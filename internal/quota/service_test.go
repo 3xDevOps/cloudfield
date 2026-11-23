@@ -67,6 +67,12 @@ func TestReadCollectsClaudeAndCodexWithoutLeakingCredentialBodies(t *testing.T) 
 	if providers[1].Provider != "codex" || providers[1].Status != "ok" || providers[1].Plan != "plus" || len(providers[1].Windows) != 2 {
 		t.Fatalf("Codex provider = %#v", providers[1])
 	}
+	for i, want := range []string{"30 minutes", "7 days"} {
+		window := providers[1].Windows[i]
+		if window.Label != want {
+			t.Errorf("Codex window %s label = %q, want %q", window.ID, window.Label, want)
+		}
+	}
 	if requests.Load() != 2 {
 		t.Fatalf("request count = %d, want 2", requests.Load())
 	}

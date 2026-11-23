@@ -563,6 +563,10 @@ can read `unauthenticated`, `unsupported`, `unavailable`, `stale` or `error`.
 Missing data is never shown as zero. Re-authenticating is up to you, in your
 environment. Cloudfield does not refresh OAuth files.
 
+Usage labels show the vendor's window duration, such as **5 hours** or
+**7 days**, and the model when the window is model-specific. If Codex omits
+the duration, its windows are labeled **Primary** and **Secondary**.
+
 Results stay cached for 60 seconds. The vendor endpoints are not public APIs and
 can change without notice.
 
