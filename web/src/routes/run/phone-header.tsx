@@ -1,7 +1,7 @@
 import type * as React from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { useAssistantAvailable } from '@/components/assistant/button'
-import { ChartGantt, ChevronLeft, FolderTree, Globe, Lock, Network, PanelRight, Search, Sparkles } from '@/components/icons'
+import { ChevronLeft, Lock, Network, PanelRight, Search, Sparkles } from '@/components/icons'
 import { RunActions, type ExtraItem } from '@/components/run-actions'
 import { ConnectionLine } from '@/components/shell/connection'
 import { Button } from '@/components/ui/button'
@@ -14,6 +14,7 @@ import { runLabel, stateName, toneOf } from '@/lib/status'
 import { historyDepth, redirectRoute, sessionEntry } from '@/lib/url-state'
 import { modeLabel } from '@/routes/run/agent-name'
 import type { RunNavigation } from '@/routes/run/header'
+import { runViewIcon } from '@/routes/run/view-icons'
 import { defaultView, runViewLabel, type RunView } from '@/routes/run/views'
 import { useStore } from '@/store'
 import { diffTotals } from '@/store/diff'
@@ -23,14 +24,6 @@ import type { RunRecord } from '@/store/runs'
 const tabViews = ['session', 'terminal', 'changes'] as const
 // A Standard session's agent runs only in its terminal, so its tabs lead with Terminal.
 const standardTabs: RunView[] = ['terminal', 'session', 'changes']
-
-type OverflowView = Exclude<RunView, (typeof tabViews)[number]>
-
-const viewIcon: Record<OverflowView, React.ComponentType<{ className?: string }>> = {
-  trace: ChartGantt,
-  files: FolderTree,
-  browser: Globe,
-}
 
 /** A text field, the composer or the terminal's input, has focus on a touch screen with the keyboard up. */
 export function useKeyboardFold(): boolean {
@@ -72,8 +65,8 @@ export function PhoneRunHeader({ run, view, views, nav, agentName, keyboard, pri
   const order: readonly RunView[] = defaultView(run) === 'terminal' ? standardTabs : tabViews
   const tabs = [...order.filter((item) => views.includes(item)), ...(order.includes(view) ? [] : [view])]
   const elsewhere: ExtraItem[] = views
-    .filter((item): item is OverflowView => !tabs.includes(item))
-    .map((item) => ({ id: `view-${item}`, label: runViewLabel[item], Icon: viewIcon[item], onSelect: () => nav.go(item) }))
+    .filter((item) => !tabs.includes(item))
+    .map((item) => ({ id: `view-${item}`, label: runViewLabel[item], Icon: runViewIcon[item], onSelect: () => nav.go(item) }))
   const panels: ExtraItem[] = [
     { id: 'details', label: detailsOpen ? 'Hide details' : 'Session details', Icon: PanelRight, onSelect: onDetails },
     { id: 'workflow', label: 'Workflow', Icon: Network, onSelect: onWorkflow },

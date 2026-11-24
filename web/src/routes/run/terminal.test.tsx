@@ -614,7 +614,7 @@ describe('terminal view', () => {
     await waitFor(() => expect(document.querySelector('.xterm')).toBeDefined())
     expect(screen.getByRole('toolbar', { name: 'Terminal toolbar' })).toBeDefined()
     expect(screen.getByRole('tablist', { name: 'Session views' })).toBeDefined()
-    expect(screen.getByRole('tabpanel')).toBeDefined()
+    expect(screen.getByRole('tabpanel', { name: 'Terminal' })).toBeDefined()
     const pane = document.querySelector('.xterm')
 
     view.unmount()
@@ -739,7 +739,7 @@ describe('terminal view', () => {
     view.unmount()
   })
   it('does not reopen an ended completed run when follow mode changes', () => {
-    const resize = atViewport(1024, { height: 844, pointer: 'coarse' })
+    const resize = atViewport(700, { height: 844, pointer: 'coarse' })
     const view = mount({}, { status: 'completed' })
     attached()
     act(() => StubSocket.last().onclose?.({ code: 1000, reason: 'session ended' }))
@@ -1433,8 +1433,8 @@ describe('the terminal on a phone', () => {
     expect(screen.getByRole('toolbar', { name: 'Terminal keys' })).toBeDefined()
     view.unmount()
   })
-  it('reattaches once when a desktop owner crosses the phone breakpoint', async () => {
-    const resize = atViewport(1024, { height: 844, pointer: 'coarse' })
+  it('reattaches once when an owner on a narrow touch screen crosses the phone breakpoint', async () => {
+    const resize = atViewport(700, { height: 844, pointer: 'coarse' })
     const view = mount()
     attached()
     expect(StubSocket.opened).toHaveLength(1)
@@ -1462,7 +1462,7 @@ describe('the terminal on a phone', () => {
   })
 
   it('reattaches on a phone follow change even after an explicit mirror choice', async () => {
-    const resize = atViewport(1024, { height: 844, pointer: 'coarse' })
+    const resize = atViewport(700, { height: 844, pointer: 'coarse' })
     const view = mount()
     attached()
 

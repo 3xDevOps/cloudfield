@@ -1,6 +1,6 @@
 import { useContext, useEffect, useRef, useState } from 'react'
 import type * as React from 'react'
-import { Camera, Copy, Eye, GitBranch, Lock, PanelRight, ScrollText } from '@/components/icons'
+import { ArrowUpRight, Camera, Copy, Eye, GitBranch, Lock, PanelRight, ScrollText } from '@/components/icons'
 import { permissionLabel, permissions } from '@/components/launch/permission-control'
 import { RunActions } from '@/components/run-actions'
 import { RunRetention } from '@/components/run-retention'
@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { PaneHeader } from '@/components/ui/pane-header'
 import { TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Tooltip } from '@/components/ui/tooltip'
 import { StatusDot } from '@/components/ui/status-dot'
 import { useIsMobile } from '@/lib/breakpoints'
 import { copyText } from '@/lib/clipboard'
@@ -229,7 +230,12 @@ function StateLine({ run, agentName }: { run: RunRecord; agentName: string }) {
  * phone with a pull request beside it for instance. It keeps the shown view's
  * tab in sight as the view or the room for it changes, and fades its right
  * edge while more tabs lie past it. */
-function ViewSwitch({ view, views }: { view: RunView; views: RunView[] }) {
+function ViewSwitch({ view, views, arrows, onArrow }: {
+  view: RunView
+  views: RunView[]
+  arrows: Partial<Record<RunView, string>>
+  onArrow: (view: RunView | null) => void
+}) {
   const strip = useRef<HTMLDivElement>(null)
   const [more, setMore] = useState(false)
   const measure = () => {
@@ -255,7 +261,21 @@ function ViewSwitch({ view, views }: { view: RunView; views: RunView[] }) {
       className={cn('overflow-x-auto [scrollbar-width:none]', more && '[mask-image:linear-gradient(to_right,black_calc(100%-1.5rem),transparent)]')}
     >
       {views.map((item) => (
-        <TabsTrigger key={item} value={item} className="scroll-mx-6">{runViewLabel[item]}</TabsTrigger>
+        <Tooltip key={item} content={arrows[item]} disabled={!arrows[item]}>
+          <TabsTrigger
+            value={item}
+            className="scroll-mx-6"
+            {...(arrows[item] && {
+              onPointerEnter: () => onArrow(item),
+              onPointerLeave: () => onArrow(null),
+              onFocus: () => onArrow(item),
+              onBlur: () => onArrow(null),
+            })}
+          >
+            {runViewLabel[item]}
+            {arrows[item] && <ArrowUpRight aria-hidden className="size-2.5 text-muted" />}
+          </TabsTrigger>
+        </Tooltip>
       ))}
     </TabsList>
   )
@@ -265,6 +285,8 @@ export function RunHeader({
   run,
   view,
   views,
+  arrows,
+  onArrow,
   agent,
   nav,
   keyboard,
@@ -286,6 +308,9 @@ export function RunHeader({
   onWorkflow: (returnTo: HTMLElement | null) => void
   view: RunView
   views: RunView[]
+  /** The views on screen in another tile, with the words that say where. */
+  arrows: Partial<Record<RunView, string>>
+  onArrow: (view: RunView | null) => void
   agent: AgentTerminal
   nav: RunNavigation
   /** The phone's soft keyboard is up, so the header folds to one row. */
@@ -303,7 +328,8 @@ export function RunHeader({
   const pullRequest = useRunPullRequest(run, agent, agentName)
   const editor = useOpenInEditor(run)
   const childRunsItems = useChildRunsItems(run)
-  useHeaderPrimary(useContext(FrameFocusContext) && Boolean(primary))
+  const focused = useContext(FrameFocusContext)
+  useHeaderPrimary(focused && Boolean(primary))
   const extra = [
     ...(modeSwitch.item ? [modeSwitch.item] : []),
     ...(editor.item ? [editor.item] : []),
@@ -348,6 +374,7 @@ export function RunHeader({
     <>
       <PaneHeader
         size="run"
+        level={focused ? 1 : 2}
         title={
           <span className="flex min-w-0 items-center gap-1.5">
             <span className="truncate">{runLabel(run)}</span>
@@ -378,7 +405,7 @@ export function RunHeader({
       <RunLineage run={run} />
       <RunRetention run={run} className="border-b border-seam px-4 py-2" />
       <div className="@container/views flex h-8 shrink-0 items-center border-b border-seam px-2 coarse:h-11">
-        <ViewSwitch view={view} views={views} />
+        <ViewSwitch view={view} views={views} arrows={arrows} onArrow={onArrow} />
         {workflow}
         {pullRequest.status}
       </div>

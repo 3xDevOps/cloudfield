@@ -3006,19 +3006,6 @@ and an open file keeps its scroll position, caret and undo history. Browser
 and Trace mount only while shown, so a hidden Browser streams no screencast
 and a hidden Trace derives nothing and ticks no clock.
 
-The Browser can also sit beside the other three views instead of being a tab:
-its toolbar's **Show beside Session** (**Show beside Terminal** on a Standard
-session) docks it at the right of the frame with a divider, and **Show the Browser
-as a tab** puts it back. The choice and the divider's position are view
-preferences (`browserBeside`, `browserBesideWidth`, persisted). Docked, it
-stays on screen across Session, Terminal and Changes, leaves the view switch,
-and each side keeps at least 320px (`BrowserDock` in
-`src/routes/browser/dock.tsx`). The frame is measured, not the window: the
-toggle is offered only while the space left by the sidebar and Details is at
-least 640px, and below that the Browser is a tab whatever the preference
-says. The divider is a `separator` that takes a drag or the arrow keys, Home
-and End.
-
 The agent's attach lives in `useAgentTerminal` at frame level, so switching
 views never reattaches, and `useRunRoom` reads the newest room page once per
 frame, then follows `workspace.room_message` events. An event naming a
@@ -4875,8 +4862,6 @@ dev.browser.status: scheduler: the session has no live environment: the session 
 - **Viewport**, a menu: **Fit the pane**, **Desktop** 1280 × 800, **Tablet**
   820 × 1180, **Phone** 390 × 844. In a pane narrower than 480px the same
   choices head the **Browser actions** menu instead.
-- **Show beside Session** / **Show the Browser as a tab**, only on a frame
-  wide enough for both.
 - **Browser actions**: **New page**, **Screenshot**, **Release control**
   while this tab drives, **Close page…** and **Reset session…**.
 - Who is driving, when it is not nobody; see Control below.

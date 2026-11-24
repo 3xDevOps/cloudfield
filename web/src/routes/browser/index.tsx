@@ -1,5 +1,5 @@
 import { useCallback, useContext, useEffect, useRef, useState } from 'react'
-import { ArrowLeft, ArrowRight, Bot, Bug, Columns2, Ellipsis, Keyboard, MessageSquarePlus, MonitorSmartphone, MousePointer2, RotateCw, X } from '@/components/icons'
+import { ArrowLeft, ArrowRight, Bot, Bug, Ellipsis, Keyboard, MessageSquarePlus, MonitorSmartphone, MousePointer2, RotateCw, X } from '@/components/icons'
 import { MissingRun } from '@/components/missing-run'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
 import { Avatar } from '@/components/ui/avatar'
@@ -50,14 +50,6 @@ type Confirmation =
   | { action: 'close'; target: DevBrowserCloseParams }
   | { action: 'reset'; target: DevBrowserResetParams }
 
-/** Present on a frame wide enough to show the Browser beside another view. */
-interface BrowserSplit {
-  beside: boolean
-  /** The view it sits beside. */
-  view: string
-  toggle: () => void
-}
-
 function browserSurface(session: string): DevSurface {
   return { kind: 'browser', id: 'browser', incarnation: session }
 }
@@ -78,7 +70,6 @@ function pageLabel(page: DevBrowserPage): string {
 
 interface BrowserViewProps {
   runID: string
-  split?: BrowserSplit
   /** Whom notes on the page are sent to, under the Session composer's rules. */
   agent: AgentTerminal
   agentName: string
@@ -90,7 +81,7 @@ export function BrowserView(props: BrowserViewProps) {
   return <BrowserRoute key={`${identity}:${props.runID}`} {...props} />
 }
 
-function BrowserRoute({ runID, split, agent, agentName, onCaptures }: BrowserViewProps) {
+function BrowserRoute({ runID, agent, agentName, onCaptures }: BrowserViewProps) {
   const run = useStore((state) => state.runs[runID])
   const tileFocused = useContext(FrameFocusContext)
   const cap = useCapability()
@@ -533,7 +524,7 @@ function BrowserRoute({ runID, split, agent, agentName, onCaptures }: BrowserVie
 
   const empty = Boolean(status?.available) && !page
   useEffect(() => {
-    if (tileFocused && empty && !split?.beside && !window.matchMedia?.(coarsePointer).matches) address.current?.focus()
+    if (tileFocused && empty && !window.matchMedia?.(coarsePointer).matches) address.current?.focus()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [empty])
 
@@ -565,7 +556,7 @@ function BrowserRoute({ runID, split, agent, agentName, onCaptures }: BrowserVie
   }, [annotating, tileFocused])
 
   const waiting = useDelayed(!status && !readError)
-  if (!run) return <MissingRun />
+  if (!run) return <MissingRun tiled />
   const loading = pending === 'load'
   const compact = pane.width > 0 && pane.width < compactBelow
   // A phone's row has no room for one more 44px button: Annotate starts from
@@ -612,9 +603,6 @@ function BrowserRoute({ runID, split, agent, agentName, onCaptures }: BrowserVie
           <MenuTrigger asChild><Button variant="ghost" size="icon" label="Viewport"><ViewportIcon /></Button></MenuTrigger>
           <MenuContent align="end">{viewportItems}</MenuContent>
         </Menu>
-      )}
-      {split && (
-        <Button variant="ghost" size="icon" label={split.beside ? 'Show the Browser as a tab' : `Show beside ${split.view}`} onClick={split.toggle}><Columns2 /></Button>
       )}
       <Menu>
         <MenuTrigger asChild>

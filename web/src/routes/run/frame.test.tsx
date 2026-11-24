@@ -13,6 +13,7 @@ import { useRunRoom } from '@/routes/run/room'
 import '@/routes/run'
 import { useStore } from '@/store'
 import { optimisticDeadlineMs } from '@/store/optimistic'
+import { emptyTiles } from '@/store/tiles'
 import { applyEvent } from '@/store/sync'
 import { agentInfo, alice, bob, fakeApi, roomMessage, run, serverInfo, workspace } from '@/test/fixtures'
 import { ApiError } from '@/lib/api'
@@ -74,8 +75,7 @@ beforeEach(() => {
     roomStatus: {},
     roomStatusControl: {},
     runViewMemory: {},
-    browserBeside: false,
-    browserBesideWidth: null,
+    tiles: emptyTiles(),
     browserRequests: {},
     sessionLogs: {},
     agentList: null,
@@ -274,18 +274,6 @@ describe('the Files view', () => {
 
 describe('the Browser view', () => {
   const views = () => within(screen.getByRole('tablist', { name: 'Session views' }))
-  /** Lays the run's frame out at `width`, which jsdom never does. */
-  function measured(width: number | ((target: Element) => number)) {
-    vi.stubGlobal('ResizeObserver', class {
-      constructor(private readonly report: ResizeObserverCallback) {}
-      observe(target: Element) {
-        const contentRect = { width: typeof width === 'number' ? width : width(target), height: 700 }
-        this.report([{ target, contentRect } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver)
-      }
-      unobserve() {}
-      disconnect() {}
-    })
-  }
 
   it('is offered for every live run the gateway can serve it for, before any browser has started', () => {
     open()
@@ -341,55 +329,6 @@ describe('the Browser view', () => {
     expect(useStore.getState().route.params.view).toBe('browser')
     expect(useStore.getState().browserRequests).toEqual({ run_1: '' })
     view.unmount()
-  })
-
-  it('sits beside the other views on a wide frame, from one remembered toggle', async () => {
-    measured(1200)
-    const view = open({ mode: 'acp' }, 'browser')
-    fireEvent.click(await screen.findByRole('button', { name: 'Show beside Chat' }))
-    expect(useStore.getState().browserBeside).toBe(true)
-    view.rerender(rerouted(useStore.getState().route.params.view!))
-    expect(views().queryByRole('tab', { name: 'Browser' })).toBeNull()
-    expect(views().getByRole('tab', { name: 'Chat' }).getAttribute('aria-selected')).toBe('true')
-    const beside = within(screen.getByRole('region', { name: 'Browser' }))
-    expect(beside.getByRole('toolbar', { name: 'Browser' })).toBeDefined()
-    expect(screen.getByRole('group', { name: 'Multiplayer controls' })).toBeDefined()
-
-    const divider = screen.getByRole('separator', { name: 'Resize the Browser' })
-    expect(divider.getAttribute('aria-valuenow')).toBe('600')
-    fireEvent.keyDown(divider, { key: 'ArrowLeft' })
-    expect(useStore.getState().browserBesideWidth).toBe(616)
-    fireEvent.keyDown(divider, { key: 'End' })
-    expect(useStore.getState().browserBesideWidth).toBe(880)
-
-    act(() => { openRunLink('run_1', 'http://localhost:3000/') })
-    expect(useStore.getState().route.params.view).toBe('session')
-
-    fireEvent.click(beside.getByRole('button', { name: 'Show the Browser as a tab' }))
-    view.rerender(rerouted('browser'))
-    expect(useStore.getState().browserBeside).toBe(false)
-    expect(views().getByRole('tab', { name: 'Browser' }).getAttribute('aria-selected')).toBe('true')
-    expect(screen.queryByRole('separator', { name: 'Resize the Browser' })).toBeNull()
-  })
-
-  it('moves notes from the rail to the strip when it narrows the Chat pane', async () => {
-    // The frame is wide enough for the rail; the views' pane beside the Browser is not.
-    measured((target) => (target.classList.contains('relative') ? 800 : 1400))
-    useStore.setState({ browserBeside: true })
-    vi.mocked(api.runRoomList).mockResolvedValue({ messages: [roomMessage({ id: 'c1', kind: 'comment', actor_id: bob.id, body: 'look here' })] })
-    open({ mode: 'acp' }, 'session')
-    expect(await screen.findByRole('button', { name: '1 note' })).toBeDefined()
-    expect(screen.getByRole('region', { name: 'Browser' })).toBeDefined()
-    expect(screen.queryByRole('list', { name: 'Notes' })).toBeNull()
-  })
-
-  it('stays a tab, with no toggle, on a frame too narrow for two panes', async () => {
-    measured(600)
-    useStore.setState({ browserBeside: true })
-    open({}, 'browser')
-    expect(views().getByRole('tab', { name: 'Browser' }).getAttribute('aria-selected')).toBe('true')
-    expect(await screen.findByRole('toolbar', { name: 'Browser' })).toBeDefined()
-    expect(screen.queryByRole('button', { name: /Show beside|as a tab/ })).toBeNull()
   })
 })
 

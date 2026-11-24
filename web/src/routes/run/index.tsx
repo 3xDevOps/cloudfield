@@ -1,6 +1,7 @@
 import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useAssistantDocked } from '@/components/assistant/panel'
 import { MissingRun } from '@/components/missing-run'
+import { TileArea } from '@/components/tiles/tile-area'
 import { replaceRouteKeepingFocus } from '@/components/shell/center-view'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Tabs, TabsContent } from '@/components/ui/tabs'
@@ -10,7 +11,6 @@ import { useKeybindings } from '@/lib/keybindings'
 import { redirectRoute } from '@/lib/url-state'
 import { cn } from '@/lib/utils'
 import { BrowserView } from '@/routes/browser'
-import { BrowserDock, minBesideWidth } from '@/routes/browser/dock'
 import { ChangesView } from '@/routes/diff'
 import { RunFiles } from '@/routes/files/run-files'
 import { registerRoute, type RouteProps } from '@/routes/registry'
@@ -30,7 +30,7 @@ import { WorkflowChip, WorkflowPanel, workflowPanelID } from '@/routes/run/workf
 import { SubagentInspector } from '@/routes/run/subagent-inspector'
 import { TerminalView } from '@/routes/run/terminal-view'
 import { TraceView } from '@/routes/run/trace-view'
-import { defaultView, hasBrowser, hasFiles, isRunView, runRoute, runViewLabel, runViews, type RunView } from '@/routes/run/views'
+import { defaultView, isRunView, offeredViews, runRoute, type RunView } from '@/routes/run/views'
 import { useStore } from '@/store'
 import { useCapability } from '@/store/hooks'
 import type { RunRecord } from '@/store/runs'
@@ -47,6 +47,11 @@ const agentWidth = 448
 const workflowWidth = 320
 
 function RunRoute({ params }: RouteProps) {
+  return useIsMobile() ? <PhoneRun params={params} /> : <TileArea params={params} Frame={RunFrame} />
+}
+
+/** A phone shows the route's session alone, with no tiles. */
+function PhoneRun({ params }: RouteProps) {
   const run = useStore((s) => s.runs[params.runId])
   const identityKey = useStore((s) => s.identityKey)
   const epoch = useStore((s) => s.terminalCacheEpoch)
@@ -72,9 +77,13 @@ export interface FrameTile {
   terminalHost: boolean
   /** The views of this session that other tabs hold. */
   elsewhere: RunView[]
+  /** Of those, the ones on screen in another tile, with the words that say where. */
+  arrows: Partial<Record<RunView, string>>
+  /** Marks the tile that shows `view` while its arrow is pointed at. */
+  onArrow: (view: RunView | null) => void
 }
 
-const lone: FrameTile = { focused: true, controls: true, alone: true, terminalHost: true, elsewhere: [] }
+const lone: FrameTile = { focused: true, controls: true, alone: true, terminalHost: true, elsewhere: [], arrows: {}, onArrow: () => {} }
 
 function useVisited(view: RunView, elsewhere: RunView[]) {
   const visited = useRef(new Set<RunView>())
@@ -89,7 +98,7 @@ function useVisited(view: RunView, elsewhere: RunView[]) {
  * in the focused tile and the tab's view and repo elsewhere.
  */
 export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteProps['params']; tile?: FrameTile }) {
-  const { focused, controls, alone, terminalHost, elsewhere } = tile ?? lone
+  const { focused, controls, alone, terminalHost, elsewhere, arrows, onArrow } = tile ?? lone
   const { agent, agentName, agentEntry, room, shells } = useContext(RunAgentContext)!
   const cap = useCapability()
   const mobile = useIsMobile()
@@ -99,7 +108,7 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
   const inline = alone && row.width >= detailsWidth + minReadableWidth
   const agentInline = alone && row.width >= agentWidth + minReadableWidth
   const navigate = useStore((s) => s.navigate)
-  const remembered = useStore((s) => s.runViewMemory[run.id])
+  const memory = useStore((s) => s.runViewMemory)
   const detailsPreference = useStore((s) => s.detailsOpen)
   const setDetailsPreference = useStore((s) => s.setDetailsOpen)
   const [overlayDetails, setOverlayDetails] = useState(false)
@@ -111,23 +120,15 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
   const [noteFocus, setNoteFocus] = useState(0)
   const textarea = useRef<HTMLTextAreaElement>(null)
 
-  const browser = hasBrowser(run, cap)
-  const beside = useStore((s) => s.browserBeside)
-  const setBeside = useStore((s) => s.setBrowserBeside)
   const browserRequest = useStore((s) => s.browserRequests[run.id])
   const requestBrowser = useStore((s) => s.requestBrowser)
-  const [frameRef, frame] = useElementSize<HTMLDivElement>()
-  const splittable = browser && frame.width >= 2 * minBesideWidth
-  const docked = splittable && beside
   const [paneRef, pane] = useElementSize<HTMLDivElement>()
-  // The pane, not the frame: a docked Browser takes its share of the frame.
   const notesWide = pane.width >= notesRailMinWidth
 
-  const files = hasFiles(run, cap)
-  const views = runViews.filter((view) =>
-    (view !== 'browser' || (browser && !docked)) && (view !== 'files' || files) && (view !== 'trace' || run.acp === true))
-  const asked = isRunView(params.view) ? params.view : remembered
-  const view = asked && views.includes(asked) ? asked : defaultView(run)
+  const views = offeredViews(run, cap)
+  const browser = views.includes('browser')
+  const files = views.includes('files')
+  const view = resolveView({ runId: run.id, view: isRunView(params.view) ? params.view : undefined }, run, cap, memory)
   const visited = useVisited(view, elsewhere)
   const setShownRunView = useStore((s) => s.setShownRunView)
   useEffect(() => {
@@ -195,29 +196,13 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
     } else navigate('run', { runId: run.id, view: next }, options)
   }, [mobile, navigate, run.id])
   useEffect(() => {
-    if (controls && browserRequest !== undefined && browser && !docked) go('browser')
-  }, [controls, browserRequest, browser, docked, go])
+    if (controls && browserRequest !== undefined && browser) go('browser')
+  }, [controls, browserRequest, browser, go])
   const openDialog = (kind: 'captures' | 'events') => (opener: HTMLElement | null) => {
     returnTo.current = opener
     setDialog(kind)
   }
   const openCaptures = openDialog('captures')
-  const browserView = (
-    <BrowserView
-      runID={run.id}
-      agent={agent}
-      agentName={agentName}
-      onCaptures={openCaptures}
-      split={splittable ? {
-        beside: docked,
-        view: runViewLabel[defaultView(run)],
-        toggle: () => {
-          setBeside(!beside)
-          go(beside ? 'browser' : view === 'browser' ? defaultView(run) : view)
-        },
-      } : undefined}
-    />
-  )
   const nav: RunNavigation = {
     go,
     reveal: (cardID) => {
@@ -245,7 +230,8 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
     if (focused && params.focus === 'composer') setComposeRequested(true)
   }, [focused, params])
 
-  const step = (delta: number) => go(views[(views.indexOf(view) + delta + views.length) % views.length]!)
+  const free = views.filter((item) => !elsewhere.includes(item))
+  const step = (delta: number) => go(free[(free.indexOf(view) + delta + free.length) % free.length]!)
   useKeybindings('run', focused ? {
     ...(!tile && { 'leave-run': () => (agentID ? closeAgent() : navigate('board')) }),
     'run-view-next': () => step(1),
@@ -283,6 +269,8 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
           run={run}
           view={view}
           views={views}
+          arrows={arrows}
+          onArrow={onArrow}
           agent={agent}
           nav={nav}
           keyboard={mobile && keyboard}
@@ -311,55 +299,52 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
           )}
         />
         {run.mode === 'acp' && view !== 'browser' && view !== 'files' && (!mobile || (shared && !keyboard && view !== 'terminal')) && <MultiplayerControls run={run} agent={agent} onPeople={() => nav.reveal('details-people')} />}
-        <div ref={frameRef} className="flex min-h-0 flex-1">
-          <div ref={paneRef} className="relative min-h-0 min-w-0 flex-1">
-            {visited.has('session') && (
-              <TabsContent value="session" forceMount inert={view !== 'session'} className={cn(panel, view !== 'session' && 'invisible')}>
-                <SessionView
-                  run={run}
-                  agent={agent}
-                  agentName={agentName}
-                  room={room}
-                  nav={nav}
-                  active={view === 'session'}
-                  textarea={textarea}
-                  focusComposer={composeRequested}
-                  onComposing={(focused) => {
-                    if (focused) setComposeRequested(false)
-                  }}
-                  shells={shells}
-                  switchable={switchable}
-                  notesWide={notesWide}
-                />
-              </TabsContent>
-            )}
-            {view === 'trace' && (
-              <TabsContent value="trace" className={panel}>
-                <TraceView run={run} nav={nav} />
-              </TabsContent>
-            )}
-            {terminalHost && (
-              <TabsContent value="terminal" forceMount inert={view !== 'terminal'} className={cn(panel, view !== 'terminal' && 'invisible')}>
-                <TerminalView run={run} agent={agent} shells={shells} onCaptures={openCaptures} />
-              </TabsContent>
-            )}
-            {visited.has('changes') && (
-              <TabsContent value="changes" forceMount inert={view !== 'changes'} className={cn(panel, view !== 'changes' && 'invisible')}>
-                <ChangesView runID={run.id} agent={agent} agentName={agentName} />
-              </TabsContent>
-            )}
-            {files && visited.has('files') && (
-              <TabsContent value="files" forceMount inert={view !== 'files'} className={cn(panel, view !== 'files' && 'invisible')}>
-                <RunFiles run={run} shown={view === 'files'} />
-              </TabsContent>
-            )}
-            {view === 'browser' && (
-              <TabsContent value="browser" className={panel}>
-                {browserView}
-              </TabsContent>
-            )}
-          </div>
-          {docked && <BrowserDock runID={run.id} available={frame.width}>{browserView}</BrowserDock>}
+        <div ref={paneRef} className="relative min-h-0 min-w-0 flex-1">
+          {visited.has('session') && (
+            <TabsContent value="session" forceMount inert={view !== 'session'} className={cn(panel, view !== 'session' && 'invisible')}>
+              <SessionView
+                run={run}
+                agent={agent}
+                agentName={agentName}
+                room={room}
+                nav={nav}
+                active={view === 'session'}
+                textarea={textarea}
+                focusComposer={composeRequested}
+                onComposing={(focused) => {
+                  if (focused) setComposeRequested(false)
+                }}
+                shells={shells}
+                switchable={switchable}
+                notesWide={notesWide}
+              />
+            </TabsContent>
+          )}
+          {view === 'trace' && (
+            <TabsContent value="trace" className={panel}>
+              <TraceView run={run} nav={nav} />
+            </TabsContent>
+          )}
+          {terminalHost && (
+            <TabsContent value="terminal" forceMount inert={view !== 'terminal'} className={cn(panel, view !== 'terminal' && 'invisible')}>
+              <TerminalView run={run} agent={agent} shells={shells} onCaptures={openCaptures} />
+            </TabsContent>
+          )}
+          {visited.has('changes') && (
+            <TabsContent value="changes" forceMount inert={view !== 'changes'} className={cn(panel, view !== 'changes' && 'invisible')}>
+              <ChangesView runID={run.id} agent={agent} agentName={agentName} />
+            </TabsContent>
+          )}
+          {files && visited.has('files') && (
+            <TabsContent value="files" forceMount inert={view !== 'files'} className={cn(panel, view !== 'files' && 'invisible')}>
+              <RunFiles run={run} shown={view === 'files'} />
+            </TabsContent>
+          )}
+          {view === 'browser' && (
+            <TabsContent value="browser" className={panel}>
+              <BrowserView runID={run.id} agent={agent} agentName={agentName} onCaptures={openCaptures} />
+            </TabsContent>
+          )}
         </div>
         {view !== 'session' && <CompletionPrompt run={run} className="border-t border-seam p-2" />}
       </div>

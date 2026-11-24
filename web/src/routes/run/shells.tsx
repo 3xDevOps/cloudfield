@@ -90,7 +90,11 @@ export function useRunShells(runID: string, visible: boolean) {
     const closed = dock.tabs.length < tabCount.current
     tabCount.current = dock.tabs.length
     if (!closed || (document.activeElement && document.activeElement !== document.body)) return
-    Array.from(document.querySelectorAll<HTMLElement>(`[data-shell-focus="${runID}"]`)).find((target) => !target.closest('[inert]'))?.focus()
+    // Never into a tile that is not the focused one: taking the keyboard there would move the tile focus.
+    const focused = useStore.getState().tiles.focused
+    Array.from(document.querySelectorAll<HTMLElement>(`[data-shell-focus="${runID}"]`))
+      .find((target) => !target.closest('[inert]') && (target.closest<HTMLElement>('[data-tile]')?.dataset.tile ?? focused) === focused)
+      ?.focus()
   }, [dock.tabs.length])
 
   const atLimit = dock.terminals.filter((item) => item.started_by !== 'run_agent' && !shellEnded(item)).length >= maxOwnShells

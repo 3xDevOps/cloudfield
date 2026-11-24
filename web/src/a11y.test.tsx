@@ -9,6 +9,7 @@ import { useStore } from '@/store'
 import { hydrate } from '@/store/sync'
 import { fakeApi, run } from '@/test/fixtures'
 import { toRecord } from '@/store/runs'
+import { emptyTiles } from '@/store/tiles'
 
 // jsdom has neither of the two browser APIs xterm and the dialogs reach for.
 Element.prototype.scrollIntoView = vi.fn()
@@ -36,6 +37,7 @@ beforeEach(async () => {
     sidebarWidth: 280,
     runViewMemory: {},
     savedRunViews: {},
+    tiles: emptyTiles(),
     navigate: realNavigate,
   })
   await hydrate(useStore, fakeApi())

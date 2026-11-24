@@ -176,7 +176,8 @@ Identity colour never replaces run-state colour.
 `web/src/components/ui/` holds the shared primitives: `Button`, `Input`,
 `Textarea`, `Select`, `Checkbox`, `Radio`, `Label`, `FormField`, `Menu`,
 `Popover`, `Tooltip`, `Dialog`, `AlertDialog`, `Command`, `Tabs`,
-`SlidingIndicator`, `Collapsible`, `Card`, `ListRow`, `PageBody`, `InsetList`,
+`SlidingIndicator`, `Splitter`, `Collapsible`, `Card`, `ListRow`, `PageBody`,
+`InsetList`,
 `PaneHeader`, `SectionLabel`, `EmptyState`, `IconTile`, `StatTile`, `Callout`,
 `Badge`, `CountBadge`, `RadioPills`, `FadeStrip`, `RequestCard`, `StatusDot`
 and `StateLine`, `Avatar`, `AgentGlyph`, `Code` and `CodeBlock`, `Kbd`,

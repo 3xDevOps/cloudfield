@@ -164,6 +164,11 @@ export function closeTab(layout: TileLayout, tabId: string): TileLayout {
   return closeTabs(layout, (tab) => tab.id === tabId)
 }
 
+/** For the empty picker tile, which has no tab to close. */
+export function closeTile(layout: TileLayout, tileId: string): TileLayout {
+  return settled(layout, inTile(layout, tileId, () => null))
+}
+
 export function closeRun(layout: TileLayout, runId: string): TileLayout {
   return closeTabs(layout, (tab) => tab.runId === runId)
 }
@@ -226,6 +231,20 @@ export function openTab(layout: TileLayout, tileId: string, runId: string, ctx: 
   const holder = free && viewHolder(layout, runId, free, ctx)
   if (holder) return activateTab(layout, holder.tab.id)
   return addTab(layout, tileId, { id: randomID('tab'), runId, ...(free && { view: free }) }, false)
+}
+
+/** `openTab` from a picker: an empty tile the session did not land in closes. */
+export function pickTab(layout: TileLayout, tileId: string, runId: string, ctx: ViewContext, view?: RunView): TileLayout {
+  const opened = openTab(layout, tileId, runId, ctx, view)
+  const tile = tileList(opened.root).find((candidate) => candidate.id === tileId)
+  return tile && !tile.tabs.length ? closeTile(opened, tileId) : opened
+}
+
+/** Whether the focused tile shows the session and view `params` name, comparing what each view resolves to. */
+export function showsRoute(layout: TileLayout, params: Record<string, string>, ctx: ViewContext): boolean {
+  const tab = tileList(layout.root).flatMap((tile) => (tile.id === layout.focused ? activeTab(tile) ?? [] : []))[0]
+  if (tab?.runId !== params.runId) return false
+  return !isRunView(params.view) || shownView({ runId: params.runId, view: params.view }, ctx) === shownView(tab, ctx)
 }
 
 /**
@@ -329,6 +348,8 @@ export function normalizeSavedTiles(value: unknown): Record<string, TileLayout> 
 export interface TilesSlice {
   /** The signed-in member's session tiles. */
   tiles: TileLayout
+  /** The tile area is too small for `tiles`, so it draws the focused tile alone. */
+  tilesCramped: boolean
   /** Each member's `tiles` on this browser, by identity key. */
   savedTiles: Record<string, TileLayout>
   /** For a store that just read every session from the server: closes the tabs of sessions that are gone. */
@@ -353,6 +374,7 @@ export function tilesAfter(s: RootState, change: (layout: TileLayout, ctx: ViewC
 
 export const createTilesSlice: SliceCreator<TilesSlice> = (set) => ({
   tiles: emptyTiles(),
+  tilesCramped: false,
   savedTiles: {},
   pruneTiles: () => set((s) => tilesAfter(s, (layout, ctx) => settleTiles(layout, ctx, true))),
 })

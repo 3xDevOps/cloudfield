@@ -11,8 +11,6 @@ test('phone operates the shared login with touch, soft keyboard and composition'
     await openBrowserPane(page, fixture)
     await signInAndHotUpdate(page, fixture, true)
     await shareWithAgent(page, fixture, true)
-    // A phone is too narrow for two panes, so the Browser stays a tab.
-    await expect(page.getByRole('button', { name: /^Show beside/ })).toHaveCount(0)
     const beforeCancel = await fixture.currentPage()
     await browserAction(page, 'Reset browser…')
     const resetDialog = page.getByRole('alertdialog')
