@@ -27,7 +27,7 @@ gateway supplies only the identity and backend behind it.
 
 | Surface | `cloudfield gui` | `cloudfield-server --web-port` |
 | --- | --- | --- |
-| Listener | `127.0.0.1` on an ephemeral or `--port` port, plain HTTP | the host's tailnet addresses, HTTPS with the tailnet certificate |
+| Listener | `127.0.0.1` on an ephemeral or `--port` port, plain HTTP | the host's tailnet addresses, HTTPS with the tailnet certificate; HTTP/2 for requests, HTTP/1.1 for WebSockets |
 | Identity | per-process bearer token; the SSH backend acts for that linked member | Tailscale WhoIs on the request's source address, per request; no browser token |
 | `/api/v1/*`, `/ws/events`, `/ws/attach`, `/ws/terminal` | yes | yes |
 | `/local/v1/*` | yes | no - those verbs need the caller's machine |

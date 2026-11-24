@@ -5554,8 +5554,8 @@ in **Needs you**.
   it onto the stored `server.info`, which is what fills the disk gauge in
   Insights › System. One read runs at a time, so a reconnect or wake joins
   the heartbeat's read, and a read unanswered after 10 seconds is aborted and
-  shown as the gauge's error: both gateways speak HTTP/1.1, so a stuck read
-  holds one of the browser's six connections to the host.
+  shown as the gauge's error: the loopback gateway speaks HTTP/1.1, so a
+  stuck read there holds one of the browser's six connections to the host.
 
 ## Insights
 

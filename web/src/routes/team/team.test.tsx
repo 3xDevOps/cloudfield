@@ -328,7 +328,7 @@ describe('team refresh and summary', () => {
     expect(screen.queryByText(failure.message)).toBeNull()
   })
 
-  // Stuck reads would fill the browser's six HTTP/1.1 connections to the gateway.
+  // Stuck reads would fill the browser's six HTTP/1.1 connections to the loopback gateway.
   it('keeps one disk read in flight and gives up on it after 10 s', async () => {
     const disk = vi.fn<Api['disk']>((signal) => new Promise((_, reject) => {
       signal?.addEventListener('abort', () => reject(signal.reason))

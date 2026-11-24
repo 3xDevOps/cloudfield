@@ -31,6 +31,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+	"golang.org/x/net/http2"
 
 	"github.com/3xDevOps/Aether/internal/domain"
 	edgeagent "github.com/3xDevOps/Aether/internal/edge/agent"
@@ -457,8 +458,58 @@ func TestIntegrationServerGatewayHTTPSConfigImport(t *testing.T) {
 		TLSClientConfig: &tls.Config{
 			RootCAs: roots, ServerName: "aether.test", MinVersion: tls.VersionTLS12,
 		},
+		ForceAttemptHTTP2: true,
 	}}
 	base := fmt.Sprintf("https://127.0.0.1:%d", port)
+
+	resp, err := client.Get(base + "/api/v1/capabilities")
+	if err != nil {
+		t.Fatalf("capabilities: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || resp.ProtoMajor != 2 {
+		t.Fatalf("capabilities = %d over %s, want 200 over HTTP/2", resp.StatusCode, resp.Proto)
+	}
+	// Advertising extended CONNECT would make browsers open WebSockets over
+	// HTTP/2, which the /ws/ routes do not handle.
+	raw, err := tls.Dial("tcp", fmt.Sprintf("127.0.0.1:%d", port), &tls.Config{
+		RootCAs: roots, ServerName: "aether.test", MinVersion: tls.VersionTLS12, NextProtos: []string{"h2"},
+	})
+	if err != nil {
+		t.Fatalf("h2 dial: %v", err)
+	}
+	defer func() { _ = raw.Close() }()
+	_ = raw.SetDeadline(time.Now().Add(10 * time.Second))
+	if _, err = io.WriteString(raw, http2.ClientPreface); err != nil {
+		t.Fatal(err)
+	}
+	framer := http2.NewFramer(raw, raw)
+	if err = framer.WriteSettings(); err != nil {
+		t.Fatal(err)
+	}
+	frame, err := framer.ReadFrame()
+	if err != nil {
+		t.Fatalf("h2 server settings: %v", err)
+	}
+	settings, ok := frame.(*http2.SettingsFrame)
+	if !ok {
+		t.Fatalf("first h2 frame = %T, want SETTINGS", frame)
+	}
+	if v, set := settings.Value(http2.SettingEnableConnectProtocol); set && v != 0 {
+		t.Fatal("server advertises ENABLE_CONNECT_PROTOCOL")
+	}
+	events, _, err := websocket.Dial(ctx, "wss"+strings.TrimPrefix(base, "https")+"/ws/events", &websocket.DialOptions{HTTPClient: client})
+	if err != nil {
+		t.Fatalf("wss events: %v", err)
+	}
+	defer func() { _ = events.CloseNow() }()
+	if err = wsjson.Write(ctx, events, protocol.SubscribeRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	var subAck protocol.SubscribeResponse
+	if err = wsjson.Read(ctx, events, &subAck); err != nil || !subAck.OK {
+		t.Fatalf("wss subscribe ack = %+v (%v)", subAck, err)
+	}
 
 	var adaInfo protocol.ServerInfoResult
 	if status := postJSONClient(t, client, base+"/api/v1/server.info", "", &adaInfo); status != http.StatusOK {
@@ -543,6 +594,29 @@ func TestIntegrationServerGatewayHTTPSConfigImport(t *testing.T) {
 		t.Fatalf("Ada config.read metadata = size %d truncated %t content length %d", read.Size, read.Truncated, len(read.Content))
 	}
 
+	// The operator's off switch has to leave the dashboard reachable.
+	t.Setenv("GODEBUG", "http2server=0")
+	gwOff, err := servergw.New(servergw.Config{SSH: srv.ssh})
+	if err != nil {
+		t.Fatalf("servergw.New: %v", err)
+	}
+	defer func() { _ = gwOff.Close() }()
+	portOff := freePort(t)
+	if err = gwOff.Start(ctx, servergw.Tailnet{
+		Node: node, Port: portOff, Certs: reachability.NewTailscale(issuing),
+	}); err != nil {
+		t.Fatalf("gateway.Start with http2server=0: %v", err)
+	}
+	resp, err = client.Get(fmt.Sprintf("https://127.0.0.1:%d/api/v1/capabilities", portOff))
+	if err != nil {
+		t.Fatalf("capabilities with http2server=0: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || resp.ProtoMajor != 1 {
+		t.Fatalf("capabilities with http2server=0 = %d over %s, want 200 over HTTP/1.1", resp.StatusCode, resp.Proto)
+	}
+
+	_ = gwOff.Close()
 	_ = gw.Close()
 	stopServer()
 	select {
