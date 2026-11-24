@@ -356,7 +356,6 @@ export function useXterm({
   }, [])
   const serverSize = useRef<{ cols: number; rows: number } | null>(null)
   const requestedSize = useRef(standardGeometry)
-  const sentSize = useRef<{ cols: number; rows: number } | null>(null)
   const resizeRef = useRef<(() => void) | null>(null)
   const viewportInteractionRevision = useRef(0)
   const structuralGeneration = useRef(0)
@@ -403,8 +402,6 @@ export function useXterm({
   )
   const setGeometry = useCallback((cols: number, rows: number, reset = false) => {
     serverSize.current = { cols, rows }
-    // Another viewer resized the shared PTY, so this pane's size may be sent again.
-    if (sentSize.current?.cols !== cols || sentSize.current.rows !== rows) sentSize.current = null
     const current = terminal
     if (!current || liveTerminal.current !== current) return Promise.resolve()
     const reflowGeneration = structuralGeneration.current
@@ -525,7 +522,6 @@ export function useXterm({
     if (!enabled || !host) return
     serverSize.current = null
     requestedSize.current = standardGeometry
-    sentSize.current = null
 
     viewportInteractionRevision.current = 0
     structuralReplay.current = null
@@ -625,14 +621,12 @@ export function useXterm({
 
       // Measure the pane without resizing the renderer: another viewer can
       // make the shared PTY smaller than this pane's requested geometry.
-      const resize = (settled = false) => {
+      const resize = () => {
         if (followRef.current) return
         const proposed = fit.proposeDimensions()
         if (!proposed) return
         requestedSize.current = proposed
         if (!serverSize.current) created.resize(proposed.cols, proposed.rows)
-        if (settled && sentSize.current?.cols === proposed.cols && sentSize.current.rows === proposed.rows) return
-        sentSize.current = proposed
         onResizeRef.current?.(proposed.cols, proposed.rows)
       }
       resizeRef.current = resize
@@ -687,11 +681,10 @@ export function useXterm({
         onDataRef.current?.(modified)
       })
       const binary = created.onBinary((data) => onBinaryRef.current?.(data))
-      // A drag reports a size per frame; the shell is told once it settles.
       let settle: number | undefined
       const observer = new ResizeObserver(() => {
         window.clearTimeout(settle)
-        settle = window.setTimeout(() => resize(true), 100)
+        settle = window.setTimeout(resize, 100)
       })
       observer.observe(host)
       teardown = () => {

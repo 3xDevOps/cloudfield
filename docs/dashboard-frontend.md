@@ -4152,9 +4152,9 @@ measurement from FitAddon without resizing the renderer; `setGeometry()` queues
 the server resize and optional attach reset between xterm writes. A font or
 pane resize reports the local measurement, never the smaller rendered grid,
 so a viewer cannot accidentally pin the shared minimum after it grows.
-A pane resize is reported 100 ms after the pane stops changing, and not at all
-when it measures the size last reported, unless the server has since announced
-a different grid. A font or follow change always reports at once.
+A pane resize is reported 100 ms after the pane stops changing, so the
+terminal keeps its old grid during a drag. A font or follow change reports at
+once. The server ignores a report of the size it already has.
 Terminal padding belongs to the xterm element, not its host: FitAddon subtracts
 the element's padding when calculating the rows and columns that fit.
 Queued geometry work is discarded when its terminal is disposed.

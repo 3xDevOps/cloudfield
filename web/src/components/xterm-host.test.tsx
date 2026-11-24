@@ -258,7 +258,7 @@ describe('shared terminal geometry', () => {
     }
   })
 
-  it('sends one resize when a drag settles, and none for a size it already sent', async () => {
+  it('sends one resize when a drag settles, and none after unmount', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     let paneResized = () => {}
     vi.stubGlobal('ResizeObserver', class {
@@ -268,8 +268,7 @@ describe('shared terminal geometry', () => {
     })
     const proposal = vi.spyOn(FitAddon.prototype, 'proposeDimensions').mockReturnValue({ cols: 100, rows: 25 })
     const onResize = vi.fn()
-    let controller: XtermController | null = null
-    const view = render(<SizedProbe follow={false} onResize={onResize} onReady={(next) => { controller = next }} />)
+    const view = render(<SizedProbe follow={false} onResize={onResize} onReady={() => {}} />)
     try {
       await act(() => vi.advanceTimersByTimeAsync(0))
       expect(onResize.mock.calls).toEqual([[100, 25]])
@@ -283,18 +282,14 @@ describe('shared terminal geometry', () => {
       await vi.advanceTimersByTimeAsync(100)
       expect(onResize.mock.calls).toEqual([[100, 25], [103, 25]])
 
-      paneResized()
-      await vi.advanceTimersByTimeAsync(100)
-      expect(onResize).toHaveBeenCalledTimes(2)
-
-      void (controller as unknown as XtermController).setGeometry(80, 24)
-      paneResized()
-      await vi.advanceTimersByTimeAsync(100)
-      expect(onResize.mock.calls).toEqual([[100, 25], [103, 25], [103, 25]])
-
       view.rerender(<SizedProbe follow onResize={onResize} onReady={() => {}} />)
       view.rerender(<SizedProbe follow={false} onResize={onResize} onReady={() => {}} />)
-      expect(onResize).toHaveBeenCalledTimes(4)
+      expect(onResize).toHaveBeenCalledTimes(3)
+
+      paneResized()
+      view.unmount()
+      await vi.advanceTimersByTimeAsync(100)
+      expect(onResize).toHaveBeenCalledTimes(3)
     } finally {
       view.unmount()
       proposal.mockRestore()
