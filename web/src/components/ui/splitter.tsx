@@ -69,7 +69,7 @@ export function Splitter({
         // Without `touch-none` the browser claims a touch drag as a pan
         // and cancels the pointer stream this listens to.
         'absolute z-10 touch-none hover:bg-hover-chrome',
-        vertical ? 'w-[7px] -translate-x-1/2 cursor-col-resize' : 'h-[7px] -translate-y-1/2 cursor-row-resize',
+        vertical ? 'w-[7px] -translate-x-1/2 cursor-col-resize coarse:w-6' : 'h-[7px] -translate-y-1/2 cursor-row-resize coarse:h-6',
         className,
       )}
       {...props}

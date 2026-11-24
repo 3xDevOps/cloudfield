@@ -376,9 +376,9 @@ export function SessionView({ run, agent, agentName, room, nav, active, textarea
   const pendingCount = session?.pending.length ?? 0
   const hadPending = useRef(false)
   useEffect(() => {
-    if (pendingCount === 0 && hadPending.current && active && document.activeElement === document.body) textarea.current?.focus()
+    if (pendingCount === 0 && hadPending.current && active && tileFocused && document.activeElement === document.body) textarea.current?.focus()
     hadPending.current = pendingCount > 0
-  }, [pendingCount, active, textarea])
+  }, [pendingCount, active, tileFocused, textarea])
 
   const fetchOlder = () => {
     if (enhanced && session?.more) void loadOlderItems(useStore, api, run.id)

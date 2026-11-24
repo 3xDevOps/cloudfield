@@ -174,7 +174,7 @@ export function createRootStore() {
       }),
       {
         name: 'aether.ui',
-        version: 13,
+        version: 12,
         // Before 2 the Repository step record is unusable and is dropped, so
         // the step asks the gateway again. Before 3 the resume point is an
         // index. Before 4 there is no furthest step, so the resume point
@@ -226,10 +226,6 @@ export function createRootStore() {
             if (walk.onboardingFurthest === 'First run') walk.onboardingFurthest = 'First session'
           }
           if (version < 12 && state.theme === 'system') delete state.theme
-          if (version < 13) {
-            delete (state as { browserBeside?: unknown }).browserBeside
-            delete (state as { browserBesideWidth?: unknown }).browserBesideWidth
-          }
           return state
         },
         // `migrate` only runs on a version change, and xterm does not validate

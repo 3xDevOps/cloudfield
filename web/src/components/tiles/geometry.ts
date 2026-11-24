@@ -10,7 +10,7 @@ export interface Rect extends Size {
   top: number
 }
 
-export interface Seam {
+interface Seam {
   id: string
   dir: 'row' | 'column'
   /** The line between the two sides, zero thick, in percent of the area. */
@@ -23,14 +23,14 @@ export interface Seam {
   max: number
 }
 
-export interface TileRects {
+interface TileRects {
   /** By tile id, in percent of the area. */
   tiles: Record<string, Rect>
   seams: Seam[]
 }
 
 /** No tile is drawn smaller than this, in pixels. */
-export const tileFloor: Size = { width: 420, height: 400 }
+const tileFloor: Size = { width: 420, height: 400 }
 
 export function minSize(node: TileNode): Size {
   if ('tabs' in node) return tileFloor
@@ -85,7 +85,6 @@ export function dropZone(size: Size, x: number, y: number): TileSide | 'center' 
   return distance < 0.2 ? side : 'center'
 }
 
-/** Which side of tile `from` tile `to` is on. */
 export function sideOf(node: TileNode, from: string, to: string): 'left' | 'right' | 'above' | 'below' | undefined {
   if ('tabs' in node) return undefined
   const holds = (within: TileNode, id: string): boolean => ('tabs' in within ? within.id === id : holds(within.a, id) || holds(within.b, id))

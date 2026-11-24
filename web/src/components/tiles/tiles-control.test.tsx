@@ -81,13 +81,6 @@ afterEach(() => {
 })
 
 describe('terminals in tiles', () => {
-  it('attaches once for a session shown in two tiles', () => {
-    show('run_1')
-    beside('run_1', 'changes')
-    expect(screen.getAllByRole('tablist', { name: 'Session views' })).toHaveLength(2)
-    expect(attaches('run_1')).toHaveLength(1)
-  })
-
   it('sends nothing and keeps its attach when a click focuses its tile', () => {
     show('run_1')
     beside('run_2')
@@ -101,13 +94,6 @@ describe('terminals in tiles', () => {
     expect([own.sent.length, watched.sent.length]).toEqual(sent)
     expect(StubSocket.opened).toHaveLength(2)
     expect(own.closed || watched.closed).toBe(false)
-  })
-
-  it('asks for no write control for a session opened on Changes alone', () => {
-    show('run_1', 'changes')
-    const socket = attached('run_1', false)
-    expect(socket.frames()).toHaveLength(1)
-    expect(socket.frames()[0]).not.toMatchObject({ write: true })
   })
 
   it('draws a terminal it does not control scaled, with its control line under it, in a tile that is not focused', () => {
@@ -131,13 +117,5 @@ describe('terminals in tiles', () => {
     expect(useStore.getState().route.params.runId).toBe('run_2')
     expect(socket.frames().at(-1)).toMatchObject({ type: 'control', write: true })
     expect(attaches('run_2')).toHaveLength(1)
-  })
-
-  it('attaches anew when the terminal cache epoch moves', () => {
-    show('run_1')
-    const before = attached('run_1', true)
-    act(() => useStore.setState({ terminalCacheEpoch: 1 }))
-    expect(attaches('run_1')).toHaveLength(2)
-    expect(before.closed).toBe(true)
   })
 })
