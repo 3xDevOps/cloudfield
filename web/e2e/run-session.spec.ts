@@ -74,7 +74,7 @@ test('an Enhanced run streams, answers a permission, takes a message and stops o
   await expect(log.locator('[data-slot="diff-block"]')).toContainText('Math.round')
   await expect(log.getByText(/^Changed \d+ files?$/)).toHaveCount(0)
 
-  const changes = page.getByRole('region', { name: 'Changes' })
+  const changes = page.getByRole('region', { name: 'Changes', exact: true })
   const changed = changes.getByRole('button', { name: /^1 file changed/ })
   await expect(changed).toBeVisible({ timeout: 30_000 })
   await expect(changed).toContainText('+3')
