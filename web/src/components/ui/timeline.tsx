@@ -248,7 +248,7 @@ export function AgentEntry({ dot, label, state, current, onOpen }: { dot: React.
       data-slot="agent-entry"
       aria-current={current || undefined}
       onClick={onOpen}
-      className={cn(focusRingInset, 'flex h-6 w-full min-w-0 items-center gap-2 rounded-control pl-6 text-left text-ui-sm text-muted hover:bg-hover hover:text-text coarse:h-11', current && 'bg-selection')}
+      className={cn(focusRingInset, 'flex h-6 w-full min-w-0 items-center gap-2 rounded-control pr-2 pl-6 text-left text-ui-sm text-muted hover:bg-hover hover:text-text coarse:h-11', current && 'bg-selection')}
     >
       {dot}
       <span className="min-w-0 flex-1 truncate">{label}</span>

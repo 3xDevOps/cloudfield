@@ -512,7 +512,7 @@ describe('the subagents bar', () => {
     await userEvent.click(header)
     expect(bar.getAllByRole('listitem').map((row) => row.textContent)).toEqual([
       expect.stringMatching(/^Watch CIRunning \d+h \d+m$/),
-      'fix-flaky-testsRunning 2 of 5 agents done ',
+      'fix-flaky-testsRunning 2 of 5 agents done 1 failed ',
       'Check testsStopped 3.0s',
       'Find usagesDone 3.0s',
     ])
@@ -532,7 +532,7 @@ describe('a workflow', () => {
     const log = await screen.findByRole('log', { name: 'Chat' })
     const card = await within(log).findByRole('button', { name: 'fix-flaky-tests, Workflow, Running' })
     expect(within(card).getByText('2 of 5 agents')).toBeDefined()
-    expect(within(card).getByText('Phase 2 of 2: Fix · 1 running')).toBeDefined()
+    expect(within(card).getByText('Phase 2 of 2: Fix · 1 running · 1 failed')).toBeDefined()
 
     socket.items(flow('failed', progress))
     expect(await within(log).findByText('1 of 5 agents failed: exit 1: bad revision')).toBeDefined()
@@ -542,7 +542,6 @@ describe('a workflow', () => {
     const inspector = await inspect([item('turn_start', 1), flow('running', progress)])
     expect(inspector.getByRole('heading', { name: 'fix-flaky-tests' })).toBeDefined()
     expect(inspector.getByText('2 of 5 agents done · 1 running · 1 failed · 1 queued · 41K tokens')).toBeDefined()
-    expect(inspector.getByText('Agents inside a workflow report status and previews, not a transcript.')).toBeDefined()
     expect(inspector.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)).toEqual(['1. Reproduce · 1 of 1 done', '2. Fix · 0 of 3 done'])
     expect(inspector.getAllByRole('listitem').map((row) => within(row).getAllByRole('button')[0]!.getAttribute('aria-label'))).toEqual([
       'Warm cache, Done', 'Run suite, general-purpose, Done', 'Patch retry, Running', 'Bisect login, Failed', 'Verify, Queued',
@@ -556,9 +555,9 @@ describe('a workflow', () => {
     const failed = inspector.getByRole('button', { name: 'Bisect login, Failed' })
     expect(failed.getAttribute('aria-expanded')).toBe('true')
     expect(within(failed).getByText('attempt 2')).toBeDefined()
-    expect(inspector.getByText('sonnet · 4 tool calls · 1K tokens')).toBeDefined()
+    expect(inspector.getByText('sonnet · 4 tool calls · 1K tokens · Workflow agents report status and a short result, not a transcript.')).toBeDefined()
     expect(inspector.getByText('Bisect the login failure')).toBeDefined()
-    expect(inspector.getAllByText('exit 1: bad revision')).toHaveLength(2)
+    expect(inspector.getAllByText('exit 1: bad revision')).toHaveLength(1)
     await userEvent.click(failed)
     expect(failed.getAttribute('aria-expanded')).toBe('false')
     expect(inspector.queryByText('Bisect the login failure')).toBeNull()

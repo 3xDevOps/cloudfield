@@ -95,11 +95,11 @@ function workflowLine(workflow: WorkflowProgress, state: AgentState): string | u
     case 'running': {
       const phases = workflow.phases ?? []
       const at = phases.map((phase) => rows.some((row) => row.state === 'running' && (row.phase ?? 0) === phase.index)).lastIndexOf(true)
-      if (at !== -1) return `Phase ${at + 1} of ${phases.length}: ${phases[at]!.title} · ${tally.running} running`
-      return [tally.running && `${tally.running} running`, tally.queued && `${tally.queued} queued`].filter(Boolean).join(' · ') || undefined
+      const counts = [tally.running && `${tally.running} running`, at === -1 && tally.queued && `${tally.queued} queued`, tally.failed && `${tally.failed} failed`].filter(Boolean).join(' · ')
+      return [at !== -1 && `Phase ${at + 1} of ${phases.length}: ${phases[at]!.title}`, counts].filter(Boolean).join(' · ') || undefined
     }
     case 'done':
-      return tally.done ? `${plural(tally.done, 'agent')} finished` : undefined
+      return tally.done ? [`${plural(tally.done, 'agent')} finished`, tally.failed && `${tally.failed} failed`].filter(Boolean).join(' · ') : undefined
     case 'failed': {
       const failed = rows.find((row) => row.state === 'failed')
       return failed && [`${tally.failed} of ${plural(rows.length, 'agent')} failed`, firstLine(failed.error)].filter(Boolean).join(': ')

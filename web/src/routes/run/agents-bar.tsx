@@ -1,4 +1,5 @@
 import { useId } from 'react'
+import { StatusDot } from '@/components/ui/status-dot'
 import { AgentEntry, WorkGroup } from '@/components/ui/timeline'
 import { cn } from '@/lib/utils'
 import { sessionColumn } from '@/routes/run/session-rows'
@@ -14,6 +15,7 @@ function BarRow({ runID, id }: { runID: string; id: string }) {
   if (!agent) return null
   const state = agentState(agent)
   const rows = agent.call?.task?.workflow?.agents
+  const failed = rows?.filter((row) => row.state === 'failed').length ?? 0
   return (
     <li>
       <AgentEntry
@@ -25,6 +27,7 @@ function BarRow({ runID, id }: { runID: string; id: string }) {
           <>
             <span className={cn(rows && 'sr-only')}>{agentStateWord(state)} </span>
             {rows && <span>{`${rows.filter((row) => row.state === 'done').length} of ${rows.length} ${rows.length === 1 ? 'agent' : 'agents'} done `}</span>}
+            {failed > 0 && <span className="text-state-failed">{failed} failed </span>}
             <AgentElapsed agent={agent} state={state} />
           </>
         }
@@ -39,10 +42,12 @@ export function AgentsBar({ runID }: { runID: string }) {
   const listID = useId()
   if (!agents) return null
   const kinds = agents.split('\n')
+  const tone = kinds.some((kind) => kind.includes(':running:')) ? 'working' : kinds.some((kind) => kind.includes(':failed:')) ? 'failed' : 'done'
   return (
     <section aria-label="Subagents and workflows" data-slot="agents-bar" className={cn(sessionColumn, 'flex shrink-0 flex-col pb-1')}>
+      <div className="flex flex-col rounded-control border border-seam bg-chrome px-2">
       <WorkGroup
-        summary={summary(kinds)}
+        summary={<span className="flex min-w-0 items-center gap-2"><StatusDot tone={tone} pulse={tone === 'working'} /><span className="truncate">{summary(kinds)}</span></span>}
         expanded={open}
         controls={listID}
         onToggle={() => useStore.getState().setSessionRow(runID, rowID, !open)}
@@ -53,6 +58,7 @@ export function AgentsBar({ runID }: { runID: string }) {
           return <BarRow key={id} runID={runID} id={id} />
         })}
       </ul>
+      </div>
     </section>
   )
 }
