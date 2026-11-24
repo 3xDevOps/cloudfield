@@ -258,6 +258,46 @@ describe('shared terminal geometry', () => {
     }
   })
 
+  it('sends one resize when a drag settles, and none for a size it already sent', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    let paneResized = () => {}
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(callback: () => void) { paneResized = callback }
+      observe() {}
+      disconnect() {}
+    })
+    const proposal = vi.spyOn(FitAddon.prototype, 'proposeDimensions').mockReturnValue({ cols: 100, rows: 25 })
+    const onResize = vi.fn()
+    let controller: XtermController | null = null
+    const view = render(<SizedProbe follow={false} onResize={onResize} onReady={(next) => { controller = next }} />)
+    try {
+      await act(() => vi.advanceTimersByTimeAsync(0))
+      expect(onResize.mock.calls).toEqual([[100, 25]])
+
+      for (const cols of [101, 102, 103]) {
+        proposal.mockReturnValue({ cols, rows: 25 })
+        paneResized()
+        await vi.advanceTimersByTimeAsync(16)
+      }
+      expect(onResize).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(100)
+      expect(onResize.mock.calls).toEqual([[100, 25], [103, 25]])
+
+      paneResized()
+      await vi.advanceTimersByTimeAsync(100)
+      expect(onResize).toHaveBeenCalledTimes(2)
+
+      void (controller as unknown as XtermController).setGeometry(80, 24)
+      paneResized()
+      await vi.advanceTimersByTimeAsync(100)
+      expect(onResize.mock.calls).toEqual([[100, 25], [103, 25], [103, 25]])
+    } finally {
+      view.unmount()
+      proposal.mockRestore()
+      vi.useRealTimers()
+    }
+  })
+
   it('starts measuring immediately when a phone becomes a desktop', async () => {
     const proposal = vi.spyOn(FitAddon.prototype, 'proposeDimensions').mockReturnValue({ cols: 100, rows: 25 })
     const onResize = vi.fn()
