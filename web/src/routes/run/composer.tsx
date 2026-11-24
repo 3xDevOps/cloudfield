@@ -550,7 +550,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
             </Button>
           )}
         />
-        <p role="status" className="sr-only">{connecting}</p>
+        {gate.interrupt && <p role="status" className="sr-only">{connecting}</p>}
       </ComposerFrame>
     )
   }
