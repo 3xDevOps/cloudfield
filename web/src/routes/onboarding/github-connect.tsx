@@ -11,7 +11,8 @@ import type { GitHubConnectResult, GitHubProbeResult } from '@/lib/types'
 import { TerminalDock } from '@/routes/environment/terminal-dock'
 import { pane } from '@/routes/onboarding/layout'
 import { useStore } from '@/store'
-import { type Capability, useIsAdmin } from '@/store/hooks'
+import type { Capability } from '@/lib/capability'
+import { useIsAdmin } from '@/store/hooks'
 
 /** Other sub-screens are named by harness, and no registry name starts with `@`. */
 export const githubSubStep = '@github'

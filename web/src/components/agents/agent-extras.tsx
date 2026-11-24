@@ -6,7 +6,8 @@ import type { Api } from '@/lib/api'
 import type { GitHubConnectResult } from '@/lib/types'
 import { ProfileDialog } from '@/routes/members/personal'
 import { GitHubSection } from '@/routes/onboarding/github-connect'
-import { type Capability, useIsAdmin } from '@/store/hooks'
+import type { Capability } from '@/lib/capability'
+import { useIsAdmin } from '@/store/hooks'
 
 function Extra({ title, summary, open, children }: { title: string; summary: string; open?: boolean; children: ReactNode }) {
   return (

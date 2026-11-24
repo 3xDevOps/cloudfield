@@ -1,3 +1,7 @@
+import type { Capability } from '@/lib/capability'
+import type { Run } from '@/lib/types'
+import { isLiveRun } from '@/routes/files/sources'
+import { isTerminal, type RunRecord } from '@/store/runs'
 import type { Route } from '@/store/ui'
 
 export const runViews = ['session', 'trace', 'terminal', 'changes', 'files', 'browser'] as const
@@ -27,4 +31,14 @@ export function runRoute(runID: string, view?: RunView): Route {
 
 export function defaultView(run: { mode: string; acp?: boolean }): RunView {
   return run.mode === 'acp' || run.acp ? 'session' : 'terminal'
+}
+
+/** A live run on a gateway that serves the browser has a Browser view. */
+export function hasBrowser(run: Pick<RunRecord, 'status'>, cap: Capability): boolean {
+  return cap.hasMethod('dev.browser.status') && !isTerminal(run.status)
+}
+
+/** A run that still has its checkout, on a gateway that serves it, has a Files view. */
+export function hasFiles(run: Run, cap: Capability): boolean {
+  return cap.hasMethod('files.tree') && isLiveRun(run)
 }

@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import { WorkspaceRepository } from '@/components/workspace-repository'
 import type { GatewayCapabilities, WorkspaceMirrorResult } from '@/lib/types'
 import { useStore, type RootState } from '@/store'
-import { capability } from '@/store/hooks'
+import { capability } from '@/lib/capability'
 import { alice, bob, fakeApi, otherWorkspace, serverInfo, workspace } from '@/test/fixtures'
 
 const localCaps: GatewayCapabilities = {

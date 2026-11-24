@@ -5,7 +5,7 @@ import { api } from '@/lib/api'
 import { message } from '@/lib/format'
 import type { LaunchDefaultsResult, LaunchMode } from '@/lib/types'
 import { useStore } from '@/store'
-import { capability } from '@/store/hooks'
+import { capability } from '@/lib/capability'
 import { type LaunchDefaultsRead, rememberedChoice, useLaunchDefaultsRead } from '@/store/launch-defaults'
 
 export interface LastLaunch {

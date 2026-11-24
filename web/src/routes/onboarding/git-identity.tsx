@@ -7,7 +7,7 @@ import type { Api } from '@/lib/api'
 import { message } from '@/lib/format'
 import { useStore } from '@/store'
 import { stillWaiting, usePastDeadline } from '@/store/optimistic'
-import type { Capability } from '@/store/hooks'
+import type { Capability } from '@/lib/capability'
 
 /** Saved values win; the machine's `git config` fills only what is still empty. */
 export function GitIdentityForm({ client, caps }: { client: Api; caps: Capability }) {

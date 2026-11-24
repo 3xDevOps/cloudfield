@@ -5,7 +5,7 @@ import { surfaces } from '@/lib/surfaces'
 import type { Event, MemoryItem, MemorySearchParams } from '@/lib/types'
 import { MemoryRoute } from '@/routes/memory'
 import { useStore } from '@/store'
-import { capability } from '@/store/hooks'
+import { capability } from '@/lib/capability'
 import { applyEvent } from '@/store/sync'
 import { alice, bob, fakeApi, memoryItem, otherWorkspace, vera, workspace } from '@/test/fixtures'
 import {

@@ -18,7 +18,7 @@ import { isApprovalCode, shellQuote } from '@/lib/shell'
 import type { EdgeAccount, EdgeLinkResult, EdgeLogin, EdgeRefusal, EdgeServer } from '@/lib/types'
 import type { HandedLink } from '@/lib/url-state'
 import { useStore } from '@/store'
-import type { Capability } from '@/store/hooks'
+import type { Capability } from '@/lib/capability'
 
 const pollMs = 2000
 
