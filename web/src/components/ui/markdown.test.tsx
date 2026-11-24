@@ -13,32 +13,55 @@ afterEach(() => {
   vi.mocked(highlightCode).mockClear()
 })
 
-test('a streaming code block is highlighted once, when its fence closes', () => {
+test('a streaming code block is highlighted once, when another block follows', () => {
   const open = 'Here:\n\n```ts\nconst a = 1\n'
   const view = render(<Markdown text={open} live />)
   view.rerender(<Markdown text={`${open}const b = 2\n`} live />)
-  view.rerender(<Markdown text={`${open}const b = 2\nconst c = 3\n`} live />)
-  const code = view.container.querySelector('[data-lang="ts"] code')!
+  const closed = `${open}const b = 2\nconst c = 3\n\`\`\`\n`
+  view.rerender(<Markdown text={closed} live />)
+  const pre = view.container.querySelector('pre')!
+  const code = pre.querySelector('code')!
   expect(code.textContent).toBe('const a = 1\nconst b = 2\nconst c = 3')
   expect(code.children).toHaveLength(0)
   expect(highlightCode).not.toHaveBeenCalled()
 
-  const closed = `${open}const b = 2\nconst c = 3\n\`\`\`\n`
-  view.rerender(<Markdown text={closed} live />)
-  expect(highlightCode).toHaveBeenCalledTimes(1)
-  expect(view.container.querySelector('[data-lang="ts"] code .tok-keyword')?.textContent).toBe('const')
-
   view.rerender(<Markdown text={`${closed}\nDone.`} live />)
-  view.rerender(<Markdown text={`${closed}\nDone.`} />)
   expect(highlightCode).toHaveBeenCalledTimes(1)
+  expect(view.container.querySelector('pre')).toBe(pre)
+  expect(pre.querySelector('.tok-keyword')?.textContent).toBe('const')
+
+  view.rerender(<Markdown text={`${closed}\nDone. More.`} live />)
+  view.rerender(<Markdown text={`${closed}\nDone. More.`} />)
+  expect(highlightCode).toHaveBeenCalledTimes(1)
+})
+
+test('a longer fence holding a three-backtick line stays plain while it is the last block', () => {
+  const open = '````ts\nconst a = 1\n```\n'
+  const view = render(<Markdown text={open} live />)
+  view.rerender(<Markdown text={`${open}const b = 2\n`} live />)
+  view.rerender(<Markdown text={`${open}const b = 2\n\`\`\`\`\n`} live />)
+  expect(highlightCode).not.toHaveBeenCalled()
+  view.rerender(<Markdown text={`${open}const b = 2\n\`\`\`\`\n\nDone.`} live />)
+  expect(highlightCode).toHaveBeenCalledTimes(1)
+  expect(view.container.querySelector('pre code')!.textContent).toBe('const a = 1\n```\nconst b = 2')
+})
+
+test('inline code in the last paragraph keeps its element when a new block arrives', () => {
+  const text = 'Run `make` first.'
+  const view = render(<Markdown text={text} live />)
+  const code = view.container.querySelector('code')!
+  view.rerender(<Markdown text={`${text}\n\nThen wait.`} live />)
+  expect(view.container.querySelector('code')).toBe(code)
 })
 
 test('an open code block is highlighted when the reply ends or is not live', () => {
   const open = '```ts\nconst a = 1\n'
   const view = render(<Markdown text={open} live />)
+  const pre = view.container.querySelector('pre')!
   expect(highlightCode).not.toHaveBeenCalled()
   view.rerender(<Markdown text={open} />)
   expect(highlightCode).toHaveBeenCalledTimes(1)
+  expect(view.container.querySelector('pre')).toBe(pre)
   cleanup()
   render(<Markdown text={open} />)
   expect(highlightCode).toHaveBeenCalledTimes(2)

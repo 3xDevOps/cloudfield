@@ -131,7 +131,10 @@ export function LinkedText({ text }: { text: string }) {
   return <>{parts}</>
 }
 
-const codeBlock = (plain: boolean): Components['code'] => ({ className, children }) => {
+const Plain = createContext(false)
+
+const CodeElement: Components['code'] = ({ className, children }) => {
+  const plain = useContext(Plain)
   const text = String(children ?? '')
   const lang = /language-([\w-]+)/.exec(className ?? '')?.[1]
   if (!lang && !text.includes('\n')) return <Code>{children}</Code>
@@ -145,7 +148,7 @@ const codeBlock = (plain: boolean): Components['code'] => ({ className, children
 
 const components: Components = {
   pre: ({ children }) => <>{children}</>,
-  code: codeBlock(false),
+  code: CodeElement,
   a: ({ href, children }) => {
     const file = href ? parsePath(href) : null
     if (file) return <FileLink target={file} explicit>{children}</FileLink>
@@ -177,17 +180,17 @@ function markPaths(parent: Root | Element) {
 
 const rehypePaths = () => markPaths
 
-const openComponents: Components = { ...components, code: codeBlock(true) }
-
 const Block = memo(function Block({ source, open }: { source: string; open: boolean }) {
-  return <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypePaths]} components={open ? openComponents : components}>{source}</ReactMarkdown>
+  return (
+    <Plain.Provider value={open}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypePaths]} components={components}>{source}</ReactMarkdown>
+    </Plain.Provider>
+  )
 })
-
-const closedFence = /^ {0,3}(`{3,}|~{3,})[^\n]*\n(?:[\s\S]*\n)? {0,3}\1[`~]* *\n*$/
 
 const blockEnter: Entrance = { motion: { duration: '--duration-270', easing: '--ease-enter' }, blur: true }
 
-/** While `live`, each block that appears after the first render fades in from a blur, and code in the last block stays unhighlighted until its fence closes. A `muted` text is the agent's own reasoning. */
+/** While `live`, each block that appears after the first render fades in from a blur, and code in the last block stays unhighlighted until another block follows. A `muted` text is the agent's own reasoning. */
 export function Markdown({ text, live = false, muted = false }: { text: string; live?: boolean; muted?: boolean }) {
   const blocks = useMemo(() => lexer(text).map((token) => token.raw).filter((raw) => raw.trim()), [text])
   const root = useRef<HTMLDivElement>(null)
@@ -202,7 +205,7 @@ export function Markdown({ text, live = false, muted = false }: { text: string; 
   })
   return (
     <div ref={root} data-slot="markdown" className={cn('markdown break-words', muted ? 'text-ui-sm text-muted' : 'text-prose text-text')}>
-      {blocks.map((raw, index) => <Block key={index} source={raw} open={live && index === blocks.length - 1 && !closedFence.test(raw)} />)}
+      {blocks.map((raw, index) => <Block key={index} source={raw} open={live && index === blocks.length - 1} />)}
     </div>
   )
 }
