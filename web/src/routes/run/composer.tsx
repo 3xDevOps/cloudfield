@@ -470,13 +470,15 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
   }
 
   const attempt = async (action: () => Promise<unknown>) => {
-    if (composerDraft(run.id).busy) return
+    if (composerDraft(run.id).busy) return false
     const request = beginDraftRequest(run.id, 'busy', { error: undefined, busyPrompt: false })
     try {
       await action()
       request.settle()
+      return true
     } catch (err) {
       request.settle({ error: message(err) })
+      return false
     }
   }
 
@@ -531,7 +533,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
     }
   }
 
-  const setOption = (option: ConfigOption, value: string) => new Promise<void>((resolve) => {
+  const setOption = (option: ConfigOption, value: string) => new Promise<boolean>((resolve) => {
     control.withControl(() => {
       const lease = sessionLease(useStore, run.id)
       return attempt(() => lease ? api.runACPSetOption(run.id, option.id, value, lease) : Promise.reject(new Error(optionUnsent))).then(resolve)

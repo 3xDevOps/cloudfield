@@ -3794,15 +3794,17 @@ The mode menu uses content-sized described rows; the model picker is
 `Command` inside `Popover`, preserving every advertised option and provider
 group with search by name, ID and description. Under its list a row of
 `RadioPills`, labelled with the option's name such as **Effort**, sets the
-agent's `thought_level` option. A line under the row gives the description
-of the level under the pointer or with focus, else of the selected one, when
-the agent describes its levels. A touch screen lays the levels out in even
-rows and does not focus the search field, which would raise its keyboard.
+agent's `thought_level` option. When the agent describes its levels, a line
+under the row gives the description of the level the pointer or keyboard
+focus last moved to, until either leaves the row, and of the selected level
+otherwise; each level is also `aria-describedby` its own. A touch screen lays the levels out in even rows of at most four and
+does not focus the search field, which would raise its keyboard.
 Each choice is a request to the agent, so the arrow keys, Home and End only
 move between levels and Space, Enter or a click chooses one. The chosen
 level shimmers until the agent confirms it, then the selection glides to it.
 A model or level picked while another change is still being set goes out
-once that one settles, so the last pick wins.
+once that one settles, so the last pick wins; it is dropped if the agent
+refused the change before it, whose error stays at the composer.
 Picking a model closes the picker; picking an effort leaves it open. An agent that offers an effort option and no model
 option gets the effort as a menu of its own. Selections use
 `run.acp.set_option`; `/` completes the agent's commands and `@` paths from

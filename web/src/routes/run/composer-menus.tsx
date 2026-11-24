@@ -116,15 +116,23 @@ type OptionPillProps = {
   /** The effort option a model pill also names and sets. */
   effort?: ConfigOption
   disabled: boolean
-  onSet: (option: ConfigOption, value: string) => Promise<void>
+  /** Resolves to whether the agent took the value. */
+  onSet: (option: ConfigOption, value: string) => Promise<boolean>
 }
 
 function EffortRow({ option, sending, onChoose }: { option: ConfigOption; sending?: string; onChoose: (value: string) => void }) {
   const label = useId()
   const [pointed, setPointed] = useState<string>()
-  // A navigation key's focus brings a click with it, in the same task, that must not choose.
-  const keyFocus = useRef(false)
+  // A navigation key brings a click with it, in the same task, that must not choose.
+  const byKey = useRef(false)
+  const markKey = () => {
+    byKey.current = true
+    queueMicrotask(() => {
+      byKey.current = false
+    })
+  }
   const levels = choices(option)
+  const shown = pointed ?? option.currentValue
   return (
     <div className="flex shrink-0 flex-col gap-1.5 border-t border-seam px-2 pt-2">
       <span id={label} className="text-ui-sm font-medium text-muted">{option.name}</span>
@@ -134,36 +142,40 @@ function EffortRow({ option, sending, onChoose }: { option: ConfigOption; sendin
         value={String(option.currentValue ?? '')}
         onBlur={() => setPointed(undefined)}
         onPointerLeave={() => setPointed(undefined)}
-        style={{ '--columns': levels.length > 4 ? Math.ceil(levels.length / 2) : levels.length } as CSSProperties}
+        style={{ '--columns': Math.ceil(levels.length / Math.ceil(levels.length / 4)) } as CSSProperties}
         className="w-full flex-wrap coarse:grid coarse:grid-cols-[repeat(var(--columns),minmax(0,1fr))]"
       >
-        {levels.map((choice) => (
+        {levels.map((choice, index) => (
           <RadioPillsItem
             key={choice.value}
             value={choice.value}
             aria-busy={choice.value === sending || undefined}
+            aria-describedby={choice.description ? `${label}-${index}` : undefined}
             className="h-6 px-2 text-ui-sm coarse:justify-center coarse:px-1"
             onPointerEnter={() => setPointed(choice.value)}
             onFocus={() => {
               setPointed(choice.value)
-              keyFocus.current = true
-              queueMicrotask(() => {
-                keyFocus.current = false
-              })
+              markKey()
             }}
             onClick={() => {
-              if (!keyFocus.current) onChoose(choice.value)
+              if (!byKey.current) onChoose(choice.value)
             }}
             onKeyDown={(event) => {
               if (event.key === 'Enter') onChoose(choice.value)
+              else if (event.key === 'Home' || event.key === 'End') markKey()
             }}
           >
             {choice.value === sending ? <Shimmer text={choice.name} /> : choice.name}
           </RadioPillsItem>
         ))}
       </RadioPills>
+      {/* Every description shares one cell: each level keeps its own for a screen reader, and the cell never changes height. */}
       {levels.some((choice) => choice.description) && (
-        <p className="min-h-[1lh] text-ui-sm text-muted coarse:min-h-[2lh]">{levels.find((choice) => choice.value === (pointed ?? option.currentValue))?.description}</p>
+        <div className="grid text-ui-sm text-muted">
+          {levels.map((choice, index) => (
+            <p key={choice.value} id={`${label}-${index}`} className={cn('[grid-area:1/1]', choice.value !== shown && 'invisible')}>{choice.description}</p>
+          ))}
+        </div>
       )}
     </div>
   )
@@ -194,12 +206,13 @@ function OptionPill({ option, effort, disabled, onSet }: OptionPillProps) {
   const send = (target: ConfigOption, value: string) => {
     inFlight.current = true
     setSending([target, value])
-    void latestSet.current(target, value).finally(() => {
+    void latestSet.current(target, value).then((taken) => {
       inFlight.current = false
       setSending(undefined)
       const next = queued.current
       queued.current = undefined
-      if (next) send(...next)
+      // After a refusal the next request would clear its error from the composer.
+      if (next && taken) send(...next)
     })
   }
   // A pick made while another is on its way waits for it, so the last one wins.
@@ -210,7 +223,7 @@ function OptionPill({ option, effort, disabled, onSet }: OptionPillProps) {
   }
   // Keep the trigger focusable so Radix can return focus on close, not after the request.
   const trigger = (
-    <Button variant="ghost" size="sm" aria-disabled={(disabled && !busy) || undefined} aria-busy={busy || undefined} aria-label={effort ? `${named(option)}, ${named(effort)}` : named(option)}>
+    <Button variant="ghost" size="sm" className="aria-expanded:bg-hover-chrome aria-expanded:text-text" aria-disabled={(unavailable && !(open && busy)) || undefined} aria-busy={busy || undefined} aria-label={effort ? `${named(option)}, ${named(effort)}` : named(option)}>
       <TextSwap className={effort ? 'max-w-[min(12rem,24cqw)]' : 'max-w-32'} layerClassName="min-w-0 truncate">{current?.name ?? option.name}</TextSwap>
       {effort && (
         <>
@@ -319,7 +332,7 @@ function OptionPill({ option, effort, disabled, onSet }: OptionPillProps) {
 export function OptionPills({ options, disabled, onSet }: {
   options: ConfigOption[]
   disabled: boolean
-  onSet: (option: ConfigOption, value: string) => Promise<void>
+  onSet: (option: ConfigOption, value: string) => Promise<boolean>
 }) {
   const shown = footerCategories.flatMap((category) => options.filter((option) => option.category === category && option.type === 'select'))
   const model = shown.find((option) => option.category === 'model')

@@ -163,7 +163,8 @@ and the button sends. The button changes with the turn:
 | **Send** | no turn is running | starts a turn |
 | **Steer** | a turn runs and the agent supports steering | joins the running turn |
 | **Queue** | a turn runs and you hold `Mod+Shift`, or the agent cannot steer | runs after this turn |
-| **Interrupt**, a red stop square | a turn runs and the box is empty | stops the turn and cancels its requests |
+| **Interrupt**, a round red stop button | a turn runs and the box is empty | stops the turn and cancels its requests |
+| **Stop waiting**, the same stop button | the agent waits on background work and the box is empty | stops the wait; tasks already started keep running |
 | **Resume** | the session is paused | resumes it |
 
 `Enter` never interrupts. `Mod+Shift+Enter` always queues. `/` lists the agent's

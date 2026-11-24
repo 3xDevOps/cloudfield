@@ -10,7 +10,7 @@ const effort: ConfigOption = {
   options: [{ value: 'low', name: 'Low', description: 'Answers fast' }, { value: 'medium', name: 'Medium' }, { value: 'high', name: 'High', description: 'Thinks longer' }],
 }
 
-function mount(options: ConfigOption[], onSet = vi.fn(async () => {})) {
+function mount(options: ConfigOption[], onSet = vi.fn(async () => true)) {
   render(<OptionPills options={options} disabled={false} onSet={onSet} />)
   return onSet
 }
@@ -26,41 +26,53 @@ describe('OptionPills', () => {
   })
 
   it('sets the effort from the model picker, which stays open', async () => {
-    const settle = Promise.withResolvers<void>()
+    const settle = Promise.withResolvers<boolean>()
     const onSet = mount([model, effort], vi.fn(() => settle.promise))
     await openPicker()
     expect(level('High').getAttribute('data-state')).toBe('checked')
-    expect(screen.getByText('Thinks longer')).toBeDefined()
+    expect(document.getElementById(level('High').getAttribute('aria-describedby')!)?.textContent).toBe('Thinks longer')
+    expect(level('Medium').getAttribute('aria-describedby')).toBeNull()
     await userEvent.click(level('Low'))
     expect(onSet).toHaveBeenCalledExactlyOnceWith(effort, 'low')
     expect(level('Low').getAttribute('aria-busy')).toBe('true')
-    settle.resolve()
+    settle.resolve(true)
     await waitFor(() => expect(level('Low').getAttribute('aria-busy')).toBeNull())
     expect(screen.getByLabelText('Search Model')).toBeDefined()
   })
 
   it('sends the last pick made while another is on its way', async () => {
-    const first = Promise.withResolvers<void>()
-    const onSet = mount([model, effort], vi.fn().mockReturnValueOnce(first.promise).mockResolvedValue(undefined))
+    const first = Promise.withResolvers<boolean>()
+    const onSet = mount([model, effort], vi.fn().mockReturnValueOnce(first.promise).mockResolvedValue(true))
     await openPicker()
     await userEvent.click(level('Low'))
     await userEvent.click(level('Medium'))
     await userEvent.click(level('High'))
     expect(onSet).toHaveBeenCalledOnce()
-    first.resolve()
+    first.resolve(true)
     await waitFor(() => expect(onSet).toHaveBeenCalledTimes(2))
     expect(onSet).toHaveBeenLastCalledWith(effort, 'high')
   })
 
+  it('drops the waiting pick when the agent refuses the one before it', async () => {
+    const first = Promise.withResolvers<boolean>()
+    const onSet = mount([model, effort], vi.fn().mockReturnValueOnce(first.promise).mockResolvedValue(true))
+    await openPicker()
+    await userEvent.click(level('Low'))
+    await userEvent.click(level('Medium'))
+    first.resolve(false)
+    await waitFor(() => expect(level('Low').getAttribute('aria-busy')).toBeNull())
+    expect(onSet).toHaveBeenCalledOnce()
+  })
+
   it('closes on a model picked while an effort is on its way, and sends it after', async () => {
-    const first = Promise.withResolvers<void>()
-    const onSet = mount([model, effort], vi.fn().mockReturnValueOnce(first.promise).mockResolvedValue(undefined))
+    const first = Promise.withResolvers<boolean>()
+    const onSet = mount([model, effort], vi.fn().mockReturnValueOnce(first.promise).mockResolvedValue(true))
     await openPicker()
     await userEvent.click(level('Low'))
     await userEvent.click(screen.getByRole('option', { name: /^Opus 5.5/ }))
     await waitFor(() => expect(screen.queryByLabelText('Search Model')).toBeNull())
     expect(onSet).toHaveBeenCalledOnce()
-    first.resolve()
+    first.resolve(true)
     await waitFor(() => expect(onSet).toHaveBeenLastCalledWith(model, 'opus'))
   })
 
@@ -71,9 +83,8 @@ describe('OptionPills', () => {
     // Radix chooses on arrow focus only while the key is still down.
     await userEvent.keyboard('{ArrowLeft>}')
     await waitFor(() => expect(document.activeElement).toBe(level('Medium')))
-    await userEvent.keyboard('{/ArrowLeft}{Home}')
+    await userEvent.keyboard('{/ArrowLeft}{Home}{Home}')
     expect(document.activeElement).toBe(level('Low'))
-    expect(screen.getByText('Answers fast')).toBeDefined()
     expect(onSet).not.toHaveBeenCalled()
     await userEvent.keyboard(' ')
     expect(onSet).toHaveBeenCalledExactlyOnceWith(effort, 'low')
