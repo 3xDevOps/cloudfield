@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type * as React from 'react'
+import { CenterView } from '@/components/shell/center-view'
 import { SidebarRuns } from '@/components/shell/sidebar-runs'
 import { changeTiles, openToSide } from '@/components/tiles/area'
 import { TileArea } from '@/components/tiles/tile-area'
@@ -42,8 +43,10 @@ const seeds = [
 
 /** What the area last told each frame about its tile, by session and view. */
 const frames = new Map<string, FrameTile & { params: Record<string, string> }>()
+let frameRenders = 0
 
 function Recorded(props: React.ComponentProps<typeof RunFrame>) {
+  frameRenders += 1
   frames.set(`${props.run.id}:${props.params.view}`, { ...props.tile!, params: props.params })
   return <RunFrame {...props} />
 }
@@ -327,6 +330,34 @@ describe('a session in two tiles', () => {
     expect(await hintOn(chat)).toBe('On screen in the tile at left')
   })
 
+  it('draws the lines under the header in each of its tiles, so focus moves no pane', () => {
+    act(() => state().upsertRun(run({ ...enhanced, id: 'run_child', task: 'review the diff', parent_run_id: 'run_1' })))
+    show('run_child')
+    beside('run_child', 'changes')
+    const lineage = () => tiles().map((node) => within(node).queryAllByRole('navigation', { name: 'Session lineage' }).length)
+    expect(lineage()).toEqual([1, 1])
+    fireEvent.pointerDown(tiles()[0])
+    expect(lineage()).toEqual([1, 1])
+  })
+
+  it('closes the tile of a view the session stops offering as soon as it does', async () => {
+    show()
+    beside('run_1', 'browser')
+    expect(names()).toEqual([`${first}, Chat, tile 1 of 2`, `${first}, Browser, tile 2 of 2`])
+    act(() => state().upsertRun({ ...state().runs.run_1, status: 'merged' }))
+    await settled()
+    expect(names()).toEqual([`${first}, Chat, tile 1 of 1`])
+  })
+
+  it('renders no frame again for an event from a session in no tile', async () => {
+    show()
+    beside('run_2')
+    await settled()
+    const before = frameRenders
+    act(() => state().upsertRun({ ...state().runs.run_3, reason: 'needs input: Which table?' }))
+    expect(frameRenders).toBe(before)
+  })
+
   it('stays in the other tile when the click on an arrowed view then focuses the tab it pressed', async () => {
     chatAndChanges()
     await userEvent.click(within(tile(1).getByRole('tablist', { name: 'Session views' })).getByRole('tab', { name: 'Changes' }))
@@ -501,6 +532,26 @@ describe('focus', () => {
     await settled()
     press('.', { ctrlKey: true })
     expect(await screen.findAllByRole('dialog', { name: 'Session details' })).toHaveLength(1)
+    expect(screen.getByRole('button', { name: `Copy branch ${state().runs.run_2.branch}` })).toBeDefined()
+  })
+
+  it('moves the keyboard to the heading of a session opened from another page', async () => {
+    render(<><button>outside</button><main id="main" tabIndex={-1}><CenterView /></main></>)
+    screen.getByRole('button', { name: 'outside' }).focus()
+    act(() => state().navigate('run', { runId: 'run_1' }))
+    await settled()
+    expect(document.activeElement).toBe(screen.getByRole('heading', { level: 1, name: first }))
+  })
+
+  it('adds a history entry only for a change that opens a tab', () => {
+    const stop = bindRouteToUrl(useStore)
+    show()
+    beside('run_2')
+    const entries = window.history.length
+    arrange((layout, ctx) => pickTab(layout, layout.focused, 'run_1', ctx, 'session'))
+    expect(state().route.params.runId).toBe('run_1')
+    expect(window.history.length).toBe(entries)
+    stop()
   })
 
   it('follows a click into another tile, replacing the history entry', () => {
@@ -600,6 +651,14 @@ describe('the composer', () => {
     expect(fields(2)[0].rows).toBe(2)
   })
 
+  it('opens Chat for the header Reply even where a docked field could take the answer', async () => {
+    show('run_3', 'changes')
+    await settled()
+    await live('run_3', 1)
+    fireEvent.click(tile(1).getByRole('button', { name: 'Reply' }))
+    expect(state().route.params).toMatchObject({ runId: 'run_3', view: 'session' })
+  })
+
   it('docks no field under a Browser or a Standard session', async () => {
     show('run_2', 'browser')
     await settled()
@@ -636,17 +695,17 @@ describe('seams', () => {
 })
 
 describe('motion', () => {
-  it('glides the tile that stays from its old rectangle with its body already at the final size, and never on a seam move', async () => {
+  it('glides the tile that stays from its old rectangle with its body already at the final width, the new one in from the edge, and never on a seam move', async () => {
     sized(1600, 900)
     show()
     const animate = vi.spyOn(Element.prototype, 'animate')
     const stays = tiles()[0]
     const body = stays.lastElementChild as HTMLElement
     fireEvent.click(screen.getByRole('button', { name: 'Split right' }))
-    expect(animate.mock.contexts).toEqual([stays, tiles()[1].lastElementChild])
+    expect(animate.mock.contexts).toEqual([stays, tiles()[1]])
     expect(animate.mock.calls[0][0]).toEqual([{ left: '0%', top: '0%', width: '100%', height: '100%', zIndex: 1 }, { left: '0%', top: '0%', width: '50%', height: '100%', zIndex: 1 }])
-    expect(animate.mock.calls[1][0]).toEqual([{ opacity: 0 }, { opacity: 1 }])
-    expect([body.style.width, body.style.height, stays.style.overflow]).toEqual(['1600px', '900px', 'clip'])
+    expect(animate.mock.calls[1][0]).toEqual([{ left: '100%', top: '0%', width: '0%', height: '100%', zIndex: 1 }, { left: '50%', top: '0%', width: '50%', height: '100%', zIndex: 1 }])
+    expect([body.style.width, body.style.height, stays.style.overflow]).toEqual(['1600px', '', 'clip'])
     await settled()
     expect([body.style.width, body.style.height, stays.style.overflow]).toEqual(['', '', ''])
 
@@ -710,6 +769,19 @@ describe('maximize', () => {
     expect(state().route.name).toBe('run')
     press('Escape')
     expect(state().route.name).toBe('board')
+  })
+})
+
+describe('closing', () => {
+  it('opens the board in place of the entry when the last tab closes beside an empty tile', () => {
+    const stop = bindRouteToUrl(useStore)
+    show()
+    fireEvent.click(screen.getByRole('button', { name: 'Split right' }))
+    const entries = window.history.length
+    fireEvent.click(tile(1).getByRole('button', { name: `Close ${first}` }))
+    expect(state().route.name).toBe('board')
+    expect(window.history.length).toBe(entries)
+    stop()
   })
 })
 

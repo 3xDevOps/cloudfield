@@ -1,18 +1,20 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { changeTiles, TileAreaContext, viewsElsewhere } from '@/components/tiles/area'
+import { focusView } from '@/components/shell/center-view'
+import { changeTiles, focusInTile, narrowBelow, TileAreaContext, tileNode, viewsElsewhere } from '@/components/tiles/area'
 import { TileDragLayer } from '@/components/tiles/drag'
 import { fits, tileRects, type Rect } from '@/components/tiles/geometry'
 import { Tile } from '@/components/tiles/tile'
 import { Splitter } from '@/components/ui/splitter'
 import { prefersReducedMotion, useElementSize } from '@/lib/hooks'
 import { useKeybindings } from '@/lib/keybindings'
-import { play, playEntrance } from '@/lib/motion'
+import { play, playEntrance, time } from '@/lib/motion'
 import { runLabel } from '@/lib/status'
 import { redirectRoute } from '@/lib/url-state'
 import type { FrameTile, RunFrame } from '@/routes/run'
 import { RunSession } from '@/routes/run/session-host'
 import type { RunView } from '@/routes/run/views'
+import { useShallow } from 'zustand/react/shallow'
 import { useStore } from '@/store'
 import { useCapability } from '@/store/hooks'
 import type { RunRecord } from '@/store/runs'
@@ -22,7 +24,6 @@ import {
   controlsTile,
   focusTile,
   maximizeTile,
-  onScreenRuns,
   resolveView,
   routeTiles,
   setRatio,
@@ -32,16 +33,11 @@ import {
   tilesAfter,
   visibleTiles,
   type Tile as TileNode,
+  type TileSide,
   type TileTab,
 } from '@/store/tiles'
 
-/** A tile narrower than this draws its strip with icons for words. */
-const narrowBelow = 560
-
-function focusHeading(tileId: string) {
-  const tile = [...document.querySelectorAll<HTMLElement>('[data-tile]')].find((node) => node.dataset.tile === tileId)
-  tile?.querySelector<HTMLElement>('h1[tabindex], h2[tabindex]')?.focus({ preventScroll: true })
-}
+const focusHeading = (tileId: string) => focusInTile(tileId, 'h1[tabindex], h2[tabindex], input')
 
 const full: Rect = { left: 0, top: 0, width: 100, height: 100 }
 const sides = ['left', 'top', 'width', 'height'] as const
@@ -49,10 +45,11 @@ const glides = new WeakMap<HTMLElement, Animation>()
 
 /**
  * Plays a tile from the rectangle it had, in percent of the area, to the one
- * it has now. Its body takes the final size at once and the tile clips it, so
- * a terminal or Browser inside is sized once, not on every frame. The end
- * keyframe is spelled out so that a glide cut short by the next one reads
- * where the tile is drawn, not a value already moving to the new rectangle.
+ * it has now. Its body takes the final width at once and the tile clips it, so
+ * nothing rewraps on the way; a terminal or Browser on show takes the final
+ * height too, and is sized once, not on every frame. The end keyframe is
+ * spelled out so that a glide cut short by the next one reads where the tile
+ * is drawn, not a value already moving to the new rectangle.
  */
 function glideTile(tile: HTMLElement, from: Rect, to: Rect) {
   const body = tile.lastElementChild as HTMLElement
@@ -62,8 +59,10 @@ function glideTile(tile: HTMLElement, from: Rect, to: Rect) {
   body.style.width = body.style.height = body.style.flex = ''
   const { width, height } = body.getBoundingClientRect()
   body.style.width = `${width}px`
-  body.style.height = `${height}px`
-  body.style.flex = 'none'
+  if ([...body.querySelectorAll('.xterm, canvas')].some((surface) => !surface.closest('[inert]'))) {
+    body.style.height = `${height}px`
+    body.style.flex = 'none'
+  }
   tile.style.overflow = 'clip'
   const end = Object.fromEntries(sides.map((side) => [side, `${to[side]}%`]))
   const animation = play(tile, [{ ...start, zIndex: 1 }, { ...end, zIndex: 1 }], { duration: '--duration-glide', easing: '--ease-glide' })
@@ -76,8 +75,19 @@ function glideTile(tile: HTMLElement, from: Rect, to: Rect) {
   animation.finished.then(settle, settle)
 }
 
-/** One session view inside its tile. The focused tile's frame reads the route; the others only their tab. */
-function TileFrame({ Frame, run, tab, view, slot, tile, route }: {
+/** Where a tile that was not on screen grows from: the far edge of the room a tile of `before` gave up for it. */
+function grownFrom(before: Record<string, Rect>, to: Rect): Rect | undefined {
+  const host = Object.values(before).find((rect) =>
+    rect.left <= to.left && rect.top <= to.top && rect.left + rect.width >= to.left + to.width && rect.top + rect.height >= to.top + to.height)
+  if (!host) return undefined
+  if (to.left > host.left) return { ...to, left: to.left + to.width, width: 0 }
+  if (to.top > host.top) return { ...to, top: to.top + to.height, height: 0 }
+  if (to.width < host.width) return { ...to, width: 0 }
+  if (to.height < host.height) return { ...to, height: 0 }
+  return undefined
+}
+
+interface TileFrameProps {
   Frame: typeof RunFrame
   run: RunRecord
   tab: TileTab
@@ -85,13 +95,27 @@ function TileFrame({ Frame, run, tab, view, slot, tile, route }: {
   slot: HTMLElement
   tile: FrameTile
   route: Record<string, string>
-}) {
+}
+
+/**
+ * One session view inside its tile. The focused tile's frame reads the route;
+ * the others only their tab. It renders again only when what it shows changed,
+ * so an event from one session stops at the area for every other.
+ */
+const TileFrame = memo(function TileFrame({ Frame, run, tab, view, slot, tile, route }: TileFrameProps) {
   const params = useMemo(
     () => (tile.focused ? { ...route, runId: run.id, view } : { runId: run.id, view, ...(tab.repo && { repo: tab.repo }) }),
     [tile.focused, route, run.id, view, tab.repo],
   )
+  // The frame mounts a render after the route changed, when focus has already fallen to `main` for want of a heading.
+  useEffect(() => {
+    if (tile.focused && document.activeElement?.id === 'main') focusView()
+  }, [])
   return createPortal(<Frame run={run} params={params} tile={tile} />, slot, tab.id)
-}
+}, (before, now) =>
+  before.Frame === now.Frame && before.run === now.run && before.tab === now.tab && before.view === now.view && before.slot === now.slot
+  && (now.tile.focused ? before.route === now.route : true)
+  && JSON.stringify(before.tile) === JSON.stringify(now.tile))
 
 /**
  * The desktop session page: the tile layout, drawn flat so that a tile keeps
@@ -101,7 +125,9 @@ function TileFrame({ Frame, run, tab, view, slot, tile, route }: {
  */
 export function TileArea({ params, Frame }: { params: Record<string, string>; Frame: typeof RunFrame }) {
   const stored = useStore((s) => s.tiles)
-  const runs = useStore((s) => s.runs)
+  const tiles = tileList(stored.root)
+  // Only the sessions the tabs name: an event from any other session renders nothing here.
+  const runs = useStore(useShallow((s) => Object.fromEntries(tiles.flatMap((tile) => tile.tabs.map((tab) => [tab.runId, s.runs[tab.runId]])))))
   const memory = useStore((s) => s.runViewMemory)
   const identityKey = useStore((s) => s.identityKey)
   const epoch = useStore((s) => s.terminalCacheEpoch)
@@ -113,9 +139,13 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
   const onSlot = useCallback((tileId: string, slot: HTMLElement | null) => setSlots((before) => ({ ...before, [tileId]: slot })), [])
   const [linked, link] = useState<string | null>(null)
   const [said, say] = useState('')
-  const [picking, pick] = useState<string | null>(null)
+  const [picking, setPicking] = useState<string | null>(null)
+  const [noRoom, setNoRoom] = useState<TileSide | null>(null)
+  const pick = useCallback((tileId: string | null) => {
+    setPicking(tileId)
+    setNoRoom(null)
+  }, [])
 
-  const tiles = tileList(stored.root)
   const measured = area.width > 0
   const cramped = measured && tiles.length > 1 && !fits(stored.root, area)
   const layout = useMemo(() => (cramped ? { ...stored, maximized: true } : stored), [cramped, stored])
@@ -123,8 +153,11 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
     useStore.setState({ tilesCramped: cramped })
   }, [cramped])
   const visible = visibleTiles(layout)
+  // The tiles a maximized one parks stay mounted and hidden where they were, so restoring them reloads nothing.
+  // A layout that does not fit has nowhere to keep them.
+  const mounted = stored.maximized && !cramped ? tiles : visible
   const rects = tileRects(layout.root, area)
-  const drawn = Object.fromEntries(visible.map((tile) => [tile.id, layout.maximized ? full : rects.tiles[tile.id]]))
+  const drawn = Object.fromEntries(mounted.map((tile) => [tile.id, layout.maximized && tile.id === layout.focused ? full : rects.tiles[tile.id]]))
   const narrow = (tileId: string) => measured && (drawn[tileId].width / 100) * area.width < narrowBelow
 
   // A seam drag and a window resize change no shape, so they never glide.
@@ -139,10 +172,31 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
     for (const tile of document.querySelectorAll<HTMLElement>('[data-tile]')) {
       const from = before.drawn[tile.dataset.tile!]
       const to = drawn[tile.dataset.tile!]
-      if (!from) playEntrance(tile.lastElementChild!, { motion: { duration: '--duration-200', easing: '--ease-enter' } })
-      else if (sides.some((side) => from[side] !== to[side])) glideTile(tile, from, to)
+      const grown = from ?? grownFrom(before.drawn, to)
+      if (!grown) playEntrance(tile.lastElementChild!, { motion: { duration: '--duration-200', easing: '--ease-enter' } })
+      else if (sides.some((side) => grown[side] !== to[side])) glideTile(tile, grown, to)
     }
   })
+
+  // A closed tile's picture stays under the glide of the tile that takes its room, so the moving edge covers a tile and not a hole.
+  useEffect(() => useStore.subscribe((s, before) => {
+    const hold = time('--duration-glide')
+    if (s.tiles === before.tiles || !hold || prefersReducedMotion()) return
+    const kept = new Set(tileList(s.tiles.root).map((tile) => tile.id))
+    for (const closed of tileList(before.tiles.root)) {
+      const node = kept.has(closed.id) ? null : tileNode(closed.id)
+      if (!node || node.inert) continue
+      const ghost = node.cloneNode(true) as HTMLElement
+      for (const named of [ghost, ...ghost.querySelectorAll('[id], [data-tile], [data-tab]')]) for (const name of ['id', 'data-tile', 'data-tab']) named.removeAttribute(name)
+      ghost.inert = true
+      ghost.ariaHidden = 'true'
+      node.parentElement!.prepend(ghost)
+      setTimeout(() => ghost.remove(), hold)
+    }
+  }), [])
+
+  // A view that stopped being offered, on a session that finished for instance, would leave two tabs showing one thing.
+  useEffect(() => changeTiles((before) => before), [ctx])
 
   // No session mounts until the layout has followed the route.
   const focusedTab = activeTab(tiles.find((tile) => tile.id === stored.focused)!)
@@ -156,7 +210,6 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
     // A deleted session takes its tab with it. An empty layout shows it again, as not found; otherwise the route follows the focus.
     if (fresh ? !synced : !held && tiles.every((tile) => !tile.tabs.length)) useStore.setState((s) => tilesAfter(s, (before, context) => routeTiles(before, params, context)))
     else if (!held) changeTiles((before) => before)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params, held])
 
   // Only a press or the Tab key focuses a tile: after a jump to another tile, a closing popover or the pressed
@@ -207,17 +260,19 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
     say,
     link,
     picking,
+    noRoom,
     pick,
     split: (tileId: string, side: 'right' | 'down') => {
       if (measured && !fits(splitTile(stored, tileId, side).root, area)) {
         pick(tileId)
+        setNoRoom(side)
         say('No room to split: adds a tab')
         return
       }
       changeTiles((before) => splitTile(before, tileId, side))
       say(`Split ${side}`)
     },
-  }), [layout, cramped, ctx, picking, stored, measured, area])
+  }), [layout, cramped, ctx, picking, noRoom, pick, stored, measured, area])
 
   const several = tiles.length > 1
   const focus = (tile: TileNode) => {
@@ -250,6 +305,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
         'tile-close-tab': () => {
           changeTiles((before) => closeTab(before, focusedTab.id))
           say('Tab closed')
+          requestAnimationFrame(() => focusHeading(useStore.getState().tiles.focused))
         },
       }),
     }),
@@ -268,7 +324,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
     }),
   })
 
-  const shown = visible.flatMap((tile) => {
+  const shown = mounted.flatMap((tile) => {
     const tab = activeTab(tile)
     const run = tab && runs[tab.runId]
     return run ? [{ tile, tab, run, view: resolveView(tab, run, cap, memory) }] : []
@@ -280,11 +336,12 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
         ref={areaRef}
         className="relative h-full min-h-0 overflow-hidden"
       >
-        {visible.map((tile) => (
+        {mounted.map((tile) => (
           <Tile
             key={tile.id}
             tile={tile}
             rect={drawn[tile.id]}
+            parked={!visible.includes(tile)}
             narrow={narrow(tile.id)}
             room={{
               right: !measured || fits(splitTile(stored, tile.id, 'right').root, area),
@@ -312,17 +369,15 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
             />
           )
         })}
-        {arrived && onScreenRuns(layout).map((runId) => {
-          const run = runs[runId]
-          const frames = shown.filter((frame) => frame.run.id === runId)
-          if (!run) return null
+        {arrived && [...new Set(shown.map((frame) => frame.run))].map((run) => {
+          const runId = run.id
+          const frames = shown.filter((frame) => frame.run === run)
           const terminalHost = (frames.find((frame) => frame.view === 'terminal') ?? frames[0]).tile.id
           const controls = controlsTile(layout, runId)?.id
           return (
             <RunSession key={JSON.stringify([identityKey, epoch, run.id, run.created_at])} run={run} views={frames.map((frame) => frame.view)}>
               {frames.map(({ tile, tab, view }) => {
                 const slot = slots[tile.id]
-                const elsewhere = viewsElsewhere(layout, tile.id, runId, ctx)
                 return slot && (
                   <TileFrame
                     key={tab.id}
@@ -337,10 +392,10 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
                       controls: tile.id === controls,
                       alone: visible.length === 1,
                       terminalHost: tile.id === terminalHost,
-                      chatOnScreen: frames.some((frame) => frame.view === 'session' && frame.tile !== tile),
+                      chatOnScreen: frames.some((frame) => frame.view === 'session' && frame.tile !== tile && visible.includes(frame.tile)),
                       elsewhere: tiles.flatMap((other) => other.tabs).filter((other) => other.runId === runId && other.id !== tab.id).map((other) => resolveView(other, run, cap, memory)),
-                      arrows: Object.fromEntries(Object.entries(elsewhere).map(([held, { where }]) => [held, where])),
-                      onArrow: (held) => link(held ? elsewhere[held]?.tile ?? null : null),
+                      arrows: viewsElsewhere(layout, tile.id, runId, ctx),
+                      onArrow: link,
                     }}
                   />
                 )

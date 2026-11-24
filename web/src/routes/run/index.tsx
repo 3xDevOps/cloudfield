@@ -80,10 +80,10 @@ export interface FrameTile {
   chatOnScreen: boolean
   /** The views of this session that other tabs hold. */
   elsewhere: RunView[]
-  /** Of those, the ones on screen in another tile, with the words that say where. */
-  arrows: Partial<Record<RunView, string>>
-  /** Marks the tile that shows `view` while its arrow is pointed at. */
-  onArrow: (view: RunView | null) => void
+  /** Of those, the ones on screen in another tile, with that tile and the words that say where it is. */
+  arrows: Partial<Record<RunView, { tile: string; where: string }>>
+  /** Marks a tile while the arrow of the view it shows is pointed at. */
+  onArrow: (tileId: string | null) => void
 }
 
 const lone: FrameTile = { focused: true, controls: true, alone: true, terminalHost: true, chatOnScreen: false, elsewhere: [], arrows: {}, onArrow: () => {} }
@@ -143,9 +143,10 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
     if (focused) setShownRunView(run.id, view)
   }, [focused, setShownRunView, run.id, view])
 
-  // A tile off Chat keeps a field for the agent unless the session's Chat is on screen. A pending request is answered in Chat, and a Browser keeps its height for the page.
+  // A tile off Chat keeps a field for the agent unless the session's Chat is on screen. A pending request is answered in Chat,
+  // and a Browser or a Terminal keeps its height, which a field that opens and folds would change.
   const requested = useStore((s) => Boolean(s.acpSessions[run.id]?.pending.length))
-  const docked = Boolean(tile) && run.acp === true && agent.steerable && !requested && view !== 'session' && view !== 'browser' && !chatOnScreen
+  const docked = Boolean(tile) && run.acp === true && agent.steerable && !requested && (view === 'changes' || view === 'files' || view === 'trace') && !chatOnScreen
 
   const switchable = agentEntry?.switchable === true
   const shared = useSharedPresence(run, agent)
@@ -227,8 +228,7 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
       }))
     },
     focusComposer: () => {
-      if (dockedTextarea.current) dockedTextarea.current.focus()
-      else if (chatOnScreen) navigate('run', { runId: run.id, view: 'session', focus: 'composer' }, { remember: false })
+      if (chatOnScreen) navigate('run', { runId: run.id, view: 'session', focus: 'composer' }, { remember: false })
       else {
         go('session', { remember: false })
         requestAnimationFrame(() => textarea.current?.focus())
@@ -257,7 +257,7 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
       returnTo.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
       setDetails(!detailsOpen)
     },
-    'focus-composer': nav.focusComposer,
+    'focus-composer': () => (dockedTextarea.current ? dockedTextarea.current.focus() : nav.focusComposer()),
   } : {})
   useKeybindings('browser', {
     'browser-address': browser && focused ? (event) => {

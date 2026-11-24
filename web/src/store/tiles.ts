@@ -320,7 +320,7 @@ export function settleTiles(layout: TileLayout, ctx: ViewContext, prune = false)
     })
     return tabs.every((tab, index) => tab === tile.tabs[index]) ? tile : { ...tile, tabs }
   })!
-  return closeTabs({ ...layout, root }, (tab) => gone.has(tab.id))
+  return root === layout.root && !gone.size ? layout : closeTabs({ ...layout, root }, (tab) => gone.has(tab.id))
 }
 
 function normalNode(value: unknown, ids: Set<string>): TileNode | null {
@@ -389,7 +389,7 @@ export function viewContext(s: RootState): ViewContext {
 export function tilesAfter(s: RootState, change: (layout: TileLayout, ctx: ViewContext) => TileLayout): Pick<TilesSlice, 'tiles' | 'savedTiles'> {
   const ctx = viewContext(s)
   const tiles = change(s.hydrated && s.staleSince === null ? settleTiles(s.tiles, ctx) : s.tiles, ctx)
-  return { tiles, savedTiles: s.identityKey ? { ...s.savedTiles, [s.identityKey]: tiles } : s.savedTiles }
+  return { tiles, savedTiles: s.identityKey && tiles !== s.tiles ? { ...s.savedTiles, [s.identityKey]: tiles } : s.savedTiles }
 }
 
 export const createTilesSlice: SliceCreator<TilesSlice> = (set) => ({

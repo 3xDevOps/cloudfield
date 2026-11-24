@@ -4,6 +4,7 @@ import { ArrowUpRight, Camera, Eye, Network, PanelRight, ScrollText } from '@/co
 import { permissionLabel, permissions } from '@/components/launch/permission-control'
 import { RunActions } from '@/components/run-actions'
 import { RunRetention } from '@/components/run-retention'
+import { narrowBelow } from '@/components/tiles/area'
 import { useTileDrag } from '@/components/tiles/drag'
 import { ConnectionLine } from '@/components/shell/connection'
 import { Badge } from '@/components/ui/badge'
@@ -36,6 +37,7 @@ import { requestCardID } from '@/routes/run/requests'
 import { PhoneRunHeader } from '@/routes/run/phone-header'
 import { runViewIcon } from '@/routes/run/view-icons'
 import { runViewLabel, type RunView } from '@/routes/run/views'
+import type { FrameTile } from '@/routes/run'
 import { useStore } from '@/store'
 import { queuedSteers, unansweredQuestions } from '@/store/collaboration'
 import { useHeaderPrimary, useNeedsYouRuns, useRunPresentation } from '@/store/hooks'
@@ -48,6 +50,7 @@ import { runWatch } from '@/store/watches'
 export interface RunNavigation {
   go: (view: RunView, options?: NavigateOptions) => void
   reveal: (cardID: string) => void
+  /** Opens Chat with its composer focused. */
   focusComposer: () => void
   focusRequest: () => void
 }
@@ -64,6 +67,7 @@ export function usePrimaryAction(run: RunRecord, view: RunView, agent: AgentTerm
   const room = useStore((s) => s.roomMessages[run.id])
   const selfID = useStore((s) => s.info?.member.id)
   const shown = useRunPresentation(run)
+  const requested = useStore((s) => Boolean(s.acpSessions[run.id]?.pending.length))
   // A finished run asks nothing of anyone, so Review is not a needs-you action.
   if (!condition) {
     return shown.state === 'ready' && run.member_id === selfID && view !== 'changes'
@@ -77,7 +81,8 @@ export function usePrimaryAction(run: RunRecord, view: RunView, agent: AgentTerm
       ? null
       : { label: action.label, act: () => { nav.go('terminal', { remember: false }); if (!agent.localControl && !agent.controlUnavailable) agent.session.takeControl() } }
 
-  if (action.kind === 'reply') return { label: action.label, act: nav.focusComposer }
+  // Chat answers a pending request on its card, which is the tile's one filled button.
+  if (action.kind === 'reply') return requested && view === 'session' ? null : { label: action.label, act: nav.focusComposer }
   switch (condition.target) {
     case 'changes':
       return view === 'changes' ? null : { label: action.label, act: () => nav.go('changes', { remember: false }) }
@@ -183,12 +188,6 @@ function StateLine({ run, agentName, narrow, controls, chip }: { run: RunRecord;
                 {mode}
               </span>
             </span>
-            {run.permission && run.permission !== 'default' && (
-              <span className={part}>
-                <span aria-hidden>·</span>
-                <Badge tone={run.permission === 'root' ? 'needs-you' : 'neutral'} title={permissions.find((p) => p.value === run.permission)?.detail}>{permissionLabel(run.permission)}</Badge>
-              </span>
-            )}
             {accountID && (
               <span className={part}>
                 <span aria-hidden>·</span>
@@ -201,27 +200,27 @@ function StateLine({ run, agentName, narrow, controls, chip }: { run: RunRecord;
                 <span className="min-w-0 truncate">Launched via {run.via}</span>
               </span>
             )}
-            {controls && watch && (
-              <span className={part}>
-                <span aria-hidden>·</span>
-                <Button
-                  variant="quiet"
-                  size="sm"
-                  hint={watchHint(watch)}
-                  className="shrink-0"
-                  onClick={() => {
-                    const route = watchRoute(watch.id)
-                    navigate(route.name, route.params)
-                  }}
-                >
-                  <Eye aria-hidden />
-                  <span className="sr-only">{watch.state === 'paused' ? 'Watch paused' : watch.state === 'error' ? 'Watch failing' : 'Watch on'}</span>
-                </Button>
-              </span>
-            )}
           </>
         )}
       </div>
+      {!narrow && run.permission && run.permission !== 'default' && (
+        <Badge tone={run.permission === 'root' ? 'needs-you' : 'neutral'} className="shrink-0" title={permissions.find((p) => p.value === run.permission)?.detail}>{permissionLabel(run.permission)}</Badge>
+      )}
+      {!narrow && controls && watch && (
+        <Button
+          variant="quiet"
+          size="sm"
+          hint={watchHint(watch)}
+          className="shrink-0"
+          onClick={() => {
+            const route = watchRoute(watch.id)
+            navigate(route.name, route.params)
+          }}
+        >
+          <Eye aria-hidden />
+          <span className="sr-only">{watch.state === 'paused' ? 'Watch paused' : watch.state === 'error' ? 'Watch failing' : 'Watch on'}</span>
+        </Button>
+      )}
     </>
   )
 }
@@ -235,8 +234,8 @@ function ViewSwitch({ runId, view, views, go, arrows, onArrow, icons }: {
   view: RunView
   views: RunView[]
   go: (view: RunView) => void
-  arrows: Partial<Record<RunView, string>>
-  onArrow: (view: RunView | null) => void
+  arrows: FrameTile['arrows']
+  onArrow: FrameTile['onArrow']
   /** Icons for words, each named by its tooltip, where the words would crowd out the state's reason. */
   icons: boolean
 }) {
@@ -268,7 +267,8 @@ function ViewSwitch({ runId, view, views, go, arrows, onArrow, icons }: {
     >
       {views.map((item) => {
         const Icon = runViewIcon[item]
-        const hint = [icons && runViewLabel[item], arrows[item]].filter(Boolean).join('\n')
+        const arrow = arrows[item]
+        const hint = [icons && runViewLabel[item], arrow?.where].filter(Boolean).join('\n')
         return (
           <Tooltip key={item} content={hint} side="bottom" disabled={!hint}>
             <TabsTrigger
@@ -284,15 +284,15 @@ function ViewSwitch({ runId, view, views, go, arrows, onArrow, icons }: {
                 },
                 onClick: () => go(item),
               })}
-              {...(arrows[item] && {
-                onPointerEnter: () => onArrow(item),
+              {...(arrow && {
+                onPointerEnter: () => onArrow(arrow.tile),
                 onPointerLeave: () => onArrow(null),
-                onFocus: () => onArrow(item),
+                onFocus: () => onArrow(arrow.tile),
                 onBlur: () => onArrow(null),
               })}
             >
               {icons ? <Icon aria-hidden className="size-3.5" /> : runViewLabel[item]}
-              {arrows[item] && <ArrowUpRight aria-hidden className="size-2.5 text-muted" />}
+              {arrow && <ArrowUpRight aria-hidden className="size-2.5 text-muted" />}
             </TabsTrigger>
           </Tooltip>
         )
@@ -329,9 +329,8 @@ export function RunHeader({
   onWorkflow: (returnTo: HTMLElement | null) => void
   view: RunView
   views: RunView[]
-  /** The views on screen in another tile, with the words that say where. */
-  arrows: Partial<Record<RunView, string>>
-  onArrow: (view: RunView | null) => void
+  arrows: FrameTile['arrows']
+  onArrow: FrameTile['onArrow']
   agent: AgentTerminal
   nav: RunNavigation
   /** The phone's soft keyboard is up, so the header folds to one row. */
@@ -346,7 +345,7 @@ export function RunHeader({
   const mobile = useIsMobile()
   // The row is sized from itself, not its tile: docked Details and Workflow take their width out of it.
   const [rowRef, row] = useElementSize<HTMLElement>()
-  const narrow = row.width > 0 && row.width < 560
+  const narrow = row.width > 0 && row.width < narrowBelow
   const icons = row.width > 0 && row.width < 800
   const primary = usePrimaryAction(run, view, agent, nav)
   const modeSwitch = useModeSwitch(run, agent, agentEntry)
@@ -437,14 +436,10 @@ export function RunHeader({
           />
         )}
       </header>
-      {controls && (
-        <>
-          {run.mode === 'acp' && <PresenceErrors run={run} agent={agent} />}
-          <RunLineage run={run} />
-          <RunRetention run={run} className="border-b border-seam px-4 py-2" />
-          <ConnectionLine className="border-b border-seam px-4 py-1" />
-        </>
-      )}
+      {run.mode === 'acp' && <PresenceErrors run={run} agent={agent} />}
+      <RunLineage run={run} />
+      <RunRetention run={run} className="border-b border-seam px-4 py-2" />
+      <ConnectionLine className="border-b border-seam px-4 py-1" />
       {dialogs}
     </>
   )

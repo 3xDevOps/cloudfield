@@ -54,7 +54,7 @@ function targetAt(source: TileDragSource & { from: DOMRect }, x: number, y: numb
   if (inside(source.from, x, y)) return null
   const layout = useStore.getState().tiles
   const held = source.tabId ?? (source.view && viewHolder(layout, source.runId, source.view, ctx)?.tab.id)
-  for (const node of document.querySelectorAll<HTMLElement>('[data-tile]')) {
+  for (const node of document.querySelectorAll<HTMLElement>('[data-tile]:not([inert])')) {
     const tile = node.getBoundingClientRect()
     if (!inside(tile, x, y)) continue
     const tileId = node.dataset.tile!
@@ -123,7 +123,7 @@ export function TileDragLayer() {
   const chip = useRef<HTMLDivElement>(null)
   const point = moved ?? drag
   const target = drag && point && targetAt(drag, point.x, point.y, ctx)
-  const run = drag ? ctx.runs[drag.runId] : undefined
+  const run = useStore((s) => (s.tileDrag ? s.runs[s.tileDrag.runId] : undefined))
   const title = run ? runLabel(run) : 'Session'
   const name = drag?.view ? `${title} · ${runViewLabel[drag.view]}` : title
   const action = (to: DropTarget) => (to.zone !== 'center' ? `Split ${to.zone}` : to.index === undefined ? 'Add as tab' : 'Move tab')
@@ -145,7 +145,7 @@ export function TileDragLayer() {
       swallowClick()
       const to = targetAt(drag, event.clientX, event.clientY, ctx)
       if (!to) return
-      changeTiles((before, context) => dropTab(before, drag, to.tileId, to.zone, context, to.index), !drag.tabId)
+      changeTiles((before, context) => dropTab(before, drag, to.tileId, to.zone, context, to.index), true)
       say(`${name}: ${action(to)}`)
     }, { signal })
     window.addEventListener('pointercancel', end, { signal })
@@ -168,7 +168,6 @@ export function TileDragLayer() {
       setMoved(null)
       end()
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [drag])
 
   useLayoutEffect(() => {

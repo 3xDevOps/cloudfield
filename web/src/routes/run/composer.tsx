@@ -551,10 +551,10 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
     }, () => void attempt(() => Promise.reject(new Error(optionUnsent))).then(resolve))
   })
 
+  if (docked && blocked) return null
   if (gate) {
-    if (docked) return null
     return (
-      <ComposerFrame docked={docked}>
+      <ComposerFrame>
         {dock}
         <Closed
           runID={run.id}

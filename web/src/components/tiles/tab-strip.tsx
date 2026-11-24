@@ -1,7 +1,7 @@
 import { useContext, useEffect, useRef } from 'react'
 import { Columns2, LayoutGrid, Maximize2, Minimize2, PanelLeft, Plus, Rows2, X } from '@/components/icons'
 import { ProtectedMark } from '@/components/protected-mark'
-import { changeTiles, TileAreaContext } from '@/components/tiles/area'
+import { changeTiles, focusInTile, TileAreaContext } from '@/components/tiles/area'
 import { useTileDrag } from '@/components/tiles/drag'
 import { Picker } from '@/components/tiles/picker'
 import { AgentGlyph } from '@/components/ui/agent-glyph'
@@ -73,10 +73,7 @@ function SessionTab({ tile, tab, narrow, onClose }: { tile: Tile; tab: TileTab; 
           if (event.key !== 'Delete' && event.key !== 'Backspace') return
           event.preventDefault()
           onClose()
-          requestAnimationFrame(() => {
-            const taker = [...document.querySelectorAll<HTMLElement>('[data-tile]')].find((node) => node.dataset.tile === useStore.getState().tiles.focused)
-            taker?.querySelector<HTMLElement>('[role="tab"][data-state="active"]')?.focus()
-          })
+          requestAnimationFrame(() => focusInTile(useStore.getState().tiles.focused, '[role="tab"][data-state="active"]'))
         }}
       >
         {run ? <TabLabel run={run} tab={tab} background={!active} narrow={narrow} /> : title}
