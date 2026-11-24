@@ -1,9 +1,14 @@
 import { Component, lazy, Suspense, type ComponentType, type ReactNode } from 'react'
+import { Button } from '@/components/ui/button'
 import { Callout } from '@/components/ui/callout'
 import { message } from '@/lib/format'
 
-const reloadedAt = 'cloudfield.chunk-reloaded-at'
-const reloadEveryMs = 60_000
+const starts: (() => Promise<unknown>)[] = []
+
+/** Fetches every lazy chunk now, so that none is fetched when its view opens. */
+export function preloadChunks() {
+  for (const start of starts) start().catch(() => {})
+}
 
 class ChunkError extends Component<{ children: ReactNode }, { error?: unknown }> {
   state: { error?: unknown } = {}
@@ -14,29 +19,25 @@ class ChunkError extends Component<{ children: ReactNode }, { error?: unknown }>
 
   render() {
     if (this.state.error === undefined) return this.props.children
-    return <Callout tone="failed" role="alert" className="m-2 whitespace-pre-wrap">{message(this.state.error)}</Callout>
+    return (
+      <Callout
+        tone="failed"
+        role="alert"
+        className="m-2 whitespace-pre-wrap"
+        actions={<Button size="sm" variant="secondary" onClick={() => window.location.reload()}>Reload</Button>}
+      >
+        {message(this.state.error)}
+      </Callout>
+    )
   }
 }
 
-/**
- * A component whose code is fetched when it first renders. A server update
- * replaces the build, so a tab opened before it asks for a file that is gone:
- * the page reloads once onto the new build, and a failure right after a
- * reload shows the error instead.
- */
+/** A component whose code is kept out of the first-page script. */
 export function lazyChunk<P extends object>(load: () => Promise<ComponentType<P>>, fallback: ReactNode) {
-  const Loaded = lazy(() =>
-    load().then(
-      (component) => ({ default: component }),
-      (err: unknown) => {
-        if (Date.now() - Number(window.sessionStorage.getItem(reloadedAt)) > reloadEveryMs) {
-          window.sessionStorage.setItem(reloadedAt, String(Date.now()))
-          window.location.reload()
-        }
-        throw err
-      },
-    ),
-  )
+  let loading: Promise<{ default: ComponentType<P> }> | undefined
+  const start = () => (loading ??= load().then((component) => ({ default: component })))
+  starts.push(start)
+  const Loaded = lazy(start)
   return function LazyChunk(props: P) {
     return (
       <ChunkError>

@@ -7,13 +7,14 @@ import type { Api } from '@/lib/api'
 import { useDelayed } from '@/lib/hooks'
 import { cn } from '@/lib/utils'
 import { useStore } from '@/store'
+import { Section } from '@/routes/insights/sections'
 import { Kpis } from '@/routes/insights/system/kpis'
 import { inRange, ranges, type RangeID } from '@/routes/insights/system/model'
 import { StorageSection } from '@/routes/insights/system/storage'
 import { useSystemStats, type SystemStatsState } from '@/routes/insights/system/use-system-stats'
 
-const Consumers = lazyChunk(() => import('@/routes/insights/system/consumers').then((m) => m.Consumers), <Skeleton className="h-96 rounded-panel" />)
-const Charts = lazyChunk(() => import('@/routes/insights/system/charts').then((m) => m.Charts), <Skeleton className="h-96 rounded-panel" />)
+const Consumers = lazyChunk(() => import('@/routes/insights/system/consumers').then((m) => m.Consumers), <Section title="Resources by session"><Skeleton className="h-96 rounded-panel" /></Section>)
+const Charts = lazyChunk(() => import('@/routes/insights/system/charts').then((m) => m.Charts), <Section title="History"><Skeleton className="h-96 rounded-panel" /></Section>)
 
 function RangePicker({ range, onChange }: { range: RangeID; onChange: (r: RangeID) => void }) {
   return (

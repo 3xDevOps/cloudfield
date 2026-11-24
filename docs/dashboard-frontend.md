@@ -133,13 +133,13 @@ development. `next build` therefore writes a static `web/dist` artifact:
 HTML, `_next` assets, CSS and copied public files. There is no production Next
 server or Node process in the shipped dashboard.
 
-The Files editor and the Insights System charts are fetched when they first
-render, through `lazyChunk` in `web/src/components/lazy-chunk.tsx`. A server
-update replaces every hashed file, so a tab opened before it can ask for a
-chunk that is gone. `lazyChunk` then reloads the page, at most once a minute,
-and a failure right after a reload shows the import error in place of the
-view. With an unsaved file draft the browser asks before that reload; staying
-keeps the draft and shows the error.
+The Files editor and the Insights System charts are kept out of the
+first-page script by `lazyChunk` in `web/src/components/lazy-chunk.tsx`.
+`App` fetches them with `preloadChunks` right after the first successful
+hydration, so opening a view fetches no script: on an Edge link, another app
+can take over the gateway's loopback port after the local GUI exits. A chunk
+that failed to load stays failed until the page is reloaded; its view shows
+the import error with a Reload button, and nothing reloads on its own.
 
 `web/embed.go` embeds `web/dist` with `//go:embed all:dist`, which fails to
 compile against an empty directory. The build output is not committed, so the

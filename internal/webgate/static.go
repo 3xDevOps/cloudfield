@@ -34,8 +34,7 @@ type staticFile struct {
 }
 
 // StaticHandler serves the built SPA, falling back to index.html so a hard
-// refresh on a client-side route still loads the app; a missing file under
-// _next/ is a 404. A binary built
+// refresh on a client-side route still loads the app. A binary built
 // without an SPA answers a plain "dashboard not built" instead of a blank
 // page. Each file is read, hashed and gzipped once, on its first request.
 func StaticHandler(fsys fs.FS) http.Handler {
@@ -49,8 +48,8 @@ func StaticHandler(fsys fs.FS) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := path.Clean(strings.TrimPrefix(r.URL.Path, "/"))
 		if info, err := fs.Stat(fsys, name); err != nil || info.IsDir() {
-			// A script import answered with the HTML page fails to parse; a
-			// 404 lets the dashboard reload onto the build that replaced it.
+			// The dashboard's script loader reports a 404, but waits forever on
+			// the page served in place of a script.
 			if strings.HasPrefix(name, "_next/") {
 				http.NotFound(w, r)
 				return

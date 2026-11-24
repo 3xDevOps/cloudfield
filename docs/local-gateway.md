@@ -342,9 +342,10 @@ unavailable identity service is reported as `-32004`.
 Anything that is not `/api/`, `/ws/`, or `/local/` is served from the
 embedded `web/dist`, without authentication - the SPA bundle is not secret
 and has to load before the gateway can authenticate API calls. Unknown paths
-fall back to `index.html` so client-side routing works on a hard refresh; a
-missing file under `_next/` is a 404, so a tab left open across a server
-update reloads instead of running the page as a script.
+fall back to `index.html` so client-side routing works on a hard refresh. A
+missing file under `_next/` is a 404: a CLI update replaces these files, and
+a tab opened before it that got the page in place of a script would wait on
+that view's placeholder forever instead of showing the load error.
 Files under `_next/static/`, whose names change with their content, carry
 `Cache-Control: public, max-age=31536000, immutable`; everything else,
 `index.html` included, carries `no-cache` and an `ETag`, so a browser
