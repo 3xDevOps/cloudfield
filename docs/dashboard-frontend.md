@@ -3553,9 +3553,10 @@ place of the transcript:
   without rows. A settled call with no `task.workflow` says it was recorded
   before per-agent progress, and its script starts open.
 
-A call cut for the wire carries the workflow's name only, so the inspector
-reads the whole item with `run.acp.item` on every snapshot while it is open
-and keeps the last rows it read in between.
+A call cut for the wire carries each row's label and state without
+previews, so the card and the bar keep their counts. The open inspector
+reads the whole item with `run.acp.item` on every snapshot and lays the
+cut rows over the last whole ones in between.
 
 A tool call snapshot logged in a later turn than the call's first, as
 when a call outlives its turn, joins that first turn and keeps one row.

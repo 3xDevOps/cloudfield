@@ -42,7 +42,7 @@ export function AgentsBar({ runID }: { runID: string }) {
   const listID = useId()
   if (!agents) return null
   const kinds = agents.split('\n')
-  const tone = kinds.some((kind) => kind.includes(':running:')) ? 'working' : kinds.some((kind) => kind.includes(':failed:')) ? 'failed' : 'done'
+  const tone = kinds.some((kind) => kind.includes(':running:')) ? 'working' : kinds.some((kind) => kind.includes(':failed:')) ? 'failed' : kinds.every((kind) => kind.includes(':done:')) ? 'done' : 'neutral'
   return (
     <section aria-label="Subagents and workflows" data-slot="agents-bar" className={cn(sessionColumn, 'flex shrink-0 flex-col pb-1')}>
       <div className="flex flex-col rounded-control border border-seam bg-chrome px-2">

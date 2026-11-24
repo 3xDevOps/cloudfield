@@ -92,9 +92,14 @@ export function SubagentInspector({ run, agentID, agent: terminal, nav, onClose 
     ;(button || root.current?.querySelector<HTMLElement>('h2') || root.current)?.focus()
   }, [])
 
-  // A call cut for the wire carries no rows or script, so the last whole read stays up while the next one loads.
-  const progress = useRef(sub?.call?.task?.workflow)
-  if (!truncated || sub?.call?.task?.workflow?.agents) progress.current = sub?.call?.task?.workflow
+  // A call cut for the wire carries each row's label and state but no previews or script, so those stay from the last whole read.
+  const snapshot = sub?.call?.task?.workflow
+  const progress = useRef(snapshot)
+  if (!truncated) progress.current = snapshot
+  else if (snapshot?.agents) {
+    const whole = new Map(progress.current?.agents?.map((row) => [row.index, row]))
+    progress.current = { ...snapshot, logs: progress.current?.logs, agents: snapshot.agents.map((row) => ({ ...whole.get(row.index), ...row })) }
+  }
   const script = useRef(prompt)
   if (!truncated || prompt) script.current = prompt
 
