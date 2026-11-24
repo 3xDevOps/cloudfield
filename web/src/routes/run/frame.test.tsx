@@ -178,7 +178,7 @@ describe('run frame', () => {
     open({ mode: 'acp' })
     const views = screen.getByRole('tablist', { name: 'Session views' })
     expect(within(views).getByRole('tab', { name: 'Chat' }).getAttribute('aria-selected')).toBe('true')
-    fireEvent.mouseDown(within(views).getByRole('tab', { name: 'Terminal' }))
+    fireEvent.click(within(views).getByRole('tab', { name: 'Terminal' }))
     expect(await screen.findByText('No agent terminal')).toBeDefined()
     expect(StubSocket.opened).toHaveLength(0)
   })

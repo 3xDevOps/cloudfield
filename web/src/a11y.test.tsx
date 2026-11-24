@@ -84,7 +84,7 @@ describe('run view switch', () => {
 
     // Arrowing past a view must not open it: Changes and Browser fetch on mount.
     expect(useStore.getState().route.params.view).toBeUndefined()
-    fireEvent.mouseDown(within(strip).getByRole('tab', { name: 'Changes' }))
+    fireEvent.click(within(strip).getByRole('tab', { name: 'Changes' }))
     expect(useStore.getState().route.params).toEqual({ runId: active.id, view: 'changes' })
   })
 

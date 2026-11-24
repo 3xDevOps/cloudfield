@@ -43,6 +43,13 @@ export interface TileLayout {
 
 export type TileSide = 'left' | 'right' | 'up' | 'down'
 
+/** What a drag carries: a tab, or a session with the view it opens on. A sidebar row names neither. */
+export interface TileDragSource {
+  runId: string
+  view?: RunView
+  tabId?: string
+}
+
 /** What decides the view a tab shows. */
 export interface ViewContext {
   runs: Record<string, RunRecord>
@@ -205,6 +212,17 @@ export function moveTab(layout: TileLayout, tabId: string, tileId: string, index
   return settled(layout, root, tileId)
 }
 
+/**
+ * Lands what a drag carries in `tileId`: in a new tile on `zone`'s side of it,
+ * or as a tab of it at `index`. A view that a tab already holds moves that tab.
+ */
+export function dropTab(layout: TileLayout, source: TileDragSource, tileId: string, zone: TileSide | 'center', ctx: ViewContext, index?: number): TileLayout {
+  const held = source.tabId ?? (source.view && viewHolder(layout, source.runId, source.view, ctx)?.tab.id)
+  const split = zone === 'center' ? layout : splitTile(layout, tileId, zone)
+  const target = zone === 'center' ? tileId : split.focused
+  return held ? moveTab(split, held, target, index) : pickTab(split, target, source.runId, ctx, source.view)
+}
+
 function addTab(layout: TileLayout, tileId: string, tab: TileTab, replace: boolean): TileLayout {
   const root = inTile(layout, tileId, (tile) => {
     const at = tile.tabs.findIndex((other) => other.id === tile.active)
@@ -350,6 +368,8 @@ export interface TilesSlice {
   tiles: TileLayout
   /** The tile area is too small for `tiles`, so it draws the focused tile alone. */
   tilesCramped: boolean
+  /** What is being dragged to a tile, and where the pointer was when it lifted. */
+  tileDrag: (TileDragSource & { x: number; y: number }) | null
   /** Each member's `tiles` on this browser, by identity key. */
   savedTiles: Record<string, TileLayout>
   /** For a store that just read every session from the server: closes the tabs of sessions that are gone. */
@@ -375,6 +395,7 @@ export function tilesAfter(s: RootState, change: (layout: TileLayout, ctx: ViewC
 export const createTilesSlice: SliceCreator<TilesSlice> = (set) => ({
   tiles: emptyTiles(),
   tilesCramped: false,
+  tileDrag: null,
   savedTiles: {},
   pruneTiles: () => set((s) => tilesAfter(s, (layout, ctx) => settleTiles(layout, ctx, true))),
 })

@@ -25,6 +25,10 @@ function inBrowser(event: KeyboardEvent): boolean {
   return event.target instanceof HTMLElement && event.target.closest('[data-browser]') !== null
 }
 
+function outsideModal(event: KeyboardEvent): boolean {
+  return !inModal(event.target)
+}
+
 export const keybindings = [
   { id: 'palette', keys: '$mod+K', scope: 'global', label: 'Open the command palette' },
   { id: 'palette-alt', keys: '$mod+Shift+P', scope: 'global', label: 'Open the command palette' },
@@ -68,6 +72,22 @@ export const keybindings = [
   },
   { id: 'focus-composer', keys: 'c', scope: 'run', label: 'Message the agent' },
   { id: 'leave-run', keys: 'Escape', scope: 'run', label: 'Leave a session for the board' },
+  // A terminal keeps Ctrl+\, which quits the program running in it.
+  { id: 'tile-split-right', keys: '$mod+Backslash', scope: 'run', label: 'Split the focused tile right', when: (event) => !inOverlay(event.target) },
+  { id: 'tile-split-down', keys: '$mod+Shift+Backslash', scope: 'run', label: 'Split the focused tile down', when: (event) => !inOverlay(event.target) },
+  { id: 'tile-focus-1', keys: '$mod+Digit1', scope: 'run', label: 'Focus a tile by its place in reading order', when: outsideModal },
+  { id: 'tile-focus-2', keys: '$mod+Digit2', scope: 'run', label: 'Focus a tile by its place in reading order', when: outsideModal },
+  { id: 'tile-focus-3', keys: '$mod+Digit3', scope: 'run', label: 'Focus a tile by its place in reading order', when: outsideModal },
+  { id: 'tile-focus-4', keys: '$mod+Digit4', scope: 'run', label: 'Focus a tile by its place in reading order', when: outsideModal },
+  { id: 'tile-focus-5', keys: '$mod+Digit5', scope: 'run', label: 'Focus a tile by its place in reading order', when: outsideModal },
+  { id: 'tile-focus-6', keys: '$mod+Digit6', scope: 'run', label: 'Focus a tile by its place in reading order', when: outsideModal },
+  { id: 'tile-focus-7', keys: '$mod+Digit7', scope: 'run', label: 'Focus a tile by its place in reading order', when: outsideModal },
+  { id: 'tile-focus-8', keys: '$mod+Digit8', scope: 'run', label: 'Focus a tile by its place in reading order', when: outsideModal },
+  { id: 'tile-focus-9', keys: '$mod+Digit9', scope: 'run', label: 'Focus a tile by its place in reading order', when: outsideModal },
+  { id: 'tile-next', keys: 'g t', scope: 'run', label: 'Focus the next tile' },
+  { id: 'tile-maximize', keys: 'x', scope: 'run', label: 'Maximize the focused tile, or restore the tiles' },
+  { id: 'tile-close-tab', keys: 'w', scope: 'run', label: 'Close the focused tab' },
+  { id: 'tile-picker', keys: 's', scope: 'run', label: 'Pick a session or view to add to the focused tile' },
   {
     id: 'browser-address',
     keys: '$mod+L',
@@ -127,14 +147,14 @@ export function isSingleKey(binding: Keybinding): boolean {
 }
 
 const modifierLabels: Record<string, string> = { Control: 'Ctrl', Meta: '⌘', Alt: 'Alt', Shift: 'Shift' }
-const keyLabels: Record<string, string> = { Space: 'Space', Escape: 'Esc', Enter: 'Enter', ArrowLeft: '←', ArrowRight: '→' }
+const keyLabels: Record<string, string> = { Space: 'Space', Escape: 'Esc', Enter: 'Enter', ArrowLeft: '←', ArrowRight: '→', Backslash: '\\' }
 
 /** A tinykeys string as this platform writes it: `⌘K` on macOS, `Ctrl+K`
  * elsewhere, `g then b` for a sequence. Optional modifiers are left out. */
 export function formatKeys(keys: string): string {
   return parseKeybinding(keys)
     .map(([required, , key]) => {
-      const name = keyLabels[String(key)] ?? (required.length > 0 ? String(key).toUpperCase() : String(key))
+      const name = keyLabels[String(key)] ?? (required.length > 0 ? String(key).replace(/^Digit/, '').toUpperCase() : String(key))
       const parts = [...required.map((modifier) => modifierLabels[modifier] ?? modifier), name]
       return mac && parts[0] === '⌘' ? `⌘${parts.slice(1).join('+')}` : parts.join('+')
     })

@@ -319,7 +319,7 @@ describe('a session in two tiles', () => {
     fireEvent.blur(changes)
     expect(tiles()[1].className).not.toContain('after:border-dashed')
 
-    fireEvent.mouseDown(changes)
+    fireEvent.click(changes)
     expect(state().tiles.focused).toBe(tiles()[1].dataset.tile)
     expect(tabs()).toEqual([['run_1'], ['run_1']])
     expect(names()).toEqual([`${first}, Chat, tile 1 of 2`, `${first}, Changes, tile 2 of 2`])
@@ -756,10 +756,100 @@ describe('the sidebar', () => {
     expect(marked()).toEqual([row(second)])
   })
 
+  it('opens the focused row to the side on Mod+Enter', () => {
+    act(() => state().navigate('run', { runId: 'run_1' }))
+    render(<><SidebarRuns /><Page /></>)
+    fireEvent.keyDown(within(row(second)).getByRole('button', { name: new RegExp(` · ${second} · `) }), { key: 'Enter', ctrlKey: true })
+    expect(names()).toEqual([`${first}, Chat, tile 1 of 2`, `${second}, Chat, tile 2 of 2`])
+  })
+
   it('offers no Open to the side on a touch screen', () => {
     atViewport(1024, { pointer: 'coarse' })
     render(<SidebarRuns />)
     expect(screen.queryByRole('button', { name: 'Open to the side' })).toBeNull()
+  })
+})
+
+describe('keys', () => {
+  const chord = (code: string, init: KeyboardEventInit = {}, target: Element | Window = window) =>
+    fireEvent.keyDown(target, { key: code.replace('Digit', ''), code, ctrlKey: true, ...init })
+  const said = (words: string | RegExp) => screen.queryByText(words, { selector: '[role=status]' })
+  /** Something that owns the keys pressed inside it: a field, or a terminal by its class. */
+  function holder(tag: string, className = '') {
+    const node = document.createElement(tag)
+    node.className = className
+    document.body.append(node)
+    onTestFinished(() => node.remove())
+    return node
+  }
+
+  it('splits right and down on Mod+\\ from a field, and leaves the chord to a terminal', () => {
+    show()
+    chord('Backslash', {}, holder('div', 'xterm'))
+    expect(tiles()).toHaveLength(1)
+    chord('Backslash', {}, holder('textarea'))
+    expect(names()).toEqual([`${first}, Chat, tile 1 of 2`, 'New tile, tile 2 of 2'])
+    expect(said('Split right')).not.toBeNull()
+    fireEvent.click(tile(2).getByRole('button', { name: 'Close tile' }))
+    chord('Backslash', { shiftKey: true })
+    expect(state().tiles.root).toMatchObject({ dir: 'column' })
+  })
+
+  it('opens the picker and says so when Mod+\\ finds no room', async () => {
+    sized(800, 700)
+    show()
+    chord('Backslash')
+    expect(await screen.findByRole('dialog')).toBeDefined()
+    expect(said('No room to split: adds a tab')).not.toBeNull()
+    expect(tiles()).toHaveLength(1)
+  })
+
+  it('focuses a tile by its place on Mod+digit, from a terminal too, and the next one on g t, with two tiles or more', async () => {
+    show()
+    chord('Digit1')
+    press('g')
+    press('t')
+    expect(said(/focused$/)).toBeNull()
+
+    beside('run_2')
+    await settled()
+    chord('Digit1', {}, holder('div', 'xterm'))
+    expect(state().tiles.focused).toBe(tiles()[0].dataset.tile)
+    expect(state().route.params.runId).toBe('run_1')
+    expect(said(`${first} focused`)).not.toBeNull()
+    press('g')
+    press('t')
+    expect(state().tiles.focused).toBe(tiles()[1].dataset.tile)
+    press('g')
+    press('t')
+    expect(state().tiles.focused).toBe(tiles()[0].dataset.tile)
+  })
+
+  it('maximizes on x, closes the tab on w and opens the picker on s, never from a field or with nothing to act on', async () => {
+    show()
+    press('x')
+    press('w')
+    expect(state().tiles.maximized).toBe(false)
+    expect(state().route.name).toBe('run')
+
+    beside('run_2')
+    await settled()
+    fireEvent.keyDown(holder('textarea'), { key: 'x' })
+    fireEvent.keyDown(holder('div', 'xterm'), { key: 'w' })
+    expect(state().tiles.maximized).toBe(false)
+    expect(tabs()).toEqual([['run_1'], ['run_2']])
+    press('x')
+    expect(state().tiles.maximized).toBe(true)
+    expect(said('Tile maximized')).not.toBeNull()
+    press('x')
+    expect(state().tiles.maximized).toBe(false)
+    expect(said('Tiles restored')).not.toBeNull()
+
+    press('w')
+    expect(tabs()).toEqual([['run_1']])
+    expect(said('Tab closed')).not.toBeNull()
+    press('s')
+    expect(within(await screen.findByRole('dialog')).getByRole('heading', { name: 'Open in this tile' })).toBeDefined()
   })
 })
 

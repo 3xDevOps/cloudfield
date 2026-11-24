@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { reopen } from '@/components/failure'
 import { openToSide } from '@/components/tiles/area'
+import { useTileDrag } from '@/components/tiles/drag'
 import { RunDetails, RunDetailsGroup } from '@/components/shell/run-details'
 import { AgentGlyph } from '@/components/ui/agent-glyph'
 import { Avatar } from '@/components/ui/avatar'
@@ -390,6 +391,8 @@ function RunRowButton({ run, state, waiting, reason, next, cause, wait, since, w
   const selected = useStore((s) => isRunRoute(s.route, run.id))
   const shown = useStore((s) => onScreen(s, run.id))
   const beside = !useMediaQuery(coarsePointer) && !mobile
+  const dragFrom = useTileDrag()
+  const lifted = useStore((s) => s.tileDrag?.runId === run.id && !s.tileDrag.tabId && !s.tileDrag.view)
   const title = runLabel(run)
   const unopened = run.finish_unopened === true && (state === 'ready' || groupOf({ state }) === 'finished')
   const active = state === 'working' || state === 'waiting-agents' || state === 'waiting-ci' || state === 'waiting-tools'
@@ -441,6 +444,12 @@ function RunRowButton({ run, state, waiting, reason, next, cause, wait, since, w
         selected={selected}
         className={cn(shown && !mobile && 'before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-accent')}
         onClick={() => navigate('run', { runId: run.id })}
+        onPointerDown={beside ? dragFrom({ runId: run.id }) : undefined}
+        onKeyDown={beside ? (event) => {
+          if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return
+          event.preventDefault()
+          openToSide(run.id)
+        } : undefined}
         leading={subsessions > 0 ? undefined : (
           <>
             <StatusDot tone={toneOf({ state, wait })} />
@@ -489,7 +498,7 @@ function RunRowButton({ run, state, waiting, reason, next, cause, wait, since, w
         )}
       >
         {workspaceName && <span className="text-muted">{workspaceName} · </span>}
-        <span className={cn(recedes && !selected && 'text-muted')}>{title}</span>
+        <span className={cn((lifted || (recedes && !selected)) && 'text-muted')}>{title}</span>
         <span id={exactTime} className="sr-only">{new Date(since).toLocaleString()}</span>
       </ListRow>
     </RunDetails>

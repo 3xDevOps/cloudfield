@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { changeTiles, TileAreaContext, viewsElsewhere } from '@/components/tiles/area'
+import { TileDragLayer } from '@/components/tiles/drag'
 import { fits, tileRects, type Rect } from '@/components/tiles/geometry'
 import { Tile } from '@/components/tiles/tile'
 import { Splitter } from '@/components/ui/splitter'
 import { prefersReducedMotion, useElementSize } from '@/lib/hooks'
 import { useKeybindings } from '@/lib/keybindings'
 import { play, playEntrance } from '@/lib/motion'
+import { runLabel } from '@/lib/status'
 import { redirectRoute } from '@/lib/url-state'
 import type { FrameTile, RunFrame } from '@/routes/run'
 import { RunSession } from '@/routes/run/session-host'
@@ -16,6 +18,7 @@ import { useCapability } from '@/store/hooks'
 import type { RunRecord } from '@/store/runs'
 import {
   activeTab,
+  closeTab,
   controlsTile,
   focusTile,
   maximizeTile,
@@ -28,6 +31,7 @@ import {
   tileList,
   tilesAfter,
   visibleTiles,
+  type Tile as TileNode,
   type TileTab,
 } from '@/store/tiles'
 
@@ -109,6 +113,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
   const onSlot = useCallback((tileId: string, slot: HTMLElement | null) => setSlots((before) => ({ ...before, [tileId]: slot })), [])
   const [linked, link] = useState<string | null>(null)
   const [said, say] = useState('')
+  const [picking, pick] = useState<string | null>(null)
 
   const tiles = tileList(stored.root)
   const measured = area.width > 0
@@ -195,6 +200,31 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
     }
   }, [])
 
+  const value = useMemo(() => ({
+    layout,
+    cramped,
+    ctx,
+    say,
+    link,
+    picking,
+    pick,
+    split: (tileId: string, side: 'right' | 'down') => {
+      if (measured && !fits(splitTile(stored, tileId, side).root, area)) {
+        pick(tileId)
+        say('No room to split: adds a tab')
+        return
+      }
+      changeTiles((before) => splitTile(before, tileId, side))
+      say(`Split ${side}`)
+    },
+  }), [layout, cramped, ctx, picking, stored, measured, area])
+
+  const several = tiles.length > 1
+  const focus = (tile: TileNode) => {
+    const run = runs[activeTab(tile)?.runId ?? '']
+    changeTiles((before) => focusTile(before, tile.id))
+    say(`${run ? runLabel(run) : 'New tile'} ${layout.maximized ? 'maximized' : 'focused'}`)
+  }
   useKeybindings('run', {
     'leave-run': () => {
       const { agent, ...rest } = params
@@ -204,9 +234,40 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
         say('Tiles restored')
       } else navigate('board')
     },
+    ...(focusedTab && {
+      'tile-picker': () => pick(stored.focused),
+      ...(!layout.maximized && {
+        'tile-split-right': (event: KeyboardEvent) => {
+          event.preventDefault()
+          value.split(stored.focused, 'right')
+        },
+        'tile-split-down': (event: KeyboardEvent) => {
+          event.preventDefault()
+          value.split(stored.focused, 'down')
+        },
+      }),
+      ...(tiles.flatMap((tile) => tile.tabs).length > 1 && {
+        'tile-close-tab': () => {
+          changeTiles((before) => closeTab(before, focusedTab.id))
+          say('Tab closed')
+        },
+      }),
+    }),
+    ...(several && {
+      ...Object.fromEntries(tiles.slice(0, 9).map((tile, index) => [`tile-focus-${index + 1}`, (event: KeyboardEvent) => {
+        event.preventDefault()
+        focus(tile)
+      }])),
+      'tile-next': () => focus(tiles[(tiles.findIndex((tile) => tile.id === stored.focused) + 1) % tiles.length]),
+    }),
+    ...(several && !cramped && {
+      'tile-maximize': () => {
+        changeTiles((before) => maximizeTile(before, before.maximized ? null : before.focused))
+        say(stored.maximized ? 'Tiles restored' : 'Tile maximized')
+      },
+    }),
   })
 
-  const value = useMemo(() => ({ layout, cramped, ctx, say, link }), [layout, cramped, ctx])
   const shown = visible.flatMap((tile) => {
     const tab = activeTab(tile)
     const run = tab && runs[tab.runId]
@@ -288,6 +349,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
           )
         })}
         <span role="status" aria-live="polite" className="sr-only">{said}</span>
+        <TileDragLayer />
       </div>
     </TileAreaContext>
   )

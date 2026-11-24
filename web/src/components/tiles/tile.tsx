@@ -28,6 +28,7 @@ export function Tile({ tile, rect, narrow, room, linked, onSlot }: {
 }) {
   const { layout, ctx } = useContext(TileAreaContext)!
   const splitFrom = useStore((s) => s.route.params.runId)
+  const dragging = useStore((s) => s.tileDrag !== null)
   const slot = useCallback((node: HTMLElement | null) => onSlot(tile.id, node), [onSlot, tile.id])
   const visible = visibleTiles(layout)
   const focused = layout.focused === tile.id
@@ -44,7 +45,7 @@ export function Tile({ tile, rect, narrow, room, linked, onSlot }: {
           'absolute flex min-h-0 min-w-0 flex-col border-seam bg-canvas after:pointer-events-none after:absolute after:inset-0 after:z-10 after:border',
           rect.left > 0 && 'border-l',
           rect.top > 0 && 'border-t',
-          linked ? 'after:border-dashed after:border-accent' : focused && visible.length > 1 ? 'after:border-accent' : 'after:border-transparent',
+          linked ? 'after:border-dashed after:border-accent' : focused && visible.length > 1 && !dragging ? 'after:border-accent' : 'after:border-transparent',
         )}
       >
         <TabStrip tile={tile} narrow={narrow} room={room} />

@@ -27,6 +27,11 @@ export interface TileAreaValue {
   say: (words: string) => void
   /** Draws the dashed outline on a tile, or on none. */
   link: (tileId: string | null) => void
+  /** The tile whose "Add a tab" picker is open. */
+  picking: string | null
+  pick: (tileId: string | null) => void
+  /** Opens an empty tile beside this one, or its picker when the area has no room for one. */
+  split: (tileId: string, side: 'right' | 'down') => void
 }
 
 export const TileAreaContext = createContext<TileAreaValue | null>(null)

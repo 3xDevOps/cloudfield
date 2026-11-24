@@ -4,6 +4,7 @@ import { ArrowUpRight, Camera, Eye, Network, PanelRight, ScrollText } from '@/co
 import { permissionLabel, permissions } from '@/components/launch/permission-control'
 import { RunActions } from '@/components/run-actions'
 import { RunRetention } from '@/components/run-retention'
+import { useTileDrag } from '@/components/tiles/drag'
 import { ConnectionLine } from '@/components/shell/connection'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -229,9 +230,11 @@ function StateLine({ run, agentName, narrow, controls, chip }: { run: RunRecord;
  * phone with a pull request beside it for instance. It keeps the shown view's
  * tab in sight as the view or the room for it changes, and fades its right
  * edge while more tabs lie past it. */
-function ViewSwitch({ view, views, arrows, onArrow, icons }: {
+function ViewSwitch({ runId, view, views, go, arrows, onArrow, icons }: {
+  runId: string
   view: RunView
   views: RunView[]
+  go: (view: RunView) => void
   arrows: Partial<Record<RunView, string>>
   onArrow: (view: RunView | null) => void
   /** Icons for words, each named by its tooltip, where the words would crowd out the state's reason. */
@@ -239,6 +242,8 @@ function ViewSwitch({ view, views, arrows, onArrow, icons }: {
 }) {
   const strip = useRef<HTMLDivElement>(null)
   const [more, setMore] = useState(false)
+  const dragFrom = useTileDrag()
+  const lifted = useStore((s) => (s.tileDrag?.runId === runId && !s.tileDrag.tabId ? s.tileDrag.view : undefined))
   const measure = () => {
     const list = strip.current
     if (list) setMore(list.scrollLeft + list.clientWidth < list.scrollWidth - 1)
@@ -269,7 +274,16 @@ function ViewSwitch({ view, views, arrows, onArrow, icons }: {
             <TabsTrigger
               value={item}
               aria-label={icons ? runViewLabel[item] : undefined}
-              className="scroll-mx-6"
+              className={cn('scroll-mx-6', lifted === item && 'outline-1 -outline-offset-1 outline-control outline-dashed')}
+              // Every view but the shown one can be dragged to a tile, so it opens on the click, not the press.
+              {...(item !== view && {
+                onPointerDown: dragFrom({ runId, view: item }),
+                onMouseDown: (event: React.MouseEvent<HTMLElement>) => {
+                  event.preventDefault()
+                  event.currentTarget.focus()
+                },
+                onClick: () => go(item),
+              })}
               {...(arrows[item] && {
                 onPointerEnter: () => onArrow(item),
                 onPointerLeave: () => onArrow(null),
@@ -387,7 +401,7 @@ export function RunHeader({
     <>
       <header ref={rowRef} data-slot="pane-header" className="@container/views relative flex h-8 shrink-0 items-center gap-1.5 border-b border-seam px-2 coarse:h-11">
         <Heading tabIndex={-1} className="sr-only">{runLabel(run)}</Heading>
-        <ViewSwitch view={view} views={views} arrows={arrows} onArrow={onArrow} icons={icons} />
+        <ViewSwitch runId={run.id} view={view} views={views} go={nav.go} arrows={arrows} onArrow={onArrow} icons={icons} />
         <StateLine run={run} agentName={agentName} narrow={narrow} controls={controls} chip={controls && !narrow ? workflow : undefined} />
         {controls && (
           <div role="toolbar" aria-label="Session actions" className="flex shrink-0 items-center gap-1">

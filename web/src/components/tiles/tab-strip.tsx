@@ -1,7 +1,8 @@
-import { useContext, useEffect, useRef, useState } from 'react'
+import { useContext, useEffect, useRef } from 'react'
 import { Columns2, LayoutGrid, Maximize2, Minimize2, PanelLeft, Plus, Rows2, X } from '@/components/icons'
 import { ProtectedMark } from '@/components/protected-mark'
 import { changeTiles, TileAreaContext } from '@/components/tiles/area'
+import { useTileDrag } from '@/components/tiles/drag'
 import { Picker } from '@/components/tiles/picker'
 import { AgentGlyph } from '@/components/ui/agent-glyph'
 import { Badge } from '@/components/ui/badge'
@@ -17,7 +18,7 @@ import { runViewLabel } from '@/routes/run/views'
 import { useStore } from '@/store'
 import { useNeedsYouRuns, useRunPresentation } from '@/store/hooks'
 import type { RunRecord } from '@/store/runs'
-import { closeTab, closeTile, focusTile, maximizeTile, resolveView, splitTile, tileList, visibleTiles, type Tile, type TileSide, type TileTab } from '@/store/tiles'
+import { closeTab, closeTile, focusTile, maximizeTile, resolveView, tileList, visibleTiles, type Tile, type TileTab } from '@/store/tiles'
 
 /** What a tab or a parked tile's chip says about its session: the title, and the view when the session has two or more tabs. */
 function TabLabel({ run, tab, background, narrow }: { run: RunRecord; tab: TileTab; background: boolean; narrow: boolean }) {
@@ -53,13 +54,15 @@ function SessionTab({ tile, tab, narrow, onClose }: { tile: Tile; tab: TileTab; 
   const active = tile.active === tab.id
   const title = run ? runLabel(run) : 'Session'
   const shell = useRef<HTMLDivElement>(null)
+  const dragFrom = useTileDrag()
   useEffect(() => {
     if (active) shell.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
   }, [active])
   return (
-    <div ref={shell} className={cn('flex h-full shrink-0 items-center border-r border-seam', active ? 'max-w-full' : 'max-w-64')}>
+    <div ref={shell} data-tab={tab.id} className={cn('flex h-full shrink-0 items-center border-r border-seam', active ? 'max-w-full' : 'max-w-64')}>
       <TabsTrigger
         value={tab.id}
+        onPointerDown={dragFrom({ tabId: tab.id, runId: tab.runId, view: run && resolveView(tab, run, ctx.cap, ctx.memory) })}
         className="min-w-0 shrink group-data-[look=underline]/tabs:pr-7 group-data-[look=underline]/tabs:pl-3 [&_[data-slot=status-dot]]:size-2.5"
         onDoubleClick={() => {
           if (cramped || tileList(layout.root).length < 2) return
@@ -93,11 +96,10 @@ export function TabStrip({ tile, narrow, room }: {
   /** Whether the area has room for a tile on each side of this one. */
   room: { right: boolean; down: boolean }
 }) {
-  const { layout, cramped, ctx, say } = useContext(TileAreaContext)!
+  const { layout, cramped, ctx, say, picking, pick, split } = useContext(TileAreaContext)!
   const navigate = useStore((s) => s.navigate)
   const sidebarCollapsed = useStore((s) => s.sidebarCollapsed)
   const toggleSidebar = useStore((s) => s.toggleSidebar)
-  const [adding, setAdding] = useState(false)
   const tiles = tileList(layout.root)
   const focused = layout.focused === tile.id
   const run = ctx.runs[tile.tabs.find((tab) => tab.id === tile.active)?.runId ?? '']
@@ -107,20 +109,12 @@ export function TabStrip({ tile, narrow, room }: {
     changeTiles((before) => closeTab(before, tab.id))
     say('Tab closed')
   }
-  const split = (side: TileSide, fits: boolean) => {
-    if (!fits) {
-      setAdding(true)
-      return
-    }
-    changeTiles((before) => splitTile(before, tile.id, side))
-    say(`Split ${side}`)
-  }
   const splitButton = (side: 'right' | 'down', Icon: typeof Columns2) => {
     const fits = side === 'right' ? room.right : room.down
     const label = `Split ${side}`
     return narrow
-      ? <Button variant="ghost" size="icon-sm" label={label} hint={fits ? label : 'No room to split: adds a tab'} onClick={() => split(side, fits)}><Icon /></Button>
-      : <Button variant="ghost" size="sm" hint={fits ? undefined : 'No room to split: adds a tab'} onClick={() => split(side, fits)}><Icon aria-hidden />{label}</Button>
+      ? <Button variant="ghost" size="icon-sm" label={label} hint={fits ? label : 'No room to split: adds a tab'} onClick={() => split(tile.id, side)}><Icon /></Button>
+      : <Button variant="ghost" size="sm" hint={fits ? undefined : 'No room to split: adds a tab'} onClick={() => split(tile.id, side)}><Icon aria-hidden />{label}</Button>
   }
 
   return (
@@ -153,12 +147,12 @@ export function TabStrip({ tile, narrow, room }: {
         </div>
       )}
       {tile.tabs.length > 0 && (
-        <Popover open={adding} onOpenChange={setAdding}>
+        <Popover open={picking === tile.id} onOpenChange={(open) => pick(open ? tile.id : null)}>
           <PopoverTrigger asChild>
             <Button variant="ghost" size="icon-sm" label="Add a tab"><Plus /></Button>
           </PopoverTrigger>
           <PopoverContent className="flex flex-col">
-            <Picker tileId={tile.id} runId={run?.id} autoFocus onPicked={() => setAdding(false)} />
+            <Picker tileId={tile.id} runId={run?.id} autoFocus onPicked={() => pick(null)} />
           </PopoverContent>
         </Popover>
       )}
