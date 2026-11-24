@@ -43,6 +43,8 @@ async function menu(label: string): Promise<string[]> {
 
 const choose = (item: string) => userEvent.click(screen.getByRole('menuitem', { name: item }))
 
+beforeAll(() => import('@/routes/files/editor'))
+
 beforeEach(() => {
   useStore.getState().resetFiles()
   useStore.setState({ capabilities: { gateway: 'server', methods: ['home.tree'], ws: [] }, workspaces: {}, runs: {}, identityKey: null })

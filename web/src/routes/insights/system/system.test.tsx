@@ -22,6 +22,8 @@ function renderSystem(over: Partial<Api> = {}) {
 
 const rows = () => within(screen.getByRole('list', { name: 'Sandboxes by usage' })).getAllByRole('listitem')
 
+beforeAll(() => Promise.all([import('@/routes/insights/system/consumers'), import('@/routes/insights/system/charts')]))
+
 describe('system tab', () => {
   it('shows six tile placeholders and keeps the sentence for assistive technology', async () => {
     renderSystem({ systemStats: vi.fn(() => new Promise<never>(() => {})) })

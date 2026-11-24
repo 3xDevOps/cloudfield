@@ -25,6 +25,8 @@ function tree() {
   return within(screen.getByRole('complementary', { name: 'Files' }))
 }
 
+beforeAll(() => import('@/routes/files/editor'))
+
 describe('Files tree', () => {
   beforeEach(() => seed())
 

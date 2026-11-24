@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { lazyChunk } from '@/components/lazy-chunk'
 import { Callout } from '@/components/ui/callout'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -6,12 +7,13 @@ import type { Api } from '@/lib/api'
 import { useDelayed } from '@/lib/hooks'
 import { cn } from '@/lib/utils'
 import { useStore } from '@/store'
-import { Charts } from '@/routes/insights/system/charts'
-import { Consumers } from '@/routes/insights/system/consumers'
 import { Kpis } from '@/routes/insights/system/kpis'
 import { inRange, ranges, type RangeID } from '@/routes/insights/system/model'
 import { StorageSection } from '@/routes/insights/system/storage'
 import { useSystemStats, type SystemStatsState } from '@/routes/insights/system/use-system-stats'
+
+const Consumers = lazyChunk(() => import('@/routes/insights/system/consumers').then((m) => m.Consumers), <Skeleton className="h-96 rounded-panel" />)
+const Charts = lazyChunk(() => import('@/routes/insights/system/charts').then((m) => m.Charts), <Skeleton className="h-96 rounded-panel" />)
 
 function RangePicker({ range, onChange }: { range: RangeID; onChange: (r: RangeID) => void }) {
   return (

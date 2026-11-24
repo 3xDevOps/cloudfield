@@ -28,6 +28,8 @@ function checkout(writable = true) {
   })
 }
 
+beforeAll(() => import('@/routes/files/editor'))
+
 beforeEach(() => {
   useStore.getState().resetFiles()
   useStore.setState({

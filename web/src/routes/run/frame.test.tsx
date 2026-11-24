@@ -55,6 +55,8 @@ function rerouted(view: string) {
   return <View params={useStore.getState().route.params} />
 }
 
+beforeAll(() => import('@/routes/files/editor'))
+
 beforeEach(() => {
   xterm.enabled = true
   StubSocket.install()
