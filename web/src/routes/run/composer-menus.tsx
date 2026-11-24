@@ -1,9 +1,12 @@
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useId, useRef, useState } from 'react'
 import { Check, ChevronDown, FileText, Folder } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
 import { Menu, MenuContent, MenuLabel, MenuRadioGroup, MenuRadioItem, MenuTrigger } from '@/components/ui/menu'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { RadioPills, RadioPillsItem } from '@/components/ui/radio-pills'
+import { TextSwap } from '@/components/ui/text-swap'
+import { Tooltip } from '@/components/ui/tooltip'
 import { api } from '@/lib/api'
 import type { ConfigOption, ConfigValue, SessionCommand } from '@/lib/session-types'
 import { cn, focusRingInset, surface } from '@/lib/utils'
@@ -96,43 +99,59 @@ export function SuggestionList({ id, items, active, onPick }: {
 
 const footerCategories = ['mode', 'model', 'thought_level']
 
-export function currentChoice(option: ConfigOption): ConfigValue | undefined {
-  return (option.options ?? []).flatMap((entry) => ('group' in entry ? entry.options : [entry])).find((choice) => choice.value === option.currentValue)
+function choices(option: ConfigOption): ConfigValue[] {
+  return (option.options ?? []).flatMap((entry) => ('group' in entry ? entry.options : [entry]))
 }
+
+export function currentChoice(option: ConfigOption): ConfigValue | undefined {
+  return choices(option).find((choice) => choice.value === option.currentValue)
+}
+
+const named = (option: ConfigOption) => `${option.name}: ${currentChoice(option)?.name ?? 'not set'}`
 
 type OptionPillProps = {
   option: ConfigOption
+  /** The effort option a model pill also names and sets. */
+  effort?: ConfigOption
   disabled: boolean
   onSet: (option: ConfigOption, value: string) => Promise<void>
 }
 
-function OptionPill({ option, disabled, onSet }: OptionPillProps) {
+function OptionPill({ option, effort, disabled, onSet }: OptionPillProps) {
   const [busy, setBusy] = useState(false)
   const [open, setOpen] = useState(false)
   const inFlight = useRef(false)
+  const effortLabel = useId()
+  // The picker's own request disables it too, and an effort change keeps it open.
   useEffect(() => {
-    if (disabled) setOpen(false)
-  }, [disabled])
+    if (disabled && !busy) setOpen(false)
+  }, [disabled, busy])
   const current = currentChoice(option)
   const unavailable = disabled || busy
   const changeOpen = (next: boolean) => {
     if (next && (unavailable || inFlight.current)) return
     setOpen(next)
   }
-  const select = (value: string) => {
+  const select = (target: ConfigOption, value: string) => {
     if (unavailable || inFlight.current) return
     inFlight.current = true
-    setOpen(false)
+    if (target !== effort) setOpen(false)
     setBusy(true)
-    void onSet(option, value).finally(() => {
+    void onSet(target, value).finally(() => {
       inFlight.current = false
       setBusy(false)
     })
   }
   // Keep the trigger focusable so Radix can return focus on close, not after the request.
   const trigger = (
-    <Button variant="ghost" size="sm" aria-disabled={unavailable || undefined} aria-busy={busy || undefined} aria-label={`${option.name}: ${current?.name ?? 'not set'}`}>
-      <span className="max-w-32 truncate">{current?.name ?? option.name}</span>
+    <Button variant="ghost" size="sm" aria-disabled={unavailable || undefined} aria-busy={busy || undefined} aria-label={effort ? `${named(option)}, ${named(effort)}` : named(option)}>
+      <TextSwap className="max-w-32" layerClassName="min-w-0 truncate">{current?.name ?? option.name}</TextSwap>
+      {effort && (
+        <>
+          <span aria-hidden className="text-icon-faint">/</span>
+          <TextSwap>{currentChoice(effort)?.name ?? effort.name}</TextSwap>
+        </>
+      )}
       <ChevronDown />
     </Button>
   )
@@ -143,8 +162,7 @@ function OptionPill({ option, disabled, onSet }: OptionPillProps) {
         key={`value:${choice.value}`}
         value={JSON.stringify(choice.value)}
         keywords={[choice.value, choice.name, choice.description ?? '', group?.name ?? '', group?.group ?? '']}
-        disabled={unavailable}
-        onSelect={() => select(choice.value)}
+        onSelect={() => select(option, choice.value)}
       >
         <span className="flex size-4 shrink-0 items-center">
           {choice.value === option.currentValue && <Check aria-hidden />}
@@ -158,7 +176,7 @@ function OptionPill({ option, disabled, onSet }: OptionPillProps) {
       </CommandItem>
     )
     return (
-      <Popover open={open && !unavailable} onOpenChange={changeOpen}>
+      <Popover open={open && (busy || !disabled)} onOpenChange={changeOpen}>
         <PopoverTrigger asChild>{trigger}</PopoverTrigger>
         <PopoverContent
           side="top"
@@ -189,6 +207,18 @@ function OptionPill({ option, disabled, onSet }: OptionPillProps) {
               ) : item(entry))}
             </CommandList>
           </Command>
+          {effort && (
+            <div className="flex shrink-0 items-baseline gap-2 border-t border-seam pt-2 pl-1">
+              <span id={effortLabel} className="shrink-0 text-ui-sm font-medium text-muted">{effort.name}</span>
+              <RadioPills aria-labelledby={effortLabel} value={String(effort.currentValue ?? '')} onValueChange={(value) => select(effort, value)} className="w-auto min-w-0 flex-1 flex-wrap">
+                {choices(effort).map((choice) => (
+                  <Tooltip key={choice.value} content={choice.description} disabled={!choice.description}>
+                    <RadioPillsItem value={choice.value} className="h-6 px-2 text-ui-sm">{choice.name}</RadioPillsItem>
+                  </Tooltip>
+                ))}
+              </RadioPills>
+            </div>
+          )}
         </PopoverContent>
       </Popover>
     )
@@ -209,7 +239,7 @@ function OptionPill({ option, disabled, onSet }: OptionPillProps) {
       <MenuTrigger asChild>{trigger}</MenuTrigger>
       <MenuContent align="start" side="top" className="w-[min(360px,calc(100vw-16px))]">
         <MenuLabel className="whitespace-normal [overflow-wrap:anywhere]">{option.name}</MenuLabel>
-        <MenuRadioGroup value={String(option.currentValue ?? '')} onValueChange={select}>
+        <MenuRadioGroup value={String(option.currentValue ?? '')} onValueChange={(value) => select(option, value)}>
           {(option.options ?? []).map((entry) => 'group' in entry ? (
             <Fragment key={entry.group}>
               <MenuLabel className="whitespace-normal [overflow-wrap:anywhere]">{entry.name}</MenuLabel>
@@ -228,9 +258,13 @@ export function OptionPills({ options, disabled, onSet }: {
   onSet: (option: ConfigOption, value: string) => Promise<void>
 }) {
   const shown = footerCategories.flatMap((category) => options.filter((option) => option.category === category && option.type === 'select'))
+  const model = shown.find((option) => option.category === 'model')
+  const effort = model && shown.find((option) => option.category === 'thought_level')
   return (
     <>
-      {shown.map((option) => <OptionPill key={option.id} option={option} disabled={disabled} onSet={onSet} />)}
+      {shown.filter((option) => option !== effort).map((option) => (
+        <OptionPill key={option.id} option={option} effort={option === model ? effort : undefined} disabled={disabled} onSet={onSet} />
+      ))}
     </>
   )
 }

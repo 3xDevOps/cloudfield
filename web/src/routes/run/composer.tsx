@@ -232,15 +232,16 @@ function SendActions({ pill, label, hint, description, disabled, onClick, onCanc
 }) {
   const look = pillLook[pill]
   const tip = [hint ? `${look.label} (${hint})` : look.label, description].filter(Boolean).join('. ')
-  const icon = <look.Icon className={cn((pill === 'interrupt' || pill === 'stop-waiting') && 'fill-current')} />
+  const stop = pill === 'interrupt' ? 'Interrupt the agent' : pill === 'stop-waiting' ? 'Stop waiting for background work' : undefined
+  const icon = <look.Icon className={cn(stop && 'fill-current')} />
   return (
     <div className="ml-auto flex shrink-0 items-center gap-1">
       {dictation}
       {onCancel && <Button size="sm" variant="ghost" onClick={onCancel}>Cancel</Button>}
       <Tooltip content={tip}>
         <span className="inline-flex">
-          {pill === 'send' && label === look.label ? (
-            <Button size="round" variant={look.variant} label={look.label} hint={false} disabled={disabled} onClick={onClick}>
+          {(pill === 'send' || stop) && label === look.label ? (
+            <Button size="round" variant={look.variant} label={stop ?? look.label} hint={false} disabled={disabled} onClick={onClick}>
               {icon}
             </Button>
           ) : (
@@ -248,7 +249,7 @@ function SendActions({ pill, label, hint, description, disabled, onClick, onCanc
               size="pill"
               variant={look.variant}
               hint={false}
-              aria-label={pill === 'interrupt' ? 'Interrupt the agent' : pill === 'stop-waiting' ? 'Stop waiting for background work' : undefined}
+              aria-label={stop}
               disabled={disabled}
               onClick={onClick}
             >
@@ -555,7 +556,8 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
     )
   }
 
-  const pillDisabled = busy || Boolean(connecting) || images.uploading || (pill !== 'interrupt' && pill !== 'stop-waiting' && pill !== 'resume' && (!images.ready || !hasContent || refusedImages || dictating))
+  const stops = pill === 'interrupt' || pill === 'stop-waiting'
+  const pillDisabled = busy || Boolean(connecting) || images.uploading || (!stops && pill !== 'resume' && (!images.ready || !hasContent || refusedImages || dictating))
   const hintText = connecting ?? (moderated ? (control.waits ? 'Delivers in 45 s unless the controller decides sooner.' : '') : turnRunning || pill === 'stop-waiting' || pill === 'resume' ? pillHint[pill] : '')
   const keyHint = coarse || pill === 'stop-waiting' ? undefined : pill === 'steer' ? `${shortcutLabel('composer-send')}; ${shortcutLabel('composer-queue')} queues` : shortcutLabel(pill === 'queue' && state?.steering ? 'composer-queue' : 'composer-send')
 
@@ -604,7 +606,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
             )}
             <SendActions
               pill={pill}
-              label={late ? stillWaiting : busy ? 'Sending…' : pillLook[pill].label}
+              label={late ? stillWaiting : busy && !stops ? 'Sending…' : pillLook[pill].label}
               hint={keyHint}
               description={hintText}
               disabled={pillDisabled}
