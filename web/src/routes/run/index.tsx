@@ -124,6 +124,9 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
   const textarea = useRef<HTMLTextAreaElement>(null)
   const dockedTextarea = useRef<HTMLTextAreaElement>(null)
   const [dockedOpen, setDockedOpen] = useState(false)
+  useEffect(() => {
+    if (!focused) setDockedOpen(false)
+  }, [focused])
 
   const browserRequest = useStore((s) => s.browserRequests[run.id])
   const requestBrowser = useStore((s) => s.requestBrowser)

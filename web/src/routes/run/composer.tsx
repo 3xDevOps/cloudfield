@@ -552,6 +552,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
   })
 
   if (gate) {
+    if (docked) return null
     return (
       <ComposerFrame docked={docked}>
         {dock}

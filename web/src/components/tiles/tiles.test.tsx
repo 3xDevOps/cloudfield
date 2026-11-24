@@ -12,7 +12,7 @@ import { RunFrame, type FrameTile } from '@/routes/run'
 import type { RunView } from '@/routes/run/views'
 import { useStore } from '@/store'
 import { toRecord } from '@/store/runs'
-import { emptyTiles, openTab, pickTab, splitTile, tileList, type TileLayout, type ViewContext } from '@/store/tiles'
+import { closeTile, emptyTiles, openTab, pickTab, splitTile, tileList, type TileLayout, type ViewContext } from '@/store/tiles'
 import { ScriptedSession } from '@/test/acp-stream'
 import { alice, bob, run, serverInfo, workspace } from '@/test/fixtures'
 import { StubSocket } from '@/test/stub-socket'
@@ -570,6 +570,7 @@ describe('the composer', () => {
   it('docks one line under another view that c opens, and leaves the session with one field once its Chat is on screen', async () => {
     show('run_1', 'changes')
     await settled()
+    expect(tile(1).queryByText('Connecting to the agent…')).toBeNull()
     await live('run_1', 1)
     const [docked] = fields(1)
     expect(docked.rows).toBe(1)
@@ -577,6 +578,15 @@ describe('the composer', () => {
     expect(document.activeElement).toBe(docked)
     expect(docked.rows).toBe(2)
     expect(state().route.params.view).toBe('changes')
+
+    beside('run_2')
+    await settled()
+    expect(docked.rows).toBe(1)
+    fireEvent.pointerDown(tiles()[0])
+    expect(fields(1)).toEqual([docked])
+    expect(docked.rows).toBe(1)
+    arrange((layout) => closeTile(layout, tiles()[1].dataset.tile!))
+    await settled()
 
     beside('run_1', 'session')
     await settled()
