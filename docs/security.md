@@ -1073,8 +1073,9 @@ Each session gets its own socket for messaging other sessions
 token enters the container.
 
 - A session can message its parent and subsessions, sessions editing the same files, and live
-  sessions in any workspace its owner may reach. A viewer's sessions message
-  nobody.
+  sessions its owner may message in any workspace the owner can reach;
+  protection and the workspace's message-others setting apply. A viewer's
+  sessions message nobody.
 - A message is an attributed inbox item. It gives the sender no steer, kill,
   terminal, git, transcript or secret access to the recipient.
 - Messages are capped at 4 KiB and 100 unread per inbox. Sessions in one

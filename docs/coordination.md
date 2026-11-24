@@ -2,7 +2,7 @@
 
 Cloudfield's conflict radar identifies active sessions that edit the same files. When
 coordination is enabled, each session also gets a small, durable channel for
-communicating with other live sessions its owner may reach, whether or not the radar
+communicating with other live sessions its owner may message, whether or not the radar
 has found an overlap yet. The channel is advisory:
 it does not lock files, pause work, or decide which change wins.
 
@@ -375,7 +375,7 @@ instructions. The agent reads the original, attributed payload through `inbox`.
 
 Hooks also warn agents about overlapping edits from `overlaps`, so a session
 that may not message the other session is still warned. The warning names
-each overlapping session ID with its count of shared files and gives the
+each overlapping session ID and gives the
 `send --to <session>` command. An Enhanced session gets no overlap warning;
 only `status` shows its overlaps.
 
@@ -726,7 +726,7 @@ shorter notes for the role.
 
 `status` always emits the v3 JSON envelope; `--json` remains accepted but is
 optional. Unknown flags and positional arguments are rejected. `skill` prints
-the CLI build version, live role and identity, current phase and immediate
+the CLI build version, session ID, current phase and immediate
 actions. `skill terminal`, `skill browser`, and `skill git` load focused
 development guidance when the relevant live capabilities are advertised.
 `skill subsessions` prints when to start a subsession, the steps, the task

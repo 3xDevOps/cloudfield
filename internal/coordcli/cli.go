@@ -399,8 +399,10 @@ owner may message, including siblings and sessions outside your tree.
 ` + coordhooks.ReceiptRule + ` recipient_status is the peer's status when the
 receipt is returned, or held while a person controls that subsession.
 ` + coordhooks.UntrustedRule + `
-Mail: Cloudfield tells you when mail arrives. Read it with
+Mail: read it with
   aether-internal inbox
+The Inbox hooks line below says whether Cloudfield tells you when mail arrives;
+where it does not, read the inbox yourself.
 Each read returns one batch of about 16 KiB and acknowledges the batch before
 it. Acknowledged mail cannot be read again, so read the whole output: never pipe
 it through head, tail or a count. Read until a read returns no messages.

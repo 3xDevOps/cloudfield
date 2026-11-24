@@ -2,6 +2,7 @@ package protocol
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/3xDevOps/Aether/internal/domain"
@@ -59,20 +60,11 @@ const (
 // CoordOverlapContext tells a working agent which sessions edit the files it
 // does. state is the announced overlap state: one "<run>:<file>" per line.
 func CoordOverlapContext(state string) string {
-	files := map[string]int{}
 	var runs []string
 	for _, line := range strings.Split(state, "\n") {
-		run, _, ok := strings.Cut(line, ":")
-		if !ok {
-			continue
-		}
-		if files[run] == 0 {
+		if run, _, ok := strings.Cut(line, ":"); ok && !slices.Contains(runs, run) {
 			runs = append(runs, run)
 		}
-		files[run]++
-	}
-	for i, run := range runs {
-		runs[i] = fmt.Sprintf("%s (%d shared)", run, files[run])
 	}
 	return "Cloudfield detects overlapping edits: " + strings.Join(runs, ", ") + " changed files you also changed. " +
 		"Run /usr/local/bin/aether-internal status to see the files. If it lists a session, send it your plan before you edit those files again: " +
