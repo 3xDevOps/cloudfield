@@ -591,12 +591,6 @@ func (s *Service) CoordReport(ctx context.Context, run domain.RunID, p protocol.
 	if rpcErr != nil {
 		return protocol.CoordReportResult{}, rpcErr
 	}
-	existingFinalized := false
-	if prior, err := s.cfg.Mail.GetCoordReportByIdempotency(ctx, run, p.IdempotencyKey); err == nil {
-		existingFinalized = prior != nil && prior.State == store.CoordReportFinalized
-	} else if !errors.Is(err, store.ErrNotFound) {
-		return protocol.CoordReportResult{}, internalError(method, err)
-	}
 	if s.cfg.Evidence == nil {
 		return protocol.CoordReportResult{}, internalError(method, ErrNoEvidenceCapture)
 	}
@@ -608,6 +602,12 @@ func (s *Service) CoordReport(ctx context.Context, run domain.RunID, p protocol.
 			lock.Unlock()
 		}
 	}()
+	existingFinalized := false
+	if prior, err := s.cfg.Mail.GetCoordReportByIdempotency(ctx, run, p.IdempotencyKey); err == nil {
+		existingFinalized = prior != nil && prior.State == store.CoordReportFinalized
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return protocol.CoordReportResult{}, internalError(method, err)
+	}
 	// Before the subsession check, so the one pass an inbox read buys is
 	// spent on the next report and never on a later one.
 	if p.Outcome == protocol.CoordOutcomeBlocked {

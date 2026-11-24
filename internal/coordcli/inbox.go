@@ -68,7 +68,7 @@ func ack(ctx context.Context, socket string, args []string) (ackResult, error) {
 	}
 	if !next.Acked {
 		if next.AckToken == "" && next.More > 0 {
-			return ackResult{}, &protocol.Error{Code: protocol.CodeConflict, Message: fmt.Sprintf("ack: %s is not the current batch; %d unread messages wait, run inbox to read them", token, next.More)}
+			return ackResult{}, &protocol.Error{Code: protocol.CodeConflict, Message: fmt.Sprintf("ack: %s is not the current batch; unread messages waiting: %d, run inbox to read them", token, next.More)}
 		}
 		if next.AckToken == "" {
 			return ackResult{}, &protocol.Error{Code: protocol.CodeConflict, Message: fmt.Sprintf("ack: %s is not the current batch and no inbox batch is waiting", token)}

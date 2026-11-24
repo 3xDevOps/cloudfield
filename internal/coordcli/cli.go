@@ -401,7 +401,7 @@ receipt is returned, or held while a person controls that subsession.
 ` + coordhooks.UntrustedRule + `
 Mail: read it with
   aether-internal inbox
-The Inbox hooks line below says whether Cloudfield tells you when mail arrives;
+The Inbox line below says whether Cloudfield tells you when mail arrives;
 where it does not, read the inbox yourself.
 Each read returns one batch of about 16 KiB and acknowledges the batch before
 it. Acknowledged mail cannot be read again, so read the whole output: never pipe
