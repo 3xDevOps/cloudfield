@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useId, useRef, useState } from 'react'
+import type { CSSProperties } from 'react'
 import { Check, ChevronDown, FileText, Folder } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '@/components/ui/command'
@@ -121,12 +122,15 @@ function OptionPill({ option, effort, disabled, onSet }: OptionPillProps) {
   const [busy, setBusy] = useState(false)
   const [open, setOpen] = useState(false)
   const inFlight = useRef(false)
+  const nextEffort = useRef<string>(undefined)
   const effortLabel = useId()
   // The picker's own request disables it too, and an effort change keeps it open.
   useEffect(() => {
     if (disabled && !busy) setOpen(false)
   }, [disabled, busy])
   const current = currentChoice(option)
+  const effortChoice = effort && currentChoice(effort)
+  const levels = effort ? choices(effort) : []
   const unavailable = disabled || busy
   const changeOpen = (next: boolean) => {
     if (next && (unavailable || inFlight.current)) return
@@ -140,16 +144,24 @@ function OptionPill({ option, effort, disabled, onSet }: OptionPillProps) {
     void onSet(target, value).finally(() => {
       inFlight.current = false
       setBusy(false)
+      const next = nextEffort.current
+      nextEffort.current = undefined
+      if (effort && next !== undefined && next !== value) select(effort, next)
     })
+  }
+  // A level picked while another is on its way waits for it, so the last pick wins.
+  const pickEffort = (value: string) => {
+    if (inFlight.current) nextEffort.current = value
+    else if (effort && value !== effort.currentValue) select(effort, value)
   }
   // Keep the trigger focusable so Radix can return focus on close, not after the request.
   const trigger = (
     <Button variant="ghost" size="sm" aria-disabled={unavailable || undefined} aria-busy={busy || undefined} aria-label={effort ? `${named(option)}, ${named(effort)}` : named(option)}>
-      <TextSwap className="max-w-32" layerClassName="min-w-0 truncate">{current?.name ?? option.name}</TextSwap>
+      <TextSwap className={effort ? 'max-w-20 md:max-w-48' : 'max-w-32'} layerClassName="min-w-0 truncate">{current?.name ?? option.name}</TextSwap>
       {effort && (
         <>
           <span aria-hidden className="text-icon-faint">/</span>
-          <TextSwap>{currentChoice(effort)?.name ?? effort.name}</TextSwap>
+          <TextSwap>{effortChoice?.name ?? effort.name}</TextSwap>
         </>
       )}
       <ChevronDown />
@@ -208,15 +220,33 @@ function OptionPill({ option, effort, disabled, onSet }: OptionPillProps) {
             </CommandList>
           </Command>
           {effort && (
-            <div className="flex shrink-0 items-baseline gap-2 border-t border-seam pt-2 pl-1">
-              <span id={effortLabel} className="shrink-0 text-ui-sm font-medium text-muted">{effort.name}</span>
-              <RadioPills aria-labelledby={effortLabel} value={String(effort.currentValue ?? '')} onValueChange={(value) => select(effort, value)} className="w-auto min-w-0 flex-1 flex-wrap">
-                {choices(effort).map((choice) => (
+            <div className="flex shrink-0 flex-col gap-1.5 border-t border-seam px-2 pt-2">
+              <span id={effortLabel} className="text-ui-sm font-medium text-muted">{effort.name}</span>
+              {/* A touch screen cannot fit the levels on one row, so it gets even rows instead of one left over. */}
+              <RadioPills
+                aria-labelledby={effortLabel}
+                value={String(effort.currentValue ?? '')}
+                style={{ '--columns': levels.length > 4 ? Math.ceil(levels.length / 2) : levels.length } as CSSProperties}
+                className="w-full flex-wrap coarse:grid coarse:grid-cols-[repeat(var(--columns),minmax(0,1fr))]"
+              >
+                {levels.map((choice) => (
                   <Tooltip key={choice.value} content={choice.description} disabled={!choice.description}>
-                    <RadioPillsItem value={choice.value} className="h-6 px-2 text-ui-sm">{choice.name}</RadioPillsItem>
+                    {/* The tooltip's own data-state and focus handler would replace the radio's. */}
+                    <span className="inline-flex">
+                      {/* Each choice is a request to the agent, so arrows only move focus: Space or a click chooses. */}
+                      <RadioPillsItem
+                        value={choice.value}
+                        className="h-6 px-2 text-ui-sm coarse:w-full coarse:justify-center coarse:px-1"
+                        onFocus={(event) => event.preventDefault()}
+                        onClick={() => pickEffort(choice.value)}
+                      >
+                        {choice.name}
+                      </RadioPillsItem>
+                    </span>
                   </Tooltip>
                 ))}
               </RadioPills>
+              {effortChoice?.description && <p className="text-ui-sm text-muted">{effortChoice.description}</p>}
             </div>
           )}
         </PopoverContent>

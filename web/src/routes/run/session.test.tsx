@@ -710,6 +710,24 @@ describe('the Enhanced session view', () => {
     expect(screen.queryByRole('button', { name: 'Compact' })).toBeNull()
   })
 
+  it('sets the effort from the model picker, which stays open beside the Send arrow', async () => {
+    const answer = Promise.withResolvers<unknown>()
+    vi.mocked(api.runACPSetOption).mockImplementationOnce(() => answer.promise)
+    open()
+    acpSocket().open({ has_control: true, control_generation: 4, state: state({ config_options: [
+      { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: 'fable', options: [{ value: 'fable', name: 'Fable 5.2' }] },
+      { id: 'effort', name: 'Effort', category: 'thought_level', type: 'select', currentValue: 'high', options: [{ value: 'low', name: 'Low' }, { value: 'high', name: 'High' }] },
+    ] }) })
+    await userEvent.click(await screen.findByRole('button', { name: 'Model: Fable 5.2, Effort: High' }))
+    await userEvent.click(screen.getByRole('radio', { name: 'Low' }))
+    expect(api.runACPSetOption).toHaveBeenCalledExactlyOnceWith('run_1', 'effort', 'low', expect.objectContaining({ control_generation: 4 }))
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDefined()
+    expect(screen.getByRole('radiogroup', { name: 'Effort' })).toBeDefined()
+    answer.resolve({})
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Model/ }).getAttribute('aria-busy')).toBeNull())
+    expect(screen.getByRole('radiogroup', { name: 'Effort' })).toBeDefined()
+  })
+
   it('offers no Cancel on an interrupt the server has not answered', async () => {
     vi.mocked(api.runACPCancel).mockImplementationOnce(() => new Promise(() => {}))
     open()

@@ -5,7 +5,7 @@ import { OptionPills } from '@/routes/run/composer-menus'
 
 const mode: ConfigOption = { id: 'mode', name: 'Mode', category: 'mode', type: 'select', currentValue: 'plan', options: [{ value: 'plan', name: 'Plan mode' }, { value: 'default', name: 'Default' }] }
 const model: ConfigOption = { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: 'fable', options: [{ value: 'fable', name: 'Fable 5.2' }, { value: 'opus', name: 'Opus 5.5' }] }
-const effort: ConfigOption = { id: 'effort', name: 'Effort', category: 'thought_level', type: 'select', currentValue: 'high', options: [{ value: 'low', name: 'Low' }, { value: 'high', name: 'High' }] }
+const effort: ConfigOption = { id: 'effort', name: 'Effort', category: 'thought_level', type: 'select', currentValue: 'high', options: [{ value: 'low', name: 'Low' }, { value: 'high', name: 'High', description: 'Thinks longer' }] }
 
 function mount(options: ConfigOption[], onSet = vi.fn(async () => {})) {
   render(<OptionPills options={options} disabled={false} onSet={onSet} />)
@@ -23,7 +23,7 @@ describe('OptionPills', () => {
     const settle = Promise.withResolvers<void>()
     const onSet = mount([model, effort], vi.fn(() => settle.promise))
     await userEvent.click(screen.getByRole('button', { name: /^Model/ }))
-    expect(screen.getByRole('radio', { name: 'High' }).getAttribute('aria-checked')).toBe('true')
+    expect(screen.getByRole('radio', { name: 'High' }).getAttribute('data-state')).toBe('checked')
     await userEvent.click(screen.getByRole('radio', { name: 'Low' }))
     expect(onSet).toHaveBeenCalledExactlyOnceWith(effort, 'low')
     await userEvent.click(screen.getByRole('option', { name: /^Opus 5.5/ }))
@@ -31,6 +31,29 @@ describe('OptionPills', () => {
     settle.resolve()
     await waitFor(() => expect(screen.getByRole('button', { name: /^Model/ }).getAttribute('aria-busy')).toBeNull())
     expect(screen.getByLabelText('Search Model')).toBeDefined()
+  })
+
+  it('sends the last effort picked while another is on its way', async () => {
+    const first = Promise.withResolvers<void>()
+    const onSet = mount([model, effort], vi.fn().mockReturnValueOnce(first.promise).mockResolvedValue(undefined))
+    await userEvent.click(screen.getByRole('button', { name: /^Model/ }))
+    await userEvent.click(screen.getByRole('radio', { name: 'Low' }))
+    await userEvent.click(screen.getByRole('radio', { name: 'High' }))
+    expect(onSet).toHaveBeenCalledOnce()
+    first.resolve()
+    await waitFor(() => expect(onSet).toHaveBeenCalledTimes(2))
+    expect(onSet).toHaveBeenLastCalledWith(effort, 'high')
+  })
+
+  it('moves between effort levels with the arrow keys and sets one on Space', async () => {
+    const onSet = mount([model, effort])
+    await userEvent.click(screen.getByRole('button', { name: /^Model/ }))
+    screen.getByRole('radio', { name: 'High' }).focus()
+    await userEvent.keyboard('{ArrowLeft}')
+    expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'Low' }))
+    expect(onSet).not.toHaveBeenCalled()
+    await userEvent.keyboard(' ')
+    expect(onSet).toHaveBeenCalledExactlyOnceWith(effort, 'low')
   })
 
   it('sets the model and closes', async () => {

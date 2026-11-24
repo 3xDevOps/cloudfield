@@ -233,7 +233,7 @@ function SendActions({ pill, label, hint, description, disabled, onClick, onCanc
   const look = pillLook[pill]
   const tip = [hint ? `${look.label} (${hint})` : look.label, description].filter(Boolean).join('. ')
   const stop = pill === 'interrupt' ? 'Interrupt the agent' : pill === 'stop-waiting' ? 'Stop waiting for background work' : undefined
-  const icon = <look.Icon className={cn(stop && 'fill-current')} />
+  const icon = <look.Icon className={cn(stop && 'size-3 fill-current coarse:size-4')} />
   return (
     <div className="ml-auto flex shrink-0 items-center gap-1">
       {dictation}
@@ -559,7 +559,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
   const stops = pill === 'interrupt' || pill === 'stop-waiting'
   const pillDisabled = busy || Boolean(connecting) || images.uploading || (!stops && pill !== 'resume' && (!images.ready || !hasContent || refusedImages || dictating))
   const hintText = connecting ?? (moderated ? (control.waits ? 'Delivers in 45 s unless the controller decides sooner.' : '') : turnRunning || pill === 'stop-waiting' || pill === 'resume' ? pillHint[pill] : '')
-  const keyHint = coarse || pill === 'stop-waiting' ? undefined : pill === 'steer' ? `${shortcutLabel('composer-send')}; ${shortcutLabel('composer-queue')} queues` : shortcutLabel(pill === 'queue' && state?.steering ? 'composer-queue' : 'composer-send')
+  const keyHint = coarse || stops ? undefined : pill === 'steer' ? `${shortcutLabel('composer-send')}; ${shortcutLabel('composer-queue')} queues` : shortcutLabel(pill === 'queue' && state?.steering ? 'composer-queue' : 'composer-send')
 
   return (
     <ComposerFrame>
@@ -606,7 +606,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
             )}
             <SendActions
               pill={pill}
-              label={late ? stillWaiting : busy && !stops ? 'Sending…' : pillLook[pill].label}
+              label={late ? stillWaiting : busy && draft.busyPrompt ? 'Sending…' : pillLook[pill].label}
               hint={keyHint}
               description={hintText}
               disabled={pillDisabled}

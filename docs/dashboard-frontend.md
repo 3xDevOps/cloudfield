@@ -1627,8 +1627,7 @@ where a resend is deduped or refused and the eventual result still shows:
 | Question **Reply** (Details) | Replying… | Yes: a resend of the same text reuses the idempotency key, and the reply arrives as a room event |
 | Teammate message and permission **Approve** / **Deny** (Details) | Approving… / Denying… | No: a second decision would race the first, and its "already decided" refusal would sit beside the first's success |
 | Composer **Send** and the Enhanced pill's Send, Steer and Queue | Sending… | Yes: the draft keeps its idempotency key, so a resend delivers once |
-| Enhanced pill's **Interrupt** and **Stop waiting** | None: the stop button dims | No: these carry no key, so a late interrupt could stop the turn sent after it |
-| Enhanced pill's **Resume**, and a session option | Sending… | No: neither carries a key |
+| Enhanced pill's **Interrupt**, **Stop waiting** and **Resume**, and a session option | None: the pill dims | No: these carry no key, so a late interrupt could stop the turn sent after it |
 | **Create workspace** | Creating… | No: `workspace.add` carries no idempotency key |
 | **Launch** (launch dialog) | Launching… | The dialog's **Cancel** closes it at any time; the request keeps going, a success still opens the session, and a refusal shows as a toast |
 | Close dialog **Merged** / **Abandoned**, over another verb's pending prediction | Closing… | The dialog's **Cancel** closes it at any time; the answer shows as a toast |
@@ -3791,10 +3790,14 @@ Closing returns focus to the thumbnail of the image last shown. Attachments sit
 outside the text-collapse area and remain available through history and reconnect.
 The mode menu uses content-sized described rows; the model picker is
 `Command` inside `Popover`, preserving every advertised option and provider
-group with search by name, ID and description. Under its list an **Effort**
-row of `RadioPills` sets the agent's `thought_level` option, with a level's
-description as its tooltip. Picking a model closes the picker; picking an
-effort leaves it open. An agent that offers an effort option and no model
+group with search by name, ID and description. Under its list a row of
+`RadioPills`, labelled with the option's name such as **Effort**, sets the
+agent's `thought_level` option. The selected level's description sits under
+the row and every level's description is its tooltip. A touch screen lays the
+levels out in even rows. Each choice is a request to the agent, so the
+arrow keys only move between levels and Space or a click chooses one; a
+level picked while another is still being set goes out once that one settles.
+Picking a model closes the picker; picking an effort leaves it open. An agent that offers an effort option and no model
 option gets the effort as a menu of its own. Selections use
 `run.acp.set_option`; `/` completes the agent's commands and `@` paths from
 the Files tree cache. It closes with one line of reason while switching, for a
