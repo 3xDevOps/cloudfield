@@ -563,7 +563,7 @@ describe('motion', () => {
     const body = stays.lastElementChild as HTMLElement
     fireEvent.click(screen.getByRole('button', { name: 'Split right' }))
     expect(animate.mock.contexts).toEqual([stays, tiles()[1].lastElementChild])
-    expect(animate.mock.calls[0][0]).toEqual([{ left: '0%', top: '0%', width: '100%', height: '100%', zIndex: 1 }, { zIndex: 1 }])
+    expect(animate.mock.calls[0][0]).toEqual([{ left: '0%', top: '0%', width: '100%', height: '100%', zIndex: 1 }, { left: '0%', top: '0%', width: '50%', height: '100%', zIndex: 1 }])
     expect(animate.mock.calls[1][0]).toEqual([{ opacity: 0 }, { opacity: 1 }])
     expect([body.style.width, body.style.height, stays.style.overflow]).toEqual(['1600px', '900px', 'clip'])
     await settled()
@@ -572,6 +572,15 @@ describe('motion', () => {
     animate.mockClear()
     fireEvent.keyDown(screen.getByRole('separator', { name: 'Resize the tiles' }), { key: 'ArrowLeft' })
     expect(animate).not.toHaveBeenCalled()
+  })
+
+  it('restarts a glide cut short toward an explicit end rectangle', () => {
+    sized(1600, 900)
+    show()
+    const animate = vi.spyOn(tiles()[0], 'animate')
+    fireEvent.click(screen.getByRole('button', { name: 'Split right' }))
+    fireEvent.click(tile(2).getByRole('button', { name: 'Close tile' }))
+    expect((animate.mock.lastCall![0] as Keyframe[])[1]).toEqual({ left: '0%', top: '0%', width: '100%', height: '100%', zIndex: 1 })
   })
 
   it('moves nothing under reduced motion', () => {

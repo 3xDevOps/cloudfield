@@ -46,20 +46,23 @@ const glides = new WeakMap<HTMLElement, Animation>()
 /**
  * Plays a tile from the rectangle it had, in percent of the area, to the one
  * it has now. Its body takes the final size at once and the tile clips it, so
- * a terminal or Browser inside is sized once, not on every frame.
+ * a terminal or Browser inside is sized once, not on every frame. The end
+ * keyframe is spelled out so that a glide cut short by the next one reads
+ * where the tile is drawn, not a value already moving to the new rectangle.
  */
-function glideTile(tile: HTMLElement, from: Rect) {
+function glideTile(tile: HTMLElement, from: Rect, to: Rect) {
   const body = tile.lastElementChild as HTMLElement
   const running = glides.get(tile)
   const start = Object.fromEntries(sides.map((side) => [side, running ? getComputedStyle(tile)[side] : `${from[side]}%`]))
   running?.cancel()
-  body.style.width = body.style.height = ''
+  body.style.width = body.style.height = body.style.flex = ''
   const { width, height } = body.getBoundingClientRect()
   body.style.width = `${width}px`
   body.style.height = `${height}px`
   body.style.flex = 'none'
   tile.style.overflow = 'clip'
-  const animation = play(tile, [{ ...start, zIndex: 1 }, { zIndex: 1 }], { duration: '--duration-glide', easing: '--ease-glide' })
+  const end = Object.fromEntries(sides.map((side) => [side, `${to[side]}%`]))
+  const animation = play(tile, [{ ...start, zIndex: 1 }, { ...end, zIndex: 1 }], { duration: '--duration-glide', easing: '--ease-glide' })
   glides.set(tile, animation)
   const settle = () => {
     if (glides.get(tile) !== animation) return
@@ -119,9 +122,10 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
   const drawn = Object.fromEntries(visible.map((tile) => [tile.id, layout.maximized ? full : rects.tiles[tile.id]]))
   const narrow = (tileId: string) => measured && (drawn[tileId].width / 100) * area.width < narrowBelow
 
-  // A split, close, move, maximize or restore glides the tiles that stay and fades in the ones that appear.
   // A seam drag and a window resize change no shape, so they never glide.
-  const shape = JSON.stringify([layout.maximized && layout.focused, layout.root], (key, value: unknown) => (key === 'ratio' || key === 'tabs' || key === 'active' ? undefined : value))
+  const shape = JSON.stringify([layout.maximized && layout.focused, layout.root], (key, value: unknown) =>
+    key === 'ratio' || key === 'tabs' || key === 'active' ? undefined : value,
+  )
   const last = useRef({ shape, cramped, drawn })
   useLayoutEffect(() => {
     const before = last.current
@@ -129,8 +133,9 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
     if (before.shape === shape || before.cramped !== cramped || prefersReducedMotion()) return
     for (const tile of document.querySelectorAll<HTMLElement>('[data-tile]')) {
       const from = before.drawn[tile.dataset.tile!]
+      const to = drawn[tile.dataset.tile!]
       if (!from) playEntrance(tile.lastElementChild!, { motion: { duration: '--duration-200', easing: '--ease-enter' } })
-      else if (sides.some((side) => from[side] !== drawn[tile.dataset.tile!][side])) glideTile(tile, from)
+      else if (sides.some((side) => from[side] !== to[side])) glideTile(tile, from, to)
     }
   })
 
