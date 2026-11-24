@@ -2209,9 +2209,9 @@ export interface SystemContainer {
   /** Absent or 0 is unlimited. */
   cpu_limit_cores?: number
   cpu_throttled_percent?: number
-  /** What the session uses inside its sandbox; `memory_limit_bytes` caps this. */
+  /** What runs inside the sandbox uses; `memory_limit_bytes` caps this. */
   memory_bytes: number
-  /** What a session VM holds of the host's memory, its kernel and file cache included. Absent for a container, whose `memory_bytes` is already that. */
+  /** What a sandbox's VM holds of the host's memory, its kernel and file cache included. Absent for a Docker container, whose `memory_bytes` is already that, or when the VM's cgroup could not be read. */
   host_memory_bytes?: number
   memory_limit_bytes: number
   pids: number

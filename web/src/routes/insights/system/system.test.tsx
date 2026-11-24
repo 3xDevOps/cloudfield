@@ -81,7 +81,7 @@ describe('system tab', () => {
     expect(rows()[0]!.textContent).toContain('4.0 GB · 25% of host1.0 GB of 8.0 GB limit')
     expect(rows()[1]!.textContent).toContain('3.5 GB of 8.0 GB limit')
     expect(rows()[1]!.textContent).not.toContain('of host')
-    expect(screen.getByText(/The first is what its VM holds of the host's memory/)).toBeDefined()
+    expect(screen.getByText(/"of host" is everything its VM holds of the host's memory/)).toBeDefined()
   })
 
   it('opens the run behind a row', async () => {

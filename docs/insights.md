@@ -123,12 +123,13 @@ it. The Activity tab is the 7-day history above; System is live.
   by use, with its limit, **near limit** from 80% of that limit, **throttled**
   when CPU is capped, and a 15-minute trend. A session's browser is its own row,
   with its own limits. A row opens its session, or your own Environment.
-  With `session-runtime vm`, a session's memory is two figures. The donut,
+  With `session-runtime vm`, a sandbox's memory is two figures. The donut,
   the ranking, the trend and the row's first line (`4.8 GB · 30% of host`)
   are what its VM holds of the host's memory, which includes the VM's own
   kernel and file cache. The second line (`2.0 GB of 8.0 GB limit`)
-  and the bar are what the session uses inside the VM, against the limit a
-  process of the session is killed at.
+  and the bar are what runs inside the VM, against the limit a process
+  there is killed at. A VM session's browser runs inside its VM, so it is
+  in both figures.
 - **History.** CPU, memory, load average, pressure, network and disk I/O.
 - **Storage.** The data filesystem, Cloudfield data by category, Docker storage,
   container writable layers and, for admins, the largest storage owners.

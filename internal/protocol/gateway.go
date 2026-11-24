@@ -166,8 +166,9 @@ type SystemHostSample struct {
 // "run", "browser" (a run's browser sidecar; OwnerID is the run) or "member"
 // (a member's environment). Rate fields are omitted until the container has
 // two samples; CPULimitCores is omitted when unlimited. HostMemoryBytes is
-// what a session VM holds of the host's memory, more than MemoryBytes, its
-// session's use inside it; it is omitted for a container.
+// what a VM holds of the host's memory, where MemoryBytes is the use inside
+// it; it is omitted for a Docker container or when the VM's cgroup could not
+// be read.
 type SystemContainer struct {
 	OwnerKind           string   `json:"owner_kind"`
 	OwnerID             string   `json:"owner_id"`

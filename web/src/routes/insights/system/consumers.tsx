@@ -157,12 +157,12 @@ export function Consumers({ stats }: { stats: SystemStats }) {
               </p>
             )}
             <Rows stats={stats} metric={metric} rows={shown} result={result} capacity={capacity.capacity} />
+            {!selected && containers.length > 0 && <EverythingElse rest={result.rest} stats={stats} metric={metric} />}
             {metric === 'memory' && shown.some((c) => c.host_memory_bytes !== undefined) && (
               <p className="px-1.5 text-ui-sm text-muted">
-                A session in a VM shows two figures. The first is what its VM holds of the host's memory, the VM's own kernel and file cache included. The limit applies to what the session uses inside the VM.
+                For a sandbox in a VM, "of host" is everything its VM holds of the host's memory, its own kernel and file cache included. The limit line and its bar are what runs inside the VM, and the limit caps only that.
               </p>
             )}
-            {!selected && containers.length > 0 && <EverythingElse rest={result.rest} stats={stats} metric={metric} />}
           </div>
         </div>
       </div>
@@ -229,7 +229,7 @@ function Rows({ stats, metric, rows, result, capacity }: { stats: SystemStats; m
                           : `${formatBytes(value)} · ${hostShare} of host`}
                   </span>
                   {inVM && limit > 0 && (
-                    <span className="text-muted tabular-nums">{formatBytes(c.memory_bytes)} of {formatBytes(limit)} limit</span>
+                    <span className={cn('tabular-nums', !level && 'text-muted')}>{formatBytes(c.memory_bytes)} of {formatBytes(limit)} limit</span>
                   )}
                   {share !== undefined && (
                     <span aria-hidden className="block h-1 w-full overflow-hidden rounded-full bg-chrome">
