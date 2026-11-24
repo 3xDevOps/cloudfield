@@ -1,5 +1,6 @@
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { preloadChunks } from '@/components/lazy-chunk'
 import type * as apiModule from '@/lib/api'
 import { api } from '@/lib/api'
 import type { Run } from '@/lib/types'
@@ -54,6 +55,8 @@ function rerouted(view: string) {
   act(() => useStore.getState().navigate('run', { runId: 'run_1', view }))
   return <View params={useStore.getState().route.params} />
 }
+
+beforeAll(() => preloadChunks())
 
 beforeEach(() => {
   xterm.enabled = true

@@ -1,5 +1,6 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { preloadChunks } from '@/components/lazy-chunk'
 import { ApiError } from '@/lib/api'
 import type { Api } from '@/lib/api'
 import { InsightsRoute } from '@/routes/insights'
@@ -21,6 +22,8 @@ function renderSystem(over: Partial<Api> = {}) {
 }
 
 const rows = () => within(screen.getByRole('list', { name: 'Sandboxes by usage' })).getAllByRole('listitem')
+
+beforeAll(() => preloadChunks())
 
 describe('system tab', () => {
   it('shows six tile placeholders and keeps the sentence for assistive technology', async () => {
