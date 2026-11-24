@@ -153,15 +153,29 @@ Guest memory is shared memory the host fills as the guest touches it
 reporting (`--balloon free_page_reporting=on`; `page_reporting_order=0`
 makes single pages count), which hands over what is free within about 30
 seconds. A guest frees its page cache only under memory pressure, and then
-only down to a few percent free, so the helper turns on the kernel's
+only down to a few percent free, so the helper trims it. Every 10 seconds it
+asks the kernel to free a quarter of the file pages on its inactive list
+beyond 64 MiB, the ones read or written once and not since, by writing the
+amount with `swappiness=0` to the root cgroup's `memory.reclaim`. As that
+list empties the kernel moves pages nothing has read lately onto it, so they
+follow, and it shrinks its caches of file names and inodes in proportion. A
+page that was in regular use, dropped and then read again comes back from
+disk and counts as a stall on memory, and the trim holds off while the
+guest's tasks stalled on memory for 1% or more of the last minute
+(`memory.pressure`, `some avg60`). A file read once, dropped and read again
+comes back from disk without one. After 1280 MiB written and read once in a
+4 GiB guest, three quarters of it was back on the host in 76 seconds, and
+16% after 3 minutes without the trim (`TestKVMBuildCacheReturnsToTheHost`).
+
+The trim frees no program memory, so the helper also turns on the kernel's
 DAMON_RECLAIM at boot: it pages out memory left untouched for `min_age`, 60
 seconds, while pages in use stay. It samples memory by region, so a cold
 page that shares a region with pages in use leaves only once DAMON splits
-them apart. A file read once starts leaving the guest, and the host, a
-minute or two later; a third of one that filled the guest is back within
-about 3 minutes, and the rest follows more slowly
-(`TestKVMColdMemoryReturnsToTheHost`). Clean file pages are dropped. A dirty
-one leaves on a later pass, once the kernel's flusher has written it.
+them apart. Alone, it returned a third of a file read once that filled the
+guest in about 4 minutes, and the rest more slowly; with the trim a third is
+back in 20 seconds (`TestKVMColdMemoryReturnsToTheHost`). Clean file pages
+are dropped. A dirty one leaves on a later pass, once the kernel's flusher
+has written it.
 With swap, cold anonymous, tmpfs and shared memory pages, such as
 `/dev/shm`, are tried too and go to the swap file (step 6 of
 [Boot](#boot)). DAMON rarely reaches idle program memory in a guest that is
@@ -406,10 +420,8 @@ PID 1 passes `SIGHUP`, `SIGINT`, `SIGQUIT`, `SIGTERM`, `SIGUSR1`, `SIGUSR2`,
 `SIGALRM` and `SIGWINCH` on to the main process, as `docker-init` does. When
 the main process exits the helper keeps running, kills every process left in
 the session cgroup, as a container's end does, and drops the clean page cache
-(`/proc/sys/vm/drop_caches`) so the host gets the memory back. It does not
-write `memory.reclaim`: from the helper, which serves the home, that stalls
-on the home's own pages. The server reads the exit code and powers the VM
-off, unless its checkouts live on its own disks ([Checkouts](#checkouts)):
+(`/proc/sys/vm/drop_caches`) so the host gets the memory back. The server
+reads the exit code and powers the VM off, unless its checkouts live on its own disks ([Checkouts](#checkouts)):
 then the VM stays up for the git work that ends a session on its checkout,
 the last snapshot, the final commit, branch publication and evidence, until
 the session is removed, started again, or 10 minutes pass. A stop whose end

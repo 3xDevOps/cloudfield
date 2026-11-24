@@ -239,6 +239,7 @@ func serve() error {
 	record("serve sockets", serveSockets(cfg.Serves))
 	record("listen on loopback ports", listenLoopbacks(cfg.Loopbacks))
 	record("start DAMON_RECLAIM", startDAMONReclaim(cfg.Swap > 0 && swapErr == nil))
+	go trimPageCache("/sys/fs/cgroup")
 
 	bootError := ""
 	if len(failures) > 0 {
