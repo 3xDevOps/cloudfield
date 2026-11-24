@@ -161,7 +161,8 @@ as **43%**, and turns the needs-you colour from 90%; click it for the breakdown,
 **Compact** when the agent has a `/compact` command.
 
 An unsent message stays with its session across pages, mode switches and reconnects.
-Reloading the page discards it.
+Reloading the page discards it. You can keep typing while the session stream
+reconnects; sending waits until it is back.
 
 Steering, answering, interrupting and changing options need control of the session.
 The owner's desktop tab takes it when it first shows Chat and nobody holds

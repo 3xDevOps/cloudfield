@@ -5,6 +5,7 @@ import { DictationNotice } from '@/components/dictation/dictation-notice'
 import { useDictationState } from '@/components/dictation/state'
 import { ArrowUp, CornerUpRight, ListPlus, Play, RefreshCw, Square } from '@/components/icons'
 import { Button } from '@/components/ui/button'
+import { Spinner } from '@/components/ui/spinner'
 import { Textarea } from '@/components/ui/textarea'
 import { Tooltip } from '@/components/ui/tooltip'
 import { api } from '@/lib/api'
@@ -214,17 +215,18 @@ function ComposerBox({ textarea, autoFocus, value, onChange, onCaret, onFocusCha
   )
 }
 
-function ComposerHint({ id, notice, description }: { id: string; notice?: string; description: string }) {
-  return notice
-    ? <p id={id} role="status" className="line-clamp-2 px-4 text-ui-sm text-muted">{notice}</p>
+function ComposerHint({ id, uploading, description }: { id: string; uploading: boolean; description: string }) {
+  return uploading
+    ? <p id={id} role="status" className="line-clamp-2 px-4 text-ui-sm text-muted">Uploading…</p>
     : <p id={id} className="sr-only">{description}</p>
 }
 
-function SendActions({ pill, label, hint, description, disabled, onClick, onCancel, dictation }: {
+function SendActions({ pill, label, hint, description, status, disabled, onClick, onCancel, dictation }: {
   pill: Pill
   label: string
   hint?: string
   description: string
+  status?: string
   disabled: boolean
   onClick: () => void
   onCancel?: () => void
@@ -235,6 +237,7 @@ function SendActions({ pill, label, hint, description, disabled, onClick, onCanc
   const icon = <look.Icon className={cn((pill === 'interrupt' || pill === 'stop-waiting') && 'fill-current')} />
   return (
     <div className="ml-auto flex shrink-0 items-center gap-1">
+      <span role="status" className="mr-1 flex items-center gap-1.5 text-ui-sm text-muted">{status && <><Spinner />{status}</>}</span>
       {dictation}
       {onCancel && <Button size="sm" variant="ghost" onClick={onCancel}>Cancel</Button>}
       <Tooltip content={tip}>
@@ -348,7 +351,7 @@ function StandardComposer({ run, agent, room, textarea, autoFocus, onFocusChange
           </>
         )}
       />
-      <ComposerHint id={hintID} notice={uploading ? 'Uploading…' : undefined} description={hint} />
+      <ComposerHint id={hintID} uploading={uploading} description={hint} />
     </ComposerFrame>
   )
 }
@@ -421,7 +424,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
   useEffect(() => onDropStatus?.({ ...drop, upload: images.upload }), [drop.blocked, drop.limit, images.upload, onDropStatus])
   const refusedImages = !supportsImages && hasImages(images.previews)
   const hasContent = Boolean(body.trim()) || images.previews.length > 0
-  const pill = moderated ? 'send' : pillFor({ paused, turnRunning, backgroundWait: waiting, steering: state?.steering ?? false, queueHeld, empty: !hasContent })
+  const pill = moderated && !connecting ? 'send' : pillFor({ paused, turnRunning, backgroundWait: waiting, steering: state?.steering ?? false, queueHeld, empty: !hasContent })
 
   const [dismissed, setDismissed] = useState(false)
   const trigger = focused && !dismissed ? triggerAt(body, caret) : null
@@ -447,11 +450,11 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
   const modelOption = state?.config_options?.find((option) => option.category === 'model' && option.type === 'select')
   const modelName = (modelOption && currentChoice(modelOption)?.name) ?? run.model
   const canCompact = state?.commands?.some((command) => command.name === 'compact') ?? false
-  const compactBlock = moderated
+  const compactBlock = connecting ?? (moderated
     ? 'Take control of the conversation to compact it.'
     : busy || hasContent
       ? 'Clear the message box first, so nothing you typed is replaced.'
-      : undefined
+      : undefined)
   const compact = () => {
     setBody('/compact ')
     setCaret(9)
@@ -586,7 +589,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
               unsupported={refusedImages ? 'This agent does not support image prompts.' : undefined}
             />
             <TemplateInsert run={run} textarea={textarea} disabled={busy} />
-            <OptionPills options={state?.config_options ?? []} disabled={busy || moderated || Boolean(connecting)} onSet={setOption} />
+            <OptionPills options={state?.config_options ?? []} disabled={busy || moderated} onSet={setOption} />
             {state?.usage && state.usage.size > 0 && (
               <ContextWindow
                 runID={run.id}
@@ -601,6 +604,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
               label={late ? stillWaiting : busy ? 'Sending…' : pillLook[pill].label}
               hint={keyHint}
               description={hintText}
+              status={connecting}
               disabled={pillDisabled}
               onClick={() => act(pill)}
               onCancel={late && draft.busyPrompt ? () => saveComposerDraft(run.id, { busy: undefined }) : undefined}
@@ -626,7 +630,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
           if (hasContent) act(turnRunning ? 'queue' : 'send')
         }}
         onEscape={onEscape}
-        placeholder={connecting ?? (turnRunning || waiting ? 'Message the agent while it works' : notFinishedYet(run) ? 'Say what is left to do, / for commands, @ for files' : 'Message the agent, / for commands, @ for files')}
+        placeholder={turnRunning || waiting ? 'Message the agent while it works' : notFinishedYet(run) ? 'Say what is left to do, / for commands, @ for files' : 'Message the agent, / for commands, @ for files'}
         describedBy={hintID}
         combobox={{ expanded: suggestions.length > 0, controls: listID, active: suggestions.length ? `${listID}-${current}` : undefined }}
         menu={<SuggestionList id={listID} items={suggestions} active={current} onPick={pick} />}
@@ -649,7 +653,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
           }
         }}
       />
-      <ComposerHint id={hintID} notice={images.uploading ? 'Uploading…' : hasContent ? connecting : undefined} description={hintText} />
+      <ComposerHint id={hintID} uploading={images.uploading} description={hintText} />
     </ComposerFrame>
   )
 }

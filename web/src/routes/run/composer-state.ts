@@ -123,7 +123,6 @@ export function composerBlock(run: RunRecord, maySteer: boolean, canReopen: bool
 interface EnhancedGate {
   reason: string
   interrupt?: boolean
-  /** The stream is down for now, so the box stays and only sending waits. */
   connecting?: boolean
 }
 

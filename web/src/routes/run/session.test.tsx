@@ -826,6 +826,7 @@ describe('the Enhanced composer draft', () => {
   const View = lookupRoute('run')!
   const lease = { has_control: true, control_generation: 4, state: state({ prompt_images: true }) }
   const box = () => screen.findByRole('combobox', { name: 'Message the agent' })
+  const waits = () => screen.queryAllByRole('status').filter((el) => el.textContent === 'Connecting to the agent…')
   const prompt = 'Round the totals\n  then update the docs'
   const sent = { message: roomMessage({ id: 'm', kind: 'steer_request' }) }
   let show: (runID: string) => void
@@ -1009,21 +1010,43 @@ describe('the Enhanced composer draft', () => {
     open()
     acpSocket().open(lease)
     const field = await box()
+    const placeholder = field.getAttribute('placeholder')
     await userEvent.type(field, 'Round')
     act(() => useStore.getState().acpStream('run_1', down))
     expect(document.activeElement).toBe(field)
+    expect(field.getAttribute('placeholder')).toBe(placeholder)
     await userEvent.keyboard(' the totals')
     expect(field).toHaveProperty('value', 'Round the totals')
-    expect(screen.getByText('Connecting to the agent…')).toBeDefined()
+    expect(waits()).toHaveLength(1)
     expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true)
     expect(screen.getByLabelText('Choose files to attach')).toHaveProperty('disabled', true)
     await userEvent.keyboard('{Enter}{Control>}{Shift>}{Enter}{/Shift}{/Control}')
     expect(api.runInject).not.toHaveBeenCalled()
     expect(field).toHaveProperty('value', 'Round the totals')
     act(() => useStore.getState().acpStream('run_1', 'live'))
-    expect(screen.queryByText('Connecting to the agent…')).toBeNull()
+    expect(waits()).toHaveLength(0)
     await userEvent.keyboard('{Enter}')
     await waitFor(() => expect(api.runInject).toHaveBeenCalledWith('run_1', 'Round the totals', expect.any(String), expect.anything()))
+  })
+
+  it('says once why sending waits for an empty, blank and image-only draft, and keeps the running turn\'s pill', async () => {
+    vi.mocked(api.uploadTerminalImage).mockReset().mockResolvedValue({ path: '/home/alice/totals.png' })
+    open()
+    acpSocket().open({ ...lease, state: state({ prompt_images: true, turn_in_flight: true, steering: true }) }, [item('turn_start', 1)])
+    const field = await box()
+    const drop = (stream: 'reconnecting' | 'live') => act(() => useStore.getState().acpStream('run_1', stream))
+    drop('reconnecting')
+    expect(waits()).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Interrupt the agent' })).toHaveProperty('disabled', true)
+    await userEvent.type(field, '   ')
+    expect(waits()).toHaveLength(1)
+    drop('live')
+    await userEvent.clear(field)
+    await userEvent.upload(screen.getByLabelText('Choose files to attach'), new File(['png'], 'totals.png', { type: 'image/png' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Steer' })).toHaveProperty('disabled', false))
+    drop('reconnecting')
+    expect(waits()).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Steer' })).toHaveProperty('disabled', true)
   })
 
   it('keeps the draft through the run\'s views, a reconnect, an event-log restart and a switch to Standard', async () => {
