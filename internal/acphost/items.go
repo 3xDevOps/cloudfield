@@ -162,7 +162,7 @@ type ToolTask struct {
 	// Status is running, completed, failed or stopped.
 	Status string `json:"status"`
 	// Workflow is the progress of a local_workflow task. A truncated item
-	// carries its name only.
+	// carries its rows without previews, or its name only.
 	Workflow *Workflow `json:"workflow,omitempty"`
 }
 

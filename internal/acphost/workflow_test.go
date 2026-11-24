@@ -370,3 +370,31 @@ func TestWorkflowToolOnlyChangesWaitLongerThanStateChanges(t *testing.T) {
 		return len(tasks) == 3 && agentStates(tasks[2]) == "done" && tasks[2].Workflow.Agents[0].Tool == "Bash"
 	})
 }
+
+func TestWorkflowKeepsFailedRowsPastItsRowLimit(t *testing.T) {
+	var rows []map[string]any
+	for i := 1; i <= 150; i++ {
+		state := "start"
+		switch {
+		case i <= 20:
+			state = "done"
+		case i <= 23:
+			state = "error"
+		case i <= 33:
+			state = "progress"
+		}
+		rows = append(rows, workflowRowOf(i, state, nil))
+	}
+	raw, err := json.Marshal(rows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := workflowSnapshot("", raw, 0)
+	counts := map[string]int{}
+	for _, a := range w.Agents {
+		counts[a.State]++
+	}
+	if len(w.Agents) != maxWorkflowAgents || w.Omitted != 50 || counts["failed"] != 3 || counts["running"] != 10 || counts["done"] != 0 {
+		t.Fatalf("%d rows %v, %d omitted; want the failed and running rows kept", len(w.Agents), counts, w.Omitted)
+	}
+}

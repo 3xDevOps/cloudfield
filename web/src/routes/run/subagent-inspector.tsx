@@ -98,7 +98,7 @@ export function SubagentInspector({ run, agentID, agent: terminal, nav, onClose 
   if (!truncated) progress.current = snapshot
   else if (snapshot?.agents) {
     const whole = new Map(progress.current?.agents?.map((row) => [row.index, row]))
-    progress.current = { ...snapshot, logs: progress.current?.logs, agents: snapshot.agents.map((row) => ({ ...whole.get(row.index), ...row })) }
+    progress.current = { ...snapshot, ...progress.current, omitted: snapshot.omitted, agents: snapshot.agents.map((row) => ({ ...row, ...whole.get(row.index), state: row.state })) }
   }
   const script = useRef(prompt)
   if (!truncated || prompt) script.current = prompt
@@ -205,11 +205,9 @@ export function SubagentInspector({ run, agentID, agent: terminal, nav, onClose 
           agentID={agentID}
           workflow={progress.current}
           live={state === 'running' || state === 'launched'}
-          loading={truncated && !progress.current?.agents
-            ? wholeError
-              ? <ReadError what="workflow" error={wholeError} onRetry={retryWhole} />
-              : <p role="status" className="text-muted">Loading the workflow…</p>
-            : undefined}
+          loading={wholeError
+            ? <ReadError what="workflow" error={wholeError} onRetry={retryWhole} />
+            : truncated && !progress.current?.agents && <p role="status" className="text-muted">Loading the workflow…</p>}
           script={script.current
             ? <CodeBlock>{script.current}</CodeBlock>
             : (truncated || cut) && <PromptNote error={wholeError} cut={cut && !truncated} onRetry={retryWhole} />}

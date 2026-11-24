@@ -65,7 +65,7 @@ export interface WorkflowAgent {
   attempt?: number
 }
 
-/** A workflow's progress. A call cut for the wire, or one before its first progress frame, carries the name only. */
+/** A workflow's progress. A call cut for the wire carries rows without previews or the name only; one before its first progress frame carries the name only. */
 export interface WorkflowProgress {
   name?: string
   phases?: { index: number; title: string }[]

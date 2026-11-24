@@ -202,6 +202,7 @@ func workflowSnapshot(name string, progress json.RawMessage, omitted int) *Workf
 		// A failed row is the one a viewer looks for, so it goes last.
 		for _, drop := range []func(WorkflowAgent) bool{
 			func(a WorkflowAgent) bool { return a.State == "done" || a.State == "skipped" },
+			func(a WorkflowAgent) bool { return a.State == "queued" },
 			WorkflowAgent.finished,
 		} {
 			w.Agents = slices.DeleteFunc(w.Agents, func(a WorkflowAgent) bool {
