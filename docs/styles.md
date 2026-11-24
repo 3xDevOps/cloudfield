@@ -243,7 +243,9 @@ The other primitives with motion or a fixed size:
 - `RadioPills` is a single choice as a row of 28px pills with seam borders,
   one tab stop: arrows move and select, Home and End select the ends, and the
   checked pill sits on a `SlidingIndicator` (`bg-hover-chrome`, seam ring).
-  A pill may carry a muted count. Memory's filters and kinds use it.
+  A pill may carry a muted count. Memory's filters and kinds use it. The
+  composer's effort row is the exception: a choice there is a request to the
+  agent, so its keys only move and Space, Enter or a click chooses.
 - `FadeStrip` scrolls a row sideways with no scrollbar and masks whichever
   edge hides content over 22px, so the fade matches any surface.
 - `CountBadge` is an 18px chip of tabular figures; a count changes at once.

@@ -6,9 +6,10 @@ import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, Command
 import { Menu, MenuContent, MenuLabel, MenuRadioGroup, MenuRadioItem, MenuTrigger } from '@/components/ui/menu'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { RadioPills, RadioPillsItem } from '@/components/ui/radio-pills'
+import { Shimmer } from '@/components/ui/shimmer'
 import { TextSwap } from '@/components/ui/text-swap'
-import { Tooltip } from '@/components/ui/tooltip'
 import { api } from '@/lib/api'
+import { coarsePointer, useMediaQuery } from '@/lib/hooks'
 import type { ConfigOption, ConfigValue, SessionCommand } from '@/lib/session-types'
 import { cn, focusRingInset, surface } from '@/lib/utils'
 import { useStore } from '@/store'
@@ -118,50 +119,103 @@ type OptionPillProps = {
   onSet: (option: ConfigOption, value: string) => Promise<void>
 }
 
+function EffortRow({ option, sending, onChoose }: { option: ConfigOption; sending?: string; onChoose: (value: string) => void }) {
+  const label = useId()
+  const [pointed, setPointed] = useState<string>()
+  // A navigation key's focus brings a click with it, in the same task, that must not choose.
+  const keyFocus = useRef(false)
+  const levels = choices(option)
+  return (
+    <div className="flex shrink-0 flex-col gap-1.5 border-t border-seam px-2 pt-2">
+      <span id={label} className="text-ui-sm font-medium text-muted">{option.name}</span>
+      {/* A touch screen cannot fit the levels on one row, so it gets even rows instead of one left over. */}
+      <RadioPills
+        aria-labelledby={label}
+        value={String(option.currentValue ?? '')}
+        onBlur={() => setPointed(undefined)}
+        onPointerLeave={() => setPointed(undefined)}
+        style={{ '--columns': levels.length > 4 ? Math.ceil(levels.length / 2) : levels.length } as CSSProperties}
+        className="w-full flex-wrap coarse:grid coarse:grid-cols-[repeat(var(--columns),minmax(0,1fr))]"
+      >
+        {levels.map((choice) => (
+          <RadioPillsItem
+            key={choice.value}
+            value={choice.value}
+            aria-busy={choice.value === sending || undefined}
+            className="h-6 px-2 text-ui-sm coarse:justify-center coarse:px-1"
+            onPointerEnter={() => setPointed(choice.value)}
+            onFocus={() => {
+              setPointed(choice.value)
+              keyFocus.current = true
+              queueMicrotask(() => {
+                keyFocus.current = false
+              })
+            }}
+            onClick={() => {
+              if (!keyFocus.current) onChoose(choice.value)
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') onChoose(choice.value)
+            }}
+          >
+            {choice.value === sending ? <Shimmer text={choice.name} /> : choice.name}
+          </RadioPillsItem>
+        ))}
+      </RadioPills>
+      {levels.some((choice) => choice.description) && (
+        <p className="min-h-[1lh] text-ui-sm text-muted coarse:min-h-[2lh]">{levels.find((choice) => choice.value === (pointed ?? option.currentValue))?.description}</p>
+      )}
+    </div>
+  )
+}
+
 function OptionPill({ option, effort, disabled, onSet }: OptionPillProps) {
-  const [busy, setBusy] = useState(false)
   const [open, setOpen] = useState(false)
+  const [sending, setSending] = useState<[ConfigOption, string]>()
+  const queued = useRef<[ConfigOption, string]>(undefined)
   const inFlight = useRef(false)
-  const nextEffort = useRef<string>(undefined)
-  const effortLabel = useId()
+  const latestSet = useRef(onSet)
+  latestSet.current = onSet
+  const coarse = useMediaQuery(coarsePointer)
+  const busy = sending !== undefined
+  useEffect(() => () => {
+    queued.current = undefined
+  }, [])
   // The picker's own request disables it too, and an effort change keeps it open.
   useEffect(() => {
     if (disabled && !busy) setOpen(false)
   }, [disabled, busy])
   const current = currentChoice(option)
-  const effortChoice = effort && currentChoice(effort)
-  const levels = effort ? choices(effort) : []
   const unavailable = disabled || busy
   const changeOpen = (next: boolean) => {
     if (next && (unavailable || inFlight.current)) return
     setOpen(next)
   }
-  const select = (target: ConfigOption, value: string) => {
-    if (unavailable || inFlight.current) return
+  const send = (target: ConfigOption, value: string) => {
     inFlight.current = true
-    if (target !== effort) setOpen(false)
-    setBusy(true)
-    void onSet(target, value).finally(() => {
+    setSending([target, value])
+    void latestSet.current(target, value).finally(() => {
       inFlight.current = false
-      setBusy(false)
-      const next = nextEffort.current
-      nextEffort.current = undefined
-      if (effort && next !== undefined && next !== value) select(effort, next)
+      setSending(undefined)
+      const next = queued.current
+      queued.current = undefined
+      if (next) send(...next)
     })
   }
-  // A level picked while another is on its way waits for it, so the last pick wins.
-  const pickEffort = (value: string) => {
-    if (inFlight.current) nextEffort.current = value
-    else if (effort && value !== effort.currentValue) select(effort, value)
+  // A pick made while another is on its way waits for it, so the last one wins.
+  const select = (target: ConfigOption, value: string) => {
+    if (target !== effort) setOpen(false)
+    if (inFlight.current) queued.current = [target, value]
+    else if (!disabled) send(target, value)
   }
   // Keep the trigger focusable so Radix can return focus on close, not after the request.
   const trigger = (
-    <Button variant="ghost" size="sm" aria-disabled={unavailable || undefined} aria-busy={busy || undefined} aria-label={effort ? `${named(option)}, ${named(effort)}` : named(option)}>
-      <TextSwap className={effort ? 'max-w-20 md:max-w-48' : 'max-w-32'} layerClassName="min-w-0 truncate">{current?.name ?? option.name}</TextSwap>
+    <Button variant="ghost" size="sm" aria-disabled={(disabled && !busy) || undefined} aria-busy={busy || undefined} aria-label={effort ? `${named(option)}, ${named(effort)}` : named(option)}>
+      <TextSwap className={effort ? 'max-w-[min(12rem,24cqw)]' : 'max-w-32'} layerClassName="min-w-0 truncate">{current?.name ?? option.name}</TextSwap>
       {effort && (
         <>
           <span aria-hidden className="text-icon-faint">/</span>
-          <TextSwap>{effortChoice?.name ?? effort.name}</TextSwap>
+          <TextSwap>{currentChoice(effort)?.name ?? effort.name}</TextSwap>
         </>
       )}
       <ChevronDown />
@@ -196,9 +250,10 @@ function OptionPill({ option, effort, disabled, onSet }: OptionPillProps) {
           className="flex flex-col overflow-hidden"
           onOpenAutoFocus={(event) => {
             const content = event.target as HTMLElement
-            const input = content.querySelector<HTMLInputElement>('[cmdk-input]')
-            if (input) {
-              input.focus({ preventScroll: true })
+            // A focused field raises a touch screen's keyboard over the list.
+            const first = coarse ? content : content.querySelector<HTMLInputElement>('[cmdk-input]')
+            if (first) {
+              first.focus({ preventScroll: true })
               event.preventDefault()
             }
             content.querySelector('[cmdk-item][data-selected=true]')?.scrollIntoView({ block: 'nearest' })
@@ -220,34 +275,13 @@ function OptionPill({ option, effort, disabled, onSet }: OptionPillProps) {
             </CommandList>
           </Command>
           {effort && (
-            <div className="flex shrink-0 flex-col gap-1.5 border-t border-seam px-2 pt-2">
-              <span id={effortLabel} className="text-ui-sm font-medium text-muted">{effort.name}</span>
-              {/* A touch screen cannot fit the levels on one row, so it gets even rows instead of one left over. */}
-              <RadioPills
-                aria-labelledby={effortLabel}
-                value={String(effort.currentValue ?? '')}
-                style={{ '--columns': levels.length > 4 ? Math.ceil(levels.length / 2) : levels.length } as CSSProperties}
-                className="w-full flex-wrap coarse:grid coarse:grid-cols-[repeat(var(--columns),minmax(0,1fr))]"
-              >
-                {levels.map((choice) => (
-                  <Tooltip key={choice.value} content={choice.description} disabled={!choice.description}>
-                    {/* The tooltip's own data-state and focus handler would replace the radio's. */}
-                    <span className="inline-flex">
-                      {/* Each choice is a request to the agent, so arrows only move focus: Space or a click chooses. */}
-                      <RadioPillsItem
-                        value={choice.value}
-                        className="h-6 px-2 text-ui-sm coarse:w-full coarse:justify-center coarse:px-1"
-                        onFocus={(event) => event.preventDefault()}
-                        onClick={() => pickEffort(choice.value)}
-                      >
-                        {choice.name}
-                      </RadioPillsItem>
-                    </span>
-                  </Tooltip>
-                ))}
-              </RadioPills>
-              {effortChoice?.description && <p className="text-ui-sm text-muted">{effortChoice.description}</p>}
-            </div>
+            <EffortRow
+              option={effort}
+              sending={sending?.[0].id === effort.id ? sending[1] : undefined}
+              onChoose={(value) => {
+                if (inFlight.current || value !== effort.currentValue) select(effort, value)
+              }}
+            />
           )}
         </PopoverContent>
       </Popover>

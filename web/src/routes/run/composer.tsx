@@ -161,7 +161,7 @@ function ComposerBox({ textarea, autoFocus, value, onChange, onCaret, onFocusCha
       <DictationNotice textarea={textarea} className="mb-2" />
       {menu}
       {drop.count !== null && <DropOverlay count={drop.count} refused={drop.refused} blocked={room.blocked} limit={room.limit} />}
-      <div className={cn('overflow-hidden rounded-composer border border-seam bg-chrome', focused && 'border-control')}>
+      <div className={cn('@container overflow-hidden rounded-composer border border-seam bg-chrome', focused && 'border-control')}>
       {images}
       <Textarea
         variant="embedded"
@@ -208,7 +208,7 @@ function ComposerBox({ textarea, autoFocus, value, onChange, onCaret, onFocusCha
           }
         }}
       />
-      <div className="flex min-w-0 flex-wrap items-center gap-1 px-2 pb-2">{footer}</div>
+      <div className="wrap-from-end min-w-0 items-center gap-1 px-2 pb-2">{footer}</div>
       </div>
     </div>
   )
@@ -334,8 +334,10 @@ function StandardComposer({ run, agent, room, textarea, autoFocus, onFocusChange
         attach={{ images, disabled: attachOff }}
         footer={(
           <>
-            <AttachButton images={images} disabled={attachOff} textarea={textarea} />
-            <TemplateInsert run={run} textarea={textarea} disabled={busy} />
+            <div className="flex items-center gap-1">
+              <AttachButton images={images} disabled={attachOff} textarea={textarea} />
+              <TemplateInsert run={run} textarea={textarea} disabled={busy} />
+            </div>
             <SendActions
               pill="send"
               label={late ? stillWaiting : busy ? 'Sending…' : 'Send'}
@@ -587,13 +589,15 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
         attach={{ images, disabled: attachOff }}
         footer={(
           <>
-            <AttachButton
-              images={images}
-              disabled={attachOff}
-              textarea={textarea}
-              unsupported={refusedImages ? 'This agent does not support image prompts.' : undefined}
-            />
-            <TemplateInsert run={run} textarea={textarea} disabled={busy} />
+            <div className="flex items-center gap-1">
+              <AttachButton
+                images={images}
+                disabled={attachOff}
+                textarea={textarea}
+                unsupported={refusedImages ? 'This agent does not support image prompts.' : undefined}
+              />
+              <TemplateInsert run={run} textarea={textarea} disabled={busy} />
+            </div>
             <OptionPills options={state?.config_options ?? []} disabled={busy || moderated || Boolean(connecting)} onSet={setOption} />
             {state?.usage && state.usage.size > 0 && (
               <ContextWindow

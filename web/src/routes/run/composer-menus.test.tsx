@@ -5,12 +5,18 @@ import { OptionPills } from '@/routes/run/composer-menus'
 
 const mode: ConfigOption = { id: 'mode', name: 'Mode', category: 'mode', type: 'select', currentValue: 'plan', options: [{ value: 'plan', name: 'Plan mode' }, { value: 'default', name: 'Default' }] }
 const model: ConfigOption = { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: 'fable', options: [{ value: 'fable', name: 'Fable 5.2' }, { value: 'opus', name: 'Opus 5.5' }] }
-const effort: ConfigOption = { id: 'effort', name: 'Effort', category: 'thought_level', type: 'select', currentValue: 'high', options: [{ value: 'low', name: 'Low' }, { value: 'high', name: 'High', description: 'Thinks longer' }] }
+const effort: ConfigOption = {
+  id: 'effort', name: 'Effort', category: 'thought_level', type: 'select', currentValue: 'high',
+  options: [{ value: 'low', name: 'Low', description: 'Answers fast' }, { value: 'medium', name: 'Medium' }, { value: 'high', name: 'High', description: 'Thinks longer' }],
+}
 
 function mount(options: ConfigOption[], onSet = vi.fn(async () => {})) {
   render(<OptionPills options={options} disabled={false} onSet={onSet} />)
   return onSet
 }
+
+const openPicker = () => userEvent.click(screen.getByRole('button', { name: /^Model/ }))
+const level = (name: string) => screen.getByRole('radio', { name })
 
 describe('OptionPills', () => {
   it('names the model and the effort on one pill', () => {
@@ -22,43 +28,63 @@ describe('OptionPills', () => {
   it('sets the effort from the model picker, which stays open', async () => {
     const settle = Promise.withResolvers<void>()
     const onSet = mount([model, effort], vi.fn(() => settle.promise))
-    await userEvent.click(screen.getByRole('button', { name: /^Model/ }))
-    expect(screen.getByRole('radio', { name: 'High' }).getAttribute('data-state')).toBe('checked')
-    await userEvent.click(screen.getByRole('radio', { name: 'Low' }))
+    await openPicker()
+    expect(level('High').getAttribute('data-state')).toBe('checked')
+    expect(screen.getByText('Thinks longer')).toBeDefined()
+    await userEvent.click(level('Low'))
     expect(onSet).toHaveBeenCalledExactlyOnceWith(effort, 'low')
-    await userEvent.click(screen.getByRole('option', { name: /^Opus 5.5/ }))
-    expect(onSet).toHaveBeenCalledOnce()
+    expect(level('Low').getAttribute('aria-busy')).toBe('true')
     settle.resolve()
-    await waitFor(() => expect(screen.getByRole('button', { name: /^Model/ }).getAttribute('aria-busy')).toBeNull())
+    await waitFor(() => expect(level('Low').getAttribute('aria-busy')).toBeNull())
     expect(screen.getByLabelText('Search Model')).toBeDefined()
   })
 
-  it('sends the last effort picked while another is on its way', async () => {
+  it('sends the last pick made while another is on its way', async () => {
     const first = Promise.withResolvers<void>()
     const onSet = mount([model, effort], vi.fn().mockReturnValueOnce(first.promise).mockResolvedValue(undefined))
-    await userEvent.click(screen.getByRole('button', { name: /^Model/ }))
-    await userEvent.click(screen.getByRole('radio', { name: 'Low' }))
-    await userEvent.click(screen.getByRole('radio', { name: 'High' }))
+    await openPicker()
+    await userEvent.click(level('Low'))
+    await userEvent.click(level('Medium'))
+    await userEvent.click(level('High'))
     expect(onSet).toHaveBeenCalledOnce()
     first.resolve()
     await waitFor(() => expect(onSet).toHaveBeenCalledTimes(2))
     expect(onSet).toHaveBeenLastCalledWith(effort, 'high')
   })
 
-  it('moves between effort levels with the arrow keys and sets one on Space', async () => {
+  it('closes on a model picked while an effort is on its way, and sends it after', async () => {
+    const first = Promise.withResolvers<void>()
+    const onSet = mount([model, effort], vi.fn().mockReturnValueOnce(first.promise).mockResolvedValue(undefined))
+    await openPicker()
+    await userEvent.click(level('Low'))
+    await userEvent.click(screen.getByRole('option', { name: /^Opus 5.5/ }))
+    await waitFor(() => expect(screen.queryByLabelText('Search Model')).toBeNull())
+    expect(onSet).toHaveBeenCalledOnce()
+    first.resolve()
+    await waitFor(() => expect(onSet).toHaveBeenLastCalledWith(model, 'opus'))
+  })
+
+  it('moves between effort levels by key without choosing, and chooses on Space or Enter', async () => {
     const onSet = mount([model, effort])
-    await userEvent.click(screen.getByRole('button', { name: /^Model/ }))
-    screen.getByRole('radio', { name: 'High' }).focus()
-    await userEvent.keyboard('{ArrowLeft}')
-    expect(document.activeElement).toBe(screen.getByRole('radio', { name: 'Low' }))
+    await openPicker()
+    level('High').focus()
+    // Radix chooses on arrow focus only while the key is still down.
+    await userEvent.keyboard('{ArrowLeft>}')
+    await waitFor(() => expect(document.activeElement).toBe(level('Medium')))
+    await userEvent.keyboard('{/ArrowLeft}{Home}')
+    expect(document.activeElement).toBe(level('Low'))
+    expect(screen.getByText('Answers fast')).toBeDefined()
     expect(onSet).not.toHaveBeenCalled()
     await userEvent.keyboard(' ')
     expect(onSet).toHaveBeenCalledExactlyOnceWith(effort, 'low')
+    level('Medium').focus()
+    await userEvent.keyboard('{Enter}')
+    await waitFor(() => expect(onSet).toHaveBeenLastCalledWith(effort, 'medium'))
   })
 
   it('sets the model and closes', async () => {
     const onSet = mount([model, effort])
-    await userEvent.click(screen.getByRole('button', { name: /^Model/ }))
+    await openPicker()
     await userEvent.click(screen.getByRole('option', { name: /^Opus 5.5/ }))
     expect(onSet).toHaveBeenCalledExactlyOnceWith(model, 'opus')
     await waitFor(() => expect(screen.queryByLabelText('Search Model')).toBeNull())

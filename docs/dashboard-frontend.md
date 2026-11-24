@@ -3691,8 +3691,10 @@ it. The Standard composer's row has attach, **Insert a template**, the mic and
 Send. The pill is a
 round arrow while it reads **Send**, a round stop square for **Interrupt**
 and **Stop waiting**, and widens to its word otherwise. Hints
-and the 45-second delivery notice sit under the box. Footer controls wrap on
-narrow screens. The context meter shows the agent's last ACP `usage_update`
+and the 45-second delivery notice sit under the box. A footer too narrow for
+one row fills its last row first (`wrap-from-end` in `index.css`): the send
+pill's row takes the controls before it and the first ones move to a row
+above, so the pill never sits on a row alone. The context meter shows the agent's last ACP `usage_update`
 (`state.usage` in the snapshot, replaced by each `usage` item) as a share of
 its context window, and is a button that opens the **Context window** popover
 (`routes/run/context-window.tsx`); hovering it shows the token counts. An agent
@@ -3792,11 +3794,15 @@ The mode menu uses content-sized described rows; the model picker is
 `Command` inside `Popover`, preserving every advertised option and provider
 group with search by name, ID and description. Under its list a row of
 `RadioPills`, labelled with the option's name such as **Effort**, sets the
-agent's `thought_level` option. The selected level's description sits under
-the row and every level's description is its tooltip. A touch screen lays the
-levels out in even rows. Each choice is a request to the agent, so the
-arrow keys only move between levels and Space or a click chooses one; a
-level picked while another is still being set goes out once that one settles.
+agent's `thought_level` option. A line under the row gives the description
+of the level under the pointer or with focus, else of the selected one, when
+the agent describes its levels. A touch screen lays the levels out in even
+rows and does not focus the search field, which would raise its keyboard.
+Each choice is a request to the agent, so the arrow keys, Home and End only
+move between levels and Space, Enter or a click chooses one. The chosen
+level shimmers until the agent confirms it, then the selection glides to it.
+A model or level picked while another change is still being set goes out
+once that one settles, so the last pick wins.
 Picking a model closes the picker; picking an effort leaves it open. An agent that offers an effort option and no model
 option gets the effort as a menu of its own. Selections use
 `run.acp.set_option`; `/` completes the agent's commands and `@` paths from
