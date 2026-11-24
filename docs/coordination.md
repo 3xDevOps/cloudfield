@@ -1132,8 +1132,8 @@ has `id`, `kind`, `correlation_id`, `from_run_id`, `body` and `created_at`.
 `kind` is `message`, `question`, `reply` or `report`; a `report` is a
 subsession's report and adds its `outcome`. To
 acknowledge it without reading on, pass its `ack_token` to `ack`. `ack` refuses
-with exit 3 and names the current batch's token when the token is stale or
-mistyped, and returns `waiting`, the number of messages no read has returned
+with exit 3 when the token is stale or mistyped, naming the current batch's
+token or the number of unread messages that wait, and returns `waiting`, the number of messages no read has returned
 yet. `inbox --ack <token>` acknowledges that token instead of the saved one.
 `--wait` asks the server to wait once for up to 30 seconds
 when no message is ready; it is not a client polling loop. If the process or

@@ -367,3 +367,9 @@ func (s *Service) refuseUnreadMail(ctx context.Context, run domain.RunID) *proto
 		"%s: %d unread %s (from %s). Run aether-internal inbox, handle them, then report again.",
 		protocol.MethodCoordReport, unread, noun, strings.Join(from, ", "))}
 }
+
+func (s *Service) forgetMailRefusal(run domain.RunID) {
+	s.mu.Lock()
+	delete(s.mailRefusals, run)
+	s.mu.Unlock()
+}

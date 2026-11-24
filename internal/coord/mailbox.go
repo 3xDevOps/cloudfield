@@ -571,6 +571,7 @@ func (s *Service) CoordReport(ctx context.Context, run domain.RunID, p protocol.
 		return protocol.CoordReportResult{}, invalidParams(method, problem)
 	}
 	if p.Outcome == protocol.CoordOutcomeNeedsInput || p.Outcome == protocol.CoordOutcomeWaiting || p.Outcome == protocol.CoordOutcomeAnswered {
+		s.forgetMailRefusal(run)
 		return s.reportState(ctx, run, p, summary, specs)
 	}
 	if len(p.EvidenceRefs) >= protocol.CoordMaxEvidenceRefs {
@@ -607,16 +608,20 @@ func (s *Service) CoordReport(ctx context.Context, run domain.RunID, p protocol.
 			lock.Unlock()
 		}
 	}()
+	// Before the subsession check, so the one pass an inbox read buys is
+	// spent on the next report and never on a later one.
+	if p.Outcome == protocol.CoordOutcomeBlocked {
+		s.forgetMailRefusal(run)
+	} else if !existingFinalized {
+		if rpcErr := s.refuseUnreadMail(ctx, run); rpcErr != nil {
+			return protocol.CoordReportResult{}, rpcErr
+		}
+	}
 	// child.start takes the same lock, so no child is reserved between this
 	// check and the report's finalization.
 	if s.cfg.Children != nil && !existingFinalized {
 		if err := s.cfg.Children.ValidateReport(ctx, run, store.CoordOutcome(p.Outcome)); err != nil {
 			return protocol.CoordReportResult{}, rpcError(method, err)
-		}
-	}
-	if !existingFinalized && (p.Outcome == protocol.CoordOutcomeSuccess || p.Outcome == protocol.CoordOutcomeFailure) {
-		if rpcErr := s.refuseUnreadMail(ctx, run); rpcErr != nil {
-			return protocol.CoordReportResult{}, rpcErr
 		}
 	}
 	nextAction := "review retained evidence"

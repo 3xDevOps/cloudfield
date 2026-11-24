@@ -205,10 +205,10 @@ type MessageStore interface {
 	// only when no batch is outstanding is a new one selected, stamped,
 	// and tokenized - all in one transaction. An empty inbox returns no
 	// messages and no token.
+	DeliverRunMessages(ctx context.Context, to domain.RunID, ackToken string, limit int) ([]*RunMessage, string, bool, error)
 	// UndeliveredRunMessageSenders lists up to limit distinct senders of the
 	// messages CountUndeliveredRunMessages counts, oldest first.
 	UndeliveredRunMessageSenders(ctx context.Context, to domain.RunID, limit int) ([]domain.RunID, error)
-	DeliverRunMessages(ctx context.Context, to domain.RunID, ackToken string, limit int) ([]*RunMessage, string, bool, error)
 	// AckRunMessages acknowledges ackToken's batch as DeliverRunMessages
 	// does and delivers nothing. It returns the token of the batch still
 	// outstanding, if any.

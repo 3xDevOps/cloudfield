@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/3xDevOps/Aether/internal/domain"
 	"github.com/3xDevOps/Aether/internal/protocol"
@@ -49,6 +50,19 @@ func TestCoordReportIsRefusedWhileMailIsUnread(t *testing.T) {
 	}
 	send(denied)
 	report(t, h, denied, protocol.CoordOutcomeSuccess, "done", "denied-2")
+
+	// The pass an inbox call buys ends with any other report.
+	if _, err := h.svc.Inbox(ctx, read, protocol.CoordInboxParams{}); err != nil {
+		t.Fatalf("Inbox: %v", err)
+	}
+	send(read)
+	refused(read, "read-4")
+	if _, err := h.svc.Inbox(ctx, read, protocol.CoordInboxParams{WaitSeconds: -1}); err == nil {
+		t.Fatal("Inbox with a negative wait succeeded")
+	}
+	report(t, h, read, protocol.CoordOutcomeBlocked, "needs access", "read-5")
+	refused(read, "read-6")
+	h.advance(time.Minute)
 
 	acker := h.run(3)
 	send(acker)

@@ -127,7 +127,10 @@ func registerTools(srv *mcp.Server, socket string, g *gate, cli string) error {
 		if err := coordtransport.Call(ctx, socket, protocol.MethodCoordInbox, in, &out); err != nil {
 			return failed(err), empty, nil
 		}
-		g.stage(id, out.AckToken)
+		// An ack-only result names a batch this call did not show.
+		if !in.AckOnly {
+			g.stage(id, out.AckToken)
+		}
 		if out.Messages == nil {
 			out.Messages = []protocol.CoordMessage{}
 		}
