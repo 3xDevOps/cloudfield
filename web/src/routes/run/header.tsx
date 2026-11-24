@@ -265,7 +265,7 @@ function ViewSwitch({ view, views, arrows, onArrow, icons }: {
         const Icon = runViewIcon[item]
         const hint = [icons && runViewLabel[item], arrows[item]].filter(Boolean).join('\n')
         return (
-          <Tooltip key={item} content={hint} disabled={!hint}>
+          <Tooltip key={item} content={hint} side="bottom" disabled={!hint}>
             <TabsTrigger
               value={item}
               aria-label={icons ? runViewLabel[item] : undefined}

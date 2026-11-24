@@ -81,13 +81,16 @@ export function Picker({ tileId, runId, autoFocus, onPicked, className }: {
               {offeredViews(run, ctx.cap).filter((view) => view !== shown).map((view) => {
                 const Icon = runViewIcon[view]
                 return (
-                  <Tooltip key={view} content={elsewhere[view]?.where} disabled={!elsewhere[view]}>
-                    <CommandItem value={runViewLabel[view]} onSelect={() => pick(run.id, view)} className="border border-seam">
-                      <Icon aria-hidden />
-                      {runViewLabel[view]}
-                      {elsewhere[view] && <ArrowUpRight aria-hidden className="size-2.5" />}
-                    </CommandItem>
-                  </Tooltip>
+                  <CommandItem key={view} value={runViewLabel[view]} onSelect={() => pick(run.id, view)} className="border border-seam px-0">
+                    {/* cmdk takes the item's own pointer moves, which a tooltip opens on. */}
+                    <Tooltip content={elsewhere[view]?.where} disabled={!elsewhere[view]}>
+                      <span className="flex items-center gap-2 self-stretch px-2">
+                        <Icon aria-hidden />
+                        {runViewLabel[view]}
+                        {elsewhere[view] && <ArrowUpRight aria-hidden className="size-2.5" />}
+                      </span>
+                    </Tooltip>
+                  </CommandItem>
                 )
               })}
             </CommandGroup>

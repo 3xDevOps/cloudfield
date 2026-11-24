@@ -1,4 +1,4 @@
-import { useContext, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
 import { Columns2, LayoutGrid, Maximize2, Minimize2, PanelLeft, Plus, Rows2, X } from '@/components/icons'
 import { ProtectedMark } from '@/components/protected-mark'
 import { changeTiles, TileAreaContext } from '@/components/tiles/area'
@@ -52,11 +52,15 @@ function SessionTab({ tile, tab, narrow, onClose }: { tile: Tile; tab: TileTab; 
   const run = ctx.runs[tab.runId]
   const active = tile.active === tab.id
   const title = run ? runLabel(run) : 'Session'
+  const shell = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (active) shell.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
+  }, [active])
   return (
-    <div className={cn('flex h-full min-w-0 items-center', active ? 'shrink-0' : 'min-w-24')}>
+    <div ref={shell} className={cn('flex h-full shrink-0 items-center border-r border-seam', active ? 'max-w-full' : 'max-w-64')}>
       <TabsTrigger
         value={tab.id}
-        className={cn('min-w-0 shrink px-2', layout.focused !== tile.id && 'data-[state=active]:text-muted')}
+        className="min-w-0 shrink group-data-[look=underline]/tabs:pr-7 group-data-[look=underline]/tabs:pl-3 [&_[data-slot=status-dot]]:size-2.5"
         onDoubleClick={() => {
           if (cramped || tileList(layout.root).length < 2) return
           changeTiles((before) => maximizeTile(before, tile.id))
@@ -74,7 +78,7 @@ function SessionTab({ tile, tab, narrow, onClose }: { tile: Tile; tab: TileTab; 
       >
         {run ? <TabLabel run={run} tab={tab} background={!active} narrow={narrow} /> : title}
       </TabsTrigger>
-      <Button variant="ghost" size="icon-sm" tabIndex={-1} label={`Close ${title}`} onClick={onClose} className="-ml-1 shrink-0">
+      <Button variant="ghost" size="icon-sm" tabIndex={-1} label={`Close ${title}`} onClick={onClose} className="mr-1 -ml-7 shrink-0">
         <X />
       </Button>
     </div>
@@ -153,14 +157,14 @@ export function TabStrip({ tile, narrow, room }: {
           <PopoverTrigger asChild>
             <Button variant="ghost" size="icon-sm" label="Add a tab"><Plus /></Button>
           </PopoverTrigger>
-          <PopoverContent>
+          <PopoverContent className="flex flex-col">
             <Picker tileId={tile.id} runId={run?.id} autoFocus onPicked={() => setAdding(false)} />
           </PopoverContent>
         </Popover>
       )}
-      <span className="flex-1" />
-      {layout.maximized ? (
-        <>
+      {/* The pill takes what the tabs leave, so the active tab keeps its title before a parked chip does. */}
+      <div className={cn('flex flex-1 justify-end', layout.maximized ? 'min-w-24' : 'min-w-0')}>
+        {layout.maximized && (
           <div className="flex h-6 min-w-0 items-center gap-1 rounded-control border border-seam px-1.5 animate-fade-in motion-reduce:animate-none">
             <LayoutGrid aria-hidden className="size-3.5 shrink-0 text-muted" />
             <FadeStrip className="flex items-center gap-1">
@@ -184,20 +188,20 @@ export function TabStrip({ tile, narrow, room }: {
               })}
             </FadeStrip>
           </div>
-          {!cramped && (
-            <Button
-              variant="secondary"
-              size="sm"
-              onClick={() => {
-                changeTiles((before) => maximizeTile(before, null))
-                say('Tiles restored')
-              }}
-            >
-              <Minimize2 aria-hidden />
-              Restore tiles
-            </Button>
-          )}
-        </>
+        )}
+      </div>
+      {layout.maximized ? !cramped && (
+        <Button
+          variant="secondary"
+          size="sm"
+          onClick={() => {
+            changeTiles((before) => maximizeTile(before, null))
+            say('Tiles restored')
+          }}
+        >
+          <Minimize2 aria-hidden />
+          Restore tiles
+        </Button>
       ) : (
         <>
           {focused && tile.tabs.length > 0 && splitButton('right', Columns2)}
