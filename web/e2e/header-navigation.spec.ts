@@ -14,9 +14,16 @@ test('header navigation preserves destinations and focus across resize and text-
   const templates = navigation.getByRole('button', { name: 'Templates', exact: true })
   const more = navigation.getByRole('button', { name: 'More navigation' })
   const menu = page.getByRole('menu', { name: 'More navigation' })
+  const textSize = async (name: string) => {
+    await page.getByRole('navigation', { name: 'Cloudfield' }).getByRole('button', { name: 'Settings', exact: true }).click()
+    await page.getByLabel('Text size', { exact: true }).click()
+    await page.getByRole('option', { name, exact: true }).click()
+  }
 
+  // With the sidebar open, every destination fits at the default text size
+  // from 768px up, and below that a phone has the tab bar instead of this row.
+  await textSize('Larger')
   await templates.focus()
-  // Below 768px a phone has the tab bar instead of this row.
   await page.setViewportSize({ width: 800, height: 844 })
   await expect(more).toBeFocused()
   await expect(board).toBeVisible()
@@ -34,9 +41,12 @@ test('header navigation preserves destinations and focus across resize and text-
   await expect(templates).toBeFocused()
   await expect(more).toBeHidden()
 
-  await page.setViewportSize({ width: 864, height: 900 })
+  await page.setViewportSize({ width: 800, height: 900 })
+  await expect(templates).toBeHidden()
+  await textSize('Default')
   await expect(templates).toBeVisible()
-  await page.getByRole('navigation', { name: 'Cloudfield' }).getByRole('button', { name: 'Settings', exact: true }).click()
+  await expect(more).toBeHidden()
+
   await page.getByLabel('Text size', { exact: true }).click()
   await page.getByRole('option', { name: 'Larger', exact: true }).click()
   await expect(templates).toBeHidden()
@@ -45,9 +55,4 @@ test('header navigation preserves destinations and focus across resize and text-
   await expect(menu.getByRole('menuitem', { name: 'Templates', exact: true })).toBeVisible()
   await page.keyboard.press('Escape')
   await expect(more).toBeFocused()
-
-  await page.getByLabel('Text size', { exact: true }).click()
-  await page.getByRole('option', { name: 'Default', exact: true }).click()
-  await expect(templates).toBeVisible()
-  await expect(more).toBeHidden()
 })

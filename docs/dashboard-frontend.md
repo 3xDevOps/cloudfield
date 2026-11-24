@@ -205,8 +205,8 @@ copied unchanged from `public/cloudfield/png/` in the website repository
 `3xDevOps/aether-web`: `icon-*.png` and `apple-touch-icon.png` are the square,
 full-bleed icon, `icon-maskable-*.png` keep the mark inside the 80% safe zone,
 and `favicon-16.png`, `favicon-32.png` and `favicon-48.png` are the small
-drawings the layout links as `rel="icon"`. The header logo and tile, the splash
-mark and the session overview's mask are the set's SVG files from
+drawings the layout links as `rel="icon"`. The header mark, the splash
+logo and the session overview's mask are the set's SVG files from
 `public/cloudfield/`, in `web/public/`. The desktop app's icons are the same
 set's files, and the Android app's come from `scripts/android-icons.py`
 ([CONTRIBUTING.md](../CONTRIBUTING.md)).
@@ -510,8 +510,8 @@ contribute to that group's count. Relationships come from the session snapshot's
 ### App header
 
 `top-bar.tsx` is a `banner` at every window width, padded by `--safe-top`.
-Its first row shows the Cloudfield logo on the left, or the 32px favicon tile when
-the destinations do not all fit beside the logo, then **Board**,
+Its first row shows the Cloudfield mark on the left
+([Styles](styles.md#type)), then **Board**,
 **Activity**, **Insights**, **Memory**, **Files**, **Environment**, **Agents** and
 **Templates** in `nav` "Main navigation". These use the sidebar's `ListRow`
 styling and current-page selection. A `ResizeObserver` measures the row and

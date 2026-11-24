@@ -52,16 +52,14 @@ Other scripts and symbols outside those ranges still use platform fallbacks.
 The aliases use `font-display: swap` and load only when a matching character
 appears; xterm keeps its own full-font family and cell metrics.
 
-The header shows the Cloudfield logo at 32px tall:
-`web/public/cloudfield-logo-small.svg` in the dark theme and
-`cloudfield-logo-small-for-light-backgrounds.svg` in the light one. Both draw
-the c with nine outer and seven inner segments, alternating solid and hollow.
-The c, centre dot and split-line letters are white on dark and black on light.
-Where the navigation's destinations do not all fit beside the 162px logo, the
-32px favicon tile replaces it: white on black in the dark theme, black on
-white in the light theme. The navigation counts 90px, the old brand's width,
-so it collapses at the same widths as before.
-The launch splash draws `cloudfield-logo-small.svg` itself, at
+The header shows the Cloudfield mark alone, 28px square with no tile behind
+it: `web/public/cloudfield-mark.svg`, white, in the dark theme and
+`cloudfield-mark-for-light-backgrounds.svg`, black, in the light one. Both draw
+the c with nine outer and seven inner segments, alternating solid and hollow,
+around a centre dot. The dot is the centre of the file, so centring the image
+in the header row puts it on the navigation buttons' centre line.
+The launch splash draws `cloudfield-logo-small.svg`, the mark with the name
+beside it, at
 `clamp(260px, 38vw, 520px)` wide; see
 [Session state and motion](#session-state-and-motion).
 
@@ -795,7 +793,7 @@ file; the field's colours are constants in the same TypeScript file.
 When the splash leaves, whatever the opening has not drawn yet appears at
 once, so the whole name dissolves: the lockup fades out over
 the first 140ms of the 260ms fade, so the logo never shows over the app's own
-header logo. Reduced motion skips the splash entirely; if the preference turns
+header mark. Reduced motion skips the splash entirely; if the preference turns
 on while it is visible, the lockup stops animating and the field holds its
 last frame. [Launch splash](dashboard-frontend.md#launch-splash) defines the
 session and startup timing.
