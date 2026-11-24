@@ -17,6 +17,7 @@ function mount(options: ConfigOption[], onSet = vi.fn(async () => true)) {
 
 const openPicker = () => userEvent.click(screen.getByRole('button', { name: /^Model/ }))
 const level = (name: string) => screen.getByRole('radio', { name })
+const description = (name: string) => document.getElementById(level(name).getAttribute('aria-describedby')!)!
 
 describe('OptionPills', () => {
   it('names the model and the effort on one pill', () => {
@@ -30,7 +31,7 @@ describe('OptionPills', () => {
     const onSet = mount([model, effort], vi.fn(() => settle.promise))
     await openPicker()
     expect(level('High').getAttribute('data-state')).toBe('checked')
-    expect(document.getElementById(level('High').getAttribute('aria-describedby')!)?.textContent).toBe('Thinks longer')
+    expect(description('High').textContent).toBe('Thinks longer')
     expect(level('Medium').getAttribute('aria-describedby')).toBeNull()
     await userEvent.click(level('Low'))
     expect(onSet).toHaveBeenCalledExactlyOnceWith(effort, 'low')
@@ -85,6 +86,7 @@ describe('OptionPills', () => {
     await waitFor(() => expect(document.activeElement).toBe(level('Medium')))
     await userEvent.keyboard('{/ArrowLeft}{Home}{Home}')
     expect(document.activeElement).toBe(level('Low'))
+    expect([description('Low').className, description('High').className].map((name) => name.includes('invisible'))).toEqual([false, true])
     expect(onSet).not.toHaveBeenCalled()
     await userEvent.keyboard(' ')
     expect(onSet).toHaveBeenCalledExactlyOnceWith(effort, 'low')

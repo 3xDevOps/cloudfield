@@ -728,6 +728,22 @@ describe('the Enhanced session view', () => {
     expect(screen.getByRole('radiogroup', { name: 'Effort' })).toBeDefined()
   })
 
+  it('drops an effort picked behind one the agent refuses, and keeps the refusal', async () => {
+    const answer = Promise.withResolvers<unknown>()
+    vi.mocked(api.runACPSetOption).mockReset().mockImplementationOnce(() => answer.promise)
+    open()
+    acpSocket().open({ has_control: true, control_generation: 4, state: state({ config_options: [
+      { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: 'fable', options: [{ value: 'fable', name: 'Fable 5.2' }] },
+      { id: 'effort', name: 'Effort', category: 'thought_level', type: 'select', currentValue: 'high', options: [{ value: 'low', name: 'Low' }, { value: 'medium', name: 'Medium' }, { value: 'high', name: 'High' }] },
+    ] }) })
+    await userEvent.click(await screen.findByRole('button', { name: 'Model: Fable 5.2, Effort: High' }))
+    await userEvent.click(screen.getByRole('radio', { name: 'Low' }))
+    await userEvent.click(screen.getByRole('radio', { name: 'Medium' }))
+    answer.reject(new Error('Invalid value for config option effort: low'))
+    expect((await screen.findByRole('alert')).textContent).toContain('Invalid value for config option effort: low')
+    expect(api.runACPSetOption).toHaveBeenCalledOnce()
+  })
+
   it('offers no Cancel on an interrupt the server has not answered', async () => {
     vi.mocked(api.runACPCancel).mockImplementationOnce(() => new Promise(() => {}))
     open()
