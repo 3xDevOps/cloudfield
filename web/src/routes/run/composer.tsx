@@ -5,7 +5,6 @@ import { DictationNotice } from '@/components/dictation/dictation-notice'
 import { useDictationState } from '@/components/dictation/state'
 import { ArrowUp, CornerUpRight, ListPlus, Play, RefreshCw, Square } from '@/components/icons'
 import { Button } from '@/components/ui/button'
-import { Spinner } from '@/components/ui/spinner'
 import { Textarea } from '@/components/ui/textarea'
 import { Tooltip } from '@/components/ui/tooltip'
 import { api } from '@/lib/api'
@@ -221,12 +220,11 @@ function ComposerHint({ id, uploading, description }: { id: string; uploading: b
     : <p id={id} className="sr-only">{description}</p>
 }
 
-function SendActions({ pill, label, hint, description, status, disabled, onClick, onCancel, dictation }: {
+function SendActions({ pill, label, hint, description, disabled, onClick, onCancel, dictation }: {
   pill: Pill
   label: string
   hint?: string
   description: string
-  status?: string
   disabled: boolean
   onClick: () => void
   onCancel?: () => void
@@ -237,7 +235,6 @@ function SendActions({ pill, label, hint, description, status, disabled, onClick
   const icon = <look.Icon className={cn((pill === 'interrupt' || pill === 'stop-waiting') && 'fill-current')} />
   return (
     <div className="ml-auto flex shrink-0 items-center gap-1">
-      <span role="status" className="mr-1 flex items-center gap-1.5 text-ui-sm text-muted">{status && <><Spinner />{status}</>}</span>
       {dictation}
       {onCancel && <Button size="sm" variant="ghost" onClick={onCancel}>Cancel</Button>}
       <Tooltip content={tip}>
@@ -604,7 +601,6 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
               label={late ? stillWaiting : busy ? 'Sending…' : pillLook[pill].label}
               hint={keyHint}
               description={hintText}
-              status={connecting}
               disabled={pillDisabled}
               onClick={() => act(pill)}
               onCancel={late && draft.busyPrompt ? () => saveComposerDraft(run.id, { busy: undefined }) : undefined}
@@ -630,7 +626,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
           if (hasContent) act(turnRunning ? 'queue' : 'send')
         }}
         onEscape={onEscape}
-        placeholder={turnRunning || waiting ? 'Message the agent while it works' : notFinishedYet(run) ? 'Say what is left to do, / for commands, @ for files' : 'Message the agent, / for commands, @ for files'}
+        placeholder={connecting ?? (turnRunning || waiting ? 'Message the agent while it works' : notFinishedYet(run) ? 'Say what is left to do, / for commands, @ for files' : 'Message the agent, / for commands, @ for files')}
         describedBy={hintID}
         combobox={{ expanded: suggestions.length > 0, controls: listID, active: suggestions.length ? `${listID}-${current}` : undefined }}
         menu={<SuggestionList id={listID} items={suggestions} active={current} onPick={pick} />}
@@ -654,6 +650,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
         }}
       />
       <ComposerHint id={hintID} uploading={images.uploading} description={hintText} />
+      <p role="status" className="sr-only">{connecting}</p>
     </ComposerFrame>
   )
 }

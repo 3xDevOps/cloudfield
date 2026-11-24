@@ -826,7 +826,8 @@ describe('the Enhanced composer draft', () => {
   const View = lookupRoute('run')!
   const lease = { has_control: true, control_generation: 4, state: state({ prompt_images: true }) }
   const box = () => screen.findByRole('combobox', { name: 'Message the agent' })
-  const waits = () => screen.queryAllByRole('status').filter((el) => el.textContent === 'Connecting to the agent…')
+  const reconnecting = 'Reconnecting to the agent…'
+  const waits = () => screen.queryAllByRole('status').filter((el) => el.textContent === reconnecting)
   const prompt = 'Round the totals\n  then update the docs'
   const sent = { message: roomMessage({ id: 'm', kind: 'steer_request' }) }
   let show: (runID: string) => void
@@ -1008,23 +1009,34 @@ describe('the Enhanced composer draft', () => {
   it.each(['reconnecting', 'offline'] as const)('keeps the message box and its focus while the stream is %s, and sends nothing until it is live', async (down) => {
     vi.mocked(api.runInject).mockClear().mockResolvedValue(sent)
     open()
+    expect((await box()).getAttribute('placeholder')).toBe('Connecting to the agent…')
     acpSocket().open(lease)
     const field = await box()
-    const placeholder = field.getAttribute('placeholder')
+    const placeholder = 'Message the agent, / for commands, @ for files'
+    await waitFor(() => expect(field.getAttribute('placeholder')).toBe(placeholder))
+    const footer = screen.getByRole('button', { name: 'Send' }).closest('div')!.parentElement!
+    const footerElements = footer.querySelectorAll('*').length
     await userEvent.type(field, 'Round')
     act(() => useStore.getState().acpStream('run_1', down))
     expect(document.activeElement).toBe(field)
-    expect(field.getAttribute('placeholder')).toBe(placeholder)
+    expect(field.getAttribute('placeholder')).toBe(reconnecting)
     await userEvent.keyboard(' the totals')
     expect(field).toHaveProperty('value', 'Round the totals')
     expect(waits()).toHaveLength(1)
+    expect(waits()[0]!.className).toBe('sr-only')
+    expect(footer.contains(waits()[0]!)).toBe(false)
+    expect(footer.querySelectorAll('*')).toHaveLength(footerElements)
     expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true)
+    await userEvent.hover(screen.getByRole('button', { name: 'Send' }).parentElement!)
+    expect((await screen.findByRole('tooltip')).textContent).toContain(reconnecting)
+    await userEvent.unhover(screen.getByRole('button', { name: 'Send' }).parentElement!)
     expect(screen.getByLabelText('Choose files to attach')).toHaveProperty('disabled', true)
     await userEvent.keyboard('{Enter}{Control>}{Shift>}{Enter}{/Shift}{/Control}')
     expect(api.runInject).not.toHaveBeenCalled()
     expect(field).toHaveProperty('value', 'Round the totals')
     act(() => useStore.getState().acpStream('run_1', 'live'))
     expect(waits()).toHaveLength(0)
+    expect(field.getAttribute('placeholder')).toBe(placeholder)
     await userEvent.keyboard('{Enter}')
     await waitFor(() => expect(api.runInject).toHaveBeenCalledWith('run_1', 'Round the totals', expect.any(String), expect.anything()))
   })
