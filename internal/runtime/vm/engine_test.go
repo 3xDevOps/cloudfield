@@ -723,9 +723,17 @@ func TestStatsAndMemoryEventsComeFromTheHelper(t *testing.T) {
 		t.Fatalf("stats = %+v, %v", stats, err)
 	}
 	st := stats[0]
-	if st.ID != "vm-run-a" || st.CreationKey != "run-a" || st.CPULimitCores != 1.5 || st.MemoryBytes != 300<<20 || st.Pids != 12 ||
+	if st.ID != "vm-run-a" || st.CreationKey != "run-a" || st.CPULimitCores != 1.5 || st.MemoryBytes != 300<<20 || st.HostMemoryBytes != 1 || st.Pids != 12 ||
 		st.NetRxBytes != 10 || st.NetTxBytes != 20 || st.DiskReadBytes != 4 || st.DiskWriteBytes != 6 {
 		t.Errorf("stat = %+v", st)
+	}
+	current := filepath.Join(h.units.cgroup(unitName("run-a")), "memory.current")
+	if err = os.WriteFile(current, []byte("garbage"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stats, err = h.engine.stats(t.Context())
+	if len(stats) != 1 || stats[0].MemoryBytes != 300<<20 || stats[0].HostMemoryBytes != 0 || err == nil || !strings.Contains(err.Error(), "host memory of VM run-a") {
+		t.Errorf("stats with an unreadable unit cgroup = %+v, %v; want the guest's figures and the error", stats, err)
 	}
 	events, err := h.engine.memoryEvents(t.Context(), "run-a")
 	if err != nil || events.OOMKills != 2 || events.LimitBytes != 2<<30 {

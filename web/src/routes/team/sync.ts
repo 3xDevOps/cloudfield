@@ -14,8 +14,9 @@ const heartbeatMs = 15_000
 /** A wake within this long of the last full read does not read again. */
 const minGapMs = 2500
 /**
- * Both gateways speak HTTP/1.1, so an unanswered disk read holds one of the
- * browser's six connections to the host. A current server answers within 5 s.
+ * The loopback gateway speaks HTTP/1.1, so an unanswered disk read there holds
+ * one of the browser's six connections to the host. A current server answers
+ * within 5 s.
  */
 const diskTimeoutMs = 10_000
 /** How far back from the log head the feed opens, in event sequence. */

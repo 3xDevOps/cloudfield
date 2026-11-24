@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 import { useShallow } from 'zustand/react/shallow'
 import { ConnectionError } from '@/components/connection-error'
 import { LaunchSplash } from '@/components/launch-splash'
+import { preloadChunks } from '@/components/lazy-chunk'
 import { AppShell } from '@/components/shell/app-shell'
 import { TopBar } from '@/components/shell/top-bar'
 import { desktopBridge } from '@/components/shell/window-bar'
@@ -33,6 +34,7 @@ export function App() {
   const edge = useStore((s) => s.linkStatus?.edge_url)
   const serverID = useStore((s) => s.unreachableAt?.server_id ?? s.linkStatus?.server_id)
   const hydrated = useStore((s) => s.hydrated)
+  const fresh = useStore((s) => s.hydrated && s.staleSince === null)
   const gatewayRestarting = useStore((s) => s.gatewayRestarting)
   const epoch = useStore((s) => s.connectionEpoch)
   const resetConnection = useStore((s) => s.resetConnection)
@@ -89,6 +91,10 @@ export function App() {
   }, [])
 
   useEffect(() => connect(useStore), [attempt, epoch])
+  // Edge serves script from a loopback port another app can take over later.
+  useEffect(() => {
+    if (fresh) void preloadChunks()
+  }, [fresh])
   // The desktop app opens a card's notification by changing the address in place.
   useEffect(() => bindRouteToUrl(useStore, (query) => {
     if (!query.has('assistant')) return
@@ -131,7 +137,7 @@ export function App() {
       <ThemeEffect />
       <LaunchSplash />
       <UpdateChecks />
-      <div className="flex min-w-0 h-full flex-col">
+      <div data-app className="flex min-w-0 h-full flex-col">
         {(blocked || gated) && desktopBridge() && <TopBar navigation={false} />}
         <div className="min-h-0 min-w-0 flex-1">
           {gated ? (

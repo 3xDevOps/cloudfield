@@ -3,6 +3,8 @@ import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import type { AetherDesktop } from '@/components/shell/window-bar'
 import type * as apiModule from '@/lib/api'
 import { App } from '@/App'
+import { preloadChunks } from '@/components/lazy-chunk'
+import type * as lazyChunkModule from '@/components/lazy-chunk'
 import { forgetHandedLink } from '@/lib/url-state'
 import { useStore } from '@/store'
 import { StubSocket } from '@/test/stub-socket'
@@ -11,6 +13,10 @@ vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof apiModule>()
   const { fakeApi } = await import('@/test/fixtures')
   return { ...actual, api: fakeApi(), API_BASE: '/api/v1', ApiError: Error }
+})
+vi.mock('@/components/lazy-chunk', async (importOriginal) => {
+  const actual = await importOriginal<typeof lazyChunkModule>()
+  return { ...actual, preloadChunks: vi.fn(actual.preloadChunks) }
 })
 // The shell opens the event stream on mount; keep it off the network.
 beforeAll(() => {
@@ -62,6 +68,7 @@ describe('App', () => {
   it('renders the shell and fills it from the server for a member who completed onboarding', async () => {
     useStore.getState().setOnboarded(true)
     await mount()
+    expect(preloadChunks).not.toHaveBeenCalled()
 
     // Sidebar, from workspace.list + run.list: the scope on top, its runs
     // below.
@@ -74,6 +81,7 @@ describe('App', () => {
     expect(screen.getByRole('heading', { level: 1, name: 'Board' })).toBeDefined()
     // The footer, from server.info.
     expect(screen.getByRole('button', { name: /^Alice, / })).toBeDefined()
+    expect(preloadChunks).toHaveBeenCalledTimes(1)
   })
 
   it('opens a sidebar row on the run\'s Terminal view', async () => {

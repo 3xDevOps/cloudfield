@@ -76,7 +76,7 @@ describe('the Enhanced composer gate', () => {
     run: toRecord(run({ mode: 'acp', acp: true })),
     maySteer: true,
     canReopen: true,
-    stream: 'live' as const,
+    refused: undefined,
     sessionLive: true,
     pending: 0,
     hasLease: true,

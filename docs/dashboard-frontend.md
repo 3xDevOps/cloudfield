@@ -31,7 +31,14 @@ This guide describes the dashboard's routes, store and components.
 `src/app/page.tsx` is a minimal Next App Router page. It loads
 `src/app/client-runtime.tsx`, which is a client component that dynamically
 imports `src/App.tsx` with `ssr: false`. This boundary keeps the browser-only
-store, WebSocket, xterm and Electron bridge out of static prerendering. Next
+store, WebSocket, xterm and Electron bridge out of static prerendering. The
+page also renders the Cloudfield mark beside that boundary, so `index.html`
+carries it and it paints on the themed background while the scripts download.
+It appears after 300ms, so a fast load and the desktop launch splash normally do
+not show it, and a CSS sibling rule hides it once `App` mounts its
+`data-app` root. It sits outside the boundary because React replaces a
+client-only boundary's prerendered content when it starts, which would
+restart the fade. Next
 still emits the document, CSS, fonts and JavaScript assets; the existing
 client-side registry and in-memory `navigate()` state remain the dashboard's
 navigation model. Next does not run in production.
@@ -132,6 +139,14 @@ Automated phone coverage is the `mobile` Playwright project, described in
 development. `next build` therefore writes a static `web/dist` artifact:
 HTML, `_next` assets, CSS and copied public files. There is no production Next
 server or Node process in the shipped dashboard.
+
+The Files editor and the Insights System charts are kept out of the
+first-page script by `lazyChunk` in `web/src/components/lazy-chunk.tsx`.
+`App` fetches them with `preloadChunks` right after the first successful
+hydration, so opening a view fetches no script: on an Edge link, another app
+can take over the gateway's loopback port after the local GUI exits. A chunk
+that failed to load stays failed until the page is reloaded; its view shows
+the import error with a Reload button, and nothing reloads on its own.
 
 `web/embed.go` embeds `web/dist` with `//go:embed all:dist`, which fails to
 compile against an empty directory. The build output is not committed, so the
@@ -3381,7 +3396,9 @@ right-aligned bubble; the author shows only when it is not the viewer or the
 message came through a connector, and the session's appended instructions hide
 under its task), `steps`, `assistant` (markdown through `react-markdown` and
 `remark-gfm`, split into blocks with `marked`'s lexer so only the streaming
-block re-renders, code highlighted with the Lezer languages), `live`,
+block re-renders; code in a streaming reply is highlighted with the Lezer
+languages once its block is complete, when another block follows or the reply
+ends), `live`,
 `event` (a wake, a new agent conversation, or a notice outside a block),
 `finished` and `agent-message`.
 
@@ -4152,6 +4169,9 @@ measurement from FitAddon without resizing the renderer; `setGeometry()` queues
 the server resize and optional attach reset between xterm writes. A font or
 pane resize reports the local measurement, never the smaller rendered grid,
 so a viewer cannot accidentally pin the shared minimum after it grows.
+A pane resize is reported 100 ms after the pane stops changing, so the
+terminal keeps its old grid during a drag. A font or follow change reports at
+once. The server ignores a report of the size it already has.
 Terminal padding belongs to the xterm element, not its host: FitAddon subtracts
 the element's padding when calculating the rows and columns that fit.
 Queued geometry work is discarded when its terminal is disposed.
@@ -4388,7 +4408,9 @@ and the Environment keep native xterm scrollback.
   glyph-atlas positions under heavy glyph churn (xtermjs/xterm.js#6038),
   garbling scrolled rows until a forced refresh; the DOM renderer never
   desyncs. The terminals render in the shipped JetBrainsMono Nerd Font Mono
-  (`src/lib/term-font.ts`, declared in `src/index.css`), so agent TUIs get
+  (`src/lib/term-font.ts`, declared in `src/index.css` from `src/fonts/`, so
+  the build gives each file a content-hashed name under `_next/static/media`
+  that browsers cache without revalidating), so agent TUIs get
   their powerline and devicon glyphs at the same advance as text. The terminal
   opens only once regular and bold faces are loaded, because xterm caches
   glyph metrics synchronously at `open` and would otherwise bake fallback
@@ -5540,8 +5562,8 @@ in **Needs you**.
   it onto the stored `server.info`, which is what fills the disk gauge in
   Insights › System. One read runs at a time, so a reconnect or wake joins
   the heartbeat's read, and a read unanswered after 10 seconds is aborted and
-  shown as the gauge's error: both gateways speak HTTP/1.1, so a stuck read
-  holds one of the browser's six connections to the host.
+  shown as the gauge's error: the loopback gateway speaks HTTP/1.1, so a
+  stuck read there holds one of the browser's six connections to the host.
 
 ## Insights
 

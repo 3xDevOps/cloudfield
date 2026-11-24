@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { Markdown } from '@/components/ui/markdown'
 import { OutputTail } from '@/components/ui/session-blocks'
+import { preloadChunks } from '@/components/lazy-chunk'
 import { api, ApiError } from '@/lib/api'
 import type { FileTreeEntry } from '@/lib/types'
 import { openInFiles } from '@/routes/files/open'
@@ -27,6 +28,8 @@ function checkout(writable = true) {
     filesRead: vi.fn(async () => ({ content: source, truncated: false, binary: false, size: source.length, revision: 'r1', writable })),
   })
 }
+
+beforeAll(() => preloadChunks())
 
 beforeEach(() => {
   useStore.getState().resetFiles()

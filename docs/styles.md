@@ -35,10 +35,10 @@ Fonts ship in the bundle; nothing is fetched from Google.
 | Face | Use | Source |
 | --- | --- | --- |
 | DM Sans (variable, Latin subset) | All UI text | `@fontsource-variable/dm-sans`, one WOFF2 |
-| Saira (variable, Latin subset) | `text-title` only | `web/public/fonts/saira-latin.woff2` |
-| VT323 (Latin subset, 400) | Play listing wordmark drawn by `scripts/make-icons.py`; the dashboard does not load it | `web/public/fonts/vt323-latin.woff2` |
-| JetBrainsMono NFM | xterm primary font; UI private-use symbols through `Aether Nerd Symbols` | `web/public/fonts/jetbrains-mono-nfm-*.woff2` |
-| Noto Sans Symbols 2 | Braille and geometric symbols through `Aether Symbols` | `web/public/fonts/noto-sans-symbols-2-spinners.woff2` |
+| Open Sans (variable, Latin subset) | `text-title` only | `@fontsource-variable/open-sans`, one WOFF2 |
+| VT323 (Latin subset, 400) | Play listing wordmark drawn by `scripts/make-icons.py`; the dashboard does not load it | `web/src/fonts/vt323-latin.woff2` |
+| JetBrainsMono NFM | xterm primary font; UI private-use symbols through `Aether Nerd Symbols` | `web/src/fonts/jetbrains-mono-nfm-*.woff2` |
+| Noto Sans Symbols 2 | Braille and geometric symbols through `Aether Symbols` | `web/src/fonts/noto-sans-symbols-2-spinners.woff2` |
 | `ui-monospace, 'SF Mono', Menlo, Consolas, monospace` | Code, paths and SHAs (`font-code`), after symbol fallbacks | system |
 
 DM Sans loads with `font-display: swap` behind `DM Sans Fallback`, Arial
@@ -73,7 +73,7 @@ The type scale, in `web/src/index.css`:
 | `text-ui-sm` | 12/16 | Supporting copy, section labels |
 | `text-ui` | 13/20 | Default UI text; the body is 13px |
 | `text-prose` | 14/22 | Agent prose and rendered markdown |
-| `text-title` | 16/24, Saira 600 | Pane, dialog, step and empty-state headings |
+| `text-title` | 16/24, Open Sans 600 | Pane, dialog, step and empty-state headings |
 | `text-stat` | 24/28, 500 | The figure in a `StatTile` only |
 
 `text-avatar` (10px) is reserved for avatar initials. **Settings >
@@ -693,6 +693,9 @@ literal time or curve.
   so the two never double up. A sidebar group turns its chevron and fades its
   list back in when the viewer reopens it; it never glides its height, since
   a group can hold hundreds of rows.
+- The first-load placeholder, the Cloudfield mark prerendered by
+  `web/src/app/page.tsx`, fades in over 200ms after a 300ms delay, then holds
+  still; under reduced motion it cuts in when the fade would end (500ms).
 - Only rows added after the first render enter: `animate-entrance` fades in
   and rises 4px. `playEntrance` staggers a burst by `--stagger-row` (30ms) up
   to the eighth row; the rest arrive with it. The Session list plays it only

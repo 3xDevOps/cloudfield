@@ -68,7 +68,7 @@ go() {
 
 caches() {
 	case $1 in
-	go.mod | go.sum | .golangci.yml | .github/* | images/* | web/public/fonts/* | \
+	go.mod | go.sum | .golangci.yml | .github/* | images/* | web/public/fonts/* | web/src/fonts/* | \
 		web/package.json | web/bun.lock | web/.bun-version | \
 		desktop/package.json | desktop/package-lock.json | \
 		android/gradle/* | android/gradle.properties | android/*.gradle.kts)

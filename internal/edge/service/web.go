@@ -44,7 +44,7 @@ func parsePages() (*template.Template, error) {
 var pageAssets = []struct{ path, file, contentType string }{
 	{"/edge.css", "edge.css", "text/css; charset=utf-8"},
 	{"/fonts/dm-sans-latin-wght-normal.woff2", "fonts/dm-sans-latin-wght-normal.woff2", "font/woff2"},
-	{"/fonts/saira-latin.woff2", "fonts/saira-latin.woff2", "font/woff2"},
+	{"/fonts/open-sans-latin-wght-normal.woff2", "fonts/open-sans-latin-wght-normal.woff2", "font/woff2"},
 	{"/cloudfield-logo-small.svg", "images/cloudfield-logo-small.svg", "image/svg+xml"},
 	{"/cloudfield-favicon.svg", "images/cloudfield-favicon.svg", "image/svg+xml"},
 	{"/favicon-32.png", "images/favicon-32.png", "image/png"},
