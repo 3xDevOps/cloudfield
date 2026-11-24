@@ -157,6 +157,11 @@ export function Consumers({ stats }: { stats: SystemStats }) {
               </p>
             )}
             <Rows stats={stats} metric={metric} rows={shown} result={result} capacity={capacity.capacity} />
+            {metric === 'memory' && shown.some((c) => c.host_memory_bytes !== undefined) && (
+              <p className="px-1.5 text-ui-sm text-muted">
+                A session in a VM shows two figures. The first is what its VM holds of the host's memory, the VM's own kernel and file cache included. The limit applies to what the session uses inside the VM.
+              </p>
+            )}
             {!selected && containers.length > 0 && <EverythingElse rest={result.rest} stats={stats} metric={metric} />}
           </div>
         </div>
@@ -189,6 +194,7 @@ function Rows({ stats, metric, rows, result, capacity }: { stats: SystemStats; m
           const limit = metricLimit(c, metric)
           const share = limitShare(c, metric)
           const level = limitLevel(share)
+          const inVM = metric === 'memory' && c.host_memory_bytes !== undefined
           const history = stats.history.get(key)?.[metric] ?? []
           const hostShare = capacity > 0 ? percentText((value / capacity) * 100) : ''
           const sub = c.owner_kind === 'member' ? 'Environment sandbox' : names.member(c.member_id)
@@ -211,17 +217,20 @@ function Rows({ stats, metric, rows, result, capacity }: { stats: SystemStats; m
                     )}
                   </span>
                 </span>
-                <Sparkline points={history} max={limit > 0 ? limit : undefined} color={color} className="hidden h-6 w-16 shrink-0 sm:block" />
+                <Sparkline points={history} max={limit > 0 && !inVM ? limit : undefined} color={color} className="hidden h-6 w-16 shrink-0 sm:block" />
                 <span className="flex w-36 shrink-0 flex-col items-end gap-1 text-ui-sm">
                   <span className="text-text tabular-nums">
                     {metric === 'cpu' && c.cpu_cores === undefined
                       ? 'Measuring…'
                       : metric === 'cpu'
                         ? `${coresText(value)} cores · ${hostShare} of host`
-                        : limit > 0
+                        : limit > 0 && !inVM
                           ? `${formatBytes(value)} of ${formatBytes(limit)} limit`
                           : `${formatBytes(value)} · ${hostShare} of host`}
                   </span>
+                  {inVM && limit > 0 && (
+                    <span className="text-muted tabular-nums">{formatBytes(c.memory_bytes)} of {formatBytes(limit)} limit</span>
+                  )}
                   {share !== undefined && (
                     <span aria-hidden className="block h-1 w-full overflow-hidden rounded-full bg-chrome">
                       <span

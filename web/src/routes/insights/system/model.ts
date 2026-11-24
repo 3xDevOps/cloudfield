@@ -24,8 +24,9 @@ export function containerKey(c: Pick<SystemContainer, 'owner_kind' | 'owner_id'>
   return `${c.owner_kind}:${c.owner_id}`
 }
 
+/** What the sandbox takes of the host. */
 export function metricValue(c: SystemContainer, metric: Metric): number {
-  return metric === 'cpu' ? c.cpu_cores ?? 0 : c.memory_bytes
+  return metric === 'cpu' ? c.cpu_cores ?? 0 : c.host_memory_bytes ?? c.memory_bytes
 }
 
 export function metricLimit(c: SystemContainer, metric: Metric): number {
@@ -138,7 +139,7 @@ export function othersValue(others: SystemOthers | undefined, metric: Metric): n
 
 export function limitShare(c: SystemContainer, metric: Metric): number | undefined {
   const limit = metricLimit(c, metric)
-  return limit > 0 ? metricValue(c, metric) / limit : undefined
+  return limit > 0 ? (metric === 'cpu' ? c.cpu_cores ?? 0 : c.memory_bytes) / limit : undefined
 }
 
 type LimitLevel = 'near' | 'critical'
@@ -163,7 +164,7 @@ export function appendHistory(previous: History, containers: SystemContainer[], 
     const cpu = (old?.cpu ?? []).filter((p) => p.t >= floor && p.t < at)
     const memory = (old?.memory ?? []).filter((p) => p.t >= floor && p.t < at)
     if (c.cpu_cores !== undefined) cpu.push({ t: at, v: c.cpu_cores })
-    memory.push({ t: at, v: c.memory_bytes })
+    memory.push({ t: at, v: metricValue(c, 'memory') })
     next.set(key, { cpu, memory })
   }
   return next

@@ -472,7 +472,8 @@ the session is killed at. Memory in use is `memory.current` less the `inactive_f
 helper and the git service, which are outside the session, are left out.
 Without the session cgroup, OOM kills and memory are the whole guest's: the
 kernel's OOM kill counter, and `MemTotal - MemAvailable` of `MemTotal`.
-Insights shows these.
+Insights shows these, and beside them what the VM holds of the host's
+memory, the figure `MemoryUse` reads.
 
 `MemoryUse` reports what each running VM holds of the host's memory, read
 from its unit's cgroup (`/sys/fs/cgroup/aether.slice/aether-vm-<key>.service`)

@@ -19,7 +19,9 @@ const (
 )
 
 // ContainerStat is one container's raw counters from a single daemon sample.
-// Rates need two samples of the same ID.
+// Rates need two samples of the same ID. HostMemoryBytes is what a VM holds
+// of the host's memory, more than MemoryBytes, its session's use inside it;
+// zero for a container.
 type ContainerStat struct {
 	ID                  string
 	CreationKey         string
@@ -30,6 +32,7 @@ type ContainerStat struct {
 	CPUThrottledPeriods uint64
 	CPULimitCores       float64
 	MemoryBytes         uint64
+	HostMemoryBytes     uint64
 	MemoryLimitBytes    uint64
 	Pids                uint64
 	PidsLimit           uint64

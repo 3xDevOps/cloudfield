@@ -187,13 +187,13 @@ func TestContainerRatesNeedTwoSamples(t *testing.T) {
 	sample := func(cpuNs, periods, throttled, rx uint64) {
 		s.finishContainers([]runtime.ContainerStat{{
 			ID: "c1", Read: read, CPUUsageNanos: cpuNs, CPUPeriods: periods, CPUThrottledPeriods: throttled,
-			NetRxBytes: rx, MemoryBytes: 5,
+			NetRxBytes: rx, MemoryBytes: 5, HostMemoryBytes: 9,
 		}}, nil)
 	}
 
 	sample(1e9, 10, 1, 0)
 	first := s.Read(time.Time{}).Containers
-	if len(first) != 1 || first[0].Rates != nil || first[0].MemoryBytes != 5 {
+	if len(first) != 1 || first[0].Rates != nil || first[0].MemoryBytes != 5 || first[0].HostMemoryBytes != 9 {
 		t.Fatalf("first sample = %+v, want gauges without rates", first)
 	}
 
