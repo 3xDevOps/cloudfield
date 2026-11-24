@@ -26,8 +26,8 @@ export interface ComposerDraft {
 
 const noDraft: ComposerDraft = { body: '', images: [] }
 
-// Not a root-store slice: every write there rewrites `aether.ui`, and one made
-// during an event drain would reach the textarea a frame late.
+// Not a root-store slice: a write there made during an event drain would reach
+// the textarea a frame late.
 const useDrafts = create<Record<string, ComposerDraft>>(() => ({}))
 
 export function composerDraft(runID: string): ComposerDraft {

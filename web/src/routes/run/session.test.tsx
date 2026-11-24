@@ -424,16 +424,17 @@ describe('the Enhanced session view', () => {
   it('scrolls to a turn’s prompt another view asks for after a room message took its row', async () => {
     SizedObserver.viewport = 240
     const [start, prompt] = [item('turn_start', 1), say(1, 'user', 'Round the totals')]
+    // Stubbed before the view mounts: its last scroll to the end can run before the log is found.
+    vi.spyOn(Element.prototype, 'scrollTo').mockImplementation(function (this: Element, to: ScrollToOptions) {
+      this.scrollTop = to.top ?? this.scrollTop
+      fireEvent.scroll(this)
+    } as typeof Element.prototype.scrollTo)
     open()
     acpSocket().open({}, [
       start, prompt, ...Array.from({ length: 40 }, (_, n) => say(1, 'assistant', `Reply ${n}`)),
       item('turn_end', 1, { stop_reason: 'end_turn' }),
     ])
     const log = await screen.findByRole('log', { name: 'Chat' })
-    log.scrollTo = ((to: ScrollToOptions) => {
-      log.scrollTop = to.top ?? log.scrollTop
-      fireEvent.scroll(log)
-    }) as typeof log.scrollTo
     act(() => useStore.getState().upsertRoomMessage(roomMessage({ id: 'msg_first', kind: 'steer_request', body: 'Round the totals', agent_delivery: 'delivered', created_at: prompt.time })))
     expect(await within(log).findByText('Reply 39')).toBeDefined()
     expect(within(log).queryByText('Round the totals')).toBeNull()

@@ -239,7 +239,8 @@ text size, sidebar width and collapse state, dock height, Details open,
 terminal zoom, single-key shortcuts, diff wrap, `activeWorkspace`, the
 **Mine** toggle, each member's launch defaults, dismissed update versions, onboarding
 progress) are persisted under the `aether.ui` key; `persistedUi` in
-`store/index.ts` is the list that decides. Server data is always re-fetched.
+`store/index.ts` is the list that decides, and the key is written only when
+one of those values changes. Server data is always re-fetched.
 
 **Selectors return primitives or stable references.** A selector that builds a
 new array or object on every call re-renders its component on every store
@@ -3683,9 +3684,8 @@ of a composer that mounts with text puts the caret after it, and the
 suggestion menu follows the selection as well as the text.
 
 Drafts live in memory and end with the page. They sit in their own Zustand
-store, not a root-store slice: every root-store write rewrites `aether.ui`,
-and one made while events drain notifies on the next frame, which drops
-keystrokes in a controlled textarea.
+store, not a root-store slice: a root-store write made while events drain
+notifies on the next frame, which drops keystrokes in a controlled textarea.
 
 **Insert a template** (shown when the gateway offers `template.list`,
 disabled while the draft is locked) opens the template library above the

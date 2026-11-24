@@ -1,3 +1,4 @@
+import { Profiler } from 'react'
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import type { AetherDesktop } from '@/components/shell/window-bar'
 import type * as apiModule from '@/lib/api'
@@ -28,8 +29,8 @@ afterAll(() => vi.unstubAllGlobals())
  * Renders the app and acknowledges its subscription, which is what releases
  * the hydration fetch.
  */
-async function mount() {
-  render(<App />)
+async function mount(ui = <App />) {
+  render(ui)
   await vi.waitFor(() => expect(StubSocket.opened.length).toBeGreaterThan(0))
   const socket = StubSocket.last()
   act(() => {
@@ -183,5 +184,25 @@ describe('App', () => {
       app.unmount()
       useStore.setState(previous, true)
     }
+  })
+
+  it('warns before leaving with an unsaved file, without re-rendering on each edit to it', async () => {
+    let commits = 0
+    await mount(<Profiler id="app" onRender={() => commits++}><App /></Profiler>)
+    const leave = () => {
+      const event = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(event)
+      return event.defaultPrevented
+    }
+    expect(leave()).toBe(false)
+
+    act(() => useStore.getState().updateDraft('notes.md', 'a'))
+    expect(leave()).toBe(true)
+    commits = 0
+    act(() => useStore.getState().updateDraft('notes.md', 'ab'))
+    expect(commits).toBe(0)
+
+    act(() => useStore.getState().updateDraft('notes.md', ''))
+    expect(leave()).toBe(false)
   })
 })
