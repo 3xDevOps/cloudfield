@@ -826,6 +826,10 @@ describe('the Enhanced composer draft', () => {
   const View = lookupRoute('run')!
   const lease = { has_control: true, control_generation: 4, state: state({ prompt_images: true }) }
   const box = () => screen.findByRole('combobox', { name: 'Message the agent' })
+  const reconnecting = 'Reconnecting to the agent…'
+  const waits = () => screen.queryAllByRole('status').filter((el) => el.textContent === reconnecting)
+  const drop = (stream: 'reconnecting' | 'live') => act(() => useStore.getState().acpStream('run_1', stream))
+  const strip = 'Answer the request above to continue.'
   const prompt = 'Round the totals\n  then update the docs'
   const sent = { message: roomMessage({ id: 'm', kind: 'steer_request' }) }
   let show: (runID: string) => void
@@ -1004,6 +1008,112 @@ describe('the Enhanced composer draft', () => {
     expect(screen.getByRole('option', { name: /\/help/ })).toBeDefined()
   })
 
+  it.each(['reconnecting', 'offline'] as const)('keeps the message box and its focus while the stream is %s, and sends nothing until it is live', async (down) => {
+    vi.mocked(api.runInject).mockClear().mockResolvedValue(sent)
+    open()
+    expect((await box()).getAttribute('placeholder')).toBe('Connecting to the agent…')
+    acpSocket().open(lease)
+    const field = await box()
+    const placeholder = 'Message the agent, / for commands, @ for files'
+    await waitFor(() => expect(field.getAttribute('placeholder')).toBe(placeholder))
+    const footer = screen.getByRole('button', { name: 'Send' }).closest('div')!.parentElement!
+    const footerElements = footer.querySelectorAll('*').length
+    await userEvent.type(field, 'Round')
+    act(() => useStore.getState().acpStream('run_1', down))
+    expect(document.activeElement).toBe(field)
+    expect(field.getAttribute('placeholder')).toBe(reconnecting)
+    await userEvent.keyboard(' the totals')
+    expect(field).toHaveProperty('value', 'Round the totals')
+    expect(waits()).toHaveLength(1)
+    expect(waits()[0]!.className).toBe('sr-only')
+    expect(footer.contains(waits()[0]!)).toBe(false)
+    expect(footer.querySelectorAll('*')).toHaveLength(footerElements)
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true)
+    await userEvent.hover(screen.getByRole('button', { name: 'Send' }).parentElement!)
+    expect((await screen.findByRole('tooltip')).textContent).toContain(reconnecting)
+    await userEvent.unhover(screen.getByRole('button', { name: 'Send' }).parentElement!)
+    expect(screen.getByLabelText('Choose files to attach')).toHaveProperty('disabled', true)
+    await userEvent.keyboard('{Enter}{Control>}{Shift>}{Enter}{/Shift}{/Control}')
+    expect(api.runInject).not.toHaveBeenCalled()
+    expect(field).toHaveProperty('value', 'Round the totals')
+    act(() => useStore.getState().acpStream('run_1', 'live'))
+    expect(waits()).toHaveLength(0)
+    expect(field.getAttribute('placeholder')).toBe(placeholder)
+    await userEvent.keyboard('{Enter}')
+    await waitFor(() => expect(api.runInject).toHaveBeenCalledWith('run_1', 'Round the totals', expect.any(String), expect.anything()))
+  })
+
+  it('says once why sending waits for an empty, blank and image-only draft, and keeps the running turn\'s pill', async () => {
+    vi.mocked(api.uploadTerminalImage).mockReset().mockResolvedValue({ path: '/home/alice/totals.png' })
+    open()
+    acpSocket().open({ ...lease, state: state({ prompt_images: true, turn_in_flight: true, steering: true }) }, [item('turn_start', 1)])
+    const field = await box()
+    drop('reconnecting')
+    expect(waits()).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Interrupt the agent' })).toHaveProperty('disabled', true)
+    await userEvent.type(field, '   ')
+    expect(waits()).toHaveLength(1)
+    drop('live')
+    await userEvent.clear(field)
+    await userEvent.upload(screen.getByLabelText('Choose files to attach'), new File(['png'], 'totals.png', { type: 'image/png' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Steer' })).toHaveProperty('disabled', false))
+    drop('reconnecting')
+    expect(waits()).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Steer' })).toHaveProperty('disabled', true)
+  })
+
+  it('keeps the closed strip of a session that waits on a request through a reconnect', async () => {
+    open()
+    acpSocket().open({ ...lease, state: state({ turn_in_flight: true, pending: [permission] }) }, [item('turn_start', 1)])
+    expect(await screen.findByText(strip)).toBeDefined()
+    for (const stream of ['reconnecting', 'live'] as const) {
+      drop(stream)
+      expect(screen.getByText(strip)).toBeDefined()
+      expect(screen.queryByRole('combobox', { name: 'Message the agent' })).toBeNull()
+      expect(screen.getByRole('button', { name: 'Interrupt the agent' })).toHaveProperty('disabled', stream !== 'live')
+      expect(waits()).toHaveLength(stream === 'live' ? 0 : 1)
+    }
+  })
+
+  it('opens a session that waits on a request with the closed strip', async () => {
+    useStore.getState().acpAck('run_1', { ok: true, seq: 0, replay: 0, epoch: 0, live: true, has_control: false, state: state({ pending: [permission] }) })
+    open()
+    expect(useStore.getState().acpSessions.run_1!.stream).not.toBe('live')
+    expect(screen.getByText(strip)).toBeDefined()
+    expect(screen.queryByRole('combobox', { name: 'Message the agent' })).toBeNull()
+  })
+
+  it('keeps a watcher\'s Send arrow while a turn runs through a reconnect', async () => {
+    vi.spyOn(api, 'runRoomStatus').mockResolvedValue(occupiedRoom)
+    open({ member_id: bob.id, controller_member_id: bob.id })
+    acpSocket().open({ has_control: false, state: state({ turn_in_flight: true, steering: true }) }, [item('turn_start', 1)])
+    const field = await box()
+    const pills = () => ['Send', 'Interrupt the agent', 'Steer'].filter((name) => screen.queryByRole('button', { name }))
+    expect(pills()).toEqual(['Send'])
+    drop('reconnecting')
+    expect(pills()).toEqual(['Send'])
+    await userEvent.type(field, 'Check the totals')
+    expect(pills()).toEqual(['Send'])
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true)
+    drop('live')
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', false)
+  })
+
+  it.each([
+    ['Stop waiting for background work', state({ background: true, tasks: [{ id: 'bg1', holds: true }] }), ''],
+    ['Queue', state({ turn_in_flight: true }), 'Then the docs'],
+  ])('keeps the controller\'s %s pill, disabled, through a reconnect', async (name, session, draft) => {
+    open()
+    acpSocket().open({ ...lease, state: session })
+    if (draft) await userEvent.type(await box(), draft)
+    const pill = () => screen.getByRole('button', { name })
+    await waitFor(() => expect(pill()).toHaveProperty('disabled', false))
+    drop('reconnecting')
+    expect(pill()).toHaveProperty('disabled', true)
+    drop('live')
+    expect(pill()).toHaveProperty('disabled', false)
+  })
+
   it('keeps the draft through the run\'s views, a reconnect, an event-log restart and a switch to Standard', async () => {
     const view = open()
     acpSocket().open(lease)
@@ -1012,7 +1122,7 @@ describe('the Enhanced composer draft', () => {
     view.rerender(<View params={{ runId: 'run_1', view: 'session', focus: 'composer' }} />)
     expect(await box()).toHaveProperty('value', prompt)
     act(() => useStore.getState().acpStream('run_1', 'reconnecting'))
-    expect(screen.getByText('Connecting to the agent…')).toBeDefined()
+    expect(await box()).toHaveProperty('value', prompt)
     act(() => useStore.getState().acpStream('run_1', 'live'))
     expect(await box()).toHaveProperty('value', prompt)
     act(() => useStore.getState().resetSeq())
