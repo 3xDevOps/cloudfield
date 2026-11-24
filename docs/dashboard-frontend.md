@@ -1627,7 +1627,7 @@ where a resend is deduped or refused and the eventual result still shows:
 | Question **Reply** (Details) | Replying… | Yes: a resend of the same text reuses the idempotency key, and the reply arrives as a room event |
 | Teammate message and permission **Approve** / **Deny** (Details) | Approving… / Denying… | No: a second decision would race the first, and its "already decided" refusal would sit beside the first's success |
 | Composer **Send** and the Enhanced pill's Send, Steer and Queue | Sending… | Yes: the draft keeps its idempotency key, so a resend delivers once |
-| Enhanced pill's **Interrupt** and **Resume**, and a session option | Sending… | No: these carry no key, so a late interrupt could stop the turn sent after it |
+| Enhanced pill's **Interrupt**, **Stop waiting** and **Resume**, and a session option | None: the pill dims | No: these carry no key, so a late interrupt could stop the turn sent after it |
 | **Create workspace** | Creating… | No: `workspace.add` carries no idempotency key |
 | **Launch** (launch dialog) | Launching… | The dialog's **Cancel** closes it at any time; the request keeps going, a success still opens the session, and a refusal shows as a toast |
 | Close dialog **Merged** / **Abandoned**, over another verb's pending prediction | Closing… | The dialog's **Cancel** closes it at any time; the answer shows as a toast |
@@ -3684,13 +3684,17 @@ The timeline rows and both composers share `sessionColumn`
 (`session-rows.tsx`): the 736px column with 16px gutters, so message text and
 the message box line up at every width. The box (`rounded-composer`, 14px)
 holds the textarea above one footer row: attach, **Insert a template**, the
-agent's mode, model and effort pickers, the context meter, and the send pill
+agent's mode picker, one picker for its model and effort that reads
+`Fable 5.2 / High`, the context meter, and the send pill
 at the end, with the dictation mic (see [Dictation](#dictation)) just left of
 it. The Standard composer's row has attach, **Insert a template**, the mic and
 Send. The pill is a
-round arrow while it reads **Send** and widens to its word otherwise. Hints
-and the 45-second delivery notice sit under the box. Footer controls wrap on
-narrow screens. The context meter shows the agent's last ACP `usage_update`
+round arrow while it reads **Send**, a round stop square for **Interrupt**
+and **Stop waiting**, and widens to its word otherwise. Hints
+and the 45-second delivery notice sit under the box. A footer too narrow for
+one row fills its last row first (`wrap-from-end` in `index.css`): the send
+pill's row takes the controls before it and the first ones move to a row
+above, so the pill never sits on a row alone. The context meter shows the agent's last ACP `usage_update`
 (`state.usage` in the snapshot, replaced by each `usage` item) as a share of
 its context window, and is a button that opens the **Context window** popover
 (`routes/run/context-window.tsx`); hovering it shows the token counts. An agent
@@ -3786,9 +3790,23 @@ zoomed, the outer gutters close it and the frame remains scrollable. Losing an
 image's blob, as on reconnect, closes the dialog if it was showing that image.
 Closing returns focus to the thumbnail of the image last shown. Attachments sit
 outside the text-collapse area and remain available through history and reconnect.
-Mode and effort menus use content-sized described rows; model selectors use
+The mode menu uses content-sized described rows; the model picker is
 `Command` inside `Popover`, preserving every advertised option and provider
-group with search by name, ID and description. Selections use
+group with search by name, ID and description. Under its list a row of
+`RadioPills`, labelled with the option's name such as **Effort**, sets the
+agent's `thought_level` option. When the agent describes its levels, a line
+under the row gives the description of the level the pointer or keyboard
+focus last moved to, until either leaves the row, and of the selected level
+otherwise; each level is also `aria-describedby` its own. A touch screen lays the levels out in even rows of at most four and
+does not focus the search field, which would raise its keyboard.
+Each choice is a request to the agent, so the arrow keys, Home and End only
+move between levels and Space, Enter or a click chooses one. The chosen
+level shimmers until the agent confirms it, then the selection glides to it.
+A model or level picked while another change is still being set goes out
+once that one settles, so the last pick wins; it is dropped if the agent
+refused the change before it, whose error stays at the composer.
+Picking a model closes the picker; picking an effort leaves it open. An agent that offers an effort option and no model
+option gets the effort as a menu of its own. Selections use
 `run.acp.set_option`; `/` completes the agent's commands and `@` paths from
 the Files tree cache. It closes with one line of reason while switching, for a
 Background session, while connecting, or while the controller has a pending
