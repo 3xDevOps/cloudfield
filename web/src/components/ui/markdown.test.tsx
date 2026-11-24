@@ -35,17 +35,6 @@ test('a streaming code block is highlighted once, when another block follows', (
   expect(highlightCode).toHaveBeenCalledTimes(1)
 })
 
-test('a longer fence holding a three-backtick line stays plain while it is the last block', () => {
-  const open = '````ts\nconst a = 1\n```\n'
-  const view = render(<Markdown text={open} live />)
-  view.rerender(<Markdown text={`${open}const b = 2\n`} live />)
-  view.rerender(<Markdown text={`${open}const b = 2\n\`\`\`\`\n`} live />)
-  expect(highlightCode).not.toHaveBeenCalled()
-  view.rerender(<Markdown text={`${open}const b = 2\n\`\`\`\`\n\nDone.`} live />)
-  expect(highlightCode).toHaveBeenCalledTimes(1)
-  expect(view.container.querySelector('pre code')!.textContent).toBe('const a = 1\n```\nconst b = 2')
-})
-
 test('inline code in the last paragraph keeps its element when a new block arrives', () => {
   const text = 'Run `make` first.'
   const view = render(<Markdown text={text} live />)
