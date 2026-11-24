@@ -186,7 +186,7 @@ function candidates(chord: boolean): [Keybinding, Handler][] {
 }
 
 function onChord(event: KeyboardEvent) {
-  if (event.isComposing) return
+  if (event.isComposing || useStore.getState().tileDrag) return
   for (const [binding, handler] of candidates(true)) {
     if (!matchKeybindingPress(event, pressesOf(binding)[0]!)) continue
     if (!binding.when || binding.when(event)) handler(event)

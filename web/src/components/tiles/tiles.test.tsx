@@ -767,6 +767,9 @@ describe('the sidebar', () => {
     atViewport(1024, { pointer: 'coarse' })
     render(<SidebarRuns />)
     expect(screen.queryByRole('button', { name: 'Open to the side' })).toBeNull()
+    const before = state().tiles
+    fireEvent.keyDown(screen.getByRole('button', { name: new RegExp(` · ${second} · `) }), { key: 'Enter', ctrlKey: true })
+    expect(state().tiles).toBe(before)
   })
 })
 

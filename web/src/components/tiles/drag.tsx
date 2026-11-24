@@ -8,12 +8,13 @@ import { AgentGlyph } from '@/components/ui/agent-glyph'
 import { StatusDot } from '@/components/ui/status-dot'
 import { useDrag } from '@/lib/hooks'
 import { runLabel, toneOf } from '@/lib/status'
+import { cn } from '@/lib/utils'
 import { runViewIcon } from '@/routes/run/view-icons'
 import { runViewLabel } from '@/routes/run/views'
 import { useStore } from '@/store'
 import { useRunPresentation } from '@/store/hooks'
 import type { RunRecord } from '@/store/runs'
-import { dropTab, splitTile, tileList, type TileDragSource, type TileSide } from '@/store/tiles'
+import { dropTab, splitTile, tileList, viewHolder, type TileDragSource, type TileSide, type ViewContext } from '@/store/tiles'
 
 /** How far a press travels, in pixels, before it is a drag and not a click. */
 const threshold = 4
@@ -24,13 +25,14 @@ export function useTileDrag(): (source: TileDragSource) => (event: React.Pointer
   return (source) => (event) => {
     if (event.button !== 0 || event.pointerType === 'touch' || !document.querySelector('[data-tile]')) return
     const { clientX, clientY } = event
+    const from = event.currentTarget.getBoundingClientRect()
     const drag = beginDrag()
     for (const native of ['selectstart', 'dragstart']) window.addEventListener(native, (ev) => ev.preventDefault(), { signal: drag.signal })
     for (const end of ['pointerup', 'pointercancel']) window.addEventListener(end, () => drag.abort(), { signal: drag.signal })
     window.addEventListener('pointermove', (ev) => {
       if (Math.hypot(ev.clientX - clientX, ev.clientY - clientY) < threshold) return
       drag.abort()
-      useStore.setState({ tileDrag: { ...source, x: ev.clientX, y: ev.clientY } })
+      useStore.setState({ tileDrag: { ...source, from, x: ev.clientX, y: ev.clientY } })
     }, { signal: drag.signal })
   }
 }
@@ -45,15 +47,19 @@ interface DropTarget {
   tile: DOMRect
 }
 
-/** What a drop at a point does, or null where it would change nothing. */
-function targetAt(source: TileDragSource, x: number, y: number): DropTarget | null {
+const inside = (rect: DOMRect, x: number, y: number) => x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom
+
+/** What a drop at a point does, or null where it would change nothing: also over what was lifted, so a shaky click is not a drop. */
+function targetAt(source: TileDragSource & { from: DOMRect }, x: number, y: number, ctx: ViewContext): DropTarget | null {
+  if (inside(source.from, x, y)) return null
   const layout = useStore.getState().tiles
+  const held = source.tabId ?? (source.view && viewHolder(layout, source.runId, source.view, ctx)?.tab.id)
   for (const node of document.querySelectorAll<HTMLElement>('[data-tile]')) {
     const tile = node.getBoundingClientRect()
-    if (x < tile.left || x >= tile.right || y < tile.top || y >= tile.bottom) continue
+    if (!inside(tile, x, y)) continue
     const tileId = node.dataset.tile!
     const tabs = tileList(layout.root).find((candidate) => candidate.id === tileId)!.tabs
-    const own = tabs.some((tab) => tab.id === source.tabId)
+    const own = tabs.some((tab) => tab.id === held)
     if (own && tabs.length === 1) return null
     const strip = node.firstElementChild!.getBoundingClientRect()
     if (source.tabId && y < strip.bottom) {
@@ -63,7 +69,7 @@ function targetAt(source: TileDragSource, x: number, y: number): DropTarget | nu
       return { tileId, zone: 'center', index, rect: { left: edge - 1, top: strip.top, width: 2, height: strip.height }, tile }
     }
     const side = y < strip.bottom ? 'center' : dropZone(tile, x - tile.left, y - tile.top)
-    const zone = side !== 'center' && fits(splitTile(layout, tileId, side).root, node.parentElement!.getBoundingClientRect()) ? side : 'center'
+    const zone = side !== 'center' && !layout.maximized && fits(splitTile(layout, tileId, side).root, node.parentElement!.getBoundingClientRect()) ? side : 'center'
     if (zone === 'center' && own) return null
     const row = zone === 'left' || zone === 'right'
     const column = zone === 'up' || zone === 'down'
@@ -106,7 +112,9 @@ const actionIcon = { left: Columns2, right: Columns2, up: Rows2, down: Rows2, ce
 /**
  * A drag in flight: the cover that keeps a terminal or a Browser from taking
  * the pointer, the preview of where the drop lands and the chip that names it.
- * Escape cancels, and the click that follows the release is swallowed.
+ * Escape cancels, and the click that follows the release is swallowed. Over
+ * what was lifted the cover lets the pointer through, so a release there is
+ * still the click it began as.
  */
 export function TileDragLayer() {
   const drag = useStore((s) => s.tileDrag)
@@ -114,7 +122,7 @@ export function TileDragLayer() {
   const [moved, setMoved] = useState<{ x: number; y: number } | null>(null)
   const chip = useRef<HTMLDivElement>(null)
   const point = moved ?? drag
-  const target = drag && point && targetAt(drag, point.x, point.y)
+  const target = drag && point && targetAt(drag, point.x, point.y, ctx)
   const run = drag ? ctx.runs[drag.runId] : undefined
   const title = run ? runLabel(run) : 'Session'
   const name = drag?.view ? `${title} · ${runViewLabel[drag.view]}` : title
@@ -132,19 +140,26 @@ export function TileDragLayer() {
       else setMoved({ x: event.clientX, y: event.clientY })
     }, { signal })
     window.addEventListener('pointerup', (event) => {
-      swallowClick()
-      const to = targetAt(drag, event.clientX, event.clientY)
       end()
+      if (inside(drag.from, event.clientX, event.clientY)) return
+      swallowClick()
+      const to = targetAt(drag, event.clientX, event.clientY, ctx)
       if (!to) return
       changeTiles((before, context) => dropTab(before, drag, to.tileId, to.zone, context, to.index), !drag.tabId)
       say(`${name}: ${action(to)}`)
     }, { signal })
     window.addEventListener('pointercancel', end, { signal })
     window.addEventListener('keydown', (event) => {
+      event.stopPropagation()
       if (event.key !== 'Escape') return
       event.preventDefault()
-      event.stopPropagation()
-      window.addEventListener('pointerup', swallowClick, { once: true })
+      const released = new AbortController()
+      for (const type of ['pointerup', 'pointerdown']) {
+        window.addEventListener(type, () => {
+          released.abort()
+          if (type === 'pointerup') swallowClick()
+        }, { capture: true, signal: released.signal })
+      }
       end()
       say('Drag cancelled')
     }, { capture: true, signal })
@@ -168,7 +183,7 @@ export function TileDragLayer() {
   const ViewIcon = drag.view && runViewIcon[drag.view]
   const ActionIcon = target && actionIcon[target.zone]
   return createPortal(
-    <div aria-hidden className="fixed inset-0 z-50 cursor-grabbing select-none">
+    <div aria-hidden className={cn('fixed inset-0 z-50 cursor-grabbing select-none', point && inside(drag.from, point.x, point.y) && 'pointer-events-none')}>
       {target && (
         <div
           data-slot="drop-preview"

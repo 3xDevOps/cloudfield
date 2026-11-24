@@ -368,8 +368,8 @@ export interface TilesSlice {
   tiles: TileLayout
   /** The tile area is too small for `tiles`, so it draws the focused tile alone. */
   tilesCramped: boolean
-  /** What is being dragged to a tile, and where the pointer was when it lifted. */
-  tileDrag: (TileDragSource & { x: number; y: number }) | null
+  /** What is being dragged to a tile, where the pointer was when it lifted, and the rectangle of what it lifted from. */
+  tileDrag: (TileDragSource & { x: number; y: number; from: DOMRect }) | null
   /** Each member's `tiles` on this browser, by identity key. */
   savedTiles: Record<string, TileLayout>
   /** For a store that just read every session from the server: closes the tabs of sessions that are gone. */

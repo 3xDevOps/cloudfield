@@ -42,17 +42,18 @@ function Page() {
 /**
  * Lays the page out as a browser would, which jsdom never does: the area fills
  * the window, each tile takes its percentages of it, a strip is 32px tall and
- * its tabs are 100px wide.
+ * its tabs are 100px wide. A sidebar row and a view segment are 10px squares.
  */
 function show(width = 1600, height = 900) {
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
     const box = (left: number, top: number, w: number, h: number) => ({ left, top, width: w, height: h, right: left + w, bottom: top + h, x: left, y: top, toJSON: () => ({}) })
     const node = this.closest<HTMLElement>('[data-tile]')
-    if (!node) return box(0, 0, width, height)
+    if (!node) return this.matches('[data-run-row]') ? box(0, 0, 10, 10) : box(0, 0, width, height)
     const share = (value: string, of: number) => (parseFloat(value) / 100) * of
     const tile = box(share(node.style.left, width), share(node.style.top, height), share(node.style.width, width), share(node.style.height, height))
     const tab = this.closest<HTMLElement>('[data-tab]')
-    if (this === tab) return box(tile.left + [...node.querySelectorAll('[data-tab]')].indexOf(tab) * 100, tile.top, 100, 32)
+    if (tab) return box(tile.left + [...node.querySelectorAll('[data-tab]')].indexOf(tab) * 100, tile.top, 100, 32)
+    if (this.role === 'tab') return box(tile.left, tile.top + 32, 10, 10)
     return this === node.firstElementChild ? box(tile.left, tile.top, tile.width, 32) : tile
   })
   act(() => useStore.getState().navigate('run', { runId: 'run_1' }))
@@ -189,6 +190,53 @@ describe('dragging a sidebar row', () => {
     expect(state().tileDrag).toBeNull()
   })
 
+  it('swallows no later click when the release after Escape never arrived', () => {
+    show()
+    lift(row(second))
+    fireEvent.keyDown(window, { key: 'Escape' })
+    fireEvent.pointerDown(row(second), { button: 0, pointerType: 'mouse', clientX: 5, clientY: 5 })
+    release(5, 5)
+    fireEvent.click(row(second))
+    expect(state().route.params.runId).toBe('run_2')
+  })
+
+  it('opens the session when a shaky click travels 4px and ends on the row', () => {
+    show()
+    fireEvent.pointerDown(row(second), { button: 0, pointerType: 'mouse', clientX: 5, clientY: 5 })
+    over(9, 9)
+    expect(chip()).toBe(second)
+    expect(preview()).toBeNull()
+    expect(document.querySelector('[data-slot=drag-chip]')!.parentElement!.className).toContain('pointer-events-none')
+    release(9, 9)
+    fireEvent.click(row(second))
+    expect(tree()).toEqual(['run_2'])
+    expect(state().route.params.runId).toBe('run_2')
+  })
+
+  it('only adds a tab to a maximized tile', async () => {
+    show()
+    await beside('run_3')
+    await act(async () => changeTiles((layout) => ({ ...layout, maximized: true })))
+    lift(row(second))
+    over(1500, 450)
+    expect(chip()).toBe(`${second}Add as tab`)
+    expect(preview()!.style.width).toBe('1600px')
+    release(1500, 450)
+    expect(tree()).toEqual(['row', ['run_1'], ['run_3', 'run_2']])
+    expect(state().tiles.maximized).toBe(true)
+  })
+
+  it('answers no shortcut while a drag is in flight', async () => {
+    show()
+    await tab('run_2')
+    const before = state().tiles
+    lift(sessionTab(1, second))
+    fireEvent.keyDown(document.body, { key: 'w', code: 'KeyW' })
+    fireEvent.keyDown(document.body, { key: '\\', code: 'Backslash', ctrlKey: true })
+    expect(state().tiles).toBe(before)
+    expect(state().tileDrag).not.toBeNull()
+  })
+
   it('ends when the button was let go outside the window', () => {
     show()
     lift(row(second))
@@ -265,6 +313,30 @@ describe('dragging a view', () => {
     release(1500, 450)
     expect(names()).toEqual([`${first}, Chat`, `${first}, Changes`])
     expect(segment(1, 'Changes').className).not.toContain('outline-dashed')
+  })
+
+  it('opens the view when a shaky click travels 4px and ends on the segment', () => {
+    show()
+    fireEvent.pointerDown(segment(1, 'Changes'), { button: 0, pointerType: 'mouse', clientX: 5, clientY: 37 })
+    over(9, 41)
+    expect(state().tileDrag).not.toBeNull()
+    expect(preview()).toBeNull()
+    release(9, 41)
+    fireEvent.click(segment(1, 'Changes'))
+    expect(names()).toEqual([`${first}, Changes`])
+  })
+
+  it('offers nothing on the tile whose tab already holds the view', async () => {
+    show()
+    await beside('run_1', 'changes')
+    await tab('run_2')
+    const before = tabIds()
+    lift(segment(1, 'Changes'))
+    over(1200, 450)
+    expect(preview()).toBeNull()
+    release(1200, 450)
+    expect(tree()).toEqual(['row', ['run_1'], ['run_1', 'run_2']])
+    expect(tabIds()).toEqual(before)
   })
 
   it('opens a view on the click, not the press, and does not drag the view it shows', () => {
