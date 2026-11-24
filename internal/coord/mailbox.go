@@ -385,8 +385,8 @@ func (s *Service) Reply(ctx context.Context, from domain.RunID, p protocol.Coord
 }
 
 // Inbox answers coord.inbox for run: acknowledge the previous batch, then
-// return the next one. If no batch is ready, wait_seconds performs one
-// bounded server-side wait without polling.
+// return the next one unless ack_only is set. If no batch is ready,
+// wait_seconds performs one bounded server-side wait without polling.
 func (s *Service) Inbox(ctx context.Context, run domain.RunID, p protocol.CoordInboxParams) (protocol.CoordInboxResult, *protocol.Error) {
 	const method = protocol.MethodCoordInbox
 	if s.cfg.Disabled {
@@ -396,6 +396,13 @@ func (s *Service) Inbox(ctx context.Context, run domain.RunID, p protocol.CoordI
 		return protocol.CoordInboxResult{}, runClosing(method)
 	}
 	defer s.leaveRun(run)
+	if !p.AckOnly {
+		s.mu.Lock()
+		if _, refused := s.mailRefusals[run]; refused {
+			s.mailRefusals[run] = true
+		}
+		s.mu.Unlock()
+	}
 	if p.WaitSeconds < 0 || p.WaitSeconds > protocol.CoordMaxInboxWaitSeconds {
 		return protocol.CoordInboxResult{}, invalidParams(method,
 			fmt.Sprintf("wait_seconds must be between 0 and %d", protocol.CoordMaxInboxWaitSeconds))
@@ -413,6 +420,20 @@ func (s *Service) Inbox(ctx context.Context, run domain.RunID, p protocol.CoordI
 	}
 	if rpcErr := s.ownerReaches(ctx, method, self); rpcErr != nil {
 		return protocol.CoordInboxResult{}, rpcErr
+	}
+	if p.AckOnly {
+		token, acked, err := s.cfg.Mail.AckRunMessages(ctx, run, p.AckToken)
+		if err != nil {
+			return protocol.CoordInboxResult{}, internalError(method, err)
+		}
+		if acked {
+			s.kickOutbox()
+		}
+		more, err := s.cfg.Mail.CountUndeliveredRunMessages(ctx, run)
+		if err != nil {
+			return protocol.CoordInboxResult{}, internalError(method, err)
+		}
+		return protocol.CoordInboxResult{AckToken: token, Acked: acked, More: more}, nil
 	}
 	var waiter chan struct{}
 	if p.WaitSeconds > 0 {
@@ -591,6 +612,11 @@ func (s *Service) CoordReport(ctx context.Context, run domain.RunID, p protocol.
 	if s.cfg.Children != nil && !existingFinalized {
 		if err := s.cfg.Children.ValidateReport(ctx, run, store.CoordOutcome(p.Outcome)); err != nil {
 			return protocol.CoordReportResult{}, rpcError(method, err)
+		}
+	}
+	if !existingFinalized && (p.Outcome == protocol.CoordOutcomeSuccess || p.Outcome == protocol.CoordOutcomeFailure) {
+		if rpcErr := s.refuseUnreadMail(ctx, run); rpcErr != nil {
+			return protocol.CoordReportResult{}, rpcErr
 		}
 	}
 	nextAction := "review retained evidence"

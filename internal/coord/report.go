@@ -337,3 +337,33 @@ func reportText(text string) string {
 	}, text)
 	return strings.Join(strings.Fields(text), " ")
 }
+
+// refuseUnreadMail refuses a report while mail no inbox read has returned
+// waits. One coord.inbox call after a refusal lets the next report through
+// whatever arrived since, so a session is never trapped; a store error lets
+// the report through.
+func (s *Service) refuseUnreadMail(ctx context.Context, run domain.RunID) *protocol.Error {
+	unread, err := s.cfg.Mail.CountUndeliveredRunMessages(ctx, run)
+	var senders []domain.RunID
+	if err == nil && unread > 0 {
+		senders, err = s.cfg.Mail.UndeliveredRunMessageSenders(ctx, run, 5)
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err != nil || unread == 0 || s.mailRefusals[run] {
+		delete(s.mailRefusals, run)
+		return nil
+	}
+	s.mailRefusals[run] = false
+	from := make([]string, len(senders))
+	for i, sender := range senders {
+		from[i] = string(sender)
+	}
+	noun := "messages"
+	if unread == 1 {
+		noun = "message"
+	}
+	return &protocol.Error{Code: protocol.CodeInvalidState, Message: fmt.Sprintf(
+		"%s: %d unread %s (from %s). Run aether-internal inbox, handle them, then report again.",
+		protocol.MethodCoordReport, unread, noun, strings.Join(from, ", "))}
+}

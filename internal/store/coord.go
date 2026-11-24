@@ -205,7 +205,14 @@ type MessageStore interface {
 	// only when no batch is outstanding is a new one selected, stamped,
 	// and tokenized - all in one transaction. An empty inbox returns no
 	// messages and no token.
+	// UndeliveredRunMessageSenders lists up to limit distinct senders of the
+	// messages CountUndeliveredRunMessages counts, oldest first.
+	UndeliveredRunMessageSenders(ctx context.Context, to domain.RunID, limit int) ([]domain.RunID, error)
 	DeliverRunMessages(ctx context.Context, to domain.RunID, ackToken string, limit int) ([]*RunMessage, string, bool, error)
+	// AckRunMessages acknowledges ackToken's batch as DeliverRunMessages
+	// does and delivers nothing. It returns the token of the batch still
+	// outstanding, if any.
+	AckRunMessages(ctx context.Context, to domain.RunID, ackToken string) (string, bool, error)
 	// RetireRunMessages retires a released run's unread inbound mail.
 	RetireRunMessages(ctx context.Context, to domain.RunID) error
 	CoordReportedSince(ctx context.Context, run domain.RunID, since time.Time) (bool, error)
@@ -436,6 +443,72 @@ func (d *DB) CountUndeliveredRunMessages(ctx context.Context, to domain.RunID) (
 	return n, nil
 }
 
+func (d *DB) UndeliveredRunMessageSenders(ctx context.Context, to domain.RunID, limit int) ([]domain.RunID, error) {
+	rows, err := d.db.QueryContext(ctx,
+		`SELECT from_run FROM run_messages WHERE to_run = ? AND delivery_token = '' AND `+unreadMessage+`
+		 GROUP BY from_run ORDER BY MIN(created_at), from_run LIMIT ?`, to, limit)
+	if err != nil {
+		return nil, fmt.Errorf("store: undelivered session message senders for %s: %w", to, err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only iteration
+	var out []domain.RunID
+	for rows.Next() {
+		var from domain.RunID
+		if err := rows.Scan(&from); err != nil {
+			return nil, fmt.Errorf("store: undelivered session message senders for %s: %w", to, err)
+		}
+		out = append(out, from)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("store: undelivered session message senders for %s: %w", to, err)
+	}
+	return out, nil
+}
+
+func (d *DB) AckRunMessages(ctx context.Context, to domain.RunID, ackToken string) (string, bool, error) {
+	now, err := encodeTime(time.Now().UTC())
+	if err != nil {
+		return "", false, fmt.Errorf("store: acknowledge session message batch: %w", err)
+	}
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", false, fmt.Errorf("store: acknowledge session message batch: begin: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+	acked, err := ackBatch(ctx, tx, to, ackToken, now)
+	if err != nil {
+		return "", false, err
+	}
+	outstanding, err := outstandingToken(ctx, tx, to)
+	if err != nil {
+		return "", false, err
+	}
+	return outstanding, acked, commitBatch(tx)
+}
+
+func ackBatch(ctx context.Context, tx *sql.Tx, to domain.RunID, ackToken string, now int64) (bool, error) {
+	ack, err := tx.ExecContext(ctx,
+		`UPDATE run_messages SET acked_at = ?
+		 WHERE to_run = ? AND delivery_token <> '' AND delivery_token = ? AND `+unreadMessage,
+		now, to, ackToken,
+	)
+	if err != nil {
+		return false, fmt.Errorf("store: acknowledge session message batch: %w", err)
+	}
+	ackedRows, err := ack.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("store: acknowledge session message batch: %w", err)
+	}
+	if ackedRows == 0 {
+		return false, nil
+	}
+	if err := enqueueCoordAudit(ctx, tx, CoordAuditAcked,
+		`m.to_run = ? AND m.delivery_token = ? AND m.acked_at = ?`, to, ackToken, now); err != nil {
+		return false, fmt.Errorf("store: acknowledge session message batch: %w", err)
+	}
+	return true, nil
+}
+
 func (d *DB) DeliverRunMessages(ctx context.Context, to domain.RunID, ackToken string, limit int) ([]*RunMessage, string, bool, error) {
 	if to == "" {
 		return nil, "", false, errors.New("store: deliver session messages: to_run is required")
@@ -453,24 +526,9 @@ func (d *DB) DeliverRunMessages(ctx context.Context, to domain.RunID, ackToken s
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
 
-	ack, aerr := tx.ExecContext(ctx,
-		`UPDATE run_messages SET acked_at = ?
-		 WHERE to_run = ? AND delivery_token <> '' AND delivery_token = ? AND `+unreadMessage,
-		now, to, ackToken,
-	)
-	if aerr != nil {
-		return nil, "", false, fmt.Errorf("store: acknowledge session message batch: %w", aerr)
-	}
-	ackedRows, aerr := ack.RowsAffected()
-	if aerr != nil {
-		return nil, "", false, fmt.Errorf("store: acknowledge session message batch: %w", aerr)
-	}
-	acked := ackedRows > 0
-	if acked {
-		if qerr := enqueueCoordAudit(ctx, tx, CoordAuditAcked,
-			`m.to_run = ? AND m.delivery_token = ? AND m.acked_at = ?`, to, ackToken, now); qerr != nil {
-			return nil, "", false, fmt.Errorf("store: acknowledge session message batch: %w", qerr)
-		}
+	acked, err := ackBatch(ctx, tx, to, ackToken, now)
+	if err != nil {
+		return nil, "", false, err
 	}
 
 	outstanding, err := outstandingToken(ctx, tx, to)
