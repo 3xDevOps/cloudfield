@@ -226,8 +226,10 @@ type Session struct {
 	loggedOwed  bool
 	// taskCalls holds the last snapshot of each tool call whose task runs;
 	// endedTasks the status of tasks that ended before their tool call
-	// arrived, oldest first in endedOrder.
+	// arrived, oldest first in endedOrder. workflows holds the progress of
+	// workflow tasks that run, or ended before their tool call arrived.
 	taskCalls  map[string]ToolCall
+	workflows  map[string]*workflowState
 	wakeups    agentWakeups
 	endedTasks map[string]string
 	endedOrder []string
@@ -275,6 +277,7 @@ func Start(ctx context.Context, r io.Reader, w io.WriteCloser, cfg Config) (*Ses
 		subs:       make(map[chan Item]struct{}),
 		tasks:      make(map[string]*liveTask),
 		taskCalls:  make(map[string]ToolCall),
+		workflows:  make(map[string]*workflowState),
 		endedTasks: make(map[string]string),
 		wakeups:    newAgentWakeups(),
 		spend:      Spend{Total: cfg.Cost},

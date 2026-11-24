@@ -161,6 +161,9 @@ type ToolTask struct {
 	Type string `json:"type,omitempty"`
 	// Status is running, completed, failed or stopped.
 	Status string `json:"status"`
+	// Workflow is the progress of a local_workflow task. A truncated item
+	// carries its name only.
+	Workflow *Workflow `json:"workflow,omitempty"`
 }
 
 type Location struct {
@@ -279,6 +282,7 @@ func (it *Item) shrink() {
 		tc.RawInput = nil
 		tc.RawOutput = nil
 		tc.Content = nil
+		tc.Task = tc.Task.brief()
 		if len(tc.Locations) > 32 {
 			tc.Locations = tc.Locations[:32]
 		}
