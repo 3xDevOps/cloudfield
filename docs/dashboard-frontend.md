@@ -2989,7 +2989,7 @@ Session for an Enhanced session or any session that streams a session (`acp: tru
 Terminal otherwise. Trace follows Chat for a session with `acp: true` only.
 Files is in the list while the session still has its
 checkout, on a gateway that serves `files.tree` (`hasFiles` in
-`views.ts`): every session the Files tree lists, a completed one
+`src/routes/run/views.ts`): every session the Files tree lists, a completed one
 that is not yet merged or abandoned included. Browser is in the list for
 every session that has not finished, on a gateway that serves
 `dev.browser.status` (`hasBrowser` in `views.ts`); no

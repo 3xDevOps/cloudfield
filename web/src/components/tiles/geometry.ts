@@ -11,7 +11,6 @@ export interface Rect extends Size {
 }
 
 export interface Seam {
-  /** The split's id. */
   id: string
   dir: 'row' | 'column'
   /** The line between the two sides, zero thick, in percent of the area. */

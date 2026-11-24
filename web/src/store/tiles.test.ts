@@ -21,6 +21,7 @@ import {
   settleTiles,
   splitTile,
   tileList,
+  tilesAfter,
   tilesOf,
   viewHolder,
   visibleTiles,
@@ -291,6 +292,14 @@ describe('navigating to a session', () => {
     expect(next).toMatchObject({ focused: 'right', maximized: true })
   })
 
+  it('lands a view the session no longer offers on the tab that shows its fallback', () => {
+    const ended: ViewContext = { ...context(), runs: runRecords(run({ id: 'run_1', status: 'merged' })) }
+    const start = layout(split('s', 'row', tile('left', tab('a', 'run_1', 'terminal')), tile('right', tab('c', 'run_1', 'changes'))), 'right')
+    const next = go(start, { runId: 'run_1', view: 'browser' }, ended)
+    expect(next.focused).toBe('left')
+    expect(settleTiles(next, ended)).toEqual({ ...start, focused: 'left' })
+  })
+
   it('ignores a view name that is not a view', () => {
     expect(go(two(), { runId: 'run_1', view: 'nope' })).toEqual(two())
   })
@@ -472,5 +481,21 @@ describe('the tiles in the store', () => {
     store.getState().patchRun('run_1', { status: 'merged' })
     store.getState().navigate('run', { runId: 'run_1', view: 'changes' })
     expect(tabs(store.getState())).toEqual(['run_1:changes'])
+  })
+
+  it('leaves the layout alone when a change names a tab the settle closed', async () => {
+    const store = createRootStore()
+    await hydrate(store, fakeApi({ runList: async () => [run({ mode: 'acp', acp: true })] }))
+    store.getState().navigate('run', { runId: 'run_1', view: 'browser' })
+    const empty = splitTile(store.getState().tiles, store.getState().tiles.focused, 'right')
+    store.setState({ tiles: openTab(empty, empty.focused, 'run_1', viewContext(store.getState())) })
+    const [first, second] = tileList(store.getState().tiles.root)
+    store.getState().patchRun('run_1', { status: 'merged' })
+
+    store.setState((s) => tilesAfter(s, (l) => activateTab(l, second.active)))
+    expect(tabs(store.getState())).toEqual(['run_1:session'])
+    store.setState({ tiles: layout(split('s', 'row', first, second), first.id) })
+    store.setState((s) => tilesAfter(s, (l) => moveTab(l, second.active, first.id)))
+    expect(tabs(store.getState())).toEqual(['run_1:session'])
   })
 })

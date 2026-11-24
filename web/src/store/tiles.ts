@@ -62,7 +62,7 @@ export function resolveView(tab: Pick<TileTab, 'runId' | 'view'>, run: RunRecord
 }
 
 /** Undefined while the session is not loaded and nothing names a view. */
-function shownView(tab: TileTab, ctx: ViewContext): RunView | undefined {
+function shownView(tab: Pick<TileTab, 'runId' | 'view'>, ctx: ViewContext): RunView | undefined {
   const run = ctx.runs[tab.runId]
   return run ? resolveView(tab, run, ctx.cap, ctx.memory) : tab.view ?? ctx.memory[tab.runId]
 }
@@ -87,7 +87,6 @@ export function tilesOf(layout: TileLayout, runId: string): Tile[] {
   return visibleTiles(layout).filter((tile) => activeTab(tile)?.runId === runId)
 }
 
-/** Each session on screen, once. */
 export function onScreenRuns(layout: TileLayout): string[] {
   return [...new Set(visibleTiles(layout).flatMap((tile) => activeTab(tile)?.runId ?? []))]
 }
@@ -156,11 +155,11 @@ export function maximizeTile(layout: TileLayout, tileId: string | null): TileLay
 }
 
 export function activateTab(layout: TileLayout, tabId: string): TileLayout {
-  const tile = tileList(layout.root).find((candidate) => candidate.tabs.some((tab) => tab.id === tabId))!
+  const tile = tileList(layout.root).find((candidate) => candidate.tabs.some((tab) => tab.id === tabId))
+  if (!tile) return layout
   return settled(layout, inTile(layout, tile.id, () => ({ ...tile, active: tabId })), tile.id)
 }
 
-/** Closing a tile's last tab removes the tile. */
 export function closeTab(layout: TileLayout, tabId: string): TileLayout {
   return closeTabs(layout, (tab) => tab.id === tabId)
 }
@@ -169,7 +168,6 @@ export function closeRun(layout: TileLayout, runId: string): TileLayout {
   return closeTabs(layout, (tab) => tab.runId === runId)
 }
 
-/** A new, focused, empty tile on `side` of `tileId`. */
 export function splitTile(layout: TileLayout, tileId: string, side: TileSide): TileLayout {
   const fresh: Tile = { id: randomID('tile'), tabs: [], active: '' }
   const first = side === 'left' || side === 'up'
@@ -191,7 +189,8 @@ export function setRatio(layout: TileLayout, splitId: string, ratio: number): Ti
 
 /** Moves a tab to `tileId`, active and focused there. `index` counts the target's other tabs; omitted, the tab goes last. */
 export function moveTab(layout: TileLayout, tabId: string, tileId: string, index?: number): TileLayout {
-  const moved = tileList(layout.root).flatMap((tile) => tile.tabs).find((tab) => tab.id === tabId)!
+  const moved = tileList(layout.root).flatMap((tile) => tile.tabs).find((tab) => tab.id === tabId)
+  if (!moved) return layout
   const root = mapTiles(layout.root, (tile) => {
     if (tile.id !== tileId) return withoutTabs(tile, (tab) => tab.id === tabId)
     const rest = tile.tabs.filter((tab) => tab.id !== tabId)
@@ -237,15 +236,18 @@ export function openTab(layout: TileLayout, tileId: string, runId: string, ctx: 
  * 4. it is a background tab: the first one;
  * 5. else it replaces the focused tile's active tab, or fills an empty tile.
  * The tab takes the named view and the route's repo, and its tile the focus.
+ * Rule 1 compares what the named view resolves to, so a view the session does
+ * not offer lands on the tab that already shows its fallback.
  */
 export function routeTiles(layout: TileLayout, params: Record<string, string>, ctx: ViewContext): TileLayout {
   const view = isRunView(params.view) ? params.view : undefined
+  const shown = view && shownView({ runId: params.runId, view }, ctx)
   const placed = ({ id, runId, view: own }: TileTab): TileTab =>
     ({ id, runId, ...((view ?? own) && { view: view ?? own }), ...(params.repo && { repo: params.repo }) })
   const held = tileList(layout.root).flatMap((tile) => tile.tabs.filter((tab) => tab.runId === params.runId).map((tab) => ({ tile, tab })))
   const active = held.filter(({ tile, tab }) => tile.active === tab.id)
   const target =
-    (view && held.find(({ tab }) => shownView(tab, ctx) === view)) ||
+    (shown && held.find(({ tab }) => shownView(tab, ctx) === shown)) ||
     active.find(({ tile }) => tile.id === layout.focused) ||
     active[0] ||
     held[0]
