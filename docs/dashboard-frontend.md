@@ -32,10 +32,13 @@ This guide describes the dashboard's routes, store and components.
 `src/app/client-runtime.tsx`, which is a client component that dynamically
 imports `src/App.tsx` with `ssr: false`. This boundary keeps the browser-only
 store, WebSocket, xterm and Electron bridge out of static prerendering. The
-import's `loading` component is prerendered into `index.html`, so the
-Cloudfield mark paints on the themed background while the app chunk
-downloads. It appears after 300ms, so a fast load and the desktop launch
-splash never show it. Next
+page also renders the Cloudfield mark beside that boundary, so `index.html`
+carries it and it paints on the themed background while the scripts download.
+It appears after 300ms, so a fast load and the desktop launch splash normally do
+not show it, and a CSS sibling rule hides it once `App` mounts its
+`data-app` root. It sits outside the boundary because React replaces a
+client-only boundary's prerendered content when it starts, which would
+restart the fade. Next
 still emits the document, CSS, fonts and JavaScript assets; the existing
 client-side registry and in-memory `navigate()` state remain the dashboard's
 navigation model. Next does not run in production.

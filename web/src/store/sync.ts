@@ -257,7 +257,7 @@ export async function hydrate(
     )
     s.setOverlaps(overlaps)
     if (signal?.aborted) return false
-    // Device cards are an extra; their failure must not fail hydration.
+    // These reads are extras; a failure must not fail hydration.
     await Promise.all([
       loadDevices(store, client).catch(ignore),
       loadWatches(store, client).catch(ignore),

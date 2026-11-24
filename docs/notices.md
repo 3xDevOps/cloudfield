@@ -79,9 +79,6 @@ The dashboard bundles these fonts under the SIL Open Font License 1.1:
   Only the Latin variable WOFF2 from the
   [`@fontsource-variable/open-sans`](https://github.com/fontsource/font-files/tree/main/fonts/variable/open-sans)
   package is bundled.
-- VT323 for the Play listing's feature graphic
-  ([`web/public/fonts/LICENSE-vt323.txt`](../web/public/fonts/LICENSE-vt323.txt)).
-  `web/src/fonts/vt323-latin.woff2` is the Latin subset at weight 400.
 - `JetBrainsMono NFM`, a Nerd Fonts Mono patch of JetBrains Mono, for xterm
   and the UI's private-use symbol fallback
   ([`web/public/fonts/LICENSE-jetbrains-mono-nfm.txt`](../web/public/fonts/LICENSE-jetbrains-mono-nfm.txt)).
@@ -100,7 +97,10 @@ The dashboard bundles these fonts under the SIL Open Font License 1.1:
 
 `scripts/make-icons.py` uses VT323 to draw the wordmark on the Play
 listing's feature graphic, `android/listing/feature-graphic.png`, whose
-tagline is JetBrainsMono NFM.
+tagline is JetBrainsMono NFM. The dashboard does not bundle VT323: the
+repository carries `web/src/fonts/vt323-latin.woff2`, the Latin subset at
+weight 400, under the SIL Open Font License 1.1
+([`web/public/fonts/LICENSE-vt323.txt`](../web/public/fonts/LICENSE-vt323.txt)).
 
 Agent glyphs are their vendors' marks, used only to identify each agent; each
 mark is its owner's trademark. The paths in `web/src/components/icons.ts` come

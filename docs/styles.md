@@ -693,6 +693,9 @@ literal time or curve.
   so the two never double up. A sidebar group turns its chevron and fades its
   list back in when the viewer reopens it; it never glides its height, since
   a group can hold hundreds of rows.
+- The first-load placeholder, the Cloudfield mark prerendered by
+  `web/src/app/page.tsx`, fades in over 200ms after a 300ms delay, then holds
+  still; under reduced motion it cuts in at the same moment.
 - Only rows added after the first render enter: `animate-entrance` fades in
   and rises 4px. `playEntrance` staggers a burst by `--stagger-row` (30ms) up
   to the eighth row; the rest arrive with it. The Session list plays it only
