@@ -88,7 +88,7 @@ export function MissingRun({ tiled }: { tiled?: boolean }) {
         <p className="mt-0.5 break-words text-ui leading-5 text-muted">
           This session is not on the server. It may have been deleted.
         </p>
-        <Button size="sm" className="mt-2" onClick={() => navigate('board')}>
+        <Button size="sm" variant={tiled ? 'secondary' : 'primary'} className="mt-2" onClick={() => navigate('board')}>
           <ArrowLeft className="size-3.5" aria-hidden />
           Back to board
         </Button>

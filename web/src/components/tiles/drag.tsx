@@ -1,7 +1,7 @@
 import { useContext, useLayoutEffect, useRef, useState } from 'react'
 import type * as React from 'react'
 import { createPortal } from 'react-dom'
-import { Columns2, Plus, Rows2 } from '@/components/icons'
+import { ArrowRightLeft, Columns2, Plus, Rows2 } from '@/components/icons'
 import { changeTiles, TileAreaContext } from '@/components/tiles/area'
 import { dropZone, fits, type Rect } from '@/components/tiles/geometry'
 import { AgentGlyph } from '@/components/ui/agent-glyph'
@@ -14,7 +14,7 @@ import { runViewLabel } from '@/routes/run/views'
 import { useStore } from '@/store'
 import { useRunPresentation } from '@/store/hooks'
 import type { RunRecord } from '@/store/runs'
-import { dropTab, splitTile, tileList, viewHolder, type TileDragSource, type TileSide, type ViewContext } from '@/store/tiles'
+import { activeTab, dropTab, splitTile, tileList, viewHolder, type TileDragSource, type TileSide, type ViewContext } from '@/store/tiles'
 
 /** How far a press travels, in pixels, before it is a drag and not a click. */
 const threshold = 4
@@ -45,6 +45,9 @@ interface DropTarget {
   /** What the drop will cover, in viewport pixels. */
   rect: Rect
   tile: DOMRect
+  strip: DOMRect
+  /** Where a new tab lands in the strip. */
+  tabsEnd: number
 }
 
 const inside = (rect: DOMRect, x: number, y: number) => x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom
@@ -66,7 +69,7 @@ function targetAt(source: TileDragSource & { from: DOMRect }, x: number, y: numb
       const others = [...node.querySelectorAll<HTMLElement>('[data-tab]')].filter((tab) => tab.dataset.tab !== source.tabId).map((tab) => tab.getBoundingClientRect())
       const index = others.filter((tab) => tab.left + tab.width / 2 < x).length
       const edge = index < others.length ? others[index].left : others.at(-1)?.right ?? strip.left
-      return { tileId, zone: 'center', index, rect: { left: edge - 1, top: strip.top, width: 2, height: strip.height }, tile }
+      return { tileId, zone: 'center', index, rect: { left: Math.max(edge - 1, strip.left + 2), top: strip.top, width: 2, height: strip.height }, tile, strip, tabsEnd: edge }
     }
     const side = y < strip.bottom ? 'center' : dropZone(tile, x - tile.left, y - tile.top)
     const zone = side !== 'center' && !layout.maximized && fits(splitTile(layout, tileId, side).root, node.parentElement!.getBoundingClientRect()) ? side : 'center'
@@ -83,6 +86,8 @@ function targetAt(source: TileDragSource & { from: DOMRect }, x: number, y: numb
         height: column ? tile.height / 2 : tile.height,
       },
       tile,
+      strip,
+      tabsEnd: [...node.querySelectorAll('[data-tab]')].at(-1)?.getBoundingClientRect().right ?? strip.left,
     }
   }
   return null
@@ -108,6 +113,7 @@ function ChipSession({ run }: { run: RunRecord }) {
 }
 
 const actionIcon = { left: Columns2, right: Columns2, up: Rows2, down: Rows2, center: Plus }
+const ghost = 'fixed flex items-center gap-1.5 px-3 text-ui font-medium'
 
 /**
  * A drag in flight: the cover that keeps a terminal or a Browser from taking
@@ -180,21 +186,43 @@ export function TileDragLayer() {
 
   if (!drag) return null
   const ViewIcon = drag.view && runViewIcon[drag.view]
-  const ActionIcon = target && actionIcon[target.zone]
+  const ActionIcon = target && (target.index === undefined ? actionIcon[target.zone] : ArrowRightLeft)
+  const split = target && target.zone !== 'center' ? target : null
+  const stays = split && activeTab(tileList(useStore.getState().tiles.root).find((tile) => tile.id === split.tileId)!)
+  const staysRun = stays ? ctx.runs[stays.runId] : undefined
   return createPortal(
     <div aria-hidden className={cn('fixed inset-0 z-50 cursor-grabbing select-none', point && inside(drag.from, point.x, point.y) && 'pointer-events-none')}>
       {target && (
         <div
           data-slot="drop-preview"
           style={target.rect}
-          className="fixed flex items-center justify-center overflow-hidden border border-accent bg-canvas text-ui font-medium transition-[left,top,width,height] duration-hover ease-hover before:absolute before:inset-0 before:bg-accent-soft motion-reduce:transition-none"
+          className="fixed border border-accent bg-accent-soft transition-[left,top,width,height] duration-hover ease-hover motion-reduce:transition-none"
+        />
+      )}
+      {split && (
+        // The tile that stays, named at the top of the half it keeps.
+        <div
+          style={{
+            left: split.tile.left + (split.zone === 'left' ? split.tile.width / 2 : 0),
+            top: split.tile.top + (split.zone === 'up' ? split.tile.height / 2 : 0),
+            width: split.zone === 'left' || split.zone === 'right' ? split.tile.width / 2 : split.tile.width,
+            height: split.strip.height,
+          }}
+          data-slot="drop-stays"
+          className={cn(ghost, 'border-b border-seam bg-chrome text-muted')}
         >
-          {target.index === undefined && (
-            <span className="relative flex min-w-0 items-center gap-2 px-3">
-              {ViewIcon && <ViewIcon className="size-3.5 shrink-0 text-accent" />}
-              <span className="truncate">{drag.view ? `${runViewLabel[drag.view]} - ${title}` : title}</span>
-            </span>
-          )}
+          {staysRun && <ChipSession run={staysRun} />}
+          <span className="min-w-0 truncate">{staysRun ? runLabel(staysRun) : stays ? 'Session' : 'New tile'}</span>
+        </div>
+      )}
+      {target && !split && target.index === undefined && (
+        <div
+          style={{ left: Math.min(target.tabsEnd, target.strip.right - 160), top: target.strip.top, height: target.strip.height, maxWidth: target.strip.right - target.tabsEnd }}
+          data-slot="drop-tab"
+          className={cn(ghost, 'min-w-40 border border-dashed border-accent bg-canvas')}
+        >
+          {run && <ChipSession run={run} />}
+          <span className="min-w-0 truncate">{name}</span>
         </div>
       )}
       <div

@@ -166,14 +166,14 @@ export function MultiplayerControls({ run, agent, onPeople }: {
 export function PresenceControls({ run, agent, wide }: {
   run: RunRecord
   agent: AgentTerminal
-  /** The focused tile, at 560px and up: words beside the avatars once the row is 720px, where the view switch can spare the room. */
+  /** The focused tile, at 560px and up: words beside the avatars once the row is 960px, where the state's reason can spare the room. */
   wide: boolean
 }) {
   const { self, summary, status, stream, connection, maySteer, controllerID, person } = usePresence(run, agent)
   const controller = controllerID ? person(controllerID) : undefined
   const watchers = status?.watchers.filter((id) => id !== self.id && id !== controllerID) ?? []
   const ringed = 'ring-1 ring-accent ring-offset-1 ring-offset-canvas'
-  const words = 'hidden @min-[45rem]/views:block'
+  const words = 'hidden @min-[60rem]/views:block'
   return (
     <div role="group" aria-label="Multiplayer controls" className="flex shrink-0 items-center gap-1 text-ui-sm text-muted">
       {watchers.length > 0 && (
@@ -187,7 +187,7 @@ export function PresenceControls({ run, agent, wide }: {
           <MenuTrigger asChild>
             <Button variant="ghost" size="sm" aria-label="You control" className="px-1">
               <Avatar size="header" {...controller} className={ringed} />
-              {wide && <span className="hidden items-center gap-1.5 @min-[45rem]/views:flex">You control<ChevronDown aria-hidden /></span>}
+              {wide && <span className="hidden items-center gap-1.5 @min-[60rem]/views:flex">You control<ChevronDown aria-hidden /></span>}
             </Button>
           </MenuTrigger>
           <MenuContent align="end">

@@ -41,6 +41,7 @@ export function Tile({ tile, rect, parked, narrow, room, linked, onSlot }: {
     <Tabs value={tile.active} onValueChange={(id) => changeTiles((before) => activateTab(before, id))} asChild>
       <section
         data-tile={tile.id}
+        data-tile-rest={(!focused && !parked) || undefined}
         tabIndex={-1}
         inert={parked}
         aria-hidden={parked || undefined}
@@ -62,8 +63,8 @@ export function Tile({ tile, rect, parked, narrow, room, linked, onSlot }: {
             {!run && <MissingRun tiled />}
           </TabsContent>
         ) : (
-          <div className="min-h-0 flex-1 overflow-y-auto p-6">
-            <Picker tileId={tile.id} runId={splitFrom} autoFocus={focused} className="mx-auto max-w-lg" />
+          <div className="flex min-h-0 flex-1 justify-center p-6">
+            <Picker tileId={tile.id} runId={splitFrom} autoFocus={focused} className="w-full max-w-lg" />
           </div>
         )}
       </section>

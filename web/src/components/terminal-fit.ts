@@ -38,6 +38,8 @@ export function useTerminalFit(terminal: Terminal | null, enabled: boolean, forc
       setDrawn(chosen)
       return
     }
+    // A desktop mirror stays readable: past 70% of the chosen size its grid scrolls sideways instead.
+    const floor = force ? Math.max(minFitTerminalFontSize, Math.ceil((chosen * 0.7) / fitStep) * fitStep) : minFitTerminalFontSize
     let widthFit = chosen
     let pinch: { distance: number; from: number; size: number } | null = null
 
@@ -57,10 +59,10 @@ export function useTerminalFit(terminal: Terminal | null, enabled: boolean, forc
       if (width <= 0 || drawnWidth <= 0) return
       const proportional = Math.floor((current * width) / drawnWidth / fitStep) * fitStep
       if (!grow && proportional >= current) return
-      widthFit = Math.max(minFitTerminalFontSize, proportional)
+      widthFit = Math.max(floor, proportional)
       setFitted(widthFit)
       if (fitWidth) apply(Math.min(chosen, widthFit))
-      for (let step = 0; fitWidth && step < 8 && gridWidth() > width && (terminal.options.fontSize ?? 0) > minFitTerminalFontSize; step++) {
+      for (let step = 0; fitWidth && step < 8 && gridWidth() > width && (terminal.options.fontSize ?? 0) > floor; step++) {
         widthFit = (terminal.options.fontSize ?? current) - fitStep
         setFitted(widthFit)
         apply(widthFit)

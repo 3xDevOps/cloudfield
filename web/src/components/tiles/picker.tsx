@@ -28,10 +28,12 @@ export function Picker({ tileId, runId, autoFocus, onPicked, className }: {
   /** The session whose other views lead: the tile's own, or the one an empty tile was split from. */
   runId: string | undefined
   autoFocus: boolean
+  /** Set by a popover, which closes on a pick; an empty tile's own picker has none and says a drag fills it too. */
   onPicked?: () => void
   className?: string
 }) {
-  const { layout, ctx, link } = useContext(TileAreaContext)!
+  const { layout, ctx, link, noRoom } = useContext(TileAreaContext)!
+  const [search, setSearch] = useState('')
   const groups = useSidebarGroups()
   const role = useSelfRole()
   const openDialog = useStore((s) => s.openPaletteDialog)
@@ -47,6 +49,7 @@ export function Picker({ tileId, runId, autoFocus, onPicked, className }: {
   const elsewhere = run ? viewsElsewhere(layout, tileId, run.id, ctx) : {}
   const onScreen = onScreenRuns(layout)
   const rows = groups.map((group) => ({ ...group, rows: group.runs.flatMap((tree) => [tree, ...tree.children]) }))
+  const refused = noRoom && onPicked
   const pick = (id: string, view?: (typeof runViews)[number]) => {
     changeTiles((before, context) => pickTab(before, tileId, id, context, view), true)
     onPicked?.()
@@ -62,10 +65,11 @@ export function Picker({ tileId, runId, autoFocus, onPicked, className }: {
 
   return (
     <section aria-label="Open in this tile" className={cn('flex min-h-0 flex-col gap-2', className)}>
-      <h2 className="text-ui font-medium">Open in this tile</h2>
+      <h2 className="px-2 text-ui font-medium">Open in this tile</h2>
+      {refused && <p className="px-2 text-ui-sm text-muted">No room to split {noRoom}. Add a tab here instead.</p>}
       <Command
         label="Find a session or view"
-        className="rounded-none bg-transparent"
+        className="flex-1 rounded-none bg-transparent"
         value={pointed}
         onValueChange={(value) => {
           setPointed(value)
@@ -73,11 +77,18 @@ export function Picker({ tileId, runId, autoFocus, onPicked, className }: {
           link((view && elsewhere[view]?.tile) ?? null)
         }}
       >
-        <CommandInput autoFocus={autoFocus} placeholder="Find a session or view" />
-        <CommandList>
-          <CommandEmpty>No session or view matches.</CommandEmpty>
+        <CommandInput
+          autoFocus={autoFocus}
+          placeholder="Find a session or view"
+          value={search}
+          onValueChange={setSearch}
+          wrapperClassName="mx-1 h-8 shrink-0 rounded-control border border-control bg-canvas focus-within:border-accent focus-within:shadow-field-focus coarse:h-11"
+          className="px-0 focus-visible:outline-0 focus-visible:shadow-none"
+        />
+        <CommandList className="max-h-none flex-1 [mask-image:linear-gradient(to_bottom,black_calc(100%-1.5rem),transparent)] [&_[cmdk-list-sizer]]:pb-6">
+          <CommandEmpty>{search ? 'No session or view matches.' : 'No sessions in this workspace yet.'}</CommandEmpty>
           {run && (
-            <CommandGroup heading={`Other views of ${runLabel(run)}`} className="[&_[cmdk-group-items]]:flex [&_[cmdk-group-items]]:flex-wrap [&_[cmdk-group-items]]:gap-1">
+            <CommandGroup heading={`Other views of ${runLabel(run)}`} className="[&_[cmdk-group-items]]:grid [&_[cmdk-group-items]]:grid-cols-[repeat(auto-fit,minmax(6rem,1fr))] [&_[cmdk-group-items]]:gap-1">
               {offeredViews(run, ctx.cap).filter((view) => view !== shown).map((view) => {
                 const Icon = runViewIcon[view]
                 return (
@@ -106,19 +117,21 @@ export function Picker({ tileId, runId, autoFocus, onPicked, className }: {
           )}
         </CommandList>
       </Command>
-      {canLaunch({ cap: ctx.cap, role }) && (
-        <Button
-          variant="secondary"
-          className="self-start"
-          onClick={() => {
-            onPicked?.()
-            openDialog('launch')
-          }}
-        >
-          <Plus aria-hidden />
-          New session
-        </Button>
-      )}
+      <div className="flex shrink-0 items-center gap-3 border-t border-seam px-1 pt-2 text-ui-sm text-muted empty:hidden">
+        {canLaunch({ cap: ctx.cap, role }) && (
+          <Button
+            variant="secondary"
+            onClick={() => {
+              onPicked?.()
+              openDialog('launch')
+            }}
+          >
+            <Plus aria-hidden />
+            New session
+          </Button>
+        )}
+        {!onPicked && 'or drag a session or a view here'}
+      </div>
     </section>
   )
 }

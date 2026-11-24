@@ -116,7 +116,7 @@ describe('run frame', () => {
   it('keeps the state time on the state line when no reason shows, and on the session tab', async () => {
     open({ paused: true })
     await waitFor(() => expect(within(screen.getByRole('banner')).getByTitle(/^Paused since /)).toBeDefined())
-    expect(within(screen.getByRole('tab', { name: /rewrite the checkout flow/ })).getByTitle(/^Paused since /)).toBeDefined()
+    expect(within(screen.getByRole('tab', { name: /rewrite the checkout flow/ })).getByTitle(/ Paused since /)).toBeDefined()
   })
 
   it('keeps the model and effort out of the state line and in the agent tooltip', async () => {

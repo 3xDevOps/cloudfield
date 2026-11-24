@@ -414,6 +414,7 @@ export function RunHeader({
               hint={`Details (${shortcutLabel('run-details')})`}
               aria-expanded={detailsOpen}
               aria-controls="run-details"
+              className={cn(detailsOpen && 'bg-hover-chrome text-text')}
               onClick={(event) => onDetails(event.currentTarget)}
             >
               <PanelRight />
