@@ -17,14 +17,15 @@ import (
 	"github.com/3xDevOps/Aether/internal/runtime"
 )
 
-// TestKVMColdMemoryReturnsToTheHost checks DAMON_RECLAIM in a guest whose
-// page cache fills it, below the 20% free at which its default watermarks
-// stop it: a third of a file read once leaves the guest, and the host's
-// memory, within twice min_age and 3 minutes, while a file Main reads every
-// 2 seconds stays cached and kdamond stays under 2% of a vCPU. The rest
-// follows more slowly, as DAMON splits it from memory in use. At a 2 GiB
-// limit the session holds enough of the guest's memory to leave under 20%
-// free.
+// TestKVMColdMemoryReturnsToTheHost checks a guest whose page cache fills
+// it, below the 20% free at which DAMON_RECLAIM's default watermarks stop
+// it: DAMON_RECLAIM runs over all of the guest's RAM, a third of a file read
+// once leaves the guest, and the host's memory, within twice min_age and 3
+// minutes, while a file Main reads every 2 seconds stays cached and kdamond
+// stays under 2% of a vCPU. The helper's page cache trim frees most of it
+// first: a third was back in 20 seconds, and in 3 minutes 55 seconds with
+// DAMON_RECLAIM alone. At a 2 GiB limit the session holds enough of the
+// guest's memory to leave under 20% free.
 func TestKVMColdMemoryReturnsToTheHost(t *testing.T) {
 	e := kvmEngine(t)
 	key := "run-cold-memory"
@@ -61,10 +62,6 @@ func TestKVMColdMemoryReturnsToTheHost(t *testing.T) {
 		"dd if=/dev/urandom of=/var/tmp/hot bs=1M count=%d iflag=fullblock oflag=direct status=none", coldMiB, hotMiB), 0)
 	time.Sleep(5 * time.Second)
 	before := guestRAMOnHost(t, key)
-	reclaimed := func() uint64 {
-		return parseUint(t, guestFields(t, e, key, "cat /sys/module/damon_reclaim/parameters/bytes_reclaimed_regions", 1)[0])
-	}
-	reclaimedBefore := reclaimed()
 	free := parseUint(t, guestFields(t, e, key, "cat /var/tmp/cold >/dev/null && awk '/^MemFree:/ {print $2}' /proc/meminfo", 1)[0])
 	read := time.Now()
 	if free*5 > memTotalKiB {
@@ -93,9 +90,6 @@ func TestKVMColdMemoryReturnsToTheHost(t *testing.T) {
 	t.Logf("reading %d MiB left %d of %d KiB free; the host's share of the guest went %d -> %d -> %d bytes, a third back %s after the read (min_age %s)",
 		coldMiB, free, memTotalKiB, before, held, guestRAMOnHost(t, key), time.Since(read).Round(time.Second), minAge)
 
-	if n := reclaimed() - reclaimedBefore; n < coldMiB<<20/3 {
-		t.Errorf("DAMON_RECLAIM paged out %d bytes after the read, under a third of the %d MiB file that left", n, coldMiB)
-	}
 	if n := rootReads() - readIn; n > hotMiB<<20/8 {
 		t.Errorf("while the cold file left, the guest read %d bytes from its root disk: DAMON_RECLAIM evicted the file Main keeps reading", n)
 	}
@@ -110,6 +104,64 @@ func TestKVMColdMemoryReturnsToTheHost(t *testing.T) {
 		t.Errorf("kdamond used %.2f%% of a vCPU", share*100)
 	}
 	t.Logf("kdamond used %.2f%% of a vCPU over %.0f s", share*100, uptime)
+}
+
+// TestKVMBuildCacheReturnsToTheHost checks the helper's page cache trim in a
+// guest that stays mostly free, as one does after a build: of files written
+// and read once on the root disk and in the home, three quarters leave the
+// guest, and the host's memory, within 3 minutes, while a file Main reads
+// every 2 seconds stays cached and the home, whose pages the trim frees
+// while they are still being written out, keeps answering. They were
+// back in 76 seconds; without the trim, 16% was after 3 minutes.
+func TestKVMBuildCacheReturnsToTheHost(t *testing.T) {
+	e := kvmEngine(t)
+	key := "run-build-cache"
+	t.Cleanup(func() { _ = e.destroy(context.Background(), key) })
+	spec := runtime.Spec{
+		Image: "docker.io/library/ubuntu:24.04", CreationKey: key,
+		Command: []string{"/bin/sh", "-c", "while :; do cat /var/tmp/hot >/dev/null 2>&1; sleep 2; done"},
+		Env:     map[string]string{"AETHER_RUN_ID": key}, CPULimit: 1, MemoryLimitBytes: 4 << 30,
+		Mounts: []runtime.Mount{{HostPath: t.TempDir(), ContainerPath: "/root"}},
+	}
+	if _, err := e.create(t.Context(), key, spec, options{Offline: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.start(t.Context(), key); err != nil {
+		t.Fatal(err)
+	}
+	const hotMiB, diskMiB, homeMiB = 64, 1024, 256
+	guestFields(t, e, key, fmt.Sprintf("dd if=/dev/urandom of=/var/tmp/hot bs=1M count=%d iflag=fullblock oflag=direct status=none", hotMiB), 0)
+	time.Sleep(5 * time.Second)
+	before := guestRAMOnHost(t, key)
+	guestFields(t, e, key, fmt.Sprintf("head -c %dM /dev/urandom >/var/tmp/built && head -c %dM /dev/urandom >/root/built && cat /var/tmp/built /root/built >/dev/null", diskMiB, homeMiB), 0)
+	built := time.Now()
+	held := guestRAMOnHost(t, key)
+	if held < before+diskMiB<<20/2 {
+		t.Fatalf("writing and reading %d MiB took the host's share of the guest from %d to only %d bytes", diskMiB+homeMiB, before, held)
+	}
+	rootReads := func() uint64 {
+		return parseUint(t, guestFields(t, e, key, "awk '{print $3 * 512}' $(dirname $(grep -lx root /sys/block/vd*/serial))/stat", 1)[0])
+	}
+	readIn := rootReads()
+	var slowest time.Duration
+	for now := held; now > before+(held-before)/4; now = guestRAMOnHost(t, key) {
+		if time.Since(built) > 3*time.Minute {
+			t.Fatalf("%s after the build the host holds %d bytes of the guest, %d right after it and %d before it", time.Since(built).Round(time.Second), now, held, before)
+		}
+		time.Sleep(5 * time.Second)
+		asked := time.Now()
+		pressure, _ := vmRun(t, e, key, "date >/root/tick && cat /root/tick >/dev/null && head -1 /sys/fs/cgroup/memory.pressure")
+		slowest = max(slowest, time.Since(asked))
+		t.Logf("%s after the build the host holds %d bytes; guest %s", time.Since(built).Round(time.Second), guestRAMOnHost(t, key), strings.TrimSpace(pressure))
+	}
+	t.Logf("the host's share of the guest went %d -> %d -> %d bytes, three quarters of the build back %s after it",
+		before, held, guestRAMOnHost(t, key), time.Since(built).Round(time.Second))
+	if n := rootReads() - readIn; n > hotMiB<<20/8 {
+		t.Errorf("while the build's files left, the guest read %d bytes from its root disk: the trim evicted the file Main keeps reading", n)
+	}
+	if slowest > 2*time.Second {
+		t.Errorf("a write and a read in the home took %s while the helper trimmed", slowest)
+	}
 }
 
 // TestKVMWakeLoadsBackWhatWasSaved measures the two amounts the scheduler's
