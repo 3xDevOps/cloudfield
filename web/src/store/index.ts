@@ -1,5 +1,6 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { createJSONStorage, persist, type StorageValue } from 'zustand/middleware'
+import { shallow } from 'zustand/shallow'
 import { clampTerminalFontSize } from '@/lib/term-font'
 import { batched } from '@/store/batch'
 import { createAgentModelsSlice, type AgentModelsSlice } from '@/store/agent-models'
@@ -133,6 +134,20 @@ const persistedUi = (s: RootState) => ({
 /** Partial: an older release stored fewer keys, and a migration may drop one. */
 type PersistedState = Partial<ReturnType<typeof persistedUi>>
 
+/** localStorage that skips a write when no persisted value changed since the last one. */
+function uiStorage() {
+  const storage = createJSONStorage<PersistedState>(() => localStorage)
+  let written: PersistedState | undefined
+  return storage && {
+    ...storage,
+    setItem: (name: string, value: StorageValue<PersistedState>) => {
+      if (shallow(value.state, written)) return
+      written = value.state
+      return storage.setItem(name, value)
+    },
+  }
+}
+
 export function createRootStore() {
   return create<RootState>()(
     batched(persist(
@@ -249,6 +264,7 @@ export function createRootStore() {
           }
         },
         partialize: persistedUi,
+        storage: uiStorage(),
       },
     )),
   )

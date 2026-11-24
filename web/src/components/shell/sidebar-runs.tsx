@@ -238,22 +238,16 @@ function RunFamily({ tree, group }: { tree: RunTree; group: RunTree['group'] }) 
     hadChildren.current = hasChildren
   }, [below])
 
+  const toggle = useCallback(() => {
+    touched.current = true
+    setExpanded((open) => !open)
+  }, [])
   const shown = expanded ? tree.children : tree.children.filter((child) => child.needsYou)
   const finished = expanded || foldable === 0 ? settled : []
   const openID = useStore((s) => settled.find((row) => isRunRoute(s.route, row.run.id))?.run.id)
   return (
     <>
-      <RunRowItem
-        tree={tree}
-        subsessions={foldable > 0 ? {
-          count: foldable,
-          expanded,
-          onToggle: () => {
-            touched.current = true
-            setExpanded((open) => !open)
-          },
-        } : undefined}
-      />
+      <RunRowItem tree={tree} subsessions={foldable} expanded={expanded} onToggle={toggle} />
       {shown.length + finished.length > 0 && (
         <ul aria-label={`Sessions in ${runLabel(tree.run)}`}>
           {shown.map((child) => (
@@ -323,7 +317,7 @@ function MineToggle() {
   )
 }
 
-function RunRowItem({ tree, subsessions }: { tree: RunTree; subsessions?: { count: number; expanded: boolean; onToggle: () => void } }) {
+function RunRowItem({ tree, subsessions = 0, expanded, onToggle }: { tree: RunTree; subsessions?: number; expanded?: boolean; onToggle?: () => void }) {
   return (
     <RunRow
       runID={tree.run.id}
@@ -335,8 +329,11 @@ function RunRowItem({ tree, subsessions }: { tree: RunTree; subsessions?: { coun
       wait={tree.wait}
       since={tree.since}
       workspaceName={tree.workspaceName}
-      childRuns={tree.childRuns}
+      counts={tree.childRuns ? `${childRunsText(tree.childRuns)} · ${childRunCounts(tree.childRuns)}` : ''}
+      childCount={tree.childRuns?.members.length}
       subsessions={subsessions}
+      expanded={subsessions > 0 && expanded}
+      onToggle={onToggle}
     />
   )
 }
@@ -351,8 +348,11 @@ const RunRow = memo(function RunRow({ runID, ...shown }: {
   wait?: RunWait
   since: string
   workspaceName?: string
-  childRuns?: TreeSummary
-  subsessions?: { count: number; expanded: boolean; onToggle: () => void }
+  counts: string
+  childCount?: number
+  subsessions: number
+  expanded?: boolean
+  onToggle?: () => void
 }) {
   const run = useRun(runID)
   return run ? <RunRowButton run={run} {...shown} /> : null
@@ -360,7 +360,7 @@ const RunRow = memo(function RunRow({ runID, ...shown }: {
 
 const names = new Intl.ListFormat(undefined, { type: 'conjunction' })
 
-function RunRowButton({ run, state, waiting, reason, next, cause, wait, since, workspaceName, childRuns, subsessions }: {
+function RunRowButton({ run, state, waiting, reason, next, cause, wait, since, workspaceName, counts, childCount, subsessions, expanded, onToggle }: {
   run: RunRecord
   state: PresentationState
   waiting: boolean
@@ -370,14 +370,16 @@ function RunRowButton({ run, state, waiting, reason, next, cause, wait, since, w
   wait?: RunWait
   since: string
   workspaceName?: string
-  childRuns?: TreeSummary
-  subsessions?: { count: number; expanded: boolean; onToggle: () => void }
+  counts: string
+  childCount?: number
+  subsessions: number
+  expanded?: boolean
+  onToggle?: () => void
 }) {
   const navigate = useStore((s) => s.navigate)
   const self = useStore((s) => s.info?.member.id)
   const selected = useStore((s) => isRunRoute(s.route, run.id))
   const title = runLabel(run)
-  const counts = childRuns ? `${childRunsText(childRuns)} · ${childRunCounts(childRuns)}` : ''
   const unopened = run.finish_unopened === true && (state === 'ready' || groupOf({ state }) === 'finished')
   const active = state === 'working' || state === 'waiting-agents' || state === 'waiting-ci' || state === 'waiting-tools'
   const recedes = !waiting && !unopened && (!active || run.member_id !== self)
@@ -395,7 +397,7 @@ function RunRowButton({ run, state, waiting, reason, next, cause, wait, since, w
     workspaceName,
     title,
     words.detail,
-    childRuns && counts,
+    counts,
     unopened && 'Not opened yet',
     timeAgo(since),
     run.member_id === self ? 'your session' : `${name(run.member_id)}'s session`,
@@ -408,10 +410,10 @@ function RunRowButton({ run, state, waiting, reason, next, cause, wait, since, w
     <span className={cn('flex items-center gap-2 text-ui-sm tabular-nums', selected ? 'text-text' : 'text-muted')}>
       {run.protected && <ProtectedMark />}
       <RelativeTime at={since} compact title={undefined} />
-      {childRuns && (
+      {childCount !== undefined && (
         <span className="flex items-center gap-0.5" title={counts}>
           <Network aria-hidden className="size-3" />
-          {childRuns.members.length}
+          {childCount}
         </span>
       )}
       <AgentGlyph agent={run.harness} />
@@ -427,7 +429,7 @@ function RunRowButton({ run, state, waiting, reason, next, cause, wait, since, w
         aria-current={selected ? 'page' : undefined}
         selected={selected}
         onClick={() => navigate('run', { runId: run.id })}
-        leading={subsessions ? undefined : (
+        leading={subsessions > 0 ? undefined : (
           <>
             <StatusDot tone={toneOf({ state, wait })} />
             <span
@@ -438,7 +440,7 @@ function RunRowButton({ run, state, waiting, reason, next, cause, wait, since, w
             />
           </>
         )}
-        leadingAction={subsessions && (
+        leadingAction={subsessions > 0 && (
           <span className="flex shrink-0 items-center gap-2 pl-2">
             <StatusDot tone={toneOf({ state, wait })} />
             <span
@@ -450,15 +452,15 @@ function RunRowButton({ run, state, waiting, reason, next, cause, wait, since, w
             <Button
               variant="ghost"
               size="icon-sm"
-              label={`${subsessions.expanded ? 'Collapse' : 'Expand'} ${subsessions.count} subsession${subsessions.count === 1 ? '' : 's'}`}
-              aria-expanded={subsessions.expanded}
+              label={`${expanded ? 'Collapse' : 'Expand'} ${subsessions} subsession${subsessions === 1 ? '' : 's'}`}
+              aria-expanded={expanded}
               onClick={(event) => {
                 event.stopPropagation()
-                subsessions.onToggle()
+                onToggle?.()
               }}
               className="-mr-2"
             >
-              <ChevronRight className={cn(chevronTurn, subsessions.expanded && 'rotate-90')} />
+              <ChevronRight className={cn(chevronTurn, expanded && 'rotate-90')} />
             </Button>
           </span>
         )}

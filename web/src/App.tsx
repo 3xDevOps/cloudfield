@@ -36,7 +36,7 @@ export function App() {
   const gatewayRestarting = useStore((s) => s.gatewayRestarting)
   const epoch = useStore((s) => s.connectionEpoch)
   const resetConnection = useStore((s) => s.resetConnection)
-  const drafts = useStore((s) => s.drafts)
+  const dirty = useStore((s) => Object.values(s.drafts).some((draft) => draft.content !== draft.baseContent || draft.saving))
   const onboardingRoute = useStore((s) => s.route.name === 'onboarding')
   // The server enforces the floor; this only explains it, and it outranks
   // every other screen because the server refuses everything else.
@@ -55,7 +55,6 @@ export function App() {
   useEffect(() => onHandedLinkForgotten(() => setHanded(null)), [])
   useEffect(() => {
     if (typeof window === 'undefined') return
-    const dirty = Object.values(drafts).some((draft) => draft.content !== draft.baseContent || draft.saving)
     if (!dirty) return
     const warn = (event: BeforeUnloadEvent) => {
       event.preventDefault()
@@ -63,7 +62,7 @@ export function App() {
     }
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
-  }, [drafts])
+  }, [dirty])
   const theme = useStore((s) => s.theme)
   // A retry remounts the connection effect; a page reload would lose the
   // in-memory session token.
