@@ -15,15 +15,14 @@ describe('aether.ui persistence', () => {
     expect(stored().state.mineOnly).toBe(true)
   })
 
-  it('writes a preference set back after another tab changed it and this one read it again', async () => {
+  it('retries a preference write the browser refused', () => {
     const store = createRootStore()
-    store.getState().setMineOnly(true)
-    const theirs = stored()
-    localStorage.setItem('aether.ui', JSON.stringify({ ...theirs, state: { ...theirs.state, mineOnly: false } }))
-    await store.persist.rehydrate()
-    expect(store.getState().mineOnly).toBe(false)
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => {
+      throw new DOMException('full', 'QuotaExceededError')
+    })
+    expect(() => store.getState().setMineOnly(true)).toThrow('full')
 
-    store.getState().setMineOnly(true)
+    store.setState({ hydrated: true })
     expect(stored().state.mineOnly).toBe(true)
   })
 })

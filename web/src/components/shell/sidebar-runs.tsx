@@ -332,7 +332,7 @@ function RunRowItem({ tree, subsessions = 0, expanded, onToggle }: { tree: RunTr
       counts={tree.childRuns ? `${childRunsText(tree.childRuns)} · ${childRunCounts(tree.childRuns)}` : ''}
       childCount={tree.childRuns?.members.length}
       subsessions={subsessions}
-      expanded={subsessions > 0 && expanded}
+      expanded={expanded}
       onToggle={onToggle}
     />
   )

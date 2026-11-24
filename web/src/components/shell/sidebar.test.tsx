@@ -260,7 +260,7 @@ describe('run rows', () => {
     useStore.setState((s) => ({
       runs: {
         ...s.runs,
-        run_parent: toRecord(run({ id: 'run_parent', task: 'coordinate' })),
+        run_parent: toRecord(run({ id: 'run_parent', task: 'coordinate', harness: 'codex' })),
         run_child: toRecord(run({ id: 'run_child', task: 'running check', parent_run_id: 'run_parent' })),
       },
     }))
@@ -270,7 +270,7 @@ describe('run rows', () => {
 
     act(() => useStore.getState().applyAgentEvent('run_1', { kind: 'tool_call', tool: 'Read', tool_use_id: 'tool_1' }, new Date().toISOString()))
 
-    expect(AgentGlyph).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(AgentGlyph).mock.calls.map(([props]) => props.agent)).toEqual(['claude'])
   })
 
   it('leaves finished subsessions out until asked, and keeps a failed one listed', () => {

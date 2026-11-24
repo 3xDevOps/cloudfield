@@ -134,21 +134,9 @@ const persistedUi = (s: RootState) => ({
 /** Partial: an older release stored fewer keys, and a migration may drop one. */
 type PersistedState = Partial<ReturnType<typeof persistedUi>>
 
-/** localStorage that skips a write when no persisted value changed since the last one. */
-function uiStorage() {
+export function createRootStore() {
   const storage = createJSONStorage<PersistedState>(() => localStorage)
   let written: PersistedState | undefined
-  return storage && {
-    ...storage,
-    setItem: (name: string, value: StorageValue<PersistedState>) => {
-      if (shallow(value.state, written)) return
-      written = value.state
-      return storage.setItem(name, value)
-    },
-  }
-}
-
-export function createRootStore() {
   return create<RootState>()(
     batched(persist(
       (...a) => ({
@@ -264,7 +252,14 @@ export function createRootStore() {
           }
         },
         partialize: persistedUi,
-        storage: uiStorage(),
+        storage: storage && {
+          ...storage,
+          setItem: (name: string, value: StorageValue<PersistedState>) => {
+            if (shallow(value.state, written)) return
+            storage.setItem(name, value)
+            written = value.state
+          },
+        },
       },
     )),
   )
