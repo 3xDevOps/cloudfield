@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { ApiError } from '@/lib/api'
 import type { Api } from '@/lib/api'
 import { InsightsRoute } from '@/routes/insights'
@@ -60,6 +61,27 @@ describe('system tab', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Show all' }))
     expect(rows()).toHaveLength(9)
+  })
+
+  it('shows what a session VM holds of the host beside its use inside the VM', async () => {
+    const gib = 1024 ** 3
+    renderSystem({
+      systemStats: vi.fn(async () => systemStats({
+        containers: [
+          systemContainer({ memory_bytes: 3.5 * gib }),
+          systemContainer({ owner_id: 'run_vm', title: 'session in a VM', memory_bytes: gib, host_memory_bytes: 4 * gib }),
+        ],
+      })),
+    })
+    await screen.findByRole('list', { name: 'Sandboxes by usage' })
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Memory' }))
+
+    expect(rows()[0]!.textContent).toContain('session in a VM')
+    expect(rows()[0]!.textContent).toContain('4.0 GB · 25% of host1.0 GB of 8.0 GB limit')
+    expect(rows()[1]!.textContent).toContain('3.5 GB of 8.0 GB limit')
+    expect(rows()[1]!.textContent).not.toContain('of host')
+    expect(screen.getByText(/"of host" is everything its VM holds of the host's memory/)).toBeDefined()
   })
 
   it('opens the run behind a row', async () => {

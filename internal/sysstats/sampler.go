@@ -63,6 +63,7 @@ type ContainerUsage struct {
 	BrowserRunContainer string
 	CPULimitCores       float64
 	MemoryBytes         uint64
+	HostMemoryBytes     uint64
 	MemoryLimitBytes    uint64
 	Pids                uint64
 	PidsLimit           uint64
@@ -263,6 +264,7 @@ func containerUsage(cur, prev runtime.ContainerStat) ContainerUsage {
 		BrowserRunContainer: cur.BrowserRunContainer,
 		CPULimitCores:       cur.CPULimitCores,
 		MemoryBytes:         cur.MemoryBytes,
+		HostMemoryBytes:     cur.HostMemoryBytes,
 		MemoryLimitBytes:    cur.MemoryLimitBytes,
 		Pids:                cur.Pids,
 		PidsLimit:           cur.PidsLimit,

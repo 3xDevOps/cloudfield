@@ -1,5 +1,5 @@
 import type { SystemContainer, SystemHost, SystemSample } from '@/lib/types'
-import { appendHistory, assignSlots, breakdown, capacityOf, limitLevel, mergeSamples, slotCount } from '@/routes/insights/system/model'
+import { appendHistory, assignSlots, breakdown, capacityOf, limitLevel, limitShare, mergeSamples, slotCount } from '@/routes/insights/system/model'
 import { systemContainer, systemStats } from '@/test/fixtures'
 
 const host: SystemHost = { cpu_cores: 10, memory_total_bytes: 1000, swap_total_bytes: 0, uptime_seconds: 0 }
@@ -39,6 +39,15 @@ describe('breakdown', () => {
     const { slices, rest } = breakdown([named('a', 2), named('b', 1)], capacity, 0, 'cpu', new Map(), label)
     expect(rest).toBeCloseTo(2)
     expect(slices.map((s) => s.value)).toEqual([2, 1, 2, 5])
+  })
+
+  it('counts what a VM holds of the host, and its limit against the use inside it', () => {
+    const vm = systemContainer({ owner_id: 'vm', title: 'vm', memory_bytes: 100, host_memory_bytes: 300, memory_limit_bytes: 200 })
+    const { slices } = breakdown([named('a', 1, 200), vm], { capacity: 1000, used: 600 }, 0, 'memory', new Map(), label)
+
+    expect(slices.map((s) => [s.label, s.value])).toEqual([['vm', 300], ['a', 200], ['Everything else', 100], ['Free', 400]])
+    expect(limitShare(vm, 'memory')).toBe(0.5)
+    expect(appendHistory(new Map(), [vm], 1).get('run:vm')!.memory).toEqual([{ t: 1, v: 300 }])
   })
 
   it('never goes negative when containers sum past the host figure', () => {

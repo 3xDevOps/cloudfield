@@ -71,7 +71,7 @@ func (s *Server) systemStats(ctx context.Context, member domain.MemberID, params
 	for _, c := range snap.Containers {
 		if c.Owner.Kind == "" || (!admin && c.Owner.MemberID != string(member)) {
 			others.Containers++
-			others.MemoryBytes += c.MemoryBytes
+			others.MemoryBytes += cmp.Or(c.HostMemoryBytes, c.MemoryBytes)
 			if c.Rates != nil {
 				others.CPUCores += c.Rates.CPUCores
 			}
@@ -83,7 +83,7 @@ func (s *Server) systemStats(ctx context.Context, member domain.MemberID, params
 		result.Others = &others
 	}
 	slices.SortStableFunc(result.Containers, func(a, b protocol.SystemContainer) int {
-		return cmp.Or(cmp.Compare(deref(b.CPUCores), deref(a.CPUCores)), cmp.Compare(b.MemoryBytes, a.MemoryBytes))
+		return cmp.Or(cmp.Compare(deref(b.CPUCores), deref(a.CPUCores)), cmp.Compare(cmp.Or(b.HostMemoryBytes, b.MemoryBytes), cmp.Or(a.HostMemoryBytes, a.MemoryBytes)))
 	})
 	return result, nil
 }
@@ -92,7 +92,7 @@ func systemContainer(c sysstats.ContainerUsage) protocol.SystemContainer {
 	out := protocol.SystemContainer{
 		OwnerKind: c.Owner.Kind, OwnerID: c.Owner.ID, MemberID: c.Owner.MemberID,
 		WorkspaceID: c.Owner.WorkspaceID, Title: c.Owner.Title, Status: c.Owner.Status,
-		CPULimitCores: c.CPULimitCores, MemoryBytes: c.MemoryBytes, MemoryLimitBytes: c.MemoryLimitBytes,
+		CPULimitCores: c.CPULimitCores, MemoryBytes: c.MemoryBytes, HostMemoryBytes: c.HostMemoryBytes, MemoryLimitBytes: c.MemoryLimitBytes,
 		Pids: c.Pids, PidsLimit: c.PidsLimit,
 	}
 	if r := c.Rates; r != nil {

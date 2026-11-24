@@ -74,7 +74,8 @@ func (e *engine) halted(ctx context.Context, key string) bool {
 }
 
 // CPU, memory and processes come from the helper, network and disk bytes
-// from Cloud Hypervisor's device counters.
+// from Cloud Hypervisor's device counters, and what the VM holds of the
+// host's memory from its unit's cgroup.
 func (e *engine) stats(ctx context.Context) ([]runtime.ContainerStat, error) {
 	ctx, cancel := context.WithTimeout(ctx, statsTimeout)
 	defer cancel()
@@ -126,14 +127,22 @@ func (e *engine) sample(ctx context.Context, key string) (*runtime.ContainerStat
 	if cores == 0 {
 		cores = float64(rec.CPUs)
 	}
+	held, err := e.unitMemory(key)
+	if err != nil {
+		err = fmt.Errorf("vm runtime: host memory of VM %s: %w", key, err)
+	}
 	return &runtime.ContainerStat{
 		ID: idPrefix + key, CreationKey: cmp.Or(rec.CreationKey, key), Read: time.Now(),
 		CPUUsageNanos: g.CPUUsageNanos, CPULimitCores: cores,
-		MemoryBytes: g.MemoryBytes, MemoryLimitBytes: g.MemoryLimitBytes, Pids: g.Pids, PidsLimit: g.PidsLimit,
+		MemoryBytes: g.MemoryBytes, HostMemoryBytes: held, MemoryLimitBytes: g.MemoryLimitBytes, Pids: g.Pids, PidsLimit: g.PidsLimit,
 		NetRxBytes: counters["net0"]["rx_bytes"], NetTxBytes: counters["net0"]["tx_bytes"],
 		DiskReadBytes:  counters["root"]["read_bytes"] + counters["data"]["read_bytes"],
 		DiskWriteBytes: counters["root"]["write_bytes"] + counters["data"]["write_bytes"],
-	}, nil
+	}, err
+}
+
+func (e *engine) unitMemory(key string) (uint64, error) {
+	return sysstats.CgroupWorkingSet(filepath.Join(e.cgroupRoot, runtime.SessionSlice, unitName(key)))
 }
 
 func (e *engine) filesystem() (runtime.FilesystemCapacity, error) {
@@ -162,7 +171,7 @@ func (e *engine) memoryUse() (map[runtime.ID]uint64, error) {
 	use := make(map[runtime.ID]uint64, len(keys))
 	var errs []error
 	for _, key := range keys {
-		n, err := sysstats.CgroupWorkingSet(filepath.Join(e.cgroupRoot, runtime.SessionSlice, unitName(key)))
+		n, err := e.unitMemory(key)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
