@@ -55,13 +55,13 @@
    fit the cell exactly. */
 @font-face {
   font-family: 'JetBrainsMono NFM';
-  src: url('/fonts/jetbrains-mono-nfm-regular.woff2') format('woff2');
+  src: url('./fonts/jetbrains-mono-nfm-regular.woff2') format('woff2');
   font-weight: 400;
   font-display: block;
 }
 @font-face {
   font-family: 'JetBrainsMono NFM';
-  src: url('/fonts/jetbrains-mono-nfm-bold.woff2') format('woff2');
+  src: url('./fonts/jetbrains-mono-nfm-bold.woff2') format('woff2');
   font-weight: 700;
   font-display: block;
 }
@@ -69,21 +69,21 @@
 /* Symbol-only aliases leave prose metrics and non-symbol fallback unchanged. */
 @font-face {
   font-family: 'Aether Symbols';
-  src: url('/fonts/noto-sans-symbols-2-spinners.woff2') format('woff2');
+  src: url('./fonts/noto-sans-symbols-2-spinners.woff2') format('woff2');
   font-weight: 400;
   font-display: swap;
   unicode-range: U+25A0-25FF, U+2800-28FF;
 }
 @font-face {
   font-family: 'Aether Nerd Symbols';
-  src: url('/fonts/jetbrains-mono-nfm-regular.woff2') format('woff2');
+  src: url('./fonts/jetbrains-mono-nfm-regular.woff2') format('woff2');
   font-weight: 400;
   font-display: swap;
   unicode-range: U+E000-F8FF, U+F0000-FFFFD, U+100000-10FFFD;
 }
 @font-face {
   font-family: 'Aether Nerd Symbols';
-  src: url('/fonts/jetbrains-mono-nfm-bold.woff2') format('woff2');
+  src: url('./fonts/jetbrains-mono-nfm-bold.woff2') format('woff2');
   font-weight: 700;
   font-display: swap;
   unicode-range: U+E000-F8FF, U+F0000-FFFFD, U+100000-10FFFD;

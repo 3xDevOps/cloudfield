@@ -74,6 +74,7 @@ expect caches true internal/store/store.go go.sum
 expect caches true .github/workflows/ci.yml
 expect caches true images/browser/Dockerfile
 expect caches true web/public/fonts/LICENSE-jetbrains-mono-nfm.txt
+expect caches true web/src/fonts/jetbrains-mono-nfm-regular.woff2
 expect caches true web/package.json
 expect caches true desktop/package-lock.json
 expect caches true android/app/build.gradle.kts

@@ -97,6 +97,16 @@ describe('hydrate', () => {
     expect(Object.keys(s.members)).toHaveLength(2)
     expect(s.runs.run_1.status).toBe('running')
   })
+  it('starts the optional reads together, so one slow read does not hold the others', async () => {
+    const store = createRootStore()
+    const client = fakeApi({ memberDeviceList: vi.fn(() => new Promise<never>(() => {})) })
+    void hydrate(store, client)
+
+    await vi.waitFor(() => expect(client.memberDeviceList).toHaveBeenCalled())
+    expect(client.watchList).toHaveBeenCalled()
+    expect(client.memberMergePending).toHaveBeenCalled()
+    expect(client.serverEdge).toHaveBeenCalled()
+  })
   it('clears a painted snapshot when the server now refuses this member', async () => {
     const store = createRootStore()
     store.setState({ hydrated: true, staleSince: Date.now() })

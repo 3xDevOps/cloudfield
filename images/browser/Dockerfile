@@ -12,7 +12,7 @@ RUN npm ci --omit=dev --ignore-scripts \
     && rm -rf /var/lib/apt/lists/* /root/.npm \
     && chmod -R a+rX /opt/playwright
 COPY images/browser/*.mjs ./
-COPY web/public/fonts/jetbrains-mono-nfm-regular.woff2 web/public/fonts/jetbrains-mono-nfm-bold.woff2 web/public/fonts/LICENSE-jetbrains-mono-nfm.txt ./fonts/
+COPY web/src/fonts/jetbrains-mono-nfm-regular.woff2 web/src/fonts/jetbrains-mono-nfm-bold.woff2 web/public/fonts/LICENSE-jetbrains-mono-nfm.txt ./fonts/
 # Runtime supplies private /tmp and /dev/shm, and the host-only control bind.
 # Chromium uses its user-namespace sandbox and debugging pipe, never a TCP port.
 USER 1000:1000

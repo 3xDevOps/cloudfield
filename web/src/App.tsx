@@ -132,7 +132,7 @@ export function App() {
       <ThemeEffect />
       <LaunchSplash />
       <UpdateChecks />
-      <div className="flex min-w-0 h-full flex-col">
+      <div data-app className="flex min-w-0 h-full flex-col">
         {(blocked || gated) && desktopBridge() && <TopBar navigation={false} />}
         <div className="min-h-0 min-w-0 flex-1">
           {gated ? (
