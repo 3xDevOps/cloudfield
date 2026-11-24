@@ -291,6 +291,10 @@ describe('shared terminal geometry', () => {
       paneResized()
       await vi.advanceTimersByTimeAsync(100)
       expect(onResize.mock.calls).toEqual([[100, 25], [103, 25], [103, 25]])
+
+      view.rerender(<SizedProbe follow onResize={onResize} onReady={() => {}} />)
+      view.rerender(<SizedProbe follow={false} onResize={onResize} onReady={() => {}} />)
+      expect(onResize).toHaveBeenCalledTimes(4)
     } finally {
       view.unmount()
       proposal.mockRestore()

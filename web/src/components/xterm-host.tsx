@@ -625,13 +625,13 @@ export function useXterm({
 
       // Measure the pane without resizing the renderer: another viewer can
       // make the shared PTY smaller than this pane's requested geometry.
-      const resize = () => {
+      const resize = (settled = false) => {
         if (followRef.current) return
         const proposed = fit.proposeDimensions()
         if (!proposed) return
         requestedSize.current = proposed
         if (!serverSize.current) created.resize(proposed.cols, proposed.rows)
-        if (sentSize.current?.cols === proposed.cols && sentSize.current.rows === proposed.rows) return
+        if (settled && sentSize.current?.cols === proposed.cols && sentSize.current.rows === proposed.rows) return
         sentSize.current = proposed
         onResizeRef.current?.(proposed.cols, proposed.rows)
       }
@@ -691,7 +691,7 @@ export function useXterm({
       let settle: number | undefined
       const observer = new ResizeObserver(() => {
         window.clearTimeout(settle)
-        settle = window.setTimeout(resize, 100)
+        settle = window.setTimeout(() => resize(true), 100)
       })
       observer.observe(host)
       teardown = () => {
