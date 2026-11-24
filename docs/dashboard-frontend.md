@@ -639,7 +639,7 @@ feedback and **Watch PR**, would crowd the tabs, so it sits in a 44px row of
 its own under them on the Changes tab only.
 
 **More** opens with a **Views** group (Trace, Files, Browser, **Session
-details**, **Workflow**, **Search…**, **Assistant**), then the session's
+details**, **Session tree**, **Search…**, **Assistant**), then the session's
 commands, Captures and Raw events. A view opened from there joins the tabs
 while it shows. The views stay reachable while a command runs. Close, Stop
 and Delete are the same commands, with the same confirmations, as on
@@ -2039,7 +2039,7 @@ chips, and its popover lists every message, so nothing depends on hover. The axi
 **Timeline window**: Left and Right pan by a tenth, `+` and `-` zoom, `0` or
 Home return to now. A polite status line announces sessions that turn Needs you,
 Failed, Finished: review or Completed, gathered for 1.5s and at most three at
-a time (the Workflow panel's announcer, `src/lib/use-announcement.ts`).
+a time (the Session tree panel's announcer, `src/lib/use-announcement.ts`).
 
 **Data.** `useLaneHistory` holds `laneHistory` in `src/store/lanes.ts` while
 the view is mounted and reads `workspace.timeline` backward with
@@ -2137,7 +2137,7 @@ stale (`cause` `wait-expired`) reads "Reported waiting on *summary*, no
 update for 30m", and `stateName` labels it **Stale wait** rather than Turn
 ended.
 
-The session header's state line shows the words beyond the label the Workflow
+The session header's state line shows the words beyond the label the Session tree
 chip under it already shows, a CI wait's age first ("42m · PR 12 checks";
 a stale one's reason already says "No update for 30m"), since the header
 prints no age of its own; `stateTitle` is the tooltip of
@@ -3040,7 +3040,7 @@ tooltip adds the `agent.list` display name, `run.model` and `run.effort`,
 allows, "On `<name>`'s account (fallback)" when the session carries
 `requested_account_member_id` ([usage fallback](teams.md#usage-fallback);
 a `run.account` event updates it live when the session moves), the reason, and
-the owner. The state's dot and label are the Workflow chip's, on the row
+the owner. The state's dot and label are the Session tree chip's, on the row
 below. A subsession adds a `nav "Run lineage"` row under the header: its
 root and parent as links, then "This subsession", and **Detached** once it
 no longer counts toward its parent. The reason takes only the room left over, so a long command never
@@ -3107,7 +3107,7 @@ activation, on its own 32px row under the header at every width. When the
 row is too narrow for every tab, as on a phone whose session has a pull request,
 the tabs scroll sideways (`ViewSwitch`): the shown view's tab is kept in
 sight as the view or the room changes, and the right edge fades while more
-tabs lie past it. The [Workflow panel](#workflow-panel)'s chip follows the
+tabs lie past it. The [Session tree panel](#session-tree-panel)'s chip follows the
 tabs. A phone has its own header and tabs; see [Phone session](#phone-session).
 
 A session with a pull request shows it at the right end of that row
@@ -3284,6 +3284,20 @@ after the 5 second deadline, the late refusal replaces the "did not answer"
 text with its real reason. If another member already completed or deleted
 the note, the card shows the error without **Retry**, and **Dismiss** removes
 it.
+
+The subagents bar (`agents-bar.tsx`, a `region "Subagents and workflows"`)
+sits above the changes bar in Chat at every width, and is absent until the
+session has a subagent or workflow. It lists every one the main agent
+launched, and any whose launch is not loaded; a workflow is one row. Its
+header is the launch step's summary ("3 subagents and 1 workflow · 2
+running, 1 failed"). It starts collapsed (`expandedRows[runID]['agents-bar']`,
+not persisted). Expanded, at most 192px tall (30% of the viewport on a
+phone), each row shows the dot, the label, and the state with its elapsed
+time, or `3 of 8 agents done` for a workflow that reports rows. Running rows
+come first, oldest launch first, then failed, stopped and the rest, each
+newest first (`topAgents` in `store/subagents.ts`, which returns one string
+so the bar re-renders only when a row's state changes). A row opens the
+subagent inspector; the open one carries `aria-current`.
 
 The changes bar (`changes-bar.tsx`) sits above the composer: one line,
 "14 files changed +612 −140" and **Review**. It counts the session's whole
@@ -3470,6 +3484,12 @@ snapshot that settled it, and a settled subagent card's report is the first
 line of the subagent's last message. Without it, the card reads "Launched in the
 background", and running once a child item is logged after the call
 completed. The launch acknowledgement is never shown as a report. A workflow card lists the subagents whose items name it as parent.
+A workflow is labelled with the name it reports (`tool_call.task.workflow.name`),
+and a type equal to the label is not shown. While its call carries agent rows,
+its card adds `3 of 8 agents` and its second line reads
+`Phase 2 of 3: Fix · 2 running` (`2 running · 3 queued` without phases),
+`8 agents finished`, `1 of 8 agents failed: <first error line>` or
+`Stopped with 2 agents not started`.
 A subagent whose launch call is not loaded, or was trimmed, shows its card at
 its first held item until a history page brings the launch; without the
 call its state is unknown. When the session state lists a live subagent or
@@ -3506,6 +3526,36 @@ call's text content). Until a known subagent's launch call is loaded it pages
 an id the loaded history does not name pages only on that button. A failed
 page, or a failed read of the whole launch item, shows the server's error
 with **Retry**.
+
+A workflow's agents report rows, not items, so its inspector shows the
+workflow view (`routes/run/workflow-view.tsx`, a plain scrolling list) in
+place of the transcript:
+
+- A count line over the rows the server sent (`2 of 8 agents done · 2 running
+  · 1 failed · 2 queued · 41K tokens`, zero parts left out), and the number
+  `omitted` past the server's 100 rows.
+- The rows, under one numbered heading per phase (`2. Fix · 1 of 3 done`);
+  rows whose `phase` matches no phase come first without one.
+- Each row: dot, label, type, duration or running time, `attempt N` from
+  the second attempt, and a second line by state: the last tool and its
+  summary, the first line of the result, `Reused a cached result`, the
+  error, `Queued` or `Skipped`. Once the workflow's task is not running, a
+  row still running reads `Stopped` and one still queued `Not started`
+  (`workflowRowState` in `store/subagents.ts`).
+- A row is a button with `aria-expanded`; open, it shows the model, tool
+  call and token counts, the prompt preview, and the result as Markdown or
+  the error verbatim. A failed row starts open. Folds are
+  `expandedRows[runID]['wf:<tool call id>:<row index>']`.
+- **Log** (the last lines the script logged) and **Script**
+  (`raw_input.script`), both folded.
+- `Starting. Agents appear here as the script launches them.` before the
+  first row, and `This workflow launched no agents.` for a settled one
+  without rows. A settled call with no `task.workflow` says it was recorded
+  before per-agent progress, and its script starts open.
+
+A call cut for the wire carries the workflow's name only, so the inspector
+reads the whole item with `run.acp.item` on every snapshot while it is open
+and keeps the last rows it read in between.
 
 A tool call snapshot logged in a later turn than the call's first, as
 when a call outlives its turn, joins that first turn and keeps one row.
@@ -4435,7 +4485,7 @@ both what it renders and the overlap set the conflict chips read.
   name before there is a pull request. Its commit list shows at most six
   rows (168px) and scrolls inside the card past that; the rest of the card
   takes the height it needs.
-  The Workflow panel shows it with `compact`: the header, the head row, one
+  The Session tree panel shows it with `compact`: the header, the head row, one
   line of check counts and the primary action, with **Show N commits**
   unfolding the graph. The panel leaves it out while the Changes view shows
   the full card.
@@ -5278,22 +5328,24 @@ whatever opened it. Sections (`details.tsx`):
 Any other failed room action shows its error above the sections with
 **Dismiss**; the composer's own failures stay above the composer.
 
-### Workflow panel
+### Session tree panel
 
-The Workflow panel (`src/routes/run/workflow-panel.tsx`) shows what the session
+The Session tree panel (`src/routes/run/workflow-panel.tsx`) shows what the session
 and its agents are doing as a tree; the [Trace view](#trace-view) shows when
-they did it. Its chip sits after the view switch and
+they did it. "Workflow" in the dashboard's copy means a Claude Code workflow
+only; the panel's identifiers (`workflowOpen`, `WorkflowTree`) keep the old
+name. Its chip sits after the view switch, ends in a tree icon, and
 mirrors the session's state: `● Working · 2 agents running` (subagents and
 workflows running at any depth, a background one included) or
 `● Waiting for CI · 3 of 9 checks` (passing checks of the pull request's
 checks this tab last read). The chip toggles the panel. While the
 session's row holds 320px for it plus `minReadableWidth`, the panel is a 320px
-`complementary "Workflow"` rail at the right of the frame, remembered per
+`complementary "Session tree"` rail at the right of the frame, remembered per
 device (`workflowOpen`, persisted, closed until the chip first opens it). A
 row too narrow for it beside Details or the subagent inspector shows those
 instead; the chip then closes Details to make room.
 Narrower rows open it as a side sheet and phones as a bottom sheet, a
-`dialog "Workflow"` that returns focus to the chip, and that closes when a
+`dialog "Session tree"` that returns focus to the chip, and that closes when a
 row opens the subagent inspector or the request, or the view changes. Under the tree, a session
 with a branch shows the compact git card (`GitFlow` in
 `src/components/workflow/git-flow.tsx`), except on the Changes view, which
@@ -5319,8 +5371,8 @@ on the root real counts (`2 agents running`, counting every depth, or
 `3 of 5 tasks done`).
 Completed subtrees start folded to their summary row; everything else starts
 open. A folded parent still lists every descendant that needs you under it.
-Rows below the fourth level collapse into one `Nested workflow · N agents`
-row that opens that subtree in place, with **Show the whole workflow** to go
+Rows below the fourth level collapse into one `Nested tree · N agents`
+row that opens that subtree in place, with **Show the whole tree** to go
 back. Past 200 visible rows the tree renders only the rows in view.
 Selecting an agent row opens it in the subagent inspector; selecting the
 Needs you row performs the header's action or reveals the request card.

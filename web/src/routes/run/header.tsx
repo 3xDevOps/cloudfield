@@ -127,7 +127,7 @@ function StateLine({ run, agentName }: { run: RunRecord; agentName: string }) {
   )
   const since = state === 'ready' && run.review_changed_at ? run.review_changed_at : run.stateChangedAt
   const words = stateWords(presentation, since, useClock())
-  // The Workflow chip under the header shows the state's own label.
+  // The Session tree chip under the header shows the state's own label.
   const detail = [
     subagents > 0 && `${subagents} ${subagents === 1 ? 'subagent' : 'subagents'} running`,
     words.label !== stateName(presentation) && words.label,
@@ -279,7 +279,7 @@ export function RunHeader({
   run: RunRecord
   agentName: string
   agentEntry: AgentInfo | undefined
-  /** The Workflow chip, which sits beside the view switch. */
+  /** The Session tree chip, which sits beside the view switch. */
   workflow?: React.ReactNode
   /** Opens the workflow, which a phone lists under the session's actions instead of the chip. */
   onWorkflow: (returnTo: HTMLElement | null) => void

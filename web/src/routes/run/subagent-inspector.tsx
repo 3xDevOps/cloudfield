@@ -3,6 +3,7 @@ import { VList, type VListHandle } from 'virtua'
 import { ChevronLeft, ChevronRight, X } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Callout } from '@/components/ui/callout'
+import { CodeBlock } from '@/components/ui/code'
 import { Markdown } from '@/components/ui/markdown'
 import { MessageRow } from '@/components/ui/timeline'
 import { api } from '@/lib/api'
@@ -13,6 +14,7 @@ import type { AgentTerminal } from '@/routes/run/agent-terminal'
 import type { RunNavigation } from '@/routes/run/header'
 import { flattenRows, rowGap, TimelineRow, useRowContext, type FlatRow, type OpenPolicy } from '@/routes/run/session-rows'
 import { AgentDot, AgentElapsed, agentStateWord, openAgent } from '@/routes/run/subagent-cards'
+import { WorkflowView } from '@/routes/run/workflow-view'
 import { useStore } from '@/store'
 import type { RunRecord } from '@/store/runs'
 import { loadOlderItems, loadWholeItem } from '@/store/session-stream'
@@ -90,7 +92,13 @@ export function SubagentInspector({ run, agentID, agent: terminal, nav, onClose 
     ;(button || root.current?.querySelector<HTMLElement>('h2') || root.current)?.focus()
   }, [])
 
-  const missing = truncated && (!prompt || (finished && !report))
+  // A call cut for the wire carries no rows or script, so the last whole read stays up while the next one loads.
+  const progress = useRef(sub?.call?.task?.workflow)
+  if (!truncated || sub?.call?.task?.workflow?.agents) progress.current = sub?.call?.task?.workflow
+  const script = useRef(prompt)
+  if (!truncated || prompt) script.current = prompt
+
+  const missing = truncated && (sub?.workflow || !prompt || (finished && !report))
   const [wholeError, setWholeError] = useState<string>()
   const [attempt, setAttempt] = useState(0)
   const retryWhole = () => setAttempt((n) => n + 1)
@@ -186,7 +194,28 @@ export function SubagentInspector({ run, agentID, agent: terminal, nav, onClose 
         </div>
       )}
       {notice && <div className="shrink-0 px-4 py-2">{notice}</div>}
-      {sub && (
+      {sub?.workflow ? (
+        <WorkflowView
+          runID={run.id}
+          agentID={agentID}
+          workflow={progress.current}
+          live={state === 'running' || state === 'launched'}
+          loading={truncated && !progress.current?.agents
+            ? wholeError
+              ? <ReadError what="workflow" error={wholeError} onRetry={retryWhole} />
+              : <p role="status" className="text-muted">Loading the workflow…</p>
+            : undefined}
+          script={script.current
+            ? <CodeBlock>{script.current}</CodeBlock>
+            : (truncated || cut) && <PromptNote error={wholeError} cut={cut && !truncated} onRetry={retryWhole} />}
+          report={report && (
+            <div>
+              <h3 className={cn('mb-1 text-ui-sm font-medium', state === 'failed' ? 'text-state-failed' : 'text-muted')}>Report</h3>
+              <Markdown text={report} />
+            </div>
+          )}
+        />
+      ) : sub && (
         <VList
           ref={list}
           role="log"

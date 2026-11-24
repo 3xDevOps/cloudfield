@@ -4,6 +4,7 @@ import { Shimmer } from '@/components/ui/shimmer'
 import { StatusDot, type Tone } from '@/components/ui/status-dot'
 import { api } from '@/lib/api'
 import { useClock } from '@/lib/clock'
+import type { WorkflowProgress } from '@/lib/session-types'
 import { redirectRoute } from '@/lib/url-state'
 import { useStore } from '@/store'
 import { loadOlderItems } from '@/store/session-stream'
@@ -15,6 +16,7 @@ import {
   agentState,
   agentType,
   launchUnloaded,
+  workflowTally,
   type AgentState,
   type Subagent,
 } from '@/store/subagents'
@@ -67,7 +69,7 @@ function runningMinutes(startedAt: string | undefined, now: number): string {
   return minutes < 60 ? `${minutes}m` : `${Math.floor(minutes / 60)}h ${minutes % 60}m`
 }
 
-function RunningElapsed({ startedAt }: { startedAt: string | undefined }) {
+export function RunningElapsed({ startedAt }: { startedAt: string | undefined }) {
   useClock()
   return <>{runningMinutes(startedAt, Date.now())}</>
 }
@@ -82,23 +84,48 @@ export function AgentElapsed({ agent, state }: { agent: Subagent; state: AgentSt
 
 const markdownMarks = /^(#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s*)+|\*\*|__|`/g
 
-function firstLine(text: string | undefined): string | undefined {
+export function firstLine(text: string | undefined): string | undefined {
   return text?.split('\n').map((line) => line.trim().replace(markdownMarks, '').trim()).find((line) => /[\p{L}\p{N}]/u.test(line))
+}
+
+function workflowLine(workflow: WorkflowProgress, state: AgentState): string | undefined {
+  const rows = workflow.agents ?? []
+  const tally = workflowTally(rows, state === 'running')
+  switch (state) {
+    case 'running': {
+      const phases = workflow.phases ?? []
+      const at = phases.map((phase) => rows.some((row) => row.state === 'running' && (row.phase ?? 0) === phase.index)).lastIndexOf(true)
+      if (at !== -1) return `Phase ${at + 1} of ${phases.length}: ${phases[at]!.title} · ${tally.running} running`
+      return [tally.running && `${tally.running} running`, tally.queued && `${tally.queued} queued`].filter(Boolean).join(' · ') || undefined
+    }
+    case 'done':
+      return tally.done ? `${plural(tally.done, 'agent')} finished` : undefined
+    case 'failed': {
+      const failed = rows.find((row) => row.state === 'failed')
+      return failed && [`${tally.failed} of ${plural(rows.length, 'agent')} failed`, firstLine(failed.error)].filter(Boolean).join(': ')
+    }
+    case 'stopped':
+      return tally['not-started'] ? `Stopped with ${plural(tally['not-started'], 'agent')} not started` : undefined
+    default:
+      return undefined
+  }
 }
 
 function Progress({ runID, agent, state }: { runID: string; agent: Subagent; state: AgentState }) {
   const more = useStore((s) => s.acpSessions[runID]?.more ?? false)
+  const workflow = agent.call?.task?.workflow
+  const line = workflow && workflowLine(workflow, state)
   const report = state === 'done' || state === 'failed' ? firstLine(agentReport(agent) ?? (agent.call?.task && !agent.workflow ? agentLastMessage(agent) : undefined)) : undefined
   const activity = agent.latest ? activityLabel(agent.latest) : undefined
   switch (state) {
     case 'running':
-      return <Shimmer text={activity ?? (agent.call?.task ? 'Running in the background' : agent.activeSeq !== undefined ? 'Working' : 'Starting')} className="block w-fit max-w-full truncate" />
+      return <Shimmer text={line ?? activity ?? (agent.call?.task ? 'Running in the background' : agent.activeSeq !== undefined ? 'Working' : 'Starting')} className="block w-fit max-w-full truncate" />
     case 'done':
-      return <>{report ?? 'Finished'}</>
+      return <>{line ?? report ?? 'Finished'}</>
     case 'failed':
-      return <span className="text-state-failed">{report ?? 'Failed'}</span>
+      return <span className="text-state-failed">{line ?? report ?? 'Failed'}</span>
     case 'stopped':
-      return <>{agent.call?.task ? 'Stopped' : 'Stopped when its turn ended'}</>
+      return <>{line ?? (agent.call?.task ? 'Stopped' : 'Stopped when its turn ended')}</>
     case 'launched':
       return <>Launched in the background</>
     case 'unknown': {
@@ -108,7 +135,7 @@ function Progress({ runID, agent, state }: { runID: string; agent: Subagent; sta
   }
 }
 
-function useAgent(runID: string, id: string): Subagent | undefined {
+export function useAgent(runID: string, id: string): Subagent | undefined {
   return useStore((s) => s.acpSessions[runID]?.agents.agents[id])
 }
 
@@ -126,6 +153,7 @@ const SubagentCard = memo(function SubagentCard({ runID, id }: { runID: string; 
   const state = agentState(agent)
   const type = agentType(agent)
   const label = agentLabel(agent)
+  const rows = agent.call?.task?.workflow?.agents
   return (
     <div data-slot="subagent-card">
       <AgentCard
@@ -139,6 +167,7 @@ const SubagentCard = memo(function SubagentCard({ runID, id }: { runID: string; 
           <>
             {agent.tools > 0 && <span className="hidden sm:inline">{agent.tools} {agent.tools === 1 ? 'tool' : 'tools'}</span>}
             {agent.children.length > 0 && <span className="hidden sm:inline">{agent.children.length} nested</span>}
+            {rows && <span>{`${rows.filter((row) => row.state === 'done').length} of ${plural(rows.length, 'agent')}`}</span>}
             <AgentElapsed agent={agent} state={state} />
           </>
         }
@@ -153,7 +182,7 @@ function plural(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? '' : 's'}`
 }
 
-function summary(kinds: string[]): string {
+export function summary(kinds: string[]): string {
   const states = kinds.map((kind) => kind.split(':')[1] as AgentState)
   const workflows = kinds.filter((kind) => kind.startsWith('w:')).length
   const agents = kinds.length - workflows

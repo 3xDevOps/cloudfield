@@ -123,6 +123,18 @@ An Enhanced session opens on **Chat**: one timeline, newest at the bottom.
   opened or closed them yourself or a subagent still runs. When a turn ends
   with no request, the session says **Waiting for your reply**, and the header's
   **Reply** focuses the composer.
+- Above the composer, a bar lists every subagent and workflow the agent
+  launched ("3 subagents and 1 workflow · 2 running, 1 failed"). It appears
+  with the first one and starts folded. Click it for one row each, running
+  ones first, and click a row to open that subagent or workflow beside the
+  chat.
+- A workflow is a script Claude Code runs that launches its own agents. Its
+  card and row count them ("3 of 8 agents"). Opened, it lists each agent
+  under its phase with its state and what it is doing; click an agent for
+  its prompt, result or error, model, and tool call and token counts.
+  Those agents report status and previews, not a transcript
+  ([Background work](#background-work)). **Log** and **Script** sit folded
+  under the list.
 - Notices, a turn that was cancelled or stopped, and messages between agents
   show inline. **Hide from Session**, under **Agent messages** in Details,
   turns agent messages off.
@@ -255,6 +267,19 @@ between turns.
   returns at once and its subagent's card follows the task until it reports. A
   reload reads up to 5,000 earlier items to keep the card of a subagent that
   still runs; past that, scroll up to load its launch.
+- A workflow reports its progress on the tool call that launched it
+  (`tool_call.task.workflow` in
+  [`internal/acphost/items.go`](../internal/acphost/items.go)): its name, its
+  phases, and one row per agent with its state (`queued`, `running`, `done`,
+  `failed` or `skipped`), last tool, token and tool call counts, and previews of
+  its prompt, result and error. Every viewer gets it live and after a reload.
+  Limits:
+  - Only Claude Code reports it. An agent inside a workflow reports its row, not
+    its messages or tool calls.
+  - A running workflow's call is written at most once a second.
+  - Previews are cut to 240 bytes. Past 100 agents the finished rows are left out
+    first, counted in `omitted`.
+  - A call too large for a viewer's frame carries the workflow's name only.
 - A shell such as a dev server does not hold the session, because it may never end.
 - Stop cancels an autonomous turn and parks the session with `turn cancelled`. The
   tasks keep running in Claude Code.

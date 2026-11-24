@@ -555,12 +555,12 @@ describe('run details', () => {
   it('leads the workflow with the request that needs the viewer, and leaves the sheet for it', async () => {
     vi.mocked(api.runRoomList).mockResolvedValue({ messages: [] })
     open({ status: 'needs-attention', state: 'needs-you', reason: 'needs input: Which port?' }, 'terminal')
-    fireEvent.click(screen.getByRole('button', { name: 'Workflow: Needs you' }))
-    const sheet = within(await screen.findByRole('dialog', { name: 'Workflow' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Session tree: Needs you' }))
+    const sheet = within(await screen.findByRole('dialog', { name: 'Session tree' }))
     const request = sheet.getByRole('treeitem', { name: /^Agent asks: Which port\?, Needs you/ })
     expect(request.getAttribute('aria-level')).toBe('2')
     fireEvent.click(request)
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Workflow' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Session tree' })).toBeNull())
     expect(useStore.getState().route.params.view).toBe('session')
   })
 

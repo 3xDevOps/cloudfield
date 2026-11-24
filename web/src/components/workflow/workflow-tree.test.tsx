@@ -24,8 +24,8 @@ const focused = () => document.activeElement?.getAttribute('data-key')
 
 describe('WorkflowTree', () => {
   it('exposes a tree with levels, positions and one tab stop', () => {
-    render(<WorkflowTree root={tree} label="Session workflow" />)
-    const root = screen.getByRole('tree', { name: 'Session workflow' })
+    render(<WorkflowTree root={tree} label="Session tree" />)
+    const root = screen.getByRole('tree', { name: 'Session tree' })
     const rows = within(root).getAllByRole('treeitem')
     expect(rows.map((row) => row.dataset.key)).toEqual(['root', 'a', 'a1', 'a2', 'b', 'c'])
     expect(rows.map((row) => row.getAttribute('aria-level'))).toEqual(['1', '2', '3', '3', '2', '2'])
@@ -37,7 +37,7 @@ describe('WorkflowTree', () => {
   })
 
   it('moves with the arrows, Home and End, and folds with Left and Right', async () => {
-    render(<WorkflowTree root={tree} label="Session workflow" />)
+    render(<WorkflowTree root={tree} label="Session tree" />)
     act(() => items()[0]!.focus())
     await userEvent.keyboard('{ArrowDown}{ArrowDown}')
     expect(focused()).toBe('a1')
@@ -57,23 +57,23 @@ describe('WorkflowTree', () => {
   })
 
   it('makes the row of a focused inline control the tab stop', () => {
-    render(<WorkflowTree root={tree} label="Session workflow" extra={(picked) => (picked.id === 'c' ? <button type="button">Details</button> : null)} />)
+    render(<WorkflowTree root={tree} label="Session tree" extra={(picked) => (picked.id === 'c' ? <button type="button">Details</button> : null)} />)
     act(() => screen.getByRole('button', { name: 'Details' }).focus())
     expect(items().filter((row) => row.tabIndex === 0).map((row) => row.dataset.key)).toEqual(['c'])
   })
 
   it('never takes focus back from outside the tree on a later update', async () => {
-    const { rerender } = render(<><WorkflowTree root={tree} label="Session workflow" /><input aria-label="Composer" /></>)
+    const { rerender } = render(<><WorkflowTree root={tree} label="Session tree" /><input aria-label="Composer" /></>)
     act(() => items()[0]!.focus())
     await userEvent.keyboard('{End}{End}')
     act(() => screen.getByRole('textbox', { name: 'Composer' }).focus())
-    rerender(<><WorkflowTree root={{ ...tree, label: 'Renamed' }} label="Session workflow" /><input aria-label="Composer" /></>)
+    rerender(<><WorkflowTree root={{ ...tree, label: 'Renamed' }} label="Session tree" /><input aria-label="Composer" /></>)
     expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Composer' }))
   })
 
   it('hands Enter to the caller, and folds a parent the caller leaves alone', async () => {
     const onSelect = vi.fn((picked: WorkflowNode) => picked.id === 'c')
-    render(<WorkflowTree root={tree} label="Session workflow" onSelect={onSelect} />)
+    render(<WorkflowTree root={tree} label="Session tree" onSelect={onSelect} />)
     act(() => items()[5]!.focus())
     await userEvent.keyboard('{Enter}')
     expect(onSelect).toHaveBeenLastCalledWith(expect.objectContaining({ id: 'c' }))
@@ -84,7 +84,7 @@ describe('WorkflowTree', () => {
 
   it('keeps a Needs you descendant in sight under a folded parent', async () => {
     const asking = node('root', 'needs-you', [node('a', 'needs-you', [node('a1', 'needs-you'), node('a2', 'working')])], { kind: 'run' })
-    render(<WorkflowTree root={asking} label="Session workflow" />)
+    render(<WorkflowTree root={asking} label="Session tree" />)
     act(() => items()[0]!.focus())
     await userEvent.keyboard('{ArrowLeft}')
     const rows = items()
@@ -95,11 +95,11 @@ describe('WorkflowTree', () => {
   it('comes back from two nested levels to the row that holds them', async () => {
     let deep = node('a9', 'working')
     for (let i = 8; i >= 1; i--) deep = node(`a${i}`, 'working', [deep])
-    render(<WorkflowTree root={node('root', 'working', [deep], { kind: 'run' })} label="Session workflow" />)
-    fireEvent.click(screen.getByRole('treeitem', { name: 'Nested workflow · 6 agents' }))
-    fireEvent.click(screen.getByRole('treeitem', { name: 'Nested workflow · 3 agents' }))
+    render(<WorkflowTree root={node('root', 'working', [deep], { kind: 'run' })} label="Session tree" />)
+    fireEvent.click(screen.getByRole('treeitem', { name: 'Nested tree · 6 agents' }))
+    fireEvent.click(screen.getByRole('treeitem', { name: 'Nested tree · 3 agents' }))
     expect(items()[0]!.dataset.key).toBe('a6')
-    await userEvent.click(screen.getByRole('button', { name: 'Show the whole workflow' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Show the whole tree' }))
     expect(items()[0]!.dataset.key).toBe('root')
     expect(focused()).toBe('nested:a3')
   })
@@ -107,25 +107,25 @@ describe('WorkflowTree', () => {
   it('opens a level past the cap in place and comes back', async () => {
     let deep = node('a6', 'working')
     for (let i = 5; i >= 1; i--) deep = node(`a${i}`, 'working', [deep])
-    render(<WorkflowTree root={node('root', 'working', [deep], { kind: 'run' })} label="Session workflow" />)
-    const nested = screen.getByRole('treeitem', { name: 'Nested workflow · 3 agents' })
+    render(<WorkflowTree root={node('root', 'working', [deep], { kind: 'run' })} label="Session tree" />)
+    const nested = screen.getByRole('treeitem', { name: 'Nested tree · 3 agents' })
     expect(nested.getAttribute('aria-level')).toBe('5')
     fireEvent.click(nested)
     expect(items().map((row) => row.dataset.key)).toEqual(['a3', 'a4', 'a5', 'a6'])
-    await userEvent.click(screen.getByRole('button', { name: 'Show the whole workflow' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Show the whole tree' }))
     expect(items()[0]!.dataset.key).toBe('root')
   })
 
   it('announces a row that comes to need the viewer first, even while the stream keeps changing', () => {
     vi.useFakeTimers()
     try {
-      const { rerender } = render(<WorkflowTree root={tree} label="Session workflow" />)
+      const { rerender } = render(<WorkflowTree root={tree} label="Session tree" />)
       const status = screen.getByRole('status')
       const done = (id: string) => node(id, 'completed')
-      rerender(<WorkflowTree root={{ ...tree, children: [node('a', 'working', [done('a1'), done('a2')]), tree.children[1]!, tree.children[2]!] }} label="Session workflow" />)
+      rerender(<WorkflowTree root={{ ...tree, children: [node('a', 'working', [done('a1'), done('a2')]), tree.children[1]!, tree.children[2]!] }} label="Session tree" />)
       act(() => vi.advanceTimersByTime(1000))
       const next = { ...tree, children: [node('a', 'completed', [done('a1'), done('a2')]), tree.children[1]!, node('c', 'needs-you')] }
-      rerender(<WorkflowTree root={next} label="Session workflow" />)
+      rerender(<WorkflowTree root={next} label="Session tree" />)
       expect(status.textContent).toBe('')
       act(() => vi.advanceTimersByTime(500))
       expect(status.textContent).toBe('c: Needs you. a1: Completed. a: Completed')
@@ -136,10 +136,10 @@ describe('WorkflowTree', () => {
 
   it('moves focus to the nearest surviving ancestor when the focused row folds away', () => {
     const live = node('root', 'working', [node('a', 'working', [node('a1', 'working')])], { kind: 'run' })
-    const { rerender } = render(<WorkflowTree root={live} label="Session workflow" />)
+    const { rerender } = render(<WorkflowTree root={live} label="Session tree" />)
     act(() => screen.getAllByRole('treeitem')[2]!.focus())
     expect(focused()).toBe('a1')
-    rerender(<WorkflowTree root={node('root', 'working', [node('a', 'completed', [node('a1', 'completed')])], { kind: 'run' })} label="Session workflow" />)
+    rerender(<WorkflowTree root={node('root', 'working', [node('a', 'completed', [node('a1', 'completed')])], { kind: 'run' })} label="Session tree" />)
     expect(items().map((row) => row.dataset.key)).toEqual(['root', 'a'])
     expect(focused()).toBe('a')
   })
@@ -165,7 +165,7 @@ describe('WorkflowTree budget', () => {
     const index = indexItems(noAgents, stream).index
     const root = deriveRunWorkflow('run_big', facts, index)
     const derived = performance.now()
-    render(<WorkflowTree root={root} label="Session workflow" />)
+    render(<WorkflowTree root={root} label="Session tree" />)
     const rendered = performance.now()
     await act(async () => {})
     const mounted = screen.getByRole('tree').querySelectorAll('[role=treeitem]').length
