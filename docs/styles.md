@@ -837,7 +837,8 @@ session and startup timing.
 The bar that holds **Take control** and **Release** shows who steers: a
 phone's Enhanced Multiplayer strip, or the agent terminal's toolbar in a
 Standard session. A desktop Enhanced session has no such bar: a teammate's
-hold is a 2px `state-failed` line along the header row's bottom edge. Its background is a grid of 2px round dots on a 6px pitch, behind the
+hold is a 2px `state-failed` line along the header row's bottom edge. The
+bar's background is a grid of 2px round dots on a 6px pitch, behind the
 bar's text and controls. The dots are neutral, `--text` at 24%, until this
 tab has live, acknowledged writable control; then they turn
 `--control-light`, the primary button's colour in both themes. A lost

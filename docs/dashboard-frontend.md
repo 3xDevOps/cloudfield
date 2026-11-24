@@ -4152,8 +4152,8 @@ the chosen text size, so **Take control** and a lone watcher get a terminal
 that fits. Tile focus changes nothing about a terminal: a focus click sends
 no resize and no reattach. A finished session reads "Container
 removed · read-only" in muted text there.
-Refusals, lost steering and presence errors are one line under the strip. A
-session with no agent terminal, such as an Enhanced session, shows "No agent
+Refusals, lost steering and presence errors are one line under the terminal
+toolbar. A session with no agent terminal, such as an Enhanced session, shows "No agent
 terminal" and the shell controls. Under 768px (`useIsMobile`), the first time
 the Terminal view shows for such a session `useRunningShellOnPhone` reads
 the shell list with `shells.refresh()`, whose revision counter drops a list
@@ -5173,8 +5173,8 @@ while the Browser is what its user is working in:
 - The user goes elsewhere: the tab releases its lease, so the agent or a
   teammate can drive. Elsewhere is the window losing focus or being hidden,
   the view or the dashboard being left, and focus or a key press landing in
-  another part of the dashboard, such as the composer beside a docked
-  Browser. A menu or a dialog does not count, since it may be the Browser's
+  another part of the dashboard, such as the composer in the tile beside a
+  Browser tile. A menu or a dialog does not count, since it may be the Browser's
   own. An action still running when focus or a key lands elsewhere in the
   dashboard, such as the first page opening, finishes and then gives its
   lease back, and takes no focus back with it; so does a terminal link
@@ -5239,13 +5239,14 @@ importing a personal browser profile.
 **Shortcuts.** The page receives every key pressed on it, so the four
 Browser bindings are matched first and kept from it; see
 [Keyboard and focus](#keyboard-and-focus). The address-bar shortcut shows the
-Browser first when it is neither selected nor docked. It is also the way out
+Browser first when no tile shows it. It is also the way out
 of the page for a keyboard user, since Tab goes to the page.
 
 **Links from a terminal.** `openRunLink` (`open.ts`) is the link handler of a
 session's agent terminal and shells. An `http(s)` link to `localhost`,
-`127.0.0.1`, `0.0.0.0` or `[::1]` is recorded in `browserRequests`; the session
-frame shows the Browser unless it is already docked, and the Browser opens
+`127.0.0.1`, `0.0.0.0` or `[::1]` is recorded in `browserRequests`; the tile
+that carries the session's controls shows the Browser, or the tile that
+already holds it takes the focus, and the Browser opens
 the address as if it had been typed. A path in the session's checkout opens in
 its [Files view](#files-in-a-session). Every other link opens in a new tab as
 before, and an OAuth callback link is still intercepted first. The
@@ -8095,7 +8096,7 @@ bindings in overlapping scopes share keys, or one begins the other's sequence.
 | `x` | run | Maximize the focused tile, or restore the tiles; with two or more tiles |
 | `w` | run | Close the focused tab; with two or more tabs in the layout |
 | `s` | run | Pick a session or view to add to the focused tile |
-| `⌘Enter` / `Ctrl+Enter` | sidebar row | Open the session to the side of the focused tile (the row's own key, not in the table) |
+| `⌘Enter` / `Ctrl+Enter` | sidebar row | Open the session to the side of the focused tile |
 | `⌘L` / `Ctrl+L` | browser | Focus the Browser's address bar, from anywhere in the session |
 | `⌘R` / `Ctrl+R` | browser | Reload the page |
 | `⌘[` / `Alt+←` | browser | Go back |
