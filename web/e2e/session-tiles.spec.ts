@@ -13,7 +13,7 @@ const reviewer = 'Review the checkout rewrite'
 const tester = 'Test the checkout rewrite'
 
 /** Alice's workspace with three working Standard sessions, on a window that fits four tiles. */
-async function setUp(page: Page, aether: Aether, query = '') {
+async function setUp(page: Page, aether: Aether) {
   const alice = await aether.member('alice')
   await seedWorkspace(alice, aether.server.addr, await aether.seedRepo('shop'), 'shop')
   const { workspaces } = await alice.api.rpc<{ workspaces: { id: string }[] }>('workspace.list')
@@ -26,7 +26,7 @@ async function setUp(page: Page, aether: Aether, query = '') {
   const runs = [run('run-tiles-lead', lead), run('run-tiles-reviewer', reviewer), run('run-tiles-tester', tester)]
   await page.route('**/api/v1/run.list', (route) => route.fulfill({ json: { runs } }))
   await page.setViewportSize({ width: 1920, height: 1200 })
-  await page.goto(alice.url + query)
+  await page.goto(alice.url)
 }
 
 const row = (page: Page, title: string) =>
@@ -117,10 +117,12 @@ test('a layout opened from the sidebar survives a reload, a deep link and Back',
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(reviewer)
 
   // Focus clicks replace the history entry, so one Back leaves both of them behind.
+  const entries = await page.evaluate(() => history.length)
   await sessionTab(tile(page, 1, 2), lead).click()
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(lead)
   await sessionTab(tile(page, 2, 2), reviewer).click()
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(reviewer)
+  expect(await page.evaluate(() => history.length)).toBe(entries)
   await page.goBack()
   await expect(page.getByRole('heading', { level: 1 })).toHaveText(lead)
   expect(new URL(page.url()).searchParams.get('run')).toBe('run-tiles-lead')
