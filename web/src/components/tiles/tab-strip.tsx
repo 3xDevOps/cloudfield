@@ -14,6 +14,7 @@ import { StatusDot } from '@/components/ui/status-dot'
 import { TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useElementSize } from '@/lib/hooks'
 import { runLabel, stateName, stateTitle, toneOf } from '@/lib/status'
+import { redirectRoute } from '@/lib/url-state'
 import { cn } from '@/lib/utils'
 import { runViewIcon } from '@/routes/run/view-icons'
 import { runViewLabel } from '@/routes/run/views'
@@ -156,7 +157,6 @@ export function TabStrip({ tile, narrow, room }: {
   room: { right: boolean; down: boolean }
 }) {
   const { layout, cramped, ctx, say, picking, noRoom, pick, split } = useContext(TileAreaContext)!
-  const navigate = useStore((s) => s.navigate)
   const sidebarCollapsed = useStore((s) => s.sidebarCollapsed)
   const toggleSidebar = useStore((s) => s.toggleSidebar)
   const tiles = tileList(layout.root)
@@ -166,7 +166,7 @@ export function TabStrip({ tile, narrow, room }: {
   const run = ctx.runs[tile.tabs.find((tab) => tab.id === tile.active)?.runId ?? '']
 
   const close = (tab: TileTab) => {
-    if (tiles.length === 1 && tile.tabs.length === 1) return navigate('board')
+    if (tiles.length === 1 && tile.tabs.length === 1) return redirectRoute(useStore, { name: 'board', params: {} })
     changeTiles((before) => closeTab(before, tab.id))
     say('Tab closed')
   }

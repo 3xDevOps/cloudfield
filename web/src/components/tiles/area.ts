@@ -74,6 +74,7 @@ export function changeTiles(change: (layout: TileLayout, ctx: ViewContext) => Ti
   } else if (s.route.name !== 'run' || s.route.params.runId !== tab.runId || routed !== view) {
     route = { name: 'run', params: { runId: tab.runId, ...(view && { view }), ...(tab.repo && { repo: tab.repo }) } }
   }
+  if (next.tiles === s.tiles && route === s.route) return
   // The address is replaced first, so the store's listener finds it current and pushes nothing.
   if (!(push && tabCount(tiles) > tabCount(tileList(s.tiles.root))) && route !== s.route) window.history.replaceState(window.history.state, '', hrefFor(window.location.href, route))
   useStore.setState({ ...next, route })

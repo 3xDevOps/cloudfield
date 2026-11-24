@@ -41,14 +41,14 @@ export function Tile({ tile, rect, parked, narrow, room, linked, onSlot }: {
     <Tabs value={tile.active} onValueChange={(id) => changeTiles((before) => activateTab(before, id))} asChild>
       <section
         data-tile={tile.id}
-        data-tile-rest={(!focused && !parked) || undefined}
+        data-tile-rest={!focused || undefined}
         tabIndex={-1}
         inert={parked}
         aria-hidden={parked || undefined}
         aria-label={`${name}, tile ${visible.indexOf(tile) + 1} of ${visible.length}`}
         style={{ left: `${rect.left}%`, top: `${rect.top}%`, width: `${rect.width}%`, height: `${rect.height}%` }}
         className={cn(
-          'absolute flex min-h-0 min-w-0 flex-col border-seam bg-canvas outline-none after:pointer-events-none after:absolute after:inset-0 after:z-10 after:border',
+          'absolute isolate flex min-h-0 min-w-0 flex-col border-seam bg-canvas outline-none after:pointer-events-none after:absolute after:inset-0 after:z-10 after:border',
           // A parked tile stays in sight under the glide of the tile that covers it.
           parked && 'invisible transition-[visibility] delay-[var(--duration-glide)] duration-0 motion-reduce:delay-0',
           layout.maximized && focused && 'z-1',

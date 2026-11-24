@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { useContext } from 'react'
 import userEvent from '@testing-library/user-event'
 import type * as React from 'react'
 import { CenterView } from '@/components/shell/center-view'
@@ -10,6 +11,7 @@ import type * as apiModule from '@/lib/api'
 import { bindRouteToUrl } from '@/lib/url-state'
 import { lookupRoute } from '@/routes/registry'
 import { RunFrame, type FrameTile } from '@/routes/run'
+import { RunAgentContext } from '@/routes/run/agent-context'
 import type { RunView } from '@/routes/run/views'
 import { useStore } from '@/store'
 import { toRecord } from '@/store/runs'
@@ -46,6 +48,8 @@ const frames = new Map<string, FrameTile & { params: Record<string, string> }>()
 let frameRenders = 0
 
 function Recorded(props: React.ComponentProps<typeof RunFrame>) {
+  // Read as the real frame reads it, so a session rendered again counts here.
+  useContext(RunAgentContext)
   frameRenders += 1
   frames.set(`${props.run.id}:${props.params.view}`, { ...props.tile!, params: props.params })
   return <RunFrame {...props} />
@@ -135,11 +139,15 @@ describe('one session', () => {
     expect(screen.queryByRole('button', { name: /Split|Add a tab|Maximize/ })).toBeNull()
   })
 
-  it('leaves for the board from the X on the only tab and keeps the layout', () => {
+  it('leaves for the board from the X on the only tab, in place of the history entry, and keeps the layout', () => {
+    const stop = bindRouteToUrl(useStore)
     show()
     const before = state().tiles
+    const entries = window.history.length
     fireEvent.click(screen.getByRole('button', { name: `Close ${first}` }))
+    stop()
     expect(state().route.name).toBe('board')
+    expect(window.history.length).toBe(entries)
     expect(state().tiles).toBe(before)
     expect(state().runs.run_1).toBeDefined()
   })
@@ -349,13 +357,23 @@ describe('a session in two tiles', () => {
     expect(names()).toEqual([`${first}, Chat, tile 1 of 1`])
   })
 
-  it('renders no frame again for an event from a session in no tile', async () => {
+  it('renders no frame again for an event from a session in no tile, and only its own for one in a tile or a background tab', async () => {
     show()
     beside('run_2')
+    arrange((layout, ctx) => openTab(layout, layout.focused, 'run_4', ctx))
+    fireEvent.pointerDown(tiles()[0])
     await settled()
     const before = frameRenders
+    const heard = vi.fn()
+    const stop = useStore.subscribe(heard)
     act(() => state().upsertRun({ ...state().runs.run_3, reason: 'needs input: Which table?' }))
+    act(() => state().upsertRun({ ...state().runs.run_2, task: 'speed up the search' }))
+    stop()
     expect(frameRenders).toBe(before)
+    expect(heard).toHaveBeenCalledTimes(2)
+    frames.clear()
+    act(() => state().upsertRun({ ...state().runs.run_1, task: 'rewrite checkout' }))
+    expect([...frames.keys()]).toEqual(['run_1:session'])
   })
 
   it('stays in the other tile when the click on an arrowed view then focuses the tab it pressed', async () => {
@@ -499,6 +517,8 @@ describe('the header row', () => {
     await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Session details' })).toBeNull())
     fireEvent.click(tile(2).getByRole('button', { name: 'Maximize' }))
     expect(screen.getByRole('complementary', { name: 'Session details' })).toBeDefined()
+    expect(document.querySelectorAll('#run-details')).toHaveLength(1)
+    expect(frames.get('run_1:session')).toMatchObject({ alone: false })
   })
 
   it('offers Open sidebar on the first strip while the sidebar is hidden', () => {
@@ -657,6 +677,17 @@ describe('the composer', () => {
     await live('run_3', 1)
     fireEvent.click(tile(1).getByRole('button', { name: 'Reply' }))
     expect(state().route.params).toMatchObject({ runId: 'run_3', view: 'session' })
+  })
+
+  it('focuses the composer for Reply when the session\'s Chat is in a parked tile', async () => {
+    show('run_3', 'changes')
+    beside('run_3', 'session')
+    await settled()
+    await live('run_3', 2)
+    fireEvent.click(tile(1).getByRole('button', { name: 'Maximize' }))
+    fireEvent.click(tile(1).getByRole('button', { name: 'Reply' }))
+    expect(names()).toEqual(['answer the schema question, Chat, tile 1 of 1'])
+    await waitFor(() => expect(document.activeElement).toBe(fields(1)[0]))
   })
 
   it('docks no field under a Browser or a Standard session', async () => {

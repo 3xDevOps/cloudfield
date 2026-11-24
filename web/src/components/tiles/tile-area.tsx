@@ -87,22 +87,25 @@ function grownFrom(before: Record<string, Rect>, to: Rect): Rect | undefined {
   return undefined
 }
 
-interface TileFrameProps {
-  Frame: typeof RunFrame
-  run: RunRecord
+interface FrameProps {
   tab: TileTab
   view: RunView
-  slot: HTMLElement
+  slot: HTMLElement | null
   tile: FrameTile
-  route: Record<string, string>
 }
 
-/**
- * One session view inside its tile. The focused tile's frame reads the route;
- * the others only their tab. It renders again only when what it shows changed,
- * so an event from one session stops at the area for every other.
- */
-const TileFrame = memo(function TileFrame({ Frame, run, tab, view, slot, tile, route }: TileFrameProps) {
+interface SessionProps {
+  Frame: typeof RunFrame
+  run: RunRecord
+  route: Record<string, string>
+  frames: FrameProps[]
+}
+
+const sameFrame = (before: FrameProps, now: FrameProps) =>
+  before.tab === now.tab && before.view === now.view && before.slot === now.slot && JSON.stringify(before.tile) === JSON.stringify(now.tile)
+
+/** One session view inside its tile. The focused tile's frame reads the route; the others only their tab. */
+const TileFrame = memo(function TileFrame({ Frame, run, route, tab, view, slot, tile }: Omit<SessionProps, 'frames'> & FrameProps & { slot: HTMLElement }) {
   const params = useMemo(
     () => (tile.focused ? { ...route, runId: run.id, view } : { runId: run.id, view, ...(tab.repo && { repo: tab.repo }) }),
     [tile.focused, route, run.id, view, tab.repo],
@@ -112,10 +115,21 @@ const TileFrame = memo(function TileFrame({ Frame, run, tab, view, slot, tile, r
     if (tile.focused && document.activeElement?.id === 'main') focusView()
   }, [])
   return createPortal(<Frame run={run} params={params} tile={tile} />, slot, tab.id)
+}, (before, now) => before.Frame === now.Frame && before.run === now.run && (!now.tile.focused || before.route === now.route) && sameFrame(before, now))
+
+/**
+ * A session and its frames. It renders again only when what its tiles show
+ * changed, so an event from one session stops at the area for every other.
+ */
+const SessionFrames = memo(function SessionFrames({ Frame, run, route, frames }: SessionProps) {
+  return (
+    <RunSession run={run} views={frames.map((frame) => frame.view)}>
+      {frames.map(({ slot, ...frame }) => slot && <TileFrame key={frame.tab.id} Frame={Frame} run={run} route={route} slot={slot} {...frame} />)}
+    </RunSession>
+  )
 }, (before, now) =>
-  before.Frame === now.Frame && before.run === now.run && before.tab === now.tab && before.view === now.view && before.slot === now.slot
-  && (now.tile.focused ? before.route === now.route : true)
-  && JSON.stringify(before.tile) === JSON.stringify(now.tile))
+  before.Frame === now.Frame && before.run === now.run && (before.route === now.route || !now.frames.some((frame) => frame.tile.focused))
+  && before.frames.length === now.frames.length && now.frames.every((frame, index) => sameFrame(before.frames[index], frame)))
 
 /**
  * The desktop session page: the tile layout, drawn flat so that a tile keeps
@@ -188,15 +202,13 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
       if (!node || node.inert) continue
       const ghost = node.cloneNode(true) as HTMLElement
       for (const named of [ghost, ...ghost.querySelectorAll('[id], [data-tile], [data-tab]')]) for (const name of ['id', 'data-tile', 'data-tab']) named.removeAttribute(name)
+      ghost.classList.replace('after:border-accent', 'after:border-transparent')
       ghost.inert = true
       ghost.ariaHidden = 'true'
       node.parentElement!.prepend(ghost)
       setTimeout(() => ghost.remove(), hold)
     }
   }), [])
-
-  // A view that stopped being offered, on a session that finished for instance, would leave two tabs showing one thing.
-  useEffect(() => changeTiles((before) => before), [ctx])
 
   // No session mounts until the layout has followed the route.
   const focusedTab = activeTab(tiles.find((tile) => tile.id === stored.focused)!)
@@ -211,6 +223,9 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
     if (fresh ? !synced : !held && tiles.every((tile) => !tile.tabs.length)) useStore.setState((s) => tilesAfter(s, (before, context) => routeTiles(before, params, context)))
     else if (!held) changeTiles((before) => before)
   }, [params, held])
+
+  // After the route is followed: a view that stopped being offered, on a session that finished for instance, would leave two tabs showing one thing.
+  useLayoutEffect(() => changeTiles((before) => before), [ctx])
 
   // Only a press or the Tab key focuses a tile: after a jump to another tile, a closing popover or the pressed
   // control takes DOM focus back, and that focus is sent on to the focused tile, once.
@@ -375,32 +390,27 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
           const terminalHost = (frames.find((frame) => frame.view === 'terminal') ?? frames[0]).tile.id
           const controls = controlsTile(layout, runId)?.id
           return (
-            <RunSession key={JSON.stringify([identityKey, epoch, run.id, run.created_at])} run={run} views={frames.map((frame) => frame.view)}>
-              {frames.map(({ tile, tab, view }) => {
-                const slot = slots[tile.id]
-                return slot && (
-                  <TileFrame
-                    key={tab.id}
-                    Frame={Frame}
-                    run={run}
-                    tab={tab}
-                    view={view}
-                    slot={slot}
-                    route={params}
-                    tile={{
-                      focused: tile.id === layout.focused,
-                      controls: tile.id === controls,
-                      alone: visible.length === 1,
-                      terminalHost: tile.id === terminalHost,
-                      chatOnScreen: frames.some((frame) => frame.view === 'session' && frame.tile !== tile && visible.includes(frame.tile)),
-                      elsewhere: tiles.flatMap((other) => other.tabs).filter((other) => other.runId === runId && other.id !== tab.id).map((other) => resolveView(other, run, cap, memory)),
-                      arrows: viewsElsewhere(layout, tile.id, runId, ctx),
-                      onArrow: link,
-                    }}
-                  />
-                )
-              })}
-            </RunSession>
+            <SessionFrames
+              key={JSON.stringify([identityKey, epoch, run.id, run.created_at])}
+              Frame={Frame}
+              run={run}
+              route={params}
+              frames={frames.map(({ tile, tab, view }) => ({
+                tab,
+                view,
+                slot: slots[tile.id] ?? null,
+                tile: {
+                  focused: tile.id === layout.focused,
+                  controls: tile.id === controls,
+                  alone: visible.length === 1 && visible.includes(tile),
+                  terminalHost: tile.id === terminalHost,
+                  chatOnScreen: frames.some((frame) => frame.view === 'session' && frame.tile !== tile && visible.includes(frame.tile)),
+                  elsewhere: tiles.flatMap((other) => other.tabs).filter((other) => other.runId === runId && other.id !== tab.id).map((other) => resolveView(other, run, cap, memory)),
+                  arrows: viewsElsewhere(layout, tile.id, runId, ctx),
+                  onArrow: link,
+                },
+              }))}
+            />
           )
         })}
         <span role="status" aria-live="polite" className="sr-only">{said}</span>

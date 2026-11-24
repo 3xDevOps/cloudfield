@@ -228,11 +228,9 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
       }))
     },
     focusComposer: () => {
-      if (chatOnScreen) navigate('run', { runId: run.id, view: 'session', focus: 'composer' }, { remember: false })
-      else {
-        go('session', { remember: false })
-        requestAnimationFrame(() => textarea.current?.focus())
-      }
+      if (!mobile) return navigate('run', { runId: run.id, view: 'session', focus: 'composer' }, { remember: false })
+      go('session', { remember: false })
+      requestAnimationFrame(() => textarea.current?.focus())
     },
     focusRequest: () => {
       if (!inline) setOverlayDetails(false)
