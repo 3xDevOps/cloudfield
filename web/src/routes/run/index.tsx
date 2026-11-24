@@ -81,11 +81,9 @@ export interface FrameTile {
   arrows: Partial<Record<RunView, string>>
   /** Marks the tile that shows `view` while its arrow is pointed at. */
   onArrow: (view: RunView | null) => void
-  /** Under 560px wide: the header row draws icons for words. */
-  narrow: boolean
 }
 
-const lone: FrameTile = { focused: true, controls: true, alone: true, terminalHost: true, elsewhere: [], arrows: {}, onArrow: () => {}, narrow: false }
+const lone: FrameTile = { focused: true, controls: true, alone: true, terminalHost: true, elsewhere: [], arrows: {}, onArrow: () => {} }
 
 function useVisited(view: RunView, elsewhere: RunView[]) {
   const visited = useRef(new Set<RunView>())
@@ -100,7 +98,7 @@ function useVisited(view: RunView, elsewhere: RunView[]) {
  * in the focused tile and the tab's view and repo elsewhere.
  */
 export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteProps['params']; tile?: FrameTile }) {
-  const { focused, controls, alone, terminalHost, elsewhere, arrows, onArrow, narrow } = tile ?? lone
+  const { focused, controls, alone, terminalHost, elsewhere, arrows, onArrow } = tile ?? lone
   const { agent, agentName, agentEntry, room, shells } = useContext(RunAgentContext)!
   const cap = useCapability()
   const mobile = useIsMobile()
@@ -290,7 +288,6 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
           agentName={agentName}
           agentEntry={agentEntry}
           controls={controls}
-          narrow={narrow}
           workflow={(
             <WorkflowChip
               run={run}

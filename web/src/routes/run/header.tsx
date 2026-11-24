@@ -17,7 +17,7 @@ import { extraRepoCount, repoLabel } from '@/lib/repos'
 import { isSudo } from '@/lib/run-requests'
 import type { AgentInfo } from '@/lib/types'
 import { useClock } from '@/lib/clock'
-import { useReducedMotion } from '@/lib/hooks'
+import { useElementSize, useReducedMotion } from '@/lib/hooks'
 import { shortcutLabel } from '@/lib/keybindings'
 import { needsYou, terminalAction } from '@/lib/needs-you'
 import { runLabel, stateName, stateTitle, stateWords, toneOf, waitLine } from '@/lib/status'
@@ -115,8 +115,8 @@ function WaitLine({ run }: { run: RunRecord }) {
   )
 }
 
-/** The state's dot and label, for which `chip` stands in, then on a wide tile what the session runs as and the reason. */
-function StateLine({ run, agentName, narrow, chip }: { run: RunRecord; agentName: string; narrow: boolean; chip?: React.ReactNode }) {
+/** The state's dot and label, for which `chip` stands in, then on a wide row the reason and what the session runs as. */
+function StateLine({ run, agentName, narrow, controls, chip }: { run: RunRecord; agentName: string; narrow: boolean; controls: boolean; chip?: React.ReactNode }) {
   const presented = useRunPresentation(run)
   const asks = useNeedsYouRuns([run.id]).has(run.id)
   const presentation = run.switching
@@ -142,6 +142,7 @@ function StateLine({ run, agentName, narrow, chip }: { run: RunRecord; agentName
   const mode = modeLabel[run.mode] ?? run.mode
   const watch = useStore((s) => runWatch(s, run.id))
   const navigate = useStore((s) => s.navigate)
+  const part = 'flex h-full min-w-0 items-center gap-1.5'
   return (
     <>
       {chip ? (
@@ -155,63 +156,66 @@ function StateLine({ run, agentName, narrow, chip }: { run: RunRecord; agentName
           <span role="status" className="font-medium">{stateName(presentation)}</span>
         </span>
       )}
-      {/* Takes only the room the switch and the controls leave, and within it the reason outlasts what comes before it. */}
-      <div className="flex min-w-0 flex-1 basis-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-ui-sm text-muted" title={narrow ? undefined : stateTitle(presentation, since)}>
+      {/* One line of a wrapping row: a part that does not fit whole wraps out of sight with its separator, and the reason, first, is the one that truncates. */}
+      <div
+        className={cn('flex h-full flex-1 basis-0 flex-wrap content-start gap-x-1.5 overflow-hidden whitespace-nowrap text-ui-sm text-muted', narrow ? 'min-w-0' : 'min-w-24')}
+        title={narrow ? undefined : stateTitle(presentation, since)}
+      >
         {!narrow && (
           <>
-            <span className="flex min-w-0 shrink-99 items-center gap-1.5 overflow-hidden">
-              {extraRepoCount(run) > 0 && (
-                <>
-                  <span aria-hidden>·</span>
-                  <span className="min-w-0 truncate" title={run.repos!.map((repo) => repo.name).join(', ')}>{repoLabel(run.repos![0]!.name, run)}</span>
-                </>
-              )}
+            {detail && (
+              <span className={part}>
+                <span aria-hidden>·</span>
+                <span className={asks && !run.switching ? 'min-w-0 truncate text-text' : 'min-w-0 truncate'}>{detail}</span>
+              </span>
+            )}
+            {extraRepoCount(run) > 0 && (
+              <span className={part}>
+                <span aria-hidden>·</span>
+                <span className="min-w-0 truncate" title={run.repos!.map((repo) => repo.name).join(', ')}>{repoLabel(run.repos![0]!.name, run)}</span>
+              </span>
+            )}
+            <span className={part}>
               <span aria-hidden>·</span>
               <span className="min-w-0 truncate" title={[agentName, mode, run.model, run.effort].filter(Boolean).join(' · ')}>
                 <span className="sr-only">{agentName} · </span>
                 {mode}
               </span>
-              {run.permission && run.permission !== 'default' && (
-                <>
-                  <span aria-hidden>·</span>
-                  <Badge tone={run.permission === 'root' ? 'needs-you' : 'neutral'} title={permissions.find((p) => p.value === run.permission)?.detail}>{permissionLabel(run.permission)}</Badge>
-                </>
-              )}
-              {accountID && (
-                <>
-                  <span aria-hidden>·</span>
-                  <span className="min-w-0 truncate">On {accountOwner}&apos;s account (fallback)</span>
-                </>
-              )}
-              {run.via && (
-                <>
-                  <span aria-hidden>·</span>
-                  <span className="min-w-0 truncate">Launched via {run.via}</span>
-                </>
-              )}
-              {watch && (
-                <>
-                  <span aria-hidden>·</span>
-                  <Button
-                    variant="quiet"
-                    size="sm"
-                    hint={watchHint(watch)}
-                    className="shrink-0"
-                    onClick={() => {
-                      const route = watchRoute(watch.id)
-                      navigate(route.name, route.params)
-                    }}
-                  >
-                    <Eye aria-hidden />
-                    <span className="sr-only">{watch.state === 'paused' ? 'Watch paused' : watch.state === 'error' ? 'Watch failing' : 'Watch on'}</span>
-                  </Button>
-                </>
-              )}
             </span>
-            {detail && (
-              <span className="flex min-w-0 items-center gap-1.5">
+            {run.permission && run.permission !== 'default' && (
+              <span className={part}>
                 <span aria-hidden>·</span>
-                <span className={asks && !run.switching ? 'min-w-0 truncate text-text' : 'min-w-0 truncate'}>{detail}</span>
+                <Badge tone={run.permission === 'root' ? 'needs-you' : 'neutral'} title={permissions.find((p) => p.value === run.permission)?.detail}>{permissionLabel(run.permission)}</Badge>
+              </span>
+            )}
+            {accountID && (
+              <span className={part}>
+                <span aria-hidden>·</span>
+                <span className="min-w-0 truncate">On {accountOwner}&apos;s account (fallback)</span>
+              </span>
+            )}
+            {run.via && (
+              <span className={part}>
+                <span aria-hidden>·</span>
+                <span className="min-w-0 truncate">Launched via {run.via}</span>
+              </span>
+            )}
+            {controls && watch && (
+              <span className={part}>
+                <span aria-hidden>·</span>
+                <Button
+                  variant="quiet"
+                  size="sm"
+                  hint={watchHint(watch)}
+                  className="shrink-0"
+                  onClick={() => {
+                    const route = watchRoute(watch.id)
+                    navigate(route.name, route.params)
+                  }}
+                >
+                  <Eye aria-hidden />
+                  <span className="sr-only">{watch.state === 'paused' ? 'Watch paused' : watch.state === 'error' ? 'Watch failing' : 'Watch on'}</span>
+                </Button>
               </span>
             )}
           </>
@@ -225,13 +229,13 @@ function StateLine({ run, agentName, narrow, chip }: { run: RunRecord; agentName
  * phone with a pull request beside it for instance. It keeps the shown view's
  * tab in sight as the view or the room for it changes, and fades its right
  * edge while more tabs lie past it. */
-function ViewSwitch({ view, views, arrows, onArrow, narrow }: {
+function ViewSwitch({ view, views, arrows, onArrow, icons }: {
   view: RunView
   views: RunView[]
   arrows: Partial<Record<RunView, string>>
   onArrow: (view: RunView | null) => void
-  /** Icons for words, each named by its tooltip. */
-  narrow: boolean
+  /** Icons for words, each named by its tooltip, where the words would crowd out the state's reason. */
+  icons: boolean
 }) {
   const strip = useRef<HTMLDivElement>(null)
   const [more, setMore] = useState(false)
@@ -259,12 +263,12 @@ function ViewSwitch({ view, views, arrows, onArrow, narrow }: {
     >
       {views.map((item) => {
         const Icon = runViewIcon[item]
-        const hint = [narrow && runViewLabel[item], arrows[item]].filter(Boolean).join('\n')
+        const hint = [icons && runViewLabel[item], arrows[item]].filter(Boolean).join('\n')
         return (
           <Tooltip key={item} content={hint} disabled={!hint}>
             <TabsTrigger
               value={item}
-              aria-label={narrow ? runViewLabel[item] : undefined}
+              aria-label={icons ? runViewLabel[item] : undefined}
               className="scroll-mx-6"
               {...(arrows[item] && {
                 onPointerEnter: () => onArrow(item),
@@ -273,7 +277,7 @@ function ViewSwitch({ view, views, arrows, onArrow, narrow }: {
                 onBlur: () => onArrow(null),
               })}
             >
-              {narrow ? <Icon aria-hidden className="size-3.5" /> : runViewLabel[item]}
+              {icons ? <Icon aria-hidden className="size-3.5" /> : runViewLabel[item]}
               {arrows[item] && <ArrowUpRight aria-hidden className="size-2.5 text-muted" />}
             </TabsTrigger>
           </Tooltip>
@@ -301,7 +305,6 @@ export function RunHeader({
   workflow,
   onWorkflow,
   controls,
-  narrow,
 }: {
   run: RunRecord
   agentName: string
@@ -325,10 +328,12 @@ export function RunHeader({
   onEvents: (returnTo: HTMLElement | null) => void
   /** This desktop tile carries the session's controls; its other tiles show the switch and the state alone. */
   controls: boolean
-  /** The desktop tile is under 560px wide. */
-  narrow: boolean
 }) {
   const mobile = useIsMobile()
+  // The row is sized from itself, not its tile: docked Details and Workflow take their width out of it.
+  const [rowRef, row] = useElementSize<HTMLElement>()
+  const narrow = row.width > 0 && row.width < 560
+  const icons = row.width > 0 && row.width < 800
   const primary = usePrimaryAction(run, view, agent, nav)
   const modeSwitch = useModeSwitch(run, agent, agentEntry)
   const pullRequest = useRunPullRequest(run, agent, agentName)
@@ -380,10 +385,10 @@ export function RunHeader({
   const Heading = focused ? 'h1' : 'h2'
   return (
     <>
-      <header data-slot="pane-header" className="@container/views relative flex h-8 shrink-0 items-center gap-1.5 border-b border-seam px-2 coarse:h-11">
+      <header ref={rowRef} data-slot="pane-header" className="@container/views relative flex h-8 shrink-0 items-center gap-1.5 border-b border-seam px-2 coarse:h-11">
         <Heading tabIndex={-1} className="sr-only">{runLabel(run)}</Heading>
-        <ViewSwitch view={view} views={views} arrows={arrows} onArrow={onArrow} narrow={narrow} />
-        <StateLine run={run} agentName={agentName} narrow={narrow} chip={controls && !narrow ? workflow : undefined} />
+        <ViewSwitch view={view} views={views} arrows={arrows} onArrow={onArrow} icons={icons} />
+        <StateLine run={run} agentName={agentName} narrow={narrow} controls={controls} chip={controls && !narrow ? workflow : undefined} />
         {controls && (
           <div role="toolbar" aria-label="Session actions" className="flex shrink-0 items-center gap-1">
             {!narrow && pullRequest.status}

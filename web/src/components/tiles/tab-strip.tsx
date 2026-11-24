@@ -33,7 +33,7 @@ function TabLabel({ run, tab, background, narrow }: { run: RunRecord; tab: TileT
       <span className="sr-only">{asks ? 'Needs you' : stateName(shown)}: </span>
       {!badge && <StatusDot tone={asks ? 'needs-you' : toneOf(shown)} />}
       {!narrow && <AgentGlyph agent={run.harness} />}
-      <span className="min-w-0 truncate" title={stateTitle(shown, run.stateChangedAt)}>{runLabel(run)}</span>
+      <span className="min-w-0 truncate" title={stateTitle(shown, shown.state === 'ready' && run.review_changed_at ? run.review_changed_at : run.stateChangedAt)}>{runLabel(run)}</span>
       {several && (
         <span className="flex shrink-0 items-center gap-1 text-muted">
           <span aria-hidden>·</span>

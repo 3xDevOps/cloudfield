@@ -254,8 +254,8 @@ function Content({ textarea, onClose }: { textarea: React.RefObject<HTMLTextArea
   return (
     <>
       <PaneHeader
-        // Beside a session the header ends where the tile's two 32px rows do.
-        className={cn(sheet && 'coarse:px-4 coarse:py-2', onRun && (sheet ? 'h-14' : 'h-16'))}
+        // Beside a session the header ends where the tile's two rows do: 32px each, 44px under a finger.
+        className={cn(sheet && 'coarse:px-4 coarse:py-2', onRun && (sheet ? 'h-14' : 'h-16 coarse:h-22'))}
         title="Assistant"
         level={2}
         stateLine={status && (

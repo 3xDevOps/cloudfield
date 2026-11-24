@@ -136,7 +136,7 @@ export function MultiplayerControls({ run, agent, onPeople }: {
           {run.protected && <span className="inline-flex shrink-0 items-center gap-1 text-ui-sm text-muted"><Shield />Protected</span>}
           <div role="group" aria-label="Session controller" className="flex min-w-0 items-center gap-1.5 text-ui-sm text-muted">
             {agent.steerable && controller && <Avatar name={controller.name} color={controller.color} />}
-            <span className="min-w-0 max-w-48 truncate @[48rem]/multiplayer:max-w-none">{agent.steerable ? controllerSummary : agent.starting ? 'Starting…' : 'Session finished · read-only'}</span>
+            <span className="min-w-0 max-w-48 truncate">{agent.steerable ? controllerSummary : agent.starting ? 'Starting…' : 'Session finished · read-only'}</span>
           </div>
           {agent.steerable && stream !== 'live' && <span className="shrink-0 text-ui-sm text-state-needs-you">{connection}</span>}
           {agent.steerable && maySteer && (
@@ -197,10 +197,12 @@ export function PresenceControls({ run, agent, wide }: {
       )}
       {agent.steerable && !agent.localControl && (
         <>
-          <span role="group" aria-label="Session controller" title={summary} className="flex min-w-0 items-center gap-1.5">
-            {controller && <Avatar size="header" {...controller} className={ringed} />}
-            {wide && <span className={cn(words, 'max-w-48 truncate')}>{summary}</span>}
-          </span>
+          {(controller || wide) && (
+            <span role="group" aria-label="Session controller" title={summary} className="flex min-w-0 items-center gap-1.5">
+              {controller && <Avatar size="header" {...controller} className={ringed} />}
+              {wide && <span className={cn(words, 'max-w-48 truncate')}>{summary}</span>}
+            </span>
+          )}
           {maySteer ? (
             <ControlButton
               ownsControl={false}

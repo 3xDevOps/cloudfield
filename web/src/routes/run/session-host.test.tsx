@@ -17,8 +17,8 @@ vi.mock('@/lib/api', async (importOriginal) => {
   return { ...actual, api: fakeApi() }
 })
 
-const focusedTile: FrameTile = { focused: true, controls: true, alone: false, terminalHost: true, elsewhere: [], arrows: {}, onArrow: () => {}, narrow: false }
-const otherTile: FrameTile = { focused: false, controls: false, alone: false, terminalHost: false, elsewhere: [], arrows: {}, onArrow: () => {}, narrow: false }
+const focusedTile: FrameTile = { focused: true, controls: true, alone: false, terminalHost: true, elsewhere: [], arrows: {}, onArrow: () => {} }
+const otherTile: FrameTile = { focused: false, controls: false, alone: false, terminalHost: false, elsewhere: [], arrows: {}, onArrow: () => {} }
 
 function record(over: Partial<Run> = {}) {
   useStore.getState().upsertRun(run(over))
