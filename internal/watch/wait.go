@@ -411,6 +411,9 @@ func runEnd(run *domain.Run) (outcome string, ended bool) {
 	if run.Status.Live() && run.Activity == domain.ActivityFinished {
 		return "reported-success", true
 	}
+	if run.Status.Live() && run.Activity == domain.ActivityFailed && strings.HasPrefix(run.Reason, domain.ReportedFailureReason) {
+		return "reported-failure", true
+	}
 	return "", false
 }
 

@@ -1073,13 +1073,13 @@ Each session gets its own socket for messaging other sessions
 token enters the container.
 
 - A session can message its parent and subsessions, sessions editing the same files, and live
-  sessions in its workspace that its owner may message. Never across workspaces. A
-  viewer's sessions message nobody.
+  sessions in any workspace its owner may reach. A viewer's sessions message
+  nobody.
 - A message is an attributed inbox item. It gives the sender no steer, kill,
   terminal, git, transcript or secret access to the recipient.
-- Messages are capped at 4 KiB, 100 unread per inbox and 8 new correspondents
-  per session outside its parent and subsessions. Sessions in one workspace share a repository, so they
-  can still steer each other through file contents.
+- Messages are capped at 4 KiB and 100 unread per inbox. Sessions in one
+  workspace share a repository, so they can still steer each other through
+  file contents.
 - `cloudfield-server config set conflict-coordination false` turns off messages
   between sessions and outcome reports; overlap warnings stay.
 - Each container holds a read-only copy of the server binary for the optional

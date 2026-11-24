@@ -459,14 +459,24 @@ func (s *Service) Inbox(ctx context.Context, run domain.RunID, p protocol.CoordI
 	}
 	out := make([]protocol.CoordMessage, 0, len(msgs))
 	for _, m := range msgs {
-		out = append(out, protocol.CoordMessage{
+		item := protocol.CoordMessage{
 			ID:            m.ID,
 			Kind:          string(m.Kind),
 			CorrelationID: m.CorrelationID,
 			FromRunID:     string(m.FromRun),
 			Body:          m.Body,
 			CreatedAt:     m.CreatedAt.UTC().Format(time.RFC3339),
-		})
+		}
+		if m.Kind == store.RunMessageKindMessage && m.CorrelationID != "" {
+			report, rerr := s.cfg.Mail.GetCoordReport(ctx, m.CorrelationID)
+			if rerr != nil && !errors.Is(rerr, store.ErrNotFound) {
+				return protocol.CoordInboxResult{}, internalError(method, rerr)
+			}
+			if rerr == nil && report.RunID == m.FromRun {
+				item.Kind, item.Outcome = protocol.CoordMessageKindReport, string(report.Outcome)
+			}
+		}
+		out = append(out, item)
 	}
 	more, err := s.cfg.Mail.CountUndeliveredRunMessages(ctx, run)
 	if err != nil {

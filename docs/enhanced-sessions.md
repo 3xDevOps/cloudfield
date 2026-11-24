@@ -299,7 +299,8 @@ Enhanced session without hooks. When mail arrives and the session has no turn ru
 the server sends the agent one prompt telling it to run
 `cloudfield-internal inbox` and acknowledge the batch, ending with
 `End this turn with exactly one report as your last action: aether_report, or /usr/local/bin/aether-internal report where you have no aether_report tool.`
-A message steered into a running turn carries no such line. Messages that arrive together
+Mail that arrives during a turn waits until the turn ends; the agent is not
+told mid-turn. Messages that arrive together
 share one prompt, and each set of new unread messages starts at most one turn,
 even a turn the agent refuses. A session that opens afterwards gets the prompt
 again.

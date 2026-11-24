@@ -169,7 +169,7 @@ func (s *Service) wakeEnhanced(run domain.RunID) (retry bool) {
 		steers := s.cfg.Waker.InTurn(run)
 		overlapSent = freshOverlap && steers
 		if overlapSent {
-			prompt.WriteString(protocol.CoordOverlapContext)
+			prompt.WriteString(protocol.CoordOverlapContext(overlap))
 		}
 		if prompt.Len() == 0 {
 			return nil
