@@ -48,7 +48,7 @@ function TabLabel({ run, tab, background, narrow }: { run: RunRecord; tab: TileT
 }
 
 function SessionTab({ tile, tab, narrow, onClose }: { tile: Tile; tab: TileTab; narrow: boolean; onClose: () => void }) {
-  const { layout, ctx, say } = useContext(TileAreaContext)!
+  const { layout, cramped, ctx, say } = useContext(TileAreaContext)!
   const run = ctx.runs[tab.runId]
   const active = tile.active === tab.id
   const title = run ? runLabel(run) : 'Session'
@@ -58,16 +58,18 @@ function SessionTab({ tile, tab, narrow, onClose }: { tile: Tile; tab: TileTab; 
         value={tab.id}
         className={cn('min-w-0 shrink px-2', layout.focused !== tile.id && 'data-[state=active]:text-muted')}
         onDoubleClick={() => {
-          if (tileList(layout.root).length < 2) return
+          if (cramped || tileList(layout.root).length < 2) return
           changeTiles((before) => maximizeTile(before, tile.id))
           say(`${title} maximized`)
         }}
         onKeyDown={(event) => {
           if (event.key !== 'Delete' && event.key !== 'Backspace') return
           event.preventDefault()
-          const list = event.currentTarget.closest('[role="tablist"]')
           onClose()
-          requestAnimationFrame(() => list?.querySelector<HTMLElement>('[role="tab"][data-state="active"]')?.focus())
+          requestAnimationFrame(() => {
+            const taker = [...document.querySelectorAll<HTMLElement>('[data-tile]')].find((node) => node.dataset.tile === useStore.getState().tiles.focused)
+            taker?.querySelector<HTMLElement>('[role="tab"][data-state="active"]')?.focus()
+          })
         }}
       >
         {run ? <TabLabel run={run} tab={tab} background={!active} narrow={narrow} /> : title}

@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import type * as React from 'react'
 import { SidebarRuns } from '@/components/shell/sidebar-runs'
 import { changeTiles, openToSide } from '@/components/tiles/area'
@@ -278,6 +279,18 @@ describe('tabs', () => {
     expect(state().route.params.runId).toBe('run_1')
   })
 
+  it('moves keyboard focus to the neighbour when Delete closes a tile, and keeps the open subagent on Maximize', async () => {
+    show()
+    beside('run_2')
+    fireEvent.keyDown(strip(2).getByRole('tab'), { key: 'Delete' })
+    await waitFor(() => expect(document.activeElement).toBe(strip(1).getByRole('tab')))
+
+    beside('run_2')
+    act(() => state().navigate('run', { runId: 'run_2', agent: 'agent_1' }))
+    fireEvent.click(tile(2).getByRole('button', { name: 'Maximize' }))
+    expect(state().route.params).toEqual({ runId: 'run_2', agent: 'agent_1' })
+  })
+
   it('puts the Needs you badge on a background tab and the lock on a protected session', () => {
     act(() => state().upsertRun({ ...seeds[1], protected: true }))
     show('run_3')
@@ -310,6 +323,31 @@ describe('a session in two tiles', () => {
     expect(names()).toEqual([`${first}, Chat, tile 1 of 2`, `${first}, Changes, tile 2 of 2`])
     const chat = within(tile(2).getByRole('tablist', { name: 'Session views' })).getByRole('tab', { name: 'Chat' })
     expect(await hintOn(chat)).toBe('On screen in the tile at left')
+  })
+
+  it('stays in the other tile when the click on an arrowed view then focuses the tab it pressed', async () => {
+    chatAndChanges()
+    await userEvent.click(within(tile(1).getByRole('tablist', { name: 'Session views' })).getByRole('tab', { name: 'Changes' }))
+    expect(state().tiles.focused).toBe(tiles()[1].dataset.tile)
+    expect(state().route.params).toMatchObject({ runId: 'run_1', view: 'changes' })
+    expect(document.activeElement).toBe(tile(2).getByRole('heading', { level: 1, name: first }))
+  })
+
+  it('stays in the other tile when the picker that jumped there closes and hands focus back', async () => {
+    chatAndChanges()
+    await userEvent.click(tile(1).getByRole('button', { name: 'Add a tab' }))
+    await userEvent.click(within(await screen.findByRole('dialog')).getByRole('option', { name: 'Changes' }))
+    await waitFor(() => expect(document.activeElement).toBe(tile(2).getByRole('heading', { level: 1, name: first })))
+    expect(state().tiles.focused).toBe(tiles()[1].dataset.tile)
+    expect(state().route.params).toMatchObject({ runId: 'run_1', view: 'changes' })
+    expect(tabs()).toEqual([['run_1'], ['run_1']])
+  })
+
+  it('follows the Tab key into another tile', async () => {
+    chatAndChanges()
+    tile(1).getAllByRole('button').at(-1)!.focus()
+    while (!tiles()[1].contains(document.activeElement)) await userEvent.tab()
+    expect(state().tiles.focused).toBe(tiles()[1].dataset.tile)
   })
 
   it('skips a view another tile holds on ] and [', () => {

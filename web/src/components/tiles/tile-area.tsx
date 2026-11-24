@@ -33,6 +33,11 @@ import {
 /** A tile narrower than this draws its chrome with icons for words. */
 const narrowBelow = 560
 
+function focusHeading(tileId: string) {
+  const tile = [...document.querySelectorAll<HTMLElement>('[data-tile]')].find((node) => node.dataset.tile === tileId)
+  tile?.querySelector<HTMLElement>('h1[tabindex], h2[tabindex]')?.focus({ preventScroll: true })
+}
+
 /** One session view inside its tile. The focused tile's frame reads the route; the others only their tab. */
 function TileFrame({ Frame, run, tab, view, slot, tile, route }: {
   Frame: typeof RunFrame
@@ -66,11 +71,6 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
   const cap = useCapability()
   const ctx = useMemo(() => ({ runs, cap, memory }), [runs, cap, memory])
   const [areaRef, area] = useElementSize<HTMLDivElement>()
-  const root = useRef<HTMLDivElement | null>(null)
-  const rootRef = useCallback((node: HTMLDivElement | null) => {
-    root.current = node
-    areaRef(node)
-  }, [areaRef])
   const [slots, setSlots] = useState<Record<string, HTMLElement | null>>({})
   const onSlot = useCallback((tileId: string, slot: HTMLElement | null) => setSlots((before) => ({ ...before, [tileId]: slot })), [])
   const [linked, link] = useState<string | null>(null)
@@ -86,10 +86,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
   const visible = visibleTiles(layout)
   const rects = tileRects(layout.root, area)
 
-  // The layout follows the route when the route changes without it: a deep link, a phone widened to a desktop.
-  // No session mounts until it has. An empty focused tile is left alone: it waits for a pick while the route
-  // keeps naming the session it was split from. Between route changes the layout leads and `changeTiles`
-  // moves the route with it.
+  // No session mounts until the layout has followed the route.
   const focusedTab = activeTab(tiles.find((tile) => tile.id === stored.focused)!)
   const held = tiles.some((tile) => tile.tabs.some((tab) => tab.runId === params.runId))
   const synced = focusedTab ? showsRoute(stored, params, ctx) : tiles.some((tile) => activeTab(tile)?.runId === params.runId)
@@ -99,23 +96,49 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
     const fresh = landed.current !== params
     landed.current = params
     // A deleted session takes its tab with it. An empty layout shows it again, as not found; otherwise the route follows the focus.
-    if (fresh ? !synced : !held && !focusedTab) useStore.setState((s) => tilesAfter(s, (before, context) => routeTiles(before, params, context)))
+    if (fresh ? !synced : !held && tiles.every((tile) => !tile.tabs.length)) useStore.setState((s) => tilesAfter(s, (before, context) => routeTiles(before, params, context)))
     else if (!held) changeTiles((before) => before)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params, held])
 
+  // Only a press or the Tab key focuses a tile: after a jump to another tile, a closing popover or the pressed
+  // control takes DOM focus back, and that focus is sent on to the focused tile, once.
   // Native and on capture: a frame is portaled into its tile, and a terminal stops the events it handles.
+  const byHand = useRef(stored.focused)
+  const stray = useRef(false)
+  useLayoutEffect(() => {
+    if (byHand.current === stored.focused) return
+    byHand.current = stored.focused
+    stray.current = true
+    const from = document.activeElement?.closest<HTMLElement>('[data-tile]')
+    if (from && from.dataset.tile !== stored.focused) focusHeading(stored.focused)
+  }, [stored.focused])
   useEffect(() => {
-    const node = root.current!
-    const focus = (event: Event) => {
+    let tabbed = false
+    const enter = (event: Event) => {
       const tileId = (event.target as Element).closest<HTMLElement>('[data-tile]')?.dataset.tile
-      if (tileId && tileId !== useStore.getState().tiles.focused) changeTiles((before) => focusTile(before, tileId))
+      const focused = useStore.getState().tiles.focused
+      if (!tileId || tileId === focused) return
+      if (event.type === 'focusin' && !tabbed) {
+        if (stray.current) focusHeading(focused)
+        stray.current = false
+        return
+      }
+      byHand.current = tileId
+      changeTiles((before) => focusTile(before, tileId))
     }
-    node.addEventListener('pointerdown', focus, true)
-    node.addEventListener('focusin', focus, true)
+    const press = (event: Event) => {
+      tabbed = event instanceof KeyboardEvent && event.key === 'Tab'
+      stray.current = false
+      if (event.type === 'pointerdown') enter(event)
+    }
+    window.addEventListener('pointerdown', press, true)
+    window.addEventListener('keydown', press, true)
+    window.addEventListener('focusin', enter, true)
     return () => {
-      node.removeEventListener('pointerdown', focus, true)
-      node.removeEventListener('focusin', focus, true)
+      window.removeEventListener('pointerdown', press, true)
+      window.removeEventListener('keydown', press, true)
+      window.removeEventListener('focusin', enter, true)
     }
   }, [])
 
@@ -140,7 +163,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
   return (
     <TileAreaContext value={value}>
       <div
-        ref={rootRef}
+        ref={areaRef}
         className="relative h-full min-h-0 overflow-hidden"
       >
         {visible.map((tile) => {
@@ -160,7 +183,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
             />
           )
         })}
-        {!layout.maximized && rects.seams.map((seam) => {
+        {measured && !layout.maximized && rects.seams.map((seam) => {
           const row = seam.dir === 'row'
           const extent = ((row ? seam.within.width : seam.within.height) / 100) * (row ? area.width : area.height)
           const resize = (ratio: number) => useStore.setState((s) => tilesAfter(s, (before) => setRatio(before, seam.id, ratio)))

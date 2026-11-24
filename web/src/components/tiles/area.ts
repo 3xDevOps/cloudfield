@@ -2,7 +2,7 @@ import { createContext } from 'react'
 import { fits, sideOf } from '@/components/tiles/geometry'
 import { capability } from '@/lib/capability'
 import { hrefFor } from '@/lib/url-state'
-import type { RunView } from '@/routes/run/views'
+import { isRunView, type RunView } from '@/routes/run/views'
 import { useStore } from '@/store'
 import {
   activeTab,
@@ -44,11 +44,13 @@ export function changeTiles(change: (layout: TileLayout, ctx: ViewContext) => Ti
   const tab = activeTab(tiles.find((tile) => tile.id === next.tiles.focused)!)
   const run = tab && s.runs[tab.runId]
   const view = run ? resolveView(tab, run, capability(s.capabilities), s.runViewMemory) : tab?.view
+  const named = s.route.params.view
+  const routed = run ? resolveView({ runId: run.id, view: isRunView(named) ? named : undefined }, run, capability(s.capabilities), s.runViewMemory) : named
   let route = s.route
   if (!tab) {
     // An empty tile holds the focus: the route keeps naming the session it was split from while a tile shows it.
     if (!tiles.some((tile) => activeTab(tile)?.runId === s.route.params.runId)) route = { name: 'board', params: {} }
-  } else if (s.route.name !== 'run' || s.route.params.runId !== tab.runId || s.route.params.view !== view) {
+  } else if (s.route.name !== 'run' || s.route.params.runId !== tab.runId || routed !== view) {
     route = { name: 'run', params: { runId: tab.runId, ...(view && { view }), ...(tab.repo && { repo: tab.repo }) } }
   }
   // The address is replaced first, so the store's listener finds it current and pushes nothing.
