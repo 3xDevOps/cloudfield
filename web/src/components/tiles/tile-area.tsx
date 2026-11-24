@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { changeTiles, TileAreaContext, viewsElsewhere } from '@/components/tiles/area'
-import { fits, tileRects } from '@/components/tiles/geometry'
+import { fits, tileRects, type Rect } from '@/components/tiles/geometry'
 import { Tile } from '@/components/tiles/tile'
 import { Splitter } from '@/components/ui/splitter'
-import { useElementSize } from '@/lib/hooks'
+import { prefersReducedMotion, useElementSize } from '@/lib/hooks'
 import { useKeybindings } from '@/lib/keybindings'
+import { play, playEntrance } from '@/lib/motion'
 import { redirectRoute } from '@/lib/url-state'
 import type { FrameTile, RunFrame } from '@/routes/run'
 import { RunSession } from '@/routes/run/session-host'
@@ -36,6 +37,36 @@ const narrowBelow = 560
 function focusHeading(tileId: string) {
   const tile = [...document.querySelectorAll<HTMLElement>('[data-tile]')].find((node) => node.dataset.tile === tileId)
   tile?.querySelector<HTMLElement>('h1[tabindex], h2[tabindex]')?.focus({ preventScroll: true })
+}
+
+const full: Rect = { left: 0, top: 0, width: 100, height: 100 }
+const sides = ['left', 'top', 'width', 'height'] as const
+const glides = new WeakMap<HTMLElement, Animation>()
+
+/**
+ * Plays a tile from the rectangle it had, in percent of the area, to the one
+ * it has now. Its body takes the final size at once and the tile clips it, so
+ * a terminal or Browser inside is sized once, not on every frame.
+ */
+function glideTile(tile: HTMLElement, from: Rect) {
+  const body = tile.lastElementChild as HTMLElement
+  const running = glides.get(tile)
+  const start = Object.fromEntries(sides.map((side) => [side, running ? getComputedStyle(tile)[side] : `${from[side]}%`]))
+  running?.cancel()
+  body.style.width = body.style.height = ''
+  const { width, height } = body.getBoundingClientRect()
+  body.style.width = `${width}px`
+  body.style.height = `${height}px`
+  body.style.flex = 'none'
+  tile.style.overflow = 'clip'
+  const animation = play(tile, [{ ...start, zIndex: 1 }, { zIndex: 1 }], { duration: '--duration-glide', easing: '--ease-glide' })
+  glides.set(tile, animation)
+  const settle = () => {
+    if (glides.get(tile) !== animation) return
+    glides.delete(tile)
+    tile.style.overflow = body.style.width = body.style.height = body.style.flex = ''
+  }
+  animation.finished.then(settle, settle)
 }
 
 /** One session view inside its tile. The focused tile's frame reads the route; the others only their tab. */
@@ -85,7 +116,23 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
   }, [cramped])
   const visible = visibleTiles(layout)
   const rects = tileRects(layout.root, area)
-  const narrow = (tileId: string) => measured && ((layout.maximized ? 100 : rects.tiles[tileId].width) / 100) * area.width < narrowBelow
+  const drawn = Object.fromEntries(visible.map((tile) => [tile.id, layout.maximized ? full : rects.tiles[tile.id]]))
+  const narrow = (tileId: string) => measured && (drawn[tileId].width / 100) * area.width < narrowBelow
+
+  // A split, close, move, maximize or restore glides the tiles that stay and fades in the ones that appear.
+  // A seam drag and a window resize change no shape, so they never glide.
+  const shape = JSON.stringify([layout.maximized && layout.focused, layout.root], (key, value: unknown) => (key === 'ratio' || key === 'tabs' || key === 'active' ? undefined : value))
+  const last = useRef({ shape, cramped, drawn })
+  useLayoutEffect(() => {
+    const before = last.current
+    last.current = { shape, cramped, drawn }
+    if (before.shape === shape || before.cramped !== cramped || prefersReducedMotion()) return
+    for (const tile of document.querySelectorAll<HTMLElement>('[data-tile]')) {
+      const from = before.drawn[tile.dataset.tile!]
+      if (!from) playEntrance(tile.lastElementChild!, { motion: { duration: '--duration-200', easing: '--ease-enter' } })
+      else if (sides.some((side) => from[side] !== drawn[tile.dataset.tile!][side])) glideTile(tile, from)
+    }
+  })
 
   // No session mounts until the layout has followed the route.
   const focusedTab = activeTab(tiles.find((tile) => tile.id === stored.focused)!)
@@ -167,23 +214,20 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
         ref={areaRef}
         className="relative h-full min-h-0 overflow-hidden"
       >
-        {visible.map((tile) => {
-          const rect = layout.maximized ? { left: 0, top: 0, width: 100, height: 100 } : rects.tiles[tile.id]
-          return (
-            <Tile
-              key={tile.id}
-              tile={tile}
-              rect={rect}
-              narrow={narrow(tile.id)}
-              room={{
-                right: !measured || fits(splitTile(stored, tile.id, 'right').root, area),
-                down: !measured || fits(splitTile(stored, tile.id, 'down').root, area),
-              }}
-              linked={linked === tile.id}
-              onSlot={onSlot}
-            />
-          )
-        })}
+        {visible.map((tile) => (
+          <Tile
+            key={tile.id}
+            tile={tile}
+            rect={drawn[tile.id]}
+            narrow={narrow(tile.id)}
+            room={{
+              right: !measured || fits(splitTile(stored, tile.id, 'right').root, area),
+              down: !measured || fits(splitTile(stored, tile.id, 'down').root, area),
+            }}
+            linked={linked === tile.id}
+            onSlot={onSlot}
+          />
+        ))}
         {measured && !layout.maximized && rects.seams.map((seam) => {
           const row = seam.dir === 'row'
           const extent = ((row ? seam.within.width : seam.within.height) / 100) * (row ? area.width : area.height)

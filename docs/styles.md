@@ -712,6 +712,13 @@ literal time or curve.
   lists the viewer reorders; never a virtualized list. The one store-driven
   use is Board moving at most eight cards between columns; see
   [Board](dashboard-frontend.md#board).
+- Session tiles glide their rectangle, position and size, on
+  `--duration-glide` / `--ease-glide` when a split, close, move, maximize or
+  restore changes the layout. A tile's body takes its final size at once and
+  the gliding tile clips it, so a terminal or Browser inside is sized once,
+  not on every frame. A tile that appears fades its body in over 200ms on
+  `--ease-enter`; a closed tile leaves at once. A seam drag and a window
+  resize never glide, and the focus outline moves at once.
 - The Map repacks with motion: units and cards glide from their old layout
   coordinates on `--duration-glide` / `--ease-glide` (never DOM-measured,
   since the world is scaled), new cards rise 6px and fade in over 220ms after

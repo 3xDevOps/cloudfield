@@ -554,6 +554,37 @@ describe('seams', () => {
   })
 })
 
+describe('motion', () => {
+  it('glides the tile that stays from its old rectangle with its body already at the final size, and never on a seam move', async () => {
+    sized(1600, 900)
+    show()
+    const animate = vi.spyOn(Element.prototype, 'animate')
+    const stays = tiles()[0]
+    const body = stays.lastElementChild as HTMLElement
+    fireEvent.click(screen.getByRole('button', { name: 'Split right' }))
+    expect(animate.mock.contexts).toEqual([stays, tiles()[1].lastElementChild])
+    expect(animate.mock.calls[0][0]).toEqual([{ left: '0%', top: '0%', width: '100%', height: '100%', zIndex: 1 }, { zIndex: 1 }])
+    expect(animate.mock.calls[1][0]).toEqual([{ opacity: 0 }, { opacity: 1 }])
+    expect([body.style.width, body.style.height, stays.style.overflow]).toEqual(['1600px', '900px', 'clip'])
+    await settled()
+    expect([body.style.width, body.style.height, stays.style.overflow]).toEqual(['', '', ''])
+
+    animate.mockClear()
+    fireEvent.keyDown(screen.getByRole('separator', { name: 'Resize the tiles' }), { key: 'ArrowLeft' })
+    expect(animate).not.toHaveBeenCalled()
+  })
+
+  it('moves nothing under reduced motion', () => {
+    sized(1600, 900)
+    vi.spyOn(window, 'matchMedia').mockImplementation((query) => ({ matches: query.includes('reduced-motion'), media: query, addEventListener() {}, removeEventListener() {} }) as unknown as MediaQueryList)
+    show()
+    const animate = vi.spyOn(Element.prototype, 'animate')
+    fireEvent.click(screen.getByRole('button', { name: 'Split right' }))
+    expect(tiles()).toHaveLength(2)
+    expect(animate).not.toHaveBeenCalled()
+  })
+})
+
 describe('maximize', () => {
   it('fills the area, parks the rest in the pill, swaps on a chip and restores', async () => {
     show()

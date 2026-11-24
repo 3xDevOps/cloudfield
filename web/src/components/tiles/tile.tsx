@@ -54,7 +54,7 @@ export function Tile({ tile, rect, narrow, room, linked, onSlot }: {
           </TabsContent>
         ) : (
           <div className="min-h-0 flex-1 overflow-y-auto p-6">
-            <Picker tileId={tile.id} runId={splitFrom} autoFocus={focused} className="mx-auto max-w-lg animate-fade-in motion-reduce:animate-none" />
+            <Picker tileId={tile.id} runId={splitFrom} autoFocus={focused} className="mx-auto max-w-lg" />
           </div>
         )}
       </section>
