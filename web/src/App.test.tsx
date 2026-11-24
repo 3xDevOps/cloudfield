@@ -45,26 +45,6 @@ function sidebar() {
 }
 
 describe('App', () => {
-  it('warns before leaving with an unsaved file, without re-rendering on each edit to it', async () => {
-    let commits = 0
-    await mount(<Profiler id="app" onRender={() => commits++}><App /></Profiler>)
-    const leave = () => {
-      const event = new Event('beforeunload', { cancelable: true })
-      window.dispatchEvent(event)
-      return event.defaultPrevented
-    }
-    expect(leave()).toBe(false)
-
-    act(() => useStore.getState().updateDraft('notes.md', 'a'))
-    expect(leave()).toBe(true)
-    commits = 0
-    act(() => useStore.getState().updateDraft('notes.md', 'ab'))
-    expect(commits).toBe(0)
-
-    act(() => useStore.getState().updateDraft('notes.md', ''))
-    expect(leave()).toBe(false)
-  })
-
   it('renders the shell and fills it from the server for a member who completed onboarding', async () => {
     useStore.getState().setOnboarded(true)
     await mount()
@@ -204,5 +184,25 @@ describe('App', () => {
       app.unmount()
       useStore.setState(previous, true)
     }
+  })
+
+  it('warns before leaving with an unsaved file, without re-rendering on each edit to it', async () => {
+    let commits = 0
+    await mount(<Profiler id="app" onRender={() => commits++}><App /></Profiler>)
+    const leave = () => {
+      const event = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(event)
+      return event.defaultPrevented
+    }
+    expect(leave()).toBe(false)
+
+    act(() => useStore.getState().updateDraft('notes.md', 'a'))
+    expect(leave()).toBe(true)
+    commits = 0
+    act(() => useStore.getState().updateDraft('notes.md', 'ab'))
+    expect(commits).toBe(0)
+
+    act(() => useStore.getState().updateDraft('notes.md', ''))
+    expect(leave()).toBe(false)
   })
 })
