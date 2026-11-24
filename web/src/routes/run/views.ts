@@ -42,3 +42,8 @@ export function hasBrowser(run: Pick<RunRecord, 'status'>, cap: Capability): boo
 export function hasFiles(run: Run, cap: Capability): boolean {
   return cap.hasMethod('files.tree') && isLiveRun(run)
 }
+
+export function offeredViews(run: RunRecord, cap: Capability): RunView[] {
+  return runViews.filter((view) =>
+    (view !== 'browser' || hasBrowser(run, cap)) && (view !== 'files' || hasFiles(run, cap)) && (view !== 'trace' || run.acp === true))
+}

@@ -11,6 +11,7 @@ import type {
   SysboxStatus,
 } from '@/lib/types'
 import type { SliceCreator } from '@/store/slice'
+import { routeTiles, tilesAfter } from '@/store/tiles'
 import type { RootState } from '@/store'
 
 export type Theme = 'light' | 'dark' | 'system'
@@ -372,6 +373,7 @@ export const createUiSlice: SliceCreator<UiSlice> = (set) => ({
   navigate: (name, params = {}, options) => {
     set((s) => ({
       route: { name, params },
+      ...(name === 'run' && params.runId ? tilesAfter(s, (layout, ctx) => routeTiles(layout, params, ctx)) : {}),
       ...(name === 'run' && params.runId && isRunView(params.view) && options?.remember !== false
         ? rememberedView(s, params.runId, params.view)
         : {}),
