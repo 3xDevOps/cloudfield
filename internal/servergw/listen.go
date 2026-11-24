@@ -53,6 +53,7 @@ func (g *Gateway) Start(ctx context.Context, tn Tailnet) error {
 	}
 	tlsCfg := &tls.Config{
 		MinVersion:     tls.VersionTLS12,
+		NextProtos:     []string{"h2", "http/1.1"},
 		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return certs.current(), nil },
 	}
 	// tailscaled reports the IPv6 address whether or not the kernel has

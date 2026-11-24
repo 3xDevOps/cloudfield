@@ -457,8 +457,35 @@ func TestIntegrationServerGatewayHTTPSConfigImport(t *testing.T) {
 		TLSClientConfig: &tls.Config{
 			RootCAs: roots, ServerName: "aether.test", MinVersion: tls.VersionTLS12,
 		},
+		ForceAttemptHTTP2: true,
 	}}
 	base := fmt.Sprintf("https://127.0.0.1:%d", port)
+
+	resp, err := client.Get(base + "/api/v1/capabilities")
+	if err != nil {
+		t.Fatalf("capabilities: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || resp.ProtoMajor != 2 {
+		t.Fatalf("capabilities = %d over %s, want 200 over HTTP/2", resp.StatusCode, resp.Proto)
+	}
+	// Like a browser, the client that speaks HTTP/2 for requests opens a
+	// WebSocket on an HTTP/1.1 connection of its own.
+	events, handshake, err := websocket.Dial(ctx, "wss"+strings.TrimPrefix(base, "https")+"/ws/events", &websocket.DialOptions{HTTPClient: client})
+	if err != nil {
+		t.Fatalf("wss events: %v", err)
+	}
+	defer func() { _ = events.CloseNow() }()
+	if handshake.ProtoMajor != 1 {
+		t.Fatalf("wss handshake over %s, want HTTP/1.1", handshake.Proto)
+	}
+	if err = wsjson.Write(ctx, events, protocol.SubscribeRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	var subAck protocol.SubscribeResponse
+	if err = wsjson.Read(ctx, events, &subAck); err != nil || !subAck.OK {
+		t.Fatalf("wss subscribe ack = %+v (%v)", subAck, err)
+	}
 
 	var adaInfo protocol.ServerInfoResult
 	if status := postJSONClient(t, client, base+"/api/v1/server.info", "", &adaInfo); status != http.StatusOK {
