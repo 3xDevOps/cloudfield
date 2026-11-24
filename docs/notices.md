@@ -81,7 +81,7 @@ The dashboard bundles these fonts under the SIL Open Font License 1.1:
   package is bundled.
 - VT323 for the Play listing's feature graphic
   ([`web/public/fonts/LICENSE-vt323.txt`](../web/public/fonts/LICENSE-vt323.txt)).
-  `web/public/fonts/vt323-latin.woff2` is the Latin subset at weight 400.
+  `web/src/fonts/vt323-latin.woff2` is the Latin subset at weight 400.
 - `JetBrainsMono NFM`, a Nerd Fonts Mono patch of JetBrains Mono, for xterm
   and the UI's private-use symbol fallback
   ([`web/public/fonts/LICENSE-jetbrains-mono-nfm.txt`](../web/public/fonts/LICENSE-jetbrains-mono-nfm.txt)).
@@ -95,7 +95,7 @@ The dashboard bundles these fonts under the SIL Open Font License 1.1:
   ```sh
   pyftsubset NotoSansSymbols2-Regular.ttf \
     --unicodes=U+25A0-25FF,U+2800-28FF --flavor=woff2 \
-    --output-file=web/public/fonts/noto-sans-symbols-2-spinners.woff2
+    --output-file=web/src/fonts/noto-sans-symbols-2-spinners.woff2
   ```
 
 `scripts/make-icons.py` uses VT323 to draw the wordmark on the Play
@@ -187,7 +187,7 @@ The separately distributed `aether-browser` image includes:
 | Chromium / Chrome for Testing | 153.0.8010.12, Playwright revision 1243, selected by the pinned [browser manifest](https://github.com/microsoft/playwright/blob/v1.63.0/packages/playwright-core/browsers.json) | [Chromium BSD-style license](https://github.com/chromium/chromium/blob/153.0.8010.12/LICENSE), plus the browser distribution's third-party notices; Chromium is not covered solely by Playwright's license |
 | FFmpeg | Playwright revision 1011, installed alongside Chromium by Playwright | [FFmpeg license terms](https://ffmpeg.org/legal.html); the [Linux distribution archive](https://cdn.playwright.dev/dbazure/download/playwright/builds/ffmpeg/1011/ffmpeg-linux.zip) carries `COPYING.LGPLv2.1`, retained under `/opt/playwright/ffmpeg-1011/` |
 | xterm.js | 6.0.0, pinned in the same package lock | [MIT](https://github.com/xtermjs/xterm.js/blob/6.0.0/LICENSE) |
-| JetBrains Mono NFM regular and bold | The same WOFF2 assets used by the dashboard, copied from `web/public/fonts/` | [SIL OFL 1.1](../web/public/fonts/LICENSE-jetbrains-mono-nfm.txt), copied into `/opt/aether-browser/fonts/` |
+| JetBrains Mono NFM regular and bold | The same WOFF2 assets used by the dashboard, copied from `web/src/fonts/` | [SIL OFL 1.1](../web/public/fonts/LICENSE-jetbrains-mono-nfm.txt), copied into `/opt/aether-browser/fonts/` |
 | Element description in [`images/browser/inspect.mjs`](../images/browser/inspect.mjs) | Selector, React component and redaction logic adapted from [Orca](https://github.com/stablyai/orca) `src/main/browser/grab-guest-*.ts` at commit `81867c8e` | [MIT](https://github.com/stablyai/orca/blob/81867c8ea044e220f78316e41b0a3fa11e5d4680/LICENSE), Copyright (c) 2026 Lovecast Inc.; the notice is at the top of that file and ships in the image |
 
 Playwright's pinned

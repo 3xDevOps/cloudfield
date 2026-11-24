@@ -36,9 +36,9 @@ Fonts ship in the bundle; nothing is fetched from Google.
 | --- | --- | --- |
 | DM Sans (variable, Latin subset) | All UI text | `@fontsource-variable/dm-sans`, one WOFF2 |
 | Open Sans (variable, Latin subset) | `text-title` only | `@fontsource-variable/open-sans`, one WOFF2 |
-| VT323 (Latin subset, 400) | Play listing wordmark drawn by `scripts/make-icons.py`; the dashboard does not load it | `web/public/fonts/vt323-latin.woff2` |
-| JetBrainsMono NFM | xterm primary font; UI private-use symbols through `Aether Nerd Symbols` | `web/public/fonts/jetbrains-mono-nfm-*.woff2` |
-| Noto Sans Symbols 2 | Braille and geometric symbols through `Aether Symbols` | `web/public/fonts/noto-sans-symbols-2-spinners.woff2` |
+| VT323 (Latin subset, 400) | Play listing wordmark drawn by `scripts/make-icons.py`; the dashboard does not load it | `web/src/fonts/vt323-latin.woff2` |
+| JetBrainsMono NFM | xterm primary font; UI private-use symbols through `Aether Nerd Symbols` | `web/src/fonts/jetbrains-mono-nfm-*.woff2` |
+| Noto Sans Symbols 2 | Braille and geometric symbols through `Aether Symbols` | `web/src/fonts/noto-sans-symbols-2-spinners.woff2` |
 | `ui-monospace, 'SF Mono', Menlo, Consolas, monospace` | Code, paths and SHAs (`font-code`), after symbol fallbacks | system |
 
 DM Sans loads with `font-display: swap` behind `DM Sans Fallback`, Arial

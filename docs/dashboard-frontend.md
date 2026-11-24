@@ -31,7 +31,11 @@ This guide describes the dashboard's routes, store and components.
 `src/app/page.tsx` is a minimal Next App Router page. It loads
 `src/app/client-runtime.tsx`, which is a client component that dynamically
 imports `src/App.tsx` with `ssr: false`. This boundary keeps the browser-only
-store, WebSocket, xterm and Electron bridge out of static prerendering. Next
+store, WebSocket, xterm and Electron bridge out of static prerendering. The
+import's `loading` component is prerendered into `index.html`, so the
+Cloudfield mark paints on the themed background while the app chunk
+downloads. It appears after 300ms, so a fast load and the desktop launch
+splash never show it. Next
 still emits the document, CSS, fonts and JavaScript assets; the existing
 client-side registry and in-memory `navigate()` state remain the dashboard's
 navigation model. Next does not run in production.
@@ -4388,7 +4392,9 @@ and the Environment keep native xterm scrollback.
   glyph-atlas positions under heavy glyph churn (xtermjs/xterm.js#6038),
   garbling scrolled rows until a forced refresh; the DOM renderer never
   desyncs. The terminals render in the shipped JetBrainsMono Nerd Font Mono
-  (`src/lib/term-font.ts`, declared in `src/index.css`), so agent TUIs get
+  (`src/lib/term-font.ts`, declared in `src/index.css` from `src/fonts/`, so
+  the build gives each file a content-hashed name under `_next/static/media`
+  that browsers cache without revalidating), so agent TUIs get
   their powerline and devicon glyphs at the same advance as text. The terminal
   opens only once regular and bold faces are loaded, because xterm caches
   glyph metrics synchronously at `open` and would otherwise bake fallback
