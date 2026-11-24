@@ -214,9 +214,9 @@ function ComposerBox({ textarea, autoFocus, value, onChange, onCaret, onFocusCha
   )
 }
 
-function ComposerHint({ id, uploading, description }: { id: string; uploading: boolean; description: string }) {
-  return uploading
-    ? <p id={id} role="status" className="line-clamp-2 px-4 text-ui-sm text-muted">Uploading…</p>
+function ComposerHint({ id, notice, description }: { id: string; notice?: string; description: string }) {
+  return notice
+    ? <p id={id} role="status" className="line-clamp-2 px-4 text-ui-sm text-muted">{notice}</p>
     : <p id={id} className="sr-only">{description}</p>
 }
 
@@ -348,7 +348,7 @@ function StandardComposer({ run, agent, room, textarea, autoFocus, onFocusChange
           </>
         )}
       />
-      <ComposerHint id={hintID} uploading={uploading} description={hint} />
+      <ComposerHint id={hintID} notice={uploading ? 'Uploading…' : undefined} description={hint} />
     </ComposerFrame>
   )
 }
@@ -409,14 +409,15 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
     pending: session?.pending.length ?? 0,
     hasLease: control.canAct,
   })
+  const connecting = gate?.connecting ? gate.reason : undefined
   const moderated = !control.canAct
   const turnRunning = state?.turn_in_flight ?? false
   const waiting = backgroundWait(run, session) !== null
   // A sleeping session's agent reports its prompt types once a wake starts it.
   const supportsImages = state?.prompt_images === true || Boolean(run.asleep_since)
   const images = useComposerImages(run.id, !gate && cap.hasMethod('terminal.file'))
-  const attachOff = busy || !cap.hasMethod('terminal.file')
-  const drop = dropRoom(images, Boolean(gate) || attachOff)
+  const attachOff = busy || Boolean(gate) || !cap.hasMethod('terminal.file')
+  const drop = dropRoom(images, attachOff)
   useEffect(() => onDropStatus?.({ ...drop, upload: images.upload }), [drop.blocked, drop.limit, images.upload, onDropStatus])
   const refusedImages = !supportsImages && hasImages(images.previews)
   const hasContent = Boolean(body.trim()) || images.previews.length > 0
@@ -502,7 +503,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
   }
 
   const act = (chosen: Pill) => {
-    if (composerDraft(run.id).busy || images.isUploading()) return
+    if (connecting || composerDraft(run.id).busy || images.isUploading()) return
     if (moderated) void deliver(false)
     else control.withControl(() => perform(chosen))
   }
@@ -529,7 +530,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
     }, () => void attempt(() => Promise.reject(new Error(optionUnsent))).then(resolve))
   })
 
-  if (gate) {
+  if (gate && !connecting) {
     return (
       <ComposerFrame>
         {dock}
@@ -548,8 +549,8 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
     )
   }
 
-  const pillDisabled = busy || images.uploading || (pill !== 'interrupt' && pill !== 'stop-waiting' && pill !== 'resume' && (!images.ready || !hasContent || refusedImages || dictating))
-  const hintText = moderated ? (control.waits ? 'Delivers in 45 s unless the controller decides sooner.' : '') : turnRunning || pill === 'stop-waiting' || pill === 'resume' ? pillHint[pill] : ''
+  const pillDisabled = busy || Boolean(connecting) || images.uploading || (pill !== 'interrupt' && pill !== 'stop-waiting' && pill !== 'resume' && (!images.ready || !hasContent || refusedImages || dictating))
+  const hintText = connecting ?? (moderated ? (control.waits ? 'Delivers in 45 s unless the controller decides sooner.' : '') : turnRunning || pill === 'stop-waiting' || pill === 'resume' ? pillHint[pill] : '')
   const keyHint = coarse || pill === 'stop-waiting' ? undefined : pill === 'steer' ? `${shortcutLabel('composer-send')}; ${shortcutLabel('composer-queue')} queues` : shortcutLabel(pill === 'queue' && state?.steering ? 'composer-queue' : 'composer-send')
 
   return (
@@ -585,7 +586,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
               unsupported={refusedImages ? 'This agent does not support image prompts.' : undefined}
             />
             <TemplateInsert run={run} textarea={textarea} disabled={busy} />
-            <OptionPills options={state?.config_options ?? []} disabled={busy || moderated} onSet={setOption} />
+            <OptionPills options={state?.config_options ?? []} disabled={busy || moderated || Boolean(connecting)} onSet={setOption} />
             {state?.usage && state.usage.size > 0 && (
               <ContextWindow
                 runID={run.id}
@@ -625,7 +626,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
           if (hasContent) act(turnRunning ? 'queue' : 'send')
         }}
         onEscape={onEscape}
-        placeholder={turnRunning || waiting ? 'Message the agent while it works' : notFinishedYet(run) ? 'Say what is left to do, / for commands, @ for files' : 'Message the agent, / for commands, @ for files'}
+        placeholder={connecting ?? (turnRunning || waiting ? 'Message the agent while it works' : notFinishedYet(run) ? 'Say what is left to do, / for commands, @ for files' : 'Message the agent, / for commands, @ for files')}
         describedBy={hintID}
         combobox={{ expanded: suggestions.length > 0, controls: listID, active: suggestions.length ? `${listID}-${current}` : undefined }}
         menu={<SuggestionList id={listID} items={suggestions} active={current} onPick={pick} />}
@@ -648,7 +649,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
           }
         }}
       />
-      <ComposerHint id={hintID} uploading={images.uploading} description={hintText} />
+      <ComposerHint id={hintID} notice={images.uploading ? 'Uploading…' : hasContent ? connecting : undefined} description={hintText} />
     </ComposerFrame>
   )
 }
