@@ -2,6 +2,7 @@ package webgate
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -160,12 +161,20 @@ func sameOrigin(origin, host string) bool {
 	return strings.EqualFold(u.Host, host)
 }
 
+// TLS makes every later Serve speak HTTPS with cfg. net/http picks the ALPN
+// protocols, so GODEBUG=http2server=0 still turns HTTP/2 off.
+func (g *Gateway) TLS(cfg *tls.Config) { g.srv.TLSConfig = cfg }
+
 func (g *Gateway) Serve(ln net.Listener) {
 	g.mu.Lock()
 	g.serving++
 	g.mu.Unlock()
+	serve := g.srv.Serve
+	if g.srv.TLSConfig != nil {
+		serve = func(ln net.Listener) error { return g.srv.ServeTLS(ln, "", "") }
+	}
 	go func() {
-		err := g.srv.Serve(ln)
+		err := serve(ln)
 		g.mu.Lock()
 		defer g.mu.Unlock()
 		g.serving--
