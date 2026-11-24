@@ -5,6 +5,7 @@ import { StatusDot, type Tone } from '@/components/ui/status-dot'
 import { api } from '@/lib/api'
 import { useClock } from '@/lib/clock'
 import { redirectRoute } from '@/lib/url-state'
+import { useRunParams } from '@/routes/run/agent-context'
 import { useStore } from '@/store'
 import { loadOlderItems } from '@/store/session-stream'
 import {
@@ -121,7 +122,7 @@ function NestedAgent({ runID, id }: { runID: string; id: string }) {
 
 const SubagentCard = memo(function SubagentCard({ runID, id }: { runID: string; id: string }) {
   const agent = useAgent(runID, id)
-  const open = useStore((s) => s.route.params.agent === id)
+  const open = useRunParams(runID).agent === id
   if (!agent) return null
   const state = agentState(agent)
   const type = agentType(agent)

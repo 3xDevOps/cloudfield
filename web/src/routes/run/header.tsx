@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useContext, useEffect, useRef, useState } from 'react'
 import type * as React from 'react'
 import { Camera, Copy, Eye, GitBranch, Lock, PanelRight, ScrollText } from '@/components/icons'
 import { permissionLabel, permissions } from '@/components/launch/permission-control'
@@ -24,6 +24,7 @@ import { needsYou, terminalAction } from '@/lib/needs-you'
 import { runLabel, stateName, stateTitle, stateWords, toneOf, waitLine } from '@/lib/status'
 import { cn } from '@/lib/utils'
 import { watchHint, watchRoute } from '@/lib/watches'
+import { FrameFocusContext } from '@/routes/run/agent-context'
 import { modeLabel } from '@/routes/run/agent-name'
 import type { AgentTerminal } from '@/routes/run/agent-terminal'
 import { RunLineage, useChildRunsItems } from '@/routes/run/child-runs'
@@ -302,7 +303,7 @@ export function RunHeader({
   const pullRequest = useRunPullRequest(run, agent, agentName)
   const editor = useOpenInEditor(run)
   const childRunsItems = useChildRunsItems(run)
-  useHeaderPrimary(Boolean(primary))
+  useHeaderPrimary(useContext(FrameFocusContext) && Boolean(primary))
   const extra = [
     ...(modeSwitch.item ? [modeSwitch.item] : []),
     ...(editor.item ? [editor.item] : []),

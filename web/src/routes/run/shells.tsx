@@ -90,7 +90,7 @@ export function useRunShells(runID: string, visible: boolean) {
     const closed = dock.tabs.length < tabCount.current
     tabCount.current = dock.tabs.length
     if (!closed || (document.activeElement && document.activeElement !== document.body)) return
-    Array.from(document.querySelectorAll<HTMLElement>('[data-shell-focus]')).find((target) => !target.closest('[inert]'))?.focus()
+    Array.from(document.querySelectorAll<HTMLElement>(`[data-shell-focus="${runID}"]`)).find((target) => !target.closest('[inert]'))?.focus()
   }, [dock.tabs.length])
 
   const atLimit = dock.terminals.filter((item) => item.started_by !== 'run_agent' && !shellEnded(item)).length >= maxOwnShells
@@ -184,10 +184,10 @@ export function useRunShells(runID: string, visible: boolean) {
 
 export type RunShells = ReturnType<typeof useRunShells>
 
-export const terminalPanelID = { agent: 'run-agent-panel', shell: 'run-shell-panel' }
+export const terminalPanelID = (runID: string) => ({ agent: `run-agent-panel-${runID}`, shell: `run-shell-panel-${runID}` })
 
 /** Where focus lands after a tab closes: the selected tab, else the control that opens one. */
-const focusTarget = { 'data-shell-focus': '' }
+const focusTarget = (runID: string) => ({ 'data-shell-focus': runID })
 
 /** What closing a shell's tab can mean. Stopping needs no control beforehand:
  * `shells.stop` takes it, and asks first when someone else holds it. */
@@ -267,7 +267,7 @@ export function TerminalTabs({ shells, agent }: { shells: RunShells; agent: bool
     return (
       <Menu>
         <MenuTrigger asChild>
-          <Button variant="ghost" size="sm" aria-label={`Terminal: ${label}`} {...focusTarget}>
+          <Button variant="ghost" size="sm" aria-label={`Terminal: ${label}`} {...focusTarget(runID)}>
             {label}
             <ChevronDown />
           </Button>
@@ -310,9 +310,9 @@ export function TerminalTabs({ shells, agent }: { shells: RunShells; agent: bool
 
   const tab = (id: string, i: number) => ({
     role: 'tab',
-    ...(id === active ? focusTarget : {}),
+    ...(id === active ? focusTarget(runID) : {}),
     'aria-selected': id === active,
-    'aria-controls': id ? terminalPanelID.shell : terminalPanelID.agent,
+    'aria-controls': terminalPanelID(runID)[id ? 'shell' : 'agent'],
     tabIndex: i === focused ? 0 : -1,
     onFocus: () => setFocused(i),
     onClick: () => (id ? shells.show(id) : showAgent()),
@@ -392,7 +392,7 @@ export function TerminalTabs({ shells, agent }: { shells: RunShells; agent: bool
       {shells.canOpen && (
         <>
           <Button
-            {...focusTarget}
+            {...focusTarget(runID)}
             variant="ghost"
             size="sm"
             aria-label="New shell"

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useRef, useState } from 'react'
 import type * as React from 'react'
 import { Ellipsis } from '@/components/icons'
 import { TerminalPane } from '@/components/terminal-pane'
@@ -13,6 +13,7 @@ import { phoneScreen, useMediaQuery } from '@/lib/hooks'
 import { type ConnectionState } from '@/lib/stream'
 import { openRunLink } from '@/routes/browser/open'
 import { findRunFiles } from '@/routes/files/open'
+import { FrameFocusContext } from '@/routes/run/agent-context'
 import { type RunShells, ShellCloseItems, controllerName, shellPollMs } from '@/routes/run/shells'
 import {
   type AttachDataKind,
@@ -58,6 +59,7 @@ export function ShellTerminal({ shells, tabs, onCaptures }: {
   onCaptures: (returnTo: HTMLElement | null) => void
 }) {
   const { runID, dock } = shells
+  const frameFocused = useContext(FrameFocusContext)
   const mobile = useIsMobile()
   const self = useSelf()
   const setShellRefused = useStore((s) => s.setShellRefused)
@@ -329,7 +331,7 @@ export function ShellTerminal({ shells, tabs, onCaptures }: {
   const focusTerminal = controller.focusTerminal
   useEffect(() => {
     setFindOpen(false)
-    focusTerminal()
+    if (frameFocused) focusTerminal()
   }, [activeTab, setFindOpen, focusTerminal])
 
   useEffect(() => {
@@ -562,7 +564,7 @@ export function ShellTerminal({ shells, tabs, onCaptures }: {
   useEffect(() => {
     if (!shells.focusShell.current || !terminal || !attached || replaying) return
     shells.focusShell.current = false
-    focusTerminal()
+    if (frameFocused) focusTerminal()
   }, [shells.focusShell, terminal, attached, replaying, focusTerminal])
   const typedHere = typedFor !== null && typedFor === activeControlKey
   useEffect(() => {

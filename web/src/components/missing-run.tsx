@@ -7,15 +7,15 @@ import { useDelayed } from '@/lib/hooks'
 import { useKeybindings } from '@/lib/keybindings'
 import { useStore } from '@/store'
 
-/** Only a hydrated store with a live connection can tell a deleted run from an unread one. */
-export function MissingRun() {
+/** Only a hydrated store with a live connection can tell a deleted run from an unread one. The tile area owns Escape, so a `tiled` one registers no `leave-run`. */
+export function MissingRun({ tiled }: { tiled?: boolean }) {
   const hydrated = useStore((s) => s.hydrated)
   const error = useStore((s) => s.hydrationError)
   const dead = useStore((s) => s.streamDead)
   const navigate = useStore((s) => s.navigate)
   // A phone opens a session over its tab bar, so a session that is still loading needs its own way out.
   const mobile = useIsMobile()
-  useKeybindings('run', { 'leave-run': () => navigate('board') })
+  useKeybindings('run', tiled ? {} : { 'leave-run': () => navigate('board') })
   const unreachable = error !== null
   const loading = useDelayed(!hydrated && !unreachable)
 

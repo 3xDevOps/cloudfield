@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useRef, useState } from 'react'
 import { ArrowLeft, ArrowRight, Bot, Bug, Columns2, Ellipsis, Keyboard, MessageSquarePlus, MonitorSmartphone, MousePointer2, RotateCw, X } from '@/components/icons'
 import { MissingRun } from '@/components/missing-run'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
@@ -15,6 +15,7 @@ import { keyboardBusy, onTabListKeyDown } from '@/lib/keys'
 import { memberName, resolveMember } from '@/lib/member-name'
 import type { DevBrowserCloseParams, DevBrowserPage, DevBrowserResetParams, DevBrowserStatusResult, DevController, DevControlFence, DevSurface } from '@/lib/types'
 import { cn } from '@/lib/utils'
+import { FrameFocusContext } from '@/routes/run/agent-context'
 import type { AgentTerminal } from '@/routes/run/agent-terminal'
 import { codeConflict } from '@/routes/terminal/attach'
 import { useStore } from '@/store'
@@ -91,6 +92,7 @@ export function BrowserView(props: BrowserViewProps) {
 
 function BrowserRoute({ runID, split, agent, agentName, onCaptures }: BrowserViewProps) {
   const run = useStore((state) => state.runs[runID])
+  const tileFocused = useContext(FrameFocusContext)
   const cap = useCapability()
   const coarse = useMediaQuery(coarsePointer)
   const members = useStore((state) => state.members)
@@ -198,7 +200,7 @@ function BrowserRoute({ runID, split, agent, agentName, onCaptures }: BrowserVie
     const focus = () => { focused.current = !document.hidden }
     const visibility = () => { if (document.hidden) blur(); else focus() }
     const elsewhere = (event: Event) => {
-      if (!(event.target instanceof Element) || event.target.closest('[data-browser], [role="menu"], [role="dialog"], [role="alertdialog"]')) return
+      if (!(event.target instanceof Element) || event.target.closest(`[data-browser="${runID}"], [role="menu"], [role="dialog"], [role="alertdialog"]`)) return
       away.current = true
       // An action still running keeps the lease it works under until it ends.
       if (!inFlight.current) void release()
@@ -206,7 +208,7 @@ function BrowserRoute({ runID, split, agent, agentName, onCaptures }: BrowserVie
     // A wheel or a touch on the page moves no focus, and neither does a
     // click on a button in Safari.
     const back = (event: Event) => {
-      if (event.target instanceof Element && event.target.closest('[data-browser]')) away.current = false
+      if (event.target instanceof Element && event.target.closest(`[data-browser="${runID}"]`)) away.current = false
     }
     const uses = ['focusin', 'pointerdown', 'wheel']
     window.addEventListener('blur', blur)
@@ -531,7 +533,7 @@ function BrowserRoute({ runID, split, agent, agentName, onCaptures }: BrowserVie
 
   const empty = Boolean(status?.available) && !page
   useEffect(() => {
-    if (empty && !split?.beside && !window.matchMedia?.(coarsePointer).matches) address.current?.focus()
+    if (tileFocused && empty && !split?.beside && !window.matchMedia?.(coarsePointer).matches) address.current?.focus()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [empty])
 
@@ -541,17 +543,17 @@ function BrowserRoute({ runID, split, agent, agentName, onCaptures }: BrowserVie
     event.stopPropagation()
     act()
   }
-  useKeybindings('browser', {
+  useKeybindings('browser', tileFocused ? {
     'browser-reload': chord(() => navigate('reload')),
     'browser-back': chord(() => navigate('back')),
     'browser-forward': chord(() => navigate('forward')),
     'browser-annotate': chord(() => annotate(!annotating)),
-  })
+  } : {})
   // Escape leaves a run, and the table gives a key to one binding. While a
   // page is annotated this answers it first, wherever in the run focus is;
   // a card, a menu or a dialog keeps its own Escape.
   useEffect(() => {
-    if (!annotating) return
+    if (!annotating || !tileFocused) return
     const leave = (event: KeyboardEvent) => {
       if (event.key !== 'Escape' || event.defaultPrevented || keyboardBusy(event)) return
       event.preventDefault()
@@ -560,7 +562,7 @@ function BrowserRoute({ runID, split, agent, agentName, onCaptures }: BrowserVie
     window.addEventListener('keydown', leave, true)
     return () => window.removeEventListener('keydown', leave, true)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [annotating])
+  }, [annotating, tileFocused])
 
   const waiting = useDelayed(!status && !readError)
   if (!run) return <MissingRun />
@@ -584,7 +586,7 @@ function BrowserRoute({ runID, split, agent, agentName, onCaptures }: BrowserVie
     </MenuRadioGroup>
   )
 
-  return <div data-browser className="flex h-full min-h-0 min-w-0 flex-col">
+  return <div data-browser={runID} className="flex h-full min-h-0 min-w-0 flex-col">
     <div role="toolbar" aria-label="Browser" className="@container relative flex shrink-0 flex-wrap items-center gap-1 border-b border-seam bg-chrome px-2 py-1">
       <Button variant="ghost" size="icon" label="Back" hint={`Back (${shortcutLabel('browser-back')})`} aria-disabled={!page || undefined} onClick={() => navigate('back')}><ArrowLeft /></Button>
       <Button variant="ghost" size="icon" label="Forward" hint={`Forward (${shortcutLabel('browser-forward')})`} aria-disabled={!page || undefined} onClick={() => navigate('forward')}><ArrowRight /></Button>

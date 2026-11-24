@@ -156,7 +156,7 @@ export function TerminalView({ run, agent, shells, onCaptures }: {
       {shellShown && (
         <div
           data-slot="shell-terminal"
-          id={terminalPanelID.shell}
+          id={terminalPanelID(run.id).shell}
           role={tabbed ? 'tabpanel' : undefined}
           aria-label={tabbed ? 'Shell' : undefined}
           className="absolute inset-0 flex flex-col"
@@ -166,7 +166,7 @@ export function TerminalView({ run, agent, shells, onCaptures }: {
       )}
       {agent.hasAgentTerminal ? (
         <div
-          id={terminalPanelID.agent}
+          id={terminalPanelID(run.id).agent}
           role={tabbed ? 'tabpanel' : undefined}
           aria-label={tabbed ? 'Agent' : undefined}
           inert={shellShown}

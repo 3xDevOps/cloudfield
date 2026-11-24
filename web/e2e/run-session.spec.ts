@@ -30,7 +30,7 @@ test('an Enhanced run streams, answers a permission, takes a message and stops o
 
   await box.fill('ask permission')
   await box.press('Enter')
-  const card = page.locator('#session-request-docked')
+  const card = page.locator('[id^="session-request-docked"]')
   await expect(card.getByText('rm -rf build')).toBeVisible()
   await expect(page.getByText('Answer the request above to continue.')).toBeVisible()
   await page.getByRole('toolbar', { name: 'Session actions' }).getByRole('button', { name: 'Answer' }).click()
@@ -362,9 +362,9 @@ test('Enhanced multiplayer keeps moderated messages, deliberate release and time
     const ownerComposer = page.getByRole('combobox', { name: 'Message the agent' })
     await ownerComposer.fill('ask permission')
     await ownerComposer.press('Enter')
-    const permission = page.locator('#session-request-docked')
+    const permission = page.locator('[id^="session-request-docked"]')
     await expect(permission.getByRole('button', { name: 'Allow', exact: true })).toBeVisible()
-    await expect(bobPage.locator('#session-request-docked').getByRole('button', { name: 'Allow', exact: true })).toBeDisabled()
+    await expect(bobPage.locator('[id^="session-request-docked"]').getByRole('button', { name: 'Allow', exact: true })).toBeDisabled()
     const pendingInstruction = 'Please check rollback after approval'
     await composer.fill(pendingInstruction)
     await bobPage.getByRole('button', { name: 'Send', exact: true }).click()

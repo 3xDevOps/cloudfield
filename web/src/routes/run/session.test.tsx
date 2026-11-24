@@ -601,7 +601,7 @@ describe('the Enhanced session view', () => {
     const needs = within(within(await screen.findByRole('dialog', { name: 'Session details' })).getByRole('region', { name: 'Needs you' }))
     expect(needs.queryByRole('generic', { name: /Allow this command\?/ })).toBeNull()
     fireEvent.click(needs.getByRole('button', { name: '1 request, shown below the timeline' }))
-    await waitFor(() => expect(document.activeElement?.id).toBe('session-request-docked'))
+    await waitFor(() => expect(document.activeElement?.id).toBe('session-request-docked-run_1'))
   })
 
   it('sends a form answer with its values', async () => {
