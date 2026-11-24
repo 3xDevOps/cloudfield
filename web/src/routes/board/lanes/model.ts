@@ -263,7 +263,7 @@ function agentLanes(run: RunLane, load: AgentLoad, now: number): Lane[] {
       end: parse(agent.settledAt) ?? (state === 'running' ? now : parse(agent.turnEndedAt) ?? now),
     })
     if (depth === agentDepth && agent.children.length > 0) {
-      out.push({ kind: 'note', key: `${key}:nested`, level: run.level + depth + 1, parentKey: key, runID, text: `Nested workflow · ${count(id)} agents`, retry: false })
+      out.push({ kind: 'note', key: `${key}:nested`, level: run.level + depth + 1, parentKey: key, runID, text: `Nested tree · ${count(id)} agents`, retry: false })
       return
     }
     for (const child of agent.children) walk(child, depth + 1, key)

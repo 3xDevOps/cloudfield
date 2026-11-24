@@ -1,7 +1,8 @@
 import type { SessionItem, SessionToolCall } from '@/lib/session-types'
 import {
   activityLabel, agentLabel, agentLoaded, agentPrompt, agentReport, agentRows, agentState, agentTurn, agentType, ancestry,
-  indexItems, launchUnloaded, localItem, noAgents, replaceAgentItem, siblings, trimAgents, turnExtras, withAgentRows,
+  indexItems, launchUnloaded, localItem, noAgents, replaceAgentItem, siblings, topAgents, trimAgents, turnExtras, withAgentRows,
+  workflowRowState, workflowTally,
 } from '@/store/subagents'
 import { rowsOfTurn } from '@/store/session-rows'
 import { item, resetItems, say, tool } from '@/test/acp-stream'
@@ -202,6 +203,41 @@ describe('indexing subagents', () => {
     expect([agentLabel(a!), agentType(a!), agentPrompt(a!), agentReport(a!)]).toEqual(['Job a', 'Explore', 'dig', 'one \n\ntwo'])
     expect([agentLabel(w!), agentType(w!), agentPrompt(w!), agentReport(w!)]).toEqual(['Audit', 'Workflow', 'run()', undefined])
     expect([agentLabel(f!), agentPrompt(f!)]).toEqual(['Agent f', undefined])
+  })
+
+  it('names a workflow after the name it reports and drops a type that repeats the label', () => {
+    const flow = (id: string, extra: Partial<SessionToolCall>) => launch(1, id, 'completed', { tool_name: 'Workflow', subagent: undefined, title: 'Workflow', ...extra })
+    const { index: idx } = index([
+      flow('named', { raw_input: { name: 'from-input' }, task: { id: 't1', status: 'running', workflow: { name: 'fix-flaky-tests' } } }),
+      flow('bare', {}),
+    ])
+    expect([agentLabel(idx.agents.named!), agentType(idx.agents.named!)]).toEqual(['fix-flaky-tests', 'Workflow'])
+    expect([agentLabel(idx.agents.bare!), agentType(idx.agents.bare!)]).toEqual(['Workflow', undefined])
+  })
+
+  it('lists top-level agents running first by age, then failed, stopped and the rest newest first', () => {
+    const { index: idx } = index([
+      launch(1, 'done1', 'completed'),
+      launch(1, 'stopped1'),
+      launch(1, 'nested', 'in_progress', { parent_id: 'stopped1' }),
+      item('turn_end', 1),
+      launch(2, 'failed1', 'failed'),
+      launch(2, 'run1'),
+      launch(2, 'flow', 'completed', { tool_name: 'Workflow', subagent: undefined, task: { id: 't1', status: 'running' } }),
+      launch(2, 'done2', 'completed'),
+      read(2, 'ghost', 'r1'),
+    ])
+    expect(topAgents(idx).split('\n')).toEqual([
+      'a:running:run1', 'w:running:flow', 'a:failed:failed1', 'a:stopped:stopped1', 'a:done:done2', 'a:done:done1', 'a:unknown:ghost',
+    ])
+    expect(topAgents(noAgents)).toBe('')
+  })
+
+  it('reads the rows a settled workflow left running or queued as stopped and not started', () => {
+    const rows = (['running', 'queued', 'done', 'failed', 'skipped'] as const).map((state, at) => ({ index: at, label: state, state }))
+    expect(rows.map((row) => workflowRowState(row, true))).toEqual(['running', 'queued', 'done', 'failed', 'skipped'])
+    expect(rows.map((row) => workflowRowState(row, false))).toEqual(['stopped', 'not-started', 'done', 'failed', 'skipped'])
+    expect(workflowTally([...rows, rows[2]!], false)).toEqual({ stopped: 1, 'not-started': 1, done: 2, failed: 1, skipped: 1 })
   })
 
   it('labels activity and memoizes the agent turn per agent object', () => {

@@ -42,6 +42,39 @@ export interface SessionContent {
   terminal_id?: string
 }
 
+/** One agent a Claude Code workflow launched. It has no transcript: this row is all it reports. */
+export interface WorkflowAgent {
+  index: number
+  label: string
+  /** The index of its phase; absent for phase 0. */
+  phase?: number
+  type?: string
+  model?: string
+  state: 'queued' | 'running' | 'done' | 'failed' | 'skipped'
+  tool?: string
+  tool_summary?: string
+  prompt?: string
+  result?: string
+  error?: string
+  tokens?: number
+  tool_calls?: number
+  started_at?: string
+  duration_ms?: number
+  cached?: boolean
+  /** Set from the second attempt on. */
+  attempt?: number
+}
+
+/** A workflow's progress. A call cut for the wire carries rows without previews or the name only; one before its first progress frame carries the name only. */
+export interface WorkflowProgress {
+  name?: string
+  phases?: { index: number; title: string }[]
+  agents?: WorkflowAgent[]
+  logs?: string[]
+  /** Agents past the server's row limit, in neither agents nor any count. */
+  omitted?: number
+}
+
 /** A tool call snapshot: it replaces the previous one with the same id,
  * except output, which appends. */
 export interface SessionToolCall {
@@ -56,7 +89,7 @@ export interface SessionToolCall {
   subagent?: { description?: string; type?: string }
   /** The Claude Code background task the call started; a later snapshot of
    * the call settles it. */
-  task?: { id: string; type?: string; status: 'running' | 'completed' | 'failed' | 'stopped' }
+  task?: { id: string; type?: string; status: 'running' | 'completed' | 'failed' | 'stopped'; workflow?: WorkflowProgress }
   status?: string
   locations?: { path: string; line?: number }[]
   content?: SessionContent[]

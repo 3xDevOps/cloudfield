@@ -86,7 +86,7 @@ function sameRow(a: RowProps, b: RowProps): boolean {
 
 export const WorkflowRowItem = memo(function WorkflowRowItem({ row, active, fresh, onActivate, onToggle, register, extra }: RowProps) {
   const { node, level, expanded, nested } = row
-  const label = nested !== undefined ? `Nested workflow · ${nested} ${nested === 1 ? 'agent' : 'agents'}` : node.label
+  const label = nested !== undefined ? `Nested tree · ${nested} ${nested === 1 ? 'agent' : 'agents'}` : node.label
   const state = workflowLabel[node.state]
   const more = nested === undefined ? extra?.(node, expanded) : undefined
   return (

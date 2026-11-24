@@ -1,12 +1,12 @@
 import { needsYouBelow, startsOpen, type WorkflowNode } from '@/store/workflow'
 
-/** Deeper levels collapse into one Nested workflow row that opens in place. */
+/** Deeper levels collapse into one Nested tree row that opens in place. */
 const maxDepth = 4
 
 export interface WorkflowRow {
   /** Unique among rows: a surfaced row carries its folded ancestor's id. */
   key: string
-  /** For a Nested workflow row, the node whose subtree it opens. */
+  /** For a Nested tree row, the node whose subtree it opens. */
   node: WorkflowNode
   level: number
   posinset: number
@@ -15,7 +15,7 @@ export interface WorkflowRow {
   expanded?: boolean
   /** A Needs you descendant shown under its folded ancestor. */
   surfaced?: boolean
-  /** The hidden subtree's size, for the Nested workflow row. */
+  /** The hidden subtree's size, for the Nested tree row. */
   nested?: number
   /** Per ancestor level, whether its connector continues past this row. */
   guides: boolean[]
