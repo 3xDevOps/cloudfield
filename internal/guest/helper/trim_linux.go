@@ -50,9 +50,9 @@ func trimOnce(dir string) error {
 	if cold <= trimKeep {
 		return nil
 	}
-	// The kernel answers EAGAIN when it freed less than asked. An os.File
-	// would wait on the poller for a cgroup file to turn writable, which
-	// after the first EAGAIN it never does again.
+	// The kernel answers EAGAIN when it freed less than asked and EINTR
+	// when a signal cut it short. An os.File would wait on the poller for a
+	// cgroup file to turn writable again, which it never does.
 	fd, err := unix.Open(filepath.Join(dir, "memory.reclaim"), unix.O_WRONLY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return fmt.Errorf("open memory.reclaim: %w", err)

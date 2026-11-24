@@ -163,10 +163,9 @@ page that was in regular use, dropped and then read again comes back from
 disk and counts as a stall on memory, and the trim holds off while the
 guest's tasks stalled on memory for 1% or more of the last minute
 (`memory.pressure`, `some avg60`). A file read once, dropped and read again
-comes back from disk without one. After
-1280 MiB written and read once in a 4 GiB guest, three quarters of it was
-back on the host in 76 seconds, and 16% after 3 minutes without the trim
-(`TestKVMBuildCacheReturnsToTheHost`).
+comes back from disk without one. After 1280 MiB written and read once in a
+4 GiB guest, three quarters of it was back on the host in 76 seconds, and
+16% after 3 minutes without the trim (`TestKVMBuildCacheReturnsToTheHost`).
 
 The trim frees no program memory, so the helper also turns on the kernel's
 DAMON_RECLAIM at boot: it pages out memory left untouched for `min_age`, 60
@@ -421,10 +420,8 @@ PID 1 passes `SIGHUP`, `SIGINT`, `SIGQUIT`, `SIGTERM`, `SIGUSR1`, `SIGUSR2`,
 `SIGALRM` and `SIGWINCH` on to the main process, as `docker-init` does. When
 the main process exits the helper keeps running, kills every process left in
 the session cgroup, as a container's end does, and drops the clean page cache
-(`/proc/sys/vm/drop_caches`) so the host gets the memory back. It does not
-ask `memory.reclaim` for all of memory: from the helper, which serves the
-home, that stalls past 30 seconds. The server reads the exit code and powers the VM
-off, unless its checkouts live on its own disks ([Checkouts](#checkouts)):
+(`/proc/sys/vm/drop_caches`) so the host gets the memory back. The server
+reads the exit code and powers the VM off, unless its checkouts live on its own disks ([Checkouts](#checkouts)):
 then the VM stays up for the git work that ends a session on its checkout,
 the last snapshot, the final commit, branch publication and evidence, until
 the session is removed, started again, or 10 minutes pass. A stop whose end

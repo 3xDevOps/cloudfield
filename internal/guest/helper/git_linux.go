@@ -126,9 +126,7 @@ func endSession(cgroup *sessionCgroup) {
 	}
 }
 
-// dropCaches hands the guest's clean page cache back to the host. Asking
-// the root cgroup's memory.reclaim for all of memory from the helper, which
-// serves the home's FUSE mount, stalls past 30 seconds instead.
+// dropCaches hands the guest's clean page cache back to the host.
 func dropCaches() {
 	if err := os.WriteFile("/proc/sys/vm/drop_caches", []byte("3"), 0); err != nil {
 		slog.Warn("guest: drop the page cache", "error", err)
