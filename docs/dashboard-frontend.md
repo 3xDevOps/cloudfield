@@ -3380,7 +3380,9 @@ right-aligned bubble; the author shows only when it is not the viewer or the
 message came through a connector, and the session's appended instructions hide
 under its task), `steps`, `assistant` (markdown through `react-markdown` and
 `remark-gfm`, split into blocks with `marked`'s lexer so only the streaming
-block re-renders, code highlighted with the Lezer languages), `live`,
+block re-renders; code in a streaming reply is highlighted with the Lezer
+languages once its block is complete, when another block follows or the reply
+ends), `live`,
 `event` (a wake, a new agent conversation, or a notice outside a block),
 `finished` and `agent-message`.
 
