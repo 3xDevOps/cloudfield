@@ -91,7 +91,7 @@ func TestKVMColdMemoryReturnsToTheHost(t *testing.T) {
 		coldMiB, free, memTotalKiB, before, held, guestRAMOnHost(t, key), time.Since(read).Round(time.Second), minAge)
 
 	if n := rootReads() - readIn; n > hotMiB<<20/8 {
-		t.Errorf("while the cold file left, the guest read %d bytes from its root disk: DAMON_RECLAIM evicted the file Main keeps reading", n)
+		t.Errorf("while the cold file left, the guest read %d bytes from its root disk: the file Main keeps reading was evicted", n)
 	}
 	cpu := guestFields(t, e, key, "cut -d' ' -f14,15 /proc/"+kdamond+"/stat; cut -d' ' -f1 /proc/uptime", 3)
 	ticks := parseUint(t, cpu[0]) + parseUint(t, cpu[1])
@@ -110,8 +110,8 @@ func TestKVMColdMemoryReturnsToTheHost(t *testing.T) {
 // guest that stays mostly free, as one does after a build: of files written
 // and read once on the root disk and in the home, three quarters leave the
 // guest, and the host's memory, within 3 minutes, while a file Main reads
-// every 2 seconds stays cached and the home, whose pages the trim frees
-// while they are still being written out, keeps answering. They were
+// every 2 seconds stays cached and the home, part of whose pages are still
+// to be written out when the trim starts, keeps answering. They were
 // back in 76 seconds; without the trim, 16% was after 3 minutes.
 func TestKVMBuildCacheReturnsToTheHost(t *testing.T) {
 	e := kvmEngine(t)
@@ -150,9 +150,9 @@ func TestKVMBuildCacheReturnsToTheHost(t *testing.T) {
 		}
 		time.Sleep(5 * time.Second)
 		asked := time.Now()
-		pressure, _ := vmRun(t, e, key, "date >/root/tick && cat /root/tick >/dev/null && head -1 /sys/fs/cgroup/memory.pressure")
+		pressure := guestFields(t, e, key, "date >/root/tick && cat /root/tick >/dev/null && head -1 /sys/fs/cgroup/memory.pressure", 5)
 		slowest = max(slowest, time.Since(asked))
-		t.Logf("%s after the build the host holds %d bytes; guest %s", time.Since(built).Round(time.Second), guestRAMOnHost(t, key), strings.TrimSpace(pressure))
+		t.Logf("%s after the build the host holds %d bytes; guest %s", time.Since(built).Round(time.Second), guestRAMOnHost(t, key), pressure)
 	}
 	t.Logf("the host's share of the guest went %d -> %d -> %d bytes, three quarters of the build back %s after it",
 		before, held, guestRAMOnHost(t, key), time.Since(built).Round(time.Second))

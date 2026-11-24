@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"path/filepath"
 	"time"
 
@@ -19,7 +18,8 @@ const (
 	trimKeep = 64 << 20
 	// trimStall is the share of the last minute, in percent, the cgroup's
 	// tasks may have stalled on memory before a trim holds off: reading back
-	// a file the trim dropped counts as such a stall.
+	// a page that was in regular use before the trim dropped it counts as
+	// such a stall.
 	trimStall = 1.0
 )
 
@@ -50,10 +50,17 @@ func trimOnce(dir string) error {
 	if cold <= trimKeep {
 		return nil
 	}
-	// The kernel answers EAGAIN when it freed less than asked.
-	err = os.WriteFile(filepath.Join(dir, "memory.reclaim"), fmt.Appendf(nil, "%d swappiness=0", (cold-trimKeep)/4), 0)
-	if errors.Is(err, unix.EAGAIN) {
-		return nil
+	// The kernel answers EAGAIN when it freed less than asked. An os.File
+	// would wait on the poller for a cgroup file to turn writable, which
+	// after the first EAGAIN it never does again.
+	fd, err := unix.Open(filepath.Join(dir, "memory.reclaim"), unix.O_WRONLY|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return fmt.Errorf("open memory.reclaim: %w", err)
 	}
-	return err
+	_, err = unix.Write(fd, fmt.Appendf(nil, "%d swappiness=0", (cold-trimKeep)/4))
+	_ = unix.Close(fd)
+	if err != nil && !errors.Is(err, unix.EAGAIN) && !errors.Is(err, unix.EINTR) {
+		return fmt.Errorf("write memory.reclaim: %w", err)
+	}
+	return nil
 }

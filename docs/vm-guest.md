@@ -158,9 +158,12 @@ asks the kernel to free a quarter of the file pages on its inactive list
 beyond 64 MiB, the ones read or written once and not since, by writing the
 amount with `swappiness=0` to the root cgroup's `memory.reclaim`. As that
 list empties the kernel moves pages nothing has read lately onto it, so they
-follow. A page read again comes back from disk and counts as a stall on
-memory, and the trim holds off while the guest's tasks stalled on memory for
-1% or more of the last minute (`memory.pressure`, `some avg60`). After
+follow, and it shrinks its caches of file names and inodes in proportion. A
+page that was in regular use, dropped and then read again comes back from
+disk and counts as a stall on memory, and the trim holds off while the
+guest's tasks stalled on memory for 1% or more of the last minute
+(`memory.pressure`, `some avg60`). A file read once, dropped and read again
+comes back from disk without one. After
 1280 MiB written and read once in a 4 GiB guest, three quarters of it was
 back on the host in 76 seconds, and 16% after 3 minutes without the trim
 (`TestKVMBuildCacheReturnsToTheHost`).
@@ -172,8 +175,8 @@ page that shares a region with pages in use leaves only once DAMON splits
 them apart. Alone, it returned a third of a file read once that filled the
 guest in about 4 minutes, and the rest more slowly; with the trim a third is
 back in 20 seconds (`TestKVMColdMemoryReturnsToTheHost`). Clean file pages
-are dropped. A dirty
-one leaves on a later pass, once the kernel's flusher has written it.
+are dropped. A dirty one leaves on a later pass, once the kernel's flusher
+has written it.
 With swap, cold anonymous, tmpfs and shared memory pages, such as
 `/dev/shm`, are tried too and go to the swap file (step 6 of
 [Boot](#boot)). DAMON rarely reaches idle program memory in a guest that is
@@ -419,8 +422,8 @@ PID 1 passes `SIGHUP`, `SIGINT`, `SIGQUIT`, `SIGTERM`, `SIGUSR1`, `SIGUSR2`,
 the main process exits the helper keeps running, kills every process left in
 the session cgroup, as a container's end does, and drops the clean page cache
 (`/proc/sys/vm/drop_caches`) so the host gets the memory back. It does not
-write the cache's whole size to `memory.reclaim`: from the helper, which
-serves the home, that stalled on the home's own pages. The server reads the exit code and powers the VM
+ask `memory.reclaim` for all of memory: from the helper, which serves the
+home, that stalls past 30 seconds. The server reads the exit code and powers the VM
 off, unless its checkouts live on its own disks ([Checkouts](#checkouts)):
 then the VM stays up for the git work that ends a session on its checkout,
 the last snapshot, the final commit, branch publication and evidence, until
