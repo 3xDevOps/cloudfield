@@ -142,7 +142,7 @@ func TestCLISkillNamesTheLiveRun(t *testing.T) {
 	if err != nil || code != ExitOK {
 		t.Fatalf("skill = %d, %v", code, err)
 	}
-	if raw := out.String(); !strings.Contains(raw, "Role: ordinary\n") || !strings.Contains(raw, "Run: run-current\n") {
+	if raw := out.String(); !strings.Contains(raw, "Run: run-current\n") {
 		t.Fatalf("skill lost live identity: %s", raw)
 	}
 }

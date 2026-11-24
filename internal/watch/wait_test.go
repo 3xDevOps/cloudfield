@@ -1122,3 +1122,20 @@ func TestAWaitOnAnotherWorkspacesRunReadsAsMissing(t *testing.T) {
 		t.Fatalf("wait on another workspace's run = %v, on a missing run = %v; want the same refusal", got, want)
 	}
 }
+
+// A subsession that reports failure stays open, so its parent's wait resolves
+// on the report; a turn the agent could not finish may still recover.
+func TestAWaitResolvesWhenALiveRunReportsFailure(t *testing.T) {
+	t.Parallel()
+	h := newWaitHarness(t)
+	owner, target := h.run(h.ada, "Integrate"), h.run(h.ada, "Build")
+	h.status(target, domain.RunNeedsAttention, domain.ActivityFailed, "agent error")
+	if resolved := h.mustReport(owner, finished(target.ID)); len(resolved) != 0 {
+		t.Fatalf("resolved = %+v, want a failed turn to keep the wait pending", resolved)
+	}
+	h.status(target, domain.RunNeedsAttention, domain.ActivityFailed, domain.ReportedFailureReason)
+	resolved := h.mustReport(owner, finished(target.ID))
+	if len(resolved) != 1 || resolved[0].Outcome != "reported-failure" {
+		t.Fatalf("resolved = %+v, want the reported failure", resolved)
+	}
+}

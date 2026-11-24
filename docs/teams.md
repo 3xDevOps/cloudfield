@@ -568,12 +568,17 @@ Anyone who messages a session is added to its co-authors. Cloudfield's commits e
 
 When two sessions change the same file, `cloudfield sessions` shows it in the `OVERLAP`
 column and the dashboard puts a warning on both cards that opens the shared
-files. It warns and does not block. Changes merged in from `main` do not count.
+files. It warns and does not block. Changes merged in from `main` do not count,
+and neither do changes in a session's extra `--repo` repositories.
 
 Agents in one workspace can also message each other. `cloudfield-internal status`
 inside a session lists the sessions it can reach, and protection and the message-others
 policy limit this the same way. Every message appears in **Activity** as an
 **Agent message** ([coordination.md](coordination.md#seeing-agent-messages)).
+
+For one goal, start one session and let it split the work across subagents or
+[subsessions](#subsessions). Separate sessions on the same goal each see only
+their own task and must coordinate by message.
 
 ### Budgets
 
