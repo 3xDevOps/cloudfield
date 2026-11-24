@@ -103,13 +103,6 @@ test('a pane header holds the view heading, its toolbar and the sidebar button',
   expect(heading.closest('header')?.className).toContain('h-11')
 })
 
-test('a run header is the taller two-line size', () => {
-  render(<PaneHeader title="Fix login" size="run" stateLine={<StateLine tone="working">Running tests</StateLine>} />)
-  expect(screen.getByRole('heading', { name: 'Fix login' }).closest('header')?.className).toContain('h-14')
-  expect(screen.getByText('Running tests')).toBeDefined()
-  expect(screen.queryByRole('toolbar')).toBeNull()
-})
-
 test('a list row is a button whose hover action stays focusable, shows on focus and always on a coarse pointer', () => {
   render(
     <ListRow selected trailing="3m" hoverAction={<Button size="icon-sm" label="Archive">x</Button>}>

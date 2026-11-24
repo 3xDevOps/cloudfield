@@ -2,6 +2,7 @@ import { useState } from 'react'
 import type * as React from 'react'
 import { AskAssistantButton } from '@/components/assistant/ask'
 import { Eye, GitPullRequest, Sparkles } from '@/components/icons'
+import type { ExtraItem } from '@/components/run-actions'
 import { Button } from '@/components/ui/button'
 import { StatusDot } from '@/components/ui/status-dot'
 import { PRFeedback } from '@/routes/diff/publish-feedback'
@@ -13,13 +14,20 @@ import { useStore } from '@/store'
 import { useCapability } from '@/store/hooks'
 import type { RunRecord } from '@/store/runs'
 
+export interface RunPullRequest {
+  status: React.ReactNode
+  panel: React.ReactNode
+  /** The same pull requests as More menu items, for a header too narrow for `status`. */
+  more: ExtraItem[]
+}
+
 /**
  * `status` and `panel` are separate because the row `status` sits in leaves the header while the
  * composer has focus on a phone, and a send waiting for control in `panel` has to outlive it.
  * Both are read through the run's container, so a run that is no longer live keeps the link and
  * drops the state nothing can refresh.
  */
-export function useRunPullRequest(run: RunRecord, agent: AgentTerminal, agentName: string): { status: React.ReactNode; panel: React.ReactNode } {
+export function useRunPullRequest(run: RunRecord, agent: AgentTerminal, agentName: string): RunPullRequest {
   const caps = useCapability()
   const watch = (run.status === 'running' || run.status === 'needs-attention') && caps.hasMethod('run.git.status') && caps.hasMethod('run.pr.feedback')
   const multiRepo = (run.repos?.length ?? 0) > 1
@@ -36,7 +44,7 @@ export function useRunPullRequest(run: RunRecord, agent: AgentTerminal, agentNam
   if (repos) return repos
   const feedback = tracked.feedback
   const pr = feedback?.pull_request
-  if (!feedback || !pr) return { status: null, panel: null }
+  if (!feedback || !pr) return { status: null, panel: null, more: [] }
   const { tone, text, short } = summarizePR(pr, feedback)
   const failing = tone === 'failed'
   return {
@@ -89,5 +97,12 @@ export function useRunPullRequest(run: RunRecord, agent: AgentTerminal, agentNam
       </div>
     ),
     panel: watch && <PRFeedback run={run} agent={agent} agentName={agentName} tracked={tracked} open={open} onOpenChange={setOpen} />,
+    more: [{
+      id: 'pull-request',
+      label: `Pull request #${pr.number}`,
+      description: text,
+      Icon: GitPullRequest,
+      onSelect: () => (watch ? setOpen(true) : window.open(pr.url, '_blank', 'noopener,noreferrer')),
+    }],
   }
 }

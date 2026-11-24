@@ -81,9 +81,11 @@ export interface FrameTile {
   arrows: Partial<Record<RunView, string>>
   /** Marks the tile that shows `view` while its arrow is pointed at. */
   onArrow: (view: RunView | null) => void
+  /** Under 560px wide: the header row draws icons for words. */
+  narrow: boolean
 }
 
-const lone: FrameTile = { focused: true, controls: true, alone: true, terminalHost: true, elsewhere: [], arrows: {}, onArrow: () => {} }
+const lone: FrameTile = { focused: true, controls: true, alone: true, terminalHost: true, elsewhere: [], arrows: {}, onArrow: () => {}, narrow: false }
 
 function useVisited(view: RunView, elsewhere: RunView[]) {
   const visited = useRef(new Set<RunView>())
@@ -98,7 +100,7 @@ function useVisited(view: RunView, elsewhere: RunView[]) {
  * in the focused tile and the tab's view and repo elsewhere.
  */
 export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteProps['params']; tile?: FrameTile }) {
-  const { focused, controls, alone, terminalHost, elsewhere, arrows, onArrow } = tile ?? lone
+  const { focused, controls, alone, terminalHost, elsewhere, arrows, onArrow, narrow } = tile ?? lone
   const { agent, agentName, agentEntry, room, shells } = useContext(RunAgentContext)!
   const cap = useCapability()
   const mobile = useIsMobile()
@@ -287,6 +289,8 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
           }}
           agentName={agentName}
           agentEntry={agentEntry}
+          controls={controls}
+          narrow={narrow}
           workflow={(
             <WorkflowChip
               run={run}
@@ -298,7 +302,7 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
             />
           )}
         />
-        {run.mode === 'acp' && view !== 'browser' && view !== 'files' && (!mobile || (shared && !keyboard && view !== 'terminal')) && <MultiplayerControls run={run} agent={agent} onPeople={() => nav.reveal('details-people')} />}
+        {mobile && run.mode === 'acp' && view !== 'browser' && view !== 'files' && shared && !keyboard && view !== 'terminal' && <MultiplayerControls run={run} agent={agent} onPeople={() => nav.reveal('details-people')} />}
         <div ref={paneRef} className="relative min-h-0 min-w-0 flex-1">
           {visited.has('session') && (
             <TabsContent value="session" forceMount inert={view !== 'session'} className={cn(panel, view !== 'session' && 'invisible')}>

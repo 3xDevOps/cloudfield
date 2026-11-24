@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import type * as React from 'react'
 import { SidebarRuns } from '@/components/shell/sidebar-runs'
@@ -377,6 +377,97 @@ describe('a session in two tiles', () => {
     beside('run_1', 'changes')
     expect(document.querySelectorAll('[role=group][aria-label=Changes]')).toHaveLength(1)
     expect(tiles()[1].querySelector('[role=group][aria-label=Changes]')).not.toBeNull()
+  })
+})
+
+describe('the header row', () => {
+  const header = (n: number) => tiles()[n - 1].querySelector('header')!
+  const gold = () => [...document.querySelectorAll('header [data-slot=button]')].filter((button) => button.className.includes('bg-action'))
+  const asking = { ...enhanced, status: 'needs-attention', state: 'needs-you' } as const
+
+  it('keeps the strip and the view row where they are when focus moves between tiles', async () => {
+    show()
+    beside('run_1', 'changes')
+    beside('run_2')
+    await settled()
+    const rows = () => tiles().flatMap((node) => {
+      const [strip, body] = node.children
+      const row = body.querySelector(':scope > div > div > header:first-child')!
+      expect(strip.className).toContain('h-8')
+      expect(row.className).toContain('h-8')
+      return [strip, row]
+    })
+    const before = rows()
+    for (const n of [0, 1, 2]) {
+      fireEvent.pointerDown(tiles()[n])
+      expect(state().tiles.focused).toBe(tiles()[n].dataset.tile)
+      rows().forEach((row, index) => expect(row).toBe(before[index]))
+    }
+  })
+
+  it('shows a session its controls once, its other tile the state alone, and one gold action on screen', async () => {
+    act(() => state().upsertRun(run({ ...asking, id: 'run_5', task: 'pick a port', reason: 'needs input: Which port?' })))
+    show('run_3')
+    beside('run_3', 'changes')
+    beside('run_5')
+    await settled()
+    const toolbars = () => tiles().map((node) => within(node).queryAllByRole('toolbar', { name: 'Session actions' }).length)
+    expect(toolbars()).toEqual([1, 0, 1])
+    expect(within(header(2)).queryAllByRole('button')).toEqual([])
+    expect(within(header(2)).getByRole('status').textContent).toBe('Needs you')
+    expect(within(header(1)).getByRole('button', { name: 'Reply' }).className).not.toContain('bg-action')
+    expect(gold()).toEqual([within(header(3)).getByRole('button', { name: 'Reply' })])
+
+    fireEvent.pointerDown(tiles()[1])
+    expect(toolbars()).toEqual([0, 1, 1])
+    expect(gold()).toEqual([within(header(2)).getByRole('button', { name: 'Reply' })])
+  })
+
+  it('draws a tile under 560px with icons for words, the state without its reason, and Workflow under More', async () => {
+    show('run_3')
+    expect(header(1).textContent).toContain('Which schema?')
+    expect(within(header(1)).getByRole('button', { name: /^Workflow: / })).toBeDefined()
+    cleanup()
+
+    sized(1000, 800)
+    show('run_3')
+    beside('run_2')
+    await settled()
+    const chat = within(tile(1).getByRole('tablist', { name: 'Session views' })).getByRole('tab', { name: 'Chat' })
+    expect(chat.textContent).toBe('')
+    expect(await hintOn(chat)).toBe('Chat')
+    expect(within(header(1)).getByRole('status').textContent).toBe('Needs you')
+    expect(header(1).textContent).not.toContain('Which schema?')
+    expect(within(header(2)).queryByRole('button', { name: /^Workflow: / })).toBeNull()
+    await userEvent.click(within(header(2)).getByRole('button', { name: 'More' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Workflow' }))
+    expect(await screen.findByRole('dialog', { name: 'Workflow' })).toBeDefined()
+  })
+
+  it('docks Details beside a lone or maximized tile and opens it as a sheet between tiles', async () => {
+    sized(1600, 900)
+    useStore.setState({ detailsOpen: true })
+    show()
+    expect(screen.getByRole('complementary', { name: 'Session details' })).toBeDefined()
+    beside('run_2')
+    await settled()
+    expect(screen.queryByRole('complementary', { name: 'Session details' })).toBeNull()
+    await userEvent.click(tile(2).getByRole('button', { name: 'Show details' }))
+    expect(await screen.findByRole('dialog', { name: 'Session details' })).toBeDefined()
+    await userEvent.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Session details' })).toBeNull())
+    fireEvent.click(tile(2).getByRole('button', { name: 'Maximize' }))
+    expect(screen.getByRole('complementary', { name: 'Session details' })).toBeDefined()
+  })
+
+  it('offers Open sidebar on the first strip while the sidebar is hidden', () => {
+    useStore.setState({ sidebarCollapsed: true })
+    show()
+    beside('run_2')
+    expect(tile(2).queryByRole('button', { name: 'Open sidebar' })).toBeNull()
+    fireEvent.click(tile(1).getByRole('button', { name: 'Open sidebar' }))
+    expect(state().sidebarCollapsed).toBe(false)
+    expect(screen.queryByRole('button', { name: 'Open sidebar' })).toBeNull()
   })
 })
 

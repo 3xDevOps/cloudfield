@@ -113,9 +113,10 @@ describe('run frame', () => {
     await waitFor(() => expect(screen.getByRole('banner').textContent).toContain("On Bob's account (fallback)"))
   })
 
-  it('keeps the state time on the state line when no reason shows', async () => {
+  it('keeps the state time on the state line when no reason shows, and on the session tab', async () => {
     open({ paused: true })
-    await waitFor(() => expect(screen.getByTitle(/^Paused since /)).toBeDefined())
+    await waitFor(() => expect(within(screen.getByRole('banner')).getByTitle(/^Paused since /)).toBeDefined())
+    expect(within(screen.getByRole('tab', { name: /rewrite the checkout flow/ })).getByTitle(/^Paused since /)).toBeDefined()
   })
 
   it('keeps the model and effort out of the state line and in the agent tooltip', async () => {
@@ -264,11 +265,13 @@ describe('the Files view', () => {
     expect(editor.closest('[inert]')).not.toBeNull()
   })
 
-  it('leaves the session’s control strip off, where no lease is used', () => {
+  it('keeps the session’s presence in the header row, which takes no room of its own', () => {
     const view = open({ mode: 'acp' }, 'session')
-    expect(screen.getByRole('group', { name: 'Multiplayer controls' })).toBeDefined()
+    const row = screen.getByRole('toolbar', { name: 'Session actions' })
+    expect(within(row).getByRole('group', { name: 'Multiplayer controls' })).toBeDefined()
     view.rerender(rerouted('files'))
-    expect(screen.queryByRole('group', { name: 'Multiplayer controls' })).toBeNull()
+    expect(within(row).getByRole('group', { name: 'Multiplayer controls' })).toBeDefined()
+    expect(row.closest('header')!.className).toContain('h-8')
   })
 })
 
@@ -290,11 +293,12 @@ describe('the Browser view', () => {
     expect(views().queryByRole('tab', { name: 'Browser' })).toBeNull()
   })
 
-  it('leaves the session’s control strip off the Browser view', async () => {
+  it('keeps the session’s presence in the header row beside the Browser’s own toolbar', async () => {
     const view = open({ mode: 'acp' }, 'session')
-    expect(await screen.findByRole('group', { name: 'Multiplayer controls' })).toBeDefined()
+    const row = within(screen.getByRole('toolbar', { name: 'Session actions' }))
+    expect(await row.findByRole('group', { name: 'Multiplayer controls' })).toBeDefined()
     view.rerender(rerouted('browser'))
-    expect(screen.queryByRole('group', { name: 'Multiplayer controls' })).toBeNull()
+    expect(row.getByRole('group', { name: 'Multiplayer controls' })).toBeDefined()
     expect(screen.getByRole('toolbar', { name: 'Browser' })).toBeDefined()
   })
 

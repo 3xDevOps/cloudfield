@@ -309,6 +309,18 @@ describe('a persisted store from an older release', () => {
     return createRootStore().getState().onboardingStep
   }
 
+  it('loads a version 12 payload and drops the Browser dock preference it stored', () => {
+    window.localStorage.setItem(
+      'aether.ui',
+      JSON.stringify({ state: { theme: 'light', browserBeside: true, browserBesideWidth: 480 }, version: 12 }),
+    )
+    const migrated = createRootStore().getState()
+    expect(migrated.theme).toBe('light')
+    expect(migrated).not.toHaveProperty('browserBeside')
+    expect(migrated).not.toHaveProperty('browserBesideWidth')
+    window.localStorage.removeItem('aether.ui')
+  })
+
   it('drops the stale repository answer and keeps the other preferences', () => {
     // Version 0 stored a push result with no `state`: the Repository step
     // matches it against none of its states and renders a blank panel.

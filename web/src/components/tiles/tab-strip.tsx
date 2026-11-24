@@ -1,5 +1,5 @@
 import { useContext, useState } from 'react'
-import { Columns2, LayoutGrid, Maximize2, Minimize2, Plus, Rows2, X } from '@/components/icons'
+import { Columns2, LayoutGrid, Maximize2, Minimize2, PanelLeft, Plus, Rows2, X } from '@/components/icons'
 import { ProtectedMark } from '@/components/protected-mark'
 import { changeTiles, TileAreaContext } from '@/components/tiles/area'
 import { Picker } from '@/components/tiles/picker'
@@ -10,14 +10,14 @@ import { FadeStrip } from '@/components/ui/fade-strip'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { StatusDot } from '@/components/ui/status-dot'
 import { TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { runLabel, stateName, toneOf } from '@/lib/status'
+import { runLabel, stateName, stateTitle, toneOf } from '@/lib/status'
 import { cn } from '@/lib/utils'
 import { runViewIcon } from '@/routes/run/view-icons'
 import { runViewLabel } from '@/routes/run/views'
 import { useStore } from '@/store'
 import { useNeedsYouRuns, useRunPresentation } from '@/store/hooks'
 import type { RunRecord } from '@/store/runs'
-import { closeTab, closeTile, focusTile, maximizeTile, resolveView, splitTile, tileList, type Tile, type TileSide, type TileTab } from '@/store/tiles'
+import { closeTab, closeTile, focusTile, maximizeTile, resolveView, splitTile, tileList, visibleTiles, type Tile, type TileSide, type TileTab } from '@/store/tiles'
 
 /** What a tab or a parked tile's chip says about its session: the title, and the view when the session has two or more tabs. */
 function TabLabel({ run, tab, background, narrow }: { run: RunRecord; tab: TileTab; background: boolean; narrow: boolean }) {
@@ -33,7 +33,7 @@ function TabLabel({ run, tab, background, narrow }: { run: RunRecord; tab: TileT
       <span className="sr-only">{asks ? 'Needs you' : stateName(shown)}: </span>
       {!badge && <StatusDot tone={asks ? 'needs-you' : toneOf(shown)} />}
       {!narrow && <AgentGlyph agent={run.harness} />}
-      <span className="min-w-0 truncate">{runLabel(run)}</span>
+      <span className="min-w-0 truncate" title={stateTitle(shown, run.stateChangedAt)}>{runLabel(run)}</span>
       {several && (
         <span className="flex shrink-0 items-center gap-1 text-muted">
           <span aria-hidden>·</span>
@@ -91,6 +91,8 @@ export function TabStrip({ tile, narrow, room }: {
 }) {
   const { layout, cramped, ctx, say } = useContext(TileAreaContext)!
   const navigate = useStore((s) => s.navigate)
+  const sidebarCollapsed = useStore((s) => s.sidebarCollapsed)
+  const toggleSidebar = useStore((s) => s.toggleSidebar)
   const [adding, setAdding] = useState(false)
   const tiles = tileList(layout.root)
   const focused = layout.focused === tile.id
@@ -119,6 +121,11 @@ export function TabStrip({ tile, narrow, room }: {
 
   return (
     <div className={cn('flex h-8 shrink-0 items-center gap-1 border-b border-seam pr-1 coarse:h-11', focused ? 'bg-canvas' : 'bg-chrome')}>
+      {sidebarCollapsed && visibleTiles(layout)[0] === tile && (
+        <Button variant="ghost" size="icon-sm" label="Open sidebar" onClick={toggleSidebar} className="ml-1">
+          <PanelLeft />
+        </Button>
+      )}
       {tile.tabs.length > 0 ? (
         <FadeStrip className="h-full flex-initial">
           <TabsList aria-label="Sessions in this tile" className={cn('h-full gap-0 coarse:h-full', !focused && '[&>[data-slot=sliding-indicator]]:hidden')}>

@@ -1,25 +1,23 @@
 import { useContext, useEffect, useRef, useState } from 'react'
 import type * as React from 'react'
-import { ArrowUpRight, Camera, Copy, Eye, GitBranch, Lock, PanelRight, ScrollText } from '@/components/icons'
+import { ArrowUpRight, Camera, Eye, Network, PanelRight, ScrollText } from '@/components/icons'
 import { permissionLabel, permissions } from '@/components/launch/permission-control'
 import { RunActions } from '@/components/run-actions'
 import { RunRetention } from '@/components/run-retention'
 import { ConnectionLine } from '@/components/shell/connection'
-import { AgentGlyph } from '@/components/ui/agent-glyph'
-import { Avatar } from '@/components/ui/avatar'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { PaneHeader } from '@/components/ui/pane-header'
+import { ProgressBar } from '@/components/ui/progress-bar'
 import { TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Tooltip } from '@/components/ui/tooltip'
 import { StatusDot } from '@/components/ui/status-dot'
 import { useIsMobile } from '@/lib/breakpoints'
-import { copyText } from '@/lib/clipboard'
-import { memberName, resolveMember } from '@/lib/member-name'
+import { memberName } from '@/lib/member-name'
 import { extraRepoCount, repoLabel } from '@/lib/repos'
 import { isSudo } from '@/lib/run-requests'
 import type { AgentInfo } from '@/lib/types'
 import { useClock } from '@/lib/clock'
+import { useReducedMotion } from '@/lib/hooks'
 import { shortcutLabel } from '@/lib/keybindings'
 import { needsYou, terminalAction } from '@/lib/needs-you'
 import { runLabel, stateName, stateTitle, stateWords, toneOf, waitLine } from '@/lib/status'
@@ -30,10 +28,12 @@ import { modeLabel } from '@/routes/run/agent-name'
 import type { AgentTerminal } from '@/routes/run/agent-terminal'
 import { RunLineage, useChildRunsItems } from '@/routes/run/child-runs'
 import { useModeSwitch } from '@/routes/run/mode-switch'
+import { PresenceControls, PresenceErrors } from '@/routes/run/multiplayer-controls'
 import { useOpenInEditor } from '@/routes/run/open-in-editor'
 import { useRunPullRequest } from '@/routes/run/pull-request'
 import { requestCardID } from '@/routes/run/requests'
 import { PhoneRunHeader } from '@/routes/run/phone-header'
+import { runViewIcon } from '@/routes/run/view-icons'
 import { runViewLabel, type RunView } from '@/routes/run/views'
 import { useStore } from '@/store'
 import { queuedSteers, unansweredQuestions } from '@/store/collaboration'
@@ -115,7 +115,8 @@ function WaitLine({ run }: { run: RunRecord }) {
   )
 }
 
-function StateLine({ run, agentName }: { run: RunRecord; agentName: string }) {
+/** The state's dot and label, for which `chip` stands in, then on a wide tile what the session runs as and the reason. */
+function StateLine({ run, agentName, narrow, chip }: { run: RunRecord; agentName: string; narrow: boolean; chip?: React.ReactNode }) {
   const presented = useRunPresentation(run)
   const asks = useNeedsYouRuns([run.id]).has(run.id)
   const presentation = run.switching
@@ -129,7 +130,6 @@ function StateLine({ run, agentName }: { run: RunRecord; agentName: string }) {
   )
   const since = state === 'ready' && run.review_changed_at ? run.review_changed_at : run.stateChangedAt
   const words = stateWords(presentation, since, useClock())
-  // The Workflow chip under the header shows the state's own label.
   const detail = [
     subagents > 0 && `${subagents} ${subagents === 1 ? 'subagent' : 'subagents'} running`,
     words.label !== stateName(presentation) && words.label,
@@ -137,92 +137,87 @@ function StateLine({ run, agentName }: { run: RunRecord; agentName: string }) {
   ]
     .filter(Boolean)
     .join(' · ')
-  const owner = useStore((s) => resolveMember(s, run.member_id).member)
-  const ownerName = useStore((s) => memberName(s, run.member_id))
   const accountID = run.requested_account_member_id ? run.account_member_id ?? '' : ''
   const accountOwner = useStore((s) => memberName(s, accountID))
   const mode = modeLabel[run.mode] ?? run.mode
   const watch = useStore((s) => runWatch(s, run.id))
   const navigate = useStore((s) => s.navigate)
   return (
-    <div className="@container/state flex w-full min-w-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-ui-sm text-muted">
-      <span role="status" className="sr-only">{stateName(presentation)}</span>
-      {run.branch && (
+    <>
+      {chip ? (
         <>
-          <Button
-            variant="quiet"
-            size="sm"
-            hint="Copy branch name"
-            aria-label={`Copy branch ${run.branch}`}
-            className="max-w-full"
-            onClick={(event) => void copyText(run.branch, event.currentTarget)}
-          >
-            <GitBranch aria-hidden />
-            <span className="min-w-0 truncate font-code">{run.branch}</span>
-            <Copy aria-hidden />
-          </Button>
-          <span aria-hidden>·</span>
+          <span role="status" className="sr-only">{stateName(presentation)}</span>
+          {chip}
         </>
+      ) : (
+        <span className="flex shrink-0 items-center gap-1.5 text-ui-sm" title={stateTitle(presentation, since)}>
+          <StatusDot tone={toneOf(presentation)} pulse={state === 'working'} />
+          <span role="status" className="font-medium">{stateName(presentation)}</span>
+        </span>
       )}
-      {extraRepoCount(run) > 0 && (
-        <>
-          <span className="min-w-0 truncate" title={run.repos!.map((repo) => repo.name).join(', ')}>{repoLabel(run.repos![0]!.name, run)}</span>
-          <span aria-hidden>·</span>
-        </>
-      )}
-      <span className="flex min-w-0 items-center gap-1.5" title={[agentName, mode, run.model, run.effort].filter(Boolean).join(' · ')}>
-        <AgentGlyph agent={run.harness} />
-        <span className="sr-only">{agentName} · </span>
-        <span className="min-w-0 truncate">{mode}</span>
-      </span>
-      {run.permission && run.permission !== 'default' && (
-        <>
-          <span aria-hidden>·</span>
-          <Badge tone={run.permission === 'root' ? 'needs-you' : 'neutral'} title={permissions.find((p) => p.value === run.permission)?.detail}>{permissionLabel(run.permission)}</Badge>
-        </>
-      )}
-      {accountID && (
-        <>
-          <span aria-hidden>·</span>
-          <span className="min-w-0 truncate">On {accountOwner}&apos;s account (fallback)</span>
-        </>
-      )}
-      {run.via && (
-        <>
-          <span aria-hidden>·</span>
-          <span className="min-w-0 truncate">Launched via {run.via}</span>
-        </>
-      )}
-      {watch && (
-        <>
-          <span aria-hidden>·</span>
-          <Button
-            variant="quiet"
-            size="sm"
-            hint={watchHint(watch)}
-            className="shrink-0"
-            onClick={() => {
-              const route = watchRoute(watch.id)
-              navigate(route.name, route.params)
-            }}
-          >
-            <Eye aria-hidden />
-            <span className="sr-only @lg/state:not-sr-only">{watch.state === 'paused' ? 'Watch paused' : watch.state === 'error' ? 'Watch failing' : 'Watch on'}</span>
-          </Button>
-        </>
-      )}
-      <span className="flex min-w-0 flex-1 basis-0 items-center gap-1.5 self-stretch overflow-hidden" title={stateTitle(presentation, since)}>
-        {detail && (
+      {/* Takes only the room the switch and the controls leave, and within it the reason outlasts what comes before it. */}
+      <div className="flex min-w-0 flex-1 basis-0 items-center gap-1.5 overflow-hidden whitespace-nowrap text-ui-sm text-muted" title={narrow ? undefined : stateTitle(presentation, since)}>
+        {!narrow && (
           <>
-            <span aria-hidden>·</span>
-            <span className={asks && !run.switching ? 'min-w-0 truncate text-text' : 'min-w-0 truncate'}>{detail}</span>
+            <span className="flex min-w-0 shrink-99 items-center gap-1.5 overflow-hidden">
+              {extraRepoCount(run) > 0 && (
+                <>
+                  <span aria-hidden>·</span>
+                  <span className="min-w-0 truncate" title={run.repos!.map((repo) => repo.name).join(', ')}>{repoLabel(run.repos![0]!.name, run)}</span>
+                </>
+              )}
+              <span aria-hidden>·</span>
+              <span className="min-w-0 truncate" title={[agentName, mode, run.model, run.effort].filter(Boolean).join(' · ')}>
+                <span className="sr-only">{agentName} · </span>
+                {mode}
+              </span>
+              {run.permission && run.permission !== 'default' && (
+                <>
+                  <span aria-hidden>·</span>
+                  <Badge tone={run.permission === 'root' ? 'needs-you' : 'neutral'} title={permissions.find((p) => p.value === run.permission)?.detail}>{permissionLabel(run.permission)}</Badge>
+                </>
+              )}
+              {accountID && (
+                <>
+                  <span aria-hidden>·</span>
+                  <span className="min-w-0 truncate">On {accountOwner}&apos;s account (fallback)</span>
+                </>
+              )}
+              {run.via && (
+                <>
+                  <span aria-hidden>·</span>
+                  <span className="min-w-0 truncate">Launched via {run.via}</span>
+                </>
+              )}
+              {watch && (
+                <>
+                  <span aria-hidden>·</span>
+                  <Button
+                    variant="quiet"
+                    size="sm"
+                    hint={watchHint(watch)}
+                    className="shrink-0"
+                    onClick={() => {
+                      const route = watchRoute(watch.id)
+                      navigate(route.name, route.params)
+                    }}
+                  >
+                    <Eye aria-hidden />
+                    <span className="sr-only">{watch.state === 'paused' ? 'Watch paused' : watch.state === 'error' ? 'Watch failing' : 'Watch on'}</span>
+                  </Button>
+                </>
+              )}
+            </span>
+            {detail && (
+              <span className="flex min-w-0 items-center gap-1.5">
+                <span aria-hidden>·</span>
+                <span className={asks && !run.switching ? 'min-w-0 truncate text-text' : 'min-w-0 truncate'}>{detail}</span>
+              </span>
+            )}
           </>
         )}
-      </span>
-      <span className="hidden shrink-0 @lg/state:flex">
-        <Avatar name={ownerName} color={owner?.color} />
-      </span>
-    </div>
+      </div>
+    </>
   )
 }
 
@@ -230,11 +225,13 @@ function StateLine({ run, agentName }: { run: RunRecord; agentName: string }) {
  * phone with a pull request beside it for instance. It keeps the shown view's
  * tab in sight as the view or the room for it changes, and fades its right
  * edge while more tabs lie past it. */
-function ViewSwitch({ view, views, arrows, onArrow }: {
+function ViewSwitch({ view, views, arrows, onArrow, narrow }: {
   view: RunView
   views: RunView[]
   arrows: Partial<Record<RunView, string>>
   onArrow: (view: RunView | null) => void
+  /** Icons for words, each named by its tooltip. */
+  narrow: boolean
 }) {
   const strip = useRef<HTMLDivElement>(null)
   const [more, setMore] = useState(false)
@@ -260,23 +257,28 @@ function ViewSwitch({ view, views, arrows, onArrow }: {
       onScroll={measure}
       className={cn('overflow-x-auto [scrollbar-width:none]', more && '[mask-image:linear-gradient(to_right,black_calc(100%-1.5rem),transparent)]')}
     >
-      {views.map((item) => (
-        <Tooltip key={item} content={arrows[item]} disabled={!arrows[item]}>
-          <TabsTrigger
-            value={item}
-            className="scroll-mx-6"
-            {...(arrows[item] && {
-              onPointerEnter: () => onArrow(item),
-              onPointerLeave: () => onArrow(null),
-              onFocus: () => onArrow(item),
-              onBlur: () => onArrow(null),
-            })}
-          >
-            {runViewLabel[item]}
-            {arrows[item] && <ArrowUpRight aria-hidden className="size-2.5 text-muted" />}
-          </TabsTrigger>
-        </Tooltip>
-      ))}
+      {views.map((item) => {
+        const Icon = runViewIcon[item]
+        const hint = [narrow && runViewLabel[item], arrows[item]].filter(Boolean).join('\n')
+        return (
+          <Tooltip key={item} content={hint} disabled={!hint}>
+            <TabsTrigger
+              value={item}
+              aria-label={narrow ? runViewLabel[item] : undefined}
+              className="scroll-mx-6"
+              {...(arrows[item] && {
+                onPointerEnter: () => onArrow(item),
+                onPointerLeave: () => onArrow(null),
+                onFocus: () => onArrow(item),
+                onBlur: () => onArrow(null),
+              })}
+            >
+              {narrow ? <Icon aria-hidden className="size-3.5" /> : runViewLabel[item]}
+              {arrows[item] && <ArrowUpRight aria-hidden className="size-2.5 text-muted" />}
+            </TabsTrigger>
+          </Tooltip>
+        )
+      })}
     </TabsList>
   )
 }
@@ -298,13 +300,15 @@ export function RunHeader({
   agentEntry,
   workflow,
   onWorkflow,
+  controls,
+  narrow,
 }: {
   run: RunRecord
   agentName: string
   agentEntry: AgentInfo | undefined
-  /** The Workflow chip, which sits beside the view switch. */
-  workflow?: React.ReactNode
-  /** Opens the workflow, which a phone lists under the session's actions instead of the chip. */
+  /** The Workflow chip, which is the state's dot and label on a wide desktop tile. */
+  workflow: React.ReactNode
+  /** Opens the workflow, which a phone or a narrow tile lists under the session's actions instead of the chip. */
   onWorkflow: (returnTo: HTMLElement | null) => void
   view: RunView
   views: RunView[]
@@ -319,16 +323,19 @@ export function RunHeader({
   onDetails: (returnTo: HTMLElement | null) => void
   onCaptures: (returnTo: HTMLElement | null) => void
   onEvents: (returnTo: HTMLElement | null) => void
+  /** This desktop tile carries the session's controls; its other tiles show the switch and the state alone. */
+  controls: boolean
+  /** The desktop tile is under 560px wide. */
+  narrow: boolean
 }) {
   const mobile = useIsMobile()
-  const collapsed = useStore((s) => s.sidebarCollapsed)
-  const toggleSidebar = useStore((s) => s.toggleSidebar)
   const primary = usePrimaryAction(run, view, agent, nav)
   const modeSwitch = useModeSwitch(run, agent, agentEntry)
   const pullRequest = useRunPullRequest(run, agent, agentName)
   const editor = useOpenInEditor(run)
   const childRunsItems = useChildRunsItems(run)
   const focused = useContext(FrameFocusContext)
+  const reducedMotion = useReducedMotion()
   useHeaderPrimary(focused && Boolean(primary))
   const extra = [
     ...(modeSwitch.item ? [modeSwitch.item] : []),
@@ -370,23 +377,18 @@ export function RunHeader({
     )
   }
 
+  const Heading = focused ? 'h1' : 'h2'
   return (
     <>
-      <PaneHeader
-        size="run"
-        level={focused ? 1 : 2}
-        title={
-          <span className="flex min-w-0 items-center gap-1.5">
-            <span className="truncate">{runLabel(run)}</span>
-            {run.protected && <Lock role="img" aria-label="Protected: only the owner or an admin can message, control or stop this session" className="size-3.5 shrink-0 text-muted" />}
-          </span>
-        }
-        stateLine={<StateLine run={run} agentName={agentName} />}
-        onOpenSidebar={collapsed ? toggleSidebar : undefined}
-        actionsLabel="Session actions"
-        actions={
-          <>
-            {primary && <Button size="sm" onClick={primary.act}>{primary.label}</Button>}
+      <header data-slot="pane-header" className="@container/views relative flex h-8 shrink-0 items-center gap-1.5 border-b border-seam px-2 coarse:h-11">
+        <Heading tabIndex={-1} className="sr-only">{runLabel(run)}</Heading>
+        <ViewSwitch view={view} views={views} arrows={arrows} onArrow={onArrow} narrow={narrow} />
+        <StateLine run={run} agentName={agentName} narrow={narrow} chip={controls && !narrow ? workflow : undefined} />
+        {controls && (
+          <div role="toolbar" aria-label="Session actions" className="flex shrink-0 items-center gap-1">
+            {!narrow && pullRequest.status}
+            {primary && <Button size="sm" variant={focused ? 'primary' : 'secondary'} onClick={primary.act}>{primary.label}</Button>}
+            {run.mode === 'acp' && <PresenceControls run={run} agent={agent} wide={focused && !narrow} />}
             <Button
               variant="ghost"
               size="icon"
@@ -398,19 +400,33 @@ export function RunHeader({
             >
               <PanelRight />
             </Button>
-            <RunActions run={run} extra={extra} />
-          </>
-        }
-      />
-      <RunLineage run={run} />
-      <RunRetention run={run} className="border-b border-seam px-4 py-2" />
-      <div className="@container/views flex h-8 shrink-0 items-center border-b border-seam px-2 coarse:h-11">
-        <ViewSwitch view={view} views={views} arrows={arrows} onArrow={onArrow} />
-        {workflow}
-        {pullRequest.status}
-      </div>
+            <RunActions
+              run={run}
+              compact
+              extra={narrow ? [{ id: 'workflow', label: 'Workflow', Icon: Network, onSelect: onWorkflow }, ...pullRequest.more, ...extra] : extra}
+            />
+          </div>
+        )}
+        {controls && agent.takeover.holderProgress !== undefined && !agent.takeover.review && (
+          <ProgressBar
+            role="progressbar"
+            aria-label="A teammate is holding to request control"
+            value={reducedMotion ? 1 : agent.takeover.holderProgress}
+            max={1}
+            className="absolute inset-x-0 bottom-0 h-0.5 rounded-none bg-transparent"
+            fillClassName="rounded-none bg-state-failed"
+          />
+        )}
+      </header>
+      {controls && (
+        <>
+          {run.mode === 'acp' && <PresenceErrors run={run} agent={agent} />}
+          <RunLineage run={run} />
+          <RunRetention run={run} className="border-b border-seam px-4 py-2" />
+          <ConnectionLine className="border-b border-seam px-4 py-1" />
+        </>
+      )}
       {dialogs}
-      <ConnectionLine className="border-b border-seam px-4 py-1" />
     </>
   )
 }

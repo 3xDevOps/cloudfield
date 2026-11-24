@@ -85,6 +85,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
   }, [cramped])
   const visible = visibleTiles(layout)
   const rects = tileRects(layout.root, area)
+  const narrow = (tileId: string) => measured && ((layout.maximized ? 100 : rects.tiles[tileId].width) / 100) * area.width < narrowBelow
 
   // No session mounts until the layout has followed the route.
   const focusedTab = activeTab(tiles.find((tile) => tile.id === stored.focused)!)
@@ -173,7 +174,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
               key={tile.id}
               tile={tile}
               rect={rect}
-              narrow={measured && (rect.width / 100) * area.width < narrowBelow}
+              narrow={narrow(tile.id)}
               room={{
                 right: !measured || fits(splitTile(stored, tile.id, 'right').root, area),
                 down: !measured || fits(splitTile(stored, tile.id, 'down').root, area),
@@ -229,6 +230,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
                       elsewhere: tiles.flatMap((other) => other.tabs).filter((other) => other.runId === runId && other.id !== tab.id).map((other) => resolveView(other, run, cap, memory)),
                       arrows: Object.fromEntries(Object.entries(elsewhere).map(([held, { where }]) => [held, where])),
                       onArrow: (held) => link(held ? elsewhere[held]?.tile ?? null : null),
+                      narrow: narrow(tile.id),
                     }}
                   />
                 )
