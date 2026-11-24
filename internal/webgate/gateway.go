@@ -44,6 +44,8 @@ type Gateway struct {
 	*http.ServeMux
 	cfg Config
 	srv *http.Server
+	// net/http fills srv.TLSConfig on a plain Serve, so it cannot say which mode this is.
+	tls bool
 
 	// Admission covers an import's whole lifetime, including the response,
 	// because it retains its wire body until then.
@@ -163,14 +165,17 @@ func sameOrigin(origin, host string) bool {
 
 // TLS makes every later Serve speak HTTPS with cfg. net/http picks the ALPN
 // protocols, so GODEBUG=http2server=0 still turns HTTP/2 off.
-func (g *Gateway) TLS(cfg *tls.Config) { g.srv.TLSConfig = cfg }
+func (g *Gateway) TLS(cfg *tls.Config) {
+	g.srv.TLSConfig = cfg
+	g.tls = true
+}
 
 func (g *Gateway) Serve(ln net.Listener) {
 	g.mu.Lock()
 	g.serving++
 	g.mu.Unlock()
 	serve := g.srv.Serve
-	if g.srv.TLSConfig != nil {
+	if g.tls {
 		serve = func(ln net.Listener) error { return g.srv.ServeTLS(ln, "", "") }
 	}
 	go func() {
