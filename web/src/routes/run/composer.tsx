@@ -399,29 +399,34 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
 
   const maySteer = allowed('steer', self, { owner: run.member_id, protected: run.protected, steerOthers })
   const state = session?.state
+  const stream = session?.stream
+  const connecting = stream === 'live' || stream === 'refused' ? undefined : stream === 'reconnecting' || stream === 'offline' ? 'Reconnecting to the agent…' : 'Connecting to the agent…'
+  // Control and the background wait read as off while the stream is down: the composer keeps its last live shape.
+  const lastLive = useRef<{ canAct: boolean; waiting: boolean }>(undefined)
+  if (stream === 'live') lastLive.current = { canAct: control.canAct, waiting: backgroundWait(run, session) !== null }
+  const shape = lastLive.current
   const gate = enhancedBlock({
     run,
     maySteer,
     canReopen: maySteer && cap.hasMethod('run.relaunch') && canReopenRun(run),
-    stream: session?.stream,
-    streamError: session?.streamError,
-    sessionLive: session?.live ?? false,
+    refused: stream === 'refused' ? session?.streamError ?? 'The agent stream was refused.' : undefined,
+    sessionLive: shape ? session?.live ?? false : true,
     pending: session?.pending.length ?? 0,
-    hasLease: control.canAct,
+    hasLease: shape?.canAct ?? true,
   })
-  const connecting = gate?.connecting ? gate.reason : undefined
-  const moderated = !control.canAct
+  const moderated = !shape?.canAct
   const turnRunning = state?.turn_in_flight ?? false
-  const waiting = backgroundWait(run, session) !== null
+  const waiting = shape?.waiting ?? false
+  const blocked = Boolean(gate || connecting)
   // A sleeping session's agent reports its prompt types once a wake starts it.
   const supportsImages = state?.prompt_images === true || Boolean(run.asleep_since)
-  const images = useComposerImages(run.id, !gate && cap.hasMethod('terminal.file'))
-  const attachOff = busy || Boolean(gate) || !cap.hasMethod('terminal.file')
+  const images = useComposerImages(run.id, !blocked && cap.hasMethod('terminal.file'))
+  const attachOff = busy || blocked || !cap.hasMethod('terminal.file')
   const drop = dropRoom(images, attachOff)
   useEffect(() => onDropStatus?.({ ...drop, upload: images.upload }), [drop.blocked, drop.limit, images.upload, onDropStatus])
   const refusedImages = !supportsImages && hasImages(images.previews)
   const hasContent = Boolean(body.trim()) || images.previews.length > 0
-  const pill = moderated && !connecting ? 'send' : pillFor({ paused, turnRunning, backgroundWait: waiting, steering: state?.steering ?? false, queueHeld, empty: !hasContent })
+  const pill = moderated ? 'send' : pillFor({ paused, turnRunning, backgroundWait: waiting, steering: state?.steering ?? false, queueHeld, empty: !hasContent })
 
   const [dismissed, setDismissed] = useState(false)
   const trigger = focused && !dismissed ? triggerAt(body, caret) : null
@@ -530,7 +535,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
     }, () => void attempt(() => Promise.reject(new Error(optionUnsent))).then(resolve))
   })
 
-  if (gate && !connecting) {
+  if (gate) {
     return (
       <ComposerFrame>
         {dock}
@@ -539,7 +544,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
           reason={gate.reason}
           failure={gate.interrupt ? error : undefined}
           action={gate.interrupt && turnRunning && (
-            <Button size="sm" variant={mobile ? 'secondary' : 'danger'} aria-label="Interrupt the agent" hint={pillHint.interrupt} disabled={busy} onClick={() => act('interrupt')}>
+            <Button size="sm" variant={mobile ? 'secondary' : 'danger'} aria-label="Interrupt the agent" hint={pillHint.interrupt} disabled={busy || Boolean(connecting)} onClick={() => act('interrupt')}>
               <Square className="fill-current" />
               Interrupt
             </Button>
@@ -586,7 +591,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
               unsupported={refusedImages ? 'This agent does not support image prompts.' : undefined}
             />
             <TemplateInsert run={run} textarea={textarea} disabled={busy} />
-            <OptionPills options={state?.config_options ?? []} disabled={busy || moderated} onSet={setOption} />
+            <OptionPills options={state?.config_options ?? []} disabled={busy || moderated || Boolean(connecting)} onSet={setOption} />
             {state?.usage && state.usage.size > 0 && (
               <ContextWindow
                 runID={run.id}

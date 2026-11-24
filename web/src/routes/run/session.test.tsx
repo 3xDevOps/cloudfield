@@ -1046,7 +1046,6 @@ describe('the Enhanced composer draft', () => {
     open()
     acpSocket().open({ ...lease, state: state({ prompt_images: true, turn_in_flight: true, steering: true }) }, [item('turn_start', 1)])
     const field = await box()
-    const drop = (stream: 'reconnecting' | 'live') => act(() => useStore.getState().acpStream('run_1', stream))
     drop('reconnecting')
     expect(waits()).toHaveLength(1)
     expect(screen.getByRole('button', { name: 'Interrupt the agent' })).toHaveProperty('disabled', true)
@@ -1059,6 +1058,60 @@ describe('the Enhanced composer draft', () => {
     drop('reconnecting')
     expect(waits()).toHaveLength(1)
     expect(screen.getByRole('button', { name: 'Steer' })).toHaveProperty('disabled', true)
+  })
+
+  const drop = (stream: 'reconnecting' | 'live') => act(() => useStore.getState().acpStream('run_1', stream))
+  const strip = 'Answer the request above to continue.'
+
+  it('keeps the closed strip of a session that waits on a request through a reconnect', async () => {
+    open()
+    acpSocket().open({ ...lease, state: state({ turn_in_flight: true, pending: [permission] }) }, [item('turn_start', 1)])
+    expect(await screen.findByText(strip)).toBeDefined()
+    for (const stream of ['reconnecting', 'live'] as const) {
+      drop(stream)
+      expect(screen.getByText(strip)).toBeDefined()
+      expect(screen.queryByRole('combobox', { name: 'Message the agent' })).toBeNull()
+      expect(screen.getByRole('button', { name: 'Interrupt the agent' })).toHaveProperty('disabled', stream !== 'live')
+    }
+  })
+
+  it('opens a session that waits on a request with the closed strip', async () => {
+    useStore.getState().acpAck('run_1', { ok: true, seq: 0, replay: 0, epoch: 0, live: true, has_control: false, state: state({ pending: [permission] }) })
+    open()
+    expect(useStore.getState().acpSessions.run_1!.stream).not.toBe('live')
+    expect(screen.getByText(strip)).toBeDefined()
+    expect(screen.queryByRole('combobox', { name: 'Message the agent' })).toBeNull()
+  })
+
+  it('keeps a watcher\'s Send arrow while a turn runs through a reconnect', async () => {
+    vi.spyOn(api, 'runRoomStatus').mockResolvedValue(occupiedRoom)
+    open({ member_id: bob.id, controller_member_id: bob.id })
+    acpSocket().open({ has_control: false, state: state({ turn_in_flight: true, steering: true }) }, [item('turn_start', 1)])
+    const field = await box()
+    const pills = () => ['Send', 'Interrupt the agent', 'Steer'].filter((name) => screen.queryByRole('button', { name }))
+    expect(pills()).toEqual(['Send'])
+    drop('reconnecting')
+    expect(pills()).toEqual(['Send'])
+    await userEvent.type(field, 'Check the totals')
+    expect(pills()).toEqual(['Send'])
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true)
+    drop('live')
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', false)
+  })
+
+  it.each([
+    ['Stop waiting for background work', state({ background: true, tasks: [{ id: 'bg1', holds: true }] }), ''],
+    ['Queue', state({ turn_in_flight: true }), 'Then the docs'],
+  ])('keeps the controller\'s %s pill, disabled, through a reconnect', async (name, session, draft) => {
+    open()
+    acpSocket().open({ ...lease, state: session })
+    if (draft) await userEvent.type(await box(), draft)
+    const pill = () => screen.getByRole('button', { name })
+    await waitFor(() => expect(pill()).toHaveProperty('disabled', false))
+    drop('reconnecting')
+    expect(pill()).toHaveProperty('disabled', true)
+    drop('live')
+    expect(pill()).toHaveProperty('disabled', false)
   })
 
   it('keeps the draft through the run\'s views, a reconnect, an event-log restart and a switch to Standard', async () => {

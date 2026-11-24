@@ -1,5 +1,4 @@
 import { create } from 'zustand'
-import type { StreamState } from '@/lib/acp-stream'
 import { plainReason } from '@/lib/reasons'
 import { modeLabel } from '@/routes/run/agent-name'
 import { useStore } from '@/store'
@@ -123,15 +122,14 @@ export function composerBlock(run: RunRecord, maySteer: boolean, canReopen: bool
 interface EnhancedGate {
   reason: string
   interrupt?: boolean
-  connecting?: boolean
 }
 
-export function enhancedBlock({ run, maySteer, canReopen, stream, streamError, sessionLive, pending, hasLease }: {
+/** The gates that hold whatever the stream is doing: the caller keeps the box through a reconnect. */
+export function enhancedBlock({ run, maySteer, canReopen, refused, sessionLive, pending, hasLease }: {
   run: RunRecord
   maySteer: boolean
   canReopen: boolean
-  stream: StreamState | undefined
-  streamError?: string
+  refused: string | undefined
   sessionLive: boolean
   pending: number
   hasLease: boolean
@@ -140,8 +138,7 @@ export function enhancedBlock({ run, maySteer, canReopen, stream, streamError, s
   if (run.mode === 'headless') return { reason: 'Background sessions take no input.' }
   const base = composerBlock(run, maySteer, canReopen)
   if (base) return { reason: base }
-  if (stream === 'refused') return { reason: streamError ?? 'The agent stream was refused.' }
-  if (stream !== 'live') return { reason: stream === 'reconnecting' || stream === 'offline' ? 'Reconnecting to the agent…' : 'Connecting to the agent…', connecting: true }
+  if (refused) return { reason: refused }
   // A message to a sleeping session wakes it.
   if (!sessionLive && !run.asleep_since) return { reason: 'The agent is not running.' }
   if (pending > 0 && hasLease) return { reason: 'Answer the request above to continue.', interrupt: true }
