@@ -94,7 +94,7 @@ export function App() {
   useEffect(() => connect(useStore), [attempt, epoch])
   // Edge serves script from a loopback port another app can take over later.
   useEffect(() => {
-    if (fresh) preloadChunks()
+    if (fresh) void preloadChunks()
   }, [fresh])
   // The desktop app opens a card's notification by changing the address in place.
   useEffect(() => bindRouteToUrl(useStore, (query) => {

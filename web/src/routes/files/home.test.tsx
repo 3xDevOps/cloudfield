@@ -1,5 +1,6 @@
 import { act, createEvent, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { preloadChunks } from '@/components/lazy-chunk'
 import { ApiError } from '@/lib/api'
 import type { FileRead, FileTreeEntry } from '@/lib/types'
 import { FilesRoute } from '@/routes/files'
@@ -43,7 +44,7 @@ async function menu(label: string): Promise<string[]> {
 
 const choose = (item: string) => userEvent.click(screen.getByRole('menuitem', { name: item }))
 
-beforeAll(() => import('@/routes/files/editor'))
+beforeAll(() => preloadChunks())
 
 beforeEach(() => {
   useStore.getState().resetFiles()

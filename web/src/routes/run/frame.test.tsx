@@ -1,5 +1,6 @@
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { preloadChunks } from '@/components/lazy-chunk'
 import type * as apiModule from '@/lib/api'
 import { api } from '@/lib/api'
 import type { Run } from '@/lib/types'
@@ -55,7 +56,7 @@ function rerouted(view: string) {
   return <View params={useStore.getState().route.params} />
 }
 
-beforeAll(() => import('@/routes/files/editor'))
+beforeAll(() => preloadChunks())
 
 beforeEach(() => {
   xterm.enabled = true

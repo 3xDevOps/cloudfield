@@ -1,6 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { Markdown } from '@/components/ui/markdown'
 import { OutputTail } from '@/components/ui/session-blocks'
+import { preloadChunks } from '@/components/lazy-chunk'
 import { api, ApiError } from '@/lib/api'
 import type { FileTreeEntry } from '@/lib/types'
 import { openInFiles } from '@/routes/files/open'
@@ -28,7 +29,7 @@ function checkout(writable = true) {
   })
 }
 
-beforeAll(() => import('@/routes/files/editor'))
+beforeAll(() => preloadChunks())
 
 beforeEach(() => {
   useStore.getState().resetFiles()

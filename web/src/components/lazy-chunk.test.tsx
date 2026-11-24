@@ -20,12 +20,13 @@ describe('lazyChunk', () => {
   it('fetches the code once, ahead of the first render', async () => {
     const load = vi.fn(async () => () => <p>charts loaded</p>)
     const Loaded = lazyChunk(load, 'Loading')
-    preloadChunks()
-    preloadChunks()
-    await Promise.resolve()
+    void preloadChunks()
+    await preloadChunks()
+    expect(load).toHaveBeenCalledTimes(1)
     render(<Loaded />)
 
-    expect(await screen.findByText('charts loaded')).toBeDefined()
+    expect(screen.queryByText('Loading')).toBeNull()
+    expect(screen.getByText('charts loaded')).toBeDefined()
     expect(load).toHaveBeenCalledTimes(1)
   })
 
@@ -37,7 +38,7 @@ describe('lazyChunk', () => {
     process.on('unhandledRejection', unhandled)
     const Gone = lazyChunk<object>(() => Promise.reject(new Error('Failed to load chunk /_next/static/chunks/gone.js')), 'Loading')
 
-    preloadChunks()
+    await preloadChunks()
     await new Promise((resolve) => setTimeout(resolve))
     process.off('unhandledRejection', unhandled)
     expect(unhandled).not.toHaveBeenCalled()

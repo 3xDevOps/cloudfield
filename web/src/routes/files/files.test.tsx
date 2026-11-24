@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { preloadChunks } from '@/components/lazy-chunk'
 import { FilesRoute } from '@/routes/files'
 import { useStore } from '@/store'
 import { filesKey } from '@/store/files'
@@ -25,7 +26,7 @@ function tree() {
   return within(screen.getByRole('complementary', { name: 'Files' }))
 }
 
-beforeAll(() => import('@/routes/files/editor'))
+beforeAll(() => preloadChunks())
 
 describe('Files tree', () => {
   beforeEach(() => seed())
