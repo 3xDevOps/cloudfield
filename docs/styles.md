@@ -637,8 +637,8 @@ Enhanced session, Terminal, Changes, Files, Browser), a segmented tab list,
 then the state and its reason, then one primary action for the session's
 state, presence, a **Details**
 toggle and **More**; destructive verbs stay last in **More**, behind their
-existing gates and confirmations. The primary action is filled only in the
-focused tile and `secondary` in any other, so the screen keeps one filled
+existing gates and confirmations. Every `primary` button is filled only in the
+focused tile and drawn as `secondary` in any other, so the screen keeps one filled
 button. A session with a pull request shows
 its number as a muted link and its check state as a ghost
 button led by a `StatusDot`: failed, working, done or neutral. Details is a
@@ -737,14 +737,17 @@ literal time or curve.
   [Board](dashboard-frontend.md#board).
 - Session tiles glide their rectangle, position and size, on
   `--duration-glide` / `--ease-glide` when a split, close, move, maximize or
-  restore changes the layout. A tile's body takes its final size at once and
-  the gliding tile clips it, so a terminal or Browser inside is sized once,
-  not on every frame. A tile that appears fades its body in over 200ms on
-  `--ease-enter`; a closed tile leaves at once. A seam drag and a window
+  restore changes the layout. A tile's body takes its final width at once and
+  the gliding tile clips it, so nothing rewraps on the way; its height follows
+  the tile, unless a terminal or Browser is on show, which takes the final
+  height too and is sized once, not on every frame. A new tile grows from the
+  edge it opens on, sharing one moving seam with the tile it split from. A
+  parked or closed tile stays painted under the tile that takes its room
+  until the glide ends. A seam drag and a window
   resize never glide, and the focus outline, the tab bar and the sidebar's
   on-screen bar move at once. The drop preview eases its position and size
   between zones on the hover duration; the drag chip and the dashed slot a
-  lifted view leaves appear at once. The parked-tiles pill fades in.
+  lifted view leaves appear at once. The preview is `--color-accent-soft` over the tile, never opaque. The parked-tiles pill fades in.
 - The Map repacks with motion: units and cards glide from their old layout
   coordinates on `--duration-glide` / `--ease-glide` (never DOM-measured,
   since the world is scaled), new cards rise 6px and fade in over 220ms after

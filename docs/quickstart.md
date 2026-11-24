@@ -425,8 +425,9 @@ Open a session to see its views:
 
 On a desktop window, sessions and views sit side by side as tiles. Hover a
 session in the sidebar and click **Open to the side**, or drag it, a tab or a
-view such as **Changes** to an edge of the page. **Split right**, **Split
-down** and **Maximize** are at the top right of the focused tile. Closing a
+view such as **Changes** to an edge of the page. **Split right** and **Split
+down** are at the top right of the focused tile, with **Maximize** once there
+are two tiles. Closing a
 tab never ends its session.
 
 From the CLI, on your computer:
