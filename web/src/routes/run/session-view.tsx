@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type * as React from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { VList, type VListHandle } from 'virtua'
@@ -15,6 +15,7 @@ import { backgroundReason, liveStateOf, runLabel, stateTone } from '@/lib/status
 import { RunFileLinks } from '@/routes/files/path-link'
 import type { RoomMessage } from '@/lib/types'
 import { modeLabel } from '@/routes/run/agent-name'
+import { FrameFocusContext } from '@/routes/run/agent-context'
 import type { AgentTerminal } from '@/routes/run/agent-terminal'
 import { ChangesBar } from '@/routes/run/changes-bar'
 import { CompletionPrompt } from '@/routes/run/completion-prompt'
@@ -245,6 +246,7 @@ export function SessionView({ run, agent, agentName, room, nav, active, textarea
   notesWide: boolean
 }) {
   useRefuseStrayFileDrops()
+  const tileFocused = useContext(FrameFocusContext)
   const enhanced = run.acp === true
   const showMessages = useStore((s) => !s.hiddenAgentMessages[run.id])
   const { rows, session, missingRoomImages } = useRows(run, enhanced, showMessages)
@@ -522,7 +524,7 @@ export function SessionView({ run, agent, agentName, room, nav, active, textarea
       {!notesWide && <NotesStrip run={run} room={room} className={cn(sessionColumn, 'pb-2')} />}
       <ChangesBar run={run} />
       <CompletionPrompt run={run} className={cn(sessionColumn, 'pb-2')} />
-      <Composer run={run} agent={agent} room={room} textarea={textarea} autoFocus={focusComposer} onFocusChange={onComposing} dock={dock || undefined} onEscape={() => viewport.current?.focus()} onDropStatus={reportDropStatus} />
+      <Composer run={run} agent={agent} room={room} textarea={textarea} autoFocus={focusComposer} collapsed={!tileFocused} onFocusChange={onComposing} dock={dock || undefined} onEscape={() => viewport.current?.focus()} onDropStatus={reportDropStatus} />
       <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">{announcement}</span>
       {drop.count !== null && <DropOverlay count={drop.count} refused={drop.refused} blocked={dropStatus.blocked} limit={dropStatus.limit} />}
     </div>

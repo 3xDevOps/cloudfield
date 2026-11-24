@@ -18,10 +18,11 @@ const fitStep = 0.25
  * into the pane, and lets two fingers choose a size. A phone follows the
  * PTY rather than sizing it (see docs/dashboard-frontend.md), so the grid
  * is as wide as the widest writer made it and only the text size can bring
- * it inside the screen.
+ * it inside the screen. `force` fits whatever the fit-to-width preference
+ * says, for a desktop mirror, whose grid is its controller's.
  */
-export function useTerminalFit(terminal: Terminal | null, enabled: boolean): TerminalFit {
-  const fitWidth = useStore((state) => state.terminalFitWidth)
+export function useTerminalFit(terminal: Terminal | null, enabled: boolean, force = false): TerminalFit {
+  const fitWidth = useStore((state) => state.terminalFitWidth) || force
   const chosen = useStore((state) => state.terminalFontSize)
   const [drawn, setDrawn] = useState(chosen)
   const [fitted, setFitted] = useState(chosen)

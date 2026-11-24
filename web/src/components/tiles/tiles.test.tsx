@@ -13,6 +13,7 @@ import type { RunView } from '@/routes/run/views'
 import { useStore } from '@/store'
 import { toRecord } from '@/store/runs'
 import { emptyTiles, openTab, pickTab, splitTile, tileList, type TileLayout, type ViewContext } from '@/store/tiles'
+import { ScriptedSession } from '@/test/acp-stream'
 import { alice, bob, run, serverInfo, workspace } from '@/test/fixtures'
 import { StubSocket } from '@/test/stub-socket'
 import { hintOn } from '@/test/tooltip'
@@ -96,6 +97,7 @@ beforeEach(() => {
     savedTiles: {},
     roomMessages: {},
     roomStatus: {},
+    acpSessions: {},
     browserRequests: {},
     agentList: null,
     route: { name: 'board', params: {} },
@@ -529,6 +531,75 @@ describe('focus', () => {
     act(() => useStore.setState({ route: { name: 'run', params: { runId: 'run_4', view: 'changes' } } }))
     expect(names()).toEqual(['tidy the readme, Changes, tile 1 of 2', `${second}, Chat, tile 2 of 2`])
     stop()
+  })
+})
+
+describe('the composer', () => {
+  const fields = (n: number) => tile(n).queryAllByRole<HTMLTextAreaElement>('combobox', { name: 'Message the agent' })
+  /** Opens the session's stream, which is what lets its composer take a message. */
+  async function live(runId: string, n: number) {
+    new ScriptedSession(StubSocket.opened.find((socket) => socket.url.includes(`/ws/acp/${runId}`))!).open()
+    await waitFor(() => expect(fields(n)).toHaveLength(1))
+  }
+
+  it('is whole in the focused Chat tile and one line in the other, and keeps the draft between the two', async () => {
+    show()
+    beside('run_2')
+    await settled()
+    await live('run_1', 1)
+    await live('run_2', 2)
+    const [field] = fields(2)
+    expect(field.rows).toBe(2)
+    expect(tile(2).getByRole('button', { name: 'Attach files' })).toBeDefined()
+    expect(fields(1)[0].rows).toBe(1)
+    expect(tile(1).queryByRole('button', { name: 'Attach files' })).toBeNull()
+    expect(tile(1).getByRole('button', { name: 'Send' })).toBeDefined()
+
+    fireEvent.change(field, { target: { value: 'ship it\nthen rest' } })
+    fireEvent.pointerDown(tiles()[0])
+    expect(fields(2)).toEqual([field])
+    expect(field.rows).toBe(1)
+    expect(field.value).toBe('ship it\nthen rest')
+    expect(fields(1)[0].rows).toBe(2)
+    fireEvent.pointerDown(tiles()[1])
+    expect(field.rows).toBe(2)
+    expect(field.value).toBe('ship it\nthen rest')
+    fireEvent.change(field, { target: { value: '' } })
+  })
+
+  it('docks one line under another view that c opens, and leaves the session with one field once its Chat is on screen', async () => {
+    show('run_1', 'changes')
+    await settled()
+    await live('run_1', 1)
+    const [docked] = fields(1)
+    expect(docked.rows).toBe(1)
+    press('c')
+    expect(document.activeElement).toBe(docked)
+    expect(docked.rows).toBe(2)
+    expect(state().route.params.view).toBe('changes')
+
+    beside('run_1', 'session')
+    await settled()
+    expect(fields(1)).toEqual([])
+    expect(fields(2)).toHaveLength(1)
+    fireEvent.pointerDown(tiles()[0])
+    expect(fields(2)[0].rows).toBe(1)
+    press('c')
+    expect(state().route.params).toMatchObject({ runId: 'run_1', view: 'session' })
+    await waitFor(() => expect(document.activeElement).toBe(fields(2)[0]))
+    expect(fields(2)[0].rows).toBe(2)
+  })
+
+  it('docks no field under a Browser or a Standard session', async () => {
+    show('run_2', 'browser')
+    await settled()
+    new ScriptedSession(StubSocket.last()).open()
+    expect(fields(1)).toEqual([])
+    act(() => state().upsertRun(run({ id: 'run_5', task: 'bump the lockfile' })))
+    act(() => state().navigate('run', { runId: 'run_5', view: 'changes' }))
+    await settled()
+    expect(names()).toEqual(['bump the lockfile, Changes, tile 1 of 1'])
+    expect(screen.queryByRole('textbox', { name: 'Message the agent' })).toBeNull()
   })
 })
 

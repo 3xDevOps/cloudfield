@@ -276,6 +276,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
                       controls: tile.id === controls,
                       alone: visible.length === 1,
                       terminalHost: tile.id === terminalHost,
+                      chatOnScreen: frames.some((frame) => frame.view === 'session' && frame.tile !== tile),
                       elsewhere: tiles.flatMap((other) => other.tabs).filter((other) => other.runId === runId && other.id !== tab.id).map((other) => resolveView(other, run, cap, memory)),
                       arrows: Object.fromEntries(Object.entries(elsewhere).map(([held, { where }]) => [held, where])),
                       onArrow: (held) => link(held ? elsewhere[held]?.tile ?? null : null),

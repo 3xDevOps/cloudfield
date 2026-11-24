@@ -18,6 +18,7 @@ import { FrameFocusContext, RunAgentContext, RunParamsContext } from '@/routes/r
 import { CapturesDialog } from '@/routes/run/captures'
 import { RawEventsDialog } from '@/routes/run/raw-events'
 import { CompletionPrompt } from '@/routes/run/completion-prompt'
+import { Composer } from '@/routes/run/composer'
 import { RunDetails } from '@/routes/run/details'
 import { RunHeader, type RunNavigation } from '@/routes/run/header'
 import { MultiplayerControls, useSharedPresence } from '@/routes/run/multiplayer-controls'
@@ -75,6 +76,8 @@ export interface FrameTile {
   alone: boolean
   /** This tile mounts the session's one Terminal. */
   terminalHost: boolean
+  /** Another tile on screen shows this session's Chat. */
+  chatOnScreen: boolean
   /** The views of this session that other tabs hold. */
   elsewhere: RunView[]
   /** Of those, the ones on screen in another tile, with the words that say where. */
@@ -83,7 +86,7 @@ export interface FrameTile {
   onArrow: (view: RunView | null) => void
 }
 
-const lone: FrameTile = { focused: true, controls: true, alone: true, terminalHost: true, elsewhere: [], arrows: {}, onArrow: () => {} }
+const lone: FrameTile = { focused: true, controls: true, alone: true, terminalHost: true, chatOnScreen: false, elsewhere: [], arrows: {}, onArrow: () => {} }
 
 function useVisited(view: RunView, elsewhere: RunView[]) {
   const visited = useRef(new Set<RunView>())
@@ -98,7 +101,7 @@ function useVisited(view: RunView, elsewhere: RunView[]) {
  * in the focused tile and the tab's view and repo elsewhere.
  */
 export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteProps['params']; tile?: FrameTile }) {
-  const { focused, controls, alone, terminalHost, elsewhere, arrows, onArrow } = tile ?? lone
+  const { focused, controls, alone, terminalHost, chatOnScreen, elsewhere, arrows, onArrow } = tile ?? lone
   const { agent, agentName, agentEntry, room, shells } = useContext(RunAgentContext)!
   const cap = useCapability()
   const mobile = useIsMobile()
@@ -119,6 +122,8 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
   const returnTo = useRef<HTMLElement | null>(null)
   const [noteFocus, setNoteFocus] = useState(0)
   const textarea = useRef<HTMLTextAreaElement>(null)
+  const dockedTextarea = useRef<HTMLTextAreaElement>(null)
+  const [dockedOpen, setDockedOpen] = useState(false)
 
   const browserRequest = useStore((s) => s.browserRequests[run.id])
   const requestBrowser = useStore((s) => s.requestBrowser)
@@ -134,6 +139,10 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
   useEffect(() => {
     if (focused) setShownRunView(run.id, view)
   }, [focused, setShownRunView, run.id, view])
+
+  // A tile off Chat keeps a field for the agent unless the session's Chat is on screen. A pending request is answered in Chat, and a Browser keeps its height for the page.
+  const requested = useStore((s) => Boolean(s.acpSessions[run.id]?.pending.length))
+  const docked = Boolean(tile) && run.acp === true && agent.steerable && !requested && view !== 'session' && view !== 'browser' && !chatOnScreen
 
   const switchable = agentEntry?.switchable === true
   const shared = useSharedPresence(run, agent)
@@ -215,8 +224,12 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
       }))
     },
     focusComposer: () => {
-      go('session', { remember: false })
-      requestAnimationFrame(() => textarea.current?.focus())
+      if (dockedTextarea.current) dockedTextarea.current.focus()
+      else if (chatOnScreen) navigate('run', { runId: run.id, view: 'session', focus: 'composer' }, { remember: false })
+      else {
+        go('session', { remember: false })
+        requestAnimationFrame(() => textarea.current?.focus())
+      }
     },
     focusRequest: () => {
       if (!inline) setOverlayDetails(false)
@@ -348,6 +361,23 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
           )}
         </div>
         {view !== 'session' && <CompletionPrompt run={run} className="border-t border-seam p-2" />}
+        {docked && (
+          <Composer
+            run={run}
+            agent={agent}
+            room={room}
+            textarea={dockedTextarea}
+            docked
+            collapsed={!focused || !dockedOpen}
+            onFocusChange={(composing) => {
+              if (composing) setDockedOpen(true)
+            }}
+            onEscape={() => {
+              setDockedOpen(false)
+              dockedTextarea.current?.blur()
+            }}
+          />
+        )}
       </div>
       {agentInline && agentID && (
         <aside aria-label="Subagent" className="flex w-[28rem] shrink-0 flex-col border-l border-seam bg-canvas">

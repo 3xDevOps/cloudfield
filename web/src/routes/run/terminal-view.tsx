@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { LoaderCircle } from '@/components/icons'
+import { Eye, LoaderCircle } from '@/components/icons'
 import { connectionLabel } from '@/components/shell/connection'
 import { TerminalPane, TerminalSpinner } from '@/components/terminal-pane'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useIsMobile } from '@/lib/breakpoints'
-import { useMediaQuery } from '@/lib/hooks'
+import { phoneScreen, useMediaQuery } from '@/lib/hooks'
 import { isRetainedRun } from '@/lib/commands'
 import { message } from '@/lib/format'
 import { endedStatuses, type AgentTerminal } from '@/routes/run/agent-terminal'
@@ -21,19 +21,26 @@ import { shellEnded } from '@/store/terminal'
 import type { DevTerminal } from '@/lib/development-types'
 import type { RunRecord } from '@/store/runs'
 
-function Presence({ run, agent }: { run: RunRecord; agent: AgentTerminal }) {
+/** `watching` is the line under a terminal this tab does not control: who does, and the way to take over. */
+function Presence({ run, agent, watching }: { run: RunRecord; agent: AgentTerminal; watching?: boolean }) {
   const summary = usePresenceSummary(run, agent)
   // "Nobody controls" would truncate beside Take control at 360px.
   const narrow = useMediaQuery('(max-width: 399px)')
   const { state } = agent.session
   const ended = endedStatuses.includes(run.status)
   const showConnection = !agent.starting && !ended && state.connection !== 'live'
+  if (watching && !ended && !showConnection && !agent.steerable) return null
   return (
-    <div role="group" aria-label="Session presence" className="control-matrix-clear flex min-w-0 items-center gap-2">
+    <div
+      role="group"
+      aria-label="Session presence"
+      className={cn('flex min-w-0 items-center gap-2', watching ? 'h-10 shrink-0 border-t border-seam bg-chrome px-4 coarse:h-11' : 'control-matrix-clear')}
+    >
+      {watching && <Eye aria-hidden className="size-4 shrink-0 text-muted" />}
       {ended && <span className="shrink-0 text-ui-sm text-muted">{isRetainedRun(run) ? 'Sandbox stopped' : 'Sandbox removed'} · read-only</span>}
       {showConnection && <span className="shrink-0 text-ui-sm text-state-needs-you">{connectionLabel[state.connection]}</span>}
       {agent.steerable && (
-        <span className="min-w-0 truncate text-ui-sm text-muted">
+        <span className={cn('min-w-0 truncate text-ui-sm text-muted', watching && 'flex-1')}>
           {narrow ? summary.replace(/^Nobody controls/, 'No one') : summary}
         </span>
       )}
@@ -140,6 +147,10 @@ export function TerminalView({ run, agent, shells, onCaptures }: {
   const { state, replaying, controlMetadata } = session
   const retryShellList = useRunningShellOnPhone(shells, !agent.hasAgentTerminal && !shellShown)
   const mobile = useIsMobile()
+  // Kept while the attach is down, so a reconnect redraws nothing. A phone follows the PTY and keeps its control in the toolbar.
+  const mirror = useRef(false)
+  if (state.connection === 'live') mirror.current = !agent.localControl
+  const watching = !useMediaQuery(phoneScreen) && mirror.current
 
   return (
     <div className="relative flex h-full min-h-0 flex-col">
@@ -170,16 +181,18 @@ export function TerminalView({ run, agent, shells, onCaptures }: {
           role={tabbed ? 'tabpanel' : undefined}
           aria-label={tabbed ? 'Agent' : undefined}
           inert={shellShown}
-          className={cn('absolute inset-0', shellShown && 'invisible')}
+          className={cn('absolute inset-0 flex flex-col', shellShown && 'invisible')}
         >
+          <div className="min-h-0 flex-1">
           <TerminalPane
             controller={controller}
             tabs={tabs}
-            toolbarEnd={<Presence run={run} agent={agent} />}
+            scaled={watching}
+            toolbarEnd={!watching && <Presence run={run} agent={agent} />}
             notice={<Notice run={run} agent={agent} />}
             onCaptures={onCaptures}
             writable={state.write && !agent.starting && !replaying}
-            controlAppearance={agent.liveWritable ? 'active'
+            controlAppearance={watching ? undefined : agent.liveWritable ? 'active'
               : state.connection !== 'live' || state.steerDenied || !agent.steerable || replaying || agent.readingHistory
                 ? 'hidden' : controlMetadata?.loss ?? 'hidden'}
             takeoverProgress={takeover.holderProgress}
@@ -200,6 +213,8 @@ export function TerminalView({ run, agent, shells, onCaptures }: {
           >
             {agent.starting && <TerminalSpinner label="Starting the session's sandbox" />}
           </TerminalPane>
+          </div>
+          {watching && <Presence run={run} agent={agent} watching />}
         </div>
       ) : !shellShown && (
         <div className="absolute inset-0 flex flex-col">
