@@ -228,7 +228,8 @@ export function AgentCard({
       aria-current={current || undefined}
       aria-expanded={expanded}
       onClick={onOpen}
-      className={cn(focusRingInset, 'flex w-full min-w-0 flex-col gap-0.5 rounded-control px-2 py-1 text-left text-ui-sm hover:bg-hover coarse:min-h-11', current && 'bg-selection')}
+      // Chromium 130, in the desktop app's Electron 33, gives a button align-items: flex-start: each line would take its text's width and never truncate.
+      className={cn(focusRingInset, 'flex w-full min-w-0 flex-col items-stretch gap-0.5 rounded-control px-2 py-1 text-left text-ui-sm hover:bg-hover coarse:min-h-11', current && 'bg-selection')}
     >
       <span className="flex min-w-0 items-center gap-2">
         {dot}
