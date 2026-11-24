@@ -828,6 +828,8 @@ describe('the Enhanced composer draft', () => {
   const box = () => screen.findByRole('combobox', { name: 'Message the agent' })
   const reconnecting = 'Reconnecting to the agent…'
   const waits = () => screen.queryAllByRole('status').filter((el) => el.textContent === reconnecting)
+  const drop = (stream: 'reconnecting' | 'live') => act(() => useStore.getState().acpStream('run_1', stream))
+  const strip = 'Answer the request above to continue.'
   const prompt = 'Round the totals\n  then update the docs'
   const sent = { message: roomMessage({ id: 'm', kind: 'steer_request' }) }
   let show: (runID: string) => void
@@ -1060,9 +1062,6 @@ describe('the Enhanced composer draft', () => {
     expect(screen.getByRole('button', { name: 'Steer' })).toHaveProperty('disabled', true)
   })
 
-  const drop = (stream: 'reconnecting' | 'live') => act(() => useStore.getState().acpStream('run_1', stream))
-  const strip = 'Answer the request above to continue.'
-
   it('keeps the closed strip of a session that waits on a request through a reconnect', async () => {
     open()
     acpSocket().open({ ...lease, state: state({ turn_in_flight: true, pending: [permission] }) }, [item('turn_start', 1)])
@@ -1072,6 +1071,7 @@ describe('the Enhanced composer draft', () => {
       expect(screen.getByText(strip)).toBeDefined()
       expect(screen.queryByRole('combobox', { name: 'Message the agent' })).toBeNull()
       expect(screen.getByRole('button', { name: 'Interrupt the agent' })).toHaveProperty('disabled', stream !== 'live')
+      expect(waits()).toHaveLength(stream === 'live' ? 0 : 1)
     }
   })
 
