@@ -13,14 +13,14 @@ import (
 // icons the edge embeds are the dashboard's own files, unchanged.
 func TestAssetCopiesMatchTheirSources(t *testing.T) {
 	for copied, source := range map[string]string{
-		"templates/fonts/saira-latin.woff2":               "../../../web/public/fonts/saira-latin.woff2",
-		"templates/fonts/LICENSE-saira.txt":               "../../../web/public/fonts/LICENSE-saira.txt",
-		"templates/fonts/LICENSE-dm-sans.txt":             "../../../web/public/fonts/LICENSE-dm-sans.txt",
-		"templates/fonts/dm-sans-latin-wght-normal.woff2": "../../../web/node_modules/@fontsource-variable/dm-sans/files/dm-sans-latin-wght-normal.woff2",
-		"templates/images/cloudfield-logo-small.svg":      "../../../web/public/cloudfield-logo-small.svg",
-		"templates/images/cloudfield-favicon.svg":         "../../../web/public/cloudfield-favicon.svg",
-		"templates/images/favicon-32.png":                 "../../../web/public/icons/favicon-32.png",
-		"templates/images/apple-touch-icon.png":           "../../../web/public/icons/apple-touch-icon.png",
+		"templates/fonts/LICENSE-open-sans.txt":             "../../../web/public/fonts/LICENSE-open-sans.txt",
+		"templates/fonts/open-sans-latin-wght-normal.woff2": "../../../web/node_modules/@fontsource-variable/open-sans/files/open-sans-latin-wght-normal.woff2",
+		"templates/fonts/LICENSE-dm-sans.txt":               "../../../web/public/fonts/LICENSE-dm-sans.txt",
+		"templates/fonts/dm-sans-latin-wght-normal.woff2":   "../../../web/node_modules/@fontsource-variable/dm-sans/files/dm-sans-latin-wght-normal.woff2",
+		"templates/images/cloudfield-logo-small.svg":        "../../../web/public/cloudfield-logo-small.svg",
+		"templates/images/cloudfield-favicon.svg":           "../../../web/public/cloudfield-favicon.svg",
+		"templates/images/favicon-32.png":                   "../../../web/public/icons/favicon-32.png",
+		"templates/images/apple-touch-icon.png":             "../../../web/public/icons/apple-touch-icon.png",
 	} {
 		want, err := os.ReadFile(source)
 		if errors.Is(err, fs.ErrNotExist) {
