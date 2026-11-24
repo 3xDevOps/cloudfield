@@ -276,10 +276,12 @@ between turns.
   Limits:
   - Only Claude Code reports it. An agent inside a workflow reports its row, not
     its messages or tool calls.
-  - A running workflow's call is written at most once a second.
-  - Previews are cut to 240 bytes. Past 100 agents the finished rows are left out
-    first, counted in `omitted`.
-  - A call too large for a viewer's frame carries the workflow's name only.
+  - A running workflow's call is written at most once a second when an agent
+    changes state, and once in 15 seconds when only its tool or token count did.
+  - Previews are cut to 240 bytes. Past 100 agents the done and skipped rows are
+    left out first, then the failed ones, counted in `omitted`.
+  - A call too large for a viewer's frame carries each agent's label and state
+    without previews or logs, and the name alone when even that does not fit.
 - A shell such as a dev server does not hold the session, because it may never end.
 - Stop cancels an autonomous turn and parks the session with `turn cancelled`. The
   tasks keep running in Claude Code.

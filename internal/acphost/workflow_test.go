@@ -283,7 +283,15 @@ func TestWorkflowSnapshotIsBounded(t *testing.T) {
 		t.Fatalf("encoded item is %d bytes, %v", len(b), err)
 	}
 	it.ToolCall.Task.Workflow = w
-	b, truncated, err := it.Wire(1 << 10)
+	b, truncated, err := it.Wire(32 << 10)
+	var cut Item
+	if err != nil || !truncated || len(b) > 32<<10 || json.Unmarshal(b, &cut) != nil {
+		t.Fatalf("Wire: %d bytes, truncated %v, %v", len(b), truncated, err)
+	}
+	if rows := cut.ToolCall.Task.Workflow; len(rows.Agents) != maxWorkflowAgents || rows.Omitted != 32 || rows.Agents[10].State != "running" || rows.Agents[0].Result != "" || rows.Logs != nil {
+		t.Fatalf("cut workflow %+v, want every row's label and state without previews", rows)
+	}
+	b, truncated, err = it.Wire(1 << 10)
 	if err != nil || !truncated || len(b) > 1<<10 {
 		t.Fatalf("Wire: %d bytes, truncated %v, %v", len(b), truncated, err)
 	}
@@ -337,4 +345,28 @@ func TestAdoptedSessionKeepsRecordingWorkflowProgress(t *testing.T) {
 	if task := last(); task.Workflow.Name != "demo" || agentStates(task) != "running" {
 		t.Fatalf("ended task %+v with workflow %+v", task, task.Workflow)
 	}
+}
+
+func TestWorkflowToolOnlyChangesWaitLongerThanStateChanges(t *testing.T) {
+	workflowEvery(t, 50*time.Millisecond)
+	shortenWaits(t, 300*time.Millisecond, 15*time.Minute)
+	m := newMockAgent(t, loadFixture(t, "claude"))
+	m.onPrompt = func(m *mockAgent, _ promptCall) (any, *acp.RequestError) {
+		m.liveTasks([2]string{"wf-1", "local_workflow"})
+		m.launchTool("t1", "wf-1")
+		return map[string]any{"stopReason": "end_turn"}, nil
+	}
+	s, _ := startWorkflow(t, m)
+	m.workflowProgress(workflowRowOf(1, "progress", nil))
+	waitFor(t, "the first rows", func() bool { return len(taskSnapshots(t, s)) == 2 })
+	m.workflowProgress(workflowRowOf(1, "progress", map[string]any{"lastToolName": "Bash", "tokens": 10}))
+	time.Sleep(4 * workflowEmitEvery)
+	if tasks := taskSnapshots(t, s); len(tasks) != 2 {
+		t.Fatalf("%d snapshots, want the tool-only change held", len(tasks))
+	}
+	m.workflowProgress(workflowRowOf(1, "done", map[string]any{"lastToolName": "Bash", "tokens": 10}))
+	waitFor(t, "the state change", func() bool {
+		tasks := taskSnapshots(t, s)
+		return len(tasks) == 3 && agentStates(tasks[2]) == "done" && tasks[2].Workflow.Agents[0].Tool == "Bash"
+	})
 }

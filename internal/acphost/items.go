@@ -406,7 +406,7 @@ func (it Item) Wire(limit int) (b []byte, truncated bool, err error) {
 	}
 	if tc := cut.ToolCall; tc != nil {
 		brief.ToolCall = &ToolCall{ID: tc.ID, ParentID: tc.ParentID, ToolKind: tc.ToolKind, ToolName: tc.ToolName,
-			Subagent: tc.Subagent, Task: tc.Task, Status: tc.Status, ExitCode: tc.ExitCode}
+			Subagent: tc.Subagent, Task: tc.Task.named(), Status: tc.Status, ExitCode: tc.ExitCode}
 	}
 	if r := cut.Request; r != nil {
 		brief.Request = &Request{ID: r.ID, Kind: r.Kind, ToolCallID: r.ToolCallID, Status: r.Status, Answer: r.Answer}

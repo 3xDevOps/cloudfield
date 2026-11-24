@@ -11,6 +11,10 @@ import (
 // workflow's tool call, each of which writes the whole call to the item log.
 var workflowEmitEvery = time.Second
 
+// workflowDetailEvery is that time when only what an agent is doing changed:
+// its tool and token counts move on every tool use.
+var workflowDetailEvery = 15 * time.Second
+
 const (
 	maxWorkflowAgents  = 100
 	maxWorkflowPhases  = 64
@@ -18,6 +22,7 @@ const (
 	maxWorkflowPreview = 240
 	maxWorkflowSummary = 160
 	maxWorkflowField   = 64
+	maxWorkflowBrief   = 48
 )
 
 // Workflow is the progress Claude Code reports for a dynamic workflow: its
@@ -65,14 +70,47 @@ type WorkflowAgent struct {
 
 func (a WorkflowAgent) finished() bool { return a.State != "queued" && a.State != "running" }
 
-// brief keeps what labels the task and drops the workflow's rows.
+// outline is the agent without what it is doing or its previews.
+func (a WorkflowAgent) outline() WorkflowAgent {
+	return WorkflowAgent{Index: a.Index, Label: a.Label, Phase: a.Phase, State: a.State}
+}
+
+// brief keeps what labels the task and counts its workflow's agents: each
+// row's label and state, without previews or logs.
 func (t *ToolTask) brief() *ToolTask {
+	if t == nil || t.Workflow == nil {
+		return t
+	}
+	w := Workflow{Name: t.Workflow.Name, Omitted: t.Workflow.Omitted}
+	for _, p := range t.Workflow.Phases {
+		p.Title, _ = cutTail(p.Title, maxWorkflowBrief)
+		w.Phases = append(w.Phases, p)
+	}
+	for _, a := range t.Workflow.Agents {
+		a = a.outline()
+		a.Label, _ = cutTail(a.Label, maxWorkflowBrief)
+		w.Agents = append(w.Agents, a)
+	}
+	b := *t
+	b.Workflow = &w
+	return &b
+}
+
+// named keeps the workflow's name alone, for a frame too small for its rows.
+func (t *ToolTask) named() *ToolTask {
 	if t == nil || t.Workflow == nil {
 		return t
 	}
 	b := *t
 	b.Workflow = &Workflow{Name: t.Workflow.Name}
 	return &b
+}
+
+// sameOutline reports whether two snapshots differ at most in what their
+// agents are doing.
+func sameOutline(a, b *Workflow) bool {
+	return a.Name == b.Name && a.Omitted == b.Omitted && slices.Equal(a.Phases, b.Phases) && slices.Equal(a.Logs, b.Logs) &&
+		slices.EqualFunc(a.Agents, b.Agents, func(x, y WorkflowAgent) bool { return x.outline() == y.outline() })
 }
 
 type workflowRow struct {
@@ -161,27 +199,35 @@ func workflowSnapshot(name string, progress json.RawMessage, omitted int) *Workf
 	}
 	if over := len(w.Agents) - maxWorkflowAgents; over > 0 {
 		w.Omitted += over
-		w.Agents = slices.DeleteFunc(w.Agents, func(a WorkflowAgent) bool {
-			if over == 0 || !a.finished() {
-				return false
-			}
-			over--
-			return true
-		})
+		// A failed row is the one a viewer looks for, so it goes last.
+		for _, drop := range []func(WorkflowAgent) bool{
+			func(a WorkflowAgent) bool { return a.State == "done" || a.State == "skipped" },
+			WorkflowAgent.finished,
+		} {
+			w.Agents = slices.DeleteFunc(w.Agents, func(a WorkflowAgent) bool {
+				if over == 0 || !drop(a) {
+					return false
+				}
+				over--
+				return true
+			})
+		}
 		w.Agents = w.Agents[:maxWorkflowAgents]
 	}
 	return w
 }
 
 // workflowState is the newest snapshot of a workflow task. dirty says the
-// task's tool call does not carry it yet; sent is when a snapshot of the
-// call was last written for it; timer says a held snapshot's write is
-// scheduled.
+// task's tool call does not carry it yet, and detail that it differs from
+// the one written only in what agents are doing; sent is when a snapshot of
+// the call was last written for it; timer is when a held snapshot's write
+// is scheduled.
 type workflowState struct {
-	snap  *Workflow
-	dirty bool
-	sent  time.Time
-	timer bool
+	snap   *Workflow
+	dirty  bool
+	detail bool
+	sent   time.Time
+	timer  time.Time
 }
 
 func (s *Session) workflowFrameLocked(m sdkMessage) {
@@ -207,6 +253,7 @@ func (s *Session) workflowFrameLocked(m sdkMessage) {
 		next = &named
 	}
 	if !reflect.DeepEqual(next, w.snap) {
+		w.detail = sameOutline(next, w.snap) && (w.detail || !w.dirty)
 		w.snap, w.dirty = next, true
 	}
 }
@@ -219,13 +266,19 @@ func (s *Session) flushWorkflowLocked(id string) {
 	if w == nil || !w.dirty || call.Task == nil {
 		return
 	}
-	if wait := workflowEmitEvery - time.Since(w.sent); wait > 0 {
-		if !w.timer {
-			w.timer = true
-			time.AfterFunc(wait, func() {
+	every := workflowEmitEvery
+	if w.detail {
+		every = workflowDetailEvery
+	}
+	if at := w.sent.Add(every); time.Until(at) > 0 {
+		if w.timer.IsZero() || at.Before(w.timer) {
+			w.timer = at
+			time.AfterFunc(time.Until(at), func() {
 				s.mu.Lock()
 				defer s.mu.Unlock()
-				w.timer = false
+				if w.timer.Equal(at) {
+					w.timer = time.Time{}
+				}
 				s.flushWorkflowLocked(id)
 			})
 		}
