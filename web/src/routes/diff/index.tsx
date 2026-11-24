@@ -47,7 +47,7 @@ export function ChangesView(props: { runID: string; agent: AgentTerminal; agentN
 function RepoSwitch({ runID, agent, agentName }: { runID: string; agent: AgentTerminal; agentName: string }) {
   const run = useStore((s) => s.runs[runID])!
   const repos = useRepoRuns(run)
-  const selected = useSelectedRepo(runID)
+  const selected = useSelectedRepo()
   const entry = repos.find((item) => item.repo.workspace_id === selected && !item.repo.primary)
   const primary = repos.find((item) => item.repo.primary)!.repo.workspace_id
   const caps = useCapability()
@@ -74,7 +74,7 @@ function RepoSwitch({ runID, agent, agentName }: { runID: string; agent: AgentTe
 function PrimaryChanges({ runID, agent, agentName }: { runID: string; agent: AgentTerminal; agentName: string }) {
   const caps = useCapability()
   const run = useStore((s) => s.runs[runID])
-  const params = useRunParams(runID)
+  const params = useRunParams()
   const state = useStore((s) => s.diffs[runID] ?? initialDiff)
   const ahead = useAhead(runID)
   const [comparison, setComparison] = useState<Comparison>({ kind: 'all' })

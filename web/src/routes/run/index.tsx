@@ -138,7 +138,7 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
   const shared = useSharedPresence(run, agent)
   const keyboard = useKeyboardFold()
 
-  const agentID = defaultView(run) === 'session' ? params.agent : undefined
+  const agentID = focused && defaultView(run) === 'session' ? params.agent : undefined
   const agentOpener = useRef<HTMLElement | null>(null)
   const inlineNow = useRef(agentInline)
   inlineNow.current = agentInline
@@ -242,8 +242,8 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
 
   const [composeRequested, setComposeRequested] = useState(false)
   useEffect(() => {
-    if (params.focus === 'composer') setComposeRequested(true)
-  }, [params])
+    if (focused && params.focus === 'composer') setComposeRequested(true)
+  }, [focused, params])
 
   const step = (delta: number) => go(views[(views.indexOf(view) + delta + views.length) % views.length]!)
   useKeybindings('run', focused ? {

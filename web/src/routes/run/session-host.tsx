@@ -12,7 +12,7 @@ import { useStore } from '@/store'
 import type { RunRecord } from '@/store/runs'
 
 /**
- * What a session has once however many frames show it: the agent terminal's
+ * What a session holds once, however many frames show it: the agent terminal's
  * attach, the room, the shells and the takeover prompt. `views` are the views
  * its frames show now.
  */

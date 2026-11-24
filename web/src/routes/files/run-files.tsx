@@ -24,7 +24,7 @@ const besideWidth = 640
 const lastSelected = new Map<string, string>()
 
 export function RunFiles({ run, shown, client = api }: { run: Run; shown: boolean; client?: Api }) {
-  const params = useRunParams(run.id)
+  const params = useRunParams()
   const filesEpoch = useStore((s) => s.filesEpoch)
   const fileTabs = useStore((s) => s.fileTabs)
   const activeFileKey = useStore((s) => s.activeFileKey)

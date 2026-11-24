@@ -10,6 +10,7 @@ import { RunFiles } from '@/routes/files/run-files'
 import { useStore } from '@/store'
 import { filesKey } from '@/store/files'
 import { fakeApi, run, workspace } from '@/test/fixtures'
+import { RouteParams } from '@/test/route-params'
 import { atViewport } from '@/test/viewport'
 
 const file = (name: string): FileTreeEntry => ({ name, kind: 'file', size: 1 })
@@ -49,7 +50,7 @@ afterEach(() => {
 describe('a run’s Files view', () => {
   it('lists the run’s checkout under its branch and opens a file beside the tree', async () => {
     const client = checkout()
-    render(<RunFiles run={run()} shown client={client} />)
+    render(<RunFiles run={run()} shown client={client} />, { wrapper: RouteParams })
     const tree = within(screen.getByRole('complementary', { name: 'Files' }))
     expect(tree.getByRole('button', { name: 'aether/run-1-checkout' }).getAttribute('aria-expanded')).toBe('true')
     expect(screen.getByText('No file open')).toBeDefined()
@@ -69,7 +70,7 @@ describe('a run’s Files view', () => {
       ],
     })
     act(() => useStore.getState().setRuns([multi]))
-    render(<RunFiles run={multi} shown client={client} />)
+    render(<RunFiles run={multi} shown client={client} />, { wrapper: RouteParams })
     fireEvent.mouseDown(screen.getByRole('tab', { name: 'api' }))
     await waitFor(() => expect(client.filesTree).toHaveBeenCalledWith({ workspace_id: workspace.id, run_id: 'run_1', repo: 'wsp_api', path: '' }))
     fireEvent.click(await screen.findByRole('button', { name: 'README.md' }))
@@ -86,7 +87,7 @@ describe('a run’s Files view', () => {
       ],
     })
     act(() => useStore.getState().setRuns([multi]))
-    render(<RunFiles run={multi} shown client={client} />)
+    render(<RunFiles run={multi} shown client={client} />, { wrapper: RouteParams })
     fireEvent.click(await screen.findByRole('button', { name: 'README.md' }))
     await screen.findByRole('textbox', { name: 'Edit README.md' })
     fireEvent.mouseDown(screen.getByRole('tab', { name: 'api' }))
@@ -105,7 +106,7 @@ describe('a run’s Files view', () => {
   it('opens the file a link names, shows it in the tree and marks its line, again when the link is followed again', async () => {
     const client = checkout()
     act(() => openInFiles('run_1', { path: 'src/app.ts', line: 3 }))
-    render(<RunFiles run={run()} shown client={client} />)
+    render(<RunFiles run={run()} shown client={client} />, { wrapper: RouteParams })
     await screen.findByRole('textbox', { name: 'Edit src/app.ts' })
     await waitFor(() => expect(document.querySelector('.cm-marked-line')?.textContent).toBe('three'))
     const row = await within(screen.getByRole('complementary', { name: 'Files' })).findByRole('button', { name: 'app.ts' })
@@ -118,14 +119,14 @@ describe('a run’s Files view', () => {
 
   it('opens a file named at column zero on the first line', async () => {
     act(() => openInFiles('run_1', { path: 'src/app.ts', line: 1, column: 0 }))
-    render(<RunFiles run={run()} shown client={checkout()} />)
+    render(<RunFiles run={run()} shown client={checkout()} />, { wrapper: RouteParams })
     await waitFor(() => expect(document.querySelector('.cm-marked-line')?.textContent).toBe('one'))
   })
 
   it('returns to the file a run had selected after another run opened one', async () => {
     const client = checkout()
     act(() => openInFiles('run_1', { path: 'README.md' }))
-    const { unmount } = render(<RunFiles run={run()} shown client={client} />)
+    const { unmount } = render(<RunFiles run={run()} shown client={client} />, { wrapper: RouteParams })
     await screen.findByRole('textbox', { name: 'Edit README.md' })
     act(() => openInFiles('run_1', { path: 'src/app.ts' }))
     await screen.findByRole('textbox', { name: 'Edit src/app.ts' })
@@ -136,30 +137,31 @@ describe('a run’s Files view', () => {
     const other = run({ id: 'run_2' })
     act(() => useStore.getState().setRuns([run(), other]))
     act(() => openInFiles('run_2', { path: 'src/app.ts' }))
-    render(<RunFiles run={other} shown client={client} />)
+    render(<RunFiles run={other} shown client={client} />, { wrapper: RouteParams })
     await screen.findByRole('textbox', { name: 'Edit src/app.ts' })
     cleanup()
+    act(() => useStore.getState().navigate('run', { runId: 'run_1', view: 'files' }))
 
-    render(<RunFiles run={run()} shown client={client} />)
+    render(<RunFiles run={run()} shown client={client} />, { wrapper: RouteParams })
     expect(await screen.findByRole('textbox', { name: 'Edit README.md' })).toBeDefined()
   })
 
   it('shows the file a link names when the view mounts with another file already open', async () => {
     const client = checkout()
     act(() => openInFiles('run_1', { path: 'README.md' }))
-    const first = render(<RunFiles run={run()} shown client={client} />)
+    const first = render(<RunFiles run={run()} shown client={client} />, { wrapper: RouteParams })
     await screen.findByRole('textbox', { name: 'Edit README.md' })
     first.unmount()
 
     act(() => openInFiles('run_1', { path: 'src/app.ts', line: 2 }))
-    render(<RunFiles run={run()} shown client={client} />)
+    render(<RunFiles run={run()} shown client={client} />, { wrapper: RouteParams })
     await screen.findByRole('textbox', { name: 'Edit src/app.ts' })
     await waitFor(() => expect(document.querySelector('.cm-marked-line')?.textContent).toBe('two'))
   })
 
   it('says a file the member may not change is read-only', async () => {
     act(() => openInFiles('run_1', { path: 'README.md' }))
-    render(<RunFiles run={run()} shown client={checkout(false)} />)
+    render(<RunFiles run={run()} shown client={checkout(false)} />, { wrapper: RouteParams })
     expect(await screen.findByText('Read-only')).toBeDefined()
     expect(screen.queryByRole('button', { name: 'Save' })).toBeNull()
     expect(screen.getByRole('textbox', { name: 'Edit README.md' }).getAttribute('aria-readonly')).toBe('true')
@@ -168,7 +170,7 @@ describe('a run’s Files view', () => {
   it('keeps the editor and the tree up while a change to the checkout rereads them', async () => {
     const client = checkout()
     act(() => openInFiles('run_1', { path: 'README.md', line: 2 }))
-    render(<RunFiles run={run()} shown client={client} />)
+    render(<RunFiles run={run()} shown client={client} />, { wrapper: RouteParams })
     const editor = await screen.findByRole('textbox', { name: 'Edit README.md' })
     const tree = within(screen.getByRole('complementary', { name: 'Files' }))
     await tree.findByRole('button', { name: 'README.md' })
@@ -196,7 +198,7 @@ describe('a run’s Files view', () => {
       if (path === 'README.md') throw new ApiError(409, 'files.upload: file changed; reload before saving')
       return {}
     })
-    render(<RunFiles run={run()} shown client={fakeApi({ filesTree: vi.fn(filesTree), filesUpload })} />)
+    render(<RunFiles run={run()} shown client={fakeApi({ filesTree: vi.fn(filesTree), filesUpload })} />, { wrapper: RouteParams })
     const tree = within(screen.getByRole('complementary', { name: 'Files' }))
     expect(tree.getByRole('button', { name: 'Upload files…' })).toBeDefined()
 
@@ -222,7 +224,7 @@ describe('a run’s Files view', () => {
     })],
   ])('shows the tree until a file is open %s, then the editor with Browse', async (_, narrow) => {
     narrow()
-    render(<RunFiles run={run()} shown client={checkout()} />)
+    render(<RunFiles run={run()} shown client={checkout()} />, { wrapper: RouteParams })
     fireEvent.click(await within(screen.getByRole('complementary', { name: 'Files' })).findByRole('button', { name: 'README.md' }))
     const viewer = await screen.findByRole('article')
     expect(screen.queryByRole('complementary', { name: 'Files' })).toBeNull()

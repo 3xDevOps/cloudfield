@@ -122,7 +122,7 @@ function NestedAgent({ runID, id }: { runID: string; id: string }) {
 
 const SubagentCard = memo(function SubagentCard({ runID, id }: { runID: string; id: string }) {
   const agent = useAgent(runID, id)
-  const open = useRunParams(runID).agent === id
+  const open = useRunParams().agent === id
   if (!agent) return null
   const state = agentState(agent)
   const type = agentType(agent)

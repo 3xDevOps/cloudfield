@@ -7,6 +7,7 @@ import { RunFrame, type FrameTile } from '@/routes/run'
 import { RunSession } from '@/routes/run/session-host'
 import type { RunView } from '@/routes/run/views'
 import { useStore } from '@/store'
+import { ScriptedSession } from '@/test/acp-stream'
 import { alice, bob, run, serverInfo, workspace } from '@/test/fixtures'
 import { StubSocket } from '@/test/stub-socket'
 
@@ -139,6 +140,22 @@ describe('unfocused frame', () => {
     expect(useStore.getState().browserRequests).toEqual({ run_1: '' })
     fireEvent.keyDown(window, { key: 'Escape' })
     expect(useStore.getState().route.name).toBe('run')
+    view.unmount()
+  })
+
+  it('does not move the keyboard to the composer the route asks for', async () => {
+    const session = record({ mode: 'acp', acp: true })
+    const params = { runId: 'run_1', view: 'session', focus: 'composer' }
+    const host = (tile: FrameTile) => (
+      <RunSession run={session} views={['session']}><RunFrame run={session} params={params} tile={tile} /></RunSession>
+    )
+    const view = render(host(otherTile))
+    new ScriptedSession(StubSocket.opened.find((socket) => socket.url.includes('/ws/acp/run_1'))!).open()
+    const composer = await screen.findByRole('combobox', { name: 'Message the agent' })
+    expect(document.activeElement).toBe(document.body)
+
+    view.rerender(host(focusedTile))
+    await waitFor(() => expect(document.activeElement).toBe(composer))
     view.unmount()
   })
 

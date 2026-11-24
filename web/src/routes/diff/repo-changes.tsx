@@ -28,8 +28,8 @@ import type { RunRecord } from '@/store/runs'
 
 export const allRepos = 'all'
 
-export function useSelectedRepo(runID: string): string | undefined {
-  const params = useRunParams(runID)
+export function useSelectedRepo(): string | undefined {
+  const params = useRunParams()
   return params.view === 'changes' ? params.repo : undefined
 }
 
@@ -115,7 +115,7 @@ function RepoSummary({ repo, run, agent, agentName }: { repo: RunRepo; run: Scop
 
 export function RepoChanges({ run, repo, agent, agentName }: { run: ScopedRecord; repo: RunRepo; agent: AgentTerminal; agentName: string }) {
   const caps = useCapability()
-  const asked = useRunParams(run.id).file
+  const asked = useRunParams().file
   const data = useRepoPatch(run.id, repo.workspace_id)
   const { files } = data
   const ids = useId()
