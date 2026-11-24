@@ -463,8 +463,13 @@ Use compact workbench geometry rather than landing-page ornament:
   move into **More navigation**, except Board. One sidebar, 260px
   by default and resizable from 220px to 400px; under 768px it is a side
   sheet, opened from a second, 48px toolbar. The desktop window bar is 35px.
-- 44px view headers (`PaneHeader`), 56px for a session's header, 32px terminal
+- 44px view headers (`PaneHeader`), 32px terminal
   toolbars, 28px list rows and menu items (44px coarse).
+- A session tile is two 32px rows (44px coarse) over its view: the strip of
+  session tabs, then the session's header row. A tile is at least 420 by
+  400px. Under 560px of tile width the strip uses icons for words; the
+  header row measures itself and uses an icon view switch under 800px and
+  drops the reason under 560px.
 - 28px fields and buttons, 24px small and toolbar icon buttons (44px on a
   coarse pointer), 12px form gaps, 4px label gaps, 16px content gutters and
   12px compact gutters. `Label` captions are block-level, so stacked
@@ -538,15 +543,14 @@ regions use `min-h-0` and vertical overflow.
 
 The session Browser view has one `bg-chrome` toolbar row over the page: ghost
 icon buttons for **Back**, **Forward** and **Reload**, the address field,
-**Ports** with its count, **Viewport**, the beside-or-tab toggle and
+**Ports** with its count, **Viewport** and
 **Browser actions**, then who is driving. A listening port is a `secondary`
 button, its address in `font-code` and its process name muted, with a ghost
 icon button beside it. A second page adds a row of small tab buttons. Messages are laid
 over the top of the page on a floating surface and never take a row. A page
 that does not fill its pane is centred on `bg-chrome` and never enlarged, and
-the page that has the keyboard wears a 1px inset accent outline. Beside
-another view the Browser is a pane with a seam and a resize handle like the
-sidebar's. [Browser view](dashboard-frontend.md#browser-view) has the
+the page that has the keyboard wears a 1px inset accent outline.
+[Browser view](dashboard-frontend.md#browser-view) has the
 behaviour.
 
 The terminal toolbar holds the terminal tabs, **Tools** (a menu; a bottom
@@ -617,16 +621,35 @@ the highlight. Preserve readable placeholders, disabled and read-only states,
 menu roving focus, typeahead, portalling and viewport flipping. Shared
 primitives retain their props, events, refs and accessibility contracts.
 
-The session header shows one primary action for the session's state, a **Details**
+The desktop session page is a set of tiles
+([Session tiles](dashboard-frontend.md#session-tiles)). The focused tile has
+its strip on `--canvas`, a 2px accent bar under its active tab and, with two
+or more tiles on screen, a 1px inset accent outline; an unfocused strip is on
+`--chrome` with no bar. Focus never dims a tile: no opacity. A tile whose
+view an arrow points at wears the same outline dashed. Seams between tiles
+are 1px `--seam` lines with a 7px grab reach. A sidebar row whose session is
+on screen has a 2px accent bar down its left edge. A drag shows a 1px accent
+border over an `--accent-soft` fill where the drop lands, and a raised chip
+by the pointer that names the action in accent.
+
+The session header row leads with the view switch (Chat, Trace on an
+Enhanced session, Terminal, Changes, Files, Browser), a segmented tab list,
+then the state and its reason, then one primary action for the session's
+state, presence, a **Details**
 toggle and **More**; destructive verbs stay last in **More**, behind their
-existing gates and confirmations. The view switch (Session, Trace on an
-Enhanced session, Terminal, Changes, Files, Browser) is a segmented tab list. A session with a pull request ends
-that row with its number as a muted link and its check state as a ghost
-button led by a `StatusDot`: failed, working, done or neutral. Details is a 320px side panel at
-1280px and wider, a side sheet below that and a bottom sheet on phones; it
+existing gates and confirmations. The primary action is filled only in the
+focused tile and `secondary` in any other, so the screen keeps one filled
+button. A session with a pull request shows
+its number as a muted link and its check state as a ghost
+button led by a `StatusDot`: failed, working, done or neutral. Details is a
+320px side panel in a tile that is alone on screen and wide enough, a side
+sheet otherwise and a bottom sheet on phones; it
 never overlays the terminal on wide screens. Standard sessions keep control in
-the terminal toolbar; Enhanced sessions keep a compact **Multiplayer** strip
-below the view switch on every view. Names and member avatars identify the
+the terminal toolbar, or on a line under a terminal this tab does not
+control. On a desktop an Enhanced session shows watchers as avatars in the
+header row and rings the controller's in accent; on a phone it keeps a
+compact **Multiplayer** strip
+below the view switch. Names and member avatars identify the
 controller and watchers directly in that strip, which stays one row while
 the controls fit beside a 6rem roster and otherwise wraps them to a second
 line. The roster scrolls horizontally, and below 34rem watchers show as avatars and
@@ -718,7 +741,10 @@ literal time or curve.
   the gliding tile clips it, so a terminal or Browser inside is sized once,
   not on every frame. A tile that appears fades its body in over 200ms on
   `--ease-enter`; a closed tile leaves at once. A seam drag and a window
-  resize never glide, and the focus outline moves at once.
+  resize never glide, and the focus outline, the tab bar and the sidebar's
+  on-screen bar move at once. The drop preview eases its position and size
+  between zones on the hover duration; the drag chip and the dashed slot a
+  lifted view leaves appear at once. The parked-tiles pill fades in.
 - The Map repacks with motion: units and cards glide from their old layout
   coordinates on `--duration-glide` / `--ease-glide` (never DOM-measured,
   since the world is scaled), new cards rise 6px and fade in over 220ms after
@@ -808,9 +834,10 @@ on while it is visible, the lockup stops animating and the field holds its
 last frame. [Launch splash](dashboard-frontend.md#launch-splash) defines the
 session and startup timing.
 
-The bar that holds **Take control** and **Release** shows who steers: the
-Enhanced Multiplayer strip, or the agent terminal's toolbar in a Standard
-session. Its background is a grid of 2px round dots on a 6px pitch, behind the
+The bar that holds **Take control** and **Release** shows who steers: a
+phone's Enhanced Multiplayer strip, or the agent terminal's toolbar in a
+Standard session. A desktop Enhanced session has no such bar: a teammate's
+hold is a 2px `state-failed` line along the header row's bottom edge. Its background is a grid of 2px round dots on a 6px pitch, behind the
 bar's text and controls. The dots are neutral, `--text` at 24%, until this
 tab has live, acknowledged writable control; then they turn
 `--control-light`, the primary button's colour in both themes. A lost
