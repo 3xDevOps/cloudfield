@@ -35,7 +35,7 @@ Fonts ship in the bundle; nothing is fetched from Google.
 | Face | Use | Source |
 | --- | --- | --- |
 | DM Sans (variable, Latin subset) | All UI text | `@fontsource-variable/dm-sans`, one WOFF2 |
-| Saira (variable, Latin subset) | `text-title` only | `web/public/fonts/saira-latin.woff2` |
+| Open Sans (variable, Latin subset) | `text-title` only | `@fontsource-variable/open-sans`, one WOFF2 |
 | VT323 (Latin subset, 400) | Play listing wordmark drawn by `scripts/make-icons.py`; the dashboard does not load it | `web/public/fonts/vt323-latin.woff2` |
 | JetBrainsMono NFM | xterm primary font; UI private-use symbols through `Aether Nerd Symbols` | `web/public/fonts/jetbrains-mono-nfm-*.woff2` |
 | Noto Sans Symbols 2 | Braille and geometric symbols through `Aether Symbols` | `web/public/fonts/noto-sans-symbols-2-spinners.woff2` |
@@ -73,7 +73,7 @@ The type scale, in `web/src/index.css`:
 | `text-ui-sm` | 12/16 | Supporting copy, section labels |
 | `text-ui` | 13/20 | Default UI text; the body is 13px |
 | `text-prose` | 14/22 | Agent prose and rendered markdown |
-| `text-title` | 16/24, Saira 600 | Pane, dialog, step and empty-state headings |
+| `text-title` | 16/24, Open Sans 600 | Pane, dialog, step and empty-state headings |
 | `text-stat` | 24/28, 500 | The figure in a `StatTile` only |
 
 `text-avatar` (10px) is reserved for avatar initials. **Settings >

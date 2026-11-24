@@ -74,11 +74,11 @@ The dashboard bundles these fonts under the SIL Open Font License 1.1:
   Only the Latin variable WOFF2 from the
   [`@fontsource-variable/dm-sans`](https://github.com/fontsource/font-files/tree/main/fonts/variable/dm-sans)
   package is bundled.
-- Saira for titles
-  ([`web/public/fonts/LICENSE-saira.txt`](../web/public/fonts/LICENSE-saira.txt)).
-  `web/public/fonts/saira-latin.woff2` is the normal-width variable font,
-  weights 100-900, Latin subset, downloaded from
-  [Google Fonts](https://fonts.googleapis.com/css2?family=Saira:wght@100..900&display=swap).
+- Open Sans for titles
+  ([`web/public/fonts/LICENSE-open-sans.txt`](../web/public/fonts/LICENSE-open-sans.txt)).
+  Only the Latin variable WOFF2 from the
+  [`@fontsource-variable/open-sans`](https://github.com/fontsource/font-files/tree/main/fonts/variable/open-sans)
+  package is bundled.
 - VT323 for the Play listing's feature graphic
   ([`web/public/fonts/LICENSE-vt323.txt`](../web/public/fonts/LICENSE-vt323.txt)).
   `web/public/fonts/vt323-latin.woff2` is the Latin subset at weight 400.
@@ -152,8 +152,10 @@ the SIL Open Font License 1.1, with their licence texts in
   bundles from
   [`@fontsource-variable/dm-sans`](https://github.com/fontsource/font-files/tree/main/fonts/variable/dm-sans)
   ([`LICENSE-dm-sans.txt`](../internal/edge/service/templates/fonts/LICENSE-dm-sans.txt)).
-- Saira, a copy of `web/public/fonts/saira-latin.woff2`
-  ([`LICENSE-saira.txt`](../internal/edge/service/templates/fonts/LICENSE-saira.txt)).
+- Open Sans, `open-sans-latin-wght-normal.woff2`, the same file the
+  dashboard bundles from
+  [`@fontsource-variable/open-sans`](https://github.com/fontsource/font-files/tree/main/fonts/variable/open-sans)
+  ([`LICENSE-open-sans.txt`](../internal/edge/service/templates/fonts/LICENSE-open-sans.txt)).
 
 ## In the standard environment image
 
