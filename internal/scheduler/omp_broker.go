@@ -180,8 +180,7 @@ func (s *Scheduler) sessionOwner(ctx context.Context, member domain.MemberID) (i
 	if err != nil {
 		return 0, 0, err
 	}
-	omp, _ := harness.Lookup("omp")
-	imageUser, err := s.resolveContainerUser(ctx, cmp.Or(m.Image, s.cfg.StandardImage), omp)
+	imageUser, err := s.resolveContainerUser(ctx, cmp.Or(m.Image, s.cfg.StandardImage))
 	if err != nil {
 		return 0, 0, err
 	}
