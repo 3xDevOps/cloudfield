@@ -334,6 +334,8 @@ type LaunchOptions struct {
 	// recorded with FromBranch, instead of capturing the workspace base.
 	FromCommit string
 	FromBranch string
+	// LinearIssueURL is recorded on the run as its Linear issue.
+	LinearIssueURL string
 }
 
 // RunLimits caps one run's container. A zero field is unset: the run
@@ -917,6 +919,9 @@ type Run struct {
 	// ChildrenSetBy still owns the run.
 	Children      string
 	ChildrenSetBy MemberID
+	// LinearIssueURL is the canonical URL of the Linear issue the run works
+	// on, or empty.
+	LinearIssueURL string
 	// Limits override the server's run limits for this run; a zero field
 	// follows them.
 	Limits RunLimits

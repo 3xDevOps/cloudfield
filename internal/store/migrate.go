@@ -2662,6 +2662,11 @@ ALTER TABLE server_update_state ADD COLUMN declined_version TEXT NOT NULL DEFAUL
 ALTER TABLE server_update_state ADD COLUMN declined_build INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE server_update_state ADD COLUMN declined_hotfix INTEGER NOT NULL DEFAULT 0;
 `,
+	// v114: the Linear issue a session works on, as its canonical URL; empty
+	// when it has none. Set when the session starts and never changed.
+	`
+ALTER TABLE runs ADD COLUMN linear_issue_url TEXT NOT NULL DEFAULT '';
+`,
 }
 
 // existingDatabaseMigrations run after their version's migration, in the

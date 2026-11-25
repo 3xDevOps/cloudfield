@@ -20,6 +20,7 @@ type recordingLauncher struct {
 	tasks   []string
 	models  []string
 	efforts []string
+	links   []string
 }
 
 func (l *recordingLauncher) LaunchWithOptions(_ context.Context, workspace domain.WorkspaceID, member, _ domain.MemberID, task, harness string, mode domain.LaunchMode, opts domain.LaunchOptions) (*domain.Run, error) {
@@ -28,6 +29,7 @@ func (l *recordingLauncher) LaunchWithOptions(_ context.Context, workspace domai
 	l.tasks = append(l.tasks, task)
 	l.models = append(l.models, opts.Model)
 	l.efforts = append(l.efforts, opts.Effort)
+	l.links = append(l.links, opts.LinearIssueURL)
 	return &domain.Run{
 		ID:            "run_1",
 		WorkspaceID:   workspace,
@@ -482,5 +484,46 @@ func TestScheduleRuleChangedDuringAScanKeepsItsSeededSlot(t *testing.T) {
 	}
 	if next := e.svc.nextFire(resaved.Schedule.ID); !next.Equal(resaved.Next) {
 		t.Fatalf("next fire after the scan = %v, want the seeded %v", next, resaved.Next)
+	}
+}
+
+func TestLaunchLinksTheLinearIssueInTheRenderedTask(t *testing.T) {
+	ctx := context.Background()
+	db, err := storetest.Open(filepath.Join(t.TempDir(), "aether.db"))
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+	bus, err := events.NewInProc(ctx, nil)
+	if err != nil {
+		t.Fatalf("bus: %v", err)
+	}
+	defer func() { _ = bus.Close() }()
+	m := &domain.Member{DisplayName: "Ada", PublicKey: testPublicKey, Color: "#e6194b", Role: domain.RoleCollaborator}
+	if err = db.CreateMember(ctx, m); err != nil {
+		t.Fatalf("create member: %v", err)
+	}
+	ws := &domain.Workspace{Name: "proj", Environment: domain.WorkspaceEnvironment{}, BaseBranch: domain.DefaultBaseBranch}
+	if err = db.CreateWorkspace(ctx, ws); err != nil {
+		t.Fatalf("create workspace: %v", err)
+	}
+	runs := &recordingLauncher{}
+	svc, err := New(Config{Store: storetest.Unscoped{DB: db}, Bus: bus, Runs: runs, Interval: time.Hour})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err = svc.Save(ctx, &store.Template{WorkspaceID: ws.ID, Name: "fix", Task: "fix {{issue}}", Harness: "claude"}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	if _, err = svc.Launch(ctx, ws.ID, "fix", m.ID, map[string]string{"issue": "https://linear.app/acme/issue/ENG-1/slug"}, "", nil); err != nil {
+		t.Fatalf("Launch with an issue URL: %v", err)
+	}
+	if _, err = svc.Launch(ctx, ws.ID, "fix", m.ID, map[string]string{"issue": "the login bug"}, "", nil); err != nil {
+		t.Fatalf("Launch without an issue URL: %v", err)
+	}
+	runs.mu.Lock()
+	defer runs.mu.Unlock()
+	if want := []string{"https://linear.app/acme/issue/ENG-1", ""}; len(runs.links) != 2 || runs.links[0] != want[0] || runs.links[1] != want[1] {
+		t.Fatalf("linked issues = %q, want %q", runs.links, want)
 	}
 }

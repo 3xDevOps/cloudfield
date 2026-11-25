@@ -1,5 +1,4 @@
 import { useEffect, useRef } from 'react'
-import { useIsMobile } from '@/lib/breakpoints'
 import { pageOf, withheld } from '@/lib/surfaces'
 import { redirectRoute } from '@/lib/url-state'
 import { lookupRoute } from '@/routes'
@@ -28,17 +27,8 @@ export function CenterView() {
   const cap = useCapability()
   const View = lookupRoute(route.name)
   const unavailable = !View || (hydrated && withheld(route.name, cap))
-  // The desktop's tile area outlives a change of session; a phone shows one session and remounts for the next.
-  const mobile = useIsMobile()
-  const viewKey =
-    route.name === 'run'
-      ? JSON.stringify([
-          route.name,
-          identityKey,
-          terminalCacheEpoch,
-          mobile ? route.params.runId ?? '' : '',
-        ])
-      : pageOf(route.name)
+  // The tile area outlives a change of session, and of width: it keys each session itself.
+  const viewKey = route.name === 'run' ? JSON.stringify([route.name, identityKey, terminalCacheEpoch]) : pageOf(route.name)
 
   // A view that took focus for itself keeps it; otherwise the heading takes
   // it so a screen reader announces where the navigation landed.

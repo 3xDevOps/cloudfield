@@ -17,6 +17,7 @@ import (
 	"github.com/3xDevOps/Aether/internal/domain"
 	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
 	"github.com/3xDevOps/Aether/internal/events"
+	"github.com/3xDevOps/Aether/internal/linear/api"
 	"github.com/3xDevOps/Aether/internal/memberhome"
 	"github.com/3xDevOps/Aether/internal/protocol"
 	"github.com/3xDevOps/Aether/internal/scheduler"
@@ -133,7 +134,11 @@ func TestMergeTailnetMemberWithEdgeMember(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = signer.Close() })
 	merged := filepath.Join(t.TempDir(), "merged")
-	e, whois := mergeEnv(t, func(c *Config) { c.Homes, c.Signing, c.MergedDir = homes, signer, merged })
+	linearKeys := api.NewKeys(t.TempDir())
+	e, whois := mergeEnv(t, func(c *Config) {
+		c.Homes, c.Signing, c.MergedDir = homes, signer, merged
+		c.Services.Linear = &api.Service{Keys: linearKeys}
+	})
 	ctx := context.Background()
 	tina := addTailnetMember(t, e, "octo@example.com", domain.RoleCollaborator)
 	tailnet := tailnetDial(t, e, whois, tina.TailnetLogin)
@@ -152,6 +157,10 @@ func TestMergeTailnetMemberWithEdgeMember(t *testing.T) {
 	}
 	agentDir, err := signer.Serve(domain.MemberID(gh.ID))
 	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err = linearKeys.Put(domain.MemberID(gh.ID), "key-absorbed"); err != nil {
 		t.Fatal(err)
 	}
 
@@ -207,6 +216,9 @@ func TestMergeTailnetMemberWithEdgeMember(t *testing.T) {
 	if res.Member.ID != string(tina.ID) || res.Merge.AbsorbedID != gh.ID || res.Merge.Discarded.DisplayName != "Octo Cat" ||
 		res.Merge.ConfirmedByKind != "ssh" || res.Merge.ArchivePath != filepath.Join(merged, res.Merge.ID) {
 		t.Fatalf("merge = %+v", res)
+	}
+	if _, kerr := linearKeys.Get(domain.MemberID(gh.ID)); !errors.Is(kerr, api.ErrNotConnected) {
+		t.Fatalf("absorbed member's Linear key after the merge: %v, want it deleted", kerr)
 	}
 	if _, serr := os.Stat(agentDir); !errors.Is(serr, os.ErrNotExist) {
 		t.Fatalf("absorbed member's signing agent after the merge: stat = %v, want it stopped", serr)
@@ -265,6 +277,28 @@ func TestMergeTailnetMemberWithEdgeMember(t *testing.T) {
 	refused, accepted := "error "+proposal.ID, "ok "+gh.ID
 	if want := []string{refused, accepted, accepted, refused, refused}; !slices.Equal(accepts, want) {
 		t.Fatalf("member.merge.accept audit entries = %q, want %q", accepts, want)
+	}
+}
+
+// A merge that cannot delete the absorbed member's Linear key still
+// commits, and says so once it has.
+func TestMergeReportsALinearKeyItCannotDelete(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	e, whois := mergeEnv(t, func(c *Config) { c.Services.Linear = &api.Service{Keys: api.NewKeys(dir)} })
+	tina := addTailnetMember(t, e, "tina@example.com", domain.RoleSuperAdmin)
+	tc := tailnetDial(t, e, whois, tina.TailnetLogin)
+	admin := controlClient(t, e)
+	if err := os.MkdirAll(filepath.Join(dir, string(tina.ID)+".key", "stuck"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	code := mergeStart(t, admin)
+	proposal := mustPropose(t, tc, code, string(e.member.ID))
+	_, err := mergeAccept(admin, proposal, false)
+	wantRefusal(t, err, "the absorbed member's Linear key was not deleted")
+	if _, gerr := e.store.GetMember(context.Background(), tina.ID); !errors.Is(gerr, store.ErrNotFound) {
+		t.Errorf("absorbed member after the merge: %v, want it merged away", gerr)
 	}
 }
 

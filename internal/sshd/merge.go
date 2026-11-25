@@ -390,6 +390,7 @@ func (s *Server) afterMerge(ctx context.Context, caller domain.MemberID, merge *
 	if err := s.removeAssistant(ctx, merge.AbsorbedID); err != nil {
 		slog.Warn("sshd: absorbed member's assistant cleanup failed", "merge", merge.ID, "error", err)
 	}
+	linearErr := s.disconnectLinear(merge.AbsorbedID)
 	s.cfg.Runs.ForgetOMPAccount(ctx, merge.AbsorbedID)
 	var agentErr error
 	if s.cfg.Signing != nil {
@@ -409,10 +410,14 @@ func (s *Server) afterMerge(ctx context.Context, caller domain.MemberID, merge *
 	}
 	slog.Info("sshd: members merged", "merge", merge.ID, "survivor", merge.SurvivorID, "absorbed", merge.AbsorbedID,
 		"role", merge.RoleAfter, "confirmed_by", merge.ConfirmedByKind, "archive", merge.ArchivePath)
+	var errs []error
 	if agentErr != nil {
-		return fmt.Errorf("the absorbed member's signing agent was not stopped: %w", agentErr)
+		errs = append(errs, fmt.Errorf("the absorbed member's signing agent was not stopped: %w", agentErr))
 	}
-	return nil
+	if linearErr != nil {
+		errs = append(errs, fmt.Errorf("the absorbed member's Linear key was not deleted: %w", linearErr))
+	}
+	return errors.Join(errs...)
 }
 
 func (s *Server) memberMergeCancel(ctx context.Context, member domain.MemberID, params json.RawMessage) (any, *protocol.Error) {

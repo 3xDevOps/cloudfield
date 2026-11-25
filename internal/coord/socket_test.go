@@ -114,6 +114,16 @@ func TestCoordinationSocketRoundTrip(t *testing.T) {
 	if !errors.As(err, &rpcErr) || rpcErr.Code != protocol.CodeMethodNotFound {
 		t.Fatalf("run.kill over the coordination socket = %v, want method not found", err)
 	}
+	// A member's Linear key stays out of reach of their sessions' agents.
+	for _, method := range []string{
+		protocol.MethodLinearStatus, protocol.MethodLinearConnect, protocol.MethodLinearDisconnect,
+		protocol.MethodLinearTeams, protocol.MethodLinearIssues, protocol.MethodLinearIssue,
+	} {
+		err = clientA.Call(method, nil, nil)
+		if !errors.As(err, &rpcErr) || rpcErr.Code != protocol.CodeMethodNotFound {
+			t.Fatalf("%s over the coordination socket = %v, want method not found", method, err)
+		}
+	}
 
 	select {
 	case e := <-timeline.Events():

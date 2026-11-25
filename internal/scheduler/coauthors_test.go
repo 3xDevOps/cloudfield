@@ -482,7 +482,7 @@ func TestRunInstructionsCarryTheReportRuleOnlyWithLifecycleReporting(t *testing.
 	for _, enabled := range []bool{false, true} {
 		e.sched.UseCoordination(&fakeCoordinator{root: t.TempDir()}, t.TempDir(), enabled)
 		got := e.sched.runInstructions(coordhooks.Guide{RunID: "run-1", Role: coordhooks.RoleInteractive})
-		if !strings.Contains(got, "run-1") || !strings.Contains(got, coAuthorInstruction) || strings.Contains(got, "--outcome") != enabled {
+		if !strings.Contains(got, "run-1") || !strings.Contains(got, `"Opened from Aether session <session id>"`) || !strings.Contains(got, coAuthorInstruction) || strings.Contains(got, "--outcome") != enabled {
 			t.Fatalf("enabled=%v instructions %q", enabled, got)
 		}
 	}

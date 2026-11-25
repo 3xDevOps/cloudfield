@@ -16,8 +16,10 @@ import { activateTab, activeTab, resolveView, visibleTiles, type Tile as TileNod
  * area portals that session's frame into the body through `onSlot`; an empty
  * tile shows the picker instead.
  */
-export function Tile({ tile, rect, parked, opening, narrow, room, linked, onSlot }: {
+export function Tile({ tile, phone, rect, parked, opening, narrow, room, linked, onSlot }: {
   tile: TileNode
+  /** A phone draws the body alone: no strip, and nothing that marks a tile or the panel of a strip tab. */
+  phone: boolean
   /** In percent of the area. */
   rect: Rect
   /** Hidden behind the maximized tile, and still mounted. */
@@ -42,12 +44,12 @@ export function Tile({ tile, rect, parked, opening, narrow, room, linked, onSlot
   return (
     <Tabs value={tile.active} onValueChange={(id) => changeTiles((before) => activateTab(before, id))} asChild>
       <section
-        data-tile={tile.id}
+        data-tile={phone ? undefined : tile.id}
         data-tile-rest={!focused || undefined}
         tabIndex={-1}
         inert={parked}
         aria-hidden={parked || undefined}
-        aria-label={`${name}, tile ${visible.indexOf(tile) + 1} of ${visible.length}`}
+        aria-label={phone ? undefined : `${name}, tile ${visible.indexOf(tile) + 1} of ${visible.length}`}
         style={{ left: `${rect.left}%`, top: `${rect.top}%`, width: `${rect.width}%`, height: `${rect.height}%` }}
         className={cn(
           'absolute isolate flex min-h-0 min-w-0 flex-col border-seam bg-canvas outline-none after:pointer-events-none after:absolute after:inset-0 after:z-10 after:border',
@@ -59,10 +61,10 @@ export function Tile({ tile, rect, parked, opening, narrow, room, linked, onSlot
           linked ? 'after:border-dashed after:border-accent' : focused && visible.length > 1 && !dragging ? 'after:border-accent' : 'after:border-transparent',
         )}
       >
-        <TabStrip tile={tile} opening={opening} narrow={narrow} room={room} />
+        {!phone && <TabStrip tile={tile} opening={opening} narrow={narrow} room={room} />}
         {tab ? (
-          <TabsContent ref={slot} value={tab.id} forceMount className="relative flex-1">
-            {!run && <MissingRun tiled />}
+          <TabsContent ref={slot} value={tab.id} forceMount className="relative flex-1" {...(phone && { role: undefined, tabIndex: undefined, 'aria-labelledby': undefined })}>
+            {!run && <MissingRun tiled={!phone} />}
           </TabsContent>
         ) : (
           <div className={cn('flex min-h-0 flex-1 justify-center p-6', opening && 'opacity-0')}>

@@ -13,6 +13,16 @@ import (
 	"github.com/3xDevOps/Aether/internal/domain"
 )
 
+func TestRunFromDomainCarriesTheLinearIssue(t *testing.T) {
+	r := RunFromDomain(&domain.Run{LinearIssueURL: "https://linear.app/acme/issue/ENG-123"})
+	if r.LinearIssue != "ENG-123" || r.LinearIssueURL != "https://linear.app/acme/issue/ENG-123" {
+		t.Fatalf("linear_issue = %q, linear_issue_url = %q", r.LinearIssue, r.LinearIssueURL)
+	}
+	if r := RunFromDomain(&domain.Run{}); r.LinearIssue != "" || r.LinearIssueURL != "" {
+		t.Fatalf("a run with no link carries %q, %q", r.LinearIssue, r.LinearIssueURL)
+	}
+}
+
 func TestAttachRequestShellWire(t *testing.T) {
 	raw, err := json.Marshal(AttachRequest{RunID: "run-1", Shell: "tab-1"})
 	if err != nil {
