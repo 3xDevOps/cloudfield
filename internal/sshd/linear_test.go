@@ -165,3 +165,30 @@ func TestLinearConnectLeavesNoKeyForARemovedMember(t *testing.T) {
 		t.Errorf("removed member's Linear key: %v, want none", kerr)
 	}
 }
+
+// When the member lookup after a connect fails for any reason but the member
+// being gone, the key is deleted and the error says the member is unconfirmed.
+func TestLinearConnectDeletesTheKeyItCannotConfirm(t *testing.T) {
+	t.Parallel()
+	var e *testEnv
+	linearAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if err := e.store.Close(); err != nil {
+			t.Errorf("close store mid-connect: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"data":{"viewer":{"name":"Target","organization":{"name":"Acme","urlKey":"acme"},"assignedIssues":{"nodes":[]}}}}`))
+	}))
+	t.Cleanup(linearAPI.Close)
+	keys := api.NewKeys(t.TempDir())
+	e = newTestEnv(t, func(c *Config) {
+		c.Services.Linear = &api.Service{Keys: keys, Client: &api.Client{URL: linearAPI.URL, HTTP: linearAPI.Client()}}
+	})
+	targetKey, target := addMember(t, e, "Target", domain.RoleCollaborator, false)
+	err := controlAs(t, e, targetKey).Call(protocol.MethodLinearConnect, protocol.LinearConnectParams{APIKey: "key-target"}, nil)
+	wantRefusal(t, err, "linear.connect: could not confirm the member still exists:")
+	if strings.Contains(err.Error(), "no longer exists") {
+		t.Errorf("error = %v, want no claim that the member is gone", err)
+	}
+	if _, kerr := keys.Get(target.ID); !errors.Is(kerr, api.ErrNotConnected) {
+		t.Errorf("Linear key after an unconfirmed member: %v, want none", kerr)
+	}
+}

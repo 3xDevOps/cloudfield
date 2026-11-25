@@ -11,6 +11,7 @@ import (
 	"github.com/3xDevOps/Aether/internal/linear/api"
 	"github.com/3xDevOps/Aether/internal/permissions"
 	"github.com/3xDevOps/Aether/internal/protocol"
+	"github.com/3xDevOps/Aether/internal/store"
 )
 
 // LinearService is the seam for members' Linear connections. Satisfied by
@@ -49,7 +50,10 @@ func init() {
 			if delErr := s.disconnectLinear(member); delErr != nil {
 				err = errors.Join(err, delErr)
 			}
-			return nil, rpcError(fmt.Errorf("linear.connect: member no longer exists: %w", err))
+			if errors.Is(err, store.ErrNotFound) {
+				return nil, rpcError(fmt.Errorf("linear.connect: member no longer exists: %w", err))
+			}
+			return nil, rpcError(fmt.Errorf("linear.connect: could not confirm the member still exists: %w", err))
 		}
 		return out, nil
 	})

@@ -56,8 +56,8 @@ there too if the file may have been copied or backed up.
 
 ## RPC methods
 
-These methods use the caller's own key, and only a member's own credentials
-(dashboard, CLI) reach them. A [connector](connectors.md) is refused every one.
+These methods use the caller's own key, and only the member's own control
+channel (the dashboard uses it; no CLI command calls them) reaches them. A [connector](connectors.md) is refused every one.
 
 | Method | Parameters | Result |
 | --- | --- | --- |

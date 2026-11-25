@@ -280,6 +280,28 @@ func TestMergeTailnetMemberWithEdgeMember(t *testing.T) {
 	}
 }
 
+// A merge that cannot delete the absorbed member's Linear key still
+// commits, and says so once it has.
+func TestMergeReportsALinearKeyItCannotDelete(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	e, whois := mergeEnv(t, func(c *Config) { c.Services.Linear = &api.Service{Keys: api.NewKeys(dir)} })
+	tina := addTailnetMember(t, e, "tina@example.com", domain.RoleSuperAdmin)
+	tc := tailnetDial(t, e, whois, tina.TailnetLogin)
+	admin := controlClient(t, e)
+	if err := os.MkdirAll(filepath.Join(dir, string(tina.ID)+".key", "stuck"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	code := mergeStart(t, admin)
+	proposal := mustPropose(t, tc, code, string(e.member.ID))
+	_, err := mergeAccept(admin, proposal, false)
+	wantRefusal(t, err, "the absorbed member's Linear key was not deleted")
+	if _, gerr := e.store.GetMember(context.Background(), tina.ID); !errors.Is(gerr, store.ErrNotFound) {
+		t.Errorf("absorbed member after the merge: %v, want it merged away", gerr)
+	}
+}
+
 func TestMergeRefusals(t *testing.T) {
 	t.Parallel()
 	e, whois := mergeEnv(t, nil)
