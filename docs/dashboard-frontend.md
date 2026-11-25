@@ -5526,12 +5526,12 @@ device run.
 
 In a tile that is alone on screen, while the session's row holds 320px for it
 plus `minReadableWidth` (560px),
-Details is a `complementary "Run details"` beside the view, toggled by
+Details is a `complementary "Session details"` beside the view, toggled by
 the header button or `Mod+.` and remembered (`detailsOpen`, persisted). When
 the row narrows, for example when the assistant docks, the inline panel goes
 and comes back once there is room again. Narrower rows, and every tile
 beside another, open it as a side sheet over the window's right edge and
-phones as a bottom sheet, each a `dialog "Run details"` that returns focus to
+phones as a bottom sheet, each a `dialog "Session details"` that returns focus to
 whatever opened it.
 
 Off a phone, the `separator "Resize session details"` on the panel's left edge

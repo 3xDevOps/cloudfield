@@ -642,8 +642,8 @@ focused tile and drawn as `secondary` in any other, so the screen keeps one fill
 button. A session with a pull request shows
 its number as a muted link and its check state as a ghost
 button led by a `StatusDot`: failed, working, done or neutral. Details is a
-320px side panel in a tile that is alone on screen and wide enough, a side
-sheet otherwise and a bottom sheet on phones; it
+side panel, 320px to 560px wide, in a tile that is alone on screen and wide
+enough, a side sheet otherwise and a bottom sheet on phones; it
 never overlays the terminal on wide screens. Standard sessions keep control in
 the terminal toolbar, or on a line under a terminal this tab does not
 control. On a desktop an Enhanced session shows watchers as avatars in the
