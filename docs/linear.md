@@ -1,9 +1,14 @@
 # Linear
 
-Each member can save a personal Linear API key on the server. The server uses
-it to read the Linear issues assigned to that member, so the dashboard can list
-them and start a session from one. It only reads: it never creates or updates a
-Linear issue.
+Cloudfield links a session to a Linear issue and lets each member save a
+personal Linear API key on the server. The server uses the key to read Linear
+issues for that member. It only reads: it never creates or updates a Linear
+issue.
+
+The dashboard's **Settings**, **Linear** section and its **Linear** page, which
+lists your issues and starts a session from one, arrive with the dashboard
+change. Until then, nothing in the CLI or dashboard saves a key; only the
+`linear.connect` method below does.
 
 ## Connect Linear's GitHub integration
 
@@ -11,30 +16,29 @@ Linear links a pull request to its issue and moves the issue's status when the
 pull request opens and merges. Cloudfield does not do this; turn it on in
 Linear under **Settings**, **Integrations**, **GitHub**.
 
+## Link a session to an issue
+
+```sh
+cloudfield session "fix the flaky retry" --agent claude --linear-issue https://linear.app/acme/issue/ENG-123
+```
+
+Without `--linear-issue`, the first Linear issue link in the task is used. The
+link is fixed at launch. [Agents](agents.md) covers the form of the URL and the
+error a malformed one gives.
+
 ## Save your API key
 
 1. In Linear, open **Settings**, **Security & access**, **Personal API keys**
    and choose **New API key**. Linear shows the key, which starts with
    `lin_api_`, once.
-2. Save it with the `linear.connect` method below. The dashboard's
-   **Settings**, **Linear** page and the **Linear** issue page with its **Start
-   session** button are not shipped yet.
+2. Call `linear.connect` with `{"api_key": "<key>"}` as the signed-in member.
 
 The server checks the key with Linear's `viewer` query before it saves it, and
-shows Linear's own error if Linear refuses it. `linear.disconnect` deletes the
-key. Revoke the key in Linear as well if it leaked.
+returns Linear's own error if Linear refuses it. `linear.disconnect` deletes
+the key. Revoke the key in Linear as well if it leaked.
 
-The key belongs to you. Another member's connection, and the key they save, is
-separate, and the server reads issues with the key of whoever asks.
-
-## Start a session from an issue
-
-Not shipped yet: the dashboard's **Linear** page lists the open issues assigned to you, newest update first,
-up to 50. Completed and canceled issues are left out. Filter by team key such as
-`CLO`, or by text in the title. **Start session** opens the launch form with the
-issue's identifier, title and URL in the task.
-
-`cloudfield run --linear-issue <url>` is not shipped yet either.
+The key belongs to you. Each member's key is separate, and the server reads
+issues with the key of whoever asks.
 
 ## Where the key is stored
 
@@ -61,7 +65,7 @@ These methods use the caller's own key, and only a member's own credentials
 | `linear.connect` | `api_key` | the same as `linear.status`; saves the key only if Linear accepts it |
 | `linear.disconnect` | none | empty |
 | `linear.teams` | none | `teams`: `key`, `name` |
-| `linear.issues` | `team` (key), `query` (title text), both optional | `issues`: `identifier`, `title`, `url`, `state` (`name`, `type`, `color`), `team`, `assignee`, `updated_at` |
+| `linear.issues` | `team` (key such as `CLO`), `query` (title text), both optional | up to 50 open issues assigned to you, newest update first: `identifier`, `title`, `url`, `state` (`name`, `type`, `color`), `team`, `assignee`, `updated_at`. Completed and canceled issues are left out. |
 | `linear.issue` | `identifier`, such as `CLO-6` | one issue with `identifier`, `title`, `url` and `state` |
 
 Without a saved key, every method but `linear.status`, `linear.connect` and
