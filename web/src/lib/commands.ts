@@ -34,11 +34,13 @@ import {
   UserPlus,
 } from '@/components/icons'
 import { api, ApiError, codeInvalidState, codeNotFound, type Api } from '@/lib/api'
+import { androidShell } from '@/lib/android-push'
 import { copyText } from '@/lib/clipboard'
 import { errorSentence, message } from '@/lib/format'
 import { runLabel } from '@/lib/status'
 import { awaitsCompletion, outcomeHeld } from '@/lib/needs-you'
 import { allowed } from '@/lib/permissions'
+import { exportSession } from '@/lib/session-export'
 import type { CloseOutcome, LinkStatus, Member, PullResult, Run, Workspace } from '@/lib/types'
 import { dismissOnIdentityChange } from '@/components/failure'
 import { closeBusyText, closeChangedText, closeState, closeWarned, readCloseCheck } from '@/lib/close-check'
@@ -597,6 +599,19 @@ export function runCommands(ctx: RunCommandContext): Command[] {
           d.recordPull(id, result)
           return result
         }),
+    })
+  }
+
+  // The Android app's WebView has no download handler, so a saved file would go nowhere.
+  if (cap.hasMethod('run.get') && cap.hasMethod(run.acp ? 'run.acp.history' : 'terminal.history') && !androidShell()) {
+    list.push({
+      id: 'export',
+      label: 'Export session',
+      Icon: FileText,
+      value: 'download save transcript conversation history',
+      done: 'Export',
+      report: (name) => [`Exported ${name as string}`],
+      perform: (d) => exportSession(d.api, id, useStore.getState().workspaces[run.workspace_id]?.name),
     })
   }
 

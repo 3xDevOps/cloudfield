@@ -98,7 +98,7 @@ test.each(['fine', 'coarse'] as const)('every verb is labeled and keyboard reach
   await userEvent.keyboard('{Enter}')
   const menu = within(await screen.findByRole('menu'))
   expect(names(menu)).toEqual([
-    'Pause session', 'Forward a port…', 'Watch…', 'Protect session', 'Pull branch', 'Hand off…', 'Captures…', 'Close session…', 'Kill session', 'Delete session',
+    'Pause session', 'Forward a port…', 'Watch…', 'Protect session', 'Pull branch', 'Export session', 'Hand off…', 'Captures…', 'Close session…', 'Kill session', 'Delete session',
   ])
   fireEvent.click(menu.getByRole('menuitem', { name: 'Pause session' }))
   await waitFor(() => expect(api.runPause).toHaveBeenCalledWith(record.id))
@@ -300,7 +300,7 @@ test('the pull toast copies the switch command and switches to the pulled branch
 test('a viewer gets no mutating actions, but can watch and use eligible local Pull', async () => {
   render(<RunActions run={seed({ paused: false, members: [alice, vera], self: vera, local: ['pull'] })} />)
   const menu = await openMore()
-  expect(names(menu)).toEqual(['Watch…', 'Pull branch'])
+  expect(names(menu)).toEqual(['Watch…', 'Pull branch', 'Export session'])
 })
 
 test('a collaborator can steer and kill another member run, but cannot protect or hand it off', async () => {
@@ -650,7 +650,7 @@ test('a pending kill offers no predicted verb until it is answered', async () =>
   render(<Live />)
   await choose(verbs[2])
   await waitFor(() => expect(runOne(useStore.getState()).status).toBe('abandoned'))
-  expect(names(await openMore())).toEqual(['Close session…', 'Delete session'])
+  expect(names(await openMore())).toEqual(['Export session', 'Close session…', 'Delete session'])
   await userEvent.keyboard('{Escape}')
   await act(async () => resolve({}))
   expect((await openMore()).getByRole('menuitem', { name: 'Archive session' })).toBeTruthy()

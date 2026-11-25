@@ -1,6 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState, type DragEvent, type ReactNode } from 'react'
 import { toast } from 'sonner'
 import type { Api } from '@/lib/api'
+import { saveFile } from '@/lib/download'
 import { useRefuseStrayFileDrops } from '@/lib/file-drag'
 import { errorSentence } from '@/lib/format'
 import { DeleteDialog, MoveDialog, ReplaceDialog } from '@/routes/files/home-dialogs'
@@ -144,12 +145,7 @@ export function HomeFiles({ client, onOpen, children }: { client: Api; onOpen: (
           (result) => {
             if (!same()) return
             const bytes = Uint8Array.from(atob(result.content_base64), (char) => char.charCodeAt(0))
-            const link = document.createElement('a')
-            link.href = URL.createObjectURL(new Blob([bytes]))
-            link.download = baseName(path)
-            link.click()
-            // Some engines read the blob only after the click has returned.
-            window.setTimeout(() => URL.revokeObjectURL(link.href), 60_000)
+            saveFile(new Blob([bytes]), baseName(path))
           },
           (err) => toast.error(errorSentence(err)),
         )
