@@ -37,7 +37,7 @@ function TabLabel({ run, tab, background, narrow }: { run: RunRecord; tab: TileT
       {!badge && <StatusDot tone={asks ? 'needs-you' : toneOf(shown)} />}
       {/* A background tab keeps its floor for the view's name. */}
       {!narrow && !(several && background) && <AgentGlyph agent={run.harness} />}
-      <span className="min-w-[4ch] shrink-[100] truncate" title={`${runLabel(run)}\n${stateTitle(shown, shown.state === 'ready' && run.review_changed_at ? run.review_changed_at : run.stateChangedAt)}`}>{runLabel(run)}</span>
+      <span className={cn('min-w-[4ch] shrink-[100] truncate', background && 'max-w-60')} title={`${runLabel(run)}\n${stateTitle(shown, shown.state === 'ready' && run.review_changed_at ? run.review_changed_at : run.stateChangedAt)}`}>{runLabel(run)}</span>
       {several && (
         <span data-slot="tab-view" className="flex min-w-0 items-center gap-1 text-muted">
           <span aria-hidden>·</span>
@@ -46,7 +46,7 @@ function TabLabel({ run, tab, background, narrow }: { run: RunRecord; tab: TileT
         </span>
       )}
       {run.protected && <ProtectedMark />}
-      {badge && <Badge tone="needs-you">Needs you</Badge>}
+      {badge && <Badge tone="needs-you"><StatusDot tone="needs-you" />Needs you</Badge>}
     </>
   )
 }
@@ -68,9 +68,10 @@ function SessionTab({ tile, tab, narrow, onClose }: {
     <div
       data-tab={tab.id}
       className={cn(
-        'flex h-full min-w-28 items-center overflow-hidden border-r border-seam',
+        'flex h-full max-w-full min-w-28 items-center overflow-hidden border-r border-seam',
         lifted && 'outline-1 -outline-offset-1 outline-control outline-dashed *:opacity-40',
-        active ? 'max-w-full' : 'max-w-64',
+        // A tight strip cuts every background title to the same width.
+        narrow && !active && 'flex-1 basis-0',
         // The floor that keeps four letters of the title beside a view's name or the badge.
         (active || !narrow) && 'has-data-[slot=badge]:min-w-48 has-data-[slot=tab-view]:min-w-48',
       )}
@@ -78,7 +79,7 @@ function SessionTab({ tile, tab, narrow, onClose }: {
       <TabsTrigger
         value={tab.id}
         onPointerDown={dragFrom({ tabId: tab.id, runId: tab.runId, view: run && resolveView(tab, run, ctx.cap, ctx.memory) })}
-        className="min-w-0 shrink group-data-[look=underline]/tabs:pr-7 group-data-[look=underline]/tabs:pl-3 [&_[data-slot=status-dot]]:size-2.5 [&_[data-slot=tab-view]]:shrink-0"
+        className="min-w-0 shrink group-data-[look=underline]/tabs:pt-0.5 group-data-[look=underline]/tabs:pr-7 group-data-[look=underline]/tabs:pl-3 [&_[data-slot=status-dot]]:size-2.5 [&_[data-slot=tab-view]]:shrink-0"
         onDoubleClick={() => {
           if (cramped || tileList(layout.root).length < 2) return
           changeTiles((before) => maximizeTile(before, tile.id))
@@ -105,18 +106,19 @@ const chipFloor = 112
 /** The floor of a tab that names its view or carries the badge. */
 const wideFloor = 192
 
-/** The tiles the maximized one parks, those that need you first: a chip each in the room the tabs leave, or one menu. */
+/** The tiles the maximized one parks, those that need you first, each named by the tab that does: a chip each in the room the tabs leave, or one menu. */
 function ParkedPill({ tile }: { tile: Tile }) {
   const { layout, ctx, say } = useContext(TileAreaContext)!
   const [roomRef, room] = useElementSize<HTMLDivElement>()
-  const all = tileList(layout.root).filter((other) => other.id !== tile.id).map((parked) => {
-    const tab = parked.tabs.find((candidate) => candidate.id === parked.active)
+  const others = tileList(layout.root).filter((other) => other.id !== tile.id)
+  const asking = useNeedsYouRuns(others.flatMap((parked) => parked.tabs.map((tab) => tab.runId)))
+  const all = others.map((parked) => {
+    const tab = parked.tabs.find((candidate) => asking.has(candidate.runId)) ?? parked.tabs.find((candidate) => candidate.id === parked.active)
     return { parked, tab, run: tab && ctx.runs[tab.runId] }
   })
-  const asking = useNeedsYouRuns(all.flatMap(({ run }) => run?.id ?? []))
   const chips = [...all.filter(({ run }) => run && asking.has(run.id)), ...all.filter(({ run }) => !run || !asking.has(run.id))]
-  const open = ({ parked, run }: (typeof chips)[number]) => {
-    changeTiles((before) => focusTile(before, parked.id))
+  const open = ({ parked, tab, run }: (typeof chips)[number]) => {
+    changeTiles((before) => (tab ? activateTab(before, tab.id) : focusTile(before, parked.id)))
     say(`${run ? runLabel(run) : 'New tile'} maximized`)
   }
   const label = (chip: (typeof chips)[number]) => (chip.tab && chip.run ? <TabLabel run={chip.run} tab={chip.tab} background narrow={false} /> : 'New tile')
@@ -172,7 +174,8 @@ export function TabStrip({ tile, narrow, room }: {
   const asking = useNeedsYouRuns(tile.tabs.map((tab) => tab.runId))
   // 36px for "+" and 92px for the menu. Tabs that do not fit at their floor fold into it from the end, those that need you last.
   const tight = tabsRoom.width > 0 && tabsRoom.width < 36 + tile.tabs.length * wideFloor
-  const over = tight ? 36 + wideFloor + (tile.tabs.length - 1) * chipFloor - tabsRoom.width : 0
+  const activeFloor = tiles.flatMap((other) => other.tabs).filter((tab) => tab.runId === run?.id).length > 1 ? wideFloor : chipFloor
+  const over = tight ? 36 + activeFloor + (tile.tabs.length - 1) * chipFloor - tabsRoom.width : 0
   const background = tile.tabs.filter((tab) => tab.id !== tile.active).reverse()
   const folded = over > 0
     ? [...background.filter((tab) => !asking.has(tab.runId)), ...background.filter((tab) => asking.has(tab.runId))].slice(0, Math.ceil((over + 92) / chipFloor))
@@ -210,7 +213,7 @@ export function TabStrip({ tile, narrow, room }: {
             {folded.length > 0 && (
               <Menu>
                 <MenuTrigger asChild>
-                  <Button variant="ghost" size="sm" className="shrink-0">
+                  <Button variant="ghost" size="sm" className="h-6 shrink-0 border border-seam px-1.5">
                     {folded.some((tab) => asking.has(tab.runId)) && <StatusDot tone="needs-you" />}
                     {folded.length} more
                     <ChevronDown aria-hidden />
@@ -228,12 +231,12 @@ export function TabStrip({ tile, narrow, room }: {
             <PopoverTrigger asChild>
               <Button variant="ghost" size="icon-sm" label="Add a tab"><Plus /></Button>
             </PopoverTrigger>
-            <PopoverContent className="flex flex-col">
+            <PopoverContent className="flex max-h-[min(calc(100dvh-16px),var(--radix-popover-content-available-height))] flex-col">
               <Picker tileId={tile.id} runId={run?.id} autoFocus onPicked={() => pick(null)} />
             </PopoverContent>
           </>
         ) : (
-          <div className={cn('flex h-full items-center border-b-2 pl-3 text-ui font-medium', focused ? 'border-accent' : 'border-transparent')}>
+          <div className={cn('flex h-full items-center border-b-2 pt-0.5 pl-3 text-ui font-medium', focused ? 'border-accent' : 'border-transparent')}>
             New tile
             <Button
               variant="ghost"

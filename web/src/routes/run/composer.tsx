@@ -144,6 +144,7 @@ function ComposerBox({ textarea, autoFocus, collapsed, value, onChange, onCaret,
   const [focused, setFocused] = useState(false)
   const caretPlaced = useRef(false)
   const dictating = useDictationState(textarea).active
+  const more = value.trimEnd().split('\n').length - 1
   useEffect(() => {
     if (autoFocus) textarea.current?.focus()
   }, [autoFocus, textarea])
@@ -218,9 +219,12 @@ function ComposerBox({ textarea, autoFocus, collapsed, value, onChange, onCaret,
         }}
       />
       {collapsed ? (
-        <Button variant="ghost" size="icon-sm" label="Send" disabled={!value.trim() || readOnly} onClick={onSend}>
-          <ArrowUp />
-        </Button>
+        <>
+          {more > 0 && <span className="shrink-0 px-1 text-ui-sm text-muted">+{more} {more === 1 ? 'line' : 'lines'}</span>}
+          <Button variant="ghost" size="icon-sm" label="Send" disabled={!value.trim() || readOnly} onClick={onSend}>
+            <ArrowUp />
+          </Button>
+        </>
       ) : (
         <div className="flex min-w-0 flex-wrap items-center gap-1 px-2 pb-2">{footer}</div>
       )}

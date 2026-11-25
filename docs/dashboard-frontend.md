@@ -3091,11 +3091,11 @@ when the focus does. The strip is a `tablist` named "Sessions in this tile":
   layout adds " · " and the view's icon and name to each of them, and its
   background tabs drop the glyph. A
   background tab of a session that needs you swaps its dot for a **Needs you**
-  badge, which stands in for the view's name. Background tabs truncate at
-  256px. A tab keeps four letters of its title: its floor is 112px, or 192px
+  badge, which stands in for the view's name. A background tab's title
+  truncates at 240px. A tab keeps four letters of its title: its floor is 112px, or 192px
   while it names its view or carries the badge. A strip with under 192px a
   tab is tight: its background tabs show the view's icon without the name and
-  a gold dot for the badge. The strip never scrolls. Tabs that do not fit at
+  a gold dot for the badge, all cut to one width. The strip never scrolls. Tabs that do not fit at
   their floor fold into an "N more" menu before "+", the last background tab
   first and those that need you last; the menu carries a gold dot while a
   folded tab needs you, and picking a tab there activates it.
@@ -3116,7 +3116,7 @@ The picker (`picker.tsx`) is headed "Open in this tile" over the search
 field "Find a session or view". It lists "Other views of `<title>`" for the
 tile's session, or the session an empty tile was split from, then the
 sessions in the sidebar's groups, then **Already on screen**. The list takes
-the height its tile or popover leaves and fades over its last 32px where more lies below;
+the height its tile leaves, or in a popover up to the window's, and fades over its last 32px where more lies below;
 **New session** stays under a seam at the foot. A session already on screen opens on its first view no tab holds;
 with none left its own tile takes the focus. An empty tile shows the picker
 as its body under a strip that reads "New tile" with **Close tile**, and its
@@ -3172,7 +3172,8 @@ what it holds.
 the area with the focused tile. The other tiles are parked: hidden where
 they were and still mounted, so restoring them reloads nothing and resizes
 no terminal. They are listed as chips in a pill on the strip, those that need
-you first and with the **Needs you** badge; the tabs and the pill share the
+you first. A chip names the tile's tab that needs you, with the **Needs
+you** badge, else its active tab, and opens that tab; the tabs and the pill share the
 strip half and half, and a pill with under 112px a chip folds into an
 "N parked" menu.
 A chip swaps the maximized tile, and
@@ -3483,8 +3484,8 @@ which drops those messages from the timeline; the choice is per session, in
 viewport; the next `Esc` is the session's `leave-run`.
 
 In a [tile](#session-tiles) that is not the focused one the composer is one
-line: the same field showing a draft's first line, with a **Send** icon and
-no toolbar. A press on it focuses the tile and it opens. A tile on Changes,
+line: the same field showing a draft's first line, "+N lines" when it has
+more, a **Send** icon and no toolbar. A press on it focuses the tile and it opens. A tile on Changes,
 Files or Trace keeps that one-line field under a seam, for an
 Enhanced session this tab may steer, while the session's Chat is not on
 screen, no request is pending and the agent's stream is live; it opens on a click or `c` and folds when

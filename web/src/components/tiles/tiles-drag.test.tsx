@@ -378,7 +378,7 @@ describe('dragging a view', () => {
 
 describe('a strip with more tabs than room', () => {
   it('folds the tabs that do not fit into a menu, the last first, and a moved tab still lands where it was dropped', async () => {
-    show(440)
+    show(360)
     await tab('run_2')
     await tab('run_3')
     const strip = within(within(tiles()[0]).getByRole('tablist', { name: 'Sessions in this tile' }))
@@ -394,5 +394,12 @@ describe('a strip with more tabs than room', () => {
     expect(state().route.params.runId).toBe('run_3')
     expect(strip.getByRole('tab', { name: new RegExp(third) }).getAttribute('aria-selected')).toBe('true')
     expect(strip.queryByRole('tab', { name: new RegExp(first) })).toBeNull()
+  })
+
+  it('folds nothing while every tab fits at its floor', async () => {
+    show(400)
+    await tab('run_2')
+    await tab('run_3')
+    expect(within(within(tiles()[0]).getByRole('tablist', { name: 'Sessions in this tile' })).getAllByRole('tab')).toHaveLength(3)
   })
 })

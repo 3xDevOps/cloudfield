@@ -95,7 +95,7 @@ export function Picker({ tileId, runId, autoFocus, onPicked, className }: {
                 return (
                   <CommandItem key={view} value={runViewLabel[view]} onSelect={() => pick(run.id, view)} className="border border-seam px-0">
                     {/* cmdk takes the item's own pointer moves, which a tooltip opens on. */}
-                    <Tooltip content={elsewhere[view]?.where} disabled={!elsewhere[view]} side="bottom">
+                    <Tooltip content={elsewhere[view]?.where} disabled={!elsewhere[view]}>
                       <span className="flex items-center gap-2 self-stretch px-2">
                         <Icon aria-hidden />
                         {runViewLabel[view]}

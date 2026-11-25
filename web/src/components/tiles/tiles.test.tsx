@@ -304,13 +304,18 @@ describe('tabs', () => {
     expect(state().route.params).toEqual({ runId: 'run_2', agent: 'agent_1' })
   })
 
-  it('puts the Needs you badge on a background tab and the lock on a protected session', () => {
+  it('puts the Needs you badge on a background tab and the lock on a protected session, and names a parked tile by the tab that needs you', async () => {
     act(() => state().upsertRun({ ...seeds[1], protected: true }))
     show('run_3')
     expect(strip(1).queryByText('Needs you', { selector: '[data-slot=badge]' })).toBeNull()
     arrange((layout, ctx) => openTab(layout, layout.focused, 'run_2', ctx))
     expect(within(strip(1).getByRole('tab', { name: /answer the schema question/ })).getByText('Needs you', { selector: '[data-slot=badge]' })).toBeDefined()
     expect(within(strip(1).getByRole('tab', { name: new RegExp(second) })).getByRole('img', { name: /^Protected/ })).toBeDefined()
+    beside('run_1')
+    await settled()
+    fireEvent.click(tile(2).getByRole('button', { name: 'Maximize' }))
+    fireEvent.click(tile(1).getByRole('button', { name: /answer the schema question/ }))
+    expect(state().route.params.runId).toBe('run_3')
   })
 })
 
@@ -469,15 +474,15 @@ describe('the header row', () => {
     expect(within(header(1)).getByRole('button', { name: 'Reply' }).className).not.toContain('bg-action')
     expect(gold()).toEqual([within(header(3)).getByRole('button', { name: 'Reply' })])
 
+    fireEvent.click(tile(3).getByRole('button', { name: 'Maximize' }))
+    expect(frames.get('run_3:session')).toMatchObject({ controls: true, arrows: { changes: { where: 'On screen in the tile at right' } } })
+    expect(frames.get('run_3:changes')).toMatchObject({ controls: false, chatOnScreen: true })
+    fireEvent.click(screen.getByRole('button', { name: 'Restore tiles' }))
     fireEvent.pointerDown(tiles()[1])
     expect(toolbars()).toEqual([0, 1, 1])
     expect(gold()).toEqual([within(header(2)).getByRole('button', { name: 'Reply' })])
   })
 
-    fireEvent.click(tile(3).getByRole('button', { name: 'Maximize' }))
-    expect(frames.get('run_3:session')).toMatchObject({ controls: true, arrows: { changes: { where: 'On screen in the tile at right' } } })
-    expect(frames.get('run_3:changes')).toMatchObject({ controls: false, chatOnScreen: true })
-    fireEvent.click(screen.getByRole('button', { name: 'Restore tiles' }))
   it('sizes the row from its own width: icons for the view names under 800px, and under 560px no reason and Workflow under More', async () => {
     const chat = () => within(tile(1).getByRole('tablist', { name: 'Session views' })).getByRole('tab', { name: 'Chat' })
     show('run_3')
@@ -634,6 +639,7 @@ describe('the composer', () => {
     fireEvent.pointerDown(tiles()[0])
     expect(fields(2)).toEqual([field])
     expect(field.rows).toBe(1)
+    expect(tile(2).getByText('+1 line')).toBeDefined()
     expect(field.value).toBe('ship it\nthen rest')
     expect(fields(1)[0].rows).toBe(2)
     fireEvent.pointerDown(tiles()[1])
