@@ -39,7 +39,7 @@ describe('linear page', () => {
   })
 
   it('offers Open session instead of Start session for an issue with a live linked session', async () => {
-    useStore.setState({ runs: { 'run-1': { id: 'run-1', status: 'running', linear_issue: 'ENG-123' } as never } })
+    useStore.setState({ runs: { 'run-1': { id: 'run-1', status: 'running', linear_issue: 'ENG-123', linear_issue_url: 'https://linear.app/acme/issue/ENG-123' } as never } })
     renderPage()
     await screen.findByText(issue.title)
 
@@ -49,8 +49,17 @@ describe('linear page', () => {
     expect(useStore.getState().route).toMatchObject({ name: 'run', params: { runId: 'run-1' } })
   })
 
+  it('does not match a live session linked to the same ID in another Linear workspace', async () => {
+    useStore.setState({ runs: { 'run-1': { id: 'run-1', status: 'running', linear_issue: 'ENG-123', linear_issue_url: 'https://linear.app/other/issue/ENG-123' } as never } })
+    renderPage()
+    await screen.findByText(issue.title)
+
+    expect(screen.getByRole('button', { name: 'Start session' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Open session' })).toBeNull()
+  })
+
   it.each(['queued', 'provisioning', 'running', 'needs-attention'])('offers Open session for a %s linked session', async (status) => {
-    useStore.setState({ runs: { 'run-1': { id: 'run-1', status, linear_issue: 'ENG-123' } as never } })
+    useStore.setState({ runs: { 'run-1': { id: 'run-1', status, linear_issue: 'ENG-123', linear_issue_url: 'https://linear.app/acme/issue/ENG-123' } as never } })
     renderPage()
     await screen.findByText(issue.title)
 
@@ -58,7 +67,7 @@ describe('linear page', () => {
   })
 
   it('offers Start session again once the linked session finished', async () => {
-    useStore.setState({ runs: { 'run-1': { id: 'run-1', status: 'completed', linear_issue: 'ENG-123' } as never } })
+    useStore.setState({ runs: { 'run-1': { id: 'run-1', status: 'completed', linear_issue: 'ENG-123', linear_issue_url: 'https://linear.app/acme/issue/ENG-123' } as never } })
     renderPage()
     await screen.findByText(issue.title)
 

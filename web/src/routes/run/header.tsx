@@ -153,7 +153,7 @@ function StateLine({ run, agentName }: { run: RunRecord; agentName: string }) {
             size="sm"
             hint="Copy branch name"
             aria-label={`Copy branch ${run.branch}`}
-            className="max-w-full"
+            className="max-w-full min-w-0 shrink"
             onClick={(event) => void copyText(run.branch, event.currentTarget)}
           >
             <GitBranch aria-hidden />
@@ -175,10 +175,10 @@ function StateLine({ run, agentName }: { run: RunRecord; agentName: string }) {
           <span aria-hidden>·</span>
         </>
       )}
-      <span className="flex min-w-0 items-center gap-1.5" title={[agentName, mode, run.model, run.effort].filter(Boolean).join(' · ')}>
+      <span className="flex shrink-0 items-center gap-1.5" title={[agentName, mode, run.model, run.effort].filter(Boolean).join(' · ')}>
         <AgentGlyph agent={run.harness} />
         <span className="sr-only">{agentName} · </span>
-        <span className="min-w-0 truncate">{mode}</span>
+        <span>{mode}</span>
       </span>
       {run.permission && run.permission !== 'default' && (
         <>

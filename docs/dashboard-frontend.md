@@ -5660,18 +5660,20 @@ reports a saved key. The server's `linear.status` answers an empty status
 when no key exists, so `readLinear` in `src/store/linear.ts` treats any
 failure that is an `ApiError` with a JSON-RPC code other than `codeUnavailable`
 and whose message carries the server's `linear: ` text as a saved key:
-`connected` stays true with the `error`, and `refused` is set when that text
-reads as authentication or 401/403 wording, so Settings can say `Linear refused
+`connected` stays true with the `error`, and `refused` is set only when that
+text starts `Linear refused the API key: ` (the server's marker for an
+authentication error in Linear's `errors` array or a 401/403 from Linear; a Go
+transport error such as `Post "...": Forbidden` from a proxy lacks it), so Settings can say `Linear refused
 your saved key` or `Could not reach Linear` and offer **Disconnect** and
 **Replace key** for both. An unconfigured service (`codeUnavailable`) and any
 error without the server's text (a proxy's 401, a transport failure) are not
-matched against wording at all: `connected` is false with the `error`, so the
+matched at all: `connected` is false with the `error`, so the
 entry and **Disconnect** stay away and Settings shows `Cloudfield could not
 check the connection. Your key is unchanged.` with **Retry**. The
 entry stays hidden until a key is saved by design: Settings › Connections ›
-Linear and the command palette are the way in. `?page=linear` without a key
+Linear is the way in. `?page=linear` without a key
 still opens and shows **Linear is not connected** with the server's error and a
-button to Settings; with a refused key it shows **Linear refused your API key**,
+button to Settings; with a refused key it shows **Linear refused your API key** in the failed tone, as Settings does (gold is for not connected),
 **Open Linear settings** as the primary button, **Retry** second, and no
 search or team filter. The page holds a header primary while an error with a
 filled button shows, so the phone's **New** pill is not gold beside it. Status
@@ -5689,15 +5691,15 @@ says the session will be linked, with **Unlink**. The draft carries the link
 (`LaunchDraft.linear`), so a restored draft shows its own chip. The chip's `<ID>` links to the issue. When Start
 session is pressed for another issue while a draft is open, or for the same
 issue again after **Unlink** (offers are compared by identity, not identifier),
-a warning callout says the draft was kept and offers a secondary **Use `<ID>`
+a neutral callout says the draft was kept and offers a secondary **Use `<ID>`
 instead**, which replaces the task and link; phone and desktop share one component.
 
 The page picks the table or the stacked list from its own width (920px), shows
 the subtitle in the page on a phone, and shows **Open session**, with a working
-dot, in place of **Start session** for an issue with a live linked session.
+dot, in place of **Start session** for an issue with a live linked session (the run's canonical `linear_issue_url` equals the issue's URL without its slug, so the same ID in another workspace does not match).
 `src/routes/run/linear-issue.tsx` is the link to `run.linear_issue_url`: in the
 session header with the status text from `linear.issue` where the header line
-has 32rem, in the Details panel's **Linear** row always with the status, and
+has 32rem, in the Details panel's **Linear** row always with the status as muted text beside the accent `<ID>` link, and
 without status or lookup in the phone header (never a status dot, which belongs
 to session state). [linear.md](linear.md) covers the behavior.
 

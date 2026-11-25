@@ -16,7 +16,7 @@ import { useIsMobile } from '@/lib/breakpoints'
 import { useElementSize } from '@/lib/hooks'
 import type { LinearIssue, LinearTeam } from '@/lib/types'
 import { cn } from '@/lib/utils'
-import { linearTask } from '@/routes/linear/issues'
+import { canonicalIssueURL, linearTask } from '@/routes/linear/issues'
 import { LinearStatusIcon } from '@/routes/linear/status-icon'
 import { registerRoute, type RouteProps } from '@/routes/registry'
 import { useStore } from '@/store'
@@ -41,7 +41,7 @@ function Status({ issue }: { issue: LinearIssue }) {
 }
 
 function Actions({ issue }: { issue: LinearIssue }) {
-  const open = useStore((s) => Object.values(s.runs).find((run) => run.linear_issue === issue.identifier && !isTerminal(run.status))?.id)
+  const open = useStore((s) => Object.values(s.runs).find((run) => run.linear_issue_url === canonicalIssueURL(issue.url) && !isTerminal(run.status))?.id)
   return (
     <span className="flex shrink-0 items-center gap-2">
       {open ? (
@@ -68,7 +68,7 @@ function ReadError({ fault, error, onRetry }: { fault: Fault; error: string; onR
   const retry = <Button size="sm" variant={fault === 'refused' ? 'secondary' : 'primary'} onClick={onRetry}>Retry</Button>
   return (
     <Callout
-      tone="needs-you"
+      tone={fault === 'refused' ? 'failed' : 'needs-you'}
       role="alert"
       title={fault === 'no-key' ? 'Linear is not connected' : fault === 'refused' ? 'Linear refused your API key' : 'Could not load issues'}
       actions={

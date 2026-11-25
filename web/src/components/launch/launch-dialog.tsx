@@ -106,8 +106,8 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   const [prefill] = useState(() => useStore.getState().paletteLaunchTask)
   const offeredTask = useStore((s) => s.paletteLaunchTask)
   const offered = useStore((s) => s.paletteLaunchLinear)
-  // The offer the form took, by identity: the same issue offered again after Unlink is a new offer.
-  const [taken, setTaken] = useState(() => (restored ? null : offered))
+  // The offer the form took, by identity: the same issue offered again after Unlink is a new offer. A draft already linked to it has taken it.
+  const [taken, setTaken] = useState(() => (restored && restored.linear?.identifier !== offered?.identifier ? null : offered))
   const [link, setLink] = useState(restored ? restored.linear ?? null : offered)
   const pending = offered && offered !== taken && offered.identifier !== link?.identifier ? offered : null
   // Text from the Linear page is the member's own pick, not text shared from another app.

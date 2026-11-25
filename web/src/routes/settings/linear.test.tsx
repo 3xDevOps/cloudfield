@@ -53,11 +53,11 @@ describe('Settings Linear section', () => {
 
   it('offers Replace key beside Disconnect, in the danger style, when Linear refuses the saved key', async () => {
     const linearConnect = vi.fn(async () => ({ connected: true, name: 'Ada Lovelace' }))
-    const client = fakeApi({ linearConnect, linearStatus: vi.fn(async () => { throw new ApiError(500, 'linear: Authentication required, not authenticated', -32603) }) })
+    const client = fakeApi({ linearConnect, linearStatus: vi.fn(async () => { throw new ApiError(500, 'linear: Linear refused the API key: Authentication required, not authenticated', -32603) }) })
     render(<LinearSection client={client} />)
 
     const alert = await screen.findByRole('alert')
-    expect(alert.textContent).toBe('linear: Authentication required, not authenticated')
+    expect(alert.textContent).toBe('linear: Linear refused the API key: Authentication required, not authenticated')
     expect(alert.getAttribute('data-tone')).toBe('failed')
     expect(screen.getByText('Linear refused your saved key')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Disconnect' })).toBeTruthy()
@@ -69,7 +69,7 @@ describe('Settings Linear section', () => {
   })
 
   it('disconnects a key Linear refuses', async () => {
-    const client = fakeApi({ linearStatus: vi.fn(async () => { throw new ApiError(500, 'linear: Authentication required', -32603) }) })
+    const client = fakeApi({ linearStatus: vi.fn(async () => { throw new ApiError(500, 'linear: Linear refused the API key: Authentication required', -32603) }) })
     render(<LinearSection client={client} />)
 
     fireEvent.click(await screen.findByRole('button', { name: 'Disconnect' }))

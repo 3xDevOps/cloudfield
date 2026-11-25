@@ -29,7 +29,7 @@ function KeyForm({ label, busy, error, onSave }: { label: string; busy: boolean;
           onChange={(event) => setKey(event.target.value)}
           className="min-w-0 flex-[1_1_9rem] font-mono"
         />
-        <Button type="submit" size="sm" disabled={busy || key.trim() === ''}>{busy ? 'Saving…' : label}</Button>
+        <Button type="submit" size="sm" variant="secondary" disabled={busy || key.trim() === ''}>{busy ? 'Saving…' : label}</Button>
       </form>
       {error && <Callout tone="failed" role="alert">{error}</Callout>}
     </>
@@ -82,6 +82,7 @@ function LinearBody({ client }: { client: Api }) {
         <SettingRow
           label={status.refused ? 'Linear refused your saved key' : 'Could not reach Linear'}
           labelFor="linear-api-key"
+          stackControl
           help={status.refused ? 'Paste a new key to replace it, or Disconnect to remove it.' : 'Your key is saved. Retry, paste a new key to replace it, or Disconnect to remove it.'}
           control={
             <span className="flex items-center gap-2">
@@ -108,6 +109,7 @@ function LinearBody({ client }: { client: Api }) {
       ) : status.error ? (
         <SettingRow
           label="Could not read your Linear connection"
+          stackControl
           help="Cloudfield could not check the connection. Your key is unchanged."
           control={<Button size="sm" variant="secondary" onClick={() => void loadLinear(useStore, client)}>Retry</Button>}
         >

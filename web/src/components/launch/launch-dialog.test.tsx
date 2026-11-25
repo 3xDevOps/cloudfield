@@ -619,6 +619,17 @@ describe('new run', () => {
     await waitFor(() => expect(useStore.getState().launchDraft?.linear).toBeUndefined())
   })
 
+  it('does not re-offer the issue a restored draft is already linked to after Unlink', async () => {
+    useStore.setState({ launchDraft: draft({ task: 'ENG-123 Fix rounding', linear: eng123 }) })
+    useStore.getState().openLaunchWithTask('ENG-123 Fix rounding', { ...eng123 })
+    await open()
+    expect(screen.queryByRole('button', { name: 'Use ENG-123 instead' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Unlink ENG-123' }))
+
+    expect(screen.queryByText(/will be linked/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Use ENG-123 instead' })).toBeNull()
+  })
+
   it('restores a draft with its link chip and keeps it when another issue is picked', async () => {
     useStore.setState({ launchDraft: draft({ task: 'ENG-123 Fix rounding', linear: eng123 }) })
     useStore.getState().openLaunchWithTask('ENG-9 Other', eng9)

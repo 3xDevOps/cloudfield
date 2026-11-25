@@ -4,3 +4,9 @@ import type { LinearIssue } from '@/lib/types'
 export function linearTask(issue: Pick<LinearIssue, 'identifier' | 'title'>): string {
   return `${issue.identifier} ${issue.title}`
 }
+
+/** https://linear.app/<workspace>/issue/<ID> without the slug, query or fragment, as the server stores linear_issue_url. */
+export function canonicalIssueURL(raw: string): string {
+  const match = /^https:\/\/linear\.app\/([^/?#]+)\/issue\/([^/?#]+)/.exec(raw)
+  return match ? `https://linear.app/${match[1]}/issue/${match[2]!.toUpperCase()}` : raw
+}

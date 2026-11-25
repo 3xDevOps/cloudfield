@@ -18,7 +18,7 @@ export function LinkedIssue({ link, onUnlink }: { link: LinearLink; onUnlink: ()
 export function OfferedIssue({ draft, offered, onUse }: { draft: LinearLink | null; offered: LinearLink; onUse: () => void }) {
   return (
     <Callout
-      tone="needs-you"
+      tone="neutral"
       role="status"
       title={`Your unfinished ${draft?.identifier ?? 'session'} draft was kept.`}
       actions={<Button type="button" size="sm" variant="secondary" onClick={onUse}>Use {offered.identifier} instead</Button>}

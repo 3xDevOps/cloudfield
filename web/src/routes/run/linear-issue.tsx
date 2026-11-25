@@ -36,18 +36,32 @@ export function RunLinearIssue({ run, client = api, compact = false, details = f
   if (!identifier || !run.linear_issue_url) return null
   const issue = lookup && 'issue' in lookup ? lookup.issue : null
   const error = lookup && 'error' in lookup ? lookup.error : null
+  const label = `Linear issue ${identifier}${issue ? `, ${issue.state.name}` : ''}`
+  const title = error ? `Linear status unavailable: ${error}` : issue?.title
+  const link = 'flex shrink-0 items-center gap-1 rounded-control text-ui-sm underline-offset-2 hover:underline coarse:h-11 coarse:px-1'
+  if (details) {
+    return (
+      <span className={cn('flex min-w-0 items-center gap-2 text-ui-sm', className)}>
+        <a className={cn(link, 'text-accent coarse:h-auto coarse:px-0')} href={run.linear_issue_url} target="_blank" rel="noreferrer" title={title} aria-label={`Linear issue ${identifier}`}>
+          <Linear aria-hidden className="size-3.5" />
+          <span className="tabular-nums">{identifier}</span>
+        </a>
+        {issue && <span className="text-muted">{issue.state.name}</span>}
+      </span>
+    )
+  }
   return (
     <a
-      className={cn('flex shrink-0 items-center gap-1 rounded-control text-ui-sm text-muted underline-offset-2 hover:text-text hover:underline coarse:h-11 coarse:px-1', className)}
+      className={cn(link, 'text-muted hover:text-text', className)}
       href={run.linear_issue_url}
       target="_blank"
       rel="noreferrer"
-      title={error ? `Linear status unavailable: ${error}` : issue?.title}
-      aria-label={`Linear issue ${identifier}${issue ? `, ${issue.state.name}` : ''}`}
+      title={title}
+      aria-label={label}
     >
       <Linear aria-hidden className="size-3.5" />
       <span className="tabular-nums">{identifier}</span>
-      {issue && <span className={cn('pl-1', !details && 'hidden @lg/state:inline')}>{issue.state.name}</span>}
+      {issue && <span className="hidden pl-1 @lg/state:inline">{issue.state.name}</span>}
     </a>
   )
 }

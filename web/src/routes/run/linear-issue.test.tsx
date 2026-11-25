@@ -37,14 +37,17 @@ describe('run header Linear link', () => {
     expect(client.linearIssue).not.toHaveBeenCalled()
   })
 
-  it('shows the status in the details row as one link titled with the issue title', async () => {
+  it('shows the status in the details row as muted text beside a link to the issue', async () => {
     useStore.setState({ linear: { connected: true } })
     const client = fakeApi({ linearIssue: vi.fn(async () => ({ identifier: 'ENG-123', title: 'Fix rounding', url: run.linear_issue_url, state: { name: 'In Progress', type: 'started' } })) })
     render(<RunLinearIssue run={run} client={client} details />)
 
-    const link = await screen.findByRole('link', { name: 'Linear issue ENG-123, In Progress' })
-    expect(link.textContent).toBe('ENG-123In Progress')
+    const status = await screen.findByText('In Progress')
+    const link = screen.getByRole('link', { name: 'Linear issue ENG-123' })
+    expect(link.textContent).toBe('ENG-123')
     expect(link.getAttribute('title')).toBe('Fix rounding')
+    expect(link.contains(status)).toBe(false)
+    expect(status.className).toContain('text-muted')
   })
 
   it('never reads an issue with an empty identifier', () => {
