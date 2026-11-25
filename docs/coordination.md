@@ -1075,7 +1075,7 @@ automatic screenshot publication, or disabling commit signing.
 
 Every pull request description ends with `Opened from Aether session <session id>`;
 `skill git` prints that line with the session's `run_id` from `status` filled in.
-Nothing parses or counts this line.
+[Success rate](insights.md#success-rate) counts pull requests opened through Cloudfield, not this line.
 
 Custom or argv-overridden agents still receive the staged CLI and run socket
 but no guessed vendor startup flags. In taskless mode their authors must invoke
