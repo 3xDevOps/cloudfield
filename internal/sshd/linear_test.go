@@ -3,6 +3,7 @@ package sshd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -96,5 +97,28 @@ func TestLinearUsesTheCallersOwnKey(t *testing.T) {
 	}
 	if err := bobC.Call(protocol.MethodLinearStatus, nil, &status); err != nil || !status.Connected {
 		t.Fatalf("bob's status after alice disconnected = %+v, %v; want still connected", status, err)
+	}
+}
+
+// Removing a member deletes their saved Linear key and no one else's.
+func TestMemberRemoveDeletesTheLinearKey(t *testing.T) {
+	t.Parallel()
+	keys := linear.NewKeys(t.TempDir())
+	e := newTestEnv(t, func(c *Config) { c.Services.Linear = &linear.Service{Keys: keys} })
+	asSuperAdmin(t, e)
+	_, target := addMember(t, e, "Target", domain.RoleCollaborator, false)
+	for _, id := range []domain.MemberID{target.ID, e.member.ID} {
+		if err := keys.Put(id, "key-"+string(id)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := controlClient(t, e).Call(protocol.MethodMemberRemove, protocol.MemberRemoveParams{MemberID: string(target.ID)}, nil); err != nil {
+		t.Fatalf("member.remove: %v", err)
+	}
+	if _, err := keys.Get(target.ID); !errors.Is(err, linear.ErrNotConnected) {
+		t.Errorf("removed member's Linear key: %v, want it deleted", err)
+	}
+	if _, err := keys.Get(e.member.ID); err != nil {
+		t.Errorf("another member's Linear key: %v, want it kept", err)
 	}
 }

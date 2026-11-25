@@ -9,14 +9,55 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/3xDevOps/Aether/internal/protocol"
 )
 
 // APIURL is Linear's GraphQL endpoint.
 const APIURL = "https://api.linear.app/graphql"
 
 const maxResponse = 4 << 20
+
+// Status is a member's Linear connection. The other fields are empty
+// unless Connected.
+type Status struct {
+	Connected    bool
+	Name         string
+	Organization string
+	URLKey       string
+}
+
+// IssuesFilter narrows a list to one team key, such as CLO, and to issues
+// whose title contains Query, ignoring case.
+type IssuesFilter struct {
+	Team  string
+	Query string
+}
+
+type Team struct {
+	Key  string `json:"key"`
+	Name string `json:"name"`
+}
+
+type State struct {
+	Name  string `json:"name"`
+	Type  string `json:"type"`
+	Color string `json:"color"`
+}
+
+type Assignee struct {
+	Name string `json:"name"`
+}
+
+// Issue is one issue. Team, Assignee and UpdatedAt are empty in the result
+// of Client.Issue, which reads only the identifier, title, URL and state.
+type Issue struct {
+	Identifier string
+	Title      string
+	URL        string
+	State      State
+	Team       *Team
+	Assignee   *Assignee
+	UpdatedAt  string
+}
 
 // Client calls Linear's GraphQL API with a personal API key.
 type Client struct {
@@ -29,7 +70,7 @@ func NewClient() *Client {
 }
 
 // Viewer returns who key belongs to; Linear refuses a key it does not know.
-func (c *Client) Viewer(ctx context.Context, key string) (protocol.LinearStatusResult, error) {
+func (c *Client) Viewer(ctx context.Context, key string) (Status, error) {
 	var data struct {
 		Viewer struct {
 			Name         string `json:"name"`
@@ -40,9 +81,9 @@ func (c *Client) Viewer(ctx context.Context, key string) (protocol.LinearStatusR
 		} `json:"viewer"`
 	}
 	if err := c.do(ctx, key, `query { viewer { name organization { name urlKey } } }`, nil, &data); err != nil {
-		return protocol.LinearStatusResult{}, err
+		return Status{}, err
 	}
-	return protocol.LinearStatusResult{
+	return Status{
 		Connected:    true,
 		Name:         data.Viewer.Name,
 		Organization: data.Viewer.Organization.Name,
@@ -50,10 +91,10 @@ func (c *Client) Viewer(ctx context.Context, key string) (protocol.LinearStatusR
 	}, nil
 }
 
-func (c *Client) Teams(ctx context.Context, key string) ([]protocol.LinearTeam, error) {
+func (c *Client) Teams(ctx context.Context, key string) ([]Team, error) {
 	var data struct {
 		Teams struct {
-			Nodes []protocol.LinearTeam `json:"nodes"`
+			Nodes []Team `json:"nodes"`
 		} `json:"teams"`
 	}
 	if err := c.do(ctx, key, `query { teams { nodes { key name } } }`, nil, &data); err != nil {
@@ -63,17 +104,17 @@ func (c *Client) Teams(ctx context.Context, key string) ([]protocol.LinearTeam, 
 }
 
 type issueNode struct {
-	Identifier string                   `json:"identifier"`
-	Title      string                   `json:"title"`
-	URL        string                   `json:"url"`
-	State      protocol.LinearState     `json:"state"`
-	Team       *protocol.LinearTeam     `json:"team"`
-	Assignee   *protocol.LinearAssignee `json:"assignee"`
-	UpdatedAt  string                   `json:"updatedAt"`
+	Identifier string    `json:"identifier"`
+	Title      string    `json:"title"`
+	URL        string    `json:"url"`
+	State      State     `json:"state"`
+	Team       *Team     `json:"team"`
+	Assignee   *Assignee `json:"assignee"`
+	UpdatedAt  string    `json:"updatedAt"`
 }
 
-func (n issueNode) issue() protocol.LinearIssue {
-	return protocol.LinearIssue{
+func (n issueNode) issue() Issue {
+	return Issue{
 		Identifier: n.Identifier, Title: n.Title, URL: n.URL, State: n.State,
 		Team: n.Team, Assignee: n.Assignee, UpdatedAt: n.UpdatedAt,
 	}
@@ -81,7 +122,7 @@ func (n issueNode) issue() protocol.LinearIssue {
 
 // Issues returns the first 50 issues assigned to key's owner that are
 // neither completed nor canceled, most recently updated first.
-func (c *Client) Issues(ctx context.Context, key string, p protocol.LinearIssuesParams) ([]protocol.LinearIssue, error) {
+func (c *Client) Issues(ctx context.Context, key string, p IssuesFilter) ([]Issue, error) {
 	filter := map[string]any{"state": map[string]any{"type": map[string]any{"nin": []string{"completed", "canceled"}}}}
 	if team := strings.TrimSpace(p.Team); team != "" {
 		filter["team"] = map[string]any{"key": map[string]any{"eqIgnoreCase": team}}
@@ -101,7 +142,7 @@ func (c *Client) Issues(ctx context.Context, key string, p protocol.LinearIssues
 	if err := c.do(ctx, key, query, map[string]any{"filter": filter}, &data); err != nil {
 		return nil, err
 	}
-	issues := make([]protocol.LinearIssue, 0, len(data.Viewer.AssignedIssues.Nodes))
+	issues := make([]Issue, 0, len(data.Viewer.AssignedIssues.Nodes))
 	for _, n := range data.Viewer.AssignedIssues.Nodes {
 		issues = append(issues, n.issue())
 	}
@@ -109,13 +150,13 @@ func (c *Client) Issues(ctx context.Context, key string, p protocol.LinearIssues
 }
 
 // Issue reads one issue by identifier, such as CLO-6.
-func (c *Client) Issue(ctx context.Context, key, identifier string) (protocol.LinearIssue, error) {
+func (c *Client) Issue(ctx context.Context, key, identifier string) (Issue, error) {
 	var data struct {
 		Issue issueNode `json:"issue"`
 	}
 	const query = `query Issue($id: String!) { issue(id: $id) { identifier title url state { name type color } } }`
 	if err := c.do(ctx, key, query, map[string]any{"id": identifier}, &data); err != nil {
-		return protocol.LinearIssue{}, err
+		return Issue{}, err
 	}
 	return data.Issue.issue(), nil
 }

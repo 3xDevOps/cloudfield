@@ -11,8 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/3xDevOps/Aether/internal/protocol"
 )
 
 type recorded struct {
@@ -50,7 +48,7 @@ func TestViewerSendsTheKeyWithoutBearer(t *testing.T) {
 	if got.auth != "lin_api_x" {
 		t.Errorf("Authorization = %q, want the bare key", got.auth)
 	}
-	if want := (protocol.LinearStatusResult{Connected: true, Name: "Ada", Organization: "Acme", URLKey: "acme"}); st != want {
+	if want := (Status{Connected: true, Name: "Ada", Organization: "Acme", URLKey: "acme"}); st != want {
 		t.Errorf("status = %+v, want %+v", st, want)
 	}
 }
@@ -84,7 +82,7 @@ func TestTeams(t *testing.T) {
 func TestIssuesFilterAndFields(t *testing.T) {
 	c, got := fakeLinear(t, 200, `{"data":{"viewer":{"assignedIssues":{"nodes":[
 		{"identifier":"CLO-6","title":"Linear","url":"https://linear.app/a/issue/CLO-6","state":{"name":"In Progress","type":"started","color":"#f2c94c"},"team":{"key":"CLO","name":"Cloudfield"},"assignee":{"name":"Ada"},"updatedAt":"2026-01-02T03:04:05Z"}]}}}}`)
-	issues, err := c.Issues(context.Background(), "k", protocol.LinearIssuesParams{Team: "CLO", Query: " lin "})
+	issues, err := c.Issues(context.Background(), "k", IssuesFilter{Team: "CLO", Query: " lin "})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +102,7 @@ func TestIssuesFilterAndFields(t *testing.T) {
 		}
 	}
 
-	if _, err := c.Issues(context.Background(), "k", protocol.LinearIssuesParams{}); err != nil {
+	if _, err := c.Issues(context.Background(), "k", IssuesFilter{}); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ = json.Marshal(got.vars["filter"])
@@ -161,7 +159,7 @@ func TestKeysAreOwnerOnlyFilesPerMember(t *testing.T) {
 func TestServiceKeepsNothingWhenLinearRefusesTheKey(t *testing.T) {
 	c, _ := fakeLinear(t, 400, `{"errors":[{"message":"Authentication required"}]}`)
 	s := &Service{Keys: NewKeys(t.TempDir()), Client: c}
-	if _, err := s.Connect(context.Background(), "m1", protocol.LinearConnectParams{APIKey: "bad"}); err == nil || !strings.Contains(err.Error(), "Authentication required") {
+	if _, err := s.Connect(context.Background(), "m1", "bad"); err == nil || !strings.Contains(err.Error(), "Authentication required") {
 		t.Fatalf("Connect = %v", err)
 	}
 	if _, err := s.Keys.Get("m1"); !errors.Is(err, ErrNotConnected) {

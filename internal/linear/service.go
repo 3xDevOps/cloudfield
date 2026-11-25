@@ -3,52 +3,38 @@ package linear
 import (
 	"context"
 	"errors"
-	"strings"
 
 	"github.com/3xDevOps/Aether/internal/domain"
-	"github.com/3xDevOps/Aether/internal/protocol"
 )
 
-// Service answers each member from their own saved key.
+// Service answers each member from their own saved key. A call that needs
+// a key returns ErrNotConnected when the member has saved none.
 type Service struct {
 	Keys   *Keys
 	Client *Client
 }
 
-func (s *Service) key(member domain.MemberID) (string, error) {
-	key, err := s.Keys.Get(member)
-	if errors.Is(err, ErrNotConnected) {
-		return "", &protocol.Error{Code: protocol.CodeInvalidState,
-			Message: "Linear is not connected: save a personal API key in Settings → Linear"}
-	}
-	return key, err
-}
-
 // Status reports the member's connection. Linear refusing the saved key
 // is an error, not a disconnection: the member sees why and replaces it.
-func (s *Service) Status(ctx context.Context, member domain.MemberID) (protocol.LinearStatusResult, error) {
+func (s *Service) Status(ctx context.Context, member domain.MemberID) (Status, error) {
 	key, err := s.Keys.Get(member)
 	if errors.Is(err, ErrNotConnected) {
-		return protocol.LinearStatusResult{}, nil
+		return Status{}, nil
 	}
 	if err != nil {
-		return protocol.LinearStatusResult{}, err
+		return Status{}, err
 	}
 	return s.Client.Viewer(ctx, key)
 }
 
-// Connect saves the key only after Linear accepts it.
-func (s *Service) Connect(ctx context.Context, member domain.MemberID, p protocol.LinearConnectParams) (protocol.LinearStatusResult, error) {
-	key := strings.TrimSpace(p.APIKey)
-	if key == "" {
-		return protocol.LinearStatusResult{}, &protocol.Error{Code: protocol.CodeInvalidParams, Message: "linear.connect: api_key is required"}
-	}
+// Connect saves key only after Linear accepts it.
+func (s *Service) Connect(ctx context.Context, member domain.MemberID, key string) (Status, error) {
 	status, err := s.Client.Viewer(ctx, key)
 	if err != nil {
-		return protocol.LinearStatusResult{}, err
+		return Status{}, err
 	}
 	if err := s.Keys.Put(member, key); err != nil {
-		return protocol.LinearStatusResult{}, err
+		return Status{}, err
 	}
 	return status, nil
 }
@@ -60,32 +46,26 @@ func (s *Service) Disconnect(member domain.MemberID) error {
 	return nil
 }
 
-func (s *Service) Teams(ctx context.Context, member domain.MemberID) (protocol.LinearTeamsResult, error) {
-	key, err := s.key(member)
+func (s *Service) Teams(ctx context.Context, member domain.MemberID) ([]Team, error) {
+	key, err := s.Keys.Get(member)
 	if err != nil {
-		return protocol.LinearTeamsResult{}, err
+		return nil, err
 	}
-	teams, err := s.Client.Teams(ctx, key)
-	return protocol.LinearTeamsResult{Teams: teams}, err
+	return s.Client.Teams(ctx, key)
 }
 
-func (s *Service) Issues(ctx context.Context, member domain.MemberID, p protocol.LinearIssuesParams) (protocol.LinearIssuesResult, error) {
-	key, err := s.key(member)
+func (s *Service) Issues(ctx context.Context, member domain.MemberID, f IssuesFilter) ([]Issue, error) {
+	key, err := s.Keys.Get(member)
 	if err != nil {
-		return protocol.LinearIssuesResult{}, err
+		return nil, err
 	}
-	issues, err := s.Client.Issues(ctx, key, p)
-	return protocol.LinearIssuesResult{Issues: issues}, err
+	return s.Client.Issues(ctx, key, f)
 }
 
-func (s *Service) Issue(ctx context.Context, member domain.MemberID, p protocol.LinearIssueParams) (protocol.LinearIssue, error) {
-	identifier := strings.TrimSpace(p.Identifier)
-	if identifier == "" {
-		return protocol.LinearIssue{}, &protocol.Error{Code: protocol.CodeInvalidParams, Message: "linear.issue: identifier is required"}
-	}
-	key, err := s.key(member)
+func (s *Service) Issue(ctx context.Context, member domain.MemberID, identifier string) (Issue, error) {
+	key, err := s.Keys.Get(member)
 	if err != nil {
-		return protocol.LinearIssue{}, err
+		return Issue{}, err
 	}
 	return s.Client.Issue(ctx, key, identifier)
 }
