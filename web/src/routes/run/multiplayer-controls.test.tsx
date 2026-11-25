@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { AgentTerminal } from '@/routes/run/agent-terminal'
 import { MultiplayerControls } from '@/routes/run/multiplayer-controls'
@@ -113,7 +114,8 @@ it('springs and wakes dots without blocking existing controls', () => {
 
   const releaseButton = screen.getByRole('button', { name: /Release/ })
   releaseButton.focus()
-  fireEvent.click(releaseButton)
+  fireEvent.keyDown(releaseButton, { key: 'Enter' })
+  fireEvent.keyUp(releaseButton, { key: 'Enter' })
   expect(release).toHaveBeenCalledTimes(1)
   fireEvent.pointerDown(releaseButton, { pointerType: 'mouse', button: 0, clientX: 100, clientY: 12 })
   advance(100)
@@ -132,6 +134,15 @@ it('springs and wakes dots without blocking existing controls', () => {
   view.unmount()
   expect(frames.size).toBe(0)
   expect(timers.size).toBe(0)
+})
+
+it('opens people with Enter on the Multiplayer button', async () => {
+  vi.unstubAllGlobals()
+  const people = vi.fn()
+  render(<MultiplayerControls run={run} agent={agent(vi.fn())} onPeople={people} />)
+  screen.getByRole('button', { name: /Multiplayer/ }).focus()
+  await userEvent.setup().keyboard('{Enter}')
+  expect(people).toHaveBeenCalledTimes(1)
 })
 
 it('moves the red takeover hold copy with the other dots', async () => {
