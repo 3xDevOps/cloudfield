@@ -3294,9 +3294,10 @@ The actions, in order:
    admin **Turn off subsessions** on a session that allowed them.
    **Leave a comment…** opens Details with the cursor in the note field. On
    a desktop layout, a right-click on Chat in the tile that carries the
-   session's controls opens the same menu at the cursor, except over selected text, a link, an input, code, an image or
-   a terminal, and on Shift+right-click, where the browser keeps its own
-   menu. The desktop app has no menu of its own there.
+   session's controls opens the same menu at the cursor, except over
+   selected text, a link, an input, code, an image or a terminal, and on
+   Shift+right-click, where the browser keeps its own menu. The desktop app
+   has no menu of its own there.
 
 Kill and Delete of a session with unfinished subsessions (live, not detached; the
 store's sessions whose `parent_run_id` is this session) say "Its 2 unfinished subsessions
@@ -8540,11 +8541,18 @@ focus, arrows, controls once per session, the header row's widths, the
 folded and docked composer, seams, maximize, closing, the sidebar,
 the glide and the tile keys; `tiles-drag.test.tsx` every drag source, zone
 and cancel; `tiles-control.test.tsx` no resize or reattach on a focus click,
-write control and the scaled terminal; and `src/routes/run/session-host.test.tsx` the per-session host
+write control, the scaled terminal, the first click in a tile that is not
+focused ("+", a background tab, a tab's close button, the composer opening
+at the release), the strip keeping its layout until the pointer is off it,
+a session's update rendering no other session's Chat, the right-click
+session menu only in the controls tile, and the glide's two-frame hold and
+empty pane; and `src/routes/run/session-host.test.tsx` the per-session host
 and what an unfocused frame leaves alone. `e2e/session-tiles.spec.ts` moves
 a real pointer over tiles whose sessions are answered in the browser: Split
 right and a pick, **Open to the side**, a sidebar row dropped on an edge, a
-tab dropped on a tile, a view torn off, a seam drag, the focus outline,
+tab dropped on a tile, a first click on "+", a background tab and a close
+button in a tile that is not focused, whose strip keeps its layout while
+the picker is open, a view torn off, a seam drag, the focus outline,
 maximize and restore, the strip and header row holding their place, a
 reload, a deep link and Back. Its last case attaches two real terminals,
 needs Docker, and checks that focus clicks open no socket and send no

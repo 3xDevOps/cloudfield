@@ -166,7 +166,7 @@ export function MultiplayerControls({ run, agent, onPeople }: {
 export function PresenceControls({ run, agent, wide }: {
   run: RunRecord
   agent: AgentTerminal
-  /** The focused tile, at 560px and up: words beside the avatars once the row is 960px, where the state's reason can spare the room. */
+  /** At 560px and up: words beside the avatars once the row is 960px, where the state's reason can spare the room. */
   wide: boolean
 }) {
   const { self, summary, status, stream, connection, maySteer, controllerID, person } = usePresence(run, agent)

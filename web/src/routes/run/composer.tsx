@@ -244,7 +244,6 @@ function ComposerBox({ textarea, autoFocus, collapsed, docked, value, onChange, 
       {collapsed ? (
         <>
           {more > 0 && <span className="shrink-0 px-1 text-ui-sm text-muted">+{more} {more === 1 ? 'line' : 'lines'}</span>}
-          {/* Only docked: a press on an unfocused Chat tile's field opens it, which would unmount the button under the press. */}
           {docked && (
             <Button variant="ghost" size="icon-sm" label="Send" disabled={!value.trim() || readOnly} onClick={onSend}>
               <ArrowUp />

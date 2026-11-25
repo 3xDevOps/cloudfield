@@ -22,7 +22,7 @@ export function Tile({ tile, rect, parked, opening, narrow, room, linked, onSlot
   rect: Rect
   /** Hidden behind the maximized tile, and still mounted. */
   parked: boolean
-  /** Growing in: an empty pane until it lands. */
+  /** Growing in: a bare strip until it lands. */
   opening: boolean
   narrow: boolean
   room: { right: boolean; down: boolean }
