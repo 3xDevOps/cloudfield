@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type * as React from 'react'
-import { Camera, Copy, Eye, GitBranch, Lock, PanelRight, ScrollText } from '@/components/icons'
+import { Camera, Copy, Eye, GitBranch, Lock, MessageSquarePlus, PanelRight, ScrollText } from '@/components/icons'
 import { permissionLabel, permissions } from '@/components/launch/permission-control'
-import { RunActions } from '@/components/run-actions'
+import { RunActions, type MenuPoint } from '@/components/run-actions'
 import { RunRetention } from '@/components/run-retention'
 import { ConnectionLine } from '@/components/shell/connection'
 import { AgentGlyph } from '@/components/ui/agent-glyph'
@@ -269,8 +269,11 @@ export function RunHeader({
   keyboard,
   detailsOpen,
   onDetails,
+  onComment,
   onCaptures,
   onEvents,
+  menuAt,
+  onMenuClose,
   agentName,
   agentEntry,
   workflow,
@@ -291,8 +294,12 @@ export function RunHeader({
   keyboard: boolean
   detailsOpen: boolean
   onDetails: (returnTo: HTMLElement | null) => void
+  onComment: (returnTo: HTMLElement | null) => void
   onCaptures: (returnTo: HTMLElement | null) => void
   onEvents: (returnTo: HTMLElement | null) => void
+  /** Where a right-click opened the session's menu, desktop only. */
+  menuAt: MenuPoint | null
+  onMenuClose: () => void
 }) {
   const mobile = useIsMobile()
   const collapsed = useStore((s) => s.sidebarCollapsed)
@@ -304,6 +311,7 @@ export function RunHeader({
   const childRunsItems = useChildRunsItems(run)
   useHeaderPrimary(Boolean(primary))
   const extra = [
+    { id: 'comment', label: 'Leave a comment…', Icon: MessageSquarePlus, onSelect: onComment },
     ...(modeSwitch.item ? [modeSwitch.item] : []),
     ...(editor.item ? [editor.item] : []),
     ...childRunsItems,
@@ -370,7 +378,7 @@ export function RunHeader({
             >
               <PanelRight />
             </Button>
-            <RunActions run={run} extra={extra} />
+            <RunActions run={run} extra={extra} at={menuAt} onAtClose={onMenuClose} />
           </>
         }
       />

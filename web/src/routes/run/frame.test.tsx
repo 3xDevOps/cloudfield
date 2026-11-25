@@ -190,6 +190,48 @@ describe('run frame', () => {
     expect(api.agentList).toHaveBeenCalledTimes(1)
   })
 
+  it.each([
+    ['the More button', () => fireEvent.pointerDown(screen.getByRole('button', { name: 'More' }), { button: 0, ctrlKey: false })],
+    ['a right-click on Chat', () => fireEvent.contextMenu(screen.getByRole('tabpanel', { name: 'Chat' }), { clientX: 200, clientY: 300 })],
+  ])('puts the cursor in the note field from Leave a comment in %s', async (_, openMenu) => {
+    xterm.enabled = false
+    open({ mode: 'acp' })
+    openMenu()
+    await userEvent.click(within(await screen.findByRole('menu')).getByRole('menuitem', { name: 'Leave a comment…' }))
+    // The closing menu restores focus a task later; let it try.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)))
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Add a note' }))
+  })
+
+  it('focuses the note field once, not on every later Details open', async () => {
+    xterm.enabled = false
+    open({ mode: 'acp' })
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'More' }), { button: 0, ctrlKey: false })
+    await userEvent.click(within(await screen.findByRole('menu')).getByRole('menuitem', { name: 'Leave a comment…' }))
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Add a note' })))
+    await userEvent.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Add a note' })).toBeNull())
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'More' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Show details' }))
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)))
+    expect(document.activeElement).not.toBe(screen.getByRole('textbox', { name: 'Add a note' }))
+  })
+
+  it('leaves the browser menu alone over a link or selected text', () => {
+    xterm.enabled = false
+    open({ mode: 'acp' })
+    const chat = screen.getByRole('tabpanel', { name: 'Chat' })
+    const link = chat.appendChild(document.createElement('a'))
+    expect(fireEvent.contextMenu(link)).toBe(true)
+    const text = chat.appendChild(document.createElement('p'))
+    text.textContent = 'agent output'
+    window.getSelection()!.selectAllChildren(text)
+    fireEvent.mouseDown(text, { button: 2 })
+    expect(fireEvent.contextMenu(text)).toBe(true)
+    expect(screen.queryByRole('menu')).toBeNull()
+    window.getSelection()!.removeAllRanges()
+  })
+
   it('keeps Changes mounted after a view switch so a Publish draft survives', () => {
     const { rerender } = open({}, 'changes')
     rerender(rerouted('session'))

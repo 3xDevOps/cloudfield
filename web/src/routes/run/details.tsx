@@ -137,14 +137,14 @@ export function DoneNotes({ run, inset }: { run: RunRecord; inset: boolean }) {
   )
 }
 
-function Notes({ run, room, nav, inset, focus, wide }: { run: RunRecord; room: RunRoom; nav: RunNavigation; inset: boolean; focus: number; wide: boolean }) {
+function Notes({ run, room, nav, inset, focus, onFocused, wide }: { run: RunRecord; room: RunRoom; nav: RunNavigation; inset: boolean; focus: boolean; onFocused: () => void; wide: boolean }) {
   const messages = useStore((s) => s.roomMessages[run.id] ?? emptyMessages)
   const count = messages.filter((m) => m.kind === 'question' || (!wide && isOpenNote(m))).length
   return (
     <Section title="Notes" count={count} inset={inset}>
       <NoteThread run={run} room={room} nav={nav} wide={wide} />
       <DoneNotes run={run} inset={false} />
-      <NoteComposer runID={run.id} room={room} focus={focus} />
+      <NoteComposer runID={run.id} room={room} focus={focus} onFocused={onFocused} />
       <p className="text-ui-xs text-muted">Notes are for people. The agent never sees them.</p>
     </Section>
   )
@@ -224,7 +224,7 @@ function ConditionCard({ run, view, agent, nav }: { run: RunRecord; view: RunVie
   )
 }
 
-export function RunDetails({ run, view, agent, agentName, room, nav, inset, noteFocus, notesWide }: {
+export function RunDetails({ run, view, agent, agentName, room, nav, inset, noteFocus, onNoteFocused, notesWide }: {
   run: RunRecord
   view: RunView
   agentName: string
@@ -232,7 +232,9 @@ export function RunDetails({ run, view, agent, agentName, room, nav, inset, note
   room: RunRoom
   nav: RunNavigation
   inset: boolean
-  noteFocus: number
+  /** A pending request to put the cursor in the note field, cleared once it is there. */
+  noteFocus: boolean
+  onNoteFocused: () => void
   /** Whether the Chat view shows the sticky rail instead of the notes strip. */
   notesWide: boolean
 }) {
@@ -254,7 +256,7 @@ export function RunDetails({ run, view, agent, agentName, room, nav, inset, note
       <WaitConditions run={run} inset={inset} />
       <ChildRuns run={run} inset={inset} />
       <AgentMessages run={run} inset={inset} />
-      <Notes run={run} room={room} nav={nav} inset={inset} focus={noteFocus} wide={notesWide} />
+      <Notes run={run} room={room} nav={nav} inset={inset} focus={noteFocus} onFocused={onNoteFocused} wide={notesWide} />
       <Facts run={run} agent={agent} agentName={agentName} inset={inset} />
     </div>
   )
