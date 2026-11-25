@@ -96,7 +96,6 @@ type localState struct {
 	// raw is the config file cfg was last read from, nil after the gateway
 	// changed cfg itself, so the next reload compares the file afresh.
 	raw     []byte
-	backend Backend
 	sync    *localops.SyncManager
 	forward *localops.ForwardManager
 	edge    edgeLogin
@@ -106,7 +105,7 @@ type localState struct {
 // fails: an unlinked (zero) cli.Config simply reports linked:false and
 // refuses the verbs that need a repo.
 func newLocalState(cfg Config) *localState {
-	state := &localState{cfg: cfg.CLI, backend: cfg.Backend, sync: localops.NewSyncManager(), forward: localops.NewForwardManager()}
+	state := &localState{cfg: cfg.CLI, sync: localops.NewSyncManager(), forward: localops.NewForwardManager()}
 	if path, err := cli.Path(); err == nil {
 		state.raw, _ = os.ReadFile(path)
 	}
