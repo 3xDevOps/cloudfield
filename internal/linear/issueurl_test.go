@@ -39,6 +39,8 @@ func TestFindIssueURL(t *testing.T) {
 		{"(see https://linear.app/acme/issue/ENG-9)", "https://linear.app/acme/issue/ENG-9"},
 		{"https://linear.app/acme/project/x then https://linear.app/acme/issue/ENG-2 and ENG-3", "https://linear.app/acme/issue/ENG-2"},
 		{"https://linear.app/acme/issue/ENG-1 https://linear.app/acme/issue/ENG-2", "https://linear.app/acme/issue/ENG-1"},
+		{"fix `https://linear.app/acme/issue/ENG-1`", "https://linear.app/acme/issue/ENG-1"},
+		{"**https://linear.app/acme/issue/ENG-1**", "https://linear.app/acme/issue/ENG-1"},
 		{"no link, just ENG-1", ""},
 		{"", ""},
 	} {

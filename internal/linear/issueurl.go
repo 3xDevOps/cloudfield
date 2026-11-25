@@ -15,7 +15,7 @@ const Form = "https://linear.app/<workspace>/issue/<TEAM>-<number>[/<slug>]"
 var (
 	identifierPattern = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9]*)-([0-9]+)$`)
 	slugPattern       = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
-	candidatePattern  = regexp.MustCompile(`https://linear\.app/[^\s<>"']+`)
+	candidatePattern  = regexp.MustCompile(`https://linear\.app/[^\s<>"'` + "`*" + `]+`)
 )
 
 // ParseIssueURL returns the issue identifier, such as ENG-123, and the

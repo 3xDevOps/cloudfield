@@ -206,8 +206,9 @@ stdin.
 
 `--linear-issue <url>` links the session to a Linear issue, for example
 `--linear-issue https://linear.app/acme/issue/ENG-123`. Without it, the first
-Linear issue link in the task is used. The link is fixed at launch. A malformed URL fails with `linear issue URL "<value>" must have the form
-https://linear.app/<workspace>/issue/<TEAM>-<number>[/<slug>]`.
+Linear issue link in the task is used. The link is fixed at launch. A
+malformed URL fails with
+`linear issue URL "<value>" must have the form https://linear.app/<workspace>/issue/<TEAM>-<number>[/<slug>]`.
 
 ## Add a repository
 

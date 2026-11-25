@@ -225,14 +225,15 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 			return nil, invalidParams(err.Error())
 		}
 	}
+	// The idempotency fingerprint covers the link as the client sent it, so
+	// a receipt recorded before links existed still matches its retry.
+	linkedIssue := linear.FindIssueURL(p.Task)
 	if p.LinearIssueURL != "" {
 		_, canonical, err := linear.ParseIssueURL(p.LinearIssueURL)
 		if err != nil {
 			return nil, invalidParams(err.Error())
 		}
-		p.LinearIssueURL = canonical
-	} else {
-		p.LinearIssueURL = linear.FindIssueURL(p.Task)
+		linkedIssue = canonical
 	}
 	key := p.IdempotencyKey
 	p.IdempotencyKey = ""
@@ -250,7 +251,9 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 	var skipped []protocol.SkippedAccount
 	var childrenErr *protocol.Error
 	run, replayed, perr := s.idempotentLaunch(ctx, member, key, protocol.MethodRunLaunch, p, earlier, func(created func(domain.RunID)) (*domain.Run, *protocol.Error) {
-		return s.launchRun(ctx, member, p, mode, policy, func(id domain.RunID) {
+		launched := p
+		launched.LinearIssueURL = linkedIssue
+		return s.launchRun(ctx, member, launched, mode, policy, func(id domain.RunID) {
 			if created != nil {
 				created(id)
 			}

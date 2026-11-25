@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/3xDevOps/Aether/internal/domain"
+	"github.com/3xDevOps/Aether/internal/linear"
 	"github.com/3xDevOps/Aether/internal/protocol"
 )
 
@@ -254,8 +255,8 @@ func starting(tool, key string, replayErr error) (string, any, error) {
 
 // recentLaunch is the member's run in the workspace, created within
 // duplicateWindow and not stopped, with the same task, agent, mode, model,
-// account, fallback policy, extra repositories, child-run setting and
-// permission tier. An omitted mode or
+// account, fallback policy, extra repositories, child-run setting,
+// permission tier and Linear issue. An omitted mode or
 // model matches any; an omitted account is self, the member's own.
 func recentLaunch(ctx context.Context, read Call, in connectorLaunchInput, self string, now time.Time) (protocol.Run, bool, error) {
 	params := struct {
@@ -266,6 +267,13 @@ func recentLaunch(ctx context.Context, read Call, in connectorLaunchInput, self 
 	if err := read(ctx, protocol.MethodRunList, params, &res); err != nil {
 		return protocol.Run{}, false, err
 	}
+	linked := linear.FindIssueURL(in.Task)
+	if in.LinearIssueURL != "" {
+		var err error
+		if _, linked, err = linear.ParseIssueURL(in.LinearIssueURL); err != nil {
+			return protocol.Run{}, false, nil
+		}
+	}
 	for _, r := range res.Runs {
 		var extras []string
 		for _, repo := range r.Repos {
@@ -275,7 +283,7 @@ func recentLaunch(ctx context.Context, read Call, in connectorLaunchInput, self 
 		}
 		if r.Harness == in.Harness && r.Task == in.Task && (in.Mode == "" || r.Mode == in.Mode) && (in.Model == "" || r.Model == in.Model || r.RefusedModel == in.Model) &&
 			cmp.Or(in.AccountMemberID, self) == cmp.Or(r.RequestedAccountMemberID, r.AccountMemberID) &&
-			slices.Equal(in.FallbackAccountMemberIDs, r.FallbackAccountMemberIDs) && in.NoFallback == r.NoFallback && in.Children == r.Children &&
+			slices.Equal(in.FallbackAccountMemberIDs, r.FallbackAccountMemberIDs) && in.NoFallback == r.NoFallback && in.Children == r.Children && linked == r.LinearIssueURL &&
 			cmp.Or(in.Permission, string(domain.PermissionDefault)) == cmp.Or(r.Permission, string(domain.PermissionDefault)) &&
 			sameRepos(in.ExtraWorkspaceIDs, extras) && !domain.RunStatus(r.Status).Final() && recent(r.CreatedAt, now) {
 			return r, true, nil
