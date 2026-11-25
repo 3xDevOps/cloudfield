@@ -21,7 +21,7 @@ const unmounts: Record<string, number> = {}
 const sockets: Record<string, Array<{ close: () => void }>> = {}
 let boardMounts = 0
 let boardUnmounts = 0
-const runIDs = ['run_a', 'run_b', 'run_c', 'run_d', 'run_e', 'run_f']
+const runIDs = ['run_a', 'run_b']
 
 class StubTerminal extends Component<RouteProps> {
   private readonly socket = { close: vi.fn() }

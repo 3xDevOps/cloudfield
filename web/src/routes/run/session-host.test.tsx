@@ -9,6 +9,7 @@ import { RunFrame, type FrameTile } from '@/routes/run'
 import { RunSession } from '@/routes/run/session-host'
 import type { RunView } from '@/routes/run/views'
 import { useStore } from '@/store'
+import { emptyTiles, routeTiles, splitTile, viewContext } from '@/store/tiles'
 import { ScriptedSession } from '@/test/acp-stream'
 import { alice, bob, run, serverInfo, workspace } from '@/test/fixtures'
 import { StubSocket } from '@/test/stub-socket'
@@ -53,6 +54,7 @@ beforeEach(() => {
     roomStatus: {},
     roomStatusControl: {},
     runViewMemory: {},
+    tiles: emptyTiles(),
     shownRunView: null,
     browserRequests: {},
     agentList: null,
@@ -127,6 +129,44 @@ describe('a phone', () => {
     expect(screen.getByRole('heading', { level: 1, name: 'speed up search' })).toBeDefined()
     expect(document.querySelector('[data-tile]')).toBeNull()
     expect(screen.queryByRole('tablist', { name: 'Sessions in this tile' })).toBeNull()
+  })
+
+  it('puts no tab panel or tab stop of a tile around the session', () => {
+    atViewport(390, { pointer: 'coarse' })
+    record()
+    render(<main id="main"><CenterView /></main>)
+    const around: Element[] = []
+    for (let node = screen.getByRole('heading', { level: 1 }).parentElement; node && node.id !== 'main'; node = node.parentElement) around.push(node)
+    expect(around.filter((node) => node.hasAttribute('role') || node.getAttribute('tabindex') === '0' || node.hasAttribute('aria-labelledby'))).toEqual([])
+    expect(screen.getAllByRole('tabpanel', { hidden: true }).filter((panel) => !document.getElementById(panel.getAttribute('aria-labelledby') ?? ''))).toEqual([])
+  })
+})
+
+describe('a phone whose stored focus is an empty tile', () => {
+  function split(view?: RunView) {
+    atViewport(390, { pointer: 'coarse' })
+    record()
+    const ctx = viewContext(useStore.getState())
+    const one = routeTiles(emptyTiles(), { runId: 'run_1' }, ctx)
+    useStore.setState({ tiles: splitTile(one, one.focused, 'right') })
+    useStore.setState({ route: { name: 'run', params: view ? { runId: 'run_1', view } : { runId: 'run_1' } } })
+    render(<main id="main"><CenterView /></main>)
+    return within(screen.getByRole('tablist', { name: 'Session views' }))
+  }
+
+  it('switches views from its tabs', () => {
+    const views = split()
+    expect(views.getByRole('tab', { name: 'Terminal' }).getAttribute('aria-selected')).toBe('true')
+    fireEvent.mouseDown(views.getByRole('tab', { name: 'Changes' }))
+    expect(views.getByRole('tab', { name: 'Changes' }).getAttribute('aria-selected')).toBe('true')
+    expect(useStore.getState().route.params).toEqual({ runId: 'run_1', view: 'changes' })
+    expect(StubSocket.opened).toHaveLength(1)
+  })
+
+  it('opens a link on the view it names', () => {
+    const views = split('changes')
+    expect(views.getByRole('tab', { name: 'Changes' }).getAttribute('aria-selected')).toBe('true')
+    expect(useStore.getState().route.params).toEqual({ runId: 'run_1', view: 'changes' })
   })
 })
 

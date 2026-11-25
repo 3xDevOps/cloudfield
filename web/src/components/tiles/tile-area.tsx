@@ -276,6 +276,11 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
     else if (!held) changeTiles((before) => before)
   }, [params, held])
 
+  // The stored focus joins the tile a phone draws, or its view tabs and a link's view would land on a tile it cannot see.
+  useLayoutEffect(() => {
+    if (routed) useStore.setState((s) => tilesAfter(s, (before, context) => routeTiles(focusTile(before, routed), params, context)))
+  }, [routed])
+
   // After the route is followed: a view that stopped being offered, on a session that finished for instance, would leave two tabs showing one thing.
   useLayoutEffect(() => changeTiles((before) => before), [ctx])
 

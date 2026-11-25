@@ -18,7 +18,7 @@ import { activateTab, activeTab, resolveView, visibleTiles, type Tile as TileNod
  */
 export function Tile({ tile, phone, rect, parked, opening, narrow, room, linked, onSlot }: {
   tile: TileNode
-  /** A phone draws the body alone: no strip, and nothing that marks a tile. */
+  /** A phone draws the body alone: no strip, and nothing that marks a tile or the panel of a strip tab. */
   phone: boolean
   /** In percent of the area. */
   rect: Rect
@@ -63,7 +63,7 @@ export function Tile({ tile, phone, rect, parked, opening, narrow, room, linked,
       >
         {!phone && <TabStrip tile={tile} opening={opening} narrow={narrow} room={room} />}
         {tab ? (
-          <TabsContent ref={slot} value={tab.id} forceMount className="relative flex-1">
+          <TabsContent ref={slot} value={tab.id} forceMount className="relative flex-1" {...(phone && { role: undefined, tabIndex: undefined, 'aria-labelledby': undefined })}>
             {!run && <MissingRun tiled={!phone} />}
           </TabsContent>
         ) : (
