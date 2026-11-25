@@ -87,7 +87,7 @@ line. The base coordination method set is:
 | --- | --- | --- |
 | `coord.status` | none | v3 wire version, this session's identity and assignment, authorized peers, unread count, and capabilities |
 | `coord.send` | `to_run_id`, `body`, `idempotency_key` | `message_id`, `recipient_status` |
-| `coord.inbox` | optional `ack_token`, optional `wait_seconds` | oldest-first `messages`, the `ack_token` for that batch, and `more`, the unacknowledged messages after it |
+| `coord.inbox` | optional `ack_token`, optional `wait_seconds`, optional `ack_only` | oldest-first `messages`, the `ack_token` for that batch, and `more`, the unacknowledged messages after it |
 | `coord.ask` | `to_run_id`, `body`, `idempotency_key` | `question_id`, `recipient_status` |
 | `coord.reply` | `question_id`, `body`, `idempotency_key` | `message_id` |
 | `coord.report` | `outcome`, `summary`, optional `waiting_for`, `until` and `evidence_refs`, `idempotency_key` | outcome, summary and next action; for success, failure and blocked also the durable `report_id`, evidence references, and automatic `evidence_ref` |
@@ -268,7 +268,10 @@ batches hold; read again until a read returns no messages. Omitting
 can be delivered again. Supplying the token on the
 next read acknowledges exactly that batch while fetching the next batch, and
 the result carries `"acked": true`; a stale or unknown token acknowledges
-nothing and omits `acked`. An empty inbox has no token. Tokens are durable across server restarts while the
+nothing and omits `acked`. With `"ack_only": true` the call acknowledges the
+token's batch and delivers nothing: the result has no `messages`, `more`
+counts every message not yet delivered, and `ack_token` names a batch still
+outstanding. An empty inbox has no token. Tokens are durable across server restarts while the
 session's sandbox and coordination data are retained.
 
 The batch is frozen until acknowledged. New arrivals can increase `status`
@@ -1129,9 +1132,9 @@ has `id`, `kind`, `correlation_id`, `from_run_id`, `body` and `created_at`.
 `kind` is `message`, `question`, `reply` or `report`; a `report` is a
 subsession's report and adds its `outcome`. To
 acknowledge it without reading on, pass its `ack_token` to `ack`. `ack` refuses
-with exit 3 and names the current batch's token when the token is stale or
-mistyped, and returns `waiting`, the number of unacknowledged messages after the
-batch it acknowledged. `inbox --ack <token>` acknowledges that token instead of the saved one.
+with exit 3 when the token is stale or mistyped, naming the current batch's
+token or the number of unread messages that wait, and returns `waiting`, the number of messages no read has returned
+yet. `inbox --ack <token>` acknowledges that token instead of the saved one.
 `--wait` asks the server to wait once for up to 30 seconds
 when no message is ready; it is not a client polling loop. If the process or
 connection ends before the result is consumed, do not acknowledge the token
@@ -1139,7 +1142,7 @@ and read again.
 
 Use this bounded wait while actively coordinating instead of keeping a model
 turn alive to poll. The active inbox waiter takes priority over native wake
-observers. Check the inbox before waiting or reporting even when integrations
+observers. Check the inbox before waiting even when integrations
 are installed; a hint is not a read or an acknowledgement.
 
 ### Team memory
@@ -1388,6 +1391,14 @@ below). A non-empty summary is required. `--evidence-ref` may be
 repeated, and `--summary-file` accepts a file or `-` for standard input. The result contains a durable
 `report_id` and the server-created `evidence_ref`.
 
+**A `success` or `failure` report is refused while mail is unread.** Mail is
+unread until an inbox read returns it. The refusal is `CodeInvalidState`
+(`-32002`) and names the senders:
+`coord.report: 2 unread messages (from run-abc, run-def). Run aether-internal inbox, handle them, then report again.`
+After a refusal, the next report passes once the session has called
+`coord.inbox` again, whatever arrived since; a call with `ack_only` does not
+count. Retrying an accepted report's key is never refused.
+
 **Interactive Standard and Enhanced sessions stay open.** A success or failure
 report completes the current task, not the session. Use a new idempotency key
 for each later task's report. A new report supersedes the previous success or
@@ -1529,8 +1540,7 @@ or work resumes; see [local-gateway.md](local-gateway.md).
 
 Within a turn, wait on a peer with `inbox --wait`; report `waiting` only to
 end the turn while waiting, and only where mail resumes an idle session and the session is not
-protected. Read the inbox once more before a
-terminal report and take no new work afterwards.
+protected. Take no new work after a terminal report.
 Finish runtime verification and collect any required terminal/browser captures
 before that report; accepted terminal outcomes may clean up the session's
 development resources. A capture receipt is not proof that an image was viewed.

@@ -401,16 +401,17 @@ receipt is returned, or held while a person controls that subsession.
 ` + coordhooks.UntrustedRule + `
 Mail: read it with
   aether-internal inbox
-The Inbox hooks line below says whether Cloudfield tells you when mail arrives;
+The Inbox line below says whether Cloudfield tells you when mail arrives;
 where it does not, read the inbox yourself.
 Each read returns one batch of about 16 KiB and acknowledges the batch before
 it. Acknowledged mail cannot be read again, so read the whole output: never pipe
 it through head, tail or a count. Read until a read returns no messages.
 kind report is a subsession's report; its outcome is success, failure or blocked.
-Check the inbox before waiting or reporting. Wait for mail inside your turn:
+A success or failure report is refused while you have mail you have not read.
+Wait for mail inside your turn:
   aether-internal inbox --wait 30
 To acknowledge a batch without reading on: aether-internal ack <ack_token>.
-Read the inbox once more before reporting:
+Report an outcome:
   aether-internal report --help
 `
 

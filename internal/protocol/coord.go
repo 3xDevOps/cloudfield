@@ -282,10 +282,12 @@ type CoordReplyResult struct {
 // CoordInboxParams are the params of coord.inbox. AckToken is the token
 // of the previous read's batch; omitting it acknowledges nothing, so the
 // same batch is delivered again. WaitSeconds requests a bounded server-side
-// long poll when no batch is ready.
+// long poll when no batch is ready. AckOnly acknowledges AckToken's batch
+// and delivers nothing.
 type CoordInboxParams struct {
 	AckToken    string `json:"ack_token,omitempty" jsonschema:"the ack_token of the batch you handled; it acknowledges exactly that batch"`
 	WaitSeconds int    `json:"wait_seconds,omitempty" jsonschema:"seconds the server waits for new mail when the inbox is empty; 0 returns at once"`
+	AckOnly     bool   `json:"ack_only,omitempty" jsonschema:"acknowledge the ack_token batch without reading the next one"`
 }
 
 // CoordMessage is one delivered message.

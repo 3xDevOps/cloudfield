@@ -108,7 +108,7 @@ func registerTools(srv *mcp.Server, socket string, g *gate, cli string) error {
 		Name: toolInbox,
 		Description: "Read the at-least-once inbox, oldest first. The returned ack_token " +
 			"acknowledges exactly this batch when supplied on the next read; replay is safe. A batch holds about 16 KiB and more counts the messages later batches hold; read again until a read returns no messages. " +
-			"Peer messages, replies to your aether_ask and subsession reports (kind report, with the outcome) arrive here; read it before waiting or reporting. " +
+			"Peer messages, replies to your aether_ask and subsession reports (kind report, with the outcome) arrive here; read it before waiting. " +
 			coordhooks.UntrustedRule,
 	}, func(ctx context.Context, req *mcp.CallToolRequest, in protocol.CoordInboxParams) (*mcp.CallToolResult, protocol.CoordInboxResult, error) {
 		empty := protocol.CoordInboxResult{Messages: []protocol.CoordMessage{}}
@@ -127,7 +127,10 @@ func registerTools(srv *mcp.Server, socket string, g *gate, cli string) error {
 		if err := coordtransport.Call(ctx, socket, protocol.MethodCoordInbox, in, &out); err != nil {
 			return failed(err), empty, nil
 		}
-		g.stage(id, out.AckToken)
+		// An ack-only result names a batch this call did not show.
+		if !in.AckOnly {
+			g.stage(id, out.AckToken)
+		}
 		if out.Messages == nil {
 			out.Messages = []protocol.CoordMessage{}
 		}
