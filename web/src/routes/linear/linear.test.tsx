@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import type { Api } from '@/lib/api'
 import type { LinearIssue } from '@/lib/types'
 import { LinearRoute } from '@/routes/linear'
@@ -34,8 +34,8 @@ describe('linear page', () => {
 
     const state = useStore.getState()
     expect(state.paletteDialog).toBe('launch')
-    expect(state.paletteLaunchTask).toBe(`ENG-123 Fix checkout total rounding\n\nLinked Linear issue: ENG-123 ${issue.url}`)
-    expect(state.paletteLaunchLinearURL).toBe(issue.url)
+    expect(state.paletteLaunchTask).toBe('ENG-123 Fix checkout total rounding')
+    expect(state.paletteLaunchLinear).toEqual({ identifier: 'ENG-123', url: issue.url })
   })
 
   it('offers Open session instead of Start session for an issue with a live linked session', async () => {
@@ -103,11 +103,36 @@ describe('linear page', () => {
     useStore.setState({ linear: { connected: false } })
     renderPage({ linearIssues: vi.fn(async () => { throw new Error('linear: not connected') }) })
 
-    await screen.findByText('Could not load issues')
+    await screen.findByText('Linear is not connected')
 
+    expect(screen.getByRole('alert').textContent).toContain('linear: not connected')
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
     expect(screen.queryByRole('searchbox')).toBeNull()
     expect(screen.getByRole('button', { name: 'Open Settings → Linear' })).toBeTruthy()
+  })
+
+  it('leads a refused key to Settings, with Retry second and no filters', async () => {
+    useStore.setState({ linear: { connected: true, error: 'Authentication required' } })
+    renderPage({ linearIssues: vi.fn(async () => { throw new Error('Authentication required') }) })
+
+    await screen.findByText('Linear refused your API key')
+
+    expect(screen.queryByRole('searchbox')).toBeNull()
+    const [first, second] = within(screen.getByRole('alert')).getAllByRole('button')
+    expect(first!.textContent).toBe('Open Settings → Linear')
+    expect(first!.className).toContain('bg-action')
+    expect(second!.textContent).toBe('Retry')
+  })
+
+  it('starts over for another identity', async () => {
+    useStore.setState({ identityKey: 'alice' })
+    const client = renderPage()
+    await screen.findByText(issue.title)
+    expect(client.linearIssues).toHaveBeenCalledTimes(1)
+
+    act(() => useStore.setState({ identityKey: 'bob' }))
+
+    await waitFor(() => expect(client.linearIssues).toHaveBeenCalledTimes(2))
   })
 
   it('shows Linear\'s own error with a button to Settings', async () => {
@@ -121,8 +146,8 @@ describe('linear page', () => {
 })
 
 describe('linear issue helpers', () => {
-  it('words the task as the title and the link', () => {
-    expect(linearTask(issue)).toBe(`ENG-123 Fix checkout total rounding\n\nLinked Linear issue: ENG-123 ${issue.url}`)
+  it('words the task as the identifier and title, with no URL the server could link again', () => {
+    expect(linearTask(issue)).toBe('ENG-123 Fix checkout total rounding')
   })
 
   it('colors a status by its type, with review as its own tone', () => {

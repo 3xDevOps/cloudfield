@@ -21,6 +21,7 @@ import { modeLabel } from '@/routes/run/agent-name'
 import type { AgentTerminal } from '@/routes/run/agent-terminal'
 import { ChildRuns } from '@/routes/run/child-runs'
 import { usePrimaryAction, type RunNavigation } from '@/routes/run/header'
+import { RunLinearIssue } from '@/routes/run/linear-issue'
 import { NoteComposer } from '@/routes/run/note-composer'
 import { NoteMessage, NoteThread } from '@/routes/run/note-thread'
 import { NeedsYouCards, useRunRequests } from '@/routes/run/requests'
@@ -183,6 +184,7 @@ function Facts({ run, agent, agentName, inset }: { run: RunRecord; agent: AgentT
         {run.account_member_id && run.account_member_id !== run.member_id && <Row label="Agent account"><Person id={run.account_member_id} /></Row>}
         <Row label="Agent">{agentName} · {modeLabel[run.mode] ?? run.mode}</Row>
         <Row label="Branch"><Code>{run.branch}</Code></Row>
+        {run.linear_issue && run.linear_issue_url && <Row label="Linear"><RunLinearIssue run={run} details className="w-fit text-text coarse:h-auto coarse:px-0" /></Row>}
         <Row label="Created"><RelativeTime at={run.created_at} /></Row>
         <Row label="Changed"><RelativeTime at={run.stateChangedAt} /></Row>
         {run.last_commit && run.last_commit_at && (

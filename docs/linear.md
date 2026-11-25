@@ -51,16 +51,41 @@ the team filter narrows the list to one team. A refused or missing key shows
 Linear's error with a button to **Settings**, **Connections**, **Linear**.
 
 **Start session** on a row opens the launch dialog with the task
-`<ID> <title>`, a blank line, and `Linked Linear issue: <ID> <url>`. Launching
-sends `linear_issue_url` explicitly, so the session is linked even if you edit
-the task. **Open in Linear** opens the issue in a new tab. If an unfinished
-launch draft exists, the dialog opens that draft instead, with no link.
+`<ID> <title>` and a chip, `<ID> · will be linked`, with an **Unlink** button.
+The task holds no URL: the link travels only as `linear_issue_url`, so
+**Unlink** really unlinks. Without it the server would link the first Linear
+URL in the task. **Open in Linear** opens the issue in a new tab. An issue
+that already has a live session shows **Open session**, with a dot, instead.
 
-A linked session shows the identifier with the Linear mark in its header, under
-the title on a wide screen and at the end of the status line on a phone. It
-links to the issue and appears before any pull request exists. With a saved
-key the header also shows the issue's status; if Linear refuses that read, the
-status is left out and Linear's error is the link's tooltip.
+The launch dialog saves its draft, and the draft carries its linked issue. A
+restored draft shows its own chip. If a draft is open when you press **Start
+session**, the dialog keeps the draft and says `Your unfinished <ID or session>
+draft was kept. <ID> was not loaded.` with **Use <ID> instead**, which replaces
+the task and the link.
+
+The agent learns the link from its role card, not the task: harnesses that
+carry Cloudfield's instructions (Claude Code, Codex, opencode) are told the
+issue and to put `Fixes <ID>` in a pull request. Gemini, Cursor, Antigravity
+and custom harnesses are not told; the link still shows in the dashboard and
+[Agents](agents.md#6-launch-the-first-session) covers how `publish` adds the line for
+them.
+
+A linked session shows the identifier with the Linear mark in its header,
+under the title on a wide screen and at the end of the status line on a phone,
+and in the **Linear** row of its Details panel next to **Branch**. It links to
+the issue and appears before any pull request exists. With a saved key the
+issue's status shows in two places: the desktop header when the status line
+is wide enough (32rem), and always in the Details panel, where the whole
+`<ID> <status>` is one link titled with the issue title. The phone header shows
+the identifier only. If Linear refuses the status read, the status is left out
+and Linear's error is the link's tooltip.
+
+**Settings**, **Connections**, **Linear** shows `Connected as <name>` with
+**View issues** and **Disconnect**. If Linear refuses the saved key, it shows
+Linear's error in red with a key field and **Replace key** beside
+**Disconnect**. If reading the status fails for any other reason (the server
+has no Linear service, an outage, a timeout), it shows the error and
+**Retry**, with no **Disconnect** and no **Linear** entry in the navigation.
 
 ## Where the key is stored
 

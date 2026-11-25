@@ -1,3 +1,4 @@
+import { ApiError, codeUnavailable } from '@/lib/api'
 import { createRootStore } from '@/store'
 import { loadLinear } from '@/store/linear'
 import { fakeApi } from '@/test/fixtures'
@@ -16,11 +17,22 @@ describe('loadLinear', () => {
     expect(store.getState().linear).toEqual({ connected: true, name: 'Ada' })
   })
 
-  it('keeps a saved key connected, with Linear\'s error, when the read fails', async () => {
+  it('keeps a saved key connected, with Linear\'s error, when Linear refuses it', async () => {
     const store = storeWith(['linear.status'])
-    await loadLinear(store, fakeApi({ linearStatus: vi.fn(async () => { throw new Error('Authentication required') }) }))
+    await loadLinear(store, fakeApi({ linearStatus: vi.fn(async () => { throw new ApiError(500, 'Authentication required', -32603) }) }))
 
     expect(store.getState().linear).toEqual({ connected: true, error: 'Authentication required' })
+  })
+
+  it.each([
+    ['an unconfigured service', new ApiError(500, 'linear service not configured', codeUnavailable)],
+    ['a timeout', new ApiError(500, 'linear: Post "https://api.linear.app/graphql": context deadline exceeded', -32603)],
+    ['a transport failure', new TypeError('Failed to fetch')],
+  ])('does not call a key saved when the read fails with %s', async (_, failure) => {
+    const store = storeWith(['linear.status'])
+    await loadLinear(store, fakeApi({ linearStatus: vi.fn(async () => { throw failure }) }))
+
+    expect(store.getState().linear).toEqual({ connected: false, error: failure.message })
   })
 
   it('clears the status on a server without linear.status', async () => {

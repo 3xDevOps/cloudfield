@@ -2526,6 +2526,12 @@ export interface PreferenceDeleteResult {
   deleted: Preference
 }
 
+/** The Linear issue a launch links its session to. */
+export interface LinearLink {
+  identifier: string
+  url: string
+}
+
 export interface LinearStatus {
   connected: boolean
   name?: string

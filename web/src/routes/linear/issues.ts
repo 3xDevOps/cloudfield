@@ -11,6 +11,7 @@ export function linearTone(state: Pick<LinearIssue['state'], 'name' | 'type'>): 
   }
 }
 
-export function linearTask(issue: Pick<LinearIssue, 'identifier' | 'title' | 'url'>): string {
-  return `${issue.identifier} ${issue.title}\n\nLinked Linear issue: ${issue.identifier} ${issue.url}`
+/** The link travels in linear_issue_url only: a URL in the task would link the session again after an Unlink. */
+export function linearTask(issue: Pick<LinearIssue, 'identifier' | 'title'>): string {
+  return `${issue.identifier} ${issue.title}`
 }

@@ -19,7 +19,7 @@ export function SettingsSection({ title, id: sectionID, heading = 'h3', scope, t
         <SectionLabel as={heading} id={id} tabIndex={-1} className="outline-none">{title}</SectionLabel>
         {scope && <Badge>{scope}</Badge>}
       </div>
-      <div className={cn('flex min-w-0 flex-col divide-y divide-seam rounded-panel border transition-colors group-data-highlight/section:bg-selection motion-reduce:transition-none', tone === 'danger' ? 'border-state-failed/40' : 'border-seam')}>{children}</div>
+      <div className={cn('flex min-w-0 flex-col divide-y divide-seam rounded-panel border transition-colors group-data-highlight/section:bg-hover motion-reduce:transition-none', tone === 'danger' ? 'border-state-failed/40' : 'border-seam')}>{children}</div>
     </section>
   )
 }

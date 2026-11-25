@@ -11,7 +11,7 @@ import { automaticFallback, ChildRunsSwitch, type ChildRunsChoice, fallbackParam
 import { PermissionControl, permissionFeature } from '@/components/launch/permission-control'
 import { ExtraRepos } from '@/components/launch/extra-repos'
 import { PhoneLaunchSheet } from '@/components/launch/phone-launch'
-import { LinkedIssue } from '@/components/launch/linked-issue'
+import { LinkedIssue, OfferedIssue } from '@/components/launch/linked-issue'
 import { AgentOptions, needsTask, RunFields, useAgentChoice } from '@/components/launch/run-fields'
 import { emptyLimits, parseLimits, useServerRunLimits } from '@/components/launch/run-limits'
 import { fallbackFromSaved, fallbackToSaved, SaveAccountDefault, SavedIssues } from '@/components/launch/saved-defaults'
@@ -104,18 +104,18 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   const choice = useAgentChoice({ account, ownAccountID, saved: savedRead, hold: preset === 'pending', pick, fallback: last?.harness, initial: restored ?? undefined, open })
   const { agents, agentError, harness, mode, model, effort, noAgents } = choice
   const [prefill] = useState(() => useStore.getState().paletteLaunchTask)
-  const storeURL = useStore((s) => s.paletteLaunchLinearURL)
-  const [pickedURL] = useState(storeURL)
-  // A collapsed draft stays mounted, so an issue picked while it is open is not the one its task was written for.
-  const ignoredURL = storeURL !== pickedURL ? storeURL : ''
-  const [unlinked, setUnlinked] = useState(false)
-  const linearURL = restored || unlinked ? '' : pickedURL
+  const offeredTask = useStore((s) => s.paletteLaunchTask)
+  const offered = useStore((s) => s.paletteLaunchLinear)
+  // The offer the form took at mount; a restored draft takes none.
+  const [taken, setTaken] = useState(() => (restored ? null : offered))
+  const [link, setLink] = useState(restored ? restored.linear ?? null : offered)
+  const pending = offered && offered.identifier !== taken?.identifier && offered.identifier !== link?.identifier ? offered : null
   // Text from the Linear page is the member's own pick, not text shared from another app.
-  const shared = pickedURL ? '' : prefill
+  const [shared] = useState(() => (offered ? '' : prefill))
   const linked = (
     <>
-      {pickedURL && !unlinked && <LinkedIssue url={pickedURL} kept={!restored} onUnlink={() => setUnlinked(true)} />}
-      {ignoredURL && <LinkedIssue url={ignoredURL} kept={false} onUnlink={() => setUnlinked(true)} />}
+      {link && <LinkedIssue link={link} onUnlink={() => setLink(null)} />}
+      {pending && <OfferedIssue draft={link} offered={pending} onUse={() => { setTask(offeredTask); setLink(pending); setTaken(pending) }} />}
     </>
   )
   const [task, setTask] = useState(restored?.task ?? prefill)
@@ -190,11 +190,12 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
     const draft: LaunchDraft = {
       version: 1, id: draftID, workspace: workspaceID, extras, account, fallback,
       permission, childRuns, limits, harness, mode, model, effort, task,
+      ...(link ? { linear: link } : {}),
     }
     const failure = state.setLaunchDraft(draft, !launchDraftError)
     if (failure && !storageFailed.current) toast.error(`Draft could not be saved in this browser: ${failure}`)
     storageFailed.current = failure !== null
-  }, [identityKey, draftID, open, workspaceID, extras, account, fallback, permission, childRuns, limits, harness, mode, model, effort, task, launchDraftError, linkStatus])
+  }, [identityKey, draftID, open, workspaceID, extras, account, fallback, permission, childRuns, limits, harness, mode, model, effort, task, link, launchDraftError, linkStatus])
 
   const collapse = () => {
     setPickedWorkspace(workspaceID)
@@ -247,7 +248,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
       ...(chosenModel ? { model: chosenModel } : {}),
       ...(effort ? { effort } : {}),
       ...(permissionOffered ? { permission } : {}),
-      ...(linearURL ? { linear_issue_url: linearURL } : {}),
+      ...(link ? { linear_issue_url: link.url } : {}),
       ...(sharedAccount ? { account_member_id: account } : {}),
       ...fallbackParams(fallback, accounts, account),
       ...extraRepos,

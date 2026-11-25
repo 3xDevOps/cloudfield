@@ -28,13 +28,31 @@ describe('run header Linear link', () => {
     expect(client.linearIssue).toHaveBeenCalledWith('ENG-123')
   })
 
-  it('drops the status text in the compact header, keeping it in the accessible name', async () => {
+  it('reads no status in the compact header, which shows none', () => {
     useStore.setState({ linear: { connected: true } })
-    const client = fakeApi({ linearIssue: vi.fn(async () => ({ identifier: 'ENG-123', title: 't', url: run.linear_issue_url, state: { name: 'In Progress', type: 'started' } })) })
+    const client = fakeApi()
     render(<RunLinearIssue run={run} client={client} compact />)
 
+    expect(screen.getByRole('link', { name: 'Linear issue ENG-123' }).textContent).toBe('ENG-123')
+    expect(client.linearIssue).not.toHaveBeenCalled()
+  })
+
+  it('shows the status in the details row as one link titled with the issue title', async () => {
+    useStore.setState({ linear: { connected: true } })
+    const client = fakeApi({ linearIssue: vi.fn(async () => ({ identifier: 'ENG-123', title: 'Fix rounding', url: run.linear_issue_url, state: { name: 'In Progress', type: 'started' } })) })
+    render(<RunLinearIssue run={run} client={client} details />)
+
     const link = await screen.findByRole('link', { name: 'Linear issue ENG-123, In Progress' })
-    expect(link.textContent).toBe('ENG-123')
+    expect(link.textContent).toBe('ENG-123In Progress')
+    expect(link.getAttribute('title')).toBe('Fix rounding')
+  })
+
+  it('never reads an issue with an empty identifier', () => {
+    useStore.setState({ linear: { connected: true } })
+    const client = fakeApi()
+    render(<RunLinearIssue run={{ linear_issue: '', linear_issue_url: run.linear_issue_url }} client={client} />)
+
+    expect(client.linearIssue).not.toHaveBeenCalled()
   })
 
   it('shows no status and puts Linear\'s error in the tooltip when the lookup fails', async () => {

@@ -12,12 +12,14 @@ import { StatusDot } from '@/components/ui/status-dot'
 import { ViewHeader } from '@/components/view-header'
 import { api, type Api } from '@/lib/api'
 import { message } from '@/lib/format'
+import { useIsMobile } from '@/lib/breakpoints'
 import { useElementSize } from '@/lib/hooks'
 import type { LinearIssue, LinearTeam } from '@/lib/types'
 import { cn } from '@/lib/utils'
 import { linearTask, linearTone } from '@/routes/linear/issues'
 import { registerRoute, type RouteProps } from '@/routes/registry'
 import { useStore } from '@/store'
+import { loadLinear } from '@/store/linear'
 import { isTerminal } from '@/store/runs'
 
 const allTeams = 'all'
@@ -42,9 +44,11 @@ function Actions({ issue }: { issue: LinearIssue }) {
   return (
     <span className="flex shrink-0 items-center gap-2">
       {open ? (
-        <Button size="sm" variant="secondary" onClick={() => useStore.getState().navigate('run', { runId: open })}>Open session</Button>
+        <Button size="sm" variant="secondary" onClick={() => useStore.getState().navigate('run', { runId: open })}>
+          <StatusDot tone="working" />Open session
+        </Button>
       ) : (
-        <Button size="sm" variant="secondary" onClick={() => useStore.getState().openLaunchWithTask(linearTask(issue), issue.url)}>Start session</Button>
+        <Button size="sm" variant="secondary" onClick={() => useStore.getState().openLaunchWithTask(linearTask(issue), { identifier: issue.identifier, url: issue.url })}>Start session</Button>
       )}
       <a className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'gap-1.5')} href={issue.url} target="_blank" rel="noreferrer">
         <Linear aria-hidden className="size-3.5" />Open in Linear
@@ -53,17 +57,21 @@ function Actions({ issue }: { issue: LinearIssue }) {
   )
 }
 
-function ReadError({ title, error, onRetry }: { title: string; error: string; onRetry?: () => void }) {
+type Fault = 'no-key' | 'refused' | 'failed'
+
+/** Without a key, or with one Linear refuses, Retry cannot help: Settings is the way on. */
+function ReadError({ fault, error, onRetry }: { fault: Fault; error: string; onRetry: () => void }) {
+  const settings = (
+    <Button size="sm" variant={fault === 'failed' ? 'secondary' : 'primary'} onClick={() => useStore.getState().navigate('settings', { section: 'linear' })}>Open Settings → Linear</Button>
+  )
+  const retry = <Button size="sm" variant={fault === 'refused' ? 'secondary' : 'primary'} onClick={onRetry}>Retry</Button>
   return (
     <Callout
       tone="needs-you"
       role="alert"
-      title={title}
+      title={fault === 'no-key' ? 'Linear is not connected' : fault === 'refused' ? 'Linear refused your API key' : 'Could not load issues'}
       actions={
-        <>
-          {onRetry && <Button size="sm" onClick={onRetry}>Retry</Button>}
-          <Button size="sm" variant={onRetry ? 'secondary' : 'primary'} onClick={() => useStore.getState().navigate('settings', { section: 'linear' })}>Open Settings → Linear</Button>
-        </>
+        fault === 'no-key' ? settings : fault === 'refused' ? <>{settings}{retry}</> : <>{retry}{settings}</>
       }
     >
       {error}
@@ -71,7 +79,12 @@ function ReadError({ title, error, onRetry }: { title: string; error: string; on
   )
 }
 
-export function LinearRoute({ client = api }: RouteProps & { client?: Api }) {
+export function LinearRoute({ params, client = api }: RouteProps & { client?: Api }) {
+  const identityKey = useStore((s) => s.identityKey)
+  return <LinearPage key={identityKey} params={params} client={client} />
+}
+
+function LinearPage({ client }: RouteProps & { client: Api }) {
   const status = useStore((s) => s.linear)
   const [typed, setTyped] = useState('')
   const [query, setQuery] = useState('')
@@ -111,8 +124,12 @@ export function LinearRoute({ client = api }: RouteProps & { client?: Api }) {
     return () => { live = false }
   }, [client, team, query, attempt])
 
-  const noKey = status?.connected === false
+  const mobile = useIsMobile()
+  const noKey = status?.connected === false && !status.error
+  const refused = status?.connected === true && status.error !== undefined
   const issues = read && 'issues' in read ? read.issues : null
+  const filters = !noKey && !(refused && issues === null)
+  const retry = () => { setAttempt((n) => n + 1); void loadLinear(useStore, client) }
   const subtitle = read && 'error' in read ? undefined : status?.organization ? `Assigned to you · ${status.organization}` : 'Assigned to you'
 
   return (
@@ -120,7 +137,8 @@ export function LinearRoute({ client = api }: RouteProps & { client?: Api }) {
       <ViewHeader title="Linear" subtitle={subtitle} />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <PageBody width="xl" className="gap-4">
-          {!noKey && <div className="flex min-w-0 flex-wrap items-center gap-2">
+          {mobile && subtitle && <p className="-mt-1 text-ui-sm text-muted">{subtitle}</p>}
+          {filters && <div className="flex min-w-0 flex-wrap items-center gap-2">
             <label className="relative min-w-0 flex-[1_1_16rem]">
               <span className="sr-only">Search issues</span>
               <Search aria-hidden className="pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2 text-muted" />
@@ -136,9 +154,11 @@ export function LinearRoute({ client = api }: RouteProps & { client?: Api }) {
               </SelectContent>
             </Select>
           </div>}
-          {teamsError && !noKey && !(read && 'error' in read) && <ReadError title="Could not load teams" error={teamsError} onRetry={() => setAttempt((n) => n + 1)} />}
+          {teamsError && filters && !(read && 'error' in read) && (
+            <Callout tone="needs-you" role="alert" title="Could not load teams" actions={<Button size="sm" onClick={retry}>Retry</Button>}>{teamsError}</Callout>
+          )}
           {read && 'error' in read ? (
-            <ReadError title="Could not load issues" error={read.error} onRetry={noKey ? undefined : () => setAttempt((n) => n + 1)} />
+            <ReadError fault={noKey ? 'no-key' : refused ? 'refused' : 'failed'} error={read.error} onRetry={retry} />
           ) : (
           <section aria-label="Issues" className="flex min-w-0 flex-col gap-2">
             <SectionLabel as="h2">

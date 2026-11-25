@@ -1,4 +1,4 @@
-import type { Api } from '@/lib/api'
+import { codeUnavailable, type ApiError, type Api } from '@/lib/api'
 import { message } from '@/lib/format'
 import type { LinearStatus } from '@/lib/types'
 import type { RootStore } from '@/store'
@@ -6,9 +6,10 @@ import { capability } from '@/store/hooks'
 import type { SliceCreator } from '@/store/slice'
 
 /** linear.status for the caller; null before it is read or when the server
- * does not serve it. A failed read leaves connected true with the error: the
- * server answers a member without a key with connected false, so a failure
- * means a key is saved and the read failed (refused key, outage or timeout). The Linear nav entry follows it. */
+ * does not serve it. A failed read has `error`. Only Linear refusing the saved
+ * key leaves connected true, since a key is then saved; any other failure
+ * (service not configured, outage, timeout) leaves connected false, so the
+ * Linear nav entry and a Disconnect row stay away while the error shows. */
 export interface LinearSlice {
   linear: LinearStatus | null
   /** Counts Connect and Disconnect, so a read that started before one cannot overwrite it. */
@@ -24,11 +25,14 @@ export const createLinearSlice: SliceCreator<LinearSlice> = (set) => ({
   writeLinear: (linear) => set((s) => ({ linear, linearWrites: s.linearWrites + 1 })),
 })
 
+const refusal = /authenticat|unauthori[sz]ed|forbidden|\b40[13]\b/i
+
 export async function readLinear(client: Api): Promise<LinearStatus> {
   try {
     return await client.linearStatus()
   } catch (err) {
-    return { connected: true, error: message(err) }
+    const error = message(err)
+    return { connected: (err as ApiError).code !== codeUnavailable && refusal.test(error), error }
   }
 }
 

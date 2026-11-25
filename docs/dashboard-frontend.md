@@ -5656,17 +5656,39 @@ in **Needs you**.
 issues from `linear.issues` with a title search and a `linear.teams` filter. It
 is in the navigation only when `linear.status` (read into the store's `linear`
 slice on hydration, without holding it, and by Settings › Connections › Linear)
-reports a saved key. `?page=linear` without a key still opens and shows one error card.
-**Start session** calls `openLaunchWithTask(task, issueURL)`; the launch dialog
-sends the URL as `linear_issue_url` and, unlike text shared from another app,
-shows no review notice. A chip above Task says the session will be linked, with
-**Unlink**; when a restored draft wins, a notice says the issue is not linked.
-The page picks the table or the stacked list from its own width (920px), and
-shows **Open session** in place of **Start session** for an issue with a live
-linked session. `src/routes/run/linear-issue.tsx` is the session
-header's link to `run.linear_issue_url`, with the status text from `linear.issue`
-(only where the header line has 32rem; never a status dot, which belongs to session state).
-[linear.md](linear.md) covers the behavior.
+reports a saved key. A failed `linear.status` counts as a saved key only when
+the error is Linear refusing it (`readLinear` in `src/store/linear.ts` matches
+the message against authentication and 401/403 wording); an unconfigured
+service, an outage or a timeout leaves `connected` false with the `error`, so
+the entry and Settings' **Disconnect** stay away and **Retry** shows. The
+entry stays hidden until a key is saved by design: Settings › Connections ›
+Linear and the command palette are the way in. `?page=linear` without a key
+still opens and shows **Linear is not connected** with the server's error and a
+button to Settings; with a refused key it shows **Linear refused your API key**,
+**Open Settings → Linear** as the primary button, **Retry** second, and no
+search or team filter. The page and the Settings section are keyed by
+`identityKey`, and a Connect or Disconnect that finishes after an identity
+switch is dropped.
+
+**Start session** calls `openLaunchWithTask("<ID> <title>", { identifier, url })`.
+The task carries no URL: `run.launch` links the first Linear URL in the task
+when `linear_issue_url` is omitted, so a URL there would link a session the
+member unlinked. The launch dialog sends the link as `linear_issue_url` and,
+unlike text shared from another app, shows no review notice. A chip above Task
+says the session will be linked, with **Unlink**. The draft carries the link
+(`LaunchDraft.linear`), so a restored draft shows its own chip. When Start
+session is pressed for another issue while a draft is open, a notice says the
+draft was kept and offers **Use `<ID>` instead**, which replaces the task and
+link; phone and desktop share one component.
+
+The page picks the table or the stacked list from its own width (920px), shows
+the subtitle in the page on a phone, and shows **Open session**, with a working
+dot, in place of **Start session** for an issue with a live linked session.
+`src/routes/run/linear-issue.tsx` is the link to `run.linear_issue_url`: in the
+session header with the status text from `linear.issue` where the header line
+has 32rem, in the Details panel's **Linear** row always with the status, and
+without status or lookup in the phone header (never a status dot, which belongs
+to session state). [linear.md](linear.md) covers the behavior.
 
 ## Insights
 
