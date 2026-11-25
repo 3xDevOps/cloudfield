@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/3xDevOps/Aether/internal/control"
 	"github.com/3xDevOps/Aether/internal/domain"
 	"github.com/3xDevOps/Aether/internal/events"
+	"github.com/3xDevOps/Aether/internal/linear"
 	"github.com/3xDevOps/Aether/internal/protocol"
 	"github.com/3xDevOps/Aether/internal/scheduler"
 	"github.com/3xDevOps/Aether/internal/store"
@@ -579,5 +581,39 @@ func TestLaunchRefusesUnknownParams(t *testing.T) {
 	var runs protocol.RunListResult
 	if err := c.Call(protocol.MethodRunList, map[string]any{"workspace_id": string(e.ws.ID), "unknown": true}, &runs); err != nil {
 		t.Fatalf("run.list with an unknown param = %v, want it ignored", err)
+	}
+}
+
+func TestControlLaunchLinksALinearIssue(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t, nil)
+	c := controlClient(t, e)
+	launch := func(p protocol.RunLaunchParams) error {
+		p.WorkspaceID, p.Harness, p.Mode = string(e.ws.ID), "claude", "tui"
+		return c.Call(protocol.MethodRunLaunch, p, nil)
+	}
+	if err := launch(protocol.RunLaunchParams{Task: "fix it", LinearIssueURL: "https://linear.app/acme/issue/eng-1/slug"}); err != nil {
+		t.Fatalf("launch with an explicit link: %v", err)
+	}
+	if err := launch(protocol.RunLaunchParams{Task: "work on https://linear.app/acme/issue/ENG-2/slug, please"}); err != nil {
+		t.Fatalf("launch with a link in the task: %v", err)
+	}
+	if err := launch(protocol.RunLaunchParams{Task: "no link here"}); err != nil {
+		t.Fatalf("launch without a link: %v", err)
+	}
+	var got []string
+	for _, opts := range e.runs.LaunchOptions() {
+		got = append(got, opts.LinearIssueURL)
+	}
+	want := []string{"https://linear.app/acme/issue/ENG-1", "https://linear.app/acme/issue/ENG-2", ""}
+	if !slices.Equal(got, want) {
+		t.Fatalf("launched Linear issues = %q, want %q", got, want)
+	}
+
+	var pe *protocol.Error
+	err := launch(protocol.RunLaunchParams{Task: "fix it", LinearIssueURL: "https://example.com/ENG-1"})
+	if !errors.As(err, &pe) || pe.Code != protocol.CodeInvalidParams || !strings.Contains(pe.Message, `"https://example.com/ENG-1"`) ||
+		!strings.Contains(pe.Message, linear.Form) || len(e.runs.LaunchOptions()) != 3 {
+		t.Fatalf("launch with a bad link = %v after %d launches, want CodeInvalidParams quoting the value and the form", err, len(e.runs.LaunchOptions()))
 	}
 }

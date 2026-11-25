@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/3xDevOps/Aether/internal/domain"
+	"github.com/3xDevOps/Aether/internal/linear"
 )
 
 // Run is the wire form of a run. Times are RFC3339; server-side host paths
@@ -113,6 +114,10 @@ type Run struct {
 	Detached     bool   `json:"detached,omitempty"`
 	// Children is the run's own child-run setting: "", "on" or "off".
 	Children string `json:"children,omitempty"`
+	// LinearIssue is the identifier, such as ENG-123, of the Linear issue
+	// the run works on; LinearIssueURL is its canonical URL.
+	LinearIssue    string `json:"linear_issue,omitempty"`
+	LinearIssueURL string `json:"linear_issue_url,omitempty"`
 	// Immutable base provenance captured at launch.
 	BaseCommit    string  `json:"base_commit,omitempty"`
 	BaseBranch    string  `json:"base_branch,omitempty"`
@@ -285,6 +290,8 @@ func RunFromDomain(r *domain.Run) Run {
 		ChildPurpose:        r.ChildPurpose,
 		Detached:            r.Detached,
 		Children:            r.Children,
+		LinearIssue:         linearIssue(r.LinearIssueURL),
+		LinearIssueURL:      r.LinearIssueURL,
 		BaseCommit:          r.BaseCommit,
 		BaseBranch:          r.BaseBranch,
 		BaseSource:          r.BaseSource,
@@ -294,6 +301,12 @@ func RunFromDomain(r *domain.Run) Run {
 		FallbackAccountMemberIDs: FallbackIDs(r.Fallback),
 		NoFallback:               r.Fallback.Disabled,
 	}
+}
+
+// linearIssue is the identifier of a stored issue URL; empty for none.
+func linearIssue(url string) string {
+	id, _, _ := linear.ParseIssueURL(url)
+	return id
 }
 
 // FallbackIDs is policy's order as member ids; nil when automatic.
@@ -513,6 +526,10 @@ type RunLaunchParams struct {
 	// Limits override the server's run limits for this run; a zero field
 	// follows them.
 	Limits *RunLimits `json:"limits,omitempty"`
+	// LinearIssueURL links the run to a Linear issue, in the form
+	// https://linear.app/<workspace>/issue/<TEAM>-<number>[/<slug>]. Empty
+	// takes the first such link in Task.
+	LinearIssueURL string `json:"linear_issue_url,omitempty"`
 }
 
 // RunLaunchResult is a RunResult; Replayed is true when IdempotencyKey

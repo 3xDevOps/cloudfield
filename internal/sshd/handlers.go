@@ -17,6 +17,7 @@ import (
 	"github.com/3xDevOps/Aether/internal/evidence"
 	"github.com/3xDevOps/Aether/internal/fallback"
 	"github.com/3xDevOps/Aether/internal/gitengine"
+	"github.com/3xDevOps/Aether/internal/linear"
 	"github.com/3xDevOps/Aether/internal/permissions"
 	"github.com/3xDevOps/Aether/internal/protocol"
 	"github.com/3xDevOps/Aether/internal/scheduler"
@@ -224,6 +225,16 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 			return nil, invalidParams(err.Error())
 		}
 	}
+	// The idempotency fingerprint covers the link as the client sent it, so
+	// a receipt recorded before links existed still matches its retry.
+	linkedIssue := linear.FindIssueURL(p.Task)
+	if p.LinearIssueURL != "" {
+		_, canonical, err := linear.ParseIssueURL(p.LinearIssueURL)
+		if err != nil {
+			return nil, invalidParams(err.Error())
+		}
+		linkedIssue = canonical
+	}
 	key := p.IdempotencyKey
 	p.IdempotencyKey = ""
 	var earlier any
@@ -240,7 +251,9 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 	var skipped []protocol.SkippedAccount
 	var childrenErr *protocol.Error
 	run, replayed, perr := s.idempotentLaunch(ctx, member, key, protocol.MethodRunLaunch, p, earlier, func(created func(domain.RunID)) (*domain.Run, *protocol.Error) {
-		return s.launchRun(ctx, member, p, mode, policy, func(id domain.RunID) {
+		launched := p
+		launched.LinearIssueURL = linkedIssue
+		return s.launchRun(ctx, member, launched, mode, policy, func(id domain.RunID) {
 			if created != nil {
 				created(id)
 			}
@@ -305,7 +318,7 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 		Limits:     limits,
 		CachedBase: p.CachedBase, Model: p.Model, Effort: p.Effort, Permission: permission, RequestedAccount: requested, Fallback: policy,
 		Admitted: unlockAuthorization, Created: created,
-		ExtraWorkspaces: workspaceIDs(p.ExtraWorkspaceIDs),
+		ExtraWorkspaces: workspaceIDs(p.ExtraWorkspaceIDs), LinearIssueURL: p.LinearIssueURL,
 	})
 	if err != nil {
 		if errors.Is(err, errLaunchOptionsUnsupported) {

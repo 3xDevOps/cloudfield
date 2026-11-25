@@ -415,7 +415,7 @@ func launchTemplate(ctx context.Context, c calls, in connectorLaunchInput) (stri
 	var named []string
 	for field, set := range map[string]bool{"task": in.Task != "", "harness": in.Harness != "", "mode": in.Mode != "", "model": in.Model != "",
 		"account_member_id": in.AccountMemberID != "", "fallback_account_member_ids": len(in.FallbackAccountMemberIDs) > 0,
-		"no_fallback": in.NoFallback, "extra_workspace_ids": len(in.ExtraWorkspaceIDs) > 0, "children": in.Children != "", "permission": in.Permission != ""} {
+		"no_fallback": in.NoFallback, "extra_workspace_ids": len(in.ExtraWorkspaceIDs) > 0, "children": in.Children != "", "permission": in.Permission != "", "linear_issue_url": in.LinearIssueURL != ""} {
 		if set {
 			named = append(named, field)
 		}

@@ -52,6 +52,7 @@ func runRun(args []string) error {
 	noFallback := fs.Bool("no-fallback", false, noFallbackHelp)
 	children := fs.String("children", "", "subsessions this session's agent may start: on or off for this session only (default: your setting, cloudfield subsessions)")
 	idempotencyKey := fs.String("idempotency-key", "", "the key a failed or interrupted launch printed: the retry returns that launch's session instead of starting another (default: a new key)")
+	linearIssue := fs.String("linear-issue", "", "link the session to a Linear issue, https://linear.app/<workspace>/issue/<TEAM>-<number> (default: the first Linear issue link in the task)")
 	var repos stringList
 	fs.Var(&repos, "repo", "also check out this workspace ID or name at /repos/<name> with its own session branch (repeatable)")
 	params := kvFlag{}
@@ -70,8 +71,8 @@ func runRun(args []string) error {
 		task = fs.Arg(0)
 	}
 	if *template != "" {
-		if task != "" || *agent != "" || *model != "" || *effort != "" || *permission != "" || *account != "" || *cachedBase != "" || *fallbackOrder != "" || *noFallback || len(repos) > 0 || *idempotencyKey != "" || *children != "" {
-			return fmt.Errorf("--template launches a saved definition: drop the task prompt, --agent, --model, --effort, --permission, --account, --cached-base, --fallback, --no-fallback, --repo, --children, and --idempotency-key")
+		if task != "" || *agent != "" || *model != "" || *effort != "" || *permission != "" || *account != "" || *cachedBase != "" || *fallbackOrder != "" || *noFallback || len(repos) > 0 || *idempotencyKey != "" || *children != "" || *linearIssue != "" {
+			return fmt.Errorf("--template launches a saved definition: drop the task prompt, --agent, --model, --effort, --permission, --account, --cached-base, --fallback, --no-fallback, --repo, --children, --linear-issue, and --idempotency-key")
 		}
 		return launchTemplate(*workspace, *template, params)
 	}
@@ -90,7 +91,7 @@ func runRun(args []string) error {
 		return fmt.Errorf("invalid --children %q: want on or off", *children)
 	}
 	if *agent == "" || fs.NArg() > 1 || (task == "" && *mode == "headless") {
-		return fmt.Errorf("usage: cloudfield session [\"task\"|-] --agent <name> [--mode standard|enhanced|background] [--model <model>] [--effort <level>] [--permission root|default|isolated] [--workspace] [--account <member-id>] [--fallback <member-id>,... | --no-fallback] [--cached-base <full-sha>] [--repo <workspace> ...] [--children on|off] [--idempotency-key <key>]\n   (a task is required with --mode background; - reads it from stdin)\n   or: cloudfield session --template <name> [--param k=v] [--workspace]\n   or: cloudfield session switch <session-id> --mode standard|enhanced")
+		return fmt.Errorf("usage: cloudfield session [\"task\"|-] --agent <name> [--mode standard|enhanced|background] [--model <model>] [--effort <level>] [--permission root|default|isolated] [--workspace] [--account <member-id>] [--fallback <member-id>,... | --no-fallback] [--cached-base <full-sha>] [--repo <workspace> ...] [--children on|off] [--linear-issue <url>] [--idempotency-key <key>]\n   (a task is required with --mode background; - reads it from stdin)\n   or: cloudfield session --template <name> [--param k=v] [--workspace]\n   or: cloudfield session switch <session-id> --mode standard|enhanced")
 	}
 	fromStdin := task == "-"
 	task, err = stdinText(task, "task", os.Stdin)
@@ -123,6 +124,7 @@ func runRun(args []string) error {
 		params.FallbackAccountMemberIDs, params.NoFallback = fallbacks, *noFallback
 		params.Children = *children
 		params.Permission = *permission
+		params.LinearIssueURL = *linearIssue
 		params.IdempotencyKey = cmp.Or(*idempotencyKey, cli.NewControlSessionID())
 		for _, repo := range repos {
 			id, err := workspaceIDIn(list.Workspaces, repo)

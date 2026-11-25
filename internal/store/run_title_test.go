@@ -136,3 +136,27 @@ func TestRunEffortRoundTripsAndCanBeChanged(t *testing.T) {
 		t.Fatal("create run with whitespace in effort succeeded")
 	}
 }
+
+func TestRunLinearIssueURLRoundTrip(t *testing.T) {
+	t.Parallel()
+	db := openTestDB(t)
+	workspace := mustCreateWorkspace(t, db)
+	member := mustCreateMember(t, db)
+	plain := mustCreateRun(t, db, workspace.ID, member.ID, domain.RunQueued)
+	linked := &domain.Run{WorkspaceID: workspace.ID, MemberID: member.ID, Harness: "claude", Mode: domain.LaunchTUI, Status: domain.RunQueued,
+		LinearIssueURL: "https://linear.app/acme/issue/ENG-123"}
+	if err := db.CreateRun(t.Context(), linked); err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	linked.Title = "renamed"
+	linked.LinearIssueURL = "https://linear.app/acme/issue/ENG-999"
+	if err := db.UpdateRun(t.Context(), linked); err != nil {
+		t.Fatalf("update run: %v", err)
+	}
+	for id, want := range map[domain.RunID]string{plain.ID: "", linked.ID: "https://linear.app/acme/issue/ENG-123"} {
+		got, err := db.GetRun(t.Context(), id)
+		if err != nil || got.LinearIssueURL != want {
+			t.Fatalf("GetRun(%s) linear issue = %q, %v; want %q", id, got.LinearIssueURL, err, want)
+		}
+	}
+}

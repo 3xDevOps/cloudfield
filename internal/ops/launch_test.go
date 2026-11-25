@@ -278,8 +278,10 @@ func TestKeylessLaunchComparesAccountOptions(t *testing.T) {
 	recentRun := testRun
 	recentRun.CreatedAt = time.Now().UTC().Format(time.RFC3339)
 	recentRun.AccountMemberID, recentRun.Permission = "mem-ada", "default"
+	recentRun.LinearIssueURL = "https://linear.app/acme/issue/ENG-1"
 	recentRun.Repos = []protocol.RunRepo{{WorkspaceID: "ws-1", Primary: true}, {WorkspaceID: "ws-2"}}
-	base := map[string]any{"workspace_id": "ws-1", "task": recentRun.Task, "harness": "claude", "account_member_id": "mem-ada", "extra_workspace_ids": []string{"ws-2"}}
+	base := map[string]any{"workspace_id": "ws-1", "task": recentRun.Task, "harness": "claude", "account_member_id": "mem-ada", "extra_workspace_ids": []string{"ws-2"},
+		"linear_issue_url": "https://linear.app/acme/issue/eng-1/slug"}
 	for name, c := range map[string]struct {
 		change    map[string]any
 		duplicate bool
@@ -291,6 +293,8 @@ func TestKeylessLaunchComparesAccountOptions(t *testing.T) {
 		"fallback order": {map[string]any{"fallback_account_member_ids": []string{"mem-me"}}, false},
 		"default tier":   {map[string]any{"permission": "default"}, true},
 		"root tier":      {map[string]any{"permission": "root"}, false},
+		"other issue":    {map[string]any{"linear_issue_url": "https://linear.app/acme/issue/ENG-2"}, false},
+		"no issue":       {map[string]any{"linear_issue_url": nil}, false},
 	} {
 		f := newFake(t)
 		f.answers[protocol.MethodRunList] = returns(protocol.RunListResult{Runs: []protocol.Run{recentRun}})

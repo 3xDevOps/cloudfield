@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/3xDevOps/Aether/internal/domain"
+	"github.com/3xDevOps/Aether/internal/linear"
 	"github.com/3xDevOps/Aether/internal/protocol"
 )
 
@@ -44,6 +45,7 @@ type connectorLaunchInput struct {
 	Children        string `json:"children,omitempty" jsonschema:"may the agent start subsessions; default your setting"`
 	Permission      string `json:"permission,omitempty" jsonschema:"default your saved tier"`
 	SavedDefaults   string `json:"saved_defaults,omitempty" jsonschema:"ignore sends only the given fields"`
+	LinearIssueURL  string `json:"linear_issue_url,omitempty" jsonschema:"https://linear.app/<workspace>/issue/<TEAM>-<number>; default the first such link in task"`
 	accountChoice
 	// Reason is the assistant's, for the member's confirmation card; the
 	// server never sees it.
@@ -253,8 +255,8 @@ func starting(tool, key string, replayErr error) (string, any, error) {
 
 // recentLaunch is the member's run in the workspace, created within
 // duplicateWindow and not stopped, with the same task, agent, mode, model,
-// account, fallback policy, extra repositories, child-run setting and
-// permission tier. An omitted mode or
+// account, fallback policy, extra repositories, child-run setting,
+// permission tier and Linear issue. An omitted mode or
 // model matches any; an omitted account is self, the member's own.
 func recentLaunch(ctx context.Context, read Call, in connectorLaunchInput, self string, now time.Time) (protocol.Run, bool, error) {
 	params := struct {
@@ -265,6 +267,13 @@ func recentLaunch(ctx context.Context, read Call, in connectorLaunchInput, self 
 	if err := read(ctx, protocol.MethodRunList, params, &res); err != nil {
 		return protocol.Run{}, false, err
 	}
+	linked := linear.FindIssueURL(in.Task)
+	if in.LinearIssueURL != "" {
+		var err error
+		if _, linked, err = linear.ParseIssueURL(in.LinearIssueURL); err != nil {
+			return protocol.Run{}, false, nil
+		}
+	}
 	for _, r := range res.Runs {
 		var extras []string
 		for _, repo := range r.Repos {
@@ -274,7 +283,7 @@ func recentLaunch(ctx context.Context, read Call, in connectorLaunchInput, self 
 		}
 		if r.Harness == in.Harness && r.Task == in.Task && (in.Mode == "" || r.Mode == in.Mode) && (in.Model == "" || r.Model == in.Model || r.RefusedModel == in.Model) &&
 			cmp.Or(in.AccountMemberID, self) == cmp.Or(r.RequestedAccountMemberID, r.AccountMemberID) &&
-			slices.Equal(in.FallbackAccountMemberIDs, r.FallbackAccountMemberIDs) && in.NoFallback == r.NoFallback && in.Children == r.Children &&
+			slices.Equal(in.FallbackAccountMemberIDs, r.FallbackAccountMemberIDs) && in.NoFallback == r.NoFallback && in.Children == r.Children && linked == r.LinearIssueURL &&
 			cmp.Or(in.Permission, string(domain.PermissionDefault)) == cmp.Or(r.Permission, string(domain.PermissionDefault)) &&
 			sameRepos(in.ExtraWorkspaceIDs, extras) && !domain.RunStatus(r.Status).Final() && recent(r.CreatedAt, now) {
 			return r, true, nil
@@ -312,7 +321,8 @@ func launchRun(ctx context.Context, c calls, in connectorLaunchInput) (string, a
 	l := links(info.DashboardURL)
 	params := protocol.RunLaunchParams{WorkspaceID: in.WorkspaceID, Task: in.Task, Harness: in.Harness, Mode: in.Mode, Model: in.Model,
 		AccountMemberID: in.AccountMemberID, FallbackAccountMemberIDs: in.FallbackAccountMemberIDs, NoFallback: in.NoFallback,
-		ExtraWorkspaceIDs: in.ExtraWorkspaceIDs, Children: in.Children, Permission: in.Permission, IdempotencyKey: in.IdempotencyKey}
+		ExtraWorkspaceIDs: in.ExtraWorkspaceIDs, Children: in.Children, Permission: in.Permission, IdempotencyKey: in.IdempotencyKey,
+		LinearIssueURL: in.LinearIssueURL}
 	dup, done := false, func(error) {}
 	if params.IdempotencyKey == "" {
 		var prior protocol.Run
