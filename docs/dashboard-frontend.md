@@ -2187,8 +2187,8 @@ prints no age of its own; `stateTitle` is the tooltip of
 the space it fills, there even when the line is empty. Beside the chip the label stays in a
 visually hidden `role=status` element, so a screen reader hears only a
 change of state; a tile without the session's controls shows the dot and label itself. While a session waits for agents,
-the header counts the Enhanced session's running subagents, "2 subagents
-running".
+that tile's state line counts the Enhanced session's running subagents, "2 subagents
+running"; beside the chip, the chip's own count stands.
 
 | State | Dot | Comes from | Group |
 | --- | --- | --- | --- |
@@ -3248,7 +3248,8 @@ protected session. The row holds, from the left:
   `requested_account_member_id` ([usage fallback](teams.md#usage-fallback);
   a `run.account` event updates it live when the session moves), "Launched via
   `<name>`". Each part that does not fit drops whole,
-  last first; the reason truncates last and keeps at least 96px.
+  last first; the reason truncates last, and with under 96px left for it
+  drops whole too, before the view switch gives way.
 - From 560px, the **Root access** (needs-you tone) or **Isolated** badge and,
   on the tile that carries the session's controls, the watch button. Neither
   yields to a long reason.

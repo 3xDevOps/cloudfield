@@ -137,7 +137,7 @@ function StateLine({ run, agentName, narrow, controls, chip }: { run: RunRecord;
   const since = state === 'ready' && run.review_changed_at ? run.review_changed_at : run.stateChangedAt
   const words = stateWords(presentation, since, useClock())
   const detail = [
-    subagents > 0 && `${subagents} ${subagents === 1 ? 'subagent' : 'subagents'} running`,
+    subagents > 0 && !chip && `${subagents} ${subagents === 1 ? 'subagent' : 'subagents'} running`,
     words.label !== stateName(presentation) && words.label,
     words.detail,
   ]
@@ -149,6 +149,9 @@ function StateLine({ run, agentName, narrow, controls, chip }: { run: RunRecord;
   const watch = useStore((s) => runWatch(s, run.id))
   const navigate = useStore((s) => s.navigate)
   const part = 'flex h-full min-w-0 items-center gap-1.5'
+  const [reasonRef, reason] = useElementSize<HTMLDivElement>()
+  // Under its 96px floor the reason goes whole, so that it and not the view switch gives way.
+  const bare = narrow || (reason.width > 0 && reason.width < 96)
   return (
     <>
       {chip ? (
@@ -164,10 +167,11 @@ function StateLine({ run, agentName, narrow, controls, chip }: { run: RunRecord;
       )}
       {/* One line of a wrapping row: a part that does not fit whole wraps out of sight with its separator, and the reason, first, is the one that truncates. */}
       <div
-        className={cn('flex h-full flex-1 basis-0 flex-wrap content-start gap-x-1.5 overflow-hidden whitespace-nowrap text-ui-sm text-muted', narrow ? 'min-w-0' : 'min-w-24')}
+        ref={reasonRef}
+        className="flex h-full min-w-0 flex-1 basis-0 flex-wrap content-start gap-x-1.5 overflow-hidden whitespace-nowrap text-ui-sm text-muted"
         title={narrow ? undefined : stateTitle(presentation, since)}
       >
-        {!narrow && (
+        {!bare && (
           <>
             {detail && (
               <span className={part}>
