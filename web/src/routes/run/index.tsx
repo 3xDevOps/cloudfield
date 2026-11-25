@@ -328,6 +328,9 @@ function RunFrame({ run, params }: { run: RunRecord; params: RouteProps['params'
                 onMouseDown={(event) => {
                   if (event.button === 2 || (event.button === 0 && event.ctrlKey)) selectedBeforeMenu.current = selectionCovers(event.target as Node)
                 }}
+                onClick={() => {
+                  selectedBeforeMenu.current = null
+                }}
                 onContextMenu={mobile ? undefined : (event) => {
                   const target = event.target as HTMLElement
                   const selected = selectedBeforeMenu.current ?? selectionCovers(target)
