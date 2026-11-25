@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Callout } from '@/components/ui/callout'
 import { Skeleton } from '@/components/ui/skeleton'
 import { RelativeTime } from '@/components/ui/relative-time'
+import { TileAreaContext } from '@/components/tiles/area'
 import { api } from '@/lib/api'
 import { useFileDrop, useRefuseStrayFileDrops } from '@/lib/file-drag'
 import { useDelayed } from '@/lib/hooks'
@@ -248,6 +249,7 @@ export function SessionView({ run, agent, agentName, room, nav, active, textarea
 }) {
   useRefuseStrayFileDrops()
   const tileFocused = useContext(FrameFocusContext)
+  const pressed = useContext(TileAreaContext)?.pressed
   const enhanced = run.acp === true
   const showMessages = useStore((s) => !s.hiddenAgentMessages[run.id])
   const { rows, session, missingRoomImages } = useRows(run, enhanced, showMessages)
@@ -526,7 +528,7 @@ export function SessionView({ run, agent, agentName, room, nav, active, textarea
       <AgentsBar runID={run.id} />
       <ChangesBar run={run} />
       <CompletionPrompt run={run} className={cn(sessionColumn, 'pb-2')} />
-      <Composer run={run} agent={agent} room={room} textarea={textarea} autoFocus={focusComposer} collapsed={!tileFocused} onFocusChange={onComposing} dock={dock || undefined} onEscape={() => viewport.current?.focus()} onDropStatus={reportDropStatus} />
+      <Composer run={run} agent={agent} room={room} textarea={textarea} autoFocus={focusComposer} collapsed={!tileFocused || pressed} onFocusChange={onComposing} dock={dock || undefined} onEscape={() => viewport.current?.focus()} onDropStatus={reportDropStatus} />
       <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">{announcement}</span>
       {drop.count !== null && <DropOverlay count={drop.count} refused={drop.refused} blocked={dropStatus.blocked} limit={dropStatus.limit} />}
     </div>

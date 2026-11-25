@@ -165,6 +165,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
   const [said, say] = useState('')
   const [picking, setPicking] = useState<string | null>(null)
   const [noRoom, setNoRoom] = useState<TileSide | null>(null)
+  const [pressed, setPressed] = useState(false)
   const pick = useCallback((tileId: string | null) => {
     setPicking(tileId)
     setNoRoom(null)
@@ -276,18 +277,25 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
         return
       }
       byHand.current = tileId
+      setPressed(event.type === 'pointerdown')
       changeTiles((before) => focusTile(before, tileId))
     }
+    // After the click that follows the release.
+    const release = () => setTimeout(() => setPressed(false))
     const press = (event: Event) => {
       tabbed = event instanceof KeyboardEvent && event.key === 'Tab'
       stray.current = false
       if (event.type === 'pointerdown') enter(event)
     }
     window.addEventListener('pointerdown', press, true)
+    window.addEventListener('pointerup', release, true)
+    window.addEventListener('pointercancel', release, true)
     window.addEventListener('keydown', press, true)
     window.addEventListener('focusin', enter, true)
     return () => {
       window.removeEventListener('pointerdown', press, true)
+      window.removeEventListener('pointerup', release, true)
+      window.removeEventListener('pointercancel', release, true)
       window.removeEventListener('keydown', press, true)
       window.removeEventListener('focusin', enter, true)
     }
@@ -302,6 +310,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
     picking,
     noRoom,
     pick,
+    pressed,
     split: (tileId: string, side: 'right' | 'down') => {
       if (measured && !fits(splitTile(stored, tileId, side).root, area)) {
         pick(tileId)
@@ -312,7 +321,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
       changeTiles((before) => splitTile(before, tileId, side))
       say(`Split ${side}`)
     },
-  }), [layout, cramped, ctx, picking, noRoom, pick, stored, measured, area])
+  }), [layout, cramped, ctx, picking, noRoom, pick, pressed, stored, measured, area])
 
   const several = tiles.length > 1
   const focus = (tile: TileNode) => {

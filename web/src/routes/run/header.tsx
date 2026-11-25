@@ -410,7 +410,7 @@ export function RunHeader({
           <div role="toolbar" aria-label="Session actions" className="flex shrink-0 items-center gap-1">
             {!narrow && pullRequest.status}
             {primary && <Button size="sm" variant={focused ? 'primary' : 'secondary'} onClick={primary.act}>{primary.label}</Button>}
-            {run.mode === 'acp' && <PresenceControls run={run} agent={agent} wide={focused && !narrow} />}
+            {run.mode === 'acp' && <PresenceControls run={run} agent={agent} wide={!narrow} />}
             <Button
               variant="ghost"
               size="icon"

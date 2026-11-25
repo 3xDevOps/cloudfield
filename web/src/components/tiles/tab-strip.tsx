@@ -276,13 +276,20 @@ export function TabStrip({ tile, narrow, room }: {
         </Button>
       ) : (
         <>
-          {focused && tile.tabs.length > 0 && splitButton('right', Columns2)}
-          {focused && tile.tabs.length > 0 && splitButton('down', Rows2)}
-          {tiles.length > 1 && (focused || !narrow) && tile.tabs.length > 0 && (
+          {/* Laid out in every tile and shown in the focused one: the press that focuses a tile moves no control out from under its click. */}
+          {tile.tabs.length > 0 && (
+            <div aria-hidden={!focused} className={cn('contents', !focused && 'invisible')}>
+              {splitButton('right', Columns2)}
+              {splitButton('down', Rows2)}
+            </div>
+          )}
+          {tiles.length > 1 && tile.tabs.length > 0 && (
             <Button
               variant="ghost"
               size="icon-sm"
               label="Maximize"
+              aria-hidden={!focused && narrow}
+              className={cn(!focused && narrow && 'invisible')}
               onClick={() => {
                 changeTiles((before) => maximizeTile(before, tile.id))
                 say('Tile maximized')

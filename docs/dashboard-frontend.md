@@ -3101,8 +3101,9 @@ when the focus does. The strip is a `tablist` named "Sessions in this tile":
   first and those that need you last; the menu carries a gold dot while a
   folded tab needs you, and picking a tab there activates it.
 - **Add a tab** ("+") opens the picker in a popover.
-- **Split right** and **Split down**, on the focused tile, open an empty
-  focused tile on that side. Where the 420 by 400px floor leaves no room they
+- **Split right** and **Split down**, shown on the focused tile and keeping
+  their room on the others so that the press that focuses a tile moves no
+  control out from under its click, open an empty focused tile on that side. Where the 420 by 400px floor leaves no room they
   open the picker instead, hung from the button that was pressed and led by
   "No room to split right. Add a tab here instead.", and the live region
   says "No room to split: adds a tab".
@@ -3365,7 +3366,7 @@ session's controls:
 - Each watcher is an `Avatar` named by its tooltip.
 - The controller's avatar has a teal ring. When this tab controls, the
   avatar is the **You control** menu, which holds **Release**; the words show
-  in the focused tile once the row is 720px wide.
+  once the row is 960px wide.
 - Otherwise the existing `ControlButton` follows the controller: take a free
   lease, or hold for three seconds to request an occupied one. A member who
   may not steer reads **View only** where the words show.
@@ -3488,7 +3489,10 @@ viewport; the next `Esc` is the session's `leave-run`.
 
 In a [tile](#session-tiles) that is not the focused one the composer is one
 line: the same field showing a draft's first line, "+N lines" when it has
-more, and no toolbar. A press on it focuses the tile and it opens. A tile on Changes,
+more, and no toolbar. A press in the tile focuses it, and the composer opens
+when the press ends, so the click lands on what was pressed. For 400ms after
+it opens, or until the pointer moves, its toolbar takes no press: the second
+press of a double-click on the field opens no menu. A tile on Changes,
 Files or Trace keeps that one-line field, with a **Send** icon, under a seam, for an
 Enhanced session this tab may steer, while the session's Chat is not on
 screen, no request is pending and the agent's stream is live; it opens on a click or `c` and folds when

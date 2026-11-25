@@ -168,6 +168,14 @@ test('a sidebar row dropped on an edge splits, and a tab dropped on a tile joins
   const joined = tile(page, 1, 1)
   await expect(joined.getByRole('tablist', { name: 'Sessions in this tile' }).getByRole('tab')).toHaveCount(2)
   await expect(sessionTab(joined, lead)).toHaveAttribute('aria-selected', 'true')
+
+  // One click on a control of a tile that is not focused acts: the press that focuses the tile moves no control.
+  await page.setViewportSize({ width: 1300, height: 900 })
+  await row(page, tester).hover()
+  await row(page, tester).locator('..').getByRole('button', { name: 'Open to the side' }).click()
+  await expect(tile(page, 2, 2)).toHaveAccessibleName(new RegExp(`^${tester}, Terminal`))
+  await tile(page, 1, 2).getByRole('button', { name: 'Add a tab' }).click()
+  await expect(page.getByRole('dialog').getByPlaceholder('Find a session or view')).toBeFocused()
 })
 
 test('a view torn off opens beside its session, and the seam between them drags', async ({ page, aether }) => {
