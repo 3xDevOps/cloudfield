@@ -123,6 +123,18 @@ An Enhanced session opens on **Chat**: one timeline, newest at the bottom.
   opened or closed them yourself or a subagent still runs. When a turn ends
   with no request, the session says **Waiting for your reply**, and the header's
   **Reply** focuses the composer.
+- Above the composer, a bar lists every subagent and workflow the agent
+  launched ("3 subagents and 1 workflow · 2 running, 1 failed"). It appears
+  with the first one and starts folded. Click it for one row each, running
+  ones first, and click a row to open that subagent or workflow beside the
+  chat.
+- A workflow is a script Claude Code runs that launches its own agents. Its
+  card and row count them ("3 of 8 agents"). Opened, it lists each agent
+  under its phase with its state and what it is doing; click an agent for
+  its prompt, result or error, model, and tool call and token counts.
+  Those agents report status and previews, not a transcript
+  ([Background work](#background-work)). **Log** and **Script** sit folded
+  under the list.
 - Notices, a turn that was cancelled or stopped, and messages between agents
   show inline. **Hide from Session**, under **Agent messages** in Details,
   turns agent messages off.
@@ -151,12 +163,13 @@ and the button sends. The button changes with the turn:
 | **Send** | no turn is running | starts a turn |
 | **Steer** | a turn runs and the agent supports steering | joins the running turn |
 | **Queue** | a turn runs and you hold `Mod+Shift`, or the agent cannot steer | runs after this turn |
-| **Interrupt** | a turn runs and the box is empty | stops the turn and cancels its requests |
+| **Interrupt**, a round red stop button | a turn runs and the box is empty | stops the turn and cancels its requests |
+| **Stop waiting**, the same stop button | the agent waits on background work and the box is empty | stops the wait; tasks already started keep running |
 | **Resume** | the session is paused | resumes it |
 
 `Enter` never interrupts. `Mod+Shift+Enter` always queues. `/` lists the agent's
 commands and `@` completes a path in the session's checkout. The menus under the box
-set the agent's mode, model and effort. The footer shows context window use, such
+set the agent's mode, and its model and effort together (**Fable 5.2 / High**). The footer shows context window use, such
 as **43%**, and turns the needs-you colour from 90%; click it for the breakdown, and for
 **Compact** when the agent has a `/compact` command.
 
@@ -257,6 +270,21 @@ between turns.
   returns at once and its subagent's card follows the task until it reports. A
   reload reads up to 5,000 earlier items to keep the card of a subagent that
   still runs; past that, scroll up to load its launch.
+- A workflow reports its progress on the tool call that launched it
+  (`tool_call.task.workflow` in
+  [`internal/acphost/items.go`](../internal/acphost/items.go)): its name, its
+  phases, and one row per agent with its state (`queued`, `running`, `done`,
+  `failed` or `skipped`), last tool, token and tool call counts, and previews of
+  its prompt, result and error. Every viewer gets it live and after a reload.
+  Limits:
+  - Only Claude Code reports it. An agent inside a workflow reports its row, not
+    its messages or tool calls.
+  - A running workflow's call is written at most once a second when an agent
+    changes state, and once in 15 seconds when only its tool or token count did.
+  - Previews are cut to 240 bytes. Past 100 agents the done and skipped rows are
+    left out first, then the failed ones, counted in `omitted`.
+  - A call too large for a viewer's frame carries each agent's label and state
+    without previews or logs, and the name alone when even that does not fit.
 - A shell such as a dev server does not hold the session, because it may never end.
 - Stop cancels an autonomous turn and parks the session with `turn cancelled`. The
   tasks keep running in Claude Code.
@@ -272,7 +300,8 @@ Enhanced session without hooks. When mail arrives and the session has no turn ru
 the server sends the agent one prompt telling it to run
 `cloudfield-internal inbox` and acknowledge the batch, ending with
 `End this turn with exactly one report as your last action: aether_report, or /usr/local/bin/aether-internal report where you have no aether_report tool.`
-A message steered into a running turn carries no such line. Messages that arrive together
+Mail that arrives during a turn waits until the turn ends; the agent is not
+told mid-turn. Messages that arrive together
 share one prompt, and each set of new unread messages starts at most one turn,
 even a turn the agent refuses. A session that opens afterwards gets the prompt
 again.

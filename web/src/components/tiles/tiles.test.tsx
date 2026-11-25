@@ -483,12 +483,12 @@ describe('the header row', () => {
     expect(gold()).toEqual([within(header(2)).getByRole('button', { name: 'Reply' })])
   })
 
-  it('sizes the row from its own width: icons for the view names under 800px, and under 560px no reason and Workflow under More', async () => {
+  it('sizes the row from its own width: icons for the view names under 800px, and under 560px no reason and Session tree under More', async () => {
     const chat = () => within(tile(1).getByRole('tablist', { name: 'Session views' })).getByRole('tab', { name: 'Chat' })
     show('run_3')
     expect(chat().textContent).toBe('Chat')
     expect(header(1).textContent).toContain('Which schema?')
-    expect(within(header(1)).getByRole('button', { name: /^Workflow: / })).toBeDefined()
+    expect(within(header(1)).getByRole('button', { name: /^Session tree: / })).toBeDefined()
     cleanup()
 
     sized(700, 800)
@@ -497,7 +497,7 @@ describe('the header row', () => {
     expect(chat().textContent).toBe('')
     expect(await hintOn(chat())).toBe('Chat')
     expect(header(1).textContent).toContain('Which schema?')
-    expect(within(header(1)).getByRole('button', { name: /^Workflow: / })).toBeDefined()
+    expect(within(header(1)).getByRole('button', { name: /^Session tree: / })).toBeDefined()
     cleanup()
 
     sized(500, 800)
@@ -506,10 +506,10 @@ describe('the header row', () => {
     expect(chat().textContent).toBe('')
     expect(within(header(1)).getByRole('status').textContent).toBe('Needs you')
     expect(header(1).textContent).not.toContain('Which schema?')
-    expect(within(header(1)).queryByRole('button', { name: /^Workflow: / })).toBeNull()
+    expect(within(header(1)).queryByRole('button', { name: /^Session tree: / })).toBeNull()
     await userEvent.click(within(header(1)).getByRole('button', { name: 'More' }))
-    await userEvent.click(await screen.findByRole('menuitem', { name: 'Workflow' }))
-    expect(await screen.findByRole('dialog', { name: 'Workflow' })).toBeDefined()
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Session tree' }))
+    expect(await screen.findByRole('dialog', { name: 'Session tree' })).toBeDefined()
   })
 
   it('docks Details beside a lone or maximized tile and opens it as a sheet between tiles', async () => {

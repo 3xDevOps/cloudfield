@@ -208,7 +208,7 @@ func TestWakeSteersOverlapsIntoAWorkingSession(t *testing.T) {
 	}
 	waker.steerable(b)
 	h.svc.wakeEnhanced(b)
-	if got := waker.next(t); got != protocol.CoordOverlapContext {
+	if got := waker.next(t); got != protocol.CoordOverlapContext(string(a)+":shared.go") {
 		t.Fatalf("steer = %q, want the overlap notice", got)
 	}
 	h.svc.wakeEnhanced(b)
@@ -221,7 +221,7 @@ func TestWakeSteersOverlapsIntoAWorkingSession(t *testing.T) {
 	h.peers.pair(a, b, "shared.go")
 	h.advance(radarRefreshInterval)
 	h.svc.wakeEnhanced(b)
-	if got := waker.next(t); got != protocol.CoordOverlapContext {
+	if got := waker.next(t); got != protocol.CoordOverlapContext(string(a)+":shared.go") {
 		t.Fatalf("steer = %q, want an overlap that came back announced again", got)
 	}
 }

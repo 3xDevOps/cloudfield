@@ -182,7 +182,7 @@ export interface UiSlice {
   /** Each member's `runViewMemory` on this browser, by identity key. */
   savedRunViews: Record<string, Record<string, RunView>>
   detailsOpen: boolean
-  /** Whether a run's Workflow rail is open on a wide window. */
+  /** Whether a run's Session tree rail is open on a wide window. */
   workflowOpen: boolean
   /** The viewport preset each run's Browser was given; without one it follows
    * its pane. Never persisted. */

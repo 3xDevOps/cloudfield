@@ -21,20 +21,10 @@ const titles: Record<string, string> = {
   sessions: 'Sessions',
 }
 
-/**
- * The logo is wider than the old brand. Where the destinations do not all fit
- * beside it, the favicon tile takes its place, and the navigation still counts
- * the old brand's width so it collapses at the same widths as before.
- */
-const LOGO_WIDTH = 162
-const TILE_WIDTH = 32
-const OLD_BRAND_WIDTH = 90
-
 export function TopBar({ navigation = true }: { navigation?: boolean }) {
   const desktop = desktopBridge()
   const mobile = useIsMobile()
   const collapsed = useStore((s) => s.sidebarCollapsed)
-  const [compact, setCompact] = useState(false)
   const header = useRef<HTMLElement>(null)
   useLayoutEffect(() => {
     const element = header.current
@@ -66,10 +56,10 @@ export function TopBar({ navigation = true }: { navigation?: boolean }) {
           )}
         >
           <div className="flex shrink-0 items-center">
-            <img src={compact ? '/cloudfield-favicon.svg' : '/cloudfield-logo-small.svg'} alt="Cloudfield" width={compact ? TILE_WIDTH : LOGO_WIDTH} height={32} className="hidden dark:block" />
-            <img src={compact ? '/cloudfield-favicon-white-tile.svg' : '/cloudfield-logo-small-for-light-backgrounds.svg'} alt="Cloudfield" width={compact ? TILE_WIDTH : LOGO_WIDTH} height={32} className="dark:hidden" />
+            <img src="/cloudfield-mark.svg" alt="Cloudfield" width={28} height={28} className="hidden dark:block" />
+            <img src="/cloudfield-mark-for-light-backgrounds.svg" alt="Cloudfield" width={28} height={28} className="dark:hidden" />
           </div>
-          {navigation && <HeaderNavigation compact={compact} onCompact={setCompact} />}
+          {navigation && <HeaderNavigation />}
           {navigation && collapsed && <AssistantButton />}
           <WindowControls />
         </div>
@@ -78,7 +68,7 @@ export function TopBar({ navigation = true }: { navigation?: boolean }) {
   )
 }
 
-function HeaderNavigation({ compact, onCompact }: { compact: boolean; onCompact: (compact: boolean) => void }) {
+function HeaderNavigation() {
   const cap = useCapability()
   const list = useMemo(() => surfaces(cap).filter((surface) => surface.place === 'nav'), [cap])
   const pinned = list.filter(({ name }) => name === 'board').length
@@ -102,11 +92,7 @@ function HeaderNavigation({ compact, onCompact }: { compact: boolean; onCompact:
       const moreWidth = more.getBoundingClientRect().width
       let count = list.length
       let width = widths.reduce((sum, value) => sum + value, 0) + gap * (count - 1)
-      const beside = element.getBoundingClientRect().width - (compact ? LOGO_WIDTH - TILE_WIDTH : 0)
-      const fits = width <= beside
-      // Counted for the brand this pass picks, so a swap never moves focus twice.
-      const available = fits ? beside : beside + LOGO_WIDTH - OLD_BRAND_WIDTH
-      onCompact(!fits)
+      const available = element.getBoundingClientRect().width
       if (width > available) {
         width += moreWidth + gap
         while (count > pinned && width > available) {
@@ -128,7 +114,7 @@ function HeaderNavigation({ compact, onCompact }: { compact: boolean; onCompact:
     observer.observe(element)
     for (const item of items) observer.observe(item)
     return () => observer.disconnect()
-  }, [list, pinned, compact, onCompact])
+  }, [list, pinned])
 
   useLayoutEffect(() => {
     focusAfterResize.current?.focus()

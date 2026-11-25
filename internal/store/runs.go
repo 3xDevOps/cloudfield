@@ -268,8 +268,8 @@ func liveStatusArgs() (string, []any) {
 }
 
 // RunSummary is the slim view of a live run that coordination lists. Task
-// holds at most the requested prefix of the task in bytes; TaskBytes is the
-// full task's length. Extras is the workspace of each extra repository.
+// holds at most the requested prefix of the task in bytes, or of the title
+// when the run was launched without a task; TaskBytes is its full length. Extras is the workspace of each extra repository.
 type RunSummary struct {
 	ID        domain.RunID
 	MemberID  domain.MemberID
@@ -288,7 +288,8 @@ func (d *DB) ListLiveRunSummaries(ctx context.Context, workspace domain.Workspac
 	placeholders, statuses := liveStatusArgs()
 	rows, err := d.db.QueryContext(ctx,
 		`SELECT id, member_id, status, activity, reason, protected,
-		     COALESCE(CAST(substr(CAST(task AS BLOB), 1, ?) AS TEXT), ''), length(CAST(task AS BLOB))
+		     COALESCE(CAST(substr(CAST(CASE WHEN task = '' THEN title ELSE task END AS BLOB), 1, ?) AS TEXT), ''),
+		     length(CAST(CASE WHEN task = '' THEN title ELSE task END AS BLOB))
 		 FROM runs WHERE workspace_id = ? AND status IN (`+placeholders+`)
 		 ORDER BY max(COALESCE(status_changed_at, created_at), created_at) DESC, rowid DESC`,
 		append([]any{taskBytes, workspace}, statuses...)...)

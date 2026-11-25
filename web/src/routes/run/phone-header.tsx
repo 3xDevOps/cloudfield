@@ -69,7 +69,7 @@ export function PhoneRunHeader({ run, view, views, nav, agentName, keyboard, pri
     .map((item) => ({ id: `view-${item}`, label: runViewLabel[item], Icon: runViewIcon[item], onSelect: () => nav.go(item) }))
   const panels: ExtraItem[] = [
     { id: 'details', label: detailsOpen ? 'Hide details' : 'Session details', Icon: PanelRight, onSelect: onDetails },
-    { id: 'workflow', label: 'Workflow', Icon: Network, onSelect: onWorkflow },
+    { id: 'workflow', label: 'Session tree', Icon: Network, onSelect: onWorkflow },
     { id: 'search', label: 'Search…', Icon: Search, onSelect: () => useStore.getState().togglePalette(true) },
     ...(assistant ? [{ id: 'assistant', label: 'Assistant', Icon: Sparkles, onSelect: () => useStore.getState().setAssistantOpen(true) }] : []),
   ]

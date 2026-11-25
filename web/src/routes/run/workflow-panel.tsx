@@ -1,5 +1,5 @@
 import { useMemo, useRef } from 'react'
-import { X } from '@/components/icons'
+import { Network, X } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { StatusDot } from '@/components/ui/status-dot'
 import { GitFlow } from '@/components/workflow/git-flow'
@@ -50,14 +50,15 @@ export function WorkflowChip({ run, open, onToggle }: { run: RunRecord; open: bo
       size="sm"
       aria-expanded={open}
       aria-controls={workflowPanelID}
-      aria-label={`Workflow: ${text}`}
-      hint={open ? 'Hide the workflow' : 'Show the workflow'}
+      aria-label={`Session tree: ${text}`}
+      hint={open ? 'Hide the session tree' : 'Show the session tree'}
       className="-mx-1.5 shrink-0 text-text"
       onClick={(event) => onToggle(event.currentTarget)}
     >
       <StatusDot tone={toneOf(shown)} pulse={state === 'working'} />
       <span>{label}</span>
       {busy && <span className="hidden @min-[480px]/views:inline">· {busy}</span>}
+      <Network aria-hidden className="text-muted" />
     </Button>
   )
 }
@@ -96,13 +97,13 @@ export function WorkflowPanel({ run, view, agent, nav, onClose, onLeave, classNa
   return (
     <div className={cn('flex min-h-0 min-w-0 flex-col', className)}>
       <div className="flex h-8 shrink-0 items-center gap-2 border-b border-seam pr-1 pl-3">
-        <h2 className="min-w-0 flex-1 truncate text-ui-sm font-medium">Workflow</h2>
-        <Button variant="ghost" size="icon-sm" label="Hide the workflow" onClick={onClose}>
+        <h2 className="min-w-0 flex-1 truncate text-ui-sm font-medium">Session tree</h2>
+        <Button variant="ghost" size="icon-sm" label="Hide the session tree" onClick={onClose}>
           <X />
         </Button>
       </div>
       <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-2 [&>*]:shrink-0">
-        <WorkflowTree root={tree} label="Session workflow" onSelect={select} />
+        <WorkflowTree root={tree} label="Session tree" onSelect={select} />
         {run.branch && view !== 'changes' && <GitFlow runId={run.id} compact />}
       </div>
     </div>

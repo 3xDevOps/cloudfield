@@ -76,5 +76,5 @@ test('a waiting run says what Aether last read, never a status it could not read
     await expect(page.getByRole('main').getByText(words, { exact: false }).first()).toBeVisible()
     await page.screenshot({ path: test.info().outputPath(`desktop-header-${kind}.png`) })
   }
-  await expect(page.getByRole('button', { name: 'Workflow: Stale wait' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Session tree: Stale wait' })).toBeVisible()
 })

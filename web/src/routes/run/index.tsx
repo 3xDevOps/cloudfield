@@ -169,7 +169,7 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
     if (squeezed) replaceRouteKeepingFocus({ name: 'run', params: { runId: run.id, view } })
   }, [resized, squeezed, row.width, assistantDocked, run.id, view])
 
-  // The Workflow rail sits beside the session when it fits; otherwise it opens as a sheet.
+  // The Session tree rail sits beside the session when it fits; otherwise it opens as a sheet.
   const workflowInline = alone && row.width >= workflowWidth + minReadableWidth
   const besideDetails = row.width >= workflowWidth + detailsWidth + minReadableWidth
   const besideAgent = row.width >= workflowWidth + agentWidth + minReadableWidth
@@ -389,7 +389,7 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
         </aside>
       )}
       {workflowInline && workflowOpen && (
-        <aside id={workflowPanelID} aria-label="Workflow" className="flex w-80 shrink-0 flex-col border-l border-seam bg-canvas">
+        <aside id={workflowPanelID} aria-label="Session tree" className="flex w-80 shrink-0 flex-col border-l border-seam bg-canvas">
           <WorkflowPanel run={run} view={view} agent={agent} nav={nav} onClose={() => setWorkflow(false)} />
         </aside>
       )}
@@ -406,7 +406,7 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
             }}
             className={mobile ? 'flex max-h-[85dvh] min-h-0 flex-col p-0' : 'flex w-80 flex-col p-0'}
           >
-            <DialogTitle className="sr-only">Workflow</DialogTitle>
+            <DialogTitle className="sr-only">Session tree</DialogTitle>
             <WorkflowPanel
               run={run}
               view={view}

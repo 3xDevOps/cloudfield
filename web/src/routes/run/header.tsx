@@ -323,9 +323,9 @@ export function RunHeader({
   run: RunRecord
   agentName: string
   agentEntry: AgentInfo | undefined
-  /** The Workflow chip, which is the state's dot and label on a wide desktop tile. */
+  /** The Session tree chip, which is the state's dot and label on a wide desktop tile. */
   workflow: React.ReactNode
-  /** Opens the workflow, which a phone or a narrow tile lists under the session's actions instead of the chip. */
+  /** Opens the session tree, which a phone or a narrow tile lists under the session's actions instead of the chip. */
   onWorkflow: (returnTo: HTMLElement | null) => void
   view: RunView
   views: RunView[]
@@ -343,7 +343,7 @@ export function RunHeader({
   controls: boolean
 }) {
   const mobile = useIsMobile()
-  // The row is sized from itself, not its tile: docked Details and Workflow take their width out of it.
+  // The row is sized from itself, not its tile: docked Details and Session tree take their width out of it.
   const [rowRef, row] = useElementSize<HTMLElement>()
   const narrow = row.width > 0 && row.width < narrowBelow
   const icons = row.width > 0 && row.width < 800
@@ -422,7 +422,7 @@ export function RunHeader({
             <RunActions
               run={run}
               compact
-              extra={narrow ? [{ id: 'workflow', label: 'Workflow', Icon: Network, onSelect: onWorkflow }, ...pullRequest.more, ...extra] : extra}
+              extra={narrow ? [{ id: 'workflow', label: 'Session tree', Icon: Network, onSelect: onWorkflow }, ...pullRequest.more, ...extra] : extra}
             />
           </div>
         )}

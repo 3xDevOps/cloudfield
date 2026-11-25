@@ -159,6 +159,45 @@ div.xterm .xterm-viewport {
   color: var(--text);
 }
 
+/* A wrapping row that fills its last line first, so its final item never
+   wraps alone. The row runs in reverse and later children take lower orders,
+   which keeps the look and the tab order in document order, for up to eight
+   children. */
+@layer components {
+  .wrap-from-end {
+    display: flex;
+    flex-flow: row-reverse wrap-reverse;
+    justify-content: flex-end;
+  }
+  .wrap-from-end > * {
+    order: 9;
+  }
+  .wrap-from-end > :nth-last-child(1) {
+    order: 1;
+  }
+  .wrap-from-end > :nth-last-child(2) {
+    order: 2;
+  }
+  .wrap-from-end > :nth-last-child(3) {
+    order: 3;
+  }
+  .wrap-from-end > :nth-last-child(4) {
+    order: 4;
+  }
+  .wrap-from-end > :nth-last-child(5) {
+    order: 5;
+  }
+  .wrap-from-end > :nth-last-child(6) {
+    order: 6;
+  }
+  .wrap-from-end > :nth-last-child(7) {
+    order: 7;
+  }
+  .wrap-from-end > :nth-last-child(8) {
+    order: 8;
+  }
+}
+
 /* In the components layer, so a ghost button's hover fill still wins. */
 @layer components {
   .control-matrix-clear {
