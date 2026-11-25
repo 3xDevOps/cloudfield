@@ -11,6 +11,7 @@ import type {
   SysboxStatus,
 } from '@/lib/types'
 import type { SliceCreator } from '@/store/slice'
+import { routeTiles, tilesAfter } from '@/store/tiles'
 import type { RootState } from '@/store'
 
 export type Theme = 'light' | 'dark' | 'system'
@@ -189,12 +190,8 @@ export interface UiSlice {
   /** Each member's `runViewMemory` on this browser, by identity key. */
   savedRunViews: Record<string, Record<string, RunView>>
   detailsOpen: boolean
-  /** Whether a run's Workflow rail is open on a wide window. */
+  /** Whether a run's Session tree rail is open on a wide window. */
   workflowOpen: boolean
-  /** Whether a run's Browser sits beside its other views on a wide window. */
-  browserBeside: boolean
-  /** Null until the divider is moved: half the run's frame. */
-  browserBesideWidth: number | null
   /** The viewport preset each run's Browser was given; without one it follows
    * its pane. Never persisted. */
   browserPresets: Record<string, string>
@@ -254,8 +251,6 @@ export interface UiSlice {
   setProfileOpen: (open: boolean) => void
   setDetailsOpen: (open: boolean) => void
   setWorkflowOpen: (open: boolean) => void
-  setBrowserBeside: (beside: boolean) => void
-  setBrowserBesideWidth: (width: number) => void
   setBrowserPreset: (runID: string, preset: string | null) => void
   requestBrowser: (runID: string, address: string | null) => void
 }
@@ -302,8 +297,6 @@ export const createUiSlice: SliceCreator<UiSlice> = (set) => ({
   savedRunViews: {},
   detailsOpen: true,
   workflowOpen: false,
-  browserBeside: false,
-  browserBesideWidth: null,
   browserPresets: {},
   browserRequests: {},
   dismissedUpdates: { cli: '', server: '', shell: '' },
@@ -386,6 +379,7 @@ export const createUiSlice: SliceCreator<UiSlice> = (set) => ({
   navigate: (name, params = {}, options) => {
     set((s) => ({
       route: { name, params },
+      ...(name === 'run' && params.runId ? tilesAfter(s, (layout, ctx) => routeTiles(layout, params, ctx)) : {}),
       ...(name === 'run' && params.runId && isRunView(params.view) && options?.remember !== false
         ? rememberedView(s, params.runId, params.view)
         : {}),
@@ -409,8 +403,6 @@ export const createUiSlice: SliceCreator<UiSlice> = (set) => ({
   setProfileOpen: (profileOpen) => set({ profileOpen }),
   setDetailsOpen: (detailsOpen) => set({ detailsOpen }),
   setWorkflowOpen: (workflowOpen) => set({ workflowOpen }),
-  setBrowserBeside: (browserBeside) => set({ browserBeside }),
-  setBrowserBesideWidth: (browserBesideWidth) => set({ browserBesideWidth }),
   setBrowserPreset: (runID, preset) => set((s) => ({ browserPresets: withEntry(s.browserPresets, runID, preset) })),
   requestBrowser: (runID, address) => set((s) => ({ browserRequests: withEntry(s.browserRequests, runID, address) })),
 })

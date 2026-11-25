@@ -5,7 +5,8 @@ import { api, ApiError, type Api } from '@/lib/api'
 import { errorSentence, message } from '@/lib/format'
 import type { LaunchDefaultsResult, LaunchMode, SavedLaunchDefaults } from '@/lib/types'
 import { sameIdentity, useStore } from '@/store'
-import { capability, useCapability } from '@/store/hooks'
+import { capability } from '@/lib/capability'
+import { useCapability } from '@/store/hooks'
 
 const codeConflict = -32003
 
@@ -58,7 +59,9 @@ export function useLaunchDefaultsRead(client: Api = api, attempt = 0): LaunchDef
     if (!readable) return
     let live = true
     setFresh(false)
-    void read(client).finally(() => { if (live) setFresh(true) })
+    void saving.then(() => {
+      if (live) return read(client)
+    }).finally(() => { if (live) setFresh(true) })
     return () => { live = false }
   }, [client, readable, identity, attempt])
   return readable ? { result, error, fresh } : { result: null, error: null, fresh: true }

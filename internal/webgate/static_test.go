@@ -50,7 +50,6 @@ func TestStaticHandlerCompressesAndCaches(t *testing.T) {
 		{"hashed asset on loopback", "/_next/static/chunks/0yk4b_qdfml3g.js", loopback, "gzip", script, "", immutable, false},
 		{"entry point", "/", remote, "gzip", page, "gzip", "no-cache", true},
 		{"client route", "/runs/abc", remote, "gzip", page, "gzip", "no-cache", true},
-		{"missing hashed asset", "/_next/static/chunks/gone.js", remote, "gzip", page, "gzip", "no-cache", true},
 		{"incompressible file", "/fonts/mono.woff2", remote, "gzip", string(font), "", "no-cache", false},
 	} {
 		t.Run(c.name, func(t *testing.T) {
@@ -90,5 +89,19 @@ func TestStaticHandlerCompressesAndCaches(t *testing.T) {
 				t.Errorf("revalidation = %d with %d bytes, want 304 with none", again.Code, again.Body.Len())
 			}
 		})
+	}
+}
+
+func TestStaticHandlerAnswersAMissingBuildFileWith404(t *testing.T) {
+	h := StaticHandler(fstest.MapFS{"index.html": {Data: []byte("<!doctype html>")}})
+	for _, target := range []string{"/_next/static/chunks/gone.js", "/_next/gone.js", "/_next/static"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, target, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("GET %s = %d, want 404", target, rec.Code)
+		}
+		if strings.Contains(rec.Body.String(), "<!doctype html>") {
+			t.Errorf("GET %s answered with the page", target)
+		}
 	}
 }

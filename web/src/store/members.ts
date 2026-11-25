@@ -3,7 +3,7 @@ import { message } from '@/lib/format'
 import type { Invitation, Member, MemberList, MergeProposal } from '@/lib/types'
 import type { RootState, RootStore } from '@/store'
 import { byCreated } from '@/store/collaboration'
-import { capability } from '@/store/hooks'
+import { capability } from '@/lib/capability'
 import type { SliceCreator } from '@/store/slice'
 
 /** A provisional invitation is one the dashboard shows before the server has assigned it an id. */

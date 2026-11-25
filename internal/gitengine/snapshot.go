@@ -168,7 +168,7 @@ func (e *Engine) checkCaptureBounds(ctx context.Context, run domain.RunID, check
 }
 
 // checkEvidenceSnapshotBounds validates the immutable tree produced by
-// writeSnapshotTree. The live checkout can change after the conservative
+// writeSnapshotTreeLocked. The live checkout can change after the conservative
 // preflight above, but a tree's blob sizes cannot change once Git has written
 // it, so this is the authoritative capture bound.
 func (e *Engine) checkEvidenceSnapshotBounds(ctx context.Context, run domain.RunID, checkout, tree string) error {
@@ -333,17 +333,6 @@ func (w *treeBoundWriter) fail(err error) {
 	w.cancel()
 }
 
-// writeSnapshotTree stages the whole checkout into the run's snapshot store
-// and writes the resulting tree, returning its object id. Every caller uses
-// the same per-run lock so the persistent scratch index and its lock cannot
-// be raced by the diff watcher and evidence capture.
-func (e *Engine) writeSnapshotTree(ctx context.Context, run domain.RunID, checkout string) (string, error) {
-	lock := e.snapshotLock(run)
-	lock.Lock()
-	defer lock.Unlock()
-	return e.writeSnapshotTreeLocked(ctx, run, checkout)
-}
-
 func (e *Engine) writeSnapshotTreeLocked(ctx context.Context, run domain.RunID, checkout string) (result string, resultErr error) {
 	if err := e.checkCaptureBounds(ctx, run, checkout, MaxSnapshotInputBytes, ErrSnapshotStorageLimit); err != nil {
 		return "", err
@@ -355,7 +344,7 @@ func (e *Engine) writeSnapshotTreeLocked(ctx context.Context, run domain.RunID, 
 	if err = e.initSnapshotStore(ctx, run, checkout, store); err != nil {
 		return "", err
 	}
-	index, err := scratchIndex(store, checkout, run)
+	index, err := e.scratchIndex(store, checkout, run)
 	if err != nil {
 		return "", err
 	}
@@ -560,6 +549,9 @@ func (e *Engine) removeRunHistory(ctx context.Context, run domain.RunID) error {
 		return err
 	}
 	e.stopDiffWatch(run, false)
+	// Unpinning rewrites packed-refs, which an evidence prune's gc locks.
+	e.repoMaintenanceMu.Lock()
+	defer e.repoMaintenanceMu.Unlock()
 	lock := e.snapshotLock(run)
 	lock.Lock()
 	defer lock.Unlock()
@@ -571,6 +563,9 @@ func (e *Engine) removeRunHistory(ctx context.Context, run domain.RunID) error {
 	}
 	if removeErr := os.Remove(meta); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 		return fmt.Errorf("gitengine: remove session metadata for %s: %w", run, removeErr)
+	}
+	if unpinErr := e.unpinHistory(ctx, run, store); unpinErr != nil {
+		return fmt.Errorf("gitengine: release the fork point of session %s: %w", run, unpinErr)
 	}
 	if removeErr := os.RemoveAll(store); removeErr != nil {
 		return fmt.Errorf("gitengine: remove snapshot store for session %s: %w", run, removeErr)
@@ -623,7 +618,16 @@ func (e *Engine) requireSnapshotTree(ctx context.Context, store, id string) erro
 // provisioning chowned it to the run's user, and objects or fan-out
 // directories created here as the server user would leave the agent unable
 // to commit.
-func scratchObjects(dir, checkout string, run domain.RunID) (string, error) {
+//
+// A store that borrows a workspace repository's objects is the history of a
+// removed checkout and is left as it is: a checkout read racing that removal
+// must not point it at objects that are about to go.
+func (e *Engine) scratchObjects(dir, checkout string, run domain.RunID) (string, error) {
+	e.alternatesMu.Lock()
+	defer e.alternatesMu.Unlock()
+	if repo, err := e.borrowedRepo(dir); err != nil || repo != "" {
+		return filepath.Join(dir, "index"), err
+	}
 	return borrowObjects(dir, filepath.Join(checkout, ".git", "objects"), run)
 }
 
@@ -664,8 +668,8 @@ func borrowObjects(dir, borrowed string, run domain.RunID) (string, error) {
 
 // scratchIndex is scratchObjects plus a staging index, for the commands
 // that write one.
-func scratchIndex(dir, checkout string, run domain.RunID) (string, error) {
-	index, err := scratchObjects(dir, checkout, run)
+func (e *Engine) scratchIndex(dir, checkout string, run domain.RunID) (string, error) {
+	index, err := e.scratchObjects(dir, checkout, run)
 	if err != nil {
 		return "", err
 	}

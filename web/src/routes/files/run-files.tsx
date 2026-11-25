@@ -8,12 +8,13 @@ import { runLabel } from '@/lib/status'
 import type { Run } from '@/lib/types'
 import { useRepoPatch } from '@/routes/diff/repo-patches'
 import { useRepoRuns } from '@/routes/diff/repos'
-import { FileEditor, type ViewerMode } from '@/routes/files/editor'
+import type { ViewerMode } from '@/routes/files/editor'
+import { FileEditor } from '@/routes/files/lazy-editor'
 import { closeTab, FilesPane } from '@/routes/files/pane'
 import type { FileTarget } from '@/routes/files/paths'
 import { fileTabFromSource, fileTabToSelection, sourceKey, type FileSource, type WorkspaceSource } from '@/routes/files/sources'
 import { RunCheckoutTree, touchedPaths, TreeExpansion } from '@/routes/files/tree'
-import { isRunRoute } from '@/routes/run/views'
+import { useRunParams } from '@/routes/run/agent-context'
 import { useStore } from '@/store'
 
 /** Below this the tree and an editor do not both fit in the pane. */
@@ -23,7 +24,7 @@ const besideWidth = 640
 const lastSelected = new Map<string, string>()
 
 export function RunFiles({ run, shown, client = api }: { run: Run; shown: boolean; client?: Api }) {
-  const route = useStore((s) => s.route)
+  const params = useRunParams()
   const filesEpoch = useStore((s) => s.filesEpoch)
   const fileTabs = useStore((s) => s.fileTabs)
   const activeFileKey = useStore((s) => s.activeFileKey)
@@ -60,10 +61,10 @@ export function RunFiles({ run, shown, client = api }: { run: Run; shown: boolea
   // A link names its file, and its line, in the route. Opening the same link
   // again is a new route, so it shows the line again.
   useEffect(() => {
-    const { view, file, line, column } = route.params
-    if (!isRunRoute(route, run.id) || view !== 'files' || !file) return
+    const { view, file, line, column } = params
+    if (view !== 'files' || !file) return
     open(file, line ? { path: file, line: Number(line), ...(column ? { column: Number(column) } : {}) } : null)
-  }, [route, run.id])
+  }, [params])
 
   const selectTab = (tab: FileSource, path: string) => {
     if (tab.kind !== 'workspace') return

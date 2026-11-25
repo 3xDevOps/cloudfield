@@ -1,9 +1,11 @@
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { preloadChunks } from '@/components/lazy-chunk'
 import type * as apiModule from '@/lib/api'
 import { api } from '@/lib/api'
 import type { Run } from '@/lib/types'
 import { ShortcutsDialog } from '@/components/shortcuts'
+import type * as xtermHostModule from '@/components/xterm-host'
 import { openRunLink } from '@/routes/browser/open'
 import { openInFiles } from '@/routes/files/open'
 import { lookupRoute } from '@/routes/registry'
@@ -11,11 +13,20 @@ import { useRunRoom } from '@/routes/run/room'
 import '@/routes/run'
 import { useStore } from '@/store'
 import { optimisticDeadlineMs } from '@/store/optimistic'
+import { emptyTiles } from '@/store/tiles'
 import { applyEvent } from '@/store/sync'
 import { agentInfo, alice, bob, fakeApi, roomMessage, run, serverInfo, workspace } from '@/test/fixtures'
 import { ApiError } from '@/lib/api'
 import { StubSocket } from '@/test/stub-socket'
 import { atViewport } from '@/test/viewport'
+
+// A real xterm costs each mount of a run view most of its jsdom time; a case
+// that never reads the agent terminal turns it off.
+const xterm = vi.hoisted(() => ({ enabled: true }))
+vi.mock('@/components/xterm-host', async (importOriginal) => {
+  const actual = await importOriginal<typeof xtermHostModule>()
+  return { ...actual, useXterm: (options: Parameters<typeof actual.useXterm>[0] = {}) => actual.useXterm({ ...options, enabled: xterm.enabled && options.enabled !== false }) }
+})
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof apiModule>()
@@ -46,7 +57,10 @@ function rerouted(view: string) {
   return <View params={useStore.getState().route.params} />
 }
 
+beforeAll(() => preloadChunks())
+
 beforeEach(() => {
+  xterm.enabled = true
   StubSocket.install()
   useStore.setState({
     hydrated: true,
@@ -61,8 +75,7 @@ beforeEach(() => {
     roomStatus: {},
     roomStatusControl: {},
     runViewMemory: {},
-    browserBeside: false,
-    browserBesideWidth: null,
+    tiles: emptyTiles(),
     browserRequests: {},
     sessionLogs: {},
     agentList: null,
@@ -100,9 +113,10 @@ describe('run frame', () => {
     await waitFor(() => expect(screen.getByRole('banner').textContent).toContain("On Bob's account (fallback)"))
   })
 
-  it('keeps the state time on the state line when no reason shows', async () => {
+  it('keeps the state time on the state line when no reason shows, and on the session tab', async () => {
     open({ paused: true })
-    await waitFor(() => expect(screen.getByTitle(/^Paused since /)).toBeDefined())
+    await waitFor(() => expect(within(screen.getByRole('banner')).getByTitle(/^Paused since /)).toBeDefined())
+    expect(within(screen.getByRole('tab', { name: /rewrite the checkout flow/ })).getByTitle(/ Paused since /)).toBeDefined()
   })
 
   it('keeps the model and effort out of the state line and in the agent tooltip', async () => {
@@ -164,7 +178,7 @@ describe('run frame', () => {
     open({ mode: 'acp' })
     const views = screen.getByRole('tablist', { name: 'Session views' })
     expect(within(views).getByRole('tab', { name: 'Chat' }).getAttribute('aria-selected')).toBe('true')
-    fireEvent.mouseDown(within(views).getByRole('tab', { name: 'Terminal' }))
+    fireEvent.click(within(views).getByRole('tab', { name: 'Terminal' }))
     expect(await screen.findByText('No agent terminal')).toBeDefined()
     expect(StubSocket.opened).toHaveLength(0)
   })
@@ -175,6 +189,49 @@ describe('run frame', () => {
     await waitFor(() => expect(useStore.getState().agentList).not.toBeNull())
     open()
     expect(api.agentList).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['the More button', () => fireEvent.pointerDown(screen.getByRole('button', { name: 'More' }), { button: 0, ctrlKey: false })],
+    ['a right-click on Chat', () => fireEvent.contextMenu(screen.getByRole('tabpanel', { name: 'Chat' }), { clientX: 200, clientY: 300 })],
+  ])('puts the cursor in the note field from Leave a comment in %s', async (_, openMenu) => {
+    xterm.enabled = false
+    open({ mode: 'acp' })
+    openMenu()
+    await userEvent.click(within(await screen.findByRole('menu')).getByRole('menuitem', { name: 'Leave a comment…' }))
+    // The closing menu restores focus a task later; let it try.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)))
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Add a note' }))
+  })
+
+  it('focuses the note field once, not on every later Details open', async () => {
+    xterm.enabled = false
+    open({ mode: 'acp' })
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'More' }), { button: 0, ctrlKey: false })
+    await userEvent.click(within(await screen.findByRole('menu')).getByRole('menuitem', { name: 'Leave a comment…' }))
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Add a note' })))
+    await userEvent.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Add a note' })).toBeNull())
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'More' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Show details' }))
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)))
+    expect(document.activeElement).not.toBe(screen.getByRole('textbox', { name: 'Add a note' }))
+  })
+
+  it('leaves the browser menu alone over a link or selected text', () => {
+    xterm.enabled = false
+    open({ mode: 'acp' })
+    const chat = screen.getByRole('tabpanel', { name: 'Chat' })
+    const link = chat.appendChild(document.createElement('a'))
+    expect(fireEvent.contextMenu(link)).toBe(true)
+    const text = chat.appendChild(document.createElement('p'))
+    text.textContent = 'agent output'
+    window.getSelection()!.selectAllChildren(text)
+    fireEvent.mouseDown(text, { button: 2 })
+    expect(fireEvent.contextMenu(text)).toBe(true)
+    expect(fireEvent.contextMenu(text)).toBe(true)
+    expect(screen.queryByRole('menu')).toBeNull()
+    window.getSelection()!.removeAllRanges()
   })
 
   it('keeps Changes mounted after a view switch so a Publish draft survives', () => {
@@ -251,28 +308,18 @@ describe('the Files view', () => {
     expect(editor.closest('[inert]')).not.toBeNull()
   })
 
-  it('leaves the session’s control strip off, where no lease is used', () => {
+  it('keeps the session’s presence in the header row, which takes no room of its own', () => {
     const view = open({ mode: 'acp' }, 'session')
-    expect(screen.getByRole('group', { name: 'Multiplayer controls' })).toBeDefined()
+    const row = screen.getByRole('toolbar', { name: 'Session actions' })
+    expect(within(row).getByRole('group', { name: 'Multiplayer controls' })).toBeDefined()
     view.rerender(rerouted('files'))
-    expect(screen.queryByRole('group', { name: 'Multiplayer controls' })).toBeNull()
+    expect(within(row).getByRole('group', { name: 'Multiplayer controls' })).toBeDefined()
+    expect(row.closest('header')!.className).toContain('h-8')
   })
 })
 
 describe('the Browser view', () => {
   const views = () => within(screen.getByRole('tablist', { name: 'Session views' }))
-  /** Lays the run's frame out at `width`, which jsdom never does. */
-  function measured(width: number | ((target: Element) => number)) {
-    vi.stubGlobal('ResizeObserver', class {
-      constructor(private readonly report: ResizeObserverCallback) {}
-      observe(target: Element) {
-        const contentRect = { width: typeof width === 'number' ? width : width(target), height: 700 }
-        this.report([{ target, contentRect } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver)
-      }
-      unobserve() {}
-      disconnect() {}
-    })
-  }
 
   it('is offered for every live run the gateway can serve it for, before any browser has started', () => {
     open()
@@ -289,11 +336,12 @@ describe('the Browser view', () => {
     expect(views().queryByRole('tab', { name: 'Browser' })).toBeNull()
   })
 
-  it('leaves the session’s control strip off the Browser view', async () => {
+  it('keeps the session’s presence in the header row beside the Browser’s own toolbar', async () => {
     const view = open({ mode: 'acp' }, 'session')
-    expect(await screen.findByRole('group', { name: 'Multiplayer controls' })).toBeDefined()
+    const row = within(screen.getByRole('toolbar', { name: 'Session actions' }))
+    expect(await row.findByRole('group', { name: 'Multiplayer controls' })).toBeDefined()
     view.rerender(rerouted('browser'))
-    expect(screen.queryByRole('group', { name: 'Multiplayer controls' })).toBeNull()
+    expect(row.getByRole('group', { name: 'Multiplayer controls' })).toBeDefined()
     expect(screen.getByRole('toolbar', { name: 'Browser' })).toBeDefined()
   })
 
@@ -328,55 +376,6 @@ describe('the Browser view', () => {
     expect(useStore.getState().route.params.view).toBe('browser')
     expect(useStore.getState().browserRequests).toEqual({ run_1: '' })
     view.unmount()
-  })
-
-  it('sits beside the other views on a wide frame, from one remembered toggle', async () => {
-    measured(1200)
-    const view = open({ mode: 'acp' }, 'browser')
-    fireEvent.click(await screen.findByRole('button', { name: 'Show beside Chat' }))
-    expect(useStore.getState().browserBeside).toBe(true)
-    view.rerender(rerouted(useStore.getState().route.params.view!))
-    expect(views().queryByRole('tab', { name: 'Browser' })).toBeNull()
-    expect(views().getByRole('tab', { name: 'Chat' }).getAttribute('aria-selected')).toBe('true')
-    const beside = within(screen.getByRole('region', { name: 'Browser' }))
-    expect(beside.getByRole('toolbar', { name: 'Browser' })).toBeDefined()
-    expect(screen.getByRole('group', { name: 'Multiplayer controls' })).toBeDefined()
-
-    const divider = screen.getByRole('separator', { name: 'Resize the Browser' })
-    expect(divider.getAttribute('aria-valuenow')).toBe('600')
-    fireEvent.keyDown(divider, { key: 'ArrowLeft' })
-    expect(useStore.getState().browserBesideWidth).toBe(616)
-    fireEvent.keyDown(divider, { key: 'End' })
-    expect(useStore.getState().browserBesideWidth).toBe(880)
-
-    act(() => { openRunLink('run_1', 'http://localhost:3000/') })
-    expect(useStore.getState().route.params.view).toBe('session')
-
-    fireEvent.click(beside.getByRole('button', { name: 'Show the Browser as a tab' }))
-    view.rerender(rerouted('browser'))
-    expect(useStore.getState().browserBeside).toBe(false)
-    expect(views().getByRole('tab', { name: 'Browser' }).getAttribute('aria-selected')).toBe('true')
-    expect(screen.queryByRole('separator', { name: 'Resize the Browser' })).toBeNull()
-  })
-
-  it('moves notes from the rail to the strip when it narrows the Chat pane', async () => {
-    // The frame is wide enough for the rail; the views' pane beside the Browser is not.
-    measured((target) => (target.classList.contains('relative') ? 800 : 1400))
-    useStore.setState({ browserBeside: true })
-    vi.mocked(api.runRoomList).mockResolvedValue({ messages: [roomMessage({ id: 'c1', kind: 'comment', actor_id: bob.id, body: 'look here' })] })
-    open({ mode: 'acp' }, 'session')
-    expect(await screen.findByRole('button', { name: '1 note' })).toBeDefined()
-    expect(screen.getByRole('region', { name: 'Browser' })).toBeDefined()
-    expect(screen.queryByRole('list', { name: 'Notes' })).toBeNull()
-  })
-
-  it('stays a tab, with no toggle, on a frame too narrow for two panes', async () => {
-    measured(600)
-    useStore.setState({ browserBeside: true })
-    open({}, 'browser')
-    expect(views().getByRole('tab', { name: 'Browser' }).getAttribute('aria-selected')).toBe('true')
-    expect(await screen.findByRole('toolbar', { name: 'Browser' })).toBeDefined()
-    expect(screen.queryByRole('button', { name: /Show beside|as a tab/ })).toBeNull()
   })
 })
 
@@ -578,12 +577,12 @@ describe('run details', () => {
   it('leads the workflow with the request that needs the viewer, and leaves the sheet for it', async () => {
     vi.mocked(api.runRoomList).mockResolvedValue({ messages: [] })
     open({ status: 'needs-attention', state: 'needs-you', reason: 'needs input: Which port?' }, 'terminal')
-    fireEvent.click(screen.getByRole('button', { name: 'Workflow: Needs you' }))
-    const sheet = within(await screen.findByRole('dialog', { name: 'Workflow' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Session tree: Needs you' }))
+    const sheet = within(await screen.findByRole('dialog', { name: 'Session tree' }))
     const request = sheet.getByRole('treeitem', { name: /^Agent asks: Which port\?, Needs you/ })
     expect(request.getAttribute('aria-level')).toBe('2')
     fireEvent.click(request)
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Workflow' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Session tree' })).toBeNull())
     expect(useStore.getState().route.params.view).toBe('session')
   })
 
@@ -722,6 +721,7 @@ describe('run details', () => {
   })
 
   it('drops a note\'s refusal that arrives after another member signed in', async () => {
+    xterm.enabled = false
     const post = heldPost()
     useStore.setState({ identityKey: 'alice' })
     open()
@@ -994,6 +994,7 @@ describe('the session composer', () => {
   })
 
   it('waits for a send that outlives it, and sends a failed one again under the same key', async () => {
+    xterm.enabled = false
     const View = lookupRoute('run')!
     let settle = { resolve: (_: { message: ReturnType<typeof roomMessage> }) => {}, reject: (_: Error) => {} }
     const pending = () => new Promise<{ message: ReturnType<typeof roomMessage> }>((resolve, reject) => { settle = { resolve, reject } })

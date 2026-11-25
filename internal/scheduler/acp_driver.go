@@ -187,12 +187,19 @@ func (d *acpDriver) Resume(ctx context.Context, entry *supervised, att runtime.A
 		return err
 	}
 	d.s.mu.Lock()
-	waking, reopening, cid := entry.waking != nil, entry.retained, entry.containerID
+	waking, reopening := entry.waking != nil, entry.retained
+	cold := entry.agentExec == nil && entry.agentKeeper == nil
 	d.s.mu.Unlock()
-	// A closed VM's close stopped its agent, so its Relaunch opens the
-	// conversation as one from a frozen container does.
-	if _, saved := d.s.saver(cid); waking && (!reopening || !saved) {
-		return d.openRestored(ctx, entry, openWake)
+	// A close stopped the agent, so a Relaunch opens the conversation as one
+	// from a frozen container does, whatever the close did with the sandbox.
+	if waking && !reopening {
+		how := openWake
+		// A VM started from its disk has no saved memory to go back to, so
+		// an agent that cannot restore its conversation starts a new one.
+		if run, err := d.s.cfg.Store.GetRun(ctx, entry.runID); cold && err == nil && !d.s.resumes(run.Harness) {
+			how = openRestore
+		}
+		return d.openRestored(ctx, entry, how)
 	}
 	if !d.continuationOwed(entry) {
 		d.connect(ctx, entry, openRestore)
@@ -450,8 +457,9 @@ func (d *acpDriver) openRestored(ctx context.Context, entry *supervised, how acp
 // open runs under the run's op lock. openRestore and openWake with no live
 // session first reattach to the keeper an earlier server process, or the
 // VM a wake restored, left running and adopt its session; every other open,
-// or a failed reattach, stops that keeper and starts the adapter under a new
-// one.
+// or a reattach that failed while ctx was live, stops that keeper and starts
+// the adapter under a new one. One that ctx's end cut short proves nothing
+// about the keeper, which stays recorded for the next open.
 func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) error {
 	if err := d.stopAdapterLocked(ctx, entry.runID); err != nil {
 		slog.Warn("scheduler: stop the previous ACP server", "run", entry.runID, "error", err)
@@ -504,7 +512,7 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 			mode = recorded
 		}
 	}
-	instructions, err := d.s.briefedInstructions(ctx, d.s.runGuide(ctx, entry.runID, oneShot, true), run.Extras, run.WorkspaceID, run.MemberID)
+	instructions, err := d.s.briefedInstructions(ctx, d.s.runGuide(ctx, entry.runID, oneShot, true, d.s.containerCLI(ctx, cid)), run.Extras, run.WorkspaceID, run.MemberID)
 	if err != nil {
 		return err
 	}
@@ -521,6 +529,9 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 			}
 			d.record(entry, func() { entry.keeperDelivered, entry.keeperAdopted = state.Delivered, true })
 		} else {
+			if ctx.Err() != nil {
+				return fmt.Errorf("reattach to the agent's keeper: %w", err)
+			}
 			slog.Warn("scheduler: reattach to the agent's keeper", "run", entry.runID, "error", err)
 			after := "the server restarted"
 			if how == openWake {

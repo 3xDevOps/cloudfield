@@ -254,10 +254,10 @@ function Content({ textarea, onClose }: { textarea: React.RefObject<HTMLTextArea
   return (
     <>
       <PaneHeader
-        className={sheet ? 'coarse:px-4 coarse:py-2' : undefined}
+        // Beside a session the header ends where the tile's two rows do: 32px each, 44px under a finger.
+        className={cn(sheet && 'coarse:px-4 coarse:py-2', onRun && (sheet ? 'h-14' : 'h-16 coarse:h-22'))}
         title="Assistant"
         level={2}
-        size={onRun ? 'run' : 'view'}
         stateLine={status && (
           <StateLine tone={waiting ? 'needs-you' : stateTone[status.state]} pulse={status.state === 'running' && !waiting}>
             {[agent, waiting ? 'Waiting for you' : stateWord[status.state]].filter(Boolean).join(' · ')}

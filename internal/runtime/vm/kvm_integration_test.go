@@ -49,7 +49,7 @@ func kvmEngine(t *testing.T) *engine {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return newEngine(Config{DataDir: dir, Images: images, Monitor: []string{server, MonitorCommand}, Helper: server}, SystemdUnits{}, dialHelper)
+	return newEngine(Config{DataDir: dir, Images: images, Monitor: []string{server, MonitorCommand}, Helper: server, ProgramUnit: localBinProgram}, SystemdUnits{}, dialHelper)
 }
 
 func vmRun(t *testing.T, e *engine, key, script string) (string, int) {
@@ -162,6 +162,21 @@ func TestKVMSessionLifecycle(t *testing.T) {
 	if out, code := vmRun(t, e, key, "echo from-guest > /workspace/written"); code != 0 {
 		t.Fatalf("write to the checkout: %d %s", code, out)
 	}
+	// Page cache counts as available in the guest, but the host holds it.
+	if out, code := vmRun(t, e, key, "head -c 134217728 /dev/zero > /tmp/cached && sync"); code != 0 {
+		t.Fatalf("fill the guest's page cache: %d %s", code, out)
+	}
+	h, err := e.helper(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := h.Stats(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if use, err := e.memoryUse(); err != nil || use[runtime.ID(idPrefix+key)] < g.MemoryBytes+96<<20 {
+		t.Errorf("memory use = %v, %v; guest count %d; want the unit's host memory, with the guest's page cache", use, err, g.MemoryBytes)
+	}
 	if data, _ := os.ReadFile(filepath.Join(src, "checkout", "written")); string(data) != "from-guest\n" {
 		t.Errorf("host sees %q", data)
 	}
@@ -176,6 +191,9 @@ func TestKVMSessionLifecycle(t *testing.T) {
 	if out, _ := vmRun(t, after, key, "cat /var/tmp/setup-log | wc -l"); strings.TrimSpace(out) != "1" {
 		t.Errorf("setup ran %s times before the engine restart", out)
 	}
+	if out, code := vmRun(t, after, key, "echo installed > /usr/local/bin/kept"); code != 0 {
+		t.Fatalf("write to the root disk: %d %s", code, out)
+	}
 	start = time.Now()
 	if err := after.stop(t.Context(), key, 2*time.Second); err != nil {
 		t.Fatal(err)
@@ -184,21 +202,44 @@ func TestKVMSessionLifecycle(t *testing.T) {
 	if info, _ := after.inspect(t.Context(), key); !info.Exited {
 		t.Errorf("stopped VM inspects as %+v", info)
 	}
+	monitor := after.path(key, monitorLog)
+	if out, _ := os.ReadFile(monitor); strings.Contains(string(out), "unknown command") {
+		t.Errorf("the monitor of a VM that powered off logged %q", out)
+	}
+	if err := os.WriteFile(monitor, []byte("the first launch\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := after.start(t.Context(), key); err != nil {
 		t.Fatal(err)
 	}
-	if out, _ := vmRun(t, after, key, "cat /var/tmp/setup-log | wc -l"); strings.TrimSpace(out) != "1" {
-		t.Errorf("a cold start kept the old root disk: setup log has %s lines", out)
+	if cur, err := os.ReadFile(monitor); err != nil || strings.Contains(string(cur), "the first launch") {
+		t.Errorf("after a cold start monitor.log holds %q, %v; want only the new launch's output", cur, err)
+	}
+	if old, _ := os.ReadFile(monitor + ".1"); string(old) != "the first launch\n" {
+		t.Errorf("monitor.log.1 holds %q, want the first launch's output", old)
+	}
+	if out, _ := vmRun(t, after, key, "cat /usr/local/bin/kept; wc -l < /var/tmp/setup-log"); out != "installed\n1\n" {
+		t.Errorf("after a cold start the root disk holds %q, want the file written before it and one setup run", out)
 	}
 }
 
-func TestKVMSaveRestoreKeepsProcesses(t *testing.T) {
+// TestKVMRepeatedSaveAndWakeKeepsMemoryAndProcesses saves and wakes one VM
+// six times. Its 5 GiB put memory the guest's kernel uses past 4 GiB, which
+// Cloud Hypervisor maps apart from the first 3 GiB. Every wake must find the
+// boot and processes it left. After every second one, 1 GiB of random bytes
+// must read back unchanged; the save before it comes with almost nothing
+// touched since the last wake. Restored on demand, all 7 such VMs died by
+// their third wake, 6 of them rebooted from their disks: a page a host
+// process had read through /proc/<pid>/mem before Cloud Hypervisor
+// registered its userfaultfd kept zeros, since Cloud Hypervisor takes a page
+// that is already there as loaded.
+func TestKVMRepeatedSaveAndWakeKeepsMemoryAndProcesses(t *testing.T) {
 	e := kvmEngine(t)
 	key := "run-vmtest-b"
 	t.Cleanup(func() { _ = e.destroy(context.Background(), key) })
 	spec := runtime.Spec{
 		Image: "docker.io/library/ubuntu:24.04", CreationKey: key, Command: []string{"/bin/sh", "-c", "exec sleep infinity"},
-		Env: map[string]string{"AETHER_RUN_ID": key}, CPULimit: 2, MemoryLimitBytes: 1 << 30,
+		Env: map[string]string{"AETHER_RUN_ID": key}, CPULimit: 2, MemoryLimitBytes: 5 << 30,
 	}
 	if _, err := e.create(t.Context(), spec.CreationKey, spec, options{}); err != nil {
 		t.Fatal(err)
@@ -206,25 +247,44 @@ func TestKVMSaveRestoreKeepsProcesses(t *testing.T) {
 	if err := e.start(t.Context(), key); err != nil {
 		t.Fatal(err)
 	}
-	before, _ := vmRun(t, e, key, "setsid sleep 4000 </dev/null >/dev/null 2>&1 & sleep 0.5; pgrep -x sleep | sort | tr '\\n' ' '; cat /proc/sys/kernel/random/boot_id")
-	start := time.Now()
-	if err := e.save(t.Context(), key); err != nil {
-		t.Fatal(err)
+	const alive = "pgrep -x sleep | sort | tr '\\n' ' '; cat /proc/sys/kernel/random/boot_id"
+	sum, _ := vmRun(t, e, key, "mount -o remount,size=90% /dev/shm; head -c 1024M /dev/urandom >/dev/shm/fill; "+
+		"setsid sleep 4000 </dev/null >/dev/null 2>&1 & cksum </dev/shm/fill")
+	before, _ := vmRun(t, e, key, alive)
+	for cycle := range 6 {
+		start := time.Now()
+		if err := e.save(t.Context(), key); err != nil {
+			t.Fatalf("save %d: %v", cycle, err)
+		}
+		if up, _ := e.running(t.Context(), key); up {
+			t.Fatal("the VM still runs after save")
+		}
+		saved, _ := e.savedMemory(key)
+		saveTook := time.Since(start)
+		// A VM asleep for minutes on a busy host has its saved memory on
+		// disk, not in the page cache.
+		unix.Sync()
+		if err := os.WriteFile("/proc/sys/vm/drop_caches", []byte("3"), 0); err != nil {
+			t.Fatal(err)
+		}
+		start = time.Now()
+		if err := e.restore(t.Context(), key); err != nil {
+			t.Fatalf("restore %d: %v", cycle, err)
+		}
+		t.Logf("cycle %d: the save took %s and wrote %d MiB, the restore %s", cycle, saveTook.Round(time.Millisecond), saved>>20, time.Since(start).Round(time.Millisecond))
+		if _, err := os.Stat(e.path(key, snapshotDir)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("cycle %d: the saved state outlived the wake that used it: %v", cycle, err)
+		}
+		if after, _ := vmRun(t, e, key, alive); after != before {
+			t.Fatalf("cycle %d: after the wake the guest has processes and boot %q, want %q%s", cycle, after, before, e.logTail(key))
+		}
+		if cycle%2 == 0 {
+			continue
+		}
+		if got, _ := vmRun(t, e, key, "cksum </dev/shm/fill"); got != sum {
+			t.Fatalf("cycle %d: the guest's memory reads back as %q, want %q", cycle, got, sum)
+		}
 	}
-	t.Logf("save took %s", time.Since(start))
-	if up, _ := e.running(t.Context(), key); up {
-		t.Fatal("the VM still runs after save")
-	}
-	start = time.Now()
-	if err := e.restore(t.Context(), key); err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("restore took %s", time.Since(start))
-	after, _ := vmRun(t, e, key, "pgrep -x sleep | sort | tr '\\n' ' '; cat /proc/sys/kernel/random/boot_id")
-	if before != after {
-		t.Errorf("processes or boot changed across save and restore:\n%s\nvs\n%s", before, after)
-	}
-	t.Logf("same processes and boot after restore: %s", strings.TrimSpace(after))
 }
 
 func kvmSession(t *testing.T, e *engine, key string, mounts ...runtime.Mount) {
@@ -882,6 +942,9 @@ func TestKVMDictationVM(t *testing.T) {
 	}
 	if links, _ := vmRun(t, e, dictationVM("i9test"), "ls /sys/class/net"); strings.TrimSpace(links) != "lo" {
 		t.Errorf("the engine's VM has network links %q, want only lo", links)
+	}
+	if got, _ := vmRun(t, e, dictationVM("i9test"), "cat /sys/fs/cgroup/session/memory.max; wc -l </proc/swaps"); got != "1073741824\n1\n" {
+		t.Errorf("the engine's memory.max and /proc/swaps line count are %q, want its 1 GiB cap and no swap, as its container has", got)
 	}
 	if err = r.RemoveDictation(t.Context(), "i9test"); err != nil {
 		t.Fatal(err)

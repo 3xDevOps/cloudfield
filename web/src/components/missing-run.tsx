@@ -7,15 +7,15 @@ import { useDelayed } from '@/lib/hooks'
 import { useKeybindings } from '@/lib/keybindings'
 import { useStore } from '@/store'
 
-/** Only a hydrated store with a live connection can tell a deleted run from an unread one. */
-export function MissingRun() {
+/** Only a hydrated store with a live connection can tell a deleted run from an unread one. The tile area owns Escape, so a `tiled` one registers no `leave-run`. */
+export function MissingRun({ tiled }: { tiled?: boolean }) {
   const hydrated = useStore((s) => s.hydrated)
   const error = useStore((s) => s.hydrationError)
   const dead = useStore((s) => s.streamDead)
   const navigate = useStore((s) => s.navigate)
   // A phone opens a session over its tab bar, so a session that is still loading needs its own way out.
   const mobile = useIsMobile()
-  useKeybindings('run', { 'leave-run': () => navigate('board') })
+  useKeybindings('run', tiled ? {} : { 'leave-run': () => navigate('board') })
   const unreachable = error !== null
   const loading = useDelayed(!hydrated && !unreachable)
 
@@ -88,7 +88,7 @@ export function MissingRun() {
         <p className="mt-0.5 break-words text-ui leading-5 text-muted">
           This session is not on the server. It may have been deleted.
         </p>
-        <Button size="sm" className="mt-2" onClick={() => navigate('board')}>
+        <Button size="sm" variant={tiled ? 'secondary' : 'primary'} className="mt-2" onClick={() => navigate('board')}>
           <ArrowLeft className="size-3.5" aria-hidden />
           Back to board
         </Button>

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
-import { persist } from 'zustand/middleware'
+import { createJSONStorage, persist, type StorageValue } from 'zustand/middleware'
+import { shallow } from 'zustand/shallow'
 import { clampTerminalFontSize } from '@/lib/term-font'
 import { batched } from '@/store/batch'
 import { createAgentModelsSlice, type AgentModelsSlice } from '@/store/agent-models'
@@ -24,6 +25,7 @@ import { createSessionsSlice, type SessionsSlice } from '@/store/sessions'
 import { createWorkspacesSlice, type WorkspacesSlice } from '@/store/workspaces'
 import { createUpdatesSlice, type UpdatesSlice } from '@/store/updates'
 import { createTerminalSlice, type TerminalSlice } from '@/store/terminal'
+import { createTilesSlice, normalizeSavedTiles, type TilesSlice } from '@/store/tiles'
 import { createTraceSlice, type TraceSlice } from '@/store/trace-log'
 import { createTimelineSlice, type TimelineSlice } from '@/store/timeline'
 import { createMessagesSlice, type MessagesSlice } from '@/store/messages'
@@ -79,6 +81,7 @@ export type RootState = ServerSlice &
   CostSlice &
   TimelineSlice &
   LanesSlice &
+  TilesSlice &
   FilesSlice &
   DiffSlice &
   CollaborationSlice &
@@ -106,8 +109,6 @@ const persistedUi = (s: RootState) => ({
   terminalDockHeight: s.terminalDockHeight,
   detailsOpen: s.detailsOpen,
   workflowOpen: s.workflowOpen,
-  browserBeside: s.browserBeside,
-  browserBesideWidth: s.browserBesideWidth,
   terminalFontSize: s.terminalFontSize,
   terminalFitWidth: s.terminalFitWidth,
   singleKeyShortcuts: s.singleKeyShortcuts,
@@ -124,6 +125,7 @@ const persistedUi = (s: RootState) => ({
   sessionsLanes: s.sessionsLanes,
   savedLaunchDefaults: s.savedLaunchDefaults,
   savedRunViews: s.savedRunViews,
+  savedTiles: s.savedTiles,
   dismissedUpdates: s.dismissedUpdates,
   sysboxNudgeDismissed: s.sysboxNudgeDismissed,
   onboarded: s.onboarded,
@@ -140,6 +142,8 @@ const persistedUi = (s: RootState) => ({
 type PersistedState = Partial<ReturnType<typeof persistedUi>>
 
 export function createRootStore() {
+  const storage = createJSONStorage<PersistedState>(() => localStorage)
+  let written: PersistedState | undefined
   return create<RootState>()(
     batched(persist(
       (...a) => ({
@@ -160,6 +164,7 @@ export function createRootStore() {
         ...createCostSlice(...a),
         ...createTimelineSlice(...a),
         ...createLanesSlice(...a),
+        ...createTilesSlice(...a),
         ...createDiffSlice(...a),
         ...createFilesSlice(...a),
         ...createCollaborationSlice(...a),
@@ -244,6 +249,7 @@ export function createRootStore() {
             laneGroup: stored.laneGroup === 'owner' ? 'owner' : 'status',
             laneHidden: normalizeLaneHidden(stored.laneHidden),
             sessionsLanes: stored.sessionsLanes === true,
+            savedTiles: normalizeSavedTiles(stored.savedTiles),
             sidebarWidth: Math.min(maxSidebarWidth, Math.max(minSidebarWidth, Number(stored.sidebarWidth) || current.sidebarWidth)),
             launchWidth: Math.min(maxLaunchWidth, Math.max(minLaunchWidth, Number(stored.launchWidth) || current.launchWidth)),
             runDetailsWidth: Math.min(maxRunDetailsWidth, Math.max(minRunDetailsWidth, Number(stored.runDetailsWidth) || current.runDetailsWidth)),
@@ -257,6 +263,14 @@ export function createRootStore() {
           }
         },
         partialize: persistedUi,
+        storage: storage && {
+          ...storage,
+          setItem: (name: string, value: StorageValue<PersistedState>) => {
+            if (shallow(value.state, written)) return
+            storage.setItem(name, value)
+            written = value.state
+          },
+        },
       },
     )),
   )

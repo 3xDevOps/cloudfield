@@ -5,7 +5,6 @@ import { cn } from '@/lib/utils'
 
 export function PaneHeader({
   title,
-  size = 'view',
   level = 1,
   stateLine,
   viewSwitch,
@@ -16,7 +15,6 @@ export function PaneHeader({
   className,
 }: {
   title: React.ReactNode
-  size?: 'view' | 'run'
   /** A pane beside the page's own header titles itself one level below it. */
   level?: 1 | 2
   stateLine?: React.ReactNode
@@ -32,8 +30,7 @@ export function PaneHeader({
     <header
       data-slot="pane-header"
       className={cn(
-        'flex shrink-0 items-center gap-2 border-b border-seam bg-canvas px-4 coarse:px-2',
-        size === 'run' ? 'h-14' : 'h-11',
+        'flex h-11 shrink-0 items-center gap-2 border-b border-seam bg-canvas px-4 coarse:px-2',
         className,
       )}
     >

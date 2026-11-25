@@ -48,6 +48,10 @@ describe('shortcut reference', () => {
     expect(screen.queryByLabelText('g then b')).toBeNull()
     expect(screen.getByRole('heading', { name: 'In a session' })).toBeDefined()
     expect(screen.getByText('Leave a session for the board')).toBeDefined()
+    expect(screen.getByLabelText('Ctrl+\\')).toBeDefined()
+    expect(screen.getByLabelText('Ctrl+1 to 9')).toBeDefined()
+    expect(screen.queryByLabelText('Ctrl+2')).toBeNull()
+    expect(screen.getByText('Open the session to the side of the focused tile')).toBeDefined()
   })
 
   it('ignores a "?" typed into a field', () => {

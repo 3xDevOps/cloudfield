@@ -17,9 +17,9 @@ func init() {
 	register(command{
 		name:  "publish",
 		short: "push a session's branch and open a pull request into its base branch, as the dashboard's Publish does",
-		usage: "aether publish <session-id> [--repo <workspace>]",
-		example: "aether publish run-d6ay38tj8j\n" +
-			"aether publish run-d6ay38tj8j --repo app",
+		usage: "cloudfield publish <session-id> [--repo <workspace>]",
+		example: "cloudfield publish run-d6ay38tj8j\n" +
+			"cloudfield publish run-d6ay38tj8j --repo app",
 		flags: true,
 		run:   runPublish,
 	})
@@ -28,7 +28,7 @@ func init() {
 func runPublish(args []string) error {
 	fs := newFlagSet("publish")
 	repo := fs.String("repo", "", "publish this extra repository of a multi-repo session, by workspace ID or name (default: the primary)")
-	const usage = "usage: aether publish <session-id> [--repo <workspace>]"
+	const usage = "usage: cloudfield publish <session-id> [--repo <workspace>]"
 	runID, err := parseLeadingArg(fs, args)
 	if err != nil {
 		return fmt.Errorf("%w\n%s", err, usage)
@@ -74,7 +74,7 @@ func publish(c *protocol.Client, w, notes io.Writer, runID, repoName string) err
 		return err
 	}
 	if !domain.RunStatus(r.Status).Live() {
-		return fmt.Errorf("session %s is %s and publishing needs its sandbox. A session closed or reported within the last 7 days keeps it: aether reopen %s, then aether publish %s. An interrupted session, or one that failed without reporting, cannot be reopened. Either way aether pull %s fetches the branch", r.ID, r.Status, r.ID, r.ID, r.ID)
+		return fmt.Errorf("session %s is %s and publishing needs its sandbox. A session closed or reported within the last 30 days keeps it: aether reopen %s, then aether publish %s. An interrupted session, or one that failed without reporting, cannot be reopened. Either way aether pull %s fetches the branch", r.ID, r.Status, r.ID, r.ID, r.ID)
 	}
 	var list protocol.WorkspaceListResult
 	if err := c.Call(protocol.MethodWorkspaceList, struct{}{}, &list); err != nil {

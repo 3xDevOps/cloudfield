@@ -261,7 +261,7 @@ function oklchRgba(color: string): string | undefined {
 
 function primarySelectionBackground(): string | undefined {
   const root = document.documentElement
-  const raw = getComputedStyle(root).getPropertyValue('--accent-fill').trim()
+  const raw = getComputedStyle(root).getPropertyValue('--accent-mark').trim()
   if (!raw) return undefined
 
   const probe = document.createElement('span')
@@ -623,7 +623,16 @@ export function useXterm({
       // make the shared PTY smaller than this pane's requested geometry.
       const resize = () => {
         if (followRef.current) return
-        const proposed = fit.proposeDimensions()
+        // A mirror drawn scaled to its pane still asks for the grid its pane holds at the chosen text size.
+        const drawn = created.options.fontSize
+        let proposed = fit.proposeDimensions()
+        if (drawn !== appliedFontSize.current) {
+          const intent = captureViewport(created, viewportInteractionRevision.current)
+          created.options.fontSize = appliedFontSize.current
+          proposed = fit.proposeDimensions()
+          created.options.fontSize = drawn
+          restoreViewport(created, intent, viewportInteractionRevision.current)
+        }
         if (!proposed) return
         requestedSize.current = proposed
         if (!serverSize.current) created.resize(proposed.cols, proposed.rows)
@@ -681,7 +690,11 @@ export function useXterm({
         onDataRef.current?.(modified)
       })
       const binary = created.onBinary((data) => onBinaryRef.current?.(data))
-      const observer = new ResizeObserver(resize)
+      let settle: number | undefined
+      const observer = new ResizeObserver(() => {
+        window.clearTimeout(settle)
+        settle = window.setTimeout(resize, 100)
+      })
       observer.observe(host)
       teardown = () => {
         host.removeEventListener('wheel', noteViewportInteraction)
@@ -689,6 +702,7 @@ export function useXterm({
         host.removeEventListener('pointerdown', noteScrollbarInteraction)
         host.removeEventListener('paste', notePaste, true)
         observer.disconnect()
+        window.clearTimeout(settle)
         themeWatch.disconnect()
         input.dispose()
         binary.dispose()

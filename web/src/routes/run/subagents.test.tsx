@@ -2,7 +2,7 @@ import { act, cleanup, render, screen, waitFor, within } from '@testing-library/
 import userEvent from '@testing-library/user-event'
 import type * as apiModule from '@/lib/api'
 import { api } from '@/lib/api'
-import type { SessionHistory, SessionItem } from '@/lib/session-types'
+import type { SessionHistory, SessionItem, WorkflowProgress } from '@/lib/session-types'
 import { CenterView } from '@/components/shell/center-view'
 import { lookupRoute } from '@/routes/registry'
 import '@/routes/run'
@@ -118,6 +118,32 @@ function transcript(): SessionItem[] {
 }
 
 describe('subagents in the session view', () => {
+  const waiting = () => {
+    open()
+    act(() => useStore.getState().upsertRun(run({ mode: 'acp', acp: true, status: 'running', state: 'waiting-agents' })))
+    acpSocket().open({}, [item('turn_start', 1), launch(1, 'a1', 'Find usages', 'in_progress'), launch(1, 'a2', 'Check tests', 'in_progress')])
+    return screen.findByText('· 2 agents running')
+  }
+
+  const mode = () => screen.queryByText('Enhanced', { selector: 'header *' })
+
+  it('counts the running subagents once in the header row, on the Session tree chip', async () => {
+    const chip = await waiting()
+    expect(chip.closest('header')!.textContent).not.toContain('subagents running')
+    expect(mode()).not.toBeNull()
+  })
+
+  it('drops the reason whole when it has under 96px beside the view switch', async () => {
+    vi.stubGlobal('ResizeObserver', class extends SizedObserver {
+      observe(target: Element) {
+        SizedObserver.width = target.matches('header > div:not([role])') ? 80 : 736
+        super.observe(target)
+      }
+    })
+    await waiting()
+    expect(mode()).toBeNull()
+  })
+
   it('groups consecutive subagents into cards and opens one in the inspector', async () => {
     open()
     acpSocket().open({}, transcript())
@@ -466,5 +492,166 @@ describe('subagents in the session view', () => {
     expect(useStore.getState().route.params.agent).toBeUndefined()
     expect(push).not.toHaveBeenCalled()
     expect(replace).toHaveBeenCalled()
+  })
+})
+
+const progress: WorkflowProgress = {
+  name: 'fix-flaky-tests',
+  phases: [{ index: 1, title: 'Reproduce' }, { index: 2, title: 'Fix' }],
+  agents: [
+    { index: 0, label: 'Warm cache', state: 'done', cached: true },
+    { index: 1, label: 'Run suite', phase: 1, type: 'general-purpose', state: 'done', result: '**Found** 3 flaky tests\nmore', duration_ms: 80_000, tokens: 40_000 },
+    { index: 2, label: 'Patch retry', phase: 2, state: 'running', tool: 'Bash', tool_summary: 'npm test -- auth', prompt: 'Patch the retry helper' },
+    { index: 3, label: 'Bisect login', phase: 2, model: 'sonnet', state: 'failed', error: 'exit 1: bad revision', tool_calls: 4, tokens: 1000, attempt: 2, prompt: 'Bisect the login failure' },
+    { index: 4, label: 'Verify', phase: 2, state: 'queued' },
+  ],
+  logs: ['phase 1 done', 'phase 2 started'],
+}
+
+const flow = (status: 'running' | 'completed' | 'failed' | 'stopped', workflow?: WorkflowProgress, extra: Record<string, unknown> = {}) =>
+  tool(1, 'w1', 'other', 'Workflow', 'completed', { tool_name: 'Workflow', raw_input: { script: 'await agent("x")' }, task: { id: 't1', type: 'local_workflow', status, workflow }, ...extra })
+
+async function inspect(items: SessionItem[]) {
+  open('w1')
+  acpSocket().open({}, items)
+  const inspector = within(await screen.findByRole('dialog', { name: 'Subagent' }))
+  await inspector.findByRole('button', { name: 'Script' })
+  return inspector
+}
+
+describe('the subagents bar', () => {
+  it('stays out of a session that launched nothing', async () => {
+    open()
+    acpSocket().open({}, [item('turn_start', 1), say(1, 'user', 'Hello')])
+    await screen.findByRole('log', { name: 'Chat' })
+    expect(screen.queryByRole('region', { name: 'Subagents and workflows' })).toBeNull()
+  })
+
+  it('lists every top-level subagent and workflow, running first, and opens one', async () => {
+    open()
+    acpSocket().open({}, [...transcript(), item('turn_start', 2), launch(2, 'a3', 'Watch CI', 'in_progress'), flow('running', progress)])
+    const bar = within(await screen.findByRole('region', { name: 'Subagents and workflows' }))
+    const header = bar.getByRole('button', { name: '3 subagents and 1 workflow · 2 running, 1 stopped' })
+    expect(header.getAttribute('aria-expanded')).toBe('false')
+    expect(bar.queryAllByRole('listitem')).toHaveLength(0)
+
+    await userEvent.click(header)
+    expect(bar.getAllByRole('listitem').map((row) => row.textContent)).toEqual([
+      expect.stringMatching(/^Watch CIRunning \d+h \d+m$/),
+      'fix-flaky-testsRunning 2 of 5 agents done 1 failed ',
+      'Check testsStopped 3.0s',
+      'Find usagesDone 3.0s',
+    ])
+    await userEvent.click(bar.getByRole('button', { name: /^fix-flaky-tests/ }))
+    expect(useStore.getState().route.params.agent).toBe('w1')
+    // The inspector is a sheet at this width, which hides the bar behind it from the accessibility tree.
+    expect(bar.getByRole('button', { name: /^fix-flaky-tests/, hidden: true }).getAttribute('aria-current')).toBe('true')
+    expect(bar.getByRole('button', { name: /^Watch CI/, hidden: true }).getAttribute('aria-current')).toBeNull()
+  })
+})
+
+describe('a workflow', () => {
+  it('shows its progress on the card', async () => {
+    open()
+    const socket = acpSocket()
+    socket.open({}, [item('turn_start', 1), flow('running', progress)])
+    const log = await screen.findByRole('log', { name: 'Chat' })
+    const card = await within(log).findByRole('button', { name: 'fix-flaky-tests, Workflow, Running' })
+    expect(within(card).getByText('2 of 5 agents')).toBeDefined()
+    expect(within(card).getByText('Phase 2 of 2: Fix · 1 running · 1 failed')).toBeDefined()
+
+    socket.items(flow('failed', progress))
+    expect(await within(log).findByText('1 of 5 agents failed: exit 1: bad revision')).toBeDefined()
+  })
+
+  it('lists its agents under their phases, with the failed one open', async () => {
+    const inspector = await inspect([item('turn_start', 1), flow('running', progress)])
+    expect(inspector.getByRole('heading', { name: 'fix-flaky-tests' })).toBeDefined()
+    expect(inspector.getByText('2 of 5 agents done · 1 running · 1 failed · 1 queued · 41K tokens')).toBeDefined()
+    expect(inspector.getAllByRole('heading', { level: 3 }).map((heading) => heading.textContent)).toEqual(['1. Reproduce · 1 of 1 done', '2. Fix · 0 of 3 done'])
+    expect(inspector.getAllByRole('listitem').map((row) => within(row).getAllByRole('button')[0]!.getAttribute('aria-label'))).toEqual([
+      'Warm cache, Done', 'Run suite, general-purpose, Done', 'Patch retry, Running', 'Bisect login, Failed', 'Verify, Queued',
+    ])
+    expect(within(inspector.getByRole('button', { name: 'Warm cache, Done' })).getByText('Reused a cached result')).toBeDefined()
+    const suite = inspector.getByRole('button', { name: 'Run suite, general-purpose, Done' })
+    expect(within(suite).getByText('Found 3 flaky tests')).toBeDefined()
+    expect(within(suite).getByText('1m 20s')).toBeDefined()
+    expect(within(inspector.getByRole('button', { name: 'Patch retry, Running' })).getByText('Bash: npm test -- auth')).toBeDefined()
+
+    const failed = inspector.getByRole('button', { name: 'Bisect login, Failed' })
+    expect(failed.getAttribute('aria-expanded')).toBe('true')
+    expect(within(failed).getByText('attempt 2')).toBeDefined()
+    expect(inspector.getByText('sonnet · 4 tool calls · 1K tokens · Workflow agents report status and a short result, not a transcript.')).toBeDefined()
+    expect(inspector.getByText('Bisect the login failure')).toBeDefined()
+    expect(inspector.getAllByText('exit 1: bad revision')).toHaveLength(1)
+    await userEvent.click(failed)
+    expect(failed.getAttribute('aria-expanded')).toBe('false')
+    expect(inspector.queryByText('Bisect the login failure')).toBeNull()
+
+    expect(suite.getAttribute('aria-expanded')).toBe('false')
+    await userEvent.click(suite)
+    expect(inspector.getByText('Result')).toBeDefined()
+
+    await userEvent.click(inspector.getByRole('button', { name: 'Log · last 2 lines' }))
+    expect(inspector.getByText(/phase 2 started/)).toBeDefined()
+    expect(inspector.queryByText('await agent("x")')).toBeNull()
+    await userEvent.click(inspector.getByRole('button', { name: 'Script' }))
+    expect(inspector.getByText('await agent("x")')).toBeDefined()
+    expect(inspector.queryByText('No activity yet.')).toBeNull()
+  })
+
+  it('reads the rows a stopped workflow left behind as stopped and not started', async () => {
+    const inspector = await inspect([item('turn_start', 1), flow('stopped', progress)])
+    expect(inspector.getByText('2 of 5 agents done · 1 failed · 1 stopped · 1 not started · 41K tokens')).toBeDefined()
+    expect(within(inspector.getByRole('button', { name: 'Patch retry, Stopped' })).getByText('Stopped')).toBeDefined()
+    expect(within(inspector.getByRole('button', { name: 'Verify, Not started' })).getByText('Not started')).toBeDefined()
+  })
+
+  it('says a running workflow is starting until it reports an agent, and a finished one launched none', async () => {
+    const inspector = await inspect([item('turn_start', 1), flow('running', { name: 'fix-flaky-tests' })])
+    expect(inspector.getByText('Starting. Agents appear here as the script launches them.')).toBeDefined()
+    acpSocket().items(flow('completed', { name: 'fix-flaky-tests' }))
+    expect(await inspector.findByText('This workflow launched no agents.')).toBeDefined()
+  })
+
+  it('offers only the script of a workflow recorded without progress', async () => {
+    const inspector = await inspect([item('turn_start', 1), flow('completed')])
+    expect(inspector.getByText('This workflow ran before Cloudfield recorded per-agent progress. Only its script is available.')).toBeDefined()
+    expect(inspector.getByRole('button', { name: 'Script' }).getAttribute('aria-expanded')).toBe('true')
+    expect(inspector.getByText('await agent("x")')).toBeDefined()
+  })
+
+  it('counts the agents the server left out', async () => {
+    const inspector = await inspect([item('turn_start', 1), flow('running', { ...progress, omitted: 12 })])
+    expect(inspector.getByText('12 more agents are not shown or counted.')).toBeDefined()
+  })
+
+  it('reads a workflow cut for the wire whole, and shows the real error when that fails', async () => {
+    const start = item('turn_start', 1)
+    const cut = { ...flow('running', { name: 'fix-flaky-tests' }, { raw_input: 'await agent(' }), truncated: true }
+    vi.mocked(api.runACPItem).mockRejectedValue(new Error('acphost: requested session history has expired'))
+    const inspector = await inspect([start, cut])
+    expect((await inspector.findAllByRole('alert'))[0]!.textContent).toBe('The workflow could not be read: acphost: requested session history has expired')
+
+    vi.mocked(api.runACPItem).mockResolvedValue({ ...cut, tool_call: { ...cut.tool_call!, task: { id: 't1', status: 'running', workflow: progress } }, truncated: false })
+    await userEvent.click(inspector.getAllByRole('button', { name: 'Retry' })[0]!)
+    expect(await inspector.findByRole('button', { name: 'Bisect login, Failed' })).toBeDefined()
+  })
+
+  it('keeps the rows and script of a cut workflow up while its next snapshot is read', async () => {
+    const cut = () => ({ ...flow('running', { name: 'fix-flaky-tests' }, { raw_input: undefined }), truncated: true })
+    const start = item('turn_start', 1)
+    const first = cut()
+    vi.mocked(api.runACPItem).mockClear().mockResolvedValue({ ...flow('running', progress), seq: first.seq })
+    const inspector = await inspect([start, first])
+    await inspector.findByRole('button', { name: 'Bisect login, Failed' })
+    await userEvent.click(inspector.getByRole('button', { name: 'Script' }))
+
+    vi.mocked(api.runACPItem).mockReturnValue(new Promise(() => {}))
+    acpSocket().items(cut())
+    await waitFor(() => expect(api.runACPItem).toHaveBeenCalledTimes(2))
+    expect(inspector.getByRole('button', { name: 'Bisect login, Failed' })).toBeDefined()
+    expect(inspector.getByText('await agent("x")')).toBeDefined()
+    expect(inspector.queryByText('Loading the prompt…')).toBeNull()
   })
 })

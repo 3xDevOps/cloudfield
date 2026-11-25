@@ -17,13 +17,14 @@ import (
 	"sync"
 	"time"
 
+	edgeclient "github.com/3xDevOps/Aether/internal/edge/client"
 	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
 	"github.com/3xDevOps/Aether/internal/version"
 	"golang.org/x/crypto/ssh"
 )
 
-// DefaultURL is the edge the project runs.
-const DefaultURL = "https://edge.onaether.dev"
+// DefaultURL is the edge the project runs, as new setups name it.
+const DefaultURL = edgeclient.DefaultURL
 
 // SSH is the part of the SSH server the agent hands relayed connections
 // and the edge's notices to. *sshd.Server implements it.
@@ -166,9 +167,6 @@ func New(cfg Config) (*Agent, error) {
 		edgeState:        edgeState,
 	}, nil
 }
-
-// ServerID is this server's id at the edge.
-func (a *Agent) ServerID() string { return a.serverID }
 
 // Run keeps the control connection until ctx is done, reconnecting with
 // jittered exponential backoff. It never gives up: an unreachable or

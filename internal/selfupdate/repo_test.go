@@ -56,7 +56,7 @@ func TestABinaryOnTheOldRepositoryNameFollowsTheRename(t *testing.T) {
 		t.Fatal(err)
 	}
 	dst := filepath.Join(t.TempDir(), "aether")
-	staged, err := Stage(t.Context(), m, "aether-linux-amd64", dst)
+	staged, err := stageIn(t.Context(), m, "aether-linux-amd64", dst, filepath.Dir(dst))
 	if err != nil {
 		t.Fatalf("download under the old name: %v", err)
 	}

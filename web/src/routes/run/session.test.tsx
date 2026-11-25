@@ -424,16 +424,17 @@ describe('the Enhanced session view', () => {
   it('scrolls to a turn’s prompt another view asks for after a room message took its row', async () => {
     SizedObserver.viewport = 240
     const [start, prompt] = [item('turn_start', 1), say(1, 'user', 'Round the totals')]
+    // Stubbed before the view mounts: its last scroll to the end can run before the log is found.
+    vi.spyOn(Element.prototype, 'scrollTo').mockImplementation(function (this: Element, to: ScrollToOptions) {
+      this.scrollTop = to.top ?? this.scrollTop
+      fireEvent.scroll(this)
+    } as typeof Element.prototype.scrollTo)
     open()
     acpSocket().open({}, [
       start, prompt, ...Array.from({ length: 40 }, (_, n) => say(1, 'assistant', `Reply ${n}`)),
       item('turn_end', 1, { stop_reason: 'end_turn' }),
     ])
     const log = await screen.findByRole('log', { name: 'Chat' })
-    log.scrollTo = ((to: ScrollToOptions) => {
-      log.scrollTop = to.top ?? log.scrollTop
-      fireEvent.scroll(log)
-    }) as typeof log.scrollTo
     act(() => useStore.getState().upsertRoomMessage(roomMessage({ id: 'msg_first', kind: 'steer_request', body: 'Round the totals', agent_delivery: 'delivered', created_at: prompt.time })))
     expect(await within(log).findByText('Reply 39')).toBeDefined()
     expect(within(log).queryByText('Round the totals')).toBeNull()
@@ -600,7 +601,7 @@ describe('the Enhanced session view', () => {
     const needs = within(within(await screen.findByRole('dialog', { name: 'Session details' })).getByRole('region', { name: 'Needs you' }))
     expect(needs.queryByRole('generic', { name: /Allow this command\?/ })).toBeNull()
     fireEvent.click(needs.getByRole('button', { name: '1 request, shown below the timeline' }))
-    await waitFor(() => expect(document.activeElement?.id).toBe('session-request-docked'))
+    await waitFor(() => expect(document.activeElement?.id).toBe('session-request-docked-run_1'))
   })
 
   it('sends a form answer with its values', async () => {
@@ -707,6 +708,40 @@ describe('the Enhanced session view', () => {
     await userEvent.click(screen.getByRole('button', { name: /^Context window/ }))
     expect(await screen.findByRole('meter', { name: 'Context window used' })).toBeDefined()
     expect(screen.queryByRole('button', { name: 'Compact' })).toBeNull()
+  })
+
+  it('sets the effort from the model picker, which stays open beside the Send arrow', async () => {
+    const answer = Promise.withResolvers<unknown>()
+    vi.mocked(api.runACPSetOption).mockImplementationOnce(() => answer.promise)
+    open()
+    acpSocket().open({ has_control: true, control_generation: 4, state: state({ config_options: [
+      { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: 'fable', options: [{ value: 'fable', name: 'Fable 5.2' }] },
+      { id: 'effort', name: 'Effort', category: 'thought_level', type: 'select', currentValue: 'high', options: [{ value: 'low', name: 'Low' }, { value: 'high', name: 'High' }] },
+    ] }) })
+    await userEvent.click(await screen.findByRole('button', { name: 'Model: Fable 5.2, Effort: High' }))
+    await userEvent.click(screen.getByRole('radio', { name: 'Low' }))
+    expect(api.runACPSetOption).toHaveBeenCalledExactlyOnceWith('run_1', 'effort', 'low', expect.objectContaining({ control_generation: 4 }))
+    expect(screen.getByRole('button', { name: 'Send' })).toBeDefined()
+    expect(screen.getByRole('radiogroup', { name: 'Effort' })).toBeDefined()
+    answer.resolve({})
+    await waitFor(() => expect(screen.getByRole('button', { name: /^Model/ }).getAttribute('aria-busy')).toBeNull())
+    expect(screen.getByRole('radiogroup', { name: 'Effort' })).toBeDefined()
+  })
+
+  it('drops an effort picked behind one the agent refuses, and keeps the refusal', async () => {
+    const answer = Promise.withResolvers<unknown>()
+    vi.mocked(api.runACPSetOption).mockReset().mockImplementationOnce(() => answer.promise)
+    open()
+    acpSocket().open({ has_control: true, control_generation: 4, state: state({ config_options: [
+      { id: 'model', name: 'Model', category: 'model', type: 'select', currentValue: 'fable', options: [{ value: 'fable', name: 'Fable 5.2' }] },
+      { id: 'effort', name: 'Effort', category: 'thought_level', type: 'select', currentValue: 'high', options: [{ value: 'low', name: 'Low' }, { value: 'medium', name: 'Medium' }, { value: 'high', name: 'High' }] },
+    ] }) })
+    await userEvent.click(await screen.findByRole('button', { name: 'Model: Fable 5.2, Effort: High' }))
+    await userEvent.click(screen.getByRole('radio', { name: 'Low' }))
+    await userEvent.click(screen.getByRole('radio', { name: 'Medium' }))
+    answer.reject(new Error('Invalid value for config option effort: low'))
+    expect((await screen.findByRole('alert')).textContent).toContain('Invalid value for config option effort: low')
+    expect(api.runACPSetOption).toHaveBeenCalledOnce()
   })
 
   it('offers no Cancel on an interrupt the server has not answered', async () => {
@@ -826,6 +861,10 @@ describe('the Enhanced composer draft', () => {
   const View = lookupRoute('run')!
   const lease = { has_control: true, control_generation: 4, state: state({ prompt_images: true }) }
   const box = () => screen.findByRole('combobox', { name: 'Message the agent' })
+  const reconnecting = 'Reconnecting to the agent…'
+  const waits = () => screen.queryAllByRole('status').filter((el) => el.textContent === reconnecting)
+  const drop = (stream: 'reconnecting' | 'live') => act(() => useStore.getState().acpStream('run_1', stream))
+  const strip = 'Answer the request above to continue.'
   const prompt = 'Round the totals\n  then update the docs'
   const sent = { message: roomMessage({ id: 'm', kind: 'steer_request' }) }
   let show: (runID: string) => void
@@ -1004,6 +1043,112 @@ describe('the Enhanced composer draft', () => {
     expect(screen.getByRole('option', { name: /\/help/ })).toBeDefined()
   })
 
+  it.each(['reconnecting', 'offline'] as const)('keeps the message box and its focus while the stream is %s, and sends nothing until it is live', async (down) => {
+    vi.mocked(api.runInject).mockClear().mockResolvedValue(sent)
+    open()
+    expect((await box()).getAttribute('placeholder')).toBe('Connecting to the agent…')
+    acpSocket().open(lease)
+    const field = await box()
+    const placeholder = 'Message the agent, / for commands, @ for files'
+    await waitFor(() => expect(field.getAttribute('placeholder')).toBe(placeholder))
+    const footer = screen.getByRole('button', { name: 'Send' }).closest('div')!.parentElement!
+    const footerElements = footer.querySelectorAll('*').length
+    await userEvent.type(field, 'Round')
+    act(() => useStore.getState().acpStream('run_1', down))
+    expect(document.activeElement).toBe(field)
+    expect(field.getAttribute('placeholder')).toBe(reconnecting)
+    await userEvent.keyboard(' the totals')
+    expect(field).toHaveProperty('value', 'Round the totals')
+    expect(waits()).toHaveLength(1)
+    expect(waits()[0]!.className).toBe('sr-only')
+    expect(footer.contains(waits()[0]!)).toBe(false)
+    expect(footer.querySelectorAll('*')).toHaveLength(footerElements)
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true)
+    await userEvent.hover(screen.getByRole('button', { name: 'Send' }).parentElement!)
+    expect((await screen.findByRole('tooltip')).textContent).toContain(reconnecting)
+    await userEvent.unhover(screen.getByRole('button', { name: 'Send' }).parentElement!)
+    expect(screen.getByLabelText('Choose files to attach')).toHaveProperty('disabled', true)
+    await userEvent.keyboard('{Enter}{Control>}{Shift>}{Enter}{/Shift}{/Control}')
+    expect(api.runInject).not.toHaveBeenCalled()
+    expect(field).toHaveProperty('value', 'Round the totals')
+    act(() => useStore.getState().acpStream('run_1', 'live'))
+    expect(waits()).toHaveLength(0)
+    expect(field.getAttribute('placeholder')).toBe(placeholder)
+    await userEvent.keyboard('{Enter}')
+    await waitFor(() => expect(api.runInject).toHaveBeenCalledWith('run_1', 'Round the totals', expect.any(String), expect.anything()))
+  })
+
+  it('says once why sending waits for an empty, blank and image-only draft, and keeps the running turn\'s pill', async () => {
+    vi.mocked(api.uploadTerminalImage).mockReset().mockResolvedValue({ path: '/home/alice/totals.png' })
+    open()
+    acpSocket().open({ ...lease, state: state({ prompt_images: true, turn_in_flight: true, steering: true }) }, [item('turn_start', 1)])
+    const field = await box()
+    drop('reconnecting')
+    expect(waits()).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Interrupt the agent' })).toHaveProperty('disabled', true)
+    await userEvent.type(field, '   ')
+    expect(waits()).toHaveLength(1)
+    drop('live')
+    await userEvent.clear(field)
+    await userEvent.upload(screen.getByLabelText('Choose files to attach'), new File(['png'], 'totals.png', { type: 'image/png' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Steer' })).toHaveProperty('disabled', false))
+    drop('reconnecting')
+    expect(waits()).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Steer' })).toHaveProperty('disabled', true)
+  })
+
+  it('keeps the closed strip of a session that waits on a request through a reconnect', async () => {
+    open()
+    acpSocket().open({ ...lease, state: state({ turn_in_flight: true, pending: [permission] }) }, [item('turn_start', 1)])
+    expect(await screen.findByText(strip)).toBeDefined()
+    for (const stream of ['reconnecting', 'live'] as const) {
+      drop(stream)
+      expect(screen.getByText(strip)).toBeDefined()
+      expect(screen.queryByRole('combobox', { name: 'Message the agent' })).toBeNull()
+      expect(screen.getByRole('button', { name: 'Interrupt the agent' })).toHaveProperty('disabled', stream !== 'live')
+      expect(waits()).toHaveLength(stream === 'live' ? 0 : 1)
+    }
+  })
+
+  it('opens a session that waits on a request with the closed strip', async () => {
+    useStore.getState().acpAck('run_1', { ok: true, seq: 0, replay: 0, epoch: 0, live: true, has_control: false, state: state({ pending: [permission] }) })
+    open()
+    expect(useStore.getState().acpSessions.run_1!.stream).not.toBe('live')
+    expect(screen.getByText(strip)).toBeDefined()
+    expect(screen.queryByRole('combobox', { name: 'Message the agent' })).toBeNull()
+  })
+
+  it('keeps a watcher\'s Send arrow while a turn runs through a reconnect', async () => {
+    vi.spyOn(api, 'runRoomStatus').mockResolvedValue(occupiedRoom)
+    open({ member_id: bob.id, controller_member_id: bob.id })
+    acpSocket().open({ has_control: false, state: state({ turn_in_flight: true, steering: true }) }, [item('turn_start', 1)])
+    const field = await box()
+    const pills = () => ['Send', 'Interrupt the agent', 'Steer'].filter((name) => screen.queryByRole('button', { name }))
+    expect(pills()).toEqual(['Send'])
+    drop('reconnecting')
+    expect(pills()).toEqual(['Send'])
+    await userEvent.type(field, 'Check the totals')
+    expect(pills()).toEqual(['Send'])
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true)
+    drop('live')
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', false)
+  })
+
+  it.each([
+    ['Stop waiting for background work', state({ background: true, tasks: [{ id: 'bg1', holds: true }] }), ''],
+    ['Queue', state({ turn_in_flight: true }), 'Then the docs'],
+  ])('keeps the controller\'s %s pill, disabled, through a reconnect', async (name, session, draft) => {
+    open()
+    acpSocket().open({ ...lease, state: session })
+    if (draft) await userEvent.type(await box(), draft)
+    const pill = () => screen.getByRole('button', { name })
+    await waitFor(() => expect(pill()).toHaveProperty('disabled', false))
+    drop('reconnecting')
+    expect(pill()).toHaveProperty('disabled', true)
+    drop('live')
+    expect(pill()).toHaveProperty('disabled', false)
+  })
+
   it('keeps the draft through the run\'s views, a reconnect, an event-log restart and a switch to Standard', async () => {
     const view = open()
     acpSocket().open(lease)
@@ -1012,7 +1157,7 @@ describe('the Enhanced composer draft', () => {
     view.rerender(<View params={{ runId: 'run_1', view: 'session', focus: 'composer' }} />)
     expect(await box()).toHaveProperty('value', prompt)
     act(() => useStore.getState().acpStream('run_1', 'reconnecting'))
-    expect(screen.getByText('Connecting to the agent…')).toBeDefined()
+    expect(await box()).toHaveProperty('value', prompt)
     act(() => useStore.getState().acpStream('run_1', 'live'))
     expect(await box()).toHaveProperty('value', prompt)
     act(() => useStore.getState().resetSeq())
@@ -1028,13 +1173,16 @@ describe('Enhanced multiplayer controls', () => {
     vi.spyOn(api, 'runRoomStatus').mockResolvedValue(occupiedRoom)
     open()
     const session = acpSocket().open({ has_control: true, control_generation: 4 })
-    const controller = within(await screen.findByRole('group', { name: 'Session controller' }))
-    expect(controller.getByRole('img', { name: alice.display_name })).toBeDefined()
-    expect(controller.queryByRole('img', { name: bob.display_name })).toBeNull()
-    expect(controller.getByText(/Alice.*You control/)).toBeDefined()
+    const controls = within(await screen.findByRole('group', { name: 'Multiplayer controls' }))
+    const mine = within(await controls.findByRole('button', { name: 'You control' }))
+    expect(mine.getByRole('img', { name: alice.display_name })).toBeDefined()
+    expect(mine.getByText('You control')).toBeDefined()
+    expect(controls.queryByRole('group', { name: 'Session controller' })).toBeNull()
     session.send({ type: 'control', has_control: false, control_generation: 4, revocation_reason: 'takeover' })
-    expect(await controller.findByRole('img', { name: bob.display_name })).toBeDefined()
+    const controller = within(await controls.findByRole('group', { name: 'Session controller' }))
+    expect(controller.getByRole('img', { name: bob.display_name })).toBeDefined()
     expect(controller.queryByRole('img', { name: alice.display_name })).toBeNull()
+    expect(controls.queryByRole('button', { name: 'You control' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Take control' })).toBeDefined()
   })
 
@@ -1046,14 +1194,16 @@ describe('Enhanced multiplayer controls', () => {
     open()
     acpSocket().open({ has_control: false })
     const controls = within(await screen.findByRole('group', { name: 'Multiplayer controls' }))
-    expect(await controls.findByText(`${alice.display_name} · You control in another tab since ${clockTime(acquired)}`)).toBeDefined()
+    expect(await controls.findByText(`You control in another tab since ${clockTime(acquired)}`)).toBeDefined()
+    expect(within(controls.getByRole('group', { name: 'Session controller' })).getByRole('img', { name: alice.display_name })).toBeDefined()
   })
 
   it('releases the acknowledged lease without closing the session and remains reachable on Terminal', async () => {
     const view = open()
     const session = acpSocket().open({ has_control: true, control_generation: 4 })
     const controls = await screen.findByRole('group', { name: 'Multiplayer controls' })
-    await userEvent.click(within(controls).getByRole('button', { name: 'Release' }))
+    await userEvent.click(within(controls).getByRole('button', { name: 'You control' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Release' }))
     const request = session.socket.frames().at(-1) as { request_id: number }
     expect(request).toMatchObject({ type: 'control', write: false, control_generation: 4 })
     session.send({ type: 'control', request_id: request.request_id, ok: true, has_control: false, control_generation: 4 })
@@ -1063,6 +1213,17 @@ describe('Enhanced multiplayer controls', () => {
     expect(screen.getByText('No agent terminal')).toBeDefined()
     expect(within(screen.getByRole('group', { name: 'Multiplayer controls' })).getByRole('button', { name: 'Take control' })).toBeDefined()
     expect(session.socket.closed).toBe(false)
+  })
+
+  it('shows the holder a teammate holding to request control, until the request is up for review', async () => {
+    open()
+    const session = acpSocket().open({ has_control: true, control_generation: 4 })
+    await screen.findByRole('button', { name: 'You control' })
+    receiveTakeover(session, 'holding')
+    expect(await screen.findByRole('progressbar', { name: 'A teammate is holding to request control' })).toBeDefined()
+    receiveTakeover(session, 'review')
+    await screen.findByRole('alertdialog', { name: 'Session control requested' })
+    expect(screen.queryByRole('progressbar', { name: 'A teammate is holding to request control' })).toBeNull()
   })
 
   it.each([false, true])('lets a collaborator send without taking the lease (pending request: %s)', async (pending) => {
@@ -1115,7 +1276,7 @@ describe('Enhanced multiplayer controls', () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(2999) })
       expect(session.socket.frames()).not.toContainEqual(expect.objectContaining({ action: 'confirm' }))
       expect(session.socket.frames()).not.toContainEqual(expect.objectContaining({ action: 'cancel' }))
-      expect(screen.queryByRole('button', { name: 'Release' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'You control' })).toBeNull()
       await act(async () => { await vi.advanceTimersByTimeAsync(41) })
       expect(session.socket.frames().at(-1)).toMatchObject({ type: 'takeover', action: 'confirm', takeover_id: start.takeover_id })
       fireEvent.keyUp(button, { key: ' ' })
@@ -1124,7 +1285,7 @@ describe('Enhanced multiplayer controls', () => {
       expect(useStore.getState().acpSessions.run_1?.control?.has_control).toBe(false)
       session.send({ type: 'control', ok: true, has_control: true, control_generation: 5 })
       receiveTakeover(session, 'granted', request)
-      expect(screen.getByRole('button', { name: 'Release' })).toBeDefined()
+      expect(screen.getByRole('button', { name: 'You control' })).toBeDefined()
       expect(session.socket.frames()).not.toContainEqual(expect.objectContaining({ action: 'cancel' }))
       expect(session.socket.frames()).not.toContainEqual(expect.objectContaining({ type: 'control', write: true }))
     } finally {
@@ -1150,7 +1311,7 @@ describe('Enhanced multiplayer controls', () => {
       await act(async () => { await vi.advanceTimersByTimeAsync(5000) })
       expect(session.socket.frames()).toContainEqual(expect.objectContaining({ type: 'takeover', action: 'cancel', takeover_id: start.takeover_id }))
       expect(session.socket.frames()).not.toContainEqual(expect.objectContaining({ action: 'confirm' }))
-      expect(screen.queryByRole('button', { name: 'Release' })).toBeNull()
+      expect(screen.queryByRole('button', { name: 'You control' })).toBeNull()
     } finally {
       await cleanupSessionView()
       vi.useRealTimers()
@@ -1170,8 +1331,8 @@ describe('Enhanced multiplayer controls', () => {
     receiveTakeover(session, decision === 'accept' ? 'granted' : 'denied')
     if (decision === 'accept') session.send({ type: 'control', has_control: false, control_generation: 4, revocation_reason: 'takeover' })
     await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull())
-    expect(Boolean(screen.queryByRole('button', { name: 'Release' }))).toBe(decision === 'deny')
-    expect(within(screen.getByRole('group', { name: 'Multiplayer controls' })).queryByRole('alert')).toBeNull()
+    expect(Boolean(screen.queryByRole('button', { name: 'You control' }))).toBe(decision === 'deny')
+    expect(screen.queryByRole('alert')).toBeNull()
     if (decision === 'deny') await waitFor(() => expect(document.activeElement).toBe(box))
   })
 })

@@ -14,12 +14,12 @@ import (
 )
 
 const (
-	workspaceMirrorUsage          = "usage: aether workspace mirror <status|configure|refresh|adopt|disable>"
-	workspaceMirrorStatusUsage    = "usage: aether workspace mirror status [--workspace <name-or-id>]"
-	workspaceMirrorConfigureUsage = "usage: aether workspace mirror configure --source <url> [--workspace <name-or-id>] [--branch <branch>] [--auth public|deploy-key|github] [--github-account-id <id>] [--known-hosts-file <path>]"
-	workspaceMirrorRefreshUsage   = "usage: aether workspace mirror refresh --workspace <name-or-id>"
-	workspaceMirrorAdoptUsage     = "usage: aether workspace mirror adopt --workspace <name-or-id> --generation <n> --commit <reviewed-sha> --yes"
-	workspaceMirrorDisableUsage   = "usage: aether workspace mirror disable --workspace <name-or-id> --yes"
+	workspaceMirrorUsage          = "usage: cloudfield workspace mirror <status|configure|refresh|adopt|disable>"
+	workspaceMirrorStatusUsage    = "usage: cloudfield workspace mirror status [--workspace <name-or-id>]"
+	workspaceMirrorConfigureUsage = "usage: cloudfield workspace mirror configure --source <url> [--workspace <name-or-id>] [--branch <branch>] [--auth public|deploy-key|github] [--github-account-id <id>] [--known-hosts-file <path>]"
+	workspaceMirrorRefreshUsage   = "usage: cloudfield workspace mirror refresh --workspace <name-or-id>"
+	workspaceMirrorAdoptUsage     = "usage: cloudfield workspace mirror adopt --workspace <name-or-id> --generation <n> --commit <reviewed-sha> --yes"
+	workspaceMirrorDisableUsage   = "usage: cloudfield workspace mirror disable --workspace <name-or-id> --yes"
 )
 
 type workspaceMirrorConfigureOptions struct {
@@ -35,12 +35,10 @@ type workspaceMirrorAdoptOptions struct {
 	workspace  string
 	generation int64
 	commit     string
-	yes        bool
 }
 
 type workspaceMirrorWorkspaceOptions struct {
 	workspace string
-	yes       bool
 }
 
 func workspaceMirror(args []string) error {
@@ -150,7 +148,7 @@ func parseWorkspaceMirrorAdoptArgs(args []string) (workspaceMirrorAdoptOptions, 
 	if !*yes {
 		return workspaceMirrorAdoptOptions{}, fmt.Errorf("%s: --yes is required because adopt replaces the accepted base", workspaceMirrorAdoptUsage)
 	}
-	return workspaceMirrorAdoptOptions{workspace: *workspace, generation: *generation, commit: *commit, yes: *yes}, nil
+	return workspaceMirrorAdoptOptions{workspace: *workspace, generation: *generation, commit: *commit}, nil
 }
 
 func parseWorkspaceMirrorDisableArgs(args []string) (workspaceMirrorWorkspaceOptions, error) {
@@ -173,7 +171,7 @@ func parseWorkspaceMirrorWorkspaceArgs(args []string, name, usage string) (works
 	if !*yes {
 		return workspaceMirrorWorkspaceOptions{}, fmt.Errorf("%s: --yes is required because disabling removes the server mirror", usage)
 	}
-	return workspaceMirrorWorkspaceOptions{workspace: *workspace, yes: *yes}, nil
+	return workspaceMirrorWorkspaceOptions{workspace: *workspace}, nil
 }
 
 func workspaceMirrorStatus(args []string) error {

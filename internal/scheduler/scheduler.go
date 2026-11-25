@@ -121,9 +121,9 @@ type Config struct {
 	PollInterval         time.Duration
 	StopGrace            time.Duration // default 10s
 	CheckoutTTL          time.Duration // default 72h; negative disables GC
-	RunContainerTTL      time.Duration // default 1h; negative destroys on close/completion
+	RunContainerTTL      time.Duration // default 720h, 168h for a container kept frozen; negative destroys on close/completion
 	// RunSleepAfter is how long an Enhanced session of an agent with
-	// harness.Capabilities.Sleep stays idle, open or closed, before its
+	// harness.Capabilities.Sleep stays idle before its
 	// container is stopped; zero keeps every session awake. VMSleepAfter is
 	// the same for any Standard or Enhanced session VM, which a sleep saves
 	// with every process.
@@ -163,14 +163,20 @@ type Config struct {
 	// HarnessUpdateDisabled stops pre-launch updates of shipped harnesses
 	// installed in the member home.
 	HarnessUpdateDisabled bool
-	// Test-only overrides of the matching default* constants.
+	// Test-only overrides: turnTail of defaultTurnTail,
+	// harnessUpdateContext of context.WithTimeout for a harness update, and
+	// hostMemory of the memory guard's /proc/meminfo read.
 	sleepAnyAgent        bool
 	turnTail             time.Duration
-	harnessUpdateTimeout time.Duration
+	harnessUpdateContext func(context.Context, time.Duration) (context.Context, context.CancelFunc)
 	filesystemCapacity   func(string) (disk.Usage, error)
+	hostMemory           func() (total, available uint64, err error)
 }
 
-const DefaultRunContainerTTL = 7 * 24 * time.Hour
+const (
+	DefaultRunContainerTTL = 30 * 24 * time.Hour
+	defaultFrozenTTL       = 7 * 24 * time.Hour
+)
 
 // DefaultServerBinary is the running server binary, /proc/self/exe rather
 // than os.Args[0].
@@ -201,7 +207,10 @@ func defaultHarnesses() map[string]HarnessSpec {
 
 // Scheduler is the run lifecycle engine behind the sshd.RunController seam.
 type Scheduler struct {
-	cfg       Config
+	cfg Config
+	// frozenTTL is RunContainerTTL for a closed session's container that
+	// stays frozen with its memory.
+	frozenTTL time.Duration
 	harnesses map[string]HarnessSpec
 	// ompFront serves session VMs' omp logins; nil without session VMs.
 	ompFront *ompbroker.Front
@@ -222,10 +231,16 @@ type Scheduler struct {
 	wg          sync.WaitGroup
 
 	// capacityGate protects admission probes/accounting, never lifecycle state.
-	capacityGate         chan struct{}
-	reclaimMu            sync.Mutex
+	capacityGate chan struct{}
+	reclaimMu    sync.Mutex
+	// reclaimSweptAt is when reclaim last swept caches, images and scratch
+	// above the low watermark. Guarded by reclaimMu.
+	reclaimSweptAt       time.Time
+	idleCloseMu          sync.Mutex
 	pressureSkipLog      sync.Once
 	capacityReservations uint64
+	// memoryClaims is guarded by capacityGate.
+	memoryClaims []*memoryClaim
 
 	// vmDiskMu serializes the disk guard's checks. vmDiskBase is each VM's
 	// disk use when the filesystem first fell below the reserve, held while
@@ -234,8 +249,26 @@ type Scheduler struct {
 	vmDiskLow  bool
 	vmDiskBase map[runtime.ID]int64
 
+	// vmMemoryMu serializes the memory guard's checks. vmMemoryLow holds
+	// from the host falling short of memory until it has its stop level
+	// free again, and vmMemoryStallSince is when the host's memory stall
+	// last rose to its limit, zero below it.
+	vmMemoryMu         sync.Mutex
+	vmMemoryLow        bool
+	vmMemoryStallSince time.Time
+	// vmMemoryBraked holds from the brake's first freeze until every VM
+	// runs again, and vmBrakeTargets are the VMs its next check freezes;
+	// only the brake's own goroutine touches them.
+	vmMemoryBraked bool
+	vmBrakeTargets []runtime.ID
+	// vmMemoryWaking holds, under mu, while a wake the guard started runs.
+	vmMemoryWaking bool
+
 	mu   sync.Mutex
 	runs map[domain.RunID]*supervised
+	// guestsNeeded counts, by VM, the recoveries that need its guest to
+	// answer, which keeps the memory brake off it.
+	guestsNeeded map[runtime.ID]int
 	// loginRefusals are the sign-in refusals agents gave on an account.
 	loginRefusals map[loginKey]loginRefusal
 	// retentionPublished tracks only nonempty runtime metadata under mu.
@@ -267,11 +300,17 @@ type Scheduler struct {
 	// unstartableImages maps a saved environment image that failed to start
 	// a session container to the cause. Guarded by mu.
 	unstartableImages map[string]string
-	// evidenceUnavailable holds active runs whose capture found the checkout
-	// gone, for the reason they are interrupted with. Guarded by mu.
-	evidenceUnavailable map[domain.RunID]struct{}
+	// evidenceUnavailable holds the cleanup note of active runs whose
+	// capture found the checkout gone or gave up on its VM, for the reason
+	// they are interrupted with. Guarded by mu.
+	evidenceUnavailable map[domain.RunID]string
 	// cleanupRetries backs off checkout cleanups that failed. Guarded by mu.
 	cleanupRetries map[domain.RunID]cleanupRetry
+	// captureBoots backs off boots of stopped VMs to capture their work.
+	// Guarded by mu. captureBootGate lets one such boot run at a time; a
+	// waiter can leave on its context.
+	captureBoots    map[domain.RunID]cleanupRetry
+	captureBootGate chan struct{}
 	// checkoutSweepGate lets one checkout sweep run at a time, so no checkout
 	// is retried before its backoff is recorded. A waiter can leave on its
 	// context.
@@ -386,10 +425,14 @@ type supervised struct {
 	stallTurnAt       time.Time // when the Enhanced turn the last stall parked started
 	paused            bool
 	diskHeld          bool // the pause is the disk guard's, which ends it
-	diskReleasedAt    time.Time
-	killRequested     bool
-	killActor         domain.MemberID
-	killBy            domain.RunID // the parent that stopped this child run
+	// memorySaved is the host memory of a working session VM the memory
+	// guard saved, which it wakes once that much is free again; zero for
+	// every other run.
+	memorySaved    uint64
+	diskReleasedAt time.Time
+	killRequested  bool
+	killActor      domain.MemberID
+	killBy         domain.RunID // the parent that stopped this child run
 	// agentReport is the last native execution report, independent of outcome
 	// presentation. Input deltas are never retained or replayed.
 	agentReport agentstatus.Report
@@ -538,6 +581,10 @@ type supervised struct {
 	// reclaimed is set once disk reclaim picks the retained container, and
 	// stays through a failed removal so the retry says why.
 	reclaimed bool
+	// relaunching counts the Relaunch calls under way, whose capacity
+	// reservation may run a disk reclaim that must leave this run's
+	// container.
+	relaunching int
 	// waitYielded is set when the wait for the container's exit returned
 	// because a move held the claim: nothing waits on the container until
 	// the move finalizes it or restarts supervision.
@@ -556,8 +603,19 @@ type supervised struct {
 	// asleepSaved is set while a sleeping VM holds its saved memory, which
 	// a wake restores with every process. saveFailedAt is the last failed
 	// save, which the sleep sweep waits a full sleep delay after.
+	// memorySaving counts the saves running that sleeping does not mark: one
+	// the memory guard or an admission started, also once heldSave stopped
+	// waiting for it, and the save again after a failed wake.
 	asleepSaved  bool
 	saveFailedAt time.Time
+	memorySaving int
+	// frozenNotedAt is when the timeline last said the memory brake froze
+	// the session's VM. frozenSave is set while the memory guard saves the
+	// VM frozen, and admitting while a wake holding the lifecycle lock
+	// waits on admission; both keep the brake from thawing it.
+	frozenNotedAt time.Time
+	frozenSave    bool
+	admitting     bool
 	// awake counts callers the container must not stop under: a delivery,
 	// an exec or a browser operation in flight.
 	awake int
@@ -698,8 +756,9 @@ func New(cfg Config) (*Scheduler, error) {
 	if cfg.CheckoutTTL == 0 {
 		cfg.CheckoutTTL = 72 * time.Hour
 	}
+	frozenTTL := cfg.RunContainerTTL
 	if cfg.RunContainerTTL == 0 {
-		cfg.RunContainerTTL = DefaultRunContainerTTL
+		cfg.RunContainerTTL, frozenTTL = DefaultRunContainerTTL, defaultFrozenTTL
 	}
 	if cfg.ExitProbeTimeout <= 0 {
 		cfg.ExitProbeTimeout = defaultExitProbeTimeout
@@ -735,14 +794,17 @@ func New(cfg Config) (*Scheduler, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Scheduler{
 		cfg:                  cfg,
+		frozenTTL:            frozenTTL,
 		harnesses:            harnesses,
 		capacityGate:         make(chan struct{}, 1),
 		checkoutSweepGate:    make(chan struct{}, 1),
+		captureBootGate:      make(chan struct{}, 1),
 		superCtx:             ctx,
 		superCancel:          cancel,
 		recoveryReady:        make(chan struct{}),
 		sudoWait:             sudoTimeout,
 		runs:                 make(map[domain.RunID]*supervised),
+		guestsNeeded:         make(map[runtime.ID]int),
 		runShellLocks:        make(map[domain.RunID]*sync.Mutex),
 		runShellReservations: make(map[string]*shellTabState),
 		terminalLocks:        make(map[domain.MemberID]*sync.Mutex),
@@ -773,6 +835,16 @@ func (s *Scheduler) RecoveryReady() <-chan struct{} {
 func (s *Scheduler) Start(ctx context.Context) error {
 	s.recovering.Store(true)
 	defer s.recovering.Store(false)
+	watchCtx, stopWatch := context.WithCancel(ctx)
+	brakeWatched := make(chan struct{})
+	go func() {
+		defer close(brakeWatched)
+		s.watchVMBrake(watchCtx)
+	}()
+	defer func() {
+		stopWatch()
+		<-brakeWatched
+	}()
 	// Subscribed before recovery, so a usage limit published meanwhile
 	// waits for the run recovery brings back.
 	var (
@@ -806,7 +878,6 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	}
 	s.recoveryReadyOnce.Do(func() { close(s.recoveryReady) })
 	s.recovering.Store(false)
-	watchCtx, stopWatch := context.WithCancel(ctx)
 	watched := make(chan struct{})
 	go func() {
 		defer close(watched)
@@ -817,10 +888,16 @@ func (s *Scheduler) Start(ctx context.Context) error {
 		defer close(disksWatched)
 		s.watchVMDisks(watchCtx)
 	}()
+	memoryWatched := make(chan struct{})
+	go func() {
+		defer close(memoryWatched)
+		s.watchVMMemory(watchCtx)
+	}()
 	defer func() {
 		stopWatch()
 		<-watched
 		<-disksWatched
+		<-memoryWatched
 	}()
 	interval := s.cfg.PollInterval
 	if interval > time.Minute {
@@ -861,6 +938,7 @@ func (s *Scheduler) Start(ctx context.Context) error {
 				s.trySweepCheckouts(ctx, time.Now().UTC().Add(-s.cfg.CheckoutTTL))
 			}
 			s.cleanupTerminalSidecars(ctx)
+			s.goCloseIdleRuns()
 			s.sweepScratch(ctx)
 			s.sweepBrowsers(ctx)
 			s.sweepCaches(ctx, false)
@@ -890,7 +968,7 @@ func (s *Scheduler) Close() error {
 	s.acp.shutdown()
 	s.appServer.shutdown()
 	s.flushPendingRunTitles()
-	return s.DetachDevelopmentTerminals(context.Background())
+	return s.DetachDevelopmentTerminals()
 }
 
 func (s *Scheduler) ContainerAddr(ctx context.Context, run domain.RunID) (string, error) {
@@ -1102,6 +1180,7 @@ func (s *Scheduler) containerSpec(run *domain.Run, member *domain.Member, argv [
 		Command:           argv,
 		TTY:               true,
 		Mounts:            plan.Mounts,
+		Programs:          plan.Programs,
 		ExtraWorktrees:    plan.Worktrees,
 		User:              plan.User,
 		CPULimit:          limits.CPUs,

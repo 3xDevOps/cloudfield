@@ -10,7 +10,8 @@ import { actionRow } from '@/routes/onboarding/layout'
 import { RepoStep } from '@/routes/onboarding/repo-step'
 import { OnboardingSourceOption } from '@/routes/onboarding/source-option'
 import { useStore } from '@/store'
-import { useIsAdmin, type Capability } from '@/store/hooks'
+import type { Capability } from '@/lib/capability'
+import { useIsAdmin } from '@/store/hooks'
 
 type WorkspaceRepositoryProps = {
   client?: Api

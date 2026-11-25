@@ -17,15 +17,18 @@ import (
 	"strconv"
 	"strings"
 
+	"golang.org/x/term"
+
 	"github.com/3xDevOps/Aether/internal/attribution"
 	"github.com/3xDevOps/Aether/internal/disk"
 	edgeagent "github.com/3xDevOps/Aether/internal/edge/agent"
+	edgeclient "github.com/3xDevOps/Aether/internal/edge/client"
 	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
 	"github.com/3xDevOps/Aether/internal/selfupdate"
 	"github.com/3xDevOps/Aether/internal/server"
 	"github.com/3xDevOps/Aether/internal/serversetup"
+	"github.com/3xDevOps/Aether/internal/serverunit"
 	"github.com/3xDevOps/Aether/internal/shellquote"
-	"golang.org/x/term"
 )
 
 func install(args []string) error {
@@ -242,6 +245,7 @@ func writeAndReport(w io.Writer, unitPath, configPath string, values map[string]
 		return err
 	}
 	_, _ = fmt.Fprintf(w, "wrote %s\nwrote %s\n", res.UnitPath, res.SlicePath)
+	linkUnitAlias(w, res.UnitPath)
 	if res.ConfigSkipped {
 		_, _ = fmt.Fprintf(w, "kept %s (already exists; pass --force to overwrite)\n", res.ConfigPath)
 	} else {
@@ -249,6 +253,20 @@ func writeAndReport(w io.Writer, unitPath, configPath string, values map[string]
 	}
 	_, _ = fmt.Fprintf(w, "\nchange options later with:\n  aether-server config set <key> <value>\n")
 	return nil
+}
+
+// linkUnitAlias gives the unit just written its second name, the link the
+// updater makes. A name held by anything else is left as it is, and no
+// failure to link fails the install.
+func linkUnitAlias(w io.Writer, unitPath string) {
+	unit := filepath.Base(unitPath)
+	if unit != filepath.Base(serversetup.UnitPath) {
+		return
+	}
+	_, err := selfupdate.Symlink(filepath.Dir(unitPath), unit, serverunit.Alias)
+	if err != nil && !errors.Is(err, selfupdate.ErrNameTaken) {
+		_, _ = fmt.Fprintln(w, "warning:", err)
+	}
 }
 
 // configuredOptions reads the config file back into the serve options, so
@@ -361,7 +379,7 @@ const clientInstall = "curl -fsSL https://raw.githubusercontent.com/3xDevOps/clo
 // so a server on another edge needs --edge on both commands.
 func claimCommands(edgeURL, code string) []string {
 	edge := ""
-	if edgeURL != edgeagent.DefaultURL {
+	if !edgeclient.Hosted(edgeURL) {
 		edge = " --edge " + edgeURL
 	}
 	return []string{"aether login" + edge, "aether link --claim " + code + edge}

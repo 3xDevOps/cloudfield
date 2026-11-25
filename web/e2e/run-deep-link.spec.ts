@@ -42,7 +42,7 @@ test('a run deep link opens that run and the address follows navigation', async 
   expect(new URL(page.url()).search).toBe('?page=settings')
   await page.goBack()
   await expect(page.getByRole('heading', { name: task, exact: true })).toBeVisible()
-  await page.getByRole('heading', { name: task, exact: true }).click()
+  await page.getByRole('heading', { name: task, exact: true }).focus()
   await page.keyboard.press('Escape')
   await expect(page.getByRole('heading', { name: 'Board', exact: true })).toBeVisible()
   expect(new URL(page.url()).search).toBe('')

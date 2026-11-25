@@ -22,22 +22,44 @@ In order, as PID 1:
 2. Mounts `/dev/pts`, `/dev/shm`, the cgroup v2 hierarchy on `/sys/fs/cgroup`
    and a tmpfs on `/run`.
 3. Writes the boot sysctls that harden the kernel against an unprivileged
-   agent ([Kernel hardening](#kernel-hardening)).
+   agent ([Kernel hardening](#kernel-hardening)), and the two that Docker
+   sets in every container: `net.ipv4.ip_unprivileged_port_start=0`, so any
+   user may listen on a port below 1024, and
+   `net.ipv4.ping_group_range=0 2147483647`, so any user may ping. Then sets
+   its own open-file limit (`RLIMIT_NOFILE`) to 524288, soft and hard;
+   every process it starts begins at 1024 soft under that hard limit, as
+   in a Docker container.
 4. Reads its configuration from `/proc/cmdline` (below), mounts the volumes
-   it names and binds what it names from them, then mounts each checkout
-   disk ([Checkouts](#checkouts)).
+   it names and binds what it names from them, binds each agent program's
+   disk over the program in the home ([Agent programs](#agent-programs)),
+   then mounts each checkout disk ([Checkouts](#checkouts)).
 5. Brings up `lo` and the VM's network device, sets the hostname, and writes
    `/etc/hostname`, `/etc/hosts` and, when DNS servers are given,
    `/etc/resolv.conf`.
-6. Creates the session cgroup `/sys/fs/cgroup/session` (below).
-7. Listens on every forwarded socket.
-8. Serves the API on vsock port 1024. It accepts connections from the host
-   only (vsock CID 2): a process in the VM that reached it through vsock
-   loopback could start processes as root.
+6. Makes the swap file `/run/aether-guest/data/swap` on the data disk, at
+   the size `aether.memory` gives, writes its swap header and turns it on
+   with discard, so freed swap goes back to the host. Any failure, such as
+   a kernel built without swap or a full data disk, is logged on the
+   console, not reported as `boot_error`, and the VM runs without swap.
+7. Creates the session cgroup `/sys/fs/cgroup/session` (below).
+8. Listens on every forwarded socket.
+9. Turns on DAMON_RECLAIM ([Memory the guest returns](#memory-the-guest-returns)).
+10. Serves the API on vsock port 1024. It accepts connections from the host
+    only (vsock CID 2): a process in the VM that reached it through vsock
+    loopback could start processes as root.
 
 A step that fails is logged on the serial console and reported by the API's
 `Info` as `boot_error`; the helper still serves, so the server can show the
 error. When it cannot serve at all, it powers the VM off.
+
+Descriptors 1 and 2 of PID 1 stay the console for the life of the VM. A
+Go write to descriptor 1 or 2 that finds a broken pipe raises `SIGPIPE` to
+end the program. The kernel does not deliver that signal to PID 1, so the
+runtime exits with status 2 and no message. Were one of them closed, the
+helper's next open would reuse its number, and a write there that finds a
+broken pipe, such as on a vsock connection whose peer hung up across a save
+and restore, would end the guest with `Attempted to kill init!
+exitcode=0x00000200`.
 
 ## Kernel hardening
 
@@ -95,11 +117,13 @@ x86 kernels cap the whole line at 2047 bytes, and `KernelArgs` fails past it.
 | `aether.hostname=<name>` | Host name of the VM. |
 | `aether.net=<address>/<prefix>,<gateway>` | IPv4 address of the VM's one network device and its default route. |
 | `aether.dns=<server>[,<server>...]` | Name servers for `/etc/resolv.conf`. Without it the image's file stays. |
+| `aether.search=<domain>[,<domain>...]` | Search domains for that `/etc/resolv.conf`. |
 | `aether.mount=<volume>,<source>,<target>[,ro\|,overlay]` | Bind `<source>` of a volume at `<target>`, in command-line order. |
 | `aether.checkout=<serial>,<key>,<target>` | Mount the checkout disk with virtio serial `<serial>` for the git service under `<key>` and bind its checkout at `<target>`. |
 | `aether.sock=<port>,<path>` | Listen on `<path>` and relay each connection to vsock port `<port>` on the host. |
 | `aether.serve=<port>,<path>` | Listen on vsock port `<port>` for the host and relay each connection to `<path>` (below). |
 | `aether.loopback=<port>,<path>` | Listen on `127.0.0.1:<port>` and relay each connection to the socket at `<path>` in the VM, for a program that reaches a server only by an HTTP address, such as omp's auth broker. |
+| `aether.memory=<limit>,<swap>` | The session cgroup's memory limit and the swap file's size, in bytes. |
 | `aether.seed=<target>,<file>` | Follows the state mount at `<target>`: at every boot, before binding it, copy `<target>/<file>` as the home shows it into the mount's directory, or remove the copy when the home has none. |
 
 Paths are escaped per segment as in a URL, so a space or a comma in a path
@@ -112,7 +136,7 @@ The volumes:
 | `share` | The virtio-fs share tagged `aether`, on `/run/aether-guest/share`. Binds are `nosuid,nodev`, and `virtiofsd` drops `CAP_MKNOD` and `CAP_SETFCAP`, so the guest cannot land a device node or a file-capability binary on the host. Only checkouts left on the server's disk use it. | A path in the share |
 | `home` | The [file service](#the-file-service), on `/run/aether-guest/home`. Binds are `nosuid,nodev`. | The index of a shared host file |
 | `data` | The disk with serial `data`, on `/run/aether-guest/data`. A missing source directory is created with the mode and owner its target has in the image, so `/tmp` keeps its sticky bit. | A path on the disk |
-| `cache` | The disk with serial `cache`, on `/run/aether-guest/cache`: the session's copy of the member's tool caches. Its root is mode `1777` and has no `lost+found`. | `.` |
+| `cache` | The disk with serial `cache`, on `/run/aether-guest/cache`: the session's copy-on-write layer over the member's newest tool caches, or an empty disk. Its root is mode `1777` and has no `lost+found`. | `.` |
 | `state` | The disk with serial `state`, on `/run/aether-guest/state`: the session's own agent databases, which outlive the VM. A missing source directory is created as on `data`. | A path on the disk |
 | `helper` | The helper's own executable, the server binary the VM booted with, bound read-only. | `.` |
 
@@ -121,6 +145,69 @@ leaves it, and a target is created as a directory or an empty file to match
 the source. `overlay`, on a `home` mount, mounts the source read-only below
 a writable layer at `overlay/<source>` on the data disk, whose root takes the
 source's owner and mode: the guest's writes stay in the VM.
+
+## Memory the guest returns
+
+Guest memory is shared memory the host fills as the guest touches it
+(`--memory shared=on`). A page the guest frees goes back through free page
+reporting (`--balloon free_page_reporting=on`; `page_reporting_order=0`
+makes single pages count), which hands over what is free within about 30
+seconds. A guest frees its page cache only under memory pressure, and then
+only down to a few percent free, so the helper trims it. Every 10 seconds it
+asks the kernel to free a quarter of the file pages on its inactive list
+beyond 64 MiB, the ones read or written once and not since, by writing the
+amount with `swappiness=0` to the root cgroup's `memory.reclaim`. As that
+list empties the kernel moves pages nothing has read lately onto it, so they
+follow, and it shrinks its caches of file names and inodes in proportion. A
+page that was in regular use, dropped and then read again comes back from
+disk and counts as a stall on memory, and the trim holds off while the
+guest's tasks stalled on memory for 1% or more of the last minute
+(`memory.pressure`, `some avg60`). A file read once, dropped and read again
+comes back from disk without one. After 1280 MiB written and read once in a
+4 GiB guest, three quarters of it was back on the host in 76 seconds, and
+16% after 3 minutes without the trim (`TestKVMBuildCacheReturnsToTheHost`).
+
+The trim frees no program memory, so the helper also turns on the kernel's
+DAMON_RECLAIM at boot: it pages out memory left untouched for `min_age`, 60
+seconds, while pages in use stay. It samples memory by region, so a cold
+page that shares a region with pages in use leaves only once DAMON splits
+them apart. Alone, it returned a third of a file read once that filled the
+guest in about 4 minutes, and the rest more slowly; with the trim a third is
+back in 20 seconds (`TestKVMColdMemoryReturnsToTheHost`). Clean file pages
+are dropped. A dirty one leaves on a later pass, once the kernel's flusher
+has written it.
+With swap, cold anonymous, tmpfs and shared memory pages, such as
+`/dev/shm`, are tried too and go to the swap file (step 6 of
+[Boot](#boot)). DAMON rarely reaches idle program memory in a guest that is
+mostly free, though: a program's 64 MiB, left idle in an otherwise idle
+2 GiB VM, stayed in memory for 5 minutes in 5 of 5 VMs, with under 300 KiB
+of it swapped. In 2 more VMs, where the inputs were committed again
+(`commit_inputs=Y`) after the session started, all of it went to swap
+within 2.5 minutes; committing them at boot did not help, and the cause is
+not known. In a VM without swap, such as the dictation engine's, anonymous
+pages are skipped, and tmpfs and shared memory pages are tried and stay.
+
+The helper writes these to `/sys/module/damon_reclaim/parameters`, `enabled`
+last:
+
+| Parameter | Why |
+| --- | --- |
+| `min_age=60000000` | 60 seconds untouched is cold. |
+| `wmarks_high=1000`, `wmarks_mid=1000`, `wmarks_low=0` | Run at any level of free memory. The defaults stop it above 50% free, and below 20%, where a guest full of cold page cache would keep it. |
+| `sample_interval=50000`, `aggr_interval=1000000` | Check accesses every 50 ms instead of 5, so its thread wakes 20 times a second instead of 200. |
+| `monitor_region_end=<bytes>` | The end of the last `System RAM` range in `/proc/iomem`. Cloud Hypervisor puts guest RAM past 3 GiB at 4 GiB, and DAMON_RECLAIM watches one range, by default only the larger piece; this spans both. The gap between them holds no RAM, but DAMON counts it toward the quota. |
+| `skip_anon=N`, or `Y` without swap | Cold program memory goes to swap; without swap an anonymous page has nowhere to go. |
+| `enabled=Y` | Starts it. |
+
+The default quotas cap it at 128 MiB of memory tried and 10 ms of CPU a
+second. The kernel config must leave `CONFIG_LRU_GEN` off: with MGLRU on,
+reading a file no longer clears the idle flag DAMON checks, and files in use
+would be paged out. The helper skips the step on a kernel, such as one set
+with `vm-kernel`, that lacks any of these parameters or runs MGLRU
+(`/sys/kernel/mm/lru_gen/enabled` is not `0x0000`); any other failure is
+reported as a `boot_error`. A server gets the kernel with its release
+([Update the server](install.md#update-the-server)); a running or saved VM
+boots it on its next cold start.
 
 ## The file service
 
@@ -147,9 +234,21 @@ mounted. It is package `internal/guest/home`, API
   reach: paths are resolved beneath their share without following a
   symlink, only regular files and directories are opened, and a read-only
   or overlaid share is never written.
-- The guest trusts what it learned of a name or a file for one second, so a
-  change from another session shows within it. An `O_APPEND` write appends
-  at the host's end of the file.
+- The guest trusts what it learned of a name, including that it does not
+  exist, and of a file's attributes for one second, so a new file or a
+  change from another session shows in a listing or `stat` within it.
+  Opening a file gets the host's current version: the guest keeps its
+  cached pages and attributes only of a file the host has not changed
+  since the guest last opened it, as NFS's close-to-open consistency does.
+  An agent that reads a login another session just refreshed reads the
+  new login whole, unless another process in the VM still has the old one
+  open. An `O_APPEND` write appends at the host's end of the file.
+- The helper raises the mount's read-ahead
+  (`/sys/class/bdi/<device>/read_ahead_kb`) from the kernel's 128 KiB to
+  512 KiB, so a program started from the home, such as an agent's binary,
+  loads in a quarter of the round trips. From 1 MiB on, a session that
+  fills its memory can thrash for minutes, refaulting its own program,
+  instead of being killed.
 - `flock` and `fcntl` locks hold only within one VM, and memory maps are not
   shared across VMs. A SQLite database or a lock file in the home is not
   protected against the member's other sessions, as it is under Docker;
@@ -157,6 +256,51 @@ mounted. It is package `internal/guest/home`, API
   databases are kept apart.
 - A VM can hold at most 128 requests in flight, each no larger than one
   1 MiB write, and the unit's `MemoryMax` bounds the rest.
+
+## Agent programs
+
+A session VM reads its agent's program from a read-only disk of its own,
+once the server has built one, instead of through the file service. The
+program is the agent's CLI, `~/.local/bin/<cli>` followed through its
+links (for Claude Code, `~/.local/share/claude/versions/<version>`), and,
+when the server drives the agent over ACP, its ACP server; when that file
+is in an npm package in `~/.local/lib/node_modules`, the program is the
+whole package.
+
+- A disk holds one version of one program of one member's home: an ext4
+  image in `<data dir>/vm/images/programs/`, named by a digest of the name,
+  inode, size, mode and times of every file in it. Its files belong to
+  root, are readable by every user and keep no set-ID bits.
+- Each cold boot attaches the disk that matches what the home holds then,
+  and a VM lets go of its disks once it powers off. A program without one
+  loads through the file service, and the server builds its disk in the
+  background from a copy of the program, one build at a time at the lowest
+  CPU priority and in the idle I/O class; it also builds one when the agent
+  updater installs a new version. A program over 2 GiB, 100,000 files or
+  128 directories deep, or one that changes while it is copied, gets no
+  disk.
+- The helper mounts each disk read-only and binds the program over its path
+  in the home, after the home and its overlay, so no agent path changes. It
+  opens that path without following a symlink. A path the home no longer
+  holds, or holds as another type, is left to the file service, and a disk
+  the helper cannot mount is logged on the console, not reported as
+  `boot_error`. Program mounts that do not fit the kernel command line are
+  dropped with a warning.
+- A process keeps reading the program from the disk it started from, even
+  after a sleep, so an update that replaces the program in the home never
+  changes it under a running agent. Once the home's copy changes, the guest
+  drops the program's mount: a process started after that reads the new
+  version through the file service until the next cold boot attaches its
+  disk.
+- While the mount is in place, the program's path is read-only: a write
+  fails with `EROFS` and a rename over it with `EBUSY`, so an agent's own
+  updater, such as `omp update`, cannot replace it in the session; the
+  server's updater does, from outside. Claude Code's disk covers only
+  `versions/<version>`, so `claude update` can still add a version beside it.
+- An Isolated session's disk is built from the member's home, not from its
+  overlay, so it hides a version the session installed in its overlay.
+- A session that borrows the account owner's installation reads it through
+  the file service.
 
 ## Forwarded sockets
 
@@ -237,8 +381,10 @@ after the one before succeeded:
 3. The main process, under the ID `main`.
 
 A later `Boot` call, also from a restarted server, returns the first call's
-result. Setup runs once per boot, and the server gives every cold start a new
-root disk.
+result. The server sends the setup script until a boot that ran it started
+the main process; later cold starts boot the root disk it set up, as a
+container keeps its writable layer. A root disk the script never finished
+on starts over from the image.
 
 `Spawn` starts any other process. Its ID is the caller's and cannot be used
 again while the helper keeps the process's record, so a spawn whose reply was
@@ -274,10 +420,8 @@ PID 1 passes `SIGHUP`, `SIGINT`, `SIGQUIT`, `SIGTERM`, `SIGUSR1`, `SIGUSR2`,
 `SIGALRM` and `SIGWINCH` on to the main process, as `docker-init` does. When
 the main process exits the helper keeps running, kills every process left in
 the session cgroup, as a container's end does, and drops the clean page cache
-(`/proc/sys/vm/drop_caches`) so the host gets the memory back. It does not
-write `memory.reclaim`: from the helper, which serves the home, that stalls
-on the home's own pages. The server reads the exit code and powers the VM
-off, unless its checkouts live on its own disks ([Checkouts](#checkouts)):
+(`/proc/sys/vm/drop_caches`) so the host gets the memory back. The server
+reads the exit code and powers the VM off, unless its checkouts live on its own disks ([Checkouts](#checkouts)):
 then the VM stays up for the git work that ends a session on its checkout,
 the last snapshot, the final commit, branch publication and evidence, until
 the session is removed, started again, or 10 minutes pass. A stop whose end
@@ -304,19 +448,23 @@ connection a save and restore cut.
 
 `Write` takes the caller's deadline as the deadline of the write itself and
 reports how many bytes the process took; it never closes the input.
-`CloseStdin` closes a pipe process's input.
+`CloseStdin` closes a pipe process's input. On the server, closing an
+attachment's input ends its `Write` in flight at once, without the helper's
+answer, which a frozen guest never gives.
 
 ## Limits, stats and the clock
 
 The session cgroup's `pids.max` is the session's process limit from `Boot`.
-Its `memory.max` is the guest's `MemAvailable` when the helper starts, less
-48 MiB: what the kernel and the helper already hold, the free memory the
-kernel keeps back, and 48 MiB for the helper to grow stay outside the
-session. A VM with checkouts keeps up to 96 MiB more out of it, a
-sixteenth of its memory at most, for the [git service](#the-git-service)'s
-anonymous memory, which its 256 MiB cap does not keep from the helper: a
-256 MiB VM's session gets 16 MiB less, a 1 GiB VM's 64 MiB less, and from
-1.5 GiB on 96 MiB less, about 1% of the default 8 GiB.
+Its `memory.max` is the session's memory limit from `aether.memory`, as a
+container's: the server boots the guest with that limit plus a 32nd of it
+plus 432 MiB, so what the kernel and the helper hold, the free memory the
+kernel keeps back, 48 MiB for the helper to grow and, in a VM with
+checkouts, up to 96 MiB (a sixteenth of the VM's memory at most) for the
+[git service](#the-git-service)'s anonymous memory, which its 256 MiB cap
+does not keep from the helper, all stay outside the session. If the guest's
+`MemAvailable` when the helper starts, less those reserves, is below the
+limit, the session gets that instead. The swap file, a quarter of the
+limit, is the guest's own: the host never swaps a VM's memory.
 A session that filled the VM would leave the helper no memory to
 serve the file service, and pages the session faults back in from it would
 never arrive, so the kernel would thrash instead of killing a process. The
@@ -328,17 +476,105 @@ Every process the helper starts begins in its leaf `/sys/fs/cgroup/session/procs
 and dockerd puts nested containers beside it, so they count too. The helper
 itself stays outside.
 
-`Stats` counts the whole VM, which is the session: CPU time outside idle and
-I/O wait from `/proc/stat`, memory in use as `MemTotal - MemAvailable`, the
-kernel's OOM kill counter, and the session cgroup's task count.
+`Stats` reports CPU time outside idle and I/O wait from `/proc/stat`, and
+from the session cgroup its OOM kills less the development browser's, its
+task count, its memory in use and its `memory.max`, the limit a process of
+the session is killed at. Memory in use is `memory.current` less the `inactive_file` of
+`memory.stat`, as `docker stats` counts a container's, so the kernel, the
+helper and the git service, which are outside the session, are left out.
+Without the session cgroup, OOM kills and memory are the whole guest's: the
+kernel's OOM kill counter, and `MemTotal - MemAvailable` of `MemTotal`.
+Insights shows these, and beside them what the VM holds of the host's
+memory, the figure `MemoryUse` reads.
+
+`MemoryUse` reports what each running VM holds of the host's memory, read
+from its unit's cgroup (`/sys/fs/cgroup/aether.slice/aether-vm-<key>.service`)
+with no call into systemd or the guest: `memory.current` less the
+`inactive_file` of `memory.stat`, the working set as the kubelet and
+`docker stats` count it. That leaves out disk cache the host
+can drop and counts what the guest's figure misses: guest page cache,
+which the guest counts as available but lives in the VM's RAM, and the
+memory of Cloud Hypervisor and the VM's file services. A VM whose cgroup
+cannot be read counts as its unit's cap, its guest's RAM plus 512 MiB.
+`SavedMemory` reports the disk a saved VM's state takes, which a restore
+loads back, after waiting for a save or restore of that VM under way. A
+saved state that cannot be read counts as the unit's cap, one that is gone
+as nothing. A wake is admitted only when that fits
+([failure-handling.md](failure-handling.md#recover-from-memory-pressure)).
 
 A restored VM's clock stopped while it was saved. The server calls
 `SetClock`, through `guest.Client.SyncClock`, after every restore. Before a
 save it calls `Sync`, which writes every filesystem's dirty data to its
 disk, so the cache disk of a saved VM that is deleted without a restore
-holds what the session wrote. `Sync` then drops the guest's page cache and
-waits 3 seconds, while free page reporting hands the freed memory to the
-host, so the saved state holds only what the session uses.
+holds what the session wrote. `Sync` then drops the guest's page cache.
+Free page reporting hands the freed memory to the host in passes 2 seconds
+apart, each about a sixteenth of the guest's free memory, so the server
+waits until a 4-second check sees under 16 MiB more come back, at most 40
+seconds, then calls `Sync` again for what the session wrote meanwhile, and
+saves. The saved state then holds about what the session uses: a 2 GiB VM
+whose page cache held 1400 MiB wrote 137 MiB of memory in a 21-second
+save, against 1228 to 1315 MiB in 7 seconds before the wait
+(`TestKVMSaveWritesOnlyWhatTheSessionUses`). The host has the memory back
+as each pass reports it, before the save ends. A VM frozen because the host
+was running out of memory
+([failure-handling.md](failure-handling.md#recover-from-memory-pressure))
+is saved with neither `Sync` nor the wait, which would let its guest run:
+its saved state holds its page cache too.
+
+## Save and restore
+
+A save is Cloud Hypervisor's `vm.snapshot` of the paused VM: its
+configuration, its device state and a sparse file of the memory the host
+holds for it. A restore starts Cloud Hypervisor with `--restore` in its
+default mode, which writes every saved page into the guest's memory before
+the VM can be resumed.
+
+Cloud Hypervisor v54.1 can load that memory on demand instead
+(`memory_restore_mode=ondemand`): it resumes at once and copies each page in
+through `userfaultfd` on its first use. That mode is not used. It takes a
+page that is already in the guest's memory as loaded
+(`UFFDIO_COPY` answers `EEXIST`), so a page anything read before the
+`userfaultfd` was registered keeps the zeros of that read instead of its
+saved bytes. On a hosted runner a host process reads each new process's
+memory through `/proc/<pid>/mem`: of 31 restores of one saved 5 GiB VM
+whose memory file was read from disk, 12 came back with 11 to 419 saved
+pages zeroed at the start of the RAM past 4 GiB, and all 7 such VMs that
+were resumed died by their third wake
+(`TestKVMRepeatedSaveAndWakeKeepsMemoryAndProcesses`).
+
+The load gets 60 seconds plus 1 second per 20 MiB of the VM unit's memory
+cap, and the wake around it 1 second per 20 MiB of saved memory beyond its
+3 minutes. The resume and the answer of the guest's helper then get 90
+seconds.
+
+The engine keeps a saved state until the restored guest's helper answers.
+A saved state matches the VM's disks only until the guest writes one:
+saved memory restored over newer disks would corrupt them. So before it
+resumes the guest, a restore records in the VM's record (`resumed`) the
+modification time of every disk the saved `config.json` lets the guest
+write, and the saved state is restored a second time only while none of
+those times has moved. From the resume on, the record reads running:
+
+- A resume that Cloud Hypervisor refuses leaves the guest paused, as saved.
+  The restore resumes it up to 3 times, then stops it as in the next case.
+- A guest that restarts, which Cloud Hypervisor's event log reports, or
+  whose unit stops before the helper answers is not the saved one. The
+  restore pauses it, stops the VM and fails with the tail of `monitor.log`
+  and `console.log`. For a guest that restarted the server log gets the
+  first 100 lines of `console.log` as well: each monitor starts that file
+  again, so they are what the woken guest printed as it died. With the disks
+  unwritten the saved state is kept for the next restore; otherwise it is
+  dropped, and the error says why, such as `its guest wrote its disks`, and
+  `it has no saved state`.
+- A server that stops between the resume and the answer leaves a running VM.
+  The next server saves it again, which replaces the saved state, or its
+  next wake takes the guest up, which only has to answer; a stop discards
+  the saved state. A save refuses a guest whose event log reports a
+  restart, which leaves the restart for the next wake to find, as above.
+  With no monitor left, the next restore restores the saved state again if
+  the disks are unwritten and drops it if not.
+- A guest that still runs but does not answer, or whose clock cannot be set,
+  keeps running without its saved state, for the caller to take up.
 
 ## Freezing the root disk
 
@@ -377,7 +613,9 @@ attributes never consulted. So Changes, the live patch and staging behave as
 for a Docker session. It is `aether-internal guest git-service`, a process of
 its own that PID 1 starts again whenever it ends, waiting up to 30 seconds
 after a start that did not last: PID 1 reaps every child it has, which would
-collect a git's exit before the engine's own wait. Its cgroup,
+collect a git's exit before the engine's own wait. It logs on the serial
+console: its output is the helper's own standard error, which the helper
+keeps open ([Boot](#boot)). The git service's cgroup,
 `/sys/fs/cgroup/git`, sits beside the session, whose cap and pause leave it
 alone, and has a `memory.max` of 256 MiB; an OOM there kills one git, and
 when the service itself ends, the helper kills whatever is left in it and
@@ -406,7 +644,7 @@ port
 | `Stage` | Writes a tree of the whole checkout: within the evidence bound for evidence, or over a copy of the checkout's own index for the final commit, as the server stages a checkout on its disk. |
 | `Install` | Indexes a pack the server sends into the checkout with `index-pack --strict`, applies ref updates in one transaction, and for a commit makes the staged index the checkout's. It runs git as the checkout's owner. |
 | `Tree`, `ReadFile`, `WriteFile`, `FileDiff` | The Files view on the checkout, including uploads. |
-| `Sync` | Serves a live overlay's endpoint (`aether sync --live`) at the checkout. |
+| `Sync` | Serves a live overlay's endpoint (`cloudfield sync --live`) at the checkout. |
 
 The server treats every reply as data from the session. It copies a
 snapshot's tree and HEAD into the session's `<run-id>.diffsnap/` store with
@@ -444,8 +682,10 @@ a server-wide counter, so several at once - and the second copy a published
 branch makes into the workspace repository - hold to that floor together
 rather than each spending the same free space.
 The server records the committed tree; while the VM does not run,
-evidence retains that tree, and without one capture fails and cleanup keeps
-the checkout's disk, since only the VM can read it. Pausing a VM whose
+evidence retains that tree. Without one, since only the VM can read the
+checkout's disk, the server boots the VM with an idle main process and no
+setup script to make the commit
+([What stays after a session ends](failure-handling.md#what-stays-after-a-session-ends)). Pausing a VM whose
 checkouts live on its own disks freezes the session cgroup with the
 helper's `FreezeSession`, as Docker's pause freezes a container's, and
 leaves the VM running: the git service is outside the session, so Close
@@ -469,9 +709,11 @@ view and diffs come from the last snapshot the server recorded: nothing can
 have changed the checkout since. A Files write or upload to a sleeping
 session wakes it first; one to an ended session, whose VM was removed,
 fails. Removing the checkout
-deletes its disk and first copies into the session's diff history what that
-history borrowed from the workspace repository, so the history outlives the
-workspace's own objects.
+deletes its disk and first repacks the session's diff history to what its
+snapshots added beyond the fork point, which it keeps borrowing from the
+workspace repository under the ref `refs/aether/sessions/<run-id>`, so
+`git gc` there never prunes it
+([What stays after a session ends](failure-handling.md#what-stays-after-a-session-ends)).
 
 ## Versions
 

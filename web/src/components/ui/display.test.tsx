@@ -103,13 +103,6 @@ test('a pane header holds the view heading, its toolbar and the sidebar button',
   expect(heading.closest('header')?.className).toContain('h-11')
 })
 
-test('a run header is the taller two-line size', () => {
-  render(<PaneHeader title="Fix login" size="run" stateLine={<StateLine tone="working">Running tests</StateLine>} />)
-  expect(screen.getByRole('heading', { name: 'Fix login' }).closest('header')?.className).toContain('h-14')
-  expect(screen.getByText('Running tests')).toBeDefined()
-  expect(screen.queryByRole('toolbar')).toBeNull()
-})
-
 test('a list row is a button whose hover action stays focusable, shows on focus and always on a coarse pointer', () => {
   render(
     <ListRow selected trailing="3m" hoverAction={<Button size="icon-sm" label="Archive">x</Button>}>
@@ -154,6 +147,26 @@ test('an agent glyph is monochrome unless asked for its colour', () => {
   expect(plain).toContain('text-muted')
   expect(colored).toContain('text-agent-claude')
   expect(unknown).toContain('text-muted')
+})
+
+test('Gemini CLI and Antigravity CLI draw Google\'s icons: its full-colour file in colour, its one-colour path when muted', () => {
+  const { container } = render(
+    <>
+      <AgentGlyph agent="gemini" colored />
+      <AgentGlyph agent="antigravity" colored />
+      <AgentGlyph agent="gemini" />
+      <AgentGlyph agent="antigravity" />
+    </>,
+  )
+  const [gemini, antigravity, ...muted] = [...container.querySelectorAll('[data-slot="agent-glyph"]')]
+  expect(gemini.getAttribute('src')).toBe('/agents/gemini-cli-icon_full-color.svg')
+  expect(antigravity.getAttribute('src')).toBe('/agents/antigravity-icon__full-color.svg')
+  expect(muted).toHaveLength(2)
+  for (const glyph of muted) {
+    expect(glyph.getAttribute('class')).toContain('text-muted')
+    expect(glyph.querySelectorAll('path')).toHaveLength(1)
+    expect(glyph.querySelector('text')).toBeNull()
+  }
 })
 
 test('a labelled spinner is a status and both loaders still under reduced motion', () => {

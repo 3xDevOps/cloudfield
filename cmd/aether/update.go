@@ -19,6 +19,7 @@ import (
 	"github.com/3xDevOps/Aether/internal/envname"
 	"github.com/3xDevOps/Aether/internal/protocol"
 	"github.com/3xDevOps/Aether/internal/selfupdate"
+	"github.com/3xDevOps/Aether/internal/serverunit"
 	"github.com/3xDevOps/Aether/internal/shellquote"
 	"github.com/3xDevOps/Aether/internal/store"
 	"github.com/3xDevOps/Aether/internal/version"
@@ -27,10 +28,10 @@ import (
 func init() {
 	register(command{
 		name:  "update",
-		short: "update this binary (and aether-server beside it) to a release",
-		usage: "aether update [--check [--json]] [--version <tag>] [--no-app] [--force]",
-		example: "aether update --check --json\n" +
-			"aether update",
+		short: "update this binary (and cloudfield-server beside it) to a release",
+		usage: "cloudfield update [--check [--json]] [--version <tag>] [--no-app] [--force]",
+		example: "cloudfield update --check --json\n" +
+			"cloudfield update",
 		flags: true,
 		run:   runUpdate,
 	})
@@ -139,7 +140,7 @@ func runUpdate(args []string) error {
 		_, _ = fmt.Fprintln(os.Stderr, "warning:", err)
 	}
 	if len(replaced) > 1 {
-		fmt.Printf("aether-server on disk is now %s; the running server keeps its old version until you restart it: sudo systemctl restart aether-server\n", *tag)
+		fmt.Printf("aether-server on disk is now %s; the running server keeps its old version until you restart it: sudo systemctl restart %s\n", *tag, serverunit.RestartName())
 		if offerSysbox(ctx, "/etc/os-release", dockerRuntimes) {
 			fmt.Println("Let agents use Docker inside sessions: sudo aether-server sysbox install (or Settings → Server in the dashboard)")
 		}

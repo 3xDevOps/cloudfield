@@ -1,7 +1,7 @@
 import type { Api } from '@/lib/api'
 import type { Device } from '@/lib/types'
 import type { RootState, RootStore } from '@/store'
-import { capability } from '@/store/hooks'
+import { capability } from '@/lib/capability'
 import type { SliceCreator } from '@/store/slice'
 
 /** Every member's devices for an admin, the viewer's own for anyone else. */

@@ -65,7 +65,15 @@ const (
 	// the session keeps across its VMs. Like VolumeData, a missing Source
 	// directory is created with the mode and owner of its Target.
 	VolumeState Volume = "state"
+	// VolumeProgram is the read-only block device whose virtio serial is
+	// "program-<Source>", an agent program's disk, which holds the program
+	// as ProgramEntry. The helper binds it over the one at Target, and
+	// leaves a Target that is missing, or of another type, to the home.
+	VolumeProgram Volume = "program"
 )
+
+// ProgramEntry names the program on its disk.
+const ProgramEntry = "program"
 
 // Config is what the helper needs before it can serve: everything on it is
 // readable by any process in the VM through /proc/cmdline, so it must not
@@ -80,14 +88,20 @@ type Config struct {
 	Sockets   []Socket
 	Serves    []Socket
 	Loopbacks []Loopback
+	// MemoryLimit caps the session's memory, in bytes; Swap sizes the swap
+	// file the helper makes on the data disk. 0 leaves either out.
+	MemoryLimit uint64
+	Swap        uint64
 }
 
 // Network configures the VM's one network interface.
 type Network struct {
 	Address netip.Prefix
 	Gateway netip.Addr
-	// DNS, when set, replaces the image's /etc/resolv.conf.
-	DNS []netip.Addr
+	// DNS, when set, replaces the image's /etc/resolv.conf, which then
+	// searches Search.
+	DNS    []netip.Addr
+	Search []string
 }
 
 // Mount binds Source, a relative path in Volume ("." for its root), at
@@ -151,6 +165,9 @@ func (c Config) KernelArgs(base string) (string, error) {
 			}
 			args = append(args, "aether.dns="+strings.Join(dns, ","))
 		}
+		if len(n.Search) > 0 {
+			args = append(args, "aether.search="+strings.Join(n.Search, ","))
+		}
 	}
 	for _, m := range c.Mounts {
 		arg := "aether.mount=" + string(m.Volume) + "," + escapePath(m.Source) + "," + escapePath(m.Target)
@@ -177,12 +194,19 @@ func (c Config) KernelArgs(base string) (string, error) {
 	for _, l := range c.Loopbacks {
 		args = append(args, "aether.loopback="+strconv.FormatUint(uint64(l.Port), 10)+","+escapePath(l.Path))
 	}
+	if c.MemoryLimit > 0 || c.Swap > 0 {
+		args = append(args, "aether.memory="+strconv.FormatUint(c.MemoryLimit, 10)+","+strconv.FormatUint(c.Swap, 10))
+	}
 	line := strings.TrimSpace(strings.Join(append(args, "--", "guest"), " "))
 	if len(line) > maxCmdline {
-		return "", fmt.Errorf("guest: kernel command line is %d bytes, over the %d-byte limit", len(line), maxCmdline)
+		return "", fmt.Errorf("guest: kernel command line is %d bytes, over the %d-byte limit: %w", len(line), maxCmdline, ErrCmdlineTooLong)
 	}
 	return line, nil
 }
+
+// ErrCmdlineTooLong is KernelArgs' error for a configuration the kernel's
+// command line cannot hold.
+var ErrCmdlineTooLong = errors.New("the configuration does not fit the kernel command line")
 
 // ParseCmdline reads the configuration KernelArgs wrote from a kernel
 // command line. Arguments without the aether. prefix are ignored.
@@ -223,7 +247,7 @@ func (c *Config) parseArg(key, value string) error {
 		if err != nil {
 			return err
 		}
-		c.Network = &Network{Address: address, Gateway: gateway, DNS: c.dns()}
+		c.network().Address, c.network().Gateway = address, gateway
 	case "aether.dns":
 		dns := make([]netip.Addr, 0, len(fields))
 		for _, f := range fields {
@@ -233,10 +257,9 @@ func (c *Config) parseArg(key, value string) error {
 			}
 			dns = append(dns, a)
 		}
-		if c.Network == nil {
-			c.Network = &Network{}
-		}
-		c.Network.DNS = dns
+		c.network().DNS = dns
+	case "aether.search":
+		c.network().Search = fields
 	case "aether.mount":
 		if len(fields) != 3 && (len(fields) != 4 || (fields[3] != "ro" && fields[3] != "overlay")) {
 			return errors.New("want <volume>,<source>,<target>[,ro|,overlay]")
@@ -311,17 +334,30 @@ func (c *Config) parseArg(key, value string) error {
 			return err
 		}
 		c.Loopbacks = append(c.Loopbacks, Loopback{Port: uint16(port), Path: p})
+	case "aether.memory":
+		if len(fields) != 2 {
+			return errors.New("want <limit>,<swap>")
+		}
+		limit, err := strconv.ParseUint(fields[0], 10, 64)
+		if err != nil {
+			return err
+		}
+		swap, err := strconv.ParseUint(fields[1], 10, 64)
+		if err != nil {
+			return err
+		}
+		c.MemoryLimit, c.Swap = limit, swap
 	default:
 		return errors.New("unknown argument")
 	}
 	return nil
 }
 
-func (c *Config) dns() []netip.Addr {
+func (c *Config) network() *Network {
 	if c.Network == nil {
-		return nil
+		c.Network = &Network{}
 	}
-	return c.Network.DNS
+	return c.Network
 }
 
 // Validate reports every problem that would make the helper refuse c.
@@ -339,13 +375,18 @@ func (c Config) Validate() error {
 				errs = append(errs, errors.New("network has an invalid DNS server"))
 			}
 		}
+		for _, d := range n.Search {
+			if !ValidDomain(d) {
+				errs = append(errs, fmt.Errorf("search domain %q is not a valid domain name", d))
+			}
+		}
 	}
 	for i, m := range c.Mounts {
 		switch m.Volume {
 		case VolumeShare, VolumeData, VolumeState:
-		case VolumeHome:
+		case VolumeHome, VolumeProgram:
 			if n, err := strconv.Atoi(m.Source); err != nil || n < 0 || strconv.Itoa(n) != m.Source {
-				errs = append(errs, fmt.Errorf("mount %d: home source %q must be an entry index", i, m.Source))
+				errs = append(errs, fmt.Errorf("mount %d: %s source %q must be an index", i, m.Volume, m.Source))
 			}
 		case VolumeCache, VolumeHelper:
 			if m.Source != "." {
@@ -430,11 +471,17 @@ func cleanAbs(p string) bool {
 }
 
 func validHostname(name string) bool {
-	if len(name) > 64 {
+	return len(name) <= 64 && ValidDomain(name)
+}
+
+// ValidDomain reports whether name is a domain name of letters, digits and
+// hyphens, without a trailing dot.
+func ValidDomain(name string) bool {
+	if len(name) > 253 {
 		return false
 	}
 	for label := range strings.SplitSeq(name, ".") {
-		if label == "" || label[0] == '-' || label[len(label)-1] == '-' {
+		if label == "" || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
 			return false
 		}
 		for _, r := range label {

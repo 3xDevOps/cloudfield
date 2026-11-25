@@ -17,7 +17,8 @@ const buttonVariants = cva(
   {
     variants: {
       variant: {
-        primary: 'bg-accent text-on-accent hover:not-aria-disabled:bg-accent-hover',
+        // One filled action per screen: in a session tile that is not the focused one it is drawn as `secondary`.
+        primary: 'bg-action text-on-accent hover:not-aria-disabled:bg-action-hover in-data-tile-rest:border in-data-tile-rest:border-seam in-data-tile-rest:bg-raised in-data-tile-rest:text-text in-data-tile-rest:shadow-button in-data-tile-rest:hover:not-aria-disabled:bg-hover-chrome',
         secondary: 'border border-seam bg-raised text-text shadow-button hover:not-aria-disabled:bg-hover-chrome hover:not-aria-disabled:shadow-button-hover',
         ghost: 'text-muted hover:not-aria-disabled:bg-hover-chrome hover:not-aria-disabled:text-text',
         danger: 'bg-state-failed text-on-failed hover:not-aria-disabled:bg-state-failed/90',

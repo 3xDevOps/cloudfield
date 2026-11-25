@@ -79,7 +79,7 @@ truncation and unsupported content, and do not automatically upload screenshots
 publicly. Verify and collect required evidence before reporting an outcome,
 terminal stop, or artifact deletion. Background success/failure reports
 may clean up development resources; interactive sessions stay open for
-follow-up. Read the inbox before reporting, then end your turn.
+follow-up. Report, then end your turn.
 `
 
 const retainCaptureSkill = `Retain only deliberately selected, reviewed captures:

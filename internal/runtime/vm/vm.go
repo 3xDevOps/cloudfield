@@ -40,6 +40,7 @@ var (
 	_ runtime.CapacityRuntime     = (*Runtime)(nil)
 	_ runtime.InitPIDRuntime      = (*Runtime)(nil)
 	_ runtime.MemoryEventsRuntime = (*Runtime)(nil)
+	_ runtime.MemoryUseRuntime    = (*Runtime)(nil)
 	_ runtime.BrowserRuntime      = (*Runtime)(nil)
 	_ runtime.SaveRuntime         = (*Runtime)(nil)
 )
@@ -59,6 +60,10 @@ type Config struct {
 	// CheckoutDisks, when set, puts the session checkouts it knows on disks
 	// of their own instead of sharing them from the server.
 	CheckoutDisks CheckoutDisks
+	// ProgramUnit, when set, finds the file or directory in home that
+	// ~/.local/bin/<executable> runs from, which a session VM may load from a
+	// disk of its own (memberhome.ProgramUnit).
+	ProgramUnit func(home, executable string) (string, error)
 }
 
 // New returns a Runtime that keeps its VMs under DataDir/vm, and starts
@@ -76,13 +81,11 @@ func New(cfg Config) (*Runtime, error) {
 // kinds are the containers besides sessions that run in VMs, by the prefix
 // of the creation key the scheduler gives them and of their VM's name: the
 // rest of the key is the member, and for the agent updater the agent too.
-// A terminal keeps its root disk across a stop and start, as a container
-// keeps its filesystem; every other VM gets a fresh one on a cold start.
 var kinds = []struct {
 	key, name string
 	opts      options
 }{
-	{"terminal:", "terminal-", options{KeepRoot: true}},
+	{"terminal:", "terminal-", options{}},
 	{"assistant:", "assistant-", options{}},
 	{"assistant-install:", "assistant-install-", options{}},
 	{"harness-update-", "harness-update-", options{Lifetime: updaterLifetime}},
@@ -396,12 +399,39 @@ func (r *Runtime) Save(ctx context.Context, id runtime.ID) error {
 	return r.vms.save(ctx, key)
 }
 
+func (r *Runtime) SavedMemory(id runtime.ID) (uint64, error) {
+	key, ok := vmKey(id)
+	if !ok {
+		return 0, nil
+	}
+	return r.vms.savedMemory(key)
+}
+
 func (r *Runtime) Restore(ctx context.Context, id runtime.ID) error {
 	key, ok := vmKey(id)
 	if !ok {
 		return errors.New("vm runtime: only a session VM can be restored; Docker containers cannot")
 	}
 	return r.vms.restore(ctx, key)
+}
+
+func (r *Runtime) SetCommand(_ context.Context, id runtime.ID, command []string) error {
+	key, ok := vmKey(id)
+	if !ok {
+		return errors.New("vm runtime: only a session VM takes a new command; Docker containers cannot")
+	}
+	return r.vms.setCommand(key, command)
+}
+
+func (e *engine) setCommand(key string, command []string) error {
+	unlock := e.lock(key)
+	defer unlock()
+	rec, err := e.load(key)
+	if err != nil {
+		return err
+	}
+	rec.Command = command
+	return e.store(rec)
 }
 
 // SessionVMs tells the scheduler that sessions run in VMs, whose host files

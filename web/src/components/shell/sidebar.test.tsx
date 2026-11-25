@@ -2,6 +2,9 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event'
 import { onTestFinished } from 'vitest'
 import { AppShell } from '@/components/shell/app-shell'
+import { SidebarRuns } from '@/components/shell/sidebar-runs'
+import { AgentGlyph } from '@/components/ui/agent-glyph'
+import type * as agentGlyph from '@/components/ui/agent-glyph'
 import { api } from '@/lib/api'
 import { useAttention } from '@/routes/needs-you/attention'
 import { useStore } from '@/store'
@@ -9,6 +12,11 @@ import { toRecord } from '@/store/runs'
 import { hydrate } from '@/store/sync'
 import { alice, bob, fakeApi, otherWorkspace, run, updateStatus, vera, workspace } from '@/test/fixtures'
 import { atViewport } from '@/test/viewport'
+
+vi.mock('@/components/ui/agent-glyph', async (importOriginal) => {
+  const actual = await importOriginal<typeof agentGlyph>()
+  return { ...actual, AgentGlyph: vi.fn(actual.AgentGlyph) }
+})
 
 Element.prototype.scrollIntoView = vi.fn()
 
@@ -246,6 +254,23 @@ describe('run rows', () => {
     expect(runList().getByText('question for you')).toBeDefined()
     fireEvent.click(runList().getByRole('button', { name: 'Expand 1 subsession' }))
     expect(runList().getByText('running check')).toBeDefined()
+  })
+
+  it('re-renders only the row whose agent used a tool, not a session with subsessions', () => {
+    useStore.setState((s) => ({
+      runs: {
+        ...s.runs,
+        run_parent: toRecord(run({ id: 'run_parent', task: 'coordinate', harness: 'codex' })),
+        run_child: toRecord(run({ id: 'run_child', task: 'running check', parent_run_id: 'run_parent' })),
+      },
+    }))
+    render(<SidebarRuns />)
+    expect(screen.getByRole('button', { name: 'Collapse 1 subsession' })).toBeDefined()
+    vi.mocked(AgentGlyph).mockClear()
+
+    act(() => useStore.getState().applyAgentEvent('run_1', { kind: 'tool_call', tool: 'Read', tool_use_id: 'tool_1' }, new Date().toISOString()))
+
+    expect(vi.mocked(AgentGlyph).mock.calls.map(([props]) => props.agent)).toEqual(['claude'])
   })
 
   it('leaves finished subsessions out until asked, and keeps a failed one listed', () => {
@@ -486,9 +511,14 @@ describe('run rows', () => {
     render(<AppShell />)
 
     const row = runList().getByRole('button', { name: /^Needs you · answer the schema question/ })
+    // The frame drops `focus` from the route as it serves it.
+    const routed = vi.fn()
+    const stop = useStore.subscribe((s) => routed(s.route))
     fireEvent.click(within(row.closest('[data-slot="list-row"]') as HTMLElement).getByRole('button', { name: 'Reply' }))
+    stop()
 
-    expect(useStore.getState().route).toEqual({ name: 'run', params: { runId: 'run_2', view: 'session', focus: 'composer' } })
+    expect(routed).toHaveBeenCalledWith({ name: 'run', params: { runId: 'run_2', view: 'session', focus: 'composer' } })
+    expect(useStore.getState().route).toEqual({ name: 'run', params: { runId: 'run_2', view: 'session' } })
   })
 
   it('keeps one tab stop in the list and walks it with j, k and the arrows', () => {

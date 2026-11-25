@@ -30,7 +30,7 @@ type imageUserResolver interface {
 
 // resolveContainerUser resolves root to "" (the image default) so
 // Spec.User is only set when it matters.
-func (s *Scheduler) resolveContainerUser(ctx context.Context, image string, profile harness.Profile) (string, error) {
+func (s *Scheduler) resolveContainerUser(ctx context.Context, image string) (string, error) {
 	var imageUser string
 	if r, ok := s.cfg.Runtime.(imageUserResolver); ok {
 		u, err := r.ImageUser(ctx, image)
@@ -39,7 +39,7 @@ func (s *Scheduler) resolveContainerUser(ctx context.Context, image string, prof
 		}
 		imageUser = u
 	}
-	user, err := harness.ResolveUser(profile.User, imageUser)
+	user, err := harness.ResolveUser(imageUser)
 	if err != nil {
 		return "", err
 	}
@@ -862,7 +862,7 @@ func (s *Scheduler) command(ctx context.Context, workspace domain.WorkspaceID, m
 		return nil, harness.Profile{}, false, fmt.Errorf("scheduler: agent %q has no model flag; launch it without a model", harnessName)
 	}
 	if task != "" && !profile.CarriesInstructions() {
-		instructions, ierr := s.briefedInstructions(ctx, s.runGuide(ctx, "", mode == domain.LaunchHeadless, false), extras, workspace, member)
+		instructions, ierr := s.briefedInstructions(ctx, s.runGuide(ctx, "", mode == domain.LaunchHeadless, false, s.createdCLI()), extras, workspace, member)
 		if ierr != nil {
 			return nil, harness.Profile{}, false, fmt.Errorf("scheduler: %w", ierr)
 		}

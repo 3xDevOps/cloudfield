@@ -298,6 +298,18 @@ export interface Run {
   repos?: RunRepo[]
 }
 
+/** A run's pull request as the server last recorded it; `run.get` lists them newest first. */
+export interface RecordedPullRequest {
+  /** The `repos[].workspace_id` that owns it; absent for the run's own repository. */
+  repo?: string
+  repository: string
+  number: number
+  url: string
+  state: string
+  merged_at?: string
+  checked_at: string
+}
+
 export interface RunRepo {
   workspace_id: string
   name: string
@@ -2209,7 +2221,10 @@ export interface SystemContainer {
   /** Absent or 0 is unlimited. */
   cpu_limit_cores?: number
   cpu_throttled_percent?: number
+  /** What runs inside the sandbox uses; `memory_limit_bytes` caps this. */
   memory_bytes: number
+  /** What a sandbox's VM holds of the host's memory, its kernel and file cache included. Absent for a Docker container, whose `memory_bytes` is already that, or when the VM's cgroup could not be read. */
+  host_memory_bytes?: number
   memory_limit_bytes: number
   pids: number
   pids_limit: number

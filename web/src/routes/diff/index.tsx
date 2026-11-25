@@ -22,9 +22,10 @@ import { allRepos, AllRepos, RepoChanges, RepoTabs, useSelectedRepo } from '@/ro
 import { useRepoRuns } from '@/routes/diff/repos'
 import { SummaryStrip } from '@/routes/diff/strip'
 import { Unplaced } from '@/routes/diff/unplaced'
-import { hasFiles, openInFiles } from '@/routes/files/open'
+import { openInFiles } from '@/routes/files/open'
+import { useRunParams } from '@/routes/run/agent-context'
 import type { AgentTerminal } from '@/routes/run/agent-terminal'
-import { isRunRoute } from '@/routes/run/views'
+import { hasFiles } from '@/routes/run/views'
 import { useStore } from '@/store'
 import { useCapability } from '@/store/hooks'
 import { comparisonFrom, comparisonScope, initialDiff, readCheckpoints, type Comparison } from '@/store/diff'
@@ -46,7 +47,7 @@ export function ChangesView(props: { runID: string; agent: AgentTerminal; agentN
 function RepoSwitch({ runID, agent, agentName }: { runID: string; agent: AgentTerminal; agentName: string }) {
   const run = useStore((s) => s.runs[runID])!
   const repos = useRepoRuns(run)
-  const selected = useSelectedRepo(runID)
+  const selected = useSelectedRepo()
   const entry = repos.find((item) => item.repo.workspace_id === selected && !item.repo.primary)
   const primary = repos.find((item) => item.repo.primary)!.repo.workspace_id
   const caps = useCapability()
@@ -73,7 +74,7 @@ function RepoSwitch({ runID, agent, agentName }: { runID: string; agent: AgentTe
 function PrimaryChanges({ runID, agent, agentName }: { runID: string; agent: AgentTerminal; agentName: string }) {
   const caps = useCapability()
   const run = useStore((s) => s.runs[runID])
-  const route = useStore((s) => s.route)
+  const params = useRunParams()
   const state = useStore((s) => s.diffs[runID] ?? initialDiff)
   const ahead = useAhead(runID)
   const [comparison, setComparison] = useState<Comparison>({ kind: 'all' })
@@ -130,10 +131,10 @@ function PrimaryChanges({ runID, agent, agentName }: { runID: string; agent: Age
   // A link to the current diff, or to one file in it, says so in the route;
   // the file is opened once the diff has it.
   useEffect(() => {
-    if (!isRunRoute(route, runID) || route.params.view !== 'changes' || (!route.params.file && route.params.diff !== 'current')) return
+    if (params.view !== 'changes' || (!params.file && params.diff !== 'current')) return
     setComparison({ kind: 'all' })
-    if (route.params.file) setAsked(route.params.file)
-  }, [route, runID])
+    if (params.file) setAsked(params.file)
+  }, [params])
   useEffect(() => {
     if (!asked || comparison.kind !== 'all') return
     if (files.some((file) => file.path === asked)) jump(asked)

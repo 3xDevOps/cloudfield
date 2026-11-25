@@ -7,7 +7,7 @@ import { board } from '@/routes/board/selectors'
 import { createRootStore } from '@/store'
 import { loadDevices } from '@/store/devices'
 import { homeKey } from '@/store/files'
-import { capability } from '@/store/hooks'
+import { capability } from '@/lib/capability'
 import { memberName } from '@/lib/member-name'
 import { addMergeProposal, dropMergeProposal, loadMergeProposals } from '@/store/members'
 import { stateContextOf } from '@/store/selectors'
@@ -96,6 +96,16 @@ describe('hydrate', () => {
     expect(Object.keys(s.workspaces)).toHaveLength(2)
     expect(Object.keys(s.members)).toHaveLength(2)
     expect(s.runs.run_1.status).toBe('running')
+  })
+  it('starts the optional reads together, so one slow read does not hold the others', async () => {
+    const store = createRootStore()
+    const client = fakeApi({ memberDeviceList: vi.fn(() => new Promise<never>(() => {})) })
+    void hydrate(store, client)
+
+    await vi.waitFor(() => expect(client.memberDeviceList).toHaveBeenCalled())
+    expect(client.watchList).toHaveBeenCalled()
+    expect(client.memberMergePending).toHaveBeenCalled()
+    expect(client.serverEdge).toHaveBeenCalled()
   })
   it('clears a painted snapshot when the server now refuses this member', async () => {
     const store = createRootStore()

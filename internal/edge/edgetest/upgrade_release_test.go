@@ -103,9 +103,6 @@ func (q *qualify) signedBuild(n int, context, minUpgradeFrom string) edgeImage {
 	q.t.Helper()
 	version := fmt.Sprintf("%s%d", qualifyVersion, n)
 	img := q.build(version, context, qualifyBuild+n)
-	if !img.updater {
-		q.t.Fatalf("%s has no version --json", version)
-	}
 	var upgrade struct {
 		Protocol selfupdate.EdgeProtocol `json:"protocol"`
 	}

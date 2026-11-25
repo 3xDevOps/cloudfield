@@ -8,6 +8,7 @@ import { useStore } from '@/store'
 import { initialDiff } from '@/store/diff'
 import { toRecord } from '@/store/runs'
 import { alice, run, serverInfo, workspace } from '@/test/fixtures'
+import { RouteParams } from '@/test/route-params'
 
 vi.mock('@/lib/api', async () => {
   const { fakeApi } = await import('@/test/fixtures')
@@ -52,7 +53,7 @@ beforeEach(() => {
   }))
 })
 
-const renderDiff = () => render(<ChangesView runID={multi.id} agent={agent} agentName="Claude Code" />)
+const renderDiff = () => render(<ChangesView runID={multi.id} agent={agent} agentName="Claude Code" />, { wrapper: RouteParams })
 
 it('shows no repo selector for a single-repo run', () => {
   seed()

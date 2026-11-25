@@ -20,7 +20,7 @@ import (
 	"github.com/3xDevOps/Aether/internal/version"
 )
 
-const vmUsage = "usage: aether-server vm install [--config <file>]"
+const vmUsage = "usage: cloudfield-server vm install [--config <file>]"
 
 // kvmDevice is a seam for install_test.go: no test host is promised KVM.
 var kvmDevice = "/dev/kvm"
@@ -62,6 +62,11 @@ func prepareVMHost(ctx context.Context, w io.Writer, baseURL, kernel string) err
 	}
 	if err := step(w, "checking "+kvmDevice, func() error { return serversetup.CheckKVM(kvmDevice) }); err != nil {
 		return err
+	}
+	if path, err := serversetup.ExcludeVMsFromNeedrestart(serversetup.NeedrestartDir); err != nil {
+		return err
+	} else if path != "" {
+		_, _ = fmt.Fprintf(w, "needrestart leaves session VMs running after a package upgrade: %s\n", path)
 	}
 	if missing := serversetup.MissingVMTools(); len(missing) > 0 {
 		var packages []string

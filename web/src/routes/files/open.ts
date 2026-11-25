@@ -1,17 +1,12 @@
 import { api, type Api } from '@/lib/api'
 import type { FileTreeEntry, Run } from '@/lib/types'
 import { findPaths, type FileTarget, type PathMatch } from '@/routes/files/paths'
-import { isLiveRun } from '@/routes/files/sources'
+import { hasFiles } from '@/routes/run/views'
 import { useStore } from '@/store'
 import { filesKey, type FileTreeState } from '@/store/files'
-import { capability, type Capability } from '@/store/hooks'
+import { capability } from '@/lib/capability'
 
 type Checkout = Pick<Run, 'id' | 'workspace_id'>
-
-/** A run that still has its checkout, on a gateway that serves it, has a Files view. */
-export function hasFiles(run: Run, cap: Capability): boolean {
-  return cap.hasMethod('files.tree') && isLiveRun(run)
-}
 
 export function openInFiles(runID: string, target: FileTarget) {
   useStore.getState().navigate('run', {

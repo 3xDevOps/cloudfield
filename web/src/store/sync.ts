@@ -257,15 +257,17 @@ export async function hydrate(
     )
     s.setOverlaps(overlaps)
     if (signal?.aborted) return false
-    // Device cards are an extra; their failure must not fail hydration.
-    await loadDevices(store, client).catch(ignore)
-    await loadWatches(store, client).catch(ignore)
-    await loadMergeProposals(store, client)
-    await loadEdge(store, client).catch(ignore)
-    if (signal?.aborted) return false
+    // These reads are extras; a failure must not fail hydration.
+    await Promise.all([
+      loadDevices(store, client).catch(ignore),
+      loadWatches(store, client).catch(ignore),
+      loadMergeProposals(store, client),
+      loadEdge(store, client).catch(ignore),
+    ])
     if (signal?.aborted) return false
     s.setHydrated(true)
     store.setState({ staleSince: null })
+    s.pruneTiles()
     const current = store.getState()
     const linked = current.route.params.runId
     const unknownLink = first && current.route === s.route && !!linked && !current.runs[linked]

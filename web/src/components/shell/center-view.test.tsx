@@ -5,6 +5,7 @@ import type { RouteProps } from '@/routes/registry'
 import { toRecord } from '@/store/runs'
 import { useStore } from '@/store'
 import { run } from '@/test/fixtures'
+import { atViewport } from '@/test/viewport'
 
 const routeRegistry = vi.hoisted(() => ({
   current: {} as Record<string, ComponentType<RouteProps>>,
@@ -149,7 +150,19 @@ describe('CenterView route mounting', () => {
     expect(unmounts.run_a).toBeUndefined()
   })
 
-  it('disposes and remounts the terminal when the run ID changes', () => {
+  it('keeps the session view mounted on a desktop when the run ID changes', () => {
+    render(<CenterView />)
+    setRoute('run', 'run_a')
+
+    setRoute('run', 'run_b')
+
+    expect(mounts.run_a).toBe(1)
+    expect(unmounts.run_a).toBeUndefined()
+    expect(screen.getByTestId('terminal-run_b')).toBeDefined()
+  })
+
+  it('disposes and remounts the terminal on a phone when the run ID changes', () => {
+    atViewport(390, { pointer: 'coarse' })
     render(<CenterView />)
     setRoute('run', 'run_a')
     const oldSocket = sockets.run_a[0]
@@ -163,7 +176,8 @@ describe('CenterView route mounting', () => {
     expect(screen.getByTestId('terminal-run_b')).toBeDefined()
   })
 
-  it('keeps only the selected terminal mounted across more than the old cache limit', () => {
+  it('keeps only the selected terminal mounted on a phone across more than the old cache limit', () => {
+    atViewport(390, { pointer: 'coarse' })
     render(<CenterView />)
 
     for (const id of runIDs) {

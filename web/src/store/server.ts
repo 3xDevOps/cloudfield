@@ -12,6 +12,7 @@ import type {
   ServerUpdateStatus,
 } from '@/lib/types'
 import type { SliceCreator } from '@/store/slice'
+import { emptyTiles, routeTiles, viewContext } from '@/store/tiles'
 
 /** Which hop is down when the app cannot reach its data.
  * `network`: this machine has no usable network at all - DNS is dead, or
@@ -253,10 +254,17 @@ export const createServerSlice: SliceCreator<ServerSlice> = (set) => {
       const restored = readLaunchDraft(identityKey, !edgeLinked && !linkStatusPending)
       const storageError = edgeLinked ? clearLaunchDraft(identityKey) : null
       const inMemoryDraft = s.identityKey === null ? s.launchDraft : null
+      const runViewMemory = s.savedRunViews[identityKey] ?? {}
+      const saved = s.savedTiles[identityKey] ?? emptyTiles()
+      const tiles = s.route.name === 'run' && s.route.params.runId
+        ? routeTiles(saved, s.route.params, { ...viewContext(s), memory: runViewMemory })
+        : saved
       return {
         identityKey,
         launchDefaults: s.savedLaunchDefaults[identityKey] ?? {},
-        runViewMemory: s.savedRunViews[identityKey] ?? {},
+        runViewMemory,
+        tiles,
+        savedTiles: { ...s.savedTiles, [identityKey]: tiles },
         paletteLaunchTask: '',
         launchDraft: inMemoryDraft ?? restored.draft,
         launchDraftError: inMemoryDraft ? null : storageError

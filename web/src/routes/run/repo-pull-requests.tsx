@@ -1,5 +1,4 @@
 import { useState } from 'react'
-import type * as React from 'react'
 import { GitPullRequest } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -8,6 +7,7 @@ import { PRFeedback } from '@/routes/diff/publish-feedback'
 import { stateLabel, summarizePR, usePullRequestList } from '@/routes/diff/publish-pr'
 import { useRepoRuns } from '@/routes/diff/repos'
 import type { AgentTerminal } from '@/routes/run/agent-terminal'
+import type { RunPullRequest } from '@/routes/run/pull-request'
 import type { RunRecord } from '@/store/runs'
 
 const severity: Partial<Record<Tone, number>> = { failed: 3, working: 2, neutral: 1 }
@@ -17,7 +17,7 @@ export function useRepoPullRequests(
   agent: AgentTerminal,
   agentName: string,
   watch: boolean,
-): { status: React.ReactNode; panel: React.ReactNode } | null {
+): RunPullRequest | null {
   const repos = useRepoRuns(run)
   const tracked = usePullRequestList(repos.map((entry) => entry.run), watch)
   const [open, setOpen] = useState(false)
@@ -28,7 +28,7 @@ export function useRepoPullRequests(
     const pr = feedback?.pull_request
     return feedback && pr ? [{ ...entry, pr, tracked: tracked[index]!, summary: summarizePR(pr, feedback) }] : []
   })
-  if (found.length === 0) return { status: null, panel: null }
+  if (found.length === 0) return { status: null, panel: null, more: [] }
   const tone = found.reduce<Tone>((worst, entry) => ((severity[entry.summary.tone] ?? 0) > (severity[worst] ?? 0) ? entry.summary.tone : worst), 'done')
   const label = `${found.length} ${found.length === 1 ? 'PR' : 'PRs'}`
   return {
@@ -88,5 +88,12 @@ export function useRepoPullRequests(
         onOpenChange={(next) => setPanel(next ? repo.workspace_id : null)}
       />
     )),
+    more: found.map(({ repo, pr, summary }) => ({
+      id: `pull-request-${repo.workspace_id}`,
+      label: `${repo.name} #${pr.number}`,
+      description: summary.text,
+      Icon: GitPullRequest,
+      onSelect: () => setPanel(repo.workspace_id),
+    })),
   }
 }

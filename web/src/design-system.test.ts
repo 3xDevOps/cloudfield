@@ -161,6 +161,8 @@ const pairs: [fg: string, bg: string, min: number][] = [
   ['accent-text', 'canvas', 4.5],
   ['accent-text', 'chrome', 4.5],
   ['on-accent', 'accent-fill', 4.5],
+  ['on-accent', 'accent-mark', 4.5],
+  ...['canvas', 'chrome', 'raised'].map((bg): [string, string, number] => ['accent-mark', bg, 3]),
   ['on-failed', 'state-failed', 4.5],
   ['on-done', 'state-done', 4.5],
   ...[...states, 'diff-add', 'diff-del'].map((fg): [string, string, number] => [fg, 'canvas', 4.5]),
@@ -168,7 +170,7 @@ const pairs: [fg: string, bg: string, min: number][] = [
   ['control-border', 'raised', 3],
   ...['canvas', 'chrome', 'raised', 'hover', 'hover-chrome', 'selection'].map((bg): [string, string, number] => ['focus-ring', bg, 3]),
   ['icon-faint', 'canvas', 3],
-  ...['claude', 'pi', 'omp', 'gemini', 'cursor', 'antigravity'].map((agent): [string, string, number] => [`agent-${agent}`, 'canvas', 3]),
+  ...['claude', 'pi', 'omp', 'cursor'].map((agent): [string, string, number] => [`agent-${agent}`, 'canvas', 3]),
 ]
 
 describe.each([

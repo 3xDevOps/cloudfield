@@ -3,7 +3,7 @@ import type { Api } from '@/lib/api'
 import { errorSentence } from '@/lib/format'
 import { awaitingReview } from '@/lib/needs-you'
 import type { RootStore } from '@/store'
-import { capability } from '@/store/hooks'
+import { capability } from '@/lib/capability'
 
 /** Marks the open run seen: `finish_unopened` for any member, `outcome_unseen`
  * for its owner. Only the server's answer clears a flag, never this tab's ack.

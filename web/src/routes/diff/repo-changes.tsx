@@ -20,16 +20,17 @@ import { useRepoRuns, type ScopedRecord } from '@/routes/diff/repos'
 import { repoReviewKey } from '@/routes/diff/review'
 import { ReviewBar } from '@/routes/diff/review-bar'
 import { Unplaced } from '@/routes/diff/unplaced'
+import { useRunParams } from '@/routes/run/agent-context'
 import type { AgentTerminal } from '@/routes/run/agent-terminal'
-import { isRunRoute } from '@/routes/run/views'
 import { useStore } from '@/store'
 import { useCapability } from '@/store/hooks'
 import type { RunRecord } from '@/store/runs'
 
 export const allRepos = 'all'
 
-export function useSelectedRepo(runID: string): string | undefined {
-  return useStore((s) => (isRunRoute(s.route, runID) && s.route.params.view === 'changes' ? s.route.params.repo : undefined))
+export function useSelectedRepo(): string | undefined {
+  const params = useRunParams()
+  return params.view === 'changes' ? params.repo : undefined
 }
 
 function select(runID: string, repo: RunRepo | typeof allRepos) {
@@ -114,7 +115,7 @@ function RepoSummary({ repo, run, agent, agentName }: { repo: RunRepo; run: Scop
 
 export function RepoChanges({ run, repo, agent, agentName }: { run: ScopedRecord; repo: RunRepo; agent: AgentTerminal; agentName: string }) {
   const caps = useCapability()
-  const route = useStore((s) => s.route)
+  const asked = useRunParams().file
   const data = useRepoPatch(run.id, repo.workspace_id)
   const { files } = data
   const ids = useId()
@@ -146,7 +147,6 @@ export function RepoChanges({ run, repo, agent, agentName }: { run: ScopedRecord
       else scrollWithin(scroller.current, document.getElementById(`${ids}-${index}`), toolbarHeight.current)
     })
   }
-  const asked = isRunRoute(route, run.id) ? route.params.file : undefined
   useEffect(() => {
     if (!asked || handled.current === asked || !files.some((file) => file.path === asked)) return
     handled.current = asked

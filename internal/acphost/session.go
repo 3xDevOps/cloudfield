@@ -226,8 +226,10 @@ type Session struct {
 	loggedOwed  bool
 	// taskCalls holds the last snapshot of each tool call whose task runs;
 	// endedTasks the status of tasks that ended before their tool call
-	// arrived, oldest first in endedOrder.
+	// arrived, oldest first in endedOrder. workflows holds the progress of
+	// workflow tasks that run, or ended before their tool call arrived.
 	taskCalls  map[string]ToolCall
+	workflows  map[string]*workflowState
 	wakeups    agentWakeups
 	endedTasks map[string]string
 	endedOrder []string
@@ -275,6 +277,7 @@ func Start(ctx context.Context, r io.Reader, w io.WriteCloser, cfg Config) (*Ses
 		subs:       make(map[chan Item]struct{}),
 		tasks:      make(map[string]*liveTask),
 		taskCalls:  make(map[string]ToolCall),
+		workflows:  make(map[string]*workflowState),
 		endedTasks: make(map[string]string),
 		wakeups:    newAgentWakeups(),
 		spend:      Spend{Total: cfg.Cost},
@@ -283,6 +286,8 @@ func Start(ctx context.Context, r io.Reader, w io.WriteCloser, cfg Config) (*Ses
 	s.turnEnded = sync.NewCond(&s.mu)
 	s.ctx, s.stop = context.WithCancel(context.Background())
 	s.proj = newProjector(s.projectLocked, s.armFlush, s.activityLocked)
+	// An adapter an earlier server opened may not send assistant frames.
+	s.proj.framed = cfg.ClaudeCode && cfg.Adopt == nil
 	go s.notify.run()
 
 	last, _, openTurn := log.state()
@@ -346,7 +351,7 @@ func Start(ctx context.Context, r io.Reader, w io.WriteCloser, cfg Config) (*Ses
 	if cfg.ClaudeCode {
 		// Claude's adapter forwards a subagent's text and thinking only when
 		// asked; they arrive stamped with the subagent's parent link.
-		s.conn.sessionMeta["claudeCode"] = map[string]any{"emitRawSDKMessages": claudeTaskFrames, "options": map[string]any{"forwardSubagentText": true}}
+		s.conn.sessionMeta["claudeCode"] = map[string]any{"emitRawSDKMessages": claudeFrames, "options": map[string]any{"forwardSubagentText": true}}
 	}
 	open := s.open
 	if adopt != nil {

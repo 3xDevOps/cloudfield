@@ -75,23 +75,25 @@ func (e *engine) stop(ctx context.Context, key string, grace time.Duration) erro
 	if err != nil {
 		return err
 	}
-	if up && rec.Exited {
+	if up && rec.Exited || !up && !rec.Saved {
 		return nil
 	}
-	if !up {
-		if !rec.Saved {
-			return nil
-		}
+	// Up, a saved VM is a guest a wake resumed, which runs past its saved
+	// state.
+	if rec.Saved {
 		if err = os.RemoveAll(e.path(key, snapshotDir)); err != nil {
 			return fmt.Errorf("vm runtime: discard saved state: %w", err)
 		}
-		rec.Saved = false
+		rec.Saved, rec.Resumed = false, nil
 		if err = e.store(rec); err != nil {
 			return err
 		}
-		e.promoteCache(ctx, rec)
-		return nil
+		if !up {
+			e.promoteCache(rec)
+			return errors.Join(e.releasePrograms(rec), e.store(rec))
+		}
 	}
+	_ = e.thaw(key)
 	api := newCHAPI(e.path(key, apiSocket))
 	if state, stateErr := api.state(ctx); stateErr == nil && state == "Paused" {
 		if err = api.resume(ctx); err != nil {
@@ -115,7 +117,7 @@ func (e *engine) stop(ctx context.Context, key string, grace time.Duration) erro
 		return err
 	}
 	// A guest that never confirmed Main's end serves no git work either.
-	return e.shutDown(ctx, rec)
+	return e.shutDown(ctx, rec, true)
 }
 
 // endMain ends Main and reports its exit code, and whether the helper
@@ -161,24 +163,29 @@ func (e *engine) finish(ctx context.Context, rec *record, code int) error {
 		return err
 	}
 	if len(rec.CheckoutDisks) == 0 {
-		return e.shutDown(ctx, rec)
+		return e.shutDown(ctx, rec, true)
 	}
 	e.endLinger(rec.Key, rec.Boots, lingerTimeout)
 	return nil
 }
 
-// shutDown powers the VM off and, when it went down clean, makes its cache
-// its pool's newest.
-func (e *engine) shutDown(ctx context.Context, rec *record) error {
+// shutDown powers the VM off, lets go of its program disks and, when it
+// went down clean and promote is set, makes its cache its pool's newest.
+func (e *engine) shutDown(ctx context.Context, rec *record, promote bool) error {
 	clean, err := e.powerOff(ctx, rec)
-	if err != nil || !clean {
+	if err != nil {
 		return err
+	}
+	if err = e.releasePrograms(rec); err != nil || !clean {
+		return errors.Join(err, e.store(rec))
 	}
 	rec.CacheSynced = true
 	if err = e.store(rec); err != nil {
 		return err
 	}
-	e.promoteCache(ctx, rec)
+	if promote {
+		e.promoteCache(rec)
+	}
 	return nil
 }
 
@@ -191,7 +198,7 @@ func (e *engine) endLinger(key string, boot int, d time.Duration) {
 		if err != nil || !rec.Exited || rec.Boots != boot {
 			return
 		}
-		if err = e.shutDown(context.Background(), rec); err != nil {
+		if err = e.shutDown(context.Background(), rec, true); err != nil {
 			slog.Warn("vm runtime: power off a VM whose session ended", "vm", key, "error", err)
 		}
 	})
@@ -221,6 +228,7 @@ func (e *engine) lingering(ctx context.Context) {
 func (e *engine) powerOff(ctx context.Context, rec *record) (bool, error) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), powerOffTimeout)
 	defer cancel()
+	_ = e.thaw(rec.Key)
 	h, err := e.helper(rec.Key)
 	if err == nil {
 		offCtx, offCancel := context.WithTimeout(ctx, helperCallTimeout)
@@ -244,8 +252,11 @@ func (e *engine) powerOff(ctx context.Context, rec *record) (bool, error) {
 	}
 }
 
+// kill thaws first, as stop, powerOff and destroy do: a frozen unit handles
+// no SIGTERM, and would hold the stop for its whole TimeoutStopSec.
 func (e *engine) kill(ctx context.Context, key string) {
 	e.forgetHelper(key)
+	_ = e.thaw(key)
 	_ = e.units.Stop(ctx, unitName(key))
 }
 
@@ -316,6 +327,7 @@ func (e *engine) waitMain(ctx context.Context, key string, boot int) (int, bool)
 		return rec.ExitCode, true
 	}
 	if gone {
+		slog.Warn("vm runtime: the guest restarted on its own, which ends its VM", "vm", key, "logs", e.logTail(key))
 		e.kill(context.WithoutCancel(ctx), key)
 		rec.Exited, rec.ExitCode = true, lostExitCode
 		return lostExitCode, e.store(rec) == nil
@@ -385,8 +397,9 @@ func (e *engine) lost(ctx context.Context, key string) (int, error) {
 	return lostExitCode, e.store(rec)
 }
 
-// destroy removes the VM and every file it had; a missing VM is not an
-// error. The key's lock stays: a caller may be waiting on it.
+// destroy removes the VM, every file it had and the shared disks only it
+// read through; a missing VM is not an error. The key's lock stays: a caller
+// may be waiting on it.
 func (e *engine) destroy(ctx context.Context, key string) error {
 	if checkKey(key) != nil {
 		return nil
@@ -403,6 +416,15 @@ func (e *engine) destroy(ctx context.Context, key string) error {
 		return err
 	}
 	rec, loadErr := e.load(key)
+	_ = e.thaw(key)
+	// A lingering VM stops for good here: if it powers off clean, its cache
+	// is promoted below as a stopped VM's is.
+	if up && loadErr == nil && rec.Exited {
+		if err = e.shutDown(ctx, rec, false); err != nil {
+			return err
+		}
+		up = false
+	}
 	// The session's database disk outlives this VM, as when an account move
 	// replaces it: the guest's unwritten data goes to it first. A paused VM
 	// cannot sync, and is destroyed only with its session, and the disk; a
@@ -419,7 +441,7 @@ func (e *engine) destroy(ctx context.Context, key string) error {
 		return err
 	}
 	if loadErr == nil && !up {
-		e.promoteCache(ctx, rec)
+		e.promoteCache(rec)
 	}
 	if err = os.RemoveAll(e.dir(key)); err != nil {
 		return fmt.Errorf("vm runtime: remove VM %s: %w", key, err)
@@ -428,6 +450,10 @@ func (e *engine) destroy(ctx context.Context, key string) error {
 	delete(e.fresh, key)
 	delete(e.events, key)
 	e.mu.Unlock()
+	// The VM is gone either way; the hourly sweep retries what this one left.
+	if err = e.cfg.Images.Sweep(); err != nil {
+		slog.Warn("vm runtime: delete the disks only a removed VM used", "vm", key, "error", err)
+	}
 	return nil
 }
 

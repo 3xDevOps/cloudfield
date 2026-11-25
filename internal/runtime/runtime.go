@@ -76,15 +76,55 @@ type MemoryEvents struct {
 	LimitBytes uint64
 }
 
+// MemoryUseRuntime optionally reports what each running container holds of
+// the host's memory, where the container's own count misses some of it, as
+// a VM's guest counts its page cache as available while the host holds it.
+// With an error it still reports every container it could measure.
+type MemoryUseRuntime interface {
+	MemoryUse(context.Context) (map[ID]uint64, error)
+}
+
 // SaveRuntime optionally writes a running container's memory and device
 // state to disk and ends it, then later restores it with every process
 // where it was. A container that was saved and not restored is stopped:
 // Inspect reports it exited and Wait returns; Stop or Start discards the
-// saved state. Saves reports whether a container can be saved at all.
+// saved state. Saves reports whether a container can be saved at all, and
+// SavedMemory the memory a Restore loads back, 0 for one not saved, once a
+// save or restore under way has finished; with an error, the most it may.
+// Restore of a container that holds no saved state fails with ErrNotSaved.
+// SetCommand replaces the main command the next Start of a stopped
+// container runs, so one that starts again from its disk does not run its
+// launch command, with the task, again.
 type SaveRuntime interface {
 	Saves(ID) bool
 	Save(context.Context, ID) error
 	Restore(context.Context, ID) error
+	SavedMemory(ID) (uint64, error)
+	SetCommand(context.Context, ID, []string) error
+}
+
+// FreezeRuntime optionally stops a running container where it stands, at
+// once and without its help, so it takes no more of the host's memory, and
+// lets it run on later. A frozen container keeps its memory and answers
+// nothing. Freeze reports whether it froze the container, false for one
+// already frozen, and fails without waiting on one that does not run or
+// that the runtime is starting, stopping, saving or restoring. Frozen lists
+// the frozen containers, the longest frozen first. Save thaws the container
+// it saves, and Stop and Destroy the one they end.
+type FreezeRuntime interface {
+	Freeze(ID) (bool, error)
+	Frozen() []ID
+	Thaw(ID) error
+}
+
+var ErrNotSaved = errors.New("it has no saved state")
+
+// CaptureRuntime optionally starts a stopped session container with a main
+// process that does nothing in place of its command, and without its setup
+// script, so the server can make the session's final commit before the
+// container is removed. Stop ends it as any start.
+type CaptureRuntime interface {
+	BootForCapture(context.Context, ID) error
 }
 
 // Mount is one additional mount into a run container. Host paths are
@@ -136,6 +176,14 @@ const (
 	// HostPath is that mount's.
 	MountSeed MountKind = "seed"
 )
+
+// Program is ~/.local/bin/<Executable> in the home at Home on the host,
+// which the session sees at Target.
+type Program struct {
+	Home       string
+	Target     string
+	Executable string
+}
 
 // ContainerInfo is immutable metadata captured from a live or stopped
 // container. Env contains the container's configured environment in
@@ -223,6 +271,10 @@ type Spec struct {
 	// profiles, coordination assets), applied after the worktree mount.
 	// Callers must pass them through ValidateMounts first.
 	Mounts []Mount
+	// Programs are the agent programs the session starts from the member's
+	// home. A session VM reads each from a read-only disk once one is built
+	// for the version the home holds; Docker ignores them.
+	Programs []Program
 	// User is the numeric "uid:gid" the main process (and setup script)
 	// runs as; empty means the image default.
 	User string

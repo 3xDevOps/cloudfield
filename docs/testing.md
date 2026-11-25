@@ -158,7 +158,7 @@ script committed to the test repository).
 | `TestIntegrationMultiMember` | Joining, roles, handoff, budget caps, an agent crash |
 | `TestIntegrationChaos*` | The server killed mid-session, disk pressure, a stalled agent |
 | `TestIntegrationCoordination*` | Messages between sessions |
-| `TestIntegrationServerUpdate*` | `aether-server update`: preflight, rollback, downgrade guards |
+| `TestIntegrationServerUpdate*` | `cloudfield-server update`: preflight, rollback, downgrade guards |
 | `TestIntegrationRestart*` | Enhanced sessions through server restarts and updates ([Restart acceptance](#restart-acceptance)) |
 | `TestIntegrationServerGateway` | The dashboard the server hosts on the tailnet |
 | `TestIntegrationConnectorFlows` | A ChatGPT connector, over OAuth and MCP, launching, messaging, answering and stopping enhanced sessions |
@@ -206,7 +206,7 @@ The test then restarts the server five ways, 20 seconds apart: `SIGTERM` and
 start the same binary twice, replace the binary with the second build, put the
 first build back (the rollback case), and `SIGKILL`. Every restart lands while
 a call, an inbox long poll and a send are in flight. The swap and rollback stop
-the server with `SIGTERM` and replace the file, as `aether-server update` does;
+the server with `SIGTERM` and replace the file, as `cloudfield-server update` does;
 the `exec` step itself is covered by `TestIntegrationServerUpdate*`.
 
 It fails on any of:
@@ -524,7 +524,7 @@ skips those tests where `bun` is not installed.
 The fixtures do not prove a real model turn. To check one, start an isolated
 coordinated Standard session with the exact CLI, server and extension versions under
 test, end a turn idle, send it one message with
-`aether-internal send --to <session> --body <nonce>`, and confirm exactly one new
+`cloudfield-internal send --to <session> --body <nonce>`, and confirm exactly one new
 turn reads and acknowledges it. Never edit a live hook, credentials or trust
 settings to get there.
 
@@ -612,13 +612,12 @@ point the test goes on through three more builds of this tree with an extra
 migration: one that fails, one that raises the compatibility floor and then
 fails, and one that succeeds. It checks that:
 
-1. `aether-edge-update` refuses an image it cannot read a version from.
-2. A failing migration is rolled back without a restore and skipped next
+1. A failing migration is rolled back without a restore and skipped next
    time.
-3. A failure after a raised floor restores the pre-update backup.
-4. A good migration applies, with a backup from the edge and the updater.
-5. A server of the starting release still enrolls and relays.
-6. `aether-edge-update --rollback` returns to the old binary.
+2. A failure after a raised floor restores the pre-update backup.
+3. A good migration applies, with a backup from the edge and the updater.
+4. A server of the starting release still enrolls and relays.
+5. `aether-edge-update --rollback` returns to the old binary.
 
 After each step the edge must keep its key and its accounts, and each owner
 must reach their server. Stub `cosign` and `docker` commands from
@@ -627,7 +626,7 @@ the release-check of a starting release, whose binary trusts only the
 release keys built into it. This tree's builds are stable releases at
 build 9000001 and up that also trust a test key. Their own release-check
 verifies the manifests the test signs with it, which the fake GitHub
-serves. From step 3 on, the fake answers 404 for the running release's
+serves. From step 2 on, the fake answers 404 for the running release's
 manifest, so the updater orders by the copy it kept.
 
 It refuses to start while a container named `aether-edge` exists, removes
@@ -654,10 +653,17 @@ with `false` and a component renders its widest layout. `atViewport`
 hit testing and focus outlines belong to the
 [dashboard end-to-end suite](#the-dashboard-end-to-end-suite).
 
+A real xterm takes most of a run page's jsdom time: its DOM renderer adds a
+stylesheet of several hundred rules, and every `getComputedStyle` call, which
+testing-library makes for each role query and user-event for each pointer
+event, has to cascade it. A case that never reads the terminal passes `enabled: false` through a mock of `useXterm`, as
+`web/src/components/assistant/context.test.tsx` does for the whole file and
+`web/src/routes/run/frame.test.tsx` does per case.
+
 ## The dashboard end-to-end suite
 
 `web/e2e/` drives Chromium against the dashboard embedded in `dist/aether`,
-through a real `aether gui` gateway and a real `aether-server` over SSH.
+through a real `cloudfield gui` gateway and a real `aether-server` over SSH.
 Playwright is the runner.
 
 ```sh
@@ -681,8 +687,11 @@ Each test gets its own stack:
 
 - One `aether-server` on its own loopback port, with a temporary data
   directory, the `busybox:1.36` image and `AETHER_FAKE_AGENT`. The first
-  identity to connect becomes the admin.
-- One `aether gui` per member, each with its own `HOME` and
+  identity to connect becomes the admin. `AETHER_NO_UPDATE_CHECK=1` keeps
+  it from reading this project's published releases and channel pointers,
+  so `server.update_status` reports no release and a channel not chosen
+  yet; a spec that needs other update state answers that method itself.
+- One `cloudfield gui` per member, each with its own `HOME` and
   `AETHER_CONFIG_DIR`, so nothing touches your own keys or links.
 - Real git repositories on disk.
 
@@ -803,11 +812,12 @@ the server does.
 `go test ./internal/guest/...` runs the real helper service against the real
 client over a Unix socket that answers Cloud Hypervisor's vsock handshake:
 processes on pipes and terminals, reattaching from a new client, lossless
-output, spawn failures, signals, orphan reaping and `Boot`. What only PID 1
-in a VM does (switching root, mounts, the network, socket forwarding, the
-process limit, an out-of-memory kill) needs a KVM host. `TestKVMHelper`
-([VM tests](#vm-tests)) boots an image from `internal/vmimage` disks with the
-test binary as the helper and drives it through the client.
+output, spawn failures, a start leaving its caller's log open, signals,
+orphan reaping and `Boot`. What only PID 1 in a VM does (switching root,
+mounts, the network, socket forwarding, the process limit, an out-of-memory
+kill) needs a KVM host. `TestKVMHelper` ([VM tests](#vm-tests)) boots an
+image from `internal/vmimage` disks with the test binary as the helper and
+drives it through the client.
 
 ## VM tests
 
@@ -819,11 +829,11 @@ runs every package that has them:
 | --- | --- | --- |
 | `internal/vmimage` | `TestKVMStandardImageRunsDocker` | The standard image from store disks, with Docker inside ([The guest kernel](#the-guest-kernel)) |
 | `internal/guest/helper` | `TestKVMHelper` | The helper as PID 1, driven through its client ([The VM helper](#the-vm-helper)) |
-| `internal/runtime/vm` | `TestKVM...` in each `kvm_*_test.go` | Sessions through the engine, with real systemd units and the server binary as monitor and helper: lifecycle, save and restore, a guest reboot, the home, the checkout, the network, Save environment |
+| `internal/runtime/vm` | `TestKVM...` in each `kvm_*_test.go` | Sessions through the engine, with real systemd units and the server binary as monitor and helper: lifecycle, six saves and wakes of one VM, a guest reboot, the home, the checkout, the helper keeping the console and outliving connections hung up at birth, the network, Save environment, cold memory returning to the host, the memory a wake loads back, a freeze stopping VMs that fill their memory at once, a shutdown letting go of a frozen VM's agent keeper |
 
 It needs root on a Linux x86-64 host with `/dev/kvm`, `cloud-hypervisor`,
 `qemu-img`, `mkfs.ext4`, `virtiofsd` at `/usr/libexec/virtiofsd`, systemd,
-iptables and network access to pull images. `sudo aether-server vm install
+iptables and network access to pull images. `sudo cloudfield-server vm install
 --vm-kernel dist/aether-vmlinux-x86_64` installs them the way a server does,
 as CI's `kvm` job does. `make test-kvm` fails, naming what is missing,
 rather than skip. It runs only the tests named `TestKVM...`: the
@@ -848,7 +858,7 @@ The target builds the test binaries and `aether-server` with
 libraries. It builds them, and keeps the disks, in a new private directory
 under `$TMPDIR` (default `/tmp`) that it removes at the end: root runs that
 server, so no other user may be able to replace it. A test's VM gets at most 2 GiB; on a CI runner the tests take
-about three minutes.
+about 13 minutes.
 
 On a KVM host without Go, build on your machine, copy the directory over,
 and run each test binary there with the variables `make test-kvm` sets:
@@ -948,6 +958,35 @@ runners. In the Docker-heavy jobs, the runner's Docker daemon and
 the buildx builders pull Docker Hub images through `mirror.gcr.io` and fall
 back to Docker Hub, so a Docker Hub outage alone does not fail them.
 
+`lint`, `build-and-test`, `store-tests`, `dashboard`, both `integration` jobs,
+`arm64` and `dashboard-e2e` run on [Blacksmith](https://docs.blacksmith.sh/)
+runners (`blacksmith-4vcpu-ubuntu-2604`, and `blacksmith-4vcpu-ubuntu-2404-arm`
+for `arm64`), declared for actionlint in `.github/actionlint.yaml`. A fork pull
+request's runs of `lint`, `build-and-test`, `store-tests` and `dashboard`
+default to `ubuntu-latest` instead. Outside contributors' runs wait for a
+maintainer's approval
+(`gh api repos/3xDevOps/cloudfield/actions/permissions/fork-pr-contributor-approval`
+reports `all_external_contributors`; organization members and repository
+collaborators are not asked). A fork can edit the workflow, so before
+approving, check its `.github/` changes for a Blacksmith label. Blacksmith's
+Ubuntu 26.04 image mounts `/tmp` as a tmpfs of half the runner's memory, too
+small for the server's disk-headroom check, so in the Docker suite jobs
+`.github/actions/free-disk` sets `TMPDIR=/t`, on the root disk and short enough
+for test socket paths; a `sudo env` step there must pass `"TMPDIR=$TMPDIR"`.
+Blacksmith's images also set `GOCACHEPROG` to `blacksmithd gocacheprog`, a Go
+build cache of Blacksmith's own that this repository does not configure.
+
+Every other job runs on a GitHub-hosted runner: `changes`, `audit`, `CI gate`,
+`edge-image`, `release-build`, `kvm`, the Windows jobs, and the release, promote
+and nightly workflows. The Windows smoke scripts refuse any other runner, and
+Blacksmith's kernel rejects the `fib` rule in the session VM firewall that the
+`kvm` tests load. Release builds never read a cache a Blacksmith job wrote: on
+Blacksmith, `actions/cache` uses Blacksmith's store, which GitHub-hosted jobs
+cannot read, so `release-build` writes the GitHub-hosted Linux amd64 module, bun
+and release compiler caches the release workflow restores. Buildx `type=gha`
+caches stay in GitHub's store, so the release workflow builds the browser and
+standard images without one.
+
 | Job | Sessions | Locally |
 | --- | --- | --- |
 | `audit` | `scripts/public-audit.sh` | `make public-audit` |
@@ -959,19 +998,20 @@ back to Docker Hub, so a Docker Hub outage alone does not fail them.
 | `dashboard` | `bun run typecheck` and `bun run test` | Same, from `web/` |
 | `dashboard-e2e` | [End-to-end suite](#the-dashboard-end-to-end-suite) in two shards | `make test-e2e E2E_ARGS='--shard=N/2'` |
 | `windows`, `windows-install` | [Windows](#windows); `windows` also scans `release-build`'s Windows binaries with Defender, and the `windows-install` install (zip) and update legs package and launch the Windows desktop zip on amd64 and arm64 | |
-| `release-build (binaries, desktop, android)` | `make release-binaries`, `aether gui build` on Linux with and without Node on `PATH`, `make android` | `make release-binaries`, [Desktop shell](../CONTRIBUTING.md#desktop-shell), `make android` |
+| `release-build (binaries, desktop, android)` | `make release-binaries`, `cloudfield gui build` on Linux with and without Node on `PATH`, `make android` | `make release-binaries`, [Desktop shell](../CONTRIBUTING.md#desktop-shell), `make android` |
 | `edge-image` | [The edge image](#the-edge-image) and [qualification](#edge-upgrade-qualification) | |
 | `kvm` | [VM tests](#vm-tests) on a hosted runner, which has `/dev/kvm` (`.github/workflows/kvm.yml`) | `make kernel`, then `make test-kvm` as root |
 
 A pull request that changes only `docs/**` or root-level `*.md` files runs
-`audit` and nothing else. A Markdown file anywhere else counts as code.
+`audit` and nothing else, unless it changes a Go file there,
+`docs/agents.md` or `docs/harnesses.md`, which Go tests check. A Markdown file anywhere else counts as code.
 `scripts/ci-classify-areas.sh` narrows the rest by area:
 
 | Mode | Jobs | True for |
 | --- | --- | --- |
-| `go` | `lint`, `build-and-test`, `store-tests` | Everything except `web/` (other than `web/embed.go`), `android/` and `docs/` |
+| `go` | `lint`, `build-and-test`, `store-tests` | Everything except `web/`, `android/` and `docs/`; within those, Go files, `web/public/`, `web/src/components/ui/agent-glyph.tsx`, `docs/agents.md` and `docs/harnesses.md` still count, because Go code embeds or checks them |
 | `web` | `dashboard` | `web/`, `cmd/aether/`, `internal/localgw/`, `internal/webgate/`, `go.mod`, `Makefile`, `.github/actions/`, `ci.yml` |
-| `caches` | The full suite on a push to `main` | `go.mod`, `go.sum`, `.golangci.yml`, `.github/`, `images/`, the fonts the browser image copies from `web/public/fonts/`, the web and desktop package manifests and lockfiles, `web/.bun-version`, the Gradle files |
+| `caches` | The full suite on a push to `main` | `go.mod`, `go.sum`, `.golangci.yml`, `.github/`, `images/`, the fonts and licence the browser image copies from `web/src/fonts/` and `web/public/fonts/`, the web and desktop package manifests and lockfiles, `web/.bun-version`, the Gradle files |
 | `vm` | `kvm` in the merge queue and on a push to `main` | `internal/runtime/vm/`, `internal/vmimage/`, the packages the VM code runs (`internal/guest/`, `internal/acpkeeper/`, `internal/version/`, `internal/devexec/`, `internal/disk/`, `internal/egress/`, `internal/gitengine/`, `internal/rootfs/`), `images/kernel/`, the `kvm*_test.go` files, the files of `internal/runtime/` the VM engine shares (`session.go`, `stream.go`, `managed_exec.go`, `docker_image.go`, `docker_cgroup.go`), files named `vm*.go` or `*_vm.go` (and their tests) anywhere under `internal/`, `go.mod`, `go.sum`, `vm.mk`, `kvm.yml` and `cmd/aether-server/vm.go` |
 
 VM code outside the VM packages goes in files named for the `vm` mode, so the

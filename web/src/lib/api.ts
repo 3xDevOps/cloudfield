@@ -70,6 +70,7 @@ import type {
   PresenceEntry,
   PullResult,
   PullSwitchResult,
+  RecordedPullRequest,
   RepoFastForwardResult,
   RepoPushResult,
   RoomDecideResult,
@@ -470,7 +471,7 @@ async function failure(
         message:
           typeof body.error.message === 'string'
             ? body.error.message
-            : `${res.status} ${res.statusText}`,
+            : statusLine(res),
         ...(typeof body.error.code === 'number' ? { code: body.error.code } : {}),
         ...(body.error.data !== undefined ? { data: body.error.data } : {}),
       }
@@ -478,7 +479,12 @@ async function failure(
   } catch {
     // Not every failure has a JSON body (a proxy 502, for instance).
   }
-  return { message: `${res.status} ${res.statusText}` }
+  return { message: statusLine(res) }
+}
+
+// HTTP/2 has no reason phrase, so statusText is empty there.
+function statusLine(res: Response): string {
+  return res.statusText ? `${res.status} ${res.statusText}` : String(res.status)
 }
 
 /** WebSocket URL for a gateway path, carrying the bearer token when set. */
@@ -528,6 +534,8 @@ export const api = {
     call<{ runs: Run[] }>('run.list', params).then((r) => r.runs),
   runGet: (runID: string) =>
     call<{ run: Run }>('run.get', { run_id: runID }).then((r) => r.run),
+  runWithPullRequests: (runID: string) =>
+    call<{ run: Run; pull_requests?: RecordedPullRequest[] }>('run.get', { run_id: runID }),
   runLaunch: (params: {
     workspace_id: string
     task?: string

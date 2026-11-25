@@ -78,14 +78,17 @@ type record struct {
 	PidsLimit    int64           `json:"pids_limit,omitempty"`
 	Checkouts    []runtime.Mount `json:"checkouts,omitempty"`
 	Mounts       []runtime.Mount `json:"mounts,omitempty"`
+	// Programs are the agent programs the VM may load from disks of their
+	// own; ProgramDisks those it booted with.
+	Programs     []runtime.Program `json:"programs,omitempty"`
+	ProgramDisks []programDisk     `json:"program_disks,omitempty"`
 	// CheckoutDisks are the Mounts whose checkouts live on disks of their
 	// own.
 	CheckoutDisks []checkoutDisk `json:"checkout_disks,omitempty"`
 	// Net is the VM's network index, or offline.
-	Net    int  `json:"net"`
-	Egress bool `json:"egress,omitempty"`
-	// KeepRoot keeps the root disk across cold starts.
-	KeepRoot  bool           `json:"keep_root,omitempty"`
+	Net       int            `json:"net"`
+	Egress    bool           `json:"egress,omitempty"`
+	NoSwap    bool           `json:"no_swap,omitempty"`
 	Lifetime  time.Duration  `json:"lifetime,omitempty"`
 	OwnedDirs []string       `json:"owned_dirs,omitempty"`
 	Serves    []guest.Socket `json:"serves,omitempty"`
@@ -97,14 +100,19 @@ type record struct {
 	BrowserEnv   []string     `json:"browser_env,omitempty"`
 	// Companion is the browser companion created in the VM, if any.
 	Companion *companion `json:"companion,omitempty"`
-	// Booted is set once a boot was launched: the next cold start builds a
-	// fresh root disk. Boots counts them, so a wait on one boot can tell it
-	// from the next.
+	// Booted is set once a boot was launched. Boots counts them, so a wait
+	// on one boot can tell it from the next.
 	Booted bool `json:"booted,omitempty"`
 	Boots  int  `json:"boots,omitempty"`
+	// SetupDone means a boot ran the setup script and Main started.
+	SetupDone bool `json:"setup_done,omitempty"`
 	// Saved means the snapshot directory holds the VM's state; the VM reads
 	// as exited until Restore.
 	Saved bool `json:"saved,omitempty"`
+	// Resumed is when each disk the guest writes was last written before a
+	// restore resumed the saved state, which matches the disks only while
+	// none of those times has moved; unset until a restore resumes it.
+	Resumed map[string]int64 `json:"resumed,omitempty"`
 	// Frozen means Pause froze the session's processes, which stay frozen
 	// through a save and restore until Resume or the next boot.
 	Frozen bool `json:"frozen,omitempty"`

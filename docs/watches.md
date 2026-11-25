@@ -46,7 +46,7 @@ and `ci` follow every pull request the session recorded (`run.pr.create`), and
 start the moment it records one.
 
 The server reads GitHub with the watch owner's own `gh` login in their
-Cloudfield home, the one `aether github connect` sets up (see
+Cloudfield home, the one `cloudfield github connect` sets up (see
 [environment-home.md](environment-home.md#from-the-cli)). Without one the
 watch is created in the `error` state with the real error and the fix:
 
@@ -408,7 +408,7 @@ An agent that ends its turn waiting on a pull request, its checks or another
 session names what it waits on:
 
 ```sh
-aether-internal report --outcome waiting --for ci \
+cloudfield-internal report --outcome waiting --for ci \
   --until pr:acme/app#7:checks@3f9c2ab --summary 'Waiting for CI on #7'
 ```
 
@@ -428,7 +428,7 @@ is refused with that error.
 | --- | --- | --- |
 | `pr:<owner>/<repo>#<n>:merged` | The pull request merged, closed without merging, or a merge queue removed it without merging it after the condition began and it was not queued again within a minute; `detail` quotes GitHub's reason, such as `reason: failed_checks` or `reason: manual`. When GitHub refuses the merge queue read, the summary says `can't read its merge queue (<GitHub's error>)` and merged and closed still resolve it. | `merged`, `closed`, or `removed-from-queue` |
 | `pr:<owner>/<repo>#<n>:checks[@<sha>]` | Every counted check on its head commit finished, or one failed and nothing counted is still running, the named commit was replaced, or the pull request closed unmerged first. When the base branch requires checks only those count and `observed.checks.required_only` is `true`; a required check nothing reported keeps the wait pending, and the summary names it. Otherwise every check counts. Cancelled runs a rerun replaced are not counted, as for [`ci`](#pull-requests-and-ci). | `passed`, `failed`, `cancelled`, `superseded`, or `closed` |
-| `run:<run-id>:finished` | That session, in the same workspace, ended or reported success. | `completed`, `merged`, `failed`, `abandoned`, `interrupted`, or `reported-success` |
+| `run:<run-id>:finished` | That session, in the same workspace, ended or reported success or failure. | `completed`, `merged`, `failed`, `abandoned`, `interrupted`, `reported-success`, or `reported-failure` |
 
 A checks condition resolves only on its head commit, `head_sha`. With
 `@<sha>` (7 to 40 lowercase hex digits, the commit you pushed) that is the

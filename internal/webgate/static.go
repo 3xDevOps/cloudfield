@@ -48,6 +48,12 @@ func StaticHandler(fsys fs.FS) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := path.Clean(strings.TrimPrefix(r.URL.Path, "/"))
 		if info, err := fs.Stat(fsys, name); err != nil || info.IsDir() {
+			// The dashboard's script loader reports a 404, but waits forever on
+			// the page served in place of a script.
+			if strings.HasPrefix(name, "_next/") {
+				http.NotFound(w, r)
+				return
+			}
 			name = "index.html"
 		}
 		mu.Lock()

@@ -17,7 +17,8 @@ import { actionRow, Step } from '@/routes/onboarding/layout'
 import { GitHubConnect, githubSubStep } from '@/routes/onboarding/github-connect'
 import { useStore } from '@/store'
 import { rememberChoice } from '@/store/launch-defaults'
-import { type Capability, useIsAdmin } from '@/store/hooks'
+import type { Capability } from '@/lib/capability'
+import { useIsAdmin } from '@/store/hooks'
 
 const addAgentSubStep = '@custom'
 
