@@ -17,6 +17,7 @@ import (
 	"github.com/3xDevOps/Aether/internal/evidence"
 	"github.com/3xDevOps/Aether/internal/fallback"
 	"github.com/3xDevOps/Aether/internal/gitengine"
+	"github.com/3xDevOps/Aether/internal/linear"
 	"github.com/3xDevOps/Aether/internal/permissions"
 	"github.com/3xDevOps/Aether/internal/protocol"
 	"github.com/3xDevOps/Aether/internal/scheduler"
@@ -224,6 +225,15 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 			return nil, invalidParams(err.Error())
 		}
 	}
+	if p.LinearIssueURL != "" {
+		_, canonical, err := linear.ParseIssueURL(p.LinearIssueURL)
+		if err != nil {
+			return nil, invalidParams(err.Error())
+		}
+		p.LinearIssueURL = canonical
+	} else {
+		p.LinearIssueURL = linear.FindIssueURL(p.Task)
+	}
 	key := p.IdempotencyKey
 	p.IdempotencyKey = ""
 	var earlier any
@@ -305,7 +315,7 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 		Limits:     limits,
 		CachedBase: p.CachedBase, Model: p.Model, Effort: p.Effort, Permission: permission, RequestedAccount: requested, Fallback: policy,
 		Admitted: unlockAuthorization, Created: created,
-		ExtraWorkspaces: workspaceIDs(p.ExtraWorkspaceIDs),
+		ExtraWorkspaces: workspaceIDs(p.ExtraWorkspaceIDs), LinearIssueURL: p.LinearIssueURL,
 	})
 	if err != nil {
 		if errors.Is(err, errLaunchOptionsUnsupported) {

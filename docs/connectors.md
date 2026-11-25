@@ -408,8 +408,9 @@ text again on purpose, pass a new `idempotency_key`.
 order), `no_fallback`, `extra_workspace_ids`, `children` (`on` or `off`:
 whether its agent may start [subsessions](teams.md#subsessions); without it, your
 setting decides) and `permission` (`root`, `default` or `isolated`: the
-session's [permission tier](security.md#permission-tiers)), as `cloudfield session`
-does. Any other `permission` fails with the tool's schema error, such as
+session's [permission tier](security.md#permission-tiers)) and `linear_issue_url`
+(the Linear issue the session works on; without it, the first Linear issue link in
+`task`), as `cloudfield session` does. Any other `permission` fails with the tool's schema error, such as
 `validating /properties/permission: enum: admin does not equal any of: [ root default isolated]`. The server
 checks the account before anything starts: a launch with an agent
 or fallback account not shared with you fails with the server's error. A launch or template launch the server does not understand fails with

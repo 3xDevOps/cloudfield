@@ -44,6 +44,7 @@ type connectorLaunchInput struct {
 	Children        string `json:"children,omitempty" jsonschema:"may the agent start subsessions; default your setting"`
 	Permission      string `json:"permission,omitempty" jsonschema:"default your saved tier"`
 	SavedDefaults   string `json:"saved_defaults,omitempty" jsonschema:"ignore sends only the given fields"`
+	LinearIssueURL  string `json:"linear_issue_url,omitempty" jsonschema:"https://linear.app/<workspace>/issue/<TEAM>-<number>; default the first such link in task"`
 	accountChoice
 	// Reason is the assistant's, for the member's confirmation card; the
 	// server never sees it.
@@ -312,7 +313,8 @@ func launchRun(ctx context.Context, c calls, in connectorLaunchInput) (string, a
 	l := links(info.DashboardURL)
 	params := protocol.RunLaunchParams{WorkspaceID: in.WorkspaceID, Task: in.Task, Harness: in.Harness, Mode: in.Mode, Model: in.Model,
 		AccountMemberID: in.AccountMemberID, FallbackAccountMemberIDs: in.FallbackAccountMemberIDs, NoFallback: in.NoFallback,
-		ExtraWorkspaceIDs: in.ExtraWorkspaceIDs, Children: in.Children, Permission: in.Permission, IdempotencyKey: in.IdempotencyKey}
+		ExtraWorkspaceIDs: in.ExtraWorkspaceIDs, Children: in.Children, Permission: in.Permission, IdempotencyKey: in.IdempotencyKey,
+		LinearIssueURL: in.LinearIssueURL}
 	dup, done := false, func(error) {}
 	if params.IdempotencyKey == "" {
 		var prior protocol.Run
