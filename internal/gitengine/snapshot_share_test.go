@@ -52,7 +52,7 @@ func sessionHistory(t *testing.T, e *Engine, run domain.RunID) (string, string) 
 		if err = errors.Join(writeErr, f.Close(), os.WriteFile(filepath.Join(checkout, "notes.txt"), []byte(line+"\n"), 0o600)); err != nil {
 			t.Fatal(err)
 		}
-		tree, err := e.writeSnapshotTree(t.Context(), run, checkout)
+		tree, err := e.writeSnapshotTreeLocked(t.Context(), run, checkout)
 		if err != nil {
 			t.Fatal(err)
 		}
