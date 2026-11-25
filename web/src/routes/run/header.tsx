@@ -1,8 +1,8 @@
 import { useContext, useEffect, useRef, useState } from 'react'
 import type * as React from 'react'
-import { ArrowUpRight, Camera, Eye, Network, PanelRight, ScrollText } from '@/components/icons'
+import { ArrowUpRight, Camera, Eye, MessageSquarePlus, Network, PanelRight, ScrollText } from '@/components/icons'
 import { permissionLabel, permissions } from '@/components/launch/permission-control'
-import { RunActions } from '@/components/run-actions'
+import { RunActions, type MenuPoint } from '@/components/run-actions'
 import { RunRetention } from '@/components/run-retention'
 import { narrowBelow } from '@/components/tiles/area'
 import { useTileDrag } from '@/components/tiles/drag'
@@ -316,8 +316,11 @@ export function RunHeader({
   keyboard,
   detailsOpen,
   onDetails,
+  onComment,
   onCaptures,
   onEvents,
+  menuAt,
+  onMenuClose,
   agentName,
   agentEntry,
   workflow,
@@ -341,10 +344,14 @@ export function RunHeader({
   keyboard: boolean
   detailsOpen: boolean
   onDetails: (returnTo: HTMLElement | null) => void
+  onComment: (returnTo: HTMLElement | null) => void
   onCaptures: (returnTo: HTMLElement | null) => void
   onEvents: (returnTo: HTMLElement | null) => void
   /** This desktop tile carries the session's controls; its other tiles show the switch and the state alone. */
   controls: boolean
+  /** Where a right-click opened the session's menu, desktop only. */
+  menuAt: MenuPoint | null
+  onMenuClose: () => void
 }) {
   const mobile = useIsMobile()
   // The row is sized from itself, not its tile: docked Details and Session tree take their width out of it.
@@ -360,6 +367,7 @@ export function RunHeader({
   const reducedMotion = useReducedMotion()
   useHeaderPrimary(focused && Boolean(primary))
   const extra = [
+    { id: 'comment', label: 'Leave a comment…', Icon: MessageSquarePlus, onSelect: onComment },
     ...(modeSwitch.item ? [modeSwitch.item] : []),
     ...(editor.item ? [editor.item] : []),
     ...childRunsItems,
@@ -427,6 +435,8 @@ export function RunHeader({
               run={run}
               compact
               extra={narrow ? [{ id: 'workflow', label: 'Session tree', Icon: Network, onSelect: onWorkflow }, ...pullRequest.more, ...extra] : extra}
+              at={menuAt}
+              onAtClose={onMenuClose}
             />
           </div>
         )}

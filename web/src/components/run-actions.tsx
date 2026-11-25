@@ -25,12 +25,22 @@ export interface ExtraItem {
   disabled?: boolean
 }
 
-export function RunActions({ run, views = [], extra = [], compact = false }: {
+export interface MenuPoint {
+  x: number
+  y: number
+  /** What had focus before the menu opened, a keyboard opener for instance. */
+  returnTo: HTMLElement | null
+}
+
+export function RunActions({ run, views = [], extra = [], compact = false, at, onAtClose }: {
   run: RunRecord
   /** Places to go, listed above the commands under their own label. */
   views?: ExtraItem[]
   extra?: ExtraItem[]
   compact?: boolean
+  /** Opens the same menu at this viewport point, as a right-click does. */
+  at?: MenuPoint | null
+  onAtClose?: () => void
 }) {
   const paused = useStore((s) => s.pausedRuns[run.id])
   const predicting = useStore((s) => Boolean(s.predicting[run.id]))
@@ -104,6 +114,51 @@ export function RunActions({ run, views = [], extra = [], compact = false }: {
     </MenuItem>
   )
 
+  // An item that moved focus on purpose, into a dialog or a field, keeps it.
+  const keepDialogFocus = (event: Event) => {
+    const focused = document.activeElement
+    const moved = focused && focused !== document.body && !(event.currentTarget as Node).contains(focused)
+    if (!openingDialog.current && !moved) return
+    openingDialog.current = false
+    event.preventDefault()
+  }
+
+  const items = (
+    <>
+      {waiting && (
+        <MenuItem disabled icon={<LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden />}>
+          {stillWaiting}
+        </MenuItem>
+      )}
+      {stale && <MenuItem disabled>Reconnect to act</MenuItem>}
+      {views.length > 0 && (
+        <>
+          <MenuLabel>Views</MenuLabel>
+          {views.map(extraItem)}
+          <MenuSeparator />
+        </>
+      )}
+      {everyday.map(item)}
+      {handoffs.length > 0 && (
+        <MenuItem
+          disabled={running !== null || stale}
+          onSelect={() => {
+            if (inFlight.current) return
+            openingDialog.current = true
+            setHandoff(true)
+          }}
+        >
+          <User aria-hidden />
+          Hand off…
+        </MenuItem>
+      )}
+      {extra.length > 0 && (everyday.length > 0 || handoffs.length > 0) && <MenuSeparator />}
+      {extra.map(extraItem)}
+      {ending.length > 0 && <MenuSeparator />}
+      {ending.map(item)}
+    </>
+  )
+
   return (
     <>
       <Menu
@@ -126,47 +181,33 @@ export function RunActions({ run, views = [], extra = [], compact = false }: {
             </Button>
           )}
         </MenuTrigger>
-        <MenuContent
-          align="end"
-          onCloseAutoFocus={(event) => {
-            if (!openingDialog.current) return
-            openingDialog.current = false
-            event.preventDefault()
-          }}
-        >
-          {waiting && (
-            <MenuItem disabled icon={<LoaderCircle className="animate-spin motion-reduce:animate-none" aria-hidden />}>
-              {stillWaiting}
-            </MenuItem>
-          )}
-          {stale && <MenuItem disabled>Reconnect to act</MenuItem>}
-          {views.length > 0 && (
-            <>
-              <MenuLabel>Views</MenuLabel>
-              {views.map(extraItem)}
-              <MenuSeparator />
-            </>
-          )}
-          {everyday.map(item)}
-          {handoffs.length > 0 && (
-            <MenuItem
-              disabled={running !== null || stale}
-              onSelect={() => {
-                if (inFlight.current) return
-                openingDialog.current = true
-                setHandoff(true)
-              }}
-            >
-              <User aria-hidden />
-              Hand off…
-            </MenuItem>
-          )}
-          {extra.length > 0 && (everyday.length > 0 || handoffs.length > 0) && <MenuSeparator />}
-          {extra.map(extraItem)}
-          {ending.length > 0 && <MenuSeparator />}
-          {ending.map(item)}
+        <MenuContent align="end" onCloseAutoFocus={keepDialogFocus}>
+          {items}
         </MenuContent>
       </Menu>
+
+      {at && (
+        <Menu key={`${at.x},${at.y}`} open modal={false} onOpenChange={(open) => !open && onAtClose?.()}>
+          <MenuTrigger asChild>
+            <span aria-hidden className="pointer-events-none fixed size-0" style={{ left: at.x, top: at.y }} />
+          </MenuTrigger>
+          <MenuContent
+            aria-label="Session actions"
+            aria-labelledby={undefined}
+            align="start"
+            sideOffset={0}
+            onCloseAutoFocus={(event) => {
+              const opening = openingDialog.current
+              keepDialogFocus(event)
+              if (opening || event.defaultPrevented) return
+              event.preventDefault()
+              if (at.returnTo?.isConnected) at.returnTo.focus()
+            }}
+          >
+            {items}
+          </MenuContent>
+        </Menu>
+      )}
 
       {asking?.confirm && (
         <RunCommandConfirmation

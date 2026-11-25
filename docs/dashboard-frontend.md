@@ -3280,13 +3280,19 @@ The actions, in order:
 3. **Show details** / **Hide details** (`Mod+.`), filled while Details is open.
 4. **More** (`components/run-actions.tsx`, an icon button): every
    session verb from `lib/commands.ts` except **Send a message to the agent…**,
-   which the composer replaces, then **Hand off…**, the mode switch,
-   **Open in editor…**, **Captures…** and **Raw events…**, then **Close
+   which the composer replaces, then **Hand off…**, **Leave a comment…**,
+   the mode switch, **Open in editor…**, **Captures…** and
+   **Raw events…**, then **Close
    session…**, **Kill run** and **Delete run** after a separator. Kill, Delete
    and **Free sandbox…** confirm first. Where the server offers
    `run.children.allow`, the owner of a live session also gets
    **Allow subsessions** (`run.children.allow` `on`), and the owner or an
    admin **Turn off subsessions** on a session that allowed them.
+   **Leave a comment…** opens Details with the cursor in the note field. On
+   a desktop layout, a right-click on Chat in the tile that carries the
+   session's controls opens the same menu at the cursor, except over selected text, a link, an input, code, an image or
+   a terminal, and on Shift+right-click, where the browser keeps its own
+   menu. The desktop app has no menu of its own there.
 
 Kill and Delete of a session with unfinished subsessions (live, not detached; the
 store's sessions whose `parent_run_id` is this session) say "Its 2 unfinished subsessions

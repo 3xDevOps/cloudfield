@@ -148,6 +148,21 @@ describe('a press that focuses a tile', () => {
   })
 })
 
+describe('the session menu', () => {
+  it('opens on a right-click on Chat only in the tile that carries the session\'s controls', async () => {
+    const enhanced = { mode: 'acp', acp: true } as const
+    act(() => useStore.setState({ runs: { run_1: toRecord(run(enhanced)) } }))
+    show('run_1')
+    beside('run_1', 'changes')
+    await act(async () => {})
+    const chat = document.querySelector('[data-tile] [role=tabpanel] [role=tabpanel]')!
+    expect(fireEvent.contextMenu(chat)).toBe(true)
+    fireEvent.pointerDown(chat)
+    expect(fireEvent.contextMenu(chat)).toBe(false)
+    expect(await screen.findByRole('menuitem', { name: 'Leave a comment…' })).toBeDefined()
+  })
+})
+
 describe('a glide', () => {
   it('holds its clock for two frames, and mounts the session of a tile that grows in once it has landed', async () => {
     vi.spyOn(motion, 'time').mockReturnValue(300)
