@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Dialog as DialogPrimitive } from 'radix-ui'
 import { toast } from 'sonner'
@@ -31,7 +31,7 @@ import { cn, focusRing, randomID, surface } from '@/lib/utils'
 import { type RootState, sameIdentity, useStore } from '@/store'
 import { useChildSettings, useChildSettingsRead } from '@/store/children'
 import { rememberChoice, saveLaunchDefaults, useLaunchDefaultsRead } from '@/store/launch-defaults'
-import { useCapability, useIsAdmin, useSelf } from '@/store/hooks'
+import { useCapability, useIsAdmin, useMainWidth, useSelf } from '@/store/hooks'
 import { stillWaiting, usePastDeadline } from '@/store/optimistic'
 import { maxLaunchWidth, minLaunchWidth } from '@/store/ui'
 
@@ -41,13 +41,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   const phone = useIsMobile()
   const launchWidth = useStore((s) => s.launchWidth)
   const setLaunchWidth = useStore((s) => s.setLaunchWidth)
-  const sidebarCollapsed = useStore((s) => s.sidebarCollapsed)
-  const sidebarWidth = useStore((s) => s.sidebarWidth)
-  const viewportWidth = useSyncExternalStore(
-    (notify) => { window.addEventListener('resize', notify); return () => window.removeEventListener('resize', notify) },
-    () => window.innerWidth,
-  )
-  const launchMaxWidth = Math.min(maxLaunchWidth, viewportWidth - (sidebarCollapsed ? 0 : sidebarWidth))
+  const launchMaxWidth = Math.min(maxLaunchWidth, useMainWidth())
   const visibleLaunchWidth = Math.min(launchWidth, launchMaxWidth)
   const beginDrag = useDrag()
   const [identityKey] = useState(() => useStore.getState().identityKey)
