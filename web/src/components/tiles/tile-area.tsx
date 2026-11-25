@@ -43,7 +43,7 @@ const full: Rect = { left: 0, top: 0, width: 100, height: 100 }
 const sides = ['left', 'top', 'width', 'height'] as const
 const glides = new WeakMap<HTMLElement, Animation>()
 /** A gliding tile draws its own edge: its moving side has no seam, and would cut the tile under it mid-word. */
-const lifted = { zIndex: 1, boxShadow: '0 0 0 1px var(--seam)' }
+const lifted = { zIndex: 1, boxShadow: '0 0 0 1px var(--control-border)' }
 
 /**
  * Plays a tile from the rectangle it had, in percent of the area, to the one
@@ -71,6 +71,11 @@ function glideTile(tile: HTMLElement, from: Rect, to: Rect): Animation {
   const end = Object.fromEntries(sides.map((side) => [side, `${to[side]}%`]))
   const animation = play(tile, [{ ...start, ...lifted }, { ...end, ...lifted }], { duration: '--duration-glide', easing: '--ease-glide' })
   glides.set(tile, animation)
+  // Held at its start for the frame that paints what the change mounted: the clock would count that work as time passed, and the glide would begin part of the way in.
+  animation.pause()
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (glides.get(tile) === animation) animation.play()
+  }))
   const settle = () => {
     if (glides.get(tile) !== animation) return
     glides.delete(tile)
@@ -185,19 +190,29 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
   )
   const last = useRef({ shape, cramped, drawn })
   const ghosts = useRef<HTMLElement[]>([])
+  // A tile that grows in is its strip over bare canvas until it lands: mounting its session meanwhile would cost the glide its frames.
+  const [growing, setGrowing] = useState<string[]>([])
   useLayoutEffect(() => {
     const before = last.current
     last.current = { shape, cramped, drawn }
     const closed = ghosts.current.splice(0)
     const glided: Animation[] = []
+    const grew: string[] = []
     if (before.shape !== shape && before.cramped === cramped && !prefersReducedMotion()) {
       for (const tile of document.querySelectorAll<HTMLElement>('[data-tile]')) {
         const from = before.drawn[tile.dataset.tile!]
         const to = drawn[tile.dataset.tile!]
         const grown = from ?? grownFrom(before.drawn, to)
         if (!grown) playEntrance(tile.lastElementChild!, { motion: { duration: '--duration-200', easing: '--ease-enter' } })
-        else if (sides.some((side) => grown[side] !== to[side])) glided.push(glideTile(tile, grown, to))
+        else if (sides.some((side) => grown[side] !== to[side])) {
+          glided.push(glideTile(tile, grown, to))
+          if (!from) grew.push(tile.dataset.tile!)
+        }
       }
+    }
+    if (grew.length && time('--duration-glide')) {
+      setGrowing(grew)
+      void Promise.allSettled(glided.map((glide) => glide.finished)).then(() => setGrowing([]))
     }
     if (closed.length) void Promise.allSettled(glided.map((glide) => glide.finished)).then(() => closed.forEach((ghost) => ghost.remove()))
   })
@@ -410,7 +425,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
                 return {
                   tab,
                   view,
-                  slot: slots[tile.id] ?? null,
+                  slot: growing.includes(tile.id) ? null : slots[tile.id] ?? null,
                   tile: {
                     focused: tile.id === layout.focused,
                     controls: tile.id === controlsTile(on, runId)?.id,

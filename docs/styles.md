@@ -741,14 +741,18 @@ literal time or curve.
   the gliding tile clips it, so nothing rewraps on the way, and a strip that
   grows does the same, so it picks its controls once; the body's height follows
   the tile, unless a terminal or Browser is on show, which takes the final
-  height too and is sized once, not on every frame. A new tile grows from the
-  edge it opens on, sharing one moving seam with the tile it split from. A
+  height too and is sized once, not on every frame. A glide starts its clock two
+  frames after the change, past the frame that paints what the change
+  mounted. A new tile grows from the
+  edge it opens on, sharing one moving seam with the tile it split from, and
+  its session mounts when it has landed: until then it is its strip over
+  bare canvas. A
   parked or closed tile stays painted under the tile that takes its room
-  until the glide ends, and a gliding tile is ringed by a 1px `--seam` line,
+  until the glide ends, and a gliding tile is ringed by a 1px `--control-border` line,
   so its moving edge reads as a pane edge over that tile. A seam drag and a window
   resize never glide, and the focus outline, the tab bar and the sidebar's
-  on-screen bar move at once. The drop preview eases its position and size
-  between zones on the hover duration; the drag chip and the dashed slot a
+  on-screen bar move at once. A whole-tile drop preview and the tab line ease their position and size
+  on the hover duration, and a split's preview moves at once with its scrims; the drag chip and the dashed slot a
   lifted view or tab leaves appear at once. The preview is `--color-accent-soft` over the tile, and a split's lays 80% `--canvas` under it so what lands reads over what leaves. The parked-tiles pill fades in.
 - The Map repacks with motion: units and cards glide from their old layout
   coordinates on `--duration-glide` / `--ease-glide` (never DOM-measured,

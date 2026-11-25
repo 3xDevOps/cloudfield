@@ -747,8 +747,8 @@ describe('motion', () => {
     const body = stays.lastElementChild as HTMLElement
     fireEvent.click(screen.getByRole('button', { name: 'Split right' }))
     expect(animate.mock.contexts).toEqual([stays, tiles()[1]])
-    expect(animate.mock.calls[0][0]).toEqual([{ left: '0%', top: '0%', width: '100%', height: '100%', zIndex: 1, boxShadow: '0 0 0 1px var(--seam)' }, { left: '0%', top: '0%', width: '50%', height: '100%', zIndex: 1, boxShadow: '0 0 0 1px var(--seam)' }])
-    expect(animate.mock.calls[1][0]).toEqual([{ left: '100%', top: '0%', width: '0%', height: '100%', zIndex: 1, boxShadow: '0 0 0 1px var(--seam)' }, { left: '50%', top: '0%', width: '50%', height: '100%', zIndex: 1, boxShadow: '0 0 0 1px var(--seam)' }])
+    expect(animate.mock.calls[0][0]).toEqual([{ left: '0%', top: '0%', width: '100%', height: '100%', zIndex: 1, boxShadow: '0 0 0 1px var(--control-border)' }, { left: '0%', top: '0%', width: '50%', height: '100%', zIndex: 1, boxShadow: '0 0 0 1px var(--control-border)' }])
+    expect(animate.mock.calls[1][0]).toEqual([{ left: '100%', top: '0%', width: '0%', height: '100%', zIndex: 1, boxShadow: '0 0 0 1px var(--control-border)' }, { left: '50%', top: '0%', width: '50%', height: '100%', zIndex: 1, boxShadow: '0 0 0 1px var(--control-border)' }])
     expect([body.style.width, body.style.height, stays.style.overflow]).toEqual(['1600px', '', 'clip'])
     await settled()
     expect([body.style.width, body.style.height, stays.style.overflow]).toEqual(['', '', ''])
@@ -764,7 +764,7 @@ describe('motion', () => {
     const animate = vi.spyOn(tiles()[0], 'animate')
     fireEvent.click(screen.getByRole('button', { name: 'Split right' }))
     fireEvent.click(tile(2).getByRole('button', { name: 'Close tile' }))
-    expect((animate.mock.lastCall![0] as Keyframe[])[1]).toEqual({ left: '0%', top: '0%', width: '100%', height: '100%', zIndex: 1, boxShadow: '0 0 0 1px var(--seam)' })
+    expect((animate.mock.lastCall![0] as Keyframe[])[1]).toEqual({ left: '0%', top: '0%', width: '100%', height: '100%', zIndex: 1, boxShadow: '0 0 0 1px var(--control-border)' })
   })
 
   it('moves nothing under reduced motion', () => {
