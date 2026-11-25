@@ -228,6 +228,7 @@ describe('run frame', () => {
     window.getSelection()!.selectAllChildren(text)
     fireEvent.mouseDown(text, { button: 2 })
     expect(fireEvent.contextMenu(text)).toBe(true)
+    expect(fireEvent.contextMenu(text)).toBe(true)
     expect(screen.queryByRole('menu')).toBeNull()
     window.getSelection()!.removeAllRanges()
   })

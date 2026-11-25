@@ -50,6 +50,11 @@ const panel = 'absolute inset-0 outline-none'
 // Where the browser's own menu is worth more than the session's: copy a link, paste, copy code.
 const nativeMenuTargets = 'a, input, textarea, select, [contenteditable], pre, code, img, video, .xterm'
 
+function selectionCovers(node: Node): boolean {
+  const selection = window.getSelection()
+  return Boolean(selection && !selection.isCollapsed && selection.getRangeAt(0).intersectsNode(node))
+}
+
 /** The inline inspectors' widths: `w-80`, `w-[28rem]` and `w-80`. */
 const detailsWidth = 320
 const agentWidth = 448
@@ -91,8 +96,10 @@ function RunFrame({ run, params }: { run: RunRecord; params: RouteProps['params'
   const returnTo = useRef<HTMLElement | null>(null)
   const [noteFocus, setNoteFocus] = useState(false)
   const [menuAt, setMenuAt] = useState<MenuPoint | null>(null)
-  // Chromium on macOS selects the word under a right-click before contextmenu fires.
-  const selectedBeforeMenu = useRef(false)
+  // Chromium on macOS selects the word under a right-click before contextmenu
+  // fires, so a pointer opener reads the selection at mousedown; null when the
+  // keyboard opened it.
+  const selectedBeforeMenu = useRef<boolean | null>(null)
   useEffect(() => {
     if (mobile) setMenuAt(null)
   }, [mobile])
@@ -319,16 +326,15 @@ function RunFrame({ run, params }: { run: RunRecord; params: RouteProps['params'
                 inert={view !== 'session'}
                 className={cn(panel, view !== 'session' && 'invisible')}
                 onMouseDown={(event) => {
-                  if (event.button !== 2) return
-                  const selection = window.getSelection()
-                  selectedBeforeMenu.current = Boolean(selection && !selection.isCollapsed && selection.getRangeAt(0).intersectsNode(event.target as Node))
+                  if (event.button === 2 || (event.button === 0 && event.ctrlKey)) selectedBeforeMenu.current = selectionCovers(event.target as Node)
                 }}
                 onContextMenu={mobile ? undefined : (event) => {
                   const target = event.target as HTMLElement
-                  const selected = selectedBeforeMenu.current
-                  selectedBeforeMenu.current = false
+                  const selected = selectedBeforeMenu.current ?? selectionCovers(target)
+                  selectedBeforeMenu.current = null
+                  const touch = (event.nativeEvent as PointerEvent).pointerType === 'touch'
                   // A portaled overlay opened from Chat still bubbles here through React.
-                  if (event.shiftKey || selected || !event.currentTarget.contains(target) || target.closest(nativeMenuTargets)) return
+                  if (event.defaultPrevented || event.shiftKey || touch || selected || !event.currentTarget.contains(target) || target.closest(nativeMenuTargets)) return
                   event.preventDefault()
                   const focused = document.activeElement
                   setMenuAt({ x: event.clientX, y: event.clientY, returnTo: focused instanceof HTMLElement && focused !== document.body ? focused : null })
