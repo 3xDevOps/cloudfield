@@ -31,15 +31,19 @@ var followUpGrace = 2 * time.Second
 // have not arrived yet.
 const endedTaskMemory = 32
 
-// claudeTaskFrames are the raw Claude Code SDK messages Claude's adapter
+// claudeFrames are the raw Claude Code SDK messages Claude's adapter
 // forwards as _claude/sdkMessage when session meta lists them in
 // claudeCode.emitRawSDKMessages. task_progress changes no state; it arrives
-// on every tool use of a task, which keeps a long task's run active.
-var claudeTaskFrames = []map[string]string{
+// on every tool use of a task, which keeps a long task's run active, and
+// carries a workflow's progress; task_started names the workflow.
+// assistant messages say which thinking blocks are narration (claudeFrame).
+var claudeFrames = []map[string]string{
 	{"type": "system", "subtype": "task_notification"},
 	{"type": "system", "subtype": "task_updated"},
 	{"type": "system", "subtype": "background_tasks_changed"},
 	{"type": "system", "subtype": "task_progress"},
+	{"type": "system", "subtype": "task_started"},
+	{"type": "assistant"},
 }
 
 // Task is one live Claude Code background task.
@@ -75,7 +79,10 @@ type sdkMessage struct {
 	Patch   struct {
 		Status string `json:"status"`
 	} `json:"patch"`
-	Tasks []struct {
+	WorkflowName     string          `json:"workflow_name"`
+	WorkflowProgress json.RawMessage `json:"workflow_progress"`
+	WorkflowOmitted  int             `json:"workflow_progress_omitted"`
+	Tasks            []struct {
 		TaskID      string `json:"task_id"`
 		TaskType    string `json:"task_type"`
 		Description string `json:"description"`
@@ -123,14 +130,22 @@ func (h updateHead) progress() bool {
 
 func (s *Session) sdkMessage(raw json.RawMessage) {
 	var m sdkMessage
-	if json.Unmarshal(raw, &m) != nil || m.Type != "system" {
+	if json.Unmarshal(raw, &m) != nil {
 		return
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if m.Type == "assistant" {
+		s.proj.claudeFrame(raw)
+		return
+	}
+	if m.Type != "system" {
+		return
+	}
 	if strings.HasPrefix(m.Subtype, "task_") {
 		// A background task reports its tool use, not the work between.
 		s.progressAt = time.Now()
+		s.workflowFrameLocked(m)
 	}
 	held := s.heldLocked()
 	switch m.Subtype {
@@ -160,6 +175,9 @@ func (s *Session) sdkMessage(raw json.RawMessage) {
 			t.ambient = lt.Ambient
 		}
 		maps.DeleteFunc(s.tasks, func(id string, _ *liveTask) bool { return !live[id] })
+	case "task_progress", "task_started":
+		s.flushWorkflowLocked(m.TaskID)
+		return
 	default:
 		return
 	}
@@ -183,11 +201,17 @@ func (s *Session) trackTaskCallLocked(it *Item) {
 	if task == nil || task.Status != "running" {
 		return
 	}
+	if with := s.attachWorkflowLocked(task); with != task {
+		task = with
+		it.ToolCall.Task = task
+		s.proj.setTask(it.ToolCall.ID, task)
+	}
 	if status, ok := s.endedTasks[task.ID]; ok {
 		ended := *task
 		ended.Status = status
 		it.ToolCall.Task = &ended
 		s.proj.setTask(it.ToolCall.ID, &ended)
+		delete(s.workflows, task.ID)
 		return
 	}
 	if t := s.tasks[task.ID]; t != nil && task.Type == "" {
@@ -208,6 +232,7 @@ func (s *Session) taskEndedLocked(id, status string) {
 		if _, seen := s.endedTasks[id]; !seen {
 			if len(s.endedOrder) == endedTaskMemory {
 				delete(s.endedTasks, s.endedOrder[0])
+				delete(s.workflows, s.endedOrder[0])
 				s.endedOrder = s.endedOrder[1:]
 			}
 			s.endedTasks[id] = status
@@ -216,7 +241,8 @@ func (s *Session) taskEndedLocked(id, status string) {
 		return
 	}
 	delete(s.taskCalls, id)
-	task := *call.Task
+	task := *s.attachWorkflowLocked(call.Task)
+	delete(s.workflows, id)
 	task.Status = status
 	if t := s.tasks[id]; t != nil && task.Type == "" {
 		task.Type = t.typ
@@ -316,6 +342,19 @@ func (s *Session) interruptTasksLocked(last Item) {
 	s.emitLocked(marker)
 }
 
+// adoptTasksLocked takes the live task set an adopted session last
+// recorded: the tasks run on under the same agent.
+func (s *Session) adoptTasksLocked(last Item) {
+	for _, t := range last.Tasks {
+		held, _ := agentstatus.HeldTask(t.Type)
+		s.tasks[t.ID] = &liveTask{typ: t.Type, description: t.Description, dismissed: held && !t.Holds}
+	}
+	s.loggedTasks, s.loggedOwed = last.Tasks, last.FollowUp
+	if last.FollowUp {
+		s.oweLocked(followUpGrace)
+	}
+}
+
 // backgroundLocked reports whether the agent works with no prompt open: an
 // autonomous turn runs, tasks it reports back on are live, or one ended and
 // the turn reporting back on it is still owed.
@@ -396,7 +435,7 @@ func (s *Session) autonomousOverLocked() bool {
 	}
 	if limit == autonomousStale {
 		s.emitLocked(Item{Kind: KindNotice, Notice: &Notice{Severity: "warning", Title: "Background turn ended",
-			Description: fmt.Sprintf("The agent sent nothing for %s while a tool call stayed open, so Aether stopped waiting for the turn's end.", limit)}})
+			Description: fmt.Sprintf("The agent sent nothing for %s while a tool call stayed open, so Cloudfield stopped waiting for the turn's end.", limit)}})
 	}
 	return true
 }
@@ -424,7 +463,7 @@ func (s *Session) endAutonomousLocked(stop string) {
 	if len(s.queue) > 0 && !s.closingLocked() {
 		next := s.queue[0]
 		s.queue = s.queue[1:]
-		s.startTurnLocked(next.blocks, next.delivered)
+		s.startTurnLocked(next.blocks, next.delivered, next.tag)
 		return
 	}
 	s.followUpLocked()
@@ -434,7 +473,7 @@ func (s *Session) stateLocked(st TurnState) {
 	s.reported = st
 	s.reported.Failed = nil
 	if s.cfg.OnState != nil {
-		st.TurnStartedAt = s.turnAt.UTC()
+		st.TurnStartedAt, st.Turn = s.turnAt.UTC(), s.turn
 		s.callback(func() { s.cfg.OnState(st) })
 	}
 }

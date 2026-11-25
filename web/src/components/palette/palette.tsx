@@ -19,7 +19,7 @@ import {
 import { runLabel, stateLabel, stateTone } from '@/lib/status'
 import { surfaces } from '@/lib/surfaces'
 import { useStore } from '@/store'
-import { useCapability, useListedRuns, useSelf } from '@/store/hooks'
+import { useCapability, useListedRuns, useSelf, useStale } from '@/store/hooks'
 import type { RunRecord } from '@/store/runs'
 
 // Browsing shows the most urgent runs; a search reaches every run.
@@ -39,6 +39,9 @@ const destinationCommandIDs: Record<string, true> = {
 
 const navigationCommandIDs = new Set(['board', 'overview', 'connectors'])
 
+// The label leads so a canonical match outscores an alias.
+const searchValue = (command: Command) => (command.value ? `${command.label} ${command.value}` : command.label)
+
 /** Rendered inside CommandDialog, which supplies the cmdk root. */
 export function PaletteBody({
   onDone,
@@ -51,7 +54,8 @@ export function PaletteBody({
   onTemplates: () => void
   onConfirm: (run: RunRecord, command: Command & { confirm: NonNullable<Command['confirm']> }) => void
 }) {
-  const runs = useListedRuns(useStore((s) => s.activeWorkspace))
+  const activeWorkspace = useStore((s) => s.activeWorkspace)
+  const runs = useListedRuns(activeWorkspace)
   const runMap = useStore((s) => s.runs)
   const workspaces = useStore((s) => s.workspaces)
   const members = useStore((s) => s.members)
@@ -59,8 +63,10 @@ export function PaletteBody({
   const navigate = useStore((s) => s.navigate)
   const pausedRuns = useStore((s) => s.pausedRuns)
   const predicting = useStore((s) => s.predicting)
+  const stale = useStale()
   const cap = useCapability()
-  const self = useSelf()
+  const self = useSelf(activeWorkspace)
+  const focusedSelf = useSelf(route.params.runId ? runMap[route.params.runId]?.workspace_id : undefined)
   const [search, setSearch] = useState('')
   const selected = useRef<Command | null>(null)
   const complete = () => {
@@ -101,7 +107,7 @@ export function PaletteBody({
   const item = (command: Command) => (
     <CommandItem
       key={command.id}
-      value={command.value ?? command.label}
+      value={searchValue(command)}
       disabled={command.disabled}
       onSelect={() => {
         if (command.confirm && focused) {
@@ -124,21 +130,22 @@ export function PaletteBody({
     run: focused,
     paused: pausedRuns[focused.id],
     predicting: Boolean(predicting[focused.id]),
+    stale,
     cap,
     members,
-    self,
+    self: focusedSelf,
     steerOthers: workspaces[focused.workspace_id]?.steer_others,
   }
   const focusedCommands = focusedContext
     ? [...runCommands(focusedContext), ...handoffCommands(focusedContext)]
     : []
   const browseOrder = [
-    ...navigationCommands.map((command) => command.value ?? command.label),
+    ...navigationCommands.map(searchValue),
     ...goTo.map(({ value }) => value),
     ...runItems.map(({ value }) => value),
     ...workspaceItems.map(({ value }) => value),
-    ...focusedCommands.map((command) => command.value ?? command.label),
-    ...boardActions.map((command) => command.value ?? command.label),
+    ...focusedCommands.map(searchValue),
+    ...boardActions.map(searchValue),
   ]
 
   return (

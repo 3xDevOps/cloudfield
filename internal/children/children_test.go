@@ -11,6 +11,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,7 +26,10 @@ import (
 )
 
 type fakeRuns struct {
-	db       *store.DB
+	db *store.DB
+	// inflight counts launches still running: repairStarted can mark a
+	// child started once its row exists, before its launch has finished.
+	inflight atomic.Int32
 	mu       sync.Mutex
 	launched []domain.LaunchOptions
 	accounts []domain.MemberID
@@ -35,6 +39,8 @@ type fakeRuns struct {
 }
 
 func (f *fakeRuns) LaunchWithOptions(ctx context.Context, ws domain.WorkspaceID, member, account domain.MemberID, task, harness string, mode domain.LaunchMode, opts domain.LaunchOptions) (*domain.Run, error) {
+	f.inflight.Add(1)
+	defer f.inflight.Add(-1)
 	r := &domain.Run{ID: opts.ReservedRunID, WorkspaceID: ws, MemberID: member, AccountMemberID: account, Task: task, Harness: harness,
 		Mode: mode, Model: opts.Model, Status: domain.RunRunning, BaseCommit: opts.FromCommit}
 	if err := f.db.CreateRunWithID(ctx, r); err != nil {
@@ -109,10 +115,14 @@ func (g *fakeGit) FetchRunBranch(context.Context, domain.WorkspaceID, string, do
 	return g.head, nil
 }
 
-// fakeAgents signs every member in to every agent except those in missing.
-type fakeAgents struct{ missing map[domain.MemberID]bool }
+// fakeAgents signs every member in to every agent except those in missing,
+// and cannot list the agents on an account in broken.
+type fakeAgents struct{ missing, broken map[domain.MemberID]bool }
 
 func (a fakeAgents) ListAgents(_ context.Context, _, account domain.MemberID) ([]protocol.AgentInfo, error) {
+	if a.broken[account] {
+		return nil, errors.New("decode harness definition: boom")
+	}
 	found := !a.missing[account]
 	var out []protocol.AgentInfo
 	for _, name := range []string{"claude", "codex"} {
@@ -189,7 +199,7 @@ func newHarness(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	h := &harness{t: t, ctx: ctx, db: db, runs: &fakeRuns{db: db, paused: map[domain.RunID]bool{}}, mail: &fakeMail{keys: map[string]bool{}}, agents: &fakeAgents{missing: map[domain.MemberID]bool{}}}
+	h := &harness{t: t, ctx: ctx, db: db, runs: &fakeRuns{db: db, paused: map[domain.RunID]bool{}}, mail: &fakeMail{keys: map[string]bool{}}, agents: &fakeAgents{missing: map[domain.MemberID]bool{}, broken: map[domain.MemberID]bool{}}}
 	h.now = time.Now()
 	h.ws = &domain.Workspace{Name: "app"}
 	if err = db.CreateWorkspace(ctx, h.ws); err != nil {
@@ -200,8 +210,8 @@ func newHarness(t *testing.T) *harness {
 	h.svc, err = New(Config{
 		Store: db, Runs: h.runs, Git: &fakeGit{head: strings.Repeat("a", 40)},
 		Agents: func() Agents { return h.agents },
-		Authorize: func(ctx context.Context, st store.Store, actor domain.MemberID, account string) (domain.MemberID, error) {
-			return fallback.ResolveLaunchAccount(ctx, st, actor, account)
+		Authorize: func(ctx context.Context, st store.Store, actor domain.MemberID, account string, workspaces []domain.WorkspaceID) (domain.MemberID, error) {
+			return fallback.ResolveLaunchAccountIn(ctx, st, actor, account, workspaces)
 		},
 		AuthorizationMu: &mu,
 		Now:             func() time.Time { return h.now },
@@ -287,7 +297,7 @@ func (h *harness) settle() {
 		if err != nil {
 			h.t.Fatal(err)
 		}
-		if len(launching) == 0 {
+		if len(launching) == 0 && h.runs.inflight.Load() == 0 {
 			h.svc.reconcile(h.ctx)
 			return
 		}
@@ -426,7 +436,8 @@ func TestParentEndCascadesAndChildEndNotifiesOnce(t *testing.T) {
 	if err := h.svc.ValidateReport(h.ctx, parent.ID, store.CoordOutcomeSuccess); code(err) != protocol.CodeInvalidState {
 		t.Fatalf("success with unfinished subsessions = %v, want refused", err)
 	}
-	if err := h.db.DetachChild(h.ctx, domain.RunID(kept.RunID)); err != nil {
+	// Handing a subsession to another member detaches it from its parent.
+	if err := h.db.TransferRun(h.ctx, domain.RunID(kept.RunID), h.bob.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := h.svc.HandleAgent(h.ctx, parent.ID, protocol.MethodChildCancel, json.RawMessage(`{"run_id":"`+stopped.RunID+`"}`)); err != nil {
@@ -497,15 +508,140 @@ func TestTreeUsageCountsEachRunOnceOnThePayingAccount(t *testing.T) {
 	}
 }
 
+func TestSubsessionsRunOnTheParentsOrASharedAccount(t *testing.T) {
+	h := newHarness(t)
+	carol := h.member("Carol", domain.RoleCollaborator)
+	if _, err := h.db.ShareAccount(h.ctx, h.bob.ID, h.ada.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.db.GrantWorkspace(h.ctx, h.ws.ID, h.bob.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	h.agents.missing[h.ada.ID] = true
+	parent := &domain.Run{WorkspaceID: h.ws.ID, MemberID: h.ada.ID, AccountMemberID: h.bob.ID, Task: "parent", Harness: "claude", Mode: domain.LaunchACP, Status: domain.RunRunning}
+	if err := h.db.CreateRun(h.ctx, parent); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, _ := json.Marshal(protocol.ChildOptionsParams{})
+	out, err := h.svc.HandleAgent(h.ctx, parent.ID, protocol.MethodChildOptions, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	listed := map[string]string{}
+	for _, c := range out.(protocol.ChildOptionsResult).Choices {
+		listed[c.AccountMemberID+"/"+c.Harness] = c.Status
+	}
+	if len(listed) != 4 || listed[string(h.bob.ID)+"/claude"] != choiceReady || listed[string(h.ada.ID)+"/claude"] != choiceNotSignedIn {
+		t.Fatalf("options = %v, want claude and codex on Ada's and Bob's accounts only, Ada's not signed in", listed)
+	}
+
+	same := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "claude", Task: "same agent"})
+	shared := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex", AccountMemberID: string(h.bob.ID), Task: "named"})
+	if same.AccountMemberID != string(h.bob.ID) || shared.AccountMemberID != string(h.bob.ID) {
+		t.Fatalf("accounts = %s, %s, want Bob's parent account and the named shared account", same.AccountMemberID, shared.AccountMemberID)
+	}
+	if _, err := h.start(parent.ID, protocol.ChildStartParams{Harness: "codex", Task: "other agent"}); code(err) != protocol.CodeDenied || !strings.Contains(err.Error(), "Ada is not signed in to codex") {
+		t.Fatalf("another agent with no account = %v, want the owner's own account refused as not signed in", err)
+	}
+	if _, err := h.start(parent.ID, protocol.ChildStartParams{Harness: "codex", AccountMemberID: string(carol.ID), Task: "unshared"}); code(err) != protocol.CodeDenied || !strings.Contains(err.Error(), "has not shared their account") {
+		t.Fatalf("an account not shared with the owner = %v, want denied", err)
+	}
+	h.settle()
+	if len(h.runs.accounts) != 2 || h.runs.accounts[0] != h.bob.ID || h.runs.accounts[1] != h.bob.ID {
+		t.Fatalf("launched on %v, want Bob's account twice", h.runs.accounts)
+	}
+
+	handed := &domain.Run{WorkspaceID: h.ws.ID, MemberID: h.ada.ID, HomeMemberID: h.bob.ID, AccountMemberID: h.bob.ID, Task: "handed", Harness: "claude", Mode: domain.LaunchACP, Status: domain.RunRunning}
+	if err := h.db.CreateRun(h.ctx, handed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.start(handed.ID, protocol.ChildStartParams{Harness: "claude", Task: "after a handoff"}); code(err) != protocol.CodeDenied || !strings.Contains(err.Error(), "handed to you") {
+		t.Fatalf("subsession from a handed session = %v, want it refused", err)
+	}
+}
+
+func TestOwnersTurnSubsessionAgentsOff(t *testing.T) {
+	h := newHarness(t)
+	carol := h.member("Carol", domain.RoleCollaborator)
+	if _, err := h.db.ShareAccount(h.ctx, h.bob.ID, h.ada.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.db.GrantWorkspace(h.ctx, h.ws.ID, h.bob.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	turn := func(harness string, account domain.MemberID, on bool) (protocol.ChildSettings, error) {
+		return h.svc.SetSettings(h.ctx, h.ada.ID, protocol.ChildSettingsParams{Choice: &protocol.ChildChoiceSetting{Harness: harness, AccountMemberID: string(account), On: on}})
+	}
+	if _, err := turn("claude", h.ada.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := turn("codex", "", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(settings.Off) != 2 || len(settings.Choices) != 4 || !settings.Enabled {
+		t.Fatalf("settings = %+v, want claude on Ada's account and codex everywhere off, with claude and codex on Ada's and Bob's accounts listed", settings)
+	}
+	if _, unshared := turn("claude", carol.ID, false); !errors.Is(unshared, permissions.ErrDenied) {
+		t.Fatalf("turning off an account not shared with Ada = %v, want denied", unshared)
+	}
+	if _, bad := turn("bad name!", "", false); code(bad) != protocol.CodeInvalidParams {
+		t.Fatalf("turning off an invalid agent name = %v, want invalid params", bad)
+	}
+
+	parent := h.run(h.ada.ID, domain.LaunchACP, "parent")
+	raw, _ := json.Marshal(protocol.ChildOptionsParams{})
+	out, err := h.svc.HandleAgent(h.ctx, parent.ID, protocol.MethodChildOptions, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	states := map[string]string{}
+	for _, c := range out.(protocol.ChildOptionsResult).Choices {
+		states[c.AccountMemberID+"/"+c.Harness] = c.Status
+	}
+	if states[string(h.ada.ID)+"/claude"] != choiceOff || states[string(h.bob.ID)+"/codex"] != choiceOff || states[string(h.bob.ID)+"/claude"] != choiceReady {
+		t.Fatalf("options = %v, want Ada's claude and every codex off, Bob's claude ready", states)
+	}
+	if _, own := h.start(parent.ID, protocol.ChildStartParams{Harness: "claude", Task: "own"}); code(own) != protocol.CodeDenied ||
+		!strings.Contains(own.Error(), "off for subsessions") || !strings.Contains(own.Error(), "aether subsessions on --agent claude --account "+string(h.ada.ID)) {
+		t.Fatalf("claude on Ada's own account = %v, want denied as off, naming the command that turns that account back on", own)
+	}
+	if _, codex := h.start(parent.ID, protocol.ChildStartParams{Harness: "codex", AccountMemberID: string(h.bob.ID), Task: "codex"}); code(codex) != protocol.CodeDenied ||
+		!strings.HasSuffix(strings.SplitN(codex.Error(), "(", 2)[1], "aether subsessions on --agent codex); aether-internal subsession options lists the agents and accounts that are on") {
+		t.Fatalf("codex on Bob's account = %v, want denied: codex is off on every account, turned back on without --account", codex)
+	}
+	onBob := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "claude", AccountMemberID: string(h.bob.ID), Task: "bob"})
+
+	if _, err = turn("claude", h.bob.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	h.settle()
+	if queued, getErr := h.db.GetChild(h.ctx, domain.RunID(onBob.RunID)); getErr != nil || queued.State != domain.ChildRefused || !strings.Contains(queued.Error, "turned off for subsessions after this one was queued") {
+		t.Fatalf("queued subsession after its account was turned off = %+v, %v; want refused", queued, getErr)
+	}
+	if settings, err = turn("codex", "", true); err != nil || len(settings.Off) != 2 {
+		t.Fatalf("turning codex back on = %+v, %v; want only the two claude entries left", settings, err)
+	}
+
+	h.agents.broken[h.bob.ID] = true
+	if settings, err = h.svc.Settings(h.ctx, h.ada.ID); err != nil || !settings.Enabled || len(settings.Choices) != 2 ||
+		!strings.Contains(settings.ChoicesError, "list the agents on account "+string(h.bob.ID)+": decode harness definition: boom") {
+		t.Fatalf("settings while Bob's agents cannot be listed = %+v, %v; want Ada's choices and the error, not a failed read", settings, err)
+	}
+}
+
 func TestAdminOffStopsChildrenAndHandoffDetaches(t *testing.T) {
 	h := newHarness(t)
 	h.enable(h.bob.ID, protocol.ChildSettingsParams{Enabled: on()})
 	parent := h.run(h.bob.ID, domain.LaunchACP, "parent")
-	if _, err := h.svc.Allow(h.ctx, h.ada, parent.ID, domain.ChildrenOff); err != nil {
+	owner := *h.ada
+	owner.Access.Owned = map[domain.WorkspaceID]bool{h.ws.ID: true}
+	if _, err := h.svc.Allow(h.ctx, &owner, parent.ID, domain.ChildrenOff); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := h.start(parent.ID, protocol.ChildStartParams{Harness: "codex"}); code(err) != protocol.CodeDenied {
-		t.Fatalf("start after an admin turned subsessions off = %v, want denied", err)
+	if _, err := h.start(parent.ID, protocol.ChildStartParams{Harness: "codex"}); code(err) != protocol.CodeDenied || !strings.Contains(err.Error(), "off for this session;") {
+		t.Fatalf("start after an admin turned subsessions off = %v, want denied naming the session's setting", err)
 	}
 	if _, err := h.svc.Allow(h.ctx, h.bob, parent.ID, ""); err != nil {
 		t.Fatal(err)
@@ -588,26 +724,43 @@ func TestRefusalNoticeComesFromTheParent(t *testing.T) {
 	}
 }
 
-func TestFinishedChildrenOutliveTheirParent(t *testing.T) {
-	h := newHarness(t)
-	h.enable(h.ada.ID, protocol.ChildSettingsParams{Enabled: on()})
-	parent := h.run(h.ada.ID, domain.LaunchACP, "parent")
-	done := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex", Task: "done"})
-	busy := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex", Task: "busy"})
-	h.settle()
-	if _, err := h.db.UpdateRunStatus(h.ctx, domain.RunID(done.RunID), domain.RunNeedsAttention, "agent reported success", domain.ActivityFinished, nil, nil); err != nil {
-		t.Fatal(err)
-	}
-	now := time.Now()
-	if _, err := h.db.UpdateRunStatus(h.ctx, parent.ID, domain.RunFailed, "killed", "", nil, &now); err != nil {
-		t.Fatal(err)
-	}
-	h.settle()
-	kept, _ := h.db.GetRun(h.ctx, domain.RunID(done.RunID))
-	stopped, _ := h.db.GetRun(h.ctx, domain.RunID(busy.RunID))
-	if kept.Status.Terminal() || !kept.Detached || !stopped.Status.Terminal() {
-		t.Fatalf("finished subsession %s detached=%v, busy subsession %s; want the finished one kept for review and the busy one stopped",
-			kept.Status, kept.Detached, stopped.Status)
+// A subsession that already reported stays with a completed parent its
+// owner has not accepted yet, to close with it, and its outcome stays for
+// the parent only. Under a parent that ended for good it is stopped, since
+// nobody can close that parent.
+func TestFinishedChildrenStayWithAParentThatCanStillClose(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status domain.RunStatus
+		reason string
+		kept   bool
+	}{
+		{"completed, not accepted", domain.RunCompleted, "agent reported success", true},
+		{"failed", domain.RunFailed, "agent failed", false},
+		{"killed", domain.RunAbandoned, "killed", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.enable(h.ada.ID, protocol.ChildSettingsParams{Enabled: on()})
+			parent := h.run(h.ada.ID, domain.LaunchACP, "parent")
+			done := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex", Task: "done"})
+			busy := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex", Task: "busy"})
+			h.settle()
+			if _, err := h.db.UpdateRunStatus(h.ctx, domain.RunID(done.RunID), domain.RunNeedsAttention, "agent reported success", domain.ActivityFinished, nil, nil); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now()
+			if _, err := h.db.UpdateRunStatus(h.ctx, parent.ID, tc.status, tc.reason, "", nil, &now); err != nil {
+				t.Fatal(err)
+			}
+			h.settle()
+			kept, _ := h.db.GetRun(h.ctx, domain.RunID(done.RunID))
+			stopped, _ := h.db.GetRun(h.ctx, domain.RunID(busy.RunID))
+			if kept.Status.Terminal() == tc.kept || kept.Detached || !kept.OutcomeHeld() || !stopped.Status.Terminal() {
+				t.Fatalf("finished subsession %s detached=%v, busy subsession %s; want the finished one kept=%v under its parent and the busy one stopped",
+					kept.Status, kept.Detached, stopped.Status, tc.kept)
+			}
+		})
 	}
 }
 
@@ -775,5 +928,162 @@ func TestParentIsToldOncePerIdleSpell(t *testing.T) {
 	h.settle()
 	if idle() != 2 || len(h.mail.errs) != 0 {
 		t.Fatalf("notices after a second spell = %+v, errors %v; want 2", h.mail.sent, h.mail.errs)
+	}
+}
+
+func TestParentIsToldWhenASubsessionStops(t *testing.T) {
+	h := newHarness(t)
+	if err := h.db.SetWorkspaceChildLimits(h.ctx, h.ws.ID, domain.ChildLimits{MaxLive: 16}); err != nil {
+		t.Fatal(err)
+	}
+	parent := h.run(h.ada.ID, domain.LaunchACP, "parent")
+	crashed := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex", Purpose: "review", Task: "c"})
+	refused := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex", Purpose: "fix", Task: "r"})
+	reported := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex", Task: "f"})
+	asked := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex", Task: "q"})
+	paused := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex", Task: "p"})
+	interrupted := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex", Purpose: "port", Task: "i"})
+	limited := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "claude", Mode: "standard", Purpose: "docs", Task: "l"})
+	broken := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex", Purpose: "ci", Task: "b"})
+	prompted := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex", Task: "a permission prompt"})
+	delivered := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex", Task: "d"})
+	h.settle()
+	if err := h.db.AppendCoordReport(h.ctx, &store.CoordReport{WorkspaceID: h.ws.ID, RunID: domain.RunID(delivered.RunID), Outcome: store.CoordOutcomeSuccess, Summary: "done", IdempotencyKey: "done"}); err != nil {
+		t.Fatal(err)
+	}
+	h.mail.db = h.db
+	park := func(id, reason string, activity domain.RunActivity) {
+		t.Helper()
+		if _, err := h.db.UpdateRunStatus(h.ctx, domain.RunID(id), domain.RunNeedsAttention, reason, activity, nil, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	notices := func(id string) (bodies []string) {
+		for _, m := range h.mail.sent {
+			if m.from == domain.RunID(id) && strings.Contains(m.body, "stopped") {
+				bodies = append(bodies, m.body)
+			}
+		}
+		return bodies
+	}
+	exited := "enhanced session ended: the agent's ACP server exited with code 137"
+	signedOut := `enhanced turn failed: acphost: session/prompt: {"code":-32000,"message":"Authentication required"}`
+	park(crashed.RunID, exited, domain.ActivityDisconnected)
+	park(refused.RunID, signedOut, domain.ActivityFailed)
+	park(reported.RunID, domain.ReportedFailureReason, domain.ActivityFailed)
+	park(asked.RunID, domain.NeedsInputReasonPrefix+"which branch?", domain.ActivityNeedsYou)
+	park(paused.RunID, exited, domain.ActivityDisconnected)
+	h.runs.paused[domain.RunID(paused.RunID)] = true
+	park(interrupted.RunID, domain.InterruptedReason, domain.ActivityNeedsYou)
+	vendorLimit := "You've hit your usage limit · resets 3pm"
+	park(limited.RunID, vendorLimit, domain.ActivityNeedsYou)
+	waitBroken := domain.WaitBrokenReasonPrefix + "pr:acme/app#7:checks resolved, wake undelivered"
+	park(broken.RunID, waitBroken, domain.ActivityNeedsYou)
+	park(prompted.RunID, "", domain.ActivityNeedsYou)
+	park(delivered.RunID, exited, domain.ActivityDisconnected)
+
+	h.settle()
+	if len(h.mail.sent) != 0 {
+		t.Fatalf("notices before a minute = %+v, want none", h.mail.sent)
+	}
+	h.now = h.now.Add(2 * time.Minute)
+	h.settle()
+	h.settle()
+	for _, c := range []protocol.ChildReceipt{crashed, refused, interrupted, limited, broken} {
+		if len(notices(c.RunID)) != 1 {
+			t.Fatalf("notices = %+v, want one for %s (%s)", h.mail.sent, c.RunID, c.Purpose)
+		}
+	}
+	if len(h.mail.sent) != 5 {
+		t.Fatalf("notices = %+v, want none for a reported failure, a question, a paused, a prompted or a delivered subsession", h.mail.sent)
+	}
+	for id, want := range map[string][]string{
+		crashed.RunID:     {"review", "disconnected", exited, "Retry Enhanced", "subsession cancel --run-id " + crashed.RunID},
+		refused.RunID:     {"fix", "failed", "Authentication required", "aether-internal send --to " + refused.RunID, "subsession cancel --run-id " + refused.RunID},
+		interrupted.RunID: {"port", "needs-you", domain.InterruptedReason, "aether-internal send --to " + interrupted.RunID},
+		limited.RunID:     {"docs", vendorLimit},
+		broken.RunID:      {"ci", waitBroken, "aether-internal send --to " + broken.RunID},
+	} {
+		body := notices(id)[0]
+		for _, w := range append(want, id) {
+			if !strings.Contains(body, w) {
+				t.Fatalf("notice %q lacks %q", body, w)
+			}
+		}
+	}
+	for _, m := range h.mail.sent {
+		if m.to != parent.ID {
+			t.Fatalf("notice went to %s, want the parent", m.to)
+		}
+	}
+
+	raw, _ := json.Marshal(protocol.ChildListParams{RunID: crashed.RunID})
+	listed, err := h.svc.HandleAgent(h.ctx, parent.ID, protocol.MethodChildList, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := listed.(protocol.ChildListResult).Children[0]; c.State != protocol.ChildDisconnected || c.Error != exited {
+		t.Fatalf("listed as %q with error %q, want %q with %q", c.State, c.Error, protocol.ChildDisconnected, exited)
+	}
+
+	// The spell goes on through a reason or activity change.
+	park(crashed.RunID, signedOut, domain.ActivityFailed)
+	h.now = h.now.Add(5 * time.Minute)
+	h.settle()
+	if len(notices(crashed.RunID)) != 1 || len(h.mail.errs) != 0 {
+		t.Fatalf("later passes in the spell sent %+v, errors %v; want the one notice", h.mail.sent, h.mail.errs)
+	}
+
+	// Work ends the spell; stopping again is told again.
+	park(crashed.RunID, "", domain.ActivityWorking)
+	h.settle()
+	park(crashed.RunID, exited, domain.ActivityDisconnected)
+	h.now = time.Now().Add(2 * time.Minute)
+	h.settle()
+	if len(notices(crashed.RunID)) != 2 || len(h.mail.errs) != 0 {
+		t.Fatalf("notices after a second stop = %+v, errors %v; want 2", h.mail.sent, h.mail.errs)
+	}
+}
+
+func TestEndNoticeSavedWithAnOlderBodyCounts(t *testing.T) {
+	h := newHarness(t)
+	h.mail.db = h.db
+	h.enable(h.ada.ID, protocol.ChildSettingsParams{Enabled: on()})
+	parent := h.run(h.ada.ID, domain.LaunchACP, "parent")
+	child := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex"})
+	h.settle()
+	if _, err := h.db.AppendRunMessageCreated(h.ctx, &store.RunMessage{WorkspaceID: parent.WorkspaceID, FromRun: domain.RunID(child.RunID), ToRun: parent.ID,
+		Kind: store.RunMessageKindMessage, Body: "an earlier server's wording", IdempotencyKey: "child-ended:" + child.RunID}, protocol.CoordMaxUnread); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if _, err := h.db.UpdateRunStatus(h.ctx, domain.RunID(child.RunID), domain.RunFailed, "agent exited 1", "", nil, &now); err != nil {
+		t.Fatal(err)
+	}
+	h.settle()
+	c, err := h.db.GetChild(h.ctx, domain.RunID(child.RunID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.EndNotified {
+		t.Fatal("an end notice saved under the same key with an older body is retried forever")
+	}
+}
+
+func TestHandedSessionCannotStartSubsessionUntilRelaunch(t *testing.T) {
+	h := newHarness(t)
+	h.enable(h.bob.ID, protocol.ChildSettingsParams{Enabled: on()})
+	// A session launched by Bob and handed to Bob's own account (home == owner)
+	// may start a subsession.
+	own := h.run(h.bob.ID, domain.LaunchACP, "own session")
+	h.mustStart(own.ID, protocol.ChildStartParams{Harness: "codex", Task: "fine"})
+	// A session whose home member differs from its current owner (a handoff)
+	// must refuse subsessions until the new owner launches a session of their own.
+	handed := &domain.Run{WorkspaceID: h.ws.ID, MemberID: h.bob.ID, HomeMemberID: h.ada.ID, Task: "handed", Harness: "claude", Mode: domain.LaunchACP, Status: domain.RunRunning}
+	if err := h.db.CreateRun(h.ctx, handed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.start(handed.ID, protocol.ChildStartParams{Harness: "codex", Task: "nope"}); code(err) != protocol.CodeDenied || !strings.Contains(err.Error(), "handed to you") {
+		t.Fatalf("subsession from a handed session = %v, want it refused", err)
 	}
 }

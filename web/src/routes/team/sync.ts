@@ -14,8 +14,9 @@ const heartbeatMs = 15_000
 /** A wake within this long of the last full read does not read again. */
 const minGapMs = 2500
 /**
- * Both gateways speak HTTP/1.1, so an unanswered disk read holds one of the
- * browser's six connections to the host. A current server answers within 5 s.
+ * The loopback gateway speaks HTTP/1.1, so an unanswered disk read there holds
+ * one of the browser's six connections to the host. A current server answers
+ * within 5 s.
  */
 const diskTimeoutMs = 10_000
 /** How far back from the log head the feed opens, in event sequence. */
@@ -29,7 +30,7 @@ export const pageBudget = maxPages * feedPage
  * Presence is keyed on (member, workspace), so this is the only workspace a
  * heartbeat may claim: beating every one would show the user online where they never looked.
  */
-export function focusedWorkspace(state: RootState): string {
+function focusedWorkspace(state: RootState): string {
   const { params } = state.route
   if (params.workspaceId) return params.workspaceId
   if (params.runId) return state.runs[params.runId]?.workspace_id ?? ''
@@ -204,7 +205,7 @@ export async function olderFeed(store: RootStore, client: Api = api): Promise<vo
   if (store.getState().feedRequest === id) store.getState().extendFeed(until, true)
 }
 
-export async function drain(store: RootStore, client: Api = api): Promise<void> {
+async function drain(store: RootStore, client: Api = api): Promise<void> {
   const s = store.getState()
   if (!s.feedFilters.workspaceID) return
   s.setFeedLoading(true)

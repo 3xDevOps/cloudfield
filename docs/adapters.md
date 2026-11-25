@@ -1,6 +1,6 @@
 # Adding an agent or an adapter
 
-Two independent seams. An **agent profile** teaches Aether how to launch an
+Two independent seams. An **agent profile** teaches Cloudfield how to launch an
 agent CLI - that is all most agents need. An **adapter** additionally turns the
 agent's machine-readable output into typed events. Adapters are optional by
 design: a session without one still has a full PTY transcript and a git-diff
@@ -20,16 +20,17 @@ one entry to the `profiles` map:
 | `Name` | The value users pass to `--agent`. Match the map key. |
 | `TUIArgs` | Argv for the interactive TUI. Use `TaskPlaceholder` (`{task}`) where the prompt goes. |
 | `HeadlessArgs` | Argv for the machine-readable mode. Same placeholder. |
-| `EnvPassthrough` | Environment variables copied from the server process into session containers when set. Only API keys and the base URLs that point the CLI at a model gateway. |
+| `EnvPassthrough` | Environment variables copied from the server process into session sandboxes when set. Only API keys and the base URLs that point the CLI at a model gateway. |
 | `Env` | Fixed environment variables the CLI needs to start at all, applied after the workspace's own so a workspace cannot break the launch. Not for configuration - a variable belongs here only when the agent refuses to run without it. |
 | `ACPMode` | The session mode a new Enhanced session starts in: the adapter's mode that acts without asking (`bypassPermissions` for Claude Code). Empty keeps the agent's default. |
 | `PermissionEnv` | Variables that turn the agent's permission prompts off in every launch mode, for an agent with no flag for it. OpenCode's `OPENCODE_CONFIG_CONTENT` is merged key by key with the workspace's value. |
 | `CredentialPaths` | Home-relative files or directories holding native login state, strictly below the home. They persist in the member home like everything else there. An account share mounts exactly these paths, read-write, from the owner's home into a recipient's session, so name the login file itself, not its configuration directory. |
 | `InstallPaths` | Home-relative directories the CLI's `~/.local/bin` launcher links into, outside `~/.local/bin` and `~/.local/lib`; `claude` names `.local/share/claude`, where its native installer puts the versions it links to. A recipient's session that borrows the owner's installation mounts each read-only from the owner's home at the same path. Leave empty for an npm install (under `~/.local/lib`) or a single binary in `~/.local/bin`. |
 | `UpdateScript` | Optional. The command that updates the CLI in `~/.local/bin` when a session launches ([harnesses.md](harnesses.md#updates-before-launch)). Make it a cheap no-op when the CLI is current, and update only the program. A launch can start the CLI while the update runs, so swap the new version in atomically. |
-| `BorrowedState` | A home-relative JSON file and the keys a launch that borrows this login sets in the launcher's copy when they are absent, so the CLI starts signed in with the owner's login instead of running first-time setup against an empty home. `claude` sets `hasCompletedOnboarding: true` in `.claude.json`, because Claude Code's setup wizard shows its sign-in step regardless of an existing login. The file is created with mode 0600 when missing, rewritten in place when it is a JSON object, and left alone otherwise. |
-| `LocalRoot` | Home-relative configuration root, the same path on the member's computer and in the member home. `aether config push` uploads from it, the **Files** editor edits it, and the explicit `profile` CLI commands read it. Empty means the agent has no configuration root. |
-| `DenyNames` | Credential/token/keychain names, matched case-insensitively in every path component. `config.roots.credential_names` combines these with shared denials so `aether config push` leaves them out before reading them. The server and manual profile path enforce the same names; `*.pem`, `.env`, and `.env.*` are always denied. |
+| `BorrowedState` | A home-relative JSON file and the keys a launch that borrows this login sets in its copy of `AccountConfig`, so the CLI starts signed in with the owner's login instead of running first-time setup. `claude` sets `hasCompletedOnboarding: true` in `.claude.json`, because Claude Code's setup wizard shows its sign-in step regardless of an existing login. |
+| `AccountConfig` | The home-relative JSON `File` where the CLI caches the account it is signed in to, the `Keys` that hold that account and its caches, an `Env` variable that, set to the home-relative directory `Dir`, makes the CLI use `Dir/<base of File>` instead, and a home-relative `Legacy` file the CLI reads before either when it is not empty. A launch that borrows another member's login writes its own copy of the launcher's `Legacy` file, or else `File`, without `Keys` and with `BorrowedState`, to `<data-dir>/scheduler/account-config/<session-id>/`, mounts it in `Dir`, masks a non-empty `Legacy` with an empty read-only file, and sets `Env`, so the session never reports the launcher's account. Every other container except an Isolated session pins those paths in its own home, as it pins logins; a missing `Legacy` file is not created. A launcher's file that is a symlink, has another hard link, is not a JSON object, or is over 64 MiB refuses the launch with the read error. `claude` names `.claude.json`, the keys Claude Code clears when it signs in to another account plus `primaryApiKey` and `customApiKeyResponses`, `CLAUDE_CONFIG_DIR` set to `~/.claude`, and `.claude/.config.json`. |
+| `LocalRoot` | Home-relative configuration root, the same path on the member's computer and in the member home. `cloudfield config push` uploads from it, the **Files** editor edits it, and the explicit `profile` CLI commands read it. Empty means the agent has no configuration root. |
+| `DenyNames` | Credential/token/keychain names, matched case-insensitively in every path component. `config.roots.credential_names` combines these with shared denials so `cloudfield config push` leaves them out before reading them. The server and manual profile path enforce the same names; `*.pem`, `.env`, and `.env.*` are always denied. |
 | `InstructionArgs`, `InstructionEnv` | How a non-ACP launch appends the session's [agent instructions](coordination.md#agent-instructions) to the agent's system prompt. `InstructionArgs` takes `{instructions}` (the raw text) or `{instructions_quoted}` (a JSON-quoted string, for Codex's `-c developer_instructions=`). `InstructionEnv` is for an agent with no flag for it and points at `/run/aether/instructions.md`, which the server writes read-only. Nothing is written to the member home or repository. Without either, the instructions follow the task prompt. |
 
 Rules that are easy to get wrong:
@@ -45,37 +46,37 @@ Rules that are easy to get wrong:
   `.config/opencode` for configuration and `.local/share/opencode/auth.json`
   for account sharing. Registry roots are home-relative defaults, not
   environment-expanded paths; native configuration overrides do not relocate
-  `aether config` or manual profile commands.
+  `cloudfield config` or manual profile commands.
 - **`CredentialPaths` and `DenyNames` are two different lists.** The first says
   what an account share *mounts* into another member's session; the second says
-  what `aether config push` and explicit profile commands must never
+  what `cloudfield config push` and explicit profile commands must never
   *upload*. A credential file usually appears in both, from opposite
   directions.
-- **Nothing under `LocalRoot` may be assumed private.** `aether config push`
+- **Nothing under `LocalRoot` may be assumed private.** `cloudfield config push`
   uploads every named file that passes the credential, runtime, and
   secret-scanner checks. The scanner finds known secret patterns, not every
   secret.
-- **Configuration changes the shared member HOME.** `aether config push` and
+- **Configuration changes the shared member HOME.** `cloudfield config push` and
   the **Files** editor write the authenticated member's persistent home,
   visible to that member's active and future sessions. No daemon watches
   `LocalRoot` or automatically synchronizes configuration.
-- **Directory size does not truncate uploads.** `aether config push` sends the
+- **Directory size does not truncate uploads.** `cloudfield config push` sends the
   named files in bounded requests. Runtime and credential policy applies
   before the 64 MiB per-file size check. Every omission is reported; a larger
   file can be installed or downloaded in the persistent home through
-  `aether terminal`. A failed request reports confirmed and unknown outcomes
+  `cloudfield terminal`. A failed request reports confirmed and unknown outcomes
   and is not retried automatically.
 - **File metadata is limited.** New files get the local permission bits
   (`0644` from Windows); overwrites retain existing remote modes. Symlinks
   are not uploaded.
-- **Profile snapshots are optional history, not the HOME.** `aether config push`
+- **Profile snapshots are optional history, not the HOME.** `cloudfield config push`
   and Files edits do not create CLI snapshots. A session's snapshot pin records
   provenance, not an isolated writable copy. Manual profile push and rollback
   overlay snapshot files into the same shared HOME; absent paths are not
   deleted, so rollback is not an exact-tree restore.
 - **Instructions go in the system prompt.** Use the vendor's documented
   mechanism for appending to it, never one that replaces the built-in
-  prompt, so the instructions survive compaction; `aether-internal skill`
+  prompt, so the instructions survive compaction; `cloudfield-internal skill`
   fetches the assignment-specific details from the session socket.
 
 - **An argv override must stay verbatim.** The scheduler drops the shipped
@@ -143,13 +144,14 @@ Most adapter output is `events.AgentEventPayload`:
 
 Token usage is **not** an agent event: report it as `events.RunCostPayload` so
 it reaches the cost rollups and workspace budgets. An agent that reports no
-usage leaves its sessions marked unmetered, which `aether cost` and `aether budget`
+usage leaves its sessions marked unmetered, which `cloudfield cost` and `cloudfield budget`
 both say out loud.
 
 `AgentSession` carries the agent's own conversation ID, which is unrelated
-to any Aether scope. It is a timeline record only: Aether does not assign a
-conversation ID from it or use it to control reopening a session. Emit it anyway - it is
-what an operator needs to find the conversation in the agent's own tooling.
+to any Cloudfield scope. It is a timeline record only: Cloudfield does not
+assign a conversation ID from it or use it to control reopening a session. Emit
+it anyway - it is what an operator needs to find the conversation in the agent's
+own tooling.
 
 ### Testing
 

@@ -9,11 +9,12 @@ import { CopyButton } from '@/components/ui/copy-button'
 import { LinkedText, Markdown } from '@/components/ui/markdown'
 import { RelativeTime } from '@/components/ui/relative-time'
 import { RequestCard } from '@/components/ui/request-card'
-import { RequestAction, RequestActions, RequestFooter } from '@/components/ui/request-choice'
+import { RequestAction, RequestActions, RequestFooter, StaleReason } from '@/components/ui/request-choice'
 import { AssistantRow, EventRow, LiveActivityRow, MessageRow } from '@/components/ui/timeline'
 import { playEntrance, type Entrance } from '@/lib/motion'
 import { memberName, resolveMember } from '@/lib/member-name'
 import { allowed } from '@/lib/permissions'
+import { cn } from '@/lib/utils'
 import { inputHint } from '@/lib/run-requests'
 import type { AgentTerminal } from '@/routes/run/agent-terminal'
 import type { RunNavigation } from '@/routes/run/header'
@@ -39,7 +40,7 @@ export const sessionColumn = 'mx-auto w-full max-w-[736px] px-4'
 /** Whether a block with no choice of the viewer's is open. */
 export type OpenPolicy = (row: StepsRow) => boolean
 
-export const openWhileCurrent: OpenPolicy = (row) => row.current
+const openWhileCurrent: OpenPolicy = (row) => row.current
 
 const foldOver = 40
 const foldHead = 5
@@ -134,7 +135,7 @@ export interface RowContext {
 }
 
 export function useRowContext(run: RunRecord, agent: AgentTerminal, nav: RunNavigation, room?: RunRoom): RowContext {
-  const self = useSelf()
+  const self = useSelf(run.workspace_id)
   const steerOthers = useStore((s) => s.workspaces[run.workspace_id]?.steer_others)
   const free = useStore((s) => (run.controller_member_id !== undefined ? !run.controller_member_id : !s.roomStatus[run.id]?.controller))
   const latest = useRef({ agent, nav, room })
@@ -150,7 +151,7 @@ export function useRowContext(run: RunRecord, agent: AgentTerminal, nav: RunNavi
     hasAgentTerminal: agent.hasAgentTerminal,
     openTerminal: () => {
       const { agent: current, nav: to } = latest.current
-      to.go('terminal')
+      to.go('terminal', { remember: false })
       if (!current.localControl && !current.controlUnavailable) current.session.takeControl()
     },
     reveal: (id) => latest.current.nav.reveal(id),
@@ -184,18 +185,22 @@ function UserRow({ row, ctx, name }: { row: Extract<SessionRow, { kind: 'user' }
           <Avatar name={name(authorID)} color={color} size="header" />
           {'decide' in steer
             ? <DecisionButtons decide={(approve) => steer.decide(row.id, approve)} />
-            : <RequestAction label="Take control to decide" onClick={steer.takeControl} />}
+            : <><StaleReason /><RequestAction label="Take control to decide" onClick={steer.takeControl} /></>}
         </>
       )}
       attachments={row.images?.length || row.files?.length ? <MessageAttachments runID={ctx.runID} images={row.images} files={row.files} /> : undefined}
       meta={
         <>
+          {author && <span aria-hidden className="-ml-1">·</span>}
           {row.delivery && (
-            <span className={row.delivery === 'Not sent' || row.delivery === 'Denied' ? 'text-state-failed' : undefined}>
-              {row.delivery === 'Queued' && row.deliverAfter ? <DeliveryCountdown deliverAfter={row.deliverAfter} /> : row.delivery}
-            </span>
+            <>
+              <span className={cn('shrink-0', (row.delivery === 'Not sent' || row.delivery === 'Denied') && 'text-state-failed')}>
+                {row.delivery === 'Queued' && row.deliverAfter ? <DeliveryCountdown deliverAfter={row.deliverAfter} /> : row.delivery}
+              </span>
+              <span aria-hidden>·</span>
+            </>
           )}
-          <RelativeTime at={row.at} />
+          <span className="shrink-0 whitespace-nowrap"><RelativeTime at={row.at} /></span>
         </>
       }
     >
@@ -274,7 +279,7 @@ function Row({ row, open, ctx }: { row: SessionRow; open: boolean; ctx: RowConte
         />
       )
     case 'event':
-      return <EventRow tone={row.tone} detail={row.detail && <span className="whitespace-pre-wrap"><LinkedText text={row.detail} /></span>} trailing={<RelativeTime at={row.at} />}>{row.text}</EventRow>
+      return <EventRow tone={row.tone} full={row.full} detail={row.detail && <span className="whitespace-pre-wrap"><LinkedText text={row.detail} /></span>} trailing={<RelativeTime at={row.at} />}>{row.text}</EventRow>
     case 'finished':
       return <EventRow tone={row.tone} trailing={<RelativeTime at={row.at} />}>{row.text}</EventRow>
     case 'agent-message':
@@ -306,7 +311,7 @@ export const TimelineRow = memo(function TimelineRow({ item, ctx }: { item: Flat
 const rowEnter: Entrance = { motion: { duration: '--duration-360', easing: '--ease-enter' }, rise: 4 }
 
 /** Rows new since the last list, by key and their place in the burst, and when they were found. */
-export interface Arrivals {
+interface Arrivals {
   at: number
   keys: Map<string, number>
 }

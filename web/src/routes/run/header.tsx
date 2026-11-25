@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type * as React from 'react'
-import { Camera, Copy, Eye, GitBranch, Lock, PanelRight, ScrollText } from '@/components/icons'
+import { Camera, Copy, Eye, GitBranch, Lock, MessageSquarePlus, PanelRight, ScrollText } from '@/components/icons'
 import { permissionLabel, permissions } from '@/components/launch/permission-control'
-import { RunActions } from '@/components/run-actions'
+import { RunActions, type MenuPoint } from '@/components/run-actions'
 import { RunRetention } from '@/components/run-retention'
 import { ConnectionLine } from '@/components/shell/connection'
 import { AgentGlyph } from '@/components/ui/agent-glyph'
@@ -31,17 +31,19 @@ import { useModeSwitch } from '@/routes/run/mode-switch'
 import { useOpenInEditor } from '@/routes/run/open-in-editor'
 import { useRunPullRequest } from '@/routes/run/pull-request'
 import { requestCardID } from '@/routes/run/requests'
+import { PhoneRunHeader } from '@/routes/run/phone-header'
 import { runViewLabel, type RunView } from '@/routes/run/views'
 import { useStore } from '@/store'
 import { queuedSteers, unansweredQuestions } from '@/store/collaboration'
 import { useHeaderPrimary, useNeedsYouRuns, useRunPresentation } from '@/store/hooks'
 import type { RunRecord } from '@/store/runs'
+import type { NavigateOptions } from '@/store/ui'
 import { agentState } from '@/store/subagents'
 import { stateContextOf } from '@/store/selectors'
 import { runWatch } from '@/store/watches'
 
 export interface RunNavigation {
-  go: (view: RunView) => void
+  go: (view: RunView, options?: NavigateOptions) => void
   reveal: (cardID: string) => void
   focusComposer: () => void
   focusRequest: () => void
@@ -58,18 +60,24 @@ export function usePrimaryAction(run: RunRecord, view: RunView, agent: AgentTerm
   const condition = useStore((s) => needsYou(run, stateContextOf(s, now)))
   const room = useStore((s) => s.roomMessages[run.id])
   const selfID = useStore((s) => s.info?.member.id)
-  if (!condition) return null
+  const shown = useRunPresentation(run)
+  // A finished run asks nothing of anyone, so Review is not a needs-you action.
+  if (!condition) {
+    return shown.state === 'ready' && run.member_id === selfID && view !== 'changes'
+      ? { label: 'Review', act: () => nav.go('changes', { remember: false }) }
+      : null
+  }
 
   const action = condition.action(run)
   const openTerminal = (): FrameAction | null =>
     !agent.hasAgentTerminal || view === 'terminal'
       ? null
-      : { label: action.label, act: () => { nav.go('terminal'); if (!agent.localControl && !agent.controlUnavailable) agent.session.takeControl() } }
+      : { label: action.label, act: () => { nav.go('terminal', { remember: false }); if (!agent.localControl && !agent.controlUnavailable) agent.session.takeControl() } }
 
   if (action.kind === 'reply') return { label: action.label, act: nav.focusComposer }
   switch (condition.target) {
     case 'changes':
-      return view === 'changes' ? null : { label: action.label, act: () => nav.go('changes') }
+      return view === 'changes' ? null : { label: action.label, act: () => nav.go('changes', { remember: false }) }
     case 'notes': {
       const question = unansweredQuestions(room ?? []).find((m) => m.actor_id !== run.member_id)
       return { label: action.label, act: () => nav.reveal(question ? requestCardID.question(question.id) : 'details-needs-you') }
@@ -119,7 +127,7 @@ function StateLine({ run, agentName }: { run: RunRecord; agentName: string }) {
   )
   const since = state === 'ready' && run.review_changed_at ? run.review_changed_at : run.stateChangedAt
   const words = stateWords(presentation, since, useClock())
-  // The Workflow chip under the header shows the state's own label.
+  // The Session tree chip under the header shows the state's own label.
   const detail = [
     subagents > 0 && `${subagents} ${subagents === 1 ? 'subagent' : 'subagents'} running`,
     words.label !== stateName(presentation) && words.label,
@@ -220,7 +228,7 @@ function StateLine({ run, agentName }: { run: RunRecord; agentName: string }) {
  * phone with a pull request beside it for instance. It keeps the shown view's
  * tab in sight as the view or the room for it changes, and fades its right
  * edge while more tabs lie past it. */
-export function ViewSwitch({ view, views }: { view: RunView; views: RunView[] }) {
+function ViewSwitch({ view, views }: { view: RunView; views: RunView[] }) {
   const strip = useRef<HTMLDivElement>(null)
   const [more, setMore] = useState(false)
   const measure = () => {
@@ -258,29 +266,40 @@ export function RunHeader({
   views,
   agent,
   nav,
-  composing,
+  keyboard,
   detailsOpen,
   onDetails,
+  onComment,
   onCaptures,
   onEvents,
+  menuAt,
+  onMenuClose,
   agentName,
   agentEntry,
   workflow,
+  onWorkflow,
 }: {
   run: RunRecord
   agentName: string
   agentEntry: AgentInfo | undefined
-  /** The Workflow chip, which sits beside the view switch. */
+  /** The Session tree chip, which sits beside the view switch. */
   workflow?: React.ReactNode
+  /** Opens the workflow, which a phone lists under the session's actions instead of the chip. */
+  onWorkflow: (returnTo: HTMLElement | null) => void
   view: RunView
   views: RunView[]
   agent: AgentTerminal
   nav: RunNavigation
-  composing: boolean
+  /** The phone's soft keyboard is up, so the header folds to one row. */
+  keyboard: boolean
   detailsOpen: boolean
-  onDetails: (returnTo: HTMLElement) => void
+  onDetails: (returnTo: HTMLElement | null) => void
+  onComment: (returnTo: HTMLElement | null) => void
   onCaptures: (returnTo: HTMLElement | null) => void
   onEvents: (returnTo: HTMLElement | null) => void
+  /** Where a right-click opened the session's menu, desktop only. */
+  menuAt: MenuPoint | null
+  onMenuClose: () => void
 }) {
   const mobile = useIsMobile()
   const collapsed = useStore((s) => s.sidebarCollapsed)
@@ -291,19 +310,59 @@ export function RunHeader({
   const editor = useOpenInEditor(run)
   const childRunsItems = useChildRunsItems(run)
   useHeaderPrimary(Boolean(primary))
+  const extra = [
+    { id: 'comment', label: 'Leave a comment…', Icon: MessageSquarePlus, onSelect: onComment },
+    ...(modeSwitch.item ? [modeSwitch.item] : []),
+    ...(editor.item ? [editor.item] : []),
+    ...childRunsItems,
+    { id: 'captures', label: 'Captures…', Icon: Camera, onSelect: onCaptures },
+    { id: 'events', label: 'Raw events…', Icon: ScrollText, onSelect: onEvents },
+  ]
+  const dialogs = (
+    <>
+      {modeSwitch.dialog}
+      {pullRequest.panel}
+      {editor.dialog}
+    </>
+  )
+
+  if (mobile) {
+    return (
+      <>
+        <PhoneRunHeader
+          run={run}
+          view={view}
+          views={views}
+          nav={nav}
+          agentName={agentName}
+          keyboard={keyboard}
+          primary={primary}
+          detailsOpen={detailsOpen}
+          onDetails={onDetails}
+          onWorkflow={onWorkflow}
+          extra={extra}
+          pullRequest={pullRequest.status}
+        />
+        {!keyboard && <WaitLine run={run} />}
+        {!keyboard && <RunLineage run={run} />}
+        <RunRetention run={run} className="border-b border-seam px-4 py-2" />
+        {dialogs}
+      </>
+    )
+  }
 
   return (
     <>
       <PaneHeader
-        size={composing ? 'view' : 'run'}
+        size="run"
         title={
           <span className="flex min-w-0 items-center gap-1.5">
             <span className="truncate">{runLabel(run)}</span>
             {run.protected && <Lock role="img" aria-label="Protected: only the owner or an admin can message, control or stop this session" className="size-3.5 shrink-0 text-muted" />}
           </span>
         }
-        stateLine={!composing && <StateLine run={run} agentName={agentName} />}
-        onOpenSidebar={!mobile && collapsed ? toggleSidebar : undefined}
+        stateLine={<StateLine run={run} agentName={agentName} />}
+        onOpenSidebar={collapsed ? toggleSidebar : undefined}
         actionsLabel="Session actions"
         actions={
           <>
@@ -312,41 +371,26 @@ export function RunHeader({
               variant="ghost"
               size="icon"
               label={detailsOpen ? 'Hide details' : 'Show details'}
-              hint={mobile ? 'Details' : `Details (${shortcutLabel('run-details')})`}
+              hint={`Details (${shortcutLabel('run-details')})`}
               aria-expanded={detailsOpen}
               aria-controls="run-details"
               onClick={(event) => onDetails(event.currentTarget)}
             >
               <PanelRight />
             </Button>
-            <RunActions
-              run={run}
-              compact={mobile}
-              extra={[
-                ...(modeSwitch.item ? [modeSwitch.item] : []),
-                ...(editor.item ? [editor.item] : []),
-                ...childRunsItems,
-                { id: 'captures', label: 'Captures…', Icon: Camera, onSelect: onCaptures },
-                { id: 'events', label: 'Raw events…', Icon: ScrollText, onSelect: onEvents },
-              ]}
-            />
+            <RunActions run={run} extra={extra} at={menuAt} onAtClose={onMenuClose} />
           </>
         }
       />
-      {mobile && !composing && <WaitLine run={run} />}
       <RunLineage run={run} />
       <RunRetention run={run} className="border-b border-seam px-4 py-2" />
-      {!composing && (
-        <div className="@container/views flex h-8 shrink-0 items-center border-b border-seam px-2 coarse:h-11">
-          <ViewSwitch view={view} views={views} />
-          {workflow}
-          {pullRequest.status}
-        </div>
-      )}
-      {modeSwitch.dialog}
-      {pullRequest.panel}
-      {editor.dialog}
-      {!mobile && <ConnectionLine className="border-b border-seam px-4 py-1" />}
+      <div className="@container/views flex h-8 shrink-0 items-center border-b border-seam px-2 coarse:h-11">
+        <ViewSwitch view={view} views={views} />
+        {workflow}
+        {pullRequest.status}
+      </div>
+      {dialogs}
+      <ConnectionLine className="border-b border-seam px-4 py-1" />
     </>
   )
 }

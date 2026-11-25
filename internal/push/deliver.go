@@ -1,9 +1,11 @@
 package push
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/3xDevOps/Aether/internal/domain"
@@ -18,9 +20,8 @@ const (
 // is set when it did not take the message; a device the push service
 // reports gone is unsubscribed, as every send does.
 type DeviceResult struct {
-	Endpoint string
-	Status   string
-	Err      error
+	Status string
+	Err    error
 }
 
 // Message is a notification for Deliver. URL is the dashboard path a click
@@ -35,6 +36,7 @@ type Message struct {
 	Urgent           bool
 	Notice           bool
 	Clear            bool
+	Card             string
 }
 
 type message struct {
@@ -46,17 +48,13 @@ type message struct {
 // Deliver does not wait for member to leave a dashboard. No result means
 // member has no device.
 func (s *Service) Deliver(ctx context.Context, member domain.MemberID, m Message) ([]DeviceResult, error) {
-	n := notification{Title: clip(m.Title, fallbackTitleRunes), Body: clip(m.Body, maxBodyRunes), Run: string(m.Run), Notice: m.Notice}
+	n := notification{Title: clip(m.Title, fallbackTitleRunes), Body: clip(m.Body, maxBodyRunes), Run: string(m.Run), Notice: m.Notice, Card: m.Card}
 	if m.Clear {
-		n.Body, n.Clear = clearedBody, true
+		n.Body, n.Clear = cmp.Or(n.Body, clearedBody), true
 	}
 	payload, err := json.Marshal(message{notification: n, URL: m.URL, Tag: m.Topic})
 	if err != nil {
 		return nil, fmt.Errorf("push: encode notification: %w", err)
-	}
-	subs, err := s.store.ListPushSubscriptions(ctx, member)
-	if err != nil {
-		return nil, fmt.Errorf("push: list subscriptions: %w", err)
 	}
 	urgency := urgencyNormal
 	if m.Urgent {
@@ -66,9 +64,39 @@ func (s *Service) Deliver(ctx context.Context, member domain.MemberID, m Message
 	if m.Topic != "" {
 		topic = topicOf(m.Topic)
 	}
+	return s.deliverPayload(ctx, member, payload, topic, urgency)
+}
+
+// Push is Deliver for a new notification: within burstWindow of member's
+// last push it replaces that one with a summary of both, and reports
+// joined. m.Topic must be set.
+func (s *Service) Push(ctx context.Context, member domain.MemberID, m Message, need bool) ([]DeviceResult, bool, error) {
+	// A session's need and a watch's need about it are one item; its other
+	// news is not, so checks finishing never hide its question.
+	key := m.Topic
+	if need && m.Run != "" {
+		key = string(m.Run)
+	}
+	sum, err := s.join(member, key, m.Topic, topicOf(m.Topic), m.Title, m.Body, need, strings.HasPrefix(m.Topic, "card:"))
+	if err != nil {
+		return nil, false, err
+	}
+	if sum == nil {
+		results, deliverErr := s.Deliver(ctx, member, m)
+		return results, false, deliverErr
+	}
+	results, err := s.deliverPayload(ctx, member, sum.payload, sum.topic, sum.urgency)
+	return results, true, err
+}
+
+func (s *Service) deliverPayload(ctx context.Context, member domain.MemberID, payload []byte, topic, urgency string) ([]DeviceResult, error) {
+	subs, err := s.store.ListPushSubscriptions(ctx, member)
+	if err != nil {
+		return nil, fmt.Errorf("push: list subscriptions: %w", err)
+	}
 	results := make([]DeviceResult, 0, len(subs))
 	for _, sub := range subs {
-		r := DeviceResult{Endpoint: sub.Endpoint, Status: DeviceDelivered}
+		r := DeviceResult{Status: DeviceDelivered}
 		if err := s.send(ctx, sub, payload, topic, urgency); err != nil {
 			r.Status, r.Err = DeviceFailed, err
 		}

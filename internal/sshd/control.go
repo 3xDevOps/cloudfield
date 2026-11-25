@@ -75,6 +75,11 @@ func (s *Server) serveControlFrame(ctx context.Context, member domain.MemberID, 
 		return true
 	}
 	slot := &afterResponse{}
+	ctx = context.WithValue(ctx, frameReleaseKey{}, func(maxLine int) {
+		if len(line) <= maxLine {
+			input.releaseSlot()
+		}
+	})
 	resp := s.handleRequest(context.WithValue(ctx, afterResponseKey{}, slot), member, line)
 	// Do not answer or restart for an update after channel/server teardown.
 	if ctx.Err() != nil {
@@ -193,6 +198,23 @@ func (r *controlFrameReader) readDone() {
 	r.mu.Unlock()
 }
 
+type frameReleaseKey struct{}
+
+// releaseSlot gives up an expanded frame's slot before the frame is done,
+// for a handler that has checked its params and then waits long, so it
+// does not hold one of the server's two slots while it waits.
+func (r *controlFrameReader) releaseSlot() {
+	r.mu.Lock()
+	expanded := r.expanded
+	r.expanded = false
+	r.mu.Unlock()
+	if expanded {
+		r.server.mu.Lock()
+		delete(r.server.controlFrames, r.member)
+		r.server.mu.Unlock()
+	}
+}
+
 func (r *controlFrameReader) finish() {
 	r.mu.Lock()
 	r.active = false
@@ -200,12 +222,7 @@ func (r *controlFrameReader) finish() {
 		r.timer.Stop()
 	}
 	r.mu.Unlock()
-	if r.expanded {
-		r.server.mu.Lock()
-		delete(r.server.controlFrames, r.member)
-		r.server.mu.Unlock()
-		r.expanded = false
-	}
+	r.releaseSlot()
 }
 
 // respond writes one response and then runs whatever the handler deferred,
@@ -301,18 +318,18 @@ func (s *Server) dispatch(ctx context.Context, member domain.MemberID, method st
 		s.auditCall(ctx, member, method, params, nil, perr, false)
 		return nil, perr
 	}
-	changed := new(bool)
-	ctx = context.WithValue(ctx, auditChangeKey{}, changed)
+	note := new(auditNote)
+	ctx = context.WithValue(ctx, auditNoteKey{}, note)
 	result, rpcErr := handler(s, ctx, member, params)
 	if rpcErr != nil {
-		s.auditCall(ctx, member, method, params, nil, rpcErr, *changed)
+		s.auditCall(ctx, member, method, params, nil, rpcErr, note.changed)
 		return nil, rpcErr
 	}
 	raw, err := json.Marshal(result)
 	if err != nil {
 		return nil, &protocol.Error{Code: protocol.CodeInternal, Message: "marshal result: " + err.Error()}
 	}
-	s.auditCall(ctx, member, method, params, raw, nil, *changed)
+	s.auditCall(ctx, member, method, params, raw, nil, note.changed)
 	return raw, nil
 }
 

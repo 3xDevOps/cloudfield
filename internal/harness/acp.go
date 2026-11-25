@@ -31,13 +31,24 @@ type ACPInstall struct {
 	Version    string
 	// Binary is the executable the package links into ~/.local/bin.
 	Binary string
+	// CLIEnv names the variable the adapter reads the agent CLI's path from,
+	// for an adapter that bundles a CLI of its own, and CLIVersion is that
+	// bundled CLI's version.
+	CLIEnv     string
+	CLIVersion string
+	// CLIPackage is the CLI's npm package when the adapter depends on it by
+	// range; the assistant's install pins it to CLIVersion.
+	CLIPackage string
 }
 
 // The adapters the registry pins. Versions move only together with
-// acpregistry.json; TestACPRegistryPins holds them equal.
+// acpregistry.json; TestACPRegistryPins holds them equal. CLIVersion moves with
+// the CLI the pinned adapter installs: the Claude Code claude-agent-acp's Agent
+// SDK bundles, and the newest @openai/codex in codex-acp's dependency range.
+// scripts/bump-agent-pins.sh moves all of them, editing these lines as text.
 var (
-	claudeACP = &ACPInstall{RegistryID: "claude-acp", Package: "@agentclientprotocol/claude-agent-acp", Version: "0.86.0", Binary: "claude-agent-acp"}
-	codexACP  = &ACPInstall{RegistryID: "codex-acp", Package: "@agentclientprotocol/codex-acp", Version: "2.1.1", Binary: "codex-acp"}
+	claudeACP = &ACPInstall{RegistryID: "claude-acp", Package: "@agentclientprotocol/claude-agent-acp", Version: "0.86.0", Binary: "claude-agent-acp", CLIEnv: "CLAUDE_CODE_EXECUTABLE", CLIVersion: "2.1.287"}
+	codexACP  = &ACPInstall{RegistryID: "codex-acp", Package: "@agentclientprotocol/codex-acp", Version: "2.1.1", Binary: "codex-acp", CLIEnv: "CODEX_PATH", CLIVersion: "0.159.3", CLIPackage: "@openai/codex"}
 	piACP     = &ACPInstall{RegistryID: "pi-acp", Package: "pi-acp", Version: "0.0.34", Binary: "pi-acp"}
 )
 
@@ -66,6 +77,21 @@ func (p Profile) HeadlessResumeCommand(session, prompt, model, effort string) []
 		out[i] = strings.ReplaceAll(a, SessionPlaceholder, session)
 	}
 	return Argv(out, prompt, p.LaunchArgs(model, effort))
+}
+
+// ACPCommand is the argv that starts adapter. An adapter with a bundled CLI
+// runs cli from PATH instead when it is at least the bundled version and the
+// environment names no CLI.
+func (p Profile) ACPCommand(adapter []string, cli string) []string {
+	i := p.ACPInstall
+	if i == nil || i.CLIEnv == "" || cli == "" || adapter[0] != i.Binary {
+		return adapter
+	}
+	script := `if [ -z "${` + i.CLIEnv + `:-}" ] && cli=$(command -v "$1") && timeout 10 "$cli" --version </dev/null 2>/dev/null | awk -v min="$2" '
+NR == 1 { for (f = 1; f < NF && $f !~ /^[0-9]+\./; f++); split($f, have, "."); split(min, want, "."); ok = 1
+	for (n = 1; n <= 3; n++) { if (have[n] + 0 > want[n] + 0) break; if (have[n] + 0 < want[n] + 0) { ok = 0; break } } }
+END { exit !ok }' 2>/dev/null; then export ` + i.CLIEnv + `="$cli"; fi; shift 2; exec "$@"`
+	return append([]string{"/bin/sh", "-c", script, "sh", cli, i.CLIVersion}, adapter...)
 }
 
 // InstallCommand is the shell command that installs the agent into the member home.

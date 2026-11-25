@@ -42,6 +42,9 @@ const (
 	TypeRunMode       Type = "run.mode"
 	TypeRunModel      Type = "run.model"
 	TypeRunEffort     Type = "run.effort"
+	// TypeRunSleep carries an idle session's sleep state after it fell
+	// asleep, started waking, woke, or failed to wake.
+	TypeRunSleep Type = "run.sleep"
 	// TypeRunArchived carries a run's archive state: a nil ArchivedAt means
 	// the run was restored.
 	TypeRunArchived Type = "run.archived"
@@ -63,9 +66,6 @@ const (
 	// TypeTyping signals that the acting member is typing in a run's
 	// composer. It is ephemeral: never persisted and carries no sequence.
 	TypeTyping Type = "run.typing"
-	// TypeApproval carries approval-inbox activity: a permission request
-	// surfacing or a member deciding it.
-	TypeApproval Type = "workspace.approval"
 	// TypeTimeline carries workspace timeline entries, including steering
 	// acts (inject, pause, kill, handoff) and free-form notes.
 	TypeTimeline Type = "workspace.timeline"
@@ -80,10 +80,6 @@ const (
 	// it; runs without one degrade to the PTY + diff timeline and no
 	// feature may hard-require these events.
 	TypeAgentEvent Type = "run.agent"
-	// TypeProfile records a member+harness profile snapshot change
-	// (put, rollback, or pin). Publishing still requires a WorkspaceID;
-	// callers without one skip the bus rather than inventing a workspace.
-	TypeProfile Type = "profile.change"
 	// TypeSyncConflict signals a paused live file overlay: concurrent
 	// local and run-worktree edits to the same paths. The overlay writes
 	// conflict twins and stops; resuming is rerunning `aether sync`.
@@ -193,10 +189,16 @@ type RunInputPayload struct {
 
 func (RunInputPayload) EventType() Type { return TypeRunInput }
 
-// RunDeletedPayload signals that a run's durable record was removed.
-type RunDeletedPayload struct{}
+// RunDeletedPayload signals that a run's durable record was removed. With
+// no record left to read them from, it names the run's extra workspaces;
+// one logged before it did reads nil.
+type RunDeletedPayload struct {
+	ExtraWorkspaceIDs []domain.WorkspaceID `json:"extra_workspace_ids"`
+}
 
 func (RunDeletedPayload) EventType() Type { return TypeRunDeleted }
+
+func (p RunDeletedPayload) RunExtraWorkspaces() []domain.WorkspaceID { return p.ExtraWorkspaceIDs }
 
 // WorkspaceDeletedPayload invalidates the deleted workspace in connected clients.
 type WorkspaceDeletedPayload struct{}
@@ -278,6 +280,20 @@ type RunEffortPayload struct {
 func (RunEffortPayload) EventType() Type { return TypeRunEffort }
 
 func init() { registerPayload[RunEffortPayload](TypeRunEffort) }
+
+// RunSleepPayload reports a run's sleep state. A nil AsleepSince means the
+// run is awake; AsleepSaved means its VM was saved with every process, and
+// WakeError is the last wake's failure while it stays asleep.
+type RunSleepPayload struct {
+	AsleepSince *time.Time `json:"asleep_since,omitempty"`
+	AsleepSaved bool       `json:"asleep_saved,omitempty"`
+	Waking      bool       `json:"waking,omitempty"`
+	WakeError   string     `json:"wake_error,omitempty"`
+}
+
+func (RunSleepPayload) EventType() Type { return TypeRunSleep }
+
+func init() { registerPayload[RunSleepPayload](TypeRunSleep) }
 
 // RunArchivedPayload reports a run's archive state as RFC3339. A nil
 // ArchivedAt means the run was restored.
@@ -363,6 +379,8 @@ type RunDiffPayload struct {
 
 func (RunDiffPayload) EventType() Type { return TypeRunDiff }
 
+func (p RunDiffPayload) RepoWorkspace() domain.WorkspaceID { return p.Repo }
+
 // RunCostPayload reports token usage for a run. Metered is false for
 // PTY-only runs where counts are best-effort estimates or unavailable.
 // Increment marks usage spent since the run's previous report, which adds
@@ -409,25 +427,6 @@ type Ephemeral interface {
 }
 
 func (TypingPayload) Ephemeral() {}
-
-// ApprovalDecision is the state of an approval-inbox request.
-type ApprovalDecision string
-
-const (
-	ApprovalRequested ApprovalDecision = "requested"
-	ApprovalApproved  ApprovalDecision = "approved"
-	ApprovalDenied    ApprovalDecision = "denied"
-)
-
-// ApprovalPayload carries approval-inbox activity. RequestID ties the
-// decision events back to the originating request.
-type ApprovalPayload struct {
-	RequestID string           `json:"request_id"`
-	Action    string           `json:"action"`
-	Decision  ApprovalDecision `json:"decision"`
-}
-
-func (ApprovalPayload) EventType() Type { return TypeApproval }
 
 // TimelineKind classifies a workspace timeline entry.
 type TimelineKind string
@@ -486,6 +485,8 @@ type GitBranchPayload struct {
 
 func (GitBranchPayload) EventType() Type { return TypeGitBranch }
 
+func (p GitBranchPayload) RepoWorkspace() domain.WorkspaceID { return p.WorkspaceID }
+
 // AgentEventKind classifies an agent activity event.
 type AgentEventKind string
 
@@ -527,27 +528,6 @@ type AgentEventPayload struct {
 
 func (AgentEventPayload) EventType() Type { return TypeAgentEvent }
 
-// ProfileAction is a profile.change payload action.
-type ProfileAction string
-
-const (
-	ProfileActionPut      ProfileAction = "put"
-	ProfileActionRollback ProfileAction = "rollback"
-	ProfileActionPin      ProfileAction = "pin"
-)
-
-// ProfilePayload records a profile snapshot mutation. The bus still
-// requires WorkspaceID on the envelope; the profile service skips publish
-// when it has no workspace rather than inventing one.
-type ProfilePayload struct {
-	Member     domain.MemberID          `json:"member"`
-	Harness    string                   `json:"harness"`
-	SnapshotID domain.ProfileSnapshotID `json:"snapshot_id"`
-	Action     ProfileAction            `json:"action"`
-}
-
-func (ProfilePayload) EventType() Type { return TypeProfile }
-
 // SyncConflictPayload reports a live-overlay sync conflict. The overlay
 // session is paused when this is published; Files are the conflicted
 // paths relative to the sync roots, and Members are the affected members
@@ -576,6 +556,9 @@ type RoomMessagePayload struct {
 	CorrelationID   string             `json:"correlation_id,omitempty"`
 	AttachmentCount int                `json:"attachment_count,omitempty"`
 	HasAnchor       bool               `json:"has_anchor,omitempty"`
+	// Resolution lets a client without the message cached tell a completed
+	// or deleted comment apart from one whose state alone did not change.
+	Resolution string `json:"resolution,omitempty"`
 }
 
 func (RoomMessagePayload) EventType() Type { return TypeRoomMessage }
@@ -615,7 +598,6 @@ type MemoryAction string
 const (
 	MemoryActionAdd       MemoryAction = "add"
 	MemoryActionRewrite   MemoryAction = "rewrite"
-	MemoryActionAnswer    MemoryAction = "answer"
 	MemoryActionSupersede MemoryAction = "supersede"
 	MemoryActionPin       MemoryAction = "pin"
 	MemoryActionUnpin     MemoryAction = "unpin"
@@ -624,8 +606,7 @@ const (
 
 // MemoryChangePayload names the note and the member who acted; an agent's
 // write, and a report's outcome note, name the run's owner here and the run
-// in the envelope's RunID. An answer names the member who answered and the
-// run that asked.
+// in the envelope's RunID.
 type MemoryChangePayload struct {
 	Action  MemoryAction    `json:"action"`
 	NoteID  string          `json:"note_id"`
@@ -651,11 +632,9 @@ var payloadCodecs = map[Type]func([]byte) (Payload, error){
 	TypeRunCost:        decodeAs[RunCostPayload],
 	TypePresence:       decodeAs[PresencePayload],
 	TypeTyping:         decodeAs[TypingPayload],
-	TypeApproval:       decodeAs[ApprovalPayload],
 	TypeTimeline:       decodeAs[TimelinePayload],
 	TypeGitBranch:      decodeAs[GitBranchPayload],
 	TypeAgentEvent:     decodeAs[AgentEventPayload],
-	TypeProfile:        decodeAs[ProfilePayload],
 	TypeSyncConflict:   decodeAs[SyncConflictPayload],
 	TypeRoomMessage:    decodeAs[RoomMessagePayload],
 	TypeEvidencePacket: decodeAs[EvidencePacketPayload],

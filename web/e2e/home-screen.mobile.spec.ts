@@ -42,7 +42,7 @@ test('a phone is served everything it needs to install the dashboard', async ({
 
   const manifest = JSON.parse(await response.text())
   expect(manifest).toMatchObject({
-    name: 'Aether',
+    name: 'Cloudfield',
     start_url: '/',
     display: 'standalone',
   })
@@ -64,6 +64,16 @@ test('a phone is served everything it needs to install the dashboard', async ({
   await expect(page.locator('link[rel="apple-touch-icon"]')).toHaveAttribute('href', apple)
   expect((await page.request.get(origin + apple)).status()).toBe(200)
 
+  // A missing file is answered with index.html, so the type is what proves it.
+  const favicons = await page.locator('link[rel="icon"]').evaluateAll((links) =>
+    links.map((link) => [link.getAttribute('href'), link.getAttribute('sizes')]),
+  )
+  expect(favicons.map(([, sizes]) => sizes)).toEqual(['16x16', '32x32', '48x48'])
+  for (const [href] of favicons) {
+    const image = await page.request.get(origin + href)
+    expect(image.headers()['content-type'], href!).toBe('image/png')
+  }
+
   // A browser registers the worker that shows push notifications only when
   // it arrives as a script.
   const worker = await page.request.get(origin + '/sw.js')
@@ -74,8 +84,11 @@ test('a phone is served everything it needs to install the dashboard', async ({
   // chrome goes: everything stays reachable and nothing overflows.
   const bar = page.getByRole('banner')
   await expect(bar).toBeInViewport({ ratio: 1 })
-  await expect(bar.getByRole('button', { name: /^Open sidebar/ })).toBeVisible()
-  await expect(bar.getByRole('button', { name: 'New session' })).toBeVisible()
+  await expect(bar.getByRole('button', { name: 'Search', exact: true })).toBeVisible()
+  const tabs = page.getByRole('navigation', { name: 'Main navigation' })
+  await expect(tabs).toBeInViewport({ ratio: 1 })
+  await expect(tabs.getByRole('button', { name: 'More' })).toBeVisible()
+  await expect(tabs.getByRole('button', { name: 'New session' })).toBeVisible()
   const overflow = await page.evaluate(() =>
     Math.max(
       document.documentElement.scrollWidth - document.documentElement.clientWidth,

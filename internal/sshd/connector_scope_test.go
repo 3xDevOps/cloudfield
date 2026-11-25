@@ -11,6 +11,7 @@ import (
 
 	"github.com/3xDevOps/Aether/internal/acphost"
 	"github.com/3xDevOps/Aether/internal/domain"
+	"github.com/3xDevOps/Aether/internal/ops"
 	"github.com/3xDevOps/Aether/internal/protocol"
 	"github.com/3xDevOps/Aether/internal/store"
 )
@@ -19,6 +20,28 @@ func TestConnectorMethodScopesNameRegisteredMethods(t *testing.T) {
 	for method := range connectorMethodScopes {
 		if _, ok := methodHandlers[method]; !ok {
 			t.Errorf("connectorMethodScopes lists %s, which no handler serves", method)
+		}
+	}
+}
+
+// A connector granted an op's scope, and read, can make every call the op
+// declares: the server admits each method under read or under that scope.
+// Write and control are separate boxes, so a control op cannot lean on
+// write.
+func TestOpsMethodsFitTheirConnectorScope(t *testing.T) {
+	for _, o := range ops.Ops {
+		if o.Scope == "" {
+			continue
+		}
+		for _, method := range o.Methods {
+			scopes, ok := connectorMethodScopes[method]
+			if !ok {
+				t.Errorf("%s calls %s, which the server refuses to every connector", o.Name, method)
+				continue
+			}
+			if !slices.Contains(scopes, ConnectorScopeRead) && !slices.Contains(scopes, string(o.Scope)) {
+				t.Errorf("%s (scope %s) calls %s, which needs %v", o.Name, o.Scope, method, scopes)
+			}
 		}
 	}
 }
@@ -68,6 +91,7 @@ func TestConnectorScopesGateEachMethod(t *testing.T) {
 		{"write scope cannot complete a live session", connector(write), protocol.MethodRunReview, review(e.run.ID, protocol.RunReviewComplete),
 			"run.review complete of a session with no reported success awaiting review needs the control scope"},
 		{"write scope puts a review off", connector(write), protocol.MethodRunReview, review(e.run.ID, protocol.RunReviewLater), ""},
+		{"write scope says a success is not finished", connector(write), protocol.MethodRunReview, review(e.run.ID, protocol.RunReviewNotYet), ""},
 		{"write scope completes a reported success", connector(write), protocol.MethodRunReview, review(ready.ID, protocol.RunReviewComplete), ""},
 		{"control scope completes a live session", connector(all), protocol.MethodRunReview, review(e.run.ID, protocol.RunReviewComplete), ""},
 		{"read scope reads a room", connector(read), protocol.MethodRunRoomList,
@@ -86,7 +110,7 @@ func TestConnectorScopesGateEachMethod(t *testing.T) {
 		{"write scope cannot switch mode", connector(write), protocol.MethodRunModeSwitch, run, "run.mode.switch needs the control scope"},
 		{"write scope cannot hand off", connector(write), protocol.MethodRunHandoff, run, "run.handoff needs the control scope"},
 		{"unlisted method", connector(all), protocol.MethodMemberRole, json.RawMessage(`{}`),
-			"member.role: ChatGPT connector con-test cannot call this method; no connector can, so use the Aether app or the aether CLI"},
+			"member.role: ChatGPT connector con-test cannot call this method; no connector can, so use the Cloudfield app or the aether CLI"},
 		{"dashboard is unscoped", e.srv.Local(e.member.ID), protocol.MethodMemberList, nil, ""},
 		{"dashboard stops", e.srv.Local(e.member.ID), protocol.MethodRunKill, run, ""},
 		{"assistant is unscoped", e.srv.AssistantLocal(e.member.ID), protocol.MethodRunKill, run, ""},
@@ -236,6 +260,7 @@ func TestAuditRecordsConnectorWritesForTheirMemberAndAdmins(t *testing.T) {
 func TestAuditRecordsConnectorsRemovedWithTheirMember(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t, nil)
+	asSuperAdmin(t, e)
 	ctx := context.Background()
 	_, bo := addMember(t, e, "Bo", domain.RoleCollaborator, false)
 	now := time.Now()
@@ -249,6 +274,7 @@ func TestAuditRecordsConnectorsRemovedWithTheirMember(t *testing.T) {
 	if _, perr := admin.Call(ctx, protocol.MethodMemberRemove, json.RawMessage(`{"member_id":"`+string(bo.ID)+`"}`)); perr != nil {
 		t.Fatalf("member.remove: %v", perr)
 	}
+	asSuperAdmin(t, e)
 	var got []string
 	for _, params := range []string{`{"limit":2}`, `{"connector_id":"` + conn.ID + `"}`} {
 		raw, perr := admin.Call(ctx, protocol.MethodAuditList, json.RawMessage(params))

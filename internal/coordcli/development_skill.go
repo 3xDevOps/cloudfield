@@ -12,7 +12,7 @@ const generalDiscovery = `No live capabilities are assumed. Run aether-internal 
 for its current authority; aether-internal --help describes syntax only.
 Use aether-internal skill again after identity or assignment changes.
 Native Git/gh and image-reading tools depend on your own harness/environment;
-Aether does not register tools, install agents, or create a task for discovery.
+Cloudfield does not register tools, install agents, or create a task for discovery.
 `
 
 const terminalSkill = `Development terminal loop:
@@ -30,8 +30,10 @@ incarnation or controller changes do. On a stale fence, re-observe ownership;
 do not blindly retry input or take over a human. Release the exact lease when
 you finish interacting. Release/detach does not stop the process. Never send
 development input to the primary harness.
-A server restart does not stop the process either, but its output cannot be
-read afterwards: have a long-running command also write a log file.
+A server restart does not stop the process either: once the server is back,
+output from your earlier cursor, input and wait continue (up to 2 MiB of
+output kept meanwhile). A terminal that reads "PTY unavailable after recovery"
+predates this: stop it and start another.
 Exercise the changed behavior, inspect output/screen and exit status, correct
 problems, and verify again. A successful wait RPC is not a successful process:
 inspect matched, timed_out and process.exit_code. Unsupported graphics or
@@ -77,7 +79,7 @@ truncation and unsupported content, and do not automatically upload screenshots
 publicly. Verify and collect required evidence before reporting an outcome,
 terminal stop, or artifact deletion. Background success/failure reports
 may clean up development resources; interactive sessions stay open for
-follow-up. Read the inbox before reporting, then end your turn.
+follow-up. Report, then end your turn.
 `
 
 const retainCaptureSkill = `Retain only deliberately selected, reviewed captures:
@@ -98,7 +100,7 @@ Retaining never publishes images to a PR. The later packet-retain revision
 does not prove the Git boundary of an earlier screenshot; unknown stays unknown.
 `
 
-const nativeGitSkill = `Native Git and gh (not an Aether Git RPC/tool registration):
+const nativeGitSkill = `Native Git and gh (not a Cloudfield Git RPC/tool registration):
 Check command availability in your harness/account environment before use.
 Inspect git status --short, git diff, git diff --cached, git branch --show-current
 and git remote -v in the session checkout. Review changes and stage exact paths;
@@ -110,7 +112,7 @@ Inspect the actual checkout remote before fetch/push. For a fork PR, explicitly
 identify the base repository + branch and head owner + branch; inspect gh auth
 status and existing PR metadata before create/update to avoid duplicate PRs.
 Use native git/gh for authenticated push and PR operations under the session account,
-not a second Git engine. Aether capabilities do not prove gh, credentials,
+not a second Git engine. Cloudfield capabilities do not prove gh, credentials,
 push rights, image readers or a public upload destination exist. Do not silently
 change remotes, auto-upload screenshots or merge a PR; follow the assigned
 review/approval boundaries.

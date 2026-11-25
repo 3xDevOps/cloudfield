@@ -97,10 +97,9 @@ type cacheState struct {
 }
 
 type readFlight struct {
-	done        chan struct{}
-	providers   []Provider
-	fingerprint [2]string
-	err         error
+	done      chan struct{}
+	providers []Provider
+	err       error
 }
 
 // New returns a quota service using homes for read-only credential access.
@@ -114,11 +113,14 @@ func New(homes *memberhome.Manager) *Service {
 }
 
 type credential struct {
-	status      string
-	err         string
-	token       string
-	accountID   string
-	plan        string
+	status    string
+	err       string
+	token     string
+	accountID string
+	plan      string
+	expired   bool
+	// signedOut: the file holds an OAuth login the agent cannot sign in with.
+	signedOut   bool
 	fingerprint string
 }
 
@@ -185,9 +187,6 @@ func (s *Service) lead(key string, account domain.MemberID, refresh bool, flight
 			readErr = latestErr
 		} else if latest.fingerprints() != creds.fingerprints() {
 			providers = s.statusRows(latest, "credential changed while usage was fetched")
-		}
-		if readErr == nil {
-			flight.fingerprint = latest.fingerprints()
 		}
 	}
 	flight.providers = cloneProviders(providers)

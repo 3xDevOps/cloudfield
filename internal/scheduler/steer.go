@@ -39,6 +39,7 @@ func (s *Scheduler) kill(ctx context.Context, run domain.RunID, actor domain.Mem
 		return s.killUnsupervised(ctx, run, actor, by)
 	}
 	s.mu.Unlock()
+	s.wakeBeforeEnd(ctx, entry, actor)
 
 	entry.lifecycleMu.Lock()
 	defer entry.lifecycleMu.Unlock()
@@ -72,6 +73,9 @@ func (s *Scheduler) kill(ctx context.Context, run domain.RunID, actor domain.Mem
 	// No container yet (still provisioning): the provisioning checkpoints
 	// see killRequested and abort. Not-found means the desired state is gone.
 	if cid != "" {
+		if err := s.endAsleepVM(ctx, entry); err != nil {
+			return err
+		}
 		if err := s.prepareDevelopmentClose(ctx, run); err != nil {
 			return err
 		}
@@ -79,6 +83,7 @@ func (s *Scheduler) kill(ctx context.Context, run domain.RunID, actor domain.Mem
 			return err
 		}
 	}
+	s.finalizeAsleep(entry, 137)
 	s.publishTimeline(ctx, workspace, run, actor, events.TimelineKill, "")
 	return nil
 }
@@ -283,13 +288,24 @@ func (s *Scheduler) killUnsupervised(ctx context.Context, id domain.RunID, actor
 // durable run record and its dependent data. The published branch remains.
 // Terminal runs are deleted directly; deleting never leaves a live container.
 func (s *Scheduler) DeleteRun(ctx context.Context, run domain.RunID, actor domain.MemberID) error {
+	var extras []domain.WorkspaceID
 	workspace, err := s.teardownRun(ctx, run, actor, func(ctx context.Context) error {
+		current, err := s.cfg.Store.GetRun(ctx, run)
+		if err != nil {
+			return fmt.Errorf("scheduler: read session %s before deleting it: %w", run, err)
+		}
+		extras = current.ExtraWorkspaces()
 		return s.cfg.Store.DeleteRun(ctx, run)
 	})
 	if err != nil {
 		return err
 	}
-	s.publishRunDeleted(ctx, workspace, run, actor)
+	s.publish(ctx, events.Event{
+		WorkspaceID: workspace,
+		RunID:       run,
+		ActorID:     actor,
+		Payload:     events.RunDeletedPayload{ExtraWorkspaceIDs: extras},
+	})
 	return nil
 }
 
@@ -298,15 +314,6 @@ func (s *Scheduler) DeleteRun(ctx context.Context, run domain.RunID, actor domai
 func (s *Scheduler) TeardownRun(ctx context.Context, run domain.RunID, actor domain.MemberID) error {
 	_, err := s.teardownRun(ctx, run, actor, nil)
 	return err
-}
-
-func (s *Scheduler) publishRunDeleted(ctx context.Context, workspace domain.WorkspaceID, run domain.RunID, actor domain.MemberID) {
-	s.publish(ctx, events.Event{
-		WorkspaceID: workspace,
-		RunID:       run,
-		ActorID:     actor,
-		Payload:     events.RunDeletedPayload{},
-	})
 }
 
 func (s *Scheduler) teardownRun(ctx context.Context, run domain.RunID, actor domain.MemberID, deleteRows func(context.Context) error) (domain.WorkspaceID, error) {
@@ -493,7 +500,7 @@ func (s *Scheduler) Pause(ctx context.Context, run domain.RunID, actor domain.Me
 	entry := s.runs[run]
 	s.mu.Unlock()
 	if entry == nil {
-		return fmt.Errorf("%w: session has no live container", ErrInvalidTransition)
+		return fmt.Errorf("%w: session has no live sandbox", ErrInvalidTransition)
 	}
 	entry.lifecycleMu.Lock()
 	defer entry.lifecycleMu.Unlock()
@@ -502,6 +509,10 @@ func (s *Scheduler) Pause(ctx context.Context, run domain.RunID, actor domain.Me
 		entry.status.Terminal() || entry.retained || entry.destroyPending || entry.finalizing {
 		s.mu.Unlock()
 		return fmt.Errorf("%w: session cannot be paused in its current state", ErrInvalidTransition)
+	}
+	if !entry.asleepSince.IsZero() {
+		s.mu.Unlock()
+		return fmt.Errorf("%w: session is asleep and its container is already stopped", ErrInvalidTransition)
 	}
 	if entry.paused {
 		s.mu.Unlock()
@@ -534,13 +545,23 @@ func (s *Scheduler) Pause(ctx context.Context, run domain.RunID, actor domain.Me
 func (s *Scheduler) Resume(ctx context.Context, run domain.RunID, actor domain.MemberID) error {
 	s.mu.Lock()
 	entry := s.runs[run]
+	asleep := entry != nil && !entry.asleepSince.IsZero() && !entry.retained
 	s.mu.Unlock()
 	if entry == nil {
-		return fmt.Errorf("%w: session has no live container", ErrInvalidTransition)
+		return fmt.Errorf("%w: session has no live sandbox", ErrInvalidTransition)
+	}
+	if asleep {
+		return s.WakeRun(ctx, run, actor)
 	}
 	entry.lifecycleMu.Lock()
-	defer entry.lifecycleMu.Unlock()
 	s.mu.Lock()
+	// A sleep that held the lifecycle lock may have finished meanwhile.
+	if !entry.asleepSince.IsZero() && !entry.retained {
+		s.mu.Unlock()
+		entry.lifecycleMu.Unlock()
+		return s.WakeRun(ctx, run, actor)
+	}
+	defer entry.lifecycleMu.Unlock()
 	if s.runs[run] != entry || entry.containerID == "" ||
 		entry.status.Terminal() || entry.retained || entry.destroyPending || entry.finalizing {
 		s.mu.Unlock()
@@ -558,14 +579,24 @@ func (s *Scheduler) Resume(ctx context.Context, run domain.RunID, actor domain.M
 	if err := s.resumeDevelopmentBrowser(ctx, run, cid); err != nil {
 		return errors.Join(err, s.cfg.Runtime.Pause(context.WithoutCancel(ctx), cid))
 	}
+	s.mu.Lock()
+	entry.resuming = acp
+	s.mu.Unlock()
 	s.setPaused(entry, false)
+	terminalsErr := s.RecoverDevelopmentTerminals(ctx, run)
 	if acp {
 		s.acp.resumeAfterPause(ctx, entry)
+		s.mu.Lock()
+		entry.resuming = false
+		s.mu.Unlock()
 	}
 	if appServer {
 		s.appServer.resumeAfterPause(entry)
 	}
 	s.publishTimeline(ctx, workspace, run, actor, events.TimelineResume, "")
+	if terminalsErr != nil {
+		return fmt.Errorf("the session resumed, but its terminals were not recovered: %w", terminalsErr)
+	}
 	return nil
 }
 
@@ -575,6 +606,7 @@ func (s *Scheduler) setPaused(entry *supervised, paused bool) {
 	entry.paused = paused
 	if !paused {
 		entry.quietFrom = time.Now().UTC()
+		entry.diskHeld = false
 	}
 	if s.runs[entry.runID] != entry {
 		// Finalized concurrently: the sidecar is gone and must stay gone.
@@ -585,11 +617,12 @@ func (s *Scheduler) setPaused(entry *supervised, paused bool) {
 	}
 }
 
+// Paused reports a frozen container; a sleeping one is asleep instead.
 func (s *Scheduler) Paused(run domain.RunID) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entry := s.runs[run]
-	return entry != nil && entry.paused
+	return entry != nil && entry.paused && entry.asleepSince.IsZero()
 }
 
 // Cause is what chose activity for the live run, empty for an unknown or
@@ -631,6 +664,11 @@ const steerRecordTimeout = 10 * time.Second
 
 func (s *Scheduler) injectLive(ctx context.Context, entry *supervised, workspace domain.WorkspaceID, actor domain.MemberID, prompt domain.AgentPrompt, steer bool, delivered func(error)) (string, error) {
 	run := entry.runID
+	awake, err := s.holdAwake(ctx, run)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", domain.ErrPromptNotSent, err)
+	}
+	defer awake()
 	m, err := s.cfg.Store.GetMember(ctx, actor)
 	if err != nil {
 		return "", err
@@ -790,6 +828,7 @@ func (s *Scheduler) closeRun(ctx context.Context, run domain.RunID, spec closeSp
 		}
 	}
 
+	s.wakeBeforeEnd(ctx, entry, actor)
 	entry.lifecycleMu.Lock()
 	defer entry.lifecycleMu.Unlock()
 	s.mu.Lock()
@@ -820,6 +859,9 @@ func (s *Scheduler) closeRun(ctx context.Context, run domain.RunID, spec closeSp
 	}
 	if live && entry.destroyPending {
 		s.mu.Unlock()
+		if status == outcome {
+			return s.retryDestroyPendingLocked(ctx, entry)
+		}
 		return fmt.Errorf("%w: session cleanup is pending", ErrInvalidTransition)
 	}
 	if !live || (entry.finalizing && !entry.retained) {
@@ -905,6 +947,9 @@ func (s *Scheduler) closeLiveLocked(ctx context.Context, entry *supervised, stat
 	run, outcome, actor := entry.runID, spec.outcome, spec.actor
 	closeReason := spec.retained
 	if mode.Interactive() && !status.Terminal() {
+		if err := s.endAsleepVM(ctx, entry); err != nil {
+			return err
+		}
 		if err := s.prepareDevelopmentClose(ctx, run); err != nil {
 			return err
 		}
@@ -940,7 +985,20 @@ func (s *Scheduler) closeLiveLocked(ctx context.Context, entry *supervised, stat
 				entry.evidenceIdentity = identity
 			}
 			s.mu.Unlock()
+			// A VM, or a container created for Enhanced, whose main process
+			// is a bare shell, stops below and keeps only its disks. Docker
+			// starts any other container only with its launch command, with
+			// the task, so it stays frozen with its memory, which nothing
+			// reclaims, and is kept for frozenTTL.
+			_, saving := s.saver(cid)
+			s.mu.Lock()
+			enhanced := entry.acp && mode == domain.LaunchACP
+			s.mu.Unlock()
+			stops := saving || enhanced && s.launchedEnhanced(ctx, entry)
 			ttl := s.cfg.RunContainerTTL
+			if !stops {
+				ttl = s.frozenTTL
+			}
 			deadline := time.Now().UTC().Add(ttl)
 			retentionReason := closeReason
 			if ttl < 0 {
@@ -1000,6 +1058,15 @@ func (s *Scheduler) closeLiveLocked(ctx context.Context, entry *supervised, stat
 			if ttl < 0 {
 				s.stopCloseContainer(ctx, cid)
 				s.destroyClosedRetained(ctx, entry)
+				return nil
+			}
+			// Relaunch starts it from its disks. One this could not stop
+			// stays paused, for the sleep sweep, where sleep is on, or for a
+			// VM the memory guard to stop.
+			if stops {
+				if err := s.sleepClosedLocked(ctx, entry); err != nil && !errors.Is(err, errStayAwake) {
+					slog.Warn("scheduler: stop a closed session's sandbox", "run", run, "error", err)
+				}
 			}
 			return nil
 		}

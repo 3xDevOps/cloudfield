@@ -209,6 +209,11 @@ func (s *Scheduler) touchCache(member domain.MemberID, pool string) {
 	}
 }
 
+// vmImageSweeper is a runtime that keeps the disks VMs boot from.
+type vmImageSweeper interface {
+	SweepImages() error
+}
+
 // sweepCaches is shared by startup, the existing hourly maintenance and one
 // pressure retry. It never waits for a busy owner, kills idle work or prunes
 // unrelated runtime resources. Lock order is terminal -> cache -> short mu.
@@ -216,7 +221,12 @@ func (s *Scheduler) sweepCaches(ctx context.Context, pressure bool) {
 	if s.cfg.Homes == nil || ctx.Err() != nil {
 		return
 	}
-	s.sweepStandardImages(ctx)
+	s.sweepUnusedImages(ctx)
+	if vms, ok := s.cfg.Runtime.(vmImageSweeper); ok {
+		if err := vms.SweepImages(); err != nil {
+			slog.Warn("scheduler: delete unused VM disks", "error", err)
+		}
+	}
 	owners, err := s.cacheOwnershipSnapshot(ctx)
 	if err != nil {
 		slog.Warn("scheduler: cache cleanup ownership unavailable", "error", err)
@@ -414,12 +424,17 @@ func (s *Scheduler) sweepCaches(ctx context.Context, pressure bool) {
 func (s *Scheduler) resolveCacheRuntimeOwners(ctx context.Context, info *memberhome.CacheInfo, owners *cacheOwnership) error {
 	member := info.Member
 	// A stopped kept terminal does not own the pool; only a running one does.
+	// Inspect reads the state directly, where a Wait probe would read a slow
+	// runtime's deadline as a running terminal. The bound only keeps a hung
+	// runtime from stalling the member's held locks; its error protects.
 	if cid, err := s.cfg.Runtime.FindByCreationKey(ctx, terminalCreationKey(member)); err == nil {
-		running, probeErr := s.terminalContainerRunning(ctx, cid, 50*time.Millisecond)
-		if probeErr != nil {
-			return probeErr
+		probeCtx, cancel := context.WithTimeout(ctx, s.cfg.ExitProbeTimeout)
+		state, inspectErr := s.cfg.Runtime.Inspect(probeCtx, cid)
+		cancel()
+		if inspectErr != nil && !errors.Is(inspectErr, runtime.ErrNotFound) {
+			return inspectErr
 		}
-		if running {
+		if inspectErr == nil && !state.Exited {
 			owners.terminal[member], owners.legacy[member] = true, true
 		}
 	} else if !errors.Is(err, runtime.ErrNotFound) {

@@ -85,7 +85,7 @@ function Invoke-AetherPowerShellFile {
     $start.CreateNoWindow = $true
     $start.RedirectStandardOutput = $true
     $start.RedirectStandardError = $true
-    foreach ($name in @('AETHER_VERSION', 'AETHER_BIN_DIR', 'AETHER_ROLE', 'AETHER_REPO', 'AETHER_BASE_URL', 'AETHER_LATEST_URL', 'AETHER_API_URL', 'AETHER_BIN', 'AETHER_FIXTURE_LOG', 'AETHER_DESKTOP_TARGET', 'AETHER_GUI_FAIL', 'PROCESSOR_ARCHITEW6432', 'PROCESSOR_ARCHITECTURE', 'LOCALAPPDATA', 'CURL_HOME')) {
+    foreach ($name in @('AETHER_VERSION', 'AETHER_BIN_DIR', 'AETHER_ROLE', 'AETHER_REPO', 'AETHER_BASE_URL', 'AETHER_LATEST_URL', 'AETHER_API_URL', 'AETHER_BIN', 'AETHER_FIXTURE_LOG', 'AETHER_DESKTOP_TARGET', 'AETHER_GUI_FAIL', 'CLOUDFIELD_VERSION', 'CLOUDFIELD_BIN_DIR', 'CLOUDFIELD_ROLE', 'CLOUDFIELD_REPO', 'CLOUDFIELD_BASE_URL', 'CLOUDFIELD_BIN', 'PROCESSOR_ARCHITEW6432', 'PROCESSOR_ARCHITECTURE', 'LOCALAPPDATA', 'CURL_HOME')) {
         $start.EnvironmentVariables.Remove($name)
     }
     foreach ($name in $Environment.Keys) {
@@ -371,6 +371,10 @@ func main() {
     }
     fmt.Println("fixture stdout progress")
     fmt.Fprintln(os.Stderr, "fixture stderr progress")
+    if os.Getenv("CLOUDFIELD_BIN") != "" {
+        fmt.Fprintln(os.Stderr, "CLOUDFIELD_BIN reached the build")
+        os.Exit(65)
+    }
     if os.Getenv("AETHER_GUI_FAIL") != "" {
         fmt.Fprintln(os.Stderr, "fixture desktop failure")
         os.Exit(23)
@@ -483,6 +487,34 @@ func main() {
     Assert-AetherTest (Get-AetherTestBytesEqual (Join-Path $env:SystemRoot 'System32\PING.EXE') $runningCli) 'install over a running CLI replaced it'
     Assert-AetherEqual $beforePath (Get-AetherTestUserPath) 'locked CLI changed user PATH'
 
+    # With the desktop app installed under both product names, a running copy
+    # of either stops a client install.
+    foreach ($runningName in @('Aether', 'Cloudfield')) {
+        $renamedLocal = Join-Path $root ('both-names-{0}' -f $runningName)
+        foreach ($name in @('Aether', 'Cloudfield')) {
+            $exe = Join-Path $renamedLocal ('Programs\{0} Desktop\aether-desktop.exe' -f $name)
+            New-Item -ItemType Directory -Path (Split-Path -Parent $exe) -Force | Out-Null
+            Copy-Item -LiteralPath (Join-Path $env:SystemRoot 'System32\PING.EXE') -Destination $exe
+        }
+        $runningDesktop = Join-Path $renamedLocal ('Programs\{0} Desktop\aether-desktop.exe' -f $runningName)
+        Write-AetherRelease $releaseRoot $version $fixture $fixture
+        $renamedProcess = Start-Process -FilePath $runningDesktop -ArgumentList @('-n', '60', '127.0.0.1') -WindowStyle Hidden -PassThru
+        try {
+            $result = Invoke-AetherPowerShellFile $installer @('-Version', $version) @{
+                AETHER_BASE_URL = $baseUrl
+                LOCALAPPDATA = $renamedLocal
+            }
+        } finally {
+            Stop-Process -Id $renamedProcess.Id -Force -ErrorAction SilentlyContinue
+            $renamedProcess.WaitForExit()
+        }
+        Assert-AetherTest ($result.ExitCode -ne 0) ("install beside a running {0} desktop app was reported as success" -f $runningName)
+        foreach ($expected in @(('aether-desktop (pid {0}) {1}' -f $renamedProcess.Id, $runningDesktop), 'Nothing was changed.')) {
+            Assert-AetherTest ($result.Stderr.Contains($expected)) ("running {0} desktop message lacks [{1}]: {2}" -f $runningName, $expected, $result.Output)
+        }
+        Assert-AetherTest (-not (Test-Path -LiteralPath (Join-Path $renamedLocal 'Programs\Aether\aether.exe'))) ("install beside a running {0} desktop app installed the CLI" -f $runningName)
+    }
+
     # A fresh default install invokes the exact installed CLI and leaves the
     # generated desktop executable beside (not inside) the CLI directory.
     $freshLocal = Join-Path $root 'fresh-localappdata'
@@ -495,12 +527,12 @@ func main() {
         AETHER_BASE_URL = $baseUrl
         LOCALAPPDATA = $freshLocal
         AETHER_FIXTURE_LOG = $freshLog
-        AETHER_DESKTOP_TARGET = (Join-Path $freshLocal 'Programs\Aether Desktop\aether-desktop.exe')
+        AETHER_DESKTOP_TARGET = (Join-Path $freshLocal 'Programs\Cloudfield Desktop\aether-desktop.exe')
         AETHER_BIN = 'caller-sentinel'
     }
     $freshBin = Join-Path $freshLocal 'Programs\Aether'
     $freshCli = Join-Path $freshBin 'aether.exe'
-    $freshDesktop = Join-Path $freshLocal 'Programs\Aether Desktop\aether-desktop.exe'
+    $freshDesktop = Join-Path $freshLocal 'Programs\Cloudfield Desktop\aether-desktop.exe'
     Assert-AetherEqual 0 $result.ExitCode ("fresh default install failed: " + $result.Output)
     Assert-AetherTest (Get-AetherTestBytesEqual $fixture $freshCli) 'fresh install did not retain the CLI executable'
     Assert-AetherTest (Test-Path -LiteralPath $freshDesktop -PathType Leaf) 'GUI build did not create the sibling desktop executable'
@@ -516,6 +548,10 @@ func main() {
     Assert-AetherTest ($result.Stderr.Contains('fixture stderr progress')) ("desktop build stderr did not reach the console: " + $result.Output)
     Assert-AetherTest (-not $result.Stderr.Contains('NativeCommandError')) ("desktop build stderr became an error record: " + $result.Stderr)
     Assert-AetherTest ((Get-AetherTestUserPath).StartsWith($freshUserPath)) 'fresh install altered unrelated PATH entries'
+    # The same cloudfield.cmd the updater writes (internal/selfupdate.writeShim).
+    $shimText = '@"%~dp0aether.exe" %*' + "`r`n"
+    $freshShim = Join-Path $freshBin 'cloudfield.cmd'
+    Assert-AetherEqual $shimText ([IO.File]::ReadAllText($freshShim)) 'fresh install did not write the cloudfield.cmd shim'
     Assert-AetherTest ([Environment]::GetEnvironmentVariable('Path', 'User').StartsWith([Environment]::ExpandEnvironmentVariables($freshUserPath))) 'fresh install stopped expanding PATH tokens'
 
     # Reinstall twice: unrelated files survive and a case/trailing-slash PATH
@@ -540,6 +576,7 @@ func main() {
     Assert-AetherTest ($result.Stdout.Contains(('[2/2] CLI {0} is already installed' -f $version))) ("unchanged reinstall did not say so: " + $result.Output)
     Assert-AetherTest (-not ([IO.File]::ReadAllText($requestLog).Contains('aether-windows-amd64.exe'))) 'unchanged reinstall downloaded the CLI again'
     Assert-AetherEqual 'unrelated user file' ([IO.File]::ReadAllText($unrelated)) 'reinstall deleted an unrelated file'
+    Assert-AetherEqual $shimText ([IO.File]::ReadAllText($freshShim)) 'reinstall changed cloudfield.cmd'
     $finalUserPath = Get-AetherTestUserPath
     Assert-AetherTest ($finalUserPath.Contains('%SystemRoot%\System32')) 'reinstall lost an expandable PATH token'
     $normalizedEntries = @($finalUserPath -split ';' | ForEach-Object { Get-AetherNormalizedPathEntry $_ })
@@ -550,6 +587,9 @@ func main() {
     $noneBin = Join-Path $root 'none-bin'
     $noneLog = Join-Path $root 'none.log'
     New-Item -ItemType Directory -Path $noneBin -Force | Out-Null
+    # A cloudfield.cmd the installer did not write is left as it is.
+    $takenShim = Join-Path $noneBin 'cloudfield.cmd'
+    [IO.File]::WriteAllText($takenShim, 'not ours')
     Write-AetherRelease $releaseRoot 'v0.4.0-alpha.6' $fixture $fixture
     $result = Invoke-AetherPowerShellFile $installer @('-Version', 'v0.4.0-alpha.6', '-Role', 'none', '-BinDir', $noneBin) @{
         AETHER_BASE_URL = $baseUrl
@@ -557,7 +597,29 @@ func main() {
     }
     Assert-AetherEqual 0 $result.ExitCode ("CLI-only install failed: " + $result.Output)
     Assert-AetherTest (Test-Path -LiteralPath (Join-Path $noneBin 'aether.exe') -PathType Leaf) 'CLI-only install did not install the CLI'
+    Assert-AetherEqual 'not ours' ([IO.File]::ReadAllText($takenShim)) 'install replaced a cloudfield.cmd it did not write'
+    Assert-AetherTest (-not $result.Output.Contains('cloudfield.cmd')) ("install warned about a cloudfield.cmd that is not its own: " + $result.Output)
     Assert-AetherTest (-not (Test-Path -LiteralPath $noneLog)) 'CLI-only opt out invoked GUI build'
+
+    # CLOUDFIELD_X wins over AETHER_X; a blank one falls back.
+    $cloudfieldBin = Join-Path $root 'cloudfield-bin'
+    $cloudfieldLog = Join-Path $root 'cloudfield.log'
+    New-Item -ItemType Directory -Path $cloudfieldBin -Force | Out-Null
+    $result = Invoke-AetherPowerShellFile $installer @() @{
+        CLOUDFIELD_BASE_URL = ' '
+        AETHER_BASE_URL = $baseUrl
+        CLOUDFIELD_VERSION = 'v0.4.0-alpha.6'
+        AETHER_VERSION = 'v0.0.0-not-a-release'
+        CLOUDFIELD_ROLE = 'none'
+        AETHER_ROLE = 'client'
+        CLOUDFIELD_BIN_DIR = $cloudfieldBin
+        AETHER_BIN_DIR = (Join-Path $root 'aether-bin-not-used')
+        AETHER_FIXTURE_LOG = $cloudfieldLog
+    }
+    Assert-AetherEqual 0 $result.ExitCode ("CLOUDFIELD_ install failed: " + $result.Output)
+    Assert-AetherTest (Test-Path -LiteralPath (Join-Path $cloudfieldBin 'aether.exe') -PathType Leaf) 'CLOUDFIELD_BIN_DIR or CLOUDFIELD_VERSION was not used'
+    Assert-AetherTest (-not (Test-Path -LiteralPath (Join-Path $root 'aether-bin-not-used'))) 'AETHER_BIN_DIR won over CLOUDFIELD_BIN_DIR'
+    Assert-AetherTest (-not (Test-Path -LiteralPath $cloudfieldLog)) 'CLOUDFIELD_ROLE=none did not win over AETHER_ROLE=client'
 
     # A desktop failure leaves the newly installed CLI and restores AETHER_BIN.
     # Called from a script with & or dot-sourced, the installer prints the
@@ -575,6 +637,7 @@ func main() {
         $wrapper = Join-Path $root 'caller-wrapper.ps1'
         $wrapperSource = @"
 `$env:AETHER_BIN = 'caller-sentinel'
+`$env:CLOUDFIELD_BIN = 'caller-cloudfield'
 Set-Location -LiteralPath '$failureCaseLiteral'
 try {
     $operator '$installerLiteral' -Version '$version' -Role client -BinDir '.\bin'
@@ -583,7 +646,7 @@ try {
 catch {
     'caller caught: ' + `$_.Exception.Message
 }
-[IO.File]::WriteAllText('$restoreLiteral', [Environment]::GetEnvironmentVariable('AETHER_BIN', 'Process'))
+[IO.File]::WriteAllText('$restoreLiteral', [Environment]::GetEnvironmentVariable('AETHER_BIN', 'Process') + '|' + [Environment]::GetEnvironmentVariable('CLOUDFIELD_BIN', 'Process'))
 "@
         [IO.File]::WriteAllText($wrapper, $wrapperSource)
         Remove-Item -LiteralPath $restoreResult -Force -ErrorAction SilentlyContinue
@@ -598,7 +661,7 @@ catch {
         Assert-AetherTest ($result.Stderr.Contains('fixture desktop failure')) ("desktop failure output did not reach the console: " + $result.Output)
         Assert-AetherEqual 1 ([regex]::Matches($result.Stderr, 'exited with code 23').Count) ("desktop failure under {0} printed the error more than once: {1}" -f $operator, $result.Stderr)
         Assert-AetherTest (Test-Path -LiteralPath (Join-Path $failureBin 'aether.exe') -PathType Leaf) 'desktop failure lost the installed CLI'
-        Assert-AetherEqual 'caller-sentinel' ([IO.File]::ReadAllText($restoreResult)) ("installer under {0} did not restore AETHER_BIN" -f $operator)
+        Assert-AetherEqual 'caller-sentinel|caller-cloudfield' ([IO.File]::ReadAllText($restoreResult)) ("installer under {0} did not restore AETHER_BIN and CLOUDFIELD_BIN" -f $operator)
     }
 
     # Old client releases are rejected before download/install/build mutation;
@@ -781,7 +844,7 @@ catch {
     Write-AetherApi $releaseRoot -Tags @('v0.7.0-alpha.12', 'v0.7.0-alpha.11')
     $result = Invoke-AetherPowerShellFile $installer @('-Role', 'none', '-BinDir', $selectBin) $selectEnv
     Assert-AetherTest ($result.ExitCode -ne 0) 'an all-incomplete release list succeeded'
-    Assert-AetherTest ($result.Stderr.Contains('no complete release for windows/amd64 among the newest 2 releases of 3xDevOps/Aether; pass -Version <tag>')) ("no-candidate failure was not explained: " + $result.Output)
+    Assert-AetherTest ($result.Stderr.Contains('no complete release for windows/amd64 among the newest 2 releases of 3xDevOps/cloudfield; pass -Version <tag>')) ("no-candidate failure was not explained: " + $result.Output)
     Assert-AetherTest ($result.Stdout.Contains('v0.7.0-alpha.12 is not fully published yet (no checksums.txt)')) ("no-candidate failure did not name the probed release: " + $result.Output)
     Assert-AetherEqual 'old select CLI' ([IO.File]::ReadAllText($selectCli)) 'no-candidate failure replaced the CLI'
 

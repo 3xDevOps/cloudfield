@@ -129,7 +129,7 @@ func TestIntegrationServerUpdateAppliesWhenIdle(t *testing.T) {
 		DisplayName: "Update Admin",
 		PublicKey:   string(ssh.MarshalAuthorizedKey(signer.PublicKey())),
 		Color:       "#e6194b",
-		Role:        domain.RoleAdmin,
+		Role:        domain.RoleSuperAdmin,
 	}
 	ws := &domain.Workspace{
 		Name:        "update",
@@ -415,7 +415,7 @@ func (h *updateHarness) start(t *testing.T, ctx context.Context, ver string) *ru
 			DisplayName: "Update Admin",
 			PublicKey:   string(ssh.MarshalAuthorizedKey(h.signer.PublicKey())),
 			Color:       "#e6194b",
-			Role:        domain.RoleAdmin,
+			Role:        domain.RoleSuperAdmin,
 		}
 		if err := srv.Store().CreateMember(ctx, h.member); err != nil {
 			t.Fatalf("seed member: %v", err)
@@ -669,7 +669,11 @@ func TestIntegrationServerUpdateBackgroundCheck(t *testing.T) {
 	if st.CheckError == "" || !strings.Contains(st.CheckError, "503") {
 		t.Fatalf("status = %+v, want the check's own error", st)
 	}
+	// The check's answer is shown before it is persisted.
 	data, err := os.ReadFile(filepath.Join(UpdateStateDir(h.dataDir), "check.json"))
+	for ; errors.Is(err, os.ErrNotExist) && ctx.Err() == nil; data, err = os.ReadFile(filepath.Join(UpdateStateDir(h.dataDir), "check.json")) {
+		time.Sleep(50 * time.Millisecond)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}

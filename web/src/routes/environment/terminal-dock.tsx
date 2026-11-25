@@ -62,7 +62,7 @@ interface StructuralReplayState {
   revision: number
 }
 
-export interface TerminalDockProps {
+interface TerminalDockProps {
   client?: Api
   openOnMount?: boolean
   /** A line to type into the main tab after its first attach. */
@@ -263,8 +263,10 @@ export function TerminalDock({
     setCollapsed(false)
   }, [openOnMount, setCollapsed])
 
+  const selectedOnMount = useRef(false)
   useEffect(() => {
-    if (!openOnMount) return
+    if (!openOnMount || selectedOnMount.current) return
+    selectedOnMount.current = true
     if (!dock.tabs.includes('main')) {
       openTab()
     } else if (dock.activeTab !== 'main') {
@@ -560,7 +562,7 @@ export function TerminalDock({
                   title="Your environment starts on first open"
                   action={<Button ref={openTrigger} type="button" onClick={open}>Open</Button>}
                 >
-                  A container with your home directory, for installing tools and logging in to agents. Save it and new sessions start from it.
+                  A sandbox with your home directory, for installing tools and logging in to agents. Save it and new sessions start from it.
                 </EmptyState>
               </div>
             ) : empty ? (
@@ -592,7 +594,7 @@ export function TerminalDock({
                     label={
                       dock.status?.running
                         ? 'Connecting to your environment'
-                        : 'Starting your environment container'
+                        : 'Starting your environment'
                     }
                   />
                 )}
@@ -616,7 +618,7 @@ export function TerminalDock({
               <AlertDialogTitle>Reset to the standard image?</AlertDialogTitle>
               <AlertDialogDescription>
                 Your saved image {dock.status?.saved_image} is deleted
-                {dock.status?.running && ' and the environment container stops'}.
+                {dock.status?.running && ' and the environment stops'}.
                 Your home files remain, and the next open starts from the
                 standard image.
               </AlertDialogDescription>

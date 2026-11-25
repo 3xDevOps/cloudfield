@@ -1,9 +1,11 @@
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { preloadChunks } from '@/components/lazy-chunk'
 import type * as apiModule from '@/lib/api'
 import { api } from '@/lib/api'
 import type { Run } from '@/lib/types'
 import { ShortcutsDialog } from '@/components/shortcuts'
+import type * as xtermHostModule from '@/components/xterm-host'
 import { openRunLink } from '@/routes/browser/open'
 import { openInFiles } from '@/routes/files/open'
 import { lookupRoute } from '@/routes/registry'
@@ -15,6 +17,15 @@ import { applyEvent } from '@/store/sync'
 import { agentInfo, alice, bob, fakeApi, roomMessage, run, serverInfo, workspace } from '@/test/fixtures'
 import { ApiError } from '@/lib/api'
 import { StubSocket } from '@/test/stub-socket'
+import { atViewport } from '@/test/viewport'
+
+// A real xterm costs each mount of a run view most of its jsdom time; a case
+// that never reads the agent terminal turns it off.
+const xterm = vi.hoisted(() => ({ enabled: true }))
+vi.mock('@/components/xterm-host', async (importOriginal) => {
+  const actual = await importOriginal<typeof xtermHostModule>()
+  return { ...actual, useXterm: (options: Parameters<typeof actual.useXterm>[0] = {}) => actual.useXterm({ ...options, enabled: xterm.enabled && options.enabled !== false }) }
+})
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof apiModule>()
@@ -45,7 +56,10 @@ function rerouted(view: string) {
   return <View params={useStore.getState().route.params} />
 }
 
+beforeAll(() => preloadChunks())
+
 beforeEach(() => {
+  xterm.enabled = true
   StubSocket.install()
   useStore.setState({
     hydrated: true,
@@ -122,6 +136,32 @@ describe('run frame', () => {
     expect(useStore.getState().runViewMemory.run_1).toBe('terminal')
   })
 
+  it('remembers a phone tab selection when reopening a session', () => {
+    atViewport(390, { pointer: 'coarse' })
+    const view = open()
+    fireEvent.mouseDown(screen.getByRole('tab', { name: 'Changes' }))
+    expect(useStore.getState().runViewMemory.run_1).toBe('changes')
+    view.unmount()
+    open()
+    expect(screen.getByRole('tab', { name: 'Changes' }).getAttribute('aria-selected')).toBe('true')
+  })
+
+  it('keeps the chosen view across a mode switch while the session still has it', () => {
+    const View = lookupRoute('run')!
+    useStore.setState({ runViewMemory: { run_1: 'changes' } })
+    const view = open({ mode: 'tui' })
+    expect(useStore.getState().shownRunView).toEqual({ runId: 'run_1', view: 'changes' })
+    act(() => useStore.getState().upsertRun(run({ mode: 'acp', acp: true })))
+    expect(useStore.getState().shownRunView).toEqual({ runId: 'run_1', view: 'changes' })
+
+    view.rerender(rerouted('trace'))
+    act(() => useStore.getState().upsertRun(run({ mode: 'tui', acp: false })))
+    useStore.setState({ route: { name: 'run', params: { runId: 'run_1' } } })
+    view.rerender(<View params={{ runId: 'run_1' }} />)
+    expect(useStore.getState().runViewMemory.run_1).toBe('trace')
+    expect(useStore.getState().shownRunView).toEqual({ runId: 'run_1', view: 'terminal' })
+  })
+
   it('asks for control only once the owner shows the agent terminal', () => {
     const view = open({}, 'session')
     attached()
@@ -148,6 +188,49 @@ describe('run frame', () => {
     await waitFor(() => expect(useStore.getState().agentList).not.toBeNull())
     open()
     expect(api.agentList).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['the More button', () => fireEvent.pointerDown(screen.getByRole('button', { name: 'More' }), { button: 0, ctrlKey: false })],
+    ['a right-click on Chat', () => fireEvent.contextMenu(screen.getByRole('tabpanel', { name: 'Chat' }), { clientX: 200, clientY: 300 })],
+  ])('puts the cursor in the note field from Leave a comment in %s', async (_, openMenu) => {
+    xterm.enabled = false
+    open({ mode: 'acp' })
+    openMenu()
+    await userEvent.click(within(await screen.findByRole('menu')).getByRole('menuitem', { name: 'Leave a comment…' }))
+    // The closing menu restores focus a task later; let it try.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)))
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Add a note' }))
+  })
+
+  it('focuses the note field once, not on every later Details open', async () => {
+    xterm.enabled = false
+    open({ mode: 'acp' })
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'More' }), { button: 0, ctrlKey: false })
+    await userEvent.click(within(await screen.findByRole('menu')).getByRole('menuitem', { name: 'Leave a comment…' }))
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Add a note' })))
+    await userEvent.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Add a note' })).toBeNull())
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'More' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Show details' }))
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)))
+    expect(document.activeElement).not.toBe(screen.getByRole('textbox', { name: 'Add a note' }))
+  })
+
+  it('leaves the browser menu alone over a link or selected text', () => {
+    xterm.enabled = false
+    open({ mode: 'acp' })
+    const chat = screen.getByRole('tabpanel', { name: 'Chat' })
+    const link = chat.appendChild(document.createElement('a'))
+    expect(fireEvent.contextMenu(link)).toBe(true)
+    const text = chat.appendChild(document.createElement('p'))
+    text.textContent = 'agent output'
+    window.getSelection()!.selectAllChildren(text)
+    fireEvent.mouseDown(text, { button: 2 })
+    expect(fireEvent.contextMenu(text)).toBe(true)
+    expect(fireEvent.contextMenu(text)).toBe(true)
+    expect(screen.queryByRole('menu')).toBeNull()
+    window.getSelection()!.removeAllRanges()
   })
 
   it('keeps Changes mounted after a view switch so a Publish draft survives', () => {
@@ -235,11 +318,12 @@ describe('the Files view', () => {
 describe('the Browser view', () => {
   const views = () => within(screen.getByRole('tablist', { name: 'Session views' }))
   /** Lays the run's frame out at `width`, which jsdom never does. */
-  function measured(width: number) {
+  function measured(width: number | ((target: Element) => number)) {
     vi.stubGlobal('ResizeObserver', class {
       constructor(private readonly report: ResizeObserverCallback) {}
       observe(target: Element) {
-        this.report([{ target, contentRect: { width, height: 700 } } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver)
+        const contentRect = { width: typeof width === 'number' ? width : width(target), height: 700 }
+        this.report([{ target, contentRect } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver)
       }
       unobserve() {}
       disconnect() {}
@@ -331,6 +415,17 @@ describe('the Browser view', () => {
     expect(screen.queryByRole('separator', { name: 'Resize the Browser' })).toBeNull()
   })
 
+  it('moves notes from the rail to the strip when it narrows the Chat pane', async () => {
+    // The frame is wide enough for the rail; the views' pane beside the Browser is not.
+    measured((target) => (target.classList.contains('relative') ? 800 : 1400))
+    useStore.setState({ browserBeside: true })
+    vi.mocked(api.runRoomList).mockResolvedValue({ messages: [roomMessage({ id: 'c1', kind: 'comment', actor_id: bob.id, body: 'look here' })] })
+    open({ mode: 'acp' }, 'session')
+    expect(await screen.findByRole('button', { name: '1 note' })).toBeDefined()
+    expect(screen.getByRole('region', { name: 'Browser' })).toBeDefined()
+    expect(screen.queryByRole('list', { name: 'Notes' })).toBeNull()
+  })
+
   it('stays a tab, with no toggle, on a frame too narrow for two panes', async () => {
     measured(600)
     useStore.setState({ browserBeside: true })
@@ -399,6 +494,22 @@ describe('the header primary action', () => {
     expect(useStore.getState().route.params.view).toBe('terminal')
   })
 
+  it('opens the terminal for a request without making it the view the session reopens on', () => {
+    useStore.setState({ runViewMemory: { run_1: 'changes' } })
+    open({ status: 'needs-attention', pending_inputs: [{ id: 'in_1', session_id: 's', kind: 'permission' }] }, 'session')
+    fireEvent.click(within(screen.getByRole('toolbar', { name: 'Session actions' })).getByRole('button', { name: 'Open terminal' }))
+    expect(useStore.getState().route.params.view).toBe('terminal')
+    expect(useStore.getState().runViewMemory.run_1).toBe('changes')
+  })
+
+  it('replies from the header without making Session the view the session reopens on', () => {
+    useStore.setState({ runViewMemory: { run_1: 'changes' } })
+    open({ mode: 'acp', acp: true, status: 'needs-attention', state: 'needs-you', reason: 'turn interrupted' }, 'changes')
+    fireEvent.click(within(screen.getByRole('toolbar', { name: 'Session actions' })).getByRole('button', { name: 'Reply' }))
+    expect(useStore.getState().route.params.view).toBe('session')
+    expect(useStore.getState().runViewMemory.run_1).toBe('changes')
+  })
+
   it('allows a sudo command from the Details card it reveals', async () => {
     vi.mocked(api.runInputRespond).mockResolvedValue({ status: 'answered' })
     const title = 'Session as root in /workspace: apt-get install -y jq'
@@ -464,7 +575,7 @@ describe('run details', () => {
     })
     open()
     const facts = within((await details()).getByRole('region', { name: 'Details' }))
-    expect(facts.getByText('Container size').nextElementSibling?.textContent).toBe('3.0 GB outside the mounted home, checkout and cache')
+    expect(facts.getByText('Sandbox size').nextElementSibling?.textContent).toBe('3.0 GB outside the mounted home, checkout and cache')
   })
 
   it('lists a teammate question among the notes', async () => {
@@ -490,12 +601,12 @@ describe('run details', () => {
   it('leads the workflow with the request that needs the viewer, and leaves the sheet for it', async () => {
     vi.mocked(api.runRoomList).mockResolvedValue({ messages: [] })
     open({ status: 'needs-attention', state: 'needs-you', reason: 'needs input: Which port?' }, 'terminal')
-    fireEvent.click(screen.getByRole('button', { name: 'Workflow: Needs you' }))
-    const sheet = within(await screen.findByRole('dialog', { name: 'Workflow' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Session tree: Needs you' }))
+    const sheet = within(await screen.findByRole('dialog', { name: 'Session tree' }))
     const request = sheet.getByRole('treeitem', { name: /^Agent asks: Which port\?, Needs you/ })
     expect(request.getAttribute('aria-level')).toBe('2')
     fireEvent.click(request)
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Workflow' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Session tree' })).toBeNull())
     expect(useStore.getState().route.params.view).toBe('session')
   })
 
@@ -634,6 +745,7 @@ describe('run details', () => {
   })
 
   it('drops a note\'s refusal that arrives after another member signed in', async () => {
+    xterm.enabled = false
     const post = heldPost()
     useStore.setState({ identityKey: 'alice' })
     open()
@@ -906,6 +1018,7 @@ describe('the session composer', () => {
   })
 
   it('waits for a send that outlives it, and sends a failed one again under the same key', async () => {
+    xterm.enabled = false
     const View = lookupRoute('run')!
     let settle = { resolve: (_: { message: ReturnType<typeof roomMessage> }) => {}, reject: (_: Error) => {} }
     const pending = () => new Promise<{ message: ReturnType<typeof roomMessage> }>((resolve, reject) => { settle = { resolve, reject } })

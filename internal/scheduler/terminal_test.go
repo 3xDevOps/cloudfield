@@ -80,6 +80,9 @@ func TestTerminalGetsVerifiedCLIWithoutRunSocketWhenCoordinationDisabled(t *test
 	if !ok || !cli.ReadOnly {
 		t.Fatalf("terminal CLI mount = %+v, want read-only %s", container.spec.Mounts, coordtransport.CLIPath)
 	}
+	if cloudfield, found := mountFor(container.spec, coordtransport.CloudfieldCLIPath); !found || cloudfield.HostPath != cli.HostPath || cloudfield.ReadOnly != cli.ReadOnly || cloudfield.Kind != cli.Kind {
+		t.Fatalf("terminal cloudfield CLI mount = %+v, want %+v", container.spec.Mounts, cli)
+	}
 	if _, ok := mountFor(container.spec, coordtransport.MountDir); ok {
 		t.Fatalf("disabled terminal received fabricated run socket mount: %+v", container.spec.Mounts)
 	}
@@ -279,7 +282,7 @@ func TestRecoveredTerminalAttachFailurePreservesAndRetries(t *testing.T) {
 		t.Fatalf("EnsureTerminal retry: %v", err)
 	}
 	conflicting := &supervised{runID: "conflicting-run", memberID: e.member.ID}
-	if err := s2.reserveRunUser(conflicting, "2000:2000", true); err == nil {
+	if err := s2.reserveRunUser(context.Background(), conflicting, "2000:2000", true); err == nil {
 		t.Fatal("incompatible session ownership was accepted while survivor remained reserved")
 	}
 	if retried.ContainerID != first.ContainerID {
@@ -669,9 +672,24 @@ func TestEnsureTerminalAfterSaveKeepsContainer(t *testing.T) {
 	}
 }
 
+// heldSupervisorRuntime keeps the terminal supervisor's unbounded Wait
+// pending, so the supervisor never takes the terminal lock that
+// DestroyStoppedTerminal only tries. Bounded exit probes see the fake as is.
+type heldSupervisorRuntime struct{ *fakeRuntime }
+
+func (r heldSupervisorRuntime) Wait(ctx context.Context, id runtime.ID) (runtime.ExitStatus, error) {
+	if _, bounded := ctx.Deadline(); bounded {
+		return r.fakeRuntime.Wait(ctx, id)
+	}
+	<-ctx.Done()
+	return runtime.ExitStatus{}, ctx.Err()
+}
+
 func TestDestroyStoppedTerminalSkipsRunningTerminal(t *testing.T) {
 	t.Parallel()
-	e := newTestEnv(t, nil)
+	e := newTestEnv(t, func(cfg *Config) {
+		cfg.Runtime = heldSupervisorRuntime{cfg.Runtime.(*fakeRuntime)}
+	})
 	terminal, err := e.sched.EnsureTerminal(t.Context(), e.member.ID)
 	if err != nil {
 		t.Fatalf("EnsureTerminal: %v", err)
@@ -804,7 +822,10 @@ func TestSuperviseTerminalMissingContainerPrunesState(t *testing.T) {
 
 func TestExitedTerminalCleanupRetainsStateForRetry(t *testing.T) {
 	t.Parallel()
-	e := newTestEnv(t, nil)
+	// The retry's adoption probe goes through a scripted Wait that a helper
+	// goroutine answers. A probe deadline it can miss under load reads the
+	// stopped container as running.
+	e := newTestEnv(t, func(cfg *Config) { cfg.ExitProbeTimeout = waitTimeout })
 	waitRuntime := newScriptedWaitRuntime(e.rt)
 	e.sched.cfg.Runtime = waitRuntime
 	failingStore := &failingPutTerminalStore{

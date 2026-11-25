@@ -3,6 +3,7 @@ import { cn, focusRingInset } from '@/lib/utils'
 
 export function ListRow({
   leading,
+  leadingAction,
   trailing,
   action,
   hoverAction,
@@ -12,6 +13,7 @@ export function ListRow({
   ...props
 }: React.ComponentProps<'button'> & {
   leading?: React.ReactNode
+  leadingAction?: React.ReactNode
   trailing?: React.ReactNode
   action?: React.ReactNode
   hoverAction?: React.ReactNode
@@ -27,6 +29,7 @@ export function ListRow({
         className,
       )}
     >
+      {leadingAction}
       <button
         type="button"
         aria-current={selected || undefined}
@@ -39,7 +42,7 @@ export function ListRow({
         {...props}
       >
         {leading}
-        <span className="min-w-0 flex-1 truncate">{children}</span>
+        <span className="relative min-w-0 flex-1 truncate">{children}</span>
         {trailing !== undefined && (
           <span className={cn('shrink-0 text-ui-sm tabular-nums', selected ? 'text-text' : 'text-muted')}>{trailing}</span>
         )}

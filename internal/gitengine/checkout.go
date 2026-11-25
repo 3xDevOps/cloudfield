@@ -38,6 +38,14 @@ type runMeta struct {
 	// created before it was recorded.
 	BaseBranch string             `json:"base_branch,omitempty"`
 	Workspace  domain.WorkspaceID `json:"workspace"`
+	// VM marks a checkout on a disk of its session's VM; Origin is the
+	// origin remote the VM sets on its first boot.
+	VM     bool   `json:"vm,omitempty"`
+	Origin string `json:"origin,omitempty"`
+	// Target is where the session sees a checkout in a VM, and FinalTree
+	// the tree its last commit recorded since the VM last started.
+	Target    string `json:"target,omitempty"`
+	FinalTree string `json:"final_tree,omitempty"`
 }
 
 func (e *Engine) runMetaPath(run domain.RunID) (string, error) {
@@ -148,6 +156,9 @@ func (e *Engine) CreateRunCheckoutAt(ctx context.Context, ws domain.WorkspaceID,
 	if resolved != baseCommit {
 		return "", "", fmt.Errorf("gitengine: base commit %q for branch %q is not a commit", baseCommit, baseBranch)
 	}
+	if e.cfg.VM != nil {
+		return e.createVMCheckout(ctx, repo, ws, run, checkoutPath, baseCommit, baseBranch, task, origin)
+	}
 
 	if _, cloneErr := e.git(ctx, "", "clone", "--local", "--no-checkout", repo, checkoutPath); cloneErr != nil {
 		return "", "", cloneErr
@@ -197,7 +208,7 @@ func (e *Engine) CreateRunCheckoutAt(ctx context.Context, ws domain.WorkspaceID,
 }
 
 // uniqueRunBranch picks and reserves the run's branch name: the readable
-// short form (aether/run-<slug>-<short-id>) unless that name is already
+// short form (cloudfield/run-<slug>-<short-id>) unless that name is already
 // claimed in the workspace, in which case the full run ID disambiguates
 // it. Two runs of the same task can only collide on the short ID, and the
 // full ID is unique by construction, so this terminates after one retry.
@@ -209,8 +220,20 @@ func (e *Engine) CreateRunCheckoutAt(ctx context.Context, ws domain.WorkspaceID,
 // git update-ref --create-reflog with an all-zero old value fails when
 // the ref already exists, which makes the claim atomic across concurrent
 // provisioning.
+//
+// A branch named cloudfield makes every cloudfield/run-* ref impossible,
+// because git stores refs/heads/cloudfield as a file where the directory
+// would go, so such a workspace keeps the aether/run- prefix.
 func (e *Engine) uniqueRunBranch(ctx context.Context, repo, base string, run domain.RunID, task string) (string, error) {
-	short := runBranch(task, shortID(run))
+	prefix := runBranchPrefix
+	blocked, err := e.branchExists(ctx, repo, "cloudfield")
+	if err != nil {
+		return "", err
+	}
+	if blocked {
+		prefix = legacyRunBranchPrefix
+	}
+	short := runBranch(prefix, task, shortID(run))
 	claimed, err := e.claimBranch(ctx, repo, short, base)
 	if err != nil {
 		return "", err
@@ -218,7 +241,7 @@ func (e *Engine) uniqueRunBranch(ctx context.Context, repo, base string, run dom
 	if claimed {
 		return short, nil
 	}
-	full := runBranch(task, string(run))
+	full := runBranch(prefix, task, string(run))
 	claimed, err = e.claimBranch(ctx, repo, full, base)
 	if err != nil {
 		return "", err
@@ -290,6 +313,9 @@ func (e *Engine) commitAll(ctx context.Context, run domain.RunID, message string
 	if err != nil {
 		return "", err
 	}
+	if e.IsVMCheckout(run) {
+		return e.vmCommit(ctx, run, message, author, signingKey)
+	}
 	if rmErr := os.Remove(filepath.Join(checkout, ".git", "info", "attributes")); rmErr != nil && !errors.Is(rmErr, os.ErrNotExist) {
 		return "", fmt.Errorf("gitengine: drop checkout attributes override: %w", rmErr)
 	}
@@ -309,7 +335,7 @@ func (e *Engine) commitAll(ctx context.Context, run domain.RunID, message string
 	if err != nil {
 		return "", err
 	}
-	env := append(gitEnv(), "GIT_ATTR_SOURCE="+emptyTree)
+	env := append(e.gitEnv(), "GIT_ATTR_SOURCE="+emptyTree)
 	// core.fsmonitor in the checkout's config would be executed by commit;
 	// false disables it. Hooks likewise come from writable config.
 	neutral := []string{"-c", "core.hooksPath=" + os.DevNull, "-c", "core.fsmonitor=false"}
@@ -385,6 +411,9 @@ func (e *Engine) publishRunBranch(ctx context.Context, run domain.RunID) (commit
 	if err != nil {
 		return "", err
 	}
+	if meta.VM {
+		return e.publishVM(ctx, run, meta)
+	}
 	if nameErr := e.checkBranchName(ctx, meta.Branch); nameErr != nil {
 		return "", nameErr
 	}
@@ -428,6 +457,9 @@ func (e *Engine) removeRunCheckout(ctx context.Context, run domain.RunID) error 
 		return err
 	}
 	e.stopDiffWatch(run, true)
+	if e.IsVMCheckout(run) {
+		return e.removeVMCheckout(ctx, run, checkout, meta)
+	}
 	// Detach while source/evidence maintenance is excluded. Acquire this
 	// before the per-run snapshot lock, as CaptureEvidence does.
 	e.repoMaintenanceMu.Lock()

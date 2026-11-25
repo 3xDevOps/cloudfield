@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/3xDevOps/Aether/internal/agentstatus"
 	"github.com/3xDevOps/Aether/internal/domain"
 	"github.com/3xDevOps/Aether/internal/events"
+	"github.com/3xDevOps/Aether/internal/gitengine"
 	"github.com/3xDevOps/Aether/internal/ptyhost"
 	"github.com/3xDevOps/Aether/internal/runtime"
 	"github.com/3xDevOps/Aether/internal/store"
@@ -662,7 +664,7 @@ func TestRecoveryUnstartedLookupFailureKeepsSyntheticOwner(t *testing.T) {
 		t.Fatal("lookup outage must retain the live container")
 	}
 
-	retry.setFindErr(nil)
+	retry.clearFindErr()
 	s2.sweepRetained(ctx)
 	waitFor(t, "unstarted lookup retry destroy", func() bool { return e.rt.byName(string(r.ID)) == nil })
 	row := e.waitStoreStatus(t, r.ID, domain.RunInterrupted)
@@ -712,7 +714,7 @@ func TestTerminalCreationKeyFailureInstallsSyntheticRetryOwner(t *testing.T) {
 	if err := s2.Close(); err != nil {
 		t.Fatalf("Close synthetic owner scheduler: %v", err)
 	}
-	retry.setFindErr(nil)
+	retry.clearFindErr()
 	s3 := e.newScheduler(t, e.rt, newFakePTY())
 	s3.cfg.Runtime = retry
 	if err := s3.recoverRuns(ctx); err != nil {
@@ -1440,32 +1442,45 @@ func (r *destroyBarrierRuntime) releaseNow() {
 	r.releaseOnce.Do(func() { close(r.release) })
 }
 
-type recoveryProbeBarrierRuntime struct {
+type recoveryInspectBarrierRuntime struct {
 	runtime.Runtime
-	started chan struct{}
-	release chan struct{}
-	mu      sync.Mutex
-	waits   int
+	started  chan struct{}
+	release  chan struct{}
+	mu       sync.Mutex
+	waits    int
+	inspects int
 }
 
-func (r *recoveryProbeBarrierRuntime) Wait(ctx context.Context, id runtime.ID) (runtime.ExitStatus, error) {
+func (r *recoveryInspectBarrierRuntime) Inspect(ctx context.Context, id runtime.ID) (runtime.ContainerInfo, error) {
 	r.mu.Lock()
-	r.waits++
-	call := r.waits
+	r.inspects++
+	call := r.inspects
 	r.mu.Unlock()
 	if call == 1 {
 		close(r.started)
 		select {
 		case <-r.release:
 		case <-ctx.Done():
-			return runtime.ExitStatus{}, ctx.Err()
+			return runtime.ContainerInfo{}, ctx.Err()
 		}
-		return runtime.ExitStatus{}, context.DeadlineExceeded
 	}
+	return r.Runtime.Inspect(ctx, id)
+}
+
+func (r *recoveryInspectBarrierRuntime) Wait(ctx context.Context, id runtime.ID) (runtime.ExitStatus, error) {
+	r.mu.Lock()
+	r.waits++
+	r.mu.Unlock()
 	return r.Runtime.Wait(ctx, id)
 }
 
-func (r *recoveryProbeBarrierRuntime) waitCount() int {
+func (r *recoveryInspectBarrierRuntime) inspectCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.inspects
+}
+
+func (r *recoveryInspectBarrierRuntime) waitCount() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	return r.waits
@@ -1504,9 +1519,9 @@ func (r *creationKeyFailureRuntime) emptyDestroyCount() int {
 	return r.emptyDestroyCalls
 }
 
-func (r *creationKeyFailureRuntime) setFindErr(err error) {
+func (r *creationKeyFailureRuntime) clearFindErr() {
 	r.mu.Lock()
-	r.findErr = err
+	r.findErr = nil
 	r.mu.Unlock()
 }
 func TestBootRetainedDestroyFailureRetriesOnSweep(t *testing.T) {
@@ -2080,9 +2095,6 @@ func TestRecoveryAttachDoesNotReplaceCloseOwner(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t, func(cfg *Config) {
 		cfg.RunContainerTTL = time.Hour
-		// The barrier holds the probe open until CloseRun has run; the default test
-		// probe timeout would race its release.
-		cfg.ExitProbeTimeout = waitTimeout
 	})
 	ctx := t.Context()
 	run, _ := e.launchFake(t, "close wins recovery attach")
@@ -2093,7 +2105,7 @@ func TestRecoveryAttachDoesNotReplaceCloseOwner(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetRun: %v", err)
 	}
-	barrier := &recoveryProbeBarrierRuntime{
+	barrier := &recoveryInspectBarrierRuntime{
 		Runtime: e.rt, started: make(chan struct{}), release: make(chan struct{}),
 	}
 	beforeAttach := e.rt.attachCount()
@@ -2132,9 +2144,9 @@ func TestRecoveryAttachDoesNotReplaceCloseOwner(t *testing.T) {
 	}
 	// CloseRun returning does not mean its own Wait owner has started yet -
 	// that runs on a goroutine CloseRun hands off to, not before it returns.
-	waitFor(t, "Close's own Wait owner", func() bool { return barrier.waitCount() == 2 })
-	if got := barrier.waitCount(); got != 2 {
-		t.Fatalf("Wait owners/calls = %d, want probe plus Close owner", got)
+	waitFor(t, "Close's own Wait owner", func() bool { return barrier.waitCount() == 1 })
+	if got := barrier.waitCount(); got != 1 {
+		t.Fatalf("Wait owners/calls = %d, want only Close's owner", got)
 	}
 	row, err := e.db.GetRun(ctx, run.ID)
 	if err != nil {
@@ -2629,5 +2641,97 @@ func TestMigratedExpiryRetriesEvidenceBeforeDestroyAndKeepsFailureVisible(t *tes
 	if err != nil || info.CleanupPending || info.CleanupError != "" || info.RetainedUntil != nil ||
 		e.rt.byName(string(run.ID)) != nil {
 		t.Fatalf("successful reboot retry left cleanup ownership: %+v, %v", info, err)
+	}
+}
+
+func TestRecoveryAttachesRunningContainerWithoutWaiting(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t, nil)
+	run, _ := e.launchFake(t, "running container reattaches at once")
+	if err := e.sched.Close(); err != nil {
+		t.Fatalf("Close scheduler: %v", err)
+	}
+	stored, err := e.db.GetRun(t.Context(), run.ID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	probe := &recoveryInspectBarrierRuntime{Runtime: e.rt, started: make(chan struct{}), release: make(chan struct{})}
+	close(probe.release)
+	s2 := e.newScheduler(t, e.rt, newFakePTY())
+	s2.cfg.Runtime = probe
+	beforeAttach := e.rt.attachCount()
+	s2.recoverSupervised(t.Context(), stored)
+	if got := e.rt.attachCount(); got != beforeAttach+1 {
+		t.Fatalf("attaches %d -> %d, want the running container reattached", beforeAttach, got)
+	}
+	if got := probe.waitCount(); got > 1 {
+		t.Fatalf("recovery called Wait %d times, want only the exit watcher", got)
+	}
+	if probe.inspectCount() != 1 {
+		t.Fatalf("recovery inspected %d times, want one", probe.inspectCount())
+	}
+}
+
+// A session whose checkout the sweep already reclaimed has nothing left to
+// clean up, and nothing left to capture evidence from. A runtime lookup
+// failure at boot must not hand it a deferred cleanup owner: that owner
+// demands evidence from the removed checkout on every sweep and reserves the
+// member's environment home as <unknown> while it retries.
+func TestCleanedTerminalRunGainsNoDeferredCleanupOwner(t *testing.T) {
+	e := newTestEnv(t, func(cfg *Config) {
+		cfg.RunContainerTTL = -time.Second
+		cfg.CheckoutTTL = time.Hour
+	})
+	capture := newSchedulerEvidenceCapture(e.ws.ID)
+	e.sched.UseEvidence(capture)
+	run, _ := e.launchFake(t, "merged work")
+	if err := e.sched.CloseRun(t.Context(), run.ID, e.member.ID, domain.RunMerged); err != nil {
+		t.Fatalf("CloseRun: %v", err)
+	}
+	row, err := e.db.GetRun(t.Context(), run.ID)
+	if err != nil {
+		t.Fatalf("GetRun: %v", err)
+	}
+	finished := time.Now().UTC().Add(-2 * time.Hour)
+	row.FinishedAt = &finished
+	if err = e.db.UpdateRun(t.Context(), row); err != nil {
+		t.Fatalf("UpdateRun: %v", err)
+	}
+	e.sched.sweepCheckouts(t.Context(), time.Now().UTC().Add(-e.sched.cfg.CheckoutTTL))
+	cleaned, err := e.db.GetRun(t.Context(), run.ID)
+	if err != nil {
+		t.Fatalf("GetRun after sweep: %v", err)
+	}
+	if cleaned.Worktree != "" {
+		t.Fatalf("worktree after cleanup = %q, want cleared", cleaned.Worktree)
+	}
+	if _, statErr := os.Stat(e.git.checkoutPath(run.ID)); !os.IsNotExist(statErr) {
+		t.Fatalf("checkout after cleanup: %v", statErr)
+	}
+	if _, serr := e.sched.readSidecar(run.ID); !os.IsNotExist(serr) {
+		t.Fatalf("cleanup ownership after cleanup: %v", serr)
+	}
+	captured := capture.requestCount()
+
+	// The checkout is gone, so every later capture fails as production did.
+	capture.refusal = fmt.Errorf("evidence: retain git state: %w", gitengine.ErrCheckoutNotFound)
+	e.rt.mu.Lock()
+	e.rt.findErr = errors.New("fake runtime: daemon unavailable")
+	e.rt.mu.Unlock()
+	e.sched.cleanupTerminalCreationKeyContainers(t.Context())
+
+	if sc, serr := e.sched.readSidecar(run.ID); serr == nil {
+		t.Fatalf("cleaned session regained cleanup ownership: %+v", sc)
+	}
+	e.sched.mu.Lock()
+	owner := e.sched.runs[run.ID]
+	e.sched.mu.Unlock()
+	if owner != nil {
+		t.Fatalf("cleaned session regained a lifecycle owner: destroy_pending=%v run_user=%q",
+			owner.destroyPending, owner.runUser)
+	}
+	e.sched.sweepRetained(t.Context())
+	if got := capture.requestCount(); got != captured {
+		t.Fatalf("evidence capture attempts %d -> %d, want none for a reclaimed checkout", captured, got)
 	}
 }

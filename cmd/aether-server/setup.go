@@ -17,6 +17,7 @@ import (
 	"time"
 
 	edgeagent "github.com/3xDevOps/Aether/internal/edge/agent"
+	edgeclient "github.com/3xDevOps/Aether/internal/edge/client"
 	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
 	"github.com/3xDevOps/Aether/internal/reachability"
 	"github.com/3xDevOps/Aether/internal/serversetup"
@@ -216,7 +217,7 @@ func askServerOptions(p *prompter, configPath string, tailscaled *reachability.T
 	}
 
 	values := map[string]string{}
-	values["addr"] = p.ask("addr", "SSH listen address for Aether, not the system sshd", def("addr"))
+	values["addr"] = p.ask("addr", "SSH listen address for Cloudfield, not the system sshd", def("addr"))
 	values["data-dir"] = p.ask("data-dir", "Data directory", def("data-dir"))
 
 	// Each config a yes writes has the edge off, a web-port or auto-join on,
@@ -302,7 +303,7 @@ func askTailnet(p *prompter, tailscaled *reachability.Tailscale, def bool) (bool
 	}
 	_, _ = fmt.Fprintf(p.w, "\nThis host is on the tailnet %s.\n", node.Tailnet)
 	_, _ = fmt.Fprintln(p.w, "With Tailscale, people on it link by this host's name and sign in with their")
-	_, _ = fmt.Fprintln(p.w, "tailnet login: no keys, invite codes or relay. Answer no to use Aether's relay")
+	_, _ = fmt.Fprintln(p.w, "tailnet login: no keys, invite codes or relay. Answer no to use Cloudfield's relay")
 	_, _ = fmt.Fprintln(p.w, "instead, such as when your computer is not on this tailnet.")
 	return p.confirm("Use Tailscale to reach this server", def), node.DNSName
 }
@@ -366,12 +367,12 @@ func askEdge(p *prompter, current map[string]string, tailscaled, tailnet bool, v
 		edgeURL = edgeagent.DefaultURL
 	}
 	operator := ""
-	if edgeURL == edgeagent.DefaultURL {
-		operator = ", run by the Aether project"
+	if edgeclient.Hosted(edgeURL) {
+		operator = ", run by the Cloudfield project"
 	}
 	if tailnet {
 		values["edge-url"] = ""
-		_, _ = fmt.Fprintf(p.w, "\nDevices off the tailnet can reach this server through the edge, Aether's relay\nat %s%s.\n", edgeURL, operator)
+		_, _ = fmt.Fprintf(p.w, "\nDevices off the tailnet can reach this server through the edge, Cloudfield's relay\nat %s%s.\n", edgeURL, operator)
 		if !p.confirm("Turn on the edge too", configured != "") {
 			return
 		}
@@ -381,9 +382,9 @@ func askEdge(p *prompter, current map[string]string, tailscaled, tailnet bool, v
 	}
 	switch {
 	case tailscaled:
-		_, _ = fmt.Fprintf(p.w, "\nSetup turns on the edge, Aether's relay at %s%s.\n", edgeURL, operator)
+		_, _ = fmt.Fprintf(p.w, "\nSetup turns on the edge, Cloudfield's relay at %s%s.\n", edgeURL, operator)
 	default:
-		_, _ = fmt.Fprintf(p.w, "\nTailscale is not installed, so setup turns on the edge, Aether's relay at\n%s%s. To use Tailscale\ninstead, install it (https://tailscale.com/download) and run setup again.\n", edgeURL, operator)
+		_, _ = fmt.Fprintf(p.w, "\nTailscale is not installed, so setup turns on the edge, Cloudfield's relay at\n%s%s. To use Tailscale\ninstead, install it (https://tailscale.com/download) and run setup again.\n", edgeURL, operator)
 	}
 	printEdgeDisclosure(p.w)
 	values["edge-url"] = edgeURL

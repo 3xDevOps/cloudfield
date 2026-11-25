@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httptrace"
@@ -97,7 +98,7 @@ func TestHTTPHeaders(t *testing.T) {
 		req.Header = passed.Clone()
 		for k, v := range map[string]string{"Cookie": "edge=1", "X-Forwarded-For": "198.51.100.1", "X-Forwarded-Port": "443",
 			"Forwarded": "for=198.51.100.1", "Accept-Encoding": "gzip", "Te": "trailers", "Connection": "Upgrade", "Upgrade": "websocket",
-			edgeproto.HeaderClientAddr: "203.0.113.9:1", edgeproto.HeaderBrowser: "forged"} {
+			edgeproto.HeaderClientAddr: "203.0.113.9:1", edgeproto.HeaderBrowser: "forged", edgeproto.HeaderRelayOrigin: "https://forged.example"} {
 			req.Header.Set(k, v)
 		}
 		req.Trailer = http.Header{"X-Client-Trailer": {"1"}}
@@ -138,7 +139,7 @@ func TestHTTPHeaders(t *testing.T) {
 			t.Errorf("server got %s on %s, want %s on %s", sreq.RequestURI, sreq.Host, path, a.id)
 		}
 		for k, v := range sreq.Header {
-			if _, ok := passed[k]; !ok && k != edgeproto.HeaderClientAddr && k != "Content-Length" {
+			if _, ok := passed[k]; !ok && k != edgeproto.HeaderClientAddr && k != edgeproto.HeaderRelayOrigin && k != "Content-Length" {
 				t.Errorf("request header %s = %q reached the server", k, v)
 			}
 		}
@@ -149,6 +150,9 @@ func TestHTTPHeaders(t *testing.T) {
 		}
 		if ap, err := netip.ParseAddrPort(sreq.Header.Get(edgeproto.HeaderClientAddr)); err != nil || !ap.Addr().IsLoopback() {
 			t.Errorf("%s = %q, want the client's address", edgeproto.HeaderClientAddr, sreq.Header.Get(edgeproto.HeaderClientAddr))
+		}
+		if got := sreq.Header.Values(edgeproto.HeaderRelayOrigin); len(got) != 1 || got[0] != e.r.origin {
+			t.Errorf("%s = %q, want the edge's relay origin %s", edgeproto.HeaderRelayOrigin, got, e.r.origin)
 		}
 		sent, _ := io.ReadAll(sreq.Body)
 		if string(sent) != body || sreq.ContentLength != int64(len(body)) || len(sreq.TransferEncoding) != 0 || len(sreq.Trailer) != 0 {
@@ -255,4 +259,139 @@ func TestUniversalRefusesAnOlderServer(t *testing.T) {
 	if w.Code != http.StatusNotImplemented || strings.TrimSpace(w.Body.String()) != want {
 		t.Fatalf("universal request to a protocol-2 server: %d %q, want 501 %q", w.Code, w.Body.String(), want)
 	}
+}
+
+// holdData answers every request on each data socket a attaches with an
+// empty JSON body once release is closed, after sending to the returned
+// channel.
+func holdData(t *testing.T, a *agent, release <-chan struct{}) <-chan struct{} {
+	held := make(chan struct{}, 64)
+	go func() {
+		for {
+			select {
+			case nc := <-a.data:
+				go func() {
+					br := bufio.NewReader(nc)
+					for {
+						req, err := http.ReadRequest(br)
+						if err != nil {
+							return
+						}
+						_, _ = io.Copy(io.Discard, req.Body)
+						held <- struct{}{}
+						<-release
+						if _, err := io.WriteString(nc, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"); err != nil {
+							return
+						}
+					}
+				}()
+			case <-t.Context().Done():
+				return
+			}
+		}
+	}()
+	return held
+}
+
+func post(e *env, a *agent) string {
+	resp, err := http.Post(e.base+edgeproto.MCPPath(a.id), "application/json", strings.NewReader("{}"))
+	if err != nil {
+		return err.Error()
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	return resp.Status + " " + strings.TrimSpace(string(body))
+}
+
+func busy(t *testing.T, e *env, a *agent, held <-chan struct{}, n, reached int) <-chan string {
+	t.Helper()
+	answers := make(chan string, n)
+	for range n {
+		go func() { answers <- post(e, a) }()
+	}
+	for range reached {
+		select {
+		case <-held:
+		case s := <-answers:
+			t.Fatalf("a request meant to hold a connection ended with %s", s)
+		case <-time.After(5 * time.Second):
+			t.Fatal("a request meant to hold a connection did not reach the server within 5s")
+		}
+	}
+	return answers
+}
+
+// A request that waits past HTTPConnWait for one of its server's busy
+// connections is refused with 503, naming the limit, and so is one past
+// MaxHTTPWaitersPerServer waiting requests, at once.
+func TestHTTPConnWait(t *testing.T) {
+	const want = "503 Service Unavailable this server already has 8 MCP connector requests in progress through the edge; retry shortly"
+	t.Run("wait", func(t *testing.T) {
+		e := newEnv(t)
+		e.r.httpConnWait = 200 * time.Millisecond
+		a := claimedAgent(t, e)
+		release := make(chan struct{})
+		answers := busy(t, e, a, holdData(t, a, release), edgeproto.MaxHTTPConnsPerServer, edgeproto.MaxHTTPConnsPerServer)
+		var logged bytes.Buffer
+		previous := slog.Default()
+		slog.SetDefault(slog.New(slog.NewTextHandler(&logged, nil)))
+		defer slog.SetDefault(previous)
+		start := time.Now()
+		if got := post(e, a); got != want {
+			t.Errorf("a request past the busy connections: %q, want %q", got, want)
+		}
+		if waited := time.Since(start); waited < e.r.httpConnWait {
+			t.Errorf("refused after %s, before the %s wait", waited, e.r.httpConnWait)
+		}
+		resp, err := http.Post(e.base+edgeproto.MCPPath(a.id), "application/json", strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if got := resp.Header.Get("Retry-After"); resp.StatusCode != http.StatusServiceUnavailable || got != "5" {
+			t.Errorf("a second refusal: %s, Retry-After %q; want 503 and 5", resp.Status, got)
+		}
+		slog.SetDefault(previous)
+		line := "refusing MCP connector requests for the connection limit; logged once until a minute passes without one\" server=" + a.id + " in_progress=8 waiting=1\n"
+		if got := logged.String(); strings.Count(got, "refusing MCP connector requests") != 1 || !strings.HasSuffix(got, line) {
+			t.Errorf("two refusals in one burst logged %q, want one line ending %q", got, line)
+		}
+		if got := e.r.Metrics().Refusals["MCP connection limit"]; got != 2 {
+			t.Errorf("refusals counted for the connection limit = %d, want 2", got)
+		}
+		close(release)
+		for range edgeproto.MaxHTTPConnsPerServer {
+			if got := <-answers; got != "200 OK {}" {
+				t.Errorf("a held request ended with %q", got)
+			}
+		}
+	})
+	t.Run("waiters", func(t *testing.T) {
+		e := newEnv(t)
+		a := claimedAgent(t, e)
+		release := make(chan struct{})
+		held := holdData(t, a, release)
+		holding := busy(t, e, a, held, edgeproto.MaxHTTPConnsPerServer, edgeproto.MaxHTTPConnsPerServer)
+		waiting := busy(t, e, a, held, edgeproto.MaxHTTPWaitersPerServer, 0)
+		eventually(t, "every waiter queued", func() bool {
+			e.r.mu.Lock()
+			defer e.r.mu.Unlock()
+			return e.r.httpWaiting[a.id] == edgeproto.MaxHTTPWaitersPerServer
+		})
+		start := time.Now()
+		if got := post(e, a); got != want {
+			t.Errorf("a request past the waiters: %q, want %q", got, want)
+		}
+		if waited := time.Since(start); waited >= edgeproto.HTTPConnWait {
+			t.Errorf("refused after %s; want at once, not after the wait", waited)
+		}
+		close(release)
+		for _, answers := range []<-chan string{holding, waiting} {
+			for range cap(answers) {
+				if got := <-answers; got != "200 OK {}" {
+					t.Errorf("a held or waiting request ended with %q", got)
+				}
+			}
+		}
+	})
 }

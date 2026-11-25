@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -34,6 +36,8 @@ type collabStore struct {
 	runs       map[domain.RunID]*domain.Run
 	messages   map[string]*store.RoomMessage
 	next       int
+	// settleFailures fails that many agent delivery settlements.
+	settleFailures int
 }
 
 func newCollabStore() *collabStore {
@@ -65,6 +69,10 @@ func cloneRoomMessage(m *store.RoomMessage) *store.RoomMessage {
 	if m.Failure != nil {
 		f := *m.Failure
 		copy.Failure = &f
+	}
+	if m.ResolvedAt != nil {
+		v := *m.ResolvedAt
+		copy.ResolvedAt = &v
 	}
 	return &copy
 }
@@ -119,7 +127,7 @@ func (s *collabStore) ListRoomMessages(_ context.Context, workspace domain.Works
 	defer s.mu.Unlock()
 	var items []*store.RoomMessage
 	for _, m := range s.messages {
-		if m.WorkspaceID == workspace && (run == "" || m.RunID == run) {
+		if m.WorkspaceID == workspace && (run == "" || m.RunID == run) && m.Resolution != store.RoomResolutionDeleted {
 			items = append(items, cloneRoomMessage(m))
 		}
 	}
@@ -202,7 +210,10 @@ func (s *collabStore) CancelQueuedSteerRequests(_ context.Context, run domain.Ru
 	}
 	return cancelled, nil
 }
-func (s *collabStore) TransitionRoomMessage(_ context.Context, id string, state store.RoomMessageState, deliveredAt *time.Time, failure *store.RoomMessageFailure) error {
+func (s *collabStore) TransitionRoomMessage(ctx context.Context, id string, state store.RoomMessageState, deliveredAt *time.Time, failure *store.RoomMessageFailure) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m := s.messages[id]
@@ -230,6 +241,10 @@ func (s *collabStore) MarkRoomMessageAgentQueued(_ context.Context, id string) (
 func (s *collabStore) SettleRoomMessageAgentDelivery(_ context.Context, id string, failure *store.RoomMessageFailure) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.settleFailures > 0 {
+		s.settleFailures--
+		return false, errors.New("collabStore: database is locked")
+	}
 	m := s.messages[id]
 	if m == nil || m.State != store.RoomMessageSent && m.State != store.RoomMessageUncertain || m.AgentDelivery == store.AgentDelivered {
 		return false, nil
@@ -253,6 +268,18 @@ func (s *collabStore) DropAgentQueuedRoomMessages(_ context.Context, failure *st
 	}
 	return ids, nil
 }
+func (s *collabStore) ListAgentQueuedRoomMessages(_ context.Context, before time.Time) ([]*store.RoomMessage, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var queued []*store.RoomMessage
+	for _, m := range s.messages {
+		if m.State == store.RoomMessageSent && m.AgentDelivery == store.AgentQueued && m.UpdatedAt.Before(before) {
+			queued = append(queued, cloneRoomMessage(m))
+		}
+	}
+	slices.SortFunc(queued, func(a, b *store.RoomMessage) int { return a.CreatedAt.Compare(b.CreatedAt) })
+	return queued, nil
+}
 func (s *collabStore) DecideRoomMessage(_ context.Context, id string, from, to store.RoomMessageState, by string, at time.Time) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -267,6 +294,24 @@ func (s *collabStore) DecideRoomMessage(_ context.Context, id string, from, to s
 	m.DecidedBy = domain.MemberID(by)
 	m.DecidedAt = &at
 	return true, nil
+}
+func (s *collabStore) ResolveRoomMessage(_ context.Context, id string, outcome store.RoomResolution, by domain.MemberID, at time.Time) (*store.RoomMessage, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	m := s.messages[id]
+	if m == nil {
+		return nil, store.ErrNotFound
+	}
+	if m.Resolution != "" {
+		if m.Resolution == outcome {
+			return cloneRoomMessage(m), nil
+		}
+		return nil, store.ErrRoomMessageResolveConflict
+	}
+	m.Resolution = outcome
+	m.ResolvedBy = by
+	m.ResolvedAt = &at
+	return cloneRoomMessage(m), nil
 }
 func (s *collabStore) CreateEvidencePacket(context.Context, *store.EvidencePacket) error { return nil }
 func (s *collabStore) GetEvidencePacket(context.Context, string) (*store.EvidencePacket, error) {
@@ -297,6 +342,19 @@ func (s *collabStore) GetMember(_ context.Context, id domain.MemberID) (*domain.
 		return nil, store.ErrNotFound
 	}
 	copy := *m
+	if copy.Access.Owned == nil && copy.Access.Granted == nil {
+		// Members of this fake reach every workspace, as before
+		// workspace-scoped access.
+		reach := map[domain.WorkspaceID]bool{}
+		for ws := range s.workspaces {
+			reach[ws] = true
+		}
+		if copy.Role == domain.RoleAdmin {
+			copy.Access.Owned = reach
+		} else {
+			copy.Access.Granted = reach
+		}
+	}
 	return &copy, nil
 }
 func (s *collabStore) GetWorkspace(_ context.Context, id domain.WorkspaceID) (*domain.Workspace, error) {
@@ -758,6 +816,114 @@ func TestSteeringDelayAndControllerImmediateSend(t *testing.T) {
 	}
 }
 
+// Waking a sleeping session ends its viewers' streams, so the controller's
+// own message can arrive while its lease waits to reconnect.
+func TestReconnectingControllerSendsAtOnce(t *testing.T) {
+	st, clock, ws, owner, other, run := setupCollab(t)
+	pty := &collabPTY{}
+	controlService := control.New(control.Config{Now: clock.Now, ReconnectWindow: time.Minute})
+	service, err := New(Config{Store: st, Runs: st, Workspaces: st, Inject: pty.Inject, Control: controlService, Now: clock.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease, _, err := controlService.Acquire(string(run.ID), string(other.ID), "session", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	controlService.Disconnect(string(run.ID), lease.SessionID, lease.Generation)
+	stale, err := service.Post(context.Background(), MessageInput{WorkspaceID: ws.ID, RunID: run.ID, ActorID: other.ID, Kind: store.RoomMessageSteerRequest, Body: "stale", IdempotencyKey: "stale", ControllerSessionID: lease.SessionID, ControllerGeneration: lease.Generation + 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stale.Message.DeliverAfter == nil || pty.Calls() != 0 {
+		t.Fatalf("stale generation: deliver_after=%v inject calls=%d, want queued", stale.Message.DeliverAfter, pty.Calls())
+	}
+	borrowed, err := service.Post(context.Background(), MessageInput{WorkspaceID: ws.ID, RunID: run.ID, ActorID: owner.ID, Kind: store.RoomMessageSteerRequest, Body: "borrowed", IdempotencyKey: "borrowed", ControllerSessionID: lease.SessionID, ControllerGeneration: lease.Generation})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if borrowed.Message.DeliverAfter == nil || pty.Calls() != 0 {
+		t.Fatalf("another member with the holder's lease: deliver_after=%v inject calls=%d, want queued", borrowed.Message.DeliverAfter, pty.Calls())
+	}
+	result, err := service.Post(context.Background(), MessageInput{WorkspaceID: ws.ID, RunID: run.ID, ActorID: other.ID, Kind: store.RoomMessageSteerRequest, Body: "wake up", IdempotencyKey: "wake", ControllerSessionID: lease.SessionID, ControllerGeneration: lease.Generation})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Message.DeliverAfter != nil || result.Message.State != store.RoomMessageSent || pty.Calls() != 1 {
+		t.Fatalf("reconnecting controller: deliver_after=%v state=%s inject calls=%d, want sent at once", result.Message.DeliverAfter, result.Message.State, pty.Calls())
+	}
+
+	leaseless, err := service.Post(context.Background(), MessageInput{WorkspaceID: ws.ID, RunID: run.ID, ActorID: other.ID, Kind: store.RoomMessageSteerRequest, Body: "from a connector", IdempotencyKey: "leaseless"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if leaseless.Message.DeliverAfter != nil || leaseless.Message.State != store.RoomMessageSent || pty.Calls() != 2 {
+		t.Fatalf("reconnecting controller's lease-less client: deliver_after=%v state=%s inject calls=%d, want sent at once", leaseless.Message.DeliverAfter, leaseless.Message.State, pty.Calls())
+	}
+	// The agent has the message, so a caller that gives up does not lose its receipt.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	cancelling, err := New(Config{Store: st, Runs: st, Workspaces: st, Control: controlService, Now: clock.Now,
+		Inject: func(context.Context, domain.RunID, domain.MemberID, domain.AgentPrompt, bool, func(error)) (string, error) {
+			cancel()
+			return "", nil
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dropped, err := cancelling.Post(ctx, MessageInput{WorkspaceID: ws.ID, RunID: run.ID, ActorID: other.ID, Kind: store.RoomMessageSteerRequest, Body: "dropped", IdempotencyKey: "dropped", ControllerSessionID: lease.SessionID, ControllerGeneration: lease.Generation})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dropped.Message.State != store.RoomMessageSent {
+		t.Fatalf("caller cancelled after delivery: state=%s, want sent", dropped.Message.State)
+	}
+	clock.Add(time.Minute + time.Second)
+	expired, err := service.Post(context.Background(), MessageInput{WorkspaceID: ws.ID, RunID: run.ID, ActorID: other.ID, Kind: store.RoomMessageSteerRequest, Body: "expired", IdempotencyKey: "expired", ControllerSessionID: lease.SessionID, ControllerGeneration: lease.Generation})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expired.Message.DeliverAfter == nil || pty.Calls() != 2 {
+		t.Fatalf("holder past its reconnect window: deliver_after=%v inject calls=%d, want queued", expired.Message.DeliverAfter, pty.Calls())
+	}
+}
+
+type disconnectingCollabBus struct {
+	events.Bus
+	disconnect func()
+}
+
+func (b *disconnectingCollabBus) Publish(_ context.Context, e events.Event) (events.Event, error) {
+	b.disconnect()
+	return e, nil
+}
+
+// The room once published a controller's message between reading its lease
+// and checking it again at delivery, and a disconnect there made the message
+// not_sent. A disconnect on that publish must not stop the delivery; the
+// message is now delivered before anything is published.
+func TestControllerSendSurvivesADisconnectBeforeDelivery(t *testing.T) {
+	st, clock, ws, _, other, run := setupCollab(t)
+	pty := &collabPTY{}
+	controlService := control.New(control.Config{Now: clock.Now, ReconnectWindow: time.Minute})
+	lease, _, err := controlService.Acquire(string(run.ID), string(other.ID), "session", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bus := &disconnectingCollabBus{disconnect: func() { controlService.Disconnect(string(run.ID), lease.SessionID, lease.Generation) }}
+	service, err := New(Config{Store: st, Runs: st, Workspaces: st, Bus: bus, Inject: pty.Inject, Control: controlService, Now: clock.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := service.Post(context.Background(), MessageInput{WorkspaceID: ws.ID, RunID: run.ID, ActorID: other.ID, Kind: store.RoomMessageSteerRequest, Body: "wake up", IdempotencyKey: "wake", ControllerSessionID: lease.SessionID, ControllerGeneration: lease.Generation})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Message.State != store.RoomMessageSent || pty.Calls() != 1 {
+		t.Fatalf("state=%s inject calls=%d, want sent", result.Message.State, pty.Calls())
+	}
+}
+
 func TestOwnerImmediateSendCannotBypassANewController(t *testing.T) {
 	st, clock, ws, owner, other, run := setupCollab(t)
 	pty := &collabPTY{}
@@ -1061,6 +1227,111 @@ func TestProtectedRunRejectsOwnerAndAdminSteering(t *testing.T) {
 	}
 }
 
+// Resolve is author-or-owner-or-admin, unlike Steer's owner-or-admin: a third
+// collaborator who is neither is refused even though they could steer a run
+// whose workspace allows steering others.
+func TestResolvePermissionsKindAndIdempotency(t *testing.T) {
+	st, clock, ws, owner, other, run := setupCollab(t)
+	admin := &domain.Member{ID: "admin", DisplayName: "Admin", Role: domain.RoleAdmin, Access: domain.WorkspaceAccess{Owned: map[domain.WorkspaceID]bool{ws.ID: true}}}
+	third := &domain.Member{ID: "third", DisplayName: "Third", Role: domain.RoleCollaborator}
+	st.members[admin.ID], st.members[third.ID] = admin, third
+	service, err := New(Config{Store: st, Runs: st, Workspaces: st, Now: clock.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	comment := func(key string) *store.RoomMessage {
+		t.Helper()
+		result, postErr := service.Post(context.Background(), MessageInput{
+			WorkspaceID: ws.ID, RunID: run.ID, ActorID: other.ID,
+			Kind: store.RoomMessageComment, Body: "note", IdempotencyKey: key,
+		})
+		if postErr != nil {
+			t.Fatal(postErr)
+		}
+		return result.Message
+	}
+
+	refused := comment("refused")
+	if _, err := service.Resolve(context.Background(), refused.ID, third.ID, store.RoomResolutionDone); !errors.Is(err, ErrUnauthorizedDecision) {
+		t.Fatalf("uninvolved collaborator resolve = %v, want ErrUnauthorizedDecision", err)
+	}
+
+	byAuthor := comment("by-author")
+	if _, err := service.Resolve(context.Background(), byAuthor.ID, other.ID, store.RoomResolutionDone); err != nil {
+		t.Fatalf("author resolve: %v", err)
+	}
+
+	byOwner := comment("by-owner")
+	if _, err := service.Resolve(context.Background(), byOwner.ID, owner.ID, store.RoomResolutionDone); err != nil {
+		t.Fatalf("owner resolve: %v", err)
+	}
+
+	byAdmin := comment("by-admin")
+	if _, err := service.Resolve(context.Background(), byAdmin.ID, admin.ID, store.RoomResolutionDeleted); err != nil {
+		t.Fatalf("admin resolve: %v", err)
+	}
+
+	question, postErr := service.Post(context.Background(), MessageInput{
+		WorkspaceID: ws.ID, RunID: run.ID, ActorID: owner.ID,
+		Kind: store.RoomMessageQuestion, Body: "what now?", IdempotencyKey: "question-1",
+	})
+	if postErr != nil {
+		t.Fatal(postErr)
+	}
+	if _, err := service.Resolve(context.Background(), question.Message.ID, owner.ID, store.RoomResolutionDone); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("question resolve = %v, want ErrInvalidRequest", err)
+	}
+
+	if _, err := service.Resolve(context.Background(), byAuthor.ID, other.ID, store.RoomResolutionDone); err != nil {
+		t.Fatalf("author resolve replay: %v", err)
+	}
+	if _, err := service.Resolve(context.Background(), byAuthor.ID, other.ID, store.RoomResolutionDeleted); !errors.Is(err, store.ErrRoomMessageResolveConflict) {
+		t.Fatalf("author resolve conflicting outcome = %v, want ErrRoomMessageResolveConflict", err)
+	}
+}
+
+type recordingCollabBus struct {
+	events.Bus
+	published []events.Event
+}
+
+func (b *recordingCollabBus) Publish(ctx context.Context, e events.Event) (events.Event, error) {
+	b.published = append(b.published, e)
+	return b.Bus.Publish(ctx, e)
+}
+
+func TestResolvePublishesTheResolverAsActor(t *testing.T) {
+	st, clock, ws, owner, other, run := setupCollab(t)
+	bus, err := events.NewInProc(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = bus.Close() })
+	recording := &recordingCollabBus{Bus: bus}
+	service, err := New(Config{Store: st, Runs: st, Workspaces: st, Bus: recording, Now: clock.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	posted, err := service.Post(context.Background(), MessageInput{
+		WorkspaceID: ws.ID, RunID: run.ID, ActorID: other.ID,
+		Kind: store.RoomMessageComment, Body: "note", IdempotencyKey: "resolved-by-owner",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Resolve(context.Background(), posted.Message.ID, owner.ID, store.RoomResolutionDone); err != nil {
+		t.Fatal(err)
+	}
+	last := recording.published[len(recording.published)-1]
+	payload, ok := last.Payload.(events.RoomMessagePayload)
+	if !ok {
+		t.Fatalf("payload = %T, want RoomMessagePayload", last.Payload)
+	}
+	if last.ActorID != owner.ID || payload.ActorID != other.ID || payload.Resolution != string(store.RoomResolutionDone) {
+		t.Fatalf("event actor %q, payload author %q, resolution %q; want resolver %q, author %q, done", last.ActorID, payload.ActorID, payload.Resolution, owner.ID, other.ID)
+	}
+}
+
 func TestRoomIdempotencyAndReceiptClassification(t *testing.T) {
 	st, clock, ws, _, other, run := setupCollab(t)
 	pty := &collabPTY{}
@@ -1161,6 +1432,51 @@ func TestDueDeliveryRechecksAuthorPermission(t *testing.T) {
 	}
 	if pty.Calls() != 0 {
 		t.Fatalf("revoked due PTY calls=%d, want 0", pty.Calls())
+	}
+}
+
+func TestSteeringNeedsEveryWorkspaceOfTheRun(t *testing.T) {
+	st, clock, ws, _, other, run := setupCollab(t)
+	st.workspaces["extra"] = &domain.Workspace{ID: "extra", Name: "extra"}
+	run.Extras = []domain.RunRepo{{WorkspaceID: "extra", Name: "extra"}}
+	pty := &collabPTY{}
+	service, err := New(Config{Store: st, Runs: st, Workspaces: st, Inject: pty.Inject, Now: clock.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.mu.Lock()
+	st.members[other.ID].Access = domain.WorkspaceAccess{Granted: map[domain.WorkspaceID]bool{ws.ID: true}}
+	st.mu.Unlock()
+	if _, err = service.Post(context.Background(), MessageInput{
+		WorkspaceID: ws.ID, RunID: run.ID, ActorID: other.ID,
+		Kind: store.RoomMessageSteerRequest, Body: "no extra", IdempotencyKey: "no-extra",
+	}); !errors.Is(err, permissions.ErrNoAccess) {
+		t.Fatalf("steer without the extra workspace: err=%v, want ErrNoAccess", err)
+	}
+
+	st.mu.Lock()
+	st.members[other.ID].Access.Granted["extra"] = true
+	st.mu.Unlock()
+	result, err := service.Post(context.Background(), MessageInput{
+		WorkspaceID: ws.ID, RunID: run.ID, ActorID: other.ID,
+		Kind: store.RoomMessageSteerRequest, Body: "queued", IdempotencyKey: "queued",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.mu.Lock()
+	delete(st.members[other.ID].Access.Granted, "extra")
+	st.mu.Unlock()
+	clock.Add(SteeringDelay)
+	if _, err = service.DeliverDue(context.Background(), 10); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetRoomMessage(context.Background(), result.Message.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.State != store.RoomMessageNotSent || pty.Calls() != 0 {
+		t.Fatalf("queued after the extra grant was revoked: state=%q inject calls=%d, want not_sent and 0", got.State, pty.Calls())
 	}
 }
 
@@ -1413,5 +1729,203 @@ func TestStartRecordsSteersQueuedBeforeTheRestartAsNotSent(t *testing.T) {
 	}
 	if n := counting.Successes(); n != 1 {
 		t.Fatalf("room publications = %d, want the dropped message", n)
+	}
+}
+
+func TestSteersQueuedBeforeTheRestartSettleByTheAgentsKeeper(t *testing.T) {
+	st, clock, ws, _, other, run := setupCollab(t)
+	restored := &domain.Run{ID: "restored", WorkspaceID: ws.ID, MemberID: run.MemberID, Harness: "claude", Mode: domain.LaunchACP, Status: domain.RunRunning}
+	st.runs[restored.ID] = restored
+	for _, m := range []struct {
+		id  string
+		run domain.RunID
+	}{{"reached", run.ID}, {"unsent", run.ID}, {"dropped", restored.ID}} {
+		st.messages[m.id] = &store.RoomMessage{
+			ID: m.id, WorkspaceID: ws.ID, RunID: m.run, ActorID: other.ID,
+			Kind: store.RoomMessageSteerRequest, Body: m.id,
+			State: store.RoomMessageSent, AgentDelivery: store.AgentQueued, CreatedAt: clock.Now(), UpdatedAt: clock.Now(),
+		}
+	}
+	clock.Add(time.Second)
+	ready := make(chan struct{})
+	sent := make(chan string, 3)
+	service, err := New(Config{
+		Store: st, Runs: st, Workspaces: st, Now: clock.Now, Ready: ready, WorkerInterval: time.Hour,
+		Inject: func(_ context.Context, _ domain.RunID, _ domain.MemberID, prompt domain.AgentPrompt, _ bool, _ func(error)) (string, error) {
+			sent <- prompt.Text
+			return acphost.OutcomeQueued, nil
+		},
+		Reattached: func(id domain.RunID) ([]string, Reattach) {
+			if id == run.ID {
+				return []string{"reached"}, Adopted
+			}
+			return nil, Restored
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := service.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	if got, _ := st.GetRoomMessage(ctx, "dropped"); got.State != store.RoomMessageSent {
+		t.Fatalf("settled before scheduler recovery: %q", got.State)
+	}
+	close(ready)
+	select {
+	case body := <-sent:
+		if body != "unsent" {
+			t.Fatalf("sent again %q, want the steer that never reached the agent", body)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the steer that never reached the agent was not sent again")
+	}
+	want := map[string]func(*store.RoomMessage) bool{
+		"reached": func(m *store.RoomMessage) bool { return m.AgentDelivery == store.AgentDelivered },
+		"unsent": func(m *store.RoomMessage) bool {
+			return m.State == store.RoomMessageSent && m.AgentDelivery == store.AgentQueued
+		},
+		"dropped": func(m *store.RoomMessage) bool {
+			return m.State == store.RoomMessageNotSent && m.Failure != nil && m.Failure.Code == "agent_disconnected"
+		},
+	}
+	for id, ok := range want {
+		var got *store.RoomMessage
+		deadline := time.Now().Add(time.Second)
+		for got, _ = st.GetRoomMessage(ctx, id); !ok(got) && time.Now().Before(deadline); got, _ = st.GetRoomMessage(ctx, id) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if !ok(got) {
+			t.Fatalf("%s after recovery: %+v", id, got)
+		}
+	}
+	select {
+	case body := <-sent:
+		t.Fatalf("sent %q again", body)
+	default:
+	}
+}
+
+func TestSteerSettlementsThatFailedToSaveAreSavedAgain(t *testing.T) {
+	st, clock, ws, _, other, run := setupCollab(t)
+	restored := &domain.Run{ID: "restored", WorkspaceID: ws.ID, MemberID: run.MemberID, Harness: "claude", Mode: domain.LaunchACP, Status: domain.RunRunning}
+	st.runs[restored.ID] = restored
+	for _, m := range []struct {
+		id  string
+		run domain.RunID
+	}{{"reached", run.ID}, {"unsent", run.ID}, {"dropped", restored.ID}} {
+		st.messages[m.id] = &store.RoomMessage{
+			ID: m.id, WorkspaceID: ws.ID, RunID: m.run, ActorID: other.ID,
+			Kind: store.RoomMessageSteerRequest, Body: m.id,
+			State: store.RoomMessageSent, AgentDelivery: store.AgentQueued, CreatedAt: clock.Now(), UpdatedAt: clock.Now(),
+		}
+	}
+	st.settleFailures = 3
+	clock.Add(time.Second)
+	ready := make(chan struct{})
+	close(ready)
+	var sent atomic.Int32
+	service, err := New(Config{
+		Store: st, Runs: st, Workspaces: st, Now: clock.Now, Ready: ready, WorkerInterval: 10 * time.Millisecond,
+		Inject: func(context.Context, domain.RunID, domain.MemberID, domain.AgentPrompt, bool, func(error)) (string, error) {
+			sent.Add(1)
+			return acphost.OutcomeSent, nil
+		},
+		Reattached: func(id domain.RunID) ([]string, Reattach) {
+			if id == run.ID {
+				return []string{"reached"}, Adopted
+			}
+			return nil, Restored
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := service.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	want := map[string]func(*store.RoomMessage) bool{
+		"reached": func(m *store.RoomMessage) bool { return m.AgentDelivery == store.AgentDelivered },
+		"unsent":  func(m *store.RoomMessage) bool { return m.AgentDelivery == store.AgentDelivered },
+		"dropped": func(m *store.RoomMessage) bool { return m.State == store.RoomMessageNotSent },
+	}
+	for id, ok := range want {
+		var got *store.RoomMessage
+		deadline := time.Now().Add(2 * time.Second)
+		for got, _ = st.GetRoomMessage(ctx, id); !ok(got) && time.Now().Before(deadline); got, _ = st.GetRoomMessage(ctx, id) {
+			time.Sleep(10 * time.Millisecond)
+		}
+		if !ok(got) {
+			t.Fatalf("%s after failed saves: %+v", id, got)
+		}
+	}
+	if n := sent.Load(); n != 1 {
+		t.Fatalf("sent %d times, want the unsent steer once", n)
+	}
+}
+
+func TestSteersQueuedForAPausedRunWaitForItsReattach(t *testing.T) {
+	st, clock, ws, _, other, run := setupCollab(t)
+	st.messages["paused"] = &store.RoomMessage{
+		ID: "paused", WorkspaceID: ws.ID, RunID: run.ID, ActorID: other.ID,
+		Kind: store.RoomMessageSteerRequest, Body: "paused",
+		State: store.RoomMessageSent, AgentDelivery: store.AgentQueued, CreatedAt: clock.Now(), UpdatedAt: clock.Now(),
+	}
+	clock.Add(time.Second)
+	ready := make(chan struct{})
+	close(ready)
+	sent := make(chan string, 2)
+	var resumed atomic.Bool
+	service, err := New(Config{
+		Store: st, Runs: st, Workspaces: st, Now: clock.Now, Ready: ready, WorkerInterval: 10 * time.Millisecond,
+		Inject: func(_ context.Context, _ domain.RunID, _ domain.MemberID, prompt domain.AgentPrompt, _ bool, _ func(error)) (string, error) {
+			sent <- prompt.Text
+			return acphost.OutcomeQueued, nil
+		},
+		Reattached: func(domain.RunID) ([]string, Reattach) {
+			if resumed.Load() {
+				return nil, Adopted
+			}
+			return nil, Undecided
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := service.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	time.Sleep(100 * time.Millisecond)
+	if got, _ := st.GetRoomMessage(ctx, "paused"); got.State != store.RoomMessageSent || got.AgentDelivery != store.AgentQueued {
+		t.Fatalf("settled while the run was paused: %+v", got)
+	}
+	select {
+	case body := <-sent:
+		t.Fatalf("sent %q while the run was paused", body)
+	default:
+	}
+	resumed.Store(true)
+	select {
+	case body := <-sent:
+		if body != "paused" {
+			t.Fatalf("sent %q", body)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the steer was not sent once the run reattached")
+	}
+	time.Sleep(100 * time.Millisecond)
+	select {
+	case body := <-sent:
+		t.Fatalf("sent %q again", body)
+	default:
 	}
 }

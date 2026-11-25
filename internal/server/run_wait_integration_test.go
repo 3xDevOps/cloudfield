@@ -5,6 +5,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"github.com/3xDevOps/Aether/internal/coordtransport"
 	"github.com/3xDevOps/Aether/internal/domain"
 	"github.com/3xDevOps/Aether/internal/protocol"
+	"github.com/3xDevOps/Aether/internal/runtime"
 	"github.com/3xDevOps/Aether/internal/store"
 )
 
@@ -97,7 +99,9 @@ func TestIntegrationRunWaitWakesTheAgent(t *testing.T) {
 	if err := env.srv.sched.Kill(ctx, target, ada.ID); err != nil {
 		t.Fatalf("kill %s: %v", target, err)
 	}
-	waitPrompted(ctx, t, env.srv, waiter, protocol.CoordInboxContext(1))
+	// The waiter's container has the new command name, which its wake names.
+	wake := coordhooks.Named(protocol.CoordInboxContext(1), coordhooks.NewCLI)
+	waitPrompted(ctx, t, env.srv, waiter, wake)
 	for _, run := range []domain.RunID{waiter, satisfied} {
 		quiesce(ctx, t, env.srv, run)
 	}
@@ -112,7 +116,7 @@ func TestIntegrationRunWaitWakesTheAgent(t *testing.T) {
 	}
 	// The mock ends the wake's turn without a report, so Aether asks it for
 	// one: that reminder is the only turn after the wake.
-	if inboxes, reminders, turns := countPrompts(t, env.srv, waiter, protocol.CoordInboxContext(1)),
+	if inboxes, reminders, turns := countPrompts(t, env.srv, waiter, wake),
 		countPrompts(t, env.srv, waiter, coordhooks.ReportReminderLead), turnsEnded(t, env.srv, waiter); inboxes != 1 || reminders != 1 || turns != 3 {
 		t.Fatalf("waiter: %d inbox prompts, %d reminders, %d turns; want its task's turn, one wake and its reminder", inboxes, reminders, turns)
 	}
@@ -128,6 +132,30 @@ func TestIntegrationRunWaitWakesTheAgent(t *testing.T) {
 	for _, run := range []domain.RunID{waiter, satisfied} {
 		if err := env.srv.sched.Kill(ctx, run, ada.ID); err != nil {
 			t.Fatalf("kill %s: %v", run, err)
+		}
+	}
+	for _, run := range []domain.RunID{ended, target, waiter, satisfied} {
+		waitDestroyed(ctx, t, env.srv, run)
+	}
+}
+
+// waitDestroyed waits until run's container is gone. Kill returns once the
+// container stops; the run's finalization destroys it afterwards, and a
+// shutdown before then leaves it for the next boot's recovery.
+func waitDestroyed(ctx context.Context, t *testing.T, srv *Server, run domain.RunID) {
+	t.Helper()
+	for {
+		_, err := srv.rt.FindByCreationKey(ctx, string(run))
+		if errors.Is(err, runtime.ErrNotFound) {
+			return
+		}
+		if err != nil {
+			t.Fatalf("find the container of %s: %v", run, err)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("the container of %s was never destroyed", run)
+		case <-time.After(100 * time.Millisecond):
 		}
 	}
 }

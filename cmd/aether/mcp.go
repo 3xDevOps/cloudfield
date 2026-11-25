@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -15,15 +16,15 @@ func init() {
 	register(command{
 		name:  "mcp",
 		short: "add the linked server to ChatGPT or Claude as a custom connector, or revoke one",
-		usage: "aether mcp\n" +
-			"aether mcp code\n" +
-			"aether mcp revoke <connector-id>",
-		example: "aether mcp",
+		usage: "cloudfield mcp\n" +
+			"cloudfield mcp code\n" +
+			"cloudfield mcp revoke <connector-id>",
+		example: "cloudfield mcp",
 		run:     runMCP,
 	})
 }
 
-const mcpUsage = "usage: aether mcp [code | revoke <connector id>]"
+const mcpUsage = "usage: cloudfield mcp [code | revoke <connector id>]"
 
 func runMCP(args []string) error {
 	switch {
@@ -77,7 +78,7 @@ func printConnectors(w io.Writer, list protocol.ConnectorListResult, code *proto
 		connectorURL = code.URL
 	}
 	if connectorURL != "" && connectorURL == list.UniversalURL {
-		_, _ = fmt.Fprintf(w, "Install Aether from the ChatGPT or Claude directory where it is listed, or add this URL as a custom connector:\n  URL   %s\n", connectorURL)
+		_, _ = fmt.Fprintf(w, "Install Cloudfield from the ChatGPT or Claude directory where it is listed, or add this URL as a custom connector:\n  URL   %s\n", connectorURL)
 	} else {
 		_, _ = fmt.Fprintf(w, "Add this server to ChatGPT or Claude as a custom connector:\n  URL   %s\n", connectorURL)
 	}
@@ -108,9 +109,9 @@ func printConnectors(w io.Writer, list protocol.ConnectorListResult, code *proto
 			used = "last used " + ago(now.Sub(last))
 		}
 		at := ""
-		switch c.Resource {
-		case "":
-		case list.UniversalURL:
+		switch {
+		case c.Resource == "":
+		case c.Resource == list.UniversalURL || slices.Contains(list.UniversalURLs, c.Resource):
 			at = "  universal URL"
 		default:
 			at = "  at " + c.Resource

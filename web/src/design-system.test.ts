@@ -83,6 +83,12 @@ const rules: Rule[] = [
     legacy: [],
   },
   {
+    name: 'no group-has or peer-has',
+    why: 'These compile to a :has() that is not the subject, which Chromium re-checks on DOM changes far from it; with one, a sidebar hover card restyled thousands of elements on every swap. Mark the target with a peer before it instead.',
+    pattern: /\b(?:group|peer)-has-/,
+    legacy: [],
+  },
+  {
     name: 'token names',
     why: 'These colour names are not tokens and render nothing; use the names in index.css (docs/styles.md).',
     pattern:
@@ -155,12 +161,16 @@ const pairs: [fg: string, bg: string, min: number][] = [
   ['accent-text', 'canvas', 4.5],
   ['accent-text', 'chrome', 4.5],
   ['on-accent', 'accent-fill', 4.5],
+  ['on-accent', 'accent-mark', 4.5],
+  ...['canvas', 'chrome', 'raised'].map((bg): [string, string, number] => ['accent-mark', bg, 3]),
   ['on-failed', 'state-failed', 4.5],
   ['on-done', 'state-done', 4.5],
   ...[...states, 'diff-add', 'diff-del'].map((fg): [string, string, number] => [fg, 'canvas', 4.5]),
   ['control-border', 'canvas', 3],
+  ['control-border', 'raised', 3],
+  ...['canvas', 'chrome', 'raised', 'hover', 'hover-chrome', 'selection'].map((bg): [string, string, number] => ['focus-ring', bg, 3]),
   ['icon-faint', 'canvas', 3],
-  ...['claude', 'codex', 'pi', 'omp', 'opencode', 'copilot', 'gemini', 'cursor', 'antigravity'].map((agent): [string, string, number] => [`agent-${agent}`, 'canvas', 3]),
+  ...['claude', 'pi', 'omp', 'cursor'].map((agent): [string, string, number] => [`agent-${agent}`, 'canvas', 3]),
 ]
 
 describe.each([
@@ -186,6 +196,13 @@ describe.each([
     // 0.7 is ControlMatrix's strength while the dots move or a hold is under way.
     const dot = over(colours[fill], over(colours.text, colours.chrome, idle), 0.7 * dots)
     expect(contrast(colours.text, over(colours.chrome, dot, clear))).toBeGreaterThanOrEqual(4.5)
+  })
+})
+
+describe('style sheets', () => {
+  it('anchor every :has() to an element, so no DOM change restyles the whole page', () => {
+    const sheets = ['index.css', 'motion.css'].map((file) => readFileSync(path.join(src, file), 'utf8')).join('\n')
+    expect(sheets.match(/(?:^|[\s,{}>+~(*])\:has\(/gm) ?? []).toEqual([])
   })
 })
 

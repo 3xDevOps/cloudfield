@@ -70,9 +70,10 @@ describe('session rows', () => {
     ])
   })
 
-  it('turns notes, questions and their replies, and steering entries into their own rows', () => {
+  it('turns questions and their replies, and steering entries into their own rows', () => {
     const room = [
       roomMessage({ id: 'c1', kind: 'comment', actor_id: bob.id, body: 'looks good', created_at: '2026-08-14T10:04:00Z' }),
+      roomMessage({ id: 'c2', kind: 'comment', actor_id: bob.id, body: 'done', resolution: 'done', created_at: '2026-08-14T10:04:30Z' }),
       roomMessage({ id: 'q1', kind: 'question', actor_id: bob.id, body: 'keep the prefix?', created_at: '2026-08-14T10:05:00Z' }),
       roomMessage({ id: 'r1', kind: 'reply', actor_id: alice.id, body: 'yes', correlation_id: 'q1', created_at: '2026-08-14T10:06:00Z' }),
     ]
@@ -83,9 +84,19 @@ describe('session rows', () => {
     expect(rows({ run: toRecord(run({ status: 'needs-attention' })), events, room, memberName, paused: false })).toEqual([
       { kind: 'event', text: 'Session started' },
       { kind: 'event', text: 'Paused by Alice' },
-      { kind: 'note', authorID: bob.id, body: 'looks good', pending: false },
       { kind: 'request', answer: 'reply', authorID: bob.id, title: 'Bob asked', body: 'keep the prefix?', reply: { authorID: alice.id, body: 'yes' } },
       { kind: 'event', text: 'Alice handed the session to Bob' },
+    ])
+  })
+
+  it('records Not yet in the session, and no other review answer', () => {
+    const events = [
+      event('run.review', { review: 'later', status_seq: 5 }, '2026-08-14T10:03:00Z', alice.id),
+      event('run.review', { review: '', status_seq: 6 }, '2026-08-14T10:04:00Z', alice.id),
+    ]
+    expect(rows({ run: toRecord(run({ status: 'needs-attention' })), events, room: [], memberName, paused: false })).toEqual([
+      { kind: 'event', text: 'Session started' },
+      { kind: 'event', text: 'Alice said the task is not finished yet' },
     ])
   })
 
@@ -97,14 +108,14 @@ describe('session rows', () => {
   })
 
   it('carries how a note was posted and the name it carried onto its row', () => {
-    const posted = roomMessage({ id: 'c1', kind: 'comment', actor_id: 'mem_gone', actor_display_name: 'Gone Person', via: 'ChatGPT', body: 'ship it', created_at: '2026-08-14T10:04:00Z' })
-    expect(rows({ run: toRecord(run({ status: 'needs-attention' })), events: [], room: [posted], memberName, paused: false }).at(-1)).toEqual({
-      kind: 'note', authorID: 'mem_gone', authorName: 'Gone Person', via: 'ChatGPT', body: 'ship it', pending: false,
+    const posted = roomMessage({ id: 'q1', kind: 'question', actor_id: 'mem_gone', actor_display_name: 'Gone Person', via: 'ChatGPT', body: 'ship it', created_at: '2026-08-14T10:04:00Z' })
+    expect(rows({ run: toRecord(run({ status: 'needs-attention', member_id: 'mem_gone' })), events: [], room: [posted], memberName, paused: false }).at(-1)).toEqual({
+      kind: 'note', authorID: 'mem_gone', authorName: 'Gone Person', via: 'ChatGPT', body: 'ship it', question: true, pending: false,
     })
   })
 
   it('marks a note still being sent as pending', () => {
-    const sending = roomMessage({ id: 'k1', idempotency_key: 'k1', kind: 'comment', actor_id: alice.id, body: 'hold on', created_at: '2026-08-14T10:06:00Z' })
+    const sending = roomMessage({ id: 'k1', idempotency_key: 'k1', kind: 'question', actor_id: alice.id, body: 'hold on', created_at: '2026-08-14T10:06:00Z' })
     expect(rows({ run: toRecord(run({ status: 'needs-attention' })), events: [], room: [sending], memberName, paused: false }).at(-1)).toMatchObject({ kind: 'note', pending: true })
   })
 
@@ -149,7 +160,7 @@ describe('session log', () => {
     await readSessionLog(store, fakeApi({ workspaceTimeline }), { id: 'run_1', workspace_id: 'wsp_1' })
 
     expect(workspaceTimeline).toHaveBeenCalledTimes(2)
-    expect(workspaceTimeline.mock.calls[0]![0]).toMatchObject({ run_id: 'run_1', newest: true, before_seq: undefined, types: ['run.agent', 'workspace.timeline', 'run.status'] })
+    expect(workspaceTimeline.mock.calls[0]![0]).toMatchObject({ run_id: 'run_1', newest: true, before_seq: undefined, types: ['run.agent', 'workspace.timeline', 'run.status', 'run.review'] })
     expect(workspaceTimeline.mock.calls[1]![0]).toMatchObject({ newest: true, before_seq: 2001 })
     const log = store.getState().sessionLogs.run_1!
     expect([log.events.length, log.events[0]!.seq, log.cursor]).toEqual([2000, 1001, 3000])

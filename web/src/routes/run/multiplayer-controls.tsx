@@ -1,3 +1,5 @@
+import { useRef } from 'react'
+import { useShallow } from 'zustand/react/shallow'
 import { ControlMatrix } from '@/components/control-matrix'
 import { Shield, Users } from '@/components/icons'
 import { connectionLabel } from '@/components/shell/connection'
@@ -8,6 +10,7 @@ import { memberName, resolveMember } from '@/lib/member-name'
 import { allowed } from '@/lib/permissions'
 import type { RoomController } from '@/lib/types'
 import type { AgentTerminal } from '@/routes/run/agent-terminal'
+import { useDotFade } from '@/routes/run/dot-fade'
 import { ControlButton } from '@/routes/terminal/control-button'
 import { useStore } from '@/store'
 import { useSelf } from '@/store/hooks'
@@ -37,22 +40,42 @@ export function usePresenceSummary(run: RunRecord, agent: AgentTerminal): string
   return stale ? `${who} (last known)` : who
 }
 
+/** Someone else watches, another member or tab holds control, or control or presence failed: what a phone keeps the strip for. */
+export function useSharedPresence(run: RunRecord, agent: AgentTerminal): boolean {
+  const self = useSelf()
+  const status = useStore((s) => s.roomStatus[run.id])
+  const presenceError = useStore((s) => s.roomStatusError[run.id])
+  const sessionError = useStore((s) => {
+    const session = s.acpSessions[run.id]
+    return Boolean(session?.controlError || session?.takeoverError || session?.streamError)
+  })
+  if (presenceError || sessionError) return true
+  // Only the owner takes free control implicitly; anyone else needs the strip's button.
+  if (!agent.localControl && (status?.controller || run.member_id !== self.id)) return true
+  return status?.watchers.some((id) => id !== self.id) ?? false
+}
+
 export function MultiplayerControls({ run, agent, onPeople }: {
   run: RunRecord
   agent: AgentTerminal
   onPeople: () => void
 }) {
-  const self = useSelf()
+  const self = useSelf(run.workspace_id)
+  const strip = useRef<HTMLDivElement>(null)
+  useDotFade(strip)
   const members = useStore((s) => s.members)
   const mergedInto = useStore((s) => s.mergedInto)
   const summary = usePresenceSummary(run, agent)
   const status = useStore((s) => s.roomStatus[run.id])
   const presenceError = useStore((s) => s.roomStatusError[run.id])
-  const session = useStore((s) => s.acpSessions[run.id])
+  const session = useStore(useShallow((s) => {
+    const held = s.acpSessions[run.id]
+    return { stream: held?.stream, controlError: held?.controlError, takeoverError: held?.takeoverError, streamError: held?.streamError }
+  }))
   const steerOthers = useStore((s) => s.workspaces[run.workspace_id]?.steer_others)
   const maySteer = allowed('steer', self, { owner: run.member_id, protected: run.protected, steerOthers })
-  const stream = session?.stream ?? 'connecting'
-  const controlError = session?.controlError ?? session?.takeoverError
+  const stream = session.stream ?? 'connecting'
+  const controlError = session.controlError ?? session.takeoverError
   const connection = stream === 'refused' ? 'Offline' : connectionLabel[stream]
   const controllerID = agent.localControl ? self.id : status?.controller?.member_id
   const controller = controllerID ? resolveMember({ members, mergedInto }, controllerID).member : undefined
@@ -61,11 +84,16 @@ export function MultiplayerControls({ run, agent, onPeople }: {
   const staleWatchers = stream !== 'live' || Boolean(presenceError)
 
   return (
-    <div role="group" aria-label="Multiplayer controls" className="@container/multiplayer relative isolate shrink-0 overflow-clip border-b border-seam bg-chrome px-2 py-1">
+    <div
+      ref={strip}
+      role="group"
+      aria-label="Multiplayer controls"
+      className="@container/multiplayer relative isolate shrink-0 touch-pan-y overflow-clip border-b border-seam bg-chrome px-2 py-1">
       <ControlMatrix
         appearance={agent.localControl ? 'active'
           : agent.controlUnavailable ? 'hidden' : agent.roomControl?.loss ?? 'hidden'}
         takeoverProgress={agent.takeover.holderProgress}
+        breathing={false}
       />
       <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
         <Button size="sm" variant="ghost" className="control-matrix-clear shrink-0" hint="See people and notes for this session" onClick={onPeople}>
@@ -109,7 +137,7 @@ export function MultiplayerControls({ run, agent, onPeople }: {
         </div>
       </div>
       {controlError && <p role="alert" className="control-matrix-clear w-fit px-1 py-1 text-ui-sm text-state-failed">Control request failed: {controlError}</p>}
-      {session?.streamError && <p role="status" className="control-matrix-clear w-fit px-1 py-1 text-ui-sm text-state-failed">{session.streamError}</p>}
+      {session.streamError && <p role="status" className="control-matrix-clear w-fit px-1 py-1 text-ui-sm text-state-failed">{session.streamError}</p>}
       {presenceError && <p role="status" className="control-matrix-clear w-fit px-1 py-1 text-ui-sm text-muted">Presence unavailable: {presenceError}</p>}
     </div>
   )

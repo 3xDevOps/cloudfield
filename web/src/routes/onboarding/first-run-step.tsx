@@ -1,4 +1,5 @@
 import { type ReactNode, useEffect, useState } from 'react'
+import { useDictating } from '@/components/dictation/state'
 import { needsTask, RunFields, useAgentChoice } from '@/components/launch/run-fields'
 import { Button } from '@/components/ui/button'
 import { Callout } from '@/components/ui/callout'
@@ -25,13 +26,13 @@ function useSourceCheck(client: Api, workspaceID: string | undefined) {
     if (!workspaceID) return
     void (async () => {
       try {
-        if (caps.hasMethod('files.tree')) await client.filesTree({ workspace_id: workspaceID, path: '' })
         if (caps.hasMethod('workspace.mirror.status')) {
           const source = await client.workspaceMirrorStatus(workspaceID)
           if (source.enabled && (source.status !== 'ready' || !source.accepted_commit)) {
-            throw new Error(source.last_error || `Source is ${source.status ?? 'pending'}; ${isAdmin ? 'verify and adopt the candidate' : 'ask an administrator to verify and adopt the candidate'} in repository setup before launching.`)
+            throw new Error(source.last_error || `Source is ${source.status ?? 'pending'}; ${isAdmin ? 'verify and adopt the candidate' : 'ask an administrator to verify and adopt the candidate'} before launching: Review source mirror → Adopt candidate under Advanced on the workspace settings page.`)
           }
         }
+        if (caps.hasMethod('files.tree')) await client.filesTree({ workspace_id: workspaceID, path: '' })
         if (live) setCheck({ workspace: workspaceID, error: null })
       } catch (cause) {
         if (live) setCheck({ workspace: workspaceID, error: message(cause) })
@@ -66,6 +67,7 @@ export function FirstRunStep({
   const caps = useCapability()
   const launchable = canLaunch({ cap: caps, role: useSelfRole() })
   const saved = useLaunchDefaultsRead(client)
+  const dictating = useDictating()
   const choice = useAgentChoice({ account: '', ownAccountID: '', saved, preferred: draft.harness, preferredModel: draft.model, preferredEffort: draft.effort, client })
   const source = useSourceCheck(client, workspace?.id)
   const [error, setError] = useState<string | null>(null)
@@ -97,13 +99,13 @@ export function FirstRunStep({
       <Step
         label="First session"
         title="Start your first session"
-        lead="A session is one agent working on its own branch in its own container. It starts from a workspace's base branch, so choose a workspace first."
+        lead="A session is one agent working on its own branch in its own sandbox, a container or virtual machine on the server. It starts from a workspace's base branch, so choose a workspace first."
         actions={<><Button onClick={onBackToRepository}>Choose a repository</Button><Button variant="secondary" onClick={goToBoard}>Go to board</Button>{back}</>}
       />
     )
   }
 
-  const ready = launchable && source.checked && source.error === null && harness !== '' && !needsTask(mode, draft.task)
+  const ready = launchable && source.checked && source.error === null && harness !== '' && !needsTask(mode, draft.task) && !dictating
 
   const launch = async () => {
     if (!ready) return
@@ -136,7 +138,7 @@ export function FirstRunStep({
     <Step
       label="First session"
       title="Start your first session"
-      lead={<>A session is one agent working on its own branch in its own container, starting from <Code>{workspace.base_branch}</Code> in {workspace.name}.</>}
+      lead={<>A session is one agent working on its own branch in its own sandbox, a container or virtual machine on the server, starting from <Code>{workspace.base_branch}</Code> in {workspace.name}.</>}
       actions={
         <>
           {noAgents ? (
@@ -149,7 +151,7 @@ export function FirstRunStep({
           {busy && (
             <span className="flex items-center gap-1.5 text-ui-sm text-muted">
               <Spinner label="Starting" />
-              Starting the container…
+              Starting the sandbox…
             </span>
           )}
         </>
@@ -186,7 +188,7 @@ export function FirstRunStep({
       {error && <Callout tone="failed" role="alert" title="Launch failed" className="whitespace-pre-wrap">{error}</Callout>}
       {!noAgents && (
         <p className="text-ui-sm text-muted">
-          After Launch the session starts its container, pulls the image the first time this server uses it, then starts the agent (about 5 s in Enhanced).
+          After Launch the session starts its sandbox, pulls the image the first time this server uses it, then starts the agent (about 5 s in Enhanced).
         </p>
       )}
       {caps.hasMethod('connector.list') && (

@@ -1,3 +1,4 @@
+import { signedOutTitle } from '@/components/agents/agent-copy'
 import { useState } from 'react'
 import { toast } from 'sonner'
 import {
@@ -11,10 +12,13 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { AskAssistantButton } from '@/components/assistant/ask'
+import { CloseWarnings, useCloseCheck, warningScroll } from '@/components/close-warnings'
 import { Button } from '@/components/ui/button'
 import { Callout } from '@/components/ui/callout'
 import { api } from '@/lib/api'
+import { closeWarned } from '@/lib/close-check'
 import { errorSentence } from '@/lib/format'
+import { focusRingShown } from '@/lib/utils'
 import type { AuthMethod, SessionItem } from '@/lib/session-types'
 import type { RunNavigation } from '@/routes/run/header'
 import type { RunShells } from '@/routes/run/shells'
@@ -26,11 +30,11 @@ import { sessionLease } from '@/store/session-stream'
 const adapterFailed = ['Enhanced agent failed', 'Enhanced agent exited']
 const authError = /authentication required|authrequired|not logged in|not signed in/i
 
-export type SessionFailure =
+type SessionFailure =
   | { kind: 'adapter'; title: string; detail?: string; seq?: number }
   | { kind: 'auth'; detail?: string; seq?: number }
 
-export function sessionFailure(session: AcpSession | undefined): SessionFailure | null {
+function sessionFailure(session: AcpSession | undefined): SessionFailure | null {
   if (!session) return null
   let notice: SessionItem | undefined
   scan: for (let t = session.turns.length - 1; t >= 0; t--) {
@@ -54,6 +58,7 @@ export function sessionFailure(session: AcpSession | undefined): SessionFailure 
 function OpenInStandard({ run, switchable, nav }: { run: RunRecord; switchable: boolean; nav: RunNavigation }) {
   const [confirm, setConfirm] = useState(false)
   const [busy, setBusy] = useState(false)
+  const check = useCloseCheck(confirm ? run.id : null, 'abandoned')
   const act = async () => {
     setBusy(true)
     try {
@@ -106,12 +111,15 @@ function OpenInStandard({ run, switchable, nav }: { run: RunRecord; switchable: 
           <AlertDialogHeader>
             <AlertDialogTitle>Start a Standard session instead?</AlertDialogTitle>
             <AlertDialogDescription>
-              This agent cannot move a running conversation between modes. Aether starts a new Standard session with the same task and closes this one without merging. The conversation so far stays in this session’s history.
+              This agent cannot move a running conversation between modes. Cloudfield starts a new Standard session with the same task and closes this one without merging. The conversation so far stays in this session’s history.
             </AlertDialogDescription>
           </AlertDialogHeader>
+          {check ? <CloseWarnings check={check} run={run} onLeave={() => setConfirm(false)} className={warningScroll} /> : <p className="text-ui-sm text-muted">Checking what closing affects…</p>}
           <AlertDialogFooter>
-            <AlertDialogCancel>Keep this session</AlertDialogCancel>
-            <AlertDialogAction onClick={() => void act()}>Start a Standard session</AlertDialogAction>
+            <AlertDialogCancel className={focusRingShown}>Keep this session</AlertDialogCancel>
+            <AlertDialogAction disabled={!check} onClick={() => void act()}>
+              {closeWarned(check, 'abandoned') ? 'Close anyway and start Standard' : 'Start a Standard session'}
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
@@ -122,7 +130,7 @@ function OpenInStandard({ run, switchable, nav }: { run: RunRecord; switchable: 
 function LoginActions({ run, command, methods, shells, nav }: { run: RunRecord; command: string | undefined; methods: AuthMethod[]; shells: RunShells; nav: RunNavigation }) {
   const terminal = methods.filter((method) => method.type === 'terminal')
   const openShell = async (typed?: string) => {
-    nav.go('terminal')
+    nav.go('terminal', { remember: false })
     const tab = await shells.open()
     const lease = sessionLease(useStore, run.id)
     if (!tab || !typed || !lease) return
@@ -151,6 +159,9 @@ export function SessionFailureCallout({ run, session, switchable, shells, nav }:
   nav: RunNavigation
 }) {
   const [retrying, setRetrying] = useState(false)
+  const own = useStore((s) => (run.account_member_id || run.member_id) === s.info?.member.id)
+  const agent = useStore((s) => (s.agentList?.identity === s.identityKey ? s.agentList.agents.find((item) => item.name === run.harness) : undefined))
+  const signedOut = own && agent?.login_problem ? agent : undefined
   const failure = sessionFailure(session)
   if (!failure || isTerminal(run.status)) return null
   const target = { kind: 'failure' as const, workspace_id: run.workspace_id, run_id: run.id, failure: failure.kind, seq: failure.seq, label: failure.kind === 'auth' ? 'Agent not signed in' : failure.title }
@@ -160,15 +171,25 @@ export function SessionFailureCallout({ run, session, switchable, shells, nav }:
     return (
       <Callout
         tone="needs-you"
-        title="The agent is not signed in"
+        title={signedOut ? signedOutTitle(signedOut) : 'The agent is not signed in'}
         actions={
           <>
+            {own && <Button size="sm" variant="secondary" onClick={() => useStore.getState().navigate('agents')}>Sign in on Agents</Button>}
             <LoginActions run={run} command={session?.state?.agent_command} methods={methods} shells={shells} nav={nav} />
             <AskAssistantButton size="sm" variant="secondary" ask={{ draft: 'Help me sign the agent in', attachments: [target] }}>Ask the assistant</AskAssistantButton>
           </>
         }
       >
-        <p>{label ? `${label}. ` : ''}Log the agent in from a terminal in this session, then send your message again.</p>
+        {signedOut ? (
+          <>
+            <p>Sign in again on the Agents page, or from a terminal in this session, then send your message again.</p>
+            {signedOut.login_blocks_launch && <p className="mt-1 font-code text-ui-sm break-words">{signedOut.login_problem}</p>}
+          </>
+        ) : own ? (
+          <p>{label ? `${label}. ` : ''}Log the agent in from a terminal in this session, then send your message again.</p>
+        ) : (
+          <p>{label ? `${label}. ` : ''}This session signs in with another member's account. They sign in again on their Agents page or with <code className="font-code">aether agent login {run.harness}</code>; then send your message again.</p>
+        )}
         {methods.length > 0 && (
           <ul className="mt-1 list-disc pl-5 text-ui-sm">
             {methods.map((method) => <li key={method.id}>{method.name}{method.description ? `: ${method.description}` : ''}</li>)}

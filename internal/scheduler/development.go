@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/3xDevOps/Aether/internal/browser"
 	"github.com/3xDevOps/Aether/internal/control"
@@ -41,7 +42,7 @@ func (s *Scheduler) ResolveLiveRun(ctx context.Context, id domain.RunID, allowPa
 		return live, err
 	}
 	if run.Status.Terminal() {
-		return live, fmt.Errorf("%w: the session is %s and its container is gone", ErrNoLiveEnvironment, run.Status)
+		return live, fmt.Errorf("%w: the session is %s and its sandbox is gone", ErrNoLiveEnvironment, run.Status)
 	}
 	if run.Status != domain.RunRunning && run.Status != domain.RunNeedsAttention {
 		return live, fmt.Errorf("%w: the session is %s", ErrNoLiveEnvironment, run.Status)
@@ -55,14 +56,14 @@ func (s *Scheduler) ResolveLiveRun(ctx context.Context, id domain.RunID, allowPa
 			return live, err
 		}
 		if sc.RunID != string(id) || sc.ContainerID == "" || sc.KillRequested || sc.ExitObserved || sc.DestroyPending || sc.Retained || (sc.Paused && !allowPaused) {
-			return live, fmt.Errorf("%w: the recorded container is stopping, gone or paused", ErrNoLiveEnvironment)
+			return live, fmt.Errorf("%w: the recorded sandbox is stopping, gone or paused", ErrNoLiveEnvironment)
 		}
 		found, err := s.cfg.Runtime.FindByCreationKey(ctx, string(id))
 		if err != nil {
 			return live, err
 		}
 		if found != runtime.ID(sc.ContainerID) {
-			return live, errors.New("recorded session container identity mismatch")
+			return live, errors.New("recorded session sandbox identity mismatch")
 		}
 		live = LiveRun{Run: *run, ContainerID: found, Workdir: s.cfg.WorktreeMount, User: sc.RunUser}
 		if sc.Home != "" {
@@ -77,7 +78,7 @@ func (s *Scheduler) ResolveLiveRun(ctx context.Context, id domain.RunID, allowPa
 	}
 	if e.containerID == "" || e.killRequested || e.finalizing || e.destroyPending || e.retained || (e.paused && !allowPaused) {
 		s.mu.Unlock()
-		return live, fmt.Errorf("%w: the container is stopping, gone or paused", ErrNoLiveEnvironment)
+		return live, fmt.Errorf("%w: the sandbox is stopping, gone or paused", ErrNoLiveEnvironment)
 	}
 	if e.status != run.Status {
 		s.mu.Unlock()
@@ -103,13 +104,15 @@ type developmentState struct {
 	locks    map[domain.RunID]*sync.Mutex
 	reserved map[domain.RunID]bool
 	captures sync.Mutex
+	// sweepFailures is the last failure text sweepBrowsers reported per key.
+	sweepFailures map[string]string
 }
 
 func (s *Scheduler) developmentState() *developmentState {
 	s.developmentMu.Lock()
 	defer s.developmentMu.Unlock()
 	if s.development == nil {
-		d := &developmentState{locks: make(map[domain.RunID]*sync.Mutex), reserved: make(map[domain.RunID]bool)}
+		d := &developmentState{locks: make(map[domain.RunID]*sync.Mutex), reserved: make(map[domain.RunID]bool), sweepFailures: make(map[string]string)}
 		d.manager, d.reason = browser.NewManager(filepath.Join(s.cfg.StateDir, "browser"), s.cfg.Runtime, browser.Config{Image: s.cfg.BrowserImage, CPULimit: 1, MemoryLimitBytes: 1 << 30})
 		s.development = d
 	}
@@ -272,6 +275,33 @@ func (s *Scheduler) CallDevelopment(ctx context.Context, id domain.RunID, p cont
 	auth := func() error { return s.developmentAuthorization(ctx, id, p, authorize) }
 	if err := auth(); err != nil {
 		return nil, err
+	}
+	// A call that starts work in the container wakes the run: a terminal, a
+	// browser operation, or taking control for one. The reads an open
+	// Browser tab polls, status, pages, console and network, neither wake a
+	// run nor keep it awake.
+	switch method {
+	case protocol.MethodDevTerminalStart, protocol.MethodDevControlAcquire, protocol.MethodDevBrowserOpen, protocol.MethodDevBrowserNavigate,
+		protocol.MethodDevBrowserAction, protocol.MethodDevBrowserViewport, protocol.MethodDevBrowserReset,
+		protocol.MethodDevBrowserSnapshot, protocol.MethodDevBrowserInspect, protocol.MethodDevBrowserScreenshot,
+		protocol.MethodDevBrowserWait:
+		awake, err := s.holdAwake(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		defer awake()
+		if strings.HasPrefix(method, "dev.browser.") {
+			s.mu.Lock()
+			if entry := s.runs[id]; entry != nil {
+				entry.browsedAt = time.Now().UTC()
+			}
+			s.mu.Unlock()
+		}
+	}
+	if strings.HasPrefix(method, "dev.browser.") {
+		if err := s.removeLeftBrowser(ctx, id); err != nil {
+			return nil, fmt.Errorf("remove the browser companion left from before the sleep: %w", err)
+		}
 	}
 	var result any
 	var err error

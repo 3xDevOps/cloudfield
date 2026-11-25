@@ -244,13 +244,13 @@ func (s *Scheduler) activityLocked(ctx context.Context, run domain.RunID, entry 
 			workers = true
 			switch {
 			case waiting.children == 1:
-				public = "waiting for 1 child run"
+				public = "waiting for 1 subsession"
 			case waiting.children > 1:
-				public = fmt.Sprintf("waiting for %d child runs", waiting.children)
+				public = fmt.Sprintf("waiting for %d subsessions", waiting.children)
 			case waiting.unread == 1:
-				public = "1 unread child message"
+				public = "1 unread subsession message"
 			default:
-				public = fmt.Sprintf("%d unread child messages", waiting.unread)
+				public = fmt.Sprintf("%d unread subsession messages", waiting.unread)
 			}
 		case !inferred && ours:
 			public = turnEndedReason
@@ -292,7 +292,7 @@ func (s *Scheduler) activityLocked(ctx context.Context, run domain.RunID, entry 
 			d.cause = events.CauseTurnEnd
 		}
 	}
-	if entry != nil && !entry.paused && waiting != domain.ActivityAnswered && waiting == d.activity {
+	if entry != nil && (!entry.paused || !entry.asleepSince.IsZero()) && waiting != domain.ActivityAnswered && waiting == d.activity {
 		wait, stranded := s.runWaitLocked(ctx, entry)
 		d.wait = &wait
 		// A live child run or background task can still wake the agent, so a

@@ -27,9 +27,9 @@ import { stepsBlock, type WorkItem } from '@/store/session-steps'
 import type { SliceCreator } from '@/store/slice'
 import { indexItems, localItem, noAgents, replaceAgentItem, trimAgents, type AgentIndex } from '@/store/subagents'
 
-export type { Delivery, SessionRow }
+export type { SessionRow }
 
-export const sessionEventTypes = ['run.agent', 'workspace.timeline', 'run.status']
+const sessionEventTypes = ['run.agent', 'workspace.timeline', 'run.status', 'run.review']
 
 const residentEvents = 2000
 const pageSize = 1000
@@ -94,7 +94,7 @@ export interface SessionsSlice {
   toggleAgentMessages: (runID: string) => void
 }
 
-export const residentSessions = 3
+const residentSessions = 3
 export const keptItems = 200
 
 let touches = 0
@@ -394,7 +394,7 @@ export function roomFiles(m: Pick<RoomMessage, 'attachments'>): string[] | undef
   return files?.length ? files : undefined
 }
 
-export interface SessionSources {
+interface SessionSources {
   run: RunRecord
   events: Event[]
   room: RoomMessage[]
@@ -423,6 +423,12 @@ export interface TimelinePayload {
   message?: string
   outcome?: string
   summary?: string
+}
+
+/** Only Not yet leaves a row: complete closes the session, which says so, and later changes nothing. */
+function reviewRow(event: Event, name: (id: string) => string): SessionRow | null {
+  if ((event.payload as { review?: string } | undefined)?.review !== '') return null
+  return { kind: 'event', id: event.id, at: event.time, text: `${event.actor_id ? name(event.actor_id) : 'The owner'} said the task is not finished yet` }
 }
 
 function timelineRow(event: Event, name: (id: string) => string): SessionRow | null {
@@ -514,7 +520,7 @@ export function rowsForRun({ run, events, room, memberName, paused }: SessionSou
       }
       return
     }
-    const row = event.type === 'run.status' ? statusRow(event) : timelineRow(event, memberName)
+    const row = event.type === 'run.status' ? statusRow(event) : event.type === 'run.review' ? reviewRow(event, memberName) : timelineRow(event, memberName)
     if (!row || steers.some((steer) => sameSteer(row, steer))) return
     if (row.kind === 'finished') finished = true
     items.push({ at: event.time, order, row })
@@ -528,8 +534,6 @@ export function rowsForRun({ run, events, room, memberName, paused }: SessionSou
       items.push({ at: m.created_at, order, row: {
         ...base, kind: 'user', authorID: m.actor_id, via: m.via, body: m.body, images: roomImages(m), files: roomFiles(m), ...deliveryOf(m),
       } })
-    } else if (m.kind === 'comment') {
-      items.push({ at: m.created_at, order, row: { ...base, kind: 'note', authorID: m.actor_id, authorName: m.actor_display_name, via: m.via, body: m.body, pending: isProvisional(m) } })
     } else if (m.kind === 'question' && m.actor_id === run.member_id) {
       items.push({ at: m.created_at, order, row: { ...base, kind: 'note', authorID: m.actor_id, authorName: m.actor_display_name, via: m.via, body: m.body, question: true, pending: isProvisional(m) } })
     } else if (m.kind === 'question') {

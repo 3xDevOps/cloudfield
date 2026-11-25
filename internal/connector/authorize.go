@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -139,7 +140,7 @@ type wrongCodes struct {
 // the client. On the universal URL the edge posts the request with its
 // assertion; anything else arrives as a GET.
 func (h *handler) authorizePage(w http.ResponseWriter, r *http.Request, res resource, q url.Values) {
-	if res == h.universal && q.Get(edgeproto.ParamServer) != h.serverID {
+	if res.universal() && q.Get(edgeproto.ParamServer) != h.serverID {
 		h.renderError(w, fmt.Sprintf("This request names server %q, not this server, %s. Start the connection again from ChatGPT or Claude.",
 			q.Get(edgeproto.ParamServer), h.serverID))
 		return
@@ -151,7 +152,7 @@ func (h *handler) authorizePage(w http.ResponseWriter, r *http.Request, res reso
 		if err == nil && u.Host != "" {
 			host = u.Host
 		}
-		h.renderError(w, fmt.Sprintf("Aether connectors work with ChatGPT and Claude; %s is not one of them.", host))
+		h.renderError(w, fmt.Sprintf("Cloudfield connectors work with ChatGPT and Claude; %s is not one of them.", host))
 		return
 	}
 	doc, err := h.fetchClient(r.Context(), clientID)
@@ -187,14 +188,14 @@ func (h *handler) authorizePage(w http.ResponseWriter, r *http.Request, res reso
 		h.redirectError(w, r, req, "invalid_target", "resource must be "+res.base)
 		return
 	}
-	page := consentPage{Client: clientLabel(req), Write: true, Universal: res == h.universal}
+	page := consentPage{Client: clientLabel(req), Write: true, Universal: res.universal()}
 	bound := h.ssh.EdgeBindsSignIn()
 	if bound && r.Method == http.MethodGet && q.Has(edgeproto.ParamAssertion) {
 		h.renderError(w, "The edge put its sign-in in the URL, where logs and browser history keep it, so it is refused. "+
 			"The edge's operator updates it; until then, connect with a code from aether mcp.")
 		return
 	}
-	if signed := q.Get(edgeproto.ParamAssertion); signed != "" && res == h.universal && h.ssh.EdgeAccess() == edgeproto.PolicyAccount {
+	if signed := q.Get(edgeproto.ParamAssertion); signed != "" && res.universal() && h.ssh.EdgeAccess() == edgeproto.PolicyAccount {
 		a, name, aerr := h.assertion(r.Context(), signed, req, h.edgeBrowser(r), bound)
 		if aerr != nil {
 			h.renderError(w, "Cannot connect with your edge sign-in: "+aerr.Error()+". Start the connection again from ChatGPT or Claude.")
@@ -324,7 +325,7 @@ func (h *handler) authorizeAllow(w http.ResponseWriter, r *http.Request, res res
 		return
 	}
 	scopes := grantedScopes(r.PostForm["scope"])
-	page := consentPage{Request: signed, Client: clientLabel(req), Universal: res == h.universal,
+	page := consentPage{Request: signed, Client: clientLabel(req), Universal: res.universal(),
 		Write: slices.Contains(scopes, string(ops.ScopeWrite)), Control: slices.Contains(scopes, string(ops.ScopeControl))}
 	now := h.now()
 	if req.Asserted != nil {
@@ -333,7 +334,7 @@ func (h *handler) authorizeAllow(w http.ResponseWriter, r *http.Request, res res
 			h.renderError(w, "Cannot connect with your edge sign-in: "+err.Error()+". Start the connection again from ChatGPT or Claude.")
 			return
 		}
-		h.issueCode(w, r, req, grant, scopes, now)
+		h.issueCode(w, r, res, req, grant, scopes, now)
 		return
 	}
 	from := clientPrefix(r)
@@ -345,7 +346,7 @@ func (h *handler) authorizeAllow(w http.ResponseWriter, r *http.Request, res res
 	grant, err := h.ssh.RedeemConnectorCode(r.PostFormValue("code"), now)
 	if errors.Is(err, sshd.ErrConnectorCode) {
 		h.recordWrong(from, now)
-		page.Error = "That code is wrong, expired or already used. Get a new one from Settings → ChatGPT and Claude in the Aether app, or aether mcp, and paste it here."
+		page.Error = "That code is wrong, expired or already used. Get a new one from Settings → ChatGPT and Claude in the Cloudfield app, or aether mcp, and paste it here."
 		h.renderConsent(w, http.StatusForbidden, page)
 		return
 	}
@@ -353,7 +354,7 @@ func (h *handler) authorizeAllow(w http.ResponseWriter, r *http.Request, res res
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	h.issueCode(w, r, req, grant, scopes, now)
+	h.issueCode(w, r, res, req, grant, scopes, now)
 }
 
 // assertedGrant spends the assertion a consent form carries, posted from
@@ -373,10 +374,10 @@ func (h *handler) assertedGrant(ctx context.Context, a *asserted, browser string
 	return grant, err
 }
 
-// issueCode sends the client an authorization code for req, bound to
-// grant and scopes.
-func (h *handler) issueCode(w http.ResponseWriter, r *http.Request, req authRequest, grant sshd.ConnectorGrant, scopes []string, now time.Time) {
-	code, hash, err := newToken(h.prefixOf(req.Resource))
+// issueCode sends the client an authorization code for req, a request
+// for res, bound to grant and scopes.
+func (h *handler) issueCode(w http.ResponseWriter, r *http.Request, res resource, req authRequest, grant sshd.ConnectorGrant, scopes []string, now time.Time) {
+	code, hash, err := newToken(res.prefix)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -541,24 +542,77 @@ type consentPage struct {
 	Failed bool
 }
 
-var consentTemplate = template.Must(template.New("consent").Parse(`<!doctype html>
+// consentLogo is web/public/cloudfield-logo-small.svg, inlined because the
+// relay's sandbox lets the consent page load nothing.
+//
+//go:embed cloudfield-logo-small.svg
+var consentLogo string
+
+var consentTemplate = template.Must(template.New("consent").Funcs(template.FuncMap{
+	"logo": func() template.HTML { return template.HTML(consentLogo) },
+}).Parse(`<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#070b11">
 <title>{{if .Failed}}Cannot connect{{else}}Connect {{.Client}} to {{.Server}}{{if .Member}} as {{.Member}}{{end}}{{end}}</title>
 <style>
-body{font:16px/1.5 system-ui,sans-serif;max-width:34rem;margin:3rem auto;padding:0 1rem;color:#1a1a1a}
-h1{font-size:1.4rem;font-weight:500}
-.error{background:#fdecec;border:1px solid #e5a5a5;padding:.6rem .8rem;border-radius:6px}
-input{font:inherit;font-size:1.2rem;letter-spacing:.1em;width:10rem;padding:.4rem;text-transform:uppercase}
-button{font:inherit;padding:.45rem 1.4rem;min-height:2.75rem}
-fieldset{border:1px solid #ccc;border-radius:6px;padding:.2rem .9rem}
-input[type=checkbox]{width:1.25rem;height:1.25rem;font-size:inherit;vertical-align:middle}
-.row{display:flex;flex-wrap:wrap;gap:.5rem;align-items:center}
+/* These tokens mirror internal/edge/service/templates/edge.css. */
+:root{
+--canvas:#070b11;--chrome:#0c141f;--raised:#151d2a;
+--seam:rgb(247 240 228 / 0.09);--control-border:#717c8d;
+--text:#f7f0e4;--text-muted:#97a3b5;
+--accent-fill:#f5c542;--accent-fill-hover:#d8ad3a;--on-accent:#070b11;
+--accent-text:#54e0d0;--focus-ring:#54e0d0;
+--state-failed:#f05c4a;--state-needs-you:#f5c542;
+--card-shadow:0 1px 2px rgb(0 0 0 / 0.4);
+--radius-chip:5px;--radius-control:8px;--radius-panel:12px;
+--duration-hover:150ms;--ease-hover:cubic-bezier(0.25,0.1,0.25,1);
+--duration-press:150ms;--duration-release:130ms;--ease-press:cubic-bezier(0.16,1,0.3,1);--scale-press:0.97;
+--font-sans:system-ui,sans-serif;
+--font-code:ui-monospace,'SF Mono',Menlo,'Cascadia Mono',Consolas,'Liberation Mono','DejaVu Sans Mono',monospace;
+--panel:480px;--gutter:24px;
+color-scheme:dark}
+*,*::before,*::after{box-sizing:border-box}
+html{background:var(--canvas);color:var(--text);font:400 16px/1.55 var(--font-sans);-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{max-width:calc(var(--panel) + 2 * var(--gutter));margin:0 auto;padding:40px var(--gutter);overflow-wrap:anywhere}
+.brand{display:block;width:162px;height:32px;margin-bottom:24px}
+.brand svg{display:block;width:162px;height:32px}
+main{padding:24px;border:1px solid var(--seam);border-radius:var(--radius-panel);background:var(--raised);box-shadow:var(--card-shadow)}
+main>:last-child{margin-bottom:0}
+p{margin:0 0 16px}
+h1{margin:0 0 16px;font-size:22px;font-weight:600;line-height:1.3}
+strong{font-weight:600}
+code{font-family:var(--font-code);font-size:.875em;background:var(--chrome);border:1px solid var(--seam);border-radius:var(--radius-chip);padding:0 4px}
+.note{color:var(--text-muted);font-size:15px}
+.error{padding:12px 16px;background:var(--chrome);border-left:2px solid var(--state-failed);border-radius:0 var(--radius-control) var(--radius-control) 0}
+fieldset{margin:0 0 16px;padding:4px 16px 0;border:1px solid var(--seam);border-radius:var(--radius-control)}
+legend{padding:0 4px;color:var(--text-muted);font-size:15px;font-weight:500}
+fieldset label{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;cursor:pointer}
+input[type=checkbox]{appearance:none;display:grid;place-content:center;width:20px;height:20px;margin:2px 0 0;border:1px solid var(--control-border);border-radius:var(--radius-chip);background:var(--chrome);cursor:pointer}
+input[type=checkbox]::before{content:'';width:6px;height:11px;border:solid var(--on-accent);border-width:0 2px 2px 0;transform:translateY(-1px) rotate(45deg);opacity:0}
+input[type=checkbox]:checked{border-color:var(--accent-text);background:var(--accent-text)}
+input[type=checkbox]:checked::before{opacity:1}
+@media (forced-colors:active){input[type=checkbox]{appearance:auto}input[type=checkbox]::before{display:none}}
+fieldset label>span{color:var(--text-muted)}
+fieldset strong,.warn{color:var(--text)}
+.warn{display:block;margin-top:8px;padding-left:12px;border-left:2px solid var(--state-needs-you)}
+label[for=code]{color:var(--text-muted);font-size:15px}
+label code{white-space:nowrap}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:stretch}
+#code{flex:1 1 12ch;min-width:0;min-height:44px;padding:8px 12px;border:1px solid var(--control-border);border-radius:var(--radius-control);background:var(--chrome);color:var(--text);font:600 20px/1.2 var(--font-code);letter-spacing:.1em;text-transform:uppercase}
+button{min-height:44px;padding:8px 24px;border:0;border-radius:var(--radius-control);background:var(--accent-fill);color:var(--on-accent);font:500 15px/1.3 var(--font-sans);cursor:pointer;transition:background-color var(--duration-hover) var(--ease-hover),scale var(--duration-release) var(--ease-press)}
+button:hover{background:var(--accent-fill-hover)}
+@media (pointer:fine){button:active{scale:var(--scale-press);transition-duration:var(--duration-hover),var(--duration-press)}}
+:focus-visible{outline:2px solid var(--focus-ring);outline-offset:2px}
+@media (max-width:400px){:root{--gutter:16px}body{padding-top:24px}main{padding:20px 16px}button{width:100%}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
 </style>
 </head>
 <body>
+<div class="brand" role="img" aria-label="Cloudfield">{{logo}}</div>
+<main>
 {{if .Failed}}
 <h1>Cannot connect to {{.Server}}</h1>
 <p class="error">{{.Error}}</p>
@@ -572,17 +626,18 @@ input[type=checkbox]{width:1.25rem;height:1.25rem;font-size:inherit;vertical-ali
 {{if .Universal}}<input type="hidden" name="server" value="{{.ServerID}}">
 {{end}}<fieldset>
 <legend>Also allow it to:</legend>
-<p><label><input type="checkbox" name="scope" value="write"{{if .Write}} checked{{end}}> <strong>Launch and message</strong>: launch runs, message runs, answer agents' questions, pause, resume and mark runs reviewed.</label></p>
-<p><label><input type="checkbox" name="scope" value="control"{{if .Control}} checked{{end}}> <strong>Stop and approve</strong>: decide approvals and permission requests, stop and close runs. Text an agent wrote that the assistant reads could then talk it into approving or ending work without asking you.</label></p>
+<p><label><input type="checkbox" name="scope" value="write"{{if .Write}} checked{{end}}> <span><strong>Launch and message</strong>: launch runs, message runs, answer agents' questions, pause, resume and mark runs reviewed.</span></label></p>
+<p><label><input type="checkbox" name="scope" value="control"{{if .Control}} checked{{end}}> <span><strong>Stop and approve</strong>: decide approvals and permission requests, stop and close runs. <span class="warn">Text an agent wrote that the assistant reads could then talk it into approving or ending work without asking you.</span></span></label></p>
 </fieldset>
-<p>To change these later, revoke the connector and connect again.</p>
-<p>Allow only if you started connecting {{.Client}} to Aether yourself just now.</p>
+<p class="note">To change these later, revoke the connector and connect again.</p>
+<p>Allow only if you started connecting {{.Client}} to Cloudfield yourself just now.</p>
 {{if .Member}}<p>You signed in at the edge as {{.Account}}, which this server admits as {{.Member}}.</p>
 <p><button type="submit" autofocus><strong>Allow</strong></button></p>
-{{else}}<p><label for="code">Paste the code from Settings → ChatGPT and Claude in the Aether app, or <code>aether mcp</code>:</label></p>
+{{else}}<p><label for="code">Paste the code from Settings → ChatGPT and Claude in the Cloudfield app, or <code>aether mcp</code>:</label></p>
 <p class="row"><input id="code" name="code" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" required autofocus><button type="submit"><strong>Allow</strong></button></p>{{end}}
 </form>
 {{end}}
+</main>
 </body>
 </html>
 `))
@@ -599,14 +654,6 @@ func (h *handler) renderConsent(w http.ResponseWriter, status int, page consentP
 
 func (h *handler) renderError(w http.ResponseWriter, message string) {
 	h.renderConsent(w, http.StatusBadRequest, consentPage{Failed: true, Error: message})
-}
-
-// prefixOf is the prefix of codes minted for the connector URL base.
-func (h *handler) prefixOf(base string) string {
-	if base == h.universal.base {
-		return h.universal.prefix
-	}
-	return ""
 }
 
 // sameResource reports whether resource names base, ignoring a trailing

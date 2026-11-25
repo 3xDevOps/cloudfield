@@ -1,8 +1,8 @@
-# Aether
+# Cloudfield
 
-Aether is a self-hosted development environment for coding agents. The public
-repository contains one Go server, one Go CLI, an embedded dashboard, and the
-operational guides needed to run them on your own hardware.
+Cloudfield is a self-hosted development environment for coding agents. The
+public repository contains one Go server, one Go CLI, an embedded dashboard, and
+the operational guides needed to run them on your own hardware.
 
 ## Public documentation
 
@@ -15,9 +15,9 @@ prose, and repetition.
 
 ## Audience
 
-The reader is a software developer who is new to Aether. Assume working
+The reader is a software developer who is new to Cloudfield. Assume working
 fluency with git, a shell, containers, and coding-agent CLIs such as Claude
-Code, Codex, and opencode. Do not assume any knowledge of Aether's own
+Code, Codex, and opencode. Do not assume any knowledge of Cloudfield's own
 concepts - workspace, session, harness, tool snapshot - and introduce each one
 where it first appears.
 
@@ -28,6 +28,10 @@ In practice, across docs, CLI output, and dashboard copy:
 - Keep the no-fluff rule above. Explain a concept once, then use it.
 - Make every surface obvious on first contact, never by taking away
   developer control.
+- Put the actions people use most on the surface, as visible buttons and
+  controls beside what they act on. Overflow menus are for rare actions,
+  never the only way to a common one
+  ([docs/styles.md](docs/styles.md#surface-the-common-actions)).
 
 ## Before changing code
 
@@ -36,6 +40,9 @@ In practice, across docs, CLI output, and dashboard copy:
 3. Keep credentials, host keys, invite codes, profile homes, transcripts, and
    runtime state outside the source tree.
 4. Prefer an end-to-end check over duplicate unit tests.
+5. Never make anything up. Paths, flags, environment variables, API fields,
+   versions, logos, measurements and citations come from the real source:
+   read it, run it, or say you do not know.
 
 ## Checks
 
@@ -62,7 +69,7 @@ make test-integration
 ```
 
 The dashboard end-to-end suite drives a real browser against a real
-`aether gui` gateway and a real server. It needs Docker, real git, and
+`cloudfield gui` gateway and a real server. It needs Docker, real git, and
 Playwright's browser:
 
 ```sh
@@ -148,6 +155,37 @@ docs(quickstart): explain how to get the desktop app
 refactor(store): collapse sessions into workspaces
 feat(cli)!: drop the aether dash command
 ```
+
+## Working in parallel as a Cloudfield agent
+
+Many sessions share the same CI runners.
+
+- Keep a pull request as a draft while you iterate. Pull request CI runs
+  only `changes`, `audit`, `lint`, `build-and-test`, `store-tests` and
+  `dashboard`; the merge queue runs the full suite.
+- Push milestones freely. Do not wait on CI or rerun it between pushes.
+- Run the checks for what you changed locally first; see
+  [docs/testing.md](docs/testing.md).
+- Mark the pull request ready (`gh pr ready <n>`) only when it is done;
+  then the merge gate applies.
+- The merge gate, with no review bot to wait for:
+  - An adversarial review by an Opus reviewer with a fresh context that
+    did not write the change (a subagent is enough; give it the pull
+    request, not the author's reasoning). Fix each real finding and answer
+    the rest with a reason in the pull request description.
+  - When those fixes change behavior, another such reviewer checks them;
+    repeat until no finding blocks. A rebase or a wording-only fix needs
+    no new review.
+  - `CI gate` green on the current head.
+
+  Then `gh pr merge <n> --squash` puts it in the merge queue, which runs
+  the full suite once per batch before `main` moves. Never pass `--admin`.
+- A UI change also gets a design review loop: a fresh-context Opus
+  reviewer (a subagent is enough) reviews dark-mode screenshots at the
+  affected widths as a senior product designer would. Apply or rebut each
+  point and re-shoot until none blocks.
+  Cloudfield is dark-first, so every screenshot is dark mode; force
+  `colorScheme: 'dark'` in headless browsers.
 
 ## Repository shape
 

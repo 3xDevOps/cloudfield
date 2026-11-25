@@ -12,7 +12,7 @@ export function isLaunch(method: string): boolean {
 }
 
 export const hearBack = {
-  run: 'Aether notifies you here, on the desktop app and on your phone when it finishes or needs you.',
+  run: 'Cloudfield notifies you here, on the desktop app and on your phone when it finishes or needs you.',
 }
 
 type Params = Record<string, unknown>
@@ -50,7 +50,7 @@ const savedFields: Record<string, string> = {
 }
 
 /** The rows a launch card shows, or undefined when `method` launches nothing. */
-export function launchRows(s: RootState, method: string, params: unknown, defaults?: AssistantConfirmation['defaults']): [string, string][] | undefined {
+function launchRows(s: RootState, method: string, params: unknown, defaults?: AssistantConfirmation['defaults']): [string, string][] | undefined {
   if (!launchMethods.has(method) || params === null || typeof params !== 'object') return undefined
   const p = params as Params
   const workspace = str(p.workspace_id)
@@ -60,6 +60,8 @@ export function launchRows(s: RootState, method: string, params: unknown, defaul
     ['Kind', 'Session: one agent on one task'],
     ['Workspace', [workspace, ...extras].filter(Boolean).map((id) => s.workspaces[id!]?.name ?? id).join(', ')],
     ['Agent', agentLine(s, p)],
+    ['Effort', str(p.effort) ?? ''],
+    ['Permission', str(p.permission) ?? 'default'],
     ['Account', owner ? `${owner}'s account, shared with you` : 'Yours'],
     ['Fallback', fallbackLine(s, p)],
   ]

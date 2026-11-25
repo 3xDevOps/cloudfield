@@ -11,16 +11,16 @@ import (
 	"golang.org/x/term"
 )
 
-const envUsage = "usage: aether env save|reset [--yes]"
+const envUsage = "usage: cloudfield env save|reset [--yes]"
 
 func init() {
 	register(command{
 		name:  "env",
 		short: "save or reset your Environment",
-		usage: "aether env save\n" +
-			"aether env reset [--yes]",
-		example: "aether env save\n" +
-			"aether env reset --yes",
+		usage: "cloudfield env save\n" +
+			"cloudfield env reset [--yes]",
+		example: "cloudfield env save\n" +
+			"cloudfield env reset --yes",
 		run: runEnv,
 	})
 }
@@ -53,9 +53,9 @@ func envSave() error {
 func envReset(yes, interactive bool, in io.Reader, out io.Writer) error {
 	if !yes {
 		if !interactive {
-			return errors.New("--yes is required because aether env reset destroys your Environment's container, unsaved changes and saved image: aether env reset --yes")
+			return errors.New("--yes is required because aether env reset destroys your Environment's sandbox, unsaved changes and saved image: aether env reset --yes")
 		}
-		_, _ = fmt.Fprint(out, "This destroys your Environment's container, unsaved changes and saved image. Your home stays. Reset? [y/N]: ")
+		_, _ = fmt.Fprint(out, "This destroys your Environment's sandbox, unsaved changes and saved image. Your home stays. Reset? [y/N]: ")
 		if !yesAnswer(bufio.NewReader(in)) {
 			return errors.New("aether env reset: nothing was reset")
 		}

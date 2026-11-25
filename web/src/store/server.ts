@@ -1,3 +1,4 @@
+import { clearLaunchDraft, launchDraftLinkStatusPending, readLaunchDraft } from '@/components/launch/draft'
 import { bareVersion } from '@/lib/format'
 import { compareVersions } from '@/lib/version'
 import type { ConnectionState } from '@/lib/stream'
@@ -155,6 +156,8 @@ export interface ServerSlice {
   /** Highest event sequence applied; the cursor a reconnect replays from. */
   lastSeq: number
   hydrated: boolean
+  /** When the painted snapshot was saved (ms) while no live hydration has replaced it; null otherwise. */
+  staleSince: number | null
   hydrationError: string | null
   /** The stream stopped for good - a dead token - and nothing retries. */
   streamDead: boolean
@@ -213,6 +216,7 @@ export const createServerSlice: SliceCreator<ServerSlice> = (set) => {
       connection: 'connecting',
       lastSeq: 0,
       hydrated: false,
+      staleSince: null,
       hydrationError: null,
       streamDead: false,
       unreachable: null,
@@ -228,6 +232,7 @@ export const createServerSlice: SliceCreator<ServerSlice> = (set) => {
     terminalCacheEpoch: 0,
     lastSeq: 0,
     hydrated: false,
+    staleSince: null,
     hydrationError: null,
     streamDead: false,
     unreachable: null,
@@ -240,8 +245,39 @@ export const createServerSlice: SliceCreator<ServerSlice> = (set) => {
     agentList: null,
     setAgentList: (identity, agents) => set({ agentList: { identity, agents } }),
     setInfo: (info) => set({ info }),
-    setIdentityKey: (identityKey) => set((s) => ({ identityKey, launchDefaults: s.savedLaunchDefaults[identityKey] ?? {} })),
-    setCapabilities: (capabilities) => set({ capabilities }),
+    // Text shared to the last member's launch form is not the next member's.
+    setIdentityKey: (identityKey) => set((s) => {
+      if (s.identityKey === identityKey) return { identityKey }
+      const edgeLinked = Boolean(s.linkStatus?.edge_url)
+      const linkStatusPending = s.capabilities === null || (s.capabilities.local?.includes('link.status') && !s.linkStatus)
+      const restored = readLaunchDraft(identityKey, !edgeLinked && !linkStatusPending)
+      const storageError = edgeLinked ? clearLaunchDraft(identityKey) : null
+      const inMemoryDraft = s.identityKey === null ? s.launchDraft : null
+      return {
+        identityKey,
+        launchDefaults: s.savedLaunchDefaults[identityKey] ?? {},
+        runViewMemory: s.savedRunViews[identityKey] ?? {},
+        paletteLaunchTask: '',
+        launchDraft: inMemoryDraft ?? restored.draft,
+        launchDraftError: inMemoryDraft ? null : storageError
+          ? `Could not remove launch draft from this browser: ${storageError}`
+          : linkStatusPending ? launchDraftLinkStatusPending : restored.error,
+      }
+    }),
+    setCapabilities: (capabilities) => set((s) => {
+      if (s.launchDraftError !== launchDraftLinkStatusPending || !s.identityKey || capabilities === null) return { capabilities }
+      if (capabilities.local?.includes('link.status') && !s.linkStatus) return { capabilities }
+      if (s.paletteDialog === 'launch' || s.launchDraft) return { capabilities }
+      if (s.linkStatus?.edge_url) {
+        const error = clearLaunchDraft(s.identityKey)
+        return {
+          capabilities,
+          launchDraftError: error ? `Could not remove launch draft from this browser: ${error}` : null,
+        }
+      }
+      const restored = readLaunchDraft(s.identityKey)
+      return { capabilities, launchDraft: restored.draft, launchDraftError: restored.error }
+    }),
     setConnection: (connection) => set({ connection }),
     noteSeq: (seq) =>
       set((s) => (seq > s.lastSeq ? { lastSeq: seq } : {})),
@@ -254,7 +290,7 @@ export const createServerSlice: SliceCreator<ServerSlice> = (set) => {
         traceLogs: {},
       })),
     setHydrated: (hydrated, error = null) =>
-      set({ hydrated, hydrationError: error }),
+      set({ hydrated, hydrationError: error, ...(hydrated ? {} : { staleSince: null }) }),
     setStreamDead: () => set({ streamDead: true }),
     setUnreachable: (unreachable, approvalCode, at) =>
       set({ unreachable, unreachableAt: unreachable ? at ?? null : null, approvalCode: approvalCode ?? null }),

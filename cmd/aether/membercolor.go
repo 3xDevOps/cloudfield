@@ -11,10 +11,10 @@ import (
 )
 
 // memberColor implements `aether member color <hex> [member-id]`: set
-// your own attribution color, or (admins only) another member's.
+// your own attribution color, or (super admins only) another member's.
 func memberColor(args []string) error {
 	if len(args) < 1 || len(args) > 2 {
-		return fmt.Errorf("usage: aether member color <#rrggbb> [member-id]")
+		return fmt.Errorf("usage: cloudfield member color <#rrggbb> [member-id]")
 	}
 	color := args[0]
 	memberID := ""

@@ -26,13 +26,14 @@ type RoomService interface {
 	Post(context.Context, collab.MessageInput) (collab.Result, error)
 	ApproveNow(context.Context, string, domain.MemberID, string, uint64) (collab.Result, error)
 	Deny(context.Context, string, domain.MemberID, string, uint64) (*store.RoomMessage, error)
+	Resolve(context.Context, string, domain.MemberID, store.RoomResolution) (*store.RoomMessage, error)
 	Protect(context.Context, domain.RunID, domain.MemberID) error
 }
 
 // EvidenceService is the transport seam for retained evidence metadata and
 // bounded supporting objects. It deliberately exposes no artifact paths.
 type EvidenceService interface {
-	List(context.Context, domain.WorkspaceID, domain.RunID, string, int) (protocol.EvidencePacketListResult, error)
+	List(context.Context, domain.WorkspaceID, domain.RunID, string, int, func(domain.RunID) bool) (protocol.EvidencePacketListResult, error)
 	Get(context.Context, domain.WorkspaceID, string) (protocol.EvidencePacket, error)
 	RenderPatch(context.Context, domain.WorkspaceID, string, int) (gitengine.Patch, error)
 	ReadTranscript(context.Context, domain.WorkspaceID, string, int) ([]byte, bool, error)
@@ -55,6 +56,10 @@ func init() {
 	registerGuarded(protocol.MethodRunRoomStatus, permissions.View, roomTarget, (*Server).runRoomStatus)
 	registerMethod(protocol.MethodRunRoomPost, (*Server).runRoomPost)
 	registerGuarded(protocol.MethodRunRoomDecide, permissions.Steer, roomMessageTarget, (*Server).runRoomDecide)
+	// Completing or deleting a comment is not a Steer-shaped permission: its
+	// author may always resolve their own note, protection notwithstanding.
+	// View only fences out non-members; Service.Resolve checks author/owner/admin.
+	registerGuarded(protocol.MethodRunRoomResolve, permissions.View, roomMessageTarget, (*Server).runRoomResolve)
 
 	registerGuarded(protocol.MethodRunEvidenceList, permissions.View, evidenceListTarget, (*Server).runEvidenceList)
 	registerGuarded(protocol.MethodRunEvidenceGet, permissions.View, evidencePacketTarget, (*Server).runEvidenceGet)
@@ -92,7 +97,7 @@ func roomTarget(s *Server, ctx context.Context, raw json.RawMessage) (permission
 		return permissions.Target{}, rpcError(err)
 	}
 	if target.Workspace != domain.WorkspaceID(p.WorkspaceID) {
-		return permissions.Target{}, &protocol.Error{Code: protocol.CodeNotFound, Message: "session is not in workspace"}
+		return permissions.Target{}, rpcError(store.ErrNotFound)
 	}
 	return target, nil
 }
@@ -130,7 +135,7 @@ func evidencePacketTarget(s *Server, ctx context.Context, raw json.RawMessage) (
 		return permissions.Target{}, rpcError(err)
 	}
 	if packet.WorkspaceID != domain.WorkspaceID(p.WorkspaceID) {
-		return permissions.Target{}, &protocol.Error{Code: protocol.CodeNotFound, Message: "evidence packet not found"}
+		return permissions.Target{}, rpcError(store.ErrNotFound)
 	}
 	target, err := resolveRunTarget(ctx, s.cfg.Store, packet.RunID)
 	if err != nil {
@@ -241,6 +246,15 @@ func (s *Server) runRoomPost(ctx context.Context, member domain.MemberID, raw js
 	if len(p.IdempotencyKey) > protocol.CollaborationMaxIdempotencyKeyBytes {
 		return nil, invalidParams("idempotency_key is too long")
 	}
+	// Members may post only member kinds. "system" is reserved for server-authored
+	// rows (handoff records, usage-fallback notes); the dashboard renders it as an
+	// authorless event row, so accepting it from a member lets a collaborator forge
+	// unattributed server notices.
+	switch p.Kind {
+	case protocol.RoomMessageComment, protocol.RoomMessageSteerRequest, protocol.RoomMessageQuestion, protocol.RoomMessageReply:
+	default:
+		return nil, invalidParams("unsupported message kind")
+	}
 	if err := validateCollaborationAttachments(p.Attachments); err != nil {
 		return nil, err
 	}
@@ -252,11 +266,15 @@ func (s *Server) runRoomPost(ctx context.Context, member domain.MemberID, raw js
 	if perr != nil {
 		return nil, perr
 	}
-	if p.Kind == protocol.RoomMessageSteerRequest {
+	role, reached := actor.RoleIn(target.Workspace)
+	switch {
+	case !reached:
+		return nil, rpcError(permissions.ErrNoAccess)
+	case p.Kind == protocol.RoomMessageSteerRequest:
 		if checkErr := permissions.Check(permissions.Steer, actor, target); checkErr != nil {
-			return nil, &protocol.Error{Code: protocol.CodeDenied, Message: protocol.MethodRunRoomPost + ": " + checkErr.Error()}
+			return nil, checkError(protocol.MethodRunRoomPost, checkErr)
 		}
-	} else if actor.Role != domain.RoleAdmin && actor.Role != domain.RoleCollaborator {
+	case role != domain.RoleAdmin && role != domain.RoleCollaborator:
 		return nil, &protocol.Error{Code: protocol.CodeDenied, Message: protocol.MethodRunRoomPost + ": posting requires the collaborator role"}
 	}
 	input := collab.MessageInput{
@@ -311,6 +329,29 @@ func (s *Server) runRoomDecide(ctx context.Context, member domain.MemberID, raw 
 	return protocol.RunRoomDecideResult{Message: protocol.RoomMessageFromStore(msg), Receipt: string(receipt)}, nil
 }
 
+func (s *Server) runRoomResolve(ctx context.Context, member domain.MemberID, raw json.RawMessage) (any, *protocol.Error) {
+	rooms, perr := s.rooms()
+	if perr != nil {
+		return nil, perr
+	}
+	p, perr := decodeParams[protocol.RunRoomResolveParams](raw)
+	if perr != nil {
+		return nil, perr
+	}
+	if p.MessageID == "" {
+		return nil, invalidParams("message_id is required")
+	}
+	outcome := store.RoomResolution(p.Outcome)
+	if !outcome.Valid() {
+		return nil, invalidParams(`outcome must be "done" or "deleted"`)
+	}
+	msg, err := rooms.Resolve(ctx, p.MessageID, member, outcome)
+	if err != nil {
+		return nil, collaborationRPCError(err)
+	}
+	return protocol.RunRoomResolveResult{Message: protocol.RoomMessageFromStore(msg)}, nil
+}
+
 func roomMutationResult(result collab.Result) protocol.RunRoomPostResult {
 	out := protocol.RunRoomPostResult{Receipt: string(result.Receipt), Outcome: result.Outcome}
 	if result.Message != nil {
@@ -319,7 +360,7 @@ func roomMutationResult(result collab.Result) protocol.RunRoomPostResult {
 	return out
 }
 
-func (s *Server) runEvidenceList(ctx context.Context, _ domain.MemberID, raw json.RawMessage) (any, *protocol.Error) {
+func (s *Server) runEvidenceList(ctx context.Context, member domain.MemberID, raw json.RawMessage) (any, *protocol.Error) {
 	ev, perr := s.evidence()
 	if perr != nil {
 		return nil, perr
@@ -334,7 +375,14 @@ func (s *Server) runEvidenceList(ctx context.Context, _ domain.MemberID, raw jso
 	if err := validateCollaborationPage(p.Before, p.Limit); err != nil {
 		return nil, err
 	}
-	result, err := ev.List(ctx, domain.WorkspaceID(p.WorkspaceID), domain.RunID(p.RunID), p.Before, p.Limit)
+	actor, err := resolveActor(ctx, s.cfg.Store, member)
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	runs := newRunScopes(s.cfg.Store)
+	result, err := ev.List(ctx, domain.WorkspaceID(p.WorkspaceID), domain.RunID(p.RunID), p.Before, p.Limit, func(run domain.RunID) bool {
+		return runs.reaches(ctx, actor, run)
+	})
 	if err != nil {
 		return nil, collaborationRPCError(err)
 	}
@@ -445,6 +493,8 @@ func collaborationRPCError(err error) *protocol.Error {
 		return &protocol.Error{Code: protocol.CodeDenied, Message: "collaboration operation denied"}
 	case errors.Is(err, collab.ErrInvalidRequest), errors.Is(err, collab.ErrInvalidAttachment), errors.Is(err, collab.ErrInvalidAnchor):
 		return &protocol.Error{Code: protocol.CodeInvalidParams, Message: "invalid collaboration request"}
+	case errors.Is(err, store.ErrRoomMessageResolveConflict):
+		return &protocol.Error{Code: protocol.CodeConflict, Message: "room message already resolved with a different outcome"}
 	case errors.Is(err, evidence.ErrExpired):
 		return &protocol.Error{Code: protocol.CodeInvalidState, Message: "evidence packet expired"}
 	case errors.Is(err, evidence.ErrTranscriptUnavailable):

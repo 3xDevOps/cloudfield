@@ -1,3 +1,4 @@
+import type { Run } from '@/lib/types'
 import { toRecord, type RunRecord } from '@/store/runs'
 import {
   descendantRuns,
@@ -5,6 +6,7 @@ import {
   needsYouByWorkspace,
   runGroups,
   sidebarGroups,
+  withoutSettled,
   type RunsInput,
 } from '@/store/selectors'
 import {
@@ -98,7 +100,7 @@ describe('child runs', () => {
     expect(groups.working).toEqual([])
     const [tree] = groups['needs-you']
     expect(ids(tree.children)).toEqual(['grandchild'])
-    expect(tree.childRuns).toMatchObject({ collapsed: true, counts: { working: 1, needsYou: 1, done: 1, failed: 0 } })
+    expect(tree.childRuns).toMatchObject({ counts: { working: 1, needsYou: 1, done: 1, failed: 0 } })
     expect(ids(tree.childRuns?.members ?? []).sort()).toEqual(['c1', 'c2', 'grandchild'])
     expect(tree.waitingSince).toBe(asking.stateChangedAt)
   })
@@ -122,14 +124,15 @@ describe('sidebarGroups', () => {
     ])
   })
 
-  it('lists every child run beneath its parent, not only those that need the viewer', () => {
+  it('lists every unfinished child run beneath its parent, not only those that need the viewer', () => {
     const groups = sidebarGroups(input([
       record({ id: 'parent' }),
       record({ id: 'c1', parent_run_id: 'parent', created_at: '2026-08-14T10:00:00Z' }),
-      record({ id: 'c2', parent_run_id: 'parent', status: 'completed', created_at: '2026-08-14T11:00:00Z' }),
+      record({ id: 'c2', parent_run_id: 'parent', state: 'waiting', created_at: '2026-08-14T11:00:00Z' }),
     ]))
     expect(ids(groups[0].runs)).toEqual(['parent'])
     expect(ids(groups[0].runs[0].children)).toEqual(['c1', 'c2'])
+    expect(groups[0].runs[0].settled).toEqual([])
   })
 
   it('keeps every visible child run beneath its parent without inflating Needs you', () => {
@@ -144,7 +147,8 @@ describe('sidebarGroups', () => {
 
     expect(groups.map((group) => [group.key, group.count])).toEqual([['needs-you', 1]])
     expect(ids(groups[0].runs)).toEqual(['run_parent'])
-    expect(ids(groups[0].runs[0].children)).toEqual(['blocked', 'done', 'working'])
+    expect(ids(groups[0].runs[0].children)).toEqual(['blocked', 'working'])
+    expect(ids(groups[0].runs[0].settled ?? [])).toEqual(['done'])
   })
 
   it('applies Mine to child runs', () => {
@@ -176,29 +180,28 @@ describe('the Needs you count', () => {
   const later = record({ id: 'later', status: 'needs-attention', state: 'finished', review: 'later' })
   const headless = record({ id: 'headless', mode: 'headless', status: 'completed', review: 'ready' })
   const accepted = record({ id: 'accepted', status: 'completed', review: 'accepted' })
-  const agents = record({ id: 'agents', status: 'running', state: 'waiting-agents' })
+  const agents = record({ id: 'agents', mode: 'acp', acp: true, status: 'needs-attention', state: 'waiting-agents', reason: 'waiting for 2 subsessions' })
+  const ci = record({ id: 'ci', mode: 'acp', acp: true, status: 'needs-attention', state: 'waiting-ci', parent_run_id: 'agents' })
+  const tools = record({ id: 'tools', mode: 'acp', acp: true, status: 'needs-attention', state: 'waiting-tools' })
   const waiting = record({ id: 'waiting', status: 'needs-attention', state: 'waiting' })
-  const runs = [stopped, ready, later, headless, accepted, agents, waiting]
+  const runs = [stopped, ready, later, headless, accepted, agents, ci, tools, waiting]
 
-  it('counts needs-you and ready runs alike in the sidebar, the badge and the list', () => {
+  it('counts only runs that need an action in the sidebar, the badge and the list', () => {
     const sidebar = sidebarGroups(input(runs)).find((group) => group.key === 'needs-you')
-    expect(sidebar?.count).toBe(3)
-    expect(ids(sidebar?.runs ?? [])).toEqual(['headless', 'stopped', 'ready'])
-    expect(needsYouByWorkspace(input(runs).ctx)).toEqual({ [workspace.id]: 3 })
-    expect(listedRuns(workspace.id, input(runs).ctx).filter((row) => row.needsYou).map((row) => row.run.id).sort())
-      .toEqual(['headless', 'ready', 'stopped'])
+    expect(sidebar?.count).toBe(1)
+    expect(ids(sidebar?.runs ?? [])).toEqual(['stopped'])
+    expect(needsYouByWorkspace(input(runs).ctx)).toEqual({ [workspace.id]: 1 })
+    expect(listedRuns(workspace.id, input(runs).ctx).filter((row) => row.needsYou).map((row) => row.run.id)).toEqual(['stopped'])
   })
 
-  it('lists a run answered Not yet quietly under Ready for review, outside the count', () => {
+  it('lists finished runs under Finished: review, with their own count, below Needs you', () => {
     const groups = sidebarGroups(input(runs))
-    expect(groups.map((group) => group.key)).toEqual(['needs-you', 'working', 'review', 'finished'])
-    expect(ids(groups.find((group) => group.key === 'review')?.runs ?? [])).toEqual(['later'])
-    expect(ids(groups.find((group) => group.key === 'working')?.runs ?? []).sort()).toEqual(['agents', 'waiting'])
-  })
-
-  it('keeps a ready run in Needs you after its owner opens it', () => {
-    const opened = { ...ready, outcome_unseen: false, finish_unopened: false }
-    expect(needsYouByWorkspace(input([opened]).ctx)).toEqual({ [workspace.id]: 1 })
+    expect(groups.map((group) => group.key)).toEqual(['needs-you', 'review', 'working', 'finished'])
+    const review = groups.find((group) => group.key === 'review')
+    expect(review?.label).toBe('Finished: review')
+    expect(review?.count).toBe(3)
+    expect(ids(review?.runs ?? []).sort()).toEqual(['headless', 'later', 'ready'])
+    expect(ids(groups.find((group) => group.key === 'working')?.runs ?? []).sort()).toEqual(['agents', 'tools', 'waiting'])
   })
 })
 
@@ -207,5 +210,69 @@ describe('listedRuns', () => {
     const rows = listedRuns(workspace.id, input([done, working, stopped, elsewhere, failed]).ctx)
     expect(ids(rows)).toEqual(['stopped', 'working', 'failed', 'done'])
     expect(rows[0].owner).toEqual(alice)
+  })
+})
+
+describe('a subsession outcome is for its parent only', () => {
+  const parent = (state: Run['state'], over: Partial<Run> = {}) =>
+    record({ id: 'lead', mode: 'acp', acp: true, status: state === 'working' ? 'running' : 'needs-attention', state, ...over })
+  const done = record({ id: 'done', parent_run_id: 'lead', status: 'needs-attention', state: 'finished', review: 'ready' })
+  const broke = record({ id: 'broke', parent_run_id: 'lead', status: 'needs-attention', state: 'failed', outcome_unseen: true })
+  const asks = record({ id: 'asks', parent_run_id: 'lead', status: 'needs-attention', state: 'needs-you', reason: 'blocked: no key' })
+  const parents = [
+    parent('working'), parent('waiting-agents'), parent('waiting-ci'), parent('waiting-tools'), parent('waiting'), parent('answered'),
+    parent('working', { paused: true }), record({ id: 'lead', status: 'completed' }),
+  ]
+
+  it.each(parents.map((lead) => [lead.paused ? 'paused' : lead.state || lead.status, lead] as const))('never surfaces under a parent that is %s', (_, lead) => {
+    const groups = sidebarGroups(input([lead, done, broke]))
+    expect(groups.some((group) => group.key === 'needs-you' || group.key === 'review')).toBe(false)
+    expect(needsYouByWorkspace(input([lead, done, broke]).ctx)).toEqual({})
+    const [tree] = groups.flatMap((group) => group.runs)
+    expect(tree.childRuns?.counts).toEqual({ working: 0, needsYou: 0, done: 1, failed: 1 })
+  })
+
+  it('shows a success as reported to its parent, never Finished: review, down the tree', () => {
+    const grandchild = record({ id: 'leaf', parent_run_id: 'done', status: 'needs-attention', state: 'failed', outcome_unseen: true })
+    const rows = listedRuns(workspace.id, input([parent('waiting'), done, grandchild]).ctx)
+    const row = (id: string) => rows.find((r) => r.run.id === id)!
+    expect(row('done')).toMatchObject({ state: 'reported', reason: 'Finished: reported to its parent', group: 'finished' })
+    expect(row('done').needsYou).toBeUndefined()
+    expect(row('leaf').needsYou).toBeUndefined()
+    expect(rows.some((r) => r.group === 'review' || r.group === 'needs-you')).toBe(false)
+  })
+
+  it('still surfaces a request the subsession makes of a person, with its family', () => {
+    const groups = sidebarGroups(input([parent('working'), asks]))
+    const needs = groups.find((group) => group.key === 'needs-you')
+    expect(needs?.count).toBe(1)
+    expect(ids(needs?.runs ?? [])).toEqual(['lead'])
+  })
+
+  it('leaves a finished subsession out of the list until it works again, and keeps one that failed or asks', () => {
+    const stoppedByParent = record({ id: 'stopped', parent_run_id: 'lead', status: 'completed', reason: 'stopped by parent session lead' })
+    const cut = record({ id: 'cut', parent_run_id: 'lead', status: 'interrupted' })
+    const family = [parent('waiting-agents'), done, stoppedByParent, broke, cut, asks]
+    const [tree] = sidebarGroups(input(family)).flatMap((group) => group.runs)
+    expect(ids(tree.children).sort()).toEqual(['asks', 'broke', 'cut'])
+    expect(ids(tree.settled ?? []).sort()).toEqual(['done', 'stopped'])
+    expect(tree.childRuns?.members).toHaveLength(5)
+    expect(ids(withoutSettled(listedRuns(workspace.id, input(family).ctx))).sort()).toEqual(['asks', 'broke', 'cut', 'lead'])
+
+    const again = { ...done, status: 'running' as const, state: 'working' as const, review: undefined }
+    const [woken] = sidebarGroups(input([parent('waiting-agents'), again])).flatMap((group) => group.runs)
+    expect(ids(woken.children)).toEqual(['done'])
+  })
+
+  it('keeps a finished subsession listed when its parent is not, or when it has sessions of its own', () => {
+    expect(ids(withoutSettled(listedRuns(workspace.id, input([done]).ctx)))).toEqual(['done'])
+    const leaf = record({ id: 'leaf', parent_run_id: 'done' })
+    expect(ids(withoutSettled(listedRuns(workspace.id, input([parent('waiting'), done, leaf]).ctx))).sort()).toEqual(['done', 'lead', 'leaf'])
+  })
+
+  it('treats a detached subsession as a session of its own', () => {
+    expect(needsYouByWorkspace(input([parent('working'), { ...broke, detached: true }]).ctx)).toEqual({ [workspace.id]: 1 })
+    const groups = sidebarGroups(input([parent('waiting'), { ...done, detached: true }]))
+    expect(groups.map((group) => [group.key, ids(group.runs)])).toEqual([['review', ['done']], ['working', ['lead']]])
   })
 })

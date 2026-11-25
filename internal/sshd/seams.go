@@ -8,6 +8,7 @@ import (
 	"github.com/3xDevOps/Aether/internal/acphost"
 	"github.com/3xDevOps/Aether/internal/domain"
 	"github.com/3xDevOps/Aether/internal/events"
+	"github.com/3xDevOps/Aether/internal/harness"
 	"github.com/3xDevOps/Aether/internal/protocol"
 	"github.com/3xDevOps/Aether/internal/ptyhost"
 	"github.com/3xDevOps/Aether/internal/scheduler"
@@ -17,6 +18,13 @@ import (
 type GitTransport interface {
 	UploadPack(ctx context.Context, ws domain.WorkspaceID, stdin io.Reader, stdout, stderr io.Writer) (exitCode int, err error)
 	ReceivePack(ctx context.Context, ws domain.WorkspaceID, stdin io.Reader, stdout, stderr io.Writer) (exitCode int, err error)
+}
+
+// VMSync serves the live overlay of a checkout that lives in its session's
+// VM. A GitTransport that has no such checkouts does not implement it.
+type VMSync interface {
+	VMSyncRoot(run domain.RunID) (string, bool)
+	ServeVMSync(ctx context.Context, run domain.RunID, stream io.ReadWriteCloser) error
 }
 
 // PTYAttacher is the SSH server's view of the PTY host (*ptyhost.Host).
@@ -72,6 +80,10 @@ type RunController interface {
 	// on account can stand in for one on requested as a usage fallback,
 	// which never borrows the owner's installation.
 	FallbackLaunchable(ctx context.Context, member, requested, account domain.MemberID, harness string, mode domain.LaunchMode) (bool, error)
+	// LoginProblem is why agent's login in account's home cannot sign it
+	// in, empty when the server knows of none, and whether a launch is
+	// refused over it.
+	LoginProblem(account domain.MemberID, agent string, profile harness.Profile) (problem string, blocks bool, err error)
 	// DefaultMode is the mode member's launch of harness on account starts
 	// in when it names none: Enhanced where the agent's ACP server is
 	// installed, else Standard.
@@ -85,6 +97,9 @@ type RunController interface {
 	ContainerAddr(ctx context.Context, run domain.RunID) (string, error)
 	TerminalContainerAddr(ctx context.Context, member domain.MemberID) (string, error)
 	Kill(ctx context.Context, run domain.RunID, actor domain.MemberID) error
+	// RevokeAccount starts moving grantee's live runs on owner's account,
+	// whose share was just removed, to another account, or stopping them.
+	RevokeAccount(owner, grantee domain.MemberID)
 	Release(ctx context.Context, run domain.RunID, actor domain.MemberID) error
 	DeleteRun(ctx context.Context, run domain.RunID, actor domain.MemberID) error
 	Pause(ctx context.Context, run domain.RunID, actor domain.MemberID) error
@@ -92,6 +107,18 @@ type RunController interface {
 	// Paused reports whether the run's container is currently frozen;
 	// unknown or finished runs report false.
 	Paused(run domain.RunID) bool
+	// Sleep is the live run's idle sleep; a run that is awake has none.
+	Sleep(run domain.RunID) scheduler.SleepState
+	// WakeRun starts a sleeping run's container and restores its agent,
+	// returning once it can take input or with the wake's error.
+	WakeRun(ctx context.Context, run domain.RunID, actor domain.MemberID) error
+	// SettleSleep waits for a sleep of the run that is under way to finish.
+	SettleSleep(ctx context.Context, run domain.RunID) error
+	// HoldRunAwake wakes a sleeping run and keeps it awake until release,
+	// which counts as the run's last activity.
+	HoldRunAwake(ctx context.Context, run domain.RunID) (release func(), err error)
+	// NoteTyping records a member typing in the run's composer.
+	NoteTyping(run domain.RunID)
 	// Cause is what chose activity for the live run; empty when unknown or
 	// when the run's activity has since changed.
 	Cause(run domain.RunID, activity domain.RunActivity) events.RunStatusCause
@@ -147,8 +174,6 @@ type RunController interface {
 	// RefreshMemberCoAuthors rewrites the co-author list of every live run
 	// that credits member, after their git identity changed.
 	RefreshMemberCoAuthors(ctx context.Context, member domain.MemberID)
-	EnsureRunShellTab(ctx context.Context, run domain.RunID, tab string, cols, rows uint) error
-	EnsureRunShellTabReserved(ctx context.Context, run domain.RunID, tab string, cols, rows uint) (ptyhost.ShellTabReservation, error)
 	EnsureTerminal(ctx context.Context, member domain.MemberID) (*domain.Terminal, error)
 	EnsureTerminalTab(ctx context.Context, member domain.MemberID, tab string, cols, rows uint) error
 	// StartAssistantLogin runs agent's sign-in for the member's assistant
@@ -160,6 +185,9 @@ type RunController interface {
 	// WithStoppedTerminal excludes terminal recreation through afterStop.
 	// The callback may lock member caches but must not reenter terminal lifecycle.
 	WithStoppedTerminal(ctx context.Context, member domain.MemberID, afterStop func() error) error
+	// ForgetOMPAccount stops the omp auth broker of a member who was removed
+	// or merged into another.
+	ForgetOMPAccount(ctx context.Context, member domain.MemberID)
 	TerminalStatus(ctx context.Context, member domain.MemberID) (domain.TerminalStatus, error)
 	ExecTerminal(ctx context.Context, member domain.MemberID, command string) (int, string, string, error)
 	SaveEnvironment(ctx context.Context, member domain.MemberID) (string, error)

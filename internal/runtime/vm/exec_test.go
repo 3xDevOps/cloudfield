@@ -1,0 +1,487 @@
+package vm
+
+import (
+	"context"
+	"errors"
+	"io"
+	"io/fs"
+	"os"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/3xDevOps/Aether/internal/guest"
+	"github.com/3xDevOps/Aether/internal/runtime"
+)
+
+func TestPipeExecutionClosesInputAndKeepsStdoutLossless(t *testing.T) {
+	h := newHarness(t)
+	h.createStarted("run-a", sessionSpec("run-a"))
+	m, err := h.engine.startManagedExec(t.Context(), "run-a", runtime.ExecSpec{Argv: []string{"cat"}, CreationKey: "ssh-1"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	supervisor := h.guest("run-a").procs[m.Identity().ExecID]
+	if !supervisor.spec.Lossless {
+		t.Error("a pipe execution without Lossless may drop stdout in the guest")
+	}
+	stdin := m.Attachment().Stdin()
+	if _, ok := stdin.(runtime.ContextWriter); !ok {
+		t.Error("a pipe execution's input lost WriteContext")
+	}
+	if err := stdin.Close(); err != nil {
+		t.Fatal(err)
+	}
+	supervisor.mu.Lock()
+	closed := supervisor.stdin
+	supervisor.mu.Unlock()
+	if !closed {
+		t.Error("closing a pipe execution's input did not close the command's stdin")
+	}
+}
+
+func TestExecStopsWhenItsContextEndsOrStderrFloods(t *testing.T) {
+	h := newHarness(t)
+	h.createStarted("run-a", sessionSpec("run-a"))
+	h.guest("run-a").output = map[string]string{"hang": "hang", "flood": "errflood:"}
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	if _, _, _, err := h.engine.exec(ctx, "run-a", []string{"hang"}, ""); !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("exec of a hung command = %v", err)
+	}
+	if time.Since(start) > 5*time.Second {
+		t.Errorf("exec outlived its context by %s", time.Since(start))
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, _, _, err := h.engine.exec(t.Context(), "run-a", []string{"flood"}, "")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "byte limit") {
+			t.Errorf("exec flooding stderr = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a stderr flood left exec waiting on a quiet stdout")
+	}
+}
+
+func TestWaitEndsWhenTheVMDiesMidWait(t *testing.T) {
+	h := newHarness(t)
+	h.createStarted("run-a", sessionSpec("run-a"))
+	done := make(chan runtime.ExitStatus, 1)
+	go func() {
+		st, _ := h.engine.wait(context.WithoutCancel(t.Context()), "run-a")
+		done <- st
+	}()
+	time.Sleep(100 * time.Millisecond)
+	_ = h.units.Stop(t.Context(), unitName("run-a"))
+	select {
+	case st := <-done:
+		if st.Code != lostExitCode {
+			t.Errorf("wait on a VM that died = %+v", st)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("wait kept waiting on a VM that died")
+	}
+}
+
+func TestAnOldWaitLeavesANewBootRunning(t *testing.T) {
+	h := newHarness(t)
+	h.createStarted("run-a", sessionSpec("run-a"))
+	if err := h.engine.stop(t.Context(), "run-a", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.engine.start(t.Context(), "run-a"); err != nil {
+		t.Fatal(err)
+	}
+	h.guest("run-a").procs[guest.MainID].exit(9)
+	code, ok := h.engine.waitMain(t.Context(), "run-a", 1)
+	if !ok || code != 143 {
+		t.Errorf("a wait on boot 1 = %d, %v; want boot 1's exit 143", code, ok)
+	}
+	if h.units.vmm("run-a") == nil {
+		t.Error("a wait on the previous boot powered off the new one")
+	}
+	if info, _ := h.engine.inspect(t.Context(), "run-a"); info.Exited {
+		t.Errorf("the new boot inspects as exited: %+v", info)
+	}
+}
+
+func TestManagedExecRecoveryKeepsTheExitRecordAndTransientErrors(t *testing.T) {
+	h := newHarness(t)
+	h.createStarted("run-a", sessionSpec("run-a"))
+	m, err := h.engine.startManagedExec(t.Context(), "run-a", runtime.ExecSpec{Argv: []string{"bash"}, CreationKey: "terminal-1", Cols: 80, Rows: 24}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	identity := m.Identity()
+	if st, stopErr := m.Stop(t.Context(), time.Second); stopErr != nil || st.Code != 143 {
+		t.Fatalf("stop = %+v, %v", st, stopErr)
+	}
+	g := h.guest("run-a")
+	g.mu.Lock()
+	delete(g.procs, identity.ExecID)
+	g.mu.Unlock()
+	if st, stErr := m.Status(t.Context()); stErr != nil || !st.Exited || *st.ExitCode != 143 {
+		t.Errorf("status once the helper forgot the supervisor = %+v, %v", st, stErr)
+	}
+	if _, err = h.engine.recoverExec(t.Context(), "run-a", identity); err != nil {
+		t.Errorf("recovery once the helper forgot the supervisor = %v", err)
+	}
+	h.units.stateErr = errors.New("systemctl: connection timed out")
+	_, err = h.engine.recoverExec(t.Context(), "run-a", identity)
+	if !errors.Is(err, runtime.ErrExecUnavailable) || errors.Is(err, runtime.ErrNotFound) {
+		t.Errorf("recovery while systemd does not answer = %v, want unavailable, not gone", err)
+	}
+}
+
+func TestPausedVMsAreNotAskedForStats(t *testing.T) {
+	h := newHarness(t)
+	h.createStarted("run-a", sessionSpec("run-a"))
+	h.guest("run-a").stats = guest.Stats{OOMKills: 3, MemoryLimitBytes: 2 << 30}
+	if _, err := h.engine.memoryEvents(t.Context(), "run-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.engine.pause(t.Context(), "run-a"); err != nil {
+		t.Fatal(err)
+	}
+	h.guest("run-a").stats = guest.Stats{OOMKills: 99}
+	if events, err := h.engine.memoryEvents(t.Context(), "run-a"); err != nil || events.OOMKills != 3 {
+		t.Errorf("memory events of a paused VM = %+v, %v; want the last reading", events, err)
+	}
+	if stats, err := h.engine.stats(t.Context()); err != nil || len(stats) != 0 {
+		t.Errorf("stats of a paused VM = %+v, %v", stats, err)
+	}
+	if _, err := h.engine.memoryEvents(t.Context(), "run-b"); err == nil || errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("memory events of an unknown VM = %v", err)
+	}
+}
+
+func TestStopKillsAVMWhoseHelperStoppedAnswering(t *testing.T) {
+	h := newHarness(t)
+	h.createStarted("run-a", sessionSpec("run-a"))
+	g := h.guest("run-a")
+	g.unresponsive = true
+	g.procs[guest.MainID].unresponsive = true
+	start := time.Now()
+	if err := h.engine.stop(context.Background(), "run-a", 50*time.Millisecond); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) > 10*time.Second {
+		t.Errorf("stop took %s on an unresponsive guest", time.Since(start))
+	}
+	if h.units.vmm("run-a") != nil {
+		t.Error("the VM still runs after stop")
+	}
+	if info, _ := h.engine.inspect(t.Context(), "run-a"); !info.Exited || info.ExitCode != killedExitCode {
+		t.Errorf("inspect after stop = %+v", info)
+	}
+}
+
+func TestWaitEndsAVMWhoseGuestRebootedOnItsOwn(t *testing.T) {
+	h := newHarness(t)
+	h.createStarted("run-a", sessionSpec("run-a"))
+	if err := os.WriteFile(h.engine.path("run-a", eventsFile), []byte(`{"source": "vm", "event": "rebooting"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	st, err := h.engine.wait(t.Context(), "run-a")
+	if err != nil || st.Code != lostExitCode {
+		t.Errorf("wait after the guest rebooted = %+v, %v", st, err)
+	}
+	if h.units.vmm("run-a") != nil {
+		t.Error("a guest that rebooted on its own kept running")
+	}
+}
+
+func TestWaitEndsAVMWhoseGuestRebootedBeforeAnyCheck(t *testing.T) {
+	h := newHarness(t)
+	h.createStarted("run-a", sessionSpec("run-a"))
+	g := h.guest("run-a")
+	g.mu.Lock()
+	delete(g.procs, guest.MainID)
+	g.mu.Unlock()
+	if err := os.WriteFile(h.engine.path("run-a", eventsFile), []byte(`{"source": "vm", "event": "rebooting"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	st, err := h.engine.wait(ctx, "run-a")
+	if err != nil || st.Code != lostExitCode {
+		t.Errorf("wait after the guest rebooted and its new helper knew no Main = %+v, %v", st, err)
+	}
+}
+
+func TestExecAttachedEndsWithItsContextOnASilentGuest(t *testing.T) {
+	h := newHarness(t)
+	h.createStarted("run-a", sessionSpec("run-a"))
+	h.guest("run-a").output = map[string]string{"/usr/local/bin/aether-internal": "hang"}
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		_, err := h.engine.execAttached(ctx, "run-a", runtime.AttachedExec{Argv: []string{"true"}, Stdout: io.Discard, Stderr: io.Discard})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("execAttached on a silent guest = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("execAttached outlived its context on a silent guest")
+	}
+}
+
+func TestExecResolvesNamedUsersInTheGuest(t *testing.T) {
+	h := newHarness(t)
+	h.createStarted("run-a", sessionSpec("run-a"))
+	g := h.guest("run-a")
+	g.output = map[string]string{"/bin/sh": "70\n71\n"}
+	if _, err := h.engine.execAttached(t.Context(), "run-a", runtime.AttachedExec{Argv: []string{"psql"}, User: "postgres", Stdout: io.Discard, Stderr: io.Discard}); err != nil {
+		t.Fatal(err)
+	}
+	var ran guest.ProcessSpec
+	for _, p := range g.spawned() {
+		if p.Argv[len(p.Argv)-1] == "psql" {
+			ran = p
+		}
+	}
+	if ran.User != "70:71" || !slices.Contains(ran.Env, runtime.RootPath) {
+		t.Errorf("a sudo -u postgres command ran as %q with %v", ran.User, ran.Env)
+	}
+	g.output["/bin/sh"] = ""
+	if _, err := h.engine.execAttached(t.Context(), "run-a", runtime.AttachedExec{Argv: []string{"psql"}, User: "nobody-here", Stdout: io.Discard, Stderr: io.Discard}); err == nil || !strings.Contains(err.Error(), "unknown in the VM") {
+		t.Errorf("an unknown user = %v", err)
+	}
+}
+
+// A resume whose reply is lost ran the guest, whose helper answering proves
+// it; one refused leaves the guest paused, as saved, and is tried again.
+func TestRestoreGetsPastAFailedResume(t *testing.T) {
+	h := newHarness(t)
+	h.createStarted("run-a", sessionSpec("run-a"))
+	if err := h.engine.save(t.Context(), "run-a"); err != nil {
+		t.Fatal(err)
+	}
+	h.units.failResume = true
+	if err := h.engine.restore(t.Context(), "run-a"); err != nil || h.units.vmm("run-a") == nil {
+		t.Errorf("restore with a lost resume reply = %v, running=%v; want the guest taken up", err, h.units.vmm("run-a") != nil)
+	}
+
+	h.createStarted("run-b", sessionSpec("run-b"))
+	if err := h.engine.save(t.Context(), "run-b"); err != nil {
+		t.Fatal(err)
+	}
+	h.units.failResume, h.units.refuseResumes = false, 2
+	if err := h.engine.restore(t.Context(), "run-b"); err != nil {
+		t.Errorf("restore through two refused resumes = %v", err)
+	}
+	if err := h.engine.save(t.Context(), "run-b"); err != nil {
+		t.Fatal(err)
+	}
+	h.units.refuseResumes = 3
+	err := h.engine.restore(t.Context(), "run-b")
+	if rec, _ := h.engine.load("run-b"); err == nil || !strings.Contains(err.Error(), "resume refused") || !rec.Saved || !rec.Exited || h.units.vmm("run-b") != nil {
+		t.Errorf("restore through three refused resumes = %v, record %+v; want the error, the VM stopped and its saved state kept", err, rec)
+	}
+	h.units.refuseResumes = 0
+	if err = h.engine.restore(t.Context(), "run-b"); err != nil {
+		t.Errorf("restore of the saved state a refused resume kept = %v", err)
+	}
+}
+
+// From its resume until its guest answers, a restored VM reads running and
+// keeps its saved state: a server that stops in between leaves the next one
+// a running VM to save again.
+func TestARestoredVMReadsRunningBeforeItsGuestAnswers(t *testing.T) {
+	h := newHarness(t)
+	h.createStarted("run-a", sessionSpec("run-a"))
+	if err := h.engine.save(t.Context(), "run-a"); err != nil {
+		t.Fatal(err)
+	}
+	g := h.guest("run-a")
+	hold := make(chan struct{})
+	g.mu.Lock()
+	g.pingHold = hold
+	g.mu.Unlock()
+	done := make(chan error, 1)
+	go func() { done <- h.engine.restore(t.Context(), "run-a") }()
+	deadline := time.After(10 * time.Second)
+	for vmm := h.units.vmm("run-a"); vmm == nil || !slices.Contains(vmm.called(), "vm.resume"); vmm = h.units.vmm("run-a") {
+		select {
+		case <-deadline:
+			t.Fatal("the restore did not resume the guest")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	info, err := h.engine.inspect(t.Context(), "run-a")
+	rec, _ := h.engine.load("run-a")
+	if err != nil || info.Exited || !rec.Saved || rec.Resumed == nil || rec.CacheSynced {
+		t.Errorf("a resumed VM whose guest has yet to answer inspects as exited=%v, %v, saved=%v resumed=%v cache synced=%v; want it running, its saved state kept and its cache unsynced", info.Exited, err, rec.Saved, rec.Resumed != nil, rec.CacheSynced)
+	}
+	close(hold)
+	if err = <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStartEndsWhenTheVMDiesDuringSetup(t *testing.T) {
+	h := newHarness(t)
+	if _, err := h.engine.create(t.Context(), "run-a", sessionSpec("run-a"), options{}); err != nil {
+		t.Fatal(err)
+	}
+	h.guest("run-a").bootHangs = true
+	done := make(chan error, 1)
+	go func() { done <- h.engine.start(context.Background(), "run-a") }()
+	deadline := time.After(10 * time.Second)
+	for h.units.vmm("run-a") == nil {
+		select {
+		case err := <-done:
+			t.Fatalf("start ended before its VM came up: %v", err)
+		case <-deadline:
+			t.Fatal("start did not bring its VM up")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	_ = h.units.Stop(t.Context(), unitName("run-a"))
+	select {
+	case err := <-done:
+		if err == nil || !strings.Contains(err.Error(), "stopped while booting") {
+			t.Errorf("start after the VM died during setup = %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("start kept waiting on a VM that died during setup")
+	}
+}
+
+func TestRestoreReplacesAMonitorAServerLeftMidRestore(t *testing.T) {
+	h := newHarness(t)
+	h.createStarted("run-a", sessionSpec("run-a"))
+	if err := h.engine.save(t.Context(), "run-a"); err != nil {
+		t.Fatal(err)
+	}
+	rec, err := h.engine.load("run-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	booted, err := readLaunch(h.engine.dir("run-a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	leftover := launch{Home: booted.Home, Args: []string{
+		"--api-socket", "path=" + h.engine.path("run-a", apiSocket), "--restore", "source_url=file://" + h.engine.path("run-a", snapshotDir),
+	}}
+	if err = h.engine.launch(t.Context(), rec, leftover); err != nil {
+		t.Fatal(err)
+	}
+	stale := h.units.vmm("run-a")
+	if err = h.engine.restore(t.Context(), "run-a"); err != nil {
+		t.Fatalf("restore over the monitor of an unfinished restore: %v", err)
+	}
+	if vmm := h.units.vmm("run-a"); vmm == nil || vmm == stale || !slices.Contains(vmm.called(), "vm.resume") {
+		t.Error("restore kept the leftover monitor instead of restoring anew")
+	}
+}
+
+// A server that stopped after a restore resumed its guest leaves the next
+// one the guest running, which it saves again or which only has to answer
+// the next wake, or gone, with a saved state older than the disks it wrote.
+func TestRestoreAfterAServerStoppedMidWake(t *testing.T) {
+	h := newHarness(t)
+	resumeMidWake := func(key string) *fakeVMM {
+		t.Helper()
+		h.createStarted(key, sessionSpec(key))
+		if err := h.engine.save(t.Context(), key); err != nil {
+			t.Fatal(err)
+		}
+		rec, err := h.engine.load(key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rec.Resumed, err = diskTimes(h.engine.path(key, snapshotDir)); err != nil {
+			t.Fatal(err)
+		}
+		rec.Exited = false
+		resumed := launch{Args: []string{"--api-socket", "path=" + h.engine.path(key, apiSocket)}}
+		if err = errors.Join(h.engine.store(rec), h.engine.launch(t.Context(), rec, resumed)); err != nil {
+			t.Fatal(err)
+		}
+		return h.units.vmm(key)
+	}
+	next := h.newEngine(h.engine.cfg.DataDir)
+	running := resumeMidWake("run-a")
+	if info, err := next.inspect(t.Context(), "run-a"); err != nil || info.Exited {
+		t.Errorf("the next server inspects a guest resumed mid-wake as %+v, %v; want it running", info, err)
+	}
+	if err := next.restore(t.Context(), "run-a"); err != nil {
+		t.Fatalf("restore over the guest an earlier restore resumed: %v", err)
+	}
+	rec, err := next.load("run-a")
+	if h.units.vmm("run-a") != running || slices.Contains(running.called(), "vm.resume") || rec.Saved {
+		t.Errorf("restore replaced or resumed again a guest that ran (calls %v), saved=%v, %v", running.called(), rec.Saved, err)
+	}
+
+	resumeMidWake("run-c")
+	if err = next.save(t.Context(), "run-c"); err != nil {
+		t.Fatalf("the next server's save of a guest resumed mid-wake = %v", err)
+	}
+	if rec, err = next.load("run-c"); !rec.Saved || rec.Resumed != nil || h.units.vmm("run-c") != nil {
+		t.Errorf("a guest resumed mid-wake and saved again left %+v, %v, running=%v", rec, err, h.units.vmm("run-c") != nil)
+	}
+	if err = next.restore(t.Context(), "run-c"); err != nil {
+		t.Errorf("restore of the guest saved again = %v", err)
+	}
+
+	resumeMidWake("run-f")
+	if err = os.WriteFile(h.engine.path("run-f", eventsFile), []byte(`{"source": "vm", "event": "rebooting"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err = next.save(t.Context(), "run-f"); err == nil || !strings.Contains(err.Error(), "its guest restarted") {
+		t.Errorf("the next server's save of a guest that restarted mid-wake = %v; want it refused", err)
+	}
+	err = next.restore(t.Context(), "run-f")
+	if rec, _ = next.load("run-f"); err == nil || !strings.Contains(err.Error(), "restarted instead of answering") || !rec.Saved || h.units.vmm("run-f") != nil {
+		t.Errorf("restore of a guest that restarted mid-wake = %v, saved=%v, running=%v; want its error, the VM stopped and its saved state kept", err, rec.Saved, h.units.vmm("run-f") != nil)
+	}
+
+	resumeMidWake("run-g")
+	if err = next.stop(t.Context(), "run-g", time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if rec, _ = next.load("run-g"); rec.Saved || rec.Resumed != nil {
+		t.Errorf("stop of a guest resumed mid-wake left saved=%v resumed=%v; want its saved state discarded", rec.Saved, rec.Resumed != nil)
+	}
+	if _, err = os.Stat(h.engine.path("run-g", snapshotDir)); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("stop of a guest resumed mid-wake kept its saved state: %v", err)
+	}
+
+	h.createStarted("run-b", sessionSpec("run-b"))
+	if err = h.engine.save(t.Context(), "run-b"); err != nil {
+		t.Fatal(err)
+	}
+	if rec, err = h.engine.load("run-b"); err != nil {
+		t.Fatal(err)
+	}
+	rec.Resumed, rec.Exited = map[string]int64{h.engine.path("run-b", "fake-root.img"): 1}, false
+	if err = h.engine.store(rec); err != nil {
+		t.Fatal(err)
+	}
+	err = h.engine.restore(t.Context(), "run-b")
+	if rec, _ = h.engine.load("run-b"); !errors.Is(err, runtime.ErrNotSaved) || !strings.Contains(err.Error(), "its guest wrote its disks") || rec.Saved || h.units.vmm("run-b") != nil {
+		t.Errorf("restore after the resumed guest wrote its disks and died = %v, saved=%v; want the stale saved state dropped and nothing started", err, rec.Saved)
+	}
+
+	resumeMidWake("run-e")
+	h.units.stopAll()
+	if err = os.Remove(h.engine.path("run-e", snapshotDir+"/config.json")); err != nil {
+		t.Fatal(err)
+	}
+	err = next.restore(t.Context(), "run-e")
+	if !errors.Is(err, runtime.ErrNotSaved) || !strings.Contains(err.Error(), "config.json: no such file") {
+		t.Errorf("restore of a saved state whose configuration is gone = %v; want the real error", err)
+	}
+}

@@ -21,17 +21,16 @@ import { repoRoot, scratchDir } from './harness/paths'
  * layout that needs more than this is broken for somebody.
  */
 function minimumWindow(): { width: number; height: number } {
-  const main = readFileSync(path.join(repoRoot, 'desktop', 'main.js'), 'utf8')
+  const zoom = readFileSync(path.join(repoRoot, 'desktop', 'zoom.js'), 'utf8')
   const read = (key: string): number => {
-    const found = [...main.matchAll(new RegExp(`${key}:\\s*(\\d+)`, 'g'))]
-    // More than one window would mean this reads the wrong one, and none
-    // would mean the shell stopped enforcing a floor at all.
+    const found = [...zoom.matchAll(new RegExp(`const ${key} = (\\d+)`, 'g'))]
+    // None would mean the shell stopped enforcing a floor at all.
     if (found.length !== 1) {
-      throw new Error(`desktop/main.js sets ${found.length} ${key} values, expected 1`)
+      throw new Error(`desktop/zoom.js sets ${found.length} ${key} values, expected 1`)
     }
     return Number(found[0][1])
   }
-  return { width: read('minWidth'), height: read('minHeight') }
+  return { width: read('MIN_WIDTH'), height: read('MIN_HEIGHT') }
 }
 
 /** update.check with a release out, in the shape internal/localgw answers. */
@@ -43,7 +42,7 @@ function available(over: Record<string, unknown> = {}) {
       latest: 'v0.3.0',
       update_available: true,
       asset: 'aether-darwin-arm64',
-      release_url: 'https://github.com/3xDevOps/Aether/releases/tag/v0.3.0',
+      release_url: 'https://github.com/3xDevOps/cloudfield/releases/tag/v0.3.0',
       dev: false,
       disabled: false,
       can_self_update: true,
@@ -113,7 +112,7 @@ async function openDesktop(page: Page, gateway: Gateway): Promise<void> {
     await route.fulfill({ response, json: { ...(await response.json()), version: 'v0.2.0' } })
   })
   await page.goto(gateway.url)
-  const sidebar = page.getByRole('navigation', { name: 'Aether' })
+  const sidebar = page.getByRole('navigation', { name: 'Cloudfield' })
   await expect(sidebar.getByText(/is available/)).toBeVisible()
   await sidebar.getByRole('button', { name: 'Update', exact: true }).click()
   await expect(page.getByText('The desktop app is out of date.')).toBeVisible()

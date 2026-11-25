@@ -18,6 +18,9 @@ const watchShown = new Map()
 // Watch finished notices per run, closed once the member sees the outcome or
 // puts it off.
 const finishedShown = new Map()
+// The session's own success notices per run, also closed when the run leaves
+// its finished standing; a watch's stay until the watch's own rules end them.
+const ownFinished = new Map()
 // The need key last announced per run. It outlives a reconnect, so a need
 // already announced stays quiet when its run's next event arrives.
 const announced = new Map()
@@ -41,12 +44,24 @@ let openRun = () => {}
 let openLink = () => {}
 let selfID = null
 
+// Assistant cards shown, by id, so one decided anywhere closes here, and
+// the sync of them in flight.
+const cardsShown = new Map()
+let cardsSync = Promise.resolve()
+// What a private card that saves or forgets a preference shows in its
+// place; internal/assistant uses the same words.
+const preferenceCards = { 'assistant.remember': 'Save a preference', 'assistant.forget': 'Forget a saved preference' }
+
 // When each run last raised a needs-you notification, by any path, and
 // under `<run> done` a finished one. The same transition can reach us as
 // run.status, as assistant.notice kind needs_attention and as a watch
 // notice; other notice kinds are different events.
 const lastShown = new Map()
 const duplicateWindowMs = 5000
+
+const cardTitle = 'Assistant asks for approval'
+// Opens the dashboard with the assistant panel, where the card is.
+const cardLink = '/?assistant=1'
 
 function recentlyShown(slot) {
   const duplicate = Date.now() - (lastShown.get(slot) || 0) < duplicateWindowMs
@@ -61,7 +76,7 @@ function recentlyShown(slot) {
  * @param {(runId: string) => void} onOpen  open a run when its notification is clicked
  * @param {(link: string) => void} onLink  open a watch notice's link when it is clicked
  */
-function start(addr, url, onOpen, onLink = () => {}) {
+function start(addr, url, onOpen, onLink) {
   stop() // a sidecar respawn hands us a fresh addr and token
   stopped = false
   attempt = 0
@@ -108,6 +123,8 @@ function connect(wsURL) {
     if (ev.ok === true) {
       // Subscribe ack: the gateway accepted us, so the backoff can reset.
       attempt = 0
+      // Cards raised while the app was away show now.
+      queueCards()
       return
     }
     if (ev.type === 'assistant.notice') {
@@ -116,6 +133,16 @@ function connect(wsURL) {
     }
     if (ev.type === 'watch.changed') {
       void showWatchNotice(ev.payload || {})
+      return
+    }
+    if (ev.type === 'assistant.cards') {
+      void (async () => {
+        try {
+          if ((ev.payload || {}).member_id === (await memberID())) queueCards()
+        } catch (err) {
+          console.log(`notify: cannot tell who this member is: ${err.message}`)
+        }
+      })()
       return
     }
     if (!ev.run_id) return
@@ -214,16 +241,117 @@ function closeFinished(runId) {
   ended.set(`${runId} done`, ++ends)
   for (const notification of finishedShown.get(runId) || []) notification.close()
   finishedShown.delete(runId)
+  closeOwnFinished(runId)
+}
+
+function closeOwnFinished(runId) {
+  for (const notification of ownFinished.get(runId) || []) notification.close()
+  ownFinished.delete(runId)
 }
 
 // Without the socket nothing tells us when these notices' needs and
 // finishes end, so they close now rather than outlive them.
 function closeShown() {
   cleared = ++ends
+  for (const notification of cardsShown.values()) notification.close()
+  cardsShown.clear()
   for (const list of watchShown.values()) for (const { notification } of list) notification.close()
-  for (const list of finishedShown.values()) for (const notification of list) notification.close()
+  for (const list of [...finishedShown.values(), ...ownFinished.values()]) for (const notification of list) notification.close()
   watchShown.clear()
   finishedShown.clear()
+  ownFinished.clear()
+}
+
+async function gatewayCall(method, params) {
+  const res = await fetch(`${gateway.origin}/api/v1/${method}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', authorization: `Bearer ${gateway.token}` },
+    body: JSON.stringify(params),
+  })
+  const body = await res.json().catch(() => null)
+  if (!res.ok) throw new Error(body?.error?.message || `${method}: ${res.status}`)
+  return body
+}
+
+// queueCards syncs the member's cards after any sync already running, so
+// an older read never lands over a newer one.
+function queueCards() {
+  cardsSync = cardsSync.then(syncCards, syncCards)
+}
+
+// syncCards shows each pending card with Review, which opens it, and
+// Decline, and closes one no longer pending; macOS shows the buttons,
+// elsewhere a click opens the card. A card the server marks private (it
+// saves, forgets or sends a saved preference), or one too long to show
+// whole, shows no buttons.
+async function syncCards() {
+  if (!Notification.isSupported()) return
+  const since = cleared
+  let status
+  try {
+    status = await gatewayCall('assistant.status', {})
+  } catch (err) {
+    console.log(`notify: assistant cards: ${err.message}`)
+    return
+  }
+  // A read the connection dropped behind would show cards it closed.
+  if (cleared !== since) return
+  const pending = (status.confirmations || []).filter((c) => c.state === 'pending')
+  for (const [id, notification] of cardsShown) {
+    if (pending.some((c) => c.id === id)) continue
+    notification.close()
+    cardsShown.delete(id)
+  }
+  for (const card of pending) {
+    if (cardsShown.has(card.id)) continue
+    const summary = card.summary || ''
+    const whole = !card.private && [...summary].length <= 240
+    const link = cardLinkOf(card.id)
+    const notification = new Notification({
+      title: cardTitle,
+      body: cardBody(card),
+      ...(whole ? { actions: [{ type: 'button', text: 'Review…' }, { type: 'button', text: 'Decline' }] } : {}),
+    })
+    notification.on('click', () => openLink(link))
+    if (whole) notification.on('action', (_event, index) => (index === 0 ? openLink(link) : void decline(card)))
+    cardsShown.set(card.id, notification)
+    notification.show()
+  }
+}
+
+// cardBody is what a card's notification says: a private one only what
+// kind of action it is, a long one cut at a word with a pointer to the rest.
+function cardBody(card) {
+  if (card.private) return `${preferenceCards[card.method] || 'An action that uses a saved preference'}. Open to review.`
+  const summary = card.summary || ''
+  if ([...summary].length <= 240) return summary
+  const rest = '… Open to read the rest.'
+  const cut = [...summary].slice(0, 240 - rest.length).join('')
+  const space = cut.lastIndexOf(' ')
+  return (space > 0 ? cut.slice(0, space).replace(/[ ,;:]+$/, '') : cut) + rest
+}
+
+function cardLinkOf(id) {
+  return `${cardLink}&card=${encodeURIComponent(id)}`
+}
+
+// decline declines card through this app's gateway. Approving is done on
+// the card itself, which shows every parameter the call sends.
+async function decline(card) {
+  let body = `Declined here: ${card.private ? preferenceCards[card.method] || 'An action that uses a saved preference' : card.summary}`
+  let failed = false
+  try {
+    await gatewayCall('assistant.confirm', { confirmation_id: card.id, approve: false })
+  } catch (err) {
+    body = `Not decided: ${err.message}`
+    failed = true
+  }
+  cardsShown.get(card.id)?.close()
+  cardsShown.delete(card.id)
+  // An error stays until it is read.
+  const notification = new Notification({ title: 'Assistant card', body: clip(body, 240), silent: true, ...(failed ? { timeoutType: 'never' } : {}) })
+  notification.on('click', () => openLink(cardLinkOf(card.id)))
+  notification.show()
 }
 
 async function readWatch(watchId) {
@@ -247,7 +375,7 @@ function onStatus(runId, p) {
   const seen = { status: p.to, reason: p.reason || '', state: p.state || '', outcome_unseen: p.outcome_unseen === true, review: p.review || '' }
   // The event does not carry paused, so a need it shows is checked on run.get.
   if (!bodyOf(seen)) {
-    resolve(runId)
+    leave(runId, seen)
     return
   }
   const token = {}
@@ -261,10 +389,20 @@ function onStatus(runId, p) {
     if (!run || !self) return
     if (run.member_id !== self) {
       resolve(runId)
+      closeOwnFinished(runId)
       return
     }
     announce(runId, run)
   })
+}
+
+// leave ends what runId was announced for. A live run that announces
+// nothing has also left its finished standing, as when a follow-up restarts
+// it, so its own success notice closes; a watch's finished notice and an
+// ended run's finish stay until seen.
+function leave(runId, run) {
+  resolve(runId)
+  if (isLive(run)) closeOwnFinished(runId)
 }
 
 function onOutcomeSeen(runId) {
@@ -302,7 +440,7 @@ async function readRun(runId) {
 function announce(runId, run) {
   const body = run.paused ? '' : bodyOf(run)
   if (!body) {
-    resolve(runId)
+    leave(runId, run)
     return
   }
   const key = needKey(run)
@@ -314,6 +452,8 @@ function announce(runId, run) {
     entry = undefined
   }
   if (attention && !entry) {
+    // A need replaces the session's own success notice; a watch's stays.
+    closeOwnFinished(runId)
     entry = { key, run, notification: null }
     standing.set(runId, entry)
     updateBadge()
@@ -321,16 +461,18 @@ function announce(runId, run) {
   if (announced.get(runId) === key) return
   announced.set(runId, key)
   // A success ready for review is the watch's finished notice too; a live failure is its needs_you notice.
-  if (attention && recentlyShown(run.review === 'ready' ? `${runId} done` : runId)) return
+  const finished = !attention && awaitsReview(run)
+  if ((attention || finished) && recentlyShown(finished ? `${runId} done` : runId)) return
   if (!Notification.isSupported()) return
   const notification = new Notification({
     title: titleOf(run),
     body,
-    ...(attention && run.review !== 'ready' ? {} : { silent: true, urgency: 'low' }),
+    ...(attention ? {} : { silent: true, urgency: 'low' }),
   })
   notification.on('click', () => openRun(runId))
   notification.show()
   if (entry) entry.notification = notification
+  if (finished) ownFinished.set(runId, [...(ownFinished.get(runId) || []), notification])
 }
 
 // resolve ends runId's need and closes its watch notices shown before `before`.
@@ -350,19 +492,27 @@ function resolve(runId, before = Infinity) {
   updateBadge()
 }
 
-// needsAttention and needKey are domain.Run.NeedsAttention and NeedKey in
-// internal/domain/domain.go; titleOf and statusBody are RunTitle and
+// needsAttention, awaitsReview, outcomeHeld and needKey are
+// domain.Run.NeedsAttention, AwaitsReview with review ready, OutcomeHeld and
+// NeedKey in internal/domain/domain.go; titleOf and statusBody are RunTitle and
 // statusBody of internal/push/need.go. A desktop notification fires and
 // reads like the one a phone gets for the same run.
 
+const isLive = (run) => run.status === 'running' || run.status === 'needs-attention'
+
 function needsAttention(run) {
-  const live = run.status === 'running' || run.status === 'needs-attention'
-  if (run.paused) return false
-  if (run.review === 'ready' && (live || run.status === 'completed')) return true
-  if (!live) return false
+  if (run.paused || !isLive(run)) return false
   if (run.state === 'needs-you' || run.state === 'disconnected') return true
-  return run.state === 'failed' && run.outcome_unseen === true
+  return !outcomeHeld(run) && run.state === 'failed' && run.outcome_unseen === true
 }
+
+function awaitsReview(run) {
+  if (run.paused || outcomeHeld(run) || run.review !== 'ready') return false
+  return run.status === 'completed' || (isLive(run) && run.state === 'finished')
+}
+
+// A subsession's outcome is for its parent agent only; a detached one is a session of its own.
+const outcomeHeld = (run) => Boolean(run.parent_run_id) && run.detached !== true
 
 function needKey(run) {
   const key = [run.status, run.state || '', run.reason || '', run.status_changed_at || '']
@@ -395,7 +545,8 @@ const disconnects = [
 function statusBody(run) {
   const reason = run.reason || ''
   if (!needsAttention(run)) {
-    if (!run.outcome_unseen || run.status !== 'failed') return ''
+    if (awaitsReview(run)) return 'Finished: review the result'
+    if (outcomeHeld(run) || !run.outcome_unseen || run.status !== 'failed') return ''
     return 'Failed, review the result'
   }
   if (run.state === 'needs-you') {
@@ -411,7 +562,6 @@ function statusBody(run) {
     const match = disconnects.find(([prefix]) => reason.startsWith(prefix))
     return match ? match[1] + reason.slice(match[0].length) : 'Agent disconnected'
   }
-  if (run.review === 'ready') return 'Agent reported success, review the result'
   if (reason.startsWith('enhanced turn failed: ')) return 'Turn failed: ' + reason.slice('enhanced turn failed: '.length)
   return reason === 'agent reported failure' ? 'Agent reported failure, review the result' : 'Agent failed'
 }

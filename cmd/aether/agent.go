@@ -18,28 +18,32 @@ import (
 func init() {
 	register(command{
 		name:  "agent",
-		short: "manage agents: add, list, login, remove",
-		usage: "aether agent list [--json]\n" +
-			"aether agent login <name>\n" +
-			"aether agent add <name> [--enhanced] [--standard <argv>] [--background <argv>] [--acp <argv>] [--acp-mode <id>] [--login <path>]\n" +
-			"aether agent remove <name>",
-		example: "aether agent list --json\n" +
-			"aether agent login claude\n" +
-			"aether agent add codex --enhanced\n" +
-			"aether agent remove codex",
+		short: "manage agents: add, list, models, login, remove",
+		usage: "cloudfield agent list [--json]\n" +
+			"cloudfield agent models <name> [--account <member-id>] [--refresh] [--json]\n" +
+			"cloudfield agent login <name>\n" +
+			"cloudfield agent add <name> [--enhanced] [--standard <argv>] [--background <argv>] [--acp <argv>] [--acp-mode <id>] [--login <path>]\n" +
+			"cloudfield agent remove <name>",
+		example: "cloudfield agent list --json\n" +
+			"cloudfield agent models claude --refresh\n" +
+			"cloudfield agent login claude\n" +
+			"cloudfield agent add codex --enhanced\n" +
+			"cloudfield agent remove codex",
 		run: runAgent,
 	})
 }
 
 func runAgent(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: aether agent <add|list|login|remove>")
+		return fmt.Errorf("usage: cloudfield agent <add|list|models|login|remove>")
 	}
 	switch args[0] {
 	case "add":
 		return agentAdd(args[1:])
 	case "list":
 		return agentList(args[1:])
+	case "models":
+		return agentModels(args[1:])
 	case "login":
 		return agentLogin(args[1:])
 	case "remove":
@@ -51,7 +55,7 @@ func runAgent(args []string) error {
 
 func agentRemove(args []string) error {
 	if len(args) != 1 || args[0] == "" {
-		return fmt.Errorf("usage: aether agent remove <name>")
+		return fmt.Errorf("usage: cloudfield agent remove <name>")
 	}
 	return withControl(func(c *protocol.Client) error {
 		var result protocol.AgentRemoveResult
@@ -74,7 +78,7 @@ func agentRemove(args []string) error {
 func agentList(args []string) error {
 	jsonOut := len(args) == 1 && args[0] == "--json"
 	if len(args) > 0 && !jsonOut {
-		return fmt.Errorf("usage: aether agent list [--json]")
+		return fmt.Errorf("usage: cloudfield agent list [--json]")
 	}
 	return withControl(func(c *protocol.Client) error {
 		var list protocol.AgentListResult
@@ -92,7 +96,9 @@ func agentList(args []string) error {
 }
 
 // printAgents labels the login column for what agent.list checks: a login
-// file in the home, not whether the vendor accepts it.
+// file in the home, not whether the vendor accepts it. A login the server
+// knows cannot sign the agent in is listed under the table with the way
+// back in.
 func printAgents(w io.Writer, agents []protocol.AgentInfo) error {
 	if len(agents) == 0 {
 		_, err := fmt.Fprintln(w, "no agents")
@@ -117,7 +123,80 @@ func printAgents(w io.Writer, agents []protocol.AgentInfo) error {
 				login = "found"
 			}
 		}
+		if a.LoginProblem != "" {
+			login = "signed out"
+		}
 		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", a.Name, a.Source, installed, enhanced, login)
+	}
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	for _, a := range agents {
+		if a.LoginProblem != "" {
+			if _, err := fmt.Fprintf(w, "%s is signed out: %s\n  sign in again: %s\n", a.Name, a.LoginProblem, signInStep(a)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func agentModels(args []string) error {
+	const usage = "usage: cloudfield agent models <name> [--account <member-id>] [--refresh] [--json]"
+	if len(args) == 0 || strings.HasPrefix(args[0], "-") {
+		return errors.New(usage)
+	}
+	params := protocol.AgentModelsParams{Name: args[0]}
+	fs := newFlagSet("agent models")
+	fs.StringVar(&params.AccountMemberID, "account", "", "member ID whose shared agent account to list (default: your own)")
+	fs.BoolVar(&params.Refresh, "refresh", false, "ask the agent again instead of the list the server cached")
+	jsonOut := fs.Bool("json", false, "print the server's answer as JSON")
+	if err := fs.Parse(args[1:]); err != nil {
+		return err
+	}
+	if fs.NArg() > 0 {
+		return errors.New(usage)
+	}
+	return withControl(func(c *protocol.Client) error {
+		var result protocol.AgentModelsResult
+		if err := c.Call(protocol.MethodAgentModels, params, &result); err != nil {
+			return err
+		}
+		if *jsonOut {
+			return json.NewEncoder(os.Stdout).Encode(result)
+		}
+		return printModels(os.Stdout, os.Stderr, params.Name, result)
+	})
+}
+
+// printModels prints the ids a launch takes as --model, and the failed
+// discovery's error on errw, also when an older list is shown.
+func printModels(w, errw io.Writer, name string, result protocol.AgentModelsResult) error {
+	if result.Error != "" {
+		if _, err := fmt.Fprintf(errw, "could not list %s's models: %s\n", name, result.Error); err != nil {
+			return err
+		}
+	}
+	if len(result.Models) == 0 {
+		_, err := fmt.Fprintf(w, "%s listed no models; --model passes any id to it as is\n", name)
+		return err
+	}
+	source := result.Source
+	if result.FetchedAt != "" {
+		source += ", listed " + result.FetchedAt
+	}
+	if _, err := fmt.Fprintf(w, "%s models (%s)\n", name, source); err != nil {
+		return err
+	}
+	if result.DefaultLabel != "" {
+		if _, err := fmt.Fprintf(w, "without --model: %s\n", result.DefaultLabel); err != nil {
+			return err
+		}
+	}
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	_, _ = fmt.Fprintln(tw, "MODEL\tNAME\tDESCRIPTION")
+	for _, m := range result.Models {
+		_, _ = fmt.Fprintf(tw, "%s\t%s\t%s\n", m.ID, m.Name, m.Description)
 	}
 	return tw.Flush()
 }
@@ -154,7 +233,7 @@ func parseAgentAdd(args []string) (agentAddOptions, error) {
 	var login stringList
 	fs.Var(&login, "login", "file whose presence shows the agent is logged in, such as ~/.cursor/auth.json (repeatable)")
 	enhanced := fs.Bool("enhanced", false, "also install the shipped agent's enhanced-mode adapter")
-	const usage = "usage: aether agent add <name> [--enhanced] [--standard <argv>] [--background <argv>] [--acp <argv>] [--acp-mode <id>] [--login <path>]"
+	const usage = "usage: cloudfield agent add <name> [--enhanced] [--standard <argv>] [--background <argv>] [--acp <argv>] [--acp-mode <id>] [--login <path>]"
 	name, err := parseLeadingArg(fs, args)
 	if err != nil {
 		return agentAddOptions{}, fmt.Errorf("%w\n%s", err, usage)
@@ -285,12 +364,12 @@ func agentAdd(args []string) error {
 	})
 }
 
-const codexHookNote = `Trust Aether's hooks once. Standard Codex sessions load Aether's inbox hooks. Codex runs a hook
-only after you trust it, so your first Standard session opens "Hooks need review": choose
-"Trust all and continue". Codex remembers this in ~/.codex/config.toml for every workspace and
-asks again only if Aether's hooks change. If a subsession is your first Standard Codex session,
-open its terminal to answer. If the list shows hooks you don't recognize, choose "Review hooks"
-instead.`
+const codexHookNote = `Trust Cloudfield's hooks once. Standard Codex sessions load Cloudfield's inbox hooks.
+Codex runs a hook only after you trust it, so your first Standard session opens "Hooks need
+review": choose "Trust all and continue". Codex remembers this in ~/.codex/config.toml for
+every workspace and asks again only if Cloudfield's hooks change. If a subsession is your first
+Standard Codex session, open its terminal to answer. If the list shows hooks you don't
+recognize, choose "Review hooks" instead.`
 
 func installShippedAgent(w io.Writer, agent protocol.AgentInfo, enhanced bool) error {
 	var result protocol.AgentInstallResult

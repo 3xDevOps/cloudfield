@@ -1,5 +1,5 @@
-import { type ReactNode, useState } from 'react'
-import { enhancedSupported, label, loginFor, ready, setupMode } from '@/components/agents/agent-copy'
+import { type ReactNode, useRef, useState } from 'react'
+import { enhancedSupported, label, loginFor, ready, setupMode, signedOutState } from '@/components/agents/agent-copy'
 import { ModeComparison, type SetupMode } from '@/components/agents/mode-comparison'
 import { AgentGlyph } from '@/components/ui/agent-glyph'
 import { Button } from '@/components/ui/button'
@@ -10,6 +10,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { StatusDot } from '@/components/ui/status-dot'
 import type { Api } from '@/lib/api'
 import { message } from '@/lib/format'
+import { copyText } from '@/lib/clipboard'
 import type { AgentInfo, AgentInstallResult } from '@/lib/types'
 import { TerminalDock } from '@/routes/environment/terminal-dock'
 import { useStore } from '@/store'
@@ -51,6 +52,7 @@ export function AgentSetup({
   /** Pins Enhanced for a caller that cannot work without its adapter, so the mode choice is skipped. */
   requireEnhanced?: boolean
 }) {
+  const commandSource = useRef<HTMLElement>(null)
   const caps = useCapability()
   const [agent, setAgent] = useState(initial)
   const [mode, setMode] = useState<SetupMode>(() => requireEnhanced ? 'acp' : setupMode(initial, useStore.getState().launchDefaults[initial.name]?.mode))
@@ -69,6 +71,7 @@ export function AgentSetup({
   const hasTerminal = caps.hasWS('terminal')
   const login = loginFor(agent)
   const typedInstall = enhanced ? agent.enhanced_install_script ?? agent.install_script : agent.install_script
+  const setupCommand = canInstall ? login?.command : typedInstall
 
   const check = async () => {
     setChecking(true)
@@ -130,7 +133,7 @@ export function AgentSetup({
           <>
             <p className="text-ui text-text">
               {needsInstall
-                ? `Installs ${name}${enhanced && agent.enhanced === 'adapter' ? ' and its Enhanced adapter' : ''} in your environment, the container Aether keeps for you on the server. Every workspace uses it.`
+                ? `Installs ${name}${enhanced && agent.enhanced === 'adapter' ? ' and its Enhanced adapter' : ''} in your environment, the sandbox (a container or virtual machine) Cloudfield keeps for you on the server. Every workspace uses it.`
                 : `${name} is installed in your environment${enhanced ? ' with Enhanced' : ''}.`}
             </p>
             <div className="flex flex-wrap items-center gap-2">
@@ -148,7 +151,7 @@ export function AgentSetup({
         ) : (
           <p className="text-ui text-text">
             {typedInstall
-              ? 'The install command is typed into your Environment terminal below. Press Enter to run it.'
+              ? <>Run <Code ref={commandSource}>{typedInstall}</Code> in your Environment terminal below.</>
               : `Install the ${agent.executable ?? agent.name} executable into ~/.local/bin from your Environment terminal below.`}
           </p>
         )}
@@ -172,10 +175,22 @@ export function AgentSetup({
             <>
               {login && (
                 <p className="text-ui text-text">
-                  Log in once: <Code>{login.command}</Code> is typed into your environment terminal. {login.hint}
+                  Log in once by running <Code ref={canInstall ? commandSource : undefined}>{login.command}</Code> in your environment terminal. {login.hint}
                 </p>
               )}
-              <TerminalDock client={client} openOnMount initialLine={canInstall ? login?.command : typedInstall} />
+              {setupCommand && (
+                <>
+                  <p className="text-ui text-text">Paste the command at a shell prompt, review it, then press Enter.</p>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    onClick={() => void copyText(setupCommand, commandSource.current)}
+                  >
+                    {canInstall ? 'Copy login command' : 'Copy install command'}
+                  </Button>
+                </>
+              )}
+              <TerminalDock client={client} openOnMount />
             </>
           ) : (
             <>
@@ -191,11 +206,13 @@ export function AgentSetup({
           <ul aria-label={`${name} status`} className="flex flex-col gap-1">
             <Fact ok={agent.installed === true}>{agent.installed === true ? 'Installed' : 'Not installed'}</Fact>
             {enhanced && <Fact ok={agent.enhanced_installed === true}>{agent.enhanced_installed ? 'Enhanced installed' : 'Enhanced not installed'}</Fact>}
-            {agent.login_found !== undefined && <Fact ok={agent.login_found}>{agent.login_found ? 'Login found' : 'No login found'}</Fact>}
+            {agent.login_problem
+              ? <Fact ok={false}>{signedOutState(agent)}: <span className="min-w-0 font-code text-ui-sm break-words">{agent.login_problem}</span></Fact>
+              : agent.login_found !== undefined && <Fact ok={agent.login_found}>{agent.login_found ? 'Login found' : 'No login found'}</Fact>}
           </ul>
         )}
-        {checked && agent.login_found === false && agent.installed === true && (
-          <p className="text-ui-sm text-muted">Aether looks for the agent's login file in your environment; log in above, then check again.</p>
+        {checked && agent.installed === true && (agent.login_found === false || agent.login_problem) && (
+          <p className="text-ui-sm text-muted">{agent.login_problem ? 'This login cannot sign the agent in' : "Cloudfield looks for the agent's login file in your environment"}; log in above, then check again.</p>
         )}
         {error && <Callout tone="failed" role="alert">{error}</Callout>}
         <div className="flex flex-wrap items-center gap-2">

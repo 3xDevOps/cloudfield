@@ -5,8 +5,10 @@ import { PaletteDialogs } from '@/components/palette/dialogs'
 import { api, ApiError } from '@/lib/api'
 import type { Event, GatewayCapabilities, Run, TimelinePage } from '@/lib/types'
 import { Board } from '@/routes/board'
+import { useReply } from '@/routes/board/card-action'
 import { virtualizeAbove } from '@/routes/board/card-list'
 import { EdgePopover } from '@/routes/board/lanes/lane-popover'
+import { liveMailMs } from '@/routes/board/lanes/live-mail'
 import { useBoard } from '@/routes/board/selectors'
 import '@/routes/diff/conflict-chips'
 import { useStore } from '@/store'
@@ -200,6 +202,14 @@ describe('board columns', () => {
     expect(cardOf('still going').queryByText('+13')).toBeNull()
   })
 
+  it('marks a protected session card with a lock and no other', () => {
+    seed([working, run({ ...queued, protected: true })])
+    renderBoard()
+    const lock = { name: 'Protected: only its owner or an admin can steer, message or close it' }
+    expect(cardOf('not started').getByRole('img', lock)).toBeDefined()
+    expect(cardOf('still going').queryByRole('img', lock)).toBeNull()
+  })
+
   it('opens the run from anywhere on the card', () => {
     seed([working])
     renderBoard()
@@ -306,7 +316,7 @@ describe('Needs you actions', () => {
     renderBoard()
 
     fireEvent.click(cardOf('still going').getByRole('button', { name: 'Open terminal' }))
-    expect(useStore.getState().route).toEqual({ name: 'run', params: { runId: working.id } })
+    expect(useStore.getState().route).toEqual({ name: 'run', params: { runId: working.id, view: 'terminal' } })
   })
 
   it('opens the changes of an unreviewed failure', () => {
@@ -490,35 +500,39 @@ describe('Finished footer', () => {
     expect(column('Finished').getByText('landed already')).toBeDefined()
   })
 
-  it('archives closed runs through the shared confirmation', async () => {
-    seed([merged, run({ ...merged, id: 'run_open', task: 'not closed', status: 'completed' })], { self: bob })
+  it('archives finished runs through the shared confirmation, keeping a completed one that still holds work', async () => {
+    seed([merged, run({ ...merged, id: 'run_open', task: 'still open', status: 'completed' })], { self: bob })
     useStore.setState({ members: { [alice.id]: alice, [bob.id]: { ...bob, role: 'admin' } } })
+    vi.mocked(api.runCloseCheck).mockResolvedValueOnce([
+      { run_id: 'run_open', warnings: [{ kind: 'pull_request', detail: 'Pull request acme/shop#42 was open, not merged', url: 'https://github.com/acme/shop/pull/42', number: 42 }] },
+    ])
     renderBoard()
 
     await userEvent.click(screen.getByRole('button', { name: 'More finished-session actions' }))
-    await userEvent.click(await screen.findByRole('menuitem', { name: 'Archive closed sessions…' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Archive finished sessions…' }))
     const dialog = within(await screen.findByRole('dialog'))
-    expect(dialog.getByText(/1 session stays: completed but not yet closed/)).toBeDefined()
+    expect(await dialog.findByRole('link', { name: 'acme/shop#42' })).toBeDefined()
+    expect(within(dialog.getByRole('list', { name: 'Sessions to archive' })).getAllByRole('listitem').map((li) => li.textContent)).toEqual([expect.stringMatching(/^landed alreadyMerged · /)])
     fireEvent.click(dialog.getByRole('button', { name: 'Archive 1' }))
 
     await waitFor(() => expect(toast.success).toHaveBeenCalledWith('Archived 1 session'))
     expect(api.runArchive).toHaveBeenCalledWith(merged.id, true)
   })
 
-  it('offers Free retained containers to admins only', async () => {
+  it('offers Free retained sandboxes to admins only', async () => {
     const retained = run({ ...merged, reason: 'closed; retained container' })
     seed([run({ ...retained, member_id: bob.id })], { self: bob })
     const { unmount } = renderBoard()
     await userEvent.click(screen.getByRole('button', { name: 'More finished-session actions' }))
-    expect(await screen.findByRole('menuitem', { name: 'Archive closed sessions…' })).toBeDefined()
-    expect(screen.queryByRole('menuitem', { name: 'Free retained containers…' })).toBeNull()
+    expect(await screen.findByRole('menuitem', { name: 'Archive finished sessions…' })).toBeDefined()
+    expect(screen.queryByRole('menuitem', { name: 'Free retained sandboxes…' })).toBeNull()
     await userEvent.keyboard('{Escape}')
     unmount()
 
     seed([retained])
     renderBoard()
     await userEvent.click(screen.getByRole('button', { name: 'More finished-session actions' }))
-    await userEvent.click(await screen.findByRole('menuitem', { name: 'Free retained containers…' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Free retained sandboxes…' }))
     fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Free 1' }))
     await waitFor(() => expect(api.runRelease).toHaveBeenCalledWith(retained.id))
   })
@@ -658,7 +672,7 @@ describe('empty board', () => {
     seed([])
     renderBoard()
 
-    expect(await screen.findByText('A session is one agent working on its own branch in its own container.')).toBeDefined()
+    expect(await screen.findByText('A session is one agent working on its own branch in its own sandbox, a container or virtual machine on the server.')).toBeDefined()
     fireEvent.click(screen.getByRole('button', { name: 'New session' }))
     expect(useStore.getState().paletteDialog).toBe('launch')
   })
@@ -759,6 +773,86 @@ describe('lanes view', () => {
     expect(useStore.getState().route).toEqual({ name: 'run', params: { runId: stopped.id } })
   })
 
+  it('marks agent mail on both lanes, joins its marks with a quiet line, and draws its link for the focused lane, with words for screen readers', async () => {
+    seed([stopped, working])
+    const sent: Event = {
+      id: 'evt_mail', seq: 1, time: new Date(Date.now() - 10 * 60_000).toISOString(), workspace_id: workspace.id, run_id: working.id, actor_id: '',
+      type: 'coord.message', payload: { message_id: 'm1', workspace_id: workspace.id, from_run_id: working.id, to_run_id: stopped.id, kind: 'question' },
+    }
+    vi.mocked(api.workspaceTimeline).mockResolvedValueOnce({ events: [sent], next_seq: 0, more: false })
+    const tree = await openLanes()
+    await waitFor(() => expect(document.querySelectorAll('[data-lane-mail] [data-mail]')).toHaveLength(2))
+    expect(document.querySelector('[data-lane-mail] [data-mail="sent"] title')?.textContent).toMatch(/^Message from still going to waiting on you · .* · 1 not acknowledged$/)
+    expect(document.querySelectorAll('[data-lane-hairlines] [data-hairline]')).toHaveLength(1)
+    expect(document.querySelector('[data-lane-hairlines]')?.getAttribute('class')).toContain('text-series-5/45')
+    expect(document.querySelectorAll('[data-lane-edges] [data-edge="message"]')).toHaveLength(0)
+    expect(document.querySelectorAll('path[data-mail-control]')).toHaveLength(0)
+    const lane = within(tree).getByRole('treeitem', { name: /^still going/ })
+    expect(lane.getAttribute('aria-label')).toMatch(/messages: sent 1 to waiting on you, 1 not acknowledged$/)
+    act(() => lane.focus())
+    await waitFor(() => expect(document.querySelectorAll('[data-lane-edges] [data-edge="message"]')).toHaveLength(1))
+    expect(document.querySelector('[data-lane-hairlines]')?.getAttribute('class')).toContain('text-seam')
+    expect(document.querySelectorAll('[data-lane-mail] [data-mail]')).toHaveLength(0)
+    const link = document.querySelector('path[data-mail-control]')!
+    expect(link.querySelector('title')?.textContent).toMatch(/^Message from still going to waiting on you/)
+    expect(screen.getByText('↔ 1')).toBeDefined()
+    expect(screen.getByText('→1')).toBeDefined()
+    await userEvent.keyboard('{Enter}')
+    const dialog = await screen.findByRole('dialog', { name: /^still going/ })
+    const messages = within(dialog).getByRole('region', { name: 'Messages' })
+    expect(within(messages).getByText('Messages with 1 session')).toBeDefined()
+    expect(within(messages).getByRole('button', { name: /^→ Agent message · .* · not acknowledged$/ })).toBeDefined()
+    await userEvent.click(within(messages).getByRole('button', { name: 'waiting on you' }))
+    await waitFor(() => expect(document.activeElement?.getAttribute('aria-label')).toMatch(/^waiting on you.*received 1 from still going/))
+  })
+
+  it('draws an arrow only for mail that arrives while the view is open, not a replay, then leaves its marks', async () => {
+    seed([stopped, working])
+    const mail = (seq: number, id: string, minutesAgo: number): Event => ({
+      id: `evt_${id}`, seq, time: new Date(Date.now() - minutesAgo * 60_000).toISOString(), workspace_id: workspace.id, run_id: working.id, actor_id: '',
+      type: 'coord.message', payload: { message_id: id, workspace_id: workspace.id, from_run_id: working.id, to_run_id: stopped.id, kind: 'question' },
+    })
+    vi.mocked(api.workspaceTimeline).mockResolvedValueOnce({ events: [mail(1, 'm1', 50)], next_seq: 0, more: false })
+    await openLanes()
+    await waitFor(() => expect(document.querySelectorAll('[data-lane-mail] [data-mail]')).toHaveLength(2))
+    expect(document.querySelector('[data-mail-live]')).toBeNull()
+    act(() => useStore.getState().appendLaneEvent(mail(2, 'replayed', 20)))
+    expect(document.querySelector('[data-mail-live]')).toBeNull()
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    try {
+      act(() => useStore.getState().appendLaneEvent(mail(3, 'm2', 0.5)))
+      const arrow = document.querySelector<HTMLElement>('[data-mail-live]')!
+      expect(arrow.className).toContain('animate-mail-live')
+      expect(arrow.querySelector('.motion-safe\\:animate-mail-travel')).not.toBeNull()
+      act(() => vi.advanceTimersByTime(1500))
+      expect(screen.getByText('New message from still going to waiting on you')).toBeDefined()
+      act(() => vi.advanceTimersByTime(liveMailMs))
+      expect(document.querySelector('[data-mail-live]')).toBeNull()
+      expect(document.querySelectorAll('[data-lane-mail] [data-mail]')).toHaveLength(6)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('shows a live arrow without travel or fade under reduced motion', async () => {
+    const media = vi.spyOn(window, 'matchMedia').mockImplementation(
+      (query: string) => ({ matches: query.includes('prefers-reduced-motion'), addEventListener() {}, removeEventListener() {} }) as unknown as MediaQueryList,
+    )
+    try {
+      seed([stopped, working])
+      await openLanes()
+      act(() => useStore.getState().appendLaneEvent({
+        id: 'evt_live', seq: 5, time: new Date().toISOString(), workspace_id: workspace.id, run_id: working.id, actor_id: '',
+        type: 'coord.message', payload: { message_id: 'live', workspace_id: workspace.id, from_run_id: working.id, to_run_id: stopped.id, kind: 'message' },
+      }))
+      const arrow = document.querySelector<HTMLElement>('[data-mail-live]')!
+      expect(arrow.className).not.toContain('animate-mail-live')
+      expect(arrow.querySelectorAll('span.rounded-full')).toHaveLength(0)
+    } finally {
+      media.mockRestore()
+    }
+  })
+
   it('keeps the reply composer open after Reply in a lane popover', async () => {
     seed([stopped, working])
     const tree = await openLanes()
@@ -769,7 +863,28 @@ describe('lanes view', () => {
     const composer = await screen.findByRole('dialog', { name: /^Reply to / })
     await act(() => new Promise((resolve) => setTimeout(resolve, 50)))
     expect(composer.isConnected).toBe(true)
-    expect(document.activeElement).toBe(within(composer).getByRole('textbox', { name: 'Message to the agent' }))
+    const box = within(composer).getByRole('textbox', { name: 'Message to the agent' })
+    expect(document.activeElement).toBe(box)
+    await userEvent.type(box, 'use the staging IdP')
+    expect((box as HTMLTextAreaElement).value).toBe('use the staging IdP')
+    expect(within(composer).getByRole('button', { name: 'Send' }).hasAttribute('disabled')).toBe(false)
+    await userEvent.click(within(composer).getByRole('button', { name: 'Cancel' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: /^Reply to / })).toBeNull())
+    expect(useReply.getState().reply).toBeNull()
+  })
+
+  it("never shows or sends another session's draft in a lane's reply composer", async () => {
+    seed([stopped, working])
+    act(() => useReply.setState({ reply: { runId: working.id, text: 'draft for still going' } }))
+    const tree = await openLanes()
+    act(() => within(tree).getAllByRole('treeitem')[1].focus())
+    await userEvent.keyboard('r')
+    const composer = await screen.findByRole('dialog', { name: /^Reply to / })
+    const box = within(composer).getByRole('textbox', { name: 'Message to the agent' }) as HTMLTextAreaElement
+    expect(box.value).toBe('')
+    await userEvent.type(box, 'use the mock')
+    await userEvent.click(within(composer).getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(api.runInject).toHaveBeenCalledWith(stopped.id, 'use the mock', expect.any(String)))
   })
 
   it('groups a run with its child runs under one lane', async () => {
@@ -800,7 +915,7 @@ describe('lanes view', () => {
       id: `m_${run_id}`, workspace_id: workspace.id, from_run_id: run_id!, to_run_id: 'c', kind: 'message' as const, body: `from ${run_id}`, created_at: '2026-08-14T10:30:00Z',
     }] })
     vi.mocked(api.coordMessagesList).mockImplementationOnce(sent).mockImplementationOnce(sent)
-    render(<EdgePopover edge={{ key: 'mail', kind: 'message', from: { lane: 'a', run: 'a', t: 0 }, to: { lane: 'c', run: 'c', t: 0 }, messages: { ids: ['m_a', 'm_b'], senders: ['a', 'b'], acked: false } }} now={Date.now()} />)
+    render(<EdgePopover edge={{ key: 'mail', kind: 'message', from: { lane: 'a', run: 'a', t: 0 }, to: { lane: 'c', run: 'c', t: 0 }, messages: { ids: ['m_a', 'm_b'], senders: ['a', 'b'], acked: false, items: [{ from: 'a', to: 'c', acked: false }, { from: 'b', to: 'c', acked: false }] } }} now={Date.now()} />)
     expect(await screen.findByText('from a')).toBeDefined()
     expect(await screen.findByText('from b')).toBeDefined()
   })

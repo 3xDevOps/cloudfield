@@ -22,7 +22,7 @@ var loginExitLine = regexp.MustCompile(`^` + loginExitMark + ` ([0-9]+)$`)
 
 func agentLogin(args []string) error {
 	if len(args) != 1 || args[0] == "" || args[0][0] == '-' {
-		return errors.New("usage: aether agent login <name>")
+		return errors.New("usage: cloudfield agent login <name>")
 	}
 	var agent protocol.AgentInfo
 	found := false
@@ -37,7 +37,7 @@ func agentLogin(args []string) error {
 	case !found:
 		return fmt.Errorf("no agent %q; aether agent list shows yours", args[0])
 	case agent.LoginCommand == "":
-		return fmt.Errorf("agent %s has no sign-in command Aether knows; run its own login in aether terminal", agent.Name)
+		return fmt.Errorf("agent %s has no sign-in command Cloudfield knows; run its own login in aether terminal", agent.Name)
 	case !agent.Installed:
 		return fmt.Errorf("agent %s is not installed in your environment; run aether agent add %s first", agent.Name, agent.Name)
 	}
@@ -101,6 +101,8 @@ func deviceLogin(out io.Writer, agent protocol.AgentInfo) error {
 		_, err = fmt.Fprintf(out, "%s exited 0\n", agent.LoginCommand)
 	case !*after.LoginFound:
 		return fmt.Errorf("%s exited 0, but %s's login file is not in your home; run aether agent login %s again", agent.LoginCommand, agent.Name, agent.Name)
+	case after.LoginProblem != "":
+		return fmt.Errorf("%s exited 0, but %s is still signed out: %s; run aether agent login %s again", agent.LoginCommand, agent.Name, after.LoginProblem, agent.Name)
 	default:
 		_, err = fmt.Fprintf(out, "%s: login file found; aether account usage checks that the vendor accepts it\n", agent.Name)
 	}

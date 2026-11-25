@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api, type Api } from '@/lib/api'
 import { message } from '@/lib/format'
-import type { RoomMessage, RoomMessageKind, Run } from '@/lib/types'
+import { backoff } from '@/lib/stream'
+import type { RoomMessage, RoomMessageKind, RoomResolution, Run } from '@/lib/types'
 import type { ControlMetadata } from '@/routes/terminal/attach'
 import { sameIdentity, useStore } from '@/store'
 import { isProvisional } from '@/store/collaboration'
 import { optimistic } from '@/store/optimistic'
 
 const presencePollMs = 10_000
+const noAnswerRetries = 3
 const presenceTimeoutMs = 15_000
 
 export interface RoomPost {
@@ -24,6 +26,8 @@ export interface RunRoom {
   /** Resending a text whose note is not yet saved reuses its idempotency key. */
   note: (body: string) => Promise<void>
   decide: (messageID: string, decision: 'approve' | 'deny') => Promise<void>
+  /** Complete or delete a comment. The caller plays the exit animation; a refusal restores it and reports its error. */
+  resolve: (messageID: string, outcome: RoomResolution) => Promise<{ ok: boolean; error?: string; refused?: Promise<string> }>
   loadOlder: () => Promise<void>
   refresh: () => Promise<void>
   error: string | undefined
@@ -53,22 +57,34 @@ export function useRunRoom(run: Run, control: ControlMetadata | undefined, clien
 
   useEffect(() => {
     let active = true
+    let wait: ReturnType<typeof setTimeout> | undefined
     const s = useStore.getState()
     s.initializeRoomPagination(runID)
     s.setRoomLoading(runID, true)
-    client.runRoomList({ workspace_id: workspaceID, run_id: runID, limit: pageLimit }).then(
-      (page) => {
-        if (active) useStore.getState().setRoomPage(runID, page.messages, page.next_before)
-      },
-      (cause) => {
-        if (active) useStore.getState().setRoomError(runID, message(cause))
-      },
-    ).finally(() => {
+    // fetch's TypeError means no answer arrived; until the next room event or
+    // stream reconnect nothing reads the list again.
+    const load = (attempt: number): Promise<void> =>
+      client.runRoomList({ workspace_id: workspaceID, run_id: runID, limit: pageLimit }).then(
+        (page) => {
+          if (active) useStore.getState().setRoomPage(runID, page.messages, page.next_before)
+        },
+        (cause) => {
+          if (!active) return
+          if (cause instanceof TypeError && attempt < noAnswerRetries) {
+            return new Promise<void>((resolve) => {
+              wait = setTimeout(resolve, backoff(attempt))
+            }).then(() => (active ? load(attempt + 1) : undefined))
+          }
+          useStore.getState().setRoomError(runID, message(cause))
+        },
+      )
+    void load(0).finally(() => {
       loaded.current = true
       if (active) useStore.getState().setRoomLoading(runID, false)
     })
     return () => {
       active = false
+      clearTimeout(wait)
     }
   }, [runID, workspaceID, client])
 
@@ -219,6 +235,25 @@ export function useRunRoom(run: Run, control: ControlMetadata | undefined, clien
     void outcome.refused?.then((error) => same() && useStore.getState().noteRefused(runID, key, error))
   }, [client, runID, selfID, workspaceID])
 
+  const resolve = useCallback(async (messageID: string, outcome: RoomResolution) => {
+    const self = useStore.getState().info?.member.id ?? ''
+    const now = new Date().toISOString()
+    const held = () => useStore.getState().roomMessages[runID]?.find((m) => m.id === messageID)
+    const before = held()
+    let applied: RoomMessage | undefined
+    const outcome_ = await optimistic({
+      apply: () => {
+        useStore.getState().setRoomMessageResolution(runID, messageID, outcome, self, now)
+        applied = held()
+      },
+      send: () => client.runRoomResolve({ message_id: messageID, outcome }),
+      confirm: (result) => useStore.getState().upsertRoomMessage(result.message),
+      // Another member's resolution may have landed meanwhile; only undo our own.
+      revert: () => before && held() === applied && useStore.getState().upsertRoomMessage(before),
+    })
+    return outcome_.ok ? { ok: true as const } : { ok: false as const, error: outcome_.error, refused: outcome_.refused }
+  }, [client, runID])
+
   const clearError = useCallback(() => useStore.getState().setRoomActionError(runID), [runID])
-  return { post, note, decide, loadOlder, refresh, error, errorFromComposer, clearError }
+  return { post, note, decide, resolve, loadOlder, refresh, error, errorFromComposer, clearError }
 }

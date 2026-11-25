@@ -204,6 +204,7 @@ export function AgentCard({
   meta,
   progress,
   current,
+  expanded,
   accessibleName,
   onOpen,
 }: {
@@ -213,6 +214,7 @@ export function AgentCard({
   meta?: React.ReactNode
   progress: React.ReactNode
   current: boolean
+  expanded?: boolean
   accessibleName: string
   onOpen: () => void
 }) {
@@ -224,8 +226,10 @@ export function AgentCard({
       aria-label={accessibleName}
       aria-describedby={progressID}
       aria-current={current || undefined}
+      aria-expanded={expanded}
       onClick={onOpen}
-      className={cn(focusRingInset, 'flex w-full min-w-0 flex-col gap-0.5 rounded-control px-2 py-1 text-left text-ui-sm hover:bg-hover coarse:min-h-11', current && 'bg-selection')}
+      // Chromium 130, in the desktop app's Electron 33, gives a button align-items: flex-start: each line would take its text's width and never truncate.
+      className={cn(focusRingInset, 'flex w-full min-w-0 flex-col items-stretch gap-0.5 rounded-control px-2 py-1 text-left text-ui-sm hover:bg-hover coarse:min-h-11', current && 'bg-selection')}
     >
       <span className="flex min-w-0 items-center gap-2">
         {dot}
@@ -238,17 +242,18 @@ export function AgentCard({
   )
 }
 
-export function AgentEntry({ dot, label, state, onOpen }: { dot: React.ReactNode; label: string; state: string; onOpen: () => void }) {
+export function AgentEntry({ dot, label, state, current, onOpen }: { dot: React.ReactNode; label: string; state: React.ReactNode; current?: boolean; onOpen: () => void }) {
   return (
     <button
       type="button"
       data-slot="agent-entry"
+      aria-current={current || undefined}
       onClick={onOpen}
-      className={cn(focusRingInset, 'flex h-6 w-full min-w-0 items-center gap-2 rounded-control pl-6 text-left text-ui-sm text-muted hover:bg-hover hover:text-text coarse:h-11')}
+      className={cn(focusRingInset, 'flex h-6 w-full min-w-0 items-center gap-2 rounded-control pr-2 pl-6 text-left text-ui-sm text-muted hover:bg-hover hover:text-text coarse:h-11', current && 'bg-selection')}
     >
       {dot}
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      <span className="shrink-0">{state}</span>
+      <span className="flex shrink-0 items-center gap-2 tabular-nums">{state}</span>
     </button>
   )
 }
@@ -267,11 +272,14 @@ export function EventRow({
   tone = 'neutral',
   trailing,
   detail,
+  full,
   children,
 }: {
   tone?: Tone
   trailing?: React.ReactNode
   detail?: React.ReactNode
+  /** Shows the whole detail, which a failure's reason needs. */
+  full?: boolean
   children: React.ReactNode
 }) {
   return (
@@ -281,7 +289,7 @@ export function EventRow({
         <span className={cn('min-w-0 flex-1 break-words', tone !== 'neutral' && 'text-text')}>{children}</span>
         {trailing !== undefined && <span className="shrink-0 pl-2 tabular-nums">{trailing}</span>}
       </div>
-      {detail && <div className={cn('line-clamp-4 max-h-[4lh] pl-6 break-words', typeof detail === 'string' && 'whitespace-pre-wrap')}>{detail}</div>}
+      {detail && <div className={cn('pl-6 break-words', !full && 'line-clamp-4 max-h-[4lh]', typeof detail === 'string' && 'whitespace-pre-wrap')}>{detail}</div>}
     </div>
   )
 }

@@ -8,9 +8,11 @@ package localgw
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -18,6 +20,7 @@ import (
 
 	"github.com/3xDevOps/Aether/internal/localops"
 	"github.com/3xDevOps/Aether/internal/protocol"
+	"github.com/3xDevOps/Aether/internal/selfupdate"
 	"github.com/3xDevOps/Aether/internal/version"
 )
 
@@ -50,6 +53,16 @@ func TestUpdateApplyCarriesTheServerRestart(t *testing.T) {
 	}
 	if got.RestartCommand != "sudo systemctl restart aether-server" {
 		t.Fatalf("restart_command = %q, want the command aether update prints", got.RestartCommand)
+	}
+
+	// Once systemd resolves the unit's second name, the line uses it.
+	restartUnit = func() string { return "cloudfield-server" }
+	rec = do(g, http.MethodPost, "/local/v1/update.apply", "{}", true)
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("status = %d (%v): %s", rec.Code, err, rec.Body)
+	}
+	if got.RestartCommand != "sudo systemctl restart cloudfield-server" {
+		t.Fatalf("restart_command = %q, want the unit's second name", got.RestartCommand)
 	}
 }
 
@@ -450,7 +463,7 @@ func TestUpdateApplyLeavesTheServerFirst(t *testing.T) {
 			pinVersion(t)
 			stubRebuild(t, "/bin/true", false)
 			backend := &verbStubBackend{apiStubBackend: apiStubBackend{results: map[string]json.RawMessage{
-				protocol.MethodServerInfo:         json.RawMessage(`{"server_version":"v1.2.8","member":{"role":"admin"}}`),
+				protocol.MethodServerInfo:         json.RawMessage(`{"server_version":"v1.2.8","member":{"role":"super_admin"}}`),
 				protocol.MethodServerUpdateStatus: json.RawMessage(fmt.Sprintf(`{"capable":%v}`, capable)),
 			}}}
 			g := updateGateway(t, backend, false)
@@ -488,5 +501,64 @@ func TestUpdateApplyLeavesTheServerFirst(t *testing.T) {
 				t.Fatalf("error = %d %q, installed %q; want the server-first refusal", perr.Code, perr.Message, installed)
 			}
 		})
+	}
+}
+
+// A server that predates workspace-scoped access reports its administrator
+// as admin, and that role still moves the server first.
+func TestUpdateCheckLeavesTheServerFirstForAnOldServersAdmin(t *testing.T) {
+	pinVersion(t)
+	stubRebuild(t, "/bin/true", false)
+	backend := &verbStubBackend{apiStubBackend: apiStubBackend{results: map[string]json.RawMessage{
+		protocol.MethodServerInfo:         json.RawMessage(`{"server_version":"v1.2.8","member":{"role":"admin"}}`),
+		protocol.MethodServerUpdateStatus: json.RawMessage(`{"capable":true}`),
+	}}}
+	g := updateGateway(t, backend, false)
+	rec := do(g, http.MethodPost, "/local/v1/update.check", "{}", true)
+	var check struct {
+		TargetVersion string `json:"target_version"`
+		ServerFirst   bool   `json:"server_first"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &check); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("check status = %d: %s", rec.Code, rec.Body)
+	}
+	if !check.ServerFirst || check.TargetVersion != "" {
+		t.Fatalf("server_first = %v target_version = %q, want the server first", check.ServerFirst, check.TargetVersion)
+	}
+}
+
+// TestUpdateApplyLinksAndNeverFailsOverALink drives update.apply with
+// the swap stubbed: the second names appear beside the replaced binary,
+// and a link that cannot be made leaves the update answered as done.
+func TestUpdateApplyLinksAndNeverFailsOverALink(t *testing.T) {
+	for _, fails := range []bool{false, true} {
+		pinVersion(t)
+		stubRebuild(t, "/bin/true", false)
+		g := updateGateway(t, &verbStubBackend{}, false)
+		dir := t.TempDir()
+		bin := filepath.Join(dir, "aether")
+		if err := os.WriteFile(bin, []byte("binary"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		stubApply(t, func(context.Context, string, string) ([]string, error) { return []string{bin}, nil })
+		linkBinaries = selfupdate.LinkAll
+		if fails {
+			linkBinaries = func([]string) error { return errors.New("symlink: operation not supported") }
+		}
+
+		rec := do(g, http.MethodPost, "/local/v1/update.apply", "{}", true)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("fails=%v: status = %d: %s", fails, rec.Code, rec.Body)
+		}
+		var got struct {
+			Updated []string `json:"updated"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil || len(got.Updated) != 1 || got.Updated[0] != bin {
+			t.Fatalf("fails=%v: updated = %v, %v; want %s", fails, got.Updated, err, bin)
+		}
+		target, err := os.Readlink(filepath.Join(dir, "cloudfield"))
+		if !fails && (err != nil || target != "aether") {
+			t.Fatalf("cloudfield -> %q, %v; want aether", target, err)
+		}
 	}
 }

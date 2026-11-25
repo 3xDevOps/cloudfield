@@ -1409,6 +1409,16 @@ describe('onboarding wizard', () => {
     await waitFor(() => expect(useStore.getState().route.params.runId).toBe('run_1'))
   })
 
+  it('names the adopt step for a fresh import that has no base branch yet', async () => {
+    const client = fakeApi({
+      filesTree: vi.fn(async () => { throw new Error('files.tree: workspace has no repository yet') }),
+      workspaceMirrorStatus: vi.fn(async () => ({ enabled: true, status: 'pending' as const, observed_commit: workspaceTip })),
+    })
+    seed({ onboardingFirstRun: { harness: 'claude', task: 'Inspect the repository' } })
+    render(<FirstRunStep client={client} workspace={workspace} onBackToAgent={vi.fn()} onBackToRepository={vi.fn()} />)
+    await screen.findByText(/Review source mirror → Adopt candidate under Advanced on the workspace settings page/)
+  })
+
   it('keeps collaborator launch disabled while source status is pending or fails, then allows a confirmed local-only source', async () => {
     const pending = Promise.withResolvers<{ enabled: boolean }>()
     const client = fakeApi({
@@ -1642,7 +1652,7 @@ describe('onboarding wizard', () => {
     await toFirstRunStep()
 
     const step = await screen.findByRole('region', { name: 'First session' })
-    expect(step.textContent).toContain('A session is one agent working on its own branch in its own container')
+    expect(step.textContent).toContain('A session is one agent working on its own branch in its own sandbox')
     // The launch dialog's own fields, not a copy.
     expect(within(step).getByRole('radiogroup', { name: 'Agent' })).toBeDefined()
     fireEvent.click(within(step).getByRole('radio', { name: /^Claude Code/ }))

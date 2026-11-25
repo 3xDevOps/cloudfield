@@ -160,7 +160,10 @@ export const createRunsSlice: SliceCreator<RunsSlice> = (set) => ({
   removeRun: (runID) =>
     set((s) => {
       const other = (id: string) => id !== runID
+      const { [runID]: _, ...runViewMemory } = s.runViewMemory
       return {
+        runViewMemory,
+        savedRunViews: Object.fromEntries(Object.entries(s.savedRunViews).map(([who, { [runID]: __, ...views }]) => [who, views])),
         runs: pruneRuns(s.runs, other),
         deletingRuns: pruneRuns(s.deletingRuns, other),
         terminalWriteIntents: pruneRuns(s.terminalWriteIntents, other),
@@ -340,19 +343,15 @@ export const createRunsSlice: SliceCreator<RunsSlice> = (set) => ({
 })
 
 /**
- * A completed run still awaits Close, so it is not archivable. The archive gate
- * and every hide guard share this predicate; see docs/dashboard-frontend.md.
+ * A finished run: completed or a final disposition. `finished_at` freezes here,
+ * and it is the archive gate and every hide guard. Mirrors domain.RunStatus.Archivable.
  */
-export function isArchivable(status: RunStatus): boolean {
+export function isTerminal(status: RunStatus): boolean {
   return (
+    status === 'completed' ||
     status === 'merged' ||
     status === 'abandoned' ||
     status === 'failed' ||
     status === 'interrupted'
   )
-}
-
-/** Freezes `finished_at`; never a hide guard, which wants `isArchivable`. */
-export function isTerminal(status: RunStatus): boolean {
-  return status === 'completed' || isArchivable(status)
 }

@@ -76,6 +76,9 @@ func newFallbackEnv(t *testing.T, mutate func(*Config)) (*shareEnv, *acpRuntime,
 	rt := newACPRuntime(t)
 	e := newShareEnv(t, func(cfg *Config) {
 		cfg.Runtime = rt
+		// The updater creates its container from a goroutine of its own,
+		// which would land among the creates these tests count or time.
+		cfg.HarnessUpdateDisabled = true
 		mutate(cfg)
 	})
 	rt.images = e.rt.images
@@ -257,7 +260,7 @@ func TestUnknownUsageOwnAccountNeedsALoginOrKey(t *testing.T) {
 			}
 			_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
 			if tc.moves {
-				continued := continuationPrompt("Grace", "Ada")
+				continued := usageMove.continuation("Grace", "Ada")
 				waitFor(t, "the continuation prompt on Ada's account", func() bool {
 					execs := rt.all()
 					prompts := execs[len(execs)-1].wire.prompts(t)
@@ -411,6 +414,40 @@ func TestHandedOffRunMovesOnlyToAccountsSharedWithItsHome(t *testing.T) {
 	}
 }
 
+// A subsession never moves onto an account its owner turned its agent off
+// on, even one turned off after it started.
+func TestSubsessionMovesOnlyToAccountsItsOwnerLeftOn(t *testing.T) {
+	t.Parallel()
+	e, _, notes := newFallbackEnv(t, enhancedClaude)
+	e.share(t)
+	parent := &domain.Run{WorkspaceID: e.ws.ID, MemberID: e.member.ID, Task: "parent", Harness: "claude", Mode: domain.LaunchACP, Status: domain.RunRunning}
+	if err := e.db.CreateRun(t.Context(), parent); err != nil {
+		t.Fatal(err)
+	}
+	reserved, _, err := e.db.ReserveChild(t.Context(), &domain.ChildReservation{ParentRunID: parent.ID, RootRunID: parent.ID, TreeKey: string(parent.ID),
+		WorkspaceID: e.ws.ID, OwnerID: e.member.ID, AccountID: e.member.ID, Harness: "claude", Mode: domain.LaunchACP, Purpose: "review", Task: "t", IdempotencyKey: "k", RequestHash: "h"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	run, err := e.sched.LaunchWithOptions(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP, domain.LaunchOptions{ReservedRunID: reserved.RunID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+	if err = e.db.PutChildSettings(t.Context(), e.member.ID, store.ChildSettings{Enabled: true, Off: domain.ChildChoicesOff{{Harness: "claude", Account: e.owner.ID}}}); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
+	var got *domain.Run
+	waitFor(t, "the usage limit's outcome", func() bool {
+		got, err = e.db.GetRun(t.Context(), run.ID)
+		return err == nil && (strings.HasPrefix(got.Reason, "Usage limit reached") || got.AccountMember() != e.member.ID)
+	})
+	if !strings.HasPrefix(got.Reason, "Usage limit reached on Ada's account; ") || got.AccountMember() != e.member.ID || len(notes.all()) != 0 {
+		t.Fatalf("subsession = reason %q account %s notes %v; want it kept off Grace's account, which its owner turned off", got.Reason, got.AccountMember(), notes.all())
+	}
+}
+
 // A container that exits while the move waits to choose an account is
 // finalized when the run stays where it is, not left live with nothing
 // supervising it.
@@ -514,7 +551,7 @@ func TestEnhancedRunMovesAgainOnASecondLimit(t *testing.T) {
 	_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
 	e.assertMovedToOwner(t, run.ID, notes)
 	waitFor(t, "the moved session", func() bool {
-		_, err := e.sched.acp.live(run.ID)
+		_, err := e.sched.acp.live(t.Context(), run.ID)
 		sc, scErr := e.sched.readSidecar(run.ID)
 		return err == nil && scErr == nil && sc.AccountSwap == nil
 	})
@@ -557,7 +594,7 @@ func TestUnconfirmedSharedLoginDoesNotUseUpTheAccount(t *testing.T) {
 		waitFor(t, "the move to "+string(account), func() bool {
 			row, rowErr := e.db.GetRun(t.Context(), run.ID)
 			sc, scErr := e.sched.readSidecar(run.ID)
-			_, liveErr := e.sched.acp.live(run.ID)
+			_, liveErr := e.sched.acp.live(t.Context(), run.ID)
 			return rowErr == nil && scErr == nil && liveErr == nil && row.AccountMemberID == account && sc.AccountSwap == nil
 		})
 	}
@@ -1084,7 +1121,7 @@ func TestMoveThatCannotRemoveTheOldContainerKeepsIt(t *testing.T) {
 	_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
 
 	got := e.waitStoreStatus(t, run.ID, domain.RunFailed)
-	if got.Reason != "Usage limit reached on Ada's account; continuing on Grace's account failed: remove the container on Ada's account: daemon busy" {
+	if got.Reason != "Usage limit reached on Ada's account; continuing on Grace's account failed: remove the sandbox on Ada's account: daemon busy" {
 		t.Fatalf("reason %q", got.Reason)
 	}
 	waitFor(t, "the old container kept for cleanup", func() bool {
@@ -1438,7 +1475,7 @@ func TestNoFallbackReason(t *testing.T) {
 		measured fallback.Measured
 		want     string
 	}{
-		{"opencode", fallback.Measured{ada: 100}, "Aether cannot read opencode's usage, so its sessions do not move to another account"},
+		{"opencode", fallback.Measured{ada: 100}, "Cloudfield cannot read opencode's usage, so its sessions do not move to another account"},
 		{"claude", fallback.Measured{ada: 100}, "no other account is shared to fall back on"},
 		{"claude", fallback.Measured{ada: 100, grace: 97}, "no fallback has usage left"},
 		{"claude", fallback.Measured{ada: 100, grace: fallback.Unknown}, "no account that may have usage left can run claude here"},

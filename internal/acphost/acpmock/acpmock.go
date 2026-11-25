@@ -14,8 +14,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -47,6 +49,10 @@ const (
 	PromptLongTool = "run a long tool"
 	// ChatterInterval paces PromptChatter and PromptThink.
 	ChatterInterval = 20 * time.Millisecond
+	// PromptRunPrefix makes the agent run the command line after it with
+	// sh -c and stream each line it prints as an assistant message chunk.
+	// The turn ends when the command exits, or at session/cancel.
+	PromptRunPrefix = "run "
 	// PromptAskForm makes the agent ask a form question and reply with the
 	// answer: "form: <action> <content as JSON>".
 	PromptAskForm = "ask form"
@@ -87,10 +93,22 @@ const (
 	// subagents the way Claude's adapter reports them: nested, concurrent,
 	// and with later updates that omit the parent link.
 	PromptSubagents = "subagents"
+	// PromptSpawn starts `sleep 600` as a child of the agent, as a shell
+	// tool leaves a command running, and replies "spawned <pid>".
+	PromptSpawn = "spawn a sleeper"
 	// PromptWorkflow launches a dynamic workflow and a background Agent
 	// the way Claude's adapter reports them: calls that complete once their
 	// work runs in the background, and the Agent's work after that.
 	PromptWorkflow = "workflow"
+	// PromptBackgroundAgents launches BackgroundAgentIDs in parallel as
+	// Claude's adapter reports Claude Code's Agent calls: each call
+	// completes once its subagent runs in the background. The main agent
+	// then runs BusyCalls commands, more items than a subscribe replays,
+	// and ends the turn; the subagents run until PromptFinishAgents.
+	PromptBackgroundAgents = "background subagents"
+	// PromptFinishAgents makes each subagent PromptBackgroundAgents started
+	// report and end.
+	PromptFinishAgents = "finish subagents"
 	// ReminderReply is the reply to Aether's report reminder, which the
 	// mock cannot act on.
 	ReminderReply = "nothing to report"
@@ -112,7 +130,14 @@ const (
 	DevServerTaskID = "mock-dev-server"
 	// HeldTaskID is the id of the workflow PromptHold starts.
 	HeldTaskID = "mock-held-task"
+	// BusyCalls is how many commands PromptBackgroundAgents runs after its
+	// launches.
+	BusyCalls = 120
 )
+
+// BackgroundAgentIDs are the tasks PromptBackgroundAgents starts; each
+// one's Agent call id is the task id with a "-call" suffix.
+var BackgroundAgentIDs = []string{"mock-agent-billing", "mock-agent-tests"}
 
 type Fixture struct {
 	Initialize json.RawMessage `json:"initialize"`
@@ -127,8 +152,16 @@ type Fixture struct {
 	} `json:"load"`
 	// List holds successive session/list results; the last one repeats.
 	List []json.RawMessage `json:"list"`
-	// RefusePrompts makes the agent refuse every prompt with authRequired.
-	RefusePrompts bool `json:"-"`
+	// RefusePrompts makes the agent refuse every prompt with authRequired,
+	// and RefuseSessions every session/new.
+	RefusePrompts  bool `json:"-"`
+	RefuseSessions bool `json:"-"`
+	// RefuseModes makes the agent refuse every session/set_mode, as
+	// Claude Code's adapter refuses bypassPermissions when bypass is off.
+	RefuseModes bool `json:"-"`
+	// RefuseNext, shared by every agent given the fixture, makes them
+	// refuse that many prompts with authRequired, then accept.
+	RefuseNext *atomic.Int32 `json:"-"`
 }
 
 func Load(name string) (Fixture, error) {
@@ -252,6 +285,16 @@ func (a *Agent) update(ctx context.Context, u json.RawMessage) {
 	session := a.session
 	a.mu.Unlock()
 	_ = a.conn.SendNotification(ctx, acp.ClientMethodSessionUpdate, map[string]any{"sessionId": session, "update": u})
+	var c struct {
+		Kind      string `json:"sessionUpdate"`
+		MessageID string `json:"messageId"`
+		Content   struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if json.Unmarshal(u, &c) == nil && c.Kind == "agent_thought_chunk" {
+		a.sdk(ctx, map[string]any{"type": "assistant", "message": map[string]any{"id": c.MessageID, "content": []any{map[string]any{"type": "thinking", "thinking": c.Content.Text}}}})
+	}
 }
 
 func (a *Agent) text(ctx context.Context, s string) {
@@ -285,6 +328,9 @@ func (a *Agent) handle(ctx context.Context, method string, params json.RawMessag
 	case acp.AgentMethodInitialize:
 		return a.fix.Initialize, nil
 	case acp.AgentMethodSessionNew:
+		if a.fix.RefuseSessions {
+			return nil, acp.NewAuthRequired(nil)
+		}
 		a.mu.Lock()
 		a.session, a.cwd, a.frames = a.fix.SessionID(), p.Cwd, frames
 		a.mu.Unlock()
@@ -332,7 +378,33 @@ func (a *Agent) handle(ctx context.Context, method string, params json.RawMessag
 		a.listed++
 		return result, nil
 	case acp.AgentMethodSessionSetMode:
+		if a.fix.RefuseModes {
+			var p struct {
+				ModeID string `json:"modeId"`
+			}
+			_ = json.Unmarshal(params, &p)
+			return nil, acp.NewInternalError(map[string]any{"details": "Mode " + p.ModeID + " is not available in this session"})
+		}
 		return map[string]any{}, nil
+	case "session/set_model":
+		var p struct {
+			ModelID string `json:"modelId"`
+		}
+		var r struct {
+			Models struct {
+				AvailableModels []struct {
+					ModelID string `json:"modelId"`
+				} `json:"availableModels"`
+			} `json:"models"`
+		}
+		_ = json.Unmarshal(params, &p)
+		_ = json.Unmarshal(a.fix.SessionNew, &r)
+		for _, m := range r.Models.AvailableModels {
+			if m.ModelID == p.ModelID {
+				return map[string]any{}, nil
+			}
+		}
+		return nil, acp.NewInvalidParams(map[string]any{"modelId": p.ModelID})
 	case acp.AgentMethodSessionSetConfigOption:
 		var o struct {
 			ConfigID string `json:"configId"`
@@ -372,7 +444,7 @@ func (a *Agent) prompt(ctx context.Context, text string) (any, *acp.RequestError
 	cancelTurn := a.cancelTurn
 	a.mu.Unlock()
 	defer cancelTurn()
-	if a.fix.RefusePrompts {
+	if a.fix.RefusePrompts || (a.fix.RefuseNext != nil && a.fix.RefuseNext.Add(-1) >= 0) {
 		return nil, acp.NewAuthRequired(nil)
 	}
 	switch text {
@@ -442,6 +514,16 @@ func (a *Agent) prompt(ctx context.Context, text string) (any, *acp.RequestError
 		a.launch(ctx, DevServerTaskID, "local_bash")
 		a.text(ctx, "started")
 		return map[string]any{"stopReason": "end_turn"}, nil
+	case PromptBackgroundAgents:
+		a.backgroundAgents(ctx)
+		return map[string]any{"stopReason": "end_turn"}, nil
+	case PromptFinishAgents:
+		for _, id := range BackgroundAgentIDs {
+			a.update(ctx, claudeUpdate(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id + "-read", "status": "completed"}, id+"-call", "Read"))
+			a.update(ctx, claudeUpdate(map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "Report from " + id + "."}}, id+"-call", ""))
+			a.finish(id)
+		}
+		return map[string]any{"stopReason": "end_turn"}, nil
 	case PromptHold:
 		a.launch(ctx, HeldTaskID, "local_workflow")
 		a.text(ctx, "started")
@@ -453,6 +535,13 @@ func (a *Agent) prompt(ctx context.Context, text string) (any, *acp.RequestError
 	case PromptWorkflow:
 		a.workflow(ctx)
 		return map[string]any{"stopReason": "end_turn"}, nil
+	case PromptSpawn:
+		sleeper := exec.Command("sleep", "600")
+		if err := sleeper.Start(); err != nil {
+			return nil, acp.NewInternalError(map[string]any{"error": err.Error()})
+		}
+		a.text(ctx, "spawned "+strconv.Itoa(sleeper.Process.Pid))
+		return map[string]any{"stopReason": "end_turn"}, nil
 	case PromptWait:
 		select {
 		case <-cancelled:
@@ -462,7 +551,7 @@ func (a *Agent) prompt(ctx context.Context, text string) (any, *acp.RequestError
 	case PromptChatter, PromptThink:
 		usage, _ := json.Marshal(map[string]any{"sessionUpdate": "usage_update", "used": 1, "size": 100})
 		commands, _ := json.Marshal(map[string]any{"sessionUpdate": "available_commands_update", "availableCommands": []any{}})
-		thought, _ := json.Marshal(map[string]any{"sessionUpdate": "agent_thought_chunk", "content": map[string]any{"type": "text", "text": "."}})
+		thought, _ := json.Marshal(map[string]any{"sessionUpdate": "agent_thought_chunk", "messageId": "msg_think", "content": map[string]any{"type": "text", "text": "."}})
 		tick := time.NewTicker(ChatterInterval)
 		defer tick.Stop()
 		for {
@@ -482,7 +571,7 @@ func (a *Agent) prompt(ctx context.Context, text string) (any, *acp.RequestError
 		}
 	case PromptLongTool, PromptGoQuiet:
 		if text == PromptGoQuiet {
-			thought, _ := json.Marshal(map[string]any{"sessionUpdate": "agent_thought_chunk", "content": map[string]any{"type": "text", "text": "hm"}})
+			thought, _ := json.Marshal(map[string]any{"sessionUpdate": "agent_thought_chunk", "messageId": "msg_quiet", "content": map[string]any{"type": "text", "text": "hm"}})
 			a.update(ctx, thought)
 		} else {
 			a.update(ctx, demoTool("long-tool", "execute", "make build", "in_progress", nil))
@@ -502,6 +591,9 @@ func (a *Agent) prompt(ctx context.Context, text string) (any, *acp.RequestError
 		a.text(ctx, string(out))
 		return map[string]any{"stopReason": "end_turn"}, nil
 	}
+	if command, ok := strings.CutPrefix(text, PromptRunPrefix); ok {
+		return a.run(ctx, cancelled, command), nil
+	}
 	if strings.HasPrefix(text, coordhooks.ReportReminderLead) {
 		// The mock cannot run aether-internal.
 		a.text(ctx, ReminderReply)
@@ -511,6 +603,37 @@ func (a *Agent) prompt(ctx context.Context, text string) (any, *acp.RequestError
 		a.update(ctx, u)
 	}
 	return a.fix.Prompt.Result, nil
+}
+
+func (a *Agent) run(ctx context.Context, cancelled <-chan struct{}, command string) any {
+	runCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	go func() {
+		select {
+		case <-cancelled:
+			stop()
+		case <-runCtx.Done():
+		}
+	}()
+	cmd := exec.CommandContext(runCtx, "sh", "-c", command)
+	cmd.Stderr = os.Stderr
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		a.text(ctx, "run: "+err.Error())
+		return map[string]any{"stopReason": "end_turn"}
+	}
+	if err = cmd.Start(); err != nil {
+		a.text(ctx, "run: "+err.Error())
+		return map[string]any{"stopReason": "end_turn"}
+	}
+	sc := bufio.NewScanner(out)
+	for sc.Scan() {
+		a.text(ctx, sc.Text()+"\n")
+	}
+	if err = cmd.Wait(); err != nil && runCtx.Err() != nil {
+		return map[string]any{"stopReason": "cancelled"}
+	}
+	return map[string]any{"stopReason": "end_turn"}
 }
 
 const demoAnswer = "The totals now round to cents before they are returned.\n\n" +
@@ -552,6 +675,7 @@ func demoTool(id, kind, title, status string, extra map[string]any) json.RawMess
 func (a *Agent) demo(ctx context.Context, cancelled <-chan struct{}, write bool) any {
 	thought, _ := json.Marshal(map[string]any{
 		"sessionUpdate": "agent_thought_chunk",
+		"messageId":     "msg_demo",
 		"content":       map[string]any{"type": "text", "text": "The billing total should round to cents; read the module and its tests first."},
 	})
 	read := func(id, path string) []json.RawMessage {
@@ -742,6 +866,38 @@ func (a *Agent) sdk(ctx context.Context, message map[string]any) {
 	if frames {
 		_ = a.conn.SendNotification(ctx, "_claude/sdkMessage", map[string]any{"sessionId": session, "message": message})
 	}
+}
+
+func (a *Agent) backgroundAgents(ctx context.Context) {
+	descriptions := []string{"Audit the billing module", "Run the test suite"}
+	for i, id := range BackgroundAgentIDs {
+		call := id + "-call"
+		a.update(ctx, claudeUpdate(map[string]any{"sessionUpdate": "tool_call", "toolCallId": call, "kind": "think", "title": "Task", "status": "pending", "rawInput": map[string]any{}}, "", "Agent"))
+		a.update(ctx, claudeUpdate(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": call, "title": descriptions[i],
+			"rawInput": map[string]any{"description": descriptions[i], "prompt": descriptions[i] + ".", "subagent_type": "general-purpose"}}, "", "Agent"))
+		a.mu.Lock()
+		if a.live == nil {
+			a.live = map[string]string{}
+		}
+		a.live[id] = "local_agent"
+		a.mu.Unlock()
+		a.liveSet(ctx)
+	}
+	for _, id := range BackgroundAgentIDs {
+		u, _ := json.Marshal(map[string]any{"sessionUpdate": "tool_call_update", "toolCallId": id + "-call", "status": "completed",
+			"rawOutput": []any{map[string]any{"type": "text", "text": "Async agent launched successfully.\nagentId: " + id}},
+			"_meta":     map[string]any{"claudeCode": map[string]any{"toolName": "Agent", "toolResponse": map[string]any{"isAsync": true, "status": "async_launched", "agentId": id}}}})
+		a.update(ctx, u)
+	}
+	for _, id := range BackgroundAgentIDs {
+		a.update(ctx, claudeUpdate(map[string]any{"sessionUpdate": "tool_call", "toolCallId": id + "-read", "kind": "read", "title": "Read src/billing.js", "status": "pending"}, id+"-call", "Read"))
+	}
+	for i := range BusyCalls {
+		call := "busy-" + strconv.Itoa(i)
+		a.update(ctx, demoTool(call, "execute", "echo "+strconv.Itoa(i), "pending", nil))
+		a.update(ctx, demoTool(call, "execute", "echo "+strconv.Itoa(i), "completed", nil))
+	}
+	a.text(ctx, "The subagents are working.")
 }
 
 func (a *Agent) workflow(ctx context.Context) {

@@ -11,15 +11,41 @@ const (
 	// MaxSSHConnsPerServer stays below sshd's relayed handshake budget.
 	MaxSSHConnsPerServer = 48
 	// MaxHTTPConnsPerServer bounds a server's KindHTTP connections, apart
-	// from its SSH connections. Each carries one request at a time.
-	MaxHTTPConnsPerServer  = 8
-	MaxConnsPerDevice      = 16
-	MaxUnclaimedPerAddress = 3
+	// from its SSH connections. Each carries one request at a time; a
+	// request past them waits up to HTTPConnWait for one to come free.
+	MaxHTTPConnsPerServer = 8
+	// MaxHTTPWaitersPerServer bounds a server's requests that hold their
+	// body without a connection yet, including those one is being opened
+	// for.
+	MaxHTTPWaitersPerServer = 2 * MaxHTTPConnsPerServer
+	// MaxHTTPLongCallsPerServer bounds a server's connector tool calls
+	// that run past HTTPShortCall, so calls that wait leave the rest of
+	// its KindHTTP connections to short ones. The server enforces it.
+	MaxHTTPLongCallsPerServer = MaxHTTPConnsPerServer / 2
+	MaxConnsPerDevice         = 16
+	MaxUnclaimedPerAddress    = 3
 	// UnclaimedTTL is how long an unclaimed registration is kept.
 	UnclaimedTTL = 30 * time.Minute
 	// AttachDeadline is how long the edge waits for a data socket after
 	// sending open.
 	AttachDeadline = 10 * time.Second
+	// HTTPConnWait is how long a request waits for one of its server's
+	// KindHTTP connections before the edge refuses it with 503. It is
+	// longer than AttachDeadline, so a connection being opened for it
+	// attaches or fails first.
+	HTTPConnWait = 15 * time.Second
+	// HTTPShortCall is how long a connector tool call runs before it
+	// counts toward MaxHTTPLongCallsPerServer; one past that bound is
+	// ended then. It is well inside HTTPConnWait, so a request waiting for
+	// a connection gets one such a call gave up. The edge also sends it as
+	// Retry-After with the 503 of HTTPConnWait.
+	HTTPShortCall = 5 * time.Second
+	// HTTPReturnWait is how long after a claimed server's control channel
+	// ended the edge holds a request to it, among the server's
+	// MaxHTTPWaitersPerServer, for the server to enroll again, as it does
+	// after a restart. Connector clients give up on a server that fails
+	// several requests in a row, so a restart must not fail them.
+	HTTPReturnWait = 30 * time.Second
 	// HTTPIdleTimeout is how long the edge keeps an idle KindHTTP
 	// connection for the next request. A server keeps one open longer,
 	// so it is the edge that closes an idle one, never a request in

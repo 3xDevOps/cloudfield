@@ -138,11 +138,11 @@ func TestCLIJSONEnvelopeAndStableExit(t *testing.T) {
 func TestCLISkillNamesTheLiveRun(t *testing.T) {
 	status := protocol.CoordStatusResult{RunID: "run-current"}
 	var out bytes.Buffer
-	code, err := writeSkill(&out, &status)
+	code, err := writeSkill(&out, &status, coordhooks.OldCLI)
 	if err != nil || code != ExitOK {
 		t.Fatalf("skill = %d, %v", code, err)
 	}
-	if raw := out.String(); !strings.Contains(raw, "Role: ordinary\n") || !strings.Contains(raw, "Run: run-current\n") {
+	if raw := out.String(); !strings.Contains(raw, "Run: run-current\n") {
 		t.Fatalf("skill lost live identity: %s", raw)
 	}
 }
@@ -172,7 +172,7 @@ func TestCLISkillOutcomesFollowTheLaunchMode(t *testing.T) {
 			t.Setenv(coordtransport.WakeEnv, "")
 			status := protocol.CoordStatusResult{RunID: "run-current", Capabilities: tc.capabilities}
 			var out bytes.Buffer
-			if code, err := writeSkill(&out, &status); err != nil || code != ExitOK {
+			if code, err := writeSkill(&out, &status, coordhooks.OldCLI); err != nil || code != ExitOK {
 				t.Fatalf("skill = %d, %v", code, err)
 			}
 			raw := out.String()
@@ -217,7 +217,7 @@ func TestCLIGeneralSkillWithoutSocket(t *testing.T) {
 }
 
 func TestCLIHelpIsSocketIndependent(t *testing.T) {
-	for _, args := range [][]string{{"--help"}, {"send", "--help"}} {
+	for _, args := range [][]string{{"--help"}, {"send", "--help"}, {"subsession", "start", "--help"}, {"subsession", "start", "--harness", "codex", "-h"}, {"subsession", "fetch", "--help"}} {
 		t.Run(strings.Join(args, "_"), func(t *testing.T) {
 			var out bytes.Buffer
 			code, err := Run(context.Background(), args, Config{Socket: filepath.Join(t.TempDir(), "missing.sock"), Out: &out})
@@ -516,7 +516,7 @@ func TestCLISkillForAnAgentNamedApartFromItsCommand(t *testing.T) {
 		Capabilities: []string{protocol.MethodCoordInbox, protocol.MethodCoordReport},
 	}
 	var out bytes.Buffer
-	if code, err := writeSkill(&out, &status); err != nil || code != ExitOK {
+	if code, err := writeSkill(&out, &status, coordhooks.OldCLI); err != nil || code != ExitOK {
 		t.Fatalf("skill = %d, %v", code, err)
 	}
 	raw := out.String()
@@ -540,7 +540,7 @@ func TestCLISkillForCursorReportsCursorHooks(t *testing.T) {
 		Capabilities: []string{protocol.MethodCoordInbox},
 	}
 	var out bytes.Buffer
-	if code, err := writeSkill(&out, &status); err != nil || code != ExitOK {
+	if code, err := writeSkill(&out, &status, coordhooks.OldCLI); err != nil || code != ExitOK {
 		t.Fatalf("skill = %d, %v", code, err)
 	}
 	if raw := out.String(); !strings.Contains(raw, "Inbox hooks (cursor): missing") || strings.Contains(raw, "no packaged integration") {
@@ -556,7 +556,7 @@ func TestCLISkillForAntigravityReportsNoPackagedHooks(t *testing.T) {
 		Capabilities: []string{protocol.MethodCoordInbox},
 	}
 	var out bytes.Buffer
-	if code, err := writeSkill(&out, &status); err != nil || code != ExitOK {
+	if code, err := writeSkill(&out, &status, coordhooks.OldCLI); err != nil || code != ExitOK {
 		t.Fatalf("skill = %d, %v", code, err)
 	}
 	if raw := out.String(); !strings.Contains(raw, "Inbox hooks: no packaged integration for harness antigravity;") {

@@ -1,4 +1,5 @@
 import { memo, useMemo, useRef } from 'react'
+import { ProtectedMark } from '@/components/protected-mark'
 import { Slot } from '@/components/slots'
 import { AgentGlyph } from '@/components/ui/agent-glyph'
 import { Avatar } from '@/components/ui/avatar'
@@ -9,7 +10,7 @@ import { StatusDot, type Tone } from '@/components/ui/status-dot'
 import { runLabel, stateLabel, stateTitle, stateWords, toneOf } from '@/lib/status'
 import { useClock } from '@/lib/clock'
 import { cn } from '@/lib/utils'
-import { CardActionButton, cardAction, openCard, ReplyComposer, setReplying, useReply } from '@/routes/board/card-action'
+import { CardActionButton, cardAction, ReplyComposer, setReplying, useReply } from '@/routes/board/card-action'
 import type { BoardCard } from '@/routes/board/selectors'
 import { useStore } from '@/store'
 import { diffTotals } from '@/store/diff'
@@ -55,7 +56,8 @@ export const RunCard = memo(function RunCard({ card, agentName }: {
         >
           <div className="flex items-start gap-3">
             <AgentGlyph agent={run.harness} colored className="mt-0.75" />
-            <CardTitle onOpen={() => openCard(card, navigate)}>{title}</CardTitle>
+            <CardTitle onOpen={() => navigate('run', { runId: run.id })}>{title}</CardTitle>
+            {run.protected && <ProtectedMark className="mt-1.5" />}
           </div>
           {description && (
             <p className={cn('mt-0.5 text-ui-sm break-words', wideIndent, needsYou ? 'text-text' : 'text-muted', card.group === 'working' ? 'line-clamp-1' : 'line-clamp-2')}>

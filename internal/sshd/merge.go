@@ -160,7 +160,7 @@ func (s *Server) refuseRetainedRuns(ctx context.Context, ms store.MergeStore, a,
 		return nil
 	}
 	return &protocol.Error{Code: protocol.CodeInvalidState, Message: fmt.Sprintf(
-		"stop these first, then merge: finished sessions %s still keep their containers, which mount the members' agent logins; merge once the server releases them, or delete the sessions (aether delete <session-id>)",
+		"stop these first, then merge: finished sessions %s still keep their sandboxes, which mount the members' agent logins; merge once the server releases them, or delete the sessions (aether delete <session-id>)",
 		strings.Join(kept, ", "))}
 }
 
@@ -218,7 +218,7 @@ func (s *Server) memberMergePending(ctx context.Context, member domain.MemberID,
 	return out, nil
 }
 
-// memberMergeAccept merges under registerMu, so the last-admin check
+// memberMergeAccept merges under registerMu, so the last-super-admin check
 // holds, and authorizationMu, so no run or terminal is admitted for
 // either member while their rows move. Nothing changes, no terminal stops
 // and no lease is fenced, until the proposal is the caller's to accept as
@@ -390,11 +390,13 @@ func (s *Server) afterMerge(ctx context.Context, caller domain.MemberID, merge *
 	if err := s.removeAssistant(ctx, merge.AbsorbedID); err != nil {
 		slog.Warn("sshd: absorbed member's assistant cleanup failed", "merge", merge.ID, "error", err)
 	}
+	s.cfg.Runs.ForgetOMPAccount(ctx, merge.AbsorbedID)
 	var agentErr error
 	if s.cfg.Signing != nil {
 		agentErr = s.cfg.Signing.StopAgent(merge.AbsorbedID)
 	}
 	s.notifyDirectory()
+	s.accessChanged()
 	ev := events.Event{WorkspaceID: events.ServerScope, ActorID: merge.SurvivorID,
 		Payload: events.MemberMergedPayload{MergeID: merge.ID, SurvivorID: merge.SurvivorID, AbsorbedID: merge.AbsorbedID}}
 	// The merge is committed, so a failed publish is logged, not returned,
@@ -590,7 +592,7 @@ func (s *Server) memberMergeList(ctx context.Context, member domain.MemberID, _ 
 		return nil, rpcError(err)
 	}
 	survivor := member
-	if caller.Role == domain.RoleAdmin {
+	if caller.Role == domain.RoleSuperAdmin {
 		survivor = ""
 	}
 	merges, err := ms.ListMerges(ctx, survivor)
@@ -643,7 +645,7 @@ func (s *Server) planToWire(plan *store.MergePlan) (protocol.MemberMergePlan, *p
 	}
 	if keep := plan.Role(true, true); keep != role {
 		out.RoleWithKeepAdmin = string(keep)
-		out.KeepAdminRequired = plan.LeavesNoAdmin(role)
+		out.KeepAdminRequired = plan.LeavesNoSuperAdmin(role)
 	}
 	for _, side := range []store.MergeSnapshot{plan.Minted, plan.Proposer} {
 		m := side.Member
@@ -672,7 +674,13 @@ func snapshotToWire(snap store.MergeSnapshot, home, full bool) protocol.MergeMem
 	m := snap.Member
 	out := protocol.MergeMember{ID: string(m.ID), DisplayName: m.DisplayName, Role: string(m.Role), TailnetLogin: m.TailnetLogin,
 		Identities: []protocol.MergeIdentity{}, Devices: []protocol.MergeDevice{}, Runs: snap.Runs, Schedules: snap.Schedules,
-		Settings: settingsToWire(snap.Settings, home, full)}
+		Settings: settingsToWire(snap.Settings, home, full), OwnedWorkspaces: []string{}, GrantedWorkspaces: []string{}}
+	for _, w := range snap.OwnedWorkspaces {
+		out.OwnedWorkspaces = append(out.OwnedWorkspaces, string(w))
+	}
+	for _, w := range snap.GrantedWorkspaces {
+		out.GrantedWorkspaces = append(out.GrantedWorkspaces, string(w))
+	}
 	if m.PublicKey != "" {
 		out.PublicKeyFingerprint = fingerprintOf(m.PublicKey)
 	}

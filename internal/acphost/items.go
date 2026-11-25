@@ -161,6 +161,9 @@ type ToolTask struct {
 	Type string `json:"type,omitempty"`
 	// Status is running, completed, failed or stopped.
 	Status string `json:"status"`
+	// Workflow is the progress of a local_workflow task. A truncated item
+	// carries its rows without previews, or its name only.
+	Workflow *Workflow `json:"workflow,omitempty"`
 }
 
 type Location struct {
@@ -206,6 +209,9 @@ type Request struct {
 	URL        string          `json:"url,omitempty"`
 	Status     string          `json:"status"`
 	Answer     string          `json:"answer,omitempty"`
+	// RPCID is the agent's JSON-RPC id for the request, which the keeper
+	// sends again unchanged.
+	RPCID string `json:"rpc_id,omitempty"`
 }
 
 // Option is one answer a person can pick. Kind is the ACP permission option
@@ -276,6 +282,7 @@ func (it *Item) shrink() {
 		tc.RawInput = nil
 		tc.RawOutput = nil
 		tc.Content = nil
+		tc.Task = tc.Task.brief()
 		if len(tc.Locations) > 32 {
 			tc.Locations = tc.Locations[:32]
 		}
@@ -399,7 +406,7 @@ func (it Item) Wire(limit int) (b []byte, truncated bool, err error) {
 	}
 	if tc := cut.ToolCall; tc != nil {
 		brief.ToolCall = &ToolCall{ID: tc.ID, ParentID: tc.ParentID, ToolKind: tc.ToolKind, ToolName: tc.ToolName,
-			Subagent: tc.Subagent, Task: tc.Task, Status: tc.Status, ExitCode: tc.ExitCode}
+			Subagent: tc.Subagent, Task: tc.Task.named(), Status: tc.Status, ExitCode: tc.ExitCode}
 	}
 	if r := cut.Request; r != nil {
 		brief.Request = &Request{ID: r.ID, Kind: r.Kind, ToolCallID: r.ToolCallID, Status: r.Status, Answer: r.Answer}

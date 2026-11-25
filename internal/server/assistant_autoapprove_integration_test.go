@@ -90,10 +90,13 @@ func TestIntegrationAssistantAutoApprove(t *testing.T) {
 		}
 		return card, <-done
 	}
+	// Three launches of one kind would highlight that kind's rule instead.
 	for i := range 3 {
 		task := fmt.Sprintf("approved by hand %d", i)
 		env.rt.script(task, func(c *e2eContainer) { c.exitNow(0) })
-		if _, resp := answer(protocol.MethodRunLaunch, launch(task), task, true); resp.Error != nil {
+		params := launch(task)
+		params.NoFallback = i == 1
+		if _, resp := answer(protocol.MethodRunLaunch, params, task, true); resp.Error != nil {
 			t.Fatalf("approved run.launch = %+v", resp.Error)
 		}
 	}
@@ -160,7 +163,7 @@ func TestIntegrationAssistantAutoApprove(t *testing.T) {
 	})
 
 	_, graceSigner := writeClientKey(t)
-	grace := &domain.Member{DisplayName: "Grace", PublicKey: string(ssh.MarshalAuthorizedKey(graceSigner.PublicKey())), Color: "#911eb4", Role: domain.RoleAdmin}
+	grace := &domain.Member{DisplayName: "Grace", PublicKey: string(ssh.MarshalAuthorizedKey(graceSigner.PublicKey())), Color: "#911eb4", Role: domain.RoleSuperAdmin}
 	if err = env.srv.Store().CreateMember(ctx, grace); err != nil {
 		t.Fatal(err)
 	}

@@ -1,0 +1,34 @@
+package vm
+
+import (
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+
+	"github.com/3xDevOps/Aether/internal/guest/home"
+)
+
+// MonitorCommand is the aether-server subcommand a VM's unit runs.
+const MonitorCommand = "vm-monitor"
+
+type launch struct {
+	Shares []share      `json:"shares,omitempty"`
+	Home   *home.Config `json:"home,omitempty"`
+	Args   []string     `json:"args"`
+	// Reveal is each host path the unit's processes need, by whether they
+	// write it, bound back through the tmpfs that hides the data directory.
+	Reveal map[string]bool `json:"reveal,omitempty"`
+}
+
+func readLaunch(dir string) (launch, error) {
+	data, err := os.ReadFile(filepath.Join(dir, launchFile))
+	if err != nil {
+		return launch{}, fmt.Errorf("vm monitor: %w", err)
+	}
+	var l launch
+	if err := json.Unmarshal(data, &l); err != nil {
+		return launch{}, fmt.Errorf("vm monitor: decode %s: %w", launchFile, err)
+	}
+	return l, nil
+}

@@ -17,6 +17,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/jsonschema-go/jsonschema"
@@ -101,11 +102,79 @@ const MetaErrorCode = "aether/error_code"
 // about 50 seconds.
 const toolTimeout = 40 * time.Second
 
+// LongCalls bounds how many of a server's connector tool calls run past
+// After at once, so calls that wait cannot hold every connection the edge
+// has to the server. A call that reaches After with Max others already
+// past it ends early: itself if it is of an op that waits, else the
+// oldest of those that is, since calling one of them again is safe.
+type LongCalls struct {
+	After time.Duration
+	Max   int
+
+	mu   sync.Mutex
+	long []*longCall
+}
+
+type longCall struct {
+	cancel context.CancelCauseFunc
+	waits  bool
+}
+
+// errLongCalls is the cancellation cause of a call LongCalls ended.
+type errLongCalls struct {
+	after time.Duration
+	max   int
+}
+
+func (e errLongCalls) Error() string {
+	return fmt.Sprintf("ended early: this server runs at most %d connector calls longer than %s at once", e.max, e.after)
+}
+
+// watch returns ctx, cancelled with errLongCalls if the call is ended
+// early, and the func that ends the watch when the call returns.
+func (l *LongCalls) watch(ctx context.Context, waits bool) (context.Context, func()) {
+	if l == nil {
+		return ctx, func() {}
+	}
+	ctx, cancel := context.WithCancelCause(ctx)
+	c := &longCall{cancel: cancel, waits: waits}
+	done := false
+	t := time.AfterFunc(l.After, func() {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		if done {
+			return
+		}
+		if len(l.long) >= l.Max {
+			ended := errLongCalls{after: l.After, max: l.Max}
+			i := slices.IndexFunc(l.long, func(o *longCall) bool { return o.waits })
+			if waits || i < 0 {
+				cancel(ended)
+				return
+			}
+			l.long[i].cancel(ended)
+			l.long = slices.Delete(l.long, i, i+1)
+		}
+		l.long = append(l.long, c)
+	})
+	return ctx, func() {
+		t.Stop()
+		l.mu.Lock()
+		done = true
+		if i := slices.Index(l.long, c); i >= 0 {
+			l.long = slices.Delete(l.long, i, i+1)
+		}
+		l.mu.Unlock()
+		cancel(nil)
+	}
+}
+
 // calls are an op's two ways to call: read for lookups, act for what the op
 // does under its scope.
 type calls struct {
 	read, act Call
 	surface   Surface
+	long      *LongCalls
 }
 
 // Op is one operation. Destructive and OpenWorld are its MCP hints, read
@@ -122,11 +191,14 @@ type Op struct {
 	Methods                []string
 	Idempotent             bool
 	Destructive, OpenWorld bool
-	Does                   string
-	enums                  map[string][]any
-	defaults               map[Surface]map[string]fieldDefault
-	hidden                 map[Surface][]string
-	add                    func(srv *mcp.Server, t *mcp.Tool, c calls, o Op)
+	// waits marks an op that waits for a person or a launch and is safe
+	// to call again when ended early: LongCalls ends these first.
+	waits    bool
+	Does     string
+	enums    map[string][]any
+	defaults map[Surface]map[string]fieldDefault
+	hidden   map[Surface][]string
+	add      func(srv *mcp.Server, t *mcp.Tool, c calls, o Op)
 }
 
 // fieldDefault is an optional input's value on one surface when the
@@ -173,9 +245,22 @@ func opOf[In any](name, title string, scope Scope, idempotent bool, next, does s
 				ctx, cancel = context.WithTimeout(ctx, budget)
 				defer cancel()
 			}
+			ctx, unwatch := c.long.watch(ctx, o.waits)
+			defer unwatch()
 			stripIDPrefixes(&in)
 			summary, out, err := run(ctx, c, in)
 			if err != nil {
+				var ended errLongCalls
+				var mixed *untrustedError
+				if errors.As(context.Cause(ctx), &ended) && !errors.As(err, &mixed) {
+					again := "call again shortly"
+					if !o.waits && !o.ReadOnly() {
+						again = "check whether it took effect before calling again"
+					}
+					perr := &protocol.Error{Code: protocol.CodeUnavailable, Message: err.Error()}
+					errors.As(err, &perr)
+					err = &protocol.Error{Code: perr.Code, Data: perr.Data, Message: ended.Error() + "; " + again + ": " + perr.Message}
+				}
 				return failed(hinted(err, next)), nil, nil
 			}
 			if m, ok := out.(map[string]any); ok && !o.ReadOnly() {
@@ -207,6 +292,11 @@ const (
 
 func (o Op) hints(destructive, openWorld bool) Op {
 	o.Destructive, o.OpenWorld = destructive, openWorld
+	return o
+}
+
+func (o Op) waiting() Op {
+	o.waits = true
 	return o
 }
 
@@ -305,21 +395,21 @@ func (o Op) description(s Surface) string {
 }
 
 // Ops is the registry: every op either surface serves.
-var Ops = slices.Concat(readOps, launchOps, changesOps, writeOps, controlOps, actOps, prOps, memoryOps, watchOps, assistantOps, preferenceOps)
+var Ops = slices.Concat(readOps, launchOps, changesOps, writeOps, controlOps, actOps, prOps, memoryOps, watchOps, askOps, assistantOps, preferenceOps)
 
 // RegisterConnector adds to srv the ops a ChatGPT or Claude connector
 // serves whose scope is granted, so tools/list shows none the connector
-// cannot call.
-func RegisterConnector(srv *mcp.Server, call Call, granted func(Scope) bool) {
-	register(srv, Connector, call, func(o Op) bool { return o.Scope != "" && granted(o.Scope) })
+// cannot call. long, when set, bounds the calls that run long.
+func RegisterConnector(srv *mcp.Server, call Call, granted func(Scope) bool, long *LongCalls) {
+	register(srv, Connector, call, long, func(o Op) bool { return o.Scope != "" && granted(o.Scope) })
 }
 
 // RegisterAssistant adds to srv every op the assistant offers.
 func RegisterAssistant(srv *mcp.Server, call Call) {
-	register(srv, Assistant, call, func(o Op) bool { return o.Tier != TierNone })
+	register(srv, Assistant, call, nil, func(o Op) bool { return o.Tier != TierNone })
 }
 
-func register(srv *mcp.Server, s Surface, call Call, offered func(Op) bool) {
+func register(srv *mcp.Server, s Surface, call Call, long *LongCalls, offered func(Op) bool) {
 	for _, o := range Ops {
 		if !offered(o) {
 			continue
@@ -338,7 +428,7 @@ func register(srv *mcp.Server, s Surface, call Call, offered func(Op) bool) {
 		annotations := &mcp.ToolAnnotations{ReadOnlyHint: o.ReadOnly(), DestructiveHint: new(o.Destructive),
 			IdempotentHint: o.Idempotent, OpenWorldHint: new(o.OpenWorld)}
 		o.add(srv, &mcp.Tool{Name: o.Name, Title: o.Title, Description: o.description(s), Annotations: annotations},
-			calls{read: declared(ScopeRead), act: declared(o.Scope), surface: s}, o)
+			calls{read: declared(ScopeRead), act: declared(o.Scope), surface: s, long: long}, o)
 	}
 }
 
@@ -388,14 +478,32 @@ func hinted(err error, next string) error {
 func failed(err error) *mcp.CallToolResult {
 	res := &mcp.CallToolResult{}
 	code := protocol.CodeInternal
-	var perr *protocol.Error
+	var (
+		perr  *protocol.Error
+		uerr  *untrustedError
+		mixed = errors.As(err, &uerr)
+	)
 	if errors.As(err, &perr) {
 		err, code = errors.New(perr.Message), perr.Code
 	}
 	res.SetError(err)
+	if mixed {
+		b, _ := json.Marshal(map[string]any{"untrusted": uerr.untrusted})
+		res.Content = []mcp.Content{&mcp.TextContent{Text: err.Error() + "\n" + string(b)}}
+	}
 	res.Meta = mcp.Meta{MetaErrorCode: code}
 	return res
 }
+
+// untrustedError is a failure whose details include text other agents
+// wrote; they are returned beside the message under untrusted, never in it.
+type untrustedError struct {
+	err       *protocol.Error
+	untrusted any
+}
+
+func (e *untrustedError) Error() string { return e.err.Error() }
+func (e *untrustedError) Unwrap() error { return e.err }
 
 // retryable adds to a write's failure the key that repeats it safely when
 // the failure leaves unknown whether it happened.

@@ -23,13 +23,16 @@ Dispatch fresh-context subsessions on other agents and models, within what this
 session's owner allows, and manage them. A subsession cannot start subsessions.
   options [--harness <agent>]   whether you may start subsessions, the limits,
                                 and each agent and account with its state
-                                (ready, exhausted, not-installed, not-signed-in);
+                                (ready, exhausted, not-installed, not-signed-in,
+                                off: your session owner turned it off);
                                 --harness also lists that agent's models
   start --harness <agent> --purpose <words> (--task <text> | --task-file <path|->)
         [--model <id>] [--mode standard|enhanced|background]
         [--account <member-id>] [--idempotency-key <key>]
                                 start a subsession from your last published commit;
-                                commit first, uncommitted changes are not included
+                                commit first, uncommitted changes are not included;
+                                --account takes your session owner's account or
+                                one shared with them, as options lists
   list [--run-id <subsession>]  your subsessions with state, latest report, branch,
                                 and account
   cancel --run-id <subsession>  stop a subsession, or drop it from the queue
@@ -155,12 +158,72 @@ func readTask(task, file string, in io.Reader) (string, error) {
 func childSkill(status *protocol.CoordStatusResult) string {
 	switch {
 	case slices.Contains(status.Capabilities, protocol.MethodChildStart):
-		return "Subsessions: `aether-internal subsession start` dispatches a session on any installed agent and model with a completely fresh context, which can orchestrate its own subagents (aether-internal subsession --help). " +
-			"Use one instead of your own subagents for a complex task that splits into parallel parts and benefits from fresh-context sessions: it is a dispatch-and-forget shortcut for firing off part of a very complex task, or for when the user asks for session orchestration. Your own subagents suit small lookups and edits. " +
-			"Run `aether-internal subsession options` once, then `subsession start`; honor the number of subsessions and agents the user asks for. " +
-			"A subsession sees only its task text and your last commit, and cannot start subsessions. Its report reaches your inbox and wakes you; account for unfinished subsessions before reporting success. A subsession idle or waiting for over an hour is reported to your inbox: check it, then wake it with `send --to <subsession>` or stop it with `subsession cancel`.\n"
+		return "Subsessions: `aether-internal subsession start` runs part of your task as a separate Cloudfield session with a fresh context and its own container and branch, on any installed agent and model, on this session's account for this session's agent or your session owner's own account otherwise; its report reaches your inbox and wakes you. " +
+			"The majority of straightforward tasks can be done in one session: split parallel or bulky parts across your own subagents or workflows. They share your checkout, start in seconds, and their results land in your working tree. " +
+			"Reserve a subsession for a large, independent stream of work that needs its own branch or pull request, would run for hours, or needs another agent, model, or harness. Don't use subsessions in excess unless there is a need to use them over subagents/singular session workflows. Honor the number of subsessions and agents the user asks for. " +
+			"When to start one, the steps, the task format and the account rules: `aether-internal skill subsessions`. " +
+			"Account for unfinished subsessions before reporting success. A subsession idle or waiting for over an hour, or stopped on an error for a minute, is reported to your inbox: check it, then wake it with `send --to <subsession>` or stop it with `subsession cancel`.\n"
 	case slices.Contains(status.Capabilities, protocol.MethodChildOptions):
 		return "Subsessions: not available to this session now; `aether-internal subsession options` gives the reason. If the user asks for one, tell them that reason.\n"
 	}
 	return ""
+}
+
+const subsessionTopic = `Subsessions: separate Cloudfield sessions you start, then collect. Each has a fresh
+context and its own container, branch and setup time, and appears under this
+session in the dashboard, where people can watch and steer it.
+The majority of straightforward tasks can be done in one session: split
+parallel or bulky parts across your own subagents or workflows. They share your
+checkout, start in seconds, and their results land in your working tree. That
+includes reviews: a fresh subagent that did not write the change is an
+independent reviewer.
+Reserve a subsession for a large, independent stream of work that:
+- needs its own branch or pull request, or would conflict with your changes;
+- would run for hours;
+- or needs another agent, model, or harness, such as a review by another agent.
+Don't use subsessions in excess unless there is a need to use them over
+subagents/singular session workflows. When the user asks for subsessions, a
+number of them or particular agents, do exactly that. A subsession can use its
+own subagents.
+Steps:
+1. Commit what it needs: it starts from your last commit and sees only its task.
+2. aether-internal subsession options --harness <agent>: whether you may start
+   one, the limits, and each agent's state and models.
+3. aether-internal subsession start --harness <agent> [--model <id>]
+     --purpose "<3-8 words>" --task-file <file>
+   The task states the goal, the files it owns, the files it must not touch, how
+   to verify, and what its final report must contain. Use repository-relative
+   paths: it runs in another container.
+4. Keep working on your part. Its report arrives in your inbox. When only
+   subsessions remain, wait for them the way aether-internal skill says for this
+   session: report waiting --for agents where mail wakes you, otherwise
+   aether-internal inbox --wait 30 inside your turn. A success report is refused
+   while one is unfinished.
+5. aether-internal subsession fetch --run-id <id>, then merge or cherry-pick
+   refs/remotes/children/<id> and verify before you report success.
+Accounts: a subsession of this session's agent starts on this session's
+account; any other agent starts on your session owner's own sign-in.
+--account picks the owner's account or one a teammate shared with the owner,
+from the accounts options lists; a choice that is not signed in is refused
+with the reason. A choice the owner turned off (state off) is refused; pick
+one options lists as ready. This session's launch fallback can still move it
+to another account the owner left on, as for any launch.
+A subsession cannot start subsessions.
+`
+
+func writeSubsessionSkill(out io.Writer, status *protocol.CoordStatusResult) (int, error) {
+	text := "No mounted session socket: whether this session may start subsessions cannot be discovered.\n"
+	switch {
+	case status != nil && slices.Contains(status.Capabilities, protocol.MethodChildStart):
+		text = subsessionTopic
+	case status != nil:
+		text = childSkill(status)
+	}
+	if text == "" {
+		text = "Subsessions: this server offers none.\n"
+	}
+	if _, err := io.WriteString(out, text); err != nil {
+		return ExitFailure, fmt.Errorf("write subsessions skill: %w", err)
+	}
+	return ExitOK, nil
 }

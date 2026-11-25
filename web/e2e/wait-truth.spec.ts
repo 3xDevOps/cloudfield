@@ -7,6 +7,11 @@ import { launchWaits, missing, showEvidence, spec, tasks, undelivered, unreadabl
 
 test.skip(!dockerReachable(), 'a session needs a reachable Docker daemon')
 
+// The unknown wait was last read 14 minutes ago, and a time that is not today
+// shows its date, so the browser runs where it is now about noon.
+const hoursToNoon = 12 - new Date().getUTCHours()
+test.use({ timezoneId: `Etc/GMT${hoursToNoon > 0 ? '-' : '+'}${Math.abs(hoursToNoon)}` })
+
 test('a waiting run says what Aether last read, never a status it could not read', async ({ page, aether }) => {
   const { alice, ids } = await launchWaits(aether)
   await showEvidence(page, ids)
@@ -42,7 +47,7 @@ test('a waiting run says what Aether last read, never a status it could not read
   await expect(stale).not.toContainText('Turn ended')
 
   // Only the broken wait asks for a person; the others are quiet.
-  const sidebar = page.getByRole('navigation', { name: 'Aether' }).getByRole('region', { name: 'Sessions' })
+  const sidebar = page.getByRole('navigation', { name: 'Cloudfield' }).getByRole('region', { name: 'Sessions' })
   await expect(sidebar.getByRole('button', { name: new RegExp(`^Needs you · .*${tasks.broken}`) })).toBeVisible()
   for (const task of [tasks.condition, tasks.unknown, tasks.fault, tasks.stale]) {
     await expect(sidebar.getByRole('button', { name: new RegExp(task) })).not.toHaveAccessibleName(/^Needs you/)
@@ -71,5 +76,5 @@ test('a waiting run says what Aether last read, never a status it could not read
     await expect(page.getByRole('main').getByText(words, { exact: false }).first()).toBeVisible()
     await page.screenshot({ path: test.info().outputPath(`desktop-header-${kind}.png`) })
   }
-  await expect(page.getByRole('button', { name: 'Workflow: Stale wait' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Session tree: Stale wait' })).toBeVisible()
 })

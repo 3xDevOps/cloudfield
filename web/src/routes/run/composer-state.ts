@@ -1,5 +1,4 @@
 import { create } from 'zustand'
-import type { StreamState } from '@/lib/acp-stream'
 import { plainReason } from '@/lib/reasons'
 import { modeLabel } from '@/routes/run/agent-name'
 import { useStore } from '@/store'
@@ -27,8 +26,8 @@ export interface ComposerDraft {
 
 const noDraft: ComposerDraft = { body: '', images: [] }
 
-// Not a root-store slice: every write there rewrites `aether.ui`, and one made
-// during an event drain would reach the textarea a frame late.
+// Not a root-store slice: a write there made during an event drain would reach
+// the textarea a frame late.
 const useDrafts = create<Record<string, ComposerDraft>>(() => ({}))
 
 export function composerDraft(runID: string): ComposerDraft {
@@ -107,7 +106,12 @@ const releasedReason = /^retained container (?:expired|unavailable|reclaimed for
 
 export function composerBlock(run: RunRecord, maySteer: boolean, canReopen: boolean): string | null {
   if (isTerminal(run.status)) {
-    if (canReopen) return 'This session has finished. Relaunch it to continue the chat and files.'
+    if (canReopen) {
+      const before = run.container_retained_until
+        ? ` before ${new Date(run.container_retained_until).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}`
+        : ''
+      return `This session has finished. Relaunch it${before} to continue the chat and files.`
+    }
     return releasedReason.test(run.reason ?? '') ? `This session has finished. ${plainReason(run.reason!)}.` : 'This session has finished.'
   }
   if (run.status === 'queued' || run.status === 'provisioning') return 'The agent is still starting.'
@@ -115,17 +119,17 @@ export function composerBlock(run: RunRecord, maySteer: boolean, canReopen: bool
   return null
 }
 
-export interface EnhancedGate {
+interface EnhancedGate {
   reason: string
   interrupt?: boolean
 }
 
-export function enhancedBlock({ run, maySteer, canReopen, stream, streamError, sessionLive, pending, hasLease }: {
+/** The gates that hold whatever the stream is doing: the caller keeps the box through a reconnect. */
+export function enhancedBlock({ run, maySteer, canReopen, refused, sessionLive, pending, hasLease }: {
   run: RunRecord
   maySteer: boolean
   canReopen: boolean
-  stream: StreamState | undefined
-  streamError?: string
+  refused: string | undefined
   sessionLive: boolean
   pending: number
   hasLease: boolean
@@ -134,9 +138,9 @@ export function enhancedBlock({ run, maySteer, canReopen, stream, streamError, s
   if (run.mode === 'headless') return { reason: 'Background sessions take no input.' }
   const base = composerBlock(run, maySteer, canReopen)
   if (base) return { reason: base }
-  if (stream === 'refused') return { reason: streamError ?? 'The agent stream was refused.' }
-  if (stream !== 'live') return { reason: 'Connecting to the agent…' }
-  if (!sessionLive) return { reason: 'The agent is not running.' }
+  if (refused) return { reason: refused }
+  // A message to a sleeping session wakes it.
+  if (!sessionLive && !run.asleep_since) return { reason: 'The agent is not running.' }
   if (pending > 0 && hasLease) return { reason: 'Answer the request above to continue.', interrupt: true }
   return null
 }

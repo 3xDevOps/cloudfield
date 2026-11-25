@@ -142,6 +142,7 @@ func listWorkspaces(ctx context.Context, c calls, _ struct{}) (string, any, erro
 		Name        string `json:"name"`
 		Installed   bool   `json:"installed"`
 		SignedIn    *bool  `json:"signed_in,omitempty"`
+		SignedOut   string `json:"signed_out,omitempty"`
 		Enhanced    bool   `json:"enhanced"`
 		DefaultMode string `json:"default_mode"`
 	}
@@ -151,7 +152,8 @@ func listWorkspaces(ctx context.Context, c calls, _ struct{}) (string, any, erro
 	}
 	rows := make([]agent, 0, len(agents.Agents))
 	for _, a := range agents.Agents {
-		rows = append(rows, agent{Name: a.Name, Installed: a.Installed, SignedIn: a.LoginFound,
+		in, out := signedIn(a)
+		rows = append(rows, agent{Name: a.Name, Installed: a.Installed, SignedIn: in, SignedOut: out,
 			Enhanced: a.Enhanced != "none" && a.EnhancedInstalled, DefaultMode: a.DefaultMode})
 	}
 	out := map[string]any{"workspaces": workspaces, "agents": rows}
@@ -166,16 +168,18 @@ func listWorkspaces(ctx context.Context, c calls, _ struct{}) (string, any, erro
 // report are written by agents, so they sit under untrusted; needs_you is
 // a fixed label for the attention kind.
 type runRow struct {
-	ID          string   `json:"id"`
-	State       string   `json:"state"`
-	Activity    string   `json:"activity,omitempty"`
-	NeedsYou    string   `json:"needs_you,omitempty"`
-	WorkspaceID string   `json:"workspace_id"`
-	Workspace   string   `json:"workspace,omitempty"`
-	Harness     string   `json:"harness"`
-	CreatedAt   string   `json:"created_at"`
-	URL         string   `json:"url,omitempty"`
-	Untrusted   *runText `json:"untrusted,omitempty"`
+	ID          string `json:"id"`
+	State       string `json:"state"`
+	Activity    string `json:"activity,omitempty"`
+	NeedsYou    string `json:"needs_you,omitempty"`
+	WorkspaceID string `json:"workspace_id"`
+	Workspace   string `json:"workspace,omitempty"`
+	Harness     string `json:"harness"`
+	CreatedAt   string `json:"created_at"`
+	URL         string `json:"url,omitempty"`
+	// WaitingUntil holds the specs of the session's pending wait conditions.
+	WaitingUntil []string `json:"waiting_until,omitempty"`
+	Untrusted    *runText `json:"untrusted,omitempty"`
 }
 
 type runText struct {
@@ -190,9 +194,25 @@ func runTitle(r protocol.Run) string {
 }
 
 func rowOf(r protocol.Run, l links, workspaces map[string]string) runRow {
-	return runRow{ID: r.ID, State: r.Status, Activity: r.Activity, WorkspaceID: r.WorkspaceID, Workspace: workspaces[r.WorkspaceID],
+	row := runRow{ID: r.ID, State: r.Status, Activity: r.Activity, WorkspaceID: r.WorkspaceID, Workspace: workspaces[r.WorkspaceID],
 		Harness: r.Harness, CreatedAt: r.CreatedAt, URL: l.run(r.ID),
 		Untrusted: &runText{Title: runTitle(r), Reason: clip(r.Reason, maxReport), Wait: clip(r.Wait.Text(time.Now()), maxReport)}}
+	for _, w := range r.WaitConditions {
+		if w.State == protocol.WaitPending {
+			row.WaitingUntil = append(row.WaitingUntil, w.Spec)
+		}
+	}
+	return row
+}
+
+// waitText is the part of a wait condition that can carry GitHub's or
+// another agent's text: check names, a session's reason, read errors.
+type waitText struct {
+	ID                string `json:"id"`
+	Summary           string `json:"summary,omitempty"`
+	Detail            string `json:"detail,omitempty"`
+	LastError         string `json:"last_error,omitempty"`
+	LastDeliveryError string `json:"last_delivery_error,omitempty"`
 }
 
 func rowLimit(n int) int {
@@ -237,7 +257,9 @@ func listRuns(ctx context.Context, c calls, in connectorListRunsInput) (string, 
 	}
 	waiting := map[string]string{}
 	for _, it := range items {
-		waiting[it.RunID] = attentionLabel(it.Kind)
+		if it.Kind != protocol.AttentionKindReady {
+			waiting[it.RunID] = attentionLabel(it.Kind)
+		}
 	}
 	words := strings.Fields(strings.ToLower(in.Query))
 	slices.SortStableFunc(res.Runs, func(a, b protocol.Run) int { return strings.Compare(b.CreatedAt, a.CreatedAt) })
@@ -387,14 +409,38 @@ func getRun(ctx context.Context, c calls, in getRunInput) (string, any, error) {
 	}
 	row := rowOf(r, l, nil)
 	untrusted := map[string]any{"run": row.Untrusted, "task": clip(r.Task, maxText)}
+	if r.ModelError != "" {
+		untrusted["model_error"] = clip(r.ModelError, maxReport)
+	}
 	row.Untrusted = nil
 	receipt := runReceipt(r, l, book)
 	out := map[string]any{"run": row, "launch": receipt, "branch": r.Branch,
 		"paused": r.Paused, "pending_inputs": len(r.PendingInputs), "finished_at": r.FinishedAt, "review": r.Review, "untrusted": untrusted}
 	summary := fmt.Sprintf("Session %s is %s on %s.", r.ID, r.Status, accountName(receipt))
+	if len(r.WaitConditions) > 0 {
+		waits := make([]protocol.WaitCondition, len(r.WaitConditions))
+		var texts []waitText
+		for i, w := range r.WaitConditions {
+			if w.Summary != "" || w.Detail != "" || w.LastError != "" || w.LastDeliveryError != "" {
+				texts = append(texts, waitText{ID: w.ID, Summary: clip(w.Summary, maxReport), Detail: clip(w.Detail, maxReport),
+					LastError: clip(w.LastError, maxReport), LastDeliveryError: clip(w.LastDeliveryError, maxReport)})
+			}
+			w.Summary, w.Detail, w.LastError, w.LastDeliveryError = "", "", "", ""
+			waits[i] = w
+		}
+		out["wait_conditions"] = waits
+		if len(texts) > 0 {
+			untrusted["wait_conditions"] = texts
+		}
+	}
+	if len(row.WaitingUntil) > 0 {
+		summary += " Waiting until " + strings.Join(row.WaitingUntil, " or ") + "."
+	}
 	for _, it := range items {
 		if it.RunID == r.ID {
-			out["needs_you"] = attentionRowOf(it, l)
+			if it.Kind != protocol.AttentionKindReady {
+				out["needs_you"] = attentionRowOf(it, l)
+			}
 			summary += " " + attentionLabel(it.Kind) + "."
 		}
 	}
@@ -494,7 +540,7 @@ func runHistory(ctx context.Context, c calls, in historyInput) (string, any, err
 	if err != nil {
 		return "", nil, err
 	}
-	untrusted := map[string]any{"reports": reps}
+	untrusted := map[string]any{"reports": reps[:min(len(reps), limit)]}
 	out := map[string]any{"run_id": r.ID, "mode": r.Mode, "untrusted": untrusted}
 	if r.ACP {
 		var before int64
@@ -701,7 +747,7 @@ func runChanges(ctx context.Context, c calls, in changesInput) (string, any, err
 	}
 	if in.IncludeDiff {
 		var diff protocol.RunGitDiffResult
-		switch err := c.read(ctx, protocol.MethodRunGitDiff, protocol.RunGitDiffParams{RunID: r.ID, Repo: in.Repo}, &diff); {
+		switch err := c.read(ctx, protocol.MethodRunGitDiff, protocol.RunGitDiffParams{RunID: r.ID, Repo: in.Repo, Base: true}, &diff); {
 		case err != nil:
 			out["diff_error"] = err.Error()
 		case diff.Error != "":
@@ -754,6 +800,13 @@ func runChanges(ctx context.Context, c calls, in changesInput) (string, any, err
 			}
 			if next := in.DiffFile + len(page); next < len(files) {
 				out["next_diff_file"] = next
+			}
+			if page == nil {
+				page = []string{}
+				out["diff_note"] = "tracked files in the worktree match the merge base with " + cmp.Or(diff.BaseRef, "the session's base") + "; untracked files are not in a diff"
+				if diff.Output.Truncated {
+					out["diff_note"] = "the server cut the diff output before any file; the diff is not known to be empty"
+				}
 			}
 			untrusted["diff"] = page
 		}

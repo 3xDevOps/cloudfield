@@ -28,8 +28,10 @@ var (
 
 // registration is one authenticated control channel.
 type registration struct {
-	id     string
-	name   string
+	id   string
+	name string
+	// origin is the relay origin the server enrolled at.
+	origin string
 	policy edgeproto.AccessPolicy
 	addr   netip.Prefix
 	ws     *websocket.Conn
@@ -46,7 +48,11 @@ type registration struct {
 	// message before it, and reg is in Relay.servers sooner, so send
 	// waits for it.
 	ready chan struct{}
-	// claimed, directory and hasDirectory are guarded by Relay.mu.
+	// unenrolled is set once the edge removes the server, before it
+	// tells the server.
+	unenrolled bool
+	// claimed, unenrolled, directory and hasDirectory are guarded by
+	// Relay.mu.
 	// directory is the latest directory an unclaimed server pushed: it
 	// pushes one as it accepts a claim, which may arrive before the edge
 	// recorded the claim.
@@ -132,7 +138,7 @@ func (r *Relay) serveControl(w http.ResponseWriter, req *http.Request) {
 	}
 	defer func() { _ = ws.CloseNow() }()
 	ws.SetReadLimit(edgeproto.MaxControlMessageSize)
-	reg, err := r.enroll(ws, edgeproto.RateLimitKey(remote.Addr()))
+	reg, err := r.enroll(ws, edgeproto.RateLimitKey(remote.Addr()), r.originOf(req))
 	if err != nil {
 		r.countRefusal("enrollment refused")
 		slog.Info("relay: enrollment refused", "client", remote, "error", err)
@@ -142,8 +148,9 @@ func (r *Relay) serveControl(w http.ResponseWriter, req *http.Request) {
 	r.serveRegistration(reg)
 }
 
-// enroll runs the challenge and hello exchange and registers the server.
-func (r *Relay) enroll(ws *websocket.Conn, addr netip.Prefix) (*registration, error) {
+// enroll runs the challenge and hello exchange and registers the server,
+// which dialed origin.
+func (r *Relay) enroll(ws *websocket.Conn, addr netip.Prefix, origin string) (*registration, error) {
 	ctx, cancel := context.WithTimeoutCause(r.ctx, handshakeTimeout, errHandshakeTimeout)
 	defer cancel()
 	// The handshake's I/O is not bound to ctx, which would drop the socket
@@ -154,7 +161,7 @@ func (r *Relay) enroll(ws *websocket.Conn, addr netip.Prefix) (*registration, er
 	defer stop()
 	nonce := make([]byte, edgeproto.NonceSize)
 	_, _ = rand.Read(nonce) // crypto/rand.Read never returns an error.
-	if err := writeControl(context.Background(), ws, edgeproto.Challenge{Version: edgeproto.Version, Nonce: nonce, Origin: r.origin}); err != nil {
+	if err := writeControl(context.Background(), ws, edgeproto.Challenge{Version: edgeproto.Version, Nonce: nonce, Origin: origin}); err != nil {
 		return nil, fmt.Errorf("relay: send challenge: %w", cmp.Or(context.Cause(ctx), err))
 	}
 	m, err := readControl(context.Background(), ws)
@@ -175,7 +182,7 @@ func (r *Relay) enroll(ws *websocket.Conn, addr netip.Prefix) (*registration, er
 	if err != nil {
 		return nil, err
 	}
-	id, err := edgeproto.VerifyEnrollment(hostKey, r.origin, nonce, hello.Signature)
+	id, err := edgeproto.VerifyEnrollment(hostKey, origin, nonce, hello.Signature)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +199,7 @@ func (r *Relay) enroll(ws *websocket.Conn, addr netip.Prefix) (*registration, er
 		return nil, fmt.Errorf("relay: claim state of %s: %w", id, err)
 	}
 
-	reg := &registration{id: id, name: hello.Name, policy: policy, version: version, agentVersion: hello.AgentVersion, addr: addr, ws: ws,
+	reg := &registration{id: id, name: hello.Name, origin: origin, policy: policy, version: version, agentVersion: hello.AgentVersion, addr: addr, ws: ws,
 		claimed: claimed, turn: make(chan struct{}, 1), ready: make(chan struct{})}
 	reg.ctx, reg.cancel = context.WithCancelCause(r.ctx)
 	r.mu.Lock()
@@ -208,6 +215,10 @@ func (r *Relay) enroll(ws *websocket.Conn, addr netip.Prefix) (*registration, er
 	}
 	old := r.servers[id]
 	r.servers[id] = reg
+	if a := r.away[id]; a != nil {
+		close(a.back)
+		delete(r.away, id)
+	}
 	r.mu.Unlock()
 	if old != nil {
 		old.cancel(errReplaced)
@@ -217,12 +228,12 @@ func (r *Relay) enroll(ws *websocket.Conn, addr netip.Prefix) (*registration, er
 	if claimed {
 		state = edgeproto.StateClaimed
 	}
-	if err := reg.write(edgeproto.Ready{ServerID: id, State: state, EdgeKey: r.pub}); err != nil {
+	if err := reg.write(edgeproto.Ready{ServerID: id, State: state, EdgeKey: r.pub, RelayOrigins: r.announced}); err != nil {
 		r.unregister(reg, err)
 		return nil, err
 	}
 	close(reg.ready)
-	slog.Info("relay: server enrolled", "server", id, "state", state, "protocol", version, "agent_version", hello.AgentVersion)
+	slog.Info("relay: server enrolled", "server", id, "state", state, "protocol", version, "agent_version", hello.AgentVersion, "origin", origin)
 	return reg, nil
 }
 
@@ -258,11 +269,57 @@ func (r *Relay) admitUnclaimedLocked(addr netip.Prefix, serverID string) error {
 
 func (r *Relay) unregister(reg *registration, cause error) {
 	reg.cancel(cause)
+	now := time.Now()
 	r.mu.Lock()
-	if r.servers[reg.id] == reg {
-		delete(r.servers, reg.id)
+	defer r.mu.Unlock()
+	if r.servers[reg.id] != reg {
+		return
 	}
-	r.mu.Unlock()
+	delete(r.servers, reg.id)
+	if !returns(reg) {
+		return
+	}
+	for id, a := range r.away {
+		if now.Sub(a.since) >= r.returnWait {
+			delete(r.away, id)
+		}
+	}
+	if r.away[reg.id] == nil {
+		r.away[reg.id] = &absence{since: now, back: make(chan struct{})}
+	}
+}
+
+// returns reports whether requests wait for the server of reg, which
+// ended, to enroll again: it was claimed and did not leave the edge.
+// Relay.mu guards claimed and unenrolled.
+func returns(reg *registration) bool {
+	return reg.claimed && !reg.unenrolled && !errors.Is(context.Cause(reg.ctx), errUnenrolled)
+}
+
+// awayLocked returns serverID's absence within returnWait of its start,
+// or nil. A claimed registration that ended but is not unregistered yet
+// starts one, which unregister keeps.
+func (r *Relay) awayLocked(serverID string, now time.Time) *absence {
+	a := r.away[serverID]
+	if a == nil {
+		reg := r.servers[serverID]
+		if reg == nil || reg.ctx.Err() == nil || !returns(reg) {
+			return nil
+		}
+		a = &absence{since: now, back: make(chan struct{})}
+		r.away[serverID] = a
+	}
+	if now.Sub(a.since) >= r.returnWait {
+		return nil
+	}
+	return a
+}
+
+// absence is a claimed server's time away from the edge, from when its
+// control channel ended; back is closed when it enrolls again.
+type absence struct {
+	since time.Time
+	back  chan struct{}
 }
 
 // serveRegistration reads the server's messages until the control channel

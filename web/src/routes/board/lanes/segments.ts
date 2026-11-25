@@ -49,7 +49,7 @@ function stateOf(status: RunStatus, state?: string): SegmentState {
   return outcomeState(status) ?? 'running'
 }
 
-export interface SegmentInput {
+interface SegmentInput {
   run: RunRecord
   /** The viewer's presentation of the run now. */
   shown: PresentationState
@@ -62,7 +62,7 @@ export interface SegmentInput {
 /**
  * The run's bar from creation to its end or now. Status history sets each
  * span; the span since the last change shows the viewer's own presentation,
- * which alone knows Needs you, Paused and Ready for review. Spans before the
+ * which alone knows Needs you, Paused and Finished: review. Spans before the
  * history floor are unloaded: `stateChangedAt` moves on status changes only,
  * so it cannot vouch for activity changes the unread history may hold.
  */

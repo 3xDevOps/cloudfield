@@ -1,31 +1,35 @@
-# Aether documentation
+# Cloudfield documentation
 
-These guides cover installing, using and extending Aether, a self-hosted server
-that runs coding agents for you and your team. If you are new, start with the
-[quickstart](quickstart.md).
+These guides cover installing, using and extending Cloudfield, a self-hosted
+server that runs coding agents for you and your team. If you are new, start with
+the [quickstart](quickstart.md).
 
 ## Concepts
 
 | Term | Meaning | Guide |
 | --- | --- | --- |
-| Server | `aether-server`, the Linux program that runs agents in Docker containers and stores your workspaces. Clients reach it over SSH, on port `2222` by default, over a tailnet, or through an edge. | [install.md](install.md) |
-| Client | What you use to reach a server: the `aether` CLI (Linux, macOS, Windows), the desktop app, or the Android app. | [install.md](install.md) |
-| Dashboard | The web app for sessions, agents, files and settings. The desktop app, `aether gui` and the Android app show it, and the server can host it on a tailnet. | [networking.md](networking.md#the-dashboard) |
+| Server | `cloudfield-server`, the Linux program that runs agents in Docker containers or virtual machines and stores your workspaces. Clients reach it over SSH, on port `2222` by default, over a tailnet, or through an edge. | [install.md](install.md) |
+| Client | What you use to reach a server: the `cloudfield` CLI (Linux, macOS, Windows), the desktop app, or the Android app. | [install.md](install.md) |
+| Dashboard | The web app for sessions, agents, files and settings. The desktop app, `cloudfield gui` and the Android app show it, and the server can host it on a tailnet. | [networking.md](networking.md#the-dashboard) |
 | Tailnet | A private network made with Tailscale. On a tailnet the server can sign people in by their Tailscale login and host the dashboard. | [networking.md](networking.md) |
-| Edge | A relay with GitHub sign-in that servers and clients both dial out to, so neither needs an open port. The project runs one at `https://edge.onaether.dev`, and you can run your own. | [edge.md](edge.md) |
-| Claim link | The link `aether-server setup` prints. Whoever uses it first, in the desktop app or with `aether link --claim`, becomes the server's administrator. | [quickstart.md](quickstart.md#2-start-the-server) |
-| Member | A person with an account on a server. Each member has a role: viewer, collaborator (the default) or admin. | [teams.md](teams.md) |
-| Administrator | A member with the admin role, who manages members, workspaces and settings. The first person to link a fresh server becomes one. | [teams.md](teams.md) |
-| Workspace | One repository and its base branch (the branch new sessions start from), plus the sessions, notes and history that belong to it. | [teams.md](teams.md) |
+| Edge | A relay with GitHub sign-in that servers and clients both dial out to, so neither needs an open port. The project runs one at `https://edge.cloudfield.ai`, and you can run your own. | [edge.md](edge.md) |
+| Claim link | The link `cloudfield-server setup` prints. Whoever uses it first, in the desktop app or with `cloudfield link --claim`, becomes the server's super admin. | [quickstart.md](quickstart.md#2-start-the-server) |
+| Member | A person with an account on a server. Each member has a role: viewer, collaborator (the default), admin or super admin. | [teams.md](teams.md#roles) |
+| Super admin | A member with the super admin role: admin in every workspace, and the only one who manages members, roles and the server itself. The first person to link a fresh server becomes one. | [teams.md](teams.md#roles) |
+| Admin | A member who administers the workspaces they own and uses the ones they are granted. | [teams.md](teams.md#roles) |
+| Workspace owner | The admin or super admin who owns a workspace. A workspace has exactly one, the member who created it until a super admin changes it. | [teams.md](teams.md#workspace-access) |
+| Grant | Lets one member into one workspace. Without a grant, a collaborator or viewer cannot see the workspace at all. | [teams.md](teams.md#workspace-access) |
+| Workspace | One repository and its base branch (the branch new sessions start from), plus the sessions, notes and history that belong to it. Members reach only the workspaces they own or were granted. | [teams.md](teams.md) |
 | Source mirror | A workspace imported from GitHub or another Git host follows that repository: the server's mirror fetches it read-only and moves the base branch forward. A workspace without one is local-only, and collaborators push its base branch. | [teams.md](teams.md#source-mirror) |
 | Publish destination | The repository sessions push their branches to, shown as **Publish changes to**: the source repository, a fork, or none. | [teams.md](teams.md#workspaces) |
-| Session | One agent working on one task in its own container, with its own checkout of the workspace and optionally of other workspaces ([extra repos](quickstart.md#working-across-repos)). A closed session keeps its container for 7 days, so you can relaunch it. | [quickstart.md](quickstart.md) |
-| Session branch | Each session commits to its own branch, `aether/run-<task>-<id>`, in the workspace's repository on the server. The session's **Changes** view shows its diff and has **Publish…**. | [quickstart.md](quickstart.md#8-review-and-publish-the-result) |
+| Sandbox | What a session or environment runs in on the server: a Docker container, or a Cloud Hypervisor virtual machine when the server runs with `session-runtime vm`. | [install.md](install.md#hosts-for-vm-sessions) |
+| Session | One agent working on one task in its own sandbox, with its own checkout of the workspace and optionally of other workspaces ([extra repos](quickstart.md#working-across-repos)). A closed session keeps its sandbox for 30 days, so you can relaunch it. | [quickstart.md](quickstart.md) |
+| Session branch | Each session commits to its own branch, `cloudfield/run-<task>-<id>` (`aether/run-<task>-<id>` for older sessions), in the workspace's repository on the server. The session's **Changes** view shows its diff and has **Publish…**. | [quickstart.md](quickstart.md#8-review-and-publish-the-result) |
 | Board | The dashboard page that groups sessions into **Needs you**, **Working** and **Finished**. | [quickstart.md](quickstart.md#7-watch-it) |
-| Environment | Your own container on the server, opened from **Environment** in the dashboard or with `aether terminal`. Your sessions start from its image: agents you install reach them at once, other tools only after **Save environment**. | [environments.md](environments.md) |
+| Environment | Your own sandbox on the server, opened from **Environment** in the dashboard or with `cloudfield terminal`. Your sessions start from its image: agents you install reach them at once, other tools only after **Save environment**. | [environments.md](environments.md) |
 | Home | Your persistent directory on the server, mounted as `$HOME` in your environment and in every session you launch. Installed agents (`~/.local/bin`), their logins and their configuration live there. | [environment-home.md](environment-home.md) |
 | Standard image | The container image an environment starts from until its member saves their own, `ghcr.io/3xdevops/aether-standard`. | [environments.md](environments.md) |
-| Agent | A coding CLI a session starts: Claude Code, Codex, OpenCode, pi, oh-my-pi (`omp`), GitHub Copilot CLI, Gemini CLI, Cursor CLI, Antigravity CLI, or one you add. Aether's code calls these harnesses. | [harnesses.md](harnesses.md) |
+| Agent | A coding CLI a session starts: Claude Code, Codex, OpenCode, pi, oh-my-pi (`omp`), GitHub Copilot CLI, Gemini CLI, Cursor CLI, Antigravity CLI, or one you add. Cloudfield's code calls these harnesses. | [harnesses.md](harnesses.md) |
 | Permission tier | What a session's agent may change outside its checkout. Root access runs sudo without asking, Default asks you before each sudo, and Isolated works on a throwaway copy of your home with only the agents' own hosts reachable. In every tier the agent itself runs unprivileged. | [security.md](security.md#permission-tiers) |
 | Standard, Enhanced and Background mode | How a session shows its agent. Standard is the agent's own terminal, Enhanced shows its messages, tool calls and approvals as dashboard controls, and Background sessions the task once with no interaction. | [enhanced-sessions.md](enhanced-sessions.md) |
 | Subsession | A session an agent starts for part of its task, one level deep. It appears under its parent in the dashboard and reports back to it. | [teams.md](teams.md#subsessions) |
@@ -37,7 +41,7 @@ that runs coding agents for you and your team. If you are new, start with the
 flowchart LR
     client["Your computer or phone:<br>CLI, desktop or Android app"] -->|"SSH: direct,<br>tailnet or edge"| server
     git["GitHub or another<br>Git host"] -->|"source mirror"| ws
-    subgraph server["Aether server"]
+    subgraph server["Cloudfield server"]
         ws["Workspace repository:<br>base and session branches"]
         env["Your environment:<br>image and home"]
         run["Session container:<br>agent and checkout"]
@@ -53,7 +57,7 @@ flowchart LR
 1. [Quickstart](quickstart.md): install, link, add a repository and finish
    your first session.
 2. [Coding agents](agents.md): a prompt that lets Claude Code, Codex or
-   another coding agent set Aether up and drive it from the CLI.
+   another coding agent set Cloudfield up and drive it from the CLI.
 
 Daily use:
 
@@ -70,8 +74,8 @@ Daily use:
    accounts, set budgets or launch subsessions.
 8. [Networking](networking.md) and [edge](edge.md): when you choose how
    people reach the server, or host the dashboard for phones.
-9. [Assistant](assistant.md): when you want to ask Aether for things in plain
-   language.
+9. [Assistant](assistant.md): when you want to ask Cloudfield for things in
+   plain language.
 10. [Team memory](memory.md): when sessions should share what they learn.
 11. [Connectors](connectors.md): when you want to run agents from ChatGPT or
     Claude, including their phone apps.
@@ -81,35 +85,37 @@ Daily use:
     pull requests.
 14. [Watches](watches.md): when you want to be told that a session needs
     you or finished, after you close the dashboard.
+15. [Dictation](dictation.md): when you want to speak tasks and messages
+    instead of typing them, transcribed on your server.
 
 Reference:
 
-15. [Install](install.md): every platform, the desktop and Android apps,
+16. [Install](install.md): every platform, the desktop and Android apps,
     upgrades and removal.
-16. [Security](security.md): what the container boundary protects and what it
+17. [Security](security.md): what the container boundary protects and what it
     does not.
-17. [Troubleshooting](failure-handling.md): reboots, full disks, stalled sessions
+18. [Troubleshooting](failure-handling.md): reboots, full disks, stalled sessions
     and dropped connections, and the server settings that tune them.
-18. [Privacy](privacy.md): what the Android app, the dashboard and the
+19. [Privacy](privacy.md): what the Android app, the dashboard and the
     project's edge store and send.
-19. [Notices](notices.md): the licence and what the release artifacts bundle.
+20. [Notices](notices.md): the licence and what the release artifacts bundle.
 
-## Extend Aether
+## Extend Cloudfield
 
 - [Agent integration](harness-integration.md): connect an agent CLI that
-  Aether does not ship to the inbox sessions use to message each other.
+  Cloudfield does not ship to the inbox sessions use to message each other.
 - [Adapters](adapters.md): add a built-in agent, or an adapter that turns an
   agent's output into timeline events.
 
 ## Contributor reference
 
-- [CONTRIBUTING.md](../CONTRIBUTING.md): build, test and release Aether.
+- [CONTRIBUTING.md](../CONTRIBUTING.md): build, test and release Cloudfield.
 - [Testing](testing.md): which suite to run for a change, and how.
 - [Dashboard frontend](dashboard-frontend.md): how the web client in `web/` is
   built.
 - [Styles](styles.md): the dashboard's visual language.
 - [Dashboard gateways](local-gateway.md): the HTTP and WebSocket surface that
-  `aether gui` and the server's tailnet dashboard serve.
+  `cloudfield gui` and the server's tailnet dashboard serve.
 - [Coordination](coordination.md): how overlapping sessions and subsessions warn
   and message each other.
 - [ChatGPT plugin listing](chatgpt-plugin.md): build the directory package,

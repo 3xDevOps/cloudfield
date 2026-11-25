@@ -1,8 +1,8 @@
-# Dashboard gateways (`aether gui` and `aether-server --web-port`)
+# Dashboard gateways (`cloudfield gui` and `cloudfield-server --web-port`)
 
-The embedded dashboard is served through two transports. `aether gui` serves
+The embedded dashboard is served through two transports. `cloudfield gui` serves
 it on the user's machine and proxies the shared API and WebSocket surfaces to
-the linked server. `aether-server --web-port` serves the same bundle directly
+the linked server. `cloudfield-server --web-port` serves the same bundle directly
 over HTTPS on the server's tailnet addresses. Both use `internal/webgate`, so
 routes, framing, timeouts, close reasons, capability checks and the control
 method shapes are the same; only authentication, backend and machine-local
@@ -10,7 +10,7 @@ surfaces differ. The SPA is documented in
 [dashboard-frontend.md](dashboard-frontend.md), and the security stances are
 in [security.md](security.md#the-dashboard-gateways).
 
-`aether gui` uses a token on its loopback listener and an SSH-backed backend.
+`cloudfield gui` uses a token on its loopback listener and an SSH-backed backend.
 The server gateway has no browser token: Tailscale WhoIs identifies the source
 address on every request, and the request is dispatched in-process for that
 member.
@@ -25,9 +25,9 @@ gateways except where this table says otherwise: the routes, framing, timeouts
 and close reasons are one implementation (`internal/webgate`), and each
 gateway supplies only the identity and backend behind it.
 
-| Surface | `aether gui` | `aether-server --web-port` |
+| Surface | `cloudfield gui` | `cloudfield-server --web-port` |
 | --- | --- | --- |
-| Listener | `127.0.0.1` on an ephemeral or `--port` port, plain HTTP | the host's tailnet addresses, HTTPS with the tailnet certificate |
+| Listener | `127.0.0.1` on an ephemeral or `--port` port, plain HTTP | the host's tailnet addresses, HTTPS with the tailnet certificate; HTTP/2 for requests, HTTP/1.1 for WebSockets |
 | Identity | per-process bearer token; the SSH backend acts for that linked member | Tailscale WhoIs on the request's source address, per request; no browser token |
 | `/api/v1/*`, `/ws/events`, `/ws/attach`, `/ws/terminal` | yes | yes |
 | `/local/v1/*` | yes | no - those verbs need the caller's machine |
@@ -37,11 +37,11 @@ gateway supplies only the identity and backend behind it.
 ## Running it
 
 ```sh
-aether gui               # bind an ephemeral loopback port, print the URL, open a browser
-aether gui --port 8080   # bind a fixed loopback port (the SPA dev proxy expects 8080)
-aether gui --url         # print the URL instead of opening a browser
-aether gui --json        # print one JSON line, then keep serving
-aether gui --server prod # serve a named link profile (aether link --name)
+cloudfield gui               # bind an ephemeral loopback port, print the URL, open a browser
+cloudfield gui --port 8080   # bind a fixed loopback port (the SPA dev proxy expects 8080)
+cloudfield gui --url         # print the URL instead of opening a browser
+cloudfield gui --json        # print one JSON line, then keep serving
+cloudfield gui --server prod # serve a named link profile (cloudfield link --name)
 ```
 
 The gateway binds `127.0.0.1` only - there is no exposure flag - and mints
@@ -53,7 +53,7 @@ initial browser tab). The printed URL is
 
 The dashboard moves the token out of the address bar into the tab's
 session storage on first load, so it is held per browser tab: a second tab
-opened from a bookmark, or the same tab after `aether gui` restarted with a
+opened from a bookmark, or the same tab after `cloudfield gui` restarted with a
 fresh token, has no usable credential. Both cases answer `401` with
 
 ```json
@@ -63,7 +63,7 @@ fresh token, has no usable credential. Both cases answer `401` with
 
 which the dashboard reports as an expired link, showing that message, rather
 than retrying a credential the gateway has already rejected. Open the URL
-`aether gui` printed again to get a working one.
+`cloudfield gui` printed again to get a working one.
 
 `run` is the other query parameter the dashboard reads on first load.
 `?run=<run_id>` opens that session's terminal, even when the local gateway has no
@@ -98,14 +98,14 @@ onboarding and workspace management on hosted gateways.
 ### Forwarding a port
 
 A forward opens a port on `127.0.0.1` of the machine it is started on and
-carries each connection to the same port in a session's container, or in your
+carries each connection to the same port in a session's sandbox, or in your
 environment's. It needs the caller's machine, so the CLI and the local gateway
 can start one and the server gateway cannot:
 
 ```sh
-aether forward <session-id> <port>               # a session's port on this machine
-aether forward terminal <port>               # a port in your environment
-aether forward <session-id> 5173 --local 8080    # on another local port
+cloudfield forward <session-id> <port>               # a session's port on this machine
+cloudfield forward terminal <port>               # a port in your environment
+cloudfield forward <session-id> 5173 --local 8080    # on another local port
 ```
 
 `run:<run-id>` names the same session as `<run-id>`. The command forwards until
@@ -116,7 +116,7 @@ listening on. On the local gateway each one has **Open on this computer**,
 which starts the forward and opens `http://localhost:<port>` in your own
 browser. **More > Forward a port…** forwards a port you type and lists the
 ports forwarded from that session, each a link beside **Stop**. A forward started
-in the dashboard lasts until it is stopped there or `aether gui` exits. On the
+in the dashboard lasts until it is stopped there or `cloudfield gui` exits. On the
 server gateway the Browser view shows the `aether forward` command for the
 port instead.
 
@@ -141,8 +141,8 @@ unopened and shows a toast carrying it, the command to run on the machine
 where the login will be finished, and a **Copy link** action:
 
 ```sh
-aether forward run:<session-id> <port>     # a link that appeared in a session's terminal
-aether forward terminal <port>         # a link in your environment
+cloudfield forward run:<session-id> <port>     # a link that appeared in a session's terminal
+cloudfield forward terminal <port>         # a link in your environment
 ```
 
 Links whose callback is not a loopback address open normally on both
@@ -152,7 +152,7 @@ For a CLI terminal, or as a dashboard fallback, forward the callback port
 before completing authorization:
 
 ```sh
-aether forward <session-id|terminal> 1455
+cloudfield forward <session-id|terminal> 1455
 ```
 
 The local port defaults to the container port; use `--local <port>` only when
@@ -167,9 +167,9 @@ ready.
 ```
 
 That line is the contract with the desktop shell sidecar, which spawns
-`aether gui --json`, parses the line, and renders the SPA itself.
+`cloudfield gui --json`, parses the line, and renders the SPA itself.
 
-Exit statuses are the other half of that contract. `aether gui --json`
+Exit statuses are the other half of that contract. `cloudfield gui --json`
 exits **75** to tell the shell that `update.apply` rebuilt the desktop app
 on disk: the shell calls `app.relaunch()` rather than respawning the
 sidecar, so the new window and the new gateway come up together. Every
@@ -186,7 +186,7 @@ A shell says it understands 76 by setting `AETHER_SHELL_QUITS_ON_76=1` in
 the sidecar's environment. An older shell respawns on 76 and never quits, so
 without that variable a supervised Windows gateway starts no helper: it
 records "this desktop app is too old to update itself on Windows: quit it
-and run `aether gui build`, or reinstall the desktop app" as the build
+and run `cloudfield gui build`, or reinstall the desktop app" as the build
 error, exits **0**, and the older shell respawns on the new CLI.
 
 ## Design
@@ -218,24 +218,39 @@ handler is not a dead connection, so the connection, its streams and its
 other calls stay up. The keepalive below drops a dead one. A server refusal passes through untouched as that `protocol.Error`;
 in particular, busy retention admission requires an explicit retry, not
 automatic replay. Streams have a separate guard: a channel that fails to open
-triggers a redial only when a keepalive shows the connection is actually gone,
-because tearing down a healthy connection would kill its other live streams.
+triggers a redial only when a keepalive, given 60 seconds to answer, shows the
+connection is actually gone, because tearing down a healthy connection would
+kill its other live streams.
 
 A network that goes away without a reset, as when a phone sleeps or moves
 between Wi-Fi and mobile data, leaves the connection open and silent. Any
 byte from the server, a keepalive reply or a stream's data, proves the
 connection alive, so a large download on a slow link is never mistaken for
 a dead one. After 30 seconds without one the gateway sends an SSH keepalive,
-and after 90 seconds without one it drops the connection, so an idle phone's
-radio can sleep and a dead connection goes within two minutes. Every call
-and stream waiting on a dropped connection then fails or redials. A call
-already sent on it is replayed under the rule above; one that is not fails
+and after 5 minutes without one it drops the connection, so an idle phone's
+radio can sleep. The window is that long because a server on a saturated
+host can stall for a minute or more under memory pressure and still be alive;
+dropping it would end every stream it carries. On Linux and Android a link
+to an address or tailnet name, not the edge, also sets `TCP_USER_TIMEOUT` to
+90 seconds: the kernel keeps acknowledging for a starved server, so a dead
+network, such as a NAT timeout or a Wi-Fi switch, trips it and that
+connection goes within about two minutes. On Linux 5.11 and newer, and older
+kernels that carry the backport of "tcp: fix TCP_USER_TIMEOUT with zero
+window", it also aborts a large upload (`home.upload`, `files.upload`,
+`terminal.file`) to a server that is alive but reads nothing for 90 seconds
+while the upload fills its receive buffer. Older kernels without that change,
+common on older Android phones, keep such a connection. Elsewhere, and through
+the edge, a dead network takes up to six minutes, and the events stream shows
+nothing new meanwhile. Through the edge the longer window does not help either: the
+edge marks a server offline after 60 seconds without control traffic.
+Every call and stream waiting on a dropped connection then fails or redials.
+A call already sent on it is replayed under the rule above; one that is not fails
 with `-32004` and `the server stopped answering keepalives`. Requests that
 arrive while a dial is in progress wait for that one dial, each only as long
 as its own request lasts, and a dial gives up after 90 seconds. A dial
 abandoned because the link changed, by `link.apply` or a config reload,
 hands its waiting requests to a dial of the new link. The gateway reloads
-`config.json` on every request whose file has changed, so `aether link` in
+`config.json` on every request whose file has changed, so `cloudfield link` in
 a terminal moves the next request onto the server it names, stopping the
 forwards and syncs `link.switch` stops. A request that arrives while a
 switch, a sync start or a forward start is in progress serves the current
@@ -255,7 +270,7 @@ firewall, and a wrong guess sends the user to fix the wrong thing. Dial
 failures are classified inside the shared dial path, so the `/ws/events`
 refusal frame carries the same code and prefix as a `POST /api/v1` error.
 
-A server whose release is newer than the CLI behind `aether gui` refuses
+A server whose release is newer than the CLI behind `cloudfield gui` refuses
 that CLI with `-32005` (upgrade required). The gateway passes the refusal
 through as HTTP 426, with `data` set to
 `{"client_version":"v0.7.0","server_version":"v0.8.0","min_client_version":"v0.8.0","command":"aether update"}`.
@@ -271,7 +286,7 @@ layer that failed, so the dashboard never reports one layer as another:
 
 ```json
 {"refusal":{"kind":"server-not-connected","refusal":"server is not connected to the edge"},
- "edge_path":{"layer":"server-registration","server_id":"<server id>","edge":"edge.onaether.dev",
+ "edge_path":{"layer":"server-registration","server_id":"<server id>","edge":"edge.cloudfield.ai",
                             "account":"github account dana",
               "online":[{"id":"<other id>","name":"prod","online":true,"role":"admin",
                          "access_policy":"approved-devices","kind":"self-hosted"}]}}
@@ -322,19 +337,22 @@ unavailable identity service is reported as `-32004`.
 | `GET` | `/ws/dev/browser/<run_id>` | observation-only binary browser frame stream |
 | `GET` | `/api/v1/dev/<run_id>/artifacts/<artifact_id>` | transient capture bytes; add `?evidence_packet_id=<packet_id>` for the retained copy |
 | `GET` | `/api/v1/run/<run_id>/messages/<message_id>/attachments/<index>` | persisted chat image bytes; zero-based attachment index, requires View on the session |
-| `POST` | `/local/v1/<verb>` | client-machine verbs, on `aether gui` only |
+| `POST` | `/local/v1/<verb>` | client-machine verbs, on `cloudfield gui` only |
 
 Anything that is not `/api/`, `/ws/`, or `/local/` is served from the
 embedded `web/dist`, without authentication - the SPA bundle is not secret
 and has to load before the gateway can authenticate API calls. Unknown paths
-fall back to `index.html` so client-side routing works on a hard refresh.
+fall back to `index.html` so client-side routing works on a hard refresh. A
+missing file under `_next/` is a 404: a CLI update replaces these files, and
+a tab opened before it that got the page in place of a script would wait on
+that view's placeholder forever instead of showing the load error.
 Files under `_next/static/`, whose names change with their content, carry
 `Cache-Control: public, max-age=31536000, immutable`; everything else,
 `index.html` included, carries `no-cache` and an `ETag`, so a browser
 revalidates it on each load and picks up a server update on the next one.
 A client that is not on loopback and sends `Accept-Encoding: gzip` gets a
 file gzipped when that saves at least a tenth; each file is compressed once,
-on its first such request (`internal/webgate/static.go`). `aether gui`'s
+on its first such request (`internal/webgate/static.go`). `cloudfield gui`'s
 loopback client gets the files uncompressed, because compressing them would
 cost CPU on every launch and save no transfer time. An
 `/api/`, `/ws/`, or `/local/` path hit with the wrong method is the exception:
@@ -343,6 +361,9 @@ so a wrong-verb client bug cannot masquerade as a `200`. Ordinary JSON request
 bodies, including `/local/v1` calls, are capped at 1 MiB. `terminal.image` has
 a 12 MiB HTTP body cap for base64 and JSON framing; decoded images are capped
 separately at 8 MiB. `terminal.file` has 96 MiB for a decoded 64 MiB file.
+`dictation.transcribe` has 6 MiB for a 120 s clip in base64, and `cloudfield gui`
+waits 4 minutes for its answer and never repeats it
+([dictation.md](dictation.md)).
 File and configuration exceptions are listed below.
 
 ### Chat image previews
@@ -404,7 +425,7 @@ in the session's network namespace, lowest first:
 name, absent when the session's user cannot see the owner. A port bound more than
 once is listed once, by its widest binding: every interface before one
 address before loopback. The server reads the list with one `/bin/sh` exec in
-the session container, which needs `grep` and `ls` there, so the session must be live
+the session sandbox, which needs `grep` and `ls` there, so the session must be live
 and not paused. Session agents cannot call it; they are inside that namespace.
 
 Cancellation and authority revocation stop source work and close download
@@ -597,7 +618,10 @@ whitespace or control characters, a leading `-`, or more than 128 bytes is
 `-32602` with
 `model "x y" must be a single argument: no whitespace or control characters, not starting with "-", at most 128 bytes`.
 Session snapshots and templates carry the `model` they launch with, omitted when
-empty.
+empty. When the agent of an Enhanced session refuses its model, the snapshot's
+`refused_model` names it, `model` becomes the one the session reports running,
+empty for the agent's default, `model_error` says why, and a `run.model` event
+with that `model` follows; choosing a model later clears both.
 
 They take an optional `effort` in the same places: one of the agent's
 `effort_levels` from `agent.list`, empty for the agent's default
@@ -726,8 +750,8 @@ checkout, transcript and session record under their existing retention rules.
 A session whose container was released cannot be reopened. A session that has become active is
 rejected with `-32002`; repeating a successful release is a no-op. Evidence
 capture or runtime cleanup errors are returned without claiming release.
-The dashboard offers this as **Free container…** on one session and, for the
-selected workspace including archived sessions, **Free retained containers…**.
+The dashboard offers this as **Free sandbox…** on one session and, for the
+selected workspace including archived sessions, **Free retained sandboxes…**.
 
 `run.delete` uses the same `Kill` capability as `run.kill` and accepts the
 same `{"run_id":"..."}` params. For a live session it stops the container and
@@ -745,13 +769,18 @@ error names the blocker. In-flight control or Git operations return `-32003`
 instead of waiting behind them. Cleanup errors leave the workspace available
 for retry but do not restore already removed data. Success publishes
 `workspace.deleted` with the workspace ID in the event envelope and `{}` as
-the payload.
+the payload, and a `member.access` notice with action `revoked` to the owner
+and each granted member, whose streams may no longer carry `workspace.deleted`.
 
 `run.archive` also uses the `Kill` capability and accepts
 `{"run_id":"...","archived":true}`. It hides a finished session from the board
-and keeps its data, restorable any time: only a session in a final disposition
-(`merged`, `abandoned`, `failed`, or `interrupted`) can be archived, and
-archiving any other status returns `-32002` naming the session's real status.
+and keeps its data, restorable any time: only a `completed` session or one in a
+final disposition (`merged`, `abandoned`, `failed`, or `interrupted`) can be
+archived, and archiving any other status returns `-32002` naming the session's
+real status. A `completed` session is also refused with `-32002`, naming what it
+holds, while its result awaits review or `run.close_check` would warn of live
+subsessions, a pull request not merged, sessions waiting on it or pending
+cleanup.
 Archiving an already-archived session is a no-op that leaves its timestamp
 unchanged; calling it with `"archived":false` restores the session. The response
 is a `RunResult` with `run.archived_at` set while archived and absent otherwise.
@@ -759,7 +788,7 @@ Archiving does not schedule deletion; the obsolete `deletes_at` field is no
 longer emitted. Both calls publish `run.archived` with `archived_at` (null on
 restore) and a matching timeline note. Explicit Delete remains separate.
 
-`member.rename` accepts `{"display_name":"..."}` (and `member_id`, admin
+`member.rename` accepts `{"display_name":"..."}` (and `member_id`, super admin
 only, to rename someone else) and returns `{"member":Member}`. The name is
 trimmed and must be 1 to 64 characters with no control characters; a bad
 name is `-32602` with the reason. Each rename publishes `member.changed`
@@ -797,17 +826,48 @@ work resumes, Close or another status change. `finish_unopened` is `true`
 from the finish until a member opens or closes the session, `false` after work
 resumes.
 
-`run.review` accepts `{"run_id":"...","action":"complete"}` or
-`"action":"later"` and returns a `RunResult`. It needs the kill permission,
+`run.review` accepts `{"run_id":"...","action":"complete"}`,
+`"action":"later"` or `"action":"not-yet"` and returns a `RunResult`. It needs the kill permission,
 as `run.close` does. `complete` closes a live session as `run.close` does but
 records `completed`, or only records the acceptance on a `completed` session,
 and sets `review` to `accepted`; it is idempotent once accepted, and refused
 with `-32002` for other terminal statuses. `later` without a `ready` or `later`
-review is `-32002` too. `later` sets
-`review` to `later` and leaves the session where it is.
+review is `-32002` too, and so is `not-yet`, which a live session also
+needs. `later` sets `review` to `later` and leaves the session where it is;
+`not-yet` clears `review`, so the session awaits no review until its agent
+reports success again.
 Each change publishes `run.review` with
 `{"review":"...","review_changed_at":"...","status_seq":N}`; apply it only
 when `status_seq` is above the one you hold.
+
+`run.close_check` takes `{"run_ids":["...", ...],"outcome":"merged"}`, 1 to 50
+sessions, and returns `{"runs":[{"run_id":"...","warnings":[...],"merged_pull_request":true,"idle_since":"..."}]}`, each
+distinct id once, in order: what closing each session would affect.
+`merged_pull_request` is true when a merged pull request recorded for the
+session's own repository holds its last commit, so a caller can close it as
+merged. `idle_since` is when the session's status, reason or activity last
+changed. `outcome`
+is optional: `merged`, `abandoned` or `completed` (Mark complete); `merged`
+skips `unmerged_work`. It reads like `run.get`, so any approved
+member may call it; a session that does not exist answers with its own
+`error` and leaves the others unaffected. Each warning has a `kind`, a `detail`
+sentence and, where it applies, `url`, `count` and `run_ids`. A subsession that
+closes with the session adds its own `pull_request`, `unmerged_work` and
+`awaited` warnings, with `subsession` naming it; their `detail` does not repeat the subsession:
+
+| `kind` | When |
+| --- | --- |
+| `protected` | The session is protected (`cloudfield protect`). |
+| `pull_request` | A pull request recorded for it was neither merged nor closed when Cloudfield last checked it; `url` links it. The check does not ask GitHub. |
+| `unmerged_work` | Its branch has commits past its base and no open pull request, or merged one, recorded for its own repository after Cloudfield last recorded a commit. Recorded pull requests carry no commit, so the warning says the commits may not be merged. |
+| `messages` | Mail from other sessions that asks it something (not a reply) and it has not acknowledged, or any mail in the last 30 minutes from a session other than its parent and subsessions; `count`, and the senders in `run_ids`. |
+| `awaited` | Live sessions wait on `run:<session-id>:finished`; `run_ids`. Closing wakes them with its outcome. |
+| `subsessions` | Attached subsessions not yet merged, abandoned, failed, interrupted or accepted, which close with it; `count`, `run_ids`. |
+| `cleanup_pending` | Its container cleanup is pending or failed; `detail` carries the error. |
+
+Closing stays allowed: `run.close` and `run.review` do not read the check.
+The dashboard, `cloudfield close` and the connector's close tools show the
+warnings and ask first ([failure-handling.md](failure-handling.md#before-a-close)).
 
 The `push.*` methods manage Web Push for the caller's own browsers
 ([networking.md](networking.md#notifications)). `push.status` accepts an
@@ -829,7 +889,7 @@ a minute. Every method but `push.status` returns `{}`.
 `run.relaunch` is another proxied control-channel method:
 
 ```sh
-aether reopen <session-id>
+cloudfield reopen <session-id>
 ```
 
 The equivalent gateway call is `POST /api/v1/run.relaunch` with
@@ -839,8 +899,11 @@ Standard or Enhanced session that retained its container and whose
 after `run.close` (`reason` is `closed; retained container`). Older
 agent-finished retained sessions remain eligible. Interactive outcome reports
 now leave the session open and do not require reopening. `run.relaunch` resumes the
-same session row in the same container and checkout; it does not create a new session
-or container and does not perform a new launch or disk-floor admission.
+same session row in the same container, or in its VM started from the disks it
+kept, and the same checkout; it does not create a new session
+or container and does not perform a new launch. Thawing a paused container
+passes no admission; starting a stopped container or VM passes the memory
+and disk checks of a wake.
 The response's `container_retained_until` is absent: the deadline is cleared
 while the session is live, `finished_at` is null, `started_at` is the relaunch, and
 the next close starts a new `--run-container-ttl` period.
@@ -850,7 +913,8 @@ boot. Once expiry destroys the retained container, the call returns `-32002`
 (invalid state, retained container unavailable), and the session cannot be
 reopened. An expired or otherwise unavailable retained session cannot be
 reopened; a row removed by `run.delete` instead returns not found. The
-default `--run-container-ttl` is `168h` (7 days); negative values disable
+default `--run-container-ttl` is `720h` (30 days), and `168h` for a container
+that stays frozen in memory; negative values disable
 retention, so a closed interactive session is unavailable to `run.relaunch` immediately.
 
 ### `GET /api/v1/capabilities`
@@ -858,7 +922,7 @@ retention, so a closed interactive session is unavailable to `run.relaunch` imme
 ```json
 {"gateway":"local","methods":["*","run.repos"],"ws":["events","attach","acp","assistant","terminal","dev/browser"],
  "local":["daemon.install","daemon.status","edge.claim","edge.hostkey","edge.join","edge.link",
-          "edge.login","edge.logout","edge.servers","edge.status","env.agents","forward.start",
+          "edge.login","edge.logout","edge.servers","edge.status","forward.start",
           "forward.status","forward.stop","git.identity","link.apply","link.repo",
           "link.reset","link.status","link.switch","pull","pull.switch","repo.fast-forward",
           "repo.push","sync.start","sync.status","sync.stop",
@@ -876,7 +940,7 @@ cannot run verbs on the browser's machine:
 
 `methods` is `["*", "run.repos"]` because both transports dispatch every
 control-channel method; `run.repos` is not a method but marks a gateway whose
-sessions carry `repos` (`aether session --repo`), which the SPA checks before showing a
+sessions carry `repos` (`cloudfield session --repo`), which the SPA checks before showing a
 repo picker. `ws` lists the WebSocket surfaces served; `local` is the sorted
 `/local/v1` verb list, absent where there are none. A client probes this
 descriptor rather than hard-coding its transport. The SPA gates local linking,
@@ -892,7 +956,7 @@ for the server. Both are absent on a gateway that predates them.
 ### Control-channel methods this gateway calls
 
 The two `GET` endpoints above are backed by control-channel methods, as are
-the file reads and the member and workspace writes below. `aether gui`
+the file reads and the member and workspace writes below. `cloudfield gui`
 proxies these methods over SSH; the server gateway dispatches them in-process.
 Both transports therefore expose the same API shape and authorization checks.
 
@@ -945,6 +1009,13 @@ carries `agent_delivery: "queued"` until the agent takes it
 (`"delivered"`), or turns `not_sent` with `failure.code` `agent_refused` or
 `agent_disconnected`; each change publishes `workspace.room_message`
 ([enhanced-sessions.md](enhanced-sessions.md#permissions-and-input)).
+A message the server could not hand to the agent at all is `not_sent` with
+`failure.message` the real error and `failure.code`: `session_unavailable`
+(no running agent, or a mode switch in flight), `prompt_not_sent` (such as a
+sleeping session that failed to wake), `unsupported_image`,
+`session_protected`, `steer_denied` or `access_revoked` (the sender lost
+**Steer** or membership before delivery), or `control_changed` (the session's
+control lease changed before delivery).
 
 `run.inject` also accepts `attachments`, an ordered array of at most eight
 references returned by `terminal.image` or `terminal.file`. Text may be empty
@@ -959,6 +1030,20 @@ and the session item log keeps that URI. An image attached for an agent
 without `prompt_images` refuses the message as **Not sent**; other files need
 no capability.
 
+`run.room.resolve` lets a comment's author, the run's owner, or an admin
+complete or delete it: `{"message_id":"...","outcome":"done"|"deleted"}`.
+Only a `comment` message can be resolved; a `question` answers `-32602`.
+A done comment stays listed by `run.room.list` for history. A deleted one is
+left out of `run.room.list`, and a download of its attachments answers
+`-32000` "room image not found". Retrying with the same outcome replays
+the saved result; a different outcome than the one already recorded is
+`-32003`. Each resolution publishes `workspace.room_message` with
+`resolution` set, so a client already holding the message can tell a
+completed or deleted comment apart from one whose state did not otherwise
+change. The event's `actor_id` is the member who resolved the comment; the
+payload's `actor_id` stays its author. Activity reads "Alice completed a
+note" or "Alice deleted a note".
+
 ### Methods for an external assistant
 
 These serve a client with no dashboard and no stream, such as the
@@ -966,14 +1051,16 @@ These serve a client with no dashboard and no stream, such as the
 
 | Method | Params | Result |
 | --- | --- | --- |
-| `attention.list` | `{"workspace_id":"..."}` (optional; omitted lists every workspace). View | `{"items":[AttentionItem]}`, oldest `since` first: each session that waits on the caller, once, under the first **Needs you** row that holds, worded as the dashboard words it |
+| `attention.list` | `{"workspace_id":"..."}` (optional; omitted lists every workspace). View | `{"items":[AttentionItem]}`, oldest `since` first, `ready` items last: each session that waits on the caller, once, under the first **Needs you** row that holds, worded as the dashboard words it, then each reported success awaiting the caller's review |
 | `run.input.respond` | `{"run_id":"...","request_id":"...","option_id":"...","values":{...}}`; Steer | `{"status":"answered"}`, or `{"status":"already_answered"}` when an earlier answer won |
 
 An `AttentionItem` is `{kind, run_id, workspace_id, title,
 harness, reason, since}` plus what answering it needs. `kind` is one of
 `permission`, `question`, `queued-message`, `room-question`,
 `disconnected`,
-`blocked`, `needs-input`, `ready` or `failed`. `permission` and
+`blocked`, `needs-input`, `ready` or `failed`. `ready` is a finished session
+whose success awaits review (reason `Finished: review the result`); it blocks
+nothing and is not Needs you. `permission` and
 `question` carry `request: {id, kind, title, options, schema}`; an enhanced
 session's `options` are `{id, label, kind}`, `kind` being `allow_once`,
 `allow_always`, `reject_once` or `reject_always` for a permission, and a
@@ -1007,7 +1094,8 @@ not replay `run.input.respond`.
 `run.launch` and `template.launch` take an optional `idempotency_key`
 (at most 256 bytes). A retry by the same member with the same key and
 params returns the session the first launch started, with `"replayed":
-true`, and launches nothing; one with other params is `-32003`, and one
+true`, and launches nothing; one with other params is `-32003` (an
+omitted `permission` and `"default"` are the same), and one
 whose session was deleted is `-32000`. One key names one launch across both
 methods. The key is reserved before the launch and records the session as
 soon as its row exists, so a launch that fails after that replays as the
@@ -1026,7 +1114,7 @@ sets an origin) as the head, into the session's base branch on the workspace's
 GitHub source, or on the head repository without one. A checkout with no GitHub
 push remote answers `error` saying to pass `target`, and one on a detached HEAD
 answers `error` saying to pass both. `run.pr.status` returns the `expected` and
-`target` it used, to pass to `run.pr.create`. Once a finished session's container is
+`target` it used, to pass to `run.pr.create`. Once a finished session's sandbox is
 gone, both report the pull request the session last recorded (`number`, `url`,
 `state`). `run.pr.feedback` then reads the pull request, its checks and its
 reviews from GitHub in one read, with the GitHub login of the session's home, as
@@ -1062,14 +1150,16 @@ The dashboard also calls these methods through the same route:
 | `run.patch` | `RunPatchParams` (`{"run_id":"...","from":"...","to":"...","repo":"..."}`; `from` and `to` optional, `to` only with `from`; `repo` is a workspace ID from the session's `repos`, empty for the primary repo) | `RunPatchResult` - the same JSON shape the patch `GET` answers |
 | `coord.messages.list` | `{"workspace_id":"...","run_id":"...","correlation_id":"...","before":"...","limit":50}` (only `workspace_id` required; `run_id` matches either side) | `{"messages":[{"id":"...","workspace_id":"...","from_run_id":"...","to_run_id":"...","kind":"message"\|"question"\|"reply"\|"report","correlation_id":"...","body":"...","created_at":"...","delivered_at":"...","acked_at":"...","outcome":"...","summary":"...","next_action":"..."}],"next_before":"..."}` newest first; report fields only on `report` rows. See [coordination.md](coordination.md#seeing-agent-messages) |
 | `server.disk` | none | `ServerDiskResult` - the same JSON shape the disk `GET` answers |
-| `system.stats` | `{"since_ms":1761100000000}` (optional; Unix milliseconds, 0 or absent returns the whole window) | `SystemStatsResult` - `{"interval_ms":5000,"retention_ms":3600000,"host":{"cpu_cores","memory_total_bytes","swap_total_bytes","uptime_seconds"},"host_error":"","samples":[{"t_ms","cpu_user","cpu_system","cpu_iowait","cpu_steal","memory_used_bytes","memory_available_bytes","memory_free_bytes","swap_used_bytes","load1","load5","load15","net_rx_bps","net_tx_bps","disk_read_bps","disk_write_bps","pressure_cpu","pressure_memory","pressure_io"}],"containers_at_ms":0,"containers_error":"","containers":[{"owner_kind":"run"\|"browser"\|"member","owner_id","member_id","workspace_id","title","status","cpu_cores","cpu_limit_cores","cpu_throttled_percent","memory_bytes","memory_limit_bytes","pids","pids_limit","net_rx_bps","net_tx_bps","disk_read_bps","disk_write_bps"}],"others":{"containers","cpu_cores","memory_bytes"}}`. The host is sampled every 5 s from server start and kept for an hour; CPU fields are percent of all cores over the interval, and the `pressure_*` fields (PSI `some avg10`) are absent without `/proc/pressure`. Host sampling reads `/proc` and `/sys`, so on a non-Linux server `host_error` says so. Containers are sampled only while a `system.stats` call arrived in the last 60 s; a call while idle starts sampling without waiting for it and the next sample follows 1 s later. `containers` is empty and `containers_at_ms` 0 when the latest snapshot is older than two intervals, and `containers_error` carries the Docker error when sampling failed. A session's browser sidecar is its own entry with `owner_kind` `browser`, the session's id and its own limits. `cpu_cores` and the rate fields are absent until a container has two samples; `cpu_limit_cores` is absent when unlimited. A member sees only their own containers; `others` sums the rest and any container with no session or member owner, and is absent when empty |
+| `server.update_status` | `{"refresh":bool}` (optional) | `ServerUpdateStatusResult`; any member. Besides the update state it carries `channel` (`stable`, `beta` or `nightly`), `channel_pending` while a new server has not chosen and follows beta, `server_build`, and `latest_build` and `latest_channel` of the newest release on the channel; `channel_wait` is true while the running build is above it, so the server stays on its build until the channel reaches it. `pending.by_server` marks an update the server scheduled itself, and `declined` (`{"version","build","hotfix"}`) is the build it no longer schedules by itself. `channel_pointers` maps `nightly`, `beta` and `stable` to `{"version","build","hotfix","published_at"}`, each only for a pointer the last check fetched and verified, so a channel whose pointer stopped moving shows its age; it is display only. Builds and hotfixes are absent for build 0 |
+| `server.release_channel_set` | `{"channel":"stable"\|"beta"\|"nightly","dry_run":bool}`; super admin only | `{"channel":"beta","previous":"nightly","saved":bool,"running":{"version","channel","build","hotfix"},"target":{...},"target_error":"...","wait":bool,"retired":"v0.9.0-nightly.14","kept":"v0.9.0-nightly.14","kept_error":"..."}` - what the confirmation states: the running release, the newest on `channel` by its signed pointer (`target`, or `target_error` when it cannot be read) and whether the server would wait on its build. `retired` is the pending update the new channel does not take, which saving retires as failed. `kept` is a pending update the change left in place because its manifest could not be fetched to check it, with the fetch error in `kept_error`; the server still refuses it at its idle moment if the channel does not take it. `dry_run` saves nothing; otherwise the channel is saved and checked at once. It never installs anything ([install.md](install.md#release-channel)) |
+| `system.stats` | `{"since_ms":1761100000000}` (optional; Unix milliseconds, 0 or absent returns the whole window) | `SystemStatsResult` - `{"interval_ms":5000,"retention_ms":3600000,"host":{"cpu_cores","memory_total_bytes","swap_total_bytes","uptime_seconds"},"host_error":"","samples":[{"t_ms","cpu_user","cpu_system","cpu_iowait","cpu_steal","memory_used_bytes","memory_available_bytes","memory_free_bytes","swap_used_bytes","load1","load5","load15","net_rx_bps","net_tx_bps","disk_read_bps","disk_write_bps","pressure_cpu","pressure_memory","pressure_io"}],"containers_at_ms":0,"containers_error":"","containers":[{"owner_kind":"run"\|"browser"\|"member","owner_id","member_id","workspace_id","title","status","cpu_cores","cpu_limit_cores","cpu_throttled_percent","memory_bytes","host_memory_bytes","memory_limit_bytes","pids","pids_limit","net_rx_bps","net_tx_bps","disk_read_bps","disk_write_bps"}],"others":{"containers","cpu_cores","memory_bytes"}}`. The host is sampled every 5 s from server start and kept for an hour; CPU fields are percent of all cores over the interval, and the `pressure_*` fields (PSI `some avg10`) are absent without `/proc/pressure`. Host sampling reads `/proc` and `/sys`, so on a non-Linux server `host_error` says so. Containers are sampled only while a `system.stats` call arrived in the last 60 s; a call while idle starts sampling without waiting for it and the next sample follows 1 s later. `containers` is empty and `containers_at_ms` 0 when the latest snapshot is older than two intervals, and `containers_error` carries the Docker error when sampling failed. A session's browser sidecar is its own entry with `owner_kind` `browser`, the session's id and its own limits. `cpu_cores` and the rate fields are absent until a container has two samples; `cpu_limit_cores` is absent when unlimited. `memory_bytes` is the use `memory_limit_bytes` caps; for a VM that is the use inside the VM, and `host_memory_bytes` is what the VM holds of the host's memory, absent for a Docker container or when the VM's cgroup could not be read. A member sees only their own containers; `others` sums the rest, counting `host_memory_bytes` where present, and any container with no session or member owner, and is absent when empty |
 | `server.run_limits` | optional `cpus`, `memory_bytes`, `pids` (`0` clears one); setting any is admin only | `{"limits":{...},"default":{...},"effective":{...}}` - what an admin set, what an unset field gets (the flag or automatic value), and what a session with no override of its own gets. New containers only. `run.launch` takes `limits` `{cpus,memory_bytes,pids}` to override them for one session |
 | `server.sysbox.status` | none; admin only | `{"state":"on"\|"off"\|"unsupported"\|"installing"\|"failed","reason":"...","log":"..."}` - whether Docker lists `sysbox-runc`. `reason` explains `off`, `unsupported` and `failed`; `off` with a reason naming `sudo aether-server sysbox install` means the server is not root. `log` is the last 8 KiB of installer output |
 | `server.sysbox.install` | none; admin only | the same status. Starts the installer in the background, one at a time; a call while one runs returns `installing`. Poll `server.sysbox.status` until `on`, `unsupported` or `failed`. The server then uses Sysbox for new containers at once. Never retried after a transport failure. While it runs, `server.update` answers `-32003` |
 | `account.usage` | `{"account_member_id":"<member-id>","refresh":false}` (`account_member_id` may be empty for the caller's account) | `{"account_member_id":"<member-id>","providers":[{"provider":"claude"\|"codex","status":"ok"\|"stale"\|"unauthenticated"\|"unsupported"\|"unavailable"\|"error","windows":[{"id":"...","label":"...","used_percent":12.5,"resets_at":"2026-09-18T13:00:00Z"}],"plan":"...","updated_at":"2026-09-18T11:59:00Z","checked_at":"2026-09-18T12:00:00Z","retry_at":"...","error":"..."},...]}` |
 | `insights.get` | `{"workspace_id":"","scope":"mine"\|"everyone","from":"<RFC3339>","to":"<RFC3339>","time_zone":"America/Los_Angeles"}` | `{"generated_at":"...","from":"...","to":"...","time_zone":"...","bucket":"day"\|"week","totals":Totals,"previous":Totals,"series":[{"start":"2026-10-09","launched":3,"completed":2,"merged":1,"failed":0,"interrupted":0,"abandoned":0}],"heatmap":[{"date":"2026-04-20","runs":2}],"by_workspace":[{"workspace_id":"...","name":"...","launched":4,"finished":3,"failed":1}],"by_agent":[{"harness":"claude","model":"","launched":4,"finished":3,"failed":1}],"durations":{"runs_measured":9,"median_run_seconds":1260,"p90_run_seconds":4100,"state_runs_measured":6,"median_working_seconds":900,"median_waiting_seconds":240,"median_response_seconds":75},"cost":{"metered_runs":3,"unmetered_runs":6,"cost_usd":4.12,"input_tokens":120000,"output_tokens":9000,"total_tokens":129000,"by_agent":[{"harness":"claude","metered_runs":3,"unmetered_runs":0,"cost_usd":4.12,"input_tokens":120000,"output_tokens":9000,"total_tokens":129000}]},"pull_requests":{"opened":2,"merged":1},"success":{"runs":{"succeeded":4,"finished":9}},"outcomes":{"runs":Outcome,"series":[{"start":"2026-10-09","runs":Outcome}],"members":[{"member_id":"...","display_name":"...","color":"#e6194b","runs":Outcome,"series":[{"start":"2026-10-09","runs":Outcome}]}]},"recent":[{"run_id":"...","title":"...","workspace_id":"...","status":"completed","reason":"","harness":"claude","model":"","created_at":"...","finished_at":"...","duration_seconds":1200,"pr_url":"","pr_state":""}],"needs_you":2,"coverage":{"state_times_since":"...","pull_requests_since":""}}`; `Outcome` is `{"done","failed","abandoned"}`; `outcomes.members` is filled only for `scope` `everyone`. `Totals` is `{"launched","completed","merged","failed","interrupted","abandoned","killed","active","finished"}`. What each number counts is in [insights.md](insights.md) |
-| `agent.list` | `{"account_member_id":"<member-id>"}` (optional; empty selects the caller's account) | `{"agents":[{"name":"claude","display_name":"Claude Code","glyph":"claude","source":"shipped"\|"member","installed":true,"executable":"claude","enhanced":"native"\|"adapter"\|"none","enhanced_installed":false,"switchable":true,"login_found":true,"default_mode":"tui"\|"acp","enhanced_default":false,"login_missing":false,"own_account_only":false,"unavailable":"","login_command":"claude auth login","login_kind":"interactive","install_script":"...","enhanced_install_script":"..."}]}` - the caller's own shipped and member-defined agents, also for a shared account; `installed` reads the caller's `~/.local/bin`, and on a shared account is also true when only the owner's has the executable, whose installation a launch there then uses. `glyph` is the shipped name, or `custom` for a member-defined agent. `enhanced_installed`, `login_found` and `enhanced_default` are described in [harnesses.md](harnesses.md#enhanced-adapters); `default_mode` is `acp` when `enhanced_installed` is true, else `tui`, the mode a `run.launch` without `mode` starts in; `executable` is the command the agent sessions, which a member's agent may name differently from the agent; `login_found` is absent for an agent that declares no login path. `login_command` is the vendor's sign-in command `aether agent login` types, `login_kind` is `device` when it prints a URL and code and needs nothing typed back, else `interactive`; both are absent for a member-defined agent. `switchable` says whether `run.mode.switch` can move a running session of that agent between Standard and Enhanced. On a shared account, `login_missing` is true when a launch of that agent there is refused because its owner has no login for it (a missing or empty file), and `own_account_only` when it is refused because the name resolves to the caller's own member-defined agent, which runs only on the caller's own account, and `unavailable` carries the launch's own error when the owner's login exists but cannot be shared; at most one is set |
-| `agent.models` | `{"name":"claude","account_member_id":"<member-id>","refresh":true}` (`account_member_id` and `refresh` optional) | `{"models":[{"id":"opus","name":"Opus 5.5","description":"..."}],"default_label":"Opus 5.5 · ...","source":"agent"\|"cache"\|"fallback"\|"none","fetched_at":"<RFC3339>","error":"..."}` - the models the agent's installed CLI offers on the account's login, cached for an hour; `refresh` discovers again. `error` is the last failed discovery's error, also when `models` holds an older or fallback list. A shared account that a launch would refuse answers with that refusal. See [harnesses.md](harnesses.md#choose-a-model) |
+| `agent.list` | `{"account_member_id":"<member-id>"}` (optional; empty selects the caller's account) | `{"agents":[{"name":"claude","display_name":"Claude Code","glyph":"claude","source":"shipped"\|"member","installed":true,"executable":"claude","enhanced":"native"\|"adapter"\|"none","enhanced_installed":false,"switchable":true,"login_found":true,"login_problem":"","login_blocks_launch":false,"default_mode":"tui"\|"acp","enhanced_default":false,"login_missing":false,"own_account_only":false,"unavailable":"","login_command":"claude auth login","login_kind":"interactive","install_script":"...","enhanced_install_script":"..."}]}` - the caller's own shipped and member-defined agents, also for a shared account; `installed` reads the caller's `~/.local/bin`, and on a shared account is also true when only the owner's has the executable, whose installation a launch there then uses. `glyph` is the shipped name, or `custom` for a member-defined agent. `enhanced_installed`, `login_found` and `enhanced_default` are described in [harnesses.md](harnesses.md#enhanced-adapters); `default_mode` is `acp` when `enhanced_installed` is true, else `tui`, the mode a `run.launch` without `mode` starts in; `executable` is the command the agent sessions, which a member's agent may name differently from the agent; `login_found` is absent for an agent that declares no login path. `login_problem` is why the login cannot sign the agent in, empty when the server knows of none, and `login_blocks_launch` whether `run.launch` on the account refuses over it ([harnesses.md](harnesses.md#when-a-login-is-signed-out)). `login_command` is the vendor's sign-in command `cloudfield agent login` types, `login_kind` is `device` when it prints a URL and code and needs nothing typed back, else `interactive`; both are absent for a member-defined agent. `switchable` says whether `run.mode.switch` can move a running session of that agent between Standard and Enhanced. On a shared account, `login_missing` is true when a launch of that agent there is refused because its owner has no login for it (a missing or empty file), and `own_account_only` when it is refused because the name resolves to the caller's own member-defined agent, which runs only on the caller's own account, and `unavailable` carries the launch's own error when the owner's login exists but cannot be shared; at most one is set |
+| `agent.models` | `{"name":"claude","account_member_id":"<member-id>","refresh":true}` (`account_member_id` and `refresh` optional) | `{"models":[{"id":"opus","name":"Opus 5.5","description":"..."}],"default_label":"Opus 5.5 · ...","source":"agent"\|"cache"\|"none","fetched_at":"<RFC3339>","error":"..."}` - the models the agent's installed CLI offers on the account's login, cached for an hour and until Cloudfield updates the agent; `refresh` discovers again. `error` is the last failed discovery's error, also when `models` holds the last list that worked (`fetched_at` says when); a failure is retried after a minute. `cache` is Codex's own `~/.codex/models_cache.json`; `none` lists nothing. A shared account that a launch would refuse answers with that refusal. See [harnesses.md](harnesses.md#choose-a-model) |
 | `agent.install` | `{"name":"claude","enhanced":true}` (`enhanced` optional) | `{"log_tail":"...","installed":true,"enhanced_installed":true,"error":"the install command exited 1"}` - runs a shipped agent's install command, and its adapter's with `enhanced`, in the caller's environment terminal, starting it if needed; `error` is set when the command failed. Needs the launch capability. Answers within 10 minutes; one install per member at a time, a second answers `-32003` |
 | `agent.remove` | `{"name":"claude"}` | `{"removed":["~/.local/bin/claude","~/.local/bin/claude-agent-acp"]}` - removes an agent from the caller's own environment so new sessions cannot start it. A shipped name (it wins over a member's definition of the same name; `custom` is not removable) deletes its `~/.local/bin` links, the Enhanced adapter's too; `removed` lists those that existed, and none existing answers `-32602` `agent "claude" is not installed in your environment: ~/.local/bin/claude does not exist`. Any other name deletes the caller's definition and answers `{}`, or `-32602` `you have no agent "x"; aether agent list shows yours`. `-32004` `persistent homes are not enabled` without member homes. Needs the launch capability; refused with `-32003` while an install or a harness update runs in the home. Package files, logins and settings stay. Not replayed on a transport failure |
 | `files.tree` | `{"workspace_id":"...","run_id":"...","path":"src"}` (`run_id` optional; an empty, omitted or `"."` path is the root) | `{"entries":[{"name":"main.go","kind":"file","size":1234},...]}` |
@@ -1096,17 +1186,21 @@ The dashboard also calls these methods through the same route:
 | `terminal.exec` | `{"command":"claude --version"}` | `{"exit_code":0,"stdout":"...","stderr":"..."}` - runs the command through a login shell in the caller's member environment, starting it if needed; a non-zero exit code is a result, not an error. Any approved member may call it. Answers within 10 minutes: a command still running then is killed and the call answers `-32603`, as it does for output past 1 MiB. See [terminal.md](terminal.md#run-one-command) |
 | `terminal.image` | `TerminalImageParams` (`{"run_id":"<run-id>","content":"<base64-original-image-bytes>"}`; `run_id` optional) | `TerminalUploadResult` (`{"path":"/home/<account>/.aether/terminal-images/image-<random>.png"}`) - absolute path in the target container |
 | `terminal.file` | `TerminalFileParams` (`{"run_id":"<run-id>","name":"notes.md","content":"<base64-file-bytes>"}`; `run_id` optional) | `TerminalUploadResult` (`{"path":"/home/<account>/.aether/terminal-files/<random>/notes.md"}`) - absolute path in the target container |
-| `env.save` | none | `EnvSaveResult` (`{"image":"aether/member-<id>:<unix-seconds>"}`) - commits the running environment terminal as the member's image |
-| `env.reset` | none | empty result; stops the environment, forgets and removes the saved image |
-| `assistant.status` | none | `AssistantStatus` - `state` (`setup`, `idle`, `installing`, `starting`, `running`, `failed`), `agent`, each agent's readiness and reason, `error`, the pending `confirmations` (each with `other_member` and `other_owner`, the owner's name, when the session belongs to another member), `auto_approve`, `suggest_auto_approve` and `share_view`. `installing` means a start is installing the agent in the assistant's container |
+| `env.save` | none | `EnvSaveResult` (`{"image":"aether/member-<id>:<unix-seconds>"}`) - commits the running environment terminal and, once its file owners pass the [check](environments.md#saved-image-checks), makes it the member's image. Answers within 11 minutes |
+| `env.reset` | none | empty result; stops the environment, forgets and removes the saved and previous images |
+| `assistant.status` | none | `AssistantStatus` - `state` (`setup`, `idle`, `installing`, `starting`, `running`, `failed`), `agent`, each agent's readiness and reason, `error`, the conversation's `queue` (waiting and running entries, then the latest 50 that ended), the open `confirmations` (each with `state` `pending`, `approved` or `running`, the turn's `origin` `{door, client, connector_id}`, and `other_member` and `other_owner`, the owner's name, when the session belongs to another member, `private` when the card saves, forgets or sends a saved preference, so a notification shows only what kind of action it is, and `rule` when the card may become an [approval rule](assistant.md#approval-rules): `{"key":{...},"wording":"Always approve ...","suggested":true}`, `suggested` after three cards of that kind approved by hand in a row), `auto_approve`, `suggest_auto_approve`, `share_view` and `sign_in_recorded`, true once a sign-in for the assistant began for any agent. `installing` means a start is installing the agent in the assistant's container |
 | `assistant.start` | `{"agent":"claude"}` (optional) | `AssistantStatus` - starts the caller's assistant, an Enhanced session of their agent in the caller's assistant container, resuming the stored session. `agent` defaults to the stored agent, which is never replaced unasked: when it is not ready the call fails with `<Agent> is not ready: <reason>; sign in again or start with another agent` (`-32004`). With no stored agent it picks the first ready of `claude`, `codex`. Naming a different agent begins a new conversation |
-| `assistant.prompt` | `{"text":"...","idempotency_key":"...","view_context":{...}}` (`view_context` optional) | empty result; needs the Launch capability, starts the assistant when needed, and ignores a key it already accepted. While a turn runs it answers `-32002`: cancel the turn first. `view_context` is `{"version":1,"captured_at":"...","route":{"name":"run","run_id":"...","view":"changes"},"open_file":{"kind":"workspace","path":"..."},"recent":[],"attachments":[{"kind":"check","run_id":"...","pr":42,"repository":"owner/name","check":"lint"}]}`. `route` is optional: a prompt whose page the member removed has none. Each attachment names what the message is about: `kind` (`workspace`, `run`, `pr`, `check`, `failure`) and any of `workspace_id`, `run_id`, `pr`, `repository`, `check` (at most 128 bytes, no control or format characters), `failure` and `seq`. Malformed ids, paths and fields are dropped, as is an attachment of unknown kind or naming no id; `recent` is cut to 8 pages and `attachments` to 6; the oldest pages, then `open_file`, then the last attachments go until it fits 4096 bytes, and an unknown `version` is dropped. It reaches the agent as an `aether://view-context` resource. With `share_view` off only `attachments` reach it, since the member picked them for this message. Otherwise its page part, never the attachments, becomes the caller's held view context, with `source` `prompt`; a prompt without `route` leaves the held view alone, as does a retry of a key already accepted |
+| `assistant.prompt` | `{"text":"...","idempotency_key":"...","view_context":{...},"door":"phone"}` (`view_context` and `door` optional) | `{"entry":AssistantQueueEntry}`; needs the Launch capability. The prompt joins the caller's queue, and a key the conversation already holds returns its entry instead. With nothing running or queued it is sent at once, starting the assistant when needed, and a failure to send is the error; otherwise `entry.state` is `queued` and it runs when the turns before it end. A sixth waiting prompt answers `-32002` `assistant: 5 prompts are already queued; wait or remove one`. `door` is `phone` or `desktop` when the Cloudfield app runs in that shell; anything else is `dashboard`, and it only labels the entry. An entry is `{id, state, text, origin: {door, client, connector_id}, error, message_id, created_at}`, `state` one of `queued`, `running`, `done`, `failed`, `interrupted` (a turn a restart lost, never rerun) and `removed`. `view_context` is `{"version":1,"captured_at":"...","route":{"name":"run","run_id":"...","view":"changes"},"open_file":{"kind":"workspace","path":"..."},"recent":[],"attachments":[{"kind":"check","run_id":"...","pr":42,"repository":"owner/name","check":"lint"}]}`. `route` is optional: a prompt whose page the member removed has none. Each attachment names what the message is about: `kind` (`workspace`, `run`, `pr`, `check`, `failure`) and any of `workspace_id`, `run_id`, `pr`, `repository`, `check` (at most 128 bytes, no control or format characters), `failure` and `seq`. Malformed ids, paths and fields are dropped, as is an attachment of unknown kind or naming no id; `recent` is cut to 8 pages and `attachments` to 6; the oldest pages, then `open_file`, then the last attachments go until it fits 4096 bytes, and an unknown `version` is dropped. It reaches the agent as an `aether://view-context` resource. With `share_view` off only `attachments` reach it, since the member picked them for this message. Otherwise its page part, never the attachments, becomes the caller's held view context, with `source` `prompt`; a prompt without `route` leaves the held view alone, as does a retry of a key already accepted |
 | `assistant.view` | `{"view_context":{...}}` | empty result; replaces the caller's held view context, which the assistant reads with `aether_view_context` along with its `source` (`prompt` or `navigation`) and `age_seconds`, unless `share_view` is off. An update whose `captured_at` is before the held view's is dropped while that view is under 10 seconds old, so a late update never replaces the view a prompt just carried; after that the last one received wins, whatever the device's clock. One without `route` forgets the held view: the member removed the page from their draft. Kept in memory only |
-| `assistant.cancel` | none | empty result; cancels the turn in flight |
+| `assistant.cancel` | none | empty result; cancels the turn in flight; the next queued prompt then runs |
+| `assistant.queue.remove` | `{"entry_id":"..."}` | empty result; removes one of the caller's queued prompts before it runs, or dismisses one that failed or was interrupted. One running or done is `not found`. The assistant's tool socket and connectors cannot call it |
 | `assistant.answer` | `{"request_id":"...","option_id":"...","values":{}}` | empty result; answers one of the harness's permission prompts or questions |
-| `assistant.confirm` | `{"confirmation_id":"...","approve":true}` | empty result; answers a tool call waiting for approval. A confirmation expires after 10 minutes |
+| `assistant.confirm` | `{"confirmation_id":"...","approve":true}`, or `{"confirmation_id":"...","approve":true,"always":true}` | `{}`; decides a pending card. Its tool call gets the answer while it waits; otherwise the server runs an approved call itself. A card expires after 10 minutes, or 24 hours from a connector turn. A decided or expired card, or one a new conversation withdrew, is `not found`. `always` also saves the rule the card offers, built by the server from the card it stored, and returns it as `{"rule":AssistantRule}`; a card that offers none answers `-32002`. The assistant's own calls and connectors cannot use `always` (`-32001`) |
+| `assistant.rules` | none | `{"rules":[AssistantRule]}` - the caller's [approval rules](assistant.md#approval-rules), oldest first: `{"id":"rule-...","method":"run.launch","wording":"Always approve ...","summary":"<the card it came from>","created_at":"...","last_used_at":"...","uses":3,"inactive":"<reason>"}`; `inactive` is set when the rule's workspace is gone or its account is no longer shared with the caller. Refused to the assistant's own calls and to connectors (`-32001`); the tool socket does not serve it |
+| `assistant.rules.revoke` | `{"id":"rule-..."}` | empty result; deletes the caller's rule, which applies to the next card. `-32000` when the caller has no such rule. Refused like `assistant.rules` |
 | `assistant.reset` | none | `AssistantStatus` - stops the session, discards the conversation and deletes the agent's state in the assistant's home |
-| `assistant.settings` | `{"auto_approve":true,"share_view":false}`, `{"suggestion":"later"}` or `{"suggestion":"never"}` (each optional; omitted reads) | `AssistantSettings` (`{"auto_approve":true,"suggest_auto_approve":false,"suggestion_off":false,"share_view":false}`) - the caller's own assistant settings. With `auto_approve` on, the assistant's confirmed tools run without a card, except on another member's session. `suggestion` answers the [suggestion](assistant.md#auto-approval) to turn it on; `suggestion_off` means it will not show again. `share_view` (default on) lets prompts and `assistant.view` carry the caller's view context; off forgets the one held. The assistant's tool socket does not serve this method |
+| `assistant.settings` | `{"auto_approve":true,"share_view":false}`, `{"suggestion":"later"}` or `{"suggestion":"never"}` (each optional; omitted reads) | `AssistantSettings` (`{"auto_approve":true,"suggest_auto_approve":false,"suggestion_off":false,"share_view":false,"approval_chosen":true}`) - the caller's own assistant settings. `approval_chosen` is set once the caller set `auto_approve` or answered the suggestion, and the dashboard then stops asking how the assistant should act. With `auto_approve` on, the assistant's confirmed tools run without a card, except on another member's session. `suggestion` answers the [suggestion](assistant.md#auto-approval) to turn it on; `suggestion_off` means it will not show again. `share_view` (default on) lets prompts and `assistant.view` carry the caller's view context; off forgets the one held. The assistant's tool socket does not serve this method |
+| `assistant.account` | `{"agent":"claude"}` | `AssistantAccount` (`{"agent":"claude","state":"other","environment":"account <uuid>, organization <uuid>","email":"..."}`) - compares the account recorded for the assistant's sign-in with the caller's environment login. `state` is `unrecorded` (no start has recorded it yet), `same`, `other`, `expired` (the environment's Claude token is past its expiry) or `error` with `error`. It reads the login read-only and never refreshes it; see [Same account as your sessions](assistant.md#same-account-as-your-sessions). The assistant's tool socket does not serve this method |
 | `assistant.history` | `{"before_seq":0,"limit":1000}` | like `run.acp.history`. A `notice` item may carry an `action` record, below |
 | `assistant.item` | `{"seq":12}` | like `run.acp.item` |
 | `workspace.origin` | `WorkspaceOriginParams` (`{"workspace_id":"...","origin":"https://github.com/acme/app.git"}`; `origin` empty clears it) | `WorkspaceOriginResult` - the workspace with its new `origin`, the upstream every new session checkout's `origin` remote points at |
@@ -1158,11 +1252,10 @@ its budget and pinning or replacing a replaced note are `-32003`; a bad
 kind, source, scope, size or limit is `-32602`; an unknown note is `-32000`. The exact
 messages are in [memory.md](memory.md#limits). Each write
 publishes a `memory.change` event,
-`{"action":"add"|"rewrite"|"answer"|"supersede"|"pin"|"unpin"|"rm","note_id":"...","actor_id":"..."}`,
+`{"action":"add"|"rewrite"|"supersede"|"pin"|"unpin"|"rm","note_id":"...","actor_id":"..."}`,
 which `/ws/events` streams with `"types":["memory.change"]`. A captured
 outcome note publishes `add`, or `rewrite` when a later report rewrites
-it, and an answer note `answer`
-([memory.md](memory.md#what-is-captured-automatically)).
+it ([memory.md](memory.md#what-is-captured-automatically)).
 
 ### Preference methods
 
@@ -1187,18 +1280,18 @@ anything.
 
 ### Session branch and pull request methods
 
-These session native `git` and `gh` in a live session's container, as the session's
+These session native `git` and `gh` in a live session's sandbox, as the session's
 account, like the other `run.git.*` and `run.pr.*` methods. `run.git.log`
 needs view; `run.pr.merge` needs push and steering, re-checked before every
-command. A session whose container is gone fails with `-32002`
+command. A session whose sandbox is gone fails with `-32002`
 (`scheduler: the session has no live environment: the session is completed and its
-container is gone`). A failed `git`
+sandbox is gone`). A failed `git`
 or `gh` command is not an RPC error: the result carries `error` and the
 command's `output` (`exit_code`, `stdout`, `stderr`, `truncated`) verbatim.
 
 | Method | Params | Result |
 | --- | --- | --- |
-| `run.git.log` | `{"run_id":"...","limit":50}` (`limit` optional, 1 to 200, default 50) | `{"branch":"aether/run-...","base_ref":"origin/main","base":"<sha>","head":"<sha>","merge_base":"<sha>","ahead":2,"behind":3,"commits":[Commit],"upstream":[Commit],"conflicts":[{"path":"go.mod"}],"conflicts_error":"...","truncated":false,"output":{...},"error":"..."}` |
+| `run.git.log` | `{"run_id":"...","limit":50}` (`limit` optional, 1 to 200, default 50) | `{"branch":"cloudfield/run-...","base_ref":"origin/main","base":"<sha>","head":"<sha>","merge_base":"<sha>","ahead":2,"behind":3,"commits":[Commit],"upstream":[Commit],"conflicts":[{"path":"go.mod"}],"conflicts_error":"...","truncated":false,"output":{...},"error":"..."}` |
 | `run.pr.merge` | `{"run_id":"...","method":"squash"\|"merge"\|"rebase","expected_head":"<sha>","repository":"owner/name","number":128,"expected_login":"octocat","expected_base":"main"}` (`repository` and `number` optional, together; `expected_login` and `expected_base` optional) | `{"identity":"octocat","pull_request":RunPullRequest,"merged":true,"account_member_id":"...","output":{...},"error":"..."}` |
 
 `run.git.log` compares the checkout's `HEAD` with its upstream base: the
@@ -1336,11 +1429,12 @@ MiB. Binary or oversized content is read-only; an oversized response sets
 the wire shape for compatibility.
 
 `files.write` without `run_id` requires **Push** and creates a one-file commit
-on the workspace base branch; it does not push upstream. With `run_id`, it
+on the workspace base branch; it does not push upstream, and it is refused
+(`denied`) when a source mirror owns that base. With `run_id`, it
 requires **Steer** and changes that session's uncommitted checkout. Existing file
 modes are preserved and new files use `0644`. Session-checkout saves recheck the
-revision immediately before atomic rename under Aether's root lock. Base
-commits compare-and-swap the branch head. Aether's locks do not serialize
+revision immediately before atomic rename under Cloudfield's root lock. Base
+commits compare-and-swap the branch head. Cloudfield's locks do not serialize
 arbitrary live-agent filesystem writers. `content` is text without NUL bytes.
 
 `files.upload` adds one new file of any bytes, up to the same 64 MiB, to a
@@ -1355,7 +1449,7 @@ home.
 They require **Launch**; an administrator cannot select another member with an
 extra request field. `config.write` has the same explicit-save and revision
 rules as `files.write`. `config.import` writes a batch of files into one
-agent's directory in that home; `aether config push` calls it over the SSH
+agent's directory in that home; `cloudfield config push` calls it over the SSH
 control channel ([Upload agent configuration](quickstart.md#upload-agent-configuration)).
 All sessions the member launches and the environment terminal mount one shared
 read-write persistent HOME; an account share exposes only the agent login
@@ -1370,8 +1464,8 @@ immediately before atomic rename; an absent destination must still be absent,
 and editor saves also recheck the content revision. A detected change returns
 `config: conflict` without replacing that destination. Staged bytes remain
 private until the destination permissions have been validated.
-These checks are optimistic, not a filesystem compare-and-swap: Aether's root
-lock coordinates its own operations, not arbitrary processes in the shared
+These checks are optimistic, not a filesystem compare-and-swap: Cloudfield's
+root lock coordinates its own operations, not arbitrary processes in the shared
 HOME, which can still write between the final check and rename.
 
 `home.tree`, `home.read`, `home.write`, `home.mkdir`, `home.rename`,
@@ -1412,10 +1506,10 @@ removed as itself; a read, write, upload, or download of one, or of anything
 under a symlinked directory, is refused, as is a regular file with more than
 one hard link. New files and directories are owned like the home. The
 credential, runtime-ignore, and secret-scanner exclusions of `config.import`
-do not apply: they decide what `aether config push` uploads, not what a
+do not apply: they decide what `cloudfield config push` uploads, not what a
 member may see or change in their own home. One lock per member serializes
 `home.*` and `config.*` calls and profile materialization, so a Files save
-and an `aether config push` of the same file cannot both pass their revision
+and a `cloudfield config push` of the same file cannot both pass their revision
 check; like configuration saves, they are not atomic against other processes
 writing the home.
 
@@ -1442,11 +1536,11 @@ ignored for Claude is not implicitly ignored for OMP or a member-defined
 custom agent. Known credential names wherever they occur in a path, and every
 basename that is `.env` or starts with `.env.` or ends in `.pem`, remain
 filtered by the destination-independent credential policy.
-`aether config push` applies both lists before reading a file and runs the
+`cloudfield config push` applies both lists before reading a file and runs the
 secret scanner locally, so flagged bytes are not sent; the server applies
 the same policy and scanner again.
 
-`config.stat` gives `aether config push` the size and revision of the
+`config.stat` gives `cloudfield config push` the size and revision of the
 server's copy of each file it is about to send, without reading the content
 back. The CLI sends only files that are absent there, or, with
 `--overwrite`, that differ. `config.import` enforces the same rule on its
@@ -1457,7 +1551,7 @@ that predates `overwrite` therefore cannot replace a file.
 
 Each `config.import` request permits at most 2,000 files and 64 MiB decoded,
 with a 64 MiB per-file ceiling matching configuration editing. These bounds
-limit a request, not a directory: `aether config push` sends batches of at
+limit a request, not a directory: `cloudfield config push` sends batches of at
 most 2,000 files and a target of 20 MiB decoded, and a larger file alone.
 Paths are slash-separated and relative to the agent's directory. `mode`
 carries permission bits for a new file, and `0` means `0644`; a replaced
@@ -1482,14 +1576,14 @@ If an import fails after writing one or more files, the response is still a
 are the exact committed counts, `imported_paths` lists the exact canonical
 paths that remain in the member's shared HOME, and `error` names the failed
 relative path and the underlying error. This is an incomplete import, not a
-successful one: `aether config push` prints those paths as `created` or
+successful one: `cloudfield config push` prints those paths as `created` or
 `replaced`, sends no further batch, and exits with the error. The optional `error` and `imported_paths`
 fields are absent from complete results and from failures before any file is
 committed.
 
 If the SSH/RPC call fails without such a result, the outcome is unknown: the
 request may have copied some files before the response was lost.
-`aether config push` prints that request's paths as `unconfirmed`, sends no
+`cloudfield config push` prints that request's paths as `unconfirmed`, sends no
 further batch, and exits with the error; `config.tree` shows what the home
 holds. Earlier confirmed batches remain reported. Cancellation can prevent
 the response from being delivered; the protocol does not claim a stronger
@@ -1523,7 +1617,7 @@ anywhere in the server, so the diff timeline reads the text here and uses
 those events to know when to ask again and which snapshot to ask from.
 
 `repo=<workspace_id>` selects one of a multi-repo session's repos (the session's
-`repos`, from `aether session --repo`); without it the primary repo is rendered.
+`repos`, from `cloudfield session --repo`); without it the primary repo is rendered.
 
 With no query params the server renders the session checkout's whole diff against
 the session's effective base, covering committed work, uncommitted edits and
@@ -1650,15 +1744,19 @@ attribution, shown in **Insights > System**:
 ```
 
 `used_bytes` and `total_bytes` describe the whole filesystem - the gauge
-answers "is the disk filling up", which is not a question about Aether's own
+answers "is the disk filling up", which is not a question about Cloudfield's own
 footprint. `free_bytes` is what an unprivileged writer can still claim, which
 is the number the scheduler's free-space floor is checked against, and is
 smaller than `total - used` wherever the filesystem reserves blocks.
 
-The categories describe Aether's footprint: worktrees, transcripts, the
+The categories describe Cloudfield's footprint: worktrees, transcripts, the
 SQLite database (including persisted events), bare workspace repositories,
 member homes, managed package/build caches, evidence, and other data-directory contents.
 `snapshot_bytes` is a subset of `worktree_bytes`, never an additional total.
+With `session-runtime vm`, `vm_bytes` holds the VMs' disks under `vm/` and
+their saved memory, and `vm_state_bytes`, the saved memory of sleeping VMs,
+is a subset of it; both are omitted on a server without VM disks. A VM's
+sparse disks count the blocks they hold, and the disks VMs share count once.
 The categories are not a promise that their bytes can be reclaimed.
 
 Directory accounting does not follow symlinks. It indexes file identities on
@@ -1669,12 +1767,12 @@ data produces `warnings`; affected measurements are partial, not evidence
 of an empty directory. Measurement lives in `internal/disk`, shared with
 the scheduler's filesystem floor.
 
-Optional `docker` accounting describes the whole daemon, including non-Aether
-workloads: `images_bytes`, `containers_bytes`, `volumes_bytes`,
+Optional `docker` accounting describes the whole daemon, including
+non-Cloudfield workloads: `images_bytes`, `containers_bytes`, `volumes_bytes`,
 `build_cache_bytes` and `reclaimable_bytes`. Shared image layers count once;
 build-cache bytes exclude image-shared records, and bind-backed homes are not
 counted again as Docker volumes. Docker's unused classification does not mean
-Aether can safely delete a saved environment image.
+Cloudfield can safely delete a saved environment image.
 
 Optional `used_bytes`, `total_bytes`, `free_bytes` and `shared_filesystem`
 require a verified local daemon whose measured storage roots share a
@@ -1686,7 +1784,7 @@ unknown, not zero.
 redacted, without discarding available data-directory measurements. This
 endpoint never prunes Docker resources.
 
-`containers` lists what each Aether container holds in its own writable
+`containers` lists what each Cloudfield container holds in its own writable
 layer: files written outside its mounted home, checkout and cache, such as
 `/tmp`. They are deleted with the container, live outside the data directory,
 and are not part of any total above. Each item has `owner_kind` (`run`, or
@@ -1700,8 +1798,8 @@ a failed measurement while the previous sizes stay.
 Admins additionally receive an optional `entries` array, bounded to the
 largest 50 measured owners; `truncated` indicates clipping. Each entry has
 `kind`, `owner_kind` (`run`, `member`, `workspace` or `server`), optional
-`owner_id`, `bytes` and `reason`, with optional `reclaimable_bytes`,
-`retained_until` (ISO 8601), `pool` and `error`. Cache pools are `runs` or
+`owner_id`, `bytes` and `reason`, with optional `retained_until` (ISO
+8601), `pool` and `error`. Cache pools are `runs` or
 `terminal`, owned by the immutable launcher rather than a shared login account.
 Their deadline is an age target: byte pressure may reclaim eligible inactive
 caches earlier. Entries attribute the category
@@ -1841,7 +1939,7 @@ authority.
 | --- | --- | --- |
 | `link.apply` | `{"addr":"host[:port]","invite":"...","name":"..."}` (`invite` and `name` optional) | `{"addr":"host:2222","user":"aether","member":{"id":"...","display_name":"...","role":"..."},"key_generated":"/home/u/.ssh/id_ed25519"}` (`key_generated` omitted when no key was created) |
 | `link.status` | `{}` | `{"linked":bool,"server_configured":bool,"addr":"...","user":"...","repo":"...","edge_url":"...","server_id":"...","links":[{"name":"...","addr":"...","repo":"..."}],"active":"..."}` (`edge_url` and `server_id` are present only on an edge link; `links` is present whenever a named profile is saved, `active` only when the gateway runs on one; a profile's `repo` is omitted when it records no clone of its own and inherits the top-level one; `server_configured` reports a configured server even when no repository is linked) |
-| `edge.login` | `{"edge":"https://...","label":"..."}` (both optional) | `{"state":"pending","edge":"https://edge.onaether.dev","signin_origin":"https://auth.onaether.dev","user_code":"...","verification_uri":"https://auth.onaether.dev/device"}` |
+| `edge.login` | `{"edge":"https://...","label":"..."}` (both optional) | `{"state":"pending","edge":"https://edge.cloudfield.ai","signin_origin":"https://auth.cloudfield.ai","user_code":"...","verification_uri":"https://auth.cloudfield.ai/device"}` |
 | `edge.status` | `{}` | `{"edges":[{"edge":"https://...","signin_origin":"https://...","account":{"id":"acct_...","provider":"github","subject":"...","login":"...","email":"...","name":"..."},"device":{"id":"...","label":"...","key":"ssh-ed25519 ..."},"error":"..."}],"login":{"state":"pending"\|"signed_in"\|"failed","edge":"...","signin_origin":"...","user_code":"...","verification_uri":"...","account":{...},"error":"..."}}` (`login` only once `edge.login` ran in this process; an entry's `error` replaces its `signin_origin`, `account` and `device` when its stored sign-in cannot be read) |
 | `edge.servers` | `{"edge":"https://..."}` (optional) | `{"edge":"https://...","servers":[{"id":"...","name":"...","online":bool,"role":"admin","access_policy":"account"\|"approved-devices","kind":"self-hosted"\|"hosted"}]}` |
 | `edge.hostkey` | `{"server_id":"...","edge":"https://..."}` (`edge` optional) | `{"edge":"https://...","server_id":"...","fingerprint":"SHA256:..."}` |
@@ -1849,8 +1947,8 @@ authority.
 | `edge.claim` | `{"code":"<claim code>","edge":"https://...","addr":"host[:port]","name":"..."}` (all but `code` optional) | as `edge.link` |
 | `edge.join` | `{"link":"<join link>","addr":"host[:port]","name":"..."}` (`addr` and `name` optional) | as `edge.link` |
 | `edge.logout` | `{"edge":"https://..."}` (optional) | `{"edge":"https://..."}` |
-| `link.switch` | `{"name":"..."}` (empty selects the default link) | `{"active":"<name>"}` after relinking the gateway in place; the dashboard reloads. It stops the gateway's forwards and syncs first and saves the choice as `gui_server` in `config.json`, which a later `aether gui` without `--server` starts on. Naming the active link changes nothing. An unknown name is `-32602`: `no server named "<name>"` |
-| `link.reset` | `{}` | `{"deleted":"<config dir>"}` after relinking the gateway to nothing, stopping its forwards and syncs, and deleting the Aether config directory: `config.json`, the edge device key and tokens, and the workspace selection. The SSH key under `~/.ssh` and the linked clone stay, and the edge keeps the device approved until it is revoked there or `aether logout` ran first. The next `link.status` reports `server_configured:false`; the dashboard clears its saved settings and reloads into onboarding |
+| `link.switch` | `{"name":"..."}` (empty selects the default link) | `{"active":"<name>"}` after relinking the gateway in place; the dashboard reloads. It stops the gateway's forwards and syncs first and saves the choice as `gui_server` in `config.json`, which a later `cloudfield gui` without `--server` starts on. Naming the active link changes nothing. An unknown name is `-32602`: `no server named "<name>"` |
+| `link.reset` | `{}` | `{"deleted":"<config dir>"}` after relinking the gateway to nothing, stopping its forwards and syncs, and deleting the Cloudfield config directory: `config.json`, the edge device key and tokens, and the workspace selection. The SSH key under `~/.ssh` and the linked clone stay, and the edge keeps the device approved until it is revoked there or `cloudfield logout` ran first. The next `link.status` reports `server_configured:false`; the dashboard clears its saved settings and reloads into onboarding |
 | `link.repo` | `{"repo":"/path/to/clone","workspace_id":"..."}` (`workspace_id` optional) | `{"repo":"...","remote":"aether","url":"...","origin":"..."}` (`origin` is the workspace checkout `Origin` afterwards, omitted when it has none) |
 | `git.identity` | `{}` | `{"name":"Ada Lovelace","email":"ada@example.com"}` - this machine's `git config user.name` and `user.email`; either is empty when unset |
 | `pull` | `{"run_id":"..."}` | `{"branch":"...","ref":"...","output":"...","current":bool,"dirty":bool}` |
@@ -1862,12 +1960,11 @@ authority.
 | `sync.status` | `{}` | `{"sessions":[{"run_id":"...","state":"...","conflict":"..."\|null}]}` |
 | `daemon.install` | `{"server":"host:port","repo":"..."}` (`repo` defaults to the linked one; the unit gets the linked `--key`) | `{"unit_path":"...","note":"..."}` |
 | `daemon.status` | `{}` | `{"installed":bool,"unit_path":"..."}` |
-| `env.agents` | `{}` | `{"agents":[{"name":"claude","installed":bool},...],"searched":["/usr/local/bin",...],"warning":"...","repo_path":"..."}` - the setup-capable agents in order, with whether each executable is on this machine's `PATH`. The verb first widens the gateway's `PATH` from your login shell (`$SHELL -l -i`, bounded to 5 seconds), so agents installed through a shell profile or since the gateway started are found; `searched` is the resulting `PATH` as a list of folders (always present, may be empty); `warning` is present only when the login shell could not be asked, carrying that error verbatim (the standard folders `/usr/local/bin`, `/opt/homebrew/bin`, `~/.local/bin`, and `~/.bun/bin` were still checked); `repo_path` is the repository folder the saved link config knows, present only when exactly one is known, for prefilling the wizard's from-repo folder input |
 | `forward.start` | `{"target":"run:<run-id>|terminal","port":1455}` | `{"target":"run:<run-id>|terminal","port":1455,"local_port":1455,"state":"active"}`; idempotent for the same target and port |
 | `forward.stop` | `{"target":"run:<run-id>|terminal","port":1455}` | `{"target":"run:<run-id>|terminal","port":1455,"state":"stopped"}` |
 | `forward.status` | `{}` | `{"forwards":[{"target":"run:<run-id>|terminal","port":1455,"local_port":1455,"conns":1}]}` sorted by target, then port |
-| `update.check` | `{"refresh":bool}` (optional; `true` skips the cached release lookup) | `{"cli":{...},"cli_error":"...","server_version":"v1.2.9","server_behind":bool,"server_error":"...","client_update_required":bool,"min_client_version":"v1.2.9","supervised":bool,"shell_build_error":"...","cli_path":"/usr/local/bin/aether","install_method":"direct"\|"admin-prompt"\|"manual","target_version":"v1.3.0","server_first":bool,"can_self_update":bool}` (`target_version` empty when there is no release to move to or `server_first` is true; `cli_error` only when the release lookup failed; `server_error` only when the server did not answer; `shell_build_error` only when the last in-app desktop rebuild failed; `cli_path` and `install_method` absent when the binary could not be probed) |
-| `update.apply` | `{}` | `{"updated":["/usr/local/bin/aether"],"version":"v1.3.0","restarting":bool,"rebuilding":bool,"note":"...","restart_command":"..."}` (`restart_command` only when `aether-server` was replaced too) |
+| `update.check` | `{"refresh":bool}` (optional; `true` skips the cached release lookup) | `{"cli":{...},"cli_build":412,"cli_error":"...","server_version":"v1.2.9","server_build":412,"server_behind":bool,"server_error":"...","client_update_required":bool,"min_client_version":"v1.2.9","min_client_build":412,"supervised":bool,"shell_build_error":"...","cli_path":"/usr/local/bin/aether","install_method":"direct"\|"admin-prompt"\|"manual","target_version":"v1.3.0","target_build":420,"server_first":bool,"can_self_update":bool}` (`target_version` empty when there is no release to move to or `server_first` is true; `cli_error` only when the release lookup failed; `server_error` only when the server did not answer; `shell_build_error` only when the last in-app desktop rebuild failed; `cli_path` and `install_method` absent when the binary could not be probed) |
+| `update.apply` | `{}` | `{"updated":["/usr/local/bin/aether"],"version":"v1.3.0","restarting":bool,"rebuilding":bool,"note":"...","restart_command":"..."}` (`restart_command` only when `cloudfield-server` was replaced too) |
 | `update.status` | `{}` | `{"phase":"packaging","lines_tail":["..."],"error":"..."}` - the desktop-app rebuild `update.apply` started (`error` only when `phase` is `error`) |
 | `workspace.selection` | `{}` reads; `{"workspace_id":"..."}` saves; an empty ID clears | `{"workspace_id":"..."}` |
 
@@ -1882,16 +1979,18 @@ does, with the same files in the config directory:
 
 | Verb | Command |
 | --- | --- |
-| `edge.login` | `aether login` |
-| `edge.servers` | `aether servers` |
-| `edge.hostkey` | the host key `aether link --from-edge` shows before it asks |
-| `edge.link` | `aether link <server id>` |
-| `edge.claim` | `aether link --claim <code>` |
-| `edge.join` | `aether link <join link>`, one attempt |
-| `edge.logout` | `aether logout` |
+| `edge.login` | `cloudfield login` |
+| `edge.servers` | `cloudfield servers` |
+| `edge.hostkey` | the host key `cloudfield link --from-edge` shows before it asks |
+| `edge.link` | `cloudfield link <server id>` |
+| `edge.claim` | `cloudfield link --claim <code>` |
+| `edge.join` | `cloudfield link <join link>`, one attempt |
+| `edge.logout` | `cloudfield logout` |
 
 - `edge` names the edge by its relay origin. Without it a verb uses the one
-  edge this machine is signed in to, else `https://edge.onaether.dev`. An
+  edge this machine is signed in to, else the project's edge at the address
+  this machine already uses, else `https://edge.cloudfield.ai`
+  ([edge.md](edge.md#moving-to-another-address-of-the-edge)). An
   address that is not `https://host[:port]`, or `http://` on loopback,
   answers `-32602`.
 - `edge.login` answers once the edge has registered the sign-in. The person
@@ -1909,7 +2008,7 @@ does, with the same files in the config directory:
   and asks for a confirmation; a server id typed from the admin links
   without one.
 - `edge.link` and `edge.claim` save the link and swap the gateway connection
-  in place, as `link.apply` does; under `aether gui --server <name>` a link
+  in place, as `link.apply` does; under `cloudfield gui --server <name>` a link
   to the same server (same address or server id) is saved into that named
   profile, and a link to another server is added as a new named link, called
   `name`, else the server id or address (suffixed `-2`, `-3` when taken), and
@@ -2007,12 +2106,20 @@ the dashboard calls them through `POST /api/v1/<method>` like any other:
   to `edge.claim`.
 
 A device recorded pending, approved or revoked is published as the
-`member.device` event, `{"device_id":"...","status":"..."}`, and a merge
-as `member.merged`, `{"merge_id":"...","survivor_id":"...","absorbed_id":"..."}`,
+`member.device` event, `{"device_id":"...","status":"...","member_id":"..."}`,
+and a merge as `member.merged`, `{"merge_id":"...","survivor_id":"...","absorbed_id":"..."}`,
 under the workspace id `server`, which names no workspace, so a server without
-workspaces still reports it. The shapes are in
+workspaces still reports it. `member_id` is the member the device signs in
+as, or for a device waiting on an invitation the member it links or the
+invitation's creator. Either event reaches only a member who sees every
+member it names (`member.list`), and a device event without `member_id`
+only super admins. The shapes are in
 `internal/protocol/identity.go` and `internal/protocol/edge.go`, and
-[edge.md](edge.md) describes what each does.
+[edge.md](edge.md) describes what each does. A workspace grant, revoke or
+owner change is also published under `server` as `member.access`,
+`{"workspace_id":"...","member_id":"...","action":"granted|revoked|owner"}`,
+to the member it changed alone, so a member who just lost the workspace still
+receives it.
 
 `workspace.selection` stores only the last selected workspace ID in
 `workspace-selection/<hash>.json` beside the CLI's `config.json`. The hash
@@ -2029,13 +2136,13 @@ the server snapshot from loading.
   must carry. Onboarding and workspace repository settings always send the
   selected ID, as do `repo.push` and `repo.fast-forward`; they never rely on
   single-workspace inference. Without it, the API still resolves like
-  `aether link --repo`: a single workspace resolves implicitly; none or several
+  `cloudfield link --repo`: a single workspace resolves implicitly; none or several
   answers `-32002` (invalid state). Use `--workspace <name-or-id>` from the CLI.
 - The gateway keeps one current repository per server profile. Linking another
   workspace replaces that current clone, not a hidden per-workspace mapping.
   The UI checks `link.status` before mutations; the gateway verifies that the
   current clone's `aether` remote targets the supplied workspace.
-  Linking under `aether gui --server <name>` saves the repository in that named
+  Linking under `cloudfield gui --server <name>` saves the repository in that named
   profile without overwriting defaults or siblings. If its saved server
   identity changed or disappeared, restart the GUI before linking.
   Creation and linking responses belong to the initiating form, connection and
@@ -2156,17 +2263,17 @@ the server snapshot from loading.
   and lost. Both carry git's own words.
 - A gateway started with `AETHER_PACKAGED` set, as the Android app does with
   `Android app`, is part of an app that installs its own updates and has no git
-  checkout, service manager or local agents. It leaves out `daemon.install`,
-  `daemon.status`, `env.agents`, `git.identity`, `link.repo`, `pull`,
+  checkout or service manager. It leaves out `daemon.install`,
+  `daemon.status`, `git.identity`, `link.repo`, `pull`,
   `pull.switch`, `repo.fast-forward`, `repo.push`, `sync.start`,
   `sync.status` and `sync.stop` from `local`, and `forward.start`,
   `forward.status` and `forward.stop` too: a forward listens on `127.0.0.1`,
   which every app on a phone can reach. `update.check` still reports the
   newest release, with `packaged` set, `can_self_update` false and no
-  `asset`, so the dashboard can say an update exists, and `aether update
+  `asset`, so the dashboard can say an update exists, and `cloudfield update
   --check --json` prints the same check for the app's own banner.
   `update.apply` refuses from the configuration, before any lookup, and
-  `aether update` without `--check` refuses likewise, both with `this aether
+  `cloudfield update` without `--check` refuses likewise, both with `this aether
   is part of the Android app, which installs its updates; update the Android
   app instead`: the APK is the update unit, and the sidecar never replaces
   its own binary.
@@ -2179,11 +2286,13 @@ the server snapshot from loading.
   `conflict`), and `error`. A conflict is also reported to the server as a
   `sync.conflict` call so both affected members see the event;
   `sync.stop` dismisses a standing conflict.
-- `update.check` answers the release check `aether update --check --json`
+- `update.check` answers the release check `cloudfield update --check --json`
   prints, under `cli`, beside the linked server's version. Its fields are
   `version`, `commit`, `latest`, `update_available`, `asset`, `release_url`,
   `dev`, `disabled`, `can_self_update`, `packaged` and `checked_at`
-  ([install.md](install.md#upgrading)). The gateway resolves the latest
+  ([install.md](install.md#upgrading)). `latest` is the newest release on the
+  channel the default linked server follows, which the gateway reads from
+  `server.update_status` at most every 10 minutes. The gateway resolves the latest
   release at most once an hour and serves the cached answer in between, so
   a page load never costs a request to GitHub. `refresh: true` skips the
   cache and dials, and the answer it resolves replaces the cached one; the
@@ -2194,7 +2303,12 @@ the server snapshot from loading.
   verb still answers 200, with `cli` holding only this build's own fields,
   so the server half shows during a GitHub outage.
   `client_update_required` is true when the server's `min_client_version`
-  is newer than this CLI, which means the server refuses it with `-32005`.
+  is newer than this CLI, which means the server refuses it with `-32005`:
+  by `min_client_build` when the server and this CLI both carry a build,
+  else by version. `cli_build`, `server_build`, `min_client_build` and
+  `target_build`, with their `*_hotfix`, are the signed build numbers of
+  those releases, absent for build 0 and for a target whose build this CLI
+  does not know.
   It is false when the server does not answer, or when either version is
   not a release. A failed lookup is cached for five minutes, so an
   offline machine is not re-dialed every time a page loads or a window
@@ -2205,7 +2319,7 @@ the server snapshot from loading.
   is not a boolean. `server_behind` compares the linked server's version
   with that same latest release; `supervised` reports
   whether this gateway was started by the desktop shell
-  (`aether gui --json`), which is what decides whether `update.apply` may
+  (`cloudfield gui --json`), which is what decides whether `update.apply` may
   restart it. `shell_build_error`
   is present only when the last in-app desktop rebuild failed, and carries
   that build's own error. `target_version` is the release this CLI should
@@ -2213,14 +2327,14 @@ the server snapshot from loading.
   server's release (`server_version` without a `git describe` tail) when it
   is a release tag newer than this CLI, otherwise `latest` when that is
   newer, otherwise empty. It is empty too for a dev build and with
-  `AETHER_NO_UPDATE_CHECK` set. `can_self_update` is true when
+  `CLOUDFIELD_NO_UPDATE_CHECK` set. `can_self_update` is true when
   `update.apply` can install it here; it is false for a dev build and with `AETHER_PACKAGED` set, where `target_version` is still
   reported so the client can link its release page. `server_first` is true
   when the linked server runs a release older than the target, this member
   is an admin, and `server.update_status` reports the server `capable` of
   updating itself: `target_version` is then empty and `update.apply`
   refuses with `-32002` and `update the server first: aether server
-  update`, the rule `aether update` applies.
+  update`, the rule `cloudfield update` applies.
 - `cli_path` is the binary `update.apply` would replace, symlinks resolved,
   and `install_method` how: `direct` when its directory is writable by this
   user, so the swap just happens; `admin-prompt` when it is not and the
@@ -2259,17 +2373,17 @@ the server snapshot from loading.
   at that moment rather than what was newest when the banner was drawn -
   and asks the linked server for its version. It installs `target_version`
   as `update.check` defines it: a server ahead of this CLI decides the
-  release, so the client matches its server, as `aether update --version
+  release, so the client matches its server, as `cloudfield update --version
   <server release>` would, even when GitHub's latest is older (it skips
   prereleases and can lag a publish). A failed lookup is the call's error
   unless the server named the target; no cached tag stands in for it. It
-  then runs the swap `aether update` runs, on the `aether` binary this gateway
-  is served from - and `aether-server` beside it on a Linux server host, in
+  then runs the swap `cloudfield update` runs, on the `aether` binary this gateway
+  is served from - and `cloudfield-server` beside it on a Linux server host, in
   which case `restart_command` carries the `sudo systemctl restart
   aether-server` the command prints, because the running server keeps the
   old code until its unit restarts. On a supervised gateway it answers
   `restarting: true`; started from a terminal it answers
-  `restarting: false` and a note telling the user to rerun `aether gui`. It
+  `restarting: false` and a note telling the user to rerun `cloudfield gui`. It
   never updates a *remote* server: the dashboard has no authority there,
   and the server banner names the commands to run on that host instead. A
   second `update.apply` for a release this gateway process already
@@ -2298,13 +2412,13 @@ the server snapshot from loading.
      because root will read from it.
   2. It runs `/usr/bin/osascript -e 'do shell script "<command>" with
      prompt "<text>" with administrator privileges'`, which shows macOS's
-     standard administrator dialog: titled `osascript`, Aether's text
-     beneath it (`Aether wants to replace /usr/local/bin/aether with aether
-     v1.3.0. macOS shows this request as osascript, the tool Aether asks
-     through. Aether never sees your password.`), and the system's own
+     standard administrator dialog: titled `osascript`, Cloudfield's text
+     beneath it (`Cloudfield wants to replace /usr/local/bin/aether with aether
+     v1.3.0. macOS shows this request as osascript, the tool Cloudfield asks
+     through. Cloudfield never sees your password.`), and the system's own
      last line, "Touch ID or enter your password to allow this." The
      password or Touch ID match goes to macOS's authorization service;
-     nothing is stored, piped, or logged by Aether. Root sessions one fixed
+     nothing is stored, piped, or logged by Cloudfield. Root sessions one fixed
      `sh` command made of
      system tools - a `0600` temp file in the destination directory, a
      copy, a SHA-256 check against the digest baked into the command text,
@@ -2353,25 +2467,25 @@ the server snapshot from loading.
 - A supervised gateway exits only once the rebuild ends: **75** on success,
   so the shell relaunches onto the new app, and **0** on failure, so the
   shell respawns the sidecar on the new CLI. On Windows the rebuild only
-  *stages* the app (`aether gui build --json --stage` downloads or builds it
+  *stages* the app (`cloudfield gui build --json --stage` downloads or builds it
   into `<user cache>/aether/desktop-build/staged-app` and installs nothing),
   because the app directory cannot be renamed while the shell runs and the
   gateway dies with the shell. The gateway then starts the updated CLI as a
-  detached helper, `aether gui build --staged --after-exit <shell pid>,<gateway pid>`
+  detached helper, `cloudfield gui build --staged --after-exit <shell pid>,<gateway pid>`
   (`DETACHED_PROCESS`, no `powershell.exe` or `cmd.exe`, working directory
 the temp directory so it never holds the app directory open), and exits
 **76**.
   The helper waits for both processes by handle, for at most a minute; ends
   the `aether-daemon` Scheduled Task if it is running (`schtasks /End` does not
   trigger the task's restart-on-failure); swaps the app in with the same
-  rename-and-roll-back install as `aether gui build`; starts the task again
+  rename-and-roll-back install as `cloudfield gui build`; starts the task again
   with `schtasks /Run`; and starts the app. If a step fails, the helper leaves the old app in place, starts it,
   and writes the error to `last-error.txt`, so the next dashboard shows it as
   `shell_build_error`. If the helper itself cannot start, the gateway
   records that and exits **0**, leaving the old app running. A failed build is also written
   to `<user cache>/aether/desktop-build/last-error.txt`, which the next
   gateway's `update.check` returns as `shell_build_error` so the dashboard
-  can show what went wrong; the next successful `aether gui build` removes
+  can show what went wrong; the next successful `cloudfield gui build` removes
   it. An *unsupervised* gateway never exits: it rebuilds the app and the
   note tells the user to restart it.
 - `update.apply` errors, each carrying the underlying message verbatim:
@@ -2388,7 +2502,7 @@ the temp directory so it never holds the app directory open), and exits
     `sudo aether update` ``, before anything is downloaded. If osascript
     still reports no session at launch time, ``no GUI session to show the
     macOS authorization dialog in: ... (-1713); run `sudo aether update` in
-    a terminal on this Mac``. Also a dev build, `AETHER_NO_UPDATE_CHECK`
+    a terminal on this Mac``. Also a dev build, `CLOUDFIELD_NO_UPDATE_CHECK`
     set, Windows, and nothing to install: `already on <latest>, the newest
     release` when neither the server nor the latest release is ahead of
     this build (downloading it over itself would report success for work
@@ -2411,7 +2525,7 @@ the temp directory so it never holds the app directory open), and exits
 ## WebSockets
 
 Cross-origin WebSocket handshakes are rejected; the SPA is served from the
-same origin as the API. On `aether gui`, each handshake carries the
+same origin as the API. On `cloudfield gui`, each handshake carries the
 per-process token as `Authorization: Bearer` or `?token=` - browsers cannot set
 headers on a WebSocket handshake. A missing or stale local token is refused
 with `401` before the upgrade, so it never becomes a socket; the dashboard's
@@ -2422,7 +2536,10 @@ Both transports reconnect on a jittered backoff that caps at 30 seconds, and
 reopen immediately - backoff reset - when the browser fires
 `visibilitychange` (visible) or `online`. A phone freezes a background tab's
 timers, so without those two events a tab returning from the pocket would sit
-out the rest of a 30-second wait. A foreground return leaves a socket that is
+out the rest of a 30-second wait. The events stream also treats a watchdog tick
+more than 15 seconds late, a `pageshow`, and a settled `navigator.connection`
+`change` as those two events ([dashboard-frontend.md](dashboard-frontend.md)).
+A foreground return leaves a socket that is
 still there alone; `online` replaces it whatever state it reached, because a
 network switch leaves even an acknowledged socket half open, with the browser
 still reporting it as connected and no close ever arriving on the client side.
@@ -2439,10 +2556,13 @@ its PTY are not reopened by either event.
 
 Every live socket - `events`, `attach`, `acp`, and `terminal` - is pinged by the
 server every **30 seconds** and closed when the pong does not arrive within
-**10**. A client that changed networks or went to sleep leaves a half-open
-connection that reads as live on both ends; the ping is what releases the PTY
-client it was holding, whose geometry may be clamping every other viewer. The SPA
-reconnects on its normal path.
+**60**. The server's own HTTPS dashboard sends these pings from the server,
+and a starved server reads the pong late; `cloudfield gui` pings from your
+machine. A client that
+changed networks or went to sleep leaves a half-open connection that reads as
+live on both ends; the ping is what releases the PTY client it was holding,
+whose geometry may be clamping every other viewer. The SPA reconnects on its
+normal path.
 
 ### `GET /ws/events`
 
@@ -2481,8 +2601,8 @@ anything dropped.
 When a member's [assistant](assistant.md#notifications) launches or messages a
 session, the server publishes `assistant.notice` as the session finishes or needs the
 member. The envelope carries the session's `workspace_id` and `run_id`, and the
-member as `actor_id`. It is a workspace event, so every subscriber of the
-workspace receives it; a client shows it only to the member in `member_id`.
+member as `actor_id`. It is private: the server sends it, on the stream and in
+`workspace.timeline`, only to the member in `member_id`.
 
 ```json
 {"type":"assistant.notice","payload":{"member_id":"mem_...","run_id":"run_...",
@@ -2506,7 +2626,7 @@ These tell a client what to re-read; none carries the full state.
 
   ```json
   {"type":"git.branch","run_id":"run_...","payload":{"workspace_id":"ws_...",
-   "branch":"aether/run-...","commit":"<sha>","previous":"<sha>","forced":false}}
+   "branch":"cloudfield/run-...","commit":"<sha>","previous":"<sha>","forced":false}}
   ```
 
 - `run.pr`: a pull request recorded for the session was opened through
@@ -2781,7 +2901,7 @@ keystrokes.
 #### Session shell tabs
 
 `GET /ws/attach/<run_id>?shell=<tab>` opens a writable shell tab inside the
-session container instead of attaching to the agent process. A shell tab always
+session sandbox instead of attaching to the agent process. A shell tab always
 requires **steer** permission and ignores the `write` value in the header;
 there is no read-only shell mode. Tab names must match
 `^[a-z0-9-]{1,32}$`, and at most four shells started by people can run in a
@@ -2790,7 +2910,7 @@ The shell starts in `/workspace`. When it exits, the socket closes normally
 with **1000** and the tab name is free to reopen with a fresh shell.
 Closing the socket only detaches: the shell keeps running, still counts
 toward that limit, and reconnecting the same tab name reattaches to
-it. Every shell ends with the session's container. An unsuccessful initial TUI
+it. Every shell ends with the session's sandbox. An unsuccessful initial TUI
 agent exit returns the session to a login shell, so another installed agent
 can use the same session checkout. A session shell can only be opened while the
 container is live; finished sessions expose their recorded terminal output but do
@@ -2871,7 +2991,8 @@ does not run its agent over ACP`. Every frame is JSON text.
    runs, then `succeeded` or `failed` under the same `id`; or `declined`,
    `expired`, `withdrawn`, or `failed` when the approval could not be read
    or counted, alone. The latest record of an `id` replaces the earlier
-   ones. `approval` is `card`, `auto`, or absent for a pause or resume.
+   ones. `approval` is `card`, `auto`, `rule` with the rule's `rule_id`,
+   or absent for a pause or resume.
    `target` has the `workspace_id` and `run_id` the call named, none for
    `env.save`, the `watch_id` of a watch change or delete, and under
    `watch` the `watch.create` target; `other_owner` names the session's owner when it is another
@@ -2915,7 +3036,7 @@ ends when the sign-in exits; there is no replay of an earlier sign-in.
 
 1. Client sends one text header with `cols` and `rows`, and `follow` where
    it means the same as it does for an attach. The gateway ensures the
-   member's environment container and the requested shell.
+   member's environment and the requested shell.
 2. The gateway answers
    `{"ok":true,"tab":"main","cols":120,"rows":40,"replay":4096}` with
    the session's live geometry or a JSON error followed by a close. For a

@@ -48,7 +48,7 @@ export function WorkspaceRepository({ client = api, caps, workspace, initialLoca
   return <section aria-label="Workspace repository" className="flex min-w-0 flex-col gap-4">
     {notReady && (
       <Callout tone="needs-you" title={`The server's copy is ${source.status ?? 'pending'}`}>
-        {source.last_error || 'Sessions start once it is verified and adopted. Open Advanced to review it.'}
+        {source.last_error || ('Sessions start once it is verified and adopted. ' + (source.status !== 'pending' || !source.observed_commit ? 'Open Advanced to review it.' : isAdmin ? 'Adopt it with Review source mirror → Adopt candidate under Advanced.' : 'Ask an admin to adopt it with Review source mirror → Adopt candidate under Advanced.'))}
       </Callout>
     )}
     {!packaged && <div className="flex flex-col items-start gap-2">
@@ -56,7 +56,7 @@ export function WorkspaceRepository({ client = api, caps, workspace, initialLoca
       <p className="text-ui-sm text-muted">
         {source?.enabled
           ? 'Link a clone on this computer to pull session branches. The base branch stays server-owned.'
-          : <>Link a clone on this computer and Aether pushes <Code>{workspace.base_branch}</Code> for you. Linking adds an <Code>aether</Code> remote; your history and origin stay as they are.</>}
+          : <>Link a clone on this computer and Cloudfield pushes <Code>{workspace.base_branch}</Code> for you. Linking adds an <Code>aether</Code> remote; your history and origin stay as they are.</>}
       </p>
       {!local && <Button size="sm" variant="secondary" onClick={() => { setLocal(true); onLocalChange?.(true) }}>Link local repository</Button>}
       {local && <RepoStep client={client} caps={caps} workspace={workspace} mirrored={source?.enabled === true} sourcePending={source === null} back={back} cancel={<Button size="sm" variant="secondary" onClick={() => { setLocal(false); onLocalChange?.(false) }}>Cancel</Button>} onNext={onNext ?? (() => { setLocal(false); onLocalChange?.(false) })} />}
@@ -68,7 +68,7 @@ export function WorkspaceRepository({ client = api, caps, workspace, initialLoca
           <span className="min-w-0 truncate text-muted">Repository source and publishing destination</span>
         </CollapsibleTrigger>
         <CollapsibleContent forceMount className="flex flex-col gap-4 pt-2 pl-5 data-[state=closed]:hidden">
-          {canReadSource ? <OnboardingSourceOption key={generation} client={client} workspaceID={workspace.id} canManageSource={isAdmin} onStatusChange={onStatusChange} /> : <p className="text-ui-sm text-muted">This gateway does not offer source status, so source ownership cannot be checked. Linking works, but base pushes stay off until local-only ownership is confirmed; ask an administrator to verify the source with Review source mirror on the Repository page before launching.</p>}
+          {canReadSource ? <OnboardingSourceOption key={generation} client={client} workspaceID={workspace.id} canManageSource={isAdmin} onStatusChange={onStatusChange} /> : <p className="text-ui-sm text-muted">This gateway does not offer source status, so source ownership cannot be checked. Linking works, but base pushes stay off until local-only ownership is confirmed; ask an administrator to verify the source with Review source mirror on the workspace settings page before launching.</p>}
           <div className="flex flex-col gap-1.5">
             <h4 className="text-ui font-medium text-text">Checkout origin</h4>
             <p className="break-words font-code text-ui-sm">{workspace.origin || 'Not configured; new session checkouts have no publishing remote.'}</p>

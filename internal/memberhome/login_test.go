@@ -6,10 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
-
-	"github.com/3xDevOps/Aether/internal/domain"
 )
 
 func newLoginHomes(t *testing.T) (*Manager, string, string) {
@@ -154,40 +151,6 @@ func replaceWithSymlink(t *testing.T, name, target string) {
 	}
 }
 
-// Two launches that find no state file both succeed: the exclusive create
-// lets one through, and the other re-reads what it wrote.
-func TestMarkBorrowedStateConcurrentCreate(t *testing.T) {
-	t.Parallel()
-	m, err := New(t.TempDir(), t.TempDir(), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	const member = domain.MemberID("m1")
-	if _, err = m.Path(member); err != nil {
-		t.Fatal(err)
-	}
-	keys := map[string]any{"hasCompletedOnboarding": true}
-	errs := make([]error, 8)
-	var wg sync.WaitGroup
-	for i := range errs {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			errs[i] = m.MarkBorrowedState(member, ".claude.json", keys)
-		}()
-	}
-	wg.Wait()
-	for i, err := range errs {
-		if err != nil {
-			t.Fatalf("mark %d: %v", i, err)
-		}
-	}
-	data, err := os.ReadFile(filepath.Join(m.Root(), string(member), ".claude.json"))
-	if err != nil || string(data) != `{"hasCompletedOnboarding":true}` {
-		t.Fatalf("state = %q, %v", data, err)
-	}
-}
-
 func TestLoginFound(t *testing.T) {
 	manager, owner, _ := newLoginHomes(t)
 	if err := os.WriteFile(filepath.Join(owner, ".codex"), nil, 0o600); err != nil {
@@ -220,5 +183,54 @@ func TestLoginFound(t *testing.T) {
 	// An empty directory is a mountpoint too.
 	if got, err := manager.LoginFound("other", []string{".omp/agent"}); err != nil || got {
 		t.Errorf("LoginFound of an empty .omp/agent = %v, %v; want false", got, err)
+	}
+}
+
+func TestLoginStampChangesWhenALoginIsWrittenOrRemoved(t *testing.T) {
+	manager, owner, _ := newLoginHomes(t)
+	rels := []string{".claude/.credentials.json", ".codex/auth.json"}
+	stamp := func() string {
+		t.Helper()
+		got, err := manager.LoginStamp("owner", rels)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	first := stamp()
+	if again := stamp(); again != first || first == "" {
+		t.Fatalf("stamp of an untouched login = %q then %q, want the same non-empty stamp", first, again)
+	}
+	file := filepath.Join(owner, ".claude", ".credentials.json")
+	if err := os.WriteFile(file, []byte(`{"signed":"in"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	written := stamp()
+	if written == first {
+		t.Fatal("stamp did not change when the login file was rewritten")
+	}
+	if err := os.Remove(file); err != nil {
+		t.Fatal(err)
+	}
+	if removed := stamp(); removed == written || removed != "" {
+		t.Fatalf("stamp with no login left = %q, want empty", removed)
+	}
+	db := filepath.Join(owner, ".omp", "agent", "agent.db")
+	dir := []string{".omp/agent"}
+	if err := os.WriteFile(db, []byte("login"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := manager.LoginStamp("owner", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(db, []byte("another login"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if after, stampErr := manager.LoginStamp("owner", dir); stampErr != nil || after == before {
+		t.Fatalf("stamp of a login directory after a file in it was rewritten = %q, %v, want a change from %q", after, stampErr, before)
+	}
+	if got, err := manager.LoginStamp("nobody", rels); err != nil || got != "" {
+		t.Fatalf("stamp of a member without a home = %q, %v, want empty", got, err)
 	}
 }

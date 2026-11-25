@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"maps"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -23,7 +24,7 @@ import (
 const (
 	harnessUpdateInterval       = 6 * time.Hour
 	harnessUpdateRetry          = 15 * time.Minute
-	defaultHarnessUpdateTimeout = 10 * time.Minute
+	harnessUpdateTimeout        = 10 * time.Minute
 	harnessUpdateDestroyTimeout = 30 * time.Second
 	harnessVersionTimeout       = 15 * time.Second
 	maxHarnessVersion           = 64
@@ -86,7 +87,38 @@ func (s *Scheduler) updateHarness(run *domain.Run, plan *EnvironmentPlan, profil
 	member := domain.MemberID(filepath.Base(home.HostPath))
 	name := "harness-update-" + string(member) + "-" + profile.Name
 	mounts := []runtime.Mount{home}
+	// Every running session shares the member's login through its pin, and
+	// a CLI that refreshes it spends the one refresh token they all hold:
+	// replacing the file by rename strands their pins on the old one, and
+	// a write the pin refuses keeps the new token only in that process.
+	// The update needs no sign-in, so it sees none.
+	noLogin := filepath.Join(s.cfg.StateDir, "updater-no-login")
+	f, err := os.OpenFile(noLogin, os.O_CREATE|os.O_RDONLY, 0o644)
+	if err == nil {
+		err = f.Close()
+	}
+	if err != nil {
+		s.mu.Lock()
+		state.running = nil
+		close(update.done)
+		s.mu.Unlock()
+		slog.Warn("scheduler: hide the login from the updater", "member", filepath.Base(home.HostPath), "error", err)
+		return
+	}
+	for _, p := range harness.Profiles() {
+		for _, rel := range p.PinnedLogins {
+			if info, statErr := os.Lstat(filepath.Join(home.HostPath, rel)); statErr == nil && info.Mode().IsRegular() {
+				mounts = append(mounts, runtime.Mount{HostPath: noLogin, ContainerPath: path.Join(plan.Home, rel), ReadOnly: true})
+			}
+		}
+	}
 	env := maps.Clone(plan.Env)
+	// The updater pins nothing, so a CLI saving its config at a shared
+	// session's account config path would replace that mountpoint and
+	// detach the session's copy.
+	if ac := profile.AccountConfig; ac != nil {
+		delete(env, ac.Env)
+	}
 	if s.cfg.Homes != nil {
 		// Provisioning holds this member's cache lock. Publish the key
 		// before starting the detached worker; running state protects
@@ -126,15 +158,15 @@ func (s *Scheduler) updateHarness(run *domain.Run, plan *EnvironmentPlan, profil
 }
 
 func (s *Scheduler) runHarnessUpdate(state *harnessUpdateState, update *harnessUpdateRun, workspace domain.WorkspaceID, runID domain.RunID, spec runtime.Spec, exe string, profile harness.Profile) {
-	timeout := s.cfg.harnessUpdateTimeout
-	if timeout <= 0 {
-		timeout = defaultHarnessUpdateTimeout
+	withTimeout := s.cfg.harnessUpdateContext
+	if withTimeout == nil {
+		withTimeout = context.WithTimeout
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	ctx, cancel := withTimeout(context.Background(), harnessUpdateTimeout)
 	defer cancel()
 	before, after, err := s.updateInContainer(ctx, spec, exe, profile.UpdateScript)
 	if err != nil && ctx.Err() != nil {
-		err = fmt.Errorf("the updater did not finish within %s", timeout)
+		err = fmt.Errorf("the updater did not finish within %s", harnessUpdateTimeout)
 	}
 	next := harnessUpdateInterval
 	switch {
@@ -156,6 +188,13 @@ func (s *Scheduler) runHarnessUpdate(state *harnessUpdateState, update *harnessU
 			after = "an unknown version"
 		}
 		s.publishTimeline(context.Background(), workspace, runID, "", events.TimelineNote, msg+" to "+after+" for the next launch")
+	}
+	// A failed update may still have replaced the CLI before a later step failed.
+	if err != nil || after != before {
+		s.expireAgentModels(domain.MemberID(filepath.Base(spec.Mounts[0].HostPath)), profile.Name)
+	}
+	if builder, ok := s.cfg.Runtime.(programBuilder); ok && err == nil && after != before {
+		builder.BuildPrograms(vmPrograms(spec.Mounts[0].HostPath, spec.WorkingDir, profile, true))
 	}
 	s.mu.Lock()
 	state.next = s.cfg.Now().Add(next)
@@ -202,7 +241,7 @@ func (s *Scheduler) updateInContainer(ctx context.Context, spec runtime.Spec, ex
 		return "", "", err
 	}
 	defer release()
-	cid, err := s.cfg.Runtime.Create(ctx, spec)
+	cid, err := s.createContainer(ctx, spec)
 	if err != nil {
 		return "", "", err
 	}

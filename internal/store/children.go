@@ -6,15 +6,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/3xDevOps/Aether/internal/domain"
 )
 
 // ChildSettings is a member's child-run setting. Child runs are on until
-// the member turns them off.
+// the member turns them off, on every agent and account but those in Off.
 type ChildSettings struct {
 	Enabled bool
+	Off     domain.ChildChoicesOff
 }
 
 // ChildCounts are one parent's reservations: busy children hold a slot,
@@ -40,13 +42,12 @@ type ChildStore interface {
 	// whose parent ended or was deleted, and completed children their
 	// closed parent left unreviewed.
 	ChildrenToSettle(ctx context.Context) ([]*domain.ChildReservation, error)
-	// IdleChildren returns the attached started children of a live parent
-	// whose live run has been quiet (domain.RunActivity.Quiet) since before
+	// ChildrenInSpell returns the attached started children of a live
+	// parent whose live run's states have all satisfied in since before
 	// cutoff, with when that spell began.
-	IdleChildren(ctx context.Context, cutoff time.Time) ([]IdleChild, error)
+	ChildrenInSpell(ctx context.Context, cutoff time.Time, in func(domain.RunActivity, string) bool) ([]ChildSpell, error)
 	// SetChildState moves a reservation from one of from to to.
 	SetChildState(ctx context.Context, run domain.RunID, to domain.ChildState, errText string, from ...domain.ChildState) error
-	DetachChild(ctx context.Context, run domain.RunID) error
 	// MarkChildEndNotified reports whether this call set the flag.
 	MarkChildEndNotified(ctx context.Context, run domain.RunID) (bool, error)
 	// UnfinishedChildren counts parent's attached children still queued,
@@ -76,7 +77,7 @@ const terminalStatuses = `'completed', 'merged', 'abandoned', 'failed', 'interru
 const childCols = `rc.run_id, rc.parent_run_id, rc.root_run_id, rc.tree_key, rc.workspace_id,
 	rc.owner_member_id, rc.account_member_id, rc.harness, rc.mode, rc.model, rc.purpose, rc.task,
 	rc.base_commit, rc.base_branch, rc.fallback_disabled, rc.fallback_order, rc.idempotency_key, rc.request_hash, rc.state,
-	rc.detached, rc.error, rc.end_notified, rc.created_at, rc.started_at`
+	rc.detached, rc.error, rc.end_notified, rc.created_at`
 
 // childReported holds for a reservation whose run's latest word is a
 // finalized success or failure report, before its run parks on it, and that
@@ -103,19 +104,17 @@ func scanChild(row interface{ Scan(...any) error }) (*domain.ChildReservation, e
 		c         domain.ChildReservation
 		order     string
 		createdAt int64
-		startedAt *int64
 	)
 	if err := row.Scan(&c.RunID, &c.ParentRunID, &c.RootRunID, &c.TreeKey, &c.WorkspaceID,
 		&c.OwnerID, &c.AccountID, &c.Harness, &c.Mode, &c.Model, &c.Purpose, &c.Task,
 		&c.BaseCommit, &c.BaseBranch, &c.Fallback.Disabled, &order, &c.IdempotencyKey, &c.RequestHash, &c.State,
-		&c.Detached, &c.Error, &c.EndNotified, &createdAt, &startedAt); err != nil {
+		&c.Detached, &c.Error, &c.EndNotified, &createdAt); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal([]byte(order), &c.Fallback.Order); err != nil {
 		return nil, fmt.Errorf("store: decode subsession fallback order: %w", err)
 	}
 	c.CreatedAt = decodeTime(createdAt)
-	c.StartedAt = decodeTimePtr(startedAt)
 	return &c, nil
 }
 
@@ -198,16 +197,16 @@ func (d *DB) ChildrenToSettle(ctx context.Context) ([]*domain.ChildReservation, 
 		 ORDER BY rc.created_at`)
 }
 
-// IdleChild is a child run in an unbroken quiet spell.
-type IdleChild struct {
+// ChildSpell is a child run in an unbroken spell of states.
+type ChildSpell struct {
 	Child *domain.ChildReservation
 	Run   *domain.Run
 	Since time.Time
 }
 
-func (d *DB) IdleChildren(ctx context.Context, cutoff time.Time) ([]IdleChild, error) {
+func (d *DB) ChildrenInSpell(ctx context.Context, cutoff time.Time, in func(domain.RunActivity, string) bool) ([]ChildSpell, error) {
 	live, args := liveStatusArgs()
-	cands, err := d.listChildren(ctx, "idle children",
+	cands, err := d.listChildren(ctx, "children in a spell",
 		`SELECT `+childCols+` FROM run_children rc
 		 JOIN runs child ON child.id = rc.run_id
 		 JOIN runs parent ON parent.id = rc.parent_run_id
@@ -217,31 +216,31 @@ func (d *DB) IdleChildren(ctx context.Context, cutoff time.Time) ([]IdleChild, e
 	if err != nil {
 		return nil, err
 	}
-	var out []IdleChild
+	var out []ChildSpell
 	for _, c := range cands {
 		run, err := d.GetRun(ctx, c.RunID)
 		if err != nil {
 			return nil, err
 		}
-		if !run.Activity.Quiet(run.Reason) {
+		if !in(run.Activity, run.Reason) {
 			continue
 		}
-		since, err := d.quietSince(ctx, c.RunID)
+		since, err := d.spellSince(ctx, c.RunID, in)
 		if err != nil {
 			return nil, err
 		}
 		if !since.IsZero() && !since.After(cutoff) {
-			out = append(out, IdleChild{Child: c, Run: run, Since: since})
+			out = append(out, ChildSpell{Child: c, Run: run, Since: since})
 		}
 	}
 	return out, nil
 }
 
-// quietSince is when the run's current unbroken quiet spell began: the
-// oldest of the newest transitions that are all quiet. A reason change
-// inside the spell keeps it going. It is zero when the newest transition is
-// not quiet.
-func (d *DB) quietSince(ctx context.Context, run domain.RunID) (time.Time, error) {
+// spellSince is when the run's current unbroken spell began: the oldest of
+// the newest transitions that all satisfy in. A reason change inside the
+// spell keeps it going. It is zero when the newest transition does not
+// satisfy in.
+func (d *DB) spellSince(ctx context.Context, run domain.RunID, in func(domain.RunActivity, string) bool) (time.Time, error) {
 	rows, err := d.db.QueryContext(ctx,
 		`SELECT activity, reason, at FROM run_state_transitions WHERE run_id = ? ORDER BY rowid DESC`, run)
 	if err != nil {
@@ -258,7 +257,7 @@ func (d *DB) quietSince(ctx context.Context, run domain.RunID) (time.Time, error
 		if err := rows.Scan(&activity, &reason, &at); err != nil {
 			return time.Time{}, fmt.Errorf("store: read run %s transitions: %w", run, err)
 		}
-		if !activity.Quiet(reason) {
+		if !in(activity, reason) {
 			break
 		}
 		since = at
@@ -304,10 +303,9 @@ func (d *DB) ChildCounts(ctx context.Context, parent domain.RunID) (ChildCounts,
 }
 
 func (d *DB) SetChildState(ctx context.Context, run domain.RunID, to domain.ChildState, errText string, from ...domain.ChildState) error {
-	query := `UPDATE run_children SET state = ?, error = ?,
-		started_at = CASE WHEN ? = 'started' THEN ? ELSE started_at END
+	query := `UPDATE run_children SET state = ?, error = ?
 		WHERE run_id = ? AND state IN (?` + repeatPlaceholders(len(from)-1) + `)`
-	args := []any{to, errText, to, time.Now().UTC().UnixNano(), run}
+	args := []any{to, errText, run}
 	for _, s := range from {
 		args = append(args, s)
 	}
@@ -326,14 +324,6 @@ func repeatPlaceholders(n int) string {
 		out += ", ?"
 	}
 	return out
-}
-
-func (d *DB) DetachChild(ctx context.Context, run domain.RunID) error {
-	err := notFoundOnZeroRows(d.db.ExecContext(ctx, `UPDATE run_children SET detached = 1 WHERE run_id = ?`, run))
-	if err != nil && !errors.Is(err, ErrNotFound) {
-		return fmt.Errorf("store: detach subsession: %w", err)
-	}
-	return err
 }
 
 func (d *DB) MarkChildEndNotified(ctx context.Context, run domain.RunID) (bool, error) {
@@ -368,21 +358,41 @@ func (d *DB) UnfinishedChildren(ctx context.Context, parent domain.RunID, since 
 
 func (d *DB) ChildSettings(ctx context.Context, member domain.MemberID) (ChildSettings, error) {
 	s := ChildSettings{Enabled: true}
-	err := d.db.QueryRowContext(ctx, `SELECT enabled FROM child_settings WHERE member_id = ?`, member).Scan(&s.Enabled)
+	var off string
+	err := d.db.QueryRowContext(ctx, `SELECT enabled, off FROM child_settings WHERE member_id = ?`, member).Scan(&s.Enabled, &off)
 	if errors.Is(err, sql.ErrNoRows) {
 		return s, nil
 	}
 	if err != nil {
 		return ChildSettings{}, fmt.Errorf("store: subsession settings: %w", err)
 	}
+	if err := json.Unmarshal([]byte(off), &s.Off); err != nil {
+		return ChildSettings{}, fmt.Errorf("store: subsession settings: decode off: %w", err)
+	}
+	if len(s.Off) == 0 {
+		s.Off = nil
+	}
+	seen := map[domain.ChildChoice]bool{}
+	s.Off = slices.DeleteFunc(s.Off, func(c domain.ChildChoice) bool {
+		dup := seen[c]
+		seen[c] = true
+		return dup
+	})
 	return s, nil
 }
 
 func (d *DB) PutChildSettings(ctx context.Context, member domain.MemberID, s ChildSettings) error {
+	off := []byte("[]")
+	if len(s.Off) > 0 {
+		var err error
+		if off, err = json.Marshal(s.Off); err != nil {
+			return fmt.Errorf("store: put subsession settings: encode off: %w", err)
+		}
+	}
 	_, err := d.db.ExecContext(ctx,
-		`INSERT INTO child_settings (member_id, enabled, updated_at) VALUES (?, ?, unixepoch())
-		 ON CONFLICT(member_id) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at`,
-		member, s.Enabled)
+		`INSERT INTO child_settings (member_id, enabled, off, updated_at) VALUES (?, ?, ?, unixepoch())
+		 ON CONFLICT(member_id) DO UPDATE SET enabled = excluded.enabled, off = excluded.off, updated_at = excluded.updated_at`,
+		member, s.Enabled, string(off))
 	if err != nil {
 		return fmt.Errorf("store: put subsession settings: %w", mapConstraint(err, ErrNotFound))
 	}

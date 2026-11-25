@@ -230,7 +230,7 @@ func TestCheckoutLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateRunCheckout: %v", err)
 	}
-	if branch != "aether/run-fix-the-auth-bug-run1" {
+	if branch != "cloudfield/run-fix-the-auth-bug-run1" {
 		t.Errorf("branch = %q", branch)
 	}
 	if want := filepath.Join(e.cfg.CheckoutsDir, "run1"); checkout != want {
@@ -331,7 +331,7 @@ func TestRunBranchFallsBackToTheFullIDOnCollision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first session: %v", err)
 	}
-	if firstBranch != "aether/run-fix-the-auth-bug-nq0jf3" {
+	if firstBranch != "cloudfield/run-fix-the-auth-bug-nq0jf3" {
 		t.Fatalf("first branch = %q, want the short-id form", firstBranch)
 	}
 
@@ -339,7 +339,7 @@ func TestRunBranchFallsBackToTheFullIDOnCollision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("colliding run: %v", err)
 	}
-	if want := "aether/run-fix-the-auth-bug-" + colliding; branch != want {
+	if want := "cloudfield/run-fix-the-auth-bug-" + colliding; branch != want {
 		t.Errorf("colliding branch = %q, want %q", branch, want)
 	}
 
@@ -367,7 +367,7 @@ func TestFailedCheckoutReleasesItsBranchName(t *testing.T) {
 	ctx := t.Context()
 
 	const run = "01m0h6tym4y65102a721nq0jf3"
-	const short = "aether/run-fix-the-auth-bug-nq0jf3"
+	const short = "cloudfield/run-fix-the-auth-bug-nq0jf3"
 
 	// Fail the run-meta write, which happens after the branch is reserved.
 	// The sidecar lives at <CheckoutsDir>/<run>.json, so a directory
@@ -500,7 +500,7 @@ func TestConcurrentRunsOneWorkspace(t *testing.T) {
 		t.Error(err)
 	}
 	for i := range n {
-		branch := fmt.Sprintf("refs/heads/aether/run-task-%d-run%d", i, i)
+		branch := fmt.Sprintf("refs/heads/cloudfield/run-task-%d-run%d", i, i)
 		if got := bareRevParse(t, e, "ws1", branch); len(got) != 40 {
 			t.Errorf("branch %s missing after concurrent runs", branch)
 		}
@@ -1103,12 +1103,18 @@ func TestDiffWatchQuiescence(t *testing.T) {
 		t.Fatalf("bare branch tip = %s, want %s", got, head)
 	}
 
-	// Drain the run.diff snapshot that accompanied the commit before
-	// checking that a stopped watch stays silent.
-	for {
-		if _, ok := nextEvent(t, diffs, 600*time.Millisecond); !ok {
-			break
+	// The commit alone changes no tree, so the only snapshot left is the one
+	// that records after.txt. Wait for a recorded interval whose patch holds
+	// the finished write (the stats can lag the tree): stopping earlier would
+	// make the final snapshot StopDiffWatch takes publish it instead.
+	for seen := false; !seen; {
+		dev, ok := nextEvent(t, diffs, 5*time.Second)
+		if !ok {
+			t.Fatal("no run.diff event recording after.txt")
 		}
+		pl := dev.Payload.(events.RunDiffPayload)
+		p, err := e.RunPatch(ctx, "run1", PatchRequest{From: pl.ParentTree, To: pl.Tree})
+		seen = err == nil && strings.Contains(p.Text, "+done")
 	}
 
 	e.StopDiffWatch("run1")
@@ -1310,7 +1316,7 @@ func TestReceivePackDeniesBranchDeletion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	branch := "aether/run-artifact-run1"
+	branch := "cloudfield/run-artifact-run1"
 
 	dst := t.TempDir()
 	gitc(t, dst, "clone", url("ws1"), "c")
@@ -1498,7 +1504,7 @@ func TestReceivePackRejectsRunBranchForcePush(t *testing.T) {
 	gitc(t, cl, "reset", "--hard", "HEAD~1")
 	gitc(t, cl, "commit", "--allow-empty", "-m", "divergent")
 	out := gitcFail(t, cl, "push", "--force", url("ws1"), branch)
-	if !strings.Contains(out, "refs/heads/"+branch) || !strings.Contains(out, "owned by the Aether server") {
+	if !strings.Contains(out, "refs/heads/"+branch) || !strings.Contains(out, "owned by the Cloudfield server") {
 		t.Errorf("force-push rejection message unreadable:\n%s", out)
 	}
 	if got := bareRevParse(t, e, "ws1", "refs/heads/"+branch); got != tip {
@@ -1547,6 +1553,89 @@ func TestReceivePackAllowsFeatureBranchForcePush(t *testing.T) {
 	if got := bareRevParse(t, e, "ws1", "refs/heads/feature"); got != want {
 		t.Fatal("feature branch deleted through ReceivePack")
 	}
+}
+
+// Sessions from before the rename keep aether/run- branches, so both
+// prefixes stay protected.
+func TestReceivePackProtectsBothSessionBranchPrefixes(t *testing.T) {
+	for _, prefix := range []string{"aether/run-", "cloudfield/run-"} {
+		t.Run(prefix, func(t *testing.T) {
+			e := newTestEngine(t, nil)
+			url := serveTransport(t, e)
+			seedWorkspace(t, e, url, "ws1")
+			assertSessionBranchProtected(t, e, url, "ws1", prefix+"client-made")
+		})
+	}
+}
+
+// assertSessionBranchProtected pushes branch as a new branch, then checks
+// that a force-push is refused and a fast-forward lands.
+func assertSessionBranchProtected(t *testing.T, e *Engine, url func(domain.WorkspaceID) string, ws domain.WorkspaceID, branch string) {
+	t.Helper()
+	dst := t.TempDir()
+	gitc(t, dst, "clone", url(ws), "c")
+	cl := filepath.Join(dst, "c")
+	gitc(t, cl, "commit", "--allow-empty", "-m", "session work")
+	gitc(t, cl, "push", url(ws), "HEAD:refs/heads/"+branch)
+	tip := gitc(t, cl, "rev-parse", "HEAD")
+
+	gitc(t, cl, "reset", "--hard", "HEAD~1")
+	gitc(t, cl, "commit", "--allow-empty", "-m", "divergent")
+	out := gitcFail(t, cl, "push", "--force", url(ws), "HEAD:refs/heads/"+branch)
+	if !strings.Contains(out, "refs/heads/"+branch) || !strings.Contains(out, "owned by the Cloudfield server") {
+		t.Errorf("force-push rejection message unreadable:\n%s", out)
+	}
+	if got := bareRevParse(t, e, ws, "refs/heads/"+branch); got != tip {
+		t.Fatalf("%s tip = %s after rejected force-push, want %s", branch, got, tip)
+	}
+
+	gitc(t, cl, "reset", "--hard", tip)
+	gitc(t, cl, "commit", "--allow-empty", "-m", "fast-forward")
+	gitc(t, cl, "push", url(ws), "HEAD:refs/heads/"+branch)
+	if got := bareRevParse(t, e, ws, "refs/heads/"+branch); got != gitc(t, cl, "rev-parse", "HEAD") {
+		t.Fatalf("fast-forward push to %s did not land", branch)
+	}
+}
+
+func TestInitWorkspaceRepoRewritesOlderHook(t *testing.T) {
+	dir := t.TempDir()
+	cfg := Config{ReposDir: filepath.Join(dir, "repos"), CheckoutsDir: filepath.Join(dir, "checkouts")}
+	before, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo, err := before.InitWorkspaceRepo(t.Context(), "ws1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = before.Close()
+
+	// The hook a server wrote before it accepted cloudfield/run-.
+	const both = "refs/heads/aether/run-* | refs/heads/cloudfield/run-*"
+	oldHook := strings.Replace(updateHook, both, "refs/heads/aether/run-*", 1)
+	if oldHook == updateHook {
+		t.Fatalf("update hook does not match %q", both)
+	}
+	hook := filepath.Join(repo, "hooks", "update")
+	if err := os.WriteFile(hook, []byte(oldHook), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// A fresh engine stands in for a restarted server.
+	after, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = after.Close() })
+	if _, err := after.InitWorkspaceRepo(t.Context(), "ws1"); err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := os.ReadFile(hook); string(data) != updateHook {
+		t.Fatalf("update hook of an existing repo not rewritten at start:\n%s", data)
+	}
+	url := serveTransport(t, after)
+	seedWorkspace(t, after, url, "ws1")
+	assertSessionBranchProtected(t, after, url, "ws1", "cloudfield/run-client-made")
 }
 
 func TestServerRewriteKeepsOldTipInReflog(t *testing.T) {

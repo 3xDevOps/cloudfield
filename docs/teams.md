@@ -1,11 +1,12 @@
-# Running Aether with a team
+# Running Cloudfield with a team
 
-One Aether server can serve several people. Each person is a **member** with a
+One Cloudfield server can serve several people. Each person is a **member** with
+a
 **role**, and everyone's agents run side by side in the same **workspaces** (a
 workspace is one repository plus its settings). A solo setup is a team of one,
 so there is nothing to switch on: you add members.
 
-You need a running server and a first member, who is the admin. See
+You need a running server and a first member, who is its super admin. See
 [quickstart.md](quickstart.md). New terms are in the
 [glossary](README.md#concepts).
 
@@ -16,29 +17,29 @@ the server.
 
 | Method | Use it when | Who approves |
 | --- | --- | --- |
-| Tailnet | Everyone is on your Tailscale network | An admin, once per person |
+| Tailnet | Everyone is on your Tailscale network | An admin or super admin, once per person |
 | Edge | People sign in with GitHub through an [edge](edge.md) (a relay that lets people reach the server without sharing a network) | The invitation, then a device approval |
 | Invite code | A person has neither, and you can send a code | Nobody: the code is the approval |
 
 ### Over a tailnet
 
-The server must have tailnet sign-in on. `aether-server setup` turns it on when
+The server must have tailnet sign-in on. `cloudfield-server setup` turns it on when
 you answer yes to its tailnet question ([install.md](install.md#first-boot)).
 The teammate joins your tailnet and sessions:
 
 ```sh
-aether link my-server
+cloudfield link my-server
 ```
 
 Tailscale proves who they are, and the server adds them as a pending
-collaborator. `aether link` prints `linked to <server> as <name> (collaborator,
+collaborator with no workspaces. `cloudfield link` prints `linked to <server> as <name> (collaborator,
 pending); an admin runs: aether member approve <member-id>`. Until an admin
 does, their commands fail with `membership pending admin approval; ask an admin
 to run: aether member approve <member-id>`.
 
 ```sh
-aether member list              # the PENDING column marks who waits
-aether member approve mem-rbekp4h6fx
+cloudfield member list              # the PENDING column marks who waits
+cloudfield member approve mem-rbekp4h6fx
 ```
 
 Start the server with `--tailnet-auto-join` to skip approval when your tailnet
@@ -47,42 +48,50 @@ revocation.
 
 ### Through an edge
 
-An admin invites a teammate by GitHub login, or by the verified primary email of
-their GitHub account:
+An admin or super admin invites a teammate by GitHub login, or by the verified
+primary email of their GitHub account. `--workspace` names a workspace the
+teammate is granted on joining, by name or id, and repeats ([Workspace
+access](#workspace-access)):
 
 ```sh
-aether invite --github dana --role collaborator
-aether invite --email dana@example.com --role viewer
+cloudfield invite --github dana --role collaborator --workspace web --workspace api
+cloudfield invite --email dana@example.com --role viewer --workspace web
 ```
 
-`--role` is `viewer`, `collaborator` (the default) or `admin`. The command prints
+`--role` is `viewer`, `collaborator` (the default), `admin` or, from a super
+admin, `super_admin`. An admin may invite only a collaborator or viewer, into
+at least one workspace they own and only into workspaces they own; a super admin
+may invite any role into any workspaces, or none. The command prints
 an invite link of the form `https://<edge host>/join/<server id>/<invitation
 id>#<secret>`. It is shown once. In the dashboard, **Members → Invite…** shows it
 with **Copy link**. Send it to the teammate, who opens it and selects **Join** in
 the desktop app, or in a terminal runs:
 
 ```sh
-aether login            # or aether login --json, for a script or coding agent
-aether link '<invite link>'
+cloudfield login            # or cloudfield login --json, for a script or coding agent
+cloudfield link '<invite link>'   # aether link on Windows: cloudfield.cmd splits a link at its &
 ```
 
 What happens next depends on the server's `edge-access` policy
 ([edge.md](edge.md#access-policies)). Under `approved-devices` (the default), the
 teammate's device waits until an admin approves it from a **Needs you** card or
-[the commands below](#approve-devices), and `aether link` prints `waiting for an
+[the commands below](#approve-devices), and `cloudfield link` prints `waiting for an
 admin of <server> to approve this device (<label>, <fingerprint>)…`. Under
 `account`, signing in admits the device and creates the member at once.
 
 An invitation expires after 7 days, and an invited login or email matches only
 within 24 hours of the teammate's last GitHub sign-in at the edge. If you see
 `open this edge in a browser to confirm them`, open any edge page to sign in
-again. List and revoke invitations with `aether invite list` and `aether invite
+again. List and revoke invitations with `cloudfield invite list` and `cloudfield invite
 revoke <invitation-id>`.
 
 | Error | Meaning |
 | --- | --- |
-| `<account> is invited to this server; open the invitation link the admin sent, or run: aether link <link>` | They ran `aether link <server id>` instead of using the link |
+| `<account> is invited to this server; open the invitation link the admin sent, or run: aether link <link>` | They ran `cloudfield link <server id>` instead of using the link |
 | `the invitation link is not valid for this server: wrong, revoked or expired; ask the admin for a new one` | The link was used, revoked or expired |
+
+Joining creates the member and their grants together. A member who joins with no
+workspaces sees none until someone grants them one.
 
 ### Approve devices
 
@@ -91,72 +100,79 @@ every new device waits for approval, a member's own second laptop included.
 Approve from the dashboard's **Needs you** card, or:
 
 ```sh
-aether device list                         # yours; an admin sees everyone's
-aether device approve <code or device-id>
-aether device revoke <device-id>
-sudo aether-server device review           # on the server
+cloudfield device list                         # yours; a super admin sees everyone's
+cloudfield device approve <code or device-id>
+cloudfield device revoke <device-id>
+sudo cloudfield-server device review           # on the server
 ```
 
-`aether device approve` shows who the device would be admitted as and asks
+`cloudfield device approve` shows who the device would be admitted as and asks
 `approve it? [y/N]`. Check the member and role first: whoever holds an approved
 device gets that member's access. There is no flag that skips the question.
 Any answer other than `y`, or no answer on stdin, fails with `device approve:
 not approved; a person must check the device shown above and confirm with y in
 their own terminal: aether device approve <code or device-id>, or approve it
-from the dashboard's Needs you card`. If the only admin has no approved device,
-the refusal includes a code, and the admin runs `sudo aether-server device
+from the dashboard's Needs you card`. If the only super admin has no approved device,
+the refusal includes a code, and they run `sudo cloudfield-server device
 approve <code>` on the server. At most 10 devices wait per account.
 
 ### By invite code
 
 For someone with neither a tailnet nor a GitHub sign-in. An admin mints a
-one-time code, and the teammate redeems it, which registers their SSH key:
+one-time code, and the teammate redeems it, which registers their SSH key.
+The code carries the same `--workspace` grants as an invitation:
 
 ```sh
-aether invite --ttl 3600      # seconds; default 86400
-aether link my-server:2222 --invite <code> --name "Dana"
+cloudfield invite --ttl 3600 --workspace web   # seconds; default 86400
+cloudfield link my-server:2222 --invite <code> --name "Dana"
 ```
 
 The member is a collaborator at once, because the code was the approval. A code
-stops working when the admin who minted it stops being an admin.
+stops working when the member who minted it stops being an admin or super admin.
 
 ### Link or merge sign-ins
 
 One person can reach the server through a tailnet login, an SSH key and GitHub
 accounts. They join one member only through an explicit step, never by matching
 emails or names. Add a GitHub account to your own member with **Profile →
-Sign-ins → Link a GitHub account** or `aether member link --github dana`. Open the
+Sign-ins → Link a GitHub account** or `cloudfield member link --github dana`. Open the
 link it prints while signed in with that account, then approve the new device
 from your existing sign-in.
 
-Someone who already became two members can merge them. Run `aether member merge
+Someone who already became two members can merge them. Run `cloudfield member merge
 start` on one sign-in, which prints a code valid for 10 minutes. On the other,
-run `aether member merge <code>` (options `--keep <member id>`, `--keep-admin`,
-`--yes`), then `aether member merge accept` back on the first. Both show what is
+run `cloudfield member merge <code>` (options `--keep <member id>`, `--keep-admin`,
+`--yes`), then `cloudfield member merge accept` back on the first. Both show what is
 discarded before you confirm. The survivor takes the other member's sessions,
 schedules, devices and accounts, and the lower of the two roles. The absorbed
 member's home moves to `<data-dir>/merged/<merge id>/home` and their private
 signing key to `signing-key` beside it. Both hold credentials, so remove the
 directory with `sudo rm -r` once nothing in it is needed. A merge is
-refused, with the reason, when either member is pending or has an unfinished session
-or terminal. Nothing undoes a merge.
+refused, with the reason, when either member is pending or has an unfinished
+session or terminal. It is also refused when the merged role would be below
+admin and either member owns workspaces: reassign them with `cloudfield workspace
+owner <workspace> <member-id>`, or keep the admin role with `--keep-admin`.
+Nothing undoes a merge.
 
 ### Remove access
 
-`aether member remove <id>` deletes a member, their environment and their
-private signing key, and closes their connections. `aether device revoke <id>` refuses a device key everywhere.
-`aether member unlink <member-id> github:<user id>` unbinds one GitHub account,
+`cloudfield member remove <id>` deletes a member, their environment and their
+private signing key, and closes their connections. `cloudfield device revoke <id>` refuses a device key everywhere.
+`cloudfield member unlink <member-id> github:<user id>` unbinds one GitHub account,
 revokes the devices that signed in with it and deletes the connectors its
-sign-in authorized. `aether invite revoke <id>` kills
+sign-in authorized. `cloudfield invite revoke <id>` kills
 a link.
 
-`aether member remove` fails with `in use` while sessions or schedules still belong
-to the member. Delete those first. `aether member transfer <member id>` makes
-another admin the server's owner at its edge.
+`cloudfield member remove` fails with `in use` while sessions or schedules still belong
+to the member. Delete those first. It is also refused while the member owns
+workspaces, with an error that names them and the command to reassign them
+(`cloudfield workspace owner`, [below](#workspace-access)). Only super admins remove
+members. Only a super admin runs `cloudfield member transfer <member id>`; it makes
+another admin or super admin the server's owner at its edge.
 
 ### Single sign-on
 
-Aether has no identity provider settings of its own: sign your tailnet in
+Cloudfield has no identity provider settings of its own: sign your tailnet in
 through yours, such as Okta, Google Workspace, Microsoft Entra ID or GitHub
 ([Tailscale's providers](https://tailscale.com/docs/integrations/identity)), and
 have people join [over the tailnet](#over-a-tailnet). Each such member is a
@@ -177,8 +193,8 @@ work on the direct SSH port), GitHub sign-ins at the edge and ChatGPT or Claude
 connectors stay open. Remove the member to close them all:
 
 ```sh
-aether member list                 # their member id
-aether member remove <member-id>   # deletes their SSH key, devices, GitHub sign-ins and connectors
+cloudfield member list                 # their member id
+cloudfield member remove <member-id>   # deletes their SSH key, devices, GitHub sign-ins and connectors
 ```
 
 It fails with `in use` until their sessions and schedules are gone
@@ -186,38 +202,99 @@ It fails with `in use` until their sessions and schedules are gone
 
 ## Roles
 
-| Role | Own sessions | Other members' sessions | Workspace |
-| --- | --- | --- | --- |
-| viewer | Cannot launch | View | Read the feed |
-| collaborator (default) | Everything | View, message, steer, stop | Launch sessions, push, use templates, set schedules, add memory notes |
-| admin | Everything | Everything | Also members, workspaces and their settings, budgets, saving templates, `aether server update` |
+A member has one server role. Where that role applies depends on the workspace:
+a role is never wider than the workspaces the member owns or was granted
+([Workspace access](#workspace-access)).
+
+| Role | Where | In those workspaces |
+| --- | --- | --- |
+| super_admin | Every workspace | Everything an admin does, in all of them. Also members, roles, `cloudfield server update` and the release channel, run limits, the edge and audit history of everyone |
+| admin | Workspaces they own | Everything: settings, budgets, templates, schedules, mirrors, delete, and granting members |
+| admin | Workspaces they were granted | Acts as a collaborator |
+| collaborator (default) | Workspaces they were granted | Launch sessions, push, use templates, set schedules, add memory notes; view, message, steer and stop others' sessions |
+| viewer | Workspaces they were granted | Read the feed; view sessions; cannot launch |
 
 Steering a session means typing into its terminal, messaging its agent, answering
 its permission prompts and pausing or resuming it. Pushing means writing to the
-workspace's git repository. Everyone who joins is a collaborator, so teammates
-can message and stop each other's agents with no setup. Every such act is
-recorded in the workspace timeline with who did it. Change a role with
-`aether member role <id> viewer|collaborator|admin`. It applies to connections
-that are already open: a demoted member's live attach drops with
-`detached: you can no longer control this session`. Member approvals,
-removals and role changes, account shares and connector writes are kept in the
-audit history; `aether audit` shows yours, or everyone's to an admin
+workspace's git repository. Everyone who joins is a collaborator unless invited
+otherwise, so teammates can message and stop each other's agents in a shared
+workspace with no setup. Every such act is recorded in the workspace timeline
+with who did it.
+
+Only a super admin changes a role or removes a member. An admin may approve or
+deny a pending member or device only when it admits a member below admin, or is
+their own, and may list the sign-ins of a member below admin. Renaming,
+recoloring or setting the git identity of another member, revoking their
+approved device, unlinking their sign-in or revoking their connector is for
+that member and super admins only. An admin revokes only invitations they
+created. An approval code for a device you may not approve fails as an unknown
+code does, and another member's connector as an unknown connector id.
+
+```sh
+cloudfield member role <id> super_admin|admin|collaborator|viewer
+sudo cloudfield-server member role <id> super_admin   # on the server
+```
+
+`cloudfield-server member role <member-id> <role>` writes the role straight to the
+server's database, like `cloudfield-server device approve`. Use it from a script or
+to restore a locked-out server. The role applies to connections that are
+already open: a demoted member's live attach drops with `detached: you can no
+longer control this session`. An approval, removal, role or owner change,
+grant, revocation or session limit change that was already running re-reads
+its caller's role as it writes, so a demotion landing first refuses it with
+`aether: rpc error -32003: store: conflict: member <id> is no longer a super
+admin` (or `... no longer an admin`, `... no longer administers workspace
+<id>`). Member approvals, removals and role changes,
+account shares and connector writes are kept in the audit history; `cloudfield
+audit` shows yours, or everyone's to a super admin
 ([connectors.md](connectors.md#audit-history)).
 
-The last admin cannot be removed or demoted: `refusing to delete the last admin`
-or `refusing to demote the last admin`. Admin-only commands fail for others with
-`aether: rpc error -32001: workspace.add requires the admin role`.
+The last super admin cannot be removed or demoted. A member who owns workspaces
+cannot be removed or demoted below admin until a super admin reassigns the
+workspaces. Commands your role may not run in a workspace fail the way an
+unknown workspace does ([below](#what-an-unreachable-workspace-looks-like)); a
+command no workspace can allow fails with `aether: rpc error -32001: <method>
+requires the admin role`.
+
+### After an upgrade
+
+A server that predates workspace access migrates once, when it first starts the
+new version:
+
+- The earliest approved admin becomes the super admin and owns every existing
+  workspace.
+- Every approved member, other admins included, keeps every workspace as a
+  grant, so nobody loses access. Members still pending get no grants.
+- Other admins keep the admin role but administer no existing workspace: in
+  one they don't own they act as a collaborator, with no settings, budget,
+  grants or delete. The super admin hands each workspace to its admin with
+  `cloudfield workspace owner <workspace> <member-id>`, and trims access with
+  `cloudfield workspace revoke`.
+- Invitations and invite codes created before the upgrade carry no
+  workspaces: whoever joins with one gets no grants until an owner or super
+  admin grants them.
+
+A server with no approved admin before the upgrade gets no super admin. Every
+member keeps their access, but nobody can administer the server until you
+promote an approved member on the server itself. Find their member id with
+`cloudfield member list` from that member's own sign-in, then run:
+
+```sh
+sudo cloudfield-server member role <member-id> super_admin
+```
 
 To limit who can control sessions:
 
 ```sh
-aether protect <session>                                    # owner and admins only
-aether workspace settings --message-others admins-only  # every member's sessions
-aether workspace settings --message-others everyone     # the default
+cloudfield protect <session>                                    # owner and admins only
+cloudfield workspace settings --message-others admins-only  # every member's sessions
+cloudfield workspace settings --message-others everyone     # the default
 ```
 
 A refused member sees `workspace restricts steer of others' sessions to their owner
-and admins`. `aether unprotect <session>` lifts a protection.
+and admins`. `cloudfield unprotect <session>` lifts a protection. A lock marks a
+protected session in the sidebar, on the board and in the lanes, and closing
+one lists the protection among its close warnings.
 
 ## Workspaces
 
@@ -226,28 +303,35 @@ templates, schedules, costs and the budget all belong to one. A
 session and its shells use the launching member's saved image, or the server's
 standard image ([environments.md](environments.md)).
 
-An admin creates a workspace. In the dashboard, open **Manage workspaces** from
+An admin or super admin creates a workspace, and owns it. In the dashboard, open **Manage workspaces** from
 the workspace selector, select **Add workspace**, choose **GitHub**, pick a
 repository you can read and accept its first revision. From the CLI:
 
 ```sh
-aether workspace import ~/code/myproject
-aether workspace import https://github.com/acme/myproject
-aether workspace add myproject [--base <branch>]
+cloudfield workspace import ~/code/myproject
+cloudfield workspace import https://github.com/acme/myproject
+cloudfield workspace add myproject [--base <branch>]
 ```
 
 `import` and `add` refuse a name already in use and print its id.
+`cloudfield workspace list` prints each workspace you reach with its `OWNER` and
+your `ROLE` there.
 
 Each member links their own clone, which adds an `aether` git remote.
-`aether workspace import <path>` links a clone whose `origin` matches the
+`cloudfield workspace import <path>` links a clone whose `origin` matches the
 workspace's publish destination; otherwise run
-`aether link my-server --repo ~/code/myproject --workspace myproject`. The
+`cloudfield link my-server --repo ~/code/myproject --workspace myproject`. The
 client keeps one linked clone per workspace: linking another clone of it
-replaces the first, and `aether status` lists them.
+replaces the first, and `cloudfield status` lists them.
 
-Branches named `aether/run-*` belong to the server and cannot be force-pushed or
-deleted. Every other branch behaves like a normal git remote. `aether pull <session>`
-brings a session's branches into the linked clones.
+Session branches belong to the server and cannot be force-pushed or deleted:
+`cloudfield/run-*` for new sessions, and `aether/run-*` for sessions created
+before the rename and in a workspace whose repository has a branch named
+`cloudfield`. Every other branch behaves like a normal git remote, except
+that git refuses a branch named `cloudfield` or `aether` once session branches
+under that name exist, in the server's repository or in the publish
+destination. `cloudfield pull <session>` brings a session's branches into the
+linked clones.
 
 | Setting | Default | What it does |
 | --- | --- | --- |
@@ -257,14 +341,14 @@ brings a session's branches into the linked clones.
 | Message-others policy | `everyone` | Whether collaborators can message and stop each other's sessions |
 
 A session can also check out other workspaces beside its own; see [Working across
-repos](quickstart.md#working-across-repos).
+repos](quickstart.md#working-across-repos). The launcher must reach every one of them.
 
 A later clone that points elsewhere does not overwrite the publish destination.
 Change it on purpose; a change reaches new sessions only:
 
 ```sh
-aether workspace origin --workspace myproject https://github.com/acme/myproject.git
-aether workspace origin --workspace myproject --clear
+cloudfield workspace origin --workspace myproject https://github.com/acme/myproject.git
+cloudfield workspace origin --workspace myproject --clear
 ```
 
 A `git@github.com:` address is stored as its HTTPS form, because sessions can
@@ -273,21 +357,24 @@ authenticate over HTTPS only.
 ### Source mirror
 
 A local-only workspace lets collaborators push the base branch directly. A
-mirror makes an upstream repository own it instead. An admin configures one:
+mirror makes an upstream repository own it instead. The workspace's admin
+configures one:
 
 ```sh
-aether workspace mirror configure --workspace myproject \
+cloudfield workspace mirror configure --workspace myproject \
   --source https://github.com/acme/myproject.git --branch main --auth github
-aether workspace mirror refresh --workspace myproject
+cloudfield workspace mirror refresh --workspace myproject
 ```
 
 `--auth` is `public`, `github` (your own GitHub login on the server, read access
-is enough) or `deploy-key` (Aether prints a public key to add as a read-only
+is enough) or `deploy-key` (Cloudfield prints a public key to add as a read-only
 deploy key). A new mirror starts pending: verify it and adopt its first revision
-before the first session. Fast-forward updates apply on their own. If upstream
+before the first session. While it is pending, `refresh`, `status` and every
+refused launch print the exact `aether workspace mirror adopt` command for the
+observed revision. Fast-forward updates apply on their own. If upstream
 rewrote history, the base stays put until an admin reviews the candidate and sessions
-`aether workspace mirror adopt --workspace myproject --generation <n> --commit
-<reviewed-sha> --yes`. `aether workspace mirror status` shows where it stands.
+`cloudfield workspace mirror adopt --workspace myproject --generation <n> --commit
+<reviewed-sha> --yes`. `cloudfield workspace mirror status` shows where it stands.
 
 Pushing a mirrored base branch is rejected. Update the upstream and refresh:
 
@@ -298,35 +385,114 @@ aether: rejected write to protected ref refs/heads/<base>: this mirrored base is
 A scheduled session refreshes the mirror first and creates no session if that fails. See
 [security.md](security.md#workspace-source-mirrors).
 
+### Workspace access
+
+A workspace has one **owner**, the admin or super admin who created it. A
+**grant** lets one member into one workspace, with the role they already have:
+a granted collaborator acts as a collaborator in it, a granted viewer as a
+viewer. A grant carries no role of its own, and a member who is neither owner nor
+granted cannot reach the workspace.
+
+| Role | Reaches |
+| --- | --- |
+| super_admin | Every workspace, as admin |
+| admin | Workspaces they own as admin; workspaces they were granted as collaborator |
+| collaborator, viewer | Workspaces they were granted |
+
+```sh
+cloudfield workspace access <workspace>               # the owner and every grant
+cloudfield workspace grant <workspace> <member-id>... # owner or super admin
+cloudfield workspace revoke <workspace> <member-id>
+cloudfield workspace owner <workspace> <member-id>    # super admin only
+```
+
+`<workspace>` is a name or an id. `access` lists who reaches the workspace; a super
+admin reaches every workspace without a grant, so none is listed. An admin grants
+and revokes collaborators and viewers in workspaces they own. A super admin
+grants any member into any workspace and changes its owner, which must be an
+admin or super admin. Revoking is refused while the member has a live session or
+a schedule in the workspace, counting a session handed off from them that still
+runs on their home or agent account. A live session whose home member loses the
+workspace another way, such as a role change, is stopped; one on a shared account
+whose owner loses it moves off that account. A `git fetch` or `git push` over
+SSH in progress stops when its member loses the workspace, with `aether: git
+receive-pack: stopped: access ended: ...` on stderr.
+
+Invitations and invite codes carry `--workspace` grants
+([Join the server](#join-the-server)). The dashboard's **Manage workspaces**,
+in the sidebar above **Members**, shows each workspace's owner, and each row's
+**Access** button opens a searchable list of members to tick or untick; a super
+admin changes the owner there too.
+
+Members see each other through workspaces. A super admin sees every member.
+Anyone else sees themselves, the super admins, and every member who owns, was
+granted or has a session in a workspace they reach, or whose account or home
+such a session uses; an admin also sees members waiting for approval. A member you do not see is absent from `cloudfield member
+list`, device lists and attention. Naming them in `cloudfield workspace grant`,
+`cloudfield account share`, `cloudfield member identities` or `cloudfield member unlink`
+fails as for an id that never existed. An admin therefore grants only members
+they see: to bring in someone new, invite them with `--workspace` or ask a super
+admin to grant them.
+
+#### What an unreachable workspace looks like
+
+A workspace you cannot reach does not exist for you. It is absent from your
+workspace list, sessions, attention, insights, changes, search, memory, counts and
+the event feed. A command that names it, by id, fails exactly as for an id that
+never existed:
+
+```
+aether: rpc error -32000: store: not found
+```
+
+The same holds for `git fetch` and `git push` to its remote. This is on purpose:
+the error never says whether the workspace is real.
+
+A session with an extra repository in a workspace you cannot reach does not
+exist for you either: it is absent from `cloudfield sessions`, attention, the recent
+sessions in insights, the overlap column, watches and your event feed, `cloudfield
+timeline` and `cloudfield changes`, and a command that names it fails as above.
+Insights and cost totals still count it. A session's wait on a pull request
+whose repository no workspace has any more, because the origin it named was
+changed or cleared, and the wait's wake message, reach only super admins and
+the member whose session waits. Once a session is deleted, its
+remaining events reach only super admins, apart from its deletion notice, which
+reaches everyone who reached the session. Events about a member you do not see,
+such as a rename, a device change or a merge, are left out the same way.
+
 ### Delete a workspace
 
-`aether workspace delete myproject --yes` removes the workspace with its sessions,
+The owner or a super admin runs `cloudfield workspace delete myproject --yes`, which removes the workspace with its sessions,
 checkouts, transcripts, templates, budget and costs. Member accounts,
 local clones and the upstream repository stay. It never stops work: stop active
-sessions and remove schedules first. The error names what blocks it.
+sessions and remove schedules first. The error names what blocks it. A session
+in another workspace that mounted this one as an extra repository stays, and
+from then on only super admins see it.
 
 ## Work together
 
 Commands that depend on a workspace take `--workspace <name-or-id>` and default
 to the only workspace. With several, they insist: `--workspace is required when
-more than one workspace exists`. `aether sessions` lists sessions from every workspace.
+more than one workspace exists`. `cloudfield sessions` lists sessions from every workspace.
 
 | Command | What it does |
 | --- | --- |
-| `aether sessions` | Every session you can see, colored by owner, with an overlap column. `--needs-you` lists only sessions that need you |
-| `aether who` | Who is online and which sessions they watch |
-| `aether attach [--read-only] <session>` | Attach to a session's terminal. Several people can attach at once |
-| `aether message <session> "..."` | Message a session's agent. It shows as a banner in your color |
-| `aether pause`, `resume`, `kill <session>` | Suspend, thaw or stop a session. The checkout and transcript survive a kill |
-| `aether sessions --needs-you` | Sessions waiting on you. `aether sessions <session-id>` shows what one needs and the command that answers it |
-| `aether timeline` | The workspace history. `aether timeline <session-id>` shows one session's. Filter with `--member`, `--type`, `--limit`. `--jsonl` exports |
-| `aether changes` | Session changes since a cursor: status, reports, mail, pull requests and lifecycle. `--follow` keeps polling ([coordination.md](coordination.md#follow-changes-from-a-cursor)) |
-| `aether cost --runs` | Token spend per member and run |
+| `cloudfield sessions` | Every session you can see, colored by owner, with an overlap column. `--needs-you` lists only sessions that need you |
+| `cloudfield who` | Who is online and which sessions they watch |
+| `cloudfield attach [--read-only] <session>` | Attach to a session's terminal. Several people can attach at once |
+| `cloudfield message <session> "..."` | Message a session's agent. It shows as a banner in your color |
+| `cloudfield pause`, `resume`, `kill <session>` | Suspend, thaw or stop a session. The checkout and transcript survive a kill |
+| `cloudfield sessions --needs-you` | Sessions waiting on you. `cloudfield sessions <session-id>` shows what one needs and the command that answers it |
+| `cloudfield timeline` | The workspace history. `cloudfield timeline <session-id>` shows one session's. Filter with `--member`, `--type`, `--limit`. `--jsonl` exports |
+| `cloudfield changes` | Session changes since a cursor: status, reports, mail, pull requests and lifecycle. `--follow` keeps polling ([coordination.md](coordination.md#follow-changes-from-a-cursor)) |
+| `cloudfield cost --runs` | Token spend per member and run |
 
-The dashboard shows each session as **Needs you**, **Working**, **Paused**, **Done**
-or **Failed**. **Needs you** means something blocks the session that you can
-resolve, such as a permission or question, a stalled session of yours, or an unreviewed
-finish. Everyone else sees that session as **Working** with
+The dashboard shows each session as **Needs you**, **Finished: review the
+result**, **Working**, **Paused**, **Done** or **Failed**. **Needs you** means
+something blocks the session that you can resolve, such as a permission or
+question or a stalled session of yours. A session whose agent reported success
+is **Finished: review**: it blocks nothing, so check its work before
+you close it. Everyone else sees that session as **Working** with
 "Waiting for Alice" ([failure-handling.md](failure-handling.md#needs-you)).
 
 Answer an agent's plan or permission prompt in the session's Chat view
@@ -334,21 +500,21 @@ Answer an agent's plan or permission prompt in the session's Chat view
 
 ### Hand off and finish sessions
 
-`aether handoff <session> <member>` changes the session's owner and notifications at
+`cloudfield handoff <session> <member>` changes the session's owner and notifications at
 once, with no acceptance step. The agent account, cost attribution and the
 container's home stay the launcher's.
 
-When a session is handed off or finishes, Aether saves an **evidence packet**: the
+When a session is handed off or finishes, Cloudfield saves an **evidence packet**: the
 objective, base and final git revisions, changed files and a transcript copy. It
-records what Aether observed and does not prove a command succeeded or that
+records what Cloudfield observed and does not prove a command succeeded or that
 anyone reviewed the result. Packets expire after 30 days, and a session whose
-checkout exceeds 64 MiB gets no finish packet. If saving fails, Aether keeps the
-checkout and transcript instead of deleting them.
+checkout exceeds 64 MiB gets no finish packet. If saving fails, Cloudfield keeps
+the checkout and transcript instead of deleting them.
 
 ```sh
-aether close <session> --outcome merged|abandoned   # clear a finished session off Needs you
-aether archive <session>                            # hide a finished session; unarchive restores it
-aether delete <session>                             # stop it and remove its checkout and records
+cloudfield close <session> --outcome merged|abandoned   # close a finished session after reviewing it
+cloudfield archive <session>                            # hide a finished session; unarchive restores it
+cloudfield delete <session>                             # stop it and remove its checkout and records
 ```
 
 These need the same permission as stopping a session. A published session branch stays in
@@ -360,11 +526,11 @@ A template is a saved launch: agent, task, mode, model, effort and parameters. A
 saves and deletes templates. Any collaborator launches them and sets schedules.
 
 ```sh
-aether template save nightly-triage --agent claude --task "triage new issues" \
+cloudfield template save nightly-triage --agent claude --task "triage new issues" \
   [--mode standard|enhanced|background] [--model <model>] [--effort <level>] \
   [--param key=value] [--budget <usd>]
-aether session --template nightly-triage [--param key=value]
-aether schedule set nightly-triage "0 6 * * *"
+cloudfield session --template nightly-triage [--param key=value]
+cloudfield schedule set nightly-triage "0 6 * * *"
 ```
 
 `--mode` defaults to `background`, and `--budget` is an advisory per-session cost
@@ -372,7 +538,7 @@ hint in USD. Use `{{name}}` in the task for a parameter. The dashboard's
 Templates page fills parameters inline before **Launch** and edits their
 defaults; any session's composer can insert a filled-in template as a draft. Cron is five-field
 syntax or an `@descriptor`, in UTC. A schedule that was due while the server was
-down waits for its next occurrence. `aether template list|delete` and `aether
+down waits for its next occurrence. `cloudfield template list|delete` and `cloudfield
 schedule list|delete` manage the rest. A `--model` the agent has no flag for
 fails with `scheduler: agent "<agent>" has no model flag; launch it without a
 model`, and an `--effort` it does not take fails with the error in
@@ -381,41 +547,46 @@ model`, and an `--effort` it does not take fails with the error in
 ### Attribution
 
 Each member has a color, shown on session rows, message banners and timeline dots.
-Change yours with `aether member color <#rrggbb>` and your display name under
+Change yours with `cloudfield member color <#rrggbb>` and your display name under
 **Profile → Display name**. Every privileged act (message, stop, approve, hand
 off, change settings) is recorded in the timeline with who did it.
 
-Set your git identity under **Profile → Git identity**, or `aether member git
---name "Dana Lee" --email dana@example.com`. The agent in a session commits as the
-member who launched it, fixed when the container starts. Aether's own commits
-(when a session finishes, is stopped or is recovered) use the session's current owner.
-With no identity set, commits use your display name and `<member-id>@aether.local`,
-which matches no GitHub account. Signed commits show **Verified** on GitHub only
-if the commit email is verified there
+Set your git identity under **Profile → Git identity**, or `cloudfield member git
+--name "Dana Lee" --email dana@example.com`. The agent in a session commits as
+the member who launched it, fixed when the container starts. Cloudfield's own
+commits (when a session finishes, is stopped or is recovered) use the session's
+current owner. With no identity set, commits use your display name and
+`<member-id>@aether.local`, which matches no GitHub account. Signed commits show
+**Verified** on GitHub only if the commit email is verified there
 ([security.md](security.md#github-credentials-and-signing-keys)).
 
-Anyone who messages a session is added to its co-authors. Aether's commits end with a
+Anyone who messages a session is added to its co-authors. Cloudfield's commits end with a
 `Co-authored-by:` line for each, and the session's agent finds the list in
 `/run/aether/co-authors` ([coordination.md](coordination.md)).
 
 ### Conflict radar
 
-When two sessions change the same file, `aether sessions` shows it in the `OVERLAP`
+When two sessions change the same file, `cloudfield sessions` shows it in the `OVERLAP`
 column and the dashboard puts a warning on both cards that opens the shared
-files. It warns and does not block. Changes merged in from `main` do not count.
+files. It warns and does not block. Changes merged in from `main` do not count,
+and neither do changes in a session's extra `--repo` repositories.
 
-Agents in one workspace can also message each other. `aether-internal status`
+Agents in one workspace can also message each other. `cloudfield-internal status`
 inside a session lists the sessions it can reach, and protection and the message-others
 policy limit this the same way. Every message appears in **Activity** as an
 **Agent message** ([coordination.md](coordination.md#seeing-agent-messages)).
 
+For one goal, start one session and let it split the work across subagents or
+[subsessions](#subsessions). Separate sessions on the same goal each see only
+their own task and must coordinate by message.
+
 ### Budgets
 
 ```sh
-aether budget                                  # show
-aether budget set --limit 25 --warn 20         # hard cap and soft warning, in USD
-aether budget set --override                   # admit new sessions past the cap
-aether budget set --override=false             # and stop again
+cloudfield budget                                  # show
+cloudfield budget set --limit 25 --warn 20         # hard cap and soft warning, in USD
+cloudfield budget set --override                   # admit new sessions past the cap
+cloudfield budget set --override=false             # and stop again
 ```
 
 An omitted flag keeps its value, and `--limit 0` clears the budget. At the cap,
@@ -423,7 +594,7 @@ new sessions are refused and running sessions finish. Claude Code reports spend 
 Background and Enhanced sessions, and OpenCode and omp in Enhanced sessions and
 Background sessions over ACP. An Enhanced session's spend counts as each turn ends.
 Every other session is unmetered, so totals are a floor. Deleting a session or a member
-keeps their spend in the totals. Only an admin sets a budget. Every admin is
+keeps their spend in the totals. Only the workspace's admin sets a budget. The workspace's admins and super admins are
 [notified](networking.md#notifications) once when spend reaches the warning and
 once at the cap; a budget change that puts spend back below either re-arms it.
 
@@ -434,20 +605,34 @@ See [memory.md](memory.md).
 
 ## Agent accounts
 
-Each member signs in to each agent once, in their own environment (`aether agent
-add <name>`, then `aether terminal`). That home is mounted into every session they
+Each member signs in to each agent once, in their own environment (`cloudfield agent
+add <name>`, then `cloudfield terminal`). That home is mounted into every session they
 launch. A member's **agent account** is that vendor login and the subscription
 behind it. One member can let a collaborator launch sessions on theirs.
 
-The owner shares under **Profile → Agent account sharing → Share account**. The
-recipient selects **New session → Options → Account** and picks `<name> (shared)`
-From the CLI:
+The owner turns on **Share my account** on the recipient's row in **Members**. The
+recipient picks the owner under **New session → Account**, below the agent.
+Each row there is marked **You** or **Shared** and says what a launch of the
+chosen agent on that account meets:
+
+| Status | Meaning |
+| --- | --- |
+| `<n>% used` | Launches; the fullest usage window, `· stale` when the last read failed |
+| **Ready** | Launches; no usage is measured for it |
+| **Sign in after launch** | Your own account has no login file for the agent; it launches and the agent asks you to sign in |
+| **Needs `<owner>`'s login** | The owner has no login for the agent; the launch is refused |
+| **Not installed**, **Your account only**, **Unavailable** | The launch is refused; hover **Unavailable** for the reason |
+| **Not checked** | The dashboard could not read the account's agents; hover for the error |
+
+Only your own account and accounts shared with you are listed, and the
+server refuses any other with `permission denied: member <id> has not
+shared their account with you`. From the CLI:
 
 ```sh
-aether account share <member-id>      # owner
-aether account list
-aether session "triage the failures" --agent codex --account <owner-member-id>   # recipient
-aether account revoke <member-id>     # owner
+cloudfield account share <member-id>      # owner
+cloudfield account list
+cloudfield session "triage the failures" --agent codex --account <owner-member-id>   # recipient
+cloudfield account revoke <member-id>     # owner
 ```
 
 A session on a shared account belongs to whoever launched it and uses their image,
@@ -464,11 +649,14 @@ lists exactly what is shared.
 > your home to.
 
 - Sharing is one-way. Admins get no implicit access to anyone's account.
-- Revoking blocks new launches, but runs already going continue. Stop them with
-  **Kill run** in the session header's **More** menu, or `aether kill <session-id>`.
-- An agent you defined with `aether agent add` runs only on your own account. A
+- Revoking blocks new launches and moves the recipient's running sessions on the
+  account to another account they may use, as [usage fallback](#usage-fallback)
+  picks one. A session that cannot move fails with `account share revoked:
+  <owner> revoked access to their account; no other account can run <agent>`, or
+  another reason [security.md](security.md#account-sharing) lists.
+- An agent you defined with `cloudfield agent add` runs only on your own account. A
   shared account shows it disabled as **Your account only**.
-- An owner with no login shows **Not logged in**. A CLI launch fails with `Grace
+- An owner with no login shows **Needs `<owner>`'s login**. A CLI launch fails with `Grace
   is not logged in to claude: no login at ~/.claude/.credentials.json in their
   home; Grace logs in to claude in their own environment terminal`.
 - Every member's containers mount their own Claude Code and Gemini login files
@@ -479,7 +667,7 @@ lists exactly what is shared.
   can still replace its member's login file, which detaches the owner's login
   from that member's sessions on shared accounts: those sessions then sign in as the
   member. Restart such environments with **Stop environment** in **Profile**,
-  or `aether terminal stop`, and relaunch such sessions.
+  or `cloudfield terminal stop`, and relaunch such sessions.
 - Before the agent starts, the server checks that the container sees the
   owner's login file itself, not the recipient's own. Otherwise the launch, or
   the move to the account, fails with `runtime: /root/.claude/.credentials.json
@@ -494,35 +682,40 @@ lists exactly what is shared.
 ### Usage fallback
 
 When a `claude` or `codex` launch's account has used 95% or more of its
-subscription quota, Aether starts the session on another account with usage left.
+subscription quota, Cloudfield starts the session on another account with usage left.
 Other agents always launch as requested, and so does an account whose usage
 cannot be read (an API-key login, signed out, or a vendor read over 3 seconds).
 
 Candidates are your own account and every account shared with you whose owner is
 logged in to the agent. The one with the most usage left wins. In the launch
-dialog, **Options → Fall back to another account** turns it off and lists
-**Fallback accounts**, which you untick or reorder. From the CLI:
+dialog, **Fallback → Fall back to another account** turns it off and lists
+**Fallback accounts**, which you untick or reorder; an account a launch could
+not run on reads **Skipped:** and the reason. Your own account with no login
+file for the agent reads **No saved login**: a launch may still fall back to
+it, last, and the agent asks you to sign in, but a running session moves
+there only if an API key (`ANTHROPIC_API_KEY`, or `CODEX_API_KEY` in
+Background) signs the agent in. From the CLI:
 
 ```sh
 # If Grace's account is exhausted, try Lin's, then your own
-aether session "triage the failures" --agent claude --account <grace-member-id> \
+cloudfield session "triage the failures" --agent claude --account <grace-member-id> \
   --fallback <lin-member-id>,<your-member-id>
 
 # Launch on the requested account even when it is exhausted
-aether session "triage the failures" --agent claude --no-fallback
+cloudfield session "triage the failures" --agent claude --no-fallback
 ```
 
 Passing both flags fails with `--fallback and --no-fallback cannot be used
 together`. With no qualifying account
 the session launches on the requested one. A session that fell back stays owned by its
-launcher. Its header reads **On `<name>`'s account (fallback)**, and `aether
+launcher. Its header reads **On `<name>`'s account (fallback)**, and `cloudfield
 sessions` appends ` (fallback)` to the `ACCOUNT` column.
 
-A session also moves to another account mid-session when its agent reports the usage
-limit. Aether starts a new container on the next account and resumes the agent's
-session there. The session keeps its ID, checkout and branch, but processes in the
-old container, terminals included, end. This works for Enhanced and Background
-sessions of `claude` and `codex` and Standard `claude` sessions
+A session also moves to another account mid-session when its agent reports the
+usage limit. Cloudfield starts a new container on the next account and resumes
+the agent's session there. The session keeps its ID, checkout and branch, but
+processes in the old container, terminals included, end. This works for Enhanced
+and Background sessions of `claude` and `codex` and Standard `claude` sessions
 ([harnesses.md](harnesses.md#usage-limit-signals)). Cost stays with the account
 that spent it. The account that ran out is not read again: the agent's report
 counts as exhausted. The move picks an account with usage left as a launch
@@ -532,7 +725,7 @@ with a login, or an API key the agent signs in with in that mode:
 `ANTHROPIC_API_KEY` for Claude, `CODEX_API_KEY` for a Background Codex run
 ([per-agent setup](harnesses.md#per-agent-setup)). An account the session already used is
 never tried again: your own, or a shared one whose login the server confirmed
-in the session's container. A shared account whose login never reached the
+in the session's sandbox. A shared account whose login never reached the
 container spent none of its quota, so it stays a candidate. A session that cannot
 move parks or fails with a reason that says why
 ([Usage limit mid-session](failure-handling.md#usage-limit-mid-session)).
@@ -553,9 +746,10 @@ out from them ([Launch options](connectors.md#launch-options)).
 
 The dashboard's launch panel opens on them, the right half of **New session**
 launches the last agent, mode, model and permission tier at once, and the
-panel saves the agent, mode and model of each launch, and the permission tier
-as soon as you change it. It saves the account and fallback only when you select
-**Save as my default** under **Options**. **Settings → Launch** shows them,
+panel saves the agent, mode and model after a launch or when an outside click
+discards a blank task. It saves the permission tier as soon as you change it.
+It saves the account and fallback only when you select
+**Save as my default** under **Account**. **Settings → Launch** shows them,
 with each invalid choice and its reason, and changes or clears them.
 
 `launch.defaults.get` returns your choices with a `revision`, which is 0 when
@@ -593,14 +787,25 @@ choices, is moved to the survivor, and those choices get a new `revision`.
 
 An agent can start a **subsession**: a session with a completely fresh context
 on any agent and model you have installed, such as Codex reviewing what Claude
-wrote. A subsession can orchestrate its own subagents. Agents dispatch one for a
-complex task that splits into parallel parts, as a dispatch-and-forget
-shortcut, or when you ask for session orchestration; small lookups
-stay with the agent's own subagents. The subsession appears under its parent in the
+wrote. A subsession can orchestrate its own subagents. Agents keep most tasks
+in one session, split across their own subagents or workflows, and start a
+subsession only for a large, independent stream of work that needs its own
+branch or pull request, would run for hours, or needs another agent, model, or
+harness, and whenever you ask for subsessions. A subsession of the parent's
+agent starts on the parent's account, so a session you launched on an account shared with you delegates on it too;
+any other agent starts on your own account. A session handed to you refuses
+subsessions, because it still runs the previous owner's agent on their home;
+launch a session of your own to use them. The
+agent can pick your account or any account shared with you whose owner reaches
+the session's workspaces instead. The subsession appears under its parent in the
 dashboard, with its purpose, agent, model, account and state, and you open,
 message, take over or stop it like any session. Its result reaches the parent's
-inbox, as does a notice when it has sat idle or waiting for over an hour, so
-the parent can wake or stop it. The agent commands are in
+inbox, as does a notice when it has sat idle or waiting for over an hour, or
+stopped on an error such as a signed-out login for a minute, so the parent can
+wake or stop it. Its success or failure is for the parent
+alone: it never shows as Needs you or Finished: review and never notifies
+you, though its requests of a person still do
+([failure-handling.md](failure-handling.md#needs-you)). The agent commands are in
 [coordination.md](coordination.md#subsessions).
 
 Subsessions go one level deep: a subsession cannot start subsessions. A parent must be
@@ -615,12 +820,39 @@ Subsessions are on for every Standard or Enhanced session you own. **Settings �
 Subsessions** or:
 
 ```sh
-aether subsessions off                         # every session you own
-aether subsessions on
-aether session "fix the login bug" --agent claude --children off   # this session only
+cloudfield subsessions off                         # every session you own
+cloudfield subsessions on
+cloudfield session "fix the login bug" --agent claude --children off   # this session only
 ```
 
-A subsessions on your own account and uses its parent's launch fallback
+### Choose the agents subsessions use
+
+Subsessions may use every agent you have installed, on your own account and on
+each account shared with you. To keep them off an agent you do not want, or an
+account whose subscription no longer works, open **Subsession agents** under
+the **Subsessions** switch in the launch panel, or in **Settings →
+Subsessions**, and untick it. An agent available on several accounts lists
+each account under it; unticking the agent turns it off on every account,
+those shared with you later included. An agent on one account is one row:
+unticking it on your own account turns the agent off everywhere, on a
+teammate's only that account. Each change is saved at once and applies to
+every session you own, however it was launched. From the CLI:
+
+```sh
+cloudfield subsessions                                        # what is on and off
+cloudfield subsessions off --agent codex                      # on every account
+cloudfield subsessions off --agent claude --account <member-id>
+cloudfield subsessions on --agent codex
+```
+
+An agent's `subsession start` on a choice you turned off fails with `-32001
+claude on <name>'s account is off for subsessions in the owner's settings
+...`, `subsession options` lists it as `off`, and a subsession queued before
+you turned its choice off is refused when its turn comes. A subsession's usage
+fallback, at launch or while it runs, never moves it onto an account you turned
+its agent off on, even one turned off after it started.
+
+A subsession uses its parent's launch fallback
 policy: when its Claude or Codex account has used 95% of its quota, the
 subsession moves to the account with the most usage left among yours and those
 shared with you, as [usage fallback](#usage-fallback) does for every launch,
@@ -633,6 +865,9 @@ setting. Only the session's owner allows it, and a handoff to another member voi
 it. An admin can turn it off. Handing a session to another member detaches it from
 its parent and from its subsessions, so no lineage spans two owners.
 
+The quick-launch button beside **New session** launches your last agent again
+with no task, and always allows subsessions for that session.
+
 When a parent is closed (merged, abandoned, or completed and accepted), its
 subsessions are closed with it: finished ones are relabeled the same way and
 working ones are stopped first. A subsession its parent cancels ends `completed`
@@ -643,7 +878,7 @@ with the reason `stopped by parent session <id>`.
 A workspace admin sets how many subsessions each parent may have busy at once:
 
 ```sh
-aether workspace settings --child-max-live 8
+cloudfield workspace settings --child-max-live 8
 ```
 
 `--child-max-live` (default 8, at most 64) counts a parent's busy subsessions;
@@ -652,7 +887,7 @@ reported or waits on a human holds no slot. A queued subsession is cancelled wit
 its parent. Every subsession is also admitted against the workspace
 [budget](#budgets) when it is queued and when it starts.
 
-Each subsession's spend counts once, on the account that paid. `aether subsessions
+Each subsession's spend counts once, on the account that paid. `cloudfield subsessions
 <session-id>` and the parent's **Subsessions** section add up the parent and its
 subsessions, split by account. A session that reports no cost (Codex, Gemini, pi) is
 counted as unmetered, so totals read "at least".
@@ -666,17 +901,17 @@ counted as unmetered, so totals read "at least".
   extra `--repo` ones included, from the parent's last commit, and inherits
   the parent's permission tier.
 - Deleting a subsession takes its spend out of the parent's total; the
-  workspace totals and `aether cost` keep it.
+  workspace totals and `cloudfield cost` keep it.
 - Turning subsessions off stops queued subsessions from starting; running ones
   continue. Kill them from the parent's **Subsessions** section or with
-  `aether kill <session-id>`.
+  `cloudfield kill <session-id>`.
 
 ## Limits
 
-- Roles are viewer, collaborator and admin. There are no custom roles.
-- The permissive default lets any collaborator stop any session. Use `aether protect`
+- Roles are viewer, collaborator, admin and super admin. There are no custom roles, and a grant has no role of its own.
+- The permissive default lets any collaborator stop any session. Use `cloudfield protect`
   or `--message-others admins-only` to narrow it.
-- A session's extra repos (`aether session --repo`) share its primary workspace's
+- A session's extra repos (`cloudfield session --repo`) share its primary workspace's
   environment, account and budget. Templates take one workspace.
 - Evidence packets expire after 30 days.
 - A merge of two members cannot be undone.
