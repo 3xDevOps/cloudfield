@@ -85,6 +85,10 @@ function glideTile(tile: HTMLElement, from: Rect, to: Rect): Animation {
   return animation
 }
 
+const fade = { motion: { duration: '--duration-200', easing: '--ease-enter' } } as const
+/** No tile is growing in. `onScreen` is the tabs that were shown before one did. */
+const settled = { tiles: [] as string[], onScreen: [] as string[] }
+
 /** Where a tile that was not on screen grows from: the far edge of the room a tile of `before` gave up for it. */
 function grownFrom(before: Record<string, Rect>, to: Rect): Rect | undefined {
   const host = Object.values(before).find((rect) =>
@@ -185,35 +189,48 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
   const drawn = Object.fromEntries(mounted.map((tile) => [tile.id, layout.maximized && tile.id === layout.focused ? full : rects.tiles[tile.id]]))
   const narrow = (tileId: string) => measured && (drawn[tileId].width / 100) * area.width < narrowBelow
 
+  const shown = mounted.flatMap((tile) => {
+    const tab = activeTab(tile)
+    const run = tab && runs[tab.runId]
+    return run ? [{ tile, tab, run, view: resolveView(tab, run, cap, memory) }] : []
+  })
+
   // A seam drag and a window resize change no shape, so they never glide.
   const shape = JSON.stringify([layout.maximized && layout.focused, layout.root], (key, value: unknown) =>
     key === 'ratio' || key === 'tabs' || key === 'active' ? undefined : value,
   )
-  const last = useRef({ shape, cramped, drawn })
+  const last = useRef({ shape, cramped, drawn, tabs: [] as string[] })
   const ghosts = useRef<HTMLElement[]>([])
-  // A tile that grows in is its strip over bare canvas until it lands: mounting its session meanwhile would cost the glide its frames.
-  const [growing, setGrowing] = useState<string[]>([])
+  // A tile that grows in is an empty pane until it lands, and a session that was not on screen mounts then: its strip
+  // would be cut by the edge it grows from, and the mount would cost the glide its frames.
+  const [opening, setOpening] = useState(settled)
   useLayoutEffect(() => {
     const before = last.current
-    last.current = { shape, cramped, drawn }
+    last.current = { shape, cramped, drawn, tabs: shown.map((frame) => frame.tab.id) }
     const closed = ghosts.current.splice(0)
     const glided: Animation[] = []
-    const grew: string[] = []
+    const grew: HTMLElement[] = []
     if (before.shape !== shape && before.cramped === cramped && !prefersReducedMotion()) {
       for (const tile of document.querySelectorAll<HTMLElement>('[data-tile]')) {
         const from = before.drawn[tile.dataset.tile!]
         const to = drawn[tile.dataset.tile!]
         const grown = from ?? grownFrom(before.drawn, to)
-        if (!grown) playEntrance(tile.lastElementChild!, { motion: { duration: '--duration-200', easing: '--ease-enter' } })
+        if (!grown) playEntrance(tile.lastElementChild!, fade)
         else if (sides.some((side) => grown[side] !== to[side])) {
           glided.push(glideTile(tile, grown, to))
-          if (!from) grew.push(tile.dataset.tile!)
+          if (!from) grew.push(tile)
         }
       }
     }
     if (grew.length && time('--duration-glide')) {
-      setGrowing(grew)
-      void Promise.allSettled(glided.map((glide) => glide.finished)).then(() => setGrowing([]))
+      setOpening({ tiles: grew.map((tile) => tile.dataset.tile!), onScreen: before.tabs })
+      void Promise.allSettled(glided.map((glide) => glide.finished)).then(() => {
+        setOpening(settled)
+        for (const tile of grew) {
+          const kept = before.tabs.includes(tiles.find((each) => each.id === tile.dataset.tile)?.active ?? '')
+          for (const part of [...tile.firstElementChild!.children, ...(kept ? [] : [tile.lastElementChild!])]) playEntrance(part, fade)
+        }
+      })
     }
     if (closed.length) void Promise.allSettled(glided.map((glide) => glide.finished)).then(() => closed.forEach((ghost) => ghost.remove()))
   })
@@ -373,12 +390,6 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
     }),
   })
 
-  const shown = mounted.flatMap((tile) => {
-    const tab = activeTab(tile)
-    const run = tab && runs[tab.runId]
-    return run ? [{ tile, tab, run, view: resolveView(tab, run, cap, memory) }] : []
-  })
-
   return (
     <TileAreaContext value={value}>
       <div
@@ -391,6 +402,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
             tile={tile}
             rect={drawn[tile.id]}
             parked={!visible.includes(tile)}
+            opening={opening.tiles.includes(tile.id)}
             narrow={narrow(tile.id)}
             room={{
               right: !measured || fits(splitTile(stored, tile.id, 'right').root, area),
@@ -434,7 +446,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
                 return {
                   tab,
                   view,
-                  slot: growing.includes(tile.id) ? null : slots[tile.id] ?? null,
+                  slot: opening.tiles.includes(tile.id) && !opening.onScreen.includes(tab.id) ? null : slots[tile.id] ?? null,
                   tile: {
                     focused: tile.id === layout.focused,
                     controls: tile.id === controlsTile(on, runId)?.id,

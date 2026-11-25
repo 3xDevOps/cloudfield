@@ -16,12 +16,14 @@ import { activateTab, activeTab, resolveView, visibleTiles, type Tile as TileNod
  * area portals that session's frame into the body through `onSlot`; an empty
  * tile shows the picker instead.
  */
-export function Tile({ tile, rect, parked, narrow, room, linked, onSlot }: {
+export function Tile({ tile, rect, parked, opening, narrow, room, linked, onSlot }: {
   tile: TileNode
   /** In percent of the area. */
   rect: Rect
   /** Hidden behind the maximized tile, and still mounted. */
   parked: boolean
+  /** Growing in: an empty pane until it lands. */
+  opening: boolean
   narrow: boolean
   room: { right: boolean; down: boolean }
   /** An arrow that points at this tile's view is hovered or focused. */
@@ -57,13 +59,13 @@ export function Tile({ tile, rect, parked, narrow, room, linked, onSlot }: {
           linked ? 'after:border-dashed after:border-accent' : focused && visible.length > 1 && !dragging ? 'after:border-accent' : 'after:border-transparent',
         )}
       >
-        <TabStrip tile={tile} narrow={narrow} room={room} />
+        <TabStrip tile={tile} opening={opening} narrow={narrow} room={room} />
         {tab ? (
           <TabsContent ref={slot} value={tab.id} forceMount className="relative flex-1">
             {!run && <MissingRun tiled />}
           </TabsContent>
         ) : (
-          <div className="flex min-h-0 flex-1 justify-center p-6">
+          <div className={cn('flex min-h-0 flex-1 justify-center p-6', opening && 'opacity-0')}>
             <Picker tileId={tile.id} runId={splitFrom} autoFocus={focused} className="w-full max-w-lg" />
           </div>
         )}

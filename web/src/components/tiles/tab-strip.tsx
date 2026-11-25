@@ -159,8 +159,10 @@ function ParkedPill({ tile }: { tile: Tile }) {
 }
 
 /** A tile's top row: its session tabs, "+", and on the right the split and maximize controls or the parked tiles. */
-export function TabStrip({ tile, narrow, room }: {
+export function TabStrip({ tile, opening, narrow, room }: {
   tile: Tile
+  /** The tile is growing in: the row is drawn bare, so the edge it grows from cuts no tab or control. */
+  opening: boolean
   /** The tile is under 560px wide: icons for words, and fewer controls. */
   narrow: boolean
   /** Whether the area has room for a tile on each side of this one. */
@@ -209,7 +211,7 @@ export function TabStrip({ tile, narrow, room }: {
 
   return (
     <Popover open={picking === tile.id} onOpenChange={(open) => pick(open ? tile.id : null)}>
-    <div className={cn('flex h-8 shrink-0 items-center gap-1 border-b border-seam pr-1 coarse:h-11', focused ? 'bg-canvas' : 'bg-chrome')}>
+    <div className={cn('flex h-8 shrink-0 items-center gap-1 border-b border-seam pr-1 coarse:h-11', focused ? 'bg-canvas' : 'bg-chrome', opening && '*:invisible')}>
       {sidebarCollapsed && visibleTiles(layout)[0] === tile && (
         <Button variant="ghost" size="icon-sm" label="Open sidebar" onClick={toggleSidebar} className="ml-1">
           <PanelLeft />

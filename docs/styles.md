@@ -744,9 +744,12 @@ literal time or curve.
   height too and is sized once, not on every frame. A glide starts its clock two
   frames after the change, past the frame that paints what the change
   mounted. A new tile grows from the
-  edge it opens on, sharing one moving seam with the tile it split from, and
-  its session mounts when it has landed: until then it is its strip over
-  bare canvas. A
+  edge it opens on, sharing one moving seam with the tile it split from, as
+  an empty pane: a bare strip row over `--canvas`, so the edge it grows from
+  cuts no tab or button. Its tabs, controls and body fade in over 200ms on
+  `--ease-enter` when it has landed, which is when a session that was not on
+  screen mounts; a session dragged out of another tile stays on show under
+  the bare strip. A
   parked or closed tile stays painted under the tile that takes its room
   until the glide ends, and a gliding tile is ringed by a 1px `--control-border` line,
   so its moving edge reads as a pane edge over that tile. A seam drag and a window

@@ -8,7 +8,7 @@ import { RunFrame } from '@/routes/run'
 import type { RunView } from '@/routes/run/views'
 import { useStore } from '@/store'
 import { toRecord } from '@/store/runs'
-import { emptyTiles, openTab, pickTab, splitTile } from '@/store/tiles'
+import { dropTab, emptyTiles, openTab, pickTab, splitTile, tileList } from '@/store/tiles'
 import { ScriptedSession } from '@/test/acp-stream'
 import { alice, bob, run, serverInfo, workspace } from '@/test/fixtures'
 import { StubSocket } from '@/test/stub-socket'
@@ -196,13 +196,19 @@ describe('the session menu', () => {
 })
 
 describe('a glide', () => {
-  it('holds its clock for two frames, and mounts the session of a tile that grows in once it has landed', async () => {
+  /** Stands in for every glide, and lands them when called. */
+  function glides() {
     vi.spyOn(motion, 'time').mockReturnValue(300)
     const frames: FrameRequestCallback[] = []
     vi.stubGlobal('requestAnimationFrame', (frame: FrameRequestCallback) => frames.push(frame))
     let land = () => {}
     const glide = { finished: new Promise<void>((done) => { land = done }), pause: vi.fn(), play: vi.fn(), cancel() {} }
     vi.spyOn(Element.prototype, 'animate').mockReturnValue(glide as unknown as Animation)
+    return { frames, glide, land: () => act(async () => land()) }
+  }
+
+  it('holds its clock for two frames, and draws a tile that grows in as an empty pane until it has landed', async () => {
+    const { frames, glide, land } = glides()
     show('run_1')
     beside('run_2')
     await act(async () => {})
@@ -214,7 +220,25 @@ describe('a glide', () => {
 
     const grown = screen.getByRole('region', { name: /, tile 2 of 2$/ })
     expect(grown.querySelector('[data-slot=pane-header]')).toBeNull()
-    await act(async () => land())
+    expect(grown.firstElementChild!.className).toContain('*:invisible')
+    await land()
     expect(grown.querySelector('[data-slot=pane-header]')).not.toBeNull()
+    expect(grown.firstElementChild!.className).not.toContain('*:invisible')
+  })
+
+  it('keeps showing a session that was on screen when its tab is dropped into a new tile', async () => {
+    show('run_1')
+    act(() => changeTiles((layout, ctx) => openTab(layout, layout.focused, 'run_2', ctx), true))
+    await act(async () => {})
+    const { land } = glides()
+    act(() => changeTiles((layout, ctx) => {
+      const from = tileList(layout.root)[0]
+      return dropTab(layout, { runId: 'run_2', tabId: from.active }, from.id, 'right', ctx)
+    }))
+    await act(async () => {})
+    const grown = screen.getByRole('region', { name: /, tile 2 of 2$/ })
+    expect(grown.getAttribute('aria-label')).toContain(theirs)
+    expect(grown.querySelector('[data-slot=pane-header]')).not.toBeNull()
+    await land()
   })
 })
