@@ -6,11 +6,13 @@
 package relay
 
 import (
+	"cmp"
 	"context"
 	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/netip"
 	"sync"
@@ -77,8 +79,12 @@ type EgressStore interface {
 // Config configures a Relay.
 type Config struct {
 	// Origin is the edge's relay origin. Servers sign it to enroll, and
-	// grants name it as their issuer.
-	Origin string
+	// grants name it as their issuer. MoreOrigins are further relay
+	// origins of the same edge, each on its own host name: a server
+	// enrolls at the origin whose host it dialed, and every grant for it
+	// names that origin, whichever origin the client came in on.
+	Origin      string
+	MoreOrigins []string
 	// EdgeKey signs grants. Servers pin its public half.
 	EdgeKey   ed25519.PrivateKey
 	Directory Directory
@@ -89,6 +95,8 @@ type Config struct {
 	// DirectoryInterval overrides the least time between two stores of
 	// one server's directory. Zero keeps the default.
 	DirectoryInterval time.Duration
+	// ReturnWait overrides edgeproto.HTTPReturnWait. Zero keeps it.
+	ReturnWait time.Duration
 }
 
 const (
@@ -131,18 +139,24 @@ const (
 // Relay is the edge relay. Register its HTTP endpoints on the edge's mux
 // and serve the edge's HTTPS on Listener.
 type Relay struct {
-	origin  string
-	key     ed25519.PrivateKey
-	pub     ed25519.PublicKey
-	dir     Directory
-	store   EgressStore
-	budget  int64
-	ctx     context.Context
-	stop    context.CancelCauseFunc
-	flushed chan struct{}
+	origin string
+	// origins holds each relay origin by host name. announced lists them
+	// for Ready, nil while the edge has one.
+	origins   map[string]string
+	announced []string
+	key       ed25519.PrivateKey
+	pub       ed25519.PublicKey
+	dir       Directory
+	store     EgressStore
+	budget    int64
+	ctx       context.Context
+	stop      context.CancelCauseFunc
+	flushed   chan struct{}
 
 	// Durations, rates and limits that tests shorten.
 	attachDeadline     time.Duration
+	httpConnWait       time.Duration
+	returnWait         time.Duration
 	unclaimedTTL       time.Duration
 	pingInterval       time.Duration
 	idleTimeout        time.Duration
@@ -155,6 +169,16 @@ type Relay struct {
 	closing bool
 	servers map[string]*registration
 	conns   map[string]*relayConn
+	// httpWaiting counts, per server id, the requests waiting for one of
+	// its http connections or for it to enroll again.
+	httpWaiting map[string]int
+	// httpLimited holds, per server id, when a request to it was last
+	// refused with errHTTPLimit, for httpLimitQuiet.
+	httpLimited map[string]time.Time
+	// away holds, per claimed server whose control channel ended within
+	// returnWait, when it ended and a channel closed when the server
+	// enrolls again.
+	away map[string]*absence
 	// claims holds, by connection id, the claim connections a server may
 	// still report as claimed.
 	claims map[string]claimGrant
@@ -174,19 +198,38 @@ type Relay struct {
 	flushMu sync.Mutex // serializes saves and month changes
 	// ended and endedBytes are the month that ended and what it is still
 	// owed, guarded by flushMu.
-	ended       string
-	endedBytes  int64
-	egress      egressMeter
-	bytes       atomic.Uint64
-	refusalsMu  sync.Mutex
-	refusalsMap map[string]uint64
+	ended      string
+	endedBytes int64
+	egress     egressMeter
+	bytes      atomic.Uint64
+	// refusalsMu guards refusalsMap and connectorMap.
+	refusalsMu   sync.Mutex
+	refusalsMap  map[string]uint64
+	connectorMap map[ConnectorKey]uint64
 }
 
 // New returns a relay and starts its egress accounting.
 func New(ctx context.Context, cfg Config) (*Relay, error) {
-	origin, err := edgeproto.Origin(cfg.Origin)
-	if err != nil {
-		return nil, fmt.Errorf("relay: %w", err)
+	origins := map[string]string{}
+	var announced []string
+	for _, o := range append([]string{cfg.Origin}, cfg.MoreOrigins...) {
+		c, err := edgeproto.Origin(o)
+		if err != nil {
+			return nil, fmt.Errorf("relay: %w", err)
+		}
+		host := edgeproto.OriginHost(c)
+		if origins[host] != "" {
+			return nil, fmt.Errorf("relay: relay origins %s and %s share the host name %s", origins[host], c, host)
+		}
+		origins[host] = c
+		announced = append(announced, c)
+	}
+	if len(announced) > edgeproto.MaxRelayOrigins {
+		return nil, fmt.Errorf("relay: %d relay origins, limit %d", len(announced), edgeproto.MaxRelayOrigins)
+	}
+	origin := announced[0]
+	if len(announced) == 1 {
+		announced = nil
 	}
 	switch {
 	case len(cfg.EdgeKey) != ed25519.PrivateKeySize:
@@ -203,6 +246,8 @@ func New(ctx context.Context, cfg Config) (*Relay, error) {
 	}
 	r := &Relay{
 		origin:             origin,
+		origins:            origins,
+		announced:          announced,
 		key:                cfg.EdgeKey,
 		pub:                cfg.EdgeKey.Public().(ed25519.PublicKey),
 		dir:                cfg.Directory,
@@ -210,6 +255,8 @@ func New(ctx context.Context, cfg Config) (*Relay, error) {
 		budget:             cfg.EgressBudget,
 		flushed:            make(chan struct{}),
 		attachDeadline:     edgeproto.AttachDeadline,
+		httpConnWait:       edgeproto.HTTPConnWait,
+		returnWait:         cmp.Or(cfg.ReturnWait, edgeproto.HTTPReturnWait),
 		unclaimedTTL:       edgeproto.UnclaimedTTL,
 		pingInterval:       edgeproto.PingInterval,
 		idleTimeout:        edgeproto.ControlIdleTimeout,
@@ -219,16 +266,21 @@ func New(ctx context.Context, cfg Config) (*Relay, error) {
 		maxConnsPerAddress: maxConnsPerAddress,
 		servers:            map[string]*registration{},
 		conns:              map[string]*relayConn{},
+		httpWaiting:        map[string]int{},
+		httpLimited:        map[string]time.Time{},
+		away:               map[string]*absence{},
 		claims:             map[string]claimGrant{},
 		directories:        map[string]*directoryWrite{},
 		addrConns:          map[netip.Prefix]int{},
 		refusalsMap:        map[string]uint64{},
+		connectorMap:       map[ConnectorKey]uint64{},
 	}
 	if cfg.DirectoryInterval > 0 {
 		r.directoryInterval = cfg.DirectoryInterval
 	}
 	r.http = &http.Transport{
 		DialContext:         r.dialHTTP,
+		MaxConnsPerHost:     edgeproto.MaxHTTPConnsPerServer,
 		MaxIdleConnsPerHost: edgeproto.MaxHTTPConnsPerServer,
 		IdleConnTimeout:     edgeproto.HTTPIdleTimeout,
 		DisableCompression:  true,
@@ -259,6 +311,29 @@ func (r *Relay) Register(mux *http.ServeMux) {
 // compressing attacker-influenced data beside secrets is how CRIME works.
 var acceptOptions = &websocket.AcceptOptions{CompressionMode: websocket.CompressionDisabled}
 
+// originOf is the relay origin req came in on. A host that names none of
+// them gets Origin: the edge's handler refuses such a host before it
+// reaches the relay.
+func (r *Relay) originOf(req *http.Request) string {
+	if o, ok := r.origins[edgeproto.RequestHost(req)]; ok {
+		return o
+	}
+	return r.origin
+}
+
+// Origin is the relay origin the claimed server serverID enrolled at,
+// which its grants and connector assertions must name, "" when it holds
+// no control channel.
+func (r *Relay) Origin(serverID string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	reg := r.servers[serverID]
+	if reg == nil || !reg.claimed || reg.ctx.Err() != nil {
+		return ""
+	}
+	return reg.origin
+}
+
 // Online reports whether serverID is claimed and holds a control channel.
 func (r *Relay) Online(serverID string) bool {
 	r.mu.Lock()
@@ -277,6 +352,9 @@ type Metrics struct {
 	ServersByProtocol map[int]int
 	// Draining is set once Shutdown started.
 	Draining bool
+	// MCPWaiting counts connector requests waiting for a connection of
+	// their server or for it to enroll again.
+	MCPWaiting int
 	// Splices counts attached connections.
 	Splices int
 	// BytesRelayed counts bytes sent to either side since the relay
@@ -286,15 +364,32 @@ type Metrics struct {
 	Throttled       bool
 	// Refusals counts refused connections and enrollments by reason.
 	Refusals map[string]uint64
+	// ServersByOrigin counts servers holding a control channel by the
+	// relay origin they enrolled at, every relay origin included.
+	// ConnectorRequests counts connector requests since the relay
+	// started by the relay origin they came in on and the protocol
+	// version of the server they were for, 0 when it was not connected.
+	ServersByOrigin   map[string]int
+	ConnectorRequests map[ConnectorKey]uint64
+}
+
+// ConnectorKey is a ConnectorRequests counter.
+type ConnectorKey struct {
+	Origin   string
+	Protocol int
 }
 
 // Metrics returns the relay's counters.
 func (r *Relay) Metrics() Metrics {
-	m := Metrics{ServersByProtocol: map[int]int{}}
+	m := Metrics{ServersByProtocol: map[int]int{}, ServersByOrigin: map[string]int{}}
+	for _, o := range r.origins {
+		m.ServersByOrigin[o] = 0
+	}
 	r.mu.Lock()
 	m.Draining = r.closing
 	for _, reg := range r.servers {
 		m.ServersByProtocol[reg.version]++
+		m.ServersByOrigin[reg.origin]++
 		if reg.claimed {
 			m.Servers++
 		} else {
@@ -306,15 +401,16 @@ func (r *Relay) Metrics() Metrics {
 			m.Splices++
 		}
 	}
+	for _, n := range r.httpWaiting {
+		m.MCPWaiting += n
+	}
 	r.mu.Unlock()
 	m.BytesRelayed = r.bytes.Load()
 	m.EgressThisMonth = r.egress.usage()
 	m.Throttled = r.throttled()
 	r.refusalsMu.Lock()
-	m.Refusals = make(map[string]uint64, len(r.refusalsMap))
-	for k, v := range r.refusalsMap {
-		m.Refusals[k] = v
-	}
+	m.Refusals = maps.Clone(r.refusalsMap)
+	m.ConnectorRequests = maps.Clone(r.connectorMap)
 	r.refusalsMu.Unlock()
 	return m
 }
@@ -367,6 +463,13 @@ func (r *Relay) CloseServer(serverID string) {
 func (r *Relay) Unenroll(serverID string) {
 	r.mu.Lock()
 	reg := r.servers[serverID]
+	if reg != nil {
+		reg.unenrolled = true
+	}
+	if a := r.away[serverID]; a != nil {
+		close(a.back)
+		delete(r.away, serverID)
+	}
 	r.mu.Unlock()
 	if reg != nil {
 		if err := reg.send(edgeproto.Unenroll{}); err != nil {

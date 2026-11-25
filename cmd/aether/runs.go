@@ -22,12 +22,12 @@ import (
 func init() {
 	register(command{
 		name:  "sessions",
-		short: "list sessions (--needs-you: sessions that need you; --archived: only archived), or show one: aether sessions <session-id>",
-		usage: "aether sessions [--needs-you|--archived] [--json]\n" +
-			"aether sessions <session-id> [--json]",
-		example: "aether sessions --json\n" +
-			"aether sessions --needs-you\n" +
-			"aether sessions run-d6ay38tj8j --json",
+		short: "list sessions (--needs-you: sessions that need you; --archived: only archived), or show one: cloudfield sessions <session-id>",
+		usage: "cloudfield sessions [--needs-you|--archived] [--json]\n" +
+			"cloudfield sessions <session-id> [--json]",
+		example: "cloudfield sessions --json\n" +
+			"cloudfield sessions --needs-you\n" +
+			"cloudfield sessions run-d6ay38tj8j --json",
 		flags: true,
 		run:   runRuns,
 	})
@@ -62,6 +62,11 @@ type runView struct {
 	PendingInputs []pendingInput  `json:"pending_inputs"`
 	Branch        string          `json:"branch"`
 	Report        *runReport      `json:"report,omitempty"`
+	// AsleepSince is when idleness stopped the session's container or
+	// saved its VM; AsleepSaved while the saved VM keeps every process.
+	AsleepSince *string `json:"asleep_since,omitempty"`
+	AsleepSaved bool    `json:"asleep_saved,omitempty"`
+	WakeError   string  `json:"wake_error,omitempty"`
 }
 
 // pendingInput.Options are those aether answer accepts; a standard run's
@@ -81,6 +86,7 @@ func viewOf(r protocol.Run, workspace string, items []protocol.AttentionItem, re
 	v := runView{
 		ID: r.ID, WorkspaceID: r.WorkspaceID, Workspace: workspace, Status: displayStatus(r), State: r.Status,
 		Reason: r.Reason, Wait: r.Wait, WaitText: r.Wait.Text(time.Now()), Branch: r.Branch, PendingInputs: []pendingInput{},
+		AsleepSince: r.AsleepSince, AsleepSaved: r.AsleepSaved, WakeError: r.WakeError,
 	}
 	offered := map[string][]protocol.AttentionOption{}
 	for _, it := range items {
@@ -211,6 +217,20 @@ func printRunView(w io.Writer, v runView, items []protocol.AttentionItem) error 
 	if v.WaitText != "" {
 		_, _ = fmt.Fprintf(tw, "wait\t%s\n", printable(v.WaitText))
 	}
+	if v.AsleepSince != nil {
+		wakes := "a message, a typed terminal, aether ssh or aether resume wakes it"
+		if domain.RunStatus(v.State).Terminal() {
+			wakes = "aether reopen " + v.ID + " wakes it"
+		}
+		held := "its container is stopped"
+		if v.AsleepSaved {
+			held = "it is saved to disk with every process"
+		}
+		_, _ = fmt.Fprintf(tw, "asleep\tsince %s; %s until %s\n", *v.AsleepSince, held, wakes)
+	}
+	if v.WakeError != "" {
+		_, _ = fmt.Fprintf(tw, "wake failed\t%s\n", printable(v.WakeError))
+	}
 	_, _ = fmt.Fprintf(tw, "workspace\t%s (%s)\n", v.Workspace, v.WorkspaceID)
 	_, _ = fmt.Fprintf(tw, "branch\t%s\n", v.Branch)
 	_, _ = fmt.Fprintf(tw, "state\t%s\n", v.State)
@@ -250,11 +270,15 @@ func runShow(runID string, asJSON bool) error {
 // needsYou selects the runs that need a member, by the rule push
 // notifications and the dashboard share (domain.Run.NeedsAttention).
 func needsYou(r protocol.Run) bool {
-	run := domain.Run{
+	return domainRun(r).NeedsAttention(r.Paused)
+}
+
+func domainRun(r protocol.Run) *domain.Run {
+	return &domain.Run{
 		Status: domain.RunStatus(r.Status), Activity: domain.RunActivity(r.Activity), Reason: r.Reason,
 		OutcomeUnseen: r.OutcomeUnseen, Review: domain.RunReview(r.Review),
+		ParentRunID: domain.RunID(r.ParentRunID), Detached: r.Detached,
 	}
-	return run.NeedsAttention(r.Paused)
 }
 
 // plural renders a count with its noun, so the notice reads as a sentence
@@ -283,14 +307,18 @@ func renderRuns(w io.Writer, runs []protocol.Run, memberName func(string) string
 		if title == "" {
 			title = r.Task
 		}
-		title = strings.ReplaceAll(title, "\n", " ")
-		task := strings.ReplaceAll(r.Task, "\n", " ")
+		title = printable(strings.ReplaceAll(title, "\n", " "))
+		task := printable(strings.ReplaceAll(r.Task, "\n", " "))
 		account := memberName(r.AccountMemberID)
 		if r.RequestedAccountMemberID != "" {
 			account += " (fallback)"
 		}
+		status := displayStatus(r)
+		if r.AsleepSince != nil {
+			status += " (asleep)"
+		}
 		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			r.ID, displayStatus(r), r.Harness, memberName(r.MemberID), account, overlapOf[r.ID], title, task); err != nil {
+			r.ID, status, r.Harness, memberName(r.MemberID), account, overlapOf[r.ID], title, task); err != nil {
 			return err
 		}
 	}
@@ -298,14 +326,15 @@ func renderRuns(w io.Writer, runs []protocol.Run, memberName func(string) string
 }
 
 // displayStatus is the dashboard's label for a live run's state, else for
-// its status. A reported success awaiting review is Ready for review, live or
-// completed.
+// its status. A reported success awaiting review (domain.Run.AwaitsReview)
+// is Finished: review, live or completed; a subsession's, which is for its
+// parent agent only, is Finished: reported to its parent.
 func displayStatus(r protocol.Run) string {
-	review := domain.RunReview(r.Review)
-	if review == domain.ReviewReady || review == domain.ReviewLater {
-		if r.Activity == string(domain.ActivityFinished) || r.Status == string(domain.RunCompleted) {
-			return "Ready for review"
-		}
+	switch run := domainRun(r); {
+	case run.AwaitsReview(false):
+		return "Finished: review"
+	case run.OutcomeHeld() && (run.Review == domain.ReviewReady || run.Review == domain.ReviewLater):
+		return "Finished: reported to its parent"
 	}
 	if label, ok := activityLabels[domain.RunActivity(r.Activity)]; ok {
 		if r.Wait != nil && waitLabels[r.Wait.Kind] != "" {
@@ -353,7 +382,7 @@ var statusLabels = map[domain.RunStatus]string{
 
 func runRuns(args []string) error {
 	fs := newFlagSet("sessions")
-	onlyNeedsYou := fs.Bool("needs-you", false, "list only sessions that need you (state needs-you or disconnected, an unseen failure, or a reported success ready for review; never paused)")
+	onlyNeedsYou := fs.Bool("needs-you", false, "list only sessions that need you (state needs-you or disconnected, or an unseen failure; never paused, never a finished session awaiting review)")
 	archived := fs.Bool("archived", false, "list only archived sessions")
 	asJSON := fs.Bool("json", false, "print a JSON array, or with a session id one JSON object: id, workspace_id, workspace, status, state, reason, pending_inputs, branch, report")
 	runID := ""
@@ -366,7 +395,7 @@ func runRuns(args []string) error {
 	if runID == "" && fs.NArg() == 1 {
 		runID = fs.Arg(0)
 	} else if fs.NArg() > 0 {
-		return fmt.Errorf("usage: aether sessions [--needs-you|--archived] [--json]\n   or: aether sessions <session-id> [--json]")
+		return fmt.Errorf("usage: cloudfield sessions [--needs-you|--archived] [--json]\n   or: cloudfield sessions <session-id> [--json]")
 	}
 	if *onlyNeedsYou && *archived {
 		return fmt.Errorf("aether sessions: --needs-you and --archived cannot be used together")

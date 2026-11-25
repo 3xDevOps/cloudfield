@@ -1,8 +1,8 @@
 # Quickstart
 
 This guide takes you from nothing to an agent's change published as a pull
-request, in eight steps. Each step ends with how you know it worked. Aether's
-terms are defined in the [glossary](README.md#concepts).
+request, in eight steps. Each step ends with how you know it worked.
+Cloudfield's terms are defined in the [glossary](README.md#concepts).
 A coding agent can do these steps from the CLI: paste the prompt in
 [agents.md](agents.md) into it.
 
@@ -13,7 +13,7 @@ You need:
   agents run. It needs no desktop and no open port
   ([prerequisites](install.md#server-prerequisites)).
 - Your own computer (Linux, macOS or Windows): the **client**, where you work.
-  The `aether` CLI and the desktop app run here and talk to the server.
+  The `cloudfield` CLI and the desktop app run here and talk to the server.
 - A GitHub account, and a login for at least one coding agent, such as a Claude
   or ChatGPT subscription.
 
@@ -28,13 +28,13 @@ at step 5.
 Run the install script on the server, then on your computer (Linux or macOS):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/3xDevOps/Aether/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/3xDevOps/cloudfield/main/scripts/install.sh | sh
 ```
 
 At the `role` prompt, answer `server` on the server. It installs
-`aether-server` and `aether` in `/usr/local/bin` with `sudo`, then starts the
-setup in step 2. Answer `client` on your computer. It installs the `aether` CLI
-in `~/.local/bin` without `sudo`, then builds the desktop app with `aether gui
+`cloudfield-server` and `cloudfield` in `/usr/local/bin` with `sudo`, then starts the
+setup in step 2. Answer `client` on your computer. It installs the `cloudfield` CLI
+in `~/.local/bin` without `sudo`, then builds the desktop app with `cloudfield gui
 build`, which downloads Electron and takes a few minutes. If `~/.local/bin` is
 not on your `PATH`, the script prints the line that adds it.
 
@@ -42,35 +42,36 @@ On Windows, download and review the PowerShell installer, then run it. It
 installs the CLI and the desktop app without administrator rights:
 
 ```powershell
-Invoke-WebRequest -UseBasicParsing -Uri https://raw.githubusercontent.com/3xDevOps/Aether/main/scripts/install.ps1 -OutFile "$env:TEMP\aether-install.ps1"
+Invoke-WebRequest -UseBasicParsing -Uri https://raw.githubusercontent.com/3xDevOps/cloudfield/main/scripts/install.ps1 -OutFile "$env:TEMP\aether-install.ps1"
 powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\aether-install.ps1"
 ```
 
-It worked if `aether version` prints the release on your computer, and
-`aether-server version` on the server. [install.md](install.md) covers every
-platform, `--role none` (binaries only), upgrades and removal.
+It worked if `cloudfield version` prints the release on your computer, and
+`cloudfield-server version` (or `--version`) on the server.
+[install.md](install.md) covers every platform, `--role none` (binaries only),
+upgrades and removal.
 
 ## 2. Start the server
 
 Do this on the server. Answering `server` already ran setup. If you skipped it,
-run `sudo aether-server setup`.
+run `sudo cloudfield-server setup`.
 
 Setup decides how your computer reaches the server. **Tailscale** is the
 simplest: on a host where Tailscale runs, Enter at the tailnet question picks
 it, and people link by this host's tailnet name with their tailnet login
 ([networking.md](networking.md#tailscale)). Otherwise setup turns on the
-**edge**, a relay the Aether project runs at `https://edge.onaether.dev`. The
-server and your computer both dial out to it, so neither needs an open port.
+**edge**, a relay the Cloudfield project runs at `https://edge.cloudfield.ai`.
+The server and your computer both dial out to it, so neither needs an open port.
 SSH runs end to end through it: the edge cannot read your traffic, but sees
 host names, IP addresses and who signs in ([edge.md](edge.md));
-`aether-server config set edge-url ""` turns it off.
+`cloudfield-server config set edge-url ""` turns it off.
 
 Setup asks these questions. Enter accepts the default shown in brackets:
 
 | Prompt | Answer |
 | --- | --- |
 | `Continue without Docker` | Asked only when Docker does not answer. Enter stops with nothing written. Install or start Docker, then run setup again. |
-| `SSH listen address for Aether, not the system sshd` | Enter keeps `:2222`. |
+| `SSH listen address for Cloudfield, not the system sshd` | Enter keeps `:2222`. |
 | `Data directory` | Enter keeps `/var/lib/aether`. |
 | `Use Tailscale to reach this server` | Asked only when Tailscale runs on this host. A **tailnet** is a private network made with Tailscale. Enter (yes) signs people in by their tailnet login; answer no when your computer is not on this tailnet, and setup uses the edge. |
 | `Let anyone on the tailnet join ...`, `Also require a registered SSH key ...`, `Dashboard HTTPS port` | Asked after a yes. Enter keeps admin approval for new members, no key requirement, and the dashboard on port 443 for phones ([networking.md](networking.md#who-is-let-in)). |
@@ -83,14 +84,14 @@ Setup ends with the commands left for you. With the edge on, it prints a claim
 link first:
 
 ```
-claim link: aether://claim?edge=https%3A%2F%2Fedge.onaether.dev&server=<server id>#<secret> (valid for 30 min, until 2026-10-25 15:04 UTC, 5 attempts)
+claim link: aether://claim?edge=https%3A%2F%2Fedge.cloudfield.ai&server=<server id>#<secret> (valid for 30 min, until 2026-10-25 15:04 UTC, 5 attempts)
 
 next:
   1. start the server on this machine:
        sudo systemctl daemon-reload && sudo systemctl enable --now aether-server
-  2. on your computer, install Aether if it is not there yet (Windows: docs/install.md):
-       curl -fsSL https://raw.githubusercontent.com/3xDevOps/Aether/main/scripts/install.sh | sh -s -- --client
-  3. on your computer: in the Aether app's Connect step choose Aether relay, sign in
+  2. on your computer, install Cloudfield if it is not there yet (Windows: docs/install.md):
+       curl -fsSL https://raw.githubusercontent.com/3xDevOps/cloudfield/main/scripts/install.sh | sh -s -- --client
+  3. on your computer: in the Cloudfield app's Connect step choose Cloudfield relay, sign in
      with GitHub and paste the claim link above; in a terminal:
        aether login
        aether link --claim <server id>-<secret>
@@ -101,18 +102,18 @@ next:
 On a tailnet, item 3 names this host instead, and the dashboard address when
 setup turned it on. With the edge on too, the claim follows as the
 alternative for a computer off the tailnet; do one or the other, because the
-first link makes its account the admin:
+first link makes its account the super admin:
 
 ```
-  3. on your computer, on the same tailnet: in the Aether app's Connect step choose
+  3. on your computer, on the same tailnet: in the Cloudfield app's Connect step choose
      Tailscale and enter my-server.tail1234.ts.net; in a terminal:
        aether link my-server.tail1234.ts.net
      or, with nothing installed, open https://my-server.tail1234.ts.net/ in a browser there
 ```
 
 > [!WARNING]
-> Whoever uses the claim link first becomes the server's administrator. It is
-> valid for 30 minutes and 5 attempts. `sudo aether-server edge claim-code`
+> Whoever uses the claim link first becomes the server's super admin. It is
+> valid for 30 minutes and 5 attempts. `sudo cloudfield-server edge claim-code`
 > prints a new one until someone has joined.
 
 Item 1 starts the server: run it now, on the server. Item 2 is step 1 on your
@@ -120,11 +121,11 @@ computer, if you have not done it. Item 3 links your computer: that is step 3,
 so keep the claim link or host name. Item 4 is optional
 ([connectors.md](connectors.md)); skip it for now.
 
-With neither, item 3 is `aether link <this-host>:2222`. With the edge, linking
+With neither, item 3 is `cloudfield link <this-host>:2222`. With the edge, linking
 by address before the claim works only on the server or through an SSH tunnel
 ([networking.md](networking.md#the-first-admin)).
 
-It worked if `sudo aether-server edge status` shows `connection  connected since
+It worked if `sudo cloudfield-server edge status` shows `connection  connected since
 <time>`, or without the edge, `systemctl status aether-server` shows `active`.
 
 ### Set up over ssh, for agents and scripts
@@ -133,30 +134,30 @@ To drive setup from an agent over ssh, with no terminal on the server (`sudo`
 there must not ask for a password), run the steps non-interactively:
 
 ```sh
-ssh <user>@<server> 'curl -fsSL https://raw.githubusercontent.com/3xDevOps/Aether/main/scripts/install.sh | sh -s -- --role none'
-ssh <user>@<server> 'sudo aether-server install --edge-url https://edge.onaether.dev --edge-access <account|approved-devices>'
+ssh <user>@<server> 'curl -fsSL https://raw.githubusercontent.com/3xDevOps/cloudfield/main/scripts/install.sh | sh -s -- --role none'
+ssh <user>@<server> 'sudo cloudfield-server install --edge-url https://edge.cloudfield.ai --edge-access <account|approved-devices>'
 ssh <user>@<server> 'sudo systemctl daemon-reload && sudo systemctl enable --now aether-server'
-ssh <user>@<server> "timeout 300 sh -c 'until sudo aether-server edge status >/dev/null; do sleep 5; done'"
-ssh <user>@<server> 'sudo aether-server edge claim-code'
+ssh <user>@<server> "timeout 300 sh -c 'until sudo cloudfield-server edge status >/dev/null; do sleep 5; done'"
+ssh <user>@<server> 'sudo cloudfield-server edge claim-code'
 ```
 
 The access policy is the owner's choice (`account` or `approved-devices`, as
-in the table above). If the wait times out, `sudo aether-server edge status`
+in the table above). If the wait times out, `sudo cloudfield-server edge status`
 prints the `connection` line that says why; fix that before you claim. The
-claim code goes to step 3: `aether login`, then `aether link --claim <code>`.
+claim code goes to step 3: `cloudfield login`, then `cloudfield link --claim <code>`.
 
 ## 3. Link from your machine
 
 Do this on your computer, with what step 2 printed: a tailnet host name or a
 claim link. Linking saves the server in your client config. The first person to
-link a fresh server becomes its **administrator** (admin); there is no
+link a fresh server becomes its **super admin**; there is no
 password. In the desktop app, which opens at **Onboarding → Connect** until it
 is linked, answer **How does this computer reach your server?**:
 
 | Choice | When | Then |
 | --- | --- | --- |
 | **Tailscale** (recommended) | This computer is on the server's tailnet. | Enter the name setup printed in **Server's tailnet name**, and click **Link**. |
-| **Aether relay** | Setup printed a claim link, or someone sent you an invitation. | Click **Sign in with GitHub**, open the address shown and confirm the code. Paste the claim link into **Claim or invite link** and click **Claim and link**. Or paste either link into **Have an invitation or claim link?** first. |
+| **Cloudfield relay** | Setup printed a claim link, or someone sent you an invitation. | Click **Sign in with GitHub**, open the address shown and confirm the code. Paste the claim link into **Claim or invite link** and click **Claim and link**. Or paste either link into **Have an invitation or claim link?** first. |
 | **SSH address** | This computer reaches the server's SSH port directly. | Enter `<server-host>:2222`, and an **Invite code** if an admin gave you one, then click **Link**. |
 
 Opening the `aether://claim` link on your computer opens the relay choice with
@@ -164,17 +165,21 @@ the link filled in.
 
 Or in a terminal:
 
-- On a tailnet: `aether link <server-host>`.
-- Through the edge: run `aether login`, open the address it prints, sign in
+- On a tailnet: `cloudfield link <server-host>`.
+- Through the edge: run `cloudfield login`, open the address it prints, sign in
   with GitHub, and enter the code on that edge page. Then run
-  `aether link --claim '<claim link>'`, or
-  `aether link --claim <server id>-<secret>`.
+  `cloudfield link --claim '<claim link>'`, or
+  `cloudfield link --claim <server id>-<secret>`.
 
-It worked if the step shows **Connected**, or `aether link` ends with `linked
+On Windows, type `aether` instead of `cloudfield` for a command that takes a
+link: `cloudfield.cmd` passes it to `cmd.exe`, which splits it at the `&`
+([install.md](install.md#old-names)).
+
+It worked if the step shows **Connected**, or `cloudfield link` ends with `linked
 to <server>` and your role, such as `linked to server <server id> through
-edge.onaether.dev as <your name> (admin)`.
+edge.cloudfield.ai as <your name> (super_admin)`.
 
-`aether status` shows where you are:
+`cloudfield status` shows where you are:
 
 - What this computer is linked to: the edge it is signed in to, the server and
   your role.
@@ -183,8 +188,8 @@ edge.onaether.dev as <your name> (admin)`.
 - The command for the next missing step. It is prefixed `an admin runs:` or
   `a human runs in a terminal:` when it is not yours or needs a terminal.
 
-`aether status --json` prints the same as one JSON object. When the server
-cannot be reached, `aether status` prints what this computer holds and the
+`cloudfield status --json` prints the same as one JSON object. When the server
+cannot be reached, `cloudfield status` prints what this computer holds and the
 error, then exits 1.
 
 On a tailnet the server knows you by your tailnet login. Linking by SSH address
@@ -195,16 +200,16 @@ Optional: set the name and email your agents commit as (otherwise they commit
 as your display name at `<member-id>@aether.local`):
 
 ```sh
-aether member git --name "Ada Lovelace" --email ada@example.com
+cloudfield member git --name "Ada Lovelace" --email ada@example.com
 ```
 
 ## 4. Create a workspace
 
 A **workspace** is one repository, its **base branch** (the branch new sessions
-start from), and the sessions started from it. Only an admin can create one.
+start from), and the sessions started from it. Only an admin or super admin can create one, and the creator owns it ([workspace access](teams.md#workspace-access)).
 
-Open the **dashboard**, the web app where you work with Aether. The desktop
-app shows it, and so does `aether gui`, which serves it in a browser tab from
+Open the **dashboard**, the web app where you work with Cloudfield. The desktop
+app shows it, and so does `cloudfield gui`, which serves it in a browser tab from
 your computer. It shows **Onboarding** (**Connect**, **Repository**, **Agent**,
 **First session**, which match steps 3 to 6 here) until you finish. If you linked
 in a terminal, it opens at the **Board** instead; click **Add your repository**
@@ -215,7 +220,7 @@ there. **Settings → General → Setup guide → Open guide** reopens onboardin
 1. In **Onboarding → Repository**, under **From GitHub**, click **Add GitHub
    repository**.
 2. Click **Connect GitHub**, then **Copy code and open GitHub**. Enter the code
-   on GitHub and authorize **GitHub CLI**, which Aether uses to connect. The
+   on GitHub and authorize **GitHub CLI**, which Cloudfield uses to connect. The
    dialog shows **Connected as `<login>`** by itself.
 3. Choose a repository. Private and organization repositories need no deploy
    key.
@@ -241,25 +246,25 @@ click **Retry fetch**, or **Source settings** to reconnect. **Settings → GitHu
 | --- | --- |
 | Public Git URL | **From a Git URL → Import repository**, then **Public HTTPS**. |
 | Private Git URL | Same form with **Read-only deploy key**. Install the public key it shows at the Git host, then **Verify** and **Adopt candidate**. |
-| A clone on your computer | **From a local clone → Create from local clone**, then push the base branch. Needs the desktop app or `aether gui` on that computer. Or [from the CLI](#from-the-cli). |
+| A clone on your computer | **From a local clone → Create from local clone**, then push the base branch. Needs the desktop app or `cloudfield gui` on that computer. Or [from the CLI](#from-the-cli). |
 
 [teams.md](teams.md) covers each source. A workspace can also run a setup script
 (such as `npm ci`) and set variables in new sessions: **Environment** on its
-**Repository** page, or `aether workspace env`
+**Repository** page, or `cloudfield workspace env`
 ([environments.md](environments.md#workspace-environment)).
 
 ### From the CLI
 
 ```sh
-aether workspace import ~/code/myproject
-aether workspace import https://github.com/acme/myproject
+cloudfield workspace import ~/code/myproject
+cloudfield workspace import https://github.com/acme/myproject
 ```
 
 A path creates a workspace named after the clone, with its checked-out branch as
 the base branch, adds the `aether` remote and pushes the base branch, ending
 with `pushed <branch> to workspace <name>`. A GitHub URL makes the server fetch
 the default branch with your GitHub connection and print the
-`aether workspace mirror adopt` command that makes the fetched commit the base;
+`cloudfield workspace mirror adopt` command that makes the fetched commit the base;
 review the commit first. Both are safe to re-run: a clone already imported is
 linked to its existing workspace.
 
@@ -268,8 +273,8 @@ linked to its existing workspace.
 An **agent** is the coding CLI a session starts: Claude Code, Codex, OpenCode, pi,
 oh-my-pi, GitHub Copilot CLI, Gemini CLI, Cursor CLI or Antigravity CLI. Agents
 run on the server, not on your computer. You install each one in your
-**environment**, your own container there, with the vendor's own login. Your
-**home** there persists, so this is done once.
+**environment**, your own sandbox there (a container or virtual machine), with
+the vendor's own login. Your **home** there persists, so this is done once.
 
 1. In **Onboarding → Agent**, or on the **Agents** page, click **Set up**
    beside an agent.
@@ -286,23 +291,23 @@ run on the server, not on your computer. You install each one in your
 5. Click **Check**.
 
 It worked if the dialog shows **Installed** and **Login found**, and after
-**Done** the agent's button reads **Run**. Aether only looks for the login file;
-the agent proves the login when a session starts.
+**Done** the agent's button reads **Run**. Cloudfield only looks for the login
+file; the agent proves the login when a session starts.
 
-From the CLI, on your computer. The environment has no `aether` command, so do
+From the CLI, on your computer. The environment has no `cloudfield` command, so do
 not run these in its terminal:
 
 ```sh
-aether agent add codex
-aether agent login codex
-aether agent list
-aether account usage
+cloudfield agent add codex
+cloudfield agent login codex
+cloudfield agent list
+cloudfield account usage
 ```
 
 Without a terminal (an agent's shell, CI), `agent add` installs the agent and
 prints the end of the install log. `agent login` prints a device code for
 Codex; Claude Code and the others need the human at a terminal, or an API key
-([harnesses.md](harnesses.md#use-an-api-key)). `aether account usage` asks the
+([harnesses.md](harnesses.md#use-an-api-key)). `cloudfield account usage` asks the
 vendor whether the login works. Logins and limits per agent:
 [harnesses.md](harnesses.md).
 
@@ -314,8 +319,8 @@ Settings, instruction files such as `CLAUDE.md`, commands, skills, hooks and MCP
 configuration live in a directory such as `~/.claude`; sessions read the same path
 in your home on the server. To copy yours, open **Agents → Agent config files**,
 click **Copy prompt**, and paste it into an agent on the computer that has your
-configuration (it needs the `aether` CLI, linked). That agent previews with
-`aether config push --dry-run`, asks you, then runs `aether config push`.
+configuration (it needs the `cloudfield` CLI, linked). That agent previews with
+`cloudfield config push --dry-run`, asks you, then runs `cloudfield config push`.
 Logins, tokens, history, and files the secret scanner flags are never uploaded,
 and only `--overwrite` replaces a different server file. Edit uploaded files on
 **Files → Home**. [Upload and edit
@@ -326,13 +331,13 @@ commands, what is left out and the errors.
 
 Sessions push and open pull requests with the GitHub login in your home. If you
 connected GitHub in step 4, skip this. Otherwise click **Connect GitHub** under
-**Agents → GitHub**, or run `aether github connect` on your computer. It prints
+**Agents → GitHub**, or run `cloudfield github connect` on your computer. It prints
 a code, waits while you approve it at github.com/login/device, then finishes
 the setup ([environment-home.md](environment-home.md#from-the-cli)).
 
 ## 6. Launch a session
 
-A **session** is one agent on one task, in its own container and on its own git
+A **session** is one agent on one task, in its own sandbox and on its own git
 branch. It uses your home, so your agent login and configuration come along.
 
 In the dashboard, click **New session**, or continue to onboarding's **First session**,
@@ -342,10 +347,13 @@ you to allow it. **Root access** lets `sudo` run
 without asking, and **Isolated** keeps every change outside the checkout
 inside the session ([permission tiers](security.md#permission-tiers)). Enter the
 **Task**, pick the **Agent** and the **Mode**, and click **Launch**.
-**Background** mode runs the task once with no interaction. From the CLI:
+**Background** mode runs the task once with no interaction. On a phone, tap
+**New**, type the task and tap **Launch**: the repository and agent start on
+your last session's unless you saved a default agent, and Permission and Mode
+are under **More options**. From the CLI:
 
 ```sh
-aether session "add a health check endpoint" --workspace myproject --agent claude
+cloudfield session "add a health check endpoint" --workspace myproject --agent claude
 ```
 
 It prints `session run-d6ay38tj8j running`. `--mode` picks `standard`, `enhanced`
@@ -363,7 +371,7 @@ Ctrl-C, the CLI prints the exact retry with `--idempotency-key`; running it
 returns the same session instead of starting another.
 
 It worked if the session is under **Working** on the **Board**, the dashboard's
-page of sessions, and `aether sessions` lists it.
+page of sessions, and `cloudfield sessions` lists it.
 
 ### Working across repos
 
@@ -374,12 +382,12 @@ A session belongs to one **primary** workspace, checked out at `/workspace`. Add
 it:
 
 ```sh
-aether session "rename the /users endpoint in the API and the web client" \
+cloudfield session "rename the /users endpoint in the API and the web client" \
   --workspace web --repo api --repo shared-types --agent claude
 ```
 
 Each extra repo is cloned to `/repos/<workspace name>` (characters outside
-`A-Za-z0-9._-` become `-`), on its own session branch `aether/run-<task>-<id>` in
+`A-Za-z0-9._-` become `-`), on its own session branch `cloudfield/run-<task>-<id>` in
 its own workspace. The agent's startup prompt lists the extra paths. The
 dashboard shows each repo on the session page, and the per-session Git, pull request
 and **Changes** methods take a `repo` (the repo's workspace ID) to pick one;
@@ -394,7 +402,7 @@ session run-d6ay38tj8j failed: provisioning: create checkout: repo "api" (worksp
 
 Limits: extras must already exist as workspaces and cannot repeat or include the
 primary one. The setup script, environment, agent account and budget are the
-primary workspace's. `aether pull <session>` fetches each repo's branch into the
+primary workspace's. `cloudfield pull <session>` fetches each repo's branch into the
 clone linked for its workspace and skips, naming it, an extra repo with no
 linked clone. Evidence packets cover the primary repo only, and the dashboard's
 Compare menu is the primary repo's.
@@ -417,14 +425,14 @@ Open a session to see its views:
 
 From the CLI, on your computer:
 
-- `aether message <session-id> "also update the README"` messages the agent and
+- `cloudfield message <session-id> "also update the README"` messages the agent and
   prints the receipt (`delivered`, or `queued` for the member in control).
-- `aether logs <session-id>` prints what the agent did as plain text.
-- `aether attach <session-id>` attaches your terminal to a Standard session's agent.
+- `cloudfield logs <session-id>` prints what the agent did as plain text.
+- `cloudfield attach <session-id>` attaches your terminal to a Standard session's agent.
   Every key, Ctrl-C included, goes to the agent; close the terminal to detach,
-  and the session keeps going. `aether attach --read-only <session-id>` only watches.
+  and the session keeps going. `cloudfield attach --read-only <session-id>` only watches.
 
-For VS Code, Cursor or Zed, run `aether ssh-config` once, then **Open in
+For VS Code, Cursor or Zed, run `cloudfield ssh-config` once, then **Open in
 editor…** in the session's **More** menu ([terminal.md](terminal.md)). On a phone,
 use the [Android app](install.md#android-app) or the tailnet dashboard
 ([networking.md](networking.md#the-dashboard)).
@@ -447,51 +455,57 @@ It worked if the dialog shows **Pushed: yes** and the pull request. The session 
 then shows the pull request number and its checks, such as **2 failing**; a
 failing check has **Send to agent**. Review and merge on GitHub as usual.
 
-`aether publish <session-id>` is the CLI form of **Publish…**.
+`cloudfield publish <session-id>` is the CLI form of **Publish…**.
 
 When you are done, close the session: **Close session…** in its **More** menu, or
-`aether close <session-id> --outcome merged` (or `abandoned`). Closing commits the
-agent's latest work to the session's branch and keeps the container 7 days
-(`--run-container-ttl`). Until then the **Relaunch** button where the message
-box sat, **Relaunch** in the **More** menu, or `aether reopen <session-id>` brings
-the session back with its chat and files. The 7 days stop counting while the session is
+`cloudfield close <session-id> --outcome merged` (or `abandoned`). Both first list
+what the close affects, such as an open pull request or a session waiting on
+this one, and ask ([failure-handling.md](failure-handling.md#before-a-close)).
+Closing commits the
+agent's latest work to the session's branch and keeps the sandbox 30 days
+(`--run-container-ttl`; 7 for a Standard or mode-switched session on a Docker host). Until then the **Relaunch** button where the message
+box sat, **Relaunch** in the **More** menu, or `cloudfield reopen <session-id>` brings
+the session back with its chat and files
+([Relaunching a closed session](failure-handling.md#relaunching-a-closed-session)). The days stop counting while the session is
 live again and start over when you close it.
 
-`aether pull <session-id>` fetches the branch, `aether/run-<task>-<id>`, into the
-clone linked for its workspace, without merging.
+`cloudfield pull <session-id>` fetches the branch, `cloudfield/run-<task>-<id>`
+(`aether/run-<task>-<id>` for older sessions), into the clone linked for its
+workspace, without merging.
 
 ### From a script or agent
 
 For scripts and coding agents. Skip it when you work by hand.
 
 ```sh
-aether session - --workspace myproject --agent claude < task.md
-aether wait run-d6ay38tj8j --timeout 30m
-aether logs run-d6ay38tj8j
-aether sessions run-d6ay38tj8j
-aether answer run-d6ay38tj8j req-7 allow-1
-aether publish run-d6ay38tj8j
-aether close session-d6ay38tj8j --outcome merged
-aether pull run-d6ay38tj8j
+cloudfield session - --workspace myproject --agent claude < task.md
+cloudfield wait run-d6ay38tj8j --timeout 30m
+cloudfield logs run-d6ay38tj8j
+cloudfield sessions run-d6ay38tj8j
+cloudfield answer run-d6ay38tj8j req-7 allow-1
+cloudfield publish run-d6ay38tj8j
+cloudfield close session-d6ay38tj8j --outcome merged
+cloudfield pull run-d6ay38tj8j
 ```
 
-`aether wait` exits 0 when the session finished, 1 when it failed, 3 when it needs
+`cloudfield wait` exits 0 when the session finished, 1 when it failed, 3 when it needs
 you by the [Needs you](failure-handling.md#needs-you) rule (a question, a
 permission request, a `needs-input` or `blocked` report, or a disconnected
 agent), 4 when it is parked with nothing pending, because its turn ended with
-an `answered` report or no report or it went silent, and a message continues it (`aether message
+an `answered` report or no report or it went silent, and a message continues it (`cloudfield message
 <session-id> "<reply>"`), 5 when its wait broke (a condition it waited on resolved
-and the wake never reached the agent, or its source went unread for an hour; see [Waits Aether can
-check](failure-handling.md#waits-aether-can-check)), and 124 on timeout. Before exiting it prints `run
-<session-id> <state>: <reason>`, with the state as `aether sessions` labels it. It keeps waiting
-while the session waits on agents, CI or a process. When Aether cannot vouch for that wait
+and the wake never reached the agent, or its source went unread for an hour; see [Waits Cloudfield can
+check](failure-handling.md#waits-cloudfield-can-check)), and 124 on timeout.
+Before exiting it prints `run
+<session-id> <state>: <reason>`, with the state as `cloudfield sessions` labels it. It keeps waiting
+while the session waits on agents, CI or a process. When Cloudfield cannot vouch for that wait
 it says so once on stderr: `session <session-id> still waits, but <condition>: status
 unknown (last read 12m ago): <error>`. It also exits 1 on its
 own error, such as an unknown session id, with the error on stderr and nothing on
-stdout. `aether sessions --needs-you` lists the sessions waiting on you, and `aether
-sessions <session-id>` shows what one needs with the command that answers it. `aether
+stdout. `cloudfield sessions --needs-you` lists the sessions waiting on you, and `cloudfield
+sessions <session-id>` shows what one needs with the command that answers it. `cloudfield
 answer` allows a permission request once or denies it once, never always.
-`--json` on `aether sessions <session-id>` and `aether wait` prints the session as one JSON
+`--json` on `cloudfield sessions <session-id>` and `cloudfield wait` prints the session as one JSON
 object.
 
 ## Prove the plumbing without an agent subscription
@@ -502,10 +516,10 @@ it in the foreground with the script (a session's checkout is at `/workspace`):
 
 ```sh
 sudo systemctl stop aether-server
-sudo AETHER_FAKE_AGENT="sh /workspace/agent.sh" aether-server serve
+sudo CLOUDFIELD_FAKE_AGENT="sh /workspace/agent.sh" cloudfield-server serve
 ```
 
-On your computer, create a throwaway repository. `aether link --repo` adds an
+On your computer, create a throwaway repository. `cloudfield link --repo` adds an
 `aether` remote to it, and the push gives the workspace its base branch. Give
 the script a few seconds before you close the session:
 
@@ -513,12 +527,12 @@ the script a few seconds before you close the session:
 mkdir demo && cd demo && git init -b main
 echo 'echo hello > result.txt' > agent.sh
 git add -A && git commit -m seed
-aether workspace add demo --base main
-aether link <server-address-or-id> --workspace demo --repo "$PWD"
+cloudfield workspace add demo --base main
+cloudfield link <server-address-or-id> --workspace demo --repo "$PWD"
 git push aether main
-aether session "write a result file" --workspace demo --agent fake
-aether close <session-id> --outcome merged
-aether pull <session-id>
+cloudfield session "write a result file" --workspace demo --agent fake
+cloudfield close <session-id> --outcome merged
+cloudfield pull <session-id>
 ```
 
 It worked if the pulled branch has a commit that adds `result.txt`. Stop the
@@ -528,24 +542,24 @@ foreground server with Ctrl-C, then `sudo systemctl start aether-server`.
 
 | Error | Fix |
 | --- | --- |
-| `writing the unit and the config file needs root; re-run with sudo` | Run `sudo aether-server setup`. |
+| `writing the unit and the config file needs root; re-run with sudo` | Run `sudo cloudfield-server setup`. |
 | `Docker does not answer: ...`, then `Continue without Docker` | Install or start Docker on the server (`sudo systemctl start docker`), then run setup again. |
 | `cli: dial <host>:2222: dial tcp <ip>:2222: connect: connection refused` | The server is not running, or the port is blocked. On the server, run `sudo systemctl enable --now aether-server` and check `systemctl status aether-server`. Open TCP 2222, or use the edge. |
-| `not signed in to edge.onaether.dev; run: aether login --edge https://edge.onaether.dev` | Run `aether login`, then link again. |
-| `edgeproto: claim code must look like <26-character server id>-xxxxxxxxxxxxxxxx` | The code was cut short. Copy the whole `<server id>-<secret>`, or pass the claim link in single quotes: `aether link --claim '<claim link>'`. |
-| `claim code is wrong`, `claim code expired` or `claim code has no attempts left` | On the server, `sudo aether-server edge claim-code` prints a new link. |
-| `... refused: server is not connected to the edge (HTTP 503)` | On the server, `sudo aether-server edge status` says why: the service is stopped, still starting, or cannot reach the edge. |
+| `not signed in to edge.cloudfield.ai; run: aether login --edge https://edge.cloudfield.ai` | Run `cloudfield login`, then link again. |
+| `edgeproto: claim code must look like <26-character server id>-xxxxxxxxxxxxxxxx` | The code was cut short. Copy the whole `<server id>-<secret>`, or pass the claim link in single quotes: `cloudfield link --claim '<claim link>'`. |
+| `claim code is wrong`, `claim code expired` or `claim code has no attempts left` | On the server, `sudo cloudfield-server edge claim-code` prints a new link. |
+| `... refused: server is not connected to the edge (HTTP 503)` | On the server, `sudo cloudfield-server edge status` says why: the service is stopped, still starting, or cannot reach the edge. |
 | `device "<label>", signed in as <account>, is waiting for approval` | The server admits approved devices only. An admin approves it from its **Needs you** card, or runs the command the message prints. |
-| `no Aether member for this key` | No member has this SSH key: someone else linked first, or you joined through the edge. Ask an admin to invite you ([teams.md](teams.md)), or link through the edge. |
-| `gitengine: mirror no-candidate`, or **The server's copy is pending** in the dashboard | The workspace's first revision was never accepted. On its **Repository** page, open **Advanced → Review source mirror** and click **Adopt candidate**. |
+| `no Cloudfield member for this key` | No member has this SSH key: someone else linked first, or you joined through the edge. Ask an admin to invite you ([teams.md](teams.md)), or link through the edge. |
+| `gitengine: mirror no-candidate for branch "<branch>": revision <sha> is waiting for an admin to adopt it; ...`, or **The server's copy is pending** in the dashboard | The mirror's current revision was never adopted. Check that `<sha>` is the upstream commit you expect, then an admin runs the `cloudfield workspace mirror adopt` command the error ends with, or, on the workspace's **Repository** page, opens **Advanced → Review source mirror** and clicks **Adopt candidate**. |
 | `gitengine: workspace branch "main" has no commit` | A local-only workspace has no base yet. Push one: `git push aether main`. |
-| `workspace "myproject" not found` or `--workspace is required when more than one workspace exists` | Pass a name that `aether workspace list` prints. |
+| `workspace "myproject" not found` or `--workspace is required when more than one workspace exists` | Pass a name that `cloudfield workspace list` prints. |
 | `[aether] harness exited with code 127` in a Standard session | The agent is not installed in your environment; set it up as in step 5. The session stays open in a shell. Any other code is the agent's own exit status. |
 | **The agent is not signed in** in an Enhanced session | Log the agent in from a terminal in the session, then send your message again. |
-| `scheduler: insufficient host memory headroom: ...` | The server keeps 2 GiB (or a tenth of its memory) free, plus 512 MiB for each session that is starting. Free memory, or wait for other sessions to start. |
+| `scheduler: insufficient host memory headroom: ...` | The server keeps 2 GiB (or a tenth of its memory) free, plus 512 MiB for each session that is starting and, for each saved session VM that wakes, the memory it saved. Free memory, or wait for other sessions to start. The error can instead say `the server stalled on memory for <n>% of the last 60s`: the server is blocked on memory even though some is free. See [Recover from memory pressure](failure-handling.md#recover-from-memory-pressure). |
 | `runrepo: gh exited <n>: ...` in **Publish…** | The session's account has no working `gh` login. Connect GitHub as in step 5, then click **Refresh status**. |
-| `session <id> not found; aether sessions lists sessions` | Pass a session id that `aether sessions` prints. |
-| `no clone of workspace <id> is linked; in your clone of it run: aether link <server> --repo . --workspace <id>` | `aether pull` writes to the clone linked for the session's workspace, not the current directory. Run the printed command in your clone, or `aether workspace import <path>`. |
+| `session <id> not found; aether sessions lists sessions` | Pass a session id that `cloudfield sessions` prints. |
+| `no clone of workspace <id> is linked; in your clone of it run: aether link <server> --repo . --workspace <id>` | `cloudfield pull` writes to the clone linked for the session's workspace, not the current directory. Run the printed command in your clone, or `cloudfield workspace import <path>`. |
 
 Later failures, such as reboots, full disks and stalls, are in
 [failure-handling.md](failure-handling.md).

@@ -61,11 +61,14 @@ func rpcError(err error) *protocol.Error {
 	if errors.As(err, &typed) && typed != nil {
 		return typed
 	}
+	if errors.Is(err, permissions.ErrNoAccess) {
+		return &protocol.Error{Code: protocol.CodeNotFound, Message: store.ErrNotFound.Error()}
+	}
 	code := protocol.CodeInternal
 	switch mirrorKind(err) {
 	case gitengine.MirrorErrorAuthFailed:
 		code = protocol.CodeDenied
-	case gitengine.MirrorErrorOffline, gitengine.MirrorErrorUnsupported:
+	case gitengine.MirrorErrorOffline:
 		code = protocol.CodeUnavailable
 	case gitengine.MirrorErrorSourceMissing:
 		code = protocol.CodeNotFound
@@ -81,6 +84,8 @@ func rpcError(err error) *protocol.Error {
 		switch {
 		case errors.Is(err, store.ErrNotFound):
 			code = protocol.CodeNotFound
+		case errors.Is(err, scheduler.ErrSignedOut):
+			code = protocol.CodeInvalidState
 		case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrInUse),
 			errors.Is(err, scheduler.ErrRunShellTabLimit), errors.Is(err, scheduler.ErrAgentInstallRunning),
 			errors.Is(err, ptyhost.ErrSessionReplaced):
@@ -142,6 +147,7 @@ func mirrorFailure(err error) *protocol.MirrorFailure {
 		failure.Kind = string(mirrorErr.Kind)
 		failure.BaseCommit = mirrorErr.Base
 		failure.ObservedCommit = mirrorErr.Observed
+		failure.AdoptCommand = mirrorErr.AdoptCommand()
 		if failure.Source == "" {
 			failure.Source = mirrorErr.SourceURL
 		}

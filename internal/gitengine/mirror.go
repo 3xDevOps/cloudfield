@@ -72,7 +72,6 @@ const (
 	MirrorErrorDiverged       MirrorErrorKind = "diverged"
 	MirrorErrorCASConflict    MirrorErrorKind = "cas-conflict"
 	MirrorErrorNoCandidate    MirrorErrorKind = "no-candidate"
-	MirrorErrorUnsupported    MirrorErrorKind = "unsupported"
 	MirrorErrorFailed         MirrorErrorKind = "error"
 )
 
@@ -86,6 +85,7 @@ type MirrorError struct {
 	Branch      string
 	Base        string
 	Observed    string
+	Generation  int64
 	Cause       error
 }
 
@@ -106,7 +106,19 @@ func (e *MirrorError) Error() string {
 		_, diagnostic := mirrorFetchProblem(failure)
 		message += ": " + diagnostic
 	}
+	if adopt := e.AdoptCommand(); adopt != "" {
+		message += fmt.Sprintf(": revision %s is waiting for an admin to adopt it; check that it is the upstream commit you expect, then run: %s", e.Observed, adopt)
+	}
 	return message
+}
+
+// AdoptCommand is the CLI step that adopts the observed revision of a
+// pending generation, or empty when there is none to adopt.
+func (e *MirrorError) AdoptCommand() string {
+	if e == nil || e.Kind != MirrorErrorNoCandidate || e.WorkspaceID == "" || e.Generation <= 0 || e.Observed == "" || !domain.ValidMirrorSHA(e.Observed) {
+		return ""
+	}
+	return domain.MirrorAdoptCommand(e.WorkspaceID, e.Generation, e.Observed)
 }
 
 func (e *MirrorError) Unwrap() error { return e.Cause }
@@ -487,6 +499,17 @@ func newIncomingRef() (string, error) {
 	return "refs/aether/incoming/" + hex.EncodeToString(buf[:]), nil
 }
 
+// isMirroredBase reports whether ref is the base branch a configured mirror
+// owns. It is a best-effort read: an unconfigured mirror or a missing key
+// returns false so non-mirrored workspaces are unaffected.
+func (e *Engine) isMirroredBase(ctx context.Context, repo, ref string) bool {
+	base, err := e.git(ctx, repo, "config", "--get", mirrorBaseConfig)
+	if err != nil {
+		return false
+	}
+	return strings.TrimSpace(base) == "refs/heads/"+ref
+}
+
 func (e *Engine) configuredMirror(ctx context.Context, repo string) (string, int64, error) {
 	base, err := e.git(ctx, repo, "config", "--get", mirrorBaseConfig)
 	if err != nil || base == "" {
@@ -519,7 +542,7 @@ func (e *Engine) fetchMirror(ctx context.Context, repo string, req MirrorRequest
 		return e.cfg.MirrorFetch(ctx, repo, req, incomingRef)
 	}
 	args := []string{"-C", repo, "-c", "safe.directory=*"}
-	env := gitEnv()
+	env := e.gitEnv()
 	if req.Auth == domain.MirrorAuthPublic || req.Auth == domain.MirrorAuthGitHub {
 		u, err := url.Parse(req.SourceURL)
 		if err != nil || u.Hostname() == "" {
@@ -771,7 +794,7 @@ func updateRefLine(ref, next, old string) string {
 func (e *Engine) runMirrorGit(ctx context.Context, repo, stdin string, args ...string) error {
 	argv := append([]string{"-C", repo, "-c", "safe.directory=*"}, args...)
 	cmd := exec.CommandContext(ctx, e.cfg.GitPath, argv...)
-	cmd.Env = gitEnv()
+	cmd.Env = e.gitEnv()
 	cmd.Stdin = strings.NewReader(stdin)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("update-ref: %w: %s", err, strings.TrimSpace(string(output)))

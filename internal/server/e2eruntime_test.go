@@ -354,12 +354,18 @@ func (r *e2eRuntime) Inspect(_ context.Context, id runtime.ID) (runtime.Containe
 	for i, m := range c.spec.Mounts {
 		targets[i] = m.ContainerPath
 	}
-	return runtime.ContainerInfo{
+	info := runtime.ContainerInfo{
 		Image:        c.spec.Image,
 		User:         c.spec.User,
 		Env:          env,
 		MountTargets: targets,
-	}, nil
+	}
+	c.mu.Lock()
+	if c.exit != nil {
+		info.Exited, info.ExitCode = true, c.exit.Code
+	}
+	c.mu.Unlock()
+	return info, nil
 }
 
 func (r *e2eRuntime) FindByCreationKey(_ context.Context, key string) (runtime.ID, error) {
@@ -372,7 +378,7 @@ func (r *e2eRuntime) FindByCreationKey(_ context.Context, key string) (runtime.I
 	}
 	return "", runtime.ErrNotFound
 }
-func (r *e2eRuntime) Commit(_ context.Context, id runtime.ID, tag string) error {
+func (r *e2eRuntime) Commit(_ context.Context, id runtime.ID, tag string, _ map[string]string) error {
 	if _, err := r.get(id); err != nil {
 		return err
 	}
@@ -399,6 +405,34 @@ func (r *e2eRuntime) ListImageTags(_ context.Context, repo string) ([]string, er
 		}
 	}
 	return tags, nil
+}
+
+func (r *e2eRuntime) ImageLabels(_ context.Context, ref string) (map[string]string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.images[ref]; !ok {
+		return nil, fmt.Errorf("e2e runtime: image %q: %w", ref, runtime.ErrNotFound)
+	}
+	return nil, nil
+}
+
+func (r *e2eRuntime) TagImage(_ context.Context, source, target string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.images[source]; !ok {
+		return fmt.Errorf("e2e runtime: no such image %q", source)
+	}
+	r.images[target] = struct{}{}
+	return nil
+}
+
+func (r *e2eRuntime) ExportImage(_ context.Context, ref string) (io.ReadCloser, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.images[ref]; !ok {
+		return nil, fmt.Errorf("e2e runtime: no such image %q", ref)
+	}
+	return io.NopCloser(strings.NewReader("")), nil
 }
 
 // RemoveImage is idempotent, matching the Docker implementation.

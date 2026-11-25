@@ -1,19 +1,27 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
+
+	"github.com/dustin/go-humanize"
 
 	"github.com/3xDevOps/Aether/internal/selfupdate"
 	"github.com/3xDevOps/Aether/internal/server"
+	"github.com/3xDevOps/Aether/internal/serversetup"
+	"github.com/3xDevOps/Aether/internal/serverunit"
 	"github.com/3xDevOps/Aether/internal/serverupdate"
 	"github.com/3xDevOps/Aether/internal/store"
 	"github.com/3xDevOps/Aether/internal/version"
@@ -23,25 +31,45 @@ const (
 	updateUnit    = "aether-server"
 	updateJournal = "sudo journalctl -u aether-server -n 50"
 	// updateTimeout covers a new binary's whole trial: up to three starts
-	// and the rollback after them.
+	// and the rollback after them. Time the active unit spends migrating
+	// the database does not count.
 	updateTimeout = 8 * time.Minute
 )
+
+// migrating reports whether the active unit is still migrating database
+// to schema want, printing the progress once per schema version it sees.
+func migrating(database string, want int, seen *int) bool {
+	current, err := store.ReadSchemaVersion(database)
+	if err != nil || current >= want || unitState() != "active" {
+		return false
+	}
+	if current != *seen {
+		*seen = current
+		fmt.Printf("aether-server is migrating the database at schema %d to %d; waiting for it\n", current, want)
+	}
+	return true
+}
 
 // updateCmd moves this host to a release the way the server's own update
 // does, then restarts the systemd unit onto it and waits for the new
 // binary to commit or be rolled back.
 func updateCmd(args []string) error {
 	fs := flag.NewFlagSet("update", flag.ExitOnError)
-	tag := fs.String("version", "", "release tag to install (default: the latest release)")
+	tag := fs.String("version", "", "release tag to install (default: the newest release on the server's release channel)")
+	channel := fs.String("channel", "", "release channel the server follows: stable, beta or nightly; prints what changes and saves it with --yes")
+	yes := fs.Bool("yes", false, "confirm the --channel change")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 {
-		return errors.New("usage: aether-server update [--version <tag>]")
+	if fs.NArg() != 0 || *channel != "" && *tag != "" || *yes && *channel == "" {
+		return errors.New("usage: cloudfield-server update [--version <tag>] | --channel <stable|beta|nightly> [--yes]")
 	}
 	if os.Geteuid() != 0 {
 		return errors.New("run it as root: sudo aether-server update")
 	}
+	// Progress goes to stdout between stopping and starting the unit: a
+	// reader that goes away, as `| head` does, must not end the update there.
+	signal.Ignore(syscall.SIGPIPE)
 	// Before Lock, so a refused host gets nothing created under its data
 	// directory with root's ownership.
 	out, err := exec.Command("systemctl", "cat", updateUnit).CombinedOutput()
@@ -62,7 +90,7 @@ func updateCmd(args []string) error {
 	// The trial runs in the process the unit starts, which reads the swap
 	// record under its own data directory and runs its own binary, so the
 	// update takes both from the unit.
-	unitExe, o, err := unitServe()
+	unitExe, serveArgs, o, err := unitServe()
 	if err != nil {
 		return err
 	}
@@ -70,32 +98,49 @@ func updateCmd(args []string) error {
 		return fmt.Errorf("the %s unit runs %s, not this binary (%s): run `sudo %s update`", updateUnit, unitExe, self, unitExe)
 	}
 	stateDir, database := server.UpdateStateDir(*o.dataDir), server.StorePath(*o.dataDir)
+	baseURL := selfupdate.DefaultChecker().BaseURL()
+	if *channel != "" {
+		return setChannel(context.Background(), os.Stdout, baseURL, stateDir, database, *channel, *yes)
+	}
+	linkUnitAndReload()
 	unlock, err := serverupdate.Lock(stateDir)
 	if err != nil {
 		return err
 	}
 	defer unlock()
 	ctx := context.Background()
-	baseURL := selfupdate.DefaultChecker().BaseURL()
-	target, err := updateTarget(ctx, baseURL, *tag)
+	target, err := updateTarget(ctx, os.Stdout, baseURL, stateDir, database, *tag)
 	if err != nil {
 		return err
 	}
+	// The binary at self installs its session VM files with the unit's
+	// serve arguments, so it reads the same config file and vm-kernel.
+	var prepareVMs func(context.Context) error
+	if *o.sessionRuntime == server.SessionRuntimeVM {
+		prepareVMs = func(ctx context.Context) error { return installVMFiles(ctx, self, serveArgs) }
+	}
 	if target == version.Version {
-		return restartIfStale(self, *o.addr)
+		// An update links the binaries in its swap; this run swaps nothing.
+		if err := selfupdate.Link(filepath.Dir(self)); err != nil {
+			_, _ = fmt.Fprintln(os.Stderr, "warning:", err)
+		}
+		return restartIfStale(self, *o.addr, database, prepareVMs)
 	}
 	fmt.Printf("aether-server %s -> %s\n%s/releases/tag/%s\n", version.Version, target, baseURL, target)
 
-	staged, err := serverupdate.Stage(ctx, serverupdate.Plan{
-		BaseURL:  baseURL,
-		Self:     self,
-		StateDir: stateDir,
-		Database: database,
-		// Read without opening the store, so without migrating it.
-		Schema: func(context.Context) (int, error) { return store.ReadSchemaVersion(database) },
-		Now:    time.Now,
-	}, target)
-	if err != nil {
+	var staged *serverupdate.Staged
+	if err := step(os.Stdout, "checking and downloading the release", func() (err error) {
+		staged, err = serverupdate.Stage(ctx, serverupdate.Plan{
+			BaseURL:  baseURL,
+			Self:     self,
+			StateDir: stateDir,
+			Database: database,
+			// Read without opening the store, so without migrating it.
+			Schema: func(context.Context) (int, error) { return store.ReadSchemaVersion(database) },
+			Now:    time.Now,
+		}, target)
+		return err
+	}); err != nil {
 		return err
 	}
 	probeCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
@@ -103,28 +148,94 @@ func updateCmd(args []string) error {
 	if out, err := exec.CommandContext(probeCtx, self, "version").CombinedOutput(); err != nil {
 		return errors.Join(fmt.Errorf("the new aether-server does not run: %w: %s", err, strings.TrimSpace(string(out))), staged.Undo())
 	}
-	before := unitPID()
-	if err := restartOnto(staged); err != nil {
-		return err
+	// After an undo the previous binary is back, and may still be running:
+	// it puts back its own files, which the failed step may have replaced.
+	restoreVMFiles := func(err error) error {
+		if prepareVMs == nil {
+			return err
+		}
+		restoreCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		return errors.Join(err, prepareVMs(restoreCtx))
 	}
-	return awaitUpdate(stateDir, target, staged.Binaries, before)
+	if prepareVMs != nil {
+		// Interrupted, the step returns here so the update is undone rather
+		// than left staged.
+		vmCtx, stop := signal.NotifyContext(ctx, os.Interrupt, syscall.SIGTERM)
+		err := prepareVMs(vmCtx)
+		stop()
+		if err != nil {
+			return restoreVMFiles(errors.Join(err, staged.Undo()))
+		}
+	}
+	before, began := unitPID(), time.Now()
+	if err := restartOnto(staged, database); err != nil {
+		return restoreVMFiles(err)
+	}
+	return awaitUpdate(stateDir, database, target, staged, before, began)
 }
 
-// updateTarget is the tag to install: the one asked for, or the latest
-// release when it is newer than this binary. A latest release no newer
-// than this binary is the running version, which means up to date.
-func updateTarget(ctx context.Context, baseURL, tag string) (string, error) {
+// installVMFiles has the binary at self install the Cloud Hypervisor and
+// guest kernel it was released with, before a restart onto it, so the VMs
+// it boots get them. A running VM keeps the files it started with.
+func installVMFiles(ctx context.Context, self string, serveArgs []string) error {
+	var stderr bytes.Buffer
+	cmd := exec.CommandContext(ctx, self, append([]string{"vm", "install"}, serveArgs...)...)
+	cmd.Stdout, cmd.Stderr = os.Stdout, &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s vm install: %w: %s", self, err, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
+// linkUnitAndReload gives the unit its second name when it is missing,
+// whether or not an update follows, and reloads systemd when it does not
+// resolve the link just made. The update goes ahead whatever this finds.
+func linkUnitAndReload() {
+	created, err := (serverupdate.Host{UnitDir: filepath.Dir(serversetup.UnitPath)}).LinkUnit()
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stderr, "warning:", err)
+	}
+	if !created || serverunit.AliasResolves() {
+		return
+	}
+	if out, err := exec.Command("systemctl", "daemon-reload").CombinedOutput(); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "warning: systemctl daemon-reload: %v: %s\n", err, strings.TrimSpace(string(out)))
+	}
+}
+
+func step(w io.Writer, what string, do func() error) error {
+	_, _ = fmt.Fprintf(w, "%s ... ", what)
+	start := time.Now()
+	if err := do(); err != nil {
+		_, _ = fmt.Fprintln(w, "failed")
+		return err
+	}
+	_, _ = fmt.Fprintf(w, "done in %s\n", time.Since(start).Round(10*time.Millisecond))
+	return nil
+}
+
+// updateTarget is the tag to install: the one asked for, or the newest
+// release on the server's release channel when the server takes it
+// (serverupdate.Offers). Anything else is the running version, which
+// means up to date; a server above its channel says it waits.
+func updateTarget(ctx context.Context, w io.Writer, baseURL, stateDir, database, tag string) (string, error) {
 	if tag != "" {
 		if !selfupdate.ValidTag(tag) {
 			return "", fmt.Errorf("%w (got %q)", serverupdate.ErrBadTag, tag)
 		}
 		return tag, nil
 	}
-	m, err := selfupdate.LatestManifestFrom(ctx, baseURL)
+	channel, m, err := followChannel(ctx, baseURL, stateDir, database, "")
 	if err != nil {
 		return "", err
 	}
-	if !selfupdate.Behind(version.Version, m.Version) {
+	running := selfupdate.Running()
+	if !serverupdate.Offers(channel, running, m.Release()) {
+		if serverupdate.Waits(running, m.Release()) {
+			_, _ = fmt.Fprintf(w, "aether-server %s stays on its build until %s reaches it: %s is at %s\n",
+				buildLabel(running), channel, channel, buildLabel(m.Release()))
+		}
 		return version.Version, nil
 	}
 	return m.Version, nil
@@ -134,15 +245,34 @@ func updateTarget(ctx context.Context, baseURL, tag string) (string, error) {
 // to it, and starts the unit. A snapshot that fails starts the previous
 // binary again instead. So does a start systemd refuses, which leaves no
 // process to count the trial and roll it back.
-func restartOnto(staged *serverupdate.Staged) error {
-	if out, err := exec.Command("systemctl", "stop", updateUnit).CombinedOutput(); err != nil {
-		return errors.Join(fmt.Errorf("systemctl stop %s: %w: %s", updateUnit, err, out), staged.Undo())
+func restartOnto(staged *serverupdate.Staged, database string) error {
+	if err := step(os.Stdout, "stopping aether-server; sessions keep running", func() error {
+		if out, err := exec.Command("systemctl", "stop", updateUnit).CombinedOutput(); err != nil {
+			return fmt.Errorf("systemctl stop %s: %w: %s", updateUnit, err, out)
+		}
+		return nil
+	}); err != nil {
+		return errors.Join(err, staged.Undo())
 	}
-	snapErr := staged.Snapshot()
+	var snapErr error
+	if snapshot := staged.SnapshotFile(); snapshot != "" {
+		var size uint64
+		if info, err := os.Stat(database); err == nil {
+			size = uint64(info.Size())
+		}
+		if snapErr = step(os.Stdout, fmt.Sprintf("copying the %s database to %s so a failed start can roll back", humanize.Bytes(size), snapshot), staged.Snapshot); snapErr != nil {
+			snapErr = errors.Join(snapErr, staged.Undo())
+		}
+	}
+	starting := "starting aether-server"
 	if snapErr != nil {
-		snapErr = errors.Join(snapErr, staged.Undo())
+		starting = "starting the previous aether-server " + version.Version + " again"
 	}
-	out, err := exec.Command("systemctl", "start", updateUnit).CombinedOutput()
+	var out []byte
+	err := step(os.Stdout, starting, func() (err error) {
+		out, err = exec.Command("systemctl", "start", updateUnit).CombinedOutput()
+		return err
+	})
 	if err == nil {
 		return snapErr
 	}
@@ -164,11 +294,13 @@ func restartOnto(staged *serverupdate.Staged) error {
 	return fmt.Errorf("%w; restored %s and started it\n%s", startErr, version.Version, updateJournal)
 }
 
-// awaitUpdate waits for the new binary to commit or be rolled back and
-// prints one line per component.
-func awaitUpdate(stateDir, target string, binaries []string, pidBefore string) error {
+// awaitUpdate says what it waits for, waits for the new binary to commit
+// or be rolled back, and prints one line per component.
+func awaitUpdate(stateDir, database, target string, staged *serverupdate.Staged, pidBefore string, began time.Time) error {
+	fmt.Printf("waiting for aether-server %s to reconnect its sessions and finish starting; sudo journalctl -u aether-server -f shows each session\n", target)
 	deadline := time.Now().Add(updateTimeout)
 	var out serverupdate.Outcome
+	seen := -1
 	for {
 		var err error
 		if out, err = serverupdate.ReadOutcome(stateDir); err != nil {
@@ -177,8 +309,11 @@ func awaitUpdate(stateDir, target string, binaries []string, pidBefore string) e
 		if out.Settled {
 			break
 		}
+		if migrating(database, staged.Schema, &seen) {
+			deadline = time.Now().Add(updateTimeout)
+		}
 		if time.Now().After(deadline) {
-			return fmt.Errorf("%s did not finish its first start within %s: unit %s, update record %q\n%s",
+			return fmt.Errorf("%s did not finish its first start within %s, not counting database migration: unit %s, update record %q\n%s",
 				target, updateTimeout, unitState(), out.Phase, updateJournal)
 		}
 		time.Sleep(time.Second)
@@ -186,8 +321,8 @@ func awaitUpdate(stateDir, target string, binaries []string, pidBefore string) e
 	if out.RolledBack {
 		return fmt.Errorf("the update to %s was rolled back: %s\n%s", target, out.Error, updateJournal)
 	}
-	fmt.Printf("aether-server  %s -> %s  restarted (pid %s -> %s)\n", version.Version, target, pidBefore, unitPID())
-	for _, path := range binaries[1:] {
+	fmt.Printf("aether-server  %s -> %s  restarted in %s (pid %s -> %s)\n", version.Version, target, time.Since(began).Round(time.Second), pidBefore, unitPID())
+	for _, path := range staged.Binaries[1:] {
 		fmt.Printf("%-14s %s  %s\n", filepath.Base(path), path, target)
 	}
 	return nil
@@ -200,10 +335,10 @@ func unitProperty(name string) string {
 
 func unitPID() string { return unitProperty("MainPID") }
 
-// unitServe is the executable and serve options the unit's ExecStart runs.
-// systemctl prints ExecStart as `{ path=<exe> ; argv[]=<args> ; ... }`
-// with the arguments joined by spaces.
-func unitServe() (string, *serveOptions, error) {
+// unitServe is the executable, serve arguments and serve options the
+// unit's ExecStart runs. systemctl prints ExecStart as
+// `{ path=<exe> ; argv[]=<args> ; ... }` with the arguments joined by spaces.
+func unitServe() (string, []string, *serveOptions, error) {
 	line := unitProperty("ExecStart")
 	_, path, _ := strings.Cut(line, "path=")
 	path, _, _ = strings.Cut(path, " ;")
@@ -211,24 +346,25 @@ func unitServe() (string, *serveOptions, error) {
 	argv, _, _ = strings.Cut(argv, " ;")
 	args := strings.Fields(argv)
 	if path == "" || len(args) < 2 || args[1] != "serve" {
-		return "", nil, fmt.Errorf("the %s unit's ExecStart does not run `aether-server serve`: %q", updateUnit, line)
+		return "", nil, nil, fmt.Errorf("the %s unit's ExecStart does not run `aether-server serve`: %q", updateUnit, line)
 	}
 	o, _, rest, err := loadOptions("serve", args[2:], nil)
 	if err != nil {
-		return "", nil, fmt.Errorf("read the %s unit's serve options %q: %w", updateUnit, argv, err)
+		return "", nil, nil, fmt.Errorf("read the %s unit's serve options %q: %w", updateUnit, argv, err)
 	}
 	if len(rest) != 0 {
-		return "", nil, fmt.Errorf("the %s unit's ExecStart has arguments serve does not take: %q", updateUnit, argv)
+		return "", nil, nil, fmt.Errorf("the %s unit's ExecStart has arguments serve does not take: %q", updateUnit, argv)
 	}
-	return path, o, nil
+	return path, args[2:], o, nil
 }
 
 // restartIfStale restarts the unit when it still runs an earlier file than
 // the binary installed at self, as after `aether update` replaced it, and
-// starts it when it runs nothing. The unit is Type=simple, so a new PID
-// only means the process started; it serves once it accepts connections on
-// addr.
-func restartIfStale(self, addr string) error {
+// starts it when it runs nothing; prepareVMs, when set, runs first. The
+// unit is Type=simple, so a new PID only means the process started; it
+// serves once it accepts connections on addr, within 2 minutes of migrating
+// database.
+func restartIfStale(self, addr, database string, prepareVMs func(context.Context) error) error {
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		return fmt.Errorf("--addr %q: %w", addr, err)
@@ -254,12 +390,24 @@ func restartIfStale(self, addr string) error {
 		}
 		verb = "restart"
 	}
+	if prepareVMs != nil {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		err = prepareVMs(ctx)
+		stop()
+		if err != nil {
+			return err
+		}
+	}
 	if out, rerr := exec.Command("systemctl", verb, updateUnit).CombinedOutput(); rerr != nil {
 		return fmt.Errorf("systemctl %s %s: %w: %s", verb, updateUnit, rerr, out)
 	}
 	deadline := time.Now().Add(2 * time.Minute)
 	started := ""
+	seen := -1
 	for time.Now().Before(deadline) {
+		if started != "" && migrating(database, store.SchemaVersion(), &seen) {
+			deadline = time.Now().Add(2 * time.Minute)
+		}
 		now, state := unitPID(), unitState()
 		switch {
 		case started == "" && now != pid && now != "0" && state == "active":
@@ -280,7 +428,7 @@ func restartIfStale(self, addr string) error {
 		}
 		time.Sleep(time.Second)
 	}
-	return fmt.Errorf("%s did not accept connections on %s within 2 minutes of the %s: unit %s\n%s", updateUnit, dial, verb, unitState(), updateJournal)
+	return fmt.Errorf("%s did not accept connections on %s within 2 minutes of the %s or of migrating the database: unit %s\n%s", updateUnit, dial, verb, unitState(), updateJournal)
 }
 
 func unitState() string {

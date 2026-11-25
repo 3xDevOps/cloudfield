@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/3xDevOps/Aether/internal/domain"
 	"github.com/3xDevOps/Aether/internal/events"
+	"github.com/3xDevOps/Aether/internal/protocol"
 	"github.com/3xDevOps/Aether/internal/runtime"
 )
 
@@ -126,6 +128,29 @@ func newUpdateEnv(t *testing.T, mutate func(*Config)) (*testEnv, *updateRuntime,
 		}
 	})
 	e.rt = rt.fakeRuntime
+	// The updater goroutine outlives the timeline note a test waits for and
+	// then releases the member's cache; a test that ends first races that
+	// write against removing its temporary directories.
+	t.Cleanup(func() {
+		rt.mu.Lock()
+		if rt.release != nil {
+			close(rt.release)
+			rt.release = nil
+		}
+		rt.mu.Unlock()
+		deadline := time.Now().Add(10 * time.Second)
+		for {
+			info, err := e.cfg.Homes.ReadCache(e.member.ID, "terminal")
+			if err != nil || !slices.ContainsFunc(info.Owners, func(o string) bool { return strings.HasPrefix(o, "harness-update-") }) {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Errorf("an updater still holds the member's cache: %v", info.Owners)
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	})
 	return e, rt, clock
 }
 
@@ -278,13 +303,28 @@ func TestHarnessUpdateFailureStillLaunches(t *testing.T) {
 
 func TestHarnessUpdateTimeoutStillLaunches(t *testing.T) {
 	t.Parallel()
-	e, rt, _ := newUpdateEnv(t, func(cfg *Config) { cfg.harnessUpdateTimeout = 50 * time.Millisecond })
+	// The deadline passes once the updater is running, never on a clock
+	// that a slow container start would also spend.
+	e, rt, _ := newUpdateEnv(t, func(cfg *Config) {
+		started := cfg.Runtime.(*updateRuntime).started
+		cfg.harnessUpdateContext = func(parent context.Context, _ time.Duration) (context.Context, context.CancelFunc) {
+			ctx, cancel := context.WithCancel(parent)
+			go func() {
+				select {
+				case <-started:
+					cancel()
+				case <-ctx.Done():
+				}
+			}()
+			return ctx, cancel
+		}
+	})
 	installInHome(t, e, "claude")
 	rt.release = make(chan struct{})
 
 	notes := launchNotes(t, e, "claude", domain.LaunchTUI)
 	want := []string{"could not update claude from 2.1.0 (Claude Code): " +
-		"the updater did not finish within 50ms"}
+		"the updater did not finish within 10m0s"}
 	if got := noteMessages(notes); !slices.Equal(got, want) {
 		t.Fatalf("notes = %q, want %q", got, want)
 	}
@@ -468,5 +508,61 @@ func TestHarnessUpdateHeadless(t *testing.T) {
 	notes := launchNotes(t, e, "claude", domain.LaunchHeadless)
 	if len(notes) != 1 || len(rt.updates()) != 1 {
 		t.Fatalf("headless launch: notes = %q, update containers = %d, want one update", noteMessages(notes), len(rt.updates()))
+	}
+}
+
+// The updater runs the vendor CLI over the member's home but sees no login:
+// a refresh there would spend the token every running session holds.
+func TestHarnessUpdateHidesTheLogins(t *testing.T) {
+	t.Parallel()
+	e, rt, _ := newUpdateEnv(t, nil)
+	installInHome(t, e, "claude")
+
+	launchNotes(t, e, "claude", domain.LaunchTUI)
+	updates := rt.updates()
+	if len(updates) != 1 {
+		t.Fatalf("updates = %d, want one", len(updates))
+	}
+	home := updates[0].Mounts[0]
+	hidden := slices.ContainsFunc(updates[0].Mounts, func(m runtime.Mount) bool {
+		return m.ContainerPath == path.Join(home.ContainerPath, ".claude/.credentials.json") && m.ReadOnly && m.HostPath != home.HostPath
+	})
+	if !hidden {
+		t.Fatalf("updater mounts %+v leave the Claude login visible", updates[0].Mounts)
+	}
+}
+
+// An update that changed the CLI, or failed after it may have, makes the
+// next model list ask the CLI again; a current CLI keeps the cached list.
+func TestHarnessUpdateExpiresTheModelList(t *testing.T) {
+	t.Parallel()
+	for _, c := range []struct {
+		name    string
+		after   string
+		code    int
+		expired bool
+	}{
+		{"updated", "2.1.1 (Claude Code)", 0, true},
+		{"failed", "2.1.0 (Claude Code)", 1, true},
+		{"current", "2.1.0 (Claude Code)", 0, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			t.Parallel()
+			e, rt, _ := newUpdateEnv(t, nil)
+			installInHome(t, e, "claude")
+			rt.after, rt.code = c.after, c.code
+			key := agentModelsKey{e.member.ID, "claude"}
+			e.sched.agentModelsMu.Lock()
+			e.sched.agentModels = map[agentModelsKey]agentModelsEntry{key: {
+				result: protocol.AgentModelsResult{Source: protocol.ModelSourceAgent, Models: []protocol.AgentModel{{ID: "fable"}}},
+				probed: e.sched.cfg.Now(),
+			}}
+			e.sched.agentModelsMu.Unlock()
+
+			launchNotes(t, e, "claude", domain.LaunchTUI)
+			if _, cached := e.sched.CachedAgentModels(e.member.ID, "claude"); cached == c.expired {
+				t.Fatalf("model list cached = %v after the update, want %v", cached, !c.expired)
+			}
+		})
 	}
 }

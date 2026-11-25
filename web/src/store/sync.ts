@@ -3,6 +3,7 @@ import { api, ApiError, type Api, type ApiErrorData } from '@/lib/api'
 import { edgeHost, errorSentence } from '@/lib/format'
 import { watchPush } from '@/lib/push'
 import { backoff, connectEvents, onWake } from '@/lib/stream'
+import { allowSnapshot, clearSnapshot, paintSnapshot, refuseSnapshot, saveSnapshot } from '@/lib/snapshot-cache'
 import { redirectRoute } from '@/lib/url-state'
 import type {
   CoordMessageAckedPayload,
@@ -19,6 +20,7 @@ import type {
   RunControllerPayload,
   RunDiffPayload,
   RunEffortPayload,
+  RunSleepPayload,
   RunInputPayload,
   RunPRPayload,
   RunModelPayload,
@@ -120,6 +122,9 @@ function noteUnreachable(store: RootStore, client: Api, err: unknown, signal: Ab
   recordUnreachable(store, client, classifyUnreachable(err, store), data?.refusal?.approval_code, measuredAt(store, data))
 }
 
+/** The kinds that refuse this member or device access, not just a route to it. */
+const accessRefusals: ReadonlySet<UnreachableKind> = new Set(['refused', 'signed-out', 'not-member', 'device-revoked', 'device-pending'])
+
 /** A failure measured on another server than the linked one means the
  * gateway followed a re-link (`aether link --from-edge`) without telling
  * the page. The link is re-read, and a moved link resets the connection
@@ -131,6 +136,7 @@ function recordUnreachable(
   approvalCode: string | undefined,
   at: Partial<EdgePath> | undefined,
 ): void {
+  if (kind && accessRefusals.has(kind)) refuseSnapshot(store)
   store.getState().setUnreachable(kind, approvalCode, at)
   const linked = store.getState().linkStatus?.server_id
   if (!at?.server_id || !linked || at.server_id === linked) return
@@ -169,6 +175,8 @@ export async function hydrate(
 ): Promise<boolean> {
   if (signal?.aborted) return false
   const s = store.getState()
+  // A painted snapshot is not a first load: selection and onboarding still apply.
+  const first = !s.hydrated || s.staleSince !== null
   try {
     const memberRead = client.memberList()
     const [info, workspaces, members, keptMembers, runs, overlaps, capabilities] =
@@ -194,7 +202,7 @@ export async function hydrate(
     if (signal?.aborted) return false
     const origin = typeof window === 'undefined' ? '' : window.location.origin
     const incomingIdentity = `${origin}\u0000${info.tailnet_hostname ?? ''}\u0000${info.member.id}`
-    if (!s.hydrated && capabilities?.local?.includes('workspace.selection')) {
+    if (first && capabilities?.local?.includes('workspace.selection')) {
       try {
         const saved = await client.localWorkspaceSelection()
         if (signal?.aborted) return false
@@ -212,11 +220,25 @@ export async function hydrate(
     const previousIdentity = store.getState().identityKey
     const identityChanged = Boolean(previousIdentity) && previousIdentity !== incomingIdentity
     if (identityChanged) {
+      clearSnapshot()
       // Reconnects retain drafts; a different authenticated owner must not.
       store.getState().resetFiles()
       store.getState().resetNotes()
       store.getState().resetAssistant()
-      store.setState({ invitations: null, revokingInvitations: [], agentModels: {}, mergedInto: {}, deletingRuns: {}, laneHistory: {}, watches: {}, watchNotices: {}, watchesFor: null })
+      store.setState({ invitations: null, revokingInvitations: [], agentModels: {}, mergedInto: {}, deletingRuns: {}, laneHistory: {}, watches: {}, watchNotices: {}, watchesFor: null, closeConfirmation: null })
+    }
+    s.setCapabilities(capabilities)
+    // Resolve Edge before restoring drafts: another app can serve script on
+    // the gateway's loopback port after the local GUI exits.
+    if (capabilities?.local?.includes('link.status')) {
+      try {
+        const linkStatus = await client.localLinkStatus()
+        if (signal?.aborted) return false
+        s.setLinkStatus(linkStatus)
+        if (first && (linkStatus.linked === true || linkStatus.server_configured === true) && !store.getState().onboardingWorkspace) s.setOnboarded(true)
+      } catch {
+        ignore()
+      }
     }
     s.setIdentityKey(incomingIdentity)
     noteServerTime(store, info.time)
@@ -235,33 +257,22 @@ export async function hydrate(
     )
     s.setOverlaps(overlaps)
     if (signal?.aborted) return false
-    s.setCapabilities(capabilities)
-    // Device cards are an extra; their failure must not fail hydration.
-    await loadDevices(store, client).catch(ignore)
-    await loadWatches(store, client).catch(ignore)
-    await loadMergeProposals(store, client)
-    await loadEdge(store, client).catch(ignore)
-    if (signal?.aborted) return false
-    // Nothing else fetches linkStatus before settings or onboarding opens, so
-    // without this a linked machine launches looking unlinked. Must not fail hydration.
-    if (store.getState().capabilities?.local?.includes('link.status')) {
-      try {
-        const linkStatus = await client.localLinkStatus()
-        if (signal?.aborted) return false
-        s.setLinkStatus(linkStatus)
-        if (!s.hydrated && (linkStatus.linked === true || linkStatus.server_configured === true) && !store.getState().onboardingWorkspace) s.setOnboarded(true)
-      } catch {
-        ignore()
-      }
-    }
+    // These reads are extras; a failure must not fail hydration.
+    await Promise.all([
+      loadDevices(store, client).catch(ignore),
+      loadWatches(store, client).catch(ignore),
+      loadMergeProposals(store, client),
+      loadEdge(store, client).catch(ignore),
+    ])
     if (signal?.aborted) return false
     s.setHydrated(true)
+    store.setState({ staleSince: null })
     const current = store.getState()
     const linked = current.route.params.runId
-    const unknownLink = !s.hydrated && current.route === s.route && !!linked && !current.runs[linked]
+    const unknownLink = first && current.route === s.route && !!linked && !current.runs[linked]
     if (
-      !s.hydrated &&
-      (s.route.name === 'board' || unknownLink) &&
+      first &&
+      (s.route.name === 'board' || s.route.name === 'needs-you' || unknownLink) &&
       current.route === s.route &&
       !current.onboarded &&
       (capabilities?.local?.includes('link.status') === true ||
@@ -275,9 +286,19 @@ export async function hydrate(
     }
     else if (unknownLink) redirectRoute(store, { name: 'board', params: {} })
     s.setUnreachable(null)
+    allowSnapshot(store)
+    saveSnapshot(store)
     return true
   } catch (err) {
     if (signal?.aborted) return false
+    const refusedAccess = err instanceof ApiError && (err.status === 401 || err.status === 403)
+    if (refusedAccess) refuseSnapshot(store)
+    if (refusedAccess && store.getState().staleSince !== null) {
+      // Access was withdrawn since the snapshot was saved: show none of it.
+      s.setHydrated(false, err.message)
+      noteUnreachable(store, client, err, signal)
+      return false
+    }
     // A failed re-hydration keeps existing data. Once the token is known dead,
     // its recorded recovery hint beats this raw failure.
     if (!store.getState().streamDead) {
@@ -395,7 +416,7 @@ export async function applyEvent(
   // No workspace.created event exists; without this a new workspace's runs
   // would be stored but rendered nowhere. Device events carry the server
   // scope, which names no workspace.
-  if (ev.type !== 'workspace.deleted' && ev.type !== 'member.device' && ev.type !== 'member.merged' && ev.workspace_id && !store.getState().workspaces[ev.workspace_id]) {
+  if (ev.type !== 'workspace.deleted' && ev.type !== 'member.device' && ev.type !== 'member.merged' && ev.type !== 'member.access' && ev.workspace_id && !store.getState().workspaces[ev.workspace_id]) {
     await client
       .workspaceListFull()
       .then(store.getState().setWorkspaces)
@@ -408,9 +429,26 @@ export async function applyEvent(
   }
 
   switch (ev.type) {
-    case 'workspace.deleted': {
+    case 'workspace.deleted':
+    case 'workspace.access':
+    case 'member.access': {
+      const { identityKey } = store.getState()
+      const stale = () => signal?.aborted || store.getState().identityKey !== identityKey
       try {
-        store.getState().setWorkspaces(await client.workspaceListFull())
+        const list = await client.workspaceListFull()
+        if (stale()) return false
+        store.getState().setWorkspaces(list)
+        // Losing a workspace drops its runs; regaining one must bring them back.
+        if (ev.type === 'member.access') {
+          const [runs, info] = await Promise.all([client.runList(), client.serverInfo()])
+          if (stale()) return false
+          store.getState().setInfo(info)
+          store.getState().setRuns(runs.filter((run) => !store.getState().deletedWorkspaceIDs.has(run.workspace_id)))
+        }
+        // Who a member sees follows workspace access.
+        const members = await store.getState().readMembers(client.memberList())
+        if (stale()) return false
+        store.getState().setMemberList(members)
       } catch (err) {
         noteUnreachable(store, client, err, signal)
         return false
@@ -542,6 +580,12 @@ export async function applyEvent(
         }
       }
       store.getState().applyRunEffort(ev.run_id, p.effort)
+      break
+    }
+    case 'run.sleep': {
+      // A run this client has not loaded arrives with its sleep in its snapshot.
+      const p = ev.payload as RunSleepPayload
+      store.getState().patchRun(ev.run_id, { asleep_since: p.asleep_since, asleep_saved: p.asleep_saved, waking: p.waking, wake_error: p.wake_error })
       break
     }
     case 'run.protected': {
@@ -685,8 +729,9 @@ export async function applyEvent(
       // server-computed attention count even for a room never opened.
       const runID = ev.run_id
       const workspaceID = ev.workspace_id
-      const payload = (ev.payload ?? {}) as { kind?: string; message_id?: string; state?: string }
+      const payload = (ev.payload ?? {}) as { kind?: string; message_id?: string; state?: string; resolution?: string }
       store.getState().clearTyping(runID, ev.actor_id)
+      store.getState().noteRoomEvent()
       if (
         runID &&
         (payload.kind === 'question' || payload.kind === 'reply')
@@ -699,12 +744,18 @@ export async function applyEvent(
           return false
         }
       }
+      // A deleted comment is excluded from the server's list, so a page
+      // reconcile would never remove the cached row; drop it directly.
+      if (runID && payload.resolution === 'deleted' && payload.message_id) {
+        store.getState().dropRoomMessage(runID, payload.message_id)
+        break
+      }
       const held = runID
         ? store.getState().roomMessages[runID]?.find((message) => message.id === payload.message_id)
         : undefined
       // A steer request's agent delivery changes without its state, and the
       // payload does not carry it.
-      const current = held !== undefined && held.kind !== 'steer_request' && held.state === payload.state
+      const current = held !== undefined && held.kind !== 'steer_request' && held.state === payload.state && (held.resolution ?? '') === (payload.resolution ?? '')
       if (runID && workspaceID && store.getState().roomMessages[runID] && !current) {
         await reconcileRoomHistory(store, client, workspaceID, runID, payload.message_id)
           .then(() => store.getState().setRoomError(runID))
@@ -805,6 +856,7 @@ async function probeGateway(
  * time in sequence order. A reconnect with no cursor re-fetches.
  */
 const mergePollMs = 5000
+const saveDebounceMs = 10_000
 
 export function connect(store: RootStore, client: Api = api): () => void {
   const lifecycle = new AbortController()
@@ -820,19 +872,20 @@ export function connect(store: RootStore, client: Api = api): () => void {
   const stopSelection = store.subscribe((state, previous) => {
     // The gateway keys the selection by the server's answer, so an unlinked
     // gateway, hydrated only for onboarding, has nowhere to save it.
-    if (!state.hydrated || !state.info || !state.capabilities?.local?.includes('workspace.selection')) return
+    // Painting fills the store without the member having chosen anything.
+    if (!state.hydrated || (state.staleSince !== null && !previous.hydrated) || !state.info || !state.capabilities?.local?.includes('workspace.selection')) return
     if (state.activeWorkspace === previous.activeWorkspace && previous.hydrated) return
     const workspace = state.activeWorkspace
     selectionWrite = selectionWrite
       .then(() => client.localWorkspaceSelection(workspace))
       .then(() => {})
       .catch((err: unknown) => {
-        if (!signal.aborted) {
-          store.getState().setHydrated(true, err instanceof Error ? err.message : String(err))
-        }
+        // A toast, not the banner's error: no retry of the connection clears this.
+        if (!signal.aborted) toast.error(errorSentence(err))
       })
   })
 
+  paintSnapshot(store)
   const stopOutcomeSeen = watchOutcomeSeen(store, client)
   const stopPush = watchPush(store, client)
 
@@ -850,7 +903,23 @@ export function connect(store: RootStore, client: Api = api): () => void {
 
   const pump = () => {
     chain = chain.then(drain).catch(ignore)
+    chain = chain.then(scheduleSave)
   }
+
+  // A long live session would otherwise save once, at its first load.
+  let saveTimer: ReturnType<typeof setTimeout> | null = null
+  const saveNow = () => {
+    if (!signal.aborted && store.getState().staleSince === null) saveSnapshot(store)
+  }
+  const scheduleSave = () => {
+    if (saveTimer) clearTimeout(saveTimer)
+    saveTimer = setTimeout(saveNow, saveDebounceMs)
+  }
+  const onHide = () => {
+    if (document.visibilityState === 'hidden') saveNow()
+  }
+  document.addEventListener('visibilitychange', onHide)
+  window.addEventListener('pagehide', saveNow)
 
   const load = async () => {
     if (signal.aborted || hydrating || store.getState().streamDead) return
@@ -920,10 +989,13 @@ export function connect(store: RootStore, client: Api = api): () => void {
         if (signal.aborted) return
         const s = store.getState()
         const refusal = data?.refusal
-        recordUnreachable(store, client, kind === 'server' ? edgeHop(detail, refusal, store) ?? kind : kind, refusal?.approval_code, measuredAt(store, data))
+        const hop = kind === 'server' ? edgeHop(detail, refusal, store) ?? kind : kind
+        recordUnreachable(store, client, hop, refusal?.approval_code, measuredAt(store, data))
         // A refused subscribe never goes live, so nothing else records this.
         // A dead token already recorded is more precise than a dead hop.
-        if (!s.hydrated && !s.streamDead) s.setHydrated(false, detail)
+        // A painted snapshot stays on screen with the error written beside
+        // it, unless access itself was refused.
+        if (!s.streamDead && (!s.hydrated || s.staleSince !== null)) s.setHydrated(s.hydrated && !accessRefusals.has(hop), detail)
       },
       onUpgradeRequired: (required) => store.getState().setUpdateRequired(required),
       afterSeq: () => store.getState().lastSeq,
@@ -961,6 +1033,7 @@ export function connect(store: RootStore, client: Api = api): () => void {
     if (probe && 'rejected' in probe) {
       // Every reconnect would carry the same rejected credential, so the
       // stream is never opened.
+      refuseSnapshot(store)
       store.getState().setStreamDead()
       store.getState().setConnection('offline')
       store.getState().setHydrated(false, probe.rejected)
@@ -970,15 +1043,23 @@ export function connect(store: RootStore, client: Api = api): () => void {
       // The handshake status never reaches the stream code, so this stays the
       // reason while the stream keeps retrying.
       const { refused } = probe
-      recordUnreachable(store, client, refusalKind(refused, store), refused.data?.refusal?.approval_code, measuredAt(store, refused.data))
+      const kind = refusalKind(refused, store)
+      recordUnreachable(store, client, kind, refused.data?.refusal?.approval_code, measuredAt(store, refused.data))
       // The client prefixes its own request path; the gateway's words are
       // what the page shows.
-      store.getState().setHydrated(false, refused.message.replace(/^[^\s:]+: /, ''))
+      // An unreachable server keeps a painted snapshot on screen; an access
+      // refusal must not show data the member may no longer read.
+      const keep = refused.status === 503 && store.getState().staleSince !== null && !(kind && accessRefusals.has(kind))
+      store.getState().setHydrated(keep, refused.message.replace(/^[^\s:]+: /, ''))
+      if (!keep) clearSnapshot()
     } else if (probe) {
       store.getState().setCapabilities(probe.unlinked.capabilities)
       store.getState().setLinkStatus(probe.unlinked.status)
       store.getState().setConnection('offline')
+      clearSnapshot()
       store.getState().setHydrated(true)
+      // The painted records belong to a server this gateway no longer links.
+      store.setState({ staleSince: null, info: null, identityKey: null, runs: {}, workspaces: {} })
       store.getState().setUnreachable(null)
       redirectRoute(store, { name: 'onboarding', params: {} })
       return
@@ -989,6 +1070,9 @@ export function connect(store: RootStore, client: Api = api): () => void {
   return () => {
     lifecycle.abort()
     stopWake()
+    document.removeEventListener('visibilitychange', onHide)
+    window.removeEventListener('pagehide', saveNow)
+    if (saveTimer) clearTimeout(saveTimer)
     clearInterval(mergeTimer)
     stopSelection()
     stopOutcomeSeen()

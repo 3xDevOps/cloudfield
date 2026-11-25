@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -335,14 +336,14 @@ func TestRunStopsOnContextCancel(t *testing.T) {
 	}
 }
 
-func TestRunBranchRefspec(t *testing.T) {
-	got := runBranchRefspec("aether")
-	want := "+refs/heads/aether/run-*:refs/remotes/aether/aether/run-*"
-	if got != want {
-		t.Errorf("refspec = %q, want %q", got, want)
+func TestRunBranchRefspecs(t *testing.T) {
+	got := runBranchRefspecs("aether")
+	want := []string{
+		"+refs/heads/aether/run-*:refs/remotes/aether/aether/run-*",
+		"+refs/heads/cloudfield/run-*:refs/remotes/aether/cloudfield/run-*",
 	}
-	if !strings.HasPrefix(got, "+") {
-		t.Error("refspec must be forced: run branches are server-owned")
+	if !slices.Equal(got, want) {
+		t.Errorf("refspecs = %q, want %q", got, want)
 	}
 }
 
@@ -357,6 +358,8 @@ func TestRunExitsWhenExecutableIsReplaced(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = ln.Close() }()
+	// Run records the executable before it first connects.
+	connected := make(chan struct{})
 	go func() {
 		for {
 			c, err := ln.Accept()
@@ -364,19 +367,34 @@ func TestRunExitsWhenExecutableIsReplaced(t *testing.T) {
 				return
 			}
 			defer func() { _ = c.Close() }()
+			select {
+			case <-connected:
+			default:
+				close(connected)
+			}
 		}
 	}()
 	d, _, _ := newTestDaemon(t, "")
 	d.cfg.Server = ln.Addr().String()
-	recorded := make(chan struct{})
-	d.executable = func() (string, error) { close(recorded); return path, nil }
+	// dial loads known hosts before it connects; the file only has to open.
+	d.cfg.KnownHostsPath = filepath.Join(t.TempDir(), "known_hosts")
+	if err := os.WriteFile(d.cfg.KnownHostsPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d.executable = func() (string, error) { return path, nil }
 	d.updatePoll = 5 * time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	done := make(chan error, 1)
 	go func() { done <- d.Run(ctx) }()
 
-	<-recorded
+	select {
+	case <-connected:
+	case err := <-done:
+		t.Fatalf("Run = %v before it connected", err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not connect")
+	}
 	next := path + ".new"
 	if err := os.WriteFile(next, []byte("v2"), 0o755); err != nil {
 		t.Fatal(err)

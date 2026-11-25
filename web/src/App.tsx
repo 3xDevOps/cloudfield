@@ -1,23 +1,30 @@
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
+import { useShallow } from 'zustand/react/shallow'
 import { ConnectionError } from '@/components/connection-error'
 import { LaunchSplash } from '@/components/launch-splash'
+import { preloadChunks } from '@/components/lazy-chunk'
 import { AppShell } from '@/components/shell/app-shell'
 import { TopBar } from '@/components/shell/top-bar'
 import { desktopBridge } from '@/components/shell/window-bar'
 import { ThemeEffect } from '@/components/theme'
 import { Toaster } from '@/components/ui/toast'
 import { UpdateChecks } from '@/components/update-checks'
+import { ServerTooOldBanner } from '@/components/server-too-old-banner'
 import { UpdateGate } from '@/components/update-gate'
 import { useKeyboardInset } from '@/lib/keyboard-inset'
 import { bindRouteToUrl, handedLink, onHandedLink, onHandedLinkForgotten } from '@/lib/url-state'
 import { useStore } from '@/store'
 import { connect } from '@/store/sync'
+import { serverTooOld } from '@/store/updates'
 
+// The phone tab bar's height includes the bottom inset.
 const toastOffset = {
-  bottom: 'calc(8px + env(safe-area-inset-bottom))',
+  bottom: 'calc(8px + var(--phone-tabs-height, env(safe-area-inset-bottom)))',
   right: 'calc(8px + env(safe-area-inset-right))',
 }
+
+const continueKey = 'aether.server-too-old-continued'
 
 export function App() {
   const hydrationError = useStore((s) => s.hydrationError)
@@ -27,20 +34,29 @@ export function App() {
   const edge = useStore((s) => s.linkStatus?.edge_url)
   const serverID = useStore((s) => s.unreachableAt?.server_id ?? s.linkStatus?.server_id)
   const hydrated = useStore((s) => s.hydrated)
+  const fresh = useStore((s) => s.hydrated && s.staleSince === null)
   const gatewayRestarting = useStore((s) => s.gatewayRestarting)
   const epoch = useStore((s) => s.connectionEpoch)
   const resetConnection = useStore((s) => s.resetConnection)
-  const drafts = useStore((s) => s.drafts)
+  const dirty = useStore((s) => Object.values(s.drafts).some((draft) => draft.content !== draft.baseContent || draft.saving))
   const onboardingRoute = useStore((s) => s.route.name === 'onboarding')
   // The server enforces the floor; this only explains it, and it outranks
   // every other screen because the server refuses everything else.
   const gated = useStore((s) => s.updateRequired !== null || s.update?.client_update_required === true)
+  const tooOld = useStore(useShallow((s) => serverTooOld(s.update, s.info?.server_version, s.info ?? undefined) ?? { client: '', server: '' }))
+  const [continued, setContinued] = useState(() => {
+    try {
+      return window.localStorage.getItem(continueKey)
+    } catch {
+      return null
+    }
+  })
+  const pair = `${tooOld.client}/${tooOld.server}`
   const [handed, setHanded] = useState(handedLink)
   useEffect(() => onHandedLink(setHanded), [])
   useEffect(() => onHandedLinkForgotten(() => setHanded(null)), [])
   useEffect(() => {
     if (typeof window === 'undefined') return
-    const dirty = Object.values(drafts).some((draft) => draft.content !== draft.baseContent || draft.saving)
     if (!dirty) return
     const warn = (event: BeforeUnloadEvent) => {
       event.preventDefault()
@@ -48,7 +64,7 @@ export function App() {
     }
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
-  }, [drafts])
+  }, [dirty])
   const theme = useStore((s) => s.theme)
   // A retry remounts the connection effect; a page reload would lose the
   // in-memory session token.
@@ -75,7 +91,16 @@ export function App() {
   }, [])
 
   useEffect(() => connect(useStore), [attempt, epoch])
-  useEffect(() => bindRouteToUrl(useStore), [])
+  // Edge serves script from a loopback port another app can take over later.
+  useEffect(() => {
+    if (fresh) void preloadChunks()
+  }, [fresh])
+  // The desktop app opens a card's notification by changing the address in place.
+  useEffect(() => bindRouteToUrl(useStore, (query) => {
+    if (!query.has('assistant')) return
+    useStore.getState().setAssistantOpen(true)
+    useStore.getState().setAssistantCard(query.get('card'))
+  }), [])
 
   // An in-app update restarts the gateway on purpose, so it is not a total failure.
   // A handed link's Connect step talks only to the local gateway, so a saved
@@ -84,9 +109,9 @@ export function App() {
 
   useEffect(() => {
     if (!hydrationError || blocked || gated) return
-    // A dead token is not an unreachable server; its error already says how to recover.
+    // An unreachable server is the banner's line, with its Retry; only a dead
+    // token, whose error says how to recover, has no banner of its own.
     if (streamDead) toast.error(hydrationError)
-    else toast.error(`Could not reach the server: ${hydrationError}`)
   }, [hydrationError, streamDead, blocked, gated])
 
   const retry = useCallback(() => {
@@ -112,7 +137,7 @@ export function App() {
       <ThemeEffect />
       <LaunchSplash />
       <UpdateChecks />
-      <div className="flex min-w-0 h-full flex-col">
+      <div data-app className="flex min-w-0 h-full flex-col">
         {(blocked || gated) && desktopBridge() && <TopBar navigation={false} />}
         <div className="min-h-0 min-w-0 flex-1">
           {gated ? (
@@ -133,6 +158,20 @@ export function App() {
           ) : (
             <>
               <AppShell />
+              {tooOld.client && continued !== pair && (
+                <ServerTooOldBanner
+                  client={tooOld.client}
+                  server={tooOld.server}
+                  onContinue={() => {
+                    try {
+                      window.localStorage.setItem(continueKey, pair)
+                    } catch {
+                      // Storage that cannot be written only brings the warning back next load.
+                    }
+                    setContinued(pair)
+                  }}
+                />
+              )}
               {toaster}
             </>
           )}

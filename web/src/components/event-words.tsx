@@ -74,17 +74,19 @@ const steerStates: Record<RoomMessageState, string> = {
   cancelled: 'was cancelled',
 }
 
-function roomLine(p: Payload): ReactNode {
+function roomLine(p: Payload, actor: string): ReactNode {
   const who = <Who id={p.actor_id} />
   switch (text(p.kind) as RoomMessageKind) {
     case 'comment':
+      if (p.resolution === 'done') return <><Who id={actor} /> completed a note</>
+      if (p.resolution === 'deleted') return <><Who id={actor} /> deleted a note</>
       return <>{who} added a note</>
     case 'question':
       return <>{who} asked a question</>
     case 'reply':
       return <>{who} answered a question</>
     case 'system':
-      return 'Aether added a note'
+      return 'Cloudfield added a note'
     case 'steer_request': {
       const state = steerStates[text(p.state) as RoomMessageState]
       return state ? <>A message from <Who id={p.actor_id} object /> {state}</> : <>{who} messaged the agent</>
@@ -178,17 +180,17 @@ const captureWords: Record<string, string> = {
   report: "Saved evidence for the agent's report",
 }
 
+const memberAccessWords: Record<string, string> = {
+  granted: 'You were granted a workspace',
+  revoked: 'Your access to a workspace was revoked',
+  owner: 'You became a workspace owner',
+}
+
 const deviceWords: Record<string, string> = {
   pending: 'A device is waiting for approval',
   registered: 'A device signed in for the first time',
   approved: 'A device was approved',
   revoked: 'A device was revoked',
-}
-
-const profileWords: Record<string, string> = {
-  put: 'saved',
-  rollback: 'rolled back',
-  pin: 'pinned',
 }
 
 // An absent or empty `with` means the run's overlaps cleared.
@@ -254,6 +256,8 @@ const describers: Record<EventType, (p: Payload, event: Event) => ReactNode> = {
     : "The agent's questions were answered",
   'run.deleted': () => 'Session deleted',
   'workspace.deleted': () => 'Workspace deleted',
+  'workspace.access': () => 'Workspace access changed',
+  'member.access': (p) => memberAccessWords[text(p.action)] ?? 'Your workspace access changed',
   'run.children': (p, e) => {
     if (p.detached) return 'Detached from its parent session'
     if (p.children === 'on') return <><Who id={e.actor_id} /> allowed subsessions for this session</>
@@ -269,13 +273,14 @@ const describers: Record<EventType, (p: Payload, event: Event) => ReactNode> = {
   'run.mode': (p) => modeLine(p),
   'run.account': (p) => <>Moved from <AccountOf id={p.previous_account_member_id} /> to <AccountOf id={p.account_member_id} /></>,
   'run.usage_limit': (p) => (text(p.message) ? `Usage limit reached: ${bounded(p.message, 160)}` : 'Usage limit reached'),
-  'run.model': (p) => <>Model set to <Quote>{bounded(p.model, 160)}</Quote></>,
+  'run.model': (p) => (text(p.model) ? <>Model set to <Quote>{bounded(p.model, 160)}</Quote></> : "Model refused, so the agent's default runs"),
   'run.effort': (p) => <>Effort set to <Quote>{bounded(p.effort, 160)}</Quote></>,
-  'run.archived': (p, e) => <><Who id={e.actor_id} fallback="Aether" /> {p.archived_at ? 'archived the session' : 'restored the session'}</>,
+  'run.sleep': (p) => p.waking ? 'Waking' : p.wake_error ? <>Wake failed: {bounded(p.wake_error, 160)}</> : p.asleep_since ? (p.asleep_saved ? 'Fell asleep: saved to disk with every process' : 'Fell asleep: its container stopped') : 'Woke',
+  'run.archived': (p, e) => <><Who id={e.actor_id} fallback="Cloudfield" /> {p.archived_at ? 'archived the session' : 'restored the session'}</>,
   'run.outcome_seen': (_, e) => <><Who id={e.actor_id} fallback="The owner" /> opened the finished session</>,
   'run.finish_opened': (_, e) => <><Who id={e.actor_id} fallback="A member" /> opened the finished session</>,
   'run.review': (p, e) => (
-    <><Who id={e.actor_id} fallback="The owner" /> {text(p.review) === 'later' ? 'chose Not yet on the finished task' : 'marked the session complete'}</>
+    <><Who id={e.actor_id} fallback="The owner" /> {text(p.review) === 'later' ? 'chose Review later' : text(p.review) === '' ? 'said the task is not finished yet' : 'marked the session complete'}</>
   ),
   'run.title': (p) => <>Agent set the title to <Quote>{bounded(p.title, 160)}</Quote></>,
   'run.agent': (p) => agentLine(p),
@@ -292,7 +297,7 @@ const describers: Record<EventType, (p: Payload, event: Event) => ReactNode> = {
   'run.pr': (p) => `Pull request${typeof p.number === 'number' ? ` #${p.number}` : ''} ${p.merged_at ? 'merged' : text(p.state).toLowerCase() || 'changed'}`,
   'sync.conflict': (p) => `Live sync paused: ${files(p.files)} changed on both sides`,
   'server.update': (p) => updateLine(p),
-  'workspace.room_message': (p) => roomLine(p),
+  'workspace.room_message': (p, e) => roomLine(p, e.actor_id),
   'workspace.evidence_packet': (p) => captureWords[text(p.trigger)] ?? 'Saved evidence for the session',
   'coord.message': (p) => (
     <span className="inline-flex max-w-full flex-wrap items-center gap-x-1.5">
@@ -304,7 +309,6 @@ const describers: Record<EventType, (p: Payload, event: Event) => ReactNode> = {
   'member.changed': (p, e) => <MemberRenamed member={p.member_id} actor={e.actor_id} name={p.display_name} />,
   'member.merged': (p) => <>Merged a member into <Who id={p.survivor_id} object /></>,
   'member.device': (p) => deviceWords[text(p.status)] ?? 'A device changed',
-  'profile.change': (p, e) => <><Who id={p.member ?? e.actor_id} /> {profileWords[text(p.action)] ?? 'changed'} the {text(p.harness) || 'agent'} profile</>,
   'memory.change': memoryLine,
   'watch.changed': (p) => (p.notification_id ? 'A watch sent you a notice' : 'A watch changed'),
 }

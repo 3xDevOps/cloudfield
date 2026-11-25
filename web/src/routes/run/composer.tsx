@@ -1,10 +1,14 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import type * as React from 'react'
+import { DictationButton } from '@/components/dictation/dictation-button'
+import { DictationNotice } from '@/components/dictation/dictation-notice'
+import { useDictationState } from '@/components/dictation/state'
 import { ArrowUp, CornerUpRight, ListPlus, Play, RefreshCw, Square } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Tooltip } from '@/components/ui/tooltip'
 import { api } from '@/lib/api'
+import { useIsMobile } from '@/lib/breakpoints'
 import { canReopenRun } from '@/lib/commands'
 import { useFileDrop } from '@/lib/file-drag'
 import { coarsePointer, useMediaQuery } from '@/lib/hooks'
@@ -12,11 +16,13 @@ import { isPress, shortcutLabel, useKeybindings } from '@/lib/keybindings'
 import { message } from '@/lib/format'
 import { allowed } from '@/lib/permissions'
 import type { ConfigOption } from '@/lib/session-types'
+import { notFinishedYet } from '@/lib/status'
 import { useImplicitControl, type AgentTerminal } from '@/routes/run/agent-terminal'
 import { AttachmentChips } from '@/routes/run/composer-attachments'
 import { AttachButton, DropOverlay, dropRoom } from '@/routes/run/composer-dropzone'
 import { hasImages, useComposerImages, type ComposerImageState } from '@/routes/run/composer-images'
 import { ContextWindow } from '@/routes/run/context-window'
+import { usePromptHistory } from '@/routes/run/composer-history'
 import { commandSuggestions, currentChoice, OptionPills, SuggestionList, triggerAt, useFileSuggestions, type Suggestion } from '@/routes/run/composer-menus'
 import { beginDraftRequest, composerBlock, composerDraft, draftSendKey, enhancedBlock, pillFor, pillHint, saveComposerDraft, sentDraft, useComposerDraft, type ComposerDraft, type Pill } from '@/routes/run/composer-state'
 import { TemplateInsert } from '@/routes/run/composer-templates'
@@ -41,11 +47,12 @@ interface ComposerProps {
   autoFocus?: boolean
   dock?: React.ReactNode
   onEscape: () => void
+  onDropStatus?: (status: { limit: number; blocked?: string; upload?: (files: File[]) => Promise<void> }) => void
 }
 
 function ComposerFrame({ children }: { children: React.ReactNode }) {
   return (
-    <div className="shrink-0 bg-canvas pb-[var(--keyboard-inset,0px)]">
+    <div className="shrink-0 bg-canvas pb-[max(0px,calc(var(--keyboard-inset,0px)-env(safe-area-inset-bottom)))]">
       <div className={cn(sessionColumn, 'flex flex-col gap-2 pb-4')}>{children}</div>
     </div>
   )
@@ -93,6 +100,8 @@ function ClosedRun({ run, reason, dock }: { run: RunRecord; reason: string; dock
   )
 }
 
+const optionUnsent = 'This tab did not get control of the session, so the option was not changed.'
+
 const pillLook: Record<Pill, { label: string; Icon: typeof ArrowUp; variant: 'primary' | 'danger' }> = {
   send: { label: 'Send', Icon: ArrowUp, variant: 'primary' },
   steer: { label: 'Steer', Icon: CornerUpRight, variant: 'primary' },
@@ -129,12 +138,13 @@ function ComposerBox({ textarea, autoFocus, value, onChange, onCaret, onFocusCha
   const drop = useFileDrop({ onFiles: (files) => void attach.images.upload(files), limit: room.limit })
   const [focused, setFocused] = useState(false)
   const caretPlaced = useRef(false)
+  const dictating = useDictationState(textarea).active
   useEffect(() => {
     if (autoFocus) textarea.current?.focus()
   }, [autoFocus, textarea])
   // The table stands plain keys down inside a field, so the textarea answers
   // Enter itself; this registration keeps Send listed in the shortcuts reference.
-  useKeybindings('composer', focused && !coarse ? {
+  useKeybindings('composer', focused && !coarse && !dictating ? {
     'composer-send': (event) => {
       event.preventDefault()
       onSend()
@@ -148,9 +158,10 @@ function ComposerBox({ textarea, autoFocus, value, onChange, onCaret, onFocusCha
   } : {})
   return (
     <div className="relative" {...drop.handlers}>
+      <DictationNotice textarea={textarea} className="mb-2" />
       {menu}
       {drop.count !== null && <DropOverlay count={drop.count} refused={drop.refused} blocked={room.blocked} limit={room.limit} />}
-      <div className={cn('overflow-hidden rounded-composer border border-seam bg-chrome', focused && 'border-control')}>
+      <div className={cn('@container overflow-hidden rounded-composer border border-seam bg-chrome', focused && 'border-control')}>
       {images}
       <Textarea
         variant="embedded"
@@ -190,14 +201,14 @@ function ComposerBox({ textarea, autoFocus, value, onChange, onCaret, onFocusCha
           if (event.defaultPrevented || event.nativeEvent.isComposing) return
           if (!coarse && isPress(event.nativeEvent, 'composer-send')) {
             event.preventDefault()
-            onSend()
+            if (!dictating) onSend()
           } else if (event.key === 'Escape' && !value.trim()) {
             event.preventDefault()
             onEscape()
           }
         }}
       />
-      <div className="flex min-w-0 flex-wrap items-center gap-1 px-2 pb-2">{footer}</div>
+      <div className="wrap-from-end min-w-0 items-center gap-1 px-2 pb-2">{footer}</div>
       </div>
     </div>
   )
@@ -209,7 +220,7 @@ function ComposerHint({ id, uploading, description }: { id: string; uploading: b
     : <p id={id} className="sr-only">{description}</p>
 }
 
-function SendActions({ pill, label, hint, description, disabled, onClick, onCancel }: {
+function SendActions({ pill, label, hint, description, disabled, onClick, onCancel, dictation }: {
   pill: Pill
   label: string
   hint?: string
@@ -217,17 +228,20 @@ function SendActions({ pill, label, hint, description, disabled, onClick, onCanc
   disabled: boolean
   onClick: () => void
   onCancel?: () => void
+  dictation: React.ReactNode
 }) {
   const look = pillLook[pill]
   const tip = [hint ? `${look.label} (${hint})` : look.label, description].filter(Boolean).join('. ')
-  const icon = <look.Icon className={cn((pill === 'interrupt' || pill === 'stop-waiting') && 'fill-current')} />
+  const stop = pill === 'interrupt' ? 'Interrupt the agent' : pill === 'stop-waiting' ? 'Stop waiting for background work' : undefined
+  const icon = <look.Icon className={cn(stop && 'size-3 fill-current coarse:size-4')} />
   return (
     <div className="ml-auto flex shrink-0 items-center gap-1">
+      {dictation}
       {onCancel && <Button size="sm" variant="ghost" onClick={onCancel}>Cancel</Button>}
       <Tooltip content={tip}>
         <span className="inline-flex">
-          {pill === 'send' && label === look.label ? (
-            <Button size="round" variant={look.variant} label={look.label} hint={false} disabled={disabled} onClick={onClick}>
+          {(pill === 'send' || stop) && label === look.label ? (
+            <Button size="round" variant={look.variant} label={stop ?? look.label} hint={false} disabled={disabled} onClick={onClick}>
               {icon}
             </Button>
           ) : (
@@ -235,7 +249,7 @@ function SendActions({ pill, label, hint, description, disabled, onClick, onCanc
               size="pill"
               variant={look.variant}
               hint={false}
-              aria-label={pill === 'interrupt' ? 'Interrupt the agent' : pill === 'stop-waiting' ? 'Stop waiting for background work' : undefined}
+              aria-label={stop}
               disabled={disabled}
               onClick={onClick}
             >
@@ -249,8 +263,8 @@ function SendActions({ pill, label, hint, description, disabled, onClick, onCanc
   )
 }
 
-function StandardComposer({ run, agent, room, textarea, autoFocus, onFocusChange, onEscape }: ComposerProps) {
-  const self = useSelf()
+function StandardComposer({ run, agent, room, textarea, autoFocus, onFocusChange, onEscape, onDropStatus }: ComposerProps) {
+  const self = useSelf(run.workspace_id)
   const cap = useCapability()
   const steerOthers = useStore((s) => s.workspaces[run.workspace_id]?.steer_others)
   const coarse = useMediaQuery(coarsePointer)
@@ -259,11 +273,14 @@ function StandardComposer({ run, agent, room, textarea, autoFocus, onFocusChange
   useTypingSignal(run.id, body)
   const busy = Boolean(draft.busy)
   const late = usePastDeadline(busy)
+  const dictating = useDictationState(textarea).active
   const hintID = useId()
   const maySteer = allowed('steer', self, { owner: run.member_id, protected: run.protected, steerOthers })
   const block = composerBlock(run, maySteer, maySteer && cap.hasMethod('run.relaunch') && canReopenRun(run))
   const images = useComposerImages(run.id, !block && cap.hasMethod('terminal.file'))
   const attachOff = busy || !cap.hasMethod('terminal.file')
+  const drop = dropRoom(images, Boolean(block) || attachOff)
+  useEffect(() => onDropStatus?.({ ...drop, upload: images.upload }), [drop.blocked, drop.limit, images.upload, onDropStatus])
   const { uploading, uploadError } = images
   const control = useImplicitControl(run, agent)
   const hint = !control.waits
@@ -310,23 +327,26 @@ function StandardComposer({ run, agent, room, textarea, autoFocus, onFocusChange
         onFocusChange={onFocusChange}
         onSend={send}
         onEscape={onEscape}
-        placeholder="Message the agent"
+        placeholder={notFinishedYet(run) ? 'Say what is left to do' : 'Message the agent'}
         describedBy={hintID}
         onPaste={images.onPaste}
         images={<AttachmentChips images={images} disabled={busy} />}
         attach={{ images, disabled: attachOff }}
         footer={(
           <>
-            <AttachButton images={images} disabled={attachOff} textarea={textarea} />
-            <TemplateInsert run={run} textarea={textarea} disabled={busy} />
+            <div className="flex items-center gap-1">
+              <AttachButton images={images} disabled={attachOff} textarea={textarea} />
+              <TemplateInsert run={run} textarea={textarea} disabled={busy} />
+            </div>
             <SendActions
               pill="send"
               label={late ? stillWaiting : busy ? 'Sending…' : 'Send'}
               hint={coarse ? undefined : shortcutLabel('composer-send')}
               description={hint}
-              disabled={!body.trim() || busy || !images.ready}
+              disabled={!body.trim() || busy || !images.ready || dictating}
               onClick={send}
               onCancel={late ? () => saveComposerDraft(run.id, { busy: undefined }) : undefined}
+              dictation={<DictationButton textarea={textarea} onInsert={(next) => saveComposerDraft(run.id, { body: next })} />}
             />
           </>
         )}
@@ -357,8 +377,9 @@ function useQueueHeld(active: boolean): boolean {
   return held
 }
 
-function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock, onEscape }: ComposerProps) {
-  const self = useSelf()
+function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock, onEscape, onDropStatus }: ComposerProps) {
+  const mobile = useIsMobile()
+  const self = useSelf(run.workspace_id)
   const cap = useCapability()
   const steerOthers = useStore((s) => s.workspaces[run.workspace_id]?.steer_others)
   const session = useStore((s) => s.acpSessions[run.id])
@@ -370,6 +391,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
   useTypingSignal(run.id, body)
   const busy = Boolean(draft.busy)
   const late = usePastDeadline(busy)
+  const dictating = useDictationState(textarea).active
   const setBody = (next: string) => saveComposerDraft(run.id, { body: next })
   const [caret, setCaret] = useState(0)
   const [focused, setFocused] = useState(false)
@@ -380,22 +402,31 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
 
   const maySteer = allowed('steer', self, { owner: run.member_id, protected: run.protected, steerOthers })
   const state = session?.state
+  const stream = session?.stream
+  const connecting = stream === 'live' || stream === 'refused' ? undefined : stream === 'reconnecting' || stream === 'offline' ? 'Reconnecting to the agent…' : 'Connecting to the agent…'
+  // Control and the background wait read as off while the stream is down: the composer keeps its last live shape.
+  const lastLive = useRef<{ canAct: boolean; waiting: boolean }>(undefined)
+  if (stream === 'live') lastLive.current = { canAct: control.canAct, waiting: backgroundWait(run, session) !== null }
+  const shape = lastLive.current
   const gate = enhancedBlock({
     run,
     maySteer,
     canReopen: maySteer && cap.hasMethod('run.relaunch') && canReopenRun(run),
-    stream: session?.stream,
-    streamError: session?.streamError,
-    sessionLive: session?.live ?? false,
+    refused: stream === 'refused' ? session?.streamError ?? 'The agent stream was refused.' : undefined,
+    sessionLive: shape ? session?.live ?? false : true,
     pending: session?.pending.length ?? 0,
-    hasLease: control.canAct,
+    hasLease: shape?.canAct ?? true,
   })
-  const moderated = !control.canAct
+  const moderated = !shape?.canAct
   const turnRunning = state?.turn_in_flight ?? false
-  const waiting = backgroundWait(run, session) !== null
-  const supportsImages = state?.prompt_images === true
-  const images = useComposerImages(run.id, !gate && cap.hasMethod('terminal.file'))
-  const attachOff = busy || !cap.hasMethod('terminal.file')
+  const waiting = shape?.waiting ?? false
+  const blocked = Boolean(gate || connecting)
+  // A sleeping session's agent reports its prompt types once a wake starts it.
+  const supportsImages = state?.prompt_images === true || Boolean(run.asleep_since)
+  const images = useComposerImages(run.id, !blocked && cap.hasMethod('terminal.file'))
+  const attachOff = busy || blocked || !cap.hasMethod('terminal.file')
+  const drop = dropRoom(images, attachOff)
+  useEffect(() => onDropStatus?.({ ...drop, upload: images.upload }), [drop.blocked, drop.limit, images.upload, onDropStatus])
   const refusedImages = !supportsImages && hasImages(images.previews)
   const hasContent = Boolean(body.trim()) || images.previews.length > 0
   const pill = moderated ? 'send' : pillFor({ paused, turnRunning, backgroundWait: waiting, steering: state?.steering ?? false, queueHeld, empty: !hasContent })
@@ -405,6 +436,10 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
   const files = useFileSuggestions(run.workspace_id, run.id, trigger?.kind === '@' ? trigger.query : null)
   const suggestions: Suggestion[] = trigger?.kind === '/' ? commandSuggestions(state?.commands ?? [], trigger.query) : trigger?.kind === '@' ? files : []
   const current = Math.min(active, Math.max(0, suggestions.length - 1))
+  const recall = usePromptHistory(run.id, body, (next) => {
+    setBody(next)
+    setDismissed(true)
+  })
 
   const pick = (item: Suggestion) => {
     if (composerDraft(run.id).busy) return
@@ -420,11 +455,11 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
   const modelOption = state?.config_options?.find((option) => option.category === 'model' && option.type === 'select')
   const modelName = (modelOption && currentChoice(modelOption)?.name) ?? run.model
   const canCompact = state?.commands?.some((command) => command.name === 'compact') ?? false
-  const compactBlock = moderated
+  const compactBlock = connecting ?? (moderated
     ? 'Take control of the conversation to compact it.'
     : busy || hasContent
       ? 'Clear the message box first, so nothing you typed is replaced.'
-      : undefined
+      : undefined)
   const compact = () => {
     setBody('/compact ')
     setCaret(9)
@@ -435,13 +470,15 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
   }
 
   const attempt = async (action: () => Promise<unknown>) => {
-    if (composerDraft(run.id).busy) return
+    if (composerDraft(run.id).busy) return false
     const request = beginDraftRequest(run.id, 'busy', { error: undefined, busyPrompt: false })
     try {
       await action()
       request.settle()
+      return true
     } catch (err) {
       request.settle({ error: message(err) })
+      return false
     }
   }
 
@@ -476,7 +513,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
   }
 
   const act = (chosen: Pill) => {
-    if (composerDraft(run.id).busy || images.isUploading()) return
+    if (connecting || composerDraft(run.id).busy || images.isUploading()) return
     if (moderated) void deliver(false)
     else control.withControl(() => perform(chosen))
   }
@@ -496,10 +533,12 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
     }
   }
 
-  const setOption = async (option: ConfigOption, value: string) => {
-    const lease = sessionLease(useStore, run.id)
-    if (lease) await attempt(() => api.runACPSetOption(run.id, option.id, value, lease))
-  }
+  const setOption = (option: ConfigOption, value: string) => new Promise<boolean>((resolve) => {
+    control.withControl(() => {
+      const lease = sessionLease(useStore, run.id)
+      return attempt(() => lease ? api.runACPSetOption(run.id, option.id, value, lease) : Promise.reject(new Error(optionUnsent))).then(resolve)
+    }, () => void attempt(() => Promise.reject(new Error(optionUnsent))).then(resolve))
+  })
 
   if (gate) {
     return (
@@ -510,19 +549,21 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
           reason={gate.reason}
           failure={gate.interrupt ? error : undefined}
           action={gate.interrupt && turnRunning && (
-            <Button size="sm" variant="danger" aria-label="Interrupt the agent" hint={pillHint.interrupt} disabled={busy} onClick={() => act('interrupt')}>
+            <Button size="sm" variant={mobile ? 'secondary' : 'danger'} aria-label="Interrupt the agent" hint={pillHint.interrupt} disabled={busy || Boolean(connecting)} onClick={() => act('interrupt')}>
               <Square className="fill-current" />
               Interrupt
             </Button>
           )}
         />
+        {gate.interrupt && <p role="status" className="sr-only">{connecting}</p>}
       </ComposerFrame>
     )
   }
 
-  const pillDisabled = busy || images.uploading || (pill !== 'interrupt' && pill !== 'stop-waiting' && pill !== 'resume' && (!images.ready || !hasContent || refusedImages))
-  const hintText = moderated ? (control.waits ? 'Delivers in 45 s unless the controller decides sooner.' : '') : turnRunning || pill === 'stop-waiting' || pill === 'resume' ? pillHint[pill] : ''
-  const keyHint = coarse || pill === 'stop-waiting' ? undefined : pill === 'steer' ? `${shortcutLabel('composer-send')}; ${shortcutLabel('composer-queue')} queues` : shortcutLabel(pill === 'queue' && state?.steering ? 'composer-queue' : 'composer-send')
+  const stops = pill === 'interrupt' || pill === 'stop-waiting'
+  const pillDisabled = busy || Boolean(connecting) || images.uploading || (!stops && pill !== 'resume' && (!images.ready || !hasContent || refusedImages || dictating))
+  const hintText = connecting ?? (moderated ? (control.waits ? 'Delivers in 45 s unless the controller decides sooner.' : '') : turnRunning || pill === 'stop-waiting' || pill === 'resume' ? pillHint[pill] : '')
+  const keyHint = coarse || stops ? undefined : pill === 'steer' ? `${shortcutLabel('composer-send')}; ${shortcutLabel('composer-queue')} queues` : shortcutLabel(pill === 'queue' && state?.steering ? 'composer-queue' : 'composer-send')
 
   return (
     <ComposerFrame>
@@ -550,14 +591,16 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
         attach={{ images, disabled: attachOff }}
         footer={(
           <>
-            <AttachButton
-              images={images}
-              disabled={attachOff}
-              textarea={textarea}
-              unsupported={refusedImages ? 'This agent does not support image prompts.' : undefined}
-            />
-            <TemplateInsert run={run} textarea={textarea} disabled={busy} />
-            <OptionPills options={state?.config_options ?? []} disabled={busy || moderated} onSet={setOption} />
+            <div className="flex items-center gap-1">
+              <AttachButton
+                images={images}
+                disabled={attachOff}
+                textarea={textarea}
+                unsupported={refusedImages ? 'This agent does not support image prompts.' : undefined}
+              />
+              <TemplateInsert run={run} textarea={textarea} disabled={busy} />
+            </div>
+            <OptionPills options={state?.config_options ?? []} disabled={busy || moderated || Boolean(connecting)} onSet={setOption} />
             {state?.usage && state.usage.size > 0 && (
               <ContextWindow
                 runID={run.id}
@@ -569,12 +612,13 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
             )}
             <SendActions
               pill={pill}
-              label={late ? stillWaiting : busy ? 'Sending…' : pillLook[pill].label}
+              label={late ? stillWaiting : busy && draft.busyPrompt ? 'Sending…' : pillLook[pill].label}
               hint={keyHint}
               description={hintText}
               disabled={pillDisabled}
               onClick={() => act(pill)}
               onCancel={late && draft.busyPrompt ? () => saveComposerDraft(run.id, { busy: undefined }) : undefined}
+              dictation={<DictationButton textarea={textarea} onInsert={setBody} />}
             />
           </>
         )}
@@ -596,13 +640,17 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
           if (hasContent) act(turnRunning ? 'queue' : 'send')
         }}
         onEscape={onEscape}
-        placeholder={turnRunning || waiting ? 'Message the agent while it works' : 'Message the agent, / for commands, @ for files'}
+        placeholder={connecting ?? (turnRunning || waiting ? 'Message the agent while it works' : notFinishedYet(run) ? 'Say what is left to do, / for commands, @ for files' : 'Message the agent, / for commands, @ for files')}
         describedBy={hintID}
         combobox={{ expanded: suggestions.length > 0, controls: listID, active: suggestions.length ? `${listID}-${current}` : undefined }}
         menu={<SuggestionList id={listID} items={suggestions} active={current} onPick={pick} />}
         onKeyDown={(event) => {
           if (busy) return
-          if (suggestions.length === 0 || event.nativeEvent.isComposing) return
+          if (suggestions.length === 0) {
+            recall(event)
+            return
+          }
+          if (event.nativeEvent.isComposing) return
           if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
             event.preventDefault()
             setActive((current + (event.key === 'ArrowDown' ? 1 : -1) + suggestions.length) % suggestions.length)
@@ -616,17 +664,21 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
         }}
       />
       <ComposerHint id={hintID} uploading={images.uploading} description={hintText} />
+      <p role="status" className="sr-only">{connecting}</p>
     </ComposerFrame>
   )
 }
 
 export function Composer(props: ComposerProps) {
   const { run, dock } = props
-  const self = useSelf()
+  const self = useSelf(run.workspace_id)
   const cap = useCapability()
   const steerOthers = useStore((s) => s.workspaces[run.workspace_id]?.steer_others)
   const maySteer = allowed('steer', self, { owner: run.member_id, protected: run.protected, steerOthers })
   const canReopen = maySteer && cap.hasMethod('run.relaunch') && canReopenRun(run)
+  useEffect(() => {
+    if (canReopen) props.onDropStatus?.({ limit: 0, blocked: 'Files cannot be attached now' })
+  }, [canReopen, props.onDropStatus])
   if (canReopen) return <ClosedRun key={run.id} run={run} reason={composerBlock(run, maySteer, true)!} dock={dock} />
   return props.run.acp ? <EnhancedComposer key={props.run.id} {...props} /> : <StandardComposer key={props.run.id} {...props} />
 }

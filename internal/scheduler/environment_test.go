@@ -7,11 +7,13 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/3xDevOps/Aether/internal/coordtransport"
 	"github.com/3xDevOps/Aether/internal/domain"
+	"github.com/3xDevOps/Aether/internal/envname"
 	"github.com/3xDevOps/Aether/internal/harness"
 	"github.com/3xDevOps/Aether/internal/memberhome"
 	"github.com/3xDevOps/Aether/internal/runtime"
@@ -40,9 +42,9 @@ func TestBuildEnvironmentPlanMountsOnePersistentHomeFirst(t *testing.T) {
 		if planErr != nil {
 			t.Fatalf("BuildEnvironmentPlan(%q): %v", purpose, planErr)
 		}
-		wantMounts := 4
+		wantMounts := 5
 		if purpose == EnvironmentPurposeTerminal {
-			wantMounts = 5
+			wantMounts = 6
 		}
 		if len(plan.Mounts) != wantMounts {
 			t.Fatalf("purpose %q mounts = %v, want home, its pinned logins and isolated cache mount", purpose, plan.Mounts)
@@ -60,8 +62,11 @@ func TestBuildEnvironmentPlanMountsOnePersistentHomeFirst(t *testing.T) {
 			pool = "terminal"
 		}
 		cache := runtime.Mount{HostPath: filepath.Join(homes.CacheRoot(), string(member.ID), pool, "data"), ContainerPath: "/aether-cache"}
-		if plan.Mounts[3] != cache {
-			t.Fatalf("purpose %q cache mount = %+v, want %+v", purpose, plan.Mounts[3], cache)
+		if purpose == EnvironmentPurposeRun {
+			cache.Kind = runtime.MountCache
+		}
+		if plan.Mounts[4] != cache {
+			t.Fatalf("purpose %q cache mount = %+v, want %+v", purpose, plan.Mounts[4], cache)
 		}
 		if plan.Env["GOCACHE"] != "/aether-cache/go-build" || plan.Env["HOME"] != "/root" || plan.Env["PATH"] != "/root/.local/bin:/workspace/bin" {
 			t.Fatalf("cache defaults changed persistent environment: %#v", plan.Env)
@@ -115,6 +120,11 @@ func TestBuildEnvironmentPlanAppliesThePermission(t *testing.T) {
 		}
 		if plan.Egress != isolated || tmp != wantTmp || !maps.Equal(overlays, wantOverlays) {
 			t.Fatalf("%s: egress %v, /tmp from %q, overlays %v; want egress %v, /tmp from %q, overlays %v", tc.permission, plan.Egress, tmp, overlays, isolated, wantTmp, wantOverlays)
+		}
+		// An isolated run's renames stay in its overlay, so the account
+		// config path is pinned only outside one.
+		if _, pinned := mountFor(runtime.Spec{Mounts: plan.Mounts}, "/root/.claude/.claude.json"); pinned == isolated {
+			t.Fatalf("%s: account config path pinned = %v, want %v", tc.permission, pinned, !isolated)
 		}
 	}
 	terminal, err := s.BuildEnvironmentPlan(context.Background(), nil, nil, member, harness.Profile{}, EnvironmentPurposeTerminal)
@@ -370,5 +380,112 @@ func TestApplyInstallEnvironmentKeepsExplicitPrefixes(t *testing.T) {
 	applyInstallEnvironment(env, "/home/dev")
 	if _, added := env["NPM_CONFIG_PREFIX"]; added || env["npm_config_prefix"] != "/opt/npm" || env["CARGO_INSTALL_ROOT"] != "/opt/cargo" {
 		t.Fatalf("explicit settings = %v, want them unchanged", env)
+	}
+}
+
+// The session's config copy is written only into a regular file in its
+// directory: never through a link, into a FIFO, or out of the directory.
+func TestWriteFileInRefusesAnythingButARegularFile(t *testing.T) {
+	t.Parallel()
+	dir, outside := t.TempDir(), filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(outside, []byte("host"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(dir, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(dir, "fifo"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"link", "fifo", "../victim"} {
+		if err := writeFileIn(dir, name, []byte("{}")); err == nil {
+			t.Errorf("writeFileIn(%q) = nil, want an error", name)
+		}
+	}
+	if got, err := os.ReadFile(outside); err != nil || string(got) != "host" {
+		t.Fatalf("file outside the directory = %q, %v; want it untouched", got, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "config"), []byte("a longer old state"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"config", "new"} {
+		if err := writeFileIn(dir, name, []byte("{}")); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := os.ReadFile(filepath.Join(dir, name)); err != nil || string(got) != "{}" {
+			t.Fatalf("%s = %q, %v; want {}", name, got, err)
+		}
+	}
+}
+
+// A workspace variable or an image's ENV under the CLOUDFIELD_ name of a
+// variable the server sets must not reach that variable's readers, which
+// take the CLOUDFIELD_ name first.
+func TestSessionVariablesCannotBeSetThroughTheirCloudfieldNames(t *testing.T) {
+	variables := map[string]string{}
+	for _, name := range coordtransport.SessionEnv {
+		variables[envname.New(name)] = "workspace"
+	}
+	s := &Scheduler{cfg: Config{StandardImage: "standard:latest", Runtime: newFakeRuntime()}}
+	ws := &domain.Workspace{ID: "ws", Environment: domain.WorkspaceEnvironment{Variables: variables}}
+	plan, err := s.BuildEnvironmentPlan(t.Context(), nil, ws, &domain.Member{ID: "member"}, harness.Profile{}, EnvironmentPurposeRun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fingerprint := "fixed"
+	id, err := s.createContainer(t.Context(), runtime.Spec{Name: "n", Image: "standard:latest", Command: []string{"true"}, Env: plan.Env, Fingerprint: fingerprint})
+	if err != nil {
+		t.Fatal(err)
+	}
+	created := s.cfg.Runtime.(*fakeRuntime).containers[id].spec
+	if created.Fingerprint != fingerprint {
+		t.Errorf("createContainer changed the fingerprint to %q", created.Fingerprint)
+	}
+	for _, name := range coordtransport.SessionEnv {
+		twin := envname.New(name)
+		if v, ok := created.Env[twin]; !ok || v != "" {
+			t.Errorf("created container %s = %q (set %v), want it set empty so neither the workspace nor an image's ENV supplies it", twin, v, ok)
+		}
+		if plan.Env[twin] != "workspace" {
+			t.Errorf("plan %s = %q; the workspace's value must stay in the plan, which a terminal's fingerprint hashes", twin, plan.Env[twin])
+		}
+	}
+}
+
+// A kept Environment terminal stays in use across this release: nothing
+// this server adds for CLOUDFIELD_ names enters the spec its fingerprint
+// hashes.
+func TestTerminalFingerprintHasNoCloudfieldNames(t *testing.T) {
+	s := &Scheduler{cfg: Config{StandardImage: "standard:latest"}}
+	ws := &domain.Workspace{ID: "ws", Environment: domain.WorkspaceEnvironment{Variables: map[string]string{"EXTRA": "yes"}}}
+	plan, err := s.BuildEnvironmentPlan(t.Context(), nil, ws, &domain.Member{ID: "member"}, harness.Profile{}, EnvironmentPurposeTerminal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key := range plan.Env {
+		if strings.HasPrefix(key, "CLOUDFIELD_") {
+			t.Errorf("terminal plan carries %s, which changes every kept terminal's fingerprint", key)
+		}
+	}
+}
+
+// Every container the scheduler makes goes through createContainer, the
+// only Create call in the package's code, whatever the runtime is named.
+func TestContainersAreCreatedThroughCreateContainer(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if strings.HasSuffix(f, "_test.go") {
+			continue
+		}
+		data, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if n := strings.Count(string(data), ".Create("); n > 0 && (f != "environment.go" || n != 1) {
+			t.Errorf("%s calls Create %d times; create containers with s.createContainer", f, n)
+		}
 	}
 }

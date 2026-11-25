@@ -11,6 +11,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/3xDevOps/Aether/internal/server"
 	"github.com/3xDevOps/Aether/internal/serversetup"
 )
 
@@ -19,7 +20,7 @@ func configCmd(args []string) error {
 	// flag package stops at the first non-flag argument, so parsing first
 	// would silently drop a --config that follows "show" or "set".
 	if len(args) == 0 {
-		return errors.New("usage: aether-server config <show|path|set|edit> [--config <file>]")
+		return errors.New("usage: cloudfield-server config <show|path|set|edit> [--config <file>]")
 	}
 	sub, args := args[0], args[1:]
 	fs := flag.NewFlagSet("config", flag.ExitOnError)
@@ -44,7 +45,7 @@ func configCmd(args []string) error {
 		return nil
 	case "set":
 		if len(rest) != 2 {
-			return errors.New("usage: aether-server config set <key> <value>")
+			return errors.New("usage: cloudfield-server config set <key> <value>")
 		}
 		return configSet(os.Stdout, *path, rest[0], rest[1])
 	case "edit":
@@ -113,7 +114,11 @@ func configSet(w io.Writer, path, key, value string) error {
 		return err
 	}
 	_, _ = fmt.Fprintf(w, "%s: %s = %s (was %s)\n", path, key, value, was)
-	_, _ = fmt.Fprintf(w, "apply it with:\n  %s\n", serversetup.RestartCommand)
+	apply := sudoPrefix() + serversetup.RestartCommand
+	if key == "session-runtime" && value == server.SessionRuntimeVM {
+		apply = sudoPrefix() + "aether-server vm install" + configFlag(path) + " && " + apply
+	}
+	_, _ = fmt.Fprintf(w, "apply it with:\n  %s\n", apply)
 	return nil
 }
 

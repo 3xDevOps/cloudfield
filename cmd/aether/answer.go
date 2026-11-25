@@ -18,17 +18,17 @@ import (
 func init() {
 	register(command{
 		name:  "answer",
-		short: "answer a session's question or permission request (aether sessions <session-id> lists them)",
-		usage: "aether answer <session-id> <request-id> <option-id> [--values <json>]\n" +
-			"aether answer <session-id> <question-id> <answer|->",
-		example: "aether answer run-d6ay38tj8j req-7 allow-1\n" +
-			"aether answer run-d6ay38tj8j q-1 \"use the staging database\"",
+		short: "answer a session's question or permission request (cloudfield sessions <session-id> lists them)",
+		usage: "cloudfield answer <session-id> <request-id> <option-id> [--values <json>]\n" +
+			"cloudfield answer <session-id> <question-id> <answer|->",
+		example: "cloudfield answer run-d6ay38tj8j req-7 allow-1\n" +
+			"cloudfield answer run-d6ay38tj8j q-1 \"use the staging database\"",
 		run: runAnswer,
 	})
 }
 
-const answerUsage = "usage: aether answer <session-id> <request-id> <option-id> [--values '<json object>']\n" +
-	"   or: aether answer <session-id> <question-id> \"<answer>\"|-   (a teammate's question)"
+const answerUsage = "usage: cloudfield answer <session-id> <request-id> <option-id> [--values '<json object>']\n" +
+	"   or: cloudfield answer <session-id> <question-id> \"<answer>\"|-   (a teammate's question)"
 
 func runAnswer(args []string) error {
 	if len(args) < 3 || strings.HasPrefix(args[0], "-") || strings.HasPrefix(args[1], "-") {
@@ -105,7 +105,7 @@ func needLines(it protocol.AttentionItem) []string {
 		case it.Request == nil || len(it.Request.Options) == 0:
 			add("answer it in the session's terminal: aether attach %s", run)
 		case len(options) == 0:
-			add("it offers no allow once or reject once option, and aether answer never answers for always; decide it in the Aether dashboard")
+			add("it offers no allow once or reject once option, and aether answer never answers for always; decide it in the Cloudfield dashboard")
 		default:
 			if it.Request.URL != "" {
 				add("open %s, then:", it.Request.URL)
@@ -119,7 +119,7 @@ func needLines(it protocol.AttentionItem) []string {
 		}
 	case protocol.AttentionKindRoomQuestion:
 		if it.Message == nil {
-			add("open the session in the Aether dashboard")
+			add("open the session in the Cloudfield dashboard")
 			break
 		}
 		add("aether answer %s %s \"<answer>\"", run, quoted)
@@ -133,7 +133,7 @@ func needLines(it protocol.AttentionItem) []string {
 		add("aether message %s \"<reply>\"", run)
 		add("aether close %s --outcome abandoned", run)
 	default:
-		add("open the session in the Aether dashboard")
+		add("open the session in the Cloudfield dashboard")
 	}
 	return lines
 }
@@ -233,7 +233,7 @@ func answer(c *protocol.Client, w io.Writer, stdin io.Reader, runID, id, reply s
 			for _, o := range options {
 				ids = append(ids, o.ID)
 			}
-			instead := "decide it in the Aether dashboard"
+			instead := "decide it in the Cloudfield dashboard"
 			if len(ids) > 0 {
 				instead = "pick one of " + strings.Join(ids, ", ") + ", or " + instead
 			}

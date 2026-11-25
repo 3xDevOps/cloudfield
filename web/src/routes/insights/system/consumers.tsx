@@ -158,6 +158,11 @@ export function Consumers({ stats }: { stats: SystemStats }) {
             )}
             <Rows stats={stats} metric={metric} rows={shown} result={result} capacity={capacity.capacity} />
             {!selected && containers.length > 0 && <EverythingElse rest={result.rest} stats={stats} metric={metric} />}
+            {metric === 'memory' && shown.some((c) => c.host_memory_bytes !== undefined) && (
+              <p className="px-1.5 text-ui-sm text-muted">
+                For a sandbox in a VM, "of host" is everything its VM holds of the host's memory, its own kernel and file cache included. The limit line and its bar are what runs inside the VM, and the limit caps only that.
+              </p>
+            )}
           </div>
         </div>
       </div>
@@ -173,12 +178,12 @@ function Rows({ stats, metric, rows, result, capacity }: { stats: SystemStats; m
   if (stats.containersError && stats.containers.length === 0) {
     return <Callout tone="failed" role="alert" className="whitespace-pre-wrap">{stats.containersError}</Callout>
   }
-  if (stats.containersAt === 0) return <p className="text-ui text-muted">Measuring containers…</p>
-  if (stats.containers.length === 0) return <p className="text-ui text-muted">No run containers are running.</p>
+  if (stats.containersAt === 0) return <p className="text-ui text-muted">Measuring sandboxes…</p>
+  if (stats.containers.length === 0) return <p className="text-ui text-muted">No sandboxes are running.</p>
   return (
     <>
       {stats.containersError && <p className="whitespace-pre-wrap break-words text-ui-sm text-state-failed">{stats.containersError}</p>}
-      <ul aria-label="Containers by usage" className="flex min-w-0 flex-col divide-y divide-seam">
+      <ul aria-label="Sandboxes by usage" className="flex min-w-0 flex-col divide-y divide-seam">
         {rows.map((c) => {
           const key = containerKey(c)
           const slot = result.slots.get(key)
@@ -189,9 +194,10 @@ function Rows({ stats, metric, rows, result, capacity }: { stats: SystemStats; m
           const limit = metricLimit(c, metric)
           const share = limitShare(c, metric)
           const level = limitLevel(share)
+          const inVM = metric === 'memory' && c.host_memory_bytes !== undefined
           const history = stats.history.get(key)?.[metric] ?? []
           const hostShare = capacity > 0 ? percentText((value / capacity) * 100) : ''
-          const sub = c.owner_kind === 'member' ? 'Environment container' : names.member(c.member_id)
+          const sub = c.owner_kind === 'member' ? 'Environment sandbox' : names.member(c.member_id)
           // The Environment page opens only the viewer's own environment.
           const open = c.owner_kind !== 'member' ? () => navigate('run', { runId: c.owner_id }) : c.owner_id === selfID ? () => navigate('environment') : undefined
           const rowClass = 'flex h-auto w-full min-w-0 items-center justify-start gap-3 whitespace-normal px-1.5 py-2 text-left font-normal text-text'
@@ -211,17 +217,20 @@ function Rows({ stats, metric, rows, result, capacity }: { stats: SystemStats; m
                     )}
                   </span>
                 </span>
-                <Sparkline points={history} max={limit > 0 ? limit : undefined} color={color} className="hidden h-6 w-16 shrink-0 sm:block" />
+                <Sparkline points={history} max={limit > 0 && !inVM ? limit : undefined} color={color} className="hidden h-6 w-16 shrink-0 sm:block" />
                 <span className="flex w-36 shrink-0 flex-col items-end gap-1 text-ui-sm">
                   <span className="text-text tabular-nums">
                     {metric === 'cpu' && c.cpu_cores === undefined
                       ? 'Measuring…'
                       : metric === 'cpu'
                         ? `${coresText(value)} cores · ${hostShare} of host`
-                        : limit > 0
+                        : limit > 0 && !inVM
                           ? `${formatBytes(value)} of ${formatBytes(limit)} limit`
                           : `${formatBytes(value)} · ${hostShare} of host`}
                   </span>
+                  {inVM && limit > 0 && (
+                    <span className={cn('tabular-nums', !level && 'text-muted')}>{formatBytes(c.memory_bytes)} of {formatBytes(limit)} limit</span>
+                  )}
                   {share !== undefined && (
                     <span aria-hidden className="block h-1 w-full overflow-hidden rounded-full bg-chrome">
                       <span
@@ -259,12 +268,12 @@ function EverythingElse({ rest, stats, metric }: { rest: number; stats: SystemSt
       </p>
       {stats.others && (
         <p className="flex justify-between gap-2">
-          <span>Other containers ({stats.others.containers})</span>
+          <span>Other sandboxes ({stats.others.containers})</span>
           <span className="tabular-nums">{amount(metric, others)}</span>
         </p>
       )}
       <p className="flex justify-between gap-2">
-        <span>Aether server, Docker and host processes</span>
+        <span>Cloudfield server, Docker and host processes</span>
         <span className="tabular-nums">{amount(metric, host)}</span>
       </p>
     </div>

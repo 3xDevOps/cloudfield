@@ -7,6 +7,8 @@
 # Checksums are computed with the real sha256 tool rather than stubbed, so
 # the download-verify path stays exactly the one users get.
 set -eu
+# The requests asserted below are the installer's defaults.
+unset CLOUDFIELD_REPO AETHER_REPO CLOUDFIELD_BASE_URL AETHER_BASE_URL
 
 script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 tmp=$(mktemp -d)
@@ -48,8 +50,8 @@ if [ "${GUI_INTERRUPTS:-0}" = 1 ] && [ "${1:-}" = gui ]; then
 	exit 130
 fi
 printf 'aether %s\n' "$*" >>"$CMD_LOG"
-echo "installed /home/tester/.local/share/aether/desktop"
-echo "open it from your application menu as Aether"
+echo "installed /home/tester/.local/share/cloudfield/desktop"
+echo "open it from your application menu as Cloudfield"
 EOF
 
 # Stands in for the real binary. A completed setup writes the systemd unit,
@@ -204,7 +206,7 @@ if [ -n "$offline" ]; then
 fi
 case "$url" in
 https://github.com/*/releases/latest)
-	printf '%s' "https://github.com/3xDevOps/Aether/releases/tag/$(cat "$FIXTURES/latest")"
+	printf '%s' "https://github.com/3xDevOps/cloudfield/releases/tag/$(cat "$FIXTURES/latest")"
 	exit 0
 	;;
 https://api.github.com/repos/*/releases*)
@@ -255,6 +257,17 @@ if [ -n "${STUB_MV_FAIL:-}" ] && [ "${last##*/}" = "$STUB_MV_FAIL" ]; then
 	exit 1
 fi
 exec /bin/mv "$@"
+EOF
+
+# STUB_LN_FAIL is a filesystem that refuses symlinks.
+cat >"$bin/ln" <<'EOF'
+#!/bin/sh
+if [ -n "${STUB_LN_FAIL:-}" ]; then
+	for last; do :; done
+	echo "ln: failed to create symbolic link '$last': Operation not permitted" >&2
+	exit 1
+fi
+exec /bin/ln "$@"
 EOF
 
 cat >"$bin/sleep" <<'EOF'
@@ -370,7 +383,8 @@ reset() {
 	: >"$reqs"
 	: >"$out"
 	: >"$err"
-	rm -f "$bindir/aether" "$bindir/aether-server" "$AETHER_UNIT_PATH"
+	rm -f "$bindir/aether" "$bindir/aether-server" "$bindir/cloudfield" "$bindir/cloudfield-server" \
+		"$AETHER_UNIT_PATH"
 	chmod 0755 "$sysbin"
 	rm -rf "${sysbin:?}"/* "$home/.local"
 	rm -f "$answers"
@@ -406,7 +420,7 @@ ends_with() { [ "$(tail -n 1 "$out")" = "$1" ] || fail "last line is not: $1"; }
 question="What is this machine?"
 
 # Every run prints the quickstart pointer.
-quickstart="https://github.com/3xDevOps/Aether/blob/main/docs/quickstart.md"
+quickstart="https://github.com/3xDevOps/cloudfield/blob/main/docs/quickstart.md"
 
 # --- --role server: aether-server setup runs -----------------------------
 
@@ -434,9 +448,9 @@ printed "This machine is your Aether server"
 printed "$quickstart"
 printed "  then, on your computer:"
 printed "  aether link <this-host>        # on a tailnet: the server's tailnet name"
-printed "  aether login                   # otherwise, sign in to the edge, Aether's relay"
+printed "  aether login                   # otherwise, sign in to the edge, Cloudfield's relay"
 ends_with "  aether link '<invite link>'    # or with an invite link from an admin"
-printed "  sudo aether-server setup       # config, systemd unit, and how to start it"
+printed "  sudo cloudfield-server setup   # config, systemd unit, and how to start it"
 plain
 
 # --- declining setup exits 0 but writes nothing: no activation line ------
@@ -444,7 +458,7 @@ plain
 reset "--role server, setup declined"
 SETUP_DECLINES=1 AETHER_TTY="$faketty" sh "$script" --role server >"$out" 2>&1 || fail "installer exited non-zero"
 ran "aether-server setup"
-printed "sudo aether-server setup"
+printed "sudo cloudfield-server setup"
 [ "$(activations)" = 0 ] || fail "offered to activate a service that was never written"
 printed "$quickstart"
 
@@ -480,7 +494,7 @@ $guard env AETHER_TTY="$tmp/no-such-tty" sh "$script" --role server >"$out" 2>&1
 [ "$status" != 0 ] || fail "installer exited 0 without setting up the server"
 not_ran "aether-server setup"
 [ -x "$bindir/aether-server" ] || fail "the server binary was not installed"
-printed "sudo aether-server install --edge-url https://edge.onaether.dev --edge-access <account|approved-devices>"
+printed "sudo cloudfield-server install --edge-url https://edge.cloudfield.ai --edge-access <account|approved-devices>"
 not_printed "This machine is your Aether server"
 
 # --- --role client: aether gui build runs --------------------------------
@@ -491,9 +505,9 @@ ran "aether gui build"
 not_ran "aether-server setup"
 printed "This machine is a client"
 printed "$quickstart"
-printed "  open Aether from your applications to link your server, or in a terminal:"
-printed "  aether link <server-host>      # on a tailnet: the server's tailnet name"
-ends_with "  aether link '<invite link>'    # or with an invite link from an admin"
+printed "  open Cloudfield from your applications to link your server, or in a terminal:"
+printed "  cloudfield link <server-host>  # on a tailnet: the server's tailnet name"
+ends_with "  cloudfield link '<invite link>' # or with an invite link from an admin"
 plain
 
 reset "--role client, gui build fails"
@@ -516,8 +530,72 @@ plain
 reset "--role none, unit already installed"
 touch "$AETHER_UNIT_PATH"
 sh "$script" --role none >"$out" 2>&1 || fail "installer exited non-zero"
-printed "sudo aether-server update --version v0.0.0-test"
+printed "sudo cloudfield-server update --version v0.0.0-test"
+not_printed "sudo cloudfield-server setup"
 not_printed "sudo aether-server setup"
+
+# --- the cloudfield names: relative links beside the real files ----------
+#
+# The same links the updater makes (internal/selfupdate.Link): a rerun, or
+# an install over the links a v0.8.7 updater made, leaves the same state.
+
+links_are() {
+	for pair in aether:cloudfield aether-server:cloudfield-server; do
+		[ -L "$bindir/${pair#*:}" ] || fail "$bindir/${pair#*:} is not a link"
+		[ "$(readlink "$bindir/${pair#*:}")" = "${pair%%:*}" ] ||
+			fail "$bindir/${pair#*:} links to $(readlink "$bindir/${pair#*:}"), want ${pair%%:*}"
+	done
+	grep -Fq "# release v0.0.0-test" "$bindir/cloudfield" || fail "cloudfield does not run the installed aether"
+}
+
+reset "a fresh install links the new names, and a rerun keeps them"
+sh "$script" --role none >"$out" 2>&1 || fail "installer exited non-zero"
+links_are
+not_printed "warning"
+sh "$script" --role none >"$out" 2>&1 || fail "rerunning the installer failed"
+links_are
+not_printed "warning"
+
+reset "an install over an old one without links adds them"
+printf 'old cli' >"$bindir/aether"
+printf 'old server' >"$bindir/aether-server"
+sh "$script" --role none >"$out" 2>&1 || fail "installer exited non-zero"
+links_are
+
+reset "an install over the links an updater made keeps them"
+printf 'old cli' >"$bindir/aether"
+printf 'old server' >"$bindir/aether-server"
+ln -s aether "$bindir/cloudfield"
+ln -s aether-server "$bindir/cloudfield-server"
+sh "$script" --role none >"$out" 2>&1 || fail "installer exited non-zero"
+links_are
+not_printed "warning"
+
+reset "an absolute link to the binary is kept as it is"
+ln -s "$bindir/aether" "$bindir/cloudfield"
+sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
+[ "$(readlink "$bindir/cloudfield")" = "$bindir/aether" ] || fail "the absolute link was replaced"
+printed "  cloudfield link <server-host>  # on a tailnet: the server's tailnet name"
+
+# Whatever else holds a new name was not made here: it is left as it is,
+# no warning, and the printed commands keep the old names.
+reset "a new name that holds something else is left alone"
+printf 'not ours' >"$bindir/cloudfield"
+ln -s elsewhere "$bindir/cloudfield-server"
+sh "$script" --role none >"$out" 2>&1 || fail "installer exited non-zero"
+[ "$(cat "$bindir/cloudfield")" = "not ours" ] || fail "the installer replaced $bindir/cloudfield"
+[ "$(readlink "$bindir/cloudfield-server")" = elsewhere ] || fail "the installer replaced $bindir/cloudfield-server"
+not_printed "warning"
+printed "  sudo aether-server setup       # on the server box"
+sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
+printed "  aether link <server-host>      # on a tailnet: the server's tailnet name"
+
+reset "a filesystem that refuses symlinks warns and installs"
+STUB_LN_FAIL=1 sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
+[ -x "$bindir/aether" ] || fail "the CLI was not installed"
+[ ! -e "$bindir/cloudfield" ] && [ ! -L "$bindir/cloudfield" ] || fail "a cloudfield appeared anyway"
+printed "aether install: warning: ln: failed to create symbolic link '$bindir/cloudfield': Operation not permitted; aether works as before"
+printed "  aether link <server-host>      # on a tailnet: the server's tailnet name"
 
 # --- AETHER_ROLE=client is the same as --role client ---------------------
 
@@ -525,6 +603,32 @@ reset "AETHER_ROLE=client"
 AETHER_ROLE=client sh "$script" >"$out" 2>&1 || fail "installer exited non-zero"
 ran "aether gui build"
 not_ran "aether-server setup"
+
+# --- CLOUDFIELD_X wins over AETHER_X; an empty one falls back -------------
+
+reset "CLOUDFIELD_ROLE=client"
+CLOUDFIELD_ROLE=client sh "$script" >"$out" 2>&1 || fail "installer exited non-zero"
+ran "aether gui build"
+not_ran "aether-server setup"
+
+reset "CLOUDFIELD_ROLE=client over AETHER_ROLE=server"
+CLOUDFIELD_ROLE=client AETHER_ROLE=server sh "$script" >"$out" 2>&1 || fail "installer exited non-zero"
+ran "aether gui build"
+not_ran "aether-server setup"
+
+reset "empty CLOUDFIELD_ROLE"
+CLOUDFIELD_ROLE= AETHER_ROLE=client sh "$script" >"$out" 2>&1 || fail "installer exited non-zero"
+ran "aether gui build"
+not_ran "aether-server setup"
+
+reset "CLOUDFIELD_VERSION, CLOUDFIELD_BIN_DIR and CLOUDFIELD_COMPONENTS"
+CLOUDFIELD_VERSION=v0.0.0-test AETHER_VERSION=v9.9.9-missing \
+	CLOUDFIELD_BIN_DIR="$bindir" AETHER_BIN_DIR="$tmp/not-here" \
+	CLOUDFIELD_COMPONENTS=client AETHER_COMPONENTS=server \
+	sh "$script" --role none >"$out" 2>&1 || fail "installer exited non-zero"
+[ -x "$bindir/aether" ] || fail "CLOUDFIELD_BIN_DIR or CLOUDFIELD_VERSION was not used"
+[ ! -e "$bindir/aether-server" ] || fail "CLOUDFIELD_COMPONENTS=client installed the server"
+[ ! -e "$tmp/not-here" ] || fail "AETHER_BIN_DIR won over CLOUDFIELD_BIN_DIR"
 
 # --- --client implies the client role ------------------------------------
 
@@ -681,7 +785,7 @@ PATH="$no_node_path" sh "$script" --role client >"$out" 2>&1 || fail "installer 
 ran "aether gui build"
 not_ran "aether-server setup"
 printed "This machine is a client"
-printed "aether link <server-host> "
+printed "cloudfield link <server-host> "
 not_printed "Node.js 22+"
 printed "$quickstart"
 
@@ -699,6 +803,9 @@ reset "client role installs the CLI alone into ~/.local/bin, without sudo"
 not_ran "sudo "
 printed "installed $home/.local/bin/aether"
 ran "aether gui build"
+# Linked, but not on PATH: the steps keep the name PATH already finds.
+[ "$(readlink "$home/.local/bin/cloudfield")" = aether ] || fail "~/.local/bin/cloudfield is not a link to aether"
+printed "  aether link <server-host>      # on a tailnet: the server's tailnet name"
 # An aether-server next to the CLI makes `aether update` treat this machine as
 # a server, so a client answer must not download or install one.
 [ ! -e "$home/.local/bin/aether-server" ] || fail "a client answer installed the server binary"
@@ -723,6 +830,8 @@ chmod 0555 "$sysbin"
 ran "sudo cp"
 ran "sudo mv -f $sysbin/.aether-server.install."
 printed "installed $sysbin/aether-server"
+ran "sudo ln -sn aether-server $sysbin/cloudfield-server"
+[ "$(readlink "$sysbin/cloudfield-server")" = aether-server ] || fail "$sysbin/cloudfield-server is not a link to aether-server"
 
 reset "--bin-dir wins over the client role"
 sh "$script" --role client --bin-dir "$bindir" >"$out" 2>&1 || fail "installer exited non-zero"
@@ -850,6 +959,16 @@ reset "stale /usr/local/bin/aether on a client"
 ) >"$out" 2>&1 || fail "installer exited non-zero"
 printed "an older $sysbin/aether would shadow $home/.local/bin/aether"
 printed "sudo rm -f $sysbin/aether"
+not_printed "$sysbin/cloudfield"
+
+reset "a stale /usr/local/bin/aether and its link"
+: >"$sysbin/aether"
+ln -s aether "$sysbin/cloudfield"
+(
+	unset AETHER_BIN_DIR
+	sh "$script" --role client
+) >"$out" 2>&1 || fail "installer exited non-zero"
+printed "sudo rm -f $sysbin/aether $sysbin/cloudfield"
 
 reset "stale /usr/local/bin/aether warns for an explicit --bin-dir too"
 : >"$sysbin/aether"
@@ -912,7 +1031,11 @@ printed "v0.7.0-alpha.12 is not fully published yet (no checksums.txt); installi
 installed_from v0.7.0-alpha.11 linux-amd64 aether
 installed_from v0.7.0-alpha.11 linux-amd64 aether-server
 printed "verified aether-release.json.sig for v0.7.0-alpha.11 against release key $test_pub"
-requested "https://api.github.com/repos/3xDevOps/Aether/releases?per_page=100"
+requested "https://api.github.com/repos/3xDevOps/cloudfield/releases?per_page=100"
+requested "https://github.com/3xDevOps/cloudfield/releases/latest"
+requested "https://github.com/3xDevOps/cloudfield/releases/download/v0.7.0-alpha.11/aether-linux-amd64"
+grep "/releases/" "$reqs" | grep -Ev '^https://(api\.)?github\.com/(repos/)?3xDevOps/cloudfield/releases' &&
+	fail "requested a release outside 3xDevOps/cloudfield: $(cat "$reqs")"
 grep "/releases/download/" "$reqs" | grep -v "/v0.7.0-alpha.12/checksums.txt$" | grep -vq "/v0.7.0-alpha.11/" &&
 	fail "downloaded from a second release"
 latest_install || fail "rerunning the installer failed"
@@ -1068,7 +1191,7 @@ mkdir -p "$fixtures/releases/v0.7.0-alpha.12"
 set_latest v0.7.0-alpha.12
 api v0.7.0-alpha.12:
 if latest_install; then fail "installed with no complete release"; fi
-printed "no complete release for linux/amd64 among the newest 100 releases of 3xDevOps/Aether; pass --version <tag>"
+printed "no complete release for linux/amd64 among the newest 100 releases of 3xDevOps/cloudfield; pass --version <tag>"
 untouched
 
 host "checksum mismatch on latest fails without falling back"
@@ -1284,7 +1407,7 @@ echo 403 >"$fixtures/api.status"
 printf 'x-ratelimit-limit: 60\r\nx-ratelimit-remaining: 0\r\nx-ratelimit-reset: 1792209652\r\n' >"$fixtures/api.headers"
 printf '{"message": "API rate limit exceeded for 192.0.2.1."}\n' >"$fixtures/api.json"
 if latest_install; then fail "installed through a rate limit"; fi
-printed "GitHub API rate limit exceeded (HTTP 403 from https://api.github.com/repos/3xDevOps/Aether/releases?per_page=100, x-ratelimit-remaining: 0, x-ratelimit-reset: 1792209652); pass --version <tag> to install a specific release"
+printed "GitHub API rate limit exceeded (HTTP 403 from https://api.github.com/repos/3xDevOps/cloudfield/releases?per_page=100, x-ratelimit-remaining: 0, x-ratelimit-reset: 1792209652); pass --version <tag> to install a specific release"
 untouched
 
 host "any other API error shows its status and message"
@@ -1295,7 +1418,7 @@ echo 403 >"$fixtures/api.status"
 printf 'x-ratelimit-remaining: 41\r\n' >"$fixtures/api.headers"
 printf '{\n  "message": "Repository access blocked"\n}\n' >"$fixtures/api.json"
 if latest_install; then fail "installed through an API error"; fi
-printed "GET https://api.github.com/repos/3xDevOps/Aether/releases?per_page=100: HTTP 403: Repository access blocked"
+printed "GET https://api.github.com/repos/3xDevOps/cloudfield/releases?per_page=100: HTTP 403: Repository access blocked"
 not_printed "rate limit"
 
 host "a compact API error body still shows its message"
@@ -1313,7 +1436,7 @@ make_release v0.7.0-alpha.12
 set_latest v0.7.0-alpha.12
 if STUB_OFFLINE=1 latest_install; then fail "installed while offline"; fi
 printed "curl: (6) Could not resolve host: github.com"
-printed "cannot reach https://github.com/3xDevOps/Aether/releases/latest"
+printed "cannot reach https://github.com/3xDevOps/cloudfield/releases/latest"
 not_printed "no published release"
 untouched
 
@@ -1322,7 +1445,7 @@ mkdir -p "$fixtures/releases/v0.7.0-alpha.12"
 set_latest v0.7.0-alpha.12
 if STUB_OFFLINE_API=1 latest_install; then fail "installed with the API down"; fi
 printed "curl: (6) Could not resolve host: api.github.com"
-printed "cannot reach https://api.github.com/repos/3xDevOps/Aether/releases?per_page=100"
+printed "cannot reach https://api.github.com/repos/3xDevOps/cloudfield/releases?per_page=100"
 untouched
 
 host "darwin/arm64 gets aether-darwin-arm64 and nothing else"
@@ -1332,6 +1455,7 @@ STUB_OS=Darwin STUB_ARCH=arm64 latest_install || fail "installer exited non-zero
 installed_from v0.7.0-alpha.12 darwin-arm64
 requested "/v0.7.0-alpha.12/aether-darwin-arm64"
 not_requested "linux-"
+[ "$(readlink "$bindir/cloudfield")" = aether ] || fail "macOS did not link cloudfield"
 [ "$(cat "$bindir/aether-server")" = "old server" ] || fail "macOS replaced aether-server"
 
 host "linux/amd64 gets both linux-amd64 binaries"
@@ -1351,7 +1475,7 @@ installed_from v0.7.0-alpha.12 linux-arm64 aether
 installed_from v0.7.0-alpha.12 linux-arm64 aether-server
 
 case_name="release keys"
-go_keys="$(grep -o '"[A-Za-z0-9+/]\{43\}="' "$script_dir/../internal/selfupdate/keys.go" | tr -d '"' | sort | tr '\n' ' ')"
+go_keys="$(sed -n '/^var releaseKeys/,/^)/p' "$script_dir/../internal/selfupdate/keys.go" | grep -o '"[A-Za-z0-9+/]\{43\}="' | tr -d '"' | sort | tr '\n' ' ')"
 sh_keys="$(sed -n 's/^RELEASE_KEYS="\(.*\)"$/\1/p' "$script_dir/install.sh" | tr ' ' '\n' | sort | tr '\n' ' ')"
 [ -n "$go_keys" ] && [ "$go_keys" = "$sh_keys" ] ||
 	fail "RELEASE_KEYS in install.sh ($sh_keys) differs from internal/selfupdate/keys.go ($go_keys)"

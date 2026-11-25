@@ -47,6 +47,7 @@ var connectorMethodScopes = map[string][]string{
 	protocol.MethodAccountUsage:      scopeRead,
 	protocol.MethodRunList:           scopeRead,
 	protocol.MethodRunGet:            scopeRead,
+	protocol.MethodRunCloseCheck:     scopeRead,
 	protocol.MethodRunACPHistory:     scopeRead,
 	protocol.MethodTerminalHistory:   scopeRead,
 	protocol.MethodRunGitLog:         scopeRead,
@@ -77,6 +78,7 @@ var connectorMethodScopes = map[string][]string{
 	protocol.MethodRunPause:          scopeWrite,
 	protocol.MethodRunWaitCancel:     scopeWrite,
 	protocol.MethodRunResume:         scopeWrite,
+	protocol.MethodRunWake:           scopeWrite,
 	protocol.MethodRunReview:         scopeWrite,
 	protocol.MethodRunProtect:        scopeWrite,
 	protocol.MethodRunArchive:        scopeWrite,
@@ -86,6 +88,7 @@ var connectorMethodScopes = map[string][]string{
 	protocol.MethodWatchCreate:       scopeWrite,
 	protocol.MethodWatchUpdate:       scopeWrite,
 	protocol.MethodWatchDelete:       scopeWrite,
+	protocol.MethodAssistantAsk:      scopeWrite,
 	protocol.MethodRunKill:           scopeControl,
 	protocol.MethodRunClose:          scopeControl,
 	protocol.MethodRunPRCreate:       scopeControl,
@@ -94,12 +97,9 @@ var connectorMethodScopes = map[string][]string{
 	protocol.MethodRunHandoff:        scopeControl,
 }
 
-// ConnectorMethodScopes are the scopes a connector needs one of to call
-// method, and false for a method no connector may call.
-func ConnectorMethodScopes(method string) ([]string, bool) {
-	scopes, ok := connectorMethodScopes[method]
-	return slices.Clone(scopes), ok
-}
+// ConnectorScopes are the scopes, any one of which lets a connector call
+// method; none for a method no connector may call.
+func ConnectorScopes(method string) []string { return slices.Clone(connectorMethodScopes[method]) }
 
 // connectorScopeRefusal refuses method to a connector call whose grant
 // lacks the method's scope, and every unlisted method to any connector.
@@ -113,7 +113,7 @@ func connectorScopeRefusal(ctx context.Context, method string) *protocol.Error {
 	scopes, listed := connectorMethodScopes[method]
 	if !listed {
 		return &protocol.Error{Code: protocol.CodeDenied, Message: fmt.Sprintf(
-			"%s: %s cannot call this method; no connector can, so use the Aether app or the aether CLI", method, label)}
+			"%s: %s cannot call this method; no connector can, so use the Cloudfield app or the aether CLI", method, label)}
 	}
 	return scopeRefusal(id, method, scopes)
 }

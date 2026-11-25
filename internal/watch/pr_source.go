@@ -42,6 +42,7 @@ type GitHub interface {
 	Credentials(ctx context.Context, member domain.MemberID) (string, github.Account, error)
 	PullRequestSnapshot(ctx context.Context, token, repo string, number int, prev *github.Snapshot) (github.Snapshot, error)
 	RequiredChecks(ctx context.Context, token string, prev, snap *github.Snapshot) error
+	MergeQueueRemoval(ctx context.Context, token, repo string, number int) (*github.QueueRemoval, error)
 }
 
 // PRStore is the persistence pull request watches use.
@@ -83,6 +84,8 @@ type prMember struct {
 	token    string
 	tokenAt  time.Time
 	limitErr *prError
+	// queueLimit is GraphQL's rate limit, a budget apart from REST's.
+	queueLimit *prError
 	// refused is when each pull request, by repo#number, began answering
 	// 403 or 404; one alone may be GitHub's own glitch, and every read
 	// within prReuse of it counts as that one.
@@ -135,7 +138,7 @@ const connectFix = "run aether github connect on your computer, or use Onboardin
 func credentialsError(err error) *prError {
 	var api *github.APIError
 	unanswered := errors.Is(err, github.ErrUnreachable) || errors.Is(err, context.DeadlineExceeded) || errors.As(err, &api) && api.Status >= 500
-	return &prError{msg: "no usable GitHub login in your Aether home (" + err.Error() + "); " + connectFix, transient: true, noLogin: !unanswered}
+	return &prError{msg: "no usable GitHub login in your Cloudfield home (" + err.Error() + "); " + connectFix, transient: true, noLogin: !unanswered}
 }
 
 func (p *PRs) member(id domain.MemberID) *prMember {
@@ -235,6 +238,8 @@ func (p *PRs) snapshot(ctx context.Context, member domain.MemberID, repo string,
 		}
 		m.limitErr = nil
 	}
+	// A read is as fresh as its start: GitHub can change while it runs.
+	readAt := p.now()
 	if snap, err = p.read(ctx, member, m, repo, number, prev, ci, recent, create); err != nil {
 		return github.Snapshot{}, false, err
 	}
@@ -247,7 +252,7 @@ func (p *PRs) snapshot(ctx context.Context, member domain.MemberID, repo string,
 		return github.Snapshot{}, false, err
 	}
 	if checkedAt.IsZero() {
-		checkedAt = p.now()
+		checkedAt = readAt
 	}
 	if err = p.store.SaveWatchPRSnapshot(ctx, &store.WatchPRSnapshot{MemberID: member, Repo: repo, Number: number, Snapshot: data, CheckedAt: checkedAt}); err != nil {
 		return github.Snapshot{}, false, err
@@ -255,6 +260,46 @@ func (p *PRs) snapshot(ctx context.Context, member domain.MemberID, repo string,
 	moved = prev == nil || prev.State != snap.State || prev.HeadSHA != snap.HeadSHA ||
 		prev.Checks().Key != snap.Checks().Key || len(prev.Reviews) != len(snap.Reviews)
 	return snap, moved, nil
+}
+
+// QueueRemoval is when a merge queue last removed repo#number without
+// merging it, read with member's credentials; nil while it is queued, was
+// never queued, or the queue merged it.
+func (p *PRs) QueueRemoval(ctx context.Context, member domain.MemberID, repo string, number int) (*github.QueueRemoval, error) {
+	m := p.member(member)
+	if err := p.lock(ctx, m); err != nil {
+		return nil, err
+	}
+	defer p.unlock(m)
+	if m.queueLimit != nil && p.now().Before(m.queueLimit.retryAt) {
+		return nil, m.queueLimit
+	}
+	cached := m.token != ""
+	token, err := p.token(ctx, member, m, false)
+	if err != nil {
+		return nil, err
+	}
+	removal, err := p.github.MergeQueueRemoval(ctx, token, repo, number)
+	if errors.Is(err, github.ErrUnauthorized) && cached {
+		if token, err = p.token(ctx, member, m, true); err != nil {
+			return nil, err
+		}
+		removal, err = p.github.MergeQueueRemoval(ctx, token, repo, number)
+	}
+	var limited *github.RateLimitError
+	switch {
+	case err == nil:
+		return removal, nil
+	case errors.As(err, &limited):
+		m.queueLimit = &prError{msg: "GitHub GraphQL rate limit, retrying at " + limited.RetryAt.UTC().Format(time.RFC3339), transient: true, retryAt: limited.RetryAt}
+		return nil, m.queueLimit
+	case errors.Is(err, github.ErrUnauthorized):
+		m.token = ""
+		return nil, credentialsError(err)
+	case ctx.Err() != nil:
+		return nil, err
+	}
+	return nil, &prError{msg: fmt.Sprintf("read the merge queue of pull request %s#%d: %v", repo, number, err), transient: true}
 }
 
 // read reads repo#number conditionally against prev, and the required
@@ -460,8 +505,12 @@ func (p *PRs) refreshRun(ctx context.Context, t prTarget, snap github.Snapshot) 
 	if p.bus == nil {
 		return nil
 	}
+	var repo domain.WorkspaceID
+	if t.prior != nil {
+		repo = t.prior.RepoWorkspace
+	}
 	if _, err := p.bus.Publish(ctx, events.Event{WorkspaceID: run.WorkspaceID, RunID: run.ID, Payload: events.RunPRPayload{
-		RunID: run.ID, Number: t.number, URL: snap.URL, State: snap.State, MergedAt: snap.MergedAt,
+		RunID: run.ID, Repo: repo, Number: t.number, URL: snap.URL, State: snap.State, MergedAt: snap.MergedAt,
 	}}); err != nil {
 		slog.Warn("watch: publish run pull request", "run", t.run, "error", err)
 	}

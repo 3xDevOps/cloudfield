@@ -57,7 +57,7 @@ describe('insights page', () => {
     expect(completed.textContent).toBe('Sessions completed7 sessions1 session failed, 1 session abandoned')
     expect(completed.textContent).not.toContain('launched')
     const rate = within(mine).getByRole('article', { name: 'Success rate' })
-    expect(rate.textContent).toBe('Success rate33%3 of 9 sessions merged a pull request')
+    expect(rate.textContent).toBe('Success rate33%3 of 9 sessions merged a pull request or were marked complete')
     const used = within(mine).getByRole('article', { name: 'Total tokens used' })
     expect(within(used).getByText('129K tokens')).toBeDefined()
     expect(within(used).getByText('Claude Code used 77% of the 129K tokens')).toBeDefined()
@@ -251,7 +251,7 @@ describe('insights page', () => {
     const time = await screen.findByRole('region', { name: 'Time' })
     expect(within(time).getByText('21m')).toBeDefined()
     expect(within(time).getByText('1h 8m')).toBeDefined()
-    expect(within(time).getByText(/measured for 6 of 9 sessions; Aether records this from Oct 12, 2026 on\./)).toBeDefined()
+    expect(within(time).getByText(/measured for 6 of 9 sessions; Cloudfield records this from Oct 12, 2026 on\./)).toBeDefined()
   })
 
   it('shows the server error and retries', async () => {

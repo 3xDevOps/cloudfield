@@ -359,3 +359,19 @@ func (f familyOf) ReportRecipient(context.Context, domain.RunID) (domain.RunID, 
 func (f familyOf) ValidateReport(context.Context, domain.RunID, store.CoordOutcome) error { return nil }
 
 func (f familyOf) NeedsInput(context.Context, domain.RunID, string) {}
+
+func TestStatusListsATasklessPeerByItsTitle(t *testing.T) {
+	h := newHarness(t, 2)
+	ctx := context.Background()
+	h.runs[1].Task = ""
+	if err := h.db.UpdateRun(ctx, h.runs[1]); err != nil {
+		t.Fatalf("clear task: %v", err)
+	}
+	if err := h.db.SetRunTitle(ctx, h.run(1), "Fix the login page"); err != nil {
+		t.Fatalf("set title: %v", err)
+	}
+	st, err := h.svc.Status(ctx, h.run(0))
+	if err != nil || len(st.Peers) != 1 || st.Peers[0].Task != "Fix the login page" {
+		t.Fatalf("peers = %+v, %v; want the taskless session listed by its title", st.Peers, err)
+	}
+}

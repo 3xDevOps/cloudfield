@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"maps"
 	"os"
 	"path/filepath"
@@ -19,7 +20,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/3xDevOps/Aether/internal/acpkeeper"
 	"github.com/3xDevOps/Aether/internal/control"
+	"github.com/3xDevOps/Aether/internal/devexec"
 	"github.com/3xDevOps/Aether/internal/domain"
 	"github.com/3xDevOps/Aether/internal/protocol"
 	"github.com/3xDevOps/Aether/internal/ptyhost"
@@ -30,6 +33,7 @@ import (
 // accidentally expose ordinary, unmanaged ExecTTY as a development terminal.
 type DevelopmentPTYHost interface {
 	StartDevelopmentSession(context.Context, ptyhost.SessionKey, runtime.Attachment, uint, uint) error
+	ResumeDevelopmentSession(context.Context, ptyhost.SessionKey, runtime.Attachment, uint, uint, ptyhost.TerminalPosition, ptyhost.TerminalSequence, ptyhost.TerminalSequence) error
 	ObserveSession(ptyhost.SessionKey) (ptyhost.ScreenObservation, error)
 	SessionGeometry(ptyhost.SessionKey) (uint, uint, uint64, error)
 	ReadSessionOutput(ptyhost.SessionKey, ptyhost.OutputRequest) (ptyhost.OutputObservation, error)
@@ -47,6 +51,9 @@ type runTerminalSet struct {
 	ContainerID runtime.ID              `json:"container_id"`
 	Closed      bool                    `json:"closed"`
 	Terminals   map[string]*runTerminal `json:"terminals"`
+	// deferred is set while the recovery of terminals waits for the paused
+	// container, which takes no exec, to resume.
+	deferred bool
 }
 
 type runTerminal struct {
@@ -63,8 +70,24 @@ type runTerminal struct {
 	Stopped        bool                 `json:"stopped"`
 	ContainerEnded bool                 `json:"container_ended,omitempty"`
 	Unavailable    string               `json:"unavailable,omitempty"`
-	Generation     uint64               `json:"-"`
-	Exec           runtime.ManagedExec  `json:"-"`
+	// Keeper is set for a terminal whose command runs under a keeper, which
+	// Identity names the exec of.
+	Keeper *terminalKeeper `json:"keeper,omitempty"`
+	// Gone records that the runtime no longer knows the exec: nothing is
+	// left to stop, and its exit status is lost.
+	Gone bool `json:"gone,omitempty"`
+	// Lost records a terminal whose exec helper could not be reached and
+	// left no exit record when its session was closed. Whatever it left
+	// running is frozen or stopped with the container, so it still counts
+	// against the shell limit.
+	Lost bool `json:"lost,omitempty"`
+	// Control is the terminal's control lease, recorded for a kept terminal
+	// so a lease survives a server restart.
+	Control    *control.SurfaceLease `json:"control,omitempty"`
+	Generation uint64                `json:"-"`
+	Exec       runtime.ManagedExec   `json:"-"`
+	Client     *acpkeeper.TermClient `json:"-"`
+	Bridge     runtime.ManagedExec   `json:"-"`
 }
 
 func (s *Scheduler) DevelopmentTerminalsAvailable() error {
@@ -119,8 +142,18 @@ func (s *Scheduler) persistRunTerminalsLocked(run domain.RunID, set *runTerminal
 func (s *Scheduler) loadRunTerminalsLocked(ctx context.Context, run domain.RunID) (*runTerminalSet, error) {
 	s.mu.Lock()
 	set := s.runShellTerminals[run]
+	entry := s.runs[run]
+	paused := entry != nil && entry.paused
 	s.mu.Unlock()
 	if set != nil {
+		if set.deferred && !paused {
+			set.deferred = false
+			for _, terminal := range set.Terminals {
+				if terminal.Exec == nil && !terminal.ContainerEnded && !terminal.Gone && !terminal.Lost {
+					s.recoverRunTerminalLocked(ctx, run, set, terminal)
+				}
+			}
+		}
 		return set, nil
 	}
 	set = &runTerminalSet{Version: 1, RunID: run, Terminals: make(map[string]*runTerminal)}
@@ -145,25 +178,13 @@ func (s *Scheduler) loadRunTerminalsLocked(ctx context.Context, run domain.RunID
 				terminal.Identity.ContainerID == "" || terminal.Identity.ExecID == "" || terminal.Identity.CreationKey == "" || terminal.Identity.ClaimToken == "" {
 				return nil, fmt.Errorf("invalid persisted terminal identity")
 			}
-			if terminal.ContainerEnded {
-				continue
-			}
-			managed, ok := s.cfg.Runtime.(runtime.ManagedExecRuntime)
-			if !ok {
-				terminal.Unavailable = "runtime does not support execution recovery"
-				continue
-			}
-			terminal.Exec, err = managed.RecoverExec(ctx, terminal.Identity)
-			if err != nil {
-				terminal.Unavailable = err.Error()
-				continue
-			}
-			state, statusErr := terminal.Exec.Status(ctx)
-			if statusErr != nil {
-				terminal.Unavailable = statusErr.Error()
-			} else {
-				terminal.State = state
-				terminal.Unavailable = "PTY unavailable after recovery; execution was not reattached or restarted"
+			switch {
+			case terminal.ContainerEnded || terminal.Gone || terminal.Lost:
+			case paused:
+				set.deferred = true
+				terminal.Unavailable = "the session is paused; the terminal reconnects when it resumes"
+			default:
+				s.recoverRunTerminalLocked(ctx, run, set, terminal)
 			}
 		}
 	} else if !os.IsNotExist(err) {
@@ -176,6 +197,48 @@ func (s *Scheduler) loadRunTerminalsLocked(ctx context.Context, run domain.RunID
 	s.runShellTerminals[run] = set
 	s.mu.Unlock()
 	return set, nil
+}
+
+// recoverRunTerminalLocked takes over terminal's exec, and its keeper if it
+// has one, from an earlier server process.
+func (s *Scheduler) recoverRunTerminalLocked(ctx context.Context, run domain.RunID, set *runTerminalSet, terminal *runTerminal) {
+	managed, ok := s.cfg.Runtime.(runtime.ManagedExecRuntime)
+	if !ok {
+		terminal.Unavailable = "runtime does not support execution recovery"
+		return
+	}
+	execution, err := managed.RecoverExec(ctx, terminal.Identity)
+	if err != nil {
+		terminal.Unavailable = err.Error()
+		if errors.Is(err, runtime.ErrNotFound) {
+			terminalGone(terminal, err)
+		}
+		return
+	}
+	terminal.Exec = execution
+	state, statusErr := terminal.Exec.Status(ctx)
+	if statusErr != nil {
+		terminal.Unavailable = statusErr.Error()
+		return
+	}
+	terminal.State = state
+	terminal.Unavailable = "PTY unavailable after recovery; execution was not reattached or restarted"
+	if terminal.Keeper != nil && state.Running {
+		if attachErr := s.attachTerminalLocked(ctx, run, set, terminal); attachErr != nil {
+			slog.Warn("scheduler: reattach to a terminal's keeper", "run", run, "terminal", terminal.ID, "error", attachErr)
+			terminal.Unavailable = "reattach to the terminal's keeper: " + attachErr.Error()
+		}
+	}
+	s.restoreTerminalLease(run, set, terminal)
+}
+
+// terminalGone records that the runtime proved terminal's exec gone, with
+// cause.
+func terminalGone(terminal *runTerminal, cause error) {
+	terminal.Gone = true
+	terminal.Generation = 0
+	terminal.State = runtime.ExecState{Exited: true}
+	terminal.Unavailable = "the terminal's execution is gone; its exit status is unavailable: " + cause.Error()
 }
 
 func (s *Scheduler) prepareRunTerminalsLocked(set *runTerminalSet, container runtime.ID) error {
@@ -196,6 +259,9 @@ func (s *Scheduler) prepareRunTerminalsLocked(set *runTerminalSet, container run
 }
 
 func (s *Scheduler) refreshRunTerminalLocked(ctx context.Context, run domain.RunID, set *runTerminalSet, terminal *runTerminal) error {
+	if terminal.Lost {
+		return nil
+	}
 	changed, attached := false, false
 	if terminal.Generation != 0 {
 		if host, ok := s.cfg.PTY.(DevelopmentPTYHost); ok {
@@ -208,8 +274,33 @@ func (s *Scheduler) refreshRunTerminalLocked(ctx context.Context, run domain.Run
 			}
 		}
 	}
-	if terminal.Exec != nil && !terminal.ContainerEnded {
+	if terminal.Client != nil && attached && terminal.State.Running {
+		select {
+		case <-terminal.Client.Done():
+			// Only a lost bridge: a preempting server holds the keeper now.
+			if errors.Is(terminal.Client.Err(), acpkeeper.ErrLost) {
+				_ = releaseTerminal(terminal)
+			}
+		default:
+		}
+	}
+	// Each refresh tries again until a running keeper takes the bridge.
+	if terminal.Keeper != nil && terminal.Client == nil && terminal.State.Running && !terminal.Gone && !terminal.ContainerEnded {
+		if err := s.attachTerminalLocked(ctx, run, set, terminal); err != nil {
+			slog.Warn("scheduler: reattach to a terminal's keeper", "run", run, "terminal", terminal.ID, "error", err)
+			terminal.Generation, attached = 0, false
+			terminal.Unavailable = "reattach to the terminal's keeper: " + err.Error()
+		} else {
+			attached = true
+			s.restoreTerminalLease(run, set, terminal)
+		}
+	}
+	if terminal.Exec != nil && !terminal.ContainerEnded && !terminal.Gone {
 		state, err := terminal.Exec.Status(ctx)
+		if errors.Is(err, runtime.ErrNotFound) {
+			terminalGone(terminal, err)
+			return s.persistRunTerminalsLocked(run, set)
+		}
 		if err != nil {
 			terminal.Unavailable = err.Error()
 		} else {
@@ -218,7 +309,9 @@ func (s *Scheduler) refreshRunTerminalLocked(ctx context.Context, run domain.Run
 			terminal.State = state
 			if attached {
 				terminal.Unavailable = ""
-				if state.Running && !state.Attached {
+				// A keeper's exec has no stdio of the server's; its client is
+				// the terminal's attachment.
+				if state.Running && !state.Attached && terminal.Keeper == nil {
 					terminal.Unavailable = state.UnavailableReason
 				}
 			}
@@ -239,7 +332,7 @@ func terminalDescription(terminal *runTerminal) protocol.DevTerminal {
 		if terminal.Stopped {
 			process.State = "stopped"
 		}
-	case terminal.ContainerEnded:
+	case terminal.ContainerEnded || terminal.Gone:
 		process.State = "exited"
 	case terminal.Unavailable == "" && terminal.State.Running:
 		process.State = "running"
@@ -253,7 +346,7 @@ func terminalDescription(terminal *runTerminal) protocol.DevTerminal {
 }
 
 func terminalEnded(terminal *runTerminal) bool {
-	return terminal.State.Exited && (terminal.State.ExitCode != nil || terminal.ContainerEnded)
+	return terminal.State.Exited && (terminal.State.ExitCode != nil || terminal.ContainerEnded || terminal.Gone)
 }
 
 // admitRunTerminalLocked holds one starter to maxRunShells running terminals
@@ -359,18 +452,30 @@ func (s *Scheduler) startRunTerminalLocked(ctx context.Context, run domain.RunID
 	}
 	incarnation := hex.EncodeToString(token[:])
 	managed := s.cfg.Runtime.(runtime.ManagedExecRuntime)
-	execution, err := managed.StartExecTTY(ctx, live.ContainerID, runtime.ExecSpec{Argv: argv, WorkingDir: live.Workdir,
-		Cols: params.Cols, Rows: params.Rows, CreationKey: "terminal-" + incarnation})
+	spec := runtime.ExecSpec{Argv: argv, WorkingDir: live.Workdir, Cols: params.Cols, Rows: params.Rows, CreationKey: "terminal-" + incarnation}
+	start := func(spec runtime.ExecSpec) (runtime.ManagedExec, *terminalKeeper, error) {
+		execution, keeper, err := s.startKeptTerminal(ctx, managed, live, spec)
+		if errors.Is(err, errNoTerminalKeeper) {
+			// A container staged before terminal keepers existed: the
+			// command runs on the server's own attachment, which a server
+			// restart loses.
+			slog.Warn("scheduler: run a development terminal without a keeper", "run", run, "error", err)
+			spec.CreationKey += "-tty"
+			execution, err = managed.StartExecTTY(ctx, live.ContainerID, spec)
+		}
+		return execution, keeper, err
+	}
+	execution, keeper, err := start(spec)
 	var exitErr *runtime.ExecExitError
 	if len(params.Command) == 0 && errors.As(err, &exitErr) && (exitErr.Code == 126 || exitErr.Code == 127) {
-		execution, err = managed.StartExecTTY(ctx, live.ContainerID, runtime.ExecSpec{Argv: []string{"/bin/sh", "-l"}, WorkingDir: live.Workdir,
-			Cols: params.Cols, Rows: params.Rows, CreationKey: "terminal-" + incarnation + "-sh"})
+		spec.Argv, spec.CreationKey = []string{"/bin/sh", "-l"}, spec.CreationKey+"-sh"
+		execution, keeper, err = start(spec)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("start owned terminal: %w", err)
 	}
 	terminal := &runTerminal{ID: params.Name, Incarnation: incarnation, StartedByAgent: byAgent, StartedAt: s.cfg.Now().UTC(),
-		Identity: execution.Identity(), Exec: execution,
+		Identity: execution.Identity(), Exec: execution, Keeper: keeper,
 		Cols: params.Cols, Rows: params.Rows, State: runtime.ExecState{Running: true, Attached: true}}
 	if terminal.Identity.ContainerID == "" || terminal.Identity.ExecID == "" || terminal.Identity.CreationKey == "" || terminal.Identity.ClaimToken == "" {
 		return nil, errors.Join(fmt.Errorf("runtime returned incomplete terminal ownership"), cleanupUnpublishedTerminal(execution))
@@ -392,17 +497,18 @@ func (s *Scheduler) startRunTerminalLocked(ctx context.Context, run domain.RunID
 	s.runShellReservationMu.Unlock()
 	for _, ended := range superseded {
 		_ = s.cfg.PTY.StopSession(ctx, ptyhost.RunShellSession(run, ended.ID))
-		if ended.Exec != nil {
-			_ = ended.Exec.Detach()
-		}
+		_ = releaseTerminal(ended)
 	}
 	host := s.cfg.PTY.(DevelopmentPTYHost)
-	if execution.Attachment() == nil {
+	switch {
+	case keeper != nil:
+		err = s.attachTerminalLocked(ctx, run, set, terminal)
+	case execution.Attachment() == nil:
 		err = runtime.ErrExecUnavailable
-	} else {
+	default:
 		err = host.StartDevelopmentSession(ctx, key, execution.Attachment(), params.Cols, params.Rows)
 	}
-	if err == nil {
+	if err == nil && keeper == nil {
 		terminal.Generation = s.cfg.PTY.SessionGeneration(key)
 		if terminal.Generation == 0 {
 			err = ptyhost.ErrSessionReplaced
@@ -410,6 +516,7 @@ func (s *Scheduler) startRunTerminalLocked(ctx context.Context, run domain.RunID
 	}
 	if err != nil {
 		terminal.Unavailable = err.Error()
+		_ = releaseTerminal(terminal)
 		cleanupErr := cleanupUnpublishedTerminal(execution)
 		_ = s.refreshRunTerminalLocked(context.WithoutCancel(ctx), run, set, terminal)
 		return nil, errors.Join(err, cleanupErr, s.persistRunTerminalsLocked(run, set))
@@ -429,7 +536,11 @@ func (s *Scheduler) stopRunTerminalsLocked(ctx context.Context, run domain.RunID
 	stopping := false
 	var wg sync.WaitGroup
 	for i, terminal := range terminals {
-		if terminal.ContainerEnded || (terminal.State.Exited && terminal.State.ExitCode != nil) {
+		if terminal.Exec == nil && !terminalEnded(terminal) && !terminal.Lost {
+			s.recoverTerminalExecLocked(ctx, terminal)
+			stopping = stopping || terminal.Gone
+		}
+		if terminalEnded(terminal) {
 			continue
 		}
 		if terminal.Exec == nil {
@@ -441,6 +552,10 @@ func (s *Scheduler) stopRunTerminalsLocked(ctx context.Context, run domain.RunID
 		// persisted after all of them return.
 		wg.Go(func() {
 			exit, err := terminal.Exec.Stop(ctx, grace)
+			if errors.Is(err, runtime.ErrNotFound) {
+				terminalGone(terminal, err)
+				return
+			}
 			if err != nil {
 				terminal.Unavailable, errs[i] = err.Error(), err
 				return
@@ -459,12 +574,84 @@ func (s *Scheduler) stopRunTerminalsLocked(ctx context.Context, run domain.RunID
 	return errors.Join(errs...)
 }
 
+// recoverTerminalExecLocked retries recovering the exec of a terminal the
+// scheduler could not recover when it loaded the run's terminals.
+func (s *Scheduler) recoverTerminalExecLocked(ctx context.Context, terminal *runTerminal) {
+	managed, ok := s.cfg.Runtime.(runtime.ManagedExecRuntime)
+	if !ok {
+		return
+	}
+	execution, err := managed.RecoverExec(ctx, terminal.Identity)
+	switch {
+	case errors.Is(err, runtime.ErrNotFound):
+		terminalGone(terminal, err)
+	case err != nil:
+		terminal.Unavailable = err.Error()
+	default:
+		terminal.Exec = execution
+	}
+}
+
 func (s *Scheduler) RecoverDevelopmentTerminals(ctx context.Context, run domain.RunID) error {
 	lock := s.lockForShell(run)
 	lock.Lock()
 	defer lock.Unlock()
 	_, err := s.loadRunTerminalsLocked(ctx, run)
 	return err
+}
+
+// settleLostDevelopmentTerminals runs only when a close failed to stop
+// terminals and the container is frozen or stopped next. A terminal whose
+// exec helper cannot be reached and left no exit record is recorded as lost
+// instead of blocking the close; any other failure still blocks it. It
+// reports whether every terminal is now ended or lost.
+func (s *Scheduler) settleLostDevelopmentTerminals(ctx context.Context, run domain.RunID) (bool, error) {
+	lock := s.lockForShell(run)
+	lock.Lock()
+	defer lock.Unlock()
+	set, err := s.loadRunTerminalsLocked(ctx, run)
+	if err != nil {
+		return false, err
+	}
+	settled := true
+	var lost []*runTerminal
+	for _, terminal := range set.Terminals {
+		if terminalEnded(terminal) || terminal.Lost {
+			continue
+		}
+		var probeErr error
+		if terminal.Exec != nil {
+			_, probeErr = terminal.Exec.Status(ctx)
+		} else if managed, ok := s.cfg.Runtime.(runtime.ManagedExecRuntime); ok {
+			_, probeErr = managed.RecoverExec(ctx, terminal.Identity)
+		}
+		if !errors.Is(probeErr, devexec.ErrNoSupervisor) {
+			settled = false
+			continue
+		}
+		terminal.Lost = true
+		terminal.Unavailable = "the terminal's exec helper cannot be reached and left no exit record, so its exit status is unknown; " +
+			"processes it left are frozen or stopped with the session's container and run again if the session is reopened: " + probeErr.Error()
+		lost = append(lost, terminal)
+	}
+	// The stop error is dropped only once every lost record is durable;
+	// otherwise they are probed again on the next attempt.
+	var saveErr error
+	if settled {
+		saveErr = s.persistRunTerminalsLocked(run, set)
+	}
+	for _, terminal := range lost {
+		if !settled || saveErr != nil {
+			terminal.Lost = false
+			continue
+		}
+		if terminal.Exec != nil {
+			_ = terminal.Exec.Detach()
+			terminal.Exec = nil
+		}
+		terminal.Generation, terminal.State = 0, runtime.ExecState{}
+	}
+	return settled && saveErr == nil, saveErr
 }
 
 func (s *Scheduler) StopDevelopmentTerminals(ctx context.Context, run domain.RunID) error {
@@ -495,7 +682,7 @@ func (s *Scheduler) MarkDevelopmentContainerEnded(ctx context.Context, run domai
 		terminal.ContainerEnded = true
 		if !terminal.State.Exited || terminal.State.ExitCode == nil {
 			terminal.State = runtime.ExecState{Exited: true}
-			terminal.Unavailable = "session container exited; command exit status unavailable"
+			terminal.Unavailable = "session sandbox exited; command exit status unavailable"
 		}
 	}
 	return s.persistRunTerminalsLocked(run, set)
@@ -515,7 +702,7 @@ func (s *Scheduler) ReopenDevelopmentTerminals(ctx context.Context, run domain.R
 		if err := s.refreshRunTerminalLocked(ctx, run, set, terminal); err != nil {
 			return err
 		}
-		if !terminal.State.Exited || (terminal.State.ExitCode == nil && !terminal.ContainerEnded) {
+		if !terminalEnded(terminal) && !terminal.Lost {
 			return fmt.Errorf("%w: prior terminal has not proved exit", runtime.ErrExecUnavailable)
 		}
 	}
@@ -523,32 +710,70 @@ func (s *Scheduler) ReopenDevelopmentTerminals(ctx context.Context, run domain.R
 	return s.persistRunTerminalsLocked(run, set)
 }
 
-func (s *Scheduler) DetachDevelopmentTerminals(ctx context.Context) error {
+// DetachDevelopmentTerminals lets go of every terminal at a shutdown, all at
+// once, and takes up none a wake left for later: a guest that does not
+// answer holds the shutdown up for one bound, not one per terminal.
+func (s *Scheduler) DetachDevelopmentTerminals() error {
 	s.mu.Lock()
-	runs := make([]domain.RunID, 0, len(s.runShellTerminals))
-	for run := range s.runShellTerminals {
-		runs = append(runs, run)
-	}
+	runs := slices.Collect(maps.Keys(s.runShellTerminals))
 	s.mu.Unlock()
-	var errs []error
-	for _, run := range runs {
-		lock := s.lockForShell(run)
-		lock.Lock()
-		set, err := s.loadRunTerminalsLocked(ctx, run)
-		if err == nil {
-			for _, terminal := range set.Terminals {
-				if terminal.Exec != nil {
-					errs = append(errs, terminal.Exec.Detach())
-				}
-				terminal.Generation = 0
-				terminal.Unavailable = "PTY detached on server shutdown; command was not stopped"
-			}
-			err = s.persistRunTerminalsLocked(run, set)
-		}
+	var (
+		wg   sync.WaitGroup
+		mu   sync.Mutex
+		errs []error
+	)
+	fail := func(err error) {
+		mu.Lock()
+		defer mu.Unlock()
 		errs = append(errs, err)
-		lock.Unlock()
 	}
+	for _, run := range runs {
+		wg.Go(func() {
+			lock := s.lockForShell(run)
+			lock.Lock()
+			defer lock.Unlock()
+			s.mu.Lock()
+			set := s.runShellTerminals[run]
+			s.mu.Unlock()
+			var released sync.WaitGroup
+			for _, terminal := range set.Terminals {
+				released.Go(func() {
+					fail(releaseTerminal(terminal))
+					terminal.Generation = 0
+					terminal.Unavailable = "PTY detached on server shutdown; command was not stopped"
+				})
+			}
+			released.Wait()
+			fail(s.persistRunTerminalsLocked(run, set))
+		})
+	}
+	wg.Wait()
 	return errors.Join(errs...)
+}
+
+// detachDevelopmentTerminals lets go of run's terminals before its VM is
+// saved, leaving them running. The first load after the wake takes each one
+// up again, as after a server restart.
+func (s *Scheduler) detachDevelopmentTerminals(ctx context.Context, run domain.RunID) error {
+	lock := s.lockForShell(run)
+	lock.Lock()
+	defer lock.Unlock()
+	set, err := s.loadRunTerminalsLocked(ctx, run)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, terminal := range set.Terminals {
+		if terminal.Exec == nil || terminal.ContainerEnded || terminal.Gone || terminal.Lost {
+			continue
+		}
+		errs = append(errs, releaseTerminal(terminal))
+		terminal.Exec = nil
+		terminal.Generation = 0
+		terminal.Unavailable = "the session is asleep; the terminal reconnects when it wakes"
+		set.deferred = true
+	}
+	return errors.Join(append(errs, s.persistRunTerminalsLocked(run, set))...)
 }
 
 func (s *Scheduler) DeleteDevelopmentTerminals(ctx context.Context, run domain.RunID) error {
@@ -564,9 +789,7 @@ func (s *Scheduler) DeleteDevelopmentTerminals(ctx context.Context, run domain.R
 	}
 	for _, terminal := range set.Terminals {
 		_ = s.cfg.PTY.StopSession(ctx, ptyhost.RunShellSession(run, terminal.ID))
-		if terminal.Exec != nil {
-			_ = terminal.Exec.Detach()
-		}
+		_ = releaseTerminal(terminal)
 	}
 	if err := os.Remove(s.runTerminalsPath(run)); err != nil && !os.IsNotExist(err) {
 		return err

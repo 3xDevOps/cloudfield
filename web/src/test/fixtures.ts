@@ -53,7 +53,7 @@ export const alice: Member = {
   id: 'mem_alice',
   display_name: 'Alice',
   color: '#e6194b',
-  role: 'admin',
+  role: 'super_admin',
 }
 
 export const bob: Member = {
@@ -108,6 +108,7 @@ export const serverInfo: ServerInfo = {
   protocol_version: '1',
   time: '2026-08-14T10:05:00Z',
   member: alice,
+  features: ['workspace-access'],
   disk: {
     used_bytes: 512 * 1024 * 1024,
     total_bytes: 2 * 1024 * 1024 * 1024,
@@ -146,7 +147,7 @@ export const template: Template = {
   created_at: '2026-08-14T09:00:00Z',
 }
 
-export function schedule(over: Partial<Schedule> = {}): Schedule {
+function schedule(over: Partial<Schedule> = {}): Schedule {
   return {
     id: 'sch_1',
     workspace_id: workspace.id,
@@ -199,7 +200,7 @@ export function updateStatus(over: Partial<UpdateStatus> = {}): UpdateStatus {
       latest: 'v1.3.0',
       update_available: true,
       asset: 'aether-linux-amd64',
-      release_url: 'https://github.com/3xDevOps/Aether/releases/tag/v1.3.0',
+      release_url: 'https://github.com/3xDevOps/cloudfield/releases/tag/v1.3.0',
       dev: false,
       disabled: false,
       can_self_update: true,
@@ -410,7 +411,7 @@ export function fakeApi(over: Partial<Api> = {}): Api {
     serverInfo: vi.fn(async () => serverInfo),
     serverEdge: vi.fn(async () => needsOverride('serverEdge')),
     serverEdgeClaimCode: vi.fn(async () => needsOverride('serverEdgeClaimCode')),
-    workspaceGet: vi.fn(async () => workspace),
+    dictationTranscribe: vi.fn<Api['dictationTranscribe']>(async () => needsOverride('dictationTranscribe')),
     memberList: vi.fn(async () => ({ members: [alice, bob] })),
     accountUsage: vi.fn(async (): Promise<UsageResult> => ({
       account_member_id: alice.id,
@@ -442,6 +443,7 @@ export function fakeApi(over: Partial<Api> = {}): Api {
       usage: { runs: 1, metered_runs: 0, unmetered_runs: 1, input_tokens: 0, output_tokens: 0, cost_usd: 0, by_account: [] },
     })),
     runChildrenAllow: vi.fn<Api['runChildrenAllow']>(async (_, children) => ({ children })),
+    runCloseCheck: vi.fn(async (ids: string[]) => ids.map((run_id) => ({ run_id, warnings: [] }))),
     runWaitCancel: vi.fn(async () => needsOverride('runWaitCancel')),
     workspaceChildLimits: vi.fn<Api['workspaceChildLimits']>(async (_, limits) => ({ max_live: 8, ...limits })),
     runRelease: vi.fn(async () => ({})),
@@ -499,8 +501,6 @@ export function fakeApi(over: Partial<Api> = {}): Api {
       terminals.set(run_id, inventory)
       return { terminal: { ...terminal, process: { ...terminal.process } } }
     }),
-    devTerminalOutput: vi.fn<Api['devTerminalOutput']>(async () => needsOverride('devTerminalOutput')),
-    devTerminalScreen: vi.fn<Api['devTerminalScreen']>(async () => needsOverride('devTerminalScreen')),
     devTerminalScreenshot: vi.fn<Api['devTerminalScreenshot']>(async () => needsOverride('devTerminalScreenshot')),
     devTerminalInput: vi.fn<Api['devTerminalInput']>(async (params) => {
       if (findTerminal(params).process.state !== 'running') throw new Error('Test terminal is not running')
@@ -512,7 +512,6 @@ export function fakeApi(over: Partial<Api> = {}): Api {
       terminals.get(params.run_id)!.set(params.terminal_id, terminal)
       return { terminal, screen_revision: 1, geometry_revision: 1 }
     }),
-    devTerminalWait: vi.fn<Api['devTerminalWait']>(async () => needsOverride('devTerminalWait')),
     devTerminalStop: vi.fn<Api['devTerminalStop']>(async (params) => {
       const current = findTerminal(params)
       const terminal: DevTerminal = { ...current, process: { state: 'stopped' } }
@@ -553,12 +552,10 @@ export function fakeApi(over: Partial<Api> = {}): Api {
     devBrowserPages: vi.fn<Api['devBrowserPages']>(async () => ({ pages: [] })),
     devBrowserOpen: vi.fn<Api['devBrowserOpen']>(async () => needsOverride('devBrowserOpen')),
     devBrowserNavigate: vi.fn<Api['devBrowserNavigate']>(async () => needsOverride('devBrowserNavigate')),
-    devBrowserSnapshot: vi.fn<Api['devBrowserSnapshot']>(async () => needsOverride('devBrowserSnapshot')),
     devBrowserInspect: vi.fn<Api['devBrowserInspect']>(async () => needsOverride('devBrowserInspect')),
     devBrowserAction: vi.fn<Api['devBrowserAction']>(async () => needsOverride('devBrowserAction')),
     devBrowserScreenshot: vi.fn<Api['devBrowserScreenshot']>(async () => needsOverride('devBrowserScreenshot')),
     devBrowserViewport: vi.fn<Api['devBrowserViewport']>(async () => needsOverride('devBrowserViewport')),
-    devBrowserWait: vi.fn<Api['devBrowserWait']>(async () => needsOverride('devBrowserWait')),
     devBrowserConsole: vi.fn<Api['devBrowserConsole']>(async () => ({
       entries: [], next: 0, missing_cursor: false, truncated: false,
     })),
@@ -568,14 +565,13 @@ export function fakeApi(over: Partial<Api> = {}): Api {
     devBrowserReset: vi.fn<Api['devBrowserReset']>(async () => needsOverride('devBrowserReset')),
     devBrowserClose: vi.fn<Api['devBrowserClose']>(async () => needsOverride('devBrowserClose')),
     devArtifactList: vi.fn<Api['devArtifactList']>(async () => ({ artifacts: [], truncated: false })),
-    devArtifactGet: vi.fn<Api['devArtifactGet']>(async () => needsOverride('devArtifactGet')),
-    devArtifactDelete: vi.fn<Api['devArtifactDelete']>(async () => needsOverride('devArtifactDelete')),
     devArtifactRetain: vi.fn<Api['devArtifactRetain']>(async () => needsOverride('devArtifactRetain')),
     devPortList: vi.fn<Api['devPortList']>(async () => ({ ports: [] })),
     devArtifactDownload: vi.fn<Api['devArtifactDownload']>(async () => needsOverride('devArtifactDownload')),
     runDelete: vi.fn(async () => ({})),
     runPause: vi.fn(async () => ({})),
     runResume: vi.fn(async () => ({})),
+    runWake: vi.fn(async () => ({})),
     runInject: vi.fn(async () => ({ message: roomMessage({ kind: 'steer_request', state: 'queued' }) })),
     roomImage: vi.fn(async () => needsOverride('roomImage')),
     assistantStatus: vi.fn(async () => needsOverride('assistantStatus')),
@@ -585,20 +581,26 @@ export function fakeApi(over: Partial<Api> = {}): Api {
     assistantCancel: vi.fn(async () => needsOverride('assistantCancel')),
     assistantAnswer: vi.fn(async () => needsOverride('assistantAnswer')),
     assistantConfirm: vi.fn(async () => needsOverride('assistantConfirm')),
+    assistantApproveAlways: vi.fn(async () => needsOverride('assistantApproveAlways')),
+    assistantRules: vi.fn(async () => []),
+    assistantRuleRevoke: vi.fn(async () => needsOverride('assistantRuleRevoke')),
+    assistantQueueRemove: vi.fn(async () => needsOverride('assistantQueueRemove')),
     assistantItem: vi.fn(async () => needsOverride('assistantItem')),
     assistantReset: vi.fn(async () => needsOverride('assistantReset')),
     assistantSettings: vi.fn(async () => ({ auto_approve: false, suggest_auto_approve: false, suggestion_off: false, share_view: true })),
     assistantHistory: vi.fn(async () => needsOverride('assistantHistory')),
+    assistantAccount: vi.fn(async (agent: string) => ({ agent, state: 'unrecorded' as const })),
     runInputAnswer: vi.fn(async () => needsOverride('runInputAnswer')),
     runInputRespond: vi.fn(async () => needsOverride('runInputRespond')),
+    attentionList: vi.fn(async () => ({ items: [] })),
     runACPCancel: vi.fn(async () => needsOverride('runACPCancel')),
     runACPSetOption: vi.fn(async () => needsOverride('runACPSetOption')),
     runACPHistory: vi.fn(async () => needsOverride('runACPHistory')),
     runACPItem: vi.fn(async () => needsOverride('runACPItem')),
     runModeSwitch: vi.fn(async () => needsOverride('runModeSwitch')),
     runClose: vi.fn(async () => run({ status: 'merged' })),
-    runReview: vi.fn(async (runID: string, action: 'complete' | 'later') =>
-      run({ id: runID, status: action === 'complete' ? 'completed' : 'needs-attention', state: action === 'complete' ? '' : 'finished', review: action === 'complete' ? 'accepted' : 'later' })),
+    runReview: vi.fn(async (runID: string, action: 'complete' | 'later' | 'not-yet') =>
+      run({ id: runID, status: action === 'complete' ? 'completed' : 'needs-attention', state: action === 'complete' ? '' : 'finished', review: ({ complete: 'accepted', later: 'later', 'not-yet': '' } as const)[action] })),
     runHandoff: vi.fn(async () => ({})),
     runRoomList: vi.fn(async () => ({ messages: [] })),
     coordMessagesList: vi.fn(async () => ({ messages: [] })),
@@ -611,6 +613,7 @@ export function fakeApi(over: Partial<Api> = {}): Api {
     })),
     runRoomPost: vi.fn(async () => ({ message: roomMessage() })),
     runRoomDecide: vi.fn(async () => ({ message: roomMessage({ state: 'denied' }) })),
+    runRoomResolve: vi.fn(async () => ({ message: roomMessage({ resolution: 'done' }) })),
     runEvidenceList: vi.fn(async () => ({ packets: [] })),
     runEvidenceGet: vi.fn(async () => ({ packet: evidencePacket() })),
     runEvidencePatch: vi.fn(async () => ({ packet: evidencePacket(), patch: '', truncated: false })),
@@ -731,6 +734,10 @@ export function fakeApi(over: Partial<Api> = {}): Api {
     workspaceAdd: vi.fn(async () => workspace),
     workspaceListFull: vi.fn(async () => [workspace, otherWorkspace]),
     workspaceDelete: vi.fn(async () => ({ ok: true as const })),
+    workspaceAccessList: vi.fn(async (workspaceID: string) => ({ workspace_id: workspaceID, owner_member_id: alice.id, grants: [] })),
+    workspaceAccessGrant: vi.fn(async () => ({})),
+    workspaceAccessRevoke: vi.fn(async () => ({})),
+    workspaceOwnerSet: vi.fn(async () => ({})),
     workspaceSettings: vi.fn(async () => workspace),
     workspaceEnvironment: vi.fn(async () => ({ workspace_id: workspace.id, setup_script: '', variables: [], egress: false, egress_hosts: [] })),
     workspaceEnvironmentSet: vi.fn(async () => needsOverride('workspaceEnvironmentSet')),
@@ -795,8 +802,8 @@ export function fakeApi(over: Partial<Api> = {}): Api {
     watchGet: vi.fn(async () => needsOverride('watchGet')),
     watchUpdate: vi.fn(async () => needsOverride('watchUpdate')),
     watchDelete: vi.fn(async () => needsOverride('watchDelete')),
-    notifyPrefsGet: vi.fn(async () => ({ push: true, destinations: { push_devices: 0 } })),
-    notifyPrefsSet: vi.fn(async (prefs) => ({ push: prefs.push ?? true, quiet_hours: prefs.quiet_hours, destinations: { push_devices: 0 } })),
+    notifyPrefsGet: vi.fn(async () => ({ push: true, level: 'batched' as const, digest: { at: '09:00', tz: '' }, destinations: { push_devices: 0 } })),
+    notifyPrefsSet: vi.fn(async (prefs) => ({ push: prefs.push ?? true, level: prefs.level ?? 'batched', digest: prefs.digest ?? { at: '09:00', tz: '' }, quiet_hours: prefs.quiet_hours, destinations: { push_devices: 0 } })),
     localWorkspaceSelection: vi.fn(async () => ({ workspace_id: '' })),
     localLinkStatus: vi.fn(async () => ({
       server_configured: true,
@@ -895,6 +902,13 @@ export function fakeApi(over: Partial<Api> = {}): Api {
     localUpdateStatus: vi.fn(async () => ({ phase: 'idle' as const })),
     serverUpdateStatus: vi.fn(async () => serverUpdateStatus()),
     serverRunLimits: vi.fn<Api['serverRunLimits']>(async () => ({ limits: {}, default: { cpus: 8, memory_bytes: 8 * 2 ** 30, pids: 4096 }, effective: { cpus: 8, memory_bytes: 8 * 2 ** 30, pids: 4096 } })),
+    serverReleaseChannelSet: vi.fn<Api['serverReleaseChannelSet']>(async (channel) => ({
+      channel,
+      previous: 'beta' as const,
+      saved: true,
+      running: { version: 'v1.2.3', build: 0 },
+      wait: false,
+    })),
     sysboxStatus: vi.fn(async () => ({ state: 'on' as const })),
     sysboxInstall: vi.fn(async () => ({ state: 'installing' as const })),
     serverUpdate: vi.fn(async () => ({
@@ -902,15 +916,6 @@ export function fakeApi(over: Partial<Api> = {}): Api {
       version: 'v1.3.0',
       requested_by: alice.id,
       requested_at: '2026-08-14T10:06:00Z',
-    })),
-    envAgents: vi.fn(async () => ({
-      agents: [
-        { name: 'claude', installed: true },
-        { name: 'codex', installed: false },
-        { name: 'pi', installed: false },
-      ],
-      searched: ['/usr/local/bin', '/home/alice/.local/bin'],
-      repo_path: '/src/repo',
     })),
     ...over,
   }

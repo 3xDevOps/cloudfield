@@ -116,7 +116,7 @@ func storageEnricher(d Deps) func(*disk.Usage) {
 }
 
 // attributeContainers keeps run and environment containers, largest first.
-// Short-lived updater and verification containers have no durable owner.
+// Short-lived updater containers have no durable owner.
 func attributeContainers(ctx context.Context, db store.Store, sizes map[string]uint64) ([]disk.Container, string) {
 	var containers []disk.Container
 	var failure string
@@ -199,7 +199,7 @@ func attributeStorage(ctx context.Context, d Deps, u *disk.Usage, now time.Time)
 				continue
 			}
 			e.OwnerKind, e.OwnerID = "run", string(run.ID)
-			e.Reason = "Session /tmp; removed when the session's container is removed"
+			e.Reason = "Session /tmp; removed when the session's sandbox is removed"
 		case "repo":
 			workspace, err := d.Store.GetWorkspace(ctx, domain.WorkspaceID(e.Key))
 			if err != nil {
@@ -208,6 +208,45 @@ func attributeStorage(ctx context.Context, d Deps, u *disk.Usage, now time.Time)
 			}
 			e.OwnerKind, e.OwnerID = "workspace", string(workspace.ID)
 			e.Reason = "Persistent repository, session branches and shared clone objects; no automatic expiry"
+		case "vm-image":
+			e.Reason = "Disks session VMs boot from, stored once and shared by every VM; cleanup deletes those no image tag or VM still uses"
+		case "vm-cache":
+			e.Reason = "Package cache new session VMs start from; rebuildable"
+		case "vm", "vm-state", "vm-db":
+			if strings.HasPrefix(e.Key, "dictation-") {
+				e.Reason = "Dictation engine VM disks; deleted after 10 minutes without a clip and when the server stops"
+				continue
+			}
+			if attributeMemberVM(ctx, d.Store, e) {
+				continue
+			}
+			run, err := d.Store.GetRun(ctx, domain.RunID(e.Key))
+			if err != nil {
+				unknownStorageOwner(e, err)
+				continue
+			}
+			e.OwnerKind, e.OwnerID = "run", string(run.ID)
+			switch e.Kind {
+			case "vm-state":
+				e.Reason = "Saved memory of a sleeping session VM; deleted when it wakes or its VM is deleted"
+				continue
+			case "vm-db":
+				e.Reason = "Agent databases of a session VM; deleted with the session's VM, kept across an account move"
+				continue
+			}
+			e.Reason = "Session VM disks; deleted with the session's VM"
+			if d.Runs == nil {
+				continue
+			}
+			until, reason, err := d.Runs.StorageRetention(ctx, run.ID)
+			if err != nil {
+				e.Error = "Session retention lookup failed"
+				continue
+			}
+			e.RetainedUntil = until
+			if reason != "" {
+				e.Reason = reason
+			}
 		case "checkout", "snapshot", "transcript", "coord":
 			owner, _ := domain.ParentRun(domain.RunID(e.Key))
 			run, err := d.Store.GetRun(ctx, owner)
@@ -285,6 +324,49 @@ func attributeStorage(ctx context.Context, d Deps, u *disk.Usage, now time.Time)
 		}
 	}
 	attributeEvidence(ctx, d.Store, u, now)
+}
+
+// memberVMs are the VMs that run for a member rather than a session, by the
+// prefix of their name; the member's ID follows, then, for the agent
+// updater, "-<agent>".
+var memberVMs = []struct{ prefix, reason string }{
+	{"terminal-", "Environment VM disks, with what the member installed; deleted when the environment is removed"},
+	{"assistant-install-", "VM that installs the assistant's agent; deleted when the install ends"},
+	{"assistant-", "Assistant VM disks; deleted when the member's assistant is removed"},
+	{"harness-update-", "Agent updater VM disks; deleted when the update ends"},
+}
+
+// attributeMemberVM gives a member VM's entry its member, reporting whether
+// the key names one. Member IDs may hold dashes, so the updater's member is
+// the longest prefix of the rest that is a member.
+func attributeMemberVM(ctx context.Context, db store.Store, e *disk.Entry) bool {
+	for _, kind := range memberVMs {
+		rest, ok := strings.CutPrefix(e.Key, kind.prefix)
+		if !ok {
+			continue
+		}
+		candidates := []string{rest}
+		if kind.prefix == "harness-update-" {
+			candidates = nil
+			for i := strings.LastIndex(rest, "-"); i > 0; i = strings.LastIndex(rest[:i], "-") {
+				candidates = append(candidates, rest[:i])
+			}
+		}
+		err := store.ErrNotFound
+		for _, id := range candidates {
+			var member *domain.Member
+			if member, err = db.GetMember(ctx, domain.MemberID(id)); err == nil {
+				e.OwnerKind, e.OwnerID, e.Reason = "member", string(member.ID), kind.reason
+				return true
+			}
+			if !errors.Is(err, store.ErrNotFound) {
+				break
+			}
+		}
+		unknownStorageOwner(e, err)
+		return true
+	}
+	return false
 }
 
 func nonemptyStorageErrors(values ...string) []string {

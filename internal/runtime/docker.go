@@ -15,7 +15,6 @@ import (
 	"math"
 	"path/filepath"
 	"slices"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -55,13 +54,6 @@ const (
 	setupSentinelPrefix = "/tmp/.aether-setup-"
 )
 
-// execOutputLimit covers stdout and stderr together.
-const execOutputLimit = 1 << 20
-
-// setupOutputLimit is how much of a setup script's output is kept, from the
-// end, where the failure is.
-const setupOutputLimit = 16 << 10
-
 // hijackWriteTimeout bounds one stdin write. Cancellation interrupts a write
 // only through its deadline; it never closes the shared stdin stream.
 const hijackWriteTimeout = 5 * time.Second
@@ -84,6 +76,10 @@ type Docker struct {
 	sysboxFound      bool
 	sysboxMissingAt  time.Time
 	sysboxVeto       func() bool
+
+	cgroupMu         sync.Mutex
+	cgroupKnown      bool
+	cgroupParentName string
 
 	cpuLimits sync.Map // container ID to float64 CPU limit in cores
 	settingUp sync.Map // IDs of containers whose setup script runs
@@ -161,7 +157,12 @@ func (d *Docker) Create(ctx context.Context, spec Spec) (ID, error) {
 			return "", err
 		}
 	}
+	cgroupParent, err := d.cgroupParent(ctx)
+	if err != nil {
+		return "", err
+	}
 	cfg, hostCfg := d.containerConfig(spec, containerRuntime)
+	hostCfg.CgroupParent = cgroupParent
 	var name string
 	if spec.Name != "" {
 		name = d.namePrefix + spec.Name
@@ -185,7 +186,7 @@ func (d *Docker) Create(ctx context.Context, spec Spec) (ID, error) {
 }
 
 func (d *Docker) pull(ctx context.Context, ref string) error {
-	if localOnlyImage(ref) {
+	if LocalOnlyImage(ref) {
 		return fmt.Errorf("runtime: image %s is built locally and is missing from the daemon", ref)
 	}
 	rc, err := d.cli.ImagePull(ctx, ref, client.ImagePullOptions{})
@@ -281,7 +282,7 @@ func (d *Docker) containerConfig(spec Spec, containerRuntime string) (*container
 	cfg := &container.Config{
 		Image:      spec.Image,
 		User:       spec.User,
-		Env:        dockerEnv(trustCheckouts(spec.Env, spec.WorktreeMountPath, spec.ExtraWorktrees)),
+		Env:        EnvList(TrustCheckouts(spec.Env, spec.WorktreeMountPath, spec.ExtraWorktrees)),
 		WorkingDir: spec.WorkingDir,
 		Entrypoint: spec.Command,
 		Labels:     labels,
@@ -304,7 +305,7 @@ func (d *Docker) containerConfig(spec Spec, containerRuntime string) (*container
 	nestedDockerd := spec.NestedDocker && containerRuntime == runtimeSysbox
 	// Gated so the agent starts only once Start has checked every subpath mount.
 	subpaths := slices.ContainsFunc(spec.Mounts, func(m Mount) bool { return m.Subpath != "" })
-	if spec.SetupScript != "" || nestedDockerd || subpaths || unprivileged(spec.User) {
+	if spec.SetupScript != "" || nestedDockerd || subpaths || Unprivileged(spec.User) {
 		sentinel := newSetupSentinel()
 		cfg.Entrypoint = gateEntrypoint(sentinel)
 		cfg.Cmd = spec.Command
@@ -477,47 +478,6 @@ func gateEntrypoint(sentinel string) []string {
 	return []string{"/bin/sh", "-c", script, "aether-gate"}
 }
 
-func dockerEnv(env map[string]string) []string {
-	if len(env) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(env))
-	for _, k := range slices.Sorted(maps.Keys(env)) {
-		out = append(out, k+"="+env[k])
-	}
-	return out
-}
-
-func trustCheckouts(env map[string]string, checkout string, extras []Mount) map[string]string {
-	env = trustCheckout(env, checkout)
-	for _, m := range extras {
-		env = trustCheckout(env, m.ContainerPath)
-	}
-	return env
-}
-
-// Execs inherit the container env, so this also covers every git the server
-// runs inside the container.
-func trustCheckout(env map[string]string, checkout string) map[string]string {
-	if checkout == "" {
-		return env
-	}
-	n := 0
-	if count, ok := env["GIT_CONFIG_COUNT"]; ok {
-		parsed, err := strconv.Atoi(count)
-		if err != nil || parsed < 0 {
-			return env
-		}
-		n = parsed
-	}
-	out := make(map[string]string, len(env)+3)
-	maps.Copy(out, env)
-	out["GIT_CONFIG_KEY_"+strconv.Itoa(n)] = "safe.directory"
-	out["GIT_CONFIG_VALUE_"+strconv.Itoa(n)] = checkout
-	out["GIT_CONFIG_COUNT"] = strconv.Itoa(n + 1)
-	return out
-}
-
 func nanoCPUs(cores float64) int64 {
 	return int64(math.Round(cores * 1e9))
 }
@@ -555,7 +515,7 @@ func (d *Docker) Start(ctx context.Context, id ID) error {
 		return nil
 	}
 	secrets := secretEnvValues(labels[labelSecretEnv], info.Container.Config.Env)
-	if err := d.prepare(ctx, id, labels, sentinel, info.Container.Config.WorkingDir, info.Container.Config.User, envValue(info.Container.Config.Env, "HOME"), secrets); err != nil {
+	if err := d.prepare(ctx, id, labels, sentinel, info.Container.Config.WorkingDir, info.Container.Config.User, EnvValue(info.Container.Config.Env, "HOME"), secrets); err != nil {
 		// Never kill a run that was already live before this Start call: a
 		// redundant Start must not take down a healthy container.
 		if !wasRunning {
@@ -571,7 +531,7 @@ func (d *Docker) Start(ctx context.Context, id ID) error {
 }
 
 func (d *Docker) prepare(ctx context.Context, id ID, labels map[string]string, sentinel, workDir, user, home string, secrets []string) error {
-	if unprivileged(user) {
+	if Unprivileged(user) {
 		if err := d.prepareUser(ctx, id, user, home, labels[labelSudo] != ""); err != nil {
 			return err
 		}
@@ -632,7 +592,7 @@ func (d *Docker) startDockerd(ctx context.Context, id ID, user string) error {
 	ctx, cancel := context.WithTimeout(ctx, dockerdStartTimeout)
 	defer cancel()
 	code, output, cut, err := d.execCombined(ctx, id, []string{"/bin/sh", "-c", dockerdScript, "aether-dockerd", user}, "", "0:0")
-	output = setupOutput(output, cut, nil)
+	output = SetupOutput(output, cut, nil)
 	if err != nil {
 		slog.Error("runtime: dockerd start failed", "container", id, "output", output, "error", err)
 		return fmt.Errorf("runtime: start dockerd: %w", err)
@@ -660,7 +620,7 @@ func (d *Docker) runSetup(ctx context.Context, id ID, script, sentinel, workDir 
 	d.settingUp.Store(id, struct{}{})
 	code, output, cut, err := d.execCombined(ctx, id, []string{"/bin/sh", "-ec", "exec 2>&1; " + script}, workDir, "")
 	d.settingUp.Delete(id)
-	output = setupOutput(output, cut, secrets)
+	output = SetupOutput(output, cut, secrets)
 	if err != nil {
 		slog.Error("runtime: setup script execution failed", "container", id, "working_dir", workDir, "script", script, "output", output, "error", err)
 		return fmt.Errorf("runtime: setup script: %w", err)
@@ -684,51 +644,6 @@ func (d *Docker) releaseGate(ctx context.Context, id ID, sentinel string) error 
 		return fmt.Errorf("runtime: release setup gate exited %d: %s", code, strings.TrimSpace(output))
 	}
 	return nil
-}
-
-func secretEnvValues(label string, env []string) []string {
-	var names []string
-	if json.Unmarshal([]byte(label), &names) != nil {
-		return nil
-	}
-	var values []string
-	for _, pair := range env {
-		name, value, _ := strings.Cut(pair, "=")
-		if value != "" && slices.Contains(names, name) {
-			values = append(values, value)
-		}
-	}
-	return values
-}
-
-const secretMask = "***"
-
-// setupOutput masks exact secret values, longest first so a secret holding
-// another is masked whole, then keeps the last setupOutputLimit bytes. cut
-// says output already lost its beginning, which may have split a secret: the
-// span that could hold its remainder is dropped. That span is measured after
-// masking, where a shorter secret inside the remainder can have grown it to
-// len(secretMask) times its length.
-func setupOutput(output string, cut bool, secrets []string) string {
-	if len(secrets) > 0 {
-		slices.SortFunc(secrets, func(a, b string) int { return len(b) - len(a) })
-		pairs := make([]string, 0, 2*len(secrets))
-		for _, secret := range secrets {
-			pairs = append(pairs, secret, secretMask)
-		}
-		output = strings.NewReplacer(pairs...).Replace(output)
-		if cut {
-			output = output[min(len(secretMask)*len(secrets[0]), len(output)):]
-		}
-	}
-	if cut || len(output) > setupOutputLimit {
-		output = output[max(0, len(output)-setupOutputLimit):]
-		if i := strings.IndexByte(output, '\n'); i >= 0 {
-			output = output[i+1:]
-		}
-		output = "[earlier output omitted]\n" + output
-	}
-	return strings.ToValidUTF8(output, "\uFFFD")
 }
 
 // tailWriter keeps the last limit bytes written to it. The buffer grows to
@@ -755,9 +670,9 @@ func (w *tailWriter) tail() (kept string, cut bool) {
 }
 
 // execCombined is Exec for the setup script, which may print without limit:
-// one transcript, of which the last execOutputLimit bytes are kept.
+// one transcript, of which the last ExecOutputLimit bytes are kept.
 func (d *Docker) execCombined(ctx context.Context, id ID, cmd []string, workDir, user string) (code int, output string, cut bool, err error) {
-	kept := &tailWriter{limit: execOutputLimit}
+	kept := &tailWriter{limit: ExecOutputLimit}
 	code, err = d.exec(ctx, id, cmd, workDir, user, nil, func(r io.Reader) error {
 		_, copyErr := stdcopy.StdCopy(kept, kept, r)
 		return copyErr
@@ -777,11 +692,15 @@ func (d *Docker) Exec(ctx context.Context, id ID, cmd []string, workDir string) 
 
 // exec writes a non-nil stdin to the command's input, which stays open until
 // exec returns.
-// rootPath is sudo's secure_path. A root exec never searches the
-// container's PATH, which puts the agent-writable ~/.local/bin first.
-const rootPath = "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
-
 func (d *Docker) exec(ctx context.Context, id ID, cmd []string, workDir, user string, stdin []byte, read func(io.Reader) error) (int, error) {
+	return d.execPath(ctx, id, cmd, workDir, user, RootUser(user), stdin, read)
+}
+
+// execPath is exec with the secure PATH chosen by the caller. A sudo exec
+// takes it whatever its user string says: the engine parses the uid more
+// loosely than RootUser ("+0", an empty uid), so deciding from the text
+// would let a spelling of root keep the agent-writable PATH.
+func (d *Docker) execPath(ctx context.Context, id ID, cmd []string, workDir, user string, securePath bool, stdin []byte, read func(io.Reader) error) (int, error) {
 	opts := client.ExecCreateOptions{
 		Cmd:          cmd,
 		User:         user,
@@ -790,8 +709,8 @@ func (d *Docker) exec(ctx context.Context, id ID, cmd []string, workDir, user st
 		AttachStdout: true,
 		AttachStderr: true,
 	}
-	if uid, _, _ := strings.Cut(user, ":"); uid == "0" || uid == "root" {
-		opts.Env = []string{rootPath}
+	if securePath {
+		opts.Env = []string{RootPath}
 	}
 	created, err := d.cli.ExecCreate(ctx, string(id), opts)
 	if err != nil {
@@ -841,16 +760,16 @@ func (d *Docker) exec(ctx context.Context, id ID, cmd []string, workDir, user st
 	}
 }
 
-// readExecOutput refuses output past execOutputLimit: the container chooses
+// readExecOutput refuses output past ExecOutputLimit: the container chooses
 // what it prints and the caller buffers it all.
 func readExecOutput(r io.Reader) (stdout, stderr string, err error) {
 	// One byte past the cap, so an output of exactly that size is not
 	// mistaken for a truncated one.
-	counted := &countingReader{r: io.LimitReader(r, execOutputLimit+1)}
+	counted := &countingReader{r: io.LimitReader(r, ExecOutputLimit+1)}
 	var out, errOut bytes.Buffer
 	_, copyErr := stdcopy.StdCopy(&out, &errOut, counted)
-	if counted.read > execOutputLimit {
-		return out.String(), errOut.String(), fmt.Errorf("output passed the %d byte limit", execOutputLimit)
+	if counted.read > ExecOutputLimit {
+		return out.String(), errOut.String(), fmt.Errorf("output passed the %d byte limit", ExecOutputLimit)
 	}
 	return out.String(), errOut.String(), copyErr
 }
@@ -1044,13 +963,17 @@ func (d *Docker) Inspect(ctx context.Context, id ID) (ContainerInfo, error) {
 	for i, m := range info.Container.Mounts {
 		targets[i] = m.Destination
 	}
-	return ContainerInfo{
+	out := ContainerInfo{
 		Image:        info.Container.Config.Image,
 		User:         info.Container.Config.User,
 		Env:          append([]string(nil), info.Container.Config.Env...),
 		MountTargets: targets,
 		Fingerprint:  info.Container.Config.Labels[labelFingerprint],
-	}, nil
+	}
+	if st := info.Container.State; st != nil && (st.Status == container.StateExited || st.Status == container.StateDead) {
+		out.Exited, out.ExitCode = true, st.ExitCode
+	}
+	return out, nil
 }
 
 // InitPID returns the host PID of the container's init process, or 0 when the
@@ -1064,6 +987,25 @@ func (d *Docker) InitPID(ctx context.Context, id ID) (int, error) {
 		return 0, nil
 	}
 	return info.Container.State.Pid, nil
+}
+
+// CreationKeys maps the creation key of every Aether container, in any
+// state, to its ID.
+func (d *Docker) CreationKeys(ctx context.Context) (map[string]ID, error) {
+	list, err := d.cli.ContainerList(ctx, client.ContainerListOptions{
+		All:     true,
+		Filters: make(client.Filters).Add("label", labelManaged+"=true"),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("runtime: list containers: %w", err)
+	}
+	keys := make(map[string]ID, len(list.Items))
+	for _, c := range list.Items {
+		if key := c.Labels[labelCreationKey]; key != "" {
+			keys[key] = ID(c.ID)
+		}
+	}
+	return keys, nil
 }
 
 // FindByCreationKey matches containers in any state.
@@ -1110,8 +1052,8 @@ type dockerAttachment struct {
 	id        string
 	tty       bool
 	resp      client.HijackedResponse
-	stdout    *streamBuffer
-	stderr    *streamBuffer
+	stdout    *StreamBuffer
+	stderr    *StreamBuffer
 	closeOnce sync.Once
 }
 
@@ -1121,8 +1063,8 @@ func newDockerAttachment(cli *client.Client, id string, tty bool, resp client.Hi
 		id:     id,
 		tty:    tty,
 		resp:   resp,
-		stdout: newStreamBuffer(),
-		stderr: newStreamBuffer(),
+		stdout: NewStreamBuffer(),
+		stderr: NewStreamBuffer(),
 	}
 	go func() {
 		var err error
@@ -1196,84 +1138,3 @@ func (h hijackStdin) WriteContext(ctx context.Context, p []byte) (int, error) {
 }
 
 func (h hijackStdin) Close() error { return h.resp.CloseWrite() }
-
-const maxStreamBuffer = 8 << 20
-
-// streamBuffer writes never block, since blocking the demux goroutine would
-// stall the sibling stream; past maxStreamBuffer the oldest bytes are
-// dropped. A lossless buffer blocks at the cap instead, for protocol streams
-// that cannot lose a byte.
-type streamBuffer struct {
-	mu       sync.Mutex
-	cond     *sync.Cond
-	buf      bytes.Buffer
-	lossless bool
-	// limit is where a lossless buffer blocks its writer.
-	limit  int
-	closed bool
-	err    error
-}
-
-func newStreamBuffer() *streamBuffer {
-	b := &streamBuffer{limit: maxStreamBuffer}
-	b.cond = sync.NewCond(&b.mu)
-	return b
-}
-
-func newLosslessStreamBuffer() *streamBuffer {
-	b := newStreamBuffer()
-	b.lossless = true
-	return b
-}
-
-func (b *streamBuffer) Write(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	for b.lossless && !b.closed && b.buf.Len() >= b.limit {
-		b.cond.Wait()
-	}
-	if b.closed {
-		return 0, io.ErrClosedPipe
-	}
-	n, _ := b.buf.Write(p) // bytes.Buffer.Write cannot fail
-	if b.lossless {
-		b.cond.Broadcast()
-		return n, nil
-	}
-	if over := b.buf.Len() - maxStreamBuffer; over > 0 {
-		b.buf.Next(over)
-	}
-	b.cond.Broadcast()
-	return n, nil
-}
-
-func (b *streamBuffer) Read(p []byte) (int, error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	for b.buf.Len() == 0 && !b.closed {
-		b.cond.Wait()
-	}
-	if b.buf.Len() > 0 {
-		if b.lossless {
-			b.cond.Broadcast()
-		}
-		return b.buf.Read(p)
-	}
-	if b.err != nil {
-		return 0, b.err
-	}
-	return 0, io.EOF
-}
-
-// CloseWithError leaves buffered data readable first. Only the first close
-// takes effect.
-func (b *streamBuffer) CloseWithError(err error) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.closed {
-		return
-	}
-	b.closed = true
-	b.err = err
-	b.cond.Broadcast()
-}

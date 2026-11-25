@@ -7,7 +7,6 @@ import { api } from '@/lib/api'
 import { useStore } from '@/store'
 import { toRecord } from '@/store/runs'
 import { agentInfo, alice, bob, otherWorkspace, run, serverInfo, vera, workspace } from '@/test/fixtures'
-import { pickOption } from '@/test/select'
 
 vi.mock('@/lib/api', async () => {
   const { fakeApi } = await import('@/test/fixtures')
@@ -205,6 +204,20 @@ describe('command palette', () => {
     expect(document.activeElement).toBe(search)
     fireEvent.keyDown(search, { key: 'Escape' })
     await waitFor(() => expect(document.activeElement).toBe(terminal))
+  })
+
+  it('offers commands on the open run by the role in its workspace, not the active one', async () => {
+    const theirs = run({ id: 'run_theirs', workspace_id: otherWorkspace.id, member_id: alice.id, protected: true })
+    useStore.setState({
+      info: { ...serverInfo, member: { ...bob, role: 'admin' } },
+      members: { [alice.id]: alice, [bob.id]: bob },
+      runs: { [active.id]: toRecord(active), [theirs.id]: toRecord(theirs) },
+      workspaces: { [workspace.id]: workspace, [otherWorkspace.id]: { ...otherWorkspace, role: 'collaborator' } },
+      route: { name: 'run', params: { runId: theirs.id } },
+    })
+    open()
+    await screen.findByRole('combobox')
+    expect(screen.queryByRole('option', { name: 'Kill session' })).toBeNull()
   })
 
   it('starts with navigation rather than a focused destructive command', async () => {
@@ -584,7 +597,7 @@ describe('command palette', () => {
       ['terminal', 'Environment', 'Environment'],
       ['logs', 'Activity', 'Activity'],
       ['dark mode', 'Use dark theme', 'Use dark theme'],
-      ['chat', 'Ask Aether', 'Send a message to the agent…'],
+      ['chat', 'Ask Cloudfield', 'Send a message to the agent…'],
       ['messages', 'Send a message to the agent…', 'Send a message to the agent…'],
       ['tunnel', 'Forward a port…', 'Forward a port…'],
     ])('"%s" ranks %s first and finds %s without running anything', async (query, first, found) => {
@@ -653,6 +666,7 @@ describe('command palette', () => {
   })
 
   it('launches with the selected shared account and its agent roster', async () => {
+    useStore.setState({ capabilities: { gateway: 'remote', methods: ['run.launch', 'agent.list', 'account.list'], ws: [] } })
     vi.mocked(api.accountList).mockResolvedValue({
       accounts: [alice, bob],
       shared_with: [],
@@ -665,9 +679,7 @@ describe('command palette', () => {
     open()
 
     fireEvent.click(await screen.findByText('New session…'))
-    const options = await screen.findByRole('button', { name: /^Options/ })
-    if (options.getAttribute('aria-expanded') === 'false') await userEvent.click(options)
-    await pickOption(screen.getByLabelText('Account'), 'Bob (shared)')
+    await userEvent.click(within(await screen.findByRole('radiogroup', { name: 'Account' })).getByRole('radio', { name: /^Bob/ }))
     await waitFor(() => expect(screen.getByRole('radio', { name: /^bob-agent/ }).getAttribute('aria-checked')).toBe('true'))
     await launchReady()
     fireEvent.click(screen.getByRole('button', { name: 'Launch' }))
@@ -886,11 +898,11 @@ describe('command palette', () => {
     })
     open()
 
-    fireEvent.click(await screen.findByText('Archive closed sessions…'))
+    fireEvent.click(await screen.findByText('Archive finished sessions…'))
 
     expect(api.runArchive).not.toHaveBeenCalled()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Archive 1' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive 1' }))
 
     await waitFor(() => expect(api.runArchive).toHaveBeenCalledWith(done.id, true))
   })
@@ -932,7 +944,7 @@ describe('command palette', () => {
       capabilities: { gateway: 'remote', methods: ['run.release'], ws: [] },
     })
     open()
-    fireEvent.click(await screen.findByText('Free retained containers…'))
+    fireEvent.click(await screen.findByText('Free retained sandboxes…'))
     expect(api.runRelease).not.toHaveBeenCalled()
     fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Free 1' }))
     await waitFor(() => expect(api.runRelease).toHaveBeenCalledWith(archived.id))
@@ -946,10 +958,10 @@ describe('command palette', () => {
       capabilities: { gateway: 'remote', methods: ['run.release'], ws: [] },
     })
     open()
-    fireEvent.click(await screen.findByText('Free container…'))
+    fireEvent.click(await screen.findByText('Free sandbox…'))
     const dialog = within(await screen.findByRole('alertdialog'))
     expect(api.runRelease).not.toHaveBeenCalled()
-    fireEvent.click(dialog.getByRole('button', { name: 'Free container' }))
+    fireEvent.click(dialog.getByRole('button', { name: 'Free sandbox' }))
     await waitFor(() => expect(api.runRelease).toHaveBeenCalledWith(active.id))
   })
 })

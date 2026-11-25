@@ -268,7 +268,7 @@ func TestServersList(t *testing.T) {
 	h.link.servers = map[string]string{id: "workstation"}
 	var servers edgeproto.ServersResponse
 	h.apiCall(t, http.MethodGet, edgeproto.PathServers, tok.Token, nil, &servers)
-	want := edgeproto.ServerInfo{ID: id, Name: "workstation", Online: true, Role: "admin",
+	want := edgeproto.ServerInfo{ID: id, Name: "workstation", Online: true, Role: "super_admin",
 		AccessPolicy: edgeproto.PolicyAccount, Kind: edgeproto.ServerSelfHosted}
 	if len(servers.Servers) != 1 || servers.Servers[0] != want {
 		t.Errorf("servers = %+v, want [%+v]", servers.Servers, want)
@@ -344,7 +344,7 @@ func TestPagesRender(t *testing.T) {
 		"/servers":  "No servers yet",
 		"/devices":  "laptop",
 		"/account":  "Delete this account",
-		"/edge.css": "--fg",
+		"/edge.css": "--canvas",
 	} {
 		resp, page := b.get(t, path)
 		if resp.StatusCode != http.StatusOK || !strings.Contains(page, want) {
@@ -365,12 +365,12 @@ func TestJoinPage(t *testing.T) {
 	resp, page := b.get(t, "/join/"+server+"/inv-7k2m9q4xbd")
 	app := "aether://join?edge=" + url.QueryEscape(testRelay) + "&amp;server=" + server + "&amp;invitation=inv-7k2m9q4xbd"
 	for _, want := range []string{
-		"Join an Aether server",
+		"Join a Cloudfield server",
 		`href="` + app + `"`,
 		`value="` + testRelay + "/join/" + server + `/inv-7k2m9q4xbd"`,
 		`<script src="/join.js">`,
 		"aether link &lt;link&gt;",
-		"https://github.com/3xDevOps/aether/releases/latest",
+		"https://github.com/3xDevOps/cloudfield/releases/latest",
 	} {
 		if resp.StatusCode != http.StatusOK || !strings.Contains(page, want) {
 			t.Errorf("join page: %s, want it to contain %q\n%s", resp.Status, want, page)
@@ -382,7 +382,7 @@ func TestJoinPage(t *testing.T) {
 	if resp.Header.Get("Referrer-Policy") != "no-referrer" || resp.Header.Get("Cache-Control") != "no-store" {
 		t.Errorf("join page headers = %v", resp.Header)
 	}
-	for path, want := range map[string]string{"/join.js": "location.replace", "/edge.css": "--fg"} {
+	for path, want := range map[string]string{"/join.js": "location.replace", "/edge.css": "--canvas"} {
 		if resp, body := b.get(t, path); resp.StatusCode != http.StatusOK || !strings.Contains(body, want) {
 			t.Errorf("GET %s on the relay origin: %s\n%s", path, resp.Status, body)
 		}

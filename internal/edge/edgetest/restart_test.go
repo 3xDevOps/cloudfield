@@ -102,7 +102,7 @@ func TestEdgeRestartAndDirectFallback(t *testing.T) {
 	}
 	_ = sc.Close()
 	servers, err := al.edge.Servers(context.Background())
-	if err != nil || len(servers) != 1 || servers[0].ID != a.id || servers[0].Role != "admin" {
+	if err != nil || len(servers) != 1 || servers[0].ID != a.id || servers[0].Role != "super_admin" {
 		t.Fatalf("servers after the restart = %+v %v", servers, err)
 	}
 }
@@ -131,6 +131,13 @@ func TestServerRemovedWhileOffline(t *testing.T) {
 	resp, page, err := b.post("/servers/remove", url.Values{"server": {a.id}})
 	if err != nil || resp.StatusCode != http.StatusSeeOther {
 		t.Fatalf("remove on the Servers page: %v %v\n%s", err, resp, page)
+	}
+	// A removed server is not waited for.
+	start := time.Now()
+	resp, body := mcpRequest(t, http.MethodPost, h.relayURL+edgeproto.MCPPath(a.id), nil, nil)
+	if waited := time.Since(start); resp.StatusCode != http.StatusNotFound || strings.TrimSpace(body) != string(edgeproto.RefusalUnknownServer) ||
+		waited > returnWait/2 {
+		t.Fatalf("connector request to the removed server: %s %q after %s, want 404 at once", resp.Status, body, waited)
 	}
 	from := h.proxy.mark()
 	h.proxy.restoreServers()

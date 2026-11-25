@@ -643,7 +643,7 @@ function Read-AetherRelease {
         $actual = (Get-FileHash -LiteralPath $binaryPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant()
         if ($actual -cne $expected) {
             Remove-Item -LiteralPath $binaryPath -Force -ErrorAction SilentlyContinue
-            throw ("checksum mismatch for {0} of {1}: checksums.txt lists {2}, the download has {3}. The download was deleted and nothing was installed. Rerun the installer; if it fails again, something between you and {4} (a proxy or mirror) is changing the file - report it at https://github.com/3xDevOps/Aether/issues" -f $asset, $Tag, $expected, $actual, $BaseUrl)
+            throw ("checksum mismatch for {0} of {1}: checksums.txt lists {2}, the download has {3}. The download was deleted and nothing was installed. Rerun the installer; if it fails again, something between you and {4} (a proxy or mirror) is changing the file - report it at https://github.com/3xDevOps/cloudfield/issues" -f $asset, $Tag, $expected, $actual, $BaseUrl)
         }
     }
     if ($signed) {
@@ -837,6 +837,29 @@ function Install-AetherCli {
     return $destination
 }
 
+# Byte for byte the cloudfield.cmd internal/selfupdate's writeShim writes.
+function Add-AetherShim {
+    param([Parameter(Mandatory = $true)][string] $Directory)
+    $shim = Join-Path $Directory 'cloudfield.cmd'
+    $stage = Join-Path $Directory ('.cloudfield.cmd.{0}.tmp' -f ([Guid]::NewGuid().ToString('N')))
+    try {
+        # Test-Path follows a link, so it misses one that dangles.
+        if ([System.IO.Directory]::GetFileSystemEntries($Directory, 'cloudfield.cmd').Length -gt 0) { return }
+        [System.IO.File]::WriteAllBytes($stage, [System.Text.Encoding]::ASCII.GetBytes('@"%~dp0aether.exe" %*' + "`r`n"))
+        # File.Move refuses an existing destination, so a file that appeared
+        # since the check is not replaced.
+        [System.IO.File]::Move($stage, $shim)
+    }
+    catch {
+        Write-Warning ("could not write {0}: {1}; aether works as before" -f $shim, $_.Exception.GetBaseException().Message.TrimEnd('.'))
+    }
+    finally {
+        if (Test-Path -LiteralPath $stage) {
+            Remove-Item -LiteralPath $stage -Force -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 function Get-AetherInstalledVersion {
     param([Parameter(Mandatory = $true)][string] $CliPath)
     if (-not (Test-Path -LiteralPath $CliPath -PathType Leaf)) { return $null }
@@ -856,11 +879,16 @@ function Invoke-AetherGuiBuild {
     param([Parameter(Mandatory = $true)][string] $CliPath)
     $hadAetherBin = Test-Path -LiteralPath 'Env:AETHER_BIN'
     $oldAetherBin = [Environment]::GetEnvironmentVariable('AETHER_BIN', 'Process')
+    # The CLI reads CLOUDFIELD_BIN ahead of AETHER_BIN, so it is hidden for
+    # the build.
+    $hadCloudfieldBin = Test-Path -LiteralPath 'Env:CLOUDFIELD_BIN'
+    $oldCloudfieldBin = [Environment]::GetEnvironmentVariable('CLOUDFIELD_BIN', 'Process')
     $previousExit = Get-Variable LASTEXITCODE -Scope Global -ValueOnly -ErrorAction SilentlyContinue
     $oldEap = $ErrorActionPreference
     $rerun = "& '{0}' gui build" -f $CliPath.Replace("'", "''")
     try {
         [Environment]::SetEnvironmentVariable('AETHER_BIN', $CliPath, 'Process')
+        Remove-Item -LiteralPath 'Env:CLOUDFIELD_BIN' -Force -ErrorAction SilentlyContinue
         # npm and electron-builder write progress to stderr; under Windows
         # PowerShell 5.1 that must not become an installer error.
         $ErrorActionPreference = 'Continue'
@@ -877,6 +905,9 @@ function Invoke-AetherGuiBuild {
         }
         else {
             Remove-Item -LiteralPath 'Env:AETHER_BIN' -Force -ErrorAction SilentlyContinue
+        }
+        if ($hadCloudfieldBin) {
+            [Environment]::SetEnvironmentVariable('CLOUDFIELD_BIN', $oldCloudfieldBin, 'Process')
         }
         if ($null -ne $previousExit) {
             $global:LASTEXITCODE = $previousExit
@@ -1006,6 +1037,16 @@ function Warn-AetherShadowing {
     }
 }
 
+# CLOUDFIELD_<Name> when it is not blank, else AETHER_<Name> (internal/envname).
+function Get-AetherEnv {
+    param([Parameter(Mandatory = $true)][string] $Name)
+    $value = [Environment]::GetEnvironmentVariable("CLOUDFIELD_$Name", 'Process')
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        $value = [Environment]::GetEnvironmentVariable("AETHER_$Name", 'Process')
+    }
+    return $value
+}
+
 function Invoke-AetherInstall {
     param(
         [AllowNull()][string] $RequestedVersion,
@@ -1024,9 +1065,9 @@ function Invoke-AetherInstall {
     $script:AetherCurl = Join-Path ([Environment]::GetEnvironmentVariable('SystemRoot', 'Process')) 'System32\curl.exe'
     if (-not (Test-Path -LiteralPath $script:AetherCurl -PathType Leaf)) { $script:AetherCurl = $null }
     $architecture = Get-AetherNativeArchitecture
-    $repo = [Environment]::GetEnvironmentVariable('AETHER_REPO', 'Process')
-    if ([string]::IsNullOrWhiteSpace($repo)) { $repo = '3xDevOps/Aether' }
-    $baseUrl = [Environment]::GetEnvironmentVariable('AETHER_BASE_URL', 'Process')
+    $repo = Get-AetherEnv 'REPO'
+    if ([string]::IsNullOrWhiteSpace($repo)) { $repo = '3xDevOps/cloudfield' }
+    $baseUrl = Get-AetherEnv 'BASE_URL'
     if ([string]::IsNullOrWhiteSpace($baseUrl)) { $baseUrl = 'https://github.com/{0}/releases/download' -f $repo }
     $baseUrl = $baseUrl.TrimEnd('/')
     $latestUrl = [Environment]::GetEnvironmentVariable('AETHER_LATEST_URL', 'Process')
@@ -1037,7 +1078,7 @@ function Invoke-AetherInstall {
 
     $role = $RequestedRole
     if ([string]::IsNullOrWhiteSpace($role)) {
-        $role = [Environment]::GetEnvironmentVariable('AETHER_ROLE', 'Process')
+        $role = Get-AetherEnv 'ROLE'
     }
     if ([string]::IsNullOrWhiteSpace($role)) { $role = 'client' }
     $role = $role.Trim().ToLowerInvariant()
@@ -1047,7 +1088,7 @@ function Invoke-AetherInstall {
 
     $version = $RequestedVersion
     if ([string]::IsNullOrWhiteSpace($version)) {
-        $version = [Environment]::GetEnvironmentVariable('AETHER_VERSION', 'Process')
+        $version = Get-AetherEnv 'VERSION'
     }
     $pinned = -not [string]::IsNullOrWhiteSpace($version)
     if ($pinned) {
@@ -1068,17 +1109,19 @@ function Invoke-AetherInstall {
     $localAppData = Get-AetherAbsolutePath $localAppData
     $binDir = $RequestedBinDir
     if ([string]::IsNullOrWhiteSpace($binDir)) {
-        $binDir = [Environment]::GetEnvironmentVariable('AETHER_BIN_DIR', 'Process')
+        $binDir = Get-AetherEnv 'BIN_DIR'
     }
     if ([string]::IsNullOrWhiteSpace($binDir)) {
         $binDir = Join-Path $localAppData 'Programs\Aether'
     }
     $binDir = [Environment]::ExpandEnvironmentVariables($binDir)
     $binDir = Remove-AetherTrailingSeparators (Get-AetherAbsolutePath $binDir)
-    $desktopDir = Join-Path $localAppData 'Programs\Aether Desktop'
+    # The desktop app's folder is named after its product name, Aether before
+    # the rename and Cloudfield after; `aether gui build` picks which.
+    $desktopDirs = @('Aether', 'Cloudfield' | ForEach-Object { Join-Path $localAppData ('Programs\{0} Desktop' -f $_) })
     $desktopBuildDir = Join-Path $localAppData 'aether\desktop-build'
     $nodeCacheDir = Join-Path $localAppData 'aether\node'
-    foreach ($blocked in @($desktopDir, $desktopBuildDir, $nodeCacheDir)) {
+    foreach ($blocked in ($desktopDirs + @($desktopBuildDir, $nodeCacheDir))) {
         if (Test-AetherPathWithin $binDir $blocked) {
             throw ("refusing -BinDir {0}: it is inside the managed desktop or build cache {1}" -f $binDir, $blocked)
         }
@@ -1089,7 +1132,7 @@ function Invoke-AetherInstall {
         Installed = Join-Path $binDir 'aether.exe'
     }
     $destination = $wanted.Installed
-    $desktopPath = Join-Path $desktopDir 'aether-desktop.exe'
+    $desktopPaths = @($desktopDirs | ForEach-Object { Join-Path $_ 'aether-desktop.exe' })
     $script:AetherStep = 0
     $script:AetherSteps = if ($role -eq 'client') { 3 } else { 2 }
     $scope = if ($role -eq 'client') { 'CLI and desktop app' } else { 'CLI only' }
@@ -1116,7 +1159,7 @@ function Invoke-AetherInstall {
 
         $runningPaths = @()
         if (-not $release.Unchanged) { $runningPaths += $destination }
-        if ($role -eq 'client') { $runningPaths += $desktopPath }
+        if ($role -eq 'client') { $runningPaths += $desktopPaths }
         if ($runningPaths.Count -gt 0) {
             $running = @(Get-AetherRunningProcess $runningPaths)
             if ($running.Count -gt 0) {
@@ -1134,9 +1177,10 @@ function Invoke-AetherInstall {
             else {
                 Write-AetherStep ('installing the CLI {0}' -f $release.Tag)
             }
-            $destination = Install-AetherCli $release.Path $binDir $release.Expected @($destination, $desktopPath)
+            $destination = Install-AetherCli $release.Path $binDir $release.Expected (@($destination) + $desktopPaths)
         }
         Write-AetherDetail $destination
+        Add-AetherShim $binDir
         try {
             $pathChanged = Update-AetherPath $binDir
         } catch {
@@ -1150,14 +1194,16 @@ function Invoke-AetherInstall {
         if ($role -eq 'client') {
             Write-AetherStep 'installing the desktop app (the build output follows)'
             Invoke-AetherGuiBuild $destination
-            Write-AetherDetail ('installed {0}' -f $desktopPath)
+            # Both folders can exist; the one the install filled was written last.
+            $installed = @($desktopPaths | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Sort-Object { (Get-Item -LiteralPath (Split-Path -Parent $_)).LastWriteTimeUtc })
+            Write-AetherDetail ('installed {0}' -f $(if ($installed.Count -gt 0) { $installed[-1] } else { $desktopPaths[0] }))
         }
         Write-Host 'next:'
         if ($role -eq 'client') {
-            Write-Host '  open Aether from the Start menu, or link from a new terminal:'
+            Write-Host '  open Cloudfield from the Start menu, or link from a new terminal:'
         }
         Write-Host '  aether link <server-host>      # on a tailnet: the server''s tailnet name'
-        Write-Host '  aether login                   # otherwise, sign in to the edge, Aether''s relay'
+        Write-Host '  aether login                   # otherwise, sign in to the edge, Cloudfield''s relay'
         Write-Host '  aether link --claim <code>     # with the claim link server setup printed'
         Write-Host '  aether link ''<invite link>''    # or with an invite link from an admin'
         Write-AetherStatus 'done:' Green ('Aether {0} installed in {1}' -f $release.Tag, (Format-AetherSeconds $total))

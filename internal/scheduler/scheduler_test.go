@@ -171,7 +171,7 @@ func newTestEnv(t *testing.T, mutate func(*Config)) *testEnv {
 		t.Fatalf("memberhome.New: %v", err)
 	}
 	e.cfg = Config{
-		Store:         db,
+		Store:         storetest.Unscoped{DB: db},
 		Runtime:       e.rt,
 		Bus:           bus,
 		Git:           e.git,
@@ -180,6 +180,8 @@ func newTestEnv(t *testing.T, mutate func(*Config)) *testEnv {
 		StateDir:      filepath.Join(dir, "scheduler"),
 		Homes:         homes,
 		StandardImage: "busybox:1.36",
+		// Tests must not depend on the free space of the host's temp dir.
+		filesystemCapacity: healthyAdmissionData,
 		// The fake runtime never needs the default two-second window, and a short
 		// probe keeps reboot scenarios from being the slowest tests.
 		ExitProbeTimeout: 20 * time.Millisecond,
@@ -188,6 +190,9 @@ func newTestEnv(t *testing.T, mutate func(*Config)) *testEnv {
 		Harnesses: map[string]HarnessSpec{
 			"fake": {TUIArgs: []string{"fake-agent", "{task}"}, HeadlessArgs: []string{"fake-agent", "{task}"}},
 		},
+	}
+	if e.cfg.Profiles, err = profile.New(db); err != nil {
+		t.Fatalf("profile.New: %v", err)
 	}
 	if mutate != nil {
 		mutate(&e.cfg)
@@ -266,6 +271,9 @@ func TestSaveTerminalImageUsesRunHome(t *testing.T) {
 		Color: "#3cb44b", Role: domain.RoleCollaborator,
 	}
 	if err := e.db.CreateMember(t.Context(), account); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.ShareAccount(t.Context(), account.ID, e.member.ID); err != nil {
 		t.Fatal(err)
 	}
 	run, err := e.sched.Launch(
@@ -1125,8 +1133,8 @@ func TestLaunchSpecIdentityAndCreationKey(t *testing.T) {
 	if c.spec.CreationKey != string(run.ID) {
 		t.Errorf("creation key = %q, want %q", c.spec.CreationKey, run.ID)
 	}
-	if len(c.spec.Mounts) != 5 {
-		t.Fatalf("mounts = %v, want persistent home, its two pinned logins, isolated cache and scratch", c.spec.Mounts)
+	if len(c.spec.Mounts) != 6 {
+		t.Fatalf("mounts = %v, want persistent home, its three pins, isolated cache and scratch", c.spec.Mounts)
 	}
 	wantHome, err := e.cfg.Homes.Path(e.member.ID)
 	if err != nil {
@@ -1150,6 +1158,9 @@ func TestSharedAccountLaunchUsesLauncherHomeAndKeepsActorIdentity(t *testing.T) 
 	if err := e.db.CreateMember(t.Context(), account); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := e.db.ShareAccount(t.Context(), account.ID, e.member.ID); err != nil {
+		t.Fatal(err)
+	}
 	sub := e.subscribe(t)
 	run, err := e.sched.Launch(
 		t.Context(), e.ws.ID, e.member.ID, account.ID,
@@ -1162,8 +1173,8 @@ func TestSharedAccountLaunchUsesLauncherHomeAndKeepsActorIdentity(t *testing.T) 
 		t.Fatalf("run actor/account = %s/%s, want %s/%s", run.MemberID, run.AccountMember(), e.member.ID, account.ID)
 	}
 	c := e.rt.byName(string(run.ID))
-	if c == nil || len(c.spec.Mounts) != 5 {
-		t.Fatalf("container mounts = %+v, want only launcher's home, its pinned logins, cache and scratch", c)
+	if c == nil || len(c.spec.Mounts) != 6 {
+		t.Fatalf("container mounts = %+v, want only launcher's home, its pins, cache and scratch", c)
 	}
 	wantHome, err := e.cfg.Homes.Path(e.member.ID)
 	if err != nil {
@@ -1199,8 +1210,8 @@ func TestLaunchMountsPersistentHome(t *testing.T) {
 	if err != nil {
 		t.Fatalf("member home: %v", err)
 	}
-	if len(c.spec.Mounts) != 5 {
-		t.Fatalf("mounts = %v, want home, its pinned logins, isolated cache and scratch", c.spec.Mounts)
+	if len(c.spec.Mounts) != 6 {
+		t.Fatalf("mounts = %v, want home, its pins, isolated cache and scratch", c.spec.Mounts)
 	}
 	if got := c.spec.Mounts[0]; got.HostPath != wantHome || got.ContainerPath != "/root" || got.ReadOnly {
 		t.Fatalf("home mount = %+v, want %q at /root", got, wantHome)
@@ -1210,7 +1221,7 @@ func TestLaunchMountsPersistentHome(t *testing.T) {
 		t.Fatalf("second Launch: %v", err)
 	}
 	c2 := e.rt.byName(string(run2.ID))
-	if c2 == nil || len(c2.spec.Mounts) != 5 || c2.spec.Mounts[0].HostPath != wantHome {
+	if c2 == nil || len(c2.spec.Mounts) != 6 || c2.spec.Mounts[0].HostPath != wantHome {
 		t.Fatalf("second home mount = %+v, want %q", c2.spec.Mounts, wantHome)
 	}
 }
@@ -1246,7 +1257,7 @@ func TestReserveRunUserConflict(t *testing.T) {
 	e.sched.mu.Unlock()
 
 	entry := &supervised{runID: "run-new", memberID: e.member.ID}
-	err := e.sched.reserveRunUser(entry, "2000:2000", true)
+	err := e.sched.reserveRunUser(context.Background(), entry, "2000:2000", true)
 	if err == nil {
 		t.Fatal("conflicting uid accepted for the shared member home")
 	}
@@ -1260,7 +1271,7 @@ func TestReserveRunUserConflict(t *testing.T) {
 	}
 
 	same := &supervised{runID: "run-same", memberID: e.member.ID}
-	if err := e.sched.reserveRunUser(same, "1000:1000", true); err != nil {
+	if err := e.sched.reserveRunUser(context.Background(), same, "1000:1000", true); err != nil {
 		t.Fatalf("same mapping rejected: %v", err)
 	}
 	if same.runUser != "1000:1000" {
@@ -1268,17 +1279,17 @@ func TestReserveRunUserConflict(t *testing.T) {
 	}
 
 	otherMember := &supervised{runID: "run-other-member", memberID: "other-member"}
-	if err := e.sched.reserveRunUser(otherMember, "2000:2000", true); err != nil {
+	if err := e.sched.reserveRunUser(context.Background(), otherMember, "2000:2000", true); err != nil {
 		t.Fatalf("different member rejected: %v", err)
 	}
 
 	root := &supervised{runID: "run-root", memberID: e.member.ID}
-	if err := e.sched.reserveRunUser(root, "", true); err != nil {
+	if err := e.sched.reserveRunUser(context.Background(), root, "", true); err != nil {
 		t.Fatalf("root run rejected: %v", err)
 	}
 
 	noHome := &supervised{runID: "run-nohome", memberID: e.member.ID}
-	if err := e.sched.reserveRunUser(noHome, "2000:2000", false); err != nil {
+	if err := e.sched.reserveRunUser(context.Background(), noHome, "2000:2000", false); err != nil {
 		t.Fatalf("run without credential mounts rejected: %v", err)
 	}
 }
@@ -1287,16 +1298,16 @@ func TestPendingTerminalReservationBlocksConflictingRun(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t, nil)
 	pending := &terminalSupervision{member: e.member.ID}
-	if err := e.sched.reserveTerminalUser(pending, "1000:1000"); err != nil {
+	if err := e.sched.reserveTerminalUser(context.Background(), pending, "1000:1000"); err != nil {
 		t.Fatalf("reserve terminal user: %v", err)
 	}
 
 	conflicting := &supervised{runID: "run-conflict", memberID: e.member.ID}
-	if err := e.sched.reserveRunUser(conflicting, "2000:2000", true); err == nil {
+	if err := e.sched.reserveRunUser(context.Background(), conflicting, "2000:2000", true); err == nil {
 		t.Fatal("conflicting session user accepted while terminal reservation was pending")
 	}
 	e.sched.releaseTerminalReservation(pending)
-	if err := e.sched.reserveRunUser(conflicting, "2000:2000", true); err != nil {
+	if err := e.sched.reserveRunUser(context.Background(), conflicting, "2000:2000", true); err != nil {
 		t.Fatalf("session user after terminal release: %v", err)
 	}
 }
@@ -1482,8 +1493,8 @@ func TestRetentionTTLDefaults(t *testing.T) {
 	if got := e.sched.cfg.CheckoutTTL; got != 72*time.Hour {
 		t.Fatalf("default CheckoutTTL = %v, want 72h", got)
 	}
-	if got := e.sched.cfg.RunContainerTTL; got != 7*24*time.Hour {
-		t.Fatalf("default RunContainerTTL = %v, want 168h", got)
+	if got := e.sched.cfg.RunContainerTTL; got != 30*24*time.Hour {
+		t.Fatalf("default RunContainerTTL = %v, want 720h", got)
 	}
 	disabled := newTestEnv(t, func(cfg *Config) { cfg.CheckoutTTL = -1 })
 	if got := disabled.sched.cfg.CheckoutTTL; got >= 0 {
@@ -1522,7 +1533,7 @@ func TestLaunchPinsProfileWithoutMount(t *testing.T) {
 	if c == nil {
 		t.Fatal("no container")
 	}
-	if len(c.spec.Mounts) != 5 || c.spec.Mounts[0].ContainerPath != "/root" || c.spec.Mounts[0].ReadOnly {
+	if len(c.spec.Mounts) != 6 || c.spec.Mounts[0].ContainerPath != "/root" || c.spec.Mounts[0].ReadOnly {
 		t.Fatalf("mounts = %v, want writable home/cache without profile mount", c.spec.Mounts)
 	}
 }
@@ -1544,7 +1555,7 @@ func TestLaunchWithoutSnapshotUsesHomeAndCache(t *testing.T) {
 		t.Fatalf("unexpected pin %q", got.ProfileSnapshotID)
 	}
 	c := e.rt.byName(string(run.ID))
-	if c == nil || len(c.spec.Mounts) != 5 || c.spec.Mounts[0].ContainerPath != "/root" {
+	if c == nil || len(c.spec.Mounts) != 6 || c.spec.Mounts[0].ContainerPath != "/root" {
 		t.Fatalf("mounts = %v, want only home/cache mounts", c.spec.Mounts)
 	}
 }
@@ -1637,8 +1648,8 @@ func TestContainerAddrRequiresSupervisedRun(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t, nil)
 	_, err := e.sched.ContainerAddr(t.Context(), "run_missing")
-	if err == nil || err.Error() != "session has no live container" {
-		t.Fatalf("ContainerAddr missing = %v, want session has no live container", err)
+	if err == nil || err.Error() != "session has no live sandbox" {
+		t.Fatalf("ContainerAddr missing = %v, want session has no live sandbox", err)
 	}
 }
 

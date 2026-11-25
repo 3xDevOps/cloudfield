@@ -224,6 +224,18 @@ func isPathWithin(candidate, root string) bool {
 	return candidate == root || strings.HasPrefix(candidate, root+"/")
 }
 
+// VMState is a home-relative directory that holds nothing but a CLI's
+// databases. Env, when set, is the variable that points the CLI at it, or
+// at File in it. Seed names files in the home's Dir, such as a login,
+// copied into the session's own at every cold start of its VM; Dir then
+// need not hold databases only.
+type VMState struct {
+	Dir  string
+	Env  string
+	File string
+	Seed []string
+}
+
 // Profile converts a generic definition to a launch profile. The registry
 // entry of the same name still supplies what is not part of the argv:
 // EnvPassthrough, Env, PermissionEnv, ACPMode, ModelArgs, ModelEnv and the
@@ -243,6 +255,8 @@ func (d Definition) Profile() Profile {
 		p.EnvPassthrough = append([]string(nil), registered.EnvPassthrough...)
 		p.Env = maps.Clone(registered.Env)
 		p.PermissionEnv = maps.Clone(registered.PermissionEnv)
+		p.VMState = slices.Clone(registered.VMState)
+		p.LoginBroker = registered.LoginBroker
 		if p.ACPMode == "" {
 			p.ACPMode = registered.ACPMode
 		}
@@ -303,13 +317,23 @@ type Profile struct {
 	// links into, mounted read-only when a launch borrows the owner's install.
 	InstallPaths []string
 	// BorrowedState maps a home-relative JSON file to keys a borrowing launch
-	// sets in the launcher's copy when absent, so the CLI starts signed in
-	// instead of running first-time setup.
+	// sets in its copy of AccountConfig, so the CLI starts signed in instead
+	// of running first-time setup.
 	BorrowedState map[string]map[string]any
+	// AccountConfig is where the CLI caches the account it is signed in to.
+	// A launch that borrows another member's login gets its own copy of it.
+	AccountConfig *AccountConfig
 	// PinnedLogins are the login files the CLI replaces by rename. Each is
 	// mounted in place in the owner's own containers too; the rename then
 	// fails with EBUSY and the CLI falls back to rewriting the shared inode.
 	PinnedLogins []string
+	// VMState is where the CLI keeps SQLite databases in WAL mode that its
+	// sessions share. Sessions in separate VMs cannot share one, so in a
+	// session VM each directory is the session's own.
+	VMState []VMState
+	// LoginBroker marks omp, whose logins the server's auth broker serves to
+	// session VMs instead of a shared account's login directory.
+	LoginBroker bool
 	// LocalRoot is the home-relative profile directory (e.g. ".claude");
 	// empty means no profile sync.
 	LocalRoot string
@@ -392,7 +416,7 @@ if [ ! -d "$dir" ]; then
 		break
 	done
 fi
-[ -d "$dir" ] || { echo "{exe} in ~/.local/bin was not installed with npm, so Aether cannot update it" >&2; exit 1; }
+[ -d "$dir" ] || { echo "{exe} in ~/.local/bin was not installed with npm, so Cloudfield cannot update it" >&2; exit 1; }
 rm -rf "$HOME/.local/lib/.{exe}-update."*
 command -v npm >/dev/null 2>&1 || { echo "npm is not in this environment's PATH, and {exe} updates through npm" >&2; exit 1; }
 latest=$(npm view {pkg} version --fetch-retries=0) && [ -n "$latest" ] || exit 1
@@ -403,6 +427,19 @@ npm install -g --prefix "$stage"{extra} "{pkg}@$latest" || exit 1
 "{server}" package-exchange "$dir" "$stage/lib/node_modules/{pkg}"`)
 }
 
+// AccountConfig is a home-relative JSON file, File, holding the account the
+// CLI is signed in to under Keys. Env set to the home-relative directory Dir
+// makes the CLI use Dir/<base of File> instead of File, unless the
+// home-relative Legacy file is there: the CLI then uses that one, and so
+// does the launcher's own CLI.
+type AccountConfig struct {
+	File   string
+	Keys   []string
+	Env    string
+	Dir    string
+	Legacy string
+}
+
 // profiles is the shipped registry. "custom" takes its command from
 // deployment configuration and declares no credentials or key passthrough.
 var profiles = map[string]Profile{
@@ -410,7 +447,7 @@ var profiles = map[string]Profile{
 		Name:        "claude",
 		DisplayName: "Claude Code",
 		Capabilities: Capabilities{Status: ReporterFull, Hooks: HooksManaged, IdleWake: true,
-			ModeSwitch: true, BackgroundTasks: true},
+			ModeSwitch: true, BackgroundTasks: true, Sleep: true},
 		TUIArgs: []string{"claude", "--dangerously-skip-permissions", TaskPlaceholder},
 		// Claude Code refuses stream-json in print mode without --verbose.
 		HeadlessArgs:    []string{"claude", "-p", "--output-format", "stream-json", "--verbose", "--dangerously-skip-permissions", TaskPlaceholder},
@@ -428,7 +465,10 @@ var profiles = map[string]Profile{
 		EnvPassthrough: []string{"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL"},
 		// Claude Code refuses --dangerously-skip-permissions as root unless the
 		// environment declares a sandbox; the run container is one.
-		Env:             map[string]string{"IS_SANDBOX": "1"},
+		// Claude Code reruns a model call that ended without text, as Aether's
+		// end-of-turn report does, unless a tool listed here succeeded since
+		// the last user message.
+		Env:             map[string]string{"IS_SANDBOX": "1", "CLAUDE_CODE_TERMINAL_MCP_TOOLS": "mcp__aether__aether_report"},
 		CredentialPaths: []string{".claude/.credentials.json"},
 		// The native installer links ~/.local/bin/claude, by absolute
 		// path, to ~/.local/share/claude/versions/<version>.
@@ -436,6 +476,22 @@ var profiles = map[string]Profile{
 		// Claude Code runs its setup wizard, whose sign-in step ignores an
 		// existing login, until ~/.claude.json says setup is complete.
 		BorrowedState: map[string]map[string]any{".claude.json": {"hasCompletedOnboarding": true}},
+		// `claude auth status` reports the account cached in oauthAccount,
+		// not the one the login belongs to. Keys are what Claude Code 2.1.319
+		// clears on a sign-in to another account, its own API key and the
+		// API keys the launcher approved. CLAUDE_CONFIG_DIR moves only this
+		// file while it names the default ~/.claude. Claude Code reads an
+		// existing ~/.claude/.config.json first, wherever the variable points,
+		// and ignores it only when it is empty and read-only.
+		AccountConfig: &AccountConfig{File: ".claude.json", Legacy: ".claude/.config.json", Keys: []string{
+			"oauthAccount", "primaryApiKey", "customApiKeyResponses",
+			"managedSettingsNoticeSeenOrg", "additionalModelOptionsCache", "additionalModelOptionsAnsweredAt",
+			"additionalModelCostsCache", "modelAccessCache", "orgModelDefaultCache", "cachedArtifactRoster",
+			"artifactRosterDenied", "lastSeenOrgDefaultUpdatedAt", "clientDataCache", "clientDataCacheSlots",
+			"autoCompactWindowsCache", "cachedUsageUtilization", "metricsStatusCache",
+			"metricsStatusCacheByPrincipal", "githubWebConnectionStatusCache", "unusedLimitResetStatusCache",
+			"startupPrefetchedAt",
+		}, Env: "CLAUDE_CONFIG_DIR", Dir: ".claude"},
 		// Claude Code writes the login to a temporary file and renames it
 		// over the old one, and rewrites it in place only when that rename
 		// fails with EXDEV, EPERM, EEXIST or EBUSY.
@@ -470,6 +526,7 @@ var profiles = map[string]Profile{
 		ResumeArgs:      []string{"codex", "resume", SessionPlaceholder},
 		EnvPassthrough:  []string{"CODEX_API_KEY", "OPENAI_API_KEY"},
 		CredentialPaths: []string{".codex/auth.json"},
+		VMState:         []VMState{{Dir: ".codex/vm-sqlite", Env: "CODEX_SQLITE_HOME"}},
 		LocalRoot:       ".codex",
 		DenyNames:       []string{"auth.json", "keychain", "token.json"},
 		// developer_instructions adds to Codex's instructions;
@@ -527,8 +584,12 @@ var profiles = map[string]Profile{
 		EffortLevels:   []string{"off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"},
 		EnvPassthrough: []string{"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "OPENAI_API_KEY"},
 		// omp keeps its login in a SQLite WAL database beside its config,
-		// and a WAL database cannot be shared file by file.
+		// and a WAL database cannot be shared file by file. In session VMs
+		// omp uses the XDG layout, which moves every database it keeps out
+		// of ~/.omp, and the server's auth broker for its logins.
 		CredentialPaths: []string{".omp/agent"},
+		LoginBroker:     true,
+		VMState:         []VMState{{Dir: ".local/share/omp"}, {Dir: ".local/state/omp"}, {Dir: ".cache/omp"}},
 		LocalRoot:       ".omp",
 		// The WAL and shm files hold provider keys too.
 		DenyNames:       []string{"agent.db", "agent.db-wal", "agent.db-shm"},
@@ -550,6 +611,7 @@ var profiles = map[string]Profile{
 		PermissionEnv:   map[string]string{"OPENCODE_CONFIG_CONTENT": `{"permission":"allow"}`},
 		EnvPassthrough:  []string{"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "OPENAI_API_KEY", "OPENAI_BASE_URL"},
 		CredentialPaths: []string{".local/share/opencode/auth.json"},
+		VMState:         []VMState{{Dir: ".local/share/opencode/vm-db", Env: "OPENCODE_DB", File: "opencode.db"}},
 		LocalRoot:       ".config/opencode",
 		DenyNames:       []string{"auth.json", "token.json", "tokens.json"},
 		ModelArgs:       []string{"--model", ModelPlaceholder},
@@ -602,8 +664,12 @@ var profiles = map[string]Profile{
 		// the token in config.json. Copilot replaces it by rename, but it is
 		// not pinned: whether Copilot can write it as a mount is unverified.
 		CredentialPaths: []string{".copilot/config.json"},
-		DenyNames:       []string{"config.json"},
-		InstallScript:   "if command -v npm >/dev/null 2>&1; then npm install -g --prefix \"$HOME/.local\" @github/copilot; else echo \"npm is not in this environment's PATH, and copilot installs through npm\" >&2; false; fi",
+		// The session index ~/.copilot/session-store.db sits beside the
+		// login, and COPILOT_HOME moves both. The login is a GitHub OAuth
+		// app token, which no use invalidates, so a copy of it is safe.
+		VMState:       []VMState{{Dir: ".copilot", Seed: []string{"config.json", "settings.json", "mcp-config.json"}}},
+		DenyNames:     []string{"config.json"},
+		InstallScript: "if command -v npm >/dev/null 2>&1; then npm install -g --prefix \"$HOME/.local\" @github/copilot; else echo \"npm is not in this environment's PATH, and copilot installs through npm\" >&2; false; fi",
 		// Not DeviceLogin: with no keychain, copilot login asks y/N before
 		// it stores the token.
 		LoginCommand: "copilot login --device-code",
@@ -645,6 +711,10 @@ var profiles = map[string]Profile{
 		ModelArgs:       []string{"--model", ModelPlaceholder},
 		EnvPassthrough:  []string{"CURSOR_API_KEY"},
 		CredentialPaths: []string{".config/cursor/auth.json"},
+		VMState: []VMState{
+			{Dir: ".cursor/ai-tracking"},
+			{Dir: ".local/state/cursor/agent-stores", Env: "CURSOR_AGENT_STORE_DIR"},
+		},
 		// The installer links ~/.local/bin/agent, by absolute path, to
 		// ~/.local/share/cursor-agent/versions/<version>.
 		InstallPaths:  []string{".local/share/cursor-agent"},
@@ -663,10 +733,15 @@ var profiles = map[string]Profile{
 		// ~/.gemini/antigravity-cli/settings.json.
 		EnvPassthrough:  []string{"GEMINI_API_KEY", "GOOGLE_GEMINI_BASE_URL"},
 		CredentialPaths: []string{".gemini/antigravity-cli/antigravity-oauth-token"},
-		DenyNames:       []string{"antigravity-oauth-token"},
-		InstallScript:   "curl -fsSL https://antigravity.google/cli/install.sh | bash",
-		LoginCommand:    "agy",
-		UpdateScript:    "agy update",
+		// conversation_summaries.db sits beside the login and no documented
+		// setting moves it. Google does not rotate the login's refresh
+		// token, so a copy of it is safe; without onboarding.json the TUI
+		// shows its first-run screens.
+		VMState:       []VMState{{Dir: ".gemini/antigravity-cli", Seed: []string{"antigravity-oauth-token", "settings.json", "cache/onboarding.json"}}},
+		DenyNames:     []string{"antigravity-oauth-token"},
+		InstallScript: "curl -fsSL https://antigravity.google/cli/install.sh | bash",
+		LoginCommand:  "agy",
+		UpdateScript:  "agy update",
 	},
 	"custom": {Name: "custom"},
 }

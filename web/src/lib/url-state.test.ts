@@ -1,6 +1,7 @@
 import { act } from '@testing-library/react'
-import { bindRouteToUrl, hrefFor, redirectRoute, routeFromQuery, routeQuery } from '@/lib/url-state'
+import { bindRouteToUrl, historyDepth, hrefFor, redirectRoute, routeFromQuery, routeQuery, sessionEntry } from '@/lib/url-state'
 import { createRootStore } from '@/store'
+import { atViewport } from '@/test/viewport'
 import type { Route } from '@/store/ui'
 
 const query = (route: Route) => routeQuery(route).toString()
@@ -42,6 +43,39 @@ describe('route in the query string', () => {
 })
 
 describe('bindRouteToUrl', () => {
+  it('reads a phone\'s bare address as Needs you when Back returns to it, as on load', () => {
+    atViewport(390, { pointer: 'coarse' })
+    window.history.replaceState(null, '', '/')
+    const store = createRootStore()
+    const stop = bindRouteToUrl(store)
+    onTestFinished(stop)
+    window.history.replaceState(null, '', '/')
+
+    act(() => store.getState().navigate('run', { runId: 'run_1' }))
+    act(() => {
+      window.history.back()
+    })
+    return vi.waitFor(() => expect(store.getState().route).toEqual({ name: 'needs-you', params: {} }))
+  })
+
+  it('remembers where a session was opened across its own entries, for a phone\'s Back', () => {
+    const store = createRootStore()
+    store.setState({ route: { name: 'needs-you', params: {} } })
+    const stop = bindRouteToUrl(store)
+    onTestFinished(stop)
+    expect(sessionEntry()).toBeUndefined()
+
+    act(() => store.getState().navigate('run', { runId: 'run_1' }))
+    act(() => redirectRoute(store, { name: 'run', params: { runId: 'run_1', view: 'terminal' } }))
+    act(() => store.getState().navigate('run', { runId: 'run_1', view: 'session', agent: 'toolu_1' }))
+    expect([historyDepth(), sessionEntry()]).toEqual([2, 1])
+
+    act(() => store.getState().navigate('run', { runId: 'run_2' }))
+    expect([historyDepth(), sessionEntry()]).toEqual([3, 3])
+    act(() => store.getState().navigate('settings'))
+    expect([historyDepth(), sessionEntry()]).toEqual([4, undefined])
+  })
+
   it('starts the store on the address, pushes each navigation and follows back', () => {
     window.history.replaceState(null, '', '/?run=run_1&view=changes')
     const store = createRootStore()
@@ -58,6 +92,22 @@ describe('bindRouteToUrl', () => {
     return vi.waitFor(() => {
       expect(window.location.search).toBe('?run=run_1&view=changes')
       expect(store.getState().route).toEqual({ name: 'run', params: { runId: 'run_1', view: 'changes' } })
+    })
+  })
+
+  it('shows the view an entry names on back without remembering it', () => {
+    window.history.replaceState(null, '', '/?run=run_1&view=terminal')
+    const store = createRootStore()
+    const stop = bindRouteToUrl(store)
+    onTestFinished(stop)
+
+    act(() => store.getState().navigate('run', { runId: 'run_1', view: 'changes' }))
+    act(() => {
+      window.history.back()
+    })
+    return vi.waitFor(() => {
+      expect(store.getState().route).toEqual({ name: 'run', params: { runId: 'run_1', view: 'terminal' } })
+      expect(store.getState().runViewMemory).toEqual({ run_1: 'changes' })
     })
   })
 
@@ -81,6 +131,43 @@ describe('bindRouteToUrl', () => {
 
     act(() => redirectRoute(store, { name: 'board', params: {} }))
     expect(window.location.search).toBe('')
+
+    act(() => {
+      window.history.back()
+    })
+    return vi.waitFor(() => {
+      expect(window.location.search).toBe('?page=settings')
+      expect(store.getState().route).toEqual({ name: 'settings', params: {} })
+    })
+  })
+})
+
+describe('an address the desktop app moves to', () => {
+  it('is seen with its query before the route rewrites it', () => {
+    const store = createRootStore()
+    const seen: string[] = []
+    const stop = bindRouteToUrl(store, (query) => seen.push(query.toString()))
+    window.history.pushState(null, '', '/?assistant=1&card=c1')
+    window.dispatchEvent(new PopStateEvent('popstate'))
+    stop()
+    window.history.replaceState(null, '', '/')
+    expect(seen).toEqual(['assistant=1&card=c1'])
+  })
+
+  it('opens a card over the page in place, so Back leaves it', () => {
+    window.history.replaceState(null, '', '/?page=settings')
+    window.history.pushState(null, '', '/?run=run_a')
+    const store = createRootStore()
+    const stop = bindRouteToUrl(store)
+    onTestFinished(stop)
+    const length = window.history.length
+
+    act(() => {
+      window.history.replaceState(window.history.state, '', '/?run=run_a&assistant=1&card=c1')
+      window.dispatchEvent(new PopStateEvent('popstate'))
+    })
+    expect(window.location.search).toBe('?run=run_a')
+    expect(window.history.length).toBe(length)
 
     act(() => {
       window.history.back()

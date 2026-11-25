@@ -51,9 +51,9 @@ describe('terminal zoom', () => {
   })
 
   it('leaves the other stored preferences alone', () => {
-    const hydrated = rehydrate({ theme: 'dark', sidebarWidth: 320, terminalFontSize: 20 })
+    const hydrated = rehydrate({ theme: 'light', sidebarWidth: 320, terminalFontSize: 20 })
 
-    expect(hydrated.theme).toBe('dark')
+    expect(hydrated.theme).toBe('light')
     expect(hydrated.sidebarWidth).toBe(320)
     expect(hydrated.terminalFontSize).toBe(20)
   })
@@ -63,15 +63,22 @@ describe('terminal zoom', () => {
   })
 
   it('drops the per-account agent memory from a version 5 payload', () => {
-    const hydrated = rehydrate({ lastHarnessByAccount: { mem_1: 'claude' }, theme: 'dark' }, 5)
+    const hydrated = rehydrate({ lastHarnessByAccount: { mem_1: 'claude' }, theme: 'light' }, 5)
     expect(hydrated).not.toHaveProperty('lastHarnessByAccount')
-    expect(hydrated.theme).toBe('dark')
+    expect(hydrated.theme).toBe('light')
   })
 
   it('drops the run dock height from a version 7 payload', () => {
-    const hydrated = rehydrate({ runDockHeight: 240, theme: 'dark' }, 7)
+    const hydrated = rehydrate({ runDockHeight: 240, theme: 'light' }, 7)
     expect(hydrated).not.toHaveProperty('runDockHeight')
-    expect(hydrated.theme).toBe('dark')
+    expect(hydrated.theme).toBe('light')
+  })
+
+  it('turns a theme stored before the dark default into dark, and keeps chosen ones', () => {
+    expect(createRootStore().getState().theme).toBe('dark')
+    expect(rehydrate({ theme: 'system' }, 11).theme).toBe('dark')
+    expect(rehydrate({ theme: 'light' }, 11).theme).toBe('light')
+    expect(rehydrate({ theme: 'system' }, 12).theme).toBe('system')
   })
 })
 
@@ -217,15 +224,46 @@ describe('terminal dock height', () => {
 })
 
 describe('run view memory', () => {
-  it('remembers the view a run was opened in for the rest of the visit', () => {
+  const alice = 'origin\u0000\u0000mem_alice'
+  const forget = () => useStore.setState({ identityKey: null, runViewMemory: {}, savedRunViews: {} })
+
+  it('keeps the view each session last showed across a reload, for the signed-in member only', () => {
+    useStore.getState().setIdentityKey(alice)
     useStore.getState().navigate('run', { runId: 'run_1', view: 'changes' })
     useStore.getState().navigate('board')
     useStore.getState().navigate('run', { runId: 'run_1' })
-
     expect(useStore.getState().runViewMemory).toEqual({ run_1: 'changes' })
-    const stored = JSON.parse(window.localStorage.getItem('aether.ui') ?? '{}') as { state?: Record<string, unknown> }
-    expect(stored.state).not.toHaveProperty('runViewMemory')
-    useStore.setState({ runViewMemory: {} })
+
+    const reloaded = createRootStore()
+    reloaded.getState().setIdentityKey(alice)
+    expect(reloaded.getState().runViewMemory).toEqual({ run_1: 'changes' })
+    reloaded.getState().setIdentityKey('origin\u0000\u0000mem_bob')
+    expect(reloaded.getState().runViewMemory).toEqual({})
+    forget()
+  })
+
+  it('keeps the newest sessions and forgets a deleted one', () => {
+    useStore.getState().setIdentityKey(alice)
+    for (let i = 0; i <= 200; i++) useStore.getState().navigate('run', { runId: `run_${i}`, view: 'files' })
+    useStore.getState().navigate('run', { runId: 'run_1', view: 'changes' })
+    const kept = useStore.getState().runViewMemory
+    expect(Object.keys(kept)).toHaveLength(200)
+    expect(kept).not.toHaveProperty('run_0')
+    expect(Object.keys(kept).at(-1)).toBe('run_1')
+
+    useStore.getState().removeRun('run_1')
+    expect(useStore.getState().runViewMemory).not.toHaveProperty('run_1')
+    expect(useStore.getState().savedRunViews[alice]).not.toHaveProperty('run_1')
+    forget()
+  })
+
+  it('shows a view without remembering it when the navigation does not choose it', () => {
+    useStore.getState().navigate('run', { runId: 'run_1', view: 'changes' })
+    useStore.getState().navigate('run', { runId: 'run_1', view: 'terminal' }, { remember: false })
+
+    expect(useStore.getState().route.params.view).toBe('terminal')
+    expect(useStore.getState().runViewMemory).toEqual({ run_1: 'changes' })
+    forget()
   })
 })
 
@@ -494,5 +532,18 @@ describe('scoped Board preferences', () => {
     expect(createRootStore().getState().boardMapFolded).toEqual({ [keyOf('other')]: true })
     window.localStorage.setItem('aether.ui', JSON.stringify({ version: 9, state: { boardMapFolded: { a: true, b: 'yes', c: null } } }))
     expect(createRootStore().getState().boardMapFolded).toEqual({ a: true })
+  })
+})
+
+describe('a card notification', () => {
+  it('opens the assistant panel even when the stored state had it closed', () => {
+    window.history.replaceState(null, '', '/?assistant=1')
+    window.localStorage.setItem('aether.ui', JSON.stringify({ state: { assistantOpen: false }, version: 8 }))
+    try {
+      expect(createRootStore().getState().assistantOpen).toBe(true)
+    } finally {
+      window.localStorage.removeItem('aether.ui')
+      window.history.replaceState(null, '', '/')
+    }
   })
 })

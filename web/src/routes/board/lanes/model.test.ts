@@ -1,7 +1,9 @@
 import type { StateContext } from '@/lib/needs-you'
 import type { Event, Run } from '@/lib/types'
 import { agoLabel, tickStep, ticks, widerWindow, windowSpan } from '@/routes/board/lanes/axis'
-import { laneEdges, mailOf } from '@/routes/board/lanes/edges'
+import { laneEdges, mailOf, type LaneEdge } from '@/routes/board/lanes/edges'
+import { addLiveMail, liveMailCap, liveShapes, type Arrival } from '@/routes/board/lanes/live-mail'
+import { bundleWords, conversationWords, conversationsByLane, mailMarks } from '@/routes/board/lanes/mail'
 import { buildLanes, layoutLanes, fineMetrics, type LanesInput, type FamilyLane, type RunLane } from '@/routes/board/lanes/model'
 import { runSegments, segmentTone, statusChanges, strongest } from '@/routes/board/lanes/segments'
 import { mapRuns } from '@/routes/board/selectors'
@@ -151,7 +153,7 @@ describe('buildLanes', () => {
       'Needs you', 'family', ['parent', 3], ['c1', 3], ['c2', 3], ['g1', 3],
     ])
     const header = lanes.find((l): l is FamilyLane => l.kind === 'family')!
-    expect(header).toMatchObject({ open: true, parentID: 'parent', detail: '3 subsessions · 1 needs you · 1 working · 1 done' })
+    expect(header).toMatchObject({ open: true, parentID: 'parent', detail: '3 subsessions · 1 needs you · 1 working · 1 finished' })
     const folded = buildLanes(input(ctx, { open: new Map([[header.key, false]]) })).lanes
     expect(folded.filter((l) => l.kind === 'run').map((l) => (l as RunLane).card.run.id)).toEqual(['g1'])
   })
@@ -162,8 +164,19 @@ describe('buildLanes', () => {
       run({ id: 'c1', parent_run_id: 'parent', status: 'completed', state: undefined, created_at: at(10), finished_at: at(20) }),
     ])
     const { lanes } = buildLanes(input(ctx))
-    expect(lanes.find((l): l is FamilyLane => l.kind === 'family')).toMatchObject({ open: false })
+    expect(lanes.find((l): l is FamilyLane => l.kind === 'family')).toMatchObject({ open: false, detail: '1 subsession · 1 finished' })
     expect(lanes.filter((l): l is RunLane => l.kind === 'run').map((l) => l.card.run.id)).toEqual(['parent'])
+  })
+
+  it('keeps a detached subsession awaiting review visible in a folded family once its parent ended', () => {
+    const ctx = ctxOf([
+      run({ id: 'parent', status: 'merged', state: undefined, created_at: at(5), started_at: at(5), finished_at: at(40) }),
+      run({ id: 'c1', parent_run_id: 'parent', detached: true, status: 'completed', state: undefined, review: 'ready', created_at: at(10), finished_at: at(20) }),
+      run({ id: 'c2', parent_run_id: 'parent', status: 'completed', state: undefined, created_at: at(10), finished_at: at(20) }),
+    ])
+    const { lanes } = buildLanes(input(ctx, { open: new Map([['section:review', true], ['section:finished', true]]) }))
+    expect(lanes.find((l): l is FamilyLane => l.kind === 'family')).toMatchObject({ open: false })
+    expect(lanes.filter((l): l is RunLane => l.kind === 'run').map((l) => l.card.run.id)).toEqual(['c1'])
   })
 
   it('keeps a failure that ended as it started visible on the Finished strip', () => {
@@ -175,10 +188,11 @@ describe('buildLanes', () => {
     expect(summary?.kind === 'summary' && summary.strip.map((s) => s.tone)).toEqual(['done', 'failed', 'done'])
   })
 
-  it('colours a completed run awaiting review by its completion, while it reads Ready for review', () => {
+  it('colours a completed run awaiting review by its completion, while it reads Finished: review, never Needs you', () => {
     const ctx = ctxOf([run({ id: 'done', status: 'completed', state: undefined, review: 'ready', created_at: at(10), started_at: at(10), finished_at: at(40) })])
     const lane = buildLanes(input(ctx)).lanes.find((l): l is RunLane => l.kind === 'run')!
     expect(lane.card.state).toBe('ready')
+    expect(lane.card.group).toBe('review')
     expect(lane.outcome).toBe('completed')
     expect(segmentTone(lane.segments[0].state, lane.outcome)).toBe('done')
   })
@@ -261,5 +275,91 @@ describe('laneEdges', () => {
       window: { start: now - 60 * min, end: now }, now, bucket: 5 * min, overlaps: {}, hidden: new Set(),
     })
     expect(edge.messages).toMatchObject({ ids: ['m1', 'm2'], senders: ['a', 'b'] })
+  })
+
+  it('keeps mail with a session outside the view, at its drawn end', () => {
+    const ctx = ctxOf([run({ id: 'a', created_at: at(0) })])
+    const model = buildLanes(input(ctx))
+    const sent: Event = {
+      id: 'm', seq: 1, time: at(30), workspace_id: workspace.id, run_id: 'a', actor_id: '', type: 'coord.message',
+      payload: { message_id: 'm', workspace_id: workspace.id, from_run_id: 'a', to_run_id: 'away', kind: 'message' },
+    }
+    const [edge] = laneEdges({ drawn: model.drawn, mail: mailOf([sent]), window: { start: now - 60 * min, end: now }, now, bucket: 5 * min, overlaps: {}, hidden: new Set() })
+    expect(edge).toMatchObject({ outside: 'away', from: { lane: model.drawn.get('a') }, to: { lane: '', run: 'away' } })
+  })
+})
+
+describe('mail', () => {
+  const edge = (key: string, from: string, to: string, t: number, ids: string[], acked = false, outside?: string): LaneEdge => ({
+    key, kind: 'message', from: { lane: from, run: `run-${from || outside}`, t }, to: { lane: to, run: `run-${to || outside}`, t }, outside,
+    messages: { ids, senders: [`run-${from}`], acked, items: ids.map(() => ({ from: `run-${from || outside}`, to: `run-${to || outside}`, acked })) },
+  })
+  const order = new Map([['a', 0], ['b', 1], ['c', 2]])
+
+  it('marks both ends on the edges that face each other, and merges marks that crowd one edge', () => {
+    const marks = mailMarks([edge('1', 'a', 'c', 10, ['m1']), edge('2', 'b', 'c', 14, ['m2', 'm3']), edge('3', 'c', 'a', 40, ['m4'])], order, (t) => t)
+    expect(marks.map((m) => [m.lane, m.side, m.sent, m.x, m.count])).toEqual([
+      ['a', 'bottom', true, 10, 1],
+      ['a', 'bottom', false, 40, 1],
+      ['b', 'bottom', true, 14, 2],
+      ['c', 'top', false, 10, 3],
+      ['c', 'top', true, 40, 1],
+    ])
+  })
+
+  it('marks only the drawn end of mail with a session outside the view, on its top edge', () => {
+    expect(mailMarks([edge('1', '', 'b', 5, ['m1'], false, 'away')], order, (t) => t).map((m) => [m.lane, m.side, m.sent])).toEqual([['b', 'top', false]])
+  })
+
+  it('groups each lane\'s mail by the other session and words it for screen readers', () => {
+    const talks = conversationsByLane([edge('1', 'a', 'b', 1, ['m1', 'm2']), edge('2', 'b', 'a', 2, ['m3'], true), edge('3', 'a', '', 3, ['m4'], false, 'away')])
+    expect(talks.get('a')!.map((c) => [c.lane || c.run, c.sent, c.received, c.unacked])).toEqual([['b', 2, 1, 2], ['run-away', 1, 0, 1]])
+    expect(conversationWords(talks.get('a')!, (c) => c.lane || 'Outside')).toBe('messages: sent 2 to b and received 1 from b, sent 1 to Outside, 3 not acknowledged')
+    expect(talks.has('')).toBe(false)
+  })
+
+  it('keeps each session folded into one lane apart, and counts only the messages not acknowledged', () => {
+    const folded: LaneEdge = {
+      key: 'f', kind: 'message', from: { lane: 'a', run: 'run-a', t: 1 }, to: { lane: 'fold', run: 'run-x', t: 1 },
+      messages: { ids: ['m1', 'm2', 'm3'], senders: ['run-a'], acked: false, items: [
+        { from: 'run-a', to: 'run-x', acked: true },
+        { from: 'run-a', to: 'run-y', acked: false },
+        { from: 'run-a', to: 'run-y', acked: true },
+      ] },
+    }
+    const talks = conversationsByLane([folded])
+    expect(talks.get('a')!.map((c) => [c.lane, c.run, c.sent, c.unacked])).toEqual([['fold', 'run-y', 2, 1], ['fold', 'run-x', 1, 0]])
+    expect(talks.get('fold')!.map((c) => [c.run, c.received])).toEqual([['run-a', 3]])
+    expect(bundleWords(folded, (c) => c.run, '11:58')).toBe('3 messages from run-a to run-x, run-y · 11:58 · 1 not acknowledged')
+  })
+})
+
+describe('live mail', () => {
+  const arrival = (from: string, to: string, i: number): Arrival => ({ from: { lane: from, run: from }, to: { lane: to, run: to }, t: now - 1000 + i, at: i })
+
+  it('merges a burst on one pair into one arrow and keeps only the newest pairs past the cap', () => {
+    const burst = [arrival('a', 'b', 0), arrival('a', 'b', 1), arrival('c', 'd', 2), arrival('e', 'f', 3), arrival('g', 'h', 4), arrival('a', 'b', 5)]
+    const live = addLiveMail([], burst)
+    expect(live).toHaveLength(liveMailCap)
+    expect(live.map((arrow) => [arrow.pair, arrow.count])).toEqual([['e>f', 1], ['g>h', 1], ['a>b', 1]])
+    expect(new Set(live.map((arrow) => arrow.slot)).size).toBe(liveMailCap)
+  })
+
+  it('points at the scrolled-away end and stubs mail with a session outside the view', () => {
+    const g = { window: { start: now - 60 * min, end: now }, width: 600, labelWidth: 240, compact: false, metrics: fineMetrics }
+    const anchors = new Map([['a', { top: 0, height: 36, half: 12 }], ['b', { top: 720, height: 36, half: 12 }]])
+    const drawn = new Map([['a', 'a'], ['b', 'b']])
+    const [down, out] = liveShapes(addLiveMail([], [arrival('a', 'b', 0), { ...arrival('a', '', 1), to: { lane: '', run: 'elsewhere' } }]), drawn, anchors, g, { top: 0, bottom: 400 }, now)
+    expect(down.offscreen).toEqual({ end: 'to', edge: 'bottom' })
+    expect(down.y2).toBeGreaterThan(down.y1)
+    expect([down.x, down.bow]).toEqual([g.width - 28, 56])
+    expect([out.stub, out.offscreen]).toEqual(['out', undefined])
+    expect([out.x, out.bow]).toEqual([g.width - 28 - 16, 0])
+    const [adjacent] = liveShapes(addLiveMail([], [arrival('a', 'b', 0)]), drawn, new Map([['a', { top: 0, height: 36, half: 12 }], ['b', { top: 36, height: 36, half: 12 }]]), g, { top: 0, bottom: 400 }, now)
+    expect(adjacent.bow).toBe(0)
+    const [up, stub] = liveShapes(addLiveMail([], [arrival('b', 'a', 0), { ...arrival('', 'a', 1), from: { lane: '', run: 'elsewhere' } }]), drawn, anchors, g, { top: 600, bottom: 1000 }, now)
+    expect(up.offscreen).toEqual({ end: 'to', edge: 'top' })
+    expect([stub.stub, stub.offscreen]).toEqual(['in', { end: 'to', edge: 'top' }])
+    expect(liveShapes(addLiveMail([], [arrival('a', 'b', 0)]), drawn, anchors, { ...g, window: { start: now - 120 * min, end: now - 60 * min } }, { top: 0, bottom: 400 }, now)).toEqual([])
   })
 })

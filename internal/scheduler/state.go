@@ -63,6 +63,16 @@ const maxPublicRunStatusReason = 256
 
 func publicRunStatusReason(reason string) string {
 	reason = strings.TrimSpace(reason)
+	if base, note := withoutCleanupNote(reason); note != "" {
+		// Redaction and the length cap apply to the reason, never the note.
+		public := []rune(publicRunStatusReason(base))
+		if room := maxPublicRunStatusReason - len("; "+note); len(public) > room {
+			head := room * 2 / 5
+			tail := room - head - 5
+			public = append(append(public[:head:head], []rune(" ... ")...), public[len(public)-tail:]...)
+		}
+		return withCleanupNote(string(public), note)
+	}
 	for _, w := range waitingPrefixes {
 		if rest, ok := strings.CutPrefix(reason, w.prefix); ok {
 			reason = rest
@@ -414,6 +424,8 @@ type sidecar struct {
 	AppServer       bool              `json:"app_server,omitempty"`
 	ServerTurn      bool              `json:"server_turn,omitempty"`
 	Paused          bool              `json:"paused"`
+	DiskHeld        bool              `json:"disk_held,omitempty"`
+	MemorySaved     uint64            `json:"memory_saved,omitempty"`
 	KillRequested   bool              `json:"kill_requested"`
 	Retained        bool              `json:"retained,omitempty"`
 	RetainedUntil   *time.Time        `json:"retained_until,omitempty"`
@@ -461,9 +473,17 @@ type sidecar struct {
 	AgentSessionID string                `json:"agent_session_id,omitempty"`
 	AgentCost      float64               `json:"agent_cost,omitempty"`
 	AgentExec      *runtime.ExecIdentity `json:"agent_exec,omitempty"`
-	Switch         *switchIntent         `json:"switch,omitempty"`
-	AccountSwap    *accountSwap          `json:"account_swap,omitempty"`
-	UsageLimit     string                `json:"usage_limit,omitempty"`
+	// AgentKeeper reattaches to the keeper AgentExec runs. An older server
+	// ignores it and stops AgentExec.
+	AgentKeeper *keeperRecord `json:"agent_keeper,omitempty"`
+	Switch      *switchIntent `json:"switch,omitempty"`
+	AccountSwap *accountSwap  `json:"account_swap,omitempty"`
+	UsageLimit  string        `json:"usage_limit,omitempty"`
+	// AsleepSince is when idleness stopped the container; WakeError is the
+	// last wake's failure.
+	AsleepSince *time.Time `json:"asleep_since,omitempty"`
+	AsleepSaved bool       `json:"asleep_saved,omitempty"`
+	WakeError   string     `json:"wake_error,omitempty"`
 }
 
 // sidecar snapshots the entry's durable state. Caller must hold s.mu.
@@ -483,7 +503,14 @@ func (e *supervised) sidecar() sidecar {
 		copied := *e.accountSwap
 		swap = &copied
 	}
-	var relaunchedAt, idleReportAt, turnStartedAt *time.Time
+	var relaunchedAt, idleReportAt, turnStartedAt, asleepSince *time.Time
+	if t := e.asleepSince; !t.IsZero() {
+		asleepSince = &t
+	}
+	var wakeError string
+	if e.wakeErr != nil {
+		wakeError = e.wakeErr.Error()
+	}
 	if t := e.relaunchedAt; !t.IsZero() {
 		relaunchedAt = &t
 	}
@@ -501,6 +528,8 @@ func (e *supervised) sidecar() sidecar {
 		AppServer:           e.appServer,
 		ServerTurn:          e.serverTurn,
 		Paused:              e.paused,
+		DiskHeld:            e.diskHeld,
+		MemorySaved:         e.memorySaved,
 		KillRequested:       e.killRequested,
 		Retained:            e.retained,
 		RetainedUntil:       e.retainedUntil,
@@ -539,9 +568,13 @@ func (e *supervised) sidecar() sidecar {
 		AgentSessionID:      e.agentSessionID,
 		AgentCost:           e.agentCost,
 		AgentExec:           e.agentExec,
+		AgentKeeper:         e.agentKeeper,
 		Switch:              e.switchIntent,
 		AccountSwap:         swap,
 		UsageLimit:          e.usageLimit,
+		AsleepSince:         asleepSince,
+		AsleepSaved:         e.asleepSaved,
+		WakeError:           wakeError,
 	}
 }
 
@@ -674,6 +707,11 @@ func (s *Scheduler) removeSidecar(run domain.RunID) {
 	}
 	s.releaseCoordination(run)
 	s.removeScratch(string(run))
+	s.removeAccountConfig(run)
+	s.removeVMDatabases(run)
+	if s.ompFront != nil {
+		s.ompFront.Close(string(run))
+	}
 }
 
 const stoppedByParentReason = "stopped by parent session "

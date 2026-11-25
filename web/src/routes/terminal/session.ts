@@ -176,6 +176,7 @@ export function useRunTerminalSession(input: RunTerminalSessionInput): RunTermin
   const previousStatusRef = useRef(run?.status)
   const relaunchPendingRef = useRef(false)
   const previousAccountRef = useRef(run?.account_member_id)
+  const previousAsleepRef = useRef(run?.asleep_since)
   terminalRef.current = terminal
   // Render the new authority as revoked immediately; the layout cleanup below
   // makes the stored lease match before the browser can paint.
@@ -531,7 +532,12 @@ export function useRunTerminalSession(input: RunTerminalSessionInput): RunTermin
 
   useEffect(() => {
     return () => {
-      attachmentRef.current?.close()
+      const attachment = attachmentRef.current
+      attachment?.close()
+      // Only a lease this session may hold is worth reclaiming. Otherwise an
+      // occupied lease is another client's, and the next mount must mirror
+      // at once instead of retrying through the reconnect window.
+      if (attachment && !attachment.mayHoldControl()) clearControlSession(runID)
       setTerminal(runID, initialTerminal)
       attachmentRef.current = null
       writeRevisionRef.current++
@@ -543,7 +549,7 @@ export function useRunTerminalSession(input: RunTerminalSessionInput): RunTermin
         void Promise.resolve(replay.cancel?.(replay.generation)).catch(() => undefined)
       }
     }
-  }, [runID, setTerminal, terminal])
+  }, [clearControlSession, runID, setTerminal, terminal])
 
 
   useEffect(() => {
@@ -566,6 +572,16 @@ export function useRunTerminalSession(input: RunTerminalSessionInput): RunTermin
     relaunchPendingRef.current = true
     relaunchIfEnded()
   }, [relaunchIfEnded, run?.account_member_id])
+
+  // A wake starts the session's terminal anew, which the stream the sleep
+  // ended never reconnects to on its own.
+  useEffect(() => {
+    const previous = previousAsleepRef.current
+    previousAsleepRef.current = run?.asleep_since
+    if (previous === undefined || run?.asleep_since !== undefined) return
+    relaunchPendingRef.current = true
+    relaunchIfEnded()
+  }, [relaunchIfEnded, run?.asleep_since])
 
   useLayoutEffect(() => {
     const previousAuthority = previousAuthorityRef.current

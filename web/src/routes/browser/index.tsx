@@ -50,7 +50,7 @@ type Confirmation =
   | { action: 'reset'; target: DevBrowserResetParams }
 
 /** Present on a frame wide enough to show the Browser beside another view. */
-export interface BrowserSplit {
+interface BrowserSplit {
   beside: boolean
   /** The view it sits beside. */
   view: string
@@ -386,10 +386,15 @@ function BrowserRoute({ runID, split, agent, agentName, onCaptures }: BrowserVie
     return opened
   }
   const focusPage = () => {
-    // Focus that has moved on since Enter stays where it went.
+    // Focus that has moved on since Enter stays where it went, also when it
+    // moves in the frame before the page takes it: a popover opened then
+    // closes when focus leaves it.
     if (document.activeElement !== address.current) return
     address.current?.blur()
-    if (!window.matchMedia?.(coarsePointer).matches) requestAnimationFrame(() => surfaceHandle.current?.focus())
+    if (window.matchMedia?.(coarsePointer).matches) return
+    requestAnimationFrame(() => {
+      if (document.activeElement === document.body) surfaceHandle.current?.focus()
+    })
   }
   // A port picked in the pane goes the way of an address typed and entered:
   // the field takes focus and hands it to the page once the port is open.

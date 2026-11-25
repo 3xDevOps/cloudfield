@@ -11,6 +11,8 @@ const (
 	MethodNotifyPrefsGet  = "notify.prefs.get"
 	MethodNotifyPrefsSet  = "notify.prefs.set"
 	WatchNotificationsMax = 50
+	// WatchRelayMax bounds a watch's relay_to.
+	WatchRelayMax = 4
 )
 
 const (
@@ -49,6 +51,9 @@ const (
 	// WatchChannelAssistant writes the notices of a watch the assistant
 	// created into the owner's assistant conversation.
 	WatchChannelAssistant = "assistant"
+	// WatchChannelRelay writes a notice into a session the watch relays
+	// to; each row names that session.
+	WatchChannelRelay = "relay"
 
 	// WatchStatusPending is a push still to be sent: being sent, waiting
 	// for the member to leave a dashboard, or waiting for a retry.
@@ -57,7 +62,9 @@ const (
 	WatchStatusNoDestination = "no_destination"
 	WatchStatusDisabled      = "disabled"
 	WatchStatusHeldQuiet     = "held_quiet_hours"
-	WatchStatusFailed        = "failed"
+	// WatchStatusBatched is a push waiting for the member's next digest.
+	WatchStatusBatched = "batched"
+	WatchStatusFailed  = "failed"
 	// WatchStatusCleared is a push dropped unsent: the need it announced
 	// was resolved first, or its watch was paused until it expired.
 	WatchStatusCleared = "cleared"
@@ -125,6 +132,7 @@ type Watch struct {
 	Observed         WatchObserved      `json:"observed"`
 	LastNotification *WatchNotification `json:"last_notification,omitempty"`
 	Link             string             `json:"link"`
+	RelayTo          []string           `json:"relay_to,omitempty"`
 }
 
 type WatchDelivery struct {
@@ -132,6 +140,8 @@ type WatchDelivery struct {
 	Status  string `json:"status"`
 	Detail  string `json:"detail,omitempty"`
 	At      string `json:"at"`
+	// RunID is the session a relay row writes to.
+	RunID string `json:"run_id,omitempty"`
 }
 
 type WatchNotification struct {
@@ -152,6 +162,9 @@ type WatchCreateParams struct {
 	Label          string      `json:"label,omitempty"`
 	Source         string      `json:"source,omitempty"`
 	IdempotencyKey string      `json:"idempotency_key,omitempty"`
+	// RelayTo names up to WatchRelayMax sessions each notice is written
+	// into.
+	RelayTo []string `json:"relay_to,omitempty"`
 }
 
 // WatchResult carries the watch and one human line saying what it watches
@@ -188,6 +201,9 @@ type WatchUpdateParams struct {
 	Conditions []string `json:"conditions,omitempty"`
 	ExpiresAt  string   `json:"expires_at,omitempty"`
 	Label      *string  `json:"label,omitempty"`
+	// RelayTo replaces the sessions notices are relayed to; an empty list
+	// stops relaying.
+	RelayTo *[]string `json:"relay_to,omitempty"`
 }
 
 type QuietHours struct {
@@ -196,14 +212,32 @@ type QuietHours struct {
 	TZ    string `json:"tz"`
 }
 
-// NotifyPrefs is how a member's watch notices reach them. Push sends them
-// to their Web Push devices; during QuietHours push is held and one push
-// is sent when they end.
+// Notification levels: what is pushed at once, and what waits for a
+// digest.
+const (
+	NotifyBlockers = "blockers"
+	NotifyBatched  = "batched"
+	NotifyAll      = "all"
+)
+
+// NotifyDigest is when the blockers level sends its daily digest: At is
+// HH:MM in TZ, an IANA zone, UTC when empty.
+type NotifyDigest struct {
+	At string `json:"at"`
+	TZ string `json:"tz"`
+}
+
+// NotifyPrefs is how a member's notifications reach them. Push sends
+// watch notices to their Web Push devices; Level decides what is pushed
+// at once and what waits for a digest; during QuietHours every push is
+// held for the digest sent when they end.
 type NotifyPrefs struct {
-	// Push is always set in a result; notify.prefs.set keeps the current
-	// value when it is omitted.
-	Push       *bool       `json:"push"`
-	QuietHours *QuietHours `json:"quiet_hours,omitempty"`
+	// Push, Level and Digest are always set in a result; notify.prefs.set
+	// keeps the current value of each one it omits.
+	Push       *bool         `json:"push"`
+	Level      string        `json:"level,omitempty"`
+	Digest     *NotifyDigest `json:"digest,omitempty"`
+	QuietHours *QuietHours   `json:"quiet_hours,omitempty"`
 	// Destinations is read-only: notify.prefs.set ignores it.
 	Destinations NotifyDestinations `json:"destinations"`
 }

@@ -7,6 +7,11 @@
 
 import type { Member } from '@/lib/types'
 
+/** Admin in some workspace: the admin role, or the server-wide super admin. */
+export function isAdminRole(role: string | null | undefined): boolean {
+  return role === 'admin' || role === 'super_admin'
+}
+
 /** One guarded class of action, named as internal/permissions names it. */
 export type RunPermission = 'steer' | 'kill' | 'handoff' | 'protect' | 'sudo' | 'launch' | 'push'
 
@@ -17,7 +22,7 @@ export interface Actor {
 }
 
 /** The run being acted on, and the policy its workspace sets. */
-export interface Target {
+interface Target {
   /** The owning member; absent when the action targets no run. */
   owner?: string
   /** Restricts steer and kill to the run's owner and admins. */
@@ -39,7 +44,7 @@ export function allowed(
   actor: Actor,
   target: Target = {},
 ): boolean {
-  if (actor.role === null || actor.role === 'admin') return true
+  if (actor.role === null || isAdminRole(actor.role)) return true
   const owner = actor.id !== null && actor.id !== '' && actor.id === target.owner
   switch (permission) {
     case 'launch':

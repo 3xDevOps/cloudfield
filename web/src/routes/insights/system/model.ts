@@ -3,10 +3,10 @@ import type { SystemContainer, SystemHost, SystemOthers, SystemSample } from '@/
 
 export type Metric = 'cpu' | 'memory'
 
-export const maxListed = 5
+const maxListed = 5
 /** A container below this share of host capacity folds into "Other runs". */
-export const minShare = 0.02
-export const historyMs = 15 * 60_000
+const minShare = 0.02
+const historyMs = 15 * 60_000
 
 export type SliceKind = 'run' | 'other' | 'rest' | 'free'
 
@@ -24,8 +24,9 @@ export function containerKey(c: Pick<SystemContainer, 'owner_kind' | 'owner_id'>
   return `${c.owner_kind}:${c.owner_id}`
 }
 
+/** What the sandbox takes of the host. */
 export function metricValue(c: SystemContainer, metric: Metric): number {
-  return metric === 'cpu' ? c.cpu_cores ?? 0 : c.memory_bytes
+  return metric === 'cpu' ? c.cpu_cores ?? 0 : c.host_memory_bytes ?? c.memory_bytes
 }
 
 export function metricLimit(c: SystemContainer, metric: Metric): number {
@@ -43,7 +44,7 @@ export function busyPercent(s: SystemSample): number {
   return s.cpu_user + s.cpu_system + s.cpu_iowait + s.cpu_steal
 }
 
-export interface Capacity {
+interface Capacity {
   capacity: number
   used: number
 }
@@ -87,7 +88,7 @@ export function assignSlots(previous: Slots, shown: string[], present: ReadonlyS
   return next
 }
 
-export interface Breakdown {
+interface Breakdown {
   slices: Slice[]
   slots: Map<string, number>
   folded: Set<string>
@@ -138,10 +139,10 @@ export function othersValue(others: SystemOthers | undefined, metric: Metric): n
 
 export function limitShare(c: SystemContainer, metric: Metric): number | undefined {
   const limit = metricLimit(c, metric)
-  return limit > 0 ? metricValue(c, metric) / limit : undefined
+  return limit > 0 ? (metric === 'cpu' ? c.cpu_cores ?? 0 : c.memory_bytes) / limit : undefined
 }
 
-export type LimitLevel = 'near' | 'critical'
+type LimitLevel = 'near' | 'critical'
 
 export function limitLevel(share: number | undefined): LimitLevel | undefined {
   if (share === undefined) return undefined
@@ -163,7 +164,7 @@ export function appendHistory(previous: History, containers: SystemContainer[], 
     const cpu = (old?.cpu ?? []).filter((p) => p.t >= floor && p.t < at)
     const memory = (old?.memory ?? []).filter((p) => p.t >= floor && p.t < at)
     if (c.cpu_cores !== undefined) cpu.push({ t: at, v: c.cpu_cores })
-    memory.push({ t: at, v: c.memory_bytes })
+    memory.push({ t: at, v: metricValue(c, 'memory') })
     next.set(key, { cpu, memory })
   }
   return next

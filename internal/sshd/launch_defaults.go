@@ -231,7 +231,7 @@ func (s *Server) launchDefaultsResult(ctx context.Context, member domain.MemberI
 	}
 	agents, err := s.ListAgents(ctx, member, account)
 	if err != nil {
-		reason := "Aether could not list the agents on this account to check it: " + rpcError(err).Message
+		reason := "Cloudfield could not list the agents on this account to check it: " + rpcError(err).Message
 		if saved.Agent != "" {
 			unknown("agent", saved.Agent, reason)
 		}
@@ -255,7 +255,13 @@ func (s *Server) launchDefaultsResult(ctx context.Context, member domain.MemberI
 			continue
 		}
 		i := slices.IndexFunc(agents, func(info protocol.AgentInfo) bool { return info.Name == name })
-		if login := agents[i].LoginFound; login != nil && !*login {
+		if problem := agents[i].LoginProblem; problem != "" {
+			way := "aether agent login " + name
+			if agents[i].LoginCommand == "" {
+				way = "aether terminal"
+			}
+			unknown("agents."+name, name, name+"'s login on this account is signed out: "+problem+"; sign in with: "+way)
+		} else if login := agents[i].LoginFound; login != nil && !*login {
 			unknown("agents."+name, name, "no "+name+" login file was found on this account; it launches only if an API key in the environment signs it in")
 		}
 		if a.Mode == domain.LaunchACP && !agents[i].EnhancedInstalled {
@@ -270,7 +276,7 @@ func (s *Server) launchDefaultsResult(ctx context.Context, member domain.MemberI
 		}
 		models, known := s.cfg.Runs.CachedAgentModels(account, name)
 		if !known || (models.Source != protocol.ModelSourceAgent && models.Source != protocol.ModelSourceCache) {
-			unknown("agents."+name+".model", a.Model, "Aether has no current list of the models "+name+" offers on this account to check it against")
+			unknown("agents."+name+".model", a.Model, "Cloudfield has no current list of the models "+name+" offers on this account to check it against")
 			continue
 		}
 		if !slices.ContainsFunc(models.Models, func(m protocol.AgentModel) bool { return m.ID == a.Model }) {

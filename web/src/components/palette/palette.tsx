@@ -19,7 +19,7 @@ import {
 import { runLabel, stateLabel, stateTone } from '@/lib/status'
 import { surfaces } from '@/lib/surfaces'
 import { useStore } from '@/store'
-import { useCapability, useListedRuns, useSelf } from '@/store/hooks'
+import { useCapability, useListedRuns, useSelf, useStale } from '@/store/hooks'
 import type { RunRecord } from '@/store/runs'
 
 // Browsing shows the most urgent runs; a search reaches every run.
@@ -54,7 +54,8 @@ export function PaletteBody({
   onTemplates: () => void
   onConfirm: (run: RunRecord, command: Command & { confirm: NonNullable<Command['confirm']> }) => void
 }) {
-  const runs = useListedRuns(useStore((s) => s.activeWorkspace))
+  const activeWorkspace = useStore((s) => s.activeWorkspace)
+  const runs = useListedRuns(activeWorkspace)
   const runMap = useStore((s) => s.runs)
   const workspaces = useStore((s) => s.workspaces)
   const members = useStore((s) => s.members)
@@ -62,8 +63,10 @@ export function PaletteBody({
   const navigate = useStore((s) => s.navigate)
   const pausedRuns = useStore((s) => s.pausedRuns)
   const predicting = useStore((s) => s.predicting)
+  const stale = useStale()
   const cap = useCapability()
-  const self = useSelf()
+  const self = useSelf(activeWorkspace)
+  const focusedSelf = useSelf(route.params.runId ? runMap[route.params.runId]?.workspace_id : undefined)
   const [search, setSearch] = useState('')
   const selected = useRef<Command | null>(null)
   const complete = () => {
@@ -127,9 +130,10 @@ export function PaletteBody({
     run: focused,
     paused: pausedRuns[focused.id],
     predicting: Boolean(predicting[focused.id]),
+    stale,
     cap,
     members,
-    self,
+    self: focusedSelf,
     steerOthers: workspaces[focused.workspace_id]?.steer_others,
   }
   const focusedCommands = focusedContext

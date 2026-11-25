@@ -2,15 +2,21 @@ package relay
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"maps"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/http/httputil"
 	"net/netip"
+	"strconv"
 	"strings"
+	"time"
 
 	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
 )
@@ -29,12 +35,13 @@ var responseHeaders = map[string]bool{
 }
 
 // forwardHeaders trims h, the request headers ReverseProxy passes on: it
-// drops Cookie, any X-Forwarded-* the client sent, HeaderBrowser, and
-// HeaderClientAddr, which it sets to addr. ReverseProxy drops hop-by-hop headers but puts
+// drops Cookie, any X-Forwarded-* the client sent, HeaderBrowser,
+// HeaderClientAddr, which it sets to addr, and HeaderRelayOrigin, which it
+// sets to origin. ReverseProxy drops hop-by-hop headers but puts
 // back Connection, Upgrade and Te; those go too, so no upgrade tunnels
 // past responseFilter. Accept-Encoding goes because Content-Encoding does
 // not come back.
-func forwardHeaders(h http.Header, addr netip.AddrPort) {
+func forwardHeaders(h http.Header, addr netip.AddrPort, origin string) {
 	for k := range h {
 		if strings.HasPrefix(k, "X-Forwarded-") {
 			delete(h, k)
@@ -46,6 +53,7 @@ func forwardHeaders(h http.Header, addr netip.AddrPort) {
 	if addr.IsValid() {
 		h.Set(edgeproto.HeaderClientAddr, addr.String())
 	}
+	h.Set(edgeproto.HeaderRelayOrigin, origin)
 }
 
 // errHTTPLimit refuses an http connection past MaxHTTPConnsPerServer.
@@ -59,6 +67,35 @@ type noMCPEndpoint struct{ name, id, agentVersion string }
 func (e noMCPEndpoint) Error() string {
 	return fmt.Sprintf("server %s (%s) runs aether-server %s, which has no MCP endpoint; upgrade it: sudo aether-server update",
 		e.name, e.id, e.agentVersion)
+}
+
+// httpLimitQuiet is how long a server's requests go without an
+// errHTTPLimit refusal before the next one starts a new burst and is
+// logged.
+const httpLimitQuiet = time.Minute
+
+// noteHTTPLimit logs the first errHTTPLimit refusal of each burst of
+// serverID's, with how many of its requests are in progress and waiting.
+func (r *Relay) noteHTTPLimit(serverID string) {
+	now := time.Now()
+	r.mu.Lock()
+	maps.DeleteFunc(r.httpLimited, func(_ string, last time.Time) bool { return now.Sub(last) >= httpLimitQuiet })
+	_, burst := r.httpLimited[serverID]
+	r.httpLimited[serverID] = now
+	inProgress := 0
+	if !burst {
+		for _, o := range r.conns {
+			if o.serverID == serverID && o.kind == edgeproto.KindHTTP {
+				inProgress++
+			}
+		}
+	}
+	waiting := r.httpWaiting[serverID]
+	r.mu.Unlock()
+	if !burst {
+		slog.Warn("relay: refusing MCP connector requests for the connection limit; logged once until a minute passes without one",
+			"server", serverID, "in_progress", inProgress, "waiting", waiting)
+	}
 }
 
 // admitHTTPLocked returns why reg takes no more http connections, if it
@@ -93,7 +130,7 @@ func (r *Relay) serveHTTP(w http.ResponseWriter, req *http.Request) {
 	if !ok {
 		return
 	}
-	r.forward(w, req, serverID, body, "")
+	r.forward(w, req, serverID, body, "", nil)
 }
 
 // ReadMCPBody reads a relayed request's body whole, before a connection
@@ -122,19 +159,14 @@ func (r *Relay) ReadMCPBody(w http.ResponseWriter, req *http.Request) ([]byte, b
 // connected server whose protocol predates edgeproto.VersionUniversalMCP
 // is refused with 501.
 func (r *Relay) ForwardUniversal(w http.ResponseWriter, req *http.Request, serverID string, body []byte, browser string) {
-	r.mu.Lock()
-	reg := r.servers[serverID]
-	var old error
-	if reg != nil && reg.version < edgeproto.VersionUniversalMCP {
-		old = noUniversalEndpoint{name: reg.name, id: reg.id, agentVersion: reg.agentVersion, origin: r.origin}
-	}
-	r.mu.Unlock()
-	if old != nil {
-		r.countRefusal("no universal MCP endpoint")
-		http.Error(w, old.Error(), http.StatusNotImplemented)
-		return
-	}
-	r.forward(w, req, serverID, body, browser)
+	r.forward(w, req, serverID, body, browser, func() error {
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		if reg := r.servers[serverID]; reg != nil && reg.version < edgeproto.VersionUniversalMCP {
+			return noUniversalEndpoint{name: reg.name, id: reg.id, agentVersion: reg.agentVersion, origin: reg.origin}
+		}
+		return nil
+	})
 }
 
 // noUniversalEndpoint refuses a universal connector request to a server
@@ -158,11 +190,71 @@ func (r *Relay) Version(serverID string) int {
 	return reg.version
 }
 
-func (r *Relay) forward(w http.ResponseWriter, req *http.Request, serverID string, body []byte, browser string) {
+// forward sends req to serverID once check, when set, passes. While the
+// server is away (awaitReturn) the request waits for it, before it is
+// sent and again whenever the edge refuses it as not connected before it
+// was written to the server. A request written to a server is never sent
+// again.
+func (r *Relay) forward(w http.ResponseWriter, req *http.Request, serverID string, body []byte, browser string, check func() error) {
+	r.countConnector(req, serverID)
+	var until time.Time
+	if _, err := r.awaitReturn(req.Context(), serverID, &until); err != nil {
+		r.refuseHTTP(w, req, serverID, err)
+		return
+	}
+	for {
+		if check != nil {
+			if err := check(); err != nil {
+				r.refuseHTTP(w, req, serverID, err)
+				return
+			}
+		}
+		unsent := r.forwardOnce(w, req, serverID, body, browser)
+		if unsent == nil {
+			return
+		}
+		back, err := r.awaitReturn(req.Context(), serverID, &until)
+		if err != nil || !back {
+			r.refuseHTTP(w, req, serverID, cmp.Or(err, unsent))
+			return
+		}
+	}
+}
+
+// countConnector counts a connector request to serverID by the relay
+// origin it came in on and the server's protocol version.
+func (r *Relay) countConnector(req *http.Request, serverID string) {
+	k := ConnectorKey{Origin: r.originOf(req)}
+	r.mu.Lock()
+	if reg := r.servers[serverID]; reg != nil {
+		k.Protocol = reg.version
+	}
+	r.mu.Unlock()
+	r.refusalsMu.Lock()
+	r.connectorMap[k]++
+	r.refusalsMu.Unlock()
+}
+
+// forwardOnce sends req to serverID and writes the answer, or the
+// refusal, to w. It writes nothing and returns the refusal when the edge
+// refused the request as not connected before it was written to the
+// server.
+func (r *Relay) forwardOnce(w http.ResponseWriter, req *http.Request, serverID string, body []byte, browser string) error {
+	client := req
+	ctx, cancel := context.WithCancelCause(req.Context())
+	defer cancel(nil)
+	cw := &connWait{r: r, serverID: serverID, cancel: cancel}
+	defer cw.got(false)
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
+		GetConn: func(string) { cw.wait() },
+		GotConn: func(httptrace.GotConnInfo) { cw.got(true) },
+	})
+	req = req.WithContext(ctx)
 	req.Body = io.NopCloser(bytes.NewReader(body))
 	req.ContentLength = int64(len(body))
 	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
-	addr := clientAddr(req.RemoteAddr)
+	addr, origin := clientAddr(req.RemoteAddr), r.originOf(client)
+	var unsent error
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			// The client's Host does not pass: the request names the server.
@@ -170,18 +262,124 @@ func (r *Relay) forward(w http.ResponseWriter, req *http.Request, serverID strin
 			// Sent with its length, the body carries none of the client's
 			// trailers: net/http writes them only on a chunked body.
 			pr.Out.TransferEncoding = nil
-			forwardHeaders(pr.Out.Header, addr)
+			forwardHeaders(pr.Out.Header, addr, origin)
 			if browser != "" {
 				pr.Out.Header.Set(edgeproto.HeaderBrowser, browser)
 			}
 		},
 		Transport:     r.http,
 		FlushInterval: -1,
-		ErrorHandler: func(_ http.ResponseWriter, out *http.Request, err error) {
-			r.refuseHTTP(w, out, serverID, err)
+		ErrorHandler: func(_ http.ResponseWriter, _ *http.Request, err error) {
+			if !cw.connected() && errors.Is(err, edgeproto.RefusalNotConnected) {
+				unsent = err
+				return
+			}
+			r.refuseHTTP(w, client, serverID, err)
 		},
 	}
 	proxy.ServeHTTP(&responseFilter{ResponseWriter: w}, req)
+	return unsent
+}
+
+// connWait is one forwarded request's wait for a connection of its
+// server, from each attempt's GetConn to its GotConn: a transport retry
+// waits again, for at most httpConnWait each time. At most
+// MaxHTTPWaitersPerServer requests wait on a server, so the bodies they
+// hold stay bounded.
+type connWait struct {
+	r        *Relay
+	serverID string
+	cancel   context.CancelCauseFunc
+	// timer, waiting and conn are guarded by r.mu. conn is set once the
+	// request got a connection, after which it may have been written.
+	timer   *time.Timer
+	waiting bool
+	conn    bool
+}
+
+func (c *connWait) wait() {
+	c.r.mu.Lock()
+	defer c.r.mu.Unlock()
+	if c.waiting {
+		return
+	}
+	if c.r.httpWaiting[c.serverID] >= edgeproto.MaxHTTPWaitersPerServer {
+		c.cancel(errHTTPLimit)
+		return
+	}
+	c.r.httpWaiting[c.serverID]++
+	c.waiting = true
+	c.timer = time.AfterFunc(c.r.httpConnWait, func() { c.cancel(errHTTPLimit) })
+}
+
+func (c *connWait) got(conn bool) {
+	c.r.mu.Lock()
+	defer c.r.mu.Unlock()
+	c.conn = c.conn || conn
+	if !c.waiting {
+		return
+	}
+	c.waiting = false
+	c.timer.Stop()
+	c.r.doneWaitingLocked(c.serverID)
+}
+
+func (c *connWait) connected() bool {
+	c.r.mu.Lock()
+	defer c.r.mu.Unlock()
+	return c.conn
+}
+
+func (r *Relay) doneWaitingLocked(serverID string) {
+	if r.httpWaiting[serverID]--; r.httpWaiting[serverID] == 0 {
+		delete(r.httpWaiting, serverID)
+	}
+}
+
+// awaitReturn holds a request to serverID while the server is away, until
+// it enrolls again or returnWait has passed since it left, and reports
+// whether it came back. until is the request's deadline, set by its first
+// wait, so a server that leaves again does not hold it longer. It returns
+// RefusalNotConnected for a request past MaxHTTPWaitersPerServer, and the
+// context's error once the client gave up.
+func (r *Relay) awaitReturn(ctx context.Context, serverID string, until *time.Time) (bool, error) {
+	now := time.Now()
+	r.mu.Lock()
+	a := r.awayLocked(serverID, now)
+	if a == nil || r.closing {
+		r.mu.Unlock()
+		return false, nil
+	}
+	deadline := a.since.Add(r.returnWait)
+	if until.IsZero() || deadline.Before(*until) {
+		*until = deadline
+	}
+	if !until.After(now) {
+		r.mu.Unlock()
+		return false, nil
+	}
+	if r.httpWaiting[serverID] >= edgeproto.MaxHTTPWaitersPerServer {
+		r.mu.Unlock()
+		return false, edgeproto.RefusalNotConnected
+	}
+	r.httpWaiting[serverID]++
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		r.doneWaitingLocked(serverID)
+		r.mu.Unlock()
+	}()
+	t := time.NewTimer(until.Sub(now))
+	defer t.Stop()
+	select {
+	case <-a.back:
+		return true, nil
+	case <-ctx.Done():
+		return false, ctx.Err()
+	case <-t.C:
+	case <-r.ctx.Done():
+	}
+	return false, nil
 }
 
 // refuseHTTP answers a request that reached no server, or whose server's
@@ -191,6 +389,7 @@ func (r *Relay) refuseHTTP(w http.ResponseWriter, req *http.Request, serverID st
 		return
 	}
 	var old noMCPEndpoint
+	var oldUniversal noUniversalEndpoint
 	var ref edgeproto.Refusal
 	var sref serverRefusal
 	status, text := http.StatusBadGateway, ""
@@ -198,8 +397,13 @@ func (r *Relay) refuseHTTP(w http.ResponseWriter, req *http.Request, serverID st
 	case errors.As(err, &old):
 		r.countRefusal("no MCP endpoint")
 		status, text = http.StatusNotImplemented, old.Error()
+	case errors.As(err, &oldUniversal):
+		r.countRefusal("no universal MCP endpoint")
+		status, text = http.StatusNotImplemented, oldUniversal.Error()
 	case errors.Is(err, errHTTPLimit):
 		r.countRefusal("MCP connection limit")
+		r.noteHTTPLimit(serverID)
+		w.Header().Set("Retry-After", strconv.Itoa(int(edgeproto.HTTPShortCall/time.Second)))
 		status, text = http.StatusServiceUnavailable, err.Error()
 	case errors.Is(err, edgeproto.RefusalNotConnected):
 		ctx, cancel := context.WithTimeout(req.Context(), directoryTimeout)

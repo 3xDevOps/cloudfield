@@ -271,8 +271,8 @@ func TestUniversalConnectorThroughTheEdge(t *testing.T) {
 				}
 				names = append(names, tool.Name)
 			}
-			if len(names) != 26 {
-				t.Fatalf("tools with read and write = %v, want 26", names)
+			if len(names) != 28 {
+				t.Fatalf("tools with read and write = %v, want 28", names)
 			}
 			t.Logf("tools/list on %s as %s: %d tools: %s", base, bobName, len(names), strings.Join(names, " "))
 			list := call[protocol.ConnectorListResult](t, bctl, protocol.MethodConnectorList, struct{}{})
@@ -363,7 +363,7 @@ func TestUniversalConnectorThroughTheEdge(t *testing.T) {
 				grant := sshd.ConnectorGrant{Member: conns[0].Member, Provider: conns[0].Provider, Subject: conns[0].Subject}
 				_, perr := s2.ssh.ConnectorLocal(grant, conns[0].ID, "Test client", conns[0].Scopes).Call(t.Context(), protocol.MethodMemberInvite, json.RawMessage(`{}`))
 				if want := "member.invite: Test client connector " + conns[0].ID +
-					" cannot call this method; no connector can, so use the Aether app or the aether CLI"; perr == nil || perr.Message != want {
+					" cannot call this method; no connector can, so use the Cloudfield app or the aether CLI"; perr == nil || perr.Message != want {
 					t.Fatalf("member.invite through alice's connector = %v, want %q", perr, want)
 				}
 				bobID := s1.memberOf(t, bob).ID

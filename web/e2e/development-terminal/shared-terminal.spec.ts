@@ -23,13 +23,11 @@ while :; do sleep 1; done`
 
 async function openDock(page: Page, url: string): Promise<Locator> {
   await page.goto(url)
-  const sidebar = page.getByRole('button', { name: /^Open sidebar/ })
-  await expect(sidebar.or(page.getByRole('navigation', { name: 'Aether' }).getByRole('region', { name: 'Sessions' }))).toBeVisible()
-  if (await sidebar.isVisible()) {
-    await sidebar.click()
-    await page.getByRole('dialog', { name: 'Aether' }).getByRole('button', { name: /development terminal acceptance/ }).click()
+  if (page.viewportSize()!.width < 768) {
+    await page.getByRole('navigation', { name: 'Main navigation' }).getByRole('button', { name: 'Sessions' }).click()
+    await page.getByRole('main').getByRole('region', { name: 'Sessions' }).getByRole('button', { name: /development terminal acceptance/ }).click()
   } else {
-    await page.getByRole('navigation', { name: 'Aether' }).getByRole('region', { name: 'Sessions' }).getByRole('button', { name: /development terminal acceptance/ }).click()
+    await page.getByRole('navigation', { name: 'Cloudfield' }).getByRole('region', { name: 'Sessions' }).getByRole('button', { name: /development terminal acceptance/ }).click()
   }
   await showShell(page, /agent-tui/)
   const dock = page.locator('[data-slot=shell-terminal]')
@@ -111,7 +109,7 @@ test('agent-created TUI shares authority, geometry, protocol responses, limits a
   await page.keyboard.press('Control+Shift+V')
   await expect.poll(() => file('input').includes('paste-界')).toBe(true)
   await testInfo.attach('shared-alternate-screen', { body: await dock.screenshot(), contentType: 'image/png' })
-  await expect(dock.getByText('You control', { exact: true })).toBeVisible()
+  await expect(dock.getByRole('button', { name: 'Release' })).toBeVisible()
 
   const watcherContext = await browser.newContext({ viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true })
   const watcherPage = await watcherContext.newPage()
@@ -195,7 +193,7 @@ test('agent-created TUI shares authority, geometry, protocol responses, limits a
   await expect.poll(async () => (await list()).terminals.find((item) => item.terminal_id === terminal.terminal_id)?.process.state).not.toBe('running')
   // A stopped shell does not come back as a tab.
   await page.reload()
-  await page.getByRole('navigation', { name: 'Aether' }).getByRole('region', { name: 'Sessions' }).getByRole('button', { name: /development terminal acceptance/ }).click()
+  await page.getByRole('navigation', { name: 'Cloudfield' }).getByRole('region', { name: 'Sessions' }).getByRole('button', { name: /development terminal acceptance/ }).click()
   const tabs = page.getByRole('main').getByRole('tablist', { name: 'Terminals' })
   await expect(tabs.getByRole('tab', { name: 'after-stop' })).toBeVisible()
   await expect(tabs.getByRole('tab', { name: /agent-tui/ })).toHaveCount(0)

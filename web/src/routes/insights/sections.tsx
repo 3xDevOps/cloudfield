@@ -26,10 +26,10 @@ export function Section({ title, children }: { title: string; children: ReactNod
 }
 
 function fraction(count: InsightsSuccessCount, unit: string): string {
-  return count.finished === 0 ? `No ${unit}s finished` : `${count.succeeded} of ${plural(count.finished, unit)} merged a pull request`
+  return count.finished === 0 ? `No ${unit}s finished` : `${count.succeeded} of ${plural(count.finished, unit)} merged a pull request or were marked complete`
 }
 
-export function Tiles({ result, agentNames }: { result: InsightsResult; agentNames: Record<string, string> }) {
+function Tiles({ result, agentNames }: { result: InsightsResult; agentNames: Record<string, string> }) {
   const { success, outcomes, cost } = result
   const rate = percent(success.runs.succeeded, success.runs.finished)
   const top = cost.by_agent[0]
@@ -223,8 +223,8 @@ export function Time({ result }: { result: InsightsResult }) {
           <p className="text-ui-sm text-muted">
             Session time is from start to end for {plural(d.runs_measured, 'session')} that ended in this period.
             {d.state_runs_measured < d.runs_measured && (since
-              ? ` Working and waiting time is measured for ${d.state_runs_measured} of ${d.runs_measured} sessions; Aether records this from ${sinceLabel(since)} on.`
-              : ' Working and waiting time is not recorded yet; Aether measures it for sessions from now on.')}
+              ? ` Working and waiting time is measured for ${d.state_runs_measured} of ${d.runs_measured} sessions; Cloudfield records this from ${sinceLabel(since)} on.`
+              : ' Working and waiting time is not recorded yet; Cloudfield measures it for sessions from now on.')}
           </p>
         </>
       )}

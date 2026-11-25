@@ -137,7 +137,7 @@ func (s *Service) commit(ctx context.Context, w *store.Watch) error {
 		}
 		for _, n := range recorded {
 			s.changed(ctx, w, n.ID)
-			if n.PushState != store.WatchPushNone || w.Source == protocol.WatchSourceAssistant && s.assistant != nil {
+			if n.PushState != store.WatchPushNone || w.Source == protocol.WatchSourceAssistant && s.assistant != nil || len(w.RelayTo) > 0 {
 				s.wake()
 			}
 		}
@@ -180,7 +180,7 @@ func backoff(failures int) time.Duration {
 }
 
 // allowed checks that w's owner still exists, is approved and can view
-// its workspace.
+// its workspace and every workspace of its session.
 func (s *Service) allowed(ctx context.Context, w *store.Watch) error {
 	m, err := s.store.GetMember(ctx, w.MemberID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -196,12 +196,22 @@ func (s *Service) allowed(ctx context.Context, w *store.Watch) error {
 		return nil
 	}
 	if _, err := s.store.GetWorkspace(ctx, w.WorkspaceID); errors.Is(err, store.ErrNotFound) {
-		return fmt.Errorf("%w: the workspace no longer exists", errRevoked)
+		// Worded as lost access: only super admins learn of a deletion.
+		return fmt.Errorf("%w: %w", errRevoked, permissions.ErrNoAccess)
 	} else if err != nil {
 		return err
 	}
-	actor := permissions.Actor{ID: m.ID, Role: m.Role}
-	if err := permissions.Check(permissions.View, actor, permissions.Target{Workspace: w.WorkspaceID}); err != nil {
+	target := permissions.Target{Workspace: w.WorkspaceID}
+	if w.RunID != "" {
+		run, err := s.store.GetRun(ctx, w.RunID)
+		switch {
+		case err == nil:
+			target.Extra = run.ExtraWorkspaces()
+		case !errors.Is(err, store.ErrNotFound):
+			return err
+		}
+	}
+	if err := permissions.Check(permissions.View, permissions.ActorOf(m), target); err != nil {
 		return fmt.Errorf("%w: %w", errRevoked, err)
 	}
 	return nil
@@ -213,7 +223,16 @@ func (s *Service) read(ctx context.Context, w *store.Watch, prev protocol.WatchO
 	}
 	switch w.TargetKind {
 	case protocol.WatchTargetRun:
-		return s.readRun(ctx, w, prev)
+		r, err := s.readRun(ctx, w, prev)
+		if err != nil {
+			return r, err
+		}
+		// Access may have ended while the session was read; what was read
+		// then is not the member's to keep.
+		if err := s.allowed(ctx, w); err != nil {
+			return reading{}, err
+		}
+		return r, nil
 	case protocol.WatchTargetPR:
 		if s.pr == nil {
 			return reading{}, errors.New("pull request watches are not supported yet")
@@ -258,7 +277,11 @@ func (s *Service) readRun(ctx context.Context, w *store.Watch, prev protocol.Wat
 		}
 	}
 	var finished string
-	if key, body, ok := runFinish(run, fired); ok {
+	key, body, ok := runFinish(run, fired)
+	if ok && run.OutcomeHeld() && followed(w) && (strings.HasPrefix(key, "reported|") || key == "failed") {
+		ok = false
+	}
+	if ok {
 		finished = body
 		if slices.Contains(w.Conditions, protocol.WatchFinished) {
 			r.notices = append(r.notices, Notice{Condition: protocol.WatchFinished, Key: key, Title: r.title, Body: body, Link: link})
@@ -320,6 +343,14 @@ func (s *Service) runNeeds(run *domain.Run) []need {
 		return out
 	}
 	return []need{{key: "status:" + run.NeedKey(), body: push.AttentionBody(run)}}
+}
+
+// followed is whether Follow made w for the assistant, rather than a person
+// or an assistant asking for that session. Its finished notice skips a
+// subsession's outcome, which is for the parent agent only
+// (domain.Run.OutcomeHeld); an asked-for one does not.
+func followed(w *store.Watch) bool {
+	return w.Source == protocol.WatchSourceAssistant && strings.HasPrefix(w.IdempotencyKey, followKeyPrefix)
 }
 
 func (s *Service) requestLine(run *domain.Run, input *domain.RunInputRequest, label string) string {
@@ -452,16 +483,17 @@ func (s *Service) notifications(ctx context.Context, w *store.Watch, notices []N
 			}
 			rec.PushState, rec.PushNextAt = store.WatchPushPending, &now
 			d.Status, d.Detail = protocol.WatchStatusPending, "Sending"
-			if until, quiet := quietUntil(*prefs, now); quiet {
-				rec.PushState, rec.PushNextAt = store.WatchPushHeld, &until
-				d.Status, d.Detail = protocol.WatchStatusHeldQuiet, quietDetail(*prefs, until)
-			} else if s.push.HeldUntil(w.MemberID).After(now) {
+			if s.push.HeldUntil(w.MemberID).After(now) {
 				d.Detail = dashboardHold
 			}
 		}
 		rec.Deliveries = append(rec.Deliveries, d)
 		if w.Source == protocol.WatchSourceAssistant && s.assistant != nil {
 			rec.Deliveries = append(rec.Deliveries, store.WatchDelivery{Channel: protocol.WatchChannelAssistant, Status: protocol.WatchStatusPending, At: now})
+		}
+		for _, run := range w.RelayTo {
+			rec.Deliveries = append(rec.Deliveries, store.WatchDelivery{Channel: protocol.WatchChannelRelay, Status: protocol.WatchStatusPending,
+				Detail: "Waiting to write to the session's inbox", At: now, RunID: run})
 		}
 		out = append(out, rec)
 	}

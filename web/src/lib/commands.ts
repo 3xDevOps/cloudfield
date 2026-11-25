@@ -30,20 +30,24 @@ import {
   Square,
   Sun,
   Trash2,
+  Undo2,
   UserPlus,
 } from '@/components/icons'
 import { api, ApiError, codeInvalidState, codeNotFound, type Api } from '@/lib/api'
 import { copyText } from '@/lib/clipboard'
 import { errorSentence, message } from '@/lib/format'
-import { awaitsCompletion } from '@/lib/needs-you'
+import { runLabel } from '@/lib/status'
+import { awaitsCompletion, outcomeHeld } from '@/lib/needs-you'
 import { allowed } from '@/lib/permissions'
-import type { LinkStatus, Member, PullResult, Run, Workspace } from '@/lib/types'
+import type { CloseOutcome, LinkStatus, Member, PullResult, Run, Workspace } from '@/lib/types'
 import { dismissOnIdentityChange } from '@/components/failure'
+import { closeBusyText, closeChangedText, closeState, closeWarned, readCloseCheck } from '@/lib/close-check'
+import { archiveState } from '@/lib/idle-archive'
 import { sameIdentity, useStore } from '@/store'
 import type { Capability } from '@/store/hooks'
 import { optimistic, optimisticDeadlineMs, refusedByServer, type Mutation, type Outcome } from '@/store/optimistic'
 import type { PaletteDialog } from '@/store/palette'
-import { isArchivable, isTerminal, toRecord, type PredictionMarker, type RunRecord } from '@/store/runs'
+import { isTerminal, toRecord, type PredictionMarker, type RunRecord } from '@/store/runs'
 import type { Theme } from '@/store/ui'
 
 export interface CommandDeps {
@@ -62,8 +66,6 @@ export interface CommandDeps {
 export interface Command {
   id: string
   label: string
-  /** The button's label; its tooltip carries the full one. */
-  short?: string
   Icon: LucideIcon
   /** Words the palette matches after the label: aliases, or a handoff target's id. */
   value?: string
@@ -79,6 +81,8 @@ export interface Command {
   predict?: () => Prediction
   /** The server answers only once the change is done, which can outlast the deadline, so the prediction waits for that answer. */
   slow?: boolean
+  /** The close this verb makes: the runner reads `run.close_check` first and asks before a close with warnings. */
+  closes?: { runID: string; outcome: CloseOutcome }
   perform: (deps: CommandDeps) => Promise<unknown> | void
 }
 
@@ -105,9 +109,14 @@ export interface RunCommandContext {
   steerOthers?: string
   /** A predicted verb is pending on the run; the caller subscribes to it. */
   predicting?: boolean
+  /** The run comes from a painted snapshot that a live load has not replaced yet. */
+  stale?: boolean
 }
 
-export interface BoardCommandContext {
+/** Dialogs whose own submit changes the run, beside every gateway verb. */
+const changingDialogs = new Set(['inject', 'close'])
+
+interface BoardCommandContext {
   cap: Capability
   /** Null before hydration. */
   self: { id: string | null; role: Member['role'] | null }
@@ -121,8 +130,6 @@ export interface RunActionCandidate {
 
 export interface ClearDonePlan {
   eligible: RunRecord[]
-  /** Stopped but not yet closed; archive cannot act on them. */
-  notClosed: number
   /** Runs whose status qualifies but this member may not kill. */
   notAllowed: number
 }
@@ -183,14 +190,11 @@ export function clearDonePlan(
   cap: Capability,
   self: { id: string | null; role: Member['role'] | null },
 ): ClearDonePlan {
-  const plan: ClearDonePlan = { eligible: [], notClosed: 0, notAllowed: 0 }
+  const plan: ClearDonePlan = { eligible: [], notAllowed: 0 }
   if (!cap.hasMethod('run.archive')) return plan
   for (const { run, workspace } of candidates) {
     if (run.archived_at) continue
-    if (!isArchivable(run.status)) {
-      if (run.status === 'completed') plan.notClosed++
-      continue
-    }
+    if (!isTerminal(run.status)) continue
     const target = { owner: run.member_id, protected: run.protected, steerOthers: workspace?.steer_others }
     if (!allowed('kill', self, target)) {
       plan.notAllowed++
@@ -204,10 +208,15 @@ export function clearDonePlan(
 // Both bulk actions bound gateway requests rather than opening one per run.
 const bulkRunConcurrency = 6
 
-/** Each call's `run.archived` event moves the run in every dashboard, so only settled calls are counted here. */
+/**
+ * Each call's `run.archived` event moves the run in every dashboard, so only settled calls are counted here.
+ * A live run in `closes` is closed with its outcome first, unless it changed since the member chose it
+ * (`asked`, from archiveState); a skipped or failed close leaves it live and unarchived.
+ */
 export async function runClearDone(
   eligible: RunRecord[],
   deps: Pick<CommandDeps, 'api' | 'removeRun'>,
+  closes: Map<string, { outcome: 'merged' | 'abandoned'; asked: string }> = new Map(),
 ): Promise<void> {
   // One slot per run, so the failures read back in Done order however the
   // calls settle.
@@ -217,13 +226,25 @@ export async function runClearDone(
     while (next < eligible.length) {
       const i = next++
       try {
+        const close = closes.get(eligible[i].id)
+        if (close) {
+          const s = useStore.getState()
+          const current = s.runs[eligible[i].id]
+          // Deleted since it was chosen: nothing is left to close or archive.
+          if (!current) continue
+          if (archiveState(current, s.pausedRuns[current.id]) !== close.asked) {
+            errors[i] = `${runLabel(eligible[i])}: ${closeChangedText}`
+            continue
+          }
+          await deps.api.runClose(eligible[i].id, close.outcome)
+        }
         await deps.api.runArchive(eligible[i].id, true)
       } catch (err) {
         // The run was already deleted, so there is nothing left to archive.
         if (err instanceof ApiError && err.code === codeNotFound) {
           deps.removeRun(eligible[i].id)
         } else {
-          errors[i] = message(err)
+          errors[i] = `${runLabel(eligible[i])}: ${message(err)}`
         }
       }
     }
@@ -234,7 +255,7 @@ export async function runClearDone(
   const failures = errors.filter((error) => error !== undefined)
   const archived = eligible.length - failures.length
   if (failures.length > 0) {
-    toast.error(`Archived ${archived}, ${failures.length} failed: ${failures[0]}`)
+    toast.error(`Archived ${archived}, ${failures.length} failed`, { description: failures.join('\n'), duration: Infinity })
   } else {
     toast.success(`Archived ${archived} ${archived === 1 ? 'session' : 'sessions'}`)
   }
@@ -265,7 +286,7 @@ export async function runReleaseFinished(
   if (failures.length > 0) {
     toast.error(`Freed ${released}, ${failures.length} failed: ${failures[0]}`)
   } else {
-    toast.success(`Freed the containers of ${released} ${released === 1 ? 'session' : 'sessions'}`)
+    toast.success(`Freed the sandboxes of ${released} ${released === 1 ? 'session' : 'sessions'}`)
   }
 }
 
@@ -279,7 +300,7 @@ function handoffTargets(
   )
 }
 
-export function handoffCommands({ run, members, self }: RunCommandContext): Command[] {
+export function handoffCommands({ run, members, self, stale }: RunCommandContext): Command[] {
   if (!allowed('handoff', self, { owner: run.member_id })) return []
   return handoffTargets(run, members).map((m) => ({
     id: `handoff:${m.id}`,
@@ -287,6 +308,7 @@ export function handoffCommands({ run, members, self }: RunCommandContext): Comm
     Icon: UserPlus,
     value: `transfer reassign ${m.id}`,
     done: `Handed off to ${m.display_name}`,
+    disabled: stale,
     perform: (d: CommandDeps) => d.api.runHandoff(run.id, m.id),
   }))
 }
@@ -318,7 +340,6 @@ export function runCommands(ctx: RunCommandContext): Command[] {
       list.push({
         id: 'resume',
         label: 'Resume session',
-        short: 'Resume',
         Icon: Play,
       value: 'continue unpause',
         done: 'Resumed',
@@ -326,11 +347,10 @@ export function runCommands(ctx: RunCommandContext): Command[] {
         perform: (d) => d.api.runResume(id),
       })
     }
-    if (paused === false) {
+    if (paused === false && !run.asleep_since) {
       list.push({
         id: 'pause',
         label: 'Pause session',
-        short: 'Pause',
         Icon: Pause,
       value: 'hold suspend',
         done: 'Paused',
@@ -341,7 +361,6 @@ export function runCommands(ctx: RunCommandContext): Command[] {
     list.push({
       id: 'inject',
       label: 'Send a message to the agent…',
-      short: 'Message',
       Icon: MessageSquarePlus,
       value: 'chat steer prompt',
       perform: (d) => d.openDialog('inject', id),
@@ -350,7 +369,6 @@ export function runCommands(ctx: RunCommandContext): Command[] {
       list.push({
         id: 'forward',
         label: 'Forward a port…',
-        short: 'Forward',
         Icon: Cable,
       value: 'tunnel expose localhost preview',
         perform: (d) => d.openForwardDialog(`run:${id}`),
@@ -363,7 +381,6 @@ export function runCommands(ctx: RunCommandContext): Command[] {
     list.push({
       id: 'watch',
       label: 'Watch…',
-      short: 'Watch',
       Icon: Eye,
       value: 'notify follow alert subscribe',
       perform: (d) => d.openDialog('watch', id),
@@ -372,36 +389,63 @@ export function runCommands(ctx: RunCommandContext): Command[] {
 
   if (cap.hasMethod('run.review') && mayKill && completable(run)) {
     const live = !finished
-    list.push({
-      id: 'complete',
-      label: 'Mark complete',
-      short: 'Mark complete',
-      Icon: Check,
-      value: 'done accept',
-      done: 'Marked complete',
-      predict: () => ({
-        runID: id,
-        record: live
-          ? {
-              review: 'accepted',
-              status: 'completed',
-              state: '',
-              stateChangedAt: new Date().toISOString(),
-              stateChangedAtEstimated: true,
-              stateChangedAtPredicted: true,
-            }
-          : { review: 'accepted' },
-      }),
-      slow: live,
-      perform: (d) => d.api.runReview(id, 'complete'),
-    })
-    if (run.review === 'ready') {
+    // Mark complete is a close, so it waits until a member has opened what the agent left.
+    if (run.finish_unopened) {
+      list.push({
+        id: 'review',
+        label: 'Review the result',
+        Icon: Eye,
+        value: 'finished open complete',
+        perform: (d) => d.navigate('run', { runId: id, view: 'session' }),
+      })
+    } else {
+      list.push({
+        id: 'complete',
+        label: 'Mark complete',
+        Icon: Check,
+        value: 'done accept',
+        done: 'Marked complete',
+        predict: () => ({
+          runID: id,
+          record: live
+            ? {
+                review: 'accepted',
+                status: 'completed',
+                state: '',
+                stateChangedAt: new Date().toISOString(),
+                stateChangedAtEstimated: true,
+                stateChangedAtPredicted: true,
+              }
+            : { review: 'accepted' },
+        }),
+        slow: live,
+        closes: { runID: id, outcome: 'completed' },
+        perform: (d) => d.api.runReview(id, 'complete'),
+      })
+    }
+    if (live && awaitsCompletion(run)) {
       list.push({
         id: 'not-yet',
-        label: 'Not yet: keep the session open',
-        short: 'Not yet',
+        label: 'Not yet: the work is not finished',
+        Icon: Undo2,
+        value: 'continue unfinished',
+        done: 'Marked not finished',
+        // The status too, so a refusal because someone closed the session meanwhile shows its error.
+        predict: () => ({ runID: id, record: { review: '', status: run.status } }),
+        perform: async (d) => {
+          const same = sameIdentity()
+          await d.api.runReview(id, 'not-yet')
+          if (same()) d.navigate('run', { runId: id, view: 'session', focus: 'composer' })
+        },
+      })
+    }
+    if (run.review === 'ready') {
+      list.push({
+        id: 'review-later',
+        label: 'Review later',
         Icon: Hourglass,
-        done: 'Kept open',
+        value: 'snooze defer',
+        done: 'Review put off',
         predict: () => ({ runID: id, record: { review: 'later' } }),
         perform: (d) => d.api.runReview(id, 'later'),
       })
@@ -413,7 +457,6 @@ export function runCommands(ctx: RunCommandContext): Command[] {
     list.push({
       id: 'close',
       label: 'Close session…',
-      short: 'Close',
       Icon: CircleCheck,
       value: 'delete remove end finish',
       perform: (d) => d.openDialog('close', id),
@@ -424,7 +467,6 @@ export function runCommands(ctx: RunCommandContext): Command[] {
     list.push({
       id: 'kill',
       label: 'Kill session',
-      short: 'Kill',
       Icon: Square,
       value: 'stop',
       done: 'Killed',
@@ -444,12 +486,11 @@ export function runCommands(ctx: RunCommandContext): Command[] {
     list.push({
       id: 'delete',
       label: 'Delete session',
-      short: 'Delete',
       Icon: Trash2,
       done: 'Deleted',
       confirm: {
         title: 'Delete this session?',
-        body: 'The session, transcript, and coordination records will be removed from Aether.',
+        body: 'The session, transcript, and coordination records will be removed from Cloudfield.',
         action: 'Delete session',
         stopsChildren: true,
       },
@@ -470,15 +511,14 @@ export function runCommands(ctx: RunCommandContext): Command[] {
   if (cap.hasMethod('run.release') && mayKill && isRetainedRun(run)) {
     list.push({
       id: 'release',
-      label: 'Free container…',
-      short: 'Free container',
+      label: 'Free sandbox…',
       Icon: PackageX,
       value: 'release cleanup',
-      done: 'Freed container',
+      done: 'Freed sandbox',
       confirm: {
-        title: 'Free this session’s container?',
-        body: 'Its compute is released and the exact process cannot be reopened. Files, result branches and history have separate lifetimes; this does not delete all session data or archive it.',
-        action: 'Free container',
+        title: 'Free this session’s sandbox?',
+        body: 'Its sandbox is removed and the exact process cannot be reopened. Files, result branches and history have separate lifetimes; this does not delete all session data or archive it.',
+        action: 'Free sandbox',
       },
       predict: () => ({ runID: id, record: { container_retained_until: undefined, cleanup_pending: undefined } }),
       slow: true,
@@ -486,23 +526,21 @@ export function runCommands(ctx: RunCommandContext): Command[] {
     })
   }
 
-  if (cap.hasMethod('run.archive') && mayKill && isArchivable(run.status)) {
+  if (cap.hasMethod('run.archive') && mayKill && isTerminal(run.status)) {
     if (run.archived_at) {
       list.push({
         id: 'restore',
         label: 'Restore session',
-        short: 'Restore',
         Icon: ArchiveRestore,
       value: 'unarchive',
         done: 'Restored',
         predict: () => ({ runID: id, record: { archived_at: undefined } }),
         perform: (d) => d.api.runArchive(id, false),
       })
-    } else {
+    } else if (!awaitsCompletion(run)) {
       list.push({
         id: 'archive',
         label: 'Archive session',
-        short: 'Archive',
         Icon: Archive,
       value: 'hide',
         done: 'Archived',
@@ -516,7 +554,6 @@ export function runCommands(ctx: RunCommandContext): Command[] {
     list.push({
       id: 'protect',
       label: run.protected ? 'Unprotect session' : 'Protect session',
-      short: run.protected ? 'Unprotect' : 'Protect',
       Icon: run.protected ? ShieldOff : Shield,
       done: run.protected ? 'Unprotected' : 'Protected',
       predict: () => ({ runID: id, record: { protected: !run.protected } }),
@@ -531,7 +568,6 @@ export function runCommands(ctx: RunCommandContext): Command[] {
     list.push({
       id: 'relaunch',
       label: 'Relaunch',
-      short: 'Relaunch',
       Icon: RefreshCw,
       value: 'restart rerun reopen',
       done: 'Relaunched',
@@ -542,7 +578,6 @@ export function runCommands(ctx: RunCommandContext): Command[] {
     list.push({
       id: 'pull',
       label: 'Pull branch',
-      short: 'Pull',
       Icon: Download,
       value: 'fetch git',
       disabled: !run.last_commit,
@@ -570,7 +605,6 @@ export function runCommands(ctx: RunCommandContext): Command[] {
     list.push({
       id: 'ask-assistant',
       label: ask.label,
-      short: ask.draft,
       Icon: Sparkles,
       value: 'assistant fix stuck why',
       perform: () => useStore.getState().askAssistant({ draft: ask.draft, attachments: [{ kind: 'run', workspace_id: run.workspace_id, run_id: id, label: id }] }),
@@ -578,7 +612,10 @@ export function runCommands(ctx: RunCommandContext): Command[] {
   }
 
   // A verb offered from a pending prediction's state could re-read the run and erase that prediction.
-  return ctx.predicting ? list.filter((command) => !command.predict) : list
+  const offered = ctx.predicting ? list.filter((command) => !command.predict) : list
+  // A painted snapshot may be minutes old: Mark complete could close work the agent started since.
+  if (!ctx.stale) return offered
+  return offered.map((command) => (command.done || changingDialogs.has(command.id) ? { ...command, disabled: true } : command))
 }
 
 /** Checks out a pulled run branch in the linked repository; a refusal, such as uncommitted changes, is shown as the gateway words it. */
@@ -611,9 +648,10 @@ export function closeCommand(runID: string, outcome: 'merged' | 'abandoned'): Co
   }
 }
 
-/** A run whose agent reported success and that its owner has not marked complete. */
-export function completable(run: RunRecord): boolean {
-  return awaitsCompletion(run) || ((run.status === 'running' || run.status === 'needs-attention') && run.state === 'finished' && run.review !== 'accepted')
+/** A run whose agent reported success and that its owner has not marked complete. A subsession finishes by reporting to its parent agent, so it has none of this. */
+function completable(run: RunRecord): boolean {
+  if (outcomeHeld(run)) return false
+  return awaitsCompletion(run) || ((run.status === 'running' || run.status === 'needs-attention') && run.state === 'finished' && run.review === undefined && !run.review_changed_at)
 }
 
 /** Older agent-report finishes can still have a retained interactive runtime. */
@@ -633,7 +671,7 @@ export function canLaunch({
   return cap.hasMethod('run.launch') && allowed('launch', { id: null, role })
 }
 
-export const unlinkedReason = 'Link this computer to a server first'
+const unlinkedReason = 'Link this computer to a server first'
 
 /** An unlinked gateway serves only onboarding, so nothing can launch yet. */
 export function launchBlocked(linkStatus: Pick<LinkStatus, 'server_configured'> | null): string | undefined {
@@ -668,7 +706,7 @@ export function boardCommands(ctx: BoardCommandContext): Command[] {
   if (ctx.cap.hasMethod('assistant.status') && canLaunch({ cap: ctx.cap, role })) {
     list.push({
       id: 'assistant',
-      label: 'Ask Aether',
+      label: 'Ask Cloudfield',
       Icon: Sparkles,
       value: 'assistant question help chat',
       perform: () => useStore.getState().setAssistantOpen(true),
@@ -701,7 +739,7 @@ export function boardCommands(ctx: BoardCommandContext): Command[] {
   if (ctx.cap.hasMethod('run.archive')) {
     list.push({
       id: 'clear-done',
-      label: 'Archive closed sessions…',
+      label: 'Archive finished sessions…',
       Icon: Archive,
       value: 'clear cleanup',
       perform: (d) => d.openDialog('clear-done'),
@@ -710,7 +748,7 @@ export function boardCommands(ctx: BoardCommandContext): Command[] {
   if (ctx.cap.hasMethod('run.release')) {
     list.push({
       id: 'release-finished',
-      label: 'Free retained containers…',
+      label: 'Free retained sandboxes…',
       Icon: PackageX,
       value: 'release cleanup',
       perform: (d) => d.openDialog('release-finished'),
@@ -718,11 +756,11 @@ export function boardCommands(ctx: BoardCommandContext): Command[] {
   }
   list.push(
     {
-      id: 'theme-system',
-      label: 'Use system theme',
-      Icon: Monitor,
+      id: 'theme-dark',
+      label: 'Use dark theme',
+      Icon: Moon,
       value: 'appearance mode',
-      perform: (d) => d.setTheme('system'),
+      perform: (d) => d.setTheme('dark'),
     },
     {
       id: 'theme-light',
@@ -732,11 +770,11 @@ export function boardCommands(ctx: BoardCommandContext): Command[] {
       perform: (d) => d.setTheme('light'),
     },
     {
-      id: 'theme-dark',
-      label: 'Use dark theme',
-      Icon: Moon,
+      id: 'theme-system',
+      label: 'Use system theme',
+      Icon: Monitor,
       value: 'appearance mode',
-      perform: (d) => d.setTheme('dark'),
+      perform: (d) => d.setTheme('system'),
     },
   )
   return list
@@ -1018,6 +1056,8 @@ export function useCommandRunner(
   const navigate = useStore((s) => s.navigate)
   const openDialog = useStore((s) => s.openPaletteDialog)
   const openForwardDialog = useStore((s) => s.openForwardDialog)
+  const openCloseConfirmation = useStore((s) => s.openCloseConfirmation)
+  const setCloseChecking = useStore((s) => s.setCloseChecking)
   const recordPull = useStore((s) => s.recordPull)
   const removeRun = useStore((s) => s.removeRun)
   const setTheme = useStore((s) => s.setTheme)
@@ -1026,6 +1066,27 @@ export function useCommandRunner(
   return useCallback(
     async (command: Command) => {
       onDone?.()
+      if (command.closes) {
+        const { runID, outcome } = command.closes
+        if (useStore.getState().closeChecking[runID]) return
+        const same = sameIdentity()
+        const asked = closeState(useStore.getState().runs[runID])
+        setCloseChecking(runID, true)
+        const check = await readCloseCheck(runID, outcome).finally(() => setCloseChecking(runID, false))
+        if (!same()) return
+        if (closeState(useStore.getState().runs[runID]) !== asked) {
+          toast.info(closeChangedText)
+          return
+        }
+        if (closeWarned(check, outcome)) {
+          if (useStore.getState().closeConfirmation) {
+            toast.info(closeBusyText)
+            return
+          }
+          openCloseConfirmation({ check, asked, outcome, command: { ...command, closes: undefined } })
+          return
+        }
+      }
       const deps: CommandDeps = {
         api,
         navigate,
@@ -1065,6 +1126,8 @@ export function useCommandRunner(
       navigate,
       onDone,
       onTemplates,
+      openCloseConfirmation,
+      setCloseChecking,
       openDialog,
       openForwardDialog,
       recordPull,

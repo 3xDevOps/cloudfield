@@ -24,6 +24,16 @@ type ID string
 // FindByCreationKey when no container carries the key.
 var ErrNotFound = errors.New("runtime: container not found")
 
+// ErrUnstartableImage reports a container that cannot start because of its
+// image, not its settings: an older image may still start.
+var ErrUnstartableImage = errors.New("runtime: the image cannot start a container")
+
+// ErrStartLater reports a kept container that failed to start for a reason
+// of the host's, not its own, such as a VM monitor that could not run: a
+// later start may succeed, so a caller keeps the container, and what only it
+// holds, rather than replace it.
+var ErrStartLater = errors.New("runtime: the host could not start the container now")
+
 // FilesystemCapacity is available capacity at a verified runtime storage root.
 // Name describes its role, not a private host path. Roots may share a filesystem.
 type FilesystemCapacity struct {
@@ -52,6 +62,71 @@ type InitPIDRuntime interface {
 	InitPID(context.Context, ID) (int, error)
 }
 
+// MemoryEventsRuntime optionally reports out-of-memory kills inside a
+// container whose own kernel does the killing, where its host cgroup cannot
+// see them. ok is false for a container its host cgroup accounts for.
+type MemoryEventsRuntime interface {
+	MemoryEvents(context.Context, ID) (events MemoryEvents, ok bool, err error)
+}
+
+// MemoryEvents counts kills since the container started; LimitBytes is 0
+// when unknown.
+type MemoryEvents struct {
+	OOMKills   uint64
+	LimitBytes uint64
+}
+
+// MemoryUseRuntime optionally reports what each running container holds of
+// the host's memory, where the container's own count misses some of it, as
+// a VM's guest counts its page cache as available while the host holds it.
+// With an error it still reports every container it could measure.
+type MemoryUseRuntime interface {
+	MemoryUse(context.Context) (map[ID]uint64, error)
+}
+
+// SaveRuntime optionally writes a running container's memory and device
+// state to disk and ends it, then later restores it with every process
+// where it was. A container that was saved and not restored is stopped:
+// Inspect reports it exited and Wait returns; Stop or Start discards the
+// saved state. Saves reports whether a container can be saved at all, and
+// SavedMemory the memory a Restore loads back, 0 for one not saved, once a
+// save or restore under way has finished; with an error, the most it may.
+// Restore of a container that holds no saved state fails with ErrNotSaved.
+// SetCommand replaces the main command the next Start of a stopped
+// container runs, so one that starts again from its disk does not run its
+// launch command, with the task, again.
+type SaveRuntime interface {
+	Saves(ID) bool
+	Save(context.Context, ID) error
+	Restore(context.Context, ID) error
+	SavedMemory(ID) (uint64, error)
+	SetCommand(context.Context, ID, []string) error
+}
+
+// FreezeRuntime optionally stops a running container where it stands, at
+// once and without its help, so it takes no more of the host's memory, and
+// lets it run on later. A frozen container keeps its memory and answers
+// nothing. Freeze reports whether it froze the container, false for one
+// already frozen, and fails without waiting on one that does not run or
+// that the runtime is starting, stopping, saving or restoring. Frozen lists
+// the frozen containers, the longest frozen first. Save thaws the container
+// it saves, and Stop and Destroy the one they end.
+type FreezeRuntime interface {
+	Freeze(ID) (bool, error)
+	Frozen() []ID
+	Thaw(ID) error
+}
+
+var ErrNotSaved = errors.New("it has no saved state")
+
+// CaptureRuntime optionally starts a stopped session container with a main
+// process that does nothing in place of its command, and without its setup
+// script, so the server can make the session's final commit before the
+// container is removed. Stop ends it as any start.
+type CaptureRuntime interface {
+	BootForCapture(context.Context, ID) error
+}
+
 // Mount is one additional mount into a run container. Host paths are
 // validated against Aether-owned roots by the mount validator (see
 // mounts.go) before a spec reaches any runtime; the runtime itself only
@@ -73,6 +148,41 @@ type Mount struct {
 	// overlay whose writes land in Overlay/upper, so they never reach
 	// HostPath. Overlay is a directory the caller owns and removes.
 	Overlay string
+	// Kind tells the VM runtime, which keeps a session on disks of its own,
+	// what the mount holds; Docker binds every kind alike.
+	Kind MountKind `json:",omitempty"`
+	// Port, for a directory holding one socket, is where programs in a
+	// session VM also reach that socket: 127.0.0.1:Port. Docker ignores it.
+	Port uint16 `json:",omitempty"`
+}
+
+// MountKind names what a mount holds.
+type MountKind string
+
+const (
+	// MountScratch is space only this container uses, such as /tmp.
+	MountScratch MountKind = "scratch"
+	// MountCache is a pool of tool caches the member's containers share;
+	// HostPath names the pool.
+	MountCache MountKind = "cache"
+	// MountServerBinary is the server's own executable.
+	MountServerBinary MountKind = "server-binary"
+	// MountState is a directory, Subpath, on a disk of one session's own
+	// that outlives each VM the session runs in. HostPath is the session's
+	// directory the VM runtime keeps that disk in.
+	MountState MountKind = "state"
+	// MountSeed is no mount but a file of the home, ContainerPath, that a
+	// session VM copies into the MountState mount covering it at every boot;
+	// HostPath is that mount's.
+	MountSeed MountKind = "seed"
+)
+
+// Program is ~/.local/bin/<Executable> in the home at Home on the host,
+// which the session sees at Target.
+type Program struct {
+	Home       string
+	Target     string
+	Executable string
 }
 
 // ContainerInfo is immutable metadata captured from a live or stopped
@@ -90,6 +200,10 @@ type ContainerInfo struct {
 	MountTargets []string
 	// Fingerprint is the Spec.Fingerprint the container was created with.
 	Fingerprint string
+	// Exited reports that the container's main process has ended; ExitCode is
+	// its exit status. A created or running container is not exited.
+	Exited   bool
+	ExitCode int
 }
 
 // Spec describes one run container, engine-neutrally: the image,
@@ -157,6 +271,10 @@ type Spec struct {
 	// profiles, coordination assets), applied after the worktree mount.
 	// Callers must pass them through ValidateMounts first.
 	Mounts []Mount
+	// Programs are the agent programs the session starts from the member's
+	// home. A session VM reads each from a read-only disk once one is built
+	// for the version the home holds; Docker ignores them.
+	Programs []Program
 	// User is the numeric "uid:gid" the main process (and setup script)
 	// runs as; empty means the image default.
 	User string
@@ -371,12 +489,21 @@ type Runtime interface {
 	// found and destroyed. Keys are assumed unique; with duplicates any
 	// match may be returned.
 	FindByCreationKey(ctx context.Context, key string) (ID, error)
-	// Commit snapshots a running container as a tagged image.
-	Commit(ctx context.Context, id ID, tag string) error
+	// Commit snapshots a running container as a tagged image with labels
+	// set on it.
+	Commit(ctx context.Context, id ID, tag string, labels map[string]string) error
+	// ImageLabels returns the labels of a local image; a missing image is
+	// ErrNotFound.
+	ImageLabels(ctx context.Context, ref string) (map[string]string, error)
 	// ImageExists reports whether an image reference exists locally.
 	ImageExists(ctx context.Context, ref string) (bool, error)
 	// ListImageTags returns the local tags under one repository.
 	ListImageTags(ctx context.Context, repo string) ([]string, error)
+	// TagImage adds target as another tag of the local image source.
+	TagImage(ctx context.Context, source, target string) error
+	// ExportImage streams the filesystem of a local image as a tar, with
+	// owners as stored in the image.
+	ExportImage(ctx context.Context, ref string) (io.ReadCloser, error)
 	// RemoveImage untags a local image. Removing a tag that does not
 	// exist is not an error.
 	RemoveImage(ctx context.Context, tag string) error

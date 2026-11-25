@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -65,6 +66,10 @@ type fakeGitHub struct {
 	required []string
 	suites   []map[string]any
 	gone     bool
+	// queued is the last merge queue event GraphQL answers, if any;
+	// queueErr, when set, is the GraphQL error it answers instead.
+	queued   map[string]any
+	queueErr string
 	// refuse answers paths with these prefixes with the status, and with
 	// X-GitHub-SSO when sso is set.
 	refuse      map[string]int
@@ -72,6 +77,13 @@ type fakeGitHub struct {
 	limitUntil  time.Time
 	requests    []string
 	conditional int
+	// hold, while set, holds the next request for its path until released.
+	hold atomic.Pointer[heldRequest]
+}
+
+type heldRequest struct {
+	path string
+	gate
 }
 
 func newFakeGitHub(t *testing.T) *fakeGitHub {
@@ -97,6 +109,10 @@ type roundTripper func(*http.Request) (*http.Response, error)
 func (f roundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
+	if h := f.hold.Load(); h != nil && strings.HasPrefix(r.URL.RequestURI(), h.path) && f.hold.CompareAndSwap(h, nil) {
+		h.arrived <- struct{}{}
+		<-h.release
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	path := r.URL.RequestURI()
@@ -165,6 +181,16 @@ func (f *fakeGitHub) serve(w http.ResponseWriter, r *http.Request) {
 			"enabled": len(checks) > 0, "required_status_checks": map[string]any{"enforcement_level": "non_admins", "checks": checks}}}
 	case strings.HasPrefix(path, "/repos/acme/app/rules/branches/main?"):
 		body = []any{}
+	case path == "/graphql" && r.Method == http.MethodPost:
+		nodes := []any{}
+		if f.queued != nil {
+			nodes = append(nodes, f.queued)
+		}
+		body = map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+			"timelineItems": map[string]any{"nodes": nodes}}}}}
+		if f.queueErr != "" {
+			body = map[string]any{"data": nil, "errors": []any{map[string]any{"type": "FORBIDDEN", "message": f.queueErr}}}
+		}
 	case strings.HasPrefix(path, "/repos/acme/app/pulls/7/reviews?"):
 		reviews := []map[string]any{}
 		for _, rv := range f.reviews {

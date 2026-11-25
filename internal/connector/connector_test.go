@@ -30,7 +30,7 @@ import (
 	"github.com/3xDevOps/Aether/internal/domain"
 	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
 	"github.com/3xDevOps/Aether/internal/events"
-	"github.com/3xDevOps/Aether/internal/ops"
+	"github.com/3xDevOps/Aether/internal/harness"
 	"github.com/3xDevOps/Aether/internal/protocol"
 	"github.com/3xDevOps/Aether/internal/scheduler"
 	"github.com/3xDevOps/Aether/internal/sshd"
@@ -174,7 +174,7 @@ func TestConnectorEndToEnd(t *testing.T) {
 	}
 
 	third := e.connect(t, allScopes...)
-	if err := e.db.RevokeDevice(ctx, e.deviceID); err != nil {
+	if err := e.db.RevokeDevice(ctx, e.deviceID, ""); err != nil {
 		t.Fatal(err)
 	}
 	if status, _, body := e.bearer(third.token.AccessToken); status != http.StatusUnauthorized || !strings.Contains(body, "revoked") {
@@ -270,6 +270,9 @@ func TestConnectorLaunchOnSharedAccount(t *testing.T) {
 		if err := e.db.CreateMember(ctx, m); err != nil {
 			t.Fatal(err)
 		}
+		if err := e.db.GrantWorkspace(ctx, e.ws.ID, m.ID, domain.MemberID(info.Member.ID)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if _, err := e.db.ShareAccount(ctx, grace.ID, domain.MemberID(info.Member.ID)); err != nil {
 		t.Fatal(err)
@@ -299,28 +302,6 @@ func TestConnectorLaunchOnSharedAccount(t *testing.T) {
 	}
 	if text := r.Content[0].(*mcp.TextContent).Text; !r.IsError || !strings.Contains(text, "member "+string(bo.ID)+" has not shared their account with you") {
 		t.Fatalf("launch on an unshared account = %v %s", r.IsError, text)
-	}
-}
-
-// A connector granted an op's scope, and read, can make every call the op
-// declares: the server admits each method under read or under that scope.
-// Write and control are separate boxes, so a control op cannot lean on
-// write.
-func TestOpsMethodsFitTheirConnectorScope(t *testing.T) {
-	for _, o := range ops.Ops {
-		if o.Scope == "" {
-			continue
-		}
-		for _, method := range o.Methods {
-			scopes, ok := sshd.ConnectorMethodScopes(method)
-			if !ok {
-				t.Errorf("%s calls %s, which the server refuses to every connector", o.Name, method)
-				continue
-			}
-			if !slices.Contains(scopes, sshd.ConnectorScopeRead) && !slices.Contains(scopes, string(o.Scope)) {
-				t.Errorf("%s (scope %s) calls %s, which needs %v", o.Name, o.Scope, method, scopes)
-			}
-		}
 	}
 }
 
@@ -643,7 +624,7 @@ func newEnv(t *testing.T) *env {
 	if err = db.RegisterDevice(ctx, dev); err != nil {
 		t.Fatal(err)
 	}
-	ws := &domain.Workspace{Name: "proj", BaseBranch: "main"}
+	ws := &domain.Workspace{Name: "proj", BaseBranch: "main", OwnerID: member.ID}
 	if err = db.CreateWorkspace(ctx, ws); err != nil {
 		t.Fatal(err)
 	}
@@ -738,7 +719,7 @@ var (
 		"aether_pr_status", "aether_overlaps", "aether_memory_search", "search", "fetch", "aether_launch_options", "aether_changes", "aether_watches"}
 	writeTools = []string{"aether_launch_session", "aether_message_session", "aether_answer", "aether_pause_session",
 		"aether_resume_session", "aether_mark_reviewed", "aether_session_lifecycle", "aether_memory_add", "aether_memory_pin",
-		"aether_watch", "aether_unwatch"}
+		"aether_watch", "aether_unwatch", "aether_ask_assistant", "aether_decide_assistant_card"}
 	controlTools = []string{"aether_decide_approval", "aether_stop_session", "aether_handoff_session",
 		"aether_pr_create", "aether_pr_merge", "aether_switch_session_mode"}
 )
@@ -982,8 +963,9 @@ type edgeAt struct {
 	version atomic.Int64
 }
 
-func (e *edgeAt) Origin() string   { return e.origin }
-func (e *edgeAt) EdgeVersion() int { return int(e.version.Load()) }
+func (e *edgeAt) Origin() string         { return e.origin }
+func (e *edgeAt) EdgeVersion() int       { return int(e.version.Load()) }
+func (e *edgeAt) RelayOrigins() []string { return []string{e.origin} }
 
 // fakeRuns records launches, with the connector client each came via, and
 // answers the reads a run snapshot makes.
@@ -1026,11 +1008,17 @@ func (f *fakeRuns) launches() []string {
 	return slices.Clone(f.launched)
 }
 
-func (*fakeRuns) Paused(domain.RunID) bool { return false }
+func (*fakeRuns) Paused(domain.RunID) bool                                     { return false }
+func (*fakeRuns) Sleep(domain.RunID) scheduler.SleepState                      { return scheduler.SleepState{} }
+func (*fakeRuns) WakeRun(context.Context, domain.RunID, domain.MemberID) error { return nil }
+func (*fakeRuns) SettleSleep(context.Context, domain.RunID) error              { return nil }
 func (*fakeRuns) DefaultMode(context.Context, domain.MemberID, domain.MemberID, string) (domain.LaunchMode, error) {
 	return domain.LaunchACP, nil
 }
-func (*fakeRuns) PendingInputs(domain.RunID) []domain.RunInputRequest          { return nil }
+func (*fakeRuns) PendingInputs(domain.RunID) []domain.RunInputRequest { return nil }
+func (*fakeRuns) LoginProblem(domain.MemberID, string, harness.Profile) (string, bool, error) {
+	return "", false, nil
+}
 func (*fakeRuns) Cause(domain.RunID, domain.RunActivity) events.RunStatusCause { return "" }
 func (*fakeRuns) Wait(domain.RunID, domain.RunActivity) *domain.RunWait        { return nil }
 func (*fakeRuns) Liveness(domain.RunID) (domain.RunLiveness, bool) {

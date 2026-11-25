@@ -1,3 +1,4 @@
+import { isAdminRole } from '@/lib/permissions'
 import { memberName as storeMemberName } from '@/lib/member-name'
 import { needsInputPrefix, plainReason } from '@/lib/reasons'
 import { isSudo } from '@/lib/run-requests'
@@ -37,7 +38,6 @@ export type NeedsYouID =
   | 'disconnected'
   | 'blocked'
   | 'needs-input'
-  | 'ready'
   | 'failed'
 
 export interface PrimaryAction {
@@ -48,7 +48,7 @@ export interface PrimaryAction {
 export const openAction: PrimaryAction = { kind: 'open', label: 'Open' }
 
 /** How a row in Needs you is labelled: a request, or a run that needs intervention. */
-export type AttentionState = 'needs-you' | 'ready' | 'failed' | 'disconnected'
+export type AttentionState = 'needs-you' | 'failed' | 'disconnected'
 
 export interface NeedsYouCondition {
   id: NeedsYouID
@@ -92,7 +92,7 @@ function condition(spec: Spec): NeedsYouCondition {
     since: (run, ctx) => spec.since?.(run, ctx) ?? run.stateChangedAt,
     applies: (run, ctx) => {
       if (!ctx.viewerID || !holds(run, ctx)) return false
-      if (spec.admins && ctx.viewerRole === 'admin') return true
+      if (spec.admins && isAdminRole(ctx.workspaces[run.workspace_id]?.role ?? ctx.viewerRole)) return true
       return spec.resolvers(run, ctx).includes(ctx.viewerID)
     },
     waitsOn: (run, ctx) =>
@@ -100,7 +100,7 @@ function condition(spec: Spec): NeedsYouCondition {
   }
 }
 
-export function isEnhanced(run: Pick<Run, 'acp'>): boolean {
+function isEnhanced(run: Pick<Run, 'acp'>): boolean {
   return run.acp === true
 }
 
@@ -115,7 +115,7 @@ export function awaitingReview(run: Pick<Run, 'status' | 'outcome_unseen' | 'sta
     (run.status === 'completed' || run.status === 'failed' || run.state === 'finished' || run.state === 'failed')
 }
 
-/** A reported success the owner has not answered, or answered Not yet. */
+/** A reported success the owner has not answered, or put off for later. */
 export function awaitsCompletion(run: Pick<Run, 'status' | 'state' | 'review'>): boolean {
   return (run.review === 'ready' || run.review === 'later') &&
     (run.status === 'completed' || (isLive(run) && run.state === 'finished'))
@@ -123,6 +123,11 @@ export function awaitsCompletion(run: Pick<Run, 'status' | 'state' | 'review'>):
 
 export function isPaused(run: RunRecord, ctx: Pick<StateContext, 'pausedRuns'>): boolean {
   return !isTerminal(run.status) && (ctx.pausedRuns[run.id] ?? run.paused) === true
+}
+
+/** A subsession's reported outcome is for its parent agent only, never a person; a detached one is a session of its own. Mirrors domain.Run.OutcomeHeld. */
+export function outcomeHeld(run: Pick<Run, 'parent_run_id' | 'detached'>): boolean {
+  return Boolean(run.parent_run_id) && run.detached !== true
 }
 
 // Room status loads only while the run is open; an older gateway's snapshot has no controller.
@@ -154,11 +159,13 @@ function queuedMessages(run: RunRecord, ctx: StateContext): RoomMessage[] {
 }
 
 const blockedPrefix = 'blocked: '
-// Mirrors usageLimitReason in internal/scheduler/usage_fallback.go.
+// Mirrors usageLimitReason in internal/scheduler/usage_fallback.go and
+// revokedReason in internal/scheduler/account_revoke.go.
 const usageLimitPrefix = 'Usage limit reached on '
+const revokedPrefix = 'account share revoked: '
 
 const asks = (run: RunRecord) => run.reason?.startsWith(needsInputPrefix) === true
-const usageLimited = (run: RunRecord) => run.reason?.startsWith(usageLimitPrefix) === true
+const leftAccount = (run: RunRecord) => run.reason?.startsWith(usageLimitPrefix) === true || run.reason?.startsWith(revokedPrefix) === true
 // Mirrors acpInterruptedReason and acpStoppedReason in internal/scheduler/acp_turn.go.
 const turnCutShort = (run: RunRecord) => run.reason === 'turn interrupted' || run.reason?.startsWith('turn ended: ') === true
 // Mirrors waitBrokenReasonPrefix in internal/scheduler/wait.go.
@@ -258,31 +265,18 @@ export const needsYouConditions: NeedsYouCondition[] = [
     reason: (run) => {
       if (turnCutShort(run)) return `${plainReason(run.reason!)} · reply to continue`
       if (waitBroken(run)) return `Wait broken: ${run.reason!.slice(waitBrokenPrefix.length)} · reply to continue`
-      return asks(run) || usageLimited(run) ? plainReason(run.reason!) : 'Open the session to see its request'
+      return asks(run) || leftAccount(run) ? plainReason(run.reason!) : 'Open the session to see its request'
     },
     // A Background run takes no input.
     action: (run) =>
       (asks(run) || turnCutShort(run) || waitBroken(run)) && run.mode !== 'headless' ? { kind: 'reply', label: 'Reply' } : openAction,
   }),
   condition({
-    id: 'ready',
-    state: 'ready',
-    target: 'run',
-    background: true,
-    completed: true,
-    // Leaves Needs you only on Mark complete or Not yet; opening the run does not answer it.
-    holds: (run) => run.review === 'ready' && awaitsCompletion(run),
-    resolvers: (run) => [run.member_id],
-    reason: () => 'Your agent reports this task is finished',
-    action: () => ({ kind: 'open', label: 'Review' }),
-    since: (run) => run.review_changed_at,
-  }),
-  condition({
     id: 'failed',
     state: 'failed',
     target: 'changes',
     background: true,
-    holds: (run) => run.state === 'failed' && run.outcome_unseen === true,
+    holds: (run) => run.state === 'failed' && run.outcome_unseen === true && !outcomeHeld(run),
     resolvers: (run) => [run.member_id],
     action: () => ({ kind: 'open', label: 'Review' }),
     reason: (run) =>
@@ -321,7 +315,7 @@ export function deviceNeeds(
   viewer: Pick<StateContext, 'viewerID' | 'viewerRole'>,
   accessPolicy: ServerEdge['access_policy'] | undefined,
 ): DeviceNeed[] {
-  const admin = viewer.viewerRole === 'admin'
+  const admin = isAdminRole(viewer.viewerRole)
   const waiting = (device: Device) =>
     admin
       ? device.status === 'pending' || (device.status === 'registered' && accessPolicy === 'approved-devices')

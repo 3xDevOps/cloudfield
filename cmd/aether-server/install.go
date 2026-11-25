@@ -2,6 +2,7 @@ package main
 
 import (
 	"cmp"
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -10,18 +11,24 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 
+	"golang.org/x/term"
+
 	"github.com/3xDevOps/Aether/internal/attribution"
 	"github.com/3xDevOps/Aether/internal/disk"
 	edgeagent "github.com/3xDevOps/Aether/internal/edge/agent"
+	edgeclient "github.com/3xDevOps/Aether/internal/edge/client"
 	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
+	"github.com/3xDevOps/Aether/internal/selfupdate"
+	"github.com/3xDevOps/Aether/internal/server"
 	"github.com/3xDevOps/Aether/internal/serversetup"
+	"github.com/3xDevOps/Aether/internal/serverunit"
 	"github.com/3xDevOps/Aether/internal/shellquote"
-	"golang.org/x/term"
 )
 
 func install(args []string) error {
@@ -91,9 +98,26 @@ func configFlag(configPath string) string {
 
 // writeInstall carries on when Docker does not answer, since automation
 // may install it next, but leaves Sysbox out: its installer needs Docker.
+// When sessions are to run in VMs it prepares the host for them first, so a
+// host without KVM gets nothing written, and leaves Sysbox out: sessions
+// and environment terminals then run their own Docker daemon in their VM.
 func writeInstall(w io.Writer, unitPath, configPath string, values map[string]string, force, sysbox bool) error {
+	vm, kernel, err := installsVMs(configPath, values, force)
+	if err != nil {
+		return err
+	}
+	if vm {
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+		err = prepareVMHost(ctx, w, selfupdate.DefaultChecker().BaseURL(), kernel)
+		stop()
+		if err != nil {
+			return err
+		}
+		_, _ = fmt.Fprintln(w)
+		sysbox = false
+	}
 	docker := checkDocker(w)
-	if err := writeAndReport(w, unitPath, configPath, values, force); err != nil {
+	if err = writeAndReport(w, unitPath, configPath, values, force); err != nil {
 		return err
 	}
 	if sysbox {
@@ -114,6 +138,21 @@ func writeInstall(w io.Writer, unitPath, configPath string, values map[string]st
 		return err
 	}
 	return printNextSteps(w, configPath, options, "", docker, "")
+}
+
+// installsVMs reports whether the config file install leaves behind, the
+// kept one or the one written from values, runs sessions in VMs, and which
+// guest kernel it names.
+func installsVMs(configPath string, values map[string]string, force bool) (bool, string, error) {
+	options := serveFlagSet()
+	if _, err := os.Stat(configPath); err == nil && !force {
+		if options, err = configuredOptions(configPath); err != nil {
+			return false, "", err
+		}
+	} else if _, err := serversetup.Apply(options, values); err != nil {
+		return false, "", err
+	}
+	return options.Lookup("session-runtime").Value.String() == server.SessionRuntimeVM, options.Lookup("vm-kernel").Value.String(), nil
 }
 
 // The least a run needs to start, from internal/scheduler/capacity.go: 2
@@ -199,13 +238,14 @@ func installValues(fs *flag.FlagSet) map[string]string {
 	return values
 }
 
-// writeAndReport writes the unit and config and says what it wrote.
+// writeAndReport writes the unit, slice and config and says what it wrote.
 func writeAndReport(w io.Writer, unitPath, configPath string, values map[string]string, force bool) error {
 	res, err := serversetup.Install(unitPath, configPath, values, force)
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(w, "wrote %s\n", res.UnitPath)
+	_, _ = fmt.Fprintf(w, "wrote %s\nwrote %s\n", res.UnitPath, res.SlicePath)
+	linkUnitAlias(w, res.UnitPath)
 	if res.ConfigSkipped {
 		_, _ = fmt.Fprintf(w, "kept %s (already exists; pass --force to overwrite)\n", res.ConfigPath)
 	} else {
@@ -213,6 +253,20 @@ func writeAndReport(w io.Writer, unitPath, configPath string, values map[string]
 	}
 	_, _ = fmt.Fprintf(w, "\nchange options later with:\n  aether-server config set <key> <value>\n")
 	return nil
+}
+
+// linkUnitAlias gives the unit just written its second name, the link the
+// updater makes. A name held by anything else is left as it is, and no
+// failure to link fails the install.
+func linkUnitAlias(w io.Writer, unitPath string) {
+	unit := filepath.Base(unitPath)
+	if unit != filepath.Base(serversetup.UnitPath) {
+		return
+	}
+	_, err := selfupdate.Symlink(filepath.Dir(unitPath), unit, serverunit.Alias)
+	if err != nil && !errors.Is(err, selfupdate.ErrNameTaken) {
+		_, _ = fmt.Fprintln(w, "warning:", err)
+	}
 }
 
 // configuredOptions reads the config file back into the serve options, so
@@ -279,7 +333,7 @@ func printNextSteps(w io.Writer, configPath string, options *flag.FlagSet, claim
 		if port != "2222" {
 			host = net.JoinHostPort(host, port)
 		}
-		line := "on your computer, on the same tailnet: in the Aether app's Connect step choose\n" +
+		line := "on your computer, on the same tailnet: in the Cloudfield app's Connect step choose\n" +
 			"     Tailscale and enter " + host + "; in a terminal:\n       " + show("aether link "+host)
 		if web := options.Lookup("web-port").Value.String(); web != "0" {
 			url := "https://" + tailnetHost + "/"
@@ -292,7 +346,7 @@ func printNextSteps(w io.Writer, configPath string, options *flag.FlagSet, claim
 	}
 	switch {
 	case claimCode != "":
-		computer = append(computer, relayFrom+": in the Aether app's Connect step choose Aether relay, sign in\n"+
+		computer = append(computer, relayFrom+": in the Cloudfield app's Connect step choose Cloudfield relay, sign in\n"+
 			"     with GitHub and paste the claim link above; in a terminal:\n       "+claim(claimCode))
 	case edgeURL != "" && owner == nil:
 		here = append(here, "on this machine, print a claim code:\n       "+show(sudo+"aether-server edge claim-code"+configFlag(configPath)))
@@ -301,7 +355,7 @@ func printNextSteps(w io.Writer, configPath string, options *flag.FlagSet, claim
 		computer = append(computer, "on your computer (the first link on a fresh server becomes admin):\n       "+
 			show("aether link "+net.JoinHostPort(cmp.Or(listen, "<this-host>"), port)))
 	}
-	install := "on your computer, install Aether if it is not there yet (Windows: docs/install.md):\n       " + show(clientInstall)
+	install := "on your computer, install Cloudfield if it is not there yet (Windows: docs/install.md):\n       " + show(clientInstall)
 	reach := append(here, append([]string{install}, computer...)...)
 	steps := append([]string{
 		"start the server on this machine:\n       " + show(strings.ReplaceAll(serversetup.ActivateCommand, "systemctl", sudo+"systemctl")),
@@ -319,13 +373,13 @@ func printNextSteps(w io.Writer, configPath string, options *flag.FlagSet, claim
 	return nil
 }
 
-const clientInstall = "curl -fsSL https://raw.githubusercontent.com/3xDevOps/Aether/main/scripts/install.sh | sh -s -- --client"
+const clientInstall = "curl -fsSL https://raw.githubusercontent.com/3xDevOps/cloudfield/main/scripts/install.sh | sh -s -- --client"
 
 // A claim code names no edge, and the client falls back to the project's,
 // so a server on another edge needs --edge on both commands.
 func claimCommands(edgeURL, code string) []string {
 	edge := ""
-	if edgeURL != edgeagent.DefaultURL {
+	if !edgeclient.Hosted(edgeURL) {
 		edge = " --edge " + edgeURL
 	}
 	return []string{"aether login" + edge, "aether link --claim " + code + edge}

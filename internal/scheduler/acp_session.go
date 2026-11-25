@@ -7,12 +7,15 @@ import (
 	"log/slog"
 	"math"
 	"os"
+	"strings"
 
 	acp "github.com/coder/acp-go-sdk"
 
 	"github.com/3xDevOps/Aether/internal/acphost"
+	"github.com/3xDevOps/Aether/internal/coordhooks"
 	"github.com/3xDevOps/Aether/internal/domain"
 	"github.com/3xDevOps/Aether/internal/events"
+	"github.com/3xDevOps/Aether/internal/runtime"
 )
 
 var ErrACPItemNotFound = errors.New("scheduler: no such conversation item")
@@ -155,7 +158,12 @@ func (s *Scheduler) openItemLog(run domain.RunID) (*acphost.Log, error) {
 }
 
 func (s *Scheduler) ACPAnswer(run domain.RunID, requestID, optionID string, values map[string]any) error {
-	sess, err := s.acp.live(run)
+	awake, err := s.holdAwakeNow(run)
+	if err != nil {
+		return err
+	}
+	defer awake()
+	sess, err := s.acp.live(context.Background(), run)
 	if err != nil {
 		return err
 	}
@@ -163,7 +171,15 @@ func (s *Scheduler) ACPAnswer(run domain.RunID, requestID, optionID string, valu
 }
 
 func (s *Scheduler) ACPCancel(ctx context.Context, run domain.RunID) error {
-	sess, err := s.acp.live(run)
+	awake, err := s.holdAwakeNow(run)
+	if errors.Is(err, errAsleep) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	defer awake()
+	sess, err := s.acp.live(ctx, run)
 	if err != nil {
 		return err
 	}
@@ -171,7 +187,12 @@ func (s *Scheduler) ACPCancel(ctx context.Context, run domain.RunID) error {
 }
 
 func (s *Scheduler) ACPSetOption(ctx context.Context, run domain.RunID, optionID string, value any) error {
-	sess, err := s.acp.live(run)
+	awake, err := s.holdAwakeNow(run)
+	if err != nil {
+		return err
+	}
+	defer awake()
+	sess, err := s.acp.live(ctx, run)
 	if err != nil {
 		return err
 	}
@@ -213,7 +234,7 @@ func (s *Scheduler) ACPSetOption(ctx context.Context, run domain.RunID, optionID
 	if err != nil {
 		return fmt.Errorf("scheduler: load session to record its model: %w", err)
 	}
-	if model == stored.Model {
+	if model == stored.Model && stored.ModelError == "" {
 		return nil
 	}
 	if err = domain.ValidModel(model); err != nil {
@@ -232,20 +253,58 @@ func (s *Scheduler) ACPSetOption(ctx context.Context, run domain.RunID, optionID
 var errACPBusy = errors.New("scheduler: the Enhanced agent is busy")
 
 // Wakeable reports whether the server can prompt run's agent session: an
-// idle enhanced session, or a Standard Codex terminal attached to its
-// app-server.
+// idle enhanced session, a Standard Codex terminal attached to its
+// app-server, or a sleeping Standard session VM.
 func (s *Scheduler) Wakeable(run domain.RunID) bool {
+	if s.asleepStandardVM(run) {
+		return true
+	}
 	if s.attachedAppServer(run) {
 		return s.appServer.connected(run) != nil
 	}
 	return s.IdleEnhanced(run)
 }
 
+// Wake prompts run's agent with prompt, text coord generates, naming the
+// command its container has. The turn-end report reminder keeps the old
+// name: released dashboards recognise it by its lead.
 func (s *Scheduler) Wake(ctx context.Context, run domain.RunID, prompt string) error {
+	if !strings.HasPrefix(prompt, coordhooks.ReportReminderLead) {
+		s.mu.Lock()
+		var cid runtime.ID
+		if entry := s.runs[run]; entry != nil {
+			cid = entry.containerID
+		}
+		s.mu.Unlock()
+		prompt = coordhooks.Named(prompt, s.containerCLI(ctx, cid))
+	}
+	if s.asleepStandardVM(run) {
+		// The save cut the agent's mail hook and app-server bridge; both
+		// connect again once the VM runs. The hook then takes the mail.
+		if err := s.WakeRun(ctx, run, ""); err != nil {
+			return err
+		}
+		if !s.attachedAppServer(run) {
+			return nil
+		}
+	}
 	if !s.attachedAppServer(run) {
 		return s.WakeEnhanced(ctx, run, prompt)
 	}
 	return s.appServer.wake(ctx, run, prompt)
+}
+
+// asleepStandardVM reports an open Standard session whose VM is saved or
+// being saved.
+func (s *Scheduler) asleepStandardVM(run domain.RunID) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry := s.runs[run]
+	if entry == nil || entry.launchMode != domain.LaunchTUI || entry.retained || (!entry.sleeping && entry.asleepSince.IsZero()) {
+		return false
+	}
+	_, saving := s.saver(entry.containerID)
+	return saving
 }
 
 // InTurn reports a Standard Codex terminal in a turn; an enhanced session
@@ -267,11 +326,17 @@ func (s *Scheduler) attachedAppServer(run domain.RunID) bool {
 	return entry != nil && entry.appServer && !entry.paused
 }
 
+// IdleEnhanced counts a sleeping open Enhanced session as idle: a prompt
+// wakes it.
 func (s *Scheduler) IdleEnhanced(run domain.RunID) bool {
 	s.mu.Lock()
 	entry := s.runs[run]
+	asleep := entry != nil && entry.launchMode == domain.LaunchACP && !entry.retained && (entry.sleeping || !entry.asleepSince.IsZero())
 	enhanced := entry != nil && entry.launchMode == domain.LaunchACP && !entry.paused && entry.switching == ""
 	s.mu.Unlock()
+	if asleep {
+		return true
+	}
 	if !enhanced {
 		return false
 	}
@@ -287,7 +352,18 @@ func (s *Scheduler) WakeEnhanced(ctx context.Context, run domain.RunID, prompt s
 	if !s.IdleEnhanced(run) {
 		return errACPBusy
 	}
-	sess, err := s.acp.live(run)
+	// A wake this starts outlasts the delivery's deadline; mail the deadline
+	// cut off is delivered on the coordination service's retry to the woken
+	// session.
+	awake, err := s.holdAwake(ctx, run)
+	if err != nil {
+		return err
+	}
+	defer awake()
+	if !s.IdleEnhanced(run) {
+		return errACPBusy
+	}
+	sess, err := s.acp.live(ctx, run)
 	if err != nil {
 		return err
 	}

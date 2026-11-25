@@ -1,19 +1,23 @@
 package scheduler
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	"image/png"
 	"io"
+	"net"
 	"os"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,6 +25,7 @@ import (
 
 	"github.com/3xDevOps/Aether/internal/acphost"
 	"github.com/3xDevOps/Aether/internal/acphost/acpmock"
+	"github.com/3xDevOps/Aether/internal/acpkeeper"
 	"github.com/3xDevOps/Aether/internal/agentstatus"
 	"github.com/3xDevOps/Aether/internal/collab"
 	"github.com/3xDevOps/Aether/internal/coordhooks"
@@ -37,7 +42,30 @@ type acpRuntime struct {
 	mu       sync.Mutex
 	execs    []*acpExec
 	specs    []runtime.ExecSpec
+	bridges  []runtime.ExecSpec
+	attached []*bridgeExec
+	keepers  map[string]*acpkeeper.Keeper
 	startErr error
+	// noKeeper fails keeper execs, as a container staged before keepers
+	// existed does.
+	noKeeper bool
+	// stuckStdin keeps adapters' stdin open when their keeper closes it, as
+	// an adapter that stopped reading it would.
+	stuckStdin atomic.Bool
+	// onAttach runs as an attach exec starts; an error fails the exec.
+	onAttach func() error
+}
+
+type stdinCloser struct {
+	io.WriteCloser
+	stuck *atomic.Bool
+}
+
+func (c stdinCloser) Close() error {
+	if c.stuck.Load() {
+		return nil
+	}
+	return c.WriteCloser.Close()
 }
 
 func newACPRuntime(t *testing.T) *acpRuntime {
@@ -45,21 +73,73 @@ func newACPRuntime(t *testing.T) *acpRuntime {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &acpRuntime{fakeRuntime: newFakeRuntime(), fixture: fix}
+	return &acpRuntime{fakeRuntime: newFakeRuntime(), fixture: fix, keepers: map[string]*acpkeeper.Keeper{}}
 }
 
 func (r *acpRuntime) StartExecTTY(context.Context, runtime.ID, runtime.ExecSpec) (runtime.ManagedExec, error) {
 	return nil, errors.New("acpRuntime: no terminal execs")
 }
 
+// StartExecPipe runs the staged binary's keeper in process: its adapter is
+// the mock agent, and an attach exec is a pipe into the keeper.
 func (r *acpRuntime) StartExecPipe(_ context.Context, id runtime.ID, spec runtime.ExecSpec) (runtime.ManagedExec, error) {
+	if len(spec.Argv) == 4 && spec.Argv[1] == acpkeeper.Command && spec.Argv[2] == "attach" {
+		return r.attach(id, spec)
+	}
+	keeper := len(spec.Argv) >= 6 && spec.Argv[1] == acpkeeper.Command && spec.Argv[2] == "serve"
 	r.mu.Lock()
-	r.specs = append(r.specs, spec)
 	err := r.startErr
+	if keeper && r.noKeeper {
+		err = errors.New("acpRuntime: the staged binary has no keeper")
+	}
+	if err == nil {
+		r.specs = append(r.specs, spec)
+	}
 	r.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
+	if !keeper {
+		return r.startDirect(id, spec), nil
+	}
+	agentIn, hostOut := io.Pipe()
+	hostIn, agentOut := io.Pipe()
+	tokenIn, tokenOut := io.Pipe()
+	readyIn, readyOut := io.Pipe()
+	e := &acpExec{
+		identity: runtime.ExecIdentity{ContainerID: id, ExecID: rand.Text(), CreationKey: spec.CreationKey, ClaimToken: "claim"},
+		argv:     spec.Argv[slices.Index(spec.Argv, "--")+1:],
+		agent:    acpmock.New(r.fixture),
+		stdin:    tokenOut,
+		stdout:   readyIn,
+		agentIn:  agentIn,
+		agentOut: agentOut,
+		done:     make(chan struct{}),
+	}
+	go func() {
+		e.agent.Serve(io.TeeReader(agentIn, &e.wire), agentOut)
+		_ = agentOut.Close()
+		close(e.done)
+	}()
+	r.mu.Lock()
+	r.execs = append(r.execs, e)
+	r.mu.Unlock()
+	go func() {
+		token, _ := bufio.NewReader(tokenIn).ReadString('\n')
+		k := acpkeeper.New(acpkeeper.Config{Token: strings.TrimSpace(token), AgentIn: stdinCloser{hostOut, &r.stuckStdin}})
+		r.mu.Lock()
+		r.keepers[spec.Argv[3]] = k
+		r.mu.Unlock()
+		_, _ = io.WriteString(readyOut, "ready\n")
+		_ = k.Pump(hostIn)
+		<-e.done
+		k.Exited(0)
+	}()
+	return e, nil
+}
+
+// startDirect runs the mock agent as the exec, with its stdio as the exec's.
+func (r *acpRuntime) startDirect(id runtime.ID, spec runtime.ExecSpec) *acpExec {
 	agentIn, hostOut := io.Pipe()
 	hostIn, agentOut := io.Pipe()
 	e := &acpExec{
@@ -80,7 +160,72 @@ func (r *acpRuntime) StartExecPipe(_ context.Context, id runtime.ID, spec runtim
 	r.mu.Lock()
 	r.execs = append(r.execs, e)
 	r.mu.Unlock()
-	return e, nil
+	return e
+}
+
+func (r *acpRuntime) attach(id runtime.ID, spec runtime.ExecSpec) (runtime.ManagedExec, error) {
+	r.mu.Lock()
+	k := r.keepers[spec.Argv[3]]
+	r.bridges = append(r.bridges, spec)
+	onAttach := r.onAttach
+	r.mu.Unlock()
+	if onAttach != nil {
+		if err := onAttach(); err != nil {
+			return nil, err
+		}
+	}
+	if k == nil {
+		return nil, fmt.Errorf("acpRuntime: no keeper at %s", spec.Argv[3])
+	}
+	host, keeper := net.Pipe()
+	b := &bridgeExec{identity: runtime.ExecIdentity{ContainerID: id, ExecID: rand.Text(), CreationKey: spec.CreationKey, ClaimToken: "claim"}, conn: host, done: make(chan struct{})}
+	r.mu.Lock()
+	r.attached = append(r.attached, b)
+	r.mu.Unlock()
+	go func() {
+		k.ServeConn(keeper)
+		close(b.done)
+	}()
+	return b, nil
+}
+
+// bridgeExec is an attach exec: its stdio is a connection to the keeper.
+type bridgeExec struct {
+	identity runtime.ExecIdentity
+	conn     net.Conn
+	done     chan struct{}
+}
+
+func (b *bridgeExec) Identity() runtime.ExecIdentity { return b.identity }
+func (b *bridgeExec) Attachment() runtime.Attachment { return b }
+func (b *bridgeExec) Stdin() io.WriteCloser          { return b.conn }
+func (b *bridgeExec) Stdout() io.Reader              { return b.conn }
+func (b *bridgeExec) Stderr() io.Reader              { return strings.NewReader("") }
+func (b *bridgeExec) Resize(context.Context, uint, uint) error {
+	return errors.New("no terminal")
+}
+func (b *bridgeExec) Close() error  { return nil }
+func (b *bridgeExec) Detach() error { return nil }
+func (b *bridgeExec) Status(context.Context) (runtime.ExecState, error) {
+	select {
+	case <-b.done:
+		code := 0
+		return runtime.ExecState{Exited: true, ExitCode: &code}, nil
+	default:
+		return runtime.ExecState{Running: true, Attached: true}, nil
+	}
+}
+func (b *bridgeExec) Wait(ctx context.Context) (runtime.ExitStatus, error) {
+	select {
+	case <-b.done:
+		return runtime.ExitStatus{}, nil
+	case <-ctx.Done():
+		return runtime.ExitStatus{}, ctx.Err()
+	}
+}
+func (b *bridgeExec) Stop(ctx context.Context, _ time.Duration) (runtime.ExitStatus, error) {
+	_ = b.conn.Close()
+	return b.Wait(ctx)
 }
 
 func (r *acpRuntime) RecoverExec(_ context.Context, identity runtime.ExecIdentity) (runtime.ManagedExec, error) {
@@ -94,6 +239,17 @@ func (r *acpRuntime) RecoverExec(_ context.Context, identity runtime.ExecIdentit
 	return nil, runtime.ErrExecUnavailable
 }
 
+// dropAdapters ends every adapter and its keeper, so the next server process
+// restores the sessions instead of adopting them.
+func (r *acpRuntime) dropAdapters(t *testing.T) {
+	t.Helper()
+	for _, e := range r.all() {
+		if _, err := e.Stop(t.Context(), 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 func (r *acpRuntime) all() []*acpExec {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -105,7 +261,7 @@ type acpExec struct {
 	argv     []string
 	agent    *acpmock.Agent
 	stdin    *io.PipeWriter
-	stdout   *io.PipeReader
+	stdout   io.Reader
 	agentIn  *io.PipeReader
 	agentOut *io.PipeWriter
 	done     chan struct{}
@@ -577,6 +733,7 @@ func TestEnhancedRunResumesAfterRestart(t *testing.T) {
 	if err := e.sched.Close(); err != nil {
 		t.Fatal(err)
 	}
+	rt.dropAdapters(t)
 
 	cfg := e.cfg
 	cfg.PTY = newFakePTY()
@@ -610,12 +767,13 @@ func TestEnhancedRunResumesAfterRestart(t *testing.T) {
 
 func TestEnhancedRunParksAsInterruptedWhenARestartFindsAnOpenTurn(t *testing.T) {
 	t.Parallel()
-	e, _ := newACPEnv(t)
+	e, rt := newACPEnv(t)
 	run := e.launchACP(t, acpmock.PromptWait)
 	e.waitAgentWorking(t, run.ID)
 	if err := e.sched.Close(); err != nil {
 		t.Fatal(err)
 	}
+	rt.dropAdapters(t)
 	log, err := acphost.OpenLog(e.pty.ItemLogPath(run.ID))
 	if err != nil {
 		t.Fatal(err)
@@ -1335,7 +1493,7 @@ func TestEnhancedRunSendsInstructionsAsSystemPromptWhenTheAgentTakesOne(t *testi
 	wire := &rt.all()[0].wire
 	meta, mcpEnv := wire.sessionNew(t)
 	system, _ := meta["systemPrompt"].(map[string]any)
-	if got := system["append"]; got != e.sched.runInstructions(coordhooks.Guide{RunID: string(run.ID), Role: coordhooks.RoleInteractive, Wake: true}) || got == "" {
+	if got := system["append"]; got != e.sched.runInstructions(coordhooks.Guide{RunID: string(run.ID), Role: coordhooks.RoleInteractive, Wake: true, CLI: coordhooks.NewCLI}) || got == "" {
 		t.Fatalf("session/new systemPrompt.append %q, want the session instructions", got)
 	}
 	if mcpEnv[coordtransport.RoleCardEnv] != "1" {
@@ -1358,7 +1516,7 @@ func TestEnhancedRunAppendsInstructionsToTheTaskWithoutASystemPromptRoute(t *tes
 		t.Fatalf("session/new _meta %+v, MCP env %v; want no system prompt and the bridge sending the card", meta, mcpEnv)
 	}
 	prompts := wire.prompts(t)
-	if want := withInstructions("say pong", e.sched.runInstructions(coordhooks.Guide{RunID: string(run.ID), Role: coordhooks.RoleInteractive, Wake: true})); len(prompts) != 1 || !slices.Equal(textOf(prompts[0]), []string{want}) {
+	if want := withInstructions("say pong", e.sched.runInstructions(coordhooks.Guide{RunID: string(run.ID), Role: coordhooks.RoleInteractive, Wake: true, CLI: coordhooks.NewCLI})); len(prompts) != 1 || !slices.Equal(textOf(prompts[0]), []string{want}) {
 		t.Fatalf("prompts %+v, want the task with the instructions", prompts)
 	}
 }
@@ -1379,7 +1537,7 @@ func TestEnhancedTasklessRunDeliversInstructionsWithTheFirstMessageOnly(t *testi
 	if len(prompts) != 2 {
 		t.Fatalf("prompts %+v, want two", prompts)
 	}
-	if want := []string{"first", "\n\n" + e.sched.runInstructions(coordhooks.Guide{RunID: string(run.ID), Role: coordhooks.RoleInteractive, Wake: true})}; !slices.Equal(textOf(prompts[0]), want) {
+	if want := []string{"first", "\n\n" + e.sched.runInstructions(coordhooks.Guide{RunID: string(run.ID), Role: coordhooks.RoleInteractive, Wake: true, CLI: coordhooks.NewCLI})}; !slices.Equal(textOf(prompts[0]), want) {
 		t.Fatalf("first prompt %q, want the message and the instructions", textOf(prompts[0]))
 	}
 	if got := textOf(prompts[1]); !slices.Equal(got, []string{"second"}) {
@@ -1405,7 +1563,7 @@ func TestEnhancedTasklessRunDeliversInstructionsWithTheFirstMailPrompt(t *testin
 	if len(prompts) != 2 {
 		t.Fatalf("prompts %+v, want two", prompts)
 	}
-	if want := []string{"inbox hint", "\n\n" + e.sched.runInstructions(coordhooks.Guide{RunID: string(run.ID), Role: coordhooks.RoleInteractive, Wake: true})}; !slices.Equal(textOf(prompts[0]), want) {
+	if want := []string{"inbox hint", "\n\n" + e.sched.runInstructions(coordhooks.Guide{RunID: string(run.ID), Role: coordhooks.RoleInteractive, Wake: true, CLI: coordhooks.NewCLI})}; !slices.Equal(textOf(prompts[0]), want) {
 		t.Fatalf("mail prompt %q, want the hint and the instructions", textOf(prompts[0]))
 	}
 	if got := textOf(prompts[1]); !slices.Equal(got, []string{"second"}) {
@@ -1443,7 +1601,7 @@ func TestEnhancedTasklessRunKeepsInstructionsAcrossARestartBeforeAnyTurn(t *test
 	if len(prompts) != 1 {
 		t.Fatalf("prompts %+v, want one", prompts)
 	}
-	if want := []string{"first", "\n\n" + s2.runInstructions(coordhooks.Guide{RunID: string(run.ID), Role: coordhooks.RoleInteractive, Wake: true})}; !slices.Equal(textOf(prompts[0]), want) {
+	if want := []string{"first", "\n\n" + s2.runInstructions(coordhooks.Guide{RunID: string(run.ID), Role: coordhooks.RoleInteractive, Wake: true, CLI: coordhooks.NewCLI})}; !slices.Equal(textOf(prompts[0]), want) {
 		t.Fatalf("first prompt %q, want the message and the instructions", textOf(prompts[0]))
 	}
 }
@@ -1462,6 +1620,7 @@ func TestEnhancedTasklessRunKeepsInstructionsAcrossARestartAfterOnlyRefusedPromp
 	if err := e.sched.Close(); err != nil {
 		t.Fatal(err)
 	}
+	rt.dropAdapters(t)
 	rt.fixture.RefusePrompts = false
 
 	cfg := e.cfg
@@ -1484,7 +1643,7 @@ func TestEnhancedTasklessRunKeepsInstructionsAcrossARestartAfterOnlyRefusedPromp
 	if len(prompts) != 1 {
 		t.Fatalf("prompts %+v, want one", prompts)
 	}
-	if want := []string{"second", "\n\n" + s2.runInstructions(coordhooks.Guide{RunID: string(run.ID), Role: coordhooks.RoleInteractive, Wake: true})}; !slices.Equal(textOf(prompts[0]), want) {
+	if want := []string{"second", "\n\n" + s2.runInstructions(coordhooks.Guide{RunID: string(run.ID), Role: coordhooks.RoleInteractive, Wake: true, CLI: coordhooks.NewCLI})}; !slices.Equal(textOf(prompts[0]), want) {
 		t.Fatalf("first answered prompt %q, want the message and the instructions", textOf(prompts[0]))
 	}
 }
@@ -1511,7 +1670,7 @@ func TestEnhancedTasklessRunKeepsInstructionsWhenTheFirstMessageIsDropped(t *tes
 	waitFor(t, "the instructions given back", func() bool {
 		e.sched.acp.mu.Lock()
 		defer e.sched.acp.mu.Unlock()
-		return e.sched.acp.runs[run.ID].instructions == e.sched.runInstructions(coordhooks.Guide{RunID: string(run.ID), Role: coordhooks.RoleInteractive, Wake: true})
+		return e.sched.acp.runs[run.ID].instructions == e.sched.runInstructions(coordhooks.Guide{RunID: string(run.ID), Role: coordhooks.RoleInteractive, Wake: true, CLI: coordhooks.NewCLI})
 	})
 }
 
@@ -1539,7 +1698,7 @@ func TestEnhancedTasklessRunAppendsInstructionsOnceToConcurrentPrompts(t *testin
 	waitFor(t, "the turns to finish", func() bool { return e.sched.IdleEnhanced(run.ID) && assistantSaidNow(e, run.ID, "pong") })
 	count := 0
 	for _, prompt := range rt.all()[0].wire.prompts(t) {
-		if slices.Contains(textOf(prompt), "\n\n"+e.sched.runInstructions(coordhooks.Guide{RunID: string(run.ID), Role: coordhooks.RoleInteractive, Wake: true})) {
+		if slices.Contains(textOf(prompt), "\n\n"+e.sched.runInstructions(coordhooks.Guide{RunID: string(run.ID), Role: coordhooks.RoleInteractive, Wake: true, CLI: coordhooks.NewCLI})) {
 			count++
 		}
 	}
@@ -1556,7 +1715,7 @@ func TestEnhancedTasklessRunGetsInstructionsBackFromABusyWake(t *testing.T) {
 	waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
 	sess := e.sched.acp.session(run.ID)
 	instructions, settle := e.sched.acp.claimInstructions(run.ID, sess)
-	if instructions != e.sched.runInstructions(coordhooks.Guide{RunID: string(run.ID), Role: coordhooks.RoleInteractive, Wake: true}) {
+	if instructions != e.sched.runInstructions(coordhooks.Guide{RunID: string(run.ID), Role: coordhooks.RoleInteractive, Wake: true, CLI: coordhooks.NewCLI}) {
 		t.Fatalf("claimed %q, want the session instructions", instructions)
 	}
 	if again, _ := e.sched.acp.claimInstructions(run.ID, sess); again != "" {

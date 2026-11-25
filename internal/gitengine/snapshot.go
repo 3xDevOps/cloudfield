@@ -236,6 +236,103 @@ func (e *Engine) checkSnapshotBounds(ctx context.Context, checkout, index, tree 
 	return nil
 }
 
+// checkTreeBounds is checkSnapshotBounds for a tree the guest named in a store
+// with no checkout beside it. It sums the blob sizes in a streamed
+// `ls-tree -r -t -l -z` listing and stops git the moment the total passes
+// limit or the raw listing passes a bound above it, so a tree whose recursive
+// expansion is huge (few objects, deep fan-out) fails fast. -t prints every
+// subtree it descends into, so even a bomb of empty folders that holds no blob
+// still drives the listing past the bound.
+func (e *Engine) checkTreeBounds(ctx context.Context, store, tree string, limit uint64, limitErr error) error {
+	if !validObjectID(tree) {
+		return ErrInvalidObjectID
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	w := &treeBoundWriter{limit: limit, listingLimit: limit + (1 << 20), limitErr: limitErr, cancel: cancel}
+	cmd := exec.CommandContext(ctx, e.cfg.GitPath, "-C", store, "-c", "safe.directory=*", "-c", "core.quotePath=false",
+		"ls-tree", "-r", "-t", "-l", "-z", tree, "--")
+	cmd.Env = e.gitEnv()
+	cmd.Stdout = w
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+	if w.err != nil {
+		return w.err
+	}
+	if runErr != nil {
+		return fmt.Errorf("gitengine: list snapshot input: %w: %s", runErr, strings.TrimSpace(stderr.String()))
+	}
+	return nil
+}
+
+// treeBoundWriter parses a streamed NUL-delimited ls-tree listing and cancels
+// its command once a bound is exceeded. git then exits on the cancelled
+// context rather than finishing the (possibly enormous) listing.
+type treeBoundWriter struct {
+	limit        uint64
+	listingLimit uint64
+	limitErr     error
+	cancel       context.CancelFunc
+	seen         uint64
+	total        uint64
+	rest         []byte
+	err          error
+}
+
+func (w *treeBoundWriter) Write(p []byte) (int, error) {
+	if w.err != nil {
+		return len(p), nil
+	}
+	if w.seen += uint64(len(p)); w.seen > w.listingLimit {
+		w.fail(fmt.Errorf("%w: snapshot listing exceeds %d bytes", w.limitErr, w.listingLimit))
+		return len(p), nil
+	}
+	data := p
+	if len(w.rest) > 0 {
+		data = append(w.rest, p...)
+	}
+	for {
+		i := bytes.IndexByte(data, 0)
+		if i < 0 {
+			break
+		}
+		if err := w.record(data[:i]); err != nil {
+			w.fail(err)
+			return len(p), nil
+		}
+		data = data[i+1:]
+	}
+	w.rest = append(w.rest[:0], data...)
+	return len(p), nil
+}
+
+// record adds one listing entry's blob size to the running total.
+func (w *treeBoundWriter) record(rec []byte) error {
+	tab := bytes.IndexByte(rec, '\t')
+	if tab < 0 {
+		return nil
+	}
+	fields := strings.Fields(string(rec[:tab]))
+	if len(fields) != 4 || fields[1] != "blob" {
+		return nil
+	}
+	size, err := strconv.ParseUint(fields[3], 10, 64)
+	if err != nil {
+		return fmt.Errorf("gitengine: parse snapshot size %q: %w", fields[3], err)
+	}
+	if size > w.limit-w.total {
+		return fmt.Errorf("%w: retained Git input exceeds %d bytes", w.limitErr, w.limit)
+	}
+	w.total += size
+	return nil
+}
+
+func (w *treeBoundWriter) fail(err error) {
+	w.err = err
+	w.cancel()
+}
+
 // writeSnapshotTree stages the whole checkout into the run's snapshot store
 // and writes the resulting tree, returning its object id. Every caller uses
 // the same per-run lock so the persistent scratch index and its lock cannot
@@ -258,7 +355,7 @@ func (e *Engine) writeSnapshotTreeLocked(ctx context.Context, run domain.RunID, 
 	if err = e.initSnapshotStore(ctx, run, checkout, store); err != nil {
 		return "", err
 	}
-	index, err := scratchIndex(store, checkout, run)
+	index, err := e.scratchIndex(store, checkout, run)
 	if err != nil {
 		return "", err
 	}
@@ -329,6 +426,14 @@ func (e *Engine) lastSnapshotTree(run domain.RunID) string {
 // its tree is pinned with the interval and becomes refs/aether/upstream in
 // the same transaction that publishes the tree, so the two never split.
 func (e *Engine) writeWatchSnapshot(ctx context.Context, run domain.RunID, checkout, base string, publish func(string) error) (string, error) {
+	return e.recordWatchSnapshot(ctx, run, base, func() (string, error) {
+		return e.writeSnapshotTreeLocked(ctx, run, checkout)
+	}, publish)
+}
+
+// recordWatchSnapshot is writeWatchSnapshot with the tree of the interval
+// coming from stage, which runs under the run's snapshot lock.
+func (e *Engine) recordWatchSnapshot(ctx context.Context, run domain.RunID, base string, stage func() (string, error), publish func(string) error) (string, error) {
 	lock := e.snapshotLock(run)
 	lock.Lock()
 	defer lock.Unlock()
@@ -369,7 +474,7 @@ func (e *Engine) writeWatchSnapshot(ctx context.Context, run domain.RunID, check
 		return "", err
 	}
 	if tree == "" {
-		tree, err = e.writeSnapshotTreeLocked(ctx, run, checkout)
+		tree, err = stage()
 		if err != nil {
 			return "", err
 		}
@@ -400,7 +505,7 @@ func (e *Engine) writeWatchSnapshot(ctx context.Context, run domain.RunID, check
 			transaction += "update " + snapshotInflightUpstreamRef + " " + upstream + "\n"
 		}
 		transaction += "prepare\ncommit\n"
-		if _, pinErr := e.gitInput(ctx, store, gitEnv(), []byte(transaction), "update-ref", "--stdin"); pinErr != nil {
+		if _, pinErr := e.gitInput(ctx, store, e.gitEnv(), []byte(transaction), "update-ref", "--stdin"); pinErr != nil {
 			return "", pinErr
 		}
 	}
@@ -427,7 +532,7 @@ func (e *Engine) writeWatchSnapshot(ctx context.Context, run domain.RunID, check
 	}
 	transaction += "update " + snapshotPublishedRef + " " + tree +
 		"\ndelete " + snapshotInflightParentRef + "\ndelete " + snapshotInflightTreeRef + "\nprepare\ncommit\n"
-	if _, acknowledgeErr := e.gitInput(ctx, store, gitEnv(), []byte(transaction), "update-ref", "--stdin"); acknowledgeErr != nil {
+	if _, acknowledgeErr := e.gitInput(ctx, store, e.gitEnv(), []byte(transaction), "update-ref", "--stdin"); acknowledgeErr != nil {
 		return "", acknowledgeErr
 	}
 	if removeErr := os.Remove(filepath.Join(store, "history-gap")); removeErr != nil {
@@ -455,6 +560,9 @@ func (e *Engine) removeRunHistory(ctx context.Context, run domain.RunID) error {
 		return err
 	}
 	e.stopDiffWatch(run, false)
+	// Unpinning rewrites packed-refs, which an evidence prune's gc locks.
+	e.repoMaintenanceMu.Lock()
+	defer e.repoMaintenanceMu.Unlock()
 	lock := e.snapshotLock(run)
 	lock.Lock()
 	defer lock.Unlock()
@@ -466,6 +574,9 @@ func (e *Engine) removeRunHistory(ctx context.Context, run domain.RunID) error {
 	}
 	if removeErr := os.Remove(meta); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
 		return fmt.Errorf("gitengine: remove session metadata for %s: %w", run, removeErr)
+	}
+	if unpinErr := e.unpinHistory(ctx, run, store); unpinErr != nil {
+		return fmt.Errorf("gitengine: release the fork point of session %s: %w", run, unpinErr)
 	}
 	if removeErr := os.RemoveAll(store); removeErr != nil {
 		return fmt.Errorf("gitengine: remove snapshot store for session %s: %w", run, removeErr)
@@ -518,14 +629,28 @@ func (e *Engine) requireSnapshotTree(ctx context.Context, store, id string) erro
 // provisioning chowned it to the run's user, and objects or fan-out
 // directories created here as the server user would leave the agent unable
 // to commit.
-func scratchObjects(dir, checkout string, run domain.RunID) (string, error) {
+//
+// A store that borrows a workspace repository's objects is the history of a
+// removed checkout and is left as it is: a checkout read racing that removal
+// must not point it at objects that are about to go.
+func (e *Engine) scratchObjects(dir, checkout string, run domain.RunID) (string, error) {
+	e.alternatesMu.Lock()
+	defer e.alternatesMu.Unlock()
+	if repo, err := e.borrowedRepo(dir); err != nil || repo != "" {
+		return filepath.Join(dir, "index"), err
+	}
+	return borrowObjects(dir, filepath.Join(checkout, ".git", "objects"), run)
+}
+
+// borrowObjects is scratchObjects for any object database to borrow from.
+func borrowObjects(dir, borrowed string, run domain.RunID) (string, error) {
 	// Repo discovery checks that the overriding object directory exists.
 	objects := filepath.Join(dir, "objects")
 	if err := os.MkdirAll(filepath.Join(objects, "info"), 0o700); err != nil {
 		return "", fmt.Errorf("gitengine: scratch objects for session %s: %w", run, err)
 	}
 	alternates := filepath.Join(objects, "info", "alternates")
-	want := []byte(filepath.Join(checkout, ".git", "objects") + "\n")
+	want := []byte(borrowed + "\n")
 	// Checked before writing, and installed by rename when it has to be
 	// written: a persistent store is read by patch requests while the watch
 	// goroutine is staging into it, and a git that opened the file mid
@@ -554,8 +679,8 @@ func scratchObjects(dir, checkout string, run domain.RunID) (string, error) {
 
 // scratchIndex is scratchObjects plus a staging index, for the commands
 // that write one.
-func scratchIndex(dir, checkout string, run domain.RunID) (string, error) {
-	index, err := scratchObjects(dir, checkout, run)
+func (e *Engine) scratchIndex(dir, checkout string, run domain.RunID) (string, error) {
+	index, err := e.scratchObjects(dir, checkout, run)
 	if err != nil {
 		return "", err
 	}

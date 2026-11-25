@@ -44,15 +44,15 @@ var plainReasons = []struct {
 	{regexp.MustCompile(`^worker finished$`), func([]string) string { return "Subsession finished" }},
 	{regexp.MustCompile(`^closed$`), func([]string) string { return "Closed" }},
 	{regexp.MustCompile(`^killed$`), func([]string) string { return "Stopped" }},
-	{regexp.MustCompile(`^retained container expired$`), func([]string) string { return "Its container was removed when it expired" }},
-	{regexp.MustCompile(`^retained container reclaimed for disk space$`), func([]string) string { return "Its container was removed early because disk space was low" }},
-	{regexp.MustCompile(`^retained container unavailable$`), func([]string) string { return "Its container is no longer available" }},
+	{regexp.MustCompile(`^retained container expired$`), func([]string) string { return "Its sandbox was removed when it expired" }},
+	{regexp.MustCompile(`^retained container reclaimed for disk space$`), func([]string) string { return "Its sandbox was removed early because disk space was low" }},
+	{regexp.MustCompile(`^retained container unavailable$`), func([]string) string { return "Its sandbox is no longer available" }},
 	{regexp.MustCompile(`^server restarted: container exited (-?\d+)$`), func(g []string) string {
-		return "Its container had stopped with exit code " + g[0] + " when the server restarted"
+		return "Its sandbox had stopped with exit code " + g[0] + " when the server restarted"
 	}},
 	{regexp.MustCompile(`^(?:agent idle|turn ended without a report)$`), func([]string) string { return "Turn ended without a report" }},
 	{regexp.MustCompile(`(?s)^no update for ([^\s:]+)(: .*)?$`), func(g []string) string { return "No update for " + g[0] + g[1] }},
-	{regexp.MustCompile(`^waiting for (\d+) (?:worker|child run)(s?)$`), func(g []string) string { return "Waiting for " + g[0] + " subsession" + g[1] }},
+	{regexp.MustCompile(`^waiting for (\d+) (?:worker|child run|subsession)(s?)$`), func(g []string) string { return "Waiting for " + g[0] + " subsession" + g[1] }},
 	{regexp.MustCompile(`^agent resumed$`), func([]string) string { return "Agent resumed" }},
 	{regexp.MustCompile(`^agent failed$`), func([]string) string { return "Agent failed" }},
 	{regexp.MustCompile(`^stalled: no output or file changes for (.+)$`), func(g []string) string { return "No output or file changes for " + g[0] }},

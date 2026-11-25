@@ -1,6 +1,7 @@
 package edgetest
 
 import (
+	"cmp"
 	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
@@ -47,6 +48,10 @@ import (
 // push, a reconnect, a connection closing.
 const waitTimeout = 20 * time.Second
 
+// returnWait is how long the edge holds a request to a stopped server, in
+// place of edgeproto.HTTPReturnWait.
+const returnWait = 10 * time.Second
+
 // policies are the two access policies a test runs under when it holds
 // for both.
 var policies = []edgeproto.AccessPolicy{edgeproto.PolicyAccount, edgeproto.PolicyApprovedDevices}
@@ -74,6 +79,12 @@ type harness struct {
 	proxies []netip.Prefix
 	// reviewer, when set, is the edge's reviewer account.
 	reviewer *edge.ReviewerAccount
+	// pairB, when set, has the edge serve a second origin pair, signinB
+	// and relayB on 127.0.0.2 and 127.0.0.3, with its own OAuth app, as
+	// --origin-pairs does. pairBAddrs are their front addresses.
+	pairB           bool
+	signinB, relayB string
+	pairBAddrs      [2]string
 
 	mu        sync.Mutex
 	skew      time.Duration
@@ -115,16 +126,30 @@ func (h *harness) advance(d time.Duration) {
 	h.skew += d
 }
 
+// listen listens on addr and, the first time, holds its port for the rest
+// of the test: startEdge binds the same addresses again after stopEdge.
+func (h *harness) listen(addr string) (net.Listener, error) {
+	lc := net.ListenConfig{Control: reusePort}
+	ln, err := lc.Listen(context.Background(), "tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	if got := ln.Addr().String(); got != addr {
+		holdPort(h.t, got)
+	}
+	return ln, nil
+}
+
 // startEdge starts the edge and its proxy, on the same addresses as the
 // previous run once there was one.
 func (h *harness) startEdge() {
 	t := h.t
 	t.Helper()
-	back, err := net.Listen("tcp", h.backAddr)
+	back, err := h.listen(h.backAddr)
 	if err != nil {
 		t.Fatal(err)
 	}
-	front, err := net.Listen("tcp", h.frontAddr)
+	front, err := h.listen(h.frontAddr)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,8 +160,28 @@ func (h *harness) startEdge() {
 	if h.renamed {
 		h.signinURL, h.relayURL = h.relayURL, h.signinURL
 	}
+	var morePairs []edge.Pair
+	var frontB []net.Listener
+	if h.pairB {
+		for i, host := range []string{"127.0.0.2", "127.0.0.3"} {
+			addr := h.pairBAddrs[i]
+			if addr == "" {
+				addr = host + ":0"
+			}
+			ln, lerr := h.listen(addr)
+			if lerr != nil {
+				t.Skipf("%s is not a loopback address on this host: %v", host, lerr)
+			}
+			h.pairBAddrs[i] = ln.Addr().String()
+			frontB = append(frontB, ln)
+		}
+		h.signinB, h.relayB = "http://"+h.pairBAddrs[0], "http://"+h.pairBAddrs[1]
+		app := h.github.app()
+		app.ClientID, app.ClientSecret = "fake-client-id-2", "fake-client-secret-2"
+		morePairs = []edge.Pair{{SigninOrigin: h.signinB, RelayOrigin: h.relayB, GitHub: app}}
+	}
 	svc, err := edge.New(edge.Config{
-		DataDir: h.edgeDir, SigninOrigin: h.signinURL, RelayOrigin: h.relayURL,
+		DataDir: h.edgeDir, SigninOrigin: h.signinURL, RelayOrigin: h.relayURL, MorePairs: morePairs,
 		GitHub: h.github.app(), Clock: h.now, ConnectorClientHosts: []string{"127.0.0.1"}, Reviewer: h.reviewer,
 	})
 	if err != nil {
@@ -144,6 +189,7 @@ func (h *harness) startEdge() {
 	}
 	relayCfg := svc.RelayConfig(0)
 	relayCfg.DirectoryInterval = 200 * time.Millisecond
+	relayCfg.ReturnWait = returnWait
 	rl, err := relay.New(context.Background(), relayCfg)
 	if err != nil {
 		t.Fatal(err)
@@ -161,6 +207,9 @@ func (h *harness) startEdge() {
 	}
 	go func() { _ = n.back.Serve(back) }()
 	go func() { _ = n.front.Serve(front) }()
+	for _, ln := range frontB {
+		go func() { _ = n.front.Serve(ln) }()
+	}
 	h.mu.Lock()
 	h.node = n
 	h.mu.Unlock()
@@ -644,7 +693,7 @@ func (h *harness) claim(c *client, code string) (cli.LinkResult, error) {
 func (h *harness) claimServer(c *client, s *serverNode) {
 	h.t.Helper()
 	res, err := h.claim(c, s.claimCode(h.t, time.Now()))
-	if err != nil || res.Config.ServerID != s.id || res.Info.Member.Role != string(domain.RoleAdmin) {
+	if err != nil || res.Config.ServerID != s.id || res.Info.Member.Role != string(domain.RoleSuperAdmin) {
 		h.t.Fatalf("%s claims %s: %+v %v", c.user.Login, s.id, res.Info.Member, err)
 	}
 	eventually(h.t, "the edge records the claim", func() error {
@@ -667,6 +716,8 @@ type (
 )
 
 func (noRuns) StopTerminal(context.Context, domain.MemberID) error { return nil }
+
+func (noRuns) ForgetOMPAccount(context.Context, domain.MemberID) {}
 
 // agent.list asks about agents no run here uses.
 func (noRuns) WakeRefusal(string, domain.LaunchMode) error { return nil }
@@ -698,12 +749,20 @@ type serverNode struct {
 	services sshd.Services
 	// reviewer is the server's edge-reviewer option.
 	reviewer bool
-	addr     string
-	db       *store.DB
-	bus      *events.InProc
-	ssh      *sshd.Server
-	agent    *edgeagent.Agent
-	stop     func()
+	// launchStarted and launchRelease are the launcher's started and
+	// release.
+	launchStarted chan struct{}
+	launchRelease chan struct{}
+	addr          string
+	db            *store.DB
+	bus           *events.InProc
+	ssh           *sshd.Server
+	agent         *edgeagent.Agent
+	stop          func()
+
+	// edge is the server's edge-url, the harness's relay origin when
+	// empty.
+	edge string
 }
 
 func (h *harness) newServer(policy edgeproto.AccessPolicy) *serverNode {
@@ -714,7 +773,7 @@ func (h *harness) newServer(policy edgeproto.AccessPolicy) *serverNode {
 // newMCPServer is newServer with mcp serving its MCP connector requests.
 func (h *harness) newMCPServer(policy edgeproto.AccessPolicy, mcp http.Handler) *serverNode {
 	h.t.Helper()
-	s := &serverNode{h: h, dir: h.t.TempDir(), policy: policy, mcp: mcp, addr: "127.0.0.1:0"}
+	s := &serverNode{h: h, dir: h.t.TempDir(), policy: policy, mcp: mcp}
 	s.start()
 	h.t.Cleanup(func() { s.stop() })
 	return s
@@ -751,10 +810,10 @@ func (s *serverNode) start() {
 	hostKeyPath := filepath.Join(s.dir, "ssh", "host_ed25519_key")
 	runs := sshd.RunController(noRuns{})
 	if s.client != nil {
-		runs = launcher{db: db}
+		runs = launcher{db: db, started: s.launchStarted, release: s.launchRelease}
 	}
 	srv, err := sshd.New(sshd.Config{
-		Addr: s.addr, HostKeyPath: hostKeyPath, Store: db, Bus: bus,
+		Addr: "127.0.0.1:0", HostKeyPath: hostKeyPath, Store: db, Bus: bus,
 		Git: noGit{}, PTY: noPTY{}, Runs: runs,
 		InvitesDir: filepath.Join(s.dir, "invites"), EdgeAccess: s.policy, EdgeReviewer: s.reviewer, Services: services,
 	})
@@ -765,16 +824,17 @@ func (s *serverNode) start() {
 	if err != nil {
 		t.Fatal(err)
 	}
+	edgeURL := cmp.Or(s.edge, s.h.relayURL)
 	mcp := s.mcp
 	if s.client != nil {
 		// A first start is backdated by ClockSkew so a test signs in right
 		// away; a restart is not, so sign-ins from before it stay refused.
 		var started time.Time
-		if s.addr == "127.0.0.1:0" {
+		if s.addr == "" {
 			started = time.Now().Add(-edgeproto.ClockSkew)
 		}
 		mcp, err = connector.New(connector.Config{
-			BaseURL: s.h.relayURL + edgeproto.MCPPath(edgeproto.ServerID(hostKey.PublicKey())),
+			BaseURL: edgeURL + edgeproto.MCPPath(edgeproto.ServerID(hostKey.PublicKey())),
 			Store:   db, SSH: srv, KeyPath: filepath.Join(s.dir, "connector", "hmac.key"),
 			ClientHosts: []string{s.client.host}, Transport: s.client.srv.Client().Transport, LoopbackClients: s.client.loopback,
 			Started: started,
@@ -783,7 +843,7 @@ func (s *serverNode) start() {
 			t.Fatal(err)
 		}
 	}
-	agent, err := edgeagent.New(edgeagent.Config{EdgeURL: s.h.relayURL, DataDir: s.dir, HostKey: hostKey, SSH: srv,
+	agent, err := edgeagent.New(edgeagent.Config{EdgeURL: edgeURL, DataDir: s.dir, HostKey: hostKey, SSH: srv,
 		AccessPolicy: s.policy, HTTP: mcp})
 	if err != nil {
 		t.Fatal(err)
@@ -817,6 +877,14 @@ func (s *serverNode) start() {
 	}
 	s.id, s.db, s.ssh, s.agent, s.bus = agent.ServerID(), db, srv, agent, bus
 	s.waitEnrolled()
+	// Serve binds the listener in its goroutine; enrollment goes through the
+	// agent, so it can finish first.
+	eventually(s.h.t, "sshd listening", func() error {
+		if srv.Addr() == nil {
+			return errors.New("not listening yet")
+		}
+		return nil
+	})
 	s.addr = srv.Addr().String()
 }
 
@@ -980,11 +1048,11 @@ func (s *serverNode) snapshot(t *testing.T) snapshot {
 	return out
 }
 
-// admins are the members with the admin role.
+// admins are the members with the admin or super admin role.
 func (sn snapshot) admins() []domain.MemberID {
 	var out []domain.MemberID
 	for id, role := range sn.members {
-		if role == domain.RoleAdmin {
+		if role.Admin() {
 			out = append(out, id)
 		}
 	}
@@ -1217,4 +1285,19 @@ func (h *harness) approveForDirect(ctl *protocol.Client, c *client, s *serverNod
 		t.Fatalf("%s's registered device directly: %v, want refused until approved", c.user.Login, err)
 	}
 	approve(t, ctl, s.pendingCode(t, c.user.Login+"'s registered device directly", r))
+}
+
+// grantEveryone grants ws to every member, as the upgrade to
+// workspace-scoped access does for a workspace made before it.
+func grantEveryone(t *testing.T, db *store.DB, ws domain.WorkspaceID) {
+	t.Helper()
+	members, err := db.ListMembers(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range members {
+		if err := db.GrantWorkspace(t.Context(), ws, m.ID, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
 }

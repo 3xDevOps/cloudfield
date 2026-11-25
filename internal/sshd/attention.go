@@ -47,33 +47,37 @@ func (s *Server) attentionList(ctx context.Context, member domain.MemberID, raw 
 	if perr != nil {
 		return nil, perr
 	}
-	caller, err := s.cfg.Store.GetMember(ctx, member)
+	actor, err := resolveActor(ctx, s.cfg.Store, member)
 	if err != nil {
 		return nil, rpcError(err)
 	}
 	var workspaces []*domain.Workspace
 	if p.WorkspaceID != "" {
+		if !actor.Reaches(domain.WorkspaceID(p.WorkspaceID)) {
+			return nil, rpcError(permissions.ErrNoAccess)
+		}
 		ws, getErr := s.cfg.Store.GetWorkspace(ctx, domain.WorkspaceID(p.WorkspaceID))
 		if getErr != nil {
 			return nil, rpcError(getErr)
 		}
 		workspaces = []*domain.Workspace{ws}
-	} else if workspaces, err = s.cfg.Store.ListWorkspaces(ctx); err != nil {
+	} else if workspaces, err = s.reachableWorkspaces(ctx, actor); err != nil {
 		return nil, rpcError(err)
 	}
-	names, err := s.memberNames(ctx)
+	names, err := s.memberNames(ctx, actor)
 	if err != nil {
 		return nil, rpcError(err)
 	}
-	viewer := attentionViewer{id: member, admin: caller.Role == domain.RoleAdmin, name: names}
 	items := []protocol.AttentionItem{}
 	for _, ws := range workspaces {
+		role, _ := actor.RoleIn(ws.ID)
+		viewer := attentionViewer{id: member, admin: role == domain.RoleAdmin, name: names}
 		runs, err := s.cfg.Store.ListRunsByWorkspace(ctx, ws.ID)
 		if err != nil {
 			return nil, rpcError(err)
 		}
 		for _, run := range runs {
-			if run.ArchivedAt != nil {
+			if run.ArchivedAt != nil || !reachesRun(actor, run) {
 				continue
 			}
 			r, err := s.attentionRun(ctx, run)
@@ -85,8 +89,15 @@ func (s *Server) attentionList(ctx context.Context, member domain.MemberID, raw 
 			}
 		}
 	}
+	// A finished run asks nothing of anyone, so it follows every row that does.
 	slices.SortStableFunc(items, func(a, b protocol.AttentionItem) int {
-		return cmp.Or(compareSince(a.Since, b.Since), cmp.Compare(a.RunID, b.RunID))
+		finished := func(it protocol.AttentionItem) int {
+			if it.Kind == protocol.AttentionKindReady {
+				return 1
+			}
+			return 0
+		}
+		return cmp.Or(cmp.Compare(finished(a), finished(b)), compareSince(a.Since, b.Since), cmp.Compare(a.RunID, b.RunID))
 	})
 	return protocol.AttentionListResult{Items: items}, nil
 }
@@ -131,15 +142,22 @@ func (s *Server) attentionRun(ctx context.Context, run *domain.Run) (*attentionR
 }
 
 // memberNames is memberName in web/src/lib/member-name.ts: a merged-away
-// id names the member it became, marked merged; an unknown id names itself.
-func (s *Server) memberNames(ctx context.Context) (func(domain.MemberID) string, error) {
+// id names the member it became, marked merged; an unknown id, and one
+// actor does not see, names itself.
+func (s *Server) memberNames(ctx context.Context, actor permissions.Actor) (func(domain.MemberID) string, error) {
+	sees, err := s.visibleMembers(ctx, actor)
+	if err != nil {
+		return nil, err
+	}
 	members, err := s.cfg.Store.ListMembers(ctx)
 	if err != nil {
 		return nil, err
 	}
 	display := make(map[domain.MemberID]string, len(members))
 	for _, m := range members {
-		display[m.ID] = m.DisplayName
+		if sees(m.ID) {
+			display[m.ID] = m.DisplayName
+		}
 	}
 	mergedInto := map[domain.MemberID]domain.MemberID{}
 	if ms, ok := s.cfg.Store.(store.MergeStore); ok {
@@ -381,12 +399,12 @@ var attentionRows = []attentionRow{
 		background: true,
 		completed:  true,
 		holds: func(r *attentionRun) bool {
-			return r.run.Review == domain.ReviewReady &&
+			return !r.run.OutcomeHeld() && r.run.Review == domain.ReviewReady &&
 				(r.run.Status == domain.RunCompleted || r.live() && r.run.Activity == domain.ActivityFinished)
 		},
 		resolvers: owner,
 		fill: func(r *attentionRun, _ attentionViewer, item *protocol.AttentionItem) {
-			item.Reason = "Your agent reports this task is finished"
+			item.Reason = "Finished: review the result"
 			if at := since(r.run.ReviewChangedAt); at != "" {
 				item.Since = at
 			}
@@ -395,8 +413,10 @@ var attentionRows = []attentionRow{
 	{
 		kind:       protocol.AttentionKindFailed,
 		background: true,
-		holds:      func(r *attentionRun) bool { return r.run.Activity == domain.ActivityFailed && r.run.OutcomeUnseen },
-		resolvers:  owner,
+		holds: func(r *attentionRun) bool {
+			return !r.run.OutcomeHeld() && r.run.Activity == domain.ActivityFailed && r.run.OutcomeUnseen
+		},
+		resolvers: owner,
 		fill: func(r *attentionRun, _ attentionViewer, item *protocol.AttentionItem) {
 			item.Reason = "Agent reported failure; review the result. Session remains open for follow-up."
 			if r.run.Reason != "" && r.run.Reason != "agent reported failure" {

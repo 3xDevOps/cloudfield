@@ -76,7 +76,7 @@ describe('the Enhanced composer gate', () => {
     run: toRecord(run({ mode: 'acp', acp: true })),
     maySteer: true,
     canReopen: true,
-    stream: 'live' as const,
+    refused: undefined,
     sessionLive: true,
     pending: 0,
     hasLease: true,
@@ -93,6 +93,9 @@ describe('the Enhanced composer gate', () => {
       expect(composerBlock({ ...parked, outcome_unseen: false }, true, false)).toBeNull()
       expect(composerBlock({ ...parked, status: 'abandoned' }, true, true))
         .toBe('This session has finished. Relaunch it to continue the chat and files.')
+      const until = '2026-12-18T12:00:00Z'
+      expect(composerBlock({ ...parked, status: 'abandoned', container_retained_until: until }, true, true))
+        .toBe(`This session has finished. Relaunch it before ${new Date(until).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })} to continue the chat and files.`)
     }
   })
 
@@ -105,8 +108,8 @@ describe('composerBlock for a finished run', () => {
   const finished = (reason: string) => toRecord(run({ status: 'merged', reason }))
 
   it.each([
-    ['retained container reclaimed for disk space', 'This session has finished. Its container was removed early because disk space was low.'],
-    ['retained container expired', 'This session has finished. Its container was removed when it expired.'],
+    ['retained container reclaimed for disk space', 'This session has finished. Its sandbox was removed early because disk space was low.'],
+    ['retained container expired', 'This session has finished. Its sandbox was removed when it expired.'],
     ['closed', 'This session has finished.'],
   ])('says why a released container is gone: %s', (reason, text) => {
     expect(composerBlock(finished(reason), true, false)).toBe(text)

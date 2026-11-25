@@ -1,0 +1,439 @@
+// Package vm runs each session in its own Cloud Hypervisor virtual machine
+// behind runtime.Runtime. Every other container kind, and every image
+// operation, still goes to Docker until it moves into a VM as well.
+package vm
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/netip"
+	"slices"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/3xDevOps/Aether/internal/coordtransport"
+	"github.com/3xDevOps/Aether/internal/runtime"
+)
+
+// idPrefix marks a VM's runtime.ID; Docker IDs are hex and never carry it.
+const idPrefix = "vm-"
+
+// Runtime sends session containers to VMs and everything else to the
+// embedded Docker runtime, whose optional methods it keeps.
+type Runtime struct {
+	*runtime.Docker
+	vms *engine
+	// stopped are the Docker containers StopDockerContainers stopped. This
+	// server never removes them, so a server switched back to docker finds
+	// them as they were, even when a terminal open finds one first by the
+	// ID its record kept.
+	stopped sync.Map
+}
+
+var (
+	_ runtime.Runtime             = (*Runtime)(nil)
+	_ runtime.ManagedExecRuntime  = (*Runtime)(nil)
+	_ runtime.SudoRuntime         = (*Runtime)(nil)
+	_ runtime.CapacityRuntime     = (*Runtime)(nil)
+	_ runtime.InitPIDRuntime      = (*Runtime)(nil)
+	_ runtime.MemoryEventsRuntime = (*Runtime)(nil)
+	_ runtime.MemoryUseRuntime    = (*Runtime)(nil)
+	_ runtime.BrowserRuntime      = (*Runtime)(nil)
+	_ runtime.SaveRuntime         = (*Runtime)(nil)
+)
+
+// Config names what a VM is built from. Monitor is the command that runs
+// Monitor inside each VM's systemd unit: the server binary and its
+// vm-monitor subcommand.
+// BrowserImage is the development browser's image, whose disk every session
+// VM gets.
+type Config struct {
+	Docker       *runtime.Docker
+	DataDir      string
+	Images       Images
+	Monitor      []string
+	Helper       string
+	BrowserImage string
+	// CheckoutDisks, when set, puts the session checkouts it knows on disks
+	// of their own instead of sharing them from the server.
+	CheckoutDisks CheckoutDisks
+	// ProgramUnit, when set, finds the file or directory in home that
+	// ~/.local/bin/<executable> runs from, which a session VM may load from a
+	// disk of its own (memberhome.ProgramUnit).
+	ProgramUnit func(home, executable string) (string, error)
+}
+
+// New returns a Runtime that keeps its VMs under DataDir/vm, and starts
+// building the browser's disk.
+func New(cfg Config) (*Runtime, error) {
+	if cfg.Docker == nil || cfg.Images == nil || len(cfg.Monitor) == 0 || cfg.Helper == "" {
+		return nil, errors.New("vm runtime: Docker, the image store, the monitor command and the helper binary are required")
+	}
+	e := newEngine(cfg, SystemdUnits{}, dialHelper)
+	go e.lingering(context.Background())
+	e.warmBrowser()
+	return &Runtime{Docker: cfg.Docker, vms: e}, nil
+}
+
+// kinds are the containers besides sessions that run in VMs, by the prefix
+// of the creation key the scheduler gives them and of their VM's name: the
+// rest of the key is the member, and for the agent updater the agent too.
+var kinds = []struct {
+	key, name string
+	opts      options
+}{
+	{"terminal:", "terminal-", options{}},
+	{"assistant:", "assistant-", options{}},
+	{"assistant-install:", "assistant-install-", options{}},
+	{"harness-update-", "harness-update-", options{Lifetime: updaterLifetime}},
+}
+
+// updaterLifetime ends an agent updater's VM that a server crash left
+// running: the container's own sleep 900 would have ended it.
+const updaterLifetime = 20 * time.Minute
+
+// isSession matches a session container, which carries its run ID both as
+// creation key and in AETHER_RUN_ID.
+func isSession(spec runtime.Spec) bool {
+	return spec.CreationKey != "" && spec.Env[coordtransport.RunIDEnv] == spec.CreationKey
+}
+
+// kindVM is the VM name and options of a creation key of one of the kinds.
+func kindVM(key string) (string, options, bool) {
+	for _, k := range kinds {
+		if rest, ok := strings.CutPrefix(key, k.key); ok {
+			return k.name + rest, k.opts, true
+		}
+	}
+	return "", options{}, false
+}
+
+// vmFor is the routing rule: sessions and the kinds run in VMs, everything
+// else in Docker.
+func vmFor(spec runtime.Spec) (string, options, bool) {
+	if name, opts, ok := kindVM(spec.CreationKey); ok {
+		return name, opts, true
+	}
+	return spec.CreationKey, options{Browser: true}, isSession(spec)
+}
+
+func vmKey(id runtime.ID) (string, bool) {
+	return strings.CutPrefix(string(id), idPrefix)
+}
+
+func (r *Runtime) Create(ctx context.Context, spec runtime.Spec) (runtime.ID, error) {
+	name, opts, ok := vmFor(spec)
+	if !ok {
+		return r.Docker.Create(ctx, spec)
+	}
+	return r.vms.create(ctx, name, spec, opts)
+}
+
+// dockerStopGrace is short: a terminal's interactive shell ignores SIGTERM,
+// and a kill loses nothing of a container's filesystem.
+const dockerStopGrace = time.Second
+
+// StopDockerContainers stops the containers Docker still runs of members'
+// kinds that now run in VMs, as the server left them when it ran them in
+// Docker. FindByCreationKey no longer finds them, so each is replaced by a
+// VM at its next use, and a stopped terminal keeps its unsaved changes for a
+// server switched back to docker. Only these members' containers are
+// touched: another server may share the daemon. The server runs it at
+// start, before it recovers anything; it logs each container, and one that
+// will not stop stays in Docker until it ends.
+func (r *Runtime) StopDockerContainers(ctx context.Context, members []string) {
+	keys, err := r.CreationKeys(ctx)
+	if err != nil {
+		slog.Warn("vm runtime: list Docker's containers to stop the ones VMs replace", "error", err)
+		return
+	}
+	for key, id := range keys {
+		if !memberKind(key, members) {
+			continue
+		}
+		r.stopped.Store(id, true)
+		if err := r.Docker.Stop(ctx, id, dockerStopGrace); err != nil {
+			slog.Warn("vm runtime: stop a container a VM replaces", "creation_key", key, "container", id, "error", err)
+			continue
+		}
+		slog.Info("vm runtime: stopped a container a VM replaces; it stays in Docker", "creation_key", key, "container", id)
+	}
+}
+
+// memberKind reports whether key is the creation key of one of members'
+// containers of a kind that runs in a VM: after the kind's prefix comes the
+// member, alone or followed by a dash and the agent.
+func memberKind(key string, members []string) bool {
+	for _, k := range kinds {
+		rest, ok := strings.CutPrefix(key, k.key)
+		if ok && slices.ContainsFunc(members, func(m string) bool { return rest == m || strings.HasPrefix(rest, m+"-") }) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *Runtime) Start(ctx context.Context, id runtime.ID) error {
+	if key, ok := browserKey(id); ok {
+		return r.vms.startBrowser(ctx, key)
+	}
+	if key, ok := vmKey(id); ok {
+		return r.vms.startKept(ctx, key)
+	}
+	return r.Docker.Start(ctx, id)
+}
+
+func (r *Runtime) Pause(ctx context.Context, id runtime.ID) error {
+	if key, ok := browserKey(id); ok {
+		return r.vms.pauseBrowser(ctx, key, true)
+	}
+	if key, ok := vmKey(id); ok {
+		return r.vms.pause(ctx, key)
+	}
+	return r.Docker.Pause(ctx, id)
+}
+
+func (r *Runtime) Resume(ctx context.Context, id runtime.ID) error {
+	if key, ok := browserKey(id); ok {
+		return r.vms.pauseBrowser(ctx, key, false)
+	}
+	if key, ok := vmKey(id); ok {
+		return r.vms.resume(ctx, key)
+	}
+	return r.Docker.Resume(ctx, id)
+}
+
+func (r *Runtime) Stop(ctx context.Context, id runtime.ID, grace time.Duration) error {
+	if key, ok := vmKey(id); ok {
+		return r.vms.stop(ctx, key, grace)
+	}
+	return r.Docker.Stop(ctx, id, grace)
+}
+
+func (r *Runtime) Destroy(ctx context.Context, id runtime.ID) error {
+	if _, ok := r.stopped.Load(id); ok {
+		return nil
+	}
+	if key, ok := browserKey(id); ok {
+		return r.vms.destroyBrowser(ctx, key)
+	}
+	if key, ok := vmKey(id); ok {
+		return r.vms.destroy(ctx, key)
+	}
+	return r.Docker.Destroy(ctx, id)
+}
+
+func (r *Runtime) Attach(ctx context.Context, id runtime.ID) (runtime.Attachment, error) {
+	if key, ok := vmKey(id); ok {
+		return r.vms.attach(ctx, key)
+	}
+	return r.Docker.Attach(ctx, id)
+}
+
+func (r *Runtime) ContainerIP(ctx context.Context, id runtime.ID) (string, error) {
+	if key, ok := vmKey(id); ok {
+		return r.vms.containerIP(ctx, key)
+	}
+	return r.Docker.ContainerIP(ctx, id)
+}
+
+func (r *Runtime) ExecTTY(ctx context.Context, id runtime.ID, argv []string, workDir string, cols, rows uint) (runtime.Attachment, error) {
+	if key, ok := vmKey(id); ok {
+		return r.vms.execTTY(ctx, key, argv, workDir, cols, rows)
+	}
+	return r.Docker.ExecTTY(ctx, id, argv, workDir, cols, rows)
+}
+
+func (r *Runtime) Exec(ctx context.Context, id runtime.ID, argv []string, workDir string) (int, string, string, error) {
+	if key, ok := vmKey(id); ok {
+		return r.vms.exec(ctx, key, argv, workDir)
+	}
+	return r.Docker.Exec(ctx, id, argv, workDir)
+}
+
+func (r *Runtime) Wait(ctx context.Context, id runtime.ID) (runtime.ExitStatus, error) {
+	if key, ok := vmKey(id); ok {
+		return r.vms.wait(ctx, key)
+	}
+	return r.Docker.Wait(ctx, id)
+}
+
+func (r *Runtime) Inspect(ctx context.Context, id runtime.ID) (runtime.ContainerInfo, error) {
+	if key, ok := vmKey(id); ok {
+		return r.vms.inspect(ctx, key)
+	}
+	return r.Docker.Inspect(ctx, id)
+}
+
+// FindByCreationKey finds the kinds only among VMs, and a session among VMs
+// first: its key names a VM only when it was created under this runtime.
+func (r *Runtime) FindByCreationKey(ctx context.Context, key string) (runtime.ID, error) {
+	if name, _, ok := kindVM(key); ok {
+		return r.vms.find(name)
+	}
+	if id, err := r.vms.findBrowser(key); !errors.Is(err, runtime.ErrNotFound) {
+		return id, err
+	}
+	id, err := r.vms.find(key)
+	if !errors.Is(err, runtime.ErrNotFound) {
+		return id, err
+	}
+	return r.Docker.FindByCreationKey(ctx, key)
+}
+
+// EgressGateway is where session VMs reach the egress proxy. It sets up the
+// VMs' network whether or not create is set, so the server's start
+// rebuilds the firewall of VMs that outlived the last server.
+func (r *Runtime) EgressGateway(ctx context.Context, _ bool) (netip.Addr, error) {
+	if err := r.vms.ensureNetwork(ctx); err != nil {
+		return netip.Addr{}, err
+	}
+	return proxyAddr, nil
+}
+
+// EgressCreationKey answers only for VMs: Docker's egress containers have
+// no route to the VMs' proxy address.
+func (r *Runtime) EgressCreationKey(_ context.Context, ip netip.Addr) (string, error) {
+	return r.vms.egressKey(ip)
+}
+
+func (r *Runtime) InitPID(ctx context.Context, id runtime.ID) (int, error) {
+	if key, ok := vmKey(id); ok {
+		return r.vms.initPID(ctx, key)
+	}
+	return r.Docker.InitPID(ctx, id)
+}
+
+func (r *Runtime) MemoryEvents(ctx context.Context, id runtime.ID) (runtime.MemoryEvents, bool, error) {
+	key, ok := vmKey(id)
+	if !ok {
+		return runtime.MemoryEvents{}, false, nil
+	}
+	events, err := r.vms.memoryEvents(ctx, key)
+	return events, true, err
+}
+
+func (r *Runtime) StartExecTTY(ctx context.Context, id runtime.ID, spec runtime.ExecSpec) (runtime.ManagedExec, error) {
+	if key, ok := vmKey(id); ok {
+		return r.vms.startManagedExec(ctx, key, spec, true)
+	}
+	return r.Docker.StartExecTTY(ctx, id, spec)
+}
+
+func (r *Runtime) StartExecPipe(ctx context.Context, id runtime.ID, spec runtime.ExecSpec) (runtime.ManagedExec, error) {
+	if key, ok := vmKey(id); ok {
+		return r.vms.startManagedExec(ctx, key, spec, false)
+	}
+	return r.Docker.StartExecPipe(ctx, id, spec)
+}
+
+func (r *Runtime) RecoverExec(ctx context.Context, identity runtime.ExecIdentity) (runtime.ManagedExec, error) {
+	if key, ok := vmKey(identity.ContainerID); ok {
+		return r.vms.recoverExec(ctx, key, identity)
+	}
+	return r.Docker.RecoverExec(ctx, identity)
+}
+
+func (r *Runtime) SettingUp(id runtime.ID) bool {
+	if key, ok := vmKey(id); ok {
+		return r.vms.settingUp(key)
+	}
+	return r.Docker.SettingUp(id)
+}
+
+func (r *Runtime) ExecAttached(ctx context.Context, id runtime.ID, spec runtime.AttachedExec) (int, error) {
+	if key, ok := vmKey(id); ok {
+		return r.vms.execAttached(ctx, key, spec)
+	}
+	return r.Docker.ExecAttached(ctx, id, spec)
+}
+
+func (r *Runtime) CreateBrowser(ctx context.Context, spec runtime.BrowserSpec) (runtime.ID, error) {
+	if key, ok := vmKey(spec.RunContainer); ok {
+		return r.vms.createBrowser(ctx, key, spec)
+	}
+	return r.Docker.CreateBrowser(ctx, spec)
+}
+
+func (r *Runtime) InspectBrowser(ctx context.Context, id runtime.ID) (runtime.BrowserInfo, error) {
+	if key, ok := browserKey(id); ok {
+		return r.vms.inspectBrowser(ctx, key)
+	}
+	return r.Docker.InspectBrowser(ctx, id)
+}
+
+func (r *Runtime) Capacity(ctx context.Context) (runtime.HostCapacity, error) {
+	capacity, err := r.Docker.Capacity(ctx)
+	if err != nil {
+		return capacity, err
+	}
+	fs, err := r.vms.filesystem()
+	if err != nil {
+		return runtime.HostCapacity{}, fmt.Errorf("vm runtime: VM disk capacity: %w", err)
+	}
+	capacity.Filesystems = append(capacity.Filesystems, fs)
+	return capacity, nil
+}
+
+// ContainerStats adds every running VM to Docker's sample. A VM that cannot
+// be sampled is left out and named in the error, like a failed container.
+func (r *Runtime) ContainerStats(ctx context.Context) ([]runtime.ContainerStat, error) {
+	stats, dockerErr := r.Docker.ContainerStats(ctx)
+	vms, vmErr := r.vms.stats(ctx)
+	return append(stats, vms...), errors.Join(dockerErr, vmErr)
+}
+
+func (r *Runtime) Saves(id runtime.ID) bool {
+	_, ok := vmKey(id)
+	return ok
+}
+
+func (r *Runtime) Save(ctx context.Context, id runtime.ID) error {
+	key, ok := vmKey(id)
+	if !ok {
+		return errors.New("vm runtime: only a session VM can be saved; Docker containers cannot")
+	}
+	return r.vms.save(ctx, key)
+}
+
+func (r *Runtime) SavedMemory(id runtime.ID) (uint64, error) {
+	key, ok := vmKey(id)
+	if !ok {
+		return 0, nil
+	}
+	return r.vms.savedMemory(key)
+}
+
+func (r *Runtime) Restore(ctx context.Context, id runtime.ID) error {
+	key, ok := vmKey(id)
+	if !ok {
+		return errors.New("vm runtime: only a session VM can be restored; Docker containers cannot")
+	}
+	return r.vms.restore(ctx, key)
+}
+
+func (r *Runtime) SetCommand(_ context.Context, id runtime.ID, command []string) error {
+	key, ok := vmKey(id)
+	if !ok {
+		return errors.New("vm runtime: only a session VM takes a new command; Docker containers cannot")
+	}
+	return r.vms.setCommand(key, command)
+}
+
+func (e *engine) setCommand(key string, command []string) error {
+	unlock := e.lock(key)
+	defer unlock()
+	rec, err := e.load(key)
+	if err != nil {
+		return err
+	}
+	rec.Command = command
+	return e.store(rec)
+}
+
+// SessionVMs tells the scheduler that sessions run in VMs, whose host files
+// need no ownership pass.
+func (r *Runtime) SessionVMs() {}

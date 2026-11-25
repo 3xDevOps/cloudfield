@@ -37,6 +37,27 @@ expect go false web/package.json web/bun.lock
 expect go false web/e2e/foo.spec.ts docs/testing.md
 expect go false docs/testing.md README.md
 expect go true web/embed.go
+expect go true web/public/cloudfield-favicon.svg
+expect go true web/public/icons/favicon-32.png
+expect go true web/src/components/ui/agent-glyph.tsx
+expect go false web/src/components/ui/button.tsx
+expect go true docs/harnesses.md
+expect go true docs/agents.md
+expect go true docs/embed.go
+expect go false docs/install.md
+
+# Every Go file under web, docs or android, and every file there Go code
+# names by a relative path, is a Go input. The node_modules comparison skips
+# without bun install, which build-and-test runs after its tests.
+repo=$script_dir/..
+read_by_go=$(git -C "$repo" grep -hoE '"(\.\./)+(web|docs|android)/[^"]+"' -- '*.go' |
+	sed -E 's|^"(\.\./)+||; s|"$||' | grep -v '/node_modules/' | sort -u)
+[ -n "$read_by_go" ] || { echo "ci-classify-areas-test: found no web, docs or android file read by Go code" >&2; exit 1; }
+set -f
+for path in $read_by_go $(git -C "$repo" ls-files 'web/*.go' 'docs/*.go' 'android/*.go'); do
+	expect go true "$path"
+done
+set +f
 expect go true web/src/app.tsx internal/store/store.go
 expect go true internal/store/store.go
 expect go true Makefile
@@ -47,7 +68,74 @@ expect go true scripts/install.sh
 expect go false android/README.md
 expect go true unknown/dir/file
 
-for mode in web go; do
+expect caches false internal/store/store.go web/src/app.tsx docs/testing.md
+expect caches false android/app/src/main/AndroidManifest.xml images
+expect caches true internal/store/store.go go.sum
+expect caches true .github/workflows/ci.yml
+expect caches true images/browser/Dockerfile
+expect caches true web/public/fonts/LICENSE-jetbrains-mono-nfm.txt
+expect caches true web/src/fonts/jetbrains-mono-nfm-regular.woff2
+expect caches true web/package.json
+expect caches true desktop/package-lock.json
+expect caches true android/app/build.gradle.kts
+expect caches true android/gradle/libs.versions.toml
+
+expect vm true internal/runtime/vm/engine.go
+expect vm true internal/guest/helper/main_linux.go
+expect vm true internal/vmimage/store.go
+expect vm true images/kernel/config-x86_64
+expect vm true internal/scheduler/vm_sessions.go
+expect vm true internal/server/vmruntime.go
+expect vm true internal/sshd/sync_vm.go
+expect vm true internal/runtime/managed_exec.go
+expect vm true internal/acpkeeper/term_linux.go
+expect vm true internal/egress/proxy.go
+expect vm true internal/gitengine/checkout_vm.go
+expect vm true internal/egress/proxy_vm_test.go
+expect vm true docs/testing.md go.sum
+expect vm true vm.mk
+expect vm true .github/workflows/kvm.yml
+expect vm true cmd/aether-server/vm.go
+expect vm false internal/runtime/docker.go internal/runtime/runtime.go internal/scheduler/environment.go
+expect vm false cmd/aether-server/main.go
+expect vm false internal/scheduler/envmerge.go web/src/app.tsx docs/testing.md
+expect vm false images/standard/Dockerfile .github/workflows/ci-suite.yml Makefile
+
+# Every package the KVM tests compile is in the vm list or here, with the
+# reason the merge queue need not boot VMs for it, so a new dependency of
+# the VM code is a decision rather than a silent skip.
+not_vm='
+internal/runtime: the Docker runtime; the vm list names the files the VM engine shares
+internal/coordtransport: the VM engine reads two of its constants
+internal/protocol: reached only through coordtransport
+internal/store: reached only through coordtransport
+internal/domain: data types; the gitengine and guest helper unit tests cover how the guest uses them
+internal/edge/proto: reached only through coordtransport
+internal/secretscan: reached only through coordtransport
+internal/events: data types; the gitengine and guest helper unit tests cover how the guest uses them
+internal/overlay: the server side of live sync; only the unit tests of the guest helper use it, without a VM
+internal/browser: the client of the browser companion, the same over Docker and VMs; the VM engine only relays its socket
+'
+cd "$script_dir/.."
+kvm_files=$(grep -rl --include='*_test.go' -E '^//go:build .*kvm' internal)
+for file in $kvm_files; do
+	expect vm true "$file"
+done
+kvm_pkgs=$(printf '%s\n' "$kvm_files" | sed 's|/[^/]*$||; s|^|./|' | sort -u)
+# An assignment, so set -e stops the test when go list fails.
+deps=$(GOOS=linux go list -deps -test -tags kvm -f '{{if .Module}}{{if .Module.Main}}{{.Dir}}{{end}}{{end}}' $kvm_pkgs)
+for dir in $(printf '%s\n' "$deps" | sort -u); do
+	pkg=${dir#"$PWD"/}
+	case $not_vm in *"
+$pkg: "*) continue ;;
+	esac
+	if [ "$(printf '%s/x.go\n' "$pkg" | sh "$script" vm)" != true ]; then
+		echo "ci-classify-areas-test: the KVM tests compile $pkg; add it to vm in ci-classify-areas.sh, or to not_vm here with the reason it needs no VM run" >&2
+		exit 1
+	fi
+done
+
+for mode in web go caches vm; do
 	got=$(sh "$script" "$mode" </dev/null)
 	if [ "$got" != true ]; then
 		echo "ci-classify-areas-test: $mode empty stdin gave $got, wanted true" >&2

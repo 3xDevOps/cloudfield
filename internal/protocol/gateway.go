@@ -45,7 +45,8 @@ type RunPatchResult struct {
 }
 
 // ServerDiskResult keeps whole-filesystem headroom separate from Aether's
-// de-duplicated file sizes. SnapshotBytes is a subset of WorktreeBytes.
+// de-duplicated file sizes. SnapshotBytes is a subset of WorktreeBytes, and
+// VMStateBytes, the saved memory of sleeping session VMs, of VMBytes.
 type ServerDiskResult struct {
 	UsedBytes       uint64            `json:"used_bytes"`
 	TotalBytes      uint64            `json:"total_bytes"`
@@ -60,6 +61,8 @@ type ServerDiskResult struct {
 	ScratchBytes    uint64            `json:"scratch_bytes"`
 	OtherBytes      uint64            `json:"other_bytes"`
 	SnapshotBytes   uint64            `json:"snapshot_bytes"`
+	VMBytes         uint64            `json:"vm_bytes,omitempty"`
+	VMStateBytes    uint64            `json:"vm_state_bytes,omitempty"`
 	Warnings        []string          `json:"warnings,omitempty"`
 	Docker          *ServerDockerDisk `json:"docker,omitempty"`
 	Entries         []ServerDiskEntry `json:"entries,omitempty"`
@@ -99,15 +102,14 @@ type ServerDockerDisk struct {
 
 // ServerDiskEntry is admin-only attribution, overlapping component totals.
 type ServerDiskEntry struct {
-	Kind             string  `json:"kind"`
-	OwnerKind        string  `json:"owner_kind"`
-	OwnerID          string  `json:"owner_id,omitempty"`
-	Pool             string  `json:"pool,omitempty"`
-	Bytes            uint64  `json:"bytes"`
-	ReclaimableBytes *uint64 `json:"reclaimable_bytes,omitempty"`
-	RetainedUntil    string  `json:"retained_until,omitempty"`
-	Reason           string  `json:"reason"`
-	Error            string  `json:"error,omitempty"`
+	Kind          string `json:"kind"`
+	OwnerKind     string `json:"owner_kind"`
+	OwnerID       string `json:"owner_id,omitempty"`
+	Pool          string `json:"pool,omitempty"`
+	Bytes         uint64 `json:"bytes"`
+	RetainedUntil string `json:"retained_until,omitempty"`
+	Reason        string `json:"reason"`
+	Error         string `json:"error,omitempty"`
 }
 
 // SystemStatsParams asks for host samples taken after SinceMS (Unix
@@ -163,7 +165,10 @@ type SystemHostSample struct {
 // SystemContainer is a running container the caller may see. OwnerKind is
 // "run", "browser" (a run's browser sidecar; OwnerID is the run) or "member"
 // (a member's environment). Rate fields are omitted until the container has
-// two samples; CPULimitCores is omitted when unlimited.
+// two samples; CPULimitCores is omitted when unlimited. HostMemoryBytes is
+// what a VM holds of the host's memory, where MemoryBytes is the use inside
+// it; it is omitted for a Docker container or when the VM's cgroup could not
+// be read.
 type SystemContainer struct {
 	OwnerKind           string   `json:"owner_kind"`
 	OwnerID             string   `json:"owner_id"`
@@ -175,6 +180,7 @@ type SystemContainer struct {
 	CPULimitCores       float64  `json:"cpu_limit_cores,omitempty"`
 	CPUThrottledPercent *float64 `json:"cpu_throttled_percent,omitempty"`
 	MemoryBytes         uint64   `json:"memory_bytes"`
+	HostMemoryBytes     uint64   `json:"host_memory_bytes,omitempty"`
 	MemoryLimitBytes    uint64   `json:"memory_limit_bytes"`
 	Pids                uint64   `json:"pids"`
 	PidsLimit           uint64   `json:"pids_limit"`

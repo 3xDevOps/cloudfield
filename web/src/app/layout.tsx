@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from 'next'
 import type { ReactNode } from 'react'
 import '../index.css'
 import { themeColor } from './theme-color'
+import { themeScript } from './theme-script'
 
 /**
  * `apple-mobile-web-app-capable` is spelled out by hand, beside the
@@ -10,11 +11,14 @@ import { themeColor } from './theme-color'
  * bar tag has no effect without the prefixed one.
  */
 export const metadata: Metadata = {
-  title: 'Aether',
-  description: 'Aether developer workbench',
-  applicationName: 'Aether',
-  icons: { apple: '/icons/apple-touch-icon.png' },
-  appleWebApp: { capable: true, title: 'Aether', statusBarStyle: 'black-translucent' },
+  title: 'Cloudfield',
+  description: 'Cloudfield developer workbench',
+  applicationName: 'Cloudfield',
+  icons: {
+    icon: [16, 32, 48].map((size) => ({ url: `/icons/favicon-${size}.png`, sizes: `${size}x${size}`, type: 'image/png' })),
+    apple: '/icons/apple-touch-icon.png',
+  },
+  appleWebApp: { capable: true, title: 'Cloudfield', statusBarStyle: 'black-translucent' },
   other: { 'apple-mobile-web-app-capable': 'yes' },
 }
 
@@ -30,15 +34,16 @@ export const viewport: Viewport = {
   initialScale: 1,
   viewportFit: 'cover',
   interactiveWidget: 'resizes-content',
-  themeColor: [
-    { media: '(prefers-color-scheme: light)', color: themeColor.light },
-    { media: '(prefers-color-scheme: dark)', color: themeColor.dark },
-  ],
+  themeColor: themeColor.dark,
 }
+
 
 export default function RootLayout({ children }: Readonly<{ children: ReactNode }>) {
   return (
-    <html lang="en">
+    <html lang="en" className="dark" data-theme="dark" style={{ colorScheme: 'dark' }} suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: themeScript }} />
+      </head>
       <body className="h-full">
         <div id="root" className="h-full">
           {children}

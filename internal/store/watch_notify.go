@@ -80,7 +80,7 @@ func (d *DB) loadWatchDeliveries(ctx context.Context, notes []*WatchNotification
 		args = append(args, n.ID)
 	}
 	rows, err := d.db.QueryContext(ctx,
-		`SELECT notification_id, channel, status, detail, at FROM watch_deliveries
+		`SELECT notification_id, channel, status, detail, at, run_id FROM watch_deliveries
 		 WHERE notification_id IN (?`+strings.Repeat(", ?", len(args)-1)+`) ORDER BY id`, args...)
 	if err != nil {
 		return fmt.Errorf("store: list watch deliveries: %w", err)
@@ -92,7 +92,7 @@ func (d *DB) loadWatchDeliveries(ctx context.Context, notes []*WatchNotification
 			del WatchDelivery
 			at  int64
 		)
-		if err := rows.Scan(&id, &del.Channel, &del.Status, &del.Detail, &at); err != nil {
+		if err := rows.Scan(&id, &del.Channel, &del.Status, &del.Detail, &at, &del.RunID); err != nil {
 			return fmt.Errorf("store: list watch deliveries: %w", err)
 		}
 		del.At = decodeTime(at)
@@ -100,19 +100,6 @@ func (d *DB) loadWatchDeliveries(ctx context.Context, notes []*WatchNotification
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("store: list watch deliveries: %w", err)
-	}
-	return nil
-}
-
-func (d *DB) ReleaseHeldWatchPushes(ctx context.Context, member domain.MemberID, now time.Time) error {
-	at, err := encodeTime(now)
-	if err != nil {
-		return fmt.Errorf("store: release held watch pushes: %w", err)
-	}
-	if _, err := d.db.ExecContext(ctx,
-		`UPDATE watch_notifications SET push_next_at = ?
-		 WHERE push_state = 'held' AND watch_id IN (SELECT id FROM watches WHERE member_id = ?)`, at, member); err != nil {
-		return fmt.Errorf("store: release held watch pushes: %w", err)
 	}
 	return nil
 }
@@ -139,6 +126,28 @@ func (d *DB) SetWatchPush(ctx context.Context, id, state string, attempts int, n
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("store: set watch push: %w", err)
+	}
+	return nil
+}
+
+func (d *DB) QueueWatchDigest(ctx context.Context, id string, del WatchDelivery, item *DigestItem) error {
+	tx, err := d.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: queue watch digest: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+	if err := notFoundOnZeroRows(tx.ExecContext(ctx,
+		`UPDATE watch_notifications SET push_state = 'none', push_next_at = NULL WHERE id = ?`, id)); err != nil {
+		return fmt.Errorf("store: queue watch digest %s: %w", id, err)
+	}
+	if err := setWatchDelivery(ctx, tx, id, del); err != nil {
+		return err
+	}
+	if err := addDigestItem(ctx, tx, item); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: queue watch digest: %w", err)
 	}
 	return nil
 }
@@ -175,7 +184,7 @@ func (d *DB) DropWatchNeedPushes(ctx context.Context, watch string, now time.Tim
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
 	const queued = `SELECT id FROM watch_notifications
-		WHERE watch_id = ?1 AND condition = 'needs_you' AND push_state IN ('pending', 'held')`
+		WHERE watch_id = ?1 AND condition = 'needs_you' AND push_state = 'pending'`
 	if _, err = tx.ExecContext(ctx,
 		`UPDATE watch_deliveries SET status = 'cleared', detail = ?2, at = ?3
 		 WHERE channel = 'push' AND notification_id IN (`+queued+`)`, watch, detail, at); err != nil {
@@ -192,10 +201,10 @@ func (d *DB) DropWatchNeedPushes(ctx context.Context, watch string, now time.Tim
 }
 
 func (d *DB) GetNotifyPrefs(ctx context.Context, member domain.MemberID) (NotifyPrefs, error) {
-	p := NotifyPrefs{Push: true}
+	p := NotifyPrefs{Push: true, Level: "batched", DigestAt: "09:00"}
 	err := d.db.QueryRowContext(ctx,
-		`SELECT push, quiet_start, quiet_end, quiet_tz FROM notify_prefs WHERE member_id = ?`, member).
-		Scan(&p.Push, &p.QuietStart, &p.QuietEnd, &p.QuietTZ)
+		`SELECT push, quiet_start, quiet_end, quiet_tz, level, digest_at, digest_tz FROM notify_prefs WHERE member_id = ?`, member).
+		Scan(&p.Push, &p.QuietStart, &p.QuietEnd, &p.QuietTZ, &p.Level, &p.DigestAt, &p.DigestTZ)
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return NotifyPrefs{}, fmt.Errorf("store: get notify prefs: %w", err)
 	}
@@ -204,10 +213,12 @@ func (d *DB) GetNotifyPrefs(ctx context.Context, member domain.MemberID) (Notify
 
 func (d *DB) PutNotifyPrefs(ctx context.Context, member domain.MemberID, p NotifyPrefs) error {
 	_, err := d.db.ExecContext(ctx,
-		`INSERT INTO notify_prefs (member_id, push, quiet_start, quiet_end, quiet_tz) VALUES (?, ?, ?, ?, ?)
+		`INSERT INTO notify_prefs (member_id, push, quiet_start, quiet_end, quiet_tz, level, digest_at, digest_tz)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT (member_id) DO UPDATE SET push = excluded.push, quiet_start = excluded.quiet_start,
-		   quiet_end = excluded.quiet_end, quiet_tz = excluded.quiet_tz`,
-		member, p.Push, p.QuietStart, p.QuietEnd, p.QuietTZ)
+		   quiet_end = excluded.quiet_end, quiet_tz = excluded.quiet_tz, level = excluded.level,
+		   digest_at = excluded.digest_at, digest_tz = excluded.digest_tz`,
+		member, p.Push, p.QuietStart, p.QuietEnd, p.QuietTZ, p.Level, p.DigestAt, p.DigestTZ)
 	if err != nil {
 		return fmt.Errorf("store: put notify prefs: %w", mapConstraint(err, ErrNotFound))
 	}

@@ -8,6 +8,7 @@ import type {
   AgentModelsResult,
   AgentRemoveResult,
   AgentInfo,
+  AttentionItem,
   BudgetReport,
   ChildLimits,
   ChildSettings,
@@ -30,7 +31,6 @@ import type {
   EdgePath,
   EdgeServer,
   EdgeStatus,
-  EnvAgentsResult,
   EnvSaveResult,
   EvidenceGetResult,
   EvidencePacketListResult,
@@ -46,6 +46,7 @@ import type {
   InsightsResult,
   Invitation,
   InvitationResult,
+  WorkspaceAccess,
   LinkApplyResult,
   LinkRepoResult,
   LinkStatus,
@@ -72,10 +73,13 @@ import type {
   RepoFastForwardResult,
   RepoPushResult,
   RoomDecideResult,
+  RoomResolution,
+  RoomResolveResult,
   RunChildrenResult,
   RunChildrenSetting,
   RoomMessageListResult,
   RoomPostResult,
+  RunInputRespondResult,
   RoomStatusResult,
   SlackLinkResult,
   SlackStatusResult,
@@ -105,12 +109,16 @@ import type {
   FileRead,
   FilesTreeResult,
   Permission,
+  CloseOutcome,
   Run,
+  RunCloseCheck,
   RunPatch,
   Schedule,
   ServerEdge,
   ServerEdgeClaimCode,
   ServerInfo,
+  ReleaseChannel,
+  ServerReleaseChannelSet,
   ServerUpdateResult,
   ServerUpdateStatus,
   RunLimits,
@@ -136,11 +144,7 @@ import type {
   SystemStatsResult,
 } from '@/lib/types'
 import type {
-  DevArtifactDeleteParams,
-  DevArtifactDeleteResult,
   DevArtifactDownloadRequest,
-  DevArtifactGetParams,
-  DevArtifactGetResult,
   DevArtifactListParams,
   DevArtifactListResult,
   DevArtifactRetainParams,
@@ -165,15 +169,11 @@ import type {
   DevBrowserResetResult,
   DevBrowserScreenshotParams,
   DevBrowserScreenshotResult,
-  DevBrowserSnapshotParams,
-  DevBrowserSnapshotResult,
   DevBrowserStatusParams,
   DevBrowserStatusResult,
   DevBrowserStreamRequest,
   DevBrowserViewportParams,
   DevBrowserViewportResult,
-  DevBrowserWaitParams,
-  DevBrowserWaitResult,
   DevControlAcquireParams,
   DevControlAcquireResult,
   DevControlReleaseParams,
@@ -186,20 +186,14 @@ import type {
   DevTerminalInputResult,
   DevTerminalListParams,
   DevTerminalListResult,
-  DevTerminalOutputParams,
-  DevTerminalOutputResult,
   DevTerminalResizeParams,
   DevTerminalResizeResult,
-  DevTerminalScreenParams,
-  DevTerminalScreenResult,
   DevTerminalScreenshotParams,
   DevTerminalScreenshotResult,
   DevTerminalStartParams,
   DevTerminalStartResult,
   DevTerminalStopParams,
   DevTerminalStopResult,
-  DevTerminalWaitParams,
-  DevTerminalWaitResult,
 } from '@/lib/development-types'
 import type {
   RunGitCommitParams,
@@ -223,10 +217,10 @@ import type {
   WorkspaceImportParams,
   WorkspaceImportResult,
 } from '@/lib/run-repository-types'
-import type { AssistantSettings, AssistantSettingsParams, AssistantStartParams, AssistantStatus, ViewContext } from '@/lib/assistant-types'
+import type { AssistantAccount, AssistantRule, AssistantSettings, AssistantSettingsParams, AssistantStartParams, AssistantStatus, ViewContext } from '@/lib/assistant-types'
 import type { SessionHistory, SessionItem, SessionLease } from '@/lib/session-types'
 
-export const API_BASE = '/api/v1'
+const API_BASE = '/api/v1'
 export const MAX_TERMINAL_IMAGE_BYTES = 8 * 1024 * 1024
 export const MAX_TERMINAL_FILE_BYTES = 64 * 1024 * 1024
 export const TERMINAL_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'] as const
@@ -453,7 +447,7 @@ export interface LocalForwardStartResult extends LocalForward {
   state: 'active'
 }
 
-export interface LocalForwardStopResult {
+interface LocalForwardStopResult {
   target: string
   port: number
   state: 'stopped'
@@ -476,7 +470,7 @@ async function failure(
         message:
           typeof body.error.message === 'string'
             ? body.error.message
-            : `${res.status} ${res.statusText}`,
+            : statusLine(res),
         ...(typeof body.error.code === 'number' ? { code: body.error.code } : {}),
         ...(body.error.data !== undefined ? { data: body.error.data } : {}),
       }
@@ -484,11 +478,16 @@ async function failure(
   } catch {
     // Not every failure has a JSON body (a proxy 502, for instance).
   }
-  return { message: `${res.status} ${res.statusText}` }
+  return { message: statusLine(res) }
+}
+
+// HTTP/2 has no reason phrase, so statusText is empty there.
+function statusLine(res: Response): string {
+  return res.statusText ? `${res.status} ${res.statusText}` : String(res.status)
 }
 
 /** WebSocket URL for a gateway path, carrying the bearer token when set. */
-export function socketURL(path: string): string {
+function socketURL(path: string): string {
   const url = new URL(path, window.location.href)
   url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
   const token = bearer()
@@ -506,6 +505,8 @@ export const api = {
   serverInfo: () => call<ServerInfo>('server.info'),
   serverEdge: () => call<ServerEdge>('server.edge'),
   serverEdgeClaimCode: () => call<ServerEdgeClaimCode>('server.edge.claimcode'),
+  dictationTranscribe: (audioBase64: string, hints: string[], signal?: AbortSignal) =>
+    call<{ text: string }>('dictation.transcribe', { audio_base64: audioBase64, hints }, signal),
   memberList: () => call<MemberList>('member.list'),
   accountList: () => call<AccountAccess>('account.list'),
   accountUsage: (params: { account_member_id?: string; refresh?: boolean } = {}) =>
@@ -556,6 +557,8 @@ export const api = {
   runChildren: (runID: string) => call<RunChildrenResult>('run.children', { run_id: runID }),
   runChildrenAllow: (runID: string, children: RunChildrenSetting) =>
     call<{ children: RunChildrenSetting }>('run.children.allow', { run_id: runID, children }),
+  runCloseCheck: (runIDs: string[], outcome?: CloseOutcome) =>
+    call<{ runs: RunCloseCheck[] }>('run.close_check', { run_ids: runIDs, ...(outcome ? { outcome } : {}) }).then((r) => r.runs),
   runWaitCancel: (runID: string, waitID: string) => call<{ wait: WaitCondition }>('run.wait.cancel', { run_id: runID, wait_id: waitID }),
   /** Without limits it reads them; an admin's limits change them. */
   workspaceChildLimits: (workspaceID: string, limits: Partial<ChildLimits> = {}) =>
@@ -585,18 +588,12 @@ export const api = {
     call<DevTerminalListResult>('dev.terminal.list', params),
   devTerminalStart: (params: DevTerminalStartParams) =>
     call<DevTerminalStartResult>('dev.terminal.start', params),
-  devTerminalOutput: (params: DevTerminalOutputParams) =>
-    call<DevTerminalOutputResult>('dev.terminal.output', params),
-  devTerminalScreen: (params: DevTerminalScreenParams) =>
-    call<DevTerminalScreenResult>('dev.terminal.screen', params),
   devTerminalScreenshot: (params: DevTerminalScreenshotParams) =>
     call<DevTerminalScreenshotResult>('dev.terminal.screenshot', params),
   devTerminalInput: (params: DevTerminalInputParams) =>
     call<DevTerminalInputResult>('dev.terminal.input', params),
   devTerminalResize: (params: DevTerminalResizeParams) =>
     call<DevTerminalResizeResult>('dev.terminal.resize', params),
-  devTerminalWait: (params: DevTerminalWaitParams) =>
-    call<DevTerminalWaitResult>('dev.terminal.wait', params),
   devTerminalStop: (params: DevTerminalStopParams) =>
     call<DevTerminalStopResult>('dev.terminal.stop', params),
   devBrowserStatus: (params: DevBrowserStatusParams) =>
@@ -607,8 +604,6 @@ export const api = {
     call<DevBrowserPagesResult>('dev.browser.pages', params),
   devBrowserNavigate: (params: DevBrowserNavigateParams) =>
     call<DevBrowserNavigateResult>('dev.browser.navigate', params),
-  devBrowserSnapshot: (params: DevBrowserSnapshotParams) =>
-    call<DevBrowserSnapshotResult>('dev.browser.snapshot', params),
   /** Reads the element under a point. It needs no control of the Browser.
    * A companion older than the server answers -32601 with the reason. */
   devBrowserInspect: (params: DevBrowserInspectParams) =>
@@ -619,8 +614,6 @@ export const api = {
     call<DevBrowserScreenshotResult>('dev.browser.screenshot', params),
   devBrowserViewport: (params: DevBrowserViewportParams) =>
     call<DevBrowserViewportResult>('dev.browser.viewport', params),
-  devBrowserWait: (params: DevBrowserWaitParams) =>
-    call<DevBrowserWaitResult>('dev.browser.wait', params),
   devBrowserConsole: (params: DevBrowserConsoleParams) =>
     call<DevBrowserConsoleResult>('dev.browser.console', params),
   devBrowserNetwork: (params: DevBrowserNetworkParams) =>
@@ -639,10 +632,6 @@ export const api = {
     call<DevControlReleaseResult>('dev.control.release', params, undefined, true),
   devArtifactList: (params: DevArtifactListParams) =>
     call<DevArtifactListResult>('dev.artifact.list', params),
-  devArtifactGet: (params: DevArtifactGetParams) =>
-    call<DevArtifactGetResult>('dev.artifact.get', params),
-  devArtifactDelete: (params: DevArtifactDeleteParams) =>
-    call<DevArtifactDeleteResult>('dev.artifact.delete', params),
   devArtifactRetain: (params: DevArtifactRetainParams) =>
     call<DevArtifactRetainResult>('dev.artifact.retain', params),
   devPortList: (params: DevPortListParams) =>
@@ -652,6 +641,7 @@ export const api = {
   runDelete: (runID: string) => call<unknown>('run.delete', { run_id: runID }),
   runPause: (runID: string) => call<unknown>('run.pause', { run_id: runID }),
   runResume: (runID: string) => call<unknown>('run.resume', { run_id: runID }),
+  runWake: (runID: string) => call<unknown>('run.wake', { run_id: runID }),
   /** steer asks an enhanced run's agent to add the message to its running
    * turn; the lease makes delivery immediate instead of moderated. */
   runInject: (
@@ -678,12 +668,14 @@ export const api = {
       ...(values ? { values } : {}),
       ...lease,
     }),
-  runInputRespond: (runID: string, requestID: string, optionID: string) =>
-    call<unknown>('run.input.respond', { run_id: runID, request_id: requestID, option_id: optionID }),
+  runInputRespond: (runID: string, requestID: string, optionID: string, values?: Record<string, unknown>) =>
+    call<RunInputRespondResult>('run.input.respond', { run_id: runID, request_id: requestID, option_id: optionID, ...(values ? { values } : {}) }),
+  attentionList: () => call<{ items: AttentionItem[] }>('attention.list', {}),
   assistantStatus: () => call<AssistantStatus>('assistant.status', {}),
   assistantStart: (params: AssistantStartParams = {}) => call<AssistantStatus>('assistant.start', params),
-  assistantPrompt: (text: string, idempotencyKey: string, viewContext?: ViewContext, signal?: AbortSignal) =>
-    call<unknown>('assistant.prompt', { text, idempotency_key: idempotencyKey, ...(viewContext ? { view_context: viewContext } : {}) }, signal),
+  assistantPrompt: (text: string, idempotencyKey: string, viewContext?: ViewContext, door?: 'phone' | 'desktop', signal?: AbortSignal) =>
+    call<unknown>('assistant.prompt', { text, idempotency_key: idempotencyKey, ...(viewContext ? { view_context: viewContext } : {}), ...(door ? { door } : {}) }, signal),
+  assistantQueueRemove: (entryID: string) => call<unknown>('assistant.queue.remove', { entry_id: entryID }),
   /** Replaces the member's latest view context. */
   assistantView: (viewContext: ViewContext) => call<unknown>('assistant.view', { view_context: viewContext }),
   assistantCancel: (signal?: AbortSignal) => call<unknown>('assistant.cancel', {}, signal),
@@ -691,9 +683,14 @@ export const api = {
     call<unknown>('assistant.answer', { request_id: requestID, option_id: optionID, ...(values ? { values } : {}) }),
   assistantConfirm: (confirmationID: string, approve: boolean) =>
     call<unknown>('assistant.confirm', { confirmation_id: confirmationID, approve }),
+  assistantApproveAlways: (confirmationID: string) =>
+    call<{ rule?: AssistantRule }>('assistant.confirm', { confirmation_id: confirmationID, approve: true, always: true }),
+  assistantRules: () => call<{ rules: AssistantRule[] }>('assistant.rules', {}).then((r) => r.rules),
+  assistantRuleRevoke: (id: string) => call<unknown>('assistant.rules.revoke', { id }),
   assistantItem: (seq: number) => call<{ item: SessionItem }>('assistant.item', { seq }).then((r) => r.item),
   assistantReset: () => call<AssistantStatus>('assistant.reset', {}),
   assistantSettings: (params: AssistantSettingsParams = {}) => call<AssistantSettings>('assistant.settings', params),
+  assistantAccount: (agent: string) => call<AssistantAccount>('assistant.account', { agent }),
   assistantHistory: (beforeSeq?: number, limit?: number) =>
     call<SessionHistory>('assistant.history', { before_seq: beforeSeq, limit }),
   runACPCancel: (runID: string, lease: SessionLease) =>
@@ -712,7 +709,7 @@ export const api = {
     call<{ run: Run }>('run.mode.switch', { run_id: runID, mode, ...lease }).then((r) => r.run),
   runClose: (runID: string, outcome: 'merged' | 'abandoned') =>
     call<{ run: Run }>('run.close', { run_id: runID, outcome }).then((r) => r.run),
-  runReview: (runID: string, action: 'complete' | 'later') =>
+  runReview: (runID: string, action: 'complete' | 'later' | 'not-yet') =>
     call<{ run: Run }>('run.review', { run_id: runID, action }).then((r) => r.run),
   runHandoff: (runID: string, toMemberID: string) =>
     call<unknown>('run.handoff', { run_id: runID, to_member_id: toMemberID }),
@@ -749,6 +746,8 @@ export const api = {
     control_session_id: string
     control_generation: number
   }) => call<RoomDecideResult>('run.room.decide', params),
+  runRoomResolve: (params: { message_id: string; outcome: RoomResolution }) =>
+    call<RoomResolveResult>('run.room.resolve', params),
   runEvidenceList: (params: {
     workspace_id: string
     run_id: string
@@ -791,6 +790,9 @@ export const api = {
    * in flight. Any member may read it; only an admin may call server.update. */
   serverUpdateStatus: (refresh?: boolean) =>
     call<ServerUpdateStatus>('server.update_status', refresh ? { refresh } : {}),
+  /** Super admin: with `dryRun`, what moving to `channel` would do, saving nothing. */
+  serverReleaseChannelSet: (channel: ReleaseChannel, dryRun = false) =>
+    call<ServerReleaseChannelSet>('server.release_channel_set', { channel, ...(dryRun ? { dry_run: true } : {}) }),
   /** Asks the server to update itself to the latest release now, at the
    * next idle moment, or to cancel the pending one. */
   serverUpdate: (when: ServerUpdateWhen) =>
@@ -804,9 +806,10 @@ export const api = {
   /** Admin only. Starts the install in the background; poll sysboxStatus. */
   sysboxInstall: () =>
     call<SysboxStatus>('server.sysbox.install'),
-  memberInvite: (ttlSeconds?: number) =>
+  memberInvite: (ttlSeconds?: number, workspaceIDs?: string[]) =>
     call<{ code: string; expires_at: string }>('member.invite', {
       ttl_seconds: ttlSeconds,
+      workspace_ids: workspaceIDs,
     }),
   memberApprove: (memberID: string) =>
     call<{ member: Member }>('member.approve', { member_id: memberID }).then(
@@ -862,6 +865,7 @@ export const api = {
     login?: string
     email?: string
     role: Member['role']
+    workspace_ids?: string[]
   }) =>
     call<InvitationResult>('member.invitation.create', params),
   memberInvitationRevoke: (invitationID: string) =>
@@ -874,14 +878,18 @@ export const api = {
     call<{ workspace: Workspace }>('workspace.add', params).then(
       (r) => r.workspace,
     ),
-  workspaceGet: (workspaceID: string) =>
-    call<{ workspace: Workspace }>('workspace.get', {
-      workspace_id: workspaceID,
-    }).then((r) => r.workspace),
   workspaceListFull: () =>
     call<{ workspaces: Workspace[] }>('workspace.list').then(
       (r) => r.workspaces,
     ),
+  workspaceAccessList: (workspaceID: string) =>
+    call<WorkspaceAccess>('workspace.access.list', { workspace_id: workspaceID }),
+  workspaceAccessGrant: (workspaceID: string, memberIDs: string[]) =>
+    call<unknown>('workspace.access.grant', { workspace_id: workspaceID, member_ids: memberIDs }),
+  workspaceAccessRevoke: (workspaceID: string, memberID: string) =>
+    call<unknown>('workspace.access.revoke', { workspace_id: workspaceID, member_id: memberID }),
+  workspaceOwnerSet: (workspaceID: string, memberID: string) =>
+    call<unknown>('workspace.owner.set', { workspace_id: workspaceID, member_id: memberID }),
   workspaceDelete: (workspaceID: string) =>
     call<{ ok: true }>('workspace.delete', { workspace_id: workspaceID }),
   workspaceSettings: (params: { workspace_id: string; steer_others?: string }) =>
@@ -1112,9 +1120,6 @@ export const api = {
   localUpdateApply: () => local<UpdateApplyResult>('update.apply'),
   /** Progress of a desktop-app rebuild started by update.apply. */
   localUpdateStatus: () => local<UpdateBuildStatus>('update.status'),
-  /** Which setup-capable agents this machine has on PATH, plus the
-   * linked repository folder when the gateway knows exactly one. */
-  envAgents: () => local<EnvAgentsResult>('env.agents'),
   terminalStatus: () => call<TerminalStatusResult>('terminal.status', {}),
   terminalHistory: (params: TerminalHistoryParams, signal?: AbortSignal) =>
     call<TerminalHistoryResult>('terminal.history', params, signal),

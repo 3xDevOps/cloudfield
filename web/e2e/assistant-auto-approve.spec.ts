@@ -12,7 +12,7 @@ test('auto-approval is turned on only after the warning and is stored on the ser
     alice.api.rpc<{ auto_approve: boolean; suggest_auto_approve: boolean; suggestion_off: boolean }>('assistant.settings', params)
 
   await page.goto(alice.url)
-  await page.getByRole('navigation', { name: 'Aether' }).getByRole('button', { name: 'Settings', exact: true }).click()
+  await page.getByRole('navigation', { name: 'Cloudfield' }).getByRole('button', { name: 'Settings', exact: true }).click()
   await page.getByRole('navigation', { name: 'Settings' }).getByRole('button', { name: 'Assistant', exact: true }).click()
   await expect(page.getByRole('heading', { level: 2, name: 'Assistant' })).toBeFocused()
   await expect(page).toHaveURL(/[?&]page=settings&id=assistant\b/)
@@ -23,7 +23,7 @@ test('auto-approval is turned on only after the warning and is stored on the ser
   await expect(scope).toContainText('Launching sessions, messaging and stopping your own sessions, saving your environment')
   await expect(scope).toContainText('Messaging or stopping another member’s session.')
   await expect(scope).toContainText('The assistant’s own shell and file tools')
-  expect(await settings({ suggestion: 'later' })).toEqual({ auto_approve: false, suggest_auto_approve: false, suggestion_off: false, share_view: true, preferences_enabled: true, temporary: false })
+  expect(await settings({ suggestion: 'later' })).toEqual({ auto_approve: false, suggest_auto_approve: false, suggestion_off: false, share_view: true, preferences_enabled: true, temporary: false, approval_chosen: true })
 
   await toggle.click()
   const dialog = page.getByRole('alertdialog', { name: 'Let the assistant act without asking?' })

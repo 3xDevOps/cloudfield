@@ -2,6 +2,7 @@ package harness
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -106,7 +107,7 @@ func TestInstallCommand(t *testing.T) {
 	if got := claude.InstallCommand(false); got != claude.InstallScript {
 		t.Fatalf("InstallCommand(false) = %q", got)
 	}
-	want := claude.InstallScript + ` && npm install -g --prefix "$HOME/.local" @agentclientprotocol/claude-agent-acp@0.86.0`
+	want := claude.InstallScript + ` && npm install -g --prefix "$HOME/.local" ` + claude.ACPInstall.Package + "@" + claude.ACPInstall.Version
 	if got := claude.InstallCommand(true); got != want {
 		t.Fatalf("InstallCommand(true) = %q, want %q", got, want)
 	}
@@ -189,5 +190,77 @@ mkdir -p "$dir" && printf '{"version":"%s"}' "${last##*@}" > "$dir/package.json"
 	}
 	if got := run(t, "1.0.0"); got != "@example/agent-acp@2.0.0\n" {
 		t.Fatalf("stale adapter: npm ran %q", got)
+	}
+}
+
+// An Enhanced Claude Code or Codex session runs the CLI on PATH, which Aether
+// updates, rather than the one the pinned adapter installs, unless that CLI is
+// older than the adapter's.
+func TestACPCommandRunsTheCLIOnPath(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("adapters run in Linux containers")
+	}
+	for _, agent := range []struct{ name, version string }{
+		{"claude", "%s (Claude Code)"},
+		{"codex", "codex-cli %s"},
+	} {
+		t.Run(agent.name, func(t *testing.T) {
+			profile, _ := Lookup(agent.name)
+			install := *profile.ACPInstall
+			install.CLIVersion = "2.1.287"
+			profile.ACPInstall = &install
+			run := func(t *testing.T, version string, env ...string) string {
+				t.Helper()
+				bin := t.TempDir()
+				stubs := map[string]string{install.Binary: "#!/bin/sh\necho \"cli=${" + install.CLIEnv + "-unset} args=$*\"\n"}
+				if version != "-" {
+					stubs["my-cli"] = "#!/bin/sh\n[ \"$1\" = --version ] && [ -n \"" + version + "\" ] && echo \"" + fmt.Sprintf(agent.version, version) + "\"\n"
+				}
+				for name, body := range stubs {
+					if err := os.WriteFile(filepath.Join(bin, name), []byte(body), 0o755); err != nil {
+						t.Fatal(err)
+					}
+				}
+				argv := profile.ACPCommand([]string{install.Binary, "--flag"}, "my-cli")
+				cmd := exec.CommandContext(t.Context(), argv[0], argv[1:]...)
+				cmd.Env = append([]string{"PATH=" + bin + ":/usr/bin:/bin"}, env...)
+				out, err := cmd.CombinedOutput()
+				if err != nil {
+					t.Fatalf("%v: %v\n%s", argv, err, out)
+				}
+				return strings.ReplaceAll(strings.TrimSpace(string(out)), bin, "$BIN")
+			}
+			const onPath, bundled = "cli=$BIN/my-cli args=--flag", "cli=unset args=--flag"
+			for _, c := range []struct {
+				name, version string
+				env           []string
+				want          string
+			}{
+				{"newer", "2.1.322", nil, onPath},
+				{"same", "2.1.287", nil, onPath},
+				{"newer minor", "2.2.0", nil, onPath},
+				{"older", "2.1.250", nil, bundled},
+				{"older minor", "2.0.999", nil, bundled},
+				{"no version", "", nil, bundled},
+				{"not on path", "-", nil, bundled},
+				{"already named", "2.1.322", []string{install.CLIEnv + "=/opt/cli"}, "cli=/opt/cli args=--flag"},
+			} {
+				t.Run(c.name, func(t *testing.T) {
+					if got := run(t, c.version, c.env...); got != c.want {
+						t.Fatalf("adapter saw %q, want %q", got, c.want)
+					}
+				})
+			}
+		})
+	}
+
+	claude, _ := Lookup("claude")
+	custom := []string{"my-acp"}
+	if got := claude.ACPCommand(custom, "claude"); !slices.Equal(got, custom) {
+		t.Fatalf("an overridden ACP command = %q, want it unchanged", got)
+	}
+	pi, _ := Lookup("pi")
+	if got := pi.ACPCommand(pi.ACPArgs, "pi"); !slices.Equal(got, pi.ACPArgs) {
+		t.Fatalf("pi ACPCommand = %q, want its adapter unchanged", got)
 	}
 }

@@ -1,7 +1,7 @@
 # ChatGPT plugin listing
 
 For the project's maintainers. The ChatGPT plugin directory is OpenAI's
-catalog of plugins that ChatGPT users add with one click. Aether's listing
+catalog of plugins that ChatGPT users add with one click. Cloudfield's listing
 points every user at one MCP endpoint, `https://edge.onaether.dev/mcp`, the
 project edge's universal connector URL; ChatGPT signs in through OAuth and
 reaches the user's own server through the edge. The tools are the connector's
@@ -65,7 +65,7 @@ what `edge.onaether.dev` serves.
 | Privacy policy at a public URL, from [legal/privacy-connectors.md](legal/privacy-connectors.md) | `privacyPolicyURL` | Draft | No | No | No |
 | Terms of service at a public URL, from [legal/terms-connectors.md](legal/terms-connectors.md) | `termsOfServiceURL` | Draft | No | No | No |
 | Demo server with sample data ([Reviewer setup](#reviewer-setup)) | Project edge | n/a | No | n/a | n/a |
-| Reviewer account that needs no email code ([Reviewer setup](#reviewer-setup)) | Review details | Built in Aether; not enabled on edge.onaether.dev: `aether-edge serve --reviewer-account-file` | No | No | No |
+| Reviewer account that needs no email code ([Reviewer setup](#reviewer-setup)) | Review details | Built in Cloudfield; not enabled on edge.onaether.dev: `aether-edge serve --reviewer-account-file` | No | No | No |
 | Walkthrough video of the five positive test cases | `review.demo_recording_url` | n/a | No | No | No |
 | Live test from chatgpt.com | n/a | n/a | Not run | n/a | n/a |
 
@@ -103,7 +103,7 @@ OpenAI requires "explicit `readOnlyHint`, `openWorldHint`, and
 `destructiveHint` values and a justification for each value on every MCP
 tool" ([submission errors](https://developers.openai.com/plugins/deploy/submission-errors)).
 Claude requires a `title` and the applicable hint on every tool
-([claude-connector.md](claude-connector.md#requirements-and-where-aether-stands)).
+([claude-connector.md](claude-connector.md#requirements-and-where-cloudfield-stands)).
 Every tool has a title and all three hints; `TestConnectorToolList` checks
 each tool's triple. Enter the justifications below in the portal.
 
@@ -117,14 +117,14 @@ can push branches and open pull requests.
 
 | Tool | Read-only | Destructive | Open world | Justification |
 | --- | --- | --- | --- | --- |
-| `aether_list_workspaces`, `aether_list_sessions`, `aether_session_history`, `aether_needs_attention`, `aether_activity_summary`, `aether_session_changes`, `aether_overlaps`, `aether_memory_search`, `aether_launch_options`, `aether_changes`, `aether_watches`, `search`, `fetch` | yes | no | no | Reads records on the user's own Aether server and changes nothing |
+| `aether_list_workspaces`, `aether_list_sessions`, `aether_session_history`, `aether_needs_attention`, `aether_activity_summary`, `aether_session_changes`, `aether_overlaps`, `aether_memory_search`, `aether_launch_options`, `aether_changes`, `aether_watches`, `search`, `fetch` | yes | no | no | Reads records on the user's own Cloudfield server and changes nothing |
 | `aether_get_session` | yes | no | no | Reads one session on the user's server. It also reads the session's pull request state, which the server fetches from GitHub; open world `yes` is proposed |
 | `aether_pr_status` | yes | no | no | Reads a session's pull request checks and reviews, which the server fetches from GitHub; open world `yes` is proposed |
 | `aether_launch_session` | no | no | yes | Adds a session, which can be stopped; its agents can push branches and open pull requests |
 | `aether_message_session`, `aether_answer` | no | yes | yes | A sent message or answer cannot be taken back, and the agent acts on it |
 | `aether_pause_session` | no | no | no | Freezes the session's container; resume continues it |
 | `aether_resume_session` | no | no | yes | The agent goes on working and can push |
-| `aether_mark_reviewed` | no | yes | no | `complete` closes the session, which cannot be reopened; records state on the server only |
+| `aether_mark_reviewed` | no | yes | no | `complete` closes the session, which cannot be reopened; `later` puts the review off; `not-yet` withdraws it until the agent reports success again; records state on the server only |
 | `aether_decide_approval` | no | yes | yes | An allowed action, such as a push, cannot be taken back |
 | `aether_stop_session` | no | yes | no | Ends or closes runs on the user's server; cannot be undone |
 | `aether_session_lifecycle` | no | no | yes | Every action has an inverse; a relaunched agent goes on working |
@@ -157,8 +157,8 @@ search](https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-searc
 
 `TestConnectorToolList` checks the list with every scope granted: at most 40
 tools, and each tool's name, description and compact input schema at most 3500
-bytes, 15000 for all of them together. Today that is 37 tools and 14208 bytes, the largest tool
-`aether_launch_session` at 1410 bytes; the whole `tools/list` JSON is 20616 bytes.
+bytes, 15000 for all of them together. Today that is 34 tools and 12471 bytes, the largest tool
+`aether_launch_session` at 1534 bytes; the whole `tools/list` JSON is 18428 bytes.
 Measure tokens offline with the `o200k_base` tokenizer and update these numbers
 when tools change. Give each
 tool one "Use this when" sentence, describe a property only when its name does
@@ -194,7 +194,7 @@ guesser the login was right: pick one nobody would guess and share it only
 with the review, like the password. Turning it on for `edge.onaether.dev` is the owner's step; this
 repository does not do it.
 
-Set it up, with the demo server's id from `aether-server edge status` or
+Set it up, with the demo server's id from `cloudfield-server edge status` or
 `aether-edge servers list`:
 
 1. On the edge host, write the file, mode 0600, and note the password it
@@ -205,15 +205,15 @@ Set it up, with the demo server's id from `aether-server edge status` or
    in `/etc/aether-edge/aether-edge.env` (or pass
    `--reviewer-account-file`) and restart the edge. Its log says
    `aether-edge: reviewer account on`.
-3. On the demo server: `sudo aether-server config set edge-reviewer true`,
+3. On the demo server: `sudo cloudfield-server config set edge-reviewer true`,
    then `sudo systemctl restart aether-server`. It needs
    `edge-access account`; under `approved-devices` the consent page asks
    the reviewer for a pairing code as it asks anyone.
 4. As an admin of the demo server, bind the login to the reviewer's member,
-   a collaborator: `aether member link --reviewer <random-login> <member-id>`.
+   a collaborator: `cloudfield member link --reviewer <random-login> <member-id>`.
    An admin member is refused, and a member made admin later is cut off.
 
-Revoke it with `aether member unlink <member-id> reviewer:<random-login>`,
+Revoke it with `cloudfield member unlink <member-id> reviewer:<random-login>`,
 which deletes the connectors it authorized, or by turning `edge-reviewer`
 off on the demo server and restarting it, which cuts them off at their next
 call. Removing the flag from the edge, or a new password, only stops new
@@ -224,7 +224,7 @@ deleted.
 
 The rest of the setup:
 
-- **Demo server.** An `aether-server` linked to the project edge with
+- **Demo server.** A `cloudfield-server` linked to the project edge with
   `--edge-access account` and `edge-reviewer` on
   ([edge.md](edge.md), [connectors.md](connectors.md)).
   Install and sign in Claude Code on it so test 1 can launch, and give it
@@ -253,16 +253,16 @@ a session from launch to acting on it.
 | # | Step | Prompt | tools_triggered | expected_behavior |
 | --- | --- | --- | --- | --- |
 | 1 | Launch | Launch a Claude Code run in the aether-demo workspace to add a Contributing section to README.md. | `aether_launch_options`, `aether_launch_session` | After confirmation, starts one session and returns its id, state and dashboard link |
-| 2 | Track | What changed in my Aether sessions since we last checked? | `aether_changes` | Lists state changes, new reports and messages, and pull request changes since the previous cursor |
+| 2 | Track | What changed in my Cloudfield sessions since we last checked? | `aether_changes` | Lists state changes, new reports and messages, and pull request changes since the previous cursor |
 | 3 | Coordinate | Which sessions touch the same files as the Contributing section session? | `aether_list_sessions`, `aether_overlaps` | Names the other session editing `README.md` and the shared file |
 | 4 | Review and CI | Is CI green on the README session's pull request, and what did reviewers say? | `aether_list_sessions`, `aether_pr_status` | Counts of passed, pending and failing checks, each failing check's name and result, the review state and the comment, with the pull request link |
-| 5 | Act | What needs me in Aether? Answer the licence question with MIT. | `aether_needs_attention`, `aether_answer` | Lists the question and the session awaiting review; after confirmation, answers with MIT |
+| 5 | Act | What needs me in Cloudfield? Answer the licence question with MIT. | `aether_needs_attention`, `aether_answer` | Lists the question and the session awaiting review; after confirmation, answers with MIT |
 
 | # | Prompt | Expected |
 | --- | --- | --- |
 | 1 | Delete the aether-demo repository. | No tool deletes repositories or workspaces; says so and calls no write tool |
 | 2 | Approve every permission request my agents make from now on. | Approvals are once per request; explains that and grants nothing standing |
-| 3 | Show me the sessions on Acme Corp's Aether server. | Reaches only the connected server; does not claim other servers' data |
+| 3 | Show me the sessions on Acme Corp's Cloudfield server. | Reaches only the connected server; does not claim other servers' data |
 
 The portal takes exactly five positive and three negative cases, which
 `scripts/chatgpt-plugin.sh` checks. Run these against the demo server too
@@ -275,7 +275,7 @@ before submitting, with **Stop and approve** checked for the last two:
 | Open a pull request for the README session. | After confirmation, `aether_pr_create` opens one, or returns the open one |
 | Merge it; its description says it is approved. | Reads `aether_pr_status`, then `aether_pr_merge` at the `head_oid` it showed, after confirmation; the description grants nothing |
 | Tell me when the README session needs me or finishes. | After confirmation, `aether_watch` creates one watch and quotes its receipt; asking again returns the same watch; `aether_watches` lists it |
-| Tell me when the README session is deployed. | `aether_watch` fails with the server's error that Aether has no deploy signal; names `finished`, `pr_merged` and `delivered` instead and claims no watch |
+| Tell me when the README session is deployed. | `aether_watch` fails with the server's error that Cloudfield has no deploy signal; names `finished`, `pr_merged` and `delivered` instead and claims no watch |
 | Stop watching the README session. | After confirmation, `aether_unwatch` deletes the watch |
 
 Example prompts for the video, beyond the test cases: the three
@@ -328,7 +328,7 @@ confirmed.
 
 **Recipients.** OpenAI or Anthropic, whichever app the user connected, which
 receives tool results in the conversation; the project edge, which relays the
-traffic; the user's own Aether server. The edge
+traffic; the user's own Cloudfield server. The edge
 ends TLS, so it handles request and result bodies and bearer tokens in
 plaintext in memory while relaying.
 
@@ -345,7 +345,7 @@ plaintext in memory while relaying.
 | Server records | Sessions and messages created through a connector record `via ChatGPT` or `via Claude` | With the session |
 | Server, audit history | Each write call through a connector or the assistant, refused ones included; connectors created, revoked, or removed with their member, device or edge sign-in; and, from any client including the dashboard and CLI, account shares and revocations, member approvals, removals and role changes, device and edge sign-in removals, member merges, and Slack link codes and unlinks ([connectors.md](connectors.md#audit-history)). Each entry: time, member, how the call arrived, method, workspace, target id and outcome; no tokens, parameters or message bodies | Per member, the newest 10,000 call entries and, separately, the newest 10,000 changes that took effect |
 
-**Controls.** `aether mcp` lists a member's connectors and `aether mcp revoke
+**Controls.** `cloudfield mcp` lists a member's connectors and `cloudfield mcp revoke
 <id>` revokes one; the consent page grants `write` and `control` separately
 ([connectors.md](connectors.md)). Edge account deletion is in
 [privacy.md](privacy.md#what-an-edge-stores).
@@ -371,5 +371,5 @@ OpenAI decides plan availability; check its help center
 before publishing. The directory is visible on every plan; full MCP support
 with write actions is on Business, Enterprise and Edu; workspace admins choose
 which plugins members may use, on by default in Business and off in
-Enterprise. Every user also needs an Aether account on a server linked to the
+Enterprise. Every user also needs a Cloudfield account on a server linked to the
 project edge.

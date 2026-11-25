@@ -137,17 +137,25 @@ func TestIntegrationAssistantWatchesRun(t *testing.T) {
 		p.MemberID != env.member.ID || p.WatchID != watchID || !strings.Contains(p.Title, "needs your attention") || p.Body != "pick a database" {
 		t.Fatalf("needs-attention notice = %+v on %+v", p, attention)
 	}
+	// The notice is announced before its assistant delivery is recorded;
+	// the record's watch.changed follows.
 	var got protocol.WatchGetResult
-	if perr := env.call(protocol.MethodWatchGet, protocol.WatchIDParams{WatchID: watchID}, &got); perr != nil {
-		t.Fatalf("watch.get: %v", perr)
-	}
-	if len(got.Notifications) != 1 || got.Notifications[0].Condition != protocol.WatchNeedsYou || got.Notifications[0].Body != "pick a database" {
-		t.Fatalf("watch notifications = %+v, want the one need", got.Notifications)
-	}
 	statuses := map[string]string{}
-	for _, d := range got.Notifications[0].Deliveries {
-		statuses[d.Channel] = d.Status
-	}
+	waitEvent(t, sub, &seen, "the assistant delivery record", func(e events.Event) bool {
+		if p, ok := e.Payload.(events.WatchChangedPayload); !ok || p.WatchID != watchID {
+			return false
+		}
+		if perr := env.call(protocol.MethodWatchGet, protocol.WatchIDParams{WatchID: watchID}, &got); perr != nil {
+			t.Fatalf("watch.get: %v", perr)
+		}
+		if len(got.Notifications) != 1 || got.Notifications[0].Condition != protocol.WatchNeedsYou || got.Notifications[0].Body != "pick a database" {
+			t.Fatalf("watch notifications = %+v, want the one need", got.Notifications)
+		}
+		for _, d := range got.Notifications[0].Deliveries {
+			statuses[d.Channel] = d.Status
+		}
+		return statuses[protocol.WatchChannelAssistant] != protocol.WatchStatusPending
+	})
 	// The owner has no push device, so nothing pushed the need; skipped is
 	// only for a push the run's own notification already made.
 	if statuses[protocol.WatchChannelInApp] != protocol.WatchStatusDelivered || statuses[protocol.WatchChannelAssistant] != protocol.WatchStatusDelivered ||
@@ -202,15 +210,16 @@ func TestIntegrationAssistantWatchesRun(t *testing.T) {
 }
 
 // seedAssistantWorkspace creates a workspace with one commit on main, pushed
-// by a second admin.
+// by a second admin who owns it.
 func seedAssistantWorkspace(t *testing.T, ctx context.Context, env *assistantEnv, name string) *domain.Workspace {
 	t.Helper()
 	store := env.srv.Store()
 	pusherPath, pusher := writeClientKey(t)
-	if err := store.CreateMember(ctx, &domain.Member{DisplayName: "Pusher", PublicKey: string(ssh.MarshalAuthorizedKey(pusher.PublicKey())), Color: "#3cb44b", Role: domain.RoleAdmin}); err != nil {
+	owner := &domain.Member{DisplayName: "Pusher", PublicKey: string(ssh.MarshalAuthorizedKey(pusher.PublicKey())), Color: "#3cb44b", Role: domain.RoleAdmin}
+	if err := store.CreateMember(ctx, owner); err != nil {
 		t.Fatal(err)
 	}
-	ws := &domain.Workspace{Name: name, BaseBranch: domain.DefaultBaseBranch}
+	ws := &domain.Workspace{Name: name, BaseBranch: domain.DefaultBaseBranch, OwnerID: owner.ID}
 	if err := store.CreateWorkspace(ctx, ws); err != nil {
 		t.Fatal(err)
 	}

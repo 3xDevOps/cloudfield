@@ -6,7 +6,7 @@ import { configPrompt } from '@/lib/config-prompt'
 import { cn, focusRing } from '@/lib/utils'
 import { useStore } from '@/store'
 
-const quickstart = 'https://github.com/3xDevOps/Aether/blob/main/docs/quickstart.md'
+const quickstart = 'https://github.com/3xDevOps/cloudfield/blob/main/docs/quickstart.md'
 
 function Quickstart({ to, children }: { to: string; children: ReactNode }) {
   return (
@@ -24,13 +24,13 @@ export function ConfigPrompt() {
       <p>
         Paste this prompt into Claude Code, Codex, opencode, or another agent on the computer that has your
         configuration; it picks what to upload, asks you first, and uploads with the{' '}
-        <code className="font-code">aether</code> CLI.
+        <code className="font-code">cloudfield</code> CLI.
       </p>
       <p>
-        That computer needs the <code className="font-code">aether</code> CLI,{' '}
+        That computer needs the <code className="font-code">cloudfield</code> CLI,{' '}
         <Quickstart to="1-install">installed</Quickstart> and{' '}
         <Quickstart to="3-link-from-your-machine">linked to this server</Quickstart> with{' '}
-        <code className="font-code">aether link</code>.
+        <code className="font-code">cloudfield link</code>.
       </p>
       <CodeBlock
         ref={prompt}

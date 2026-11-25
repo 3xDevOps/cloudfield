@@ -1,11 +1,22 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { onTestFinished } from 'vitest'
 import { AppShell } from '@/components/shell/app-shell'
+import { SidebarRuns } from '@/components/shell/sidebar-runs'
+import { AgentGlyph } from '@/components/ui/agent-glyph'
+import type * as agentGlyph from '@/components/ui/agent-glyph'
+import { api } from '@/lib/api'
+import { useAttention } from '@/routes/needs-you/attention'
 import { useStore } from '@/store'
 import { toRecord } from '@/store/runs'
 import { hydrate } from '@/store/sync'
 import { alice, bob, fakeApi, otherWorkspace, run, updateStatus, vera, workspace } from '@/test/fixtures'
 import { atViewport } from '@/test/viewport'
+
+vi.mock('@/components/ui/agent-glyph', async (importOriginal) => {
+  const actual = await importOriginal<typeof agentGlyph>()
+  return { ...actual, AgentGlyph: vi.fn(actual.AgentGlyph) }
+})
 
 Element.prototype.scrollIntoView = vi.fn()
 
@@ -40,7 +51,7 @@ beforeEach(async () => {
   })
 })
 
-const nav = () => within(screen.getByRole('navigation', { name: 'Aether' }))
+const nav = () => within(screen.getByRole('navigation', { name: 'Cloudfield' }))
 // jsdom counts a header inside main as a banner; a browser does not.
 const topBanners = () => screen.queryAllByRole('banner').filter((header) => !header.closest('main'))
 const runList = () => within(nav().getByRole('region', { name: 'Sessions' }))
@@ -113,6 +124,26 @@ describe('run rows', () => {
     render(<AppShell />)
 
     expect(runList().getAllByRole('button', { name: /^Needs you · question/ })).toHaveLength(7)
+  })
+
+  it('shows three finished sessions awaiting review, names their state, and offers the rest', async () => {
+    const finished = Array.from({ length: 5 }, (_, i) =>
+      run({ id: `run_done_${i}`, task: `finished ${i}`, status: 'needs-attention', state: 'finished', review: 'ready' }))
+    useStore.setState({ runs: Object.fromEntries(finished.map((r) => [r.id, toRecord(r)])) })
+    render(<AppShell />)
+
+    runList().getByRole('heading', { name: /^Finished: review/ })
+    expect(runList().getAllByRole('button', { name: /^Finished: review · finished/ })).toHaveLength(3)
+    await userEvent.click(runList().getByRole('button', { name: '2 more' }))
+    expect(runList().getAllByRole('button', { name: /^Finished: review · finished/ })).toHaveLength(5)
+  })
+
+  it('marks a protected session row with a lock and no other', () => {
+    const lock = { name: 'Protected: only its owner or an admin can steer, message or close it' }
+    useStore.setState({ runs: { run_1: toRecord(run({ protected: true })), run_2: toRecord(run({ id: 'run_2', task: 'open session' })) } })
+    render(<AppShell />)
+
+    expect(runList().getAllByRole('img', lock)).toHaveLength(1)
   })
 
   it('sorts an Enhanced run by what it waits on', () => {
@@ -193,6 +224,7 @@ describe('run rows', () => {
       }
     }
 
+    fireEvent.click(runList().getByRole('button', { name: '1 finished' }))
     expect(shown('Failed', 'bump the linter')).toEqual({ unopened: true, muted: false })
     expect(shown('Completed', 'port the parser')).toEqual({ unopened: true, muted: false })
     expect(shown('Merged', 'tidy the readme')).toEqual({ unopened: false, muted: true })
@@ -200,6 +232,99 @@ describe('run rows', () => {
     act(() => useStore.getState().applyFinishOpened('run_5'))
 
     expect(shown('Failed', 'bump the linter')).toEqual({ unopened: false, muted: true })
+  })
+
+  it('folds a session’s subsessions independently and keeps Needs you subsessions visible', () => {
+    useStore.setState((s) => ({
+      runs: {
+        ...s.runs,
+        run_parent: toRecord(run({ id: 'run_parent', task: 'coordinate' })),
+        run_child: toRecord(run({ id: 'run_child', task: 'running check', parent_run_id: 'run_parent' })),
+        run_waiting: toRecord(run({ id: 'run_waiting', task: 'question for you', status: 'needs-attention', state: 'needs-you', reason: 'needs input: Which schema?', parent_run_id: 'run_parent' })),
+      },
+    }))
+    render(<AppShell />)
+
+    const disclosure = runList().getByRole('button', { name: 'Collapse 1 subsession' })
+    expect(disclosure.getAttribute('aria-expanded')).toBe('true')
+    expect(disclosure.querySelector('svg')?.getAttribute('class')).toContain('rotate-90')
+    fireEvent.click(disclosure)
+    expect(disclosure.getAttribute('aria-expanded')).toBe('false')
+    expect(runList().queryByText('running check')).toBeNull()
+    expect(runList().getByText('question for you')).toBeDefined()
+    fireEvent.click(runList().getByRole('button', { name: 'Expand 1 subsession' }))
+    expect(runList().getByText('running check')).toBeDefined()
+  })
+
+  it('re-renders only the row whose agent used a tool, not a session with subsessions', () => {
+    useStore.setState((s) => ({
+      runs: {
+        ...s.runs,
+        run_parent: toRecord(run({ id: 'run_parent', task: 'coordinate', harness: 'codex' })),
+        run_child: toRecord(run({ id: 'run_child', task: 'running check', parent_run_id: 'run_parent' })),
+      },
+    }))
+    render(<SidebarRuns />)
+    expect(screen.getByRole('button', { name: 'Collapse 1 subsession' })).toBeDefined()
+    vi.mocked(AgentGlyph).mockClear()
+
+    act(() => useStore.getState().applyAgentEvent('run_1', { kind: 'tool_call', tool: 'Read', tool_use_id: 'tool_1' }, new Date().toISOString()))
+
+    expect(vi.mocked(AgentGlyph).mock.calls.map(([props]) => props.agent)).toEqual(['claude'])
+  })
+
+  it('leaves finished subsessions out until asked, and keeps a failed one listed', () => {
+    const child = (id: string, task: string, over: Parameters<typeof run>[0]) =>
+      toRecord(run({ id, task, parent_run_id: 'run_parent', ...over }))
+    useStore.setState((s) => ({
+      runs: {
+        ...s.runs,
+        run_parent: toRecord(run({ id: 'run_parent', task: 'coordinate' })),
+        run_reported: child('run_reported', 'reported check', { status: 'needs-attention', state: 'finished', review: 'ready' }),
+        run_stopped: child('run_stopped', 'stopped check', { status: 'completed', reason: 'stopped by parent session run_parent' }),
+        run_failed: child('run_failed', 'failed check', { status: 'needs-attention', state: 'failed', outcome_unseen: true }),
+      },
+    }))
+    render(<AppShell />)
+
+    expect(runList().getByRole('button', { name: /^Working · coordinate · 3 subsessions · 1 failed · 2 done · / })).toBeDefined()
+    expect(runList().getByText('failed check')).toBeDefined()
+    expect(runList().queryByText('reported check')).toBeNull()
+    expect(runList().queryByText('stopped check')).toBeNull()
+    const finished = runList().getByRole('button', { name: '2 finished' })
+    expect(finished.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(finished)
+    expect(runList().getByText('reported check')).toBeDefined()
+    expect(runList().getByText('stopped check')).toBeDefined()
+    fireEvent.click(runList().getByRole('button', { name: 'Hide finished' }))
+    expect(runList().queryByText('reported check')).toBeNull()
+
+    act(() => useStore.getState().navigate('run', { runId: 'run_stopped' }))
+    expect(runList().getByRole('button', { name: /stopped check/ }).getAttribute('aria-current')).toBe('page')
+    expect(runList().queryByText('reported check')).toBeNull()
+    expect(runList().getByRole('button', { name: '2 finished' })).toBeDefined()
+
+    fireEvent.click(runList().getByRole('button', { name: 'Collapse 1 subsession' }))
+    expect(runList().queryByRole('button', { name: '2 finished' })).toBeNull()
+    expect(runList().queryByText('failed check')).toBeNull()
+  })
+
+  it('opens and turns the subsession arrow when the first child arrives', async () => {
+    useStore.setState((s) => ({ runs: { ...s.runs, run_parent: toRecord(run({ id: 'run_parent', task: 'coordinate' })) } }))
+    render(<AppShell />)
+    expect(runList().queryByRole('button', { name: /subsession/ })).toBeNull()
+
+    act(() => useStore.setState((s) => ({
+      runs: {
+        ...s.runs,
+        run_child: toRecord(run({ id: 'run_child', task: 'new check', parent_run_id: 'run_parent' })),
+      },
+    })))
+
+    const disclosure = await runList().findByRole('button', { name: 'Collapse 1 subsession' })
+    expect(disclosure.getAttribute('aria-expanded')).toBe('true')
+    expect(disclosure.querySelector('svg')?.getAttribute('class')).toContain('rotate-90')
+    expect(runList().getByText('new check')).toBeDefined()
   })
 
   describe('people', () => {
@@ -406,10 +531,30 @@ describe('run rows', () => {
     expect(rows[1].tabIndex).toBe(-1)
   })
 
-  it('opens what a Needs you row waits on, not always its terminal', () => {
+  it('opens a Needs you row on the last chosen view', () => {
+    useStore.setState({ runViewMemory: { run_3: 'session' } })
     render(<AppShell />)
     fireEvent.click(runList().getByRole('button', { name: /^Failed · docs-site · ship the invoice export/ }))
-    expect(useStore.getState().route).toEqual({ name: 'run', params: { runId: 'run_3', view: 'changes' } })
+    expect(useStore.getState().shownRunView).toEqual({ runId: 'run_3', view: 'session' })
+  })
+
+  it('replies without making Session the view the session reopens on', () => {
+    useStore.setState({ runViewMemory: { run_2: 'changes' } })
+    render(<AppShell />)
+    const row = runList().getByRole('button', { name: /^Needs you · answer the schema question/ })
+    fireEvent.click(within(row.closest('[data-slot="list-row"]') as HTMLElement).getByRole('button', { name: 'Reply' }))
+    expect(useStore.getState().runViewMemory.run_2).toBe('changes')
+    useStore.setState({ runViewMemory: {} })
+  })
+
+  it('reopens a disconnected session on the view the member chose', () => {
+    useStore.getState().upsertRun(run({ id: 'run_5', task: 'lost its agent', status: 'needs-attention', state: 'disconnected' }))
+    act(() => useStore.getState().navigate('run', { runId: 'run_5', view: 'changes' }))
+    render(<AppShell />)
+    fireEvent.click(runList().getByRole('button', { name: /lost its agent/ }))
+    expect(useStore.getState().shownRunView).toEqual({ runId: 'run_5', view: 'changes' })
+    expect(useStore.getState().runViewMemory.run_5).toBe('changes')
+    useStore.setState({ runViewMemory: {} })
   })
 
   it('walks on from the open run when focus is outside the list', () => {
@@ -442,10 +587,38 @@ describe('run rows', () => {
     expect(useStore.getState().mineOnly).toBe(true)
     expect(runList().getByText('answer the schema question')).toBeDefined()
   })
+
+  it('keeps Mine available when the filter removes the Working group', () => {
+    useStore.setState({
+      mineOnly: true,
+      runs: { teammate: toRecord(run({ id: 'teammate', task: 'teammate session', member_id: bob.id, status: 'merged' })) },
+    })
+    render(<AppShell />)
+
+    expect(runList().queryByRole('heading', { name: /Working/ })).toBeNull()
+    fireEvent.click(runList().getByRole('button', { name: 'Mine' }))
+
+    expect(useStore.getState().mineOnly).toBe(false)
+    expect(runList().getByText('teammate session')).toBeDefined()
+  })
+
+  it('says when Mine hides every session and keeps it available', () => {
+    useStore.setState({ runs: {}, mineOnly: true })
+    render(<AppShell />)
+    expect(runList().getByText('No sessions yet.')).toBeDefined()
+
+    act(() => useStore.setState({
+      runs: { teammate: toRecord(run({ id: 'teammate', task: 'teammate session', member_id: bob.id, status: 'merged' })) },
+    }))
+    expect(runList().getByText('No sessions of yours.')).toBeDefined()
+    fireEvent.click(runList().getByRole('button', { name: 'Mine' }))
+
+    expect(useStore.getState().mineOnly).toBe(false)
+  })
 })
 
 describe('navigation rows', () => {
-  it('marks the open page and lists Members for an admin only', () => {
+  it('marks the open page and keeps Manage workspaces, Members and Settings at the foot for every role', () => {
     useStore.setState((s) => ({ info: s.info && { ...s.info, member: { ...s.info.member, role: 'collaborator' } } }))
     render(<AppShell />)
 
@@ -454,10 +627,11 @@ describe('navigation rows', () => {
     expect(useStore.getState().route.name).toBe('environment')
     expect(navigation.getByRole('button', { name: 'Environment' }).getAttribute('aria-current')).toBe('page')
     expect(navigation.getByRole('button', { name: 'Board' }).getAttribute('aria-current')).toBeNull()
-    expect(nav().queryByRole('button', { name: 'Members' })).toBeNull()
+    const foot = ['Manage workspaces', 'Members', 'Settings']
+    expect(foot.map((name) => nav().getByRole('button', { name }).textContent)).toEqual(foot)
 
-    act(() => useStore.setState((s) => ({ info: s.info && { ...s.info, member: { ...s.info.member, role: 'admin' } } })))
-    expect(nav().getByRole('button', { name: 'Members' })).toBeDefined()
+    act(() => useStore.getState().navigate('workspace', { workspaceId: useStore.getState().activeWorkspace }))
+    expect(nav().getByRole('button', { name: 'Manage workspaces' }).getAttribute('aria-current')).toBe('page')
   })
 
   it('draws the selection beside the list, so the overflow measuring still counts only items', () => {
@@ -490,14 +664,11 @@ describe('workspace switcher', () => {
     expect(useStore.getState().route.name).toBe('overview')
   })
 
-  it('opens the active workspace at its Environment section', async () => {
+  it('opens the active workspace settings', async () => {
     render(<AppShell />)
     fireEvent.keyDown(nav().getByRole('button', { name: /^Workspace:/ }), { key: 'Enter' })
-    fireEvent.click(await screen.findByRole('menuitem', { name: 'Environment' }))
-    expect(useStore.getState().route).toEqual({
-      name: 'workspace',
-      params: { workspaceId: useStore.getState().activeWorkspace, section: 'environment' },
-    })
+    fireEvent.click(await screen.findByRole('menuitem', { name: 'Workspace settings' }))
+    expect(useStore.getState().route).toEqual({ name: 'workspace', params: { workspaceId: useStore.getState().activeWorkspace } })
   })
 })
 
@@ -513,10 +684,10 @@ describe('sidebar visibility', () => {
     expect(useStore.getState().sidebarCollapsed).toBe(false)
 
     fireEvent.keyDown(window, { key: 'b', ctrlKey: true })
-    expect(screen.queryByRole('navigation', { name: 'Aether' })).toBeNull()
+    expect(screen.queryByRole('navigation', { name: 'Cloudfield' })).toBeNull()
 
     fireEvent.click(within(screen.getByRole('main')).getByRole('button', { name: 'Open sidebar' }))
-    expect(screen.getByRole('navigation', { name: 'Aether' })).toBeDefined()
+    expect(screen.getByRole('navigation', { name: 'Cloudfield' })).toBeDefined()
   })
 })
 
@@ -562,30 +733,52 @@ describe('update notice and footer', () => {
 })
 
 describe('phone shell', () => {
-  it('opens the drawer from the top bar and closes it on navigation, focusing the view', async () => {
+  it('opens More from the tab bar and closes it on navigation, focusing the view', async () => {
     atViewport(390, { pointer: 'coarse' })
     render(<AppShell />)
 
-    expect(screen.queryByRole('navigation', { name: 'Aether' })).toBeNull()
-    const banner = within(topBanners()[0]!)
-    fireEvent.click(banner.getByRole('button', { name: 'Open sidebar, 2 sessions need you' }))
+    expect(screen.queryByRole('navigation', { name: 'Cloudfield' })).toBeNull()
+    const tabs = within(screen.getByRole('navigation', { name: 'Main navigation' }))
+    fireEvent.click(tabs.getByRole('button', { name: 'More pages' }))
 
-    const drawer = within(await screen.findByRole('dialog', { name: 'Aether' }))
-    fireEvent.click(drawer.getByRole('button', { name: 'Settings' }))
+    const more = within(await screen.findByRole('dialog', { name: 'More' }))
+    fireEvent.click(more.getByRole('button', { name: 'Settings' }))
 
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Aether' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'More' })).toBeNull())
     await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('heading', { level: 1, name: 'Settings' })))
   })
 
-  it('titles a run page "Run" and shrinks New run to an icon there', () => {
+  it('opens a run page full screen, over the top bar and the tab bar', async () => {
     atViewport(390, { pointer: 'coarse' })
     useStore.setState({ route: { name: 'run', params: { runId: 'run_2' } } })
     render(<AppShell />)
 
-    const banner = within(topBanners()[0]!)
-    expect(banner.getByText('Session')).toBeDefined()
-    expect(banner.queryByText('answer the schema question')).toBeNull()
-    expect(banner.getByRole('button', { name: 'New session' }).textContent).toBe('')
+    expect(await screen.findByRole('button', { name: 'Back' })).toBeDefined()
+    expect(screen.queryByRole('navigation', { name: 'Main navigation' })).toBeNull()
+    expect(topBanners()).toHaveLength(0)
+  })
+
+  it('counts what asks the viewer on the Needs you tab, never a finished session', async () => {
+    atViewport(390, { pointer: 'coarse' })
+    const item = { workspace_id: workspace.id, harness: 'claude', reason: '', since: '2026-08-14T10:02:00Z' }
+    const spy = vi.spyOn(api, 'attentionList').mockResolvedValue({ items: [
+      { ...item, kind: 'ready', run_id: 'run_1', title: 'finished one' },
+      { ...item, kind: 'failed', run_id: 'run_2', title: 'failed one' },
+      { ...item, kind: 'permission', run_id: 'run_3', title: 'asks one' },
+    ] })
+    onTestFinished(() => {
+      spy.mockRestore()
+      useAttention.setState({ items: null })
+    })
+    useStore.setState({ route: { name: 'needs-you', params: {} } })
+    render(<AppShell />)
+
+    const tabs = within(screen.getByRole('navigation', { name: 'Main navigation' }))
+    expect(await tabs.findByRole('button', { name: 'Needs you, 2' })).toBeDefined()
+    const cards = within(screen.getByRole('list', { name: 'Needs you' }))
+    expect(cards.getAllByRole('group').map((card) => card.getAttribute('aria-label'))).toEqual(['asks one', 'failed one'])
+    const finished = within(screen.getByRole('region', { name: /^Finished: review the result/ }))
+    expect(finished.getByRole('button', { name: /finished one/ })).toBeDefined()
   })
 })
 

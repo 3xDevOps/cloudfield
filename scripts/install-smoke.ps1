@@ -36,14 +36,15 @@ $installer = Join-Path $PSScriptRoot 'install.ps1'
 $root = Join-Path ([IO.Path]::GetTempPath()) ('Aether smoke & ' + [guid]::NewGuid().ToString('N'))
 $programs = [Environment]::GetFolderPath([Environment+SpecialFolder]::Programs, [Environment+SpecialFolderOption]::DoNotVerify)
 if ([string]::IsNullOrWhiteSpace($programs)) { throw 'The current-user Programs Known Folder could not be resolved.' }
-$shortcut = Join-Path $programs 'Aether.lnk'
-$shortcutBackup = Join-Path $root 'Aether.lnk.backup'
+$shortcut = Join-Path $programs 'Cloudfield.lnk'
+$shortcutBackup = Join-Path $root 'Cloudfield.lnk.backup'
 $shortcutCaptured = $false
 $shortcutRestored = $true
 $hadShortcut = $false
 $variables = @('LOCALAPPDATA', 'PATH', 'AETHER_BIN',
     'AETHER_BASE_URL', 'AETHER_REPO', 'AETHER_VERSION', 'AETHER_ROLE', 'AETHER_BIN_DIR',
     'AETHER_CONFIG_DIR', 'AETHER_NO_UPDATE_CHECK', 'npm_config_cache',
+    'CLOUDFIELD_BIN', 'CLOUDFIELD_BASE_URL', 'CLOUDFIELD_REPO', 'CLOUDFIELD_VERSION', 'CLOUDFIELD_ROLE', 'CLOUDFIELD_BIN_DIR', 'CLOUDFIELD_CONFIG_DIR', 'CLOUDFIELD_NO_UPDATE_CHECK',
     'ELECTRON_CACHE', 'ELECTRON_BUILDER_CACHE')
 $saved = @{}
 foreach ($name in $variables) { $saved[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }
@@ -107,7 +108,7 @@ function Write-ShellDiagnostics {
         Write-Host "Explorer: PID=$($explorer.Id); SessionId=$($explorer.SessionId); MainWindowHandle=$($explorer.MainWindowHandle)"
     }
     Write-Host "Shell paths: LOCALAPPDATA=$env:LOCALAPPDATA; Programs=$programs; Target=$desktop; FixtureRoot=$root"
-    Write-Host "AppsFolder: Count=$catalogueCount; AetherCandidateCount=$candidateCount; Showing=$($candidates.Count)"
+    Write-Host "AppsFolder: Count=$catalogueCount; CloudfieldCandidateCount=$candidateCount; Showing=$($candidates.Count)"
     foreach ($candidate in $candidates) { Write-Host "AppsFolder candidate: $candidate" }
 }
 
@@ -156,7 +157,8 @@ server.listen(0, '127.0.0.1', () => console.log(server.address().port))
         Start-Sleep -Milliseconds 100
     } while ($true)
 
-    foreach ($name in @('AETHER_BIN', 'AETHER_VERSION', 'AETHER_ROLE', 'AETHER_BIN_DIR')) {
+    # The CLOUDFIELD_ names win over the AETHER_ ones this script sets.
+    foreach ($name in @('AETHER_BIN', 'AETHER_VERSION', 'AETHER_ROLE', 'AETHER_BIN_DIR', 'CLOUDFIELD_BIN', 'CLOUDFIELD_BASE_URL', 'CLOUDFIELD_REPO', 'CLOUDFIELD_VERSION', 'CLOUDFIELD_ROLE', 'CLOUDFIELD_BIN_DIR', 'CLOUDFIELD_CONFIG_DIR', 'CLOUDFIELD_NO_UPDATE_CHECK')) {
         [Environment]::SetEnvironmentVariable($name, $null, 'Process')
     }
     $env:LOCALAPPDATA = Join-Path $root 'Local'
@@ -184,7 +186,7 @@ server.listen(0, '127.0.0.1', () => console.log(server.address().port))
     $sentinel = Join-Path $cliDir 'unrelated.txt'
     'preserve this file' | Set-Content -LiteralPath $sentinel
     $installed = Join-Path $cliDir 'aether.exe'
-    $desktop = Join-Path $env:LOCALAPPDATA 'Programs\Aether Desktop\aether-desktop.exe'
+    $desktop = Join-Path $env:LOCALAPPDATA 'Programs\Cloudfield Desktop\aether-desktop.exe'
 
     # The CLI is a development build, so install.ps1's own gui build builds
     # the desktop from source. The third round installs over that desktop
@@ -203,7 +205,7 @@ server.listen(0, '127.0.0.1', () => console.log(server.address().port))
         }
         if ((Get-Content -LiteralPath $sentinel) -ne 'preserve this file') { throw 'An unrelated file changed.' }
         if (-not (Test-Path -LiteralPath $desktop)) { throw 'The desktop executable was not installed.' }
-        if (-not (Test-Path -LiteralPath $shortcut -PathType Leaf)) { throw "The Programs Known Folder has no Aether shortcut: $programs" }
+        if (-not (Test-Path -LiteralPath $shortcut -PathType Leaf)) { throw "The Programs Known Folder has no Cloudfield shortcut: $programs" }
         $link = $shortcutShell.CreateShortcut($shortcut)
         if ($link.TargetPath -ine $desktop) { throw "The Start Menu shortcut targets $($link.TargetPath), not $desktop." }
         if ($link.WorkingDirectory -ine (Split-Path -Parent $desktop)) {
@@ -247,31 +249,31 @@ server.listen(0, '127.0.0.1', () => console.log(server.address().port))
         $catalogueCount = $items.Count
         foreach ($item in $items) {
             $target = [string]$item.ExtendedProperty('System.Link.TargetParsingPath')
-            if ($item.Name -inotlike '*Aether*' -and $target -inotlike '*Aether*') { continue }
+            if ($item.Name -inotlike '*Cloudfield*' -and $target -inotlike '*Cloudfield*') { continue }
             $candidateCount++
             if ($candidates.Count -lt 10) {
                 $appId = [string]$item.ExtendedProperty('System.AppUserModel.ID')
                 $candidates += "Name=$($item.Name); Path=$($item.Path); AppUserModelID=$appId; System.Link.TargetParsingPath=$target"
             }
-            if ($null -eq $discovered -and $item.Name -ieq 'Aether' -and [Environment]::ExpandEnvironmentVariables($target) -ieq $desktop) {
+            if ($null -eq $discovered -and $item.Name -ieq 'Cloudfield' -and [Environment]::ExpandEnvironmentVariables($target) -ieq $desktop) {
                 $discovered = $item
             }
         }
         if ($null -ne $discovered) { break }
         if ([DateTime]::UtcNow -ge $deadline) {
             Write-ShellDiagnostics
-            throw "Aether was not discovered in the shell AppsFolder catalogue for target $desktop."
+            throw "Cloudfield was not discovered in the shell AppsFolder catalogue for target $desktop."
         }
         Start-Sleep -Milliseconds 250
     } while ($true)
     # Resolve the matching shortcut too for the separate instrumented launch.
     $programsFolder = $shell.NameSpace($programs)
     if ($null -eq $programsFolder) { throw "The shell Programs folder is unavailable: $programs" }
-    $discoveredShortcut = $programsFolder.ParseName('Aether.lnk')
-    if ($null -eq $discoveredShortcut) { throw "The shell cannot resolve the catalogued Aether shortcut in $programs." }
+    $discoveredShortcut = $programsFolder.ParseName('Cloudfield.lnk')
+    if ($null -eq $discoveredShortcut) { throw "The shell cannot resolve the catalogued Cloudfield shortcut in $programs." }
     $link = $shortcutShell.CreateShortcut($discoveredShortcut.Path)
     if ($link.TargetPath -ine $desktop -or $link.WorkingDirectory -ine (Split-Path -Parent $desktop)) {
-        throw 'The catalogued Aether shortcut no longer identifies the installed desktop and its working directory.'
+        throw 'The catalogued Cloudfield shortcut no longer identifies the installed desktop and its working directory.'
     }
     if ($link.Arguments -cne $catalogueArguments) { throw 'The catalogued shortcut lost its isolated Electron data directory.' }
     Write-Host "Discovered shell catalogue entry: Name=$($discovered.Name); Path=$($discovered.Path); Target=$($link.TargetPath); Programs=$programs"
@@ -348,7 +350,7 @@ const { chromium } = require(process.argv[2])
     const page = context.pages()[0] || await context.waitForEvent('page')
     await page.waitForURL(/^http:\/\/127\.0\.0\.1:\d+\//, { timeout: 45000 })
     await page.getByRole('heading', { name: 'Onboarding', exact: true }).waitFor({ timeout: 45000 })
-    await page.locator('[aria-label="Starting Aether"]').waitFor({ state: 'detached' })
+    await page.locator('[aria-label="Starting Aether"], [aria-label="Starting Cloudfield"]').waitFor({ state: 'detached' })
     await page.screenshot({ path: process.argv[4] })
     console.log('The installed desktop rendered its first-run onboarding screen.')
     await page.close()
@@ -362,7 +364,7 @@ const { chromium } = require(process.argv[2])
     if ($LASTEXITCODE -ne 0) { throw 'The installed desktop did not render onboarding.' }
     if (-not $app.WaitForExit(15000)) { throw 'The desktop did not exit after closing its window.' }
     if (-not $appChild.WaitForExit(15000)) { throw 'The instrumented desktop left its CLI sidecar running.' }
-    Write-Host 'The shell-catalogued Aether shortcut found the CLI without an updated PATH and loaded its dashboard.'
+    Write-Host 'The shell-catalogued Cloudfield shortcut found the CLI without an updated PATH and loaded its dashboard.'
 
     $preferences = Get-MpPreference
     if ((Get-MpComputerStatus).RealTimeProtectionEnabled -ne $true -or $preferences.MAPSReporting -ne 2 -or $preferences.DisableRealtimeMonitoring -or $preferences.DisableIOAVProtection -or $preferences.DisableBehaviorMonitoring) {

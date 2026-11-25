@@ -26,6 +26,17 @@ const (
 	MethodAssistantView = "assistant.view"
 	// MethodAssistantViewContext is served only on the assistant tool socket.
 	MethodAssistantViewContext = "assistant.view_context"
+	// MethodAssistantRules lists the caller's approval rules, and
+	// MethodAssistantRuleRevoke deletes one. Neither the assistant nor a
+	// connector may call them; assistant.confirm with always creates one.
+	MethodAssistantRules      = "assistant.rules"
+	MethodAssistantRuleRevoke = "assistant.rules.revoke"
+	// MethodAssistantAccount compares an agent's assistant sign-in with the
+	// login in the caller's environment.
+	MethodAssistantAccount = "assistant.account"
+	// MethodAssistantQueueRemove removes one of the caller's queued prompts.
+	// The assistant's tool socket does not serve it.
+	MethodAssistantQueueRemove = "assistant.queue.remove"
 )
 
 const (
@@ -46,6 +57,34 @@ type AssistantAgent struct {
 	// Reason says why the agent is not ready, for example that its Enhanced
 	// adapter is not installed or no login was found.
 	Reason string `json:"reason,omitempty"`
+}
+
+type AssistantAccountParams struct {
+	Agent string `json:"agent"`
+}
+
+const (
+	// AssistantAccountUnrecorded means the server recorded no account for
+	// the assistant's sign-in yet; it does at the next start.
+	AssistantAccountUnrecorded = "unrecorded"
+	AssistantAccountSame       = "same"
+	AssistantAccountOther      = "other"
+	// AssistantAccountExpired means the environment's access token is past
+	// its expiry, so the vendor cannot be asked whose it is.
+	AssistantAccountExpired = "expired"
+	AssistantAccountError   = "error"
+)
+
+// AssistantAccount is information only: the environment's login is
+// writable by every session, so it gates nothing.
+type AssistantAccount struct {
+	Agent string `json:"agent"`
+	State string `json:"state"`
+	// Environment names the environment's account when State is other.
+	Environment string `json:"environment,omitempty"`
+	// Email is the environment account's email, when the vendor names one.
+	Email string `json:"email,omitempty"`
+	Error string `json:"error,omitempty"`
 }
 
 type AssistantConfirmation struct {
@@ -72,6 +111,95 @@ type AssistantConfirmation struct {
 	// launch, as the assistant's launch tool reported it. It is shown on the
 	// card and decides nothing.
 	Defaults *AssistantDefaultsUse `json:"defaults,omitempty"`
+	// Rule is the approval rule approving this card with always would
+	// save, when the card may become one.
+	Rule *AssistantRuleOffer `json:"rule,omitempty"`
+	// State is one of the AssistantCard states; a card is listed while it
+	// is pending, approved or running. DecidedAt is when it left pending.
+	State     string    `json:"state,omitempty"`
+	DecidedAt time.Time `json:"decided_at,omitzero"`
+	// Origin is where the prompt of the turn that raised the card came from.
+	Origin AssistantOrigin `json:"origin,omitzero"`
+	// Private means the card saves, forgets or sends a saved preference, so
+	// a notification shows only what kind of action it is.
+	Private bool `json:"private,omitempty"`
+}
+
+// States of an assistant approval card. Approved is the decision; running
+// is the claim taken before the call runs, so it runs at most once.
+const (
+	AssistantCardPending   = "pending"
+	AssistantCardApproved  = "approved"
+	AssistantCardDeclined  = "declined"
+	AssistantCardExpired   = "expired"
+	AssistantCardWithdrawn = "withdrawn"
+	AssistantCardRunning   = "running"
+	AssistantCardSucceeded = "succeeded"
+	AssistantCardFailed    = "failed"
+)
+
+// Doors of an assistant turn's origin. An Aether client names its own door
+// for display; it decides nothing.
+const (
+	AssistantDoorDashboard = "dashboard"
+	AssistantDoorPhone     = "phone"
+	AssistantDoorDesktop   = "desktop"
+	AssistantDoorConnector = "connector"
+)
+
+// AssistantOrigin is where a turn's prompt came from, stamped by the server
+// from the transport that carried it. Only the connector route sets the
+// connector door.
+type AssistantOrigin struct {
+	Door string `json:"door"`
+	// Client and ConnectorID name the connector of a connector turn.
+	Client      string `json:"client,omitempty"`
+	ConnectorID string `json:"connector_id,omitempty"`
+}
+
+// AssistantRuleOffer is the rule a card offers: the key the server built
+// from the card's params and its wording of it. Suggested marks a card
+// whose kind the member approved by hand three times in a row.
+type AssistantRuleOffer struct {
+	Key       AssistantRuleKey `json:"key"`
+	Wording   string           `json:"wording"`
+	Suggested bool             `json:"suggested,omitempty"`
+}
+
+// AssistantRuleKey is what an approval rule matches: a card passes when its
+// method and every field equal the rule's.
+type AssistantRuleKey struct {
+	Method          string `json:"method"`
+	WorkspaceID     string `json:"workspace_id,omitempty"`
+	Agent           string `json:"agent,omitempty"`
+	AccountMemberID string `json:"account_member_id,omitempty"`
+	Mode            string `json:"mode,omitempty"`
+	Model           string `json:"model,omitempty"`
+	Effort          string `json:"effort,omitempty"`
+	Permission      string `json:"permission,omitempty"`
+	NoFallback      bool   `json:"no_fallback,omitempty"`
+}
+
+// AssistantRule is one of a member's approval rules. Wording is what the
+// member clicked and Summary the card it came from. Inactive, when set, is
+// why the rule no longer passes cards.
+type AssistantRule struct {
+	ID         string    `json:"id"`
+	Method     string    `json:"method"`
+	Wording    string    `json:"wording"`
+	Summary    string    `json:"summary"`
+	CreatedAt  time.Time `json:"created_at"`
+	LastUsedAt time.Time `json:"last_used_at,omitzero"`
+	Uses       int       `json:"uses"`
+	Inactive   string    `json:"inactive,omitempty"`
+}
+
+type AssistantRulesResult struct {
+	Rules []AssistantRule `json:"rules"`
+}
+
+type AssistantRuleRevokeParams struct {
+	ID string `json:"id"`
 }
 
 // AssistantDefaultsUse names the launch fields saved defaults filled, each
@@ -94,8 +222,11 @@ type AssistantStatus struct {
 	Agents        []AssistantAgent        `json:"agents"`
 	Error         string                  `json:"error,omitempty"`
 	Confirmations []AssistantConfirmation `json:"confirmations"`
-	AutoApprove   bool                    `json:"auto_approve"`
-	ShareView     bool                    `json:"share_view"`
+	// Queue is the current conversation's prompts: those waiting and
+	// running, then the latest 50 that ended.
+	Queue       []AssistantQueueEntry `json:"queue"`
+	AutoApprove bool                  `json:"auto_approve"`
+	ShareView   bool                  `json:"share_view"`
 	// PreferencesEnabled lets the assistant read and save the member's
 	// preferences; Temporary keeps this conversation from using them.
 	PreferencesEnabled bool `json:"preferences_enabled"`
@@ -103,6 +234,13 @@ type AssistantStatus struct {
 	// SuggestAutoApprove means the member approved enough cards by hand
 	// that the dashboard may suggest turning auto-approval on.
 	SuggestAutoApprove bool `json:"suggest_auto_approve"`
+	// ApprovalChosen means the member chose whether the assistant asks
+	// before acting: they set auto_approve, or answered the suggestion.
+	ApprovalChosen bool `json:"approval_chosen"`
+	// SignInRecorded means a sign-in for the assistant was started or
+	// recorded for some agent. The dashboard starts one on its own only
+	// while none was: a sign-in deletes the agent's earlier one.
+	SignInRecorded bool `json:"sign_in_recorded"`
 }
 
 // Answers to the suggestion to turn auto-approval on.
@@ -137,6 +275,7 @@ type AssistantSettings struct {
 	ShareView          bool `json:"share_view"`
 	PreferencesEnabled bool `json:"preferences_enabled"`
 	Temporary          bool `json:"temporary"`
+	ApprovalChosen     bool `json:"approval_chosen"`
 }
 
 type AssistantStartParams struct {
@@ -147,6 +286,45 @@ type AssistantPromptParams struct {
 	Text           string                `json:"text"`
 	IdempotencyKey string                `json:"idempotency_key"`
 	ViewContext    *AssistantViewContext `json:"view_context,omitempty"`
+	// Door is the Aether client's name for itself, AssistantDoorPhone or
+	// AssistantDoorDesktop, shown on the prompt; anything else is the
+	// dashboard. It decides nothing.
+	Door string `json:"door,omitempty"`
+}
+
+// AssistantPromptResult is the queue entry a prompt became.
+type AssistantPromptResult struct {
+	Entry AssistantQueueEntry `json:"entry"`
+}
+
+type AssistantQueueRemoveParams struct {
+	EntryID string `json:"entry_id"`
+}
+
+// States of an assistant queue entry. Interrupted is a turn the server
+// lost to a restart; it is not run again.
+const (
+	AssistantQueueQueued      = "queued"
+	AssistantQueueRunning     = "running"
+	AssistantQueueDone        = "done"
+	AssistantQueueFailed      = "failed"
+	AssistantQueueInterrupted = "interrupted"
+	AssistantQueueRemoved     = "removed"
+)
+
+// AssistantQueueEntry is one prompt in a member's assistant queue; its id
+// names the turn it runs.
+type AssistantQueueEntry struct {
+	ID     string          `json:"id"`
+	State  string          `json:"state"`
+	Text   string          `json:"text"`
+	Origin AssistantOrigin `json:"origin"`
+	Error  string          `json:"error,omitempty"`
+	// MessageID is the id of the prompt's message in the transcript once its
+	// turn ended.
+	MessageID string    `json:"message_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 type AssistantViewParams struct {
@@ -222,6 +400,13 @@ type AssistantAnswerParams struct {
 type AssistantConfirmParams struct {
 	ConfirmationID string `json:"confirmation_id"`
 	Approve        bool   `json:"approve"`
+	// Always approves the card and saves the rule it offers.
+	Always bool `json:"always,omitempty"`
+}
+
+// AssistantConfirmResult names the rule an always answer saved.
+type AssistantConfirmResult struct {
+	Rule *AssistantRule `json:"rule,omitempty"`
 }
 
 type AssistantHistoryParams struct {
@@ -286,9 +471,10 @@ type AssistantAction struct {
 	Target  AssistantActionTarget `json:"target"`
 	Outcome string                `json:"outcome"`
 	// Approval is how the call was allowed to run: "card" when the member
-	// approved it, "auto" by auto-approval, empty for a reversible call
-	// that needs none.
+	// approved it, "auto" by auto-approval, "rule" by the approval rule
+	// RuleID, empty for a reversible call that needs none.
 	Approval string `json:"approval,omitempty"`
+	RuleID   string `json:"rule_id,omitempty"`
 	// ConfirmationID is the card's id, when the action showed one.
 	ConfirmationID string `json:"confirmation_id,omitempty"`
 	// IdempotencyKey is the call's, when its method takes one, so a client

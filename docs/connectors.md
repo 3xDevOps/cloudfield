@@ -1,16 +1,16 @@
 # ChatGPT and Claude connectors
 
 A connector is a custom MCP connector in ChatGPT or Claude that points at your
-Aether server. Once you add one, you can launch sessions, see what needs
+Cloudfield server. Once you add one, you can launch sessions, see what needs
 you, answer agents, and check pull requests from a chat in ChatGPT or Claude,
-the phone apps included, with no Aether app on the phone. The connector acts
-as you: the Aether member who authorized it, under the same role checks as
-`aether` and the dashboard.
+the phone apps included, with no Cloudfield app on the phone. The connector acts
+as you: the Cloudfield member who authorized it, under the same role checks as
+`cloudfield` and the dashboard.
 
 ```mermaid
 flowchart LR
     A[ChatGPT or Claude] -->|HTTPS tool calls| E[Edge]
-    E -->|forwards| S[Your Aether server]
+    E -->|forwards| S[Your Cloudfield server]
 ```
 
 The edge is a public relay your server connects out to ([edge.md](edge.md)). Your
@@ -25,7 +25,7 @@ server hosts the connector endpoint and signs you in.
   [edge.md](edge.md#turning-it-on).
 - A server new enough to serve connectors. Otherwise the edge answers HTTP 501:
   `server <name> (<id>) runs aether-server <version>, which has no MCP endpoint; upgrade it: sudo aether-server update`.
-- A linked CLI (`aether link`) on an approved device, a member SSH key or a
+- A linked CLI (`cloudfield link`) on an approved device, a member SSH key or a
   tailnet connection. Under `edge-access account`, any registered device works.
 - A ChatGPT or Claude plan that allows custom connectors (see below).
 
@@ -46,17 +46,17 @@ section shows the URL at once. What the third step asks depends on the server's
 The section checks every 3 seconds and shows **ChatGPT (chatgpt.com)
 connected** with its scopes once the app connects. It lists your connectors
 with their scopes, the URL each was added at, when each was added and last
-used, and **Reconnect** and **Revoke** buttons. Errors appear as `aether mcp`
+used, and **Reconnect** and **Revoke** buttons. Errors appear as `cloudfield mcp`
 prints them, with a link to the fix.
 
 From a terminal:
 
 ```sh
-aether mcp
+cloudfield mcp
 ```
 
 ```
-Install Aether from the ChatGPT or Claude directory where it is listed, or add this URL as a custom connector:
+Install Cloudfield from the ChatGPT or Claude directory where it is listed, or add this URL as a custom connector:
   URL   https://edge.onaether.dev/mcp
   No code: on the page that opens, sign in to the edge with GitHub, pick this server and select Allow
 Connected:
@@ -64,7 +64,7 @@ Connected:
 Remove one: aether mcp revoke <id>
 ```
 
-Where the page asks for a code, `aether mcp` prints one instead of the `No
+Where the page asks for a code, `cloudfield mcp` prints one instead of the `No
 code` line:
 
 ```
@@ -72,15 +72,17 @@ code` line:
 ```
 
 The URL is the same for both apps and every server on the edge. On the
-server, `sudo aether-server edge status` also prints it. Before edge protocol
+server, `sudo cloudfield-server edge status` also prints it. Before edge protocol
 3, and for a member with no GitHub account linked, it is the server's own URL,
 `https://edge.onaether.dev/mcp/<server id>`. The code works once, within 10
-minutes. Running `aether mcp` again replaces a code you have not used.
+minutes. Running `cloudfield mcp` again replaces a code you have not used.
 
 That URL's page asks for a code even when the universal URL needs none, so a
-connector added there reconnects with one. `aether mcp code` prints a code
+connector added there reconnects with one. `cloudfield mcp code` prints a code
 alone. In Settings, **Reconnect** on such a connector shows the server's own
-URL and a code.
+URL and a code. A connector added at the universal URL of another address of
+the edge is not such a connector: it shows as **Universal URL** and
+reconnects with the sign-in.
 
 ## Add it in ChatGPT
 
@@ -89,7 +91,7 @@ Custom MCP servers are added on the web only, at chatgpt.com
 
 1. Open [ChatGPT Plugins](https://chatgpt.com/plugins).
 2. Select the plus button, then **Add custom MCP server**.
-3. Name it `Aether`, paste the URL from `aether mcp` as the server URL, and
+3. Name it `Aether`, paste the URL from `cloudfield mcp` as the server URL, and
    choose **OAuth**.
 4. Select **Create as a plugin**, then install it.
 5. On the [universal URL](#the-universal-url), the edge's page opens: sign in
@@ -108,7 +110,7 @@ On claude.ai
 ([Anthropic: add a custom connector](https://claude.com/docs/connectors/custom/add-unlisted)):
 
 1. Free, Pro and Max: open **Customize → Connectors**, select **Add custom
-   connector**, name it `Aether`, paste the URL from `aether mcp`, leave
+   connector**, name it `Aether`, paste the URL from `cloudfield mcp`, leave
    **Advanced settings** empty and select **Add**. Free allows one custom
    connector.
 2. Team and Enterprise: an Owner opens **Organization settings → Connectors**,
@@ -124,9 +126,9 @@ The connector then works in Claude on the web, desktop and mobile.
 
 ## The universal URL
 
-`https://<edge>/mcp` is one URL for every Aether server, so one ChatGPT
-plugin can serve every Aether user. Once Aether is listed in ChatGPT's plugin
-directory ([chatgpt-plugin.md](chatgpt-plugin.md)) or Claude's connector
+`https://<edge>/mcp` is one URL for every Cloudfield server, so one ChatGPT
+plugin can serve every Cloudfield user. Once Cloudfield is listed in ChatGPT's
+plugin directory ([chatgpt-plugin.md](chatgpt-plugin.md)) or Claude's connector
 directory ([claude-connector.md](claude-connector.md)), install it from there
 instead of adding a custom MCP server; connecting then works as described here.
 
@@ -143,7 +145,7 @@ the server's [`edge-access`](edge.md#access-policies) policy:
   with the [scopes](#scopes) and no code. Signing in at the edge already
   admits you there.
 - `approved-devices`: the page asks for the code. Paste the code from
-  **Settings → ChatGPT and Claude** in the app, or `aether mcp`.
+  **Settings → ChatGPT and Claude** in the app, or `cloudfield mcp`.
 
 **Continue** posts the edge's signed statement that your GitHub account chose
 this server to the edge, never in a URL. The server binds it to the first
@@ -152,13 +154,13 @@ within 5 minutes. A link copied out of your browser, history or a log connects
 nobody. [edge.md](edge.md#mcp-connectors) has the details.
 
 The sign-in page lists a server only to the GitHub accounts bound to its
-members. So the app and `aether mcp` show the universal URL only to a member with a
+members. So the app and `cloudfield mcp` show the universal URL only to a member with a
 GitHub account bound, and `<edge>/mcp/<server id>` to one with only a member
-SSH key or tailnet login. `sudo aether-server edge status` prints both.
+SSH key or tailnet login. `sudo cloudfield-server edge status` prints both.
 
 A connector added without a code stops working when the server switches to
 `approved-devices`, when its GitHub account is unbound from the member
-(`aether member identities`, or deleting the account at the edge), or when the
+(`cloudfield member identities`, or deleting the account at the edge), or when the
 member is removed. It has no device, so a method that needs an approved device
 refuses it, as it refuses a device no person approved, and it cannot mint a
 pairing code or a Slack link code. Connectors added at
@@ -167,21 +169,26 @@ pairing code or a Slack link code. Connectors added at
 ### Move a connector to the universal URL
 
 A connector keeps the URL it was added at. Settings marks each one
-**Universal URL** or **This server's own URL**, and `aether mcp` prints
+**Universal URL** or **This server's own URL**, and `cloudfield mcp` prints
 `universal URL` or `at <url>`. Once Settings shows the universal URL for you,
 **Move to the universal URL** next to a connector on the server's own URL
-starts a new connection: add Aether again in the app with the universal URL.
+starts a new connection: add Cloudfield again in the app with the universal URL.
 Settings revokes the old connector once a new one from the same client, such as
-ChatGPT or Claude, connects at the universal URL and calls Aether. If none
+ChatGPT or Claude, connects at the universal URL and calls Cloudfield. If none
 calls within 10 minutes, it leaves the old one and says so. Remove the old
 Aether connector in ChatGPT or Claude yourself. From a terminal, connect again at the
-universal URL, then run `aether mcp revoke <old id>`.
+universal URL, then run `cloudfield mcp revoke <old id>`.
 
 ### Self-hosted and custom edges
 
 The universal URL is `https://<relay host>/mcp` of whichever edge the server
 uses, so an operator's own edge has its own. `<edge>/mcp/<server id>` with a
 pairing code works on every edge from protocol 2 and under either policy.
+
+An edge with more than one relay host serves a connector at each of them once
+the edge and the server both speak edge protocol 6. A connector keeps working
+only at the host it was added at
+([edge.md](edge.md#more-than-one-address-pair)).
 
 ### Claude Code
 
@@ -210,20 +217,20 @@ than `offline_access`, the only one the OAuth metadata lists in
 | Scope | On the page | Grants |
 | --- | --- | --- |
 | `read` | Always granted | Every read-only tool |
-| `write` | **Launch and message**, checked by default | Launching sessions; messaging, pausing, resuming, relaunching, protecting and archiving sessions; answering agents' and teammates' questions; marking sessions reviewed; adding and pinning team memory |
+| `write` | **Launch and message**, checked by default | Launching sessions; messaging, pausing, resuming, relaunching, protecting and archiving sessions; answering agents' and teammates' questions; marking sessions reviewed; adding and pinning team memory; asking your assistant |
 | `control` | **Stop and approve**, unchecked by default | Deciding permission requests, stopping and closing sessions, switching a session's mode, handing sessions to teammates, opening and merging pull requests. Text an agent wrote could talk the assistant into approving or ending work without asking you |
 
 Every member can read every session on the server, so a connector can read all of
-them. A connector lists only the tools of its scopes, and `aether mcp` shows
+them. A connector lists only the tools of its scopes, and `cloudfield mcp` shows
 each connector's scopes.
 
 The server also checks the scope of every call a connector makes, whatever the
-member's role. Reads such as `run.get`, `workspace.timeline`, `member.list`,
+member's role. Reads such as `run.get`, `run.close_check`, `workspace.timeline`, `member.list`,
 `memory.show`, `template.list`, `changes.list` and
 `launch.defaults.get` need `read`; `run.launch`, `template.launch`,
-`run.inject`, `run.room.post`, `run.pause`, `run.resume`,
+`run.inject`, `run.room.post`, `run.pause`, `run.resume`, `run.wake`,
 `run.review`, `run.relaunch`, `run.protect`, `run.archive`, `memory.add`,
-`memory.pin` and `memory.unpin` need `write`; `run.kill`, `run.close`,
+`memory.pin`, `memory.unpin` and `assistant.ask` need `write`; `run.kill`, `run.close`,
 `run.mode.switch` (it discards a turn in progress), `run.handoff`,
 `run.pr.create` and `run.pr.merge` need `control`.
 `run.input.respond` needs `control` to decide a permission request and `write`
@@ -235,13 +242,13 @@ connector:
 
 ```
 run.kill needs the control scope, which ChatGPT connector con-7k2m9q4xbd was not granted; select Reconnect next to it in Settings → ChatGPT and Claude and check Stop and approve on the consent page
-member.role: ChatGPT connector con-7k2m9q4xbd cannot call this method; no connector can, so use the Aether app or the aether CLI
+member.role: ChatGPT connector con-7k2m9q4xbd cannot call this method; no connector can, so use the Cloudfield app or the aether CLI
 ```
 
 To change scopes, revoke the connector and connect
 again, or select **Reconnect** in Settings. It gets a new code where the page
 asks for one, and revokes the old connector once the new connection calls
-Aether. Connectors added before scopes existed have all three.
+Cloudfield. Connectors added before scopes existed have all three.
 
 ## What it can do
 
@@ -252,7 +259,7 @@ The connector has these tools and no others:
 | `aether_list_workspaces` | Workspaces, and agents (installed, signed in, Enhanced) | `read` |
 | `aether_launch_options` | What you can launch and on which account: workspaces, your accounts with their usage, each account's agents and modes, fallback, a workspace's templates, and an agent's models when asked for ([Launch options](#launch-options)) | `read` |
 | `aether_list_sessions`, `aether_get_session` | Your sessions (or everyone's with `mine: false`) with their last report, filtered by workspace, activity, what needs you, or words in the title, task, workspace name or branch; one session with what it waits on, its `wait_conditions`, its latest report and its pull request; `evidence: true` adds [progress evidence](#progress-evidence) | `read` |
-| `aether_session_history` | A page of a session's conversation (Enhanced) or terminal, with its reports | `read` |
+| `aether_session_history` | A page of a session's conversation (Enhanced) or terminal, with the session's newest reports, the same on every page; `limit` (default 20, at most 50) caps the page and the reports | `read` |
 | `aether_needs_attention` | What needs you, the dashboard's **Needs you** list, each item naming the tool that answers it | `read` |
 | `aether_activity_summary` | What your sessions did today, yesterday or this week, in your time zone | `read` |
 | `aether_session_changes`, `aether_pr_status` | A session's commits, conflicts, changed files and optionally its diff, for its primary or an extra repo, paged; its pull request's checks, reviews, comments, merge state and head commit | `read` |
@@ -262,10 +269,11 @@ The connector has these tools and no others:
 | `aether_watches` | Your [watches](watches.md), each with its state, conditions and last notice; with `watch_id`, one watch with its 10 newest notices and where each was delivered | `read` |
 | `aether_launch_session` | Start a session, from a task or a saved [template](teams.md#task-templates-and-schedules), on any account you may use, with a fallback policy and extra repositories | `write` |
 | `aether_message_session`, `aether_answer` | Message a session; answer an agent's or a teammate's question | `write` |
-| `aether_pause_session`, `aether_resume_session`, `aether_mark_reviewed` | Pause or resume a session; accept a reported success, which closes the session, or put it off | `write` |
+| `aether_pause_session`, `aether_resume_session`, `aether_mark_reviewed` | Pause or resume a session; accept a reported success, which closes the session, put it off, or say the work is not finished | `write` |
 | `aether_session_lifecycle` | Relaunch a stopped session, protect or unprotect it, archive or restore it | `write` |
 | `aether_memory_add`, `aether_memory_pin` | Add a team memory note; pin or unpin one | `write` |
-| `aether_watch`, `aether_unwatch` | Watch a session (`run_id`) or pull request (`pr`: `owner/name#7` or its GitHub URL) for `conditions`, or with `watch_id` change its conditions or `expires_at`, or pause or resume it; delete a watch and its notices | `write` |
+| `aether_ask_assistant`, `aether_decide_assistant_card` | Send a prompt to your [assistant](assistant.md) and read its reply; approve or decline a card its turn raised ([Ask your assistant](#ask-your-assistant)) | `write` |
+| `aether_watch`, `aether_unwatch` | Watch a session (`run_id`) or pull request (`pr`: `owner/name#7` or its GitHub URL) for `conditions`, optionally relaying each notice into up to 4 sessions (`relay_to`), or with `watch_id` change its conditions, `relay_to` or `expires_at`, or pause or resume it; delete a watch and its notices | `write` |
 | `aether_decide_approval` | Allow or deny a permission request, once | `control` |
 | `aether_stop_session` | Stop a session, or with `outcome` close it as merged or abandoned | `control` |
 | `aether_switch_session_mode` | Switch a live session to Standard or Enhanced, discarding the turn in progress | `control` |
@@ -274,7 +282,7 @@ The connector has these tools and no others:
 
 Things to ask:
 
-- "What needs me in Aether?"
+- "What needs me in Cloudfield?"
 - "What is the agent working on edge doing?"
 - "Launch a Claude run in api to fix the flaky login test."
 - "Which subscription has the most usage left? Launch the docs fix on it."
@@ -287,7 +295,7 @@ Things to ask:
 - "Tell me when the login fix session needs me or finishes."
 
 The connector tells ChatGPT and Claude to launch and write the task as
-Aether's assistant does: [What a launch's task holds](assistant.md#what-a-launchs-task-holds).
+Cloudfield's assistant does: [What a launch's task holds](assistant.md#what-a-launchs-task-holds).
 
 Results link to the session in the dashboard when the server serves one on
 its tailnet (`web-port`); the edge serves no dashboard. A result's text is a
@@ -312,11 +320,16 @@ it returns a session's title, task and reason whole. A permission
 request longer than 600 characters is decided only in the dashboard, never by
 `aether_decide_approval`. Lists return 20 rows by default, at most 100, and say
 how many matched when they cut rows; `aether_needs_attention` returns at most 30
-items. `aether_session_changes` lists 20 commits and up to 10 diff
+items, pending permission requests and questions first, since a sudo request
+expires after 10 minutes, then the rest oldest first. `aether_session_changes` lists 20 commits and up to 10 diff
 files of 6000 bytes, 12000 in all, per page, and returns `next_commits_offset`
 and `next_diff_file` for the next page, `diff_clipped_files` with the numbers of
 files cut at 6000 bytes, and `diff_truncated: true` when the server cut the diff
-before paging, so files past the cut are missing; its `repos` names a multi-repo
+before paging, so files past the cut are missing. The diff is the worktree
+against the merge base with the session's base: committed, staged and unstaged
+tracked changes, not untracked files. With no diff it is `diff: []` with a
+`diff_note`, never null; an unresolvable base is `diff_error`. `repos` names a
+multi-repo
 session's extra repos, which `repo` selects. Tools that take a `run_id` also accept the `run:` ids `search` returns. When the
 server no longer keeps the start of a session's conversation or terminal,
 `aether_session_history` returns `truncated_before: true` and a `note` saying so.
@@ -324,7 +337,13 @@ server no longer keeps the start of a session's conversation or terminal,
 A launch, message or answer takes an optional `idempotency_key`; a
 retry with the same key returns the first result. A write's result has
 `write: "done"`, or `"pending"` while a launch is starting or a message waits
-for approval, and the key it used. A failure that leaves it unknown whether the
+for approval, and the key it used. `write` says only that the call finished;
+a message's `state` says whether it reached the agent. A message the session
+did not take fails the call with the failure code and the way forward, for
+example `message to session run-… was not sent (session_protected; …);
+unprotect it with aether_session_lifecycle`, and the real error under
+`untrusted.failure`, since an agent's refusal is the agent's text. Send it
+again, with a new `idempotency_key` if you passed one. A failure that leaves it unknown whether the
 write happened, such as a timeout, ends with the key to retry with. A
 teammate answer retried with its key after the question stopped
 waiting returns the saved answer; an `answer_id` that is not a teammate
@@ -371,9 +390,11 @@ text again on purpose, pass a new `idempotency_key`.
   defaults and tasks are under `untrusted`); pass `version` to
   `aether_launch_session` as `template_version` to refuse a template changed since.
   With `models` (an agent name) and
-  optionally `account_member_id`, that agent's model ids on that account, which
+  optionally `account_member_id`, that agent's models on that account, each
+  an `id` to launch with and its `name`, such as `fable` and `Fable 5.2`, which
   the server caches. `account_member_id` without `models` is refused. When it
-  lists none, launch without `model` for the agent's default.
+  lists none, launch without `model` for the agent's default, or pass the id
+  the agent takes.
 - `saved`: your [saved launch choices](teams.md#saved-launch-choices) as
   `launch.defaults.get` returns them, with `invalid` and `unknown` listing each
   choice a launch could not use or check, with the reason. `saved_error` holds
@@ -384,17 +405,19 @@ text again on purpose, pass a new `idempotency_key`.
   choices.
 
 `aether_launch_session` takes `account_member_id`, `fallback_account_member_ids` (an
-order), `no_fallback`, `extra_workspace_ids` and `children` (`on` or `off`:
+order), `no_fallback`, `extra_workspace_ids`, `children` (`on` or `off`:
 whether its agent may start [subsessions](teams.md#subsessions); without it, your
-setting decides), as `aether session` does. The server
+setting decides) and `permission` (`root`, `default` or `isolated`: the
+session's [permission tier](security.md#permission-tiers)), as `cloudfield session`
+does. Any other `permission` fails with the tool's schema error, such as
+`validating /properties/permission: enum: admin does not equal any of: [ root default isolated]`. The server
 checks the account before anything starts: a launch with an agent
 or fallback account not shared with you fails with the server's error. A launch or template launch the server does not understand fails with
 `unknown param "<name>"` instead of starting without it.
 
 A launch fills each field you leave out from your saved launch choices: what
-you pass wins, then what you saved, then the server's own defaults. The saved
-permission tier is the exception: these launches always run at Default
-([permission tiers](security.md#permission-tiers)). `harness`
+you pass wins, then what you saved, then the server's own defaults, which for
+`permission` is Default. `harness`
 may be left out when you saved an agent that can launch on the launch's
 account; the saved agent's mode and model apply to whichever agent the launch uses. A saved mode the agent
 cannot start in on the launch's account, or a saved fallback member
@@ -424,7 +447,11 @@ Each launch's result and `aether_get_session` has a
 (`member_id`, `name`, `access`: `own`, `shared`, or `other` for a teammate's own
 session), `requested_account` when usage fallback moved the session, `fallback`
 (`policy`: `automatic`, `ordered` with `order`, or `off`), `repos`, the session's
-own `children` setting, `via`, and `url`. A new launch's receipt adds
+own `children` setting, its `permission` tier, `via`, and `url`. An Enhanced
+session sets its model after it opens, so a launch's `model` is the one
+asked for; when the agent refuses it, `aether_get_session` names it in
+`refused_model`, `model` is the one the session runs on (absent for the
+agent's default), and `untrusted.model_error` says why. A new launch's receipt adds
 `defaults_applied`, the input fields your saved choices filled,
 `defaults_skipped`, each saved choice it did not use with `field` and `reason`,
 and `defaults_unchecked`, each saved agent, mode or model it used without
@@ -453,21 +480,21 @@ Every part carries its source and the time it was read (`as_of` or
 and the summary line ends with `Not confirmed:` and the number of lookups
 that returned an error, sessions with pull requests not checked live, and
 unreadable reports. It adds `released` and `deployed` as `{"state":
-"unknown", "reason": "Aether does not track releases or deployments of this
+"unknown", "reason": "Cloudfield does not track releases or deployments of this
 repository"}`.
 
 The lookups are the same as `aether_pr_status`'s, for at most 5 sessions per
-call: one may record what GitHub showed in Aether and tell open dashboards
+call: one may record what GitHub showed in Cloudfield and tell open dashboards
 that the session's pull request changed.
 
 `aether_get_session`'s `evidence` has:
 
 - `pull_requests`: the first 20 pull requests the session opened
-  (`pull_requests_total` when there are more), as Aether recorded it
+  (`pull_requests_total` when there are more), as Cloudfield recorded it
   (`source: "aether record"`, with the `checked_at` of that record), or as
   GitHub just showed it (`source: "github"`). Only a lookup that reached
   GitHub without an error relabels one; a finished session's lookup can answer
-  from Aether's record without asking GitHub, and a recorded merge stays as
+  from Cloudfield's record without asking GitHub, and a recorded merge stays as
   recorded. A pull request not merged that no lookup confirmed has
   `not_checked_live`. A session closed as merged adds `closed_as_merged`: a
   person closed it, which is not a GitHub merge.
@@ -506,12 +533,28 @@ says to call again without `cursor`.
 
 `aether_mark_reviewed` completes only a session whose agent reported success and
 awaits your review; to end any other session, use `aether_stop_session` under
-`control`. A message to your own session that no one
+`control`. Both read `run.close_check` before they act, and so does a stop
+without `outcome`, since a stop also ends the session and settles its
+subsessions: one with warnings fails with `closing session <id> has warnings
+(<kinds>), listed under untrusted.warnings; ...` until the call repeats with
+`acknowledge: true`, so the assistant shows you what each stop or close
+affects first. `acknowledge` is the caller's word that it showed them; the
+server does not tie it to the warnings it returned. The warnings sit under
+`untrusted` because they quote session titles agents wrote. The dashboard
+assistant's close card lists the same warnings
+([failure-handling.md](failure-handling.md#before-a-close)). A message to your own session that no one
 controls in the dashboard, or to a session you control, reaches the agent at once. Any other message waits
 about 45 seconds for the member in control to approve it. `aether_decide_approval` allows
 or denies a permission request once; it never picks an "always" option, so it
 cannot change what the agent may do next time. Any other tool call is cut off
-after 40 seconds, inside ChatGPT's wait.
+after 40 seconds, inside ChatGPT's wait. A server runs at most 4 tool calls
+longer than 5 seconds at once, across all its connectors, so calls that wait
+cannot hold all 8 requests the edge forwards to it
+([edge.md](edge.md#limits)). Past that, the server ends an
+`aether_launch_session` or `aether_ask_assistant` call early before any other:
+the launch answers as one still starting, and the ask with its `turn_id` to
+poll. Any other call ended early fails with a message that starts `ended
+early: this server runs at most 4 connector calls longer than 5s at once`.
 
 The other writes repeat safely without a key. Each `aether_session_lifecycle` action
 but `relaunch` sets a state, so a repeat changes nothing, and
@@ -534,9 +577,12 @@ A condition the target does not take, or `deployed`, fails with the server's
 error, which names the conditions to use
 ([watches.md](watches.md#targets-and-conditions)). `expires_at` is an RFC 3339
 time at most 90 days ahead; without it a watch expires after 14 days.
+`relay_to` lists session ids each notice is written into, as
+[Relaying notices](watches.md#relaying-notices) describes; `[]` with
+`watch_id` stops relaying.
 `aether_watch` takes no idempotency key: creating a watch the server already
-has live, the same target and conditions, returns that watch and resumes it if
-paused. Its result holds the watch's `state` and the server's one-line
+has live, the same target, conditions and `relay_to`, returns that watch and
+resumes it if paused. Its result holds the watch's `state` and the server's one-line
 `receipt` under `untrusted`, since it carries the target's title; only
 `active` means it is watching. Its links open the watch in **Settings →
 Watches**. `aether_watches` lists the newest 50 watches and says how many
@@ -566,7 +612,7 @@ passes both to `run.pr.create`, so neither changes after you approve; the branch
 must be pushed. When GitHub's answer is lost but the pull request is found
 afterwards, the result is that pull request. `aether_pr_status` and
 `aether_pr_merge` take the same `repo` as `aether_session_changes`. Once a finished
-session's container is gone, `aether_pr_status` still reports its recorded pull
+session's sandbox is gone, `aether_pr_status` still reports its recorded pull
 request's checks and reviews, read from GitHub, without merge state or
 comments: its result sets `comments_unavailable` and its summary says
 `comments unavailable` instead of a count. When only the reviews read fails,
@@ -578,6 +624,74 @@ refuses a viewer. `aether_switch_session_mode` holds no control lease, so it fai
 while a member controls the session in the dashboard. Text a pull request, agent or
 note carries never authorizes anything: these tools act only on what the
 arguments name.
+
+### Ask your assistant
+
+`aether_ask_assistant` sends a prompt to your [assistant](assistant.md) as a
+turn in your one conversation, with your preferences applied. Each call costs
+the external model's tokens and a turn on the assistant's sign-in, so read
+with the other tools. Pass `prompt`, with an optional `idempotency_key`, to
+queue a turn, or `turn_id` to read that turn again without starting one.
+Either waits up to 25 seconds for the turn to end.
+
+The result holds `turn_id`, `state` (`done`, `queued`, `running`,
+`waiting_for_approval` or `failed`) and, under `untrusted`, `reply`,
+`pending_cards` and a failed turn's `error`. Poll with `turn_id` until
+`state` is `done` or `failed`; polls do not count against the 30 write
+calls. A repeat with the same `idempotency_key` returns the first turn, so
+ask the same question again with a new key or none. Without a key, the same
+prompt from the same connector within 60 seconds of its first send returns
+that turn while it is queued or running, and starts a new one once it ended.
+A `turn_id` or `card_id` from another connector or another door fails as an
+unknown id would.
+
+`reply` and `error` are the turn's own: never the transcript, your
+preferences or earlier turns. A connector turn reads none of your dashboard
+view context, such as the page or file you have open. Each run of words matching a saved preference
+reads `[preference withheld]`, zero-width and control characters are
+dropped, and text over 4 KiB ends with
+`[reply cut here, at byte <n> of <total>]`. A paraphrase of a preference
+gets past the check ([security.md](security.md#chatgpt-and-claude-connectors)).
+
+Each pending card is `{card_id, card}`, where `card` is the card's summary
+followed by one `<field>: <value>` line for each parameter the call runs
+with, whole, and a template launch's rendered task. A value holding a line
+break or a character not printed as itself, such as a bidi override, is
+shown quoted with escapes.
+
+`aether_decide_assistant_card` decides one: `card_id`, `decision` (`approve`
+or `decline`) and `card`, byte for byte. Anything else fails with `card text
+does not match card <id>; show the person the card and pass its text
+exactly` and decides nothing. It is a separate tool so the host asks before
+each decision; an **Always allow** on it lets the external model approve
+cards without asking you, so allow it once at a time. Approving needs the
+scope of the method's own tool: `write` for launches, messages, answers,
+pauses, session lifecycle, memory notes and watches, `control` for stops,
+closes, merges, pull requests, mode switches and handoffs. A method no
+connector tool calls, such as saving the environment or your launch
+defaults, is decided only in Cloudfield. Declining needs no scope. Only a card a turn of this
+connector raised can be decided. A card reads `Waiting for your approval in
+Cloudfield` and is decided only there when its text is over 2,000 characters,
+its summary holds a line break or a character not printed as itself, it forgets a
+preference or shows a saved one, or approving it needs a scope the
+connector lacks now or lacked when the turn ran. The connector offers only
+**Approve** and **Decline**; rules and auto-approval change only in Cloudfield.
+
+Your [approval rules and auto-approval](assistant.md#auto-approval) apply to
+connector turns as to dashboard turns, within the connector's scopes: a
+method the connector was not granted always shows a card, decided in Cloudfield.
+A call that never shows a card, such as a pause, runs only under a scope
+the connector holds, so a connector turn cannot save a preference.
+The server reads the connector's scopes when each prompt is sent and each
+call is checked, not when the prompt was queued: once you revoke the
+connector, its waiting prompts fail with `assistant: ChatGPT connector <id>:
+it was revoked`, its turn's calls no longer pass without a card, and its
+calls that never show one, such as a pause, fail.
+
+The assistant not being signed in fails the call with `assistant: no agent is
+ready; ...`, and a full queue with the queue's own error. The MCP Tasks
+extension is not supported: the Go MCP SDK this server uses (v1.7.0) has no
+`tasks/get`, so clients poll with `turn_id`.
 
 ### Only in the dashboard
 
@@ -593,12 +707,13 @@ do not hold:
 
 ChatGPT and Claude ask before each tool that is not read-only. ChatGPT asks by
 default and can remember your answer for a conversation. Claude offers **Allow
-once** and **Always allow** per tool. Aether shows no confirmation card of its
-own, and the [assistant's auto-approval](assistant.md#auto-approval) does not
-apply. Your role still decides: a viewer's launch is refused, as it is in
-`aether`. A connector's calls are judged by the device its code was minted on:
-a method that needs an approved device refuses a connector minted on a
-registered one.
+once** and **Always allow** per tool. Cloudfield shows no confirmation card of
+its own for these tools, and the [assistant's
+auto-approval](assistant.md#auto-approval) applies only inside
+[`aether_ask_assistant`](#ask-your-assistant) turns. Your role still decides: a
+viewer's launch is refused, as it is in `cloudfield`. A connector's calls are judged
+by the device its code was minted on: a method that needs an approved device
+refuses a connector minted on a registered one.
 
 Each connector can make 30 write calls at once, enough for many parallel
 launches, then regains one every 2 seconds, up to 30 again. Past that, the
@@ -642,12 +757,12 @@ device or Slack user it acted on (for an accepted merge, the absorbed member;
 for a refused one, the proposal), and `ok` or `error` with the error code. It never holds tokens, messages or other parameters. How a call arrived
 is `connector` with the client and connector id, `assistant`, `dashboard` for
 the server-hosted dashboard, or `cli` for any SSH client, including the
-desktop app and `aether gui`.
+desktop app and `cloudfield gui`.
 
 ```sh
-aether audit                                  # your entries, newest first
-aether audit --connector con-7k2m9q4xbd       # one connector's calls, creation and end
-aether audit --before 812                     # the page after one ending at 812
+cloudfield audit                                  # your entries, newest first
+cloudfield audit --connector con-7k2m9q4xbd       # one connector's calls, creation and end
+cloudfield audit --before 812                     # the page after one ending at 812
 ```
 
 ```
@@ -656,51 +771,55 @@ SEQ  TIME                 MEMBER          VIA                                MET
 813  2026-10-26 14:01:40  mem-4f8x2kq9vd  connector ChatGPT con-7k2m9q4xbd    run.launch  run-d6ay38tj8j  ok
 ```
 
-You see your own entries; an admin sees everyone's. The `audit.list` RPC
+You see your own entries; a super admin sees everyone's. An admin also sees the
+entries in the workspaces they own, except another member's entries about a
+session they do not reach in every workspace, or one since deleted, and about a
+note from such a session or one since deleted. The `audit.list` RPC
 returns the same entries, at most 200 a page. The server keeps each member's
 newest 10,000 call entries and, apart from them, their newest 10,000 connector,
 account, member and Slack changes that took effect, so a flood of calls cannot
 push a security change out of the history. A call that changed nothing, such
 as revoking a share that does not exist, is a call entry. After a member merge, the absorbed member's entries
-keep their id, so only admins see them.
+keep their id, so only super admins see them.
 
 ## Revoke a connector
 
 Select **Revoke** next to it in **Settings → ChatGPT and Claude**, or run:
 
 ```sh
-aether mcp revoke con-7k2m9q4xbd
+cloudfield mcp revoke con-7k2m9q4xbd
 ```
 
 The connector's next call fails, including one in a session the app already has
 open, and so does its refresh token; the app asks you to connect again with a
-new code. You can revoke your own connectors, and an admin can revoke anyone's.
+new code. You can revoke your own connectors, and a super admin can revoke
+anyone's; any other connector id fails as an unknown one.
 Removing the connector in ChatGPT or Claude does not revoke it on the server.
 Revoke it here too.
 
 A connector also stops working at its next request when:
 
-- the device it was minted on is revoked (`aether device revoke <device id>`)
+- the device it was minted on is revoked (`cloudfield device revoke <device id>`)
 - its member is removed
 - the server runs under `edge-access approved-devices` and that device is not
   approved
-- its refresh token goes unused for 30 days (`aether mcp` then no longer lists
+- its refresh token goes unused for 30 days (`cloudfield mcp` then no longer lists
   it)
 - the edge moved to another origin, which changes the connector URL
 
 A connector whose code was minted over a member SSH key or a tailnet
 connection has no device, so revoking a device never cuts it off. Revoke it
-with `aether mcp revoke`.
+with `cloudfield mcp revoke`.
 
 ## Troubleshooting
 
-`aether mcp` prints errors as `aether: rpc error <code>: <message>`.
+`cloudfield mcp` prints errors as `aether: rpc error <code>: <message>`.
 
 | Message | Fix |
 | --- | --- |
-| `connector.code: this server has no edge (edge-url is empty), and ChatGPT and Claude reach a connector only through one; an admin turns it on with: sudo aether-server config set edge-url https://edge.onaether.dev, then sudo systemctl restart aether-server` | Turn the edge on |
+| `connector.code: this server has no edge (edge-url is empty), and ChatGPT and Claude reach a connector only through one; an admin turns it on with: sudo aether-server config set edge-url https://edge.cloudfield.ai, then sudo systemctl restart aether-server` | Turn the edge on |
 | `connector.code: this server is not connected to its edge at <edge-url>; an admin sees why with: sudo aether-server edge status` | Fix the edge connection |
-| `connector.code needs an approved device, a member SSH key or a tailnet connection; this connection signed in with device "<label>", which is registered` | An admin approves your device, or run `aether mcp` from an approved one |
+| `connector.code needs an approved device, a member SSH key or a tailnet connection; this connection signed in with device "<label>", which is registered` | An admin approves your device, or run `cloudfield mcp` from an approved one |
 | `method not found: connector.code; the server is older than this CLI, and an admin updates it with aether server update` | Update the server |
 | `connector.revoke: no connector <id>; aether mcp lists yours` | The id is wrong or already revoked |
 
@@ -710,24 +829,26 @@ A tool call can fail with:
 | --- | --- |
 | `<method> needs the <scope> scope, which <client> connector <id> was not granted; ...` | Select **Reconnect** next to the connector and check the box the message names |
 | `<method>: <client> connector <id> cannot call this method; ...` | No connector can. Use the app or the CLI |
+| `503 this server already has 8 MCP connector requests in progress through the edge; retry shortly` | 8 calls to the server were in progress for the 15 seconds this one waited, or 16 others were already waiting. Call again after the `Retry-After` seconds; if it persists, the edge's log and `aether_edge_refusals_total{reason="MCP connection limit"}` show it ([edge.md](edge.md#monitoring)) |
+| `503 server is not connected to the edge` | The server is down or cannot reach the edge; an admin runs `sudo cloudfield-server edge status`. For 30 seconds after the edge sees the server's control channel end, it holds up to 16 calls and sends them to the server once it is back, so a quick restart does not fail them. A host that drops off the network without closing the channel is noticed only after 60 seconds of silence. If the client marks the connector failed, reconnect it (in Claude Code, `/mcp`) |
 
 On the page that opens when you connect:
 
 | Message | Cause |
 | --- | --- |
-| `That code is wrong, expired or already used. Get a new one from Settings → ChatGPT and Claude in the Aether app, or aether mcp, and paste it here.` | The code is not live. A server restart also forgets codes |
+| `That code is wrong, expired or already used. Get a new one from Settings → ChatGPT and Claude in the Cloudfield app, or aether mcp, and paste it here.` | The code is not live. A server restart also forgets codes |
 | `10 wrong codes came from your address in the last minute. Wait a minute, then paste the code again.` | 10 wrong codes in a minute from your address (your IPv6 /64). Other addresses are not affected |
 | `300 wrong codes came to this server from all addresses in the last minute. Wait a minute, then paste the code again.` | Someone is guessing codes from many addresses. Pairing resumes a minute after the guessing stops |
-| `Aether connectors work with ChatGPT and Claude; <host> is not one of them.` | Only `chatgpt.com` and `claude.ai` can connect |
-| `None of your servers can take this connection.` (edge sign-in page) | Each server listed under **Not available** says why: not connected, too old for the universal URL (an admin runs `sudo aether-server update`), or an invitation you have not joined |
-| The edge sign-in page does not list your server | Your GitHub account is not bound to a member there. Bind it (`aether member identities`) or use the `<edge>/mcp/<server id>` URL `aether mcp` prints |
+| `Cloudfield connectors work with ChatGPT and Claude; <host> is not one of them.` | Only `chatgpt.com` and `claude.ai` can connect |
+| `None of your servers can take this connection.` (edge sign-in page) | Each server listed under **Not available** says why: not connected, too old for the universal URL (an admin runs `sudo cloudfield-server update`), or an invitation you have not joined |
+| The edge sign-in page does not list your server | Your GitHub account is not bound to a member there. Bind it (`cloudfield member identities`) or use the `<edge>/mcp/<server id>` URL `cloudfield mcp` prints |
 | `Cannot connect as your GitHub account: <account> is not a member of <server>; ...` | That GitHub account is not bound to a member. Sign in at the edge as the right account, or connect with a code |
 | `Cannot connect as your GitHub account: the edge's sign-in for it was already used.`, `... expired at <time>` or `... was issued at <time>, and this server takes only sign-ins issued from <time>, 30s after it last started` | Start again from ChatGPT or Claude |
 | `Cannot connect as your GitHub account: the edge's sign-in for it was already opened in another browser.` or `... this consent page was opened in another browser than the one that signed in at the edge.` | The page was opened or posted from a browser other than the one that chose the server. Start again from ChatGPT or Claude in one browser |
 | `The edge put its sign-in in the URL, where logs and browser history keep it, so it is refused.` | The server's edge speaks protocol 4, but something sent the old hand-off. Start again from ChatGPT or Claude |
 
 If an app asks you to sign in again, the connector was revoked or cut off.
-Connect again from the app; `aether mcp` prints the URL and a code if the page
+Connect again from the app; `cloudfield mcp` prints the URL and a code if the page
 asks for one.
 
 ## Security model

@@ -14,12 +14,12 @@ import (
 )
 
 const (
-	workspaceMirrorUsage          = "usage: aether workspace mirror <status|configure|refresh|adopt|disable>"
-	workspaceMirrorStatusUsage    = "usage: aether workspace mirror status [--workspace <name-or-id>]"
-	workspaceMirrorConfigureUsage = "usage: aether workspace mirror configure --source <url> [--workspace <name-or-id>] [--branch <branch>] [--auth public|deploy-key|github] [--github-account-id <id>] [--known-hosts-file <path>]"
-	workspaceMirrorRefreshUsage   = "usage: aether workspace mirror refresh --workspace <name-or-id>"
-	workspaceMirrorAdoptUsage     = "usage: aether workspace mirror adopt --workspace <name-or-id> --generation <n> --commit <reviewed-sha> --yes"
-	workspaceMirrorDisableUsage   = "usage: aether workspace mirror disable --workspace <name-or-id> --yes"
+	workspaceMirrorUsage          = "usage: cloudfield workspace mirror <status|configure|refresh|adopt|disable>"
+	workspaceMirrorStatusUsage    = "usage: cloudfield workspace mirror status [--workspace <name-or-id>]"
+	workspaceMirrorConfigureUsage = "usage: cloudfield workspace mirror configure --source <url> [--workspace <name-or-id>] [--branch <branch>] [--auth public|deploy-key|github] [--github-account-id <id>] [--known-hosts-file <path>]"
+	workspaceMirrorRefreshUsage   = "usage: cloudfield workspace mirror refresh --workspace <name-or-id>"
+	workspaceMirrorAdoptUsage     = "usage: cloudfield workspace mirror adopt --workspace <name-or-id> --generation <n> --commit <reviewed-sha> --yes"
+	workspaceMirrorDisableUsage   = "usage: cloudfield workspace mirror disable --workspace <name-or-id> --yes"
 )
 
 type workspaceMirrorConfigureOptions struct {
@@ -391,6 +391,12 @@ func printWorkspaceMirror(w io.Writer, ws protocol.Workspace, result protocol.Wo
 	}
 	if result.PublicKey != "" {
 		if _, err := fmt.Fprintf(w, "public deploy key %s\n", result.PublicKey); err != nil {
+			return err
+		}
+	}
+	if result.Status == string(domain.MirrorStatusPending) && result.ObservedCommit != "" && result.AcceptedCommit == "" && result.Generation > 0 {
+		if _, err := fmt.Fprintf(w, "sessions cannot launch until an admin adopts revision %s\ncheck that it is the upstream commit you expect on %s, then run:\n  %s\n",
+			result.ObservedCommit, result.Branch, domain.MirrorAdoptCommand(domain.WorkspaceID(ws.ID), result.Generation, result.ObservedCommit)); err != nil {
 			return err
 		}
 	}

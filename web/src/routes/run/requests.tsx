@@ -21,7 +21,7 @@ import type { RunRoom } from '@/routes/run/room'
 import { SessionRequestCard } from '@/routes/run/session-requests'
 import { useStore } from '@/store'
 import { queuedSteers, unansweredQuestions } from '@/store/collaboration'
-import { useSelf } from '@/store/hooks'
+import { useSelf, useStale } from '@/store/hooks'
 import { stillWaiting, usePastDeadline } from '@/store/optimistic'
 import type { RunRecord } from '@/store/runs'
 
@@ -58,9 +58,10 @@ function ReplyForm({ question, room }: { question: RoomMessage; room: RunRoom })
   const [body, setBody] = useState('')
   const [sending, setSending] = useState<object | null>(null)
   const late = usePastDeadline(sending !== null)
+  const stale = useStale()
   const send = async () => {
     const text = body.trim()
-    if (!text || sending) return
+    if (!text || sending || stale) return
     const mine = {}
     setSending(mine)
     const posted = await room.post({ kind: 'reply', body: text, correlationID: question.id })
@@ -121,12 +122,14 @@ function SteerCard({ steer, name, agent, room, openTerminal }: {
 }
 
 function SudoCard({ run, request }: { run: RunRecord; request: RunInputRequest }) {
-  const self = useSelf()
+  const self = useSelf(run.workspace_id)
   const steerOthers = useStore((s) => s.workspaces[run.workspace_id]?.steer_others)
   const mayAllow = allowed('sudo', self, { owner: run.member_id })
   const mayDeny = allowed('steer', self, { owner: run.member_id, protected: run.protected, steerOthers })
   const [error, setError] = useState<string>()
+  const stale = useStale()
   const decide = async (allow: boolean) => {
+    if (stale) return
     setError(undefined)
     try {
       await api.runInputRespond(run.id, request.id, allow ? sudoOption.allow : sudoOption.deny)
@@ -174,7 +177,7 @@ export function NeedsYouCards({ run, agent, room, nav, docked }: {
   const { inputs, sudo, sessionRequests, steers, questions } = useRunRequests(run)
   const name = (id: string, snapshot?: string) => memberNameOr({ members, mergedInto }, id, snapshot)
   const openTerminal = () => {
-    nav.go('terminal')
+    nav.go('terminal', { remember: false })
     if (!agent.localControl && !agent.controlUnavailable) agent.session.takeControl()
   }
 

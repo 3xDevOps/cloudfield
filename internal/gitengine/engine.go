@@ -18,6 +18,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -68,6 +69,24 @@ type Config struct {
 	MirrorResolve MirrorResolveFunc
 	// RemoveCheckout deletes a run checkout tree; nil uses os.RemoveAll.
 	RemoveCheckout func(ctx context.Context, path string) error
+	// VM, when set, puts every new session checkout on a disk of the
+	// session's VM instead of a server directory.
+	VM *VM
+	// GitConfig is git configuration, each "key=value", that every git the
+	// engine runs gets: the git service in a session VM bounds git's memory
+	// with it.
+	GitConfig []string
+	// Relay, when set, receives every snapshot and moved checkout HEAD in
+	// place of the bus and the workspace repository: inside a VM, where the
+	// git service runs this engine, the server publishes them.
+	Relay Relay
+}
+
+// Relay passes on what the diff watch of a checkout reports, under the
+// checkout's key.
+type Relay interface {
+	Snapshot(ctx context.Context, key domain.RunID, payload events.RunDiffPayload) error
+	BranchMoved(ctx context.Context, key domain.RunID, head string) error
 }
 
 // runInfo is a watch-registry entry. Entries are created by StartDiffWatch
@@ -93,7 +112,7 @@ type Engine struct {
 	cfg           Config
 	checkoutsRoot *os.Root
 	mu            sync.Mutex
-	watches       map[domain.RunID]*diffWatch
+	watches       map[domain.RunID]watcher
 	registry      map[domain.RunID]runInfo
 	closed        bool
 	// repoInitMu serializes first-touch creation and configuration, including
@@ -109,6 +128,15 @@ type Engine struct {
 	// repoMaintenanceMu prevents internal repository writers from racing
 	// evidence object pruning and repacking.
 	repoMaintenanceMu sync.Mutex
+	// alternatesMu makes a snapshot store's alternates check and rewrite one
+	// step, so a checkout read cannot undo the switch that shares a store.
+	alternatesMu sync.Mutex
+	// vmReceiveMu guards vmReceiveReserved, the bytes concurrent receives of
+	// VM objects have promised to write but not yet freed. Each receive counts
+	// against it so several at once cannot jointly spend past the free-disk
+	// floor the way an independent disk.Free check each would.
+	vmReceiveMu       sync.Mutex
+	vmReceiveReserved int64
 	// evidencePrunes holds each workspace's debounced object prune. mu
 	// guards it and may be taken under fileWriteMu and repoMaintenanceMu,
 	// never the reverse. Close cancels pruneCtx and waits for prunesRunning.
@@ -153,7 +181,7 @@ func New(cfg Config) (*Engine, error) {
 	return &Engine{
 		cfg:                cfg,
 		checkoutsRoot:      checkoutsRoot,
-		watches:            make(map[domain.RunID]*diffWatch),
+		watches:            make(map[domain.RunID]watcher),
 		registry:           make(map[domain.RunID]runInfo),
 		snapshotLocks:      make(map[domain.RunID]*sync.Mutex),
 		evidencePrunes:     make(map[domain.WorkspaceID]*evidencePrune),
@@ -172,11 +200,11 @@ func (e *Engine) Close() error {
 		return nil
 	}
 	e.closed = true
-	watches := make([]*diffWatch, 0, len(e.watches))
+	watches := make([]watcher, 0, len(e.watches))
 	for _, w := range e.watches {
 		watches = append(watches, w)
 	}
-	e.watches = make(map[domain.RunID]*diffWatch)
+	e.watches = make(map[domain.RunID]watcher)
 	e.mu.Unlock()
 	e.cancelPrunes()
 	for _, w := range watches {
@@ -213,7 +241,9 @@ func (e *Engine) InitWorkspaceRepo(ctx context.Context, ws domain.WorkspaceID) (
 }
 
 // RemoveWorkspaceRepo removes all branches and private refs after the server
-// has fenced workspace admission and purged its run artifacts.
+// has fenced workspace admission and purged its run artifacts. Diff history
+// of other workspaces' sessions that borrows from it, an extra repository's,
+// gets its own copy first.
 func (e *Engine) RemoveWorkspaceRepo(ctx context.Context, ws domain.WorkspaceID) error {
 	repo, err := e.repoPath(ws)
 	if err != nil {
@@ -226,7 +256,19 @@ func (e *Engine) RemoveWorkspaceRepo(ctx context.Context, ws domain.WorkspaceID)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if err := os.RemoveAll(repo); err != nil {
+	if err := e.unshareHistory(ctx, repo); err != nil {
+		return err
+	}
+	// Moved out of the repositories first, so a removal that stops halfway
+	// leaves nothing history could borrow part of a fork point from.
+	removed := repo + ".removed"
+	if err := os.RemoveAll(removed); err != nil {
+		return fmt.Errorf("gitengine: remove workspace repository: %w", err)
+	}
+	if err := os.Rename(repo, removed); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("gitengine: remove workspace repository: %w", err)
+	}
+	if err := os.RemoveAll(removed); err != nil {
 		return fmt.Errorf("gitengine: remove workspace repository: %w", err)
 	}
 	e.mu.Lock()
@@ -241,16 +283,17 @@ func (e *Engine) RemoveWorkspaceRepo(ctx context.Context, ws domain.WorkspaceID)
 
 // updateHook is installed as hooks/update in every workspace bare repo. Run
 // branches are server-owned artifacts: a client push may create or
-// fast-forward refs/heads/aether/run-* but never rewrite one. Deletions are
+// fast-forward refs/heads/aether/run-* or refs/heads/cloudfield/run-* but
+// never rewrite one. Deletions are
 // refused wholesale by receive.denyDeletes (transport.go). Update hooks only
 // fire under receive-pack, so PublishRunBranch's direct fetch into the bare
 // repo rewrites run branches unimpeded.
 const updateHook = `#!/bin/sh
-# Installed by Aether; do not edit - rewritten when the workspace is touched.
+# Installed by Cloudfield; do not edit - rewritten when the workspace is touched.
 refname="$1" oldrev="$2" newrev="$3"
 case "$refname" in
 refs/aether/*)
-	echo "aether: rejected write to protected ref $refname: mirror refs are owned by the Aether server" >&2
+	echo "aether: rejected write to protected ref $refname: mirror refs are owned by the Cloudfield server" >&2
 	exit 1
 	;;
 esac
@@ -259,12 +302,12 @@ if [ -n "$mirrorbase" ] && [ "$refname" = "$mirrorbase" ]; then
 	echo "aether: rejected write to protected ref $refname: this mirrored base is owned by the upstream; use the configured upstream to update it" >&2
 	exit 1
 fi
-case "$refname" in refs/heads/aether/run-*) ;; *) exit 0 ;; esac
+case "$refname" in refs/heads/aether/run-* | refs/heads/cloudfield/run-*) ;; *) exit 0 ;; esac
 zero="0000000000000000000000000000000000000000"
 [ "$oldrev" = "$zero" ] && exit 0 # branch creation is allowed
 [ "$newrev" = "$zero" ] && exit 0 # deletion: receive.denyDeletes decides
 git merge-base --is-ancestor "$oldrev" "$newrev" && exit 0
-echo "aether: rejected non-fast-forward push to $refname: session branches are owned by the Aether server" >&2
+echo "aether: rejected non-fast-forward push to $refname: session branches are owned by the Cloudfield server" >&2
 exit 1
 `
 
@@ -388,6 +431,9 @@ func (e *Engine) existingCheckoutPath(run domain.RunID) (string, error) {
 		return "", err
 	}
 	fi, err := os.Lstat(path)
+	if err != nil && !os.IsNotExist(err) {
+		return "", fmt.Errorf("gitengine: session checkout %s: %w", run, err)
+	}
 	if err != nil || !fi.IsDir() || fi.Mode()&os.ModeSymlink != 0 {
 		return "", fmt.Errorf("%w: %s", ErrCheckoutNotFound, run)
 	}
@@ -426,7 +472,7 @@ func validateID(id string) error {
 // passes -c safe.directory=* to neutralize mixed-ownership checks on
 // container-written checkouts. dir may be empty. Returns trimmed stdout.
 func (e *Engine) git(ctx context.Context, dir string, args ...string) (string, error) {
-	return e.gitIn(ctx, dir, gitEnv(), args...)
+	return e.gitIn(ctx, dir, e.gitEnv(), args...)
 }
 
 // gitIn is git with the environment chosen by the caller, for operations
@@ -449,15 +495,16 @@ func (e *Engine) gitIn(ctx context.Context, dir string, env []string, args ...st
 }
 
 // gitEnv is the sanitized environment for every git invocation: PATH for
-// tool discovery, no user or system config, no inherited GIT_* variables.
+// tool discovery, no user or system config, no inherited GIT_* variables;
+// Config.GitConfig is the only configuration it adds.
 //
 // GIT_TERMINAL_PROMPT stops git itself from asking; the askpass pair stops
 // ssh-keygen from asking. A member home is agent-writable, so the signing
 // key CommitAll is handed can be a passphrase-protected one, and without
 // these the server blocks on /dev/tty forever whenever it was started from
 // a terminal.
-func gitEnv() []string {
-	return []string{
+func (e *Engine) gitEnv() []string {
+	return append([]string{
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + os.TempDir(),
 		"GIT_CONFIG_NOSYSTEM=1",
@@ -466,7 +513,22 @@ func gitEnv() []string {
 		"SSH_ASKPASS=/bin/false",
 		"SSH_ASKPASS_REQUIRE=force",
 		"LC_ALL=C",
+	}, ConfigEnv(e.cfg.GitConfig)...)
+}
+
+// ConfigEnv gives git the settings, each "key=value", through its
+// environment, as git -c does on a command line.
+func ConfigEnv(settings []string) []string {
+	if len(settings) == 0 {
+		return nil
 	}
+	env := []string{"GIT_CONFIG_COUNT=" + strconv.Itoa(len(settings))}
+	for i, setting := range settings {
+		key, value, _ := strings.Cut(setting, "=")
+		n := strconv.Itoa(i)
+		env = append(env, "GIT_CONFIG_KEY_"+n+"="+key, "GIT_CONFIG_VALUE_"+n+"="+value)
+	}
+	return env
 }
 
 // publishBranch emits git.branch for a run whose branch tip moved from

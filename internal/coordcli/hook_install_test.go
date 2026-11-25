@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/3xDevOps/Aether/internal/coordhooks"
 )
 
 func hookInstallFixture(t *testing.T, path, content string) {
@@ -152,7 +154,7 @@ func TestHookInstallationBoundsAndCustomSources(t *testing.T) {
 
 func TestHookSummaryReportsOnlyTheRunHarness(t *testing.T) {
 	home, project := t.TempDir(), t.TempDir()
-	in := hookInstallInputs{home: home, cwd: project, env: func(string) string { return "" }}
+	in := hookInstallInputs{home: home, cwd: project, env: func(string) string { return "" }, cli: coordhooks.OldCLI}
 	destinations := map[string]string{
 		"claude":  filepath.Join(home, ".claude", "settings.json"),
 		"codex":   filepath.Join(home, ".codex", "hooks.json"),
@@ -190,7 +192,7 @@ func TestHookSummaryReportsOnlyTheRunHarness(t *testing.T) {
 // and are never reported missing.
 func TestHookInstallManagedLaunchLoadsHooks(t *testing.T) {
 	const managed = "Inbox hooks (opencode): loaded by this session's launch; do not install a manual copy.\n"
-	const enhanced = "Inbox hooks: not used in Enhanced sessions; Aether hands this session its mail as a prompt. Do not install them.\n"
+	const enhanced = "Inbox hooks: not used in Enhanced sessions; Cloudfield hands this session its mail as a prompt. Do not install them.\n"
 	for _, tt := range []struct {
 		name    string
 		env     map[string]string
@@ -204,7 +206,7 @@ func TestHookInstallManagedLaunchLoadsHooks(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			env := tt.env
 			env["AETHER_HARNESS"] = "opencode"
-			in := hookInstallInputs{home: t.TempDir(), cwd: t.TempDir(), env: func(key string) string { return env[key] }}
+			in := hookInstallInputs{home: t.TempDir(), cwd: t.TempDir(), env: func(key string) string { return env[key] }, cli: coordhooks.OldCLI}
 			var summary, full strings.Builder
 			if err := writeHookSummaryWithInputs(&summary, "opencode", in); err != nil {
 				t.Fatal(err)

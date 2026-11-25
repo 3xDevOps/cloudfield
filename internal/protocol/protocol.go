@@ -26,10 +26,6 @@ const (
 	SubsystemSync = "aether-sync"
 	// SubsystemTerminal is the per-member terminal control and PTY channel.
 	SubsystemTerminal = "aether-terminal"
-
-	// WindowChangeRequest is the RFC 4254 resize request. The server also
-	// sends it to report a resize by someone else; see docs/local-gateway.md.
-	WindowChangeRequest = "window-change"
 )
 
 // MaxLineBytes is the maximum length of one NDJSON line, framing included.
@@ -38,37 +34,42 @@ const MaxLineBytes = 96 << 20
 
 // Control-channel method names.
 const (
-	MethodServerInfo      = "server.info"
-	MethodWorkspaceList   = "workspace.list"
-	MethodWorkspaceGet    = "workspace.get"
-	MethodMemberList      = "member.list"
-	MethodMemberApprove   = "member.approve"
-	MethodMemberInvite    = "member.invite"
-	MethodMemberRemove    = "member.remove"
-	MethodMemberColor     = "member.color"
-	MethodMemberRename    = "member.rename"
-	MethodMemberGit       = "member.git"
-	MethodMemberRole      = "member.role"
-	MethodAccountList     = "account.list"
-	MethodAccountShare    = "account.share"
-	MethodAccountRevoke   = "account.revoke"
-	MethodWorkspaceAdd    = "workspace.add"
-	MethodWorkspaceDelete = "workspace.delete"
-	MethodRunLaunch       = "run.launch"
-	MethodRunList         = "run.list"
-	MethodRunGet          = "run.get"
-	MethodRunKill         = "run.kill"
-	MethodRunRelease      = "run.release"
-	MethodRunDelete       = "run.delete"
-	MethodRunPause        = "run.pause"
-	MethodRunResume       = "run.resume"
-	MethodRunInject       = "run.inject"
-	MethodRunClose        = "run.close"
-	MethodRunRelaunch     = "run.relaunch"
-	MethodRunHandoff      = "run.handoff"
-	MethodRunPull         = "run.pull"
-	MethodTerminalStatus  = "terminal.status"
-	MethodTerminalStop    = "terminal.stop"
+	MethodServerInfo            = "server.info"
+	MethodWorkspaceList         = "workspace.list"
+	MethodWorkspaceGet          = "workspace.get"
+	MethodMemberList            = "member.list"
+	MethodMemberApprove         = "member.approve"
+	MethodMemberInvite          = "member.invite"
+	MethodMemberRemove          = "member.remove"
+	MethodMemberColor           = "member.color"
+	MethodMemberRename          = "member.rename"
+	MethodMemberGit             = "member.git"
+	MethodMemberRole            = "member.role"
+	MethodAccountList           = "account.list"
+	MethodAccountShare          = "account.share"
+	MethodAccountRevoke         = "account.revoke"
+	MethodWorkspaceAdd          = "workspace.add"
+	MethodWorkspaceDelete       = "workspace.delete"
+	MethodWorkspaceAccessList   = "workspace.access.list"
+	MethodWorkspaceAccessGrant  = "workspace.access.grant"
+	MethodWorkspaceAccessRevoke = "workspace.access.revoke"
+	MethodWorkspaceOwnerSet     = "workspace.owner.set"
+	MethodRunLaunch             = "run.launch"
+	MethodRunList               = "run.list"
+	MethodRunGet                = "run.get"
+	MethodRunKill               = "run.kill"
+	MethodRunRelease            = "run.release"
+	MethodRunDelete             = "run.delete"
+	MethodRunPause              = "run.pause"
+	MethodRunResume             = "run.resume"
+	MethodRunWake               = "run.wake"
+	MethodRunInject             = "run.inject"
+	MethodRunClose              = "run.close"
+	MethodRunRelaunch           = "run.relaunch"
+	MethodRunHandoff            = "run.handoff"
+	MethodRunPull               = "run.pull"
+	MethodTerminalStatus        = "terminal.status"
+	MethodTerminalStop          = "terminal.stop"
 	// MethodTerminalExec runs one command in the caller's environment
 	// terminal and answers when it ends or TerminalExecTimeout passes.
 	MethodTerminalExec = "terminal.exec"
@@ -110,6 +111,9 @@ const (
 // AgentInstallTimeout bounds one agent.install.
 const AgentInstallTimeout = 10 * time.Minute
 
+// EnvSaveCheckTimeout bounds the check env.save runs on the committed image.
+const EnvSaveCheckTimeout = 10 * time.Minute
+
 // AssistantStartTimeout bounds starting the assistant, which on a first start
 // installs its agent; assistant.start and assistant.prompt wait for it.
 const AssistantStartTimeout = 10 * time.Minute
@@ -132,7 +136,8 @@ const (
 	MethodRunSeen = "run.seen"
 	// MethodRunReview records what the owner did with a reported success:
 	// complete accepts it, closing a live run as completed; later puts it
-	// off (Kill-gated, like run.close).
+	// off; not-yet withdraws it from review until the agent reports success
+	// again (Kill-gated, like run.close).
 	MethodRunReview = "run.review"
 	// MethodSyncConflict notifies both affected members via the event feed
 	// (Steer-gated, like the sync bridge).

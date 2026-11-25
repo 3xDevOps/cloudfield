@@ -7,9 +7,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
-	"maps"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -61,9 +62,7 @@ func seedAssistantInstall(t *testing.T, assistantDir string, member domain.Membe
 	if err := os.Chmod(filepath.Join(dir, "node_modules", ".bin", profile.ACPInstall.Binary), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	deps := map[string]string{profile.ACPInstall.Package: profile.ACPInstall.Version}
-	maps.Copy(deps, assistantPins[agent])
-	manifest, err := json.Marshal(map[string]any{"private": true, "dependencies": deps})
+	manifest, err := json.Marshal(map[string]any{"private": true, "dependencies": assistantDeps(profile.ACPInstall)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +196,7 @@ func TestIntegrationAssistantContainerIsolationDocker(t *testing.T) {
 		switch {
 		case m.Type == mount.TypeVolume:
 			t.Errorf("the assistant container mounts the volume %s at %s", m.Name, m.Destination)
-		case m.Type == mount.TypeBind && !strings.HasPrefix(m.Source, resolvedDir) && m.Destination != coordtransport.BinaryPath && m.Destination != coordtransport.CLIPath:
+		case m.Type == mount.TypeBind && !strings.HasPrefix(m.Source, resolvedDir) && m.Destination != coordtransport.BinaryPath && m.Destination != coordtransport.CLIPath && m.Destination != coordtransport.CloudfieldCLIPath:
 			t.Errorf("assistant bind mount from outside its directory: %s at %s", m.Source, m.Destination)
 		}
 	}
@@ -277,9 +276,13 @@ func TestIntegrationAssistantContainerIsolationDocker(t *testing.T) {
 	if _, err := e.sched.EnsureTerminal(ctx, ada); err != nil {
 		t.Fatalf("EnsureTerminal: %v", err)
 	}
+	// The terminal mounts Ada's home volume, which the runs' cleanups remove.
+	// A non-nil afterStop makes WithStoppedTerminal destroy the kept container
+	// under the terminal lock, which the supervisor takes when the stop wakes it.
 	t.Cleanup(func() {
-		_ = e.sched.StopTerminal(context.Background(), ada)
-		_, _ = e.sched.DestroyStoppedTerminal(context.Background(), ada)
+		if err := e.sched.WithStoppedTerminal(context.Background(), ada, func() error { return nil }); err != nil {
+			t.Errorf("stop and destroy the terminal: %v", err)
+		}
 	})
 	sup := e.sched.lookupLiveTerminal(ada)
 	terminal, err := docker.Inspect(ctx, sup.containerID)
@@ -496,6 +499,26 @@ func TestIntegrationAssistantIssuerMatchesTheBundledCLIs(t *testing.T) {
 			if !bytes.Contains(data, []byte(s)) {
 				t.Errorf("%s's bundled CLI %s does not contain %q; update the issuer next to the pins", agent, matches[0], s)
 			}
+		}
+		dir := AssistantInstallDir(e.sched.cfg.AssistantDir, e.member.ID, agent)
+		if i := profile.ACPInstall; i.CLIPackage != "" {
+			if _, err := os.Stat(filepath.Join(dir, "node_modules", i.Package, "node_modules", i.CLIPackage)); !errors.Is(err, fs.ErrNotExist) {
+				t.Errorf("%s installed its own %s (stat: %v): its dependency range does not accept CLIVersion %q; set CLIVersion to a version it accepts", i.Package, i.CLIPackage, err, i.CLIVersion)
+			}
+			continue
+		}
+		if profile.ACPInstall.CLIVersion == "" {
+			continue
+		}
+		raw, err := os.ReadFile(filepath.Join(dir, "node_modules/@anthropic-ai/claude-agent-sdk/package.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var sdk struct {
+			ClaudeCodeVersion string `json:"claudeCodeVersion"`
+		}
+		if err := json.Unmarshal(raw, &sdk); err != nil || sdk.ClaudeCodeVersion != profile.ACPInstall.CLIVersion {
+			t.Errorf("%s's adapter bundles Claude Code %q (%v); set CLIVersion %q next to the pin to it", agent, sdk.ClaudeCodeVersion, err, profile.ACPInstall.CLIVersion)
 		}
 	}
 }

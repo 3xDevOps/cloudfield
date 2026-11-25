@@ -60,7 +60,7 @@ func (s *Service) normalize(kind string, conditions []string) ([]string, error) 
 	for _, c := range conditions {
 		switch {
 		case c == "deployed":
-			return nil, invalid("Aether has no deploy signal, so it cannot watch for %q; watch finished or pr_merged instead", c)
+			return nil, invalid("Cloudfield has no deploy signal, so it cannot watch for %q; watch finished or pr_merged instead", c)
 		case !slices.Contains(set.all, c):
 			return nil, invalid("condition %q does not apply to a %s; use %s", c, kind, strings.Join(set.all, ", "))
 		case s.pr == nil && (kind == protocol.WatchTargetPR || c == protocol.WatchPRMerged || c == protocol.WatchCI):
@@ -116,7 +116,7 @@ func (s *Service) resolve(ctx context.Context, member *domain.Member, t protocol
 		if t.RunID == "" {
 			return "", "", nil, invalid("target.run_id is required")
 		}
-		run, err := s.store.GetRun(ctx, domain.RunID(t.RunID))
+		run, err := s.reachableRun(ctx, member, domain.RunID(t.RunID))
 		if err != nil {
 			return "", "", nil, fmt.Errorf("session %s: %w", t.RunID, err)
 		}
@@ -133,7 +133,7 @@ func (s *Service) resolve(ctx context.Context, member *domain.Member, t protocol
 			return "", "", nil, invalid("target.repo and target.number are required")
 		}
 		if t.RunID != "" {
-			run, err := s.store.GetRun(ctx, domain.RunID(t.RunID))
+			run, err := s.reachableRun(ctx, member, domain.RunID(t.RunID))
 			if err != nil {
 				return "", "", nil, fmt.Errorf("session %s: %w", t.RunID, err)
 			}
@@ -143,13 +143,23 @@ func (s *Service) resolve(ctx context.Context, member *domain.Member, t protocol
 	default:
 		return "", "", nil, invalid("target kind %q is not one of run, pr", t.Kind)
 	}
-	if ws != "" {
-		actor := permissions.Actor{ID: member.ID, Role: member.Role}
-		if err := permissions.Check(permissions.View, actor, permissions.Target{Workspace: ws}); err != nil {
-			return "", "", nil, fmt.Errorf("%w: %w", ErrDenied, err)
+	return ws, title, fired, nil
+}
+
+// reachableRun reads run id for member, answering a run with a workspace
+// they cannot reach exactly as a missing one.
+func (s *Service) reachableRun(ctx context.Context, member *domain.Member, id domain.RunID) (*domain.Run, error) {
+	run, err := s.store.GetRun(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	actor := permissions.ActorOf(member)
+	for _, ws := range append([]domain.WorkspaceID{run.WorkspaceID}, run.ExtraWorkspaces()...) {
+		if !actor.Reaches(ws) {
+			return nil, store.ErrNotFound
 		}
 	}
-	return ws, title, fired, nil
+	return run, nil
 }
 
 // ErrDenied marks a target the caller may not see.
@@ -205,12 +215,16 @@ func (s *Service) create(ctx context.Context, memberID domain.MemberID, p protoc
 	if err != nil {
 		return protocol.WatchResult{}, err
 	}
+	relay, err := s.relayTargets(ctx, member, ws, p.RelayTo)
+	if err != nil {
+		return protocol.WatchResult{}, err
+	}
 	w := &store.Watch{
 		MemberID: memberID, WorkspaceID: ws, TargetKind: p.Target.Kind, RunID: domain.RunID(p.Target.RunID),
 		Repo: p.Target.Repo, Number: p.Target.Number,
 		TargetTitle: title, Conditions: conditions, Label: lbl, Source: source, State: protocol.WatchActive,
 		Fired: fired, IdempotencyKey: p.IdempotencyKey, CreatedAt: now, UpdatedAt: now, ExpiresAt: expires,
-		NextCheckAt: &now,
+		NextCheckAt: &now, RelayTo: relay,
 	}
 	if p.Target.Kind == protocol.WatchTargetPR || len(prConditionsOf(conditions)) > 0 {
 		prTitle, verr := s.pr.Validate(ctx, memberID, p.Target)
@@ -244,7 +258,7 @@ func (s *Service) create(ctx context.Context, memberID domain.MemberID, p protoc
 
 // insert stores w unless member already has it: the watch with the same
 // idempotency key, or without a key, a live watch on the same target with
-// the same conditions, resumed if it was paused and given w's assistant
+// the same conditions and relay_to, resumed if it was paused and given w's assistant
 // source if w has it. It reports whether w is new, and otherwise replaces
 // *w with the existing watch.
 func (s *Service) insert(ctx context.Context, w *store.Watch) (bool, error) {
@@ -262,7 +276,7 @@ func (s *Service) insert(ctx context.Context, w *store.Watch) (bool, error) {
 	}
 	s.createMu.Lock()
 	defer s.createMu.Unlock()
-	found, err := s.existing(ctx, w.MemberID, targetOf(w), w.Conditions, w.Source)
+	found, err := s.existing(ctx, w.MemberID, targetOf(w), w.Conditions, w.RelayTo, w.Source)
 	if err != nil {
 		return false, err
 	}
@@ -273,18 +287,18 @@ func (s *Service) insert(ctx context.Context, w *store.Watch) (bool, error) {
 	return true, s.store.CreateWatch(ctx, w)
 }
 
-// existing is member's live watch on target with conditions, resumed if it
+// existing is member's live watch on target with conditions and relay, resumed if it
 // was paused, or nil. A request from the assistant makes the watch an
 // assistant watch, since only those write their notices into the assistant
 // conversation; push delivery is unchanged.
-func (s *Service) existing(ctx context.Context, member domain.MemberID, t protocol.WatchTarget, conditions []string, source string) (*store.Watch, error) {
+func (s *Service) existing(ctx context.Context, member domain.MemberID, t protocol.WatchTarget, conditions []string, relay []domain.RunID, source string) (*store.Watch, error) {
 	for range 4 {
 		watches, err := s.store.ListWatches(ctx, store.WatchFilter{MemberID: member, TargetKind: t.Kind, RunID: domain.RunID(t.RunID)})
 		if err != nil {
 			return nil, err
 		}
 		i := slices.IndexFunc(watches, func(w *store.Watch) bool {
-			return targetOf(w) == t && slices.Equal(w.Conditions, conditions) &&
+			return targetOf(w) == t && slices.Equal(w.Conditions, conditions) && slices.Equal(w.RelayTo, relay) &&
 				w.State != protocol.WatchDone && w.State != protocol.WatchExpired
 		})
 		if i < 0 {
@@ -341,7 +355,13 @@ func (s *Service) settledWatch(ctx context.Context, id string) (*store.Watch, er
 }
 
 func (s *Service) result(ctx context.Context, w *store.Watch) (protocol.WatchResult, error) {
-	out, err := s.toProto(ctx, w)
+	if err := s.allowed(ctx, w); errors.Is(err, errRevoked) {
+		return protocol.WatchResult{Watch: revokedProto(w, err),
+			Receipt: fmt.Sprintf("Not checking %s watch %s: %v. Delete it with watch.delete.", kindWords[w.TargetKind], w.ID, err)}, nil
+	} else if err != nil {
+		return protocol.WatchResult{}, err
+	}
+	out, err := s.readProto(ctx, w)
 	if err != nil {
 		return protocol.WatchResult{}, err
 	}
@@ -378,6 +398,13 @@ func (s *Service) receipt(ctx context.Context, w *store.Watch) (string, error) {
 		line = fmt.Sprintf("Done: %s %s reached its final state.", kindWords[w.TargetKind], w.TargetTitle)
 	case protocol.WatchExpired:
 		line = fmt.Sprintf("Expired: %s %s is no longer watched.", kindWords[w.TargetKind], w.TargetTitle)
+	}
+	if len(w.RelayTo) > 0 && w.State != protocol.WatchDone && w.State != protocol.WatchExpired {
+		ids := make([]string, 0, len(w.RelayTo))
+		for _, run := range w.RelayTo {
+			ids = append(ids, string(run))
+		}
+		line += " Relays each notice to " + strings.Join(ids, ", ") + "."
 	}
 	prefs, err := s.store.GetNotifyPrefs(ctx, w.MemberID)
 	if err != nil {
@@ -422,12 +449,26 @@ func stamp(t *time.Time) string {
 	return t.UTC().Format(time.RFC3339Nano)
 }
 
+// toProto is w as its member may read it now.
 func (s *Service) toProto(ctx context.Context, w *store.Watch) (protocol.Watch, error) {
+	if err := s.allowed(ctx, w); errors.Is(err, errRevoked) {
+		return revokedProto(w, err), nil
+	} else if err != nil {
+		return protocol.Watch{}, err
+	}
+	return s.readProto(ctx, w)
+}
+
+// readProto is w in full, for a member allowed shows it to.
+func (s *Service) readProto(ctx context.Context, w *store.Watch) (protocol.Watch, error) {
 	out := protocol.Watch{
 		ID: w.ID, MemberID: string(w.MemberID), WorkspaceID: string(w.WorkspaceID), Target: targetOf(w),
 		TargetTitle: w.TargetTitle, Conditions: w.Conditions, State: w.State, Error: w.Error, Label: w.Label,
 		Source: w.Source, CreatedAt: stamp(&w.CreatedAt), UpdatedAt: stamp(&w.UpdatedAt), ExpiresAt: stamp(&w.ExpiresAt),
 		LastCheckAt: stamp(w.LastCheckAt), NextCheckAt: stamp(w.NextCheckAt), Link: WatchLink(w.ID),
+	}
+	for _, run := range w.RelayTo {
+		out.RelayTo = append(out.RelayTo, string(run))
 	}
 	if err := json.Unmarshal(w.Observed, &out.Observed); err != nil {
 		return protocol.Watch{}, fmt.Errorf("watch %s observed: %w", w.ID, err)
@@ -443,13 +484,23 @@ func (s *Service) toProto(ctx context.Context, w *store.Watch) (protocol.Watch, 
 	return out, nil
 }
 
+// revokedProto is w for a member who no longer reaches what it watches:
+// enough to recognize and delete it, nothing it read.
+func revokedProto(w *store.Watch, err error) protocol.Watch {
+	return protocol.Watch{
+		ID: w.ID, MemberID: string(w.MemberID), Target: protocol.WatchTarget{Kind: w.TargetKind},
+		Conditions: w.Conditions, State: protocol.WatchError, Error: err.Error(), Label: w.Label, Source: w.Source,
+		CreatedAt: stamp(&w.CreatedAt), UpdatedAt: stamp(&w.UpdatedAt), ExpiresAt: stamp(&w.ExpiresAt), Link: WatchLink(w.ID),
+	}
+}
+
 func notificationProto(n *store.WatchNotification) protocol.WatchNotification {
 	out := protocol.WatchNotification{
 		ID: n.ID, WatchID: n.WatchID, Condition: n.Condition, Title: n.Title, Body: n.Body, Link: n.Link,
 		CreatedAt: stamp(&n.CreatedAt), Deliveries: make([]protocol.WatchDelivery, 0, len(n.Deliveries)),
 	}
 	for _, d := range n.Deliveries {
-		out.Deliveries = append(out.Deliveries, protocol.WatchDelivery{Channel: d.Channel, Status: d.Status, Detail: d.Detail, At: stamp(&d.At)})
+		out.Deliveries = append(out.Deliveries, protocol.WatchDelivery{Channel: d.Channel, Status: d.Status, Detail: d.Detail, At: stamp(&d.At), RunID: string(d.RunID)})
 	}
 	return out
 }
@@ -495,7 +546,12 @@ func (s *Service) Get(ctx context.Context, member domain.MemberID, id string) (p
 	if err != nil {
 		return protocol.WatchGetResult{}, err
 	}
-	pw, err := s.toProto(ctx, w)
+	if aerr := s.allowed(ctx, w); errors.Is(aerr, errRevoked) {
+		return protocol.WatchGetResult{Watch: revokedProto(w, aerr), Notifications: []protocol.WatchNotification{}}, nil
+	} else if aerr != nil {
+		return protocol.WatchGetResult{}, aerr
+	}
+	pw, err := s.readProto(ctx, w)
 	if err != nil {
 		return protocol.WatchGetResult{}, err
 	}
@@ -538,6 +594,15 @@ func (s *Service) Update(ctx context.Context, member domain.MemberID, p protocol
 		}
 		if p.Label != nil {
 			if w.Label, err = label(*p.Label); err != nil {
+				return protocol.WatchResult{}, err
+			}
+		}
+		if p.RelayTo != nil {
+			m, merr := s.store.GetMember(ctx, member)
+			if merr != nil {
+				return protocol.WatchResult{}, merr
+			}
+			if w.RelayTo, err = s.relayTargets(ctx, m, w.WorkspaceID, *p.RelayTo); err != nil {
 				return protocol.WatchResult{}, err
 			}
 		}
@@ -601,7 +666,7 @@ func (s *Service) Prefs(ctx context.Context, member domain.MemberID) (protocol.N
 }
 
 func (s *Service) prefsProto(ctx context.Context, member domain.MemberID, p store.NotifyPrefs) (protocol.NotifyPrefs, error) {
-	out := protocol.NotifyPrefs{Push: &p.Push}
+	out := protocol.NotifyPrefs{Push: &p.Push, Level: p.Level, Digest: &protocol.NotifyDigest{At: p.DigestAt, TZ: p.DigestTZ}}
 	if p.QuietTZ != "" {
 		out.QuietHours = &protocol.QuietHours{Start: p.QuietStart, End: p.QuietEnd, TZ: p.QuietTZ}
 	}
@@ -615,20 +680,36 @@ func (s *Service) prefsProto(ctx context.Context, member domain.MemberID, p stor
 	return out, nil
 }
 
-// SetPrefs replaces member's notification preferences, keeping push as it
-// is when p leaves it out.
+// SetPrefs replaces member's notification preferences, keeping push, the
+// level and the digest time as they are when p leaves them out.
 func (s *Service) SetPrefs(ctx context.Context, member domain.MemberID, p protocol.NotifyPrefs) (protocol.NotifyPrefs, error) {
 	current, err := s.store.GetNotifyPrefs(ctx, member)
 	if err != nil {
 		return protocol.NotifyPrefs{}, err
 	}
-	rec := store.NotifyPrefs{Push: current.Push}
+	rec := store.NotifyPrefs{Push: current.Push, Level: current.Level, DigestAt: current.DigestAt, DigestTZ: current.DigestTZ}
 	if p.Push != nil {
 		rec.Push = *p.Push
 	}
+	switch p.Level {
+	case "":
+	case protocol.NotifyBlockers, protocol.NotifyBatched, protocol.NotifyAll:
+		rec.Level = p.Level
+	default:
+		return protocol.NotifyPrefs{}, invalid("level %q is not blockers, batched or all", p.Level)
+	}
+	if d := p.Digest; d != nil {
+		if _, ok := push.ParseClock(d.At); !ok {
+			return protocol.NotifyPrefs{}, invalid("digest.at is HH:MM, such as 09:00")
+		}
+		if _, err := time.LoadLocation(d.TZ); err != nil || d.TZ == "Local" {
+			return protocol.NotifyPrefs{}, invalid("digest.tz %q is not an IANA time zone such as Europe/Berlin", d.TZ)
+		}
+		rec.DigestAt, rec.DigestTZ = d.At, d.TZ
+	}
 	if q := p.QuietHours; q != nil {
-		start, okStart := minutes(q.Start)
-		end, okEnd := minutes(q.End)
+		start, okStart := push.ParseClock(q.Start)
+		end, okEnd := push.ParseClock(q.End)
 		if !okStart || !okEnd {
 			return protocol.NotifyPrefs{}, invalid("quiet_hours start and end are HH:MM, such as 22:00")
 		}
@@ -638,6 +719,9 @@ func (s *Service) SetPrefs(ctx context.Context, member domain.MemberID, p protoc
 		if q.TZ == "" {
 			return protocol.NotifyPrefs{}, invalid("quiet_hours.tz is required, an IANA time zone such as Europe/Berlin")
 		}
+		if q.TZ == "Local" {
+			return protocol.NotifyPrefs{}, invalid("quiet_hours.tz %q is not an IANA time zone such as Europe/Berlin", q.TZ)
+		}
 		if _, err := time.LoadLocation(q.TZ); err != nil {
 			return protocol.NotifyPrefs{}, invalid("quiet_hours.tz %q is not an IANA time zone: %v", q.TZ, err)
 		}
@@ -646,9 +730,5 @@ func (s *Service) SetPrefs(ctx context.Context, member domain.MemberID, p protoc
 	if err := s.store.PutNotifyPrefs(ctx, member, rec); err != nil {
 		return protocol.NotifyPrefs{}, err
 	}
-	if err := s.store.ReleaseHeldWatchPushes(ctx, member, s.now()); err != nil {
-		return protocol.NotifyPrefs{}, err
-	}
-	s.wake()
 	return s.prefsProto(ctx, member, rec)
 }

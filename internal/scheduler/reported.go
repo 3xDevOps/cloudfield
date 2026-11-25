@@ -24,14 +24,44 @@ const reportFinishDeadline = 2 * time.Minute
 
 const (
 	reportedSuccessReason         = domain.ReportedSuccessReason
-	reportedFailureReason         = "agent reported failure"
+	reportedFailureReason         = domain.ReportedFailureReason
 	reportedSuccessRetainedReason = reportedSuccessReason + "; retained container"
 	reportedFailureRetainedReason = reportedFailureReason + "; retained container"
 	blockedReasonPrefix           = domain.BlockedReasonPrefix
 	needsInputReasonPrefix        = domain.NeedsInputReasonPrefix
 	exitedCompletedReason         = "agent exited; results committed"
 	exitedFailedReasonPrefix      = "agent exited "
+	evidenceUnavailableReason     = "evidence unavailable: session checkout missing"
+	evidenceOverLimitReason       = "evidence unavailable: evidence storage limit exceeded"
+	workUncapturedReason          = "work could not be captured: the session VM stopped before its final commit and is gone; the checkout's changes since the branch's last published commit are lost"
 )
+
+// cleanupNotes are the notes checkout cleanup appends to a terminal reason.
+var cleanupNotes = []string{evidenceUnavailableReason, evidenceOverLimitReason, workUncapturedReason}
+
+// withoutCleanupNote strips the note checkout cleanup appended, returning it,
+// so the retention reasons below still match exactly.
+func withoutCleanupNote(reason string) (string, string) {
+	for _, note := range cleanupNotes {
+		if reason == note {
+			return "", note
+		}
+		if base, ok := strings.CutSuffix(reason, "; "+note); ok {
+			return base, note
+		}
+	}
+	return reason, ""
+}
+
+func withCleanupNote(reason, note string) string {
+	if note == "" {
+		return reason
+	}
+	if reason == "" {
+		return note
+	}
+	return reason + "; " + note
+}
 
 // closeSpec is what ending a run through closeRun records.
 type closeSpec struct {
@@ -69,6 +99,7 @@ func reportedClose(outcome domain.RunStatus) closeSpec {
 // retainedReason reports whether a terminal row promises a retained,
 // relaunchable container.
 func retainedReason(status domain.RunStatus, reason string) bool {
+	reason, _ = withoutCleanupNote(reason)
 	switch status {
 	case domain.RunMerged, domain.RunAbandoned:
 		return reason == retainedCloseReason
@@ -89,16 +120,20 @@ func retentionValid(mode domain.LaunchMode, status domain.RunStatus, reason stri
 // releasedReason is the reason a retained run keeps once its container is
 // gone, and whether the row needs it.
 func releasedReason(status domain.RunStatus, reason, closed string) (string, bool) {
+	reason, note := withoutCleanupNote(reason)
+	var released string
 	switch {
 	case status == domain.RunCompleted && reason == reportedSuccessRetainedReason:
-		return reportedSuccessReason, true
+		released = reportedSuccessReason
 	case status == domain.RunFailed && reason == reportedFailureRetainedReason:
-		return reportedFailureReason, true
+		released = reportedFailureReason
 	case status == domain.RunMerged || status == domain.RunAbandoned ||
 		(status == domain.RunCompleted && reason == retainedCloseReason):
-		return closed, true
+		released = closed
+	default:
+		return "", false
 	}
-	return "", false
+	return withCleanupNote(released, note), true
 }
 
 // relabelLocked rewrites a terminal run's reason without changing its status.
@@ -349,10 +384,11 @@ func (s *Scheduler) overrideExitLocked(ctx context.Context, run domain.RunID, re
 		return fmt.Errorf("scheduler: finish reported session %s: %w", run, err)
 	}
 	if !r.Status.Terminal() {
-		return fmt.Errorf("scheduler: finish reported session %s: the session is %s and has no live container yet", run, r.Status)
+		return fmt.Errorf("scheduler: finish reported session %s: the session is %s and has no live sandbox yet", run, r.Status)
 	}
-	exited := (r.Status == domain.RunCompleted && r.Reason == exitedCompletedReason) ||
-		(r.Status == domain.RunFailed && strings.HasPrefix(r.Reason, exitedFailedReasonPrefix))
+	base, note := withoutCleanupNote(r.Reason)
+	exited := (r.Status == domain.RunCompleted && base == exitedCompletedReason) ||
+		(r.Status == domain.RunFailed && strings.HasPrefix(base, exitedFailedReasonPrefix))
 	if !exited {
 		return nil
 	}
@@ -368,7 +404,7 @@ func (s *Scheduler) overrideExitLocked(ctx context.Context, run domain.RunID, re
 			return nil
 		}
 	}
-	reason := publicRunStatusReason(reportedClose(outcome).reason)
+	reason := publicRunStatusReason(withCleanupNote(reportedClose(outcome).reason, note))
 	stamp, writeErr := s.cfg.Store.FinishRunReported(ctx, run, outcome, reason, "", nil, nil)
 	if writeErr != nil {
 		return fmt.Errorf("scheduler: finish reported session %s over its exit: %w", run, writeErr)
@@ -457,7 +493,7 @@ func (s *Scheduler) requireFinished(ctx context.Context, run domain.RunID, what 
 	if r.Status.Terminal() {
 		return finished
 	}
-	return fmt.Errorf("scheduler: %s %s: the session is %s and has no live container yet", what, run, r.Status)
+	return fmt.Errorf("scheduler: %s %s: the session is %s and has no live sandbox yet", what, run, r.Status)
 }
 
 // startReportedFinishLocked finishes an armed run off the caller's path so

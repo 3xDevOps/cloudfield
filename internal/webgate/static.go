@@ -48,6 +48,12 @@ func StaticHandler(fsys fs.FS) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := path.Clean(strings.TrimPrefix(r.URL.Path, "/"))
 		if info, err := fs.Stat(fsys, name); err != nil || info.IsDir() {
+			// The dashboard's script loader reports a 404, but waits forever on
+			// the page served in place of a script.
+			if strings.HasPrefix(name, "_next/") {
+				http.NotFound(w, r)
+				return
+			}
 			name = "index.html"
 		}
 		mu.Lock()
@@ -63,6 +69,11 @@ func StaticHandler(fsys fs.FS) http.Handler {
 		}
 		h := w.Header()
 		h.Set("Content-Type", f.ctype)
+		// The dashboard authorizes by ambient position (loopback token or
+		// tailnet identity), so its same-origin check cannot stop clickjacking.
+		// Refuse framing by any other origin, as the edge pages already do.
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Content-Security-Policy", "frame-ancestors 'none'")
 		if strings.HasPrefix(name, hashedAssets) {
 			h.Set("Cache-Control", "public, max-age=31536000, immutable")
 		} else {

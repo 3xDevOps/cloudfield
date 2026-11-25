@@ -4,7 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
+	"path"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/3xDevOps/Aether/internal/acphost"
@@ -16,7 +20,7 @@ import (
 
 const agentDeliveryTimeout = 10 * time.Second
 
-func (s *Service) deliverResult(ctx context.Context, msg *store.RoomMessage, actor *domain.Member, run *domain.Run, force bool, approver domain.MemberID, deliveryProof *control.Snapshot, claimAdmission func(func() error) error, steer bool) (Result, error) {
+func (s *Service) deliverResult(ctx context.Context, msg *store.RoomMessage, actor *domain.Member, run *domain.Run, force bool, approver domain.MemberID, claimAdmission func(func() error) error, steer bool) (Result, error) {
 	var (
 		claimed bool
 		stored  *store.RoomMessage
@@ -50,7 +54,7 @@ func (s *Service) deliverResult(ctx context.Context, msg *store.RoomMessage, act
 	// Do not publish the uncertain claim before attempting PTY delivery. A
 	// publication outage must never turn an otherwise unattempted steer into
 	// a durable "uncertain" result.
-	receipt, outcome, deliveryErr := s.deliver(ctx, msg, actor, run, s.deliveryAdmission(run.ID, deliveryProof), steer)
+	receipt, outcome, failure, deliveryErr := s.deliver(ctx, msg, actor, run, s.deliveryAdmission(run.ID), steer)
 	if deliveryErr != nil {
 		return Result{}, deliveryErr
 	}
@@ -58,11 +62,11 @@ func (s *Service) deliverResult(ctx context.Context, msg *store.RoomMessage, act
 	// depend on the caller staying connected.
 	settleCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), agentDeliveryTimeout)
 	defer cancel()
-	return s.settleResult(settleCtx, msg, receipt, outcome)
+	return s.settleResult(settleCtx, msg, receipt, outcome, failure)
 }
 
-func (s *Service) settleResult(ctx context.Context, msg *store.RoomMessage, receipt Receipt, outcome string) (Result, error) {
-	if err := s.settleRoomMessage(ctx, msg, receipt, outcome == acphost.OutcomeQueued); err != nil {
+func (s *Service) settleResult(ctx context.Context, msg *store.RoomMessage, receipt Receipt, outcome string, failure *store.RoomMessageFailure) (Result, error) {
+	if err := s.settleRoomMessage(ctx, msg, receipt, outcome == acphost.OutcomeQueued, failure); err != nil {
 		if errors.Is(err, store.ErrConflict) {
 			stored, getErr := s.cfg.Store.GetRoomMessage(ctx, msg.ID)
 			if getErr != nil {
@@ -80,43 +84,37 @@ func (s *Service) settleResult(ctx context.Context, msg *store.RoomMessage, rece
 }
 
 // deliveryAdmission holds the same run admission lock used by controller
-// takeover and fencing. An immediate delivery also proves the exact member,
-// session, and generation that made it eligible.
-func (s *Service) deliveryAdmission(run domain.RunID, deliveryProof *control.Snapshot) func(func() error) error {
-	switch {
-	case s.cfg.Control == nil:
+// takeover and fencing.
+func (s *Service) deliveryAdmission(run domain.RunID) func(func() error) error {
+	if s.cfg.Control == nil {
 		return func(fn func() error) error { return fn() }
-	case deliveryProof != nil:
-		return func(fn func() error) error {
-			return s.cfg.Control.AdmitMember(string(run), deliveryProof.MemberID, deliveryProof.SessionID, deliveryProof.Generation, fn)
-		}
-	default:
-		return func(fn func() error) error { return s.cfg.Control.Admit(string(run), fn) }
 	}
+	return func(fn func() error) error { return s.cfg.Control.Admit(string(run), fn) }
 }
 
 // deliver rechecks mutable membership and workspace policy inside admit. The
 // callback must not call back into Control.
-func (s *Service) deliver(ctx context.Context, msg *store.RoomMessage, actor *domain.Member, run *domain.Run, admit func(func() error) error, steer bool) (Receipt, string, error) {
-	var attempted, revoked bool
+func (s *Service) deliver(ctx context.Context, msg *store.RoomMessage, actor *domain.Member, run *domain.Run, admit func(func() error) error, steer bool) (Receipt, string, *store.RoomMessageFailure, error) {
+	var attempted bool
+	var revoked *store.RoomMessageFailure
 	var outcome string
 	accept := func() error {
 		freshRun, freshActor, ws, err := s.scope(ctx, msg.WorkspaceID, msg.RunID, msg.ActorID)
 		if err != nil {
 			if errors.Is(err, ErrNotMember) || errors.Is(err, store.ErrNotFound) {
-				revoked = true
+				revoked = &store.RoomMessageFailure{Code: "access_revoked", Message: err.Error()}
 				return nil
 			}
 			return err
 		}
 		if freshRun.Protected {
-			revoked = true
+			revoked = &store.RoomMessageFailure{Code: "session_protected", Message: "the session was protected before delivery; it takes no messages until it is unprotected"}
 			return nil
 		}
-		if permissions.Check(permissions.Steer,
-			permissions.Actor{ID: freshActor.ID, Role: freshActor.Role},
-			permissions.Target{Workspace: ws.ID, Owner: freshRun.MemberID, Protected: freshRun.Protected, SteerOthers: ws.SteerOthers}) != nil {
-			revoked = true
+		if denied := permissions.Check(permissions.Steer,
+			permissions.ActorOf(freshActor),
+			permissions.Target{Workspace: ws.ID, Extra: freshRun.ExtraWorkspaces(), Owner: freshRun.MemberID, Protected: freshRun.Protected, SteerOthers: ws.SteerOthers}); denied != nil {
+			revoked = &store.RoomMessageFailure{Code: "steer_denied", Message: denied.Error()}
 			return nil
 		}
 		// The initial values are retained only for low-level test injectors;
@@ -127,19 +125,36 @@ func (s *Service) deliver(ctx context.Context, msg *store.RoomMessage, actor *do
 		return err
 	}
 	err := admit(accept)
-	if revoked {
-		return ReceiptNotSent, "", nil
+	if revoked != nil {
+		return ReceiptNotSent, "", revoked, nil
 	}
 	if err != nil {
 		if !attempted && errors.Is(err, control.ErrStale) {
-			return ReceiptNotSent, "", nil
+			return ReceiptNotSent, "", &store.RoomMessageFailure{Code: "control_changed", Message: "control of the session changed before delivery: " + err.Error()}, nil
 		}
 		if !attempted {
-			return "", "", err
+			return "", "", nil, err
 		}
-		return ClassifyReceipt(err), "", nil
+		if ClassifyReceipt(err) != ReceiptNotSent {
+			return ReceiptUncertain, "", nil, nil
+		}
+		code := "session_unavailable"
+		switch {
+		case errors.Is(err, acphost.ErrUnsupportedImage):
+			code = "unsupported_image"
+		case errors.Is(err, domain.ErrPromptNotSent):
+			code = "prompt_not_sent"
+		}
+		message := err.Error()
+		// Every workspace viewer reads the failure; an attached file's error
+		// names its host path.
+		var pathErr *fs.PathError
+		if errors.As(err, &pathErr) {
+			message = strings.ReplaceAll(message, pathErr.Path, path.Base(pathErr.Path))
+		}
+		return ReceiptNotSent, "", &store.RoomMessageFailure{Code: code, Message: message}, nil
 	}
-	return ReceiptSent, outcome, nil
+	return ReceiptSent, outcome, nil, nil
 }
 
 func (s *Service) inject(ctx context.Context, msg *store.RoomMessage, actor *domain.Member, run *domain.Run, steer bool) (string, error) {
@@ -147,16 +162,21 @@ func (s *Service) inject(ctx context.Context, msg *store.RoomMessage, actor *dom
 	if s.cfg.Inject == nil {
 		return "", ErrNoInjector
 	}
-	return s.cfg.Inject(ctx, run.ID, actor.ID, prompt, steer, func(err error) {
-		s.agentDelivered(context.WithoutCancel(ctx), msg.ID, err)
+	return s.cfg.Inject(ctx, run.ID, actor.ID, prompt, steer, func(deliveryErr error) {
+		if err := s.agentDelivered(context.WithoutCancel(ctx), msg.ID, deliveryErr); err != nil {
+			slog.Warn("collab: record the agent's delivery of a queued message", "message", msg.ID, "error", err)
+		}
 	})
 }
 
-func (s *Service) agentDelivered(ctx context.Context, id string, deliveryErr error) {
+func (s *Service) agentDelivered(ctx context.Context, id string, deliveryErr error) error {
 	ctx, cancel := context.WithTimeout(ctx, agentDeliveryTimeout)
 	defer cancel()
 	var failure *store.RoomMessageFailure
+	var notSent notSentError
 	switch {
+	case errors.As(deliveryErr, &notSent):
+		failure = notSent.failure
 	case errors.Is(deliveryErr, acphost.ErrClosed):
 		failure = &store.RoomMessageFailure{Code: "agent_disconnected", Message: deliveryErr.Error()}
 	case deliveryErr != nil:
@@ -170,9 +190,16 @@ func (s *Service) agentDelivered(ctx context.Context, id string, deliveryErr err
 		}
 	}
 	if err != nil {
-		slog.Warn("collab: record the agent's delivery of a queued message", "message", id, "error", err)
+		return fmt.Errorf("collab: record the agent's delivery of message %s: %w", id, err)
 	}
+	return nil
 }
+
+// notSentError is a redelivery the server did not send, saved with its
+// failure rather than as the agent's.
+type notSentError struct{ failure *store.RoomMessageFailure }
+
+func (e notSentError) Error() string { return e.failure.Message }
 
 func (s *Service) dropAgentQueued(ctx context.Context) error {
 	ids, err := s.cfg.Store.DropAgentQueuedRoomMessages(ctx, &store.RoomMessageFailure{Code: "agent_disconnected", Message: acphost.ErrClosed.Error()})
@@ -189,6 +216,84 @@ func (s *Service) dropAgentQueued(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// settleAgentQueued settles the steers an earlier server process left queued
+// behind an agent turn: delivered when the agent's keeper reported they
+// reached the agent, sent again when the session was adopted and they did
+// not, and not sent when the session was restored. It leaves those of a
+// paused run queued. settled holds the steers earlier calls settled, which a
+// redelivery can leave queued; unsaved holds those whose settlement failed to
+// save, with the delivery error to save again, so none is sent twice. It
+// reports whether a later call has any left to settle.
+func (s *Service) settleAgentQueued(ctx context.Context, settled map[string]bool, unsaved map[string]error) (bool, error) {
+	var errs []error
+	for id, deliveryErr := range unsaved {
+		if err := s.agentDelivered(ctx, id, deliveryErr); err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		delete(unsaved, id)
+	}
+	queued, err := s.cfg.Store.ListAgentQueuedRoomMessages(ctx, s.bootAt)
+	if err != nil {
+		return true, errors.Join(append(errs, fmt.Errorf("collab: list messages queued before the restart: %w", err))...)
+	}
+	undecided := false
+	for _, msg := range queued {
+		if settled[msg.ID] {
+			continue
+		}
+		delivered, state := s.cfg.Reattached(msg.RunID)
+		if state == Undecided {
+			undecided = true
+			continue
+		}
+		settled[msg.ID] = true
+		var deliveryErr error
+		switch {
+		case state == Restored:
+			deliveryErr = acphost.ErrClosed
+		case slices.Contains(delivered, msg.ID):
+		default:
+			var settle bool
+			if settle, deliveryErr = s.redeliver(ctx, msg); !settle {
+				continue
+			}
+		}
+		if err := s.agentDelivered(ctx, msg.ID, deliveryErr); err != nil {
+			unsaved[msg.ID] = deliveryErr
+			errs = append(errs, err)
+		}
+	}
+	return undecided || len(unsaved) > 0, errors.Join(errs...)
+}
+
+// redeliver sends a steer that never reached the agent to its adopted
+// session again, as the next prompt. It reports whether the steer is
+// settled now, and with what delivery error; a steer queued behind the
+// agent's turn settles when the agent takes it.
+func (s *Service) redeliver(ctx context.Context, msg *store.RoomMessage) (bool, error) {
+	run, err := s.cfg.Runs.GetRun(ctx, msg.RunID)
+	var actor *domain.Member
+	if err == nil {
+		actor, err = s.cfg.Runs.GetMember(ctx, msg.ActorID)
+	}
+	var receipt Receipt
+	var outcome string
+	var failure *store.RoomMessageFailure
+	if err == nil {
+		receipt, outcome, failure, err = s.deliver(ctx, msg, actor, run, s.deliveryAdmission(run.ID), false)
+	}
+	switch {
+	case err != nil:
+		return true, fmt.Errorf("collab: send again after the restart: %w", err)
+	case failure != nil:
+		return true, notSentError{failure}
+	case receipt != ReceiptSent:
+		return true, acphost.ErrClosed
+	}
+	return outcome != acphost.OutcomeQueued, nil
 }
 
 // DeliverDue delivers every bounded page of overdue steer requests. It is
@@ -225,7 +330,7 @@ func (s *Service) DeliverDue(ctx context.Context, limit int) (int, error) {
 					sweepErrs = append(sweepErrs, fmt.Errorf("load overdue session %q for message %q: %w", msg.RunID, msg.ID, err))
 					continue
 				}
-				if _, err := s.deliverResult(ctx, msg, nil, run, false, "", nil, nil, false); err != nil {
+				if _, err := s.deliverResult(ctx, msg, nil, run, false, "", nil, false); err != nil {
 					sweepErrs = append(sweepErrs, fmt.Errorf("deliver overdue message %q: %w", msg.ID, err))
 					continue
 				}
