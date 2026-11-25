@@ -474,6 +474,10 @@ describe('the header row', () => {
     expect(gold()).toEqual([within(header(2)).getByRole('button', { name: 'Reply' })])
   })
 
+    fireEvent.click(tile(3).getByRole('button', { name: 'Maximize' }))
+    expect(frames.get('run_3:session')).toMatchObject({ controls: true, arrows: { changes: { where: 'On screen in the tile at right' } } })
+    expect(frames.get('run_3:changes')).toMatchObject({ controls: false, chatOnScreen: true })
+    fireEvent.click(screen.getByRole('button', { name: 'Restore tiles' }))
   it('sizes the row from its own width: icons for the view names under 800px, and under 560px no reason and Workflow under More', async () => {
     const chat = () => within(tile(1).getByRole('tablist', { name: 'Session views' })).getByRole('tab', { name: 'Chat' })
     show('run_3')

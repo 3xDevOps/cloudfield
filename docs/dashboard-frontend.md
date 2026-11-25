@@ -3182,8 +3182,8 @@ neighbour takes the room and the focus. Closing the only tab of the only
 tile, or the last tab beside an empty tile, opens the board in place of the
 history entry. Details, Workflow and the subagent inspector dock
 only in a tile that is alone on screen; beside other tiles they open as
-sheets. A parked tile keeps the shape it had, so maximizing docks nothing
-inside it.
+sheets. A parked tile keeps the shape, controls and composer it had, so
+maximizing docks nothing inside it.
 
 **Controls once per session.** When a session is in several tiles, its
 actions, presence and watch button sit in one of them: its

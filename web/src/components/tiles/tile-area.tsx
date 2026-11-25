@@ -388,28 +388,31 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
           const runId = run.id
           const frames = shown.filter((frame) => frame.run === run)
           const terminalHost = (frames.find((frame) => frame.view === 'terminal') ?? frames[0]).tile.id
-          const controls = controlsTile(layout, runId)?.id
           return (
             <SessionFrames
               key={JSON.stringify([identityKey, epoch, run.id, run.created_at])}
               Frame={Frame}
               run={run}
               route={params}
-              frames={frames.map(({ tile, tab, view }) => ({
-                tab,
-                view,
-                slot: slots[tile.id] ?? null,
-                tile: {
-                  focused: tile.id === layout.focused,
-                  controls: tile.id === controls,
-                  alone: visible.length === 1 && visible.includes(tile),
-                  terminalHost: tile.id === terminalHost,
-                  chatOnScreen: frames.some((frame) => frame.view === 'session' && frame.tile !== tile && visible.includes(frame.tile)),
-                  elsewhere: tiles.flatMap((other) => other.tabs).filter((other) => other.runId === runId && other.id !== tab.id).map((other) => resolveView(other, run, cap, memory)),
-                  arrows: viewsElsewhere(layout, tile.id, runId, ctx),
-                  onArrow: link,
-                },
-              }))}
+              frames={frames.map(({ tile, tab, view }) => {
+                // A parked tile is told what it was told before it was parked.
+                const on = visible.includes(tile) ? layout : { ...layout, maximized: false }
+                return {
+                  tab,
+                  view,
+                  slot: slots[tile.id] ?? null,
+                  tile: {
+                    focused: tile.id === layout.focused,
+                    controls: tile.id === controlsTile(on, runId)?.id,
+                    alone: visible.length === 1 && visible.includes(tile),
+                    terminalHost: tile.id === terminalHost,
+                    chatOnScreen: frames.some((frame) => frame.view === 'session' && frame.tile !== tile && visibleTiles(on).includes(frame.tile)),
+                    elsewhere: tiles.flatMap((other) => other.tabs).filter((other) => other.runId === runId && other.id !== tab.id).map((other) => resolveView(other, run, cap, memory)),
+                    arrows: viewsElsewhere(on, tile.id, runId, ctx),
+                    onArrow: link,
+                  },
+                }
+              })}
             />
           )
         })}
