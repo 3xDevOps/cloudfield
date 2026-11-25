@@ -2,6 +2,7 @@ import { useId } from 'react'
 import { StatusDot } from '@/components/ui/status-dot'
 import { AgentEntry, WorkGroup } from '@/components/ui/timeline'
 import { cn } from '@/lib/utils'
+import { useRunParams } from '@/routes/run/agent-context'
 import { sessionColumn } from '@/routes/run/session-rows'
 import { AgentDot, AgentElapsed, agentStateWord, openAgent, summary, useAgent } from '@/routes/run/subagent-cards'
 import { useStore } from '@/store'
@@ -11,7 +12,7 @@ const rowID = 'agents-bar'
 
 function BarRow({ runID, id }: { runID: string; id: string }) {
   const agent = useAgent(runID, id)
-  const current = useStore((s) => s.route.params.agent === id)
+  const current = useRunParams().agent === id
   if (!agent) return null
   const state = agentState(agent)
   const rows = agent.call?.task?.workflow?.agents

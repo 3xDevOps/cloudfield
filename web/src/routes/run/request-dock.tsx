@@ -10,7 +10,7 @@ import type { AgentTerminal } from '@/routes/run/agent-terminal'
 import { SessionRequestCard } from '@/routes/run/session-requests'
 import type { RunRecord } from '@/store/runs'
 
-export const dockedRequestID = 'session-request-docked'
+export const dockedRequestID = (runID: string) => `session-request-docked-${runID}`
 
 const fadeOut: Motion = { duration: '--duration-200', easing: '--ease-standard' }
 const fadeIn: Motion = { duration: '--duration-250', easing: '--ease-standard' }
@@ -106,7 +106,7 @@ export function RequestDock({ run, requests, caughtUp, agent, className }: {
     <div ref={box} className={cn('max-h-[50dvh] overflow-y-auto rounded-panel border border-seam bg-raised', className)}>
       <div ref={content} key={request.id} inert={leaving || undefined}>
         <SessionRequestCard
-          id={dockedRequestID}
+          id={dockedRequestID(run.id)}
           className="rounded-none border-0"
           run={run}
           request={request}

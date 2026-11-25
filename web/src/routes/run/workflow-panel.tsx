@@ -52,7 +52,7 @@ export function WorkflowChip({ run, open, onToggle }: { run: RunRecord; open: bo
       aria-controls={workflowPanelID}
       aria-label={`Session tree: ${text}`}
       hint={open ? 'Hide the session tree' : 'Show the session tree'}
-      className="ml-1 shrink-0"
+      className="-mx-1.5 shrink-0 text-text"
       onClick={(event) => onToggle(event.currentTarget)}
     >
       <StatusDot tone={toneOf(shown)} pulse={state === 'working'} />

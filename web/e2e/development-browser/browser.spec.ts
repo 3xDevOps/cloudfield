@@ -21,18 +21,6 @@ test('real shared login, HMR, popups, watcher takeover and stale authority', asy
     await fixture.waitText('Scroll 0')
     await testInfo.attach('shared authenticated app', { body: await remotePage(page).screenshot(), contentType: 'image/png' })
 
-    // Beside the run's first view and back: the same page, and no button to drive it again.
-    await page.getByRole('button', { name: 'Show beside Terminal', exact: true }).click()
-    const beside = page.getByRole('region', { name: 'Browser', exact: true })
-    await expect(beside.getByRole('toolbar', { name: 'Browser', exact: true })).toBeVisible()
-    await expect(page.getByRole('tab', { name: 'Browser', exact: true })).toHaveCount(0)
-    await expect(page.getByRole('tab', { name: 'Terminal', exact: true })).toHaveAttribute('aria-selected', 'true')
-    await expectLive(page)
-    await page.getByRole('button', { name: 'Show the Browser as a tab', exact: true }).click()
-    await expect(page.getByRole('tab', { name: 'Browser', exact: true })).toHaveAttribute('aria-selected', 'true')
-    await expectLive(page)
-    await fixture.waitText('Signed in as test@example.invalid')
-
     const beforePopup = await fixture.currentPage()
     const pages = page.getByRole('tablist', { name: 'Pages', exact: true })
     await expect(pages).toHaveCount(0)

@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react'
 import type * as React from 'react'
+import { Copy } from '@/components/icons'
 import { MessageRow } from '@/components/messages/message-row'
 import { Avatar } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Code } from '@/components/ui/code'
+import { copyText } from '@/lib/clipboard'
 import { RequestCard } from '@/components/ui/request-card'
 import { RequestAction, RequestActions, RequestFooter } from '@/components/ui/request-choice'
 import { RelativeTime } from '@/components/ui/relative-time'
@@ -182,7 +184,12 @@ function Facts({ run, agent, agentName, inset }: { run: RunRecord; agent: AgentT
         <Row label="Owner"><Person id={run.member_id} /></Row>
         {run.account_member_id && run.account_member_id !== run.member_id && <Row label="Agent account"><Person id={run.account_member_id} /></Row>}
         <Row label="Agent">{agentName} · {modeLabel[run.mode] ?? run.mode}</Row>
-        <Row label="Branch"><Code>{run.branch}</Code></Row>
+        <Row label="Branch">
+          <Button variant="quiet" size="sm" hint="Copy branch name" aria-label={`Copy branch ${run.branch}`} className="max-w-full" onClick={(event) => void copyText(run.branch, event.currentTarget)}>
+            <span className="min-w-0 truncate font-code">{run.branch}</span>
+            <Copy aria-hidden />
+          </Button>
+        </Row>
         <Row label="Created"><RelativeTime at={run.created_at} /></Row>
         <Row label="Changed"><RelativeTime at={run.stateChangedAt} /></Row>
         {run.last_commit && run.last_commit_at && (

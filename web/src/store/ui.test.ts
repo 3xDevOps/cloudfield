@@ -309,6 +309,7 @@ describe('a persisted store from an older release', () => {
     return createRootStore().getState().onboardingStep
   }
 
+
   it('drops the stale repository answer and keeps the other preferences', () => {
     // Version 0 stored a push result with no `state`: the Repository step
     // matches it against none of its states and renders a blank panel.

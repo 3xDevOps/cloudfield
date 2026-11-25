@@ -106,6 +106,11 @@ import {
   UserPlus as LucideUserPlus,
   WifiOff as LucideWifiOff,
   Columns2 as LucideColumns2,
+  Rows2 as LucideRows2,
+  Maximize2 as LucideMaximize2,
+  Minimize2 as LucideMinimize2,
+  ArrowUpRight as LucideArrowUpRight,
+  FileDiff as LucideFileDiff,
   Columns3 as LucideColumns3,
   Network as LucideNetwork,
   ChartGantt as LucideChartGantt,
@@ -279,6 +284,11 @@ export const Unplug = icon(LucideUnplug)
 export const UserPlus = icon(LucideUserPlus)
 export const WifiOff = icon(LucideWifiOff)
 export const Columns2 = icon(LucideColumns2)
+export const Rows2 = icon(LucideRows2)
+export const Maximize2 = icon(LucideMaximize2)
+export const Minimize2 = icon(LucideMinimize2)
+export const ArrowUpRight = icon(LucideArrowUpRight)
+export const FileDiff = icon(LucideFileDiff)
 export const Columns3 = icon(LucideColumns3)
 export const Network = icon(LucideNetwork)
 export const ChartGantt = icon(LucideChartGantt)

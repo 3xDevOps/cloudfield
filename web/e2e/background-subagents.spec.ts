@@ -34,12 +34,12 @@ test('background subagents launched before the replayed history stay on the chat
   await box.fill('background subagents')
   await box.press('Enter')
   await expect(log.getByText('The subagents are working.')).toBeVisible({ timeout: 30_000 })
-  await expect(header.getByText(/2 subagents running/)).toBeVisible()
+  await expect(header.getByText(/2 agents running/)).toBeVisible()
 
   // The launches are older than the items a subscribe replays.
   await page.reload()
   await expect(log.getByText('The subagents are working.')).toBeVisible({ timeout: 30_000 })
-  await expect(header.getByText(/2 subagents running/)).toBeVisible()
+  await expect(header.getByText(/2 agents running/)).toBeVisible()
   await openAgent('mock-agent-billing', 'Audit the billing module', 'Running')
   await expect(inspector.getByRole('log', { name: 'Subagent transcript' }).getByText(/src\/billing\.js/).first()).toBeVisible()
   await openAgent('mock-agent-tests', 'Run the test suite', 'Running')
@@ -47,7 +47,7 @@ test('background subagents launched before the replayed history stay on the chat
   await box.fill('finish subagents')
   await box.press('Enter')
   await expect(inspector.getByText('Done', { exact: true }).first()).toBeVisible({ timeout: 30_000 })
-  await expect(header.getByText(/subagents? running/)).toHaveCount(0)
+  await expect(header.getByText(/agents? running/)).toHaveCount(0)
   await openAgent('mock-agent-billing', 'Audit the billing module', 'Done')
   await expect(inspector.getByRole('log', { name: 'Subagent transcript' }).getByText('Report from mock-agent-billing.')).toBeVisible()
 })

@@ -1,7 +1,7 @@
 import type { Api } from '@/lib/api'
 import type { ServerEdge } from '@/lib/types'
 import type { RootStore } from '@/store'
-import { capability } from '@/store/hooks'
+import { capability } from '@/lib/capability'
 import type { SliceCreator } from '@/store/slice'
 
 /** server.edge, for Settings › Remote access and the device cards; null

@@ -7,7 +7,7 @@ import { OnboardingRoute } from '@/routes/onboarding'
 import { AgentStep } from '@/routes/onboarding/agent-step'
 import { FirstRunStep } from '@/routes/onboarding/first-run-step'
 import { useStore } from '@/store'
-import { capability } from '@/store/hooks'
+import { capability } from '@/lib/capability'
 import {
   agentInfo,
   alice,

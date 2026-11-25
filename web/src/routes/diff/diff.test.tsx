@@ -11,6 +11,7 @@ import { initialDiff, type Checkpoint, type DiffSnapshot, type RunDiffState } fr
 import { toRecord } from '@/store/runs'
 import type { RunPatch } from '@/lib/types'
 import { alice, bob, roomMessage, run, serverInfo, vera, workspace } from '@/test/fixtures'
+import { RouteParams } from '@/test/route-params'
 import { hintOn } from '@/test/tooltip'
 import { atViewport } from '@/test/viewport'
 
@@ -101,7 +102,7 @@ function agent(over: Partial<AgentTerminal> = {}): AgentTerminal {
 }
 
 function renderDiff(over?: Partial<AgentTerminal>) {
-  return render(<ChangesView runID={active.id} agent={agent(over)} agentName="Claude Code" />)
+  return render(<ChangesView runID={active.id} agent={agent(over)} agentName="Claude Code" />, { wrapper: RouteParams })
 }
 
 function openMenu(name: RegExp | string) {
@@ -561,7 +562,7 @@ test('a conflict chip writes its file list out on a coarse pointer', () => {
 it('sends an unknown run to the shared missing-run view', () => {
   seed()
   useStore.setState({ hydrationError: null, streamDead: false })
-  render(<ChangesView runID="run_missing" agent={agent()} agentName="Claude Code" />)
+  render(<ChangesView runID="run_missing" agent={agent()} agentName="Claude Code" />, { wrapper: RouteParams })
   expect(screen.getByRole('button', { name: 'Back to board' })).toBeDefined()
 })
 

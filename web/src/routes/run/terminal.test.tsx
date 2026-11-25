@@ -144,15 +144,16 @@ describe('terminal view', () => {
       roomStatus: { run_1: status },
       roomStatusError: {},
     }))
-    const presence = within(screen.getByRole('group', { name: 'Session presence' }))
-    expect(presence.getByText(/^You control in another tab since /)).toBeDefined()
+    // The line moves from under the terminal into its toolbar with control, so it is found anew each time.
+    const presence = () => within(screen.getByRole('group', { name: 'Session presence' }))
+    expect(presence().getByText(/^You control in another tab since /)).toBeDefined()
 
     fireEvent.click(screen.getByRole('button', { name: 'Take control' }))
-    expect(presence.queryByText('You control')).toBeNull()
+    expect(presence().queryByText('You control')).toBeNull()
     controlAck(true, 1, 1)
-    expect(presence.getByText('You control')).toBeDefined()
+    expect(presence().getByText('You control')).toBeDefined()
     act(() => StubSocket.last().onclose?.({ code: 1006, reason: '' }))
-    expect(presence.queryByText('You control')).toBeNull()
+    expect(presence().queryByText('You control')).toBeNull()
     view.unmount()
   })
 
@@ -169,20 +170,20 @@ describe('terminal view', () => {
     const view = mount({}, { member_id: bob.id })
     attached()
     await act(async () => {})
-    const presence = within(screen.getByRole('group', { name: 'Session presence' }))
+    const presence = () => within(screen.getByRole('group', { name: 'Session presence' }))
     const refresh = Promise.withResolvers<typeof occupied>()
     status.mockReturnValue(refresh.promise)
     fireEvent.click(screen.getByRole('button', { name: 'Take control' }))
     controlAck(true, 1, 1)
-    expect(presence.getByText('You control')).toBeDefined()
+    expect(presence().getByText('You control')).toBeDefined()
     fireEvent.click(screen.getByRole('button', { name: 'Release' }))
     controlAck(false, 2, 1)
-    expect(presence.getByText(/^You control in another tab since .* \(last known\)$/)).toBeDefined()
+    expect(presence().getByText(/^You control in another tab since .* \(last known\)$/)).toBeDefined()
     await act(async () => {
       refresh.reject(new Error('presence service unavailable'))
       await Promise.resolve()
     })
-    expect(presence.getByText(/^You control in another tab since .* \(last known\)$/)).toBeDefined()
+    expect(presence().getByText(/^You control in another tab since .* \(last known\)$/)).toBeDefined()
     expect(screen.getByRole('button', { name: 'Take control' })).toBeDefined()
     view.unmount()
   })
@@ -614,7 +615,7 @@ describe('terminal view', () => {
     await waitFor(() => expect(document.querySelector('.xterm')).toBeDefined())
     expect(screen.getByRole('toolbar', { name: 'Terminal toolbar' })).toBeDefined()
     expect(screen.getByRole('tablist', { name: 'Session views' })).toBeDefined()
-    expect(screen.getByRole('tabpanel')).toBeDefined()
+    expect(screen.getByRole('tabpanel', { name: 'Terminal' })).toBeDefined()
     const pane = document.querySelector('.xterm')
 
     view.unmount()
@@ -739,7 +740,7 @@ describe('terminal view', () => {
     view.unmount()
   })
   it('does not reopen an ended completed run when follow mode changes', () => {
-    const resize = atViewport(1024, { height: 844, pointer: 'coarse' })
+    const resize = atViewport(700, { height: 844, pointer: 'coarse' })
     const view = mount({}, { status: 'completed' })
     attached()
     act(() => StubSocket.last().onclose?.({ code: 1000, reason: 'session ended' }))
@@ -1433,8 +1434,8 @@ describe('the terminal on a phone', () => {
     expect(screen.getByRole('toolbar', { name: 'Terminal keys' })).toBeDefined()
     view.unmount()
   })
-  it('reattaches once when a desktop owner crosses the phone breakpoint', async () => {
-    const resize = atViewport(1024, { height: 844, pointer: 'coarse' })
+  it('reattaches once when an owner on a narrow touch screen crosses the phone breakpoint', async () => {
+    const resize = atViewport(700, { height: 844, pointer: 'coarse' })
     const view = mount()
     attached()
     expect(StubSocket.opened).toHaveLength(1)
@@ -1462,7 +1463,7 @@ describe('the terminal on a phone', () => {
   })
 
   it('reattaches on a phone follow change even after an explicit mirror choice', async () => {
-    const resize = atViewport(1024, { height: 844, pointer: 'coarse' })
+    const resize = atViewport(700, { height: 844, pointer: 'coarse' })
     const view = mount()
     attached()
 

@@ -623,7 +623,16 @@ export function useXterm({
       // make the shared PTY smaller than this pane's requested geometry.
       const resize = () => {
         if (followRef.current) return
-        const proposed = fit.proposeDimensions()
+        // A mirror drawn scaled to its pane still asks for the grid its pane holds at the chosen text size.
+        const drawn = created.options.fontSize
+        let proposed = fit.proposeDimensions()
+        if (drawn !== appliedFontSize.current) {
+          const intent = captureViewport(created, viewportInteractionRevision.current)
+          created.options.fontSize = appliedFontSize.current
+          proposed = fit.proposeDimensions()
+          created.options.fontSize = drawn
+          restoreViewport(created, intent, viewportInteractionRevision.current)
+        }
         if (!proposed) return
         requestedSize.current = proposed
         if (!serverSize.current) created.resize(proposed.cols, proposed.rows)

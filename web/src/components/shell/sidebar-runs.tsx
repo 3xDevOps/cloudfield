@@ -1,10 +1,12 @@
 import { memo, useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { reopen } from '@/components/failure'
+import { openToSide } from '@/components/tiles/area'
+import { useTileDrag } from '@/components/tiles/drag'
 import { RunDetails, RunDetailsGroup } from '@/components/shell/run-details'
 import { AgentGlyph } from '@/components/ui/agent-glyph'
 import { Avatar } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
-import { ChevronRight, Network } from '@/components/icons'
+import { ChevronRight, Columns2, Network } from '@/components/icons'
 import { CountBadge } from '@/components/ui/count-badge'
 import { ProtectedMark } from '@/components/protected-mark'
 import { ListRow } from '@/components/ui/list-row'
@@ -13,21 +15,28 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { StatusDot } from '@/components/ui/status-dot'
 import { useClock } from '@/lib/clock'
 import { timeAgo } from '@/lib/format'
-import { useDelayed } from '@/lib/hooks'
+import { useIsMobile } from '@/lib/breakpoints'
+import { coarsePointer, useDelayed, useMediaQuery } from '@/lib/hooks'
 import { memberName, resolveMember } from '@/lib/member-name'
 import { needsYou, type StateContext } from '@/lib/needs-you'
 import { groupOf, runLabel, stateWords, toneOf, type PresentationState } from '@/lib/status'
 import { chevronTurn, cn } from '@/lib/utils'
 import { targetRoute } from '@/routes/board/card-action'
 import { isRunRoute } from '@/routes/run/views'
-import { useStore } from '@/store'
+import { useStore, type RootState } from '@/store'
 import { useDeviceNeeds, useRun, useRunPeople, useSidebarGroups, useStateContext } from '@/store/hooks'
 import { isTerminal, type RunRecord } from '@/store/runs'
 import { childRunsText, hiddenByMine, type RunTree, type SidebarGroup, type TreeSummary } from '@/store/selectors'
+import { onScreenRuns } from '@/store/tiles'
 import type { Route } from '@/store/ui'
 import type { RunStatusCause, RunWait } from '@/lib/types'
 
 export const runRowSelector = '#sidebar-runs [data-run-row]'
+
+/** Whether a session is the route's, or the active tab of a tile on screen beside it. */
+function onScreen(s: RootState, runID: string): boolean {
+  return s.route.name === 'run' && (s.route.params.runId === runID || onScreenRuns(s.tilesCramped ? { ...s.tiles, maximized: true } : s.tiles).includes(runID))
+}
 
 export function needsYouRoute(run: RunRecord, ctx: StateContext): Route {
   return targetRoute(run, needsYou(run, ctx)?.target)
@@ -244,7 +253,7 @@ function RunFamily({ tree, group }: { tree: RunTree; group: RunTree['group'] }) 
   }, [])
   const shown = expanded ? tree.children : tree.children.filter((child) => child.needsYou)
   const finished = expanded || foldable === 0 ? settled : []
-  const openID = useStore((s) => settled.find((row) => isRunRoute(s.route, row.run.id))?.run.id)
+  const openID = useStore((s) => settled.find((row) => onScreen(s, row.run.id))?.run.id)
   return (
     <>
       <RunRowItem tree={tree} subsessions={foldable} expanded={expanded} onToggle={toggle} />
@@ -377,8 +386,13 @@ function RunRowButton({ run, state, waiting, reason, next, cause, wait, since, w
   onToggle?: () => void
 }) {
   const navigate = useStore((s) => s.navigate)
+  const mobile = useIsMobile()
   const self = useStore((s) => s.info?.member.id)
   const selected = useStore((s) => isRunRoute(s.route, run.id))
+  const shown = useStore((s) => onScreen(s, run.id))
+  const beside = !useMediaQuery(coarsePointer) && !mobile
+  const dragFrom = useTileDrag()
+  const lifted = useStore((s) => s.tileDrag?.runId === run.id && !s.tileDrag.tabId && !s.tileDrag.view)
   const title = runLabel(run)
   const unopened = run.finish_unopened === true && (state === 'ready' || groupOf({ state }) === 'finished')
   const active = state === 'working' || state === 'waiting-agents' || state === 'waiting-ci' || state === 'waiting-tools'
@@ -428,7 +442,14 @@ function RunRowButton({ run, state, waiting, reason, next, cause, wait, since, w
         aria-describedby={exactTime}
         aria-current={selected ? 'page' : undefined}
         selected={selected}
+        className={cn(shown && !mobile && 'before:absolute before:inset-y-0 before:left-0 before:w-0.5 before:bg-accent')}
         onClick={() => navigate('run', { runId: run.id })}
+        onPointerDown={beside ? dragFrom({ runId: run.id }) : undefined}
+        onKeyDown={beside ? (event) => {
+          if (event.key !== 'Enter' || !(event.metaKey || event.ctrlKey)) return
+          event.preventDefault()
+          openToSide(run.id)
+        } : undefined}
         leading={subsessions > 0 ? undefined : (
           <>
             <StatusDot tone={toneOf({ state, wait })} />
@@ -465,10 +486,19 @@ function RunRowButton({ run, state, waiting, reason, next, cause, wait, since, w
           </span>
         )}
         trailing={indicators}
-        hoverAction={waiting && <AnswerButton run={run} />}
+        hoverAction={(waiting || beside) && (
+          <>
+            {waiting && <AnswerButton run={run} />}
+            {beside && (
+              <Button variant="ghost" size="icon-sm" tabIndex={-1} label="Open to the side" onClick={() => openToSide(run.id)}>
+                <Columns2 />
+              </Button>
+            )}
+          </>
+        )}
       >
         {workspaceName && <span className="text-muted">{workspaceName} · </span>}
-        <span className={cn(recedes && !selected && 'text-muted')}>{title}</span>
+        <span className={cn((lifted || (recedes && !selected)) && 'text-muted')}>{title}</span>
         <span id={exactTime} className="sr-only">{new Date(since).toLocaleString()}</span>
       </ListRow>
     </RunDetails>

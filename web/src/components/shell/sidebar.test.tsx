@@ -511,9 +511,14 @@ describe('run rows', () => {
     render(<AppShell />)
 
     const row = runList().getByRole('button', { name: /^Needs you · answer the schema question/ })
+    // The frame drops `focus` from the route as it serves it.
+    const routed = vi.fn()
+    const stop = useStore.subscribe((s) => routed(s.route))
     fireEvent.click(within(row.closest('[data-slot="list-row"]') as HTMLElement).getByRole('button', { name: 'Reply' }))
+    stop()
 
-    expect(useStore.getState().route).toEqual({ name: 'run', params: { runId: 'run_2', view: 'session', focus: 'composer' } })
+    expect(routed).toHaveBeenCalledWith({ name: 'run', params: { runId: 'run_2', view: 'session', focus: 'composer' } })
+    expect(useStore.getState().route).toEqual({ name: 'run', params: { runId: 'run_2', view: 'session' } })
   })
 
   it('keeps one tab stop in the list and walks it with j, k and the arrows', () => {

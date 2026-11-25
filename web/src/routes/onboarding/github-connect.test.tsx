@@ -12,7 +12,7 @@ import {
   setEnvTerminalSocketReady,
   type EnvTerminalSocket,
 } from '@/store/env-terminal'
-import { capability } from '@/store/hooks'
+import { capability } from '@/lib/capability'
 import { alice, fakeApi, serverInfo, workspace } from '@/test/fixtures'
 import { StubSocket } from '@/test/stub-socket'
 

@@ -1,8 +1,9 @@
 import { createContext, type ReactNode, useContext, useMemo, useRef } from 'react'
 import type { Run } from '@/lib/types'
 import { cn, focusRing } from '@/lib/utils'
-import { hasFiles, isListedFile, isRunFile, openInFiles } from '@/routes/files/open'
+import { isListedFile, isRunFile, openInFiles } from '@/routes/files/open'
 import { findPaths, type FileTarget } from '@/routes/files/paths'
+import { hasFiles } from '@/routes/run/views'
 import { useStore } from '@/store'
 import { useCapability } from '@/store/hooks'
 

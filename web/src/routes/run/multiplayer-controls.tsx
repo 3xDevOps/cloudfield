@@ -1,14 +1,16 @@
 import { useRef } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { ControlMatrix } from '@/components/control-matrix'
-import { Shield, Users } from '@/components/icons'
+import { ChevronDown, Shield, Users } from '@/components/icons'
 import { connectionLabel } from '@/components/shell/connection'
 import { Avatar } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
+import { Menu, MenuContent, MenuItem, MenuTrigger } from '@/components/ui/menu'
 import { clockTime } from '@/lib/format'
 import { memberName, resolveMember } from '@/lib/member-name'
 import { allowed } from '@/lib/permissions'
 import type { RoomController } from '@/lib/types'
+import { cn } from '@/lib/utils'
 import type { AgentTerminal } from '@/routes/run/agent-terminal'
 import { useDotFade } from '@/routes/run/dot-fade'
 import { ControlButton } from '@/routes/terminal/control-button'
@@ -55,14 +57,8 @@ export function useSharedPresence(run: RunRecord, agent: AgentTerminal): boolean
   return status?.watchers.some((id) => id !== self.id) ?? false
 }
 
-export function MultiplayerControls({ run, agent, onPeople }: {
-  run: RunRecord
-  agent: AgentTerminal
-  onPeople: () => void
-}) {
+function usePresence(run: RunRecord, agent: AgentTerminal) {
   const self = useSelf(run.workspace_id)
-  const strip = useRef<HTMLDivElement>(null)
-  useDotFade(strip)
   const members = useStore((s) => s.members)
   const mergedInto = useStore((s) => s.mergedInto)
   const summary = usePresenceSummary(run, agent)
@@ -73,14 +69,34 @@ export function MultiplayerControls({ run, agent, onPeople }: {
     return { stream: held?.stream, controlError: held?.controlError, takeoverError: held?.takeoverError, streamError: held?.streamError }
   }))
   const steerOthers = useStore((s) => s.workspaces[run.workspace_id]?.steer_others)
-  const maySteer = allowed('steer', self, { owner: run.member_id, protected: run.protected, steerOthers })
   const stream = session.stream ?? 'connecting'
-  const controlError = session.controlError ?? session.takeoverError
-  const connection = stream === 'refused' ? 'Offline' : connectionLabel[stream]
   const controllerID = agent.localControl ? self.id : status?.controller?.member_id
-  const controller = controllerID ? resolveMember({ members, mergedInto }, controllerID).member : undefined
-  const controllerName = controllerID ? memberName({ members, mergedInto }, controllerID) : undefined
-  const controllerSummary = controllerID === self.id && controllerName ? `${controllerName} · ${summary}` : summary
+  return {
+    self,
+    summary,
+    status,
+    presenceError,
+    stream,
+    streamError: session.streamError,
+    controlError: session.controlError ?? session.takeoverError,
+    connection: stream === 'refused' ? 'Offline' : connectionLabel[stream],
+    maySteer: allowed('steer', self, { owner: run.member_id, protected: run.protected, steerOthers }),
+    controllerID,
+    person: (id: string) => ({ name: memberName({ members, mergedInto }, id), color: resolveMember({ members, mergedInto }, id).member?.color }),
+  }
+}
+
+/** The full-width strip a phone keeps under its header. */
+export function MultiplayerControls({ run, agent, onPeople }: {
+  run: RunRecord
+  agent: AgentTerminal
+  onPeople: () => void
+}) {
+  const strip = useRef<HTMLDivElement>(null)
+  useDotFade(strip)
+  const { self, summary, status, presenceError, stream, streamError, controlError, connection, maySteer, controllerID, person } = usePresence(run, agent)
+  const controller = controllerID ? person(controllerID) : undefined
+  const controllerSummary = controllerID === self.id && controller ? `${controller.name} · ${summary}` : summary
   const staleWatchers = stream !== 'live' || Boolean(presenceError)
 
   return (
@@ -105,11 +121,10 @@ export function MultiplayerControls({ run, agent, onPeople }: {
             <span className="shrink-0 text-muted">Watching{status && staleWatchers && ' (last known)'}</span>
             <div role="group" aria-label="Session watchers" tabIndex={status?.watchers.length ? 0 : undefined} className="flex min-w-0 flex-1 touch-pan-x items-center gap-3 overflow-x-auto whitespace-nowrap">
               {status ? status.watchers.length > 0 ? status.watchers.map((id) => {
-                const member = resolveMember({ members, mergedInto }, id).member
-                const name = memberName({ members, mergedInto }, id)
+                const { name, color } = person(id)
                 return (
                   <span key={id} className="inline-flex shrink-0 items-center gap-1.5">
-                    <Avatar name={name} color={member?.color} />
+                    <Avatar name={name} color={color} />
                     <span className="@max-[34rem]/multiplayer:sr-only">{name}</span>
                   </span>
                 )
@@ -120,8 +135,8 @@ export function MultiplayerControls({ run, agent, onPeople }: {
         <div className="control-matrix-clear ml-auto flex min-w-0 items-center justify-end gap-2">
           {run.protected && <span className="inline-flex shrink-0 items-center gap-1 text-ui-sm text-muted"><Shield />Protected</span>}
           <div role="group" aria-label="Session controller" className="flex min-w-0 items-center gap-1.5 text-ui-sm text-muted">
-            {agent.steerable && controllerID && <Avatar name={controllerName ?? controllerID} color={controller?.color} />}
-            <span className="min-w-0 max-w-48 truncate @[48rem]/multiplayer:max-w-none">{agent.steerable ? controllerSummary : agent.starting ? 'Starting…' : 'Session finished · read-only'}</span>
+            {agent.steerable && controller && <Avatar name={controller.name} color={controller.color} />}
+            <span className="min-w-0 max-w-48 truncate">{agent.steerable ? controllerSummary : agent.starting ? 'Starting…' : 'Session finished · read-only'}</span>
           </div>
           {agent.steerable && stream !== 'live' && <span className="shrink-0 text-ui-sm text-state-needs-you">{connection}</span>}
           {agent.steerable && maySteer && (
@@ -137,8 +152,81 @@ export function MultiplayerControls({ run, agent, onPeople }: {
         </div>
       </div>
       {controlError && <p role="alert" className="control-matrix-clear w-fit px-1 py-1 text-ui-sm text-state-failed">Control request failed: {controlError}</p>}
-      {session.streamError && <p role="status" className="control-matrix-clear w-fit px-1 py-1 text-ui-sm text-state-failed">{session.streamError}</p>}
+      {streamError && <p role="status" className="control-matrix-clear w-fit px-1 py-1 text-ui-sm text-state-failed">{streamError}</p>}
       {presenceError && <p role="status" className="control-matrix-clear w-fit px-1 py-1 text-ui-sm text-muted">Presence unavailable: {presenceError}</p>}
     </div>
+  )
+}
+
+/**
+ * The strip folded into a desktop tile's header row: people are avatars named
+ * by their tooltips, the controller's has the teal ring, and Release is inside
+ * the "You control" menu.
+ */
+export function PresenceControls({ run, agent, wide }: {
+  run: RunRecord
+  agent: AgentTerminal
+  /** At 560px and up: words beside the avatars once the row is 960px, where the state's reason can spare the room. */
+  wide: boolean
+}) {
+  const { self, summary, status, stream, connection, maySteer, controllerID, person } = usePresence(run, agent)
+  const controller = controllerID ? person(controllerID) : undefined
+  const watchers = status?.watchers.filter((id) => id !== self.id && id !== controllerID) ?? []
+  const ringed = 'ring-1 ring-accent ring-offset-1 ring-offset-canvas'
+  const words = 'hidden @min-[60rem]/views:block'
+  return (
+    <div role="group" aria-label="Multiplayer controls" className="flex shrink-0 items-center gap-1 text-ui-sm text-muted">
+      {watchers.length > 0 && (
+        <span role="group" aria-label="Session watchers" className="flex items-center gap-1">
+          {watchers.map((id) => <Avatar key={id} size="header" {...person(id)} />)}
+        </span>
+      )}
+      {agent.steerable && stream !== 'live' && <span className="text-state-needs-you">{connection}</span>}
+      {agent.steerable && agent.localControl && controller && (
+        <Menu>
+          <MenuTrigger asChild>
+            <Button variant="ghost" size="sm" aria-label="You control" className="px-1">
+              <Avatar size="header" {...controller} className={ringed} />
+              {wide && <span className="hidden items-center gap-1.5 @min-[60rem]/views:flex">You control<ChevronDown aria-hidden /></span>}
+            </Button>
+          </MenuTrigger>
+          <MenuContent align="end">
+            <MenuItem disabled={agent.controlUnavailable || Boolean(run.switching)} onSelect={() => agent.session.releaseControl()}>Release</MenuItem>
+          </MenuContent>
+        </Menu>
+      )}
+      {agent.steerable && !agent.localControl && (
+        <>
+          {(controller || wide) && (
+            <span role="group" aria-label="Session controller" title={summary} className="flex min-w-0 items-center gap-1.5">
+              {controller && <Avatar size="header" {...controller} className={ringed} />}
+              {wide && <span className={cn(words, 'max-w-48 truncate')}>{summary}</span>}
+            </span>
+          )}
+          {maySteer ? (
+            <ControlButton
+              ownsControl={false}
+              unavailable={agent.controlUnavailable || Boolean(run.switching)}
+              onTakeControl={agent.session.takeControl}
+              onReleaseControl={agent.session.releaseControl}
+              takeover={agent.takeover.interaction}
+            />
+          ) : wide && <span className={words}>View only</span>}
+        </>
+      )}
+    </div>
+  )
+}
+
+/** What the strip says under itself when control, the stream or presence failed, as lines under a desktop tile's header row. */
+export function PresenceErrors({ run, agent }: { run: RunRecord; agent: AgentTerminal }) {
+  const { controlError, streamError, presenceError } = usePresence(run, agent)
+  const line = 'border-b border-seam px-4 py-1 text-ui-sm'
+  return (
+    <>
+      {controlError && <p role="alert" className={cn(line, 'text-state-failed')}>Control request failed: {controlError}</p>}
+      {streamError && <p role="status" className={cn(line, 'text-state-failed')}>{streamError}</p>}
+      {presenceError && <p role="status" className={cn(line, 'text-muted')}>Presence unavailable: {presenceError}</p>}
+    </>
   )
 }

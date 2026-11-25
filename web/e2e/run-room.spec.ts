@@ -129,7 +129,7 @@ test('two members share notes, moderated messages, and explicit control transfer
     const withDetails = terminalSizes.at(-1)!.cols
     for (const viewerPage of [page, bobPage]) {
       const details = viewerPage.getByRole('complementary', { name: 'Session details' })
-      const terminal = viewerPage.getByRole('tabpanel').filter({ has: viewerPage.locator('.xterm') })
+      const terminal = viewerPage.getByRole('tabpanel', { name: 'Terminal', exact: true })
       const terminalBox = await terminal.boundingBox()
       const detailsBox = await details.boundingBox()
       if (!terminalBox || !detailsBox) throw new Error('the terminal and Session details must have visible geometry')
