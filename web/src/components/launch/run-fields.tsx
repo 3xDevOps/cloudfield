@@ -209,10 +209,12 @@ export function TaskField({ mode, task, onTask, autoFocus = false, shared = fals
           {characters} {characters === 1 ? 'character' : 'characters'}, {lines} {lines === 1 ? 'line' : 'lines'}. Nothing runs until you choose Launch.
         </Callout>
       )}
-      {linked}
-      <FormField label="Task" help={help}>
-        <TaskBox className={cn('[field-sizing:content]', !shared && 'max-h-48')} autoFocus={autoFocus} readOnly={disabled} required={headless} value={task} onTask={onTask} />
-      </FormField>
+      <div className="flex min-w-0 flex-col gap-2">
+        {linked}
+        <FormField label="Task" help={help}>
+          <TaskBox className={cn('[field-sizing:content]', !shared && 'max-h-48')} autoFocus={autoFocus} readOnly={disabled} required={headless} value={task} onTask={onTask} />
+        </FormField>
+      </div>
     </>
   )
 }

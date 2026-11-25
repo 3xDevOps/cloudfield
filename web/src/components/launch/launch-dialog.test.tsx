@@ -581,6 +581,36 @@ describe('new run', () => {
     expect(sent.task).not.toContain('linear.app')
   })
 
+  it('offers the same issue again, instead of launching unlinked, when Start session is pressed after Unlink', async () => {
+    useStore.getState().openLaunchWithTask('ENG-123 Fix rounding', eng123)
+    await open()
+    fireEvent.click(screen.getByRole('button', { name: 'Unlink ENG-123' }))
+    expect(screen.queryByRole('button', { name: 'Use ENG-123 instead' })).toBeNull()
+    act(() => useStore.getState().openLaunchWithTask('ENG-123 Fix rounding', { ...eng123 }))
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Use ENG-123 instead' }))
+
+    expect(screen.getByText(/will be linked/).textContent).toContain('ENG-123')
+    expect(screen.queryByRole('button', { name: 'Use ENG-123 instead' })).toBeNull()
+    fireEvent.click(launchButton())
+    await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith(expect.objectContaining({ linear_issue_url: url })))
+  })
+
+  it('shows a link to the issue in the chip and a secondary Use button', async () => {
+    useStore.setState({ launchDraft: draft({ task: 'old draft' }) })
+    useStore.getState().openLaunchWithTask('ENG-9 Other', eng9)
+    await open()
+
+    expect(screen.getByRole('button', { name: 'Use ENG-9 instead' }).className).not.toContain('bg-action')
+  })
+
+  it('links the chip identifier to Linear', async () => {
+    useStore.getState().openLaunchWithTask('ENG-123 Fix rounding', eng123)
+    await open()
+
+    expect(screen.getByRole('link', { name: 'ENG-123' }).getAttribute('href')).toBe(url)
+  })
+
   it('saves the linked issue in the draft', async () => {
     useStore.getState().openLaunchWithTask('ENG-123 Fix rounding', eng123)
     await open()

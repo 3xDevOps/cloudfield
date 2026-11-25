@@ -8,7 +8,7 @@ export function LinkedIssue({ link, onUnlink }: { link: LinearLink; onUnlink: ()
   return (
     <div className="flex min-w-0 items-center gap-2 rounded-control border border-seam bg-chrome py-1 pr-1 pl-2 text-ui-sm text-muted">
       <Linear aria-hidden className="size-3.5 shrink-0" />
-      <span className="min-w-0 flex-1 truncate"><span className="tabular-nums text-text">{link.identifier}</span> · will be linked</span>
+      <span className="min-w-0 flex-1 truncate"><a className="tabular-nums text-accent underline-offset-2 hover:underline" href={link.url} target="_blank" rel="noreferrer">{link.identifier}</a> · will be linked</span>
       <Button type="button" variant="ghost" size="sm" aria-label={`Unlink ${link.identifier}`} onClick={onUnlink}>Unlink</Button>
     </div>
   )
@@ -21,7 +21,7 @@ export function OfferedIssue({ draft, offered, onUse }: { draft: LinearLink | nu
       tone="needs-you"
       role="status"
       title={`Your unfinished ${draft?.identifier ?? 'session'} draft was kept.`}
-      actions={<Button type="button" size="sm" onClick={onUse}>Use {offered.identifier} instead</Button>}
+      actions={<Button type="button" size="sm" variant="secondary" onClick={onUse}>Use {offered.identifier} instead</Button>}
     >
       {offered.identifier} was not loaded. Using it replaces the draft's task and link.
     </Callout>

@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import type { Api } from '@/lib/api'
 import type { LinearIssue } from '@/lib/types'
 import { LinearRoute } from '@/routes/linear'
-import { linearTask, linearTone } from '@/routes/linear/issues'
+import { linearTask } from '@/routes/linear/issues'
 import { useStore } from '@/store'
 import { fakeApi } from '@/test/fixtures'
 
@@ -47,6 +47,30 @@ describe('linear page', () => {
 
     expect(screen.queryByRole('button', { name: 'Start session' })).toBeNull()
     expect(useStore.getState().route).toMatchObject({ name: 'run', params: { runId: 'run-1' } })
+  })
+
+  it.each(['queued', 'provisioning', 'running', 'needs-attention'])('offers Open session for a %s linked session', async (status) => {
+    useStore.setState({ runs: { 'run-1': { id: 'run-1', status, linear_issue: 'ENG-123' } as never } })
+    renderPage()
+    await screen.findByText(issue.title)
+
+    expect(screen.getByRole('button', { name: 'Open session' })).toBeTruthy()
+  })
+
+  it('offers Start session again once the linked session finished', async () => {
+    useStore.setState({ runs: { 'run-1': { id: 'run-1', status: 'completed', linear_issue: 'ENG-123' } as never } })
+    renderPage()
+    await screen.findByText(issue.title)
+
+    expect(screen.getByRole('button', { name: 'Start session' })).toBeTruthy()
+  })
+
+  it('shows the status as a neutral badge, not in a session-state colour', async () => {
+    renderPage()
+    const badge = (await screen.findByText('In Progress')).closest('[data-slot="badge"]')!
+
+    expect(badge.getAttribute('data-tone')).toBe('neutral')
+    expect(badge.querySelector('svg')).toBeTruthy()
   })
 
   it('sends the typed words and the chosen team to linear.issues', async () => {
@@ -108,18 +132,18 @@ describe('linear page', () => {
     expect(screen.getByRole('alert').textContent).toContain('linear: not connected')
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
     expect(screen.queryByRole('searchbox')).toBeNull()
-    expect(screen.getByRole('button', { name: 'Open Settings → Linear' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Open Linear settings' })).toBeTruthy()
   })
 
   it('leads a refused key to Settings, with Retry second and no filters', async () => {
-    useStore.setState({ linear: { connected: true, error: 'Authentication required' } })
+    useStore.setState({ linear: { connected: true, refused: true, error: 'linear: Authentication required' } })
     renderPage({ linearIssues: vi.fn(async () => { throw new Error('Authentication required') }) })
 
     await screen.findByText('Linear refused your API key')
 
     expect(screen.queryByRole('searchbox')).toBeNull()
     const [first, second] = within(screen.getByRole('alert')).getAllByRole('button')
-    expect(first!.textContent).toBe('Open Settings → Linear')
+    expect(first!.textContent).toBe('Open Linear settings')
     expect(first!.className).toContain('bg-action')
     expect(second!.textContent).toBe('Retry')
   })
@@ -140,7 +164,7 @@ describe('linear page', () => {
     renderPage({ linearIssues: vi.fn(async () => { throw new Error(error) }) })
 
     expect((await screen.findByRole('alert')).textContent).toContain(error)
-    fireEvent.click(screen.getByRole('button', { name: 'Open Settings → Linear' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Open Linear settings' }))
     expect(useStore.getState().route).toMatchObject({ name: 'settings', params: { section: 'linear' } })
   })
 })
@@ -148,13 +172,5 @@ describe('linear page', () => {
 describe('linear issue helpers', () => {
   it('words the task as the identifier and title, with no URL the server could link again', () => {
     expect(linearTask(issue)).toBe('ENG-123 Fix checkout total rounding')
-  })
-
-  it('colors a status by its type, with review as its own tone', () => {
-    expect(linearTone({ name: 'Todo', type: 'unstarted' })).toBe('neutral')
-    expect(linearTone({ name: 'In Progress', type: 'started' })).toBe('working')
-    expect(linearTone({ name: 'In Review', type: 'started' })).toBe('review')
-    expect(linearTone({ name: 'Done', type: 'completed' })).toBe('done')
-    expect(linearTone({ name: 'Canceled', type: 'canceled' })).toBe('closed')
   })
 })

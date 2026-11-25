@@ -2537,8 +2537,10 @@ export interface LinearStatus {
   name?: string
   organization?: string
   url_key?: string
-  /** Set by the dashboard, never the server: linear.status failed, so a key is saved but Linear or the server refused the read. */
+  /** Set by the dashboard, never the server: linear.status failed. With connected true a key is saved and the read failed; without, nothing says a key exists. */
   error?: string
+  /** Set by the dashboard with a saved key: Linear refused it, as opposed to Linear being unreachable. */
+  refused?: boolean
 }
 
 export interface LinearTeam {

@@ -53,12 +53,13 @@ describe('Settings Linear section', () => {
 
   it('offers Replace key beside Disconnect, in the danger style, when Linear refuses the saved key', async () => {
     const linearConnect = vi.fn(async () => ({ connected: true, name: 'Ada Lovelace' }))
-    const client = fakeApi({ linearConnect, linearStatus: vi.fn(async () => { throw new ApiError(500, 'Authentication required, not authenticated', -32603) }) })
+    const client = fakeApi({ linearConnect, linearStatus: vi.fn(async () => { throw new ApiError(500, 'linear: Authentication required, not authenticated', -32603) }) })
     render(<LinearSection client={client} />)
 
     const alert = await screen.findByRole('alert')
-    expect(alert.textContent).toBe('Authentication required, not authenticated')
+    expect(alert.textContent).toBe('linear: Authentication required, not authenticated')
     expect(alert.getAttribute('data-tone')).toBe('failed')
+    expect(screen.getByText('Linear refused your saved key')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Disconnect' })).toBeTruthy()
     fireEvent.change(screen.getByPlaceholderText('lin_api_…'), { target: { value: 'lin_api_new' } })
     fireEvent.click(screen.getByRole('button', { name: 'Replace key' }))
@@ -68,7 +69,7 @@ describe('Settings Linear section', () => {
   })
 
   it('disconnects a key Linear refuses', async () => {
-    const client = fakeApi({ linearStatus: vi.fn(async () => { throw new ApiError(500, 'Authentication required', -32603) }) })
+    const client = fakeApi({ linearStatus: vi.fn(async () => { throw new ApiError(500, 'linear: Authentication required', -32603) }) })
     render(<LinearSection client={client} />)
 
     fireEvent.click(await screen.findByRole('button', { name: 'Disconnect' }))
@@ -88,6 +89,41 @@ describe('Settings Linear section', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
 
     await screen.findByPlaceholderText('lin_api_…')
+  })
+
+  it('keeps Disconnect and Replace key, and offers Retry, when Linear cannot be reached with a key saved', async () => {
+    const error = 'linear: Post "https://api.linear.app/graphql": context deadline exceeded'
+    const linearStatus = vi.fn<Api['linearStatus']>()
+      .mockRejectedValueOnce(new ApiError(500, error, -32603))
+      .mockResolvedValue({ connected: true, name: 'Ada Lovelace' })
+    render(<LinearSection client={fakeApi({ linearStatus })} />)
+
+    expect((await screen.findByRole('alert')).textContent).toBe(error)
+    expect(screen.getByText('Could not reach Linear')).toBeTruthy()
+    expect(screen.queryByText('Linear refused your saved key')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Disconnect' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Replace key' })).toBeTruthy()
+    expect(useStore.getState().linear).toMatchObject({ connected: true, refused: false })
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }))
+
+    await screen.findByText('Connected as Ada Lovelace')
+  })
+
+  it('assumes no key, and says the key is unchanged, when a gateway answers 401 without the server\'s Linear text', async () => {
+    const client = fakeApi({ linearStatus: vi.fn(async () => { throw new ApiError(401, 'linear.status: 401 Unauthorized') }) })
+    render(<LinearSection client={client} />)
+
+    expect((await screen.findByRole('alert')).textContent).toBe('linear.status: 401 Unauthorized')
+    expect(screen.getByText('Cloudfield could not check the connection. Your key is unchanged.')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Disconnect' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Replace key' })).toBeNull()
+    expect(useStore.getState().linear?.connected).toBe(false)
+  })
+
+  it('keeps gold for Save: View issues and Retry are secondary', async () => {
+    render(<LinearSection client={fakeApi({ linearStatus: vi.fn(async () => ({ connected: true, name: 'Ada Lovelace' })) })} />)
+
+    expect((await screen.findByRole('button', { name: 'View issues' })).className).not.toContain('bg-action')
   })
 
   it('drops a Connect that finishes after the identity changed', async () => {

@@ -17,18 +17,33 @@ describe('loadLinear', () => {
     expect(store.getState().linear).toEqual({ connected: true, name: 'Ada' })
   })
 
-  it('keeps a saved key connected, with Linear\'s error, when Linear refuses it', async () => {
+  it.each([
+    ['Authentication required, not authenticated', 'linear: Authentication required, not authenticated'],
+    ['a 401 status', 'linear: 401 Unauthorized: {}'],
+  ])('keeps a saved key connected and refused when Linear says %s', async (_, text) => {
     const store = storeWith(['linear.status'])
-    await loadLinear(store, fakeApi({ linearStatus: vi.fn(async () => { throw new ApiError(500, 'Authentication required', -32603) }) }))
+    await loadLinear(store, fakeApi({ linearStatus: vi.fn(async () => { throw new ApiError(500, `linear.status: ${text}`, -32603) }) }))
 
-    expect(store.getState().linear).toEqual({ connected: true, error: 'Authentication required' })
+    expect(store.getState().linear).toEqual({ connected: true, refused: true, error: `linear.status: ${text}` })
+  })
+
+  it.each([
+    ['a timeout', 'linear: Post "https://api.linear.app/graphql": context deadline exceeded'],
+    ['an unreadable key file', 'linear: read key of member m1: permission denied'],
+    ['a server error from Linear', 'linear: 502 Bad Gateway: <html>'],
+  ])('keeps a saved key connected, not refused, when the read fails with %s', async (_, text) => {
+    const store = storeWith(['linear.status'])
+    await loadLinear(store, fakeApi({ linearStatus: vi.fn(async () => { throw new ApiError(500, `linear.status: ${text}`, -32603) }) }))
+
+    expect(store.getState().linear).toEqual({ connected: true, refused: false, error: `linear.status: ${text}` })
   })
 
   it.each([
     ['an unconfigured service', new ApiError(500, 'linear service not configured', codeUnavailable)],
-    ['a timeout', new ApiError(500, 'linear: Post "https://api.linear.app/graphql": context deadline exceeded', -32603)],
+    ['a proxy 401', new ApiError(401, 'linear.status: 401 Unauthorized')],
+    ['a proxy 403 with a JSON error of its own', new ApiError(403, 'linear.status: Forbidden by policy', -32001)],
     ['a transport failure', new TypeError('Failed to fetch')],
-  ])('does not call a key saved when the read fails with %s', async (_, failure) => {
+  ])('assumes no key when the read fails with %s', async (_, failure) => {
     const store = storeWith(['linear.status'])
     await loadLinear(store, fakeApi({ linearStatus: vi.fn(async () => { throw failure }) }))
 

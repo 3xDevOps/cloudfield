@@ -48,20 +48,26 @@ issues with the key of whoever asks.
 The **Linear** page lists up to 50 open issues assigned to you: identifier,
 title, status, team and last update. Search matches the title, and
 the team filter narrows the list to one team. A refused or missing key shows
-Linear's error with a button to **Settings**, **Connections**, **Linear**.
+the error with **Open Linear settings**, which opens **Settings**,
+**Connections**, **Linear**. The no-key error,
+`Linear is not connected: save a personal API key in Settings → Connections → Linear`,
+is Cloudfield's own message, not Linear's.
 
 **Start session** on a row opens the launch dialog with the task
 `<ID> <title>` and a chip, `<ID> · will be linked`, with an **Unlink** button.
-The task holds no URL: the link travels only as `linear_issue_url`, so
-**Unlink** really unlinks. Without it the server would link the first Linear
-URL in the task. **Open in Linear** opens the issue in a new tab. An issue
+The task holds no URL: the link travels only as `linear_issue_url`, so the
+dashboard sends no link after **Unlink**. A Linear issue URL you type into the
+task still links the session, because without `linear_issue_url` the server
+links the first Linear URL in the task. The `<ID>` in the chip opens the issue
+in Linear. **Open in Linear** opens the issue in a new tab. An issue
 that already has a live session shows **Open session**, with a dot, instead.
 
 The launch dialog saves its draft, and the draft carries its linked issue. A
 restored draft shows its own chip. If a draft is open when you press **Start
 session**, the dialog keeps the draft and says `Your unfinished <ID or session>
 draft was kept. <ID> was not loaded.` with **Use <ID> instead**, which replaces
-the task and the link.
+the task and the link. After **Unlink**, **Start session** for the same issue
+offers it the same way and never launches unlinked on its own.
 
 The agent learns the link from its role card, not the task: harnesses that
 carry Cloudfield's instructions (Claude Code, Codex, opencode) are told the
@@ -81,11 +87,18 @@ the identifier only. If Linear refuses the status read, the status is left out
 and Linear's error is the link's tooltip.
 
 **Settings**, **Connections**, **Linear** shows `Connected as <name>` with
-**View issues** and **Disconnect**. If Linear refuses the saved key, it shows
-Linear's error in red with a key field and **Replace key** beside
-**Disconnect**. If reading the status fails for any other reason (the server
-has no Linear service, an outage, a timeout), it shows the error and
-**Retry**, with no **Disconnect** and no **Linear** entry in the navigation.
+**View issues** and **Disconnect**. `linear.status` answers an empty status
+when you have no key, so any failure that carries the server's own `linear: `
+error text means a key is saved: the **Linear** entry stays in the navigation
+and the section shows the error in red with a key field and **Replace key**
+beside **Disconnect**. `Linear refused your saved key` is an authentication
+failure (a 401 or 403, or `Authentication required`). `Could not reach Linear`
+is any other Linear failure, such as a timeout or a 5xx, and adds **Retry**.
+If the server has no Linear service (`linear service not configured`) or the
+error is not the server's (a proxy's 401, a dropped connection), the dashboard
+cannot tell whether a key exists: it shows the error, `Cloudfield could not
+check the connection. Your key is unchanged.` and **Retry**, with no
+**Disconnect** and no **Linear** entry in the navigation.
 
 ## Where the key is stored
 

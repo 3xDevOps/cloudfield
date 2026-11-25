@@ -16,24 +16,25 @@ import { useIsMobile } from '@/lib/breakpoints'
 import { useElementSize } from '@/lib/hooks'
 import type { LinearIssue, LinearTeam } from '@/lib/types'
 import { cn } from '@/lib/utils'
-import { linearTask, linearTone } from '@/routes/linear/issues'
+import { linearTask } from '@/routes/linear/issues'
+import { LinearStatusIcon } from '@/routes/linear/status-icon'
 import { registerRoute, type RouteProps } from '@/routes/registry'
 import { useStore } from '@/store'
+import { useHeaderPrimary } from '@/store/hooks'
 import { loadLinear } from '@/store/linear'
 import { isTerminal } from '@/store/runs'
 
 const allTeams = 'all'
 const searchDelay = 250
-// The fixed columns take 624px, which leaves a title at least 296px.
+// The fixed columns take 592px, which leaves a title at least 328px.
 const tableWidth = 920
 
 type Read = { issues: LinearIssue[] } | { error: string } | null
 
 function Status({ issue }: { issue: LinearIssue }) {
-  const tone = linearTone(issue.state)
   return (
-    <Badge tone={tone}>
-      <StatusDot tone={tone} />
+    <Badge>
+      <LinearStatusIcon type={issue.state.type} />
       {issue.state.name}
     </Badge>
   )
@@ -62,7 +63,7 @@ type Fault = 'no-key' | 'refused' | 'failed'
 /** Without a key, or with one Linear refuses, Retry cannot help: Settings is the way on. */
 function ReadError({ fault, error, onRetry }: { fault: Fault; error: string; onRetry: () => void }) {
   const settings = (
-    <Button size="sm" variant={fault === 'failed' ? 'secondary' : 'primary'} onClick={() => useStore.getState().navigate('settings', { section: 'linear' })}>Open Settings → Linear</Button>
+    <Button size="sm" variant={fault === 'failed' ? 'secondary' : 'primary'} onClick={() => useStore.getState().navigate('settings', { section: 'linear' })}>Open Linear settings</Button>
   )
   const retry = <Button size="sm" variant={fault === 'refused' ? 'secondary' : 'primary'} onClick={onRetry}>Retry</Button>
   return (
@@ -126,9 +127,10 @@ function LinearPage({ client }: RouteProps & { client: Api }) {
 
   const mobile = useIsMobile()
   const noKey = status?.connected === false && !status.error
-  const refused = status?.connected === true && status.error !== undefined
+  const refused = status?.refused === true
   const issues = read && 'issues' in read ? read.issues : null
   const filters = !noKey && !(refused && issues === null)
+  useHeaderPrimary(read !== null && 'error' in read)
   const retry = () => { setAttempt((n) => n + 1); void loadLinear(useStore, client) }
   const subtitle = read && 'error' in read ? undefined : status?.organization ? `Assigned to you · ${status.organization}` : 'Assigned to you'
 
@@ -155,7 +157,7 @@ function LinearPage({ client }: RouteProps & { client: Api }) {
             </Select>
           </div>}
           {teamsError && filters && !(read && 'error' in read) && (
-            <Callout tone="needs-you" role="alert" title="Could not load teams" actions={<Button size="sm" onClick={retry}>Retry</Button>}>{teamsError}</Callout>
+            <Callout tone="needs-you" role="alert" title="Could not load teams" actions={<Button size="sm" variant="secondary" onClick={retry}>Retry</Button>}>{teamsError}</Callout>
           )}
           {read && 'error' in read ? (
             <ReadError fault={noKey ? 'no-key' : refused ? 'refused' : 'failed'} error={read.error} onRetry={retry} />
@@ -172,7 +174,7 @@ function LinearPage({ client }: RouteProps & { client: Api }) {
                       <th className="w-22 px-3 py-1.5 font-medium">ID</th>
                       <th className="px-3 py-1.5 font-medium">Title</th>
                       <th className="w-32 px-3 py-1.5 font-medium">Status</th>
-                      <th className="w-24 px-3 py-1.5 font-medium">Team</th>
+                      <th className="w-16 px-3 py-1.5 font-medium">Team</th>
                       <th className="w-20 px-3 py-1.5 font-medium">Updated</th>
                       <th className="w-58 px-3 py-1.5"><span className="sr-only">Actions</span></th>
                     </tr>

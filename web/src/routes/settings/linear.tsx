@@ -17,7 +17,7 @@ function KeyForm({ label, busy, error, onSave }: { label: string; busy: boolean;
   return (
     <>
       <form
-        className="flex min-w-0 flex-wrap items-center gap-2"
+        className="flex min-w-0 items-center gap-2"
         onSubmit={(event) => { event.preventDefault(); onSave(key.trim()) }}
       >
         <Input
@@ -27,7 +27,7 @@ function KeyForm({ label, busy, error, onSave }: { label: string; busy: boolean;
           placeholder="lin_api_…"
           value={key}
           onChange={(event) => setKey(event.target.value)}
-          className="min-w-0 flex-[1_1_16rem] font-mono"
+          className="min-w-0 flex-[1_1_9rem] font-mono"
         />
         <Button type="submit" size="sm" disabled={busy || key.trim() === ''}>{busy ? 'Saving…' : label}</Button>
       </form>
@@ -80,20 +80,25 @@ function LinearBody({ client }: { client: Api }) {
         <SettingRow label="Personal API key" help="Loading…" />
       ) : status.connected && status.error ? (
         <SettingRow
-          label="Linear refused your saved key"
+          label={status.refused ? 'Linear refused your saved key' : 'Could not reach Linear'}
           labelFor="linear-api-key"
-          help="Paste a new key to replace it, or Disconnect to remove it."
-          control={<Button size="sm" variant="secondary" disabled={busy} onClick={disconnect}>Disconnect</Button>}
+          help={status.refused ? 'Paste a new key to replace it, or Disconnect to remove it.' : 'Your key is saved. Retry, paste a new key to replace it, or Disconnect to remove it.'}
+          control={
+            <span className="flex items-center gap-2">
+              {!status.refused && <Button size="sm" variant="secondary" disabled={busy} onClick={() => void loadLinear(useStore, client)}>Retry</Button>}
+              <Button size="sm" variant="secondary" disabled={busy} onClick={disconnect}>Disconnect</Button>
+            </span>
+          }
         >
           <KeyForm label="Replace key" busy={busy} error={error ?? status.error} onSave={connect} />
         </SettingRow>
       ) : status.connected ? (
         <SettingRow
           label={`Connected as ${status.name}${status.organization ? ` (${status.organization})` : ''}`}
-          help="Start session on an issue links the new session to it."
+          help={<>The <strong>Start session</strong> button on an issue links the new session to it.</>}
           control={
             <span className="flex items-center gap-2">
-              <Button size="sm" onClick={() => navigate('linear')}>View issues</Button>
+              <Button size="sm" variant="secondary" onClick={() => navigate('linear')}>View issues</Button>
               <Button size="sm" variant="secondary" disabled={busy} onClick={disconnect}>Disconnect</Button>
             </span>
           }
@@ -103,8 +108,8 @@ function LinearBody({ client }: { client: Api }) {
       ) : status.error ? (
         <SettingRow
           label="Could not read your Linear connection"
-          help="This is not Linear refusing a key, so the key is left as it is."
-          control={<Button size="sm" onClick={() => void loadLinear(useStore, client)}>Retry</Button>}
+          help="Cloudfield could not check the connection. Your key is unchanged."
+          control={<Button size="sm" variant="secondary" onClick={() => void loadLinear(useStore, client)}>Retry</Button>}
         >
           <Callout tone="failed" role="alert">{status.error}</Callout>
         </SettingRow>

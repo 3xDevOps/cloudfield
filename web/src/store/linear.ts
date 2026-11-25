@@ -1,4 +1,4 @@
-import { codeUnavailable, type ApiError, type Api } from '@/lib/api'
+import { ApiError, codeUnavailable, type Api } from '@/lib/api'
 import { message } from '@/lib/format'
 import type { LinearStatus } from '@/lib/types'
 import type { RootStore } from '@/store'
@@ -6,10 +6,12 @@ import { capability } from '@/store/hooks'
 import type { SliceCreator } from '@/store/slice'
 
 /** linear.status for the caller; null before it is read or when the server
- * does not serve it. A failed read has `error`. Only Linear refusing the saved
- * key leaves connected true, since a key is then saved; any other failure
- * (service not configured, outage, timeout) leaves connected false, so the
- * Linear nav entry and a Disconnect row stay away while the error shows. */
+ * does not serve it. A failed read has `error`. The server answers an empty
+ * status when no key is saved, so any error carrying its own "linear: " text
+ * means a key is saved: connected stays true, and `refused` tells Linear
+ * refusing the key from Linear being unreachable. An unconfigured service or
+ * an error that is not the server's (a proxy, a dropped connection) leaves
+ * connected false, since nothing says a key exists. */
 export interface LinearSlice {
   linear: LinearStatus | null
   /** Counts Connect and Disconnect, so a read that started before one cannot overwrite it. */
@@ -25,6 +27,7 @@ export const createLinearSlice: SliceCreator<LinearSlice> = (set) => ({
   writeLinear: (linear) => set((s) => ({ linear, linearWrites: s.linearWrites + 1 })),
 })
 
+const serverText = /(?:^|: )linear: (.*)$/s
 const refusal = /authenticat|unauthori[sz]ed|forbidden|\b40[13]\b/i
 
 export async function readLinear(client: Api): Promise<LinearStatus> {
@@ -32,7 +35,9 @@ export async function readLinear(client: Api): Promise<LinearStatus> {
     return await client.linearStatus()
   } catch (err) {
     const error = message(err)
-    return { connected: (err as ApiError).code !== codeUnavailable && refusal.test(error), error }
+    const linear = err instanceof ApiError && err.code !== undefined && err.code !== codeUnavailable ? serverText.exec(error) : null
+    if (!linear) return { connected: false, error }
+    return { connected: true, error, refused: refusal.test(linear[1]!) }
   }
 }
 
