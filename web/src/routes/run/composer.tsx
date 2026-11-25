@@ -153,6 +153,24 @@ function ComposerBox({ textarea, autoFocus, collapsed, docked, value, onChange, 
   useLayoutEffect(() => {
     if (collapsed) textarea.current?.scrollTo(0, 0)
   }, [collapsed, textarea])
+  // The box opens with its footer where the one line was pressed, so the footer takes no press at first:
+  // the second press of a double-click opens no menu and takes no focus from the field.
+  const [was, setWas] = useState(collapsed)
+  const [opening, setOpening] = useState(false)
+  if (was !== collapsed) {
+    setWas(collapsed)
+    setOpening(!collapsed)
+  }
+  useEffect(() => {
+    if (!opening) return
+    const done = () => setOpening(false)
+    const timer = setTimeout(done, 400)
+    window.addEventListener('pointermove', done, { once: true })
+    return () => {
+      clearTimeout(timer)
+      window.removeEventListener('pointermove', done)
+    }
+  }, [opening])
   // The table stands plain keys down inside a field, so the textarea answers
   // Enter itself; this registration keeps Send listed in the shortcuts reference.
   useKeybindings('composer', focused && !coarse && !dictating ? {
@@ -172,7 +190,12 @@ function ComposerBox({ textarea, autoFocus, collapsed, docked, value, onChange, 
       <DictationNotice textarea={textarea} className="mb-2" />
       {menu}
       {drop.count !== null && <DropOverlay count={drop.count} refused={drop.refused} blocked={room.blocked} limit={room.limit} />}
-      <div className={cn('@container overflow-hidden rounded-composer border border-seam bg-chrome', focused && 'border-control', collapsed && 'flex items-center pr-1')}>
+      <div
+        className={cn('@container overflow-hidden rounded-composer border border-seam bg-chrome', focused && 'border-control', collapsed && 'flex items-center pr-1')}
+        onMouseDown={(event) => {
+          if (opening && event.target === event.currentTarget) event.preventDefault()
+        }}
+      >
       {!collapsed && images}
       <Textarea
         variant="embedded"
@@ -230,7 +253,7 @@ function ComposerBox({ textarea, autoFocus, collapsed, docked, value, onChange, 
           )}
         </>
       ) : (
-        <div className="wrap-from-end min-w-0 items-center gap-1 px-2 pb-2">{footer}</div>
+        <div className={cn('wrap-from-end min-w-0 items-center gap-1 px-2 pb-2', opening && 'pointer-events-none')}>{footer}</div>
       )}
       </div>
     </div>
