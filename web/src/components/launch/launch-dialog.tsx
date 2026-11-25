@@ -481,21 +481,19 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
             <X />
           </Button>
         </DialogPrimitive.Close>
-        {!phone && (
-          <div
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize launch panel"
-            aria-controls="launch-form"
-            aria-valuenow={Math.round(visibleLaunchWidth)}
-            aria-valuemin={minLaunchWidth}
-            aria-valuemax={launchMaxWidth}
-            tabIndex={0}
-            onPointerDown={startResize}
-            onKeyDown={resizeKey}
-            className={cn(focusRing, 'absolute inset-y-0 right-0 z-10 w-2 cursor-col-resize touch-none hover:bg-hover-chrome coarse:w-6')}
-          />
-        )}
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize launch panel"
+          aria-controls="launch-form"
+          aria-valuenow={Math.round(visibleLaunchWidth)}
+          aria-valuemin={minLaunchWidth}
+          aria-valuemax={launchMaxWidth}
+          tabIndex={0}
+          onPointerDown={startResize}
+          onKeyDown={resizeKey}
+          className={cn(focusRing, 'absolute inset-y-0 right-0 z-10 w-2 cursor-col-resize touch-none hover:bg-hover-chrome coarse:w-4')}
+        />
       </DialogPrimitive.Content>
       </SlideOut>
     </Dialog>

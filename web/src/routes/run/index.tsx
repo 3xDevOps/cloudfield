@@ -534,7 +534,7 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
               <DialogTitle>Session details</DialogTitle>
               {details(false)}
             </div>
-            {!mobile && <ResizeDetails width={detailsWidth} max={detailsMaxWidth} onResize={setRunDetailsWidth} className="left-0" />}
+            {!mobile && <ResizeDetails width={detailsWidth} max={detailsMaxWidth} onResize={setRunDetailsWidth} className="left-0 coarse:w-4" />}
           </DialogContent>
         </Dialog>
       )}
