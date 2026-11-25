@@ -129,7 +129,9 @@ export function useDotFade(ref: RefObject<HTMLElement | null>) {
       const rect = matrix.getBoundingClientRect()
       if (!rect.width || !rect.height) return
       if (!layers) build(rect.width, rect.height)
-      const dt = lastFrame ? clamp((now - lastFrame) / 16.67, 0.25, 10) : 1
+      const elapsed = lastFrame ? clamp((now - lastFrame) / 16.67, 0.25, 10) : FRAME_INTERVAL_MS / 16.67
+      const steps = Math.ceil(elapsed)
+      const dt = elapsed / steps
       lastFrame = now
       zones = [...strip.querySelectorAll('.control-matrix-clear')].map((element) => {
         const box = element.getBoundingClientRect()
@@ -150,6 +152,10 @@ export function useDotFade(ref: RefObject<HTMLElement | null>) {
           }
         }
       }
+      const from = pointer
+      let speed = 0
+      let alongX = 0
+      let alongY = 0
       if (client) {
         const point = { x: client.x - rect.left, y: client.y - rect.top }
         client = undefined
@@ -157,52 +163,58 @@ export function useDotFade(ref: RefObject<HTMLElement | null>) {
         else {
           const distance = pointer ? Math.hypot(point.x - pointer.x, point.y - pointer.y) : 0
           if (pointer && distance > 0.01) {
-            const speed = clamp(distance / Math.max(now - pointer.time, 8), 0, 2)
-            const alongX = (point.x - pointer.x) / distance
-            const alongY = (point.y - pointer.y) / distance
-            for (const dot of dots) {
-              const trail = -((dot.x - point.x) * alongX + (dot.y - point.y) * alongY)
-              const side = (dot.x - point.x) * -alongY + (dot.y - point.y) * alongX
-              const branchWidth = 7 + trail * 0.2
-              if (trail > 0 && trail < WAKE_LENGTH && Math.abs(side) < branchWidth) {
-                const wake = speed * (1 - trail / WAKE_LENGTH) * (1 - Math.abs(side) / branchWidth) * WAKE_OVERSHOOT
-                  * (side < 0 ? -1 : 1) * calm(dot.x, dot.y)
-                dot.vx += -alongY * wake
-                dot.vy += alongX * wake
-              }
-            }
+            speed = clamp(distance / Math.max(now - pointer.time, 8), 0, 2)
+            alongX = (point.x - pointer.x) / distance
+            alongY = (point.y - pointer.y) / distance
           }
           pointer = { ...point, time: now }
         }
       }
       let moving = false
-      for (const dot of dots) {
-        let targetX = 0
-        let targetY = 0
-        if (pointer) {
-          const dx = dot.x - pointer.x
-          const dy = dot.y - pointer.y
-          const distance = Math.hypot(dx, dy)
-          if (distance > 0.01 && distance < PART_RADIUS) {
-            const force = (1 - distance / PART_RADIUS) * 13 * calm(dot.x, dot.y)
-            targetX = dx / distance * force
-            targetY = dy / distance * force
+      // An update is drawn once but simulated in steps of at most one 60 Hz frame, with the
+      // pointer walked along its path since the last update, so the motion keeps its shape.
+      for (let step = 1; step <= steps; step++) {
+        const at = pointer && from
+          ? { x: from.x + (pointer.x - from.x) * step / steps, y: from.y + (pointer.y - from.y) * step / steps }
+          : pointer
+        for (const dot of dots) {
+          let targetX = 0
+          let targetY = 0
+          if (at) {
+            const dx = dot.x - at.x
+            const dy = dot.y - at.y
+            const trail = -(dx * alongX + dy * alongY)
+            const side = dx * -alongY + dy * alongX
+            const branchWidth = 7 + trail * 0.2
+            if (speed && trail > 0 && trail < WAKE_LENGTH && Math.abs(side) < branchWidth) {
+              const wake = speed * (1 - trail / WAKE_LENGTH) * (1 - Math.abs(side) / branchWidth) * WAKE_OVERSHOOT
+                * (side < 0 ? -1 : 1) * calm(dot.x, dot.y) * dt
+              dot.vx += -alongY * wake
+              dot.vy += alongX * wake
+            }
+            const distance = Math.hypot(dx, dy)
+            if (distance > 0.01 && distance < PART_RADIUS) {
+              const force = (1 - distance / PART_RADIUS) * 13 * calm(dot.x, dot.y)
+              targetX = dx / distance * force
+              targetY = dy / distance * force
+            }
           }
-        }
-        // Dots at rest keep the position they were last drawn at, so a frame writes only the dots in motion.
-        if (!targetX && !targetY && !dot.dx && !dot.dy && !dot.vx && !dot.vy && !dot.burst) continue
-        dot.vx = (dot.vx + (targetX - dot.dx) * SPRING * dt) * Math.pow(DAMPING, dt)
-        dot.vy = (dot.vy + (targetY - dot.dy) * SPRING * dt) * Math.pow(DAMPING, dt)
-        dot.dx += dot.vx * dt
-        dot.dy += dot.vy * dt
-        dot.burst *= Math.pow(0.82, dt)
-        const restless = Math.abs(dot.dx - targetX) + Math.abs(dot.dy - targetY) + Math.abs(dot.vx) + Math.abs(dot.vy) + dot.burst
-        if (restless > 0.025) moving = true
-        else if (!targetX && !targetY) Object.assign(dot, { dx: 0, dy: 0, vx: 0, vy: 0, burst: 0 })
-        for (const circle of dot.circles) {
-          circle.setAttribute('cx', String(dot.x + dot.dx))
-          circle.setAttribute('cy', String(dot.y + dot.dy))
-          circle.setAttribute('r', String(DOT_RADIUS + dot.burst))
+          // Dots at rest keep the position they were last drawn at, so a frame writes only the dots in motion.
+          if (!targetX && !targetY && !dot.dx && !dot.dy && !dot.vx && !dot.vy && !dot.burst) continue
+          dot.vx = (dot.vx + (targetX - dot.dx) * SPRING * dt) * Math.pow(DAMPING, dt)
+          dot.vy = (dot.vy + (targetY - dot.dy) * SPRING * dt) * Math.pow(DAMPING, dt)
+          dot.dx += dot.vx * dt
+          dot.dy += dot.vy * dt
+          dot.burst *= Math.pow(0.82, dt)
+          if (step < steps) continue
+          const restless = Math.abs(dot.dx - targetX) + Math.abs(dot.dy - targetY) + Math.abs(dot.vx) + Math.abs(dot.vy) + dot.burst
+          if (restless > 0.025) moving = true
+          else if (!targetX && !targetY) Object.assign(dot, { dx: 0, dy: 0, vx: 0, vy: 0, burst: 0 })
+          for (const circle of dot.circles) {
+            circle.setAttribute('cx', String(dot.x + dot.dx))
+            circle.setAttribute('cy', String(dot.y + dot.dy))
+            circle.setAttribute('r', String(DOT_RADIUS + dot.burst))
+          }
         }
       }
       if (pulse && ring) {

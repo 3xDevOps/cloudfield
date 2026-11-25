@@ -3194,10 +3194,11 @@ ring. The clear bars behind text damp motion to 25%. The effect is decoration,
 so the strip is not a tab stop and takes no keys. The hook listens on the strip
 alone: `ControlButton`'s pointer capture and a touch's implicit capture keep a drag's
 moves there, and `touch-pan-y` keeps a horizontal touch drag from turning into
-a pan. Events only record the latest pointer; dot simulation and DOM writes run
-at most ten times per second, coalescing intermediate moves. Each update
-measures the strip and its clear bars once, moves the dots, and rewrites only
-those not at rest.
+a pan. Events only record the latest pointer; the dots are redrawn at most ten
+times per second, coalescing intermediate moves. Each update measures the strip
+and its clear bars once, simulates the time since the last update in 60 Hz
+steps with the pointer walked along the straight line it covered, and rewrites
+only the dots not at rest.
 When every dot is back at rest the SVG is removed and the static texture
 returns. With reduced motion the strip keeps the static texture.
 
