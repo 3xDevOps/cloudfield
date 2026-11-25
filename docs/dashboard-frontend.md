@@ -3102,12 +3102,15 @@ when the focus does. The strip is a `tablist` named "Sessions in this tile":
   folded tab needs you, and picking a tab there activates it.
 - **Add a tab** ("+") opens the picker in a popover.
 - **Split right** and **Split down**, on the focused tile, open an empty
-  focused tile on that side. A tile focused by a press shows them when the
-  press ends, so its strip keeps its layout under the click and a first
-  click on "+", a tab or a tab's close button acts. Where the 420 by 400px floor leaves no room they
-  open the picker instead, hung from the button that was pressed and led by
-  "No room to split right. Add a tab here instead.", and the live region
-  says "No room to split: adds a tab".
+  focused tile on that side. The strip of a tile focused by a press keeps
+  the layout it had, without them, until the pointer is off the strip with
+  no button down, and while a popover or menu opened from the strip is open:
+  a first click on "+", a tab or a tab's close button acts, and nothing
+  moves under the pointer after it. A lifted finger counts as off the strip.
+  Where the 420 by 400px floor leaves no room they open the picker instead,
+  hung from the button that was pressed and led by "No room to split right.
+  Add a tab here instead.", and the live region says "No room to split: adds
+  a tab".
 - **Maximize**, with two or more tiles.
 - **Open sidebar**, at the left of the first tile's strip while the sidebar is
   hidden.

@@ -170,6 +170,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
   const [picking, setPicking] = useState<string | null>(null)
   const [noRoom, setNoRoom] = useState<TileSide | null>(null)
   const [pressed, setPressed] = useState(false)
+  const [resting, setResting] = useState<string | null>(null)
   const pick = useCallback((tileId: string | null) => {
     setPicking(tileId)
     setNoRoom(null)
@@ -275,10 +276,13 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
   // Native and on capture: a frame is portaled into its tile, and a terminal stops the events it handles.
   const byHand = useRef(stored.focused)
   const stray = useRef(false)
+  const restingStrip = useRef<Element | null>(null)
   useLayoutEffect(() => {
     if (byHand.current === stored.focused) return
     byHand.current = stored.focused
     stray.current = true
+    restingStrip.current = null
+    setResting(null)
     const from = document.activeElement?.closest<HTMLElement>('[data-tile]')
     if (from && from.dataset.tile !== stored.focused) focusHeading(stored.focused)
   }, [stored.focused])
@@ -294,11 +298,26 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
         return
       }
       byHand.current = tileId
-      setPressed(event.type === 'pointerdown')
+      const down = event.type === 'pointerdown'
+      restingStrip.current = down ? tileNode(tileId)!.firstElementChild : null
+      setPressed(down)
+      setResting(down ? tileId : null)
       changeTiles((before) => focusTile(before, tileId))
     }
+    // The pressed tile's strip is let go with no button down, nothing it opened still open and the pointer off it, as a lifted finger is.
+    const settle = (event: PointerEvent) => {
+      const strip = restingStrip.current
+      if (!strip || event.buttons || strip.querySelector('[aria-expanded=true]')) return
+      const box = strip.getBoundingClientRect()
+      if (event.pointerType !== 'touch' && event.clientX >= box.left && event.clientX < box.right && event.clientY >= box.top && event.clientY < box.bottom) return
+      restingStrip.current = null
+      setResting(null)
+    }
     // After the click that follows the release.
-    const release = () => setTimeout(() => setPressed(false))
+    const release = (event: PointerEvent) => setTimeout(() => {
+      setPressed(false)
+      settle(event)
+    })
     const press = (event: Event) => {
       tabbed = event instanceof KeyboardEvent && event.key === 'Tab'
       stray.current = false
@@ -307,12 +326,14 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
     window.addEventListener('pointerdown', press, true)
     window.addEventListener('pointerup', release, true)
     window.addEventListener('pointercancel', release, true)
+    window.addEventListener('pointermove', settle, true)
     window.addEventListener('keydown', press, true)
     window.addEventListener('focusin', enter, true)
     return () => {
       window.removeEventListener('pointerdown', press, true)
       window.removeEventListener('pointerup', release, true)
       window.removeEventListener('pointercancel', release, true)
+      window.removeEventListener('pointermove', settle, true)
       window.removeEventListener('keydown', press, true)
       window.removeEventListener('focusin', enter, true)
     }
@@ -327,6 +348,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
     picking,
     noRoom,
     pick,
+    resting,
     split: (tileId: string, side: 'right' | 'down') => {
       if (measured && !fits(splitTile(stored, tileId, side).root, area)) {
         pick(tileId)
@@ -337,7 +359,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
       changeTiles((before) => splitTile(before, tileId, side))
       say(`Split ${side}`)
     },
-  }), [layout, cramped, ctx, picking, noRoom, pick, stored, measured, area])
+  }), [layout, cramped, ctx, picking, noRoom, pick, resting, stored, measured, area])
 
   const several = tiles.length > 1
   const focus = (tile: TileNode) => {

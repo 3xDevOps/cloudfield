@@ -180,6 +180,26 @@ describe('a press that focuses a tile', () => {
     expect(rest.getAllByRole('tab', { name: new RegExp(third) })).toHaveLength(1)
   })
 
+  it('keeps the strip as it was until the pointer is off it and the picker it opened has closed', async () => {
+    const rest = await twoTabsAtRest()
+    const strip = screen.getByRole('region', { name: /, tile 1 of 2$/ }).firstElementChild!
+    vi.spyOn(strip, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 600, 32))
+    const split = () => rest.queryByRole('button', { name: 'Split right' })
+    const moveTo = (clientX: number, clientY: number) => fireEvent.pointerMove(window, { clientX, clientY })
+
+    await userEvent.click(rest.getByRole('button', { name: 'Add a tab' }))
+    await act(async () => {})
+    expect(screen.getByRole('dialog')).toBeDefined()
+    moveTo(300, 200)
+    expect(split()).toBeNull()
+    await userEvent.keyboard('{Escape}')
+    expect(screen.queryByRole('dialog')).toBeNull()
+    moveTo(300, 16)
+    expect(split()).toBeNull()
+    moveTo(300, 200)
+    expect(split()).not.toBeNull()
+  })
+
   it('renders no other session\'s Chat when a session changes', async () => {
     await twoTabsAtRest()
     // Only a session's Chat calls it here.

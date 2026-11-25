@@ -1,7 +1,7 @@
 import { useContext } from 'react'
 import { ChevronDown, Columns2, LayoutGrid, Maximize2, Minimize2, PanelLeft, Plus, Rows2, X } from '@/components/icons'
 import { ProtectedMark } from '@/components/protected-mark'
-import { changeTiles, focusInTile, TileAreaContext, TilePressedContext } from '@/components/tiles/area'
+import { changeTiles, focusInTile, TileAreaContext } from '@/components/tiles/area'
 import { useTileDrag } from '@/components/tiles/drag'
 import { Picker } from '@/components/tiles/picker'
 import { AgentGlyph } from '@/components/ui/agent-glyph'
@@ -168,13 +168,12 @@ export function TabStrip({ tile, opening, narrow, room }: {
   /** Whether the area has room for a tile on each side of this one. */
   room: { right: boolean; down: boolean }
 }) {
-  const { layout, cramped, ctx, say, picking, noRoom, pick, split } = useContext(TileAreaContext)!
-  const pressed = useContext(TilePressedContext)
+  const { layout, cramped, ctx, say, picking, noRoom, pick, resting, split } = useContext(TileAreaContext)!
   const sidebarCollapsed = useStore((s) => s.sidebarCollapsed)
   const toggleSidebar = useStore((s) => s.toggleSidebar)
   const tiles = tileList(layout.root)
   const focused = layout.focused === tile.id
-  const controls = focused && !pressed
+  const controls = focused && resting !== tile.id
   // A parked tile keeps the strip it had, in sight under the glide of the tile that covers it.
   const maximized = layout.maximized && focused
   const run = ctx.runs[tile.tabs.find((tab) => tab.id === tile.active)?.runId ?? '']

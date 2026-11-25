@@ -45,13 +45,15 @@ interface TileAreaValue {
   /** The split that found no room and opened that picker instead. */
   noRoom: TileSide | null
   pick: (tileId: string | null) => void
+  /** The tile a press focused, whose strip keeps the layout it had: until the pointer is off that strip, and while a popover or menu the strip opened is open. */
+  resting: string | null
   /** Opens an empty tile beside this one, or its picker when the area has no room for one. */
   split: (tileId: string, side: 'right' | 'down') => void
 }
 
 export const TileAreaContext = createContext<TileAreaValue | null>(null)
 
-/** The press that focused a tile is still down: what only a focused tile shows waits, or it would move the pressed control out from under its click. */
+/** The press that focused a tile is still down: the one-line Chat field opens after it, or it would move what was pressed out from under its click. */
 export const TilePressedContext = createContext(false)
 
 /**
