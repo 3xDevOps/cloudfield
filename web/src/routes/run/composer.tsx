@@ -45,7 +45,7 @@ interface ComposerProps {
   onFocusChange: (focused: boolean) => void
   /** The gate can keep the box unmounted, so focusing waits for it to mount. */
   autoFocus?: boolean
-  /** One line with a send button, for a tile the keyboard is not in. The field is the same one, so a press on it keeps its focus when the box opens. */
+  /** One line, for a tile the keyboard is not in; a docked one keeps a send button. The field is the same one, so a press on it keeps its focus when the box opens. */
   collapsed?: boolean
   /** Under a view other than Chat: the frame spans its tile below a seam. */
   docked?: boolean
@@ -57,7 +57,7 @@ interface ComposerProps {
 function ComposerFrame({ docked, children }: { docked?: boolean; children: React.ReactNode }) {
   return (
     <div className={cn('shrink-0 bg-canvas pb-[max(0px,calc(var(--keyboard-inset,0px)-env(safe-area-inset-bottom)))]', docked && 'border-t border-seam')}>
-      <div className={cn('flex flex-col gap-2', docked ? 'px-4 py-2' : cn(sessionColumn, 'pb-4'))}>{children}</div>
+      <div className={cn('flex flex-col gap-2', docked ? 'px-4 pt-2 pb-4' : cn(sessionColumn, 'pb-4'))}>{children}</div>
     </div>
   )
 }
@@ -189,7 +189,7 @@ function ComposerBox({ textarea, autoFocus, collapsed, docked, value, onChange, 
         readOnly={readOnly}
         onPaste={onPaste}
         placeholder={collapsed ? 'Message the agent' : placeholder}
-        className={cn('resize-none', collapsed ? 'my-2 h-5 min-h-0 flex-1 overflow-hidden py-0 whitespace-pre coarse:h-5' : '[field-sizing:content] max-md:[--composer-lines:7.5rem]')}
+        className={cn('resize-none', collapsed ? 'my-2 h-5 min-h-0 flex-1 overflow-hidden py-0 whitespace-pre [mask-image:linear-gradient(to_right,black_calc(100%-1.5rem),transparent)] coarse:h-5' : '[field-sizing:content] max-md:[--composer-lines:7.5rem]')}
         style={{ maxHeight: 'var(--composer-lines, 12rem)' }}
         onFocus={(event) => {
           // A textarea that mounts with a draft starts its caret before the text.

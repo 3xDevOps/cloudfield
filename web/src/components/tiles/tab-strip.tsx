@@ -74,6 +74,7 @@ function SessionTab({ tile, tab, narrow, onClose }: {
         narrow && !active && 'flex-1 basis-0 has-data-[slot=tab-view]:min-w-32',
         // The floor that keeps four letters of the title beside a view's name or the badge.
         (active || !narrow) && 'has-data-[slot=badge]:min-w-48 has-data-[slot=tab-view]:min-w-48',
+        !active && !narrow && 'shrink-[100]',
       )}
     >
       <TabsTrigger
