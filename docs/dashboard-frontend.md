@@ -3156,7 +3156,7 @@ room of a tile the drag empties included: it covers what is there now with a
 tile that stays is named in a strip at the top of the room it keeps, over
 the same scrim, which also dims a tile the drag takes the only tab of. An
 added tab shows as a dashed tab at the end of the strip, in place of the
-strip's buttons. A lifted tab leaves a dashed slot, as a lifted view does. A chip by the pointer names the
+strip's buttons. A lifted tab leaves a dashed slot, as a lifted view does. A chip by the pointer, kept clear of a split preview's plate, names the
 drop:
 **Split left**, **Split right**, **Split up**, **Split down**, **Add as tab**
 (also where the floor forbids the split, and on a maximized tile) or **Move

@@ -136,6 +136,7 @@ export function TileDragLayer() {
   const { ctx, say } = useContext(TileAreaContext)!
   const [moved, setMoved] = useState<{ x: number; y: number } | null>(null)
   const chip = useRef<HTMLDivElement>(null)
+  const plate = useRef<HTMLDivElement>(null)
   const point = moved ?? drag
   const target = drag && point && targetAt(drag, point.x, point.y, ctx)
   const run = useStore((s) => (s.tileDrag ? s.runs[s.tileDrag.runId] : undefined))
@@ -190,8 +191,20 @@ export function TileDragLayer() {
     const node = chip.current
     if (!node || !point) return
     const bounds = target?.tile ?? { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight }
-    node.style.left = `${Math.max(bounds.left + 4, Math.min(point.x + 12, bounds.right - node.offsetWidth - 4))}px`
-    node.style.top = `${Math.max(bounds.top + 4, Math.min(point.y + 16, bounds.bottom - node.offsetHeight - 4))}px`
+    const left = Math.max(bounds.left + 4, Math.min(point.x + 12, bounds.right - node.offsetWidth - 4))
+    let top = Math.max(bounds.top + 4, Math.min(point.y + 16, bounds.bottom - node.offsetHeight - 4))
+    // Clear of the plate that names what lands, placed from the target: the preview is still easing to it.
+    if (plate.current && target) {
+      const { offsetWidth: width, offsetHeight: height } = plate.current
+      const plateLeft = target.rect.left + (target.rect.width - width) / 2
+      const plateTop = target.rect.top + (target.rect.height - height) / 2
+      if (left < plateLeft + width && left + node.offsetWidth > plateLeft && top < plateTop + height + 8 && top + node.offsetHeight > plateTop - 8) {
+        const below = plateTop + height + 8
+        top = below + node.offsetHeight + 4 <= bounds.bottom ? below : plateTop - 8 - node.offsetHeight
+      }
+    }
+    node.style.left = `${left}px`
+    node.style.top = `${top}px`
   })
 
   if (!drag) return null
@@ -226,7 +239,7 @@ export function TileDragLayer() {
         >
           {split && (
             <div data-slot="drop-lands" className="absolute inset-0 flex items-center justify-center bg-accent-soft px-3">
-              <div className={cn(ghost, 'static h-7 min-w-0 rounded-control bg-canvas px-2')}>{named}</div>
+              <div ref={plate} className={cn(ghost, 'static h-7 min-w-0 rounded-control bg-canvas px-2')}>{named}</div>
             </div>
           )}
         </div>

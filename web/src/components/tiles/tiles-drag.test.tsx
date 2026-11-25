@@ -142,6 +142,18 @@ describe('dragging a sidebar row', () => {
     expect(said(`${second}: ${action}`)).toBeDefined()
   })
 
+  it('keeps the chip clear of the plate that names what lands', () => {
+    vi.spyOn(HTMLElement.prototype, 'offsetWidth', 'get').mockReturnValue(400)
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(28)
+    show()
+    lift(row(second))
+    over(1500, 440)
+    const top = () => document.querySelector<HTMLElement>('[data-slot=drag-chip]')!.style.top
+    expect(top()).toBe('472px')
+    over(1500, 300)
+    expect(top()).toBe('316px')
+  })
+
   it('covers the room the new tile will take, its floor included, and drops the focus outline while it does', async () => {
     show()
     await beside('run_3')
