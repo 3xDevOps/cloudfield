@@ -58,3 +58,10 @@ func linearMethod[P any](call func(LinearService, context.Context, domain.Member
 		return out, nil
 	}
 }
+
+func (s *Server) disconnectLinear(member domain.MemberID) error {
+	if s.cfg.Services.Linear == nil {
+		return nil
+	}
+	return s.cfg.Services.Linear.Disconnect(member)
+}

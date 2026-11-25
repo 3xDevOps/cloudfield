@@ -16,24 +16,25 @@ Linear under **Settings**, **Integrations**, **GitHub**.
 1. In Linear, open **Settings**, **Security & access**, **Personal API keys**
    and choose **New API key**. Linear shows the key, which starts with
    `lin_api_`, once.
-2. In the dashboard, open **Settings**, **Linear**, paste the key and save it.
+2. Save it with the `linear.connect` method below. The dashboard's
+   **Settings**, **Linear** page and the **Linear** issue page with its **Start
+   session** button are not shipped yet.
 
 The server checks the key with Linear's `viewer` query before it saves it, and
-shows Linear's own error if Linear refuses it. **Disconnect** in the same place
-deletes the key. Revoke the key in Linear as well if it leaked.
+shows Linear's own error if Linear refuses it. `linear.disconnect` deletes the
+key. Revoke the key in Linear as well if it leaked.
 
 The key belongs to you. Another member's connection, and the key they save, is
 separate, and the server reads issues with the key of whoever asks.
 
 ## Start a session from an issue
 
-The **Linear** page lists the open issues assigned to you, newest update first,
+Not shipped yet: the dashboard's **Linear** page lists the open issues assigned to you, newest update first,
 up to 50. Completed and canceled issues are left out. Filter by team key such as
 `CLO`, or by text in the title. **Start session** opens the launch form with the
 issue's identifier, title and URL in the task.
 
-A session links to an issue with `cloudfield run --linear-issue <url>`, or with
-a Linear issue URL in the task.
+`cloudfield run --linear-issue <url>` is not shipped yet either.
 
 ## Where the key is stored
 
@@ -43,7 +44,11 @@ file `0600`. The key is outside `aether.db` and is not a workspace secret:
 nothing under `linear/` is mounted into a session or environment container, set
 as an environment variable there, or reachable through the session's
 coordination socket. An agent in a session cannot read your key or call the
-Linear methods below.
+Linear methods below. The server administrator can read the files.
+
+`cloudfield member remove` and a member merge delete the key of the removed or
+absorbed member from the server. That does not revoke it in Linear: revoke it
+there too if the file may have been copied or backed up.
 
 ## RPC methods
 
