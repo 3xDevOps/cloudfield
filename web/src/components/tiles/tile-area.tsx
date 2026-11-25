@@ -6,6 +6,7 @@ import { TileDragLayer } from '@/components/tiles/drag'
 import { fits, tileRects, type Rect } from '@/components/tiles/geometry'
 import { Tile } from '@/components/tiles/tile'
 import { Splitter } from '@/components/ui/splitter'
+import { useIsMobile } from '@/lib/breakpoints'
 import { prefersReducedMotion, useElementSize } from '@/lib/hooks'
 import { useKeybindings } from '@/lib/keybindings'
 import { play, playEntrance, time } from '@/lib/motion'
@@ -110,6 +111,7 @@ interface FrameProps {
 
 interface SessionProps {
   Frame: typeof RunFrame
+  phone: boolean
   run: RunRecord
   route: Record<string, string>
   frames: FrameProps[]
@@ -119,7 +121,7 @@ const sameFrame = (before: FrameProps, now: FrameProps) =>
   before.tab === now.tab && before.view === now.view && before.slot === now.slot && JSON.stringify(before.tile) === JSON.stringify(now.tile)
 
 /** One session view inside its tile. The focused tile's frame reads the route; the others only their tab. */
-const TileFrame = memo(function TileFrame({ Frame, run, route, tab, view, slot, tile }: Omit<SessionProps, 'frames'> & FrameProps & { slot: HTMLElement }) {
+const TileFrame = memo(function TileFrame({ Frame, phone, run, route, tab, view, slot, tile }: Omit<SessionProps, 'frames'> & FrameProps & { slot: HTMLElement }) {
   const params = useMemo(
     () => (tile.focused ? { ...route, runId: run.id, view } : { runId: run.id, view, ...(tab.repo && { repo: tab.repo }) }),
     [tile.focused, route, run.id, view, tab.repo],
@@ -128,28 +130,31 @@ const TileFrame = memo(function TileFrame({ Frame, run, route, tab, view, slot, 
   useEffect(() => {
     if (tile.focused && document.activeElement?.id === 'main') focusView()
   }, [])
-  return createPortal(<Frame run={run} params={params} tile={tile} />, slot, tab.id)
-}, (before, now) => before.Frame === now.Frame && before.run === now.run && (!now.tile.focused || before.route === now.route) && sameFrame(before, now))
+  return createPortal(<Frame run={run} params={params} tile={phone ? undefined : tile} />, slot, tab.id)
+}, (before, now) => before.Frame === now.Frame && before.phone === now.phone && before.run === now.run && (!now.tile.focused || before.route === now.route) && sameFrame(before, now))
 
 /**
  * A session and its frames. It renders again only when what its tiles show
  * changed, so an event from one session stops at the area for every other.
  */
-const SessionFrames = memo(function SessionFrames({ Frame, run, route, frames }: SessionProps) {
+const SessionFrames = memo(function SessionFrames({ Frame, phone, run, route, frames }: SessionProps) {
   return (
     <RunSession run={run} views={frames.map((frame) => frame.view)}>
-      {frames.map(({ slot, ...frame }) => slot && <TileFrame key={frame.tab.id} Frame={Frame} run={run} route={route} slot={slot} {...frame} />)}
+      {frames.map(({ slot, ...frame }) => slot && <TileFrame key={frame.tab.id} Frame={Frame} phone={phone} run={run} route={route} slot={slot} {...frame} />)}
     </RunSession>
   )
 }, (before, now) =>
-  before.Frame === now.Frame && before.run === now.run && (before.route === now.route || !now.frames.some((frame) => frame.tile.focused))
+  before.Frame === now.Frame && before.phone === now.phone && before.run === now.run && (before.route === now.route || !now.frames.some((frame) => frame.tile.focused))
   && before.frames.length === now.frames.length && now.frames.every((frame, index) => sameFrame(before.frames[index], frame)))
 
 /**
- * The desktop session page: the tile layout, drawn flat so that a tile keeps
+ * The session page: the tile layout, drawn flat so that a tile keeps
  * its place in the tree of elements, and with it its terminal and scroll
- * position, whatever splits and closes around it. `Frame` is the session
- * frame, passed in because its module is the one that renders this area.
+ * position, whatever splits and closes around it. A phone draws the tile that
+ * shows the route's session alone and bare, from this same tree, so a window
+ * resized across the phone width keeps its session and what was open in it.
+ * `Frame` is the session frame, passed in because its module is the one that
+ * renders this area.
  */
 export function TileArea({ params, Frame }: { params: Record<string, string>; Frame: typeof RunFrame }) {
   const stored = useStore((s) => s.tiles)
@@ -176,9 +181,13 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
     setNoRoom(null)
   }, [])
 
+  const phone = useIsMobile()
   const measured = area.width > 0
-  const cramped = measured && tiles.length > 1 && !fits(stored.root, area)
-  const layout = useMemo(() => (cramped ? { ...stored, maximized: true } : stored), [cramped, stored])
+  const cramped = tiles.length > 1 && (phone || (measured && !fits(stored.root, area)))
+  // A phone has no strip to leave an empty tile by, so it draws the tile that shows the route's session.
+  const focusedTab = activeTab(tiles.find((tile) => tile.id === stored.focused)!)
+  const routed = phone && !focusedTab ? tiles.find((tile) => activeTab(tile)?.runId === params.runId)?.id : undefined
+  const layout = useMemo(() => (cramped ? { ...stored, maximized: true, focused: routed ?? stored.focused } : stored), [cramped, stored, routed])
   useEffect(() => {
     useStore.setState({ tilesCramped: cramped })
   }, [cramped])
@@ -255,7 +264,6 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
   }), [])
 
   // No session mounts until the layout has followed the route.
-  const focusedTab = activeTab(tiles.find((tile) => tile.id === stored.focused)!)
   const held = tiles.some((tile) => tile.tabs.some((tab) => tab.runId === params.runId))
   const synced = focusedTab ? showsRoute(stored, params, ctx) : tiles.some((tile) => activeTab(tile)?.runId === params.runId)
   const landed = useRef<Record<string, string> | null>(null)
@@ -395,7 +403,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
     changeTiles((before) => focusTile(before, tile.id))
     say(`${run ? runLabel(run) : 'New tile'} ${layout.maximized ? 'maximized' : 'focused'}`)
   }
-  useKeybindings('run', {
+  useKeybindings('run', phone ? {} : {
     'leave-run': () => {
       const { agent, ...rest } = params
       if (agent) redirectRoute(useStore, { name: 'run', params: rest })
@@ -450,6 +458,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
           <Tile
             key={tile.id}
             tile={tile}
+            phone={phone}
             rect={drawn[tile.id]}
             parked={!visible.includes(tile)}
             opening={opening.tiles.includes(tile.id)}
@@ -488,6 +497,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
             <SessionFrames
               key={JSON.stringify([identityKey, epoch, run.id, run.created_at])}
               Frame={Frame}
+              phone={phone}
               run={run}
               route={params}
               frames={frames.map(({ tile, tab, view }) => {

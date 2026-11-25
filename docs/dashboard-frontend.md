@@ -3035,9 +3035,11 @@ browser has to be running, and opening the view starts none. `isRunRoute` in
 `RunFrame` (`index.tsx`) is one view of a session: the header row, the view
 and Details. On a desktop each [tile](#session-tiles) on screen holds one; a
 phone holds one for the route's session. It stays mounted while its view
-changes. `CenterView` remounts a phone's frame for another session, identity
-or event epoch, and the desktop's tile area only for another identity or
-epoch, so crossing 768px remounts the session. Session, Terminal, Changes and
+changes. `CenterView` remounts the tile area only for another identity or
+event epoch, and the area keys each session by its id, so a phone's frame
+remounts for another session. A phone's frame is the same tile's, drawn
+without its strip, so crossing 768px keeps the session, its attach and what
+is open in it. Session, Terminal, Changes and
 Files mount on first visit and stay
 mounted, laid out but `invisible` and `inert`: xterm hidden with
 `display: none` measures zero and would resize the shared PTY, a Publish
@@ -3086,7 +3088,8 @@ On a desktop the session page is the tile area (`components/tiles/`,
 the others in its strip. One session opened once is one tile with one tab.
 The **focused tile** is the one the keyboard, the address and the sidebar
 selection follow. A phone (under 768px) shows the route's session alone, with
-no tile control.
+no tile control: `TileArea` draws the one tile that shows it, without its
+strip, and the layout still follows the route.
 
 A tile is two 32px rows (44px on a coarse pointer) over the view: the strip
 (`tab-strip.tsx`), then the session's [header row](#header). Neither moves
