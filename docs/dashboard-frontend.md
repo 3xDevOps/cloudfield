@@ -361,9 +361,6 @@ top to bottom:
    launch. A slanted cut splits it in two. The left half, **New session** (`n`),
    slides the launch panel out of the sidebar's right edge over the view, with
    no scrim. See [the forms](#the-forms) for how it closes and resumes drafts.
-   Drag its right edge, or focus **Resize launch panel** and press the arrow
-   keys, to set its width from 360px to 720px, never past the room right of
-   the sidebar. The width is saved on this browser.
    The right half appears once a launch choice has been saved. It shows the
    saved agent's glyph and launches that agent, mode,
    model, account and fallback at once with no task and with `children: "on"`,
@@ -379,7 +376,10 @@ top to bottom:
    state; a change saves the member setting at once with `child.settings`
    `choice`, one save after another, and **Settings → Subsessions** shows the
    same menu. An account whose agents could not be listed is named, with the
-   server's error, below the row (`choices_error`).
+   server's error, below the row (`choices_error`). Drag the panel's right
+   edge, or focus **Resize launch panel** and press the arrow keys, to set its
+   width from 360px to 720px, never past the room right of the sidebar. The
+   width is saved on this browser.
 3. **Sessions** (`sidebar-runs.tsx`), a `region` with three groups, **Needs you**,
    **Working** and **Finished** (see [Session state](#session-state)), each an `h2`
    holding an `aria-expanded` disclosure button, a chevron that turns a
@@ -5522,7 +5522,7 @@ device run.
 
 ### Details
 
-In a tile that is alone on screen, while the session's row holds 280px for it
+In a tile that is alone on screen, while the session's row holds 320px for it
 plus `minReadableWidth` (560px),
 Details is a `complementary "Run details"` beside the view, toggled by
 the header button or `Mod+.` and remembered (`detailsOpen`, persisted). When
@@ -5533,7 +5533,7 @@ phones as a bottom sheet, each a `dialog "Run details"` that returns focus to
 whatever opened it.
 
 Off a phone, the `separator "Resize session details"` on the panel's left edge
-sets its width from 280px to 560px by drag or arrow keys, 320px until then
+sets its width from 320px to 560px by drag or arrow keys, 320px until then
 (`runDetailsWidth`, persisted). One width serves the inline panel and the
 sheet. Inline it is drawn no wider than leaves 560px for the view, less the
 320px Session tree rail when that is open beside it; the saved width is kept
