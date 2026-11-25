@@ -21,7 +21,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 })
 
 vi.mock('sonner', () => ({
-  toast: { success: vi.fn(), error: vi.fn(), dismiss: vi.fn() },
+  toast: { success: vi.fn(), error: vi.fn(), dismiss: vi.fn(), loading: vi.fn(() => 'busy') },
 }))
 
 /** A JSON-RPC refusal; an error with no code reads as a request the server never answered. */
@@ -873,4 +873,16 @@ test('an admin granted another owner\'s workspace acts there by their role in it
   useStore.setState((s) => ({ workspaces: { [workspace.id]: { ...s.workspaces[workspace.id], role: 'collaborator' } } }))
   render(<RunActions run={record} />)
   expect((await openMore()).queryByRole('menuitem', { name: 'Archive session' })).toBeNull()
+})
+
+test('Export session says it is running and reports the real error', async () => {
+  const fetched = Promise.withResolvers<{ run: Run }>()
+  vi.mocked(api.runWithPullRequests).mockReturnValueOnce(fetched.promise)
+  render(<RunActions run={seed({ paused: false })} />)
+  await selectMore('Export session')
+  expect(toast.loading).toHaveBeenCalledWith('Exporting run_1…')
+  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+  fetched.reject(new Error('run not found'))
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Export failed: run not found'))
+  expect(toast.dismiss).toHaveBeenCalledWith('busy')
 })

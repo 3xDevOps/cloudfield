@@ -40,7 +40,7 @@ import { errorSentence, message } from '@/lib/format'
 import { runLabel } from '@/lib/status'
 import { awaitsCompletion, outcomeHeld } from '@/lib/needs-you'
 import { allowed } from '@/lib/permissions'
-import { exportSession } from '@/lib/session-export'
+import { exporting, exportSession } from '@/lib/session-export'
 import type { CloseOutcome, LinkStatus, Member, PullResult, Run, Workspace } from '@/lib/types'
 import { dismissOnIdentityChange } from '@/components/failure'
 import { closeBusyText, closeChangedText, closeState, closeWarned, readCloseCheck } from '@/lib/close-check'
@@ -609,9 +609,13 @@ export function runCommands(ctx: RunCommandContext): Command[] {
       label: 'Export session',
       Icon: FileText,
       value: 'download save transcript conversation history',
+      disabled: exporting.has(id),
       done: 'Export',
       report: (name) => [`Exported ${name as string}`],
-      perform: (d) => exportSession(d.api, id, useStore.getState().workspaces[run.workspace_id]?.name),
+      perform: (d) => {
+        const busy = toast.loading(`Exporting ${id}…`)
+        return exportSession(d.api, id, useStore.getState().workspaces[run.workspace_id]?.name).finally(() => toast.dismiss(busy))
+      },
     })
   }
 
