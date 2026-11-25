@@ -492,7 +492,7 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
       {inline && detailsOpen && (
         <aside id="run-details" aria-label="Session details" style={{ width: detailsWidth }} className="relative shrink-0 border-l border-seam bg-canvas">
           <div className="h-full overflow-y-auto">{details(true)}</div>
-          <ResizeDetails width={detailsWidth} max={detailsMaxWidth} onResize={setRunDetailsWidth} className="-left-1 coarse:-left-3" />
+          <ResizeDetails width={detailsWidth} max={detailsMaxWidth} onResize={setRunDetailsWidth} className="-left-1 coarse:-left-2" />
         </aside>
       )}
       {!inline && (
