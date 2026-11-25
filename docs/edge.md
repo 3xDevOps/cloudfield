@@ -1351,7 +1351,7 @@ verify a nightly release: update it once on `beta` or `stable` first.
 
 Without cosign or jq `--check` fails with `cosign not found` or `jq not found`.
 An edge whose image predates `version --json`, `release-check`, `backup` and
-`schema` makes every session exit 1 with `<image>@<digest> predates aether-edge ...`.
+`schema` makes every run exit 1 with `<image>@<digest> predates aether-edge ...`.
 Upgrade it by hand once ([First upgrade](#first-upgrade)). To be told about
 failures, add `OnFailure=` to the service.
 
@@ -1382,12 +1382,12 @@ updater does the rest.
   manifests; when one cannot be read, the step counts as needed and the floor as
   not met, and the reason names the tag. A boundary that names a beta not yet
   published therefore holds nightly hosts until that beta is published.
-- A `broken` state means the rollback failed, and every session exits 1 with
+- A `broken` state means the rollback failed, and every run exits 1 with
   `state is broken since <time>: <reason>`. Run the edge on a release you trust
   (put its digest in `.env`, restore a backup first if `schema --json` asks for
   it, then `docker compose up -d --wait aether-edge`) and delete
   `/var/lib/aether-edge-update/state`.
-- A digest in `/var/lib/aether-edge-update/failed` is skipped on every session. Delete
+- A digest in `/var/lib/aether-edge-update/failed` is skipped on every run. Delete
   its line to try it again.
 - `/var/lib/aether-edge-update/releases/<tag>.json` and `.json.sig` are the signed
   manifests `release-check` verified, kept so updates still order after GitHub

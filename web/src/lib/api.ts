@@ -70,6 +70,7 @@ import type {
   PresenceEntry,
   PullResult,
   PullSwitchResult,
+  RecordedPullRequest,
   RepoFastForwardResult,
   RepoPushResult,
   RoomDecideResult,
@@ -533,6 +534,8 @@ export const api = {
     call<{ runs: Run[] }>('run.list', params).then((r) => r.runs),
   runGet: (runID: string) =>
     call<{ run: Run }>('run.get', { run_id: runID }).then((r) => r.run),
+  runWithPullRequests: (runID: string) =>
+    call<{ run: Run; pull_requests?: RecordedPullRequest[] }>('run.get', { run_id: runID }),
   runLaunch: (params: {
     workspace_id: string
     task?: string

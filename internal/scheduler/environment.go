@@ -40,8 +40,7 @@ const (
 // EnvironmentPlan is the complete, server-assembled container environment.
 // Host paths in Mounts are derived only from configured server roots.
 type EnvironmentPlan struct {
-	Purpose EnvironmentPurpose
-	Image   string
+	Image string
 	// ImageNotice says why the container does not start from the member's
 	// saved image; empty when it does.
 	ImageNotice string
@@ -49,7 +48,6 @@ type EnvironmentPlan struct {
 	SetupScript string
 	User        string
 	Home        string
-	Path        string
 	Mounts      []runtime.Mount
 	// Worktrees are not Mounts because a mount is chowned wholesale, which a
 	// checkout of hard-linked objects must not be.
@@ -127,7 +125,7 @@ func (s *Scheduler) BuildEnvironmentPlan(ctx context.Context, run *domain.Run, w
 		}
 		image, imageNotice = cmp.Or(saved, s.cfg.StandardImage), notice
 	}
-	user, err := s.resolveContainerUser(ctx, image, profile)
+	user, err := s.resolveContainerUser(ctx, image)
 	if err != nil {
 		return nil, fmt.Errorf("scheduler: resolve environment user: %w", err)
 	}
@@ -163,10 +161,10 @@ func (s *Scheduler) BuildEnvironmentPlan(ctx context.Context, run *domain.Run, w
 	}
 	env["PATH"] = localBin + ":" + pathValue
 	plan := &EnvironmentPlan{
-		Purpose: purpose, Image: image, ImageNotice: imageNotice, Env: env,
+		Image: image, ImageNotice: imageNotice, Env: env,
 		SetupScript: setupScript,
 		SecretEnv:   slices.Sorted(maps.Keys(secrets)),
-		User:        user, Home: home, Path: env["PATH"],
+		User:        user, Home: home,
 		Egress: purpose == EnvironmentPurposeRun && (ws.Environment.Egress.On || isolated),
 		Sudo:   purpose == EnvironmentPurposeTerminal || (run != nil && run.Permission == domain.PermissionRoot),
 	}
@@ -231,7 +229,6 @@ func (s *Scheduler) BuildEnvironmentPlan(ctx context.Context, run *domain.Run, w
 				// After the image's directories too: the launcher's own
 				// executables win, and the owner's fill the gaps.
 				env["PATH"] += ":" + path.Join(home, accountBin)
-				plan.Path = env["PATH"]
 			}
 		}
 		pins, err := s.pinnedLogins(ctx, member.ID, homePath, home, plan.Mounts, isolated)
@@ -522,7 +519,7 @@ func (s *Scheduler) protectConfiguredLegacyCaches(ctx context.Context, memberID 
 	workspaces = append(workspaces, nil)
 	var paths []string
 	for _, profile := range profiles {
-		user, err := s.resolveContainerUser(ctx, image, profile)
+		user, err := s.resolveContainerUser(ctx, image)
 		if err != nil {
 			return err
 		}

@@ -466,6 +466,9 @@ func serve(args []string) error {
 	// fail an update's trial, which rolls back to the binary whose files
 	// are still in place; on any other start the server keeps serving.
 	if *o.sessionRuntime == server.SessionRuntimeVM && os.Getenv("INVOCATION_ID") != "" {
+		if _, nerr := serversetup.ExcludeVMsFromNeedrestart(serversetup.NeedrestartDir); nerr != nil {
+			slog.Error("session VMs: the next package upgrade may restart every running VM; `sudo aether-server vm install` retries", "error", nerr)
+		}
 		vmCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		err = ensureVMFiles(vmCtx, *o.vmKernel)
 		cancel()

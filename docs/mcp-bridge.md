@@ -92,7 +92,7 @@ surface.
 | --- | --- | --- | --- |
 | `aether_status` | `coord.status` | none | v3 identity, assignment, messageable peers, unread count, capabilities |
 | `aether_send` | `coord.send` | `to_run_id`, `body`, `idempotency_key` | `message_id`, `recipient_status` |
-| `aether_inbox` | `coord.inbox` | optional `ack_token`, optional `wait_seconds` | `messages`, `ack_token` |
+| `aether_inbox` | `coord.inbox` | optional `ack_token`, optional `wait_seconds`, optional `ack_only` (acknowledge without reading the next batch) | `messages`, `ack_token` |
 | `aether_ask` | `coord.ask` | `to_run_id`, `body`, `idempotency_key` | `question_id`, `recipient_status` |
 | `aether_reply` | `coord.reply` | `question_id`, `body`, `idempotency_key` | `message_id` |
 | `aether_report` | `coord.report` | `outcome`, `summary`, optional `evidence_refs`, optional `waiting_for`, optional `until`, `idempotency_key` | durable `report_id`, outcome, summary, next action, evidence references, automatic `evidence_ref` |

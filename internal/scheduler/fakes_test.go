@@ -667,46 +667,37 @@ func (a *fakeAttachment) Close() error {
 type fakeGit struct {
 	root string
 
-	mu                sync.Mutex
-	commits           map[domain.RunID][]string
-	published         map[domain.RunID]int
-	watching          map[domain.RunID]domain.WorkspaceID
-	lastFile          map[domain.RunID]time.Time
-	baseCommits       map[domain.RunID]string
-	bases             map[domain.RunID]string
-	origins           map[domain.RunID]string
-	workspaceByRun    map[domain.RunID]domain.WorkspaceID
-	branchByRun       map[domain.RunID]string
-	publishedBranches map[domain.WorkspaceID]map[string]bool
-	branchCommits     map[domain.WorkspaceID]map[string]string
-	branchLookupErr   error
-	createErr         error
-	publishErr        error
-	removeErr         error
-	createHook        func(run domain.RunID)
-	watchHook         func(run domain.RunID)                 // runs at the top of StartDiffWatch
-	stopWatchHook     func(run domain.RunID)                 // runs at the top of StopDiffWatch
-	commitHook        func(run domain.RunID, message string) // runs at the top of CommitAll
-	authors           map[domain.RunID][]domain.GitIdentity
-	signed            map[domain.RunID][]bool
+	mu            sync.Mutex
+	commits       map[domain.RunID][]string
+	published     map[domain.RunID]int
+	watching      map[domain.RunID]domain.WorkspaceID
+	lastFile      map[domain.RunID]time.Time
+	baseCommits   map[domain.RunID]string
+	bases         map[domain.RunID]string
+	origins       map[domain.RunID]string
+	createErr     error
+	publishErr    error
+	removeErr     error
+	createHook    func(run domain.RunID)
+	watchHook     func(run domain.RunID)                 // runs at the top of StartDiffWatch
+	stopWatchHook func(run domain.RunID)                 // runs at the top of StopDiffWatch
+	commitHook    func(run domain.RunID, message string) // runs at the top of CommitAll
+	authors       map[domain.RunID][]domain.GitIdentity
+	signed        map[domain.RunID][]bool
 }
 
 func newFakeGit(root string) *fakeGit {
 	return &fakeGit{
-		root:              root,
-		commits:           make(map[domain.RunID][]string),
-		published:         make(map[domain.RunID]int),
-		watching:          make(map[domain.RunID]domain.WorkspaceID),
-		lastFile:          make(map[domain.RunID]time.Time),
-		baseCommits:       make(map[domain.RunID]string),
-		bases:             make(map[domain.RunID]string),
-		origins:           make(map[domain.RunID]string),
-		workspaceByRun:    make(map[domain.RunID]domain.WorkspaceID),
-		branchByRun:       make(map[domain.RunID]string),
-		publishedBranches: make(map[domain.WorkspaceID]map[string]bool),
-		branchCommits:     make(map[domain.WorkspaceID]map[string]string),
-		authors:           make(map[domain.RunID][]domain.GitIdentity),
-		signed:            make(map[domain.RunID][]bool),
+		root:        root,
+		commits:     make(map[domain.RunID][]string),
+		published:   make(map[domain.RunID]int),
+		watching:    make(map[domain.RunID]domain.WorkspaceID),
+		lastFile:    make(map[domain.RunID]time.Time),
+		baseCommits: make(map[domain.RunID]string),
+		bases:       make(map[domain.RunID]string),
+		origins:     make(map[domain.RunID]string),
+		authors:     make(map[domain.RunID][]domain.GitIdentity),
+		signed:      make(map[domain.RunID][]bool),
 	}
 }
 func (g *fakeGit) checkoutPath(run domain.RunID) string {
@@ -735,36 +726,10 @@ func (g *fakeGit) CreateRunCheckoutAt(_ context.Context, ws domain.WorkspaceID, 
 	g.baseCommits[run] = baseCommit
 	g.bases[run] = baseBranch
 	g.origins[run] = origin
-	g.workspaceByRun[run] = ws
-	g.branchByRun[run] = branch
 	return path, branch, nil
 }
 
-func (g *fakeGit) WorkspaceBranchExists(_ context.Context, ws domain.WorkspaceID, branch string) (bool, error) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.branchLookupErr != nil {
-		return false, g.branchLookupErr
-	}
-	return g.publishedBranches[ws][branch], nil
-}
 func (g *fakeGit) IsVMCheckout(domain.RunID) bool { return false }
-
-func (g *fakeGit) WorkspaceBranchCommit(_ context.Context, ws domain.WorkspaceID, branch string) (string, error) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.branchLookupErr != nil {
-		return "", g.branchLookupErr
-	}
-	if !g.publishedBranches[ws][branch] {
-		return "", fmt.Errorf("fake git: workspace branch %s/%s is not published", ws, branch)
-	}
-	commit := g.branchCommits[ws][branch]
-	if commit == "" {
-		commit = "tip"
-	}
-	return commit, nil
-}
 
 func (g *fakeGit) baseCommitFor(run domain.RunID) string {
 	g.mu.Lock()
@@ -809,18 +774,6 @@ func (g *fakeGit) PublishRunBranch(_ context.Context, run domain.RunID) (string,
 		return "", g.publishErr
 	}
 	g.published[run]++
-	ws, workspaceOK := g.workspaceByRun[run]
-	branch, branchOK := g.branchByRun[run]
-	if workspaceOK && branchOK {
-		if g.publishedBranches[ws] == nil {
-			g.publishedBranches[ws] = make(map[string]bool)
-		}
-		if g.branchCommits[ws] == nil {
-			g.branchCommits[ws] = make(map[string]string)
-		}
-		g.publishedBranches[ws][branch] = true
-		g.branchCommits[ws][branch] = "tip"
-	}
 	return "tip", nil
 }
 

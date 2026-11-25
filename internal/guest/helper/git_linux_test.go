@@ -848,7 +848,7 @@ func TestGitServiceAnswersTheServersCheckoutCalls(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Cleanup(func() { _ = client.Close() })
-		sess, err := livesync.NewSession(livesync.Options{LocalDir: local, DataDir: t.TempDir(), Dial: func(ctx context.Context) (io.ReadWriteCloser, error) {
+		sess, err := livesync.NewSession(livesync.Options{LocalDir: local, Dial: func(ctx context.Context) (io.ReadWriteCloser, error) {
 			return client.Sync(ctx, string(testRun))
 		}})
 		if err != nil {

@@ -379,7 +379,7 @@ func TestWorkspaceWithACloudfieldBranchKeepsTheAetherPrefix(t *testing.T) {
 	if want := "aether/run-fix-the-bug-7k2m9q4xbd"; branch != want {
 		t.Errorf("branch = %q, want %q", branch, want)
 	}
-	if exists, err := e.WorkspaceBranchExists(ctx, "forked", branch); err != nil || !exists {
-		t.Errorf("WorkspaceBranchExists(%q) = %v, %v; want the branch reserved", branch, exists, err)
+	if _, err := e.WorkspaceBranchCommit(ctx, "forked", branch); err != nil {
+		t.Errorf("WorkspaceBranchCommit(%q): %v; want the branch reserved", branch, err)
 	}
 }

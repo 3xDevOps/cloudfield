@@ -298,6 +298,18 @@ export interface Run {
   repos?: RunRepo[]
 }
 
+/** A run's pull request as the server last recorded it; `run.get` lists them newest first. */
+export interface RecordedPullRequest {
+  /** The `repos[].workspace_id` that owns it; absent for the run's own repository. */
+  repo?: string
+  repository: string
+  number: number
+  url: string
+  state: string
+  merged_at?: string
+  checked_at: string
+}
+
 export interface RunRepo {
   workspace_id: string
   name: string
