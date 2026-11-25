@@ -39,20 +39,9 @@ type CopyTarget = { term: Terminal; host: HTMLElement }
 // Most recently used last.
 const copyTargets: CopyTarget[] = []
 
-function copyTargetFor(target: EventTarget | null): CopyTarget | undefined {
-  const tile = target instanceof Element ? target.closest('[data-tile]') : null
-  for (let i = copyTargets.length - 1; i >= 0; i--) {
-    const { term, host } = copyTargets[i]!
-    if (tile && tile !== host.closest('[data-tile]')) continue
-    if (host.getClientRects().length > 0 && !host.closest('[inert]') && term.hasSelection()) return copyTargets[i]
-  }
-}
-
 /**
- * Native copy reaches xterm only while its own input has the focus. This
- * serves a copy xterm did not handle from the most recently used terminal on
- * screen that holds a selection, and never from a tile other than the one
- * the focus is in.
+ * Native copy reaches xterm only while its own input has the focus, so this
+ * serves the copies xterm did not handle.
  */
 export function registerTerminalCopy(term: Terminal, host: HTMLElement): () => void {
   const entry: CopyTarget = { term, host }
@@ -73,7 +62,15 @@ export function registerTerminalCopy(term: Terminal, host: HTMLElement): () => v
       (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
     ) return
     if (document.getSelection()?.isCollapsed === false) return
-    if (copyTargetFor(target) !== entry) return
+    const tile = document.activeElement?.closest('[data-tile]')
+    const eligible = copyTargets.filter(
+      (other) =>
+        (!tile || tile === other.host.closest('[data-tile]')) &&
+        other.host.getClientRects().length > 0 &&
+        !other.host.closest('[inert]') &&
+        other.term.hasSelection(),
+    )
+    if (eligible.at(-1) !== entry) return
     event.clipboardData.setData('text/plain', term.getSelection())
     event.preventDefault()
   }
@@ -233,7 +230,7 @@ export function clipboardKeys(term: Terminal): (ev: KeyboardEvent) => boolean {
 export async function copySelection(term: Terminal): Promise<boolean> {
   const text = term.getSelection()
   if (!text) {
-    toast.error('Nothing selected: drag to select text (Option-drag on macOS) or use Copy screen')
+    toast.error('Nothing selected: drag over text to select it, or use Copy screen')
     return false
   }
   return copyTerminalText(text)

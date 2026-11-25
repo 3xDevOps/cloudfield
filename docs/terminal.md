@@ -344,10 +344,11 @@ These work in every terminal Cloudfield draws, when it has focus:
 After the focus leaves a terminal, `Cmd+C` or `Ctrl+C` still copies its
 highlighted selection, unless the focus is in a text field or text is
 selected elsewhere on the page. With several terminals on screen it copies
-the one used last, and with the focus in a tile only that tile's terminal.
-When a terminal program captures the mouse, hold `Shift` while dragging to
-select text (`Option` on macOS). **Copy selection** with nothing selected
-says so.
+the one used last that holds a selection, and with the focus in a
+[tile](quickstart.md#7-watch-it) only that tile's terminal. When a terminal
+program captures the mouse, hold `Shift` while dragging to select text
+(`Option` on macOS). In a live terminal, **Copy selection** with nothing
+selected says so.
 
 On a touch screen, a key row below the terminal has **Ctrl**, **Alt**,
 **Esc**, **Tab**, the arrows, **Enter** and **More keys**. **More keys**

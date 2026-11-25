@@ -146,7 +146,7 @@ describe('terminal clipboard keys', () => {
     const { term } = mount()
     await expect(copySelection(term)).resolves.toBe(false)
     expect(toast.error).toHaveBeenCalledWith(
-      'Nothing selected: drag to select text (Option-drag on macOS) or use Copy screen',
+      'Nothing selected: drag over text to select it, or use Copy screen',
     )
   })
 
@@ -175,11 +175,14 @@ describe('terminal clipboard keys', () => {
     const leftTerminal = copyTarget('left', left)
     const rightTerminal = copyTarget('right', right)
 
-    expect(copyFrom(left.querySelector('button')!).text).toBe('left')
-    expect(copyFrom(right.querySelector('button')!).text).toBe('right')
+    left.querySelector('button')!.focus()
+    expect(copyFrom(document.body).text).toBe('left')
+    right.querySelector('button')!.focus()
+    expect(copyFrom(document.body).text).toBe('right')
 
     rightTerminal.term.hasSelection = () => false
-    expect(copyFrom(right.querySelector('button')!).text).toBeNull()
+    expect(copyFrom(left).text).toBeNull()
+    right.querySelector('button')!.blur()
     expect(copyFrom(document.body).text).toBe('left')
     leftTerminal.unregister()
     rightTerminal.unregister()

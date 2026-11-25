@@ -4726,7 +4726,12 @@ and the Environment keep native xterm scrollback.
 - **Live Find, zoom, and clipboard share xterm's key handler.**
   `xterm-host.tsx` chains zoom, find, and `clipboardKeys` in that order; the
   first to claim a key stops it reaching the shell. `clipboardKeys` claims
-  copy shortcuts but leaves native paste alive. `Ctrl+Shift+F` opens the find bar
+  copy shortcuts but leaves native paste alive. A native copy reaches xterm
+  only while its input has the focus, so `registerTerminalCopy`
+  (`src/lib/term-clipboard.ts`) listens on the document and serves an
+  unhandled copy from the most recently used terminal that is on screen, not
+  under `[inert]` and holds a selection; with the focus inside a `[data-tile]`
+  only that tile's terminal qualifies. `Ctrl+Shift+F` opens the find bar
   `TerminalPane` (`src/components/terminal-pane.tsx`) places above the
   terminal. Live search uses `@xterm/addon-search`; while reading, the same
   bar delegates to loaded archive pages and frozen rows. **No matches** comes
