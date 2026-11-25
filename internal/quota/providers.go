@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -141,6 +142,10 @@ func fetchCodex(ctx context.Context, token, accountID string) (usageResult, erro
 		if !ok {
 			continue
 		}
+		var seconds int64
+		if err := json.Unmarshal(window.LimitWindowSeconds, &seconds); err == nil && seconds > 0 {
+			label = windowDurationLabel(seconds)
+		}
 		reset, hasReset := parseTime(window.ResetAt)
 		var resetPtr *time.Time
 		if hasReset {
@@ -152,6 +157,29 @@ func fetchCodex(ctx context.Context, token, accountID string) (usageResult, erro
 		return usageResult{}, &responseError{reason: "Codex usage response contained no valid windows"}
 	}
 	return usageResult{windows: windows, plan: shape.PlanType}, nil
+}
+
+func windowDurationLabel(seconds int64) string {
+	for _, unit := range []struct {
+		seconds int64
+		name    string
+	}{
+		{86400, "day"},
+		{3600, "hour"},
+		{60, "minute"},
+	} {
+		if seconds%unit.seconds == 0 {
+			count := seconds / unit.seconds
+			if count == 1 {
+				return "1 " + unit.name
+			}
+			return fmt.Sprintf("%d %ss", count, unit.name)
+		}
+	}
+	if seconds == 1 {
+		return "1 second"
+	}
+	return fmt.Sprintf("%d seconds", seconds)
 }
 
 func parsePercentage(raw json.RawMessage) (float64, bool) {
