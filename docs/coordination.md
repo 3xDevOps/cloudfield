@@ -1075,7 +1075,7 @@ automatic screenshot publication, or disabling commit signing.
 
 Every pull request description ends with `Opened from Aether session <session id>`;
 `skill git` prints that line with the session's `run_id` from `status` filled in.
-The count of agent-made pull requests is derived from this line.
+Nothing parses or counts this line.
 
 Custom or argv-overridden agents still receive the staged CLI and run socket
 but no guessed vendor startup flags. In taskless mode their authors must invoke
