@@ -12,7 +12,7 @@ import (
 	"testing"
 
 	"github.com/3xDevOps/Aether/internal/domain"
-	"github.com/3xDevOps/Aether/internal/linear"
+	"github.com/3xDevOps/Aether/internal/linear/api"
 	"github.com/3xDevOps/Aether/internal/protocol"
 )
 
@@ -20,7 +20,7 @@ import (
 // refused every one of them whatever its scopes.
 func TestLinearUsesTheCallersOwnKey(t *testing.T) {
 	t.Parallel()
-	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	linearAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := map[string]string{"key-alice": "Alice L", "key-bob": "Bob L"}[r.Header.Get("Authorization")]
 		if name == "" {
 			_, _ = w.Write([]byte(`{"errors":[{"message":"Authentication required"}]}`))
@@ -28,10 +28,10 @@ func TestLinearUsesTheCallersOwnKey(t *testing.T) {
 		}
 		_, _ = w.Write([]byte(`{"data":{"viewer":{"name":"` + name + `","organization":{"name":"Acme","urlKey":"acme"},"assignedIssues":{"nodes":[{"identifier":"CLO-1","title":"` + name + `'s issue","url":"https://linear.app/acme/issue/CLO-1","state":{"name":"Todo","type":"unstarted","color":"#fff"}}]}}}}`))
 	}))
-	t.Cleanup(api.Close)
+	t.Cleanup(linearAPI.Close)
 	dir := filepath.Join(t.TempDir(), "linear")
 	e := newTestEnv(t, func(c *Config) {
-		c.Services.Linear = &linear.Service{Keys: linear.NewKeys(dir), Client: &linear.Client{URL: api.URL, HTTP: api.Client()}}
+		c.Services.Linear = &api.Service{Keys: api.NewKeys(dir), Client: &api.Client{URL: linearAPI.URL, HTTP: linearAPI.Client()}}
 	})
 	aliceKey, alice := addMember(t, e, "Alice", domain.RoleCollaborator, false)
 	bobKey, _ := addMember(t, e, "Bob", domain.RoleViewer, false)
@@ -103,8 +103,8 @@ func TestLinearUsesTheCallersOwnKey(t *testing.T) {
 // Removing a member deletes their saved Linear key and no one else's.
 func TestMemberRemoveDeletesTheLinearKey(t *testing.T) {
 	t.Parallel()
-	keys := linear.NewKeys(t.TempDir())
-	e := newTestEnv(t, func(c *Config) { c.Services.Linear = &linear.Service{Keys: keys} })
+	keys := api.NewKeys(t.TempDir())
+	e := newTestEnv(t, func(c *Config) { c.Services.Linear = &api.Service{Keys: keys} })
 	asSuperAdmin(t, e)
 	_, target := addMember(t, e, "Target", domain.RoleCollaborator, false)
 	for _, id := range []domain.MemberID{target.ID, e.member.ID} {
@@ -115,10 +115,53 @@ func TestMemberRemoveDeletesTheLinearKey(t *testing.T) {
 	if err := controlClient(t, e).Call(protocol.MethodMemberRemove, protocol.MemberRemoveParams{MemberID: string(target.ID)}, nil); err != nil {
 		t.Fatalf("member.remove: %v", err)
 	}
-	if _, err := keys.Get(target.ID); !errors.Is(err, linear.ErrNotConnected) {
+	if _, err := keys.Get(target.ID); !errors.Is(err, api.ErrNotConnected) {
 		t.Errorf("removed member's Linear key: %v, want it deleted", err)
 	}
 	if _, err := keys.Get(e.member.ID); err != nil {
 		t.Errorf("another member's Linear key: %v, want it kept", err)
+	}
+}
+
+// A key that cannot be deleted is reported once the member is removed, as
+// a signing key failure is.
+func TestMemberRemoveReportsALinearKeyItCannotDelete(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	e := newTestEnv(t, func(c *Config) { c.Services.Linear = &api.Service{Keys: api.NewKeys(dir)} })
+	asSuperAdmin(t, e)
+	_, target := addMember(t, e, "Target", domain.RoleCollaborator, false)
+	if err := os.MkdirAll(filepath.Join(dir, string(target.ID)+".key", "stuck"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	err := controlClient(t, e).Call(protocol.MethodMemberRemove, protocol.MemberRemoveParams{MemberID: string(target.ID)}, nil)
+	wantRefusal(t, err, "the member is removed, but its Linear key is not")
+	if _, gerr := e.store.GetMember(context.Background(), target.ID); gerr == nil {
+		t.Error("member still exists, want removed")
+	}
+}
+
+// A connect that finishes after its member was removed leaves no key.
+func TestLinearConnectLeavesNoKeyForARemovedMember(t *testing.T) {
+	t.Parallel()
+	var e *testEnv
+	var target *domain.Member
+	linearAPI := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if err := e.store.DeleteMember(context.Background(), target.ID, ""); err != nil {
+			t.Errorf("remove member mid-connect: %v", err)
+		}
+		_, _ = w.Write([]byte(`{"data":{"viewer":{"name":"Target","organization":{"name":"Acme","urlKey":"acme"},"assignedIssues":{"nodes":[]}}}}`))
+	}))
+	t.Cleanup(linearAPI.Close)
+	keys := api.NewKeys(t.TempDir())
+	e = newTestEnv(t, func(c *Config) {
+		c.Services.Linear = &api.Service{Keys: keys, Client: &api.Client{URL: linearAPI.URL, HTTP: linearAPI.Client()}}
+	})
+	targetKey, m := addMember(t, e, "Target", domain.RoleCollaborator, false)
+	target = m
+	err := controlAs(t, e, targetKey).Call(protocol.MethodLinearConnect, protocol.LinearConnectParams{APIKey: "key-target"}, nil)
+	wantRefusal(t, err, "member no longer exists")
+	if _, kerr := keys.Get(target.ID); !errors.Is(kerr, api.ErrNotConnected) {
+		t.Errorf("removed member's Linear key: %v, want none", kerr)
 	}
 }

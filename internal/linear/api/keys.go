@@ -1,4 +1,4 @@
-package linear
+package api
 
 import (
 	"errors"

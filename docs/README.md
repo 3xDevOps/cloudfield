@@ -81,8 +81,8 @@ Daily use:
     Claude, including their phone apps.
 12. [Slack](slack.md): when you want to hear about sessions, and answer them,
     in Slack, including on Android.
-13. [Linear](linear.md): when you want to start sessions from your Linear
-    issues.
+13. [Linear](linear.md): when you want to link sessions to Linear issues and
+    keep your Linear API key on the server.
 14. [Insights](insights.md): when you want statistics on sessions, time, cost and
     pull requests.
 15. [Watches](watches.md): when you want to be told that a session needs

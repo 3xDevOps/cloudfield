@@ -4,23 +4,24 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/3xDevOps/Aether/internal/domain"
-	"github.com/3xDevOps/Aether/internal/linear"
+	"github.com/3xDevOps/Aether/internal/linear/api"
 	"github.com/3xDevOps/Aether/internal/permissions"
 	"github.com/3xDevOps/Aether/internal/protocol"
 )
 
 // LinearService is the seam for members' Linear connections. Satisfied by
-// *linear.Service. Every method acts on the caller's own key.
+// *api.Service. Every method acts on the caller's own key.
 type LinearService interface {
-	Status(ctx context.Context, member domain.MemberID) (linear.Status, error)
-	Connect(ctx context.Context, member domain.MemberID, key string) (linear.Status, error)
+	Status(ctx context.Context, member domain.MemberID) (api.Status, error)
+	Connect(ctx context.Context, member domain.MemberID, key string) (api.Status, error)
 	Disconnect(member domain.MemberID) error
-	Teams(ctx context.Context, member domain.MemberID) ([]linear.Team, error)
-	Issues(ctx context.Context, member domain.MemberID, f linear.IssuesFilter) ([]linear.Issue, error)
-	Issue(ctx context.Context, member domain.MemberID, identifier string) (linear.Issue, error)
+	Teams(ctx context.Context, member domain.MemberID) ([]api.Team, error)
+	Issues(ctx context.Context, member domain.MemberID, f api.IssuesFilter) ([]api.Issue, error)
+	Issue(ctx context.Context, member domain.MemberID, identifier string) (api.Issue, error)
 }
 
 func init() {
@@ -28,14 +29,30 @@ func init() {
 		status, err := svc.Status(ctx, m)
 		return protocolLinearStatus(status), err
 	}))
-	registerGuarded(protocol.MethodLinearConnect, permissions.View, nil, linearMethod(func(svc LinearService, ctx context.Context, m domain.MemberID, p protocol.LinearConnectParams) (any, error) {
+	connect := linearMethod(func(svc LinearService, ctx context.Context, m domain.MemberID, p protocol.LinearConnectParams) (any, error) {
 		key := strings.TrimSpace(p.APIKey)
 		if key == "" {
 			return nil, &protocol.Error{Code: protocol.CodeInvalidParams, Message: "linear.connect: api_key is required"}
 		}
 		status, err := svc.Connect(ctx, m, key)
 		return protocolLinearStatus(status), err
-	}))
+	})
+	registerGuarded(protocol.MethodLinearConnect, permissions.View, nil, func(s *Server, ctx context.Context, member domain.MemberID, raw json.RawMessage) (any, *protocol.Error) {
+		out, perr := connect(s, ctx, member, raw)
+		if perr != nil {
+			return out, perr
+		}
+		// member.remove can finish while Linear validates the key, after
+		// its own key deletion. The key is saved by now, so this check
+		// sees the removal or the removal deletes the key.
+		if _, err := s.cfg.Store.GetMember(ctx, member); err != nil {
+			if delErr := s.disconnectLinear(member); delErr != nil {
+				err = errors.Join(err, delErr)
+			}
+			return nil, rpcError(fmt.Errorf("linear.connect: member no longer exists: %w", err))
+		}
+		return out, nil
+	})
 	registerGuarded(protocol.MethodLinearDisconnect, permissions.View, nil, linearMethod(func(svc LinearService, _ context.Context, m domain.MemberID, _ struct{}) (any, error) {
 		return struct{}{}, svc.Disconnect(m)
 	}))
@@ -48,7 +65,7 @@ func init() {
 		return out, err
 	}))
 	registerGuarded(protocol.MethodLinearIssues, permissions.View, nil, linearMethod(func(svc LinearService, ctx context.Context, m domain.MemberID, p protocol.LinearIssuesParams) (any, error) {
-		issues, err := svc.Issues(ctx, m, linear.IssuesFilter{Team: strings.TrimSpace(p.Team), Query: strings.TrimSpace(p.Query)})
+		issues, err := svc.Issues(ctx, m, api.IssuesFilter{Team: strings.TrimSpace(p.Team), Query: strings.TrimSpace(p.Query)})
 		out := protocol.LinearIssuesResult{Issues: make([]protocol.LinearIssue, 0, len(issues))}
 		for _, i := range issues {
 			out.Issues = append(out.Issues, protocolLinearIssue(i))
@@ -65,11 +82,11 @@ func init() {
 	}))
 }
 
-func protocolLinearStatus(s linear.Status) protocol.LinearStatusResult {
+func protocolLinearStatus(s api.Status) protocol.LinearStatusResult {
 	return protocol.LinearStatusResult(s)
 }
 
-func protocolLinearIssue(i linear.Issue) protocol.LinearIssue {
+func protocolLinearIssue(i api.Issue) protocol.LinearIssue {
 	out := protocol.LinearIssue{
 		Identifier: i.Identifier, Title: i.Title, URL: i.URL,
 		State:     protocol.LinearState(i.State),
@@ -96,7 +113,7 @@ func linearMethod[P any](call func(LinearService, context.Context, domain.Member
 			return nil, perr
 		}
 		out, err := call(svc, ctx, member, p)
-		if errors.Is(err, linear.ErrNotConnected) {
+		if errors.Is(err, api.ErrNotConnected) {
 			return nil, &protocol.Error{Code: protocol.CodeInvalidState,
 				Message: "Linear is not connected: save a personal API key in Settings → Linear"}
 		}

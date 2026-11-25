@@ -7,8 +7,7 @@ issue.
 
 The dashboard's **Settings**, **Linear** section and its **Linear** page, which
 lists your issues and starts a session from one, arrive with the dashboard
-change. Until then, nothing in the CLI or dashboard saves a key; only the
-`linear.connect` method below does.
+change. Until that ships, nothing in the CLI or dashboard saves a key.
 
 ## Connect Linear's GitHub integration
 
@@ -31,11 +30,12 @@ error a malformed one gives.
 1. In Linear, open **Settings**, **Security & access**, **Personal API keys**
    and choose **New API key**. Linear shows the key, which starts with
    `lin_api_`, once.
-2. Call `linear.connect` with `{"api_key": "<key>"}` as the signed-in member.
+2. Paste it into **Settings**, **Linear**. That section ships with the
+   dashboard change; the dashboard does not have it yet.
 
 The server checks the key with Linear's `viewer` query before it saves it, and
-returns Linear's own error if Linear refuses it. `linear.disconnect` deletes
-the key. Revoke the key in Linear as well if it leaked.
+returns Linear's own error if Linear refuses it. Disconnecting deletes the
+key. Revoke the key in Linear as well if it leaked.
 
 The key belongs to you. Each member's key is separate, and the server reads
 issues with the key of whoever asks.
