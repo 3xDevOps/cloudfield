@@ -210,6 +210,16 @@ Linear issue link in the task is used. The link is fixed at launch. A
 malformed URL fails with
 `linear issue URL "<value>" must have the form https://linear.app/<workspace>/issue/<TEAM>-<number>[/<slug>]`.
 
+Sessions of harnesses that carry Cloudfield's instructions, such as Claude Code,
+Codex and opencode, are told the linked issue and to put `Fixes ENG-123` in
+the description of any pull request they open. Gemini, Cursor, Antigravity and
+custom harnesses are not told. `cloudfield
+publish` and the Changes view's **Publish…** append that line when the body
+does not already name the identifier, before any trailing `Co-authored-by`
+trailers, so Linear's GitHub integration links the pull request and closes the
+issue when it merges. A pull request the agent opens itself with `gh pr
+create` gets no appended line.
+
 ## Add a repository
 
 ```sh

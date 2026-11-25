@@ -114,6 +114,7 @@ type githubFixture struct {
 	head             string
 	prs              []githubPR
 	posts            int
+	body             string
 	failCreate       bool
 	persistOnFailure bool
 	failReviews      bool
@@ -165,6 +166,7 @@ func (f *githubFixture) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			fail(err.Error())
 			return
 		}
+		f.body = request.Body
 		owner, repo, _ := strings.Cut(f.target.HeadRepository, "/")
 		if request.Base != f.target.BaseBranch || request.Head != owner+":"+f.target.HeadBranch || request.HeadRepo != repo {
 			w.WriteHeader(http.StatusUnprocessableEntity)

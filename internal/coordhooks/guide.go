@@ -35,6 +35,10 @@ type Guide struct {
 	// CLI is the name the text gives the in-container command; empty
 	// means OldCLI.
 	CLI string
+	// LinearIssue is the identifier, and LinearIssueURL the URL, of the
+	// Linear issue the run is linked to; empty for none.
+	LinearIssue    string
+	LinearIssueURL string
 }
 
 // The in-container command's names. Both run the same binary, but only a
@@ -266,6 +270,9 @@ func RoleCard(g Guide) string {
 			"A subsession (`aether-internal subsession start`) is a separate session with its own container, branch and setup time; its report wakes you. " +
 			"Reserve it for a large, independent stream of work that needs its own branch or pull request, would run for hours, or needs another agent, model, or harness. " +
 			"Don't use subsessions in excess unless there is a need to use them over subagents/singular session workflows. `aether-internal skill subsessions` says how.\n")
+	}
+	if g.LinearIssue != "" {
+		fmt.Fprintf(&b, "This session is linked to Linear issue %s (%s). Put \"Fixes %s\" in the description of any pull request you open, so Linear links the pull request and closes the issue when it merges.\n", g.LinearIssue, g.LinearIssueURL, g.LinearIssue)
 	}
 	if g.Role != "" {
 		b.WriteString(ReportGuide(g))

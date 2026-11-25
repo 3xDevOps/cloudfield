@@ -32,6 +32,9 @@ type Execution struct {
 	// CoAuthors reuses the scheduler's attribution list, excluding the
 	// actual native author email (including Git environment overrides).
 	CoAuthors func(context.Context, string) ([]string, error)
+	// LinearIssue is the identifier, such as ENG-123, of the Linear issue
+	// the run is linked to, or empty.
+	LinearIssue string
 }
 
 type Service struct{ exec ExecFunc }
