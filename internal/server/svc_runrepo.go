@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/3xDevOps/Aether/internal/domain"
+	"github.com/3xDevOps/Aether/internal/linear"
 	"github.com/3xDevOps/Aether/internal/runrepo"
 	"github.com/3xDevOps/Aether/internal/scheduler"
 	"github.com/3xDevOps/Aether/internal/sshd"
@@ -29,6 +30,7 @@ func (s *runRepositoryService) Execution(ctx context.Context, run domain.Run) (r
 		return runrepo.Execution{}, errors.New("session account changed; refresh before acting")
 	}
 	execution := runrepo.Execution{ContainerID: live.ContainerID, WorkDir: live.Workdir}
+	execution.LinearIssue, _, _ = linear.ParseIssueURL(live.Run.LinearIssueURL)
 	execution.Authorize = func(ctx context.Context, _ bool) error {
 		current, err := s.runs.ResolveLiveRun(ctx, run.ID, false)
 		if err != nil {

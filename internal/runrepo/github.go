@@ -212,6 +212,22 @@ func (s *Service) LookupPR(ctx context.Context, run Execution, target PRTarget) 
 	return result, err
 }
 
+// withFixes ends body with "Fixes <issue>", the line Linear's GitHub
+// integration links a pull request by, unless body already names the issue.
+func withFixes(issue, body string) (string, error) {
+	if issue == "" || strings.Contains(body, issue) {
+		return body, nil
+	}
+	line := "Fixes " + issue
+	if body != "" {
+		line = strings.TrimRight(body, "\n") + "\n\n" + line
+	}
+	if len(line) > protocol.MaxRunPRBodyBytes {
+		return "", errors.New("runrepo: body with Linear issue exceeds input limit")
+	}
+	return line, nil
+}
+
 // CreatePR never pushes, retries an external mutation, or changes a branch.
 // Every invocation first discovers the exact existing open PR. A failed POST
 // is reconciled once by read only; partial/uncertain state and the original
@@ -227,7 +243,11 @@ func (s *Service) CreatePR(ctx context.Context, run Execution, req PRCreateReque
 	if err := s.CheckExpected(ctx, run, req.Expected); err != nil {
 		return result, err
 	}
-	body, err := s.withCoAuthors(ctx, run, req.Body, protocol.MaxRunPRBodyBytes)
+	body, err := withFixes(run.LinearIssue, req.Body)
+	if err != nil {
+		return result, err
+	}
+	body, err = s.withCoAuthors(ctx, run, body, protocol.MaxRunPRBodyBytes)
 	if err != nil {
 		return result, err
 	}

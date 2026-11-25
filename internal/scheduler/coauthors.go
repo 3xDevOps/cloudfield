@@ -16,6 +16,7 @@ import (
 	"github.com/3xDevOps/Aether/internal/domain"
 	"github.com/3xDevOps/Aether/internal/events"
 	"github.com/3xDevOps/Aether/internal/harness"
+	"github.com/3xDevOps/Aether/internal/linear"
 	"github.com/3xDevOps/Aether/internal/memberhome"
 )
 
@@ -87,6 +88,7 @@ func (s *Scheduler) runGuide(ctx context.Context, run domain.RunID, background, 
 	}
 	if r != nil {
 		g.Parent = string(r.ParentRunID)
+		g.LinearIssue, g.LinearIssueURL, _ = linear.ParseIssueURL(r.LinearIssueURL)
 	}
 	return g
 }

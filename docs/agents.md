@@ -210,6 +210,12 @@ Linear issue link in the task is used. The link is fixed at launch. A
 malformed URL fails with
 `linear issue URL "<value>" must have the form https://linear.app/<workspace>/issue/<TEAM>-<number>[/<slug>]`.
 
+A linked session's agent is told the issue and to put `Fixes ENG-123` in the
+description of any pull request it opens. A pull request opened through the
+session's repository API gets that line appended when the body does not
+already contain the identifier, so Linear's GitHub integration links the pull
+request and closes the issue when it merges.
+
 ## Add a repository
 
 ```sh
