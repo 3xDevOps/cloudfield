@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { focusView } from '@/components/shell/center-view'
-import { changeTiles, focusInTile, narrowBelow, TileAreaContext, tileNode, TilePressedContext, viewsElsewhere } from '@/components/tiles/area'
+import { changeTiles, focusInTile, narrowBelow, TileAreaContext, tileNode, TilePressedContext, viewsElsewhere, type TileAreaValue } from '@/components/tiles/area'
 import { TileDragLayer } from '@/components/tiles/drag'
 import { fits, tileRects, type Rect } from '@/components/tiles/geometry'
 import { Tile } from '@/components/tiles/tile'
@@ -170,7 +170,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
   const [picking, setPicking] = useState<string | null>(null)
   const [noRoom, setNoRoom] = useState<TileSide | null>(null)
   const [pressed, setPressed] = useState(false)
-  const [resting, setResting] = useState<string | null>(null)
+  const [resting, setResting] = useState<TileAreaValue['resting']>(null)
   const pick = useCallback((tileId: string | null) => {
     setPicking(tileId)
     setNoRoom(null)
@@ -277,6 +277,11 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
   const byHand = useRef(stored.focused)
   const stray = useRef(false)
   const restingStrip = useRef<Element | null>(null)
+  // A strip is held as drawn only while its tile keeps its room.
+  useLayoutEffect(() => {
+    restingStrip.current = null
+    setResting(null)
+  }, [shape])
   useLayoutEffect(() => {
     if (byHand.current === stored.focused) return
     byHand.current = stored.focused
@@ -288,10 +293,29 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
   }, [stored.focused])
   useEffect(() => {
     let tabbed = false
+    const letGo = () => {
+      restingStrip.current = null
+      setResting(null)
+    }
+    const hold = (tileId: string, controls: boolean) => {
+      const strip = tileNode(tileId)!.firstElementChild!
+      restingStrip.current = strip
+      const { active } = tileList(useStore.getState().tiles.root).find((tile) => tile.id === tileId)!
+      const widths = Object.fromEntries([...strip.querySelectorAll<HTMLElement>('[data-tab]')].map((tab) => [tab.dataset.tab!, tab.getBoundingClientRect().width]))
+      setResting((before) => {
+        if (before?.tileId !== tileId) return { tileId, controls, active, widths }
+        return active in before.widths ? before : { ...before, active, widths }
+      })
+    }
     const enter = (event: Event) => {
-      const tileId = (event.target as Element).closest<HTMLElement>('[data-tile]')?.dataset.tile
+      const target = event.target as Element
+      const tileId = target.closest<HTMLElement>('[data-tile]')?.dataset.tile
       const focused = useStore.getState().tiles.focused
-      if (!tileId || tileId === focused) return
+      if (!tileId) return
+      if (tileId === focused) {
+        if (event.type === 'pointerdown' && target.closest('[data-tab]')) hold(tileId, true)
+        return
+      }
       if (event.type === 'focusin' && !tabbed) {
         if (stray.current) focusHeading(focused)
         stray.current = false
@@ -299,19 +323,19 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
       }
       byHand.current = tileId
       const down = event.type === 'pointerdown'
-      restingStrip.current = down ? tileNode(tileId)!.firstElementChild : null
       setPressed(down)
-      setResting(down ? tileId : null)
+      if (down) hold(tileId, false)
+      else letGo()
       changeTiles((before) => focusTile(before, tileId))
     }
-    // The pressed tile's strip is let go with no button down, nothing it opened still open and the pointer off it, as a lifted finger is.
+    // aria-expanded marks a popover or menu the strip opened; a lifted finger, or a pointer that left the window, counts as off the strip.
     const settle = (event: PointerEvent) => {
       const strip = restingStrip.current
       if (!strip || event.buttons || strip.querySelector('[aria-expanded=true]')) return
       const box = strip.getBoundingClientRect()
-      if (event.pointerType !== 'touch' && event.clientX >= box.left && event.clientX < box.right && event.clientY >= box.top && event.clientY < box.bottom) return
-      restingStrip.current = null
-      setResting(null)
+      const gone = event.pointerType === 'touch' || (event.type === 'pointerout' && !event.relatedTarget)
+      if (!gone && event.clientX >= box.left && event.clientX < box.right && event.clientY >= box.top && event.clientY < box.bottom) return
+      letGo()
     }
     // After the click that follows the release.
     const release = (event: PointerEvent) => setTimeout(() => {
@@ -320,6 +344,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
     })
     const press = (event: Event) => {
       tabbed = event instanceof KeyboardEvent && event.key === 'Tab'
+      if (tabbed) letGo()
       stray.current = false
       if (event.type === 'pointerdown') enter(event)
     }
@@ -327,6 +352,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
     window.addEventListener('pointerup', release, true)
     window.addEventListener('pointercancel', release, true)
     window.addEventListener('pointermove', settle, true)
+    window.addEventListener('pointerout', settle, true)
     window.addEventListener('keydown', press, true)
     window.addEventListener('focusin', enter, true)
     return () => {
@@ -334,6 +360,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
       window.removeEventListener('pointerup', release, true)
       window.removeEventListener('pointercancel', release, true)
       window.removeEventListener('pointermove', settle, true)
+      window.removeEventListener('pointerout', settle, true)
       window.removeEventListener('keydown', press, true)
       window.removeEventListener('focusin', enter, true)
     }

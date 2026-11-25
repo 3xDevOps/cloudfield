@@ -3110,11 +3110,16 @@ when the focus does. The strip is a `tablist` named "Sessions in this tile":
   folded tab needs you, and picking a tab there activates it.
 - **Add a tab** ("+") opens the picker in a popover.
 - **Split right** and **Split down**, on the focused tile, open an empty
-  focused tile on that side. The strip of a tile focused by a press keeps
-  the layout it had, without them, until the pointer is off the strip with
-  no button down, and while a popover or menu opened from the strip is open:
-  a first click on "+", a tab or a tab's close button acts, and nothing
-  moves under the pointer after it. A lifted finger counts as off the strip.
+  focused tile on that side. A press holds a strip as drawn: one that
+  focuses its tile keeps the strip without them, and one on a tab or its
+  close button, in any tile, keeps each tab at its width with its label as
+  it was and folds or unfolds none. So a first click on "+", a tab or a
+  tab's close button acts, and nothing moves under the pointer after it.
+  The strip is laid out once when the pointer is off it with no button down
+  and no popover or menu opened from it still open; a lifted finger and a
+  pointer that left the window count as off it. The Tab key and a tile
+  that splits, closes, maximizes or restores let it go at once, and a tab
+  that was folded or is new takes its room at once.
   Where the 420 by 400px floor leaves no room they open the picker instead,
   hung from the button that was pressed and led by "No room to split right.
   Add a tab here instead.", and the live region says "No room to split: adds
@@ -8548,10 +8553,12 @@ rectangles, floors, fit and drop zones; `tiles.test.tsx` the strip, picker,
 focus, arrows, controls once per session, the header row's widths, the
 folded and docked composer, seams, maximize, closing, the sidebar,
 the glide and the tile keys; `tiles-drag.test.tsx` every drag source, zone
-and cancel; `tiles-control.test.tsx` no resize or reattach on a focus click,
+and cancel, and a pressed tab's strip keeping its tabs and their widths;
+`tiles-control.test.tsx` no resize or reattach on a focus click,
 write control, the scaled terminal, the first click in a tile that is not
 focused ("+", a background tab, a tab's close button, the composer opening
-at the release), the strip keeping its layout until the pointer is off it,
+at the release), the strip keeping its layout until the pointer is off it
+or a double click maximizes its tile,
 a session's update rendering no other session's Chat, the right-click
 session menu only in the controls tile, and the glide's two-frame hold and
 empty pane; and `src/routes/run/session-host.test.tsx` the per-session host

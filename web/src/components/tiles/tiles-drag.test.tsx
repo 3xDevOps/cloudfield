@@ -410,6 +410,38 @@ describe('a strip with more tabs than room', () => {
     expect(strip.queryByRole('tab', { name: new RegExp(first) })).toBeNull()
   })
 
+  it('keeps the tabs on show and their widths after a press on one, until the pointer is off the strip, out of the window or the Tab key is pressed', async () => {
+    show(360)
+    await tab('run_2')
+    await tab('run_3')
+    const strip = within(within(tiles()[0]).getByRole('tablist', { name: 'Sessions in this tile' }))
+    const shown = () => strip.getAllByRole('tab').map((each) => [each.textContent!.replace(/^.*: /, ''), each.closest<HTMLElement>('[data-tab]')!.style.width])
+    const press = async (title: string) => {
+      await userEvent.click(strip.getByRole('tab', { name: new RegExp(title) }))
+      await act(() => new Promise((done) => setTimeout(done)))
+      expect(strip.getByRole('tab', { name: new RegExp(title) }).getAttribute('aria-selected')).toBe('true')
+    }
+
+    await press(first)
+    expect(state().route.params.runId).toBe('run_1')
+    expect(shown()).toEqual([[first, '100px'], [third, '100px']])
+    expect(within(tiles()[0]).getByRole('button', { name: 'Split right' })).toBeDefined()
+    fireEvent.pointerMove(window, { clientX: 300, clientY: 16 })
+    expect(shown()).toEqual([[first, '100px'], [third, '100px']])
+    fireEvent.pointerMove(window, { clientX: 300, clientY: 200 })
+    expect(shown()).toEqual([[first, ''], [second, '']])
+
+    await press(second)
+    expect(shown()).toEqual([[first, '100px'], [second, '100px']])
+    fireEvent.pointerOut(document.body, { clientX: 300, clientY: 16 })
+    expect(shown()).toEqual([[first, ''], [second, '']])
+
+    await press(first)
+    expect(shown()).toEqual([[first, '100px'], [second, '100px']])
+    await userEvent.keyboard('{Tab}')
+    expect(shown()).toEqual([[first, ''], [second, '']])
+  })
+
   it('counts 128px for a background tab that shows its view\'s icon', async () => {
     show(400)
     await tab('run_1')

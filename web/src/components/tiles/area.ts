@@ -31,7 +31,7 @@ export function focusInTile(tileId: string, selector: string) {
 }
 
 /** What the tile area shares with its tiles, strips and pickers. */
-interface TileAreaValue {
+export interface TileAreaValue {
   /** The layout as drawn: maximized when the stored one does not fit. */
   layout: TileLayout
   /** The stored layout does not fit the area, so there is nothing to restore to. */
@@ -45,8 +45,11 @@ interface TileAreaValue {
   /** The split that found no room and opened that picker instead. */
   noRoom: TileSide | null
   pick: (tileId: string | null) => void
-  /** The tile a press focused, whose strip keeps the layout it had: until the pointer is off that strip, and while a popover or menu the strip opened is open. */
-  resting: string | null
+  /**
+   * The tile whose strip a press holds as drawn, with or without its split controls, each tab at its width and
+   * `active` drawn as the tab on show: until the pointer is off that strip, and while a popover or menu the strip opened is open.
+   */
+  resting: { tileId: string; controls: boolean; active: string; widths: Record<string, number> } | null
   /** Opens an empty tile beside this one, or its picker when the area has no room for one. */
   split: (tileId: string, side: 'right' | 'down') => void
 }

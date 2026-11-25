@@ -51,22 +51,26 @@ function TabLabel({ run, tab, background, narrow }: { run: RunRecord; tab: TileT
   )
 }
 
-function SessionTab({ tile, tab, narrow, onClose }: {
+function SessionTab({ tile, tab, active, width, narrow, onClose }: {
   tile: Tile
   tab: TileTab
+  /** Drawn as the tab on show: the tile's active tab, or the one a held strip had. */
+  active: boolean
+  /** The width a held strip keeps the tab at, in pixels. */
+  width: number | undefined
   /** The tile is narrow or the strip is tight: a background tab is its dot, its title and its view's icon. */
   narrow: boolean
   onClose: () => void
 }) {
   const { layout, cramped, ctx, say } = useContext(TileAreaContext)!
   const run = ctx.runs[tab.runId]
-  const active = tile.active === tab.id
   const title = run ? runLabel(run) : 'Session'
   const dragFrom = useTileDrag()
   const lifted = useStore((s) => s.tileDrag?.tabId === tab.id)
   return (
     <div
       data-tab={tab.id}
+      style={width === undefined ? undefined : { flex: 'none', width }}
       className={cn(
         'flex h-full max-w-full min-w-28 items-center overflow-hidden border-r border-seam',
         lifted && 'outline-1 -outline-offset-1 outline-control outline-dashed *:opacity-40',
@@ -173,7 +177,10 @@ export function TabStrip({ tile, opening, narrow, room }: {
   const toggleSidebar = useStore((s) => s.toggleSidebar)
   const tiles = tileList(layout.root)
   const focused = layout.focused === tile.id
-  const controls = focused && resting !== tile.id
+  const hold = resting?.tileId === tile.id ? resting : null
+  const controls = focused && (hold?.controls ?? true)
+  // A hold that has to show a tab it did not, one picked from the menu or added, lays the strip out again.
+  const kept = hold && tile.active in hold.widths ? hold : null
   // A parked tile keeps the strip it had, in sight under the glide of the tile that covers it.
   const maximized = layout.maximized && focused
   const run = ctx.runs[tile.tabs.find((tab) => tab.id === tile.active)?.runId ?? '']
@@ -188,6 +195,7 @@ export function TabStrip({ tile, opening, narrow, room }: {
   const background = tile.tabs.filter((tab) => tab.id !== tile.active).reverse()
   let freed = 0
   const folded = [...background.filter((tab) => !asking.has(tab.runId)), ...background.filter((tab) => asking.has(tab.runId))].filter((tab) => {
+    if (kept) return !(tab.id in kept.widths)
     const fold = over > 0 && freed < over + 92
     if (fold) freed += floor(tab)
     return fold
@@ -220,7 +228,7 @@ export function TabStrip({ tile, opening, narrow, room }: {
         {tile.tabs.length > 0 ? (
           <>
             <TabsList aria-label="Sessions in this tile" className={cn('h-full gap-0 overflow-hidden coarse:h-full', (!focused || lifted) && '[&>[data-slot=sliding-indicator]]:hidden')}>
-              {tile.tabs.filter((tab) => !folded.includes(tab)).map((tab) => <SessionTab key={tab.id} tile={tile} tab={tab} narrow={narrow || tight} onClose={() => close(tab)} />)}
+              {tile.tabs.filter((tab) => !folded.includes(tab)).map((tab) => <SessionTab key={tab.id} tile={tile} tab={tab} active={tab.id === (kept ?? tile).active} width={kept?.widths[tab.id]} narrow={narrow || tight} onClose={() => close(tab)} />)}
             </TabsList>
             {folded.length > 0 && (
               <Menu>

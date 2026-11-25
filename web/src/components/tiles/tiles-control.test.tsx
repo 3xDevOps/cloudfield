@@ -173,6 +173,17 @@ describe('a press that focuses a tile', () => {
     expect(useStore.getState().route.params.runId).toBe('run_1')
   })
 
+  it('lets the strip go when a double click on a tab maximizes its tile', async () => {
+    const rest = await twoTabsAtRest()
+    vi.spyOn(screen.getByRole('region', { name: /, tile 1 of 2$/ }).firstElementChild!, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 600, 32))
+    const held = () => rest.getByRole('tab', { name: new RegExp(mine) }).closest<HTMLElement>('[data-tab]')!.style.width
+    await userEvent.click(rest.getByRole('tab', { name: new RegExp(mine) }))
+    expect(held()).toBe('0px')
+    fireEvent.doubleClick(rest.getByRole('tab', { name: new RegExp(mine) }))
+    expect(useStore.getState().tiles.maximized).toBe(true)
+    expect(held()).toBe('')
+  })
+
   it('closes a tab on a first click on its close button', async () => {
     const rest = await twoTabsAtRest()
     await userEvent.click(rest.getByRole('button', { name: `Close ${mine}` }))
