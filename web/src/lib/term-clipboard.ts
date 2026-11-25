@@ -34,6 +34,63 @@ const IMAGE_TYPES: Record<string, true> = {
   'image/webp': true,
 }
 
+type CopyTarget = { term: Terminal; host: HTMLElement }
+
+// Most recently used last.
+const copyTargets: CopyTarget[] = []
+
+function copyTargetFor(target: EventTarget | null): CopyTarget | undefined {
+  const tile = target instanceof Element ? target.closest('[data-tile]') : null
+  for (let i = copyTargets.length - 1; i >= 0; i--) {
+    const { term, host } = copyTargets[i]!
+    if (tile && tile !== host.closest('[data-tile]')) continue
+    if (host.getClientRects().length > 0 && !host.closest('[inert]') && term.hasSelection()) return copyTargets[i]
+  }
+}
+
+/**
+ * Native copy reaches xterm only while its own input has the focus. This
+ * serves a copy xterm did not handle from the most recently used terminal on
+ * screen that holds a selection, and never from a tile other than the one
+ * the focus is in.
+ */
+export function registerTerminalCopy(term: Terminal, host: HTMLElement): () => void {
+  const entry: CopyTarget = { term, host }
+  const forget = () => {
+    const at = copyTargets.indexOf(entry)
+    if (at !== -1) copyTargets.splice(at, 1)
+  }
+  const used = () => {
+    forget()
+    copyTargets.push(entry)
+  }
+  const onCopy = (rawEvent: Event) => {
+    const event = rawEvent as ClipboardEvent
+    const target = event.target
+    if (event.defaultPrevented || !event.clipboardData) return
+    if (
+      target instanceof HTMLElement &&
+      (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)
+    ) return
+    if (document.getSelection()?.isCollapsed === false) return
+    if (copyTargetFor(target) !== entry) return
+    event.clipboardData.setData('text/plain', term.getSelection())
+    event.preventDefault()
+  }
+  copyTargets.push(entry)
+  host.addEventListener('focusin', used)
+  const onSelection = term.onSelectionChange(() => {
+    if (term.hasSelection()) used()
+  })
+  document.addEventListener('copy', onCopy)
+  return () => {
+    host.removeEventListener('focusin', used)
+    onSelection.dispose()
+    document.removeEventListener('copy', onCopy)
+    forget()
+  }
+}
+
 function terminalInput(term: Terminal): TerminalInput | null {
   const input = (term as Terminal & { textarea?: HTMLTextAreaElement | null }).textarea
   return input ?? null
@@ -174,7 +231,12 @@ export function clipboardKeys(term: Terminal): (ev: KeyboardEvent) => boolean {
 
 /** Copy the terminal's selection, reporting whether it reached a clipboard. */
 export async function copySelection(term: Terminal): Promise<boolean> {
-  return copyTerminalText(term.getSelection())
+  const text = term.getSelection()
+  if (!text) {
+    toast.error('Nothing selected: drag to select text (Option-drag on macOS) or use Copy screen')
+    return false
+  }
+  return copyTerminalText(text)
 }
 
 /**

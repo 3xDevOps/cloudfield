@@ -335,11 +335,19 @@ These work in every terminal Cloudfield draws, when it has focus:
 
 | Key | What it does |
 | --- | --- |
-| `Ctrl+Shift+C` | Copy the selection. Plain `Ctrl+C` copies when text is selected and interrupts otherwise. |
+| `Ctrl+Shift+C` (`Cmd+C` on macOS) | Copy the selection. Plain `Ctrl+C` copies when text is selected and interrupts otherwise. |
 | `Ctrl+Shift+V`, `Ctrl+V` (`Cmd+V` on macOS) | Paste |
 | `Ctrl+Shift+F` | Find. `Enter` next, `Shift+Enter` previous, `Esc` closes. |
 | `Ctrl+=` / `Ctrl+-` | Larger or smaller font, 8 to 32 px, kept across terminals and reloads |
 | `Ctrl+0` | Default 12 px font |
+
+After the focus leaves a terminal, `Cmd+C` or `Ctrl+C` still copies its
+highlighted selection, unless the focus is in a text field or text is
+selected elsewhere on the page. With several terminals on screen it copies
+the one used last, and with the focus in a tile only that tile's terminal.
+When a terminal program captures the mouse, hold `Shift` while dragging to
+select text (`Option` on macOS). **Copy selection** with nothing selected
+says so.
 
 On a touch screen, a key row below the terminal has **Ctrl**, **Alt**,
 **Esc**, **Tab**, the arrows, **Enter** and **More keys**. **More keys**

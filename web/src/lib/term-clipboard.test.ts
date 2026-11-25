@@ -6,6 +6,7 @@ import {
   copySelection,
   pasteClipboard,
   registerClipboardImages,
+  registerTerminalCopy,
   type ClipboardImageHandler,
 } from './term-clipboard'
 
@@ -24,9 +25,37 @@ function mount(selection = '') {
     paste,
     focus,
     textarea: input,
+    onSelectionChange: () => ({ dispose: vi.fn() }),
   }
   const handler: KeyHandler = clipboardKeys(term as unknown as Terminal)
   return { handler, paste, focus, input, term: term as unknown as Terminal }
+}
+
+function copyTarget(selection: string, parent: HTMLElement = document.body) {
+  const { term } = mount(selection)
+  const host = document.createElement('div')
+  parent.append(host)
+  let rects: object[] = [{}]
+  host.getClientRects = () => rects as unknown as DOMRectList
+  const unregister = registerTerminalCopy(term, host)
+  return { term, host, unregister, hide: () => { rects = [] } }
+}
+
+function copyFrom(target: EventTarget): { text: string | null; event: Event } {
+  const setData = vi.fn()
+  const event = new Event('copy', { bubbles: true, cancelable: true })
+  Object.defineProperty(event, 'clipboardData', { value: { setData } })
+  target.dispatchEvent(event)
+  return { text: setData.mock.calls[0]?.[1] ?? null, event }
+}
+
+function tile(): HTMLElement {
+  const section = document.createElement('section')
+  section.dataset.tile = ''
+  const control = document.createElement('button')
+  section.append(control)
+  document.body.append(section)
+  return section
 }
 
 function key(opts: KeyboardEventInit): KeyboardEvent {
@@ -111,6 +140,86 @@ describe('terminal clipboard keys', () => {
     expect(handler(key({ code: 'KeyV', metaKey: true }))).toBe(true)
     expect(handler(key({ code: 'KeyC', ctrlKey: true, altKey: true, shiftKey: true }))).toBe(true)
     expect(handler(key({ code: 'KeyV', ctrlKey: true, altKey: true, shiftKey: true }))).toBe(true)
+  })
+
+  it('reports when the copy action has no terminal selection', async () => {
+    const { term } = mount()
+    await expect(copySelection(term)).resolves.toBe(false)
+    expect(toast.error).toHaveBeenCalledWith(
+      'Nothing selected: drag to select text (Option-drag on macOS) or use Copy screen',
+    )
+  })
+
+  it('copies the most recently used terminal selection when the page has focus', () => {
+    const first = copyTarget('first')
+    const second = copyTarget('second')
+
+    const copied = copyFrom(document.body)
+    expect(copied.text).toBe('second')
+    expect(copied.event.defaultPrevented).toBe(true)
+
+    first.host.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
+    expect(copyFrom(document.body).text).toBe('first')
+
+    first.term.hasSelection = () => false
+    expect(copyFrom(document.body).text).toBe('second')
+
+    second.unregister()
+    expect(copyFrom(document.body).text).toBeNull()
+    first.unregister()
+  })
+
+  it('copies from the tile the focus is in and never from another tile', () => {
+    const left = tile()
+    const right = tile()
+    const leftTerminal = copyTarget('left', left)
+    const rightTerminal = copyTarget('right', right)
+
+    expect(copyFrom(left.querySelector('button')!).text).toBe('left')
+    expect(copyFrom(right.querySelector('button')!).text).toBe('right')
+
+    rightTerminal.term.hasSelection = () => false
+    expect(copyFrom(right.querySelector('button')!).text).toBeNull()
+    expect(copyFrom(document.body).text).toBe('left')
+    leftTerminal.unregister()
+    rightTerminal.unregister()
+  })
+
+  it('leaves handled copies, page selections and editable targets alone', () => {
+    const { unregister } = copyTarget('terminal')
+    const input = document.createElement('input')
+    const text = document.createTextNode('outside')
+    document.body.append(input, text)
+
+    expect(copyFrom(input).text).toBeNull()
+
+    const handled = new Event('copy', { bubbles: true, cancelable: true })
+    const setData = vi.fn()
+    Object.defineProperty(handled, 'clipboardData', { value: { setData } })
+    handled.preventDefault()
+    document.body.dispatchEvent(handled)
+    expect(setData).not.toHaveBeenCalled()
+
+    const selection = document.getSelection()!
+    const range = document.createRange()
+    range.selectNodeContents(text)
+    selection.addRange(range)
+    expect(copyFrom(document.body).text).toBeNull()
+    selection.removeAllRanges()
+    expect(copyFrom(document.body).text).toBe('terminal')
+    unregister()
+  })
+
+  it('does not copy from a terminal that is hidden or inert', () => {
+    const parked = tile()
+    parked.setAttribute('inert', '')
+    const inert = copyTarget('inert', parked)
+    const hidden = copyTarget('hidden')
+    hidden.hide()
+
+    expect(copyFrom(document.body).text).toBeNull()
+    inert.unregister()
+    hidden.unregister()
   })
 
   it('delivers a native image paste once and leaves text-only paste native', async () => {
