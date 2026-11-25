@@ -120,6 +120,7 @@ function entries(items: Read[]): Entry[] {
 }
 
 const base64Run = /[A-Za-z0-9+/]{512,}={0,2}/g
+const hexOnly = /^[0-9a-fA-F]+$/
 
 // The server keeps an image's type in `content` and drops its bytes, but a
 // tool's raw output can still hold them.
@@ -130,7 +131,7 @@ function resultText(call: SessionToolCall, output: string): string {
   if (shown.length > 0) return shown.join('\n\n')
   const raw = call.raw_output
   if (raw === undefined || raw === null) return ''
-  return (typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2)).replace(base64Run, (run) => `[base64 data, ${run.length} characters]`)
+  return (typeof raw === 'string' ? raw : JSON.stringify(raw, null, 2)).replace(base64Run, (run) => (hexOnly.test(run) ? run : `[base64 data, ${run.length} characters]`))
 }
 
 function toolText(call: SessionToolCall, output: string, cuts: Set<string>): string {
@@ -142,13 +143,26 @@ function toolText(call: SessionToolCall, output: string, cuts: Set<string>): str
   return blocks.join('\n\n')
 }
 
+/** The fence a message leaves open, by CommonMark's rules, so the export can close it. */
+function openFence(text: string): string | undefined {
+  let open: string | undefined
+  for (const line of text.split('\n')) {
+    const [, fence, rest] = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line) ?? []
+    if (!fence) continue
+    if (open === undefined) {
+      if (fence[0] !== '`' || !rest!.includes('`')) open = fence
+    } else if (fence[0] === open[0] && fence.length >= open.length && !rest!.trim()) open = undefined
+  }
+  return open
+}
+
 function entryText(entry: Entry): string {
   if ('note' in entry) return entry.note
   if ('call' in entry) return toolText(entry.call, entry.output, entry.cuts)
   const who = entry.message.role === 'user' ? 'User' : 'Assistant'
   const text = entry.text.trim()
-  const unclosed = (text.match(/^\s*```/gm) ?? []).length % 2 === 1
-  return `### ${who}${entry.message.parent_id ? ' (subagent)' : ''}\n\n${text}${unclosed ? '\n```' : ''}`
+  const open = openFence(text)
+  return `### ${who}${entry.message.parent_id ? ' (subagent)' : ''}\n\n${text}${open ? `\n${open}` : ''}`
 }
 
 async function conversation(client: Client, runID: string): Promise<string> {
@@ -165,7 +179,7 @@ const cursorExpired = 'earlier terminal history has expired'
 // asked for, and is read again.
 async function terminal(client: Client, runID: string): Promise<string> {
   const lines: string[] = []
-  const seen = new Set<string>()
+  let boundary = new Set<string>()
   const consumed = new Set<string>()
   let before: string | undefined
   let stalls = 0
@@ -189,9 +203,8 @@ async function terminal(client: Client, runID: string): Promise<string> {
       continue
     }
     stalls = 0
-    const fresh = page.lines.filter((line) => !seen.has(line.cursor))
-    for (const line of fresh) seen.add(line.cursor)
-    lines.unshift(...fresh.map((line) => line.text))
+    lines.unshift(...page.lines.filter((line) => !boundary.has(line.cursor)).map((line) => line.text))
+    if (page.lines.length > 0) boundary = new Set(page.lines.map((line) => line.cursor))
     if (!page.has_more) {
       if (page.truncated_before) marker = '[earlier output has expired]'
       break

@@ -27,7 +27,7 @@ test('an Enhanced session exports every page of its history under a header of th
     frame(11, { kind: 'tool_call', tool_call: { id: 't2', title: 'cat big.log', status: 'completed' } }),
     frame(12, { kind: 'thought', message: { role: 'thought', message_id: 'th', text: 'cut' } }, true),
     frame(13, { kind: 'tool_call', truncated: true, tool_call: { id: 't3', parent_id: 't2', title: 'Read shot.png', content: [{ type: 'image', mime_type: 'image/png' }], raw_output: [{ source: { data: 'iVBOR' + 'A'.repeat(600) } }] } }),
-    frame(14, { kind: 'tool_call', tool_call: { id: 't4', title: 'Read photo.jpg', raw_output: '[{"source":{"data":"' + 'A'.repeat(600) } }),
+    frame(14, { kind: 'tool_call', tool_call: { id: 't4', title: 'Read photo.jpg', raw_output: '[{"source":{"data":"' + 'A'.repeat(599) + 'Z ' + 'ab12'.repeat(200) } }),
     frame(15, said('assistant', 'a2', 'Run:\n```sh\nmake')),
   ]
   const client = fakeApi({
@@ -78,11 +78,12 @@ test('an Enhanced session exports every page of its history under a header of th
   expect(vi.mocked(client.runACPItem).mock.calls.map(([, seq]) => seq)).toEqual([9, 10])
   expect(body).toContain('```\ngo test ./...\n```\n\n```\n[... 9 earlier characters]\n' + 'x'.repeat(outputCap) + '\n```')
   expect(body).toContain('```\nRead shot.png\n```\n\n```\n[image, image/png]\n```')
-  expect(body).toContain('```\nRead photo.jpg\n```\n\n```\n[{"source":{"data":"[base64 data, 600 characters]\n```')
+  expect(body).toContain('```\nRead photo.jpg\n```\n\n```\n[{"source":{"data":"[base64 data, 600 characters] ' + 'ab12'.repeat(200) + '\n```')
 })
 
 test('a Standard session exports its terminal history oldest first', async () => {
-  const line = (text: string) => ({ cursor: text, time: 0, text })
+  let at = 0
+  const line = (text: string) => ({ cursor: `p${at++}`, time: 0, text })
   const client = fakeApi({
     runWithPullRequests: vi.fn(async () => ({ run: run({ id: 'run-tui1' }) })),
     terminalHistory: vi.fn(async ({ before }: { before?: string }) =>
@@ -97,7 +98,8 @@ test('a Standard session exports its terminal history oldest first', async () =>
   expect(text.endsWith('## Terminal\n\n[earlier output has expired]\n\n````\n$ make\n```\nok\n````\n')).toBe(true)
 })
 
-const page = (lines: string[], next?: string) => ({ lines: lines.map((text) => ({ cursor: text, time: 0, text })), has_more: next !== undefined, next_cursor: next })
+let position = 0
+const page = (lines: string[], next?: string) => ({ lines: lines.map((text) => ({ cursor: `p${position++}`, time: 0, text })), has_more: next !== undefined, next_cursor: next })
 
 test('a terminal page the server ran out of time on is read again, and the export fails when it never advances', async () => {
   vi.useFakeTimers()
@@ -110,7 +112,7 @@ test('a terminal page the server ran out of time on is read again, and the expor
   })
   const done = sessionMarkdown(client, 'run-tui1', undefined, now)
   await vi.advanceTimersByTimeAsync(stallDelays[0]!)
-  expect((await done).endsWith('```\n$ make\nok\n```\n')).toBe(true)
+  expect((await done).endsWith('```\n$ make\nok\nok\n```\n')).toBe(true)
 
   pages.push(page(['ok'], 'c1'))
   const failed = sessionMarkdown(client, 'run-tui1', undefined, now).catch((err: Error) => err.message)
@@ -132,4 +134,18 @@ test('a missing transcript and an expired cursor are marked instead of failing t
 
   history.mockRejectedValueOnce(new ApiError(200, 'terminal history is unavailable', codeUnavailable))
   await expect(sessionMarkdown(client, 'run-tui1', undefined, now)).rejects.toThrow('terminal history is unavailable')
+})
+
+test.each([
+  ['````md\n```\ninner\n```\n````', ''],
+  ['~~~\n```\n~~~', ''],
+  ['```x``` is inline code.', ''],
+  ['````sh\nmake\n```', '\n````'],
+  ['a\n```sh\nmake', '\n```'],
+])('a message closes only the fence it leaves open: %j', async (text, closing) => {
+  const client = fakeApi({
+    runWithPullRequests: vi.fn(async () => ({ run: run({ id: 'run-abc123', acp: true }) })),
+    runACPHistory: vi.fn(async () => ({ frames: [frame(1, said('assistant', 'a1', text))], oldest_seq: 1 })),
+  })
+  expect((await sessionMarkdown(client, 'run-abc123', undefined, now)).endsWith(`### Assistant\n\n${text}${closing}\n`)).toBe(true)
 })

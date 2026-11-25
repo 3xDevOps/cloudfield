@@ -423,8 +423,8 @@ output over 20,000 characters keeps its end after `[... N earlier
 characters]`; a diff that long keeps its start before `[... N more
 characters]`. An image a tool read is written as `[image, <type>]`, and
 base64 data left in a tool's raw output as `[base64 data, N characters]`.
-Not exported: thoughts, plans, permission requests and questions, and
-attachments. A session switched between Enhanced and Standard exports only
+Not exported: thoughts, plans, permission requests and questions,
+attachments, and tool inputs such as a subagent's prompt. A session switched between Enhanced and Standard exports only
 its current mode. The Android app does not offer it.
 `cloudfield attach` is a raw stream that replays retained
 output and discards keystrokes typed before the replay finishes.
