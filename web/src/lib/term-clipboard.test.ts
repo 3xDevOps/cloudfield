@@ -19,26 +19,37 @@ function mount(selection = '') {
   const focus = vi.fn()
   const input = document.createElement('textarea')
   document.body.append(input)
+  let selectionChanged = () => {}
   const term = {
     hasSelection: () => selection.length > 0,
     getSelection: () => selection,
     paste,
     focus,
     textarea: input,
-    onSelectionChange: () => ({ dispose: vi.fn() }),
+    onSelectionChange: (listener: () => void) => {
+      selectionChanged = listener
+      return { dispose: vi.fn() }
+    },
   }
   const handler: KeyHandler = clipboardKeys(term as unknown as Terminal)
-  return { handler, paste, focus, input, term: term as unknown as Terminal }
+  return {
+    handler,
+    paste,
+    focus,
+    input,
+    term: term as unknown as Terminal,
+    select: () => selectionChanged(),
+  }
 }
 
 function copyTarget(selection: string, parent: HTMLElement = document.body) {
-  const { term } = mount(selection)
+  const { term, select } = mount(selection)
   const host = document.createElement('div')
   parent.append(host)
   let rects: object[] = [{}]
   host.getClientRects = () => rects as unknown as DOMRectList
   const unregister = registerTerminalCopy(term, host)
-  return { term, host, unregister, hide: () => { rects = [] } }
+  return { term, host, unregister, select, hide: () => { rects = [] } }
 }
 
 function copyFrom(target: EventTarget): { text: string | null; event: Event } {
@@ -158,13 +169,21 @@ describe('terminal clipboard keys', () => {
     expect(copied.text).toBe('second')
     expect(copied.event.defaultPrevented).toBe(true)
 
+    first.select()
+    expect(copyFrom(document.body).text).toBe('first')
+    second.host.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
+    expect(copyFrom(document.body).text).toBe('second')
+
     first.host.dispatchEvent(new FocusEvent('focusin', { bubbles: true }))
     expect(copyFrom(document.body).text).toBe('first')
 
     first.term.hasSelection = () => false
     expect(copyFrom(document.body).text).toBe('second')
 
+    const removeEventListener = vi.spyOn(document, 'removeEventListener')
     second.unregister()
+    expect(removeEventListener).toHaveBeenCalledWith('copy', expect.any(Function))
+    removeEventListener.mockRestore()
     expect(copyFrom(document.body).text).toBeNull()
     first.unregister()
   })

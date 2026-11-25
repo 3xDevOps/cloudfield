@@ -341,8 +341,8 @@ These work in every terminal Cloudfield draws, when it has focus:
 | `Ctrl+=` / `Ctrl+-` | Larger or smaller font, 8 to 32 px, kept across terminals and reloads |
 | `Ctrl+0` | Default 12 px font |
 
-After the focus leaves a terminal, `Cmd+C` or `Ctrl+C` still copies its
-highlighted selection, unless the focus is in a text field or text is
+After the focus leaves a terminal, `Cmd+C` (macOS) or `Ctrl+C` still copies
+its highlighted selection, unless the focus is in a text field or text is
 selected elsewhere on the page. With several terminals on screen it copies
 the one used last that holds a selection, and with the focus in a
 [tile](quickstart.md#7-watch-it) only that tile's terminal. When a terminal
