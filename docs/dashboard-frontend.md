@@ -3176,8 +3176,8 @@ they were and still mounted, so restoring them reloads nothing and resizes
 no terminal. They are listed as chips in a pill on the strip, those that need
 you first. A chip names the tile's tab that needs you, with the **Needs
 you** badge, else its active tab, and opens that tab; the tabs and the pill share the
-strip half and half, and a pill with under 112px a chip folds into an
-"N parked" menu.
+strip half and half, and a pill with under 112px a chip, or 192px for one
+that names its view or carries the badge, folds into an "N parked" menu.
 A chip swaps the maximized tile, and
 **Restore tiles**, `x` or `Esc` brings them back. A stored layout that does
 not fit the window is drawn the same way, with no **Restore tiles** and only

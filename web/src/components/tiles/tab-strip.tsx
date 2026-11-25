@@ -39,10 +39,10 @@ function TabLabel({ run, tab, background, narrow }: { run: RunRecord; tab: TileT
       {!narrow && !(several && background) && <AgentGlyph agent={run.harness} />}
       <span className={cn('min-w-[4ch] shrink-[100] truncate', background && 'max-w-60')} title={`${runLabel(run)}\n${stateTitle(shown, shown.state === 'ready' && run.review_changed_at ? run.review_changed_at : run.stateChangedAt)}`}>{runLabel(run)}</span>
       {several && (
-        <span data-slot="tab-view" className="flex min-w-0 items-center gap-1 text-muted">
+        <span data-slot="tab-view" className="flex shrink-0 items-center gap-1 text-muted">
           <span aria-hidden>·</span>
           <Icon aria-hidden className="size-3" />
-          <span className={cn('truncate', background && (narrow || asks) && 'sr-only')}>{runViewLabel[view]}</span>
+          <span className={cn(background && (narrow || asks) && 'sr-only')}>{runViewLabel[view]}</span>
         </span>
       )}
       {run.protected && <ProtectedMark />}
@@ -80,7 +80,7 @@ function SessionTab({ tile, tab, narrow, onClose }: {
       <TabsTrigger
         value={tab.id}
         onPointerDown={dragFrom({ tabId: tab.id, runId: tab.runId, view: run && resolveView(tab, run, ctx.cap, ctx.memory) })}
-        className="min-w-0 shrink group-data-[look=underline]/tabs:pt-0.5 group-data-[look=underline]/tabs:pr-7 group-data-[look=underline]/tabs:pl-3 [&_[data-slot=status-dot]]:size-2.5 [&_[data-slot=tab-view]]:shrink-0"
+        className="min-w-0 flex-1 group-data-[look=underline]/tabs:pt-0.5 group-data-[look=underline]/tabs:pr-7 group-data-[look=underline]/tabs:pl-3 [&_[data-slot=status-dot]]:size-2.5"
         onDoubleClick={() => {
           if (cramped || tileList(layout.root).length < 2) return
           changeTiles((before) => maximizeTile(before, tile.id))
@@ -120,6 +120,8 @@ function ParkedPill({ tile }: { tile: Tile }) {
     return { parked, tab, run: tab && ctx.runs[tab.runId] }
   })
   const chips = [...all.filter(({ run }) => run && asking.has(run.id)), ...all.filter(({ run }) => !run || !asking.has(run.id))]
+  const held = tileList(layout.root).flatMap((other) => other.tabs)
+  const floors = chips.reduce((sum, { run }) => sum + (run && (asking.has(run.id) || held.filter((tab) => tab.runId === run.id).length > 1) ? wideFloor : chipFloor), 32)
   const open = ({ parked, tab, run }: (typeof chips)[number]) => {
     changeTiles((before) => (tab ? activateTab(before, tab.id) : focusTile(before, parked.id)))
     say(`${run ? runLabel(run) : 'New tile'} maximized`)
@@ -128,7 +130,7 @@ function ParkedPill({ tile }: { tile: Tile }) {
   const pill = 'flex h-6 min-w-0 items-center gap-1 rounded-control border border-seam px-1.5 animate-fade-in motion-reduce:animate-none'
   return (
     <div ref={roomRef} className="flex min-w-24 flex-1 justify-end">
-      {room.width > 0 && room.width < chips.length * chipFloor + 32 ? (
+      {room.width > 0 && room.width < floors ? (
         <Menu>
           <MenuTrigger asChild>
             <Button variant="ghost" size="sm" className={cn(pill, 'shrink-0')}>
@@ -146,7 +148,7 @@ function ParkedPill({ tile }: { tile: Tile }) {
         <div className={pill}>
           <LayoutGrid aria-hidden className="size-3.5 shrink-0 text-muted" />
           {chips.map((chip) => (
-            <Button key={chip.parked.id} variant="ghost" size="sm" className="h-5 min-w-22 shrink gap-1.5 px-1.5" onClick={() => open(chip)}>
+            <Button key={chip.parked.id} variant="ghost" size="sm" className="h-5 min-w-22 shrink gap-1.5 px-1.5 has-data-[slot=badge]:min-w-48 has-data-[slot=tab-view]:min-w-48" onClick={() => open(chip)}>
               {label(chip)}
             </Button>
           ))}
