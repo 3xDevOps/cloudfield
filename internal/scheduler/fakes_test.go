@@ -270,11 +270,11 @@ func (r *fakeRuntime) Resume(_ context.Context, id runtime.ID) error {
 }
 
 func (r *fakeRuntime) Stop(_ context.Context, id runtime.ID, _ time.Duration) error {
-	if r.stopErr != nil {
-		return r.stopErr
-	}
 	if r.stopHook != nil {
 		r.stopHook()
+	}
+	if r.stopErr != nil {
+		return r.stopErr
 	}
 	c, err := r.get(id)
 	if err != nil {
@@ -426,17 +426,23 @@ func (r *fakeRuntime) Wait(ctx context.Context, id runtime.ID) (runtime.ExitStat
 	c.mu.Lock()
 	done := c.done
 	c.mu.Unlock()
+	// Like Docker, an exited container answers at once even when ctx expired
+	// meanwhile; a two-way select would pick ctx at random.
 	select {
-	case <-ctx.Done():
-		return runtime.ExitStatus{}, ctx.Err()
 	case <-done:
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		if done != c.done {
-			return c.prevExit, nil
+	default:
+		select {
+		case <-ctx.Done():
+			return runtime.ExitStatus{}, ctx.Err()
+		case <-done:
 		}
-		return *c.exit, nil
 	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if done != c.done {
+		return c.prevExit, nil
+	}
+	return *c.exit, nil
 }
 
 func (r *fakeRuntime) Inspect(_ context.Context, id runtime.ID) (runtime.ContainerInfo, error) {
@@ -679,6 +685,7 @@ type fakeGit struct {
 	removeErr         error
 	createHook        func(run domain.RunID)
 	watchHook         func(run domain.RunID)                 // runs at the top of StartDiffWatch
+	stopWatchHook     func(run domain.RunID)                 // runs at the top of StopDiffWatch
 	commitHook        func(run domain.RunID, message string) // runs at the top of CommitAll
 	authors           map[domain.RunID][]domain.GitIdentity
 	signed            map[domain.RunID][]bool
@@ -842,6 +849,12 @@ func (g *fakeGit) StartDiffWatch(_ context.Context, workspace domain.WorkspaceID
 }
 
 func (g *fakeGit) StopDiffWatch(run domain.RunID) {
+	g.mu.Lock()
+	hook := g.stopWatchHook
+	g.mu.Unlock()
+	if hook != nil {
+		hook(run)
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	delete(g.watching, run)

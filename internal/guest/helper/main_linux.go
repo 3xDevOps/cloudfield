@@ -82,6 +82,9 @@ func execStart(noNewPrivs bool, dir, program string, argv []string) int {
 	runtime.LockOSThread()
 	status := os.NewFile(3, "exec status")
 	env, err := started(status)
+	if err == nil {
+		err = lowerSoftFileLimit()
+	}
 	if err == nil && noNewPrivs {
 		err = unix.Prctl(unix.PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0)
 	}
@@ -134,6 +137,9 @@ func execInRoot(root, uid, gid, dir, program string, argv []string) int {
 	runtime.LockOSThread()
 	status := os.NewFile(3, "exec status")
 	env, err := started(status)
+	if err == nil {
+		err = lowerSoftFileLimit()
+	}
 	if err == nil {
 		err = enterRoot(root)
 	}
@@ -191,15 +197,25 @@ func serve() error {
 	}
 	record(guest.RootStep, switchRoot())
 	record("mount system filesystems", mountSystem())
-	record("harden the kernel", harden())
+	record("write the boot sysctls", writeBootSysctls())
+	record("raise the open-file limit", unix.Setrlimit(unix.RLIMIT_NOFILE, &unix.Rlimit{Cur: openFileLimit, Max: openFileLimit}))
 	cmdline, err := os.ReadFile("/proc/cmdline")
 	record("read the kernel command line", err)
 	cfg, err := guest.ParseCmdline(string(cmdline))
 	record("read the configuration", err)
 	record("mount volumes", mountVolumes(cfg.Mounts))
+	if programsErr := bindPrograms(cfg.Mounts); programsErr != nil {
+		slog.Warn("guest: load the agent programs from their disks; the home serves them", "error", programsErr)
+	}
 	record("mount checkouts", mountCheckouts(cfg.Checkouts))
 	record("configure the network", configureNetwork(cfg))
-	cgroup, err := newSessionCgroup("/sys/fs/cgroup", len(cfg.Checkouts) > 0)
+	// A session runs without swap, as a container on a host without it,
+	// rather than not at all.
+	swapErr := enableSwap(cfg.Swap)
+	if swapErr != nil {
+		slog.Warn("guest: turn on swap", "error", swapErr)
+	}
+	cgroup, err := newSessionCgroup("/sys/fs/cgroup", len(cfg.Checkouts) > 0, cfg.MemoryLimit)
 	record("create the session cgroup", err)
 	var procsDir *os.File
 	if cgroup != nil {
@@ -222,6 +238,8 @@ func serve() error {
 	record("forward sockets", forwardSockets(cfg.Sockets))
 	record("serve sockets", serveSockets(cfg.Serves))
 	record("listen on loopback ports", listenLoopbacks(cfg.Loopbacks))
+	record("start DAMON_RECLAIM", startDAMONReclaim(cfg.Swap > 0 && swapErr == nil))
+	go trimPageCache("/sys/fs/cgroup")
 
 	bootError := ""
 	if len(failures) > 0 {
@@ -229,10 +247,7 @@ func serve() error {
 	}
 	svc := newService(procs, cgroup, rand.Text(), bootError)
 	svc.powerOff = func() error { return unix.Reboot(unix.LINUX_REBOOT_CMD_POWER_OFF) }
-	svc.reclaim = func() {
-		dropCaches()
-		time.Sleep(pageReportingDelay)
-	}
+	svc.reclaim = dropCaches
 	svc.setClock = func(t time.Time) error {
 		ts := unix.NsecToTimespec(t.UnixNano())
 		return unix.ClockSettime(unix.CLOCK_REALTIME, &ts)
@@ -246,11 +261,6 @@ func serve() error {
 	slog.Info("guest: serving", "port", guest.APIPort, "boot_error", bootError)
 	return newServer(svc).Serve(hostOnly{listener})
 }
-
-// pageReportingDelay outlasts the 2 s free page reporting waits before it
-// hands freed guest pages to the host (the kernel's PAGE_REPORTING_DELAY),
-// so a save made at once would still write them.
-const pageReportingDelay = 3 * time.Second
 
 // hostOnly accepts only the host: through vsock loopback a process in the
 // VM could otherwise reach the helper and start processes as root.

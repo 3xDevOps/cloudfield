@@ -11,10 +11,10 @@ import (
 	"io"
 	"log/slog"
 	"os"
-	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -34,6 +34,7 @@ import (
 	"github.com/3xDevOps/Aether/internal/selfupdate"
 	"github.com/3xDevOps/Aether/internal/server"
 	"github.com/3xDevOps/Aether/internal/serversetup"
+	"github.com/3xDevOps/Aether/internal/serverunit"
 	"github.com/3xDevOps/Aether/internal/serverupdate"
 	"github.com/3xDevOps/Aether/internal/version"
 )
@@ -57,6 +58,7 @@ func main() {
 	}
 	if len(os.Args) > 1 && os.Args[1] == vm.MonitorCommand {
 		exitOn(vm.Monitor(os.Args[2:]))
+		return
 	}
 	if name := filepath.Base(os.Args[0]); name == "aether-internal" || name == "cloudfield-internal" {
 		os.Exit(coordcli.Main(os.Args[1:]))
@@ -131,63 +133,68 @@ func isHelpFlag(arg string) bool {
 // These commands take a subcommand before their flags, so without this
 // --help would be read as the subcommand or a device code.
 var subcommandHelp = map[string]string{
-	"config": `usage: aether-server config show [--config <file>]
-       aether-server config path [--config <file>]
-       aether-server config set <key> <value> [--config <file>]
-       aether-server config edit [--config <file>]
+	"config": `usage: cloudfield-server config show [--config <file>]
+       cloudfield-server config path [--config <file>]
+       cloudfield-server config set <key> <value> [--config <file>]
+       cloudfield-server config edit [--config <file>]
 
 show or change the options file serve reads; set and edit need root
 
 example:
-  sudo aether-server config set edge-access approved-devices
+  sudo cloudfield-server config set edge-access approved-devices
 `,
-	"device": `usage: aether-server device approve <code> [--config <file>]
-       aether-server device review [--config <file>]
+	"device": `usage: cloudfield-server device approve <code> [--config <file>]
+       cloudfield-server device review [--config <file>]
 
 approve a member's edge device by the code it shows, or review and revoke devices
 
 example:
-  sudo aether-server device approve <code>
+  sudo cloudfield-server device approve <code>
 `,
-	"dictation": `usage: aether-server dictation install [--gpu] [--config <file>]
-       aether-server dictation status [--config <file>]
-       aether-server dictation remove [--config <file>]
+	"dictation": `usage: cloudfield-server dictation install [--gpu] [--config <file>]
+       cloudfield-server dictation status [--config <file>]
+       cloudfield-server dictation remove [--config <file>]
 
 download the pinned speech-to-text engine and model into <data-dir>/dictation,
 report what is installed, or delete it (docs/dictation.md)
 
 example:
-  sudo aether-server dictation install
+  sudo cloudfield-server dictation install
 `,
-	"edge": `usage: aether-server edge status [--config <file>]
-       aether-server edge claim-code [--admin <member-id>] [--config <file>]
-       aether-server edge trust [--config <file>]
-       aether-server edge leave [--config <file>]
+	"edge": `usage: cloudfield-server edge status [--config <file>]
+       cloudfield-server edge claim-code [--admin <member-id>] [--config <file>]
+       cloudfield-server edge trust [--config <file>]
+       cloudfield-server edge move <address> [--config <file>]
+       cloudfield-server edge leave [--config <file>]
 
 status prints the edge, access policy, server id and connection; it exits 0
 when connected, 3 when not connected yet, and 1 on an error
 
+move sets edge-url to another address of the same edge, once that edge
+speaks edge protocol 6 or later and announces both addresses; links and
+connectors made at the old address keep working (docs/edge.md)
+
 example:
-  sudo aether-server edge status
+  sudo cloudfield-server edge status
 `,
-	"member": `usage: aether-server member role <member-id> <viewer|collaborator|admin|super_admin> [--config <file>]
+	"member": `usage: cloudfield-server member role <member-id> <viewer|collaborator|admin|super_admin> [--config <file>]
 
 set a member's role in the store; the last super admin is never demoted, and
 a member who owns workspaces stays an admin
 
 example:
-  sudo aether-server member role <member-id> super_admin
+  sudo cloudfield-server member role <member-id> super_admin
 `,
-	"slack": `usage: aether-server slack setup [--config <file>]
-       aether-server slack remove [--config <file>]
+	"slack": `usage: cloudfield-server slack setup [--config <file>]
+       cloudfield-server slack remove [--config <file>]
 
 store the Slack bot's tokens, which setup asks for with input hidden or reads
 from stdin, or remove them; restart the server to apply either (docs/slack.md)
 
 example:
-  sudo aether-server slack setup
+  sudo cloudfield-server slack setup
 `,
-	"vm": `usage: aether-server vm install [--config <file>]
+	"vm": `usage: cloudfield-server vm install [--config <file>]
 
 check for /dev/kvm, then install what sessions in VMs need: qemu-img,
 mkfs.ext4, virtiofsd, iptables, nft and ip with apt-get when missing, Cloud
@@ -195,15 +202,15 @@ Hypervisor, and this release's guest kernel at vm-kernel
 (docs/install.md#hosts-for-vm-sessions)
 
 example:
-  sudo aether-server vm install
+  sudo cloudfield-server vm install
 `,
-	"sysbox": `usage: aether-server sysbox status
-       aether-server sysbox install
+	"sysbox": `usage: cloudfield-server sysbox status
+       cloudfield-server sysbox install
 
 report or install the Sysbox runtime that lets sessions start their own Docker daemon
 
 example:
-  sudo aether-server sysbox install
+  sudo cloudfield-server sysbox install
 `,
 }
 
@@ -222,7 +229,7 @@ func exitOn(err error) {
 }
 
 func usage(w io.Writer) {
-	_, _ = fmt.Fprintf(w, `usage: aether-server <command>
+	_, _ = fmt.Fprintf(w, `usage: cloudfield-server <command>
 
 commands:
   serve    run the server
@@ -242,7 +249,7 @@ commands:
 serve and install options, which are also the config file keys:
   %s
 
-run "aether-server serve -h" for what each one does, or keep them in %s
+run "cloudfield-server serve -h" for what each one does, or keep them in %s
 `, joinOptions(), serversetup.DefaultConfigPath)
 }
 
@@ -301,14 +308,14 @@ func serveFlags(fs *flag.FlagSet) *serveOptions {
 	o.tailnetRequireKey = fs.Bool("tailnet-require-key", false, "additionally require pubkey verification on tailnet connections")
 	o.edgeURL = new(edgeURLValue)
 	fs.Var(o.edgeURL, "edge-url",
-		"edge that relays SSH for members without a direct or tailnet route (empty = off; aether-server setup offers "+edgeagent.DefaultURL+")")
+		"edge that relays SSH for members without a direct or tailnet route (empty = off; cloudfield-server setup offers "+edgeagent.DefaultURL+")")
 	o.edgeAccess = new(accessPolicyValue(edgeproto.PolicyApprovedDevices))
 	fs.Var(o.edgeAccess, "edge-access",
 		"who may reach this server through the edge: account (signing in with GitHub is enough) or approved-devices "+
 			"(each new device waits until a person approves it); changed only on this host")
 	o.edgeReviewer = fs.Bool("edge-reviewer", false,
 		"let a connector authorized by the edge's reviewer account, for an app directory's review, act as the member an admin binds it to "+
-			"with aether member link --reviewer; needs edge-access account; changed only on this host")
+			"with cloudfield member link --reviewer; needs edge-access account; changed only on this host")
 	o.conflictCoordination = fs.Bool("conflict-coordination", true, "let overlapping sessions exchange coordination messages")
 	o.agentUpdate = fs.Bool("agent-update", true, "update a shipped agent installed in the member home before launching it")
 	o.stallThreshold = fs.Duration("stall-threshold", 0,
@@ -321,9 +328,9 @@ func serveFlags(fs *flag.FlagSet) *serveOptions {
 	o.checkoutTTL = fs.Duration("checkout-ttl", 0,
 		"how long a finished session's checkout is kept before it is garbage-collected (0 = 72h, negative = never)")
 	o.runContainerTTL = fs.Duration("run-container-ttl", 0,
-		"how long explicitly closed Standard and Enhanced session containers are retained (0 = 168h, negative = no retention)")
+		"how long explicitly closed Standard and Enhanced session containers are retained (0 = 720h, or 168h for a container that stays frozen in memory; negative = no retention)")
 	o.runSleepAfter = fs.Duration("run-sleep-after", scheduler.DefaultRunSleepAfter,
-		"how long an idle Enhanced session of an agent that can resume its conversation, open or closed, keeps its container running before it is stopped until its next use (0 = never); "+
+		"how long an idle Enhanced session of an agent that can resume its conversation keeps its container running before it is stopped until its next use (0 = never); "+
 			"unset, an idle session VM is saved to disk after "+scheduler.DefaultVMSleepAfter.String()+" instead")
 	o.minFreeDisk = fs.Int64("min-free-disk", 0,
 		"free-byte reserve on data/runtime filesystems (0 = automatic 5-20GiB, negative = disable disk admission)")
@@ -346,6 +353,7 @@ func serveFlags(fs *flag.FlagSet) *serveOptions {
 func serve(args []string) error {
 	host := serverupdate.HostProcess()
 	if host.UnderSystemd() {
+		lowerOOMScore()
 		linkSecondNames(host)
 	}
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
@@ -563,19 +571,29 @@ func linkSecondNames(host serverupdate.Host) {
 	// reloads systemd itself, because a daemon-reload has host-wide effects.
 	if created {
 		go func() {
-			if !unitAliasResolved() {
-				slog.Warn("systemd does not resolve " + serverupdate.UnitAlias + " to " + serversetup.ServiceName +
+			if !serverunit.AliasResolves() {
+				slog.Warn("systemd does not resolve " + serverunit.Alias + " to " + serversetup.ServiceName +
 					" yet; it does after: sudo systemctl daemon-reload")
 			}
 		}()
 	}
 }
 
-// unitAliasResolved reports whether systemd loads the unit's second name
-// as the server's unit.
-func unitAliasResolved() bool {
-	out, err := exec.Command("systemctl", "show", "-p", "Id", "--value", serverupdate.UnitAlias).Output()
-	return err == nil && strings.TrimSpace(string(out)) == serversetup.ServiceName+".service"
+// lowerOOMScore lowers the server's OOM score to the unit's -500, which a
+// unit from before that line, left in place by updates, does not set. A
+// lower score an operator set stays.
+func lowerOOMScore() {
+	score, err := os.ReadFile("/proc/self/oom_score_adj")
+	current := 0
+	if err == nil {
+		current, err = strconv.Atoi(strings.TrimSpace(string(score)))
+	}
+	if err == nil && current > -500 {
+		err = os.WriteFile("/proc/self/oom_score_adj", []byte("-500"), 0)
+	}
+	if err != nil {
+		slog.Warn("could not set the server's OOM score; a host out of memory may kill it", "error", err)
+	}
 }
 
 // warnIfUnitOutdated tells the operator when the installed systemd unit, or

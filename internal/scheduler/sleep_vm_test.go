@@ -1,11 +1,15 @@
 package scheduler
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -13,7 +17,9 @@ import (
 
 	"github.com/3xDevOps/Aether/internal/acphost"
 	"github.com/3xDevOps/Aether/internal/acphost/acpmock"
+	"github.com/3xDevOps/Aether/internal/coordtransport"
 	"github.com/3xDevOps/Aether/internal/domain"
+	"github.com/3xDevOps/Aether/internal/events"
 	"github.com/3xDevOps/Aether/internal/runtime"
 )
 
@@ -35,10 +41,35 @@ type saveRuntime struct {
 	// restoreLate fails a restore only after it deleted the saved state
 	// and started the guest, as a failed clock set does.
 	restoreLate bool
+	// restoreHang holds a restore until its ctx ends, keeping the saved
+	// state, as a restore that never gets an answer from its VM does.
+	restoreHang bool
 	restores    int
+	// restoreTime is what was left of the last restore's ctx as it began.
+	restoreTime time.Duration
+	// commands holds the command each container starts from its disk with.
+	commands map[runtime.ID][]string
 }
 
 func (r *saveRuntime) Saves(runtime.ID) bool { return true }
+
+func (r *saveRuntime) SetCommand(_ context.Context, id runtime.ID, command []string) error {
+	r.saveMu.Lock()
+	defer r.saveMu.Unlock()
+	if r.commands == nil {
+		r.commands = map[runtime.ID][]string{}
+	}
+	r.commands[id] = command
+	return nil
+}
+
+func (r *saveRuntime) command(id runtime.ID) []string {
+	r.saveMu.Lock()
+	defer r.saveMu.Unlock()
+	return r.commands[id]
+}
+
+func (r *saveRuntime) SavedMemory(runtime.ID) (uint64, error) { return 0, nil }
 
 func (r *saveRuntime) Save(_ context.Context, id runtime.ID) error {
 	r.saveMu.Lock()
@@ -69,6 +100,14 @@ func (r *saveRuntime) Save(_ context.Context, id runtime.ID) error {
 func (r *saveRuntime) Restore(ctx context.Context, id runtime.ID) error {
 	r.saveMu.Lock()
 	r.restores++
+	if deadline, ok := ctx.Deadline(); ok {
+		r.restoreTime = time.Until(deadline)
+	}
+	if r.restoreHang {
+		r.saveMu.Unlock()
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	err, late, saved := r.restoreErr, r.restoreLate, r.saved[id]
 	if err == nil || late {
 		delete(r.saved, id)
@@ -80,7 +119,7 @@ func (r *saveRuntime) Restore(ctx context.Context, id runtime.ID) error {
 	case err != nil:
 		return err
 	case saved == "":
-		return errors.New("it has no saved state")
+		return runtime.ErrNotSaved
 	}
 	return r.restart(ctx, id, saved)
 }
@@ -191,24 +230,56 @@ func TestAVMSleepsBySavingAndWakesWithItsAgentRunning(t *testing.T) {
 	waitItems(t, e.sched, run.ID, "the wake's notice", noticed("Woke from sleep", "carry on where they were"))
 }
 
-// Work that still runs keeps a VM awake as it keeps a container: an agent's
-// background task, and in a VM also a guest that uses the CPU.
-func TestRunningWorkKeepsAVMAwake(t *testing.T) {
+// A save keeps every process, so a dev server keeps a VM awake only while
+// it uses the CPU, whether the agent runs it as a background shell or a
+// terminal has it in the foreground.
+func TestOnlyBusyWorkKeepsAVMAwake(t *testing.T) {
 	t.Parallel()
 	e, _, sr := newSaveEnv(t, false)
-	task := e.launchClaudeACP(t, acpmock.PromptDevServer)
-	waitItems(t, e.sched, task.ID, "the task's turn", turnEnded("end_turn", 1))
-	e.stayAwake(t, task.ID, "the agent's dev server ran")
-
-	run := e.launchACP(t, "say pong")
-	waitItems(t, e.sched, run.ID, "the turn", turnEnded("end_turn", 1))
-	e.onGuestCPU("60")
+	run := e.launchClaudeACP(t, acpmock.PromptDevServer)
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	var cpu atomic.Value
+	cpu.Store("150")
+	e.rt.mu.Lock()
+	e.rt.execHandler = func(_ runtime.ID, argv []string) (int, string, error) {
+		switch {
+		case slices.Contains(argv, guestCPUScript):
+			return 0, cpu.Load().(string) + "\n", nil
+		case slices.Contains(argv, foregroundJobScript):
+			return 0, "next-server\n", nil
+		}
+		return 0, "", nil
+	}
+	e.rt.mu.Unlock()
+	e.waitIdle(t, run.ID)
 	e.stayAwake(t, run.ID, "the guest was busy")
-	e.onGuestCPU("1")
+	cpu.Store("20")
 	e.sleepRun(t, run.ID)
 	if !sr.isSaved(e.cid(t, run.ID)) {
 		t.Fatal("the VM was not saved once idle")
 	}
+}
+
+// Work the agent waits for, such as a workflow or a monitor, keeps a VM
+// awake: a save would freeze it, and the turn that reports on it with it.
+func TestWorkTheAgentWaitsForKeepsAVMAwake(t *testing.T) {
+	t.Parallel()
+	e, _, _ := newSaveEnv(t, false)
+	run := e.launchClaudeACP(t, acpmock.PromptHold)
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	waitFor(t, "the workflow held", func() bool { return e.sched.acp.session(run.ID).State().Background })
+	e.stayAwake(t, run.ID, "the agent waited for its workflow")
+}
+
+// waitIdle waits until nothing in run's own state keeps it awake, so a sweep
+// reaches the probes of what runs in its container or VM.
+func (e *testEnv) waitIdle(t *testing.T, run domain.RunID) {
+	t.Helper()
+	waitFor(t, "the session idle", func() bool {
+		e.sched.mu.Lock()
+		defer e.sched.mu.Unlock()
+		return e.sched.liveFactsLocked(e.sched.runs[run]).busy == ""
+	})
 }
 
 // A save that fails, as one of a VM that still shares a folder, leaves the
@@ -380,8 +451,9 @@ func TestAVMWhoseStateCannotBeRestoredStartsFromItsDisk(t *testing.T) {
 	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
 	e.sleepRun(t, run.ID)
 	sr.saveMu.Lock()
-	sr.restoreErr = errors.New("restore: the saved state was written by another kernel")
+	sr.restoreErr = errors.New("restore: the saved state was written by another kernel\nconsole.log:\nKernel panic")
 	sr.saveMu.Unlock()
+	sub := e.subscribe(t)
 
 	if _, err := e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "after sleep"}, false, nil); err != nil {
 		t.Fatalf("a prompt to a session whose state is lost: %v", err)
@@ -395,6 +467,40 @@ func TestAVMWhoseStateCannotBeRestoredStartsFromItsDisk(t *testing.T) {
 	}
 	waitItems(t, e.sched, run.ID, "a turn after the fallback", turnEnded("end_turn", 2))
 	waitItems(t, e.sched, run.ID, "the fallback's notice", noticed("Woke from sleep", "another kernel"))
+	note := waitTimelineEvent(t, sub, run.ID, events.TimelineNote).Payload.(events.TimelinePayload).Message
+	if !strings.Contains(note, "Processes and terminals that were running were stopped") || !strings.HasSuffix(note, "another kernel") {
+		t.Fatalf("the timeline says %q of a wake that lost the session's processes", note)
+	}
+}
+
+// A wake that started a session from its disk and then could not reattach
+// to it saves it again with no processes: the timeline and the wake's error
+// still say what was lost.
+func TestAColdStartWhoseReattachFailsNotesTheLostProcesses(t *testing.T) {
+	t.Parallel()
+	e, rt, sr := newSaveEnv(t, true)
+	run := e.launchACP(t, "say pong")
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	e.sleepRun(t, run.ID)
+	sr.saveMu.Lock()
+	sr.restoreErr = errors.New("restore: the saved state was written by another kernel\nconsole.log:\nKernel panic")
+	sr.saveMu.Unlock()
+	rt.mu.Lock()
+	rt.startErr = errors.New("the agent did not start")
+	rt.mu.Unlock()
+	sub := e.subscribe(t)
+
+	err := e.sched.WakeRun(t.Context(), run.ID, e.member.ID)
+	if err == nil || !strings.Contains(err.Error(), "the agent did not start") || !strings.Contains(err.Error(), "without its processes, as its restore failed: restore: the saved state was written by another kernel") || strings.Contains(err.Error(), "Kernel panic") {
+		t.Fatalf("WakeRun = %v; want the reattach's error and the first line of the restore's", err)
+	}
+	if !sr.isSaved(e.cid(t, run.ID)) {
+		t.Fatal("the cold-started VM was not saved again")
+	}
+	note := waitTimelineEvent(t, sub, run.ID, events.TimelineNote).Payload.(events.TimelinePayload).Message
+	if !strings.Contains(note, "Processes and terminals that were running were stopped") || !strings.HasSuffix(note, "another kernel") {
+		t.Fatalf("the timeline says %q of a wake that lost the session's processes", note)
+	}
 }
 
 // An agent that cannot restore its conversation in a new process keeps its
@@ -427,6 +533,29 @@ func TestAFailedRestoreOfAnAgentThatCannotResumeKeepsItsState(t *testing.T) {
 	}
 }
 
+// A VM that stopped while asleep before it was saved, as one the kernel
+// killed while a server restart had it waiting for its save, starts again
+// from its disk on the next wake, whatever its agent.
+func TestAWakeStartsAVMThatStoppedBeforeItWasSavedFromItsDisk(t *testing.T) {
+	t.Parallel()
+	e, _, sr := newSaveEnv(t, false)
+	run := e.launchACP(t, "say pong")
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	e.sleepRun(t, run.ID)
+	sr.saveMu.Lock()
+	delete(sr.saved, e.cid(t, run.ID))
+	sr.saveMu.Unlock()
+	e.sched.mu.Lock()
+	e.sched.runs[run.ID].asleepSaved = false
+	e.sched.mu.Unlock()
+	if _, err := e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "wake"}, false, nil); err != nil {
+		t.Fatalf("Inject = %v, want the VM started from its disk", err)
+	}
+	if got, _ := e.db.GetRun(t.Context(), run.ID); got.Status.Terminal() || containerState(e.container(t, run.ID)) != "running" {
+		t.Fatalf("the session is %s in a %s VM, want it open and running", got.Status, containerState(e.container(t, run.ID)))
+	}
+}
+
 // A restore that failed once the guest ran left the VM running with every
 // process; the wake takes it up.
 func TestAWakeTakesUpAGuestAFailedRestoreLeftRunning(t *testing.T) {
@@ -447,7 +576,9 @@ func TestAWakeTakesUpAGuestAFailedRestoreLeftRunning(t *testing.T) {
 	waitItems(t, e.sched, run.ID, "a turn after the wake", turnEnded("end_turn", 2))
 }
 
-func TestAClosedVMIsSavedAndRelaunchRestoresIt(t *testing.T) {
+// A closed VM keeps its disks and no memory, and Relaunch starts it from
+// them with a command that does not run the task again.
+func TestAClosedVMKeepsOnlyItsDisksAndRelaunchStartsItFromThem(t *testing.T) {
 	t.Parallel()
 	e, rt, sr := newSaveEnv(t, false)
 	run := e.launchACP(t, "say pong")
@@ -456,23 +587,20 @@ func TestAClosedVMIsSavedAndRelaunchRestoresIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	cid := e.cid(t, run.ID)
-	if state := e.sched.Sleep(run.ID); state.AsleepSince == nil || !state.Saved || sr.savedFrom(cid) != "paused" {
-		t.Fatalf("a closed VM was not saved paused at the close: %+v, saved from %q", state, sr.savedFrom(cid))
-	}
-	if e.rt.byName(string(run.ID)) == nil {
-		t.Fatal("the save destroyed the retained VM")
+	if state := e.sched.Sleep(run.ID); state.AsleepSince == nil || state.Saved || sr.isSaved(cid) || containerState(e.container(t, run.ID)) != "stopped" {
+		t.Fatalf("a closed VM was not stopped without saved memory at the close: %+v, container %s", state, containerState(e.container(t, run.ID)))
 	}
 
 	s2 := e.restartACP(t)
-	if state := s2.Sleep(run.ID); state.AsleepSince == nil || !state.Saved {
-		t.Fatalf("the restart lost the closed session's saved state: %+v", state)
+	if state := s2.Sleep(run.ID); state.AsleepSince == nil || state.Saved {
+		t.Fatalf("the restart lost the closed session's stop: %+v", state)
 	}
 	before := len(rt.all())
 	if _, err := s2.Relaunch(t.Context(), run.ID, e.member.ID); err != nil {
 		t.Fatalf("Relaunch: %v", err)
 	}
-	if sr.restores != 1 || containerState(e.container(t, run.ID)) != "running" {
-		t.Fatalf("Relaunch did not restore the VM: %d restores", sr.restores)
+	if containerState(e.container(t, run.ID)) != "running" || !slices.Equal(sr.command(cid), wrapTUICommand(nil)) {
+		t.Fatalf("Relaunch left the VM %s with the command %q, want it running a bare shell", containerState(e.container(t, run.ID)), sr.command(cid))
 	}
 	if methods := rt.all()[before].agent.Methods(); !slices.Contains(methods, acp.AgentMethodSessionResume) {
 		t.Fatalf("reopened with %v, want session/resume", methods)
@@ -481,9 +609,109 @@ func TestAClosedVMIsSavedAndRelaunchRestoresIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitItems(t, s2, run.ID, "a turn after reopening", turnEnded("end_turn", 2))
+	waitItems(t, s2, run.ID, "the relaunch's notice", noticed("Relaunched", "from its disk"))
 }
 
-func TestARelaunchOfAClosedVMThatFailsAfterTheRestoreCanBeRetried(t *testing.T) {
+// forgetConversations makes every agent started from now on refuse to
+// restore a conversation, as omp's does.
+func forgetConversations(rt *acpRuntime) {
+	fix := bytes.Replace(rt.fixture.Initialize, []byte(`"loadSession": true`), []byte(`"loadSession": false`), 1)
+	rt.fixture.Initialize = bytes.Replace(fix, []byte(`"resume": {}`), []byte(`"list": {}`), 1)
+}
+
+// An agent that cannot restore its conversation starts a new one in a VM
+// that started from its disk with no saved memory to go back to: a closed
+// session's, and an open one's whose saved memory is gone.
+func TestAVMStartedFromItsDiskStartsANewConversationWhenTheAgentCannotRestoreIts(t *testing.T) {
+	t.Parallel()
+	for _, closed := range []bool{true, false} {
+		t.Run(map[bool]string{true: "closed", false: "asleep"}[closed], func(t *testing.T) {
+			t.Parallel()
+			e, rt, sr := newSaveEnv(t, false)
+			run := e.launchACP(t, "say pong")
+			waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+			forgetConversations(rt)
+			var err error
+			if closed {
+				if err = e.sched.CloseRun(t.Context(), run.ID, e.member.ID, domain.RunMerged); err == nil {
+					_, err = e.sched.Relaunch(t.Context(), run.ID, e.member.ID)
+				}
+			} else {
+				e.sleepRun(t, run.ID)
+				if err = sr.Stop(t.Context(), e.cid(t, run.ID), 0); err == nil {
+					_, err = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "wake"}, false, nil)
+				}
+			}
+			if err != nil {
+				t.Fatalf("starting the session from its disk: %v", err)
+			}
+			execs := rt.all()
+			if methods := execs[len(execs)-1].agent.Methods(); !slices.Contains(methods, acp.AgentMethodSessionNew) {
+				t.Fatalf("the agent started from disk called %v, want session/new", methods)
+			}
+			waitItems(t, e.sched, run.ID, "the new conversation's notice", noticed("Started a new agent conversation", "could not be restored"))
+			if _, err := e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "carry on"}, false, nil); err != nil {
+				t.Fatalf("a prompt to the new conversation: %v", err)
+			}
+		})
+	}
+}
+
+// A closed Standard VM starts from its disk with the agent's terminal on the
+// conversation it reported, with a new one ready for when that is gone, or
+// on a new one when it reported none, and never with its launch command,
+// which holds the task.
+func TestARelaunchedStandardVMReopensItsConversationInsteadOfRunningItsTask(t *testing.T) {
+	t.Parallel()
+	for _, session := range []string{"sess-1", ""} {
+		t.Run("session "+session, func(t *testing.T) {
+			t.Parallel()
+			var sr *saveRuntime
+			e := newSwitchEnv(t, func(cfg *Config) {
+				sr = &saveRuntime{acpRuntime: cfg.Runtime.(*acpRuntime), saved: map[runtime.ID]string{}}
+				cfg.Runtime = sr
+			})
+			run := e.launch(t, "fix the flaky test", domain.LaunchTUI)
+			waitFor(t, "the container running", func() bool { return containerState(e.container(t, run.ID)) == "running" })
+			e.sched.mu.Lock()
+			e.sched.runs[run.ID].agentSessionID = session
+			e.sched.mu.Unlock()
+			if err := e.sched.CloseRun(t.Context(), run.ID, e.member.ID, domain.RunMerged); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := e.sched.Relaunch(t.Context(), run.ID, e.member.ID); err != nil {
+				t.Fatalf("Relaunch: %v", err)
+			}
+			supervisor := wrapTUICommand(nil)
+			if session != "" {
+				supervisor = wrapResumeCommand(nil)
+			}
+			command := sr.command(e.cid(t, run.ID))
+			if len(command) < 3 || !slices.Equal(command[:len(command)-3], supervisor) {
+				t.Fatalf("the VM starts from its disk with %q, want the supervisor running a script", command)
+			}
+			omp := func(what, script string, resume bool) {
+				t.Helper()
+				if strings.Contains(script, "fix the flaky test") || !strings.Contains(script, "exec 'omp' '--auto-approve'") || strings.Contains(script, "'--resume=sess-1'") != resume {
+					t.Fatalf("%s is %q, want omp without the task, resuming the conversation: %v", what, script, resume)
+				}
+			}
+			omp("the script", command[len(command)-1], session != "")
+			if session != "" {
+				next, err := os.ReadFile(filepath.Join(e.coord.root, string(run.ID), coordtransport.NextCommandName))
+				if err != nil {
+					t.Fatal(err)
+				}
+				omp("the new conversation for a resume that fails", string(next), false)
+			}
+			if got, _ := e.db.GetRun(t.Context(), run.ID); got.Status != domain.RunRunning || containerState(e.container(t, run.ID)) != "running" {
+				t.Fatalf("the relaunched session is %s in a %s VM", got.Status, containerState(e.container(t, run.ID)))
+			}
+		})
+	}
+}
+
+func TestARelaunchOfAClosedVMThatFailsCanBeRetried(t *testing.T) {
 	t.Parallel()
 	e, _, sr := newSaveEnv(t, false)
 	run := e.launchACP(t, "say pong")
@@ -491,7 +719,6 @@ func TestARelaunchOfAClosedVMThatFailsAfterTheRestoreCanBeRetried(t *testing.T) 
 	if err := e.sched.CloseRun(t.Context(), run.ID, e.member.ID, domain.RunMerged); err != nil {
 		t.Fatal(err)
 	}
-	cid := e.cid(t, run.ID)
 	e.rt.mu.Lock()
 	e.rt.attachHook = func(context.Context, runtime.ID) (runtime.Attachment, error) {
 		return nil, errors.New("attach refused")
@@ -500,8 +727,8 @@ func TestARelaunchOfAClosedVMThatFailsAfterTheRestoreCanBeRetried(t *testing.T) 
 	if _, err := e.sched.Relaunch(t.Context(), run.ID, e.member.ID); err == nil {
 		t.Fatal("Relaunch succeeded with its attach refused")
 	}
-	if from := sr.savedFrom(cid); from != "paused" {
-		t.Fatalf("the failed Relaunch saved the closed VM from %q, want paused", from)
+	if state := e.sched.Sleep(run.ID); state.AsleepSince == nil || sr.isSaved(e.cid(t, run.ID)) || containerState(e.container(t, run.ID)) != "stopped" {
+		t.Fatalf("the failed Relaunch left the closed VM %s, %+v; want it stopped on its disks again", containerState(e.container(t, run.ID)), state)
 	}
 	e.rt.mu.Lock()
 	e.rt.attachHook = nil
@@ -510,7 +737,30 @@ func TestARelaunchOfAClosedVMThatFailsAfterTheRestoreCanBeRetried(t *testing.T) 
 		t.Fatalf("Relaunch after a failed one: %v", err)
 	}
 	if containerState(e.container(t, run.ID)) != "running" {
-		t.Fatal("the second Relaunch left the VM paused")
+		t.Fatal("the second Relaunch left the VM stopped")
+	}
+}
+
+// A closed VM whose close could not stop it stays awake for the sleep sweep
+// and the memory guard to stop. A restart that finds one marked asleep and
+// still up, as a server stopped mid-stop leaves it, stops it without saving
+// its memory.
+func TestARestartStopsAClosedVMWithoutSavingIt(t *testing.T) {
+	t.Parallel()
+	e, _, sr := newSaveEnv(t, false)
+	run := e.launchACP(t, "say pong")
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	e.closeFrozen(t, run.ID)
+	e.sched.mu.Lock()
+	entry := e.sched.runs[run.ID]
+	e.sched.mu.Unlock()
+	if err := e.sched.markAsleep(entry); err != nil {
+		t.Fatal(err)
+	}
+	s2 := e.restartACP(t)
+	waitFor(t, "the closed VM stopped", func() bool { return containerState(e.container(t, run.ID)) == "stopped" })
+	if state := s2.Sleep(run.ID); state.AsleepSince == nil || state.Saved || sr.isSaved(e.cid(t, run.ID)) {
+		t.Fatalf("the restart left the closed VM %+v, saved %v; want it asleep on its disks", state, sr.isSaved(e.cid(t, run.ID)))
 	}
 }
 
@@ -531,6 +781,73 @@ func TestASavedRunWakesWithItsAgentAfterARestart(t *testing.T) {
 		t.Fatalf("the wake after a restart did not reattach to the saved agent: %d restores, %d agents", sr.restores, len(rt.all()))
 	}
 	waitItems(t, s2, run.ID, "a turn after the restart", turnEnded("end_turn", 2))
+}
+
+// A stop that cuts a wake short while it reattaches to the agent's keeper
+// leaves the keeper running and recorded, and the next server's wake adopts
+// it instead of starting another agent beside it.
+func TestAStopDuringAWakesReattachKeepsTheAgentForTheNextServer(t *testing.T) {
+	t.Parallel()
+	e, rt, _ := newSaveEnv(t, false)
+	run := e.launchACP(t, "say pong")
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	e.sleepRun(t, run.ID)
+	rt.mu.Lock()
+	rt.onAttach = func() error {
+		e.sched.superCancel()
+		return context.Canceled
+	}
+	rt.mu.Unlock()
+	if _, err := e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "during the stop"}, false, nil); err == nil {
+		t.Fatal("a wake the stop cut short reported success")
+	}
+	rt.mu.Lock()
+	rt.onAttach = nil
+	rt.mu.Unlock()
+	if sc, err := e.sched.readSidecar(run.ID); err != nil || sc.AgentKeeper == nil || len(rt.all()) != 1 || rt.all()[0].exited() {
+		t.Fatalf("the cut wake left the sidecar %+v, %v and %d agents, the first exited %v; want the keeper recorded and running alone",
+			sc, err, len(rt.all()), rt.all()[0].exited())
+	}
+
+	s2 := e.restartACP(t)
+	if _, err := s2.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "after restart"}, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	if !adopted(rt) {
+		t.Fatalf("the next server's wake did not adopt the keeper: %d agents", len(rt.all()))
+	}
+	waitItems(t, s2, run.ID, "a turn after the restart", turnEnded("end_turn", 2))
+}
+
+// Low disk takes a closed session's VM, whose work is on its branch, before
+// the saved memory of an open one, and leaves one a Relaunch is starting:
+// its capacity reservation is what runs the reclaim.
+func TestDiskReclaimRemovesAClosedVMBeforeAnOpenSessionsSavedMemory(t *testing.T) {
+	t.Parallel()
+	e, _, sr := newSaveEnv(t, true)
+	open := e.launchACP(t, "say pong")
+	waitItems(t, e.sched, open.ID, "the open session's turn", turnEnded("end_turn", 1))
+	e.sleepRun(t, open.ID)
+	var closed [2]*domain.Run
+	for i := range closed {
+		closed[i] = e.launchACP(t, "say pong")
+		waitItems(t, e.sched, closed[i].ID, "the closed session's turn", turnEnded("end_turn", 1))
+		if err := e.sched.CloseRun(t.Context(), closed[i].ID, e.member.ID, domain.RunMerged); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.sched.mu.Lock()
+	e.sched.runs[closed[0].ID].relaunching++
+	e.sched.mu.Unlock()
+	var steps []string
+	e.sched.reclaimSessions(t.Context(), "", func(step string) bool {
+		steps = append(steps, step)
+		return true
+	})
+	if !slices.Equal(steps, []string{"closed session container"}) || e.rt.byName(string(closed[1].ID)) != nil ||
+		e.rt.byName(string(closed[0].ID)) == nil || !sr.isSaved(e.cid(t, open.ID)) {
+		t.Fatalf("reclaim freed %q; want only the VM of the closed session nobody is relaunching, with the open session's saved memory kept", steps)
+	}
 }
 
 func TestDiskReclaimDropsASavedStateAndTheWakeStartsFromDisk(t *testing.T) {

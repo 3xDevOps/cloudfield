@@ -161,7 +161,7 @@ function ComposerBox({ textarea, autoFocus, value, onChange, onCaret, onFocusCha
       <DictationNotice textarea={textarea} className="mb-2" />
       {menu}
       {drop.count !== null && <DropOverlay count={drop.count} refused={drop.refused} blocked={room.blocked} limit={room.limit} />}
-      <div className={cn('overflow-hidden rounded-composer border border-seam bg-chrome', focused && 'border-control')}>
+      <div className={cn('@container overflow-hidden rounded-composer border border-seam bg-chrome', focused && 'border-control')}>
       {images}
       <Textarea
         variant="embedded"
@@ -208,7 +208,7 @@ function ComposerBox({ textarea, autoFocus, value, onChange, onCaret, onFocusCha
           }
         }}
       />
-      <div className="flex min-w-0 flex-wrap items-center gap-1 px-2 pb-2">{footer}</div>
+      <div className="wrap-from-end min-w-0 items-center gap-1 px-2 pb-2">{footer}</div>
       </div>
     </div>
   )
@@ -232,15 +232,16 @@ function SendActions({ pill, label, hint, description, disabled, onClick, onCanc
 }) {
   const look = pillLook[pill]
   const tip = [hint ? `${look.label} (${hint})` : look.label, description].filter(Boolean).join('. ')
-  const icon = <look.Icon className={cn((pill === 'interrupt' || pill === 'stop-waiting') && 'fill-current')} />
+  const stop = pill === 'interrupt' ? 'Interrupt the agent' : pill === 'stop-waiting' ? 'Stop waiting for background work' : undefined
+  const icon = <look.Icon className={cn(stop && 'size-3 fill-current coarse:size-4')} />
   return (
     <div className="ml-auto flex shrink-0 items-center gap-1">
       {dictation}
       {onCancel && <Button size="sm" variant="ghost" onClick={onCancel}>Cancel</Button>}
       <Tooltip content={tip}>
         <span className="inline-flex">
-          {pill === 'send' && label === look.label ? (
-            <Button size="round" variant={look.variant} label={look.label} hint={false} disabled={disabled} onClick={onClick}>
+          {(pill === 'send' || stop) && label === look.label ? (
+            <Button size="round" variant={look.variant} label={stop ?? look.label} hint={false} disabled={disabled} onClick={onClick}>
               {icon}
             </Button>
           ) : (
@@ -248,7 +249,7 @@ function SendActions({ pill, label, hint, description, disabled, onClick, onCanc
               size="pill"
               variant={look.variant}
               hint={false}
-              aria-label={pill === 'interrupt' ? 'Interrupt the agent' : pill === 'stop-waiting' ? 'Stop waiting for background work' : undefined}
+              aria-label={stop}
               disabled={disabled}
               onClick={onClick}
             >
@@ -333,8 +334,10 @@ function StandardComposer({ run, agent, room, textarea, autoFocus, onFocusChange
         attach={{ images, disabled: attachOff }}
         footer={(
           <>
-            <AttachButton images={images} disabled={attachOff} textarea={textarea} />
-            <TemplateInsert run={run} textarea={textarea} disabled={busy} />
+            <div className="flex items-center gap-1">
+              <AttachButton images={images} disabled={attachOff} textarea={textarea} />
+              <TemplateInsert run={run} textarea={textarea} disabled={busy} />
+            </div>
             <SendActions
               pill="send"
               label={late ? stillWaiting : busy ? 'Sending…' : 'Send'}
@@ -399,24 +402,30 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
 
   const maySteer = allowed('steer', self, { owner: run.member_id, protected: run.protected, steerOthers })
   const state = session?.state
+  const stream = session?.stream
+  const connecting = stream === 'live' || stream === 'refused' ? undefined : stream === 'reconnecting' || stream === 'offline' ? 'Reconnecting to the agent…' : 'Connecting to the agent…'
+  // Control and the background wait read as off while the stream is down: the composer keeps its last live shape.
+  const lastLive = useRef<{ canAct: boolean; waiting: boolean }>(undefined)
+  if (stream === 'live') lastLive.current = { canAct: control.canAct, waiting: backgroundWait(run, session) !== null }
+  const shape = lastLive.current
   const gate = enhancedBlock({
     run,
     maySteer,
     canReopen: maySteer && cap.hasMethod('run.relaunch') && canReopenRun(run),
-    stream: session?.stream,
-    streamError: session?.streamError,
-    sessionLive: session?.live ?? false,
+    refused: stream === 'refused' ? session?.streamError ?? 'The agent stream was refused.' : undefined,
+    sessionLive: shape ? session?.live ?? false : true,
     pending: session?.pending.length ?? 0,
-    hasLease: control.canAct,
+    hasLease: shape?.canAct ?? true,
   })
-  const moderated = !control.canAct
+  const moderated = !shape?.canAct
   const turnRunning = state?.turn_in_flight ?? false
-  const waiting = backgroundWait(run, session) !== null
+  const waiting = shape?.waiting ?? false
+  const blocked = Boolean(gate || connecting)
   // A sleeping session's agent reports its prompt types once a wake starts it.
   const supportsImages = state?.prompt_images === true || Boolean(run.asleep_since)
-  const images = useComposerImages(run.id, !gate && cap.hasMethod('terminal.file'))
-  const attachOff = busy || !cap.hasMethod('terminal.file')
-  const drop = dropRoom(images, Boolean(gate) || attachOff)
+  const images = useComposerImages(run.id, !blocked && cap.hasMethod('terminal.file'))
+  const attachOff = busy || blocked || !cap.hasMethod('terminal.file')
+  const drop = dropRoom(images, attachOff)
   useEffect(() => onDropStatus?.({ ...drop, upload: images.upload }), [drop.blocked, drop.limit, images.upload, onDropStatus])
   const refusedImages = !supportsImages && hasImages(images.previews)
   const hasContent = Boolean(body.trim()) || images.previews.length > 0
@@ -446,11 +455,11 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
   const modelOption = state?.config_options?.find((option) => option.category === 'model' && option.type === 'select')
   const modelName = (modelOption && currentChoice(modelOption)?.name) ?? run.model
   const canCompact = state?.commands?.some((command) => command.name === 'compact') ?? false
-  const compactBlock = moderated
+  const compactBlock = connecting ?? (moderated
     ? 'Take control of the conversation to compact it.'
     : busy || hasContent
       ? 'Clear the message box first, so nothing you typed is replaced.'
-      : undefined
+      : undefined)
   const compact = () => {
     setBody('/compact ')
     setCaret(9)
@@ -461,13 +470,15 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
   }
 
   const attempt = async (action: () => Promise<unknown>) => {
-    if (composerDraft(run.id).busy) return
+    if (composerDraft(run.id).busy) return false
     const request = beginDraftRequest(run.id, 'busy', { error: undefined, busyPrompt: false })
     try {
       await action()
       request.settle()
+      return true
     } catch (err) {
       request.settle({ error: message(err) })
+      return false
     }
   }
 
@@ -502,7 +513,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
   }
 
   const act = (chosen: Pill) => {
-    if (composerDraft(run.id).busy || images.isUploading()) return
+    if (connecting || composerDraft(run.id).busy || images.isUploading()) return
     if (moderated) void deliver(false)
     else control.withControl(() => perform(chosen))
   }
@@ -522,7 +533,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
     }
   }
 
-  const setOption = (option: ConfigOption, value: string) => new Promise<void>((resolve) => {
+  const setOption = (option: ConfigOption, value: string) => new Promise<boolean>((resolve) => {
     control.withControl(() => {
       const lease = sessionLease(useStore, run.id)
       return attempt(() => lease ? api.runACPSetOption(run.id, option.id, value, lease) : Promise.reject(new Error(optionUnsent))).then(resolve)
@@ -538,19 +549,21 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
           reason={gate.reason}
           failure={gate.interrupt ? error : undefined}
           action={gate.interrupt && turnRunning && (
-            <Button size="sm" variant={mobile ? 'secondary' : 'danger'} aria-label="Interrupt the agent" hint={pillHint.interrupt} disabled={busy} onClick={() => act('interrupt')}>
+            <Button size="sm" variant={mobile ? 'secondary' : 'danger'} aria-label="Interrupt the agent" hint={pillHint.interrupt} disabled={busy || Boolean(connecting)} onClick={() => act('interrupt')}>
               <Square className="fill-current" />
               Interrupt
             </Button>
           )}
         />
+        {gate.interrupt && <p role="status" className="sr-only">{connecting}</p>}
       </ComposerFrame>
     )
   }
 
-  const pillDisabled = busy || images.uploading || (pill !== 'interrupt' && pill !== 'stop-waiting' && pill !== 'resume' && (!images.ready || !hasContent || refusedImages || dictating))
-  const hintText = moderated ? (control.waits ? 'Delivers in 45 s unless the controller decides sooner.' : '') : turnRunning || pill === 'stop-waiting' || pill === 'resume' ? pillHint[pill] : ''
-  const keyHint = coarse || pill === 'stop-waiting' ? undefined : pill === 'steer' ? `${shortcutLabel('composer-send')}; ${shortcutLabel('composer-queue')} queues` : shortcutLabel(pill === 'queue' && state?.steering ? 'composer-queue' : 'composer-send')
+  const stops = pill === 'interrupt' || pill === 'stop-waiting'
+  const pillDisabled = busy || Boolean(connecting) || images.uploading || (!stops && pill !== 'resume' && (!images.ready || !hasContent || refusedImages || dictating))
+  const hintText = connecting ?? (moderated ? (control.waits ? 'Delivers in 45 s unless the controller decides sooner.' : '') : turnRunning || pill === 'stop-waiting' || pill === 'resume' ? pillHint[pill] : '')
+  const keyHint = coarse || stops ? undefined : pill === 'steer' ? `${shortcutLabel('composer-send')}; ${shortcutLabel('composer-queue')} queues` : shortcutLabel(pill === 'queue' && state?.steering ? 'composer-queue' : 'composer-send')
 
   return (
     <ComposerFrame>
@@ -578,14 +591,16 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
         attach={{ images, disabled: attachOff }}
         footer={(
           <>
-            <AttachButton
-              images={images}
-              disabled={attachOff}
-              textarea={textarea}
-              unsupported={refusedImages ? 'This agent does not support image prompts.' : undefined}
-            />
-            <TemplateInsert run={run} textarea={textarea} disabled={busy} />
-            <OptionPills options={state?.config_options ?? []} disabled={busy || moderated} onSet={setOption} />
+            <div className="flex items-center gap-1">
+              <AttachButton
+                images={images}
+                disabled={attachOff}
+                textarea={textarea}
+                unsupported={refusedImages ? 'This agent does not support image prompts.' : undefined}
+              />
+              <TemplateInsert run={run} textarea={textarea} disabled={busy} />
+            </div>
+            <OptionPills options={state?.config_options ?? []} disabled={busy || moderated || Boolean(connecting)} onSet={setOption} />
             {state?.usage && state.usage.size > 0 && (
               <ContextWindow
                 runID={run.id}
@@ -597,7 +612,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
             )}
             <SendActions
               pill={pill}
-              label={late ? stillWaiting : busy ? 'Sending…' : pillLook[pill].label}
+              label={late ? stillWaiting : busy && draft.busyPrompt ? 'Sending…' : pillLook[pill].label}
               hint={keyHint}
               description={hintText}
               disabled={pillDisabled}
@@ -625,7 +640,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
           if (hasContent) act(turnRunning ? 'queue' : 'send')
         }}
         onEscape={onEscape}
-        placeholder={turnRunning || waiting ? 'Message the agent while it works' : notFinishedYet(run) ? 'Say what is left to do, / for commands, @ for files' : 'Message the agent, / for commands, @ for files'}
+        placeholder={connecting ?? (turnRunning || waiting ? 'Message the agent while it works' : notFinishedYet(run) ? 'Say what is left to do, / for commands, @ for files' : 'Message the agent, / for commands, @ for files')}
         describedBy={hintID}
         combobox={{ expanded: suggestions.length > 0, controls: listID, active: suggestions.length ? `${listID}-${current}` : undefined }}
         menu={<SuggestionList id={listID} items={suggestions} active={current} onPick={pick} />}
@@ -649,6 +664,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
         }}
       />
       <ComposerHint id={hintID} uploading={images.uploading} description={hintText} />
+      <p role="status" className="sr-only">{connecting}</p>
     </ComposerFrame>
   )
 }

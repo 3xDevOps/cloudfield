@@ -109,20 +109,41 @@ func (s *Scheduler) Relaunch(ctx context.Context, run domain.RunID, actor domain
 		return nil, fmt.Errorf("%w: session %s predates the narrowed account share, and its container still mounts the account owner's whole home; it stays closed, so launch a new session",
 			ErrInvalidTransition, run)
 	}
-	// Outside lifecycleMu: the disk reclaim a reservation may run can pick
-	// this closed run and take its lock. A sleep that finishes before the
-	// lock is taken makes the run reserve and take it again.
+	// Outside lifecycleMu: the disk reclaim a reservation may run takes the
+	// lock of each closed run it looks at, and leaves one being relaunched.
+	// A save under way finishes first, so the wake is measured on the memory
+	// it wrote. A sleep that finishes before the lock is taken makes the run
+	// reserve and take it again.
+	s.mu.Lock()
+	entry.relaunching++
+	s.mu.Unlock()
+	defer func() {
+		s.mu.Lock()
+		entry.relaunching--
+		s.mu.Unlock()
+	}()
 	reserved := false
 	for {
 		s.mu.Lock()
-		asleep := entry.sleeping || !entry.asleepSince.IsZero()
+		sleeping, done := entry.sleeping, entry.sleepDone
+		asleep := !entry.asleepSince.IsZero()
+		cid := entry.containerID
 		s.mu.Unlock()
+		if sleeping {
+			select {
+			case <-done:
+				continue
+			case <-ctx.Done():
+				return nil, fmt.Errorf("wait for the session to finish falling asleep: %w", ctx.Err())
+			}
+		}
 		if asleep && !reserved {
-			release, capErr := s.reserveCapacity(ctx)
+			release, capErr := s.reserveWake(ctx, cid)
 			if capErr != nil {
 				return nil, capErr
 			}
 			defer release()
+			defer s.needGuest(cid)()
 			reserved = true
 		}
 		entry.lifecycleMu.Lock()
@@ -463,7 +484,7 @@ func (s *Scheduler) Relaunch(ctx context.Context, run domain.RunID, actor domain
 	if asleep {
 		s.publishSleep(entry)
 	}
-	if woken.restoreErr != nil {
+	if woken.closed {
 		s.noteWake(ctx, run, woken)
 	}
 	return &runningRow, nil
@@ -693,6 +714,9 @@ func (s *Scheduler) recoverRuns(ctx context.Context) error {
 			}
 			slog.Info("scheduler: recovery: session started", "run", r.ID)
 			start := time.Now()
+			if sc, err := s.readSidecar(r.ID); err == nil && sc.AsleepSince == nil && !s.sleepFrozen(ctx, r, sc) {
+				defer s.needGuest(runtime.ID(sc.ContainerID))()
+			}
 			switch r.Status {
 			case domain.RunQueued, domain.RunProvisioning:
 				s.recoverUnstarted(ctx, r)
@@ -1337,14 +1361,11 @@ func (s *Scheduler) recoverUnstarted(ctx context.Context, r *domain.Run) {
 
 // interrupt re-reads the status under s.mu so a kill that raced recovery is
 // never overwritten.
-// interruptedReasonLocked adds a recorded missing-checkout note to the
-// reason an active run is interrupted with. The caller holds s.mu and
-// clears the note once that reason is written.
+// interruptedReasonLocked adds a recorded cleanup note to the reason an
+// active run is interrupted with. The caller holds s.mu and clears the note
+// once that reason is written.
 func (s *Scheduler) interruptedReasonLocked(run domain.RunID, reason string) string {
-	if _, ok := s.evidenceUnavailable[run]; !ok {
-		return reason
-	}
-	return withCleanupNote(reason, evidenceUnavailableReason)
+	return withCleanupNote(reason, s.evidenceUnavailable[run])
 }
 
 func (s *Scheduler) interrupt(ctx context.Context, r *domain.Run) {
@@ -1973,6 +1994,7 @@ func (s *Scheduler) entryFromSidecar(r *domain.Run, sc sidecar) *supervised {
 		betweenTurns:        sc.BetweenTurns,
 		paused:              sc.Paused,
 		diskHeld:            sc.DiskHeld,
+		memorySaved:         sc.MemorySaved,
 		killRequested:       sc.KillRequested,
 		retained:            sc.Retained,
 		retainedUntil:       sc.RetainedUntil,

@@ -5,12 +5,18 @@ import { Input } from '@/components/ui/input'
 import type { RunRoom } from '@/routes/run/room'
 import { useStore } from '@/store'
 
-/** `focus` is a counter: each bump moves the cursor into the field. */
-export function NoteComposer({ runID, room, focus }: { runID: string; room: RunRoom; focus: number }) {
+export function NoteComposer({ runID, room, focus, onFocused }: { runID: string; room: RunRoom; focus: boolean; onFocused: () => void }) {
   const body = useStore((s) => s.noteDrafts[runID] ?? '')
   const input = useRef<HTMLInputElement>(null)
   useEffect(() => {
-    if (focus) input.current?.focus()
+    if (!focus) return
+    // A frame later: the Details dialog focuses itself as it opens, after this effect.
+    const frame = requestAnimationFrame(() => {
+      input.current?.focus()
+      onFocused()
+    })
+    return () => cancelAnimationFrame(frame)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus])
   return (
     <form

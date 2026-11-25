@@ -271,7 +271,7 @@ func hookContext(notices hookNotices, stopping bool) string {
 		text.WriteString(protocol.CoordInboxContext(notices.Unread))
 	}
 	if notices.Overlap != "" && !stopping {
-		text.WriteString(protocol.CoordOverlapContext)
+		text.WriteString(protocol.CoordOverlapContext(notices.Overlap))
 	}
 	if stopping && text.Len() > 0 {
 		text.WriteString(protocol.CoordReportReminder)

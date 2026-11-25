@@ -63,14 +63,17 @@ func ack(ctx context.Context, socket string, args []string) (ackResult, error) {
 	}
 	token := fs.Arg(0)
 	var next protocol.CoordInboxResult
-	if err := coordtransport.Call(ctx, socket, protocol.MethodCoordInbox, protocol.CoordInboxParams{AckToken: token}, &next); err != nil {
+	if err := coordtransport.Call(ctx, socket, protocol.MethodCoordInbox, protocol.CoordInboxParams{AckToken: token, AckOnly: true}, &next); err != nil {
 		return ackResult{}, err
 	}
 	if !next.Acked {
+		if next.AckToken == "" && next.More > 0 {
+			return ackResult{}, &protocol.Error{Code: protocol.CodeConflict, Message: fmt.Sprintf("ack: %s is not the current batch; unread messages waiting: %d, run inbox to read them", token, next.More)}
+		}
 		if next.AckToken == "" {
 			return ackResult{}, &protocol.Error{Code: protocol.CodeConflict, Message: fmt.Sprintf("ack: %s is not the current batch and no inbox batch is waiting", token)}
 		}
 		return ackResult{}, &protocol.Error{Code: protocol.CodeConflict, Message: fmt.Sprintf("ack: %s is not the current batch; run inbox to read batch %s", token, next.AckToken)}
 	}
-	return ackResult{Acked: token, Waiting: len(next.Messages) + next.More}, nil
+	return ackResult{Acked: token, Waiting: next.More}, nil
 }

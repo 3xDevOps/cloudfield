@@ -236,6 +236,7 @@ func (s *Service) Release(run domain.RunID) error {
 	delete(s.lifecycleBuckets, run)
 	delete(s.turnBuckets, run)
 	delete(s.reportLocks, run)
+	delete(s.mailRefusals, run)
 	delete(s.enhancedWoken, run)
 	delete(s.enhancedOpens, run)
 	delete(s.enhancedRefusals, run)

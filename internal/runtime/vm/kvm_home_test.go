@@ -33,7 +33,7 @@ func kvmUserSession(t *testing.T, e *engine, key string, mounts ...runtime.Mount
 	t.Cleanup(func() { _ = e.destroy(context.Background(), key) })
 	spec := runtime.Spec{
 		Image: "docker.io/library/ubuntu:24.04", CreationKey: key, User: sessionUser, Command: []string{"/bin/sh", "-c", "exec sleep infinity"},
-		Env: map[string]string{"AETHER_RUN_ID": key, "HOME": "/root"}, CPULimit: 1, MemoryLimitBytes: 512 << 20, Mounts: mounts,
+		Env: map[string]string{"AETHER_RUN_ID": key, "HOME": "/root", "PATH": "/root/.local/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}, CPULimit: 1, MemoryLimitBytes: 512 << 20, Mounts: mounts,
 	}
 	start := time.Now()
 	if _, err := e.create(t.Context(), spec.CreationKey, spec, options{}); err != nil {
@@ -307,7 +307,7 @@ func TestKVMCacheStartsFromTheMembersLastSession(t *testing.T) {
 	if err := e.stop(t.Context(), "run-vmcache-a", 2*time.Second); err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("stop, with the cache copied for promotion, took %s", time.Since(start))
+	t.Logf("stop took %s", time.Since(start))
 	for newest() == first {
 		if time.Since(start) > 2*time.Minute {
 			t.Fatal("the stopped session's cache never became the pool's newest")

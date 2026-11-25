@@ -21,6 +21,7 @@ import (
 	"github.com/3xDevOps/Aether/internal/selfupdate"
 	"github.com/3xDevOps/Aether/internal/server"
 	"github.com/3xDevOps/Aether/internal/serversetup"
+	"github.com/3xDevOps/Aether/internal/serverunit"
 	"github.com/3xDevOps/Aether/internal/serverupdate"
 	"github.com/3xDevOps/Aether/internal/store"
 	"github.com/3xDevOps/Aether/internal/version"
@@ -61,7 +62,7 @@ func updateCmd(args []string) error {
 		return err
 	}
 	if fs.NArg() != 0 || *channel != "" && *tag != "" || *yes && *channel == "" {
-		return errors.New("usage: aether-server update [--version <tag>] | --channel <stable|beta|nightly> [--yes]")
+		return errors.New("usage: cloudfield-server update [--version <tag>] | --channel <stable|beta|nightly> [--yes]")
 	}
 	if os.Geteuid() != 0 {
 		return errors.New("run it as root: sudo aether-server update")
@@ -195,7 +196,7 @@ func linkUnitAndReload() {
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stderr, "warning:", err)
 	}
-	if !created || unitAliasResolved() {
+	if !created || serverunit.AliasResolves() {
 		return
 	}
 	if out, err := exec.Command("systemctl", "daemon-reload").CombinedOutput(); err != nil {

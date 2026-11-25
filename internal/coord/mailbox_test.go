@@ -951,7 +951,8 @@ func TestBlockedReportRetriesFullInboxAndPreservesChildReason(t *testing.T) {
 	}
 	inbox, rpcErr := h.svc.Inbox(ctx, parent, protocol.CoordInboxParams{})
 	if rpcErr != nil || len(inbox.Messages) != 1 || inbox.Messages[0].Body != summary ||
-		inbox.Messages[0].FromRunID != string(child) || inbox.Messages[0].CorrelationID != result.ReportID {
+		inbox.Messages[0].FromRunID != string(child) || inbox.Messages[0].CorrelationID != result.ReportID ||
+		inbox.Messages[0].Kind != protocol.CoordMessageKindReport || inbox.Messages[0].Outcome != protocol.CoordOutcomeBlocked {
 		t.Fatalf("blocked inbox = %+v, %v", inbox, rpcErr)
 	}
 	if _, rpcErr := h.svc.Inbox(ctx, parent, protocol.CoordInboxParams{AckToken: inbox.AckToken}); rpcErr != nil {

@@ -51,10 +51,10 @@ func (g *Gateway) Start(ctx context.Context, tn Tailnet) error {
 	if err != nil {
 		return fmt.Errorf("servergw: HTTPS certificate for %s: %w; enable MagicDNS and HTTPS certificates for the tailnet in the Tailscale admin console (DNS page), or set web-port to 0", tn.Node.DNSName, err)
 	}
-	tlsCfg := &tls.Config{
+	g.core.TLS(&tls.Config{
 		MinVersion:     tls.VersionTLS12,
 		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) { return certs.current(), nil },
-	}
+	})
 	// tailscaled reports the IPv6 address whether or not the kernel has
 	// IPv6 enabled, so one address that will not bind is a warning; only
 	// none binding is a refusal.
@@ -68,7 +68,7 @@ func (g *Gateway) Start(ctx context.Context, tn Tailnet) error {
 			continue
 		}
 		g.lns = append(g.lns, ln)
-		g.core.Serve(tls.NewListener(ln, tlsCfg))
+		g.core.Serve(ln)
 	}
 	if len(g.lns) == 0 {
 		return fmt.Errorf("servergw: listen: no tailnet address could be bound: %w", errors.Join(failed...))

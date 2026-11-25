@@ -122,17 +122,17 @@ func readMessage(ctx context.Context, c *websocket.Conn, timeout time.Duration) 
 	}
 }
 
-// enroll dials the control endpoint and answers the challenge. It returns
-// the enrolled connection, the edge's ready and the protocol version the
-// hello named once the edge key matches the pinned one, pinning it on
-// first enrollment.
-func (a *Agent) enroll(ctx context.Context) (*websocket.Conn, context.CancelFunc, edgeproto.Ready, int, error) {
-	c, cancel, err := dial(ctx, a.origin+edgeproto.PathServerControl, nil, handshakeTimeout)
+// enroll dials the control endpoint at origin and answers the challenge.
+// It returns the enrolled connection, the edge's ready and the protocol
+// version the hello named once the edge key matches the pinned one,
+// pinning it on first enrollment.
+func (a *Agent) enroll(ctx context.Context, origin string) (*websocket.Conn, context.CancelFunc, edgeproto.Ready, int, error) {
+	c, cancel, err := dial(ctx, origin+edgeproto.PathServerControl, nil, handshakeTimeout)
 	if err != nil {
 		return nil, nil, edgeproto.Ready{}, 0, err
 	}
 	c.SetReadLimit(edgeproto.MaxControlMessageSize)
-	ready, protocol, err := a.handshake(ctx, c)
+	ready, protocol, err := a.handshake(ctx, c, origin)
 	if err != nil {
 		_ = c.Close(websocket.StatusPolicyViolation, truncate(err.Error(), 120))
 		cancel()
@@ -141,7 +141,7 @@ func (a *Agent) enroll(ctx context.Context) (*websocket.Conn, context.CancelFunc
 	return c, cancel, ready, protocol, nil
 }
 
-func (a *Agent) handshake(ctx context.Context, c *websocket.Conn) (edgeproto.Ready, int, error) {
+func (a *Agent) handshake(ctx context.Context, c *websocket.Conn, origin string) (edgeproto.Ready, int, error) {
 	m, err := readMessage(ctx, c, handshakeTimeout)
 	if err != nil {
 		return edgeproto.Ready{}, 0, fmt.Errorf("read challenge: %w", err)
@@ -155,7 +155,7 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn) (edgeproto.Rea
 	}
 	// The signature names the origin this server dialed, never ch.Origin:
 	// a challenge relayed from another edge must not enroll there.
-	sig, err := edgeproto.SignEnrollment(a.cfg.HostKey, a.origin, ch.Nonce)
+	sig, err := edgeproto.SignEnrollment(a.cfg.HostKey, origin, ch.Nonce)
 	if err != nil {
 		return edgeproto.Ready{}, 0, err
 	}
@@ -200,7 +200,7 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn) (edgeproto.Rea
 		if err := a.state.Pin(ready.EdgeKey); err != nil {
 			return edgeproto.Ready{}, 0, err
 		}
-		slog.Info("edge: pinned edge key", "edge", a.origin, "fingerprint", edgeproto.EdgeKeyFingerprint(ready.EdgeKey))
+		slog.Info("edge: pinned edge key", "edge", origin, "fingerprint", edgeproto.EdgeKeyFingerprint(ready.EdgeKey))
 	case !bytes.Equal(pinned, ready.EdgeKey):
 		return edgeproto.Ready{}, 0, pinMismatch(pinned, ready.EdgeKey)
 	}
@@ -210,7 +210,7 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn) (edgeproto.Rea
 // session runs one control connection until it ends and returns how long
 // it stayed enrolled with an accepted edge key.
 func (a *Agent) session(ctx context.Context) (time.Duration, error) {
-	c, cancel, ready, protocol, err := a.enroll(ctx)
+	c, cancel, ready, protocol, err := a.enroll(ctx, a.origin)
 	if err != nil {
 		return 0, err
 	}
@@ -247,7 +247,7 @@ func (a *Agent) session(ctx context.Context) (time.Duration, error) {
 		a.recordBeats(sctx, s)
 		close(recorded)
 	}()
-	err = a.serve(sctx, s)
+	err = a.serve(ctx, sctx, s)
 	// The disconnected status the caller writes must land after the last
 	// heartbeat.
 	stop()
@@ -458,11 +458,18 @@ func (a *Agent) pushDirectory(ctx context.Context, s *session) {
 	}
 }
 
-func (a *Agent) serve(ctx context.Context, s *session) error {
+func (a *Agent) serve(run, ctx context.Context, s *session) error {
 	for {
 		m, err := readMessage(ctx, s.c, a.idleTimeout)
 		if err != nil {
 			return fmt.Errorf("control connection: %w", err)
+		}
+		// Ending run closes the relayed connections, and the edge can send
+		// an open in their place before ctx, derived from run, ends. Their
+		// slots free only as they finish closing, so an answer could refuse
+		// it as over the limit; unanswered, the edge holds it.
+		if err := run.Err(); err != nil {
+			return fmt.Errorf("control connection: server stopping: %w", err)
 		}
 		switch m := m.(type) {
 		case edgeproto.Ping:
@@ -502,7 +509,7 @@ func (a *Agent) serve(ctx context.Context, s *session) error {
 // Leave tells the edge the operator removed this server, then forgets the
 // owner and the claim code. The pinned edge key is kept.
 func (a *Agent) Leave(ctx context.Context) error {
-	c, cancel, _, _, err := a.enroll(ctx)
+	c, cancel, _, _, err := a.enroll(ctx, a.origin)
 	if err != nil {
 		return fmt.Errorf("edgeagent: leave %s: %w", a.origin, err)
 	}

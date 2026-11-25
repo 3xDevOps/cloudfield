@@ -6,9 +6,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
+	"path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -43,7 +46,7 @@ func newHarness(t *testing.T) *harness {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	h := &harness{t: t, images: &fakeImages{}, guests: map[string]*fakeHelper{}}
-	h.units = &fakeUnits{t: t, active: map[string]*fakeVMM{}}
+	h.units = &fakeUnits{t: t, active: map[string]*fakeVMM{}, cgroups: t.TempDir()}
 	h.engine = h.newEngine(dir)
 	t.Cleanup(h.units.stopAll)
 	return h
@@ -51,11 +54,19 @@ func newHarness(t *testing.T) *harness {
 
 // newEngine is a second engine process over the same data directory.
 func (h *harness) newEngine(dir string) *engine {
-	cfg := Config{DataDir: dir, Images: h.images, Monitor: []string{"/srv/aether-server", MonitorCommand}, Helper: "/srv/aether-server"}
+	cfg := Config{DataDir: dir, Images: h.images, Monitor: []string{"/srv/aether-server", MonitorCommand}, Helper: "/srv/aether-server", ProgramUnit: localBinProgram}
 	e := newEngine(cfg, h.units, func(vsock string) (helper, error) {
 		return h.guest(filepath.Base(filepath.Dir(vsock))), nil
 	})
 	e.run = func(context.Context, string, ...string) error { return nil }
+	e.cgroupRoot, e.reportPoll = h.units.cgroups, time.Millisecond
+	e.listenDNS = func() (*dnsRelay, error) {
+		r, err := listenDNS(netip.MustParseAddr("127.0.0.1"), netip.MustParsePrefix("127.0.0.0/8"), func() []netip.AddrPort { return nil })
+		if err == nil {
+			h.t.Cleanup(r.close)
+		}
+		return r, err
+	}
 	return e
 }
 
@@ -68,6 +79,18 @@ func (h *harness) guest(key string) *fakeHelper {
 		h.guests[key] = g
 	}
 	return g
+}
+
+// localBinProgram stands in for memberhome.ProgramUnit, which has tests of
+// its own: a program is its plain file in ~/.local/bin.
+func localBinProgram(home, executable string) (string, error) {
+	unit := path.Join(".local/bin", executable)
+	if _, err := os.Stat(filepath.Join(home, unit)); errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	} else if err != nil {
+		return "", err
+	}
+	return unit, nil
 }
 
 func sessionSpec(key string) runtime.Spec {
@@ -85,6 +108,7 @@ type fakeImages struct {
 	tags      map[string]vmimage.Base
 	saves     []fakeSave
 	saveErr   error
+	programs  map[string]bool
 }
 
 type fakeSave struct {
@@ -185,12 +209,14 @@ func (f *fakeImages) NewDataDisk(_ context.Context, path string, _ int64) (vmima
 }
 
 func (f *fakeImages) NewCacheDisk(_ context.Context, _, path string) (vmimage.Disk, error) {
-	return vmimage.Disk{Path: path, Format: "raw"}, os.WriteFile(path, nil, 0o600)
+	return vmimage.Disk{Path: path, Format: "qcow2", Backing: path + ".base"}, os.WriteFile(path, nil, 0o600)
 }
 
-func (f *fakeImages) SnapshotCache(_ context.Context, disk vmimage.Disk) (string, error) {
+func (f *fakeImages) SnapshotCache(disk vmimage.Disk) (string, error) {
 	return disk.Path + ".snapshot", nil
 }
+
+func (f *fakeImages) UnshareCache(context.Context, vmimage.Disk) error { return nil }
 
 func (f *fakeImages) PromoteCache(pool, snapshot string) error {
 	f.mu.Lock()
@@ -199,6 +225,25 @@ func (f *fakeImages) PromoteCache(pool, snapshot string) error {
 	if promoted != nil {
 		promoted <- pool + " " + filepath.Base(snapshot)
 	}
+	return nil
+}
+
+func (f *fakeImages) ProgramDisk(_, _, unit, path string) (vmimage.Disk, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.programs[unit] {
+		return vmimage.Disk{}, false, nil
+	}
+	return vmimage.Disk{Path: path, Format: vmimage.FormatRaw}, true, os.WriteFile(path, nil, 0o444)
+}
+
+func (f *fakeImages) BuildProgram(_, _, unit string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.programs == nil {
+		f.programs = map[string]bool{}
+	}
+	f.programs[unit] = true
 	return nil
 }
 
@@ -220,6 +265,19 @@ type fakeUnits struct {
 	failNext   bool
 	stateErr   error
 	failResume bool
+	// Each VMM started refuses its first refuseResumes resumes, staying
+	// paused; as it resumes, with rebootOnResume it reports a guest reboot
+	// and with resumeWrites it writes that disk.
+	refuseResumes  int
+	rebootOnResume bool
+	resumeWrites   string
+	// cgroups is the cgroup root, which holds a memory.current, a
+	// memory.stat and a cgroup.freeze for each running unit.
+	cgroups string
+}
+
+func (u *fakeUnits) cgroup(name string) string {
+	return filepath.Join(u.cgroups, runtime.SessionSlice, name)
 }
 
 type startCall struct {
@@ -238,11 +296,33 @@ func (u *fakeUnits) Start(_ context.Context, name string, argv, properties []str
 	if err = json.Unmarshal(data, &l); err != nil {
 		return err
 	}
+	if err = os.MkdirAll(u.cgroup(name), 0o755); err != nil {
+		return err
+	}
+	if err = os.WriteFile(filepath.Join(u.cgroup(name), "memory.current"), []byte("1\n"), 0o644); err != nil {
+		return err
+	}
+	if err = os.WriteFile(filepath.Join(u.cgroup(name), "memory.stat"), []byte("anon 1\ninactive_file 0\n"), 0o644); err != nil {
+		return err
+	}
+	if err = os.WriteFile(filepath.Join(u.cgroup(name), "cgroup.freeze"), []byte("0\n"), 0o644); err != nil {
+		return err
+	}
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	u.started = append(u.started, startCall{name, argv, properties, l})
 	if u.failNext {
 		u.failNext = false
+		for _, p := range properties {
+			if log, ok := strings.CutPrefix(p, "StandardOutput=append:"); ok {
+				f, openErr := os.OpenFile(log, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+				if openErr != nil {
+					return openErr
+				}
+				_, err = f.WriteString("cloud-hypervisor: Error booting VM: KvmNotAvailable\n")
+				return errors.Join(err, f.Close())
+			}
+		}
 		return nil
 	}
 	socket := ""
@@ -253,7 +333,7 @@ func (u *fakeUnits) Start(_ context.Context, name string, argv, properties []str
 	}
 	vmm, err := startVMM(socket, l.Args, func() { go func() { _ = u.Stop(context.Background(), name) }() })
 	if vmm != nil {
-		vmm.failResume = u.failResume
+		vmm.failResume, vmm.refuseResumes, vmm.rebootOnResume, vmm.resumeWrites = u.failResume, u.refuseResumes, u.rebootOnResume, u.resumeWrites
 	}
 	if err != nil {
 		return err
@@ -269,7 +349,7 @@ func (u *fakeUnits) Stop(_ context.Context, name string) error {
 		vmm.close()
 	}
 	delete(u.active, name)
-	return nil
+	return os.RemoveAll(u.cgroup(name))
 }
 
 func (u *fakeUnits) State(_ context.Context, name string) (unitState, error) {
@@ -318,6 +398,15 @@ type fakeVMM struct {
 	restored   bool
 	srv        *http.Server
 	listener   net.Listener
+	// snapshotFails refuses every snapshot. A snapshot sends on
+	// snapshotHold, when set, as it starts, and finishes once it receives
+	// from it.
+	snapshotFails  bool
+	snapshotHold   chan struct{}
+	refuseResumes  int
+	rebootOnResume bool
+	resumeWrites   string
+	events         string
 }
 
 func startVMM(socket string, args []string, exit func()) (*fakeVMM, error) {
@@ -327,9 +416,12 @@ func startVMM(socket string, args []string, exit func()) (*fakeVMM, error) {
 		return nil, err
 	}
 	v := &fakeVMM{state: "Running", listener: l}
-	for _, arg := range args {
-		if arg == "--restore" {
+	for i, arg := range args {
+		switch arg {
+		case "--restore":
 			v.state, v.restored = "Paused", true
+		case "--event-monitor":
+			v.events = strings.TrimPrefix(args[i+1], "path=")
 		}
 	}
 	mux := http.NewServeMux()
@@ -345,17 +437,40 @@ func startVMM(socket string, args []string, exit func()) (*fakeVMM, error) {
 		case "vm.pause":
 			v.state = "Paused"
 		case "vm.resume":
+			if v.refuseResumes > 0 {
+				v.refuseResumes--
+				http.Error(w, "resume refused", http.StatusInternalServerError)
+				return
+			}
 			v.state = "Running"
+			if v.resumeWrites != "" {
+				later := time.Now().Add(time.Minute)
+				_ = os.Chtimes(v.resumeWrites, later, later)
+			}
+			if v.rebootOnResume {
+				_ = os.WriteFile(v.events, []byte(`{"source": "vm", "event": "rebooting"}`), 0o600)
+			}
 			if v.failResume {
 				http.Error(w, "reply lost", http.StatusGatewayTimeout)
 			}
 		case "vm.snapshot":
+			if v.snapshotFails {
+				http.Error(w, "no space left on device", http.StatusInternalServerError)
+				return
+			}
+			if v.snapshotHold != nil {
+				v.snapshotHold <- struct{}{}
+				<-v.snapshotHold
+			}
 			var req struct {
 				Destination string `json:"destination_url"`
 			}
 			_ = json.Unmarshal(body, &req)
 			dir := strings.TrimPrefix(req.Destination, "file://")
 			_ = os.WriteFile(filepath.Join(dir, "state.json"), []byte("{}"), 0o600)
+			disk := filepath.Join(filepath.Dir(dir), "fake-root.img")
+			_ = os.WriteFile(disk, nil, 0o600)
+			_ = os.WriteFile(filepath.Join(dir, "config.json"), fmt.Appendf(nil, `{"disks":[{"path":%q}]}`, disk), 0o600)
 		case "vm.counters":
 			_ = json.NewEncoder(w).Encode(map[string]map[string]uint64{
 				"net0": {"rx_bytes": 10, "tx_bytes": 20}, "root": {"read_bytes": 1, "write_bytes": 2}, "data": {"read_bytes": 3, "write_bytes": 4},
@@ -392,8 +507,10 @@ type fakeHelper struct {
 	boots []guest.BootSpec
 	procs map[string]*fakeProc
 	// bootErr and output program the next Boot and Spawn.
-	bootErr  error
-	pingErr  error
+	bootErr error
+	pingErr error
+	// pingHold, when set, holds Ping until it is closed.
+	pingHold chan struct{}
 	output   map[string]string
 	ignoreTE bool
 	clock    time.Time
@@ -422,11 +539,18 @@ type fakeHelper struct {
 
 func (g *fakeHelper) Ping(ctx context.Context) (guest.Info, error) {
 	g.mu.Lock()
-	pingErr := g.pingErr
+	pingErr, hold := g.pingErr, g.pingHold
 	g.mu.Unlock()
 	if pingErr != nil {
 		<-ctx.Done()
 		return guest.Info{}, pingErr
+	}
+	if hold != nil {
+		select {
+		case <-hold:
+		case <-ctx.Done():
+			return guest.Info{}, ctx.Err()
+		}
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()

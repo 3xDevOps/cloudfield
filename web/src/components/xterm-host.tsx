@@ -261,7 +261,7 @@ function oklchRgba(color: string): string | undefined {
 
 function primarySelectionBackground(): string | undefined {
   const root = document.documentElement
-  const raw = getComputedStyle(root).getPropertyValue('--accent-fill').trim()
+  const raw = getComputedStyle(root).getPropertyValue('--accent-mark').trim()
   if (!raw) return undefined
 
   const probe = document.createElement('span')
@@ -681,7 +681,11 @@ export function useXterm({
         onDataRef.current?.(modified)
       })
       const binary = created.onBinary((data) => onBinaryRef.current?.(data))
-      const observer = new ResizeObserver(resize)
+      let settle: number | undefined
+      const observer = new ResizeObserver(() => {
+        window.clearTimeout(settle)
+        settle = window.setTimeout(resize, 100)
+      })
       observer.observe(host)
       teardown = () => {
         host.removeEventListener('wheel', noteViewportInteraction)
@@ -689,6 +693,7 @@ export function useXterm({
         host.removeEventListener('pointerdown', noteScrollbarInteraction)
         host.removeEventListener('paste', notePaste, true)
         observer.disconnect()
+        window.clearTimeout(settle)
         themeWatch.disconnect()
         input.dispose()
         binary.dispose()

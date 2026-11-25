@@ -19,7 +19,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / "web" / "public" / "aether-mark.png"
-FONTS = ROOT / "web" / "public" / "fonts"
+FONTS = ROOT / "web" / "src" / "fonts"
 ANDROID_LISTING = ROOT / "android" / "listing"
 
 # Google Play's feature graphic is a fixed 1024x500 banner in JPEG or 24-bit
@@ -44,7 +44,7 @@ FEATURE_TAGLINE_GAP_PX = 54
 FEATURE_WORDMARK_INK = (255, 255, 255)
 FEATURE_TAGLINE_INK = (234, 242, 251)
 
-# Reading both from web/public/fonts keeps the banner reproducible without a
+# Reading both from web/src/fonts keeps the banner reproducible without a
 # system font or a second copy in the tree.
 WORDMARK_FONT = FONTS / "vt323-latin.woff2"
 TAGLINE_FONT = FONTS / "jetbrains-mono-nfm-regular.woff2"

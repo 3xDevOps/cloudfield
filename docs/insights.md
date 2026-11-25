@@ -123,13 +123,21 @@ it. The Activity tab is the 7-day history above; System is live.
   by use, with its limit, **near limit** from 80% of that limit, **throttled**
   when CPU is capped, and a 15-minute trend. A session's browser is its own row,
   with its own limits. A row opens its session, or your own Environment.
+  With `session-runtime vm`, a sandbox's memory is two figures. The donut,
+  the ranking, the trend and the row's first line (`4.8 GB · 30% of host`)
+  are what its VM holds of the host's memory, which includes the VM's own
+  kernel and file cache. The second line (`2.0 GB of 8.0 GB limit`)
+  and the bar are what runs inside the VM, against the limit a process
+  there is killed at. A VM session's browser runs inside its VM, so it is
+  in both figures.
 - **History.** CPU, memory, load average, pressure, network and disk I/O.
 - **Storage.** The data filesystem, Cloudfield data by category, Docker storage,
   container writable layers and, for admins, the largest storage owners.
 
 The server reads host figures from `/proc` and `/sys` every 5 seconds and
 keeps one hour. Sandbox figures come from Docker's per-container stats, and
-from inside each VM with `session-runtime vm`, and are sampled only while
+with `session-runtime vm` from inside each VM and, for the memory it holds
+of the host, from its unit's cgroup. They are sampled only while
 someone has the System tab open. Admins see every sandbox; members see their
 own, and the rest counts toward **Everything else**. The tab reads `This server
 does not report system stats. Update the server to see them.` when the server
@@ -142,7 +150,7 @@ is too old.
 - Time worked, time waiting and pull requests are recorded only from the day
   your server was upgraded to a version that records them. Earlier sessions are
   left out of those numbers, and the page says
-  `Aether records this from <date> on` when only some sessions are measured.
+  `Cloudfield records this from <date> on` when only some sessions are measured.
 - Deleting a session removes it from these statistics.
 - The tiles read `This server does not report insights. Update the server to
   see them.` when the server is too old.

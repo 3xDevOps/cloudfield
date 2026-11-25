@@ -16,6 +16,7 @@ import { RunFileLinks } from '@/routes/files/path-link'
 import type { RoomMessage } from '@/lib/types'
 import { modeLabel } from '@/routes/run/agent-name'
 import type { AgentTerminal } from '@/routes/run/agent-terminal'
+import { AgentsBar } from '@/routes/run/agents-bar'
 import { ChangesBar } from '@/routes/run/changes-bar'
 import { CompletionPrompt } from '@/routes/run/completion-prompt'
 import { Composer } from '@/routes/run/composer'
@@ -191,7 +192,7 @@ function SessionWelcome({ run, agentName }: { run: RunRecord; agentName: string 
       <div className="m-auto flex w-full min-w-0 max-w-sm flex-col items-center gap-6">
         <div
           aria-hidden="true"
-          className="h-36 max-h-[24vh] w-52 shrink-0 bg-icon-faint/15"
+          className="h-36 max-h-[24vh] w-52 shrink-0 bg-text/15"
           style={{ mask: 'url(/cloudfield-mark.svg) center / contain no-repeat' }}
         />
         <h2 className="line-clamp-3 max-w-full text-center text-title break-words text-muted">{runLabel(run)}</h2>
@@ -520,6 +521,7 @@ export function SessionView({ run, agent, agentName, room, nav, active, textarea
         <SleepCallout run={run} />
       </div>
       {!notesWide && <NotesStrip run={run} room={room} className={cn(sessionColumn, 'pb-2')} />}
+      <AgentsBar runID={run.id} />
       <ChangesBar run={run} />
       <CompletionPrompt run={run} className={cn(sessionColumn, 'pb-2')} />
       <Composer run={run} agent={agent} room={room} textarea={textarea} autoFocus={focusComposer} onFocusChange={onComposing} dock={dock || undefined} onEscape={() => viewport.current?.focus()} onDropStatus={reportDropStatus} />

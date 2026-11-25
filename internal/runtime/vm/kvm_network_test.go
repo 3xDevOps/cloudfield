@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"os/exec"
 	"slices"
@@ -25,6 +26,7 @@ import (
 	"github.com/3xDevOps/Aether/internal/egress"
 	"github.com/3xDevOps/Aether/internal/events"
 	"github.com/3xDevOps/Aether/internal/runtime"
+	"github.com/vishvananda/netlink"
 )
 
 const probePath = "/opt/aether-vmtest"
@@ -49,6 +51,15 @@ func TestKVMNetProbe(t *testing.T) {
 		}
 	case "dial":
 		fmt.Println(dial(args[1]))
+	case "resolve":
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip4", args[1])
+		if err != nil {
+			fmt.Println("error:", err)
+			return
+		}
+		fmt.Println("connected:", addrs)
 	case "connect":
 		c, err := net.DialTimeout("tcp", args[1], 3*time.Second)
 		if err != nil {
@@ -172,8 +183,9 @@ func docker(t *testing.T, args ...string) string {
 }
 
 // TestKVMNetwork checks what docs/environments.md promises a session VM's
-// network: open VMs reach the host and the internet but not each other, a
-// Docker container or the metadata service; a VM with egress control
+// network: open VMs reach the host and whatever it routes to by its own
+// links, however it routes, but not each other, a Docker container, a routed
+// veth, a bridge of veths or the metadata service; a VM with egress control
 // reaches only the proxy, which names its run; port forwards reach a dev
 // server in either; and a new engine rebuilds the firewall.
 func TestKVMNetwork(t *testing.T) {
@@ -194,6 +206,13 @@ func TestKVMNetwork(t *testing.T) {
 	})
 	ws := func(id, host string) *domain.Workspace {
 		return &domain.Workspace{ID: domain.WorkspaceID(id), Environment: domain.WorkspaceEnvironment{Egress: domain.EgressPolicy{On: true, Hosts: []string{host}}}}
+	}
+	// Only the host reaches this resolver, as only the host reaches its own
+	// systemd-resolved stub or tailnet resolver: a guest resolves its name
+	// through the server's relay or not at all.
+	hostOnly := fakeResolver(t, "relay.aether.test.", netip.MustParseAddr("192.0.2.7"))
+	e.listenDNS = func() (*dnsRelay, error) {
+		return listenDNS(proxyAddr, vmSubnet, func() []netip.AddrPort { return append([]netip.AddrPort{hostOnly}, hostResolvers()...) })
 	}
 	proxy := egress.New(&Runtime{vms: e}, probeStore{"run-vmnet-c": ws("ws-allows", "example.com"), "run-vmnet-d": ws("ws-denies", "example.org")}, probeBus{})
 	if _, err := proxy.Prepare(t.Context()); err != nil {
@@ -244,7 +263,7 @@ func TestKVMNetwork(t *testing.T) {
 	}
 	expect("the host reaches the Docker container", dial(containerIP+":8080"), true)
 	targets := map[string]string{"another VM": b + ":8080", "a VM with egress control": c + ":8080", "a Docker container": containerIP + ":8080"}
-	egressTargets := map[string]string{"the internet": "1.1.1.1:443", "another VM": a + ":8080", "the host": hostPort}
+	egressTargets := map[string]string{"the internet": "1.1.1.1:443", "another VM": a + ":8080", "the host": hostPort, "the DNS relay": proxyAddr.String() + ":53"}
 	for _, dns := range hostDNS() {
 		egressTargets["the DNS server "+dns.String()] = dns.String() + ":53"
 	}
@@ -255,7 +274,7 @@ func TestKVMNetwork(t *testing.T) {
 	}
 	// 169.254.169.253 is the AWS VPC DNS resolver: a link-local address other
 	// than the metadata IPs that an open VM must not reach, unless it is the
-	// host's own configured resolver (then it stays reachable on port 53).
+	// host's own configured resolver (then port 53 to it reaches the relay).
 	resolverIsDNS := false
 	for _, dns := range hostDNS() {
 		resolverIsDNS = resolverIsDNS || dns.String() == "169.254.169.253"
@@ -266,16 +285,63 @@ func TestKVMNetwork(t *testing.T) {
 		t.Logf("169.254.169.253 is not a reachable non-resolver link-local target here: %s", got)
 	}
 
+	expect("an open VM resolves through the host's own resolver", probe(t, e, "run-vmnet-a", "resolve relay.aether.test"), true)
+	if _, search := hostResolvConf(); len(search) > 0 {
+		if out, _ := vmRun(t, e, "run-vmnet-a", "grep ^search /etc/resolv.conf"); strings.TrimSpace(out) != "search "+strings.Join(search, " ") {
+			t.Errorf("an open VM searches %q, the host %v", out, search)
+		}
+	}
+	// A VM booted before v0.9.0-beta.2 was given the host's upstream servers,
+	// and a terminal VM runs for weeks: a lookup through each of them must
+	// reach the relay, even at a link-local address the drop would otherwise
+	// catch (169.254.169.254 on GCP, 168.63.129.16 on Azure).
+	for _, dns := range hostDNS() {
+		if out, code := vmRun(t, e, "run-vmnet-b", "echo 'nameserver "+dns.String()+"' >/etc/resolv.conf"); code != 0 {
+			t.Fatalf("write run-vmnet-b's resolv.conf: %s", out)
+		}
+		expect("a VM booted before the relay resolves through "+dns.String(), probe(t, e, "run-vmnet-b", "resolve relay.aether.test"), true)
+	}
 	expect("an open VM reaches the internet", probe(t, e, "run-vmnet-a", "dial example.com:80"), true)
 	expect("an open VM reaches the host", probe(t, e, "run-vmnet-a", "dial "+hostPort), true)
+	splitRoutes(t)
+	// Each ensureNetwork here is what the next VM boot does.
+	if err = e.ensureNetwork(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for what, target := range map[string]string{"a server through split routes": "198.51.100.1:8080", "a server through a policy-routed split route": "198.51.100.129:8080"} {
+		expect("the host reaches "+what, dial(target), true)
+		expect("an open VM reaches "+what, probe(t, e, "run-vmnet-a", "dial "+target), true)
+		egressTargets[what] = target
+	}
+	targets["a routed veth"], egressTargets["a routed veth"] = "192.0.2.2:8080", "192.0.2.2:8080"
+	expect("the host reaches a routed veth", dial("192.0.2.2:8080"), true)
+	expect("the host reaches a bridge of veths", dial("192.0.2.10:8080"), true)
+	expect("an open VM reaches a bridge of veths", probe(t, e, "run-vmnet-a", "dial 192.0.2.10:8080"), false)
+	routes, err := netlink.RouteGet(net.ParseIP("1.1.1.1"))
+	if err != nil || len(routes) == 0 {
+		t.Fatalf("the host's internet route: %v", err)
+	}
+	nic, err := netlink.LinkByIndex(routes[0].LinkIndex)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, port := range []struct {
+		what, cmd string
+		reached   bool
+	}{
+		{"a dummy port", "ip link add vmtestdum type dummy && ip link set vmtestdum master vmtestbr up", false},
+		{"a VLAN of the host's NIC as a port", "ip link add link " + nic.Attrs().Name + " name vmtestnic type vlan id 4001 && ip link set vmtestnic master vmtestbr up", true},
+	} {
+		if out, linkErr := exec.Command("sh", "-c", port.cmd).CombinedOutput(); linkErr != nil {
+			t.Fatalf("%s: %v: %s", port.cmd, linkErr, out)
+		}
+		if err = e.ensureNetwork(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		expect("an open VM reaches a bridge with "+port.what, probe(t, e, "run-vmnet-a", "dial 192.0.2.10:8080"), port.reached)
+	}
 	for what, target := range targets {
 		expect("an open VM reaches "+what, probe(t, e, "run-vmnet-a", "dial "+target), false)
-	}
-	// The DNS exception must keep every configured resolver reachable on 53,
-	// including one at a link-local address the drop above would otherwise
-	// catch (for example 169.254.169.254 on GCP, 168.63.129.16 on Azure).
-	for _, dns := range hostDNS() {
-		expect("an open VM reaches its DNS resolver "+dns.String(), probe(t, e, "run-vmnet-a", "dial "+dns.String()+":53"), true)
 	}
 	rec, err := e.load("run-vmnet-a")
 	if err != nil {
@@ -321,6 +387,7 @@ func TestKVMNetwork(t *testing.T) {
 		t.Errorf("behind a default-deny INPUT the proxy refused run-vmnet-c: %s", got)
 	}
 	expect("behind a default-deny INPUT an open VM reaches the host", probe(t, e, "run-vmnet-a", "dial "+hostPort), false)
+	expect("behind a default-deny INPUT an open VM resolves", probe(t, e, "run-vmnet-a", "resolve relay.aether.test"), true)
 	if out, denyErr := exec.Command("iptables", append([]string{"-D"}, deny...)...).CombinedOutput(); denyErr != nil {
 		t.Fatalf("iptables -D %v: %v: %s", deny, denyErr, out)
 	}
@@ -402,6 +469,88 @@ func TestKVMNetwork(t *testing.T) {
 		if n := strings.Count(string(rules), "--mark 0x1000000/0x1000000 -j ACCEPT"); n != 1 {
 			t.Errorf("%s holds the VM rule %d times:\n%s", chain, n, rules)
 		}
+	}
+}
+
+// splitRoutes gives a host that already runs VMs what a VPN, Kubernetes and
+// Docker give it: a network namespace serving on :8080 behind a veth that
+// holds no default route, as a Calico pod's does; a layer-3 tun into it, as a
+// VPN client's, that reaches it through split prefixes, one in the main table
+// and one through a policy rule as wg-quick and Tailscale route; and a bridge
+// whose only port is a veth into it. The test relays the tun's packets to a
+// second tun in the namespace.
+func splitRoutes(t *testing.T) {
+	t.Helper()
+	const ns = "aether-vmtest"
+	t.Cleanup(func() {
+		_ = exec.Command("ip", "rule", "del", "to", "198.51.100.128/25", "lookup", "1000").Run()
+		for _, link := range []string{"vmtestbr", "vmtestdum", "vmtestnic"} {
+			_ = exec.Command("ip", "link", "del", link).Run()
+		}
+		_ = exec.Command("ip", "netns", "del", ns).Run()
+	})
+	if out, err := exec.Command("ip", "netns", "add", ns).CombinedOutput(); err != nil {
+		t.Fatalf("ip netns add %s: %v: %s", ns, err, out)
+	}
+	var tuns []*os.File
+	for _, name := range []string{"vmtestvpn", "vmtestvpnb"} {
+		tun := &netlink.Tuntap{LinkAttrs: netlink.LinkAttrs{Name: name}, Mode: netlink.TUNTAP_MODE_TUN, Flags: netlink.TUNTAP_NO_PI, Queues: 1, NonPersist: true}
+		if err := netlink.LinkAdd(tun); err != nil {
+			t.Fatalf("add the tun %s: %v", name, err)
+		}
+		tuns = append(tuns, tun.Fds[0])
+	}
+	t.Cleanup(func() {
+		for _, f := range tuns {
+			_ = f.Close()
+		}
+	})
+	relay := func(dst, src *os.File) {
+		buf := make([]byte, 65536)
+		for n, err := src.Read(buf); err == nil; n, err = src.Read(buf) {
+			_, _ = dst.Write(buf[:n])
+		}
+	}
+	go relay(tuns[0], tuns[1])
+	go relay(tuns[1], tuns[0])
+	for _, args := range [][]string{
+		{"link", "set", "vmtestvpnb", "netns", ns},
+		{"link", "add", "vmtestwan", "type", "veth", "peer", "name", "wan", "netns", ns},
+		{"link", "add", "vmtestlan", "type", "veth", "peer", "name", "lan", "netns", ns},
+		{"link", "add", "vmtestbr", "type", "bridge"},
+		{"link", "set", "vmtestlan", "master", "vmtestbr", "up"},
+		{"link", "set", "vmtestbr", "up"},
+		{"link", "set", "vmtestwan", "up"},
+		{"link", "set", "vmtestvpn", "up"},
+		{"addr", "add", "192.0.2.1/30", "dev", "vmtestwan"},
+		{"addr", "add", "192.0.2.5", "peer", "192.0.2.6", "dev", "vmtestvpn"},
+		{"addr", "add", "192.0.2.9/29", "dev", "vmtestbr"},
+		{"-n", ns, "addr", "add", "192.0.2.2/30", "dev", "wan"},
+		{"-n", ns, "addr", "add", "192.0.2.6", "peer", "192.0.2.5", "dev", "vmtestvpnb"},
+		{"-n", ns, "addr", "add", "192.0.2.10/29", "dev", "lan"},
+		{"-n", ns, "addr", "add", "198.51.100.1/32", "dev", "lo"},
+		{"-n", ns, "addr", "add", "198.51.100.129/32", "dev", "lo"},
+		{"-n", ns, "link", "set", "lo", "up"},
+		{"-n", ns, "link", "set", "wan", "up"},
+		{"-n", ns, "link", "set", "vmtestvpnb", "up"},
+		{"-n", ns, "link", "set", "lan", "up"},
+		{"route", "add", "198.51.100.0/25", "dev", "vmtestvpn"},
+		{"route", "add", "198.51.100.128/25", "dev", "vmtestvpn", "table", "1000"},
+		{"rule", "add", "to", "198.51.100.128/25", "lookup", "1000"},
+	} {
+		if out, err := exec.Command("ip", args...).CombinedOutput(); err != nil {
+			t.Fatalf("ip %s: %v: %s", strings.Join(args, " "), err, out)
+		}
+	}
+	self, _ := os.Executable()
+	server := exec.Command("ip", "netns", "exec", ns, self, "-test.run", "^TestKVMNetProbe$")
+	server.Env = append(os.Environ(), "AETHER_VM_TEST_PROBE=listen :8080")
+	if err := server.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = server.Process.Kill(); _ = server.Wait() })
+	for deadline := time.Now().Add(10 * time.Second); !strings.HasPrefix(dial("192.0.2.2:8080"), "connected:") && time.Now().Before(deadline); {
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 

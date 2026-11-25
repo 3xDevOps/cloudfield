@@ -3,16 +3,20 @@ package home
 import (
 	"context"
 	"encoding/binary"
+	"fmt"
 	"hash/fnv"
 	"log/slog"
 	"net"
+	"os"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
 	"github.com/hanwen/go-fuse/v2/fs"
 	"github.com/hanwen/go-fuse/v2/fuse"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/codes"
@@ -25,13 +29,18 @@ import (
 
 const (
 	// cacheTTL is how long the guest trusts what it learned of a name or a
-	// file, so another VM's change shows within it.
+	// file's attributes, so another VM's change shows in them within it.
 	cacheTTL = time.Second
 	// callTimeout bounds one operation, including waiting for the service
 	// to come back after a restore.
 	callTimeout = 2 * time.Minute
 	// retries covers a connection cut under a call, as a save does.
 	retries = 3
+	// readAheadKiB replaces the kernel's 128 KiB in sysfs, as the mount's
+	// MaxReadAhead can only lower it. From 1 MiB on, a session that fills
+	// its memory can thrash for minutes on refaults of its own program
+	// instead of being killed (TestKVMSessionThatFillsTheVMIsKilled).
+	readAheadKiB = 512
 )
 
 // Mount mounts the service at dir and serves it from this process until the
@@ -60,6 +69,9 @@ func Mount(dir string, dial func(context.Context) (net.Conn, error)) error {
 			DirectMount: true, DirectMountStrict: true,
 			Options:  []string{"default_permissions"},
 			MaxWrite: maxIO, MaxBackground: 64, DisableReadDirPlus: true,
+			// Read returns bytes, which go-fuse cannot splice; each try
+			// costs a pipe write.
+			DisableSplice: true,
 			// Requests in flight live in PID 1, outside the session's
 			// memory cap; the kernel queues the rest.
 			MaxInflightRequestBytes: 8 << 20,
@@ -67,8 +79,17 @@ func Mount(dir string, dial func(context.Context) (net.Conn, error)) error {
 	})
 	if err != nil {
 		_ = conn.Close()
+		return err
 	}
-	return err
+	var st unix.Stat_t
+	if err = unix.Stat(dir, &st); err != nil {
+		return fmt.Errorf("stat the home: %w", err)
+	}
+	bdi := fmt.Sprintf("/sys/class/bdi/%d:%d/read_ahead_kb", unix.Major(st.Dev), unix.Minor(st.Dev))
+	if err = os.WriteFile(bdi, []byte(strconv.Itoa(readAheadKiB)), 0); err != nil {
+		return fmt.Errorf("set the home's read-ahead: %w", err)
+	}
+	return nil
 }
 
 type filesystem struct {
@@ -105,6 +126,22 @@ type node struct {
 	fs.Inode
 	fsys  *filesystem
 	share int
+
+	mu sync.Mutex
+	// opened is the host file the guest's cache of the node is of: the one
+	// the node was created with, or last opened.
+	opened version
+}
+
+// version tells apart two host files at one path, or one file before and
+// after a change.
+type version struct {
+	node, size   uint64
+	mtime, ctime int64
+}
+
+func versionOf(a *guestpb.HomeAttr) version {
+	return version{node: a.GetNode(), size: a.GetSize(), mtime: a.GetMtimeNs(), ctime: a.GetCtimeNs()}
 }
 
 var (
@@ -180,7 +217,7 @@ func (n *node) newChild(ctx context.Context, name string, a *guestpb.HomeAttr, o
 	share := n.childShare(name)
 	id := n.inode(share, a)
 	fill(&out.Attr, a, id)
-	return n.NewInode(ctx, &node{fsys: n.fsys, share: share}, fs.StableAttr{Mode: a.GetMode() & syscall.S_IFMT, Ino: id})
+	return n.NewInode(ctx, &node{fsys: n.fsys, share: share, opened: versionOf(a)}, fs.StableAttr{Mode: a.GetMode() & syscall.S_IFMT, Ino: id})
 }
 
 func (n *node) entry(ctx context.Context, name string, out *fuse.EntryOut, op func(context.Context) (*guestpb.HomeEntryReply, error)) (*fs.Inode, syscall.Errno) {
@@ -308,8 +345,8 @@ func (n *node) Create(ctx context.Context, name string, flags, mode uint32, out 
 	return child, &file{handle: h, inode: child, fsys: n.fsys}, fuse.FOPEN_KEEP_CACHE, 0
 }
 
-// Open keeps the guest's cached pages of the file: the kernel drops them
-// once a lookup or getattr shows another size or modification time.
+// Open keeps the guest's cached pages and attributes of the file only while
+// the host's file is the one the guest last opened, unchanged.
 func (n *node) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, syscall.Errno) {
 	h := &guestpb.HomeHandle{Id: n.fsys.handles.Add(1), Flags: flags}
 	req := &guestpb.HomeOpenRequest{Path: n.path(), Handle: h}
@@ -318,7 +355,24 @@ func (n *node) Open(ctx context.Context, flags uint32) (fs.FileHandle, uint32, s
 		return nil, 0, errno
 	}
 	h.Node = r.GetAttr().GetNode()
-	return &file{handle: h, inode: n.EmbeddedInode(), fsys: n.fsys}, fuse.FOPEN_KEEP_CACHE, 0
+	f := &file{handle: h, inode: n.EmbeddedInode(), fsys: n.fsys}
+	n.mu.Lock()
+	v := versionOf(r.GetAttr())
+	if v == n.opened {
+		n.mu.Unlock()
+		return f, fuse.FOPEN_KEEP_CACHE, 0
+	}
+	// The attributes only; the kernel drops the pages of an open without
+	// FOPEN_KEEP_CACHE.
+	if errno = n.NotifyContent(-1, 0); errno == 0 {
+		n.opened = v
+	}
+	n.mu.Unlock()
+	if errno != 0 {
+		_ = f.Release(ctx)
+		return nil, 0, errno
+	}
+	return f, 0, 0
 }
 
 func (n *node) Statfs(ctx context.Context, out *fuse.StatfsOut) syscall.Errno {

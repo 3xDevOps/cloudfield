@@ -180,6 +180,8 @@ func newTestEnv(t *testing.T, mutate func(*Config)) *testEnv {
 		StateDir:      filepath.Join(dir, "scheduler"),
 		Homes:         homes,
 		StandardImage: "busybox:1.36",
+		// Tests must not depend on the free space of the host's temp dir.
+		filesystemCapacity: healthyAdmissionData,
 		// The fake runtime never needs the default two-second window, and a short
 		// probe keeps reboot scenarios from being the slowest tests.
 		ExitProbeTimeout: 20 * time.Millisecond,
@@ -1491,8 +1493,8 @@ func TestRetentionTTLDefaults(t *testing.T) {
 	if got := e.sched.cfg.CheckoutTTL; got != 72*time.Hour {
 		t.Fatalf("default CheckoutTTL = %v, want 72h", got)
 	}
-	if got := e.sched.cfg.RunContainerTTL; got != 7*24*time.Hour {
-		t.Fatalf("default RunContainerTTL = %v, want 168h", got)
+	if got := e.sched.cfg.RunContainerTTL; got != 30*24*time.Hour {
+		t.Fatalf("default RunContainerTTL = %v, want 720h", got)
 	}
 	disabled := newTestEnv(t, func(cfg *Config) { cfg.CheckoutTTL = -1 })
 	if got := disabled.sched.cfg.CheckoutTTL; got >= 0 {

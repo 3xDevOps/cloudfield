@@ -38,7 +38,7 @@ func TestSystemStatsFiltersContainersToTheCallerAndSumsTheRest(t *testing.T) {
 		Containers: []sysstats.ContainerUsage{
 			{Owner: sysstats.Owner{Kind: "run", ID: "run-idle", MemberID: grace}, MemoryBytes: 300},
 			{Owner: sysstats.Owner{Kind: "run", ID: "run-busy", MemberID: grace}, MemoryBytes: 100, Rates: cores(2)},
-			{Owner: sysstats.Owner{Kind: "run", ID: "run-admin", MemberID: admin}, MemoryBytes: 500, Rates: cores(1.5)},
+			{Owner: sysstats.Owner{Kind: "run", ID: "run-admin", MemberID: admin}, MemoryBytes: 500, HostMemoryBytes: 900, Rates: cores(1.5)},
 			{MemoryBytes: 50, Rates: cores(0.25)},
 		},
 	}
@@ -65,6 +65,9 @@ func TestSystemStatsFiltersContainersToTheCallerAndSumsTheRest(t *testing.T) {
 	if len(all.Containers) != 3 || all.Containers[0].OwnerID != "run-busy" || all.Containers[1].OwnerID != "run-admin" || all.Containers[2].OwnerID != "run-idle" {
 		t.Fatalf("admin containers = %+v, want sorted by cpu then memory", all.Containers)
 	}
+	if all.Containers[1].MemoryBytes != 500 || all.Containers[1].HostMemoryBytes != 900 {
+		t.Errorf("admin run = %+v, want its use inside the VM and what it holds of the host", all.Containers[1])
+	}
 	if all.Containers[2].CPUCores != nil {
 		t.Errorf("a container without two samples must omit cpu_cores")
 	}
@@ -79,8 +82,8 @@ func TestSystemStatsFiltersContainersToTheCallerAndSumsTheRest(t *testing.T) {
 	if len(own.Containers) != 2 || own.Containers[0].OwnerID != "run-busy" || own.Containers[1].OwnerID != "run-idle" {
 		t.Fatalf("member containers = %+v, want only their own", own.Containers)
 	}
-	if own.Others == nil || own.Others.Containers != 2 || own.Others.CPUCores != 1.75 || own.Others.MemoryBytes != 550 {
-		t.Errorf("member others = %+v, want the admin run and the unowned container", own.Others)
+	if own.Others == nil || own.Others.Containers != 2 || own.Others.CPUCores != 1.75 || own.Others.MemoryBytes != 950 {
+		t.Errorf("member others = %+v, want what the admin run holds of the host and the unowned container", own.Others)
 	}
 }
 

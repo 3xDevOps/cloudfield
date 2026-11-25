@@ -2,6 +2,7 @@ package webgate
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -43,6 +44,8 @@ type Gateway struct {
 	*http.ServeMux
 	cfg Config
 	srv *http.Server
+	// net/http fills srv.TLSConfig on a plain Serve, so it cannot say which mode this is.
+	tls bool
 
 	// Admission covers an import's whole lifetime, including the response,
 	// because it retains its wire body until then.
@@ -160,12 +163,23 @@ func sameOrigin(origin, host string) bool {
 	return strings.EqualFold(u.Host, host)
 }
 
+// TLS makes every later Serve speak HTTPS with cfg. net/http picks the ALPN
+// protocols, so GODEBUG=http2server=0 still turns HTTP/2 off.
+func (g *Gateway) TLS(cfg *tls.Config) {
+	g.srv.TLSConfig = cfg
+	g.tls = true
+}
+
 func (g *Gateway) Serve(ln net.Listener) {
 	g.mu.Lock()
 	g.serving++
 	g.mu.Unlock()
+	serve := g.srv.Serve
+	if g.tls {
+		serve = func(ln net.Listener) error { return g.srv.ServeTLS(ln, "", "") }
+	}
 	go func() {
-		err := g.srv.Serve(ln)
+		err := serve(ln)
 		g.mu.Lock()
 		defer g.mu.Unlock()
 		g.serving--

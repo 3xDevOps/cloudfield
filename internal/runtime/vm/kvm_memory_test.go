@@ -1,0 +1,301 @@
+//go:build kvm
+
+package vm
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
+
+	"github.com/3xDevOps/Aether/internal/runtime"
+)
+
+// TestKVMColdMemoryReturnsToTheHost checks a guest whose page cache fills
+// it, below the 20% free at which DAMON_RECLAIM's default watermarks stop
+// it: DAMON_RECLAIM runs over all of the guest's RAM, a third of a file read
+// once leaves the guest, and the host's memory, within twice min_age and 3
+// minutes, while a file Main reads every 2 seconds stays cached and kdamond
+// stays under 2% of a vCPU. The helper's page cache trim frees most of it
+// first: a third was back in 20 seconds, and in 3 minutes 55 seconds with
+// DAMON_RECLAIM alone. At a 2 GiB limit the session holds enough of the
+// guest's memory to leave under 20% free.
+func TestKVMColdMemoryReturnsToTheHost(t *testing.T) {
+	e := kvmEngine(t)
+	key := "run-cold-memory"
+	t.Cleanup(func() { _ = e.destroy(context.Background(), key) })
+	spec := runtime.Spec{
+		Image: "docker.io/library/ubuntu:24.04", CreationKey: key,
+		Command: []string{"/bin/sh", "-c", "while :; do cat /var/tmp/hot >/dev/null 2>&1; sleep 2; done"},
+		Env:     map[string]string{"AETHER_RUN_ID": key}, CPULimit: 1, MemoryLimitBytes: 2 << 30,
+	}
+	if _, err := e.create(t.Context(), key, spec, options{Offline: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.start(t.Context(), key); err != nil {
+		t.Fatal(err)
+	}
+	params := guestFields(t, e, key, "cd /sys/module/damon_reclaim/parameters && cat enabled min_age monitor_region_end skip_anon kdamond_pid; "+
+		"grep 'System RAM' /proc/iomem | tail -1 | cut -d' ' -f1; awk '/^MemTotal:/ {print $2}' /proc/meminfo", 7)
+	if params[0] != "Y" {
+		t.Fatalf("DAMON_RECLAIM is not running: enabled=%s", params[0])
+	}
+	minAge := time.Duration(parseUint(t, params[1])) * time.Microsecond
+	_, ramLast, _ := strings.Cut(params[5], "-")
+	if last, err := strconv.ParseUint(ramLast, 16, 64); err != nil || last+1 != parseUint(t, params[2]) {
+		t.Errorf("DAMON_RECLAIM watches up to %s, the guest's RAM ends at %s+1", params[2], ramLast)
+	}
+	if params[3] != "N" {
+		t.Errorf("DAMON_RECLAIM has skip_anon=%s in a guest with swap", params[3])
+	}
+	kdamond, memTotalKiB := params[4], parseUint(t, params[6])
+
+	const hotMiB = 64
+	coldMiB := memTotalKiB * 9 / 10 >> 10
+	guestFields(t, e, key, fmt.Sprintf("dd if=/dev/urandom of=/var/tmp/cold bs=1M count=%d iflag=fullblock oflag=direct status=none && "+
+		"dd if=/dev/urandom of=/var/tmp/hot bs=1M count=%d iflag=fullblock oflag=direct status=none", coldMiB, hotMiB), 0)
+	time.Sleep(5 * time.Second)
+	before := guestRAMOnHost(t, key)
+	free := parseUint(t, guestFields(t, e, key, "cat /var/tmp/cold >/dev/null && awk '/^MemFree:/ {print $2}' /proc/meminfo", 1)[0])
+	read := time.Now()
+	if free*5 > memTotalKiB {
+		t.Fatalf("reading %d MiB left %d of %d KiB free, not under 20%%", coldMiB, free, memTotalKiB)
+	}
+	held := guestRAMOnHost(t, key)
+	if held < before+coldMiB<<20/2 {
+		t.Fatalf("reading %d MiB took the host's share of the guest from %d to only %d bytes", coldMiB, before, held)
+	}
+	// The bytes read from the root disk, which holds the hot file; the
+	// helper's binary, whose cold pages leave too, is on a disk of its own.
+	rootReads := func() uint64 {
+		return parseUint(t, guestFields(t, e, key, "awk '{print $3 * 512}' $(dirname $(grep -lx root /sys/block/vd*/serial))/stat", 1)[0])
+	}
+	// Main reloads within 2 seconds whatever of its file the read pushed out.
+	time.Sleep(5 * time.Second)
+	readIn := rootReads()
+	deadline := read.Add(2*minAge + 3*time.Minute)
+	for now := guestRAMOnHost(t, key); now > held-coldMiB<<20/3; now = guestRAMOnHost(t, key) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%s after reading %d MiB the host holds %d bytes of the guest, %d right after the read and %d before it (min_age %s)",
+				time.Since(read).Round(time.Second), coldMiB, now, held, before, minAge)
+		}
+		time.Sleep(5 * time.Second)
+	}
+	t.Logf("reading %d MiB left %d of %d KiB free; the host's share of the guest went %d -> %d -> %d bytes, a third back %s after the read (min_age %s)",
+		coldMiB, free, memTotalKiB, before, held, guestRAMOnHost(t, key), time.Since(read).Round(time.Second), minAge)
+
+	if n := rootReads() - readIn; n > hotMiB<<20/8 {
+		t.Errorf("while the cold file left, the guest read %d bytes from its root disk: the file Main keeps reading was evicted", n)
+	}
+	cpu := guestFields(t, e, key, "cut -d' ' -f14,15 /proc/"+kdamond+"/stat; cut -d' ' -f1 /proc/uptime", 3)
+	ticks := parseUint(t, cpu[0]) + parseUint(t, cpu[1])
+	uptime, err := strconv.ParseFloat(cpu[2], 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	share := float64(ticks) / 100 / uptime
+	if share > 0.02 {
+		t.Errorf("kdamond used %.2f%% of a vCPU", share*100)
+	}
+	t.Logf("kdamond used %.2f%% of a vCPU over %.0f s", share*100, uptime)
+}
+
+// TestKVMBuildCacheReturnsToTheHost checks the helper's page cache trim in a
+// guest that stays mostly free, as one does after a build: of files written
+// and read once on the root disk and in the home, three quarters leave the
+// guest, and the host's memory, within 3 minutes, while a file Main reads
+// every 2 seconds stays cached and the home, part of whose pages are still
+// to be written out when the trim starts, keeps answering. They were
+// back in 76 seconds; without the trim, 16% was after 3 minutes.
+func TestKVMBuildCacheReturnsToTheHost(t *testing.T) {
+	e := kvmEngine(t)
+	key := "run-build-cache"
+	t.Cleanup(func() { _ = e.destroy(context.Background(), key) })
+	spec := runtime.Spec{
+		Image: "docker.io/library/ubuntu:24.04", CreationKey: key,
+		Command: []string{"/bin/sh", "-c", "while :; do cat /var/tmp/hot >/dev/null 2>&1; sleep 2; done"},
+		Env:     map[string]string{"AETHER_RUN_ID": key}, CPULimit: 1, MemoryLimitBytes: 4 << 30,
+		Mounts: []runtime.Mount{{HostPath: t.TempDir(), ContainerPath: "/root"}},
+	}
+	if _, err := e.create(t.Context(), key, spec, options{Offline: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.start(t.Context(), key); err != nil {
+		t.Fatal(err)
+	}
+	const hotMiB, diskMiB, homeMiB = 64, 1024, 256
+	guestFields(t, e, key, fmt.Sprintf("dd if=/dev/urandom of=/var/tmp/hot bs=1M count=%d iflag=fullblock oflag=direct status=none", hotMiB), 0)
+	time.Sleep(5 * time.Second)
+	before := guestRAMOnHost(t, key)
+	guestFields(t, e, key, fmt.Sprintf("head -c %dM /dev/urandom >/var/tmp/built && head -c %dM /dev/urandom >/root/built && cat /var/tmp/built /root/built >/dev/null", diskMiB, homeMiB), 0)
+	built := time.Now()
+	held := guestRAMOnHost(t, key)
+	if held < before+diskMiB<<20/2 {
+		t.Fatalf("writing and reading %d MiB took the host's share of the guest from %d to only %d bytes", diskMiB+homeMiB, before, held)
+	}
+	rootReads := func() uint64 {
+		return parseUint(t, guestFields(t, e, key, "awk '{print $3 * 512}' $(dirname $(grep -lx root /sys/block/vd*/serial))/stat", 1)[0])
+	}
+	readIn := rootReads()
+	var slowest time.Duration
+	for now := held; now > before+(held-before)/4; now = guestRAMOnHost(t, key) {
+		if time.Since(built) > 3*time.Minute {
+			t.Fatalf("%s after the build the host holds %d bytes of the guest, %d right after it and %d before it", time.Since(built).Round(time.Second), now, held, before)
+		}
+		time.Sleep(5 * time.Second)
+		asked := time.Now()
+		pressure := guestFields(t, e, key, "date >/root/tick && cat /root/tick >/dev/null && head -1 /sys/fs/cgroup/memory.pressure", 5)
+		slowest = max(slowest, time.Since(asked))
+		t.Logf("%s after the build the host holds %d bytes; guest %s", time.Since(built).Round(time.Second), guestRAMOnHost(t, key), pressure)
+	}
+	t.Logf("the host's share of the guest went %d -> %d -> %d bytes, three quarters of the build back %s after it",
+		before, held, guestRAMOnHost(t, key), time.Since(built).Round(time.Second))
+	if n := rootReads() - readIn; n > hotMiB<<20/8 {
+		t.Errorf("while the build's files left, the guest read %d bytes from its root disk: the trim evicted the file Main keeps reading", n)
+	}
+	if slowest > 2*time.Second {
+		t.Errorf("a write and a read in the home took %s while the helper trimmed", slowest)
+	}
+}
+
+// TestKVMWakeLoadsBackWhatWasSaved measures the two amounts the scheduler's
+// admission counts: what a session VM holds of the host once it has booted,
+// under the 512 MiB a start is allowed (startupMemoryBytes), and what a wake
+// loads back, which savedMemory reads off the disk before the restore: the
+// memory the session held, not the VM's 2 GiB.
+func TestKVMWakeLoadsBackWhatWasSaved(t *testing.T) {
+	e := kvmEngine(t)
+	key := "run-wake-memory"
+	t.Cleanup(func() { _ = e.destroy(context.Background(), key) })
+	spec := runtime.Spec{
+		Image: "docker.io/library/ubuntu:24.04", CreationKey: key, Command: []string{"/bin/sh", "-c", "exec sleep infinity"},
+		Env: map[string]string{"AETHER_RUN_ID": key}, CPULimit: 2, MemoryLimitBytes: 2 << 30,
+	}
+	if _, err := e.create(t.Context(), key, spec, options{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.start(t.Context(), key); err != nil {
+		t.Fatal(err)
+	}
+	held := func() uint64 {
+		use, err := e.memoryUse()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return use[runtime.ID(idPrefix+key)]
+	}
+	const start, fill = 512 << 20, 768 << 20
+	booted := held()
+	if booted == 0 || booted > start {
+		t.Errorf("a booted VM holds %d bytes of the host, want some and at most the %d a start is allowed", booted, start)
+	}
+	if saved, err := e.savedMemory(key); err != nil || saved != 0 {
+		t.Errorf("a running VM has %d bytes of saved memory, %v", saved, err)
+	}
+
+	guestFields(t, e, key, "head -c 768M /dev/urandom >/dev/shm/fill", 0)
+	before := held()
+	if err := e.save(t.Context(), key); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := e.savedMemory(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved < fill || saved > fill+start {
+		t.Errorf("the saved state holds %d bytes, want the %d the session filled and at most a start's %d more", saved, uint64(fill), uint64(start))
+	}
+	if err = e.restore(t.Context(), key); err != nil {
+		t.Fatal(err)
+	}
+	after := held()
+	if after < fill || after > saved+start {
+		t.Errorf("the woken VM holds %d bytes, want the %d it filled and at most the %d saved plus a start", after, uint64(fill), saved)
+	}
+	t.Logf("booted with %d bytes; held %d before the save, %d saved on disk, %d after the wake", booted, before, saved, after)
+}
+
+func guestFields(t *testing.T, e *engine, key, script string, n int) []string {
+	t.Helper()
+	out, code := vmRun(t, e, key, script)
+	fields := strings.Fields(out)
+	if code != 0 || len(fields) != n {
+		t.Fatalf("%q exited %d with %q, want %d fields", script, code, out, n)
+	}
+	return fields
+}
+
+func parseUint(t *testing.T, s string) uint64 {
+	t.Helper()
+	v, err := strconv.ParseUint(s, 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+// guestRAMOnHost is the guest memory the host holds for the VM: Cloud
+// Hypervisor's shared memory, charged to the VM's unit.
+func guestRAMOnHost(t *testing.T, key string) uint64 {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("/sys/fs/cgroup", runtime.SessionSlice, unitName(key), "memory.stat"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for line := range strings.SplitSeq(string(data), "\n") {
+		if v, ok := strings.CutPrefix(line, "shmem "); ok {
+			return parseUint(t, v)
+		}
+	}
+	t.Fatalf("memory.stat of %s has no shmem", key)
+	return 0
+}
+
+// TestKVMSaveWritesOnlyWhatTheSessionUses saves a VM whose page cache fills
+// most of it: the save waits for free page reporting to hand the dropped
+// cache to the host, so the memory file holds little more than the session
+// uses. Saved 3 s after the drop, it held 1228 to 1315 MiB of the 1400 MiB
+// cached.
+func TestKVMSaveWritesOnlyWhatTheSessionUses(t *testing.T) {
+	e := kvmEngine(t)
+	key := "run-save-small"
+	t.Cleanup(func() { _ = e.destroy(context.Background(), key) })
+	spec := runtime.Spec{
+		Image: "docker.io/library/ubuntu:24.04", CreationKey: key, Command: []string{"/bin/sh", "-c", "exec sleep infinity"},
+		Env: map[string]string{"AETHER_RUN_ID": key}, CPULimit: 2, MemoryLimitBytes: 2 << 30,
+	}
+	if _, err := e.create(t.Context(), key, spec, options{Offline: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.start(t.Context(), key); err != nil {
+		t.Fatal(err)
+	}
+	sum := guestFields(t, e, key, "head -c 1400M /dev/urandom >/var/tmp/f && sync && cksum </var/tmp/f", 2)
+	held := guestRAMOnHost(t, key)
+	start := time.Now()
+	if err := e.save(t.Context(), key); err != nil {
+		t.Fatal(err)
+	}
+	took := time.Since(start)
+	var st unix.Stat_t
+	if err := unix.Stat(filepath.Join(e.path(key, snapshotDir), "memory-ranges"), &st); err != nil {
+		t.Fatal(err)
+	}
+	saved := uint64(st.Blocks) * 512
+	t.Logf("the save took %s and wrote %d MiB of memory; the host held %d MiB of the guest before it", took.Round(time.Millisecond), saved>>20, held>>20)
+	if saved > 400<<20 {
+		t.Errorf("the save wrote %d MiB of memory, most of the %d MiB the host held of the guest, its page cache included", saved>>20, held>>20)
+	}
+	if err := e.restore(t.Context(), key); err != nil {
+		t.Fatal(err)
+	}
+	if got := guestFields(t, e, key, "cksum </var/tmp/f", 2); got[0] != sum[0] || got[1] != sum[1] {
+		t.Errorf("the restored guest reads its file back as %v, want %v", got, sum)
+	}
+}

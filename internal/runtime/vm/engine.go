@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"log/slog"
 	"math"
 	"net/netip"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -38,8 +40,11 @@ type Images interface {
 	Untag(ref string) error
 	Tags(repo string) ([]string, error)
 	NewCacheDisk(ctx context.Context, pool, path string) (vmimage.Disk, error)
-	SnapshotCache(ctx context.Context, disk vmimage.Disk) (string, error)
+	SnapshotCache(disk vmimage.Disk) (string, error)
+	UnshareCache(ctx context.Context, disk vmimage.Disk) error
 	PromoteCache(pool, snapshot string) error
+	ProgramDisk(home, executable, unit, path string) (vmimage.Disk, bool, error)
+	BuildProgram(home, executable, unit string) error
 	Sweep() error
 }
 
@@ -50,11 +55,19 @@ const (
 	stateDiskBytes = 1 << 30
 	minMemoryMiB   = 256
 	bootTimeout    = 90 * time.Second
-	agentOOMScore  = 500
+	// guestOverheadMiB is what the guest keeps out of the session's limit
+	// beyond a 32nd of it (guestMiB): 288 MiB for what the kernel and the
+	// helper hold (at most 265 MiB, at a 3 GiB limit, once sessions of 1 to
+	// 8 GiB had started), the helper's 48 MiB reserve and the git service's
+	// 96 MiB.
+	guestOverheadMiB = 288 + 48 + 96
 	// unitOverheadMiB is what a VM's unit may hold beyond the guest's
 	// memory: Cloud Hypervisor, virtiofsd, and the monitor with the file
 	// service, whose requests a guest can fill.
 	unitOverheadMiB = 512
+	// consoleStartLines is how much of the start of its console the server
+	// log keeps for a guest that restarted instead of answering.
+	consoleStartLines = 100
 	// cmdlineBase boots the read-only helper disk, whose /init is the helper.
 	// Page reporting order 0 lets freed guest page cache back to the host;
 	// at the default order it stalls with most of it still held. Cloud
@@ -70,26 +83,38 @@ type engine struct {
 	dial  func(vsockPath string) (helper, error)
 	run   func(ctx context.Context, name string, args ...string) error
 
+	cgroupRoot string
+	reportPoll time.Duration
+
 	mu      sync.Mutex
 	locks   map[string]*sync.Mutex
 	helpers map[string]helper
 	gits    map[string]*guest.Git
 	booting map[string]bool
 	fresh   map[string]bool
+	capture map[string]bool
 	events  map[string]runtime.MemoryEvents
 	relays  map[string]*relay
+	// frozenAt is when freeze froze each VM that is still frozen.
+	frozenAt map[string]time.Time
 
-	netMu    sync.Mutex
-	reserved map[int]bool
+	netMu     sync.Mutex
+	reserved  map[int]bool
+	dns       *dnsRelay
+	listenDNS func() (*dnsRelay, error)
 
 	promotions sync.WaitGroup
+	builds     sync.WaitGroup
 }
 
 func newEngine(cfg Config, u units, dial func(string) (helper, error)) *engine {
 	return &engine{
 		cfg: cfg, root: filepath.Join(cfg.DataDir, "vm"), units: u, dial: dial, run: runCommand,
 		locks: map[string]*sync.Mutex{}, helpers: map[string]helper{}, gits: map[string]*guest.Git{}, booting: map[string]bool{},
-		fresh: map[string]bool{}, events: map[string]runtime.MemoryEvents{}, relays: map[string]*relay{}, reserved: map[int]bool{},
+		fresh: map[string]bool{}, capture: map[string]bool{}, events: map[string]runtime.MemoryEvents{}, relays: map[string]*relay{}, reserved: map[int]bool{},
+		frozenAt:   map[string]time.Time{},
+		listenDNS:  func() (*dnsRelay, error) { return listenDNS(proxyAddr, vmSubnet, hostResolvers) },
+		cgroupRoot: "/sys/fs/cgroup", reportPoll: 4 * time.Second,
 	}
 }
 
@@ -102,15 +127,20 @@ func runCommand(ctx context.Context, name string, args ...string) error {
 }
 
 func (e *engine) lock(key string) func() {
+	l := e.keyLock(key)
+	l.Lock()
+	return l.Unlock
+}
+
+func (e *engine) keyLock(key string) *sync.Mutex {
 	e.mu.Lock()
+	defer e.mu.Unlock()
 	l := e.locks[key]
 	if l == nil {
 		l = &sync.Mutex{}
 		e.locks[key] = l
 	}
-	e.mu.Unlock()
-	l.Lock()
-	return l.Unlock
+	return l
 }
 
 // helper returns the key's client, dialing once per VM lifetime; the client
@@ -177,9 +207,11 @@ func (e *engine) flag(m map[string]bool, key string) bool {
 
 // options are what a VM of one kind needs beyond its spec.
 type options struct {
-	KeepRoot bool
 	// Offline gives the VM no network device.
 	Offline bool
+	// NoSwap gives the VM no swap, as the dictation engine's container has
+	// none.
+	NoSwap bool
 	// Lifetime has systemd end the VM after it, even when no server is
 	// left to: the VM of a check that a crash interrupted.
 	Lifetime time.Duration
@@ -256,8 +288,8 @@ func (e *engine) create(ctx context.Context, key string, spec runtime.Spec, opts
 		Env:        overrideEnv(base.Config.Env, runtime.EnvList(runtime.TrustCheckouts(spec.Env, spec.WorktreeMountPath, spec.ExtraWorktrees))),
 		WorkingDir: cmp.Or(spec.WorkingDir, base.Config.WorkingDir, "/"), Command: spec.Command, TTY: spec.TTY,
 		SetupScript: spec.SetupScript, SecretEnv: spec.SecretEnv, NestedDocker: spec.NestedDocker, Sudo: spec.Sudo,
-		CPUs: cpus, CPULimit: limit, MemoryMiB: memMiB, PidsLimit: spec.PidsLimit, Checkouts: shared, CheckoutDisks: disks, Mounts: spec.Mounts, Net: index, Egress: spec.Egress,
-		KeepRoot: opts.KeepRoot, Lifetime: opts.Lifetime, OwnedDirs: opts.OwnedDirs, Serves: opts.Serves,
+		CPUs: cpus, CPULimit: limit, MemoryMiB: memMiB, PidsLimit: spec.PidsLimit, Checkouts: shared, CheckoutDisks: disks, Mounts: spec.Mounts, Programs: spec.Programs, Net: index, Egress: spec.Egress,
+		NoSwap: opts.NoSwap, Lifetime: opts.Lifetime, OwnedDirs: opts.OwnedDirs, Serves: opts.Serves,
 	}
 	if opts.Browser {
 		if err = e.attachBrowser(ctx, rec); err != nil {
@@ -278,6 +310,19 @@ func vcpus(limit float64) (int, float64) {
 		return host, 0
 	}
 	return min(host, max(1, int(math.Ceil(limit)))), limit
+}
+
+// guestMiB is the RAM of a VM whose session's limit is limitMiB: the limit,
+// which the session gets whole, and what the guest holds outside it. A
+// 64th of RAM goes to the kernel's page structures, and up to as much
+// again to its watermarks.
+func guestMiB(limitMiB int64) int64 {
+	return limitMiB + limitMiB/32 + guestOverheadMiB
+}
+
+// unitMemoryMiB is the MemoryMax of rec's unit.
+func unitMemoryMiB(rec *record) int64 {
+	return guestMiB(rec.MemoryMiB) + unitOverheadMiB
 }
 
 func memoryMiB(limit int64) (int64, error) {
@@ -312,11 +357,17 @@ func hostMemoryBytes() (int64, error) {
 	return 0, errors.New("vm runtime: /proc/meminfo has no MemTotal")
 }
 
-// start cold-starts a stopped VM; on a running one it only makes sure Main
+// start cold-starts a stopped VM on the disks it had, as docker start keeps
+// a container's writable layer; on a running one it only makes sure Main
 // was started, as a redundant docker start does.
-func (e *engine) start(ctx context.Context, key string) (err error) {
+func (e *engine) start(ctx context.Context, key string) error {
 	unlock := e.lock(key)
 	defer unlock()
+	return e.startLocked(ctx, key)
+}
+
+// startLocked is start for a caller holding the VM's lock.
+func (e *engine) startLocked(ctx context.Context, key string) (err error) {
 	rec, err := e.load(key)
 	if err != nil {
 		return err
@@ -326,7 +377,9 @@ func (e *engine) start(ctx context.Context, key string) (err error) {
 		return err
 	}
 	if st.Active && rec.Exited {
-		if err = e.shutDown(ctx, rec); err != nil {
+		// A lingering VM powers off only to boot again on the same cache
+		// disk, which becomes its pool's newest when the VM stops for good.
+		if err = e.shutDown(ctx, rec, false); err != nil {
 			return err
 		}
 	} else if st.Active {
@@ -338,9 +391,16 @@ func (e *engine) start(ctx context.Context, key string) (err error) {
 		}
 		rec.Saved = false
 	}
-	if rec.Booted && !rec.KeepRoot {
+	// A root disk the setup script never finished on, as on every VM made
+	// before setup ran once per VM, starts over from the base.
+	if rec.Booted && rec.SetupScript != "" && !rec.SetupDone {
 		if rec.Root, err = e.cfg.Images.NewRootDisk(ctx, rec.Base, e.path(key, rootDisk)); err != nil {
 			return fmt.Errorf("vm runtime: root disk: %w", err)
+		}
+	}
+	if rec.Cache.Path != "" {
+		if err = e.cfg.Images.UnshareCache(ctx, rec.Cache); err != nil {
+			return fmt.Errorf("vm runtime: cache disk: %w", err)
 		}
 	}
 	// A cold start ends any companion and takes the current browser image's
@@ -350,6 +410,9 @@ func (e *engine) start(ctx context.Context, key string) (err error) {
 		if err = e.attachBrowser(ctx, rec); err != nil {
 			return err
 		}
+	}
+	if err = e.attachPrograms(rec); err != nil {
+		return err
 	}
 	l, err := e.bootLaunch(ctx, rec)
 	if err != nil {
@@ -376,6 +439,13 @@ func (e *engine) start(ctx context.Context, key string) (err error) {
 	}()
 	if err = e.boot(ctx, rec); err != nil {
 		return err
+	}
+	// A boot for capture runs no setup script.
+	if !rec.SetupDone && !e.flag(e.capture, key) {
+		rec.SetupDone = true
+		if err = e.store(rec); err != nil {
+			return err
+		}
 	}
 	e.setFlag(e.fresh, key, true)
 	return nil
@@ -412,24 +482,51 @@ func (e *engine) bootLaunch(ctx context.Context, rec *record) (launch, error) {
 	if rec.Browser.Path != "" {
 		disks = append(disks, attached{rec.Browser, "browser", true})
 	}
-	diskArgs, err := diskArgs(disks)
-	if err != nil {
-		return launch{}, err
+	programs := make([]guest.Mount, len(rec.ProgramDisks))
+	for i, d := range rec.ProgramDisks {
+		programs[i] = guest.Mount{Volume: guest.VolumeProgram, Source: strconv.Itoa(i), Target: d.Target, ReadOnly: true}
 	}
-	cfg := guest.Config{Hostname: rec.Key, Mounts: p.mounts, Checkouts: checkouts, Sockets: p.sockets, Serves: rec.Serves, Loopbacks: p.loopbacks}
+	cfg := guest.Config{
+		Hostname: rec.Key, Mounts: slices.Concat(p.mounts, programs), Checkouts: checkouts, Sockets: p.sockets, Serves: rec.Serves, Loopbacks: p.loopbacks,
+		MemoryLimit: uint64(rec.MemoryMiB) << 20,
+	}
+	if !rec.NoSwap {
+		// A quarter of the limit, as Docker gives a container.
+		cfg.Swap = cfg.MemoryLimit / 4
+	}
 	if rec.Browser.Path != "" {
 		cfg.Serves = append(cfg.Serves, guest.Socket{Port: guest.BrowserPort, Path: guest.BrowserSocket})
 	}
 	if rec.Net != offline {
-		var dns []netip.Addr
+		cfg.Network = guestNetwork(rec.Net)
 		if !rec.Egress {
-			dns = hostDNS()
+			cfg.Network.DNS = []netip.Addr{proxyAddr}
+			_, cfg.Network.Search = hostResolvConf()
 		}
-		cfg.Network = guestNetwork(rec.Net, dns)
 	}
 	cmdline, err := cfg.KernelArgs(cmdlineBase)
+	if errors.Is(err, guest.ErrCmdlineTooLong) && len(programs) > 0 {
+		slog.Warn("vm runtime: boot without the agent programs' disks, whose mounts do not fit the kernel command line", "vm", rec.Key)
+		if err = e.releasePrograms(rec); err != nil {
+			return launch{}, err
+		}
+		cfg.Mounts = p.mounts
+		cmdline, err = cfg.KernelArgs(cmdlineBase)
+	}
+	if errors.Is(err, guest.ErrCmdlineTooLong) && cfg.Network != nil && len(cfg.Network.Search) > 0 {
+		slog.Warn("vm runtime: boot without the host's search domains, which do not fit the kernel command line", "vm", rec.Key, "search", cfg.Network.Search)
+		cfg.Network.Search = nil
+		cmdline, err = cfg.KernelArgs(cmdlineBase)
+	}
 	if err != nil {
 		return launch{}, fmt.Errorf("vm runtime: kernel command line: %w", err)
+	}
+	for i, d := range rec.ProgramDisks {
+		disks = append(disks, attached{d.Disk, programSerial(i), true})
+	}
+	diskArgs, err := diskArgs(disks)
+	if err != nil {
+		return launch{}, err
 	}
 	args := []string{
 		"--api-socket", "path=" + e.path(rec.Key, apiSocket),
@@ -445,7 +542,7 @@ func (e *engine) bootLaunch(ctx context.Context, rec *record) (launch, error) {
 		// (Cloud Hypervisor v54.1 on a host that is itself a VM). Sessions
 		// run no VMs of their own.
 		"--cpus", fmt.Sprintf("boot=%d,nested=off", rec.CPUs),
-		"--memory", fmt.Sprintf("size=%dM,shared=on", rec.MemoryMiB),
+		"--memory", fmt.Sprintf("size=%dM,shared=on", guestMiB(rec.MemoryMiB)),
 		"--balloon", "size=0,free_page_reporting=on",
 	)
 	if rec.Net != offline {
@@ -492,9 +589,10 @@ type attached struct {
 }
 
 // diskArgs states every disk's format to Cloud Hypervisor, which would
-// otherwise guess it from bytes a session may have written. Only qcow2 disks,
-// which the server makes over bases no session wrote, may open a backing
-// file.
+// otherwise guess it from bytes a session may have written. Only qcow2 disks
+// may open a backing file: the server makes each with its backing format
+// pinned to raw, which Cloud Hypervisor follows, so a base a session wrote
+// reads as data.
 func diskArgs(disks []attached) ([]string, error) {
 	args := make([]string, len(disks))
 	for i, a := range disks {
@@ -526,7 +624,11 @@ func (e *engine) launch(ctx context.Context, rec *record, l launch) error {
 	logPath := e.path(rec.Key, monitorLog)
 	properties := []string{
 		"Type=exec", "PrivateMounts=yes", "KillMode=control-group", "TimeoutStopSec=15",
-		fmt.Sprintf("OOMScoreAdjust=%d", agentOOMScore), fmt.Sprintf("MemoryMax=%dM", rec.MemoryMiB+unitOverheadMiB),
+		// The guest swaps its own memory: host swap would page it out
+		// behind the guest's back. No OOMScoreAdjust, unlike a container's
+		// 500: a host OOM kill of the monitor ends the whole session, not
+		// one process in it.
+		fmt.Sprintf("MemoryMax=%dM", unitMemoryMiB(rec)), "MemorySwapMax=0",
 		"StandardOutput=append:" + logPath, "StandardError=append:" + logPath,
 	}
 	if rec.CPULimit > 0 {
@@ -537,6 +639,14 @@ func (e *engine) launch(ctx context.Context, rec *record, l launch) error {
 	}
 	properties = append(properties, sandbox(filepath.Dir(e.root), e.cfg.Monitor[0], rec, l)...)
 	argv := append(append([]string{}, e.cfg.Monitor...), e.dir(rec.Key))
+	if err := os.Rename(logPath, logPath+".1"); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("vm runtime: keep the last monitor log of VM %s: %w", rec.Key, err)
+	}
+	// Removed before the unit starts: the last monitor's events would read
+	// as a reboot of this guest.
+	if err := os.Remove(e.path(rec.Key, eventsFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("vm runtime: remove the last monitor's events of VM %s: %w", rec.Key, err)
+	}
 	if err := e.units.Start(ctx, unitName(rec.Key), argv, properties); err != nil {
 		return err
 	}
@@ -597,13 +707,22 @@ func (e *engine) boot(ctx context.Context, rec *record) error {
 	if rec.TTY {
 		tty = &guest.Size{Cols: 80, Rows: 24}
 	}
+	// The setup script runs once per VM, as once per container: the root
+	// disk keeps what it did.
+	argv, script := rec.Command, rec.SetupScript
+	if rec.SetupDone {
+		script = ""
+	}
+	if e.flag(e.capture, rec.Key) {
+		argv, script = captureMain, ""
+	}
 	e.setFlag(e.booting, rec.Key, true)
 	err = h.Boot(upCtx, guest.BootSpec{
 		Main: guest.ProcessSpec{
-			ID: guest.MainID, Argv: rec.Command, Env: rec.Env, User: rec.User, Dir: rec.WorkingDir, TTY: tty,
+			ID: guest.MainID, Argv: argv, Env: rec.Env, User: rec.User, Dir: rec.WorkingDir, TTY: tty,
 			NoNewPrivileges: !rec.Sudo,
 		},
-		SetupScript: rec.SetupScript, NestedDocker: rec.NestedDocker, PidsLimit: rec.PidsLimit,
+		SetupScript: script, NestedDocker: rec.NestedDocker, PidsLimit: rec.PidsLimit,
 	})
 	e.setFlag(e.booting, rec.Key, false)
 	var setup *guest.SetupError
@@ -619,20 +738,21 @@ func (e *engine) boot(ctx context.Context, rec *record) error {
 	return nil
 }
 
-// startKept is start, with a failure of a VM that keeps its root disk that
-// is not the disk's own marked runtime.ErrStartLater, so its unsaved
+// startKept is start, with a failure that is not the VM's own (its root
+// disk's or its setup script's) marked runtime.ErrStartLater, so its unsaved
 // changes are not thrown away with it.
 func (e *engine) startKept(ctx context.Context, key string) error {
 	err := e.start(ctx, key)
-	if err == nil || errors.Is(err, runtime.ErrUnstartableImage) || ctx.Err() != nil {
+	_, setup := errors.AsType[*runtime.SetupError](err)
+	if err == nil || setup || errors.Is(err, runtime.ErrUnstartableImage) || errors.Is(err, runtime.ErrNotFound) || ctx.Err() != nil {
 		return err
 	}
-	if rec, loadErr := e.load(key); loadErr == nil && rec.KeepRoot {
-		return fmt.Errorf("%w: %w", runtime.ErrStartLater, err)
-	}
-	return err
+	return fmt.Errorf("%w: %w", runtime.ErrStartLater, err)
 }
 
+// waitHelper waits for the guest's helper to answer. A guest that restarted
+// first is not the one awaited, whatever answers after: a restored guest
+// that dies comes back from its disks, with none of its processes.
 func (e *engine) waitHelper(ctx context.Context, key string, h helper) error {
 	ctx, cancel := context.WithTimeout(ctx, bootTimeout)
 	defer cancel()
@@ -648,6 +768,9 @@ func (e *engine) waitHelper(ctx context.Context, key string, h helper) error {
 	for {
 		select {
 		case err := <-answered:
+			if e.rebooted(key) {
+				return e.restarted(key)
+			}
 			if err != nil {
 				return fmt.Errorf("vm runtime: helper of VM %s did not answer: %w%s", key, err, e.logTail(key))
 			}
@@ -659,12 +782,27 @@ func (e *engine) waitHelper(ctx context.Context, key string, h helper) error {
 			}
 			return nil
 		case <-tick.C:
+			if e.rebooted(key) {
+				cancel()
+				return e.restarted(key)
+			}
 			if st, err := e.units.State(ctx, unitName(key)); err == nil && !st.Active {
 				cancel()
 				return fmt.Errorf("vm runtime: VM %s stopped while booting%s", key, e.logTail(key))
 			}
 		}
 	}
+}
+
+// restarted is the error of a guest that restarted before it answered.
+// Each monitor starts console.log again, so its first lines are what the
+// guest printed as it died, and its kernel's panic fills the tail the error
+// quotes: the server log keeps them.
+func (e *engine) restarted(key string) error {
+	data, _ := readNoFollow(e.path(key, consoleLog))
+	lines := strings.SplitN(string(data), "\n", consoleStartLines+1)
+	slog.Warn("vm runtime: the guest restarted instead of answering", "vm", key, "console_start", strings.Join(lines[:min(consoleStartLines, len(lines))], "\n"))
+	return fmt.Errorf("vm runtime: the guest of VM %s restarted instead of answering%s", key, e.logTail(key))
 }
 
 func (e *engine) logTail(key string) string {

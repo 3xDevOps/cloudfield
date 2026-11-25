@@ -131,18 +131,24 @@ export function LinkedText({ text }: { text: string }) {
   return <>{parts}</>
 }
 
+const Plain = createContext(false)
+
+const CodeElement: Components['code'] = ({ className, children }) => {
+  const plain = useContext(Plain)
+  const text = String(children ?? '')
+  const lang = /language-([\w-]+)/.exec(className ?? '')?.[1]
+  if (!lang && !text.includes('\n')) return <Code>{children}</Code>
+  const code = text.replace(/\n$/, '')
+  return (
+    <CodeBlock data-lang={lang}>
+      <code>{plain ? code : <Highlighted code={code} lang={lang ?? ''} />}</code>
+    </CodeBlock>
+  )
+}
+
 const components: Components = {
   pre: ({ children }) => <>{children}</>,
-  code: ({ className, children }) => {
-    const text = String(children ?? '')
-    const lang = /language-([\w-]+)/.exec(className ?? '')?.[1]
-    if (!lang && !text.includes('\n')) return <Code>{children}</Code>
-    return (
-      <CodeBlock data-lang={lang}>
-        <code><Highlighted code={text.replace(/\n$/, '')} lang={lang ?? ''} /></code>
-      </CodeBlock>
-    )
-  },
+  code: CodeElement,
   a: ({ href, children }) => {
     const file = href ? parsePath(href) : null
     if (file) return <FileLink target={file} explicit>{children}</FileLink>
@@ -174,13 +180,17 @@ function markPaths(parent: Root | Element) {
 
 const rehypePaths = () => markPaths
 
-const Block = memo(function Block({ source }: { source: string }) {
-  return <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypePaths]} components={components}>{source}</ReactMarkdown>
+const Block = memo(function Block({ source, open }: { source: string; open: boolean }) {
+  return (
+    <Plain.Provider value={open}>
+      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypePaths]} components={components}>{source}</ReactMarkdown>
+    </Plain.Provider>
+  )
 })
 
 const blockEnter: Entrance = { motion: { duration: '--duration-270', easing: '--ease-enter' }, blur: true }
 
-/** While `live`, each block that appears after the first render fades in from a blur. A `muted` text is the agent's own reasoning. */
+/** While `live`, each block that appears after the first render fades in from a blur, and code in the last block stays unhighlighted until another block follows. A `muted` text is the agent's own reasoning. */
 export function Markdown({ text, live = false, muted = false }: { text: string; live?: boolean; muted?: boolean }) {
   const blocks = useMemo(() => lexer(text).map((token) => token.raw).filter((raw) => raw.trim()), [text])
   const root = useRef<HTMLDivElement>(null)
@@ -195,7 +205,7 @@ export function Markdown({ text, live = false, muted = false }: { text: string; 
   })
   return (
     <div ref={root} data-slot="markdown" className={cn('markdown break-words', muted ? 'text-ui-sm text-muted' : 'text-prose text-text')}>
-      {blocks.map((raw, index) => <Block key={index} source={raw} />)}
+      {blocks.map((raw, index) => <Block key={index} source={raw} open={live && index === blocks.length - 1} />)}
     </div>
   )
 }

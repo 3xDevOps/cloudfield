@@ -3,10 +3,12 @@
 package vm
 
 import (
+	"bufio"
 	"bytes"
 	"cmp"
 	"context"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -181,7 +183,7 @@ func TestKVMCheckoutLivesOnTheVMDisk(t *testing.T) {
 	key := prefix + "-a"
 	run := domain.RunID(key)
 	branch := h.sh(t, key, "git symbolic-ref --short HEAD")
-	if !strings.HasPrefix(branch, "aether/run-") {
+	if !strings.HasPrefix(branch, "cloudfield/run-") {
 		t.Fatalf("checkout is on %q, not its run branch", branch)
 	}
 	if owner := h.sh(t, key, "stat -c %u:%g /workspace /workspace/src/0/f0.txt /workspace/.git/index | sort -u"); owner != "1000:1000" {
@@ -245,7 +247,9 @@ func TestKVMCheckoutLivesOnTheVMDisk(t *testing.T) {
 	// Pause freezes the session, not the VM: a writer in it stops, exec is
 	// refused, and git still serves the checkout, so a close can commit a
 	// paused session as it commits a paused container.
-	h.sh(t, key, "(while [ ! -e stop ]; do date +%s%N > tick; sleep 0.05; done) >/dev/null 2>&1 &")
+	// The writer renames each tick into place, so a pause never lands on an
+	// empty file.
+	h.sh(t, key, "date +%s%N > tick; (while [ ! -e stop ]; do date +%s%N > tick.new && mv tick.new tick; sleep 0.05; done) >/dev/null 2>&1 &")
 	tick := func() string {
 		t.Helper()
 		got, readErr := h.git.FilesRead(ctx, ws, run, "", "tick", 0)
@@ -265,7 +269,7 @@ func TestKVMCheckoutLivesOnTheVMDisk(t *testing.T) {
 	if _, _, _, err = h.e.exec(ctx, key, []string{"true"}, "/"); err == nil {
 		t.Fatal("exec into a paused session was not refused")
 	}
-	if patch, err = h.git.RunPatch(ctx, run, gitengine.PatchRequest{}); err != nil || patch.Recorded || !strings.Contains(patch.Text, "+++ b/tick") {
+	if patch, err = h.git.RunPatch(ctx, run, gitengine.PatchRequest{}); err != nil || patch.Recorded || !strings.Contains(patch.Text, "+++ b/tick\n") {
 		t.Fatalf("patch of a paused session = %+v, %v", patch, err)
 	}
 	member := domain.GitIdentity{Name: "Member", Email: "member@localhost"}
@@ -285,7 +289,7 @@ func TestKVMCheckoutLivesOnTheVMDisk(t *testing.T) {
 	if now := tick(); now == frozen {
 		t.Fatal("a resumed session does not write")
 	}
-	h.sh(t, key, "touch stop && sleep 0.3 && rm -f stop tick")
+	h.sh(t, key, "touch stop && sleep 0.3 && rm -f stop tick tick.new")
 
 	// Finalize's order: the main process exits, then the last snapshot, the
 	// commit, publication and evidence, then the VM goes.
@@ -325,11 +329,27 @@ func TestKVMCheckoutLivesOnTheVMDisk(t *testing.T) {
 	if read, err = h.git.FilesRead(ctx, ws, run, "", "after-commit.txt", 0); err != nil || string(read.Content) != "after\n" {
 		t.Fatalf("files read of an ended session = %+v, %v", read, err)
 	}
-	if err := h.git.RemoveRunCheckout(ctx, run); err != nil {
+	if err = h.git.RemoveRunCheckout(ctx, run); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := os.Stat(filepath.Join(store, "objects", "info", "alternates")); !os.IsNotExist(err) {
-		t.Fatalf("removed checkout's history still borrows the workspace's objects: %v", err)
+	t.Logf("history store of the removed checkout: %s", strings.Join(strings.Fields(hostGit(t, store, "count-objects", "-vH")), " "))
+	fork, last := hostGit(t, store, "rev-parse", "refs/aether/base"), hostGit(t, store, "rev-parse", "refs/aether/published")
+	if pin := hostGit(t, repo, "rev-parse", "refs/aether/sessions/"+key); pin != fork {
+		t.Fatalf("the workspace pins %s for the history, not its fork point %s", pin, fork)
+	}
+	// The workspace drops the session's commits, which the history borrowed
+	// while the VM ran; main keeps the fork point for the tests after this.
+	unrelated := hostGit(t, repo, "commit-tree", "-m", "unrelated", hostGit(t, repo, "hash-object", "-t", "tree", "-w", "/dev/null"))
+	for _, ref := range strings.Fields(hostGit(t, repo, "for-each-ref", "--format=%(refname)", "refs/heads/")) {
+		if ref != "refs/heads/main" {
+			hostGit(t, repo, "update-ref", ref, unrelated)
+		}
+	}
+	hostGit(t, repo, "reflog", "expire", "--expire=now", "--all")
+	hostGit(t, repo, "gc", "--prune=now", "--quiet")
+	if patch, err = h.git.RunPatch(ctx, run, gitengine.PatchRequest{From: fork, To: last}); err != nil ||
+		!strings.Contains(patch.Text, "+two") || !strings.Contains(patch.Text, "+++ b/after-commit.txt") {
+		t.Fatalf("history of a removed checkout after its workspace pruned the session's commits = %+v, %v", patch, err)
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(h.repos), "checkouts", key, "disk.qcow2")); !os.IsNotExist(err) {
 		t.Fatalf("removed checkout's disk remains: %v", err)
@@ -447,6 +467,59 @@ func TestKVMGitServiceBesideAFullSession(t *testing.T) {
 	}
 	if commit, err = h.git.CommitAll(t.Context(), run, "aether: after", member, nil); err != nil || commit == "" {
 		t.Errorf("commit after the git service was killed mid-commit = %q, %v", commit, err)
+	}
+}
+
+// TestKVMHelperOutlivesConnectionsHungUpAtBirth checks that PID 1 keeps
+// the console as descriptors 1 and 2 (docs/vm-guest.md#boot). Then it
+// hangs connections to the helper up as soon as they open, as a wake
+// resets a new connection that reuses a saved one's ports, and requires
+// the guest to survive them. The engine's own connection is closed first,
+// so a hung-up one can take its descriptor.
+func TestKVMHelperOutlivesConnectionsHungUpAtBirth(t *testing.T) {
+	h := newCheckoutHost(t)
+	ws := domain.WorkspaceID("wshangup")
+	key := fmt.Sprintf("run-vmhangup-%x", time.Now().Unix())
+	h.session(t, ws, key, h.workspace(t, ws, 1))
+	api, err := h.e.helper(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := h.e.load(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Only root may read PID 1's descriptors.
+	code, fds, err := h.e.runAsRoot(t.Context(), api, rec, []string{"/bin/sh", "-c", "readlink -v /proc/1/fd/1; readlink -v /proc/1/fd/2"})
+	if err != nil || code != 0 || fds != "/dev/console\n/dev/console\n" {
+		t.Fatalf("PID 1's descriptors 1 and 2: %d %v %q", code, err, fds)
+	}
+	h.e.forgetHelper(key)
+	socket := h.e.path(key, vsockSocket)
+	// An OK shows the helper is listening before the hang-ups below.
+	conn, err := net.Dial("unix", socket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+	_, _ = fmt.Fprintf(conn, "CONNECT %d\n", guest.APIPort)
+	reply, err := bufio.NewReader(conn).ReadString('\n')
+	_ = conn.Close()
+	if !strings.HasPrefix(reply, "OK ") {
+		t.Fatalf("CONNECT %d: %q, %v%s", guest.APIPort, reply, err, h.e.logTail(key))
+	}
+	for range 10 {
+		// A failed dial is left to the checks below.
+		if conn, err = net.Dial("unix", socket); err == nil {
+			_, _ = fmt.Fprintf(conn, "CONNECT %d\n", guest.APIPort)
+			_ = conn.Close()
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	// After an exec, so a death at the last hang-up has shown.
+	code, _, errOut, err := h.e.exec(t.Context(), key, []string{"/bin/sh", "-c", "true"}, "/workspace")
+	if rebooted := h.e.rebooted(key); rebooted || err != nil || code != 0 {
+		t.Fatalf("after the hang-ups: rebooted %t, exec %d %v %s%s", rebooted, code, err, errOut, h.e.logTail(key))
 	}
 }
 

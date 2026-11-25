@@ -1,6 +1,7 @@
 package guest
 
 import (
+	"errors"
 	"net/netip"
 	"reflect"
 	"strings"
@@ -14,6 +15,7 @@ func TestKernelArgsRoundTrip(t *testing.T) {
 			Address: netip.MustParsePrefix("10.88.0.5/24"),
 			Gateway: netip.MustParseAddr("10.88.0.1"),
 			DNS:     []netip.Addr{netip.MustParseAddr("10.88.0.1"), netip.MustParseAddr("1.1.1.1")},
+			Search:  []string{"corp.example", "tailnet-name.ts.net"},
 		},
 		Mounts: []Mount{
 			{Volume: VolumeShare, Source: "home", Target: "/root"},
@@ -21,10 +23,11 @@ func TestKernelArgsRoundTrip(t *testing.T) {
 			{Volume: VolumeData, Source: "tmp", Target: "/tmp"},
 			{Volume: VolumeState, Source: "0", Target: "/root/.copilot", Seed: []string{"config.json", "cache/on boarding.json"}},
 		},
-		Checkouts: []CheckoutMount{{Serial: "repo0", Key: "run-abc", Target: "/workspace"}, {Serial: "repo1", Key: "run-abc-r1", Target: "/repos/my repo"}},
-		Sockets:   []Socket{{Port: 1025, Path: "/run/aether/coord3.sock"}},
-		Serves:    []Socket{{Port: 2000, Path: "/run/dictation/engine.sock"}},
-		Loopbacks: []Loopback{{Port: 47630, Path: "/run/aether-omp/broker.sock"}},
+		Checkouts:   []CheckoutMount{{Serial: "repo0", Key: "run-abc", Target: "/workspace"}, {Serial: "repo1", Key: "run-abc-r1", Target: "/repos/my repo"}},
+		Sockets:     []Socket{{Port: 1025, Path: "/run/aether/coord3.sock"}},
+		Serves:      []Socket{{Port: 2000, Path: "/run/dictation/engine.sock"}},
+		Loopbacks:   []Loopback{{Port: 47630, Path: "/run/aether-omp/broker.sock"}},
+		MemoryLimit: 8 << 30, Swap: 2 << 30,
 	}
 	line, err := cfg.KernelArgs("console=ttyS0 root=/dev/vda")
 	if err != nil {
@@ -56,6 +59,7 @@ func TestConfigRejects(t *testing.T) {
 		"relative loopback": {Loopbacks: []Loopback{{Port: 47630, Path: "run/x.sock"}}},
 		"hostname":          {Hostname: "bad host"},
 		"network no prefix": {Network: &Network{Gateway: netip.MustParseAddr("10.0.0.1")}},
+		"search domain":     {Network: &Network{Address: netip.MustParsePrefix("10.0.0.2/30"), Gateway: netip.MustParseAddr("10.0.0.1"), Search: []string{"a b"}}},
 		"checkout key path": {Checkouts: []CheckoutMount{{Serial: "repo0", Key: "../etc", Target: "/workspace"}}},
 		"checkout serial":   {Checkouts: []CheckoutMount{{Serial: "repo0,root", Key: "run", Target: "/workspace"}}},
 	} {
@@ -67,7 +71,7 @@ func TestConfigRejects(t *testing.T) {
 	for range 100 {
 		long.Mounts = append(long.Mounts, Mount{Volume: VolumeShare, Source: "some/long/source/path", Target: "/some/long/target/path"})
 	}
-	if _, err := long.KernelArgs(""); err == nil || !strings.Contains(err.Error(), "limit") {
+	if _, err := long.KernelArgs(""); !errors.Is(err, ErrCmdlineTooLong) || !strings.Contains(err.Error(), "limit") {
 		t.Errorf("a command line past the kernel's limit: got %v", err)
 	}
 	if _, err := ParseCmdline("aether.unknown=1 -- guest"); err == nil {

@@ -1,9 +1,11 @@
 import { act, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { preloadChunks } from '@/components/lazy-chunk'
 import type * as apiModule from '@/lib/api'
 import { api } from '@/lib/api'
 import type { Run } from '@/lib/types'
 import { ShortcutsDialog } from '@/components/shortcuts'
+import type * as xtermHostModule from '@/components/xterm-host'
 import { openRunLink } from '@/routes/browser/open'
 import { openInFiles } from '@/routes/files/open'
 import { lookupRoute } from '@/routes/registry'
@@ -16,6 +18,14 @@ import { agentInfo, alice, bob, fakeApi, roomMessage, run, serverInfo, workspace
 import { ApiError } from '@/lib/api'
 import { StubSocket } from '@/test/stub-socket'
 import { atViewport } from '@/test/viewport'
+
+// A real xterm costs each mount of a run view most of its jsdom time; a case
+// that never reads the agent terminal turns it off.
+const xterm = vi.hoisted(() => ({ enabled: true }))
+vi.mock('@/components/xterm-host', async (importOriginal) => {
+  const actual = await importOriginal<typeof xtermHostModule>()
+  return { ...actual, useXterm: (options: Parameters<typeof actual.useXterm>[0] = {}) => actual.useXterm({ ...options, enabled: xterm.enabled && options.enabled !== false }) }
+})
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof apiModule>()
@@ -46,7 +56,10 @@ function rerouted(view: string) {
   return <View params={useStore.getState().route.params} />
 }
 
+beforeAll(() => preloadChunks())
+
 beforeEach(() => {
+  xterm.enabled = true
   StubSocket.install()
   useStore.setState({
     hydrated: true,
@@ -175,6 +188,49 @@ describe('run frame', () => {
     await waitFor(() => expect(useStore.getState().agentList).not.toBeNull())
     open()
     expect(api.agentList).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['the More button', () => fireEvent.pointerDown(screen.getByRole('button', { name: 'More' }), { button: 0, ctrlKey: false })],
+    ['a right-click on Chat', () => fireEvent.contextMenu(screen.getByRole('tabpanel', { name: 'Chat' }), { clientX: 200, clientY: 300 })],
+  ])('puts the cursor in the note field from Leave a comment in %s', async (_, openMenu) => {
+    xterm.enabled = false
+    open({ mode: 'acp' })
+    openMenu()
+    await userEvent.click(within(await screen.findByRole('menu')).getByRole('menuitem', { name: 'Leave a comment…' }))
+    // The closing menu restores focus a task later; let it try.
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)))
+    expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Add a note' }))
+  })
+
+  it('focuses the note field once, not on every later Details open', async () => {
+    xterm.enabled = false
+    open({ mode: 'acp' })
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'More' }), { button: 0, ctrlKey: false })
+    await userEvent.click(within(await screen.findByRole('menu')).getByRole('menuitem', { name: 'Leave a comment…' }))
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByRole('textbox', { name: 'Add a note' })))
+    await userEvent.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByRole('textbox', { name: 'Add a note' })).toBeNull())
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'More' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Show details' }))
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)))
+    expect(document.activeElement).not.toBe(screen.getByRole('textbox', { name: 'Add a note' }))
+  })
+
+  it('leaves the browser menu alone over a link or selected text', () => {
+    xterm.enabled = false
+    open({ mode: 'acp' })
+    const chat = screen.getByRole('tabpanel', { name: 'Chat' })
+    const link = chat.appendChild(document.createElement('a'))
+    expect(fireEvent.contextMenu(link)).toBe(true)
+    const text = chat.appendChild(document.createElement('p'))
+    text.textContent = 'agent output'
+    window.getSelection()!.selectAllChildren(text)
+    fireEvent.mouseDown(text, { button: 2 })
+    expect(fireEvent.contextMenu(text)).toBe(true)
+    expect(fireEvent.contextMenu(text)).toBe(true)
+    expect(screen.queryByRole('menu')).toBeNull()
+    window.getSelection()!.removeAllRanges()
   })
 
   it('keeps Changes mounted after a view switch so a Publish draft survives', () => {
@@ -545,12 +601,12 @@ describe('run details', () => {
   it('leads the workflow with the request that needs the viewer, and leaves the sheet for it', async () => {
     vi.mocked(api.runRoomList).mockResolvedValue({ messages: [] })
     open({ status: 'needs-attention', state: 'needs-you', reason: 'needs input: Which port?' }, 'terminal')
-    fireEvent.click(screen.getByRole('button', { name: 'Workflow: Needs you' }))
-    const sheet = within(await screen.findByRole('dialog', { name: 'Workflow' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Session tree: Needs you' }))
+    const sheet = within(await screen.findByRole('dialog', { name: 'Session tree' }))
     const request = sheet.getByRole('treeitem', { name: /^Agent asks: Which port\?, Needs you/ })
     expect(request.getAttribute('aria-level')).toBe('2')
     fireEvent.click(request)
-    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Workflow' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Session tree' })).toBeNull())
     expect(useStore.getState().route.params.view).toBe('session')
   })
 
@@ -689,6 +745,7 @@ describe('run details', () => {
   })
 
   it('drops a note\'s refusal that arrives after another member signed in', async () => {
+    xterm.enabled = false
     const post = heldPost()
     useStore.setState({ identityKey: 'alice' })
     open()
@@ -961,6 +1018,7 @@ describe('the session composer', () => {
   })
 
   it('waits for a send that outlives it, and sends a failed one again under the same key', async () => {
+    xterm.enabled = false
     const View = lookupRoute('run')!
     let settle = { resolve: (_: { message: ReturnType<typeof roomMessage> }) => {}, reject: (_: Error) => {} }
     const pending = () => new Promise<{ message: ReturnType<typeof roomMessage> }>((resolve, reject) => { settle = { resolve, reject } })

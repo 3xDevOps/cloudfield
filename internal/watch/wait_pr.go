@@ -237,6 +237,8 @@ func nextStep(w *store.RunWait) string {
 		return "Cloudfield cannot read the target; check its name and your access, or report blocked if a person must fix it"
 	case w.Kind == protocol.WaitKindRunFinished && (w.Outcome == "completed" || w.Outcome == "merged" || w.Outcome == "reported-success"):
 		return "that run finished; read its result and continue"
+	case w.Kind == protocol.WaitKindRunFinished && w.Outcome == "reported-failure":
+		return "that run reported failure and is still open; read its report, then retry it, take it over or report"
 	case w.Kind == protocol.WaitKindRunFinished:
 		return "that run ended " + w.Outcome + " without finishing its work; decide whether to retry, take it over or report"
 	}

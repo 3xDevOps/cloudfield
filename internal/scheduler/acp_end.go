@@ -39,6 +39,7 @@ func (d *acpDriver) reopenLost(entry *supervised, lost *acpRun, cause error) {
 	if !current {
 		return
 	}
+	defer d.needGuest(entry)()
 	d.s.mu.Lock()
 	again := time.Since(entry.sessionLostAt) < acpLostAgain
 	entry.sessionLostAt = time.Now()
@@ -120,6 +121,7 @@ func (d *acpDriver) reauth(entry *supervised, lost *acpRun, st acphost.TurnState
 	if err := sess.Notice("warning", title, detail); err != nil {
 		slog.Warn("scheduler: record the sign-in notice", "run", entry.runID, "error", err)
 	}
+	defer d.needGuest(entry)()
 	ctx, cancel := context.WithTimeout(context.Background(), acpConnectTimeout)
 	defer cancel()
 	// The restored session's idle state must not hide the refusal: nothing
@@ -241,11 +243,21 @@ func (d *acpDriver) takenOver(entry *supervised, lost *acpRun) {
 	d.notice(entry.runID, "error", "Agent connection taken over", "Another process attached to the agent's keeper, so Cloudfield restarted the agent and restored its session.")
 	// open stops the keeper the run still records as its exec.
 	d.record(entry, func() { entry.agentKeeper = nil })
+	defer d.needGuest(entry)()
 	ctx, cancel := context.WithTimeout(context.Background(), acpConnectTimeout)
 	defer cancel()
 	if err := d.open(ctx, entry, openRestore); err != nil {
 		d.fail(entry, err)
 	}
+}
+
+// needGuest keeps the memory brake off entry's VM while the server restarts
+// its agent, which gives up on a guest that does not answer in time.
+func (d *acpDriver) needGuest(entry *supervised) func() {
+	d.s.mu.Lock()
+	cid := entry.containerID
+	d.s.mu.Unlock()
+	return d.s.needGuest(cid)
 }
 
 func adapterError(err error, stderr *tailBuffer) error {
@@ -314,20 +326,13 @@ func (d *acpDriver) stopAdapterLocked(ctx context.Context, run domain.RunID) err
 // whose stdio this server holds, cannot outlive that and is stopped.
 func (d *acpDriver) detach(ctx context.Context, run domain.RunID) error {
 	defer d.lockOp(run)()
-	d.mu.Lock()
-	r := d.runs[run]
-	if r != nil && r.session != nil && r.keeper != nil {
-		delete(d.runs, run)
-		r.stopping = true
-	}
-	d.mu.Unlock()
-	if r == nil || r.session == nil {
+	r := d.letGo(run)
+	if r == nil {
+		if d.session(run) != nil {
+			return d.stopAdapterLocked(ctx, run)
+		}
 		return nil
 	}
-	if r.keeper == nil {
-		return d.stopAdapterLocked(ctx, run)
-	}
-	r.session.Detach()
 	err := r.keeper.Detach(ctx)
 	select {
 	case <-r.session.Done():
@@ -338,6 +343,25 @@ func (d *acpDriver) detach(ctx context.Context, run domain.RunID) error {
 		return fmt.Errorf("detach from the agent's keeper: %w", err)
 	}
 	return nil
+}
+
+// letGo is detach without the keeper's answer, for a guest that gives none:
+// the session's connection may end from then on without anything recording
+// that end, and the next open reattaches to the keeper. It returns the run
+// to release once that connection is no longer needed, nil for one with no
+// session under a keeper.
+func (d *acpDriver) letGo(run domain.RunID) *acpRun {
+	d.mu.Lock()
+	r := d.runs[run]
+	if r == nil || r.session == nil || r.keeper == nil {
+		d.mu.Unlock()
+		return nil
+	}
+	delete(d.runs, run)
+	r.stopping = true
+	d.mu.Unlock()
+	r.session.Detach()
+	return r
 }
 
 // shutdown detaches every session from its keeper without recording or

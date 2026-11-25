@@ -1,8 +1,7 @@
 # Install, upgrade and remove Cloudfield
 
-The product is named Cloudfield. Its commands, variables, paths and hostnames,
-and what the apps and the CLI print, still say `aether` or Aether until later
-releases.
+Cloudfield's commands and variables have new names, and the old ones keep
+working ([Old names](#old-names)).
 
 This guide installs, upgrades and removes Cloudfield on every platform. For the
 shortest path to a first session, follow [quickstart.md](quickstart.md), then come
@@ -11,21 +10,21 @@ defined in the [glossary](README.md#concepts).
 
 ## What gets installed where
 
-Cloudfield has two parts. The server, `aether-server`, runs on one Linux
+Cloudfield has two parts. The server, `cloudfield-server`, runs on one Linux
 machine: it keeps your repositories and runs each agent in its own Docker
 container or [virtual machine](#hosts-for-vm-sessions). A
-client is any machine you work from: the `aether` CLI, the desktop app and the
+client is any machine you work from: the `cloudfield` CLI, the desktop app and the
 Android app all connect to that server.
 
 | Component | Sessions on | What it is | Install it with |
 | --- | --- | --- | --- |
-| `aether-server` | Linux, x64 and arm64 | The server. Needs Docker. | [The install script](#the-install-script), answering `server` |
-| `aether` | Linux, macOS and Windows, x64 and arm64 | The CLI. `aether gui` also serves the dashboard on your machine. | [The install script](#the-install-script) or the [Windows install script](#windows-install-script) |
-| Desktop app | Linux, macOS, Windows | A window around the dashboard. Needs the CLI. | [`aether gui build`](#desktop-app) |
+| `cloudfield-server` | Linux, x64 and arm64 | The server. Needs Docker. | [The install script](#the-install-script), answering `server` |
+| `cloudfield` | Linux, macOS and Windows, x64 and arm64 | The CLI. `cloudfield gui` also serves the dashboard on your machine. | [The install script](#the-install-script) or the [Windows install script](#windows-install-script) |
+| Desktop app | Linux, macOS, Windows | A window around the dashboard. Needs the CLI. | [`cloudfield gui build`](#desktop-app) |
 | Android app | Android | The dashboard on a phone. | [`aether-android.apk`](#android-app) |
 
 Clients reach the server over SSH, port 2222 by default. Without a direct or
-Tailscale route they go through the edge, a relay at `https://edge.onaether.dev`
+Tailscale route they go through the edge, a relay at `https://edge.cloudfield.ai`
 that both sides dial out to after a GitHub sign-in ([edge.md](edge.md)).
 
 ```mermaid
@@ -36,6 +35,19 @@ flowchart LR
   edge -- "relays SSH" --> server
   server -- "one container per session" --> docker["Docker"]
 ```
+
+## Old names
+
+| Old name | New name | Note |
+| --- | --- | --- |
+| `aether` | `cloudfield` | The CLI. `cloudfield` is a symlink to `aether` in the same directory; the file keeps the old name. |
+| `aether-server` | `cloudfield-server` | The server, linked the same way. |
+| `aether.exe` | `cloudfield.cmd` | Windows. `cloudfield.cmd` runs `aether.exe` with the same arguments. PowerShell passes an argument without spaces to a `.cmd` unquoted, so `cmd.exe` splits `'aether://…&…'` at the `&` and expands `%NAME%`: type `aether` for links and arguments with `&`, `%` or `^`. |
+| `aether-server.service` | `cloudfield-server.service` | A symlink to the unit in `/etc/systemd/system`. `systemctl restart` and `status` take either name once systemd has reloaded. `systemctl enable` refuses an alias and `journalctl -u` reads the real unit, so those take `aether-server`. |
+| `aether-internal` | `cloudfield-internal` | Inside a session. Containers created before the rename have only `/usr/local/bin/aether-internal`, and micro VM sessions are told the old name. |
+| `AETHER_<NAME>` | `CLOUDFIELD_<NAME>` | A variable you set in a shell or a client. A program reads `CLOUDFIELD_<NAME>` when it is not empty, else `AETHER_<NAME>`. Variables in `/etc/aether/aether-server.env` and the edge's env files, and those Cloudfield sets inside sessions, such as `AETHER_RUN_ID`, keep the old names. |
+
+The old names keep working, with no end date.
 
 ## Server prerequisites
 
@@ -57,7 +69,7 @@ flowchart LR
   of the filesystem, at least 5 GiB, at most 20 GiB; `min-free-disk` overrides
   it) plus 1 GiB per starting session free
   ([environments.md](environments.md#resource-limits-and-launch-admission)).
-  `aether-server install` warns below this.
+  `cloudfield-server install` warns below this.
 - Optional: Sysbox, so agents can run Docker inside their sessions. Setup offers
   it on Ubuntu and Debian
   ([environments.md](environments.md#docker-inside-sessions)).
@@ -67,7 +79,7 @@ flowchart LR
   edge ([networking.md](networking.md)).
 - Optional: dictation, which transcribes speech on the server in a Docker
   container, needs 690 MB of disk plus a 100 MB image, and 2 GiB of available
-  memory while it runs; install it with `sudo aether-server dictation install`
+  memory while it runs; install it with `sudo cloudfield-server dictation install`
   ([dictation.md](dictation.md)).
 
 ## Hosts for VM sessions
@@ -78,8 +90,8 @@ The host must be x86-64 and expose `/dev/kvm`: bare metal, or a cloud VM with
 nested virtualization. Install a server for it with:
 
 ```sh
-sudo aether-server install --session-runtime vm   # a new server
-sudo aether-server vm install                     # a server already installed
+sudo cloudfield-server install --session-runtime vm   # a new server
+sudo cloudfield-server vm install                     # a server already installed
 ```
 
 Both first open `/dev/kvm` and stop with the error when they cannot, such as
@@ -126,7 +138,9 @@ On AWS:
   sudo mount /dev/nvme1n1 /var/lib/aether
   ```
 
-  XFS clones package-cache disks without copying them. VM disks,
+  On XFS, Save environment and a member's next package cache share blocks
+  with the disk they are made from, and take new space only for what the
+  session wrote; ext4 copies the whole disk. VM disks,
   checkouts and the image store must share one filesystem, because they
   hard-link each other. Instance storage is lost when the instance stops or
   fails, so keep the [backups](#what-lives-in-the-data-directory) current, or
@@ -151,11 +165,11 @@ asks `What is this machine?`:
 
 | Answer | Installs | Into | Then runs |
 | --- | --- | --- | --- |
-| `server` | `aether-server` and `aether` | `/usr/local/bin`, using `sudo`; `~/.local/bin` on a machine without `sudo` | `sudo aether-server setup` ([First boot](#first-boot)) |
-| `client` | `aether` | `~/.local/bin` | `aether gui build` ([Desktop app](#desktop-app)) |
+| `server` | `cloudfield-server` and `cloudfield` | `/usr/local/bin`, using `sudo`; `~/.local/bin` on a machine without `sudo` | `sudo cloudfield-server setup` ([First boot](#first-boot)) |
+| `client` | `cloudfield` | `~/.local/bin` | `cloudfield gui build` ([Desktop app](#desktop-app)) |
 | `none` | The same as `server` | `/usr/local/bin` | Nothing |
 
-macOS gets only `aether`. Enter takes `server` on Linux without a desktop
+macOS gets only `cloudfield`. Enter takes `server` on Linux without a desktop
 session (no `DISPLAY` or `WAYLAND_DISPLAY`), and `client` on a Linux desktop
 and on macOS; with no terminal, as in CI, the script acts like `--role none`. A
 client goes in `~/.local/bin` so the dashboard's **Update now** can replace it.
@@ -163,12 +177,19 @@ If the directory is not on your `PATH`, the script prints the line to add (it
 never edits a profile), and it prints the `sudo rm -f` for an older `aether`
 in `/usr/local/bin` that would run first.
 
+Beside `aether` and `aether-server` the script adds `cloudfield` and
+`cloudfield-server`, relative symlinks to them; the files keep the `aether`
+names. A name that already holds anything is left as it is. If the
+filesystem refuses the link, the script prints the `ln` error and the
+install still succeeds. `next:` names a command on this machine by its new
+name only where that link exists and its directory is on `PATH`.
+
 - `--role server` with no terminal installs the binaries, then exits 1 with
   the command that sets the server up from flags
   ([First boot](#first-boot)):
-  `sudo aether-server install --edge-url https://edge.onaether.dev --edge-access <account|approved-devices>`.
+  `sudo cloudfield-server install --edge-url https://edge.cloudfield.ai --edge-access <account|approved-devices>`.
 - When `sudo` fails, for example because it needs a password and there is no
-  terminal, the script exits 1. If it was installing `aether` alone, as on
+  terminal, the script exits 1. If it was installing `cloudfield` alone, as on
   macOS or with `--client`, it names the install that needs no `sudo`:
 
   ```sh
@@ -180,19 +201,19 @@ in `/usr/local/bin` that would run first.
   `ssh -t <user>@<host> '<install command>'`.
 
 - When setup does not run on a host whose `aether-server` unit already exists,
-  `next:` says `sudo aether-server update`, which restarts the running server
+  `next:` says `sudo cloudfield-server update`, which restarts the running server
   onto the new binary.
 - When the desktop build fails, the script still exits 0 and its last line says
   the CLI is installed and the app is not, with the exit status of
-  `aether gui build`.
+  `cloudfield gui build`.
 
 | Flag | Variable | Effect |
 | --- | --- | --- |
-| `--version <tag>` | `AETHER_VERSION` | Install exactly this release, or stop. |
-| `--bin-dir <dir>` | `AETHER_BIN_DIR` | Install into this directory, whatever the role. |
-| `--client` or `--server` | `AETHER_COMPONENTS=client` or `server` | Install only `aether`, or only `aether-server`, and answer to match. |
-| `--role <role>` | `AETHER_ROLE` | Answer the question in advance: `server`, `client` or `none`. |
-| | `AETHER_REPO`, `AETHER_BASE_URL` | Download from a fork, or release assets from an HTTPS mirror. |
+| `--version <tag>` | `CLOUDFIELD_VERSION` | Install exactly this release, or stop. |
+| `--bin-dir <dir>` | `CLOUDFIELD_BIN_DIR` | Install into this directory, whatever the role. |
+| `--client` or `--server` | `CLOUDFIELD_COMPONENTS=client` or `server` | Install only `cloudfield`, or only `cloudfield-server`, and answer to match. |
+| `--role <role>` | `CLOUDFIELD_ROLE` | Answer the question in advance: `server`, `client` or `none`. |
+| | `CLOUDFIELD_REPO`, `CLOUDFIELD_BASE_URL` | Download from a fork, or release assets from an HTTPS mirror. |
 
 Flags passed through a pipe need `sh -s --`, as in
 `curl -fsSL <install.sh URL> | sh -s -- --client --bin-dir ~/bin`.
@@ -226,9 +247,14 @@ ask for administrator rights or change the execution policy or Defender
 settings: `-ExecutionPolicy Bypass` applies to that one process only. Open a
 new terminal afterwards: open ones keep their old `PATH`.
 
+Beside `aether.exe` it writes `cloudfield.cmd`, which runs `aether.exe` with
+the same arguments, unless something already holds that name. `next:` keeps
+the `aether` names: PowerShell passes an argument without spaces to a `.cmd`
+unquoted, so `cmd.exe` would split an `aether://` link at its `&`.
+
 It takes `-Version <tag>`, `-BinDir <dir>` and `-Role client|none` (`none`
-installs only the CLI), or `AETHER_VERSION`, `AETHER_BIN_DIR`, `AETHER_ROLE`,
-`AETHER_REPO` and an `https` `AETHER_BASE_URL`. The desktop app needs
+installs only the CLI), or `CLOUDFIELD_VERSION`, `CLOUDFIELD_BIN_DIR`, `CLOUDFIELD_ROLE`,
+`CLOUDFIELD_REPO` and an `https` `CLOUDFIELD_BASE_URL`. The desktop app needs
 `v0.5.1-alpha.4` or newer, so an older `-Version` needs `-Role none`.
 PowerShell cannot check the manifest's signature, so the script checks SHA-256
 and size only.
@@ -243,10 +269,10 @@ If only the desktop step fails, it prints the `gui build` command to rerun.
 Windows runs only the client. It keeps its config in `%APPDATA%\aether\` and
 uses the keys in `%USERPROFILE%\.ssh\`. Differences from Linux and macOS:
 
-- `aether init` refuses to run. It prepares a server data directory, so run
+- `cloudfield init` refuses to run. It prepares a server data directory, so run
   it on the Linux server.
 - `scripts/install.sh` does not run on Windows. Use `install.ps1`.
-- `aether update` works, but Windows cannot overwrite a running `aether.exe`:
+- `cloudfield update` works, but Windows cannot overwrite a running `aether.exe`:
   the update renames it to `aether.exe.old`, and the next `aether` command
   deletes that copy. If Smart App Control, AppLocker or an antivirus blocks
   the new build, the update restores the old one and fails with
@@ -286,12 +312,14 @@ CLI as `aether-linux-<arch>`, `aether-darwin-<arch>` and
 `ghcr.io/3xdevops/aether-edge:<tag>` ([edge.md](edge.md#in-a-container)).
 
 On Linux or macOS, download the binary and `checksums.txt`, check it, and put
-it on your `PATH`. Install a server binary as `/usr/local/bin/aether-server`,
-the path the systemd unit runs.
+it on your `PATH`, then add the new name as a symlink beside it. Install a
+server binary as `/usr/local/bin/aether-server`, the path the systemd unit
+runs, and link `cloudfield-server` to it the same way.
 
 ```sh
 grep ' aether-linux-amd64$' checksums.txt | sha256sum -c -   # macOS: shasum -a 256 -c -
 mkdir -p ~/.local/bin && install -m 0755 aether-linux-amd64 ~/.local/bin/aether
+ln -s aether ~/.local/bin/cloudfield
 ```
 
 On Windows, in PowerShell, from the directory you downloaded into:
@@ -316,14 +344,14 @@ To build from source, see [CONTRIBUTING.md](../CONTRIBUTING.md#build-from-source
 
 ## Desktop app
 
-The desktop app is a window around the dashboard. It starts `aether gui`, the
+The desktop app is a window around the dashboard. It starts `cloudfield gui`, the
 dashboard server built into the CLI, with the same access the CLI has. While
 open, it notifies you when a session needs attention and opens `aether://run/<id>`
 and edge join and claim links ([edge.md](edge.md#the-dashboard)). Both install
 scripts can install it; to install or rebuild it yourself:
 
 ```sh
-aether gui build
+cloudfield gui build
 ```
 
 On Windows this downloads the release's prebuilt
@@ -345,12 +373,14 @@ Before the rename the app was named Aether: `~/.local/share/aether/desktop/`,
 `Aether.app`, `%LOCALAPPDATA%\Programs\Aether Desktop\` and the Start Menu
 entry `Aether.lnk`. An update installs Cloudfield beside it. The first start of
 Cloudfield removes the old app and, on Windows, `Aether.lnk`; if the old app is
-running then, a later start does. An old app installed before
-v0.7.0-alpha.13 on Linux or Windows stays; delete it by hand. Both apps use
-the same saved settings and sign-ins (`aether-desktop`, see
-[Uninstalling](#uninstalling)). On macOS and Windows, Dock, taskbar and Start
-pins of the old app stop working; pin Cloudfield again. On Linux the launcher
-keeps its file name and opens Cloudfield, so its pins keep working.
+running then, a later start does. Windows keeps the folder of an app that has
+just quit in use for a moment, so there the removal retries for up to 10
+seconds. An old app installed before v0.7.0-alpha.13 on Linux or Windows stays;
+delete it by hand. Both apps use the same saved settings and sign-ins
+(`aether-desktop`, see [Uninstalling](#uninstalling)). On macOS and Windows,
+Dock, taskbar and Start pins of the old app stop working; pin Cloudfield again.
+On Linux the launcher keeps its file name and opens Cloudfield, so its pins
+keep working.
 
 Going back to a release from before the rename, such as v0.8.7, installs
 Aether beside Cloudfield, because that release knows only the old name; it
@@ -358,14 +388,14 @@ leaves Cloudfield and the shared settings in place. Updating forward again
 replaces Cloudfield, and its next start removes Aether.
 
 The app does not contain the CLI: `gui build` records the path of the CLI
-that ran it, and the app starts that one (`AETHER_BIN` overrides it). If that
+that ran it, and the app starts that one (`CLOUDFIELD_BIN` overrides it). If that
 CLI is moved or deleted, the app's error names the path; restore it, set
-`AETHER_BIN`, or rerun `gui build`. The dashboard ships inside the CLI, and
-`aether update` rebuilds the app ([Upgrading](#upgrading)). On Windows, close
+`CLOUDFIELD_BIN`, or rerun `gui build`. The dashboard ships inside the CLI, and
+`cloudfield update` rebuilds the app ([Upgrading](#upgrading)). On Windows, close
 Cloudfield before rebuilding by hand.
 
 On Windows the app runs its dashboard server without opening a console window.
-To diagnose startup failures, run `aether gui` in a terminal.
+To diagnose startup failures, run `cloudfield gui` in a terminal.
 
 ## Android app
 
@@ -419,11 +449,11 @@ certificate SHA-256, as `apksigner verify --print-certs` prints it, is
 
 ## First boot
 
-`aether-server setup` sets the server up as a systemd service. The install
+`cloudfield-server setup` sets the server up as a systemd service. The install
 script runs it when you answer `server`; to run it yourself:
 
 ```sh
-sudo aether-server setup
+sudo cloudfield-server setup
 ```
 
 It asks these questions in order, and shows `/etc/aether/server.conf` for you
@@ -445,14 +475,14 @@ nothing written.
 | `Let agents use Docker inside their sessions? This installs the Sysbox runtime (Ubuntu/Debian)` | yes | Skipped when Docker already has Sysbox or does not answer. |
 
 With the edge on and no owner yet, setup prints a claim link holding a code
-valid for 30 minutes (`sudo aether-server edge claim-code` prints a new one).
+valid for 30 minutes (`sudo cloudfield-server edge claim-code` prints a new one).
 Setup starts nothing; it ends on `next:`: start the service, then on your
-machine link it. On a tailnet that is `aether link <MagicDNS name>`, or
-**Tailscale** in the app's Connect step; through the edge, `aether login` and
-`aether link --claim <code>`, or **Cloudfield relay** with the claim link; with
-neither, `aether link <this-host>:2222`. When the edge is not
-`https://edge.onaether.dev`, both client commands carry `--edge <url>`, because
-a claim code names no edge.
+machine link it. On a tailnet that is `cloudfield link <MagicDNS name>`, or
+**Tailscale** in the app's Connect step; through the edge, `cloudfield login` and
+`cloudfield link --claim <code>`, or **Cloudfield relay** with the claim link; with
+neither, `cloudfield link <this-host>:2222`. When the edge is not the project's,
+at `https://edge.cloudfield.ai` or `https://edge.onaether.dev`, both client
+commands carry `--edge <url>`, because a claim code names no edge.
 
 ```sh
 sudo systemctl daemon-reload && sudo systemctl enable --now aether-server
@@ -462,12 +492,12 @@ sudo journalctl -u aether-server -f
 On first start the server creates its database, repositories and SSH host
 key. Do not delete the key: clients pin it, and the edge knows the server by
 it. The first identity to link becomes the super admin: the SSH key or tailnet login
-of whoever runs `aether link` first, or the account that uses the claim code.
+of whoever runs `cloudfield link` first, or the account that uses the claim code.
 With the edge on, a first SSH key must come from the server itself or an SSH
 tunnel ([networking.md](networking.md#the-first-admin)).
 
-For automation, `aether-server install` writes the same files from flags,
-such as `--edge-url https://edge.onaether.dev --edge-access approved-devices`.
+For automation, `cloudfield-server install` writes the same files from flags,
+such as `--edge-url https://edge.cloudfield.ai --edge-access approved-devices`.
 It installs Sysbox unless you pass `--sysbox=false` or
 `--session-runtime vm`, turns the edge on only with `--edge-url`, and issues
 no claim code. With Tailscale on the host, the first tailnet login becomes the
@@ -493,9 +523,9 @@ or rewrite the file from these flags alone by adding --force
 Options live in `/etc/aether/server.conf`. Updates never rewrite it, and a
 rerun of `setup` keeps it unless you pass `--force`, and a rerun of `install`
 that names a different value fails as shown above.
-`aether-server config show` prints each option's value and source, and
-`aether-server serve -h` describes them. Change one with
-`sudo aether-server config set <key> <value>` (or `config edit`), then
+`cloudfield-server config show` prints each option's value and source, and
+`cloudfield-server serve -h` describes them. Change one with
+`sudo cloudfield-server config set <key> <value>` (or `config edit`), then
 `sudo systemctl restart aether-server`. `--config <file>` may go before or
 after the key and value of `config set`.
 
@@ -503,13 +533,13 @@ after the key and value of `config set`.
 | --- | --- | --- |
 | `web-port` | `0` (off) | Serve the dashboard over HTTPS on the tailnet at this port ([networking.md](networking.md#the-dashboard)). |
 | `edge-url`, `edge-access` | off, `approved-devices` | The edge the server enrolls with, and who may reach it through the edge: `account` or `approved-devices`. |
-| `edge-reviewer` | off | Under `edge-access account`, a connector authorized by the edge's [reviewer account](edge.md#reviewer-account) acts as the member an admin binds it to with `aether member link --reviewer <login> <member-id>`. |
+| `edge-reviewer` | off | Under `edge-access account`, a connector authorized by the edge's [reviewer account](edge.md#reviewer-account) acts as the member an admin binds it to with `cloudfield member link --reviewer <login> <member-id>`. |
 | `tailnet-auto-join` | off | Tailnet logins join as approved members instead of pending. |
 | `tailnet-require-key` | off | Tailnet connections must also present a registered SSH key. Cannot be combined with `web-port`. |
 | `run-cpus`, `run-memory`, `run-pids` | 8 CPUs (at most the host's), 8 GiB, 4096 | Ceilings per session and member environment, not reservations. |
 | `min-free-disk` | `0` (5% of the filesystem, 5 to 20 GiB) | Free-space reserve below which new sessions are refused. Negative turns the check off. |
 | `checkout-ttl` | `72h` | How long a finished session's checkout is kept after the session ends. It also stays while the session's container is kept. Negative keeps it forever. |
-| `run-container-ttl` | `168h` | How long a closed session's container is kept so the session can be relaunched. A relaunched session's clock restarts at its next close. |
+| `run-container-ttl` | `720h`; `168h` for a container that stays frozen in memory | How long a closed session's container or VM disks are kept so the session can be relaunched ([Relaunching a closed session](failure-handling.md#relaunching-a-closed-session)). A relaunched session's clock restarts at its next close. |
 | `run-sleep-after` | `30m`; `5m` for session VMs | How long an idle Enhanced Claude Code session keeps its container running before Cloudfield stops it until its next use, and how long an idle session VM runs before Cloudfield saves it to disk ([Idle sleep](failure-handling.md#idle-sleep)). A value you set applies to both. `0` keeps every session awake. |
 | `browser-image` | `ghcr.io/3xdevops/aether-browser:<release>` | The image a session's **Browser** tab starts from. Set it and updates stop moving it. |
 | `conflict-coordination` | on | Let overlapping sessions message each other ([coordination.md](coordination.md)). |
@@ -530,11 +560,18 @@ cgroup driver, the default on current Ubuntu and Debian, and `/aether` with the
 driver. This parent overrides `cgroup-parent` in `/etc/docker/daemon.json`.
 The server reads the driver once, so after changing Docker's cgroup driver,
 restart it: `sudo systemctl restart aether-server`. All sessions together
-then compete as one group with `system.slice`, which holds `aether-server`,
+then compete as one group with `system.slice`, which holds `cloudfield-server`,
 `docker`, `containerd`, `ssh` and `tailscaled`, and with `user.slice`, which
 holds login shells.
 
-`aether-server install` and `setup` write `/etc/systemd/system/aether.slice`
+`cloudfield-server install` and `setup` also link
+`/etc/systemd/system/cloudfield-server.service` to `aether-server.service`
+when nothing holds that name. `systemctl` takes either name for `start`,
+`stop`, `restart` and `status`; `enable` refuses the link, so enable
+`aether-server`. Restart lines the dashboard and `cloudfield update` print
+use `cloudfield-server` only where systemd resolves it.
+
+`cloudfield-server install` and `setup` write `/etc/systemd/system/aether.slice`
 beside the unit, with `CPUWeight=50` and `IOWeight=50`. `system.slice` and
 `user.slice` keep the default 100, so while all three want more than the host
 has, sessions get a fifth of CPU and disk and `system.slice` two fifths;
@@ -543,7 +580,11 @@ and disk while they are contended; they cap nothing, so sessions use every
 core of an otherwise idle host. Image builds, pulls and other services on the
 host, such as a CI runner, stay in `system.slice` at twice the session group's
 weight. The slice sets no memory limit and never throttles, stops or kills a
-session. Its name has no dash because systemd nests `a-b.slice` inside
+session. A `MemoryHigh` on it would stop the memory guard: the host cannot
+swap VM memory, so a session VM held above the limit cannot be saved to
+disk. On a hosted test runner, with a VM 64 MiB over a 1.3 GiB limit, its
+save did not finish within the server's 2-minute timeout on Cloud
+Hypervisor's API and left it paused. Its name has no dash because systemd nests `a-b.slice` inside
 `a.slice`, whose default weight would decide instead. `install` rewrites the
 file, so change the weights in a drop-in: `sudo systemctl edit aether.slice`,
 under `[Slice]`.
@@ -563,7 +604,7 @@ To add the slice to an existing install, without restarting the server or any
 session:
 
 ```sh
-sudo aether-server install --sysbox=false
+sudo cloudfield-server install --sysbox=false
 sudo systemctl daemon-reload
 ```
 
@@ -602,6 +643,14 @@ a valid slice named as "xxx.slice"`, Docker's cgroup driver changed after the
 server started: `sudo systemctl restart aether-server`. To give the session
 group the default weight again, remove any `systemctl edit` drop-in and run
 `sudo systemctl set-property aether.slice CPUWeight=100 IOWeight=100`.
+
+The server also lowers its own OOM score to the unit's
+`OOMScoreAdjust=-500` when it starts, so an install whose unit file
+predates that line, which updates leave in place, is protected too. It
+never raises a score you set lower: `cat /proc/"$(pgrep -of
+'aether-server serve')"/oom_score_adj` prints `-500` or yours. A server
+that does not run as root cannot lower it; its journal then has `could not
+set the server's OOM score`.
 
 `MemoryLow=1G` makes the kernel reclaim the server's first gigabyte only after
 unprotected memory. Memory protection passes down the cgroup tree, so it
@@ -642,21 +691,21 @@ systemd 232 and newer know all three directives; an older one logs
 
 ## Client files and variables
 
-The `aether` CLI keeps these files on your computer and reads these
+The `cloudfield` CLI keeps these files on your computer and reads these
 variables. `<config dir>` is the directory that holds `config.json`.
-`aether status` prints its path.
+`cloudfield status` prints its path.
 
 | File or variable | What it is |
 | --- | --- |
-| `config.json` | The server link `aether link` writes: `$AETHER_CONFIG_DIR/aether/config.json` when that variable is set, else `~/.config/aether/config.json` on Linux (honours `$XDG_CONFIG_HOME`), `~/Library/Application Support/aether/config.json` on macOS, `%AppData%\aether\config.json` on Windows. It also lists the linked clones, one per workspace (`repos`). |
-| `<config dir>/edge-device-key` | This computer's private key for edge links, created by the first `aether login`. |
-| `<config dir>/edge-tokens.json` | The device token for each edge you signed in to with `aether login`. Do not share or commit it. `aether logout` revokes the token at the edge and deletes it here. |
-| `~/.ssh/id_ed25519` | Your SSH key, which `aether link <host:port>` creates only when you have none. |
-| `~/.ssh/known_hosts` | Where `aether link` pins the server's host key. |
-| `~/.ssh/aether_config`, `~/.ssh/aether_known_hosts` | Written by `aether ssh-config` ([terminal.md](terminal.md)): the `<session>.aether` host block and its host key. |
-| `AETHER_CONFIG_DIR` | Replaces the platform config directory above. |
-| `AETHER_NO_UPDATE_CHECK` | Any non-empty value turns off release checks. |
-| `AETHER_BIN` | Path of the `aether` binary the desktop app starts and `aether gui build` requires. |
+| `config.json` | The server link `cloudfield link` writes: `$CLOUDFIELD_CONFIG_DIR/aether/config.json` when that variable is set, else `~/.config/aether/config.json` on Linux (honours `$XDG_CONFIG_HOME`), `~/Library/Application Support/aether/config.json` on macOS, `%AppData%\aether\config.json` on Windows. It also lists the linked clones, one per workspace (`repos`). |
+| `<config dir>/edge-device-key` | This computer's private key for edge links, created by the first `cloudfield login`. |
+| `<config dir>/edge-tokens.json` | The device token for each edge you signed in to with `cloudfield login`. Do not share or commit it. `cloudfield logout` revokes the token at the edge and deletes it here. |
+| `~/.ssh/id_ed25519` | Your SSH key, which `cloudfield link <host:port>` creates only when you have none. |
+| `~/.ssh/known_hosts` | Where `cloudfield link` pins the server's host key. |
+| `~/.ssh/aether_config`, `~/.ssh/aether_known_hosts` | Written by `cloudfield ssh-config` ([terminal.md](terminal.md)): the `<session>.aether` host block and its host key. |
+| `CLOUDFIELD_CONFIG_DIR` | Replaces the platform config directory above. |
+| `CLOUDFIELD_NO_UPDATE_CHECK` | Any non-empty value turns off release checks. |
+| `CLOUDFIELD_BIN` | Path of the `aether` binary the desktop app starts and `cloudfield gui build` requires. |
 
 ## The client-side sync daemon
 
@@ -666,7 +715,7 @@ mirror it pushes your local base branch to the server. It is optional and sessio
 once per clone.
 
 ```sh
-aether daemon install --repo ~/code/myproject
+cloudfield daemon install --repo ~/code/myproject
 systemctl --user daemon-reload && systemctl --user enable --now aether-daemon
 ```
 
@@ -675,7 +724,7 @@ systemctl --user daemon-reload && systemctl --user enable --now aether-daemon
 command that starts it; the second line is for Linux. `--server` and
 `--server-id` default to the linked server, with its key. Pass
 `--server-id <id> --edge-url <edge>` (through the edge) or `--server` only for a
-different server. `aether daemon run` runs in the foreground.
+different server. `cloudfield daemon run` runs in the foreground.
 
 A workspace's base branch is whatever members push, unless an admin gives it
 a source mirror: a read-only repository the server fetches from, with a deploy
@@ -694,17 +743,17 @@ A super admin can update from any client or from the dashboard's
 and root can update on the server host:
 
 ```sh
-aether server update [--version <tag>]        # from any client, as a super admin
-sudo aether-server update [--version <tag>]   # on the server host
+cloudfield server update [--version <tag>]        # from any client, as a super admin
+sudo cloudfield-server update [--version <tag>]   # on the server host
 ```
 
 Both check the signature, replace `aether-server` and the `aether` beside
 it, and restart the service. The old binaries stay as `aether-server.prev` and
 `aether.prev`, and the database is copied first when its schema changes. If
 the new server does not finish starting, it restores both and records why.
-Sessions keep going; `aether attach` and `aether sync --live` reconnect.
+Sessions keep going; `cloudfield attach` and `cloudfield sync --live` reconnect.
 
-`sudo aether-server update` prints each step as it runs, with how long it
+`sudo cloudfield-server update` prints each step as it runs, with how long it
 took. The database copy appears only when the release changes the schema, and
 the wait at the end lasts until the new server has reconnected every open
 session:
@@ -721,8 +770,8 @@ aether-server  v0.8.7-beta.12 -> v0.8.7-beta.13  restarted in 1m12s (pid 1234 ->
 aether         /usr/local/bin/aether  v0.8.7-beta.13
 ```
 
-With `session-runtime vm`, `sudo aether-server update` has the new binary run
-`aether-server vm install` before the restart, and prints its steps, so new VMs
+With `session-runtime vm`, `sudo cloudfield-server update` has the new binary run
+`cloudfield-server vm install` before the restart, and prints its steps, so new VMs
 boot the release's Cloud Hypervisor and guest kernel. Running VMs keep theirs,
 and their helper disk, until they stop; Ctrl-C during that step undoes the
 update. Before it starts any VM, a server started by its systemd unit also puts
@@ -732,16 +781,16 @@ client or the dashboard, and a rollback. If it cannot during an update's first
 start, the update rolls back; on any other start the server logs the error and
 keeps serving. `AETHER_NO_UPDATE_CHECK=1` turns that check off.
 
-`aether server update --when idle` waits until no session is working, no terminal
+`cloudfield server update --when idle` waits until no session is working, no terminal
 is attached and no SSH connection into a session is open; `--cancel` clears that
 pending update. `--allow-downgrade` allows an older release, `--yes` skips the
 confirmation, and `--status`, which any member can run, shows the versions,
 any pending update and the last update's outcome and error.
 
 The server refuses a release missing any client binary or the Android app,
-and names the asset. `sudo aether-server update` needs an `aether-server`
-systemd unit that runs as root, and `aether server update` refuses when the
-server cannot replace its own binary. On such hosts, run `sudo aether update`
+and names the asset. `sudo cloudfield-server update` needs an `aether-server`
+systemd unit that runs as root, and `cloudfield server update` refuses when the
+server cannot replace its own binary. On such hosts, run `sudo cloudfield update`
 and restart the server yourself.
 
 After a rollback, `sudo journalctl -u aether-server -n 50` shows why. If the
@@ -778,7 +827,7 @@ Cloudfield. A promotion rebuilds the same commit under the new tag and keeps its
 build number, so a nightly and the beta promoted from it are the same code.
 
 A server follows one channel, the `release_channel` setting. Its release
-check, `aether server update` and `sudo aether-server update` with no
+check, `cloudfield server update` and `sudo cloudfield-server update` with no
 `--version` take the newest release on that channel, read from the
 channel's signed pointer ([Verified releases](#verified-releases)). A server
 that existed before channels follows `beta`. A new server chooses at its
@@ -794,18 +843,18 @@ admin changes it, in the dashboard's **Settings → Server → Release channel**
 host:
 
 ```sh
-sudo aether-server update --channel beta          # prints what changes
-sudo aether-server update --channel beta --yes    # saves it
+sudo cloudfield-server update --channel beta          # prints what changes
+sudo cloudfield-server update --channel beta --yes    # saves it
 ```
 
 Without `--yes` it prints the confirmation and changes nothing. A plain
-`sudo aether-server update` only reads the channel, following `beta` while
+`sudo cloudfield-server update` only reads the channel, following `beta` while
 the server has not chosen. Saving installs nothing: the server checks the
-new channel at its next release check, and `sudo aether-server update`
+new channel at its next release check, and `sudo cloudfield-server update`
 installs what it finds.
 
 A server never installs a lower build because its channel changed. Moving
-to nightly asks first (`aether-server update --channel nightly` prints the
+to nightly asks first (`cloudfield-server update --channel nightly` prints the
 same text):
 
 ```
@@ -830,7 +879,7 @@ This server runs v0.9.0-nightly.12 (build 412). Beta is at v0.9.0-beta.1 (build 
 ```
 
 Meanwhile `server.update_status` reports `channel_wait`, and `sudo
-aether-server update` prints
+cloudfield-server update` prints
 `aether-server v0.9.0-nightly.12 (build 412) stays on its build until beta reaches it: beta is at v0.9.0-beta.1 (build 380)`.
 The same build under the lower channel's tag installs. Each channel keeps
 its own pointer mark in `server-update/check.json`, so switching away and
@@ -849,7 +898,7 @@ take it. `--when now` installs any release.
 release preflight failed: the server no longer takes this update: v0.9.0-nightly.13 is a nightly release, which an install on beta does not take; update with --when now to install it anyway
 ```
 
-Clients follow their server. `aether update` and the desktop app take the
+Clients follow their server. `cloudfield update` and the desktop app take the
 release of the channel their default linked server follows, and by default
 never one above that server; a member who cannot update the server, or
 `--force`, can ([Update a client](#update-a-client)). The Android app in
@@ -861,7 +910,7 @@ CLI follows its own `config.json`, and `stable` when it has none
 
 On every channel, a server applies updates by itself when idle. Its check
 runs every 6 hours. When it finds a release on the server's channel above
-the running build, the server schedules it as `aether server update --when
+the running build, the server schedules it as `cloudfield server update --when
 idle` would, and applies it once no session is working, no terminal is
 attached and no SSH connection into a session is open. `server.update_status`
 marks that pending update `by_server`, and the timeline names `server` as
@@ -873,7 +922,7 @@ The server schedules nothing when:
   past a tag, or dirty), or it runs a release from before channels, which has
   no signed build. `server.update_status` still offers the release; a server
   on `v0.8.7-beta.N` shows the update and stays until a super admin runs
-  `aether server update` or `sudo aether-server update`. Self-applying starts
+  `cloudfield server update` or `sudo cloudfield-server update`. Self-applying starts
   once it runs `v0.8.7`, build 1.
 - The release is from before channels, has no signed build, or fails the
   update preflight. `schedule_error` in `server.update_status` says why the
@@ -882,7 +931,7 @@ The server schedules nothing when:
 - A member's update is already pending. The server never replaces it.
 - The release's build is not above a declined one (below).
 
-See it with any member's `aether server update --status`. It prints the
+See it with any member's `cloudfield server update --status`. It prints the
 server's version, the latest release on its channel, `update available`,
 when the check ran and why it failed, and the phase of the current update.
 A server-scheduled update shows as `pending update: <tag>, requested by
@@ -903,7 +952,7 @@ with `--allow-downgrade`, an update that failed (after 3 tries for a network
 error), and a server-scheduled update whose new binary failed its start and
 rolled back. The server then schedules only a build above the declined one,
 so a rollback holds until a newer build ships. A super admin's own
-`aether server update` ignores the mark, and so does `--version`. Recording
+`cloudfield server update` ignores the mark, and so does `--version`. Recording
 comes first: a cancel or rollback whose mark cannot be saved is refused with
 the error. A cancel whose release's build cannot be read from its signed
 manifest still cancels, and says in `not_declined` (`decline_note` in
@@ -918,7 +967,7 @@ a server update is already being applied: v0.9.0-nightly.13 is applying now and 
 ```
 
 An update whose download could not be undone refuses the next one until
-`aether-server` restarts and puts the previous binaries back. `--when idle`
+`cloudfield-server` restarts and puts the previous binaries back. `--when idle`
 cannot go with `--allow-downgrade`; the CLI refuses with `aether server
 update: --allow-downgrade applies now only; drop --when idle`. A release that is not above the running build is refused
 without `--allow-downgrade`:
@@ -935,7 +984,7 @@ schema is below the database's fails with `this database is at schema <n> and
 ### Update a client
 
 ```sh
-aether update
+cloudfield update
 ```
 
 It installs the newest release on the channel its default linked server
@@ -953,10 +1002,10 @@ aether: update the server first: aether server update (the server runs v0.8.0 an
 It never asks for privileges. A CLI in a directory you cannot write, such as
 `/usr/local/bin`, fails before anything downloads with
 ``/usr/local/bin is not writable by this user; re-run as `sudo aether update` ``.
-`sudo` resets `HOME`, so `sudo aether update` cannot see your link; pass the
-server's version (from `aether server update --status`) with `--version`. On a
+`sudo` resets `HOME`, so `sudo cloudfield update` cannot see your link; pass the
+server's version (from `cloudfield server update --status`) with `--version`. On a
 server host it also replaces `aether-server` and prints the restart to run;
-with a root unit, `sudo aether update` runs `sudo aether-server update`.
+with a root unit, `sudo cloudfield update` runs `sudo cloudfield-server update`.
 
 The dashboard's **Update now** runs the same update and relaunches the app.
 For a CLI in a directory you cannot write, macOS asks once for an administrator
@@ -969,9 +1018,9 @@ One from `v0.7.0-alpha.12` or older needs one restart by hand:
 `schtasks /End /TN aether-daemon`, then `schtasks /Run /TN aether-daemon`).
 With no linked server, or one that does not answer and was never read, the
 CLI and the desktop app follow `stable`, and `beta` until the first `stable.json`
-exists. A running desktop gateway keeps the last channel it read while the server is down; a one-shot `aether update` does not, and checks stable then. Each channel's
+exists. A running desktop gateway keeps the last channel it read while the server is down; a one-shot `cloudfield update` does not, and checks stable then. Each channel's
 pointer mark is in `update.json` beside `config.json`.
-`AETHER_NO_UPDATE_CHECK=1` turns off release checks in the CLI and dashboard.
+`CLOUDFIELD_NO_UPDATE_CHECK=1` turns off release checks in the CLI and dashboard.
 
 ### What an update does not change
 
@@ -984,7 +1033,7 @@ pointer mark is in `update.json` beside `config.json`.
   When only `aether.slice` is missing or differs, and a local Docker uses the
   systemd cgroup driver, the warning leaves out the restart ([Keep the server reachable under load](#keep-the-server-reachable-under-load)).
   Keep your own changes in a drop-in (`sudo systemctl edit aether-server`).
-- Sysbox's settings: rerun `sudo aether-server sysbox install`. With
+- Sysbox's settings: rerun `sudo cloudfield-server sysbox install`. With
   containers running, it prints `sudo systemctl restart sysbox` for later.
 - An open member environment, which keeps its image until it is stopped and
   reopened ([environments.md](environments.md#the-standard-image)).
@@ -999,9 +1048,9 @@ A server refuses any client older than itself. The CLI prints this and exits 1:
 aether: rpc error -32005: this aether is v0.7.0-alpha.11 and the server runs v0.8.0; update this client first: run `aether update` (desktop: Update in the app; Android: install the latest aether-android.apk), then retry
 ```
 
-Run `aether update`, or **Update now** on the dashboard's update screen, then
+Run `cloudfield update`, or **Update now** on the dashboard's update screen, then
 retry; both install the server's release. Updating and git fetch and push keep
-working meanwhile. Rerun a refused `aether link --repo` afterwards to set the
+working meanwhile. Rerun a refused `cloudfield link --repo` afterwards to set the
 git remote. Development builds (`dev` or a bare commit) are never refused.
 
 ### Verified releases
@@ -1016,21 +1065,21 @@ before signing have no manifest, so install those with the install script.
 The manifest also signs the release's `channel` (`nightly`, `beta` or
 `stable`), which must match the tag's form (`-nightly.N`, `-beta.N`, none),
 and its `build` and `hotfix` numbers. Releases from before channels carry
-none of the three and count as build 0. Release checks, `aether server
-update` and `sudo aether-server update` order a release by its `(build,
+none of the three and count as build 0. Release checks, `cloudfield server
+update` and `sudo cloudfield-server update` order a release by its `(build,
 hotfix)`, whatever the tags say: `v0.9.0-beta.2` at build 412 is newer than
 `v0.9.0-nightly.10` at build 400. Between two build-0 releases, the version
 decides. The server refuses a lower build, or the same build on the same
 channel, without `--allow-downgrade`; the same build under another
-channel's tag installs. `aether update` and the dashboard's **Update now**
-never pick a lower build on their own; `aether update --version <tag>`
+channel's tag installs. `cloudfield update` and the dashboard's **Update now**
+never pick a lower build on their own; `cloudfield update --version <tag>`
 installs the release you name. `server.info` reports the server's `build`
 and `min_client_build`, and a client sends its build in its SSH banner as
 `v0.9.0-beta.2+b.412` (`+b.412.h.1` for a hotfix). When both carry a
 build, the server refuses a client below its build and the client matches
 its server by build; when either is build 0, the version decides, as
 before. A server from before builds ignores the build in the banner. A
-match to a lower build is refused, and `aether update --version <tag>`
+match to a lower build is refused, and `cloudfield update --version <tag>`
 installs it anyway.
 The manifest also signs image digests ([edge.md](edge.md#verifying-an-image)).
 
@@ -1067,17 +1116,19 @@ The server keeps all its state in `/var/lib/aether`, or the `data-dir` you set.
 | `checkouts/` | One git worktree per session, and each session's recorded diff history in `<run-id>.diffsnap/`. With `session-runtime vm`, `<run-id>/` holds the session's checkout disk instead of a worktree. |
 | `transcripts/` | Terminal recordings and Enhanced conversation logs, kept until you delete the session. |
 | `homes/<member>/` | Each member's persistent home: installed agents, agent logins, uploaded configuration, and their GitHub token. |
-| `signing-keys/` | Each member's private commit signing key, which no container mounts. Without a backup, each member runs `aether github connect` again for a new key. |
+| `signing-keys/` | Each member's private commit signing key, which no container mounts. Without a backup, each member runs `cloudfield github connect` again for a new key. |
 | `workspace-secrets/` | Secret workspace variables in plain text, readable only by the server's user. |
 | `mirrors/`, `profiles/` | Source mirror settings and deploy keys, and agent profile snapshots. |
 | `server-update/` | Update state, and the database copy taken before an update that changes its schema. |
 | `home-caches/`, `scratch/` | Package caches and each container's `/tmp`. Rebuildable; no backup needed. |
 | `vm/` | With `session-runtime vm`: each VM's disks, logs and saved memory in `<key>/`, and in `images/` the disks VMs boot from, package caches, and the environments members saved (`images/tags.json` and `images/bases/local-*/`). |
-| `dictation/` | The speech-to-text engine and model `aether-server dictation install` downloaded. Reinstallable; no backup needed. |
+| `dictation/` | The speech-to-text engine and model `cloudfield-server dictation install` downloaded. Reinstallable; no backup needed. |
 
 The other directories hold internal server state. To recover a server, back
 up `aether.db`, `repos/`, `checkouts/*.diffsnap/`, `transcripts/`, `homes/`,
-`signing-keys/`, `profiles/`, `mirrors/` and `workspace-secrets/`. With
+`signing-keys/`, `profiles/`, `mirrors/` and `workspace-secrets/`. Each
+`<run-id>.diffsnap/` of an ended session reads its fork point from `repos/`,
+so back up and restore the two together. With
 `session-runtime vm`, also back up `vm/images/tags.json` and
 `vm/images/bases/local-*/`, the environments members saved; they are sparse
 disks, so copy them with `tar --sparse` or `cp --sparse=always`. Like
@@ -1104,10 +1155,13 @@ and git history. Follow the steps in order.
 
 ```sh
 # 0. With the edge on: unenroll, so the edge stops listing the server.
-sudo aether-server edge leave
+sudo cloudfield-server edge leave
 # 1. Stop the service.
 sudo systemctl disable --now aether-server
 sudo rm -f /etc/systemd/system/aether-server.service /etc/systemd/system/aether.slice
+# The cloudfield-* names, only where they are the installer's links.
+u=/etc/systemd/system/cloudfield-server.service
+if [ "$(readlink $u)" = aether-server.service ]; then sudo rm $u; fi
 sudo systemctl daemon-reload
 # 2. Containers and VMs. Stopping the server does NOT remove them.
 sudo docker rm -f $(sudo docker ps -aq --filter label=aether.managed=true)
@@ -1119,6 +1173,7 @@ sudo docker volume rm $(sudo docker volume ls -q --filter label=aether.managed=t
 # 3. State, config, binary.
 sudo rm -rf /var/lib/aether /etc/aether
 sudo rm -f /usr/local/bin/aether-server
+if [ "$(readlink /usr/local/bin/cloudfield-server)" = aether-server ]; then sudo rm /usr/local/bin/cloudfield-server; fi
 sudo rm -rf /usr/local/bin/cloud-hypervisor /usr/local/lib/aether   # with session-runtime vm
 # The VM firewall rules and IP forwarding stay until the next reboot.
 sudo rm -rf /tmp/aether-patch-*
@@ -1131,8 +1186,8 @@ carries `aether.managed=true`. The server writes no log files.
 ### Client
 
 Sign out of every edge first: deleting the config does not revoke this
-device's tokens. `aether logout` signs out of one edge; with several, run
-`aether logout --edge <url>` for each origin under `edges` in
+device's tokens. `cloudfield logout` signs out of one edge; with several, run
+`cloudfield logout --edge <url>` for each origin under `edges` in
 `edge-tokens.json`. If an edge is unreachable, logout keeps the token and says
 so. Retry, or revoke it later on that edge's Devices page.
 
@@ -1146,8 +1201,9 @@ systemctl --user daemon-reload
 rm -rf ~/.config/aether ~/.config/aether-desktop
 ssh-keygen -R '[<server-host>]:2222'
 rm -f ~/.local/bin/aether       # the client default
-# sudo rm -f /usr/local/bin/aether if you installed there instead
-# only if you ran `aether gui build`:
+if [ "$(readlink ~/.local/bin/cloudfield)" = aether ]; then rm ~/.local/bin/cloudfield; fi
+# Installed in /usr/local/bin instead: the same two lines there, with sudo.
+# only if you ran `cloudfield gui build`:
 rm -rf ~/.local/share/cloudfield/desktop ~/.local/share/aether/desktop ~/.local/share/applications/aether-desktop.desktop
 rm -rf ~/.cache/aether ~/.cache/electron ~/.cache/electron-builder
 ```
@@ -1158,8 +1214,8 @@ app (`Cloudfield.app`, or `Aether.app` from before the rename, in
 `/Applications` or `~/Applications`) and
 `~/Library/Caches/{aether,electron,electron-builder}`. Run `ssh-keygen -R` for
 every address you linked through: a reinstalled server has a new host key, and
-a stale entry makes `aether link` fail with a host key mismatch. Keep your SSH
-keys: `~/.ssh/id_ed25519` is yours, even when `aether link` created it because
+a stale entry makes `cloudfield link` fail with a host key mismatch. Keep your SSH
+keys: `~/.ssh/id_ed25519` is yours, even when `cloudfield link` created it because
 you had none.
 
 ### Windows client
@@ -1206,26 +1262,26 @@ rundll32 'sysdm.cpl,EditEnvironmentVariables'
 
 ### Linked repositories
 
-Each clone that `aether link --repo` or `aether workspace import` linked
-(`aether status` lists them) has an `aether` remote and a branch per session you
-pulled. Repoint the base branch, which `aether link` set to the `aether`
+Each clone that `cloudfield link --repo` or `cloudfield workspace import` linked
+(`cloudfield status` lists them) has an `aether` remote and a branch per session you
+pulled. Repoint the base branch, which `cloudfield link` set to the `aether`
 remote, before removing it, or `git push` on it fails. This runs in PowerShell
 too:
 
 ```sh
 cd ~/code/myproject
 git branch --set-upstream-to=origin/main main
-git branch -D $(git branch --format='%(refname:short)' --list 'aether/run-*')
+git branch -D $(git branch --format='%(refname:short)' --list 'cloudfield/run-*' 'aether/run-*')
 git remote remove aether
 ```
 
-An interrupted `aether sync --live` can leave `*.aether-conflict` files next
+An interrupted `cloudfield sync --live` can leave `*.aether-conflict` files next
 to your originals, holding local edits from when it paused.
 
 ## Limits
 
 - The server runs only on Linux, and setup installs Sysbox only on Ubuntu and
-  Debian. The Windows client has no `aether init`.
+  Debian. The Windows client has no `cloudfield init`.
 - Release binaries and locally built desktop apps are not code-signed
   ([Windows Defender and SmartScreen](#windows-defender-and-smartscreen)).
 - The Windows install script, and the install script without OpenSSL 3, do
@@ -1242,7 +1298,7 @@ to your originals, holding local edits from when it paused.
 | Error or symptom | Fix |
 | --- | --- |
 | `runtime: docker engine API "1.44" cannot mount a path beneath a member home; that needs API 1.45 (Docker Engine 26.0) or newer` | Upgrade Docker Engine to 26.0 or newer. If `DOCKER_API_VERSION` is set below 1.45 in the server's environment, unset or raise it. |
-| `aether link` fails with `knownhosts: key mismatch` after the server was reinstalled | The server has a new host key. Run `ssh-keygen -R '[<server-host>]:2222'` for every address you linked through, then link again. |
+| `cloudfield link` fails with `knownhosts: key mismatch` after the server was reinstalled | The server has a new host key. Run `ssh-keygen -R '[<server-host>]:2222'` for every address you linked through, then link again. |
 | The sync daemon fails with exit status 2 after an upgrade | Its service passes a flag that no longer exists, such as `--sync-origin`. Rerun both commands in [The client-side sync daemon](#the-client-side-sync-daemon). |
 
 ### Cloudfield is missing from the Windows Start Menu

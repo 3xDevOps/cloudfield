@@ -36,21 +36,14 @@
   line-gap-override: 0%;
 }
 
-/* Saira: `text-title` only. */
+/* Open Sans: `text-title` only. */
 @font-face {
-  font-family: 'Saira';
+  font-family: 'Open Sans Variable';
   font-style: normal;
-  font-weight: 100 900;
+  font-weight: 300 800;
   font-display: swap;
-  src: url('/fonts/saira-latin.woff2') format('woff2');
+  src: url('../node_modules/@fontsource-variable/open-sans/files/open-sans-latin-wght-normal.woff2') format('woff2-variations');
   unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
-}
-
-@font-face {
-  font-family: 'VT323';
-  src: url('/fonts/vt323-latin.woff2') format('woff2');
-  font-weight: 400;
-  font-display: swap;
 }
 
 /* Terminal font: JetBrainsMono Nerd Font Mono, for xterm alone (it reads the
@@ -62,13 +55,13 @@
    fit the cell exactly. */
 @font-face {
   font-family: 'JetBrainsMono NFM';
-  src: url('/fonts/jetbrains-mono-nfm-regular.woff2') format('woff2');
+  src: url('./fonts/jetbrains-mono-nfm-regular.woff2') format('woff2');
   font-weight: 400;
   font-display: block;
 }
 @font-face {
   font-family: 'JetBrainsMono NFM';
-  src: url('/fonts/jetbrains-mono-nfm-bold.woff2') format('woff2');
+  src: url('./fonts/jetbrains-mono-nfm-bold.woff2') format('woff2');
   font-weight: 700;
   font-display: block;
 }
@@ -76,21 +69,21 @@
 /* Symbol-only aliases leave prose metrics and non-symbol fallback unchanged. */
 @font-face {
   font-family: 'Aether Symbols';
-  src: url('/fonts/noto-sans-symbols-2-spinners.woff2') format('woff2');
+  src: url('./fonts/noto-sans-symbols-2-spinners.woff2') format('woff2');
   font-weight: 400;
   font-display: swap;
   unicode-range: U+25A0-25FF, U+2800-28FF;
 }
 @font-face {
   font-family: 'Aether Nerd Symbols';
-  src: url('/fonts/jetbrains-mono-nfm-regular.woff2') format('woff2');
+  src: url('./fonts/jetbrains-mono-nfm-regular.woff2') format('woff2');
   font-weight: 400;
   font-display: swap;
   unicode-range: U+E000-F8FF, U+F0000-FFFFD, U+100000-10FFFD;
 }
 @font-face {
   font-family: 'Aether Nerd Symbols';
-  src: url('/fonts/jetbrains-mono-nfm-bold.woff2') format('woff2');
+  src: url('./fonts/jetbrains-mono-nfm-bold.woff2') format('woff2');
   font-weight: 700;
   font-display: swap;
   unicode-range: U+E000-F8FF, U+F0000-FFFFD, U+100000-10FFFD;
@@ -160,6 +153,45 @@
   color: var(--text);
 }
 
+/* A wrapping row that fills its last line first, so its final item never
+   wraps alone. The row runs in reverse and later children take lower orders,
+   which keeps the look and the tab order in document order, for up to eight
+   children. */
+@layer components {
+  .wrap-from-end {
+    display: flex;
+    flex-flow: row-reverse wrap-reverse;
+    justify-content: flex-end;
+  }
+  .wrap-from-end > * {
+    order: 9;
+  }
+  .wrap-from-end > :nth-last-child(1) {
+    order: 1;
+  }
+  .wrap-from-end > :nth-last-child(2) {
+    order: 2;
+  }
+  .wrap-from-end > :nth-last-child(3) {
+    order: 3;
+  }
+  .wrap-from-end > :nth-last-child(4) {
+    order: 4;
+  }
+  .wrap-from-end > :nth-last-child(5) {
+    order: 5;
+  }
+  .wrap-from-end > :nth-last-child(6) {
+    order: 6;
+  }
+  .wrap-from-end > :nth-last-child(7) {
+    order: 7;
+  }
+  .wrap-from-end > :nth-last-child(8) {
+    order: 8;
+  }
+}
+
 /* In the components layer, so a ghost button's hover fill still wins. */
 @layer components {
   .control-matrix-clear {
@@ -180,7 +212,7 @@
 
 /* Revealed from the right edge, where Take control and Release sit, so the
    color pours out of the button and drains back into it. During a hold, red
-   spreads from the same edge and blends into the teal over 4rem. */
+   spreads from the same edge and blends into the control colour over 4rem. */
 .control-matrix-reach {
   clip-path: inset(0 0 0 calc(var(--control-reach) * 100%));
   mask-image: linear-gradient(to left, transparent calc(var(--control-edge) - 4rem), #000 var(--control-edge));
@@ -216,6 +248,7 @@
   --text-muted: #6b6b6b;
   --icon-faint: #8a8a8a;
   --accent-fill: #367f77;
+  --accent-mark: #367f77;
   --control-light: #367f77;
   --control-dots: 100%;
   --accent-text: #306f69;
@@ -249,9 +282,7 @@
   --agent-claude: #b4532a;
   --agent-pi: #8a3fb8;
   --agent-omp: #1f7a8c;
-  --agent-gemini: #1f6fd1;
   --agent-cursor: #9a6a00;
-  --agent-antigravity: #2f7d4a;
   --tone-soft: 8%;
   --lane-tint: 16%;
 
@@ -269,42 +300,43 @@
 .dark {
   color-scheme: dark;
 
-  --canvas: #141516;
-  --chrome: #1b1c1d;
-  --hover: #1d1e1f;
-  --hover-chrome: #262728;
-  --raised: #222324;
-  --seam: rgb(255 255 255 / 0.08);
-  --control-border: #767676;
-  --text: #e8e8e8;
-  --text-muted: #9a9a9a;
-  --icon-faint: #7a7a7a;
-  --accent-fill: #367f77;
-  --control-light: #4cc2b3;
+  --canvas: #070b11;
+  --chrome: #0c141f;
+  --hover: #121924;
+  --hover-chrome: #1c2531;
+  --raised: #151d2a;
+  --seam: rgb(247 240 228 / 0.09);
+  --control-border: #717c8d;
+  --text: #f7f0e4;
+  --text-muted: #97a3b5;
+  --icon-faint: #798699;
+  --accent-fill: #f5c542;
+  --accent-mark: #54e0d0;
+  --control-light: #f5c542;
   --control-dots: 70%;
-  --accent-text: #5fb3a8;
-  --focus-ring: #5fb3a8;
-  --on-accent: #ffffff;
-  --selection: #17413d;
+  --accent-text: #54e0d0;
+  --focus-ring: #54e0d0;
+  --on-accent: #070b11;
+  --selection: #0c3b36;
 
   --state-working: #4a9eff;
-  --state-needs-you: #e0a52a;
+  --state-needs-you: #f5c542;
   --state-failed: #f05c4a;
   --state-done: #45c26a;
-  --state-paused: #8a8a8a;
-  --on-failed: #141516;
-  --on-done: #141516;
+  --state-paused: #798699;
+  --on-failed: #070b11;
+  --on-done: #070b11;
 
   --series-1: #3987e5;
   --series-2: #d95926;
   --series-3: #199e70;
   --series-4: #c98500;
-  --series-5: #d55181;
+  --series-5: #8fbaff;
   --series-6: #008300;
   --series-7: #9085e9;
   --series-8: #e66767;
-  --series-other: #7a7a7a;
-  --series-rest: #4a4a4a;
+  --series-other: #6e798a;
+  --series-rest: #3e4958;
 
   --diff-add: #45c26a;
   --diff-del: #f05c4a;
@@ -313,9 +345,7 @@
   --agent-claude: #e0835e;
   --agent-pi: #c792ea;
   --agent-omp: #5ec4d6;
-  --agent-gemini: #7ab4ff;
   --agent-cursor: #e8b84a;
-  --agent-antigravity: #6ccf8e;
   --tone-soft: 12%;
   --lane-tint: 26%;
 
@@ -345,8 +375,7 @@
   --radius-4xl: var(--radius-panel);
 
   --font-sans: 'DM Sans Variable', 'Aether Symbols', 'Aether Nerd Symbols', 'DM Sans Fallback', system-ui, sans-serif;
-  --font-title: 'Saira', 'DM Sans Variable', 'Aether Symbols', 'Aether Nerd Symbols', 'DM Sans Fallback', sans-serif;
-  --font-pixel: 'VT323', monospace;
+  --font-title: 'Open Sans Variable', 'DM Sans Variable', 'Aether Symbols', 'Aether Nerd Symbols', 'DM Sans Fallback', sans-serif;
   --font-code: 'Aether Symbols', 'Aether Nerd Symbols', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
   --font-mono: var(--font-code);
 
@@ -399,7 +428,7 @@
   --color-state-failed-soft: color-mix(in srgb, var(--state-failed) var(--tone-soft), transparent);
   --color-state-done-soft: color-mix(in srgb, var(--state-done) var(--tone-soft), transparent);
   --color-state-paused-soft: color-mix(in srgb, var(--state-paused) var(--tone-soft), transparent);
-  --color-accent-soft: color-mix(in srgb, var(--accent-fill) var(--tone-soft), transparent);
+  --color-accent-soft: color-mix(in srgb, var(--accent-mark) var(--tone-soft), transparent);
   --color-diff-add: var(--diff-add);
   --color-diff-del: var(--diff-del);
   --color-diff-add-bg: color-mix(in srgb, var(--diff-add) var(--diff-bg), transparent);
@@ -407,15 +436,15 @@
   --color-agent-claude: var(--agent-claude);
   --color-agent-pi: var(--agent-pi);
   --color-agent-omp: var(--agent-omp);
-  --color-agent-gemini: var(--agent-gemini);
   --color-agent-cursor: var(--agent-cursor);
-  --color-agent-antigravity: var(--agent-antigravity);
 
-  /* `accent` is a fill for backgrounds and borders but the link colour for
-     text. Tailwind reads the property namespace before `--color-*`. */
-  --color-accent: var(--accent-fill);
+  /* `accent` marks what is selected or active as a fill or border, and is the
+     link colour for text. Tailwind reads the property namespace before
+     `--color-*`. `action` is the primary button's own fill. */
+  --color-accent: var(--accent-mark);
   --color-focus: var(--focus-ring);
-  --color-accent-hover: color-mix(in srgb, var(--accent-fill) 88%, black);
+  --color-action: var(--accent-fill);
+  --color-action-hover: color-mix(in srgb, var(--accent-fill) 88%, black);
   --text-color-accent: var(--accent-text);
   --text-color-muted: var(--text-muted);
   --color-scrim: var(--scrim);
@@ -427,10 +456,10 @@
   --shadow-button-hover: var(--button-hover-shadow);
   --shadow-overlay: var(--overlay-shadow);
   --shadow-dialog: var(--dialog-shadow);
-  --shadow-field-focus: 0 0 4px color-mix(in srgb, var(--accent-fill) 25%, transparent);
+  --shadow-field-focus: 0 0 4px color-mix(in srgb, var(--accent-mark) 25%, transparent);
 }
 
-/* Saira at 600 for pane, dialog, step and empty-state headings only. */
+/* Open Sans at 600 for pane, dialog, step and empty-state headings only. */
 @utility text-title {
   font-family: var(--font-title);
   font-size: var(--title-size);
@@ -521,26 +550,13 @@
 }
 @layer components {
   .launch-splash {
-    --primary: #367f77;
     position: fixed;
     inset: 0;
     z-index: 1000;
     display: grid;
     place-items: center;
     overflow: hidden;
-    isolation: isolate;
-    background:
-      radial-gradient(ellipse at 50% 52%, rgb(24 37 65 / 0.72), transparent 54%),
-      linear-gradient(
-        to bottom,
-        #0c1322 0%,
-        #0b1120 18%,
-        #101a30 36%,
-        #182541 54%,
-        #101b33 72%,
-        #080e1d 90%,
-        #05070f 100%
-      );
+    background: #070b11;
     opacity: 1;
     transition: opacity 260ms cubic-bezier(0.4, 0, 1, 1);
   }
@@ -550,323 +566,123 @@
     pointer-events: none;
   }
 
-  .launch-splash__sky,
-  .launch-splash__starfield,
-  .launch-splash__big-stars,
-  .launch-splash__shooting-stars {
-    position: absolute;
-    inset: 0;
-  }
-
-  .launch-splash__sky {
-    z-index: -1;
-  }
-
-  .launch-splash__grain {
+  .launch-splash__field {
     position: absolute;
     inset: 0;
     width: 100%;
     height: 100%;
-    opacity: 0.24;
-    mix-blend-mode: screen;
   }
 
-  .launch-splash__cloud {
-    position: absolute;
-    left: -10vw;
-    width: min(55vw, 640px);
-    opacity: 0.075;
-    filter: saturate(0.75);
-    animation: launch-cloud 150s linear infinite;
+  .launch-splash__lockup {
+    position: relative;
+    width: clamp(260px, 38vw, 520px);
+    transform: translateY(-3vh);
+    transition: opacity 140ms cubic-bezier(0.4, 0, 1, 1);
   }
 
-  .launch-splash__cloud img {
+  .launch-splash--leaving .launch-splash__lockup {
+    opacity: 0;
+  }
+
+  .launch-splash--leaving .launch-splash__dash,
+  .launch-splash--leaving .launch-splash__dot,
+  .launch-splash--leaving .launch-splash__letter,
+  .launch-splash--leaving .launch-splash__letter path {
+    animation: none;
+  }
+
+  .launch-splash__lockup > * {
     display: block;
     width: 100%;
     height: auto;
+    overflow: visible;
   }
 
-  .launch-splash__cloud--one {
-    top: 8%;
-    opacity: 0.1;
+  /* Delays are set per element from T in launch-splash-opening.tsx. */
+  .launch-splash__dash {
+    animation: launch-dash 120ms var(--ease-glide) both;
   }
 
-  .launch-splash__cloud--two {
-    top: 34%;
-    width: min(48vw, 560px);
-    animation-duration: 190s;
-    animation-delay: -70s;
+  .launch-splash__dot {
+    animation: launch-on 1ms linear both;
   }
 
-  .launch-splash__cloud--three {
-    top: 72%;
-    width: min(58vw, 680px);
-    opacity: 0.085;
-    animation-duration: 175s;
-    animation-delay: -115s;
+  .launch-splash__letter {
+    animation: launch-pop 150ms var(--ease-glide) both;
   }
 
-  .launch-splash__starfield {
-    width: 2px;
-    height: 2px;
-    inset: auto;
-    top: 0;
-    left: 0;
-    background: #dce6f2;
-    box-shadow:
-      7vw 12vh 0 #dce6f2,
-      13vw 32vh 0 rgb(110 231 214 / 0.75),
-      19vw 78vh 0 rgb(167 139 250 / 0.7),
-      25vw 18vh 0 rgb(220 230 242 / 0.75),
-      31vw 44vh 0 rgb(255 157 107 / 0.75),
-      37vw 84vh 0 rgb(220 230 242 / 0.6),
-      43vw 9vh 0 rgb(110 231 214 / 0.7),
-      49vw 68vh 0 rgb(167 139 250 / 0.65),
-      56vw 25vh 0 rgb(220 230 242 / 0.7),
-      62vw 93vh 0 rgb(255 157 107 / 0.65),
-      68vw 51vh 0 rgb(110 231 214 / 0.7),
-      74vw 16vh 0 rgb(220 230 242 / 0.8),
-      81vw 76vh 0 rgb(167 139 250 / 0.7),
-      87vw 35vh 0 rgb(255 157 107 / 0.7),
-      94vw 88vh 0 rgb(220 230 242 / 0.65);
-    animation: launch-twinkle 4.5s steps(2) infinite;
+  .launch-splash__letter path {
+    animation: launch-draw 200ms var(--ease-glide) both;
   }
 
-  .launch-splash__big-star {
-    position: absolute;
-    width: 3px;
-    height: 3px;
-    background: var(--star-color);
-    box-shadow:
-      3px 0 0 var(--star-color),
-      -3px 0 0 var(--star-color),
-      0 3px 0 var(--star-color),
-      0 -3px 0 var(--star-color);
-    animation: launch-twinkle 6s steps(2) infinite;
-  }
-
-  .launch-splash__big-star--pale {
-    --star-color: rgb(220 230 242 / 0.78);
-  }
-
-  .launch-splash__big-star--mint {
-    --star-color: rgb(110 231 214 / 0.75);
-    box-shadow:
-      3px 0 0 var(--star-color),
-      -3px 0 0 var(--star-color),
-      0 3px 0 var(--star-color),
-      0 -3px 0 var(--star-color),
-      0 0 8px rgb(110 231 214 / 0.25);
-  }
-
-  .launch-splash__big-star--violet {
-    --star-color: rgb(167 139 250 / 0.7);
-  }
-
-  .launch-splash__big-star--amber {
-    --star-color: rgb(255 157 107 / 0.7);
-  }
-
-  .launch-splash__satellite {
-    position: absolute;
-    left: -5vw;
-    width: 3px;
-    height: 3px;
-    animation: launch-satellite 9s linear infinite;
-  }
-
-  .launch-splash__satellite--pale {
-    top: 9%;
-    background: #dce6f2;
-    opacity: 0.75;
-  }
-
-  .launch-splash__satellite--mint {
-    top: 64%;
-    background: #6ee7d6;
-    opacity: 0.6;
-    animation-delay: -4s;
-    animation-duration: 12s;
-  }
-
-  .launch-splash__shooting-star {
-    --shoot-angle: 35deg;
-    --shoot-distance: 80vmax;
-    position: absolute;
-    left: -18vw;
-    top: 24%;
-    width: clamp(90px, 12vw, 150px);
-    height: 2px;
-    border-radius: 999px;
-    transform-origin: right center;
-    background: linear-gradient(
-      to right,
-      transparent 0%,
-      rgb(220 230 242 / 0.18) 40%,
-      rgb(220 230 242 / 0.7) 76%,
-      #dce6f2 100%
-    );
-    transform: rotate(var(--shoot-angle)) translate3d(0, 0, 0);
-    animation: launch-shoot 1.35s cubic-bezier(0.2, 0.7, 0.25, 1) infinite;
-  }
-
-  .launch-splash__shooting-star--two {
-    --shoot-angle: 42deg;
-    top: 58%;
-    left: 34vw;
-    background: linear-gradient(
-      to right,
-      transparent 0%,
-      rgb(110 231 214 / 0.16) 40%,
-      rgb(110 231 214 / 0.7) 76%,
-      #6ee7d6 100%
-    );
-    animation-delay: -0.78s;
-    animation-duration: 1.55s;
-  }
-
-  .launch-splash__shooting-star--three {
-    --shoot-angle: 30deg;
-    top: 42%;
-    left: 72vw;
-    background: linear-gradient(
-      to right,
-      transparent 0%,
-      rgb(255 157 107 / 0.14) 40%,
-      rgb(255 157 107 / 0.65) 76%,
-      #ff9d6b 100%
-    );
-    animation-delay: -1.1s;
-    animation-duration: 1.7s;
-  }
-
-  .launch-splash__logo {
-    position: relative;
-    z-index: 1;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 18px;
-    animation: launch-logo-in 700ms cubic-bezier(0.16, 1, 0.3, 1) both;
-  }
-
-  .launch-splash__logo img {
-    display: block;
-    width: clamp(150px, 22vw, 260px);
-    height: auto;
-  }
-
-  .launch-splash__wordmark {
-    color: #f7f0e4;
-    font-family: var(--font-pixel);
-    font-size: clamp(32px, 4vw, 48px);
-    letter-spacing: 0.12em;
-    line-height: 1;
-    text-shadow: 0 0 18px rgb(220 230 242 / 0.28);
-  }
-
-  @keyframes launch-logo-in {
-    from {
+  @keyframes launch-on {
+    0% {
       opacity: 0;
-      transform: translateY(16px) scale(0.94);
     }
-    to {
-      opacity: 1;
-      transform: translateY(0) scale(1);
-    }
-  }
-
-  @keyframes launch-twinkle {
-    0%,
-    100% {
-      opacity: 0.42;
-    }
-    50% {
-      opacity: 0.95;
-    }
-  }
-
-  @keyframes launch-cloud {
-    from {
-      transform: translateX(0);
-    }
-    to {
-      transform: translateX(118vw);
-    }
-  }
-
-  @keyframes launch-satellite {
-    from {
-      transform: translateX(0);
-    }
-    to {
-      transform: translateX(125vw);
-    }
-  }
-
-  @keyframes launch-shoot {
-    0%,
-    8% {
-      opacity: 0;
-      transform: rotate(var(--shoot-angle)) translate3d(0, 0, 0);
-    }
-    18% {
-      opacity: 1;
-    }
-    100% {
-      opacity: 0;
-      transform: rotate(var(--shoot-angle)) translate3d(var(--shoot-distance), 0, 0);
-    }
-  }
-  .launch-splash__status {
-    display: block;
-    width: 6px;
-    height: 6px;
-    border-radius: 999px;
-    background: var(--primary);
-    animation: launch-status-pulse 1.8s ease-in-out infinite;
-  }
-
-  @keyframes launch-status-pulse {
-    0%,
+    1%,
     100% {
       opacity: 1;
     }
-    50% {
-      opacity: 0.4;
+  }
+
+  @keyframes launch-draw {
+    from {
+      stroke-dasharray: 0 1;
+    }
+    to {
+      stroke-dasharray: 1 0;
+    }
+  }
+
+  @keyframes launch-dash {
+    0% {
+      opacity: 0;
+      stroke-dasharray: 0 1;
+    }
+    1% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 1;
+      stroke-dasharray: 1 0;
+    }
+  }
+
+  @keyframes launch-pop {
+    0% {
+      opacity: 0;
+      transform: translateY(26px);
+    }
+    1% {
+      opacity: 1;
+    }
+    100% {
+      opacity: 1;
+      transform: none;
     }
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .launch-splash {
+    .launch-splash,
+    .launch-splash__lockup {
       transition: none;
     }
 
-    .launch-splash__cloud,
-    .launch-splash__starfield,
-    .launch-splash__big-star,
-    .launch-splash__satellite,
-    .launch-splash__shooting-star,
-    .launch-splash__status,
-    .launch-splash__logo {
+    .launch-splash .launch-splash__lockup * {
       animation: none;
-    }
-
-    .launch-splash__shooting-star {
-      opacity: 0.55;
     }
   }
 
-  /* Sticky note colors derive from accent-fill/control-light so dark and
-     light themes both track the live theme rather than a fixed palette. */
+  /* Sticky note colors derive from accent-mark so dark and light themes
+     both track the live theme rather than a fixed palette. */
   .sticky-note {
     --scratch-stroke: #ff9b8a;
-    background: color-mix(in srgb, var(--accent-fill) 30%, var(--canvas));
-    border-color: color-mix(in srgb, var(--control-light) 38%, transparent);
+    background: color-mix(in srgb, var(--accent-mark) 30%, var(--canvas));
+    border-color: color-mix(in srgb, var(--accent-mark) 38%, transparent);
   }
 
   .sticky-note__header {
-    color: color-mix(in srgb, var(--control-light) 65%, var(--text));
+    color: color-mix(in srgb, var(--accent-mark) 65%, var(--text));
   }
 }
 

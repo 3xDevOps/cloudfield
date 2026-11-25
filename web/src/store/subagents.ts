@@ -1,4 +1,4 @@
-import type { BackgroundTask, SessionItem, SessionToolCall } from '@/lib/session-types'
+import type { BackgroundTask, SessionItem, SessionToolCall, WorkflowAgent } from '@/lib/session-types'
 import { isLaunch, toolLabel, toolStatus, type Rehome, type SessionRow, type Turn } from '@/store/session-rows'
 
 /** A background task's own status wins; otherwise done and failed come from
@@ -347,11 +347,29 @@ function text(value: unknown): string | undefined {
 
 export function agentLabel(agent: Subagent): string {
   const raw = rawInput(agent)
-  return agent.call?.subagent?.description || (agent.workflow ? text(raw.name) : undefined) || text(raw.description) || agent.call?.title || 'Subagent'
+  return agent.call?.subagent?.description || (agent.workflow ? agent.call?.task?.workflow?.name || text(raw.name) : undefined) || text(raw.description) || agent.call?.title || 'Subagent'
 }
 
 export function agentType(agent: Subagent): string | undefined {
-  return agent.workflow ? 'Workflow' : agent.call?.subagent?.type
+  const type = agent.workflow ? 'Workflow' : agent.call?.subagent?.type
+  return type === agentLabel(agent) ? undefined : type
+}
+
+export type WorkflowRowState = WorkflowAgent['state'] | 'stopped' | 'not-started'
+
+/** Once its workflow is no longer running, a row still running was stopped and one still queued never started. */
+export function workflowRowState(row: WorkflowAgent, live: boolean): WorkflowRowState {
+  if (live || (row.state !== 'running' && row.state !== 'queued')) return row.state
+  return row.state === 'running' ? 'stopped' : 'not-started'
+}
+
+export function workflowTally(rows: WorkflowAgent[], live: boolean): Partial<Record<WorkflowRowState, number>> {
+  const tally: Partial<Record<WorkflowRowState, number>> = {}
+  for (const row of rows) {
+    const state = workflowRowState(row, live)
+    tally[state] = (tally[state] ?? 0) + 1
+  }
+  return tally
 }
 
 export function agentReport(agent: Subagent): string | undefined {
@@ -407,6 +425,21 @@ export function agentTurn(agent: Subagent): Turn {
 export function agentLoaded(agent: Subagent, oldestSeq: number): boolean {
   const first = agent.items[0]?.seq ?? Infinity
   return agent.opened === true && agent.launchSeq! >= oldestSeq && first > agent.launchSeq!
+}
+
+const barRank: Partial<Record<AgentState, number>> = { running: 0, failed: 1, stopped: 2 }
+
+/** Every subagent and workflow the main agent launched, or whose launch is
+ * not loaded, one `<w|a>:<state>:<id>` line each: running ones oldest first,
+ * then failed, stopped and the rest, each newest first. A string, so a
+ * selector returning it changes only when a row would. */
+export function topAgents(index: AgentIndex): string {
+  return Object.values(index.agents)
+    .filter((agent) => !agent.parentID)
+    .map((agent) => ({ agent, state: agentState(agent) }))
+    .sort((a, b) => (barRank[a.state] ?? 3) - (barRank[b.state] ?? 3) || (a.state === 'running' ? 1 : -1) * ((a.agent.launchSeq ?? 0) - (b.agent.launchSeq ?? 0)))
+    .map(({ agent, state }) => `${agent.workflow ? 'w' : 'a'}:${state}:${agent.id}`)
+    .join('\n')
 }
 
 export function siblings(index: AgentIndex, agent: Subagent): string[] {

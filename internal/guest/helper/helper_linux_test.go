@@ -22,7 +22,7 @@ import (
 
 // testProcs is the one table of the test binary: its reaper collects every
 // child, so two tables would steal each other's exits. The reaper starts
-// with the first helper a test serves, so TestKVMHelper, run alone, keeps
+// with the first test that needs it, so TestKVMHelper, run alone, keeps
 // os/exec's own waits for the VM monitor and the disk tools.
 var (
 	testProcs   = newProcesses(nil)
@@ -313,6 +313,29 @@ func TestStartLeavesGoSettingsToTheProgram(t *testing.T) {
 	}
 }
 
+func TestProcessesStartAtTheSoftFileLimit(t *testing.T) {
+	var lim unix.Rlimit
+	if err := unix.Getrlimit(unix.RLIMIT_NOFILE, &lim); err != nil {
+		t.Fatal(err)
+	}
+	// PID 1 runs with its soft limit raised to the hard one; a test started
+	// at a lower soft limit would pass without the trampolines lowering it.
+	if err := unix.Setrlimit(unix.RLIMIT_NOFILE, &unix.Rlimit{Cur: lim.Max, Max: lim.Max}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = unix.Setrlimit(unix.RLIMIT_NOFILE, &lim) })
+	_, client := startHelper(t)
+	for _, nnp := range []bool{false, true} {
+		p := spawn(t, client, guest.ProcessSpec{ID: fmt.Sprint(nnp), Argv: []string{"sh", "-c", "ulimit -S -n; ulimit -H -n"}, NoNewPrivileges: nnp})
+		a := p.Attach(true)
+		out, _ := io.ReadAll(a.Stdout())
+		_ = a.Close()
+		if want := fmt.Sprintf("%d\n%d\n", processSoftFileLimit, lim.Max); string(out) != want {
+			t.Errorf("NoNewPrivileges %v: the program's open-file limits are %q, want %q", nnp, out, want)
+		}
+	}
+}
+
 func TestNoNewPrivileges(t *testing.T) {
 	_, client := startHelper(t)
 	// Without the option a process keeps the helper's own setting, which a
@@ -372,6 +395,31 @@ func TestSpawnFailures(t *testing.T) {
 	}
 }
 
+// The git service logs to the helper's own stderr: a start that closed its
+// log would hand PID 1's descriptor 2 to whatever the helper opens next.
+func TestSpawnLeavesTheLogOpen(t *testing.T) {
+	startReaper.Do(func() { go reapForever(testProcs) })
+	log, err := os.Create(filepath.Join(t.TempDir(), "log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = log.Close() }()
+	p, err := testProcs.spawn(spawnSpec{
+		ProcessSpec: guest.ProcessSpec{ID: t.Name(), User: self, Argv: []string{"sh", "-c", "echo out; echo err >&2"}, Env: []string{"PATH=" + os.Getenv("PATH")}},
+		log:         log,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-p.done
+	if _, err = log.WriteString("still open\n"); err != nil {
+		t.Fatalf("the start closed its caller's log: %v", err)
+	}
+	if data, err := os.ReadFile(log.Name()); err != nil || string(data) != "out\nerr\nstill open\n" {
+		t.Errorf("log = %q, %v", data, err)
+	}
+}
+
 func TestSignalAndInput(t *testing.T) {
 	_, client := startHelper(t)
 	ctx := testContext(t)
@@ -392,6 +440,41 @@ func TestSignalAndInput(t *testing.T) {
 	}
 	if err := p.Signal(ctx, syscall.SIGTERM); err == nil {
 		t.Fatal("signalling an exited process must fail")
+	}
+}
+
+// Closing an attachment's input ends a write the helper never answers, as a
+// frozen guest never does.
+func TestCloseInputEndsAWriteInFlight(t *testing.T) {
+	_, client := startHelper(t)
+	ctx := testContext(t)
+	p := spawn(t, client, guest.ProcessSpec{ID: "sleep", Argv: []string{"sleep", "60"}})
+	defer func() { _ = p.Signal(ctx, syscall.SIGKILL) }()
+	a := p.Attach(false)
+	defer func() { _ = a.Close() }()
+	wrote := make(chan error, 1)
+	go func() {
+		_, err := a.Stdin().Write(make([]byte, 4<<20))
+		wrote <- err
+	}()
+	time.Sleep(200 * time.Millisecond)
+	closed := make(chan struct{})
+	go func() {
+		_ = a.Stdin().Close()
+		close(closed)
+	}()
+	select {
+	case <-closed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("closing the input waited for the write in flight")
+	}
+	select {
+	case err := <-wrote:
+		if err == nil {
+			t.Fatal("a write the close ended reported success")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the close did not end the write in flight")
 	}
 }
 

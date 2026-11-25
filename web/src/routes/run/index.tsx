@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useAssistantDocked } from '@/components/assistant/panel'
 import { MissingRun } from '@/components/missing-run'
+import type { MenuPoint } from '@/components/run-actions'
 import { replaceRouteKeepingFocus } from '@/components/shell/center-view'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Tabs, TabsContent } from '@/components/ui/tabs'
@@ -46,6 +47,13 @@ import type { NavigateOptions } from '@/store/ui'
 /** Inactive views stay laid out but invisible: a terminal hidden with
  * display:none measures zero and would resize the shared PTY. */
 const panel = 'absolute inset-0 outline-none'
+// Where the browser's own menu is worth more than the session's: copy a link, paste, copy code.
+const nativeMenuTargets = 'a, input, textarea, select, [contenteditable], pre, code, img, video, .xterm'
+
+function selectionCovers(node: Node): boolean {
+  const selection = window.getSelection()
+  return Boolean(selection && !selection.isCollapsed && selection.getRangeAt(0).intersectsNode(node))
+}
 
 /** The inline inspectors' widths: `w-80`, `w-[28rem]` and `w-80`. */
 const detailsWidth = 320
@@ -86,7 +94,15 @@ function RunFrame({ run, params }: { run: RunRecord; params: RouteProps['params'
   const [overlayWorkflow, setOverlayWorkflow] = useState(false)
   const [dialog, setDialog] = useState<'captures' | 'events' | null>(null)
   const returnTo = useRef<HTMLElement | null>(null)
-  const [noteFocus, setNoteFocus] = useState(0)
+  const [noteFocus, setNoteFocus] = useState(false)
+  const [menuAt, setMenuAt] = useState<MenuPoint | null>(null)
+  // Chromium on macOS selects the word under a right-click before contextmenu
+  // fires, so a pointer opener reads the selection at mousedown; null when the
+  // keyboard opened it.
+  const selectedBeforeMenu = useRef<boolean | null>(null)
+  useEffect(() => {
+    if (mobile) setMenuAt(null)
+  }, [mobile])
   const textarea = useRef<HTMLTextAreaElement>(null)
 
   const browser = hasBrowser(run, cap)
@@ -137,7 +153,7 @@ function RunFrame({ run, params }: { run: RunRecord; params: RouteProps['params'
     if (squeezed) replaceRouteKeepingFocus({ name: 'run', params: { runId: run.id, view } })
   }, [resized, squeezed, row.width, assistantDocked, run.id, view])
 
-  // The Workflow rail sits beside the session when it fits; otherwise it opens as a sheet.
+  // The Session tree rail sits beside the session when it fits; otherwise it opens as a sheet.
   const workflowInline = row.width >= workflowWidth + minReadableWidth
   const besideDetails = row.width >= workflowWidth + detailsWidth + minReadableWidth
   const besideAgent = row.width >= workflowWidth + agentWidth + minReadableWidth
@@ -252,7 +268,7 @@ function RunFrame({ run, params }: { run: RunRecord; params: RouteProps['params'
   // otherwise Details must keep showing them, or they appear nowhere.
   const notesShownInRail = view === 'session' && notesWide
   const details = (inset: boolean) => (
-    <RunDetails run={run} view={view} agent={agent} agentName={agentName} room={room} nav={nav} inset={inset} noteFocus={noteFocus} notesWide={notesShownInRail} />
+    <RunDetails run={run} view={view} agent={agent} agentName={agentName} room={room} nav={nav} inset={inset} noteFocus={noteFocus} onNoteFocused={() => setNoteFocus(false)} notesWide={notesShownInRail} />
   )
   const requesterID = agent.takeover.review?.requester_member_id
   const holding = !agent.localControl ? agent.takeover.interaction.phase : undefined
@@ -274,8 +290,15 @@ function RunFrame({ run, params }: { run: RunRecord; params: RouteProps['params'
             returnTo.current = opener
             setDetails(!detailsOpen)
           }}
+          onComment={(opener) => {
+            returnTo.current = opener
+            setNoteFocus(true)
+            setDetails(true)
+          }}
           onCaptures={openCaptures}
           onEvents={openDialog('events')}
+          menuAt={menuAt}
+          onMenuClose={() => setMenuAt(null)}
           onWorkflow={(opener) => {
             returnTo.current = opener
             setWorkflow(true)
@@ -297,7 +320,29 @@ function RunFrame({ run, params }: { run: RunRecord; params: RouteProps['params'
         <div ref={frameRef} className="flex min-h-0 flex-1">
           <div ref={paneRef} className="relative min-h-0 min-w-0 flex-1">
             {visited.has('session') && (
-              <TabsContent value="session" forceMount inert={view !== 'session'} className={cn(panel, view !== 'session' && 'invisible')}>
+              <TabsContent
+                value="session"
+                forceMount
+                inert={view !== 'session'}
+                className={cn(panel, view !== 'session' && 'invisible')}
+                onMouseDown={(event) => {
+                  if (event.button === 2 || (event.button === 0 && event.ctrlKey)) selectedBeforeMenu.current = selectionCovers(event.target as Node)
+                }}
+                onClick={() => {
+                  selectedBeforeMenu.current = null
+                }}
+                onContextMenu={mobile ? undefined : (event) => {
+                  const target = event.target as HTMLElement
+                  const selected = selectedBeforeMenu.current ?? selectionCovers(target)
+                  selectedBeforeMenu.current = null
+                  const touch = (event.nativeEvent as PointerEvent).pointerType === 'touch'
+                  // A portaled overlay opened from Chat still bubbles here through React.
+                  if (event.defaultPrevented || event.shiftKey || touch || selected || !event.currentTarget.contains(target) || target.closest(nativeMenuTargets)) return
+                  event.preventDefault()
+                  const focused = document.activeElement
+                  setMenuAt({ x: event.clientX, y: event.clientY, returnTo: focused instanceof HTMLElement && focused !== document.body ? focused : null })
+                }}
+              >
                 <SessionView
                   run={run}
                   agent={agent}
@@ -350,7 +395,7 @@ function RunFrame({ run, params }: { run: RunRecord; params: RouteProps['params'
         </aside>
       )}
       {workflowInline && workflowOpen && (
-        <aside id={workflowPanelID} aria-label="Workflow" className="flex w-80 shrink-0 flex-col border-l border-seam bg-canvas">
+        <aside id={workflowPanelID} aria-label="Session tree" className="flex w-80 shrink-0 flex-col border-l border-seam bg-canvas">
           <WorkflowPanel run={run} view={view} agent={agent} nav={nav} onClose={() => setWorkflow(false)} />
         </aside>
       )}
@@ -367,7 +412,7 @@ function RunFrame({ run, params }: { run: RunRecord; params: RouteProps['params'
             }}
             className={mobile ? 'flex max-h-[85dvh] min-h-0 flex-col p-0' : 'flex w-80 flex-col p-0'}
           >
-            <DialogTitle className="sr-only">Workflow</DialogTitle>
+            <DialogTitle className="sr-only">Session tree</DialogTitle>
             <WorkflowPanel
               run={run}
               view={view}
@@ -440,7 +485,7 @@ function RunFrame({ run, params }: { run: RunRecord; params: RouteProps['params'
         onAnswer={(fact) => {
           setDialog(null)
           useStore.getState().setNoteDraft(run.id, fact)
-          setNoteFocus((n) => n + 1)
+          setNoteFocus(true)
           setDetails(true)
         }}
       />
