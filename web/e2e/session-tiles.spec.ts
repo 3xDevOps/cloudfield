@@ -169,13 +169,26 @@ test('a sidebar row dropped on an edge splits, and a tab dropped on a tile joins
   await expect(joined.getByRole('tablist', { name: 'Sessions in this tile' }).getByRole('tab')).toHaveCount(2)
   await expect(sessionTab(joined, lead)).toHaveAttribute('aria-selected', 'true')
 
-  // One click on a control of a tile that is not focused acts: the press that focuses the tile moves no control.
+  // One click on a control of a tile that is not focused acts: its strip keeps the layout it had until the press ends.
   await page.setViewportSize({ width: 1300, height: 900 })
   await row(page, tester).hover()
   await row(page, tester).locator('..').getByRole('button', { name: 'Open to the side' }).click()
-  await expect(tile(page, 2, 2)).toHaveAccessibleName(new RegExp(`^${tester}, Terminal`))
-  await tile(page, 1, 2).getByRole('button', { name: 'Add a tab' }).click()
+  const rest = tile(page, 1, 2)
+  const focused = tile(page, 2, 2)
+  await expect(focused).toHaveAccessibleName(new RegExp(`^${tester}, Terminal`))
+  await rest.getByRole('button', { name: 'Add a tab' }).click()
   await expect(page.getByRole('dialog').getByPlaceholder('Find a session or view')).toBeFocused()
+  await page.keyboard.press('Escape')
+
+  await sessionTab(focused, tester).click()
+  expect(await outlined(rest)).toBe(false)
+  await sessionTab(rest, reviewer).click()
+  await expect(sessionTab(rest, reviewer)).toHaveAttribute('aria-selected', 'true')
+
+  await sessionTab(focused, tester).click()
+  expect(await outlined(rest)).toBe(false)
+  await rest.getByRole('button', { name: `Close ${lead}` }).click()
+  await expect(rest.getByRole('tablist', { name: 'Sessions in this tile' }).getByRole('tab')).toHaveCount(1)
 })
 
 test('a view torn off opens beside its session, and the seam between them drags', async ({ page, aether }) => {

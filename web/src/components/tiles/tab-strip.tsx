@@ -166,11 +166,13 @@ export function TabStrip({ tile, narrow, room }: {
   /** Whether the area has room for a tile on each side of this one. */
   room: { right: boolean; down: boolean }
 }) {
-  const { layout, cramped, ctx, say, picking, noRoom, pick, split } = useContext(TileAreaContext)!
+  const { layout, cramped, ctx, say, picking, noRoom, pick, pressed, split } = useContext(TileAreaContext)!
   const sidebarCollapsed = useStore((s) => s.sidebarCollapsed)
   const toggleSidebar = useStore((s) => s.toggleSidebar)
   const tiles = tileList(layout.root)
   const focused = layout.focused === tile.id
+  // The controls of the focused tile wait for the press that focused it to end: they would move what was pressed out from under its click.
+  const controls = focused && !pressed
   // A parked tile keeps the strip it had, in sight under the glide of the tile that covers it.
   const maximized = layout.maximized && focused
   const run = ctx.runs[tile.tabs.find((tab) => tab.id === tile.active)?.runId ?? '']
@@ -276,20 +278,13 @@ export function TabStrip({ tile, narrow, room }: {
         </Button>
       ) : (
         <>
-          {/* Laid out in every tile and shown in the focused one: the press that focuses a tile moves no control out from under its click. */}
-          {tile.tabs.length > 0 && (
-            <div aria-hidden={!focused} className={cn('contents', !focused && 'invisible')}>
-              {splitButton('right', Columns2)}
-              {splitButton('down', Rows2)}
-            </div>
-          )}
-          {tiles.length > 1 && tile.tabs.length > 0 && (
+          {controls && tile.tabs.length > 0 && splitButton('right', Columns2)}
+          {controls && tile.tabs.length > 0 && splitButton('down', Rows2)}
+          {tiles.length > 1 && (controls || !narrow) && tile.tabs.length > 0 && (
             <Button
               variant="ghost"
               size="icon-sm"
               label="Maximize"
-              aria-hidden={!focused && narrow}
-              className={cn(!focused && narrow && 'invisible')}
               onClick={() => {
                 changeTiles((before) => maximizeTile(before, tile.id))
                 say('Tile maximized')

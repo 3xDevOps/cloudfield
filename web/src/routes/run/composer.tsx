@@ -153,8 +153,7 @@ function ComposerBox({ textarea, autoFocus, collapsed, docked, value, onChange, 
   useLayoutEffect(() => {
     if (collapsed) textarea.current?.scrollTo(0, 0)
   }, [collapsed, textarea])
-  // The box opens with its footer where the one line was pressed, so the footer takes no press at first:
-  // the second press of a double-click opens no menu and takes no focus from the field.
+  // The box opens with its footer where the one line was pressed: for 400ms or until the pointer moves the footer takes no press, or a double-click would open a menu.
   const [was, setWas] = useState(collapsed)
   const [opening, setOpening] = useState(false)
   if (was !== collapsed) {

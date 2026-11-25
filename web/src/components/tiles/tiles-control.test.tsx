@@ -8,7 +8,7 @@ import { RunFrame } from '@/routes/run'
 import type { RunView } from '@/routes/run/views'
 import { useStore } from '@/store'
 import { toRecord } from '@/store/runs'
-import { emptyTiles, pickTab, splitTile } from '@/store/tiles'
+import { emptyTiles, openTab, pickTab, splitTile } from '@/store/tiles'
 import { ScriptedSession } from '@/test/acp-stream'
 import { alice, bob, run, serverInfo, workspace } from '@/test/fixtures'
 import { StubSocket } from '@/test/stub-socket'
@@ -123,28 +123,60 @@ describe('terminals in tiles', () => {
 })
 
 describe('a press that focuses a tile', () => {
-  it('moves no control out from under its click', async () => {
-    const enhanced = { mode: 'acp', acp: true } as const
-    act(() => useStore.setState({ runs: Object.fromEntries([run(enhanced), run({ ...enhanced, id: 'run_2', task: theirs })].map((seed) => [seed.id, toRecord(seed)])) }))
+  const enhanced = { mode: 'acp', acp: true } as const
+  const third = 'cache the catalog'
+
+  /** Tile 1, not focused, holds two sessions with the second on show; tile 2 has the focus. */
+  async function twoTabsAtRest() {
+    act(() => useStore.setState({
+      runs: Object.fromEntries([run({ ...enhanced, task: mine }), run({ ...enhanced, id: 'run_2', task: theirs }), run({ ...enhanced, id: 'run_3', task: third })].map((seed) => [seed.id, toRecord(seed)])),
+    }))
     show('run_1')
+    act(() => changeTiles((layout, ctx) => openTab(layout, layout.focused, 'run_3', ctx), true))
     beside('run_2')
     await act(async () => {})
     for (const socket of StubSocket.opened.filter((opened) => opened.url.includes('/ws/acp/'))) new ScriptedSession(socket).open()
-    const rest = within(screen.getByRole('region', { name: /, tile 1 of 2$/ }))
-    expect(rest.queryByRole('button', { name: 'Split right' })).toBeNull()
-    expect(rest.getByRole('button', { name: 'Split right', hidden: true }).closest('.invisible')).not.toBeNull()
+    return within(screen.getByRole('region', { name: /, tile 1 of 2$/ }))
+  }
+
+  it('moves no control out from under its click', async () => {
+    const rest = await twoTabsAtRest()
+    expect(rest.queryByRole('button', { name: 'Split right', hidden: true })).toBeNull()
     expect(rest.getByRole('group', { name: 'Session controller' })).toBeDefined()
 
     const field = await rest.findByRole<HTMLTextAreaElement>('combobox', { name: 'Message the agent' })
     fireEvent.pointerDown(field)
-    expect(useStore.getState().route.params.runId).toBe('run_1')
+    expect(useStore.getState().route.params.runId).toBe('run_3')
     expect(field.rows).toBe(1)
+    expect(rest.queryByRole('button', { name: 'Split right' })).toBeNull()
     fireEvent.pointerUp(field)
     await waitFor(() => expect(field.rows).toBe(2))
+    expect(rest.getByRole('button', { name: 'Split right' })).toBeDefined()
     const footer = rest.getByRole('button', { name: 'Attach files' }).closest('.wrap-from-end')!
     expect(footer.className).toContain('pointer-events-none')
     fireEvent.pointerMove(window)
     expect(footer.className).not.toContain('pointer-events-none')
+  })
+
+  it('opens the picker on a first click on "+"', async () => {
+    const rest = await twoTabsAtRest()
+    await userEvent.click(rest.getByRole('button', { name: 'Add a tab' }))
+    expect(useStore.getState().route.params.runId).toBe('run_3')
+    expect(within(screen.getByRole('dialog')).getByPlaceholderText('Find a session or view')).toBeDefined()
+  })
+
+  it('activates a background tab on a first click on it', async () => {
+    const rest = await twoTabsAtRest()
+    await userEvent.click(rest.getByRole('tab', { name: new RegExp(mine) }))
+    expect(rest.getByRole('tab', { name: new RegExp(mine) }).getAttribute('aria-selected')).toBe('true')
+    expect(useStore.getState().route.params.runId).toBe('run_1')
+  })
+
+  it('closes a tab on a first click on its close button', async () => {
+    const rest = await twoTabsAtRest()
+    await userEvent.click(rest.getByRole('button', { name: `Close ${mine}` }))
+    expect(rest.queryByRole('tab', { name: new RegExp(mine) })).toBeNull()
+    expect(rest.getAllByRole('tab', { name: new RegExp(third) })).toHaveLength(1)
   })
 })
 
