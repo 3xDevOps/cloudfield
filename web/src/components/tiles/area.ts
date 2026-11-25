@@ -45,13 +45,14 @@ interface TileAreaValue {
   /** The split that found no room and opened that picker instead. */
   noRoom: TileSide | null
   pick: (tileId: string | null) => void
-  /** The press that focused a tile is still down: what only a focused tile shows waits, or it would move the pressed control out from under its click. */
-  pressed: boolean
   /** Opens an empty tile beside this one, or its picker when the area has no room for one. */
   split: (tileId: string, side: 'right' | 'down') => void
 }
 
 export const TileAreaContext = createContext<TileAreaValue | null>(null)
+
+/** The press that focused a tile is still down: what only a focused tile shows waits, or it would move the pressed control out from under its click. */
+export const TilePressedContext = createContext(false)
 
 /**
  * Applies a layout change a tile control asked for, then points the route at

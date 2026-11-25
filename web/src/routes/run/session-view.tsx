@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Callout } from '@/components/ui/callout'
 import { Skeleton } from '@/components/ui/skeleton'
 import { RelativeTime } from '@/components/ui/relative-time'
-import { TileAreaContext } from '@/components/tiles/area'
+import { TilePressedContext } from '@/components/tiles/area'
 import { api } from '@/lib/api'
 import { useFileDrop, useRefuseStrayFileDrops } from '@/lib/file-drag'
 import { useDelayed } from '@/lib/hooks'
@@ -249,7 +249,7 @@ export function SessionView({ run, agent, agentName, room, nav, active, textarea
 }) {
   useRefuseStrayFileDrops()
   const tileFocused = useContext(FrameFocusContext)
-  const pressed = useContext(TileAreaContext)?.pressed
+  const pressed = useContext(TilePressedContext)
   const enhanced = run.acp === true
   const showMessages = useStore((s) => !s.hiddenAgentMessages[run.id])
   const { rows, session, missingRoomImages } = useRows(run, enhanced, showMessages)

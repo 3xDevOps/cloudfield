@@ -3,6 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { changeTiles } from '@/components/tiles/area'
 import { TileArea } from '@/components/tiles/tile-area'
 import type * as apiModule from '@/lib/api'
+import * as fileDrag from '@/lib/file-drag'
 import * as motion from '@/lib/motion'
 import { RunFrame } from '@/routes/run'
 import type { RunView } from '@/routes/run/views'
@@ -177,6 +178,17 @@ describe('a press that focuses a tile', () => {
     await userEvent.click(rest.getByRole('button', { name: `Close ${mine}` }))
     expect(rest.queryByRole('tab', { name: new RegExp(mine) })).toBeNull()
     expect(rest.getAllByRole('tab', { name: new RegExp(third) })).toHaveLength(1)
+  })
+
+  it('renders no other session\'s Chat when a session changes', async () => {
+    await twoTabsAtRest()
+    // Only a session's Chat calls it here.
+    const chats = vi.spyOn(fileDrag, 'useRefuseStrayFileDrops')
+    // A write outside a batch notifies what the streams' replies still hold back, which would render every Chat.
+    act(() => useStore.setState({}))
+    chats.mockClear()
+    act(() => useStore.setState((s) => ({ runs: { ...s.runs, run_2: { ...s.runs.run_2, task: 'renamed' } } })))
+    expect(chats).toHaveBeenCalledTimes(1)
   })
 })
 

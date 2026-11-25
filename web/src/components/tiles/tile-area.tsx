@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { focusView } from '@/components/shell/center-view'
-import { changeTiles, focusInTile, narrowBelow, TileAreaContext, tileNode, viewsElsewhere } from '@/components/tiles/area'
+import { changeTiles, focusInTile, narrowBelow, TileAreaContext, tileNode, TilePressedContext, viewsElsewhere } from '@/components/tiles/area'
 import { TileDragLayer } from '@/components/tiles/drag'
 import { fits, tileRects, type Rect } from '@/components/tiles/geometry'
 import { Tile } from '@/components/tiles/tile'
@@ -327,7 +327,6 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
     picking,
     noRoom,
     pick,
-    pressed,
     split: (tileId: string, side: 'right' | 'down') => {
       if (measured && !fits(splitTile(stored, tileId, side).root, area)) {
         pick(tileId)
@@ -338,7 +337,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
       changeTiles((before) => splitTile(before, tileId, side))
       say(`Split ${side}`)
     },
-  }), [layout, cramped, ctx, picking, noRoom, pick, pressed, stored, measured, area])
+  }), [layout, cramped, ctx, picking, noRoom, pick, stored, measured, area])
 
   const several = tiles.length > 1
   const focus = (tile: TileNode) => {
@@ -392,6 +391,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
 
   return (
     <TileAreaContext value={value}>
+      <TilePressedContext value={pressed}>
       <div
         ref={areaRef}
         className="relative h-full min-h-0 overflow-hidden"
@@ -465,6 +465,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
         <span role="status" aria-live="polite" className="sr-only">{said}</span>
         <TileDragLayer />
       </div>
+      </TilePressedContext>
     </TileAreaContext>
   )
 }
