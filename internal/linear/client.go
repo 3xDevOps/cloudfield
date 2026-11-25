@@ -113,13 +113,6 @@ type issueNode struct {
 	UpdatedAt  string    `json:"updatedAt"`
 }
 
-func (n issueNode) issue() Issue {
-	return Issue{
-		Identifier: n.Identifier, Title: n.Title, URL: n.URL, State: n.State,
-		Team: n.Team, Assignee: n.Assignee, UpdatedAt: n.UpdatedAt,
-	}
-}
-
 // Issues returns the first 50 issues assigned to key's owner that are
 // neither completed nor canceled, most recently updated first.
 func (c *Client) Issues(ctx context.Context, key string, p IssuesFilter) ([]Issue, error) {
@@ -144,7 +137,7 @@ func (c *Client) Issues(ctx context.Context, key string, p IssuesFilter) ([]Issu
 	}
 	issues := make([]Issue, 0, len(data.Viewer.AssignedIssues.Nodes))
 	for _, n := range data.Viewer.AssignedIssues.Nodes {
-		issues = append(issues, n.issue())
+		issues = append(issues, Issue(n))
 	}
 	return issues, nil
 }
@@ -158,7 +151,7 @@ func (c *Client) Issue(ctx context.Context, key, identifier string) (Issue, erro
 	if err := c.do(ctx, key, query, map[string]any{"id": identifier}, &data); err != nil {
 		return Issue{}, err
 	}
-	return data.Issue.issue(), nil
+	return Issue(data.Issue), nil
 }
 
 // do posts one GraphQL operation. Linear reports a refused key or a bad
