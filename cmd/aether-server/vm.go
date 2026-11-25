@@ -63,6 +63,11 @@ func prepareVMHost(ctx context.Context, w io.Writer, baseURL, kernel string) err
 	if err := step(w, "checking "+kvmDevice, func() error { return serversetup.CheckKVM(kvmDevice) }); err != nil {
 		return err
 	}
+	if path, err := serversetup.ExcludeVMsFromNeedrestart(serversetup.NeedrestartDir); err != nil {
+		return err
+	} else if path != "" {
+		_, _ = fmt.Fprintf(w, "needrestart leaves session VMs running after a package upgrade: %s\n", path)
+	}
 	if missing := serversetup.MissingVMTools(); len(missing) > 0 {
 		var packages []string
 		for _, tool := range missing {

@@ -116,6 +116,18 @@ also adds the system user `aether-omp` that omp's auth brokers run as.
 Sysbox out: sessions and environment terminals run their own Docker daemon in
 their VM.
 
+On a host with needrestart (`/etc/needrestart` exists),
+both commands, and every server start under its systemd unit, write
+`/etc/needrestart/conf.d/cloudfield.conf`. Without it, the first package
+upgrade after a server update, unattended ones included, restarts every
+`aether-vm-*` unit, because the update replaced the binary each VM's monitor
+runs, and a restarted VM loses its session. A server from before this file
+existed gets it on its next update; until then, write it by hand:
+
+```sh
+echo '$nrconf{override_rc}{qr(^aether-vm-)} = 0;' | sudo tee /etc/needrestart/conf.d/cloudfield.conf
+```
+
 On AWS:
 
 - Use an Intel instance from the M7i, C7i, R7i, M8i, C8i or R8i families,
