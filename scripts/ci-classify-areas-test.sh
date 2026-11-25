@@ -108,6 +108,7 @@ not_vm='
 internal/runtime: the Docker runtime; the vm list names the files the VM engine shares
 internal/coordtransport: the VM engine reads two of its constants
 internal/protocol: reached only through coordtransport
+internal/linear: Linear issue URL parsing, reached only through protocol; no guest code uses it
 internal/store: reached only through coordtransport
 internal/domain: data types; the gitengine and guest helper unit tests cover how the guest uses them
 internal/edge/proto: reached only through coordtransport
