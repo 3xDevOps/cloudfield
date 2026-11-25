@@ -21,7 +21,7 @@ vi.mock('@/lib/api', async (importOriginal) => {
 })
 
 vi.mock('sonner', () => ({
-  toast: { success: vi.fn(), error: vi.fn(), dismiss: vi.fn() },
+  toast: { success: vi.fn(), error: vi.fn(), dismiss: vi.fn(), loading: vi.fn(() => 'busy') },
 }))
 
 /** A JSON-RPC refusal; an error with no code reads as a request the server never answered. */
@@ -98,7 +98,7 @@ test.each(['fine', 'coarse'] as const)('every verb is labeled and keyboard reach
   await userEvent.keyboard('{Enter}')
   const menu = within(await screen.findByRole('menu'))
   expect(names(menu)).toEqual([
-    'Pause session', 'Forward a port…', 'Watch…', 'Protect session', 'Pull branch', 'Hand off…', 'Captures…', 'Close session…', 'Kill session', 'Delete session',
+    'Pause session', 'Forward a port…', 'Watch…', 'Protect session', 'Pull branch', 'Export session', 'Hand off…', 'Captures…', 'Close session…', 'Kill session', 'Delete session',
   ])
   fireEvent.click(menu.getByRole('menuitem', { name: 'Pause session' }))
   await waitFor(() => expect(api.runPause).toHaveBeenCalledWith(record.id))
@@ -300,7 +300,7 @@ test('the pull toast copies the switch command and switches to the pulled branch
 test('a viewer gets no mutating actions, but can watch and use eligible local Pull', async () => {
   render(<RunActions run={seed({ paused: false, members: [alice, vera], self: vera, local: ['pull'] })} />)
   const menu = await openMore()
-  expect(names(menu)).toEqual(['Watch…', 'Pull branch'])
+  expect(names(menu)).toEqual(['Watch…', 'Pull branch', 'Export session'])
 })
 
 test('a collaborator can steer and kill another member run, but cannot protect or hand it off', async () => {
@@ -650,7 +650,7 @@ test('a pending kill offers no predicted verb until it is answered', async () =>
   render(<Live />)
   await choose(verbs[2])
   await waitFor(() => expect(runOne(useStore.getState()).status).toBe('abandoned'))
-  expect(names(await openMore())).toEqual(['Close session…', 'Delete session'])
+  expect(names(await openMore())).toEqual(['Export session', 'Close session…', 'Delete session'])
   await userEvent.keyboard('{Escape}')
   await act(async () => resolve({}))
   expect((await openMore()).getByRole('menuitem', { name: 'Archive session' })).toBeTruthy()
@@ -873,4 +873,16 @@ test('an admin granted another owner\'s workspace acts there by their role in it
   useStore.setState((s) => ({ workspaces: { [workspace.id]: { ...s.workspaces[workspace.id], role: 'collaborator' } } }))
   render(<RunActions run={record} />)
   expect((await openMore()).queryByRole('menuitem', { name: 'Archive session' })).toBeNull()
+})
+
+test('Export session says it is running and reports the real error', async () => {
+  const fetched = Promise.withResolvers<{ run: Run }>()
+  vi.mocked(api.runWithPullRequests).mockReturnValueOnce(fetched.promise)
+  render(<RunActions run={seed({ paused: false })} />)
+  await selectMore('Export session')
+  expect(toast.loading).toHaveBeenCalledWith('Exporting run_1…')
+  await waitFor(() => expect(screen.queryByRole('menu')).toBeNull())
+  fetched.reject(new Error('run not found'))
+  await waitFor(() => expect(toast.error).toHaveBeenCalledWith('Export failed: run not found'))
+  expect(toast.dismiss).toHaveBeenCalledWith('busy')
 })

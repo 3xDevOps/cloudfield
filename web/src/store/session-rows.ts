@@ -132,7 +132,7 @@ function lookupTarget(call: SessionToolCall): string | undefined {
 
 const builtInKinds = new Set(['read', 'edit', 'delete', 'move', 'search', 'execute', 'think', 'fetch', 'switch_mode'])
 
-function toolResult(call: SessionToolCall): unknown {
+export function toolResult(call: SessionToolCall): unknown {
   const text = (call.content ?? []).filter((c) => c.type === 'text' && c.text).map((c) => c.text).join('\n\n')
   return text || call.raw_output
 }

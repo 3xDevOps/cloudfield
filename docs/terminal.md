@@ -413,7 +413,20 @@ terminal. Closing the container, reclaiming the checkout and archiving do not
 remove it. If earlier output has expired, history is marked truncated and
 cannot be recovered. `cloudfield logs <session-id> [--limit N]` prints the recorded
 terminal lines as plain text, and an Enhanced session's messages and tool calls,
-one line each. `cloudfield attach` is a raw stream that replays retained
+one line each. **Export session** in a session's **More** menu downloads
+`<session-id>.md` for a live, finished or failed session: a header (title,
+session id, workspace, branch, agent, status and reason, pull requests, export
+time), then a Standard session's recorded terminal lines or an Enhanced
+session's messages, tool calls with their output and diffs, and notices. Give
+the file to a new session to continue work whose sandbox is gone. A tool
+output over 20,000 characters keeps its end after `[... N earlier
+characters]`; a diff that long keeps its start before `[... N more
+characters]`. An image a tool read is written as `[image, <type>]`, and
+base64 data left in a tool's raw output as `[base64 data, N characters]`.
+Not exported: thoughts, plans, permission requests and questions,
+attachments, and tool inputs such as a subagent's prompt. A session switched between Enhanced and Standard exports only
+its current mode. The Android app does not offer it.
+`cloudfield attach` is a raw stream that replays retained
 output and discards keystrokes typed before the replay finishes.
 
 ## Reconnects and server updates

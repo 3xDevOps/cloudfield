@@ -431,6 +431,7 @@ export function fakeApi(over: Partial<Api> = {}): Api {
     accountRevoke: vi.fn(async () => ({})),
     runList: vi.fn(async () => [run()]),
     runGet: vi.fn(async () => run()),
+    runWithPullRequests: vi.fn(async () => ({ run: run() })),
     runLaunch: vi.fn(async () => run()),
     runKill: vi.fn(async () => ({})),
     childSettings: vi.fn<Api['childSettings']>(async () => ({ enabled: true })),

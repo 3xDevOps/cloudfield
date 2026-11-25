@@ -2485,8 +2485,16 @@ capability gate, optional confirmation and call. Session verbs (`runCommands`):
 **Pause session** / **Resume session**, **Send a message to the agent…**, **Forward a
 port…** (local gateway), **Close session…**, **Kill run**, **Delete run**, **Free
 sandbox…**, **Archive run** / **Restore run**, **Protect run** /
-**Unprotect run**, **Relaunch**, **Pull branch** (local gateway) and **Hand
-off to <member>**. Pull branch fetches the session branch into the linked
+**Unprotect run**, **Relaunch**, **Pull branch** (local gateway), **Export
+session** and **Hand off to <member>**. Export session
+(`src/lib/session-export.ts`) is offered to anyone who can view the session,
+in every status. It reads `run.get`, then every page of `run.acp.history`
+(with `run.acp.item` for each cut item) for a session with `acp: true`, or of
+`terminal.history` otherwise (an empty page with an unchanged cursor is read
+again, five times at most, then the export fails), and saves
+`<session-id>.md` through the browser's download. A toast says it is running
+and the command is disabled until it ends. It is hidden in the Android app,
+whose WebView has no download handler. Pull branch fetches the session branch into the linked
 repository; unless you are already on that branch, its toast offers **Switch
 to it** (`pull.switch`, which refuses a dirty checkout with git's own
 reason) and **Copy command** (`git switch <branch>`). Board verbs (`boardCommands`): **Open the board**, **Open
