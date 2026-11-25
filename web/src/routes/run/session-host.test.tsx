@@ -1,4 +1,6 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
+import { CenterView } from '@/components/shell/center-view'
 import type * as apiModule from '@/lib/api'
 import { api } from '@/lib/api'
 import type { Run } from '@/lib/types'
@@ -7,9 +9,11 @@ import { RunFrame, type FrameTile } from '@/routes/run'
 import { RunSession } from '@/routes/run/session-host'
 import type { RunView } from '@/routes/run/views'
 import { useStore } from '@/store'
+import { emptyTiles, routeTiles, splitTile, viewContext } from '@/store/tiles'
 import { ScriptedSession } from '@/test/acp-stream'
 import { alice, bob, run, serverInfo, workspace } from '@/test/fixtures'
 import { StubSocket } from '@/test/stub-socket'
+import { atViewport } from '@/test/viewport'
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof apiModule>()
@@ -50,6 +54,7 @@ beforeEach(() => {
     roomStatus: {},
     roomStatusControl: {},
     runViewMemory: {},
+    tiles: emptyTiles(),
     shownRunView: null,
     browserRequests: {},
     agentList: null,
@@ -108,6 +113,105 @@ describe('session host', () => {
     expect(StubSocket.opened).toHaveLength(2)
     expect(StubSocket.opened[0]!.closed).toBe(true)
     expect(screen.getByRole('tablist', { name: 'Session views' })).not.toBe(before)
+  })
+})
+
+describe('a phone', () => {
+  it('closes a session and attaches the next one, with no tile around it', () => {
+    atViewport(390, { pointer: 'coarse' })
+    record()
+    useStore.getState().upsertRun(run({ id: 'run_2', task: 'speed up search' }))
+    render(<main id="main"><CenterView /></main>)
+    expect(StubSocket.opened.map((socket) => socket.url)).toEqual([expect.stringContaining('/ws/attach/run_1')])
+    act(() => useStore.getState().navigate('run', { runId: 'run_2' }))
+    expect(StubSocket.opened.map((socket) => socket.closed)).toEqual([true, false])
+    expect(StubSocket.last().url).toContain('/ws/attach/run_2')
+    expect(screen.getByRole('heading', { level: 1, name: 'speed up search' })).toBeDefined()
+    expect(document.querySelector('[data-tile]')).toBeNull()
+    expect(screen.queryByRole('tablist', { name: 'Sessions in this tile' })).toBeNull()
+  })
+
+  it('puts no tab panel or tab stop of a tile around the session', () => {
+    atViewport(390, { pointer: 'coarse' })
+    record()
+    render(<main id="main"><CenterView /></main>)
+    const around: Element[] = []
+    for (let node = screen.getByRole('heading', { level: 1 }).parentElement; node && node.id !== 'main'; node = node.parentElement) around.push(node)
+    expect(around.filter((node) => node.hasAttribute('role') || node.getAttribute('tabindex') === '0' || node.hasAttribute('aria-labelledby'))).toEqual([])
+    expect(screen.getAllByRole('tabpanel', { hidden: true }).filter((panel) => !document.getElementById(panel.getAttribute('aria-labelledby') ?? ''))).toEqual([])
+  })
+})
+
+describe('a phone whose stored focus is an empty tile', () => {
+  function split(view?: RunView) {
+    atViewport(390, { pointer: 'coarse' })
+    record()
+    const ctx = viewContext(useStore.getState())
+    const one = routeTiles(emptyTiles(), { runId: 'run_1' }, ctx)
+    useStore.setState({ tiles: splitTile(one, one.focused, 'right') })
+    useStore.setState({ route: { name: 'run', params: view ? { runId: 'run_1', view } : { runId: 'run_1' } } })
+    render(<main id="main"><CenterView /></main>)
+    return within(screen.getByRole('tablist', { name: 'Session views' }))
+  }
+
+  it('switches views from its tabs', () => {
+    const views = split()
+    expect(views.getByRole('tab', { name: 'Terminal' }).getAttribute('aria-selected')).toBe('true')
+    fireEvent.mouseDown(views.getByRole('tab', { name: 'Changes' }))
+    expect(views.getByRole('tab', { name: 'Changes' }).getAttribute('aria-selected')).toBe('true')
+    expect(useStore.getState().route.params).toEqual({ runId: 'run_1', view: 'changes' })
+    expect(StubSocket.opened).toHaveLength(1)
+  })
+
+  it('opens a link on the view it names', () => {
+    const views = split('changes')
+    expect(views.getByRole('tab', { name: 'Changes' }).getAttribute('aria-selected')).toBe('true')
+    expect(useStore.getState().route.params).toEqual({ runId: 'run_1', view: 'changes' })
+  })
+})
+
+describe('a window resized across the phone breakpoint', () => {
+  it.each([[700, 960], [960, 700]])('keeps the session, its open Captures and a control request from %i to %i wide', async (from, to) => {
+    const resize = atViewport(from)
+    record({ mode: 'acp', acp: true })
+    useStore.setState({ route: { name: 'run', params: { runId: 'run_1', view: 'session' } } })
+    render(<main id="main"><CenterView /></main>)
+    const socket = StubSocket.opened.find((opened) => opened.url.includes('/ws/acp/run_1'))!
+    const session = new ScriptedSession(socket).open({ has_control: true, control_generation: 4 })
+    const composer = await screen.findByRole('combobox', { name: 'Message the agent' })
+    await userEvent.type(composer, 'half a thought')
+    await userEvent.click(screen.getByRole('button', { name: 'More' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Captures…' }))
+    const captures = await screen.findByRole('dialog', { name: 'Captures' })
+    session.send({
+      type: 'takeover',
+      ok: true,
+      takeover: {
+        id: 'takeover-request',
+        requester_member_id: bob.id,
+        requester_session_id: 'other-session',
+        holder_session_id: String(session.header().control_session_id),
+        holder_generation: 4,
+        phase: 'review',
+        hold_started_at: '2026-10-08T12:00:00Z',
+        hold_deadline: '2026-10-08T12:00:03Z',
+        decision_deadline: '2026-10-08T12:00:10Z',
+        server_now: '2026-10-08T12:00:03Z',
+      },
+    })
+    const deny = within(await screen.findByRole('alertdialog', { name: 'Session control requested' })).getByRole('button', { name: 'Deny' })
+    expect(document.activeElement).toBe(deny)
+
+    resize(to)
+
+    expect(within(screen.getByRole('alertdialog', { name: 'Session control requested' })).getByRole('button', { name: 'Deny' })).toBe(deny)
+    expect(document.activeElement).toBe(deny)
+    expect(captures.isConnected).toBe(true)
+    expect(composer.isConnected).toBe(true)
+    expect(composer).toHaveProperty('value', 'half a thought')
+    expect(Boolean(document.querySelector('[data-tile] [role=tablist][aria-label="Sessions in this tile"]'))).toBe(to >= 768)
+    expect(socket.closed).toBe(false)
+    expect(StubSocket.opened.filter((opened) => opened.url.includes('/ws/acp/run_1'))).toHaveLength(1)
   })
 })
 

@@ -1087,3 +1087,26 @@ func TestHandedSessionCannotStartSubsessionUntilRelaunch(t *testing.T) {
 		t.Fatalf("subsession from a handed session = %v, want it refused", err)
 	}
 }
+
+func TestSubsessionInheritsTheParentsLinearIssue(t *testing.T) {
+	h := newHarness(t)
+	parent := &domain.Run{WorkspaceID: h.ws.ID, MemberID: h.ada.ID, Task: "fix login", Harness: "claude", Mode: domain.LaunchACP,
+		Status: domain.RunRunning, LinearIssueURL: "https://linear.app/acme/issue/ENG-1"}
+	if err := h.db.CreateRun(h.ctx, parent); err != nil {
+		t.Fatal(err)
+	}
+	h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex", Task: "review it"})
+	h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex", Task: "see https://linear.app/acme/issue/ENG-2/other"})
+	h.settle()
+	h.runs.mu.Lock()
+	defer h.runs.mu.Unlock()
+	var got []string
+	for _, opts := range h.runs.launched {
+		got = append(got, opts.LinearIssueURL)
+	}
+	slices.Sort(got)
+	want := []string{"https://linear.app/acme/issue/ENG-1", "https://linear.app/acme/issue/ENG-2"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("subsession Linear issues = %v, want %v", got, want)
+	}
+}

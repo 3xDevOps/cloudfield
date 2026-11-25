@@ -647,6 +647,15 @@ id is `-32602`. `server.info` lists the `multi-repo` feature when `run.launch`
 takes them; an older server drops
 the field.
 
+`run.launch` takes an optional `linear_issue_url`, the Linear issue the
+session works on, `https://linear.app/<workspace>/issue/<TEAM>-<number>[/<slug>]`.
+Without it the first such link in `task` is used. Any other value is `-32602`
+with `linear issue URL "<value>" must have the form https://linear.app/<workspace>/issue/<TEAM>-<number>[/<slug>]`.
+Session snapshots carry `linear_issue` (`ENG-123`) and `linear_issue_url`
+(`https://linear.app/<workspace>/issue/ENG-123`), both omitted when the session
+has no link. The link is fixed at launch. A subsession gets the first Linear
+issue link in its own task, else its parent's link.
+
 Session snapshots, including mutation results, also expose
 `container_retained_until` (RFC 3339), `cleanup_pending`, and `cleanup_error`
 when applicable. These describe the retained runtime, not the lifetime of

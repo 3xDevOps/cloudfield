@@ -1,4 +1,4 @@
-import { useContext } from 'react'
+import { useContext, useRef, type RefObject } from 'react'
 import { ChevronDown, Columns2, LayoutGrid, Maximize2, Minimize2, PanelLeft, Plus, Rows2, X } from '@/components/icons'
 import { ProtectedMark } from '@/components/protected-mark'
 import { changeTiles, focusInTile, TileAreaContext } from '@/components/tiles/area'
@@ -51,7 +51,7 @@ function TabLabel({ run, tab, background, narrow }: { run: RunRecord; tab: TileT
   )
 }
 
-function SessionTab({ tile, tab, active, width, narrow, onClose }: {
+function SessionTab({ tile, tab, active, width, narrow, pressed, onClose }: {
   tile: Tile
   tab: TileTab
   /** Drawn as the tab on show: the tile's active tab, or the one a held strip had. */
@@ -60,6 +60,8 @@ function SessionTab({ tile, tab, active, width, narrow, onClose }: {
   width: number | undefined
   /** The tile is narrow or the strip is tight: a background tab is its dot, its title and its view's icon. */
   narrow: boolean
+  /** The tab the first press of a click or double click landed on. */
+  pressed: RefObject<string | null>
   onClose: () => void
 }) {
   const { layout, cramped, ctx, say } = useContext(TileAreaContext)!
@@ -86,7 +88,8 @@ function SessionTab({ tile, tab, active, width, narrow, onClose }: {
         onPointerDown={dragFrom({ tabId: tab.id, runId: tab.runId, view: run && resolveView(tab, run, ctx.cap, ctx.memory) })}
         className="min-w-0 flex-1 group-data-[look=underline]/tabs:pt-0.5 group-data-[look=underline]/tabs:pr-7 group-data-[look=underline]/tabs:pl-3 [&_[data-slot=status-dot]]:size-2.5"
         onDoubleClick={() => {
-          if (cramped || tileList(layout.root).length < 2) return
+          // A close moves the next tab under the pointer: a double click maximizes only when both presses were on this tab.
+          if (pressed.current !== tab.id || cramped || tileList(layout.root).length < 2) return
           changeTiles((before) => maximizeTile(before, tile.id))
           say(`${title} maximized`)
         }}
@@ -188,7 +191,8 @@ export function TabStrip({ tile, opening, narrow, room }: {
   const [tabsRef, tabsRoom] = useElementSize<HTMLDivElement>()
   const asking = useNeedsYouRuns(tile.tabs.map((tab) => tab.runId))
   // 36px for "+" and 92px for the menu. Tabs that do not fit at their floor fold into it from the end, those that need you last.
-  const tight = tabsRoom.width > 0 && tabsRoom.width < 36 + tile.tabs.length * wideFloor
+  const tight = kept ? kept.tight : tabsRoom.width > 0 && tabsRoom.width < 36 + tile.tabs.length * wideFloor
+  const pressed = useRef<string | null>(null)
   const held = tiles.flatMap((other) => other.tabs)
   const floor = (tab: TileTab) => (held.filter((other) => other.runId === tab.runId).length < 2 ? chipFloor : tab.id === tile.active ? wideFloor : iconFloor)
   const over = tight ? 36 + tile.tabs.reduce((sum, tab) => sum + floor(tab), 0) - tabsRoom.width : 0
@@ -224,11 +228,17 @@ export function TabStrip({ tile, opening, narrow, room }: {
           <PanelLeft />
         </Button>
       )}
-      <div ref={tabsRef} className="flex h-full min-w-0 flex-1 items-center gap-1">
+      <div
+        ref={tabsRef}
+        className="flex h-full min-w-0 flex-1 items-center gap-1"
+        onMouseDownCapture={(event) => {
+          if (event.detail === 1) pressed.current = (event.target as Element).closest('[role=tab]')?.closest<HTMLElement>('[data-tab]')?.dataset.tab ?? null
+        }}
+      >
         {tile.tabs.length > 0 ? (
           <>
-            <TabsList aria-label="Sessions in this tile" className={cn('h-full gap-0 overflow-hidden coarse:h-full', (!focused || lifted) && '[&>[data-slot=sliding-indicator]]:hidden')}>
-              {tile.tabs.filter((tab) => !folded.includes(tab)).map((tab) => <SessionTab key={tab.id} tile={tile} tab={tab} active={tab.id === (kept ?? tile).active} width={kept?.widths[tab.id]} narrow={narrow || tight} onClose={() => close(tab)} />)}
+            <TabsList aria-label="Sessions in this tile" data-tight={tight || undefined} className={cn('h-full gap-0 overflow-hidden coarse:h-full', (!focused || lifted) && '[&>[data-slot=sliding-indicator]]:hidden')}>
+              {tile.tabs.filter((tab) => !folded.includes(tab)).map((tab) => <SessionTab key={tab.id} tile={tile} tab={tab} active={tab.id === (kept ?? tile).active} width={kept?.widths[tab.id]} narrow={narrow || tight} pressed={pressed} onClose={() => close(tab)} />)}
             </TabsList>
             {folded.length > 0 && (
               <Menu>

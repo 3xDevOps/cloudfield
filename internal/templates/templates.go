@@ -47,6 +47,7 @@ import (
 
 	"github.com/3xDevOps/Aether/internal/domain"
 	"github.com/3xDevOps/Aether/internal/events"
+	"github.com/3xDevOps/Aether/internal/linear"
 	"github.com/3xDevOps/Aether/internal/store"
 )
 
@@ -285,7 +286,7 @@ func (s *Service) launch(ctx context.Context, t *store.Template, member domain.M
 	if err != nil {
 		return nil, fmt.Errorf("templates: launch %s: %w", t.Name, err)
 	}
-	run, err := s.runs.LaunchWithOptions(ctx, t.WorkspaceID, member, member, task, t.Harness, t.Mode, domain.LaunchOptions{Model: t.Model, Effort: t.Effort, Created: created})
+	run, err := s.runs.LaunchWithOptions(ctx, t.WorkspaceID, member, member, task, t.Harness, t.Mode, domain.LaunchOptions{Model: t.Model, Effort: t.Effort, LinearIssueURL: linear.FindIssueURL(task), Created: created})
 	if err != nil {
 		return nil, fmt.Errorf("templates: launch %s: %w", t.Name, err)
 	}

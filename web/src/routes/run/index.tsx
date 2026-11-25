@@ -1,6 +1,5 @@
 import { useCallback, useContext, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useAssistantDocked } from '@/components/assistant/panel'
-import { MissingRun } from '@/components/missing-run'
 import type { MenuPoint } from '@/components/run-actions'
 import { TileArea } from '@/components/tiles/tile-area'
 import { replaceRouteKeepingFocus } from '@/components/shell/center-view'
@@ -27,7 +26,6 @@ import { MultiplayerControls, useSharedPresence } from '@/routes/run/multiplayer
 import { useKeyboardFold } from '@/routes/run/phone-header'
 import { dockedRequestID } from '@/routes/run/request-dock'
 import { notesRailMinWidth } from '@/routes/run/session-notes'
-import { RunSession } from '@/routes/run/session-host'
 import { SessionView } from '@/routes/run/session-view'
 import { WorkflowChip, WorkflowPanel, workflowPanelID } from '@/routes/run/workflow-panel'
 import { SubagentInspector } from '@/routes/run/subagent-inspector'
@@ -89,23 +87,7 @@ function ResizeDetails({ width, max, onResize, className }: { width: number; max
 }
 
 function RunRoute({ params }: RouteProps) {
-  return useIsMobile() ? <PhoneRun params={params} /> : <TileArea params={params} Frame={RunFrame} />
-}
-
-/** A phone shows the route's session alone, with no tiles. */
-function PhoneRun({ params }: RouteProps) {
-  const run = useStore((s) => s.runs[params.runId])
-  const identityKey = useStore((s) => s.identityKey)
-  const epoch = useStore((s) => s.terminalCacheEpoch)
-  const cap = useCapability()
-  const memory = useStore((s) => s.runViewMemory)
-  if (!run) return <MissingRun />
-  const view = resolveView({ runId: run.id, view: isRunView(params.view) ? params.view : undefined }, run, cap, memory)
-  return (
-    <RunSession key={JSON.stringify([identityKey, epoch, run.id, run.created_at])} run={run} views={[view]}>
-      <RunFrame run={run} params={params} />
-    </RunSession>
-  )
+  return <TileArea params={params} Frame={RunFrame} />
 }
 
 /** Where a frame sits among the session tiles. */
@@ -137,8 +119,8 @@ function useVisited(view: RunView, elsewhere: RunView[]) {
 }
 
 /**
- * One view of a session, inside a `RunSession`. Without `tile` it is the only
- * frame on screen and registers `leave-run` itself. `params` are the route's
+ * One view of a session, inside a `RunSession`. Without `tile` it is a phone's:
+ * the only frame on screen, which registers `leave-run` itself. `params` are the route's
  * in the focused tile and the tab's view and repo elsewhere.
  */
 export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteProps['params']; tile?: FrameTile }) {

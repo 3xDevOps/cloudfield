@@ -89,6 +89,20 @@ func TestKillAtAdmissionStopsTheLaunch(t *testing.T) {
 	waitFor(t, "container destroyed", func() bool { return e.rt.byName(string(admitted.ID)) == nil })
 }
 
+func TestLaunchStoresTheLinearIssue(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t, nil)
+	const link = "https://linear.app/acme/issue/ENG-123"
+	run, err := e.sched.LaunchWithOptions(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "fix it", "fake", domain.LaunchTUI, domain.LaunchOptions{LinearIssueURL: link})
+	if err != nil {
+		t.Fatalf("LaunchWithOptions: %v", err)
+	}
+	got, err := e.db.GetRun(t.Context(), run.ID)
+	if err != nil || got.LinearIssueURL != link {
+		t.Fatalf("stored linear issue = %q, %v; want %q", got.LinearIssueURL, err, link)
+	}
+}
+
 // A handoff and a protection committed while an admitted launch provisions
 // survive it: provisioning writes only the columns it owns.
 func TestHandoffAndProtectionDuringProvisioningSurvive(t *testing.T) {

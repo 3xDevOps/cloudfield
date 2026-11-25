@@ -179,8 +179,53 @@ describe('a press that focuses a tile', () => {
     const held = () => rest.getByRole('tab', { name: new RegExp(mine) }).closest<HTMLElement>('[data-tab]')!.style.width
     await userEvent.click(rest.getByRole('tab', { name: new RegExp(mine) }))
     expect(held()).toBe('0px')
-    fireEvent.doubleClick(rest.getByRole('tab', { name: new RegExp(mine) }))
+    await userEvent.dblClick(rest.getByRole('tab', { name: new RegExp(mine) }))
     expect(useStore.getState().tiles.maximized).toBe(true)
+    expect(held()).toBe('')
+  })
+
+  it('maximizes on a double click only when both presses landed on the same tab', async () => {
+    const rest = await twoTabsAtRest()
+    const close = rest.getByRole('button', { name: `Close ${mine}` })
+    fireEvent.mouseDown(close, { detail: 1 })
+    fireEvent.click(close)
+    const next = rest.getByRole('tab', { name: new RegExp(third) })
+    fireEvent.mouseDown(next, { detail: 2 })
+    fireEvent.doubleClick(next)
+    expect(useStore.getState().tiles.maximized).toBe(false)
+    await userEvent.dblClick(next)
+    expect(useStore.getState().tiles.maximized).toBe(true)
+  })
+
+  it('keeps a tight strip tight when a tab closes under the press that holds it', async () => {
+    // 400px of tabs is tight for two tabs and not for one.
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return new DOMRect(0, 0, this.querySelector(':scope > [role=tablist]') ? 400 : 1200, 800)
+    })
+    const rest = await twoTabsAtRest()
+    const glyph = () => rest.getByRole('tab', { name: new RegExp(third) }).querySelector('[data-slot=agent-glyph]')
+    expect(glyph()).toBeNull()
+    await userEvent.click(rest.getByRole('button', { name: `Close ${mine}` }))
+    expect(rest.queryByRole('tab', { name: new RegExp(mine) })).toBeNull()
+    expect(glyph()).toBeNull()
+    fireEvent.pointerMove(window, { clientX: 600, clientY: 900 })
+    expect(glyph()).not.toBeNull()
+  })
+
+  it('lets the strip go when the area is resized', async () => {
+    const observed: [Element, ResizeObserverCallback][] = []
+    vi.stubGlobal('ResizeObserver', class {
+      constructor(private readonly report: ResizeObserverCallback) {}
+      observe(node: Element) { observed.push([node, this.report]) }
+      disconnect() {}
+    })
+    const rest = await twoTabsAtRest()
+    vi.spyOn(screen.getByRole('region', { name: /, tile 1 of 2$/ }).firstElementChild!, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 600, 32))
+    const held = () => rest.getByRole('tab', { name: new RegExp(mine) }).closest<HTMLElement>('[data-tab]')!.style.width
+    await userEvent.click(rest.getByRole('tab', { name: new RegExp(mine) }))
+    expect(held()).toBe('0px')
+    const [area, report] = observed.find(([node]) => node.querySelector('[data-tile]'))!
+    act(() => report([{ target: area, contentRect: new DOMRect(0, 0, 1100, 800) } as ResizeObserverEntry], {} as ResizeObserver))
     expect(held()).toBe('')
   })
 

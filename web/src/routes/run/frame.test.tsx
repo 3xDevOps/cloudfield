@@ -139,11 +139,16 @@ describe('run frame', () => {
 
   it('remembers a phone tab selection when reopening a session', () => {
     atViewport(390, { pointer: 'coarse' })
-    const view = open()
+    const View = lookupRoute('run')!
+    const Routed = () => <View params={useStore((s) => s.route.params)} />
+    useStore.getState().upsertRun(run())
+    useStore.setState({ route: { name: 'run', params: { runId: 'run_1' } } })
+    const view = render(<Routed />)
     fireEvent.mouseDown(screen.getByRole('tab', { name: 'Changes' }))
     expect(useStore.getState().runViewMemory.run_1).toBe('changes')
     view.unmount()
-    open()
+    useStore.setState({ route: { name: 'run', params: { runId: 'run_1' } } })
+    render(<Routed />)
     expect(screen.getByRole('tab', { name: 'Changes' }).getAttribute('aria-selected')).toBe('true')
   })
 

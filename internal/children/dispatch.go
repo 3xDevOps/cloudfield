@@ -1,6 +1,7 @@
 package children
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"github.com/3xDevOps/Aether/internal/agentstatus"
 	"github.com/3xDevOps/Aether/internal/domain"
 	"github.com/3xDevOps/Aether/internal/fallback"
+	"github.com/3xDevOps/Aether/internal/linear"
 	"github.com/3xDevOps/Aether/internal/protocol"
 	"github.com/3xDevOps/Aether/internal/store"
 )
@@ -135,6 +137,7 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 	_, err = s.cfg.Runs.LaunchWithOptions(ctx, c.WorkspaceID, c.OwnerID, account, c.Task, c.Harness, c.Mode, domain.LaunchOptions{
 		Model: c.Model, Permission: parent.Permission, RequestedAccount: requested, Fallback: c.Fallback, ReservedRunID: c.RunID,
 		FromCommit: c.BaseCommit, FromBranch: c.BaseBranch, ExtraWorkspaces: workspaces[1:], Admitted: unlock,
+		LinearIssueURL: cmp.Or(linear.FindIssueURL(c.Task), parent.LinearIssueURL),
 		Created: func(domain.RunID) {
 			created = true
 			if stateErr := s.cfg.Store.SetChildState(ctx, c.RunID, domain.ChildStarted, "", domain.ChildLaunching); stateErr != nil {

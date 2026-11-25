@@ -16,6 +16,7 @@ import (
 	"github.com/3xDevOps/Aether/internal/domain"
 	"github.com/3xDevOps/Aether/internal/events"
 	"github.com/3xDevOps/Aether/internal/harness"
+	"github.com/3xDevOps/Aether/internal/linear"
 	"github.com/3xDevOps/Aether/internal/memberhome"
 )
 
@@ -30,7 +31,7 @@ var coAuthorInstruction = "Before each commit, read " + coAuthorsPath +
 	". It holds one Co-authored-by trailer per person other than the session owner who has steered this session," +
 	" and it changes while you work. End every commit message you write, and the description of any pull" +
 	" request you open, with exactly those lines. If the file is missing or empty, add nothing." +
-	" After those lines, end every pull request description with \"Opened from Aether run <run id>\", using the run_id" +
+	" After those lines, end every pull request description with \"Opened from Aether session <session id>\", using the run_id" +
 	" aether-internal status reports."
 
 // runInstructions are the rules a run's agent follows: its role card, with
@@ -87,6 +88,7 @@ func (s *Scheduler) runGuide(ctx context.Context, run domain.RunID, background, 
 	}
 	if r != nil {
 		g.Parent = string(r.ParentRunID)
+		g.LinearIssue, g.LinearIssueURL, _ = linear.ParseIssueURL(r.LinearIssueURL)
 	}
 	return g
 }

@@ -1129,6 +1129,7 @@ The server keeps all its state in `/var/lib/aether`, or the `data-dir` you set.
 | `transcripts/` | Terminal recordings and Enhanced conversation logs, kept until you delete the session. |
 | `homes/<member>/` | Each member's persistent home: installed agents, agent logins, uploaded configuration, and their GitHub token. |
 | `signing-keys/` | Each member's private commit signing key, which no container mounts. Without a backup, each member runs `cloudfield github connect` again for a new key. |
+| `linear/` | Each member's personal Linear API key, `<member-id>.key`, readable only by the server's user and never mounted into a container ([linear.md](linear.md#where-the-key-is-stored)). Without a backup, each member saves a new key. |
 | `workspace-secrets/` | Secret workspace variables in plain text, readable only by the server's user. |
 | `mirrors/`, `profiles/` | Source mirror settings and deploy keys, and agent profile snapshots. |
 | `server-update/` | Update state, and the database copy taken before an update that changes its schema. |
@@ -1138,7 +1139,7 @@ The server keeps all its state in `/var/lib/aether`, or the `data-dir` you set.
 
 The other directories hold internal server state. To recover a server, back
 up `aether.db`, `repos/`, `checkouts/*.diffsnap/`, `transcripts/`, `homes/`,
-`signing-keys/`, `profiles/`, `mirrors/` and `workspace-secrets/`. Each
+`signing-keys/`, `linear/`, `profiles/`, `mirrors/` and `workspace-secrets/`. Each
 `<run-id>.diffsnap/` of an ended session reads its fork point from `repos/`,
 so back up and restore the two together. With
 `session-runtime vm`, also back up `vm/images/tags.json` and
@@ -1148,8 +1149,8 @@ containers, each VM's own disks and saved memory are left out: a recovered
 server keeps those sessions' branches and history, and cannot reopen them.
 
 > [!WARNING]
-> These backups hold every member's agent logins, GitHub tokens and signing
-> keys, the mirror deploy keys and the workspace secrets. Encrypt them,
+> These backups hold every member's agent logins, GitHub tokens, Linear keys
+> and signing keys, the mirror deploy keys and the workspace secrets. Encrypt them,
 > restrict who can read them, and never attach them to an issue
 > ([security.md](security.md#github-credentials-and-signing-keys)).
 

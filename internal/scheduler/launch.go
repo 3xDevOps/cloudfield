@@ -391,6 +391,7 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 		BaseCheckedAt:   base.CheckedAt,
 		Fallback:        opts.Fallback,
 		Extras:          extras.repos,
+		LinearIssueURL:  opts.LinearIssueURL,
 	}
 	if opts.RequestedAccount != account {
 		run.RequestedAccountMemberID = opts.RequestedAccount
