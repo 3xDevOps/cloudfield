@@ -25,18 +25,25 @@ import { mobileScreen, useIsMobile } from '@/lib/breakpoints'
 import { message } from '@/lib/format'
 import { multiRepoFeature, multiRepoMethod } from '@/lib/repos'
 import type { Member, Permission, Run } from '@/lib/types'
-import { useReturnFocus } from '@/lib/hooks'
-import { cn, randomID, surface } from '@/lib/utils'
+import { useDrag, useReturnFocus } from '@/lib/hooks'
+import { splitterTarget } from '@/lib/keys'
+import { cn, focusRing, randomID, surface } from '@/lib/utils'
 import { type RootState, sameIdentity, useStore } from '@/store'
 import { useChildSettings, useChildSettingsRead } from '@/store/children'
 import { rememberChoice, saveLaunchDefaults, useLaunchDefaultsRead } from '@/store/launch-defaults'
-import { useCapability, useIsAdmin, useSelf } from '@/store/hooks'
+import { useCapability, useIsAdmin, useMainWidth, useSelf } from '@/store/hooks'
 import { stillWaiting, usePastDeadline } from '@/store/optimistic'
+import { maxLaunchWidth, minLaunchWidth } from '@/store/ui'
 
 /** A collapsed draft stays mounted; `visible` keeps its surface only through the closing slide. */
 export function LaunchDialog({ open = true, visible = true }: { open?: boolean; visible?: boolean }) {
   const returnFocus = useReturnFocus()
   const phone = useIsMobile()
+  const launchWidth = useStore((s) => s.launchWidth)
+  const setLaunchWidth = useStore((s) => s.setLaunchWidth)
+  const launchMaxWidth = Math.min(maxLaunchWidth, useMainWidth())
+  const visibleLaunchWidth = Math.min(launchWidth, launchMaxWidth)
+  const beginDrag = useDrag()
   const [identityKey] = useState(() => useStore.getState().identityKey)
   const [restored] = useState(() => useStore.getState().launchDraft)
   const [draftID] = useState(() => restored?.id ?? randomID('launch-draft'))
@@ -184,6 +191,21 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   const collapse = () => {
     setPickedWorkspace(workspaceID)
     close()
+  }
+
+  const startResize = (event: React.PointerEvent) => {
+    event.preventDefault()
+    const startX = event.clientX
+    const drag = beginDrag()
+    window.addEventListener('pointermove', (ev) => setLaunchWidth(Math.min(launchMaxWidth, Math.max(minLaunchWidth, visibleLaunchWidth + ev.clientX - startX))), { signal: drag.signal })
+    for (const end of ['pointerup', 'pointercancel']) window.addEventListener(end, () => drag.abort(), { signal: drag.signal })
+  }
+
+  const resizeKey = (event: React.KeyboardEvent) => {
+    const next = splitterTarget(event.key, { value: visibleLaunchWidth, min: minLaunchWidth, max: launchMaxWidth, grow: 'ArrowRight', shrink: 'ArrowLeft' })
+    if (next === null) return
+    event.preventDefault()
+    setLaunchWidth(Math.min(launchMaxWidth, Math.max(minLaunchWidth, next)))
   }
 
   const discard = () => {
@@ -399,7 +421,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
 
   return (
     <Dialog open={open} modal={false} onOpenChange={(next) => { if (!next) discard() }}>
-      <SlideOut open={open} width="26rem">
+      <SlideOut open={open} width={`${visibleLaunchWidth}px`}>
       <DialogPrimitive.Content
         {...returnFocus}
         forceMount
@@ -449,10 +471,23 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
           <Button type="submit" form="launch-form" disabled={launchDisabled}>{launchLabel}</Button>
         </DialogFooter>
         <DialogPrimitive.Close asChild>
-          <Button variant="ghost" size="icon-sm" label="Close" className="absolute top-2 right-2">
+          <Button variant="ghost" size="icon-sm" label="Close" className="absolute top-2 right-2 z-20">
             <X />
           </Button>
         </DialogPrimitive.Close>
+        <div
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize launch panel"
+          aria-controls="launch-form"
+          aria-valuenow={Math.round(visibleLaunchWidth)}
+          aria-valuemin={minLaunchWidth}
+          aria-valuemax={launchMaxWidth}
+          tabIndex={0}
+          onPointerDown={startResize}
+          onKeyDown={resizeKey}
+          className={cn(focusRing, 'absolute inset-y-0 right-0 z-10 w-2 cursor-col-resize touch-none hover:bg-hover-chrome coarse:w-4')}
+        />
       </DialogPrimitive.Content>
       </SlideOut>
     </Dialog>

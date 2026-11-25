@@ -6,10 +6,11 @@ import { replaceRouteKeepingFocus } from '@/components/shell/center-view'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Tabs, TabsContent } from '@/components/ui/tabs'
 import { minReadableWidth, useIsMobile } from '@/lib/breakpoints'
-import { useElementSize } from '@/lib/hooks'
+import { useDrag, useElementSize } from '@/lib/hooks'
+import { splitterTarget } from '@/lib/keys'
 import { useKeybindings } from '@/lib/keybindings'
 import { redirectRoute } from '@/lib/url-state'
-import { cn } from '@/lib/utils'
+import { cn, focusRing } from '@/lib/utils'
 import { BrowserView } from '@/routes/browser'
 import { ChangesView } from '@/routes/diff'
 import { RunFiles } from '@/routes/files/run-files'
@@ -32,6 +33,7 @@ import { TerminalView } from '@/routes/run/terminal-view'
 import { TraceView } from '@/routes/run/trace-view'
 import { defaultView, isRunView, offeredViews, runRoute, type RunView } from '@/routes/run/views'
 import { useStore } from '@/store'
+import { maxRunDetailsWidth, minRunDetailsWidth } from '@/store/ui'
 import { useCapability } from '@/store/hooks'
 import type { RunRecord } from '@/store/runs'
 import { resolveView } from '@/store/tiles'
@@ -48,10 +50,41 @@ function selectionCovers(node: Node): boolean {
   return Boolean(selection && !selection.isCollapsed && selection.getRangeAt(0).intersectsNode(node))
 }
 
-/** The inline inspectors' widths: `w-80`, `w-[28rem]` and `w-80`. */
-const detailsWidth = 320
+/** The inline inspectors' widths: `w-[28rem]` and `w-80`. */
 const agentWidth = 448
 const workflowWidth = 320
+
+function ResizeDetails({ width, max, onResize, className }: { width: number; max: number; onResize: (width: number) => void; className: string }) {
+  const beginDrag = useDrag()
+  const startResize = (event: React.PointerEvent) => {
+    event.preventDefault()
+    const startX = event.clientX
+    const drag = beginDrag()
+    window.addEventListener('pointermove', (ev) => onResize(Math.min(max, Math.max(minRunDetailsWidth, width - (ev.clientX - startX)))), { signal: drag.signal })
+    for (const end of ['pointerup', 'pointercancel']) window.addEventListener(end, () => drag.abort(), { signal: drag.signal })
+  }
+  const resizeKey = (event: React.KeyboardEvent) => {
+    const next = splitterTarget(event.key, { value: width, min: minRunDetailsWidth, max, grow: 'ArrowLeft', shrink: 'ArrowRight' })
+    if (next === null) return
+    event.preventDefault()
+    onResize(Math.min(max, Math.max(minRunDetailsWidth, next)))
+  }
+  return (
+    <div
+      role="separator"
+      aria-orientation="vertical"
+      aria-label="Resize session details"
+      aria-controls="run-details"
+      aria-valuenow={Math.round(width)}
+      aria-valuemin={minRunDetailsWidth}
+      aria-valuemax={max}
+      tabIndex={0}
+      onPointerDown={startResize}
+      onKeyDown={resizeKey}
+      className={cn(focusRing, 'absolute inset-y-0 z-10 w-2 cursor-col-resize touch-none hover:bg-hover-chrome coarse:w-6', className)}
+    />
+  )
+}
 
 function RunRoute({ params }: RouteProps) {
   return <TileArea params={params} Frame={RunFrame} />
@@ -98,7 +131,9 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
   // Measured with the inspectors inside it, so opening one never changes the answer.
   const [rowRef, row] = useElementSize<HTMLDivElement>()
   const measured = row.width > 0
-  const inline = alone && row.width >= detailsWidth + minReadableWidth
+  const preferredDetailsWidth = useStore((s) => s.runDetailsWidth)
+  const setRunDetailsWidth = useStore((s) => s.setRunDetailsWidth)
+  const inline = alone && row.width >= minRunDetailsWidth + minReadableWidth
   const agentInline = alone && row.width >= agentWidth + minReadableWidth
   const navigate = useStore((s) => s.navigate)
   const memory = useStore((s) => s.runViewMemory)
@@ -169,12 +204,17 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
 
   // The Session tree rail sits beside the session when it fits; otherwise it opens as a sheet.
   const workflowInline = alone && row.width >= workflowWidth + minReadableWidth
-  const besideDetails = row.width >= workflowWidth + detailsWidth + minReadableWidth
+  const besideDetails = row.width >= workflowWidth + minRunDetailsWidth + minReadableWidth
   const besideAgent = row.width >= workflowWidth + agentWidth + minReadableWidth
   const detailsOpen = inline ? detailsPreference && !agentID : overlayDetails
   const workflowOpen = workflowInline
     ? workflowPreference && (!agentID || besideAgent) && (!(inline && detailsOpen) || besideDetails)
     : overlayWorkflow
+  // Inline, Details gives way to the view and to the Session tree beside it; the sheet lies over the window.
+  const detailsMaxWidth = inline
+    ? Math.min(maxRunDetailsWidth, row.width - minReadableWidth - (workflowInline && workflowOpen ? workflowWidth : 0))
+    : maxRunDetailsWidth
+  const detailsWidth = Math.min(preferredDetailsWidth, detailsMaxWidth)
   const setDetails = useCallback((open: boolean) => {
     if (inline && open && agentID) closeAgent()
     if (inline) setDetailsPreference(open)
@@ -450,8 +490,9 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
         </Dialog>
       )}
       {inline && detailsOpen && (
-        <aside id="run-details" aria-label="Session details" className="w-80 shrink-0 overflow-y-auto border-l border-seam bg-canvas">
-          {details(true)}
+        <aside id="run-details" aria-label="Session details" style={{ width: detailsWidth }} className="relative shrink-0 border-l border-seam bg-canvas">
+          <div className="h-full overflow-y-auto">{details(true)}</div>
+          <ResizeDetails width={detailsWidth} max={detailsMaxWidth} onResize={setRunDetailsWidth} className="-left-1 coarse:-left-2" />
         </aside>
       )}
       {!inline && (
@@ -469,12 +510,13 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
               event.preventDefault()
               returnTo.current.focus()
             }}
-            className={mobile ? undefined : 'w-80'}
+            style={mobile ? undefined : { width: detailsWidth }}
           >
             <div className="flex min-h-0 flex-col gap-1 overflow-y-auto px-4 pt-4 max-md:p-0">
               <DialogTitle>Session details</DialogTitle>
               {details(false)}
             </div>
+            {!mobile && <ResizeDetails width={detailsWidth} max={detailsMaxWidth} onResize={setRunDetailsWidth} className="left-0 coarse:w-4" />}
           </DialogContent>
         </Dialog>
       )}

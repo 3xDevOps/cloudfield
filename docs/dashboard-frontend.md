@@ -376,7 +376,10 @@ top to bottom:
    state; a change saves the member setting at once with `child.settings`
    `choice`, one save after another, and **Settings → Subsessions** shows the
    same menu. An account whose agents could not be listed is named, with the
-   server's error, below the row (`choices_error`).
+   server's error, below the row (`choices_error`). Drag the panel's right
+   edge, or focus **Resize launch panel** and press the arrow keys, to set its
+   width from 360px to 720px, never past the room right of the sidebar. The
+   width is saved on this browser.
 3. **Sessions** (`sidebar-runs.tsx`), a `region` with three groups, **Needs you**,
    **Working** and **Finished** (see [Session state](#session-state)), each an `h2`
    holding an `aria-expanded` disclosure button, a chevron that turns a
@@ -5528,13 +5531,20 @@ device run.
 
 In a tile that is alone on screen, while the session's row holds 320px for it
 plus `minReadableWidth` (560px),
-Details is a 320px `complementary "Run details"` beside the view, toggled by
+Details is a `complementary "Session details"` beside the view, toggled by
 the header button or `Mod+.` and remembered (`detailsOpen`, persisted). When
 the row narrows, for example when the assistant docks, the inline panel goes
 and comes back once there is room again. Narrower rows, and every tile
-beside another, open it as a side sheet and
-phones as a bottom sheet, each a `dialog "Run details"` that returns focus to
-whatever opened it. Sections (`details.tsx`):
+beside another, open it as a side sheet over the window's right edge and
+phones as a bottom sheet, each a `dialog "Session details"` that returns focus to
+whatever opened it.
+
+Off a phone, the `separator "Resize session details"` on the panel's left edge
+sets its width from 320px to 560px by drag or arrow keys, 320px until then
+(`runDetailsWidth`, persisted). One width serves the inline panel and the
+sheet. Inline it is drawn no wider than leaves 560px for the view, less the
+320px Session tree rail when that is open beside it; the saved width is kept
+and applies again once there is room. Sections (`details.tsx`):
 
 - **Needs you**: `RequestCard`s for pending native inputs, teammate messages
   awaiting the controller with **Deny** / **Approve** through

@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { capability, type Capability } from '@/lib/capability'
 import { useClock } from '@/lib/clock'
@@ -213,4 +213,16 @@ export function useHeaderPrimary(shown: boolean) {
 /** A saved snapshot is on screen: what it shows may be answered already, so nothing may act on it. */
 export function useStale(): boolean {
   return useStore((s) => s.staleSince !== null)
+}
+
+function subscribeResize(notify: () => void) {
+  window.addEventListener('resize', notify)
+  return () => window.removeEventListener('resize', notify)
+}
+
+/** The width of `main` with nothing docked beside it. */
+export function useMainWidth(): number {
+  const sidebar = useStore((s) => (s.sidebarCollapsed ? 0 : s.sidebarWidth))
+  const innerWidth = useSyncExternalStore(subscribeResize, () => window.innerWidth)
+  return innerWidth - sidebar
 }

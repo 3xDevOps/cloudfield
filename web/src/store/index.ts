@@ -34,7 +34,11 @@ import { createWatchesSlice, type WatchesSlice } from '@/store/watches'
 import { createWorkflowSignalsSlice, type WorkflowSignalsSlice } from '@/store/workflow-signals'
 import {
   createUiSlice,
+  maxLaunchWidth,
+  maxRunDetailsWidth,
   maxSidebarWidth,
+  minLaunchWidth,
+  minRunDetailsWidth,
   minSidebarWidth,
   normalizeBoardMapFolded,
   normalizeBoardMapViewports,
@@ -96,6 +100,8 @@ const persistedUi = (s: RootState) => ({
   theme: s.theme,
   textSize: s.textSize,
   sidebarWidth: s.sidebarWidth,
+  launchWidth: s.launchWidth,
+  runDetailsWidth: s.runDetailsWidth,
   sidebarCollapsed: s.sidebarCollapsed,
   // A phone never reopens the sheet on load.
   assistantOpen: s.assistantOpen && !onPhone(),
@@ -245,6 +251,8 @@ export function createRootStore() {
             sessionsLanes: stored.sessionsLanes === true,
             savedTiles: normalizeSavedTiles(stored.savedTiles),
             sidebarWidth: Math.min(maxSidebarWidth, Math.max(minSidebarWidth, Number(stored.sidebarWidth) || current.sidebarWidth)),
+            launchWidth: Math.min(maxLaunchWidth, Math.max(minLaunchWidth, Number(stored.launchWidth) || current.launchWidth)),
+            runDetailsWidth: Math.min(maxRunDetailsWidth, Math.max(minRunDetailsWidth, Number(stored.runDetailsWidth) || current.runDetailsWidth)),
             // A card's notification opens the panel whatever was stored.
             assistantOpen: openedForACard() || (stored.assistantOpen === true && !onPhone()),
             assistantWidth: clampAssistantWidth(Number(stored.assistantWidth) || current.assistantWidth),
