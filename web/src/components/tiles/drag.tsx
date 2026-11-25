@@ -2,8 +2,8 @@ import { useContext, useLayoutEffect, useRef, useState } from 'react'
 import type * as React from 'react'
 import { createPortal } from 'react-dom'
 import { ArrowRightLeft, Columns2, Plus, Rows2 } from '@/components/icons'
-import { changeTiles, TileAreaContext } from '@/components/tiles/area'
-import { dropZone, fits, type Rect } from '@/components/tiles/geometry'
+import { changeTiles, TileAreaContext, tileNode } from '@/components/tiles/area'
+import { dropZone, fits, tileRects, type Rect } from '@/components/tiles/geometry'
 import { AgentGlyph } from '@/components/ui/agent-glyph'
 import { StatusDot } from '@/components/ui/status-dot'
 import { useDrag } from '@/lib/hooks'
@@ -44,6 +44,8 @@ interface DropTarget {
   index?: number
   /** What the drop will cover, in viewport pixels. */
   rect: Rect
+  /** Where a split leaves the tile it splits. */
+  stays?: Rect
   tile: DOMRect
   strip: DOMRect
   /** Where a new tab lands in the strip. */
@@ -73,22 +75,25 @@ function targetAt(source: TileDragSource & { from: DOMRect }, x: number, y: numb
       // Counted among all the tile's tabs: a strip folds those that do not fit into a menu.
       const rest = tabs.filter((tab) => tab.id !== source.tabId)
       const index = slot < others.length ? rest.findIndex((tab) => tab.id === others[slot].dataset.tab) : rest.length
-      return { tileId, zone: 'center', index, rect: { left: Math.max(edge - 1, strip.left + 2), top: strip.top, width: 2, height: strip.height }, tile, strip, tabsEnd: edge }
+      return { tileId, zone: 'center', index, rect: { left: Math.max(edge - 1, strip.left + 4), top: strip.top, width: 2, height: strip.height }, tile, strip, tabsEnd: edge }
     }
     const side = y < strip.bottom ? 'center' : dropZone(tile, x - tile.left, y - tile.top)
-    const zone = side !== 'center' && !layout.maximized && fits(splitTile(layout, tileId, side).root, node.parentElement!.getBoundingClientRect()) ? side : 'center'
-    if (zone === 'center' && own) return null
-    const row = zone === 'left' || zone === 'right'
-    const column = zone === 'up' || zone === 'down'
+    const area = node.parentElement!.getBoundingClientRect()
+    const split = side !== 'center' && !layout.maximized ? splitTile(layout, tileId, side) : null
+    // Laid out as the drop will be: a split that pushes a seam to make its floor is not a half.
+    const after = split && fits(split.root, area) ? tileRects(split.root, area).tiles : null
+    if (!after && own) return null
+    const drawn = (rect: Rect): Rect => ({
+      left: area.left + (rect.left / 100) * area.width,
+      top: area.top + (rect.top / 100) * area.height,
+      width: (rect.width / 100) * area.width,
+      height: (rect.height / 100) * area.height,
+    })
     return {
       tileId,
-      zone,
-      rect: {
-        left: tile.left + (zone === 'right' ? tile.width / 2 : 0),
-        top: tile.top + (zone === 'down' ? tile.height / 2 : 0),
-        width: row ? tile.width / 2 : tile.width,
-        height: column ? tile.height / 2 : tile.height,
-      },
+      zone: after && side !== 'center' ? side : 'center',
+      rect: after ? drawn(after[split!.focused]) : { left: tile.left, top: tile.top, width: tile.width, height: tile.height },
+      stays: after ? drawn(after[tileId]) : undefined,
       tile,
       strip,
       tabsEnd: [...node.querySelectorAll('[data-tab]')].at(-1)?.getBoundingClientRect().right ?? strip.left,
@@ -136,6 +141,7 @@ export function TileDragLayer() {
   const run = useStore((s) => (s.tileDrag ? s.runs[s.tileDrag.runId] : undefined))
   const title = run ? runLabel(run) : 'Session'
   const name = drag?.view ? `${title} · ${runViewLabel[drag.view]}` : title
+  const held = drag && (drag.tabId ?? (drag.view && viewHolder(useStore.getState().tiles, drag.runId, drag.view, ctx)?.tab.id))
   const action = (to: DropTarget) => (to.zone !== 'center' ? `Split ${to.zone}` : to.index === undefined ? 'Add as tab' : 'Move tab')
 
   useLayoutEffect(() => {
@@ -191,29 +197,39 @@ export function TileDragLayer() {
   if (!drag) return null
   const ViewIcon = drag.view && runViewIcon[drag.view]
   const ActionIcon = target && (target.index === undefined ? actionIcon[target.zone] : ArrowRightLeft)
-  const split = target && target.zone !== 'center' ? target : null
-  const stays = split && activeTab(tileList(useStore.getState().tiles.root).find((tile) => tile.id === split.tileId)!)
+  const split = target?.stays ? target : null
+  const tiles = tileList(useStore.getState().tiles.root)
+  const stays = split && activeTab(tiles.find((tile) => tile.id === split.tileId)!)
   const staysRun = stays ? ctx.runs[stays.runId] : undefined
+  const closes = target && tileNode(tiles.find((tile) => tile.tabs.length === 1 && tile.tabs[0].id === held)?.id ?? '')?.getBoundingClientRect()
+  const named = (
+    <>
+      {run && <ChipSession run={run} />}
+      <span className="min-w-0 truncate">{title}</span>
+      {ViewIcon && (
+        <span className="flex shrink-0 items-center gap-1 text-muted">
+          <span>·</span>
+          <ViewIcon className="size-3.5" />
+          {runViewLabel[drag.view!]}
+        </span>
+      )}
+    </>
+  )
   return createPortal(
     <div aria-hidden className={cn('fixed inset-0 z-50 cursor-grabbing select-none', point && inside(drag.from, point.x, point.y) && 'pointer-events-none')}>
       {target && (
         <div
           data-slot="drop-preview"
           style={target.rect}
-          className="fixed border border-accent bg-accent-soft transition-[left,top,width,height] duration-hover ease-hover motion-reduce:transition-none"
-        />
-      )}
-      {split && (
-        // The tile that stays, named at the top of the half it keeps, over a scrim: what shows there now is not where it will be.
-        <div
-          style={{
-            left: split.tile.left + (split.zone === 'left' ? split.tile.width / 2 : 0),
-            top: split.tile.top + (split.zone === 'up' ? split.tile.height / 2 : 0),
-            width: split.zone === 'left' || split.zone === 'right' ? split.tile.width / 2 : split.tile.width,
-            height: split.zone === 'up' || split.zone === 'down' ? split.tile.height / 2 : split.tile.height,
-          }}
-          className="fixed bg-canvas/80"
+          className={cn('fixed border border-accent transition-[left,top,width,height] duration-hover ease-hover motion-reduce:transition-none', split ? 'bg-canvas/80' : 'bg-accent-soft')}
         >
+          {split && <div data-slot="drop-lands" className={cn(ghost, 'absolute inset-0 justify-center bg-accent-soft')}>{named}</div>}
+        </div>
+      )}
+      {closes && <div style={{ left: closes.left, top: closes.top, width: closes.width, height: closes.height }} className="fixed bg-canvas/80" />}
+      {split && (
+        // The tile that stays, named at the top of the room it keeps, over a scrim: what shows there now is not where it will be.
+        <div style={split.stays} className="fixed bg-canvas/80">
           <div style={{ height: split.strip.height }} data-slot="drop-stays" className={cn(ghost, 'static border-b border-seam bg-chrome text-muted')}>
             {staysRun && <ChipSession run={staysRun} />}
             <span className="min-w-0 truncate">{staysRun ? runLabel(staysRun) : stays ? 'Session' : 'New tile'}</span>
@@ -226,10 +242,7 @@ export function TileDragLayer() {
           style={{ left: Math.min(target.tabsEnd, target.strip.right - 160), top: target.strip.top, right: window.innerWidth - target.strip.right, height: target.strip.height }}
           className={cn('fixed flex border-b border-seam', useStore.getState().tiles.focused === target.tileId ? 'bg-canvas' : 'bg-chrome')}
         >
-          <div data-slot="drop-tab" className={cn(ghost, 'static min-w-0 border border-dashed border-accent bg-canvas')}>
-            {run && <ChipSession run={run} />}
-            <span className="min-w-0 truncate">{name}</span>
-          </div>
+          <div data-slot="drop-tab" className={cn(ghost, 'static min-w-0 border border-dashed border-accent bg-canvas')}>{named}</div>
         </div>
       )}
       <div
@@ -238,15 +251,7 @@ export function TileDragLayer() {
         style={{ maxWidth: (target?.tile.width ?? window.innerWidth) - 8 }}
         className="fixed flex h-7 items-center gap-2 rounded-control border border-seam bg-raised px-2 text-ui font-medium shadow-overlay"
       >
-        {run && <ChipSession run={run} />}
-        <span className="min-w-0 truncate">{title}</span>
-        {ViewIcon && (
-          <span className="flex shrink-0 items-center gap-1 text-muted">
-            <span>·</span>
-            <ViewIcon className="size-3.5" />
-            {runViewLabel[drag.view!]}
-          </span>
-        )}
+        {named}
         {target && ActionIcon && (
           <span className="flex shrink-0 items-center gap-1.5 border-l border-seam pl-2 text-accent">
             <ActionIcon className="size-3.5" />

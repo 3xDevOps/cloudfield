@@ -142,12 +142,12 @@ describe('dragging a sidebar row', () => {
     expect(said(`${second}: ${action}`)).toBeDefined()
   })
 
-  it('covers the half the new tile will take, and drops the focus outline while it does', async () => {
+  it('covers the room the new tile will take, its floor included, and drops the focus outline while it does', async () => {
     show()
     await beside('run_3')
     lift(row(second))
     over(1500, 450)
-    expect(preview()!.style).toMatchObject({ left: '1200px', top: '0px', width: '400px', height: '900px' })
+    expect(preview()!.style).toMatchObject({ left: '1180px', top: '0px', width: '420px', height: '900px' })
     expect(tiles().some((node) => node.className.includes('after:border-accent'))).toBe(false)
     over(1500, 880)
     expect(preview()!.style).toMatchObject({ left: '800px', top: '450px', width: '800px', height: '450px' })

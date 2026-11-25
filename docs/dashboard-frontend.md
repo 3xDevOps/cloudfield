@@ -3148,11 +3148,13 @@ its own. With a mouse or a pen, a sidebar row, a tab and every view but the
 one its tile shows can be dragged (`drag.tsx`); a press becomes a drag after
 4px. The outer fifth of a tile splits it on that side, its middle or strip
 adds a tab, and a tab over a strip moves to where the 2px line shows. A
-translucent preview tints what the drop takes, so the tile under it stays
-readable. A split also names the tile that stays, in a strip at the top of
-the half it keeps over a `--canvas` scrim, and an added tab shows as a dashed
-tab at the end of the strip, in place of the strip's buttons. A lifted tab
-leaves a dashed slot, as a lifted view does. A chip by the pointer names the
+teal preview marks what the drop takes. A split's preview is the rectangle
+the new tile will have, seams moved for the floor included: it covers what
+is there now with a `--canvas` scrim and names what lands at its centre. The
+tile that stays is named in a strip at the top of the room it keeps, over
+the same scrim, which also dims a tile the drag takes the only tab of. An
+added tab shows as a dashed tab at the end of the strip, in place of the
+strip's buttons. A lifted tab leaves a dashed slot, as a lifted view does. A chip by the pointer names the
 drop:
 **Split left**, **Split right**, **Split up**, **Split down**, **Add as tab**
 (also where the floor forbids the split, and on a maximized tile) or **Move
