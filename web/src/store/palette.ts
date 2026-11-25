@@ -18,6 +18,8 @@ export interface PaletteSlice {
   paletteWatchTarget: WatchTarget | null
   /** The task the launch form opens with: text shared to Aether. */
   paletteLaunchTask: string
+  /** The Linear issue URL a launch from the Linear page links to; empty for none. */
+  paletteLaunchLinearURL: string
   launchDraft: LaunchDraft | null
   launchDraftError: string | null
   setLaunchDraft: (draft: LaunchDraft | null, persist?: boolean) => string | null
@@ -28,7 +30,7 @@ export interface PaletteSlice {
   closeChecking: Record<string, true>
   togglePalette: (open?: boolean) => void
   openPaletteDialog: (dialog: PaletteDialog, runID?: string) => void
-  openLaunchWithTask: (task: string) => void
+  openLaunchWithTask: (task: string, linearURL?: string) => void
   openForwardDialog: (target: string) => void
   openWatchDialog: (target: WatchTarget) => void
   closePaletteDialog: () => void
@@ -44,6 +46,7 @@ export const createPaletteSlice: SliceCreator<PaletteSlice> = (set, get) => ({
   paletteForwardTarget: null,
   paletteWatchTarget: null,
   paletteLaunchTask: '',
+  paletteLaunchLinearURL: '',
   launchDraft: null,
   launchDraftError: null,
   setLaunchDraft: (launchDraft, persist = true) => {
@@ -68,8 +71,9 @@ export const createPaletteSlice: SliceCreator<PaletteSlice> = (set, get) => ({
       paletteForwardTarget: null,
       paletteWatchTarget: null,
       paletteLaunchTask: '',
+      paletteLaunchLinearURL: '',
     }),
-  openLaunchWithTask: (task) =>
+  openLaunchWithTask: (task, linearURL = '') =>
     set({
       paletteOpen: false,
       paletteDialog: 'launch',
@@ -77,6 +81,7 @@ export const createPaletteSlice: SliceCreator<PaletteSlice> = (set, get) => ({
       paletteForwardTarget: null,
       paletteWatchTarget: null,
       paletteLaunchTask: task,
+      paletteLaunchLinearURL: linearURL,
     }),
   openForwardDialog: (target) =>
     set({
@@ -101,6 +106,7 @@ export const createPaletteSlice: SliceCreator<PaletteSlice> = (set, get) => ({
       paletteForwardTarget: null,
       paletteWatchTarget: null,
       paletteLaunchTask: '',
+      paletteLaunchLinearURL: '',
     }),
   // A later check's answer never replaces the confirmation on screen, whose
   // Close anyway would then run another session's close.

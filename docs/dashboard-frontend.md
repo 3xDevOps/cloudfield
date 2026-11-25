@@ -512,7 +512,7 @@ contribute to that group's count. Relationships come from the session snapshot's
 `top-bar.tsx` is a `banner` at every window width, padded by `--safe-top`.
 Its first row shows the Cloudfield mark on the left
 ([Styles](styles.md#type)), then **Board**,
-**Activity**, **Insights**, **Memory**, **Files**, **Environment**, **Agents** and
+**Activity**, **Insights**, **Linear** (once the member saved a Linear key), **Memory**, **Files**, **Environment**, **Agents** and
 **Templates** in `nav` "Main navigation". These use the sidebar's `ListRow`
 styling and current-page selection. A `ResizeObserver` measures the row and
 its buttons, including font and text-size changes. Destinations that do not
@@ -5649,6 +5649,24 @@ in **Needs you**.
   the heartbeat's read, and a read unanswered after 10 seconds is aborted and
   shown as the gauge's error: the loopback gateway speaks HTTP/1.1, so a
   stuck read there holds one of the browser's six connections to the host.
+
+## Linear
+
+`src/routes/linear/` is **Linear** (`?page=linear`), the member's open Linear
+issues from `linear.issues` with a title search and a `linear.teams` filter. It
+is in the navigation only when `linear.status` (read into the store's `linear`
+slice on hydration, without holding it, and by Settings › Connections › Linear)
+reports a saved key. `?page=linear` without a key still opens and shows one error card.
+**Start session** calls `openLaunchWithTask(task, issueURL)`; the launch dialog
+sends the URL as `linear_issue_url` and, unlike text shared from another app,
+shows no review notice. A chip above Task says the session will be linked, with
+**Unlink**; when a restored draft wins, a notice says the issue is not linked.
+The page picks the table or the stacked list from its own width (920px), and
+shows **Open session** in place of **Start session** for an issue with a live
+linked session. `src/routes/run/linear-issue.tsx` is the session
+header's link to `run.linear_issue_url`, with the status text from `linear.issue`
+(only where the header line has 32rem; never a status dot, which belongs to session state).
+[linear.md](linear.md) covers the behavior.
 
 ## Insights
 

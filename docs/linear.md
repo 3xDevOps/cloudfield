@@ -5,9 +5,10 @@ personal Linear API key on the server. The server uses the key to read Linear
 issues for that member. It only reads: it never creates or updates a Linear
 issue.
 
-The dashboard's **Settings**, **Linear** section and its **Linear** page, which
-lists your issues and starts a session from one, arrive with the dashboard
-change. Until that ships, nothing in the CLI or dashboard saves a key.
+In the dashboard, **Settings**, **Connections**, **Linear** saves your key, the
+**Linear** page lists your open issues and starts a session from one, and a
+session linked to an issue shows the issue in its header. The **Linear** page
+appears in the navigation once you have saved a key.
 
 ## Connect Linear's GitHub integration
 
@@ -23,15 +24,17 @@ cloudfield session "fix the flaky retry" --agent claude --linear-issue https://l
 
 Without `--linear-issue`, the first Linear issue link in the task is used. The
 link is fixed at launch. [Agents](agents.md) covers the form of the URL and the
-error a malformed one gives.
+error a malformed one gives. A pull request opened by a linked session gets a
+`Fixes <ID>` line in its body, which Linear's integration uses to link it.
 
 ## Save your API key
 
-1. In Linear, open **Settings**, **Security & access**, **Personal API keys**
+1. In Linear, open **Settings**, **Account**, **Security & access**, **Personal API keys**
    and choose **New API key**. Linear shows the key, which starts with
    `lin_api_`, once.
-2. Paste it into **Settings**, **Linear**. That section ships with the
-   dashboard change; the dashboard does not have it yet.
+2. Paste it into **Settings**, **Connections**, **Linear** and choose **Save**.
+   [Linear's API guide](https://linear.app/docs/api-and-webhooks) shows where
+   the keys are.
 
 The server checks the key with Linear's `viewer` query before it saves it, and
 returns Linear's own error if Linear refuses it. Disconnecting deletes the
@@ -39,6 +42,25 @@ key. Revoke the key in Linear as well if it leaked.
 
 The key belongs to you. Each member's key is separate, and the server reads
 issues with the key of whoever asks.
+
+## Start a session from an issue
+
+The **Linear** page lists up to 50 open issues assigned to you: identifier,
+title, status, team and last update. Search matches the title, and
+the team filter narrows the list to one team. A refused or missing key shows
+Linear's error with a button to **Settings**, **Connections**, **Linear**.
+
+**Start session** on a row opens the launch dialog with the task
+`<ID> <title>`, a blank line, and `Linked Linear issue: <ID> <url>`. Launching
+sends `linear_issue_url` explicitly, so the session is linked even if you edit
+the task. **Open in Linear** opens the issue in a new tab. If an unfinished
+launch draft exists, the dialog opens that draft instead, with no link.
+
+A linked session shows the identifier with the Linear mark in its header, under
+the title on a wide screen and at the end of the status line on a phone. It
+links to the issue and appears before any pull request exists. With a saved
+key the header also shows the issue's status; if Linear refuses that read, the
+status is left out and Linear's error is the link's tooltip.
 
 ## Where the key is stored
 
@@ -72,5 +94,5 @@ Without a saved key, every method but `linear.status`, `linear.connect` and
 `linear.disconnect` fails with:
 
 ```
-Linear is not connected: save a personal API key in Settings → Linear
+Linear is not connected: save a personal API key in Settings → Connections → Linear
 ```

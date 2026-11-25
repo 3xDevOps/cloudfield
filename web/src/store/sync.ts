@@ -43,6 +43,7 @@ import { applyWatchChanged } from '@/store/watch-notice'
 import { loadWatches } from '@/store/watches'
 import { loadMergeProposals } from '@/store/members'
 import { loadEdge } from '@/store/edge'
+import { loadLinear } from '@/store/linear'
 import { pausedFromTimeline } from '@/store/board'
 import { scheduleBudgetRead, type BudgetPayload } from '@/store/cost'
 import { touchChildren } from '@/store/child-touches'
@@ -225,6 +226,7 @@ export async function hydrate(
       store.getState().resetFiles()
       store.getState().resetNotes()
       store.getState().resetAssistant()
+      store.getState().setLinear(null)
       store.setState({ invitations: null, revokingInvitations: [], agentModels: {}, mergedInto: {}, deletingRuns: {}, laneHistory: {}, watches: {}, watchNotices: {}, watchesFor: null, closeConfirmation: null })
     }
     s.setCapabilities(capabilities)
@@ -264,6 +266,8 @@ export async function hydrate(
       loadMergeProposals(store, client),
       loadEdge(store, client).catch(ignore),
     ])
+    // Only the nav entry and the header link follow it, so a slow Linear must not hold hydration.
+    void loadLinear(store, client).catch(ignore)
     if (signal?.aborted) return false
     s.setHydrated(true)
     store.setState({ staleSince: null })

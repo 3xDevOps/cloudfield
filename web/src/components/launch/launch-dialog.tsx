@@ -11,6 +11,7 @@ import { automaticFallback, ChildRunsSwitch, type ChildRunsChoice, fallbackParam
 import { PermissionControl, permissionFeature } from '@/components/launch/permission-control'
 import { ExtraRepos } from '@/components/launch/extra-repos'
 import { PhoneLaunchSheet } from '@/components/launch/phone-launch'
+import { LinkedIssue } from '@/components/launch/linked-issue'
 import { AgentOptions, needsTask, RunFields, useAgentChoice } from '@/components/launch/run-fields'
 import { emptyLimits, parseLimits, useServerRunLimits } from '@/components/launch/run-limits'
 import { fallbackFromSaved, fallbackToSaved, SaveAccountDefault, SavedIssues } from '@/components/launch/saved-defaults'
@@ -102,8 +103,22 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   const permissionPicked = useRef(false)
   const choice = useAgentChoice({ account, ownAccountID, saved: savedRead, hold: preset === 'pending', pick, fallback: last?.harness, initial: restored ?? undefined, open })
   const { agents, agentError, harness, mode, model, effort, noAgents } = choice
-  const [shared] = useState(() => useStore.getState().paletteLaunchTask)
-  const [task, setTask] = useState(restored?.task ?? shared)
+  const [prefill] = useState(() => useStore.getState().paletteLaunchTask)
+  const storeURL = useStore((s) => s.paletteLaunchLinearURL)
+  const [pickedURL] = useState(storeURL)
+  // A collapsed draft stays mounted, so an issue picked while it is open is not the one its task was written for.
+  const ignoredURL = storeURL !== pickedURL ? storeURL : ''
+  const [unlinked, setUnlinked] = useState(false)
+  const linearURL = restored || unlinked ? '' : pickedURL
+  // Text from the Linear page is the member's own pick, not text shared from another app.
+  const shared = pickedURL ? '' : prefill
+  const linked = (
+    <>
+      {pickedURL && !unlinked && <LinkedIssue url={pickedURL} kept={!restored} onUnlink={() => setUnlinked(true)} />}
+      {ignoredURL && <LinkedIssue url={ignoredURL} kept={false} onUnlink={() => setUnlinked(true)} />}
+    </>
+  )
+  const [task, setTask] = useState(restored?.task ?? prefill)
   const [error, setError] = useState<string | null>(null)
   const [setup, setSetup] = useState<string | null>(null)
   const [unadopted, setUnadopted] = useState<{ workspace: string; command: string } | null>(null)
@@ -232,6 +247,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
       ...(chosenModel ? { model: chosenModel } : {}),
       ...(effort ? { effort } : {}),
       ...(permissionOffered ? { permission } : {}),
+      ...(linearURL ? { linear_issue_url: linearURL } : {}),
       ...(sharedAccount ? { account_member_id: account } : {}),
       ...fallbackParams(fallback, accounts, account),
       ...extraRepos,
@@ -369,6 +385,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
         task={task}
         onTask={setTask}
         shared={shared !== '' && task === shared}
+        linked={linked}
         choice={choice}
         onAgent={(name) => { setError(null); choice.choose(name) }}
         workspaces={allWorkspaces}
@@ -434,7 +451,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
           onSubmit={(event) => { event.preventDefault(); if (!dictating) void submit() }}
         >
           {permissionOffered && <PermissionControl value={permission} onChange={choosePermission} disabled={launching} />}
-          <RunFields choice={choice} task={task} onTask={setTask} onSetUp={setUp} onChoice={() => { choiceEdited.current = true; setError(null) }} disabled={launching} autoFocus shared={shared !== '' && task === shared} account={accountChoice} owner={sharedAccount ? accountName : undefined} />
+          <RunFields choice={choice} task={task} onTask={setTask} onSetUp={setUp} onChoice={() => { choiceEdited.current = true; setError(null) }} disabled={launching} autoFocus shared={shared !== '' && task === shared} linked={linked} account={accountChoice} owner={sharedAccount ? accountName : undefined} />
           {limitsOffered && <RunLimitsOption value={limits} onChange={setLimits} effective={serverLimits.limits?.effective} disabled={launching} />}
           {childRunsOffered && <ChildRunsSwitch value={childRuns} onChange={setChildRuns} enabled={childSettings?.enabled} settings={childSettings} readError={childReadError} unavailable={mode === 'headless' ? 'Background sessions cannot start subsessions.' : undefined} disabled={launching} />}
           {reposOffered && <ExtraRepos options={extraOptions} value={extras} onChange={setExtras} disabled={launching} />}

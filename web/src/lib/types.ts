@@ -204,6 +204,9 @@ export interface WaitCondition {
 
 export interface Run {
   id: string
+  /** Identifier of the Linear issue the run works on, such as ENG-123. */
+  linear_issue?: string
+  linear_issue_url?: string
   workspace_id: string
   member_id: string
   /** Account backing the run; absent on servers predating account sharing. */
@@ -2521,4 +2524,35 @@ export interface PreferenceResult {
 
 export interface PreferenceDeleteResult {
   deleted: Preference
+}
+
+export interface LinearStatus {
+  connected: boolean
+  name?: string
+  organization?: string
+  url_key?: string
+  /** Set by the dashboard, never the server: linear.status failed, so a key is saved but Linear or the server refused the read. */
+  error?: string
+}
+
+export interface LinearTeam {
+  key: string
+  name: string
+}
+
+export interface LinearState {
+  name: string
+  type?: 'backlog' | 'unstarted' | 'started' | 'completed' | 'canceled' | string
+  color?: string
+}
+
+/** `team`, `assignee` and `updated_at` are absent from a `linear.issue` read. */
+export interface LinearIssue {
+  identifier: string
+  title: string
+  url: string
+  state: LinearState
+  team?: LinearTeam
+  assignee?: { name: string }
+  updated_at?: string
 }

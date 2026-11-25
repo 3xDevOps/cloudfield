@@ -37,6 +37,8 @@ beforeEach(() => {
     workspaces: { [workspace.id]: workspace },
     activeWorkspace: workspace.id,
     paletteDialog: 'launch',
+    paletteLaunchTask: '',
+    paletteLaunchLinearURL: '',
     launchDraft: null,
     launchDraftError: null,
     linkStatus: null,
@@ -549,6 +551,60 @@ describe('new run', () => {
     await userEvent.type(screen.getByLabelText('Task'), 'write the changelog')
     await userEvent.click(launchButton())
     await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith(expect.objectContaining({ limits: { memory_bytes: 1.5 * 2 ** 30, pids: 256 } })))
+  })
+
+  it('launches from a Linear issue with its URL passed explicitly and no shared-text notice', async () => {
+    const url = 'https://linear.app/acme/issue/ENG-123'
+    const task = `ENG-123 Fix rounding\n\nLinked Linear issue: ENG-123 ${url}`
+    useStore.getState().openLaunchWithTask(task, url)
+    await open()
+    expect((screen.getByLabelText('Task') as HTMLTextAreaElement).value).toBe(task)
+    expect(screen.queryByText(/Shared from another app/)).toBeNull()
+    expect(screen.getByText(/will be linked/)).toBeTruthy()
+    fireEvent.click(launchButton())
+
+    await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith(expect.objectContaining({ task, linear_issue_url: url })))
+  })
+
+  it('sends no Linear link once the member unlinks the issue', async () => {
+    const url = 'https://linear.app/acme/issue/ENG-123'
+    useStore.getState().openLaunchWithTask('ENG-123 Fix rounding', url)
+    await open()
+    fireEvent.click(screen.getByRole('button', { name: 'Unlink ENG-123' }))
+    expect(screen.queryByText(/will be linked/)).toBeNull()
+    fireEvent.click(launchButton())
+
+    await waitFor(() => expect(api.runLaunch).toHaveBeenCalled())
+    expect(vi.mocked(api.runLaunch).mock.calls[0]![0]).not.toHaveProperty('linear_issue_url')
+  })
+
+  it('says so when a restored draft wins over the Linear issue', async () => {
+    const url = 'https://linear.app/acme/issue/ENG-123/fix-rounding'
+    useStore.setState({ launchDraft: draft({ task: 'old draft' }) })
+    useStore.getState().openLaunchWithTask('ENG-123 Fix rounding', url)
+    await open()
+    expect(screen.getByRole('status', { name: '' }).textContent).toContain('ENG-123 is not linked')
+    expect((screen.getByLabelText('Task') as HTMLTextAreaElement).value).toBe('old draft')
+  })
+
+  it('says so when a Linear issue is picked while a collapsed draft is already mounted', async () => {
+    useStore.setState({ launchDraft: draft({ task: 'old draft' }) })
+    await open()
+    expect(screen.queryByText(/is not linked/)).toBeNull()
+    act(() => useStore.getState().openLaunchWithTask('ENG-123 Fix rounding', 'https://linear.app/acme/issue/ENG-123'))
+    expect(await screen.findByText('ENG-123 is not linked')).toBeTruthy()
+  })
+
+  it('keeps the first issue linked and names the one a collapsed draft ignored', async () => {
+    const first = 'https://linear.app/acme/issue/ENG-123'
+    useStore.getState().openLaunchWithTask('ENG-123 Fix rounding', first)
+    await open()
+    act(() => useStore.getState().openLaunchWithTask('ENG-9 Other', 'https://linear.app/acme/issue/ENG-9'))
+    expect(await screen.findByText('ENG-9 is not linked')).toBeTruthy()
+    expect(screen.getByText(/ENG-123/, { selector: 'span.text-text' })).toBeTruthy()
+    fireEvent.click(launchButton())
+
+    await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith(expect.objectContaining({ linear_issue_url: first })))
   })
 
   it('launches a never-launched agent in Enhanced when available and remembers the choice', async () => {

@@ -107,6 +107,19 @@ describe('hydrate', () => {
     expect(client.memberMergePending).toHaveBeenCalled()
     expect(client.serverEdge).toHaveBeenCalled()
   })
+  it('does not wait for linear.status, and drops the previous member\'s status on an identity change', async () => {
+    const store = createRootStore()
+    store.setState({ identityKey: 'someone-else', linear: { connected: true, name: 'Ada' } })
+    const client = fakeApi({
+      capabilities: vi.fn(async () => ({ gateway: 'test', methods: ['*'], ws: [] })),
+      linearStatus: vi.fn(() => new Promise<never>(() => {})),
+    })
+    await hydrate(store, client)
+
+    expect(client.linearStatus).toHaveBeenCalled()
+    expect(store.getState().hydrated).toBe(true)
+    expect(store.getState().linear).toBeNull()
+  })
   it('clears a painted snapshot when the server now refuses this member', async () => {
     const store = createRootStore()
     store.setState({ hydrated: true, staleSince: Date.now() })

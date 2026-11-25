@@ -14,6 +14,7 @@ import { createEdgeSlice, type EdgeSlice } from '@/store/edge'
 import { createFilesSlice, type FilesSlice } from '@/store/files'
 import { createEnvTerminalSlice, type EnvTerminalSlice } from '@/store/env-terminal'
 import { createLanesSlice, normalizeLaneHidden, normalizeLaneWindow, type LanesSlice } from '@/store/lanes'
+import { createLinearSlice, type LinearSlice } from '@/store/linear'
 import { createLocalSlice, type LocalSlice } from '@/store/local'
 import { createMembersSlice, type MembersSlice } from '@/store/members'
 import { createPaletteSlice, type PaletteSlice } from '@/store/palette'
@@ -80,6 +81,7 @@ export type RootState = ServerSlice &
   DiffSlice &
   CollaborationSlice &
   LocalSlice &
+  LinearSlice &
   UpdatesSlice &
   MessagesSlice &
   SessionsSlice &
@@ -161,6 +163,7 @@ export function createRootStore() {
         ...createFilesSlice(...a),
         ...createCollaborationSlice(...a),
         ...createLocalSlice(...a),
+        ...createLinearSlice(...a),
         ...createUpdatesSlice(...a),
         ...createMessagesSlice(...a),
         ...createSessionsSlice(...a),

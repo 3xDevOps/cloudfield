@@ -29,6 +29,7 @@ import type { AgentTerminal } from '@/routes/run/agent-terminal'
 import { RunLineage, useChildRunsItems } from '@/routes/run/child-runs'
 import { useModeSwitch } from '@/routes/run/mode-switch'
 import { useOpenInEditor } from '@/routes/run/open-in-editor'
+import { RunLinearIssue } from '@/routes/run/linear-issue'
 import { useRunPullRequest } from '@/routes/run/pull-request'
 import { requestCardID } from '@/routes/run/requests'
 import { PhoneRunHeader } from '@/routes/run/phone-header'
@@ -159,6 +160,12 @@ function StateLine({ run, agentName }: { run: RunRecord; agentName: string }) {
             <span className="min-w-0 truncate font-code">{run.branch}</span>
             <Copy aria-hidden />
           </Button>
+          <span aria-hidden>·</span>
+        </>
+      )}
+      {run.linear_issue && (
+        <>
+          <RunLinearIssue run={run} />
           <span aria-hidden>·</span>
         </>
       )}

@@ -258,6 +258,7 @@ export const createServerSlice: SliceCreator<ServerSlice> = (set) => {
         launchDefaults: s.savedLaunchDefaults[identityKey] ?? {},
         runViewMemory: s.savedRunViews[identityKey] ?? {},
         paletteLaunchTask: '',
+        paletteLaunchLinearURL: '',
         launchDraft: inMemoryDraft ?? restored.draft,
         launchDraftError: inMemoryDraft ? null : storageError
           ? `Could not remove launch draft from this browser: ${storageError}`

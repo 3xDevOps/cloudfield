@@ -13,6 +13,7 @@ import { cn } from '@/lib/utils'
 import { runLabel, stateName, toneOf } from '@/lib/status'
 import { historyDepth, redirectRoute, sessionEntry } from '@/lib/url-state'
 import { modeLabel } from '@/routes/run/agent-name'
+import { RunLinearIssue } from '@/routes/run/linear-issue'
 import type { RunNavigation } from '@/routes/run/header'
 import { defaultView, runViewLabel, type RunView } from '@/routes/run/views'
 import { useStore } from '@/store'
@@ -99,6 +100,7 @@ export function PhoneRunHeader({ run, view, views, nav, agentName, keyboard, pri
               <span role="status">{state}</span>
               {!keyboard && <span> · {agentName} · {modeLabel[run.mode] ?? run.mode}</span>}
             </span>
+            {!keyboard && <RunLinearIssue run={run} compact className="coarse:h-auto coarse:px-0" />}
           </p>
         </div>
         {primary && !keyboard && <Button size="sm" variant={asking && view === 'session' ? 'secondary' : 'primary'} onClick={primary.act}>{primary.label}</Button>}
