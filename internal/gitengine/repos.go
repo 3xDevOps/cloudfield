@@ -63,10 +63,10 @@ func (e *Engine) eachExtra(run domain.RunID, history bool, fn func(domain.RunID)
 }
 
 func (e *Engine) StartDiffWatch(ctx context.Context, workspace domain.WorkspaceID, run domain.RunID) error {
-	if err := e.startDiffWatch(ctx, workspace, run); err != nil {
+	if err := e.startDiffWatch(ctx, workspace, run, false); err != nil {
 		return err
 	}
-	return e.eachExtra(run, false, func(key domain.RunID) error { return e.startDiffWatch(ctx, workspace, key) })
+	return e.eachExtra(run, false, func(key domain.RunID) error { return e.startDiffWatch(ctx, workspace, key, false) })
 }
 
 func (e *Engine) LastFileChange(run domain.RunID) (time.Time, bool) {
@@ -104,26 +104,35 @@ func (e *Engine) StopDiffWatch(run domain.RunID) {
 	}
 }
 
+// CommitAll still commits the extra repositories when the main checkout is
+// missing, and then reports ErrCheckoutNotFound unless an extra failed.
 func (e *Engine) CommitAll(ctx context.Context, run domain.RunID, message string, author domain.GitIdentity, signingKey []byte) (string, error) {
 	commit, err := e.commitAll(ctx, run, message, author, signingKey)
-	if err != nil {
+	if err != nil && !errors.Is(err, ErrCheckoutNotFound) {
 		return "", err
 	}
-	return commit, e.eachExtra(run, false, func(key domain.RunID) error {
-		_, err := e.commitAll(ctx, key, message, author, signingKey)
-		return err
-	})
+	if extraErr := e.eachExtra(run, false, func(key domain.RunID) error {
+		_, keyErr := e.commitAll(ctx, key, message, author, signingKey)
+		return keyErr
+	}); extraErr != nil {
+		return commit, extraErr
+	}
+	return commit, err
 }
 
+// PublishRunBranch handles a missing main checkout as CommitAll does.
 func (e *Engine) PublishRunBranch(ctx context.Context, run domain.RunID) (string, error) {
 	commit, err := e.publishRunBranch(ctx, run)
-	if err != nil {
+	if err != nil && !errors.Is(err, ErrCheckoutNotFound) {
 		return "", err
 	}
-	return commit, e.eachExtra(run, false, func(key domain.RunID) error {
-		_, err := e.publishRunBranch(ctx, key)
-		return err
-	})
+	if extraErr := e.eachExtra(run, false, func(key domain.RunID) error {
+		_, keyErr := e.publishRunBranch(ctx, key)
+		return keyErr
+	}); extraErr != nil {
+		return commit, extraErr
+	}
+	return commit, err
 }
 
 func (e *Engine) RemoveRunCheckout(ctx context.Context, run domain.RunID) error {
@@ -151,6 +160,9 @@ func (e *Engine) FetchRunBranch(ctx context.Context, ws domain.WorkspaceID, bran
 	repo, err := e.existingRepoPath(ws)
 	if err != nil {
 		return "", err
+	}
+	if dst.VM {
+		return e.vmFetchBranch(ctx, repo, branch, into, dst, ref)
 	}
 	checkout, err := e.existingCheckoutPath(into)
 	if err != nil {

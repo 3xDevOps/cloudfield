@@ -95,6 +95,12 @@ func (s RunStatus) Final() bool {
 	return false
 }
 
+// Archivable reports whether a run in this status may be hidden from the
+// board: a Final disposition, or completed, which its owner accepted as done.
+func (s RunStatus) Archivable() bool {
+	return s.Final() || s == RunCompleted
+}
+
 func (s RunStatus) Valid() bool {
 	return slices.Contains(AllRunStatuses, s)
 }
@@ -144,6 +150,16 @@ func (a RunActivity) Quiet(reason string) bool {
 	return false
 }
 
+// These start the reasons of a needs-you run an error stopped: an Enhanced
+// turn interrupted or ended early, a usage limit Aether does not resume
+// from, or a wait whose wake was never delivered.
+const (
+	InterruptedReason        = "turn interrupted"
+	StoppedShortReasonPrefix = "turn ended: "
+	UsageLimitReasonPrefix   = "Usage limit reached on "
+	WaitBrokenReasonPrefix   = "wait broken: "
+)
+
 // RunReview is whether the run's owner has dealt with the success its agent
 // reported: empty when no success awaits them.
 type RunReview string
@@ -163,23 +179,43 @@ const BlockedReasonPrefix = "blocked: "
 // ActivityFinished instead.
 const ReportedSuccessReason = "agent reported success"
 
+// ReportedFailureReason is the reason of a run its agent's failure report
+// parked or ended, before any retention suffix.
+const ReportedFailureReason = "agent reported failure"
+
 // NeedsAttention is the one rule for whether a run needs a member, which
 // push notifications, assistant follow notices, aether sessions --needs-you and
 // the dashboard's Needs you list share: a live run with an open human
-// request, a disconnected agent, or a failure nobody has seen, or a reported
-// success awaiting review. A paused run never does.
+// request, a disconnected agent, or a failure nobody has seen unless it is a
+// subsession's (OutcomeHeld). A reported success is AwaitsReview, never this.
+// A paused run never does.
 func (r *Run) NeedsAttention(paused bool) bool {
 	switch {
-	case paused:
-		return false
-	case r.Review == ReviewReady && (r.Status.Live() || r.Status == RunCompleted):
-		return true
-	case !r.Status.Live():
+	case paused, !r.Status.Live():
 		return false
 	case r.Activity == ActivityNeedsYou, r.Activity == ActivityDisconnected:
 		return true
 	}
-	return r.Activity == ActivityFailed && r.OutcomeUnseen
+	return !r.OutcomeHeld() && r.Activity == ActivityFailed && r.OutcomeUnseen
+}
+
+// AwaitsReview is the one rule for Finished: review the result: a success
+// its agent reported that the owner has not marked complete, on a live
+// finished run or a completed one. It asks nothing of anyone, so it is never
+// NeedsAttention. A paused run, or a subsession (OutcomeHeld), never does.
+func (r *Run) AwaitsReview(paused bool) bool {
+	if paused || r.OutcomeHeld() || r.Review != ReviewReady && r.Review != ReviewLater {
+		return false
+	}
+	return r.Status == RunCompleted || r.Status.Live() && r.Activity == ActivityFinished
+}
+
+// OutcomeHeld reports whether the run's reported outcome is for its parent
+// agent only, never a person: it is an attached subsession. A detached one
+// is a session of its own. Requests a subsession makes of a person are
+// never held.
+func (r *Run) OutcomeHeld() bool {
+	return r.ParentRunID != "" && !r.Detached
 }
 
 // NeedKey identifies the standing the run is in: its status, state and
@@ -319,18 +355,23 @@ type AccountFallback struct {
 	Order []MemberID
 }
 
-// Role is a member's role within the deployment.
+// Role is a member's role on the server. A super admin reaches every
+// workspace; everyone else reaches the workspaces they own or were granted.
 type Role string
 
 const (
 	RoleViewer       Role = "viewer"
 	RoleCollaborator Role = "collaborator"
 	RoleAdmin        Role = "admin"
+	RoleSuperAdmin   Role = "super_admin"
 )
 
 func (r Role) Valid() bool {
-	return r == RoleViewer || r == RoleCollaborator || r == RoleAdmin
+	return r == RoleViewer || r == RoleCollaborator || r == RoleAdmin || r == RoleSuperAdmin
 }
+
+// Admin reports whether r may own and administer workspaces.
+func (r Role) Admin() bool { return r == RoleAdmin || r == RoleSuperAdmin }
 
 // Workspace is a repo checkout, its server-owned environment definition,
 // and the shared context every run against it inherits: runs, costs,
@@ -346,7 +387,26 @@ type Workspace struct {
 	// Origin is the upstream git URL run checkouts push to; "" when the
 	// workspace has none, in which case a checkout keeps the origin its
 	// clone made.
-	Origin    string
+	Origin string
+	// OwnerID is the admin or super admin who owns the workspace and
+	// administers it.
+	OwnerID   MemberID
+	CreatedAt time.Time
+}
+
+// WorkspaceAccess is the workspaces a member owns and was granted.
+type WorkspaceAccess struct {
+	Owned   map[WorkspaceID]bool
+	Granted map[WorkspaceID]bool
+}
+
+// WorkspaceGrant lets a member into a workspace they do not own.
+type WorkspaceGrant struct {
+	WorkspaceID WorkspaceID
+	MemberID    MemberID
+	// GrantedBy is the member who granted it; empty for grants the
+	// upgrade to workspace-scoped access created.
+	GrantedBy MemberID
 	CreatedAt time.Time
 }
 
@@ -480,6 +540,12 @@ func ValidMirrorBranch(branch string) bool {
 	return true
 }
 
+// MirrorAdoptCommand is the CLI step an admin runs to adopt a pending
+// mirror revision after checking it against the upstream.
+func MirrorAdoptCommand(workspace WorkspaceID, generation int64, commit string) string {
+	return fmt.Sprintf("aether workspace mirror adopt --workspace %s --generation %d --commit %s --yes", workspace, generation, commit)
+}
+
 // ValidMirrorSHA accepts empty or a full SHA-1 or SHA-256 object ID.
 func ValidMirrorSHA(sha string) bool {
 	if sha == "" {
@@ -599,6 +665,9 @@ type Member struct {
 	// colorblind-safe palette; overridable.
 	Color string
 	Role  Role
+	// Access is the workspaces the member owns and was granted. GetMember
+	// loads it with the role, so a check sees both as they are now.
+	Access WorkspaceAccess `json:"-"`
 	// GitName and GitEmail are the identity commits made for this member
 	// are authored as. Empty falls back to GitIdentity's defaults.
 	GitName   string
@@ -767,10 +836,13 @@ type Run struct {
 	Harness string
 	Mode    LaunchMode
 	// Model is the agent's model for this run and Effort its effort or
-	// thinking level; empty keeps the agent's default.
-	Model      string
-	Effort     string
-	Permission Permission
+	// thinking level; empty keeps the agent's default. RefusedModel is the
+	// model the run asked for and the agent refused, and ModelError why.
+	Model        string
+	RefusedModel string
+	ModelError   string
+	Effort       string
+	Permission   Permission
 	// ACP is true when the server drives the agent over the Agent Client
 	// Protocol: every LaunchACP run, and a LaunchHeadless run whose agent
 	// serves ACP. Such a run has a session item log.
@@ -782,7 +854,9 @@ type Run struct {
 	Activity RunActivity
 	// StatusSeq increases on every change of status, reason or activity.
 	StatusSeq int64
-	// Branch is aether/run-<slug>-<id>.
+	// Branch is cloudfield/run-<slug>-<id>, or aether/run-<slug>-<id> for
+	// sessions created before the rename and in a workspace with a branch
+	// named cloudfield.
 	Branch string
 	// LastCommit is the most recently published commit on the run branch.
 	LastCommit   string
@@ -794,7 +868,7 @@ type Run struct {
 	// owner and admins, regardless of the workspace's SteerOthers setting.
 	Protected bool
 	// ArchivedAt is when this run was hidden from the board; nil means it
-	// is not archived. Only a Final run can be archived. Archiving does
+	// is not archived. Only an Archivable run can be archived. Archiving does
 	// not schedule deletion.
 	ArchivedAt *time.Time
 	// OutcomeUnseen is true while a run an agent's report finished
@@ -906,16 +980,6 @@ func (r *Run) HomeMember() MemberID {
 	return r.AccountMember()
 }
 
-// AccountShare grants Grantee permission to launch agents with Owner's
-// vendor login: the harness's declared login paths from Owner's home, inside
-// Grantee's own environment. The authenticated grantee remains the run owner
-// and the actor recorded in the timeline.
-type AccountShare struct {
-	Owner     MemberID
-	Grantee   MemberID
-	CreatedAt time.Time
-}
-
 // ServerBusy is what a scheduled self-update waits for. Paused runs do not
 // hold an update back - a frozen container survives a restart - but are still
 // reported so an admin sees why a "running" run is ignored.
@@ -980,6 +1044,15 @@ func RepoDirName(name string) string {
 		return "repo"
 	}
 	return dir
+}
+
+// ExtraWorkspaces are the workspaces of the run's extra repos.
+func (r *Run) ExtraWorkspaces() []WorkspaceID {
+	out := make([]WorkspaceID, 0, len(r.Extras))
+	for _, repo := range r.Extras {
+		out = append(out, repo.WorkspaceID)
+	}
+	return out
 }
 
 func (r *Run) ExtraRepo(workspace WorkspaceID) (RunRepo, bool) {

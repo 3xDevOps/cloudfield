@@ -89,6 +89,7 @@ type session struct {
 	ended              bool
 	stopped            bool
 	lastOut            time.Time
+	lastIn             time.Time
 	paintQuietUntil    time.Time
 	done               chan struct{}
 	title              titleScanner
@@ -104,9 +105,15 @@ type session struct {
 	geometryRevision   uint64
 	changed            chan struct{}
 	development        bool
-	protocolPending    []byte
-	protocolWake       chan struct{}
-	protocolErr        error
+	// quiet is the output position up to which terminal queries are not
+	// answered: a resumed terminal replays output whose queries were.
+	quiet           TerminalSequence
+	protocolPending []byte
+	// answering is set while respond writes replies it took from
+	// protocolPending.
+	answering    bool
+	protocolWake chan struct{}
+	protocolErr  error
 
 	// pendingEcho is the echo the terminal still owes for input the server
 	// wrote to the agent - an injected line, or a member's keystrokes. The
@@ -248,6 +255,15 @@ func (s *session) commitOutputLocked(p []byte) {
 	if len(p) == 0 {
 		return
 	}
+	// A query is answered by the position before the output it is in, so
+	// the output on either side of quiet is applied apart.
+	if s.ring != nil {
+		if at := s.ring.position().Sequence; at < s.quiet && s.quiet-at < TerminalSequence(len(p)) {
+			n := int(s.quiet - at)
+			s.commitOutputLocked(p[:n])
+			p = p[n:]
+		}
+	}
 	if s.screen != nil {
 		s.screen.write(p)
 	}
@@ -263,6 +279,7 @@ func (s *session) commitOutputLocked(p []byte) {
 	for c := range s.clients {
 		c.enqueue(p)
 	}
+	s.answeredLocked()
 }
 
 // commitPendingOutputLocked applies output withheld while a resize RPC was in
@@ -468,6 +485,15 @@ func (s *session) lastOutput() (time.Time, bool) {
 	return s.lastOut, true
 }
 
+func (s *session) lastInput() (time.Time, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		return time.Time{}, false
+	}
+	return s.lastIn, true
+}
+
 func (s *session) addClient(c *client) error {
 	return s.addClientCommitted(context.Background(), c)
 }
@@ -619,6 +645,7 @@ func (s *session) writeClientStdinContext(ctx context.Context, c *client, p []by
 		s.mu.Unlock()
 		return ErrWriteDenied
 	}
+	s.lastIn = time.Now()
 	s.mu.Unlock()
 	return s.writeStdinContextLocked(ctx, p)
 }

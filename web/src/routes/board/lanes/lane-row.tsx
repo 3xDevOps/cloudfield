@@ -1,5 +1,6 @@
 import { memo, type CSSProperties, type ReactNode } from 'react'
 import { ChevronRight, Network } from '@/components/icons'
+import { ProtectedMark } from '@/components/protected-mark'
 import { modeLabel } from '@/components/launch/modes'
 import { AgentGlyph } from '@/components/ui/agent-glyph'
 import { Avatar } from '@/components/ui/avatar'
@@ -11,6 +12,7 @@ import { compactAge, elapsed } from '@/lib/format'
 import { stateLabel, stateTone, stateWords } from '@/lib/status'
 import { cn, focusRingInset } from '@/lib/utils'
 import { xOf, type TimeWindow } from '@/routes/board/lanes/axis'
+import { MailChip } from '@/routes/board/lanes/mail-marks'
 import type { Lane, LaneMetrics, RunLane } from '@/routes/board/lanes/model'
 import { segmentTone, type Segment, type Stretch } from '@/routes/board/lanes/segments'
 import { agentTone } from '@/routes/run/subagent-cards'
@@ -126,14 +128,15 @@ function RunBar({ lane, g, now }: { lane: RunLane; g: LaneGeometry; now: number 
   const needs = live && card.group === 'needs-you'
   const box = span(lane.start, lane.end, g)
   const after = box && lane.outcome ? box.left + box.width + 6 : undefined
+  const tagged = needs && box !== undefined && box.width > 200
   return (
     <>
       <Segments segments={lane.segments} outcome={lane.outcome} g={g} height={g.metrics.bar} className={working ? 'border-r-2 border-state-working' : undefined}>
-        <span className="relative flex h-full min-w-0 items-center gap-1.5 px-2 text-ui-sm font-medium whitespace-nowrap text-text">
+        {box && box.width >= 48 && <span className={cn('relative flex h-full min-w-0 items-center gap-1.5 px-2 text-ui-sm font-medium whitespace-nowrap text-text', tagged && 'pr-24')}>
           <StatusDot tone={stateTone[card.state]} />
-          {working ? <Shimmer text={g.compact ? lane.title : barText(lane)} className="min-w-0 overflow-hidden" /> : <span className="min-w-0 overflow-hidden">{g.compact ? lane.title : barText(lane)}</span>}
-        </span>
-        {needs && box && box.width > 200 && (
+          {working ? <Shimmer text={barText(lane)} className="min-w-0 overflow-hidden text-ellipsis" /> : <span className="min-w-0 overflow-hidden text-ellipsis">{barText(lane)}</span>}
+        </span>}
+        {tagged && (
           <span aria-hidden className="absolute top-1/2 right-1 flex h-4.5 -translate-y-1/2 items-center gap-1 rounded-chip bg-raised px-1.5 text-ui-xs font-medium text-state-needs-you shadow-button">
             <StatusDot tone="needs-you" pulse />
             Needs you
@@ -162,7 +165,7 @@ function Elbow({ x, last }: { x: number; last: boolean }) {
   )
 }
 
-function RunLabel({ lane, agentName, compact, now }: { lane: RunLane; agentName?: string; compact: boolean; now: number }) {
+function RunLabel({ lane, agentName, compact, now, mail }: { lane: RunLane; agentName?: string; compact: boolean; now: number; mail?: string }) {
   const { card } = lane
   const state = card.group === 'needs-you' && !card.needsYou ? 'needs-you' : card.state
   const owner = (
@@ -175,9 +178,16 @@ function RunLabel({ lane, agentName, compact, now }: { lane: RunLane; agentName?
   )
   if (compact) {
     return (
-      <span className="flex items-center gap-1">
-        <StatusDot tone={stateTone[state]} pulse={state === 'working'} />
-        <AgentGlyph agent={card.run.harness} />
+      <span className="flex min-w-0 flex-1 flex-col justify-center">
+        <span className="flex min-w-0 items-center gap-1.5">
+          <StatusDot tone={stateTone[state]} pulse={state === 'working'} />
+          <span className={cn('min-w-0 truncate text-ui leading-4 font-medium', lane.outcome && 'text-muted')}>{lane.title}</span>
+          {card.run.protected && <ProtectedMark />}
+        </span>
+        <span className="flex min-w-0 items-center gap-1.5 text-ui-sm text-muted">
+          <AgentGlyph agent={card.run.harness} />
+          <span className="tabular-nums">{compactAge(card.run.created_at, now)}</span>
+        </span>
       </span>
     )
   }
@@ -187,19 +197,24 @@ function RunLabel({ lane, agentName, compact, now }: { lane: RunLane; agentName?
         <StatusDot tone={stateTone[state]} />
         {owner}
         <span className={cn('min-w-0 truncate text-ui leading-4 font-medium', lane.outcome && 'text-muted')}>{lane.title}</span>
+        {card.run.protected && <ProtectedMark />}
         {card.group === 'needs-you' && <Badge tone="needs-you" className="h-4 text-ui-xs">Needs you</Badge>}
+        {card.group === 'review' && <Badge tone="review" className="h-4 text-ui-xs">{stateLabel.ready}</Badge>}
       </span>
       <span className="flex min-w-0 items-center gap-1.5 text-ui-sm text-muted">
         <AgentGlyph agent={card.run.harness} />
         <span className="min-w-0 truncate">{`${agentName ?? card.run.harness} · ${modeLabel(card.run.mode)}`}</span>
         {card.workspaceName && <span className="min-w-0 truncate">· {card.workspaceName}</span>}
-        <span className="ml-auto shrink-0 tabular-nums">{compactAge(card.run.created_at, now)}</span>
+        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+          {mail && <MailChip text={mail} />}
+          <span className="tabular-nums">{compactAge(card.run.created_at, now)}</span>
+        </span>
       </span>
     </span>
   )
 }
 
-export interface LaneRowProps {
+interface LaneRowProps {
   lane: Lane
   top: number
   height: number
@@ -212,12 +227,14 @@ export interface LaneRowProps {
   selected: boolean
   agentName?: string
   widen?: string
+  /** The focused lane's mail with this lane, as `MailChip` text. */
+  mail?: string
   onPick: (lane: Lane, x: number | undefined, chevron: boolean) => void
   onWiden: () => void
   onRetry: (runID: string) => void
 }
 
-export const LaneRow = memo(function LaneRow({ lane, top, height, g, now, tree, name, active, selected, agentName, widen, onPick, onWiden, onRetry }: LaneRowProps) {
+export const LaneRow = memo(function LaneRow({ lane, top, height, g, now, tree, name, active, selected, agentName, widen, mail, onPick, onWiden, onRetry }: LaneRowProps) {
   const nested = lane.kind === 'agent' || lane.kind === 'note' || (lane.kind === 'run' && lane.level > 2)
   const pad = g.compact ? (nested ? 12 : 8) : 12 + Math.max(0, lane.level - 2) * indent
   let label: ReactNode
@@ -227,7 +244,7 @@ export const LaneRow = memo(function LaneRow({ lane, top, height, g, now, tree, 
       const before = lane.before > 0 && (
         <>
           <span className="min-w-0 truncate">{g.compact && '· '}{lane.before} ended before this window</span>
-          {widen && <Button variant="link" size="sm" tabIndex={-1} className="shrink-0" onClick={(event) => { event.stopPropagation(); onWiden() }}>Show {widen}</Button>}
+          {widen && <Button variant="link" size="sm" tabIndex={-1} className="min-h-6 shrink-0" onClick={(event) => { event.stopPropagation(); onWiden() }}>Show {widen}</Button>}
         </>
       )
       label = (
@@ -274,7 +291,7 @@ export const LaneRow = memo(function LaneRow({ lane, top, height, g, now, tree, 
       label = (
         <>
           {lane.agentsOpen && <Chevron open />}
-          <RunLabel lane={lane} agentName={agentName} compact={g.compact} now={now} />
+          <RunLabel lane={lane} agentName={agentName} compact={g.compact} now={now} mail={mail} />
         </>
       )
       track = <RunBar lane={lane} g={g} now={now} />
@@ -319,7 +336,8 @@ export const LaneRow = memo(function LaneRow({ lane, top, height, g, now, tree, 
       aria-label={name}
       className={cn(
         focusRingInset,
-        'absolute inset-x-0 flex cursor-default items-stretch outline-none',
+        'absolute inset-x-0 flex items-stretch outline-none',
+        lane.kind === 'note' && !lane.retry ? 'cursor-default' : 'cursor-pointer',
         lane.kind === 'section' && 'border-t border-seam first:border-t-0',
       )}
       style={{ top, height }}
@@ -332,9 +350,10 @@ export const LaneRow = memo(function LaneRow({ lane, top, height, g, now, tree, 
       <div className="relative flex min-w-0 shrink-0 items-center gap-1 pr-2" style={{ width: header ? g.labelWidth + g.width : g.labelWidth, paddingLeft: pad }}>
         {nested && <Elbow x={pad - 10} last={tree.posinset === tree.setsize} />}
         {label}
+        {mail && !g.compact && lane.kind !== 'run' && <MailChip text={mail} />}
       </div>
       {!header && (
-        <div data-lane-track className="relative shrink-0" style={{ width: g.width }}>
+        <div data-lane-track className="relative shrink-0 select-none" style={{ width: g.width }}>
           {track}
         </div>
       )}

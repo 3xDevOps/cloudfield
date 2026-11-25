@@ -3,8 +3,10 @@
 An **edge** is a relay that lets members reach a server through a public host
 name with a GitHub sign-in. The server and the client both dial out to it, so
 a laptop reaches a server with no Tailscale, no open router port and no SSH
-key to copy. The project runs one at `https://edge.onaether.dev`, and
-`aether-edge` runs your own.
+key to copy. The project runs one at `https://edge.cloudfield.ai`, and
+`aether-edge` runs your own. Servers set up before that address existed use
+the same edge at `https://edge.onaether.dev`, which keeps working
+([Moving to another address of the edge](#moving-to-another-address-of-the-edge)).
 
 - [Using an edge](#using-an-edge) is for members and server administrators.
 - [Running your own edge](#running-your-own-edge) is for operators.
@@ -26,7 +28,7 @@ flowchart LR
 The edge splices the two outbound connections. SSH runs end to end between
 client and server, so the edge cannot read it. The edge says who signed in; the
 server alone decides what that person may do. Tailnet identities, member SSH
-keys, invite codes and `aether gui` keep working beside the edge.
+keys, invite codes and `cloudfield gui` keep working beside the edge.
 
 | Term | Meaning |
 | --- | --- |
@@ -36,24 +38,26 @@ keys, invite codes and `aether gui` keep working beside the edge.
 | Owner | The account that claimed the server at the edge |
 | Invitation | A GitHub account that may join with a role. Its join link carries a secret the server checks and the edge never sees |
 
-On the project's edge, `https://auth.onaether.dev` serves sign-in and the
-Devices, Servers and Account pages, and `https://edge.onaether.dev` is the relay,
-the name you configure clients and servers with. A path asked for on the wrong
-host gets `421 Misdirected Request`.
+On the project's edge, `https://auth.cloudfield.ai` serves sign-in and the
+Devices, Servers and Account pages, and `https://edge.cloudfield.ai` is the relay,
+the name you configure clients and servers with. It serves the same accounts
+and servers at its first pair, `https://auth.onaether.dev` and
+`https://edge.onaether.dev`. A path asked for on the wrong host gets
+`421 Misdirected Request`.
 
 ### Turning it on
 
-The edge is off until you turn it on. `aether-server setup` turns on
-`https://edge.onaether.dev` when the host has no Tailscale or you turn tailnet
+The edge is off until you turn it on. `cloudfield-server setup` turns on
+`https://edge.cloudfield.ai` when the host has no Tailscale or you turn tailnet
 sign-in off, and prints what the edge can see. With tailnet sign-in on, it asks
 `Turn on the edge too`, defaulting to no. Otherwise use
-`aether-server install --edge-url <url> --edge-access <policy>` (it refuses
+`cloudfield-server install --edge-url <url> --edge-access <policy>` (it refuses
 `--edge-url` without `--edge-access`), or the config keys:
 
 ```sh
-sudo aether-server config set edge-url https://edge.onaether.dev
-sudo aether-server config set edge-access approved-devices
-sudo aether-server config set edge-url ""     # off
+sudo cloudfield-server config set edge-url https://edge.cloudfield.ai
+sudo cloudfield-server config set edge-access approved-devices
+sudo cloudfield-server config set edge-url ""     # off
 sudo systemctl restart aether-server          # apply the change
 ```
 
@@ -62,16 +66,147 @@ from `/etc/aether/aether-server.env`.
 
 The server pins the edge's signing key on first connection, so a new host name
 for the same edge keeps the pin and the owner. An edge with another key is
-refused with `edge key changed` until you run `sudo aether-server edge trust`.
+refused with `edge key changed` until you run `sudo cloudfield-server edge trust`.
 To move to another edge:
 
 ```sh
-sudo aether-server edge leave                 # unenroll at the old edge, forget its owner
-sudo aether-server config set edge-url https://<edge-host>
-sudo aether-server edge trust                 # compare the key with the one the edge's operator publishes, type yes
+sudo cloudfield-server edge leave                 # unenroll at the old edge, forget its owner
+sudo cloudfield-server config set edge-url https://<edge-host>
+sudo cloudfield-server edge trust                 # compare the key with the one the edge's operator publishes, type yes
 sudo systemctl restart aether-server
-sudo aether-server edge claim-code --admin <member id>   # or, from an admin's linked terminal: aether edge connect
+sudo cloudfield-server edge claim-code --admin <member id>   # or, from a super admin's linked terminal: cloudfield edge connect
 ```
+
+### Moving to another address of the edge
+
+The project's edge answers at `https://edge.cloudfield.ai`, which new setups
+use, and at `https://edge.onaether.dev`. Updates never change `edge-url` in
+`/etc/aether/server.conf`, and `cloudfield-server setup` keeps it, so a server set
+up at `https://edge.onaether.dev` stays there, with its links, connectors and
+join links. To move it, at a quiet time:
+
+1. Check where the server reads its edge from. `edge-url` comes only from
+   the config file or a flag on `ExecStart`:
+
+   ```sh
+   systemctl cat aether-server | grep ExecStart
+   grep edge-url /etc/aether/server.conf
+   sudo cloudfield-server edge status
+   ```
+
+   Expect `ExecStart=/usr/local/bin/aether-server serve --config
+   /etc/aether/server.conf` with no `--edge-url`, `edge-url =
+   https://edge.onaether.dev`, and a status that exits 0 with
+   `edge         https://edge.onaether.dev`, `connection   connected since
+   <time>; the edge last answered <n>s ago` and `edge key     SHA256:<fingerprint>`.
+   `curl -fsS -H 'Aether-Edge-Version: 6' https://edge.cloudfield.ai/v1/edge`
+   shows the same fingerprint.
+2. Move. The server keeps running:
+
+   ```sh
+   sudo cloudfield-server edge move https://edge.cloudfield.ai
+   ```
+
+   ```
+   enrolled at https://edge.cloudfield.ai, an address of the same edge (edge key SHA256:<fingerprint>, still pinned); the edge announces https://edge.onaether.dev too, so links and connectors made there keep working
+   /etc/aether/server.conf: edge-url = https://edge.cloudfield.ai (was https://edge.onaether.dev)
+   apply it with:
+     sudo systemctl restart aether-server
+   to move back:
+     sudo aether-server edge move https://edge.onaether.dev
+   ```
+
+   A refusal prints one line from the table below, exits 1 and writes
+   nothing. Each of the two enrollments replaces the running server's
+   control connection at the edge; the server dials again within 1 to 3
+   seconds. Relayed connections already open stay open; a new one in that
+   gap can fail with `server is not connected to the edge`. A status run in
+   those seconds can say `disconnected since <time>: ... reason = "replaced by
+   a newer connection of this server"`.
+3. Apply it. The restart ends every relayed connection, and new ones fail
+   until the server is back:
+
+   ```sh
+   sudo systemctl restart aether-server
+   ```
+
+4. Check with `sudo cloudfield-server edge status`: it exits 0, prints
+   `edge         https://edge.cloudfield.ai`, the connector URLs under
+   `https://edge.cloudfield.ai/mcp`, the same `edge key` and `owner`, and
+   `connection   connected since <time>; ...`, with no `running` line.
+
+To move back, run the `to move back` line, then restart.
+
+What each person redoes afterwards:
+
+- Owner: nothing.
+- Member with a CLI link: nothing.
+- Member on the Android app: nothing.
+- Member on the desktop app: nothing.
+- Someone holding an unused join link: nothing; it works until it expires.
+- Claude or ChatGPT connector user: nothing. The directory listings stay at
+  `https://edge.onaether.dev/mcp` on purpose.
+
+Grants name the address the server is enrolled at and are checked whichever
+address the client used, and connector tokens are checked against the address
+the request came in on, which the edge still announces. Device tokens are
+stored per address, though, and join links, claim codes and connector URLs
+the server issues after the move name the new address. A member whose
+machine holds a token only for the old address gets `not signed in to
+edge.cloudfield.ai; run: aether login --edge https://edge.cloudfield.ai` from
+such a link, and runs that once.
+
+`edge move <address>` works for any edge that serves
+[more than one address pair](#more-than-one-address-pair). It enrolls at the
+current address, then at the new one, and writes `edge-url` only when every
+check passes; otherwise it prints the refusal and writes nothing on the
+server. Each enrollment replaces the running server's control connection at
+the edge, which the server dials again within seconds, and states the
+server's `edge-access`, so the edge's record of the server stays as it was.
+
+| Check | Refusal |
+| --- | --- |
+| The address is another one | `edge-url already is <url>` |
+| The server has pinned its edge's key | `no edge key is pinned for <url> yet, so nothing shows that <address> is the same edge; start the server, let it connect once, and run edge move again` |
+| The edge speaks edge protocol 6 or later | `<url> speaks edge protocol <n>; a server moved to <address> would accept connector tokens only for that address, so connectors registered at <url> would stop working. Moving needs edge protocol 6 or later: the edge's operator upgrades it` |
+| The edge announces both addresses | `the edge at <url> announces the relay addresses <list>; moving needs both <url> and <address> among them: the edge's operator adds the address first` |
+| The new address presents the pinned key | `<address> presents edge key <fingerprint>, but this server pinned <fingerprint> for its edge at <url>, which announced it: another edge answers there. edge move only changes the address of one edge; changing edges is in docs/edge.md#turning-it-on` |
+
+No flag skips a check: below protocol 6, or without the old address announced,
+a moved server accepts connector tokens only for its new address, and every
+connector registered at the old one stops working.
+
+An edge key is public, so the key check catches a wrong address, not an
+impostor that copies the key. The new address's TLS certificate is what
+authenticates it, as for the address the server first enrolled at. After the
+move the pin still refuses any other key there until an operator runs
+`edge trust`.
+
+After the move:
+
+- The edge key stays pinned and the owner stays: the server keeps both per edge
+  key, not per address.
+- `cloudfield-server edge status` names the new address and the connector URLs at
+  it. Until the restart it also prints `running      the running server is at
+  <old address>; restart to apply edge-url: sudo systemctl restart aether-server`.
+- Connectors registered at the old address keep working while the edge
+  announces it. The Claude and ChatGPT listings stay at
+  `https://edge.onaether.dev/mcp`.
+- CLI and device links, join links and claim codes made at the old address keep
+  working: the edge relays a client at either address to a server enrolled at
+  either.
+- A server binary put back to a release below edge protocol 6 enrolls at the
+  new address, but accepts connector tokens only for it, so connectors
+  registered at the old address fail until the server is updated or moved back.
+
+A client keeps the address it already uses, before and after a server moves.
+Without `--edge`, `cloudfield login`, `logout`, `servers`, `link --claim` and the
+dashboard's edge verbs use the one edge the machine is signed in to; with
+several, the project's edge at an address it holds a token for, the new one
+first; with none, the project's edge at an address a saved link names, the new
+one first; else `https://edge.cloudfield.ai`. So a client set up at
+`https://edge.onaether.dev` signs in there again after updating, and its links
+keep finding their token.
 
 ### Server id and claiming
 
@@ -81,7 +216,7 @@ new host key is a new server that must be claimed and linked again.
 Until an account claims it, the edge relays nothing for a server except claim
 connections. Setup ends with a claim link,
 `aether://claim?edge=...&server=<server id>#<secret>`, and the claim code
-`<server id>-<secret>`, valid for 30 minutes and 5 attempts. `sudo aether-server
+`<server id>-<secret>`, valid for 30 minutes and 5 attempts. `sudo cloudfield-server
 edge claim-code` prints a new one, with its expiry as `valid for 30 min, until
 2026-10-25 15:04 UTC`, and says when it replaces an earlier code that still
 worked, which then stops working. It is refused while the server has an owner,
@@ -90,41 +225,42 @@ and without `--admin` while it has members.
 1. Start the server: `sudo systemctl daemon-reload && sudo systemctl enable
    --now aether-server`.
 2. On your computer, open the claim link (the desktop app's Connect step also
-   accepts it pasted), or run `aether link --claim '<claim link>'`. The claim
-   link names its edge, so `--edge` is not needed; `aether link --claim <code>`
+   accepts it pasted), or run `cloudfield link --claim '<claim link>'` (`aether`
+   on Windows, where `cloudfield.cmd` splits a link at its `&`). The claim
+   link names its edge, so `--edge` is not needed; `cloudfield link --claim <code>`
    takes the bare code and claims through `--edge`, else the one edge you are
    signed in to.
 
-The claiming account becomes the owner and an admin, and its device is approved
+The claiming account becomes the owner and the super admin, and its device is approved
 under either policy, because the code came from the machine's console. A claim
 from a device signed in as another account is refused with `this device claims
 as github account <subject>, but the edge signed the connection in as github
 account <login>; the claim was not attempted`.
 
-On a server that already has members (its first admin joined with an SSH key or
-over the tailnet), an admin claims it under **Settings → Remote access → Connect
+On a server that already has members (its first super admin joined with an SSH key or
+over the tailnet), a super admin claims it under **Settings → Remote access → Connect
 my GitHub account**, or from a linked terminal:
 
 ```sh
-aether login --edge <edge url>   # if this machine is not signed in there
-aether edge connect
+cloudfield login --edge <edge url>   # if this machine is not signed in there
+cloudfield edge connect
 ```
 
 This binds your GitHub account to your own member, changes no role, and adds the
 edge to the current link. If the server already has an owner it prints `this
 server is already connected to <edge url> as github <login>` and changes
 nothing. Any other claim on a server with members is refused with `server is
-already claimed`. `aether link --claim` adds `; link it with: aether link
+already claimed`. `cloudfield link --claim` adds `; link it with: aether link
 <server id>`, which is also the answer when you run a claim again after it
-succeeded. Until the edge has recorded the server, `aether invite
---github|--email`, the Invite dialog and `aether member link` are refused with
+succeeded. Until the edge has recorded the server, `cloudfield invite
+--github|--email`, the Invite dialog and `cloudfield member link` are refused with
 `the edge has not recorded this server yet ... connect your GitHub account
-first`. If the edge cannot record a claim, `sudo aether-server edge status`
+first`. If the edge cannot record a claim, `sudo cloudfield-server edge status`
 shows `ownership report refused: <reason>`.
 
 ### Checking the connection
 
-`sudo aether-server edge status` prints the edge, policy, server id, the
+`sudo cloudfield-server edge status` prints the edge, policy, server id, the
 [connector](#mcp-connectors) URL (the universal one while the server is connected
 at edge protocol 3), the pinned edge key, the owner and the
 connection. `connection` reads `connected since <time>`, `stale: ...` when the
@@ -139,7 +275,7 @@ when the edge is on but the server is not connected (never connected, stale or
 disconnected), so a script can wait on it:
 
 ```sh
-timeout 300 sh -c 'until sudo aether-server edge status >/dev/null; do sleep 5; done'
+timeout 300 sh -c 'until sudo cloudfield-server edge status >/dev/null; do sleep 5; done'
 ```
 
 It exits 1 on any other error, such as the edge being off or the state being
@@ -147,7 +283,7 @@ unreadable because it ran without `sudo`:
 
 ```
 the edge is off: edge-url is empty in /etc/aether/server.conf; turn it on with:
-  sudo aether-server config set edge-url https://edge.onaether.dev
+  sudo aether-server config set edge-url https://edge.cloudfield.ai
 ```
 
 When the edge's key changed, the server keeps retrying and logs this. Run `edge
@@ -158,30 +294,31 @@ edge key changed: pinned SHA256:<old>, edge presents SHA256:<new>; if the edge's
 ```
 
 The server has no owner under a key it was not claimed with, so it reports itself
-ownerless as it reconnects. An admin's **Connect my GitHub account**, or `edge
+ownerless as it reconnects. A super admin's **Connect my GitHub account**, or `edge
 claim-code --admin <member id>`, gives it an owner again.
 
 ### Signing in and linking
 
 ```sh
-aether login              # prints an address and a code; open the address, sign in with GitHub, enter the code
-aether servers            # servers your account reaches
-aether logout             # revokes this device's token at the edge and deletes it here
+cloudfield login              # prints an address and a code; open the address, sign in with GitHub, enter the code
+cloudfield servers            # servers your account reaches
+cloudfield logout             # revokes this device's token at the edge and deletes it here
 ```
 
 Confirm only a code you started. `--edge <url>` takes the relay origin; without
-it commands use the one edge this machine is signed in to, else
-`https://edge.onaether.dev`. The device key `edge-device-key` and the token file
+it commands use the one edge this machine is signed in to, else the project's
+edge at the address this machine already uses, else `https://edge.cloudfield.ai`
+([Moving to another address of the edge](#moving-to-another-address-of-the-edge)). The device key `edge-device-key` and the token file
 `edge-tokens.json` live in the client's config directory with mode 0600.
-`aether servers` shows the access policy the edge reports; the server enforces
+`cloudfield servers` shows the access policy the edge reports; the server enforces
 its own.
 
-`aether login --json` is for a script or a coding agent that relays the code to
+`cloudfield login --json` is for a script or a coding agent that relays the code to
 you: it opens no browser, prints one JSON line, then waits for you to confirm
 and prints a second:
 
 ```
-{"state":"pending","edge":"https://edge.onaether.dev","signin_origin":"https://edge.onaether.dev","user_code":"<code>","verification_uri":"https://edge.onaether.dev/device","expires_at":"<RFC 3339 time>"}
+{"state":"pending","edge":"https://edge.cloudfield.ai","signin_origin":"https://auth.cloudfield.ai","user_code":"<code>","verification_uri":"https://auth.cloudfield.ai/device","expires_at":"<RFC 3339 time>"}
 {"state":"signed_in",...,"account":{...},"device":{"id":"<device id>","label":"<label>","key":"<public key>"}}
 ```
 
@@ -195,10 +332,10 @@ safest first:
 
 | Command | Where the id comes from | Who you trust |
 | --- | --- | --- |
-| `aether link <join link>` | The invitation link an admin sent | The admin and the channel they used |
-| `aether link --claim <code>` | The claim link printed on the server's console | Whoever handed it to you |
-| `aether link <server id>` | The admin, from Settings → Remote access or `sudo aether-server edge status` | The admin and the channel. The edge cannot substitute another server |
-| `aether link --from-edge <server id>` | `aether servers`, which the edge supplies | The edge. One that lists a false id can send your first link to another server |
+| `cloudfield link <join link>` | The invitation link an admin sent | The admin and the channel they used |
+| `cloudfield link --claim <code>` | The claim link printed on the server's console | Whoever handed it to you |
+| `cloudfield link <server id>` | The admin, from Settings → Remote access or `sudo cloudfield-server edge status` | The admin and the channel. The edge cannot substitute another server |
+| `cloudfield link --from-edge <server id>` | `cloudfield servers`, which the edge supplies | The edge. One that lists a false id can send your first link to another server |
 
 `--from-edge` shows the server's name, id, host key and policy, then asks `link
 and pin this server? [y/N]`. Compare the host key with `sudo ssh-keygen -lf
@@ -207,8 +344,8 @@ and pin this server? [y/N]`. Compare the host key with `sudo ssh-keygen -lf
 falls back to the edge. The direct path admits approved devices only, so under
 `account` a new device works through the edge but not directly until approved.
 
-`aether link` points the repository's `aether` remote at
-`<server id>.edge.aether.invalid` and sets `core.sshCommand` to `aether
+`cloudfield link` points the repository's `aether` remote at
+`<server id>.edge.aether.invalid` and sets `core.sshCommand` to `cloudfield
 edge-ssh`, so `git push aether` goes through the edge. If the repository already
 sets a different `core.sshCommand`, it prints the line to add instead.
 
@@ -222,28 +359,28 @@ or on the server:
   sudo aether-server device review
 ```
 
-If the device would be the server's only admin and that admin has no approved
+If the device would be the server's only super admin and that super admin has no approved
 device, the refusal carries an approval code for `sudo aether-server device
 approve <code>` instead.
 
 ### Members, invitations and devices
 
 Invitations, device approval and removing access are in
-[teams.md](teams.md#through-an-edge). `aether member identities <id>` lists the
+[teams.md](teams.md#through-an-edge). `cloudfield member identities <id>` lists the
 GitHub accounts bound to a member.
 
 #### Join page
 
 An invitation's link is `https://<relay host>/join/<server id>/<invitation
 id>#<secret>`. Opening it shows a page that opens the desktop app (**Open in
-Aether**) and offers the link to **Copy**, or run `aether link <link>`. The
+Cloudfield**) and offers the link to **Copy**, or run `aether link <link>`. The
 secret is the link's fragment, which a browser never sends, so no request to the
 edge carries it. There is no claim page, so no claim secret passes through the
 edge.
 
 ### Access policies
 
-Each server chooses its policy and enforces it itself. `aether-server setup`
+Each server chooses its policy and enforces it itself. `cloudfield-server setup`
 asks `Who may reach this server through the edge?`: `1` is `account`, `2` is
 `approved-devices`.
 
@@ -268,8 +405,8 @@ administrator approves.
 Only on the server's host. No dashboard action or client command changes it.
 
 ```sh
-sudo aether-server config set edge-access approved-devices
-sudo aether-server device review     # before restarting: see what a switch affects
+sudo cloudfield-server config set edge-access approved-devices
+sudo cloudfield-server device review     # before restarting: see what a switch affects
 sudo systemctl restart aether-server
 ```
 
@@ -285,7 +422,7 @@ then lists the member SSH keys and tailnet logins that reach the server whatever
 
 | An attacker with | `account` | `approved-devices` |
 | --- | --- | --- |
-| A member's GitHub account | Signs in and lists the member's servers. Reaches a workspace with the member's role. If the member is an admin, can invite accounts, change roles and transfer ownership, but not approve a device | Signs in and lists servers. The new device is pending and reaches nothing |
+| A member's GitHub account | Signs in and lists the member's servers. Reaches a workspace with the member's role. If the member is a super admin, can invite accounts, change roles and transfer ownership, but not approve a device. An admin's account can invite only into the workspaces that admin owns | Signs in and lists servers. The new device is pending and reaches nothing |
 | That account plus the join link sent to it | Completes the join with the invited role | A pending device that waits for an admin's click |
 | That account without the join link | Refused: `<account> is invited to this server; open the invitation link the admin sent, or run: aether link <link>` | The same |
 | A compromised edge or its signing key | Forges a grant for any account and reaches the workspace of every `account` server as any member | Forged grants yield pending devices. It cannot admit one |
@@ -306,9 +443,9 @@ is the exception to end to end encryption, under both policies.
 
 | Action | Relayed connections | Direct connections with the device key |
 | --- | --- | --- |
-| `aether member remove <id>`, `aether device revoke <id>` | Closed at once | Closed at once |
-| Revoking in `sudo aether-server device review` | Closed within 3 seconds | The same |
-| `aether logout`, or revoking on the edge's Devices page | Closed at once | Stay open, and new ones are admitted: the device is still approved on the server |
+| `cloudfield member remove <id>`, `cloudfield device revoke <id>` | Closed at once | Closed at once |
+| Revoking in `sudo cloudfield-server device review` | Closed within 3 seconds | The same |
+| `cloudfield logout`, or revoking on the edge's Devices page | Closed at once | Stay open, and new ones are admitted: the device is still approved on the server |
 | Deleting the account ([Deleting an account](#deleting-an-account)) | Closed at once | Closed: each server removes the account's edge devices (when it next connects to the edge, if it is offline) |
 | `aether-edge accounts block` or `delete` by the edge's operator | Stay open until they end or the edge restarts | `delete` reaches each server at its next enrollment |
 
@@ -316,7 +453,7 @@ A revocation made on a server works without the edge. To end a device
 completely, revoke it on both the edge and the server. A device token never
 expires. A sign-in code lasts 10 minutes, an edge session 30 days after last use,
 an invitation 7 days and a claim code 30 minutes. If the edge cannot be reached,
-`aether logout` keeps the token so you can retry. It never deletes the device key
+`cloudfield logout` keeps the token so you can retry. It never deletes the device key
 or a link. With the token revoked, a link fails through the edge with `device
 token revoked`, and its `--addr` path still works with the approved device key.
 SSH keys and tailnet identities are unaffected.
@@ -325,14 +462,14 @@ SSH keys and tailnet identities are unaffected.
 
 - Servers keep running and reconnect on their own. Running work is untouched.
 - Relayed connections drop. Links with `--addr`, tailnet members, member SSH keys,
-  invite codes, `aether gui` and the tailnet dashboard work as before.
+  invite codes, `cloudfield gui` and the tailnet dashboard work as before.
 - Every revocation and approval made on a server works.
-- `aether login`, `aether servers`, `aether logout` and account deletion fail with
+- `cloudfield login`, `cloudfield servers`, `cloudfield logout` and account deletion fail with
   the edge's error.
 
 A server reinstalled with a new data directory has a new host key and so a new
 id. When the edge has no live registration for the linked id but sees other
-servers of your account online, it lists them, and `aether link --from-edge <id>`
+servers of your account online, it lists them, and `cloudfield link --from-edge <id>`
 links the new one.
 
 ### Recovering a GitHub account
@@ -341,15 +478,15 @@ Recovering a GitHub account ends the attacker's use of it for new sign-ins and
 nothing else. Devices the attacker signed in keep their tokens, which do not
 expire, and stay on every server until revoked.
 
-1. Sign in on the edge's Devices page (`https://auth.onaether.dev/devices` on the
+1. Sign in on the edge's Devices page (`https://auth.cloudfield.ai/devices` on the
    project's edge) and revoke every device you do not recognize.
-2. On each server, run `aether device list` and `aether device revoke
-   <device-id>` for each unknown device. On the machine, `sudo aether-server
+2. On each server, run `cloudfield device list` and `cloudfield device revoke
+   <device-id>` for each unknown device. On the machine, `sudo cloudfield-server
    device review` shows each device with its account and first-seen time.
-3. Under `account`, if the account was an admin's, check what an admin could have
-   done: `aether member list`, `aether invite list`, and the SSH keys and tailnet
-   logins `device review` lists. Revoke with `aether invite revoke <id>` and
-   `aether member remove <id>`. An invite code minted by an approved device is a
+3. Under `account`, if the account was an admin's or super admin's, check what
+   they could have done: `cloudfield member list`, `cloudfield invite list`, and the SSH keys and tailnet
+   logins `device review` lists. Revoke with `cloudfield invite revoke <id>` and
+   `cloudfield member remove <id>`. An invite code minted by an approved device is a
    file in the server's invites directory until redeemed or expired, and no
    command lists it.
 4. If the account was linked to a member while someone else held it, remove the
@@ -358,8 +495,8 @@ expire, and stay on every server until revoked.
    keys and tailnet identity stay:
 
    ```sh
-   aether member identities <member-id>
-   aether member unlink <member-id> github:<user id>
+   cloudfield member identities <member-id>
+   cloudfield member unlink <member-id> github:<user id>
    ```
 
 Under `approved-devices` the attacker's devices are pending and had no access.
@@ -367,43 +504,43 @@ Revoke them anyway so nobody approves one by mistake.
 
 ### Console recovery
 
-An admin who reached the server only through the edge and lost that account is
-restored on the machine. The server must have no owner, as after the owner
+An admin or super admin who reached the server only through the edge and lost that
+account is restored on the machine. The server must have no owner, as after the owner
 deletes their account:
 
 ```sh
-sudo aether-server edge claim-code --admin <member id>
+sudo cloudfield-server edge claim-code --admin <member id>
 ```
 
-This prints a claim link bound to that admin. The admin opens it signed in with
-the account they now use, or runs `aether link --claim <code>`. The server binds
+This prints a claim link bound to that member. They open it signed in with
+the account they now use, or runs `cloudfield link --claim <code>`. The server binds
 the account to that member, approves the device and becomes owned by that
 account. It creates no member and raises no role: a member who is not an admin is
 refused (`is collaborator, not an admin; the claim was refused`), as is an account
-bound to another member. Find the member id with `aether member list`.
+bound to another member. Find the member id with `cloudfield member list`.
 
 ### Ownership and deleting an account
 
-`aether member transfer <member-id>` hands ownership at the edge to another admin
-with a linked GitHub account. It fails with `ownership report refused: <reason>`
+`cloudfield member transfer <member-id>` hands ownership at the edge to an admin or super
+admin with a linked GitHub account. Only a super admin can run it. It fails with `ownership report refused: <reason>`
 when the edge refuses or does not answer within 10 seconds, and the server keeps
 its previous owner. It is refused while the server is not connected to the edge
 or has no owner, or when the target has two linked accounts (remove one with
-`aether member unlink`). A transfer never creates an admin or changes a role.
+`cloudfield member unlink`). A transfer never creates a super admin or changes a role.
 
 When the owner's identity leaves the server (the member was removed or the account
 deleted), the server is **ownerless**. It stays enrolled and keeps relaying for
-its members. Give it an owner with **Connect my GitHub account**, `aether edge
+its members. Give it an owner with **Connect my GitHub account**, `cloudfield edge
 connect` or [Console recovery](#console-recovery).
 
 #### Deleting an account
 
-Only the Account page deletes an account (`https://auth.onaether.dev/account` on
+Only the Account page deletes an account (`https://auth.cloudfield.ai/account` on
 the project's edge). It lists the servers the account owns and belongs to, and
 needs a GitHub sign-in in this browser from the last 5 minutes plus the account's
 login typed back. Otherwise it is refused with `deleting an account needs a
 sign-in in this browser from the last 5m0s: sign in again at <url>, then delete it
-within 5m0s`. `aether logout --delete-account` lists the same servers and where to
+within 5m0s`. `cloudfield logout --delete-account` lists the same servers and where to
 delete.
 
 Transfer ownership of each server the account owns first. Deleting ends the
@@ -412,16 +549,16 @@ its edge devices (when it next connects, if it is offline). No server loses a
 member, role or data. An SSH key or tailnet identity of the same person keeps
 working until an admin removes it, and invitations to the login or email stay
 until revoked. Signing in again creates a new account that no server knows: link
-it with `aether member link`, or an admin invites it, which creates a new member.
-Before deleting the only way an admin reaches a server, make sure another admin
-exists or that the admin also has an SSH key or tailnet identity there.
+it with `cloudfield member link`, or an admin invites it, which creates a new member.
+Before deleting the only way a super admin reaches a server, make sure another super admin
+exists or that they also have an SSH key or tailnet identity there.
 Otherwise only the machine's administrator can restore them
 ([Console recovery](#console-recovery)).
 
 ### The dashboard
 
 The edge serves no dashboard. A dashboard that reaches a server through an edge
-is `aether gui` on a computer, or the [Android app](install.md#android-app) in
+is `cloudfield gui` on a computer, or the [Android app](install.md#android-app) in
 Edge mode ([local-gateway.md](local-gateway.md)). A phone without that mode
 reaches a dashboard over a tailnet
 ([networking.md](networking.md#the-dashboard)).
@@ -433,7 +570,7 @@ sessions as a member ([connectors.md](connectors.md)). The edge forwards it at t
 URLs, and the server authenticates every request:
 
 - `https://<relay host>/mcp`, the universal URL every server on the edge
-  shares. `aether mcp` and `sudo aether-server edge status` print it once the
+  shares. `cloudfield mcp` and `sudo cloudfield-server edge status` print it once the
   server and the edge both speak edge protocol 3 or later.
 - `https://<relay host>/mcp/<server id>`, the server's own URL. Connectors
   added there keep working.
@@ -527,12 +664,12 @@ malformed ones.
 
 The server decides the rest. It takes the assertion only under
 `edge-access account`, with `edge-reviewer` on (off by default; set it on
-the server's host with `sudo aether-server config set edge-reviewer true`
+the server's host with `sudo cloudfield-server config set edge-reviewer true`
 and restart), and once an admin bound the login to a member who is no admin
-with `aether member link --reviewer <login> <member-id>`. Otherwise the
+with `cloudfield member link --reviewer <login> <member-id>`. Otherwise the
 consent page refuses with the reason; under `approved-devices` it asks for a
 pairing code as for anyone. A connector the reviewer authorized acts as that
-member, and every call checks again: `aether member unlink <member-id>
+member, and every call checks again: `cloudfield member unlink <member-id>
 reviewer:<login>` deletes the connectors it authorized, so binding the
 login again does not revive them; turning `edge-reviewer` off or making the
 member an admin cuts them off at their next call. A new password, written
@@ -555,7 +692,16 @@ The edge answers `404 unknown server`, `503 server is not connected to the edge`
 (<id>) runs aether-server <version>, which has no MCP endpoint; upgrade it: sudo
 aether-server update`, `403 this server does not serve MCP connectors`, `503 this
 server already has 8 MCP connector requests in progress through the edge; retry
-shortly` and `413 request body is over the edge's limit of 1048576 bytes`. On the
+shortly` for a request that waited 15 seconds for one of them to finish or found
+16 others already waiting, with `Retry-After: 5`, and
+`413 request body is over the edge's limit of 1048576 bytes`. A request to a
+server whose control channel ended in the last 30 seconds, as a restarting
+server's does, waits for it to enroll again and goes to it then. So does a
+request still waiting for a connection when the server drops off; a request the
+server received is never sent twice. `503 server is not connected to the edge`
+comes only once the 30 seconds pass, or at once for a request that finds 16
+others waiting. A host that drops off the network without closing the channel
+is noticed only after 60 seconds of silence. On the
 universal URL it also answers `401` with `WWW-Authenticate` naming the metadata
 for a request without a token or whose token names no server, `400
 invalid_grant` for a code or refresh token that names none, and `501 server
@@ -565,7 +711,25 @@ at https://<relay host>/mcp; upgrade it ...` for a server at protocol 2.
 ### Limits
 
 - 48 concurrent SSH connections and 8 MCP connector requests per server, and 16
-  connections per device.
+  connections per device. A connector request past the 8 waits up to 15 seconds
+  for one to finish; at most 16 wait per server, counting those whose connection
+  is being opened and those waiting up to 30 seconds for the server to return.
+- 4 connector tool calls per server running longer than 5 seconds, so calls
+  that wait leave the other 4 requests to short calls. The server, not the
+  edge, enforces it. When a call reaches 5 seconds with 4 others already past
+  it, the server ends one early: that call if it is `aether_launch_session` or
+  `aether_ask_assistant`, which wait by design and are safe to call again,
+  else the oldest of those two in progress, else that call. An ended launch
+  keeps starting and is answered as a launch still starting is, within 5 more
+  seconds, and an ended ask with its `turn_id` to poll. Any other ended call
+  fails with a message that starts `ended early: this server runs at most 4
+  connector calls longer than 5s at once`, followed by `call again shortly`
+  for a read and `check whether it took effect before calling again` for a
+  write ([connectors.md](connectors.md)). The count is of calls, not
+  connections: an ended call holds its connection until it returns. The
+  server answers an MCP
+  `subscriptions/listen` request at once instead of holding it open: its tool
+  list never changes while a client listens.
 - Universal connector URL: 20 server choices and consent pages at once, then 1
   every 3 seconds per address; 60 token requests at once, then 1 a second per
   address and server.
@@ -581,10 +745,11 @@ at https://<relay host>/mcp; upgrade it ...` for a server at protocol 2.
 SQLite database. Run it with a systemd unit ([Installing](#installing)) or as the
 image `ghcr.io/3xdevops/aether-edge` ([In a container](#in-a-container)). It
 answers on two host names, written `<signin-host>` and `<relay-host>` below (such
-as `auth.example.com` and `edge.example.com`). Either a reverse proxy terminates
+as `auth.example.com` and `edge.example.com`), and on two more for each extra
+[address pair](#more-than-one-address-pair). Either a reverse proxy terminates
 TLS and passes plain HTTP to a loopback port (`--proxy-listen`; the packaged unit
 expects nginx), or the edge listens on `:443` itself with Let's Encrypt
-certificates for its two names (`--listen`, the default).
+certificates for its names (`--listen`, the default).
 
 ### Requirements
 
@@ -592,7 +757,7 @@ certificates for its two names (`--listen`, the default).
   IPv4 address. The edge limits requests by client address, so no other proxy or
   load balancer may sit between clients and the edge's own proxy.
 - Outbound HTTPS to `github.com`, `api.github.com` and Let's Encrypt.
-- Two DNS names, a GitHub OAuth app, and egress bandwidth ([Egress
+- Two DNS names and a GitHub OAuth app per address pair, and egress bandwidth ([Egress
   budget](#egress-budget)).
 
 ### GitHub OAuth app
@@ -602,7 +767,7 @@ settings → OAuth Apps → New OAuth App**. The edge asks for the scope `user:e
 
 | Field | Value |
 | --- | --- |
-| Application name | `Aether` |
+| Application name | `Cloudfield` |
 | Homepage URL | `https://<signin-host>` |
 | Authorization callback URL | `https://<signin-host>/signin/github/callback` (must match exactly) |
 | Enable Device Flow | Off: the edge runs its own device flow |
@@ -675,13 +840,13 @@ install it with the unit and the environment file (`<arch>` is `amd64` or
 `arm64`):
 
 ```sh
-base=https://github.com/3xDevOps/Aether/releases/download/<release-tag>
+base=https://github.com/3xDevOps/cloudfield/releases/download/<release-tag>
 curl -fLO "$base/aether-edge-linux-<arch>"
 curl -fLO "$base/checksums.txt"
 sha256sum --check --ignore-missing checksums.txt
 sudo install -m 0755 aether-edge-linux-<arch> /usr/local/bin/aether-edge
 
-src=https://raw.githubusercontent.com/3xDevOps/Aether/<release-tag>/packaging
+src=https://raw.githubusercontent.com/3xDevOps/cloudfield/<release-tag>/packaging
 sudo curl -fsSL -o /etc/systemd/system/aether-edge.service "$src/systemd/aether-edge.service"
 sudo useradd --system --home-dir /var/lib/aether-edge --no-create-home --shell /usr/sbin/nologin aether-edge
 sudo install -d -m 0700 /etc/aether-edge
@@ -704,18 +869,22 @@ the secret in as a systemd credential. If the file is missing the start fails wi
 ### In a container
 
 The release publishes `ghcr.io/3xdevops/aether-edge` for linux/amd64 and
-linux/arm64, running as uid and gid 65532. `<release-tag>` never moves. `latest`
-moves with every release, alphas included, and can migrate the database on an
-unattended restart, so keep it out of production. `stable` moves to a release an
-admin promoted after it qualified and soaked
-([CONTRIBUTING.md](../CONTRIBUTING.md#releases)). In production pin `stable` by
-digest (`ghcr.io/3xdevops/aether-edge:stable@sha256:<digest>`, from `docker
+linux/arm64, running as uid and gid 65532. `<release-tag>` never moves. The
+other tags are release channels, the same three Cloudfield servers follow
+([install.md](install.md#release-channel)), and each moves only when a
+workflow promotes a release onto it ([Promoting an edge
+release](#promoting-an-edge-release-to-stable)). `stable` is the one to run:
+an admin moves it to a release that qualified and soaked 24 hours. `beta`
+and `nightly` carry builds that have soaked less. `latest` follows GitHub's
+Latest release with no promotion attestation, and can migrate the database
+on an unattended restart, so keep it out of production. In production pin `stable`
+by digest (`ghcr.io/3xdevops/aether-edge:stable@sha256:<digest>`, from `docker
 buildx imagetools inspect ghcr.io/3xdevops/aether-edge:stable`) and change it
 deliberately.
 
 Put the edge and the proxy on one container network, publish only the proxy's
 ports, give the proxy a fixed address and trust that address alone, never the
-network's subnet. The proxy passes both host names to `http://aether-edge:8443`:
+network's subnet. The proxy passes every host name of every pair to `http://aether-edge:8443`:
 
 ```sh
 docker volume create aether-edge-data
@@ -742,7 +911,7 @@ limits.
   container: a named volume, or a directory owned by uid 65532 (`chown -R
   65532:65532 <dir> && chmod 0700 <dir>`). A container started without it makes
   a new signing key, which every server refuses with `edge key changed`, and
-  every client must run `aether login` again.
+  every client must run `cloudfield login` again.
 - The client secret is a file mounted read-only, readable by uid 65532. Never
   put it in an image layer or a committed file. `AETHER_EDGE_GITHUB_CLIENT_SECRET`
   works, but `docker inspect` shows it.
@@ -762,24 +931,35 @@ aether-edge: data directory /var/lib/aether-edge (uid 0, gid 0, mode 0755) is no
 
 Before you run a new digest, ask the edge you already run whether a release signed
 it ([Verified releases](install.md#verified-releases)) and whether the upgrade
-needs manual steps. It exits 0 to go ahead, or 3 with each `aether-edge: hold:
-...` reason on stderr:
+needs manual steps. `--from-digest` is the index digest the edge runs: the build
+number of the running release comes from `--from`'s signed manifest, which must
+name that digest. `--from-manifest <file>` reads a saved copy of that manifest,
+with its signature in `<file>.sig`, instead of downloading it, and
+`--keep-manifests <dir>` saves each manifest it downloads and verifies there as
+`<tag>.json` and `<tag>.json.sig`. `--channel` is the
+channel the host follows. It exits 1 when either manifest cannot be fetched and
+verified, when the release is not newer by build number, or when the channel
+does not take it (`stable` takes
+stable releases, `beta` beta and stable, `nightly` all three, `latest` all but nightly),
+0 to go ahead, or 3 with each `aether-edge: hold: ...` reason on stderr:
 
 ```sh
 docker exec <container> aether-edge release-check \
-  --tag <release-tag> --digest sha256:<digest> --from <running-tag>
+  --tag <release-tag> --digest sha256:<digest> --from <running-tag> \
+  --from-digest sha256:<running-digest> --channel stable
 ```
 
-A digest that `stable` names also carries a promotion attestation from
-`promote-edge.yml` on `main`. A host that follows `stable` requires it. The
-printed predicate must name `stable`, the digest and the tag `release-check`
-verified:
+A digest that `nightly`, `beta` or `stable` names also carries a promotion
+attestation from `promote-edge.yml` on `main`, signed in the repository under
+its old name or its current one. A host that follows one of them requires it.
+The printed predicate must name that channel, the digest and the tag
+`release-check` verified:
 
 ```sh
 cosign verify-attestation --new-bundle-format \
   --type https://github.com/3xDevOps/aether/edge-promotion/v1 \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  --certificate-identity https://github.com/3xDevOps/aether/.github/workflows/promote-edge.yml@refs/heads/main \
+  --certificate-identity-regexp '^https://github\.com/3xDevOps/(aether|cloudfield)/\.github/workflows/promote-edge\.yml@refs/heads/main$' \
   ghcr.io/3xdevops/aether-edge@sha256:<digest>
 ```
 
@@ -810,6 +990,88 @@ and names the problem, such as `no GitHub OAuth app is configured; set
 | `--openai-challenge` | `AETHER_EDGE_OPENAI_CHALLENGE` | None. OpenAI's domain verification token, served as `text/plain` at `https://<relay host>/.well-known/openai-apps-challenge`; unset answers 404 |
 | `--dev-listen` | `AETHER_EDGE_DEV_LISTEN` | None. Plain HTTP on a loopback address for local testing |
 | none | `AETHER_EDGE_GITHUB_CLIENT_SECRET` | None. The secret itself, instead of a file; setting both is refused |
+| `--origin-pairs` | `AETHER_EDGE_ORIGIN_PAIRS` | None. More origin pairs, each with its own GitHub OAuth app ([More than one address pair](#more-than-one-address-pair)) |
+
+### More than one address pair
+
+An edge can serve more than one pair of a sign-in origin and a relay origin, as
+when it moves to new host names and servers enrolled at the old ones must keep
+working. `--signin-origin` and `--relay-origin` stay the first pair, so an older
+edge image, which ignores `AETHER_EDGE_ORIGIN_PAIRS`, still serves it after a
+rollback. `AETHER_EDGE_ORIGIN_PAIRS` lists the others, comma-separated, each as
+four fields separated by spaces:
+
+```sh
+AETHER_EDGE_ORIGIN_PAIRS=https://<signin-host-2> https://<relay-host-2> <github-client-id-2> /run/credentials/aether-edge.service/github-client-secret-2
+```
+
+The fields are the sign-in origin, the relay origin, the client id of a GitHub
+OAuth app whose callback URL is `https://<signin-host-2>/signin/github/callback`,
+and a file holding that app's client secret. An OAuth app has one callback URL, so
+each sign-in origin needs its own app. Accounts are keyed by GitHub user id, so
+both apps sign a person in to the same account. Every host name of every pair
+must differ, and each needs [DNS](#dns) and, behind a proxy, its own `server`
+block. Under systemd, load the secret with a drop-in (`sudo systemctl edit
+aether-edge`):
+
+```ini
+[Service]
+LoadCredential=github-client-secret-2:/etc/aether-edge/github-client-secret-2
+```
+
+A request is served by the pair its host name belongs to: the sign-in pages,
+cookies, connector metadata, join links and the `421 Misdirected Request` answer
+to a wrong host all stay on that pair, and no pair is preferred. Sign-in cookies
+are per host, so a browser signs in on each sign-in origin separately. Device
+tokens work through every relay origin.
+
+Without a reverse proxy the edge obtains certificates for every host name of
+every pair itself. Behind one, add each pair's two host names to the proxy: a
+`server` block and a certificate each under nginx, or `|| Host(...)` terms in the
+router rule under Traefik ([`compose.yaml`](../packaging/edge/compose.yaml)).
+Probe `/healthz` and the certificate expiry on each of them
+([Monitoring](#monitoring)).
+
+A server enrolls at the relay origin it dialed. Every grant and connector
+assertion for it names that origin as issuer, whichever relay origin the client
+came in on, because the server refuses any other. Moving a server to another
+address means enrolling it there. With more than one pair, the edge's `ready`
+message lists every relay origin in `relay_origins`; a server that does not know
+the field ignores it.
+
+From edge protocol 6 the edge sends every connector request to the server with
+`Aether-Edge-Relay-Origin`, the relay origin the client sent it to, replacing
+any such header a client sends. A server at protocol 6 serves its connector at
+each relay origin its edge announced and at the one it enrolled at: metadata,
+issuer and the `resource` it requires name the origin the client used, and each
+token is bound to the URL it was issued for, so a token issued at
+`https://<relay host 1>/mcp` is refused at `https://<relay host 2>/mcp`
+(`the access token is for <url>, not <url>`), and a `resource` at any other
+origin gets `invalid_target`. An origin the edge did not announce in the
+current control connection gets `421 the edge relayed this request from
+"<origin>", which is not one of the relay origins it announced: ...`.
+
+| Edge | Server | Connector at another relay origin of the edge |
+| --- | --- | --- |
+| 6 | 6 | Works, bound to that origin |
+| 5 or below | 6 | Only the server's own relay origin, as before. The server ignores the header, which an older edge passes through from the client |
+| 6 | 5 or below | Only the server's own relay origin; `resource` at another gets `invalid_target`. The server ignores the header |
+
+Update the edge to protocol 6 before adding a pair. `MinVersion` stays 1, so
+no version refuses another. Tokens are stored with the URL they were issued
+for, so they survive a server restart, an edge restart and a reconnect. While
+the edge stops serving an origin, its tokens reach nothing; they work again,
+within their lifetimes, once the edge serves it again. A server that enrolls at
+another relay origin of the same edge keeps accepting tokens issued at the one
+it left while the edge speaks protocol 6 and announces it; below 6 it accepts
+only the origin it enrolled at.
+
+`/metrics` counts per address: `aether_edge_servers_by_origin{origin}` (servers
+holding a control channel by the relay origin they enrolled at),
+`aether_edge_device_logins_total{origin}` (device sign-ins by sign-in origin)
+and `aether_edge_connector_requests_total{origin,protocol}` (connector requests
+by the relay origin they came in on and the protocol version of the server they
+were for, `0` when it was not connected).
 
 ### Firewall
 
@@ -840,7 +1102,7 @@ Encrypt account.
    sudo apt-get install nginx certbot python3-certbot-nginx
    ```
 
-2. Get a certificate for each host name. Port 80 must be open. The deploy hook
+2. Get a certificate for each host name, those of extra pairs too. Port 80 must be open. The deploy hook
    reloads nginx after each renewal:
 
    ```sh
@@ -863,7 +1125,7 @@ Encrypt account.
    nginx. `nginx -t` prints `syntax is ok` and `test is successful`:
 
    ```sh
-   src=https://raw.githubusercontent.com/3xDevOps/Aether/<release-tag>/packaging
+   src=https://raw.githubusercontent.com/3xDevOps/cloudfield/<release-tag>/packaging
    curl -fsSL "$src/nginx/aether-edge.conf.example" |
      sed -e 's/<signin-host>/auth.example.com/g' -e 's/<relay-host>/edge.example.com/g' |
      sudo tee /etc/nginx/conf.d/aether-edge.conf >/dev/null
@@ -892,20 +1154,20 @@ Check from another machine:
 2. `curl -sS -H 'Aether-Edge-Version: 1' https://<relay-host>/v1/edge` prints the
    signing key and its fingerprint. `sudo ssh-keygen -lf
    /var/lib/aether-edge/edge_key` on the edge prints the same one. Publish it
-   where server operators compare it during `aether-server edge trust`, and back
+   where server operators compare it during `cloudfield-server edge trust`, and back
    the key up now.
-3. On a laptop, `aether login --edge https://<relay-host>`, confirm the code,
-   then `aether servers --edge https://<relay-host>`.
+3. On a laptop, `cloudfield login --edge https://<relay-host>`, confirm the code,
+   then `cloudfield servers --edge https://<relay-host>`.
 4. Enroll a canary server on another machine and keep it running:
 
    ```sh
-   sudo aether-server install --edge-url https://<relay-host> --edge-access approved-devices
+   sudo cloudfield-server install --edge-url https://<relay-host> --edge-access approved-devices
    sudo systemctl daemon-reload && sudo systemctl enable --now aether-server
-   sudo aether-server edge status        # edge key matches step 2; connection: connected since ...
-   sudo aether-server edge claim-code
+   sudo cloudfield-server edge status        # edge key matches step 2; connection: connected since ...
+   sudo cloudfield-server edge claim-code
    ```
 
-   Then `aether link --claim <code> --edge https://<relay-host>` and `aether
+   Then `cloudfield link --claim <code> --edge https://<relay-host>` and `aether
    sessions` on the laptop.
 
 ### Monitoring
@@ -914,17 +1176,25 @@ The metrics listener serves Prometheus text at `/metrics` on loopback; scrape it
 on the edge host or over an SSH tunnel. Alert on `aether_edge_throttled` equal to
 1 (the egress budget is spent), on `aether_edge_servers{state="claimed"}` falling
 to near zero, and on a sustained rise in one
-`aether_edge_refusals_total{reason="..."}`. `aether_edge_egress_month_bytes` and
-`aether_edge_github_errors_total` are also exported.
+`aether_edge_refusals_total{reason="..."}`; `reason="MCP connection limit"`
+counts the `503 this server already has 8 MCP connector requests in progress`
+answers. `aether_edge_egress_month_bytes`,
+`aether_edge_github_errors_total` and `aether_edge_mcp_waiting` (connector
+requests waiting for a connection or for their server to return) are also
+exported.
 
 `/healthz` (`aether-edge healthcheck`) is liveness. `/readyz` (`aether-edge
 healthcheck --ready`) answers 200 when the database answers within a second, the
 public listener serves and the edge is not stopping, and 503 otherwise. From
-outside the edge's network, probe `/healthz` on both names and the certificate
+outside the edge's network, probe `/healthz` on every host name and each one's certificate
 expiry (`openssl x509 -noout -checkend 1814400`).
 
 The edge logs to the journal (`journalctl -u aether-edge`), including client
-addresses for refused enrollments and failed TLS handshakes. Those are personal
+addresses for refused enrollments and failed TLS handshakes. When it refuses a
+connector request for the 8-request limit it logs `relay: refusing MCP connector
+requests for the connection limit` with the server id and how many of the
+server's requests are in progress and waiting, once until a minute passes
+without such a refusal for that server. Those are personal
 data: set `MaxRetentionSec=` in `/etc/systemd/journald.conf.d/retention.conf`,
 restart `systemd-journald`, and state the period in your privacy notice
 ([privacy.md](privacy.md#what-an-edge-stores)). nginx keeps its own access log in
@@ -953,7 +1223,7 @@ and whoever holds a copy can act as the edge, so encrypt it. If it is lost while
 missing, and edge.db holds accounts or servers that pin it`): put it back with
 `aether-edge restore --key <key file> <database backup>`. With no copy, start over
 with a new data directory, and every server refuses the new key with `edge key
-changed` until `sudo aether-server edge trust`.
+changed` until `sudo cloudfield-server edge trust`.
 
 Back `edge.db` up daily. `aether-edge backup` copies a consistent snapshot while
 the edge runs, to a directory, a new file, or `-` for standard output;
@@ -967,7 +1237,7 @@ docker exec aether-edge aether-edge backup - > edge-$(date -u +%Y%m%d).db
 
 `backup` never removes old copies, and a full volume stops the next upgrade, so
 rotate them and copy them off the machine. A lost `edge.db` forgets every
-account, device token and owner: each client runs `aether login` again, and each
+account, device token and owner: each client runs `cloudfield login` again, and each
 server drops its owner and logs ``edge: the edge does not know this server's
 owner; claim it again with a code from `aether-server edge claim-code` ``.
 Members, roles and devices live on the servers and survive. Restoring an older
@@ -1018,11 +1288,15 @@ check first, run `docker run --rm -v <data>:/var/lib/aether-edge <old image> sch
 ### Automatic updates
 
 `aether-edge-update` ([`scripts/edge-update.sh`](../scripts/edge-update.sh))
-updates an edge that runs in Docker Compose to the newest release on a channel.
+updates an edge that runs in Docker Compose to the newest release on a channel:
+`nightly`, `beta`, `stable` (the default) or `latest`.
 A systemd timer runs it daily at 04:00 UTC with up to an hour's random delay. It
-never downgrades and never runs a digest that a signed release does not name.
+never moves to a lower build number than the running release's signed manifest
+carries, whatever the version says (an edge whose image predates release
+channels compares versions instead), and never runs a digest that a signed
+release does not name.
 Before it switches, it checks with `cosign` that `promote-edge.yml` on `main`
-promoted the digest (except on `latest`), runs `aether-edge release-check` from
+promoted the digest onto the host's channel (except on `latest`), runs `aether-edge release-check` from
 the running image, and backs the database up to
 `backups/pre-update-<version>-<UTC time>.db`. A blocking manual step holds the
 update: it exits 3 and changes nothing. After `docker compose up -d --wait` it
@@ -1040,6 +1314,11 @@ fixed address, put it in `AETHER_EDGE_TRUSTED_PROXIES`, and keep
 `forwardedHeaders.trustedIPs` and `forwardedHeaders.insecure` unset on the entry
 point the edge uses.
 
+The hosted Cloudfield Edge service follows `stable`, like any host left on the
+default.
+
+#### Installing the updater
+
 At the release tag you install, copy `scripts/edge-update.sh` to
 `/usr/local/sbin/aether-edge-update`, `packaging/edge/aether-edge-update.env.example`
 to `/etc/aether-edge-update.env` (set `AETHER_EDGE_UPDATE_RELAY_URL`; the file
@@ -1054,6 +1333,21 @@ sudo aether-edge-update --check            # verifies the running digest; change
 sudo systemctl daemon-reload
 sudo systemctl enable --now aether-edge-update.timer aether-edge-update-recover.service
 ```
+
+`AETHER_EDGE_DIGEST` must be the release's index digest, the `Digest:` that
+`docker buildx imagetools inspect ghcr.io/3xdevops/aether-edge:<release-tag>`
+prints, not a platform digest. Otherwise every run stops with `the running
+release <tag> signs the edge image <index digest>, not the running <digest>; pin
+the edge to the index digest <index digest>`.
+
+To change channel, set `AETHER_EDGE_UPDATE_CHANNEL` and run `sudo
+aether-edge-update --check`: it accepts a running release promoted on the old
+channel, but the next one must be promoted on the new channel. An edge that
+leaves `nightly` stays on its build until the new channel reaches it; until
+then each run exits 1 with `refusing to upgrade: <tag> (build <n>) is older
+than the running <tag> (build <n>)`. An edge
+whose image prints no `build` in `version --json` predates channels and cannot
+verify a nightly release: update it once on `beta` or `stable` first.
 
 Without cosign or jq `--check` fails with `cosign not found` or `jq not found`.
 An edge whose image predates `version --json`, `release-check`, `backup` and
@@ -1083,6 +1377,11 @@ updater does the rest.
   --manual-steps-done`. A hold because the running release is older than
   `min_upgrade_from` is refused with `--manual-steps-done passes only blocking
   manual steps`: upgrade by hand to a release at or above it first.
+  An edge whose release has a build number compares itself with
+  `min_upgrade_from` and each step's `since` by the builds in their signed
+  manifests; when one cannot be read, the step counts as needed and the floor as
+  not met, and the reason names the tag. A boundary that names a beta not yet
+  published therefore holds nightly hosts until that beta is published.
 - A `broken` state means the rollback failed, and every run exits 1 with
   `state is broken since <time>: <reason>`. Run the edge on a release you trust
   (put its digest in `.env`, restore a backup first if `schema --json` asks for
@@ -1090,13 +1389,90 @@ updater does the rest.
   `/var/lib/aether-edge-update/state`.
 - A digest in `/var/lib/aether-edge-update/failed` is skipped on every run. Delete
   its line to try it again.
+- `/var/lib/aether-edge-update/releases/<tag>.json` and `.json.sig` are the signed
+  manifests `release-check` verified, kept so updates still order after GitHub
+  prunes the release the edge runs (nightlies after 14 days). An update switches
+  only once the new release's copy is kept; otherwise nothing changes and the
+  next run retries. A copy that does not verify is
+  refused with `saved <file>: ... is not signed by a trusted release key`; delete
+  both files and the next run downloads them again. Without a copy, `release-check`
+  downloads the manifest, so an edge whose release was pruned before a copy was
+  kept stops with `the running release: release <tag> has no signed
+  aether-release.json`: upgrade it by hand to the channel's current release
+  ([First upgrade](#first-upgrade)).
 - A host that reboots mid-update is recovered at boot by
   `aether-edge-update-recover.service`, or by `sudo aether-edge-update --recover`.
+- An updater copied before the repository took its current name refuses every
+  promotion made since: each run exits 1 with `<tag> (<digest>) on <channel> has
+  no valid promotion attestation from promote-edge.yml on main`, after cosign's
+  error naming the signer it got. Install the new updater on every host before
+  the first promotion after the rename, from the release you install:
+
+  ```sh
+  curl -fsSL -o edge-update.sh https://raw.githubusercontent.com/3xDevOps/cloudfield/<release-tag>/scripts/edge-update.sh
+  sudo install -m 0755 edge-update.sh /usr/local/sbin/aether-edge-update
+  sudo aether-edge-update --check
+  ```
 
 `sudo aether-edge-update --rollback` returns to the previous release. If that
 release cannot run the migrated database it changes nothing and exits 1 with the
 backup's age, because restoring loses every account, device and server change
-since. To roll back anyway, add `--restore-backup`.
+since. To roll back anyway, add `--restore-backup`. While the edge's
+`AETHER_EDGE_ORIGIN_PAIRS` is set, it also refuses a release whose `version
+--json` reports an edge protocol below 6, which serves only the first
+[address pair](#more-than-one-address-pair), and exits 1 with `... reports no
+edge protocol 6 or later in version --json`. Remove the setting first, or add
+`--drop-origin-pairs` to cut off the servers enrolled at the other pairs. The
+rollback after a failed update returns to the release that ran before and is
+never refused.
+
+### Promoting an edge release to stable
+
+This is for maintainers. The image tags `nightly`, `beta` and `stable` move
+only through `.github/workflows/promote-edge.yml`, which copies the exact
+index the release signed and attested; it never builds, and never moves a
+tag to a lower build. Each move publishes an `edge-promotion/v1` attestation
+naming the tag's channel, which hosts check ([Verifying an
+image](#verifying-an-image)). The attestation is signed by `promote-edge.yml`
+on `main`, which hosts pin, so only a run of that file on `main` moves a tag.
+
+| Tag | Moved by | When |
+| --- | --- | --- |
+| `nightly` | `nightly.yml` calling `promote-edge.yml` | each nightly it publishes; the tag takes only a nightly release |
+| `beta` | `promote.yml` calling `promote-edge.yml` | each time Promote moves `beta.json`, on a promotion to stable too. A hotfix moves `beta.json` only when it is above it, and never `:beta`, which follows at the next Promote |
+| `stable` | an admin dispatching `promote-edge.yml` | by hand, as below |
+
+Promote never waits on `stable`: an admin promotes a release's image once
+it has been published for 24 hours. Edges on the previous stable keep
+working meanwhile, because their compat floors let an older edge serve
+updated servers. A stable that raises a compat floor cannot wait, so promote
+its image at once with `soak_override_reason`.
+
+```sh
+docker buildx imagetools inspect ghcr.io/3xdevops/aether-edge:<tag>   # Digest:
+gh workflow run promote-edge.yml -f tag=<tag> -f digest=sha256:<digest>
+# sooner than 24 hours after publication:
+gh workflow run promote-edge.yml -f tag=<tag> -f digest=sha256:<digest> -f soak_override_reason='<why>'
+```
+
+The run refuses, with these errors:
+
+- `release <tag> is a draft; promote only a published release`;
+- `<tag> is a <channel> release, which aether-edge:stable does not take`
+  (`stable` takes a stable release, or one from before channels; `beta` anything
+  but a nightly);
+- `<tag> was published <n> hours ago; wait until 24 hours have passed or give soak_override_reason`;
+- `ghcr.io/3xdevops/aether-edge:<tag> is <digest>, not <digest>` when the
+  digest you passed is not the tag's index;
+- `ghcr.io/3xdevops/aether-edge:stable carries <tag>; release-check refuses to move it to <tag> (see its output above); promote a release between them first if <tag> upgrades only from a later one`
+  when the new release is not above the carried one by build, or its
+  `min_upgrade_from` is above the carried one. A blocking manual step does
+  not refuse the move: edges on the channel hold until their operator
+  takes it.
+
+The admin check applies to a dispatch for `stable` only. `beta` moves only
+from `promote.yml` and `nightly` only from `nightly.yml`, each running on
+`main`; `promote-edge.yml` refuses a call from any other workflow or ref.
 
 ### Operator commands
 

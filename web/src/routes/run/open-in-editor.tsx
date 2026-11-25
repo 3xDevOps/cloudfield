@@ -39,7 +39,7 @@ export const editors: { name: string; link: (host: string) => string }[] = [
  */
 export function useOpenInEditor(run: RunRecord): { item: ExtraItem | null; dialog: React.ReactNode } {
   const phone = useMediaQuery(phoneScreen)
-  const self = useSelf()
+  const self = useSelf(run.workspace_id)
   const steerOthers = useStore((s) => s.workspaces[run.workspace_id]?.steer_others)
   const paused = useStore((s) => s.pausedRuns[run.id])
   const [open, setOpen] = useState(false)
@@ -70,7 +70,7 @@ export function useOpenInEditor(run: RunRecord): { item: ExtraItem | null; dialo
       >
         <DialogHeader>
           <DialogTitle>Open in editor</DialogTitle>
-          <DialogDescription>Your editor connects to this session&apos;s container over SSH and opens its checkout.</DialogDescription>
+          <DialogDescription>Your editor connects to this session over SSH and opens its checkout.</DialogDescription>
         </DialogHeader>
         <div className="flex flex-wrap gap-2">
           {editors.map((editor) => (

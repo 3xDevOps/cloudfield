@@ -44,7 +44,9 @@ test('an Enhanced run streams, answers a permission, takes a message and stops o
   // The command and its answer are steps; once the turn ends their block shuts behind the header.
   const asked = log.getByRole('button', { name: /^Ran 1 command/ })
   await expect(asked).toHaveAttribute('aria-expanded', 'false')
-  await asked.click()
+  // The chat list still scrolls and measures rows after a turn ends or a block opens, and a click whose
+  // button moves between mouse down and up never fires, so these disclosures open from the keyboard.
+  await asked.press('Enter')
   await expect(log.getByText(/Allowed once · run/)).toBeVisible()
   await expect.poll(async () => {
     const [row, view] = await Promise.all([log.getByText('permission: allow').boundingBox(), log.boundingBox()])
@@ -65,10 +67,10 @@ test('an Enhanced run streams, answers a permission, takes a message and stops o
   const steps = log.getByRole('button', { name: /^Read 2 files, ran 1 command and edited 1 file/ })
   await expect(steps).toHaveAttribute('aria-expanded', 'false', { timeout: 30_000 })
   await expect(log.getByText(/^Finished in \d+s$/).last()).toBeVisible()
-  await steps.click()
+  await steps.press('Enter')
   await expect(log.getByText('billing.js', { exact: true })).toBeVisible()
   await expect(log.getByText('All 3 steps done')).toBeVisible()
-  await log.getByRole('button', { name: /Edited src\/billing\.js/ }).click()
+  await log.getByRole('button', { name: /Edited src\/billing\.js/ }).press('Enter')
   await expect(log.locator('[data-slot="diff-block"]')).toContainText('Math.round')
   await expect(log.getByText(/^Changed \d+ files?$/)).toHaveCount(0)
 
@@ -77,7 +79,7 @@ test('an Enhanced run streams, answers a permission, takes a message and stops o
   await expect(changed).toBeVisible({ timeout: 30_000 })
   await expect(changed).toContainText('+3')
   await expect(changed).toHaveAttribute('aria-expanded', 'false')
-  await changed.click()
+  await changed.press('Enter')
   await changes.getByRole('button', { name: /billing\.js/ }).click()
   await expect(page.getByRole('tab', { name: 'Changes', selected: true })).toBeVisible()
   await expect(page.getByRole('tabpanel', { name: 'Changes' }).getByText('Math.round((a + b) * 100) / 100')).toBeVisible()
@@ -139,7 +141,7 @@ test('an Enhanced run holding background work stays working, asks while it waits
 
   await page.goto(`${alice.url}&run=${run.id}`)
   const log = page.getByRole('log', { name: 'Chat' })
-  const runs = page.getByRole('navigation', { name: 'Aether' }).getByRole('region', { name: 'Sessions' })
+  const runs = page.getByRole('navigation', { name: 'Cloudfield' }).getByRole('region', { name: 'Sessions' })
   const header = page.locator('[data-slot="pane-header"]')
   const box = page.getByRole('combobox', { name: 'Message the agent' })
   await expect(log.getByText(/^Finished/).first()).toBeVisible({ timeout: 60_000 })
@@ -219,11 +221,11 @@ test('an Enhanced run keeps subagents out of the conversation and opens each in 
   await expect(log.getByText('Read src/billing.js')).toHaveCount(0)
   await expect(log.getByText(/^Changed \d+ files?$/)).toHaveCount(0)
 
-  const chip = page.getByRole('button', { name: /^Workflow: / })
+  const chip = page.getByRole('button', { name: /^Session tree: / })
   await chip.click()
   await expect(chip).toHaveAttribute('aria-expanded', 'true')
-  const panel = page.getByRole('complementary', { name: 'Workflow' })
-  const tree = panel.getByRole('tree', { name: 'Session workflow' })
+  const panel = page.getByRole('complementary', { name: 'Session tree' })
+  const tree = panel.getByRole('tree', { name: 'Session tree' })
   await expect(tree.getByRole('treeitem', { name: /^Map the billing module, Completed, Read 1 file/ })).toHaveAttribute('aria-level', '2')
   await expect(tree.getByRole('treeitem', { name: /^Run the tests, Completed/ })).toHaveAttribute('aria-posinset', '2')
   await expect(tree.getByRole('treeitem', { name: /^Round totals to cents, Completed/ })).toHaveAttribute('aria-setsize', '3')

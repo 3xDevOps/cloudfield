@@ -11,6 +11,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/3xDevOps/Aether/internal/envname"
 )
 
 // Config is the local linked-server configuration written by `aether link`.
@@ -206,16 +208,34 @@ const ConfigDirEnv = "AETHER_CONFIG_DIR"
 // Path is the linked-server config file: $AETHER_CONFIG_DIR/aether/config.json
 // when that variable is set, otherwise ~/.config/aether/config.json on
 // Linux, ~/Library/Application Support/aether/config.json on macOS, and
-// %AppData%\aether\config.json on Windows.
+// %AppData%\aether\config.json on Windows. A cloudfield directory beside
+// aether is used instead when it exists. Neither is ever moved, because an
+// older CLI on the same machine reads only aether.
 func Path() (string, error) {
-	dir := os.Getenv(ConfigDirEnv)
+	dir := envname.Getenv(ConfigDirEnv)
 	if dir == "" {
 		var err error
 		if dir, err = os.UserConfigDir(); err != nil {
 			return "", fmt.Errorf("cli: config dir: %w", err)
 		}
 	}
-	return filepath.Join(dir, "aether", "config.json"), nil
+	name := "aether"
+	if hasDir(dir, "cloudfield") {
+		name = "cloudfield"
+	}
+	return filepath.Join(dir, name, "config.json"), nil
+}
+
+// hasDir reports whether dir holds a directory named exactly name. A
+// case-insensitive volume would let Stat find "Cloudfield", the directory
+// another program may own, so the entries are compared byte for byte.
+func hasDir(dir, name string) bool {
+	entries, err := os.ReadDir(dir)
+	if err != nil || !slices.ContainsFunc(entries, func(e os.DirEntry) bool { return e.Name() == name }) {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(dir, name))
+	return err == nil && info.IsDir()
 }
 
 // Dir is the directory that holds config.json, the device key and the
@@ -245,6 +265,11 @@ func Load() (Config, error) {
 		}
 		return Config{}, fmt.Errorf("cli: read config: %w", err)
 	}
+	return Parse(path, body)
+}
+
+// Parse decodes body, the contents of the config file at path, as Load does.
+func Parse(path string, body []byte) (Config, error) {
 	var cfg Config
 	if err := json.Unmarshal(body, &cfg); err != nil {
 		return Config{}, fmt.Errorf("cli: parse config: %w", err)
@@ -253,6 +278,37 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("cli: config %s has no addr", path)
 	}
 	return cfg, nil
+}
+
+// LinkedEdges are the edge URLs the saved links name, the default link's
+// first, none when nothing is linked. Unlike Load it takes a config with
+// named links only.
+func LinkedEdges() ([]string, error) {
+	path, err := Path()
+	if err != nil {
+		return nil, err
+	}
+	body, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("cli: read config: %w", err)
+	}
+	var cfg Config
+	if err := json.Unmarshal(body, &cfg); err != nil {
+		return nil, fmt.Errorf("cli: parse config: %w", err)
+	}
+	var edges []string
+	if cfg.EdgeURL != "" {
+		edges = append(edges, cfg.EdgeURL)
+	}
+	for _, l := range cfg.Links {
+		if l.EdgeURL != "" {
+			edges = append(edges, l.EdgeURL)
+		}
+	}
+	return edges, nil
 }
 
 // Save writes cfg to the linked-server config path (directory 0700, file 0600).

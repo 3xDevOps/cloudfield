@@ -3,6 +3,7 @@
 package scheduler
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -54,7 +55,7 @@ func (s *Scheduler) applyRunOwnership(ws *domain.Workspace, run *domain.Run, hom
 	if err != nil {
 		return err
 	}
-	if run.Worktree != "" {
+	if run.Worktree != "" && !s.cfg.Git.IsVMCheckout(run.ID) {
 		protected, err := protectedInodes(filepath.Join(s.cfg.ReposDir, string(ws.ID)+".git"))
 		if err != nil {
 			return err
@@ -64,6 +65,9 @@ func (s *Scheduler) applyRunOwnership(ws *domain.Workspace, run *domain.Run, hom
 		}
 	}
 	for _, extra := range run.Extras {
+		if s.cfg.Git.IsVMCheckout(extra.Key) {
+			continue
+		}
 		protected, err := protectedInodes(filepath.Join(s.cfg.ReposDir, string(extra.WorkspaceID)+".git"))
 		if err != nil {
 			return err
@@ -77,6 +81,12 @@ func (s *Scheduler) applyRunOwnership(ws *domain.Workspace, run *domain.Run, hom
 	defer lock.Unlock()
 	for _, m := range mounts {
 		if m.ReadOnly || m.Subpath != "" {
+			continue
+		}
+		if info, err := os.Lstat(m.HostPath); err == nil && info.Mode().IsRegular() {
+			if err := os.Lchown(m.HostPath, uid, gid); err != nil {
+				return fmt.Errorf("scheduler: chown %s: %w", m.HostPath, err)
+			}
 			continue
 		}
 		if err := chownTree(m.HostPath, uid, gid, nil); err != nil {
@@ -129,6 +139,68 @@ func (s *Scheduler) applyLoginOwnership(entry *supervised, login domain.MemberID
 		}
 	}
 	return nil
+}
+
+// restoreHomeRoot gives entry's home directory back to its container user,
+// with its owner permissions, when root in one of the member's containers
+// took it: every container mounts the same directory, so all of them lose
+// the home at once. It returns the owner and mode it replaced, or "" when
+// they were right or entry no longer holds the home's mapping.
+func (s *Scheduler) restoreHomeRoot(ctx context.Context, entry *supervised) (string, error) {
+	s.mu.Lock()
+	member, user := entry.memberID, entry.runUser
+	s.mu.Unlock()
+	if user == "" || user == unknownRecoveryRunUser {
+		return "", nil
+	}
+	uid, gid, err := parseNumericUser(user)
+	if err != nil {
+		return "", err
+	}
+	home, err := s.cfg.Homes.Path(member)
+	if err != nil {
+		return "", fmt.Errorf("scheduler: resolve home: %w", err)
+	}
+	lock := s.homeLock(member)
+	lock.Lock()
+	defer lock.Unlock()
+	info, err := os.Lstat(home)
+	if err != nil {
+		return "", fmt.Errorf("scheduler: check home: %w", err)
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return "", fmt.Errorf("scheduler: check home %s: no ownership information", home)
+	}
+	mode := info.Mode().Perm()
+	if int(st.Uid) == uid && int(st.Gid) == gid && mode&0o700 == 0o700 {
+		return "", nil
+	}
+	// A container launched since the snapshot may have been handed the
+	// home with another mapping; this chown must not take it back.
+	lookupErr := s.resolveStaleRunUsers(ctx, member, "", user)
+	s.mu.Lock()
+	s.syncRunUserReservationsLocked()
+	current := s.runs[entry.runID] == entry && entry.runUser == user
+	conflict := s.reservationConflictLocked(member, "", user, "live session "+string(entry.runID))
+	s.mu.Unlock()
+	if !current {
+		return "", nil
+	}
+	if conflict != nil {
+		if lookupErr != nil {
+			return "", withLookupError(conflict, lookupErr)
+		}
+		return "", nil
+	}
+	was := fmt.Sprintf("%d:%d %04o", st.Uid, st.Gid, mode)
+	if err := os.Lchown(home, uid, gid); err != nil {
+		return was, fmt.Errorf("scheduler: home %s is %s, not %s, and restoring it failed: %w", home, was, user, err)
+	}
+	if err := os.Chmod(home, mode|0o700); err != nil {
+		return was, fmt.Errorf("scheduler: home %s was %s and giving its owner rwx back failed: %w", home, was, err)
+	}
+	return was, nil
 }
 
 // homeLock returns the lock every ownership pass holds while it chowns inside
@@ -289,6 +361,9 @@ const maxHeldDirs = 64
 type ownershipWalk struct {
 	uid, gid  int
 	protected map[inodeKey]struct{}
+	// syscalls counts the directory reads, stats, chowns and opens the walk
+	// makes, so a test can compare walks by work rather than by time.
+	syscalls int
 }
 
 type subdir struct {
@@ -300,7 +375,7 @@ type subdir struct {
 // stat however deep it sits, and closes dir. The first maxHeldDirs levels stay
 // open while their subdirectories are walked; a deeper directory is reopened
 // from anchor, the deepest one still open, along fromAnchor.
-func (w ownershipWalk) walk(dir *os.File, rel string, depth, anchor int, fromAnchor []string) error {
+func (w *ownershipWalk) walk(dir *os.File, rel string, depth, anchor int, fromAnchor []string) error {
 	subdirs, err := w.entries(dir, rel)
 	if err != nil || depth >= maxHeldDirs {
 		_ = dir.Close()
@@ -313,7 +388,7 @@ func (w ownershipWalk) walk(dir *os.File, rel string, depth, anchor int, fromAnc
 	}
 	for _, sub := range subdirs {
 		components := append(slices.Clip(fromAnchor), sub.name)
-		child, err := openBeneath(anchor, components, sub)
+		child, err := w.openBeneath(anchor, components, sub)
 		if errors.Is(err, unix.ENOENT) || errors.Is(err, unix.ELOOP) || errors.Is(err, unix.ENOTDIR) || errors.Is(err, errDirChanged) {
 			continue
 		}
@@ -328,8 +403,9 @@ func (w ownershipWalk) walk(dir *os.File, rel string, depth, anchor int, fromAnc
 }
 
 // entries chowns dir's entries and returns its subdirectories.
-func (w ownershipWalk) entries(dir *os.File, rel string) ([]subdir, error) {
+func (w *ownershipWalk) entries(dir *os.File, rel string) ([]subdir, error) {
 	fd := int(dir.Fd())
+	w.syscalls++
 	names, err := dir.Readdirnames(-1)
 	if errors.Is(err, unix.ENOENT) && rel != "." {
 		return nil, nil
@@ -340,6 +416,7 @@ func (w ownershipWalk) entries(dir *os.File, rel string) ([]subdir, error) {
 	var subdirs []subdir
 	for _, name := range names {
 		var st unix.Stat_t
+		w.syscalls++
 		if err := unix.Fstatat(fd, name, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
 			if errors.Is(err, unix.ENOENT) {
 				continue
@@ -351,6 +428,7 @@ func (w ownershipWalk) entries(dir *os.File, rel string) ([]subdir, error) {
 		_, protectedLink := w.protected[inodeKey{st.Dev, st.Ino}]
 		shared := st.Mode&unix.S_IFMT == unix.S_IFREG && (protectedLink || st.Nlink > 1)
 		if (int(st.Uid) != w.uid || int(st.Gid) != w.gid) && !shared {
+			w.syscalls++
 			if err := unix.Fchownat(fd, name, w.uid, w.gid, unix.AT_SYMLINK_NOFOLLOW); err != nil && !errors.Is(err, unix.ENOENT) {
 				return nil, fmt.Errorf("chown %s: %w", path.Join(rel, name), err)
 			}
@@ -366,9 +444,10 @@ var errDirChanged = errors.New("directory changed during the walk")
 
 // openBeneath opens the directory components lead to from anchor without
 // following a symlink at any step, and refuses one that is no longer want.
-func openBeneath(anchor int, components []string, want subdir) (*os.File, error) {
+func (w *ownershipWalk) openBeneath(anchor int, components []string, want subdir) (*os.File, error) {
 	fd := anchor
 	for _, name := range components {
+		w.syscalls++
 		next, err := unix.Openat(fd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 		if fd != anchor {
 			_ = unix.Close(fd)
@@ -379,6 +458,7 @@ func openBeneath(anchor int, components []string, want subdir) (*os.File, error)
 		fd = next
 	}
 	var st unix.Stat_t
+	w.syscalls++
 	if err := unix.Fstat(fd, &st); err != nil {
 		_ = unix.Close(fd)
 		return nil, err

@@ -56,7 +56,7 @@ function layerOf(kind: UnreachableKind, link: Pick<LinkStatus, 'edge_url'> | nul
 }
 
 /** What failed, on which server, and the command that comes next. */
-export function unreachableSentence(
+function unreachableSentence(
   kind: UnreachableKind,
   link: Pick<LinkStatus, 'addr' | 'edge_url' | 'server_id'> | null,
   approvalCode: string | null,
@@ -144,9 +144,11 @@ export function useConnectionWord(): string {
 
 export function ConnectionLine({ className }: { className?: string }) {
   const problem = useConnectionProblem()
+  const stale = useStore((s) => s.staleSince !== null || s.hydrationError !== null)
   if (!problem) return null
   return (
-    <div className={cn('min-w-0', className)}>
+    // The saved-state banner carries the failure on a phone.
+    <div className={cn('min-w-0', stale && 'max-md:hidden', className)}>
       <StateLine tone="failed">{problem}</StateLine>
     </div>
   )

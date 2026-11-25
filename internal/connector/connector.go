@@ -34,6 +34,7 @@ import (
 
 	"github.com/3xDevOps/Aether/internal/assistant/tools"
 	"github.com/3xDevOps/Aether/internal/domain"
+	edgeagent "github.com/3xDevOps/Aether/internal/edge/agent"
 	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
 	"github.com/3xDevOps/Aether/internal/mcpbridge"
 	"github.com/3xDevOps/Aether/internal/ops"
@@ -89,18 +90,22 @@ type Config struct {
 	Started time.Time
 }
 
-// resource is one connector URL the handler serves: base is the URL,
-// path its path, and prefix what the codes and tokens minted for it start
-// with, "<server id>." for the universal URL so the edge can route them.
+// resource is one connector URL the handler serves at one relay origin:
+// base is the URL, path its path, and prefix what the codes and tokens
+// minted for it start with, "<server id>." for the universal URL so the
+// edge can route them.
 type resource struct {
-	base, path, prefix string
+	origin, base, path, prefix string
 }
 
+func (r resource) universal() bool { return r.prefix != "" }
+
 type handler struct {
+	// origin stands in for the relay origin of a request that carries
+	// none (edgeagent.RelayOrigin): the configured edge's.
 	origin      string
 	serverID    string
-	own         resource
-	universal   resource
+	ownPath     string
 	store       store.ConnectorStore
 	ssh         *sshd.Server
 	key         []byte
@@ -110,6 +115,7 @@ type handler struct {
 	fetch           *http.Client
 	mux             *http.ServeMux
 	now             func() time.Time
+	long            *ops.LongCalls
 
 	// mu guards codes, nonces, wrong, wrongAll, wrongSwept, writes and
 	// writesSwept.
@@ -155,15 +161,14 @@ func New(cfg Config) (http.Handler, error) {
 		loopback = loopbackClients
 	}
 	origin := u.Scheme + "://" + u.Host
-	h := &handler{origin: origin, serverID: serverID,
-		own:       resource{base: cfg.BaseURL, path: u.Path},
-		universal: resource{base: origin + edgeproto.PathUniversalMCP, path: edgeproto.PathUniversalMCP, prefix: serverID + "."},
-		store:     cfg.Store, ssh: cfg.SSH, key: key, clientHosts: hosts, loopbackClients: loopback,
+	h := &handler{origin: origin, serverID: serverID, ownPath: u.Path,
+		store: cfg.Store, ssh: cfg.SSH, key: key, clientHosts: hosts, loopbackClients: loopback,
 		fetch: &http.Client{Transport: cfg.Transport, CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
 		}},
 		mux: http.NewServeMux(), now: time.Now, started: cmp.Or(cfg.Started, time.Now()), codes: map[string]authCode{}, nonces: map[string]nonceUse{}, wrong: map[netip.Prefix]wrongCodes{},
-		writes: map[string]*rate.Limiter{}}
+		writes: map[string]*rate.Limiter{},
+		long:   &ops.LongCalls{After: edgeproto.HTTPShortCall, Max: edgeproto.MaxHTTPLongCallsPerServer}}
 
 	streamable := mcp.NewStreamableHTTPHandler(h.server, &mcp.StreamableHTTPOptions{
 		Stateless:    true,
@@ -173,41 +178,60 @@ func New(cfg Config) (http.Handler, error) {
 		DisableLocalhostProtection: true,
 	})
 	// The edge serves the universal URL's metadata itself.
-	h.mux.Handle("/.well-known/oauth-protected-resource"+h.own.path, auth.ProtectedResourceMetadataHandler(
-		edgeproto.ConnectorResourceMetadata(h.own.base)))
-	h.mux.HandleFunc("GET /.well-known/oauth-authorization-server"+h.own.path, func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, edgeproto.ConnectorAuthServerMetadata(h.own.base))
+	h.mux.HandleFunc("/.well-known/oauth-protected-resource"+h.ownPath, func(w http.ResponseWriter, r *http.Request) {
+		auth.ProtectedResourceMetadataHandler(edgeproto.ConnectorResourceMetadata(h.at(r, h.ownPath).base)).ServeHTTP(w, r)
 	})
-	for _, res := range []resource{h.own, h.universal} {
-		verify := func(ctx context.Context, token string, _ *http.Request) (*auth.TokenInfo, error) {
-			return h.verify(ctx, res, token)
-		}
+	h.mux.HandleFunc("GET /.well-known/oauth-authorization-server"+h.ownPath, func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, edgeproto.ConnectorAuthServerMetadata(h.at(r, h.ownPath).base))
+	})
+	for _, path := range []string{h.ownPath, edgeproto.PathUniversalMCP} {
 		// No cross-origin check: the edge rewrites Host to the server id,
 		// ChatGPT and Claude may send their own Origin, and a browser on
 		// another site cannot attach the bearer token, which no cookie
 		// carries.
-		h.mux.Handle(res.path, auth.RequireBearerToken(verify, &auth.RequireBearerTokenOptions{
-			ResourceMetadataURL: h.origin + "/.well-known/oauth-protected-resource" + res.path,
-		})(streamable))
-		h.mux.HandleFunc("GET "+res.path+"/authorize", func(w http.ResponseWriter, r *http.Request) { h.authorizePage(w, r, res, r.URL.Query()) })
-		h.mux.HandleFunc("POST "+res.path+"/authorize", func(w http.ResponseWriter, r *http.Request) {
+		h.mux.HandleFunc(path, func(w http.ResponseWriter, r *http.Request) {
+			res := h.at(r, path)
+			verify := func(ctx context.Context, token string, _ *http.Request) (*auth.TokenInfo, error) {
+				return h.verify(ctx, res, token)
+			}
+			auth.RequireBearerToken(verify, &auth.RequireBearerTokenOptions{
+				ResourceMetadataURL: res.origin + "/.well-known/oauth-protected-resource" + res.path,
+			})(streamable).ServeHTTP(w, r)
+		})
+		h.mux.HandleFunc("GET "+path+"/authorize", func(w http.ResponseWriter, r *http.Request) {
+			h.authorizePage(w, r, h.at(r, path), r.URL.Query())
+		})
+		h.mux.HandleFunc("POST "+path+"/authorize", func(w http.ResponseWriter, r *http.Request) {
+			res := h.at(r, path)
 			r.Body = http.MaxBytesReader(w, r.Body, maxFormBytes)
 			if err := r.ParseForm(); err != nil {
 				h.renderError(w, "Cannot read the form: "+err.Error())
 				return
 			}
-			if res == h.universal && !r.PostForm.Has("request") {
+			if res.universal() && !r.PostForm.Has("request") {
 				h.authorizePage(w, r, res, r.PostForm)
 				return
 			}
 			h.authorizeAllow(w, r, res)
 		})
-		h.mux.HandleFunc("POST "+res.path+"/token", func(w http.ResponseWriter, r *http.Request) { h.token(w, r, res) })
+		h.mux.HandleFunc("POST "+path+"/token", func(w http.ResponseWriter, r *http.Request) { h.token(w, r, h.at(r, path)) })
 	}
 	return h, nil
 }
 
 func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.mux.ServeHTTP(w, r) }
+
+// at is the connector URL at path for the relay origin r came in on, so
+// every code, token, issuer and metadata document names the address the
+// client used.
+func (h *handler) at(r *http.Request, path string) resource {
+	origin := cmp.Or(edgeagent.RelayOrigin(r.Context()), h.origin)
+	res := resource{origin: origin, base: origin + path, path: path}
+	if path == edgeproto.PathUniversalMCP {
+		res.prefix = h.serverID + "."
+	}
+	return res
+}
 
 // verify resolves an access token to its connector and re-checks the
 // member and minting device behind it on every request.
@@ -242,8 +266,15 @@ func grantOf(c *store.Connector) sshd.ConnectorGrant {
 func (h *handler) server(r *http.Request) *mcp.Server {
 	c := auth.TokenInfoFromContext(r.Context()).Extra["connector"].(*store.Connector)
 	local := h.ssh.ConnectorLocal(grantOf(c), c.ID, c.ClientName, c.Scopes)
-	srv := mcp.NewServer(&mcp.Implementation{Name: mcpbridge.ServerName, Title: "Aether", Version: version.String()},
-		&mcp.ServerOptions{Instructions: instructions})
+	// The server lives for one request, so its tool list never changes
+	// under a client. Advertising listChanged would make the SDK hold a
+	// subscriptions/listen request, and one of the edge's few connections
+	// to this server, until the client gave up.
+	srv := mcp.NewServer(&mcp.Implementation{Name: mcpbridge.ServerName, Title: "Cloudfield", Version: version.String()},
+		&mcp.ServerOptions{Instructions: instructions, Capabilities: &mcp.ServerCapabilities{
+			// Logging is the SDK's default, which setting Capabilities drops.
+			Logging: &mcp.LoggingCapabilities{}, //nolint:staticcheck
+			Tools:   &mcp.ToolCapabilities{}}})
 	ops.RegisterConnector(srv, func(ctx context.Context, method string, params, out any) error {
 		var raw json.RawMessage
 		if params != nil {
@@ -269,7 +300,7 @@ func (h *handler) server(r *http.Request) *mcp.Server {
 		slog.Info("connector: write call", "connector", c.ID, "member", c.Member, "method", method,
 			"target", callTarget(raw), "result", result)
 		return err
-	}, func(s ops.Scope) bool { return slices.Contains(c.Scopes, string(s)) })
+	}, func(s ops.Scope) bool { return slices.Contains(c.Scopes, string(s)) }, h.long)
 	return srv
 }
 
@@ -324,7 +355,7 @@ func (h *handler) allowWrite(id string, now time.Time) error {
 }
 
 func (h *handler) serverName() string {
-	return cmp.Or(h.ssh.Name(), "your Aether server")
+	return cmp.Or(h.ssh.Name(), "your Cloudfield server")
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"regexp"
 	"slices"
 	"strings"
 	"sync"
@@ -43,6 +44,7 @@ var tiers = map[string]string{
 	protocol.MethodServerInfo:           tierRead,
 	protocol.MethodRunList:              tierRead,
 	protocol.MethodRunGet:               tierRead,
+	protocol.MethodRunCloseCheck:        tierRead,
 	protocol.MethodRunACPHistory:        tierRead,
 	protocol.MethodTerminalHistory:      tierRead,
 	protocol.MethodWorkspaceList:        tierRead,
@@ -206,8 +208,8 @@ func (s *Server) serve(ctx context.Context, conn net.Conn) {
 }
 
 // dispatchWatched runs req with a context that ends when the caller hangs up,
-// so a confirmation nobody can answer any more is withdrawn. The wait for a
-// confirmation outlasts the idle deadline, which is lifted meanwhile.
+// so a call nobody can read the result of stops waiting for its card. The
+// wait for a card outlasts the idle deadline, which is lifted meanwhile.
 func (s *Server) dispatchWatched(ctx context.Context, conn net.Conn, r *bufio.Reader, req protocol.Request) (json.RawMessage, *protocol.Error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -232,6 +234,13 @@ func (s *Server) dispatch(ctx context.Context, req protocol.Request) (json.RawMe
 		return nil, &protocol.Error{Code: protocol.CodeMethodNotFound, Message: fmt.Sprintf(
 			"method not found: %s; allowed methods: %s", req.Method, strings.Join(allowedMethods(), ", "))}
 	}
+	relay, rpcErr := s.relayed(ctx, req)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	if len(relay) > 0 {
+		tier = tierConfirmed
+	}
 	result, rpcErr := s.run(ctx, req, tier)
 	outcome := "ok"
 	if rpcErr != nil {
@@ -239,6 +248,37 @@ func (s *Server) dispatch(ctx context.Context, req protocol.Request) (json.RawMe
 	}
 	slog.Info("assistant tool", "method", req.Method, "tier", tier, "outcome", outcome)
 	return result, rpcErr
+}
+
+// relayed is the sessions a watch.create or watch.update leaves the watch
+// writing into. Writing wakes them as a message does, so such a call is
+// confirmed like run.inject; an update that keeps a relay, such as a
+// resume or new conditions, is too. Only pausing never relays.
+func (s *Server) relayed(ctx context.Context, req protocol.Request) ([]string, *protocol.Error) {
+	switch req.Method {
+	case protocol.MethodWatchCreate:
+		p, err := protocol.DecodeParams[protocol.WatchCreateParams](req.Params)
+		if err != nil {
+			return nil, nil
+		}
+		return p.RelayTo, nil
+	case protocol.MethodWatchUpdate:
+		p, err := protocol.DecodeParams[protocol.WatchUpdateParams](req.Params)
+		switch {
+		case err != nil || p.WatchID == "":
+			return nil, nil
+		case p.RelayTo != nil:
+			return *p.RelayTo, nil
+		case p.Paused != nil && *p.Paused:
+			return nil, nil
+		}
+		var got protocol.WatchGetResult
+		if rpcErr := s.call(ctx, protocol.MethodWatchGet, protocol.WatchIDParams{WatchID: p.WatchID}, &got); rpcErr != nil {
+			return nil, rpcErr
+		}
+		return got.Watch.RelayTo, nil
+	}
+	return nil, nil
 }
 
 func (s *Server) run(ctx context.Context, req protocol.Request, tier string) (json.RawMessage, *protocol.Error) {
@@ -259,16 +299,11 @@ func (s *Server) run(ctx context.Context, req protocol.Request, tier string) (js
 		if result, ok := s.replayTemplateLaunch(ctx, req); ok {
 			return result, nil
 		}
-		c := protocol.AssistantConfirmation{Method: req.Method, Params: req.Params, CreatedAt: time.Now().UTC(), Defaults: defaults}
-		if rpcErr := s.summarize(ctx, req, &c); rpcErr != nil {
+		c := protocol.AssistantConfirmation{Method: req.Method, Params: req.Params, CreatedAt: time.Now().UTC(), Defaults: defaults, Reason: reason}
+		if rpcErr := s.Summarize(ctx, &c); rpcErr != nil {
 			return nil, rpcErr
 		}
 		req.Params = c.Params
-		c.Summary += defaultsNote(defaults)
-		if reason != "" {
-			c.Reason = reason
-			c.Summary += fmt.Sprintf(". The assistant's reason: %q", reason)
-		}
 		if err := s.Confirm(ctx, c); err != nil {
 			var pe *protocol.Error
 			if errors.As(err, &pe) {
@@ -277,9 +312,28 @@ func (s *Server) run(ctx context.Context, req protocol.Request, tier string) (js
 			return nil, &protocol.Error{Code: protocol.CodeDenied, Message: req.Method + " was not approved: " + err.Error()}
 		}
 	}
-	result, rpcErr := s.Caller.Call(ctx, req.Method, req.Params)
+	return s.Call(ctx, req.Method, req.Params)
+}
+
+// Summarize writes the card of c's call from its method, params, saved
+// defaults and stated reason, as the member is shown it. It may pin the
+// params, such as a template launch to the version it shows.
+func (s *Server) Summarize(ctx context.Context, c *protocol.AssistantConfirmation) *protocol.Error {
+	if rpcErr := s.summarize(ctx, protocol.Request{Method: c.Method, Params: c.Params}, c); rpcErr != nil {
+		return rpcErr
+	}
+	c.Summary += defaultsNote(c.Defaults)
+	if c.Reason != "" {
+		c.Summary += fmt.Sprintf(". The assistant's reason: %q", c.Reason)
+	}
+	return nil
+}
+
+// Call makes an allowed call and follows the run it launched or messaged.
+func (s *Server) Call(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, *protocol.Error) {
+	result, rpcErr := s.Caller.Call(ctx, method, params)
 	if rpcErr == nil && s.Follow != nil {
-		if id := s.followed(req, result); id != "" {
+		if id := s.followed(protocol.Request{Method: method, Params: params}, result); id != "" {
 			s.Follow(context.WithoutCancel(ctx), id)
 		}
 	}
@@ -345,6 +399,8 @@ func (s *Server) summarize(ctx context.Context, req protocol.Request, c *protoco
 		return s.summarizeTemplate(ctx, req, c)
 	case protocol.MethodRunInject:
 		return s.summarizeInject(ctx, req, c)
+	case protocol.MethodWatchCreate, protocol.MethodWatchUpdate:
+		return s.summarizeRelay(ctx, req, c)
 	case protocol.MethodRunKill:
 		p, err := protocol.DecodeParams[protocol.RunIDParams](req.Params)
 		if err != nil || p.RunID == "" {
@@ -480,7 +536,7 @@ func (s *Server) launchNames(ctx context.Context, defaults *protocol.AssistantDe
 		return launchNames{}, rpcErr
 	}
 	n := launchNames{member: s.Member, accounts: map[string]string{}, workspaces: map[string]string{}}
-	if defaults != nil && slices.ContainsFunc(defaults.Applied, func(f string) bool { return f == "account_member_id" || f == "workers.account_member_id" }) {
+	if defaults != nil && slices.Contains(defaults.Applied, "account_member_id") {
 		var saved protocol.LaunchDefaultsResult
 		if rpcErr := s.call(ctx, protocol.MethodLaunchDefaultsGet, nil, &saved); rpcErr != nil {
 			return launchNames{}, rpcErr
@@ -511,9 +567,22 @@ func (n launchNames) account(id string) string {
 		return "your account"
 	}
 	if id == n.savedAccount {
-		return fmt.Sprintf("%q's account (your saved default)", n.owner(id))
+		return AccountOf(n.owner(id)) + " (your saved default)"
 	}
-	return fmt.Sprintf("%q's account", n.owner(id))
+	return AccountOf(n.owner(id))
+}
+
+// plainName matches a member name that cannot read as more of a card.
+var plainName = regexp.MustCompile(`^[\p{L}\p{N} .'-]+$`)
+
+// AccountOf names name's account on a card. Members set their own names,
+// so one that is not plain is quoted: "Grace, no fallback" must not read
+// as the card's own words.
+func AccountOf(name string) string {
+	if plainName.MatchString(name) {
+		return name + "'s account"
+	}
+	return fmt.Sprintf("%q's account", name)
 }
 
 // maxNamed bounds how many accounts, repositories or agents a card names.
@@ -580,6 +649,12 @@ func (s *Server) summarizeLaunch(ctx context.Context, req protocol.Request, c *p
 	if mode == "" {
 		mode = "default mode"
 	}
+	if p.Model != "" {
+		mode += ", model " + truncate(p.Model)
+	}
+	if p.Effort != "" {
+		mode += ", effort " + truncate(p.Effort)
+	}
 	summary := fmt.Sprintf("Launch %s (%s) in %s", p.Harness, mode, ws)
 	if p.AccountMemberID != "" && p.AccountMemberID != s.Member {
 		summary += " on " + n.account(p.AccountMemberID)
@@ -587,6 +662,9 @@ func (s *Server) summarizeLaunch(ctx context.Context, req protocol.Request, c *p
 	summary += n.options(p.FallbackAccountMemberIDs, p.NoFallback, p.ExtraWorkspaceIDs, c)
 	if p.Children != "" {
 		summary += ", subsessions " + p.Children
+	}
+	if p.Permission != "" {
+		summary += ", permission " + p.Permission
 	}
 	c.Summary = fmt.Sprintf("%s: \"%s\"", summary, firstLine(p.Task))
 	return nil
@@ -644,7 +722,7 @@ const maxReason = 200
 // savedApplied are the launch fields ops may say saved defaults filled, and
 // savedSkippable those it may say it skipped or could not check.
 var (
-	savedApplied   = []string{"harness", "mode", "model", "account_member_id", "fallback", "workers.account_member_id"}
+	savedApplied   = []string{"harness", "mode", "model", "account_member_id", "fallback", "permission"}
 	savedSkippable = []string{"harness", "mode", "model", "fallback_account_member_ids"}
 )
 
@@ -760,6 +838,51 @@ func (s *Server) summarizeInject(ctx context.Context, req protocol.Request, c *p
 		return rpcErr
 	}
 	c.Summary = fmt.Sprintf("Send to session %s (%q)%s: %q%s", p.RunID, runLabel(run), ownedBy(c), truncate(p.Message), attached(p.Attachments, nil))
+	return nil
+}
+
+func (s *Server) summarizeRelay(ctx context.Context, req protocol.Request, c *protocol.AssistantConfirmation) *protocol.Error {
+	relay, rpcErr := s.relayed(ctx, req)
+	if rpcErr != nil {
+		return rpcErr
+	}
+	var watched string
+	if req.Method == protocol.MethodWatchCreate {
+		p, _ := protocol.DecodeParams[protocol.WatchCreateParams](req.Params)
+		watched = "session " + p.Target.RunID
+		if p.Target.Kind == protocol.WatchTargetPR {
+			watched = fmt.Sprintf("pull request %s#%d", p.Target.Repo, p.Target.Number)
+		}
+	} else {
+		p, _ := protocol.DecodeParams[protocol.WatchUpdateParams](req.Params)
+		watched = "watch " + p.WatchID
+		// The approved call applies the sessions the card names, whatever
+		// another client sets while it waits.
+		p.RelayTo = &relay
+		params, err := json.Marshal(p)
+		if err != nil {
+			return &protocol.Error{Code: protocol.CodeInternal, Message: req.Method + ": " + err.Error()}
+		}
+		c.Params = params
+	}
+	parts := make([]string, 0, len(relay))
+	for _, id := range relay {
+		var probe protocol.AssistantConfirmation
+		run, rpcErr := s.ownedRun(ctx, id, &probe)
+		if rpcErr != nil && rpcErr.Code == protocol.CodeNotFound {
+			// The server drops a deleted session at the watch's next notice.
+			parts = append(parts, id+" (deleted)")
+			continue
+		}
+		if rpcErr != nil {
+			return rpcErr
+		}
+		if probe.OtherMember {
+			c.OtherMember, c.OtherOwner = true, probe.OtherOwner
+		}
+		parts = append(parts, fmt.Sprintf("%s (%q)%s", id, runLabel(run), ownedBy(&probe)))
+	}
+	c.Summary = fmt.Sprintf("Write each notice of %s into the inbox of session %s", watched, strings.Join(parts, ", "))
 	return nil
 }
 

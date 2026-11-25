@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/3xDevOps/Aether/internal/runtime"
 )
 
 func TestParseIgnoresCommentsAndBlankLines(t *testing.T) {
@@ -198,10 +200,33 @@ func TestPackagedUnitMatchesDefaultUnit(t *testing.T) {
 	}
 }
 
+// The runtime places session containers in the slice this package installs.
+func TestPackagedSliceMatchesDefaultSlice(t *testing.T) {
+	if sliceFile != runtime.SessionSlice {
+		t.Errorf("installed slice %q, runtime places sessions in %q", sliceFile, runtime.SessionSlice)
+	}
+	path := filepath.Join("..", "..", "packaging", "systemd", sliceFile)
+	packaged, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(packaged) != DefaultSlice() {
+		t.Errorf("%s differs from DefaultSlice()\npackaged:\n%s\nDefaultSlice():\n%s", path, packaged, DefaultSlice())
+	}
+	for _, refused := range []string{"MemoryMax", "MemoryHigh", "MemorySwapMax", "TasksMax", "CPUQuota"} {
+		if strings.Contains(DefaultSlice(), refused) {
+			t.Errorf("slice sets %s, which can throttle or kill sessions", refused)
+		}
+	}
+}
+
 func TestDefaultUnitKeepsOperationalDirectives(t *testing.T) {
 	unit := DefaultUnit()
 	for _, want := range []string{
 		"Requires=docker.service",
+		"CPUWeight=10000",
+		"IOWeight=10000",
+		"MemoryLow=1G",
 		"ExecStart=/usr/local/bin/aether-server serve --config " + DefaultConfigPath,
 		"EnvironmentFile=-/etc/aether/aether-server.env",
 		"StateDirectory=aether",
@@ -292,6 +317,10 @@ func TestInstallWritesUnitAndConfig(t *testing.T) {
 	if string(unit) != DefaultUnit() {
 		t.Error("installed unit differs from DefaultUnit()")
 	}
+	slice, err := os.ReadFile(filepath.Join(dir, "systemd", "aether.slice"))
+	if err != nil || string(slice) != DefaultSlice() || res.SlicePath != filepath.Join(dir, "systemd", "aether.slice") {
+		t.Errorf("installed slice %s = %q, %v; want DefaultSlice()", res.SlicePath, slice, err)
+	}
 	values, err := Load(configPath)
 	if err != nil {
 		t.Fatal(err)
@@ -343,9 +372,10 @@ func TestApplyRetiresRemovedOptionsInsteadOfFailing(t *testing.T) {
 	}
 
 	retired, err := Apply(fs, map[string]string{
-		"addr":           ":2300",
-		"dashboard-port": "8080",
-		"dashboard-addr": "100.64.0.1:8080",
+		"addr":                   ":2300",
+		"dashboard-port":         "8080",
+		"dashboard-addr":         "100.64.0.1:8080",
+		"session-login-accounts": "mem-1",
 	})
 	if err != nil {
 		t.Fatalf("Apply with retired keys: %v, want it to carry on", err)
@@ -353,7 +383,7 @@ func TestApplyRetiresRemovedOptionsInsteadOfFailing(t *testing.T) {
 	if *addr != ":2300" {
 		t.Errorf("addr = %q, want the live key still applied", *addr)
 	}
-	want := []string{"dashboard-addr", "dashboard-port"}
+	want := []string{"dashboard-addr", "dashboard-port", "session-login-accounts"}
 	if len(retired) != len(want) {
 		t.Fatalf("retired = %v, want %v", retired, want)
 	}
@@ -393,5 +423,37 @@ func TestUnitOutdated(t *testing.T) {
 		if err != nil || got != want {
 			t.Errorf("UnitOutdated(%s) = %v, %v; want %v, nil", filepath.Base(path), got, err, want)
 		}
+	}
+}
+
+func TestSliceOutdated(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		unit, slice bool
+		content     string
+		want        bool
+	}{
+		{"no unit", false, false, "", false},
+		{"unit without slice", true, false, "", true},
+		{"current slice", true, true, DefaultSlice(), false},
+		{"edited slice", true, true, strings.Replace(DefaultSlice(), "CPUWeight=50", "CPUWeight=100", 1), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			unit := filepath.Join(dir, "aether-server.service")
+			if tc.unit {
+				if err := os.WriteFile(unit, []byte(DefaultUnit()), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.slice {
+				if err := os.WriteFile(filepath.Join(dir, "aether.slice"), []byte(tc.content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got, err := SliceOutdated(unit); err != nil || got != tc.want {
+				t.Errorf("SliceOutdated = %v, %v; want %v, nil", got, err, tc.want)
+			}
+		})
 	}
 }

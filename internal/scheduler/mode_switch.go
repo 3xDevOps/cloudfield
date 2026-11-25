@@ -12,8 +12,10 @@ import (
 	"time"
 
 	"github.com/3xDevOps/Aether/internal/agentstatus"
+	"github.com/3xDevOps/Aether/internal/codexapp"
 	"github.com/3xDevOps/Aether/internal/coordtransport"
 	"github.com/3xDevOps/Aether/internal/domain"
+	"github.com/3xDevOps/Aether/internal/envname"
 	"github.com/3xDevOps/Aether/internal/events"
 	"github.com/3xDevOps/Aether/internal/harness"
 	"github.com/3xDevOps/Aether/internal/runtime"
@@ -94,7 +96,7 @@ func (s *Scheduler) SwitchMode(ctx context.Context, run domain.RunID, actor doma
 	entry := s.runs[run]
 	s.mu.Unlock()
 	if entry == nil {
-		return fmt.Errorf("%w: the session has no live container", ErrInvalidTransition)
+		return fmt.Errorf("%w: the session has no live sandbox", ErrInvalidTransition)
 	}
 	entry.lifecycleMu.Lock()
 	defer entry.lifecycleMu.Unlock()
@@ -152,7 +154,7 @@ func (s *Scheduler) switchableLocked(entry *supervised, mode domain.LaunchMode) 
 	switch {
 	case s.runs[entry.runID] != entry || entry.containerID == "" || entry.retained || entry.destroyPending ||
 		entry.finalizing || entry.exitObserved || entry.killRequested:
-		return fmt.Errorf("%w: the session's container is not live", ErrInvalidTransition)
+		return fmt.Errorf("%w: the session's sandbox is not live", ErrInvalidTransition)
 	case entry.status != domain.RunRunning && entry.status != domain.RunNeedsAttention:
 		return fmt.Errorf("%w: the session is %s", ErrInvalidTransition, entry.status)
 	case entry.paused:
@@ -251,7 +253,7 @@ func (m modeSwitch) restoreEnhanced(ctx context.Context) error {
 // leaves the Enhanced session failed, as an adapter crash would.
 func (m modeSwitch) reopenEnhanced(ctx context.Context) error {
 	m.s.acp.connect(ctx, m.entry, openSwitch)
-	if _, err := m.s.acp.live(m.entry.runID); err != nil {
+	if _, err := m.s.acp.live(ctx, m.entry.runID); err != nil {
 		return fmt.Errorf("restore the Enhanced agent's conversation: %w", err)
 	}
 	return nil
@@ -289,32 +291,55 @@ func (m modeSwitch) writeTerminal(ctx context.Context) (string, harness.Reporter
 	if err != nil {
 		return "", 0, fmt.Errorf("load the session's model: %w", err)
 	}
-	argv := m.profile.ResumeCommand(m.session, current.Model, current.Effort)
-	base, err := m.s.harnessEnvironment(ctx, m.run, m.profile, current.Model)
+	nonce := rand.Text()
+	script, files, reporter, err := m.terminalScript(ctx, nonce, m.profile.ResumeCommand(m.session, current.Model, current.Effort), current.Model)
 	if err != nil {
 		return "", 0, err
+	}
+	files[coordtransport.NextCommandName] = script
+	if err := m.c.svc.WriteFiles(m.entry.runID, files); err != nil {
+		return "", 0, fmt.Errorf("write the agent's command: %w", err)
+	}
+	return nonce, reporter, nil
+}
+
+// terminalScript is the next-command script that runs argv as the session's
+// Standard agent with the arguments and environment a launch gives it, the
+// session directory files that launch reads, and the reporter it gives the
+// run.
+func (m modeSwitch) terminalScript(ctx context.Context, nonce string, argv []string, model string) ([]byte, map[string][]byte, harness.Reporter, error) {
+	base, err := m.s.harnessEnvironment(ctx, m.run, m.profile, model)
+	if err != nil {
+		return nil, nil, 0, err
 	}
 	var native harness.NativeLaunch
 	if m.c.enabled && m.run.Task != "" {
 		if native, err = m.profile.PrepareNativeLaunch(coordtransport.MountDir, argv, base); err != nil {
-			return "", 0, fmt.Errorf("prepare native coordination: %w", err)
+			return nil, nil, 0, fmt.Errorf("prepare native coordination: %w", err)
 		}
+	}
+	// As a launch: the terminal of an agent the server steers attaches to
+	// its app-server.
+	appServer := m.profile.Capabilities.Steer
+	if appServer && m.c.enabled {
+		native.IdleWake = true
+		native.Env = map[string]string{coordtransport.ManagedHooksEnv: "1"}
 	}
 	tui := *m.run
 	tui.Mode, tui.ACP = domain.LaunchTUI, false
-	instructions, err := m.s.launchInstructions(ctx, &tui, m.profile, native)
+	instructions, err := m.s.launchInstructions(ctx, &tui, m.profile, native, m.s.containerCLI(ctx, m.cid))
 	if err != nil {
-		return "", 0, err
+		return nil, nil, 0, err
 	}
 	launch, err := newCoordinationLaunch(m.c.enabled, &tui, m.profile, native, instructions)
 	if err != nil {
-		return "", 0, err
+		return nil, nil, 0, err
 	}
 	// The container already holds base; the command exports only what it
 	// changes, merged into base as the launch path merges it.
 	merged := maps.Clone(base)
 	if err := harness.MergeEnv(merged, launch.env); err != nil {
-		return "", 0, err
+		return nil, nil, 0, err
 	}
 	maps.Copy(merged, native.Env)
 	env := make(map[string]string, len(launch.env)+len(native.Env))
@@ -324,13 +349,12 @@ func (m modeSwitch) writeTerminal(ctx context.Context) (string, harness.Reporter
 	for key := range native.Env {
 		env[key] = merged[key]
 	}
-	nonce := rand.Text()
-	files := maps.Clone(launch.files)
-	files[coordtransport.NextCommandName] = nextCommand(nonce, native.Command(append(argv, launch.args...)), env)
-	if err := m.c.svc.WriteFiles(m.entry.runID, files); err != nil {
-		return "", 0, fmt.Errorf("write the agent's command: %w", err)
+	if appServer {
+		argv = codexapp.LaunchCommand(launch.args, argv)
+	} else {
+		argv = append(argv, launch.args...)
 	}
-	return nonce, launch.reporter, nil
+	return nextCommand(nonce, native.Command(argv), env), maps.Clone(launch.files), launch.reporter, nil
 }
 
 func (m modeSwitch) writeShell() (string, error) {
@@ -406,7 +430,7 @@ func nextCommand(nonce string, argv []string, env map[string]string) []byte {
 	if len(argv) == 0 {
 		return []byte(b.String())
 	}
-	b.WriteString("unset " + coordtransport.EnhancedEnv + "\n")
+	b.WriteString("unset " + coordtransport.EnhancedEnv + " " + envname.New(coordtransport.EnhancedEnv) + "\n")
 	for _, key := range slices.Sorted(maps.Keys(env)) {
 		b.WriteString("export " + key + "=" + shellquote.QuoteAlways(env[key]) + "\n")
 	}

@@ -24,9 +24,9 @@ import (
 	"github.com/3xDevOps/Aether/internal/memberhome"
 	"github.com/3xDevOps/Aether/internal/protocol"
 	"github.com/3xDevOps/Aether/internal/secretstore"
+	"github.com/3xDevOps/Aether/internal/selfupdate"
 	"github.com/3xDevOps/Aether/internal/signing"
 	"github.com/3xDevOps/Aether/internal/store"
-	"github.com/3xDevOps/Aether/internal/version"
 )
 
 // memberIDExtension is the ssh.Permissions extension carrying the
@@ -156,9 +156,11 @@ type Config struct {
 	// re-checks its authorization; zero means defaultRevalidateInterval.
 	// Unexported test knob.
 	revalidateInterval time.Duration
-	// release is the version this server reports and gates clients on;
-	// empty means version.Version. Unexported test knob.
-	release string
+	// release, build and hotfix are the release this server reports and
+	// gates clients on; an empty release means this binary's.
+	// Unexported test knobs.
+	release       string
+	build, hotfix int
 }
 
 type Server struct {
@@ -199,6 +201,11 @@ type Server struct {
 	// paths never acquire registerMu or mu, so the lock order cannot cycle.
 	authorizationMu *sync.Mutex
 	handoffSeq      atomic.Uint64
+	// accessGen counts workspace access changes; see accessChanged.
+	accessGen atomic.Uint64
+	// accessWake is closed by the next accessChanged; see accessChange.
+	accessWakeMu sync.Mutex
+	accessWake   chan struct{}
 
 	// Workspace gates fence repository access and live overlays against
 	// deletion. Keep each gate stable even after deletion so queued readers
@@ -288,7 +295,8 @@ func New(cfg Config) (*Server, error) {
 		cfg.revalidateInterval = defaultRevalidateInterval
 	}
 	if cfg.release == "" {
-		cfg.release = version.Version
+		running := selfupdate.Running()
+		cfg.release, cfg.build, cfg.hotfix = running.Version, running.Build, running.Hotfix
 	}
 	signer, err := LoadOrCreateHostKey(cfg.HostKeyPath)
 	if err != nil {
@@ -374,7 +382,7 @@ func (s *Server) authenticate(cm ssh.ConnMetadata, key ssh.PublicKey) (*ssh.Perm
 		}
 		return nil, &ssh.BannerError{
 			Err:     errors.New("sshd: unknown public key"),
-			Message: "no Aether member for this key\n",
+			Message: "no Cloudfield member for this key\n",
 		}
 	}
 	return &ssh.Permissions{Extensions: map[string]string{memberIDExtension: string(m.ID)}}, nil
@@ -390,7 +398,7 @@ func fromLoopback(cm ssh.ConnMetadata) bool {
 // both client commands.
 func firstAdminBanner(origin string, cm ssh.ConnMetadata) string {
 	edge := ""
-	if origin != edgeclient.DefaultURL {
+	if !edgeclient.Hosted(origin) {
 		edge = " --edge " + origin
 	}
 	_, port, _ := net.SplitHostPort(cm.LocalAddr().String())
@@ -410,7 +418,7 @@ func (s *Server) storeIsFresh(ctx context.Context) (bool, error) {
 }
 
 // bootstrapKeyMember registers the first key to contact a fresh server as
-// the admin member, only after the SSH handshake verified its signature.
+// the super admin member, only after the SSH handshake verified its signature.
 // Freshness is re-checked under registerMu: if another identity won the
 // race the connection is rejected, exactly as an unknown key would be.
 func (s *Server) bootstrapKeyMember(ctx context.Context, user, keyLine string) (*domain.Member, error) {
@@ -427,12 +435,12 @@ func (s *Server) bootstrapKeyMember(ctx context.Context, user, keyLine string) (
 		DisplayName: "admin",
 		PublicKey:   keyLine,
 		Color:       attribution.NextColor(nil),
-		Role:        domain.RoleAdmin,
+		Role:        domain.RoleSuperAdmin,
 	}
 	if err := s.cfg.Store.CreateMember(ctx, m); err != nil {
 		return nil, fmt.Errorf("sshd: bootstrap: %w", err)
 	}
-	slog.Info("sshd: bootstrap: first member registered as admin",
+	slog.Info("sshd: bootstrap: first member registered as super admin",
 		"member", m.ID, "key", fingerprintOf(keyLine), "user", user, "method", "publickey")
 	return m, nil
 }
@@ -648,7 +656,7 @@ func (s *Server) serveConn(ctx context.Context, c net.Conn, cfg *ssh.ServerConfi
 	if err != nil {
 		return
 	}
-	id.clientVersion, id.legacyClient = parseClientBanner(string(sconn.ClientVersion()))
+	id.client, id.legacyClient = parseClientBanner(string(sconn.ClientVersion()))
 	// A revocation between authentication and this registration closed
 	// nothing, so re-check once the connection is findable.
 	s.bindConn(c, id)

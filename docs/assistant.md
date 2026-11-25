@@ -1,10 +1,10 @@
 # Assistant
 
-The assistant is a chat panel in the dashboard where you ask Aether for things
-in plain language: "what's the status of my sessions?", "launch a session to fix the
-flaky login test", "install Rust in my environment". It acts with your
-permissions and asks before it launches, messages or stops a session, or saves your
-environment, unless you turn on [auto-approval](#auto-approval).
+The assistant is a chat panel in the dashboard where you ask Cloudfield for
+things in plain language: "what's the status of my sessions?", "launch a session
+to fix the flaky login test", "install Rust in my environment". It acts with
+your permissions and asks before it launches, messages or stops a session, or
+saves your environment, unless you turn on [auto-approval](#auto-approval).
 
 The assistant is not a session. It is an [Enhanced](enhanced-sessions.md) session of
 Claude Code or Codex with a sign-in of its own, which you make once for it. Its
@@ -13,10 +13,11 @@ workspace.
 
 ## Where it runs
 
-Each member's assistant runs in a container of its own,
-`aether-assistant-<member>`, created from the server's standard image. Your
-sessions and your [environment](environments.md) (the persistent container
-`aether terminal` opens) cannot see it:
+Each member's assistant runs in a sandbox of its own, created from the
+server's standard image: the container `aether-assistant-<member>`, or with
+`session-runtime vm` the VM unit `aether-vm-assistant-<member id>.service`.
+Your sessions and your [environment](environments.md) (the persistent sandbox
+`cloudfield terminal` opens) cannot see it:
 
 - Its home is `<data>/assistant/<member>/home` on the server. It mounts
   nothing from your home or any other member's: no `CLAUDE.md`, `AGENTS.md`,
@@ -67,18 +68,18 @@ On the first start, and after a server upgrade that pins a newer adapter, the
 panel shows **Installing** while a short-lived container,
 `aether-assistant-install-<member>`, runs `npm install` of the pinned adapter
 into that directory. It needs network access to the npm registry. The adapter
-carries the agent itself: the Claude Code binary of its Agent SDK, or Codex,
-which the install pins to 0.159.3. Neither updates on its own; both move when a
-server upgrade pins a newer version.
+carries the agent itself: the Claude Code binary of its Agent SDK, or the Codex
+version Cloudfield pins with the adapter. Neither updates on its own; both move
+when a server upgrade pins a newer version.
 
 ## Open it
 
-- Select **Assistant** in the sidebar next to **New session**, in the top bar when
-  the sidebar is hidden, or in the phone toolbar. A dot on it means an action
-  waits for your approval.
+- Select **Assistant** in the sidebar next to **New session**, in the top bar
+  when the sidebar is hidden, or the **Assistant** tab on a phone. A dot on it
+  means an action waits for your approval.
 - Press `Ctrl+Shift+Space` (`⌘Shift+Space` on macOS), even while a text field or
   a terminal has focus.
-- Run **Ask Aether** from the command palette.
+- Run **Ask Cloudfield** from the command palette.
 
 Viewers do not see the assistant. On a wide screen the panel docks on the right
 and can be resized. On a narrow window it floats over the page and `Esc` closes
@@ -91,20 +92,79 @@ Codex. An agent is ready when you signed it in for the assistant; a sign-in in
 your environment does not count, because your sessions can change it. A row that
 is not ready says `Not signed in for the assistant` and has **Sign in**.
 
-**Sign in** opens a terminal running the agent's sign-in in the assistant's
-container: `claude-agent-acp --cli auth login` for Claude Code, which prints a
-URL and asks for the code the page shows, or `codex login --device-auth` for
-Codex, which prints a URL and a code to enter there. It installs the adapter
-first if needed. Starting a sign-in deletes that agent's earlier sign-in, so
-what the server records is what the sign-in writes. The sign-in is written to
-the assistant's home only. Starting
-it stops a running assistant; the next prompt starts it again, and a
-prompt sent while the sign-in runs fails until it exits. Select **Done** when
-it exits.
+The first time you open the panel, while no agent has ever been signed in for
+the assistant, the panel starts the sign-in of the first agent the server
+lists, Claude Code before Codex. It never starts one on its own again: the
+server reports `sign_in_recorded` in the assistant status once any agent's
+sign-in has begun (`<data>/assistant/<member>/signin/started`, kept when a
+sign-in is abandoned or forgotten), and the dashboard starts at most one per
+page load.
+Otherwise select **Sign in** on a row.
 
-Aether checks only that the sign-in file exists, not that it still works. When
-the sign-in expires or you want another account, use **Settings > Assistant >
-Sign-in > Sign in again**.
+The sign-in runs in the assistant's container: `claude-agent-acp --cli auth
+login` for Claude Code, or `codex login --device-auth` for Codex. It installs
+the adapter first if needed. The panel reads the sign-in's output and shows:
+
+- Claude Code: **Open Claude sign-in**, the URL the sign-in printed, and a
+  **Paste the code** field that types the code the page shows into the
+  sign-in, followed by Enter.
+- Codex: **Open Codex sign-in** and the one-time code to enter there, with a
+  copy button.
+
+The button opens only a URL on the vendor's own hosts (`claude.com`,
+`claude.ai`, `anthropic.com`; `openai.com`, `chatgpt.com`), the newest one the
+sign-in printed. After you send a code the terminal opens, since the sign-in
+reports only there whether the code worked.
+
+**Show terminal** shows the sign-in's own terminal; when the sign-in exits or
+cannot start, the panel shows the terminal and the real error. In **Settings >
+Assistant > Sign-in** the terminal shows from the start.
+
+Starting a sign-in deletes that agent's earlier sign-in, so what the server
+records is what the sign-in writes. The sign-in is written to the assistant's
+home only. Starting it stops a running assistant; the next prompt starts it
+again, and a prompt sent while the sign-in runs fails until it exits. Select
+**Done** when it exits.
+
+Cloudfield checks only that the sign-in file exists, not that it still works.
+When the sign-in expires or you want another account, use **Settings > Assistant
+> Sign-in > Sign in again**.
+
+After sign-in the panel asks once **How should your assistant act?**:
+**Ask before acting** (recommended) keeps [approval cards](#approve-an-action),
+and **Act without asking** turns on [auto-approval](#auto-approval), with its
+warning shown under the button. Either answer is stored with your settings;
+a member who already set auto-approval, from Settings or the CLI, or answered
+the suggestion to turn it on, is not asked.
+
+### Same account as your sessions
+
+Once the first start has recorded the assistant's account, the panel's empty
+conversation and **Settings > Assistant > Sign-in** compare it with the login
+your sessions use: `~/.claude/.credentials.json` and `~/.codex/auth.json` in
+your environment's home (`assistant.account`). For Claude Code the server sends
+that file's access token to the profile endpoint the start uses and compares
+the account and organization; for Codex it reads the ChatGPT account from the
+file's token claims, with no network call. The line reads one of:
+
+- `Same Claude account as your sessions`, with the email when the profile
+  names one.
+- `Your sessions use another Claude account (account <uuid>, organization <uuid>, <email>)`,
+  or for Codex `(ChatGPT account <id>)` or `(an API key)`. Codex compares the
+  ChatGPT account only; the API key a ChatGPT login holds is its own.
+- `Can't compare: your environment's Claude token is expired. Start a session to refresh it`.
+  Codex has no such case, because its claims are read without the vendor.
+- `Can't compare with your sessions' <vendor> account: <error>`, for example
+  `your environment has no ~/.codex/auth.json`, or the profile endpoint's
+  answer.
+
+The check only reads the file. It never refreshes, writes, or locks it, and the
+refresh token stays where it is. The result is information only: it gates no
+start, and the assistant's own recorded account stays the one every start
+checks. Your sessions can rewrite the environment's login, so a match says only
+what the file holds now. A session on a
+[shared account](security.md#account-sharing) uses the owner's login instead of
+yours; the check reads yours.
 
 The first conversation uses the first ready agent, Claude Code before Codex. A
 conversation keeps its agent, because another agent cannot continue it. If that
@@ -116,8 +176,8 @@ ready agent.
 ## What it can do
 
 The assistant can do what you can do through the dashboard and nothing more. It
-can also read Aether's own guides, so it can explain features of the server you
-run.
+can also read Cloudfield's own guides, so it can explain features of the server
+you run.
 
 | What | Examples | Asks first? |
 | --- | --- | --- |
@@ -125,6 +185,7 @@ run.
 | Pause and resume | Pause or resume a session | No |
 | Launch a session | Start a session with a workspace, agent and task | Yes |
 | Message a session | Send a message to a session's agent | Yes |
+| Watch | Watch a session or pull request, change or pause a watch | No; Yes, even with auto-approval, when the watch relays notices into sessions (`relay_to`), except to pause it |
 | Stop or close a session | Stop a session, or close it as merged or abandoned | Yes |
 | Save your environment | Save it as the image new sessions and terminals start from | Yes |
 | Session lifecycle | Relaunch a stopped session, switch its mode, protect or archive it, hand it to a teammate | Yes |
@@ -134,8 +195,8 @@ run.
 Asked "what is left", "continue this" or "did we ship?", the assistant reads
 the session with its [progress evidence](connectors.md#progress-evidence)
 and answers requested, implemented, reviewed, merged, released and deployed
-on separate lines, each with its source and time, or "unknown" when Aether has
-no source, as for releases and deployments. An agent's success report alone
+on separate lines, each with its source and time, or "unknown" when Cloudfield
+has no source, as for releases and deployments. An agent's success report alone
 is not proof. "Continue" never repeats a launch, message or merge; the
 assistant proposes the next step and launches only when you ask.
 
@@ -146,8 +207,8 @@ An approved message reaches the agent at once when you control the session, or
 when it is your own session and no one controls it. Otherwise it waits about 45
 seconds for the member in control to approve or deny it.
 
-Installing a toolchain or editing a file is not an Aether action. The assistant
-does it in its own shell in your environment, then offers to save the
+Installing a toolchain or editing a file is not a Cloudfield action. The
+assistant does it in its own shell in your environment, then offers to save the
 environment.
 
 ## What a launch's task holds
@@ -211,7 +272,7 @@ The view a message carries is the one the assistant uses for that turn until
 you open another page. Before acting on a session it resolves the target from ids
 you wrote, then the page, then recent pages, and asks when more than one fits
 or you moved away from the session it last discussed. Only this assistant sees your
-page; assistants connected from outside Aether, such as ChatGPT, do not.
+page; assistants connected from outside Cloudfield, such as ChatGPT, do not.
 
 ## Approve an action
 
@@ -226,8 +287,11 @@ Save your environment as a new image; new sessions and terminals start from it
 ```
 
 A launch card instead lists what starts: the kind, workspace, agent with model
-and mode, the account, the fallback when that account's usage runs out, the
-task, and how you hear back. A template launch's card shows the whole task its
+and mode, the effort when set, the permission tier, the account, the fallback when that account's usage runs out, the
+task, and how you hear back. Its title names the
+[permission tier](security.md#permission-tiers) when the launch sets one, from
+your request or your saved choices, as in `Launch claude (acp) in api,
+permission root`, and the model and effort when the launch sets them. A template launch's card shows the whole task its
 parameters fill in. When the assistant gives a one-line reason for a launch,
 the card shows it as a **Reason** row above the rest. The assistant fills what you did not say from
 your [saved launch choices](teams.md#saved-launch-choices): **From your saved
@@ -253,10 +317,44 @@ assistant saves it with `aether_save_launch_defaults`, behind a card that
 spells out every saved choice; a choice for one launch is never saved. The
 launch dialog and **Settings → Launch** show the same choices.
 
-**Approve** runs it. **Decline**, no answer within 10 minutes, or ending the
-turn or session fails the action with the reason, for example `run.kill was
-not approved: the member declined this action`. The assistant is told to report
-the failure and not retry. The assistant cannot approve for you.
+**Approve** runs it. **Decline** or no answer before the card expires fails
+the action with the reason, for example `run.kill was not approved: the member
+declined this action`. The assistant is told to report the failure and not
+retry. The assistant cannot approve for you.
+
+A card outlives the turn that raised it. The server stores it with the exact
+call, so it shows after a reload, on your phone or desktop, after a server
+restart and while the assistant itself needs sign-in, and any of them can
+decide it (`assistant.confirm`); the first decision wins, and a second gets
+`assistant: no such pending confirmation`. Its
+push notification carries **Review…**, which opens the card, and **Decline**
+where the device shows them ([watches.md](watches.md#assistant-cards)); only
+the card itself approves.
+
+- A card from a turn you started in Cloudfield keeps the call waiting for 10
+  minutes; approving it in that time hands the result to the assistant.
+  **Stop**, the turn ending or the tool call hanging up stops the wait but
+  leaves the card open until it expires.
+- A card from a connector turn (ChatGPT, Claude) does not wait: the call
+  returns `Waiting for approval as card <id>; ...` at once and the card stays
+  open for 24 hours. In a connector turn, a call the connector's scopes do not
+  cover always shows a card, even with auto-approval on.
+- The same call asked again while its card is open shares that card.
+- Approving a card whose call no longer waits makes the server run it with
+  the stored parameters, as you. It first builds the card again; when it
+  would read differently, for example the session changed owner or the
+  template changed, the card fails with what it reads now and nothing runs.
+  The outcome is written into the conversation; the assistant is not woken.
+- Each card runs at most once. A run cut off by a server restart is recorded
+  as `Failed: the server restarted while it ran; check before retrying`, and
+  is not run again.
+- **New conversation** withdraws every open card.
+
+The card's chip names a turn that did not come from the dashboard, such as
+**via ChatGPT** for a turn a connector started with
+[`aether_ask_assistant`](connectors.md#ask-your-assistant). That connector can
+also decide the card with `aether_decide_assistant_card`, by echoing its text. An approved card reads **Approved, running…** until its
+outcome is in the conversation.
 
 Every action is recorded in the transcript. The approval is written before the
 action runs; if it cannot be written, the action does not run. The outcome
@@ -266,9 +364,10 @@ follows when the call returns:
 | --- | --- |
 | `Approved: <summary>` | You approved the card |
 | `Auto-approved: <summary>` | [Auto-approval](#auto-approval) passed it |
-| `Declined`, `Expired`, `Withdrawn: <summary>` | You declined, did not answer in 10 minutes, or the turn ended first. Nothing ran |
+| `Auto-approved by rule <id>: <summary>` | One of your [approval rules](#approval-rules) passed it |
+| `Declined`, `Expired`, `Withdrawn: <summary>` | You declined, did not answer before the card expired, or a new conversation withdrew it. Nothing ran |
 | `Done: <summary>` | It succeeded, with the session it launched |
-| `Failed: <summary>` | The server refused it, or the approval could not be read or counted, with the exact error. In the second case nothing ran |
+| `Failed: <summary>` | The server refused it, the card changed before it ran, the server restarted while it ran, or the approval could not be read or counted, with the exact error. In the last three cases nothing ran, or you check whether it did |
 
 Pausing and resuming are recorded as `Done` or `Failed` without an approval.
 Each record carries the target's session and workspace id, and the owner when the
@@ -276,12 +375,81 @@ session is another member's; the [protocol reference](local-gateway.md) gives th
 fields. Resetting the conversation drops the records of actions still in
 flight instead of writing them into the new one.
 
+## Approval rules
+
+A card that could become a rule shows four buttons. The third is the
+server's wording of exactly what the rule covers:
+
+```text
+Launch claude (acp) in api, no fallback: "Fix the flaky login test"
+  [Decline]  [Approve]
+  [Always approve launches of Claude Code (Enhanced) in api on your account, permission default, no fallback, for any task]
+  [Approve everything from now on]
+```
+
+**Always approve …** approves the card and saves the rule. **Approve
+everything from now on** approves the card, then asks to confirm turning on
+[auto-approval](#auto-approval); it is not shown while auto-approval is on. A later card with the same
+key passes without asking and is recorded as `Auto-approved by rule <id>:
+<summary>`. A card of any other kind still asks. Rules are checked before
+[auto-approval](#auto-approval), are read on every call, and never expire.
+
+| Card | The rule's key |
+| --- | --- |
+| `run.launch` | workspace, agent, account (yours or one named teammate's), mode, model, effort, permission tier, and whether fallback is off |
+| `run.inject`, `run.kill` | workspace, your own sessions only |
+| `env.save` | your environment |
+
+The key is built by the server from the card's parameters, never from the
+task, the message or the assistant's reason, which a rule does not limit.
+An empty mode, model or effort is part of the key: the rule covers only
+launches that leave it to the agent's default.
+
+These cards never offer a rule, and a rule never passes them:
+
+- Messaging or stopping another member's session.
+- A launch with automatic [usage fallback](teams.md#usage-fallback) while
+  any account is shared with you, or with a fallback order, extra
+  repositories, a subsession setting or resource limits.
+- A card whose text holds one of your saved [preferences](#preferences).
+- Everything auto-approval does not cover: template launches, merges,
+  closes, handoffs, memory notes and pins, forgetting a preference, saving
+  launch choices, and answering a session's question.
+
+Only you create rules, by clicking **Always approve** on a card in the
+Cloudfield app. The assistant, its tool socket and connectors cannot create,
+list or revoke them.
+
+**Settings → Assistant → Approval rules** lists each rule with its wording,
+the card it came from, when it was created and last used, and how many cards
+it passed. **Revoke** deletes it in one click and applies to the next card.
+The CLI does the same:
+
+```sh
+cloudfield member assistant rules                    # list
+cloudfield member assistant rules --revoke <rule-id>
+```
+
+```
+rule-7k2m9q4xbd  created 2026-11-03 14:02, 3 uses, last 2026-11-03 16:40
+  Always approve launches of Claude Code (Enhanced) in api on your account, permission default, for any task
+  from: Launch claude (acp) in api: "Fix the flaky login test"
+```
+
+A rule whose workspace was removed, or whose teammate's account is no
+longer shared with you, stops passing cards and is listed as `Inactive: <reason>`. Merging two members
+keeps the survivor's rules and does not move the absorbed member's.
+
+After you approve three cards of one kind in a row, the next card of that
+kind highlights **Always approve** and says `You approved this kind three
+times in a row.`
+
 ## See what it did
 
 Each action appears in the conversation as a card. The card names the action
 and its target ("Launched session on api with Claude Code", "Merged PR #42") and
-shows its state: running, done, failed, declined by you, expired after 10
-minutes unanswered, withdrawn when the turn ended first, or did not finish. A
+shows its state: running, done, failed, declined by you, expired unanswered,
+withdrawn by a new conversation, or did not finish. A
 call waiting for your approval is one line above the approval card. It also
 says whether you approved it or auto-approval passed it, and links to the session,
 pull request or environment. A failure shows the server's error as is.
@@ -302,9 +470,9 @@ it is on, the panel says **Acts without asking**. The dashboard asks you to
 confirm before turning it on. The CLI does not ask:
 
 ```sh
-aether member assistant                     # show the setting
-aether member assistant --auto-approve on
-aether member assistant --auto-approve off
+cloudfield member assistant                     # show the setting
+cloudfield member assistant --auto-approve on
+cloudfield member assistant --auto-approve off
 ```
 
 ```
@@ -336,8 +504,10 @@ not covered   the assistant's own shell and file tools, which never ask
 > call the assistant's tools and gets the same pass. See
 > [security.md](security.md#the-assistant).
 
-After you approve three cards in a row that auto-approval would have passed, the
-panel offers **Skip approval cards for the assistant?** when it is idle.
+After you approve three cards in a row that auto-approval would have passed,
+not all of one kind, the panel offers **Skip approval cards for the
+assistant?** when it is idle. Three of one kind highlight that kind's
+[rule](#approval-rules) instead.
 **Turn on auto-approval** turns it on. **Not now** asks again in 7 days, then 30,
 then never. **Don't suggest again** stops it.
 
@@ -351,8 +521,8 @@ agent asks you still appears as a card.
 
 ## Notifications
 
-Aether watches every session the assistant launches, relaunches or messages for
-you: it
+Cloudfield watches every session the assistant launches, relaunches or messages
+for you: it
 creates a [watch](watches.md#assistant-watches) with source `assistant`,
 listed in **Settings > Watches**, where you pause it to stop the notices. If
 the watch cannot be created, the conversation says so with the error. You do
@@ -381,7 +551,36 @@ answer within 10 seconds, Stop shows `assistant.cancel got no answer within 10
 seconds` and can be pressed again. A message the server does not accept within
 60 seconds shows `assistant.prompt got no answer within 60 seconds` and stays
 in the box; **Send** retries it under the same idempotency key, so it runs at
-most once. While a turn runs you cannot send another prompt.
+most once.
+
+### The queue
+
+A message sent while a turn runs is queued: the button reads **Queue**, and
+the message shows at the end of the conversation, numbered under **N queued,
+run after this turn**, until its turn starts. Queued messages run in that
+order, each when the turn before it ends.
+**Stop** cancels only the running turn; the next queued message then runs.
+**Remove** takes a queued message off before it runs. At most 5 wait; a sixth
+fails with `assistant: 5 prompts are already queued; wait or remove one`.
+
+The queue is stored on the server, so it survives a reload and a restart. A
+turn the server lost to a restart is marked `Interrupted` with `the server
+restarted while this turn ran; it was not sent again`, and is not rerun; the
+waiting messages then run. A queued message that could not start shows
+**Not sent** with the server's error, above the queued ones; **Retry** puts
+its text back in the message box, once an agent is ready, and **Dismiss**
+removes it. Each queued message names the door it came from. **New conversation** deletes the
+queue with the conversation: waiting messages, and the stored text and
+replies of earlier ones.
+
+Every message records where it came from. A chip on each of the last 50
+names any door other than the dashboard: **from phone** for the Android app,
+**from desktop** for the desktop app, **from ChatGPT (connector)** for a
+connector. The server stamps the origin from
+the connection that carried the message; the Cloudfield app only names which of
+its own clients it is, which labels the message and decides nothing. A
+connector origin is set only by the connector's own route, never by a request
+field.
 
 There is one conversation per member. It survives page reloads and server
 restarts. If the agent stops, the next prompt starts it again. **New
@@ -396,7 +595,7 @@ already did stays done.
 Before the assistant had its own container it ran in your environment, in
 `~/.aether/assistant`, and kept its sessions in your home. That state, and the
 login it borrowed from your home, are not moved, because any session could have
-changed them. Delete the old state from `aether terminal`; the session
+changed them. Delete the old state from `cloudfield terminal`; the session
 directory is named after your home's path, `-root--aether-assistant` when it
 is `/root`:
 
@@ -482,11 +681,14 @@ A failed start shows **The assistant stopped** with the error and **Retry**.
 | `scheduler: Anthropic answered 400 Bad Request: the sign-in service refused the assistant's sign-in. Sign in again` | The vendor refused the refresh token. [Sign in again](#first-use) |
 | `scheduler: not signed in for the assistant. Sign in for the assistant first` | No sign-in was recorded, or the sign-in wrote no usable file. [Sign in](#first-use) |
 | `scheduler: the assistant's sign-in changed since you signed in. Sign in again` | The sign-in file is not the one you made; only the assistant's own agent writes it. [Sign in again](#first-use) |
-| `scheduler: the assistant's sign-in held what Aether does not keep, and it was removed: ...` | The keys follow the colon. Only the assistant's own agent writes that file. **Retry**, and sign in again if the agent then reports no sign-in |
+| `scheduler: the assistant's sign-in held what Cloudfield does not keep, and it was removed: ...` | The keys follow the colon. Only the assistant's own agent writes that file. **Retry**, and sign in again if the agent then reports no sign-in |
 | `scheduler: install Claude Code for the assistant exited 1: ...` | The adapter install failed; npm's output follows the colon. Fix the cause (often network access), then **Retry** |
-| `assistant: a turn is running; stop it first` | Press **Stop**, then send again |
+| `assistant: 5 prompts are already queued; wait or remove one` | Five messages already wait. **Remove** one, or wait for the running turn |
+| `the server restarted while this turn ran; it was not sent again` | The turn may have done part of its work. Check, then send it again |
 | `assistant: open the claude session; stderr: ...` | The adapter failed to start. Read stderr, then **Retry** |
-| `the member did not answer within 10m0s` | The card timed out. Ask again |
+| `the member did not answer before the card expired` | The card timed out. Ask again |
+| `The card changed after you approved it, so nothing was run.` followed by `You approved: ...` and `It now reads: ...` | The target changed while the card waited. Read the new text and ask again |
+| `the server restarted while it ran; check before retrying` | The call may or may not have taken effect. Check the session before you ask again |
 | `<method> was not approved: record the approval: <error>` | The approval could not be saved, so the action did not run. Try again |
 | `the assistant is not configured on this server` | The server runs without the assistant |
 | `assistant: the server is shutting down` | Try again after the restart |

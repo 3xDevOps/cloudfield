@@ -187,13 +187,13 @@ func TestContainerRatesNeedTwoSamples(t *testing.T) {
 	sample := func(cpuNs, periods, throttled, rx uint64) {
 		s.finishContainers([]runtime.ContainerStat{{
 			ID: "c1", Read: read, CPUUsageNanos: cpuNs, CPUPeriods: periods, CPUThrottledPeriods: throttled,
-			NetRxBytes: rx, MemoryBytes: 5,
+			NetRxBytes: rx, MemoryBytes: 5, HostMemoryBytes: 9,
 		}}, nil)
 	}
 
 	sample(1e9, 10, 1, 0)
 	first := s.Read(time.Time{}).Containers
-	if len(first) != 1 || first[0].Rates != nil || first[0].MemoryBytes != 5 {
+	if len(first) != 1 || first[0].Rates != nil || first[0].MemoryBytes != 5 || first[0].HostMemoryBytes != 9 {
 		t.Fatalf("first sample = %+v, want gauges without rates", first)
 	}
 
@@ -230,6 +230,7 @@ func TestContainersAreSampledOnlyWhileWatched(t *testing.T) {
 	s.interval, s.delay, s.ttl = 40*time.Millisecond, 10*time.Millisecond, 150*time.Millisecond
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	started := time.Now()
 	go s.Run(ctx)
 
 	time.Sleep(100 * time.Millisecond)
@@ -237,12 +238,29 @@ func TestContainersAreSampledOnlyWhileWatched(t *testing.T) {
 		t.Fatalf("idle sampler read containers %d times", n)
 	}
 
-	s.Read(time.Time{})
-	waitFor(t, "wake sample and the sample after it", func() bool { return src.calls.Load() >= 2 })
-
-	// Reads keep it watched; once they stop, sampling stops after the TTL.
-	waitFor(t, "ticks while watched", func() bool { return src.calls.Load() >= 5 })
+	// Reads keep it watched, as a polling dashboard does; once they stop,
+	// sampling stops after the TTL.
+	watched := func(calls int64, d time.Duration) func() bool {
+		begin := time.Now()
+		return func() bool {
+			s.Read(time.Time{})
+			return src.calls.Load() >= calls && time.Since(begin) >= d
+		}
+	}
+	waitFor(t, "wake sample and the sample after it", watched(2, 0))
+	waitFor(t, "ticks while watched", watched(5, 4*s.interval))
+	// Only ticks sample while watched: beyond the wake sample and the one
+	// after it, a Read must not trigger a sample.
+	n := src.calls.Load()
+	if limit := 3 + int64(time.Since(started)/s.interval); n > limit {
+		t.Fatalf("%d samples while watched, more than the %d the ticker allows", n, limit)
+	}
 	time.Sleep(s.ttl + 2*s.interval)
+	waitFor(t, "the last sample to finish", func() bool {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return !s.running
+	})
 	stopped := src.calls.Load()
 	time.Sleep(4 * s.interval)
 	if n := src.calls.Load(); n != stopped {
@@ -261,5 +279,21 @@ func waitFor(t *testing.T, what string, ok func() bool) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestCgroupMemoryPressureReadsAvg60(t *testing.T) {
+	dir := t.TempDir()
+	got, err := CgroupMemoryPressure(dir)
+	if err != nil || got != nil {
+		t.Fatalf("missing memory.pressure = %v, %v, want nil, nil", got, err)
+	}
+	body := "some avg10=90.00 avg60=12.50 avg300=1.00 total=1\nfull avg10=9.00 avg60=0 avg300=0 total=0\n"
+	if err = os.WriteFile(filepath.Join(dir, "memory.pressure"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	got, err = CgroupMemoryPressure(dir)
+	if err != nil || got == nil || *got != 12.5 {
+		t.Fatalf("CgroupMemoryPressure = %v, %v, want 12.5", got, err)
 	}
 }

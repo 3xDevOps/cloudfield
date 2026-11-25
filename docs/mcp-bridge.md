@@ -1,17 +1,19 @@
 # The MCP bridge
 
-Aether's MCP bridge is an in-container MCP server for six coordination
+Cloudfield's MCP bridge is an in-container MCP server for six coordination
 tools and two team memory tools, registered automatically for Enhanced sessions
 and manually elsewhere. The canonical agent interface is the
-`aether-internal` CLI, which is automatically available in every managed
-container and can load a version-matched skill on demand. The bridge does not mirror the whole `aether-internal` surface.
+`cloudfield-internal` CLI (`aether-internal` in containers created before the
+rename and in micro VM sessions), which is available in every managed
+container and can load a version-matched skill on demand. The bridge does not mirror the whole `cloudfield-internal` surface.
 
 When coordination assets are available, the server stages verified executable
-bytes read-only at the two in-container paths used by the existing surfaces:
+bytes read-only at the in-container paths used by the existing surfaces:
 
 ```
-/opt/aether/aether-server         optional MCP entry point and lifecycle hook
-/usr/local/bin/aether-internal    canonical agent-facing coordination CLI
+/opt/aether/aether-server             optional MCP entry point and lifecycle hook
+/usr/local/bin/aether-internal        canonical agent-facing coordination CLI
+/usr/local/bin/cloudfield-internal    the same CLI; containers created before this release lack it
 ```
 
 The session coordination directory carries the session socket and related server
@@ -22,9 +24,9 @@ assets:
 /run/aether/co-authors            server-generated commit trailers
 ```
 
-These are Aether-owned surfaces, not caller-provided mounts. Caller mounts
+These are Cloudfield-owned surfaces, not caller-provided mounts. Caller mounts
 cannot shadow the coordination directory or either executable. If verified
-staging fails, Aether refuses to create the managed container; it does not
+staging fails, Cloudfield refuses to create the managed container; it does not
 silently launch a container without the canonical CLI or bridge binary.
 
 The socket is the session identity and authentication boundary. The bridge and CLI
@@ -35,9 +37,9 @@ session-bound operations are unavailable.
 ## Registration
 
 Enhanced sessions (sessions driven over ACP, the Agent Client Protocol) get the bridge
-automatically: when the session has a coordination directory, Aether passes
+automatically: when the session has a coordination directory, Cloudfield passes
 `/opt/aether/aether-server mcp` as the stdio MCP server `aether` in ACP
-`session/new`, `session/resume` and `session/load`. Aether writes no agent
+`session/new`, `session/resume` and `session/load`. Cloudfield writes no agent
 configuration file for it.
 
 Standard sessions do not get the bridge registered. To use it there, create a
@@ -51,12 +53,12 @@ EOF
 claude --mcp-config /tmp/aether-mcp.json
 ```
 
-Aether does not write or manage that path, and other agents use different
+Cloudfield does not write or manage that path, and other agents use different
 syntax. The bridge still reaches only the session socket of its container.
 
 The bridge's MCP `instructions` are the session's role card (see
 [Agent instructions](coordination.md#agent-instructions)). When
-`AETHER_ROLE_CARD=1`, which Aether sets on the bridge when the ACP system
+`AETHER_ROLE_CARD=1`, which Cloudfield sets on the bridge when the ACP system
 prompt already carries the card, they are only a brief of under 512 bytes:
 report success or failure when the work the agent owns is done or cannot be
 done, needs-input only for a question a human must answer (Background
@@ -66,10 +68,10 @@ for mail in the turn with `aether_inbox`; never report while still working;
 subagents and spawned workflows never report. Both come from `coord.status`,
 asked once with a 2-second limit: without `coord.report` in its
 capabilities there is no brief and the card has no report lines, and
-without an answer the instructions only point at `aether-internal skill`.
+without an answer the instructions only point at `cloudfield-internal skill`.
 
 The canonical CLI remains available without MCP. A shell-capable agent can
-invoke `aether-internal` directly and request its live, version-matched skill
+invoke `cloudfield-internal` directly and request its live, version-matched skill
 on demand. A container or terminal without a session identity can use general
 help or the non-session skill guidance, but status, messaging and reporting return unavailable. Lack of manual MCP registration is not
 an overlap-only or notice-only mode.
@@ -90,13 +92,13 @@ surface.
 | --- | --- | --- | --- |
 | `aether_status` | `coord.status` | none | v3 identity, assignment, messageable peers, unread count, capabilities |
 | `aether_send` | `coord.send` | `to_run_id`, `body`, `idempotency_key` | `message_id`, `recipient_status` |
-| `aether_inbox` | `coord.inbox` | optional `ack_token`, optional `wait_seconds` | `messages`, `ack_token` |
+| `aether_inbox` | `coord.inbox` | optional `ack_token`, optional `wait_seconds`, optional `ack_only` (acknowledge without reading the next batch) | `messages`, `ack_token` |
 | `aether_ask` | `coord.ask` | `to_run_id`, `body`, `idempotency_key` | `question_id`, `recipient_status` |
 | `aether_reply` | `coord.reply` | `question_id`, `body`, `idempotency_key` | `message_id` |
 | `aether_report` | `coord.report` | `outcome`, `summary`, optional `evidence_refs`, optional `waiting_for`, optional `until`, `idempotency_key` | durable `report_id`, outcome, summary, next action, evidence references, automatic `evidence_ref` |
 | `aether_memory_search` | `memory.search`, or `memory.show` with `id` | optional `query`, `id`, `kind`, `file`, `all` | up to 10 `items`, best first; with `id`, that note as the one item and its supersede `chain` |
 | `aether_memory_add` | `memory.add` | `kind`, `text`, optional `files`, `supersedes`, `scope` | the stored `item`, `duplicate`, up to 3 `similar` live notes |
-| `aether_subsession_options` | `child.options` | optional `harness` | `allowed`, the refusal `reason`, `scope`, `limits`, `busy`, `queued`, `total`, each `choice` with its `status` |
+| `aether_subsession_options` | `child.options` | optional `harness` | `allowed`, the refusal `reason`, `scope`, `limits`, `busy`, `queued`, `total`, each `choice` with its `status`; with `harness`, its `models` and a failed discovery's `models_error` |
 | `aether_subsession_start` | `child.start` | `harness`, `purpose`, `task`, `idempotency_key`, optional `model`, `mode`, `account_member_id` | the subsession and `next` |
 | `aether_subsessions` | `child.list` | optional `run_id` | `children` |
 | `aether_subsession_cancel` | `child.cancel` | `run_id` | the subsession |
@@ -125,7 +127,7 @@ notes.
 
 `aether_status` lists every capability of the session, including `dev.*` methods
 that have no MCP tool. Its tool description tells the agent to run
-`aether-internal skill` for those.
+`cloudfield-internal skill` for those.
 
 `aether_status` lists the peers described in
 [Wire v3](coordination.md#wire-v3); a peer's `run_id` is the `to_run_id` for
@@ -173,7 +175,7 @@ anything else is invalid params. `until`, also only with `waiting`, is up to
 4 conditions that wake the agent when the first resolves
 ([session waits](watches.md#session-waits)). The schema's outcome description is the
 same for every session; the server refuses outcomes a session's role or launch
-cannot use, and the instructions list the ones that apply. Before the server accepts a report, Aether
+cannot use, and the instructions list the ones that apply. Before the server accepts a report, Cloudfield
 captures the session's evidence, including a private Git evidence commit and a bounded PTY
 transcript. The retained packet records factual context, provenance,
 unresolved facts, and a next action, with unavailable or truncated sources
@@ -189,25 +191,25 @@ terminal report behavior. See [Report an outcome](coordination.md#report-an-outc
 ## MCP errors
 
 Coordination failures are returned as MCP tool results with `isError`, not as
-MCP session-level JSON-RPC failures. Aether's numeric code is in the result
+MCP session-level JSON-RPC failures. Cloudfield's numeric code is in the result
 metadata key `aether/error_code`; the text includes the method-qualified
 message. Local socket failures such as a missing listener, EOF, broken pipe,
 or a connection-cap refusal map to `CodeUnavailable` (`-32004`). Server
-responses preserve their own Aether codes, including `CodeDenied` (`-32001`),
-`CodeConflict` (`-32003`), `CodeNotFound` (`-32000`), and
+responses preserve their own Cloudfield codes, including `CodeDenied`
+(`-32001`), `CodeConflict` (`-32003`), `CodeNotFound` (`-32000`), and
 `CodeInvalidParams` (`-32602`). This keeps an operation failure actionable
 without tearing down the MCP session.
 
 The method set is closed. The bridge cannot invoke a control verb, type into a
 terminal, read Git, or access another session's transcript. Human messages still
-use Aether's host-side serialized PTY input path, except in Standard Codex, which
+use Cloudfield's host-side serialized PTY input path, except in Standard Codex, which
 receives them through its app-server; MCP is not an inbound
 terminal hook.
 
 ## `run.report` is not `coord.report`
 
 `aether_report` is the MCP spelling of durable `coord.report`, and has the
-same evidence-before-acceptance behavior as `aether-internal report`.
+same evidence-before-acceptance behavior as `cloudfield-internal report`.
 
 The staged binary at `/opt/aether/aether-server` also retains the separate
 agent lifecycle command:
@@ -231,15 +233,15 @@ unavailable so it cannot block the agent.
 ## Staging, retention, and shutdown
 
 The staged binary is content-addressed. A session keeps the exact verified bytes
-used at provisioning, even if the server binary is upgraded later. Aether
+used at provisioning, even if the server binary is upgraded later. Cloudfield
 records the staged digest and coordination directory in the session sidecar before
 creating the container, and recovery rebuilds the listener from surviving
 sidecars.
 
 Active sessions and retained terminal TUI sessions keep their socket, unread mailbox,
 and MCP assets through a server restart. When the container is destroyed,
-Aether releases the coordination directory and mailbox after required evidence
-capture.
+Cloudfield releases the coordination directory and mailbox after required
+evidence capture.
 The coordination disable setting remains effective. When it is off, no session
 socket or usable MCP bridge is provided: bridge calls and run-bound CLI
 operations return unavailable. Every newly created managed container still
@@ -250,8 +252,8 @@ conflict radar itself continues to operate.
 ## The assistant tool set
 
 `aether-server mcp --assistant` serves a different tool set for the member
-assistant (the built-in agent that runs in the member's environment container,
-not in a session). It dials `/run/aether-assistant/assistant.sock`; `-socket`
+assistant (the built-in agent that runs in a sandbox of its own, not in a
+session or the member's environment). It dials `/run/aether-assistant/assistant.sock`; `-socket`
 overrides the path. The socket is bound to one member, so no call names who
 acts: the socket rejects any param containing `member_id` except the agent
 accounts a call launches on or reads (`account_member_id` and

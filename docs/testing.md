@@ -12,9 +12,9 @@ pull request sessions are in
 | --- | --- | --- |
 | Any Go code | `make test` | Go |
 | Server code that touches containers, git, SSH or storage | `make test-integration` | Docker, git; root to match CI |
-| Dashboard components in `web/src` | `cd web && bun run typecheck && bun run test` | Bun, Node 22+ |
+| Dashboard components in `web/src` | `cd web && bun run typecheck && bun run test`, then `make public-audit` | Bun, Node 22+ |
 | Something a person clicks through in the dashboard | `make test-e2e` | Docker, git, Bun, Node 22+, Playwright's Chromium |
-| `scripts/`, the installers, `desktop/` | `make test-scripts` | sh, Node, OpenSSL 3 |
+| `scripts/`, the installers, `desktop/` | `make test-scripts` | sh, Node, OpenSSL 3, jq, Go |
 | `.github/workflows/` | `make lint-workflows` | ShellCheck |
 | How an agent CLI is launched (`internal/harness`) | [Real-agent smoke tests](#real-agent-smoke-tests) | Docker |
 | How a session drives, reads or wakes its agent | [Real agents against a mock model](#real-agents-against-a-mock-model) | Docker, git |
@@ -25,15 +25,27 @@ pull request sessions are in
 | The edge store or `scripts/edge-update.sh` | `make test-edge-upgrade` | root, Docker with Compose and buildx, jq, curl |
 | `images/browser/` | `make browser-image && make browser-smoke` | Docker |
 | `android/` | `make android` | Docker |
+| `internal/vmimage` | `go test ./internal/vmimage`, then [`make test-kvm`](#vm-tests) | e2fsprogs, qemu-utils; root for the owner test |
+| `images/kernel/` | [The guest kernel](#the-guest-kernel), then [`make test-kvm`](#vm-tests) | Docker; a KVM host to boot it |
+| `internal/guest` (the VM helper) | `go test ./internal/guest/...`, then [`make test-kvm`](#vm-tests) | Go; a KVM host for the VM test |
+| `internal/runtime/vm` (the VM engine) | `go test ./internal/runtime/vm`, then [`make test-kvm`](#vm-tests) | Go; a KVM host for the VM test |
 | Only `docs/` or root `*.md` | `make public-audit` | sh |
 
 ## Unit tests
 
-`make test` runs `go test -race` over every package. `make test TEST_RACE=`
-drops the race detector; the SQLite driver is transpiled C, which the
+`make test` runs `go test -race` over every package, with `-d=checkptr=0`
+passed through `-gcflags` to `modernc.org/sqlite/...`,
+`modernc.org/libc/...`, `modernc.org/memory` and `modernc.org/mathutil`:
+checkptr, which `-race` turns on, is off for the SQLite library's packages
+and stays on for every other package. `make test TEST_RACE=` drops the race
+detector and those `-gcflags`; the SQLite driver is transpiled C, which the
 detector slows ten to twenty times (`internal/store` takes 26 s without it and
-over five minutes with it). CI runs pull requests without `-race` and the
-merge queue and `main` with it.
+over five minutes with it). CI runs pull requests without `-race`, except
+`internal/store`, and the merge queue and `main` with it.
+
+`make test-store` runs `internal/store` alone under `-race` with the same
+`-gcflags`. CI runs it on every event as the `store-tests` job and leaves
+`internal/store` out of `build-and-test`'s `make test`.
 
 ```sh
 make test                                   # everything
@@ -86,21 +98,19 @@ checkout to the container user and an unprivileged process can only hand
 files to itself.
 
 `make test-integration` and `make test-agents` run with `-race`. A non-empty
-`INTEGRATION_NORACE` turns it off, as a CI pull request does; pushes to main and
-the merge queue race everything.
+`INTEGRATION_NORACE` turns it off. CI runs the Docker suites in the merge
+queue and on `main` only, with `-race`.
 
-CI splits the suite into three jobs. To repeat one that failed:
+CI splits the suite into two jobs. To repeat one that failed:
 
 | CI job | Variables |
 | --- | --- |
 | `integration (server-rest, browser)` | `INTEGRATION_PKGS=./internal/server INTEGRATION_SKIP_PATTERN='^TestIntegration(Chaos\|Coordination\|EndToEnd\|MultiMember\|ServerUpdate)'` with the [browser image](#the-browser-companion) variables, after `make browser-smoke` |
-| `integration (server-flows, smoke)` | `INTEGRATION_PKGS=./internal/server INTEGRATION_RUN='^TestIntegration(Chaos\|Coordination)'`, then the same with `'^TestIntegration(EndToEnd\|MultiMember\|ServerUpdate)'`, then the [smoke tests](#real-agent-smoke-tests) |
-| `integration (scheduler, rest, agents)` | `INTEGRATION_SKIP="./internal/harness ./internal/server" INTEGRATION_SKIP_PATTERN='^TestDockerBrowser'`, then [`make test-agents`](#real-agents-against-a-mock-model) |
+| `integration (server-flows, scheduler, rest, agents, smoke)` | `INTEGRATION_PKGS=./internal/server INTEGRATION_RUN='^TestIntegration(Chaos\|Coordination)'`, then the same with `'^TestIntegration(EndToEnd\|MultiMember\|ServerUpdate)'`, then `INTEGRATION_SKIP="./internal/harness ./internal/server" INTEGRATION_SKIP_PATTERN='^TestDockerBrowser'`, then the [smoke tests](#real-agent-smoke-tests) and [`make test-agents`](#real-agents-against-a-mock-model) |
 
-A pull request runs the Docker suites on amd64 only. A push to main and a
-merge-queue entry also run the `arm64` job: the standard-image and
-browser-image builds, the smoke tests, `make browser-smoke` and the browser
-runtime tests on a native arm64 runner.
+The merge queue and `main` run the Docker suites on amd64 and also run the
+`arm64` job: the standard-image and browser-image builds, the smoke tests,
+`make browser-smoke` and the browser runtime tests on a native arm64 runner.
 
 CI sets `GOFLAGS=-v`, so each test's duration is in the job log.
 
@@ -148,7 +158,8 @@ script committed to the test repository).
 | `TestIntegrationMultiMember` | Joining, roles, handoff, budget caps, an agent crash |
 | `TestIntegrationChaos*` | The server killed mid-session, disk pressure, a stalled agent |
 | `TestIntegrationCoordination*` | Messages between sessions |
-| `TestIntegrationServerUpdate*` | `aether-server update`: preflight, rollback, downgrade guards |
+| `TestIntegrationServerUpdate*` | `cloudfield-server update`: preflight, rollback, downgrade guards |
+| `TestIntegrationRestart*` | Enhanced sessions through server restarts and updates ([Restart acceptance](#restart-acceptance)) |
 | `TestIntegrationServerGateway` | The dashboard the server hosts on the tailnet |
 | `TestIntegrationConnectorFlows` | A ChatGPT connector, over OAuth and MCP, launching, messaging, answering and stopping enhanced sessions |
 
@@ -157,17 +168,88 @@ sudo env "PATH=$PATH" "HOME=$HOME" make test-integration \
   INTEGRATION_PKGS=./internal/server INTEGRATION_RUN='^TestIntegrationEndToEnd$'
 ```
 
+## Restart acceptance
+
+`internal/server/restart_integration_test.go` checks that Enhanced sessions keep
+working through a server restart or update, in three sizes:
+
+- `TestIntegrationRestartSmoke` runs in CI, in about 90 seconds. Two Enhanced
+  sessions, A streaming a numbered line every 100 ms and B holding a permission
+  request, each run a probe process started with `docker exec` (not part of
+  the agent). The probes call the server through the staged CLI and MCP bridge
+  and exchange mail, keeping an `inbox --wait 20` long poll open. Just before
+  each of two `SIGTERM`s and one `SIGKILL`, each probe fires keyed
+  `send`s through both the CLI and the bridge, and one unkeyed
+  `dev.terminal.input`.
+- `TestIntegrationRestartCoordination` measures the coordination socket alone
+  with one external probe.
+- `TestIntegrationRestartScaling` repeats two `SIGTERM` restarts with 2, 4 and 7
+  live Enhanced sessions and prints the stream delay of each; it skips unless
+  `AETHER_RESTART_FULL=1`.
+- `TestIntegrationRestartAcceptance` is the full matrix for a release or an
+  owner check; it skips unless `AETHER_RESTART_FULL=1`.
+
+The full matrix builds `aether-server` twice (the second reports `v0.0.0-soak-b`), runs one as a
+child process against real Docker with a temporary data directory, and launches
+three Enhanced sessions of a scripted agent (`internal/acphost/acpmock`):
+
+- Sessions A and B each start a 120-second shell command that appends a line a
+  second to a marker file, then for 105 seconds call the server through the
+  staged `aether-internal` CLI and the staged `aether-server mcp` bridge
+  (`internal/server/testdata/soakagent`), about one request a second in all. A sends mail to B with the CLI and
+  reads with the bridge; B does the reverse. Half of A's CLI sends omit the
+  idempotency key; the bridge requires one. Each side keeps one `inbox` long poll in flight. The agent
+  streams a numbered line every 100 ms as its answer.
+- Session C holds a permission request open until the end.
+
+The test then restarts the server five ways, 20 seconds apart: `SIGTERM` and
+start the same binary twice, replace the binary with the second build, put the
+first build back (the rollback case), and `SIGKILL`. Every restart lands while
+a call, an inbox long poll and a send are in flight. The swap and rollback stop
+the server with `SIGTERM` and replace the file, as `cloudfield-server update` does;
+the `exec` step itself is covered by `TestIntegrationServerUpdate*`.
+
+It fails on any of:
+
+- a turn interrupted or a run parked with `turn interrupted`;
+- a failed CLI or bridge call the agent saw;
+- a send that failed but was delivered, unless its error says it "may already
+  have applied", or a message delivered twice;
+- an unkeyed terminal input applied more than once, or its echo not read
+  from the output cursor held before the restart without `missing_cursor`
+  or `truncated`;
+- no terminal input accepted after the first restart with the control lease
+  the probe acquired before it;
+- a sent message that was never received, or was received twice;
+- a streamed line missing or repeated;
+- the marker file not holding lines 1 to 120, or the container's ID or start
+  time changing;
+- the permission request lost, or its answer not reaching the agent.
+
+It prints, per restart, the milliseconds between the last success before the
+signal and the first success after it for each channel (CLI and bridge calls
+on both runs and the `aether-acp` stream). Status calls run every
+2 seconds (4 in the smoke test), because the coordination socket allows one request a second per
+run, so a gap under about one interval is the probe interval and means no outage.
+
+```sh
+sudo env "PATH=$PATH" "HOME=$HOME" AETHER_RESTART_FULL=1 make test-integration \
+  INTEGRATION_PKGS=./internal/server INTEGRATION_RUN='^TestIntegrationRestart'
+```
+
+Both use `busybox:1.36`, which must be pulled; the full matrix takes about four minutes.
+
 ## Real-agent smoke tests
 
 `internal/harness/smoke_integration_test.go` starts the vendors' real agent
-CLIs to check that the command lines Aether builds are still accepted. A
+CLIs to check that the command lines Cloudfield builds are still accepted. A
 vendor renaming a flag breaks every session of that agent, and nothing else
 catches it.
 
 `TestSmokeHeadlessNoLogin` runs in CI. It launches each headless template
 with no credentials and passes when the session fails for want of a login, never
-for an unparseable command line. CI's `integration (server-flows, smoke)` job
-builds the standard image, adds the agent CLIs at their current versions with
+for an unparseable command line. CI's `integration (server-flows, scheduler, rest, agents, smoke)`
+job builds the standard image, adds the agent CLIs at their current versions with
 `images/smoke/Dockerfile`,
 and sessions:
 
@@ -235,15 +317,15 @@ process (`internal/server/mockmodel_integration_test.go`) serves streaming
 Anthropic `/v1/messages` and OpenAI `/v1/responses`. Each prompt the test
 sends carries a tag, `aether-script:<turn>;`, naming the script the mock
 plays for that turn: one tool call per step, then a text answer. The mock
-answers each report reminder Aether sends with `aether-internal report`.
+answers each report reminder Cloudfield sends with `aether-internal report`.
 
 One Standard and one Enhanced session per agent play these turns in order. The
 launch starts `turn`, mail starts `wake`, and `run.inject` starts the rest:
 
 | Turn | The agent | The session must show |
 | --- | --- | --- |
-| `turn` | runs a command and ends the turn without a report | `answered` after one reminder; Standard Codex, which Aether cannot remind, `waiting` |
-| `wake` | gets mail while idle | a new turn, where Aether can wake the session |
+| `turn` | runs a command and ends the turn without a report | `answered` after one reminder; Standard Codex, which Cloudfield cannot remind, `waiting` |
+| `wake` | gets mail while idle | a new turn, where Cloudfield can wake the session |
 | `waiting` | reports `waiting --for ci` | `waiting-ci` with the summary |
 | `answered` | reports `answered` | `answered`, not Needs you |
 | `late-report` | reports `waiting --for process` from a detached process five seconds later | the report landing after the session parked, then `waiting-tools` |
@@ -260,12 +342,12 @@ or a report recorded but shown as the wrong state (`misclassified`). The
 first turn and every Background session also require the launch to record where
 its instructions went.
 
-The `wake` turn runs where Aether can wake the session: every Enhanced session, and a
+The `wake` turn runs where Cloudfield can wake the session: every Enhanced session, and a
 Standard session whose agent sets `IdleWake` in its capabilities
 (`internal/harness/capabilities.go`); the others skip it. A session must never
 need you while its subagent works. It should show `working`, or
 `waiting-agents` when Standard Claude Code ends the turn with the subagent
-still running in the background. Aether gets no
+still running in the background. Cloudfield gets no
 signal for a Codex subagent, and Standard Claude Code's Stop hook can arrive
 without the subagent among its background tasks, so those sessions can read as
 idle; the test logs their idle states as a known gap and fails any other.
@@ -281,6 +363,14 @@ Code run against a model that accepts every request and never answers. It
 requires the session to park as a possible stall awaiting its first event, and
 never to read disconnected.
 
+`TestIntegrationClaudeEnhancedSleepsAndWakes`
+(`internal/server/sleep_integration_test.go`) runs a server with
+`--run-sleep-after 5s`. An Enhanced Claude Code session answers one turn and
+falls asleep; the test requires its container to be stopped, not removed, and
+the session still live. A prompt then wakes it, and the model's next request
+must carry the turn from before the sleep. An agent gets
+`Capabilities.Sleep` only with a test like this one.
+
 Sessions reach the mock the way they reach a [model
 gateway](harnesses.md#per-agent-setup): `ANTHROPIC_BASE_URL` for Claude Code,
 `openai_base_url` in `~/.codex/config.toml` for Codex. The test seeds the
@@ -289,7 +379,7 @@ approved API key and a trusted checkout. The Codex config also sets
 `model_auto_compact_token_limit`, so the `compaction` turn's claimed usage
 makes Codex compact.
 
-CI's `integration (scheduler, rest, agents)` job runs both as root. Run them the same way, with Docker and
+CI's `integration (server-flows, scheduler, rest, agents, smoke)` job runs both as root. Run them the same way, with Docker and
 git:
 
 ```sh
@@ -308,13 +398,46 @@ mock received.
 `CODEX_VERSION`; the ACP adapters follow `internal/harness/acpregistry.json`,
 the versions members install. The smoke image takes each vendor's latest
 release; this one is pinned so a vendor release cannot fail an unrelated pull
-request. To bump, change the version, run the two commands above, and fix
-what the new release broke in the same pull request.
+request.
 
-The assistant installs the adapters at the versions in `acpregistry.json` and
-`assistantPins` (`internal/scheduler/assistant_container.go`), and refreshes
-its sign-ins with the endpoints and client ids next to `assistantPins`. After
-moving either, run:
+`scripts/bump-agent-pins.sh` moves every pin to the newest release and prints
+each one it moved: the adapters in `acpregistry.json` and
+`internal/harness/acp.go` to the versions the
+[ACP registry](https://cdn.agentclientprotocol.com/registry/v1/latest/registry.json)
+lists, each adapter's `CLIVersion` to the CLI that release installs, the
+two CLIs above to npm's latest, and the oh-my-pi release session VMs' auth
+broker runs, in `internal/serversetup/omp.go`, to the newest GitHub release
+with its SHA-256 and size. It needs curl, jq and npm. Run the two commands
+above on the result, and fix what the new releases broke in the same pull
+request.
+
+The **Agent pins** workflow (`.github/workflows/agent-pins.yml`) runs the
+script every Monday at 06:00 UTC and on `gh workflow run agent-pins.yml`, and
+opens or updates one pull request from `bot/agent-pins`. Pull request CI runs
+the unit tests; the merge queue runs the real-agent suite on the new versions.
+The workflow never replaces a pull request that carries a commit anyone else
+authored or committed, so push a fix for a failing bump to that branch.
+
+The workflow pushes as a GitHub App, because a pull request opened with the
+workflow's own token starts no CI. To set it up once, an organization owner:
+
+1. Creates a GitHub App with no webhook and the repository permissions
+   **Contents**, **Pull requests** and **Workflows** set to **Read and write**.
+   GitHub refuses an App's push that changes a workflow file without
+   Workflows, and the branch rebuilt on a newer `main` changes every workflow
+   `main` changed since the last run.
+2. Installs it on this repository only.
+3. Saves its App ID as the repository variable `AGENT_PINS_APP_ID` and a
+   private key as the repository secret `AGENT_PINS_APP_KEY`.
+
+Without them, each run fails with `set the AGENT_PINS_APP_ID variable and the
+AGENT_PINS_APP_KEY secret`.
+
+The assistant installs the adapters at the versions in `acpregistry.json`, and
+Codex at the `CLIVersion` next to its pin (`internal/harness/acp.go`). It
+refreshes its sign-ins with the endpoints and client ids in
+`internal/scheduler/assistant_container.go`. CI's integration job checks them
+with the test below; after moving any of them, run it yourself:
 
 ```sh
 AETHER_ACP_IMAGE=aether-standard:local \
@@ -401,7 +524,7 @@ skips those tests where `bun` is not installed.
 The fixtures do not prove a real model turn. To check one, start an isolated
 coordinated Standard session with the exact CLI, server and extension versions under
 test, end a turn idle, send it one message with
-`aether-internal send --to <session> --body <nonce>`, and confirm exactly one new
+`cloudfield-internal send --to <session> --body <nonce>`, and confirm exactly one new
 turn reads and acknowledges it. Never edit a live hook, credentials or trust
 settings to get there.
 
@@ -457,17 +580,9 @@ With podman, build with `podman build --format docker -f
 images/edge/Dockerfile .`. The default OCI format drops `HEALTHCHECK` and the
 smoke test fails.
 
-Two script tests in `make test-scripts` keep the image's CI trigger and Go
-version honest. When `aether-edge` starts importing another package,
-`scripts/ci-classify-edge-test.sh` fails with the line to add:
-
-```
-ci-classify-edge-test: aether-edge imports internal/<package> on linux/amd64, which ci-classify-edge.sh classifies false; add internal/<package>/* to its first case pattern
-```
-
 The image builds with its own golang base image, so
-`scripts/edge-go-version-test.sh` fails when that image and `go.mod`'s
-`toolchain` line name different Go versions:
+`scripts/edge-go-version-test.sh`, in `make test-scripts`, fails when that
+image and `go.mod`'s `toolchain` line name different Go versions:
 
 ```
 edge-go-version-test: images/edge/Dockerfile builds with golang:1.26.8, but go.mod pins go1.26.9; change the golang tag and its @sha256 digest in images/edge/Dockerfile to 1.26.9 (or go.mod's toolchain line to go1.26.8)
@@ -476,40 +591,51 @@ edge-go-version-test: images/edge/Dockerfile builds with golang:1.26.8, but go.m
 ## Edge upgrade qualification
 
 `TestEdgeUpgrade` updates real edge containers with
-[`scripts/edge-update.sh`](../scripts/edge-update.sh), from the previous
-release to builds of this tree. It needs root (the data directory belongs to
-uid 65532), Docker with Compose and buildx, `jq`, `curl`, Go, and git history
-with tags:
+[`scripts/edge-update.sh`](../scripts/edge-update.sh), from the releases
+edge hosts run to builds of this tree. It needs root (the data directory
+belongs to uid 65532), Docker with Compose and buildx, `jq`, `curl`, Go,
+network access to github.com, and git history with tags:
 
 ```sh
 sudo env "PATH=$PATH" "HOME=$HOME" make test-edge-upgrade
 ```
 
-It builds the edge image five times into a local registry: the previous
-release (`git describe --tags HEAD^`, in a `git worktree`), this tree as
-`v99.0.0-qualify.1`, and three builds of this tree with an extra migration:
-one that fails, one that raises the compatibility floor and then fails, and
-one that succeeds. The edge runs from `packaging/edge/compose.yaml` behind
-nginx, real servers enroll and are claimed, and then it checks that:
+It starts from each release the signed `stable.json` and `beta.json`
+pointers name, and with `EDGE_QUALIFY_CHANNEL=nightly`, which
+`release-build.yml` sets for a nightly, also from the one `nightly.json`
+names. While no pointer exists it starts from the previous tag
+(`git describe --tags HEAD^`). Each starting release is built in a
+`git worktree` into a local registry, runs from
+`packaging/edge/compose.yaml` behind nginx, has real servers enroll and be
+claimed, and is updated to this tree as `v99.0.1`. From the first starting
+point the test goes on through three more builds of this tree with an extra
+migration: one that fails, one that raises the compatibility floor and then
+fails, and one that succeeds. It checks that:
 
 1. `aether-edge-update` refuses an image it cannot read a version from.
 2. A failing migration is rolled back without a restore and skipped next
    time.
 3. A failure after a raised floor restores the pre-update backup.
 4. A good migration applies, with a backup from the edge and the updater.
-5. A server of the previous release still enrolls and relays.
+5. A server of the starting release still enrolls and relays.
 6. `aether-edge-update --rollback` returns to the old binary.
 
 After each step the edge must keep its key and its accounts, and each owner
 must reach their server. Stub `cosign` and `docker` commands from
-`internal/edge/edgetest/testdata/upgrade/` answer the release signature
-checks from the digests the test built, because a production binary trusts
-only the release keys built into it.
+`internal/edge/edgetest/testdata/upgrade/` answer the promotion checks, and
+the release-check of a starting release, whose binary trusts only the
+release keys built into it. This tree's builds are stable releases at
+build 9000001 and up that also trust a test key. Their own release-check
+verifies the manifests the test signs with it, which the fake GitHub
+serves. From step 3 on, the fake answers 404 for the running release's
+manifest, so the updater orders by the copy it kept.
 
 It refuses to start while a container named `aether-edge` exists, removes
-everything it creates, and takes about two minutes with warm caches. CI runs
-it in `edge-image.yml` on pull requests that change the edge, and in
-`release.yml` before a release publishes.
+everything it creates, and takes about two and a half minutes with warm
+caches, plus about a minute for each further starting point; this tree's
+builds are made once for all of them. CI runs
+it in `edge-image.yml` in the merge queue and on `main`, and in
+`release-build.yml` before a release publishes.
 
 ## Dashboard component tests
 
@@ -528,10 +654,17 @@ with `false` and a component renders its widest layout. `atViewport`
 hit testing and focus outlines belong to the
 [dashboard end-to-end suite](#the-dashboard-end-to-end-suite).
 
+A real xterm takes most of a run page's jsdom time: its DOM renderer adds a
+stylesheet of several hundred rules, and every `getComputedStyle` call, which
+testing-library makes for each role query and user-event for each pointer
+event, has to cascade it. A case that never reads the terminal passes `enabled: false` through a mock of `useXterm`, as
+`web/src/components/assistant/context.test.tsx` does for the whole file and
+`web/src/routes/run/frame.test.tsx` does per case.
+
 ## The dashboard end-to-end suite
 
 `web/e2e/` drives Chromium against the dashboard embedded in `dist/aether`,
-through a real `aether gui` gateway and a real `aether-server` over SSH.
+through a real `cloudfield gui` gateway and a real `aether-server` over SSH.
 Playwright is the runner.
 
 ```sh
@@ -555,8 +688,11 @@ Each test gets its own stack:
 
 - One `aether-server` on its own loopback port, with a temporary data
   directory, the `busybox:1.36` image and `AETHER_FAKE_AGENT`. The first
-  identity to connect becomes the admin.
-- One `aether gui` per member, each with its own `HOME` and
+  identity to connect becomes the admin. `AETHER_NO_UPDATE_CHECK=1` keeps
+  it from reading this project's published releases and channel pointers,
+  so `server.update_status` reports no release and a channel not chosen
+  yet; a spec that needs other update state answers that method itself.
+- One `cloudfield gui` per member, each with its own `HOME` and
   `AETHER_CONFIG_DIR`, so nothing touches your own keys or links.
 - Real git repositories on disk.
 
@@ -572,7 +708,7 @@ without Docker instead. Some specs need more:
 | --- | --- |
 | `onboarding-github`, and `native`, `git-card` and `github` in `remote-development-git/` | The real standard image: `docker build -f images/standard/Dockerfile -t aether-standard:ci .`, or another build named by `AETHER_E2E_STANDARD_IMAGE` |
 | `development-browser/*` | The browser companion image ([below](#the-browser-companion)) and `node:22.14.0-alpine3.21` |
-| `remote-development-git/import.spec.ts` | Network access to `AETHER_E2E_GIT_SOURCE_URL` (default `https://github.com/3xDevOps/Aether.git`) |
+| `remote-development-git/import.spec.ts` | Network access to `AETHER_E2E_GIT_SOURCE_URL` (default `https://github.com/3xDevOps/cloudfield.git`) |
 | `remote-development-git/github.spec.ts` | Opt-in: `AETHER_E2E_GITHUB_PUBLISH=1`, `AETHER_E2E_GITHUB_TOKEN`, `AETHER_E2E_GITHUB_BASE_REPOSITORY` (a public `owner/name`), `AETHER_E2E_GITHUB_HEAD_REPOSITORY` (your writable fork); `AETHER_E2E_GITHUB_BASE_BRANCH` defaults to `main` |
 
 `github.spec.ts` opens, comments on and closes a real pull request upstream.
@@ -646,6 +782,105 @@ without the tests. Building, signing and installing are in
 `scripts/android-verify-signature-test.sh`, both in `make test-scripts`,
 cover the version code and the signature check with the SDK tools stubbed.
 
+## The guest kernel
+
+`make kernel` builds `dist/aether-vmlinux-x86_64`, the kernel session VMs
+boot, from the version and checksum in `images/kernel/build.sh` and the
+options in `images/kernel/config-x86_64`. It runs in a Debian container pinned
+by digest, with packages from a dated snapshot, so two builds give the same
+SHA-256; compare them after changing either file. The build fails, naming
+the options, when a line of the config does not reach the kernel's
+`.config` because something it depends on is off.
+
+On a KVM host, `TestKVMStandardImageRunsDocker` ([VM tests](#vm-tests))
+checks that a change still boots an image and runs Docker in it: it builds
+the image's disks with `internal/vmimage`, boots them with the kernel, starts
+dockerd, runs a container and a `-p` port mapping, and refuses to save the
+root disk while the VM runs.
+
+Docker's `contrib/check-config.sh` from the moby repository, pointed at the
+config (`/proc/config.gz` in the guest), must report every
+`Generally Necessary` option enabled.
+
+`go test ./internal/vmimage` covers layer extraction and the image store
+with real `mkfs.ext4`, `debugfs`, `qemu-img` and `qemu-io`; it skips the tests whose
+tools are missing. Run it once as root too, as CI's `build-and-test` does:
+only root can keep other owners, set-user-ID bits and file capabilities, as
+the server does.
+
+## The VM helper
+
+`go test ./internal/guest/...` runs the real helper service against the real
+client over a Unix socket that answers Cloud Hypervisor's vsock handshake:
+processes on pipes and terminals, reattaching from a new client, lossless
+output, spawn failures, a start leaving its caller's log open, signals,
+orphan reaping and `Boot`. What only PID 1 in a VM does (switching root,
+mounts, the network, socket forwarding, the process limit, an out-of-memory
+kill) needs a KVM host. `TestKVMHelper` ([VM tests](#vm-tests)) boots an
+image from `internal/vmimage` disks with the test binary as the helper and
+drives it through the client.
+
+## VM tests
+
+Tests that boot real Cloud Hypervisor VMs carry the `kvm` build tag, so
+`make test` and `make test-integration` never build them. `make test-kvm`
+runs every package that has them:
+
+| Package | Test | Boots |
+| --- | --- | --- |
+| `internal/vmimage` | `TestKVMStandardImageRunsDocker` | The standard image from store disks, with Docker inside ([The guest kernel](#the-guest-kernel)) |
+| `internal/guest/helper` | `TestKVMHelper` | The helper as PID 1, driven through its client ([The VM helper](#the-vm-helper)) |
+| `internal/runtime/vm` | `TestKVM...` in each `kvm_*_test.go` | Sessions through the engine, with real systemd units and the server binary as monitor and helper: lifecycle, six saves and wakes of one VM, a guest reboot, the home, the checkout, the helper keeping the console and outliving connections hung up at birth, the network, Save environment, cold memory returning to the host, the memory a wake loads back, a freeze stopping VMs that fill their memory at once, a shutdown letting go of a frozen VM's agent keeper |
+
+It needs root on a Linux x86-64 host with `/dev/kvm`, `cloud-hypervisor`,
+`qemu-img`, `mkfs.ext4`, `virtiofsd` at `/usr/libexec/virtiofsd`, systemd,
+iptables and network access to pull images. `sudo cloudfield-server vm install
+--vm-kernel dist/aether-vmlinux-x86_64` installs them the way a server does,
+as CI's `kvm` job does. `make test-kvm` fails, naming what is missing,
+rather than skip. It runs only the tests named `TestKVM...`: the
+unit tests already run in `make test`, and the helper's reap every child of
+the test binary, the VM monitor's too. Build the kernel first:
+
+```sh
+make kernel
+sudo env "PATH=$PATH" "HOME=$HOME" make test-kvm
+sudo env "PATH=$PATH" "HOME=$HOME" make test-kvm KVM_RUN='^TestKVMHelper$' KVM_SKIP='./internal/vmimage ./internal/runtime/vm'
+```
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `KVM_KERNEL` | `dist/aether-vmlinux-x86_64` | The guest kernel |
+| `KVM_IMAGE` | `ghcr.io/3xdevops/aether-standard:latest` | The image the store and helper tests boot; the engine tests boot `ubuntu:24.04` |
+| `KVM_RUN` | `^TestKVM` | Passed to `go test -run` |
+| `KVM_SKIP` | none | Packages to leave out |
+
+The target builds the test binaries and `aether-server` with
+`CGO_ENABLED=0`: the binaries also run inside the VMs, where there are no
+libraries. It builds them, and keeps the disks, in a new private directory
+under `$TMPDIR` (default `/tmp`) that it removes at the end: root runs that
+server, so no other user may be able to replace it. A test's VM gets at most 2 GiB; on a CI runner the tests take
+about 13 minutes.
+
+On a KVM host without Go, build on your machine, copy the directory over,
+and run each test binary there with the variables `make test-kvm` sets:
+
+```sh
+CGO_ENABLED=0 go test -c -tags kvm -o kvm/ ./internal/vmimage ./internal/guest/helper ./internal/runtime/vm
+CGO_ENABLED=0 go build -o kvm/aether-server ./cmd/aether-server
+cp dist/aether-vmlinux-x86_64 kvm/
+scp -r kvm <host>:
+
+# on the host, in kvm/; then the same for helper.test and vmimage.test
+sudo env AETHER_TEST_KERNEL="$PWD/aether-vmlinux-x86_64" \
+  AETHER_TEST_IMAGE=ghcr.io/3xdevops/aether-standard:latest \
+  AETHER_VM_TEST_KERNEL="$PWD/aether-vmlinux-x86_64" AETHER_VM_TEST_DIR="$(sudo mktemp -d)" \
+  AETHER_VM_TEST_SERVER="$PWD/aether-server" ./vm.test -test.run TestKVM -test.v
+```
+
+A test that is interrupted can leave a VM behind: `systemctl list-units
+'aether-vm-*'` lists the engine's, and `pgrep -a cloud-hypervisor` the
+others.
+
 ## Windows
 
 CI's `windows` job builds, vets and tests the client packages on Windows.
@@ -665,84 +900,165 @@ Start Menu and the registry, so they refuse to run unless
 fails, `scripts/defender-diagnostics.ps1` prints Defender's detections in the
 job log. The screenshots are uploaded as `windows-desktop-*` artifacts.
 
+When `update-smoke.ps1` cannot move `aether.exe` because another process
+holds it open, it prints the processes Windows Restart Manager names and
+waits up to 30 s for them to close it. It fails if Restart Manager names no
+process, or if the move still fails after the wait.
+
 Before they run, `scripts/windows-defender.ps1 -Mode Prepare` removes the
 runner image's Defender exclusions and adds one for GitHub's own agent,
 `provjobd.exe*` in the runner user's Temp. On `windows-11-arm`, Defender
 flags that agent as `Trojan:Win32/Gracing.I` and removes it; the job then
 hangs until GitHub fails it with "The hosted runner lost communication with
-the server". Nothing Aether builds or installs is excluded.
+the server". Nothing Cloudfield builds or installs is excluded.
 
 ## How CI runs the suites
 
 The `CI` workflow (`.github/workflows/ci.yml`) runs on every pull request,
-every merge queue entry and every push to `main`.
+every merge queue entry, every push to `main` or a `release/X.Y` hotfix
+branch and nightly on `main` at 08:00 UTC. A pull request, draft or ready, runs `changes`, `audit`, `lint`,
+`build-and-test`, `store-tests` and `dashboard`. Every other job lives in
+`.github/workflows/ci-suite.yml`, which `ci.yml` calls as the `suite` job, so
+a run that skips them shows one skipped `suite` check; in a run that calls it
+each job shows as `suite / <job>`. The merge queue runs every job, so the full
+suite runs once per change, on the merge result, before `main` moves; a
+failure there removes the pull request from the queue. The one exception is
+`kvm`, which boots VMs: the queue runs it only when the change can affect
+the VM tests (the `vm` mode below), and the nightly run always does.
+
+The queue moves `main` to the commit it tested, so a push to `main` reuses
+that verdict: `scripts/ci-queue-verdict.sh` finds the merge queue run on the
+same commit that completed with conclusion success and whose `CI gate`
+passed, and the push runs only `changes` and `CI gate`, whose summary links
+that run. The push runs every job when no such run exists, when a lookup
+fails, when the push touches 300 files or more (GitHub's compare limit), or
+when it changes a file a cache key hashes (`ci-classify-areas.sh caches`).
+Caches save only from runs on `main`, because a merge queue run's caches are
+scoped to its own queue branch; the nightly run refreshes them, so between
+nightly runs a session restores compiler caches up to a day old. It also
+tests `main` against the newest agent CLIs and the latest published release;
+its result gates nothing, so read a red nightly `CI gate` on the `main` tip
+yourself. A merge queue run re-run after its push reused it does not change
+that push's verdict: re-run the push session too. A push to a `release/X.Y`
+branch never reuses a verdict and runs every job, the VM tests included; a
+hotfix release reads that run.
+
+`CI gate` is the one required check: it passes when
+every other job passed or was skipped by its own rule, and fails when any
+failed or was cancelled. In the merge queue no rule skips a job, so there it
+passes only when every job passed: a cancellation can leave a job skipped. A
+new job in `ci.yml` must be added to its `needs` list to gate `main`; a job
+in `ci-suite.yml` gates it through `suite`.
+
+`main` takes changes through a merge queue. `gh pr merge <n> --squash` adds a
+ready pull request whose `CI gate` passed; the queue batches up to five
+entries, runs the full suite on each batch's merge result, and moves `main`
+only when that run's `CI gate` passes. Each queue run's `changes` job first
+cancels the runs of groups the queue has discarded, so they stop holding
+runners. In the Docker-heavy jobs, the runner's Docker daemon and
+the buildx builders pull Docker Hub images through `mirror.gcr.io` and fall
+back to Docker Hub, so a Docker Hub outage alone does not fail them.
+
+`lint`, `build-and-test`, `store-tests`, `dashboard`, both `integration` jobs,
+`arm64` and `dashboard-e2e` run on [Blacksmith](https://docs.blacksmith.sh/)
+runners (`blacksmith-4vcpu-ubuntu-2604`, and `blacksmith-4vcpu-ubuntu-2404-arm`
+for `arm64`), declared for actionlint in `.github/actionlint.yaml`. A fork pull
+request's runs of `lint`, `build-and-test`, `store-tests` and `dashboard`
+default to `ubuntu-latest` instead. Outside contributors' runs wait for a
+maintainer's approval
+(`gh api repos/3xDevOps/cloudfield/actions/permissions/fork-pr-contributor-approval`
+reports `all_external_contributors`; organization members and repository
+collaborators are not asked). A fork can edit the workflow, so before
+approving, check its `.github/` changes for a Blacksmith label. Blacksmith's
+Ubuntu 26.04 image mounts `/tmp` as a tmpfs of half the runner's memory, too
+small for the server's disk-headroom check, so in the Docker suite jobs
+`.github/actions/free-disk` sets `TMPDIR=/t`, on the root disk and short enough
+for test socket paths; a `sudo env` step there must pass `"TMPDIR=$TMPDIR"`.
+Blacksmith's images also set `GOCACHEPROG` to `blacksmithd gocacheprog`, a Go
+build cache of Blacksmith's own that this repository does not configure.
+
+Every other job runs on a GitHub-hosted runner: `changes`, `audit`, `CI gate`,
+`edge-image`, `release-build`, `kvm`, the Windows jobs, and the release, promote
+and nightly workflows. The Windows smoke scripts refuse any other runner, and
+Blacksmith's kernel rejects the `fib` rule in the session VM firewall that the
+`kvm` tests load. Release builds never read a cache a Blacksmith job wrote: on
+Blacksmith, `actions/cache` uses Blacksmith's store, which GitHub-hosted jobs
+cannot read, so `release-build` writes the GitHub-hosted Linux amd64 module, bun
+and release compiler caches the release workflow restores. Buildx `type=gha`
+caches stay in GitHub's store, so the release workflow builds the browser and
+standard images without one.
 
 | Job | Sessions | Locally |
 | --- | --- | --- |
 | `audit` | `scripts/public-audit.sh` | `make public-audit` |
-| `lint` | Formatting, workflow lint, `make lint` (golangci-lint, which includes `go vet` and shadow), then the script and native hook tests; `make vulncheck` as advice on `main` pushes and merge queue sessions only | `make fmt-check lint-workflows lint test-scripts test-native-hooks` |
-| `build-and-test` | Unit tests (`-race` on the merge queue and `main` only), then `make build` | `make test build` |
-| `integration (server-rest, browser)`, `integration (server-flows, smoke)`, `integration (scheduler, rest, agents)` | [Integration tests](#integration-tests), the [smoke tests](#real-agent-smoke-tests), [real agents against a mock model](#real-agents-against-a-mock-model) and [the browser companion](#the-browser-companion), on amd64 | See the table under Integration tests |
-| `arm64` | Standard and browser image builds, smoke tests and browser runtime tests on arm64; push to `main` and merge queue only | Same commands on an arm64 host |
+| `lint` | Formatting, workflow lint, `make lint` (golangci-lint, which includes `go vet` and shadow), then the script and native hook tests; `make vulncheck` as advice on every session that runs the full suite | `make fmt-check lint-workflows lint test-scripts test-native-hooks` |
+| `build-and-test` | Unit tests except `internal/store` (`-race` on the merge queue and `main` only), then `make build` | `make test TEST_SKIP=./internal/store build` |
+| `store-tests` | `internal/store`'s unit tests, always with `-race` | `make test-store` |
+| `integration (server-rest, browser)`, `integration (server-flows, scheduler, rest, agents, smoke)` | [Integration tests](#integration-tests), the [smoke tests](#real-agent-smoke-tests), [real agents against a mock model](#real-agents-against-a-mock-model) and [the browser companion](#the-browser-companion), on amd64 | See the table under Integration tests |
+| `arm64` | Standard and browser image builds, smoke tests and browser runtime tests on arm64 | Same commands on an arm64 host |
 | `dashboard` | `bun run typecheck` and `bun run test` | Same, from `web/` |
 | `dashboard-e2e` | [End-to-end suite](#the-dashboard-end-to-end-suite) in two shards | `make test-e2e E2E_ARGS='--shard=N/2'` |
-| `desktop`, `desktop-windows` | `aether gui build` on Linux; the Windows desktop zip on amd64 and arm64 | [Desktop shell](../CONTRIBUTING.md#desktop-shell) |
-| `windows`, `windows-install` | [Windows](#windows) | |
-| `release-build`, `android`, `windows-defender` | `make release-binaries`, `make android`, a Defender scan of the Windows binaries | `make release-binaries`, `make android` |
+| `windows`, `windows-install` | [Windows](#windows); `windows` also scans `release-build`'s Windows binaries with Defender, and the `windows-install` install (zip) and update legs package and launch the Windows desktop zip on amd64 and arm64 | |
+| `release-build (binaries, desktop, android)` | `make release-binaries`, `cloudfield gui build` on Linux with and without Node on `PATH`, `make android` | `make release-binaries`, [Desktop shell](../CONTRIBUTING.md#desktop-shell), `make android` |
 | `edge-image` | [The edge image](#the-edge-image) and [qualification](#edge-upgrade-qualification) | |
+| `kvm` | [VM tests](#vm-tests) on a hosted runner, which has `/dev/kvm` (`.github/workflows/kvm.yml`) | `make kernel`, then `make test-kvm` as root |
 
 A pull request that changes only `docs/**` or root-level `*.md` files runs
-`audit` and nothing else. A Markdown file anywhere else counts as code.
+`audit` and nothing else, unless it changes a Go file there,
+`docs/agents.md` or `docs/harnesses.md`, which Go tests check. A Markdown file anywhere else counts as code.
 `scripts/ci-classify-areas.sh` narrows the rest by area:
 
 | Mode | Jobs | True for |
 | --- | --- | --- |
-| `go` | `lint`, `build-and-test`, `integration`, `integration-server-rest`, `integration-server-flows` | Everything except `web/` (other than `web/embed.go`), `android/` and `docs/` |
-| `web` | `dashboard`, `dashboard-e2e` | `web/`, `cmd/aether/`, `internal/localgw/`, `internal/webgate/`, `go.mod`, `Makefile`, `.github/actions/`, `ci.yml` |
+| `go` | `lint`, `build-and-test`, `store-tests` | Everything except `web/`, `android/` and `docs/`; within those, Go files, `web/public/`, `web/src/components/ui/agent-glyph.tsx`, `docs/agents.md` and `docs/harnesses.md` still count, because Go code embeds or checks them |
+| `web` | `dashboard` | `web/`, `cmd/aether/`, `internal/localgw/`, `internal/webgate/`, `go.mod`, `Makefile`, `.github/actions/`, `ci.yml` |
+| `caches` | The full suite on a push to `main` | `go.mod`, `go.sum`, `.golangci.yml`, `.github/`, `images/`, the fonts and licence the browser image copies from `web/src/fonts/` and `web/public/fonts/`, the web and desktop package manifests and lockfiles, `web/.bun-version`, the Gradle files |
+| `vm` | `kvm` in the merge queue and on a push to `main` | `internal/runtime/vm/`, `internal/vmimage/`, the packages the VM code runs (`internal/guest/`, `internal/acpkeeper/`, `internal/version/`, `internal/devexec/`, `internal/disk/`, `internal/egress/`, `internal/gitengine/`, `internal/rootfs/`), `images/kernel/`, the `kvm*_test.go` files, the files of `internal/runtime/` the VM engine shares (`session.go`, `stream.go`, `managed_exec.go`, `docker_image.go`, `docker_cgroup.go`), files named `vm*.go` or `*_vm.go` (and their tests) anywhere under `internal/`, `go.mod`, `go.sum`, `vm.mk`, `kvm.yml` and `cmd/aether-server/vm.go` |
 
-A dashboard-only pull request therefore skips the Go jobs, and a change
-elsewhere in `internal/` skips the dashboard jobs, which rely on the Go
-integration suites for server behavior. The e2e suite runs the real
-server, so add the package to the `web` list in the script when a change
-there breaks the UI. A new top-level path counts as both. The pull request
-run is cancelled by a newer push (`cancel-in-progress` for `pull_request`
-only); `main` pushes and merge queue runs, whose concurrency groups are
-unique per commit, always run to completion.
-`edge-image` runs only when `scripts/ci-classify-edge.sh` says a changed path
-can affect the edge image, and `desktop-windows` only when
-`scripts/ci-classify-desktop.sh` finds a change under `desktop/`. On a pull
-request `edge-image` skips the upgrade qualification.
-`scripts/ci-classify-platform.sh` gates the rest by what each job builds:
+VM code outside the VM packages goes in files named for the `vm` mode, so the
+merge queue still runs `kvm` for it. `make test-scripts` fails when the KVM
+tests compile a package that is neither in the list nor in the exclusions in
+`scripts/ci-classify-areas-test.sh`, each with the reason it needs no VM run,
+or when a test file with the `kvm` tag is outside the list. `make lint` builds
+the VM tests on every pull request. The merge queue classifies the files
+GitHub's compare lists between `main` and the group, because a group also
+carries the entries ahead of it; a push compares with the commit before it;
+past its 300-file limit, or when the lookup fails, `kvm` runs. The guest
+kernel takes up to six minutes to build, so `kvm` restores it from a cache
+keyed by a hash of `images/kernel/` and the `make kernel` recipe, and builds
+it only on a miss; runs on `main` save it.
 
-| Mode | Jobs | True for |
-| --- | --- | --- |
-| `client` | `windows`, `desktop`, `android` | The packages `cmd/aether` imports, `web/`, `desktop/`, `android/`, packaging and install scripts, `go.mod`, `Makefile` |
-| `installer` | `windows-install` | The CLI, self-update and local-ops packages, `desktop/`, `packaging/windows/`, the install and Defender scripts |
-| `release` | `release-build`, `windows-defender` | `Makefile`, `go.mod`, `packaging/`, `cmd/aether/` |
+The classifier runs from the pull request's (or merge group's) base revision,
+so a pull request cannot change its own classification, and a renamed file
+counts by its old path as well as its new one. A failed classification runs
+both. A skipped job reports as skipped, not failed. A newer push cancels a
+pull request's run (`cancel-in-progress` for `pull_request` only); `main`
+pushes and merge queue runs, whose concurrency groups are unique per commit,
+always run to completion.
 
-A server-only change therefore skips every platform job. `build-and-test`
-covers the Linux build, and `release.yml` repeats `release-build`, the
-Defender scan and `android` for each tag. All classifiers run from the pull
-request's base revision, so a pull request cannot change its own
-classification, and a renamed file counts by its old path as well as its new
-one. A push to `main`, a merge queue entry and a failed classification run
-everything, upgrade qualification included. A skipped job reports as skipped,
-not failed. `ci-classify-platform-test.sh` fails when `cmd/aether` starts
-importing a package the `client` mode does not list.
-
-To run the edge image jobs on a branch the classifier skips, with write access to the repository:
+To run the edge image jobs on a pull request branch, with write access to the repository:
 
 ```sh
 gh workflow run edge-image.yml --ref <branch>
 gh workflow run edge-image.yml --ref main -f ref=refs/pull/<n>/head   # a pull request from a fork
 ```
 
+To run the VM tests on a branch without the merge queue:
+
+```sh
+gh workflow run kvm.yml --ref <branch>
+```
+
+A failed `kvm` fails `suite` and `CI gate`, so a nightly failure reaches
+whoever GitHub notifies about the scheduled run: the person who last changed
+its `cron` line.
+
 To rerun only the failed jobs of a session: `gh run rerun <session-id> --failed`.
 
 ## Running the Docker suites inside a session
 
-You can work on Aether from inside an Aether run (an agent's container on an
-Aether server). Two things differ there.
+You can work on Cloudfield from inside a Cloudfield run (an agent's container on
+a Cloudfield server). Two things differ there.
 
 A session sets `AETHER_*` variables (`AETHER_RUN_ID`, `AETHER_HARNESS`,
 `AETHER_WORKSPACE_ID` and others) that some tests read. `internal/coordcli`

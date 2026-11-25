@@ -3,7 +3,7 @@ import { routeFromQuery } from '@/lib/url-state'
 import type { Route } from '@/store/ui'
 import type { Watch, WatchCondition, WatchDelivery, WatchState, WatchTarget, WatchTargetKind } from '@/lib/types'
 
-export interface ConditionChoice {
+interface ConditionChoice {
   value: WatchCondition
   label: string
   description: string
@@ -76,10 +76,12 @@ export function deliveryText(delivery: WatchDelivery): string {
           return 'No push device - in-app only'
         case 'held_quiet_hours':
           return detail ? `Held for quiet hours: ${detail}` : 'Held for quiet hours'
+        case 'batched':
+          return 'Push waits for your next digest'
         case 'failed':
           return `Push failed: ${detail || 'no reason given'}`
         case 'cleared':
-          return 'Push not sent: resolved before delivery'
+          return `Push not sent: ${detail || 'resolved before delivery'}`
         case 'pending':
           return detail ? `Push pending: ${detail}` : 'Push pending'
         case 'withdrawn':
@@ -93,6 +95,18 @@ export function deliveryText(delivery: WatchDelivery): string {
     case 'assistant':
       if (delivery.status === 'delivered') return 'In the assistant chat'
       if (delivery.status === 'failed') return `Assistant chat failed: ${detail || 'no reason given'}`
+      break
+    case 'relay':
+      switch (delivery.status) {
+        case 'delivered':
+          return `Relayed to ${delivery.run_id}${detail ? `: ${detail}` : ''}`
+        case 'failed':
+          return `Relay to ${delivery.run_id} failed: ${detail || 'no reason given'}`
+        case 'pending':
+          return `Relay to ${delivery.run_id} pending${detail ? `: ${detail}` : ''}`
+        case 'cleared':
+          return `Not relayed to ${delivery.run_id}${detail ? `: ${detail}` : ''}`
+      }
   }
   return `${delivery.channel}: ${delivery.status}${detail ? ` (${detail})` : ''}`
 }
@@ -112,6 +126,7 @@ export function deliveryTone(delivery: WatchDelivery): Tone {
     case 'failed':
       return 'failed'
     case 'held_quiet_hours':
+    case 'batched':
     case 'pending':
       return 'paused'
     default:

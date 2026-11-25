@@ -2,6 +2,7 @@ package coord
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/3xDevOps/Aether/internal/agentstatus"
 	"github.com/3xDevOps/Aether/internal/domain"
 	"github.com/3xDevOps/Aether/internal/events"
 	"github.com/3xDevOps/Aether/internal/evidence"
@@ -174,27 +176,71 @@ func rpcError(method string, err error) *protocol.Error {
 	}
 	return &protocol.Error{Code: code, Message: method + ": " + err.Error()}
 }
-func (s *Service) transportAllowed(run domain.RunID, method string) bool {
-	buckets := s.requestBuckets
+
+// transportBudget names the per-run allowance a request spends. A report
+// that decides the run's state gets its own: a native harness reports every
+// tool use against the lifecycle budget, so a busy turn would otherwise
+// spend the allowance its own end, its questions or its held background
+// tasks need.
+func transportBudget(method string, params json.RawMessage) string {
 	switch method {
 	case protocol.MethodCoordHookStatus:
-		buckets = s.hookBuckets
+		return "hook"
 	case protocol.MethodRunReport:
+		if turnStateReport(params) {
+			return "turn state"
+		}
+		return "lifecycle"
+	}
+	return "transport"
+}
+
+// turnStateReport reports whether a run.report starts or ends the agent's
+// turn, opens, closes or clears a question, or keeps the run waiting on
+// background tasks. A replace is a full snapshot that pi and omp attach to
+// every heartbeat, so it counts as a tool report. Whether a stop ended the
+// turn or failed it is the scheduler's to judge.
+func turnStateReport(params json.RawMessage) bool {
+	var p struct {
+		State        string `json:"state"`
+		Reason       string `json:"reason"`
+		TurnStart    bool   `json:"turn_start"`
+		InputUpdates []struct {
+			Operation string `json:"operation"`
+		} `json:"input_updates"`
+	}
+	if json.Unmarshal(params, &p) != nil {
+		return false
+	}
+	if p.State == string(agentstatus.Idle) || p.TurnStart ||
+		(p.State == string(agentstatus.Working) && strings.HasPrefix(p.Reason, agentstatus.ReasonBackground)) {
+		return true
+	}
+	for _, u := range p.InputUpdates {
+		if u.Operation != "replace" {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) transportAllowed(run domain.RunID, budget string) bool {
+	buckets := s.requestBuckets
+	switch budget {
+	case "hook":
+		buckets = s.hookBuckets
+	case "lifecycle":
 		buckets = s.lifecycleBuckets
+	case "turn state":
+		buckets = s.turnBuckets
 	}
 	return s.spend(buckets, run, requestBurst, requestRefill)
 }
 
-func transportRateError(method string) *protocol.Error {
-	budget := "transport"
-	code := protocol.CodeConflict
-	switch method {
-	case protocol.MethodCoordHookStatus:
-		budget = "hook"
-		code = protocol.CodeUnavailable
-	case protocol.MethodRunReport:
-		budget = "lifecycle"
-		code = protocol.CodeUnavailable
+func transportRateError(budget string) *protocol.Error {
+	code := protocol.CodeUnavailable
+	if budget == "transport" {
+		code = protocol.CodeConflict
 	}
 	return &protocol.Error{
 		Code: code,
@@ -309,13 +355,17 @@ func (s *Service) Reply(ctx context.Context, from domain.RunID, p protocol.Coord
 	if err != nil {
 		return protocol.CoordReplyResult{}, internalError(method, err)
 	}
-	if _, serr := s.cfg.Store.GetRun(ctx, from); serr != nil {
-		if errors.Is(serr, store.ErrNotFound) {
-			return protocol.CoordReplyResult{}, &protocol.Error{
-				Code: protocol.CodeNotFound, Message: fmt.Sprintf("%s: unknown session %s", method, from),
-			}
+	self, serr := s.cfg.Store.GetRun(ctx, from)
+	if errors.Is(serr, store.ErrNotFound) {
+		return protocol.CoordReplyResult{}, &protocol.Error{
+			Code: protocol.CodeNotFound, Message: fmt.Sprintf("%s: unknown session %s", method, from),
 		}
+	}
+	if serr != nil {
 		return protocol.CoordReplyResult{}, internalError(method, serr)
+	}
+	if rpcErr := s.ownerReaches(ctx, method, self); rpcErr != nil {
+		return protocol.CoordReplyResult{}, rpcErr
 	}
 	if question.ToRun != from {
 		return protocol.CoordReplyResult{}, &protocol.Error{
@@ -335,8 +385,8 @@ func (s *Service) Reply(ctx context.Context, from domain.RunID, p protocol.Coord
 }
 
 // Inbox answers coord.inbox for run: acknowledge the previous batch, then
-// return the next one. If no batch is ready, wait_seconds performs one
-// bounded server-side wait without polling.
+// return the next one unless ack_only is set. If no batch is ready,
+// wait_seconds performs one bounded server-side wait without polling.
 func (s *Service) Inbox(ctx context.Context, run domain.RunID, p protocol.CoordInboxParams) (protocol.CoordInboxResult, *protocol.Error) {
 	const method = protocol.MethodCoordInbox
 	if s.cfg.Disabled {
@@ -346,6 +396,13 @@ func (s *Service) Inbox(ctx context.Context, run domain.RunID, p protocol.CoordI
 		return protocol.CoordInboxResult{}, runClosing(method)
 	}
 	defer s.leaveRun(run)
+	if !p.AckOnly {
+		s.mu.Lock()
+		if _, refused := s.mailRefusals[run]; refused {
+			s.mailRefusals[run] = true
+		}
+		s.mu.Unlock()
+	}
 	if p.WaitSeconds < 0 || p.WaitSeconds > protocol.CoordMaxInboxWaitSeconds {
 		return protocol.CoordInboxResult{}, invalidParams(method,
 			fmt.Sprintf("wait_seconds must be between 0 and %d", protocol.CoordMaxInboxWaitSeconds))
@@ -357,8 +414,26 @@ func (s *Service) Inbox(ctx context.Context, run domain.RunID, p protocol.CoordI
 				method, inboxBurst, int(inboxRefill.Seconds())),
 		}
 	}
-	if _, rpcErr := s.resolveRun(ctx, method, run); rpcErr != nil {
+	self, rpcErr := s.resolveRun(ctx, method, run)
+	if rpcErr != nil {
 		return protocol.CoordInboxResult{}, rpcErr
+	}
+	if rpcErr := s.ownerReaches(ctx, method, self); rpcErr != nil {
+		return protocol.CoordInboxResult{}, rpcErr
+	}
+	if p.AckOnly {
+		token, acked, err := s.cfg.Mail.AckRunMessages(ctx, run, p.AckToken)
+		if err != nil {
+			return protocol.CoordInboxResult{}, internalError(method, err)
+		}
+		if acked {
+			s.kickOutbox()
+		}
+		more, err := s.cfg.Mail.CountUndeliveredRunMessages(ctx, run)
+		if err != nil {
+			return protocol.CoordInboxResult{}, internalError(method, err)
+		}
+		return protocol.CoordInboxResult{AckToken: token, Acked: acked, More: more}, nil
 	}
 	var waiter chan struct{}
 	if p.WaitSeconds > 0 {
@@ -405,31 +480,46 @@ func (s *Service) Inbox(ctx context.Context, run domain.RunID, p protocol.CoordI
 	}
 	out := make([]protocol.CoordMessage, 0, len(msgs))
 	for _, m := range msgs {
-		out = append(out, protocol.CoordMessage{
+		item := protocol.CoordMessage{
 			ID:            m.ID,
 			Kind:          string(m.Kind),
 			CorrelationID: m.CorrelationID,
 			FromRunID:     string(m.FromRun),
 			Body:          m.Body,
 			CreatedAt:     m.CreatedAt.UTC().Format(time.RFC3339),
-		})
+		}
+		if m.Kind == store.RunMessageKindMessage && m.CorrelationID != "" {
+			report, rerr := s.cfg.Mail.GetCoordReport(ctx, m.CorrelationID)
+			if rerr != nil && !errors.Is(rerr, store.ErrNotFound) {
+				return protocol.CoordInboxResult{}, internalError(method, rerr)
+			}
+			if rerr == nil && report.RunID == m.FromRun {
+				item.Kind, item.Outcome = protocol.CoordMessageKindReport, string(report.Outcome)
+			}
+		}
+		out = append(out, item)
 	}
-	return protocol.CoordInboxResult{Messages: out, AckToken: token, Acked: acked}, nil
+	more, err := s.cfg.Mail.CountUndeliveredRunMessages(ctx, run)
+	if err != nil {
+		return protocol.CoordInboxResult{}, internalError(method, err)
+	}
+	return protocol.CoordInboxResult{Messages: out, AckToken: token, Acked: acked, More: more}, nil
 }
 
 // resolveRun loads a run, mapping the unknown case to CodeNotFound.
 func (s *Service) resolveRun(ctx context.Context, method string, run domain.RunID) (*domain.Run, *protocol.Error) {
 	r, err := s.cfg.Store.GetRun(ctx, run)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, &protocol.Error{
-			Code:    protocol.CodeNotFound,
-			Message: fmt.Sprintf("%s: unknown session %s", method, run),
-		}
+		return nil, unknownRun(method, run)
 	}
 	if err != nil {
 		return nil, internalError(method, err)
 	}
 	return r, nil
+}
+
+func unknownRun(method string, run domain.RunID) *protocol.Error {
+	return &protocol.Error{Code: protocol.CodeNotFound, Message: fmt.Sprintf("%s: unknown session %s", method, run)}
 }
 
 // CoordReport reserves an outcome before evidence capture. Live interactive
@@ -481,6 +571,7 @@ func (s *Service) CoordReport(ctx context.Context, run domain.RunID, p protocol.
 		return protocol.CoordReportResult{}, invalidParams(method, problem)
 	}
 	if p.Outcome == protocol.CoordOutcomeNeedsInput || p.Outcome == protocol.CoordOutcomeWaiting || p.Outcome == protocol.CoordOutcomeAnswered {
+		s.forgetMailRefusal(run)
 		return s.reportState(ctx, run, p, summary, specs)
 	}
 	if len(p.EvidenceRefs) >= protocol.CoordMaxEvidenceRefs {
@@ -500,12 +591,6 @@ func (s *Service) CoordReport(ctx context.Context, run domain.RunID, p protocol.
 	if rpcErr != nil {
 		return protocol.CoordReportResult{}, rpcErr
 	}
-	existingFinalized := false
-	if prior, err := s.cfg.Mail.GetCoordReportByIdempotency(ctx, run, p.IdempotencyKey); err == nil {
-		existingFinalized = prior != nil && prior.State == store.CoordReportFinalized
-	} else if !errors.Is(err, store.ErrNotFound) {
-		return protocol.CoordReportResult{}, internalError(method, err)
-	}
 	if s.cfg.Evidence == nil {
 		return protocol.CoordReportResult{}, internalError(method, ErrNoEvidenceCapture)
 	}
@@ -517,6 +602,21 @@ func (s *Service) CoordReport(ctx context.Context, run domain.RunID, p protocol.
 			lock.Unlock()
 		}
 	}()
+	existingFinalized := false
+	if prior, err := s.cfg.Mail.GetCoordReportByIdempotency(ctx, run, p.IdempotencyKey); err == nil {
+		existingFinalized = prior != nil && prior.State == store.CoordReportFinalized
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return protocol.CoordReportResult{}, internalError(method, err)
+	}
+	// Before the subsession check, so the one pass an inbox read buys is
+	// spent on the next report and never on a later one.
+	if p.Outcome == protocol.CoordOutcomeBlocked {
+		s.forgetMailRefusal(run)
+	} else if !existingFinalized {
+		if rpcErr := s.refuseUnreadMail(ctx, run); rpcErr != nil {
+			return protocol.CoordReportResult{}, rpcErr
+		}
+	}
 	// child.start takes the same lock, so no child is reserved between this
 	// check and the report's finalization.
 	if s.cfg.Children != nil && !existingFinalized {
@@ -1022,19 +1122,35 @@ func (s *Service) publishCoordAudit(ctx context.Context, outbox store.CoordAudit
 	// Coordination is a run-originated protocol event, not a human action:
 	// the actor stays empty rather than naming the run's mutable owner.
 	ev := events.Event{ID: pub.EventID, Time: pub.CreatedAt, WorkspaceID: pub.WorkspaceID}
+	// The message and its ack are filed under the sender's workspace, which
+	// follows the sender's view of the conversation. A recipient in another
+	// workspace is left out of both, so neither names a run to members who
+	// cannot reach it.
+	var toWorkspace domain.WorkspaceID
+	switch to, err := s.cfg.Store.GetRun(ctx, pub.ToRun); {
+	case err == nil:
+		toWorkspace = to.WorkspaceID
+	case !errors.Is(err, store.ErrNotFound):
+		return fmt.Errorf("coord: read session %s for its message event: %w", pub.ToRun, err)
+	}
 	switch {
 	case pub.EventType == store.CoordAuditMessage && pub.EventID == store.CoordAuditEventID(pub.MessageID):
+		to := pub.ToRun
+		if toWorkspace != pub.WorkspaceID {
+			to = ""
+		}
 		ev.RunID = pub.FromRun
 		ev.Payload = events.CoordMessagePayload{
 			MessageID: pub.MessageID, WorkspaceID: pub.WorkspaceID,
-			FromRunID: pub.FromRun, ToRunID: pub.ToRun, Kind: pub.Kind, CorrelationID: pub.CorrelationID,
+			FromRunID: pub.FromRun, ToRunID: to, Kind: pub.Kind, CorrelationID: pub.CorrelationID,
 		}
 	case pub.EventType == store.CoordAuditAcked && pub.EventID == store.CoordAuditAckedEventID(pub.MessageID) &&
 		pub.AckedAt != nil:
-		ev.RunID = pub.ToRun
-		ev.Payload = events.CoordMessageAckedPayload{
-			MessageID: pub.MessageID, ToRunID: pub.ToRun, AckedAt: pub.AckedAt.UTC().Format(time.RFC3339Nano),
+		acked := events.CoordMessageAckedPayload{MessageID: pub.MessageID, AckedAt: pub.AckedAt.UTC().Format(time.RFC3339Nano)}
+		if toWorkspace == pub.WorkspaceID {
+			ev.RunID, acked.ToRunID = pub.ToRun, pub.ToRun
 		}
+		ev.Payload = acked
 	default:
 		return store.ErrCoordAuditPublicationConflict
 	}
@@ -1097,9 +1213,18 @@ func (s *Service) sendMessage(ctx context.Context, method string, from, to domai
 				Message: fmt.Sprintf("%s: idempotency_key %q was used with different message inputs", method, idempotency),
 			}
 		}
+		sender, rpcErr := s.resolveRun(ctx, method, from)
+		if rpcErr != nil {
+			return nil, "", rpcErr
+		}
 		target, rpcErr := s.resolveRun(ctx, method, to)
 		if rpcErr != nil {
 			return nil, "", rpcErr
+		}
+		if !correlated {
+			if rpcErr := s.reachable(ctx, method, sender, target); rpcErr != nil {
+				return nil, "", rpcErr
+			}
 		}
 		return prior, target.Status, nil
 	} else if !errors.Is(err, store.ErrNotFound) {
@@ -1119,6 +1244,11 @@ func (s *Service) sendMessage(ctx context.Context, method string, from, to domai
 	target, rpcErr := s.resolveRun(ctx, method, to)
 	if rpcErr != nil {
 		return nil, "", rpcErr
+	}
+	if !correlated {
+		if rpcErr := s.reachable(ctx, method, sender, target); rpcErr != nil {
+			return nil, "", rpcErr
+		}
 	}
 	if target.Status.Terminal() {
 		return nil, "", &protocol.Error{

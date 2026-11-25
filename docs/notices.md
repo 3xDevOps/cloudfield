@@ -1,31 +1,69 @@
 # Open source notices
 
-Aether, including the Android app (package `io.aether.android`) and the
+Cloudfield, including the Android app (package `io.aether.android`) and the
 dashboard it shows, is licensed under the GNU General Public License version
 3. The full text is [LICENSE](../LICENSE) in this repository, which the app's
 first screen links to. The source for the exact build a release ships is the
 tag that release was cut from.
 
-These notices cover the Android APK, dashboard assets, and the separately
-distributed standard-environment and browser-companion images. The APK does not
+These notices cover the Android APK, dashboard assets, the edge binary
+(`aether-edge`), and the separately distributed standard-environment and
+browser-companion images. The APK does not
 contain the server or these container images. Each bundled dependency keeps its
-own license; Aether's GPL-3.0 license does not replace those terms.
+own license; Cloudfield's GPL-3.0 license does not replace those terms.
 
 ## In the APK
 
-The Android app links two Google libraries, both under the Apache License 2.0:
+The Android app links these libraries, all under the Apache License 2.0:
 
 - `androidx.core:core`
 - `androidx.activity:activity`
+- `androidx.webkit:webkit`
+- `org.unifiedpush.android:connector`, by UnifiedPush
 
 Their transitive dependencies - the Kotlin standard library, kotlinx
-coroutines, the rest of androidx - are Apache-2.0 as well. The exact versions
+coroutines, the rest of androidx, Google's Tink, Gson and Error Prone
+annotations - are Apache-2.0 as well, except Protocol Buffers
+(`com.google.protobuf:protobuf-java`, through Tink), which is under the
+BSD 3-Clause licence below. The exact versions
 and their checksums are in
 [`android/gradle/verification-metadata.xml`](../android/gradle/verification-metadata.xml);
 the direct ones are in
 [`android/gradle/libs.versions.toml`](../android/gradle/libs.versions.toml).
 A copy of the Apache-2.0 text ships inside the APK at
 `META-INF/androidx/annotation/annotation/LICENSE.txt`.
+
+Protocol Buffers:
+
+```text
+Copyright 2008 Google Inc.  All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are
+met:
+
+    * Redistributions of source code must retain the above copyright
+notice, this list of conditions and the following disclaimer.
+    * Redistributions in binary form must reproduce the above
+copyright notice, this list of conditions and the following disclaimer
+in the documentation and/or other materials provided with the
+distribution.
+    * Neither the name of Google Inc. nor the names of its
+contributors may be used to endorse or promote products derived from
+this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```
 
 ## In the dashboard bundle
 
@@ -36,14 +74,11 @@ The dashboard bundles these fonts under the SIL Open Font License 1.1:
   Only the Latin variable WOFF2 from the
   [`@fontsource-variable/dm-sans`](https://github.com/fontsource/font-files/tree/main/fonts/variable/dm-sans)
   package is bundled.
-- Saira for titles
-  ([`web/public/fonts/LICENSE-saira.txt`](../web/public/fonts/LICENSE-saira.txt)).
-  `web/public/fonts/saira-latin.woff2` is the normal-width variable font,
-  weights 100-900, Latin subset, downloaded from
-  [Google Fonts](https://fonts.googleapis.com/css2?family=Saira:wght@100..900&display=swap).
-- VT323 for the header and launch-splash wordmarks
-  ([`web/public/fonts/LICENSE-vt323.txt`](../web/public/fonts/LICENSE-vt323.txt)).
-  `web/public/fonts/vt323-latin.woff2` is the Latin subset at weight 400.
+- Open Sans for titles
+  ([`web/public/fonts/LICENSE-open-sans.txt`](../web/public/fonts/LICENSE-open-sans.txt)).
+  Only the Latin variable WOFF2 from the
+  [`@fontsource-variable/open-sans`](https://github.com/fontsource/font-files/tree/main/fonts/variable/open-sans)
+  package is bundled.
 - `JetBrainsMono NFM`, a Nerd Fonts Mono patch of JetBrains Mono, for xterm
   and the UI's private-use symbol fallback
   ([`web/public/fonts/LICENSE-jetbrains-mono-nfm.txt`](../web/public/fonts/LICENSE-jetbrains-mono-nfm.txt)).
@@ -57,23 +92,70 @@ The dashboard bundles these fonts under the SIL Open Font License 1.1:
   ```sh
   pyftsubset NotoSansSymbols2-Regular.ttf \
     --unicodes=U+25A0-25FF,U+2800-28FF --flavor=woff2 \
-    --output-file=web/public/fonts/noto-sans-symbols-2-spinners.woff2
+    --output-file=web/src/fonts/noto-sans-symbols-2-spinners.woff2
   ```
 
-`scripts/make-icons.py` also uses VT323 to draw the wordmark on the Play
+`scripts/make-icons.py` uses VT323 to draw the wordmark on the Play
 listing's feature graphic, `android/listing/feature-graphic.png`, whose
-tagline is JetBrainsMono NFM.
+tagline is JetBrainsMono NFM. The dashboard does not bundle VT323: the
+repository carries `web/src/fonts/vt323-latin.woff2`, the Latin subset at
+weight 400, under the SIL Open Font License 1.1
+([`web/public/fonts/LICENSE-vt323.txt`](../web/public/fonts/LICENSE-vt323.txt)).
 
-The glyph for Claude Code sessions is the Claude mark, a trademark of Anthropic,
-used only to identify that agent. Its path in `web/src/components/icons.ts`
-comes from [Simple Icons](https://github.com/simple-icons/simple-icons) 16.34.0,
-which publishes it under CC0-1.0.
+Agent glyphs are their vendors' marks, used only to identify each agent; each
+mark is its owner's trademark. The paths in `web/src/components/icons.ts` come
+from:
+
+| Agent | Mark | Source | Licence of the file |
+| --- | --- | --- | --- |
+| Claude Code | Claude, Anthropic | [Simple Icons 16.34.0 `claude`](https://cdn.jsdelivr.net/npm/simple-icons@16.34.0/icons/claude.svg) | none stated |
+| Codex | OpenAI Blossom, OpenAI | `OAI_OpenAI-Blossom_Black.svg` in [openai-logos.zip](https://cdn.openai.com/brand/openai-logos.zip), from [openai.com/brand](https://openai.com/brand/) | OpenAI brand terms |
+| pi | pi | [Simple Icons 16.38.0 `pi`](https://cdn.jsdelivr.net/npm/simple-icons@16.38.0/icons/pi.svg), from pi.dev's favicon | none stated |
+| oh-my-pi | oh-my-pi | [`packages/collab-web/public/favicon.svg` at v18.20.3](https://github.com/can1357/oh-my-pi/blob/v18.20.3/packages/collab-web/public/favicon.svg), drawn in one colour instead of its gradient | [MIT](https://github.com/can1357/oh-my-pi/blob/v18.20.3/LICENSE), with the repository |
+| OpenCode | OpenCode | the frame of [`opencode-logo-transparent-dark.svg`](https://opencode.ai/brand/files/opencode-logo-transparent-dark.svg) from [opencode.ai/brand](https://opencode.ai/brand) | none stated |
+| GitHub Copilot CLI | Invertocat, GitHub | [Primer Octicons 19.42.0 `mark-github-24`](https://cdn.jsdelivr.net/npm/@primer/octicons@19.42.0/build/svg/mark-github-24.svg) | [MIT](https://cdn.jsdelivr.net/npm/@primer/octicons@19.42.0/LICENSE) |
+| Gemini CLI | Gemini CLI icon, Google | [`gemini-cli-icon_full-color.svg`](https://geminicli.com/brandassets/gemini-cli-icon_full-color.svg), and the one path of [`gemini-cli-icon_monotone_on_dark.svg`](https://geminicli.com/brandassets/gemini-cli-icon_monotone_on_dark.svg), from the [Gemini CLI brand kit](https://geminicli.com/brand-kit/) | none stated; the kit's [guidelines](https://geminicli.com/brandassets/gemini_cli_logo_icon_guidelines.pdf) apply |
+| Antigravity CLI | Antigravity icon, Google | [`antigravity-icon__full-color.svg`](https://antigravity.google/assets/image/brand/antigravity-icon__full-color.svg), and the path of [`antigravity-icon__one-color.svg`](https://antigravity.google/assets/image/brand/antigravity-icon__one-color.svg), from Google's [press assets](https://antigravity.google/press) | none stated |
+| Cursor CLI | Cursor cube | `General Logos/Cube/SVG/CUBE_2D_LIGHT.svg` in the kit on [cursor.com/brand](https://cursor.com/brand) | none stated |
+
+Simple Icons is CC0, but its
+[disclaimer](https://github.com/simple-icons/simple-icons/blob/16.38.0/DISCLAIMER.md)
+says that does not make every icon in it CC0. OpenAI, OpenCode and GitHub
+forbid changing their marks' colours, so Codex, OpenCode and Copilot glyphs
+only ever take the text colour; OpenCode's mark also keeps its 4:5
+proportions. GitHub retired the Copilot head in early 2026 and shows Copilot
+with its Invertocat
+([GitHub brand: Copilot](https://brand.github.com/brand-identity/copilot)).
+Google's brand guidance lists product icons under "Ask first"
+([Google brand guidance](https://about.google/brand-resource-center/guidance/)).
+The Gemini CLI guidelines say its assets "should not ever be altered" and
+that the icon "is for where the brand has to be separated from the product
+name"; the Antigravity press page gives files and no terms. So neither icon
+is redrawn or tinted with an agent colour. In colour, the dashboard shows
+Google's full-colour files as served, in `web/public/agents/`. Where every
+glyph is one colour, it draws the path of Google's own one-colour file in
+that row's colour.
 
 The terminal uses [xterm.js](https://github.com/xtermjs/xterm.js), including its
 fit, search and web-links addons, under the
 [MIT license](https://github.com/xtermjs/xterm.js/blob/6.0.0/LICENSE).
 Dashboard dependency versions and resolved integrity records are in
 [`web/package.json`](../web/package.json) and [`web/bun.lock`](../web/bun.lock).
+
+## In the edge binary
+
+`aether-edge` embeds two of the dashboard's fonts for its browser pages, under
+the SIL Open Font License 1.1, with their licence texts in
+`internal/edge/service/templates/fonts/`:
+
+- DM Sans, `dm-sans-latin-wght-normal.woff2`, the same file the dashboard
+  bundles from
+  [`@fontsource-variable/dm-sans`](https://github.com/fontsource/font-files/tree/main/fonts/variable/dm-sans)
+  ([`LICENSE-dm-sans.txt`](../internal/edge/service/templates/fonts/LICENSE-dm-sans.txt)).
+- Open Sans, `open-sans-latin-wght-normal.woff2`, the same file the
+  dashboard bundles from
+  [`@fontsource-variable/open-sans`](https://github.com/fontsource/font-files/tree/main/fonts/variable/open-sans)
+  ([`LICENSE-open-sans.txt`](../internal/edge/service/templates/fonts/LICENSE-open-sans.txt)).
 
 ## In the standard environment image
 
@@ -105,7 +187,7 @@ The separately distributed `aether-browser` image includes:
 | Chromium / Chrome for Testing | 153.0.8010.12, Playwright revision 1243, selected by the pinned [browser manifest](https://github.com/microsoft/playwright/blob/v1.63.0/packages/playwright-core/browsers.json) | [Chromium BSD-style license](https://github.com/chromium/chromium/blob/153.0.8010.12/LICENSE), plus the browser distribution's third-party notices; Chromium is not covered solely by Playwright's license |
 | FFmpeg | Playwright revision 1011, installed alongside Chromium by Playwright | [FFmpeg license terms](https://ffmpeg.org/legal.html); the [Linux distribution archive](https://cdn.playwright.dev/dbazure/download/playwright/builds/ffmpeg/1011/ffmpeg-linux.zip) carries `COPYING.LGPLv2.1`, retained under `/opt/playwright/ffmpeg-1011/` |
 | xterm.js | 6.0.0, pinned in the same package lock | [MIT](https://github.com/xtermjs/xterm.js/blob/6.0.0/LICENSE) |
-| JetBrains Mono NFM regular and bold | The same WOFF2 assets used by the dashboard, copied from `web/public/fonts/` | [SIL OFL 1.1](../web/public/fonts/LICENSE-jetbrains-mono-nfm.txt), copied into `/opt/aether-browser/fonts/` |
+| JetBrains Mono NFM regular and bold | The same WOFF2 assets used by the dashboard, copied from `web/src/fonts/` | [SIL OFL 1.1](../web/public/fonts/LICENSE-jetbrains-mono-nfm.txt), copied into `/opt/aether-browser/fonts/` |
 | Element description in [`images/browser/inspect.mjs`](../images/browser/inspect.mjs) | Selector, React component and redaction logic adapted from [Orca](https://github.com/stablyai/orca) `src/main/browser/grab-guest-*.ts` at commit `81867c8e` | [MIT](https://github.com/stablyai/orca/blob/81867c8ea044e220f78316e41b0a3fa11e5d4680/LICENSE), Copyright (c) 2026 Lovecast Inc.; the notice is at the top of that file and ships in the image |
 
 Playwright's pinned
@@ -127,8 +209,8 @@ transitive component has been independently license-audited.
 
 ## Not distributed by the app
 
-Enhanced-mode adapters are not distributed with Aether. `agent.install` and
-`aether agent add --enhanced` install them from the npm registry into the
+Enhanced-mode adapters are not distributed with Cloudfield. `agent.install` and
+`cloudfield agent add --enhanced` install them from the npm registry into the
 member's home, each under its own licence, which
 `internal/harness/acpregistry.json` records: `@agentclientprotocol/claude-agent-acp`
 (proprietary), `@agentclientprotocol/codex-acp` (Apache-2.0), and `pi-acp`

@@ -10,6 +10,7 @@ import (
 
 	"github.com/3xDevOps/Aether/internal/acphost"
 	"github.com/3xDevOps/Aether/internal/agentstatus"
+	"github.com/3xDevOps/Aether/internal/domain"
 )
 
 // The dashboard matches these reason prefixes (web/src/lib/needs-you.ts).
@@ -22,8 +23,8 @@ const (
 // Idle reasons of an interactive enhanced turn that did not end normally.
 const (
 	acpCancelledReason   = "turn cancelled"
-	acpInterruptedReason = "turn interrupted"
-	acpStoppedReason     = "turn ended: "
+	acpInterruptedReason = domain.InterruptedReason
+	acpStoppedReason     = domain.StoppedShortReasonPrefix
 )
 
 func backgroundWork(report agentstatus.Report) bool {
@@ -41,6 +42,21 @@ func heldByTasks(report agentstatus.Report) bool {
 }
 
 func (d *acpDriver) turnState(entry *supervised, oneShot bool, st acphost.TurnState) {
+	// The first state after a sign-in restart shows the refusal, unless a
+	// turn started meanwhile.
+	d.s.mu.Lock()
+	refused := entry.authRefused
+	entry.authRefused = nil
+	d.s.mu.Unlock()
+	switch {
+	case st.Working || st.Failed != nil:
+	case refused != nil:
+		st.Reason, st.Failed = "error", refused
+	case acp.StopReason(st.Reason) == acp.StopReasonEndTurn:
+		ctx, cancel := context.WithTimeout(context.Background(), acpLoginTimeout)
+		d.s.turnWorked(ctx, entry.runID)
+		cancel()
+	}
 	// A child run's ended turn hands its last message to its parent.
 	forward, message := false, ""
 	switch acp.StopReason(st.Reason) {
@@ -135,7 +151,8 @@ func (d *acpDriver) startOneShot(ctx context.Context, entry *supervised, sess *a
 			return
 		}
 	}
-	if _, err := sess.Prompt(ctx, []acp.ContentBlock{acp.TextBlock(prompt)}, false, nil); err != nil && !usageLimited(err) {
+	// The turn's own end reports a usage limit and a refused sign-in.
+	if _, err := sess.Prompt(ctx, []acp.ContentBlock{acp.TextBlock(prompt)}, false, nil); err != nil && !usageLimited(err) && !acphost.AuthRequired(err) {
 		d.endOneShot(entry, false, agentstatus.Report{State: agentstatus.Idle, Reason: "send the task to the agent: " + err.Error()})
 	}
 }
@@ -175,7 +192,14 @@ func (d *acpDriver) endOneShot(entry *supervised, ok bool, idle agentstatus.Repo
 	if skip {
 		return
 	}
+	// A move that replaces the container meanwhile must not get this
+	// turn's end.
+	d.s.mu.Lock()
+	cid := entry.containerID
+	d.s.mu.Unlock()
 	go func() {
+		// The signal is sent once: a frozen guest would never get it.
+		defer d.s.needGuest(cid)()
 		unlock := d.lockOp(entry.runID)
 		d.mu.Lock()
 		current := d.runs[entry.runID] == r
@@ -187,8 +211,7 @@ func (d *acpDriver) endOneShot(entry *supervised, ok bool, idle agentstatus.Repo
 		}
 		unlock()
 		d.s.mu.Lock()
-		cid := entry.containerID
-		if !ok {
+		if !ok && entry.containerID == cid {
 			entry.exitDetail = idle.Reason
 		}
 		d.s.mu.Unlock()

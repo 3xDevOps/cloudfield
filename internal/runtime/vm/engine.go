@@ -1,0 +1,831 @@
+package vm
+
+import (
+	"cmp"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"log/slog"
+	"math"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	goruntime "runtime"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/3xDevOps/Aether/internal/guest"
+	"github.com/3xDevOps/Aether/internal/runtime"
+	"github.com/3xDevOps/Aether/internal/vmimage"
+)
+
+// Images is the image store, *vmimage.Store.
+type Images interface {
+	Kernel() (string, error)
+	HelperDisk(ctx context.Context, binary, path string) (vmimage.Disk, error)
+	BaseDisk(ctx context.Context, ref string) (vmimage.Base, error)
+	LookupBase(ref string) (vmimage.Base, error)
+	NewRootDisk(ctx context.Context, base vmimage.Base, path string) (vmimage.Disk, error)
+	NewDataDisk(ctx context.Context, path string, size int64) (vmimage.Disk, error)
+	SaveBase(ctx context.Context, disk vmimage.Disk, base vmimage.Base, ref string, labels map[string]string) (vmimage.Base, error)
+	Tag(source, target string) error
+	Untag(ref string) error
+	Tags(repo string) ([]string, error)
+	NewCacheDisk(ctx context.Context, pool, path string) (vmimage.Disk, error)
+	SnapshotCache(disk vmimage.Disk) (string, error)
+	UnshareCache(ctx context.Context, disk vmimage.Disk) error
+	PromoteCache(pool, snapshot string) error
+	ProgramDisk(home, executable, unit, path string) (vmimage.Disk, bool, error)
+	BuildProgram(home, executable, unit string) error
+	Sweep() error
+}
+
+const (
+	// dataDiskBytes and stateDiskBytes are sparse: they cost only what the
+	// guest writes.
+	dataDiskBytes  = 128 << 30
+	stateDiskBytes = 1 << 30
+	minMemoryMiB   = 256
+	bootTimeout    = 90 * time.Second
+	// guestOverheadMiB is what the guest keeps out of the session's limit
+	// beyond a 32nd of it (guestMiB): 288 MiB for what the kernel and the
+	// helper hold (at most 265 MiB, at a 3 GiB limit, once sessions of 1 to
+	// 8 GiB had started), the helper's 48 MiB reserve and the git service's
+	// 96 MiB.
+	guestOverheadMiB = 288 + 48 + 96
+	// unitOverheadMiB is what a VM's unit may hold beyond the guest's
+	// memory: Cloud Hypervisor, virtiofsd, and the monitor with the file
+	// service, whose requests a guest can fill.
+	unitOverheadMiB = 512
+	// consoleStartLines is how much of the start of its console the server
+	// log keeps for a guest that restarted instead of answering.
+	consoleStartLines = 100
+	// cmdlineBase boots the read-only helper disk, whose /init is the helper.
+	// Page reporting order 0 lets freed guest page cache back to the host;
+	// at the default order it stalls with most of it still held. Cloud
+	// Hypervisor never exits on a guest panic, so panic=-1 makes a dead
+	// helper reboot the guest, which its event log reports.
+	cmdlineBase = "root=/dev/vda ro rootfstype=ext4 init=/init console=ttyS0 quiet panic=-1 page_reporting.page_reporting_order=0"
+)
+
+type engine struct {
+	cfg   Config
+	root  string
+	units units
+	dial  func(vsockPath string) (helper, error)
+	run   func(ctx context.Context, name string, args ...string) error
+
+	cgroupRoot string
+	reportPoll time.Duration
+
+	mu      sync.Mutex
+	locks   map[string]*sync.Mutex
+	helpers map[string]helper
+	gits    map[string]*guest.Git
+	booting map[string]bool
+	fresh   map[string]bool
+	capture map[string]bool
+	events  map[string]runtime.MemoryEvents
+	relays  map[string]*relay
+	// frozenAt is when freeze froze each VM that is still frozen.
+	frozenAt map[string]time.Time
+
+	netMu     sync.Mutex
+	reserved  map[int]bool
+	dns       *dnsRelay
+	listenDNS func() (*dnsRelay, error)
+
+	promotions sync.WaitGroup
+	builds     sync.WaitGroup
+}
+
+func newEngine(cfg Config, u units, dial func(string) (helper, error)) *engine {
+	return &engine{
+		cfg: cfg, root: filepath.Join(cfg.DataDir, "vm"), units: u, dial: dial, run: runCommand,
+		locks: map[string]*sync.Mutex{}, helpers: map[string]helper{}, gits: map[string]*guest.Git{}, booting: map[string]bool{},
+		fresh: map[string]bool{}, capture: map[string]bool{}, events: map[string]runtime.MemoryEvents{}, relays: map[string]*relay{}, reserved: map[int]bool{},
+		frozenAt:   map[string]time.Time{},
+		listenDNS:  func() (*dnsRelay, error) { return listenDNS(proxyAddr, vmSubnet, hostResolvers) },
+		cgroupRoot: "/sys/fs/cgroup", reportPoll: 4 * time.Second,
+	}
+}
+
+func runCommand(ctx context.Context, name string, args ...string) error {
+	out, err := exec.CommandContext(ctx, name, args...).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("vm runtime: %s %s: %w: %s", name, strings.Join(args, " "), err, strings.TrimSpace(string(out)))
+	}
+	return nil
+}
+
+func (e *engine) lock(key string) func() {
+	l := e.keyLock(key)
+	l.Lock()
+	return l.Unlock
+}
+
+func (e *engine) keyLock(key string) *sync.Mutex {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	l := e.locks[key]
+	if l == nil {
+		l = &sync.Mutex{}
+		e.locks[key] = l
+	}
+	return l
+}
+
+// helper returns the key's client, dialing once per VM lifetime; the client
+// redials by itself across a save and restore.
+func (e *engine) helper(key string) (helper, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if h := e.helpers[key]; h != nil {
+		return h, nil
+	}
+	h, err := e.dial(e.path(key, vsockSocket))
+	if err != nil {
+		return nil, fmt.Errorf("vm runtime: connect to the helper of VM %s: %w", key, err)
+	}
+	e.helpers[key] = h
+	return h, nil
+}
+
+// gitClient returns the client of the key's git service, dialed once per
+// VM lifetime as helper's is.
+func (e *engine) gitClient(key string) (*guest.Git, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if g := e.gits[key]; g != nil {
+		return g, nil
+	}
+	g, err := guest.DialGit(e.path(key, vsockSocket))
+	if err != nil {
+		return nil, fmt.Errorf("vm runtime: connect to the git service of VM %s: %w", key, err)
+	}
+	e.gits[key] = g
+	return g, nil
+}
+
+func (e *engine) forgetHelper(key string) {
+	e.mu.Lock()
+	h, g := e.helpers[key], e.gits[key]
+	delete(e.helpers, key)
+	delete(e.gits, key)
+	e.mu.Unlock()
+	if h != nil {
+		_ = h.Close()
+	}
+	if g != nil {
+		_ = g.Close()
+	}
+}
+
+func (e *engine) setFlag(m map[string]bool, key string, on bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if on {
+		m[key] = true
+	} else {
+		delete(m, key)
+	}
+}
+
+func (e *engine) flag(m map[string]bool, key string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return m[key]
+}
+
+// options are what a VM of one kind needs beyond its spec.
+type options struct {
+	// Offline gives the VM no network device.
+	Offline bool
+	// NoSwap gives the VM no swap, as the dictation engine's container has
+	// none.
+	NoSwap bool
+	// Lifetime has systemd end the VM after it, even when no server is
+	// left to: the VM of a check that a crash interrupted.
+	Lifetime time.Duration
+	// OwnedDirs are made in the VM, owned by the spec's user, before the
+	// main process starts.
+	OwnedDirs []string
+	// Serves are the VM's sockets the host reaches through the helper.
+	Serves []guest.Socket
+	// Browser gives the VM the development browser's disk, once built.
+	Browser bool
+}
+
+func (e *engine) create(ctx context.Context, key string, spec runtime.Spec, opts options) (_ runtime.ID, err error) {
+	if err = spec.Validate(); err != nil {
+		return "", err
+	}
+	if err = checkKey(key); err != nil {
+		return "", err
+	}
+	memMiB, err := memoryMiB(spec.MemoryLimitBytes)
+	if err != nil {
+		return "", err
+	}
+	unlock := e.lock(key)
+	defer unlock()
+	if _, err = os.Stat(e.dir(key)); err == nil {
+		return "", fmt.Errorf("vm runtime: a VM named %s already exists", key)
+	}
+	base, err := e.cfg.Images.BaseDisk(ctx, spec.Image)
+	if err != nil {
+		return "", fmt.Errorf("vm runtime: base disk for %s: %w", spec.Image, err)
+	}
+	index := offline
+	if !opts.Offline {
+		if index, err = e.allocateNet(); err != nil {
+			return "", err
+		}
+		defer e.releaseNet(index)
+	}
+	if err = os.MkdirAll(e.dir(key), 0o700); err != nil {
+		return "", fmt.Errorf("vm runtime: %w", err)
+	}
+	defer func() {
+		if err != nil {
+			_ = os.RemoveAll(e.dir(key))
+		}
+	}()
+	root, err := e.cfg.Images.NewRootDisk(ctx, base, e.path(key, rootDisk))
+	if err != nil {
+		return "", fmt.Errorf("vm runtime: root disk: %w", err)
+	}
+	data, err := e.cfg.Images.NewDataDisk(ctx, e.path(key, dataDisk), dataDiskBytes)
+	if err != nil {
+		return "", fmt.Errorf("vm runtime: data disk: %w", err)
+	}
+	var cache vmimage.Disk
+	if m, ok := cacheMount(spec.Mounts); ok {
+		if cache, err = e.cfg.Images.NewCacheDisk(ctx, cachePool(m), e.path(key, cacheDisk)); err != nil {
+			return "", fmt.Errorf("vm runtime: cache disk: %w", err)
+		}
+	}
+	disks, shared, err := e.checkoutDisks(ctx, spec)
+	if err != nil {
+		return "", err
+	}
+	state, err := e.stateDisk(ctx, spec.Mounts)
+	if err != nil {
+		return "", err
+	}
+	cpus, limit := vcpus(spec.CPULimit)
+	rec := &record{
+		Key: key, CreationKey: spec.CreationKey, Fingerprint: spec.Fingerprint, Image: spec.Image, Base: base, Root: root, Data: data, Cache: cache, State: state,
+		User:       spec.User,
+		Env:        overrideEnv(base.Config.Env, runtime.EnvList(runtime.TrustCheckouts(spec.Env, spec.WorktreeMountPath, spec.ExtraWorktrees))),
+		WorkingDir: cmp.Or(spec.WorkingDir, base.Config.WorkingDir, "/"), Command: spec.Command, TTY: spec.TTY,
+		SetupScript: spec.SetupScript, SecretEnv: spec.SecretEnv, NestedDocker: spec.NestedDocker, Sudo: spec.Sudo,
+		CPUs: cpus, CPULimit: limit, MemoryMiB: memMiB, PidsLimit: spec.PidsLimit, Checkouts: shared, CheckoutDisks: disks, Mounts: spec.Mounts, Programs: spec.Programs, Net: index, Egress: spec.Egress,
+		NoSwap: opts.NoSwap, Lifetime: opts.Lifetime, OwnedDirs: opts.OwnedDirs, Serves: opts.Serves,
+	}
+	if opts.Browser {
+		if err = e.attachBrowser(ctx, rec); err != nil {
+			return "", err
+		}
+	}
+	if err = e.store(rec); err != nil {
+		return "", err
+	}
+	return runtime.ID(idPrefix + key), nil
+}
+
+// vcpus rounds a fractional CPU limit up to whole vCPUs and keeps the limit
+// itself as the unit's CPU quota; no limit means every host CPU.
+func vcpus(limit float64) (int, float64) {
+	host := goruntime.NumCPU()
+	if limit <= 0 {
+		return host, 0
+	}
+	return min(host, max(1, int(math.Ceil(limit)))), limit
+}
+
+// guestMiB is the RAM of a VM whose session's limit is limitMiB: the limit,
+// which the session gets whole, and what the guest holds outside it. A
+// 64th of RAM goes to the kernel's page structures, and up to as much
+// again to its watermarks.
+func guestMiB(limitMiB int64) int64 {
+	return limitMiB + limitMiB/32 + guestOverheadMiB
+}
+
+// unitMemoryMiB is the MemoryMax of rec's unit.
+func unitMemoryMiB(rec *record) int64 {
+	return guestMiB(rec.MemoryMiB) + unitOverheadMiB
+}
+
+func memoryMiB(limit int64) (int64, error) {
+	if limit <= 0 {
+		total, err := hostMemoryBytes()
+		if err != nil {
+			return 0, err
+		}
+		return total >> 20, nil
+	}
+	mib := (limit + (1<<20 - 1)) >> 20
+	if mib < minMemoryMiB {
+		return 0, fmt.Errorf("vm runtime: a memory limit of %d bytes is below the %d MiB a session VM needs to boot", limit, minMemoryMiB)
+	}
+	return mib, nil
+}
+
+func hostMemoryBytes() (int64, error) {
+	var kb int64
+	data, err := os.ReadFile("/proc/meminfo")
+	if err != nil {
+		return 0, fmt.Errorf("vm runtime: host memory: %w", err)
+	}
+	for line := range strings.SplitSeq(string(data), "\n") {
+		if rest, ok := strings.CutPrefix(line, "MemTotal:"); ok {
+			if _, err := fmt.Sscanf(strings.TrimSpace(rest), "%d kB", &kb); err != nil {
+				return 0, fmt.Errorf("vm runtime: parse MemTotal: %w", err)
+			}
+			return kb << 10, nil
+		}
+	}
+	return 0, errors.New("vm runtime: /proc/meminfo has no MemTotal")
+}
+
+// start cold-starts a stopped VM on the disks it had, as docker start keeps
+// a container's writable layer; on a running one it only makes sure Main
+// was started, as a redundant docker start does.
+func (e *engine) start(ctx context.Context, key string) error {
+	unlock := e.lock(key)
+	defer unlock()
+	return e.startLocked(ctx, key)
+}
+
+// startLocked is start for a caller holding the VM's lock.
+func (e *engine) startLocked(ctx context.Context, key string) (err error) {
+	rec, err := e.load(key)
+	if err != nil {
+		return err
+	}
+	st, err := e.units.State(ctx, unitName(key))
+	if err != nil {
+		return err
+	}
+	if st.Active && rec.Exited {
+		// A lingering VM powers off only to boot again on the same cache
+		// disk, which becomes its pool's newest when the VM stops for good.
+		if err = e.shutDown(ctx, rec, false); err != nil {
+			return err
+		}
+	} else if st.Active {
+		return e.boot(ctx, rec)
+	}
+	if rec.Saved {
+		if err = os.RemoveAll(e.path(key, snapshotDir)); err != nil {
+			return fmt.Errorf("vm runtime: discard saved state: %w", err)
+		}
+		rec.Saved = false
+	}
+	// A root disk the setup script never finished on, as on every VM made
+	// before setup ran once per VM, starts over from the base.
+	if rec.Booted && rec.SetupScript != "" && !rec.SetupDone {
+		if rec.Root, err = e.cfg.Images.NewRootDisk(ctx, rec.Base, e.path(key, rootDisk)); err != nil {
+			return fmt.Errorf("vm runtime: root disk: %w", err)
+		}
+	}
+	if rec.Cache.Path != "" {
+		if err = e.cfg.Images.UnshareCache(ctx, rec.Cache); err != nil {
+			return fmt.Errorf("vm runtime: cache disk: %w", err)
+		}
+	}
+	// A cold start ends any companion and takes the current browser image's
+	// disk, which a server update or the first build may have brought.
+	rec.Companion = nil
+	if rec.session() && rec.BrowserImage != e.cfg.BrowserImage {
+		if err = e.attachBrowser(ctx, rec); err != nil {
+			return err
+		}
+	}
+	if err = e.attachPrograms(rec); err != nil {
+		return err
+	}
+	l, err := e.bootLaunch(ctx, rec)
+	if err != nil {
+		return err
+	}
+	if rec.Net != offline {
+		if err = e.ensureNetwork(ctx); err != nil {
+			return err
+		}
+	}
+	rec.Booted, rec.Exited, rec.Frozen = true, false, false
+	rec.CacheRan, rec.CacheSynced = rec.Cache.Path != "", false
+	rec.Boots++
+	if err = e.store(rec); err != nil {
+		return err
+	}
+	if err = e.launch(ctx, rec, l); err != nil {
+		return err
+	}
+	defer func() {
+		if err != nil {
+			e.kill(context.WithoutCancel(ctx), key)
+		}
+	}()
+	if err = e.boot(ctx, rec); err != nil {
+		return err
+	}
+	// A boot for capture runs no setup script.
+	if !rec.SetupDone && !e.flag(e.capture, key) {
+		rec.SetupDone = true
+		if err = e.store(rec); err != nil {
+			return err
+		}
+	}
+	e.setFlag(e.fresh, key, true)
+	return nil
+}
+
+func (e *engine) bootLaunch(ctx context.Context, rec *record) (launch, error) {
+	p, err := e.plan(rec)
+	if err != nil {
+		return launch{}, err
+	}
+	if err = linkSockets(e.dir(rec.Key), p.links); err != nil {
+		return launch{}, err
+	}
+	kernel, err := e.cfg.Images.Kernel()
+	if err != nil {
+		return launch{}, fmt.Errorf("vm runtime: guest kernel: %w", err)
+	}
+	helperDisk, err := e.cfg.Images.HelperDisk(ctx, e.cfg.Helper, e.path(rec.Key, helperImage))
+	if err != nil {
+		return launch{}, fmt.Errorf("vm runtime: helper disk: %w", err)
+	}
+	disks := []attached{{helperDisk, "helper", true}, {rec.Root, "root", false}, {rec.Data, "data", false}}
+	checkouts := make([]guest.CheckoutMount, len(rec.CheckoutDisks))
+	for i, c := range rec.CheckoutDisks {
+		disks = append(disks, attached{c.Disk, checkoutSerial(i), false})
+		checkouts[i] = guest.CheckoutMount{Serial: checkoutSerial(i), Key: c.Checkout.Key, Target: c.Target}
+	}
+	if rec.Cache.Path != "" {
+		disks = append(disks, attached{rec.Cache, "cache", false})
+	}
+	if rec.State.Path != "" {
+		disks = append(disks, attached{rec.State, "state", false})
+	}
+	if rec.Browser.Path != "" {
+		disks = append(disks, attached{rec.Browser, "browser", true})
+	}
+	programs := make([]guest.Mount, len(rec.ProgramDisks))
+	for i, d := range rec.ProgramDisks {
+		programs[i] = guest.Mount{Volume: guest.VolumeProgram, Source: strconv.Itoa(i), Target: d.Target, ReadOnly: true}
+	}
+	cfg := guest.Config{
+		Hostname: rec.Key, Mounts: slices.Concat(p.mounts, programs), Checkouts: checkouts, Sockets: p.sockets, Serves: rec.Serves, Loopbacks: p.loopbacks,
+		MemoryLimit: uint64(rec.MemoryMiB) << 20,
+	}
+	if !rec.NoSwap {
+		// A quarter of the limit, as Docker gives a container.
+		cfg.Swap = cfg.MemoryLimit / 4
+	}
+	if rec.Browser.Path != "" {
+		cfg.Serves = append(cfg.Serves, guest.Socket{Port: guest.BrowserPort, Path: guest.BrowserSocket})
+	}
+	if rec.Net != offline {
+		cfg.Network = guestNetwork(rec.Net)
+		if !rec.Egress {
+			cfg.Network.DNS = []netip.Addr{proxyAddr}
+			_, cfg.Network.Search = hostResolvConf()
+		}
+	}
+	cmdline, err := cfg.KernelArgs(cmdlineBase)
+	if errors.Is(err, guest.ErrCmdlineTooLong) && len(programs) > 0 {
+		slog.Warn("vm runtime: boot without the agent programs' disks, whose mounts do not fit the kernel command line", "vm", rec.Key)
+		if err = e.releasePrograms(rec); err != nil {
+			return launch{}, err
+		}
+		cfg.Mounts = p.mounts
+		cmdline, err = cfg.KernelArgs(cmdlineBase)
+	}
+	if errors.Is(err, guest.ErrCmdlineTooLong) && cfg.Network != nil && len(cfg.Network.Search) > 0 {
+		slog.Warn("vm runtime: boot without the host's search domains, which do not fit the kernel command line", "vm", rec.Key, "search", cfg.Network.Search)
+		cfg.Network.Search = nil
+		cmdline, err = cfg.KernelArgs(cmdlineBase)
+	}
+	if err != nil {
+		return launch{}, fmt.Errorf("vm runtime: kernel command line: %w", err)
+	}
+	for i, d := range rec.ProgramDisks {
+		disks = append(disks, attached{d.Disk, programSerial(i), true})
+	}
+	diskArgs, err := diskArgs(disks)
+	if err != nil {
+		return launch{}, err
+	}
+	args := []string{
+		"--api-socket", "path=" + e.path(rec.Key, apiSocket),
+		"--vsock", "cid=3,socket=" + e.path(rec.Key, vsockSocket),
+		"--serial", "file=" + e.path(rec.Key, consolePipe), "--console", "off",
+		"--event-monitor", "path=" + e.path(rec.Key, eventsFile),
+		"--kernel", kernel, "--cmdline", cmdline,
+		"--disk",
+	}
+	args = append(args, diskArgs...)
+	args = append(args,
+		// With nested virtualization a guest rebooted on its second restore
+		// (Cloud Hypervisor v54.1 on a host that is itself a VM). Sessions
+		// run no VMs of their own.
+		"--cpus", fmt.Sprintf("boot=%d,nested=off", rec.CPUs),
+		"--memory", fmt.Sprintf("size=%dM,shared=on", guestMiB(rec.MemoryMiB)),
+		"--balloon", "size=0,free_page_reporting=on",
+	)
+	if rec.Net != offline {
+		args = append(args, "--net", "id=net0,"+chNetArg(rec.Net, rec.Egress))
+	}
+	l := launch{Args: args, Shares: p.shares, Home: p.homeConfig(rec.User), Reveal: revealPaths(e.dir(rec.Key), kernel, rec, p)}
+	if len(p.shares) > 0 {
+		l.Args = append(l.Args, "--fs", "tag="+guest.ShareTag+",socket="+e.path(rec.Key, fsSocket))
+	}
+	return l, nil
+}
+
+// stateDisk is the session's disk in the directory its state mounts name,
+// made empty for its first VM; a VM that replaces that one, as an account
+// move does, finds it as the last one left it.
+func (e *engine) stateDisk(ctx context.Context, mounts []runtime.Mount) (vmimage.Disk, error) {
+	i := slices.IndexFunc(mounts, func(m runtime.Mount) bool { return m.Kind == runtime.MountState })
+	if i < 0 {
+		return vmimage.Disk{}, nil
+	}
+	path := filepath.Join(mounts[i].HostPath, stateDiskFile)
+	// The monitor opens the disk as root: it must be the file itself, never
+	// a link to another.
+	if info, err := os.Lstat(path); err == nil {
+		if !info.Mode().IsRegular() {
+			return vmimage.Disk{}, fmt.Errorf("vm runtime: state disk %s is not a regular file", path)
+		}
+		return vmimage.Disk{Path: path, Format: vmimage.FormatRaw}, nil
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		return vmimage.Disk{}, fmt.Errorf("vm runtime: state disk: %w", err)
+	}
+	d, err := e.cfg.Images.NewDataDisk(ctx, path, stateDiskBytes)
+	if err != nil {
+		return vmimage.Disk{}, fmt.Errorf("vm runtime: state disk: %w", err)
+	}
+	return d, nil
+}
+
+// attached is a disk as the guest sees it, under its serial.
+type attached struct {
+	disk     vmimage.Disk
+	serial   string
+	readOnly bool
+}
+
+// diskArgs states every disk's format to Cloud Hypervisor, which would
+// otherwise guess it from bytes a session may have written. Only qcow2 disks
+// may open a backing file: the server makes each with its backing format
+// pinned to raw, which Cloud Hypervisor follows, so a base a session wrote
+// reads as data.
+func diskArgs(disks []attached) ([]string, error) {
+	args := make([]string, len(disks))
+	for i, a := range disks {
+		var backing string
+		switch a.disk.Format {
+		case vmimage.FormatRaw:
+			backing = "off"
+		case vmimage.FormatQcow2:
+			backing = "on"
+		default:
+			return nil, fmt.Errorf("vm runtime: disk %s has no known format %q", a.disk.Path, a.disk.Format)
+		}
+		args[i] = fmt.Sprintf("path=%s,image_type=%s,backing_files=%s,id=%s,serial=%s", a.disk.Path, a.disk.Format, backing, a.serial, a.serial)
+		if a.readOnly {
+			args[i] += ",readonly=on"
+		}
+	}
+	return args, nil
+}
+
+func (e *engine) launch(ctx context.Context, rec *record, l launch) error {
+	data, err := json.MarshalIndent(l, "", "  ")
+	if err != nil {
+		return fmt.Errorf("vm runtime: encode launch: %w", err)
+	}
+	if err := writeFileAtomic(e.path(rec.Key, launchFile), data); err != nil {
+		return err
+	}
+	logPath := e.path(rec.Key, monitorLog)
+	properties := []string{
+		"Type=exec", "PrivateMounts=yes", "KillMode=control-group", "TimeoutStopSec=15",
+		// The guest swaps its own memory: host swap would page it out
+		// behind the guest's back. No OOMScoreAdjust, unlike a container's
+		// 500: a host OOM kill of the monitor ends the whole session, not
+		// one process in it.
+		fmt.Sprintf("MemoryMax=%dM", unitMemoryMiB(rec)), "MemorySwapMax=0",
+		"StandardOutput=append:" + logPath, "StandardError=append:" + logPath,
+	}
+	if rec.CPULimit > 0 {
+		properties = append(properties, fmt.Sprintf("CPUQuota=%d%%", int(math.Ceil(rec.CPULimit*100))))
+	}
+	if rec.Lifetime > 0 {
+		properties = append(properties, fmt.Sprintf("RuntimeMaxSec=%d", int(rec.Lifetime.Seconds())))
+	}
+	properties = append(properties, sandbox(filepath.Dir(e.root), e.cfg.Monitor[0], rec, l)...)
+	argv := append(append([]string{}, e.cfg.Monitor...), e.dir(rec.Key))
+	if err := os.Rename(logPath, logPath+".1"); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("vm runtime: keep the last monitor log of VM %s: %w", rec.Key, err)
+	}
+	// Removed before the unit starts: the last monitor's events would read
+	// as a reboot of this guest.
+	if err := os.Remove(e.path(rec.Key, eventsFile)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return fmt.Errorf("vm runtime: remove the last monitor's events of VM %s: %w", rec.Key, err)
+	}
+	if err := e.units.Start(ctx, unitName(rec.Key), argv, properties); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (e *engine) boot(ctx context.Context, rec *record) error {
+	h, err := e.helper(rec.Key)
+	if err != nil {
+		return err
+	}
+	if err = e.waitHelper(ctx, rec.Key, h); err != nil {
+		return err
+	}
+	upCtx, stop, _ := e.whileUp(ctx, rec.Key)
+	defer stop()
+	stopped := func(err error) error {
+		if upCtx.Err() != nil && ctx.Err() == nil {
+			return fmt.Errorf("vm runtime: VM %s stopped while booting%s", rec.Key, e.logTail(rec.Key))
+		}
+		return err
+	}
+	if runtime.Unprivileged(rec.User) {
+		allow := ""
+		if rec.Sudo {
+			allow = "sudo"
+		}
+		home := cmp.Or(runtime.EnvValue(rec.Env, "HOME"), "/")
+		code, out, prepErr := e.runAsRoot(upCtx, h, rec, []string{"/bin/sh", "-c", runtime.UserScript, "aether-user", rec.User, home, allow})
+		if _, noShell := errors.AsType[*guest.StartError](prepErr); noShell {
+			return fmt.Errorf("vm runtime: prepare user %s: %w: %w", rec.User, prepErr, runtime.ErrUnstartableImage)
+		}
+		if prepErr != nil {
+			return stopped(fmt.Errorf("vm runtime: prepare user %s: %w", rec.User, prepErr))
+		}
+		if code != 0 {
+			return fmt.Errorf("vm runtime: prepare user %s exited %d: %s: %w", rec.User, code, strings.TrimSpace(out), runtime.ErrUnstartableImage)
+		}
+	}
+	if len(rec.CheckoutDisks) > 0 {
+		g, gitErr := e.gitClient(rec.Key)
+		if gitErr == nil {
+			setupCtx, cancel := context.WithTimeout(ctx, bootTimeout)
+			gitErr = g.Setup(setupCtx, rec.checkoutIdentities())
+			cancel()
+		}
+		if gitErr != nil {
+			return fmt.Errorf("vm runtime: set up the checkouts of VM %s: %w", rec.Key, gitErr)
+		}
+	}
+	for _, dir := range rec.OwnedDirs {
+		code, out, dirErr := e.runAsRoot(ctx, h, rec, []string{"/bin/sh", "-c", `mkdir -p -- "$1" && chown -- "$2" "$1"`, "aether-dir", dir, rec.User})
+		if dirErr != nil || code != 0 {
+			return errors.Join(dirErr, fmt.Errorf("vm runtime: make %s for user %s: exit %d: %s", dir, rec.User, code, strings.TrimSpace(out)))
+		}
+	}
+	var tty *guest.Size
+	if rec.TTY {
+		tty = &guest.Size{Cols: 80, Rows: 24}
+	}
+	// The setup script runs once per VM, as once per container: the root
+	// disk keeps what it did.
+	argv, script := rec.Command, rec.SetupScript
+	if rec.SetupDone {
+		script = ""
+	}
+	if e.flag(e.capture, rec.Key) {
+		argv, script = captureMain, ""
+	}
+	e.setFlag(e.booting, rec.Key, true)
+	err = h.Boot(upCtx, guest.BootSpec{
+		Main: guest.ProcessSpec{
+			ID: guest.MainID, Argv: argv, Env: rec.Env, User: rec.User, Dir: rec.WorkingDir, TTY: tty,
+			NoNewPrivileges: !rec.Sudo,
+		},
+		SetupScript: script, NestedDocker: rec.NestedDocker, PidsLimit: rec.PidsLimit,
+	})
+	e.setFlag(e.booting, rec.Key, false)
+	var setup *guest.SetupError
+	if errors.As(err, &setup) {
+		return &runtime.SetupError{ExitCode: setup.ExitCode, Output: runtime.SetupOutput(setup.Output, setup.Cut, runtime.SecretValues(rec.SecretEnv, rec.Env))}
+	}
+	if _, noMain := errors.AsType[*guest.StartError](err); noMain {
+		return stopped(fmt.Errorf("vm runtime: boot VM %s: %w: %w", rec.Key, err, runtime.ErrUnstartableImage))
+	}
+	if err != nil {
+		return stopped(fmt.Errorf("vm runtime: boot VM %s: %w", rec.Key, err))
+	}
+	return nil
+}
+
+// startKept is start, with a failure that is not the VM's own (its root
+// disk's or its setup script's) marked runtime.ErrStartLater, so its unsaved
+// changes are not thrown away with it.
+func (e *engine) startKept(ctx context.Context, key string) error {
+	err := e.start(ctx, key)
+	_, setup := errors.AsType[*runtime.SetupError](err)
+	if err == nil || setup || errors.Is(err, runtime.ErrUnstartableImage) || errors.Is(err, runtime.ErrNotFound) || ctx.Err() != nil {
+		return err
+	}
+	return fmt.Errorf("%w: %w", runtime.ErrStartLater, err)
+}
+
+// waitHelper waits for the guest's helper to answer. A guest that restarted
+// first is not the one awaited, whatever answers after: a restored guest
+// that dies comes back from its disks, with none of its processes.
+func (e *engine) waitHelper(ctx context.Context, key string, h helper) error {
+	ctx, cancel := context.WithTimeout(ctx, bootTimeout)
+	defer cancel()
+	answered := make(chan error, 1)
+	var info guest.Info
+	go func() {
+		var err error
+		info, err = h.Ping(ctx)
+		answered <- err
+	}()
+	tick := time.NewTicker(250 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case err := <-answered:
+			if e.rebooted(key) {
+				return e.restarted(key)
+			}
+			if err != nil {
+				return fmt.Errorf("vm runtime: helper of VM %s did not answer: %w%s", key, err, e.logTail(key))
+			}
+			if strings.HasPrefix(info.BootError, guest.RootStep) {
+				return fmt.Errorf("vm runtime: VM %s failed to boot: %s: %w", key, info.BootError, runtime.ErrUnstartableImage)
+			}
+			if info.BootError != "" {
+				return fmt.Errorf("vm runtime: VM %s failed to boot: %s", key, info.BootError)
+			}
+			return nil
+		case <-tick.C:
+			if e.rebooted(key) {
+				cancel()
+				return e.restarted(key)
+			}
+			if st, err := e.units.State(ctx, unitName(key)); err == nil && !st.Active {
+				cancel()
+				return fmt.Errorf("vm runtime: VM %s stopped while booting%s", key, e.logTail(key))
+			}
+		}
+	}
+}
+
+// restarted is the error of a guest that restarted before it answered.
+// Each monitor starts console.log again, so its first lines are what the
+// guest printed as it died, and its kernel's panic fills the tail the error
+// quotes: the server log keeps them.
+func (e *engine) restarted(key string) error {
+	data, _ := readNoFollow(e.path(key, consoleLog))
+	lines := strings.SplitN(string(data), "\n", consoleStartLines+1)
+	slog.Warn("vm runtime: the guest restarted instead of answering", "vm", key, "console_start", strings.Join(lines[:min(consoleStartLines, len(lines))], "\n"))
+	return fmt.Errorf("vm runtime: the guest of VM %s restarted instead of answering%s", key, e.logTail(key))
+}
+
+func (e *engine) logTail(key string) string {
+	var out strings.Builder
+	for _, name := range []string{monitorLog, consoleLog} {
+		// The log files are in the VM's own directory, which its unit may
+		// write, so a symlink planted there must not be followed off it.
+		data, err := readNoFollow(e.path(key, name))
+		if err != nil || len(data) == 0 {
+			continue
+		}
+		lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
+		fmt.Fprintf(&out, "\n%s:\n%s", name, strings.Join(lines[max(0, len(lines)-15):], "\n"))
+	}
+	return out.String()
+}
+
+// readNoFollow reads a file, refusing to follow a final symlink.
+func readNoFollow(path string) ([]byte, error) {
+	f, err := os.OpenFile(path, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return io.ReadAll(f)
+}

@@ -185,7 +185,7 @@ func (s *Scheduler) ensureTerminalLocked(ctx context.Context, member domain.Memb
 			return nil, adoptErr
 		}
 		if destroyErr := s.destroyTerminalContainer(ctx, runtime.ID(row.ContainerID)); destroyErr != nil {
-			s.retainTerminalAfterRuntimeError(m, row, runtime.ID(row.ContainerID))
+			s.retainTerminalAfterRuntimeError(m, row, runtime.ID(row.ContainerID), terminalUnknownUser)
 			return nil, fmt.Errorf("scheduler: destroy stale terminal: %w", destroyErr)
 		}
 	}
@@ -193,40 +193,95 @@ func (s *Scheduler) ensureTerminalLocked(ctx context.Context, member domain.Memb
 	if findErr == nil {
 		kept = cid
 	}
-	release, err := s.tryReserveCapacity(ctx)
+	release, err := s.tryReserveCapacity(ctx, &memoryClaim{bytes: startupMemoryBytes})
 	if err != nil {
 		return nil, err
 	}
 	defer release()
 
 	s.removeScratch(terminalScratchName(member))
-	plan, err := s.BuildEnvironmentPlan(ctx, nil, nil, m, harness.Profile{}, EnvironmentPurposeTerminal)
+	st, err := s.startTerminalContainer(ctx, m, m, key, kept)
 	if err != nil {
-		return nil, fmt.Errorf("scheduler: build terminal environment: %w", err)
+		canRetry := func() bool { return st.cid == "" }
+		var plan *EnvironmentPlan
+		plan, err = s.startFromOlderImages(ctx, m, st.plan, err, canRetry, func(older *domain.Member) (*EnvironmentPlan, error) {
+			var startErr error
+			st, startErr = s.startTerminalContainer(ctx, m, older, key, "")
+			return st.plan, startErr
+		})
+		if err != nil {
+			return nil, err
+		}
+		slog.Warn("scheduler: environment terminal started from an older image", "member", member, "notice", plan.ImageNotice)
+	}
+	plan, terminalReservation, coordMounts, createdUser, cid, image := st.plan, st.reservation, st.coordMounts, st.createdUser, st.cid, st.image
+	if len(coordMounts) > 0 {
+		if updateErr := s.updateTerminalCoordination(member, cid); updateErr != nil {
+			destroyErr := s.cfg.Runtime.Destroy(context.WithoutCancel(ctx), cid)
+			if destroyErr == nil || errors.Is(destroyErr, runtime.ErrNotFound) {
+				s.releaseTerminalCoordination(member)
+			} else {
+				s.retainTerminalAfterRuntimeError(m, nil, cid, createdUser)
+			}
+			s.releaseTerminalReservation(terminalReservation)
+			if destroyErr != nil && !errors.Is(destroyErr, runtime.ErrNotFound) {
+				return nil, errors.Join(updateErr, fmt.Errorf("scheduler: destroy terminal after sidecar failure: %w", destroyErr))
+			}
+			return nil, updateErr
+		}
+	}
+	terminalReservation.containerID = cid
+	terminal := &domain.Terminal{Member: member, ContainerID: string(cid), Image: image, StartedAt: st.startedAt}
+	sup := s.registerTerminal(terminal, terminalReservation.userReservation, plan.Home)
+	sup.persistPending = true
+	if err := s.ensureTerminalReady(ctx, sup, terminal); err != nil {
+		return nil, err
+	}
+	return terminal, nil
+}
+
+type terminalStart struct {
+	plan        *EnvironmentPlan
+	reservation *terminalSupervision
+	coordMounts []runtime.Mount
+	createdUser string
+	startedAt   time.Time
+	cid         runtime.ID
+	image       string
+}
+
+// startTerminalContainer starts m's terminal container from planned's
+// image. On failure it releases what it reserved, except a container it
+// could not destroy, which it retains and returns.
+func (s *Scheduler) startTerminalContainer(ctx context.Context, m, planned *domain.Member, key string, kept runtime.ID) (terminalStart, error) {
+	member := m.ID
+	plan, err := s.BuildEnvironmentPlan(ctx, nil, nil, planned, harness.Profile{}, EnvironmentPurposeTerminal)
+	if err != nil {
+		return terminalStart{}, fmt.Errorf("scheduler: build terminal environment: %w", err)
 	}
 	coordMounts, coordErr := s.terminalCoordinationMount(member)
 	if coordErr != nil {
-		return nil, coordErr
+		return terminalStart{plan: plan}, coordErr
 	}
 	plan.Mounts = append(plan.Mounts, coordMounts...)
 	if len(coordMounts) > 0 {
 		ensureCoordinationCLIPath(plan.Env)
 	}
 	terminalReservation := &terminalSupervision{member: member}
-	if reserveErr := s.reserveTerminalUser(terminalReservation, plan.User); reserveErr != nil {
+	if reserveErr := s.reserveTerminalUser(ctx, terminalReservation, plan.User); reserveErr != nil {
 		s.releaseTerminalCoordination(member)
-		return nil, fmt.Errorf("scheduler: reserve terminal user: %w", reserveErr)
+		return terminalStart{plan: plan}, fmt.Errorf("scheduler: reserve terminal user: %w", reserveErr)
 	}
 	if ownershipErr := s.applyRunOwnership(nil, &domain.Run{}, member, plan.Mounts, plan.User); ownershipErr != nil {
 		s.releaseTerminalCoordination(member)
 		s.releaseTerminalReservation(terminalReservation)
-		return nil, fmt.Errorf("scheduler: apply terminal ownership: %w", ownershipErr)
+		return terminalStart{plan: plan}, fmt.Errorf("scheduler: apply terminal ownership: %w", ownershipErr)
 	}
 	limits, err := s.runLimits(ctx, domain.RunLimits{})
 	if err != nil {
 		s.releaseTerminalCoordination(member)
 		s.releaseTerminalReservation(terminalReservation)
-		return nil, err
+		return terminalStart{plan: plan}, err
 	}
 	startedAt := time.Now().UTC()
 	spec := runtime.Spec{
@@ -247,7 +302,14 @@ func (s *Scheduler) ensureTerminalLocked(ctx context.Context, member domain.Memb
 		Sudo:             plan.Sudo,
 	}
 	spec.Fingerprint = terminalFingerprint(spec, s.cfg.StandardImage)
+	// A container this call creates runs as plan.User; a kept one or a
+	// root one leaves its user to inspection.
+	createdUser := plan.User
+	if createdUser == "" || kept != "" {
+		createdUser = terminalUnknownUser
+	}
 	cid, image, err := s.startOrCreateTerminal(ctx, kept, spec)
+	st := terminalStart{plan: plan, reservation: terminalReservation, coordMounts: coordMounts, createdUser: createdUser, startedAt: startedAt, cid: cid, image: image}
 	if err != nil {
 		if cid == "" {
 			s.releaseTerminalCoordination(member)
@@ -255,34 +317,12 @@ func (s *Scheduler) ensureTerminalLocked(ctx context.Context, member domain.Memb
 			if updateErr := s.updateTerminalCoordination(member, cid); updateErr != nil {
 				slog.Warn("scheduler: retain terminal coordination container reference", "member", member, "container", cid, "error", updateErr)
 			}
-			s.retainTerminalAfterRuntimeError(m, nil, cid)
+			s.retainTerminalAfterRuntimeError(m, nil, cid, createdUser)
 		}
 		s.releaseTerminalReservation(terminalReservation)
-		return nil, err
+		return st, err
 	}
-	if len(coordMounts) > 0 {
-		if updateErr := s.updateTerminalCoordination(member, cid); updateErr != nil {
-			destroyErr := s.cfg.Runtime.Destroy(context.WithoutCancel(ctx), cid)
-			if destroyErr == nil || errors.Is(destroyErr, runtime.ErrNotFound) {
-				s.releaseTerminalCoordination(member)
-			} else {
-				s.retainTerminalAfterRuntimeError(m, nil, cid)
-			}
-			s.releaseTerminalReservation(terminalReservation)
-			if destroyErr != nil && !errors.Is(destroyErr, runtime.ErrNotFound) {
-				return nil, errors.Join(updateErr, fmt.Errorf("scheduler: destroy terminal after sidecar failure: %w", destroyErr))
-			}
-			return nil, updateErr
-		}
-	}
-	terminalReservation.containerID = cid
-	terminal := &domain.Terminal{Member: member, ContainerID: string(cid), Image: image, StartedAt: startedAt}
-	sup := s.registerTerminal(terminal, terminalReservation.userReservation, plan.Home)
-	sup.persistPending = true
-	if err := s.ensureTerminalReady(ctx, sup, terminal); err != nil {
-		return nil, err
-	}
-	return terminal, nil
+	return st, nil
 }
 
 // terminalFingerprint identifies the settings a terminal container was
@@ -315,8 +355,9 @@ func (s *Scheduler) startOrCreateTerminal(ctx context.Context, kept runtime.ID, 
 			if startErr == nil {
 				return kept, info.Image, nil
 			}
-			if ctx.Err() != nil {
-				// A cancelled open says nothing about the container.
+			if ctx.Err() != nil || errors.Is(startErr, runtime.ErrStartLater) {
+				// A cancelled open, or a host that could not start it now,
+				// says nothing about the container.
 				return "", "", fmt.Errorf("scheduler: start kept terminal: %w", startErr)
 			}
 			slog.Warn("scheduler: kept terminal did not start; recreating it from the saved image", "container", kept, "error", startErr)
@@ -398,7 +439,7 @@ func (s *Scheduler) destroyKeptTerminalLocked(ctx context.Context, member domain
 }
 
 func (s *Scheduler) createAndStartTerminal(ctx context.Context, spec runtime.Spec) (runtime.ID, error) {
-	cid, err := s.cfg.Runtime.Create(ctx, spec)
+	cid, err := s.createContainer(ctx, spec)
 	if err != nil {
 		return "", fmt.Errorf("scheduler: create terminal: %w", err)
 	}
@@ -515,8 +556,9 @@ func (s *Scheduler) ensureTerminalReady(ctx context.Context, sup *terminalSuperv
 		if err != nil {
 			return err
 		}
+		lookupErr := s.resolveStaleRunUsers(ctx, sup.member, "", user)
 		if err := s.resolveTerminalMetadata(sup, user, home); err != nil {
-			return err
+			return withLookupError(err, lookupErr)
 		}
 		if info.Image != "" {
 			s.mu.Lock()
@@ -526,8 +568,12 @@ func (s *Scheduler) ensureTerminalReady(ctx context.Context, sup *terminalSuperv
 		}
 	}
 	if sup.ownershipBlocked {
+		s.mu.Lock()
+		user := sup.runUser
+		s.mu.Unlock()
+		lookupErr := s.resolveStaleRunUsers(ctx, sup.member, "", user)
 		if err := s.checkTerminalOwnership(sup); err != nil {
-			return err
+			return withLookupError(err, lookupErr)
 		}
 		s.mu.Lock()
 		sup.ownershipBlocked = false
@@ -599,8 +645,8 @@ func terminalOwnershipConflict(member domain.MemberID, other *credentialUserRese
 	if user == "" {
 		user = "root"
 	}
-	return fmt.Errorf("member's environment home %s is reserved by %s as user %s, but environment terminal resolved user %s; concurrent containers for the same member must share one uid:gid mapping",
-		member, other.owner, other.user, user)
+	return fmt.Errorf("member's environment home %s is reserved by %s as user %s, but environment terminal resolved user %s; concurrent sandboxes for the same member must share one uid:gid mapping",
+		member, other.holder(), other.user, user)
 }
 
 func (s *Scheduler) retainTerminalReservation(entry *terminalSupervision, user string) {
@@ -661,17 +707,17 @@ func (s *Scheduler) tryAdoptTerminal(ctx context.Context, member *domain.Member,
 	case ctx.Err() != nil:
 		return nil, false, ctx.Err()
 	default:
-		s.retainTerminalAfterRuntimeError(member, row, cid)
+		s.retainTerminalAfterRuntimeError(member, row, cid, terminalUnknownUser)
 		return nil, false, fmt.Errorf("scheduler: probe terminal container: %w", waitErr)
 	}
-	return s.pendingTerminalAdoption(member, row, cid), true, nil
+	return s.pendingTerminalAdoption(member, row, cid, terminalUnknownUser), true, nil
 }
 
 // pendingTerminalAdoption captures ownership before runtime metadata, PTY
 // attach, or durable persistence is repaired. The reservation is deliberately
 // unknown until Inspect succeeds; treating an inconclusive probe as root would
 // allow another container to take ownership of the member home.
-func (s *Scheduler) pendingTerminalAdoption(member *domain.Member, row *domain.Terminal, cid runtime.ID) *terminalAdoption {
+func (s *Scheduler) pendingTerminalAdoption(member *domain.Member, row *domain.Terminal, cid runtime.ID, user string) *terminalAdoption {
 	terminal := terminalForAdoption(member, row, cid, "")
 	if terminal.Image == "" {
 		terminal.Image = s.cfg.StandardImage
@@ -680,15 +726,15 @@ func (s *Scheduler) pendingTerminalAdoption(member *domain.Member, row *domain.T
 		member: member.ID, containerID: cid, image: terminal.Image,
 		startedAt: terminal.StartedAt, metadataPending: true,
 	}
-	s.retainTerminalReservation(entry, terminalUnknownUser)
+	s.retainTerminalReservation(entry, user)
 	return &terminalAdoption{
 		terminal: terminal, home: "", reservation: entry.userReservation,
 		metadataPending: true, persistPending: row == nil || row.ContainerID != string(cid),
 	}
 }
 
-func (s *Scheduler) retainTerminalAfterRuntimeError(member *domain.Member, row *domain.Terminal, cid runtime.ID) {
-	s.registerAdoptedTerminal(s.pendingTerminalAdoption(member, row, cid))
+func (s *Scheduler) retainTerminalAfterRuntimeError(member *domain.Member, row *domain.Terminal, cid runtime.ID, user string) {
+	s.registerAdoptedTerminal(s.pendingTerminalAdoption(member, row, cid, user))
 }
 
 func terminalForAdoption(member *domain.Member, row *domain.Terminal, cid runtime.ID, image string) *domain.Terminal {

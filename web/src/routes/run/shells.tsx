@@ -16,15 +16,15 @@ import { getShellSocket, initialRunShellDock, shellEnded } from '@/store/termina
 
 /** Mirrors maxRunShells in internal/scheduler/run_shell.go. */
 const maxOwnShells = 4
-const limitReason = `People can run ${maxOwnShells} shells in a session; the agent’s are counted apart. Stop one to open another.`
+export const limitReason = `People can run ${maxOwnShells} shells in a session; the agent’s are counted apart. Stop one to open another.`
 
 export const shellPollMs = (visible: boolean) => (visible ? 2_000 : 10_000)
 
-export const shellControlKey = (runID: string, terminal: Pick<DevTerminal, 'terminal_id' | 'incarnation'>) =>
+const shellControlKey = (runID: string, terminal: Pick<DevTerminal, 'terminal_id' | 'incarnation'>) =>
   `${runID}:${terminal.terminal_id}:${terminal.incarnation}`
 
 /** The server names an unnamed shell `tab-N`, and keeps that id for its life. */
-export function shellName(terminal: DevTerminal): string {
+function shellName(terminal: DevTerminal): string {
   const numbered = /^tab-(\d+)$/.exec(terminal.name)
   return numbered ? `Shell ${numbered[1]}` : terminal.name
 }
@@ -396,7 +396,7 @@ export function TerminalTabs({ shells, agent }: { shells: RunShells; agent: bool
             variant="ghost"
             size="sm"
             aria-label="New shell"
-            hint={shells.atLimit ? limitReason : 'Open a shell in this session’s container'}
+            hint={shells.atLimit ? limitReason : 'Open a shell in this session’s sandbox'}
             aria-disabled={!shells.canAdd || undefined}
             onClick={() => {
               if (shells.canAdd) void shells.open()

@@ -12,6 +12,87 @@ import (
 	"github.com/3xDevOps/Aether/internal/domain"
 )
 
+// memberRefs classifies every column that holds a member id. A merge
+// moves the reassigned ones, what grants access or carries the person's
+// ongoing work, a run's account and home included since reopening it
+// reads them, to the survivor. History keeps naming the absorbed
+// member, which stays as a tombstone that GetMember refuses; member.list
+// maps it to the survivor for display. A new column is added here, or
+// TestMergeClassifiesEveryMemberColumn fails.
+var memberRefs = map[string]bool{
+	"account_shares.owner_member_id":           true,
+	"account_shares.grantee_member_id":         true,
+	"connectors.member_id":                     true,
+	"member_devices.member_id":                 true,
+	"member_identities.member_id":              true,
+	"member_merges.survivor_id":                true,
+	"members.merged_into":                      true,
+	"memory.pinned_by":                         true,
+	"push_subscriptions.member_id":             true,
+	"run_steerers.member_id":                   true,
+	"runs.member_id":                           true,
+	"runs.account_member_id":                   true,
+	"runs.home_member_id":                      true,
+	"runs.requested_account_member_id":         true,
+	"runs.children_set_by":                     true,
+	"run_children.owner_member_id":             true,
+	"run_children.account_member_id":           true,
+	"child_settings.member_id":                 false,
+	"schedules.member_id":                      true,
+	"slack_links.member_id":                    true,
+	"audit.member_id":                          false,
+	"assistant_sessions.member_id":             false,
+	"assistant_prompt_keys.member_id":          false,
+	"watches.member_id":                        true,
+	"notify_prefs.member_id":                   true,
+	"push_digest.member_id":                    true,
+	"push_cards.member_id":                     true,
+	"watch_pr_snapshots.member_id":             false,
+	"watches.wait_ended_by":                    false,
+	"member_preferences.member_id":             true,
+	"assistant_settings.member_id":             false,
+	"assistant_rules.member_id":                false,
+	"assistant_rules.account_member_id":        false,
+	"assistant_cards.member_id":                false,
+	"assistant_queue.member_id":                false,
+	"launch_defaults.member_id":                false,
+	"launch_defaults.account_member_id":        true,
+	"events.actor_id":                          false,
+	"evidence_packets.origin_id":               false,
+	"evidence_packets.owner_id":                false,
+	"evidence_packets.creator_id":              false,
+	"evidence_staging.origin_id":               false,
+	"evidence_staging.creator_id":              false,
+	"handoff_outbox.actor_id":                  false,
+	"handoff_outbox.from_member_id":            false,
+	"handoff_outbox.to_member_id":              false,
+	"harness_definitions.member_id":            false,
+	"identity_invitations.member_id":           false,
+	"identity_invitations.created_by":          false,
+	"member_devices.approved_by":               false,
+	"member_merge_codes.member_id":             false,
+	"member_merge_codes.proposed_by":           false,
+	"member_merge_codes.keep_settings_of":      false,
+	"member_merges.absorbed_id":                false,
+	"member_terminals.member_id":               false,
+	"memory.author_member_id":                  false,
+	"profile_heads.member_id":                  false,
+	"profile_snapshots.member_id":              false,
+	"room_messages.actor_id":                   false,
+	"room_messages.decided_by":                 false,
+	"room_messages.resolved_by":                false,
+	"run_account_segments.account_member_id":   false,
+	"run_cost_deletions.member_id":             false,
+	"run_launch_receipts.member_id":            false,
+	"run_costs.member_id":                      false,
+	"server_update_state.pending_requested_by": false,
+	"workspace_budgets.updated_by":             false,
+	"workspace_mirrors.github_member_id":       false,
+	"workspace_grants.member_id":               true,
+	"workspace_grants.granted_by":              false,
+	"workspaces.owner_member_id":               true,
+}
+
 // notMemberRefs are the columns a member-reference name pattern matches
 // that hold no member id.
 var notMemberRefs = map[string]string{
@@ -146,6 +227,9 @@ func TestAcceptMergeMovesOngoingWorkAndKeepsHistory(t *testing.T) {
 	w := mustCreateWorkspace(t, db)
 	runB := mustCreateRun(t, db, w.ID, b.ID, domain.RunCompleted)
 	runC := mustCreateRun(t, db, w.ID, c.ID, domain.RunCompleted)
+	if err := db.PutChildSettings(ctx, c.ID, ChildSettings{Enabled: true, Off: domain.ChildChoicesOff{{Harness: "claude", Account: b.ID}, {Harness: "codex"}, {Harness: "claude", Account: a.ID}}}); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.BindIdentity(ctx, &domain.Identity{Member: b.ID, Provider: "github", Subject: "42", Login: "ada"}); err != nil {
 		t.Fatal(err)
 	}
@@ -166,8 +250,16 @@ func TestAcceptMergeMovesOngoingWorkAndKeepsHistory(t *testing.T) {
 	if err := db.PutPushSubscription(ctx, &PushSubscription{Endpoint: "https://push.example/b", MemberID: b.ID, P256DH: "k", Auth: "a"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.PutNotifyPrefs(ctx, b.ID, NotifyPrefs{Push: false}); err != nil {
+	if err := db.PutNotifyPrefs(ctx, b.ID, NotifyPrefs{Push: false, Level: "batched", DigestAt: "09:00"}); err != nil {
 		t.Fatal(err)
+	}
+	for _, item := range []*DigestItem{
+		{MemberID: b.ID, Source: "run", Key: string(b.ID) + "|finished:x", Kind: "done", Title: "t", RunID: runB.ID, CreatedAt: now},
+		{MemberID: b.ID, Source: "watch", Key: "notice-1", Kind: "done", Title: "t", CreatedAt: now},
+	} {
+		if err := db.AddDigestItem(ctx, item); err != nil {
+			t.Fatal(err)
+		}
 	}
 	launchRevisions := map[domain.MemberID]int64{}
 	for m, l := range map[domain.MemberID]LaunchDefaults{
@@ -233,6 +325,10 @@ func TestAcceptMergeMovesOngoingWorkAndKeepsHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AcceptMerge: %v", err)
 	}
+	digest, err := db.ListDigestItems(ctx, a.ID)
+	if err != nil || len(digest) != 2 || digest[0].Key != string(a.ID)+"|finished:x" || digest[1].Key != "notice-1" {
+		t.Fatalf("survivor's digest = %+v, %v; want the session's item keyed to the survivor and the watch's as it was", digest, err)
+	}
 
 	got, err := db.GetMember(ctx, a.ID)
 	if err != nil {
@@ -293,6 +389,9 @@ func TestAcceptMergeMovesOngoingWorkAndKeepsHistory(t *testing.T) {
 	}
 	if perr := db.PutLaunchDefaults(ctx, c.ID, LaunchDefaults{Source: "member"}, launchRevisions[c.ID]); !errors.Is(perr, ErrConflict) {
 		t.Fatalf("PutLaunchDefaults with the revision read before the merge = %v, want ErrConflict", perr)
+	}
+	if cs, gerr := db.ChildSettings(ctx, c.ID); gerr != nil || !slices.Equal(cs.Off, domain.ChildChoicesOff{{Harness: "claude", Account: a.ID}, {Harness: "codex"}}) {
+		t.Fatalf("Cy's subsession agents off = %+v, %v; want the absorbed member's account moved to the survivor", cs.Off, gerr)
 	}
 	if got, gerr := db.GetWatch(ctx, watchB.ID); gerr != nil || got.MemberID != a.ID || got.Version == watchB.Version {
 		t.Fatalf("absorbed member's watch = %+v, %v; want it moved with a new version", got, gerr)

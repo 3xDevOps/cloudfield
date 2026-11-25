@@ -3,9 +3,9 @@ import { api, type Api } from '@/lib/api'
 import { message } from '@/lib/format'
 import type { SysboxStatus } from '@/lib/types'
 import { useStore } from '@/store'
-import { useCapability, useIsAdmin } from '@/store/hooks'
+import { useCapability, useIsSuperAdmin } from '@/store/hooks'
 
-export const SYSBOX_POLL_MS = 2000
+const SYSBOX_POLL_MS = 2000
 
 const ROOT_COMMAND = 'sudo aether-server sysbox install'
 
@@ -19,7 +19,7 @@ export function rootCommand(status: SysboxStatus): string | undefined {
  * non-admin and for a server without server.sysbox.status. */
 export function useSysbox(client: Api = api) {
   const caps = useCapability()
-  const admin = useIsAdmin()
+  const admin = useIsSuperAdmin()
   const enabled = admin && caps.hasMethod('server.sysbox.status')
   const [status, setStatus] = useState<SysboxStatus | null>(null)
   const [error, setError] = useState<string | null>(null)

@@ -12,7 +12,6 @@ import { PaneHeader } from '@/components/ui/pane-header'
 import { Clamped } from '@/components/ui/request-card'
 import { SectionLabel } from '@/components/ui/section-label'
 import { ToolValue } from '@/components/ui/session-blocks'
-import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { StateLine, StatusDot, type Tone, toneClasses } from '@/components/ui/status-dot'
@@ -157,6 +156,26 @@ test('an agent glyph is monochrome unless asked for its colour', () => {
   expect(unknown).toContain('text-muted')
 })
 
+test('Gemini CLI and Antigravity CLI draw Google\'s icons: its full-colour file in colour, its one-colour path when muted', () => {
+  const { container } = render(
+    <>
+      <AgentGlyph agent="gemini" colored />
+      <AgentGlyph agent="antigravity" colored />
+      <AgentGlyph agent="gemini" />
+      <AgentGlyph agent="antigravity" />
+    </>,
+  )
+  const [gemini, antigravity, ...muted] = [...container.querySelectorAll('[data-slot="agent-glyph"]')]
+  expect(gemini.getAttribute('src')).toBe('/agents/gemini-cli-icon_full-color.svg')
+  expect(antigravity.getAttribute('src')).toBe('/agents/antigravity-icon__full-color.svg')
+  expect(muted).toHaveLength(2)
+  for (const glyph of muted) {
+    expect(glyph.getAttribute('class')).toContain('text-muted')
+    expect(glyph.querySelectorAll('path')).toHaveLength(1)
+    expect(glyph.querySelector('text')).toBeNull()
+  }
+})
+
 test('a labelled spinner is a status and both loaders still under reduced motion', () => {
   const { container } = render(
     <>
@@ -178,7 +197,6 @@ test('the small text primitives render their elements', () => {
       <Kbd>K</Kbd>
       <Code>main</Code>
       <CodeBlock>go test ./...</CodeBlock>
-      <Separator decorative={false} />
     </>,
   )
   expect(screen.getByRole('heading', { name: 'No sessions yet' })).toBeDefined()
@@ -186,7 +204,6 @@ test('the small text primitives render their elements', () => {
   expect(screen.getByText('K').tagName).toBe('KBD')
   expect(screen.getByText('main').tagName).toBe('CODE')
   expect(screen.getByText('go test ./...').tagName).toBe('PRE')
-  expect(screen.getByRole('separator')).toBeDefined()
 })
 
 test('a clipped tool value selects every line for a manual copy', async () => {

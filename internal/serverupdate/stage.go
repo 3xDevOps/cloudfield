@@ -33,8 +33,10 @@ func Lock(stateDir string) (unlock func(), err error) {
 type Staged struct {
 	// Binaries are the files replaced, the server first.
 	Binaries []string
-	dir      string
-	rec      *swapRecord
+	// Schema is the store schema the new release migrates the database to.
+	Schema int
+	dir    string
+	rec    *swapRecord
 }
 
 // Stage moves the installation Plan describes to tag the way the server's
@@ -54,8 +56,15 @@ func Stage(ctx context.Context, p Plan, tag string) (*Staged, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Staged{Binaries: rec.Binaries, dir: p.StateDir, rec: rec}, nil
+	if err := commitSwap(p.StateDir, rec); err != nil {
+		return nil, err
+	}
+	return &Staged{Binaries: rec.Binaries, Schema: m.StoreSchema, dir: p.StateDir, rec: rec}, nil
 }
+
+// SnapshotFile is where Snapshot copies the database, empty when the
+// release keeps the schema and nothing is copied.
+func (s *Staged) SnapshotFile() string { return s.rec.Snapshot }
 
 // Snapshot copies the database when the release migrates it. Call it once
 // the server has stopped and before it starts again.

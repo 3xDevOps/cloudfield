@@ -11,11 +11,13 @@ import { releaseFinishedPlan } from '@/lib/commands'
 import { api, type Api } from '@/lib/api'
 import { errorSentence } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { buildLabel } from '@/lib/version'
 import { rootCommand, useSysbox } from '@/lib/use-sysbox'
 import { workspaceRuns } from '@/routes/board/selectors'
 import { SettingRow, SettingsSection, TryAgain } from '@/routes/settings/layout'
+import { ReleaseChannelSection } from '@/routes/settings/release-channel'
 import { useStore } from '@/store'
-import { useCapability, useIsAdmin, useSelf, useStateContext } from '@/store/hooks'
+import { useCapability, useIsAdmin, useIsSuperAdmin, useSelf, useStateContext } from '@/store/hooks'
 
 /** The server retries a tailnet dashboard that cannot start, so its error can clear or appear while Settings is open. */
 const tailnetDashboardRecheckMs = 30_000
@@ -23,6 +25,7 @@ const tailnetDashboardRecheckMs = 30_000
 export function ServerSection({ client = api }: { client?: Api } = {}) {
   const info = useStore((s) => s.info)
   const admin = useIsAdmin()
+  const superAdmin = useIsSuperAdmin()
   const caps = useCapability()
   const update = useUpdateNotice(true)
   const { server, client: cli } = useUpdateTargets()
@@ -31,6 +34,7 @@ export function ServerSection({ client = api }: { client?: Api } = {}) {
   const navigate = useStore((s) => s.navigate)
   const clearDismissed = useStore((s) => s.clearDismissedUpdates)
   const checkForUpdates = useCheckForUpdates(client)
+  const channel = useStore((s) => s.serverUpdate?.channel)
   useEffect(() => {
     const read = () =>
       client.serverInfo().then(
@@ -50,8 +54,12 @@ export function ServerSection({ client = api }: { client?: Api } = {}) {
   const failed = [server, cli].find((t) => t.state === 'check_failed')
   const current = server.state === 'up_to_date' ? server : cli.state === 'up_to_date' ? cli : null
   const checking = server.state === 'checking' || cli.state === 'checking'
-  const checkedLine =
-    current && !update && checkedTime(current.checkedAt) ? `Up to date. Checked ${checkedTime(current.checkedAt)}.` : ''
+  const waiting = server.state === 'channel_wait' ? server : null
+  const checkedLine = waiting
+    ? `Stays on ${buildLabel(waiting.build, waiting.hotfix) || waiting.version} until ${waiting.channel} reaches it.`
+    : current && !update && checkedTime(current.checkedAt)
+      ? `Up to date${channel ? ` on ${channel}` : ''}. Checked ${checkedTime(current.checkedAt)}.`
+      : ''
   return (
     <>
       <SettingsSection title="Status">
@@ -59,7 +67,7 @@ export function ServerSection({ client = api }: { client?: Api } = {}) {
           id="version"
           label="Version"
           help={[
-            `Aether ${info.server_version}, protocol ${info.protocol_version}.`,
+            `Cloudfield ${info.server_version}, protocol ${info.protocol_version}.`,
             update && `${update.text}.`,
             checking ? 'Checking for updates…' : checkedLine,
             packaged && packagedLine(packaged),
@@ -109,10 +117,11 @@ export function ServerSection({ client = api }: { client?: Api } = {}) {
           control={<Button size="sm" variant="secondary" onClick={() => navigate('insights', { tab: 'system' })}>Open Insights › System</Button>}
         />
       </SettingsSection>
+      <ReleaseChannelSection client={client} />
       {admin && (caps.hasMethod('server.sysbox.status') || caps.hasMethod('run.release') || caps.hasMethod('server.run_limits')) && (
         <SettingsSection title="Admin" scope="Server · admins">
-          <RunLimitsRow client={client} />
-          <DockerInRunsRow client={client} />
+          {superAdmin && <RunLimitsRow client={client} />}
+          {superAdmin && <DockerInRunsRow client={client} />}
           <RetainedContainersRow />
         </SettingsSection>
       )}
@@ -158,7 +167,7 @@ function RunLimitsRow({ client }: { client: Api }) {
     <SettingRow
       id="run-limits"
       label="Session limits"
-      help={`Memory, CPU and process ceiling for every session's container, applied to sessions started after you save. A session's launch options can override them. Now: ${limitsText(limits.effective)}.`}
+      help={`Memory, CPU and process ceiling for every session's sandbox, applied to sessions started after you save. A session's launch options can override them. Now: ${limitsText(limits.effective)}.`}
       control={(
         <Button size="sm" disabled={draft === null || saving || !parsed.limits} onClick={save}>
           {saving ? 'Saving…' : 'Save'}
@@ -229,8 +238,8 @@ function DockerInRunsRow({ client }: { client: Api }) {
 function RetainedContainersRow() {
   const ctx = useStateContext()
   const caps = useCapability()
-  const self = useSelf()
   const activeWorkspace = useStore((s) => s.activeWorkspace)
+  const self = useSelf(activeWorkspace)
   const workspaceName = useStore((s) => s.workspaces[s.activeWorkspace]?.name)
   const openDialog = useStore((s) => s.openPaletteDialog)
   if (!caps.hasMethod('run.release')) return null
@@ -239,13 +248,13 @@ function RetainedContainersRow() {
   return (
     <SettingRow
       id="retained-containers"
-      label="Retained containers"
+      label="Retained sandboxes"
       help={count > 0
-        ? `${count} finished ${count === 1 ? 'session keeps its' : 'sessions keep their'} container${where}. Removing containers prevents reopening those sessions; it does not delete all session data, homes, repositories or history.`
-        : `No finished session keeps a container${where}.`}
+        ? `${count} finished ${count === 1 ? 'session keeps its' : 'sessions keep their'} sandbox${where}. Removing sandboxes prevents reopening those sessions; it does not delete all session data, homes, repositories or history.`
+        : `No finished session keeps a sandbox${where}.`}
       control={(
         <Button size="sm" variant="secondary" disabled={count === 0} onClick={() => openDialog('release-finished')}>
-          Free retained containers…
+          Free retained sandboxes…
         </Button>
       )}
     />

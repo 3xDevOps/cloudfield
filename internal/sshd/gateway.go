@@ -31,7 +31,7 @@ type DiskReader interface {
 	Usage(ctx context.Context) (disk.Usage, error)
 }
 
-func (s *Server) runPatch(ctx context.Context, _ domain.MemberID, params json.RawMessage) (any, *protocol.Error) {
+func (s *Server) runPatch(ctx context.Context, member domain.MemberID, params json.RawMessage) (any, *protocol.Error) {
 	patcher := s.cfg.Services.Patch
 	if patcher == nil {
 		return nil, &protocol.Error{Code: protocol.CodeUnavailable, Message: "run.patch: diff rendering is not enabled"}
@@ -47,7 +47,7 @@ func (s *Server) runPatch(ctx context.Context, _ domain.MemberID, params json.Ra
 	if _, err := s.cfg.Store.GetRun(ctx, id); err != nil {
 		return nil, rpcError(err)
 	}
-	checkout, _, perr := s.resolveRepo(ctx, req.RunID, "", req.Repo)
+	checkout, _, perr := s.resolveRepo(ctx, member, req.RunID, "", req.Repo)
 	if perr != nil {
 		return nil, perr
 	}
@@ -109,6 +109,8 @@ func (s *Server) serverDisk(ctx context.Context, member domain.MemberID, _ json.
 		ScratchBytes:    usage.ScratchBytes,
 		OtherBytes:      usage.OtherBytes,
 		SnapshotBytes:   usage.SnapshotBytes,
+		VMBytes:         usage.VMBytes,
+		VMStateBytes:    usage.VMStateBytes,
 		Warnings:        usage.Warnings,
 		Docker:          (*protocol.ServerDockerDisk)(usage.Docker),
 		ContainersError: usage.ContainersError,
@@ -116,7 +118,7 @@ func (s *Server) serverDisk(ctx context.Context, member domain.MemberID, _ json.
 	if usage.ContainersAt != nil {
 		result.ContainersMeasuredAt = usage.ContainersAt.UTC().Format(time.RFC3339Nano)
 	}
-	admin := s.requireAdmin(ctx, member, protocol.MethodServerDisk) == nil
+	admin := s.superAdmin(ctx, member)
 	for _, c := range usage.Containers {
 		if admin || c.MemberID == string(member) {
 			result.Containers = append(result.Containers, protocol.ServerDiskContainer{OwnerKind: c.OwnerKind, OwnerID: c.OwnerID, Bytes: c.Bytes})
@@ -127,8 +129,7 @@ func (s *Server) serverDisk(ctx context.Context, member domain.MemberID, _ json.
 		for _, entry := range usage.Entries[:min(len(usage.Entries), 50)] {
 			wire := protocol.ServerDiskEntry{
 				Kind: entry.Kind, OwnerKind: entry.OwnerKind, OwnerID: entry.OwnerID, Pool: entry.Pool,
-				Bytes: entry.Bytes, ReclaimableBytes: entry.ReclaimableBytes,
-				Reason: entry.Reason, Error: entry.Error,
+				Bytes: entry.Bytes, Reason: entry.Reason, Error: entry.Error,
 			}
 			if entry.RetainedUntil != nil {
 				wire.RetainedUntil = entry.RetainedUntil.UTC().Format(time.RFC3339Nano)

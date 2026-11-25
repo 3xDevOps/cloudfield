@@ -7,9 +7,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"sync"
@@ -351,7 +351,8 @@ func TestMemberCRUDAndPublicKeyLookup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetMember: %v", err)
 	}
-	if *got != *m {
+	got.Access = m.Access
+	if !reflect.DeepEqual(got, m) {
 		t.Fatalf("member round-trip: got %+v, want %+v", got, m)
 	}
 
@@ -376,7 +377,8 @@ func TestMemberCRUDAndPublicKeyLookup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetMember after update: %v", err)
 	}
-	if *got != *m {
+	got.Access = m.Access
+	if !reflect.DeepEqual(got, m) {
 		t.Fatalf("member update round-trip: got %+v, want %+v", got, m)
 	}
 
@@ -409,7 +411,7 @@ func TestMemberCRUDAndPublicKeyLookup(t *testing.T) {
 		t.Fatalf("UpdateMemberImage missing member = %v, want ErrNotFound", err)
 	}
 
-	if err := db.DeleteMember(ctx, m.ID); err != nil {
+	if err := db.DeleteMember(ctx, m.ID, ""); err != nil {
 		t.Fatalf("DeleteMember: %v", err)
 	}
 	if _, err := db.GetMember(ctx, m.ID); !errors.Is(err, ErrNotFound) {
@@ -505,7 +507,7 @@ func TestMemberTailnetIdentity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetMemberByTailnetLogin: %v", err)
 	}
-	if *got != *m {
+	if !reflect.DeepEqual(got, m) {
 		t.Fatalf("tailnet member round-trip: got %+v, want %+v", got, m)
 	}
 	if _, lookupErr := db.GetMemberByTailnetLogin(ctx, "nobody@example.com"); !errors.Is(lookupErr, ErrNotFound) {
@@ -536,7 +538,7 @@ func TestMemberTailnetIdentity(t *testing.T) {
 		t.Fatal("CreateMember accepted a member with no identity at all")
 	}
 
-	if approveErr := db.ApproveMember(ctx, m.ID); approveErr != nil {
+	if approveErr := db.ApproveMember(ctx, m.ID, ""); approveErr != nil {
 		t.Fatalf("ApproveMember: %v", approveErr)
 	}
 	got, err = db.GetMember(ctx, m.ID)
@@ -549,7 +551,7 @@ func TestMemberTailnetIdentity(t *testing.T) {
 	if got.TailnetLogin != m.TailnetLogin || got.DisplayName != m.DisplayName {
 		t.Errorf("ApproveMember touched other fields: %+v", got)
 	}
-	if err := db.ApproveMember(ctx, "m_missing"); !errors.Is(err, ErrNotFound) {
+	if err := db.ApproveMember(ctx, "m_missing", ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("ApproveMember unknown id: %v, want ErrNotFound", err)
 	}
 }
@@ -562,22 +564,7 @@ func TestMemberTailnetMigrationPreservesRows(t *testing.T) {
 	// runs.member_id references, and v12 must rehome the run onto the
 	// workspace.
 	path := filepath.Join(t.TempDir(), "aether.db")
-	raw, err := sql.Open("sqlite", "file:"+url.PathEscape(path)+"?_pragma=foreign_keys(1)&_pragma=synchronous(OFF)")
-	if err != nil {
-		t.Fatalf("open raw: %v", err)
-	}
-	if _, execErr := raw.Exec(`CREATE TABLE schema_migrations (
-		version    INTEGER PRIMARY KEY,
-		applied_at INTEGER NOT NULL
-	)`); execErr != nil {
-		t.Fatalf("create schema_migrations: %v", execErr)
-	}
-	if _, execErr := raw.Exec(migrations[0]); execErr != nil {
-		t.Fatalf("apply v1: %v", execErr)
-	}
-	if _, execErr := raw.Exec(`INSERT INTO schema_migrations (version, applied_at) VALUES (1, 0)`); execErr != nil {
-		t.Fatalf("record v1: %v", execErr)
-	}
+	raw := openLegacy(t, path, 1)
 	key := testKey(t, "")
 	if _, execErr := raw.Exec(`INSERT INTO members (id, display_name, public_key, color, role, created_at)
 		VALUES ('m1', 'Ada', ?, '#e6194b', 'admin', 1)`, key); execErr != nil {
@@ -862,7 +849,7 @@ func TestForeignKeyEnforcement(t *testing.T) {
 	if err := db.DeleteWorkspace(ctx, w.ID); !errors.Is(err, ErrInUse) {
 		t.Fatalf("DeleteWorkspace with dependent runs: %v, want ErrInUse", err)
 	}
-	if err := db.DeleteMember(ctx, m.ID); !errors.Is(err, ErrInUse) {
+	if err := db.DeleteMember(ctx, m.ID, ""); !errors.Is(err, ErrInUse) {
 		t.Fatalf("DeleteMember with dependent runs: %v, want ErrInUse", err)
 	}
 }
@@ -1410,24 +1397,7 @@ func TestRunOutcomeUnseenMigrationFromV47(t *testing.T) {
 	t.Parallel()
 	const previous = 47
 	path := filepath.Join(t.TempDir(), "aether.db")
-	raw, err := sql.Open("sqlite", "file:"+url.PathEscape(path)+"?_pragma=foreign_keys(1)&_pragma=synchronous(OFF)")
-	if err != nil {
-		t.Fatalf("open raw: %v", err)
-	}
-	if _, execErr := raw.Exec(`CREATE TABLE schema_migrations (
-		version    INTEGER PRIMARY KEY,
-		applied_at INTEGER NOT NULL
-	)`); execErr != nil {
-		t.Fatalf("create schema_migrations: %v", execErr)
-	}
-	for v := 1; v <= previous; v++ {
-		if _, execErr := raw.Exec(migrations[v-1]); execErr != nil {
-			t.Fatalf("apply v%d: %v", v, execErr)
-		}
-		if _, execErr := raw.Exec(`INSERT INTO schema_migrations (version, applied_at) VALUES (?, 0)`, v); execErr != nil {
-			t.Fatalf("record v%d: %v", v, execErr)
-		}
-	}
+	raw := openLegacy(t, path, previous)
 	if _, execErr := raw.Exec(`
 		INSERT INTO members (id, display_name, public_key, color, role, created_at)
 			VALUES ('m1', 'Ada', ?, '#e6194b', 'admin', 1);

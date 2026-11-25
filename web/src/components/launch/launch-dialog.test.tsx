@@ -1,16 +1,20 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { toast } from 'sonner'
+import { setDictationState } from '@/components/dictation/state'
+import type { LaunchDraft } from '@/components/launch/draft'
+import { useIsMobile } from '@/lib/breakpoints'
 import { LaunchDialog } from '@/components/launch/launch-dialog'
 import { PaletteDialogs } from '@/components/palette/dialogs'
 import { api } from '@/lib/api'
 import { useStore } from '@/store'
+import { useChildSettings } from '@/store/children'
 import { useLaunchDefaults } from '@/store/launch-defaults'
 import { optimisticDeadlineMs } from '@/store/optimistic'
-import { agentInfo, alice, bob, run, runRecords, serverInfo, vera, workspace } from '@/test/fixtures'
+import { atViewport } from '@/test/viewport'
+import { agentInfo, alice, bob, otherWorkspace, run, runRecords, serverInfo, vera, workspace } from '@/test/fixtures'
 import { chooseModel, pickModel } from '@/test/model'
 import { pickOption } from '@/test/select'
-import { atViewport } from '@/test/viewport'
 
 vi.mock('@/lib/api', async () => {
   const { fakeApi } = await import('@/test/fixtures')
@@ -21,19 +25,27 @@ const claude = (over: Parameters<typeof agentInfo>[0] = {}) =>
   agentInfo({ display_name: 'Claude Code', enhanced: 'adapter', enhanced_installed: true, login_found: true, default_mode: 'tui', ...over })
 
 beforeEach(() => {
+  localStorage.clear()
   Element.prototype.scrollIntoView = vi.fn()
+  vi.mocked(api.runLaunch).mockResolvedValue(run())
   vi.mocked(api.agentList).mockResolvedValue([claude()])
   vi.mocked(api.accountList).mockResolvedValue({ accounts: [alice], shared_with: [] })
+  vi.mocked(api.accountUsage).mockResolvedValue({ account_member_id: alice.id, providers: [] })
   vi.mocked(api.launchDefaultsGet).mockResolvedValue({ revision: 0, defaults: {} })
   useLaunchDefaults.setState({ result: null, error: null })
   useStore.setState({
     workspaces: { [workspace.id]: workspace },
     activeWorkspace: workspace.id,
     paletteDialog: 'launch',
+    launchDraft: null,
+    launchDraftError: null,
+    linkStatus: null,
+    identityKey: null,
     paletteRunID: null,
     route: { name: 'board', params: {} },
     runs: {},
     launchDefaults: {},
+    savedLaunchDefaults: {},
     agentModels: {},
     capabilities: null,
     info: serverInfo,
@@ -41,9 +53,11 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
+const signedOut = '~/.claude/.credentials.json: Claude OAuth access token is missing or invalid'
 const launchButton = () => screen.getByRole('button', { name: 'Launch' }) as HTMLButtonElement
 const agentRow = (name: RegExp | string) => screen.getByRole('radio', { name }) as HTMLButtonElement
 const modeSegment = (name: string) => within(screen.getByRole('radiogroup', { name: 'Mode' })).getByRole('radio', { name }) as HTMLButtonElement
+const allowDraftStorage = () => useStore.getState().setCapabilities({ gateway: 'remote', methods: ['run.launch', 'agent.list', 'account.list'], ws: [] })
 
 async function open() {
   render(<LaunchDialog />)
@@ -54,14 +68,338 @@ function setTask(task: string) {
   fireEvent.change(screen.getByLabelText('Task'), { target: { value: task } })
 }
 
+const draft = (over: Partial<LaunchDraft> = {}): LaunchDraft => ({
+  version: 1, id: 'saved-draft', workspace: workspace.id, extras: [], account: alice.id,
+  fallback: { off: false, order: null, excluded: [] }, permission: 'default', childRuns: '',
+  limits: { cpus: '', memory: '', pids: '' }, harness: 'claude', mode: 'tui', model: '', effort: '', task: 'keep this prompt',
+  ...over,
+})
+
 describe('reopening', () => {
   it('starts a fresh form when New run opens again while the last panel is still leaving', async () => {
     render(<PaletteDialogs />)
     fireEvent.change(await screen.findByLabelText('Task'), { target: { value: 'first task' } })
-    act(() => useStore.setState({ paletteDialog: null }))
-    act(() => useStore.setState({ paletteDialog: 'launch' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+    act(() => useStore.getState().openPaletteDialog('launch'))
     expect(((await screen.findAllByLabelText('Task')).at(-1) as HTMLTextAreaElement).value).toBe('')
     expect(screen.getAllByRole('dialog')).toHaveLength(1)
+  })
+})
+
+describe('saved launch draft', () => {
+  const resume = () => screen.getByRole('button', { name: 'Resume new session draft' })
+
+  it('discards an untouched blank draft without saving an automatic mode fallback', async () => {
+    vi.mocked(api.agentList).mockResolvedValue([claude({ enhanced_installed: false })])
+    vi.mocked(api.launchDefaultsGet).mockResolvedValue({ revision: 3, defaults: { agent: 'claude', agents: { claude: { mode: 'acp' } } } })
+    useStore.setState({ capabilities: { gateway: 'remote', methods: ['run.launch', 'agent.list', 'account.list', 'launch.defaults.get', 'launch.defaults.set'], ws: [] } })
+    render(<><button>Main chat</button><PaletteDialogs /></>)
+    await waitFor(() => expect(modeSegment('Standard').getAttribute('aria-checked')).toBe('true'))
+    expect(useLaunchDefaults.getState().result?.defaults.agents?.claude.mode).toBe('acp')
+    await userEvent.click(screen.getByRole('button', { name: 'Main chat' }))
+    await waitFor(() => expect(screen.queryByLabelText('Task')).toBeNull())
+    expect(useStore.getState().launchDraft).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Resume new session draft' })).toBeNull()
+    expect(api.launchDefaultsSet).not.toHaveBeenCalled()
+  })
+
+  it('keeps the blank draft when an outside click interrupts active dictation', async () => {
+    const box = { current: null }
+    render(<><button>Main chat</button><PaletteDialogs /></>)
+    await waitFor(() => expect(launchButton().disabled).toBe(false))
+    act(() => setDictationState(box, { active: true }))
+    try {
+      await userEvent.click(screen.getByRole('button', { name: 'Main chat' }))
+      await waitFor(() => expect(resume()).toBeTruthy())
+    } finally {
+      act(() => setDictationState(box, { active: false }))
+    }
+  })
+
+  it('collapses on an outside click, keeps that click and restores the task and mode', async () => {
+    const mainClick = vi.fn()
+    render(<><button onClick={mainClick}>Main chat</button><PaletteDialogs /></>)
+    await waitFor(() => expect(launchButton().disabled).toBe(false))
+    setTask('keep my unfinished prompt')
+    fireEvent.click(modeSegment('Standard'))
+    await userEvent.click(screen.getByRole('button', { name: 'Main chat' }))
+    await waitFor(() => expect(screen.queryByLabelText('Task')).toBeNull())
+    expect(mainClick).toHaveBeenCalledOnce()
+    await userEvent.click(resume())
+    expect((await screen.findByLabelText('Task') as HTMLTextAreaElement).value).toBe('keep my unfinished prompt')
+    expect(modeSegment('Standard').getAttribute('aria-checked')).toBe('true')
+  })
+
+  it('keeps the draft on Escape and restores it through New session', async () => {
+    render(<PaletteDialogs />)
+    await waitFor(() => expect(launchButton().disabled).toBe(false))
+    setTask('Escape preserves this')
+    await userEvent.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByLabelText('Task')).toBeNull())
+    expect(resume()).toBeTruthy()
+    act(() => useStore.getState().openPaletteDialog('launch'))
+    expect((await screen.findByLabelText('Task') as HTMLTextAreaElement).value).toBe('Escape preserves this')
+  })
+
+  it('keeps a blank draft collapsed with Escape when the page is clicked during the exit', async () => {
+    render(<><button>Main chat</button><PaletteDialogs /></>)
+    await waitFor(() => expect(launchButton().disabled).toBe(false))
+    await userEvent.keyboard('{Escape}')
+    expect(useStore.getState().paletteDialog).toBeNull()
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Main chat' }), { pointerType: 'mouse' })
+    await waitFor(() => expect(resume()).toBeTruthy())
+  })
+
+  it('recovers the task, mode and model collapsed after a reload without applying saved defaults over them', async () => {
+    allowDraftStorage()
+    useStore.getState().setIdentityKey('server/alice')
+    const view = render(<PaletteDialogs />)
+    await waitFor(() => expect(launchButton().disabled).toBe(false))
+    setTask('recover after browser restart')
+    fireEvent.click(modeSegment('Standard'))
+    await chooseModel(screen.getByRole('combobox', { name: 'Model' }), 'draft-model')
+    view.unmount()
+    useStore.setState({ identityKey: null, launchDraft: null, paletteDialog: null })
+    vi.mocked(api.launchDefaultsGet).mockResolvedValue({ revision: 2, defaults: { agents: { claude: { mode: 'headless', model: 'other-model' } } } })
+    useLaunchDefaults.setState({ result: null, error: null })
+    useStore.getState().setIdentityKey('server/alice')
+    render(<PaletteDialogs />)
+    expect(screen.queryByLabelText('Task')).toBeNull()
+    await userEvent.click(resume())
+    expect((await screen.findByLabelText('Task') as HTMLTextAreaElement).value).toBe('recover after browser restart')
+    await waitFor(() => expect(launchButton().disabled).toBe(false))
+    expect(modeSegment('Standard').getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(launchButton())
+    await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith(expect.objectContaining({ task: 'recover after browser restart', mode: 'tui', model: 'draft-model' })))
+    expect(useStore.getState().launchDraft).toBeNull()
+  })
+
+  it.each(['Close', 'Cancel'])('discards the recovery copy with %s', async (name) => {
+    allowDraftStorage()
+    useStore.getState().setIdentityKey('server/alice')
+    render(<PaletteDialogs />)
+    await waitFor(() => expect(launchButton().disabled).toBe(false))
+    setTask('discard me')
+    await userEvent.click(screen.getByRole('button', { name }))
+    await waitFor(() => expect(screen.queryByLabelText('Task')).toBeNull())
+    expect(screen.queryByRole('button', { name: 'Resume new session draft' })).toBeNull()
+    act(() => {
+      useStore.getState().setIdentityKey('server/bob')
+      useStore.getState().setIdentityKey('server/alice')
+      useStore.getState().openPaletteDialog('launch')
+    })
+    expect((await screen.findByLabelText('Task') as HTMLTextAreaElement).value).toBe('')
+  })
+
+  it('keeps a pending blank-task launch on an outside click and clears the draft on success', async () => {
+    let finish!: (value: ReturnType<typeof run>) => void
+    vi.mocked(api.runLaunch).mockImplementation(() => new Promise((resolve) => { finish = resolve }))
+    render(<><button>Main chat</button><PaletteDialogs /></>)
+    await waitFor(() => expect(launchButton().disabled).toBe(false))
+    fireEvent.click(launchButton())
+    await userEvent.click(screen.getByRole('button', { name: 'Main chat' }))
+    await waitFor(() => expect(screen.queryByLabelText('Task')).toBeNull())
+    await userEvent.click(resume())
+    expect((screen.getByRole('button', { name: 'Launching…' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(api.runLaunch).toHaveBeenCalledOnce()
+    await act(async () => finish(run()))
+    await waitFor(() => expect(useStore.getState().launchDraft).toBeNull())
+  })
+
+  it('keeps the task and refusal when a collapsed launch fails', async () => {
+    let refuse!: (reason: Error) => void
+    vi.mocked(api.runLaunch).mockImplementation(() => new Promise((_, reject) => { refuse = reject }))
+    render(<PaletteDialogs />)
+    await waitFor(() => expect(launchButton().disabled).toBe(false))
+    setTask('retry this task')
+    fireEvent.click(launchButton())
+    await userEvent.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByLabelText('Task')).toBeNull())
+    await act(async () => refuse(new Error('server refused this launch')))
+    await userEvent.click(resume())
+    expect((await screen.findByLabelText('Task') as HTMLTextAreaElement).value).toBe('retry this task')
+    expect(screen.getByText('server refused this launch')).toBeTruthy()
+    expect(launchButton().disabled).toBe(false)
+  })
+
+  it('keeps the draft repository when the sidebar changes workspace after collapse', async () => {
+    useStore.setState({ workspaces: { [workspace.id]: workspace, [otherWorkspace.id]: otherWorkspace } })
+    render(<PaletteDialogs />)
+    await waitFor(() => expect(launchButton().disabled).toBe(false))
+    setTask('keep this repository')
+    await userEvent.keyboard('{Escape}')
+    await waitFor(() => expect(screen.queryByLabelText('Task')).toBeNull())
+    act(() => useStore.setState({ activeWorkspace: otherWorkspace.id }))
+    await userEvent.click(resume())
+    await waitFor(() => expect(launchButton().disabled).toBe(false))
+    fireEvent.click(launchButton())
+    await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith(expect.objectContaining({ workspace_id: workspace.id, task: 'keep this repository' })))
+  })
+
+  it('isolates recovery by server and member', async () => {
+    allowDraftStorage()
+    useStore.getState().setIdentityKey('server/alice')
+    render(<PaletteDialogs />)
+    await waitFor(() => expect(launchButton().disabled).toBe(false))
+    setTask('Alice private draft')
+    act(() => useStore.getState().setIdentityKey('other-server/alice'))
+    expect((await screen.findByLabelText('Task') as HTMLTextAreaElement).value).toBe('')
+    setTask('other server draft')
+    act(() => useStore.getState().setIdentityKey('server/bob'))
+    expect((await screen.findByLabelText('Task') as HTMLTextAreaElement).value).toBe('')
+    act(() => useStore.getState().setIdentityKey('server/alice'))
+    expect((await screen.findByLabelText('Task') as HTMLTextAreaElement).value).toBe('Alice private draft')
+  })
+
+  it('keeps an Edge-linked draft in memory and removes its browser copy', () => {
+    const saved = draft()
+    allowDraftStorage()
+    useStore.setState({ identityKey: 'server/alice', launchDraft: saved })
+    useStore.getState().setLaunchDraft(saved)
+    expect(localStorage.getItem('aether.launch-draft.v1:server%2Falice')).not.toBeNull()
+
+    useStore.getState().setLinkStatus({ edge_url: 'http://127.0.0.1:4173' } as never)
+
+    expect(useStore.getState().launchDraft).toEqual(saved)
+    expect(localStorage.getItem('aether.launch-draft.v1:server%2Falice')).toBeNull()
+    useStore.getState().setLaunchDraft({ ...saved, task: 'still in memory' })
+    expect(localStorage.getItem('aether.launch-draft.v1:server%2Falice')).toBeNull()
+    useStore.setState({ identityKey: null, launchDraft: null })
+    useStore.getState().setIdentityKey('server/alice')
+    expect(useStore.getState().launchDraft).toBeNull()
+  })
+
+  it('waits for the local link status before reading a saved draft', () => {
+    const saved = draft()
+    const key = 'aether.launch-draft.v1:server%2Falice'
+    localStorage.setItem(key, JSON.stringify(saved))
+    useStore.setState({
+      paletteDialog: null,
+      capabilities: { gateway: 'local', methods: [], ws: [], local: ['link.status'] },
+    })
+    useStore.getState().setIdentityKey('server/alice')
+    expect(useStore.getState().launchDraft).toBeNull()
+    expect(useStore.getState().launchDraftError).toContain('Could not confirm')
+
+    useStore.getState().setLinkStatus({ linked: false } as never)
+
+    expect(useStore.getState().launchDraft).toEqual(saved)
+    expect(useStore.getState().launchDraftError).toBeNull()
+  })
+
+  it('never reads an Edge-linked draft from browser storage', () => {
+    const saved = draft()
+    const key = 'aether.launch-draft.v1:server%2Falice'
+    localStorage.setItem(key, JSON.stringify(saved))
+    useStore.setState({ capabilities: { gateway: 'local', methods: [], ws: [], local: ['link.status'] } })
+    useStore.getState().setIdentityKey('server/alice')
+    expect(useStore.getState().launchDraft).toBeNull()
+    expect(localStorage.getItem(key)).not.toBeNull()
+
+    useStore.getState().setLinkStatus({ edge_url: 'http://127.0.0.1:4173' } as never)
+
+    expect(useStore.getState().launchDraft).toBeNull()
+    expect(localStorage.getItem(key)).toBeNull()
+  })
+
+  it('reports invalid saved draft data and waits for an explicit fresh draft', async () => {
+    const key = 'aether.launch-draft.v1:server%2Falice'
+    localStorage.setItem(key, '{')
+    allowDraftStorage()
+    useStore.getState().setIdentityKey('server/alice')
+    expect(useStore.getState().launchDraftError).toContain('Could not read saved launch draft')
+    render(<LaunchDialog />)
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('Could not read saved launch draft')
+    expect(localStorage.getItem(key)).toBe('{')
+
+    await userEvent.click(within(alert).getByRole('button', { name: 'Start a new draft' }))
+    await waitFor(() => expect(useStore.getState().launchDraftError).toBeNull())
+    await waitFor(() => expect(JSON.parse(localStorage.getItem(key) ?? 'null').version).toBe(1))
+  })
+
+  it('shows browser storage read errors without overwriting the saved draft', async () => {
+    const key = 'aether.launch-draft.v1:server%2Falice'
+    localStorage.setItem(key, JSON.stringify(draft()))
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => { throw new Error('storage blocked') })
+    allowDraftStorage()
+    useStore.getState().setIdentityKey('server/alice')
+    getItem.mockRestore()
+    render(<LaunchDialog />)
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('storage blocked')
+    expect(JSON.parse(localStorage.getItem(key) ?? 'null').task).toBe('keep this prompt')
+  })
+
+  it('keeps typed work in memory and resumable when storage cannot be read', async () => {
+    allowDraftStorage()
+    localStorage.setItem('aether.launch-draft.v1:server%2Falice', '{')
+    useStore.getState().setIdentityKey('server/alice')
+    render(<><button>Main chat</button><PaletteDialogs /></>)
+    setTask('keep this new task in memory')
+    await waitFor(() => expect(useStore.getState().launchDraft?.task).toBe('keep this new task in memory'))
+
+    await userEvent.click(screen.getByRole('button', { name: 'Main chat' }))
+    await waitFor(() => expect(screen.queryByLabelText('Task')).toBeNull())
+    expect(screen.getByRole('button', { name: 'Resume new session draft' })).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: 'Resume new session draft' }))
+    expect((await screen.findByLabelText('Task') as HTMLTextAreaElement).value).toBe('keep this new task in memory')
+  })
+
+  it('falls back to the active workspace when the saved workspace was deleted', async () => {
+    useStore.setState({
+      activeWorkspace: otherWorkspace.id,
+      workspaces: { [otherWorkspace.id]: otherWorkspace },
+      launchDraft: draft({ workspace: 'deleted-workspace' }),
+    })
+    await open()
+    fireEvent.click(launchButton())
+    await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith(expect.objectContaining({ workspace_id: otherWorkspace.id, task: 'keep this prompt' })))
+  })
+
+  it('replaces a saved account that is no longer accessible while keeping the prompt', async () => {
+    allowDraftStorage()
+    useStore.setState({ launchDraft: draft({ account: bob.id }) })
+    await open()
+    expect((screen.getByLabelText('Task') as HTMLTextAreaElement).value).toBe('keep this prompt')
+    fireEvent.click(launchButton())
+    await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith(expect.objectContaining({ workspace_id: workspace.id, task: 'keep this prompt' })))
+    expect(vi.mocked(api.runLaunch).mock.calls[0]?.[0]).not.toHaveProperty('account_member_id')
+  })
+
+  it('keeps the restored account and blocks launch when the account list read fails', async () => {
+    allowDraftStorage()
+    vi.mocked(api.accountList).mockRejectedValueOnce(new Error('account list unavailable'))
+    useStore.setState({ launchDraft: draft({ account: bob.id, task: 'keep account and task' }) })
+    render(<LaunchDialog />)
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('account list unavailable')
+    expect((screen.getByLabelText('Task') as HTMLTextAreaElement).value).toBe('keep account and task')
+    expect(launchButton().disabled).toBe(true)
+
+    vi.mocked(api.accountList).mockResolvedValue({ accounts: [alice], shared_with: [] })
+    await userEvent.click(within(alert).getByRole('button', { name: 'Retry account read' }))
+    await waitFor(() => expect(launchButton().disabled).toBe(false))
+    await userEvent.click(launchButton())
+    await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith(expect.objectContaining({ task: 'keep account and task' })))
+    expect(vi.mocked(api.runLaunch).mock.calls[0]?.[0]).not.toHaveProperty('account_member_id')
+  })
+
+  it('moves the resume arrow to the replacement sidebar after resizing back from phone', async () => {
+    const resize = atViewport(1024)
+    function Shell() {
+      const phone = useIsMobile()
+      return <>{!phone && <aside id="sidebar" />}<PaletteDialogs /></>
+    }
+    useStore.setState({ paletteDialog: null, launchDraft: draft() })
+    const view = render(<Shell />)
+    const original = document.getElementById('sidebar')
+    expect(screen.getByRole('button', { name: 'Resume new session draft' }).parentElement).toBe(original)
+    resize(767)
+    resize(1024)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Resume new session draft' }).parentElement).toBe(document.getElementById('sidebar')))
+    expect(document.getElementById('sidebar')).not.toBe(original)
+    view.unmount()
   })
 })
 
@@ -91,6 +429,18 @@ describe('child runs switch', () => {
     for (const [params] of vi.mocked(api.launchDefaultsSet).mock.calls) expect(JSON.stringify(params)).not.toContain('children')
   })
 
+  it('offers the subsession agents while subsessions are on for the launch', async () => {
+    useChildSettings.setState({ settings: null, error: null })
+    vi.mocked(api.childSettings).mockResolvedValue({ enabled: true, off: [{ harness: 'codex' }], choices: [
+      { account_member_id: alice.id, account_name: 'Alice', harness: 'claude', display_name: 'Claude Code', status: 'ready' },
+      { account_member_id: alice.id, account_name: 'Alice', harness: 'codex', display_name: 'Codex', status: 'ready' },
+    ] })
+    await open()
+    expect(await screen.findByRole('button', { name: 'Subsession agents: 1 off' })).toBeDefined()
+    fireEvent.click(childSwitch())
+    expect(screen.queryByRole('button', { name: /^Subsession agents/ })).toBeNull()
+  })
+
   it('is off and disabled for a Background run', async () => {
     await open()
     await waitFor(() => expect(childSwitch().getAttribute('aria-checked')).toBe('true'))
@@ -101,6 +451,10 @@ describe('child runs switch', () => {
 })
 
 describe('new run', () => {
+  beforeEach(() => {
+    useStore.setState({ capabilities: { gateway: 'remote', methods: ['run.launch', 'agent.list', 'account.list'], ws: [] } })
+  })
+
   it('returns focus to what had it before the dialog opened', async () => {
     render(<button type="button">Board</button>)
     const before = screen.getByRole('button', { name: 'Board' })
@@ -117,22 +471,26 @@ describe('new run', () => {
     await waitFor(() => expect(document.activeElement).toBe(before))
   })
 
-  it('collapses the agent list to the choice on a phone until Change', async () => {
-    atViewport(412, { pointer: 'coarse' })
-    vi.mocked(api.agentList).mockResolvedValue([
-      claude(),
-      agentInfo({ name: 'codex', display_name: 'Codex', login_found: true }),
-    ])
+  it('keeps Launch off with a reason while its workspace no longer exists, and keeps the task', async () => {
     await open()
+    setTask('keep me')
+    act(() => useStore.setState({ workspaces: {} }))
+    expect(screen.getByRole('alert').textContent).toContain('This workspace no longer exists.')
+    expect(launchButton().disabled).toBe(true)
+    expect((screen.getByLabelText('Task') as HTMLTextAreaElement).value).toBe('keep me')
+  })
 
-    expect(screen.getAllByRole('radio', { name: /^(Claude Code|Codex)/ })).toHaveLength(1)
-    expect(screen.getByRole('radiogroup', { name: 'Mode' })).toBeDefined()
-
-    fireEvent.click(screen.getByRole('button', { name: 'Change agent' }))
-    fireEvent.click(agentRow(/^Codex/))
-
-    expect(screen.getAllByRole('radio', { name: /^(Claude Code|Codex)/ })).toHaveLength(1)
-    expect(agentRow(/^Codex/).getAttribute('aria-checked')).toBe('true')
+  it('allows an own-account launch on servers without account.list', async () => {
+    useStore.setState({
+      capabilities: { gateway: 'remote', methods: ['run.launch', 'agent.list'], ws: [] },
+      launchDraft: draft({ account: bob.id, task: 'legacy server task' }),
+    })
+    await open()
+    expect(api.accountList).not.toHaveBeenCalled()
+    expect((screen.getByLabelText('Task') as HTMLTextAreaElement).value).toBe('legacy server task')
+    fireEvent.click(launchButton())
+    await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith(expect.objectContaining({ task: 'legacy server task' })))
+    expect(vi.mocked(api.runLaunch).mock.calls[0]?.[0]).not.toHaveProperty('account_member_id')
   })
 
   it('lists only installed agents with their login state, and sends Install more agents to Agents', async () => {
@@ -143,12 +501,27 @@ describe('new run', () => {
     ])
     await open()
 
-    expect(agentRow(/^Claude Code/).textContent).toBe('Claude CodeLogin found')
-    expect(agentRow(/^Codex/).textContent).toBe('CodexNo login found')
+    expect(agentRow(/^Claude Code/).textContent).toBe('Claude CodeReady')
+    expect(agentRow(/^Codex/).textContent).toBe('CodexSign in after launch')
     expect(screen.queryByRole('radio', { name: /^Pi/ })).toBeNull()
     expect(agentRow(/^custom/).disabled).toBe(false)
 
     fireEvent.click(screen.getByRole('button', { name: 'Install more agents...' }))
+    expect(useStore.getState().route.name).toBe('agents')
+    expect(useStore.getState().paletteDialog).toBeNull()
+  })
+
+  it('says a signed-out agent is signed out, shows the problem and sends the member to Agents, without refusing the launch', async () => {
+    vi.mocked(api.agentList).mockResolvedValue([claude({ login_problem: signedOut, login_blocks_launch: true })])
+    await open()
+
+    expect(agentRow(/^Claude Code/).textContent).toBe('Claude CodeSigned out')
+    expect(screen.queryByRole('radiogroup', { name: 'Account' })).toBeNull()
+    const note = screen.getByText('Claude Code is signed out').closest('[data-slot="callout"]')!
+    expect(note.textContent).toContain(signedOut)
+    expect(note.textContent).toContain('Until then a launch here is refused, unless a workspace variable signs the agent in.')
+    expect(launchButton().disabled).toBe(false)
+    fireEvent.click(within(note as HTMLElement).getByRole('button', { name: 'Sign in on Agents' }))
     expect(useStore.getState().route.name).toBe('agents')
     expect(useStore.getState().paletteDialog).toBeNull()
   })
@@ -393,6 +766,47 @@ describe('new run', () => {
     expect(within(alert).getByLabelText('Setup script output').textContent).toBe('npm error code E401\n')
   })
 
+  it('gives an admin the adopt command and the way to the workspace settings page', async () => {
+    const command = 'aether workspace mirror adopt --workspace ' + workspace.id + ' --generation 3 --commit ' + 'a'.repeat(40) + ' --yes'
+    const text = 'gitengine: mirror no-candidate for branch "dev": revision ' + 'a'.repeat(40) + ' is waiting for an admin to adopt it; check that it is the upstream commit you expect, then run: ' + command
+    vi.mocked(api.runLaunch).mockRejectedValueOnce(Object.assign(new Error(text), { data: { kind: 'no-candidate', adopt_command: command } }))
+    await open()
+    fireEvent.click(launchButton())
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain(text.slice(0, -command.length - 1))
+    expect(alert.textContent?.split(command)).toHaveLength(2)
+    expect(within(alert).getByLabelText('Adopt command').textContent).toBe(command)
+    fireEvent.click(within(alert).getByRole('button', { name: 'Copy the adopt command' }))
+    fireEvent.click(within(alert).getByRole('button', { name: 'Open workspace settings' }))
+    expect(api.runLaunch).toHaveBeenCalledTimes(1)
+    expect(useStore.getState().route).toEqual({ name: 'workspace', params: { workspaceId: workspace.id } })
+    expect(useStore.getState().paletteDialog).toBeNull()
+  })
+
+  it('tells a non-admin to ask an admin to adopt the source mirror', async () => {
+    useStore.setState({ info: { ...serverInfo, member: { ...alice, role: 'collaborator' } } })
+    vi.mocked(api.runLaunch).mockRejectedValueOnce(Object.assign(new Error('gitengine: mirror no-candidate'), { data: { kind: 'no-candidate', adopt_command: 'aether workspace mirror adopt' } }))
+    await open()
+    fireEvent.click(launchButton())
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('Ask an admin to adopt it with Review source mirror → Adopt candidate under Advanced on the workspace settings page.')
+    expect(within(alert).getByLabelText('Adopt command').textContent).toBe('aether workspace mirror adopt')
+    expect(within(alert).queryByRole('button', { name: 'Open workspace settings' })).toBeNull()
+  })
+
+  it('offers no adopt step when the pending mirror has no candidate yet', async () => {
+    vi.mocked(api.runLaunch).mockRejectedValueOnce(Object.assign(new Error('gitengine: mirror no-candidate'), { data: { kind: 'no-candidate' } }))
+    await open()
+    fireEvent.click(launchButton())
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('gitengine: mirror no-candidate')
+    expect(alert.textContent).not.toContain('Adopt candidate')
+    expect(within(alert).queryByRole('button')).toBeNull()
+  })
+
   it('needs a task for Background and says so', async () => {
     await open()
     await userEvent.click(modeSegment('Background'))
@@ -435,20 +849,40 @@ describe('new run', () => {
       vi.mocked(api.accountList).mockResolvedValue({ accounts: [alice, bob], shared_with: [] })
     })
 
-    it('hides Options without a shared account', async () => {
+    it('hides Account and Fallback without a shared account', async () => {
       vi.mocked(api.accountList).mockResolvedValue({ accounts: [alice], shared_with: [] })
       await open()
-      expect(screen.queryByText('Options')).toBeNull()
+      expect(screen.queryByRole('radiogroup', { name: 'Account' })).toBeNull()
+      expect(screen.queryByRole('button', { name: /^Fallback/ })).toBeNull()
     })
 
-    it('launches on the account chosen under Options', async () => {
+    it('lists each account with its access and the chosen agent\'s usage or readiness there', async () => {
+      vi.mocked(api.accountList).mockResolvedValue({ accounts: [alice, bob, vera], shared_with: [] })
+      vi.mocked(api.agentList).mockImplementation(async (account?: string) => account === vera.id ? [claude({ login_missing: true })] : [claude()])
+      vi.mocked(api.accountUsage).mockImplementation(async (params = {}) => ({
+        account_member_id: params.account_member_id ?? alice.id,
+        providers: params.account_member_id === bob.id
+          ? [{ provider: 'claude', status: 'ok', checked_at: '2026-11-06T00:00:00Z', windows: [{ id: '5h', label: '5 hours', used_percent: 12 }, { id: '7d', label: '7 days', used_percent: 96.4 }] }]
+          : [],
+      }))
+      await open()
+      const accounts = screen.getByRole('radiogroup', { name: 'Account' })
+      await waitFor(() => expect(within(accounts).getAllByRole('radio').map((row) => row.textContent)).toEqual([
+        'AliceYouReady',
+        'BobShared96% used',
+        "VeraSharedNeeds Vera's login",
+      ]))
+      expect(within(accounts).getByRole('radio', { name: /^Alice/ }).getAttribute('aria-checked')).toBe('true')
+      expect(api.accountUsage).toHaveBeenCalledWith({ account_member_id: bob.id })
+    })
+
+    it('launches on the shared account chosen under Account', async () => {
       vi.mocked(api.agentList).mockImplementation(async (account?: string) =>
         account === bob.id ? [agentInfo({ name: 'bob-agent', source: 'member', install_script: undefined })] : [claude()])
       await open()
-      await userEvent.click(await screen.findByRole('button', { name: /^Options/ }))
-      await pickOption(screen.getByLabelText('Account'), 'Bob (shared)')
+      await userEvent.click(within(screen.getByRole('radiogroup', { name: 'Account' })).getByRole('radio', { name: /^Bob/ }))
       await waitFor(() => expect(agentRow(/^bob-agent/).getAttribute('aria-checked')).toBe('true'))
-      expect(screen.getByText(/^Uses Bob's agent login and vendor quota/)).toBeDefined()
+      expect(screen.getByText("Uses Bob's bob-agent login and quota. Runs in your environment with your GitHub login; the session stays yours.")).toBeDefined()
       fireEvent.click(launchButton())
 
       await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith({ workspace_id: workspace.id, harness: 'bob-agent', mode: 'tui', account_member_id: bob.id }))
@@ -458,16 +892,62 @@ describe('new run', () => {
     it('sends the ticked fallback accounts in the order shown once one is moved or unticked', async () => {
       vi.mocked(api.accountList).mockResolvedValue({ accounts: [alice, bob, vera, { ...alice, id: 'mem_carol', display_name: 'Carol' }], shared_with: [] })
       await open()
-      await userEvent.click(screen.getByRole('button', { name: /^Options/ }))
+      await userEvent.click(screen.getByRole('button', { name: /^Fallback/ }))
       const fallbacks = screen.getByRole('list', { name: 'Fallback accounts' })
-      expect(within(fallbacks).getAllByRole('checkbox').map((box) => box.closest('label')?.textContent)).toEqual(['Bob (shared)', 'Vera (shared)', 'Carol (shared)'])
-      expect(screen.getByText("The session starts on the account here with the most usage left if Alice's usage is at 95% or more at launch, and continues there if the vendor reports the limit mid-session.")).toBeDefined()
+      await waitFor(() => expect(within(fallbacks).getAllByRole('checkbox').map((box) => box.closest('label')?.textContent)).toEqual(['BobSharedReady', 'VeraSharedReady', 'CarolSharedReady']))
+      expect(screen.getByRole('button', { name: /^Fallback/ }).textContent).toBe('Fallback· Automatic · ifAliceruns out')
+      expect(screen.getByText("If Alice's usage is 95% or more at launch, or the vendor reports the limit mid-session, the session moves to the ticked account with the most usage left.")).toBeDefined()
 
-      await userEvent.click(screen.getByRole('button', { name: 'Move Carol (shared) up' }))
-      await userEvent.click(screen.getByRole('checkbox', { name: 'Bob (shared)' }))
+      await userEvent.click(screen.getByRole('button', { name: 'Move Carol up' }))
+      await userEvent.click(screen.getByRole('checkbox', { name: /^Bob/ }))
+      expect(screen.getByText(/the session moves to the first ticked account, top to bottom, with usage left\.$/)).toBeDefined()
       fireEvent.click(launchButton())
 
       await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith({ workspace_id: workspace.id, harness: 'claude', mode: 'acp', fallback_account_member_ids: ['mem_carol', vera.id] }))
+    })
+
+    it('keeps a fallback account ticked while it is the launch account and the list is edited', async () => {
+      vi.mocked(api.accountList).mockResolvedValue({ accounts: [alice, bob, vera], shared_with: [] })
+      vi.mocked(api.launchDefaultsGet).mockResolvedValue({ revision: 1, defaults: { fallback: { policy: 'ordered', order: [bob.id, vera.id] } } })
+      useStore.setState({ capabilities: { gateway: 'remote', methods: ['*'], ws: [] } })
+      await open()
+      const accounts = () => within(screen.getByRole('radiogroup', { name: 'Account' }))
+      await userEvent.click(screen.getByRole('button', { name: /^Fallback/ }))
+      await userEvent.click(accounts().getByRole('radio', { name: /^Bob/ }))
+      await userEvent.click(screen.getByRole('checkbox', { name: /^Vera/ }))
+      await userEvent.click(accounts().getByRole('radio', { name: /^Alice/ }))
+      await waitFor(() => expect(launchButton().disabled).toBe(false))
+      fireEvent.click(launchButton())
+      await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith(expect.objectContaining({ fallback_account_member_ids: [bob.id] })))
+      expect(vi.mocked(api.runLaunch).mock.calls[0]![0]).not.toHaveProperty('account_member_id')
+    })
+
+    it('keeps the account a launch moved off ticked, last, in a list reordered from automatic', async () => {
+      vi.mocked(api.accountList).mockResolvedValue({ accounts: [alice, bob, vera], shared_with: [] })
+      await open()
+      await userEvent.click(screen.getByRole('button', { name: /^Fallback/ }))
+      await userEvent.click(screen.getByRole('button', { name: 'Move Vera up' }))
+      await userEvent.click(within(screen.getByRole('radiogroup', { name: 'Account' })).getByRole('radio', { name: /^Bob/ }))
+      const fallbacks = screen.getByRole('list', { name: 'Fallback accounts' })
+      const rows = () => within(fallbacks).getAllByRole('checkbox').map((box) => [box.closest('li')?.querySelector('.truncate')?.textContent, box.getAttribute('aria-checked')])
+      await waitFor(() => expect(rows()).toEqual([['Vera', 'true'], ['Alice', 'true']]))
+      await waitFor(() => expect(launchButton().disabled).toBe(false))
+      fireEvent.click(launchButton())
+      await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith(expect.objectContaining({ account_member_id: bob.id, fallback_account_member_ids: [vera.id, alice.id] })))
+    })
+
+    it("says the shared account's login is signed out and that its owner signs in again", async () => {
+      vi.mocked(api.agentList).mockImplementation(async (account?: string) => account === bob.id ? [claude({ login_problem: signedOut, login_blocks_launch: true })] : [claude()])
+      await open()
+      const accountRow = () => within(screen.getByRole('radiogroup', { name: 'Account' })).getByRole('radio', { name: /^Bob/ })
+      await waitFor(() => expect(accountRow().textContent).toBe('BobSharedSigned out'))
+      await userEvent.click(accountRow())
+
+      const note = (await screen.findByText("Bob's Claude Code login is signed out")).closest('[data-slot="callout"]') as HTMLElement
+      expect(note.textContent).toContain(signedOut)
+      expect(note.textContent).toContain('Bob signs in again on their Agents page or with aether agent login claude.')
+      expect(within(note).queryByRole('button')).toBeNull()
+      expect(agentRow(/^Claude Code/).textContent).toBe('Claude CodeSigned out')
     })
 
     it('gives the server\'s reasons an installed agent cannot launch there', async () => {
@@ -480,16 +960,15 @@ describe('new run', () => {
           ]
         : [claude()])
       await open()
-      await userEvent.click(screen.getByRole('button', { name: /^Options/ }))
-      await pickOption(screen.getByLabelText('Account'), 'Bob (shared)')
+      await userEvent.click(within(screen.getByRole('radiogroup', { name: 'Account' })).getByRole('radio', { name: /^Bob/ }))
 
       const notes = await screen.findByRole('status')
       expect(notes.textContent).toBe(
         'Bob is not logged in to Claude Code, so it cannot launch on this account. Bob logs in from their own Environment terminal; then open this dialog again.'
-          + 'Your own agent definitions run only on your own account: myagent. To launch one, choose your own account, marked (you), under Account.'
+          + 'Your own agent definitions run only on your own account: myagent. To launch one, choose your own account under Account.'
           + `codex cannot launch on this account: ${refusal}`,
       )
-      expect(agentRow(/^Claude Code/).textContent).toBe('Claude CodeNot logged in')
+      expect(agentRow(/^Claude Code/).textContent).toBe("Claude CodeNeeds Bob's login")
       expect(agentRow(/^codex/).disabled).toBe(true)
       expect(agentRow(/^myagent/).textContent).toBe('myagentYour account only')
       expect(launchButton().disabled).toBe(true)
@@ -552,6 +1031,10 @@ describe('extra repos', () => {
 })
 
 describe('saved launch defaults', () => {
+  beforeEach(() => {
+    useStore.setState({ capabilities: { gateway: 'remote', methods: ['run.launch', 'agent.list', 'account.list'], ws: [] } })
+  })
+
   const everyMethod = { gateway: 'remote' as const, methods: ['*'], ws: [] }
 
   beforeEach(() => {
@@ -626,7 +1109,7 @@ describe('saved launch defaults', () => {
     await waitFor(() => expect(launchButton().disabled).toBe(false))
     setTask('fix the cart')
     vi.mocked(api.launchDefaultsGet).mockResolvedValue({ revision: 1, defaults: { agent: 'codex', agents: { codex: { mode: 'tui' } } } })
-    act(() => useStore.setState({ identityKey: 'identity-b' }))
+    act(() => useStore.getState().setIdentityKey('identity-b'))
     await waitFor(() => expect(agentRow(/^Codex/).getAttribute('aria-checked')).toBe('true'))
     expect((screen.getByLabelText('Task') as HTMLTextAreaElement).value).toBe('')
   })
@@ -663,8 +1146,8 @@ describe('saved launch defaults', () => {
   it('saves the account and fallback with Save as my default', async () => {
     vi.mocked(api.accountList).mockResolvedValue({ accounts: [alice, bob], shared_with: [] })
     await open()
-    fireEvent.click(screen.getByRole('button', { name: /^Options/ }))
-    await pickOption(screen.getByRole('combobox', { name: 'Account' }), `${bob.display_name} (shared)`)
+    fireEvent.click(within(screen.getByRole('radiogroup', { name: 'Account' })).getByRole('radio', { name: new RegExp(`^${bob.display_name}`) }))
+    fireEvent.click(screen.getByRole('button', { name: /^Fallback/ }))
     fireEvent.click(screen.getByRole('checkbox', { name: 'Fall back to another account' }))
     fireEvent.click(screen.getByRole('button', { name: 'Save as my default' }))
     await waitFor(() => expect(api.launchDefaultsSet).toHaveBeenCalledWith({ defaults: { account_member_id: bob.id, fallback: { policy: 'off' } }, revision: 0 }))
@@ -715,8 +1198,8 @@ describe('saved launch defaults across devices', () => {
   it('saves the Run tab\'s fallback without the account it runs on', async () => {
     vi.mocked(api.accountList).mockResolvedValue({ accounts: [alice, bob, vera], shared_with: [] })
     await open()
-    fireEvent.click(screen.getByRole('button', { name: /^Options/ }))
-    fireEvent.click(screen.getByRole('checkbox', { name: `${vera.display_name} (shared)` }))
+    fireEvent.click(screen.getByRole('button', { name: /^Fallback/ }))
+    fireEvent.click(screen.getByRole('checkbox', { name: new RegExp(`^${vera.display_name}`) }))
     fireEvent.click(screen.getByRole('button', { name: 'Save as my default' }))
     await waitFor(() => expect(api.launchDefaultsSet).toHaveBeenCalledWith({ defaults: { account_member_id: '', fallback: { policy: 'ordered', order: [bob.id] } }, revision: 0 }))
   })

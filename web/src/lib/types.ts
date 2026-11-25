@@ -70,7 +70,7 @@ export type RunActivity =
   | 'failed'
   | 'disconnected'
 
-/** `ready` awaits the owner's Mark complete; `later` is their Not yet. */
+/** `ready` awaits the owner's Mark complete; `later` is their Review later. Not yet clears it to `''`. */
 export type RunReview = '' | 'ready' | 'later' | 'accepted'
 
 export interface RunInputRequest {
@@ -81,10 +81,49 @@ export interface RunInputRequest {
   title?: string
 }
 
-export type WaitConditionKind = 'pr_merged' | 'pr_checks' | 'run_finished'
+/** A pending request as attention.list carries it; a Standard session's has no options. */
+export interface AttentionRequest {
+  id: string
+  kind: string
+  title?: string
+  options?: { id: string; label: string; kind?: string }[]
+  schema?: unknown
+  url?: string
+}
+
+/** In the order the server checks a session, as internal/protocol/attention.go lists them. */
+export type AttentionKind =
+  | 'permission'
+  | 'question'
+  | 'queued-message'
+  | 'room-question'
+  | 'disconnected'
+  | 'blocked'
+  | 'needs-input'
+  | 'ready'
+  | 'failed'
+
+/** One session that waits on the caller, under the first Needs you row that holds for it. */
+export interface AttentionItem {
+  kind: AttentionKind
+  run_id: string
+  workspace_id: string
+  title: string
+  harness: string
+  reason: string
+  since?: string
+  request?: AttentionRequest
+  message?: { id: string; body: string; from?: string }
+}
+
+export interface RunInputRespondResult {
+  status: 'answered' | 'already_answered'
+}
+
+type WaitConditionKind = 'pr_merged' | 'pr_checks' | 'run_finished'
 export type WaitState = 'pending' | 'resolved' | 'cancelled' | 'superseded' | 'expired' | 'error'
 
-export interface WaitChecks {
+interface WaitChecks {
   passed: number
   failed: number
   pending: number
@@ -92,12 +131,40 @@ export interface WaitChecks {
   required_only: boolean
 }
 
-export interface WaitObserved {
+interface WaitObserved {
   pr_state?: string
   head_sha?: string
   merged_at?: string
   checks?: WaitChecks
   run_status?: string
+}
+
+export type CloseWarningKind = 'protected' | 'pull_request' | 'unmerged_work' | 'messages' | 'awaited' | 'subsessions' | 'cleanup_pending'
+
+export type CloseOutcome = 'merged' | 'abandoned' | 'completed'
+
+/** One thing closing a run would affect, from `run.close_check`; `subsession` names the subsession closing with it that the warning is about. */
+export interface CloseWarning {
+  kind: CloseWarningKind
+  detail: string
+  url?: string
+  count?: number
+  run_ids?: string[]
+  subsession?: string
+  /** On a pull_request warning: its number and when Aether last observed it. */
+  number?: number
+  observed_at?: string
+}
+
+/** A run's close warnings, or the error reading them. */
+export interface RunCloseCheck {
+  run_id: string
+  warnings: CloseWarning[]
+  /** A merged pull request of the run's own repository holds its last commit; absent from older servers. */
+  merged_pull_request?: boolean
+  /** When the run's status, reason or activity last changed; absent from older servers. */
+  idle_since?: string
+  error?: { code: number; message: string }
 }
 
 /** One condition a run registered with `report --outcome waiting --until`. */
@@ -201,6 +268,14 @@ export interface Run {
   reason?: string
   /** Decorated by the gateway from the scheduler; absent on legacy servers. */
   paused?: boolean
+  /** When idleness stopped the live session's container or saved its VM; absent while it is awake. */
+  asleep_since?: string
+  /** The sleeping session's VM was saved with every process, which a wake restores. */
+  asleep_saved?: boolean
+  /** A wake is starting the sleeping container. */
+  waking?: boolean
+  /** The last wake's failure while the session stays asleep. */
+  wake_error?: string
   /** Exact runtime grace deadline; files and results have separate lifetimes. */
   container_retained_until?: string
   cleanup_pending?: boolean
@@ -240,6 +315,23 @@ export interface Workspace {
   /** The upstream git URL a run checkout's `origin` remote points at;
    * absent until a clone with an origin is linked. */
   origin?: string
+  /** The admin who owns the workspace; absent from a server older than workspace access. */
+  owner_member_id?: string
+  /** The caller's role in this workspace; absent from a server older than workspace access. */
+  role?: Member['role']
+}
+
+/** workspace.access.list: the owner and every member granted the workspace. */
+export interface WorkspaceAccess {
+  workspace_id: string
+  owner_member_id: string
+  grants: WorkspaceGrant[]
+}
+
+export interface WorkspaceGrant {
+  member_id: string
+  granted_by?: string
+  created_at: string
 }
 
 /** `value` is absent for a secret: the server never returns one. */
@@ -264,7 +356,7 @@ export interface Member {
   id: string
   display_name: string
   color: string
-  role: 'viewer' | 'collaborator' | 'admin'
+  role: 'viewer' | 'collaborator' | 'admin' | 'super_admin'
   pending?: boolean
   /** The name commits made in this member's runs are authored as; absent
    * until the member sets one, when the server falls back. */
@@ -369,7 +461,7 @@ export interface InsightsRun {
   pr_state: string
 }
 
-export interface InsightsCostAgent {
+interface InsightsCostAgent {
   harness: string
   metered_runs: number
   unmetered_runs: number
@@ -384,7 +476,7 @@ export interface InsightsCost extends Omit<InsightsCostAgent, 'harness'> {
   by_agent: InsightsCostAgent[]
 }
 
-/** Finished work with a merged pull request, out of all that finished. */
+/** Finished work with a merged pull request or marked complete, out of all that finished. */
 export interface InsightsSuccessCount {
   succeeded: number
   finished: number
@@ -396,13 +488,13 @@ export interface InsightsOutcome {
   abandoned: number
 }
 
-export interface InsightsOutcomeBucket {
+interface InsightsOutcomeBucket {
   /** A local date, YYYY-MM-DD, as in the series. */
   start: string
   runs: InsightsOutcome
 }
 
-export interface InsightsMemberOutcome {
+interface InsightsMemberOutcome {
   member_id: string
   display_name: string
   /** The member's profile color. */
@@ -543,6 +635,9 @@ export interface ServerInfo {
   time: string
   member: Member
   tailnet_hostname?: string
+  /** The server release's signed build and hotfix; absent for a release from before channels. */
+  build?: number
+  hotfix?: number
   /** Absent on servers that predate feature advertising. */
   features?: string[]
   tailnet_identity_auth?: boolean
@@ -570,6 +665,10 @@ export interface DiskUsage {
   other_bytes?: number
   /** Included in worktree_bytes, not an additional category. */
   snapshot_bytes?: number
+  /** Session VM disks and saved states; absent on a server that runs no VMs. */
+  vm_bytes?: number
+  /** Saved memory of sleeping session VMs, included in vm_bytes. */
+  vm_state_bytes?: number
   warnings?: string[]
   docker?: DockerDiskUsage
   entries?: DiskEntry[]
@@ -610,7 +709,6 @@ export interface DiskEntry {
   owner_id?: string
   pool?: string
   bytes: number
-  reclaimable_bytes?: number
   retained_until?: string
   reason: string
   error?: string
@@ -699,6 +797,8 @@ export interface RoomMessageFailure {
   retryable?: boolean
 }
 
+export type RoomResolution = 'done' | 'deleted'
+
 export interface RoomMessage {
   id: string
   workspace_id: string
@@ -720,6 +820,10 @@ export interface RoomMessage {
   delivered_at?: string
   agent_delivery?: 'queued' | 'delivered'
   failure?: RoomMessageFailure
+  /** Set only on a comment: who completed or deleted it, and when. */
+  resolved_at?: string
+  resolved_by?: string
+  resolution?: RoomResolution
   created_at: string
   updated_at: string
 }
@@ -757,6 +861,10 @@ export interface RoomPostResult {
 export interface RoomDecideResult {
   message: RoomMessage
   receipt?: RoomDeliveryReceipt
+}
+
+export interface RoomResolveResult {
+  message: RoomMessage
 }
 
 export type RoomDeliveryReceipt = 'sent' | 'not_sent' | 'uncertain'
@@ -888,6 +996,12 @@ export interface RunModelPayload {
 }
 export interface RunEffortPayload {
   effort: string
+}
+export interface RunSleepPayload {
+  asleep_since?: string
+  asleep_saved?: boolean
+  waking?: boolean
+  wake_error?: string
 }
 export interface RunProtectedPayload {
   protected: boolean
@@ -1136,12 +1250,6 @@ export interface Schedule {
   next_fire_at?: string | null
 }
 
-/** Addresses a workspace by exactly one of id or name. */
-export interface WorkspaceSelector {
-  id?: string
-  name?: string
-}
-
 /** The wire names of Standard, Enhanced and Background. */
 export type LaunchMode = 'tui' | 'acp' | 'headless'
 
@@ -1166,6 +1274,10 @@ export interface AgentInfo {
   executable?: string
   /** Whether a login file exists in the home the launch signs in with. Absent when the agent declares none. */
   login_found?: boolean
+  /** Why the account's login cannot sign the agent in: its login file, or the agent's refusal of a turn. Shown verbatim. */
+  login_problem?: string
+  /** Whether the server refuses a launch over login_problem, unless a workspace variable signs the agent in. */
+  login_blocks_launch?: boolean
   /** The launch mode the agent starts in unless asked otherwise. */
   default_mode?: 'tui' | 'acp'
   /** Whether the agent prefers Enhanced, installed yet or not. */
@@ -1194,11 +1306,11 @@ export interface AgentModel {
   description?: string
 }
 
-/** agent.models: `error` is the last failed discovery, even when `models` holds an older or fallback list. */
+/** agent.models: `error` is the last failed discovery, even when `models` holds an older list. */
 export interface AgentModelsResult {
   models: AgentModel[]
   default_label?: string
-  source: 'agent' | 'cache' | 'fallback' | 'none'
+  source: 'agent' | 'cache' | 'none'
   fetched_at?: string
   error?: string
 }
@@ -1443,6 +1555,8 @@ export interface Invitation {
   login?: string
   email?: string
   role?: Member['role']
+  /** Workspaces the invitation grants on joining. */
+  workspace_ids?: string[]
   member_id?: string
   created_by: string
   created_at: string
@@ -1790,6 +1904,11 @@ export interface UpdateStatus {
   cli: UpdateCheck
   /** Empty when the server did not answer; server_error then says why. */
   server_version: string
+  /** The signed builds of this CLI and of the server; absent for a release from before channels. */
+  cli_build?: number
+  cli_hotfix?: number
+  server_build?: number
+  server_hotfix?: number
   server_behind: boolean
   /** The CLI half is still answered in full when the SSH hop is down. */
   server_error?: string
@@ -1863,6 +1982,8 @@ export interface PendingServerUpdate {
   version: string
   requested_by: string
   requested_at: string
+  /** The server scheduled it itself, when its release check found a newer build on its channel. */
+  by_server?: boolean
 }
 
 /** What a pending update is still waiting for. Paused runs are reported
@@ -1886,6 +2007,25 @@ export interface ServerUpdateAttempt {
  * `manual_commands` says what to run on the server host. */
 export interface ServerUpdateStatus {
   server_version: string
+  /** Builds are the signed (build, hotfix) of a release, absent for one from before channels. */
+  server_build?: number
+  server_hotfix?: number
+  /** The release channel the server follows; absent on servers from before channels. */
+  channel?: ReleaseChannel
+  /** The server has not chosen a channel yet and follows beta. */
+  channel_pending?: boolean
+  /** The running build is above the channel's: the server stays on it until the channel reaches it. */
+  channel_wait?: boolean
+  /** Why the server last failed to schedule the newest release itself, such as its preflight. */
+  schedule_error?: string
+  /** The last cancel's `not_declined`: the build could not be recorded as declined. */
+  decline_note?: string
+  /** The newest release of each channel whose signed pointer the last check verified. Absent from an older server, and after a restart until the first check. */
+  channel_pointers?: Partial<Record<ReleaseChannel, ChannelPointer>>
+  /** The newest release on `channel`; empty until a check on it has run. */
+  latest_channel?: string
+  latest_build?: number
+  latest_hotfix?: number
   latest?: string
   update_available: boolean
   capable: boolean
@@ -1908,6 +2048,43 @@ export interface ServerUpdateStatus {
   error?: string
   from_version?: string
   to_version?: string
+}
+
+/** A verified channel pointer: the release it names and when it was signed. */
+export interface ChannelPointer {
+  version: string
+  build?: number
+  hotfix?: number
+  /** RFC3339 UTC. */
+  published_at: string
+}
+
+export type ReleaseChannel = 'stable' | 'beta' | 'nightly'
+
+/** A release and its place in the release order; build 0 is a release from before channels. */
+export interface ReleaseBuild {
+  version: string
+  channel?: string
+  build: number
+  hotfix?: number
+}
+
+/** server.release_channel_set. With `dry_run` it saves nothing and says what saving would do. */
+export interface ServerReleaseChannelSet {
+  channel: ReleaseChannel
+  previous: ReleaseChannel
+  saved: boolean
+  running: ReleaseBuild
+  /** The newest release on `channel`; absent when it could not be read, and `target_error` says why. */
+  target?: ReleaseBuild
+  target_error?: string
+  /** `running` is above `target`: the server stays on its build until the channel reaches it. */
+  wait: boolean
+  /** The pending update the change retires because the new channel does not take its release. */
+  retired?: string
+  /** A pending update left in place because its manifest could not be fetched to check it; `kept_error` is that error. */
+  kept?: string
+  kept_error?: string
 }
 
 /** server.sysbox.status and server.sysbox.install: whether runs can use
@@ -1947,6 +2124,8 @@ export interface ServerUpdateResult {
   version?: string
   requested_by?: string
   requested_at?: string
+  /** On a cancel: the release's build could not be recorded as declined, so the server may schedule it again by itself. */
+  not_declined?: string
 }
 
 /** How far one update has got. `restarting` is the last frame the socket
@@ -1972,23 +2151,6 @@ export interface ServerUpdatePayload {
   from_version?: string
 }
 
-
-/** env.agents: one setup-capable agent's local availability. */
-export interface LocalAgentStatus {
-  name: string
-  installed: boolean
-}
-
-/** env.agents. `repo_path` is set when the link config knows exactly one repository folder. */
-export interface EnvAgentsResult {
-  agents: LocalAgentStatus[]
-  /** The folders the gateway looked in, so an empty result can say where. */
-  searched: string[]
-  /** Why the login shell could not be asked for its PATH; set only when
-   * the probe failed and just the standard folders were checked. */
-  warning?: string
-  repo_path?: string
-}
 
 export interface AssistantNoticePayload {
   member_id: string
@@ -2047,7 +2209,10 @@ export interface SystemContainer {
   /** Absent or 0 is unlimited. */
   cpu_limit_cores?: number
   cpu_throttled_percent?: number
+  /** What runs inside the sandbox uses; `memory_limit_bytes` caps this. */
   memory_bytes: number
+  /** What a sandbox's VM holds of the host's memory, its kernel and file cache included. Absent for a Docker container, whose `memory_bytes` is already that, or when the VM's cgroup could not be read. */
+  host_memory_bytes?: number
   memory_limit_bytes: number
   pids: number
   pids_limit: number
@@ -2118,12 +2283,15 @@ export interface Connector {
  * connector.list: the member's connectors and how they add one. `url` is
  * the URL to add; `universal_url` the edge's one URL for every server,
  * which differs from `url` until the member links a GitHub account;
- * `sign_in` means the consent page takes the edge sign-in, no code.
+ * `universal_urls` that URL at every address of the edge, `universal_url`
+ * among them; `sign_in` means the consent page takes the edge sign-in,
+ * no code.
  */
 export interface ConnectorList {
   connectors: Connector[]
   url?: string
   universal_url?: string
+  universal_urls?: string[]
   sign_in?: boolean
 }
 
@@ -2165,16 +2333,18 @@ export interface WatchObserved {
   review_state?: string
 }
 
-export type WatchDeliveryChannel = 'push' | 'in_app' | 'assistant'
+export type WatchDeliveryChannel = 'push' | 'in_app' | 'assistant' | 'relay'
 
 /** pending: not sent yet, with why in detail. cleared: dropped unsent because its need was resolved first or its watch stayed paused. withdrawn: delivered, then replaced on the devices because its need ended. */
-export type WatchDeliveryStatus = 'pending' | 'delivered' | 'no_destination' | 'disabled' | 'held_quiet_hours' | 'failed' | 'cleared' | 'withdrawn' | 'skipped'
+export type WatchDeliveryStatus = 'pending' | 'delivered' | 'no_destination' | 'disabled' | 'held_quiet_hours' | 'batched' | 'failed' | 'cleared' | 'withdrawn' | 'skipped'
 
 export interface WatchDelivery {
   channel: WatchDeliveryChannel
   status: WatchDeliveryStatus
   detail?: string
   at: string
+  /** The session a relay row writes to. */
+  run_id?: string
 }
 
 export interface WatchNotification {
@@ -2207,6 +2377,8 @@ export interface Watch {
   observed: WatchObserved
   last_notification?: WatchNotification
   link: string
+  /** Sessions each notice is written into. */
+  relay_to?: string[]
 }
 
 export interface WatchCreateParams {
@@ -2245,17 +2417,30 @@ export interface WatchGetResult {
 
 export type QuietHours = { start: string; end: string; tz: string }
 
+/** blockers: only what needs you at once, the rest in a daily digest; batched: the rest every 30 minutes; all: everything at once. */
+export type NotifyLevel = 'blockers' | 'batched' | 'all'
+
+/** When the blockers level sends its daily digest: HH:MM in an IANA zone, UTC when empty. */
+export interface NotifyDigest {
+  at: string
+  tz: string
+}
+
 export interface NotifyPrefs {
   /** Watch notices to Web Push devices. */
   push: boolean
+  level: NotifyLevel
+  digest: NotifyDigest
   quiet_hours?: QuietHours
   /** Read-only: where notices go now. */
   destinations: { push_devices: number }
 }
 
-/** notify.prefs.set replaces quiet_hours and keeps push as it is when push is left out. */
+/** notify.prefs.set replaces quiet_hours and keeps push, level and digest as they are when left out. */
 export interface NotifyPrefsSetParams {
   push?: boolean
+  level?: NotifyLevel
+  digest?: NotifyDigest
   quiet_hours?: QuietHours
 }
 

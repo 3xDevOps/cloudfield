@@ -1,11 +1,11 @@
 # Enhanced sessions
 
 A session normally shows the agent's own terminal UI. This is **Standard** mode. In
-**Enhanced** mode, Aether drives the agent over the Agent Client Protocol (ACP),
-a JSON protocol on the agent's stdin and stdout. The dashboard then shows the
-agent's messages, tool calls, diffs and permission prompts as native controls
-in a **Chat** view, instead of a terminal. Read [Agents](harnesses.md) first
-to install and sign in to an agent. Other terms are in the
+**Enhanced** mode, Cloudfield drives the agent over the Agent Client Protocol
+(ACP), a JSON protocol on the agent's stdin and stdout. The dashboard then shows
+the agent's messages, tool calls, diffs and permission prompts as native
+controls in a **Chat** view, instead of a terminal. Read [Agents](harnesses.md)
+first to install and sign in to an agent. Other terms are in the
 [glossary](README.md#concepts).
 
 ## Which agents
@@ -27,7 +27,7 @@ to install and sign in to an agent. Other terms are in the
 Like Standard, an Enhanced session acts without asking by default. You can switch
 the session to a mode that asks (Claude Code, Codex and Gemini offer one).
 
-`claude`, `codex` and `pi` need their adapter installed: `aether agent add
+`claude`, `codex` and `pi` need their adapter installed: `cloudfield agent add
 <name> --enhanced` installs the agent and its adapter
 ([Enhanced adapters](harnesses.md#enhanced-adapters)).
 
@@ -46,7 +46,7 @@ in **New session** or in the **Default mode** select on the **Agents** page, and
 **New session** starts on it. A launch from **New session** saves the
 agent, mode and model on the server, so every device starts from them
 ([Saved launch choices](teams.md#saved-launch-choices)). For an agent with no remembered mode, **New session** starts on Enhanced when the agent's Enhanced mode is installed, and on Standard
-otherwise; `aether session` and the connector do so
+otherwise; `cloudfield session` and the connector do so
 whenever no mode is named. **New session** lists Enhanced first and marks it
 **Recommended**. Before an agent's Enhanced mode is installed, **Set up**
 suggests Enhanced for Codex, oh-my-pi, OpenCode, Copilot, Gemini and Cursor,
@@ -57,22 +57,33 @@ Enhanced.
 ## Launch an Enhanced session
 
 ```sh
-aether session "fix the flaky login test" --agent codex --mode enhanced
-aether session "fix the flaky login test" --agent claude --mode enhanced --model opus --effort high
+cloudfield session "fix the flaky login test" --agent codex --mode enhanced
+cloudfield session "fix the flaky login test" --agent claude --mode enhanced --model opus --effort high
 ```
 
-`--mode` takes `standard`, `enhanced` or `background` on `aether session` and
-`aether template save`. The task is the session's
+`--mode` takes `standard`, `enhanced` or `background` on `cloudfield session` and
+`cloudfield template save`. The task is the session's
 first prompt. An agent with no ACP command is refused:
 
 ```text
 scheduler: harness "custom" has no command for mode "acp"
 ```
 
-`--model` is set after the session opens. If the agent rejects it, the Session
-view shows a **Model not set** error notice with the agent's error. A model you
+`--model` is set after the session opens, so the launch itself still
+succeeds. If the agent rejects it, the session runs on the agent's default
+model, or the one it already had, and says so: the session's `model` becomes
+that one, `refused_model` names the refused one, `model_error` holds the
+reason, and the Session view shows a **Model not set** error notice, such
+as `The agent refused "claude-fable-5-2", so the session runs on the agent's
+default model: ... Invalid value for config option model: claude-fable-5-2`
+from a Claude Code that predates the model. A Background session driven over
+ACP ends instead, with `model not set: <the agent's error>`. Standard
+sessions, and Claude Code's Background sessions, pass the model to the CLI,
+which fails the turn with its own error, for example `Claude Code 2.1.287
+does not support this model; version 2.1.290 or newer is required. Run
+'claude update'`. A model you
 pick later from the composer menu becomes the session's recorded model and survives a
-reopen, a server restart and a switch to Standard. A model id Aether cannot
+reopen, a server restart and a switch to Standard. A model id Cloudfield cannot
 store (whitespace, a leading `-`, or over 128 bytes) shows a **Model not
 recorded** notice.
 
@@ -85,7 +96,7 @@ driven over ACP fails rather than run at the default. An effort you pick later
 from the composer menu becomes the session's recorded effort and survives a reopen
 and a switch to Standard, like the model.
 
-The session's container is the same as a Standard session's, with the same image, home,
+The session's sandbox is the same as a Standard session's, with the same image, home,
 retention, Pause and Close. The agent's ACP server runs beside a login shell,
 and the **Terminal** tab is that shell: use it to log the agent in or inspect
 the checkout ([terminal.md](terminal.md)).
@@ -102,6 +113,9 @@ An Enhanced session opens on **Chat**: one timeline, newest at the bottom.
   1 command and edited 1 file"). Click it for one step per call, and click a
   call for its command, output, diff, or input and result. Files the agent
   read are chips that open in **Files**.
+- Claude's API can replace what Claude Code writes between tool calls with a
+  short summary of it. The summary shows as the agent's message, not as a
+  thought. Claude Code's thoughts appear once each one is complete.
 - While the agent works, the newest header stays open and says what it is
   doing, with the seconds since it began. While it waits on you it reads
   "Waiting for your approval: <command>" or "Waiting for your answer". Once
@@ -109,6 +123,18 @@ An Enhanced session opens on **Chat**: one timeline, newest at the bottom.
   opened or closed them yourself or a subagent still runs. When a turn ends
   with no request, the session says **Waiting for your reply**, and the header's
   **Reply** focuses the composer.
+- Above the composer, a bar lists every subagent and workflow the agent
+  launched ("3 subagents and 1 workflow · 2 running, 1 failed"). It appears
+  with the first one and starts folded. Click it for one row each, running
+  ones first, and click a row to open that subagent or workflow beside the
+  chat.
+- A workflow is a script Claude Code runs that launches its own agents. Its
+  card and row count them ("3 of 8 agents"). Opened, it lists each agent
+  under its phase with its state and what it is doing; click an agent for
+  its prompt, result or error, model, and tool call and token counts.
+  Those agents report status and previews, not a transcript
+  ([Background work](#background-work)). **Log** and **Script** sit folded
+  under the list.
 - Notices, a turn that was cancelled or stopped, and messages between agents
   show inline. **Hide from Session**, under **Agent messages** in Details,
   turns agent messages off.
@@ -119,8 +145,9 @@ An Enhanced session opens on **Chat**: one timeline, newest at the bottom.
 
 A success or failure report from the agent does not close the session: the
 timeline shows **Done** or **Failed**, and you can keep sending messages.
-**Close** ends the session and starts the container retention period (default
-seven days).
+**Close** ends the session and keeps its sandbox for **Relaunch**, 30 days by
+default (`--run-container-ttl`)
+([Relaunching a closed session](failure-handling.md#relaunching-a-closed-session)).
 
 The **Multiplayer** strip under the view switch shows who controls the session and
 who watches, with **Take control** and **Release**. Control works as in a
@@ -136,17 +163,20 @@ and the button sends. The button changes with the turn:
 | **Send** | no turn is running | starts a turn |
 | **Steer** | a turn runs and the agent supports steering | joins the running turn |
 | **Queue** | a turn runs and you hold `Mod+Shift`, or the agent cannot steer | runs after this turn |
-| **Interrupt** | a turn runs and the box is empty | stops the turn and cancels its requests |
+| **Interrupt**, a round red stop button | a turn runs and the box is empty | stops the turn and cancels its requests |
+| **Stop waiting**, the same stop button | the agent waits on background work and the box is empty | stops the wait; tasks already started keep running |
 | **Resume** | the session is paused | resumes it |
 
 `Enter` never interrupts. `Mod+Shift+Enter` always queues. `/` lists the agent's
 commands and `@` completes a path in the session's checkout. The menus under the box
-set the agent's mode, model and effort. The footer shows context window use, such
-as **43%**, and turns amber from 90%; click it for the breakdown, and for
+set the agent's mode, and its model and effort together (**Fable 5.2 / High**). The footer shows context window use, such
+as **43%**, and turns the needs-you colour from 90%; click it for the breakdown, and for
 **Compact** when the agent has a `/compact` command.
 
 An unsent message stays with its session across pages, mode switches and reconnects.
-Reloading the page discards it.
+Reloading the page discards it. While the agent reconnects, the composer keeps
+its shape and Send stays disabled until it is back; an empty box and Send's
+tooltip say why.
 
 Steering, answering, interrupting and changing options need control of the session.
 The owner's desktop tab takes it when it first shows Chat and nobody holds
@@ -161,11 +191,22 @@ the image before sending.
 
 ## Permissions and input
 
-A new session starts in the agent's no-prompt setting, so a request arrives only
-after you switch to a mode that asks, or from an agent whose own configuration
-still asks. Each request marks the session **Needs you** and docks above the
+A new session starts in the agent's no-prompt setting, so a request arrives
+after you switch to a mode that asks, from an agent whose own configuration
+still asks, or for a check the agent never skips. Claude Code in
+`bypassPermissions` still asks for an explicit `ask` rule in its settings, a
+tool that needs a person, and its own safety checks, at every
+[permission tier](security.md#permission-tiers). Answer here, with `cloudfield
+answer`, or with a connector's `aether_decide_approval`. Each request marks the session **Needs you** and docks above the
 composer, one at a time (`1 of N`). The composer stays shut until you answer.
 **Interrupt** stops the turn and cancels the request instead.
+
+If the agent refuses its no-prompt mode, the Chat view shows a **Mode not
+set** error notice, such as `The agent refused mode "bypassPermissions", so
+the session runs in "default": ... Mode bypassPermissions is not available in
+this session`, and the agent asks as that mode does. Claude Code's adapter
+refuses `bypassPermissions` when its settings or managed policy set
+`permissions.disableBypassPermissionsMode` to `"disable"`.
 
 - The card names what the agent wants ("Claude Code wants to run a command")
   and shows the command, or the files it changes with their diffs.
@@ -180,7 +221,7 @@ composer, one at a time (`1 of N`). The composer stays shut until you answer.
 - An answered request stays in the timeline as one line, such as "Allowed once
   · run `go test`".
 - A subagent's request is the session's request, answered the same way.
-- From the CLI, `aether sessions <session-id>` lists pending requests and `aether
+- From the CLI, `cloudfield sessions <session-id>` lists pending requests and `aether
   answer <session-id> <request-id> <option-id>` answers one: allow once or reject once,
   never always.
 - Answering needs permission to steer the session and control of it. The first
@@ -204,8 +245,8 @@ Standard session whose agent reports its turns. The reason tells you how it ende
 | Reason | State | Cause |
 | --- | --- | --- |
 | `turn ended without a report` | `waiting` | The turn ended normally with no outcome report |
-| `agent reported success` | `finished` | The session shows **Ready for review** ([failure-handling.md](failure-handling.md#review)) |
-| `needs input: <question>` | `needs-you` | The agent ran `aether-internal report --outcome needs-input` and ended its turn |
+| `agent reported success` | `finished` | The session shows **Finished: review** ([failure-handling.md](failure-handling.md#review)) |
+| `needs input: <question>` | `needs-you` | The agent ran `cloudfield-internal report --outcome needs-input` and ended its turn |
 | `blocked: <summary>` | `needs-you` | The agent reported an external blocker |
 | the summary of a `waiting` report | `waiting-agents`, `waiting-ci` or `waiting-tools` | The agent waits on its own agents, CI or a process |
 | the summary of an `answered` report | `answered` | The agent replied with nothing pending. It never needs you |
@@ -225,6 +266,25 @@ on its own, the Chat view shows it as an autonomous turn. The session reason rea
 `working in background: <n> tasks`, or `waiting-agents` or `waiting-tools`
 between turns.
 
+- Claude Code runs the main agent's `Agent` calls in the background: the call
+  returns at once and its subagent's card follows the task until it reports. A
+  reload reads up to 5,000 earlier items to keep the card of a subagent that
+  still runs; past that, scroll up to load its launch.
+- A workflow reports its progress on the tool call that launched it
+  (`tool_call.task.workflow` in
+  [`internal/acphost/items.go`](../internal/acphost/items.go)): its name, its
+  phases, and one row per agent with its state (`queued`, `running`, `done`,
+  `failed` or `skipped`), last tool, token and tool call counts, and previews of
+  its prompt, result and error. Every viewer gets it live and after a reload.
+  Limits:
+  - Only Claude Code reports it. An agent inside a workflow reports its row, not
+    its messages or tool calls.
+  - A running workflow's call is written at most once a second when an agent
+    changes state, and once in 15 seconds when only its tool or token count did.
+  - Previews are cut to 240 bytes. Past 100 agents the done and skipped rows are
+    left out first, then the failed ones, counted in `omitted`.
+  - A call too large for a viewer's frame carries each agent's label and state
+    without previews or logs, and the name alone when even that does not fit.
 - A shell such as a dev server does not hold the session, because it may never end.
 - Stop cancels an autonomous turn and parks the session with `turn cancelled`. The
   tasks keep running in Claude Code.
@@ -238,9 +298,10 @@ between turns.
 Messages from other sessions and people ([coordination.md](coordination.md)) reach an
 Enhanced session without hooks. When mail arrives and the session has no turn running,
 the server sends the agent one prompt telling it to run
-`aether-internal inbox` and acknowledge the batch, ending with
-`End this turn with exactly one /usr/local/bin/aether-internal report as your last action.`
-A message steered into a running turn carries no such line. Messages that arrive together
+`cloudfield-internal inbox` and acknowledge the batch, ending with
+`End this turn with exactly one report as your last action: aether_report, or /usr/local/bin/aether-internal report where you have no aether_report tool.`
+Mail that arrives during a turn waits until the turn ends; the agent is not
+told mid-turn. Messages that arrive together
 share one prompt, and each set of new unread messages starts at most one turn,
 even a turn the agent refuses. A session that opens afterwards gets the prompt
 again.
@@ -249,7 +310,7 @@ again.
 
 A turn that ends normally (`end_turn`) without an outcome report gets one more
 prompt from the server:
-`Report your state with aether-internal report (answered, waiting, needs-input, blocked, success or failure) before ending the turn.`,
+`Report your state with aether_report or aether-internal report (answered, waiting, needs-input, blocked, success or failure) before ending the turn.`,
 naming only the outcomes the session's role may use. It appears in the Session
 view as a message. The turn it starts is never
 reminded, so an agent that still does not report parks with
@@ -276,26 +337,126 @@ retries a waiting prompt at least every 30 seconds.
 
 ## Restarts and failures
 
-A server restart, **Reopen** after Close, or a failed Close stops the old ACP
-server and starts a fresh one. Aether then restores the agent's conversation. A turn
-cut off by the restart ends with a **Turn interrupted** notice, its pending
-permission requests are dropped, and the session parks with `turn interrupted`. Queued
-messages read **Not sent**: send them again. Background tasks end with the old
-adapter, including commands the agent's own shell tool left running, and the log
-notes **Background work interrupted**. Commands in a terminal started with
-`aether-internal terminal` keep running. A conversation that cannot be restored
-starts a new one and says `Started a new agent conversation`.
+The agent's ACP server runs under a keeper: a process in the session sandbox,
+started from the staged server binary as `aether-internal acp-keeper`, that
+owns the adapter's stdin and stdout and serves them on a socket in
+`/run/aether-acp/`. The server attaches to the keeper with a short-lived
+`aether-internal acp-keeper attach` exec and a token only the server holds.
+The keeper and that exec run as root, out of the agent's reach; the adapter
+runs as the session's user with the session's environment, `PATH` included, as
+before ([security](security.md#permission-tiers)).
+
+A server restart or update (`systemctl restart aether-server`,
+`cloudfield server update`, a boot trial or a rollback) leaves the keeper and the
+agent running. Terminals started with `cloudfield-internal terminal` run under a
+keeper of their own and keep their output, input and exit status through it
+([terminal.md](terminal.md#reconnects-and-server-updates)). The next server
+process reattaches and adopts the conversation: the turn in flight keeps
+streaming, an open permission request or question stays open under the same
+id, background tasks and commands the agent's shell tool started keep
+running, and nothing is sent to the agent twice. A turn that ended while no
+server was attached still ends before what the agent sent after it, such as a
+background task's follow-up turn. A message queued behind the
+turn is sent again once the server is back, unless it already reached the
+agent; one queued for a paused session waits until the session resumes. An
+answer, cancel or message sent while the new server is still recovering
+sessions waits for recovery, up to 30 seconds, instead of failing with `the
+Enhanced agent is not running`. The log records no notice for an adoption.
+A stopped server detaches cleanly unless the agent's VM stops answering, as
+one the memory brake froze does: the server waits 3 seconds for the keeper
+to confirm the detach and 1 second for it to take the ack of the last output
+recorded, then lets go as a killed server would
+([failure-handling.md](failure-handling.md#recover-from-memory-pressure)).
+A killed one can, rarely, record twice the agent output it logged in the
+instant before it died. A server killed
+after it recorded a new turn but before the turn's prompt reached the keeper
+ends that turn with **Turn interrupted**: `Cloudfield's server restarted before
+this turn's prompt reached the agent. Send it again.`
+
+The server cannot reattach when the keeper or the agent exited, when the agent
+wrote more than 32 MiB while no server read it, when the keeper speaks another
+protocol version, or when the server stopped before the agent's conversation
+opened. An agent counts as exited 5 seconds after its process ends, even if
+a command it started still holds its output open. The server then logs **Agent restarted** with the reason, stops the keeper and
+the agent, and restores the conversation in a fresh one, as **Reopen** after
+Close, a failed Close and **Retry Enhanced** always do. A turn cut off that way
+ends with a **Turn interrupted** notice, its pending permission requests are
+dropped, and the session parks with `turn interrupted`. Queued messages read
+**Not sent**: send them again. Background tasks end with the old adapter,
+including commands the agent's own shell tool left running, and the log notes
+**Background work interrupted**. Commands in a terminal started with
+`cloudfield-internal terminal` keep running, and the terminal stays usable
+([terminal.md](terminal.md#reconnects-and-server-updates)). A conversation that
+cannot be restored starts a new one and says `Started a new agent
+conversation`. When another process attaches to the keeper, which only a
+second server on the same data directory or root in the container can do, the
+server logs **Agent connection taken over** and restores the conversation the
+same way.
+
+A session sandbox keeps the server binary it was created with. A session
+whose container a server without keepers created runs its adapter without
+one, and every restart restores its conversation as above until the container
+is recreated. **Reopen**, **Retry Enhanced**, Pause and resume reuse the
+container; a new session, or an account switch at a usage limit, gets a new
+container with a keeper. When a new keeper fails to start and Cloudfield cannot
+stop it, the session fails with **Enhanced agent failed** and `the keeper that
+failed to start could not be stopped`, instead of running the adapter without
+a keeper beside one the keeper may have started. Rolling the server back to a build without keepers
+stops each keeper with its agent and restores the conversation as above.
 
 Restoration depends on the agent's own saved conversation and login. Check the
 checkout before you retry interrupted work.
 
 Claude's adapter keeps running when its Claude Code process dies, but drops the
-conversation and answers every later prompt with `Session not found`. Aether shows
+conversation and answers every later prompt with `Session not found`. Cloudfield shows
 that prompt's **Prompt failed** notice, then **Agent conversation lost**, and
 restores the conversation in a fresh adapter as above. Send the failed message
-again. If the agent loses the conversation again within 5 minutes, Aether stops the
+again. If the agent loses the conversation again within 5 minutes, Cloudfield stops the
 adapter and the session parks with
 `enhanced session failed: the agent lost its conversation again within 5 minutes: ...`.
+
+If the agent refuses a turn with `Authentication required`, Cloudfield shows
+**Sign-in refused**, or **Agent signed out** when the login file cannot sign
+the agent in, restarts the adapter in the same container so it reads the
+account's login again, and restores the conversation. Agent mail is offered
+again by itself. A session whose agent reported an outcome that is still
+waiting for its turn to end is not restarted. The session parks with the
+agent's error followed by what to do, one of:
+
+```text
+enhanced turn failed: ... Authentication required ...; Ada's Claude Code login is signed out. Sign in, then send the message again: dashboard Agents page, or aether agent login claude
+enhanced turn failed: ... Authentication required ...; Cloudfield restarted the agent to reread Ada's login: send the message again. Refused again? Sign in: dashboard Agents page, or aether agent login claude
+enhanced turn failed: ... Authentication required ...; a restart did not help. Start a new session, or if Ada's Claude Code login is signed out, sign in: dashboard Agents page, or aether agent login claude
+```
+
+The first is a login file that cannot sign the agent in; the notice quotes
+what it lacks. The second is a refusal the file does not explain, which a
+restart fixes when only the agent's copy of the login was stale. The third is
+a second refusal within 5 minutes: either this sandbox's copy of the login
+is stale, which a new session's sandbox does not share, or the login is
+signed out. The owner named is the owner of the account the session runs on.
+A refusal after the login file changed restarts the agent once more inside
+those 5 minutes, so a message sent after signing in reaches an agent that has
+read the new login. A session Cloudfield does not restart the agent of (a
+Background one, or one whose agent reported an outcome) ends its reason with
+`<owner>'s <agent> login may be signed out. Sign in: ...`, and so does a
+session whose agent refuses to open its conversation. See
+[harnesses.md](harnesses.md#when-a-login-is-signed-out) for where else a
+signed-out login shows.
+
+Each time it starts or restarts an adapter, Cloudfield checks that your home
+still belongs to the session's user with owner `rwx`. A root command in any of
+your sessions can change that and lock every agent on the home out of its login
+and its `~/.local/bin`. Cloudfield gives the home back and shows **Home
+restored** with the owner and mode it found
+([security.md](security.md#permission-tiers)). An agent that stays
+connected and is never refused gets no restore, so its tools keep failing:
+run `sudo chown "$(id -u):$(id -g)" "$HOME" && sudo chmod u+rwx "$HOME"` in
+that session's **Terminal** tab, which runs as the session's user; a Default
+session's `sudo` waits for your approval. If restoring fails, the session parks
+with
+`enhanced session failed: the agent cannot read its home: ...`, naming the
+home, its owner and mode, and the error.
 
 If the adapter fails to start or exits, the container and login shell stay
 available. The log shows the real error and the end of the adapter's stderr, and
@@ -327,8 +488,8 @@ A running Standard or Enhanced session can move to the other mode in the same
 container, keeping the agent's conversation:
 
 ```sh
-aether session switch <session-id> --mode enhanced
-aether session switch <session-id> --mode standard
+cloudfield session switch <session-id> --mode enhanced
+cloudfield session switch <session-id> --mode standard
 ```
 
 In the dashboard, **More → Switch to Enhanced…** (or **Switch to Standard…**)

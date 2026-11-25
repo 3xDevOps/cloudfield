@@ -92,6 +92,7 @@ func newFake(t *testing.T) *fakeServer {
 		protocol.MethodWorkspaceTimeline: returns(protocol.WorkspaceTimelineResult{}),
 		protocol.MethodWorkspaceList:     returns(protocol.WorkspaceListResult{Workspaces: []protocol.Workspace{{ID: "ws-1", Name: "api"}}}),
 		protocol.MethodRunChildren:       returns(protocol.RunChildrenResult{}),
+		protocol.MethodRunCloseCheck:     returns(protocol.RunCloseCheckResult{Runs: []protocol.RunCloseCheck{{RunID: "run-1"}}}),
 		protocol.MethodLaunchDefaultsGet: returns(protocol.LaunchDefaultsResult{}),
 		protocol.MethodAccountList: returns(protocol.AccountListResult{Accounts: []protocol.Member{{ID: "mem-me", DisplayName: "Me"},
 			{ID: "mem-ada", DisplayName: "Ada"}}}),
@@ -106,7 +107,7 @@ func connectorSession(t *testing.T, f *fakeServer, scopes ...Scope) *mcp.ClientS
 func callSession(t *testing.T, call Call, scopes ...Scope) *mcp.ClientSession {
 	t.Helper()
 	srv := mcp.NewServer(&mcp.Implementation{Name: "aether", Version: "v0"}, nil)
-	RegisterConnector(srv, call, func(s Scope) bool { return s == ScopeRead || slices.Contains(scopes, s) })
+	RegisterConnector(srv, call, func(s Scope) bool { return s == ScopeRead || slices.Contains(scopes, s) }, nil)
 	st, ct := mcp.NewInMemoryTransports()
 	if _, err := srv.Connect(t.Context(), st, nil); err != nil {
 		t.Fatal(err)
@@ -292,12 +293,12 @@ func TestConnectorToolList(t *testing.T) {
 		}
 	}
 	// An optional value may be sent empty for its default.
-	if want := map[string]string{"aether_launch_session.mode": ",tui,headless,acp", "aether_launch_session.children": ",on,off", "aether_launch_session.saved_defaults": ",apply,ignore", "aether_activity_summary.period": ",today,yesterday,week",
+	if want := map[string]string{"aether_launch_session.mode": ",tui,headless,acp", "aether_launch_session.children": ",on,off", "aether_launch_session.permission": ",root,default,isolated", "aether_launch_session.saved_defaults": ",apply,ignore", "aether_activity_summary.period": ",today,yesterday,week",
 		"aether_decide_approval.decision": "allow,deny", "aether_stop_session.outcome": ",merged,abandoned",
-		"aether_mark_reviewed.action": "complete,later", "aether_memory_search.kind": ",decision,convention,gotcha,preference,outcome",
+		"aether_mark_reviewed.action": "complete,later,not-yet", "aether_memory_search.kind": ",decision,convention,gotcha,preference,outcome",
 		"aether_memory_add.kind": "decision,convention,gotcha,preference", "aether_pr_merge.method": ",squash,merge,rebase",
 		"aether_session_lifecycle.action": "relaunch,protect,unprotect,archive,restore",
-		"aether_switch_session_mode.mode": "standard,enhanced"}; !maps.Equal(enums, want) {
+		"aether_switch_session_mode.mode": "standard,enhanced", "aether_decide_assistant_card.decision": "approve,decline"}; !maps.Equal(enums, want) {
 		t.Errorf("enums = %v, want %v", enums, want)
 	}
 	connectorTools := slices.DeleteFunc(slices.Clone(Ops), func(o Op) bool { return o.Scope == "" })
@@ -318,6 +319,7 @@ func TestConnectorToolList(t *testing.T) {
 		"aether_pr_create": {false, false, true}, "aether_pr_merge": {false, true, true},
 		"aether_memory_add": {false, false, false}, "aether_memory_pin": {false, false, false},
 		"aether_watch": {false, false, false}, "aether_unwatch": {false, true, false},
+		"aether_ask_assistant": {false, true, true}, "aether_decide_assistant_card": {false, true, true},
 	}
 	names := map[Scope][]string{}
 	for _, tool := range all {
@@ -394,9 +396,31 @@ func TestConnectorReadTools(t *testing.T) {
 		t.Fatalf("newest session first, cut to the limit = %q %v", text, out)
 	}
 
+	refused := testRun
+	refused.Mode, refused.RefusedModel, refused.ModelError = "acp", "claude-fable-5-2", "The agent refused \"claude-fable-5-2\", so the session runs on the agent's default model: "+injection
+	f.answers[protocol.MethodRunGet] = returns(protocol.RunResult{Run: refused})
+	_, out = run(t, cs, "aether_get_session", map[string]any{"run_id": "run-1"})
+	if launch := out["launch"].(map[string]any); launch["refused_model"] != "claude-fable-5-2" || launch["model"] != nil ||
+		!strings.HasPrefix(out["untrusted"].(map[string]any)["model_error"].(string), "The agent refused \"claude-fable-5-2\"") || strings.Contains(trusted(t, out), injection) {
+		t.Fatalf("aether_get_session of a refused model = %v", out)
+	}
+
+	waiter := testRun
+	waiter.WaitConditions = []protocol.WaitCondition{
+		{ID: "wait-1", Spec: "pr:o/r#7:checks", Kind: protocol.WaitKindPRChecks, Repo: "o/r", Number: 7, State: protocol.WaitPending,
+			Summary: injection, Detail: injection, LastError: injection, ConsecutiveFailures: 2},
+		{ID: "wait-0", Spec: "run:run-2:finished", Kind: protocol.WaitKindRunFinished, RunID: "run-2", State: protocol.WaitSuperseded},
+	}
+	f.answers[protocol.MethodRunGet] = returns(protocol.RunResult{Run: waiter})
 	text, out = run(t, cs, "aether_get_session", map[string]any{"run_id": "run:run-1"})
 	untrusted := out["untrusted"].(map[string]any)
-	if text != "Session run-1 is running on your account. The agent asks a question." || out["pr"].(map[string]any)["number"] != float64(7) ||
+	waits := out["wait_conditions"].([]any)
+	if out["run"].(map[string]any)["waiting_until"].([]any)[0] != "pr:o/r#7:checks" || len(waits) != 2 ||
+		waits[0].(map[string]any)["consecutive_failures"] != float64(2) ||
+		untrusted["wait_conditions"].([]any)[0].(map[string]any)["last_error"] != injection {
+		t.Fatalf("aether_get_session wait conditions = %v", out)
+	}
+	if text != "Session run-1 is running on your account. Waiting until pr:o/r#7:checks. The agent asks a question." || out["pr"].(map[string]any)["number"] != float64(7) ||
 		out["pr_error"] != "refresh pull request: gh: rate limited" || untrusted["latest_report"].(map[string]any)["summary"] != injection || untrusted["pr_title"] != injection ||
 		out["needs_you"].(map[string]any)["answer_with"] != "aether_answer" || strings.Contains(trusted(t, out), injection) {
 		t.Fatalf("aether_get_session of a search id = %q %v", text, out)
@@ -445,22 +469,65 @@ func TestConnectorReadTools(t *testing.T) {
 		out["truncated_before"] != true || out["note"] != historyExpired {
 		t.Fatalf("aether_session_history of an expired terminal = %q %v", text, out)
 	}
+	answers := f.answers[protocol.MethodWorkspaceTimeline]
+	f.answers[protocol.MethodWorkspaceTimeline] = timeline(t, reportEvent("run-1", "waiting", "first"), reportEvent("run-1", "waiting", "second"),
+		reportEvent("run-1", "waiting", "third"))
+	_, out = run(t, cs, "aether_session_history", map[string]any{"run_id": "run-1", "limit": 2})
+	var summaries []string
+	for _, rep := range out["untrusted"].(map[string]any)["reports"].([]any) {
+		summaries = append(summaries, rep.(map[string]any)["summary"].(string))
+	}
+	if want := []string{"third", "second"}; !slices.Equal(summaries, want) {
+		t.Fatalf("aether_session_history limit 2 reports = %v, want %v", summaries, want)
+	}
+	f.answers[protocol.MethodWorkspaceTimeline] = answers
 	f.answers[protocol.MethodRunGet] = returns(protocol.RunResult{Run: testRun})
 
 	text, out = run(t, cs, "aether_needs_attention", nil)
 	item := out["items"].([]any)[0].(map[string]any)
-	if text != "1 items need you, oldest first." || item["answer_id"] != "req-1" || item["reason"] != "The agent asks a question" ||
+	if text != "1 items need you, pending requests first, then oldest first." || item["answer_id"] != "req-1" || item["reason"] != "The agent asks a question" ||
 		item["untrusted"].(map[string]any)["text"] != "Which database?" || len(item["untrusted"].(map[string]any)["options"].([]any)) != 1 ||
 		strings.Contains(trusted(t, out), injection) {
 		t.Fatalf("aether_needs_attention = %q %v", text, out)
 	}
 	many := make([]protocol.AttentionItem, 45)
 	for i := range many {
-		many[i] = protocol.AttentionItem{Kind: protocol.AttentionKindFailed, RunID: fmt.Sprintf("run-%d", i)}
+		many[i] = protocol.AttentionItem{Kind: protocol.AttentionKindReady, RunID: fmt.Sprintf("run-%d", i)}
 	}
+	sudo := &protocol.AttentionRequest{ID: "sudo-1", Kind: "permission", Title: "Run as root in /tmp: kill 1", Options: []protocol.AttentionOption{
+		{ID: "allow-once", Label: "Allow once", Kind: "allow_once"}, {ID: "deny-once", Label: "Deny", Kind: "reject_once"}}}
+	for i, kind := range map[int]string{3: protocol.AttentionKindRoomQuestion, 10: protocol.AttentionKindQuestion, 20: protocol.AttentionKindQueuedMessage,
+		40: protocol.AttentionKindFailed, 44: protocol.AttentionKindPermission} {
+		many[i].Kind = kind
+	}
+	many[44].Request = sudo
 	f.answers[protocol.MethodAttentionList] = returns(protocol.AttentionListResult{Items: many})
-	if text, out = run(t, cs, "aether_needs_attention", nil); text != "30 of 45 items that need you, oldest first." || len(out["items"].([]any)) != 30 || out["total"] != float64(45) {
+	text, out = run(t, cs, "aether_needs_attention", nil)
+	items := out["items"].([]any)
+	if text != "Showing 30 of 45 items. 5 items need you, pending requests first, then oldest first. 40 finished sessions await review last; they are not blocking." ||
+		len(items) != 30 || out["total"] != float64(45) {
 		t.Fatalf("aether_needs_attention past the cap = %q", text)
+	}
+	want := []string{"run-3", "run-10", "run-20", "run-44", "run-40"}
+	for i := 0; len(want) < 30; i++ {
+		if !slices.Contains([]int{3, 10, 20, 40, 44}, i) {
+			want = append(want, fmt.Sprintf("run-%d", i))
+		}
+	}
+	var got []string
+	for _, it := range items {
+		got = append(got, it.(map[string]any)["run_id"].(string))
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("aether_needs_attention past the cap lists %v, want the pending requests oldest first, then the rest oldest first: %v", got, want)
+	}
+	if sudoRow := items[3].(map[string]any); sudoRow["answer_id"] != "sudo-1" || sudoRow["answer_with"] != "aether_decide_approval" {
+		t.Fatalf("the sudo request = %v, want it answered with aether_decide_approval", sudoRow)
+	}
+
+	f.answers[protocol.MethodAttentionList] = returns(protocol.AttentionListResult{Items: many[:2]})
+	if text, _ = run(t, cs, "aether_needs_attention", nil); text != "Nothing needs you. 2 finished sessions await review last; they are not blocking." {
+		t.Fatalf("aether_needs_attention with only finished sessions = %q", text)
 	}
 
 	f.answers[protocol.MethodInsightsGet] = func(raw json.RawMessage) (any, error) {
@@ -619,6 +686,19 @@ func TestConnectorLaunch(t *testing.T) {
 		t.Fatalf("the same launch with an empty mode = %v, want the agent's default mode", out)
 	}
 	delete(args, "mode")
+	refused := recent
+	refused.RefusedModel = "claude-fable-5-2"
+	f.answers[protocol.MethodRunList] = returns(protocol.RunListResult{Runs: []protocol.Run{refused}})
+	args["model"] = "claude-fable-5-2"
+	if _, out = run(t, cs, "aether_launch_session", args); out["duplicate"] != true {
+		t.Fatalf("the same launch after the agent refused its model = %v, want the first session", out)
+	}
+	args["model"] = "fable"
+	if _, out = run(t, cs, "aether_launch_session", args); out["run_id"] != "run-9" {
+		t.Fatalf("a retry with another model after a refusal = %v, want a new session", out)
+	}
+	delete(args, "model")
+	f.answers[protocol.MethodRunList] = returns(protocol.RunListResult{Runs: []protocol.Run{recent}})
 	for _, stopped := range []string{"failed", "interrupted", "abandoned"} {
 		recent.Status = stopped
 		f.answers[protocol.MethodRunList] = returns(protocol.RunListResult{Runs: []protocol.Run{recent}})
@@ -804,6 +884,35 @@ func TestConnectorMessage(t *testing.T) {
 	}
 }
 
+func TestConnectorMessageNotSentFailsWithTheReason(t *testing.T) {
+	f := newFake(t)
+	f.answers[protocol.MethodServerInfo] = returns(protocol.ServerInfoResult{DashboardURL: "https://aether.example", Member: protocol.Member{ID: "mem-bo"}})
+	cs := connectorSession(t, f, ScopeWrite)
+	f.answers[protocol.MethodRunInject] = returns(protocol.RunRoomPostResult{Message: protocol.RoomMessage{ID: "msg-1", State: protocol.RoomMessageNotSent,
+		Failure: &protocol.RoomMessageFailure{Code: "session_protected", Message: "the session was protected before delivery"}}})
+	text, _, failed := try(t, cs, "aether_message_session", map[string]any{"run_id": "run-1", "message": "use postgres", "idempotency_key": "m1"})
+	if !failed || !strings.Contains(text, "message to session run-1 was not sent (session_protected; the error is under untrusted.failure); unprotect it with aether_session_lifecycle") ||
+		!strings.Contains(text, "new idempotency_key, since m1 returns this refusal") ||
+		!strings.Contains(text, `"untrusted":{"failure":{"code":"session_protected","message":"the session was protected before delivery"}}`) {
+		t.Fatalf("a message the session refused = %q (failed %v), want a failed call with the reason", text, failed)
+	}
+
+	f.calls = nil
+	f.answers[protocol.MethodRunInject] = returns(protocol.RunRoomPostResult{Message: protocol.RoomMessage{ID: "msg-2", State: protocol.RoomMessageNotSent,
+		Failure: &protocol.RoomMessageFailure{Code: "unsupported_image", Message: "acphost: agent does not support image prompts"}}})
+	text, _, failed = try(t, cs, "aether_message_session", map[string]any{"run_id": "run-1", "message": "see the screenshot"})
+	if !failed || !strings.Contains(text, "(unsupported_image; the error is under untrusted.failure); drop the images; send it again") || strings.Contains(text, "idempotency_key") {
+		t.Fatalf("a keyless message the session refused = %q, want the hint without a key the caller never passed", text)
+	}
+	refusedKey := f.acted().params
+	f.calls = nil
+	f.answers[protocol.MethodRunInject] = returns(protocol.RunRoomPostResult{Message: protocol.RoomMessage{ID: "msg-3", State: protocol.RoomMessageSent}})
+	if text, _, failed := try(t, cs, "aether_message_session", map[string]any{"run_id": "run-1", "message": "see the screenshot"}); failed || strings.Contains(text, "within the last 60s") ||
+		f.acted().params == refusedKey {
+		t.Fatalf("resending a refused keyless message = %q (failed %v) with params %s, want a new send under a new key", text, failed, f.acted().params)
+	}
+}
+
 func TestConnectorAnswerAndDecide(t *testing.T) {
 	items := []protocol.AttentionItem{
 		{Kind: protocol.AttentionKindRoomQuestion, RunID: "run-2", WorkspaceID: "ws-1", Message: &protocol.AttentionMessage{ID: "rm-1", Body: "Ready?"}},
@@ -846,7 +955,7 @@ func TestConnectorAnswerAndDecide(t *testing.T) {
 		{"aether_answer", map[string]any{"run_id": "run-2", "answer_id": "gone", "answer": "x"}, "session run-2 has nothing pending for you with that answer_id; it may be answered already; call aether_needs_attention"},
 		{"aether_decide_approval", map[string]any{"run_id": "run-4", "answer_id": "req-4", "decision": "allow", "action": "Session rm"}, "action is not the pending request's untrusted.text word for word; call aether_needs_attention"},
 		{"aether_decide_approval", map[string]any{"run_id": "run-7", "answer_id": "req-7", "decision": "allow", "action": strings.Repeat("x", 600) + "…"},
-			"session run-7's request is longer than the connector shows; decide it in the Aether dashboard at https://aether.example/?run=run-7"},
+			"session run-7's request is longer than the connector shows; decide it in the Cloudfield dashboard at https://aether.example/?run=run-7"},
 		{"aether_decide_approval", map[string]any{"run_id": "run-3", "answer_id": "req-3", "decision": "allow", "action": ""}, "this item is a question, which is answered with aether_answer"},
 	} {
 		f.calls = nil
@@ -907,6 +1016,48 @@ func TestConnectorRunActions(t *testing.T) {
 	f.errs[protocol.MethodRunGet] = &protocol.Error{Code: protocol.CodeNotFound, Message: "session run-x not found"}
 	if text, _, _ := try(t, cs, "aether_get_session", map[string]any{"run_id": "run-x"}); text != "session run-x not found; call aether_list_sessions for session ids" {
 		t.Fatalf("an unknown session = %q", text)
+	}
+}
+
+// A close whose run.close_check has warnings is refused, naming them,
+// until the caller acknowledges them.
+func TestConnectorCloseNeedsAcknowledgment(t *testing.T) {
+	f := newFake(t)
+	f.answers[protocol.MethodRunClose] = returns(struct{}{})
+	f.answers[protocol.MethodRunKill] = returns(struct{}{})
+	f.answers[protocol.MethodRunReview] = returns(struct{}{})
+	ready := testRun
+	ready.Review = "ready"
+	f.answers[protocol.MethodRunGet] = returns(protocol.RunResult{Run: ready})
+	f.answers[protocol.MethodRunCloseCheck] = returns(protocol.RunCloseCheckResult{Runs: []protocol.RunCloseCheck{{RunID: "run-1", Warnings: []protocol.CloseWarning{
+		{Kind: protocol.CloseWarningPullRequest, Detail: "Pull request acme/api#7 is open, not merged", URL: "https://github.com/acme/api/pull/7"}}}}})
+	cs := connectorSession(t, f, ScopeWrite, ScopeControl)
+	for _, c := range []struct {
+		name   string
+		args   map[string]any
+		method string
+	}{
+		{"aether_stop_session", map[string]any{"run_id": "run-1", "outcome": "abandoned"}, protocol.MethodRunClose},
+		{"aether_stop_session", map[string]any{"run_id": "run-1"}, protocol.MethodRunKill},
+		{"aether_mark_reviewed", map[string]any{"run_id": "run-1", "action": "complete"}, protocol.MethodRunReview},
+	} {
+		f.calls = nil
+		text, _, failed := try(t, cs, c.name, c.args)
+		want := "closing session run-1 has warnings (pull_request), listed under untrusted.warnings; show them to the user, then retry with acknowledge true to close anyway\n" +
+			`{"untrusted":{"warnings":[{"kind":"pull_request","detail":"Pull request acme/api#7 is open, not merged","url":"https://github.com/acme/api/pull/7"}]}}`
+		if !failed || text != want {
+			t.Fatalf("%s without acknowledge = %q, want %q", c.name, text, want)
+		}
+		for _, call := range f.calls {
+			if call.scope != ScopeRead {
+				t.Fatalf("%s without acknowledge made %+v", c.name, call)
+			}
+		}
+		c.args["acknowledge"] = true
+		run(t, cs, c.name, c.args)
+		if got := f.acted(); got.method != c.method {
+			t.Errorf("%s with acknowledge called %+v, want %s", c.name, got, c.method)
+		}
 	}
 }
 

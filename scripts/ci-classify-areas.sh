@@ -1,19 +1,29 @@
 #!/bin/sh
-# Whether a pull request's changed paths can affect the web or go jobs.
+# Whether a pull request's changed paths can affect the web or go jobs,
+# whether a push to main changed what a CI cache key hashes, or whether a
+# change can affect the tests that boot VMs.
 #
-# usage: ci-classify-areas.sh web|go
+# usage: ci-classify-areas.sh web|go|caches|vm
 # stdin: newline-separated repo paths. Prints true or false.
-# web covers the dashboard checks and the browser end-to-end suite: the
-# dashboard source and everything that builds or serves it. go covers the
-# Go unit, lint, integration, agent, browser and smoke jobs: everything
-# except the dashboard source (web/ other than web/embed.go) and docs-only
-# changes. false only when at least one path is present and every path is
-# in the unrelated set for the mode. Empty input prints true. Blank lines
-# are ignored. A path in neither set prints true.
+# web covers the dashboard checks: the dashboard source and everything that
+# builds or serves it. go covers the Go unit and lint jobs: everything
+# except web/, docs/, android/ and root-level Markdown files, other than the
+# Go files there and the files Go code checks (web/public,
+# agent-glyph.tsx, docs/agents.md, docs/harnesses.md). caches covers every file a cache key in .github/ hashes, every
+# file the cached browser and standard image builds copy in, and .github/
+# itself, which names the keys; any other path is outside it. vm covers what
+# make test-kvm builds, boots or runs: the VM packages, every package the
+# guest helper compiles, the guest kernel, the KVM tests, the runtime
+# helpers the VM engine shares with Docker, the dependencies, the VM files
+# other packages name vm*.go or *_vm.go, vm.mk, kvm.yml and the vm install
+# command the job runs; any other path is outside it. false only when at
+# least one path is present and every path is in the unrelated set for the
+# mode. Empty input prints true. Blank lines are ignored. For web and go, a
+# path in neither set prints true.
 set -eu
 
 if [ "$#" -ne 1 ]; then
-	echo "usage: ci-classify-areas.sh web|go" >&2
+	echo "usage: ci-classify-areas.sh web|go|caches|vm" >&2
 	exit 2
 fi
 mode=$1
@@ -40,7 +50,9 @@ web() {
 
 go() {
 	case $1 in
-	web/embed.go | go.mod | go.sum | Makefile | scripts/ci-classify-* | \
+	web/*.go | docs/*.go | android/*.go | web/public/* | web/src/components/ui/agent-glyph.tsx | \
+		docs/agents.md | docs/harnesses.md | \
+		go.mod | go.sum | Makefile | scripts/ci-classify-* | \
 		.github/actions/* | .github/workflows/ci.yml)
 		return 0
 		;;
@@ -54,10 +66,37 @@ go() {
 	esac
 }
 
+caches() {
+	case $1 in
+	go.mod | go.sum | .golangci.yml | .github/* | images/* | web/public/fonts/* | web/src/fonts/* | \
+		web/package.json | web/bun.lock | web/.bun-version | \
+		desktop/package.json | desktop/package-lock.json | \
+		android/gradle/* | android/gradle.properties | android/*.gradle.kts)
+		return 0
+		;;
+	esac
+	return 1
+}
+
+vm() {
+	case $1 in
+	internal/runtime/vm/* | internal/guest/* | internal/vmimage/* | internal/ompbroker/* | images/kernel/* | \
+		internal/acpkeeper/* | internal/version/* | internal/devexec/* | internal/disk/* | internal/egress/* | \
+		internal/gitengine/* | internal/rootfs/* | internal/sysstats/* | \
+		internal/*/kvm*_test.go | internal/runtime/session.go | internal/runtime/stream.go | \
+		internal/runtime/managed_exec.go | internal/runtime/docker_image.go | internal/runtime/docker_cgroup.go | \
+		internal/*/vm*.go | internal/*/*_vm.go | internal/*/*_vm_test.go | go.mod | go.sum | \
+		vm.mk | .github/workflows/kvm.yml | cmd/aether-server/vm.go)
+		return 0
+		;;
+	esac
+	return 1
+}
+
 case $mode in
-web | go) ;;
+web | go | caches | vm) ;;
 *)
-	echo "usage: ci-classify-areas.sh web|go" >&2
+	echo "usage: ci-classify-areas.sh web|go|caches|vm" >&2
 	exit 2
 	;;
 esac

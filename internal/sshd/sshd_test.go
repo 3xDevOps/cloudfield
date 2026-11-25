@@ -346,6 +346,8 @@ func (p *fakePTY) setErr(err error) {
 
 type fakeRuns struct {
 	mu              sync.Mutex
+	held            []domain.RunID
+	loginProblem    string
 	err             error
 	addr            string
 	addrErr         error
@@ -370,10 +372,12 @@ type fakeRuns struct {
 	terminalAddrErr error
 	terminalStopErr error
 	calls           []string
-	launchOptions   []domain.LaunchOptions
-	paused          map[domain.RunID]bool
-	retentions      map[domain.RunID]scheduler.RetentionInfo
-	retentionErr    error
+	// revokes lists each RevokeAccount as owner:grantee.
+	revokes       []string
+	launchOptions []domain.LaunchOptions
+	paused        map[domain.RunID]bool
+	retentions    map[domain.RunID]scheduler.RetentionInfo
+	retentionErr  error
 	// sharedLaunches is what CheckSharedLaunch reports, keyed by
 	// "member:account:harness"; absent means launchable. sharedRefusals is
 	// the refusal it reports with the same key.
@@ -384,6 +388,9 @@ type fakeRuns struct {
 	acpPending     map[domain.RunID][]acphost.Request
 	sudo           map[domain.RunID][]domain.RunInputRequest
 	readImage      func(context.Context, domain.RunID, string) ([]byte, string, error)
+	// whileTerminalStopped, when set, runs inside WithStoppedTerminal
+	// before its callback.
+	whileTerminalStopped func()
 }
 
 func (f *fakeRuns) Retention(run *domain.Run) (scheduler.RetentionInfo, error) {
@@ -482,6 +489,10 @@ func (f *fakeRuns) FallbackLaunchable(context.Context, domain.MemberID, domain.M
 
 func (f *fakeRuns) DefaultMode(context.Context, domain.MemberID, domain.MemberID, string) (domain.LaunchMode, error) {
 	return domain.LaunchACP, nil
+}
+
+func (f *fakeRuns) LoginProblem(domain.MemberID, string, harness.Profile) (string, bool, error) {
+	return f.loginProblem, f.loginProblem != "", nil
 }
 
 func (f *fakeRuns) WakeRefusal(agent string, mode domain.LaunchMode) error {
@@ -603,6 +614,18 @@ func (f *fakeRuns) Kill(_ context.Context, run domain.RunID, actor domain.Member
 	return f.record(fmt.Sprintf("kill:%s:%s", run, actor))
 }
 
+func (f *fakeRuns) RevokeAccount(owner, grantee domain.MemberID) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.revokes = append(f.revokes, string(owner)+":"+string(grantee))
+}
+
+func (f *fakeRuns) Revokes() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.revokes)
+}
+
 func (f *fakeRuns) Release(_ context.Context, run domain.RunID, actor domain.MemberID) error {
 	return f.record(fmt.Sprintf("release:%s:%s", run, actor))
 }
@@ -681,6 +704,20 @@ func (f *fakeRuns) Paused(run domain.RunID) bool {
 	defer f.mu.Unlock()
 	return f.paused[run]
 }
+
+func (f *fakeRuns) Sleep(domain.RunID) scheduler.SleepState { return scheduler.SleepState{} }
+
+func (f *fakeRuns) WakeRun(context.Context, domain.RunID, domain.MemberID) error { return nil }
+func (f *fakeRuns) SettleSleep(context.Context, domain.RunID) error              { return nil }
+
+func (f *fakeRuns) HoldRunAwake(_ context.Context, run domain.RunID) (func(), error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.held = append(f.held, run)
+	return func() {}, nil
+}
+
+func (f *fakeRuns) NoteTyping(domain.RunID) {}
 
 func (f *fakeRuns) Cause(domain.RunID, domain.RunActivity) events.RunStatusCause { return "" }
 func (f *fakeRuns) Wait(domain.RunID, domain.RunActivity) *domain.RunWait        { return nil }
@@ -772,48 +809,6 @@ func (f *fakeRuns) Relaunch(ctx context.Context, run domain.RunID, actor domain.
 	}, nil
 }
 
-type fakeShellReservation struct {
-	f    *fakeRuns
-	run  domain.RunID
-	tab  string
-	mu   sync.Mutex
-	done bool
-}
-
-func (r *fakeShellReservation) Generation() uint64 {
-	return 1
-}
-
-func (r *fakeShellReservation) Adopt() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.done {
-		return
-	}
-	r.done = true
-}
-
-func (r *fakeShellReservation) Rollback(_ context.Context) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.done {
-		return nil
-	}
-	r.done = true
-	return r.f.record(fmt.Sprintf("run-shell-stop:%s:%s", r.run, r.tab))
-}
-
-func (f *fakeRuns) EnsureRunShellTabReserved(_ context.Context, run domain.RunID, tab string, cols, rows uint) (ptyhost.ShellTabReservation, error) {
-	if err := f.record(fmt.Sprintf("run-shell:%s:%s:%d:%d", run, tab, cols, rows)); err != nil {
-		return nil, err
-	}
-	return &fakeShellReservation{f: f, run: run, tab: tab}, nil
-}
-
-func (f *fakeRuns) EnsureRunShellTab(_ context.Context, run domain.RunID, tab string, cols, rows uint) error {
-	return f.record(fmt.Sprintf("run-shell:%s:%s:%d:%d", run, tab, cols, rows))
-}
-
 func (f *fakeRuns) StopRunShellTab(_ context.Context, run domain.RunID, tab string) error {
 	return f.record(fmt.Sprintf("run-shell-stop:%s:%s", run, tab))
 }
@@ -859,9 +854,14 @@ func (f *fakeRuns) StopTerminal(_ context.Context, member domain.MemberID) error
 	return f.terminalStopErr
 }
 
+func (f *fakeRuns) ForgetOMPAccount(context.Context, domain.MemberID) {}
+
 func (f *fakeRuns) WithStoppedTerminal(ctx context.Context, member domain.MemberID, afterStop func() error) error {
 	if err := f.StopTerminal(ctx, member); err != nil {
 		return err
+	}
+	if f.whileTerminalStopped != nil {
+		f.whileTerminalStopped()
 	}
 	return afterStop()
 }
@@ -952,9 +952,12 @@ func (f *fakeRuns) ProbeGitHubCLI(_ context.Context, member domain.MemberID) (do
 func (f *fakeRuns) HoldShell() func() { return func() {} }
 
 type testEnv struct {
-	srv         *Server
-	addr        string
-	store       store.Store
+	srv   *Server
+	addr  string
+	store store.Store
+	// db is the store under the test's view of it: store is
+	// storetest.Unscoped unless the env was built by newScopedTestEnv.
+	db          *store.DB
 	bus         events.Bus
 	git         *fakeGit
 	pty         *fakePTY
@@ -966,6 +969,23 @@ type testEnv struct {
 	serveCancel context.CancelFunc
 	// joinSecrets maps an invitation id to the join secret of its link.
 	joinSecrets *sync.Map
+}
+
+// testDBOK is the *store.DB behind a Config's Store, through
+// storetest.Unscoped.
+func testDBOK(st store.Store) (*store.DB, bool) {
+	switch v := st.(type) {
+	case *store.DB:
+		return v, true
+	case storetest.Unscoped:
+		return v.DB, true
+	}
+	return nil, false
+}
+
+func testDB(st store.Store) *store.DB {
+	db, _ := testDBOK(st)
+	return db
 }
 
 func newSigner(t *testing.T) ssh.Signer {
@@ -989,15 +1009,26 @@ func newTestEnv(t *testing.T, mod func(*Config)) *testEnv {
 // newFreshTestEnv uses an unseeded store, for bootstrap tests.
 func newFreshTestEnv(t *testing.T, mod func(*Config)) *testEnv {
 	t.Helper()
-	return buildTestEnv(t, mod, newSigner(t), false)
+	return buildTestEnv(t, mod, newSigner(t), false, false)
 }
 
 func newTestEnvWithSigner(t *testing.T, mod func(*Config), signer ssh.Signer) *testEnv {
 	t.Helper()
-	return buildTestEnv(t, mod, signer, true)
+	return buildTestEnv(t, mod, signer, true, false)
 }
 
-func buildTestEnv(t *testing.T, mod func(*Config), signer ssh.Signer, seed bool) *testEnv {
+// newScopedTestEnv is newTestEnv with workspace-scoped access enforced:
+// members reach only the workspaces they own or were granted. The seeded
+// member is a super admin.
+func newScopedTestEnv(t *testing.T, mod func(*Config)) *testEnv {
+	t.Helper()
+	return buildTestEnv(t, mod, newSigner(t), true, true)
+}
+
+// buildTestEnv builds a server on a fresh store. Unless scoped, the server
+// sees it through storetest.Unscoped, so tests written before workspace
+// access existed keep every member reaching every workspace.
+func buildTestEnv(t *testing.T, mod func(*Config), signer ssh.Signer, seed, scoped bool) *testEnv {
 	t.Helper()
 	ctx := context.Background()
 	dir := t.TempDir()
@@ -1012,8 +1043,13 @@ func buildTestEnv(t *testing.T, mod func(*Config), signer ssh.Signer, seed bool)
 	}
 	t.Cleanup(func() { _ = bus.Close() })
 
+	var view store.Store = storetest.Unscoped{DB: db}
+	if scoped {
+		view = db
+	}
 	e := &testEnv{
-		store:       db,
+		store:       view,
+		db:          db,
 		bus:         bus,
 		git:         &fakeGit{},
 		pty:         &fakePTY{resumeID: "fake-pty"},
@@ -1028,6 +1064,9 @@ func buildTestEnv(t *testing.T, mod func(*Config), signer ssh.Signer, seed bool)
 			PublicKey:   string(ssh.MarshalAuthorizedKey(e.signer.PublicKey())),
 			Color:       "#e6194b",
 			Role:        domain.RoleAdmin,
+		}
+		if scoped {
+			e.member.Role = domain.RoleSuperAdmin
 		}
 		if cerr := db.CreateMember(ctx, e.member); cerr != nil {
 			t.Fatalf("create member: %v", cerr)
@@ -1049,7 +1088,7 @@ func buildTestEnv(t *testing.T, mod func(*Config), signer ssh.Signer, seed bool)
 	cfg := Config{
 		Addr:        "127.0.0.1:0",
 		HostKeyPath: filepath.Join(dir, "ssh", "host_ed25519_key"),
-		Store:       db,
+		Store:       view,
 		Bus:         bus,
 		Git:         e.git,
 		PTY:         e.pty,

@@ -22,7 +22,7 @@ const localCaps: GatewayCapabilities = {
   gateway: 'local',
   methods: ['*'],
   ws: ['events', 'attach', 'terminal'],
-  local: ['link.status', 'link.repo', 'env.agents'],
+  local: ['link.status', 'link.repo'],
 }
 
 function seed(caps: GatewayCapabilities = localCaps) {
@@ -91,6 +91,7 @@ function attachMainTab(): EnvTerminalSocket {
     setControl: vi.fn(),
     requestTakeover: vi.fn(() => false),
     isEnded: vi.fn(() => false),
+    mayHoldControl: vi.fn(() => false),
     close: vi.fn(),
   }
   useStore.getState().resetEnvTerminal()

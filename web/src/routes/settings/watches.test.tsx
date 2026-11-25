@@ -2,7 +2,7 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { toast } from 'sonner'
 import { WatchDialog } from '@/components/palette/watch-dialog'
-import type { Event, Watch, WatchDelivery, WatchNotification } from '@/lib/types'
+import type { Event, Watch, WatchDelivery, WatchNotification, NotifyPrefs, NotifyPrefsSetParams } from '@/lib/types'
 import { ApiError, codeNotFound, codeUnavailable } from '@/lib/api'
 import { SettingsRoute } from '@/routes/settings'
 import { WatchNotifySection } from '@/routes/settings/notifications'
@@ -119,7 +119,7 @@ describe('watches in settings', () => {
     const user = userEvent.setup()
     const { rerender } = showSettings([watch()], {
       watchGet: vi.fn(async () => ({
-        watch: watch({ source: 'assistant' }),
+        watch: watch({ source: 'assistant', relay_to: ['run-b'] }),
         notifications: [
           notice,
           {
@@ -134,6 +134,15 @@ describe('watches in settings', () => {
           { ...notice, id: 'not-c', title: 'Broken', deliveries: [at('push', 'failed', '410 Gone from fcm.googleapis.com')] },
           { ...notice, id: 'not-e', title: 'Skipped', deliveries: [at('push', 'skipped', 'The session notification already sent it'), at('assistant', 'delivered')] },
           { ...notice, id: 'not-f', title: 'Withdrawn', deliveries: [at('push', 'withdrawn')] },
+          {
+            ...notice,
+            id: 'not-g',
+            title: 'Relayed',
+            deliveries: [
+              { ...at('relay', 'delivered', "Written to the session's inbox"), run_id: 'run-b' },
+              { ...at('relay', 'failed', 'Not relayed: you may not write to session run-c'), run_id: 'run-c' },
+            ],
+          },
         ],
       })),
     })
@@ -153,6 +162,9 @@ describe('watches in settings', () => {
     expect(within(dialog).getByText('Push skipped: The session notification already sent it')).toBeDefined()
     expect(within(dialog).getByText('In the assistant chat')).toBeDefined()
     expect(within(dialog).getByText('Push withdrawn from your devices: the need ended')).toBeDefined()
+    expect(within(dialog).getByRole('button', { name: 'run-b' })).toBeDefined()
+    expect(within(dialog).getByText("Relayed to run-b: Written to the session's inbox")).toBeDefined()
+    expect(within(dialog).getByText('Relay to run-c failed: Not relayed: you may not write to session run-c')).toBeDefined()
     await user.click(within(dialog).getByRole('button', { name: 'Open session' }))
     expect(useStore.getState().route).toEqual({ name: 'run', params: { runId: fixRun.id } })
   })
@@ -437,8 +449,8 @@ describe('watch notification preferences', () => {
   it('states the destinations and saves the push toggle with the quiet hours it keeps', async () => {
     const user = userEvent.setup()
     const client = fakeApi({
-      notifyPrefsGet: vi.fn(async () => ({ push: true, destinations: { push_devices: 2 } })),
-      notifyPrefsSet: vi.fn(async (prefs) => ({ push: prefs.push ?? true, quiet_hours: prefs.quiet_hours, destinations: { push_devices: 2 } })),
+      notifyPrefsGet: vi.fn(async () => ({ push: true, level: 'batched' as const, digest: { at: '09:00', tz: '' }, destinations: { push_devices: 2 } })),
+      notifyPrefsSet: vi.fn(async (prefs) => ({ push: prefs.push ?? true, level: prefs.level ?? 'batched', digest: prefs.digest ?? { at: '09:00', tz: '' }, quiet_hours: prefs.quiet_hours, destinations: { push_devices: 2 } })),
     })
     render(<WatchNotifySection client={client} />)
     expect(await screen.findByText(/Push to 2 devices · the desktop app while it is open · in-app on every dashboard/)).toBeDefined()
@@ -447,14 +459,14 @@ describe('watch notification preferences', () => {
     expect(await screen.findByText(/Push is off/)).toBeDefined()
   })
 
-  it('says in-app only with no push device, and quiet hours default to this browser’s time zone', async () => {
+  it('says when no push device is subscribed, and quiet hours default to this browser’s time zone', async () => {
     const user = userEvent.setup()
     const client = fakeApi({
-      notifyPrefsGet: vi.fn(async () => ({ push: true, destinations: { push_devices: 0 } })),
-      notifyPrefsSet: vi.fn(async (prefs) => ({ push: prefs.push ?? true, quiet_hours: prefs.quiet_hours, destinations: { push_devices: 0 } })),
+      notifyPrefsGet: vi.fn(async () => ({ push: true, level: 'batched' as const, digest: { at: '09:00', tz: '' }, destinations: { push_devices: 0 } })),
+      notifyPrefsSet: vi.fn(async (prefs) => ({ push: prefs.push ?? true, level: prefs.level ?? 'batched', digest: prefs.digest ?? { at: '09:00', tz: '' }, quiet_hours: prefs.quiet_hours, destinations: { push_devices: 0 } })),
     })
     render(<WatchNotifySection client={client} />)
-    expect(await screen.findByText(/No push device subscribed, so in-app only/)).toBeDefined()
+    expect(await screen.findByText(/No push device subscribed · the desktop app/)).toBeDefined()
     await user.click(screen.getByRole('checkbox', { name: 'Quiet hours' }))
     const zone = Intl.DateTimeFormat().resolvedOptions().timeZone
     expect(client.notifyPrefsSet).toHaveBeenCalledWith({ quiet_hours: { start: '22:00', end: '07:00', tz: zone } })
@@ -464,31 +476,62 @@ describe('watch notification preferences', () => {
   it('tells a server without Web Push apart from no device, and shows a quiet-hours error on that row', async () => {
     const user = userEvent.setup()
     const client = fakeApi({
-      notifyPrefsGet: vi.fn(async () => ({ push: true, destinations: { push_devices: 0 } })),
+      notifyPrefsGet: vi.fn(async () => ({ push: true, level: 'batched' as const, digest: { at: '09:00', tz: '' }, destinations: { push_devices: 0 } })),
       notifyPrefsSet: vi.fn(async () => { throw new Error('notify.prefs.set: unknown time zone "Mars/Olympus"') }),
       pushStatus: vi.fn(async () => { throw new ApiError(503, 'push service not configured', codeUnavailable) }),
     })
     render(<WatchNotifySection client={client} />)
-    expect(await screen.findByText(/No push \(push service not configured\), so in-app only/)).toBeDefined()
+    expect(await screen.findByText(/No push \(push service not configured\) · the desktop app/)).toBeDefined()
     await user.click(screen.getByRole('checkbox', { name: 'Quiet hours' }))
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('unknown time zone')
     expect(alert.closest('#quiet-hours')).not.toBeNull()
   })
 
+  it('describes every level, and saves the level and the digest time in the saved zone, keeping quiet hours', async () => {
+    const user = userEvent.setup()
+    const quiet = { start: '22:00', end: '07:00', tz: 'Europe/Berlin' }
+    const browser = Intl.DateTimeFormat().resolvedOptions().timeZone
+    // A saved zone this browser is not in, so it offers to switch.
+    const away = browser === 'Pacific/Auckland' ? 'America/Lima' : 'Pacific/Auckland'
+    let saved: NotifyPrefs = { push: true, level: 'batched', digest: { at: '09:00', tz: away }, quiet_hours: quiet, destinations: { push_devices: 0 } }
+    const client = fakeApi({
+      notifyPrefsGet: vi.fn(async () => saved),
+      notifyPrefsSet: vi.fn(async (p: NotifyPrefsSetParams) => (saved = { ...saved, level: p.level ?? saved.level, digest: p.digest ?? saved.digest, quiet_hours: p.quiet_hours })),
+    })
+    render(<WatchNotifySection client={client} />)
+    expect(await screen.findByRole('radio', { name: /^Blockers now, the rest every half hour.*\(default\)$/ })).toBeDefined()
+    expect(screen.getByText(/in one digest daily at 09:00/)).toBeDefined()
+    expect(screen.getByText(/in a digest on each half hour/)).toBeDefined()
+    expect(screen.getByText(/No device receives pushes yet; this takes effect once one does/)).toBeDefined()
+    await user.click(screen.getByRole('radio', { name: 'Blockers now, the rest daily' }))
+    // notify.prefs.set turns quiet hours off when they are left out.
+    expect(client.notifyPrefsSet).toHaveBeenCalledWith({ level: 'blockers', quiet_hours: quiet })
+    const time = await screen.findByLabelText(`Daily digest at (${away})`)
+    await user.clear(time)
+    await user.type(time, '08:30')
+    await user.click(screen.getByRole('button', { name: 'Save digest time' }))
+    expect(client.notifyPrefsSet).toHaveBeenLastCalledWith({ digest: { at: '08:30', tz: away }, quiet_hours: quiet })
+    // An edited, unsaved time goes along with the zone.
+    await user.clear(time)
+    await user.type(time, '07:15')
+    await user.click(screen.getByRole('button', { name: `Use this browser’s zone (${browser})` }))
+    expect(client.notifyPrefsSet).toHaveBeenLastCalledWith({ digest: { at: '07:15', tz: browser }, quiet_hours: quiet })
+  })
+
   it('re-reads the device count when this device subscribes', async () => {
-    const notifyPrefsGet = vi.fn(async () => ({ push: true, destinations: { push_devices: 0 } }))
+    const notifyPrefsGet = vi.fn(async () => ({ push: true, level: 'batched' as const, digest: { at: '09:00', tz: '' }, destinations: { push_devices: 0 } }))
     const client = fakeApi({ notifyPrefsGet })
     const view = render(<WatchNotifySection client={client} subscriptions={0} />)
     expect(await screen.findByText(/No push device subscribed/)).toBeDefined()
-    notifyPrefsGet.mockResolvedValue({ push: true, destinations: { push_devices: 1 } })
+    notifyPrefsGet.mockResolvedValue({ push: true, level: 'batched' as const, digest: { at: '09:00', tz: '' }, destinations: { push_devices: 1 } })
     view.rerender(<WatchNotifySection client={client} subscriptions={1} />)
     expect(await screen.findByText(/Push to 1 device ·/)).toBeDefined()
   })
 
   it('does not claim the server lacks Web Push when push.status fails for another reason', async () => {
     const client = fakeApi({
-      notifyPrefsGet: vi.fn(async () => ({ push: true, destinations: { push_devices: 2 } })),
+      notifyPrefsGet: vi.fn(async () => ({ push: true, level: 'batched' as const, digest: { at: '09:00', tz: '' }, destinations: { push_devices: 2 } })),
       pushStatus: vi.fn(async () => { throw new Error('network down') }),
     })
     render(<WatchNotifySection client={client} />)

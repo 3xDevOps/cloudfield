@@ -81,7 +81,12 @@ func (e *Engine) RunPatch(ctx context.Context, run domain.RunID, req PatchReques
 	ctx, cancel := context.WithTimeout(ctx, snapshotTimeout)
 	defer cancel()
 
-	patch, err := e.renderPatch(ctx, run, checkout, req, maxBytes)
+	var patch Patch
+	if meta, metaErr := e.readRunMeta(run); metaErr == nil && meta.VM {
+		patch, err = e.vmPatch(ctx, run, checkout, req, maxBytes)
+	} else {
+		patch, err = e.renderPatch(ctx, run, checkout, req, maxBytes)
+	}
 	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		// A git killed by the deadline reports "signal: killed", not the
 		// deadline.
@@ -143,7 +148,7 @@ func (e *Engine) livePatch(ctx context.Context, run domain.RunID, checkout, base
 		return Patch{}, fmt.Errorf("gitengine: scratch index for session %s: %w", run, err)
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
-	index, err := scratchIndex(dir, checkout, run)
+	index, err := e.scratchIndex(dir, checkout, run)
 	if err != nil {
 		return Patch{}, err
 	}
@@ -296,7 +301,7 @@ func (e *Engine) snapshotPatch(ctx context.Context, store, from, to string, maxB
 	if err != nil {
 		return Patch{}, err
 	}
-	text, truncated, err := e.gitBareBoundedEnv(ctx, store, append(gitEnv(), "GIT_ATTR_SOURCE="+emptyTree), maxBytes,
+	text, truncated, err := e.gitBareBoundedEnv(ctx, store, append(e.gitEnv(), "GIT_ATTR_SOURCE="+emptyTree), maxBytes,
 		"diff", "--no-ext-diff", "--no-textconv", "--no-color", "--no-renames", from, to, "--")
 	if err != nil {
 		return Patch{}, err

@@ -5,7 +5,7 @@
 request, time spent, tokens and cost. The server computes the numbers from its
 own database, and nothing is sent anywhere else.
 
-A **session** is one agent working on one task in its own container.
+A **session** is one agent working on one task in its own sandbox.
 
 ## What the page shows
 
@@ -19,7 +19,7 @@ chart. Below them:
 | Section | What it shows |
 | --- | --- |
 | Sessions completed | How many ended, plus how many failed or were abandoned |
-| Success rate | Share of finished sessions that merged a pull request |
+| Success rate | Share of finished sessions that merged a pull request or were marked complete |
 | Total tokens used | Tokens across all sessions, and the agent that used the most |
 | Finished work | Your sessions that ended in the last 7 days, newest first, up to 50 |
 | Last 26 weeks | A heatmap of how many sessions were active each day |
@@ -53,15 +53,15 @@ A session you stop yourself is abandoned.
 
 ## Success rate
 
-A session succeeds when its status is `merged` or a pull request it opened is merged.
+A session succeeds when its status is `merged`, a pull request it opened is merged, or its owner chose **Mark complete**.
 
-Only pull requests opened through Aether count. A pull request an agent opens
-with `gh` directly is not counted. A merge is counted only after Aether has
-seen it. On load, the page checks up to 10 open pull requests from your
-finished sessions against GitHub, so a pull request merged after its session finished
-appears within a moment. An older one can stay `open` until its session's pull
-request status is read again. If GitHub cannot be read, the row shows
-`Could not refresh this pull request: <error>`.
+Only pull requests opened through Cloudfield count. A pull request an agent
+opens with `gh` directly is not counted. A merge is counted only after
+Cloudfield has seen it. On load, the page checks up to 10 open pull requests
+from your finished sessions against GitHub, so a pull request merged after its
+session finished appears within a moment. An older one can stay `open` until its
+session's pull request status is read again. If GitHub cannot be read, the row
+shows `Could not refresh this pull request: <error>`.
 
 ## Time
 
@@ -89,8 +89,8 @@ Every other session, Standard sessions included, is listed as not reporting toke
 its cost is unknown, not zero, so cost and token figures are a floor. When some
 sessions are unmetered the page says `at least $X`.
 
-An Enhanced agent reports the running cost of its session. Aether charges what
-each report adds, with the tokens of that turn. A restored session, a new
+An Enhanced agent reports the running cost of its session. Cloudfield charges
+what each report adds, with the tokens of that turn. A restored session, a new
 session or Claude Code's `/clear` neither counts spend twice nor drops it, and
 spend the server had not recorded when it stopped counts with the agent's next
 report.
@@ -111,28 +111,37 @@ it. The Activity tab is the 7-day history above; System is live.
   `Live · every 5s`, `Paused while this tab is hidden`, or the error of the
   last failed poll; the last data stays on screen, dimmed.
 - **Tiles.** CPU busy (user, system, I/O wait and steal), memory used,
-  the data filesystem, network, running containers, and pressure when the
+  the data filesystem, network, running sandboxes, and pressure when the
   kernel reports it. Pressure is the share of the last 10 seconds some task
   waited for CPU, memory or I/O.
 - **Resources by session.** A donut of CPU or memory use. Each of up to five
-  containers using at least 2% of the host gets a slice; the rest are one
+  sandboxes using at least 2% of the host gets a slice; the rest are one
   **Other sessions** slice. **Everything else** is host use outside the listed
-  containers: the Aether server, Docker, host processes and containers you
+  sandboxes: the Cloudfield server, Docker, host processes and sandboxes you
   cannot see. Click a slice or its legend entry to filter the ranked list to
-  it; click again or **Show all** to clear. The list ranks every container
+  it; click again or **Show all** to clear. The list ranks every sandbox
   by use, with its limit, **near limit** from 80% of that limit, **throttled**
   when CPU is capped, and a 15-minute trend. A session's browser is its own row,
   with its own limits. A row opens its session, or your own Environment.
+  With `session-runtime vm`, a sandbox's memory is two figures. The donut,
+  the ranking, the trend and the row's first line (`4.8 GB · 30% of host`)
+  are what its VM holds of the host's memory, which includes the VM's own
+  kernel and file cache. The second line (`2.0 GB of 8.0 GB limit`)
+  and the bar are what runs inside the VM, against the limit a process
+  there is killed at. A VM session's browser runs inside its VM, so it is
+  in both figures.
 - **History.** CPU, memory, load average, pressure, network and disk I/O.
-- **Storage.** The data filesystem, Aether data by category, Docker storage,
+- **Storage.** The data filesystem, Cloudfield data by category, Docker storage,
   container writable layers and, for admins, the largest storage owners.
 
 The server reads host figures from `/proc` and `/sys` every 5 seconds and
-keeps one hour. Container figures come from Docker's per-container stats and
-are sampled only while someone has the System tab open. Admins see every
-container; members see their own, and the rest counts toward **Everything
-else**. The tab reads `This server does not report system stats. Update the
-server to see them.` when the server is too old.
+keeps one hour. Sandbox figures come from Docker's per-container stats, and
+with `session-runtime vm` from inside each VM and, for the memory it holds
+of the host, from its unit's cgroup. They are sampled only while
+someone has the System tab open. Admins see every sandbox; members see their
+own, and the rest counts toward **Everything else**. The tab reads `This server
+does not report system stats. Update the server to see them.` when the server
+is too old.
 
 ## Limits
 
@@ -141,7 +150,7 @@ server to see them.` when the server is too old.
 - Time worked, time waiting and pull requests are recorded only from the day
   your server was upgraded to a version that records them. Earlier sessions are
   left out of those numbers, and the page says
-  `Aether records this from <date> on` when only some sessions are measured.
+  `Cloudfield records this from <date> on` when only some sessions are measured.
 - Deleting a session removes it from these statistics.
 - The tiles read `This server does not report insights. Update the server to
   see them.` when the server is too old.

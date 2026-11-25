@@ -80,13 +80,28 @@ func readHost(procRoot, sysRoot string, at time.Time) (hostReading, error) {
 		return r, err
 	}
 	for i, name := range [...]string{"cpu", "memory", "io"} {
-		v, err := readPressure(filepath.Join(procRoot, "pressure", name))
+		v, err := readPressure(filepath.Join(procRoot, "pressure", name), "some", "avg10")
 		if err != nil {
 			return r, err
 		}
 		r.pressure[i] = v
 	}
 	return r, nil
+}
+
+// MemoryAvailable is the host's MemAvailable from /proc/meminfo.
+func MemoryAvailable() (uint64, error) {
+	_, available, err := HostMemory("/proc")
+	return available, err
+}
+
+// HostMemory is MemTotal and MemAvailable from procRoot's meminfo.
+func HostMemory(procRoot string) (total, available uint64, err error) {
+	var r hostReading
+	if err := r.readMeminfo(procRoot); err != nil {
+		return 0, 0, err
+	}
+	return r.info.MemoryTotalBytes, r.sample.MemoryAvailableBytes, nil
 }
 
 func readProc(path string) ([]byte, error) {
@@ -269,9 +284,53 @@ func (r *hostReading) readDisk(procRoot, sysRoot string) error {
 	return nil
 }
 
-// readPressure returns nil when the kernel has no pressure file. A kernel
-// booted with psi=0 keeps the files but fails reads with EOPNOTSUPP.
-func readPressure(path string) (*float64, error) {
+// CgroupMemoryPressure is the percentage of the last 60 seconds in which at
+// least one task of the cgroup v2 directory dir stalled on memory
+// (memory.pressure, "some avg60"). It is nil when the kernel does not expose
+// pressure for that cgroup.
+func CgroupMemoryPressure(dir string) (*float64, error) {
+	return readPressure(filepath.Join(dir, "memory.pressure"), "some", "avg60")
+}
+
+// CgroupWorkingSet is the cgroup v2 directory dir's memory.current less its
+// inactive_file, as the kubelet and docker stats count a container's.
+func CgroupWorkingSet(dir string) (uint64, error) {
+	current, err := os.ReadFile(filepath.Join(dir, "memory.current"))
+	if err != nil {
+		return 0, err
+	}
+	n, err := strconv.ParseUint(strings.TrimSpace(string(current)), 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("parse memory.current: %w", err)
+	}
+	stat, err := os.ReadFile(filepath.Join(dir, "memory.stat"))
+	if err != nil {
+		return 0, err
+	}
+	for line := range strings.SplitSeq(string(stat), "\n") {
+		if v, ok := strings.CutPrefix(line, "inactive_file "); ok {
+			inactive, err := strconv.ParseUint(strings.TrimSpace(v), 10, 64)
+			if err != nil {
+				return 0, fmt.Errorf("parse memory.stat: %w", err)
+			}
+			return n - min(inactive, n), nil
+		}
+	}
+	return 0, errors.New("memory.stat has no inactive_file")
+}
+
+// HostMemoryStall is the percentage of the last 10 seconds in which every
+// non-idle task on the host stalled on memory at once (procRoot's
+// pressure/memory, "full avg10"), the figure systemd-oomd acts on. It is nil
+// when the kernel does not expose pressure.
+func HostMemoryStall(procRoot string) (*float64, error) {
+	return readPressure(filepath.Join(procRoot, "pressure", "memory"), "full", "avg10")
+}
+
+// readPressure returns the avg field (avg10, avg60) of the "some" or "full"
+// line, or nil when the kernel has no pressure file. A kernel booted with
+// psi=0 keeps the files but fails reads with EOPNOTSUPP.
+func readPressure(path, kind, avg string) (*float64, error) {
 	b, err := os.ReadFile(path)
 	if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.EOPNOTSUPP) {
 		return nil, nil
@@ -281,11 +340,11 @@ func readPressure(path string) (*float64, error) {
 	}
 	for line := range strings.SplitSeq(string(b), "\n") {
 		f := strings.Fields(line)
-		if len(f) < 2 || f[0] != "some" {
+		if len(f) < 2 || f[0] != kind {
 			continue
 		}
 		for _, field := range f[1:] {
-			if v, ok := strings.CutPrefix(field, "avg10="); ok {
+			if v, ok := strings.CutPrefix(field, avg+"="); ok {
 				p, err := strconv.ParseFloat(v, 64)
 				if err != nil {
 					return nil, fmt.Errorf("parse %s: %w", path, err)
@@ -294,7 +353,7 @@ func readPressure(path string) (*float64, error) {
 			}
 		}
 	}
-	return nil, fmt.Errorf("parse %s: no \"some avg10=\" line", path)
+	return nil, fmt.Errorf("parse %s: no \"%s %s=\" line", path, kind, avg)
 }
 
 // sampleSince turns two readings into one interval. A counter that went backwards

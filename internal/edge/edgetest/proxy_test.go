@@ -45,7 +45,9 @@ type proxy struct {
 }
 
 type controlLink struct {
-	serverID    string
+	serverID string
+	// host is the host the agent dialed, which picks the relay origin.
+	host        string
 	agent, edge *websocket.Conn
 }
 
@@ -86,6 +88,14 @@ func (p *proxy) handler(backAddr string) http.Handler {
 		if route != nil {
 			r.URL.Path = route(r.URL.Path)
 		}
+		// The transport may still be reading the request body when the
+		// edge's answer arrives; a server that is not full duplex closes
+		// the body once the answer starts, which fails that read and
+		// drops the connection mid-answer.
+		if err := http.NewResponseController(w).EnableFullDuplex(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 		rp.ServeHTTP(w, r)
 	})
 }
@@ -118,7 +128,7 @@ func (p *proxy) serveControl(w http.ResponseWriter, r *http.Request, backAddr st
 	for _, c := range []*websocket.Conn{edgeWS, agentWS} {
 		c.SetReadLimit(edgeproto.MaxControlMessageSize)
 	}
-	l := &controlLink{agent: agentWS, edge: edgeWS}
+	l := &controlLink{host: r.Host, agent: agentWS, edge: edgeWS}
 	p.mu.Lock()
 	p.links = append(p.links, l)
 	p.mu.Unlock()

@@ -12,13 +12,20 @@ import { extraRepoCount, repoLabel } from '@/lib/repos'
 import { rootKey, runKey, runParents } from '@/routes/board/map-layout'
 import type { Member, RunStatusCause, RunWait } from '@/lib/types'
 import type { RootState } from '@/store'
-import { isArchivable, type RunRecord } from '@/store/runs'
+import { isTerminal, type RunRecord } from '@/store/runs'
 
 /** An empty workspace scopes nothing, as before hydration names one. */
 export interface RunsInput {
   workspace: string
   mineOnly: boolean
   ctx: StateContext
+}
+
+/** Mine is on and hides at least one teammate's session in scope. */
+export function hiddenByMine(s: RunsInput): boolean {
+  return s.mineOnly && Object.values(s.ctx.runs).some(
+    (run) => (!s.workspace || run.workspace_id === s.workspace) && run.member_id !== s.ctx.viewerID,
+  )
 }
 
 export interface RunRow {
@@ -40,7 +47,6 @@ export interface RunRow {
 
 /** The runs under a tree's root, at any depth. */
 export interface TreeSummary {
-  collapsed: boolean
   counts: { working: number; needsYou: number; done: number; failed: number }
   members: RunRow[]
 }
@@ -52,11 +58,13 @@ export function childRunsText({ members }: TreeSummary): string {
 /** `children` are the members that need the viewer, which a folded tree still shows. */
 export interface RunTree extends RunRow {
   children: RunRow[]
+  /** The sidebar's finished subsessions, which it lists only on request. */
+  settled?: RunRow[]
   /** Child runs of a run. */
   childRuns?: TreeSummary
 }
 
-export interface RunGroups {
+interface RunGroups {
   'needs-you': RunTree[]
   working: RunTree[]
   review: RunTree[]
@@ -89,7 +97,7 @@ export function runRows(ctx: StateContext): RunRow[] {
   const rows: RunRow[] = []
   for (const run of Object.values(ctx.runs)) {
     // A live run can never be hidden.
-    if (run.archived_at && isArchivable(run.status)) continue
+    if (run.archived_at && isTerminal(run.status)) continue
     const shown = presentRun(run, ctx)
     const since = shown.needsYou?.since(run, ctx) ?? run.stateChangedAt
     rows.push({
@@ -124,7 +132,7 @@ function childRunTree(root: RunRow, members: RunRow[]): RunTree {
     group: children.length > 0 ? 'needs-you' : root.group,
     waitingSince: waits.map((row) => row.waitingSince).sort()[0] ?? root.waitingSince,
     children,
-    childRuns: { collapsed: children.length < members.length, counts, members },
+    childRuns: { counts, members },
   }
 }
 
@@ -144,6 +152,19 @@ export function runTrees(rows: RunRow[]): RunTree[] {
     trees.push(members.length > 0 ? childRunTree(root, members) : { ...root, children: [] })
   }
   return trees
+}
+
+/** A subsession that finished with nothing left for a person: its result went to its parent, which still lists it. */
+const settled = (row: RunRow) => row.group === 'finished' && !endedBadly(row.state)
+
+/** `rows` without the settled subsessions whose parent is among them; one with sessions of its own stays, so they keep their place. */
+export function withoutSettled<T extends RunRow>(rows: T[]): T[] {
+  const parents = runParents(rows)
+  const withChildren = new Set(parents.values())
+  return rows.filter((row) => {
+    const key = runKey(row)
+    return !parents.has(key) || withChildren.has(key) || !settled(row)
+  })
 }
 
 /** Every child run below `rootIDs`, nearest first. */
@@ -180,7 +201,7 @@ const inGroup: Record<RunGroup, (a: RunRow, b: RunRow) => number> = {
   review: byChange,
   finished: failedFirst,
 }
-const groupOrder: RunGroup[] = ['needs-you', 'working', 'review', 'finished']
+const groupOrder: RunGroup[] = ['needs-you', 'review', 'working', 'finished']
 
 function located(row: RunRow, s: RunsInput): RunRow {
   const elsewhere = s.workspace && row.run.workspace_id !== s.workspace
@@ -219,13 +240,14 @@ export function sidebarGroups(s: RunsInput, devices = 0): SidebarGroup[] {
     .map((key) => ({
       key,
       label: groupLabel[key],
-      runs: groups[key].map((tree) => tree.childRuns ? {
-        ...tree,
-        children: tree.childRuns.members
+      runs: groups[key].map((tree) => {
+        if (!tree.childRuns) return tree
+        const members = tree.childRuns.members
           .filter((row) => key === 'needs-you' || !s.mineOnly || row.run.member_id === s.ctx.viewerID)
           .sort((a, b) => a.run.created_at.localeCompare(b.run.created_at) || a.run.id.localeCompare(b.run.id))
-          .map((row) => located(row, s)),
-      } : tree),
+          .map((row) => located(row, s))
+        return { ...tree, children: members.filter((row) => !settled(row)), settled: members.filter(settled) }
+      }),
       count:
         key === 'needs-you'
           ? groups[key].reduce(

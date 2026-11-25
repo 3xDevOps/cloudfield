@@ -16,6 +16,7 @@ import (
 	"github.com/3xDevOps/Aether/internal/attribution"
 	"github.com/3xDevOps/Aether/internal/domain"
 	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
+	"github.com/3xDevOps/Aether/internal/selfupdate"
 	"github.com/3xDevOps/Aether/internal/store"
 )
 
@@ -25,14 +26,14 @@ const deviceIDExtension = "aether-device-id"
 
 // connIdentity is who an authenticated connection is. device is set on
 // connections that authenticated with an edge device key, relayed or
-// direct. clientVersion and legacyClient come from the SSH banner; see
-// parseClientBanner. connector and connectorClient are set on a ChatGPT
-// or Claude connector's calls, whose device is the one its pairing code
-// was minted on.
+// direct. client and legacyClient come from the SSH
+// banner; see parseClientBanner. connector and connectorClient are set on
+// a ChatGPT or Claude connector's calls, whose device is the one its
+// pairing code was minted on.
 type connIdentity struct {
 	member          domain.MemberID
 	device          domain.DeviceID
-	clientVersion   string
+	client          selfupdate.Release
 	legacyClient    bool
 	connector       string
 	connectorClient string
@@ -267,7 +268,7 @@ func (s *Server) admitEdge(ctx context.Context, grant edgeproto.Grant, key ssh.P
 	if err := ids.TouchDevice(ctx, dev.ID, time.Now().UTC()); err != nil {
 		return nil, fmt.Errorf("sshd: edge auth: %w", err)
 	}
-	slog.Info("sshd: edge auth", "member", m.ID, "device", dev.ID, "status", dev.Status,
+	slog.Debug("sshd: edge auth", "member", m.ID, "device", dev.ID, "status", dev.Status,
 		"provider", grant.Account.Provider, "subject", grant.Account.Subject, "pending", m.Pending)
 	return devicePermissions(m.ID, dev), nil
 }
@@ -330,11 +331,12 @@ func (s *Server) approvalRefusal(ctx context.Context, ids store.IdentityStore, d
 }
 
 // loneApprover reports whether nobody can approve a device admitting as
-// member in the app: member is an admin, no other admin exists,
-// and member has no approved device. A device adding a new member (member
+// member in the app: member is an admin or super admin, which only a
+// super admin or member itself approves, no other super admin exists, and
+// member has no approved device. A device adding a new member (member
 // empty) always has one, the admin who invited it.
 func (s *Server) loneApprover(ctx context.Context, ids store.IdentityStore, member domain.MemberID, role domain.Role) (bool, error) {
-	if member == "" || role != domain.RoleAdmin {
+	if member == "" || !role.Admin() {
 		return false, nil
 	}
 	members, err := s.cfg.Store.ListMembers(ctx)
@@ -342,7 +344,7 @@ func (s *Server) loneApprover(ctx context.Context, ids store.IdentityStore, memb
 		return false, err
 	}
 	for _, m := range members {
-		if m.ID != member && m.Role == domain.RoleAdmin {
+		if m.ID != member && m.Role == domain.RoleSuperAdmin && !m.Pending {
 			return false, nil
 		}
 	}
@@ -528,6 +530,7 @@ func (s *Server) acceptInvitation(ctx context.Context, ids store.IdentityStore, 
 	if err != nil {
 		return nil, fmt.Errorf("sshd: accept invitation %s: %w", inv.ID, err)
 	}
+	s.accessChanged()
 	s.notifyDirectory()
 	slog.Info("sshd: edge invitation accepted", "invitation", inv.ID, "member", m.ID, "role", m.Role,
 		"provider", account.Provider, "subject", account.Subject)
@@ -626,7 +629,7 @@ func displayNameOf(a edgeproto.Account) string {
 
 // claimServer makes the grant's account this server's admin after the
 // claim code matched, and approves key as that member's device. On a
-// server with no member it creates that admin. On a server with members,
+// server with no member it creates that member, a super admin. On a server with members,
 // the account must already be an admin's identity (a repeated claim), or
 // match an admin's open link from member.identity.link, which it then
 // consumes: an admin who joined by key or tailnet links the account
@@ -652,7 +655,7 @@ func (s *Server) claimServer(ctx context.Context, grant edgeproto.Grant, key ssh
 	if err != nil {
 		return nil, err
 	}
-	if m.Role != domain.RoleAdmin {
+	if !m.Role.Admin() {
 		return nil, edgeproto.RefusalClaimed
 	}
 	dev, err := s.claimDevice(ctx, ids, m.ID, account, edgeproto.DeviceKeyLine(key), deviceLabel(grant, key))
@@ -679,7 +682,7 @@ func (s *Server) recoverAdmin(ctx context.Context, ids store.IdentityStore, admi
 	if err != nil {
 		return nil, fmt.Errorf("sshd: claim: %w", err)
 	}
-	if m.Role != domain.RoleAdmin {
+	if !m.Role.Admin() {
 		return nil, refusal(fmt.Errorf("sshd: claim for member %s, who is %s", admin, m.Role),
 			&edgeproto.Refused{Kind: edgeproto.RefusedClaimMemberNotAdmin, MemberID: string(admin), Role: string(m.Role)})
 	}
@@ -709,7 +712,7 @@ func (s *Server) claimMember(ctx context.Context, ids store.IdentityStore, accou
 	if !errors.Is(err, store.ErrNotFound) {
 		return m, err
 	}
-	owner := &domain.Member{DisplayName: displayNameOf(account), Color: attribution.NextColor(nil), Role: domain.RoleAdmin}
+	owner := &domain.Member{DisplayName: displayNameOf(account), Color: attribution.NextColor(nil), Role: domain.RoleSuperAdmin}
 	err = ids.ClaimMember(ctx, owner, identityOf(account))
 	if !errors.Is(err, store.ErrConflict) {
 		return owner, err
@@ -726,13 +729,14 @@ func (s *Server) claimMember(ctx context.Context, ids store.IdentityStore, accou
 		if err != nil {
 			return nil, fmt.Errorf("sshd: claim: linked member: %w", err)
 		}
-		if linked.Role != domain.RoleAdmin {
+		if !linked.Role.Admin() {
 			continue
 		}
 		m, err = ids.AcceptInvitation(ctx, inv.ID, identityOf(account), owner, time.Now())
 		if err != nil {
 			return nil, fmt.Errorf("sshd: claim: %w", err)
 		}
+		s.accessChanged()
 		return m, nil
 	}
 	return nil, edgeproto.RefusalClaimed

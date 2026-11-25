@@ -69,7 +69,7 @@ func TestConnectorProtocolThroughTheEdge(t *testing.T) {
 
 	resp, out := rpc(t, base, token.AccessToken, "tools/list", map[string]any{})
 	tools, _ := out["result"].(map[string]any)["tools"].([]any)
-	if resp.StatusCode != http.StatusOK || len(tools) != 32 || resp.Header.Get("Mcp-Session-Id") != "" {
+	if resp.StatusCode != http.StatusOK || len(tools) != 34 || resp.Header.Get("Mcp-Session-Id") != "" {
 		t.Fatalf("tools/list without initialize: %s %v", resp.Status, out)
 	}
 	// The budget of docs/chatgpt-plugin.md#tool-list-budget, as a client
@@ -115,6 +115,7 @@ func TestConnectorIsolationThroughTheEdge(t *testing.T) {
 	if err := s.db.CreateWorkspace(t.Context(), ws); err != nil {
 		t.Fatal(err)
 	}
+	grantEveryone(t, s.db, ws.ID)
 	now := time.Now()
 	alicesRun := &domain.Run{WorkspaceID: ws.ID, MemberID: s.memberOf(t, alice).ID, AccountMemberID: s.memberOf(t, alice).ID, Task: "migrate the schema",
 		Harness: "claude", Mode: domain.LaunchTUI, Status: domain.RunRunning, StartedAt: &now}

@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/moby/moby/client"
+	"golang.org/x/crypto/ssh"
 
 	"github.com/3xDevOps/Aether/internal/coord"
 	"github.com/3xDevOps/Aether/internal/coordhooks"
@@ -45,7 +46,21 @@ const (
 
 var realAgentModes = map[domain.LaunchMode]string{domain.LaunchTUI: "standard", domain.LaunchHeadless: "background", domain.LaunchACP: "enhanced"}
 
-func TestIntegrationRealAgents(t *testing.T) {
+// realAgents is a server whose run containers reach a mock model, with
+// Claude Code and Codex signed in to it in Ada's home, and a fake run that
+// sends mail.
+type realAgents struct {
+	e            *coordEnv
+	srv          *coordServer
+	ctrl         *protocol.Client
+	sshClient    *ssh.Client
+	model        *mockModel
+	docker       *runtime.Docker
+	senderSocket string
+}
+
+func startRealAgents(ctx context.Context, t *testing.T, tune func(*Config)) *realAgents {
+	t.Helper()
 	image := os.Getenv("AETHER_AGENTS_IMAGE")
 	if image == "" {
 		t.Skip("AETHER_AGENTS_IMAGE unset; build the image with make agents-image, then run make test-agents (docs/testing.md)")
@@ -53,8 +68,6 @@ func TestIntegrationRealAgents(t *testing.T) {
 	if !dockerReachable(t) {
 		t.Fatal("AETHER_AGENTS_IMAGE is set but the Docker daemon is unreachable")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-	defer cancel()
 
 	// dockerRuntime's containers have no network, and these must reach the
 	// mock model.
@@ -74,6 +87,7 @@ func TestIntegrationRealAgents(t *testing.T) {
 		image:        image,
 		serverBinary: buildServerBinary(t),
 		dataDir:      filepath.Join(shortTempDir(t), "data"),
+		tune:         tune,
 	}
 	srv := e.seed(ctx, t, false)
 	ctrl, sshClient := srv.control(t, e.ada.key)
@@ -124,19 +138,28 @@ func TestIntegrationRealAgents(t *testing.T) {
 		}
 	}
 
-	launch := func(t *testing.T, a *realAgentRun, task string) {
-		t.Helper()
-		var launched protocol.RunLaunchResult
-		if err := ctrl.Call(protocol.MethodRunLaunch, protocol.RunLaunchParams{
-			WorkspaceID: string(e.ws.ID), Task: task, Harness: a.agent, Mode: string(a.mode),
-		}, &launched); err != nil {
-			t.Fatalf("run.launch %s %s: %v", a.agent, a.mode, err)
-		}
-		a.run = launched.Run
-		if a.mode == domain.LaunchTUI {
-			a.observer = openObserver(t, sshClient, a.run.ID)
-		}
+	return &realAgents{e: e, srv: srv, ctrl: ctrl, sshClient: sshClient, model: model, docker: docker, senderSocket: senderSocket}
+}
+
+func (r *realAgents) launch(t *testing.T, a *realAgentRun, task string) {
+	t.Helper()
+	var launched protocol.RunLaunchResult
+	if err := r.ctrl.Call(protocol.MethodRunLaunch, protocol.RunLaunchParams{
+		WorkspaceID: string(r.e.ws.ID), Task: task, Harness: a.agent, Mode: string(a.mode),
+	}, &launched); err != nil {
+		t.Fatalf("run.launch %s %s: %v", a.agent, a.mode, err)
 	}
+	a.run = launched.Run
+	if a.mode == domain.LaunchTUI {
+		a.observer = openObserver(t, r.sshClient, a.run.ID)
+	}
+}
+
+func TestIntegrationRealAgents(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+	defer cancel()
+	r := startRealAgents(ctx, t, nil)
+	e, srv, ctrl, model, senderSocket, launch := r.e, r.srv, r.ctrl, r.model, r.senderSocket, r.launch
 
 	t.Run("agents", func(t *testing.T) {
 		for _, agent := range []string{"claude", "codex"} {
@@ -211,8 +234,10 @@ func TestIntegrationRealAgents(t *testing.T) {
 							// A reminder gets the same report, so whichever lands
 							// last leaves the run where the late one should.
 							model.remind(turn, "waiting --for process")
-							// Codex ends a command's process group with it.
-							return []step{{command: "setsid sh -c \"sleep 5; " + reportCommand("waiting --for process", turn) + "\" >/dev/null 2>&1 &"}}
+							// Codex kills a command's process group once it exits,
+							// so the command waits for the report's line, printed
+							// only after setsid has left that group.
+							return []step{{command: "{ setsid sh -c \"echo; exec >/dev/null 2>&1; sleep 5; " + reportCommand("waiting --for process", turn) + "\" & } | read -r _"}}
 						},
 						want: func(turn string) turnWant {
 							return turnWant{activity: domain.ActivityWaitingTools, cause: events.CauseReport, outcome: protocol.CoordOutcomeWaiting, waitingFor: protocol.CoordWaitingForProcess, summary: turn, reminders: -1, late: true}
@@ -346,9 +371,12 @@ func TestIntegrationRealAgents(t *testing.T) {
 						if tc.outcome == "" && !model.saw(tagged(turn), coord.ErrCannotAsk.Error()) {
 							t.Errorf("the agent was not told it cannot ask:%s", model.tails(tagged(turn)))
 						}
-						// Only a success awaiting review needs a member.
-						if got, want := needsYou(r), tc.outcome == protocol.CoordOutcomeSuccess; got != want {
-							t.Errorf("needs you = %v (review %q), want %v", got, r.Review, want)
+						// A Background run never needs a member; its success awaits review.
+						if needsYou(r) {
+							t.Errorf("needs you (review %q), want not", r.Review)
+						}
+						if got, want := domainRun(r).AwaitsReview(r.Paused), tc.outcome == protocol.CoordOutcomeSuccess; got != want {
+							t.Errorf("awaits review = %v (review %q), want %v", got, r.Review, want)
 						}
 					})
 				}
@@ -401,11 +429,14 @@ func (a *realAgentRun) get(t *testing.T) protocol.Run {
 
 // needsYou is the rule the dashboard's Needs you list applies.
 func needsYou(r protocol.Run) bool {
-	run := domain.Run{
+	return domainRun(r).NeedsAttention(r.Paused)
+}
+
+func domainRun(r protocol.Run) *domain.Run {
+	return &domain.Run{
 		Status: domain.RunStatus(r.Status), Activity: domain.RunActivity(r.Activity), Reason: r.Reason,
 		OutcomeUnseen: r.OutcomeUnseen, Review: domain.RunReview(r.Review),
 	}
-	return run.NeedsAttention(r.Paused)
 }
 
 // instructed fails unless the launch recorded where the run instructions

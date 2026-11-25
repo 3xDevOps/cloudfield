@@ -1,24 +1,31 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import type * as React from 'react'
+import { DictationButton } from '@/components/dictation/dictation-button'
+import { DictationNotice } from '@/components/dictation/dictation-notice'
 import { AgentPicker, customAgent, launchable } from '@/components/launch/agent-picker'
 import { EffortPicker } from '@/components/launch/effort-picker'
 import { ModeControl } from '@/components/launch/mode-control'
 import { ModelPicker } from '@/components/launch/model-picker'
 import { initialMode, modeRefusal, refusals } from '@/components/launch/modes'
+import { Callout } from '@/components/ui/callout'
 import { FormField } from '@/components/ui/form-field'
+import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { api, type Api } from '@/lib/api'
 import { message } from '@/lib/format'
 import type { AgentInfo, LaunchDefaultsResult, LaunchMode } from '@/lib/types'
+import { cn } from '@/lib/utils'
 import { useStore } from '@/store'
 import { type LaunchDefaultsRead, rememberedChoice } from '@/store/launch-defaults'
 
-function preselect(list: AgentInfo[], saved: LaunchDefaultsResult | null, preferred?: string): string {
+function preselect(list: AgentInfo[], saved: LaunchDefaultsResult | null, preferred?: string, fallback?: string): string {
   const { launchDefaults, runs } = useStore.getState()
   const ok = list.filter(launchable)
-  if (preferred && ok.some((agent) => agent.name === preferred)) return preferred
-  const last = saved
-    ? ok.find((agent) => agent.name === saved.defaults.agent)
-    : ok.filter((agent) => launchDefaults[agent.name]).sort((a, b) => launchDefaults[b.name].at - launchDefaults[a.name].at)[0]
+  const can = (name?: string): name is string => !!name && ok.some((agent) => agent.name === name)
+  if (can(preferred)) return preferred
+  if (saved && can(saved.defaults.agent)) return saved.defaults.agent
+  if (can(fallback)) return fallback
+  const last = saved ? undefined : ok.filter((agent) => launchDefaults[agent.name]).sort((a, b) => launchDefaults[b.name].at - launchDefaults[a.name].at)[0]
   if (last) return last.name
   const recent = Object.values(runs)
     .sort((a, b) => b.created_at.localeCompare(a.created_at))
@@ -27,32 +34,37 @@ function preselect(list: AgentInfo[], saved: LaunchDefaultsResult | null, prefer
 }
 
 /** The agent, mode, model and effort a launch uses, reloaded for each account; `preferred`
- * wins the first pick when that agent can launch, with `preferredModel` and `preferredEffort`.
+ * wins the first pick when that agent can launch, with `preferredModel` and `preferredEffort`;
+ * `fallback` comes right after the saved agent.
  * The first pick waits for `saved`, the server's saved choices, or uses this
  * browser's when the server keeps none or cannot be read. */
-export function useAgentChoice({ account, ownAccountID, saved, preferred, preferredModel, preferredEffort, hold = false, pick = 0, client = api }: {
+export function useAgentChoice({ account, ownAccountID, saved, preferred, preferredModel, preferredEffort, fallback, initial, open = true, hold = false, pick = 0, client = api }: {
   account: string
   ownAccountID: string
   saved: LaunchDefaultsRead
   preferred?: string
   preferredModel?: string
   preferredEffort?: string
+  fallback?: string
+  open?: boolean
+  initial?: { harness: string; mode: LaunchMode; model: string; effort: string }
   /** Holds the first pick while the caller may still switch `account`. */
   hold?: boolean
   /** A change picks again from the saved choices, replacing the current agent. */
   pick?: number
   client?: Api
 }) {
-  const [listed, setListed] = useState<{ account: string; agents: AgentInfo[] } | null>(null)
-  const agents = listed?.account === account ? listed.agents : null
+  // current turns false while a new read runs, so the last list can stay on screen until it answers.
+  const [listed, setListed] = useState<{ account: string; agents: AgentInfo[]; current: boolean } | null>(null)
+  const agents = listed?.current && listed.account === account ? listed.agents : null
   const [agentError, setAgentError] = useState<string | null>(null)
-  const [harness, setHarness] = useState('')
-  const [mode, setMode] = useState<LaunchMode>('tui')
-  const [model, setModel] = useState('')
-  const [effort, setEffort] = useState('')
+  const [harness, setHarness] = useState(initial?.harness ?? '')
+  const [mode, setMode] = useState<LaunchMode>(initial?.mode ?? 'tui')
+  const [model, setModel] = useState(initial?.model ?? '')
+  const [effort, setEffort] = useState(initial?.effort ?? '')
   const [attempt, setAttempt] = useState(0)
   const savedReady = saved.fresh
-  const choice = useRef({ harness, mode, preferred, preferredModel, preferredEffort, saved: saved.result, pick })
+  const choice = useRef({ harness, mode, preferred, preferredModel, preferredEffort, fallback, saved: saved.result, pick })
   choice.current = { ...choice.current, harness, mode, saved: saved.result }
 
   const choose = useCallback((name: string, list: AgentInfo[]) => {
@@ -65,18 +77,19 @@ export function useAgentChoice({ account, ownAccountID, saved, preferred, prefer
   }, [])
 
   useEffect(() => {
+    if (!open) return
     let live = true
-    setListed(null)
+    setListed((last) => last && { ...last, current: false })
     setAgentError(null)
     client.agentList(account && account !== ownAccountID ? account : undefined).then((list) => {
-      if (live) setListed({ account, agents: list })
+      if (live) setListed({ account, agents: list, current: true })
     }).catch((err) => {
       if (!live) return
-      setListed({ account, agents: [] })
+      setListed({ account, agents: [], current: true })
       setAgentError(message(err))
     })
     return () => { live = false }
-  }, [account, ownAccountID, client, attempt])
+  }, [account, ownAccountID, client, attempt, open])
 
   useEffect(() => {
     if (!agents || agentError !== null || !savedReady || hold) return
@@ -85,7 +98,7 @@ export function useAgentChoice({ account, ownAccountID, saved, preferred, prefer
     current.pick = pick
     const keep = !repick && (current.harness === customAgent || agents.some((item) => item.name === current.harness && launchable(item)))
     if (!keep) {
-      const name = preselect(agents, current.saved, current.preferred)
+      const name = preselect(agents, current.saved, current.preferred, current.fallback)
       choose(name, agents)
       if (name === current.preferred && current.preferredModel !== undefined) setModel(current.preferredModel)
       if (name === current.preferred && current.preferredEffort !== undefined) setEffort(current.preferredEffort)
@@ -93,10 +106,11 @@ export function useAgentChoice({ account, ownAccountID, saved, preferred, prefer
     else if (modeRefusal(agents.find((item) => item.name === current.harness), current.harness, current.mode)) setMode('tui')
   }, [agents, agentError, savedReady, hold, pick, choose])
 
-  const agent = agents?.find((item) => item.name === harness)
+  const agent = (agents ?? listed?.agents)?.find((item) => item.name === harness)
   const noAgents = agents !== null && agentError === null && !agents.some((item) => item.installed)
   return {
     agents,
+    lastAgents: listed?.agents ?? null,
     agentError,
     agent,
     accountMemberID: account && account !== ownAccountID ? account : undefined,
@@ -122,6 +136,9 @@ export function RunFields({
   onChoice,
   disabled = false,
   autoFocus = false,
+  shared = false,
+  account,
+  owner,
 }: {
   choice: ReturnType<typeof useAgentChoice>
   task: string
@@ -130,36 +147,128 @@ export function RunFields({
   onChoice?: () => void
   disabled?: boolean
   autoFocus?: boolean
+  shared?: boolean
+  account?: React.ReactNode
+  owner?: string
 }) {
-  const { agents, agent, harness, mode, noAgents } = choice
+  const { agents, lastAgents, harness, mode, noAgents } = choice
+  const shown = agents ?? lastAgents
   return (
     <>
-      <FormField
-        label="Task"
-        help={mode === 'headless'
-          ? 'Required. A Background session starts with this task and takes no input.'
-          : 'Optional. Leave it blank to open the agent with no prompt.'}
-      >
-        <Textarea className="max-h-48 [field-sizing:content]" autoFocus={autoFocus} required={mode === 'headless'} rows={3} placeholder="What should the agent do?" value={task} onChange={(event) => onTask(event.target.value)} />
-      </FormField>
-      {agents === null ? (
-        <p className="text-ui-sm text-muted">Loading agents…</p>
+      <TaskField mode={mode} task={task} onTask={onTask} autoFocus={autoFocus} shared={shared} />
+      {shown === null ? (
+        <div className="flex flex-col gap-1">
+          <Label asChild>
+            <p>Agent</p>
+          </Label>
+          <p role="status" className="flex h-8 items-center px-2 text-ui-sm text-muted coarse:h-11">Loading agents…</p>
+        </div>
       ) : (
-        <AgentPicker
-          label="Agent"
-          agents={agents}
-          value={harness}
-          onChange={(name) => { onChoice?.(); choice.choose(name) }}
-          onSetUp={noAgents ? undefined : onSetUp}
-          disabled={disabled}
-        />
+        <div aria-busy={agents === null} className={cn(agents === null && 'opacity-60')}>
+          <AgentPicker
+            label="Agent"
+            agents={shown}
+            value={harness}
+            onChange={(name) => { onChoice?.(); choice.choose(name) }}
+            onSetUp={noAgents ? undefined : onSetUp}
+            owner={owner}
+            disabled={disabled || agents === null}
+          />
+        </div>
       )}
-      {harness && (
-        <ModeControl label="Mode" value={mode} onChange={(next) => { onChoice?.(); choice.setMode(next) }} refused={refusals(agent, harness)} onSetUp={onSetUp} />
+      {account}
+      <AgentOptions choice={choice} onSetUp={onSetUp} onChoice={onChoice} disabled={disabled} />
+    </>
+  )
+}
+
+/** `shared` marks text another app handed over, which shows whole until edited. */
+export function TaskField({ mode, task, onTask, autoFocus = false, shared = false, brief = false, disabled = false }: {
+  mode: LaunchMode
+  task: string
+  onTask: (task: string) => void
+  autoFocus?: boolean
+  shared?: boolean
+  /** One-word help, for a phone. */
+  brief?: boolean
+  disabled?: boolean
+}) {
+  const headless = mode === 'headless'
+  const characters = [...task].length
+  const lines = task.split('\n').length
+  const help = brief
+    ? (headless ? 'Required in Background mode.' : 'Optional.')
+    : (headless ? 'Required. A Background session starts with this task and takes no input.' : 'Optional. Leave it blank to open the agent with no prompt.')
+  return (
+    <>
+      {shared && (
+        <Callout tone="needs-you" role="status" title="Shared from another app: review it before launching">
+          {characters} {characters === 1 ? 'character' : 'characters'}, {lines} {lines === 1 ? 'line' : 'lines'}. Nothing runs until you choose Launch.
+        </Callout>
       )}
-      {harness && <ModelField harness={harness} accountMemberID={choice.accountMemberID} value={choice.model} onChange={(next) => { onChoice?.(); choice.setModel(next) }} disabled={disabled} />}
+      <FormField label="Task" help={help}>
+        <TaskBox className={cn('[field-sizing:content]', !shared && 'max-h-48')} autoFocus={autoFocus} readOnly={disabled} required={headless} value={task} onTask={onTask} />
+      </FormField>
+    </>
+  )
+}
+
+export function AgentOptions({ choice, onSetUp, onChoice, disabled = false }: {
+  choice: ReturnType<typeof useAgentChoice>
+  onSetUp: () => void
+  onChoice?: () => void
+  disabled?: boolean
+}) {
+  const { agent, harness, mode } = choice
+  if (!harness) return null
+  return (
+    <>
+      <ModeControl label="Mode" value={mode} onChange={(next) => { onChoice?.(); choice.setMode(next) }} refused={refusals(agent, harness)} onSetUp={onSetUp} />
+      <ModelField harness={harness} accountMemberID={choice.accountMemberID} value={choice.model} onChange={(next) => { onChoice?.(); choice.setModel(next) }} disabled={disabled} />
       {choice.effortLevels.length > 0 && <EffortField levels={choice.effortLevels} value={choice.effort} onChange={(next) => { onChoice?.(); choice.setEffort(next) }} disabled={disabled} />}
     </>
+  )
+}
+
+/** Takes the id and descriptions FormField gives its child, so the label still names the textarea above the mic. */
+function TaskBox({ onTask, ...props }: React.ComponentProps<'textarea'> & { value: string; onTask: (task: string) => void }) {
+  const textarea = useRef<HTMLTextAreaElement>(null)
+  const textSize = useStore((s) => s.textSize)
+  useLayoutEffect(() => {
+    const el = textarea.current
+    if (!el) return
+    const resize = () => {
+      el.style.height = '0px'
+      const style = getComputedStyle(el)
+      const maxHeight = Number.parseFloat(style.maxHeight)
+      const borderHeight = Number.parseFloat(style.borderTopWidth) + Number.parseFloat(style.borderBottomWidth)
+      const contentHeight = el.scrollHeight + borderHeight
+      const height = Number.isFinite(maxHeight) ? Math.min(contentHeight, maxHeight) : contentHeight
+      el.style.height = `${height}px`
+      el.style.overflowY = contentHeight > height ? 'auto' : 'hidden'
+    }
+    resize()
+    const frame = requestAnimationFrame(resize)
+    let width = el.getBoundingClientRect().width
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry.contentRect.width === width) return
+      width = entry.contentRect.width
+      resize()
+    })
+    observer.observe(el)
+    return () => {
+      cancelAnimationFrame(frame)
+      observer.disconnect()
+    }
+  }, [props.value, textSize])
+  return (
+    <div className="flex flex-col gap-1">
+      <Textarea className="max-h-48 [field-sizing:content]" rows={3} placeholder="What should the agent do?" onChange={(event) => onTask(event.target.value)} {...props} ref={textarea} />
+      <DictationNotice textarea={textarea} />
+      <div className="flex justify-end empty:hidden">
+        <DictationButton textarea={textarea} onInsert={onTask} />
+      </div>
+    </div>
   )
 }
 

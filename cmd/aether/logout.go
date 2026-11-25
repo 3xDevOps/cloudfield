@@ -7,6 +7,7 @@ import (
 	"os"
 	"text/tabwriter"
 
+	"github.com/3xDevOps/Aether/internal/cli"
 	edgeclient "github.com/3xDevOps/Aether/internal/edge/client"
 	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
 )
@@ -15,8 +16,8 @@ func init() {
 	register(command{
 		name:    "logout",
 		short:   "revoke this device's edge sign-in, or show how to delete the edge account",
-		usage:   "aether logout [--edge <url>] [--delete-account]",
-		example: "aether logout",
+		usage:   "cloudfield logout [--edge <url>] [--delete-account]",
+		example: "cloudfield logout",
 		flags:   true,
 		run:     runLogout,
 	})
@@ -30,7 +31,7 @@ func runLogout(args []string) error {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return fmt.Errorf("usage: aether logout [--edge <url>] [--delete-account]")
+		return fmt.Errorf("usage: cloudfield logout [--edge <url>] [--delete-account]")
 	}
 	client, err := edgeClient(*edgeURL)
 	if err != nil {
@@ -39,10 +40,28 @@ func runLogout(args []string) error {
 	if *deleteAccount {
 		return deleteEdgeAccount(context.Background(), client, os.Stdout)
 	}
-	if err := client.Logout(context.Background()); err != nil {
+	if err = client.Logout(context.Background()); err != nil {
 		return err
 	}
 	fmt.Printf("signed out of %s: the device token is revoked at the edge and deleted here; the device key and your links stay\n", client.Host())
+	dir, err := cli.Dir()
+	if err != nil {
+		return err
+	}
+	return printStillSignedIn(os.Stdout, dir)
+}
+
+// printStillSignedIn names the edges this machine still holds a token
+// for, as after a logout without --edge on a machine signed in to both
+// addresses of the project's edge.
+func printStillSignedIn(w io.Writer, dir string) error {
+	signedIn, err := edgeclient.SignedIn(dir)
+	if err != nil {
+		return err
+	}
+	for _, o := range signedIn {
+		_, _ = fmt.Fprintf(w, "still signed in to %s; sign out there with: aether logout --edge %s\n", edgeclient.HostOf(o), o)
+	}
 	return nil
 }
 

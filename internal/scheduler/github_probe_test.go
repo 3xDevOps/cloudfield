@@ -30,7 +30,9 @@ func TestProbeGitHubCLI(t *testing.T) {
 		standard string
 		// pinned marks a standard image an operator set, rather than the
 		// one this build ships.
-		pinned  bool
+		pinned bool
+		// vms runs the server's sessions and terminals in VMs.
+		vms     bool
 		code    int
 		out     string
 		status  domain.GitHubCLIStatus
@@ -162,6 +164,19 @@ func TestProbeGitHubCLI(t *testing.T) {
 			admin:    "docker pull acme/dev-environment:latest",
 		},
 		{
+			// docker pull leaves the VM image store's copy of the tag
+			// as it was, so only a new reference reaches a VM.
+			name:     "moving tag on a server that runs VMs",
+			standard: "acme/dev-environment:latest",
+			pinned:   true,
+			vms:      true,
+			code:     127,
+			out:      ghNotFound,
+			status:   domain.GitHubCLIMissing,
+			remedy:   "aether terminal stop",
+			admin:    "sudo aether-server config set standard-image <a newer image> && sudo systemctl restart aether-server",
+		},
+		{
 			name:     "digest-pinned standard image",
 			standard: "ghcr.io/3xdevops/aether-standard@sha256:" + strings.Repeat("a", 64),
 			code:     127,
@@ -183,12 +198,15 @@ func TestProbeGitHubCLI(t *testing.T) {
 				if tc.pinned {
 					c.DefaultStandardImage = "ghcr.io/3xdevops/aether-standard:v0.9.9"
 				}
+				if tc.vms {
+					c.Runtime = vmFakeRuntime{c.Runtime.(*fakeRuntime)}
+				}
 			})
 			if tc.saved != "" {
 				if err := e.db.UpdateMemberImage(t.Context(), e.member.ID, tc.saved); err != nil {
 					t.Fatalf("UpdateMemberImage: %v", err)
 				}
-				if err := e.rt.Commit(t.Context(), "c-saved", tc.saved); err != nil {
+				if err := e.rt.Commit(t.Context(), "c-saved", tc.saved, nil); err != nil {
 					t.Fatalf("seed the saved image: %v", err)
 				}
 			}
@@ -283,7 +301,7 @@ func TestProbeGitHubCLIKeepsASavedEnvironmentOnItsOwnRemedy(t *testing.T) {
 	if err := e.db.UpdateMemberImage(t.Context(), e.member.ID, "aether/member-test:2"); err != nil {
 		t.Fatalf("UpdateMemberImage: %v", err)
 	}
-	if err := e.rt.Commit(t.Context(), "c-saved", "aether/member-test:2"); err != nil {
+	if err := e.rt.Commit(t.Context(), "c-saved", "aether/member-test:2", nil); err != nil {
 		t.Fatalf("seed the saved image: %v", err)
 	}
 	cli, err := e.sched.ProbeGitHubCLI(t.Context(), e.member.ID)

@@ -16,7 +16,7 @@ import { connectors } from '@/components/shell/sidebar-runs'
 
 export function RunList({ runs, empty }: { runs: RunRow[]; empty: string }) {
   const hydrated = useStore((s) => s.hydrated)
-  const error = useStore((s) => s.hydrationError)
+  const error = useStore((s) => (s.hydrated ? null : s.hydrationError))
   const dead = useStore((s) => s.streamDead)
   const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   const tree = useMemo(() => nestWorkers(runs), [runs])
@@ -239,7 +239,7 @@ function Row({
   )
 }
 
-export function StatusChip({ state, tone = stateTone[state], label = stateLabel[state], title }: { state: PresentationState; tone?: Tone; label?: string; title?: string }) {
+function StatusChip({ state, tone = stateTone[state], label = stateLabel[state], title }: { state: PresentationState; tone?: Tone; label?: string; title?: string }) {
   return (
     <span title={title} className="inline-flex min-h-5 items-center gap-1.5 rounded-chip border border-seam/80 px-1.5 py-px text-ui-sm leading-4 text-text">
       <StatusDot tone={tone} />

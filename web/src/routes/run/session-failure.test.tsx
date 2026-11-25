@@ -4,7 +4,7 @@ import { SessionFailureCallout } from '@/routes/run/session-failure'
 import type { RunShells } from '@/routes/run/shells'
 import { useStore } from '@/store'
 import type { AcpSession } from '@/store/sessions'
-import { run, runRecords } from '@/test/fixtures'
+import { agentInfo, run, runRecords, serverInfo } from '@/test/fixtures'
 
 afterEach(() => {
   vi.restoreAllMocks()
@@ -51,7 +51,47 @@ describe('terminal login', () => {
   })
 })
 
+describe('signed-out login', () => {
+  const problem = '~/.claude/.credentials.json: Claude OAuth access token is missing or invalid'
+
+  it("says the account's login is signed out, shows the problem and sends the member to Agents", () => {
+    useStore.setState({ info: serverInfo, agentList: { identity: null, agents: [agentInfo({ display_name: 'Claude Code', login_problem: problem, login_blocks_launch: true })] }, route: { name: 'run', params: { runId: 'run_1' } } })
+    renderCallout(signedOutSession())
+    expect(screen.getByText('Claude Code is signed out')).toBeDefined()
+    expect(screen.getByText(/Sign in again on the Agents page, or from a terminal in this session/)).toBeDefined()
+    expect(screen.getByText(problem)).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Log in' })).toBeDefined()
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in on Agents' }))
+    expect(useStore.getState().route.name).toBe('agents')
+  })
+
+  it("offers no Agents page for a run on another member's account", () => {
+    useStore.setState({ info: serverInfo, agentList: { identity: null, agents: [agentInfo({ login_problem: problem })] } })
+    const record = runRecords(run({ id: 'run_1', harness: 'claude', status: 'running', account_member_id: 'mem_bob' })).run_1!
+    useStore.setState({ acpSessions: { run_1: signedOutSession() } })
+    const shells = { canAdd: true, open: vi.fn() } as unknown as RunShells
+    render(<SessionFailureCallout run={record} session={signedOutSession()} switchable={false} shells={shells} nav={{ go: vi.fn(), reveal: vi.fn(), focusComposer: vi.fn(), focusRequest: vi.fn() }} />)
+    expect(screen.queryByRole('button', { name: 'Sign in on Agents' })).toBeNull()
+    expect(screen.getByText('The agent is not signed in')).toBeDefined()
+    expect(screen.getByText(/This session signs in with another member's account\. They sign in again on their Agents page or with/).textContent).toContain('aether agent login claude')
+  })
+})
+
+describe('refused sign-in', () => {
+  it("does not repeat the agent's refusal, which the failure already quotes", () => {
+    const refusal = 'the agent refused: Authentication required'
+    useStore.setState({ info: serverInfo, agentList: { identity: null, agents: [agentInfo({ display_name: 'Claude Code', login_problem: refusal })] } })
+    renderCallout(signedOutSession())
+    expect(screen.getByText("Claude Code's sign-in was refused")).toBeDefined()
+    expect(screen.queryByText(refusal)).toBeNull()
+  })
+})
+
 describe('open in Standard', () => {
+  beforeEach(() => {
+    vi.spyOn(api, 'runCloseCheck').mockResolvedValue([{ run_id: 'run_1', warnings: [] }])
+  })
+
   it('relaunches on the account, fallback, child-run setting and repositories of the run it replaces', async () => {
     const launch = vi.spyOn(api, 'runLaunch').mockResolvedValue(run({ id: 'run_2', status: 'running' }))
     vi.spyOn(api, 'runClose').mockResolvedValue(run({ id: 'run_1', status: 'completed' }))
@@ -70,6 +110,25 @@ describe('open in Standard', () => {
       workspace_id: record.workspace_id, task: record.task, harness: 'claude', mode: 'tui', model: 'opus',
       account_member_id: 'mem-ada', fallback_account_member_ids: ['mem-me'], children: 'off', extra_workspace_ids: ['ws-2'],
     }))
+  })
+
+  it('lists close warnings before it closes the run it replaces', async () => {
+    vi.spyOn(api, 'runCloseCheck').mockResolvedValue([{ run_id: 'run_1', warnings: [{ kind: 'messages', detail: '2 messages from other sessions unread or sent in the last 30 minutes', count: 2 }] }])
+    const launch = vi.spyOn(api, 'runLaunch').mockResolvedValue(run({ id: 'run_2', status: 'running' }))
+    vi.spyOn(api, 'runClose').mockResolvedValue(run({ id: 'run_1', status: 'abandoned' }))
+    const record = runRecords(run({ id: 'run_1', harness: 'claude', status: 'running' })).run_1!
+    const session = { turns: [{ items: [{ kind: 'notice', notice: { title: 'Enhanced agent failed' } }] }], live: false } as unknown as AcpSession
+    useStore.setState({ acpSessions: { run_1: session }, info: { member: { id: 'mem-me' } } as never })
+    const nav = { go: vi.fn(), reveal: vi.fn(), focusComposer: vi.fn(), focusRequest: vi.fn() }
+    render(<SessionFailureCallout run={record} session={session} switchable={false} shells={{} as RunShells} nav={nav} />)
+    fireEvent.click(screen.getByRole('button', { name: 'Open in Standard' }))
+    const go = await screen.findByRole('button', { name: 'Close anyway and start Standard' })
+    expect(screen.getByRole('list', { name: 'What closing affects' }).textContent).toBe('2 messages from other sessions unread or sent in the last 30 minutes.')
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Keep this session' }))
+    expect(screen.getByRole('button', { name: 'Keep this session' }).className).toContain('focus:outline-accent')
+    fireEvent.click(go)
+    await waitFor(() => expect(api.runClose).toHaveBeenCalledWith('run_1', 'abandoned'))
+    expect(launch).toHaveBeenCalled()
   })
 
   it("launches a teammate's run on the viewer's own account and settings", async () => {

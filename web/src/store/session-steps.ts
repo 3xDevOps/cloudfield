@@ -37,7 +37,7 @@ export type Step =
   | { kind: 'plan'; id: string; at: string; entries: PlanEntry[] }
   | { kind: 'subagents'; id: string; at: string; ids: string[] }
   | { kind: 'answered'; id: string; at: string; request: SessionRequest; command?: string }
-  | { kind: 'event'; id: string; at: string; text: string; detail?: string; tone?: Tone }
+  | { kind: 'event'; id: string; at: string; text: string; detail?: string; tone?: Tone; full?: true }
 
 export type StepsRow = Extract<SessionRow, { kind: 'steps' }>
 
@@ -137,15 +137,15 @@ export function stepsBlock(id: string, steps: Step[], start: string, current = f
 
 export function asRow(step: Step): SessionRow {
   if (step.kind === 'narration') return { kind: 'assistant', id: step.id, at: step.at, text: step.text, streaming: step.streaming }
-  if (step.kind === 'event') return { kind: 'event', id: step.id, at: step.at, text: step.text, detail: step.detail, tone: step.tone }
+  if (step.kind === 'event') return { kind: 'event', id: step.id, at: step.at, text: step.text, detail: step.detail, tone: step.tone, ...(step.full ? { full: step.full } : {}) }
   throw new Error(`a ${step.kind} step belongs in a block`)
 }
 
 /** A boundary starts a segment: a person's message, a wake or a new agent session. */
 export type Part = { kind: 'boundary'; row: SessionRow } | { kind: 'step'; step: Step }
 
-/** Aether's end-of-turn report, run as a command or called as an MCP tool. */
-const reportCall = /(?:^|[;&|]\s*)(?:\S*\/)?aether-internal report\b|(?:^|[_.])aether_report$/
+/** Aether's end-of-turn report, run as a command under either of its names or called as an MCP tool. */
+const reportCall = /(?:^|[;&|]\s*)(?:\S*\/)?(?:aether|cloudfield)-internal report\b|(?:^|[_.])aether_report$/
 
 /**
  * Splits a turn into segments at each boundary. Within a segment the agent's

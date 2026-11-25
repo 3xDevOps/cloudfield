@@ -1,13 +1,13 @@
 # Dashboard SPA (`web/`)
 
-The dashboard is the browser client for Aether. A **workspace** is one
+The dashboard is the browser client for Cloudfield. A **workspace** is one
 repository and base branch; a **session** is one agent working on its own branch
-in its own container. The dashboard shows a member's sessions, lets them launch,
+in its own sandbox, a container or virtual machine on the server. The dashboard shows a member's sessions, lets them launch,
 watch, message and review them, and holds the pages for agents, files,
 templates, members and settings.
 
-It is one static bundle served through either dashboard gateway: `aether gui`
-on the user's machine, or `aether-server --web-port` over HTTPS on the
+It is one static bundle served through either dashboard gateway: `cloudfield gui`
+on the user's machine, or `cloudfield-server --web-port` over HTTPS on the
 server's tailnet addresses. Next.js 16.3.4 produces the static export, React
 19 + TypeScript render the client runtime, Tailwind v4 and the Radix-based
 primitives in `src/components/ui/` provide the components, and Zustand holds
@@ -15,8 +15,9 @@ the state. Both gateways use the shared `internal/webgate` API and WebSocket
 surfaces; the server gateway authenticates each request with Tailscale WhoIs
 and no browser token.
 
-The visual contract is a dense developer workbench on graphite surfaces with
-one teal accent: flat panes, compact controls, restrained elevation and short
+The visual contract is a dense developer workbench on neutral surfaces: in
+the dark theme blue-black, with a teal accent and a gold primary button, as
+on the website, and in the light one white with a teal accent: flat panes, compact controls, restrained elevation and short
 token-driven motion. `docs/styles.md` defines the tokens, type and motion.
 
 The gateways and their transport boundaries are documented in
@@ -30,7 +31,14 @@ This guide describes the dashboard's routes, store and components.
 `src/app/page.tsx` is a minimal Next App Router page. It loads
 `src/app/client-runtime.tsx`, which is a client component that dynamically
 imports `src/App.tsx` with `ssr: false`. This boundary keeps the browser-only
-store, WebSocket, xterm and Electron bridge out of static prerendering. Next
+store, WebSocket, xterm and Electron bridge out of static prerendering. The
+page also renders the Cloudfield mark beside that boundary, so `index.html`
+carries it and it paints on the themed background while the scripts download.
+It appears after 300ms, so a fast load and the desktop launch splash normally do
+not show it, and a CSS sibling rule hides it once `App` mounts its
+`data-app` root. It sits outside the boundary because React replaces a
+client-only boundary's prerendered content when it starts, which would
+restart the fade. Next
 still emits the document, CSS, fonts and JavaScript assets; the existing
 client-side registry and in-memory `navigate()` state remain the dashboard's
 navigation model. Next does not run in production.
@@ -45,8 +53,8 @@ cd web && bun run typecheck  # tsc --noEmit
 
 `bun run dev` starts `dev-server.mjs`, the development-only Node loopback
 server. It defaults to `127.0.0.1:3000`, accepts `--port`/`-p` and
-`--hostname`/`-H`, and uses `AETHER_DASHBOARD` as its gateway target. The
-target may be a local `aether gui` URL or a server-hosted HTTPS dashboard;
+`--hostname`/`-H`, and uses `CLOUDFIELD_DASHBOARD` as its gateway target. The
+target may be a local `cloudfield gui` URL or a server-hosted HTTPS dashboard;
 local targets also proxy `/local`, while both targets proxy `/api` and `/ws`
 with WebSocket support. The proxy preserves the browser `Host` and `Origin`
 headers so the shared gateway remains the WebSocket origin boundary. Other
@@ -59,10 +67,10 @@ dev URL:
 
 ```sh
 # terminal 1
-aether gui --port 8080 --url
+cloudfield gui --port 8080 --url
 
 # terminal 2
-cd web && AETHER_DASHBOARD=http://127.0.0.1:8080 \
+cd web && CLOUDFIELD_DASHBOARD=http://127.0.0.1:8080 \
   bun run dev -- --port 3000 --hostname 127.0.0.1
 # open http://127.0.0.1:3000/?token=<token-from-aether-gui>
 ```
@@ -70,8 +78,8 @@ cd web && AETHER_DASHBOARD=http://127.0.0.1:8080 \
 The client moves `?token=` into `sessionStorage` under `aether.token`, removes
 only that query parameter from the address bar, and sends the value as a
 Bearer token on HTTP or a `token` query parameter on WebSockets. The token is
-minted per `aether gui` process and stops working when that process exits.
-When `AETHER_DASHBOARD` points at the server gateway instead, the browser
+minted per `cloudfield gui` process and stops working when that process exits.
+When `CLOUDFIELD_DASHBOARD` points at the server gateway instead, the browser
 sends no token: Tailscale WhoIs identifies the phone or development browser
 on every request.
 
@@ -89,14 +97,14 @@ The shipped phone path is the server-hosted gateway, checked by hand as
 
 For a contributor's loop against a dashboard build that is not embedded in a
 server yet, use the development server as a LAN-facing proxy to a local
-`aether gui`:
+`cloudfield gui`:
 
 ```sh
 # terminal 1, on the computer the phone will reach
-aether gui --port 8080 --url
+cloudfield gui --port 8080 --url
 
 # terminal 2, with <lan-ip> that computer's address on the phone's network
-cd web && AETHER_DASHBOARD=http://127.0.0.1:8080 \
+cd web && CLOUDFIELD_DASHBOARD=http://127.0.0.1:8080 \
   bun run dev -- --port 3000 --hostname <lan-ip>
 # on the phone: http://<lan-ip>:3000/?token=<token-from-aether-gui>
 ```
@@ -112,7 +120,7 @@ cd web && AETHER_DASHBOARD=http://127.0.0.1:8080 \
 - `--hostname` has to be the address typed on the phone. Next's development
   server permits only localhost and the hostname it was started on; any other
   origin needs `allowedDevOrigins` in `web/next.config.ts`.
-- The token is minted per `aether gui` process, and the phone needs that one.
+- The token is minted per `cloudfield gui` process, and the phone needs that one.
   Nothing else authenticates the local development proxy.
 - A tunnel or proxy in front of this must preserve `Host` and `Origin`. One
   that rewrites `Host` breaks every WebSocket - the terminal, the event feed
@@ -131,6 +139,14 @@ Automated phone coverage is the `mobile` Playwright project, described in
 development. `next build` therefore writes a static `web/dist` artifact:
 HTML, `_next` assets, CSS and copied public files. There is no production Next
 server or Node process in the shipped dashboard.
+
+The Files editor and the Insights System charts are kept out of the
+first-page script by `lazyChunk` in `web/src/components/lazy-chunk.tsx`.
+`App` fetches them with `preloadChunks` right after the first successful
+hydration, so opening a view fetches no script: on an Edge link, another app
+can take over the gateway's loopback port after the local GUI exits. A chunk
+that failed to load stays failed until the page is reloaded; its view shows
+the import error with a Reload button, and nothing reloads on its own.
 
 `web/embed.go` embeds `web/dist` with `//go:embed all:dist`, which fails to
 compile against an empty directory. The build output is not committed, so the
@@ -175,19 +191,25 @@ manifest cannot say: the status bar style, which needs
 the unprefixed `mobile-web-app-capable`. `web/public/icons/apple-touch-icon.png`
 stays because Safari prefers it over the manifest icons.
 
-A manifest carries one `theme_color` where the layout's viewport export carries
-one per colour scheme, so both read `web/src/app/theme-color.ts` and the
-manifest takes the dark value. `background_color` is the separate
-`iconBackground` from that module, `#0a0a0a`: an installed app's splash centres
-an icon on it, and any other value would leave the icon's tile showing as a
-square. That hex is deliberately darker than the dashboard's own dark
-`--canvas`, `#141516` - a launcher icon has to read as an object against a
-wallpaper - so the splash lightens slightly as the SPA paints over it.
+The manifest's `theme_color` and the layout's viewport `themeColor` both read
+`web/src/app/theme-color.ts` and take the dark value, the default theme;
+`ThemeEffect` switches the page's `theme-color` meta to the light value when
+the member picks light. `background_color` is the separate
+`iconBackground` from that module, `#000000`, the tile of the Cloudfield
+icons: an installed app's splash centres an icon on it, and any other value
+would leave the icon's tile showing as a square. The splash changes to the
+dashboard's own `--canvas` as the SPA paints over it.
 
-Every icon is generated from `web/public/aether-mark.png` by `python3
-scripts/make-icons.py`, the same script that writes the desktop app's, and the
-output is committed. Maskable icons and the iOS icon are square and full-bleed
-because the platform applies its own mask; the rest carry the rounded tile.
+The icons in `web/public/icons/` are the Cloudfield logo set's PNG renders,
+copied unchanged from `public/cloudfield/png/` in the website repository
+`3xDevOps/aether-web`: `icon-*.png` and `apple-touch-icon.png` are the square,
+full-bleed icon, `icon-maskable-*.png` keep the mark inside the 80% safe zone,
+and `favicon-16.png`, `favicon-32.png` and `favicon-48.png` are the small
+drawings the layout links as `rel="icon"`. The header mark, the splash
+logo and the session overview's mask are the set's SVG files from
+`public/cloudfield/`, in `web/public/`. The desktop app's icons are the same
+set's files, and the Android app's come from `scripts/android-icons.py`
+([CONTRIBUTING.md](../CONTRIBUTING.md)).
 
 CI installs Bun with `oven-sh/setup-bun` (version pinned in
 `web/.bun-version`) in jobs that run `make build` or `make release-binaries`,
@@ -217,7 +239,8 @@ text size, sidebar width and collapse state, dock height, Details open,
 terminal zoom, single-key shortcuts, diff wrap, `activeWorkspace`, the
 **Mine** toggle, each member's launch defaults, dismissed update versions, onboarding
 progress) are persisted under the `aether.ui` key; `persistedUi` in
-`store/index.ts` is the list that decides. Server data is always re-fetched.
+`store/index.ts` is the list that decides, and the key is written only when
+one of those values changes. Server data is always re-fetched.
 
 **Selectors return primitives or stable references.** A selector that builds a
 new array or object on every call re-renders its component on every store
@@ -309,13 +332,16 @@ desktop app. `AppShell` (`app-shell.tsx`) mounts it once, together
 with the shell-wide hosts: the command palette, the dialogs the store opens
 (`components/palette/dialogs.tsx`: launch, message, forward, close, archive
 and free), the shortcuts dialog, the updates dialog (`UpdateCenter`), the
-connection announcer, the shell keys (`useNavShortcuts`) and the team
-refresh (`useTeamRefresh`).
+connection announcer, the shell keys (`useNavShortcuts`), the team
+refresh (`useTeamRefresh`) and `AppBadge` (`lib/app-badge.ts`), which sets the
+installed app's icon badge to the Needs you count while push is on, in any
+layout, and clears it when the shell unmounts. It does nothing in the desktop
+app, which badges itself.
 
 ### Sidebar
 
-The sidebar (`sidebar.tsx`) is a `nav` named "Aether", 260px wide by default and
-resizable from 220px to 400px; older saved widths are clamped. `Mod+B`, the
+The sidebar (`sidebar.tsx`) is a `nav` named "Cloudfield", 260px wide by default
+and resizable from 220px to 400px; older saved widths are clamped. `Mod+B`, the
 **Hide sidebar** button in its header and Enter on its splitter hide it
 completely; the content view's header then shows **Open sidebar** at its left
 edge. Hiding or showing it hands focus to the control that reverses it. From
@@ -325,29 +351,36 @@ top to bottom:
    (`workspace-switcher.tsx`) shows the active workspace's name and base
    branch, and the total Needs you count across every workspace. Its menu
    lists each workspace with its own count, **All workspaces** (the
-   `overview` route), **Manage workspaces**, **Repository** (the
-   workspace page) and **Environment** (the same page, scrolled to that
-   section). With one workspace and no `workspace.list` method it is a
+   `overview` route), **Manage workspaces** and **Workspace settings** (the
+   workspace page). With one workspace and no `workspace.list` method it is a
    plain label. The search button opens the command palette.
 2. **New session**, the only filled button in the shell, for a member who may
    launch. A slanted cut splits it in two. The left half, **New session** (`n`),
    slides the launch panel out of the sidebar's right edge over the view, with
-   no scrim; the panel stays open while you use the view behind it, and
-   Escape or its **Close** button closes it and returns focus to what opened
-   it. The right half appears once a launch has been saved: it shows the saved
-   agent's glyph and launches that agent, mode, model, account and fallback at
-   once with no task
-   (`quick-launch.ts`). Hovering or focusing it slides out the saved choices.
+   no scrim. See [the forms](#the-forms) for how it closes and resumes drafts.
+   The right half appears once a launch choice has been saved. It shows the
+   saved agent's glyph and launches that agent, mode,
+   model, account and fallback at once with no task and with `children: "on"`,
+   so subsessions are allowed whatever your Settings choice (`quick-launch.ts`).
+   Hovering or focusing it slides out the saved choices.
    A Background launch needs a task, so that half opens the panel instead, as
    it does when the saved choices name an agent or model the account cannot
    use. The panel's **Subsessions** switch follows your Settings choice and
    sends `children` only when flipped, for that session alone; it is off and
-   disabled for a Background session.
+   disabled for a Background session. While it is on, **Subsession agents**
+   (`subsession-agents.tsx`) opens a menu of checkboxes, one per installed
+   agent with its accounts under it when it has several, each with its login
+   state; a change saves the member setting at once with `child.settings`
+   `choice`, one save after another, and **Settings → Subsessions** shows the
+   same menu. An account whose agents could not be listed is named, with the
+   server's error, below the row (`choices_error`).
 3. **Sessions** (`sidebar-runs.tsx`), a `region` with three groups, **Needs you**,
    **Working** and **Finished** (see [Session state](#session-state)), each an `h2`
    holding an `aria-expanded` disclosure button, a chevron that turns a
    quarter and the count in a `CountBadge`; the count stays in the button's
-   name. Every group starts expanded and lists all of its sessions; a group
+   name. **Mine** matches the count badge's height on fine pointers and keeps a
+   44px touch target on coarse pointers. Every group starts expanded and lists all
+   of its sessions; a group
    closes only when its header is pressed, and the list fades back in when
    the viewer reopens it (rows never glide their height, and a group that
    mounts with hydration does not fade). Until the first sessions arrive, six
@@ -355,16 +388,20 @@ top to bottom:
    "Loading sessions". Needs you lists every workspace; a row outside the
    selected workspace leads with that workspace's name. Working and Finished
    list the selected workspace, and only the viewer's own sessions while **Mine**
-   (`mineOnly`, persisted) in the Working header is pressed. The region
+   (`mineOnly`, persisted) in the Working header is pressed. When Mine is on and
+   no Working sessions are visible, the same toggle stays at the top of the
+   region so it can be turned off. When Mine hides a teammate's session and
+   leaves the list empty, it reads "No sessions of yours." The region
    scrolls on its own, and while more rows sit below the fold its bottom edge
    fades out. The sidebar never collapses on its own at narrow widths; the
    splitter and `⌘B` stay the reader's call.
-4. **Members** (admins only) and **Settings**. Board through Templates live
-   in the header instead, leaving the sidebar's height for sessions. The current
-   destination carries `aria-current="page"`. Gates come from
-   `src/lib/surfaces.ts`, which also feeds the palette's Navigate group; its
-   `palette` entries (Members › Devices, Manage workspaces, and Members for a
-   non-admin) are reached from the palette only, and its `link` entries
+4. **Manage workspaces**, **Members** and **Settings**, for every member.
+   Board through Templates live in the header instead, leaving the sidebar's
+   height for sessions. The current destination carries
+   `aria-current="page"`; a workspace's own page keeps **Manage workspaces**
+   current. Gates come from `src/lib/surfaces.ts`, which also feeds the
+   palette's Navigate group; its `palette` entry (Members › Devices) is
+   reached from the palette only, and its `link` entries
    (the board's Needs you; Onboarding, opened from **Settings › General ›
    Setup guide**) only from a link.
 5. **One update notice row** when a server, CLI or desktop update exists, for
@@ -399,8 +436,11 @@ attached to it, the viewer included: the `watching` lists of
 right edge and the age and the glyph move left to make
 room; a session nobody is on reserves none. A root with subsessions shows a
 `Network` glyph and their count before the agent glyph, and its name adds
-"2 subsessions · 1 working"; every subsession lists under it. The first avatar sits whole at the
-edge and each one after shows from behind it, to its left. First is the
+"2 subsessions · 1 working"; its subsessions list under it. Its chevron
+folds the subsessions for this browser session only; they start open, and the
+first child to arrive opens with the chevron's turn animation. Folding keeps
+subsessions that need you visible. The first avatar sits whole at the edge and
+each one after shows from behind it, to its left. First is the
 session's controller. While nobody holds control it is the last controller, if
 they are still on the session. The rest follow by name. A row draws three
 avatars at most: a fourth person turns the stack into two avatars and `+2`.
@@ -445,13 +485,21 @@ session), and `u` opens the next session that needs you, oldest first.
 A Finished or Failed row does not recede while no member has opened its session
 since it finished (`finish_unopened`, see [Session state](#session-state)): its title
 keeps the text colour and its accessible name says "Not opened yet" before
-the age. A finished subsession nested under its parent follows the same rule. Once
+the age. A finished subsession listed under its parent follows the same rule. Once
 any member opens the session, the row recedes in every member's dashboard.
 
-Every unarchived subsession is indented beneath its parent and joined to it
+Every subsession in the list is indented beneath its parent and joined to it
 by tree connectors: a vertical trunk under the parent's status dot and a
 horizontal wire into each subsession row
-([Styles](styles.md#shell-palette-and-focus)). **Mine** also filters
+([Styles](styles.md#shell-palette-and-focus)). A subsession that finished
+with nothing left for a person leaves the list: one that reported success
+(**Finished: reported to its parent**) or ended `completed`, `merged` or
+`abandoned`, such as one its parent stopped. Its parent's last nested line
+counts them (**3 finished**, outside the chevron's count) and lists them in place until **Hide finished**,
+for this browser session only; the one that is open lists there regardless.
+The parent's count and its Details (**Subsessions**) still include them. One that failed, was interrupted or
+needs you stays listed, and a finished one returns while it works again. The
+session stays open either way (`settled` in `src/store/selectors.ts`). **Mine** also filters
 these subsessions under Working and Finished; Needs you keeps the whole tree
 visible. Selecting a session row opens that session, from anywhere on the row
 outside its buttons. The whole tree sits in
@@ -462,7 +510,8 @@ contribute to that group's count. Relationships come from the session snapshot's
 ### App header
 
 `top-bar.tsx` is a `banner` at every window width, padded by `--safe-top`.
-Its first row shows the Aether mark and lowercase `aether` wordmark on the left, then **Board**,
+Its first row shows the Cloudfield mark on the left
+([Styles](styles.md#type)), then **Board**,
 **Activity**, **Insights**, **Memory**, **Files**, **Environment**, **Agents** and
 **Templates** in `nav` "Main navigation". These use the sidebar's `ListRow`
 styling and current-page selection. A `ResizeObserver` measures the row and
@@ -474,28 +523,182 @@ overflow measuring still counts only buttons, and it hides while the current
 page is in **More navigation**. Gateway capability gates still apply. Hidden buttons
 are inert and excluded from the accessibility tree.
 
-Under 768px a second, 48px toolbar holds **Open sidebar** with an amber dot
-while anything needs you, the view's title, **Search** and **New session**. On a
-session page the title is "Session", because the session header under it already shows
-the session's title. A connection problem is one line under the toolbar. On a
-phone the view's own header keeps only its actions, and its `h1` stays for
-screen readers. The header's measured bottom edge sets
+Under 768px the header is one 48px row: the view's title and **Search**. On
+a session page the title is "Session", because the session header under it
+already shows the session's title. A connection problem is one line under the
+row. On a phone the view's own header keeps only its actions, and its `h1`
+stays for screen readers. The header's measured bottom edge sets
 `--app-header-bottom` for the command palette's position and height limit.
+Navigation moves to the [phone tab bar](#phone-layout).
+
+### Phone layout
+
+Below 768px (`mobileScreen` in `src/lib/breakpoints.ts`) the shell adds a
+bottom tab bar, `phone-tab-bar.tsx`, a `nav` named "Main navigation". Desktop
+is unchanged. The tabs are at least 44px square, and the bar pads itself by
+the bottom and side safe-area insets, so `main` does not pad the bottom on a
+phone. Its measured height sets `--phone-tabs-height`, which keeps toasts 8px
+above it. On a touch screen the bar hides while the soft keyboard is up: a
+text field other than the terminal's has focus and the visible viewport is
+more than 150px shorter than the tallest it has been at this width. Android's
+Back and iOS's Done close the keyboard without a blur, so focus alone would
+keep the bar hidden. With more than one workspace the header shows the active
+one's name, muted, after the title.
+
+| Tab | Opens |
+| --- | --- |
+| **Needs you** | the `needs-you` route; its badge counts what asks you |
+| **Sessions** | the `sessions` route: **List**, the sidebar's session list at full width, or **Lanes** ([phone lanes](#lanes)), chosen by a **Sessions view** switch in the top bar beside Search; the choice persists as `sessionsLanes`. Current on a session, the board and All workspaces too |
+| **New** | the [launch sheet](#the-forms); named **New session**, hidden if you cannot launch |
+| **Assistant** | the assistant, full screen, with the desktop button's dot and name |
+| **More** | a bottom sheet, a `dialog` named "More"; the tab is **More pages** |
+
+On a phone the Sessions list is regrouped by `attention.list` (`byAttention`
+in `src/routes/needs-you/attention.ts`): its Needs you group has the badge's
+count and order, and a session the server lists as finished moves to the
+review group, newest change first. A session only the dashboard's copy of the
+rule puts in Needs you stays listed, last, and is not counted.
+
+A phone that opens the dashboard with no `run` or `page` in the address lands
+on Needs you (`initialRoute` in `src/lib/url-state.ts`; Back to such an
+address does too), or on onboarding on a
+first visit, as the board does on desktop. Every other link still opens its
+own page. The board is in More, and on a phone its address carries
+`page=board`, so a reload stays on it. A gateway without `attention.list`,
+whether it does not list the method or answers `-32601` for it, has no Needs
+you tab, and its landing page redirects to the board. The Sessions route
+exists only on a phone; a wider window redirects it to the board, whose
+sidebar has the same list.
 
 A phone screen has one filled button. A page whose own action is filled calls
 `useHeaderPrimary(shown)` (`src/store/hooks.ts`) while that action shows; the
 `ui` slice counts the holders in `headerPrimaries`, and while the count is
-above zero the top bar draws **New session** as an icon button with the same
-accessible name. A session page always gets the icon, with or without a primary
-action. The holders are a session header with a primary action, Environment's **Open** or **Save
-environment**, onboarding, Files with a file open and the Changes view's
-**Publish…**. The board, lists and settings keep the filled **New session**.
+above zero the **New** tab drops its filled pill. The holders are a session
+header with a primary action, Environment's **Open** or **Save environment**,
+onboarding, Files with a file open and the Changes view's **Publish…**.
 
-The sidebar opens as a left side sheet, a `dialog` named "Aether" with the
-same contents and **Close sidebar** in place of **Hide sidebar**; a tap
-outside, Escape or any navigation closes it, and navigation moves focus to the
-new view's heading. `Mod+B` closes it too, because it is the key that opened
-it; every other shell key stands down while it is open.
+**More** holds the workspace switcher, whose needs-you counts come from
+`attention.list` too, every page the desktop header and sidebar link to
+(Board, Activity, Insights, Memory, Files, Environment, Agents, Templates,
+Members, Settings, Devices, Manage workspaces) in a list that scrolls, the
+update notice and the profile footer. A tap outside, Escape or any navigation
+closes it, and navigation moves focus to the new view's heading. `Mod+B` opens
+and closes it; every other shell key stands down while it is open.
+
+**Needs you** (`src/routes/needs-you/`) reads the server's `attention.list`
+([local-gateway.md](local-gateway.md#methods-for-an-external-assistant)), not
+the dashboard's copy of the rule. It reads it again within 250ms of any change
+to a session's status, state, review, outcome flag, pause, requests, room
+messages and their decisions, or controller, after a reconnect, and each time
+the page opens. One read runs at a time; a change during it asks for one more.
+A different member or server clears the list. While the page shows a saved
+snapshot and the list has not been read, Needs you lists the saved sessions the
+dashboard's own rule puts in Needs you, to open but not answer. A failed read
+shows its own error unless the saved-state banner already shows one. The badge counts the same list's
+requests, plus the devices waiting for approval and the merge proposals to the
+viewer, as the sidebar's Needs you does; their board cards (`DeviceCard`,
+`MergeProposalCard`) sit above the session cards. Cards are ranked by kind in
+the order the server checks them (`needsYouConditions` in
+`src/lib/needs-you.ts`): permission, question, queued message, room question,
+disconnected, blocked, needs input, failed, and a kind this dashboard does not
+know last. Within a kind the server's order holds, oldest first. Each card is
+a `RequestCard`. Its title, at most two lines, opens the session's view the
+condition names; the request's detail is clamped to five lines with **Show
+more**. Then comes its inline answer:
+
+- A permission with `allow_once` and `reject_once` options shows **Deny** and
+  a second half. A sudo request's title is the whole command, so the second
+  half is **Approve** (the session's own `DecisionButtons`). An agent's tool
+  call can be a file edit or a plan that `attention.list` does not carry, so
+  its second half is **Review**, which opens the session where the change is
+  shown and approved. Deny and Approve send `run.input.respond` with the
+  request's id and that option, so a tap that lands after the request changed
+  decides nothing else. **Always** is not offered. A Standard session's
+  permission has no options and opens the terminal instead.
+- An Enhanced session's question shows its form and its options, answered the
+  same way. A link question opens the session.
+- A turn that ended asking (`needs input`, the condition's **Reply**) shows
+  **Reply…**, which opens a focused text field; **Send** or `Mod+Enter` sends
+  `run.inject`. The field scrolls into view above the keyboard, and the list
+  pads by `--keyboard-inset` for iOS, whose keyboard leaves the layout tall. A
+  room question replies with `run.room.post`, correlated to the question. A
+  retry of the same text reuses its idempotency key; a reply not sent or
+  uncertain keeps its draft.
+- Everything else has one button that opens the session.
+
+Setup notices the board shows, such as letting agents use Docker, sit above
+the cards. While the first read is in flight two skeleton cards show; a failed
+read is a failed-tone callout with the server's error and **Retry**, and the
+list and badge keep their last values. `already_answered` shows "Already
+answered: an earlier answer won". Once the server takes an answer the card
+says **Answered** until the list drops the request, so a second tap is never
+sent. While another member controls the session, a permission or question card
+names them and offers only the session, because `run.input.respond` would
+refuse with `-32003`. Any other refusal shows the server's error on the card.
+Below the cards, **Finished: review the result** lists the `ready` items as
+plain rows. They never count toward the badge and have no Mark complete;
+opening one opens the session.
+
+### Phone session
+
+On a phone a session opens full screen: the `run` route renders no top bar
+and the tab bar hides, so the shell pads the top safe area (above the
+reconnect banner) and `main` the bottom and side ones.
+The header (`routes/run/phone-header.tsx`) is one 48px row: **Back**, the
+title with its protection lock, a state line (status dot, state, agent and
+mode), the header's primary action when there is one, and **More**. Under it
+the tabs **Chat**, **Terminal** and **Changes** fill a 44px row; a Standard
+session orders them **Terminal**, **Chat**, **Changes**. **Changes** carries
+the muted `+N −M` of the latest snapshot, unless it was truncated, and drops
+it below 400px while a fourth tab shows. The pull request, with its checks,
+feedback and **Watch PR**, would crowd the tabs, so it sits in a 44px row of
+its own under them on the Changes tab only.
+
+**More** opens with a **Views** group (Trace, Files, Browser, **Session
+details**, **Session tree**, **Search…**, **Assistant**), then the session's
+commands, Captures and Raw events. A view opened from there joins the tabs
+while it shows. The views stay reachable while a command runs. Close, Stop
+and Delete are the same commands, with the same confirmations, as on
+desktop.
+
+Without a `view` in the address a phone opens the session's last chosen view,
+or its default when none was chosen. A link that names a view still opens it.
+A tab switch replaces the history entry instead of pushing one. Each history
+entry records its depth, and an entry of a session records the depth at which that session
+was opened, carried across the session's own entries, a subagent's included
+(`pushedEntry` and `sessionEntry` in `src/lib/url-state.ts`; a
+notification's entry records them too). **Back** steps back to the entry
+below that one, so it leaves the session in one step. A session opened by a
+link or a reload has no app page below it, and **Back** replaces it with
+Sessions.
+
+While the soft keyboard is up, the header folds to one 44px row: the title,
+the status dot and, from 400px wide, the state's name. The tabs (kept
+mounted but visually hidden, since each view's panel is labelled by its
+tab), the wait line, the lineage line and the
+[multiplayer strip](#multiplayer-controls) leave. The keyboard counts as up
+on a touch screen while a text field, the composer or the terminal's input,
+has focus and the visible viewport is more than 150px shorter than the
+tallest it has been at that width (`useKeyboardUp` in
+`src/lib/keyboard-inset.ts`, which the tab bar uses too). Android's Back and
+iOS's Done close the keyboard without a blur, so focus alone is not enough.
+
+On a phone the strip shows only while someone else watches, another member
+or another of your tabs holds control, the session is not yours, or control,
+presence or the stream failed (`useSharedPresence`). Only the owner takes
+free control implicitly, by sending a message or changing a model, mode or
+effort option. What waits for control runs in the order it was asked, each after the one before settles, so an
+option chosen before a send reaches the agent first. An option change that does not
+get control within 10 seconds says so at the composer. Details lists the people. A hidden tab bar removes
+`--phone-tabs-height`, so toasts fall back to the bottom safe area.
+
+The Chat composer is the desktop `ComposerBox`. It pads by
+`--keyboard-inset` (`src/lib/keyboard-inset.ts`) less the bottom safe area
+that `main` already pads, so it sits on an iOS keyboard. While a request is
+open, the request card holds the one filled button: its answers fill the
+card's width, and on Chat the header's action and the composer's
+**Interrupt** are outlined. A session that is still loading on a phone shows
+**Back to sessions**.
 
 ### Assistant panel
 
@@ -524,7 +727,9 @@ launch sessions (`useAssistantAvailable`); the same check gates every entry poin
   the key first; so does `Mod+Shift+Space` from anywhere. Crossing between
   docked and floating restyles the one `aside` rather than remounting it, so
   the draft, the focused composer and the transcript's scroll survive.
-- **Phone:** a right side sheet, a `dialog` named "Assistant".
+- **Phone:** a full-screen `dialog` named "Assistant", over the tab bar, with
+  square corners and, with a touch screen, a 16px header inset. Its composer sits at the bottom,
+  above the soft keyboard (`--keyboard-inset`).
 - **Header:** an `h2`, because the view beside it owns the page's `h1`. It
   takes the session header's height on a session and the view header's elsewhere, so
   the two seams line up. It holds the agent and state, **Actions**, **New conversation** (confirms, then
@@ -542,7 +747,11 @@ launch sessions (`useAssistantAvailable`); the same check gates every entry poin
   runs and reads **Stopping…** while `assistant.cancel` is in flight, so a
   double click cancels once and an agent that ignores it can be stopped
   again; the call aborts after 10 seconds with `assistant.cancel got no
-  answer within 10 seconds`). An empty conversation offers four example prompts that fill the
+  answer within 10 seconds`). An empty conversation leads with
+  `AssistantAccountCheck` (`assistant.account`, shown when the server lists
+  it), the [same-account line](assistant.md#same-account-as-your-sessions),
+  which **Settings > Assistant > Sign-in** also shows under each ready agent,
+  and offers four example prompts that fill the
   composer, led by the page's own: a failed session offers **Fix this**, one that
   needs you or waits **Why is this stuck?**, one with an open pull request
   (`useOpenPullRequest`) **Review and merge when checks pass**; the board
@@ -555,18 +764,29 @@ launch sessions (`useAssistantAvailable`); the same check gates every entry poin
   **N more**), or for `run.launch` a **What starts**
   list (`components/assistant/launch-summary.tsx`; the title then stops
   before the quoted task) of kind, workspace,
-  agent with model and mode, account (`Yours` or `<name>'s, shared with
-  you`), fallback, task, and how the member hears back, a
+  agent with model and mode, effort when set, permission tier (`default`
+  when unset), account (`Yours` or `<name>'s, shared with you`), fallback, task, and how the member hears back, a
   relative deadline with a bar draining toward it, **Decline**
   and **Approve** (`assistant.confirm`). Confirmations stack above the harness
   prompts in one 40dvh scroll. A card leaves only when a
-  `confirmations` frame stops listing it. While `auto_approve` is off a card
-  links **Skip these cards…** to Settings > Assistant; a card with
+  `confirmations` frame stops listing it. A card's footer is not sticky: the dock (65dvh with an empty
+  conversation, whose suggestion chips it hides, else 40dvh, 50dvh on tall
+  screens) scrolls the whole card, so its actions come after every row they
+  approve, and rows have no scroll of their own. A card with `rule` adds,
+  under `Or save a rule:`, a secondary button labeled with `rule.wording`
+  (`assistant.confirm` with `always: true`), marked with an accent left rule
+  and `You approved this kind three times in a row.` when `rule.suggested`,
+  and, while `auto_approve` is off,
+  **Approve everything from now on**: it approves the card, then sets the
+  store's `assistantConfirmAutoApprove`, which opens the panel's **Let the
+  assistant act without asking?** confirm (`AutoApproveConfirm` in
+  `components/assistant/approval-choice.tsx`). While `auto_approve` is off a
+  card without `rule` links **Skip these cards…** to Settings > Assistant; a card with
   `other_member` says that member (`other_owner`) owns the session, so it asks
   even with auto-approval on; for a launch it says their account pays.
 - **Action cards** (`components/assistant/action-card.tsx`,
-  `lib/assistant-actions.ts`): `assistantView` takes each Aether tool call out
-  of its step block as a card: one whose `tool_name` ends in an `aether_*`
+  `lib/assistant-actions.ts`): `assistantView` takes each Cloudfield tool call
+  out of its step block as a card: one whose `tool_name` ends in an `aether_*`
   tool (Claude Code's `mcp__aether__aether_launch_session`, or the bare name), or
   a Codex call titled `mcp.aether.aether_*`, whose `{server, tool, arguments}`
   input and `{result, error}` output are unwrapped from the call's latest
@@ -582,7 +802,7 @@ launch sessions (`useAssistantAvailable`); the same check gates every entry poin
   `Withdrawn: the turn ended before you answered`, `Did not finish: the
   turn ended first` for a call still open when its turn ended, approved or
   not, or `Not confirmed: check status before retrying` for an
-  `aether_pr_create` whose result says `write: "pending"`) with `approved by you` or `auto-approved`, and its time. A call
+  `aether_pr_create` whose result says `write: "pending"`) with `approved by you`, `auto-approved` or `approved by your rule <id>` (a record with `approval: "rule"` and its `rule_id`), and its time. A call
   waiting for approval is one line that points at the approval card in the
   composer dock, and the live line under it is dropped. A failure shows the
   server's error verbatim; a declined, expired or withdrawn card keeps the
@@ -635,6 +855,17 @@ launch sessions (`useAssistantAvailable`); the same check gates every entry poin
   actions**, which loads them as **Show earlier messages** does. Focus starts
   on the newest entry. Up, Down, Home and End move, and Enter opens the target
   and closes the popover.
+- **Setup question** (`ApprovalChoice` in
+  `components/assistant/approval-choice.tsx`): when the status has
+  `approval_chosen: false` and the state is not `failed` (a failed status
+  carries no stored settings; absent never asks), a notice above the composer
+  asks **How should your assistant act?** **Ask before acting** and **Act
+  without asking** call `assistant.settings` with `auto_approve` false or
+  true; the second shows the auto-approval warning under its button, so it
+  opens no dialog. It scrolls past 40% of the viewport height, and the
+  auto-approval suggestion waits until it is answered. The answer's settings
+  replace the status, which drops the notice, unless another member signed in
+  meanwhile; a refusal shows under the buttons.
 - **Auto-approval suggestion** (`components/assistant/suggestion.tsx`): when
   the status has `suggest_auto_approve`, the state is `idle`, no turn runs,
   no confirmation or harness prompt waits and the conversation has items, a
@@ -785,17 +1016,19 @@ when a needs-you notification for the same session fired within five
 seconds. A phone gets the web push the server sends for the same notice.
 
 Entry points: the **Assistant** button (`components/assistant/button.tsx`, one
-component mounted in one place at a time: the sidebar's **New session** row (a secondary
-icon button to its right, which keeps the workspace switcher's room), the top bar's first row while the sidebar is hidden, or
-the phone toolbar under 768px; keeping it out of the top bar's row leaves that
-row to the header destinations), `Mod+Shift+Space`, the palette's **Ask Aether**, a secondary
-**Ask Aether** in the board's empty states, and **Stuck? Ask Aether** under
+component mounted in one place at a time: the sidebar's **New session** row (a
+secondary icon button to its right, which keeps the workspace switcher's
+room), or the top bar's first row while the sidebar is hidden; under 768px the
+**Assistant** tab of the [phone tab bar](#phone-layout) replaces it; keeping
+it out of the top bar's row leaves that row to the header destinations),
+`Mod+Shift+Space`, the palette's **Ask Cloudfield**, a secondary **Ask
+Cloudfield** in the board's empty states, and **Stuck? Ask Cloudfield** under
 each onboarding step.
 
 ### Landmarks and headers
 
 **Landmarks.** The skip link "Skip to content" is the first tab stop; the
-header navigation is `nav` "Main navigation"; the sidebar is `nav` "Aether"
+header navigation is `nav` "Main navigation"; the sidebar is `nav` "Cloudfield"
 containing `region` "Sessions"; the content is the one `main`, with one `h1` per
 view from `PaneHeader` (`tabIndex=-1`). After a route
 change focus moves to that `h1`, unless the view took focus for itself. Unit
@@ -820,6 +1053,17 @@ have no application menu, so a right-click on the row opens the shell's
 native menu - **Check for Updates…**, Minimize, Maximize or Restore, Close -
 from the window's `system-context-menu` event on a drag region and from
 `controls.showMenu(x, y)` elsewhere on the row.
+
+No platform has a View menu, so the shell zooms the window: Cmd on macOS
+and Ctrl on Windows and Linux, with `=` or `+` to zoom in, `-` to zoom out
+and `0` to return to 100%, matched on the character typed.
+`desktop/preload.js` acts only on a key the page has not claimed with
+`preventDefault`, so inside a terminal the same keys zoom the terminal
+instead. `desktop/zoom.js` scales the window's 960×600 minimum size with
+the zoom, so the layout never narrows into the phone toolbar, which has no
+window controls or drag region. It refuses a zoom whose minimum would not fit
+the display, and on macOS moves the traffic lights to stay centred in the
+row, stopping at 91% where the logo would reach them.
 
 On macOS, the shell keeps the native traffic lights, centers them in the
 44px navigation row and reserves 80px before the logo. The row uses
@@ -855,14 +1099,18 @@ Repository step applies the first such pick, unless the field was edited,
 link is in flight or a clone is connected. A window the shell cannot resolve
 rejects with `no window asked for the folder dialog`.
 Both properties are optional on the type for the same reason `shellVersion`
-exists: a shell built by an older `aether gui build` lacks them.
+exists: a shell built by an older `cloudfield gui build` lacks them.
 
 ### Launch splash
 
 `App.tsx` mounts `src/components/launch-splash.tsx` over the shell at desktop
-startup. It intentionally preserves the original animated night sky, logo
-and pixel wordmark, not the workbench's visual language
-([Styles](styles.md#session-state-and-motion)).
+startup. It plays the website's opening, drawn from
+`public/cloudfield-logo-small.svg`, not the workbench's visual language
+([Styles](styles.md#session-state-and-motion)). A `?raw` import inlines the
+file's text into the bundle: Vite does this for Vitest, and the Turbopack rule
+in `next.config.ts` runs `raw-loader.cjs` for `next dev` and `next build`, so
+the splash fetches nothing. If the file cannot be split into the parts that
+move, the splash shows it as a plain `<img>` instead.
 
 The splash requires `window.aetherDesktop` and plays once per desktop window,
 recorded by `aether.launchSplashShown` in `sessionStorage`. Browser tabs,
@@ -876,6 +1124,8 @@ It stays for at least 600ms, then fades when hydration succeeds or fails.
 A hung connection starts the fade at 2500ms even without a result. The fade
 lasts 260ms, releases pointer input as it begins and unmounts the splash at
 its end, exposing the shell or the raw connection error and window controls.
+A hydrate that lands before 600ms fades the splash while the opening is still
+playing; the rest of the name appears at once and dissolves with it.
 
 ### URL state
 
@@ -917,18 +1167,19 @@ desktop window bar or the phone top bar, and nothing in its own chrome
 scrolls sideways. A control pushed past an edge is unreachable, not merely off
 screen, so every row states what gives way first.
 
-`desktop/main.js` sets `minWidth: 960` and `minHeight: 600`. That is the size
-the desktop rules are designed against; a browser tab has no such floor, so
-the same rules degrade below it rather than break. A phone is the far end of
-that: `src/app/layout.tsx` exports the viewport the shell needs there.
+`desktop/zoom.js` sets `MIN_WIDTH = 960` and `MIN_HEIGHT = 600`, the
+window's minimum size at 100%. That is the size the desktop rules are
+designed against; a browser tab has no such floor, so the same rules degrade
+below it rather than break. A phone is the far end of that:
+`src/app/layout.tsx` exports the viewport the shell needs there.
 
 - `width=device-width, initial-scale=1` - the page is laid out at the device's
   own width rather than a desktop-sized canvas scaled down.
 - `viewport-fit=cover` - the shell paints under the notch and the home
   indicator, and the chrome that touches those edges pads itself back out with
   `env(safe-area-inset-*)`: the phone top bar sideways and downwards, the
-  sidebar sheet on all three edges it reaches, the sidebar on the left and the
-  content view on the right and bottom. The top inset is the one a surface
+  phone tab bar sideways and upwards, the sidebar on the left and the content
+  view on the right (and bottom, on desktop). The top inset is the one a surface
   away from that edge also has to read, because an installed iOS app asks for
   a `black-translucent` status bar and gets the whole screen: it is
   `--safe-top` in `src/index.css`, and the top bar's height, the palette's
@@ -945,9 +1196,9 @@ that: `src/app/layout.tsx` exports the viewport the shell needs there.
   is what every `dvh` in the app - dialogs, the palette, selects, menus - is
   already sized against, so they all shorten when the
   keyboard opens. Nothing in the shell uses `vh`.
-- `themeColor` per `prefers-color-scheme` - the browser reads it before the
-  SPA has applied the member's stored theme, so it follows the OS scheme
-  rather than the app setting.
+- `themeColor` is the dark value, the default theme, so browser chrome matches
+  the page before the SPA mounts; `ThemeEffect` then follows the member's
+  stored theme.
 
 A layout that only changes size belongs in CSS. Layouts that mount different
 elements for a finger than for a mouse, or for a narrow window, ask
@@ -956,8 +1207,8 @@ elements for a finger than for a mouse, or for a narrow window, ask
 room a view has rather than the window, such as Board's columns, measures
 itself with `useElementSize`. The `md` edge is `MOBILE_MAX_WIDTH` and `useIsMobile()` in
 `src/lib/breakpoints.ts`. The shell has one breakpoint: under 768px
-(`useIsMobile()`, Tailwind `max-md:`) the top bar and the sidebar sheet
-replace the sidebar.
+(`useIsMobile()`, Tailwind `max-md:`) the one-row top bar and the
+[phone tab bar](#phone-layout) replace the sidebar.
 
 A panel docked beside other content decides from room, not from the
 viewport. `minReadableWidth` (560px, `src/lib/breakpoints.ts`) is the width
@@ -987,7 +1238,7 @@ Desktop density is untouched.
 Use this variant rather than a new breakpoint or a per-component pixel value.
 
 **Header offsets follow the rendered layout.** `--top-bar-height` (48px,
-border included) in `src/index.css` sets the phone toolbar's height.
+border included) in `src/index.css` sets the phone header row's height.
 The app header reports its measured bottom edge through `--app-header-bottom`
 for the command palette. Desktop dragging uses the navigation row, not a
 separate height token.
@@ -1005,8 +1256,9 @@ layout viewport for the keyboard, so `useKeyboardInset()`
 browsers that resize. `md` is a width breakpoint, so a desktop window
 narrower than 768px is treated as a phone here too. A menu with more than six
 items also opens as a bottom sheet below `md`. On a phone (`phoneScreen`)
-the New session sheet's agent list shows only the chosen agent with **Change**,
+onboarding's First session agent list shows only the chosen agent with **Change**,
 so **Mode** sits above the fold; picking an agent collapses the list again.
+New session has its own phone sheet ([the forms](#the-forms)).
 
 What gives way first:
 
@@ -1100,7 +1352,7 @@ Removal also repairs the selection and open route before any refresh awaits.
   failure, is named as the servers the edge does see online beside the
   server id the dashboard is linked to. Each failure is stored with the
   server id it was measured on. A failure measured on another server than
-  the linked one means the gateway followed a re-link (`aether link
+  the linked one means the gateway followed a re-link (`cloudfield link
   --from-edge`): the dashboard re-reads the link status, resets the
   connection as for any server switch, and shows the failure under the new
   server's id. An offline computer is the client-to-edge layer on a link
@@ -1110,7 +1362,7 @@ Removal also repairs the selection and open route before any refresh awaits.
   instead of an empty sidebar and an empty board behind a toast. Which hop
   failed picks the copy: `network` says this machine has no network at all
   and names wifi and a VPN, `server` says the server did not answer through
-  the selected transport, `gateway` says the local `aether gui` process
+  the selected transport, `gateway` says the local `cloudfield gui` process
   stopped answering, `tailnet` says the phone got no answer from the server
   that serves it the page, and an access refusal preserves the gateway's own
   reason. A fetch that got no answer at all is `gateway` only on the desktop
@@ -1120,7 +1372,7 @@ Removal also repairs the selection and open route before any refresh awaits.
   arrives as `data.refusal` on the gateway's `503`, and `refusalHop` in
   `src/store/sync.ts` maps its `kind` to a class, never its wording:
   `edge-server` (the edge holds no live registration for the server id;
-  `aether-server edge status` on that host reports the server's side of the
+  `cloudfield-server edge status` on that host reports the server's side of the
   same connection and can disagree), `edge-not-claimed` (the edge
   recorded the server's owner, and the server has not applied the claim to
   its live connection yet; says to retry), `edge-refused`
@@ -1143,12 +1395,55 @@ Removal also repairs the selection and open route before any refresh awaits.
   server.** `connect` reads `GET /api/v1/capabilities` before it opens the
   stream, and a `401` there means the local gateway refused its token. The
   store records that refusal verbatim, stops retrying and tells the member to
-  open a fresh URL from `aether gui`. The token is minted per process and held
+  open a fresh URL from `cloudfield gui`. The token is minted per process and held
   in the tab's session storage, so a bookmarked URL, a second tab or a
-  restarted `aether gui` needs a newly printed URL. On the server gateway
+  restarted `cloudfield gui` needs a newly printed URL. On the server gateway
   there is no token check: WhoIs identifies the source address on every
   request, while a tagged node is denied and an unavailable identity service
   reports its own `403` or `503` refusal.
+- **The last snapshot paints before the network answers.** After a
+  successful hydration, ten seconds after later changes and when the page is
+  hidden, `saveSnapshot` (`src/lib/snapshot-cache.ts`) writes the
+  workspaces, sessions, members, server info and capabilities to
+  `localStorage` (`aether.snapshot.v1:<origin>`; contents and deletion in
+  [privacy.md](privacy.md#what-the-app-stores-on-the-phone)). `connect`
+  calls `paintSnapshot` first, on a cold start only (a reconnect to another
+  server never repaints the last one): it fills the store, sets `hydrated` and
+  `staleSince` (the save time), and seeds `identityKey` so hydration treats a
+  different member or server as an identity change and drops the cache.
+  `hydrate` still counts a painted store as a first load (workspace
+  selection, onboarding redirect) and clears `staleSince` when it succeeds.
+  While `staleSince` is set, or a refresh failed, `StaleBanner` shows one
+  line under the top bar: *Saved state from 3 minutes ago*, then the
+  hydration error verbatim (or *reconnecting*; tap it to read it all), and
+  **Retry**, which fires
+  the `online` wake below. While it shows (a saved snapshot, or any failed refresh), the
+  toast, the empty-board "Cannot reach the server" cards and (below 768px)
+  the header connection line stay out, and the banner is the one place the
+  failure is written. On a saved snapshot, every `RequestAction` (Approve,
+  Deny, Reply, permission choices) is disabled, and `RequestActions` writes
+  *Reconnect to act* beside the row: a disabled button shows no tooltip on
+  touch. `runCommands` and `handoffCommands` get `stale` too and disable
+  every gateway verb and the Send and Close dialogs, so **Mark complete**,
+  the **More** menu (which says *Reconnect to act* at its top) and the
+  palette cannot act on a session the agent may have moved on from. Each
+  saved session keeps its current paused state from `pausedRuns` and its
+  confirmed change time as `status_changed_at`; an estimated time is left
+  out and estimated again on paint. Any access refusal (a 401 or 403, or a
+  `refused`, `signed-out`, `not-member`, `device-revoked` or
+  `device-pending` hop, from a load, the stream or the connect probe)
+  calls `refuseSnapshot`: it deletes the saved entry and blocks every save
+  until a hydration succeeds. On a painted snapshot it also shows the
+  connection error instead. A rejected link token does the same and shows
+  the expired-link page as before.
+- **Resuming from the pocket also reconnects without an event.**
+  `connectEvents` runs a 5 s watchdog; a tick more than 15 s late while the
+  tab is visible means the page was frozen, and it replaces the socket like
+  `online`. `pageshow` (back/forward cache) counts as a foreground return, and
+  a `navigator.connection` change of `type` counts as `online` after it has
+  been quiet for 1 s, so a burst of interface events reconnects once. Speed
+  estimates (`effectiveType`, `rtt`, `downlink`) never count, and a browser
+  that reports no `type` never reconnects on a connection change.
 - **The sockets reopen on a foreground or network return.** Both
   `connectEvents` and `connectAttach` subscribe to `visibilitychange`
   (visible) and `online` through `onWake` in `src/lib/stream.ts`. A phone
@@ -1244,7 +1539,7 @@ may do. `useSelfRole()` and `useIsAdmin()` in the same hooks file read the
 role off `server.info`'s member record, and every admin affordance needs both
 predicates: the gateway can carry the method *and* the caller holds the admin
 role. Reads are gated on capability only, so the roster is reachable on the
-server-hosted dashboard as well as through `aether gui`; the server remains
+server-hosted dashboard as well as through `cloudfield gui`; the server remains
 the authority and checks every call again. A non-admin cannot edit membership
 or roles but can grant or revoke access to their own agent account.
 
@@ -1257,7 +1552,7 @@ patch, disk gauge and capabilities descriptor are read through `GET`;
 development and retained capture bytes also use an authenticated binary `GET`,
 not base64 in control JSON. The shared browser's observation-only WebSocket is
 `/ws/dev/browser/{run_id}`; actions stay on the typed HTTP control API.
-`aether gui` sends its per-process token as `Authorization: Bearer` on HTTP
+`cloudfield gui` sends its per-process token as `Authorization: Bearer` on HTTP
 and as `?token=` on WebSockets. The server-hosted gateway sends no token;
 WhoIs authenticates each request.
 
@@ -1268,8 +1563,8 @@ team reads write it onto the stored info, which is the gauge's only reader. The 
 stays optional and the gauge stays hidden if the read fails. What `statfs`
 answers is the whole filesystem holding the data directory, not the directory
 itself, and the gauge is labelled as that: it is the number that says whether
-the box is running out of room, and claiming it as Aether's own usage would be
-an invention.
+the box is running out of room, and claiming it as Cloudfield's own usage would
+be an invention.
 
 `account.usage` is the quota RPC used by Settings > **Usage**. Its params
 are `{account_member_id?: string, refresh?: boolean}` and its result is
@@ -1332,7 +1627,7 @@ where a resend is deduped or refused and the eventual result still shows:
 | Question **Reply** (Details) | Replying… | Yes: a resend of the same text reuses the idempotency key, and the reply arrives as a room event |
 | Teammate message and permission **Approve** / **Deny** (Details) | Approving… / Denying… | No: a second decision would race the first, and its "already decided" refusal would sit beside the first's success |
 | Composer **Send** and the Enhanced pill's Send, Steer and Queue | Sending… | Yes: the draft keeps its idempotency key, so a resend delivers once |
-| Enhanced pill's **Interrupt** and **Resume**, and a session option | Sending… | No: these carry no key, so a late interrupt could stop the turn sent after it |
+| Enhanced pill's **Interrupt**, **Stop waiting** and **Resume**, and a session option | None: the pill dims | No: these carry no key, so a late interrupt could stop the turn sent after it |
 | **Create workspace** | Creating… | No: `workspace.add` carries no idempotency key |
 | **Launch** (launch dialog) | Launching… | The dialog's **Cancel** closes it at any time; the request keeps going, a success still opens the session, and a refusal shows as a toast |
 | Close dialog **Merged** / **Abandoned**, over another verb's pending prediction | Closing… | The dialog's **Cancel** closes it at any time; the answer shows as a toast |
@@ -1369,7 +1664,9 @@ shows (`card-list.tsx`, virtua).
 In a flat session list (`run-list.tsx`) a root lists its subsessions
 under it with a toggle naming the count (**Show 2 subsessions
 **). Subsessions start shown, and a folded one that needs you still shows. Nested rows add the model to the
-agent.
+agent. **All workspaces** leaves out the finished subsessions the sidebar
+does (`withoutSettled`), from its rows and its count, except one with
+sessions under it.
 
 A card (`run-card.tsx`, on the `Card` primitive) has three parts:
 
@@ -1396,7 +1693,7 @@ card's previous object while it is unchanged (`dequal`), so the memoized
 `RunCard` skips it.
 
 A **subsession** is a session that another session's agent started with
-`aether-internal subsession start` ([subsessions](plans/2026-10-26-subsessions.md));
+`cloudfield-internal subsession start` ([subsessions](plans/2026-10-26-subsessions.md));
 its parent is that session and its root the top of the tree. Every surface reads
 one hierarchy: `runParents` in `map-layout.ts` takes a session's parent
 from `parent_run_id`, and
@@ -1424,9 +1721,12 @@ both show:
 | Unreviewed finish | **Review** |
 
 Every action but Approve and the card's Reply goes where the condition's
-`target` points: the session (requests and questions), its Terminal view
-(blocked, held, Enhanced failure), or its Changes view for an unreviewed
-finish.
+`target` points: an agent's request or question opens the session's
+`defaultView` (Terminal for Standard, Session for Enhanced), a blocked, held
+or failed Enhanced session its Terminal view, an unreviewed finish its Changes
+view, and a teammate's question or a usage limit the session's last chosen
+view. Until the session's record loads, an agent's request also opens the
+last chosen view.
 
 While a card has focus, `r` replies and `o` opens (the `card`
 key scope, pushed only then and only for the actions that card offers, so
@@ -1442,17 +1742,51 @@ server drops the reply.
 **Finished footer.** **Archived (n)** swaps Finished for archived sessions in
 scope (Mine applies); **Back to Finished** returns. Archived sessions have no
 automatic deletion countdown. **More finished-run actions** (`…`, in the Finished
-heading, only when it has an item) holds **Archive closed sessions…** and, for
-admins, **Free retained containers…**. Both open the
+heading, only when it has an item) holds **Archive finished sessions…** and, for
+admins, **Free retained sandboxes…**. Both open the
 store-hosted confirmations (`src/components/palette/clear-done-dialog.tsx`,
 drawn by `src/routes/board/clear-done-dialog.tsx`) over a plan snapshotted
 when they open: `clearDonePlan()` and `releaseFinishedPlan()` in
 `src/lib/commands.ts`, over the whole active workspace whoever owns the session.
 `runClearDone()` and `runReleaseFinished()` run at most six calls at once,
-continue past failures and report the first real error; archive counts
-`CodeNotFound` as done. Archiving hides a session whose status is final
-(`isArchivable`) from every group without deleting its history; freeing removes
-a retained container and keeps the session and its history.
+continue past failures and report each session's real error; archive counts
+`CodeNotFound` as done. Archiving hides a session whose status is final or
+`completed` (`isTerminal`) from every group without deleting its history.
+Before the archive confirmation offers its count, it reads `run.close_check` for
+the plan's completed sessions, 50 at a time, and keeps back, with the server's
+reasons, each one that still has live subsessions, a pull request not merged,
+sessions waiting on it or pending cleanup; the server refuses those too, and a
+completed session whose result still awaits review, which the single Archive
+command does not offer.
+The same confirmation offers live sessions that are idle and done:
+`idleArchivePlan()` (`src/lib/idle-archive.ts`) takes a running or parked
+session whose agent replied, or whose turn ended without a report, with
+nothing that needs you, no pending request, no reported wait, no live
+subsessions or held background tasks, not paused, and no open parent. The
+batched `run.close_check` then says how long each has been idle
+(`idle_since`) and whether it closes as merged (`merged_pull_request`, else
+abandoned); one changed within 24 hours, or on an older server that does not
+report `idle_since`, is not included. Each row leads with
+its outcome, then why ("Closes as merged · idle 3d, replied"). One with a
+close warning, a failed check, or an older server that cannot tell its
+outcome starts unchecked and says "Check to close anyway", or "Closing
+anyway" once checked; the rest start checked. The section header's select
+all takes only rows without warnings, so a warned row always needs its own
+click; it shows a full check only when every idle row is checked. On a phone
+the Idle header stays at the top of the scrolling body. Every other live session in scope is listed under **Not included**,
+collapsed, with what keeps it. The title and primary button say what happens
+("Archive 5 sessions, closing 2 first?", **Close 2, archive 5**), Cancel
+holds the focus with its ring drawn, and **Check again** rebuilds the whole
+plan, as does the retry shown when an idle session's check failed. With idle
+sessions offered but none checked the title reads "Choose idle sessions to
+close and archive"; "Nothing to archive" means nothing was offered. On desktop the Idle list scrolls in a bounded box that fades at the
+bottom while more is below; on a phone the sheet scrolls instead. Each checked session is
+closed, then archived, unless it changed since the plan saw it (its status,
+review, state, pause or pending requests); one deleted meanwhile is dropped
+without an error, and a skipped or
+failed close leaves it live and unarchived, and the toast names each session
+that failed with its error.
+Freeing removes a retained sandbox and keeps the session and its history.
 
 **Empty board.** With no sessions in scope the board names the first unmet
 requirement, with one sentence and one button:
@@ -1465,7 +1799,7 @@ requirement, with one sentence and one button:
 3. `agent.list` reports nothing installed: **Set up an agent** (Agents);
 4. Mine hides every session in scope: **Show everyone's sessions**;
 5. otherwise: "A session is one agent working on its own branch in its own
-   container." and **New session**, for members who may launch.
+   sandbox, a container or virtual machine on the server." and **New session**, for members who may launch.
 
 Loading shows two delayed card-sized skeletons per group; a hydrated empty
 group says "Nothing here.". An unreachable server shows its error in place
@@ -1485,7 +1819,8 @@ Needs you count changes.
 
 ### Map
 
-**Map** exposes every individual session, subsessions included. `mapRuns()` reads
+**Map** exposes every individual session, subsessions included, finished ones
+too. `mapRuns()` reads
 the unaggregated `runRows()` presentation rather than Board's folded cards, and `useMapRuns` reuses unchanged card objects
 (`dequal`), so a `run.agent` event re-renders one card. A map card opens that
 individual session; its primary action still targets the condition that needs
@@ -1547,7 +1882,8 @@ old place, new cards fade in, removed ones fade out, and the camera stays.
 A parent's fold button shows its subsession count; folded, `+N`. Folding
 fades the subsessions out and repacks, and the camera follows so the parent
 stays where it was on screen; a folded family never unfolds by itself.
-When hidden subsessions need you the button turns amber, as `+N · k need you`.
+When hidden subsessions need you the button turns the needs-you colour, as
+`+N · k need you`.
 Unlike the sidebar, whose fold keeps Needs you subsessions visible, the Map
 never moves cards on a state change. Folds persist in `aether.ui`
 (`boardMapFolded`), pruned to sessions that still exist.
@@ -1585,9 +1921,9 @@ Map's scope picker (labelled **Lanes workspace scope**), **Mine** and
 - **Time window**: 1h, 6h, 24h or 7d. Without a choice it opens on 1h while
   any session is working, else 6h. Ctrl/Cmd-scroll zooms around the pointer and
   the control then reads **Custom**.
-- **Show**: which links to draw (Agent messages, Overlaps).
+- **Show**: which relationships to draw (Agent messages, Overlaps).
 - **Group lanes by**: status or owner.
-- **Legend**: every bar fill and link style with its meaning.
+- **Legend**: every bar fill, mail mark and link style with its meaning.
 - **Now**, shown only after panning into the past. While the window ends at
   now it follows now.
 
@@ -1595,9 +1931,21 @@ The axis counts back from now ("−20m") up to an hour wide; wider windows
 show clock times, and 7d weekday and date. Shift-scroll, a sideways wheel or
 dragging the track pans; the history page loads as the window reaches it.
 
-**Sections.** By status, sections follow Board: Needs you (oldest wait first),
-Working and Ready for review (newest start first), then Finished (failed
-first, then latest end). Finished starts folded into one summary lane ("37
+**On a phone** (below 768px, and in the Sessions tab's **Lanes**) the label
+column is 36% of the width, between 112px and 160px, and holds each session's
+title, state dot, agent glyph and age. Titles stay in that column while the
+track pans; bars carry the state words, cut with an ellipsis. With a touch
+screen (`coarse` pointer) the time window's buttons are 44px wide. Everything else folds into one **Filters**
+popover: **Workspace** and **Group** selects, **Only mine** (with the line that it filters Working and Finished
+only) and **Archived (n)** switches, the **Show** checkboxes, **Legend** and **Reset**. The
+button counts the filters changed from their defaults (this workspace, not
+only mine, not archived, every relationship shown, by status) and turns
+accent while any is; Reset restores them. Axis labels that would touch are
+dropped. The track keeps the room the live mail arrow needs left of now.
+
+**Sections.** By status, sections follow the sidebar: Needs you (oldest wait
+first), Finished: review and Working (newest start first), then Finished
+(failed first, then latest end). Finished starts folded into one summary lane ("37
 finished · 3 failed") whose strip shows each moment's outcome. By owner, there
 is one section per owner, yours first. A section header counts the sessions that
 ended before the window and offers the next wider window. When no session reaches
@@ -1615,31 +1963,83 @@ outline covers Starting (queued and provisioning); then each span takes the
 state `run.status` history gives it. History knows only the server's
 needs-attention, so a past span reads **Needed attention**; the span since
 the last change shows the viewer's own state (`presentRun`), which alone
-knows Needs you, Paused and Ready for review. Once a session ends, its working
+knows Needs you, Paused and Finished: review. Once a session ends, its working
 spans take its outcome's colour, so only live work reads Working. Time
 before the history read is a dotted outline that says "History not loaded";
 if the read fails, bars fall back to the current state and a **Session history**
 callout shows the server's error with **Retry**. A working bar has a 2px end
 cap and its activity text shimmers; a Needs you bar ends in a **Needs you**
-tag. Finished bars add "took 18m" after their end when there is room.
+tag. A session awaiting review never gets that tag; its label carries a
+review-tone **Finished: review** chip instead of the Needs you chip. Finished
+bars add "took 18m" after their end when there is room.
 
-**Links.** Mail between sessions
-(`coord.message`, bundled per lane pair within 24px, its glyph naming a
-question, reply or report, the arrowhead hollow until every message is
-acknowledged) and, for the hovered or selected session only, file overlaps at the
-now line. A link into a folded family or Finished attaches to its header.
-Hovering or selecting a lane keeps its links in colour and greys the rest.
-Clicking a link opens its facts; a mail link reads the bodies through
-`coord.messages.list` (the thread, else each sender's newest page, since a
-link into a folded lane can bundle several senders) and shows them with
-`MessageRow`. [Styles: Lanes](styles.md#lanes) has the colour coding.
+**Messages and overlaps.** Agent mail (`coord.message`, bundled per lane
+pair within 24px) draws as marks joined by a hairline: a dot on the
+sender's bar and a ring on the recipient's, at the send time, on the bar
+edge facing the other lane, and a thin line between them under the bars.
+The hairlines are fainter below 768px. Marks within 8px on one edge merge
+and show their message count. Mail into a folded family or Finished marks its header. Mail with a session that
+has no lane in this view (another workspace, hidden by **Mine**) keeps its
+drawn end, marked on the top edge. A mark's or link's tooltip names sender,
+recipient, time and how many messages are not yet acknowledged; a session
+folded into a family or Finished keeps its own name and counts.
+Each lane's accessible name ends with its mail, such as "messages: sent 2 to
+Reviewer and received 1 from Reviewer, 2 not acknowledged".
+Mail is not parentage: subsessions show as a family, and nothing draws
+dependencies.
 
-**Popovers.** Clicking a bar or pressing Enter on a lane opens its popover:
+Mail that arrives while the view is open (`appendLaneEvent` records it in
+`laneArrivals`; history pages never do) also draws a dashed arc from
+sender to recipient and tints the recipient's lane; both fade out by 4.5s
+and leave the marks. Mail sent over a minute before it arrives (a reconnect
+replaying the log) and mail outside the time window draw none. More mail
+on the same lane pair restarts its arrow with a count, at most three show at
+once (a new pair replaces the oldest), and arrows at one moment step 16px
+apart, starting 28px left of the window's end. Both ends sit at the send
+time, and the arc bows left by 0.3 of its height (at most 56px), so it
+stays clear of the now line and the bars' end caps. An arrow under 24px
+tall, such as between adjacent lanes or a stub, stays straight so its head
+points at the recipient.
+An arrow follows a family that folds or opens while it shows. An end scrolled past the rows gets a pinned **to**/**from** button
+that moves to it; mail with a session outside the view draws a short stub
+labelled with that session, with the same button when its lane is scrolled
+away. Nothing draws while the tab is hidden or Agent
+messages is off. A second polite status line announces each burst once,
+1.5s after its first message ("New message from Lead to Reviewer", or "3 new
+messages: ...", listing at most three pairs).
+
+Hovering, focusing or selecting a lane draws its mail as solid links (a dot
+at the sender, an arrowhead at the recipient, hollow until every bundled
+message is acknowledged) and greys every other mark and hairline. Chips on the lanes'
+labels count that mail from the focused lane's side: `↔ 3` on the focused
+lane (sessions it talks with), `→2 ←1` on each of them. Sessions past the
+scrolled rows get a pinned **↑**/**↓** button that moves to them, and mail with
+sessions outside the view gets a dashed note. File overlaps draw for the
+focused lane only, at the now line. Moving the pointer onto a link, mark or
+pinned button keeps the lane that drew it. While the pointer heads for one of
+the lane's pinned buttons and keeps closing in, the lanes it crosses wait:
+one it rests on for 150ms, or crosses after a second and a half, takes the
+hover. An
+open popover keeps the lane it opened from in focus: lanes the pointer
+crosses, or that lie under the popover, show only the hover band until it
+closes. Clicking a mark or link opens its
+facts, every bundle a merged mark holds;
+a mail link reads the bodies through `coord.messages.list` (the thread, else
+each sender's newest page, since a mark on a folded lane can bundle several
+senders) and shows them with `MessageRow`. [Styles: Lanes](styles.md#lanes)
+has the colour coding.
+
+**Popovers.** Clicking a bar or pressing Enter on a lane opens its popover
+(with one open, one click on another lane, mark or link moves it there,
+clicking its own lane again closes it, and dragging the track or a pinned
+button closes it):
 "agent · state · elapsed", the title, the reason, next step, branch and diff,
 unread mail, pending inputs, overlaps and the state span under the pointer,
 then the card's primary action (Reply opens the same composer as a card),
 **Open session** and, for Enhanced sessions, **Show agents**, then the
-lane's **Links**, each opening the same facts as clicking that link. A popover whose lane leaves the view, as when its session folds
+lane's **Messages** by session (`→ sent 2 · ← received 1`, then each bundle with
+its direction, time and "not acknowledged"; a session's name moves to its
+lane) and any overlaps, each opening the same facts as clicking its link. A popover whose lane leaves the view, as when its session folds
 into Finished, closes and puts focus on the lane that now draws the session. Show
 agents inserts the session's subagents as sub-lanes: from the live session when
 the session is open elsewhere in this tab, else from one `run.acp.history` page of
@@ -1650,11 +2050,12 @@ subagent. Escape closes and returns focus to the lane.
 and Down move, Home and End jump, Right opens a section, a family or a session's
 agents (or moves into it), Left closes it or moves to its parent, Enter or
 Space opens the popover or toggles a header, and `o` and `r` open and reply as
-on a card; links open from a lane's popover. The axis is a separate tab stop,
+on a card. Focusing a lane draws its mail as links and
+chips, and its popover lists every message, so nothing depends on hover. The axis is a separate tab stop,
 **Timeline window**: Left and Right pan by a tenth, `+` and `-` zoom, `0` or
 Home return to now. A polite status line announces sessions that turn Needs you,
-Failed, Ready for review or Completed, gathered for 1.5s and at most three at
-a time (the Workflow panel's announcer, `src/lib/use-announcement.ts`).
+Failed, Finished: review or Completed, gathered for 1.5s and at most three at
+a time (the Session tree panel's announcer, `src/lib/use-announcement.ts`).
 
 **Data.** `useLaneHistory` holds `laneHistory` in `src/store/lanes.ts` while
 the view is mounted and reads `workspace.timeline` backward with
@@ -1669,7 +2070,11 @@ read. Lane geometry comes from the model
 measurement; above 60 lanes only those near the viewport render. Live bars
 move on a timer of window width per pixel, between 1s and 30s. Lanes move with
 a glide only when they change section, and lanes added after the first render
-fade in; reduced motion turns both off.
+fade in; reduced motion turns both off. A live update that moves lanes keeps
+the view steady: the lane at the top of the scrolled view stays where it was,
+an open popover follows its lane, a resting pointer hovers the lane now under
+it, and keyboard focus on a lane that leaves moves to the lane that now draws
+its session, else to its neighbour.
 
 `aether.ui` stores the window choice, the grouping and hidden link kinds.
 Below 768px the label column shrinks to the state dot and agent glyph, and
@@ -1698,8 +2103,8 @@ its own dot shape and a text or `aria-label` label, so no state is told by
 colour alone. Only Working pulses, breathing in opacity and size, except in
 the sidebar, board, palette and All workspaces, and not under
 `prefers-reduced-motion`.
-Waiting states are a neutral, static glyph; Needs you is the only amber
-state.
+Waiting states are a neutral, static glyph; no other state takes the
+needs-you colour.
 
 `stateWords` gives a state's words: the reason in place of the label when
 the reason names what the session waits on ("Waiting for 2 subsessions", "Waiting
@@ -1722,9 +2127,9 @@ message. *Cause* is the session's `cause` in words; it is shown only while the
 session is live and shows the state the server chose, so not for a paused session
 or a request shown as "Waiting for *name*".
 
-A session that shows a reported wait carries `wait`, what Aether verified about
-the conditions the agent named ([Waits Aether can
-check](failure-handling.md#waits-aether-can-check)). `waitLine` words it,
+A session that shows a reported wait carries `wait`, what Cloudfield verified
+about the conditions the agent named ([Waits Cloudfield can
+check](failure-handling.md#waits-cloudfield-can-check)). `waitLine` words it,
 and `stateWords` puts that in place of the agent's summary, even one that
 reads "Waiting for ...", which moves to the tooltip as "The agent reported:
 *summary*":
@@ -1734,8 +2139,8 @@ reads "Waiting for ...", which moves to the tooltip as "The agent reported:
 | `condition` | "Waiting on *detail* · checked 2m ago", aging with the half-minute clock | the state's |
 | `source_unknown` | "Waiting on *detail* since 01:10 — *error*": the local time of the last successful read and the source's error verbatim, never the last status as current | dashed clock, neutral |
 | `system_fault`, still waiting | "Wait fault: *detail* — *error*" | clock, failed colour |
-| `system_fault`, Needs you | the Needs you reason, then " — *error*" | amber ring |
-| `unverified` | the agent's summary; the tooltip adds "Not verified: the wait names no condition Aether can check." | the state's |
+| `system_fault`, Needs you | the Needs you reason, then " — *error*" | needs-you ring |
+| `unverified` | the agent's summary; the tooltip adds "Not verified: the wait names no condition Cloudfield can check." | the state's |
 
 `toneOf` picks the dot, and the tooltip gives the exact time of the last
 read. Only the server's `needs-you` state lists a broken wait in Needs you;
@@ -1748,7 +2153,7 @@ stale (`cause` `wait-expired`) reads "Reported waiting on *summary*, no
 update for 30m", and `stateName` labels it **Stale wait** rather than Turn
 ended.
 
-The session header's state line shows the words beyond the label the Workflow
+The session header's state line shows the words beyond the label the Session tree
 chip under it already shows, a CI wait's age first ("42m · PR 12 checks";
 a stale one's reason already says "No update for 30m"), since the header
 prints no age of its own; `stateTitle` is the tooltip of
@@ -1767,18 +2172,25 @@ running".
 | Turn ended | dashed ring | `waiting`, legacy `idle`, or a parked session with no `state`: the turn ended without a verified reason. Asks nothing | Working |
 | Stale wait | dashed ring | `waiting` with `cause` `wait-expired`: a waiting report went stale. Asks nothing | Working |
 | Waiting | dashed ring | a session whose request waits on another member, read "Waiting for *name*" | Working |
-| Answered | dashed ring | `answered`: an `answered` report, the agent replied with nothing pending. Its reason is the summary, with no call to action | Working |
-| Needs you | amber ring | `needs-you`: a reported question or blocker, a pending permission, an unanswered question | Needs you, for the member a condition below names |
-| Ready for review | filled accent circle with a check | `finished` (a reported success on a live session), or a `completed` run whose `review` is `ready` or `later` | Needs you for its owner while `review` is `ready`, else Ready for review |
+| Answered | dashed ring | `answered`: an `answered` report, the agent replied with nothing pending. Its reason is the summary, with no call to action. Also a live `finished` session a member answered **Not yet** (no `review`, with a `review_changed_at`), read "Not finished yet" | Working |
+| Needs you | needs-you ring | `needs-you`: a reported question or blocker, a pending permission, an unanswered question | Needs you, for the member a condition below names |
+| Finished: review | filled accent circle with a check | `finished` (a reported success on a live session) unless answered **Not yet**, or a `completed` run whose `review` is `ready` or `later` | Finished: review, never Needs you |
 | Completed / Merged | check | `completed`, `merged` | Finished |
+| Finished: reported to its parent | check in `icon-faint` | an attached subsession's reported success, which is for its parent agent only ([failure-handling.md](failure-handling.md#needs-you)) | Finished, beneath its parent |
 | Closed | ring with a bar | `abandoned` ("Closed without merging") | Finished |
 | Failed | cross | `failed` (an interactive failure parked for review, or a turn that failed), or `failed` | Needs you for its owner while live and `outcome_unseen`, else Finished, sorted first |
 | Interrupted | ring with an exclamation mark | `interrupted` | Finished |
 | Disconnected | broken ring, neutral | `disconnected`: the agent session or process ended while the session is open | Needs you for its owner |
 | Paused | bars | a live session paused by a member | Working |
 
-The sidebar and session list show Ready for review as its own quiet group
-between Working and Finished; the board lists it at the head of Finished.
+The sidebar and session list show Finished: review as its own
+quiet group, with its own count, directly below Needs you; the sidebar shows
+three of its rows and a **N more** button for the rest. The board lists it at
+the head of Finished; the list layout, which folds Finished, shows it as a
+group of its own above Working. Lanes sections count a session and its
+subsessions as one, as the sidebar does. A finished session asks nothing of anyone, so it
+never adds to the Needs you count, a workspace badge or the desktop badge. In
+the session view its primary action is **Review**, which opens Changes.
 
 Live actions (stop, pause, message, Stop waiting) still gate on the wire
 `status` (`running`, `needs-attention`), not on the state.
@@ -1799,24 +2211,30 @@ a `run.review` event under the same `status_seq` rule.
 ([failure-handling.md](failure-handling.md#review)). `run.review` with
 `action` `complete` closes a live session as `completed` (or records it on a
 `completed` run) and sets `review` to `accepted`; `later` sets it to `later`
-and leaves the session where it is. Both return `{"run": Run}` and need the same
+and leaves the session where it is; `not-yet` clears it on a live session. All
+return `{"run": Run}` and need the same
 permission as `run.close`.
 
 The Needs you group, its counts and badges follow the session-state attention
-rule push notifications, watches and `aether sessions --needs-you`
+rule push notifications, watches and `cloudfield sessions --needs-you`
 share ([failure-handling.md](failure-handling.md)): a live session (`running` or
 `needs-attention`) that is not paused, with `state` `needs-you`,
-`disconnected`, or `failed` while `outcome_unseen`, and a reported success,
-live or `completed`, whose `review` is `ready`. Waiting, every Waiting for
-state, Working, a `review` of `later` or `accepted`, and a finished session
-never count. The sidebar's Needs you count, the workspace badges and the
+`disconnected`, or `failed` while `outcome_unseen`. Waiting, every Waiting
+for state, Working, a reported success awaiting review (`review` `ready` or
+`later`) and a finished session never count. An attached subsession's
+success or failure is for its parent agent only (`outcomeHeld` in
+`src/lib/needs-you.ts`, [failure-handling.md](failure-handling.md#needs-you)),
+so it never counts either: the family stays in its parent's group and counts
+the subsession as done or failed. Its run commands offer no **Mark
+complete**, **Not yet** or **Review later**, and its session view shows no
+completion prompt. The sidebar's Needs you count, the workspace badges and the
 list's Needs you rows come from the same `runRows`, so they always agree. The request rows below need a live, unpaused session
 too.
 Needs you means the viewer can resolve it.
 
 The queued message and teammate question rows are the dashboard's own:
 they come from the room, which the session's `state` does not cover, so push and
-`aether sessions --needs-you` do not announce them.
+`cloudfield sessions --needs-you` do not announce them.
 `src/lib/needs-you.ts` holds the conditions as one table, checked in order;
 `needsYou(run, ctx)` returns the first that applies:
 
@@ -1830,10 +2248,9 @@ they come from the room, which the session's `state` does not cover, so push and
 | `state` `disconnected` (labelled Disconnected) | owner | the reason: Agent disconnected: … / Enhanced could not start: … |
 | `state` `needs-you` with a `blocked: <summary>` reason | owner | Blocked: … |
 | `state` `needs-you` with a `needs input: <question>` reason | owner | Agent asks: …, with **Reply** |
-| `state` `needs-you` with a usage limit Aether will not resume | owner | Usage limit reached on …, with **Open** |
+| `state` `needs-you` with a usage limit Cloudfield will not resume | owner | Usage limit reached on …, with **Open** |
 | `state` `needs-you` with an Enhanced `turn interrupted` or `turn ended: <stop reason>` reason | owner | Turn interrupted · reply to continue / Stopped: the reply reached its token limit · reply to continue, with **Reply** |
 | `state` `needs-you`, any other reason: a permission or question not loaded yet | owner | Open the session to see its request, with **Open** |
-| `review` `ready` on a live `finished` or a `completed` run (labelled Ready for review) | owner | Your agent reports this task is finished |
 | `state` `failed` with `outcome_unseen` (labelled Failed) | owner | Agent reported failure; review the result / the reason: Turn failed: … |
 
 Failed and Disconnected rows show their reason in full-contrast text, as a
@@ -1848,7 +2265,7 @@ device as. It is read at hydration, on each `member.device` event (published
 under the workspace id `server`, so the event's unknown workspace does not
 drop it), and whenever the tab returns to the foreground or the browser
 comes back online, which catches a failed read and an approval made with
-`sudo aether-server device approve`, which publishes no event:
+`sudo cloudfield-server device approve`, which publishes no event:
 
 | Device | Who it needs | Reason line | Actions |
 | --- | --- | --- | --- |
@@ -1916,7 +2333,7 @@ the `workspace.timeline` stream keep it current (`pausedFromTimeline` in
 `src/store/board.ts`).
 
 **Unreviewed outcome** marks a success or failure reported with
-`aether-internal report` that the owner has not opened. Interactive Standard
+`cloudfield-internal report` that the owner has not opened. Interactive Standard
 and Enhanced sessions stay live at `needs-attention`, with the reason
 `agent reported success` or `agent reported failure`; Background sessions finish.
 The server owns `outcome_unseen`, so it survives reloads and needs only the
@@ -1928,30 +2345,44 @@ An answer is not ordered against the event stream, so one that a newer
 `run.status` event for the session overtook is dropped and the session is asked about
 again.
 
-A reported success presents **Ready for review** whether or not the flag is
+A reported success presents **Finished: review** whether or not the flag is
 set; a reported failure stays a **Failed** row in Needs you until its owner
-opens the session, the next turn or Close. A session that has ended is in Needs you
-only while its `review` is `ready`; any other keeps its unopened marker in
+opens the session, the next turn or Close. A session that has ended is never in
+Needs you; it keeps its unopened marker in Finished: review or
 Finished.
 
 **Completion review** is the owner's answer to a reported success, held by
 the server as the session's `review` (`""`, `ready`, `later`, `accepted`) and
 `review_changed_at`. A success report sets `ready`; opening the session does not
-change it, so the session stays in Needs you. While the open session is `ready`,
+change it, so the session stays in Finished: review. While the open session is `ready`,
 `CompletionPrompt` (`src/routes/run/completion-prompt.tsx`) shows an inline
 callout above the Chat composer, or at the foot of any other session view:
 "Your agent reports this task is
-finished. Mark it complete?", the summary of the session's latest success
-report when its agent messages are loaded, **Mark complete** and **Not
-yet**. Both are run commands
-(`src/lib/commands.ts`) that follow [Actions](#actions): **Mark complete**
-sends `run.review {action: "complete"}` and predicts `review` `accepted`
-and, for a live session, status `completed`; **Not yet** sends `action:
-"later"` and predicts `later`. A refusal puts the callout back and toasts the
-server's error. After Not yet the callout stays hidden until a new success
-report sets `ready` again, and **Mark complete** stays in the session's actions
-menu and the palette for any session that reads Ready for review. Both need the
-gateway's `run.review` method and the kill permission.
+finished. Mark complete?", the summary of the session's latest success
+report (three lines, with **Show more** when it overflows them as laid out;
+opened, it scrolls within 30% of the viewport), **Mark complete**,
+**Not yet** and **Review later** (Not yet only on a live session), and "Closes
+the session.", which also describes **Mark complete** to assistive technology.
+**Mark complete** is a secondary button, and no button takes focus on its own. Each is a run command
+(`src/lib/commands.ts`) that follows [Actions](#actions): **Mark complete**
+(`complete`) sends `run.review {action: "complete"}` and predicts `review`
+`accepted` and, for a live session, status `completed`; **Not yet**
+(`not-yet`) sends `action: "not-yet"` and predicts `""`; once the server
+accepts it, the command opens the Chat view with the composer focused, from
+the callout, the actions menu or the palette alike, and the composer's
+placeholder reads "Say what is left to do". **Review later**
+(`review-later`) sends `action: "later"` and predicts `later`. A refusal puts
+the callout back and toasts the server's error. While `review` is `later` the
+callout folds to one line, "Finished, kept for later ·" and **Review now**,
+which unfolds it. After Not yet the session reads Answered, "Not finished
+yet" (`notFinishedYet` in `src/lib/status.ts`), its Chat view records
+"*name* said the task is not finished yet" from the `run.review` event, and the callout
+stays hidden until a new success report sets `ready` again. The session's
+actions menu and the palette offer the same commands, except that until
+someone opens the result (`finish_unopened`, which any member opening the
+session clears) they offer **Review the result**, which opens its Chat view,
+in place of **Mark complete**. All need the gateway's `run.review`
+method and the kill permission.
 An interactive session still accepts messages and terminal input; the reason
 line says it remains open for follow-up. Its next working turn returns it
 to Working. Archive eligibility and input gates use the wire status, not
@@ -2053,16 +2484,16 @@ It is reached from the workspace switcher, `g` then `l` and the palette's
 capability gate, optional confirmation and call. Session verbs (`runCommands`):
 **Pause session** / **Resume session**, **Send a message to the agent…**, **Forward a
 port…** (local gateway), **Close session…**, **Kill run**, **Delete run**, **Free
-container…**, **Archive run** / **Restore run**, **Protect run** /
+sandbox…**, **Archive run** / **Restore run**, **Protect run** /
 **Unprotect run**, **Relaunch**, **Pull branch** (local gateway) and **Hand
 off to <member>**. Pull branch fetches the session branch into the linked
 repository; unless you are already on that branch, its toast offers **Switch
 to it** (`pull.switch`, which refuses a dirty checkout with git's own
 reason) and **Copy command** (`git switch <branch>`). Board verbs (`boardCommands`): **Open the board**, **Open
 all workspaces**, **Connect ChatGPT or Claude** (these three in the Navigate
-group), **Ask Aether** (opens the assistant; offered when the server
+group), **Ask Cloudfield** (opens the assistant; offered when the server
 serves `assistant.status`), **New session…**, **Launch from a template…**,
-**Archive closed sessions…**, **Free retained containers…** and the three theme
+**Archive finished sessions…**, **Free retained sandboxes…** and the three theme
 commands. Each verb is offered only when the server would allow it: the gates
 ask the same questions `internal/permissions` does. `useCommandRunner()`
 reports gateway success or its real refusal in both the session's More menu and
@@ -2140,19 +2571,19 @@ the server's events with an RPC response.
   it is bound to, and a port nothing listens on is forwarded with a note that
   its link works once something does. The Environment page's **Forward port**
   opens the same dialog for the environment, whose ports no method lists.
-- **Archive / Restore** are gated on `isArchivable(status)`
-  (`src/store/runs.ts`; `merged`, `abandoned`, `failed`, `interrupted`, never
-  `completed`) plus the kill permission and the `run.archive` capability;
+- **Archive / Restore** are gated on `isTerminal(status)`
+  (`src/store/runs.ts`; `completed`, `merged`, `abandoned`, `failed`,
+  `interrupted`) plus the kill permission and the `run.archive` capability;
   neither confirms, since archiving is reversible. The palette resolves its
   focused session from the session map by `route.params.runId` rather than the session
   list, so an archived session's own page still offers Restore.
-- **Free container…** removes a finished session's retained container and keeps
+- **Free sandbox…** removes a finished session's retained sandbox and keeps
   the session and its history; the session can no longer be reopened. It needs
   `run.release`, the kill permission and a retained-container reason
   (`isRetainedRun`). A freed or expired session no longer offers it, and the
   server checks the lifecycle again if the session changed after the menu opened.
 - **Relaunch** resumes a retained Standard or Enhanced session after explicit
-  Close (`aether reopen` on the command line). It is offered in **More** and
+  Close (`cloudfield reopen` on the command line). It is offered in **More** and
   as the primary button in the composer slot of a finished session, which calls
   `run.relaunch` and swaps the finished record for the live one the server
   returns. A session is eligible while the server reports `container_retained_until`
@@ -2167,11 +2598,26 @@ the server's events with an RPC response.
   repository on this machine, so it answers to `hasLocal('pull')` alone. It
   does not refresh a workspace base or authorize a mirror source.
 
-A command with a `confirm` field - Kill, Delete and Free container - opens
+A command with a `confirm` field - Kill, Delete and Free sandbox - opens
 the session-naming confirmation (`run-command-confirmation.tsx`) from More or the
 palette, with Cancel initially focused. **Close session…** opens its own dialog,
 which asks whether the work was merged or abandoned; a choice closes it and
-shows the outcome at once. Palette confirmations
+shows the outcome at once. The dialog reads `run.close_check` when it opens
+and lists the warnings with `CloseWarnings` (`src/components/close-warnings.tsx`),
+which orders them by risk (pull requests, read as one line of numbers when
+there are several, and unmerged work, then mail, waiting sessions,
+subsessions with their own warnings nested under each, cleanup,
+protection). The buttons read **Close as abandoned** and **Close as
+merged**; with any warning abandoning is `danger` and merging `secondary`,
+without one merging is the primary. On a phone they stack in reading order,
+Cancel first. Cancel holds the focus with the ring drawn (`focusRingShown`); closing as merged ignores
+`unmerged_work`. A command with `closes` (Mark complete, outcome `completed`)
+is checked by the runner itself before it runs, once at a time per session
+(`closeChecking`): with warnings, or a check that failed, the runner opens
+`CloseConfirmation` instead, and **Close anyway** runs the command. More locks
+while that check and the close run. A check that has not answered within 15
+seconds counts as failed, so no close waits on it forever. **Open in Standard** lists the same warnings in its
+confirmation. Palette confirmations
 capture the authenticated identity with the session and command; an identity
 change dismisses a pending or visible confirmation instead of applying it to
 another account. More locks while an unpredicted verb is in flight and shows
@@ -2195,7 +2641,14 @@ view has the header's primary action and **More**. Appearance has explicit
 **Use system theme**, **Use light theme** and **Use dark theme** commands
 that set the same persisted preference as Settings.
 
-The palette ranks with cmdk's default scorer. The pinned local cmdk patch
+The palette ranks with cmdk's default scorer. A command matches on its label
+followed by its aliases, `Command.value` in `src/lib/commands.ts` (a
+destination's `keywords` in `src/lib/surfaces.ts`), so a label that starts
+with the query outranks an alias match: "delete" ranks **Delete session**
+above **Close session…**. cmdk matches subsequences, so check that a new
+alias does not pull a destructive command into an unrelated query; typing
+never runs a command, and Enter on a confirmed verb opens its confirmation.
+The pinned local cmdk patch
 in `patches/cmdk@1.1.1.patch` stays because stock cmdk 1.1.1 leaves the
 input's `aria-activedescendant` unset for the initial selection and stale
 after filtering, and spreads caller props before that attribute, so no
@@ -2224,11 +2677,25 @@ session with `template.launch`, sending the name and the filled-in parameters,
 then reveals it. A refusal shows the server's error and any setup output.
 
 The launch form lives in `components/launch/`. It asks for a
-task, an agent, a mode and a model; an account appears only when one is shared with the
-caller. The agent picker is a list of rows from `agent.list`: the vendor glyph
-in its colour, the display name, and "Login found" or "No login found" for a
-shipped agent (`login_found` checks the launch home for login files, not for a
-working session; a server that does not report it shows nothing). An agent
+task, an agent, an account when one is shared with the caller, a mode and a
+model. The agent picker is a list of rows from `agent.list`: the vendor glyph
+in its colour, the display name, and "Ready" or "Sign in after launch"
+for a shipped agent (`login_found` checks the launch home for login files, not
+for a working session; a server that does not report it shows nothing), or
+"Signed out" in the needs-you colour, with `login_problem` as its tooltip,
+for any agent whose login file cannot sign it in (`login_blocks_launch`), or
+"Sign-in refused" when `login_problem` is only an agent's own refusal. Such
+an agent stays selectable: the server refuses the launch itself when
+`login_blocks_launch` is set, unless a workspace variable signs the agent in.
+For the chosen agent a needs-you callout under the refusal notes says
+"Claude Code is signed out" or "Claude Code's sign-in was refused" (on a
+shared account "<owner>'s Claude Code login is signed out" or "<owner>'s
+Claude Code sign-in was refused") with `login_problem` verbatim; on the member's own
+account it has **Sign in on Agents**, which closes the dialog and opens
+Agents, and on a shared one it says "<owner> signs in again on their Agents
+page or with `aether agent login <agent>`". While
+the list is read again for another account the last one stays, dimmed and
+disabled, and Launch stays off until it answers. An agent
 that is not installed is not listed. **Install more agents...** below the
 list closes the dialog and opens Agents. The last row is `custom`, the escape hatch that
 `agent.list` never returns and that only launches where the deployment pinned
@@ -2237,6 +2704,71 @@ nothing is preselected, Launch stays disabled, and the form says "No agent is
 installed in your environment." with a **Set up an agent** button in place of
 **Install more agents...**. The list is read each time the dialog opens; a failed read
 shows its error and no setup button, and Launch stays disabled.
+
+The Task textarea grows as text is typed or pasted, up to 12rem; longer tasks
+scroll inside the field. A shared prompt grows without that cap so the whole
+prompt is visible.
+
+On desktop, clicking outside the form with a blank or whitespace-only **Task**
+saves the agent, mode and model from an edited or recovered form as launch
+defaults and discards the draft. With task text, active dictation or a launch
+in progress, the outside click slides the form away and leaves a resume
+arrow. The outside click still reaches the view behind the form. **Escape**
+also leaves the arrow, unless a picker handles Escape first. The arrow sits
+at the sidebar edge or, when the sidebar is hidden, the window edge. The arrow
+and **New session** restore the draft. **X** and **Cancel** discard the draft
+and keep saved launch defaults.
+
+The task and launch settings save on change in browser-local storage, scoped
+to the server and signed-in member. Refreshing or reopening the dashboard in
+the same browser profile restores a collapsed draft; another device, browser
+profile or the desktop app has separate storage. Edge-linked gateways keep
+the draft in memory only because another app could serve script from the
+gateway's loopback port. A read error is shown; the current form is kept in
+memory until the user starts a fresh draft. Clearing site data removes it. A
+successful launch clears the draft; a failed launch keeps it. Collapsing
+during launch keeps the pending request, so reopening does not launch twice.
+Shared text waits while a draft exists rather than replacing it.
+
+Below 768px the same form is a bottom sheet (`phone-launch.tsx`): **Task**
+first, focused, with one-word help; then the **Repository** chip, the base
+branch as muted text ("from main"; sessions always start from it) and the
+**Agent** chip; then **Launch** pinned under the form. Permission, the
+account and fallback, Mode, Model, Effort, Resource limits, Subsessions and
+extra repositories sit under **More options**, whose caption names the mode
+and, on a shared account, "<owner>'s account", only the name truncated, with **Install more
+agents...** at its end. Closing the sheet returns focus to what opened it. The repository starts
+on the workspace of your newest session that you started yourself (not a
+subsession or a connector launch) in a workspace that still exists, read once
+when the sheet opens; without one, the active workspace. The agent is your
+saved agent; with none saved, that session's agent if it can launch; then as
+on desktop. A line under the chips says which of the two match that session. A repository chosen here affects only
+this launch. If the chosen workspace is deleted while the form is open,
+Launch turns off and a callout says so; the task is kept. With no workspace
+at all the sheet says so and offers **Add a
+workspace**, which opens Manage workspaces. A refusal shows between the
+form and Launch, outside the scrolling form, so the keyboard cannot hide it;
+past 40% of the screen it scrolls. So a quick task is three steps: **New**,
+type, Launch.
+
+**Sharing from another app.** Opening `/?new=1&prompt=<encodeURIComponent(text)>`, or
+the gateway URL with `&new=1&prompt=...` through an edge, opens New session
+with the text as its task. It is the entry point for sharing from another
+app, so the text only fills the form. At load, before any route is written to
+history, `initialRoute` (`src/lib/url-state.ts`) takes `new` and `prompt` off
+the address with `history.replaceState` and keeps the text in memory, so
+neither Back nor a reload brings it back; a `prompt` without `new=1` is
+dropped. Once the server has answered (not only a saved snapshot) and no
+other form is open,
+`useSharedPrompt` (`components/launch/shared-prompt.ts`) opens the form,
+keeping the first 8000 characters (counted by code point, so an emoji is never split) and saying so in a toast when it cut any.
+Above the task a callout says "Shared from another app: review it before
+launching" with the character and line count, and the task field grows to
+show all of it; both go back to normal once the text is edited. Only the
+address read at load carries a share, so each one meets a fresh form. A
+member who cannot launch gets a toast with the reason: the gateway has no
+`run.launch`, or the role cannot launch. On desktop the panel opens the same
+way.
 
 **Mode** is a segmented control with one line per mode: **Enhanced** (`acp`,
 "Native messages, approvals and progress", see
@@ -2269,8 +2801,9 @@ default**, sends no `model` and shows what that default resolves to when the
 agent reports it. The rest come from `agent.models` for the chosen agent and
 account, fetched when the field first shows and kept for the page session;
 the refresh button asks again with `refresh: true`. The list says when it is
-the agent's cache or a fallback list, and shows a failed discovery's error
-verbatim without blocking a choice. Search matches id, name and description;
+the agent's cache, and shows a failed discovery's error verbatim without
+blocking a choice, after **List from <age>** when it keeps the last list that
+worked. Search matches id, name and description;
 text that matches no id is offered as **Use “<text>”**, so any id works,
 including for agents with no discovery. A saved model missing from the list
 stays selected. A model that is not a single argument is
@@ -2302,15 +2835,16 @@ assistant may have saved since. The first pick waits for that read and for
 the saved account to be applied, then
 preselects the saved agent if it can launch, else the agent of the newest
 session, else the first launchable one, in that agent's saved mode, else
-Enhanced, with its saved model. A successful launch saves only the
-agent, mode and model through `launch.defaults.set` with the revision it
-read; when another device saved since, the refusal carries the current
+Enhanced, with its saved model. A successful launch or an outside click that
+discards a blank task saves the agent, mode and model through
+`launch.defaults.set` with the revision it read. When another device has
+saved since that read, the refusal carries the current
 choices, and the form applies its change to those and saves once more. A
 failed save shows "Launch choices not saved: " and the server's error. The
 saved account is preselected when `account.list` still lists it and `get`
 does not mark it invalid, and the saved fallback policy fills the fallback
 list, keeping only listed accounts. A launch never saves the account or the
-fallback; **Save as my default** under **Options** does, and says "Saved
+fallback; **Save as my default** under **Account** does, and says "Saved
 for every device." until the account or fallback changes again. It saves the fallback list as the session sends
 it, without the selected account. **Session**, **Default mode** and **Set up** on
 Agents, and the onboarding wizard, save their agent and mode the same way
@@ -2340,10 +2874,34 @@ old one open on the same choices. The form starts over when a different
 member signs in while it is open. An Enhanced or remembered mode the agent cannot
 use (no Enhanced support, or its adapter not installed) shows as Standard.
 
-**Options** appears when `account.list` returns more than the caller and
-holds the **Account** select: the caller first as "(you)", then accounts
-shared with them as "(shared)". A shared selection sends its ID as
-`account_member_id` on `agent.list` and `run.launch`. `agent.list` still
+**Account** (`account-picker.tsx`), below Agent and above Mode, appears when
+`account.list` returns more than the caller. It is a radio list: the caller
+first, marked "You", then each account shared with them, marked "Shared".
+Launch stays disabled while `account.list` is pending or failed. A failure
+shows the server error and **Retry account read**; the saved account is only
+replaced after a successful read confirms it is no longer available.
+If the gateway does not offer `account.list`, the form uses the caller's
+account and does not offer shared-account launches.
+Each row ends with what a launch of the chosen agent there meets, read once
+per open with `agent.list` and `account.usage` for every account, four reads
+at a time, and nothing until that account's `agent.list` answers: "Not
+installed", "Needs <owner>'s login", "Your account only" or "Unavailable"
+(its error as the tooltip) from the `agent.list` fields below, else the
+agent's fullest current usage window as "<n>% used" (the needs-you colour
+from 80%, red at 100%, as on Settings > **Usage**; "· stale" with the provider's error as the
+tooltip when its last read failed), else "Sign in after launch" when
+`login_found` is false, else "Ready". "Signed out" or "Sign-in refused"
+(needs-you, `login_problem` as the tooltip) comes before the usage window. A failed `agent.list` reads "Not
+checked" with the error as the tooltip; a failed `account.usage` puts its
+error on the status's tooltip. Expired windows drop on the half-minute
+clock. A status takes at most 60% of its row, here and in the agent list,
+and clips an owner name past 13 characters, whole in the tooltip. A shared
+selection says "Uses <owner>'s <agent> login and quota. Runs
+in your environment with your GitHub login; the session stays yours.", and
+sends its ID as `account_member_id` on `agent.list` and `run.launch`;
+`run.launch` refuses an account not shared with the caller with the server's
+error under "Launch failed". Under the list sit **Fallback** and **Save as my
+default**. `agent.list` still
 returns the caller's own agents and installations, since the session executes
 in the caller's environment, and marks each agent the account's owner has no
 login for with `login_missing`, each name that resolves to the caller's own
@@ -2352,10 +2910,11 @@ login exists but cannot be shared with `unavailable` and the launch's own
 error. The form takes the reason from those fields, never from `source`: a
 member-defined name that is also a server-wide definition launches the
 server-wide one, so it can be `login_missing`. Refused rows are disabled
-("Not logged in", "Your account only", "Unavailable"), and one note under
+("Needs <owner>'s login", "Your account only", "Unavailable"), and one note under
 the picker says "<owner> is not logged in to <agent>" and that the owner logs
 in from their own Environment, that the caller's own definitions run only
-on their own account, and "<agent> cannot launch on this account: " with
+on their own account (choose your own under Account, or More options →
+Account on a phone), and "<agent> cannot launch on this account: " with
 the server's error unchanged. On a shared account with nothing installed the
 heading reads "Neither you nor <owner> has an agent installed." and the note
 says the session uses the owner's login and the caller's installation, or the
@@ -2366,21 +2925,28 @@ sessions** select: **Use my setting** (naming it, "(off)"), **Allow for this
 session** and **Off for this session**, sent as `run.launch` `subsessions: "on"` or
 `"off"`; the first sends nothing.
 
-Below the select, **Options** holds the [usage
+The collapsed **Fallback** under the account list, whose caption reads
+"Automatic", "Ordered" or "Off", then "if <owner> runs out" with only the
+name truncated, holds the [usage
 fallback](teams.md#usage-fallback) controls (`launch-options.tsx`): a
 **Fall back to another account** checkbox and the **Fallback accounts** list,
-each account with a checkbox and
-**Move `<name>` up** / **Move `<name>` down**. A hint names the rule: "The
-session starts on the account here with the most usage left if `<owner>`'s
-usage is at 95% or more at launch, and continues there if the vendor
-reports the limit mid-session.", with "the first ticked account, top to bottom,
-with usage left" in place of "the account here with the most usage left"
-once the list was changed. Untouched, the
-form sends neither field and the server orders by usage left. After a
-reorder or untick it sends the ticked accounts in order as
-`fallback_account_member_ids`; with the checkbox off, or every account
-unticked, it sends `no_fallback: true` and the summary adds "· Fallback
-off". The list leaves out the selected account.
+each account with a checkbox, "You" or "Shared", the account list's status
+("Skipped: <status>" where a launch would be refused, which usage fallback
+skips too, and "No saved login" for "Sign in after launch", whose tooltip
+says a launch may still fall back there, last, but a running session moves
+there only with an API key),
+and **Move `<name>` up** / **Move `<name>` down**. A hint names the rule: "If
+<owner>'s usage is 95% or more at launch, or the vendor reports the limit
+mid-session, the session moves to the ticked account with the most usage
+left.", with "the first ticked account, top to bottom, with usage left" once
+the list was changed. Untouched, the form sends neither field and the server
+orders by usage left. After a reorder or untick it sends the ticked accounts
+in order as `fallback_account_member_ids`; with the checkbox off, or every
+account unticked, it sends `no_fallback: true`. The list leaves out the
+selected account but keeps its place and tick, so selecting another account
+and editing the list never drops it; changed from automatic, the list adds
+it last, ticked. An account the changed list did not hold, such as one
+shared since, joins it unticked.
 
 The launch form does not ask which workspace to launch into: it takes
 `activeWorkspace` and says where the session will land, naming the workspace and its
@@ -2405,8 +2971,20 @@ written to the address as `?run=<id>&view=<view>`; the old `?view=diff` reads
 as `changes`.
 Every way into a session navigates to `run`: board card, sidebar row, session list,
 palette, feed entry, approval, conflict chip, template, and the launch and
-onboarding forms. A view the address does not name is the one this tab last
-showed for the session (`runViewMemory`, not persisted), else `defaultView`:
+onboarding forms. A view the address does not name is the one the member last
+chose for the session, else `defaultView`. Choosing a view means picking a tab
+(click, `[` or `]`) or following a link or command that names a
+view, such as Review changes or a file path; an opened `?view=` address shows
+its view without choosing it, since a reload reopens one too. Reply is not a
+choice. Session rows, card titles and `u` open the last chosen view even when
+the session needs attention. Explicit actions, such as Open terminal or Review,
+open the view needed for that action without changing the choice. Back and
+forward show the view their entry names without choosing it. `runViewMemory`
+holds the choices, the newest 200 sessions per signed-in
+member, saved under `aether.ui` in `savedRunViews` by identity key, so they last as long as the browser origin's storage (the desktop app's origin changes each launch); deleting a
+session drops its entry. A chosen view the session no longer has, such as
+Files without a checkout, gives way to `defaultView`.
+`defaultView` is
 Session for an Enhanced session or any session that streams a session (`acp: true`),
 Terminal otherwise. Trace follows Chat for a session with `acp: true` only.
 Files is in the list while the session still has its
@@ -2478,7 +3056,7 @@ tooltip adds the `agent.list` display name, `run.model` and `run.effort`,
 allows, "On `<name>`'s account (fallback)" when the session carries
 `requested_account_member_id` ([usage fallback](teams.md#usage-fallback);
 a `run.account` event updates it live when the session moves), the reason, and
-the owner. The state's dot and label are the Workflow chip's, on the row
+the owner. The state's dot and label are the Session tree chip's, on the row
 below. A subsession adds a `nav "Run lineage"` row under the header: its
 root and parent as links, then "This subsession", and **Detached** once it
 no longer counts toward its parent. The reason takes only the room left over, so a long command never
@@ -2500,13 +3078,19 @@ The actions, in order:
 2. **Show details** / **Hide details** (`Mod+.`).
 3. **More** (`components/run-actions.tsx`, an icon button on a phone): every
    session verb from `lib/commands.ts` except **Send a message to the agent…**,
-   which the composer replaces, then **Hand off…**, the mode switch,
-   **Open in editor…**, **Captures…** and **Raw events…**, then **Close
+   which the composer replaces, then **Hand off…**, **Leave a comment…**,
+   the mode switch, **Open in editor…**, **Captures…** and
+   **Raw events…**, then **Close
    session…**, **Kill run** and **Delete run** after a separator. Kill, Delete
-   and **Free container…** confirm first. Where the server offers
+   and **Free sandbox…** confirm first. Where the server offers
    `run.children.allow`, the owner of a live session also gets
    **Allow subsessions** (`run.children.allow` `on`), and the owner or an
    admin **Turn off subsessions** on a session that allowed them.
+   **Leave a comment…** opens Details with the cursor in the note field. On
+   a desktop layout, a right-click on Chat opens the same menu at the
+   cursor, except over selected text, a link, an input, code, an image or
+   a terminal, and on Shift+right-click, where the browser keeps its own
+   menu. The desktop app has no menu of its own there.
 
 Kill and Delete of a session with unfinished subsessions (live, not detached; the
 store's sessions whose `parent_run_id` is this session) say "Its 2 unfinished subsessions
@@ -2518,7 +3102,7 @@ ask, and never on a phone (`phoneScreen`), which has no editor to hand the
 session to. A paused session shows it disabled with **Resume the session first**. Its
 dialog has a **VS Code**, a **Cursor** and a **Zed** button, each navigating
 to that editor's deep link for the ssh host `<run-id>.aether` and the
-checkout `/workspace`, then `ssh <session-id>.aether` and `aether ssh-config` as
+checkout `/workspace`, then `ssh <session-id>.aether` and `cloudfield ssh-config` as
 copyable commands for whoever has not set the host up. The item is
 not offered for a session whose id is not one lowercase host label (`runHost`),
 the only kind the links and the command are built from. The dashboard calls
@@ -2545,9 +3129,8 @@ activation, on its own 32px row under the header at every width. When the
 row is too narrow for every tab, as on a phone whose session has a pull request,
 the tabs scroll sideways (`ViewSwitch`): the shown view's tab is kept in
 sight as the view or the room changes, and the right edge fades while more
-tabs lie past it. The [Workflow panel](#workflow-panel)'s chip follows the
-tabs. On a phone with the composer focused the header keeps only the title
-line.
+tabs lie past it. The [Session tree panel](#session-tree-panel)'s chip follows the
+tabs. A phone has its own header and tabs; see [Phone session](#phone-session).
 
 A session with a pull request shows it at the right end of that row
 (`pull-request.tsx`): `#412`, a link to the pull request on GitHub, then the
@@ -2567,7 +3150,7 @@ when the session page opens, every 60
 seconds while the page is visible, after each push or creation in the
 dialog, and at once on a `run.pr` or `git.branch` event for the session. The header and the [git card](#changes-view-and-publish)
 share one poll per session however many of them are mounted. It re-reads `run.git.status` only when the answer says the branch or
-HEAD moved. Both calls execute `git` and `gh` in the session's container, so the
+HEAD moved. Both calls execute `git` and `gh` in the session's sandbox, so the
 check state exists only while the session is `running` or `needs-attention`: a
 session that leaves those states keeps the link and drops the state, and a page
 loaded after that shows neither. The board and sidebar show no pull request.
@@ -2591,7 +3174,7 @@ over polled controller metadata; the controller's name remains visible
 beside **You control** or **You control in another session since <time>**.
 That text appears when `run.room.status` names your member with a
 `control_session_id` other than this tab's: another tab, device or
-`aether attach`, held since the lease's `acquired_at`.
+`cloudfield attach`, held since the lease's `acquired_at`.
 **Multiplayer** still opens Details for shared notes and run facts.
 The strip is one row whenever the controls fit beside a 6rem roster, which
 covers desktop windows. Only when they cannot, as on a phone with
@@ -2603,6 +3186,18 @@ and below 30rem **Multiplayer** keeps only its icon. The controller summary
 truncates instead of wrapping, at 12rem below a 48rem strip. Offline or
 failed presence reads mark the retained roster **(last known)**. Control and
 presence failures stay beside the action rather than inside a closed composer.
+With a mouse or touch pointer on the multiplayer strip, `useDotFade`
+(`routes/run/dot-fade.ts`) swaps the strip's dot texture for SVG copies of
+it and springs each dot away from the pointer. Pointer speed adds a
+two-branch V wake, and a click or tap swells the nearby dots under a spreading
+ring. The clear bars behind text damp motion to 25%. The effect is decoration,
+so the strip is not a tab stop and takes no keys. The hook listens on the strip
+alone: `ControlButton`'s pointer capture and a touch's implicit capture keep a drag's
+moves there, and `touch-pan-y` keeps a horizontal touch drag from turning into
+a pan. Events only record the pointer; each animation frame measures the strip
+and its clear bars once, moves the dots, and rewrites only those not at rest.
+When every dot is back at rest the SVG is removed and the static texture
+returns. With reduced motion the strip keeps the static texture.
 
 ACP control uses the same server-timed hold, seven-second holder dialog,
 cancellation and server acknowledgement as Standard sessions. Streaming updates
@@ -2613,19 +3208,23 @@ generation. Takeover denials belong to the requester, not the holder.
 `MultiplayerControls` renders `ControlMatrix` as the strip's background,
 and `TerminalPane` renders it behind the agent terminal's toolbar. The
 component is a neutral dot layer, one `radial-gradient` tile, under a
-colored copy of the same dots. The bars give each group of text and
-buttons `.control-matrix-clear`, a 90% `--chrome` fill with a blurred
-shadow of the same colour that hides the dots under the group and fades
-them back in around it. A `:has(> .control-matrix)` rule turns
-`text-muted` on the bar to `--text`. The copy is clipped from the left by
-`--control-reach`, a registered `@property` number (1 empty, 0 full), so it
-is revealed from the right edge, where the control button sits. The
+colored copy of the same dots. While the strip's dots move, `useDotFade`
+removes these backgrounds and draws each layer's dots as an SVG inside the
+same element, red hold copy included, so the clipping, masks, colors and paint
+order below apply unchanged.
+The bars give each group of text and buttons `.control-matrix-clear`, a 90%
+`--chrome` fill with a blurred shadow of the same colour that hides the dots
+under the group and fades them back in around it. A rule on the matrix's
+siblings turns `text-muted` on the bar to `--text`. The copy is clipped from the
+left by `--control-reach`, a registered `@property` number (1 empty, 0 full),
+so it is revealed from the right edge, where the control button sits. The
 acquisition, release and takeover animations drive `--control-reach` and
 `color` on the colored layer. Its opacity is a separate animation: 70%
 while the dots move or a hold is under way, then half once acquisition
-settles, breathing on an infinite 8-second loop. During a hold
-`--control-hold` moves a 4rem gradient mask that fades the teal out and a
-red copy in. In
+settles. Behind the terminal toolbar it then breathes on an infinite 8-second
+loop; on the multiplayer strip, whose dots answer the pointer, it holds still.
+During a hold `--control-hold` moves a 4rem gradient mask that fades the
+`--control-light` dots out and a red copy in. In
 Enhanced sessions its appearance follows the acknowledged ACP lease, not the
 unused agent terminal's history or connection state, and it shows on every
 view that shows the strip. Voluntary release retracts it; takeover
@@ -2639,11 +3238,12 @@ progress, takeover loss and reduced-motion behavior.
 The Chat view (`session-view.tsx`) is the session's conversation: what was said
 to the agent, what it did and asked, and the session's notes. It is a `virtua`
 list in a 736px column over `rowsForRun` (`store/sessions.ts`). For a Standard
-session the rows come from the session's `run.agent`, `workspace.timeline` and
-`run.status` events (read with `workspace.timeline` filtered by session and type,
+session the rows come from the session's `run.agent`, `workspace.timeline`,
+`run.status` and `run.review` events (read with `workspace.timeline` filtered by session and type,
 then kept live by sync), room messages, the session record and its pending inputs:
-`user` (a message to the agent with its delivery word), `note` (the Notes
-thread's row, without the thread's own arrival motion), `steps` (consecutive
+`user` (a message to the agent with its delivery word), `note` (the owner's
+own question as a Notes thread row, without the thread's own arrival motion;
+`comment` messages get no row, they are stickies), `steps` (consecutive
 tool calls in one closed block, "Ran 3 commands and read 2 files", expanding
 to verb-first steps), `request` (an agent request reads "Answer in
 the terminal." with **Open terminal**, or "Answer it from the agent's
@@ -2679,6 +3279,48 @@ screens, opening Details narrows the pane rather than overlaying the composer.
 Its focus highlight follows the outer border around the textarea and attachments.
 Transcript rows retain their 736px reading width.
 
+Open `comment` room messages show as a floating sticky rail in the pane's
+right gutter (`session-notes.tsx`), not as transcript rows: stacked oldest first,
+236px wide, 20px from the top, right and bottom edges, each card rotated a degree
+off the last, and not scroll-linked to the rows above it; the rail scrolls its own
+contents instead of growing past the pane. A card still being sent shows "Sending…"
+in place of the time and "via ChatGPT" after the name when a connector posted it,
+the same as a thread row, and its Complete and Delete stay disabled until the
+saved copy, under its server id, replaces it. A check completes a
+note: red strokes scratch across its text, the text dims, then the card fades
+and collapses; an X deletes it the same way with no scratch. Both buttons show
+on hover, focus, or touch and need the note's author, the session's owner, or
+an admin; there is no undo. A screen reader hears "Note completed." or "Note
+deleted." once the server accepts. When the Chat pane is below 1248px wide
+(Details or a docked Browser can narrow it), the rail becomes a strip above
+the composer, "N notes ▾", that expands to the same cards within its own
+bounded, scrolling list so expanding it cannot push the composer out of view,
+and Details keeps listing open notes as it always did. At 1248px and over,
+while Chat is the active view, Details drops that list - the rail already shows
+the open ones - and keeps only the composer and a "Done" history of completed
+notes; switching to Terminal, Changes or another view, the rail no longer shows,
+so Details lists open comments again. `question` notes are never stickies; they
+keep their row in Details and **Reply**. A refused completion or deletion
+restores the card with the server's error and **Retry**; if the server answers
+after the 5 second deadline, the late refusal replaces the "did not answer"
+text with its real reason. If another member already completed or deleted
+the note, the card shows the error without **Retry**, and **Dismiss** removes
+it.
+
+The subagents bar (`agents-bar.tsx`, a `region "Subagents and workflows"`)
+sits above the changes bar in Chat at every width, and is absent until the
+session has a subagent or workflow. It lists every one the main agent
+launched, and any whose launch is not loaded; a workflow is one row. Its
+header is the launch step's summary ("3 subagents and 1 workflow · 2
+running, 1 failed"). It starts collapsed (`expandedRows[runID]['agents-bar']`,
+not persisted). Expanded, at most 192px tall (30% of the viewport on a
+phone), each row shows the dot, the label, and the state with its elapsed
+time, or `3 of 8 agents done` for a workflow that reports rows. Running rows
+come first, oldest launch first, then failed, stopped and the rest, each
+newest first (`topAgents` in `store/subagents.ts`, which returns one string
+so the bar re-renders only when a row's state changes). A row opens the
+subagent inspector; the open one carries `aria-current`.
+
 The changes bar (`changes-bar.tsx`) sits above the composer: one line,
 "14 files changed +612 −140" and **Review**. It counts the session's whole
 worktree against its base, the Changes view's **All changes**, so
@@ -2699,12 +3341,17 @@ failed read shows the server's error with **Retry**. Conversation rows carry no 
 For a session with `acp: true` (Enhanced, or Background over ACP) the rows come
 from its [session item log](enhanced-sessions.md#instructions-and-the-session-log) instead.
 With no conversation rows or older-history control, the pane shows a
-decorative, low-contrast Aether mark above the session's title, workspace, agent
+decorative, low-contrast Cloudfield mark above the session's title, workspace, agent
 and mode, branch, owner and creation time. The title and each metadata row
 are centered in the conversation pane, including when long metadata needs
 scrolling. The overview gives way to the conversation as rows arrive. History
 errors and their **Retry** action remain visible above it; the overview does
-not imply that the agent is connected.
+not imply that the agent is connected. While the stream first connects, a
+session with nothing held shows neither the overview nor the people's
+messages: after ~200ms a skeleton of three exchanges stands in, announced as
+"Loading the conversation…". It gives way to the conversation, or to the
+overview when the replay holds no rows or the first connection fails. A
+session switching mode opens no stream and shows the overview.
 
 Screenshots with fixture data: [desktop](media/acp-session-desktop.png),
 [phone](media/acp-session-phone.png),
@@ -2725,7 +3372,10 @@ or reloading the tab, releases a held lease before the stream closes, so a
 reload takes it straight back. Navigating away waits up to 2 s for the release's answer, because the
 server commits it on the stream's context. Closing the stream resets the
 session's stream and lease state. Frames go through `batchNotifications`, so a
-burst re-renders once per frame.
+burst re-renders once per frame. The client holds the ack until the `replay`
+items it announces have arrived and applies them together, so a conversation
+never paints half loaded or shows a finished turn as live. A stream that closes
+mid-replay drops what arrived, and the next subscribe replays it again.
 
 An ack or history page's `truncated_before` displays the expired-prefix
 boundary. The page's `oldest_seq` stops older-page requests at the actual
@@ -2743,7 +3393,8 @@ at a time, along with older room messages, and repeats until that much is
 loaded above the viewport or history ends. A page shorter than the request
 does not end paging, so a server with a lower `limit` cap still pages to the
 start. If the loaded rows do not fill the viewport, paging continues until
-they do or history ends. Inactive views and failed reads do not auto-page;
+they do or history ends; that paging keeps a view that follows the newest row
+following. Inactive views and failed reads do not auto-page;
 failures keep the server's error with **Retry**. While older items remain, a
 room message or agent message from before the oldest item held stays hidden
 until the items around it load; a message the agent has not taken yet always
@@ -2755,7 +3406,9 @@ While every row below the top visible one keeps its key, it anchors the page
 from the end. That keeps the distance from the end, which moves with any row
 that resizes below the reader, so an unpinned view also restores the first
 visible row that survives, by key and offset; that alone places the view when
-live rows arrive with the page. A closed
+live rows arrive with the page. A view at the end follows the newest row, also
+while a streamed reply grows its row in place; only the reader's own scrolling
+stops it. A closed
 turn's rows are derived once and kept; only the open turn re-derives. At most
 three sessions stay whole; the least recently
 opened others keep their newest 200 items. Rows: `user` (a
@@ -2763,7 +3416,9 @@ right-aligned bubble; the author shows only when it is not the viewer or the
 message came through a connector, and the session's appended instructions hide
 under its task), `steps`, `assistant` (markdown through `react-markdown` and
 `remark-gfm`, split into blocks with `marked`'s lexer so only the streaming
-block re-renders, code highlighted with the Lezer languages), `live`,
+block re-renders; code in a streaming reply is highlighted with the Lezer
+languages once its block is complete, when another block follows or the reply
+ends), `live`,
 `event` (a wake, a new agent conversation, or a notice outside a block),
 `finished` and `agent-message`.
 
@@ -2772,8 +3427,8 @@ new agent conversation (`store/session-steps.ts`). In a segment, the agent's
 prose stays in the conversation as `assistant` rows, and the work between
 two pieces of prose (thoughts, tool calls, plans, subagent launches and
 answered requests) joins one `steps` block. The prose after the last block
-is the answer. The `aether-internal report` call (or `aether_report` tool)
-that ends an Aether turn joins the block before the prose it follows, so a
+is the answer. The `cloudfield-internal report` call (or `aether_report` tool)
+that ends a Cloudfield turn joins the block before the prose it follows, so a
 reply written before reporting stays the answer. A segment without work,
 such as `ping` and `pong`, has no block. The
 block's header names the work ("Read 12 files, ran 5 commands and edited 3
@@ -2781,8 +3436,8 @@ files") with up to three tool icons, failures, plan progress and tools still
 running. While the turn is open and the stream live, the header carries the
 live state instead: the state dot, "Running npm test", "Waiting on 2
 subagents", "Waiting for your approval: <command>" (or "Waiting for your
-answer") in amber, else "Working", with the seconds since the block's work
-began: the segment's start for its first block.
+answer") in the needs-you colour, else "Working", with the seconds since the
+block's work began: the segment's start for its first block.
 A turn whose newest row is not a block keeps the `live` row. Steps sit on a
 rail: thoughts (a two-line preview that expands to the whole thought), lookups
 (consecutive reads, searches and fetches as chips; a chip for a file in the
@@ -2849,12 +3504,23 @@ Workflow call, or an Agent call with `run_in_background`, completes as soon
 as its work starts. When the call carries `tool_call.task`
 ([`internal/acphost/items.go`](../internal/acphost/items.go)), the card follows
 the task: running, then done, failed or stopped, with elapsed time to the
-snapshot that settled it. Without it, the card reads "Launched in the
+snapshot that settled it, and a settled subagent card's report is the first
+line of the subagent's last message. Without it, the card reads "Launched in the
 background", and running once a child item is logged after the call
 completed. The launch acknowledgement is never shown as a report. A workflow card lists the subagents whose items name it as parent.
+A workflow is labelled with the name it reports (`tool_call.task.workflow.name`),
+and a type equal to the label is not shown. While its call carries agent rows,
+its card adds `3 of 8 agents` and its second line reads
+`Phase 2 of 3: Fix · 2 running` (`2 running · 3 queued` without phases),
+`8 agents finished`, `1 of 8 agents failed: <first error line>` or
+`Stopped with 2 agents not started`.
 A subagent whose launch call is not loaded, or was trimmed, shows its card at
 its first held item until a history page brings the launch; without the
-call its state is unknown. A launch id seen again after
+call its state is unknown. When the session state lists a live subagent or
+workflow task that no held call started, the Chat and Trace views page
+`run.acp.history`, up to five pages, until one does or history ends: a reload
+replays only the newest 200 items, and leaving a session trims it, either of
+which can drop a launch that still runs. A launch id seen again after
 its call settled names a new subagent, keyed `<id>@<seq>`. While the main
 agent only waits on its subagents, the live steps header reads "Waiting on 2
 subagents". A fallback launch shows a card with no nested items;
@@ -2884,6 +3550,37 @@ call's text content). Until a known subagent's launch call is loaded it pages
 an id the loaded history does not name pages only on that button. A failed
 page, or a failed read of the whole launch item, shows the server's error
 with **Retry**.
+
+A workflow's agents report rows, not items, so its inspector shows the
+workflow view (`routes/run/workflow-view.tsx`, a plain scrolling list) in
+place of the transcript:
+
+- A count line over the rows the server sent (`2 of 8 agents done · 2 running
+  · 1 failed · 2 queued · 41K tokens`, zero parts left out), and the number
+  `omitted` past the server's 100 rows.
+- The rows, under one numbered heading per phase (`2. Fix · 1 of 3 done`);
+  rows whose `phase` matches no phase come first without one.
+- Each row: dot, label, type, duration or running time, `attempt N` from
+  the second attempt, and a second line by state: the last tool and its
+  summary, the first line of the result, `Reused a cached result`, the
+  error, `Queued` or `Skipped`. Once the workflow's task is not running, a
+  row still running reads `Stopped` and one still queued `Not started`
+  (`workflowRowState` in `store/subagents.ts`).
+- A row is a button with `aria-expanded`; open, it shows the model, tool
+  call and token counts, the prompt preview, and the result as Markdown or
+  the error verbatim. A failed row starts open. Folds are
+  `expandedRows[runID]['wf:<tool call id>:<row index>']`.
+- **Log** (the last lines the script logged) and **Script**
+  (`raw_input.script`), both folded.
+- `Starting. Agents appear here as the script launches them.` before the
+  first row, and `This workflow launched no agents.` for a settled one
+  without rows. A settled call with no `task.workflow` says it was recorded
+  before per-agent progress, and its script starts open.
+
+A call cut for the wire carries each row's label and state without
+previews, so the card and the bar keep their counts. The open inspector
+reads the whole item with `run.acp.item` on every snapshot and lays the
+cut rows over the last whole ones in between.
 
 A tool call snapshot logged in a later turn than the call's first, as
 when a call outlives its turn, joins that first turn and keeps one row.
@@ -2929,7 +3626,12 @@ running, and a later follow-up opens a new autonomous turn. With text typed
 the pill is **Send**, which starts a turn, so a reply to the question still
 goes out. `Enter` does what the pill says and nothing without text or
 images, `Shift+Enter` adds a line and `Mod+Shift+Enter` queues; on touch only
-the pill sends. `Enter` is a plain key, which the shortcut table stands down
+the pill sends. With the box empty or the caret at the very start,
+`ArrowUp` fills the box with the last prompt you sent in this session and each
+further press the one before; `ArrowDown` steps forward again and, past the
+newest, restores what you had typed. Anywhere else the arrows move the caret,
+so a wrapped draft is never replaced. The walk uses the prompts as they were
+when it started, and any edit ends it (`composer-history.ts`). `Enter` is a plain key, which the shortcut table stands down
 for inside a field, so the textarea answers it itself through `isPress`; the
 binding stays registered so the shortcuts reference lists it. A key still composing in an input method
 never sends. The shared upload state in
@@ -2967,13 +3669,19 @@ the same rows; closing it with files attached returns focus to the field unless 
 coarse pointer skips the popover: **+** opens the chooser directly and the
 chips carry the progress.
 
-Dragging files over the box covers it with a dashed veil (accent only while the drop would be accepted) reading "Drop
-to attach n files"; it ignores text and link drags, takes no pointer events so
-the field keeps its caret, and reads "At most n files fit", "Uploading…" or
-"At most 8 files" when the drop would be refused (the cursor then shows no
-drop). `useFileDrop` in `web/src/lib/file-drag.ts` counts the files in the drag (not the link or markup it carries) and the enter and leave
+Dragging files over the Chat pane attaches them; the pane covers with a dashed
+veil reading "Drop to attach n files". The pane is the conversation and
+composer area, below the session header and beside neither the sidebar nor
+Details. The composer also keeps its own drop target. Both share the composer's
+current capacity and disabled state and ignore text and link drags; their veils
+take no pointer events, so the field keeps its caret. A refused drop reads "At
+most n files fit", "Uploading…", "At most 8 files" or "Files cannot be attached
+now" (the cursor then shows no drop). `useFileDrop` in
+`web/src/lib/file-drag.ts` counts the files in the drag (not the link or markup it carries) and the enter and leave
 events so a child never ends the drag early, and stops them so a drag over the
-popover's zone does not also drive the box around it. Folders are not walked:
+popover's zone does not also drive the box around it. A drag over a dialog or
+popover opened from the chat, such as the image viewer, is not a drop on the
+pane. Folders are not walked:
 a dropped folder fails as a file with the browser's own read error. The Session
 view and Home both call `useRefuseStrayFileDrops`, so a file dropped outside a
 target does nothing instead of replacing the dashboard with that file.
@@ -2982,12 +3690,17 @@ The timeline rows and both composers share `sessionColumn`
 (`session-rows.tsx`): the 736px column with 16px gutters, so message text and
 the message box line up at every width. The box (`rounded-composer`, 14px)
 holds the textarea above one footer row: attach, **Insert a template**, the
-agent's mode, model and effort pickers, the context meter, and the send pill
-at the end. The Standard composer's row has attach, **Insert a template** and
+agent's mode picker, one picker for its model and effort that reads
+`Fable 5.2 / High`, the context meter, and the send pill
+at the end, with the dictation mic (see [Dictation](#dictation)) just left of
+it. The Standard composer's row has attach, **Insert a template**, the mic and
 Send. The pill is a
-round arrow while it reads **Send** and widens to its word otherwise. Hints
-and the 45-second delivery notice sit under the box. Footer controls wrap on
-narrow screens. The context meter shows the agent's last ACP `usage_update`
+round arrow while it reads **Send**, a round stop square for **Interrupt**
+and **Stop waiting**, and widens to its word otherwise. Hints
+and the 45-second delivery notice sit under the box. A footer too narrow for
+one row fills its last row first (`wrap-from-end` in `index.css`): the send
+pill's row takes the controls before it and the first ones move to a row
+above, so the pill never sits on a row alone. The context meter shows the agent's last ACP `usage_update`
 (`state.usage` in the snapshot, replaced by each `usage` item) as a share of
 its context window, and is a button that opens the **Context window** popover
 (`routes/run/context-window.tsx`); hovering it shows the token counts. An agent
@@ -3032,9 +3745,8 @@ of a composer that mounts with text puts the caret after it, and the
 suggestion menu follows the selection as well as the text.
 
 Drafts live in memory and end with the page. They sit in their own Zustand
-store, not a root-store slice: every root-store write rewrites `aether.ui`,
-and one made while events drain notifies on the next frame, which drops
-keystrokes in a controlled textarea.
+store, not a root-store slice: a root-store write made while events drain
+notifies on the next frame, which drops keystrokes in a controlled textarea.
 
 **Insert a template** (shown when the gateway offers `template.list`,
 disabled while the draft is locked) opens the template library above the
@@ -3055,11 +3767,52 @@ ACP row whose `resource_link` URIs name attached files matches the room
 message with the same text and the same attachment paths. `message-images.tsx`
 fetches authorized image blobs through `api.roomImage` and revokes its object
 URLs when identity, session or row changes, and shows each other file as a chip
-named by its basename with the path as its title. Attachments sit outside the
-text-collapse area and remain available through history and reconnect.
-Mode and effort menus use content-sized described rows; model selectors use
+named by its basename with the path as its title. Attachments wrap within
+320px, so an image-only message bubble is no wider than its thumbnails.
+Thumbnails keep each image's aspect ratio within 320×192px; their composer
+radius shrinks on short images so the corners do not meet. Each image is named
+by its place in the row ("Image 2 of 3", or "Attached image" when it is alone),
+and its thumbnail is a button that opens the same blob in a `Dialog` filling
+the window (the whole screen on a phone). The dialog shows the image on a
+near-black backdrop, centered in the viewport with the composer's thin border
+and corner radius, at up to 80% of the viewport width and height. Escape or
+clicking outside the image closes it; the image name stays for screen readers.
+Each image fits the frame, enlarging small images when needed. Zoom
+runs from fitted to 400% of the larger of the image's native size or fitted
+size, in a frame that scrolls and takes keyboard focus; the focus outline
+follows the image. A trackpad pinch (a ctrl wheel, or Safari's gesture events,
+both kept from zooming the page) or a two-finger touch pinch zooms about the
+fingers or pointer. `Mod+=`/`Mod+-` step by 1.25 about the frame's centre while
+`Mod+0` fits again. A click on a fitted image zooms downscaled images to 100%
+or enlarged images to 125% of fit, preserving the clicked point. A multi-image
+gallery has no step buttons: `ArrowLeft` and `ArrowRight`, or a horizontal
+swipe, step through loaded images while the image is fitted, stopping at either
+end. With a fine pointer, the image name appears at the top right when each
+image loads and on a key press, pointer move or scroll over the image, then
+fades after one second without input.
+Zoomed in, or with a modifier key held or the page pinch-zoomed, the keys and
+swipe do not switch. With the image fitted, clicking beside it closes the dialog; while
+zoomed, the outer gutters close it and the frame remains scrollable. Losing an
+image's blob, as on reconnect, closes the dialog if it was showing that image.
+Closing returns focus to the thumbnail of the image last shown. Attachments sit
+outside the text-collapse area and remain available through history and reconnect.
+The mode menu uses content-sized described rows; the model picker is
 `Command` inside `Popover`, preserving every advertised option and provider
-group with search by name, ID and description. Selections use
+group with search by name, ID and description. Under its list a row of
+`RadioPills`, labelled with the option's name such as **Effort**, sets the
+agent's `thought_level` option. When the agent describes its levels, a line
+under the row gives the description of the level the pointer or keyboard
+focus last moved to, until either leaves the row, and of the selected level
+otherwise; each level is also `aria-describedby` its own. A touch screen lays the levels out in even rows of at most four and
+does not focus the search field, which would raise its keyboard.
+Each choice is a request to the agent, so the arrow keys, Home and End only
+move between levels and Space, Enter or a click chooses one. The chosen
+level shimmers until the agent confirms it, then the selection glides to it.
+A model or level picked while another change is still being set goes out
+once that one settles, so the last pick wins; it is dropped if the agent
+refused the change before it, whose error stays at the composer.
+Picking a model closes the picker; picking an effort leaves it open. An agent that offers an effort option and no model
+option gets the effort as a menu of its own. Selections use
 `run.acp.set_option`; `/` completes the agent's commands and `@` paths from
 the Files tree cache. It closes with one line of reason while switching, for a
 Background session, while connecting, or while the controller has a pending
@@ -3108,7 +3861,81 @@ The header's **Answer** focuses the docked card on every screen. While Session s
 you** shows one link, "1 request, shown below the timeline", that closes a
 Details sheet and focuses the card; on other views it lists the cards. `routes/run/session-failure.tsx` shows an adapter failure with
 **Retry Enhanced** and **Open in Standard**, and a sign-in failure with the
-agent's auth methods.
+agent's auth methods. On a run on the viewer's own account it adds **Sign in
+on Agents**, and when that agent's `agent.list` row has `login_problem` its
+title is the alert's ("Claude Code is signed out" or "Claude Code's sign-in
+was refused"); a login-file problem shows verbatim, while a refusal is
+already the failure quoted below. On a run on another member's account it
+says that member signs in again on their Agents page or with
+`aether agent login <agent>`.
+
+### Dictation
+
+`components/dictation/` turns speech into text in a message box. Its
+`DictationButton` takes `{ textarea, onInsert, hints? }`: the box, a callback
+that stores the new text, and optional hints. It is mounted left of **Send** in
+the session composer and the assistant composer, and in a row under the New
+session **Task** box (`run-fields.tsx`). It renders nothing unless
+`server.info` lists the `dictation` feature, which the server sets only once
+dictation is installed.
+
+The button and the composer around it share state through `state.ts`, keyed by
+the box's ref: `useDictationState(textarea)` returns `active` (starting,
+recording or transcribing) and the current `notice`. While `active`, the
+composer's text-sending actions (Send, Steer, Queue) are disabled and Enter
+does nothing, so a missed press cannot send the old draft mid-recording;
+Interrupt, Stop waiting and Resume stay available. The mic will not start in
+a box that is read-only because its message is still sending, since the sent
+draft would replace the dictated words; it shows a notice instead. The New session dialog and the onboarding
+first run hold **Launch** the same way through `useDictating()`, which is true
+while any box dictates. `DictationNotice` draws the notice as a strip
+above the box: failed tint, alert icon and `role="alert"` for an error, a plain
+`role="status"` strip for "No speech was recognized.", and an **x** that
+dismisses it and returns focus to the box.
+
+| State | Button | Live region |
+| --- | --- | --- |
+| Idle | Mic in text colour | - |
+| Starting | Neutral pill: spinner, "Starting mic…" | Starting microphone |
+| Recording | Red pill: stop square, seven-bar level meter, elapsed time | Recording. Press again to stop, Escape to cancel. |
+| Transcribing | Neutral pill: spinner, "Transcribing…" | Transcribing |
+
+The button's name is always **Dictate**; `aria-pressed` says whether it is
+recording. The pills share one minimum width, so the button does not jump
+between states. A tap starts and a second tap stops. A press held 300 ms or
+more after recording began stops on release (hold to talk); a press that
+outlasted the browser's permission prompt counts as a tap. Enter and Space
+toggle like a tap. A pointer press keeps focus in the box, so a phone keeps its
+keyboard up. Escape pressed in the box or on the mic while starting, recording
+or transcribing drops the audio or the request in flight; an Escape anywhere
+else goes to its own owner. Recording stops by
+itself at 2:00.
+
+The browser asks for the microphone on the first press, never on load.
+`capture.ts` opens it with `getUserMedia` at the hardware rate (a 16 kHz
+`AudioContext` records silence on some macOS devices), downmixes each render
+quantum to mono in an `AudioWorklet` loaded from a blob URL, and reads the
+meter from an `AnalyserNode` at 15 Hz. The track stops as soon as recording
+ends. `wav.ts` averages down to 16 kHz, clips at 120 s and encodes PCM16 mono
+WAV; `api.dictationTranscribe` posts it base64 to `dictation.transcribe` with
+the hints. Without `hints`, `dictationHints` sends up to 200 names of at most
+80 bytes: every workspace, the open workspace's repo and run repos, and its
+sessions' titles, newest first. Transcription times out after 240 s, the local gateway's bound.
+
+`insertTranscript` puts the text where the caret or selection was when
+recording started; if the text changed meanwhile, at the caret the member left
+in the box, or at the end, adding a space on either side only where a word would
+otherwise touch it, then focuses the box with the caret after the text. It
+never sends: the mic has `type="button"`, so a press inside the New session
+form does not launch. Errors show verbatim, with paths and the install command
+in code: the server's message (not installed, busy, too long) or the
+browser's, as `Microphone: <DOMException name>: <message>`. A
+`NotAllowedError` adds, on its own muted line, how to allow the microphone
+again. A page served over
+plain http to a non-loopback host is not a secure context and has no
+microphone; the notice names the origin. The meter keeps reading the level
+under reduced motion but drops its transition. On a coarse pointer the mic and
+pills are 44px tall.
 
 ### Trace view
 
@@ -3137,7 +3964,7 @@ from the sessions the dashboard already holds, so a new subsession appears at on
 A call still open when its turn or subagent ended is **Stopped** at that end,
 unless it is a background task of a live session. Item times are log times, so a
 call that settled within 50ms is instant. A turn is named by the first line
-of its prompt, by Aether's wake-up wording ("Woken by new agent messages"),
+of its prompt, by Cloudfield's wake-up wording ("Woken by new agent messages"),
 or `Turn N`. The session's bar is its `run.status` history, coloured by state;
 `readTraceLog` (`src/store/trace-log.ts`) reads the session's `run.status` and
 `run.cost` events with `workspace.timeline` (newest first, at most 2,000),
@@ -3205,16 +4032,32 @@ the selected shell under one toolbar, a 32px strip (44px on touch): the
 terminal tabs (**Agent**, then each shell; one menu under 768px), **+ Shell**,
 the **Tools** menu, and on the right the presence summary with
 `ControlButton` (click to take a free lease, hold three seconds to request an
-occupied one; **Release** has the accent fill) and the connection word only
+occupied one; **Release** is a primary button) and the connection word only
 while a live session's attach is not live. A finished session reads "Container
 removed · read-only" in muted text there.
 Refusals, lost steering and presence errors are one line under the strip. A
 session with no agent terminal, such as an Enhanced session, shows "No agent
-terminal" and the shell controls. The frame renders one `TakeoverDialog`
+terminal" and the shell controls. Under 768px (`useIsMobile`), the first time
+the Terminal view shows for such a session `useRunningShellOnPhone` reads
+the shell list with `shells.refresh()`, whose revision counter drops a list
+that an **Open shell** overtook. It then shows a running shell a member
+started (`started_by: 'member'`) and has not hidden; the agent's own shells
+stay behind the tab menu. A failed read shows its error with **Retry**. It
+never starts a shell, because viewing a tab must not start a process or take
+a lease: the empty state carries a primary **Open shell** (`shells.open`)
+instead, with a spinner while it starts and the shell-limit reason under it
+when four are running. On that view the Enhanced session's
+`MultiplayerControls` strip, which is about the Chat lease, is hidden; the
+shell's toolbar shows the shell's own control. These three follow the phone
+layout's breakpoint (`useIsMobile`, under 768px, any pointer), because they
+are layout. Fitting, read-first focus and the size stepper follow
+`phoneScreen` (a coarse pointer under 640px) instead: the same query that
+makes a terminal follow the PTY, which fitting needs, and the screens where
+focus raises a soft keyboard. The frame renders one `TakeoverDialog`
 above every sheet and dialog for the holder's decision; the dialog restores
 the interrupted focus.
 
-**Shells.** A shell is a shared development terminal in the session's container
+**Shells.** A shell is a shared development terminal in the session's sandbox
 ([terminal.md](terminal.md#session-shells)). **+ Shell** (named "New shell")
 starts one with `dev.terminal.start`. `useRunShells(runID, visible)` in
 `shells.tsx` lists them with `dev.terminal.list` every two seconds while the
@@ -3250,7 +4093,7 @@ refusal, a release or a dropped connection discards them. If the server
 answers with a full replay instead of resuming, that redraw stays on screen
 rather than behind "Restoring terminal history", which would blur the terminal
 mid-word.
-The toolbar reads "You control" with an accent-filled **Release**, or "<name> controls"
+The toolbar shows a primary **Release** while you control the shell, or "<name> controls"
 / "The agent controls" with **Take control**, which confirms; with nobody
 controlling it shows neither. Under 768px the controller's name moves to the
 line under the toolbar. Leaving the Terminal view releases the lease. **Shell
@@ -3264,7 +4107,10 @@ open a shell in it" in place of the terminal.
 (named "Terminal tools"): **Find** (**Find in recorded output** while
 reading history), the text size with **Smaller text**, **Larger text** and
 **Reset text size**, **Copy selection**, **Copy screen**, **Paste**,
-**Upload image…** and, on a session, **Captures…**. It is one menu at every
+**Upload image…** and, on a session, **Captures…**. On `phoneScreen` the
+trigger is icon-only so the toolbar fits 360px, and, except while reading recorded history (drawn at the
+chosen size), the size items follow `useTextSizeStepper` (below), with
+**Fit to width** in place of the reset. It is one menu at every
 width; on a phone a menu longer than six items opens as a bottom sheet.
 
 The rest of this section is the terminal machinery the session terminal, its
@@ -3398,6 +4244,11 @@ measurement from FitAddon without resizing the renderer; `setGeometry()` queues
 the server resize and optional attach reset between xterm writes. A font or
 pane resize reports the local measurement, never the smaller rendered grid,
 so a viewer cannot accidentally pin the shared minimum after it grows.
+A pane resize is reported 100 ms after the pane stops changing, so the
+terminal keeps its old grid during a drag. A font or follow change reports at
+once. The server ignores a report of the size it already has.
+Terminal padding belongs to the xterm element, not its host: FitAddon subtracts
+the element's padding when calculating the rows and columns that fit.
 Queued geometry work is discarded when its terminal is disposed.
 The server queues geometry with terminal output. SSH and in-process dashboard
 attachments request ordered framing, and the gateway emits the geometry frame
@@ -3436,14 +4287,77 @@ A following terminal therefore:
   what makes xterm's textarea read-only, so a tap on a mirror raises no
   keyboard.
 
+**Sizing the PTY to a phone is not done.** A phone could size the PTY
+while no wider client is attached, but the server keeps one grid and one
+transcript per session, so: every keyboard open and close would resize the
+agent's screen and make its TUI redraw; a desktop attaching or leaving would
+flip the width, and output drawn at the phone's 45 columns stays in the
+recorded transcript that later desktop viewers replay; and an older server
+reads an unknown "size only when alone" flag as an ordinary writer imposing
+its size, shrinking every desktop viewer. A phone therefore follows, and fits
+on the client.
+
+**Fit to width.** `useTerminalFit` (`src/components/terminal-fit.ts`), on
+`phoneScreen`, sets xterm's `fontSize` so the followed grid's columns fit the
+host's content box: proportional from the drawn `.xterm-screen` width,
+floored to 0.25px steps, no larger than the chosen size and no smaller than
+`minFitTerminalFontSize` (7px, `src/lib/term-font.ts`), below which the grid
+pans. It grows only when the pane, the grid or the preference changes; a
+render only shrinks an overflow, so device-pixel rounding cannot make it
+oscillate. 80 columns fit a 360px screen at about 7px. The fitted size is
+not stored: the store keeps `terminalFitWidth` (persisted, default on) beside
+`terminalFontSize`, and `setTerminalFontSize` turns fitting off.
+`useTextSizeStepper` (`terminal-keys.tsx`) backs the sheet's bottom row -
+**A−**, the drawn size with **Fit**, **A+** - and the phone's Tools menu: a
+step is one whole pixel from the drawn size, and a step down to the fitted
+size or below the 8px zoom minimum returns to fitting, so **A−** is disabled
+while fitted. Only a phone shows the stepper; a tablet keeps the Tools
+items. A two-finger pinch on the host draws the size live in 0.5px steps;
+on release it returns to fitting when it ends at or below the size fitting
+would draw or below 8px, and otherwise stores the size rounded to a whole
+pixel.
+
+**Read first.** On `phoneScreen` `focusTerminal()` does nothing, so no
+effect - a new shell, a tab change, a closed find bar - raises the soft
+keyboard. Only a tap on the terminal's own textarea, or **Show keyboard** in
+the more-keys sheet, focuses it.
+
 `TerminalKeys` is shown under the host on any coarse pointer while the
-terminal is writable, a tablet included: Ctrl, Esc, Tab, the arrows, Enter
-and Ctrl+C, each through `terminal.input` so the replay gate and
-`disableStdin` treat a tap exactly like a keystroke. Ctrl is a one-shot
-modifier held in the host (`armCtrl`), because a soft keyboard sends
-characters and never a modifier: it rewrites the next character into its
-control code, and a key it has no code for keeps the modifier armed rather
-than spending it on the wrong byte.
+terminal is writable, a tablet included. Its row does not scroll: **Ctrl**,
+**Alt**, Esc, Tab, the arrows, Enter and **More keys** share the width at
+44px tall. 4px apart. **More keys** (its trigger carries Radix's `aria-expanded`) is a
+non-modal `Popover` above the row that keeps focus where it was: symbols a
+phone keyboard buries, ^C, Home/End, PgUp/PgDn and Del; **F1–F12**, which
+toggles the function keys; Show/Hide keyboard; and the size stepper last,
+next to the row. It stays open while keys are tapped and closes on its
+trigger or a tap outside. The keyboard label reads the textarea's focus and
+whether the visual viewport has lost at least 120px from its tallest,
+because Android's Back hides the keyboard and keeps focus. The stepper's
+size readout stays focusable at full contrast while fitted, with
+`aria-disabled`, rather than a greyed disabled button. Every key goes through
+`terminal.input`, so the replay gate and `disableStdin` treat a tap exactly
+like a keystroke, refuses focus on `pointerdown` so the keyboard stays as it
+was, and then calls `focusTerminal()`, which a tablet honours and a phone
+ignores. The row pads its bottom by `--keyboard-inset` (`keyboard-inset.ts`)
+so it stays above an iOS keyboard.
+
+Ctrl and Alt are sticky modifiers held in the host (`modifiers`,
+`tapModifier`, `clearModifiers` on `XtermController`), because a soft
+keyboard sends characters and never a modifier. `terminal-modifiers.ts` has
+the rules: a tap arms a modifier for one key, a second tap within 400ms locks
+it, the next tap releases it. A locked modifier stays `aria-pressed`, shows a
+lock glyph and adds a visually hidden ", locked" to its name. `applyModifiers`
+rewrites a single character into its control code (xterm's: Ctrl+Space and
+Ctrl+` are NUL, Ctrl+? is DEL, Ctrl+Backspace is ^H) and/or an ESC prefix for
+Alt, and the cursor, Home/End, paging and function-key sequences into
+xterm's `1;<n>` modifier parameter form. A key it does not cover passes
+unmodified and keeps the modifiers armed rather than spending them on the
+wrong byte, and a paste (flagged from the DOM `paste` event and around
+`terminal.paste()`, which Tools → Paste calls, since xterm hands either to
+`onData` like a key) never takes them. The row's arrows, Home
+and End send SS3 (`ESC O`) while the program has asked for application
+cursor keys (`terminal.modes.applicationCursorKeysMode`).
+Losing write access clears them.
 
 In a session's normal buffer, a downward finger drag pans the live grid to its
 top before handing off continuously to integrated history. Horizontal drags
@@ -3469,7 +4383,7 @@ and the Environment keep native xterm scrollback.
   mirror shows who controls ("Nobody controls", "<name> controls", "You
   control in another session since <time>", with "(last known)" while the
   status is stale) and **Take control**. Live, acknowledged local control
-  reads "You control" with an accent-filled **Release**, plus teal control
+  reads "You control" with a primary **Release**, plus `--control-light`
   dots behind the terminal toolbar while input is writable
   ([styles.md](styles.md)). They
   never change layout, and return to neutral during replay or history
@@ -3513,7 +4427,7 @@ and the Environment keep native xterm scrollback.
   starting apart from a terminal that is gone. A `queued` or `provisioning`
   session is not attached to at all: the tab clears the pane and covers it with
   `TerminalSpinner`, the overlay the environment dock uses, reading
-  **Starting the session's container**, and reports no connection state while
+  **Starting the session's sandbox**, and reports no connection state while
   nothing is connecting. The attach effect already re-runs on `run.status`,
   so the session turning `running` attaches on its own. On a session that is up, a
   `-32004` is retried a bounded number of times on the usual `backoff()`
@@ -3569,7 +4483,9 @@ and the Environment keep native xterm scrollback.
   glyph-atlas positions under heavy glyph churn (xtermjs/xterm.js#6038),
   garbling scrolled rows until a forced refresh; the DOM renderer never
   desyncs. The terminals render in the shipped JetBrainsMono Nerd Font Mono
-  (`src/lib/term-font.ts`, declared in `src/index.css`), so agent TUIs get
+  (`src/lib/term-font.ts`, declared in `src/index.css` from `src/fonts/`, so
+  the build gives each file a content-hashed name under `_next/static/media`
+  that browsers cache without revalidating), so agent TUIs get
   their powerline and devicon glyphs at the same advance as text. The terminal
   opens only once regular and bold faces are loaded, because xterm caches
   glyph metrics synchronously at `open` and would otherwise bake fallback
@@ -3616,7 +4532,7 @@ both what it renders and the overlap set the conflict chips read.
   name before there is a pull request. Its commit list shows at most six
   rows (168px) and scrolls inside the card past that; the rest of the card
   takes the height it needs.
-  The Workflow panel shows it with `compact`: the header, the head row, one
+  The Session tree panel shows it with `compact`: the header, the head row, one
   line of check counts and the primary action, with **Show N commits**
   unfolding the graph. The panel leaves it out while the Changes view shows
   the full card.
@@ -3628,8 +4544,8 @@ both what it renders and the overlap set the conflict chips read.
   merge base. A row shows the subject (focusable, with the full subject in a
   tooltip), a mono pill with the branch or base name at its tip, the short
   SHA, and the author and age once the card is 420px wide. An upstream
-  commit that touches a path a merge would conflict on (`paths`) is amber
-  with a count. More than eight commits fold into **N more commits**, which
+  commit that touches a path a merge would conflict on (`paths`) is the
+  needs-you colour with a count. More than eight commits fold into **N more commits**, which
   keeps the three newest upstream commits in sight and unfolds the rest; a
   `truncated` log ends in a row that says so, with dotted edges. The top row
   is the pending action, a hollow node with dashed edges to both tips:
@@ -3881,7 +4797,7 @@ both what it renders and the overlap set the conflict chips read.
 - **Publish is two steps.** **Publish…** appears with `run.git.status` once
   the diff has a file, and opens `publish-dialog.tsx`, a bottom sheet on a
   phone. One line above both steps names what they act on and as whom,
-  "`aether/run-1` at `4f9c2a7d` · as Ada Lovelace · GitHub ada-l", with
+  "`cloudfield/run-1` at `4f9c2a7d` · as Ada Lovelace · GitHub ada-l", with
   **Refresh status** beside it and the status's own errors under it. **1 ·
   Commit** selects changed paths, reviews their worktree and staged diffs and
   untracked contents, and runs **Commit selected**. **2 · Push and pull
@@ -3892,9 +4808,9 @@ both what it renders and the overlap set the conflict chips read.
   uncertain survive switching steps, closing the dialog and switching views.
 - **The destination is two sentences.** Step 2 (`publish-push.tsx`) says
   where the work goes instead of asking: "Pushes commit `4f9c2a7d` to
-  `https://github.com/acme/app.git` as branch `aether/run-1`. Never a force
+  `https://github.com/acme/app.git` as branch `cloudfield/run-1`. Never a force
   push." and "Opens a pull request into `acme/app:main` from
-  `ada/app:aether/run-1` as **ada-l**. It is not merged from here." Under
+  `ada/app:cloudfield/run-1` as **ada-l**. It is not merged from here." Under
   them sit only what the member writes, **PR title**, **PR description** and
   **Draft PR**, and the buttons. A pull request the branch already has
   replaces the second sentence with its number, title and state, linking to
@@ -4359,6 +5275,32 @@ whatever opened it. Sections (`details.tsx`):
   decision or reply locks only its own card ([Actions](#actions)). With none of
   these, one card with the needs-you reason and the header's action as a
   secondary button, or "Nothing is waiting on you."
+- **Waiting until**, when the session carries `wait_conditions`: what its
+  agent reported waiting `--until` ([session waits](watches.md#session-waits)),
+  pending first, then the last resolved list. Each row has the pull request
+  link (`<owner>/<repo>#<n>`, to GitHub) or the session link, cut to two
+  lines, then "merged", "checks final" or "finished", and a badge: how a
+  resolved condition resolved ("Passed", "Merged", "Abandoned", "Reported
+  success"), or the state (Pending, Cancelled, Replaced, Expired,
+  Unreadable). Under it: the condition's summary and detail unless they
+  repeat the error; the pull request state, head commit, session status and
+  checks the server last read, as **Required checks** when the base branch
+  requires them, else **Checks** ("4 passed, 0 failed, 1 running", or "None
+  reported yet"); **Last verified**; **Next check** while it is still
+  ahead; **Failures** ("3 in a row: <error>") with the source's own error;
+  **Resolved**; **Delivery** ("Delivered to the agent", "Waiting to be
+  delivered", or "Not delivered after N attempts: <error>"); why it ended,
+  "Cancelled by <name>" or "Cancelled by you" when a person cancelled it;
+  and when a pending one gives up. Only the session's owner and admins get
+  what the server read and the errors. The server publishes
+  `run.wait.changed` only when a result changes, not on every read, so a
+  next check already past is left out rather than called overdue; the
+  state line's `wait` is the server's own judgment of a stale read
+  ([session state](#session-state)). **Cancel** (`run.wait.cancel`, for
+  whoever may steer the session) ends a pending condition and shows the
+  result, unless the linked server or member changed meanwhile or a newer
+  read already replaced that condition. The section rereads the session on
+  every `run.wait.changed` event.
 - **Subsessions**, where the server offers `run.children` and the session has
   any: every descendant, nearest first and indented by depth, with its
   purpose, state, agent and model, "On `<name>`'s account" plus "(fallback
@@ -4372,20 +5314,28 @@ whatever opened it. Sections (`details.tsx`):
   descendant the store holds changes.
 - **Agent messages**: the session-scoped agent mail, which the Chat view also
   shows inline, with **Show older** and **Show all**.
-- **Notes**: a comment thread (`note-thread.tsx`) of `comment` room messages,
-  human to human on the session, and teammates' `question` messages. Each note is
-  a row: the author's `Avatar` ringed in their member colour, the name
+- **Notes**: a thread (`note-thread.tsx`) of teammates' `question` messages,
+  human to human on the session, plus open `comment` messages too, unless
+  Chat is the active view and its pane is 1248px or over (however Details or
+  a docked Browser narrowed it) - there, the rail already shows open
+  comments, so the thread here holds only questions.
+  Each note is a row: the author's `Avatar` ringed in their member colour, the name
   ("via ChatGPT" after it when a connector posted it, the name the message
   carried when the member is gone), a **question** badge, the time, and the
   body indented under the name, clamped to eight lines with **Show more**.
   A reply to a question nests under it behind an L connector. A teammate
   question nobody has answered also has **Reply**, which scrolls to its
   Needs you card; the owner's own question has none. The thread is
-  chronological and shows the newest five loaded notes with **Show N earlier
-  notes** above them; once every loaded note shows and history remains,
-  **Show older** (also shown when the loaded pages hold no notes) pages
-  `run.room.list` back 100 room messages at a time and expands the thread, and a failed read shows the server's error with
-  **Retry**. The count beside the title is the loaded notes, not a total.
+  chronological and shows the newest five loaded notes with
+  **Show N earlier notes** above them; once every loaded note shows and
+  history remains, **Show older** (also shown when the loaded pages hold no
+  notes) pages `run.room.list` back 100 room messages at a time and expands
+  the thread, and a failed read shows the server's error with **Retry**, as
+  does Chat's "Messages could not be read" callout, which shares the read. The
+  session's first `run.room.list` read that gets no answer at all, as when the
+  browser drops a request because a network interface changed, is retried
+  three times with backoff before its error shows. The count beside the title
+  is the loaded notes, not a total.
   A note that arrives after the thread settled, yours or a teammate's,
   fades in and rises 4px once, its body 100ms behind its header;
   the first page, **Show earlier** and older pages appear at once, and a
@@ -4407,10 +5357,17 @@ whatever opened it. Sections (`details.tsx`):
   still reading "Sending…", when the signed-in member changes; an answer or failure that arrives after the
   change is dropped too. Adding a note never disables **Reply**,
   **Approve** / **Deny** or the composer.
+- **Done**: completed comments, newest first, five shown with **Show all**
+  for the rest; each row is the same as a thread row with a done badge, timed
+  by when it was completed rather than posted. Deleted comments show nowhere:
+  not in Details, the rail, the strip, or the Chat transcript. A delete tombstones
+  its id client-side, so a `run.room.list` page already in flight when it lands
+  cannot re-add the row, and a retried send that turns out to target an
+  already-deleted note drops its own sticky too, rather than leaving an orphan.
 - **Details**: the task, Owner, Agent account (when it is someone else's),
   Agent and mode, Branch, Created, Changed, Last commit, In control,
-  Watching, Container ("Starting", "Running", "Stopped, kept for reopening"
-  or "Removed"), Container size (what the session wrote inside its container
+  Watching, Sandbox ("Starting", "Running", "Stopped, kept for reopening"
+  or "Removed"), Sandbox size (what a Docker session wrote inside its container
   outside the mounted home, checkout and cache; shown to the session's owner and
   admins once measured), Archived, and **Last reason**, the server's `run.reason`, so
   a parked error or stall detail the reason line leaves out is never hidden.
@@ -4418,22 +5375,24 @@ whatever opened it. Sections (`details.tsx`):
 Any other failed room action shows its error above the sections with
 **Dismiss**; the composer's own failures stay above the composer.
 
-### Workflow panel
+### Session tree panel
 
-The Workflow panel (`src/routes/run/workflow-panel.tsx`) shows what the session
+The Session tree panel (`src/routes/run/workflow-panel.tsx`) shows what the session
 and its agents are doing as a tree; the [Trace view](#trace-view) shows when
-they did it. Its chip sits after the view switch and
+they did it. "Workflow" in the dashboard's copy means a Claude Code workflow
+only; the panel's identifiers (`workflowOpen`, `WorkflowTree`) keep the old
+name. Its chip sits after the view switch, ends in a tree icon, and
 mirrors the session's state: `● Working · 2 agents running` (subagents and
 workflows running at any depth, a background one included) or
 `● Waiting for CI · 3 of 9 checks` (passing checks of the pull request's
 checks this tab last read). The chip toggles the panel. While the
 session's row holds 320px for it plus `minReadableWidth`, the panel is a 320px
-`complementary "Workflow"` rail at the right of the frame, remembered per
+`complementary "Session tree"` rail at the right of the frame, remembered per
 device (`workflowOpen`, persisted, closed until the chip first opens it). A
 row too narrow for it beside Details or the subagent inspector shows those
 instead; the chip then closes Details to make room.
 Narrower rows open it as a side sheet and phones as a bottom sheet, a
-`dialog "Workflow"` that returns focus to the chip, and that closes when a
+`dialog "Session tree"` that returns focus to the chip, and that closes when a
 row opens the subagent inspector or the request, or the view changes. Under the tree, a session
 with a branch shows the compact git card (`GitFlow` in
 `src/components/workflow/git-flow.tsx`), except on the Changes view, which
@@ -4459,8 +5418,8 @@ on the root real counts (`2 agents running`, counting every depth, or
 `3 of 5 tasks done`).
 Completed subtrees start folded to their summary row; everything else starts
 open. A folded parent still lists every descendant that needs you under it.
-Rows below the fourth level collapse into one `Nested workflow · N agents`
-row that opens that subtree in place, with **Show the whole workflow** to go
+Rows below the fourth level collapse into one `Nested tree · N agents`
+row that opens that subtree in place, with **Show the whole tree** to go
 back. Past 200 visible rows the tree renders only the rows in view.
 Selecting an agent row opens it in the subagent inspector; selecting the
 Needs you row performs the header's action or reveals the request card.
@@ -4474,7 +5433,7 @@ completed subtree folds, focus moves to its nearest remaining ancestor; in a
 virtualized tree the focused row stays mounted while scrolled away. Each
 `treeitem` carries `aria-level`, `aria-posinset`, `aria-setsize` and, on a
 parent, `aria-expanded`. One polite status region announces rows that come
-to need you, fail, become ready for review or complete: transitions are
+to need you, fail, finish awaiting review or complete: transitions are
 gathered for 1.5 seconds from the first, then up to three are read, Needs
 you and Failed first. Only Working dots pulse, and rows added after the first
 render enter with `animate-entrance` (a fade and a 4px rise over 360ms); with
@@ -4680,8 +5639,8 @@ in **Needs you**.
   it onto the stored `server.info`, which is what fills the disk gauge in
   Insights › System. One read runs at a time, so a reconnect or wake joins
   the heartbeat's read, and a read unanswered after 10 seconds is aborted and
-  shown as the gauge's error: both gateways speak HTTP/1.1, so a stuck read
-  holds one of the browser's six connections to the host.
+  shown as the gauge's error: the loopback gateway speaks HTTP/1.1, so a
+  stuck read there holds one of the browser's six connections to the host.
 
 ## Insights
 
@@ -4724,8 +5683,8 @@ section loads, fails and retries on its own.
   - *Sessions completed*: `outcomes.runs.done`, with the failed and
     abandoned counts below. Every number is from `outcomes`, work
     that finished in the window, so the box and the chart agree.
-  - *Success rate*: sessions that ended with a merged pull request
-    over all that finished, `success.runs`, rounded
+  - *Success rate*: sessions that ended with a merged pull request or
+    were marked complete, over all that finished, `success.runs`, rounded
     down in integers so 100% means exactly all succeeded; a dash when none finished. Each
     fraction is written out below.
   - *Total tokens used*: `cost.total_tokens` as "100K tokens", with the
@@ -4771,7 +5730,7 @@ The sections below cover only the member's own sessions in the same window.
 - **Time.** Median and slowest-10% session time, and, from the server's state
   record, median time working, waiting on you and your response time. When
   fewer sessions have state times than session times it says "measured for N of M
-  sessions; Aether records this from <date> on."
+  sessions; Cloudfield records this from <date> on."
 - **Usage**, collapsed: cost as a floor ("at least $4.12") with how many
   sessions reported it, tokens, and a link to **Settings › Usage** for
   subscription quota. Cost never stops a session.
@@ -4830,7 +5789,7 @@ Top to bottom:
   Dana", or "Pinned for you" or "Pinned for Dana" on a pin for one member's
   briefs) and **Superseded**; cited files are in the detail. Under a mouse,
   hover or focus shows **Pin for every new session** or **Pin for your new sessions**
-  (no `scope`, so the note keeps its own, as `aether memory pin`), **Unpin**,
+  (no `scope`, so the note keeps its own, as `cloudfield memory pin`), **Unpin**,
   **Replace** and **Remove**; a replaced note offers only **Remove**. On a
   touch screen a tap opens the detail instead. A pin or unpin glides the row
   into its group. While a new search or filter is read, the previous list
@@ -4870,11 +5829,11 @@ A row opens `memory.show`: the note's text, its provenance (author, session and
 its ID, commit, pull request, files, the report or question it came from,
 when it was written and pinned, what replaced it) and the supersede chain in
 replacement order, each other note a link. A member who may push gets **Pin
-for me only** (`scope: member`, as `aether memory pin --me`), **Pin** on a
+for me only** (`scope: member`, as `cloudfield memory pin --me`), **Pin** on a
 workspace-scope note, **Unpin**, **Replace…** and **Remove**, which closes the
 detail and offers **Undo** in the footer; a replaced note offers no pin and
 no **Replace…**. **Replace**, from a row or the detail, opens the composer as
-`aether memory add --supersedes`: the note's text, its kind (an outcome
+`cloudfield memory add --supersedes`: the note's text, its kind (an outcome
 note's becomes decision), its files and **Only me** for a member-scope note.
 It sends `supersedes` with the note's ID; from the detail it then opens the
 replacement. For a pinned note the server moves the pin to the replacement in
@@ -5228,9 +6187,12 @@ both. The page header has **Add agent…** where the gateway serves
 maps each shipped name to an icon and its `--agent-*` colour token), its
 display name,
 "Not installed", "Installed", "Installed · Login found" or "Installed · No
-login found" (from `login_found`), "Standard · Enhanced" or "Standard", and
+login found" (from `login_found`), or "Signed out" or "Sign-in refused" with
+a needs-you dot and `login_problem` verbatim on a line of its own when the
+server reports one,
+"Standard · Enhanced" or "Standard", and
 one button by state: **Set up** while not installed, **Log in** while
-installed with no login found, and **Run** once ready, with **Set up again**
+installed with no login found or signed out, and **Run** once ready, with **Set up again**
 in the row's **More** menu; closing a setup returns focus to that row's
 button. On the Agents page only, where the gateway serves `agent.remove`, the
 **More** menu of a member agent or an installed agent also has **Remove…**.
@@ -5253,6 +6215,23 @@ sent through `agent.register`. The Background default follows the Standard
 command's first word, which is also the executable. A session that is not
 signed in offers its terminal login method, typed as the ACP server command
 (`agent_command` in the session state) with the method's args.
+
+**Signed-out logins.** `SignedOutAlert` (`components/shell/signed-out-alert.tsx`),
+mounted by `AppShell` under `StaleBanner`, shows while any installed agent in
+the member's own `agent.list` has `login_problem`: a needs-you band with one
+line per agent, "Claude Code is signed out" when the login file cannot sign
+it in (`login_blocks_launch`) or "Claude Code's sign-in was refused" when an
+agent refused, then the problem verbatim, **Sign in on Agents** and a dismiss
+button at the right. On narrow screens each agent's label and problem stack;
+the actions stay beside them. Dismissal hides the alert for the current app
+launch; it appears again next launch. Otherwise it leaves out what already
+sits beside its own sign-in action: everything on the Agents page, and, in
+the Chat view of a session on the member's own account whose reason is a
+refused turn or open, that session's agent. If not dismissed, it goes when a
+read no longer reports the problem. `agent.list`
+has no event, so it reads again every 60 seconds while the page is visible,
+on window focus, and when one of the member's runs gets a new
+`enhanced turn failed: ` or `enhanced session failed: ` reason.
 
 Below the list, `AgentExtras` holds collapsed disclosures: **Git identity**
 (Agents page only), which says agents commit as the name and email in the
@@ -5284,12 +6263,17 @@ else `default_mode`.
 **Install and log in** calls `agent.install` with `enhanced` set when Enhanced
 is chosen and shows the answer: the log tail in an **Install output**
 disclosure, open when `error` is set, and **Install failed** with the error.
-Once the agent is installed it mounts an Environment dock with the agent's
-login command typed. A gateway without `agent.install` types the
-install command there instead, and one without a terminal socket prints the
-`aether terminal` commands. **Check** re-reads `agent.list` and lists
+Once the agent is installed it mounts an Environment dock. The login or
+install command appears above the dock. Use **Copy login command** or
+**Copy install command**, paste at a shell prompt, review the command, then
+press Enter. Resize the dock by dragging its visible top grip or using the expand/shrink button;
+both stop at the space available to the dock. A gateway without a terminal
+socket prints the `aether terminal` commands.
+**Check** re-reads `agent.list` and lists
 **Installed**, **Enhanced installed** and **Login found** or **No login
-found**; the copy never says "signed in", because the probe checks for a
+found**, or **Signed out:** or **Sign-in refused:** with `login_problem` when
+the server reports one;
+the copy never says "signed in", because the probe checks for a
 file. **Done** appears once the agent is installed with no missing login and
 calls `rememberLaunch` with the chosen mode, which seeds **New session** and
 First session. Setup does not save the Environment image: the install lands in
@@ -5387,8 +6371,8 @@ carries.
 The browser reads and uploads nothing. The section gives the member a prompt
 to paste into a coding agent on the computer that has their configuration;
 that agent picks the files, asks the member, and uploads them with
-`aether config ls` and `aether config push`, so that computer needs the
-`aether` CLI linked to this server. The two sentences above the prompt say so and link
+`cloudfield config ls` and `cloudfield config push`, so that computer needs the
+`cloudfield` CLI linked to this server. The two sentences above the prompt say so and link
 the quickstart's install and link steps.
 
 The prompt is `configPrompt` in `src/lib/config-prompt.ts`, a plain module
@@ -5408,7 +6392,7 @@ protocol](local-gateway.md#files-and-member-configuration) for the
 ## Environment
 
 `src/routes/environment/` is the member's **Environment**: a shell into their
-own long-lived container, where they install tools, log in to agents and save
+own long-lived sandbox, where they install tools, log in to agents and save
 the result as the image new sessions start from
 ([environment-home.md](environment-home.md)). It is reached through the
 header's **Environment** button (or **More navigation → Environment**) or
@@ -5445,8 +6429,8 @@ menu.
 
 From the moment a tab opens until its attach is acked, a spinner covers the
 terminal. The words follow what the dock knows: a terminal it has not seen
-running is **Starting your environment container**, the wait Docker's
-container start accounts for; a second tab, a tab switch or an expanded dock
+running is **Starting your environment**, the wait its sandbox's
+start accounts for; a second tab, a tab switch or an expanded dock
 is **Connecting to your environment**. A refused or failed start replaces the
 terminal with the gateway's own error and **Retry**.
 
@@ -5471,13 +6455,13 @@ subscriptions are removed on cleanup, while closing a tab or an exited shell
 unregisters its socket, so route changes and tab remounts cannot deliver late
 output, resizes, or image actions to a disposed host.
 
-The same stop confirmation (`StopEnvironmentDialog`) backs the Profile
-dialog's notice after a member's first account share: containers started
+The same stop confirmation (`StopEnvironmentDialog`) backs the Members
+page's notice after a member's first account share: containers started
 before that share lack the in-place mount of Claude Code's login file
 ([security.md](security.md#account-sharing)), so when the store's
 `envTerminal.status`, re-read with `terminal.status` at the share, says the
-container is running, or that re-read fails, **Agent account sharing** says
-so and offers **Stop environment**. The advice follows the first share the
+container is running, or that re-read fails, the roster says so and offers
+**Stop environment**. The advice follows the first share the
 server answered while no other grant was saved; a later share shows
 nothing, because the page cannot tell whether the container predates the
 first one.
@@ -5489,12 +6473,40 @@ Each tab has its own route name (`members`, `devices`), so the address, back
 button and the palette's **Devices** entry land on the right tab, and the
 sidebar's **Members** row stays current on both.
 
-**Members** is a roster table, each row filling on hover: name, role, whether you and that member share
-an agent account, and last seen (**Online**, a relative time, or
-**Offline**). An admin changes a role or removes a member from the row's
-menu; giving up your own admin role, and removing anyone, ask first. Members
+**Members** is a roster table, each row filling on hover: name, role, agent
+account and last seen (**Online**, a relative time, or **Offline**). Below
+64rem, where the sidebar leaves the table too little room, the agent account
+and last seen sit below the name, so the table never scrolls sideways. Roles are
+Viewer, Collaborator, Admin and Super admin. A super admin changes a role with
+the select in the **Role** column and removes a member with the row's trash
+button; giving up your own super admin role, and removing anyone, ask first.
+The **Agent account** column holds a **Share my account** switch for every
+other member (`account.share`, `account.revoke`) and says when that member
+shares their account with you; the omp warning sits behind **What a teammate
+can do with your account** above the table. Members
 waiting for approval are listed above the roster with **Approve**. Below it,
-admins see **Open invitations** with **Revoke**.
+admins see **Open invitations** with **Revoke** and the workspaces each
+invitation grants.
+
+**Invite…** carries a workspace multi-select of the workspaces the inviter
+administers, for an account invitation and for an invite code. An admin who is
+not a super admin must pick at least one and may invite only a viewer or a
+collaborator; a super admin may pick any role and no workspace.
+
+**Manage workspaces** shows each workspace's owner. Where the caller's `role`
+in `workspace.list` is `admin`, a row's **Access** button, or **Access…** under
+**Team** on the workspace's settings page, opens the owner, a search field and
+a scrolling list of every other member, each with a checkbox; ticking grants
+and unticking revokes at once, showing the server's error verbatim. Super
+admins are ticked and locked, since they reach every workspace, and an admin
+who is not a super admin cannot tick or untick another admin. Super admins
+also get **Change owner…** on the owner's line. A grant,
+revoke, `workspace.access` event or `member.access` event reloads the workspace
+list. `member.access` (workspace id `server`) goes only to the member whose
+access changed, so a member who just lost a workspace still gets it. Server-wide
+controls (server update, session limits, Docker inside sessions, remote access)
+show to super admins; the dashboard hides what the caller cannot use and the
+server refuses it regardless.
 
 A role change, **Approve**, and a confirmed **Revoke** follow
 [Actions](#actions): the radio moves, the member joins the roster, or the
@@ -5572,18 +6584,19 @@ from that device, which no row shows: **Review** looks the code up with
 `member.device.lookup`, and a dialog shows the device, its account, its
 fingerprint, and the member and role approving admits it as, before
 **Approve** sends `member.device.approve` with the device id and the code.
-It revokes a device too, and shows every server refusal verbatim. The
+**Revoke** shows on the member's own devices, on a device still waiting,
+and, for a super admin, on every device; it shows every server refusal
+verbatim. The
 list is an `InsetList`; until it arrives, three row skeletons stand in after
 ~200ms ("Loading devices").
 
 Personal settings are not on this page. The sidebar footer menu's
 **Profile** opens the **Profile** dialog (`src/routes/members/personal.tsx`):
 the member's name and role, **Display name** (an input with **Save**, sent
-as `member.rename`), **Colour**, **Git identity** (the name and email
+as `member.rename`), **Colour** and **Git identity** (the name and email
 the member's agents commit as, saved with `member.git`; the same form
-onboarding shows) and **Agent account sharing** (**Share account** or
-**Revoke access** per teammate, with the omp warning behind **Learn more**).
-Profile is the one place that edits the git identity; Agents links to it.
+onboarding shows). Agent account sharing lives on **Members**. Profile is the
+one place that edits the git identity; Agents links to it.
 
 Display name, colour, and share or revoke follow [Actions](#actions): the
 header, roster and avatars take the new name or colour, and the teammate's
@@ -5638,24 +6651,23 @@ opens a dialog with two tabs:
   error and drops the preview, as does editing the code, so only a new
   **Preview** can propose.
 
-A proposal for the viewer to accept (`member.merge.pending` where the
-viewer minted the code) shows in Sign-ins, in the code tab, as a Needs you
-card and as a row in the sidebar's Needs you; **Review** and the row open
-Profile at Sign-ins. Profile is mounted by the app shell (`profileOpen` in
+A proposal for the viewer to accept (`member.merge.pending` where the viewer
+minted the code) shows in Sign-ins, in the code tab, as a Needs you card and
+as a row in the sidebar's Needs you; **Review** and the row open Profile at
+Sign-ins. Profile is mounted by the app shell (`profileOpen` in
 `store/ui.ts`), not the sidebar, so **Review** works with the sidebar
-collapsed or the phone drawer closed. It lists the proposer's sign-ins, the settings kept,
-what is discarded and the resulting role; **Accept and merge** (danger
-style) needs the same tick and sends `member.merge.accept` with the
-proposal's digest, and **Cancel** sends `member.merge.cancel`. A refused
-accept clears the tick and re-reads the proposals, so a `refusal` the
-server now reports disables **Accept and merge**. A proposal the server
-could not plan shows only its `refusal` and **Cancel**, and the viewer's
-own open proposals show with **Cancel**. Every RPC error shows verbatim,
-as a toast when it arrives after its dialog or Profile closed, unless the
-signed-in member changed. After a merge
-the record shows in Sign-ins; **Merge history** lists `member.merge.list`
-with the discarded settings, custom agent definitions included, and the
-archive path.
+collapsed or the phone's More sheet closed. It lists the proposer's sign-ins,
+the settings kept, what is discarded and the resulting role; **Accept and
+merge** (danger style) needs the same tick and sends `member.merge.accept`
+with the proposal's digest, and **Cancel** sends `member.merge.cancel`. A
+refused accept clears the tick and re-reads the proposals, so a `refusal` the
+server now reports disables **Accept and merge**. A proposal the server could
+not plan shows only its `refusal` and **Cancel**, and the viewer's own open
+proposals show with **Cancel**. Every RPC error shows verbatim, as a toast
+when it arrives after its dialog or Profile closed, unless the signed-in
+member changed. After a merge the record shows in Sign-ins; **Merge history**
+lists `member.merge.list` with the discarded settings, custom agent
+definitions included, and the archive path.
 
 `member.list`'s `merged_into` is kept as `mergedInto`. `memberName` and
 `resolveMember` in `lib/member-name.ts` follow it, so an id history names
@@ -5668,14 +6680,15 @@ without a reload.
 ## Manage workspaces
 
 `src/routes/workspaces/` lists workspaces as rows, with three row skeletons
-while the list loads. Selecting a row opens the
-workspace: it becomes the active one and the board shows. Each row's menu
-holds **Repository** (the repository page), **Environment** (its Environment
-section), **Settings…** (who may message others' sessions) and **Delete…**, each
-gated by its permission. **Add
+while the list loads. A row's name opens the
+workspace: it becomes the active one and the board shows. Below the name sit
+its base branch and its owner, and beside
+it two buttons, never a menu: **Access** (for the workspace's admin) and
+**Settings** (the workspace page, for every member). **Current** marks the
+active workspace beside its name. **Add
 workspace** in the header shows the creation choices above the list; with no
-workspace yet they show without it. Open the page from the workspace
-switcher or the command palette.
+workspace yet they show without it. Open the page from the sidebar, the
+workspace switcher or the command palette.
 
 The creation choices are the shared `src/components/workspace-create.tsx`,
 the same ones onboarding's Repository step shows:
@@ -5755,28 +6768,31 @@ After deletion, the list and workspace switcher update together.
 `workspace.deleted` events reconcile other connected dashboards, including
 their selection and any open deleted workspace or run.
 
-### Repository page
+### Workspace settings page
 
-The workspace switcher's **Repository** item and the **Repository** item of
-a row's menu in Manage workspaces open `routes/workspace.tsx`. It is one
+The workspace switcher's **Workspace settings** item and a row's **Settings**
+button in Manage workspaces open `routes/workspace.tsx`. It is one
 workspace in sections: **Base branch**, read-only because sessions have already
 forked from it; **Source and clone**, the shared
 `components/workspace-repository.tsx` (link a local clone, the
 server-fetched source with its mirror status and deploy key, the checkout
-Origin) with its Advanced part open; **Environment**, below; and **Team**,
-the budget with **Set budget…** (`budget.set`) and who may message others'
+Origin) with its Advanced part open; **Environment**, below; and **Team**:
+**Access**, naming the owner, with **Access…** for the workspace's admin; the
+budget with **Set budget…** (`budget.set`) and who may message others'
 sessions with **Change…** (`workspace.settings`), and, where the server offers
 `workspace.child_limits`, the subsession limit ("8 subsessions busy at once per parent session"). The
 admin's **Change…** dialog edits it as **Busy at once**, saving with
-`workspace.child_limits`. Each button is gated by its
+`workspace.child_limits`. Last, for the workspace's admin, **Danger zone**
+holds **Delete…** (`workspace.delete`), which confirms, then lands on Manage
+workspaces. Each button is gated by its
 server-side permission; a member without it reads the same facts. The page
 lists no sessions: the board does.
 
 **Environment** (`components/workspace-environment.tsx`) is the workspace's
 setup script, variables and egress control ([environments.md](environments.md#workspace-environment)),
-read with `workspace.environment.get` when the page opens. Opening the page
-through an **Environment** menu item passes `section: 'environment'`, and the
-section scrolls into view once it has loaded.
+read with `workspace.environment.get` when the page opens. A link that opens
+the page with `section: 'environment'` scrolls that section into view once it
+has loaded.
 
 - An admin edits the **Setup script** in a monospace field and each variable
   as a row: name, value, a **Secret** checkbox and **Remove**. A saved secret
@@ -5790,7 +6806,7 @@ section scrolls into view once it has loaded.
   mask.
 - **Import .env…** (`components/workspace-environment-import.tsx`) takes
   pasted `NAME=VALUE` lines or a chosen file, parsed by `lib/dotenv.ts`, the
-  format `aether workspace env import` reads. It lists each name as **New** or
+  format `cloudfield workspace env import` reads. It lists each name as **New** or
   **Replaces the current value**, counts the lines it skips, and has **Store
   as secrets** ticked. An empty value has nothing to hide and is added
   plain; over a saved secret it stays a secret with no value, which **Save**
@@ -5804,7 +6820,7 @@ section scrolls into view once it has loaded.
 - **Save** sends one `workspace.environment.set` holding only what changed,
   so an untouched secret is never named. It is disabled until something
   differs; **Unsaved changes.** and **Discard** show while it does. Beside it
-  the page says what a save reaches: sessions launched afterwards, not containers
+  the page says what a save reaches: sessions launched afterwards, not sandboxes
   that exist. A row that cannot be saved - no name, a name used twice, `=` in
   a name, a secret with no value - is marked on **Save**, which focuses it and
   sends nothing. The server's refusal shows verbatim under **Not saved**, and
@@ -5817,6 +6833,12 @@ When the setup script fails a launch, the New session and template launch
 dialogs show the server's reason and, under **Setup script output**, what
 the script printed (`components/launch/setup-output.tsx`, from the error's
 `setup_output`).
+When the refusal is a pending source mirror with a revision to adopt (error
+data `adopt_command`), the New session dialog shows the server's reason with
+its closing `aether workspace mirror adopt` command moved into a code block
+with a copy button. An admin also gets **Open workspace settings**, which leads to
+**Review source mirror → Adopt candidate**; other members read where an admin
+adopts it.
 
 The source mirror dialog reports local-only, pending, ready or failure,
 including the configured source, branch, accepted SHA and last check time.
@@ -5855,7 +6877,7 @@ while one of its entries is visible, so the nav and search never disagree.
 | You | Subsessions (`children`) | Subsessions (`child-runs`): the on/off switch, Limits (`child-limits`) |
 | You | Usage (`usage`) | Subscription usage (`subscription-usage`) |
 | This computer | This computer (`this-computer`) | Link (`link`); Syncing: Sync daemon (`sync-daemon`), Mirror session files (`mirror`); Danger zone (`danger-zone`) |
-| Server | Server (`server`) | Status: Version (`version`), Tailnet dashboard, Disk and performance (`disk`); Admin: Docker inside sessions (`docker`), Retained containers (`retained-containers`) |
+| Server | Server (`server`) | Status: Version (`version`), Tailnet dashboard, Disk and performance (`disk`); Admin: Docker inside sessions (`docker`), Retained sandboxes (`retained-containers`) |
 | Server | Remote access (`remote-access`) | Edge (`edge`) |
 
 **Addressing.** The route is `{name: "settings", params: {section}}`, and
@@ -5876,7 +6898,7 @@ the query is non-empty the nav lists the results with their category, and a
 polite status reads `N settings` or `No settings match “q”`. Enter opens the
 first result; ArrowDown moves to the results; Escape clears the query, then
 leaves the field. Two results leave the page: **Workspace settings and
-budget** opens the active workspace's Repository page, and **Members and
+budget** opens the active workspace's settings page, and **Members and
 devices** opens Members.
 
 **Phone.** Below 768px the category list is the page. A category shows on its
@@ -5896,7 +6918,7 @@ Assistant, Linked server, Sync daemon, Docker inside sessions, Remote access).
 
 Categories:
 
-- **General**: **Theme** (System, Light, Dark; the palette and the footer
+- **General**: **Theme** (Dark, the default, Light, System; the palette and the footer
   menu offer the same), **Text size** (Default, Large, Larger; it scales the
   interface type tokens through `data-text-size` on the root element and
   leaves terminal zoom alone), **Single-key shortcuts** (see
@@ -5909,7 +6931,9 @@ Categories:
   {client}`, remounted when `identityKey` changes so a code never outlives
   its member. A ChatGPT / Claude segmented control picks numbered steps.
   `connector.list` gives the URL to show at once (`url`), the edge's
-  `universal_url` and `sign_in`. With `sign_in` the third step mints no code
+  `universal_url`, that URL at every address of the edge
+  (`universal_urls`) and `sign_in`. A URL in `universal_urls` is treated as
+  `universal_url` everywhere below. With `sign_in` the third step mints no code
   and **Watch for the connection** polls for 10 minutes, then says nothing
   connected; otherwise **Get a
   code** calls `connector.code` and shows its code with `useCountdown`. A
@@ -5937,7 +6961,7 @@ Categories:
   failed mint revokes nothing) and **Revoke** (confirm). A move or
   reconnect stays in progress past its code or watch, so **Get a code** or
   **Watch for the connection** continues it at its URL, until its
-  replacement calls Aether or **Stop** ends it; until then the status region
+  replacement calls Cloudfield or **Stop** ends it; until then the status region
   names it and the other **Move** and **Reconnect** buttons are disabled.
   Errors show verbatim with a fix:
   a server without `connector.list` (`-32601`) gets the update command and
@@ -5973,9 +6997,23 @@ Categories:
   without asking?** with the warning that the assistant will launch sessions,
   message and stop the member's sessions and save the environment on its own;
   turning it off does not ask. A refusal stays in the dialog or under the
-  row. **Change in Settings** in the assistant panel opens
+  row. **Approval rules** (`routes/settings/approval-rules.tsx`) lists
+  `assistant.rules`: each rule's wording, `From:` the card it came from,
+  when it was created and last used and how many times, `Inactive: <reason>`
+  when set, and **Revoke** (`assistant.rules.revoke`), which drops the row
+  once the server answers and reads the list again; with none it says **No rules yet**, and a failed
+  read shows `Couldn’t read your rules` with its error and **Try again**. A
+  muted line under the heading says rules work with auto-approval off; an
+  inactive rule's wording is muted with an `Inactive` badge. It reads again when a card saves a
+  rule (the store's `ruleSaves`) or another member signs in. **Change in Settings** in the assistant panel opens
   `{section: "auto-approve"}`; the Syncing badge opens `mirror` and the
   Insights quota link opens `usage`.
+- **Agents**, where the server offers `agent.list`: each agent's install and
+  login state (`useAgentList`, read again each time the section opens,
+  rendered by the Agents page's `AgentList` without its actions) and **Open
+  Agents**, which leads to the Agents page; that page still owns install,
+  sign-in, update and removal. Search finds it by "sign in", "login", "Claude",
+  "install" or "agents".
 - **Launch**, where the server offers `launch.defaults.get`: **Saved
   defaults** says who saved them (you or the assistant) and when, or
   "Nothing saved yet". It lists each agent's saved mode and model with
@@ -5994,8 +7032,10 @@ Categories:
   start subsessions** (`enabled`, on by default), with a **What subsessions
   cover** list (what it allows, that budgets and limits apply, how to override it for one session). The switch saves
   on change; a refused change rereads the setting and keeps the error under
-  the row. Where the server offers `workspace.child_limits`, a read-only row
-  gives the active workspace's limit.
+  the row. **Subsession agents**, once the server lists `choices`, is the
+  launch panel's agents menu; a refused change there shows the server's error
+  in a toast and rereads the setting. Where the server offers
+  `workspace.child_limits`, a read-only row gives the active workspace's limit.
 - **Usage**: the subscription usage of your account, or of an account
   shared with you. A provider that reports `unauthenticated` keeps the
   server's error and adds **Sign in on Agents**.
@@ -6024,7 +7064,7 @@ Categories:
   verbatim and the restart command a config change needs, re-read every 30
   seconds while the category is open because the server keeps retrying; and
   **Disk and performance**, a link to [Insights › System](#insights). For
-  admins, **Free retained containers…** opens the same confirmation as the
+  admins, **Free retained sandboxes…** opens the same confirmation as the
   board's Finished menu for the active workspace. It prevents reopening those
   sessions but does not delete all session data: checkouts, homes, repositories and
   history retain their existing lifecycle.
@@ -6073,7 +7113,7 @@ Categories:
   copy ([edge.md](edge.md#server-id-and-claiming)).
 
 Repository settings, base freshness and the source mirror live on the
-[Repository page](#repository-page) on either gateway.
+[Workspace settings page](#workspace-settings-page) on either gateway.
 
 ### Watches
 
@@ -6155,7 +7195,7 @@ first two:
 | blocked | `Notification.permission` is `denied` | how to allow notifications in the browser |
 | unsupported, `desktop` | the Electron shell | that the desktop app notifies by itself |
 | unsupported, `gateway` | any gateway but the server's own | that `aether gui` cannot be opened by a notification later |
-| unsupported, `home-screen` | no Web Push, on an iPhone or iPad outside a home-screen app | a link to [Add it to your home screen](networking.md#add-it-to-your-home-screen) |
+| unsupported, `home-screen` | no Web Push, on an iPhone or iPad outside a home-screen app | install steps in a dismissible callout (kept in `localStorage`) in place of the switch, and a link to [Add it to your home screen](networking.md#add-it-to-your-home-screen) |
 | unsupported, `browser` | no Web Push anywhere else, the Android app's WebView included | the same link |
 
 `enablePush` calls `Notification.requestPermission()` before anything else is
@@ -6175,7 +7215,7 @@ cannot read, because Safari drops a subscription whose push shows nothing.
 A message with `clear` set means the session's need, or the watch's, ended: for
 the same reason it is not simply closed but replaced, under the same tag and keeping the shown
 title, by a `silent` notification with the server's body,
-`No longer needs you`. The server sends it only to the devices whose push
+`No longer needs you`, or `No longer awaiting review` for a finished session's. The server sends it only to the devices whose push
 service took the need, when the need ends or the session changes hands,
 under the session's Web Push topic, so a need still queued at the push service
 is never shown, and tries again a minute later for a device it could not
@@ -6303,7 +7343,7 @@ fills the field unless it was edited or the step moved on since (see the
 bridge paragraph above). On a shell built before that, leaving the step and
 coming back is the way out of a chooser that died without answering. Typing
 stays the fallback, because a browser tab has no dialog and a shell built by
-an older `aether gui build` has no method.
+an older `cloudfield gui build` has no method.
 
 The step adds the `aether` remote (`link.repo`) and then seeds the workspace:
 where the local gateway serves `repo.push` it shows a **Push now** button.
@@ -6320,7 +7360,7 @@ status is unresolved or identifies a mirror. Configuring or fetching a source
 never silently authorizes its candidate.
 
 When `link.repo` answers an `origin`, the connected line adds `Sessions push to
-<origin>`: the upstream a session pushes to, the same one `aether link --repo`
+<origin>`: the upstream a session pushes to, the same one `cloudfield link --repo`
 prints. That push destination is separate from the Source control read source.
 A link that recorded none says nothing about one.
 
@@ -6336,7 +7376,7 @@ working tree is dirty. The panel then shows both outputs in the order git
 produced them: the comparison's fetch, then the fast-forward. `diverged`
 means both sides moved on: the step names both tips and offers the fetch,
 log, rebase and push commands to resolve it by hand, copyable as one block,
-with no fast-forward button, because Aether never force-pushes.
+with no fast-forward button, because Cloudfield never force-pushes.
 
 Both states keep **Push now**, which re-compares - the thing to do after
 resolving by hand - and both take away the copyable `git push -u aether
@@ -6404,7 +7444,7 @@ navigating elsewhere marks the UI onboarded and clears wizard state.
 
 Connect asks **How does this computer reach your server?** with three
 radio cards (`src/routes/onboarding/connect-step.tsx`): **Tailscale**,
-marked Recommended and chosen by default, **Aether relay**, and **SSH
+marked Recommended and chosen by default, **Cloudfield relay**, and **SSH
 address**. On a phone the three share one row and the chosen card's
 one-line description shows below it, so the field below stays above the
 keyboard. A handed link, or **Link
@@ -6416,7 +7456,7 @@ which `link.apply` takes as the invite's display name or the saved link's
 profile name. Both send `link.apply`; only SSH address sends the invite and
 name.
 
-Aether relay signs in to an edge (`src/routes/onboarding/edge-link.tsx`):
+Cloudfield relay signs in to an edge (`src/routes/onboarding/edge-link.tsx`):
 **Sign in with GitHub** runs the edge's device flow through the local
 gateway, which keeps the device token, shows the code while it polls
 `edge.status`, then lists the servers the account reaches, each with one
@@ -6428,7 +7468,7 @@ id and the host key fingerprint `edge.hostkey` read, and links only on **Link
 and pin**, because that id comes from the edge. Opened from Settings > This computer > **Link another server**, the step
 starts on this picker with a server already linked; linking an edge server makes it the default and keeps the
 previous edge default as a saved server named by its server id. **Claim
-or invite link** takes the claim link or code `aether-server setup` printed
+or invite link** takes the claim link or code `cloudfield-server setup` printed
 and refuses a claim link naming another edge than the one signed in; a join
 link pasted there opens the Join panel below. It shows below the server
 list; **Other ways to link** holds **Server id from your admin**, which the
@@ -6445,7 +7485,7 @@ stays mounted, hidden, while another card is shown, so a link in flight
 keeps its busy state. Connect
 distinguishes no configured server from a linked one, shows **Continue** only
 once a server is configured, and refreshes on Retry and when the window
-regains focus, so a separate `aether link` command appears without
+regains focus, so a separate `cloudfield link` command appears without
 restarting the GUI.
 
 A link a shell hands over ([URL state](#url-state)) opens
@@ -6509,11 +7549,11 @@ not on the step.
 ## Update prompts
 
 The dashboard tracks three update targets: the **server**, **this client**
-(the `aether` binary running `aether gui`) and the **desktop shell**.
+(the `aether` binary running `cloudfield gui`) and the **desktop shell**.
 `src/store/updates.ts` derives each target's state from the store:
 `up_to_date`, `checking`, `check_failed`, `available`, `required`,
-`scheduled`, `applying`, `restarting`, `ready_to_restart`, `failed` or
-`rolled_back`. Every surface below renders from those states:
+`scheduled`, `channel_wait`, `applying`, `restarting`, `ready_to_restart`,
+`failed` or `rolled_back`. Every surface below renders from those states:
 
 - the sidebar notice row,
 - the **Updates** dialog (`UpdateCenter` in
@@ -6530,6 +7570,38 @@ semver precedence:
 - numeric prerelease identifiers order numerically;
 - a `git describe` tail ranks just above its tag;
 - an unparseable version (`dev`, a bare commit) is never behind.
+
+That order decides only the dashboard's own comparisons, and only when a
+side reports no signed build. When the client and the server both report
+one (`cli_build` in `update.check`, `build` in `server.info`), the notice
+that the server is older than this client (`serverTooOld`) orders by
+`(build, hotfix)`, as the server's client gate does, so a beta promoted
+from a nightly is not older than that nightly.
+
+- **Release channel.** **Settings › Server** has a **Release channel**
+  section (`src/routes/settings/release-channel.tsx`) with Stable, Beta and
+  Nightly pills, shown once `server.update_status` names a `channel`. Every
+  member sees the current channel; only a super admin gets the pills.
+  Picking Nightly always asks **Switch to nightly builds?** first. Picking
+  Stable or Beta runs `server.release_channel_set` with `dry_run`, and when
+  the answer says `wait` (the running build is above that channel's newest),
+  or the channel's newest release could not be read, shows **Switch to
+  beta?** with the running and target versions and builds, or the dry run's
+  `target_error` verbatim. Anything else saves at once. Saving installs
+  nothing; a pending update the new channel does not take is cancelled and
+  the section says so. A server error shows as it came. On a nightly or beta
+  server a super admin also sees the newest beta, with the days since it
+  was cut, and the newest nightly, from `channel_pointers` in
+  `server.update_status` (each present only when the last check verified
+  that pointer, and absent after a restart until the first check). Each has
+  a **Promote** link to
+  `https://github.com/3xDevOps/cloudfield/actions/workflows/promote.yml`. The
+  link only opens that page; its Run button promotes.
+- **Channel wait.** While `server.update_status` reports `channel_wait`, the
+  server row says the server stays on its build, with both builds, until the
+  channel reaches it, instead of "up to date" or an offer. An update the
+  server scheduled itself (`pending.by_server`) reads "Scheduled by the
+  server".
 
 The server always comes first. It updates before its clients, and a server
 that runs a newer release than a client refuses that client
@@ -6554,7 +7626,7 @@ that runs a newer release than a client refuses that client
   background too.
 
   The CLI and shell rows come from `update.check`, because the dashboard can
-  update only the machine running `aether gui`. The server row comes from
+  update only the machine running `cloudfield gui`. The server row comes from
   the server's own background release check. Any member may read the
   server's status.
 
@@ -6582,7 +7654,7 @@ that runs a newer release than a client refuses that client
   its cache. The check always answers. With nothing to update, the dialog
   says *You're up to date (vX). Checked HH:MM.*, and each row says the same
   for its target; an out-of-date desktop app withholds that line. A check that failed shows the error verbatim:
-  - *Could not check for a new Aether release.*
+  - *Could not check for a new Cloudfield release.*
   - *The server could not check for a new release.*
   - *Could not read the server's update status.* when the status read
     itself failed.
@@ -6596,7 +7668,7 @@ that runs a newer release than a client refuses that client
      rolled back*;
   3. *Server X is available* (members: *Server X is available, ask an
      admin*);
-  4. *Update to Aether X failed* or *Aether X is available*;
+  4. *Update to Cloudfield X failed* or *Cloudfield X is available*;
   5. *The desktop app is out of date*.
 - **The dialog lists the server first.**
   - **Admins** get the server's version, the latest release and the
@@ -6607,7 +7679,7 @@ that runs a newer release than a client refuses that client
       list, using the server's definition of busy: a paused session and one
       parked at needs-attention do not count. The dialog says what the
       restart costs: sessions keep going because the server reattaches to
-      their containers, and attached terminals reconnect on their own. The
+      their sandboxes, and attached terminals reconnect on their own. The
       confirm calls `server.update` with `when: "now"`. Update when idle
       sends `when: "idle"`, and the row becomes *Server X is scheduled.
       Scheduled by <member>, applies when no session is active.*, with a
@@ -6671,8 +7743,8 @@ that runs a newer release than a client refuses that client
     directory only root can write, such as `/usr/local/bin/aether`): the
     button, and before the click: *macOS will ask for an administrator
     password: {cli_path} is in a directory this account cannot write to.
-    The dialog is labelled osascript, the tool Aether asks through. Aether
-    never sees your password.*
+    The dialog is labelled osascript, the tool Cloudfield asks
+    through. Cloudfield never sees your password.*
   - *manual*: no button. The row shows `sudo aether update` with a copy
     button.
 
@@ -6686,7 +7758,7 @@ that runs a newer release than a client refuses that client
   `applyClientUpdate` in `src/store/updates.ts` runs the click, shared with
   the gate:
   1. It re-reads `update.check` with `refresh: true`. A fresh answer that
-     finds this machine current installs nothing and says *Aether vX is the
+     finds this machine current installs nothing and says *Cloudfield vX is the
      newest release. Nothing was downloaded.* A fresh `cli_error` is the
      click's error, except on a gated client whose `target_version` is
      set: the server's release was found anyway, so the install goes on.
@@ -6696,7 +7768,7 @@ that runs a newer release than a client refuses that client
   The outcome stays on the store, so the row keeps saying what happened
   after the re-checks report this machine as current:
   - the paths replaced;
-  - the `restart_command` for a co-located `aether-server`;
+  - the `restart_command` for a co-located `cloudfield-server`;
   - a rebuild still running, or its real error with `aether gui build`.
 
   A `403` answer means the macOS dialog was cancelled or the password
@@ -6707,8 +7779,8 @@ that runs a newer release than a client refuses that client
 
   When the gateway reports the CLI as `packaged` (the Android app), the
   client row and its notice are gone. The dialog says *Updates come from
-  the Android app: install its new version to update Aether.*, followed,
-  when a newer release exists, by *Aether <tag> is released; the app's
+  the Android app: install its new version to update Cloudfield.*, followed,
+  when a newer release exists, by *Cloudfield <tag> is released; the app's
   banner says when and where to update.* The app's own banner is the
   notice ([install.md](install.md#android-app)).
 - **The required-update gate.** The gate replaces the whole dashboard while
@@ -6723,6 +7795,22 @@ that runs a newer release than a client refuses that client
   is refused everything except `server.info` and `server.update_status`.
   The hydration retry and the event stream stop for good, since every
   retry would be refused the same way.
+
+  The reverse direction is `ServerTooOldBanner`: when the server release
+  is older than this client's (release cores compared, so a source build of
+  the same release does not count), `App` floats *This server is older than
+  this app*, the versions and `aether server update` over the mounted
+  shell. The check can answer while a form is half filled, so the warning
+  never replaces the shell or takes focus. The server version is whichever
+  was read last: `server.info` on a hydration, or the live server half of
+  a later `update.check`, which writes it back into `info` unless a
+  hydration replaced `info` while the check was out. The server
+  refuses nothing in this direction, so **Continue anyway** dismisses it for
+  that pair of versions (`aether.server-too-old-continued` in `localStorage`),
+  so a reload or a killed WebView does not bring it back until either
+  version changes. It is only reachable where
+  `update.check` is: the local gateway, which includes the Android app. The
+  server gateway serves a dashboard built into the server itself.
 
   The gate cannot be dismissed. It is a region labelled by its heading,
   which takes focus when the gate appears. It shows the server's own
@@ -6742,11 +7830,11 @@ that runs a newer release than a client refuses that client
   with. A client that cannot update itself gets neither button nor
   command, only the line and release link the client row shows; a
   *packaged* one (the Android app) reads *Updates come from the Android
-  app: install its vX release to update Aether.* What follows a finished
+  app: install its vX release to update Cloudfield.* What follows a finished
   update depends on the gateway:
   - under the desktop shell, the gateway relaunches and the page comes
     back on the new version;
-  - in a browser tab, the gate says *Aether X is installed.*, says to
+  - in a browser tab, the gate says *Cloudfield X is installed.*, says to
     restart `aether gui`, and offers **Reload**.
 
   A later `update.check` that reached the server (`server_version` set, no
@@ -6760,7 +7848,7 @@ that runs a newer release than a client refuses that client
   - **Copy details** copies the versions, the message, the manual command
     and the last error;
   - **Reload**;
-  - **Switch to <name>** for every other server saved with `aether link
+  - **Switch to <name>** for every other server saved with `cloudfield link
     --name`, through `link.switch`.
 
   A dashboard served by the server itself is never gated. It reloads
@@ -6782,16 +7870,16 @@ that runs a newer release than a client refuses that client
   own storage would start empty each time. Clicking the notification opens
   the dialog and runs a check.
 - **The desktop shell has a prompt of its own.** The SPA ships inside the
-  CLI, but the Electron shell around it is whatever `aether gui build`
+  CLI, but the Electron shell around it is whatever `cloudfield gui build`
   last installed. The shell's `package.json` carries the complete CLI
   version beside its npm-valid version, and the install records the CLI's
   executable path in `resources/aether-cli.json`.
   `desktop/main.js` starts the recorded binary ahead of `PATH` (unless
-  `AETHER_BIN` overrides it) and hands the build version to the renderer.
+  `CLOUDFIELD_BIN` overrides it) and hands the build version to the renderer.
   `desktop/preload.js` exposes it as `window.aetherDesktop.shellVersion`.
   On a local gateway, a shell whose version differs from the capabilities
   version by release precedence raises *The desktop app is out of date.*
-  with `aether gui build`. Two builds of one tag do not count as
+  with `cloudfield gui build`. Two builds of one tag do not count as
   different. A browser tab and a server-hosted dashboard have no local
   shell to compare. The prompt is independent of `update_available`: the
   CLI is usually current *after* an update that left the shell old.
@@ -6799,7 +7887,7 @@ that runs a newer release than a client refuses that client
   The bridge also carries `onCheckForUpdates` (the menu item) and
   `notifyUpdate`. On Windows and Linux, `controls.showMenu` opens the
   title-bar menu. All three are optional, because a shell built by an older
-  `aether gui build` lacks them.
+  `cloudfield gui build` lacks them.
 
 ## Keyboard and focus
 
@@ -7047,7 +8135,7 @@ coarse pointer at all and the dock offers collapsed, half and full instead
   the state mark says what state. `StatusDot`
   (`src/components/ui/status-dot.tsx`) is the only session-state mark: one shape
   and colour per state (filled circle Working, clock Waiting for, dashed ring
-  Waiting, amber ring Needs you, filled accent check Ready for review, check
+  Waiting, needs-you ring Needs you, filled accent check Finished: review, check
   Completed, ring with a bar Closed, cross Failed, ring with an exclamation
   mark Interrupted, broken ring Disconnected, bars Paused), named by the state
   word where it stands alone.
@@ -7060,7 +8148,7 @@ coarse pointer at all and the dock offers collapsed, half and full instead
 - **Motion is optional.** Every animation and transition stops under
   `prefers-reduced-motion: reduce`: the state pulse, the Session live
   shimmer, row and answer-block entrances, overlay and sheet entrances, tab indicators, disclosures, spinners
-  and skeletons. The controlling terminal's 1px teal outline is always static.
+  and skeletons. The controlling terminal's 1px accent outline is always static.
   There is no startup scene or reveal-flash animation.
 - **Primitives first.** `src/components/ui/` holds the house primitives on
   Radix: `Button` (`primary`, `secondary`, `ghost`, `danger`, `link` and the
@@ -7154,9 +8242,9 @@ notification frame and fallback timer.
 
 Session actions cover the retained-run contract: Close chooses merged or abandoned,
 while Reopen run appears only for eligible retained Standard sessions. Free
-container is also offered for finished retained subsessions; its
+sandbox is also offered for finished retained subsessions; its
 confirmation and error path do not hide or delete history. Expired or
-unavailable sessions offer no Free container. Sidebar tests cover group
+unavailable sessions offer no Free sandbox. Sidebar tests cover group
 disclosure: every group starts expanded and closes when its header is pressed.
 They also cover an unopened finish: the row and a nested subsession keep the text
 colour and say so in their names until `finish_unopened` clears. They also
@@ -7167,7 +8255,13 @@ device cards an admin and a member see.
 history, section order and folding, axis ticks and link
 bundling; the board test's `lanes view` cases cover the tree keyboard, the
 session popover and its links, a popover whose lane folds away, an empty
-window, bundled mail bodies and failed history reads.
+window, bundled mail bodies and failed history reads. `e2e/lanes.spec.ts`
+moves a real pointer over Lanes, with sessions and mail answered in the
+browser: from a lane to its popover and off it, one click from one lane's
+popover to another's, a drag and a pinned button closing it, and from a lane
+to its pinned button, on a held clock. Its live cases send `run.status`
+through the events socket: a session leaving above the view, one arriving
+above an open popover, and the focused lane folding into Finished.
 
 `src/a11y.test.tsx` exercises the session tab strip, dock tabs and sidebar
 splitter with keyboard events: arrow navigation, Enter and Space activation,
@@ -7200,7 +8294,7 @@ relevant confirmation. Preserve verbatim gateway errors in assertions when
 they are part of the contract.
 
 `web/e2e/` is the layout and browser-behavior layer. Playwright drives a real
-browser against the local `aether gui` gateway and the server it proxies,
+browser against the local `cloudfield gui` gateway and the server it proxies,
 while the same static bundle is also usable through the server-hosted
 gateway. `keyboard-focus` checks Escape ordering across an open dialog, the
 footer menu and a session view, confirms that a focused control paints the app
@@ -7211,27 +8305,30 @@ and Escape. `run-session` streams an Enhanced session, answers a permission,
 sends a message and stops it with Interrupt, then checks its Trace tab.
 
 The touch shell is driven by the `mobile` project, which
-[testing.md](testing.md) describes: `shell-drawer.mobile.spec.ts` opens the
-phone drawer, taps a session and finds the drawer gone with the session on screen and
-focus on its heading; `dialog-anchor.mobile.spec.ts` checks that a short
-dialog sits at the top rather than the middle, and that the launch form keeps
-its footer on screen on a viewport as short as a keyboard leaves;
-`toast-clearance.mobile.spec.ts` checks that a toast comes to rest 8px clear
-of the bottom edge; `home-screen.mobile.spec.ts` checks the manifest, icons
-and that the top bar clears a phone status bar; `run-views.mobile.spec.ts`
-protects a session from More and reads its changes; and `files-browser.mobile.spec.ts` opens a second file
-from the tree sheet. `sidebar-drawer.spec.ts` stays on the desktop project
-because its keyboard contract - `Mod+B` closing the drawer and the palette
-coming back once it is gone - needs a narrow window with a keyboard rather
-than a phone. `sign-ins-merge.spec.ts` gets a merge code
-as one member and previews it as another at phone width; both harness
-members have an SSH key, so it checks the server's refusal verbatim, and
-`src/routes/members/sign-ins.test.tsx` covers choosing, proposing and
-accepting. `board-card`, `run-switch`, `run-attach-retry`,
-`run-provisioning`, `terminal-tools` and the onboarding scenarios cover the
-corresponding real UI transitions, gateway responses and terminal behavior.
-Run the full browser workflow with `make test-e2e`; its scenario inventory and
-setup details live in [testing.md](testing.md).
+[testing.md](testing.md) describes: `phone-shell.mobile.spec.ts` checks the
+tab bar at 360px and 430px with no sideways scroll, Needs you as the landing
+page and its badge, and approves a permission and replies to a question from
+their cards; `shell-drawer.mobile.spec.ts` taps a session in the Sessions tab
+and finds it on screen with focus on its heading;
+`dialog-anchor.mobile.spec.ts` checks that a short dialog sits at the top
+rather than the middle, and that the launch form keeps its footer on screen on
+a viewport as short as a keyboard leaves; `toast-clearance.mobile.spec.ts`
+checks that a toast comes to rest 8px clear of the bottom edge;
+`home-screen.mobile.spec.ts` checks the manifest, icons, favicons and that the top bar
+clears a phone status bar and the tab bar shows; `run-views.mobile.spec.ts`
+protects a session from More and reads its changes; and
+`files-browser.mobile.spec.ts` opens a second file from the tree sheet.
+`sidebar-drawer.spec.ts` stays on the desktop project because its keyboard
+contract - `Mod+B` closing the drawer and the palette coming back once it is
+gone - needs a narrow window with a keyboard rather than a phone.
+`sign-ins-merge.spec.ts` gets a merge code as one member and previews it as
+another at phone width; both harness members have an SSH key, so it checks the
+server's refusal verbatim, and `src/routes/members/sign-ins.test.tsx` covers
+choosing, proposing and accepting. `board-card`, `run-switch`,
+`run-attach-retry`, `run-provisioning`, `terminal-tools` and the onboarding
+scenarios cover the corresponding real UI transitions, gateway responses and
+terminal behavior. Run the full browser workflow with `make test-e2e`; its
+scenario inventory and setup details live in [testing.md](testing.md).
 
 `run-room.spec.ts` and `run-room.mobile.spec.ts` cover shared notes,
 moderated messages, explicit control transfer, the phone Details sheet and
@@ -7293,7 +8390,7 @@ and a real touch device are checked by hand. Give the server a dashboard port
 and restart it:
 
 ```sh
-sudo aether-server config set web-port 443
+sudo cloudfield-server config set web-port 443
 sudo systemctl restart aether-server
 ```
 
@@ -7311,7 +8408,7 @@ The installed app is a manual check too, because no browser lets a test
 emulate the `display-mode: standalone` a real install gives. On Android,
 Chrome's ⋮ menu should offer **Install app**; on iPhone, Safari's **Share >
 Add to Home Screen**. The icon that lands on the home screen should be the
-Aether mark on a dark tile, and opening it should give a full-screen dashboard
+white Cloudfield mark on a black tile, and opening it should give a full-screen dashboard
 with the shell's own top bar, safe-area padding intact under
 the notch, and the soft keyboard still shortening the layout rather than
 covering it. Watch what the server saw with:

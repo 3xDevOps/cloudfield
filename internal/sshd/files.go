@@ -48,7 +48,7 @@ func filesTarget(s *Server, ctx context.Context, params json.RawMessage) (permis
 	return workspaceTarget(s, ctx, params)
 }
 
-func (s *Server) filesTree(ctx context.Context, _ domain.MemberID, params json.RawMessage) (any, *protocol.Error) {
+func (s *Server) filesTree(ctx context.Context, member domain.MemberID, params json.RawMessage) (any, *protocol.Error) {
 	p, perr := decodeParams[protocol.FilesTreeParams](params)
 	if perr != nil {
 		return nil, perr
@@ -63,7 +63,7 @@ func (s *Server) filesTree(ctx context.Context, _ domain.MemberID, params json.R
 	if reader == nil {
 		return nil, &protocol.Error{Code: protocol.CodeUnavailable, Message: "files.tree: file browsing is not enabled"}
 	}
-	run, workspace, perr := s.resolveRepo(ctx, p.RunID, p.WorkspaceID, p.Repo)
+	run, workspace, perr := s.resolveRepo(ctx, member, p.RunID, p.WorkspaceID, p.Repo)
 	if perr != nil {
 		return nil, perr
 	}
@@ -107,7 +107,7 @@ func (s *Server) filesRead(ctx context.Context, member domain.MemberID, params j
 	if reader == nil {
 		return nil, &protocol.Error{Code: protocol.CodeUnavailable, Message: "files.read: file browsing is not enabled"}
 	}
-	run, workspace, perr := s.resolveRepo(ctx, p.RunID, p.WorkspaceID, p.Repo)
+	run, workspace, perr := s.resolveRepo(ctx, member, p.RunID, p.WorkspaceID, p.Repo)
 	if perr != nil {
 		return nil, perr
 	}
@@ -204,7 +204,7 @@ func (s *Server) writeRepoFile(ctx context.Context, member domain.MemberID, meth
 	if err != nil {
 		return gitengine.FileRead{}, rpcError(err)
 	}
-	checkout, workspace, perr := s.resolveRepo(ctx, p.RunID, p.WorkspaceID, p.Repo)
+	checkout, workspace, perr := s.resolveRepo(ctx, member, p.RunID, p.WorkspaceID, p.Repo)
 	if perr != nil {
 		return gitengine.FileRead{}, perr
 	}
@@ -229,7 +229,7 @@ func (s *Server) writeRepoFile(ctx context.Context, member domain.MemberID, meth
 		target = permissions.Target{Workspace: workspace}
 	}
 	if err = permissions.Check(cap, actor, target); err != nil {
-		return gitengine.FileRead{}, &protocol.Error{Code: protocol.CodeDenied, Message: method + ": " + err.Error()}
+		return gitengine.FileRead{}, checkError(method, err)
 	}
 	m, err := s.cfg.Store.GetMember(ctx, member)
 	if err != nil {
@@ -242,6 +242,15 @@ func (s *Server) writeRepoFile(ctx context.Context, member domain.MemberID, meth
 			return gitengine.FileRead{}, rpcError(err)
 		}
 	}
+	// A checkout in a VM is written by the VM, which a sleeping session
+	// has to run again for it.
+	if vm, ok := reader.(interface{ IsVMCheckout(domain.RunID) bool }); ok && p.RunID != "" && s.cfg.Runs != nil && vm.IsVMCheckout(checkout) {
+		release, holdErr := s.cfg.Runs.HoldRunAwake(ctx, domain.RunID(p.RunID))
+		if holdErr != nil {
+			return gitengine.FileRead{}, rpcError(holdErr)
+		}
+		defer release()
+	}
 	result, err := reader.FilesWrite(ctx, workspace, checkout, ref, p.Path, content, p.Revision, m.GitIdentity(), signingKey)
 	if err != nil {
 		return gitengine.FileRead{}, filesWriteError(method, p.RunID, err)
@@ -249,7 +258,7 @@ func (s *Server) writeRepoFile(ctx context.Context, member domain.MemberID, meth
 	return result, nil
 }
 
-func (s *Server) filesDiff(ctx context.Context, _ domain.MemberID, params json.RawMessage) (any, *protocol.Error) {
+func (s *Server) filesDiff(ctx context.Context, member domain.MemberID, params json.RawMessage) (any, *protocol.Error) {
 	p, perr := decodeParams[protocol.FilesDiffParams](params)
 	if perr != nil {
 		return nil, perr
@@ -264,7 +273,7 @@ func (s *Server) filesDiff(ctx context.Context, _ domain.MemberID, params json.R
 	if reader == nil {
 		return nil, &protocol.Error{Code: protocol.CodeUnavailable, Message: "files.diff: file browsing is not enabled"}
 	}
-	checkout, _, perr := s.resolveRepo(ctx, p.RunID, "", p.Repo)
+	checkout, _, perr := s.resolveRepo(ctx, member, p.RunID, "", p.Repo)
 	if perr != nil {
 		return nil, perr
 	}
@@ -303,6 +312,8 @@ func filesWriteError(method, run string, err error) *protocol.Error {
 		return invalidParams("workspace_id does not own run_id")
 	case errors.Is(err, gitengine.ErrRevisionConflict):
 		return &protocol.Error{Code: protocol.CodeConflict, Message: method + ": file changed; reload before saving"}
+	case errors.Is(err, gitengine.ErrMirroredBase):
+		return &protocol.Error{Code: protocol.CodeDenied, Message: method + ": this workspace base is mirrored from upstream; edit it there, not in Cloudfield"}
 	}
 	if run != "" {
 		return &protocol.Error{Code: protocol.CodeUnavailable, Message: method + ": this session's checkout was removed; pull the branch to edit its files"}

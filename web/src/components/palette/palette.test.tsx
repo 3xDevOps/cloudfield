@@ -7,7 +7,6 @@ import { api } from '@/lib/api'
 import { useStore } from '@/store'
 import { toRecord } from '@/store/runs'
 import { agentInfo, alice, bob, otherWorkspace, run, serverInfo, vera, workspace } from '@/test/fixtures'
-import { pickOption } from '@/test/select'
 
 vi.mock('@/lib/api', async () => {
   const { fakeApi } = await import('@/test/fixtures')
@@ -62,6 +61,15 @@ function overlay(markup: string): void {
   host.innerHTML = markup
   document.body.append(host)
   onTestFinished(() => host.remove())
+}
+
+function arrowTo(search: HTMLElement, name: string): void {
+  const row = screen.getByRole('option', { name })
+  for (const _ of screen.getAllByRole('option')) {
+    if (row.getAttribute('aria-selected') === 'true') return
+    fireEvent.keyDown(search, { key: 'ArrowDown' })
+  }
+  expect(row.getAttribute('aria-selected')).toBe('true')
 }
 
 function SearchButton() {
@@ -196,6 +204,20 @@ describe('command palette', () => {
     expect(document.activeElement).toBe(search)
     fireEvent.keyDown(search, { key: 'Escape' })
     await waitFor(() => expect(document.activeElement).toBe(terminal))
+  })
+
+  it('offers commands on the open run by the role in its workspace, not the active one', async () => {
+    const theirs = run({ id: 'run_theirs', workspace_id: otherWorkspace.id, member_id: alice.id, protected: true })
+    useStore.setState({
+      info: { ...serverInfo, member: { ...bob, role: 'admin' } },
+      members: { [alice.id]: alice, [bob.id]: bob },
+      runs: { [active.id]: toRecord(active), [theirs.id]: toRecord(theirs) },
+      workspaces: { [workspace.id]: workspace, [otherWorkspace.id]: { ...otherWorkspace, role: 'collaborator' } },
+      route: { name: 'run', params: { runId: theirs.id } },
+    })
+    open()
+    await screen.findByRole('combobox')
+    expect(screen.queryByRole('option', { name: 'Kill session' })).toBeNull()
   })
 
   it('starts with navigation rather than a focused destructive command', async () => {
@@ -519,6 +541,105 @@ describe('command palette', () => {
     await waitFor(() => expect(useStore.getState().route.name).toBe('run'))
   })
 
+  it('finds Close session by "delete" below Delete session, and only opens its confirmation on Enter', async () => {
+    useStore.setState({ route: { name: 'run', params: { runId: active.id } } })
+    open()
+    const search = await screen.findByRole('combobox')
+    await userEvent.type(search, 'Delete')
+
+    const names = screen.getAllByRole('option').map((option) => option.textContent)
+    expect(names.indexOf('Delete session')).toBe(0)
+    expect(names).toContain('Close session…')
+    expect(screen.getByRole('option', { name: 'Delete session' }).getAttribute('aria-selected')).toBe('true')
+
+    arrowTo(search, 'Close session…')
+    fireEvent.keyDown(search, { key: 'Enter' })
+
+    expect(await screen.findByText('Close this session?')).toBeTruthy()
+    expect(api.runDelete).not.toHaveBeenCalled()
+    expect(api.runKill).not.toHaveBeenCalled()
+  })
+
+  it('finds New session by "launch" and opens the launch form on Enter', async () => {
+    open()
+    const search = await screen.findByRole('combobox')
+    await userEvent.type(search, 'LAUNCH')
+
+    arrowTo(search, 'New session…')
+    fireEvent.keyDown(search, { key: 'Enter' })
+
+    expect(await screen.findByLabelText('Target workspace')).toBeTruthy()
+    expect(api.runLaunch).not.toHaveBeenCalled()
+  })
+
+  describe('aliases', () => {
+    beforeEach(() => {
+      useStore.setState({
+        route: { name: 'run', params: { runId: active.id } },
+        pausedRuns: { [active.id]: false },
+        capabilities: { gateway: 'local', methods: ['*'], ws: ['terminal'], local: ['forward.start'] },
+      })
+    })
+
+    async function search(query: string): Promise<(string | null)[]> {
+      open()
+      await userEvent.type(await screen.findByRole('combobox'), query)
+      return screen.queryAllByRole('option').map((option) => option.textContent)
+    }
+
+    it.each([
+      ['launch', 'Launch from a template…', 'New session…'],
+      ['start', 'New session…', 'New session…'],
+      ['kill', 'Kill session', 'Kill session'],
+      ['stop', 'Kill session', 'Kill session'],
+      ['remove', 'Close session…', 'Close session…'],
+      ['preferences', 'Settings', 'Settings'],
+      ['terminal', 'Environment', 'Environment'],
+      ['logs', 'Activity', 'Activity'],
+      ['dark mode', 'Use dark theme', 'Use dark theme'],
+      ['chat', 'Ask Cloudfield', 'Send a message to the agent…'],
+      ['messages', 'Send a message to the agent…', 'Send a message to the agent…'],
+      ['tunnel', 'Forward a port…', 'Forward a port…'],
+    ])('"%s" ranks %s first and finds %s without running anything', async (query, first, found) => {
+      const names = await search(query)
+      expect(names[0]).toBe(first)
+      expect(names).toContain(found)
+      expect(api.runKill).not.toHaveBeenCalled()
+      expect(api.runDelete).not.toHaveBeenCalled()
+      expect(api.runPause).not.toHaveBeenCalled()
+    })
+
+    it.each([
+      ['terminal', 'Kill session'],
+      ['start', 'Kill session'],
+      ['done', 'Delete session'],
+    ])('keeps "%s" from reaching %s', async (query, absent) => {
+      expect(await search(query)).not.toContain(absent)
+    })
+
+    it('opens the kill confirmation, not the kill, when Enter takes the "stop" match', async () => {
+      const names = await search('stop')
+      expect(names[0]).toBe('Kill session')
+      fireEvent.keyDown(screen.getByRole('combobox'), { key: 'Enter' })
+      expect(within(await screen.findByRole('alertdialog')).getByText('Kill this session?')).toBeTruthy()
+      expect(api.runKill).not.toHaveBeenCalled()
+    })
+
+    it('offers no Relaunch by "restart" on a live session', async () => {
+      expect(await search('restart')).not.toContain('Relaunch')
+    })
+
+    it('offers Kill session by "stop" only with a session in view', async () => {
+      useStore.setState({ route: { name: 'board', params: {} } })
+      expect(await search('stop')).not.toContain('Kill session')
+    })
+
+    it('says so when nothing matches', async () => {
+      expect(await search('output')).toEqual([])
+      expect(screen.getByText('No commands, sessions, or workspaces match.')).toBeTruthy()
+    })
+  })
+
   it('hides New run from a role that cannot launch', async () => {
     useStore.setState({
       capabilities: { gateway: 'remote', methods: ['*'], ws: [] },
@@ -529,6 +650,8 @@ describe('command palette', () => {
     })
     open()
     await screen.findByText('Open the board')
+    expect(screen.queryByText('New session…')).toBeNull()
+    await userEvent.type(screen.getByRole('combobox'), 'launch')
     expect(screen.queryByText('New session…')).toBeNull()
   })
 
@@ -543,6 +666,7 @@ describe('command palette', () => {
   })
 
   it('launches with the selected shared account and its agent roster', async () => {
+    useStore.setState({ capabilities: { gateway: 'remote', methods: ['run.launch', 'agent.list', 'account.list'], ws: [] } })
     vi.mocked(api.accountList).mockResolvedValue({
       accounts: [alice, bob],
       shared_with: [],
@@ -555,9 +679,7 @@ describe('command palette', () => {
     open()
 
     fireEvent.click(await screen.findByText('New session…'))
-    const options = await screen.findByRole('button', { name: /^Options/ })
-    if (options.getAttribute('aria-expanded') === 'false') await userEvent.click(options)
-    await pickOption(screen.getByLabelText('Account'), 'Bob (shared)')
+    await userEvent.click(within(await screen.findByRole('radiogroup', { name: 'Account' })).getByRole('radio', { name: /^Bob/ }))
     await waitFor(() => expect(screen.getByRole('radio', { name: /^bob-agent/ }).getAttribute('aria-checked')).toBe('true'))
     await launchReady()
     fireEvent.click(screen.getByRole('button', { name: 'Launch' }))
@@ -776,11 +898,11 @@ describe('command palette', () => {
     })
     open()
 
-    fireEvent.click(await screen.findByText('Archive closed sessions…'))
+    fireEvent.click(await screen.findByText('Archive finished sessions…'))
 
     expect(api.runArchive).not.toHaveBeenCalled()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Archive 1' }))
+    fireEvent.click(await screen.findByRole('button', { name: 'Archive 1' }))
 
     await waitFor(() => expect(api.runArchive).toHaveBeenCalledWith(done.id, true))
   })
@@ -805,6 +927,8 @@ describe('command palette', () => {
       },
     })
     open()
+    await userEvent.type(await screen.findByRole('combobox'), 'restart')
+    expect(api.runRelaunch).not.toHaveBeenCalled()
 
     fireEvent.click(await screen.findByText('Relaunch'))
 
@@ -820,7 +944,7 @@ describe('command palette', () => {
       capabilities: { gateway: 'remote', methods: ['run.release'], ws: [] },
     })
     open()
-    fireEvent.click(await screen.findByText('Free retained containers…'))
+    fireEvent.click(await screen.findByText('Free retained sandboxes…'))
     expect(api.runRelease).not.toHaveBeenCalled()
     fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Free 1' }))
     await waitFor(() => expect(api.runRelease).toHaveBeenCalledWith(archived.id))
@@ -834,10 +958,10 @@ describe('command palette', () => {
       capabilities: { gateway: 'remote', methods: ['run.release'], ws: [] },
     })
     open()
-    fireEvent.click(await screen.findByText('Free container…'))
+    fireEvent.click(await screen.findByText('Free sandbox…'))
     const dialog = within(await screen.findByRole('alertdialog'))
     expect(api.runRelease).not.toHaveBeenCalled()
-    fireEvent.click(dialog.getByRole('button', { name: 'Free container' }))
+    fireEvent.click(dialog.getByRole('button', { name: 'Free sandbox' }))
     await waitFor(() => expect(api.runRelease).toHaveBeenCalledWith(active.id))
   })
 })

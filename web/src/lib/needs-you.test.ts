@@ -1,5 +1,5 @@
 import { deviceNeeds, needsYou, needsYouConditions, waitingOn, type AttentionState, type NeedsYouID } from '@/lib/needs-you'
-import { presentRun } from '@/lib/status'
+import { groupOf, presentRun } from '@/lib/status'
 import type { Run } from '@/lib/types'
 import { toRecord, type RunRecord } from '@/store/runs'
 import {
@@ -9,6 +9,7 @@ import {
   roomMessage,
   run,
   stateContext,
+  workspace,
 } from '@/test/fixtures'
 
 const record = (over: Parameters<typeof run>[0] = {}): RunRecord => toRecord(run(over))
@@ -29,8 +30,26 @@ it.each(['tui', 'acp'] as const)('keeps actual requests ahead of a reported %s o
   expect(needsYou(success, stateContext())).toBeUndefined()
   expect(presentRun(success, stateContext())).toMatchObject({ state: 'ready', reason: 'Agent reported success' })
   const ready = { ...success, review: 'ready' as const }
-  expect(needsYou(ready, stateContext())?.id).toBe('ready')
+  expect(needsYou(ready, stateContext())).toBeUndefined()
+  for (const finished of [ready, { ...ready, status: 'completed' as const, state: undefined }, { ...ready, parent_run_id: 'run_0', detached: true }, { ...ready, review: 'later' as const }]) {
+    const shown = presentRun(finished, stateContext())
+    expect(shown).toMatchObject({ state: 'ready' })
+    expect(shown.needsYou).toBeUndefined()
+    expect(groupOf(shown)).toBe('review')
+  }
+  const subsession = presentRun({ ...ready, parent_run_id: 'run_0' }, stateContext())
+  expect(subsession).toMatchObject({ state: 'reported' })
+  expect(groupOf(subsession)).toBe('finished')
   expect(needsYou({ ...ready, pending_inputs: [{ id: 'question_1', session_id: 'session_1', kind: 'question' }] }, stateContext())?.id).toBe('question')
+})
+
+it("asks an admin to answer a sudo request only where they administer the run's workspace", () => {
+  const sudo = record({ member_id: bob.id, pending_inputs: [{ id: 'sudo-1', session_id: 'aether-sudo', kind: 'permission', title: 'Run as root in /workspace: id' }] })
+  const viewing = (role: 'admin' | 'collaborator') => stateContext({
+    viewerID: alice.id, viewerRole: 'admin', workspaces: { [workspace.id]: { ...workspace, role } },
+  })
+  expect(needsYou(sudo, viewing('admin'))?.id).toBe('sudo')
+  expect(needsYou(sudo, viewing('collaborator'))).toBeUndefined()
 })
 
 const rows: {
@@ -104,13 +123,6 @@ const rows: {
     reason: 'Agent asks: Which database?',
   },
   {
-    id: 'ready',
-    run: record({ mode: 'acp', acp: true, status: 'needs-attention', state: 'finished', reason: 'agent reported success', review: 'ready' }),
-    ctx: {},
-    reason: 'Your agent reports this task is finished',
-    state: 'ready',
-  },
-  {
     id: 'failed',
     run: record({
       mode: 'acp', acp: true, status: 'needs-attention', state: 'failed',
@@ -161,11 +173,11 @@ describe('needs you conditions', () => {
     ['a session waiting on a tool', { state: 'waiting-tools' }, undefined],
     ['a paused request', { state: 'needs-you', paused: true }, undefined],
     ['a paused disconnect', { state: 'disconnected', paused: true }, undefined],
-    ['a usage limit Aether resumes', { state: 'idle', reason: "Usage limit reached on Alice's account; moving to Bob's account" }, undefined],
+    ['a usage limit Cloudfield resumes', { state: 'idle', reason: "Usage limit reached on Alice's account; moving to Bob's account" }, undefined],
     ['an interrupted Enhanced turn', { mode: 'acp', acp: true, state: 'needs-you', reason: 'turn interrupted' }, 'needs-input'],
     ['an Enhanced turn stopped short', { mode: 'acp', acp: true, state: 'needs-you', reason: 'turn ended: max_tokens' }, 'needs-input'],
     ['a cancelled Enhanced turn', { mode: 'acp', acp: true, state: 'idle', reason: 'turn cancelled' }, undefined],
-    ['a usage limit Aether cannot resume', { state: 'needs-you', reason: "Usage limit reached on Alice's account; no fallback has usage left" }, 'needs-input'],
+    ['a usage limit Cloudfield cannot resume', { state: 'needs-you', reason: "Usage limit reached on Alice's account; no fallback has usage left" }, 'needs-input'],
     ['a Background request', { mode: 'headless', state: 'needs-you' }, 'needs-input'],
     ['a Background failure', { mode: 'headless', state: 'failed', outcome_unseen: true }, 'failed'],
     ["a subsession's request", { parent_run_id: 'run_parent', state: 'needs-you', reason: 'needs input: Which port?' }, 'needs-input'],
@@ -232,6 +244,13 @@ describe('needs you conditions', () => {
       wait: { kind: 'system_fault', detail: 'pr:o/r#12:checks resolved, but the agent was not woken', error: 'deliver wake: session closed' },
     })
     expect(needsYou(broken, stateContext())?.id).toBe('needs-input')
+  })
+
+  it("shows why a session on a revoked account stopped", () => {
+    const reason = "account share revoked: Alice revoked access to their account; the session is on Bob's account and its conversation could not be restored: resume failed"
+    const parked = record({ status: 'needs-attention', state: 'needs-you', reason })
+    expect(needsYou(parked, stateContext())?.id).toBe('needs-input')
+    expect(presentRun(parked, stateContext()).reason).not.toBe('Open the session to see its request')
   })
 
   it("labels a disconnected agent with the server's reason", () => {

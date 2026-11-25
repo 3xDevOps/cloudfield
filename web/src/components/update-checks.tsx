@@ -3,7 +3,7 @@ import { desktopBridge } from '@/components/shell/window-bar'
 import { api, onUpgradeRequired, type Api } from '@/lib/api'
 import { bareVersion } from '@/lib/format'
 import { useStore } from '@/store'
-import { useCapability } from '@/store/hooks'
+import { administersServer, useCapability } from '@/store/hooks'
 import { serverInFlight } from '@/store/server'
 import {
   checkClient,
@@ -146,12 +146,12 @@ export function UpdateChecks({ client = api }: { client?: Api }) {
       const s = useStore.getState()
       const server = serverTarget(s, Date.now())
       const cli = clientTarget(s)
-      const admin = s.info?.member.role === 'admin'
+      const admin = administersServer(s.info)
       const offer =
         admin && server.state === 'available'
-          ? { key: `server:${server.latest}`, title: `Server ${bareVersion(server.latest)} is available`, body: `The server runs ${server.version}. Open Aether to update it.` }
+          ? { key: `server:${server.latest}`, title: `Server ${bareVersion(server.latest)} is available`, body: `The server runs ${server.version}. Open Cloudfield to update it.` }
           : cli.state === 'available' && !s.update?.cli.packaged
-            ? { key: `cli:${cli.latest}`, title: `Aether ${bareVersion(cli.latest)} is available`, body: `This computer runs ${cli.version}. Open Aether to update.` }
+            ? { key: `cli:${cli.latest}`, title: `Cloudfield ${bareVersion(cli.latest)} is available`, body: `This computer runs ${cli.version}. Open Cloudfield to update.` }
             : null
       // The shell announces each key once, across launches.
       if (offer) desktop.notifyUpdate?.(offer)

@@ -81,7 +81,7 @@ func TestAssistantContainerMountsNothingFromTheMemberHome(t *testing.T) {
 		if strings.HasPrefix(m.HostPath, e.cfg.Homes.Root()) {
 			t.Errorf("mounts %s from the member homes at %s", m.HostPath, m.ContainerPath)
 		}
-		if m.ContainerPath == coordtransport.BinaryPath || m.ContainerPath == coordtransport.CLIPath {
+		if m.ContainerPath == coordtransport.BinaryPath || m.ContainerPath == coordtransport.CLIPath || m.ContainerPath == coordtransport.CloudfieldCLIPath {
 			if !m.ReadOnly {
 				t.Errorf("server binary mounted writable")
 			}
@@ -290,7 +290,7 @@ func TestAssistantStartRefusesARemovedMember(t *testing.T) {
 	if err := e.db.CreateMember(t.Context(), gone); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.db.DeleteMember(t.Context(), gone.ID); err != nil {
+	if err := e.db.DeleteMember(t.Context(), gone.ID, ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := e.sched.StartAssistantLogin(t.Context(), gone.ID, "codex", 80, 24); err == nil {
@@ -417,7 +417,7 @@ func TestAssistantInstallsOnlyWhenMissing(t *testing.T) {
 		t.Fatalf("installing called %d times, execs %+v; want one install for codex and one for claude", calls, runs)
 	}
 	manifest, err := os.ReadFile(filepath.Join(install, "package.json"))
-	if want := `{"dependencies":{"@agentclientprotocol/codex-acp":"` + codex.ACPInstall.Version + `","@openai/codex":"0.159.3"},"private":true}`; err != nil || string(manifest) != want {
+	if want := `{"dependencies":{"@agentclientprotocol/codex-acp":"` + codex.ACPInstall.Version + `","@openai/codex":"` + codex.ACPInstall.CLIVersion + `"},"private":true}`; err != nil || string(manifest) != want {
 		t.Fatalf("codex package.json = %s, %v; want %s", manifest, err, want)
 	}
 	if want := []runtime.Mount{{HostPath: AssistantInstallDir(assistantDir, e.member.ID, "claude"), ContainerPath: AssistantInstallPath + "/claude"}}; !slices.Equal(installer.Mounts, want) {

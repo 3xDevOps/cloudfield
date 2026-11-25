@@ -1,4 +1,4 @@
-import type { SessionItem, SessionToolCall } from '@/lib/session-types'
+import type { BackgroundTask, SessionItem, SessionToolCall, WorkflowAgent } from '@/lib/session-types'
 import { isLaunch, toolLabel, toolStatus, type Rehome, type SessionRow, type Turn } from '@/store/session-rows'
 
 /** A background task's own status wins; otherwise done and failed come from
@@ -323,6 +323,19 @@ export function agentState(agent: Subagent): AgentState {
   return agent.turnEndedSeq !== undefined && (agent.activeSeq ?? -1) < agent.turnEndedSeq ? 'stopped' : 'running'
 }
 
+/** Whether a live subagent or workflow task was launched before the loaded
+ * history: no call held from oldestSeq on started it and no launch of an
+ * open turn still waits for its task, so its card shows only once older
+ * history is read. */
+export function launchUnloaded(index: AgentIndex, tasks: BackgroundTask[] | undefined, oldestSeq: number): boolean {
+  const live = (tasks ?? []).filter((task) => /agent|workflow/.test(task.type ?? ''))
+  if (live.length === 0) return false
+  const agents = Object.values(index.agents)
+  if (agents.some((agent) => !agent.parentID && agent.turnEndedSeq === undefined && agent.call && !agent.call.task && !callSettled(agent.call))) return false
+  const held = new Set(agents.filter((agent) => Math.max(agent.launchSeq ?? -1, agent.callSeq ?? -1) >= oldestSeq).map((agent) => agent.call?.task?.id))
+  return live.some((task) => !held.has(task.id))
+}
+
 function rawInput(agent: Subagent): Record<string, unknown> {
   const raw = agent.call?.raw_input
   return raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {}
@@ -334,11 +347,29 @@ function text(value: unknown): string | undefined {
 
 export function agentLabel(agent: Subagent): string {
   const raw = rawInput(agent)
-  return agent.call?.subagent?.description || (agent.workflow ? text(raw.name) : undefined) || text(raw.description) || agent.call?.title || 'Subagent'
+  return agent.call?.subagent?.description || (agent.workflow ? agent.call?.task?.workflow?.name || text(raw.name) : undefined) || text(raw.description) || agent.call?.title || 'Subagent'
 }
 
 export function agentType(agent: Subagent): string | undefined {
-  return agent.workflow ? 'Workflow' : agent.call?.subagent?.type
+  const type = agent.workflow ? 'Workflow' : agent.call?.subagent?.type
+  return type === agentLabel(agent) ? undefined : type
+}
+
+export type WorkflowRowState = WorkflowAgent['state'] | 'stopped' | 'not-started'
+
+/** Once its workflow is no longer running, a row still running was stopped and one still queued never started. */
+export function workflowRowState(row: WorkflowAgent, live: boolean): WorkflowRowState {
+  if (live || (row.state !== 'running' && row.state !== 'queued')) return row.state
+  return row.state === 'running' ? 'stopped' : 'not-started'
+}
+
+export function workflowTally(rows: WorkflowAgent[], live: boolean): Partial<Record<WorkflowRowState, number>> {
+  const tally: Partial<Record<WorkflowRowState, number>> = {}
+  for (const row of rows) {
+    const state = workflowRowState(row, live)
+    tally[state] = (tally[state] ?? 0) + 1
+  }
+  return tally
 }
 
 export function agentReport(agent: Subagent): string | undefined {
@@ -346,6 +377,14 @@ export function agentReport(agent: Subagent): string | undefined {
   if ((state !== 'done' && state !== 'failed') || agent.call?.task) return undefined
   const report = (agent.call?.content ?? []).filter((c) => c.type === 'text').map((c) => c.text ?? '').join('\n\n').trim()
   return report || undefined
+}
+
+/** The text of a subagent's last message, which reports what a background
+ * subagent did: its launching call returned once it started. */
+export function agentLastMessage(agent: Subagent): string | undefined {
+  const id = agent.items.filter((item) => item.kind === 'message' && item.message?.role === 'assistant').at(-1)?.message?.message_id
+  if (!id) return undefined
+  return agent.items.filter((item) => item.kind === 'message' && item.message?.message_id === id).map((item) => item.message!.text).join('').trim() || undefined
 }
 
 export function agentPrompt(agent: Subagent): string | undefined {
@@ -386,6 +425,21 @@ export function agentTurn(agent: Subagent): Turn {
 export function agentLoaded(agent: Subagent, oldestSeq: number): boolean {
   const first = agent.items[0]?.seq ?? Infinity
   return agent.opened === true && agent.launchSeq! >= oldestSeq && first > agent.launchSeq!
+}
+
+const barRank: Partial<Record<AgentState, number>> = { running: 0, failed: 1, stopped: 2 }
+
+/** Every subagent and workflow the main agent launched, or whose launch is
+ * not loaded, one `<w|a>:<state>:<id>` line each: running ones oldest first,
+ * then failed, stopped and the rest, each newest first. A string, so a
+ * selector returning it changes only when a row would. */
+export function topAgents(index: AgentIndex): string {
+  return Object.values(index.agents)
+    .filter((agent) => !agent.parentID)
+    .map((agent) => ({ agent, state: agentState(agent) }))
+    .sort((a, b) => (barRank[a.state] ?? 3) - (barRank[b.state] ?? 3) || (a.state === 'running' ? 1 : -1) * ((a.agent.launchSeq ?? 0) - (b.agent.launchSeq ?? 0)))
+    .map(({ agent, state }) => `${agent.workflow ? 'w' : 'a'}:${state}:${agent.id}`)
+    .join('\n')
 }
 
 export function siblings(index: AgentIndex, agent: Subagent): string[] {

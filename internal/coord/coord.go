@@ -9,7 +9,8 @@
 //
 // The same socket carries run.report, a harness lifecycle hook. Durable
 // outcomes use coord.report and remain available after the request
-// returns. Nothing here blocks, locks, or arbitrates. A send is authorized
+// returns. Nothing here locks or arbitrates, and the only thing unread mail
+// blocks is a success or failure report. A send is authorized
 // by the sender owner's message permission on any live run on the server,
 // including a parent or child; it is size-capped, rate-limited, depth-capped, and stamped into the
 // workspace timeline;
@@ -208,6 +209,7 @@ type Service struct {
 	requestBuckets    map[domain.RunID]*bucket
 	hookBuckets       map[domain.RunID]*bucket
 	lifecycleBuckets  map[domain.RunID]*bucket
+	turnBuckets       map[domain.RunID]*bucket
 	inboxWaiters      map[domain.RunID]*inboxWaiter
 	hookWaiters       map[domain.RunID]map[*hookWaiter]struct{}
 	inboxConsumers    map[domain.RunID]int
@@ -225,6 +227,11 @@ type Service struct {
 	outboxKick        chan struct{}
 	closed            bool
 	wg                sync.WaitGroup
+
+	// mailRefusals holds each run whose last success or failure report was
+	// refused for unread mail; true once it has called coord.inbox since.
+	// Guarded by mu.
+	mailRefusals map[domain.RunID]bool
 }
 
 // socketKey identifies one listener: a run and the wire-version socket
@@ -277,10 +284,12 @@ func New(cfg Config) (*Service, error) {
 		requestBuckets:    make(map[domain.RunID]*bucket),
 		hookBuckets:       make(map[domain.RunID]*bucket),
 		lifecycleBuckets:  make(map[domain.RunID]*bucket),
+		turnBuckets:       make(map[domain.RunID]*bucket),
 		inboxWaiters:      make(map[domain.RunID]*inboxWaiter),
 		hookWaiters:       make(map[domain.RunID]map[*hookWaiter]struct{}),
 		inboxConsumers:    make(map[domain.RunID]int),
 		reportLocks:       make(map[domain.RunID]*sync.Mutex),
+		mailRefusals:      make(map[domain.RunID]bool),
 		enhancedWoken:     make(map[domain.RunID]map[string]struct{}),
 		enhancedOpens:     make(map[domain.RunID]uint64),
 		enhancedRefusals:  make(map[domain.RunID]wakeRefusal),
@@ -468,7 +477,7 @@ func (s *Service) wakeContext(parent context.Context, run domain.RunID, timeout 
 }
 
 func runClosing(method string) *protocol.Error {
-	return &protocol.Error{Code: protocol.CodeUnavailable, Message: method + ": session is closing"}
+	return &protocol.Error{Code: protocol.CodeUnavailable, Message: method + protocol.CoordRunClosingSuffix}
 }
 func (s *Service) isRunClosing(run domain.RunID) bool {
 	s.mu.Lock()

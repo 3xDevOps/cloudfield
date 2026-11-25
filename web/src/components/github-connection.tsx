@@ -1,3 +1,4 @@
+import { isAdminRole } from '@/lib/permissions'
 import { useLayoutEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { api, type Api } from '@/lib/api'
@@ -72,9 +73,9 @@ export function GitHubConnection({ client = api, onConnected, onDisconnected }: 
       setError(null)
       setCopied(false)
       setBusy(false)
-      if (useStore.getState().info?.member.role === 'admin') void request('status')
+      if (isAdminRole(useStore.getState().info?.member.role)) void request('status')
     }
-    command.current = (action) => { if (useStore.getState().info?.member.role === 'admin') void request(action) }
+    command.current = (action) => { if (isAdminRole(useStore.getState().info?.member.role)) void request(action) }
     const unsubscribe = useStore.subscribe((state, previous) => {
       if (state.identityKey !== previous.identityKey || state.connectionEpoch !== previous.connectionEpoch || state.info?.member.id !== previous.info?.member.id || state.info?.member.role !== previous.info?.member.role) reset()
     })
@@ -95,7 +96,7 @@ export function GitHubConnection({ client = api, onConnected, onDisconnected }: 
                 : busy ? 'Checking GitHub connection…' : 'GitHub is not connected.'}</p>
     {waiting && result?.user_code && <div className="space-y-2">
       <p>Enter this one-time code on GitHub: <strong className="select-all font-code">{result.user_code}</strong></p>
-      <p className="text-ui-sm text-muted">Authorize GitHub CLI on GitHub; Aether uses it to connect this server.</p>
+      <p className="text-ui-sm text-muted">Authorize GitHub CLI on GitHub; Cloudfield uses it to connect this server.</p>
       <div className="flex flex-wrap items-center gap-2">
         <Button type="button" size="sm" onClick={() => {
           const version = copyGeneration.current

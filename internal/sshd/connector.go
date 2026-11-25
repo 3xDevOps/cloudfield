@@ -301,9 +301,9 @@ func (s *Server) checkReviewer(account edgeproto.Account, m *domain.Member) erro
 	case !s.cfg.EdgeReviewer:
 		return fmt.Errorf("%s does not take the edge's reviewer account: edge-reviewer is off. An admin turns it on on the server's host with "+
 			"sudo aether-server config set edge-reviewer true, then sudo systemctl restart aether-server", cmp.Or(s.cfg.Name, "this server"))
-	case m.Role == domain.RoleAdmin:
+	case m.Role.Admin():
 		return fmt.Errorf("%s is bound to member %s, an admin, and a reviewer may act only as a viewer or collaborator; "+
-			"an admin changes the member's role with aether member role", accountName(account), m.ID)
+			"a super admin changes the member's role with aether member role", accountName(account), m.ID)
 	}
 	return nil
 }
@@ -333,6 +333,11 @@ func (s *Server) connectorList(ctx context.Context, member domain.MemberID, _ js
 	universal := s.UniversalConnectorURL()
 	out := protocol.ConnectorListResult{Connectors: make([]protocol.Connector, 0, len(list)), URL: connectorURL, UniversalURL: universal,
 		SignIn: universal != "" && connectorURL == universal && s.cfg.EdgeAccess == edgeproto.PolicyAccount}
+	if edge := s.currentEdgeOwner(); universal != "" && edge != nil {
+		for _, o := range edge.RelayOrigins() {
+			out.UniversalURLs = append(out.UniversalURLs, o+edgeproto.PathUniversalMCP)
+		}
+	}
 	for _, c := range list {
 		out.Connectors = append(out.Connectors, connectorToWire(c))
 	}
@@ -352,16 +357,17 @@ func (s *Server) connectorRevoke(ctx context.Context, member domain.MemberID, pa
 	if perr != nil {
 		return nil, perr
 	}
+	unknown := &protocol.Error{Code: protocol.CodeNotFound, Message: fmt.Sprintf(
+		"%s: no connector %s; aether mcp lists yours", method, p.ConnectorID)}
 	c, err := cs.GetConnector(ctx, p.ConnectorID)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, &protocol.Error{Code: protocol.CodeNotFound, Message: fmt.Sprintf(
-			"%s: no connector %s; aether mcp lists yours", method, p.ConnectorID)}
+		return nil, unknown
 	}
 	if err != nil {
 		return nil, rpcError(err)
 	}
-	if perr := s.actingOn(ctx, member, c.Member, method); perr != nil {
-		return nil, perr
+	if c.Member != member && !s.superAdmin(ctx, member) {
+		return nil, unknown
 	}
 	if err := cs.DeleteConnector(ctx, c.ID); err != nil {
 		return nil, rpcError(err)

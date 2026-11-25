@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,6 +42,7 @@ type connectorLaunchInput struct {
 	Mode            string `json:"mode,omitempty" jsonschema:"default acp if installed"`
 	Model           string `json:"model,omitempty"`
 	Children        string `json:"children,omitempty" jsonschema:"may the agent start subsessions; default your setting"`
+	Permission      string `json:"permission,omitempty" jsonschema:"default your saved tier"`
 	SavedDefaults   string `json:"saved_defaults,omitempty" jsonschema:"ignore sends only the given fields"`
 	accountChoice
 	// Reason is the assistant's, for the member's confirmation card; the
@@ -68,8 +70,9 @@ type answerInput struct {
 }
 
 type reviewInput struct {
-	RunID  string `json:"run_id"`
-	Action string `json:"action"`
+	RunID       string `json:"run_id"`
+	Action      string `json:"action"`
+	Acknowledge bool   `json:"acknowledge,omitempty"`
 }
 
 type decideInput struct {
@@ -80,18 +83,22 @@ type decideInput struct {
 }
 
 type stopInput struct {
-	RunID   string `json:"run_id"`
-	Outcome string `json:"outcome,omitempty"`
+	RunID       string `json:"run_id"`
+	Outcome     string `json:"outcome,omitempty"`
+	Acknowledge bool   `json:"acknowledge,omitempty"`
 }
 
 const idempotencyRule = " Reuse idempotency_key on a retry; "
+
+const closeRule = " A stop or close with warnings is refused with them; show them to the user, then retry with acknowledge true."
 
 var writeOps = []Op{
 	opOf("aether_launch_session", "Launch session", ScopeWrite, false, nextWorkspaces,
 		"Use this when starting an agent on a task or saved template, one call per task; then poll aether_get_session."+
 			idempotencyRule+"without one, a repeat within 60s, or of a template while it starts, returns the first session.", launchRun).
-		enum("mode", "tui", "headless", "acp").enum("children", "on", "off").enum("saved_defaults", savedApply, savedIgnore).hints(false, true).hide(Connector, "reason").
-		offer(TierConfirmed).calling(protocol.MethodServerInfo, protocol.MethodAccountList, protocol.MethodLaunchDefaultsGet, protocol.MethodAgentList, protocol.MethodRunList,
+		enum("mode", "tui", "headless", "acp").enum("children", "on", "off").
+		enum("permission", string(domain.PermissionRoot), string(domain.PermissionDefault), string(domain.PermissionIsolated)).enum("saved_defaults", savedApply, savedIgnore).hints(false, true).hide(Connector, "reason").
+		waiting().offer(TierConfirmed).calling(protocol.MethodServerInfo, protocol.MethodAccountList, protocol.MethodLaunchDefaultsGet, protocol.MethodAgentList, protocol.MethodRunList,
 		protocol.MethodRunLaunch, protocol.MethodTemplateLaunch),
 	opOf("aether_message_session", "Message session", ScopeWrite, false, nextRuns,
 		"Use this when the user wants to tell a session's agent something, which cannot be taken back; it waits up to 45s if another member controls the session."+
@@ -108,9 +115,9 @@ var writeOps = []Op{
 		"Use this when the user wants a paused session to continue.", pauseRun(protocol.MethodRunResume, "Resumed")).hints(false, true).
 		offer(TierReversible).calling(protocol.MethodServerInfo, protocol.MethodRunResume, protocol.MethodRunGet),
 	opOf("aether_mark_reviewed", "Mark session reviewed", ScopeWrite, true, nextRuns,
-		"Use this when the user has checked a session's reported success: complete accepts it and closes the session, later puts it off.", markReviewed).
-		enum("action", protocol.RunReviewComplete, protocol.RunReviewLater).hints(true, false).
-		calling(protocol.MethodRunGet, protocol.MethodServerInfo, protocol.MethodRunReview),
+		"Use this when the user has checked a session's reported success: complete accepts it and closes the session, later puts it off, not-yet says the work is not finished."+closeRule, markReviewed).
+		enum("action", protocol.RunReviewComplete, protocol.RunReviewLater, protocol.RunReviewNotYet).hints(true, false).
+		calling(protocol.MethodRunGet, protocol.MethodServerInfo, protocol.MethodRunCloseCheck, protocol.MethodRunReview),
 }
 
 var controlOps = []Op{
@@ -119,14 +126,14 @@ var controlOps = []Op{
 		enum("decision", "allow", "deny").hints(true, true).
 		offer(TierConfirmed).calling(protocol.MethodAttentionList, protocol.MethodServerInfo, protocol.MethodRunInputRespond),
 	opOf("aether_stop_session", "Stop or close session", ScopeControl, true, nextRuns,
-		"Use this when the user wants a session stopped now, or with outcome closed as merged or abandoned.", stopRun).
+		"Use this when the user wants a session stopped now, or with outcome closed as merged or abandoned."+closeRule, stopRun).
 		enum("outcome", "merged", "abandoned").hints(true, false).
-		offer(TierConfirmed).calling(protocol.MethodServerInfo, protocol.MethodRunKill, protocol.MethodRunClose, protocol.MethodRunGet),
+		offer(TierConfirmed).calling(protocol.MethodServerInfo, protocol.MethodRunKill, protocol.MethodRunCloseCheck, protocol.MethodRunClose, protocol.MethodRunGet),
 }
 
 func launched(r protocol.Run, l links, book accountBook) map[string]any {
 	return map[string]any{"run_id": r.ID, "state": r.Status, "url": l.run(r.ID), "launch": runReceipt(r, l, book),
-		"next": "poll aether_get_session with run_id"}
+		"next": nextAfterLaunch(r)}
 }
 
 func recent(at string, now time.Time) bool {
@@ -246,7 +253,8 @@ func starting(tool, key string, replayErr error) (string, any, error) {
 
 // recentLaunch is the member's run in the workspace, created within
 // duplicateWindow and not stopped, with the same task, agent, mode, model,
-// account, fallback policy, extra repositories and child-run setting. An omitted mode or
+// account, fallback policy, extra repositories, child-run setting and
+// permission tier. An omitted mode or
 // model matches any; an omitted account is self, the member's own.
 func recentLaunch(ctx context.Context, read Call, in connectorLaunchInput, self string, now time.Time) (protocol.Run, bool, error) {
 	params := struct {
@@ -264,9 +272,10 @@ func recentLaunch(ctx context.Context, read Call, in connectorLaunchInput, self 
 				extras = append(extras, repo.WorkspaceID)
 			}
 		}
-		if r.Harness == in.Harness && r.Task == in.Task && (in.Mode == "" || r.Mode == in.Mode) && (in.Model == "" || r.Model == in.Model) &&
+		if r.Harness == in.Harness && r.Task == in.Task && (in.Mode == "" || r.Mode == in.Mode) && (in.Model == "" || r.Model == in.Model || r.RefusedModel == in.Model) &&
 			cmp.Or(in.AccountMemberID, self) == cmp.Or(r.RequestedAccountMemberID, r.AccountMemberID) &&
 			slices.Equal(in.FallbackAccountMemberIDs, r.FallbackAccountMemberIDs) && in.NoFallback == r.NoFallback && in.Children == r.Children &&
+			cmp.Or(in.Permission, string(domain.PermissionDefault)) == cmp.Or(r.Permission, string(domain.PermissionDefault)) &&
 			sameRepos(in.ExtraWorkspaceIDs, extras) && !domain.RunStatus(r.Status).Final() && recent(r.CreatedAt, now) {
 			return r, true, nil
 		}
@@ -295,7 +304,7 @@ func launchRun(ctx context.Context, c calls, in connectorLaunchInput) (string, a
 	if err != nil {
 		return "", nil, err
 	}
-	fill, err := fillSaved(saved, launchSlots{harness: &in.Harness, mode: &in.Mode, model: &in.Model, account: &in.accountChoice},
+	fill, err := fillSaved(saved, launchSlots{harness: &in.Harness, mode: &in.Mode, model: &in.Model, permission: &in.Permission, account: &in.accountChoice},
 		agentLister(ctx, c.read, book), book)
 	if err != nil {
 		return "", nil, err
@@ -303,12 +312,14 @@ func launchRun(ctx context.Context, c calls, in connectorLaunchInput) (string, a
 	l := links(info.DashboardURL)
 	params := protocol.RunLaunchParams{WorkspaceID: in.WorkspaceID, Task: in.Task, Harness: in.Harness, Mode: in.Mode, Model: in.Model,
 		AccountMemberID: in.AccountMemberID, FallbackAccountMemberIDs: in.FallbackAccountMemberIDs, NoFallback: in.NoFallback,
-		ExtraWorkspaceIDs: in.ExtraWorkspaceIDs, Children: in.Children, IdempotencyKey: in.IdempotencyKey}
+		ExtraWorkspaceIDs: in.ExtraWorkspaceIDs, Children: in.Children, Permission: in.Permission, IdempotencyKey: in.IdempotencyKey}
 	dup, done := false, func(error) {}
 	if params.IdempotencyKey == "" {
 		var prior protocol.Run
 		var found bool
-		params.IdempotencyKey, dup, found, done, err = keyless(info.Member.ID, protocol.MethodRunLaunch, params, func() (ok bool, err error) {
+		fingerprint := params
+		fingerprint.Permission = cmp.Or(params.Permission, string(domain.PermissionDefault))
+		params.IdempotencyKey, dup, found, done, err = keyless(info.Member.ID, protocol.MethodRunLaunch, fingerprint, func() (ok bool, err error) {
 			prior, ok, err = recentLaunch(ctx, c.read, in, book.self(), time.Now())
 			return ok, err
 		})
@@ -411,7 +422,7 @@ type sentKey struct {
 // else a new one. dup is true when an identical message is in flight or was
 // sent. done ends the call with whether it succeeded and restarts the
 // window, since an assistant call waits for the member's approval first.
-func messageKey(member string, p protocol.RunInjectParams, now time.Time) (key string, dup bool, done func(sent bool)) {
+func messageKey(member string, p protocol.RunInjectParams, now time.Time) (key string, dup bool, done func(sent, refused bool)) {
 	sum := sha256.Sum256(fmt.Appendf(nil, "%s\x00%s\x00%t\x00%s", member, p.RunID, p.Steer, p.Message))
 	fingerprint := string(sum[:])
 	sentKeys.Lock()
@@ -428,12 +439,16 @@ func messageKey(member string, p protocol.RunInjectParams, now time.Time) (key s
 	}
 	dup = k.inflight > 0 || k.sent
 	k.inflight++
-	return k.key, dup, func(sent bool) {
+	used := k.key
+	return used, dup, func(sent, refused bool) {
 		sentKeys.Lock()
 		defer sentKeys.Unlock()
 		k.inflight--
 		k.at = time.Now()
 		k.sent = k.sent || sent
+		if refused && k.key == used {
+			k.key, k.sent = uuid.NewString(), false
+		}
 	}
 }
 
@@ -444,17 +459,43 @@ func messageRun(ctx context.Context, c calls, in connectorMessageInput) (string,
 	}
 	l := links(info.DashboardURL)
 	params := protocol.RunInjectParams{RunID: in.RunID, Message: in.Message, Steer: in.Steer, IdempotencyKey: in.IdempotencyKey}
-	dup, done := false, func(bool) {}
+	dup, done := false, func(bool, bool) {}
 	if params.IdempotencyKey == "" {
 		params.IdempotencyKey, dup, done = messageKey(info.Member.ID, params, time.Now())
 	}
 	var res protocol.RunRoomPostResult
 	err = c.act(ctx, protocol.MethodRunInject, params, &res)
-	done(err == nil)
+	refused := err == nil && res.Message.State == protocol.RoomMessageNotSent
+	done(err == nil && !refused, refused)
 	if err != nil {
 		return "", nil, retryable(err, params.IdempotencyKey)
 	}
 	m := res.Message
+	if m.State == protocol.RoomMessageNotSent {
+		code, next := "no reason recorded", "aether_get_session shows the session's state; "
+		if f := m.Failure; f != nil {
+			code = f.Code
+			f.Message = clip(f.Message, 1024)
+			switch f.Code {
+			case "session_protected":
+				next = "unprotect it with aether_session_lifecycle; "
+			case "unsupported_image":
+				next = "drop the images; "
+			case "steer_denied":
+				next = "ask the session's owner or a workspace admin for access; "
+			case "access_revoked":
+				next = "aether_get_session shows whether the session still exists; if it does, ask a workspace admin for access; "
+			case "control_changed":
+				next = ""
+			}
+		}
+		again := "send it again"
+		if in.IdempotencyKey != "" {
+			again += " with a new idempotency_key, since " + in.IdempotencyKey + " returns this refusal"
+		}
+		return "", nil, &untrustedError{untrusted: map[string]any{"failure": m.Failure}, err: &protocol.Error{Code: protocol.CodeInvalidState, Message: fmt.Sprintf(
+			"message to session %s was not sent (%s; the error is under untrusted.failure); %s%s", in.RunID, code, next, again)}}
+	}
 	out := map[string]any{"run_id": in.RunID, "state": m.State, "outcome": res.Outcome, "url": l.run(in.RunID), "idempotency_key": params.IdempotencyKey}
 	summary := fmt.Sprintf("Message to session %s is %s.", in.RunID, m.State)
 	if m.State == protocol.RoomMessageQueued && m.DeliverAfter != nil {
@@ -640,8 +681,40 @@ func markReviewed(ctx context.Context, c calls, in reviewInput) (string, any, er
 			return "", nil, &protocol.Error{Code: protocol.CodeInvalidState, Message: fmt.Sprintf(
 				"session %s has no reported success awaiting review (review %q); to end it, aether_stop_session, which needs the control scope", r.ID, r.Review)}
 		}
+		if err := closeWarned(ctx, c.read, in.RunID, string(domain.RunCompleted), in.Acknowledge); err != nil {
+			return "", nil, err
+		}
 	}
 	return runAction(ctx, c, protocol.MethodRunReview, in.RunID, "Marked reviewed ("+in.Action+")", protocol.RunReviewParams{RunID: in.RunID, Action: in.Action})
+}
+
+// closeWarned refuses to close run while it has close warnings the caller
+// did not acknowledge, naming each one.
+func closeWarned(ctx context.Context, read Call, id, outcome string, acknowledged bool) error {
+	if acknowledged {
+		return nil
+	}
+	var res protocol.RunCloseCheckResult
+	if err := read(ctx, protocol.MethodRunCloseCheck, protocol.RunCloseCheckParams{RunIDs: []string{id}, Outcome: outcome}, &res); err != nil {
+		return err
+	}
+	if len(res.Runs) != 1 {
+		return fmt.Errorf("run.close_check answered for %d sessions, want 1", len(res.Runs))
+	}
+	if res.Runs[0].Error != nil {
+		return res.Runs[0].Error
+	}
+	warnings := res.Runs[0].Warnings
+	if len(warnings) == 0 {
+		return nil
+	}
+	kinds := make([]string, len(warnings))
+	for i, w := range warnings {
+		kinds[i] = w.Kind
+	}
+	return &untrustedError{untrusted: map[string]any{"warnings": warnings}, err: &protocol.Error{Code: protocol.CodeInvalidState, Message: fmt.Sprintf(
+		"closing session %s has warnings (%s), listed under untrusted.warnings; show them to the user, then retry with acknowledge true to close anyway",
+		id, strings.Join(slices.Compact(kinds), ", "))}}
 }
 
 // decidable refuses a request the connector showed cut, since deciding it
@@ -651,7 +724,7 @@ func decidable(in decideInput, l links, shown ...string) error {
 	for _, text := range shown {
 		if len([]rune(text)) > maxText {
 			return &protocol.Error{Code: protocol.CodeInvalidState, Message: fmt.Sprintf(
-				"session %s's request is longer than the connector shows; decide it in the Aether dashboard%s", in.RunID, at(l.run(in.RunID)))}
+				"session %s's request is longer than the connector shows; decide it in the Cloudfield dashboard%s", in.RunID, at(l.run(in.RunID)))}
 		}
 	}
 	if in.Action != shown[0] {
@@ -696,7 +769,7 @@ func decideApproval(ctx context.Context, c calls, in decideInput) (string, any, 
 		}
 		if option == "" {
 			return "", nil, &protocol.Error{Code: protocol.CodeInvalidState,
-				Message: fmt.Sprintf("session %s's request offers no %s option, and the connector never answers for always; decide it in the Aether dashboard%s", in.RunID, want, at(l.run(in.RunID)))}
+				Message: fmt.Sprintf("session %s's request offers no %s option, and the connector never answers for always; decide it in the Cloudfield dashboard%s", in.RunID, want, at(l.run(in.RunID)))}
 		}
 		var res protocol.RunInputRespondResult
 		if err := c.act(ctx, protocol.MethodRunInputRespond, protocol.RunInputRespondParams{RunID: in.RunID, RequestID: in.AnswerID, OptionID: option}, &res); err != nil {
@@ -708,7 +781,12 @@ func decideApproval(ctx context.Context, c calls, in decideInput) (string, any, 
 	return "", nil, invalid("this item is a %s, which is answered with %s", it.Kind, answerWith(it))
 }
 
+// stopRun checks a stop like a close: a kill also ends the run abandoned,
+// settling its subsessions and waking its waiters.
 func stopRun(ctx context.Context, c calls, in stopInput) (string, any, error) {
+	if err := closeWarned(ctx, c.read, in.RunID, cmp.Or(in.Outcome, string(domain.RunAbandoned)), in.Acknowledge); err != nil {
+		return "", nil, err
+	}
 	if in.Outcome == "" {
 		return runAction(ctx, c, protocol.MethodRunKill, in.RunID, "Stopped", protocol.RunIDParams{RunID: in.RunID})
 	}

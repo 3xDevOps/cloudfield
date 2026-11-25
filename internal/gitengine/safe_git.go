@@ -57,18 +57,20 @@ func (e *Engine) checkoutObjectFormat(workTree string) (string, error) {
 // checkout's .git directory is deliberately never used as GIT_DIR: it is
 // agent-writable and may contain config, attributes, hooks, or command names.
 func (e *Engine) ensureScratchGitDir(ctx context.Context, dir, workTree string) error {
-	config := filepath.Join(dir, "config")
-	if _, err := os.Stat(config); err == nil {
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("gitengine: inspect scratch git directory: %w", err)
-	}
+	// Git 2.44 and later write config before HEAD, so only both mark a
+	// finished init; a killed init leaves config alone and is run again.
 	scratchGitMu.Lock()
 	defer scratchGitMu.Unlock()
-	if _, err := os.Stat(config); err == nil {
+	ready := true
+	for _, name := range []string{"config", "HEAD"} {
+		if _, err := os.Stat(filepath.Join(dir, name)); errors.Is(err, os.ErrNotExist) {
+			ready = false
+		} else if err != nil {
+			return fmt.Errorf("gitengine: inspect scratch git directory: %w", err)
+		}
+	}
+	if ready {
 		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("gitengine: inspect scratch git directory: %w", err)
 	}
 	objectFormat, err := e.checkoutObjectFormat(workTree)
 	if err != nil {
@@ -142,6 +144,24 @@ const (
 // handles on Unix; the bounded read prevents an agent-controlled file from
 // consuming unbounded memory.
 func (e *Engine) readCheckoutGitFile(checkout, name string, limit int64) ([]byte, error) {
+	file, err := e.openCheckoutGitFile(checkout, name)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	data, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("gitengine: read checkout metadata %s: %w", name, err)
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("gitengine: checkout metadata %s exceeds %d bytes", name, limit)
+	}
+	return data, nil
+}
+
+// openCheckoutGitFile opens the regular file name under the checkout's .git
+// as inert data, never through a link.
+func (e *Engine) openCheckoutGitFile(checkout, name string) (*os.File, error) {
 	root, err := e.openCheckoutRoot(checkout)
 	if err != nil {
 		return nil, err
@@ -151,22 +171,16 @@ func (e *Engine) readCheckoutGitFile(checkout, name string, limit int64) ([]byte
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = file.Close() }()
 	info, err := file.Stat()
 	if err != nil {
+		_ = file.Close()
 		return nil, fmt.Errorf("gitengine: stat checkout metadata %s: %w", name, err)
 	}
 	if !info.Mode().IsRegular() {
+		_ = file.Close()
 		return nil, fmt.Errorf("gitengine: checkout metadata %s is not a regular file", name)
 	}
-	data, err := io.ReadAll(io.LimitReader(file, limit+1))
-	if err != nil {
-		return nil, fmt.Errorf("gitengine: read checkout metadata %s: %w", name, err)
-	}
-	if int64(len(data)) > limit {
-		return nil, fmt.Errorf("gitengine: checkout metadata %s exceeds %d bytes", name, limit)
-	}
-	return data, nil
+	return file, nil
 }
 
 // resolveCheckoutHEAD reads the checkout's HEAD and ref files as inert data.
@@ -255,7 +269,7 @@ func (e *Engine) checkoutHead(ctx context.Context, run domain.RunID, checkout st
 	if err != nil {
 		return "", err
 	}
-	if _, objectsErr := scratchObjects(store, checkout, run); objectsErr != nil {
+	if _, objectsErr := e.scratchObjects(store, checkout, run); objectsErr != nil {
 		return "", objectsErr
 	}
 	if ensureErr := e.ensureScratchGitDir(ctx, store, checkout); ensureErr != nil {
@@ -298,7 +312,7 @@ func (e *Engine) checkoutHeadSource(ctx context.Context, run domain.RunID, check
 func (e *Engine) attributeSource(ctx context.Context, workTree, gitDir, objects string) (string, error) {
 	if run, err := e.checkoutRunID(workTree); err == nil {
 		if meta, metaErr := e.readRunMeta(run); metaErr == nil {
-			env := append(gitEnv(), "GIT_OBJECT_DIRECTORY="+objects)
+			env := append(e.gitEnv(), "GIT_OBJECT_DIRECTORY="+objects)
 			if tree, treeErr := e.gitIn(ctx, gitDir, env, "rev-parse", "--verify", "--quiet", meta.Base+"^{tree}"); treeErr == nil {
 				return tree, nil
 			}
@@ -369,7 +383,7 @@ func (e *Engine) gitWorktreeObjects(ctx context.Context, workTree, gitDir, index
 	}
 	argv = append(argv, args...)
 	cmd := exec.CommandContext(ctx, e.cfg.GitPath, argv...)
-	cmd.Env = append(gitEnv(),
+	cmd.Env = append(e.gitEnv(),
 		"GIT_INDEX_FILE="+index,
 		"GIT_OBJECT_DIRECTORY="+objects,
 		"GIT_ATTR_SOURCE="+attributes,
@@ -402,7 +416,7 @@ func (e *Engine) gitCheckoutBounded(ctx context.Context, run domain.RunID, check
 	if err != nil {
 		return "", false, err
 	}
-	if _, objectsErr := scratchObjects(store, checkout, run); objectsErr != nil {
+	if _, objectsErr := e.scratchObjects(store, checkout, run); objectsErr != nil {
 		return "", false, objectsErr
 	}
 	index := filepath.Join(checkout, ".git", "index")

@@ -2,12 +2,31 @@
 
 ## Workbench language
 
-The dashboard is a dense developer workbench on graphite surfaces with one
-teal accent. Adjoining panes are flat and quiet. Elevation is restrained:
-cards and secondary buttons carry a light shadow, floating surfaces a deeper
-one, panes none. Do not add saturated colours, gradients or backdrop blur.
-The desktop launch splash is an intentional original-animation exception;
+The dashboard is a dense developer workbench on neutral surfaces. The dark
+theme, the default, follows the Cloudfield website: blue-black surfaces,
+Cream `#f7f0e4` text, teal `#54e0d0` as the accent, and one warm colour,
+gold `#f5c542`, for the primary button and for
+what needs a person. The light theme is white and grey with a teal accent.
+Adjoining panes are flat and quiet. Elevation is restrained: cards and
+secondary buttons carry a light shadow, floating surfaces a deeper one, panes
+none. Do not add saturated colours beyond the tokens, gradients or backdrop
+blur.
+The desktop launch splash is the exception: it plays the website's opening;
 see [Session state and motion](#session-state-and-motion).
+
+### Surface the common actions
+
+A control nobody can see is a control nobody uses. Put the actions people
+reach for most on the surface, beside what they act on: a row's main actions
+are visible buttons on that row, and a value someone changes in place, such as
+a member's role, is a select in the cell that shows it. Pick a list of
+checkboxes with a search field over adding items one at a time from a
+dropdown. Keep the overflow menu (`Ellipsis`) for rare actions, and never make
+it, or a hover-only control, the only way to a common one. A destructive action
+may sit on its row as a ghost icon button behind a confirm. A
+page someone needs often gets its own sidebar row, not a menu item two levels
+down. When a surface gets crowded, regroup it rather than folding actions
+into menus.
 
 ## Type
 
@@ -16,10 +35,10 @@ Fonts ship in the bundle; nothing is fetched from Google.
 | Face | Use | Source |
 | --- | --- | --- |
 | DM Sans (variable, Latin subset) | All UI text | `@fontsource-variable/dm-sans`, one WOFF2 |
-| Saira (variable, Latin subset) | `text-title` only | `web/public/fonts/saira-latin.woff2` |
-| VT323 (Latin subset, 400) | Header and launch-splash wordmarks | `web/public/fonts/vt323-latin.woff2` |
-| JetBrainsMono NFM | xterm primary font; UI private-use symbols through `Aether Nerd Symbols` | `web/public/fonts/jetbrains-mono-nfm-*.woff2` |
-| Noto Sans Symbols 2 | Braille and geometric symbols through `Aether Symbols` | `web/public/fonts/noto-sans-symbols-2-spinners.woff2` |
+| Open Sans (variable, Latin subset) | `text-title` only | `@fontsource-variable/open-sans`, one WOFF2 |
+| VT323 (Latin subset, 400) | Play listing wordmark drawn by `scripts/make-icons.py`; the dashboard does not load it | `web/src/fonts/vt323-latin.woff2` |
+| JetBrainsMono NFM | xterm primary font; UI private-use symbols through `Aether Nerd Symbols` | `web/src/fonts/jetbrains-mono-nfm-*.woff2` |
+| Noto Sans Symbols 2 | Braille and geometric symbols through `Aether Symbols` | `web/src/fonts/noto-sans-symbols-2-spinners.woff2` |
 | `ui-monospace, 'SF Mono', Menlo, Consolas, monospace` | Code, paths and SHAs (`font-code`), after symbol fallbacks | system |
 
 DM Sans loads with `font-display: swap` behind `DM Sans Fallback`, Arial
@@ -33,11 +52,16 @@ Other scripts and symbols outside those ranges still use platform fallbacks.
 The aliases use `font-display: swap` and load only when a matching character
 appears; xterm keeps its own full-font family and cell metrics.
 
-The header wordmark is lowercase `aether` and uses `text-wordmark`: VT323 at
-24px, 400 weight and line height 1. The header logo and wordmark sit 1px above
-the row's center to align visually with navigation buttons. The splash keeps
-its original `clamp(32px, 4vw, 48px)` size and `0.12em` letter spacing. Both use
-`--font-pixel`; other headings stay Saira.
+The header shows the Cloudfield mark alone, 28px square with no tile behind
+it: `web/public/cloudfield-mark.svg`, white, in the dark theme and
+`cloudfield-mark-for-light-backgrounds.svg`, black, in the light one. Both draw
+the c with nine outer and seven inner segments, alternating solid and hollow,
+around a centre dot. The dot is the centre of the file, so centring the image
+in the header row puts it on the navigation buttons' centre line.
+The launch splash draws `cloudfield-logo-small.svg`, the mark with the name
+beside it, at
+`clamp(260px, 38vw, 520px)` wide; see
+[Session state and motion](#session-state-and-motion).
 
 The type scale, in `web/src/index.css`:
 
@@ -47,7 +71,7 @@ The type scale, in `web/src/index.css`:
 | `text-ui-sm` | 12/16 | Supporting copy, section labels |
 | `text-ui` | 13/20 | Default UI text; the body is 13px |
 | `text-prose` | 14/22 | Agent prose and rendered markdown |
-| `text-title` | 16/24, Saira 600 | Pane, dialog, step and empty-state headings |
+| `text-title` | 16/24, Open Sans 600 | Pane, dialog, step and empty-state headings |
 | `text-stat` | 24/28, 500 | The figure in a `StatTile` only |
 
 `text-avatar` (10px) is reserved for avatar initials. **Settings >
@@ -67,54 +91,78 @@ pair it with `font-*` classes.
 ## Semantic palette
 
 `web/src/index.css` is authoritative: light values sit on `:root`, dark ones
-on `.dark`. The theme preference is `system`, `light` or `dark`; `system`
-follows `prefers-color-scheme` live.
+on `.dark`. The theme preference is `dark` (the default), `light` or `system`;
+`system` follows `prefers-color-scheme` live. A theme stored before the dark
+default as `system`, which is how a never-chosen theme was saved, becomes
+`dark`; a stored `light` or `dark` is kept. An inline script in
+`web/src/app/layout.tsx` applies the stored theme before the first paint, so a
+light device never flashes light. The desktop window and the Android
+WebView and its launch window start on the dark `--canvas` for the same
+reason; Android's system bar icons are light over the dashboard and follow
+the system theme over the native error and update panels.
 
 | Token | Utility | Light | Dark | Use |
 | --- | --- | --- | --- | --- |
-| `--canvas` | `bg-canvas` | `#ffffff` | `#141516` | Main view, fields |
-| `--chrome` | `bg-chrome` | `#f7f7f7` | `#1b1c1d` | Sidebar, app header, toolbars, code, browser chrome |
-| `--hover` | `bg-hover` | `#f3f3f3` | `#1d1e1f` | Hovered rows and cards on canvas |
-| `--hover-chrome` | `bg-hover-chrome` | `#ececec` | `#262728` | Hover on chrome and raised surfaces: sidebar and list rows, menu items, ghost and secondary buttons |
-| `--raised` | `bg-raised` | `#ffffff` | `#222324` | Floating surfaces, secondary buttons |
-| `--seam` | `border-seam` | black 8% | white 8% | Every border; the default border colour |
-| `--control-border` | `border-control` | `#8a8a8a` | `#767676` | Fields, checkboxes, radios |
-| `--text` | `text-text` | `#1f1f1f` | `#e8e8e8` | Text |
-| `--text-muted` | `text-muted` | `#6b6b6b` | `#9a9a9a` | Placeholders, timestamps, meta |
-| `--icon-faint` | `text-icon-faint` | `#8a8a8a` | `#7a7a7a` | Disabled text, decorative icons, scrollbar thumbs, tree connectors |
-| `--accent-fill` | `bg-accent`, `border-accent` | `#367f77` | `#367f77` | The one primary button, focus ring, control outline |
-| `--accent-text` | `text-accent` | `#306f69` | `#5fb3a8` | Links, accent text |
-| `--on-accent` | `text-on-accent` | `#ffffff` | `#ffffff` | Text on `bg-accent` |
-| `--selection` | `bg-selection` | `#dfebe9` | `#17413d` | Selected rows |
+| `--canvas` | `bg-canvas` | `#ffffff` | `#070b11` | Main view, fields |
+| `--chrome` | `bg-chrome` | `#f7f7f7` | `#0c141f` | Sidebar, app header, toolbars, code, browser chrome |
+| `--hover` | `bg-hover` | `#f3f3f3` | `#121924` | Hovered rows and cards on canvas |
+| `--hover-chrome` | `bg-hover-chrome` | `#ececec` | `#1c2531` | Hover on chrome and raised surfaces: sidebar and list rows, menu items, ghost and secondary buttons |
+| `--raised` | `bg-raised` | `#ffffff` | `#151d2a` | Floating surfaces, secondary buttons |
+| `--seam` | `border-seam` | black 8% | Cream 9% | Every border; the default border colour |
+| `--control-border` | `border-control` | `#8a8a8a` | `#717c8d` | Fields, checkboxes, radios |
+| `--scrim` | `bg-scrim` | black 56% | black 56% | Dialogs and sheets |
+| `--scrim-strong` | `bg-scrim-strong` | black 85% | black 85% | ACP image viewer |
+| `--text` | `text-text` | `#1f1f1f` | `#f7f0e4` | Text |
+| `--text-muted` | `text-muted` | `#6b6b6b` | `#97a3b5` | Placeholders, timestamps, meta |
+| `--icon-faint` | `text-icon-faint` | `#8a8a8a` | `#798699` | Disabled text, decorative icons, scrollbar thumbs, tree connectors |
+| `--accent-fill` | `bg-action` | `#367f77` | `#f5c542` | The one primary button |
+| `--accent-mark` | `bg-accent`, `border-accent`, `outline-accent` | `#367f77` | `#54e0d0` | What is selected or active: checked controls, the current tab, progress, control outlines |
+| `--focus-ring` | `outline-focus` | `#367f77` | `#54e0d0` | Keyboard focus ring; 3:1 on every surface and on the selected row in both themes |
+| `--accent-text` | `text-accent` | `#306f69` | `#54e0d0` | Links, accent text |
+| `--on-accent` | `text-on-accent` | `#ffffff` | `#070b11` | Text on `bg-action` and `bg-accent` |
+| `--selection` | `bg-selection` | `#dfebe9` | `#0c3b36` | Selected rows |
 
 `accent` is a fill for backgrounds and borders but the link colour for text;
-`bg-accent-hover` darkens the fill for a hovered primary button. The accent
-marks selection, focus, the one primary button per view and links, nothing
-else. Inside a selected row, secondary text uses `text-text`. A floating
+`bg-action` is the primary button's own fill and `bg-action-hover` darkens it
+under the pointer. In the light theme both are the same teal. In the dark
+theme the primary button is gold and the accent is teal: the accent marks
+selection, focus, links and the Finished: review state, nothing else, and
+gold is on the one primary button per view and on Needs you. Inside a selected row, secondary text uses `text-text`. A floating
 surface is `bg-raised`, a 1px seam and `shadow-overlay`; dialogs, the
 palette and sheets take `shadow-dialog` and sit over `bg-scrim`.
 [Geometry](#geometry-and-responsive-behavior) lists every shadow.
 
-The five session states (see
+The session states (see
 [dashboard-frontend.md](dashboard-frontend.md#session-state)), used on dots,
-state lines, badges, callouts and request cards:
+state lines, badges, callouts and request cards. Finished: review, a reported
+success awaiting its owner, takes the accent and a filled check circle; it
+asks nothing, so it never takes the needs-you colour. That colour, also the
+dashboard's warning colour, is amber in the light theme and gold in the dark
+one, where it is also the primary button's fill; a warning is an outlined
+chip, a ring or text with an icon, never a filled button. A subsession's
+success, which is for its
+parent agent only, draws the done check in `icon-faint` (the `held` tone):
 
 | State | Utility | Light | Dark |
 | --- | --- | --- | --- |
-| Needs you | `state-needs-you` | `#8a5d00` | `#e0a52a` |
+| Needs you | `state-needs-you` | `#8a5d00` | `#f5c542` |
 | Working | `state-working` | `#1b65c2` | `#4a9eff` |
-| Paused | `state-paused` | `#6e6e6e` | `#8a8a8a` |
+| Paused | `state-paused` | `#6e6e6e` | `#798699` |
 | Done | `state-done` | `#1a7a36` | `#45c26a` |
 | Failed | `state-failed` | `#c8321f` | `#f05c4a` |
+| Finished: review | `text-accent`, `bg-accent-soft` (`review` tone) | `#306f69` | `#54e0d0` |
 
 Each state has a `-soft` fill (`bg-state-failed-soft`) at 8% light, 12% dark;
 `bg-accent-soft` likewise. `text-on-failed` is the text on a `bg-state-failed`
 fill, and `text-on-done` on a `bg-state-done` fill. Diffs use `text-diff-add`/`text-diff-del` (the done and failed colours)
 and `bg-diff-add-bg`/`bg-diff-del-bg` at 8% light, 10% dark.
 
-Agent vendor colours (`text-agent-claude`, `-codex`, `-pi`, `-omp`,
-`-opencode`) appear only on the Agents page, the launch picker and the head
-of a Board card, through `AgentGlyph colored`.
+Agent vendor colours (`text-agent-claude`, `-pi`, `-omp`, `-cursor`) appear
+only on the Agents page, the launch picker and the head of a Board card,
+through `AgentGlyph colored`. Codex, OpenCode and Copilot glyphs take
+`text-text` there instead: OpenAI, OpenCode and GitHub forbid recolouring
+their marks. Gemini CLI and Antigravity CLI show Google's full-colour icon
+files there, unchanged.
 
 Member colours are the only arbitrary server data applied inline: avatar
 rings, the owner rail in session lists, the owner mark on sidebar session rows and
@@ -131,9 +179,9 @@ Identity colour never replaces run-state colour.
 `Badge`, `CountBadge`, `RadioPills`, `FadeStrip`, `RequestCard`, `StatusDot`
 and `StateLine`, `Avatar`, `AgentGlyph`, `Code` and `CodeBlock`, `Kbd`,
 `Markdown`, `RelativeTime`, `Spinner`, `Skeleton`, `ProgressBar`, `DropZone`,
-`TextSwap` and `IconSwap`, `CopyButton`, `Separator`, `Toaster`, `LineGutter`
-(a code line's clickable number gutter, for the Changes view's comments) and
-the Chat view's timeline rows, step rail (`steps.tsx`) and blocks. Reach
+`TextSwap` and `IconSwap`, `CopyButton`, `Toaster`, `LineGutter` (a code
+line's clickable number gutter, for the Changes view's comments) and the Chat
+view's timeline rows, step rail (`steps.tsx`) and blocks. Reach
 for one before writing markup, and pass its `variant`, `size` or `tone` rather
 than restyling it.
 
@@ -141,13 +189,18 @@ than restyling it.
 
 | Variant | Look | Use |
 | --- | --- | --- |
-| `primary` (default) | `bg-accent`, `text-on-accent` | The one primary action in a view |
+| `primary` (default) | `bg-action`, `text-on-accent` | The one primary action in a view |
 | `secondary` | Seam border on `bg-raised`, `shadow-button` | Other actions |
 | `ghost` | Muted text, `bg-hover-chrome` on hover | Toolbar and icon buttons |
 | `danger` | `bg-state-failed`, `text-on-failed` | Confirming a destructive action |
 | `confirm` | `bg-state-done`, `text-on-done` | Approve, beside a `danger` Deny |
 | `link` | Accent text, underline on hover | Inline actions that read as links |
 | `quiet` | Muted text; `text-text` and an underline on hover | Inline secondary actions inside muted copy |
+
+A `secondary` button the app suggests, such as a card's approval rule after
+three approvals of its kind, adds a 2px `border-l-accent` over
+`bg-accent-soft` and a muted line saying why; it never becomes `primary` or
+`confirm`, which stay the card's own Approve.
 
 Sizes are `md` (28px, the default), `sm` (24px), `icon` (28px square),
 `icon-sm` (24px square), and the composer's and the Notes field's send control: `round` (28px
@@ -188,7 +241,9 @@ The other primitives with motion or a fixed size:
 - `RadioPills` is a single choice as a row of 28px pills with seam borders,
   one tab stop: arrows move and select, Home and End select the ends, and the
   checked pill sits on a `SlidingIndicator` (`bg-hover-chrome`, seam ring).
-  A pill may carry a muted count. Memory's filters and kinds use it.
+  A pill may carry a muted count. Memory's filters and kinds use it. The
+  composer's effort row is the exception: a choice there is a request to the
+  agent, so its keys only move and Space, Enter or a click chooses.
 - `FadeStrip` scrolls a row sideways with no scrollbar and masks whichever
   edge hides content over 22px, so the fade matches any surface.
 - `CountBadge` is an 18px chip of tabular figures; a count changes at once.
@@ -235,8 +290,8 @@ The other primitives with motion or a fixed size:
   `TextSwap` and shows its answer digit as a `Kbd` on a fine pointer.
   Answers split a narrow card in halves and sit at their own width on the
   right of a wide one. `RequestTimeBar` drains 2px of needs-you toward a
-  deadline. Amber appears only in the dot and that bar; accent only on the
-  primary answer.
+  deadline. The needs-you colour appears only in the dot and that bar; the
+  primary fill only on the primary answer.
 - `Spinner` draws a ring: a track at `--opacity-track` under a quarter arc
   turning every 900ms.
 - `Skeleton` sweeps a `bg-hover-chrome` band across `bg-chrome`. A page that
@@ -282,7 +337,7 @@ own bar is its state history in the `-soft` state fills. A running bar
 carries `trace-live`, the live shimmer's band in working blue; history that
 is not loaded is hatched (`trace-unknown`). A duration that would run past
 the track sits inside the bar's end, on the bar's own fill. The **Slowest**
-pill is neutral, `bg-hover-chrome` and muted, because amber means Needs you.
+pill is neutral, `bg-hover-chrome` and muted: it is not a warning.
 
 ## Lanes
 
@@ -293,7 +348,10 @@ fill and link. Every encoding differs by line style or marker as well as
 colour.
 
 Bars, `rounded-control`, 24px in a 36px lane (32px in 44px on a coarse
-pointer), with 1px between state spans. A filled span is its state's text
+pointer), with 1px between state spans. Bar text that does not fit ends in
+an ellipsis and keeps clear of the Needs you tag; a bar under 48px shows
+only its colour. Dragging a track selects no text. Every lane but a note
+takes `cursor-pointer`. A filled span is its state's text
 colour at `--lane-tint` (16% light, 26% dark), `bg-current/(--lane-tint)`,
 so every state reads as a tinted bar in both themes; bar text is `text-text`,
 which stays at 4.5:1 or more on every fill (`design-system.test.ts` checks
@@ -304,7 +362,7 @@ it). Subagent sub-lanes use the same fills.
 | Working | `text-state-working`; a live bar adds a 2px `border-state-working` end cap and `live-shimmer` on its activity text |
 | Needs you, or Needed attention in history | `text-state-needs-you`; a live bar ends in a `bg-raised` **Needs you** tag with a pulsing dot |
 | Paused | `text-state-paused` |
-| Ready for review | `text-accent`, matching its dot |
+| Finished: review | `text-accent`, matching its dot; never the Needs you tag. The lane's label carries a review-tone **Finished: review** chip |
 | Done, Failed | `text-state-done`, `text-state-failed`; a finished session's working spans take its outcome's colour |
 | Waiting, answered, closed | `text-muted` |
 | Starting | hollow, dashed `border-seam` |
@@ -315,18 +373,36 @@ the window fades in over its first 32px (a mask, not a colour). Strips (folded F
 in the state's text colour, neighbours of one colour drawn as one; each
 stretch is at least 1/300 of the window, so a brief failure still shows.
 
-Links use the categorical series by meaning:
+Mail marks and links use the categorical series by meaning:
 
-| Link | Colour | Style | Ends |
+| Mark or link | Colour | Style | Ends |
 | --- | --- | --- | --- |
-| Agent message | `text-series-5` | dotted, round caps | dot at the sender; arrowhead at the recipient, filled once acknowledged, hollow before; a chip with the kind glyph and count |
+| Agent message, at rest | `text-series-5` | sent: 5.5px filled dot with a 1px `--canvas` halo; received: 6px `--canvas` ring, 1.5px stroke; 2px outside the bar edge facing the other lane | a `text-ui-xs` tabular count on a `--canvas` halo when marks merge |
+| Agent message, at rest, between drawn lanes | `text-series-5/45` (`/30` below 768px); `text-seam` while a lane is focused | solid 1px hairline under the bars, no hit path, one layer apart from the links | its two marks |
+| Agent message, focused lane | `text-series-5` | solid 1.5px, round caps | dot at the sender; arrowhead at the recipient, filled once acknowledged, hollow before; a count chip on bundles |
+| Agent message, live | `text-series-5` over a 4px `--canvas` halo; the recipient's track `bg-series-5/10` | dashed `4 3` 2px, round caps, an arc bowing left of the send time | dot at the sender, filled arrowhead along the arc at the recipient; a `×n` chip left of the arc |
 | File overlap | `text-state-needs-you` | dashed `4 2` bracket at the now line | warning chip with the file count |
 | Subagent | `border-icon-faint` | elbow tree connectors in the label column | none |
 
-Links and their chips draw under the bars and labels, over the hover and
-selection fills; only their 10px hit paths sit above. Hovering or selecting a
-lane keeps its links in colour and turns every other link `text-icon-faint`;
-nothing uses opacity. The axis is 28px with `text-ui-xs` muted tabular labels
+Marks sit above the bars with hit targets as wide as a bar is tall (24px,
+32px on a coarse pointer), 12px deep and inside their own lane, ending
+halfway to a closer mark on the same edge; link hit paths are 16px wide. Links and their chips draw
+under the bars and labels, over the hover and selection fills; only their
+16px hit paths sit above. A focused lane's marks give way to its links and
+every other mark turns `text-icon-faint`. Label chips are 16px
+`rounded-chip`, `border-series-5` on `bg-raised` with the `MessageSquare`
+glyph, left of the age. A mark added after the view opens fades in once with
+`motion-safe:animate-fade-in`; nothing loops. A live arrow draws above the
+bars for `--duration-mail-live` (4.5s, under WCAG 2.2.2's five seconds):
+`animate-mail-live` fades it and the recipient's tint in over 150ms, holds
+them to 2s and fades them out on `--ease-in-out`; `animate-mail-travel`
+(down, linear) and `animate-mail-bow` (sideways, quadratic) run an 8px dot
+along the arc from sender to recipient once over 500ms, and
+`animate-mail-ping` grows a ring at the head once. Each arrow is its own HTML box and animates only `opacity` and
+`transform`, which an SVG child could not keep on the compositor. Under
+reduced motion the arrow and tint show still, without the dot or ring, and
+go when their time ends. Tree focus without hover or a
+popover takes the `bg-hover` row fill, like hover. nothing uses opacity. The axis is 28px with `text-ui-xs` muted tabular labels
 over dashed `border-seam` gridlines, dropping any label within 48px of the
 now chip; the now line is 1px `bg-icon-faint` under a neutral `bg-raised`
 **now** chip, never accent. The label column is 240px, 48px under 768px. Lanes that change
@@ -360,7 +436,7 @@ when a listed file already complies, so the lists only shrink.
 
 The same file checks contrast in both themes: `text` and `text-muted` on
 every surface, `text` on `selection`, accent text on canvas and chrome,
-`on-accent` on the accent fill, `on-failed` and `on-done` on their fills, and the
+`on-accent` on the primary fill and on the accent mark, `on-failed` and `on-done` on their fills, and the
 states and diff colours on canvas at 4.5:1; control borders, `icon-faint`
 and the agent colours on canvas at 3:1. It also checks that every `text-*`
 and `bg-*` class in `components/ui/` names a token defined in `index.css`.
@@ -369,8 +445,14 @@ and `bg-*` class in `components/ui/` names a token defined in `index.css`.
 
 Icons come from `web/src/components/icons.ts`, which re-exports the lucide
 icons the dashboard uses at stroke width 1.75. Add a name there rather than
-importing `lucide-react`. The same module holds `Claude`, the Claude mark that
-`AgentGlyph` draws for the `claude` agent; it is filled, not stroked.
+importing `lucide-react`. The same module holds the agent marks `AgentGlyph`
+draws, filled in the text colour rather than stroked, each in a viewBox that
+fits the mark as its source draws it, never stretched. Gemini CLI and
+Antigravity CLI are Google's icons, which may not be altered: `AgentGlyph
+colored` shows Google's full-colour file from `web/public/agents/` as an
+image, and a one-colour glyph draws the path of Google's one-colour file in
+the file's own viewBox, so both sit the same.
+[notices.md](notices.md) lists where each mark comes from.
 
 ## Geometry and responsive behavior
 
@@ -475,7 +557,7 @@ control** or **Release** ([terminal.md](terminal.md)). A session shell adds
 ## Shell, palette and focus
 
 The shell has a branded navigation header above one sidebar and the content
-view, with no icon rail or status bar. The Aether mark and title sit at its
+view, with no icon rail or status bar. The Cloudfield logo sits at its
 left; Board through Templates follow as horizontal `ListRow`s. Measure
 available width rather than assuming every label fits a breakpoint, and
 keep Board outside the overflow menu. The header and sidebar use
@@ -503,24 +585,30 @@ are sentence-case 12px muted disclosure buttons with their count. The footer
 holds the avatar, name and a connection dot; the
 update notice above it is one 12px muted line with an **Update** link.
 
-Under 768px a second, 48px toolbar (`bg-chrome`) holds the sidebar button,
-with a needs-you dot while anything needs the viewer, the view title in
-13/20 medium, **Search** and **New session**. When the page has its own primary
-action, the toolbar's **New session** becomes a ghost `+` icon so the screen keeps
-one filled button. The sidebar opens as a left side sheet. Content views draw
-`PaneHeader`: the title in `text-title`, one optional muted line under it,
-and actions on the right. A connection problem is a failed-tone `StateLine`,
-in the header on desktop and under the top bar on a phone.
+Under 768px the header is one 48px row (`bg-chrome`): the view title in 13/20
+medium and **Search**. A `bg-chrome` tab bar along the bottom holds Needs you,
+Sessions, New, Assistant and More: 56px tall, a 20px icon in the same 28 ×
+44px box over a 12px label, muted at rest and accent when current, with a 2px
+accent bar along the top edge. Counts over 99 read 99+. The Needs you count is
+a needs-you chip with `text-canvas` figures, the one place that colour fills a count,
+because it is the needs-you signal. **New** is a primary pill unless the page
+has its own primary action, so the screen keeps one filled button. More opens
+as a bottom sheet. Content views draw `PaneHeader`: the title in `text-title`,
+one optional muted line under it, and actions on the right. A connection
+problem is a failed-tone `StateLine`, in the header on desktop and under the
+top bar on a phone.
 
 The command palette is mounted exactly once in `AppShell` and opened from the
 **Search** buttons, `Mod+K` or `Mod+Shift+P`, top-centred, max 600px, with
 32px rows (44px on a coarse pointer). Theme is in **Settings > General** and the footer menu, with
-explicit **System**, **Light** and **Dark** choices and matching palette
+explicit **Dark**, **Light** and **System** choices and matching palette
 commands.
 
 `focusRing`, `fieldFocus` and `field` in `web/src/lib/utils.ts` are the shared
 focus and field styles. Buttons and navigation show their outlines only
-after Tab, never after a click or another key; text fields use a 1px inset accent outline over the existing border with a
+after Tab, never after a click or another key. One exception: Cancel in a
+close confirmation takes focus when the confirmation opens and shows its
+outline then (`focusRingShown`), so the safe default is visible; text fields use a 1px inset accent outline over the existing border with a
 faint 4px glow and no offset gap. The outline remains visible in forced-colors
 mode, where box shadows disappear. The Chat composer draws this treatment
 on its enclosing box, not its embedded textarea, so attachments do not clip
@@ -551,10 +639,11 @@ right, at most 85% wide, with `rounded-composer`; everything the agent wrote
 starts after the step rail's 24px gutter, where state dots and step marks
 sit. Turns are 24px apart and a turn's header and answer 12px. Its composer
 fills the available pane with balanced 16px side gutters, including when
-Details is open. An empty ACP
-conversation shows a subdued Aether mark above the centered session title and
-metadata rows: workspace, agent, branch, owner and creation time. Symmetric
-scrollbar gutters keep the overview centered when its content needs scrolling.
+Details is open. An empty ACP conversation shows a subdued Cloudfield mark,
+`cloudfield-mark.svg` as a mask at `min(144px, 24vh)`, above the centered
+session title and metadata rows: workspace, agent, branch, owner and creation
+time. Symmetric scrollbar gutters keep the overview centered when its content
+needs scrolling.
 
 ## Session state and motion
 
@@ -604,6 +693,9 @@ literal time or curve.
   so the two never double up. A sidebar group turns its chevron and fades its
   list back in when the viewer reopens it; it never glides its height, since
   a group can hold hundreds of rows.
+- The first-load placeholder, the Cloudfield mark prerendered by
+  `web/src/app/page.tsx`, fades in over 200ms after a 300ms delay, then holds
+  still; under reduced motion it cuts in when the fade would end (500ms).
 - Only rows added after the first render enter: `animate-entrance` fades in
   and rises 4px. `playEntrance` staggers a burst by `--stagger-row` (30ms) up
   to the eighth row; the rest arrive with it. The Session list plays it only
@@ -669,16 +761,43 @@ shimmer leaves plain muted text, the spinner shows a still arc and a
 skeleton a flat fill. Holds and timers do not change. `useReducedMotion()` and `prefersReducedMotion()` in
 `web/src/lib/hooks.ts` answer the query in scripts.
 
-The desktop launch splash deliberately retains its original animation,
-independent of these workbench motion tokens: the grain, three drifting cloud
-layers, stepped starfield and coloured stars, satellites and shooting stars,
-700ms logo entrance and 260ms fade. Its status dot uses the local
-`launch-status-pulse`: the original 1.8s `ease-in-out` loop from opacity 1
-to 0.4 and back, not the shared `state-pulse`. The splash's original
-palette and keyframes stay scoped to `launch-splash` in `web/src/index.css`;
-do not restyle them to match the workbench. Reduced motion skips the splash
-entirely, and its CSS stops animation if the preference changes while it is
-visible. [Launch splash](dashboard-frontend.md#launch-splash) defines the
+The desktop launch splash plays the website's opening on `#070b11` in every
+theme. Its keyframes are scoped to `launch-splash` in `web/src/index.css`.
+`web/src/components/launch-splash-opening.tsx` inlines
+`web/public/cloudfield-logo-small.svg` at build time and splits it into the
+parts that move when the splash mounts, so a new logo file changes the splash
+with no code edit. A file it cannot split shows as a plain image. The lockup
+is `clamp(260px, 38vw, 520px)` wide, raised 3vh above centre. Times are from
+the splash's first paint:
+
+| Time | What happens |
+| --- | --- |
+| 30ms, then every 30ms | An outer-ring dash of the c draws in over 120ms |
+| 170ms, then every 30ms | An inner-ring dash draws in over 120ms |
+| 420ms | The c's centre dot appears |
+| 450ms, then every 40ms | A letter rises 26 units over 150ms |
+| With its letter, 24ms apart | Each line of the letter draws over 200ms |
+| 820ms | The field wakes outward from the c's centre over 620ms |
+
+The field is the website's slope field: one stroke per 12px lattice point,
+turned along four drifting vortices and coloured in the website's teal and
+blue field palette: `#8fbaff` at the top left through `#266ce1`,
+`#4a8dff`, `#4bb9ea` and `#54e0d0` to `#aaf5ea` at the bottom right, the run
+stretched about its middle so the pale ends reach the corners. On a window
+large enough for more than 15,000 strokes the lattice widens to stay under
+that. Until it wakes, every stroke is a short flat dash at 2/6 opacity, drawn
+once; the frame loop starts at the wake.
+Awake, the field runs at 0.85 opacity, and within 95px of the lockup strokes
+shorten by up to half and dim to 0.46, so the name stays the brightest thing
+on screen. The c's dashes and the letters take their colours from the logo
+file; the field's colours are constants in the same TypeScript file.
+
+When the splash leaves, whatever the opening has not drawn yet appears at
+once, so the whole name dissolves: the lockup fades out over
+the first 140ms of the 260ms fade, so the logo never shows over the app's own
+header mark. Reduced motion skips the splash entirely; if the preference turns
+on while it is visible, the lockup stops animating and the field holds its
+last frame. [Launch splash](dashboard-frontend.md#launch-splash) defines the
 session and startup timing.
 
 The bar that holds **Take control** and **Release** shows who steers: the
@@ -686,16 +805,17 @@ Enhanced Multiplayer strip, or the agent terminal's toolbar in a Standard
 session. Its background is a grid of 2px round dots on a 6px pitch, behind the
 bar's text and controls. The dots are neutral, `--text` at 24%, until this
 tab has live, acknowledged writable control; then they turn
-`--control-light`, the accent teal in light theme and a brighter teal in
-dark. A lost takeover and an occupied hold turn them `--state-failed`.
+`--control-light`, the primary button's colour in both themes. A lost
+takeover and an occupied hold turn them `--state-failed`.
 Colored dots sit at `--control-dots` opacity (100% light, 70% dark), scaled
 by a strength of 70% while they move or turn red. Once acquisition settles
 the strength dims to half over 1.2s, then breathes between 42% and 60% on
 an 8-second cycle. The dots fade out around each group of text and
 buttons on the bar, to 10% under them over about 20px, and the bar's text
 uses `--text`, not `--text-muted`. `src/design-system.test.ts` checks text
-over the faded teal and red dots at full strength. **Release**, shown while you
-control, has the accent fill; **Take control** is a secondary button. The matrix is pointer-transparent and does not change
+over the faded `--control-light` and red dots at full strength. **Release**,
+shown while you control, is a primary button; **Take control** is a secondary
+button. The matrix is pointer-transparent and does not change
 layout. Terminal replay and history reading return it to neutral; reading
 earlier Enhanced items does not disable the composer or clear its color.
 The right end, under **Take control** and **Release**, is the color's
@@ -704,8 +824,8 @@ drains it back to the right, each over 720ms and decelerating toward the
 endpoint. A control-lost takeover turns the dots red over 540ms and drains
 them to the right over 1440ms. An occupied three-second hold fills **Take
 control** and the holder's **Release** diagonally in red and spreads red
-dots leftward from the right end of the holder's bar, blending into the
-teal over 4rem; text on either side of the fill edge keeps its own contrast.
+dots leftward from the right end of the holder's bar, blending into
+`--control-light` over 4rem; text on either side of the fill edge keeps its own contrast.
 The fill decelerates (logarithmic) while the countdown stays linear. A
 seven-second holder decision follows. Under
 `prefers-reduced-motion: reduce`, ownership changes are instant, settled

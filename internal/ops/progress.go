@@ -12,10 +12,9 @@ import (
 
 const (
 	notInReports = "not in the last 100 reports"
-	notTracked   = "Aether does not track releases or deployments of this repository"
+	notTracked   = "Cloudfield does not track releases or deployments of this repository"
 	sourceRecord = "aether record"
 	sourceGitHub = "github"
-	sourceAether = "aether git"
 )
 
 // untracked is what an evidence read says of releases and deployments,

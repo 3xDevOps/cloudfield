@@ -1,10 +1,10 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useMemo, useRef } from 'react'
 import { AssistantButton } from '@/components/assistant/button'
 import { PanelLeft, Search } from '@/components/icons'
 import { focusView } from '@/components/shell/center-view'
 import { SplitNewRun } from '@/components/shell/new-run-button'
 import { SidebarFooter, UpdateNotice } from '@/components/shell/sidebar-footer'
-import { needsYouRoute, runRowSelector, SidebarRuns } from '@/components/shell/sidebar-runs'
+import { runRowSelector, SidebarRuns } from '@/components/shell/sidebar-runs'
 import { WorkspaceSwitcher } from '@/components/shell/workspace-switcher'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
@@ -16,9 +16,10 @@ import { isPress, shortcutLabel, useKeybindings } from '@/lib/keybindings'
 import { splitterTarget } from '@/lib/keys'
 import { surfaces } from '@/lib/surfaces'
 import { cn, focusRing } from '@/lib/utils'
+import { askingByWorkspace, useAttention } from '@/routes/needs-you/attention'
 import { isRunRoute } from '@/routes/run/views'
 import { useStore } from '@/store'
-import { useCapability, useIsAdmin, useSelfRole } from '@/store/hooks'
+import { useCapability, useSelfRole } from '@/store/hooks'
 import { sidebarGroups, stateContextOf } from '@/store/selectors'
 import { maxSidebarWidth, minSidebarWidth } from '@/store/ui'
 
@@ -43,8 +44,7 @@ function openNextNeedsYou() {
     return isRunRoute(s.route, row.run.id)
   })
   const next = waiting[(current + 1) % waiting.length]!
-  const route = needsYouRoute(next.run, ctx)
-  s.navigate(route.name, route.params)
+  s.navigate('run', { runId: next.run.id })
 }
 
 export function Sidebar() {
@@ -103,11 +103,9 @@ export function Sidebar() {
       <Dialog open={drawerOpen} onOpenChange={setDrawerOpen}>
         <DialogContent
           id="sidebar-drawer"
-          variant="side"
-          side="left"
-          showCloseButton={false}
+          variant="bottom"
           aria-describedby={undefined}
-          className="w-[min(20rem,calc(100vw-3rem))]"
+          className="pr-[calc(1rem+env(safe-area-inset-right))] pl-[calc(1rem+env(safe-area-inset-left))]"
           onOpenAutoFocus={() => {
             opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
           }}
@@ -125,8 +123,8 @@ export function Sidebar() {
             setDrawerOpen(false)
           }}
         >
-          <DialogTitle className="sr-only">Aether</DialogTitle>
-          <SidebarContent onHide={() => setDrawerOpen(false)} />
+          <DialogTitle className="sr-only">More</DialogTitle>
+          <MoreContent />
         </DialogContent>
       </Dialog>
     )
@@ -200,18 +198,15 @@ function DesktopSidebar({ onHide }: { onHide: () => void }) {
 }
 
 function SidebarContent({ onHide }: { onHide: () => void }) {
-  const mobile = useIsMobile()
   const cap = useCapability()
-  const admin = useIsAdmin()
   const role = useSelfRole()
   const blocked = useStore((s) => launchBlocked(s.linkStatus))
   const togglePalette = useStore((s) => s.togglePalette)
-  const setDrawerOpen = useStore((s) => s.setSidebarDrawerOpen)
   const openDialog = useStore((s) => s.openPaletteDialog)
-  const lower = surfaces(cap, admin).filter((surface) => surface.place === 'admin')
+  const lower = surfaces(cap).filter((surface) => surface.place === 'admin')
 
   return (
-    <nav aria-label="Aether" className="flex min-h-0 flex-1 flex-col">
+    <nav aria-label="Cloudfield" className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-11 shrink-0 items-center gap-1 px-2">
         <WorkspaceSwitcher />
         <Button
@@ -219,10 +214,7 @@ function SidebarContent({ onHide }: { onHide: () => void }) {
           size="icon"
           label="Search"
           hint={`Search · ${shortcutLabel('palette')}`}
-          onClick={() => {
-            setDrawerOpen(false)
-            togglePalette(true)
-          }}
+          onClick={() => togglePalette(true)}
         >
           <Search />
         </Button>
@@ -230,8 +222,8 @@ function SidebarContent({ onHide }: { onHide: () => void }) {
           id="sidebar-hide"
           variant="ghost"
           size="icon"
-          label={mobile ? 'Close sidebar' : 'Hide sidebar'}
-          hint={`${mobile ? 'Close' : 'Hide'} sidebar · ${shortcutLabel('sidebar')}`}
+          label="Hide sidebar"
+          hint={`Hide sidebar · ${shortcutLabel('sidebar')}`}
           onClick={onHide}
         >
           <PanelLeft />
@@ -242,12 +234,9 @@ function SidebarContent({ onHide }: { onHide: () => void }) {
           <SplitNewRun
             blocked={blocked ?? null}
             shortcut={shortcutLabel('launch')}
-            onOpen={() => {
-              setDrawerOpen(false)
-              openDialog('launch')
-            }}
+            onOpen={() => openDialog('launch')}
           />
-          {!mobile && <AssistantButton variant="secondary" />}
+          <AssistantButton variant="secondary" />
         </div>
       )}
       <SidebarRuns />
@@ -256,6 +245,28 @@ function SidebarContent({ onHide }: { onHide: () => void }) {
           <NavRows surfaces={lower} />
         </div>
       )}
+      <UpdateNotice />
+      <SidebarFooter />
+    </nav>
+  )
+}
+
+/** On a phone the tab bar carries Needs you, sessions, launch and the assistant; More holds every other page. */
+function MoreContent() {
+  const cap = useCapability()
+  const items = useAttention((s) => s.items)
+  const needsYou = useMemo(() => askingByWorkspace(items), [items])
+  const list = surfaces(cap)
+    .filter((surface) => surface.place !== 'link')
+    .map((surface) => (surface.name === 'devices' ? { ...surface, label: 'Devices' } : surface))
+  return (
+    <nav aria-label="More" className="flex min-h-0 flex-col gap-1">
+      <div className="flex shrink-0 items-center pr-10">
+        <WorkspaceSwitcher needsYou={needsYou} />
+      </div>
+      <div className="min-h-0 overflow-y-auto">
+        <NavRows surfaces={list} />
+      </div>
       <UpdateNotice />
       <SidebarFooter />
     </nav>

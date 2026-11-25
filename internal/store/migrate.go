@@ -2440,7 +2440,247 @@ CREATE INDEX idx_watches_wait_target ON watches(wait_target_run) WHERE wait_targ
 CREATE INDEX idx_watches_wait_delivery ON watches(wait_delivery_next_at) WHERE wait_delivery_next_at IS NOT NULL;
 ALTER TABLE coord_state_reports ADD COLUMN until_conditions TEXT NOT NULL DEFAULT '';
 `,
+	// v101: the sessions a watch relays its notices to, and one delivery
+	// row per notice and session, with its attempts and when it is due.
+	`
+ALTER TABLE watches ADD COLUMN relay_to TEXT NOT NULL DEFAULT '[]';
+ALTER TABLE watch_deliveries ADD COLUMN run_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE watch_deliveries ADD COLUMN attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE watch_deliveries ADD COLUMN next_at INTEGER;
+CREATE UNIQUE INDEX idx_watch_deliveries_relay ON watch_deliveries(notification_id, run_id) WHERE channel = 'relay';
+CREATE INDEX idx_watch_deliveries_relay_due ON watch_deliveries(next_at) WHERE channel = 'relay' AND next_at IS NOT NULL;
+`,
+	// v102: a member's assistant approval rules, each passing the cards
+	// whose typed key fields equal its own. workspace_id and
+	// account_member_id carry no foreign key: a rule whose workspace or
+	// account is gone stays listed as inactive. rule_streak_key and
+	// rule_streak count the cards of one rule key approved in a row.
+	`
+CREATE TABLE assistant_rules (
+	id                TEXT PRIMARY KEY,
+	member_id         TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+	method            TEXT NOT NULL,
+	workspace_id      TEXT NOT NULL DEFAULT '',
+	agent             TEXT NOT NULL DEFAULT '',
+	account_member_id TEXT NOT NULL DEFAULT '',
+	mode              TEXT NOT NULL DEFAULT '',
+	model             TEXT NOT NULL DEFAULT '',
+	effort            TEXT NOT NULL DEFAULT '',
+	permission        TEXT NOT NULL DEFAULT '',
+	no_fallback       INTEGER NOT NULL DEFAULT 0,
+	wording           TEXT NOT NULL,
+	summary           TEXT NOT NULL,
+	created_at        INTEGER NOT NULL,
+	last_used_at      INTEGER,
+	uses              INTEGER NOT NULL DEFAULT 0
+);
+CREATE UNIQUE INDEX idx_assistant_rules_key ON assistant_rules(member_id, method, workspace_id, agent, account_member_id, mode, model, effort, permission, no_fallback);
+ALTER TABLE assistant_settings ADD COLUMN rule_streak_key TEXT NOT NULL DEFAULT '';
+ALTER TABLE assistant_settings ADD COLUMN rule_streak INTEGER NOT NULL DEFAULT 0;
+`,
+	// v103: approval_chosen records that the member chose how the assistant
+	// acts, so the dashboard asks once. Turning auto-approval on or answering
+	// the suggestion to was a choice.
+	`
+ALTER TABLE assistant_settings ADD COLUMN approval_chosen INTEGER NOT NULL DEFAULT 0;
+UPDATE assistant_settings SET approval_chosen = 1 WHERE auto_approve = 1 OR suggest_off = 1 OR suggest_snoozes > 0;
+`,
+	// v104: assistant approval cards outlive the turn that raised them. A
+	// card holds the exact call it approves and the conversation generation
+	// it belongs to; state 'running' is the claim taken before that call
+	// runs, so it runs at most once.
+	`
+CREATE TABLE assistant_cards (
+	id          TEXT PRIMARY KEY,
+	member_id   TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+	generation  INTEGER NOT NULL,
+	method      TEXT NOT NULL,
+	params      TEXT NOT NULL,
+	card        TEXT NOT NULL,
+	origin      TEXT NOT NULL,
+	state       TEXT NOT NULL,
+	action_id   TEXT NOT NULL DEFAULT '',
+	result      TEXT NOT NULL DEFAULT '',
+	error       TEXT NOT NULL DEFAULT '',
+	shown_at    INTEGER NOT NULL DEFAULT 0,
+	decided_at  INTEGER NOT NULL DEFAULT 0,
+	created_at  INTEGER NOT NULL,
+	expires_at  INTEGER NOT NULL,
+	updated_at  INTEGER NOT NULL
+);
+CREATE INDEX idx_assistant_cards_member ON assistant_cards(member_id, created_at);
+CREATE INDEX idx_assistant_cards_open ON assistant_cards(state) WHERE state IN ('pending', 'approved', 'running');
+`,
+	// v105: each member's assistant prompt queue, in seq order. A key names
+	// one entry per conversation; one that failed before it was sent frees
+	// it.
+	`
+CREATE TABLE assistant_queue (
+	seq        INTEGER PRIMARY KEY AUTOINCREMENT,
+	id         TEXT NOT NULL UNIQUE,
+	member_id  TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+	generation INTEGER NOT NULL,
+	key        TEXT NOT NULL,
+	text       TEXT NOT NULL,
+	view       TEXT NOT NULL,
+	origin     TEXT NOT NULL,
+	state      TEXT NOT NULL,
+	error      TEXT NOT NULL DEFAULT '',
+	reply      TEXT NOT NULL DEFAULT '',
+	message_id TEXT NOT NULL DEFAULT '',
+	cards      TEXT NOT NULL DEFAULT '',
+	sent       INTEGER NOT NULL DEFAULT 0,
+	created_at INTEGER NOT NULL,
+	updated_at INTEGER NOT NULL
+);
+CREATE UNIQUE INDEX idx_assistant_queue_key ON assistant_queue(member_id, generation, key) WHERE state <> 'failed' OR sent = 1;
+CREATE INDEX idx_assistant_queue_member ON assistant_queue(member_id, state, seq);
+`,
+	// v106: how often a member is notified, and the digest the server
+	// writes for what it does not push at once: one row per item waiting
+	// for the member's next digest, overnight when quiet hours held it.
+	// Quiet hours now hand watch pushes to the digest, so the watch's own
+	// held state goes.
+	`
+ALTER TABLE notify_prefs ADD COLUMN level TEXT NOT NULL DEFAULT 'batched' CHECK (level IN ('blockers', 'batched', 'all'));
+ALTER TABLE notify_prefs ADD COLUMN digest_at TEXT NOT NULL DEFAULT '09:00';
+ALTER TABLE notify_prefs ADD COLUMN digest_tz TEXT NOT NULL DEFAULT '';
+CREATE TABLE push_digest (
+	member_id  TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+	source     TEXT NOT NULL,
+	key        TEXT NOT NULL,
+	kind       TEXT NOT NULL,
+	workspace  TEXT NOT NULL DEFAULT '',
+	title      TEXT NOT NULL,
+	body       TEXT NOT NULL DEFAULT '',
+	url        TEXT NOT NULL DEFAULT '',
+	run_id     TEXT NOT NULL DEFAULT '',
+	overnight  INTEGER NOT NULL DEFAULT 0,
+	created_at INTEGER NOT NULL,
+	PRIMARY KEY (member_id, source, key)
+);
+UPDATE watch_notifications SET push_state = 'pending', push_next_at = 0 WHERE push_state = 'held';
+`,
+	// v107: the assistant cards pushed to a member's devices, so a server
+	// that restarts still withdraws the push of one decided meanwhile.
+	`
+CREATE TABLE push_cards (
+	member_id TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+	card_id   TEXT NOT NULL,
+	PRIMARY KEY (member_id, card_id)
+);
+`,
+	// v108: let a comment's author, the run's owner, or an admin complete or
+	// delete it. resolved_at is nullable because unresolved is itself
+	// meaningful; resolved_by/resolution follow the zero-default convention.
+	`
+ALTER TABLE room_messages ADD COLUMN resolved_at INTEGER;
+ALTER TABLE room_messages ADD COLUMN resolved_by TEXT NOT NULL DEFAULT '';
+ALTER TABLE room_messages ADD COLUMN resolution TEXT NOT NULL DEFAULT '' CHECK (resolution IN ('', 'done', 'deleted'));
+`,
+	// v109: type-filtered event reads, such as a replaying subscriber, a
+	// run's diff snapshots or a workspace's timeline, scanned every event
+	// in their range for their types. internal/events.readQuery names these
+	// indexes.
+	`
+CREATE INDEX IF NOT EXISTS idx_events_type ON events (type);
+CREATE INDEX IF NOT EXISTS idx_events_run_type ON events (run_id, type);
+CREATE INDEX IF NOT EXISTS idx_events_workspace_type ON events (workspace_id, type);
+`,
+	// v110: the model an Enhanced run's agent refused and why; the run's
+	// model is then the one the session runs on, empty for the agent's default.
+	`
+ALTER TABLE runs ADD COLUMN refused_model TEXT NOT NULL DEFAULT '';
+ALTER TABLE runs ADD COLUMN model_error TEXT NOT NULL DEFAULT '';
+`,
+	// v111: workspace-scoped access. A workspace has an owner and members
+	// reach it through a grant. The earliest live admin, the server's
+	// creator, becomes super admin and owns every existing workspace, and
+	// every approved member keeps the access they had, which was every
+	// workspace, as grants. Pending members had none and get none. An
+	// invitation carries the workspaces it grants, a JSON array of ids.
+	//
+	// The event log is rescoped to what publishers now write, so its
+	// history names no workspace past the one a reader is checked
+	// against: a run.pr from an extra repository gains that repository's
+	// workspace as repo, and one whose repository cannot be told any more
+	// goes; a coordination message or ack to a run in another workspace
+	// drops that run. Both are refresh hints, so dropping one loses no
+	// data.
+	`
+ALTER TABLE workspaces ADD COLUMN owner_member_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE identity_invitations ADD COLUMN workspaces TEXT NOT NULL DEFAULT '[]';
+CREATE TABLE workspace_grants (
+	workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+	member_id    TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+	granted_by   TEXT NOT NULL DEFAULT '',
+	created_at   INTEGER NOT NULL,
+	PRIMARY KEY (workspace_id, member_id)
+);
+CREATE INDEX idx_workspace_grants_member ON workspace_grants(member_id);
+UPDATE members SET role = 'super_admin' WHERE id = (
+	SELECT id FROM members WHERE role = 'admin' AND pending = 0 AND merged_into = ''
+	ORDER BY created_at, rowid LIMIT 1);
+UPDATE workspaces SET owner_member_id = COALESCE(
+	(SELECT id FROM members WHERE role = 'super_admin' ORDER BY created_at, rowid LIMIT 1), '');
+INSERT INTO workspace_grants (workspace_id, member_id, granted_by, created_at)
+	SELECT w.id, m.id, '', unixepoch() * 1000000000
+	FROM workspaces w, members m
+	WHERE m.pending = 0 AND m.merged_into = '' AND m.role <> 'super_admin';
+UPDATE events SET payload = json_set(payload, '$.repo', (
+	SELECT p.repo_workspace_id FROM run_pull_requests p
+	WHERE p.run_id = events.run_id AND p.url = json_extract(events.payload, '$.url') AND p.repo_workspace_id <> ''
+	ORDER BY p.created_at LIMIT 1))
+WHERE type = 'run.pr' AND json_extract(payload, '$.repo') IS NULL AND EXISTS (
+	SELECT 1 FROM run_pull_requests p
+	WHERE p.run_id = events.run_id AND p.url = json_extract(events.payload, '$.url') AND p.repo_workspace_id <> '');
+DELETE FROM events
+WHERE type = 'run.pr' AND json_extract(payload, '$.repo') IS NULL
+	AND EXISTS (SELECT 1 FROM run_repos rr WHERE rr.run_id = events.run_id)
+	AND NOT EXISTS (SELECT 1 FROM run_pull_requests p
+		WHERE p.run_id = events.run_id AND p.url = json_extract(events.payload, '$.url') AND p.repo_workspace_id = '');
+UPDATE events SET payload = json_set(payload, '$.to_run_id', '')
+WHERE type = 'coord.message' AND json_extract(payload, '$.to_run_id') <> '' AND NOT EXISTS (
+	SELECT 1 FROM runs r WHERE r.id = json_extract(events.payload, '$.to_run_id') AND r.workspace_id = events.workspace_id);
+UPDATE events SET run_id = '', payload = json_set(payload, '$.to_run_id', '')
+WHERE type = 'coord.message.acked' AND json_extract(payload, '$.to_run_id') <> '' AND NOT EXISTS (
+	SELECT 1 FROM runs r WHERE r.id = json_extract(events.payload, '$.to_run_id') AND r.workspace_id = events.workspace_id);
+`,
+	// v112: the agents and accounts a member's subsessions may not use, a
+	// JSON array of {harness, account_member_id}.
+	`
+ALTER TABLE child_settings ADD COLUMN off TEXT NOT NULL DEFAULT '[]';
+`,
+	// v113: the release channel the server follows, set by a super admin.
+	// Empty means not chosen yet: a new server chooses from the channel
+	// pointers at its first release check. A server that existed before
+	// channels follows beta (existingDatabaseMigrations). The declined
+	// build is the one the server no longer schedules by itself.
+	`
+ALTER TABLE server_update_state ADD COLUMN release_channel TEXT NOT NULL DEFAULT '';
+ALTER TABLE server_update_state ADD COLUMN declined_version TEXT NOT NULL DEFAULT '';
+ALTER TABLE server_update_state ADD COLUMN declined_build INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE server_update_state ADD COLUMN declined_hotfix INTEGER NOT NULL DEFAULT 0;
+`,
 }
+
+// existingDatabaseMigrations run after their version's migration, in the
+// same transaction, only on a database this migrator did not create (see
+// newDatabaseMarker): what a server that predates the change keeps, which
+// a new one must not get.
+var existingDatabaseMigrations = map[int]string{
+	113: `INSERT INTO server_update_state (id, release_channel) VALUES (1, 'beta')
+	ON CONFLICT (id) DO UPDATE SET release_channel = 'beta';`,
+}
+
+// newDatabaseMarker is set in the transaction of migration 1, so a database
+// this migrator created carries it however early a run is interrupted. A
+// database with applied versions and no marker is a server that existed
+// before it, including one a build without the marker left interrupted at
+// the version before a migration in existingDatabaseMigrations: that
+// cannot be told from a real one and gets the pre-channel setting, the
+// safe side.
+const newDatabaseMarker = `PRAGMA user_version = 1`
 
 // foreignKeysOffMigrations are the versions that drop a table other tables
 // reference with ON DELETE CASCADE. See applyMigration.
@@ -2523,9 +2763,14 @@ func migrateOnce(db *sql.DB) error {
 	).Scan(&current); err != nil {
 		return fmt.Errorf("store: read schema version: %w", err)
 	}
+	var born int
+	if err := db.QueryRow(`PRAGMA user_version`).Scan(&born); err != nil {
+		return fmt.Errorf("store: read database birth marker: %w", err)
+	}
+	existing := current > 0 && born == 0
 	for current < len(migrations) {
 		var err error
-		current, err = applyMigration(db, current+1)
+		current, err = applyMigration(db, current+1, existing)
 		if err != nil {
 			return err
 		}
@@ -2546,7 +2791,7 @@ func migrateOnce(db *sql.DB) error {
 // transaction and DROP TABLE would otherwise fire ON DELETE CASCADE into
 // every referencing table. PRAGMA foreign_key_check must come back empty
 // before it commits.
-func applyMigration(db *sql.DB, version int) (int, error) {
+func applyMigration(db *sql.DB, version int, existing bool) (int, error) {
 	ctx := context.Background()
 	conn, err := db.Conn(ctx)
 	if err != nil {
@@ -2607,6 +2852,16 @@ func applyMigration(db *sql.DB, version int) (int, error) {
 	}
 	if _, err := tx.Exec(migrations[version-1]); err != nil {
 		return 0, fmt.Errorf("store: apply migration %d: %w", version, err)
+	}
+	if version == 1 {
+		if _, err := tx.Exec(newDatabaseMarker); err != nil {
+			return 0, fmt.Errorf("store: mark new database: %w", err)
+		}
+	}
+	if extra := existingDatabaseMigrations[version]; existing && extra != "" {
+		if _, err := tx.Exec(extra); err != nil {
+			return 0, fmt.Errorf("store: apply migration %d to an existing database: %w", version, err)
+		}
 	}
 	if fkOff {
 		if err := checkForeignKeys(tx); err != nil {

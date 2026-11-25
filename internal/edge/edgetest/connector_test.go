@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -21,6 +22,7 @@ import (
 	"github.com/3xDevOps/Aether/internal/domain"
 	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
 	"github.com/3xDevOps/Aether/internal/events"
+	agentharness "github.com/3xDevOps/Aether/internal/harness"
 	"github.com/3xDevOps/Aether/internal/protocol"
 	"github.com/3xDevOps/Aether/internal/scheduler"
 	"github.com/3xDevOps/Aether/internal/sshd"
@@ -77,7 +79,7 @@ func newClient(t *testing.T, loopback bool) *connectorClient {
 // team features.
 func (h *harness) newConnectorServer(policy edgeproto.AccessPolicy, client *connectorClient, services sshd.Services) *serverNode {
 	h.t.Helper()
-	s := &serverNode{h: h, dir: h.t.TempDir(), policy: policy, client: client, services: services, addr: "127.0.0.1:0"}
+	s := &serverNode{h: h, dir: h.t.TempDir(), policy: policy, client: client, services: services}
 	s.start()
 	h.t.Cleanup(func() { s.stop() })
 	return s
@@ -88,16 +90,36 @@ func (h *harness) newConnectorServer(policy edgeproto.AccessPolicy, client *conn
 type launcher struct {
 	noRuns
 	db *store.DB
+	// started, when set, gets each launch as it starts, and release keeps
+	// it from finishing until it is closed.
+	started chan<- struct{}
+	release <-chan struct{}
 }
 
 func (l launcher) Launch(ctx context.Context, ws domain.WorkspaceID, member, account domain.MemberID, task, harness string, mode domain.LaunchMode) (*domain.Run, error) {
-	run := &domain.Run{WorkspaceID: ws, MemberID: member, AccountMemberID: account, Task: task, Harness: harness, Mode: mode, Status: domain.RunQueued}
+	return l.LaunchWithOptions(ctx, ws, member, account, task, harness, mode, domain.LaunchOptions{})
+}
+
+func (l launcher) LaunchWithOptions(ctx context.Context, ws domain.WorkspaceID, member, account domain.MemberID, task, harness string, mode domain.LaunchMode,
+	opts domain.LaunchOptions) (*domain.Run, error) {
+	if l.started != nil {
+		l.started <- struct{}{}
+		<-l.release
+	}
+	run := &domain.Run{WorkspaceID: ws, MemberID: member, AccountMemberID: account, Task: task, Harness: harness, Mode: mode, Permission: opts.Permission,
+		Status: domain.RunQueued}
 	return run, l.db.CreateRun(ctx, run)
 }
 
-func (launcher) Paused(domain.RunID) bool { return false }
+func (launcher) Paused(domain.RunID) bool                                     { return false }
+func (launcher) Sleep(domain.RunID) scheduler.SleepState                      { return scheduler.SleepState{} }
+func (launcher) WakeRun(context.Context, domain.RunID, domain.MemberID) error { return nil }
+func (launcher) SettleSleep(context.Context, domain.RunID) error              { return nil }
 func (launcher) DefaultMode(context.Context, domain.MemberID, domain.MemberID, string) (domain.LaunchMode, error) {
 	return domain.LaunchACP, nil
+}
+func (launcher) LoginProblem(domain.MemberID, string, agentharness.Profile) (string, bool, error) {
+	return "", false, nil
 }
 func (launcher) PendingInputs(domain.RunID) []domain.RunInputRequest          { return nil }
 func (launcher) Cause(domain.RunID, domain.RunActivity) events.RunStatusCause { return "" }
@@ -145,7 +167,7 @@ func (c *connectorClient) consent(ctx context.Context, authURL, code string, sco
 		return nil, err
 	}
 	if resp.StatusCode != http.StatusForbidden || resp.Header.Get("Content-Security-Policy") != connectorCSP ||
-		!strings.Contains(page, "That code is wrong, expired or already used. Get a new one from Settings → ChatGPT and Claude in the Aether app, or aether mcp, and paste it here.") {
+		!strings.Contains(page, "That code is wrong, expired or already used. Get a new one from Settings → ChatGPT and Claude in the Cloudfield app, or aether mcp, and paste it here.") {
 		return nil, fmt.Errorf("wrong code: %s %v\n%s", resp.Status, resp.Header, page)
 	}
 	if resp, page, err = send(http.MethodPost, url.Values{"request": {m[1]}, "code": {code}, "scope": scopes}); err != nil {
@@ -187,10 +209,13 @@ func callTool(t *testing.T, cs *mcp.ClientSession, name string, args map[string]
 	return string(out)
 }
 
-// tokenAnswer is the token endpoint's answer.
+// tokenAnswer is the token endpoint's answer: tokens, or an RFC 6749
+// error.
 type tokenAnswer struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
+	Error        string `json:"error"`
+	Description  string `json:"error_description"`
 }
 
 // TestConnectorThroughTheEdge adds a server as a custom connector at its
@@ -220,6 +245,7 @@ func TestConnectorThroughTheEdge(t *testing.T) {
 			if err := s.db.CreateWorkspace(t.Context(), ws); err != nil {
 				t.Fatal(err)
 			}
+			grantEveryone(t, s.db, ws.ID)
 			base := h.relayURL + edgeproto.MCPPath(s.id)
 			bearer := func(token string) (*http.Response, string) {
 				header := http.Header{"Content-Type": {"application/json"}, "Accept": {"application/json, text/event-stream"}}
@@ -277,8 +303,8 @@ func TestConnectorThroughTheEdge(t *testing.T) {
 				}
 				names = append(names, tool.Name)
 			}
-			if len(names) != 32 {
-				t.Fatalf("tools = %v, want all 32", names)
+			if len(names) != 34 {
+				t.Fatalf("tools = %v, want all 34", names)
 			}
 			const task = "fix the flaky login test"
 			if out := callTool(t, session, "aether_list_sessions", map[string]any{"mine": true}); strings.Contains(out, task) {
@@ -389,4 +415,76 @@ func TestConnectorAtEdgeProtocol1(t *testing.T) {
 			t.Errorf("the server enrolled again: %+v", m)
 		}
 	}
+}
+
+// TestConnectorAcrossServerRestart connects at the universal URL with
+// go-sdk's MCP and OAuth client, as Claude and ChatGPT do, then restarts
+// the server. A tools/list sent while the server is down is held at the
+// edge and answered by the restarted server: a client sees no failure, so
+// it has no reason to give up on the connector.
+func TestConnectorAcrossServerRestart(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	client := newConnectorClient(t)
+	policy := edgeproto.PolicyApprovedDevices
+	s := h.newConnectorServer(policy, client, sshd.Services{})
+	al := h.login(alice)[0]
+	h.claimServer(al, s)
+	code := call[protocol.ConnectorCodeResult](t, h.control(al, s), protocol.MethodConnectorCode, struct{}{})
+	browser, err := h.signIn(alice)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, err := auth.NewAuthorizationCodeHandler(&auth.AuthorizationCodeHandlerConfig{
+		ClientIDMetadataDocumentConfig: &auth.ClientIDMetadataDocumentConfig{URL: client.id},
+		RedirectURL:                    client.redirect,
+		AuthorizationCodeFetcher: func(_ context.Context, args *auth.AuthorizationArgs) (*auth.AuthorizationResult, error) {
+			res, _ := universalConsent(t, browser, args.URL, "", s.memberOf(t, alice).DisplayName, code.Code, policy)
+			return res, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := h.relayURL + edgeproto.PathUniversalMCP
+	session := connectMCP(t, &mcp.StreamableClientTransport{Endpoint: base, OAuthHandler: handler})
+	if _, err := session.ListTools(t.Context(), nil); err != nil {
+		t.Fatal(err)
+	}
+
+	s.stop()
+	eventually(t, "server offline", func() error {
+		if h.relay().Online(s.id) {
+			return fmt.Errorf("server %s still online", s.id)
+		}
+		return nil
+	})
+	const calls = 4
+	answers := make(chan error, calls)
+	for range calls {
+		go func() {
+			_, err := session.ListTools(t.Context(), nil)
+			answers <- err
+		}()
+	}
+	eventually(t, "every call held at the edge", func() error {
+		select {
+		case err := <-answers:
+			t.Fatalf("tools/list answered while the server is down: %v", err)
+		default:
+		}
+		if n := h.relay().Metrics().MCPWaiting; n != calls {
+			return fmt.Errorf("%d held", n)
+		}
+		return nil
+	})
+	restarted := time.Now()
+	s.start()
+	for range calls {
+		if err := <-answers; err != nil {
+			t.Fatalf("tools/list sent while the server was down: %v", err)
+		}
+	}
+	t.Logf("calls sent while the server was down answered %s after it started again", time.Since(restarted).Round(time.Millisecond))
+	callTool(t, session, "aether_list_workspaces", nil)
 }

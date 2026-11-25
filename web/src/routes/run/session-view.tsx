@@ -5,26 +5,33 @@ import { VList, type VListHandle } from 'virtua'
 import type { Tone } from '@/components/ui/status-dot'
 import { Button } from '@/components/ui/button'
 import { Callout } from '@/components/ui/callout'
+import { Skeleton } from '@/components/ui/skeleton'
 import { RelativeTime } from '@/components/ui/relative-time'
 import { api } from '@/lib/api'
-import { useRefuseStrayFileDrops } from '@/lib/file-drag'
+import { useFileDrop, useRefuseStrayFileDrops } from '@/lib/file-drag'
+import { useDelayed } from '@/lib/hooks'
 import { memberName } from '@/lib/member-name'
 import { backgroundReason, liveStateOf, runLabel, stateTone } from '@/lib/status'
 import { RunFileLinks } from '@/routes/files/path-link'
 import type { RoomMessage } from '@/lib/types'
 import { modeLabel } from '@/routes/run/agent-name'
 import type { AgentTerminal } from '@/routes/run/agent-terminal'
+import { AgentsBar } from '@/routes/run/agents-bar'
 import { ChangesBar } from '@/routes/run/changes-bar'
 import { CompletionPrompt } from '@/routes/run/completion-prompt'
 import { Composer } from '@/routes/run/composer'
+import { DropOverlay } from '@/routes/run/composer-dropzone'
 import type { RunNavigation } from '@/routes/run/header'
 import type { RunRoom } from '@/routes/run/room'
 import { SessionFailureCallout } from '@/routes/run/session-failure'
+import { SleepCallout } from '@/routes/run/sleep-callout'
 import { StallCallout } from '@/routes/run/stall-recovery'
 import { RequestDock } from '@/routes/run/request-dock'
 import { requestAnnouncement } from '@/routes/run/session-requests'
 import { EnteringRow, rowGap, sessionColumn, TimelineRow, useArrivals, useFlatRows, useRowContext, type FlatRow, type OpenPolicy } from '@/routes/run/session-rows'
+import { NotesRail, NotesStrip } from '@/routes/run/session-notes'
 import type { RunShells } from '@/routes/run/shells'
+import { useLiveLaunches } from '@/routes/run/subagent-cards'
 import { cn } from '@/lib/utils'
 import { useStore } from '@/store'
 import { messageScopeKey, useMessageList } from '@/store/messages'
@@ -35,10 +42,13 @@ import { loadOlderItems } from '@/store/session-stream'
 import { agentState, extrasSig, noAgents, turnExtras, withAgentRows, type AgentIndex } from '@/store/subagents'
 
 const emptyRoom: RoomMessage[] = []
+const noRows: SessionRow[] = []
 const emptyIDs: string[] = []
 const bottomSlack = 24
 const historyViewports = 3
 const userScrollWindow = 600
+const scrollKeys = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', 'Tab'])
+const onControl = (target: EventTarget) => target instanceof Element && target.closest('button, input, textarea, select, [role="button"]') !== null
 const sameMessageWindow = 120_000
 
 function byTime(rows: SessionRow[], extra: SessionRow[]): SessionRow[] {
@@ -182,8 +192,8 @@ function SessionWelcome({ run, agentName }: { run: RunRecord; agentName: string 
       <div className="m-auto flex w-full min-w-0 max-w-sm flex-col items-center gap-6">
         <div
           aria-hidden="true"
-          className="h-36 max-h-[24vh] w-52 shrink-0 bg-icon-faint/15"
-          style={{ mask: 'url(/aether-mark.png) center / contain no-repeat' }}
+          className="h-36 max-h-[24vh] w-52 shrink-0 bg-text/15"
+          style={{ mask: 'url(/cloudfield-mark.svg) center / contain no-repeat' }}
         />
         <h2 className="line-clamp-3 max-w-full text-center text-title break-words text-muted">{runLabel(run)}</h2>
         <dl className="flex w-full min-w-0 flex-col gap-2 text-center text-ui-sm text-muted">
@@ -198,7 +208,29 @@ function SessionWelcome({ run, agentName }: { run: RunRecord; agentName: string 
   )
 }
 
-export function SessionView({ run, agent, agentName, room, nav, active, textarea, focusComposer, onComposing, shells, switchable }: {
+const replyLines = ['w-full', 'w-11/12', 'w-4/5', 'w-2/3']
+
+// On canvas a skeleton shows mostly through its sweep, which reduced motion stops.
+const bar = 'motion-reduce:bg-hover-chrome'
+
+function LoadingChat() {
+  return (
+    <div role="status" className={cn(sessionColumn, 'flex min-h-0 flex-1 flex-col justify-end gap-10 overflow-hidden pb-4 [scrollbar-gutter:stable]')}>
+      <span className="sr-only">Loading the conversation…</span>
+      {[0, 1, 2].map((exchange) => (
+        <div key={exchange} className="flex shrink-0 flex-col gap-2">
+          <Skeleton className={cn(bar, 'ml-auto h-14 w-3/5 rounded-composer')} />
+          <Skeleton className={cn(bar, 'mb-2 ml-auto h-3 w-24')} />
+          <div className="flex flex-col gap-1.5 pl-6">
+            {replyLines.map((width, line) => <Skeleton key={line} className={cn(bar, 'h-4', width)} />)}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+export function SessionView({ run, agent, agentName, room, nav, active, textarea, focusComposer, onComposing, shells, switchable, notesWide }: {
   run: RunRecord
   agent: AgentTerminal
   agentName: string
@@ -210,11 +242,19 @@ export function SessionView({ run, agent, agentName, room, nav, active, textarea
   onComposing: (composing: boolean) => void
   shells: RunShells
   switchable: boolean
+  /** Whether the Chat pane is wide enough for the sticky rail instead of the notes strip. */
+  notesWide: boolean
 }) {
   useRefuseStrayFileDrops()
   const enhanced = run.acp === true
   const showMessages = useStore((s) => !s.hiddenAgentMessages[run.id])
   const { rows, session, missingRoomImages } = useRows(run, enhanced, showMessages)
+  // Until the stream's first replay lands there is nothing to place the people's messages against.
+  const firstLoad = enhanced && !run.switching && !session?.seq && !session?.state && (!session || session.stream === 'connecting')
+  const loaded = useRef(false)
+  if (!firstLoad) loaded.current = true
+  const loading = firstLoad && !loaded.current
+  const skeleton = useDelayed(loading)
   const expanded = useStore((s) => s.expandedRows[run.id])
   const log = useStore((s) => (enhanced ? undefined : s.sessionLogs[run.id]))
   const roomError = useStore((s) => s.roomError[run.id])
@@ -224,6 +264,7 @@ export function SessionView({ run, agent, agentName, room, nav, active, textarea
     return Boolean(page?.initialized && !page.exhausted && s.roomNextBefore[run.id] !== undefined)
   })
   const older = olderRoom || (enhanced && Boolean(session?.more))
+  useLiveLaunches(run.id, enhanced)
   useEffect(() => {
     if (missingRoomImages && olderRoom && !roomLoading && !roomError) void room.loadOlder()
   }, [missingRoomImages, olderRoom, roomLoading, roomError, room.loadOlder])
@@ -240,7 +281,7 @@ export function SessionView({ run, agent, agentName, room, nav, active, textarea
     return agent !== undefined && agentState(agent) === 'running'
   }), [agents])
   const [focused, setFocused] = useState<string | null>(null)
-  const flat = useFlatRows(rows, expanded, following, focused, policy)
+  const flat = useFlatRows(loading ? noRows : rows, expanded, following, focused, policy)
   const arrivals = useArrivals(flat, expanded)
   const lastInput = useRef(-Infinity)
   const viewport = useRef<HTMLDivElement>(null)
@@ -279,29 +320,46 @@ export function SessionView({ run, agent, agentName, room, nav, active, textarea
   const markInput = () => {
     lastInput.current = performance.now()
   }
-  const follow = useRef(() => {})
-  follow.current = () => {
-    if (active && pinned.current && count > 0) list.current?.scrollToIndex(count - 1, { align: 'end' })
+  // Pressing a control opens a block, and measuring its rows moves the offset: that is not the person scrolling.
+  const markScrollKey = (event: React.KeyboardEvent) => {
+    if (scrollKeys.has(event.key) || (event.key === ' ' && !onControl(event.target))) markInput()
+  }
+  const markPointer = (event: React.PointerEvent) => {
+    if (!onControl(event.target)) markInput()
+  }
+  const follow = useRef<(grown?: boolean) => void>(() => {})
+  follow.current = (grown = false) => {
+    if (!active || !pinned.current || count === 0) return
+    if (grown) list.current?.scrollTo(list.current.scrollSize)
+    else list.current?.scrollToIndex(count - 1, { align: 'end' })
   }
   useLayoutEffect(() => follow.current(), [active, count])
   const reveal = useStore((s) => s.sessionReveal[run.id])
   useLayoutEffect(() => {
-    if (!active || !reveal) return
+    if (!active || !reveal || loading) return
     useStore.getState().revealSessionRow(run.id, undefined)
     const index = flat.findIndex((item) => item.key === reveal || (item.kind === 'row' && item.row.kind === 'user' && item.row.itemID === reveal))
     if (index === -1) return
     pin(false)
     list.current?.scrollToIndex(index + Number(older), { align: 'center' })
-  }, [active, reveal, flat, older, run.id])
+  }, [active, reveal, loading, flat, older, run.id])
   useEffect(() => {
     const node = viewport.current
     if (!node) return
+    // virtua sizes this to its rows, so it grows while a streamed reply grows its row without adding one.
+    const content = node.querySelector('[role="log"]')?.firstElementChild
     let frame = 0
-    const observer = new ResizeObserver(() => {
-      cancelAnimationFrame(frame)
-      frame = requestAnimationFrame(() => follow.current())
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.target === content) follow.current(true)
+        else {
+          cancelAnimationFrame(frame)
+          frame = requestAnimationFrame(() => follow.current())
+        }
+      }
     })
     observer.observe(node)
+    if (content) observer.observe(content)
     return () => {
       observer.disconnect()
       cancelAnimationFrame(frame)
@@ -321,17 +379,20 @@ export function SessionView({ run, agent, agentName, room, nav, active, textarea
     hadPending.current = pendingCount > 0
   }, [pendingCount, active, textarea])
 
-  const loadOlder = () => {
-    pin(false)
+  const fetchOlder = () => {
     if (enhanced && session?.more) void loadOlderItems(useStore, api, run.id)
     if (olderRoom) void room.loadOlder()
+  }
+  const loadOlder = () => {
+    pin(false)
+    fetchOlder()
   }
   const loadingOlder = roomLoading || (enhanced && Boolean(session?.olderLoading))
   const olderError = enhanced ? session?.olderError : undefined
   const loadEarlier = () => {
     const handle = list.current
     if (!active || !enhanced || !older || loadingOlder || olderError || roomError || !handle || handle.viewportSize === 0) return
-    if (handle.scrollOffset <= historyViewports * handle.viewportSize && (!pinned.current || handle.scrollSize <= handle.viewportSize + bottomSlack)) loadOlder()
+    if (handle.scrollOffset <= historyViewports * handle.viewportSize && (!pinned.current || handle.scrollSize <= handle.viewportSize + bottomSlack)) fetchOlder()
   }
   useEffect(() => {
     const frame = requestAnimationFrame(loadEarlier)
@@ -348,9 +409,21 @@ export function SessionView({ run, agent, agentName, room, nav, active, textarea
       className="max-md:max-h-[40dvh]"
     />
   )
+  const [dropStatus, setDropStatus] = useState<{ limit: number; blocked?: string }>({ limit: 0, blocked: 'Files cannot be attached now' })
+  const droppedUpload = useRef<(files: File[]) => Promise<void>>(async () => {})
+  const reportDropStatus = useCallback((status: { limit: number; blocked?: string; upload?: (files: File[]) => Promise<void> }) => {
+    if (status.upload) droppedUpload.current = status.upload
+    setDropStatus((current) => current.limit === status.limit && current.blocked === status.blocked
+      ? current
+      : { limit: status.limit, blocked: status.blocked })
+  }, [])
+  const drop = useFileDrop({
+    limit: dropStatus.limit,
+    onFiles: (files) => void droppedUpload.current(files),
+  })
 
   return (
-    <div className="relative flex h-full min-h-0 flex-col">
+    <div className="relative flex h-full min-h-0 flex-col" {...drop.handlers}>
       {session?.truncatedBefore && (
         <div className={cn(sessionColumn, 'shrink-0 pt-2')}>
           <Callout tone="needs-you" role="status">
@@ -364,8 +437,8 @@ export function SessionView({ run, agent, agentName, room, nav, active, textarea
         className="relative flex min-h-0 flex-1 flex-col outline-none"
         onWheelCapture={markInput}
         onTouchMoveCapture={markInput}
-        onKeyDownCapture={markInput}
-        onPointerDownCapture={markInput}
+        onKeyDownCapture={markScrollKey}
+        onPointerDownCapture={markPointer}
       >
         {(log?.error || roomError || olderError) && (
           <div className={cn(sessionColumn, 'flex flex-col gap-2 pt-3')}>
@@ -386,14 +459,14 @@ export function SessionView({ run, agent, agentName, room, nav, active, textarea
             )}
           </div>
         )}
-        {enhanced && count === 0 && <SessionWelcome run={run} agentName={agentName} />}
+        {loading ? skeleton && <LoadingChat /> : enhanced && count === 0 && <SessionWelcome run={run} agentName={agentName} />}
         <VList
           ref={list}
           role="log"
           aria-live="off"
           aria-label="Chat"
           className="min-h-0 flex-1"
-          style={enhanced && count === 0 ? { display: 'none' } : undefined}
+          style={loading || (enhanced && count === 0) ? { display: 'none' } : undefined}
           data={older ? [null, ...flat] : flat}
           shift={shift}
           keepMounted={focusedIndex >= 0 ? [focusedIndex + Number(older)] : undefined}
@@ -440,17 +513,20 @@ export function SessionView({ run, agent, agentName, room, nav, active, textarea
             </EnteringRow>
           )}
         </VList>
+        {notesWide && <NotesRail run={run} room={room} />}
       </div>
-      {enhanced && (
-        <div className={cn(sessionColumn, 'pb-2 empty:hidden')}>
-          <SessionFailureCallout run={run} session={session} switchable={switchable} shells={shells} nav={nav} />
-          <StallCallout run={run} agent={agent} rows={rows} nav={nav} />
-        </div>
-      )}
+      <div className={cn(sessionColumn, 'pb-2 empty:hidden')}>
+        {enhanced && <SessionFailureCallout run={run} session={session} switchable={switchable} shells={shells} nav={nav} />}
+        {enhanced && <StallCallout run={run} agent={agent} rows={rows} nav={nav} />}
+        <SleepCallout run={run} />
+      </div>
+      {!notesWide && <NotesStrip run={run} room={room} className={cn(sessionColumn, 'pb-2')} />}
+      <AgentsBar runID={run.id} />
       <ChangesBar run={run} />
       <CompletionPrompt run={run} className={cn(sessionColumn, 'pb-2')} />
-      <Composer run={run} agent={agent} room={room} textarea={textarea} autoFocus={focusComposer} onFocusChange={onComposing} dock={dock || undefined} onEscape={() => viewport.current?.focus()} />
+      <Composer run={run} agent={agent} room={room} textarea={textarea} autoFocus={focusComposer} onFocusChange={onComposing} dock={dock || undefined} onEscape={() => viewport.current?.focus()} onDropStatus={reportDropStatus} />
       <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">{announcement}</span>
+      {drop.count !== null && <DropOverlay count={drop.count} refused={drop.refused} blocked={dropStatus.blocked} limit={dropStatus.limit} />}
     </div>
   )
 }

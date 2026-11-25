@@ -1,16 +1,17 @@
 # Privacy policy
 
-Aether is self-hosted software. Nothing about you reaches the people who
-publish it unless you sign in to the edge they run, at `auth.onaether.dev`
-and `edge.onaether.dev` ([What an edge stores](#what-an-edge-stores)). This page is the privacy
-policy for the Aether Android app (package `io.aether.android`), whether it
+Cloudfield is self-hosted software. Nothing about you reaches the people who
+publish it unless you sign in to the edge they run, at `auth.cloudfield.ai`
+and `edge.cloudfield.ai`, or `auth.onaether.dev` and `edge.onaether.dev`
+([What an edge stores](#what-an-edge-stores)). This page is the privacy
+policy for the Cloudfield Android app (package `io.aether.android`), whether it
 came from a GitHub release or from Google Play, for the dashboard the app
 shows, and for that edge. Effective 2026-10-16.
 
 ## Who publishes it
 
-Aether is published by 3xDevOps, <https://github.com/3xDevOps>. Questions
-about this policy go to <https://github.com/3xDevOps/Aether/issues>.
+Cloudfield is published by 3xDevOps, <https://github.com/3xDevOps>. Questions
+about this policy go to <https://github.com/3xDevOps/cloudfield/issues>.
 Privacy requests about what the project's edge holds, such as a copy or a
 deletion, go to <team@onaether.dev>; deleting your own account needs no
 request ([What an edge stores](#what-an-edge-stores)).
@@ -19,7 +20,7 @@ request ([What an edge stores](#what-an-edge-stores)).
 
 - **Which mode you chose and, in Tailscale mode, the server name you type on
   the first screen**, in the app's private storage.
-- **In Aether Edge mode, the CLI's state**, under the app's private files
+- **In Cloudfield Edge mode, the CLI's state**, under the app's private files
   directory in `.config/aether/`: `config.json` (the servers you linked),
   `edge-device-key` (this phone's SSH private key, mode `0600`),
   `edge-tokens.json` (the edge's sign-in token for this device, mode `0600`)
@@ -27,6 +28,14 @@ request ([What an edge stores](#what-an-edge-stores)).
   phone's current network, which the app reads (permission
   `ACCESS_NETWORK_STATE`) and rewrites when the network changes. Nothing else
   the app writes is its own.
+- **With notifications on, the push registration**, in the app's private
+  storage: the distributor's address for this phone, the two Web Push keys,
+  and the last error registering. The UnifiedPush connector library keeps
+  the private key in its own database, encrypted (AES-GCM) with a key held
+  in the Android Keystore. Showing notifications needs the
+  `POST_NOTIFICATIONS` permission, which Android asks for when you turn them
+  on; the connector adds `WAKE_LOCK`, to finish handling a message while the
+  phone sleeps.
 - **The WebView's ordinary cache** of the dashboard's files (none in Edge
   mode, which turns it off), and the
   dashboard's own local record of how you use it. That record holds how the
@@ -34,12 +43,55 @@ request ([What an edge stores](#what-an-edge-stores)).
   collapsed, whether a session's Details panel is open, the embedded
   Environment terminal's height, terminal font size, line wrapping in
   Changes, whether single-key shortcuts are on); where you were (the
-  workspace you last opened, whether the sidebar lists only your own sessions);
+  workspace you last opened, whether the sidebar lists only your own sessions,
+  and the view you last chose for each of your last 200 sessions, by session id);
   the mode you last launched each agent in; which update notices you
   dismissed, by version; and the onboarding wizard's progress. The dashboard writes these
   preferences in origin-local `aether.ui` storage: they are separate for each
   server origin, including its port. Nothing reads them but the dashboard,
   and they last until you uninstall the app. Both are private to the app.
+- **The unfinished New session form**, in `localStorage` under
+  `aether.launch-draft.v1:<encoded identity>`. The identity includes the
+  dashboard origin, server hostname and signed-in member. It holds the task,
+  repository choices, agent, account and fallback choices, mode, model,
+  effort, permission, subsession choice and resource limits. Changes save
+  immediately. X, Cancel, a successful launch or clicking outside the desktop
+  form with a blank task deletes the draft. Outside clicks with task text,
+  active dictation or a launch in progress keep it, as does Escape.
+  Edge-linked pages keep drafts in memory only because another app could serve
+  script from the gateway's loopback port. Elsewhere, reopening the same dashboard in the
+  same browser profile restores it collapsed. It is not
+  synchronized to another browser, device or the desktop app. Clearing site
+  data deletes it; private browsing usually deletes it when the private
+  session ends. Storage errors are shown; the form still keeps its in-memory
+  draft while the page remains open. If a saved draft cannot be read, the form
+  waits for the user to start a fresh draft before replacing it.
+- **The last snapshot the dashboard loaded**, in `localStorage` under
+  `aether.snapshot.v1:<origin>`, so the next launch paints at once, marked
+  *Saved state from ...*, until the live state arrives. It holds:
+  - the server info: version, your member (without git name or email) and
+    the tailnet host name;
+  - the workspace list (name, base branch, id; not the git origin URL);
+  - every session the server listed, as the server sent it: task text,
+    title, branch, status, pending question ids and wait conditions, but not
+    the last tool the agent used;
+  - the member list without git names and emails;
+  - the gateway's capability list.
+
+  It holds no token, key, environment variable, transcript, file or terminal
+  output, and no disk usage. It is rewritten after a load, ten seconds after
+  the last change and when the page is hidden, deleted when the dashboard
+  sees a different member or server, or any refusal of access (a rejected
+  token, a refused or removed member, a revoked or pending device); after a
+  refusal nothing is saved again until a load succeeds. It is skipped above
+  1 MB. In Cloudfield Edge mode the dashboard never saves it and deletes any
+  copy, because another app could serve script from the gateway's loopback
+  port. `localStorage` itself stays on in the app's WebView there; the app
+  turns off only its HTTP cache and service workers' network loads. It is
+  keyed by origin, so two members who share one browser profile and one
+  dashboard address see each other's saved state until the first live load
+  replaces it; sign in with separate browser profiles. It is not sent
+  anywhere. In a browser, *Clear site data* deletes it.
 
 In Tailscale mode the app stores no account, password, token, cookie or key:
 there is no dashboard sign-in, and the phone's Tailscale login identifies it
@@ -85,7 +137,7 @@ device-to-device transfer (`allowBackup=false` and
 - **In both modes, to `github.com` for the newest release.** When the app
   comes to the front, about once an hour, and when you tap **Check for
   updates**, the bundled CLI asks `github.com` for the tag of the newest
-  Aether release, so the app can say an update exists. GitHub sees the
+  Cloudfield release, so the app can say an update exists. GitHub sees the
   phone's IP address and that request, nothing about you or your server.
   The app downloads nothing itself: you install a release from Google Play,
   or download its APK in the browser.
@@ -119,7 +171,7 @@ device-to-device transfer (`allowBackup=false` and
   opens in the phone's browser, under that browser's own policy.
 
 Dashboard requests above go to the server you chose, not to an
-Aether-operated analytics service. Optional GitHub authorization and the
+Cloudfield-operated analytics service. Optional GitHub authorization and the
 server-side connections described below are separate external requests.
 Nothing is sold.
 
@@ -130,7 +182,7 @@ your own server. Your server contacts GitHub to verify the account, list
 repositories the account can access (including private collaborator and
 organization repositories), look up a selected repository, and fetch its
 selected source branch over HTTPS. GitHub receives these authenticated
-requests under its own policy. There is no new Aether-operated authorization
+requests under its own policy. There is no new Cloudfield-operated authorization
 broker or analytics service, and this connection is separate from signing
 in to an edge and from an agent's model-provider account.
 
@@ -138,7 +190,7 @@ The native token is stored in
 `homes/<member>/.config/gh/hosts.yml` on your server. The server reads it for
 GitHub API requests and source fetches. A source mirror stores only the
 authorizing member and numeric GitHub account binding with its source
-metadata, not a copy of the token. Aether does not send that token to the
+metadata, not a copy of the token. Cloudfield does not send that token to the
 dashboard, the edge, or other members, or put it in workspace database
 records, on-disk Git configuration, URLs, or command arguments. It is used
 in server memory and the fetch child's temporary environment.
@@ -161,10 +213,8 @@ and revoke GitHub authorization, see
 ## Push notifications
 
 Off until you turn on **Notify this device when a session needs me** in the
-dashboard's Settings, in a browser or in the dashboard added to a home screen
-([networking.md](networking.md#notifications)). The Android app cannot
-receive them, so it never registers with a push service; the one thing in
-this section it does send is the last paragraph's report to your server.
+dashboard's Settings, in a browser, in the dashboard added to a home screen,
+or in the Android app ([networking.md](networking.md#notifications)).
 
 Turning it on makes that browser register with its vendor's push service -
 Google's for Chrome, Mozilla's for Firefox, Apple's for Safari, Microsoft's
@@ -186,18 +236,31 @@ push service receives:
   server's IP address.
 - **The notification, encrypted** on your server so that only that browser
   can read it (RFC 8291): the session's title or the first line of its task, one
-  line saying why it needs you, and the session's ID. The push service sees its
+  line saying why it needs you, and the session's ID. A
+  [digest or a burst's summary](watches.md#notification-levels) holds up to 5
+  such lines, each with its workspace's name. The push service sees its
   size, at most 4096 bytes, and when it was sent.
 - **A signed token** (RFC 8292): the public half of a key your server
   generated for this purpose, the push service's own address, an expiry, and
-  the fixed contact `https://github.com/3xDevOps/Aether`. It names neither
+  the fixed contact `https://github.com/3xDevOps/cloudfield`. It names neither
   your server nor you.
 - **Delivery settings**: a 24-hour time to live, high urgency (normal for a
   reported success and for the message that clears a need), and a topic,
-  which is a hash of the session's ID, so that a newer notification for a session
-  replaces an undelivered older one.
+  which is a hash of the session's ID (of your member ID for a digest), so
+  that a newer notification for a session replaces an undelivered older one.
 
 The push service relays the message to your browser under its own policy.
+
+In the Android app, turning it on registers the app with the UnifiedPush
+distributor app you installed, such as ntfy. The distributor's server issues
+the address; the app generates the two keys, keeps the private one on the
+phone, and sends the address and the public keys to your server, the
+same three values as above. The distributor and its server receive what a
+push service does, listed above, and relay it to the app; they cannot read
+the notification. ntfy's policy covers what ntfy.sh keeps. Turning it off
+tells your server to remove the values and the distributor to drop the
+registration. The app sends a declined assistant card's ID and the decision
+to your server, as the dashboard does.
 **Send test notification** sends the same request with the text
 `Notifications work on this device.` and no session.
 
@@ -208,14 +271,14 @@ you are there. It is not stored, and no other member sees it.
 
 ## Slack
 
-Off until an admin runs `sudo aether-server slack setup`
+Off until an admin runs `sudo cloudfield-server slack setup`
 ([slack.md](slack.md)) and a member links a Slack account. For each linked
 member the server sends Slack the titles of the sessions that need them, the
 need lines (which can quote an agent's reason), the text and options of
 pending requests, session IDs and the dashboard's address, and, in the
-link confirmation, the member's Aether display name and the server's host name.
-Replies and button presses pass through Slack to the server. Nothing is sent
-to Slack for members who never linked.
+link confirmation, the member's Cloudfield display name and the server's host
+name. Replies and button presses pass through Slack to the server. Nothing is
+sent to Slack for members who never linked.
 
 Slack keeps the messages under the workspace's retention settings. Unlinking
 or removing the bot does not delete messages already sent. The tokens stay in
@@ -224,11 +287,12 @@ or removing the bot does not delete messages already sent. The tokens stay in
 ## What an edge stores
 
 An **edge** is the relay and sign-in service that lets a computer running
-`aether` reach a server over SSH without Tailscale ([edge.md](edge.md)). The
+`cloudfield` reach a server over SSH without Tailscale ([edge.md](edge.md)). The
 Android app uses it only in Edge mode. Whoever runs an edge, the publisher for
-`auth.onaether.dev` and `edge.onaether.dev`, holds the following. The edge
-cannot read terminal, agent, file or dashboard content you reach over SSH,
-which is encrypted end to end between your computer and your server. An MCP
+`auth.cloudfield.ai`, `edge.cloudfield.ai`, `auth.onaether.dev` and
+`edge.onaether.dev`, holds the following. The edge cannot read terminal,
+agent, file or dashboard content you reach over SSH, which is encrypted end to
+end between your computer and your server. An MCP
 connector's traffic is different: TLS ends at the edge, which decrypts each
 request, answer and token in memory to relay it ([edge.md](edge.md#mcp-connectors))
 and keeps none of them. Its journal logs requests it refuses before relaying,
@@ -239,9 +303,9 @@ address, path, status and user agent.
 | What | Why | Kept |
 | --- | --- | --- |
 | Your GitHub account: an account id the edge assigns, GitHub's user id, your login, verified primary email and display name, and when you last signed in with GitHub | To sign you in and to match invitations | Until you delete it on the edge's Account page, or its operator deletes it with `aether-edge accounts delete` |
-| Each signed-in device: its label (the machine's host name unless you chose one), its public key, a hash of its token, when it signed in and was last used | To let that device connect | Until you revoke it with `aether logout` or the edge's Devices page |
+| Each signed-in device: its label (the machine's host name unless you chose one), its public key, a hash of its token, when it signed in and was last used | To let that device connect | Until you revoke it with `cloudfield logout` or the edge's Devices page |
 | Browser sign-ins at the edge: a hash of the cookie | To keep you signed in there | 30 days after last use |
-| A pending sign-in from `aether login`: the device label, public key and the IP address it started from | To show you on the confirmation page where the sign-in came from | Until the device collects its token or is denied; an expired one (after 10 minutes) until the next sign-in starts |
+| A pending sign-in from `cloudfield login`: the device label, public key and the IP address it started from | To show you on the confirmation page where the sign-in came from | Until the device collects its token or is denied; an expired one (after 10 minutes) until the next sign-in starts |
 | Each server you claim: its id, its host name, the access policy it announces, you as its owner | To route connections and show you your servers | Until the owner removes it, or the edge's operator removes or blocks it. Deleting your account removes you as its owner |
 | Each server the edge let your account connect to: its id and your GitHub user id | To tell every server that may hold your identity when you delete your account | Until you delete your account |
 | A deletion owed to a server that was offline when you deleted your account: that server's id and your GitHub user id | To tell that server to remove your identity | Until it is sent, when the server next connects; at most 1000 per server |
@@ -254,14 +318,14 @@ address, path, status and user agent.
 Rate limits count requests per IP address, or per /64 for IPv6, in memory
 only; nothing is written. While you are connected, the edge also sees your
 IP address, which server you reach, when, and how many bytes flow. Your
-server logs the IP address of each connection the edge relays to it
-(`edge: relayed connection ... client=<address>`), as it does for direct
-connections.
+server logs the client address of a relayed connection whose grant it
+refuses (`edge: refused relayed connection ... client=<address>`). It logs
+accepted connections only at debug level, which the server does not emit.
 
 Revoking your devices removes them from the edge; the account record stays.
 To delete it yourself, open the edge's Account page,
-`https://auth.onaether.dev/account` for the project's edge; `aether logout
---delete-account` prints that address. The page asks you to sign in with
+`https://auth.cloudfield.ai/account` or `https://auth.onaether.dev/account`
+for the project's edge; `cloudfield logout --delete-account` prints that address. The page asks you to sign in with
 GitHub in that browser within the last 5 minutes and to type your
 login ([edge.md](edge.md#deleting-an-account)). The edge then deletes the
 account, its devices and sessions, and tells each server it reached to
@@ -295,7 +359,7 @@ draft thumbnail or deleting a session does not remove the member-home file; see
 
 The shared app browser runs on your server, not in the phone's WebView.
 Browser input, app-terminal input, observations, frames, and explicit capture
-requests travel through your Aether server. A page opened there makes its
+requests travel through your Cloudfield server. A page opened there makes its
 own network requests from the session's network namespace; those app endpoints
 and any third parties the page contacts receive the usual browser requests
 under their own policies. This is separate from the Android shell's lack of
@@ -345,7 +409,7 @@ To preserve a reviewed capture before cleanup, open **Captures…** from the
 session's **More** menu or a terminal's **Tools**, select it under **Select
 transient captures to retain**, optionally enter verification notes, and
 choose **Retain selected captures**. An agent with the advertised capability uses
-`aether-internal artifact retain` with selected `artifact_ids`, optional
+`cloudfield-internal artifact retain` with selected `artifact_ids`, optional
 `verification_notes`, and an `idempotency_key`. This copies only the selected
 PNGs into the existing retained packet storage and returns a
 `packet_id`; it does not verify the application or report an outcome.
@@ -367,7 +431,7 @@ expired captures are not a successful verification result.
 Nothing is retained automatically. Resetting the browser does not delete
 already-written PNGs, and retaining an image does not upload it to a public
 pull request. There is no credential-entry recording. Do not capture
-credentials or publish app logins, cookies, tokens, or customer data; Aether
+credentials or publish app logins, cookies, tokens, or customer data; Cloudfield
 cannot reliably redact secrets an app renders in pixels or text, or those
 you include in verification notes. A member who explicitly downloads,
 exports or publishes a capture creates a separate copy under that
@@ -428,12 +492,13 @@ gotcha, preference or outcome), up to 20 file paths it cites, the member it
 is attributed to, the session, agent and commit it came from, and who pinned
 it and when. Notes reach the store three ways:
 
-- An agent writes one with `aether-internal memory add`, or a member with
-  `aether memory add`: at most 1024 bytes of text.
+- An agent writes one with `cloudfield-internal memory add`, or a member with
+  `cloudfield memory add`: at most 1024 bytes of text.
 - When a session's agent reports success or failure, the server writes one
   outcome note for that session: the report's summary and next action, with the
   files and HEAD commit of the session's latest snapshot. A later report
-  rewrites it and clears its pin.
+  rewrites it and clears its pin. Nothing is written while the session's
+  owner is a viewer.
 
 Every member of the server, viewers included, can read every note, and
 every session in the workspace can search them. The first line of each pinned
@@ -455,12 +520,12 @@ report or answer with a secret is still recorded, with its text replaced by
 secrets it has rules for, so keep credentials out of reports and answers.
 
 Notes do not expire. A collaborator or admin deletes one with
-`aether memory rm <id>`, or every note attributed to a session with `aether memory rm --run <session>`. Deleting a session deletes its unpinned notes; pinned notes stay until
+`cloudfield memory rm <id>`, or every note attributed to a session with `cloudfield memory rm --run <session>`. Deleting a session deletes its unpinned notes; pinned notes stay until
 removed. Deleting the workspace deletes all of its notes. A replaced note stays, hidden from
 search unless asked for with `--all`, until it is removed. Removing a member
 keeps the notes attributed to them.
 
-Before a release migrates the schema, `aether-server update` and **Update
+Before a release migrates the schema, `cloudfield-server update` and **Update
 now** copy the database to `<data-dir>/aether.db.pre-update` and delete
 that copy once the new release has started. A note deleted while the copy
 exists is still in it, and a rollback restores it.
@@ -474,8 +539,8 @@ or Settings) with the id of the message it was quoted from, and when it was
 created, changed and last read.
 
 Only you can read, change or delete your preferences. Teammates and admins
-cannot through Aether, nor can your sessions or connected apps. Server operators
-with access to the database file can read it.
+cannot through Cloudfield, nor can your sessions or connected apps. Server
+operators with access to the database file can read it.
 
 Forgetting a preference deletes its row. SQLite overwrites the deleted text
 (`secure_delete`) and the server checkpoints and truncates the write-ahead
@@ -511,12 +576,27 @@ records each as deleted in the same file before it commits. Merging two members 
 remains, even past the 200 limit; new saves are then refused until enough
 are forgotten.
 
+## Dictation
+
+With [dictation](dictation.md) installed, the dashboard sends each clip you
+record to your server, never to the publisher or another service. The clip
+lives only in the server's memory while it is transcribed: the server does not
+write it to disk, log it, put it in audit entries or error messages, or keep
+it after the request, and the speech-to-text engine runs on the server with
+its log file set to `/dev/null` and no Docker logs. The server does not keep the transcript
+either; it returns to your browser, which puts it in the box you were typing
+in. Nothing is stored that you would need to delete.
+
 ## Permissions
 
 `INTERNET` lets the app reach your server, or in Edge mode the edge.
 `ACCESS_NETWORK_STATE` lets Edge mode read the active network's DNS servers,
 because Go's resolver finds no `/etc/resolv.conf` on Android; the app reads
-no other network state. The androidx library
+no other network state. `RECORD_AUDIO` lets the dashboard's mic button record
+for dictation. The app asks for it only the first time the page requests the
+microphone, grants it only to the dashboard's origin, and records only while
+you use the button. The app does not store the audio; the server's handling
+is under [Dictation](#dictation). The androidx library
 adds one signature-level permission the app defines for its own receivers,
 which no other app can hold and which grants nothing.
 
@@ -528,8 +608,8 @@ which no other app can hold and which grants nothing.
 - At an edge: see [What an edge stores](#what-an-edge-stores).
 - On the server: the server's administrator owns the data directory and can
   delete a session, a member home, or the whole directory
-  ([install.md](install.md#uninstalling)). `aether member remove` removes
-  your environment container, deletes your member record and erases your
+  ([install.md](install.md#uninstalling)). `cloudfield member remove` removes
+  your environment, deletes your member record and erases your
   member home. It refuses while anything still points at you - a session you
   launched, a schedule you own, or an agent profile you pushed - so an
   administrator deletes those first; what a session wrote stays in the data
@@ -556,4 +636,4 @@ screen links to both that page and the licence text.
 ## Changes
 
 Changes to this policy are commits to this file; its history is public at
-<https://github.com/3xDevOps/Aether/commits/main/docs/privacy.md>.
+<https://github.com/3xDevOps/cloudfield/commits/main/docs/privacy.md>.

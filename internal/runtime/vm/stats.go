@@ -1,0 +1,189 @@
+package vm
+
+import (
+	"cmp"
+	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"time"
+
+	"golang.org/x/sync/errgroup"
+
+	"github.com/3xDevOps/Aether/internal/disk"
+	"github.com/3xDevOps/Aether/internal/runtime"
+	"github.com/3xDevOps/Aether/internal/sysstats"
+)
+
+const (
+	statsConcurrency = 4
+	statsTimeout     = 3 * time.Second
+)
+
+// memoryEvents reports a stopped VM as fs.ErrNotExist, as the OOM watcher
+// treats a stopped container's missing cgroup. A paused guest cannot answer
+// and kills nothing, so it reports what it last did.
+func (e *engine) memoryEvents(ctx context.Context, key string) (runtime.MemoryEvents, error) {
+	rec, err := e.load(key)
+	if err != nil {
+		return runtime.MemoryEvents{}, err
+	}
+	if up, upErr := e.running(ctx, key); upErr != nil || !up || rec.Exited {
+		return runtime.MemoryEvents{}, errors.Join(upErr, fmt.Errorf("vm runtime: VM %s is not running: %w", key, fs.ErrNotExist))
+	}
+	if e.halted(ctx, key) {
+		e.mu.Lock()
+		events, known := e.events[key]
+		e.mu.Unlock()
+		if !known {
+			return events, fmt.Errorf("vm runtime: VM %s is paused: %w", key, fs.ErrNotExist)
+		}
+		return events, nil
+	}
+	h, err := e.helper(key)
+	if err != nil {
+		return runtime.MemoryEvents{}, err
+	}
+	st, err := h.Stats(ctx)
+	if err != nil {
+		return runtime.MemoryEvents{}, fmt.Errorf("vm runtime: memory events of VM %s: %w", key, err)
+	}
+	events := runtime.MemoryEvents{OOMKills: st.OOMKills, LimitBytes: st.MemoryLimitBytes}
+	e.mu.Lock()
+	e.events[key] = events
+	e.mu.Unlock()
+	return events, nil
+}
+
+// paused reports a VM whose session cannot run: its vCPUs are stopped or
+// Pause froze its processes.
+func (e *engine) paused(ctx context.Context, key string) bool {
+	if rec, err := e.load(key); err == nil && rec.Frozen {
+		return true
+	}
+	return e.halted(ctx, key)
+}
+
+// halted reports a VM whose vCPUs are stopped, so its guest answers
+// nothing.
+func (e *engine) halted(ctx context.Context, key string) bool {
+	state, err := newCHAPI(e.path(key, apiSocket)).state(ctx)
+	return err == nil && state == "Paused"
+}
+
+// CPU, memory and processes come from the helper, network and disk bytes
+// from Cloud Hypervisor's device counters, and what the VM holds of the
+// host's memory from its unit's cgroup.
+func (e *engine) stats(ctx context.Context) ([]runtime.ContainerStat, error) {
+	ctx, cancel := context.WithTimeout(ctx, statsTimeout)
+	defer cancel()
+	keys, err := e.keys()
+	if err != nil {
+		return nil, err
+	}
+	results := make([]*runtime.ContainerStat, len(keys))
+	errs := make([]error, len(keys))
+	var g errgroup.Group
+	g.SetLimit(statsConcurrency)
+	for i, key := range keys {
+		g.Go(func() error {
+			results[i], errs[i] = e.sample(ctx, key)
+			return nil
+		})
+	}
+	_ = g.Wait()
+	var out []runtime.ContainerStat
+	for _, st := range results {
+		if st != nil {
+			out = append(out, *st)
+		}
+	}
+	return out, errors.Join(errs...)
+}
+
+func (e *engine) sample(ctx context.Context, key string) (*runtime.ContainerStat, error) {
+	rec, err := e.load(key)
+	if err != nil {
+		return nil, err
+	}
+	if up, upErr := e.running(ctx, key); upErr != nil || !up || e.halted(ctx, key) {
+		return nil, upErr
+	}
+	h, err := e.helper(key)
+	if err != nil {
+		return nil, err
+	}
+	g, err := h.Stats(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("vm runtime: stats of VM %s: %w", key, err)
+	}
+	counters, err := newCHAPI(e.path(key, apiSocket)).counters(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("vm runtime: device counters of VM %s: %w", key, err)
+	}
+	cores := rec.CPULimit
+	if cores == 0 {
+		cores = float64(rec.CPUs)
+	}
+	held, err := e.unitMemory(key)
+	if err != nil {
+		err = fmt.Errorf("vm runtime: host memory of VM %s: %w", key, err)
+	}
+	return &runtime.ContainerStat{
+		ID: idPrefix + key, CreationKey: cmp.Or(rec.CreationKey, key), Read: time.Now(),
+		CPUUsageNanos: g.CPUUsageNanos, CPULimitCores: cores,
+		MemoryBytes: g.MemoryBytes, HostMemoryBytes: held, MemoryLimitBytes: g.MemoryLimitBytes, Pids: g.Pids, PidsLimit: g.PidsLimit,
+		NetRxBytes: counters["net0"]["rx_bytes"], NetTxBytes: counters["net0"]["tx_bytes"],
+		DiskReadBytes:  counters["root"]["read_bytes"] + counters["data"]["read_bytes"],
+		DiskWriteBytes: counters["root"]["write_bytes"] + counters["data"]["write_bytes"],
+	}, err
+}
+
+func (e *engine) unitMemory(key string) (uint64, error) {
+	return sysstats.CgroupWorkingSet(filepath.Join(e.cgroupRoot, runtime.SessionSlice, unitName(key)))
+}
+
+func (e *engine) filesystem() (runtime.FilesystemCapacity, error) {
+	if err := os.MkdirAll(e.root, 0o700); err != nil {
+		return runtime.FilesystemCapacity{}, err
+	}
+	usage, err := disk.Filesystem(e.root)
+	if err != nil {
+		return runtime.FilesystemCapacity{}, err
+	}
+	return runtime.FilesystemCapacity{Name: "Session VM disks", TotalBytes: usage.TotalBytes, FreeBytes: usage.FreeBytes}, nil
+}
+
+func (r *Runtime) MemoryUse(context.Context) (map[runtime.ID]uint64, error) {
+	return r.vms.memoryUse()
+}
+
+// memoryUse reads each VM unit's cgroup, which exists while the unit runs,
+// with no call into systemd or the guest. A VM whose cgroup cannot be read
+// counts as its unit's cap.
+func (e *engine) memoryUse() (map[runtime.ID]uint64, error) {
+	keys, err := e.keys()
+	if err != nil {
+		return nil, err
+	}
+	use := make(map[runtime.ID]uint64, len(keys))
+	var errs []error
+	for _, key := range keys {
+		n, err := e.unitMemory(key)
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			errs = append(errs, fmt.Errorf("vm runtime: memory of VM %s: %w", key, err))
+			rec, loadErr := e.load(key)
+			if loadErr != nil {
+				continue
+			}
+			n = uint64(unitMemoryMiB(rec)) << 20
+		}
+		use[runtime.ID(idPrefix+key)] = n
+	}
+	return use, errors.Join(errs...)
+}

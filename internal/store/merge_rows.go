@@ -8,77 +8,6 @@ import (
 	"github.com/3xDevOps/Aether/internal/domain"
 )
 
-// memberRefs classifies every column that holds a member id. A merge
-// moves the reassigned ones, what grants access or carries the person's
-// ongoing work, a run's account and home included since reopening it
-// reads them, to the survivor. History keeps naming the absorbed
-// member, which stays as a tombstone that GetMember refuses; member.list
-// maps it to the survivor for display. A new column is added here, or
-// TestMergeClassifiesEveryMemberColumn fails.
-var memberRefs = map[string]bool{
-	"account_shares.owner_member_id":           true,
-	"account_shares.grantee_member_id":         true,
-	"connectors.member_id":                     true,
-	"member_devices.member_id":                 true,
-	"member_identities.member_id":              true,
-	"member_merges.survivor_id":                true,
-	"members.merged_into":                      true,
-	"memory.pinned_by":                         true,
-	"push_subscriptions.member_id":             true,
-	"run_steerers.member_id":                   true,
-	"runs.member_id":                           true,
-	"runs.account_member_id":                   true,
-	"runs.home_member_id":                      true,
-	"runs.requested_account_member_id":         true,
-	"runs.children_set_by":                     true,
-	"run_children.owner_member_id":             true,
-	"run_children.account_member_id":           true,
-	"child_settings.member_id":                 false,
-	"schedules.member_id":                      true,
-	"slack_links.member_id":                    true,
-	"audit.member_id":                          false,
-	"assistant_sessions.member_id":             false,
-	"assistant_prompt_keys.member_id":          false,
-	"watches.member_id":                        true,
-	"notify_prefs.member_id":                   true,
-	"watch_pr_snapshots.member_id":             false,
-	"watches.wait_ended_by":                    false,
-	"member_preferences.member_id":             true,
-	"assistant_settings.member_id":             false,
-	"launch_defaults.member_id":                false,
-	"launch_defaults.account_member_id":        true,
-	"events.actor_id":                          false,
-	"evidence_packets.origin_id":               false,
-	"evidence_packets.owner_id":                false,
-	"evidence_packets.creator_id":              false,
-	"evidence_staging.origin_id":               false,
-	"evidence_staging.creator_id":              false,
-	"handoff_outbox.actor_id":                  false,
-	"handoff_outbox.from_member_id":            false,
-	"handoff_outbox.to_member_id":              false,
-	"harness_definitions.member_id":            false,
-	"identity_invitations.member_id":           false,
-	"identity_invitations.created_by":          false,
-	"member_devices.approved_by":               false,
-	"member_merge_codes.member_id":             false,
-	"member_merge_codes.proposed_by":           false,
-	"member_merge_codes.keep_settings_of":      false,
-	"member_merges.absorbed_id":                false,
-	"member_terminals.member_id":               false,
-	"memory.author_member_id":                  false,
-	"profile_heads.member_id":                  false,
-	"profile_snapshots.member_id":              false,
-	"room_messages.actor_id":                   false,
-	"room_messages.decided_by":                 false,
-	"run_account_segments.account_member_id":   false,
-	"run_cost_deletions.member_id":             false,
-	"run_launch_receipts.member_id":            false,
-	"run_costs.member_id":                      false,
-	"server_update_state.pending_requested_by": false,
-	"workspace_budgets.updated_by":             false,
-	"workspace_mirrors.github_member_id":       false,
-}
-
 // mergeRows moves what grants access or carries ongoing work from absorbed
 // to survivor, tombstones absorbed, and gives the survivor its credentials
 // and role. Account shares absorbed granted go with its discarded
@@ -109,11 +38,19 @@ func mergeRows(ctx context.Context, tx *sql.Tx, survivor, absorbed domain.Member
 		{"subsessions", `UPDATE run_children SET account_member_id = ?2 WHERE account_member_id = ?1`},
 		{"subsession fallback order", `UPDATE run_children SET fallback_order = replace(fallback_order, '"' || ?1 || '"', '"' || ?2 || '"')
 			WHERE instr(fallback_order, '"' || ?1 || '"') > 0`},
+		{"subsession accounts off", `UPDATE child_settings SET off = replace(off, '"' || ?1 || '"', '"' || ?2 || '"')
+			WHERE instr(off, '"' || ?1 || '"') > 0`},
 		{"schedules", `UPDATE schedules SET member_id = ?2 WHERE member_id = ?1`},
 		{"push subscriptions", `UPDATE push_subscriptions SET member_id = ?2 WHERE member_id = ?1`},
 		{"watches", `UPDATE watches SET member_id = ?2, idempotency_key = NULL, version = version + 1 WHERE member_id = ?1`},
 		{"notification settings", `UPDATE OR IGNORE notify_prefs SET member_id = ?2 WHERE member_id = ?1`},
 		{"notification settings", `DELETE FROM notify_prefs WHERE member_id = ?1`},
+		{"notification digest", `UPDATE OR IGNORE push_digest SET member_id = ?2,
+			key = CASE WHEN source = 'run' AND key LIKE ?1 || '|%' THEN ?2 || substr(key, length(?1) + 1) ELSE key END
+			WHERE member_id = ?1`},
+		{"notification digest", `DELETE FROM push_digest WHERE member_id = ?1`},
+		{"pushed cards", `UPDATE OR IGNORE push_cards SET member_id = ?2 WHERE member_id = ?1`},
+		{"pushed cards", `DELETE FROM push_cards WHERE member_id = ?1`},
 		{"assistant preferences", `UPDATE member_preferences SET member_id = ?2 WHERE member_id = ?1`},
 		{"launch defaults", `INSERT OR REPLACE INTO launch_defaults (member_id, agent, agents, account_member_id, fallback_policy, fallback_order, source, updated_at)
 			SELECT l.member_id, l.agent, l.agents, CASE l.account_member_id WHEN ?1 THEN ?2 ELSE l.account_member_id END, l.fallback_policy,
@@ -122,6 +59,9 @@ func mergeRows(ctx context.Context, tx *sql.Tx, survivor, absorbed domain.Member
 				l.source, l.updated_at
 			FROM launch_defaults l WHERE l.account_member_id = ?1 OR instr(l.fallback_order, '"' || ?1 || '"') > 0`},
 		{"memory pins", `UPDATE memory SET pinned_by = ?2 WHERE pinned_by = ?1`},
+		{"workspace grants", `UPDATE OR IGNORE workspace_grants SET member_id = ?2 WHERE member_id = ?1`},
+		{"workspace grants", `DELETE FROM workspace_grants WHERE member_id = ?1`},
+		{"workspace owners", `UPDATE workspaces SET owner_member_id = ?2 WHERE owner_member_id = ?1`},
 		{"connectors", `UPDATE connectors SET member_id = ?2 WHERE member_id = ?1`},
 		{"slack links", `UPDATE OR IGNORE slack_links SET member_id = ?2 WHERE member_id = ?1`},
 		{"slack links", `DELETE FROM slack_links WHERE member_id = ?1`},

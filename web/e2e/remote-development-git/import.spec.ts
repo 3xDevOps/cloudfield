@@ -4,7 +4,7 @@ import type { Workspace, WorkspaceMirrorResult } from '../../src/lib/types'
 // A real credential-free HTTPS repository reachable by the server. No route
 // interception, fabricated mirror response, or local repository link is used.
 // Remote fetch uses the scenario deadline, not the short rendering timeout.
-const source = process.env.AETHER_E2E_GIT_SOURCE_URL ?? 'https://github.com/3xDevOps/Aether.git'
+const source = process.env.AETHER_E2E_GIT_SOURCE_URL ?? 'https://github.com/3xDevOps/cloudfield.git'
 const branch = process.env.AETHER_E2E_GIT_SOURCE_BRANCH ?? 'main'
 
 test('remote import retains the initial candidate until an administrator adopts its reviewed commit and generation', async ({ page, aether }) => {
@@ -29,7 +29,7 @@ test('remote import retains the initial candidate until an administrator adopts 
   expect(pending.status).toBe('pending')
   expect(pending.observed_commit).toMatch(/^[a-f0-9]{40,64}$/)
   expect(pending.accepted_commit ?? '').toBe('')
-  await dialog.getByRole('button', { name: 'Continue to Repository' }).click()
+  await dialog.getByRole('button', { name: 'Continue to workspace settings' }).click()
   const mirror = page.getByRole('dialog', { name: 'Workspace Source' })
   await expect(mirror).toContainText(pending.observed_commit!)
   await mirror.getByRole('button', { name: 'Adopt candidate', exact: true }).click()
@@ -60,7 +60,7 @@ test('a failed fetch keeps the created workspace and repair flow instead of repl
   expect(workspaces.map((entry) => entry.name)).toEqual(['retained-fetch-failure'])
   await expect(result).toContainText(workspaces[0].id)
   await expect(dialog.getByRole('button', { name: 'Import repository', exact: true })).toHaveCount(0)
-  await dialog.getByRole('button', { name: 'Continue to Repository' }).click()
+  await dialog.getByRole('button', { name: 'Continue to workspace settings' }).click()
   const mirror = page.getByRole('dialog', { name: 'Workspace Source' })
   await expect(mirror).toBeVisible()
   await expect(mirror.getByRole('button', { name: /Verify|Refresh/ })).toBeEnabled()

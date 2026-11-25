@@ -28,6 +28,8 @@ import (
 
 	"github.com/3xDevOps/Aether/internal/domain"
 	"github.com/3xDevOps/Aether/internal/events"
+	"github.com/3xDevOps/Aether/internal/permissions"
+	"github.com/3xDevOps/Aether/internal/protocol"
 	"github.com/3xDevOps/Aether/internal/store"
 )
 
@@ -50,6 +52,7 @@ var (
 type Store interface {
 	GetRun(ctx context.Context, id domain.RunID) (*domain.Run, error)
 	GetWorkspace(ctx context.Context, id domain.WorkspaceID) (*domain.Workspace, error)
+	GetMember(ctx context.Context, id domain.MemberID) (*domain.Member, error)
 	ListMembers(ctx context.Context) ([]*domain.Member, error)
 	store.PushStore
 }
@@ -73,6 +76,15 @@ type Config struct {
 	Client *http.Client
 	// Quiet overrides DefaultQuiet.
 	Quiet time.Duration
+	// Recovered closes once the scheduler has reconciled the runs a restart
+	// found; digests wait for it, since a session not yet recovered reads
+	// as needing nothing. Nil starts them at once.
+	Recovered <-chan struct{}
+	// Now replaces time.Now when the quiet period, levels, digests and
+	// bursts read it, for tests. The waits stay on real timers, which
+	// re-read Now when they fire, so a clock that jumps does not wake a
+	// waiting notice early.
+	Now func() time.Time
 }
 
 // Need is a need as a Sink hears of it: Key identifies it, Body is the
@@ -110,7 +122,12 @@ type Service struct {
 	key     *vapidKey
 	client  *http.Client
 	quiet   time.Duration
+	now     func() time.Time
 	sink    Sink
+	sources map[string]DigestSource
+	cards   Cards
+	// recovered is Config.Recovered.
+	recovered <-chan struct{}
 	// started is when Start ran. A run standing in a need it entered before
 	// then was announced, if at all, by the server before this one.
 	started time.Time
@@ -128,6 +145,14 @@ type Service struct {
 	// notices holds, for every admin with a workspace's budget notice
 	// to send, what hands its watcher the state to announce.
 	notices map[budgetKey]chan budgetDue
+	bursts  map[domain.MemberID][]*burst
+	// cardPushes has a lock of its own: reading cards and pushing them
+	// must not hold mu.
+	cardPushes cardPushes
+	// digestRetry and digestAttempts hold, for a member whose digest no
+	// device took, when to try again and how often it was tried.
+	digestRetry    map[domain.MemberID]time.Time
+	digestAttempts map[domain.MemberID]int
 }
 
 type notification struct {
@@ -137,12 +162,22 @@ type notification struct {
 	Workspace string `json:"workspace,omitempty"`
 	// Clear replaces the run's notification quietly: its need ended.
 	Clear bool `json:"clear,omitempty"`
-	// Notice marks an assistant's news, which a clear leaves shown.
+	// Notice marks news, which a clear leaves shown: an assistant's, a
+	// digest or a burst's summary.
 	Notice bool `json:"notice,omitempty"`
+	// Quiet replaces a notification without alerting again.
+	Quiet bool `json:"quiet,omitempty"`
+	// Card is the assistant card a notification asks to decide, which the
+	// device approves or declines with its own sign-in.
+	Card string `json:"card,omitempty"`
 }
 
-// clearedBody is what a device shows in place of a need that ended.
-const clearedBody = "No longer needs you"
+// clearedBody is what a device shows in place of a need that ended, and
+// clearedFinishedBody in place of a finished session's notice.
+const (
+	clearedBody         = "No longer needs you"
+	clearedFinishedBody = "No longer awaiting review"
+)
 
 // New loads the server's VAPID key, creating it on first use; call Start to
 // begin consuming events.
@@ -160,6 +195,9 @@ func New(cfg Config) (*Service, error) {
 	if cfg.Quiet <= 0 {
 		cfg.Quiet = DefaultQuiet
 	}
+	if cfg.Now == nil {
+		cfg.Now = time.Now
+	}
 	return &Service{
 		store:   cfg.Store,
 		bus:     cfg.Bus,
@@ -168,10 +206,20 @@ func New(cfg Config) (*Service, error) {
 		key:     key,
 		client:  cfg.Client,
 		quiet:   cfg.Quiet,
-		sink:    noSink{},
-		active:  map[domain.MemberID]time.Time{},
-		watched: map[domain.RunID]chan struct{}{},
-		notices: map[budgetKey]chan budgetDue{},
+		now:     cfg.Now,
+
+		recovered: cfg.Recovered,
+		sink:      noSink{},
+		sources:   map[string]DigestSource{},
+		active:    map[domain.MemberID]time.Time{},
+		watched:   map[domain.RunID]chan struct{}{},
+		notices:   map[budgetKey]chan budgetDue{},
+		bursts:    map[domain.MemberID][]*burst{},
+
+		cardPushes: cardPushes{cards: map[domain.MemberID]map[string]announced{}, held: map[domain.MemberID]bool{}, members: map[domain.MemberID]*sync.Mutex{}},
+
+		digestRetry:    map[domain.MemberID]time.Time{},
+		digestAttempts: map[domain.MemberID]int{},
 	}, nil
 }
 
@@ -185,7 +233,7 @@ func (s *Service) Start(ctx context.Context) error {
 	sub, err := s.bus.Subscribe(ctx, events.SubscribeOptions{Filter: events.Filter{Types: []events.Type{
 		events.TypeRunStatus, events.TypeRunInput, events.TypeRunOutcomeSeen,
 		events.TypeRunReview, events.TypeRunMode, events.TypeTimeline, events.TypeRunDeleted,
-		events.TypeRunArchived, events.TypeBudget,
+		events.TypeRunArchived, events.TypeBudget, events.TypeAssistantCards,
 	}}})
 	if err != nil {
 		return fmt.Errorf("push: subscribe: %w", err)
@@ -194,7 +242,14 @@ func (s *Service) Start(ctx context.Context) error {
 	s.mu.Lock()
 	s.sub, s.stop, s.started = sub, cancel, time.Now()
 	s.mu.Unlock()
+	restored := s.restoreCards(ctx)
 	s.wg.Go(func() { s.consume(loopCtx, sub) })
+	s.wg.Go(func() { s.digests(loopCtx) })
+	s.wg.Go(func() {
+		for _, member := range restored {
+			s.cardsChanged(loopCtx, member)
+		}
+	})
 	return nil
 }
 
@@ -233,6 +288,8 @@ func (s *Service) consume(ctx context.Context, sub events.Subscription) {
 			switch p := e.Payload.(type) {
 			case events.BudgetPayload:
 				s.budget(ctx, e, p)
+			case events.AssistantCardsPayload:
+				s.wg.Go(func() { s.cardsChanged(ctx, p.MemberID) })
 			default:
 				s.changed(ctx, e.RunID)
 			}
@@ -286,6 +343,11 @@ func (s *Service) watch(ctx context.Context, id domain.RunID, signal chan struct
 			if devicesErr != nil {
 				slog.Warn("push: a device was not told a need ended; trying again later", "run", id, "in", retry, "error", devicesErr)
 			}
+			// A summary is updated only once this need's own clear went
+			// out, so a clear retried later never lands over it.
+			if devicesErr == nil {
+				s.unjoin(ctx, string(id), "")
+			}
 			if err = s.sink.Clear(ctx, id); err != nil {
 				slog.Warn("push: the sink did not clear a need; trying again later", "run", id, "in", retry, "error", err)
 			}
@@ -316,8 +378,11 @@ func (s *Service) watch(ctx context.Context, id domain.RunID, signal chan struct
 				wake = time.After(retry)
 			}
 			for key := range announced {
-				if !strings.HasPrefix(key, string(n.member)+"|") {
+				if former, _, _ := strings.Cut(key, "|"); former != string(n.member) {
 					delete(announced, key)
+					// The former owner's summary no longer shows the
+					// run's need; other members' watches keep theirs.
+					s.unjoin(ctx, string(id), domain.MemberID(former))
 				}
 			}
 			// Clearing can take a while: announce what the run needs then.
@@ -329,7 +394,7 @@ func (s *Service) watch(ctx context.Context, id domain.RunID, signal chan struct
 			announced[n.key] = true
 		}
 		if n != nil && (!announced[n.key] || shown != "" && shown != n.key) {
-			if wait := time.Until(s.freeAt(n.member)); wait > 0 {
+			if wait := s.freeAt(n.member).Sub(s.now()); wait > 0 {
 				wake = time.After(wait)
 			} else if !announced[n.key] && s.offer(ctx, run, n, offered) {
 				continue
@@ -357,9 +422,13 @@ func (s *Service) watch(ctx context.Context, id domain.RunID, signal chan struct
 // deleted.
 func (s *Service) withdraw(ctx context.Context, run *domain.Run, id domain.RunID, offered map[[2]string]domain.MemberID, keep domain.MemberID) error {
 	devices := map[domain.MemberID]map[string]bool{}
+	body := clearedFinishedBody
 	for device, member := range offered {
 		if member == "" || member == keep {
 			continue
+		}
+		if !strings.HasPrefix(device[0], string(member)+"|finished:") {
+			body = clearedBody
 		}
 		if devices[member] == nil {
 			devices[member] = map[string]bool{}
@@ -369,7 +438,7 @@ func (s *Service) withdraw(ctx context.Context, run *domain.Run, id domain.RunID
 	if len(devices) == 0 {
 		return nil
 	}
-	message := notification{Body: clearedBody, Run: string(id), Clear: true}
+	message := notification{Body: body, Run: string(id), Clear: true}
 	if run != nil {
 		message.Title = RunTitle(run)
 	}
@@ -429,8 +498,17 @@ func (s *Service) unwatch(id domain.RunID, signal chan struct{}) bool {
 }
 
 // offer sends n to the next device of its member that has not had it, and
-// reports whether there was one.
+// reports whether there was one. Before the first device it routes n by
+// the member's level: queued for their digest, or joined to their last
+// push as its summary, n has no device to offer it to.
 func (s *Service) offer(ctx context.Context, run *domain.Run, n *need, offered map[[2]string]domain.MemberID) bool {
+	started := false
+	for device := range offered {
+		started = started || device[0] == n.key
+	}
+	if !started && s.routed(ctx, run, n) {
+		return false
+	}
 	payload, err := json.Marshal(notification{Title: RunTitle(run), Body: n.body, Run: string(run.ID)})
 	if err != nil {
 		slog.Warn("push: encode notification", "run", run.ID, "error", err)
@@ -458,6 +536,45 @@ func (s *Service) offer(ctx context.Context, run *domain.Run, n *need, offered m
 	return false
 }
 
+// routed queues n for its member's digest, or sends it as the summary of
+// their last push, and reports whether it did either. One it could not
+// queue is pushed at once.
+func (s *Service) routed(ctx context.Context, run *domain.Run, n *need) bool {
+	kind := needKind(run, n)
+	if kind != KindNeed {
+		// The run stopped asking: a question it had in a summary goes.
+		s.unjoin(ctx, string(run.ID), "")
+	}
+	prefs, err := s.store.GetNotifyPrefs(ctx, n.member)
+	if err != nil {
+		slog.Warn("push: read notification settings; pushing at once", "member", n.member, "error", err)
+		prefs.Level = protocol.NotifyAll
+	}
+	// Routed as of when the need began and as of now, the later of the
+	// two: one that began in quiet hours stays theirs though the
+	// member's dashboard held it past their end, and one held into them
+	// waits for them to end.
+	now := s.now()
+	route := RouteOf(prefs, kind, now)
+	if !n.since.IsZero() && n.since.Before(now) {
+		route = max(route, RouteOf(prefs, kind, n.since))
+	}
+	if route != RouteNow {
+		if err = s.queueNeed(ctx, run, n, kind, route == RouteOvernight); err == nil {
+			return true
+		}
+		slog.Warn("push: queue a notification for the digest; pushing at once", "run", run.ID, "error", err)
+	}
+	sum, err := s.join(n.member, string(run.ID), string(run.ID), topicOf(string(run.ID)), RunTitle(run), n.body, kind == KindNeed, false)
+	if err != nil || sum == nil {
+		return false
+	}
+	if results, err := s.deliverPayload(ctx, n.member, sum.payload, sum.topic, sum.urgency); failed(results, err) {
+		slog.Warn("push: summary not delivered", "member", n.member, "error", errors.Join(err, deviceErrors(results)))
+	}
+	return true
+}
+
 // read is the run as it stands and what it needs, if anything, in the
 // dashboard's order: its own requests, then its status. The need is keyed to the member it waits on: a run handed to
 // another member is theirs to hear about.
@@ -470,13 +587,35 @@ func (s *Service) read(ctx context.Context, id domain.RunID) (*domain.Run, *need
 		return nil, nil, err
 	}
 	n := needOf(run, s.runs.PendingInputs(id), s.runs.Paused(id))
-	if n != nil {
-		n.member = run.MemberID
+	if n == nil {
+		return run, nil, nil
 	}
-	if n != nil {
-		n.key = string(n.member) + "|" + n.key
+	n.member = run.MemberID
+	n.key = string(n.member) + "|" + n.key
+	reaches, err := s.reachesRun(ctx, n.member, run)
+	if err != nil || !reaches {
+		return run, nil, err
 	}
 	return run, n, nil
+}
+
+// reachesRun reports whether member still reaches every workspace of run:
+// a need it raised is no longer theirs to hear once they lost one.
+func (s *Service) reachesRun(ctx context.Context, member domain.MemberID, run *domain.Run) (bool, error) {
+	m, err := s.store.GetMember(ctx, member)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	actor := permissions.ActorOf(m)
+	for _, ws := range append([]domain.WorkspaceID{run.WorkspaceID}, run.ExtraWorkspaces()...) {
+		if !actor.Reaches(ws) {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func topicOf(id string) string {
@@ -489,7 +628,7 @@ func topicOf(id string) string {
 // the run's need leaves shown; one with a check is a need, which it replaces.
 func (s *Service) Notify(ctx context.Context, member domain.MemberID, title, body string, run domain.RunID, urgent bool, flush <-chan struct{}, current func(context.Context) bool) error {
 	for flushed := false; !flushed; {
-		wait := time.Until(s.freeAt(member))
+		wait := s.freeAt(member).Sub(s.now())
 		if wait <= 0 {
 			break
 		}
@@ -586,7 +725,7 @@ func (s *Service) Test(ctx context.Context, member domain.MemberID, endpoint str
 	if err != nil {
 		return err
 	}
-	payload, err := json.Marshal(notification{Title: "Aether", Body: "Notifications work on this device."})
+	payload, err := json.Marshal(notification{Title: "Cloudfield", Body: "Notifications work on this device."})
 	if err != nil {
 		return err
 	}
@@ -596,7 +735,7 @@ func (s *Service) Test(ctx context.Context, member domain.MemberID, endpoint str
 // Active records that member is using a dashboard now.
 func (s *Service) Active(member domain.MemberID) {
 	s.mu.Lock()
-	s.active[member] = time.Now()
+	s.active[member] = s.now()
 	s.mu.Unlock()
 }
 

@@ -14,18 +14,27 @@ import (
 	"os/signal"
 	"path/filepath"
 	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
+	"github.com/3xDevOps/Aether/internal/acpkeeper"
 	"github.com/3xDevOps/Aether/internal/codexapp"
 	"github.com/3xDevOps/Aether/internal/coordcli"
 	edgeagent "github.com/3xDevOps/Aether/internal/edge/agent"
 	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
+	"github.com/3xDevOps/Aether/internal/envname"
+	"github.com/3xDevOps/Aether/internal/guest/helper"
 	"github.com/3xDevOps/Aether/internal/harness"
+	"github.com/3xDevOps/Aether/internal/runtime"
+	"github.com/3xDevOps/Aether/internal/runtime/vm"
 	"github.com/3xDevOps/Aether/internal/scheduler"
+	"github.com/3xDevOps/Aether/internal/selfupdate"
 	"github.com/3xDevOps/Aether/internal/server"
 	"github.com/3xDevOps/Aether/internal/serversetup"
+	"github.com/3xDevOps/Aether/internal/serverunit"
 	"github.com/3xDevOps/Aether/internal/serverupdate"
 	"github.com/3xDevOps/Aether/internal/version"
 )
@@ -40,7 +49,18 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "dev-exec" {
 		os.Exit(devExec(os.Args[2:]))
 	}
-	if filepath.Base(os.Args[0]) == "aether-internal" {
+	if len(os.Args) > 1 && os.Args[1] == acpkeeper.Command {
+		os.Exit(acpKeeper(os.Args[2:]))
+	}
+	// A session VM's kernel starts the binary as /init with this argument.
+	if len(os.Args) > 1 && os.Args[1] == "guest" {
+		os.Exit(helper.Main(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == vm.MonitorCommand {
+		exitOn(vm.Monitor(os.Args[2:]))
+		return
+	}
+	if name := filepath.Base(os.Args[0]); name == "aether-internal" || name == "cloudfield-internal" {
 		os.Exit(coordcli.Main(os.Args[1:]))
 	}
 	if len(os.Args) < 2 {
@@ -60,7 +80,7 @@ func main() {
 		return
 	}
 	switch cmd {
-	case "version":
+	case "version", "--version":
 		fmt.Println("aether-server", version.String())
 	case "mcp":
 		exitOn(mcp(args))
@@ -91,8 +111,14 @@ func main() {
 		exitOn(edgeCmd(args))
 	case "device":
 		exitOn(deviceCmd(args))
+	case "member":
+		exitOn(memberCmd(args))
 	case "slack":
 		exitOn(slackCmd(args))
+	case "dictation":
+		exitOn(dictationCmd(args))
+	case "vm":
+		exitOn(vmCmd(args))
 	default:
 		_, _ = fmt.Fprintf(os.Stderr, "aether-server: unknown command %q\n", cmd)
 		usage(os.Stderr)
@@ -107,51 +133,84 @@ func isHelpFlag(arg string) bool {
 // These commands take a subcommand before their flags, so without this
 // --help would be read as the subcommand or a device code.
 var subcommandHelp = map[string]string{
-	"config": `usage: aether-server config show [--config <file>]
-       aether-server config path [--config <file>]
-       aether-server config set <key> <value> [--config <file>]
-       aether-server config edit [--config <file>]
+	"config": `usage: cloudfield-server config show [--config <file>]
+       cloudfield-server config path [--config <file>]
+       cloudfield-server config set <key> <value> [--config <file>]
+       cloudfield-server config edit [--config <file>]
 
 show or change the options file serve reads; set and edit need root
 
 example:
-  sudo aether-server config set edge-access approved-devices
+  sudo cloudfield-server config set edge-access approved-devices
 `,
-	"device": `usage: aether-server device approve <code> [--config <file>]
-       aether-server device review [--config <file>]
+	"device": `usage: cloudfield-server device approve <code> [--config <file>]
+       cloudfield-server device review [--config <file>]
 
 approve a member's edge device by the code it shows, or review and revoke devices
 
 example:
-  sudo aether-server device approve <code>
+  sudo cloudfield-server device approve <code>
 `,
-	"edge": `usage: aether-server edge status [--config <file>]
-       aether-server edge claim-code [--admin <member-id>] [--config <file>]
-       aether-server edge trust [--config <file>]
-       aether-server edge leave [--config <file>]
+	"dictation": `usage: cloudfield-server dictation install [--gpu] [--config <file>]
+       cloudfield-server dictation status [--config <file>]
+       cloudfield-server dictation remove [--config <file>]
+
+download the pinned speech-to-text engine and model into <data-dir>/dictation,
+report what is installed, or delete it (docs/dictation.md)
+
+example:
+  sudo cloudfield-server dictation install
+`,
+	"edge": `usage: cloudfield-server edge status [--config <file>]
+       cloudfield-server edge claim-code [--admin <member-id>] [--config <file>]
+       cloudfield-server edge trust [--config <file>]
+       cloudfield-server edge move <address> [--config <file>]
+       cloudfield-server edge leave [--config <file>]
 
 status prints the edge, access policy, server id and connection; it exits 0
 when connected, 3 when not connected yet, and 1 on an error
 
+move sets edge-url to another address of the same edge, once that edge
+speaks edge protocol 6 or later and announces both addresses; links and
+connectors made at the old address keep working (docs/edge.md)
+
 example:
-  sudo aether-server edge status
+  sudo cloudfield-server edge status
 `,
-	"slack": `usage: aether-server slack setup [--config <file>]
-       aether-server slack remove [--config <file>]
+	"member": `usage: cloudfield-server member role <member-id> <viewer|collaborator|admin|super_admin> [--config <file>]
+
+set a member's role in the store; the last super admin is never demoted, and
+a member who owns workspaces stays an admin
+
+example:
+  sudo cloudfield-server member role <member-id> super_admin
+`,
+	"slack": `usage: cloudfield-server slack setup [--config <file>]
+       cloudfield-server slack remove [--config <file>]
 
 store the Slack bot's tokens, which setup asks for with input hidden or reads
 from stdin, or remove them; restart the server to apply either (docs/slack.md)
 
 example:
-  sudo aether-server slack setup
+  sudo cloudfield-server slack setup
 `,
-	"sysbox": `usage: aether-server sysbox status
-       aether-server sysbox install
+	"vm": `usage: cloudfield-server vm install [--config <file>]
+
+check for /dev/kvm, then install what sessions in VMs need: qemu-img,
+mkfs.ext4, virtiofsd, iptables, nft and ip with apt-get when missing, Cloud
+Hypervisor, and this release's guest kernel at vm-kernel
+(docs/install.md#hosts-for-vm-sessions)
+
+example:
+  sudo cloudfield-server vm install
+`,
+	"sysbox": `usage: cloudfield-server sysbox status
+       cloudfield-server sysbox install
 
 report or install the Sysbox runtime that lets sessions start their own Docker daemon
 
 example:
-  sudo aether-server sysbox install
+  sudo cloudfield-server sysbox install
 `,
 }
 
@@ -170,7 +229,7 @@ func exitOn(err error) {
 }
 
 func usage(w io.Writer) {
-	_, _ = fmt.Fprintf(w, `usage: aether-server <command>
+	_, _ = fmt.Fprintf(w, `usage: cloudfield-server <command>
 
 commands:
   serve    run the server
@@ -181,13 +240,16 @@ commands:
   update   [--version <tag>]: replace the server and aether binaries and restart the service
   edge     status | claim-code | trust | leave
   device   approve <code> | review: approve or revoke members' edge devices
+  member   role <member-id> <role>: set a member's role
   slack    setup | remove: store or remove the Slack bot's tokens (docs/slack.md)
-  version  print the version
+  dictation install [--gpu] | status | remove: speech-to-text for the dashboard (docs/dictation.md)
+  vm       install: what sessions in VMs need (session-runtime vm)
+  version  print the version (also --version)
 
 serve and install options, which are also the config file keys:
   %s
 
-run "aether-server serve -h" for what each one does, or keep them in %s
+run "cloudfield-server serve -h" for what each one does, or keep them in %s
 `, joinOptions(), serversetup.DefaultConfigPath)
 }
 
@@ -211,11 +273,14 @@ type serveOptions struct {
 	pollInterval         *time.Duration
 	checkoutTTL          *time.Duration
 	runContainerTTL      *time.Duration
+	runSleepAfter        *time.Duration
 	minFreeDisk          *int64
 	runCPUs              *runCPUValue
 	runMemory            *runCountValue
 	runPids              *runCountValue
 	containerRuntime     *string
+	sessionRuntime       *string
+	vmKernel             *string
 }
 
 // serveFlags declares the server options on fs. It is the single definition
@@ -231,26 +296,26 @@ func serveFlags(fs *flag.FlagSet) *serveOptions {
 		"serve the dashboard over HTTPS on this host's tailnet addresses at this port (0 = off; 443 makes it https://<magicdns-name>/)")
 	o.standardImage = fs.String("standard-image", server.DefaultStandardImage,
 		"published standard environment image recommended at workspace creation")
-	browserImage := os.Getenv("AETHER_BROWSER_IMAGE")
+	browserImage := envname.Getenv("AETHER_BROWSER_IMAGE")
 	if browserImage == "" {
 		browserImage = server.DefaultBrowserImage
 	}
 	o.browserImage = fs.String("browser-image", browserImage,
 		"versioned browser companion image or digest (AETHER_BROWSER_IMAGE; never untagged or latest)")
-	o.agentDefinitions = fs.String("agent-definitions", os.Getenv("AETHER_AGENT_DEFINITIONS"),
+	o.agentDefinitions = fs.String("agent-definitions", envname.Getenv("AETHER_AGENT_DEFINITIONS"),
 		`JSON object of administrator-owned agent definitions (AETHER_AGENT_DEFINITIONS)`)
 	o.tailnetAutoJoin = fs.Bool("tailnet-auto-join", false, "register unknown tailnet identities as approved members instead of pending")
 	o.tailnetRequireKey = fs.Bool("tailnet-require-key", false, "additionally require pubkey verification on tailnet connections")
 	o.edgeURL = new(edgeURLValue)
 	fs.Var(o.edgeURL, "edge-url",
-		"edge that relays SSH for members without a direct or tailnet route (empty = off; aether-server setup offers "+edgeagent.DefaultURL+")")
+		"edge that relays SSH for members without a direct or tailnet route (empty = off; cloudfield-server setup offers "+edgeagent.DefaultURL+")")
 	o.edgeAccess = new(accessPolicyValue(edgeproto.PolicyApprovedDevices))
 	fs.Var(o.edgeAccess, "edge-access",
 		"who may reach this server through the edge: account (signing in with GitHub is enough) or approved-devices "+
 			"(each new device waits until a person approves it); changed only on this host")
 	o.edgeReviewer = fs.Bool("edge-reviewer", false,
 		"let a connector authorized by the edge's reviewer account, for an app directory's review, act as the member an admin binds it to "+
-			"with aether member link --reviewer; needs edge-access account; changed only on this host")
+			"with cloudfield member link --reviewer; needs edge-access account; changed only on this host")
 	o.conflictCoordination = fs.Bool("conflict-coordination", true, "let overlapping sessions exchange coordination messages")
 	o.agentUpdate = fs.Bool("agent-update", true, "update a shipped agent installed in the member home before launching it")
 	o.stallThreshold = fs.Duration("stall-threshold", 0,
@@ -263,7 +328,10 @@ func serveFlags(fs *flag.FlagSet) *serveOptions {
 	o.checkoutTTL = fs.Duration("checkout-ttl", 0,
 		"how long a finished session's checkout is kept before it is garbage-collected (0 = 72h, negative = never)")
 	o.runContainerTTL = fs.Duration("run-container-ttl", 0,
-		"how long explicitly closed Standard and Enhanced session containers are retained (0 = 168h, negative = no retention)")
+		"how long explicitly closed Standard and Enhanced session containers are retained (0 = 720h, or 168h for a container that stays frozen in memory; negative = no retention)")
+	o.runSleepAfter = fs.Duration("run-sleep-after", scheduler.DefaultRunSleepAfter,
+		"how long an idle Enhanced session of an agent that can resume its conversation keeps its container running before it is stopped until its next use (0 = never); "+
+			"unset, an idle session VM is saved to disk after "+scheduler.DefaultVMSleepAfter.String()+" instead")
 	o.minFreeDisk = fs.Int64("min-free-disk", 0,
 		"free-byte reserve on data/runtime filesystems (0 = automatic 5-20GiB, negative = disable disk admission)")
 	o.runCPUs = new(runCPUValue)
@@ -275,10 +343,19 @@ func serveFlags(fs *flag.FlagSet) *serveOptions {
 	o.containerRuntime = fs.String("container-runtime", server.DefaultContainerRuntime,
 		"OCI runtime for run and member environment containers: auto uses sysbox-runc when Docker has it registered "+
 			"(Docker inside sessions without --privileged), otherwise the daemon default; any other value is used as given, e.g. runc to opt out")
+	o.sessionRuntime = fs.String("session-runtime", server.SessionRuntimeDocker,
+		"where sessions run: docker, or vm for one Cloud Hypervisor VM per session (needs /dev/kvm, cloud-hypervisor and virtiofsd; "+
+			"every other container stays on Docker)")
+	o.vmKernel = fs.String("vm-kernel", server.DefaultVMKernel, "the guest kernel session VMs boot with -session-runtime vm")
 	return o
 }
 
 func serve(args []string) error {
+	host := serverupdate.HostProcess()
+	if host.UnderSystemd() {
+		lowerOOMScore()
+		linkSecondNames(host)
+	}
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	configPath := fs.String("config", serversetup.DefaultConfigPath,
 		"options file; values here lose to flags passed on the command line")
@@ -300,12 +377,17 @@ func serve(args []string) error {
 	// The last update's swap record is read before the store opens: a
 	// start that has to roll back must do so before this binary migrates
 	// the database.
-	host := serverupdate.HostProcess()
 	stateDir := server.UpdateStateDir(*o.dataDir)
 	trial, err := serverupdate.Boot(stateDir, host)
 	if err != nil {
 		return err
 	}
+	vmSleepAfter := scheduler.DefaultVMSleepAfter
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "run-sleep-after" {
+			vmSleepAfter = *o.runSleepAfter
+		}
+	})
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	ctx, stopServe := context.WithCancelCause(ctx)
@@ -349,12 +431,16 @@ func serve(args []string) error {
 		PollInterval:     *o.pollInterval,
 		CheckoutTTL:      *o.checkoutTTL,
 		RunContainerTTL:  *o.runContainerTTL,
+		RunSleepAfter:    *o.runSleepAfter,
+		VMSleepAfter:     vmSleepAfter,
 		MinFreeDiskBytes: *o.minFreeDisk,
 		RunCPULimit:      float64(*o.runCPUs),
 		RunMemoryBytes:   int64(*o.runMemory),
 		RunPidsLimit:     int64(*o.runPids),
 
 		ContainerRuntime: *o.containerRuntime,
+		SessionRuntime:   *o.sessionRuntime,
+		VMKernel:         *o.vmKernel,
 		SysboxInstaller:  true,
 	})
 	if err != nil {
@@ -376,10 +462,24 @@ func serve(args []string) error {
 		})
 		defer timer.Stop()
 	}
+	// Under its unit, before any VM starts. Files that cannot be installed
+	// fail an update's trial, which rolls back to the binary whose files
+	// are still in place; on any other start the server keeps serving.
+	if *o.sessionRuntime == server.SessionRuntimeVM && os.Getenv("INVOCATION_ID") != "" {
+		vmCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+		err = ensureVMFiles(vmCtx, *o.vmKernel)
+		cancel()
+		if err != nil && !deadline.IsZero() {
+			return trial.Fail(errors.Join(fmt.Errorf("install this release's files for session VMs: %w", err), srv.Close()))
+		}
+		if err != nil {
+			slog.Error("session VMs: could not install this release's Cloud Hypervisor and guest kernel; `sudo aether-server vm install` retries", "error", err)
+		}
+	}
 	go commitWhenServing(ctx, srv, trial)
 	_, _ = fmt.Fprintf(os.Stderr, "aether-server %s serving SSH on %s (data dir %s)%s\n",
 		version.String(), *o.addr, *o.dataDir, from)
-	warnIfUnitOutdated()
+	go warnIfUnitOutdated()
 	err = srv.Run(ctx)
 	drainMu.Lock()
 	argv := drained
@@ -449,9 +549,57 @@ func applyConfigFile(fs *flag.FlagSet, path string, optional bool) (string, erro
 	return " from " + path, nil
 }
 
-// warnIfUnitOutdated tells the operator when the installed systemd unit is not
-// the one this release ships. It only reads the unit: a daemon-reload has
-// host-wide effects, so applying the new unit stays the operator's call.
+// linkSecondNames gives this binary, the aether beside it and, as root,
+// the unit their second names when they are missing. An update from a
+// release that predates them leaves only the real files, so the first
+// start of this release under systemd completes the layout. Binaries it
+// may not link are left silently: a unit that runs as another user would
+// repeat the warning at every start, and `aether-server update` and
+// `aether update` name the command. Every process a session runs from
+// this binary dispatches before serve and links nothing.
+func linkSecondNames(host serverupdate.Host) {
+	if self, err := os.Executable(); err == nil {
+		if self, err = filepath.EvalSymlinks(self); err == nil {
+			_ = selfupdate.Link(filepath.Dir(self))
+		}
+	}
+	created, err := host.LinkUnit()
+	if err != nil {
+		slog.Warn("could not give the systemd unit its second name", "error", err)
+	}
+	// Only the start that made the link names the reload; the server never
+	// reloads systemd itself, because a daemon-reload has host-wide effects.
+	if created {
+		go func() {
+			if !serverunit.AliasResolves() {
+				slog.Warn("systemd does not resolve " + serverunit.Alias + " to " + serversetup.ServiceName +
+					" yet; it does after: sudo systemctl daemon-reload")
+			}
+		}()
+	}
+}
+
+// lowerOOMScore lowers the server's OOM score to the unit's -500, which a
+// unit from before that line, left in place by updates, does not set. A
+// lower score an operator set stays.
+func lowerOOMScore() {
+	score, err := os.ReadFile("/proc/self/oom_score_adj")
+	current := 0
+	if err == nil {
+		current, err = strconv.Atoi(strings.TrimSpace(string(score)))
+	}
+	if err == nil && current > -500 {
+		err = os.WriteFile("/proc/self/oom_score_adj", []byte("-500"), 0)
+	}
+	if err != nil {
+		slog.Warn("could not set the server's OOM score; a host out of memory may kill it", "error", err)
+	}
+}
+
+// warnIfUnitOutdated tells the operator when the installed systemd unit, or
+// the slice beside it on a host where Docker uses that slice, is not the one
+// this release ships. It only reads them: a daemon-reload has host-wide
+// effects, so applying them stays the operator's call.
 func warnIfUnitOutdated() {
 	if os.Getenv("INVOCATION_ID") == "" {
 		return
@@ -465,5 +613,29 @@ func warnIfUnitOutdated() {
 		slog.Warn("the installed systemd unit differs from this release's; apply it with: "+
 			"sudo aether-server install --sysbox=false && sudo systemctl daemon-reload && sudo systemctl restart "+serversetup.ServiceName,
 			"unit", serversetup.UnitPath)
+		return
+	}
+	outdated, err = serversetup.SliceOutdated(serversetup.UnitPath)
+	if err != nil {
+		slog.Warn("could not check whether the systemd slice is up to date", "error", err)
+		return
+	}
+	if !outdated {
+		return
+	}
+	docker, err := runtime.NewDocker()
+	if err != nil {
+		slog.Warn("could not check whether Docker places session containers in the systemd slice", "error", err)
+		return
+	}
+	defer func() { _ = docker.Close() }()
+	applies, err := docker.UsesSessionSlice(context.Background())
+	if err != nil {
+		slog.Warn("could not check whether Docker places session containers in the systemd slice", "error", err)
+		return
+	}
+	if applies {
+		slog.Warn("the systemd slice for session containers is missing or differs from this release's; apply it, without a restart, with: " +
+			"sudo aether-server install --sysbox=false && sudo systemctl daemon-reload")
 	}
 }

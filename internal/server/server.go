@@ -4,6 +4,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -29,17 +30,21 @@ import (
 	"github.com/3xDevOps/Aether/internal/evidence"
 	"github.com/3xDevOps/Aether/internal/fallback"
 	"github.com/3xDevOps/Aether/internal/gitengine"
+	"github.com/3xDevOps/Aether/internal/guest"
 	"github.com/3xDevOps/Aether/internal/harness"
 	"github.com/3xDevOps/Aether/internal/memberhome"
+	"github.com/3xDevOps/Aether/internal/ompbroker"
 	"github.com/3xDevOps/Aether/internal/preference"
 	"github.com/3xDevOps/Aether/internal/profile"
 	"github.com/3xDevOps/Aether/internal/ptyhost"
 	"github.com/3xDevOps/Aether/internal/quota"
 	"github.com/3xDevOps/Aether/internal/reachability"
 	"github.com/3xDevOps/Aether/internal/runtime"
+	"github.com/3xDevOps/Aether/internal/runtime/vm"
 	"github.com/3xDevOps/Aether/internal/scheduler"
 	"github.com/3xDevOps/Aether/internal/secretstore"
 	"github.com/3xDevOps/Aether/internal/servergw"
+	"github.com/3xDevOps/Aether/internal/serversetup"
 	"github.com/3xDevOps/Aether/internal/serverupdate"
 	"github.com/3xDevOps/Aether/internal/signing"
 	"github.com/3xDevOps/Aether/internal/sshd"
@@ -162,7 +167,9 @@ type Config struct {
 	// with no tool running. CheckoutTTL is how long a finished run's
 	// checkout is kept before the GC reclaims it (negative disables GC).
 	// RunContainerTTL retains exact containers after TUI Close, or an agent-finished
-	// TUI run (negative disables retention).
+	// TUI run (negative disables retention). RunSleepAfter stops an idle
+	// Enhanced session's container after that long, and VMSleepAfter saves
+	// an idle session VM (zero never does).
 	// MinFreeDiskBytes overrides the automatic data/runtime filesystem
 	// reserve. Negative disables disk admission, not host memory checks.
 	StallThreshold   time.Duration
@@ -171,6 +178,8 @@ type Config struct {
 	PollInterval     time.Duration
 	CheckoutTTL      time.Duration
 	RunContainerTTL  time.Duration
+	RunSleepAfter    time.Duration
+	VMSleepAfter     time.Duration
 	MinFreeDiskBytes int64
 	// Run budgets apply to runs and member environments. Zero selects
 	// automatic up-to-8 CPUs, 8 GiB memory, and 4096 processes.
@@ -183,6 +192,14 @@ type Config struct {
 	// it registered, empty means the Docker daemon default.
 	ContainerRuntime string
 
+	// SessionRuntime is where sessions run: SessionRuntimeDocker (empty
+	// means the same) or SessionRuntimeVM, one Cloud Hypervisor VM each.
+	// Every other container stays on Docker either way.
+	SessionRuntime string
+	// VMKernel is the guest kernel session VMs boot; empty means
+	// DefaultVMKernel.
+	VMKernel string
+
 	// SysboxInstaller lets admins install Sysbox on the host through the
 	// control channel. Only cmd/aether-server sets it; an embedded server
 	// never runs host installers.
@@ -191,6 +208,11 @@ type Config struct {
 
 const DefaultContainerRuntime = runtime.RuntimeAuto
 
+const (
+	SessionRuntimeDocker = "docker"
+	SessionRuntimeVM     = "vm"
+)
+
 // Server is the assembled Aether server.
 type Server struct {
 	db        *store.DB
@@ -198,7 +220,7 @@ type Server struct {
 	bus       *events.InProc
 	rt        runtime.Runtime
 	docker    *runtime.Docker // set only when the server constructed it
-	egress    *egress.Proxy   // set with docker
+	egress    []*egress.Proxy // set with docker: Docker's, then the VM runtime's
 	git       *gitengine.Engine
 	pty       *ptyhost.Host
 	sched     *scheduler.Scheduler
@@ -304,11 +326,46 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 	}
 
 	s.rt = cfg.Runtime
+	var vmCheckouts *gitengine.VM
+	var ompBrokers *ompbroker.Manager
 	if s.rt == nil {
 		if s.docker, err = runtime.NewDocker(runtime.WithContainerRuntime(cfg.ContainerRuntime)); err != nil {
 			return nil, err
 		}
 		s.rt = s.docker
+		switch cfg.SessionRuntime {
+		case "", SessionRuntimeDocker:
+		case SessionRuntimeVM:
+			var members []*domain.Member
+			if members, err = s.db.ListMembers(ctx); err != nil {
+				return nil, fmt.Errorf("server: list members: %w", err)
+			}
+			ids := make([]string, len(members))
+			for i, m := range members {
+				ids[i] = string(m.ID)
+			}
+			checkouts := func(ctx context.Context, path, target string, uid, gid int) (string, guest.Checkout, bool, error) {
+				return s.git.VMCheckoutDisk(ctx, path, target, uid, gid)
+			}
+			vms, images, vmErr := newVMRuntime(ctx, cfg.DataDir, cmp.Or(cfg.VMKernel, DefaultVMKernel), cfg.BrowserImage, ids, s.docker, checkouts)
+			if vmErr != nil {
+				return nil, vmErr
+			}
+			s.rt, vmCheckouts = vms, &gitengine.VM{Disks: images, Guest: vms.Git}
+			uid, gid, userErr := serversetup.EnsureSystemUser(ctx, serversetup.OMPBrokerUser)
+			if userErr != nil {
+				slog.Warn("server: no user for omp's auth broker; omp in session VMs cannot sign in", "error", userErr)
+			}
+			ompBrokers = ompbroker.NewManager(ompbroker.Config{
+				Binary: serversetup.OMPBroker.Path, Dir: filepath.Join(cfg.DataDir, "omp-broker"),
+				DataDir: cfg.DataDir, Units: vm.SystemdUnits{}, Unbind: vm.Unbind, UID: uid, GID: gid,
+				Bind: func(target, base, subpath string, onDiskUID, onDiskGID int) error {
+					return vm.BindBeneath(target, base, subpath, vm.IDMap{OnDiskUID: onDiskUID, OnDiskGID: onDiskGID, ShownUID: uid, ShownGID: gid})
+				},
+			})
+		default:
+			return nil, fmt.Errorf("server: session-runtime %q: use %s or %s", cfg.SessionRuntime, SessionRuntimeDocker, SessionRuntimeVM)
+		}
 	}
 	removeAgentFiles := runtime.Remover(s.rt, cfg.StandardImage)
 
@@ -318,6 +375,7 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 		Bus:            s.bus,
 		EventLog:       s.log,
 		RemoveCheckout: removeAgentFiles,
+		VM:             vmCheckouts,
 		OnBranchPublished: func(run domain.RunID, commit string, at time.Time) {
 			if s.sched == nil {
 				return
@@ -376,7 +434,10 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 	if rerr := os.RemoveAll(filepath.Join(cfg.DataDir, "toolenv")); rerr != nil {
 		return nil, fmt.Errorf("server: remove legacy toolenv: %w", rerr)
 	}
-	s.control = control.New(control.Config{OnHolderChange: s.publishController})
+	s.control = control.New(control.Config{OnHolderChange: s.publishController,
+		PersistSurface: func(run domain.RunID, surface control.Surface, lease control.SurfaceLease) error {
+			return s.sched.PersistDevelopmentLease(run, surface, lease)
+		}})
 	secrets := secretstore.New(filepath.Join(cfg.DataDir, "workspace-secrets"))
 	mem, err := newMemory(Deps{Store: s.db, Bus: s.bus, Events: s.log})
 	if err != nil {
@@ -384,8 +445,13 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 	}
 	var egressProxy scheduler.EgressProxy
 	if s.docker != nil {
-		s.egress = egress.New(s.docker, s.db, s.bus)
-		egressProxy = s.egress
+		s.egress = []*egress.Proxy{egress.New(s.docker, s.db, s.bus)}
+		// Docker's proxy keeps serving the sessions started on Docker before
+		// session-runtime was vm.
+		if vms, ok := s.rt.(*vm.Runtime); ok {
+			s.egress = append(s.egress, egress.New(vms, s.db, s.bus))
+		}
+		egressProxy = s.egress[len(s.egress)-1]
 	}
 	var waitConditions scheduler.WaitConditions = storeWaitConditions{s.db}
 	if cfg.WaitConditions != nil {
@@ -403,6 +469,7 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 		StateDir:       filepath.Join(cfg.DataDir, "scheduler"),
 		DataDir:        cfg.DataDir,
 		Homes:          homes,
+		OMPBrokers:     ompBrokers,
 		Signing:        s.signing,
 		Memory:         mem,
 		RemoveAll:      removeAgentFiles,
@@ -415,6 +482,7 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 		// What this build ships with, so the scheduler can tell a member
 		// whether a server update would move their environment image.
 		DefaultStandardImage: DefaultStandardImage,
+		DefaultBrowserImage:  DefaultBrowserImage,
 		Harnesses:            cfg.Harnesses,
 		StallThreshold:       cfg.StallThreshold,
 		FirstEventGrace:      cfg.FirstEventGrace,
@@ -422,6 +490,8 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 		PollInterval:         cfg.PollInterval,
 		CheckoutTTL:          cfg.CheckoutTTL,
 		RunContainerTTL:      cfg.RunContainerTTL,
+		RunSleepAfter:        cfg.RunSleepAfter,
+		VMSleepAfter:         cfg.VMSleepAfter,
 		MinFreeBytes:         cfg.MinFreeDiskBytes,
 		RunCPULimit:          cfg.RunCPULimit,
 		RunMemoryBytes:       cfg.RunMemoryBytes,
@@ -487,13 +557,17 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 		DeleteWorkspace:   workspaces.Delete,
 	}
 	s.assistant = assistant.New(assistant.Config{
-		Dir:         filepath.Join(cfg.DataDir, "assistant"),
-		Store:       s.db,
-		Runs:        s.sched,
-		Host:        s.sched,
-		Caller:      func(member domain.MemberID) tools.Caller { return s.ssh.AssistantLocal(member) },
-		Bus:         s.bus,
-		Preferences: preferences,
+		Dir:             filepath.Join(cfg.DataDir, "assistant"),
+		Store:           s.db,
+		Runs:            s.sched,
+		Host:            s.sched,
+		Caller:          func(member domain.MemberID) tools.Caller { return s.ssh.AssistantLocal(member) },
+		Bus:             s.bus,
+		Preferences:     preferences,
+		ConnectorScopes: sshd.ConnectorScopes,
+		ConnectorGrant: func(ctx context.Context, member domain.MemberID, id string) ([]string, error) {
+			return s.ssh.ConnectorGrantScopes(ctx, member, id)
+		},
 	})
 	sshCfg.Services.Assistant = s.assistant
 	sshCfg.Services.Preferences = preferences
@@ -694,10 +768,13 @@ func (s *Server) Run(ctx context.Context) error {
 	if err := s.startServices(ctx); err != nil {
 		return errors.Join(err, s.Close())
 	}
-	if s.egress != nil {
-		// Not fatal: only egress-limited runs need the proxy, and the next
-		// launch of one tries again.
-		if err := s.egress.Resume(ctx); err != nil {
+	if err := s.assistant.Resume(ctx); err != nil {
+		return errors.Join(err, s.Close())
+	}
+	// Not fatal: only egress-limited runs need the proxy, and the next
+	// launch of one tries again.
+	for _, proxy := range s.egress {
+		if err := proxy.Resume(ctx); err != nil {
 			slog.Warn("server: resume the egress proxy", "error", err)
 		}
 	}
@@ -725,6 +802,32 @@ func (s *Server) Run(ctx context.Context) error {
 			s.serveWeb(runCtx)
 		}()
 	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		workspaceOf := func(ctx context.Context, key domain.RunID) (domain.WorkspaceID, error) {
+			parent, _ := domain.ParentRun(key)
+			run, err := s.db.GetRun(ctx, parent)
+			if errors.Is(err, store.ErrNotFound) {
+				return "", nil
+			}
+			if err != nil {
+				return "", err
+			}
+			if run.ID == key {
+				return run.WorkspaceID, nil
+			}
+			for _, extra := range run.Extras {
+				if extra.Key == key {
+					return extra.WorkspaceID, nil
+				}
+			}
+			return "", nil
+		}
+		if err := s.git.ShareDetachedHistory(runCtx, workspaceOf); err != nil && runCtx.Err() == nil {
+			slog.Warn("server: share diff history with workspace repositories", "error", err)
+		}
+	}()
 	go func() {
 		defer wg.Done()
 		if err := s.sched.Start(runCtx); err != nil {
@@ -783,8 +886,8 @@ func (s *Server) Close() error {
 		}
 		// Registered services publish events, so they stop before the bus.
 		closeAll = append(closeAll, s.closeServices()...)
-		if s.egress != nil {
-			closeAll = append(closeAll, s.egress.Close)
+		for _, proxy := range s.egress {
+			closeAll = append(closeAll, proxy.Close)
 		}
 		if s.git != nil {
 			closeAll = append(closeAll, s.git.Close)

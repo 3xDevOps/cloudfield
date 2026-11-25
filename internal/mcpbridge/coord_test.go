@@ -111,7 +111,7 @@ func newCoordStack(t *testing.T) *coordStack {
 
 	svc, err := coord.New(coord.Config{
 		Dir:   filepath.Join(dir, "coord"),
-		Store: db,
+		Store: storetest.Unscoped{DB: db},
 		Mail:  db,
 		Bus:   bus,
 		Peers: livePeers{a: runs[0], b: runs[1]},
@@ -180,7 +180,7 @@ func TestBridgeAgainstRealCoordination(t *testing.T) {
 	if statusA.Unread != 1 {
 		t.Fatalf("unread = %d, want 1", statusA.Unread)
 	}
-	var inbox inboxOutput
+	var inbox protocol.CoordInboxResult
 	callTool(t, agentA, toolInbox, nil, &inbox)
 	if len(inbox.Messages) != 1 || inbox.Messages[0].Body != body ||
 		inbox.Messages[0].FromRunID != string(stack.runB) {
@@ -229,7 +229,7 @@ func TestRealBatchRedeliversWhenTheResponseIsLost(t *testing.T) {
 	}
 
 	revived := session(t, stack.sockA, nil)
-	var inbox inboxOutput
+	var inbox protocol.CoordInboxResult
 	callTool(t, revived, toolInbox, nil, &inbox)
 	if len(inbox.Messages) != 1 || inbox.Messages[0].Body != body {
 		t.Fatalf("redelivered inbox = %+v, want the same batch", inbox)
@@ -269,7 +269,7 @@ func TestRealCancelledInboxNeverLosesAMessage(t *testing.T) {
 		delivered += messageCount(t, res)
 	}
 
-	var inbox inboxOutput
+	var inbox protocol.CoordInboxResult
 	callTool(t, agentA, toolInbox, nil, &inbox)
 	delivered += len(inbox.Messages)
 
@@ -283,7 +283,7 @@ func messageCount(t *testing.T, res *mcp.CallToolResult) int {
 	if res.IsError {
 		return 0
 	}
-	var out inboxOutput
+	var out protocol.CoordInboxResult
 	decodeStructured(t, res, &out)
 	return len(out.Messages)
 }
@@ -316,7 +316,7 @@ func TestBridgeGuidesAgentsBeforeAnyCall(t *testing.T) {
 	stack := newCoordStack(t)
 	cs := session(t, stack.sockB, nil)
 	instructions := cs.InitializeResult().Instructions
-	if !strings.HasPrefix(instructions, "You are Aether session "+string(stack.runB)) || strings.Contains(instructions, "Aether hosts this session") {
+	if !strings.HasPrefix(instructions, "You are Cloudfield session "+string(stack.runB)) || strings.Contains(instructions, "Cloudfield hosts this session") {
 		t.Fatalf("instructions must be the session's role card alone: %q", instructions)
 	}
 	tools, err := cs.ListTools(t.Context(), nil)
@@ -375,7 +375,7 @@ func TestBridgeInstructionsFollowTheRun(t *testing.T) {
 		{name: "standard", capabilities: []string{protocol.MethodCoordStatus, protocol.MethodCoordReport},
 			want: []string{"- needs-input: only", "never report waiting"}, refuse: []string{"- waiting"}},
 		{name: "card in system prompt", enhanced: "1", card: "1", capabilities: []string{protocol.MethodCoordStatus, protocol.MethodCoordReport},
-			want: []string{coordhooks.Brief(coordhooks.Guide{Role: coordhooks.RoleInteractive, Wake: true})}, refuse: []string{"You are Aether session"}},
+			want: []string{coordhooks.Brief(coordhooks.Guide{Role: coordhooks.RoleInteractive, Wake: true})}, refuse: []string{"You are Cloudfield session"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv(coordtransport.BackgroundEnv, tc.background)

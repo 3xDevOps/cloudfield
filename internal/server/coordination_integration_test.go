@@ -259,7 +259,7 @@ func (e *coordEnv) seedMember(ctx context.Context, t *testing.T, srv *coordServe
 		DisplayName: name,
 		PublicKey:   string(ssh.MarshalAuthorizedKey(key.PublicKey())),
 		Color:       color,
-		Role:        domain.RoleAdmin,
+		Role:        domain.RoleSuperAdmin,
 	}
 	if err := srv.srv.Store().CreateMember(ctx, m); err != nil {
 		t.Fatalf("seed member %s: %v", name, err)
@@ -389,7 +389,7 @@ func (e *coordEnv) assertRegistered(t *testing.T, run protocol.Run) {
 	if slices.Contains(c.spec.Command, "--mcp-config") {
 		t.Errorf("run %s received obsolete automatic MCP config: %v", run.ID, c.spec.Command)
 	}
-	for _, target := range []string{coordtransport.MountDir, coordtransport.BinaryPath, coordtransport.CLIPath} {
+	for _, target := range []string{coordtransport.MountDir, coordtransport.BinaryPath, coordtransport.CLIPath, coordtransport.CloudfieldCLIPath} {
 		m, ok := c.mount(target)
 		if !ok || !m.ReadOnly {
 			t.Fatalf("run %s has no read-only mount at %s: %+v", run.ID, target, c.spec.Mounts)

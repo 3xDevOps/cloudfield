@@ -106,7 +106,7 @@ func TestPreferenceUpdateOrdersAndAborts(t *testing.T) {
 // neither the database file nor its write-ahead log.
 func TestForgottenPreferenceTextLeavesTheFiles(t *testing.T) {
 	t.Parallel()
-	path := filepath.Join(t.TempDir(), "aether.db")
+	path := templateDBPath(t)
 	db, err := Open(path)
 	if err != nil {
 		t.Fatal(err)
@@ -165,7 +165,7 @@ func TestRemovingAMemberDeletesTheirPreferences(t *testing.T) {
 	ctx := context.Background()
 	alice := mustCreateMember(t, db).ID
 	p := addPreference(t, db, alice, "Prefer table output")
-	if err := db.DeleteMember(ctx, alice); err != nil {
+	if err := db.DeleteMember(ctx, alice, ""); err != nil {
 		t.Fatal(err)
 	}
 	var count int
@@ -187,7 +187,7 @@ func TestRefusedRemovalKeepsThePreferences(t *testing.T) {
 		t.Fatal(err)
 	}
 	var recorded []string
-	err := db.DeleteMemberWithPreferences(ctx, alice.ID, func(ids []string) error {
+	err := db.DeleteMemberWithPreferences(ctx, alice.ID, "", func(ids []string) error {
 		recorded = ids
 		return nil
 	})
@@ -266,7 +266,7 @@ func TestRemovingAMemberRecordsItsConnectorsAndTombstonesPreferences(t *testing.
 		t.Fatal(err)
 	}
 	var recorded []string
-	if err := db.DeleteMemberWithPreferences(ctx, alice.ID, func(ids []string) error {
+	if err := db.DeleteMemberWithPreferences(ctx, alice.ID, "", func(ids []string) error {
 		recorded = ids
 		return nil
 	}); err != nil {

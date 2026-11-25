@@ -30,7 +30,7 @@ export const actionTone: Record<ActionState, Tone> = {
   unfinished: 'interrupted',
 }
 
-export const actionStateWord: Record<ActionState, string> = {
+const actionStateWord: Record<ActionState, string> = {
   approval: 'Waiting for your approval',
   running: 'Running',
   done: 'Done',
@@ -70,7 +70,9 @@ const quiet = new Set<ActionState>(['declined', 'expired', 'withdrawn'])
 export function stateLine(action: AssistantAction, background: boolean): string {
   return [
     background ? 'Working in the background' : actionStateWord[action.state],
-    action.approval === 'approved' ? 'approved by you' : action.approval === 'auto-approved' ? 'auto-approved' : undefined,
+    action.approval === 'approved' ? 'approved by you'
+      : action.approval === 'auto-approved' ? 'auto-approved'
+        : action.approval?.startsWith('rule ') ? `approved by your rule ${action.approval.slice(5)}`.trim() : undefined,
   ].filter(Boolean).join(' · ')
 }
 
@@ -125,7 +127,7 @@ export function useBackground(action: AssistantAction): boolean {
   })
 }
 
-export function retryDraft(action: AssistantAction, names: ActionNames): void {
+function retryDraft(action: AssistantAction, names: ActionNames): void {
   const retry = `Retry: ${actionSummary({ ...action, state: 'failed' }, names)}`
   const typed = useStore.getState().assistantDraft.trimEnd()
   useStore.getState().setAssistantDraft(typed ? `${typed}\n\n${retry}` : retry)

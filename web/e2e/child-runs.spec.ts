@@ -16,9 +16,21 @@ import { dockerReachable } from './harness/server'
 import { memberID, seedWorkspace } from './harness/setup'
 
 test.skip(!dockerReachable(), 'the sessions need a reachable Docker daemon')
+test.use({ colorScheme: 'dark' })
 
 const launchTimeout = 3 * 60 * 1000
 const shots = process.env.AETHER_E2E_SHOTS
+
+// A report shows once the agent's turn has ended, so this agent works for two seconds and then idles.
+const idleAgent = `i=0
+until /opt/aether/aether-server report pi --json '{"state":"working"}' >/dev/null; do
+  i=$((i + 1))
+  if [ "$i" -ge 300 ]; then exit 1; fi
+  sleep 0.1
+done
+sleep 2
+/opt/aether/aether-server report pi --json '{"state":"waiting","reason":"agent idle"}'
+sleep 600`
 
 type Run = { id: string; status: string; reason?: string; parent_run_id?: string; child_purpose?: string }
 
@@ -52,8 +64,8 @@ test('an agent starts a child run that its owner sees, follows and stops', async
   await page.goto(settings.toString())
   const toggle = page.getByRole('checkbox', { name: 'Let my sessions start subsessions' })
   await expect(toggle).toBeChecked({ timeout: 30_000 })
-  const saved = await alice.api.rpc<{ enabled: boolean }>('child.settings', {})
-  expect(saved).toEqual({ enabled: true })
+  const saved = await alice.api.rpc<{ enabled: boolean; off: unknown[] }>('child.settings', {})
+  expect(saved).toMatchObject({ enabled: true, off: [] })
   if (shots) await page.screenshot({ path: `${shots}/settings.png` })
 
   const { run: parent } = await alice.api.rpc<{ run: Run }>('run.launch', {
@@ -111,4 +123,83 @@ test('an agent starts a child run that its owner sees, follows and stops', async
   await alice.api.rpc('run.kill', { run_id: parent.id })
   await expect.poll(async () => (await runStatus(alice, second.run_id)).status, { timeout: 60_000 }).toBe('completed')
   expect((await runStatus(alice, second.run_id)).reason).toContain(`stopped by parent session ${parent.id}`)
+})
+
+test('the sidebar folds a parent session’s subsessions and leaves out the finished ones', async ({ page, aether }) => {
+  test.setTimeout(8 * 60 * 1000)
+  const alice = await aether.member('alice')
+  const repo = await aether.seedRepo('sidebar-subsessions-project')
+  await seedWorkspace(alice, aether.server.addr, repo, 'sidebar-subsessions-project')
+  const aliceID = await memberID(alice)
+  aether.installAgent(aliceID, 'claude', idleAgent)
+  // The children are Claude sessions: a Codex shim has no app-server, and its failure replaces a reported state.
+  const claudeHome = path.join(aether.server.memberHome(aliceID), '.claude')
+  mkdirSync(claudeHome, { recursive: true })
+  writeFileSync(path.join(claudeHome, '.credentials.json'), '{}\n')
+  const { workspaces } = await alice.api.rpc<{ workspaces: { id: string }[] }>('workspace.list')
+  const { run: parent } = await alice.api.rpc<{ run: Run }>('run.launch', {
+    workspace_id: workspaces[0].id, task: 'Coordinate the sidebar check', harness: 'claude', mode: 'tui',
+  })
+  await waitForCoordCLI(parent.id, aether.server.dataDir)
+  const child = runCoordCLI<{ run_id: string }>(parent.id, [
+    'subsession', 'start', '--harness', 'claude', '--mode', 'standard', '--purpose', 'Sidebar fold check',
+    '--task', 'Wait for the parent to stop this check.', '--idempotency-key', 'sidebar-fold-check',
+  ])
+  await expect.poll(async () => (await runStatus(alice, child.run_id)).status, { timeout: launchTimeout }).toBe('running')
+
+  const parentURL = new URL(alice.url)
+  parentURL.searchParams.set('run', parent.id)
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto(parentURL.toString())
+  const sidebar = page.getByRole('navigation', { name: 'Cloudfield' }).getByRole('region', { name: 'Sessions' })
+  const fold = () => sidebar.getByRole('button', { name: /^(Collapse|Expand) 1 subsession$/ })
+  const childRow = sidebar.getByRole('button', { name: /Sidebar fold check/ })
+  await expect(fold()).toHaveAttribute('aria-expanded', 'true')
+  await expect(childRow).toBeVisible()
+  if (shots) await page.screenshot({ path: `${shots}/sidebar-subsessions-expanded.png` })
+  await fold().click()
+  await expect(fold()).toHaveAttribute('aria-expanded', 'false')
+  await expect(childRow).toBeHidden()
+  if (shots) await page.screenshot({ path: `${shots}/sidebar-subsessions-folded.png` })
+  await fold().click()
+  await expect(childRow).toBeVisible()
+
+  const start = (purpose: string, key: string) => runCoordCLI<{ run_id: string }>(parent.id, [
+    'subsession', 'start', '--harness', 'claude', '--mode', 'standard', '--purpose', purpose,
+    '--task', 'Wait for the parent to stop this check.', '--idempotency-key', key,
+  ])
+  const failing = start('Sidebar failing check', 'sidebar-failing-check')
+  const asking = start('Sidebar asking check', 'sidebar-asking-check')
+  for (const started of [failing, asking]) {
+    await expect.poll(async () => (await runStatus(alice, started.run_id)).status, { timeout: launchTimeout }).toBe('running')
+    await waitForCoordCLI(started.run_id, aether.server.dataDir)
+  }
+  await waitForCoordCLI(child.run_id, aether.server.dataDir)
+  for (const purpose of ['Sidebar fold check', 'Sidebar failing check', 'Sidebar asking check']) {
+    await expect(sidebar.getByRole('button', { name: new RegExp(`^Turn ended · ${purpose}`) })).toBeVisible({ timeout: 60_000 })
+  }
+  runCoordCLI(child.run_id, ['report', '--outcome', 'success', '--summary', 'The fold works.', '--idempotency-key', 'fold-verdict'])
+  runCoordCLI(failing.run_id, ['report', '--outcome', 'failure', '--summary', 'The check could not run.', '--idempotency-key', 'failing-verdict'])
+  runCoordCLI(asking.run_id, ['report', '--outcome', 'needs-input', '--summary', 'Which width next?', '--idempotency-key', 'asking-question'])
+
+  // A finished subsession leaves the list; one that failed or asks stays, and the parent still lists all three.
+  const finished = sidebar.getByRole('button', { name: '1 finished', exact: true })
+  await expect(finished).toBeVisible({ timeout: 60_000 })
+  await expect(childRow).toBeHidden()
+  await expect(sidebar.getByRole('button', { name: /Sidebar failing check/ })).toBeVisible()
+  await expect(sidebar.getByRole('button', { name: /Sidebar asking check/ })).toBeVisible()
+  const section = page.getByRole('region', { name: 'Subsessions' })
+  for (const purpose of ['Sidebar fold check', 'Sidebar failing check', 'Sidebar asking check']) {
+    await expect(section.getByText(purpose)).toBeVisible({ timeout: 60_000 })
+  }
+  await expect(section.getByText('The fold works.')).toBeVisible()
+  if (shots) await page.screenshot({ path: `${shots}/sidebar-subsessions-finished.png` })
+  await finished.click()
+  await expect(childRow).toBeVisible()
+  await sidebar.getByRole('button', { name: 'Hide finished', exact: true }).click()
+  await expect(childRow).toBeHidden()
+
+  await page.setViewportSize({ width: 768, height: 900 })
+  if (shots) await page.screenshot({ path: `${shots}/sidebar-subsessions-narrow.png` })
+  await alice.api.rpc('run.kill', { run_id: parent.id })
 })

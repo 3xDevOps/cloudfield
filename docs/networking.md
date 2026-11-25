@@ -1,6 +1,6 @@
 # Networking and identity
 
-A client (the `aether` CLI or the dashboard) must reach the server's SSH port,
+A client (the `cloudfield` CLI or the dashboard) must reach the server's SSH port,
 `:2222` by default. Git, the control channel, terminals and `ssh` into a session
 ([terminal.md](terminal.md#ssh-and-editors)) all travel over that one
 connection. The server opens no HTTP port unless you set `web-port`
@@ -14,7 +14,7 @@ flowchart LR
     C[Client] -->|tailnet| T[Tailscale]
     C -->|GitHub sign-in| E[Edge relay]
     C -->|SSH key| L["LAN, VPN or public IP"]
-    T --> S["Aether server :2222"]
+    T --> S["Cloudfield server :2222"]
     E -->|server dials out| S
     L --> S
 ```
@@ -23,9 +23,9 @@ flowchart LR
 
 | Path | You need | Who can join | Each person installs | Trade-offs |
 | --- | --- | --- | --- | --- |
-| [Tailscale](#tailscale) | The server on a tailnet | Anyone on the tailnet, once an admin approves | Tailscale and `aether` | No keys or invite codes. Enables the dashboard for phones. Identity is the device owner |
-| [An edge](#through-an-edge) | A GitHub account. No open port | Anyone invited by GitHub account | `aether` | Works behind any NAT. A third party relays traffic but cannot read SSH. No server-hosted dashboard |
-| [LAN, VPN or public IP](#plain-lan-vpn-or-a-cloud-box) | A reachable `host:2222` | Anyone with an invite code | `aether` | You manage SSH keys and invite codes. Keep the port behind a firewall |
+| [Tailscale](#tailscale) | The server on a tailnet | Anyone on the tailnet, once an admin approves | Tailscale and `cloudfield` | No keys or invite codes. Enables the dashboard for phones. Identity is the device owner |
+| [An edge](#through-an-edge) | A GitHub account. No open port | Anyone invited by GitHub account | `cloudfield` | Works behind any NAT. A third party relays traffic but cannot read SSH. No server-hosted dashboard |
+| [LAN, VPN or public IP](#plain-lan-vpn-or-a-cloud-box) | A reachable `host:2222` | Anyone with an invite code | `cloudfield` | You manage SSH keys and invite codes. Keep the port behind a firewall |
 
 All paths feed one member list, so a tailnet server can also hand an invite
 code to someone outside the tailnet. With no preference, use Tailscale. When
@@ -48,7 +48,7 @@ or invite code.
 
    Give your team the name it prints, such as `my-server.tailnet-name.ts.net`.
 
-2. Run `sudo aether-server setup` ([install.md](install.md#first-boot)). It
+2. Run `sudo cloudfield-server setup` ([install.md](install.md#first-boot)). It
    finds tailscaled, names its tailnet and asks `Use Tailscale to reach this
    server`. Enter answers yes; no turns tailnet sign-in off. Setup ends by
    printing the host name to link to.
@@ -58,7 +58,7 @@ or invite code.
 
    ```sh
    sudo tailscale up
-   aether link my-server
+   cloudfield link my-server
    ```
 
    A bare host name uses port `:2222`. The first link saves the host key in
@@ -75,21 +75,21 @@ The server asks the local Tailscale daemon who is on the other end of each
 connection, as Tailscale SSH does. The tailnet login becomes the member, and the
 part before the `@` becomes the display name.
 
-- The first tailnet identity to link a fresh server becomes its admin. Until
-  then, a first admin SSH key is taken only over the tailnet or from the
+- The first tailnet identity to link a fresh server becomes its super admin. Until
+  then, a first super admin SSH key is taken only over the tailnet or from the
   server itself, so a port 2222 open beyond the tailnet cannot be used to take
-  admin first.
-- Everyone after that joins as a pending collaborator. `aether link` prints
+  super admin first.
+- Everyone after that joins as a pending collaborator. `cloudfield link` prints
   `linked to <server> as <name> (collaborator, pending); an admin runs: aether
   member approve <member-id>`, and every other command fails with `membership
   pending admin approval; ask an admin to run: aether member approve
-  <member-id>` until one does. Roles change with `aether member role`
+  <member-id>` until one does. Roles change with `cloudfield member role`
   ([teams.md](teams.md)).
 - `--tailnet-auto-join` skips approval, for teams whose tailnet already is the
   team boundary.
 - Removing someone from the tailnet, or denying them the server in your
   Tailscale ACLs, locks them out of this path. Their other sign-ins stay until
-  `aether member remove <member-id>`. [Single sign-on](teams.md#single-sign-on)
+  `cloudfield member remove <member-id>`. [Single sign-on](teams.md#single-sign-on)
   covers signing the tailnet in through your identity provider.
 
 ### What an attacker can and cannot do
@@ -111,7 +111,7 @@ while tailscaled is down.
 | Message on the client | What happened |
 | --- | --- |
 | `tailnet identity unavailable; key authentication required` | The connection did not arrive over the tailnet, or tailscaled is down. Routine on LAN connections |
-| `tailnet login <x> must also present a registered SSH key` | `--tailnet-require-key` is on, as `aether-server setup` leaves it when you answer no to its tailnet question. To undo: `sudo aether-server config set tailnet-require-key false`, then `sudo systemctl restart aether-server` |
+| `tailnet login <x> must also present a registered SSH key` | `--tailnet-require-key` is on, as `cloudfield-server setup` leaves it when you answer no to its tailnet question. To undo: `sudo cloudfield-server config set tailnet-require-key false`, then `sudo systemctl restart aether-server` |
 
 The server's user must be able to read `/var/run/tailscale/tailscaled.sock`.
 The shipped unit runs as root. For another user, run `sudo tailscale set
@@ -122,16 +122,19 @@ The shipped unit runs as root. For another user, run `sudo tailscale set
 An edge is a relay on the public internet. The server and the client both dial
 out to it, so neither needs an open port, a tailnet or a copied SSH key, and
 people sign in with GitHub. The project runs one at
-`https://edge.onaether.dev`. `aether-server setup` turns it on when the host has
+`https://edge.cloudfield.ai`. `cloudfield-server setup` turns it on when the host has
 no tailscaled or you answer no to its tailnet question. You can also
 [run your own](edge.md#running-your-own-edge).
 
 ```sh
-aether login                        # sign in with GitHub; --json prints the address and code as JSON
-aether link --claim '<claim link>'  # the owner, with the claim link or code aether-server setup printed
-aether link '<invite link>'         # anyone an admin invited, with the link the admin sent
-aether status                       # what this computer is linked to, and the next step
+cloudfield login                        # sign in with GitHub; --json prints the address and code as JSON
+cloudfield link --claim '<claim link>'  # the owner, with the claim link or code cloudfield-server setup printed
+cloudfield link '<invite link>'         # anyone an admin invited, with the link the admin sent
+cloudfield status                       # what this computer is linked to, and the next step
 ```
+
+On Windows, run the two `link` lines with `aether`: `cloudfield.cmd` splits a
+link at its `&`.
 
 A bare name such as `my-server` is always an SSH address. Only a server id, a
 claim code or link after `--claim`, or a join link goes through the edge. A
@@ -152,12 +155,12 @@ With no tailnet and no edge, SSH keys and invite codes identify people.
 ### The first admin
 
 ```sh
-aether link 192.168.1.50:2222
+cloudfield link 192.168.1.50:2222
 ```
 
-The first key to link a fresh server becomes the admin. Without an edge or
+The first key to link a fresh server becomes the super admin. Without an edge or
 tailnet sign-in, until that first link any key that reaches port 2222 becomes
-admin, so link right after the server starts and keep the port closed to the
+super admin, so link right after the server starts and keep the port closed to the
 internet. With tailnet sign-in, the first key must arrive over the tailnet or
 from loopback.
 
@@ -165,23 +168,23 @@ The CLI offers `~/.ssh/id_ed25519` and any key in your ssh-agent, and creates
 `~/.ssh/id_ed25519` if it finds none. For another key:
 
 ```sh
-aether link 192.168.1.50:2222 --key ~/.ssh/aether_ed25519
+cloudfield link 192.168.1.50:2222 --key ~/.ssh/aether_ed25519
 ```
 
-When the server has an edge, the first admin's key must come from a loopback
+When the server has an edge, the first super admin's key must come from a loopback
 address: the server itself, or an SSH tunnel to it. Anyone who can reach the
-port could otherwise take admin before the owner claims the server.
+port could otherwise take super admin before the owner claims the server.
 
 ```sh
 ssh -L 2222:127.0.0.1:2222 <user>@<server-host>   # keep it open
-aether link 127.0.0.1:2222                        # in another terminal
+cloudfield link 127.0.0.1:2222                        # in another terminal
 ```
 
 From any other address the handshake fails and the server's message names the
-claim instead: `sudo aether-server edge claim-code` on the server, then
-`aether login` and `aether link --claim <code>` on your machine
+claim instead: `sudo cloudfield-server edge claim-code` on the server, then
+`cloudfield login` and `cloudfield link --claim <code>` on your machine
 ([edge.md](edge.md#server-id-and-claiming)). Once you are admin, your key works
-from any address: `aether link <server-host>:2222`.
+from any address: `cloudfield link <server-host>:2222`.
 
 `link` saves the path in the client's `config.json` (`~/.config/aether/` on
 Linux, `~/Library/Application Support/aether/` on macOS). `git push aether`
@@ -192,11 +195,11 @@ a protected key first. Without a usable key the handshake fails with
 
 ### Everyone else
 
-An unknown key is refused with `no Aether member for this key`. An admin
+An unknown key is refused with `no Cloudfield member for this key`. An admin
 creates a one-time code (`--ttl` is in seconds, default 24 hours):
 
 ```sh
-aether invite --ttl 3600
+cloudfield invite --ttl 3600
 ```
 
 ```
@@ -208,7 +211,7 @@ The teammate redeems it once, which registers their key as a collaborator and
 burns the code:
 
 ```sh
-aether link <server-host> --invite <invite-code> --name "Example"
+cloudfield link <server-host> --invite <invite-code> --name "Example"
 ```
 
 ```
@@ -226,14 +229,14 @@ keys as secrets.
 
 There are two dashboards, and they are independent.
 
-| | `aether gui` | Server-hosted |
+| | `cloudfield gui` | Server-hosted |
 | --- | --- | --- |
 | Sessions on | Your own machine, on `127.0.0.1` | The server |
 | Reaches the server | Over the same SSH link as the CLI | Directly, over HTTPS |
 | Works with | Every path above | Tailscale only |
 | Good for | Computers: has the directory picker and other local actions ([local-gateway.md](local-gateway.md)) | Phones and borrowed laptops: open a URL, already signed in |
 
-`aether gui` changes nothing about the server's network shape. The
+`cloudfield gui` changes nothing about the server's network shape. The
 server-hosted dashboard is the server's only HTTP port, and it listens on the
 host's tailnet addresses only. It needs tailscaled running before the server,
 MagicDNS and HTTPS certificates enabled for the tailnet (Tailscale admin
@@ -241,15 +244,15 @@ console, DNS page), and root or the tailscaled operator to fetch the
 certificate. Plain HTTP is never offered. Turn it on:
 
 ```sh
-sudo aether-server config set web-port 443
+sudo cloudfield-server config set web-port 443
 sudo systemctl restart aether-server
 ```
 
 Any device on the tailnet then opens the server's MagicDNS name, already signed
 in, with no token or install: `https://my-server.tailnet-name.ts.net/` (other
 ports append `:<port>`). `web-port` defaults to `0`, SSH only.
-`aether-server setup` offers `443` after you answer yes to its tailnet
-question, and `aether-server install --web-port 443` sets it without questions.
+`cloudfield-server setup` offers `443` after you answer yes to its tailnet
+question, and `cloudfield-server install --web-port 443` sets it without questions.
 
 Requests are identified by the same tailnet lookup as SSH, on every request
 with no session or token. The joining, approval and role rules above apply, and
@@ -268,10 +271,21 @@ A phone can keep the dashboard as an app that opens full screen.
 
 - On Android, open the server URL in Chrome and pick **Install app** from the
   ⋮ menu.
-- On an iPhone, open the server URL in Safari and pick **Share → Add to Home
-  Screen**.
+- On an iPhone, open the server URL in Safari (Chrome on iOS can add it too)
+  and pick **Share → Add to Home Screen**.
 
-Install the server URL, not an `aether gui` one. An `aether gui` URL carries a
+On iOS, Web Push works only for the installed app, and has these limits:
+
+- iOS 16.4 or later, and the app opened from the home-screen icon. In a Safari
+  tab **Settings → Push notifications** shows install steps instead of the
+  switch; **Dismiss** hides them on that browser.
+- The permission prompt appears when you turn the switch on, because iOS asks
+  only after a tap.
+- The icon badge shows the **Needs you** count while the app is open and push
+  is on, and clears at 0. The push carries no count, so a closed app keeps
+  the badge it last had until you open it.
+
+Install the server URL, not a `cloudfield gui` one. A `cloudfield gui` URL carries a
 per-process token that the home-screen icon drops, so the app opens
 unauthenticated. There is no offline mode: away from the tailnet the app shows
 the same connection error as the browser.
@@ -298,8 +312,8 @@ and to every admin when a workspace's spend rises past its
 | asks you with `report --outcome needs-input` | the question |
 | needs you another way | `Waiting for your reply`, or the usage-limit reason |
 | loses its Enhanced session | `Enhanced could not start: <error>` or `Agent disconnected: <cause>` |
-| fails a turn or reports failure | `Turn failed: <error>`, `Agent failed` or `Agent reported failure, review the result` |
-| reports success | `Agent reported success, review the result` |
+| fails a turn or reports failure | `Turn failed: <error>`, `Agent failed` or `Agent reported failure, review the result`; never for an attached subsession |
+| reports success | `Finished: review the result`, once and quietly; never for an attached [subsession](teams.md#subsessions), whose outcome is for its parent agent |
 | ends `failed` with a result nobody has seen | `Failed, review the result` |
 | *(admins, titled with the workspace)* spend reaches the budget's warning or cap | `Budget warning: $8.50 of $10.00 spent` or `Budget reached: $21.00 of $20.00 spent, new sessions are refused` |
 
@@ -307,23 +321,32 @@ A working, waiting or stalled session does not notify. A Background session does
 question. One notification per
 session or workspace budget: a newer one replaces the older, and tapping it opens
 the session or the workspace's budget. When a session stops needing you, its
-notification is replaced, silently, by `No longer needs you`; a push must
+notification is replaced, silently, by `No longer needs you`, or `No longer
+awaiting review` for a finished session's; a push must
 show something or Safari drops the subscription. While you use a dashboard on any device,
 notifications wait until you have left every dashboard alone for a minute and
-the session still needs you, or the budget is still where it was. Runs the
+the session still needs you, or the budget is still where it was.
+How often you are notified is your [notification level](watches.md#notification-levels)
+in **Settings → Notifications**: by default what needs you is pushed at once
+and a finished or failed session waits for a digest every 30 minutes. Pushes
+within 2 minutes of another join it as one quiet summary, and
+[quiet hours](watches.md#notification-preferences) hold every push for a digest
+sent when they end. An [assistant card](watches.md#assistant-cards) is pushed with
+**Review…**, which opens the card where you approve it, and **Decline**,
+where the device shows them. Runs the
 [assistant](assistant.md#notifications) launched for you also notify you when
 they finish, through the [watch](watches.md#assistant-watches) it keeps on
 them.
 
 It needs:
 
-- The server-hosted dashboard. `aether gui` does not offer the switch. The
+- The server-hosted dashboard. `cloudfield gui` does not offer the switch. The
   [desktop app](install.md#desktop-app) shows its own notification while open.
 - A browser with Web Push: Chrome, Edge and Firefox on a computer or Android,
   Safari on a Mac. On an iPhone or iPad it works only in the dashboard added to
   the home screen, on iOS 16.4 or later. The
-  [Android app](install.md#android-app) cannot receive notifications: install
-  the dashboard from Chrome instead.
+  [Android app](install.md#android-app) needs a UnifiedPush distributor
+  ([below](#in-the-android-app)).
 - Outbound HTTPS from the server on port 443 to the browser vendors' push
   services: `fcm.googleapis.com` (Chrome), `updates.push.services.mozilla.com`
   (Firefox), `web.push.apple.com` (Safari) and `*.notify.windows.com` (Edge).
@@ -335,6 +358,84 @@ The server signs messages with a key it creates on first start,
 on again on each device. A refused message is logged as `push: notification not
 delivered` with the service's answer. What the push service receives is in
 [privacy.md](privacy.md#push-notifications).
+
+### In the Android app
+
+The app's WebView has no Web Push, so the app subscribes itself through
+[UnifiedPush](https://unifiedpush.org): a distributor app on the phone, such
+as [ntfy](https://ntfy.sh) from Google Play or F-Droid, holds one connection
+to its push server for every app that uses it. The switch is the same
+**Settings → Notify this device when a session needs me**, in either
+connection mode, `cloudfield gui`'s Edge gateway included.
+
+Turning it on asks Android for permission to notify, then asks the
+distributor for an address and Web Push keys, picking the default
+distributor or showing Android's picker when there are several. The app hands
+the address and keys to `push.subscribe` itself, as the dashboard would. The
+server encrypts and signs exactly as it does for Chrome; the connector library
+in the app decrypts, and the app drops any message not encrypted to its keys.
+
+With no distributor installed the switch row says `The app gets notifications
+through a UnifiedPush distributor, and this phone has none.` Install ntfy and
+turn the switch on, or, in **Tailscale** mode, open the dashboard in Chrome
+and install it there.
+A distributor that refuses shows its reason, such as `The push distributor
+refused to register Cloudfield: ACTION_REQUIRED` (sign in to it, then try
+again).
+
+An assistant card's notification follows the dashboard's rules: **Review…**
+opens the card, where you approve it, **Decline** declines it without opening
+the app, and a private card or one over 240 characters has no buttons. **Decline** needs
+**Tailscale** mode and Android 12 or later: it calls `assistant.confirm` on
+the server's dashboard, identified by the phone's tailnet login like any
+dashboard request, and Android asks you to unlock the phone before it runs
+when you tap it. A card with buttons is not bridged to a watch, but an app
+you have given notification access can still press **Decline** for you.
+**Decline** refuses a card from a server other than the one chosen under
+**Connection** now, with the error `This card is from <old>, and the app now
+connects to <new>.`
+Older Android cannot require that, so there, and in **Cloudfield Edge** mode,
+where the identity is the CLI the app runs only while it is open, a card's
+notification only opens it. While it runs the notification reads
+`Declining…` with no buttons; then `Declined` with the card's text, or
+`Couldn't decline` with the server's own error, which alerts and opens the
+card. Tapping a notification while the dashboard is open opens its page in
+place, keeping unsent drafts; a card opens over the page you are on, so Back
+still returns where it did. When a session stops needing you, its
+notification goes away; a card
+decided or withdrawn elsewhere is replaced, silently, by how it ended, such as
+`Approved: <summary>`.
+
+Sessions, watches and cards that need you, and summaries of them, arrive on
+the **Sessions that need you** channel; assistant notices, budgets and test
+notifications on **Assistant updates**, which you can quiet separately in
+Android's settings for the app.
+The notifications are marked private. Whether the lock screen shows their
+text is Android's setting for sensitive notifications; with it off, the lock
+screen shows only what kind each one is: `A session needs you`, `New update`,
+or `Assistant card` for a card with buttons, how a card ended, and the
+outcome of declining it.
+
+In **Tailscale** mode, when you choose another server under **Connection**,
+the app drops its registration at the distributor, tells the previous server
+to forget the phone, and registers a new address for the new server, so
+nothing the previous server sends reaches the phone.
+
+Limits:
+
+- The server posts only to public addresses. A self-hosted ntfy reachable
+  only on the tailnet or LAN fails with `refusing to connect to <ip>: not a
+  public address` in the server's `push: notification not delivered` log
+  line. Use ntfy.sh or an ntfy server with a public address.
+- In **Cloudfield Edge** mode, switching to another server through the gateway
+  keeps the registration on the first one, which goes on notifying the
+  phone. Turn notifications off before you switch, and on again after.
+- In **Cloudfield Edge** mode the server learns a new address from the
+  distributor only while the app is open; until then notifications go to the
+  old one, which the server drops once the push service reports it gone.
+- ntfy keeps a connection open, which its authors measure at about 0-1% of
+  battery over 17 hours. ntfy from Google Play delivers ntfy.sh messages
+  through Firebase unless instant delivery is on.
 
 ### When it does not start
 
@@ -363,7 +464,7 @@ login and a tagged node has none` (tagged nodes use a key over SSH), or `503`
 not on the tailnet).
 
 `web-port` is off by default because it needs tailscaled, MagicDNS and HTTPS
-certificates that an existing install may lack. On a fresh config `aether-server
+certificates that an existing install may lack. On a fresh config `cloudfield-server
 setup` checks that tailscaled answers, that HTTPS certificates are on, that the
 host holds its tailnet addresses (tailscaled with `--tun=userspace-networking`
 does not) and that nothing listens on port 443. If a check fails it offers `0`

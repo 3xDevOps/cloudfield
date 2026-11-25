@@ -1,14 +1,15 @@
 # Security model
 
-What Aether isolates, what it leaves exposed, and who can see or act on what.
-Read it before you run Aether for other people or let someone join your
-server.
+What Cloudfield isolates, what it leaves exposed, and who can see or act on
+what. Read it before you run Cloudfield for other people or let someone join
+your server.
 
-The Aether server runs on your Linux host and starts every agent in a Docker
-container. A member is a person admitted to the server. Each member has a home
-directory on the server and an environment, a long-lived container where they
-install and sign in to agent CLIs. A session is one agent task in its own
-container, with the launching member's home mounted into it. A workspace is a
+The Cloudfield server runs on your Linux host and starts every agent in a
+sandbox: a Docker container, or with `session-runtime vm` a virtual machine. A
+member is a person admitted to the server. Each member has a home directory on
+the server and an environment, a long-lived sandbox where they install and sign
+in to agent CLIs. A session is one agent task in its own sandbox, with the
+launching member's home mounted into it. A workspace is a
 repository and its sessions. [Concepts](README.md#concepts) has the full glossary.
 
 ## Report a vulnerability
@@ -21,20 +22,21 @@ credentials out of the report.
 
 | Surface | What it protects | What it does not protect |
 | --- | --- | --- |
-| [Session container](#the-agent-container) | Keeps agents off the host, out of the host Docker daemon and out of other members' homes. Sessions and environments cannot connect to each other. Agents run unprivileged. | It is not a VM. A session can read and change everything mounted into it: your home, the checkout and the workspace secrets. |
-| [Permission tiers](#permission-tiers) | A Default session's `sudo` waits for its owner or an admin. Isolated keeps every change outside the checkout inside the session. | Root access runs sudo without asking. Docker inside a Default session gives root in the container without asking. |
+| [Session sandbox](#the-agent-container) | Keeps agents off the host, out of the host Docker daemon and out of other members' homes. Sessions and environments cannot connect to each other. Agents run unprivileged. | A container shares the host's kernel. A session can read and change everything mounted into it: your home, the checkout and the workspace secrets. |
+| [Permission tiers](#permission-tiers) | A Default session's `sudo` waits for its owner or an admin of its workspace. Isolated keeps every change outside the checkout inside the session. | Root access runs sudo without asking. Docker inside a Default session gives root in the container without asking. |
 | [Egress control](environments.md#egress-control) | Off by default. When on, a workspace's sessions reach only its listed hosts, through the server's proxy, and never a private, loopback or metadata address. | An allowed host receives whatever the agent sends: with `github.com` allowed, the launcher's gh token can push anywhere it can write. Sessions still reach the server host. |
 | [Member home and environment](#the-agent-container) | Your home is mounted only into your own environment and your own sessions. | Every session you launch can read and replace your agent logins and gh token, and sign with your commit signing key. |
 | [Who can act on a session](#who-can-see-and-act-on-a-session) | Viewers can only watch. Every action is attributed on the workspace timeline. | By default every collaborator can type into, message and kill your sessions, which hold your home. |
-| [Account sharing](#account-sharing) | A recipient's session gets your agent login, not your home. | The recipient's session can copy, overwrite or log out your login. Revoking does not stop running sessions. An `omp` share is as broad as sharing your home. |
+| [Account sharing](#account-sharing) | A recipient's session gets your agent login, not your home. | The recipient's session can copy, overwrite or log out your login. A copied refresh token outlives a revoke. An `omp` share is as broad as sharing your home. |
 | [GitHub credentials](#github-credentials-and-signing-keys) | The gh token stays in your home and the private signing key on the server, out of the database and out of saved images. Sessions sign through an agent and cannot copy the key. | Any of your sessions can act as you on GitHub within the token's scopes, including registering a signing key of its own. |
 | [Workspace secrets](#workspace-secrets) | Hidden in settings, never returned by the API, masked in setup script output. | Every process in every session of the workspace reads them, and anyone who can launch or message a session can make it print one. |
-| [Assistant](#the-assistant) | Its own container, home and sign-in, which your sessions and account share recipients cannot see or change. Launching, messaging and stopping sessions and saving the environment wait for your click. | A prompt that steers it can redirect the rest of its running session. Starting it needs the vendor's sign-in service. Auto-approve removes the click. |
+| [Assistant](#the-assistant) | Its own sandbox, home and sign-in, which your sessions and account share recipients cannot see or change. Launching, messaging and stopping sessions and saving the environment wait for your click. | A prompt that steers it can redirect the rest of its running session. Starting it needs the vendor's sign-in service. Auto-approve removes the click, and an approval rule removes it for one kind of action. |
 | [Remote development and browser companion](#remote-development-and-browser-isolation) | Terminals, the app browser and captures need permission to steer the session. Chromium mounts none of your files. | Pages and captures can contain secrets. Anyone who can view the session can read a retained capture. |
 | [Workspace mirrors](#workspace-source-mirrors) | Nobody can push to a mirrored base. A failed refresh blocks the launch instead of using stale code. | The configuring admin's gh token or the deploy key sits on the server, readable by the server administrator. |
-| [Dashboard gateways](#the-dashboard-gateways) | `aether gui` listens on loopback with a per-process token. The server's dashboard is tailnet-only HTTPS with per-request identity. | Any process on the server host that connects to the host's own tailnet address is served as the node's owner. |
+| [Dashboard gateways](#the-dashboard-gateways) | `cloudfield gui` listens on loopback with a per-process token. The server's dashboard is tailnet-only HTTPS with per-request identity. | Any process on the server host that connects to the host's own tailnet address is served as the node's owner. |
+| [Dictation](#dictation) | The speech-to-text engine runs in a sandbox with no network and a memory cap, as an unprivileged user, reachable only through a Unix socket in a `0700` directory. Only approved members call it, never connectors, one clip at a time. Audio stays in memory. | The engine and model are third-party binaries, checked only against pinned SHA-256 sums. |
 | [Push notifications](#push-notifications) | The server posts only to public HTTPS endpoints, and the payload is encrypted to your browser. | A notice shows run text (title and reason) on your device. |
-| [Agent configuration and Files](#agent-configuration-and-files) | `aether config push` skips credential files and leaves out files with secrets. Files will not show a known credential file. | Files acts on your whole home. A credential under an unrecognized name is not locked. |
+| [Agent configuration and Files](#agent-configuration-and-files) | `cloudfield config push` skips credential files and leaves out files with secrets. Files will not show a known credential file. | Files acts on your whole home. A credential under an unrecognized name is not locked. |
 | [SSH into a session and port forwarding](#ssh-into-a-session) | Same admission as a session shell. Forwards reach only the session's own loopback. | Sessions are not recorded. Attaching an editor lets the session's agent reach your computer through the editor. |
 | [Edge](#edge-remote-access) | SSH stays end to end. The server decides membership. By default a person approves every new device. | Under `edge-access account`, a taken-over GitHub account or edge admits a device. The edge sees connection metadata. |
 | [Connectors](#chatgpt-and-claude-connectors) | A connector acts as one member through the tools of the scopes they granted, with that member's permissions. | TLS ends at the edge, so a compromised edge sees connector traffic and tokens. Under `edge-access account` a GitHub sign-in at the edge authorizes one without a code. |
@@ -42,18 +44,81 @@ credentials out of the report.
 | [Coordination](#coordination-between-sessions) | Sessions message only allowed peers in their workspace. A message grants no control. | Sessions in one workspace share a repository and can influence each other through files. |
 | [Team memory](#team-memory) | Only members pin notes into briefs. Notes with secrets are refused. Agents cannot delete. | A note can be wrong or planted. It is data, never an instruction. |
 | [Sysbox](#the-agent-container) | Docker inside a session without the host socket. Container root maps to an unprivileged host user. | Installing it from the dashboard runs a root script on the host. |
-| [Release signing](#release-signing) | Updaters install only binaries listed in a signed manifest for that exact tag. | `aether gui build --zip` checks only the app layout of a local zip. |
-| [Self-update](#server-and-client-updates) | Only signed `v*` releases of `3xDevOps/Aether`. A failed download replaces nothing. | An admin chooses which release the server runs. |
+| [Release signing](#release-signing) | Updaters install only binaries listed in a signed manifest for that exact tag. | `cloudfield gui build --zip` checks only the app layout of a local zip. |
+| [Self-update](#server-and-client-updates) | Only signed `v*` releases of `3xDevOps/cloudfield`. A failed download replaces nothing. | A super admin chooses which release the server runs. |
 | [Vulnerability scanning](#vulnerability-scanning) | `govulncheck` runs on every pull request that changes code. | It is advisory: a finding does not fail the build. |
 
 ## The agent container
 
 The container is the only isolation boundary. It is not a VM: every session
-shares the host's kernel, and Aether builds no second sandbox inside it.
+shares the host's kernel, and Cloudfield builds no second boundary inside it.
+
+With `session-runtime vm`, the boundary is a Cloud Hypervisor virtual machine
+with its own kernel instead
+([Sessions in virtual machines](environments.md#sessions-in-virtual-machines)
+has its network rules). Cloud Hypervisor and the host services a VM uses,
+such as its [file service](vm-guest.md#the-file-service) and `virtiofsd`, run
+as root on the host, so a flaw in any of them reaches the host. The guest
+kernel is [hardened](vm-guest.md#kernel-hardening) to keep an unprivileged
+agent from reaching root inside the VM without the sudo gate, and the one
+remaining `virtiofsd` share (a checkout not yet on a VM disk) cannot carry a
+device node or a file-capability binary to the host. Their systemd unit
+limits what a flaw in them reaches:
+
+- `NoNewPrivileges=yes`, `ProtectSystem=strict`, `ProtectKernelTunables=yes`,
+  `ProtectKernelModules=yes`, `ProtectKernelLogs=yes`,
+  `ProtectControlGroups=yes` and `ProtectClock=yes`. It opens no device but
+  `/dev/kvm`, `/dev/net/tun` and the standard pseudo devices
+  (`DevicePolicy=closed`), and has no netlink
+  (`RestrictAddressFamilies=AF_UNIX AF_INET`). It also gets `ProtectHome=yes`,
+  which hides `/home`, `/root` and `/run/user`, unless the data directory or
+  the guest kernel lives under one of those (a server run from a home
+  directory), since that setting hides a path past every bind.
+- A tmpfs hides the whole data directory, so the database and every other
+  VM's disks and files are gone from the unit. Only the paths this VM needs
+  are bound back, writable only where it writes: its own directory, its state
+  disk, each checkout's directory, the home and shares the session mounts,
+  and the directories of the sockets forwarded into it, those read-only. Its
+  disks reach their base images through hard links inside those directories,
+  so the image store itself is never exposed; those links, the helper disk,
+  and the record and launch files the server trusts across a restart or
+  restore are bound read-only inside the writable directories, so the unit
+  cannot rewrite them to reach another VM's disks or the database on its next
+  boot.
+- Its capability bounding set is `CAP_CHOWN`, `CAP_DAC_OVERRIDE`,
+  `CAP_DAC_READ_SEARCH`, `CAP_FOWNER` and `CAP_FSETID` for the file service,
+  plus `CAP_NET_ADMIN`, with which Cloud Hypervisor makes the VM's tap, when
+  it has a network. A VM with a virtio-fs share also starts with the mount
+  and `virtiofsd` capabilities; the monitor drops them once `virtiofsd` runs,
+  before Cloud Hypervisor and the file service start.
+- What it does not stop: it reads the host outside the data directory as
+  root, outside `/home`, `/root` and `/run/user`. `CAP_NET_ADMIN` still lets
+  a compromised Cloud Hypervisor change host interfaces and routes through
+  `ioctl`. A mount of one file inside a directory, as an Isolated session's
+  own login, makes that whole directory writable to the unit; the file
+  service still serves the session only that file.
+
+The bullets below on Docker, Sysbox and networks
+describe Docker mode; what a session is given, after them, applies to both.
+
+Every disk a VM gets names its format to Cloud Hypervisor, so nothing guesses
+a format from bytes a guest wrote. Raw disks - data, state, an empty cache -
+are attached with backing files off. The qcow2 disks - a root disk, a cache
+disk over the member's newest cache, a checkout's disk and the browser's
+disk - are made only by the server, with `qemu-img create -F raw -u` over a
+read-only base. Their header pins the base's format to raw, and Cloud
+Hypervisor reads a backing file in the format the header names, so a base a
+session wrote, such as a saved environment or a member's newest cache, reads
+as plain bytes even when it starts like a qcow2 header that names a host
+file. A guest writes only the data of its qcow2 disk, never its header. A
+member's cache pool serves only that member's sessions, and Save
+environment and cache promotion write a qcow2 disk's data into a raw copy
+of the base the server recorded, never into the backing file its header
+names.
 
 - Agents run as uid `1000`, or as an image's own non-root user. What they may
   do as root depends on the session's [permission tier](#permission-tiers).
-  Treat root in a session as able to do anything the container can reach.
+  Treat root in a session as able to do anything its sandbox can reach.
 - A session is never `--privileged` and never gets the host Docker socket. With
   [Sysbox](environments.md#docker-inside-sessions) installed, runs and
   environments get their own Docker daemon, and root in the container maps to
@@ -72,11 +137,11 @@ shares the host's kernel, and Aether builds no second sandbox inside it.
   checkouts to the agent's user. An unprivileged server runs every container
   as its own uid and gid, the only owner it can hand files to.
 
-What a session container is given decides what it can do:
+What a session sandbox is given decides what it can do:
 
 ```mermaid
 flowchart LR
-  home["Launcher's home on the server"] -- "read-write as $HOME" --> run["Session container (agent is uid 1000)"]
+  home["Launcher's home on the server"] -- "read-write as $HOME" --> run["Session sandbox (agent is uid 1000)"]
   checkout["Session checkout"] -- "mounted at /workspace" --> run
   secrets["Workspace variables and secrets"] -- "environment variables" --> run
   coord["Session's coordination socket"] -- "mounted" --> run
@@ -85,7 +150,7 @@ flowchart LR
 
 Your home is mounted only into your environment and the sessions you launch; an
 [account share](#account-sharing) is the one exception. Your git name and
-email (set with `aether member git`) are the author and committer in those
+email (set with `cloudfield member git`) are the author and committer in those
 sessions, and `/run/aether/co-authors` holds a `Co-authored-by: Name <email>` line
 for each other member who messaged or typed into the session.
 
@@ -99,9 +164,11 @@ for each other member who messaged or typed into the session.
 
 Every session has a permission tier. Pick it under **Permission** at the top of
 the launch form, which remembers your last choice, or with
-`aether session --permission root|default|isolated`. Everything else launches at
-Default: the CLI without the flag, the assistant, connectors and
-Slack. A subsession gets its parent's tier.
+`cloudfield session --permission root|default|isolated`. The assistant and
+connectors launch at the tier they pass as `permission`, or else at your saved
+tier, as the launch form preselects it. Everything else launches at Default:
+the CLI without the flag and Slack. A subsession gets its parent's tier. Any
+member who may launch a session may pick any tier.
 
 | | Root access | Default | Isolated |
 | --- | --- | --- | --- |
@@ -111,6 +178,11 @@ Slack. A subsession gets its parent's tier.
 | Docker inside the session | With Sysbox | With Sysbox | None |
 | Messages to other sessions, team memory notes | Yes | Yes | Refused |
 
+- A tier governs `sudo`, the container and the network, never the agent's own
+  permission prompts. Those follow the agent's launch flags or Enhanced mode
+  ([Modes](harnesses.md#modes-and-what-the-session-container-does)), which no
+  tier sets, and an agent can still ask for checks it never skips
+  ([Permissions and input](enhanced-sessions.md#permissions-and-input)).
 - In every tier the agent runs as uid `1000`, or as the image's own user when
   that is not root. An image whose user is root, such as an environment you
   saved, still runs as `1000:1000`, with your home at `/root` so paths saved
@@ -118,6 +190,19 @@ Slack. A subsession gets its parent's tier.
   before each container starts, and gives the uid a passwd entry whose home
   is `/root`: git, `ssh` and `ssh-keygen` refuse to run without one, and
   `ssh` reads `~/.ssh` from it rather than `$HOME`.
+- Every container of yours mounts the same home, so root in one session can
+  take it from all of them. The start step links
+  `/etc/tmpfiles.d/provision.conf` to `/dev/null`, replacing any the image
+  ships: without that, installing a package that pulls in systemd
+  (Playwright's `--with-deps` browser libraries do) runs
+  `systemd-tmpfiles --create`, whose Ubuntu `provision.conf` hands `/root` to
+  root. A container started before your server had this change gets the link
+  at its next start. If root changes the home's owner or removes its owner
+  permissions anyway, every agent on it loses its login and its executables
+  until the server gives the home back. It restores the home directory's
+  owner and the owner's `rwx`, not files inside it, when an Enhanced agent
+  next starts or restarts, with the notice **Home restored**; each new
+  container's start hands the whole home back.
 - Default and Isolated sessions get Docker's `no-new-privileges`, so no setuid
   binary raises the agent.
 - A Root access run and your environment terminal get a sudoers entry for
@@ -125,6 +210,17 @@ Slack. A subsession gets its parent's tier.
 - Docker inside a Default session puts the agent in the daemon's group, so it can
   reach root inside the container through Docker without asking. With Sysbox
   that root maps to an unprivileged host user.
+- An Enhanced session's adapter runs under a
+  [keeper](enhanced-sessions.md#restarts-and-failures) that outlives server
+  restarts. The keeper and the server's bridge to it run as root and cannot
+  be traced, and their socket sits in a root-only directory under
+  `/run/aether-acp`, so the agent's user cannot read the conversation's
+  stream, inject into it or take it over. The adapter itself runs as the
+  agent's user. The agent's group can read the status of the keeper's exec
+  and stop it, which ends only its own agent, so that a server build without
+  keepers can still stop a keeper after a rollback. Root in the container can
+  reach the keeper: in a Root access session, or a Default session with
+  Docker, that boundary is the tier's.
 - In every tier the session's checkout and session branch are its result. Sessions
   launched before tiers existed show as Root access.
 
@@ -136,7 +232,7 @@ it runs may not show inside it. Its network reaches only the agent hosts in the
 everything else is refused with
 `aether: egress to <host> denied; an isolated session reaches only the agents' own hosts`.
 `sudo` fails with `sudo: an isolated session cannot run commands as root`, in the
-workspace setup script too, which then fails the launch. `aether-internal
+workspace setup script too, which then fails the launch. `cloudfield-internal
 send`, `ask`, `reply` and `memory add` fail with
 `<method>: an isolated session cannot message other sessions or write team memory`.
 
@@ -155,23 +251,23 @@ Two things in an Isolated session still reach outside it:
 
 ### Sudo in a Default session
 
-A Default session's `sudo` is Aether's shim at `/usr/local/bin/sudo`, ahead of
-the image's on `PATH`. Docker's `no-new-privileges` stops the image's own:
+A Default session's `sudo` is Cloudfield's shim at `/usr/local/bin/sudo`, ahead
+of the image's on `PATH`. Docker's `no-new-privileges` stops the image's own:
 `/usr/bin/sudo` fails with `sudo: The "no new privileges" flag is set, which
 prevents sudo from running as root.`
 
 The shim sends the command to the server and waits. The session shows **Needs
 you** with `Run as root in <directory>: <command>` wherever permission requests show: the
 session's **Needs you** panel, the Needs you list, push and Slack notifications,
-`aether answer` and the connectors' `aether_decide_approval`. The command text
+`cloudfield answer` and the connectors' `aether_decide_approval`. The command text
 is the agent's: read it before you allow it.
 
-- Only the session's owner or a server admin may allow it, because root in the
+- Only the session's owner or an admin of its workspace may allow it, because root in the
   container acts on the owner's home and credentials. Anyone who can steer the
   session may deny it. Anyone else gets `run.input.respond: permission denied:
   allowing a command to run as root requires the session's owner or an admin`.
 - Allowed, the command runs once as root (with `-u <user>`, as that user) in
-  the session's container, with the same arguments, the shim's working directory,
+  the session's sandbox, with the same arguments, the shim's working directory,
   the container's environment with sudo's fixed `PATH`
   (`/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin`, never the
   agent-writable `~/.local/bin`) and up to 1 MiB of piped standard input. A
@@ -187,22 +283,28 @@ is the agent's: read it before you allow it.
 - The shim accepts `sudo [-u user] [-E] [-H] [-n] [--] command [args...]`.
   `-E` and `-H` change nothing. `-n` fails instead of asking, with `sudo: a
   person must allow this command; -n cannot wait for one`. Any other flag
-  fails, for example `sudo: -i is not supported in an Aether Default session`.
+  fails, for example `sudo: -i is not supported in a Cloudfield Default session`.
 - While the workspace [setup script](environments.md#setup-script) runs,
   before the agent starts, `sudo` runs without asking: an admin wrote the
   script.
 
 ## Who can see and act on a session
 
-The default role, collaborator, can view, steer (type into the terminal,
-message, approve, pause) and kill every other member's session. A viewer can only
-watch ([roles](teams.md#roles)). A session's container mounts its launcher's home,
-so steering someone's session acts with their home, gh login and signing key. A
-handoff (`aether handoff`) changes the owner but not the home.
+A member acts only in workspaces they own or were granted
+([workspace access](teams.md#workspace-access)). A workspace a member cannot
+reach does not exist for them: it is absent from lists, counts, events and
+search, and a request naming it gets the same `not found` as one that never
+existed. Enforcement is on the server; the dashboard only mirrors it.
 
-To narrow it, `aether workspace settings --message-others admins-only` limits
-messaging, steering and killing others' sessions to owners and admins. `aether
-protect <session>` does the same for one session; `aether unprotect <session>` lifts it.
+In a workspace they reach, the default role, collaborator, can view, steer (type
+into the terminal, message, approve, pause) and kill every other member's
+session. A viewer can only watch ([roles](teams.md#roles)). A session's sandbox mounts its launcher's home,
+so steering someone's session acts with their home, gh login and signing key. A
+handoff (`cloudfield handoff`) changes the owner but not the home.
+
+To narrow it, `cloudfield workspace settings --message-others admins-only` limits
+messaging, steering and killing others' sessions to owners and admins. `cloudfield
+protect <session>` does the same for one session; `cloudfield unprotect <session>` lifts it.
 
 Development terminals, the app browser, captures and SSH into a session need
 permission to steer it even to read, because the app browser can already be
@@ -212,12 +314,15 @@ that loses that permission drops to read-only.
 ## Account sharing
 
 Sharing your agent account lets another member session tasks on your agent
-subscription. Share under **Profile → Agent account sharing → Share account**
-or with `aether account share <member-id>`; revoke with **Revoke access** or
-`aether account revoke <member-id>`. The other member picks your account in
-the launch dialog's **Account** picker, or with `aether session --account
+subscription. Turn on **Share my account** on their row in **Members**, or
+run `cloudfield account share <member-id>`; turn it off again, or run `cloudfield
+account revoke <member-id>`, to revoke. The other member picks your account in
+the launch dialog's **Account** picker, or with `cloudfield session --account
 <your-member-id>`. They stay the session's owner; usage and cost count against your
-account.
+account. Their agents can use it too: a subsession running the same agent as a
+session they launched on your account starts on it, up to the workspace's
+subsession limit (8 busy at once by default), and their agents may pick it for
+any subsession with `--account` ([teams.md](teams.md#subsessions)).
 
 Their session uses their own image and home plus your agent login file, mounted
 read-write because a token refresh rewrites it. The server checks the mounted
@@ -230,22 +335,101 @@ they have no installation of the agent in their own `~/.local/bin`, they also
 get yours, read-only, with your whole `~/.local/bin` on their `PATH` after
 their own entries.
 
-- Root in their session can copy your login, refresh token included, and revoking
-  does not recall a copy. Log out and in again to rotate it.
-- Their session can end or replace your login: `/logout` in Claude Code and
-  `codex logout` revoke it at the vendor, and `/login` writes their login into
+In session VMs, three agents work differently. A `copilot` or `antigravity`
+session gets a copy of your login, made at each cold start of its VM; a copy
+of either login is not invalidated when another is used, and after a revoke
+the session moves off your account or stops, so the copy is replaced. An
+`omp` session gets no file: oh-my-pi asks an auth broker the server runs for
+your account, which holds your logins in your `~/.omp/agent/agent.db`. The
+server checks every request against the session's account, ends open ones
+within 10 seconds of a revoke, and refuses the next. A recipient's session
+may only read your omp logins, refresh one and report usage, not store,
+disable or block them. The broker runs as a transient systemd unit as the
+system user `aether-omp`, without capabilities, with the host read-only and
+the server's data directory hidden except your `~/.omp/agent` and the
+broker's own directory, so it cannot read your other agents' logins
+([harnesses.md](harnesses.md#oh-my-pi-in-session-vms)). A recipient's omp
+receives your access tokens and API keys, never the refresh tokens.
+
+Claude Code caches the account it is signed in to as `oauthAccount` in
+`~/.claude.json`, and `claude auth status` reports that cache, not the owner of
+the login. A `claude` session on your account therefore gets its own copy of
+their `~/.claude.json` without `oauthAccount`, their `primaryApiKey`, the API
+keys they approved, or the account caches Claude Code clears when it signs in
+to another account. The copy is written to
+`<data-dir>/scheduler/account-config/<session-id>/.claude.json`, which no
+container can replace, and mounted at `~/.claude/.claude.json` with
+`CLAUDE_CONFIG_DIR=~/.claude`, so Claude Code reads it instead. Claude Code
+then fetches your profile with your login. When they still have a legacy
+`~/.claude/.config.json`, which Claude Code reads before either file, the copy
+is made from it instead, and the session sees an empty read-only file there,
+which Claude Code ignores.
+
+Their own `~/.claude.json` is never mounted there, so their other sessions
+rewriting it cannot replace the copy. Every member's containers other than
+Isolated sessions mount their own `~/.claude/.claude.json`, and an existing
+`~/.claude/.config.json`, in place like their login, so a CLI there that saves
+to those paths cannot detach the session's files either. Every member's home
+therefore has an empty `~/.claude/.claude.json`, visible under **Files**. A
+`~/.claude.json` or `~/.claude/.config.json` of theirs that is a symlink, has
+another hard link, is not a JSON object, or is over 64 MiB refuses the launch
+with the read error.
+
+What the session changes in its copy lasts until its container is recreated: a
+move to another account recreates it, while reopening a retained session keeps
+it. Claude Code writes backups of the copy, which name your account once it
+has fetched your profile, to their `~/.claude/backups/`, and the `cp -f`
+restore command it prints for a damaged config can point at one of them.
+
+A session on your account still takes from their home and environment
+everything but these files and the login file. A `claude` API key that
+reaches it overrides your login: `apiKeyHelper`, or `ANTHROPIC_API_KEY` or
+`ANTHROPIC_AUTH_TOKEN` under `env`, in their `~/.claude/settings.json`; the
+same variables set as workspace variables; and `ANTHROPIC_API_KEY` that the
+server passes through to every `claude` session. With `ANTHROPIC_API_KEY`
+set, `claude auth status` reports `"authMethod": "api_key"`, and because the
+copy leaves out the keys they approved, the interactive session first asks
+`Detected a custom API key in your environment`; answering yes uses the key
+instead of your login.
+
+- Root in their session can copy your login file. The refresh token in it
+  outlives a revoke and keeps working until you log out and in again.
+- Their session can end or replace your login. Measured with Claude Code
+  2.1.317 and Codex 0.166.0: `/logout` or `claude auth logout`, and `codex
+  logout`, in their session POST your refresh token to the vendor's revoke
+  endpoint, which ends your login everywhere. `/login` writes their login into
   your file. For every agent except `omp`, that costs the login and nothing
   else in your home.
-- Revoking blocks later launches and reopens and removes their control of sessions
-  on your account, but does not stop a running container. Kill those sessions
-  first: **Kill run** in the session header's **More** menu, or `aether kill
-  <session-id>`.
+- Revoking blocks later launches and reopens, removes their control of sessions
+  on your account, and takes your login out of their running sessions. Each of
+  their live sessions on your account moves to another account they may use,
+  picked by the [usage fallback](teams.md#usage-fallback) rules whether or not
+  your usage ran out, and continues there with a room note; an Enhanced session
+  gets a prompt to continue. A session that cannot move fails, its container
+  removed, with one of:
+  - `account share revoked: <owner> revoked access to their account; no other account can run <agent>`
+  - `account share revoked: <owner> revoked access to their account; fallback is off for this session`
+    (launched with `--no-fallback`)
+  - `account share revoked: <owner> revoked access to their account; cannot continue on another account: <reason>`,
+    for example `the session is paused`
+  - `account share revoked: <owner> revoked access to their account; continuing on <account>'s account failed: <error>`
+
+  `cloudfield account revoke` returns once the moves start. The server checks
+  again every 30 seconds (`cloudfield-server --poll-interval`) and after a
+  restart. A session still preparing when you revoke fails with `check the
+  account share: ...` before its agent starts; one whose container had
+  started, or that was moving onto your account, checks the share once it
+  runs and then moves or stops, its agent having started with your login. A
+  closed session's paused container cannot reopen on it. Only the
+  launcher's share counts: a session handed to another member (`aether
+  handoff`) stays on the launcher's account.
 - [Usage fallback](teams.md#usage-fallback) can move their session onto your
   account when theirs runs out, without them picking it: your share is the
   consent. It never picks an account not shared with the launcher.
 - A launch checks every account it names, fallback included, when it is
   created, so a member cannot queue a session on an account nobody shared with them:
   `permission denied: member <member-id> has not shared their account with you`.
+  An id that names no member gets the same answer.
 - Sharing and revoking are recorded in the
   [audit history](connectors.md#audit-history), readable by the sharing member
   and admins.
@@ -257,7 +441,7 @@ their own entries.
 > your whole home, gh token and signing key. Share `omp` only with someone
 > you would give your home to.
 
-A member's own agent definition (`aether agent add`) is refused on a shared
+A member's own agent definition (`cloudfield agent add`) is refused on a shared
 account:
 
 ```
@@ -273,15 +457,15 @@ runtime: docker engine API "1.44" cannot mount a path beneath a member home; tha
 
 After you first share a `claude` or `gemini` account, restart your environment
 (**Stop environment** in **Profile**, then **Open** on **Environment**, or
-`aether terminal stop` and `aether terminal`) so recipients get your refreshes.
+`cloudfield terminal stop` and `cloudfield terminal`) so recipients get your refreshes.
 
 ## GitHub credentials and signing keys
 
-Connecting GitHub, from the dashboard or with `gh auth login` and `aether
+Connecting GitHub, from the dashboard or with `gh auth login` and `cloudfield
 github connect` in your environment
 ([environment-home.md](environment-home.md#connect-github)), creates an
 ed25519 signing key and leaves three files in your home on the server. None is
-in the database, and `aether env save` never captures the home.
+in the database, and `cloudfield env save` never captures the home.
 
 | File | Holds |
 | --- | --- |
@@ -294,20 +478,20 @@ The private key is never in your home. The server keeps it in
 your sessions and environment through a read-only SSH agent mounted at
 `/run/aether-signing/agent.sock`, which `SSH_AUTH_SOCK` names. git signs
 through it with `ssh-keygen`. The agent lists and signs with your key and
-refuses to add, remove, lock or unlock keys. Aether signs its end-of-session
+refuses to add, remove, lock or unlock keys. Cloudfield signs its end-of-session
 commits with the same key, read from the data directory.
 
 Root in any of your sessions can read and replace the token and `~/.gitconfig`, and
 can sign anything with your key while the session lives. It cannot copy the key or
-make Aether sign with another one. The token carries gh's default scopes
-(`repo`, `read:org`, `gist`) plus the `admin:ssh_signing_key` scope Aether
+make Cloudfield sign with another one. The token carries gh's default scopes
+(`repo`, `read:org`, `gist`) plus the `admin:ssh_signing_key` scope Cloudfield
 needs to register the key, so an agent can push to the workspace's origin,
 open pull requests, and add or remove signing keys on your account: a key it
 registers signs commits that GitHub shows as Verified. It can also plant
-`~/.local/bin/gh`, which then runs on your next `aether github connect`.
+`~/.local/bin/gh`, which then runs on your next `cloudfield github connect`.
 
 `SSH_AUTH_SOCK` names the signing agent in every session and environment. A
-workspace variable of that name has no effect, and neither `aether ssh` nor an
+workspace variable of that name has no effect, and neither `cloudfield ssh` nor an
 editor's Remote-SSH connection forwards your local agent. A shell that starts its
 own `ssh-agent` replaces it, and `git commit` there fails with `error: Couldn't
 find key in agent?`.
@@ -317,8 +501,8 @@ first start after the upgrade the server moves each such key into
 `signing-keys/`, deletes it from the home and rewrites `user.signingkey`, so
 the key already registered on GitHub keeps signing. Sessions and the environment
 started before the upgrade have no agent, so `git commit` in them fails with
-`error: Couldn't get agent socket?`. Restart the environment (`aether terminal
-stop`, then `aether terminal`); such a session's end-of-session commit is still
+`error: Couldn't get agent socket?`. Restart the environment (`cloudfield terminal
+stop`, then `cloudfield terminal`); such a session's end-of-session commit is still
 signed.
 
 To revoke the connection:
@@ -331,7 +515,7 @@ To revoke the connection:
    signing key there you did not add yourself.
 3. Delete `~/.config/gh/hosts.yml` and `~/.ssh/aether_signing.pub` from your
    home. To retire the private key, a server admin deletes
-   `signing-keys/<member-id>` from the data directory; the next `aether github
+   `signing-keys/<member-id>` from the data directory; the next `cloudfield github
    connect` creates a new one.
 4. Clear the signing settings in your environment terminal. Without the
    private key, every `git commit` in a session fails with `error: Couldn't find
@@ -343,7 +527,7 @@ To revoke the connection:
    git config --global --unset gpg.format
    ```
 
-`aether env reset` does none of this; it leaves the home alone.
+`cloudfield env reset` does none of this; it leaves the home alone.
 
 ## Workspace secrets
 
@@ -358,7 +542,7 @@ someone who can run code in the workspace.
 - Plain variables and the setup script are readable by every member, so keep
   credentials out of them. A variable marked secret later stays in old
   database backups: change its value too.
-- Every new session container gets the secrets as
+- Every new session sandbox gets the secrets as
   environment variables, readable by every process in it and by anyone with
   Docker access on the host (`docker inspect`). Anyone who can launch or
   message a session in the workspace can make it print a secret into the
@@ -371,9 +555,9 @@ someone who can run code in the workspace.
 
 ## The assistant
 
-The [assistant](assistant.md) is an agent that runs in a container of its own
-per member, driven from the dashboard. Its Aether tools act as you, with your
-permissions, and it uses the account you signed it in to.
+The [assistant](assistant.md) is an agent that runs in a sandbox of its own
+per member, driven from the dashboard. Its Cloudfield tools act as you, with
+your permissions, and it uses the account you signed it in to.
 
 - Its home is `<data>/assistant/<member>/home` and its instructions are
   read-only. No session, environment or other member's container mounts either,
@@ -404,22 +588,57 @@ permissions, and it uses the account you signed it in to.
   **New conversation**.
 - The assistant does not start when the server cannot reach the vendor's
   sign-in service.
+- The [same-account check](assistant.md#same-account-as-your-sessions) reads
+  your environment's login read-only and sends only its Claude access token
+  to the profile endpoint. It is information only and gates nothing.
 - Reading runs and pausing or resuming them happen at once. Launching,
   messaging or stopping a session and saving your environment wait for you to
-  approve a card. An unanswered card fails after 10 minutes.
+  approve a card. An unanswered card expires after 10 minutes, or 24 hours
+  when a connector turn raised it. In a connector turn, auto-approval never
+  passes a call the connector's scopes do not cover. Only your own Cloudfield
+  devices decide a card (`assistant.confirm`), and a connector its own
+  turns' cards (see [ChatGPT and Claude connectors](#chatgpt-and-claude-connectors)),
+  never the assistant's tool socket. A card approved
+  after its turn ended runs on the server as you, at most once, and only if it
+  still reads as the card you approved.
+- A card's push holds only its id and what it does, never a token, and never
+  the text of a saved preference: a card that saves, forgets or sends one
+  reads only `Save a preference`, `Forget a saved preference` or `An action
+  that uses a saved preference`. No notification approves a card, because a
+  notification shows only a summary and its actions run even on a locked
+  phone or Mac: **Review…** opens the full card, which shows every parameter
+  the call sends, and you approve there. **Decline** decides at once through
+  `assistant.confirm` from that device with its own sign-in (its tailnet
+  identity or edge session, or the desktop app's gateway token). Someone who
+  sees or copies a push cannot decide the card without that device's
+  sign-in. A card is decided once; a replayed or foreign decision gets
+  `assistant: no such pending confirmation`. **Always** options appear only
+  on the full card.
 - **Let the assistant act without asking** (auto-approve, off by default)
   skips the card for your own sessions. Messaging or stopping another member's session
   always asks. The assistant cannot turn auto-approve on or approve a card
   itself.
-- Its shell and file tools never ask, inside its own container.
-- Transcripts it reads can carry injected instructions. With auto-approve off,
-  a steered assistant still needs your click. With it on, a steered assistant
-  can launch, message and stop your sessions.
+- An [approval rule](assistant.md#approval-rules) skips the card for one
+  kind of action: launches of one agent, mode, model and permission tier in
+  one workspace on one account, messages or stops of your own sessions in one
+  workspace, or saving your environment. The server builds the rule from the
+  card's typed parameters, never from text the assistant or a session wrote,
+  and checks it on every call. Only your click on a card creates one;
+  `assistant.rules` and `assistant.rules.revoke` refuse the assistant's own
+  calls and connectors, and its tool socket serves none of them. A rule does
+  not limit the task or message: a steered assistant can launch any task
+  with the agent a rule covers, or send any message to your own sessions in
+  its workspace. Rules never expire; revoke one you no longer use.
+- Its shell and file tools never ask, inside its own sandbox.
+- Transcripts it reads can carry injected instructions. With auto-approve off
+  and no rules, a steered assistant still needs your click. With it on, a
+  steered assistant can launch, message and stop your sessions; with a rule,
+  it can do what the rule covers.
 
 Every write call the assistant makes, such as a launch, message, pause or stop,
 is recorded in the [audit history](connectors.md#audit-history) as `assistant`.
 
-Never sign the `aether` CLI in inside a session or your environment terminal. Its
+Never sign the `cloudfield` CLI in inside a session or your environment terminal. Its
 client key would sit in your home, where every session can read it and act as you,
 including approving the assistant's cards.
 
@@ -427,7 +646,7 @@ including approving the assistant's cards.
 
 A session can have development terminals, a shared app browser (a headless Chromium
 companion container) and captures of both. All need permission to steer the session,
-reads included. A terminal runs in the live session container with the session owner's
+reads included. A terminal runs in the live session sandbox with the session owner's
 home and credentials. Taking control of a terminal or the browser only decides
 whose input goes in; other processes keep running. A human can take control from
 an agent, never the reverse.
@@ -437,6 +656,25 @@ every capability dropped, `no-new-privileges` and Chromium's sandbox on. It
 mounts none of the checkout, your home, keys, agent logins or the Docker
 socket. It shares the session's network, so it reaches the app's loopback ports
 and everything else the session can. Chromium is driven over a pipe, not a port.
+
+With `session-runtime vm` the companion runs inside the session's VM instead
+([The development browser](vm-guest.md#the-development-browser)): from the
+browser image's read-only disk, as the root of its own mount namespace, as UID
+`65533` (`65532` for a session that runs as `65533`), never the session's own,
+with `no-new-privileges`, its own IPC namespace and a cgroup inside the
+session's (the same memory and 512-process caps), a `/proc` that hides other
+users' processes, a seccomp filter that refuses vsock sockets and io_uring,
+which can make them too, so it cannot reach the coordination or signing
+sockets forwarded into the VM, and Chromium's sandbox on. It does not get the
+container's seccomp profile. This keeps its files, its memory and its control
+socket out of reach of the session's unprivileged processes. It is no boundary
+against root in the VM: a session with **Root access**, and every VM session
+with Docker inside, since Docker gives root in its containers and so in the
+VM, can read the browser's profile and cookies, watch what is typed into it,
+and talk to or replace the companion, whose screenshots, captures and page
+state the server then takes from a process the session controls. In Docker
+mode the companion was a separate container that root in the session could not
+reach.
 
 Page content is not protected: cookies, tokens, customer data, console output,
 URLs and anything on screen can end up in a capture. Use test accounts, never
@@ -459,7 +697,7 @@ session branches and pull requests go. A source URL must not contain credentials
 | --- | --- | --- |
 | `github` | The configuring admin's own gh login, with all its scopes. | The admin's home. |
 | `public` | None. | None. |
-| `deploy-key` | An ed25519 key Aether generates for the mirror. | `<data-dir>/mirrors/<workspace>/private_key.<generation>`, mode `0600`. |
+| `deploy-key` | An ed25519 key Cloudfield generates for the mirror. | `<data-dir>/mirrors/<workspace>/private_key.<generation>`, mode `0600`. |
 
 - Mirroring private source shares its code with every member and run in the
   workspace. It does not lend them the admin's GitHub login.
@@ -478,7 +716,7 @@ session branches and pull requests go. A source URL must not contain credentials
 The dashboard reaches the server through one of two gateways
 ([local-gateway.md](local-gateway.md)). An edge serves no dashboard.
 
-`aether gui` runs on your own machine. It listens on `127.0.0.1` only, with no
+`cloudfield gui` runs on your own machine. It listens on `127.0.0.1` only, with no
 flag to expose it, and every API and WebSocket request must carry a token
 minted for that process, which dies with it. It acts with your SSH key's
 authority on the server and with your own file and git access locally.
@@ -503,7 +741,11 @@ The [Android app](install.md#android-app) is a WebView locked to one HTTPS
 origin. It refuses `http://` addresses and certificate errors, opens other
 sites in the phone's browser, stays out of cloud backup and holds no
 credential. Safe Browsing is off because it only loads your server and the
-phone's browser checks every other link ([privacy.md](privacy.md)).
+phone's browser checks every other link ([privacy.md](privacy.md)). It holds
+the `RECORD_AUDIO` permission and grants the microphone only to the
+dashboard's origin, when you press the dashboard's mic button; every other
+origin and every other WebView permission request is denied. The audio goes to
+your Cloudfield server for transcription and the app does not store it.
 
 ### Push notifications
 
@@ -514,6 +756,21 @@ addresses, never its own host, LAN or tailnet. The payload is encrypted to the
 browser and signed with the key in `<data-dir>/push/vapid_key.pem`, which
 grants nothing on the server. A notice carries the session's title and a reason
 from the session.
+
+The Android app subscribes the same way through a UnifiedPush distributor and
+shows only messages encrypted to its own keys. Its **Decline** button declines
+an assistant card through `assistant.confirm` with the phone's tailnet
+identity, so the app offers it only on Android 12 and later, which require the
+phone to be unlocked before a tap runs it. An app with notification access
+can still press it; the card's notification is kept off watches. The
+notifications are marked private; whether a locked phone shows their text is
+Android's sensitive-notifications setting ([networking.md](networking.md#in-the-android-app)). The connector
+library adds two exported components, as every UnifiedPush app has: a
+receiver for the distributor's broadcasts, which acts only on a registration
+it made and hands the app only what decrypts with its keys, and a service the
+distributor binds to keep the app running while it delivers. Any app can
+also open Cloudfield at a dashboard route, as an `aether://` link can, or take
+down one of its notifications; a route is only shown, never acted on.
 
 ### Terminal image uploads
 
@@ -534,9 +791,27 @@ lists ignored files too, and anyone who can view the session can read any file i
 its checkout, a `.env` included. Keep a value viewers must not see as a
 workspace secret and out of files.
 
+### Dictation
+
+`sudo cloudfield-server dictation install` downloads sherpa-onnx's prebuilt engine
+and an ONNX model from the sherpa-onnx GitHub releases and accepts only files
+matching the SHA-256 sums pinned in `cloudfield-server`, and pulls the engine's
+image by digest ([dictation.md](dictation.md#install)). The engine has no
+authentication and listens on every interface, so its container has no
+network: nothing reaches it, sessions included, but the server through
+`<data-dir>/dictation/sock/engine.sock`, mode `0600` in a `0700` directory. The
+container runs as uid 65534 with a read-only root, every capability dropped,
+`no-new-privileges`, the engine and model mounted read-only, at most 4 CPUs,
+2.5 GiB of memory and 256 processes, and the engine at nice 10
+([dictation.md](dictation.md#the-engine-container)). `dictation.transcribe`
+takes any approved member's clip; pending members, connectors and the assistant
+are refused, and the server queues at most four clips behind the one it
+transcribes, one per member, so dictation takes no more than one engine's CPU
+from sessions.
+
 ## Agent configuration and Files
 
-`aether config push` uploads agent configuration from your computer
+`cloudfield config push` uploads agent configuration from your computer
 ([environment-home.md](environment-home.md#upload-and-edit-configuration)). It skips
 credential files, `*.pem`, `.env` and `.env.*`, symlinks and files over
 64 MiB, and leaves out any file the secret scanner flags, with no override.
@@ -556,7 +831,7 @@ environment and every session you launch.
 ## SSH into a session
 
 `ssh <session-id>.aether` ([terminal.md](terminal.md#ssh-and-editors)) gives you
-a shell, file transfer and port forwarding inside a session's container.
+a shell, file transfer and port forwarding inside a session's sandbox.
 
 - Admission is the session shell's: membership, permission to steer the session, and a
   `running` or `needs-attention` session that is not paused. It is checked again
@@ -569,7 +844,7 @@ a shell, file transfer and port forwarding inside a session's container.
   64 forwards.
 - Processes you start stop when the session ends. For a paused session the stop
   waits for resume, and a server restart in between forgets it, leaving them
-  running. Only **Free container…** on a finished session is certain to end them.
+  running. Only **Free sandbox…** on a finished session is certain to end them.
 - Your `ssh` must be OpenSSH 9.6 or a build patched for CVE-2023-51385. Older
   clients can run a command on your computer when they open a crafted
   `*.aether` host name, for example from a git submodule URL.
@@ -586,7 +861,7 @@ The desktop app opens only exact editor links to a session, such as
 
 ### SSH port forwarding
 
-`aether forward` and the dashboard's OAuth sign-in forwards reach only a session
+`cloudfield forward` and the dashboard's OAuth sign-in forwards reach only a session
 (`run:<run-id>`, which needs permission to steer it) or your own environment
 (`terminal`). Other hosts and reverse forwarding are refused. For an OAuth link that
 redirects to a loopback address, the local dashboard binds that port on your
@@ -598,27 +873,28 @@ The [edge](edge.md) relays SSH for members with no tailnet or direct route to
 the server. It vouches for who signed in with GitHub; the server decides who
 is a member.
 
-- A server uses an edge only when its config names one. `aether-server setup`
+- A server uses an edge only when its config names one. `cloudfield-server setup`
   turns on the project's edge on a host without tailscaled, and says so.
-- Until it has a member, a server with an edge takes its first admin by SSH
+- Until it has a member, a server with an edge takes its first super admin by SSH
   key only from a loopback address: the server itself or an SSH tunnel.
-  Everyone else claims it with `sudo aether-server edge claim-code`, so a scan
-  that finds port 2222 open cannot take admin first. A forwarder on the host
+  Everyone else claims it with `sudo cloudfield-server edge claim-code`, so a scan
+  that finds port 2222 open cannot take super admin first. A forwarder on the host
   that connects outside clients to `127.0.0.1:2222`, such as `socat`, defeats
   this. Without an edge, a server with tailnet sign-in takes that first key
   only over the tailnet or from loopback, and one with neither takes it from
   any address.
 - SSH is encrypted end to end. The edge cannot read it or pose as your server.
 - The server pins the edge's signing key. A different key is refused until you
-  compare fingerprints and run `sudo aether-server edge trust`.
+  compare fingerprints and run `sudo cloudfield-server edge trust`.
 - `edge-access`, set only on the server host, decides what a GitHub sign-in
   is worth. Under `approved-devices` (the default) a person must also approve
   each new device. Under `account` a member's GitHub sign-in is enough, so a
   taken-over GitHub account or a compromised edge gets in
   ([what an attacker can do](edge.md#what-an-attacker-can-do)).
-- Approve only a code read from a device you are holding. `aether device
+- Approve only a code read from a device you are holding. `cloudfield device
   approve` first shows the device, the GitHub account, and the member and role
-  it would join as. Refuse a code that would admit someone as you or an admin.
+  it would join as. Refuse a code that would admit someone as you, an admin or
+  a super admin.
   An approved device key also works on the direct SSH port, without the edge.
 - Device tokens do not expire. After you recover a taken-over GitHub account,
   revoke the devices it signed in
@@ -626,11 +902,11 @@ is a member.
 - Linking a second GitHub account to a member, or merging two members, needs
   proof from both sign-ins and a person's approval. A merged member keeps the
   lower role. Do not enter a merge code you did not ask for.
-- `sudo aether-server edge claim-code --admin <member-id>` recovers access for
-  an existing admin and nothing else.
-- The first link pins the server's identity. A server id from `aether servers`
+- `sudo cloudfield-server edge claim-code --admin <member-id>` recovers access for
+  an existing admin or super admin and nothing else; it raises no role.
+- The first link pins the server's identity. A server id from `cloudfield servers`
   comes from the edge: before you confirm, compare the id and fingerprint the
-  CLI shows with `sudo aether-server edge status` on the server.
+  CLI shows with `sudo cloudfield-server edge status` on the server.
 
 The edge operator sees server ids and host names, account identities, device
 labels, client addresses, timing and byte counts
@@ -649,20 +925,43 @@ there is no terminal, file, settings or git-writing tool.
 - Scopes: the member picks them on the consent page, not the client. `read` is
   always granted, and every member can read every session on the server, so a
   connector can read all of them. `write` (launch sessions, message,
-  pause and resume sessions, answer questions, mark sessions reviewed) is checked by
+  pause and resume sessions, answer questions, mark sessions reviewed, ask the assistant) is checked by
   default; `control` (decide permission requests, stop and close sessions) is not, because text an agent wrote could talk the assistant into
   approving or ending work. A connector serves only its scopes' tools, and the
   server checks every call's method against its scopes, a permission decision
   against `control`, and refuses every method outside its table
   ([connectors.md](connectors.md#scopes)). It can make 30 write calls at once,
   then one every 2 seconds.
+- `aether_ask_assistant` runs a turn of your assistant, in your conversation
+  with your preferences. Its origin and the grant it belongs to come from the
+  connector's token, never from the call. The turn reads no dashboard view
+  context. It returns only that turn's final
+  reply, capped at 4 KiB, with saved preferences matched word for word
+  withheld; a paraphrase still gets out, a risk the owner accepted. Your
+  approval rules and auto-approval pass a connector turn's calls as they do a
+  dashboard turn's, so content the external host reads, which Cloudfield cannot
+  see, can steer them; a method outside the connector's scopes, as they are
+  when the call is made, never passes without a card, and a revoked
+  connector's waiting prompts do not run. A connector decides only cards its own turns raised, and
+  only by echoing the card's text, the summary and every parameter whole,
+  byte for byte. The external host's confirmation of that tool call is the
+  human gate, as for `aether_decide_approval`; the echo binds it to the exact
+  card. Deciding is its own tool, `aether_decide_assistant_card`, so the
+  host asks for each decision; a member who sets that tool to **Always
+  allow** lets the external model, and content it read, approve cards
+  without them. Approving needs the scope of the method's own tool. A card
+  over 2,000 characters, one showing a saved preference, or one whose summary
+  holds a line break or a character not printed as itself is decided only
+  in Cloudfield. The assistant's tool socket cannot call `assistant.ask` or
+  `assistant.confirm`, and no connector can create a rule or change
+  auto-approval.
 - Audit history: a connector's write calls, refused ones included, and its
   creation and revocation are recorded with the member, connector, method,
   target and outcome, never the parameters
   ([connectors.md](connectors.md#audit-history)). A member reads their own
   entries; an admin reads all.
 - A connector minted over a member SSH key or a tailnet connection has no
-  device: revoking a device does not cut it off. `aether mcp revoke` does.
+  device: revoking a device does not cut it off. `cloudfield mcp revoke` does.
 - TLS ends at the edge, because ChatGPT and Claude need a public certificate.
   A compromised edge sees every tool call, result and token it relays, and can
   act as the member until the token expires (an hour), a refresh rotates it, or
@@ -730,7 +1029,7 @@ there is no terminal, file, settings or git-writing tool.
   server's instructions tell the assistant never to follow it. Outside that
   field are only fixed labels, ids, states, counts, times, links, workspace
   and agent names, branch names, file paths and the server's own errors.
-  ChatGPT and Claude ask you before each write tool; Aether adds no
+  ChatGPT and Claude ask you before each write tool; Cloudfield adds no
   confirmation of its own. A permission request is only ever allowed or
   denied once: the connector never picks an "always" option, refuses a
   decision whose `action` text differs from the pending request's, and
@@ -744,7 +1043,7 @@ there is no terminal, file, settings or git-writing tool.
 ## Slack
 
 The [Slack bot](slack.md) acts as the member who linked a Slack account, the way
-a connector does: with that member's role checks, judged by the device `aether
+a connector does: with that member's role checks, judged by the device `cloudfield
 slack link` ran on, and with audit records naming `Slack connector <Slack user
 id>`. It holds all three [scopes](connectors.md#scopes), since deciding a
 permission request takes `control`, and calls only the methods its buttons and
@@ -756,7 +1055,7 @@ replies need. Its write calls enter the
   longer than 600 characters gets no buttons, so a press never decides text
   Slack cut.
 - Whoever controls the linked Slack account acts as you on your sessions.
-  `aether slack unlink`, revoking the device the code was minted on, or
+  `cloudfield slack unlink`, revoking the device the code was minted on, or
   removing the member cuts the link off.
 - Linking takes a one-use 40-bit code, valid for 10 minutes, sent to the bot in
   a direct message.
@@ -774,14 +1073,15 @@ Each session gets its own socket for messaging other sessions
 token enters the container.
 
 - A session can message its parent and subsessions, sessions editing the same files, and live
-  sessions in its workspace that its owner may message. Never across workspaces. A
-  viewer's sessions message nobody.
+  sessions its owner may message in any workspace the owner can reach;
+  protection and the workspace's message-others setting apply. A viewer's
+  sessions message nobody.
 - A message is an attributed inbox item. It gives the sender no steer, kill,
   terminal, git, transcript or secret access to the recipient.
-- Messages are capped at 4 KiB, 100 unread per inbox and 8 new correspondents
-  per session outside its parent and subsessions. Sessions in one workspace share a repository, so they
-  can still steer each other through file contents.
-- `aether-server config set conflict-coordination false` turns off messages
+- Messages are capped at 4 KiB and 100 unread per inbox. Sessions in one
+  workspace share a repository, so they can still steer each other through
+  file contents.
+- `cloudfield-server config set conflict-coordination false` turns off messages
   between sessions and outcome reports; overlap warnings stay.
 - Each container holds a read-only copy of the server binary for the optional
   MCP bridge. It carries no credentials.
@@ -792,13 +1092,13 @@ token enters the container.
 workspace. A note is an attributed claim that can be stale, wrong or planted,
 never an instruction.
 
-- Only members pin notes (`aether memory pin`, which needs permission to push).
+- Only members pin notes (`cloudfield memory pin`, which needs permission to push).
   Pinned notes go into every session's launch brief; other notes reach an agent only
   when it searches.
 - Agents can add, search and read notes, and replace only another agent's
   unpinned note. They cannot pin, unpin or delete. A viewer's sessions only read.
   A note that gitleaks flags is refused, and a flagged report is withheld.
-- `aether memory rm <id>` deletes a note and `aether memory rm --run <session>`
+- `cloudfield memory rm <id>` deletes a note and `cloudfield memory rm --run <session>`
   every note a session wrote. Every change shows in the activity feed.
 
 ## Updates and releases
@@ -808,32 +1108,167 @@ never an instruction.
 Anyone who can write to the repository's GitHub releases can replace their
 files, so updaters trust a signature instead. Each release carries
 `aether-release.json`, listing every file's SHA-256 and size, and an ed25519
-signature over it. `aether update`, the dashboard's **Update now** and
-`aether server update` check the signature against keys built into the binary,
+signature over it. `cloudfield update`, the dashboard's **Update now** and
+`cloudfield server update` check the signature against keys built into the binary,
 require the manifest's version to match the tag, and check every download
 against it. [install.md](install.md#verified-releases) shows the check by hand.
 
-`aether gui build` on Windows checks the desktop app zip the same way, but
-`aether gui build --zip <path>` checks only a local zip's layout: compare it
+The key is an ed25519 key pair generated offline. The base64 of its 32-byte
+seed is the secret `AETHER_RELEASE_SIGNING_KEY`, set in the `release`
+environment and nowhere in the repository; the base64 of its 32-byte public
+key is an entry of `releaseKeys` in `internal/selfupdate/keys.go`. The
+nightly key is the same kind of pair: the secret `AETHER_NIGHTLY_SIGNING_KEY`
+in the `nightly` environment, and `nightlyKeys` in the same file. Keep a
+seed out of logs, shells that record history and agent sessions.
+
+`cloudfield gui build` on Windows checks the desktop app zip the same way, but
+`cloudfield gui build --zip <path>` checks only a local zip's layout: compare it
 with `checksums.txt` first.
 
 When the signing key changes, one bridge release trusts both keys. A client
 older than the bridge rejects every later release: install the bridge first
-with `aether update --version <bridge-tag>` (or `aether server update
+with `cloudfield update --version <bridge-tag>` (or `cloudfield server update
 --version <bridge-tag>`), or reinstall with the install script. A client that
 has not installed a release past a leaked key still trusts that key.
 
+### Release channels
+
+A server and its clients follow a [release channel](install.md#release-channel)
+(`nightly`, `beta` or `stable`). Which release is newest on a channel comes
+from three signed documents, none from GitHub's own ordering or labels:
+
+- **The manifest** (above) signs the release's `channel`, which must match its
+  tag's form (`-nightly.N`, `-beta.N`, none), so a nightly cannot be
+  relabelled beta, and a `build` number and `hotfix` count. Releases order by
+  `(build, hotfix)`, never by the tag: version strings sort `beta` below
+  `nightly`, and a tag is only a label. A release from before channels has no
+  build and counts as 0; among those, the version decides.
+- **A pointer per channel**, `nightly.json`, `beta.json` and `stable.json`
+  with a `.sig`, are assets of the `channels` prerelease. Each names the
+  channel's newest release (its tag, commit, build, hotfix and store schema)
+  and when it was published. A client verifies the pointer, fetches the
+  manifest of the tag it names, and refuses the release unless the manifest
+  agrees with the pointer on version, commit, build, hotfix and store schema.
+- **Both sign their channel.** A client refuses a pointer for another channel
+  (`channel pointer beta.json is signed for channel "stable"; do not follow
+  it`) and a manifest its channel does not take (`v0.9.0-nightly.13 is a
+  nightly release, which an install on beta does not take`). A channel takes
+  its own releases and those above it ([channels](install.md#release-channel)).
+
+**The high-water mark.** Every install keeps the highest `(build, hotfix)` it
+has accepted from each channel's pointer: on a server in
+`server-update/check.json` in its data directory, on a client in `update.json`
+beside `config.json`. A pointer below the mark is refused, and the check
+counts as failed:
+
+```
+channel pointer beta.json names build 380, below build 412 seen before
+```
+
+So replaying an old pointer, or serving one from a stale mirror, can fail
+checks but cannot move an install back. A manifest below the running build is
+refused the same way, because an install refuses a lower build whatever the
+pointer says. Only a named release installs one: `cloudfield server update
+--version <tag> --allow-downgrade`, which never crosses the database's
+schema, or `cloudfield update --version <tag>`. A state file that exists but
+cannot be read fails the check and is never overwritten, because starting
+again would forget the marks.
+
+What the mark cannot do:
+
+- **Withheld updates.** Serving an old pointer forever, or a 404, stalls
+  updates without moving anything backward. Cloudfield cannot tell a stalled
+  channel from a quiet one except by the signed `published_at`, which the
+  dashboard's Release channel section shows as the pointer's age. A frozen
+  channel stalls security fixes too. Until an install has verified a pointer
+  once, a missing pointer falls back to GitHub's Latest, which only releases
+  the channel takes can satisfy; after that a missing pointer is a failed
+  check, never a fall back.
+- **A bad pointer that is validly signed.** The mark moves only on a pointer
+  whose signature, manifest and fields all verify. A validly signed pointer
+  with a very high build raises every install's mark for good: no later
+  pointer with a lower build is accepted, and only a release with a higher
+  build recovers. The pointer writer refuses to sign a lower build for that
+  reason, so withdrawing a bad release means shipping a higher build, not
+  moving the pointer back.
+
+**Two kinds of key.** Release keys sign any manifest and pointer. Nightly keys,
+a separate list in the binary, verify only a document whose signed `channel` is
+`nightly`; a nightly-signed pointer must also name a nightly release. The first
+nightly key ships in `v0.8.7-beta.15`; a client older than that release cannot
+verify any nightly.
+Nightlies publish unattended, so their key lives in the `nightly` environment,
+limited to `main`, and never signs a beta or stable. Whoever holds a leaked
+nightly key and can put files in the repository's releases can:
+
+- publish a nightly release and move `nightly.json` to it, which every server
+  and client on `nightly` then installs, with code that runs as root on a
+  server; and set a very high nightly build, so that nightly installs refuse
+  any real nightly below it.
+
+It cannot move `beta.json` or `stable.json`, publish a beta or stable release,
+or relabel a nightly: those fail verification (`channel pointer nightly.json is
+signed by a nightly key but names <tag>, a beta release; do not install it`).
+Servers and clients on `beta` or `stable` are not reached. Rotate a nightly key
+as the release key is rotated ([above](#release-signing)): ship the next public
+key in a release before anything is signed with it.
+
+**The trusted signer.** Releases are built in one job and signed in another.
+The jobs that build run the released commit's code and hold no manifest or
+pointer signing key (the Android job is the exception, below). The
+job that signs checks out `main`, takes only the built artifacts and values,
+and runs `main`'s `release-manifest`, `publish-release.sh` and pointer writer
+with the key. Code from the commit being released, including a commit that
+Promote rebuilds under a new tag, therefore never runs next to the key, and a
+promoted old commit is signed in today's manifest format. Which key a run can
+reach is decided by its GitHub environment: `release` for beta and stable,
+`nightly` for nightlies. A run for one refuses a document of the other's kind
+before it signs.
+
+Limits of that arrangement:
+
+- The Android job decodes the Android keystore secrets and runs the released
+  commit's Gradle with them, so the keystore is within reach of the built
+  commit's code. `nightly.yml` passes those secrets too, so that happens
+  unattended on every nightly.
+- A Promote's signing job checks the re-running admin again. A nightly's
+  signing job and a pushed tag's do not, and the `nightly` environment has no
+  reviewers, so a non-admin with write access can re-run them. A re-run can
+  only finish what the original run resolved.
+- GitHub environments limit which refs a workflow may use a secret from, but
+  not which workflow file. A tag runs the tagged commit's own workflow files,
+  so a hotfix tag on a `release/X.Y` branch runs that branch's copies with the
+  release key. The guards are the branch's ruleset (reviewed pull requests,
+  admin-only creation), a tag ruleset that only admins and GitHub Actions can
+  create `v*` tags under, required reviewers on the `release` environment, and
+  an admin's own reading of the branch before tagging
+  ([CONTRIBUTING.md](../CONTRIBUTING.md#hotfixes)).
+- The workflow files on `main` reach the key like any code on `main`, and pass
+  the same merge gate.
+- A release tag, a hotfix and a Promote run check that the pusher or dispatcher
+  is a repository admin. A workflow file that skips that check is not stopped
+  by it; a scheduled nightly has no admin behind it, and builds only a `main`
+  commit whose CI is green.
+
+**What an admin can do by hand.** On the server host, `sudo cloudfield-server update
+--version <tag>` and `cloudfield update --version <tag>` install a release you name,
+signature checked, whatever the pointer says. Removing `server-update/check.json`
+(or a client's `update.json`) forgets the marks; the error for an unreadable
+state file names this. `sudo cloudfield-server update --channel
+<channel> --yes` moves a server to another channel. Restoring a pointer is a
+maintainer step ([CONTRIBUTING.md](../CONTRIBUTING.md#releases)).
+
 ### Server and client updates
 
-`aether server update` lets an admin replace the server's binaries without a
-shell on the host. That adds no power, since an admin can already run any code
+`cloudfield server update` lets a super admin replace the server's binaries without a
+shell on the host. That adds no power, since a super admin can already run any code
 on the server's Docker daemon. The version must be a `v` semver tag from the
-`3xDevOps/Aether` releases; a client never supplies a URL. Both binaries are
+`3xDevOps/cloudfield` releases; a client never supplies a URL. Both binaries are
 verified before either is replaced.
 
 **Install** in the **Docker inside sessions** row of **Settings → Server** (admins
 only) runs the Sysbox installer built into the server binary as root, the same
-one `sudo aether-server sysbox install` runs; the dashboard sends no script or
+one `sudo cloudfield-server sysbox install` runs; the dashboard sends no script or
 URL. A server that is not root refuses with `the server does not run as root;
 on the host run: sudo aether-server sysbox install`.
 
@@ -844,10 +1279,10 @@ When the `aether` CLI lives in a directory only root can write, such as
 macOS dialog titled `osascript`. It authorizes one fixed command that copies
 the download, staged in `~/Library/Caches/aether/update` (mode `0700`), into
 place as root after checking its SHA-256. Your password goes to macOS, never
-through Aether. A same-user process can make the update fail or stall, not
+through Cloudfield. A same-user process can make the update fail or stall, not
 install other bytes: the digest is part of the command. A mismatch afterwards
 reports `installed <path> does not match the release checksum; do not run it`.
-Where Aether cannot offer the dialog, the banner shows `sudo aether update`
+Where Cloudfield cannot offer the dialog, the banner shows `sudo aether update`
 ([local-gateway.md](local-gateway.md#localv1-verbs)).
 
 ## Vulnerability scanning
@@ -860,16 +1295,39 @@ vulnerability it reports gets a fix, and `go.mod` pins a patched Go
 ## Limits
 
 - Containers share the host kernel. A kernel or Docker escape reaches the
-  host.
+  host. A session VM has its own kernel, [hardened](vm-guest.md#kernel-hardening)
+  against an unprivileged agent; a flaw in Cloud Hypervisor or a host service
+  the VM uses reaches the host.
+- A session VM leaves an unprivileged agent two in-VM escalation surfaces by
+  design. Unprivileged user namespaces stay on because the in-VM development
+  browser's Chromium sandbox needs them; through one the agent reaches
+  `nf_tables`. The agents themselves do not need them - they run as uid 1000
+  with the VM as their boundary, and nested Docker runs its daemon as root -
+  so a seccomp filter on the agent process tree could deny the agent
+  `CLONE_NEWUSER` while the browser keeps it, a tightening left to the owner.
+  `perf_event_open` likewise stays available to the unprivileged. Both are
+  bounded by the VM.
+- Root in a session VM (a Root-tier session, a Default session with Docker, or
+  a Default session whose `sudo` was approved) can move a process out of the
+  `/session` cgroup and so evade the close-time freeze, the session process
+  limit and the kill when the main process exits. This is accepted: it is
+  already root in its own throwaway VM, and the VM, not the cgroup, is what
+  keeps it off the host and out of other sessions.
 - Outbound traffic is limited only for sessions of a workspace with egress
   control on. Other sessions and environment terminals
   reach the internet, your network and ports the server host listens on.
+- Any user in a session without egress control, a Default-tier agent
+  included, can send from a source port below 1024, which the host's
+  masquerade keeps below 1024, so a service on your network that trusts
+  privileged source ports, such as an NFS export with `secure`, takes it for
+  root on the server host.
 - An egress-limited session still reaches services on the server host, and every
   allowed host can receive data. A client that ignores the proxy variables
   cannot connect at all.
 - The egress proxy tells sessions apart by source address. Root in a session with
   Docker inside can claim another egress-limited session's address and get that
-  workspace's host list.
+  workspace's host list. A session VM cannot: its tap drops what it sends from
+  any other address.
 - On Docker older than 26.0 (25.0.4 and 23.0.11 on older lines), an internal
   network still resolves names through the host (CVE-2024-29018), so an
   egress-limited session can send data out in DNS queries.

@@ -46,6 +46,10 @@ func (s *stubUpdates) Update(_ context.Context, _ domain.MemberID, p protocol.Se
 	return s.result, s.restart, nil
 }
 
+func (s *stubUpdates) SetChannel(_ context.Context, _ domain.MemberID, p protocol.ServerReleaseChannelSetParams) (protocol.ServerReleaseChannelSetResult, error) {
+	return protocol.ServerReleaseChannelSetResult{Channel: p.Channel, Saved: !p.DryRun}, nil
+}
+
 func updateEnv(t *testing.T, svc *stubUpdates) *testEnv {
 	t.Helper()
 	return newTestEnv(t, func(c *Config) { c.Services.ServerUpdate = svc })
@@ -55,12 +59,13 @@ func TestServerUpdateRequiresAdmin(t *testing.T) {
 	t.Parallel()
 	svc := &stubUpdates{calls: make(chan protocol.ServerUpdateParams, 1)}
 	e := updateEnv(t, svc)
+	asSuperAdmin(t, e)
 	bob, _ := addMember(t, e, "Bob", domain.RoleCollaborator, false)
 
 	err := controlAs(t, e, bob).Call(protocol.MethodServerUpdate,
 		protocol.ServerUpdateParams{When: protocol.ServerUpdateNow}, nil)
 	wantDenied(t, err, "collaborator server.update")
-	if !strings.Contains(err.Error(), protocol.MethodServerUpdate+" requires the admin role") {
+	if !strings.Contains(err.Error(), protocol.MethodServerUpdate+": permission denied: this requires the super_admin role") {
 		t.Fatalf("error = %v, want it to name the method and the role", err)
 	}
 	select {
@@ -109,6 +114,7 @@ func TestServerUpdateRestartsOnlyAfterTheResponse(t *testing.T) {
 		},
 	}
 	e := updateEnv(t, svc)
+	asSuperAdmin(t, e)
 	defer close(release)
 
 	var got protocol.ServerUpdateResult
@@ -141,6 +147,7 @@ func TestServerUpdateRestartsOnlyAfterTheResponse(t *testing.T) {
 func TestServerUpdateIncapableNamesTheManualCommands(t *testing.T) {
 	t.Parallel()
 	e := updateEnv(t, &stubUpdates{err: serverupdate.ErrIncapable})
+	asSuperAdmin(t, e)
 
 	err := controlClient(t, e).Call(protocol.MethodServerUpdate,
 		protocol.ServerUpdateParams{When: protocol.ServerUpdateNow}, nil)
@@ -158,6 +165,7 @@ func TestServerUpdateIncapableNamesTheManualCommands(t *testing.T) {
 func TestServerUpdateBadTagIsInvalidParams(t *testing.T) {
 	t.Parallel()
 	e := updateEnv(t, &stubUpdates{err: serverupdate.ErrBadTag})
+	asSuperAdmin(t, e)
 
 	err := controlClient(t, e).Call(protocol.MethodServerUpdate,
 		protocol.ServerUpdateParams{Version: "latest", When: protocol.ServerUpdateNow}, nil)
@@ -179,6 +187,7 @@ func TestServerUpdateRefusalsMapToCodes(t *testing.T) {
 		{fmt.Errorf("%w: aether-server v0.2.0 is not older than the latest release v0.2.0", serverupdate.ErrUpToDate), protocol.CodeInvalidState},
 	} {
 		e := updateEnv(t, &stubUpdates{err: tc.err})
+		asSuperAdmin(t, e)
 		err := controlClient(t, e).Call(protocol.MethodServerUpdate,
 			protocol.ServerUpdateParams{Version: "v0.1.0", When: protocol.ServerUpdateNow}, nil)
 		var pe *protocol.Error
@@ -208,6 +217,7 @@ func TestServerUpdateStatusPassesRefresh(t *testing.T) {
 func TestServerUpdateUnavailableWithoutTheService(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t, nil)
+	asSuperAdmin(t, e)
 	c := controlClient(t, e)
 	for _, method := range []string{protocol.MethodServerUpdate, protocol.MethodServerUpdateStatus} {
 		err := c.Call(method, struct{}{}, nil)
@@ -311,7 +321,7 @@ func TestServerUpdateRemovedMemberIsDenied(t *testing.T) {
 	e := updateEnv(t, &stubUpdates{})
 	signer, member := addMember(t, e, "Gone", domain.RoleAdmin, false)
 	c := controlAs(t, e, signer)
-	if err := e.store.DeleteMember(context.Background(), member.ID); err != nil {
+	if err := e.store.DeleteMember(context.Background(), member.ID, ""); err != nil {
 		t.Fatalf("delete member: %v", err)
 	}
 	wantDenied(t, c.Call(protocol.MethodServerUpdate,

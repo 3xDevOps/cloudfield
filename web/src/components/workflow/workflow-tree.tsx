@@ -220,7 +220,7 @@ export function WorkflowTree({
           }}
         >
           <ArrowLeft />
-          Show the whole workflow
+          Show the whole tree
         </Button>
       )}
       <div

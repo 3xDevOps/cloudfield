@@ -65,7 +65,7 @@ export const createTimelineSlice: SliceCreator<TimelineSlice> = (set, get) => ({
     return () => set((s) => ({ feedViews: s.feedViews - 1 }))
   },
   appendLiveEvent: (event) => {
-    // Even an empty set notifies listeners and makes persist rewrite localStorage.
+    // Even an empty set notifies listeners.
     const now = get()
     if (now.feedViews === 0 || !selects(now.feedFilters, event)) return
     if (now.feed.some((e) => e.seq === event.seq)) return

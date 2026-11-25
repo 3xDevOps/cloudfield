@@ -1,0 +1,878 @@
+package vm
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"io/fs"
+	"net"
+	"net/http"
+	"net/netip"
+	"os"
+	"path"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/3xDevOps/Aether/internal/devexec"
+	"github.com/3xDevOps/Aether/internal/guest"
+	"github.com/3xDevOps/Aether/internal/runtime"
+	"github.com/3xDevOps/Aether/internal/vmimage"
+)
+
+// harness wires an engine to fakes: systemd units that serve a fake Cloud
+// Hypervisor API on the VM's real API socket, one fake helper per VM, and a
+// fake image store.
+type harness struct {
+	t      *testing.T
+	engine *engine
+	units  *fakeUnits
+	images *fakeImages
+	mu     sync.Mutex
+	guests map[string]*fakeHelper
+}
+
+func newHarness(t *testing.T) *harness {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "vmt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	h := &harness{t: t, images: &fakeImages{}, guests: map[string]*fakeHelper{}}
+	h.units = &fakeUnits{t: t, active: map[string]*fakeVMM{}, cgroups: t.TempDir()}
+	h.engine = h.newEngine(dir)
+	t.Cleanup(h.units.stopAll)
+	return h
+}
+
+// newEngine is a second engine process over the same data directory.
+func (h *harness) newEngine(dir string) *engine {
+	cfg := Config{DataDir: dir, Images: h.images, Monitor: []string{"/srv/aether-server", MonitorCommand}, Helper: "/srv/aether-server", ProgramUnit: localBinProgram}
+	e := newEngine(cfg, h.units, func(vsock string) (helper, error) {
+		return h.guest(filepath.Base(filepath.Dir(vsock))), nil
+	})
+	e.run = func(context.Context, string, ...string) error { return nil }
+	e.cgroupRoot, e.reportPoll = h.units.cgroups, time.Millisecond
+	e.listenDNS = func() (*dnsRelay, error) {
+		r, err := listenDNS(netip.MustParseAddr("127.0.0.1"), netip.MustParsePrefix("127.0.0.0/8"), func() []netip.AddrPort { return nil })
+		if err == nil {
+			h.t.Cleanup(r.close)
+		}
+		return r, err
+	}
+	return e
+}
+
+func (h *harness) guest(key string) *fakeHelper {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	g := h.guests[key]
+	if g == nil {
+		g = &fakeHelper{key: key, units: h.units, procs: map[string]*fakeProc{}}
+		h.guests[key] = g
+	}
+	return g
+}
+
+// localBinProgram stands in for memberhome.ProgramUnit, which has tests of
+// its own: a program is its plain file in ~/.local/bin.
+func localBinProgram(home, executable string) (string, error) {
+	unit := path.Join(".local/bin", executable)
+	if _, err := os.Stat(filepath.Join(home, unit)); errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	} else if err != nil {
+		return "", err
+	}
+	return unit, nil
+}
+
+func sessionSpec(key string) runtime.Spec {
+	return runtime.Spec{
+		Image: "aether/standard:1", Command: []string{"/bin/sh", "-c", "agent"}, TTY: true,
+		Env: map[string]string{"AETHER_RUN_ID": key, "HOME": "/root", "TOKEN": "s3cret"}, CreationKey: key,
+		Fingerprint: "fp-1", CPULimit: 1.5, MemoryLimitBytes: 2 << 30, PidsLimit: 4096,
+	}
+}
+
+type fakeImages struct {
+	mu        sync.Mutex
+	rootDisks int
+	promoted  chan string
+	tags      map[string]vmimage.Base
+	saves     []fakeSave
+	saveErr   error
+	programs  map[string]bool
+}
+
+type fakeSave struct {
+	disk   vmimage.Disk
+	base   vmimage.Base
+	ref    string
+	labels map[string]string
+	// copied is what the disk held when SaveBase read it.
+	copied string
+}
+
+func (f *fakeImages) Kernel() (string, error) { return "/k/vmlinux", nil }
+
+func (f *fakeImages) HelperDisk(_ context.Context, _, path string) (vmimage.Disk, error) {
+	return vmimage.Disk{Path: path, Format: "raw"}, os.WriteFile(path, nil, 0o600)
+}
+
+func (f *fakeImages) BaseDisk(_ context.Context, ref string) (vmimage.Base, error) {
+	if ref == "missing:1" {
+		return vmimage.Base{}, errors.New("manifest unknown")
+	}
+	return vmimage.Base{ID: "sha256:b", Path: "/images/b.raw", Config: vmimage.ImageConfig{
+		Env: []string{"PATH=/usr/bin:/bin", "HOME=/image-home"}, WorkingDir: "/srv",
+	}}, nil
+}
+
+func (f *fakeImages) LookupBase(ref string) (vmimage.Base, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if b, ok := f.tags[ref]; ok {
+		return b, nil
+	}
+	return vmimage.Base{}, fmt.Errorf("image %s: %w", ref, runtime.ErrNotFound)
+}
+
+func (f *fakeImages) SaveBase(_ context.Context, disk vmimage.Disk, base vmimage.Base, ref string, labels map[string]string) (vmimage.Base, error) {
+	data, err := os.ReadFile(disk.Path)
+	if err != nil {
+		return vmimage.Base{}, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.saves = append(f.saves, fakeSave{disk: disk, base: base, ref: ref, labels: labels, copied: string(data)})
+	if f.saveErr != nil {
+		return vmimage.Base{}, f.saveErr
+	}
+	b := vmimage.Base{ID: "local:1", Path: "/images/saved.raw", Config: vmimage.ImageConfig{Labels: labels}}
+	f.tagLocked(ref, b)
+	return b, nil
+}
+
+func (f *fakeImages) tagLocked(ref string, b vmimage.Base) {
+	if f.tags == nil {
+		f.tags = map[string]vmimage.Base{}
+	}
+	f.tags[ref] = b
+}
+
+func (f *fakeImages) Tag(source, target string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	b, ok := f.tags[source]
+	if !ok {
+		return runtime.ErrNotFound
+	}
+	f.tagLocked(target, b)
+	return nil
+}
+
+func (f *fakeImages) Untag(ref string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.tags, ref)
+	return nil
+}
+
+func (f *fakeImages) Tags(repo string) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for ref := range f.tags {
+		if strings.HasPrefix(ref, repo+":") {
+			out = append(out, ref)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeImages) NewRootDisk(_ context.Context, _ vmimage.Base, path string) (vmimage.Disk, error) {
+	f.mu.Lock()
+	f.rootDisks++
+	f.mu.Unlock()
+	return vmimage.Disk{Path: path, Format: "qcow2"}, os.WriteFile(path, nil, 0o600)
+}
+
+func (f *fakeImages) NewDataDisk(_ context.Context, path string, _ int64) (vmimage.Disk, error) {
+	return vmimage.Disk{Path: path, Format: "raw"}, os.WriteFile(path, nil, 0o600)
+}
+
+func (f *fakeImages) NewCacheDisk(_ context.Context, _, path string) (vmimage.Disk, error) {
+	return vmimage.Disk{Path: path, Format: "qcow2", Backing: path + ".base"}, os.WriteFile(path, nil, 0o600)
+}
+
+func (f *fakeImages) SnapshotCache(disk vmimage.Disk) (string, error) {
+	return disk.Path + ".snapshot", nil
+}
+
+func (f *fakeImages) UnshareCache(context.Context, vmimage.Disk) error { return nil }
+
+func (f *fakeImages) PromoteCache(pool, snapshot string) error {
+	f.mu.Lock()
+	promoted := f.promoted
+	f.mu.Unlock()
+	if promoted != nil {
+		promoted <- pool + " " + filepath.Base(snapshot)
+	}
+	return nil
+}
+
+func (f *fakeImages) ProgramDisk(_, _, unit, path string) (vmimage.Disk, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if !f.programs[unit] {
+		return vmimage.Disk{}, false, nil
+	}
+	return vmimage.Disk{Path: path, Format: vmimage.FormatRaw}, true, os.WriteFile(path, nil, 0o444)
+}
+
+func (f *fakeImages) BuildProgram(_, _, unit string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.programs == nil {
+		f.programs = map[string]bool{}
+	}
+	f.programs[unit] = true
+	return nil
+}
+
+func (f *fakeImages) Sweep() error { return nil }
+
+func (f *fakeImages) roots() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.rootDisks
+}
+
+// fakeUnits starts a fake VMM per unit: it reads the launch the engine
+// wrote and serves Cloud Hypervisor's API on the API socket it names.
+type fakeUnits struct {
+	t          *testing.T
+	mu         sync.Mutex
+	active     map[string]*fakeVMM
+	started    []startCall
+	failNext   bool
+	stateErr   error
+	failResume bool
+	// Each VMM started refuses its first refuseResumes resumes, staying
+	// paused; as it resumes, with rebootOnResume it reports a guest reboot
+	// and with resumeWrites it writes that disk.
+	refuseResumes  int
+	rebootOnResume bool
+	resumeWrites   string
+	// cgroups is the cgroup root, which holds a memory.current, a
+	// memory.stat and a cgroup.freeze for each running unit.
+	cgroups string
+}
+
+func (u *fakeUnits) cgroup(name string) string {
+	return filepath.Join(u.cgroups, runtime.SessionSlice, name)
+}
+
+type startCall struct {
+	name       string
+	argv       []string
+	properties []string
+	launch     launch
+}
+
+func (u *fakeUnits) Start(_ context.Context, name string, argv, properties []string) error {
+	data, err := os.ReadFile(filepath.Join(argv[len(argv)-1], launchFile))
+	if err != nil {
+		return err
+	}
+	var l launch
+	if err = json.Unmarshal(data, &l); err != nil {
+		return err
+	}
+	if err = os.MkdirAll(u.cgroup(name), 0o755); err != nil {
+		return err
+	}
+	if err = os.WriteFile(filepath.Join(u.cgroup(name), "memory.current"), []byte("1\n"), 0o644); err != nil {
+		return err
+	}
+	if err = os.WriteFile(filepath.Join(u.cgroup(name), "memory.stat"), []byte("anon 1\ninactive_file 0\n"), 0o644); err != nil {
+		return err
+	}
+	if err = os.WriteFile(filepath.Join(u.cgroup(name), "cgroup.freeze"), []byte("0\n"), 0o644); err != nil {
+		return err
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.started = append(u.started, startCall{name, argv, properties, l})
+	if u.failNext {
+		u.failNext = false
+		for _, p := range properties {
+			if log, ok := strings.CutPrefix(p, "StandardOutput=append:"); ok {
+				f, openErr := os.OpenFile(log, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+				if openErr != nil {
+					return openErr
+				}
+				_, err = f.WriteString("cloud-hypervisor: Error booting VM: KvmNotAvailable\n")
+				return errors.Join(err, f.Close())
+			}
+		}
+		return nil
+	}
+	socket := ""
+	for i, arg := range l.Args {
+		if arg == "--api-socket" {
+			socket = strings.TrimPrefix(l.Args[i+1], "path=")
+		}
+	}
+	vmm, err := startVMM(socket, l.Args, func() { go func() { _ = u.Stop(context.Background(), name) }() })
+	if vmm != nil {
+		vmm.failResume, vmm.refuseResumes, vmm.rebootOnResume, vmm.resumeWrites = u.failResume, u.refuseResumes, u.rebootOnResume, u.resumeWrites
+	}
+	if err != nil {
+		return err
+	}
+	u.active[name] = vmm
+	return nil
+}
+
+func (u *fakeUnits) Stop(_ context.Context, name string) error {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if vmm := u.active[name]; vmm != nil {
+		vmm.close()
+	}
+	delete(u.active, name)
+	return os.RemoveAll(u.cgroup(name))
+}
+
+func (u *fakeUnits) State(_ context.Context, name string) (unitState, error) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.stateErr != nil {
+		return unitState{}, u.stateErr
+	}
+	if u.active[name] != nil {
+		return unitState{Active: true, MainPID: 4242}, nil
+	}
+	return unitState{}, nil
+}
+
+func (u *fakeUnits) stopAll() {
+	u.mu.Lock()
+	names := make([]string, 0, len(u.active))
+	for name := range u.active {
+		names = append(names, name)
+	}
+	u.mu.Unlock()
+	for _, name := range names {
+		_ = u.Stop(context.Background(), name)
+	}
+}
+
+func (u *fakeUnits) vmm(key string) *fakeVMM {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.active[unitName(key)]
+}
+
+func (u *fakeUnits) last() startCall {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	return u.started[len(u.started)-1]
+}
+
+// fakeVMM is Cloud Hypervisor's REST API with the state transitions the
+// engine relies on.
+type fakeVMM struct {
+	mu         sync.Mutex
+	failResume bool
+	state      string
+	calls      []string
+	restored   bool
+	srv        *http.Server
+	listener   net.Listener
+	// snapshotFails refuses every snapshot. A snapshot sends on
+	// snapshotHold, when set, as it starts, and finishes once it receives
+	// from it.
+	snapshotFails  bool
+	snapshotHold   chan struct{}
+	refuseResumes  int
+	rebootOnResume bool
+	resumeWrites   string
+	events         string
+}
+
+func startVMM(socket string, args []string, exit func()) (*fakeVMM, error) {
+	_ = os.Remove(socket)
+	l, err := net.Listen("unix", socket)
+	if err != nil {
+		return nil, err
+	}
+	v := &fakeVMM{state: "Running", listener: l}
+	for i, arg := range args {
+		switch arg {
+		case "--restore":
+			v.state, v.restored = "Paused", true
+		case "--event-monitor":
+			v.events = strings.TrimPrefix(args[i+1], "path=")
+		}
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/", func(w http.ResponseWriter, r *http.Request) {
+		endpoint := strings.TrimPrefix(r.URL.Path, "/api/v1/")
+		body, _ := io.ReadAll(r.Body)
+		v.mu.Lock()
+		defer v.mu.Unlock()
+		v.calls = append(v.calls, endpoint)
+		switch endpoint {
+		case "vm.info":
+			_ = json.NewEncoder(w).Encode(map[string]string{"state": v.state})
+		case "vm.pause":
+			v.state = "Paused"
+		case "vm.resume":
+			if v.refuseResumes > 0 {
+				v.refuseResumes--
+				http.Error(w, "resume refused", http.StatusInternalServerError)
+				return
+			}
+			v.state = "Running"
+			if v.resumeWrites != "" {
+				later := time.Now().Add(time.Minute)
+				_ = os.Chtimes(v.resumeWrites, later, later)
+			}
+			if v.rebootOnResume {
+				_ = os.WriteFile(v.events, []byte(`{"source": "vm", "event": "rebooting"}`), 0o600)
+			}
+			if v.failResume {
+				http.Error(w, "reply lost", http.StatusGatewayTimeout)
+			}
+		case "vm.snapshot":
+			if v.snapshotFails {
+				http.Error(w, "no space left on device", http.StatusInternalServerError)
+				return
+			}
+			if v.snapshotHold != nil {
+				v.snapshotHold <- struct{}{}
+				<-v.snapshotHold
+			}
+			var req struct {
+				Destination string `json:"destination_url"`
+			}
+			_ = json.Unmarshal(body, &req)
+			dir := strings.TrimPrefix(req.Destination, "file://")
+			_ = os.WriteFile(filepath.Join(dir, "state.json"), []byte("{}"), 0o600)
+			disk := filepath.Join(filepath.Dir(dir), "fake-root.img")
+			_ = os.WriteFile(disk, nil, 0o600)
+			_ = os.WriteFile(filepath.Join(dir, "config.json"), fmt.Appendf(nil, `{"disks":[{"path":%q}]}`, disk), 0o600)
+		case "vm.counters":
+			_ = json.NewEncoder(w).Encode(map[string]map[string]uint64{
+				"net0": {"rx_bytes": 10, "tx_bytes": 20}, "root": {"read_bytes": 1, "write_bytes": 2}, "data": {"read_bytes": 3, "write_bytes": 4},
+			})
+		case "vmm.shutdown":
+			exit()
+		default:
+			http.Error(w, "unknown endpoint", http.StatusNotFound)
+		}
+	})
+	v.srv = &http.Server{Handler: mux, ReadHeaderTimeout: time.Second}
+	go func() { _ = v.srv.Serve(l) }()
+	return v, nil
+}
+
+// Close alone leaves the listener to Serve when Serve has not tracked it yet,
+// and Serve's late close would unlink the socket of the unit's next monitor.
+func (v *fakeVMM) close() {
+	_ = v.srv.Close()
+	_ = v.listener.Close()
+}
+
+func (v *fakeVMM) called() []string {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return append([]string(nil), v.calls...)
+}
+
+// fakeHelper is the in-VM helper. Main exits when it is signalled or told to.
+type fakeHelper struct {
+	key   string
+	units *fakeUnits
+	mu    sync.Mutex
+	boots []guest.BootSpec
+	procs map[string]*fakeProc
+	// bootErr and output program the next Boot and Spawn.
+	bootErr error
+	pingErr error
+	// pingHold, when set, holds Ping until it is closed.
+	pingHold chan struct{}
+	output   map[string]string
+	ignoreTE bool
+	clock    time.Time
+	clockErr error
+	// bootHangs makes Boot wait for its context, as a dead guest does.
+	bootHangs bool
+	syncErr   error
+	syncs     int
+	// unresponsive makes calls fail as a guest that stopped answering does.
+	unresponsive bool
+	stats        guest.Stats
+	// finals are dev-exec's own exit records, which outlive the helper's.
+	finals map[string]int
+	// freezes records Freeze and Thaw calls in order.
+	freezes       []string
+	freezeErr     error
+	thawed        bool
+	sessionFrozen bool
+	sessionErr    error
+	bootError     string
+	// browser is the companion's process ID.
+	browser      string
+	browserSpec  guest.BrowserSpec
+	browserCalls []string
+}
+
+func (g *fakeHelper) Ping(ctx context.Context) (guest.Info, error) {
+	g.mu.Lock()
+	pingErr, hold := g.pingErr, g.pingHold
+	g.mu.Unlock()
+	if pingErr != nil {
+		<-ctx.Done()
+		return guest.Info{}, pingErr
+	}
+	if hold != nil {
+		select {
+		case <-hold:
+		case <-ctx.Done():
+			return guest.Info{}, ctx.Err()
+		}
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return guest.Info{BootID: "b1", Protocol: guest.Protocol, BootError: g.bootError}, nil
+}
+
+func (g *fakeHelper) Boot(ctx context.Context, spec guest.BootSpec) error {
+	if g.bootHangs {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.boots = append(g.boots, spec)
+	if g.bootErr != nil {
+		return g.bootErr
+	}
+	if main := g.procs[guest.MainID]; main == nil || main.exited() {
+		main = newFakeProc(spec.Main, "", 0, g.ignoreTE)
+		g.procs[guest.MainID] = main
+		if code, ok := strings.CutPrefix(strings.Join(spec.Main.Argv, " "), "/bin/sh -c exit "); ok {
+			n, _ := strconv.Atoi(code)
+			main.exit(n)
+		}
+	}
+	return nil
+}
+
+func (g *fakeHelper) Spawn(_ context.Context, spec guest.ProcessSpec) (process, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if _, ok := g.procs[spec.ID]; ok {
+		return nil, errors.New("already exists")
+	}
+	out := g.output[spec.Argv[0]]
+	if len(spec.Argv) >= 8 && spec.Argv[1] == devexec.Command && spec.Argv[2] == "control" {
+		out = g.control(spec.Argv[3], spec.Argv[4], spec.Argv[5], spec.Argv[6])
+	}
+	if strings.HasPrefix(out, "start-error:") {
+		return nil, &guest.StartError{Code: 127, Err: errors.New("exec: no such file")}
+	}
+	p := newFakeProc(spec, out, 0, false)
+	g.procs[spec.ID] = p
+	if supervisor := len(spec.Argv) > 2 && spec.Argv[1] == devexec.Command && (spec.Argv[2] == "run" || spec.Argv[2] == "run-pipe"); !supervisor {
+		p.exit(0)
+	}
+	return p, nil
+}
+
+// control answers like dev-exec's control command; it holds g.mu.
+func (g *fakeHelper) control(key, execID, claim, action string) string {
+	state := devexec.State{CreationKey: key, ExecID: execID, ClaimToken: claim}
+	supervisor := g.procs[execID]
+	if code, ok := g.finals[execID]; ok && supervisor == nil {
+		state.Exited, state.ExitCode = true, &code
+	} else if supervisor == nil {
+		state.Error = "no such execution"
+	} else {
+		if action == "stop" {
+			supervisor.exit(143)
+		}
+		if st, _ := supervisor.Status(context.Background()); st.Exited {
+			code := st.ExitCode
+			state.Exited, state.ExitCode = true, &code
+			if g.finals == nil {
+				g.finals = map[string]int{}
+			}
+			g.finals[execID] = code
+		} else {
+			state.Running = true
+		}
+	}
+	data, _ := json.Marshal(state)
+	return string(data)
+}
+
+func (g *fakeHelper) Process(id string) process {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if p := g.procs[id]; p != nil {
+		return p
+	}
+	return missingProc{}
+}
+
+func (g *fakeHelper) spawned() []guest.ProcessSpec {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	var out []guest.ProcessSpec
+	for _, p := range g.procs {
+		out = append(out, p.spec)
+	}
+	return out
+}
+
+func (g *fakeHelper) Stats(context.Context) (guest.Stats, error) { return g.stats, nil }
+
+func (g *fakeHelper) SyncClock(_ context.Context, t time.Time) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.clock = t
+	return g.clockErr
+}
+
+// PowerOff ends the VM the way a guest poweroff ends Cloud Hypervisor.
+func (g *fakeHelper) PowerOff(ctx context.Context) error {
+	if g.unresponsive {
+		return context.DeadlineExceeded
+	}
+	return g.units.Stop(ctx, unitName(g.key))
+}
+
+func (g *fakeHelper) Sync(context.Context) error {
+	if g.unresponsive {
+		return context.DeadlineExceeded
+	}
+	g.mu.Lock()
+	g.syncs++
+	g.mu.Unlock()
+	return g.syncErr
+}
+
+func (g *fakeHelper) Close() error { return nil }
+
+func (g *fakeHelper) Freeze(_ context.Context, _ string, timeout time.Duration) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.freezes = append(g.freezes, "freeze "+timeout.String())
+	return g.freezeErr
+}
+
+// Thaw reports the freeze held, unless thawed set its deadline as passed.
+func (g *fakeHelper) Thaw(context.Context, string) (bool, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.freezes = append(g.freezes, "thaw")
+	frozen := !g.thawed && len(g.freezes) > 1 && strings.HasPrefix(g.freezes[len(g.freezes)-2], "freeze")
+	return frozen, nil
+}
+
+// FreezeSession fails a freeze with sessionErr after it took hold, as a
+// slow one does; errors.ErrUnsupported fails every call, as a helper from
+// before the call does.
+func (g *fakeHelper) FreezeSession(_ context.Context, frozen bool) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if errors.Is(g.sessionErr, errors.ErrUnsupported) {
+		return g.sessionErr
+	}
+	g.sessionFrozen = frozen
+	if frozen {
+		return g.sessionErr
+	}
+	return nil
+}
+
+func (g *fakeHelper) isSessionFrozen() bool {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.sessionFrozen
+}
+
+// StartBrowser runs the companion as a process under its own ID.
+func (g *fakeHelper) StartBrowser(_ context.Context, spec guest.BrowserSpec) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if p := g.procs[g.browser]; p != nil && !p.exited() {
+		return errors.New("the browser still runs")
+	}
+	g.browser, g.browserSpec = spec.Process.ID, spec
+	g.procs[spec.Process.ID] = newFakeProc(spec.Process, "", 0, false)
+	g.browserCalls = append(g.browserCalls, "start")
+	return nil
+}
+
+func (g *fakeHelper) PauseBrowser(_ context.Context, paused bool) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.browserCalls = append(g.browserCalls, fmt.Sprintf("pause %v", paused))
+	return nil
+}
+
+func (g *fakeHelper) StopBrowser(context.Context) error {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if p := g.procs[g.browser]; p != nil {
+		p.exit(137)
+	}
+	g.browserCalls = append(g.browserCalls, "stop")
+	return nil
+}
+
+func (g *fakeHelper) frozen() []string {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]string(nil), g.freezes...)
+}
+
+type fakeProc struct {
+	unresponsive bool
+	spec         guest.ProcessSpec
+	out          string
+	ignoreTE     bool
+	mu           sync.Mutex
+	signals      []syscall.Signal
+	done         chan struct{}
+	code         int
+	stdin        bool
+}
+
+func newFakeProc(spec guest.ProcessSpec, out string, code int, ignoreTerm bool) *fakeProc {
+	return &fakeProc{spec: spec, out: out, code: code, ignoreTE: ignoreTerm, done: make(chan struct{})}
+}
+
+func (p *fakeProc) exited() bool {
+	select {
+	case <-p.done:
+		return true
+	default:
+		return false
+	}
+}
+
+func (p *fakeProc) exit(code int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	select {
+	case <-p.done:
+	default:
+		p.code = code
+		close(p.done)
+	}
+}
+
+// Attach serves the programmed output. "hang" never ends stdout, and
+// "errflood:" sends stderr past the exec output limit first; both end only
+// when the attachment closes.
+func (p *fakeProc) Attach(bool) runtime.Attachment {
+	stdout, held := io.Pipe()
+	a := &fakeAttachment{stdout: stdout, stderr: strings.NewReader(""), closed: func() { _ = held.CloseWithError(io.ErrClosedPipe) }}
+	switch p.out {
+	case "hang":
+	case "errflood:":
+		a.stderr = strings.NewReader(strings.Repeat("e", runtime.ExecOutputLimit+1))
+	default:
+		go func() {
+			_, _ = io.WriteString(held, p.out)
+			_ = held.Close()
+		}()
+	}
+	return a
+}
+
+func (p *fakeProc) CloseStdin(context.Context) error {
+	p.mu.Lock()
+	p.stdin = true
+	p.mu.Unlock()
+	return nil
+}
+
+func (p *fakeProc) Resize(context.Context, guest.Size) error { return nil }
+
+func (p *fakeProc) Signal(_ context.Context, sig syscall.Signal) error {
+	if p.unresponsive {
+		return context.DeadlineExceeded
+	}
+	p.mu.Lock()
+	p.signals = append(p.signals, sig)
+	ignore := p.ignoreTE && sig == syscall.SIGTERM
+	p.mu.Unlock()
+	if !ignore {
+		p.exit(128 + int(sig))
+	}
+	return nil
+}
+
+func (p *fakeProc) Status(context.Context) (guest.State, error) {
+	select {
+	case <-p.done:
+		return guest.State{Exited: true, ExitCode: p.code}, nil
+	default:
+		return guest.State{}, nil
+	}
+}
+
+func (p *fakeProc) Wait(ctx context.Context) (int, error) {
+	select {
+	case <-p.done:
+		return p.code, nil
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	}
+}
+
+type missingProc struct{}
+
+func (missingProc) Attach(bool) runtime.Attachment               { return &fakeAttachment{} }
+func (missingProc) CloseStdin(context.Context) error             { return guest.ErrNotFound }
+func (missingProc) Resize(context.Context, guest.Size) error     { return guest.ErrNotFound }
+func (missingProc) Signal(context.Context, syscall.Signal) error { return guest.ErrNotFound }
+func (missingProc) Status(context.Context) (guest.State, error) {
+	return guest.State{}, guest.ErrNotFound
+}
+func (missingProc) Wait(context.Context) (int, error) { return 0, guest.ErrNotFound }
+
+type fakeAttachment struct {
+	stdout, stderr io.Reader
+	closed         func()
+}
+
+func (a *fakeAttachment) Stdin() io.WriteCloser                    { return nopWriteCloser{} }
+func (a *fakeAttachment) Stdout() io.Reader                        { return a.stdout }
+func (a *fakeAttachment) Stderr() io.Reader                        { return a.stderr }
+func (a *fakeAttachment) Resize(context.Context, uint, uint) error { return nil }
+func (a *fakeAttachment) Close() error {
+	if a.closed != nil {
+		a.closed()
+	}
+	return nil
+}
+
+type nopWriteCloser struct{}
+
+func (nopWriteCloser) Write(p []byte) (int, error) { return len(p), nil }
+func (nopWriteCloser) Close() error                { return nil }

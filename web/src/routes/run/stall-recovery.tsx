@@ -25,8 +25,9 @@ import type { RunRecord } from '@/store/runs'
 import type { SessionRow } from '@/store/session-rows'
 import { sessionLease } from '@/store/session-stream'
 
-// Mirrors coordhooks.ReportReminderLead in internal/coordhooks/guide.go: Aether's prompt, not the member's.
-const reportReminderLead = 'Report your state with aether-internal report'
+// Mirror coordhooks.ReportReminderLead in internal/coordhooks/guide.go, now and before it named aether_report:
+// Aether's prompt, not the member's, kept in older sessions' history.
+const reportReminderLeads = ['Report your state with aether_report or aether-internal report', 'Report your state with aether-internal report']
 
 function LastProgress({ liveness, now }: { liveness: RunLiveness; now: number }) {
   if (liveness.last_progress_at) {
@@ -67,7 +68,7 @@ export function StallCallout({ run, agent, rows, nav }: {
   }, [stalled])
   if (!stalled) return null
   const lastPrompt = [...rows].reverse().find((row): row is Extract<SessionRow, { kind: 'user' }> =>
-    row.kind === 'user' && (row.delivery === undefined || row.delivery === 'Sent') && !row.body.startsWith(reportReminderLead))
+    row.kind === 'user' && (row.delivery === undefined || row.delivery === 'Sent') && !reportReminderLeads.some((lead) => row.body.startsWith(lead)))
 
   const attempt = async (what: string, act: () => Promise<unknown>) => {
     setBusy(true)
@@ -142,7 +143,7 @@ export function StallCallout({ run, agent, rows, nav }: {
           </dl>
         )}
         {error && <p className="mt-1 text-ui-sm text-muted">Could not read the agent’s progress: {error}</p>}
-        <p className="mt-1 text-ui-sm text-muted">Aether restarts nothing on its own. A slow model can still answer.</p>
+        <p className="mt-1 text-ui-sm text-muted">Cloudfield restarts nothing on its own. A slow model can still answer.</p>
       </Callout>
       <AlertDialog open={confirm !== undefined} onOpenChange={(open) => { if (!open) setConfirm(undefined) }}>
         <AlertDialogContent>

@@ -53,7 +53,7 @@ func reviewerEdge(t *testing.T) (*harness, string, string) {
 // bob joins as a collaborator. reviewer is its edge-reviewer option.
 func (h *harness) reviewerServer(dir string, policy edgeproto.AccessPolicy, client *connectorClient, reviewer bool) (*serverNode, domain.MemberID, domain.MemberID) {
 	h.t.Helper()
-	s := &serverNode{h: h, dir: dir, policy: policy, client: client, reviewer: reviewer, addr: "127.0.0.1:0"}
+	s := &serverNode{h: h, dir: dir, policy: policy, client: client, reviewer: reviewer}
 	s.start()
 	h.t.Cleanup(func() { s.stop() })
 	clients := h.login(alice, bob)
@@ -143,8 +143,8 @@ func TestReviewerSignIn(t *testing.T) {
 		as, member domain.MemberID
 		want       string
 	}{
-		{"bob binding himself", bobID, bobID, "admins only"},
-		{"alice binding herself, an admin", aliceID, aliceID, "is an admin"},
+		{"bob binding himself", bobID, bobID, "requires the super_admin role"},
+		{"alice binding herself, a super admin", aliceID, aliceID, "is super_admin; bind the reviewer account to a viewer or collaborator"},
 	} {
 		if err := link(tt.as, tt.member); err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Fatalf("%s: %v, want %q", tt.what, err, tt.want)
