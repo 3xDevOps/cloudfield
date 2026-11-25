@@ -680,7 +680,7 @@ describe('the composer', () => {
     await settled()
     await live('run_3', 1)
     fireEvent.click(tile(1).getByRole('button', { name: 'Reply' }))
-    expect(state().route.params).toMatchObject({ runId: 'run_3', view: 'session' })
+    expect(state().route.params).toEqual({ runId: 'run_3', view: 'session' })
   })
 
   it('focuses the composer for Reply when the session\'s Chat is in a parked tile', async () => {

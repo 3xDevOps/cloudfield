@@ -241,7 +241,10 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
 
   const [composeRequested, setComposeRequested] = useState(false)
   useEffect(() => {
-    if (focused && params.focus === 'composer') setComposeRequested(true)
+    if (!focused || params.focus !== 'composer') return
+    setComposeRequested(true)
+    // Served once: a tile focused again would otherwise take the keyboard back. The address never carried it.
+    useStore.setState((s) => ({ route: { ...s.route, params: Object.fromEntries(Object.entries(s.route.params).filter(([key]) => key !== 'focus')) } }))
   }, [focused, params])
 
   const free = views.filter((item) => !elsewhere.includes(item))

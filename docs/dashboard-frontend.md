@@ -3139,7 +3139,9 @@ outline. When a navigation, a pick or a shortcut moves
 the focus while the keyboard sits in another tile, the keyboard moves to the
 new tile's heading. Only the focused tile answers the session's shortcuts,
 reads `agent`, `file`, `line`, `column`, `diff` and `focus` from the route,
-reports its view to the assistant and marks its session seen.
+reports its view to the assistant and marks its session seen. `focus` is
+served once and then dropped from the route, so a tile that takes the focus
+again leaves the keyboard where the press put it.
 
 **Tear-off** is dragging a view out of a tile's view switch into a tile of
 its own. With a mouse or a pen, a sidebar row, a tab and every view but the
