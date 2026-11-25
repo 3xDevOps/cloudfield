@@ -54,8 +54,9 @@ export function Picker({ tileId, runId, autoFocus, onPicked, className }: {
     changeTiles((before, context) => pickTab(before, tileId, id, context, view), true)
     onPicked?.()
   }
-  const session = (row: RunRow) => (
-    <CommandItem key={row.run.id} value={`${runLabel(row.run)} ${row.run.id}`} onSelect={() => pick(row.run.id)}>
+  const parent = new Map(groups.flatMap((group) => group.runs.flatMap((tree) => tree.children.map((child) => [child.run.id, tree.run.id] as const))))
+  const session = (row: RunRow, indent = false) => (
+    <CommandItem key={row.run.id} value={`${runLabel(row.run)} ${row.run.id}`} onSelect={() => pick(row.run.id)} className={cn(indent && 'pl-6')}>
       <StatusDot tone={toneOf(row)} />
       <span className="min-w-0 flex-1 truncate">{runLabel(row.run)}</span>
       <RelativeTime at={row.since} compact title={undefined} className="text-ui-sm text-muted" />
@@ -65,11 +66,11 @@ export function Picker({ tileId, runId, autoFocus, onPicked, className }: {
 
   return (
     <section aria-label="Open in this tile" className={cn('flex min-h-0 flex-col gap-2', className)}>
-      <h2 className="px-2 text-ui font-medium">Open in this tile</h2>
-      {refused && <p className="px-2 text-ui-sm text-muted">No room to split {noRoom}. Add a tab here instead.</p>}
+      <h2 className="px-3 text-ui font-medium">Open in this tile</h2>
+      {refused && <p className="px-3 text-ui-sm text-muted">No room to split {noRoom}. Add a tab here instead.</p>}
       <Command
         label="Find a session or view"
-        className="flex-1 rounded-none bg-transparent"
+        className="flex-1 rounded-none bg-transparent not-focus-within:[&_[cmdk-item][data-selected=true]:not(:hover)]:bg-transparent"
         value={pointed}
         onValueChange={(value) => {
           setPointed(value)
@@ -85,7 +86,7 @@ export function Picker({ tileId, runId, autoFocus, onPicked, className }: {
           wrapperClassName="mx-1 h-8 shrink-0 rounded-control border border-control bg-canvas focus-within:border-accent focus-within:shadow-field-focus coarse:h-11"
           className="px-0 focus-visible:outline-0 focus-visible:shadow-none"
         />
-        <CommandList className="max-h-none flex-1 [mask-image:linear-gradient(to_bottom,black_calc(100%-1.5rem),transparent)] [&_[cmdk-list-sizer]]:pb-6">
+        <CommandList className="max-h-none flex-1 [mask-image:linear-gradient(to_bottom,black_calc(100%-2rem),transparent)] [&_[cmdk-list-sizer]]:pb-8">
           <CommandEmpty>{search ? 'No session or view matches.' : 'No sessions in this workspace yet.'}</CommandEmpty>
           {run && (
             <CommandGroup heading={`Other views of ${runLabel(run)}`} className="[&_[cmdk-group-items]]:grid [&_[cmdk-group-items]]:grid-cols-[repeat(auto-fit,minmax(6rem,1fr))] [&_[cmdk-group-items]]:gap-1">
@@ -94,7 +95,7 @@ export function Picker({ tileId, runId, autoFocus, onPicked, className }: {
                 return (
                   <CommandItem key={view} value={runViewLabel[view]} onSelect={() => pick(run.id, view)} className="border border-seam px-0">
                     {/* cmdk takes the item's own pointer moves, which a tooltip opens on. */}
-                    <Tooltip content={elsewhere[view]?.where} disabled={!elsewhere[view]}>
+                    <Tooltip content={elsewhere[view]?.where} disabled={!elsewhere[view]} side="bottom">
                       <span className="flex items-center gap-2 self-stretch px-2">
                         <Icon aria-hidden />
                         {runViewLabel[view]}
@@ -108,11 +109,11 @@ export function Picker({ tileId, runId, autoFocus, onPicked, className }: {
           )}
           {rows.map((group) => {
             const off = group.rows.filter((row) => !onScreen.includes(row.run.id))
-            return off.length > 0 && <CommandGroup key={group.key} heading={group.label}>{off.map(session)}</CommandGroup>
+            return off.length > 0 && <CommandGroup key={group.key} heading={group.label}>{off.map((row) => session(row, off.some((above) => above.run.id === parent.get(row.run.id))))}</CommandGroup>
           })}
           {rows.some((group) => group.rows.some((row) => onScreen.includes(row.run.id))) && (
             <CommandGroup heading="Already on screen">
-              {rows.flatMap((group) => group.rows.filter((row) => onScreen.includes(row.run.id))).map(session)}
+              {rows.flatMap((group) => group.rows.filter((row) => onScreen.includes(row.run.id))).map((row) => session(row))}
             </CommandGroup>
           )}
         </CommandList>

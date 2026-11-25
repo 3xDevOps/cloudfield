@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { SidebarRuns } from '@/components/shell/sidebar-runs'
 import { changeTiles } from '@/components/tiles/area'
 import { TileArea } from '@/components/tiles/tile-area'
@@ -372,5 +373,26 @@ describe('dragging a view', () => {
     release(1200, 450)
     expect(tree()).toEqual(['row', ['run_1'], ['run_2', 'run_1']])
     expect(names()).toEqual([`${first}, Chat`, `${first}, Files`])
+  })
+})
+
+describe('a strip with more tabs than room', () => {
+  it('folds the tabs that do not fit into a menu, the last first, and a moved tab still lands where it was dropped', async () => {
+    show(440)
+    await tab('run_2')
+    await tab('run_3')
+    const strip = within(within(tiles()[0]).getByRole('tablist', { name: 'Sessions in this tile' }))
+    expect(strip.getAllByRole('tab').map((shown) => shown.textContent)).toEqual([expect.stringContaining(first), expect.stringContaining(third)])
+
+    lift(sessionTab(1, first))
+    over(180, 10)
+    release(180, 10)
+    expect(tree()).toEqual(['run_2', 'run_3', 'run_1'])
+
+    await userEvent.click(screen.getByRole('button', { name: '1 more' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: new RegExp(third) }))
+    expect(state().route.params.runId).toBe('run_3')
+    expect(strip.getByRole('tab', { name: new RegExp(third) }).getAttribute('aria-selected')).toBe('true')
+    expect(strip.queryByRole('tab', { name: new RegExp(first) })).toBeNull()
   })
 })

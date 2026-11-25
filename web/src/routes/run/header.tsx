@@ -437,10 +437,15 @@ export function RunHeader({
           />
         )}
       </header>
-      {run.mode === 'acp' && <PresenceErrors run={run} agent={agent} />}
+      {/* Drawn in each of the session's tiles so that focus moves no pane, and read out from one. */}
+      <div aria-hidden={!controls || undefined} className="contents">
+        {run.mode === 'acp' && <PresenceErrors run={run} agent={agent} />}
+      </div>
       <RunLineage run={run} />
       <RunRetention run={run} className="border-b border-seam px-4 py-2" />
-      <ConnectionLine className="border-b border-seam px-4 py-1" />
+      <div aria-hidden={!controls || undefined} className="contents">
+        <ConnectionLine className="border-b border-seam px-4 py-1" />
+      </div>
       {dialogs}
     </>
   )

@@ -1,4 +1,4 @@
-import { useContext, useEffect, useRef } from 'react'
+import { useContext } from 'react'
 import { ChevronDown, Columns2, LayoutGrid, Maximize2, Minimize2, PanelLeft, Plus, Rows2, X } from '@/components/icons'
 import { ProtectedMark } from '@/components/protected-mark'
 import { changeTiles, focusInTile, TileAreaContext } from '@/components/tiles/area'
@@ -7,7 +7,6 @@ import { Picker } from '@/components/tiles/picker'
 import { AgentGlyph } from '@/components/ui/agent-glyph'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { FadeStrip } from '@/components/ui/fade-strip'
 import { Menu, MenuContent, MenuItem, MenuTrigger } from '@/components/ui/menu'
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { StatusDot } from '@/components/ui/status-dot'
@@ -21,7 +20,7 @@ import { runViewLabel } from '@/routes/run/views'
 import { useStore } from '@/store'
 import { useNeedsYouRuns, useRunPresentation } from '@/store/hooks'
 import type { RunRecord } from '@/store/runs'
-import { closeTab, closeTile, focusTile, maximizeTile, resolveView, tileList, visibleTiles, type Tile, type TileTab } from '@/store/tiles'
+import { activateTab, closeTab, closeTile, focusTile, maximizeTile, resolveView, tileList, visibleTiles, type Tile, type TileTab } from '@/store/tiles'
 
 /** What a tab or a parked tile's chip says about its session: the title, and the view when the session has two or more tabs. */
 function TabLabel({ run, tab, background, narrow }: { run: RunRecord; tab: TileTab; background: boolean; narrow: boolean }) {
@@ -38,12 +37,12 @@ function TabLabel({ run, tab, background, narrow }: { run: RunRecord; tab: TileT
       {!badge && <StatusDot tone={asks ? 'needs-you' : toneOf(shown)} />}
       {/* A background tab keeps its floor for the view's name. */}
       {!narrow && !(several && background) && <AgentGlyph agent={run.harness} />}
-      <span className="min-w-0 shrink-[100] truncate" title={`${runLabel(run)}\n${stateTitle(shown, shown.state === 'ready' && run.review_changed_at ? run.review_changed_at : run.stateChangedAt)}`}>{runLabel(run)}</span>
+      <span className="min-w-[4ch] shrink-[100] truncate" title={`${runLabel(run)}\n${stateTitle(shown, shown.state === 'ready' && run.review_changed_at ? run.review_changed_at : run.stateChangedAt)}`}>{runLabel(run)}</span>
       {several && (
-        <span className="flex min-w-0 items-center gap-1 text-muted">
+        <span data-slot="tab-view" className="flex min-w-0 items-center gap-1 text-muted">
           <span aria-hidden>·</span>
           <Icon aria-hidden className="size-3" />
-          <span className="truncate">{runViewLabel[view]}</span>
+          <span className={cn('truncate', background && (narrow || asks) && 'sr-only')}>{runViewLabel[view]}</span>
         </span>
       )}
       {run.protected && <ProtectedMark />}
@@ -52,32 +51,34 @@ function TabLabel({ run, tab, background, narrow }: { run: RunRecord; tab: TileT
   )
 }
 
-function SessionTab({ tile, tab, narrow, onClose }: { tile: Tile; tab: TileTab; narrow: boolean; onClose: () => void }) {
+function SessionTab({ tile, tab, narrow, onClose }: {
+  tile: Tile
+  tab: TileTab
+  /** The tile is narrow or the strip is tight: a background tab is its dot, its title and its view's icon. */
+  narrow: boolean
+  onClose: () => void
+}) {
   const { layout, cramped, ctx, say } = useContext(TileAreaContext)!
   const run = ctx.runs[tab.runId]
   const active = tile.active === tab.id
   const title = run ? runLabel(run) : 'Session'
-  const shell = useRef<HTMLDivElement>(null)
   const dragFrom = useTileDrag()
-  const asks = useNeedsYouRuns([tab.runId]).has(tab.runId)
-  useEffect(() => {
-    if (active) shell.current?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
-  }, [active])
+  const lifted = useStore((s) => s.tileDrag?.tabId === tab.id)
   return (
     <div
-      ref={shell}
       data-tab={tab.id}
       className={cn(
-        'flex h-full items-center border-r border-seam',
-        active ? 'max-w-full shrink-0' : 'max-w-64 min-w-24 overflow-hidden',
-        // A background tab that needs you keeps room for its badge and stays in sight however far the strip scrolls.
-        !active && asks && cn('sticky inset-x-0 z-1 min-w-40', layout.focused === tile.id ? 'bg-canvas' : 'bg-chrome'),
+        'flex h-full min-w-28 items-center overflow-hidden border-r border-seam',
+        lifted && 'outline-1 -outline-offset-1 outline-control outline-dashed *:opacity-40',
+        active ? 'max-w-full' : 'max-w-64',
+        // The floor that keeps four letters of the title beside a view's name or the badge.
+        (active || !narrow) && 'has-data-[slot=badge]:min-w-48 has-data-[slot=tab-view]:min-w-48',
       )}
     >
       <TabsTrigger
         value={tab.id}
         onPointerDown={dragFrom({ tabId: tab.id, runId: tab.runId, view: run && resolveView(tab, run, ctx.cap, ctx.memory) })}
-        className="min-w-0 shrink group-data-[look=underline]/tabs:pr-7 group-data-[look=underline]/tabs:pl-3 [&_[data-slot=status-dot]]:size-2.5"
+        className="min-w-0 shrink group-data-[look=underline]/tabs:pr-7 group-data-[look=underline]/tabs:pl-3 [&_[data-slot=status-dot]]:size-2.5 [&_[data-slot=tab-view]]:shrink-0"
         onDoubleClick={() => {
           if (cramped || tileList(layout.root).length < 2) return
           changeTiles((before) => maximizeTile(before, tile.id))
@@ -99,8 +100,10 @@ function SessionTab({ tile, tab, narrow, onClose }: { tile: Tile; tab: TileTab; 
   )
 }
 
-/** A parked chip is never cut shorter than this, in pixels: past it the pill folds into a menu. */
+/** A parked chip or a tab is never cut shorter than this, in pixels: past it the pill, or the last tabs, fold into a menu. */
 const chipFloor = 112
+/** The floor of a tab that names its view or carries the badge. */
+const wideFloor = 192
 
 /** The tiles the maximized one parks, those that need you first: a chip each in the room the tabs leave, or one menu. */
 function ParkedPill({ tile }: { tile: Tile }) {
@@ -164,6 +167,16 @@ export function TabStrip({ tile, narrow, room }: {
   // A parked tile keeps the strip it had, in sight under the glide of the tile that covers it.
   const maximized = layout.maximized && focused
   const run = ctx.runs[tile.tabs.find((tab) => tab.id === tile.active)?.runId ?? '']
+  const lifted = useStore((s) => s.tileDrag?.tabId === tile.active)
+  const [tabsRef, tabsRoom] = useElementSize<HTMLDivElement>()
+  const asking = useNeedsYouRuns(tile.tabs.map((tab) => tab.runId))
+  // 36px for "+" and 92px for the menu. Tabs that do not fit at their floor fold into it from the end, those that need you last.
+  const tight = tabsRoom.width > 0 && tabsRoom.width < 36 + tile.tabs.length * wideFloor
+  const over = tight ? 36 + wideFloor + (tile.tabs.length - 1) * chipFloor - tabsRoom.width : 0
+  const background = tile.tabs.filter((tab) => tab.id !== tile.active).reverse()
+  const folded = over > 0
+    ? [...background.filter((tab) => !asking.has(tab.runId)), ...background.filter((tab) => asking.has(tab.runId))].slice(0, Math.ceil((over + 92) / chipFloor))
+    : []
 
   const close = (tab: TileTab) => {
     if (tiles.length === 1 && tile.tabs.length === 1) return redirectRoute(useStore, { name: 'board', params: {} })
@@ -188,39 +201,55 @@ export function TabStrip({ tile, narrow, room }: {
           <PanelLeft />
         </Button>
       )}
-      {tile.tabs.length > 0 ? (
-        <FadeStrip className={cn('h-full flex-initial', maximized && 'max-w-1/2')}>
-          <TabsList aria-label="Sessions in this tile" className={cn('h-full gap-0 coarse:h-full', !focused && '[&>[data-slot=sliding-indicator]]:hidden')}>
-            {tile.tabs.map((tab) => <SessionTab key={tab.id} tile={tile} tab={tab} narrow={narrow} onClose={() => close(tab)} />)}
-          </TabsList>
-        </FadeStrip>
-      ) : (
-        <div className="flex h-full items-center border-b-2 border-accent pl-3 text-ui font-medium">
-          New tile
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            label="Close tile"
-            onClick={() => {
-              changeTiles((before) => closeTile(before, tile.id))
-              say('Tile closed')
-            }}
-          >
-            <X />
-          </Button>
-        </div>
-      )}
-      {tile.tabs.length > 0 && (
-        <>
-          <PopoverTrigger asChild>
-            <Button variant="ghost" size="icon-sm" label="Add a tab"><Plus /></Button>
-          </PopoverTrigger>
-          <PopoverContent className="flex flex-col">
-            <Picker tileId={tile.id} runId={run?.id} autoFocus onPicked={() => pick(null)} />
-          </PopoverContent>
-        </>
-      )}
-      {maximized ? <ParkedPill tile={tile} /> : <div className="min-w-0 flex-1" />}
+      <div ref={tabsRef} className="flex h-full min-w-0 flex-1 items-center gap-1">
+        {tile.tabs.length > 0 ? (
+          <>
+            <TabsList aria-label="Sessions in this tile" className={cn('h-full gap-0 overflow-hidden coarse:h-full', (!focused || lifted) && '[&>[data-slot=sliding-indicator]]:hidden')}>
+              {tile.tabs.filter((tab) => !folded.includes(tab)).map((tab) => <SessionTab key={tab.id} tile={tile} tab={tab} narrow={narrow || tight} onClose={() => close(tab)} />)}
+            </TabsList>
+            {folded.length > 0 && (
+              <Menu>
+                <MenuTrigger asChild>
+                  <Button variant="ghost" size="sm" className="shrink-0">
+                    {folded.some((tab) => asking.has(tab.runId)) && <StatusDot tone="needs-you" />}
+                    {folded.length} more
+                    <ChevronDown aria-hidden />
+                  </Button>
+                </MenuTrigger>
+                <MenuContent>
+                  {[...folded].reverse().map((tab) => (
+                    <MenuItem key={tab.id} onSelect={() => changeTiles((before) => activateTab(before, tab.id))}>
+                      {ctx.runs[tab.runId] ? <TabLabel run={ctx.runs[tab.runId]} tab={tab} background narrow={false} /> : 'Session'}
+                    </MenuItem>
+                  ))}
+                </MenuContent>
+              </Menu>
+            )}
+            <PopoverTrigger asChild>
+              <Button variant="ghost" size="icon-sm" label="Add a tab"><Plus /></Button>
+            </PopoverTrigger>
+            <PopoverContent className="flex flex-col">
+              <Picker tileId={tile.id} runId={run?.id} autoFocus onPicked={() => pick(null)} />
+            </PopoverContent>
+          </>
+        ) : (
+          <div className={cn('flex h-full items-center border-b-2 pl-3 text-ui font-medium', focused ? 'border-accent' : 'border-transparent')}>
+            New tile
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              label="Close tile"
+              onClick={() => {
+                changeTiles((before) => closeTile(before, tile.id))
+                say('Tile closed')
+              }}
+            >
+              <X />
+            </Button>
+          </div>
+        )}
+      </div>
+      {maximized && <ParkedPill tile={tile} />}
       {maximized ? !cramped && (
         <Button
           variant="secondary"

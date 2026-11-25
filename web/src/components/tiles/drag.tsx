@@ -66,9 +66,13 @@ function targetAt(source: TileDragSource & { from: DOMRect }, x: number, y: numb
     if (own && tabs.length === 1) return null
     const strip = node.firstElementChild!.getBoundingClientRect()
     if (source.tabId && y < strip.bottom) {
-      const others = [...node.querySelectorAll<HTMLElement>('[data-tab]')].filter((tab) => tab.dataset.tab !== source.tabId).map((tab) => tab.getBoundingClientRect())
-      const index = others.filter((tab) => tab.left + tab.width / 2 < x).length
-      const edge = index < others.length ? others[index].left : others.at(-1)?.right ?? strip.left
+      const others = [...node.querySelectorAll<HTMLElement>('[data-tab]')].filter((tab) => tab.dataset.tab !== source.tabId)
+      const rects = others.map((tab) => tab.getBoundingClientRect())
+      const slot = rects.filter((tab) => tab.left + tab.width / 2 < x).length
+      const edge = slot < rects.length ? rects[slot].left : rects.at(-1)?.right ?? strip.left
+      // Counted among all the tile's tabs: a strip folds those that do not fit into a menu.
+      const rest = tabs.filter((tab) => tab.id !== source.tabId)
+      const index = slot < others.length ? rest.findIndex((tab) => tab.id === others[slot].dataset.tab) : rest.length
       return { tileId, zone: 'center', index, rect: { left: Math.max(edge - 1, strip.left + 2), top: strip.top, width: 2, height: strip.height }, tile, strip, tabsEnd: edge }
     }
     const side = y < strip.bottom ? 'center' : dropZone(tile, x - tile.left, y - tile.top)
@@ -200,29 +204,32 @@ export function TileDragLayer() {
         />
       )}
       {split && (
-        // The tile that stays, named at the top of the half it keeps.
+        // The tile that stays, named at the top of the half it keeps, over a scrim: what shows there now is not where it will be.
         <div
           style={{
             left: split.tile.left + (split.zone === 'left' ? split.tile.width / 2 : 0),
             top: split.tile.top + (split.zone === 'up' ? split.tile.height / 2 : 0),
             width: split.zone === 'left' || split.zone === 'right' ? split.tile.width / 2 : split.tile.width,
-            height: split.strip.height,
+            height: split.zone === 'up' || split.zone === 'down' ? split.tile.height / 2 : split.tile.height,
           }}
-          data-slot="drop-stays"
-          className={cn(ghost, 'border-b border-seam bg-chrome text-muted')}
+          className="fixed bg-canvas/80"
         >
-          {staysRun && <ChipSession run={staysRun} />}
-          <span className="min-w-0 truncate">{staysRun ? runLabel(staysRun) : stays ? 'Session' : 'New tile'}</span>
+          <div style={{ height: split.strip.height }} data-slot="drop-stays" className={cn(ghost, 'static border-b border-seam bg-chrome text-muted')}>
+            {staysRun && <ChipSession run={staysRun} />}
+            <span className="min-w-0 truncate">{staysRun ? runLabel(staysRun) : stays ? 'Session' : 'New tile'}</span>
+          </div>
         </div>
       )}
       {target && !split && target.index === undefined && (
+        // Over the strip's own controls from the last tab on, so the tab to come covers no half of a button.
         <div
-          style={{ left: Math.min(target.tabsEnd, target.strip.right - 160), top: target.strip.top, height: target.strip.height, maxWidth: target.strip.right - target.tabsEnd }}
-          data-slot="drop-tab"
-          className={cn(ghost, 'min-w-40 border border-dashed border-accent bg-canvas')}
+          style={{ left: Math.min(target.tabsEnd, target.strip.right - 160), top: target.strip.top, right: window.innerWidth - target.strip.right, height: target.strip.height }}
+          className={cn('fixed flex border-b border-seam', useStore.getState().tiles.focused === target.tileId ? 'bg-canvas' : 'bg-chrome')}
         >
-          {run && <ChipSession run={run} />}
-          <span className="min-w-0 truncate">{name}</span>
+          <div data-slot="drop-tab" className={cn(ghost, 'static min-w-0 border border-dashed border-accent bg-canvas')}>
+            {run && <ChipSession run={run} />}
+            <span className="min-w-0 truncate">{name}</span>
+          </div>
         </div>
       )}
       <div
