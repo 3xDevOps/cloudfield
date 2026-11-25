@@ -530,45 +530,6 @@ describe('the header row', () => {
     expect(frames.get('run_1:session')).toMatchObject({ alone: false })
   })
 
-  it('draws inline Details no wider than leaves the view 560px, keeps the saved width and offers all of it in the sheet', async () => {
-    sized(1000, 800)
-    useStore.setState({ detailsOpen: true, runDetailsWidth: 560 })
-    show()
-    const handle = () => screen.getByRole('separator', { name: 'Resize session details' })
-    expect(screen.getByRole('complementary', { name: 'Session details' }).style.width).toBe('440px')
-    expect(handle().getAttribute('aria-valuemax')).toBe('440')
-    expect(state().runDetailsWidth).toBe(560)
-    fireEvent.keyDown(handle(), { key: 'ArrowLeft' })
-    expect(state().runDetailsWidth).toBe(440)
-    fireEvent.keyDown(handle(), { key: 'ArrowRight' })
-    expect(state().runDetailsWidth).toBe(424)
-
-    act(() => state().setRunDetailsWidth(560))
-    beside('run_2')
-    await settled()
-    await userEvent.click(tile(2).getByRole('button', { name: 'Show details' }))
-    expect((await screen.findByRole('dialog', { name: 'Session details' })).style.width).toBe('560px')
-    expect(handle().getAttribute('aria-valuemax')).toBe('560')
-  })
-
-  it('keeps the Session tree and inline Details together only while Details has its 320px', async () => {
-    sized(1220, 800)
-    useStore.setState({ detailsOpen: true, runDetailsWidth: 560 })
-    show()
-    await userEvent.click(within(header(1)).getByRole('button', { name: /^Session tree: / }))
-    expect(screen.getByRole('complementary', { name: 'Session tree' })).toBeDefined()
-    expect(screen.getByRole('complementary', { name: 'Session details' }).style.width).toBe('340px')
-    expect(state().runDetailsWidth).toBe(560)
-    cleanup()
-
-    sized(1180, 800)
-    useStore.setState({ detailsOpen: true, workflowOpen: false })
-    show()
-    await userEvent.click(within(header(1)).getByRole('button', { name: /^Session tree: / }))
-    expect(screen.getByRole('complementary', { name: 'Session tree' })).toBeDefined()
-    expect(screen.queryByRole('complementary', { name: 'Session details' })).toBeNull()
-  })
-
   it('offers Open sidebar on the first strip while the sidebar is hidden', () => {
     useStore.setState({ sidebarCollapsed: true })
     show()

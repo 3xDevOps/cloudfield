@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { changeTiles } from '@/components/tiles/area'
 import { TileArea } from '@/components/tiles/tile-area'
@@ -50,6 +50,14 @@ function attached(runId: string, control: boolean) {
   })
   return socket
 }
+
+/** Lays every element out at this size, which jsdom never does. */
+function sized(width: number, height: number) {
+  vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({ width, height, left: 0, top: 0, right: width, bottom: height, x: 0, y: 0, toJSON: () => ({}) })
+}
+
+/** A session that mounts inside an event renders a microtask later under jsdom. */
+const settled = () => act(async () => {})
 
 const tile = (name: string) => screen.getByRole('region', { name: new RegExp(`^${name}, Terminal, tile`) })
 const grid = (name: string) => tile(name).querySelector<HTMLElement>('[id^=run-agent-panel] .overflow-x-auto')!
@@ -328,5 +336,48 @@ describe('a glide', () => {
     expect(grown.getAttribute('aria-label')).toContain(theirs)
     expect(grown.querySelector('[data-slot=pane-header]')).not.toBeNull()
     await land()
+  })
+})
+
+describe('the width of Details', () => {
+  const header = () => tile(mine).querySelector('header')!
+
+  it('draws inline Details no wider than leaves the view 560px, keeps the saved width and offers all of it in the sheet', async () => {
+    sized(1000, 800)
+    useStore.setState({ detailsOpen: true, runDetailsWidth: 560 })
+    show('run_1')
+    const handle = () => screen.getByRole('separator', { name: 'Resize session details' })
+    expect(screen.getByRole('complementary', { name: 'Session details' }).style.width).toBe('440px')
+    expect(handle().getAttribute('aria-valuemax')).toBe('440')
+    expect(useStore.getState().runDetailsWidth).toBe(560)
+    fireEvent.keyDown(handle(), { key: 'ArrowLeft' })
+    expect(useStore.getState().runDetailsWidth).toBe(440)
+    fireEvent.keyDown(handle(), { key: 'ArrowRight' })
+    expect(useStore.getState().runDetailsWidth).toBe(424)
+
+    act(() => useStore.getState().setRunDetailsWidth(560))
+    beside('run_2')
+    await settled()
+    await userEvent.click(within(tile(theirs)).getByRole('button', { name: 'Show details' }))
+    expect((await screen.findByRole('dialog', { name: 'Session details' })).style.width).toBe('560px')
+    expect(handle().getAttribute('aria-valuemax')).toBe('560')
+  })
+
+  it('keeps the Session tree and inline Details together only while Details has its 320px', async () => {
+    sized(1220, 800)
+    useStore.setState({ detailsOpen: true, runDetailsWidth: 560 })
+    show('run_1')
+    await userEvent.click(within(header()).getByRole('button', { name: /^Session tree: / }))
+    expect(screen.getByRole('complementary', { name: 'Session tree' })).toBeDefined()
+    expect(screen.getByRole('complementary', { name: 'Session details' }).style.width).toBe('340px')
+    expect(useStore.getState().runDetailsWidth).toBe(560)
+    cleanup()
+
+    sized(1180, 800)
+    useStore.setState({ detailsOpen: true, workflowOpen: false })
+    show('run_1')
+    await userEvent.click(within(header()).getByRole('button', { name: /^Session tree: / }))
+    expect(screen.getByRole('complementary', { name: 'Session tree' })).toBeDefined()
+    expect(screen.queryByRole('complementary', { name: 'Session details' })).toBeNull()
   })
 })
