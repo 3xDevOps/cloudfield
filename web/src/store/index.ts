@@ -185,8 +185,7 @@ export function createRootStore() {
         // Before 10 launch defaults are not kept per member, so whose they
         // are is unknown and they are dropped. Before 12 every theme that was
         // never chosen was stored as 'system', so 'system' gives way to the
-        // dark default. Before 13 the Browser could sit beside a view; a
-        // tile of its own replaced that.
+        // dark default.
         migrate: (persisted, version): PersistedState => {
           const state: PersistedState = { ...((persisted ?? {}) as PersistedState) }
           if (version < 2) {
