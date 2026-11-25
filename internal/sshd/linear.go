@@ -119,7 +119,7 @@ func linearMethod[P any](call func(LinearService, context.Context, domain.Member
 		out, err := call(svc, ctx, member, p)
 		if errors.Is(err, api.ErrNotConnected) {
 			return nil, &protocol.Error{Code: protocol.CodeInvalidState,
-				Message: "Linear is not connected: save a personal API key in Settings → Linear"}
+				Message: "Linear is not connected: save a personal API key in Settings → Connections → Linear"}
 		}
 		if err != nil {
 			return nil, rpcError(err)
