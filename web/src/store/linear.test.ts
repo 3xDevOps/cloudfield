@@ -18,8 +18,8 @@ describe('loadLinear', () => {
   })
 
   it.each([
-    ['Authentication required, not authenticated', 'linear: Authentication required, not authenticated'],
-    ['a 401 status', 'linear: 401 Unauthorized: {}'],
+    ['Authentication required, not authenticated', 'linear: Linear refused the API key: Authentication required, not authenticated'],
+    ['a 401 status', 'linear: Linear refused the API key: 401 Unauthorized: {}'],
   ])('keeps a saved key connected and refused when Linear says %s', async (_, text) => {
     const store = storeWith(['linear.status'])
     await loadLinear(store, fakeApi({ linearStatus: vi.fn(async () => { throw new ApiError(500, `linear.status: ${text}`, -32603) }) }))
@@ -30,6 +30,7 @@ describe('loadLinear', () => {
   it.each([
     ['a timeout', 'linear: Post "https://api.linear.app/graphql": context deadline exceeded'],
     ['an unreadable key file', 'linear: read key of member m1: permission denied'],
+    ['a proxy refusing the connection', 'linear: Post "https://api.linear.app/graphql": Forbidden'],
     ['a server error from Linear', 'linear: 502 Bad Gateway: <html>'],
   ])('keeps a saved key connected, not refused, when the read fails with %s', async (_, text) => {
     const store = storeWith(['linear.status'])

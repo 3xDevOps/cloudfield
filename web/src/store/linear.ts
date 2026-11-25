@@ -28,7 +28,7 @@ export const createLinearSlice: SliceCreator<LinearSlice> = (set) => ({
 })
 
 const serverText = /(?:^|: )linear: (.*)$/s
-const refusal = /authenticat|unauthori[sz]ed|forbidden|\b40[13]\b/i
+const refusal = /^Linear refused the API key: /
 
 export async function readLinear(client: Api): Promise<LinearStatus> {
   try {
