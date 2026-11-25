@@ -193,7 +193,7 @@ export function TileDragLayer() {
     const bounds = target?.tile ?? { left: 0, top: 0, right: window.innerWidth, bottom: window.innerHeight }
     const left = Math.max(bounds.left + 4, Math.min(point.x + 12, bounds.right - node.offsetWidth - 4))
     let top = Math.max(bounds.top + 4, Math.min(point.y + 16, bounds.bottom - node.offsetHeight - 4))
-    // Clear of the plate that names what lands, placed from the target: the preview is still easing to it.
+    // Clear of the plate that names what lands.
     if (plate.current && target) {
       const { offsetWidth: width, offsetHeight: height } = plate.current
       const plateLeft = target.rect.left + (target.rect.width - width) / 2
@@ -232,10 +232,12 @@ export function TileDragLayer() {
     <div aria-hidden className={cn('fixed inset-0 z-[51] cursor-grabbing select-none', point && inside(drag.from, point.x, point.y) && 'pointer-events-none')}>
       {closes && <div style={{ left: closes.left, top: closes.top, width: closes.width, height: closes.height }} className="fixed bg-canvas/80" />}
       {target && (
+        // A split's preview moves in the same frame as its scrims: an easing box would leave what it has not reached yet undimmed.
         <div
+          key={split ? 'split' : 'whole'}
           data-slot="drop-preview"
           style={target.rect}
-          className={cn('fixed border border-accent transition-[left,top,width,height] duration-hover ease-hover motion-reduce:transition-none', split ? 'bg-canvas/80' : 'bg-accent-soft')}
+          className={cn('fixed border border-accent', split ? 'bg-canvas/80' : 'bg-accent-soft transition-[left,top,width,height] duration-hover ease-hover motion-reduce:transition-none')}
         >
           {split && (
             <div data-slot="drop-lands" className="absolute inset-0 flex items-center justify-center bg-accent-soft px-3">

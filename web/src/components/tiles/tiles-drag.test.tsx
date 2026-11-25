@@ -163,7 +163,7 @@ describe('dragging a sidebar row', () => {
     expect(tiles().some((node) => node.className.includes('after:border-accent'))).toBe(false)
     over(1500, 880)
     expect(preview()!.style).toMatchObject({ left: '800px', top: '450px', width: '800px', height: '450px' })
-    expect(preview()!.className).toContain('motion-reduce:transition-none')
+    expect(preview()!.className).not.toContain('transition')
     expect(preview()!.closest('[aria-hidden=true]')).not.toBeNull()
   })
 
