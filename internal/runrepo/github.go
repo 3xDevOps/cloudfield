@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -212,20 +213,45 @@ func (s *Service) LookupPR(ctx context.Context, run Execution, target PRTarget) 
 	return result, err
 }
 
-// withFixes ends body with "Fixes <issue>", the line Linear's GitHub
-// integration links a pull request by, unless body already names the issue.
+var trailerLine = regexp.MustCompile(`^([A-Za-z][A-Za-z0-9-]*: |[ \t])`)
+
+// withFixes adds "Fixes <issue>", the line Linear's GitHub integration links
+// a pull request by, unless body already names the issue. The line goes
+// before a trailing trailer block so that block stays last, where
+// git interpret-trailers looks for it.
 func withFixes(issue, body string) (string, error) {
-	if issue == "" || strings.Contains(body, issue) {
+	if issue == "" {
+		return body, nil
+	}
+	named := regexp.MustCompile(`(?i)(^|[^A-Za-z0-9])` + regexp.QuoteMeta(issue) + `($|[^A-Za-z0-9])`)
+	if named.MatchString(body) {
 		return body, nil
 	}
 	line := "Fixes " + issue
-	if body != "" {
-		line = strings.TrimRight(body, "\n") + "\n\n" + line
+	body = strings.TrimRight(body, "\n")
+	cut := strings.LastIndex(body, "\n\n")
+	switch {
+	case body == "":
+	case cut < 0 && allTrailers(body):
+		line += "\n\n" + body
+	case cut >= 0 && allTrailers(body[cut+2:]):
+		line = body[:cut] + "\n\n" + line + body[cut:]
+	default:
+		line = body + "\n\n" + line
 	}
 	if len(line) > protocol.MaxRunPRBodyBytes {
 		return "", errors.New("runrepo: body with Linear issue exceeds input limit")
 	}
 	return line, nil
+}
+
+func allTrailers(paragraph string) bool {
+	for _, l := range strings.Split(paragraph, "\n") {
+		if !trailerLine.MatchString(l) {
+			return false
+		}
+	}
+	return true
 }
 
 // CreatePR never pushes, retries an external mutation, or changes a branch.
