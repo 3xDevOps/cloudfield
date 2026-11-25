@@ -19,7 +19,7 @@ import {
   terminalZoomKey,
   whenTerminalFontReady,
 } from '@/lib/term-font'
-import { clipboardKeys } from '@/lib/term-clipboard'
+import { clipboardKeys, registerTerminalCopy } from '@/lib/term-clipboard'
 import { standardGeometry } from '@/routes/terminal/attach'
 import { useStore } from '@/store'
 
@@ -539,6 +539,7 @@ export function useXterm({
       // would throw its scrollback away, so the size is applied below.
       fontSize: (appliedFontSize.current = useStore.getState().terminalFontSize),
       fontFamily: terminalFontFamily,
+      macOptionClickForcesSelection: true,
       scrollback: Math.max(0, Math.floor(scrollback)),
       scrollOnEraseInDisplay: true,
       cursorBlink: false,
@@ -580,6 +581,7 @@ export function useXterm({
       created.loadAddon(searchAddon)
       setSearch(searchAddon)
       created.open(host)
+      const unregisterCopy = registerTerminalCopy(created, host)
       liveTerminal.current = created
       setTerminal(created)
 
@@ -697,6 +699,7 @@ export function useXterm({
       })
       observer.observe(host)
       teardown = () => {
+        unregisterCopy()
         host.removeEventListener('wheel', noteViewportInteraction)
         host.removeEventListener('touchmove', noteViewportInteraction)
         host.removeEventListener('pointerdown', noteScrollbarInteraction)
