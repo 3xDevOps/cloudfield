@@ -42,6 +42,8 @@ const focusHeading = (tileId: string) => focusInTile(tileId, 'h1[tabindex], h2[t
 const full: Rect = { left: 0, top: 0, width: 100, height: 100 }
 const sides = ['left', 'top', 'width', 'height'] as const
 const glides = new WeakMap<HTMLElement, Animation>()
+/** A gliding tile draws its own edge: its moving side has no seam, and would cut the tile under it mid-word. */
+const lifted = { zIndex: 1, boxShadow: '0 0 0 1px var(--seam)' }
 
 /**
  * Plays a tile from the rectangle it had, in percent of the area, to the one
@@ -67,7 +69,7 @@ function glideTile(tile: HTMLElement, from: Rect, to: Rect): Animation {
   }
   tile.style.overflow = 'clip'
   const end = Object.fromEntries(sides.map((side) => [side, `${to[side]}%`]))
-  const animation = play(tile, [{ ...start, zIndex: 1 }, { ...end, zIndex: 1 }], { duration: '--duration-glide', easing: '--ease-glide' })
+  const animation = play(tile, [{ ...start, ...lifted }, { ...end, ...lifted }], { duration: '--duration-glide', easing: '--ease-glide' })
   glides.set(tile, animation)
   const settle = () => {
     if (glides.get(tile) !== animation) return
@@ -210,6 +212,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
       const ghost = node.cloneNode(true) as HTMLElement
       for (const named of [ghost, ...ghost.querySelectorAll('[id], [data-tile], [data-tab]')]) for (const name of ['id', 'data-tile', 'data-tab']) named.removeAttribute(name)
       ghost.classList.replace('after:border-accent', 'after:border-transparent')
+      ghost.firstElementChild!.querySelector('[data-slot=sliding-indicator]')?.remove()
       ghost.inert = true
       ghost.ariaHidden = 'true'
       node.parentElement!.prepend(ghost)

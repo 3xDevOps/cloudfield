@@ -744,7 +744,8 @@ literal time or curve.
   height too and is sized once, not on every frame. A new tile grows from the
   edge it opens on, sharing one moving seam with the tile it split from. A
   parked or closed tile stays painted under the tile that takes its room
-  until the glide ends. A seam drag and a window
+  until the glide ends, and a gliding tile is ringed by a 1px `--seam` line,
+  so its moving edge reads as a pane edge over that tile. A seam drag and a window
   resize never glide, and the focus outline, the tab bar and the sidebar's
   on-screen bar move at once. The drop preview eases its position and size
   between zones on the hover duration; the drag chip and the dashed slot a
