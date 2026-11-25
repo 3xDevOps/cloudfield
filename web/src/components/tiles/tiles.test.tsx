@@ -801,7 +801,7 @@ describe('maximize', () => {
   it('spends Escape on the subagent, then on restoring, then on leaving for the board', async () => {
     show()
     beside('run_2')
-    fireEvent.doubleClick(strip(2).getByRole('tab'))
+    await userEvent.dblClick(strip(2).getByRole('tab'))
     expect(state().tiles.maximized).toBe(true)
     act(() => state().navigate('run', { runId: 'run_2', view: 'session', agent: 'agent_1' }))
     await settled()

@@ -281,7 +281,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
   useLayoutEffect(() => {
     restingStrip.current = null
     setResting(null)
-  }, [shape])
+  }, [shape, area.width, area.height])
   useLayoutEffect(() => {
     if (byHand.current === stored.focused) return
     byHand.current = stored.focused
@@ -302,9 +302,10 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
       restingStrip.current = strip
       const { active } = tileList(useStore.getState().tiles.root).find((tile) => tile.id === tileId)!
       const widths = Object.fromEntries([...strip.querySelectorAll<HTMLElement>('[data-tab]')].map((tab) => [tab.dataset.tab!, tab.getBoundingClientRect().width]))
+      const tight = !!strip.querySelector('[data-tight]')
       setResting((before) => {
-        if (before?.tileId !== tileId) return { tileId, controls, active, widths }
-        return active in before.widths ? before : { ...before, active, widths }
+        if (before?.tileId !== tileId) return { tileId, controls, active, tight, widths }
+        return active in before.widths ? before : { ...before, active, tight, widths }
       })
     }
     const enter = (event: Event) => {

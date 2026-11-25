@@ -46,10 +46,10 @@ export interface TileAreaValue {
   noRoom: TileSide | null
   pick: (tileId: string | null) => void
   /**
-   * The tile whose strip a press holds as drawn, with or without its split controls, each tab at its width and
+   * The tile whose strip a press holds as drawn, with or without its split controls, each tab at its width, tight or not, and
    * `active` drawn as the tab on show: until the pointer is off that strip, and while a popover or menu the strip opened is open.
    */
-  resting: { tileId: string; controls: boolean; active: string; widths: Record<string, number> } | null
+  resting: { tileId: string; controls: boolean; active: string; tight: boolean; widths: Record<string, number> } | null
   /** Opens an empty tile beside this one, or its picker when the area has no room for one. */
   split: (tileId: string, side: 'right' | 'down') => void
 }

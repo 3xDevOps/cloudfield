@@ -3117,9 +3117,9 @@ when the focus does. The strip is a `tablist` named "Sessions in this tile":
   tab's close button acts, and nothing moves under the pointer after it.
   The strip is laid out once when the pointer is off it with no button down
   and no popover or menu opened from it still open; a lifted finger and a
-  pointer that left the window count as off it. The Tab key and a tile
-  that splits, closes, maximizes or restores let it go at once, and a tab
-  that was folded or is new takes its room at once.
+  pointer that left the window count as off it. The Tab key, a resize of
+  the tile area and a tile that splits, closes, maximizes or restores let
+  it go at once, and a tab that was folded or is new takes its room at once.
   Where the 420 by 400px floor leaves no room they open the picker instead,
   hung from the button that was pressed and led by "No room to split right.
   Add a tab here instead.", and the live region says "No room to split: adds
