@@ -352,6 +352,9 @@ What changes:
 
 - Each VM runs in the systemd unit `aether-vm-<run id>.service` in
   `aether.slice`, so it keeps running through a server restart or update.
+  Restarting the unit yourself boots a new VM and loses the session; the
+  server keeps needrestart from doing so after a package upgrade
+  ([install.md](install.md#hosts-for-vm-sessions)).
   The unit is sandboxed ([security.md](security.md#the-agent-container)): a
   tmpfs hides the data directory and only the VM's own paths are bound back.
   Its disks and logs are in `<data dir>/vm/<run id>/`: `monitor.log` holds the
