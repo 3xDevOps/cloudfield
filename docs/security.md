@@ -40,6 +40,7 @@ credentials out of the report.
 | [SSH into a session and port forwarding](#ssh-into-a-session) | Same admission as a session shell. Forwards reach only the session's own loopback. | Sessions are not recorded. Attaching an editor lets the session's agent reach your computer through the editor. |
 | [Edge](#edge-remote-access) | SSH stays end to end. The server decides membership. By default a person approves every new device. | Under `edge-access account`, a taken-over GitHub account or edge admits a device. The edge sees connection metadata. |
 | [Connectors](#chatgpt-and-claude-connectors) | A connector acts as one member through the tools of the scopes they granted, with that member's permissions. | TLS ends at the edge, so a compromised edge sees connector traffic and tokens. Under `edge-access account` a GitHub sign-in at the edge authorizes one without a code. |
+| [Linear](#linear) | Each member's personal Linear API key stays in a `0600` file on the server, outside the database, and never reaches a container or an agent. Each member's methods use only their own key. | The key has the access you gave it in Linear, usually your whole Linear workspace, and the server administrator can read it. Removing a member deletes the file but does not revoke the key in Linear. |
 | [Slack](#slack) | The bot connects out to Slack and acts as one linked member: it messages runs and answers requests once, with that member's permissions. | Whoever controls the linked Slack account acts as you on your sessions. Slack keeps the messages it was sent. |
 | [Coordination](#coordination-between-sessions) | Sessions message only allowed peers in their workspace. A message grants no control. | Sessions in one workspace share a repository and can influence each other through files. |
 | [Team memory](#team-memory) | Only members pin notes into briefs. Notes with secrets are refused. Agents cannot delete. | A note can be wrong or planted. It is data, never an instruction. |
@@ -1065,6 +1066,21 @@ replies need. Its write calls enter the
   administrator. The app holds `chat:write` and `im:history`, and reads no
   channel.
 - A link makes 30 actions at once, then one every 2 seconds.
+
+## Linear
+
+Each member can save a personal [Linear API key](linear.md#where-the-key-is-stored)
+so the dashboard can list their issues.
+
+- The key sits in `<data-dir>/linear/<member-id>.key`, mode `0600` in a `0700`
+  directory, readable by the server administrator. It is not mounted into a
+  container, set as an environment variable or reachable from the coordination
+  socket.
+- Linear scopes the key to what you chose when you created it. Cloudfield only
+  reads issues with it.
+- `cloudfield member remove` and a member merge delete the file. Revoke the key
+  in Linear as well if a copy or backup of the data directory exists.
+- A connector is refused every `linear.*` method.
 
 ## Coordination between sessions
 
