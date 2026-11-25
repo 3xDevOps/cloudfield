@@ -747,7 +747,7 @@ literal time or curve.
   resize never glide, and the focus outline, the tab bar and the sidebar's
   on-screen bar move at once. The drop preview eases its position and size
   between zones on the hover duration; the drag chip and the dashed slot a
-  lifted view leaves appear at once. The preview is `--color-accent-soft` over the tile, never opaque. The parked-tiles pill fades in.
+  lifted view or tab leaves appear at once. The preview is `--color-accent-soft` over the tile, never opaque. The parked-tiles pill fades in.
 - The Map repacks with motion: units and cards glide from their old layout
   coordinates on `--duration-glide` / `--ease-glide` (never DOM-measured,
   since the world is scaled), new cards rise 6px and fade in over 220ms after

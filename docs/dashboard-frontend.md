@@ -1043,7 +1043,7 @@ header navigation is `nav` "Main navigation"; the sidebar is `nav` "Cloudfield"
 containing `region` "Sessions"; the content is the one `main`, with one `h1` per
 view from `PaneHeader` (`tabIndex=-1`). A session page's `h1` is the focused
 tile's title, visually hidden; every other tile's title is an `h2`. An empty
-tile has no heading, and focus sent to it lands in the picker's search field. After a route
+tile has no focusable title heading, and focus sent to it lands in the picker's search field. After a route
 change focus moves to that `h1`, unless the view took focus for itself. Unit
 and end-to-end tests select by these names.
 
@@ -1296,8 +1296,8 @@ What gives way first:
   view switch is icons, under 560px the reason and what follows it leave.
   Above that the mode, the permission badge, the fallback account and
   "Launched via" drop whole, last first, and the reason truncates last, never
-  below 96px. A tab's title truncates before the strip scrolls
-  (see [Header](#header)).
+  below 96px. A tile's strip never scrolls: tabs that do not fit fold into a
+  menu ([Session tiles](#session-tiles)).
 - **The board** places its three columns side by side when its own width
   fits them and otherwise stacks them into one list (see [Board](#board)).
 
@@ -3091,9 +3091,14 @@ when the focus does. The strip is a `tablist` named "Sessions in this tile":
   layout adds " · " and the view's icon and name to each of them, and its
   background tabs drop the glyph. A
   background tab of a session that needs you swaps its dot for a **Needs you**
-  badge. Background tabs truncate at 256px and shrink to 96px (160px with the
-  badge) before the strip scrolls with the active tab in sight. A background
-  tab that needs you sticks to the strip's edge, so no scroll hides it.
+  badge, which stands in for the view's name. Background tabs truncate at
+  256px. A tab keeps four letters of its title: its floor is 112px, or 192px
+  while it names its view or carries the badge. A strip with under 192px a
+  tab is tight: its background tabs show the view's icon without the name and
+  a gold dot for the badge. The strip never scrolls. Tabs that do not fit at
+  their floor fold into an "N more" menu before "+", the last background tab
+  first and those that need you last; the menu carries a gold dot while a
+  folded tab needs you, and picking a tab there activates it.
 - **Add a tab** ("+") opens the picker in a popover.
 - **Split right** and **Split down**, on the focused tile, open an empty
   focused tile on that side. Where the 420 by 400px floor leaves no room they
@@ -3111,7 +3116,7 @@ The picker (`picker.tsx`) is headed "Open in this tile" over the search
 field "Find a session or view". It lists "Other views of `<title>`" for the
 tile's session, or the session an empty tile was split from, then the
 sessions in the sidebar's groups, then **Already on screen**. The list takes
-the height its tile or popover leaves and fades where more lies below;
+the height its tile or popover leaves and fades over its last 32px where more lies below;
 **New session** stays under a seam at the foot. A session already on screen opens on its first view no tab holds;
 with none left its own tile takes the focus. An empty tile shows the picker
 as its body under a strip that reads "New tile" with **Close tile**, and its
@@ -3126,7 +3131,9 @@ choosing it activates that tab.
 
 **Focus.** A pointer press in a tile, or focus that follows a `Tab` key
 press, focuses it. The focused tile's strip is on `--canvas` with a 2px teal
-bar under its active tab; an unfocused strip is on `--chrome` with no bar.
+bar under its active tab or its "New tile" label; an unfocused strip is on
+`--chrome` with no bar, and a picker marks its active row only while the
+keyboard is in it.
 With two or more tiles on screen the focused one also has a 1px teal
 outline. When a navigation, a pick or a shortcut moves
 the focus while the keyboard sits in another tile, the keyboard moves to the
@@ -3141,8 +3148,10 @@ one its tile shows can be dragged (`drag.tsx`); a press becomes a drag after
 adds a tab, and a tab over a strip moves to where the 2px line shows. A
 translucent preview tints what the drop takes, so the tile under it stays
 readable. A split also names the tile that stays, in a strip at the top of
-the half it keeps, and an added tab shows as a dashed tab at the end of the
-strip. A chip by the pointer names the drop:
+the half it keeps over a `--canvas` scrim, and an added tab shows as a dashed
+tab at the end of the strip, in place of the strip's buttons. A lifted tab
+leaves a dashed slot, as a lifted view does. A chip by the pointer names the
+drop:
 **Split left**, **Split right**, **Split up**, **Split down**, **Add as tab**
 (also where the floor forbids the split, and on a maximized tile) or **Move
 tab**. A view another tab already holds moves that tab; nothing opens twice.
@@ -3159,8 +3168,9 @@ what it holds.
 the area with the focused tile. The other tiles are parked: hidden where
 they were and still mounted, so restoring them reloads nothing and resizes
 no terminal. They are listed as chips in a pill on the strip, those that need
-you first and with the **Needs you** badge; the active tab keeps at most half
-the strip, and a pill with under 112px a chip folds into an "N parked" menu.
+you first and with the **Needs you** badge; the tabs and the pill share the
+strip half and half, and a pill with under 112px a chip folds into an
+"N parked" menu.
 A chip swaps the maximized tile, and
 **Restore tiles**, `x` or `Esc` brings them back. A stored layout that does
 not fit the window is drawn the same way, with no **Restore tiles** and only
@@ -3172,14 +3182,16 @@ neighbour takes the room and the focus. Closing the only tab of the only
 tile, or the last tab beside an empty tile, opens the board in place of the
 history entry. Details, Workflow and the subagent inspector dock
 only in a tile that is alone on screen; beside other tiles they open as
-sheets.
+sheets. A parked tile keeps the shape it had, so maximizing docks nothing
+inside it.
 
 **Controls once per session.** When a session is in several tiles, its
 actions, presence and watch button sit in one of them: its
 focused tile, else its first in reading order. The others show the view
 switch and the state. Every tile draws the lines under the header (lineage,
 retention, connection and presence failures), so moving the focus changes no
-pane's height.
+pane's height; a screen reader is read the connection and presence lines from
+the tile that carries the controls alone.
 
 **Layout and route.** The layout is `tiles` in the store
 (`store/tiles.ts`): a tree of splits, the focused tile and whether it is
@@ -3248,8 +3260,8 @@ The actions, in order:
    elsewhere. It is
    the label the condition names in `lib/needs-you.ts`, the same one the board
    card and sidebar row show, performed inside the frame: **Reply** opens Chat
-   with its composer focused, and is absent on Chat while a request card
-   waits there, **Open terminal** switches to Terminal and asks for the
+   with its composer focused, in whichever tile or tab holds the session's
+   Chat, and is absent on Chat while a request card waits there, **Open terminal** switches to Terminal and asks for the
    lease, **Answer** focuses the docked request on Session or reveals the
    question's card in Details, **Review message** reveals the queued message's
    card in Details, and **Review** opens Changes for a finish. On the Terminal view there is no terminal action in
