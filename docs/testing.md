@@ -612,13 +612,12 @@ point the test goes on through three more builds of this tree with an extra
 migration: one that fails, one that raises the compatibility floor and then
 fails, and one that succeeds. It checks that:
 
-1. `aether-edge-update` refuses an image it cannot read a version from.
-2. A failing migration is rolled back without a restore and skipped next
+1. A failing migration is rolled back without a restore and skipped next
    time.
-3. A failure after a raised floor restores the pre-update backup.
-4. A good migration applies, with a backup from the edge and the updater.
-5. A server of the starting release still enrolls and relays.
-6. `aether-edge-update --rollback` returns to the old binary.
+2. A failure after a raised floor restores the pre-update backup.
+3. A good migration applies, with a backup from the edge and the updater.
+4. A server of the starting release still enrolls and relays.
+5. `aether-edge-update --rollback` returns to the old binary.
 
 After each step the edge must keep its key and its accounts, and each owner
 must reach their server. Stub `cosign` and `docker` commands from
@@ -627,7 +626,7 @@ the release-check of a starting release, whose binary trusts only the
 release keys built into it. This tree's builds are stable releases at
 build 9000001 and up that also trust a test key. Their own release-check
 verifies the manifests the test signs with it, which the fake GitHub
-serves. From step 3 on, the fake answers 404 for the running release's
+serves. From step 2 on, the fake answers 404 for the running release's
 manifest, so the updater orders by the copy it kept.
 
 It refuses to start while a container named `aether-edge` exists, removes
