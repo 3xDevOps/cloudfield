@@ -58,6 +58,9 @@ type Services struct {
 	// Slack is the server's Slack bot, which members link their Slack
 	// accounts to.
 	Slack SlackService
+	// Linear keeps each member's personal Linear API key and reads their
+	// issues with it.
+	Linear LinearService
 	// Memory is team memory: notes, pins and the launch brief.
 	Memory MemoryService
 	// Watches keeps each member's watches and notification preferences.

@@ -81,24 +81,26 @@ Daily use:
     Claude, including their phone apps.
 12. [Slack](slack.md): when you want to hear about sessions, and answer them,
     in Slack, including on Android.
-13. [Insights](insights.md): when you want statistics on sessions, time, cost and
+13. [Linear](linear.md): when you want to start sessions from your Linear
+    issues.
+14. [Insights](insights.md): when you want statistics on sessions, time, cost and
     pull requests.
-14. [Watches](watches.md): when you want to be told that a session needs
+15. [Watches](watches.md): when you want to be told that a session needs
     you or finished, after you close the dashboard.
-15. [Dictation](dictation.md): when you want to speak tasks and messages
+16. [Dictation](dictation.md): when you want to speak tasks and messages
     instead of typing them, transcribed on your server.
 
 Reference:
 
-16. [Install](install.md): every platform, the desktop and Android apps,
+17. [Install](install.md): every platform, the desktop and Android apps,
     upgrades and removal.
-17. [Security](security.md): what the container boundary protects and what it
+18. [Security](security.md): what the container boundary protects and what it
     does not.
-18. [Troubleshooting](failure-handling.md): reboots, full disks, stalled sessions
+19. [Troubleshooting](failure-handling.md): reboots, full disks, stalled sessions
     and dropped connections, and the server settings that tune them.
-19. [Privacy](privacy.md): what the Android app, the dashboard and the
+20. [Privacy](privacy.md): what the Android app, the dashboard and the
     project's edge store and send.
-20. [Notices](notices.md): the licence and what the release artifacts bundle.
+21. [Notices](notices.md): the licence and what the release artifacts bundle.
 
 ## Extend Cloudfield
 
