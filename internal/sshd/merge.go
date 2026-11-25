@@ -410,13 +410,14 @@ func (s *Server) afterMerge(ctx context.Context, caller domain.MemberID, merge *
 	}
 	slog.Info("sshd: members merged", "merge", merge.ID, "survivor", merge.SurvivorID, "absorbed", merge.AbsorbedID,
 		"role", merge.RoleAfter, "confirmed_by", merge.ConfirmedByKind, "archive", merge.ArchivePath)
+	var errs []error
 	if agentErr != nil {
-		return fmt.Errorf("the absorbed member's signing agent was not stopped: %w", agentErr)
+		errs = append(errs, fmt.Errorf("the absorbed member's signing agent was not stopped: %w", agentErr))
 	}
 	if linearErr != nil {
-		return fmt.Errorf("the absorbed member's Linear key was not deleted: %w", linearErr)
+		errs = append(errs, fmt.Errorf("the absorbed member's Linear key was not deleted: %w", linearErr))
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 func (s *Server) memberMergeCancel(ctx context.Context, member domain.MemberID, params json.RawMessage) (any, *protocol.Error) {
