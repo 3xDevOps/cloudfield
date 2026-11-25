@@ -506,7 +506,7 @@ describe('run details', () => {
     fireEvent.pointerUp(window)
     expect(useStore.getState().runDetailsWidth).toBe(346)
     fireEvent.keyDown(handle, { key: 'Home' })
-    expect(useStore.getState().runDetailsWidth).toBe(280)
+    expect(useStore.getState().runDetailsWidth).toBe(320)
     fireEvent.keyDown(handle, { key: 'End' })
     expect(useStore.getState().runDetailsWidth).toBe(560)
     expect(JSON.parse(localStorage.getItem('aether.ui')!).state.runDetailsWidth).toBe(560)

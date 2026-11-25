@@ -230,7 +230,7 @@ export function RunFrame({ run, params, tile }: { run: RunRecord; params: RouteP
     : overlayWorkflow
   // Inline, Details gives way to the view and to the Session tree beside it; the sheet lies over the window.
   const detailsMaxWidth = inline
-    ? Math.min(maxRunDetailsWidth, row.width - minReadableWidth - (workflowOpen ? workflowWidth : 0))
+    ? Math.min(maxRunDetailsWidth, row.width - minReadableWidth - (workflowInline && workflowOpen ? workflowWidth : 0))
     : maxRunDetailsWidth
   const detailsWidth = Math.min(preferredDetailsWidth, detailsMaxWidth)
   const setDetails = useCallback((open: boolean) => {

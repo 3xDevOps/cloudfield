@@ -114,7 +114,7 @@ const defaultSidebarWidth = 260
 export const minLaunchWidth = 360
 export const maxLaunchWidth = 720
 const defaultLaunchWidth = 416
-export const minRunDetailsWidth = 280
+export const minRunDetailsWidth = 320
 export const maxRunDetailsWidth = 560
 const defaultRunDetailsWidth = 320
 

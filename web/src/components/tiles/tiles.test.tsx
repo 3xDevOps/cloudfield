@@ -537,6 +537,7 @@ describe('the header row', () => {
     const handle = () => screen.getByRole('separator', { name: 'Resize session details' })
     expect(screen.getByRole('complementary', { name: 'Session details' }).style.width).toBe('440px')
     expect(handle().getAttribute('aria-valuemax')).toBe('440')
+    expect(state().runDetailsWidth).toBe(560)
     fireEvent.keyDown(handle(), { key: 'ArrowLeft' })
     expect(state().runDetailsWidth).toBe(440)
     fireEvent.keyDown(handle(), { key: 'ArrowRight' })
@@ -548,6 +549,24 @@ describe('the header row', () => {
     await userEvent.click(tile(2).getByRole('button', { name: 'Show details' }))
     expect((await screen.findByRole('dialog', { name: 'Session details' })).style.width).toBe('560px')
     expect(handle().getAttribute('aria-valuemax')).toBe('560')
+  })
+
+  it('keeps the Session tree and inline Details together only while Details has its 320px', async () => {
+    sized(1220, 800)
+    useStore.setState({ detailsOpen: true, runDetailsWidth: 560 })
+    show()
+    await userEvent.click(within(header(1)).getByRole('button', { name: /^Session tree: / }))
+    expect(screen.getByRole('complementary', { name: 'Session tree' })).toBeDefined()
+    expect(screen.getByRole('complementary', { name: 'Session details' }).style.width).toBe('340px')
+    expect(state().runDetailsWidth).toBe(560)
+    cleanup()
+
+    sized(1180, 800)
+    useStore.setState({ detailsOpen: true, workflowOpen: false })
+    show()
+    await userEvent.click(within(header(1)).getByRole('button', { name: /^Session tree: / }))
+    expect(screen.getByRole('complementary', { name: 'Session tree' })).toBeDefined()
+    expect(screen.queryByRole('complementary', { name: 'Session details' })).toBeNull()
   })
 
   it('offers Open sidebar on the first strip while the sidebar is hidden', () => {
