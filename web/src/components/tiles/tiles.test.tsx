@@ -470,7 +470,7 @@ describe('the header row', () => {
     const toolbars = () => tiles().map((node) => within(node).queryAllByRole('toolbar', { name: 'Session actions' }).length)
     expect(toolbars()).toEqual([1, 0, 1])
     expect(within(header(2)).queryAllByRole('button')).toEqual([])
-    expect(within(header(2)).getByRole('status').textContent).toBe('Needs you')
+    expect(within(header(2)).getByText('Needs you').getAttribute('role')).toBeNull()
     expect(within(header(1)).getByRole('button', { name: 'Reply' }).className).not.toContain('bg-action')
     expect(gold()).toEqual([within(header(3)).getByRole('button', { name: 'Reply' })])
 
@@ -633,7 +633,7 @@ describe('the composer', () => {
     expect(tile(2).getByRole('button', { name: 'Attach files' })).toBeDefined()
     expect(fields(1)[0].rows).toBe(1)
     expect(tile(1).queryByRole('button', { name: 'Attach files' })).toBeNull()
-    expect(tile(1).getByRole('button', { name: 'Send' })).toBeDefined()
+    expect(tile(1).queryByRole('button', { name: 'Send' })).toBeNull()
 
     fireEvent.change(field, { target: { value: 'ship it\nthen rest' } })
     fireEvent.pointerDown(tiles()[0])
@@ -663,6 +663,9 @@ describe('the composer', () => {
     beside('run_2')
     await settled()
     expect(docked.rows).toBe(1)
+    fireEvent.change(docked, { target: { value: 'ship it' } })
+    await userEvent.click(tile(1).getByRole('button', { name: 'Send' }))
+    expect(StubSocket.opened.find((socket) => socket.url.includes('/ws/acp/run_1'))!.frames().at(-1)).toMatchObject({ type: 'control', write: true })
     fireEvent.pointerDown(tiles()[0])
     expect(fields(1)).toEqual([docked])
     expect(docked.rows).toBe(1)

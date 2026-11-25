@@ -159,7 +159,7 @@ function StateLine({ run, agentName, narrow, controls, chip }: { run: RunRecord;
       ) : (
         <span className="flex shrink-0 items-center gap-1.5 text-ui-sm" title={stateTitle(presentation, since)}>
           <StatusDot tone={toneOf(presentation)} pulse={state === 'working'} />
-          <span role="status" className="font-medium">{stateName(presentation)}</span>
+          <span role={controls ? 'status' : undefined} className="font-medium">{stateName(presentation)}</span>
         </span>
       )}
       {/* One line of a wrapping row: a part that does not fit whole wraps out of sight with its separator, and the reason, first, is the one that truncates. */}

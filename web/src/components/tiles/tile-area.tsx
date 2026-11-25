@@ -46,19 +46,21 @@ const glides = new WeakMap<HTMLElement, Animation>()
 /**
  * Plays a tile from the rectangle it had, in percent of the area, to the one
  * it has now. Its body takes the final width at once and the tile clips it, so
- * nothing rewraps on the way; a terminal or Browser on show takes the final
- * height too, and is sized once, not on every frame. The end keyframe is
+ * nothing rewraps on the way, and so does a strip that grows, which then picks
+ * its controls once; a terminal or Browser on show takes the final height too,
+ * and is sized once, not on every frame. The end keyframe is
  * spelled out so that a glide cut short by the next one reads where the tile
  * is drawn, not a value already moving to the new rectangle.
  */
-function glideTile(tile: HTMLElement, from: Rect, to: Rect) {
+function glideTile(tile: HTMLElement, from: Rect, to: Rect): Animation {
+  const strip = tile.firstElementChild as HTMLElement
   const body = tile.lastElementChild as HTMLElement
   const running = glides.get(tile)
   const start = Object.fromEntries(sides.map((side) => [side, running ? getComputedStyle(tile)[side] : `${from[side]}%`]))
   running?.cancel()
   body.style.width = body.style.height = body.style.flex = ''
   const { width, height } = body.getBoundingClientRect()
-  body.style.width = `${width}px`
+  body.style.width = strip.style.minWidth = `${width}px`
   if ([...body.querySelectorAll('.xterm, canvas')].some((surface) => !surface.closest('[inert]'))) {
     body.style.height = `${height}px`
     body.style.flex = 'none'
@@ -70,9 +72,10 @@ function glideTile(tile: HTMLElement, from: Rect, to: Rect) {
   const settle = () => {
     if (glides.get(tile) !== animation) return
     glides.delete(tile)
-    tile.style.overflow = body.style.width = body.style.height = body.style.flex = ''
+    tile.style.overflow = strip.style.minWidth = body.style.width = body.style.height = body.style.flex = ''
   }
   animation.finished.then(settle, settle)
+  return animation
 }
 
 /** Where a tile that was not on screen grows from: the far edge of the room a tile of `before` gave up for it. */
@@ -179,23 +182,27 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
     key === 'ratio' || key === 'tabs' || key === 'active' ? undefined : value,
   )
   const last = useRef({ shape, cramped, drawn })
+  const ghosts = useRef<HTMLElement[]>([])
   useLayoutEffect(() => {
     const before = last.current
     last.current = { shape, cramped, drawn }
-    if (before.shape === shape || before.cramped !== cramped || prefersReducedMotion()) return
-    for (const tile of document.querySelectorAll<HTMLElement>('[data-tile]')) {
-      const from = before.drawn[tile.dataset.tile!]
-      const to = drawn[tile.dataset.tile!]
-      const grown = from ?? grownFrom(before.drawn, to)
-      if (!grown) playEntrance(tile.lastElementChild!, { motion: { duration: '--duration-200', easing: '--ease-enter' } })
-      else if (sides.some((side) => grown[side] !== to[side])) glideTile(tile, grown, to)
+    const closed = ghosts.current.splice(0)
+    const glided: Animation[] = []
+    if (before.shape !== shape && before.cramped === cramped && !prefersReducedMotion()) {
+      for (const tile of document.querySelectorAll<HTMLElement>('[data-tile]')) {
+        const from = before.drawn[tile.dataset.tile!]
+        const to = drawn[tile.dataset.tile!]
+        const grown = from ?? grownFrom(before.drawn, to)
+        if (!grown) playEntrance(tile.lastElementChild!, { motion: { duration: '--duration-200', easing: '--ease-enter' } })
+        else if (sides.some((side) => grown[side] !== to[side])) glided.push(glideTile(tile, grown, to))
+      }
     }
+    if (closed.length) void Promise.allSettled(glided.map((glide) => glide.finished)).then(() => closed.forEach((ghost) => ghost.remove()))
   })
 
-  // A closed tile's picture stays under the glide of the tile that takes its room, so the moving edge covers a tile and not a hole.
+  // A closed tile's picture stays under the glides of the tiles that take its room, so the moving edge covers a tile and not a hole.
   useEffect(() => useStore.subscribe((s, before) => {
-    const hold = time('--duration-glide')
-    if (s.tiles === before.tiles || !hold || prefersReducedMotion()) return
+    if (s.tiles === before.tiles || !time('--duration-glide') || prefersReducedMotion()) return
     const kept = new Set(tileList(s.tiles.root).map((tile) => tile.id))
     for (const closed of tileList(before.tiles.root)) {
       const node = kept.has(closed.id) ? null : tileNode(closed.id)
@@ -206,7 +213,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
       ghost.inert = true
       ghost.ariaHidden = 'true'
       node.parentElement!.prepend(ghost)
-      setTimeout(() => ghost.remove(), hold)
+      ghosts.current.push(ghost)
     }
   }), [])
 

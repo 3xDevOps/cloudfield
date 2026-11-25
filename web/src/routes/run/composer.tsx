@@ -115,10 +115,11 @@ const pillLook: Record<Pill, { label: string; Icon: typeof ArrowUp; variant: 'pr
   resume: { label: 'Resume', Icon: Play, variant: 'primary' },
 }
 
-function ComposerBox({ textarea, autoFocus, collapsed, value, onChange, onCaret, onFocusChange, onSend, onQueue, onEscape, placeholder, describedBy, menu, onKeyDown, combobox, onPaste, readOnly, images, attach, footer }: {
+function ComposerBox({ textarea, autoFocus, collapsed, docked, value, onChange, onCaret, onFocusChange, onSend, onQueue, onEscape, placeholder, describedBy, menu, onKeyDown, combobox, onPaste, readOnly, images, attach, footer }: {
   textarea: React.RefObject<HTMLTextAreaElement | null>
   autoFocus?: boolean
   collapsed?: boolean
+  docked?: boolean
   value: string
   onChange: (value: string, caret: number) => void
   onCaret?: (caret: number) => void
@@ -221,9 +222,12 @@ function ComposerBox({ textarea, autoFocus, collapsed, value, onChange, onCaret,
       {collapsed ? (
         <>
           {more > 0 && <span className="shrink-0 px-1 text-ui-sm text-muted">+{more} {more === 1 ? 'line' : 'lines'}</span>}
-          <Button variant="ghost" size="icon-sm" label="Send" disabled={!value.trim() || readOnly} onClick={onSend}>
-            <ArrowUp />
-          </Button>
+          {/* Only docked: a press on an unfocused Chat tile's field opens it, which would unmount the button under the press. */}
+          {docked && (
+            <Button variant="ghost" size="icon-sm" label="Send" disabled={!value.trim() || readOnly} onClick={onSend}>
+              <ArrowUp />
+            </Button>
+          )}
         </>
       ) : (
         <div className="wrap-from-end min-w-0 items-center gap-1 px-2 pb-2">{footer}</div>
@@ -606,6 +610,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
         textarea={textarea}
         autoFocus={autoFocus}
         collapsed={collapsed}
+        docked={docked}
         value={body}
         readOnly={busy}
         onPaste={images.onPaste}

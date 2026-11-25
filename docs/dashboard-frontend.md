@@ -3094,8 +3094,9 @@ when the focus does. The strip is a `tablist` named "Sessions in this tile":
   badge, which stands in for the view's name. A background tab's title
   truncates at 240px. A tab keeps four letters of its title: its floor is 112px, or 192px
   while it names its view or carries the badge. A strip with under 192px a
-  tab is tight: its background tabs show the view's icon without the name and
-  a gold dot for the badge, all cut to one width. The strip never scrolls. Tabs that do not fit at
+  tab is tight: its background tabs show the view's icon without the name, on
+  a 128px floor that keeps it clear of the close button, and a gold dot for
+  the badge, all cut to one width. The strip never scrolls. Tabs that do not fit at
   their floor fold into an "N more" menu before "+", the last background tab
   first and those that need you last; the menu carries a gold dot while a
   folded tab needs you, and picking a tab there activates it.
@@ -3149,8 +3150,9 @@ one its tile shows can be dragged (`drag.tsx`); a press becomes a drag after
 4px. The outer fifth of a tile splits it on that side, its middle or strip
 adds a tab, and a tab over a strip moves to where the 2px line shows. A
 teal preview marks what the drop takes. A split's preview is the rectangle
-the new tile will have, seams moved for the floor included: it covers what
-is there now with a `--canvas` scrim and names what lands at its centre. The
+the new tile will have after the drop, seams moved for the floor and the
+room of a tile the drag empties included: it covers what is there now with a
+`--canvas` scrim and names what lands on a plate at its centre. The
 tile that stays is named in a strip at the top of the room it keeps, over
 the same scrim, which also dims a tile the drag takes the only tab of. An
 added tab shows as a dashed tab at the end of the strip, in place of the
@@ -3485,8 +3487,8 @@ viewport; the next `Esc` is the session's `leave-run`.
 
 In a [tile](#session-tiles) that is not the focused one the composer is one
 line: the same field showing a draft's first line, "+N lines" when it has
-more, a **Send** icon and no toolbar. A press on it focuses the tile and it opens. A tile on Changes,
-Files or Trace keeps that one-line field under a seam, for an
+more, and no toolbar. A press on it focuses the tile and it opens. A tile on Changes,
+Files or Trace keeps that one-line field, with a **Send** icon, under a seam, for an
 Enhanced session this tab may steer, while the session's Chat is not on
 screen, no request is pending and the agent's stream is live; it opens on a click or `c` and folds when
 the tile loses focus. A Browser or Terminal tile has none, so the page and

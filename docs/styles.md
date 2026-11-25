@@ -738,7 +738,8 @@ literal time or curve.
 - Session tiles glide their rectangle, position and size, on
   `--duration-glide` / `--ease-glide` when a split, close, move, maximize or
   restore changes the layout. A tile's body takes its final width at once and
-  the gliding tile clips it, so nothing rewraps on the way; its height follows
+  the gliding tile clips it, so nothing rewraps on the way, and a strip that
+  grows does the same, so it picks its controls once; the body's height follows
   the tile, unless a terminal or Browser is on show, which takes the final
   height too and is sized once, not on every frame. A new tile grows from the
   edge it opens on, sharing one moving seam with the tile it split from. A

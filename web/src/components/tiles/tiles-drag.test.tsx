@@ -250,13 +250,15 @@ describe('dragging a sidebar row', () => {
 })
 
 describe('dragging a tab', () => {
-  it('moves it to the edge of another tile, and its emptied tile closes', async () => {
+  it('moves it to the edge of another tile, previewed as it lands once its emptied tile closes', async () => {
     show()
     await beside('run_2')
     const before = tabIds()
     lift(sessionTab(2, second))
     over(400, 850)
     expect(chip()).toContain('Split down')
+    expect(preview()!.style).toMatchObject({ left: '0px', top: '450px', width: '1600px', height: '450px' })
+    expect(document.querySelector<HTMLElement>('[data-slot=drop-stays]')!.parentElement!.style).toMatchObject({ left: '0px', top: '0px', width: '1600px', height: '450px' })
     release(400, 850)
     expect(tree()).toEqual(['column', ['run_1'], ['run_2']])
     expect(tabIds()).toEqual(before)
@@ -394,6 +396,13 @@ describe('a strip with more tabs than room', () => {
     expect(state().route.params.runId).toBe('run_3')
     expect(strip.getByRole('tab', { name: new RegExp(third) }).getAttribute('aria-selected')).toBe('true')
     expect(strip.queryByRole('tab', { name: new RegExp(first) })).toBeNull()
+  })
+
+  it('counts 128px for a background tab that shows its view\'s icon', async () => {
+    show(400)
+    await tab('run_1')
+    await tab('run_3')
+    expect(screen.getByRole('button', { name: '1 more' })).toBeDefined()
   })
 
   it('folds nothing while every tab fits at its floor', async () => {

@@ -70,8 +70,8 @@ function SessionTab({ tile, tab, narrow, onClose }: {
       className={cn(
         'flex h-full max-w-full min-w-28 items-center overflow-hidden border-r border-seam',
         lifted && 'outline-1 -outline-offset-1 outline-control outline-dashed *:opacity-40',
-        // A tight strip cuts every background title to the same width.
-        narrow && !active && 'flex-1 basis-0',
+        // A tight strip cuts every background title to the same width, with room for a view's icon clear of the close button.
+        narrow && !active && 'flex-1 basis-0 has-data-[slot=tab-view]:min-w-32',
         // The floor that keeps four letters of the title beside a view's name or the badge.
         (active || !narrow) && 'has-data-[slot=badge]:min-w-48 has-data-[slot=tab-view]:min-w-48',
       )}
@@ -105,6 +105,8 @@ function SessionTab({ tile, tab, narrow, onClose }: {
 const chipFloor = 112
 /** The floor of a tab that names its view or carries the badge. */
 const wideFloor = 192
+/** The floor of a tight strip's background tab that shows its view's icon. */
+const iconFloor = 128
 
 /** The tiles the maximized one parks, those that need you first, each named by the tab that does: a chip each in the room the tabs leave, or one menu. */
 function ParkedPill({ tile }: { tile: Tile }) {
@@ -174,12 +176,16 @@ export function TabStrip({ tile, narrow, room }: {
   const asking = useNeedsYouRuns(tile.tabs.map((tab) => tab.runId))
   // 36px for "+" and 92px for the menu. Tabs that do not fit at their floor fold into it from the end, those that need you last.
   const tight = tabsRoom.width > 0 && tabsRoom.width < 36 + tile.tabs.length * wideFloor
-  const activeFloor = tiles.flatMap((other) => other.tabs).filter((tab) => tab.runId === run?.id).length > 1 ? wideFloor : chipFloor
-  const over = tight ? 36 + activeFloor + (tile.tabs.length - 1) * chipFloor - tabsRoom.width : 0
+  const held = tiles.flatMap((other) => other.tabs)
+  const floor = (tab: TileTab) => (held.filter((other) => other.runId === tab.runId).length < 2 ? chipFloor : tab.id === tile.active ? wideFloor : iconFloor)
+  const over = tight ? 36 + tile.tabs.reduce((sum, tab) => sum + floor(tab), 0) - tabsRoom.width : 0
   const background = tile.tabs.filter((tab) => tab.id !== tile.active).reverse()
-  const folded = over > 0
-    ? [...background.filter((tab) => !asking.has(tab.runId)), ...background.filter((tab) => asking.has(tab.runId))].slice(0, Math.ceil((over + 92) / chipFloor))
-    : []
+  let freed = 0
+  const folded = [...background.filter((tab) => !asking.has(tab.runId)), ...background.filter((tab) => asking.has(tab.runId))].filter((tab) => {
+    const fold = over > 0 && freed < over + 92
+    if (fold) freed += floor(tab)
+    return fold
+  })
 
   const close = (tab: TileTab) => {
     if (tiles.length === 1 && tile.tabs.length === 1) return redirectRoute(useStore, { name: 'board', params: {} })

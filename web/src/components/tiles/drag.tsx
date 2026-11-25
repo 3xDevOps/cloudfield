@@ -14,7 +14,7 @@ import { runViewLabel } from '@/routes/run/views'
 import { useStore } from '@/store'
 import { useRunPresentation } from '@/store/hooks'
 import type { RunRecord } from '@/store/runs'
-import { activeTab, dropTab, splitTile, tileList, viewHolder, type TileDragSource, type TileSide, type ViewContext } from '@/store/tiles'
+import { activeTab, dropTab, tileList, viewHolder, type TileDragSource, type TileSide, type ViewContext } from '@/store/tiles'
 
 /** How far a press travels, in pixels, before it is a drag and not a click. */
 const threshold = 4
@@ -79,8 +79,8 @@ function targetAt(source: TileDragSource & { from: DOMRect }, x: number, y: numb
     }
     const side = y < strip.bottom ? 'center' : dropZone(tile, x - tile.left, y - tile.top)
     const area = node.parentElement!.getBoundingClientRect()
-    const split = side !== 'center' && !layout.maximized ? splitTile(layout, tileId, side) : null
-    // Laid out as the drop will be: a split that pushes a seam to make its floor is not a half.
+    const split = side !== 'center' && !layout.maximized ? dropTab(layout, source, tileId, side, ctx) : null
+    // Laid out as the drop will be: a seam pushed to make a floor is not a half, and a tile the drag empties gives up its room.
     const after = split && fits(split.root, area) ? tileRects(split.root, area).tiles : null
     if (!after && own) return null
     const drawn = (rect: Rect): Rect => ({
@@ -216,17 +216,21 @@ export function TileDragLayer() {
     </>
   )
   return createPortal(
-    <div aria-hidden className={cn('fixed inset-0 z-50 cursor-grabbing select-none', point && inside(drag.from, point.x, point.y) && 'pointer-events-none')}>
+    <div aria-hidden className={cn('fixed inset-0 z-[51] cursor-grabbing select-none', point && inside(drag.from, point.x, point.y) && 'pointer-events-none')}>
+      {closes && <div style={{ left: closes.left, top: closes.top, width: closes.width, height: closes.height }} className="fixed bg-canvas/80" />}
       {target && (
         <div
           data-slot="drop-preview"
           style={target.rect}
           className={cn('fixed border border-accent transition-[left,top,width,height] duration-hover ease-hover motion-reduce:transition-none', split ? 'bg-canvas/80' : 'bg-accent-soft')}
         >
-          {split && <div data-slot="drop-lands" className={cn(ghost, 'absolute inset-0 justify-center bg-accent-soft')}>{named}</div>}
+          {split && (
+            <div data-slot="drop-lands" className="absolute inset-0 flex items-center justify-center bg-accent-soft px-3">
+              <div className={cn(ghost, 'static h-7 min-w-0 rounded-control bg-canvas px-2')}>{named}</div>
+            </div>
+          )}
         </div>
       )}
-      {closes && <div style={{ left: closes.left, top: closes.top, width: closes.width, height: closes.height }} className="fixed bg-canvas/80" />}
       {split && (
         // The tile that stays, named at the top of the room it keeps, over a scrim: what shows there now is not where it will be.
         <div style={split.stays} className="fixed bg-canvas/80">
