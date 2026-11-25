@@ -231,9 +231,8 @@ The other primitives with motion or a fixed size:
   drag the launch panel's right edge to resize it; its saved width ranges from
   360px to 720px, capped by the available room.
 - The Session details panel defaults to 320px. Its left edge resizes it from
-  280px to 560px, leaving 560px for the session view when inline. The side
-  sheet is capped to the available room; the width is saved on this browser.
-  On phones the panel remains a bottom sheet.
+  280px to 560px, leaving 560px for the session view when inline; the width
+  is saved on this browser. On phones the panel remains a bottom sheet.
 - `Tabs` draws one `SlidingIndicator` per list: the underline look slides a
   2px accent bar, the segmented look a `bg-raised` pill with a seam ring. It
   follows keyboard selection and stays attached in a scrolling strip.

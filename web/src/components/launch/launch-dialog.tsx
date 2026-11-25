@@ -477,7 +477,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
           <Button type="submit" form="launch-form" disabled={launchDisabled}>{launchLabel}</Button>
         </DialogFooter>
         <DialogPrimitive.Close asChild>
-          <Button variant="ghost" size="icon-sm" label="Close" className="absolute top-2 right-2">
+          <Button variant="ghost" size="icon-sm" label="Close" className="absolute top-2 right-2 z-20">
             <X />
           </Button>
         </DialogPrimitive.Close>

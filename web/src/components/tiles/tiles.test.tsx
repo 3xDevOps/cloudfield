@@ -530,6 +530,26 @@ describe('the header row', () => {
     expect(frames.get('run_1:session')).toMatchObject({ alone: false })
   })
 
+  it('draws inline Details no wider than leaves the view 560px, keeps the saved width and offers all of it in the sheet', async () => {
+    sized(1000, 800)
+    useStore.setState({ detailsOpen: true, runDetailsWidth: 560 })
+    show()
+    const handle = () => screen.getByRole('separator', { name: 'Resize session details' })
+    expect(screen.getByRole('complementary', { name: 'Session details' }).style.width).toBe('440px')
+    expect(handle().getAttribute('aria-valuemax')).toBe('440')
+    fireEvent.keyDown(handle(), { key: 'ArrowLeft' })
+    expect(state().runDetailsWidth).toBe(440)
+    fireEvent.keyDown(handle(), { key: 'ArrowRight' })
+    expect(state().runDetailsWidth).toBe(424)
+
+    act(() => state().setRunDetailsWidth(560))
+    beside('run_2')
+    await settled()
+    await userEvent.click(tile(2).getByRole('button', { name: 'Show details' }))
+    expect((await screen.findByRole('dialog', { name: 'Session details' })).style.width).toBe('560px')
+    expect(handle().getAttribute('aria-valuemax')).toBe('560')
+  })
+
   it('offers Open sidebar on the first strip while the sidebar is hidden', () => {
     useStore.setState({ sidebarCollapsed: true })
     show()

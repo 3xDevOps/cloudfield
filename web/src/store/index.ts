@@ -180,7 +180,7 @@ export function createRootStore() {
       }),
       {
         name: 'aether.ui',
-        version: 14,
+        version: 12,
         // Before 2 the Repository step record is unusable and is dropped, so
         // the step asks the gateway again. Before 3 the resume point is an
         // index. Before 4 there is no furthest step, so the resume point
