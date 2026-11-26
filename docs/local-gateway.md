@@ -2059,6 +2059,23 @@ does, with the same files in the config directory:
   dashboard turns a pasted or handed claim link into one.
 - `edge.logout` revokes the device token at the edge and forgets it, and
   drops a pending `edge.login` for that edge.
+- An `edge.status` entry carries `retiring` when its edge address says it
+  is retiring, or refuses as retired:
+  `{"state":"retiring"|"retired","replacement":"https://...","date":"YYYY-MM-DD","known":true|false}`.
+  It is the address's own, unauthenticated word, validated as a canonical
+  origin and a real date. `known` is whether this computer already holds a
+  token at `replacement`, a saved link names it, or it is the built-in default
+  edge. The gateway asks each signed-in edge's `GET /v1/edge` at most every 5
+  minutes, waits 2 seconds at most, and shows a notice for at most an hour
+  after that edge last answered; an answer without a notice clears it, and
+  `edge.logout` and `link.reset` forget it. Without a notice the field is
+  absent.
+- `edge.logout` at an address that answers `410` naming a replacement deletes
+  the token and answers
+  `{"edge":"https://...","unrevoked":{"device_id":"...","replacement":"https://..."}}`:
+  the edge did not revoke the token. A refusal from such an address also
+  carries `data.retired: {"replacement":"https://..."}` beside
+  `data.refusal`, whose `refusal` is the edge's text.
 - Errors carry the client's own message. Not signed in, or an edge refusal
   with a `4xx` status such as a revoked token or a claimed server, answers
   `-32002`. An edge that cannot be reached or answers `5xx` answers
