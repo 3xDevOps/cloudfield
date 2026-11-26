@@ -72,6 +72,33 @@ const fill: Record<MeterTone, string> = {
   done: 'bg-state-done',
 }
 
+/** One meter per usage window; `label` names the login or provider in each meter's accessible name. */
+export function UsageMeters({ label, windows, now }: { label: string; windows: UsageWindow[]; now: number }) {
+  return (
+    <ul className="flex min-w-0 flex-col gap-3">
+      {windows.map((window) => {
+        const reset = resetsIn(window.resets_at, now)
+        return (
+          <li key={window.id} className="flex min-w-0 flex-col gap-1">
+            <div className="flex min-w-0 items-baseline justify-between gap-2 text-ui-sm">
+              <span className="min-w-0 truncate text-text">{window.label}</span>
+              <span className="shrink-0 tabular-nums text-muted">
+                {Math.round(window.used_percent)}% used{reset && ` · ${reset}`}
+              </span>
+            </div>
+            <ProgressBar
+              role="progressbar"
+              aria-label={`${label} ${window.label} usage`}
+              value={window.used_percent}
+              fillClassName={fill[tone(window.used_percent)]}
+            />
+          </li>
+        )
+      })}
+    </ul>
+  )
+}
+
 function ProviderRow({ name, provider, now, own }: { name: UsageProviderName; provider: UsageProvider | undefined; now: number; own: boolean }) {
   const label = providerLabels[name]
   const status = provider?.status ?? 'unavailable'
@@ -88,27 +115,7 @@ function ProviderRow({ name, provider, now, own }: { name: UsageProviderName; pr
         : help}
     >
       {windows.length > 0 ? (
-        <ul className="flex min-w-0 flex-col gap-3">
-          {windows.map((window) => {
-            const reset = resetsIn(window.resets_at, now)
-            return (
-              <li key={window.id} className="flex min-w-0 flex-col gap-1">
-                <div className="flex min-w-0 items-baseline justify-between gap-2 text-ui-sm">
-                  <span className="min-w-0 truncate text-text">{window.label}</span>
-                  <span className="shrink-0 tabular-nums text-muted">
-                    {Math.round(window.used_percent)}% used{reset && ` · ${reset}`}
-                  </span>
-                </div>
-                <ProgressBar
-                  role="progressbar"
-                  aria-label={`${label} ${window.label} usage`}
-                  value={window.used_percent}
-                  fillClassName={fill[tone(window.used_percent)]}
-                />
-              </li>
-            )
-          })}
-        </ul>
+        <UsageMeters label={label} windows={windows} now={now} />
       ) : (status === 'ok' || status === 'stale') && <p className="text-ui-sm text-muted">No current measured windows.</p>}
     </SettingRow>
   )

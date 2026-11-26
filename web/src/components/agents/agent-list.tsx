@@ -23,6 +23,7 @@ export function AgentList({
   onRun,
   onRemove,
   extra,
+  below,
   returnFocusTo,
   primary,
 }: {
@@ -32,6 +33,8 @@ export function AgentList({
   onRun?: (agent: AgentInfo) => void
   onRemove?: (agent: AgentInfo) => void
   extra?: (agent: AgentInfo) => ReactNode
+  /** Full-width content under the row, such as Claude Code's logins. */
+  below?: (agent: AgentInfo) => ReactNode
   returnFocusTo?: string
   primary?: string
 }) {
@@ -90,6 +93,7 @@ export function AgentList({
                 </Menu>
               )}
             </span>
+            {below?.(agent)}
           </InsetListItem>
         )
       })}

@@ -1,5 +1,7 @@
-import { type ComponentProps, useRef, useState } from 'react'
+import { type ComponentProps, useEffect, useRef, useState } from 'react'
 import { AddAgent } from '@/components/agents/add-agent'
+import { AddLogin } from '@/components/agents/add-login'
+import { LoginList, loginAgent, useAgentLogins } from '@/components/agents/agent-logins'
 import { defaultMode, enhancedSupported, label } from '@/components/agents/agent-copy'
 import { AgentExtras } from '@/components/agents/agent-extras'
 import { AgentList } from '@/components/agents/agent-list'
@@ -21,7 +23,7 @@ import { ViewHeader } from '@/components/view-header'
 import { api, type Api } from '@/lib/api'
 import { useDelayed } from '@/lib/hooks'
 import { cn } from '@/lib/utils'
-import type { AgentInfo, GitHubConnectResult, LaunchMode } from '@/lib/types'
+import type { AgentInfo, GitHubConnectResult, LaunchMode, Member } from '@/lib/types'
 import { useAgentList } from '@/routes/agents/use-agents'
 import { GitHubConnect } from '@/routes/onboarding/github-connect'
 import { registerRoute, type RouteProps } from '@/routes/registry'
@@ -31,6 +33,7 @@ import { useCapability } from '@/store/hooks'
 
 const addScreen = '@add'
 const githubScreen = '@github'
+const loginScreen = '@login'
 
 function DefaultMode({ agent }: { agent: AgentInfo }) {
   const saved = useLaunchDefaults((s) => s.result)
@@ -53,9 +56,19 @@ function DefaultMode({ agent }: { agent: AgentInfo }) {
   )
 }
 
-function AgentRows({ agents, ...actions }: { agents: AgentInfo[] } & Pick<ComponentProps<typeof AgentList>, 'onSetUp' | 'onRun' | 'onRemove' | 'returnFocusTo'>) {
+function AgentRows({ agents, onAddLogin, ...actions }: { agents: AgentInfo[]; onAddLogin?: () => void } & Pick<ComponentProps<typeof AgentList>, 'onSetUp' | 'onRun' | 'onRemove' | 'returnFocusTo' | 'below'>) {
   const list = (shown: AgentInfo[], label?: string) => (
-    <AgentList agents={shown} label={label} extra={(agent) => agent.installed === true && <DefaultMode agent={agent} />} {...actions} />
+    <AgentList
+      agents={shown}
+      label={label}
+      extra={(agent) => agent.installed === true && (
+        <>
+          <DefaultMode agent={agent} />
+          {agent.name === loginAgent && onAddLogin && <Button size="sm" variant="secondary" onClick={onAddLogin}>Add login</Button>}
+        </>
+      )}
+      {...actions}
+    />
   )
   const installed = agents.filter((agent) => agent.installed === true)
   const more = agents.filter((agent) => agent.installed !== true)
@@ -102,6 +115,16 @@ function AgentsRoute({ client = api }: RouteProps & { client?: Api }) {
   const [compare, setCompare] = useState(false)
   const [removing, setRemoving] = useState<AgentInfo | null>(null)
   const addButton = useRef<HTMLButtonElement>(null)
+  const claudeInstalled = agents?.some((agent) => agent.name === loginAgent && agent.installed === true) ?? false
+  const logins = useAgentLogins(client, claudeInstalled && caps.hasMethod('agent.login.list'))
+  const [sharedWith, setSharedWith] = useState<Member[]>([])
+  const severalLogins = (logins.logins?.length ?? 0) > 1
+  useEffect(() => {
+    if (!severalLogins) return
+    let live = true
+    client.accountList().then((access) => live && setSharedWith(access.shared_with), () => {})
+    return () => { live = false }
+  }, [client, severalLogins])
   const loading = useDelayed(agents === null && error === null)
   const canSetUp = caps.hasMethod('agent.install') || caps.hasWS('terminal')
   const settingUp = agents?.find((agent) => agent.name === screen)
@@ -135,7 +158,9 @@ function AgentsRoute({ client = api }: RouteProps & { client?: Api }) {
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <PageBody width="lg" className="gap-6">
-          {screen === githubScreen ? (
+          {screen === loginScreen ? (
+            <AddLogin client={client} onClose={() => { logins.reload(); close() }} />
+          ) : screen === githubScreen ? (
             <GitHubConnect client={client} caps={caps} onConnected={setGithub} onClose={close} />
           ) : screen === addScreen ? (
             <AddAgent client={client} onAdded={(agent) => { reload(); openSetup(agent.name) }} onCancel={close} />
@@ -163,6 +188,17 @@ function AgentsRoute({ client = api }: RouteProps & { client?: Api }) {
                   onSetUp={canSetUp ? (agent) => openSetup(agent.name) : undefined}
                   onRun={caps.hasMethod('run.launch') ? run : undefined}
                   onRemove={caps.hasMethod('agent.remove') ? setRemoving : undefined}
+                  onAddLogin={logins.logins && caps.hasMethod('agent.login.add') && caps.hasWS('terminal') ? () => setScreen(loginScreen) : undefined}
+                  below={(agent) => agent.name === loginAgent && (
+                    <>
+                      {logins.error && (
+                        <Callout tone="failed" role="alert" className="basis-full" actions={<Button size="sm" variant="secondary" onClick={logins.reload}>Retry</Button>}>
+                          Logins not read: <span className="font-code">{logins.error}</span>
+                        </Callout>
+                      )}
+                      {severalLogins && logins.logins && <LoginList logins={logins.logins} sharedWith={sharedWith} client={client} onChanged={logins.reload} />}
+                    </>
+                  )}
                   returnFocusTo={returnFocusTo}
                 />
               )}

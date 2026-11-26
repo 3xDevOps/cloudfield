@@ -8,6 +8,7 @@ import type {
   AgentModelsResult,
   AgentRemoveResult,
   AgentInfo,
+  AgentLogin,
   LinearIssue,
   LinearStatus,
   LinearTeam,
@@ -513,7 +514,8 @@ export const api = {
     call<{ text: string }>('dictation.transcribe', { audio_base64: audioBase64, hints }, signal),
   memberList: () => call<MemberList>('member.list'),
   accountList: () => call<AccountAccess>('account.list'),
-  accountUsage: (params: { account_member_id?: string; refresh?: boolean } = {}) =>
+  /** `login` reads one of the caller's own logins; empty is the default login. */
+  accountUsage: (params: { account_member_id?: string; login?: string; refresh?: boolean } = {}) =>
     call<UsageResult>('account.usage', params),
   insightsGet: (params: InsightsParams) => call<InsightsResult>('insights.get', params),
   systemStats: (params: SystemStatsParams, signal?: AbortSignal) => call<SystemStatsResult>('system.stats', params, signal),
@@ -997,6 +999,18 @@ export const api = {
     call<{ agents: AgentInfo[] }>('agent.list', {
       ...(accountMemberID ? { account_member_id: accountMemberID } : {}),
     }).then((r) => r.agents),
+  agentLoginList: (agent: string) =>
+    call<{ agent: string; logins: AgentLogin[] }>('agent.login.list', { agent }).then((r) => r.logins),
+  /** Reserves the sign-in that agentLoginSocket then runs. */
+  agentLoginAdd: (agent: string, name: string) => call<{ login_id: string }>('agent.login.add', { agent, name }),
+  /** Waits for the sign-in to end: the new login, or the reason it was not added. */
+  agentLoginResult: (agent: string, loginID: string) => call<AgentLogin>('agent.login.result', { agent, login_id: loginID }),
+  agentLoginRename: (agent: string, loginID: string, name: string) => call<unknown>('agent.login.rename', { agent, login_id: loginID, name }),
+  agentLoginRemove: (agent: string, loginID: string) => call<unknown>('agent.login.remove', { agent, login_id: loginID }),
+  /** Names every login once, `default` included, first to last. */
+  agentLoginOrder: (agent: string, loginIDs: string[]) => call<unknown>('agent.login.order', { agent, login_ids: loginIDs }),
+  agentLoginAutomatic: (agent: string, loginID: string, automatic: boolean) =>
+    call<unknown>('agent.login.automatic', { agent, login_id: loginID, automatic }),
   agentModels: (name: string, accountMemberID?: string, refresh?: boolean) =>
     call<AgentModelsResult>('agent.models', {
       name,
@@ -1161,6 +1175,8 @@ export const api = {
     socketURL(`/ws/terminal?tab=${encodeURIComponent(tab)}`),
   assistantLoginSocket: (agent: string) =>
     socketURL(`/ws/terminal?assistant_login=${encodeURIComponent(agent)}`),
+  agentLoginSocket: (loginID: string) =>
+    socketURL(`/ws/terminal?agent_login=${encodeURIComponent(loginID)}`),
   eventsSocket: () => socketURL('/ws/events'),
   attachSocket: (runID: string) =>
     socketURL(`/ws/attach/${encodeURIComponent(runID)}`),

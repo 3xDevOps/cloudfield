@@ -386,6 +386,25 @@ export interface AccountAccess {
   /** Members the caller has allowed to use their account. */
   shared_with: Member[]
 }
+
+/** One of the member's own logins of an agent, from agent.login.list. Only Claude Code has added logins. */
+export interface AgentLogin {
+  /** `default`, the login in the member's home, or an added login's `lgn-…` id. */
+  id: string
+  name: string
+  /** `api_key` is the default login's only; absent when no login is found. */
+  kind?: 'subscription' | 'console' | 'api_key'
+  plan?: string
+  email?: string
+  organization_id?: string
+  organization_name?: string
+  /** Billed per use: a Console login. */
+  per_use?: boolean
+  automatic: boolean
+  /** Whether the owner's account shares reach this login. */
+  shared: boolean
+  position: number
+}
 export type UsageProviderName = 'claude' | 'codex'
 
 export type UsageProviderStatus =
@@ -417,6 +436,7 @@ export interface UsageProvider {
 /** account.usage: read-only subscription quota measurements. */
 export interface UsageResult {
   account_member_id: string
+  login?: string
   providers: UsageProvider[]
 }
 

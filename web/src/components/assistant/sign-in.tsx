@@ -1,5 +1,5 @@
 import type { Terminal } from '@xterm/xterm'
-import { type FormEvent, useEffect, useRef, useState } from 'react'
+import { type FormEvent, type ReactNode, useEffect, useRef, useState } from 'react'
 import { TerminalPane } from '@/components/terminal-pane'
 import { Button, buttonVariants } from '@/components/ui/button'
 import { ArrowLeft } from '@/components/icons'
@@ -16,10 +16,38 @@ const vendor: Record<string, string> = { claude: 'Claude', codex: 'Codex' }
 
 /**
  * Runs the agent's sign-in in the assistant's own container, so the login it writes is the assistant's alone.
+ */
+export function AssistantSignIn({ agent, client, onDone, onBack, terminal = true }: { agent: AssistantAgent; client: Api; onDone: () => void; onBack?: () => void; terminal?: boolean }) {
+  return (
+    <SignInTerminal
+      agent={agent}
+      socket={() => client.assistantLoginSocket(agent.name)}
+      onDone={onDone}
+      back={onBack && { label: 'Choose another agent', onBack }}
+      terminal={terminal}
+    >
+      Sign in to {agent.display_name} for the assistant. The sign-in runs in the assistant's own sandbox and is kept there, apart from your sessions, which cannot read or change it.
+    </SignInTerminal>
+  )
+}
+
+/**
+ * Runs an agent's sign-in on the terminal `socket` opens.
  * It offers the URL and code the sign-in prints; the terminal shows from the start only with `terminal`, and once the sign-in ends.
  */
-export function AssistantSignIn({ agent, client, onDone, onBack, terminal: terminalFirst = true }: { agent: AssistantAgent; client: Api; onDone: () => void; onBack?: () => void; terminal?: boolean }) {
+export function SignInTerminal({ agent, socket, onDone, back, terminal: terminalFirst = true, children }: {
+  agent: { name: string; display_name: string }
+  socket: () => string
+  onDone: () => void
+  back?: { label: string; onBack: () => void }
+  terminal?: boolean
+  /** What the sign-in is for. */
+  children: ReactNode
+}) {
   const attachment = useRef<Attachment | null>(null)
+  // A new function each render must not reconnect the sign-in.
+  const socketURL = useRef(socket)
+  socketURL.current = socket
   const output = useRef<Uint8Array[]>([])
   const live = useRef<Terminal | null>(null)
   const [prompt, setPrompt] = useState<SignInPrompt>({})
@@ -44,7 +72,7 @@ export function AssistantSignIn({ agent, client, onDone, onBack, terminal: termi
     let decoder = new TextDecoder()
     let text = ''
     let liveText = ''
-    const attached = connectAttach(() => client.assistantLoginSocket(agent.name), {
+    const attached = connectAttach(() => socketURL.current(), {
       onData: (chunk, kind) => {
         output.current.push(chunk)
         const decoded = decoder.decode(chunk, { stream: true })
@@ -93,7 +121,7 @@ export function AssistantSignIn({ agent, client, onDone, onBack, terminal: termi
       attached.close()
       attachment.current = null
     }
-  }, [agent.name, client, geometry, attempt])
+  }, [agent.name, geometry, attempt])
   useEffect(() => {
     if (!terminal) return
     for (const chunk of output.current) terminal.write(chunk)
@@ -127,18 +155,16 @@ export function AssistantSignIn({ agent, client, onDone, onBack, terminal: termi
   }
   return (
     <section aria-label={`Sign in to ${agent.display_name}`} className="flex flex-col gap-3">
-      {onBack && (
+      {back && (
         <div>
           <Button size="sm" variant="ghost" onClick={() => {
             // The sign-in outlives its socket, and while it runs no other agent's can start.
             if (!ended) attachment.current?.send('\x03')
-            onBack()
-          }}><ArrowLeft />Choose another agent</Button>
+            back.onBack()
+          }}><ArrowLeft />{back.label}</Button>
         </div>
       )}
-      <p className="text-ui">
-        Sign in to {agent.display_name} for the assistant. The sign-in runs in the assistant's own sandbox and is kept there, apart from your sessions, which cannot read or change it.
-      </p>
+      <p className="text-ui">{children}</p>
       {refused && (
         <Callout tone="failed" role="alert" title="The sign-in could not start" actions={<Button size="sm" variant="secondary" onClick={retry}>Try again</Button>}>
           <code className="font-code break-words">{refused}</code>
