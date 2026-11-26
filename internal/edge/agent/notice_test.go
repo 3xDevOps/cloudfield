@@ -325,6 +325,36 @@ func TestOlderBinarysTrustDuringAWriteStands(t *testing.T) {
 	}
 }
 
+// TestOlderBinarysPinDuringTheLinkStoresNothing lets an older binary
+// pin, the same key or another and back, after writeNotices checked the
+// pin and before it links the pin file: no notices are read afterwards
+// and none are left on disk.
+func TestOlderBinarysPinDuringTheLinkStoresNothing(t *testing.T) {
+	a, _, _ := ed25519.GenerateKey(rand.Reader)
+	b, _, _ := ed25519.GenerateKey(rand.Reader)
+	for name, repin := range map[string][]ed25519.PublicKey{"A to A": {a}, "A to B to A": {b, a}} {
+		s := OpenState(t.TempDir())
+		p := pinNow(t, s, a)
+		s.beforeLink = func() {
+			for _, k := range repin {
+				writeOlderPin(t, s, k)
+			}
+		}
+		if err := s.writeNotices(p, testStored()); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := s.Notices(noticeServerID); err != nil || got.Notices != nil {
+			t.Errorf("%s: read %d notice(s) stored under the pin before", name, len(got.Notices))
+		}
+		if noticesFileExists(t, s, a) {
+			t.Errorf("%s: notices.json left beside a link to another pin", name)
+		}
+		if _, err := os.Stat(s.path(keyDirFile(a, noticesPinFile))); err == nil {
+			t.Errorf("%s: notices.pin left", name)
+		}
+	}
+}
+
 // TestDialErrorTextIsPrintable refuses a dial with text that would drive
 // a terminal or forge a log line, and with too much of it.
 func TestDialErrorTextIsPrintable(t *testing.T) {

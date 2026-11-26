@@ -53,7 +53,12 @@ const (
 // same edge keeps its pin and owner. The owner is kept per edge key: an
 // edge with another key, once `aether-server edge trust` pins it, starts
 // without one, and pinning the first edge's key again finds its owner.
-type State struct{ dir string }
+type State struct {
+	dir string
+	// beforeLink, when set, runs just before writeNotices links the pin
+	// file; tests pin a key there as an older binary would.
+	beforeLink func()
+}
 
 // OpenState returns the state under dataDir. Nothing is created until a
 // method writes.
@@ -409,8 +414,16 @@ func (s *State) writeNotices(p pin, n StoredNotices) error {
 	if err := s.write(name, n); err != nil {
 		return err
 	}
+	if s.beforeLink != nil {
+		s.beforeLink()
+	}
+	// An older binary pins without the lock, so the file linked may be a
+	// pin written since the check above.
 	if os.Link(s.path(pinFile), s.path(link)) != nil {
 		return s.remove(name)
+	}
+	if linked, err := os.Stat(s.path(link)); err != nil || !samePin(pin{file: linked}, p) {
+		return errors.Join(s.remove(link), s.remove(name))
 	}
 	return nil
 }
