@@ -35,7 +35,7 @@ below name `edge.cloudfield.ai`; nobody has checked them live there yet.
 | Transport | "Use Streamable HTTP, which the MCP specification defines for remote servers." ([building](https://claude.com/docs/connectors/building)) | Streamable HTTP at `/mcp` (live) |
 | IPv4 | "Connectors are IPv4-only, so a hostname that only publishes `AAAA` records can't be reached" ([troubleshooting](https://claude.com/docs/connectors/building/troubleshooting)) | `edge.onaether.dev` had an A record (live); not checked for `edge.cloudfield.ai` |
 | 401 starts sign-in | "A `401` is required to start sign-in, and Claude ignores a `WWW-Authenticate` header on a `200` response" ([authentication](https://claude.com/docs/connectors/building/authentication)) | `401` with `WWW-Authenticate: Bearer resource_metadata="https://edge.cloudfield.ai/.well-known/oauth-protected-resource/mcp"` (code) |
-| Resource | "the document's `resource` field must equal the URL as the user enters it in Claude, including any path component" ([authentication](https://claude.com/docs/connectors/building/authentication)) | `"resource":"https://edge.cloudfield.ai/mcp"` (code; `TestConnectorAtEveryRelayOrigin`). A server older than v0.8.7 enrolled at the old address refuses it ([connectors.md](connectors.md#prerequisites)) |
+| Resource | "the document's `resource` field must equal the URL as the user enters it in Claude, including any path component" ([authentication](https://claude.com/docs/connectors/building/authentication)) | `"resource":"https://edge.cloudfield.ai/mcp"` (code; `TestConnectorAtEveryRelayOrigin`). A server older than v0.8.7 enrolled at the old address refuses it ([connectors.md](connectors.md#older-edge-address)) |
 | PKCE | "Your authorization server must support S256 PKCE." ([authentication](https://claude.com/docs/connectors/building/authentication)) | `code_challenge_methods_supported: ["S256"]` (live) |
 | CIMD | "Claude selects CIMD only when your authorization server metadata advertises both `"client_id_metadata_document_supported": true` and `"none"` in `token_endpoint_auth_methods_supported`" ([authentication](https://claude.com/docs/connectors/building/authentication)) | Both advertised, no registration endpoint (live). The listing's auth type is `oauth_cimd` |
 | Callback | "register exactly this redirect URI: `https://claude.ai/api/mcp/auth_callback`" ([authentication](https://claude.com/docs/connectors/building/authentication)) | Taken from Claude's client metadata document, which lists it; only `claude.ai` and `chatgpt.com` clients are accepted (code: `internal/connector/authorize.go`) |
@@ -118,7 +118,7 @@ directory connectors"
    `https://edge.cloudfield.ai/mcp`, no advanced settings.
 2. **Connect**, sign in at the edge, pick the demo server, **Allow** with
    both scopes.
-3. Check the connector shows **Connected** and all 26 tools appear under
+3. Check the connector shows **Connected** and all 34 tools appear under
    **Tool permissions**, read tools without a confirmation prompt.
 4. Run every [example prompt](#the-listing) and each tool at least once
    through **+ → Connectors**. Revoke the connector afterwards (`cloudfield mcp

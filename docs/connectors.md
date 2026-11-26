@@ -28,40 +28,10 @@ server hosts the connector endpoint and signs you in.
 - A linked CLI (`cloudfield link`) on an approved device, a member SSH key or a
   tailnet connection. Under `edge-access account`, any registered device works.
 - A ChatGPT or Claude plan that allows custom connectors (see below).
-
-As of 2026-11-26 the project edge's connector URL is
-`https://edge.cloudfield.ai/mcp`. The edge still answers at
-`edge.onaether.dev`, and connectors added at `https://edge.onaether.dev/mcp`
-keep working. `cloudfield mcp`, **Settings → ChatGPT and Claude** and `sudo
-cloudfield-server edge status` show the URLs for new connectors at the
-address the server is enrolled at, its `edge-url`; Settings and `cloudfield
-mcp` list existing connectors at the URL each was added at. A server set up
-at `https://edge.onaether.dev` stays enrolled there, so the URL offered starts
-with `https://edge.onaether.dev`. On v0.8.7 or later a connector works at
-either address, at the universal URL and at the server's own. Where the URL
-shown starts with `https://edge.onaether.dev`, add a new connector at the same
-URL with `https://edge.cloudfield.ai` in its place:
-`https://edge.cloudfield.ai/mcp`, or
-`https://edge.cloudfield.ai/mcp/<server id>` with the pairing code shown; a
-code is not tied to an address. Settings sees a universal URL at either
-address and marks the connector **Universal URL**. It watches for a new
-connector at the server's own URL only at the address it shows: at the other,
-it waits until the code expires, then shows `The last code expired.` and lists
-the connector as **This server's own URL**,
-`https://edge.cloudfield.ai/mcp/<server id>`, which `cloudfield mcp` prints as
-`at https://edge.cloudfield.ai/mcp/<server id>`. To make the server show the
-new address, an admin runs `sudo cloudfield-server edge move
-https://edge.cloudfield.ai`, then `sudo systemctl restart aether-server`
-(v0.9.0 or later; [edge.md](edge.md#moving-to-another-address-of-the-edge)).
-
-A server too old for the universal URL is listed on the edge's sign-in page
-under **Not available**: `its aether-server is too old for this URL; an admin
-runs sudo aether-server update`. One older than v0.8.7, enrolled at
-`edge.onaether.dev`, that the page offers sends ChatGPT or Claude back the
-OAuth error `invalid_target`, `resource must be
-https://edge.onaether.dev/mcp`, at `https://edge.cloudfield.ai/mcp`. Either
-way its admin updates it with `sudo aether-server update`; the server does
-not need to move.
+- The project edge's address is `https://edge.cloudfield.ai`. A server
+  enrolled at its older address, `https://edge.onaether.dev`, needs v0.8.7 or
+  later for a connector at the new one
+  ([Older edge address](#older-edge-address)).
 
 ## Get the URL
 
@@ -119,6 +89,41 @@ URL and a code. A connector added at the universal URL of another address of
 the edge is not such a connector: it shows as **Universal URL** and
 reconnects with the sign-in.
 
+### Older edge address
+
+As of 2026-11-26 the project edge's address is `https://edge.cloudfield.ai`.
+It still answers at `https://edge.onaether.dev`, and connectors added there
+keep working.
+
+Where `cloudfield mcp` (`aether mcp` before v0.9.0) or Settings shows a URL
+that starts with `https://edge.onaether.dev`, the server is enrolled there:
+
+- On a server at v0.8.7 or later, add the connector at the same URL with
+  `https://edge.cloudfield.ai` in its place: the universal URL, or the
+  server's own with the code shown. Take the URL and the code from one
+  place, since each new code, from Settings or `cloudfield mcp`, replaces
+  your earlier one.
+- On an older server, an admin first runs `sudo aether-server update`. Until
+  then both URLs fail at the new address. The universal URL returns the
+  OAuth error `invalid_target`, `resource must be
+  https://edge.onaether.dev/mcp`, or, below edge protocol 4, the edge's
+  sign-in page lists the server under **Not available**: `its aether-server
+  is too old for this URL; an admin runs sudo aether-server update`. The
+  server's own URL serves a protected-resource document whose `resource` is
+  the old URL, which Claude refuses.
+
+Settings sees a connector at the universal URL of either address and marks
+it **Universal URL**. At the
+server's own URL of the other address it keeps waiting and ends with `The
+last code expired.` although the connector connected: it is listed as
+**This server's own URL**, `https://edge.cloudfield.ai/mcp/<server id>`, and
+`cloudfield mcp` prints `at https://edge.cloudfield.ai/mcp/<server id>`.
+
+To make the server show the new address, an admin moves it on v0.9.0 or
+later with `sudo cloudfield-server edge move https://edge.cloudfield.ai`,
+then `sudo systemctl restart aether-server`
+([edge.md](edge.md#moving-to-another-address-of-the-edge)).
+
 ## Add it in ChatGPT
 
 Custom MCP servers are added on the web only, at chatgpt.com
@@ -127,9 +132,8 @@ Custom MCP servers are added on the web only, at chatgpt.com
 1. Open [ChatGPT Plugins](https://chatgpt.com/plugins).
 2. Select the plus button, then **Add custom MCP server**.
 3. Name it `Aether`, paste the URL from `cloudfield mcp` as the server URL, and
-   choose **OAuth**. Where that URL starts with `https://edge.onaether.dev`,
-   paste it with `https://edge.cloudfield.ai` in its place
-   ([Prerequisites](#prerequisites)).
+   choose **OAuth** (for a URL at `https://edge.onaether.dev`, see
+   [Older edge address](#older-edge-address)).
 4. Select **Create as a plugin**, then install it.
 5. On the [universal URL](#the-universal-url), the edge's page opens: sign in
    with GitHub and select **Continue with <server>**. A page from your server
@@ -148,10 +152,9 @@ On claude.ai
 
 1. Free, Pro and Max: open **Customize → Connectors**, select **Add custom
    connector**, name it `Aether`, paste the URL from `cloudfield mcp`, leave
-   **Advanced settings** empty and select **Add**. Where that URL starts with
-   `https://edge.onaether.dev`, paste it with `https://edge.cloudfield.ai` in
-   its place ([Prerequisites](#prerequisites)). Free allows one custom
-   connector.
+   **Advanced settings** empty and select **Add** (for a URL at
+   `https://edge.onaether.dev`, see [Older edge address](#older-edge-address)).
+   Free allows one custom connector.
 2. Team and Enterprise: an Owner opens **Organization settings → Connectors**,
    selects **Add**, **Custom**, then **Web**, and pastes the same URL. Each member
    then selects **Connect** under **Customize → Connectors**.
@@ -213,9 +216,9 @@ A connector keeps the URL it was added at. Settings marks each one
 **Universal URL** or **This server's own URL**, and `cloudfield mcp` prints
 `universal URL` or `at <url>`. Once Settings shows the universal URL for you,
 **Move to the universal URL** next to a connector on the server's own URL
-starts a new connection: add Cloudfield again in the app with the universal URL.
-Where Settings or the CLI names it at `https://edge.onaether.dev/mcp`, use
-`https://edge.cloudfield.ai/mcp` ([Prerequisites](#prerequisites)).
+starts a new connection: add Cloudfield again in the app with the universal URL
+(for one at `https://edge.onaether.dev`, see
+[Older edge address](#older-edge-address)).
 Settings revokes the old connector once a new one from the same client, such as
 ChatGPT or Claude, connects at the universal URL and calls Cloudfield. If none
 calls within 10 minutes, it leaves the old one and says so. Remove the old
@@ -888,7 +891,7 @@ On the page that opens when you connect:
 | `300 wrong codes came to this server from all addresses in the last minute. Wait a minute, then paste the code again.` | Someone is guessing codes from many addresses. Pairing resumes a minute after the guessing stops |
 | `Cloudfield connectors work with ChatGPT and Claude; <host> is not one of them.` | Only `chatgpt.com` and `claude.ai` can connect |
 | `None of your servers can take this connection.` (edge sign-in page) | Each server listed under **Not available** says why: not connected, too old for the universal URL (an admin runs `sudo cloudfield-server update`), or an invitation you have not joined |
-| The edge sign-in page does not list your server | Your GitHub account is not bound to a member there. Bind it (`cloudfield member identities`) or use the `<edge>/mcp/<server id>` URL `cloudfield mcp` prints |
+| The edge sign-in page does not list your server | Your GitHub account is not bound to a member there. Link it with `cloudfield member link --github <login>` ([teams.md](teams.md#link-or-merge-sign-ins)) or use the `<edge>/mcp/<server id>` URL `cloudfield mcp` prints; for one at `https://edge.onaether.dev`, see [Older edge address](#older-edge-address) |
 | `Cannot connect as your GitHub account: <account> is not a member of <server>; ...` | That GitHub account is not bound to a member. Sign in at the edge as the right account, or connect with a code |
 | `Cannot connect as your GitHub account: the edge's sign-in for it was already used.`, `... expired at <time>` or `... was issued at <time>, and this server takes only sign-ins issued from <time>, 30s after it last started` | Start again from ChatGPT or Claude |
 | `Cannot connect as your GitHub account: the edge's sign-in for it was already opened in another browser.` or `... this consent page was opened in another browser than the one that signed in at the edge.` | The page was opened or posted from a browser other than the one that chose the server. Start again from ChatGPT or Claude in one browser |
