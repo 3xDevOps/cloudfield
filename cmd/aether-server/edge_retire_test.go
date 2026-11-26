@@ -122,7 +122,8 @@ func TestEdgeStatusRetiringRow(t *testing.T) {
 			if tt.row != "" {
 				want = []string{tt.row}
 			}
-			if len(rows) != len(want) || len(want) == 1 && (rows[0] != want[0] && !(tt.raw != "" && strings.HasPrefix(rows[0], want[0]))) {
+			matches := func(got, want string) bool { return got == want || tt.raw != "" && strings.HasPrefix(got, want) }
+			if len(rows) != len(want) || len(want) == 1 && !matches(rows[0], want[0]) {
 				t.Errorf("rows:\n%q\nwant\n%q\nin:\n%s", rows, want, out.String())
 			}
 			if len(connections) != 1 || tt.connection != "" && connections[0] != tt.connection {
