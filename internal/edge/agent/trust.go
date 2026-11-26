@@ -37,7 +37,7 @@ func FetchEdgeInfo(ctx context.Context, edgeURL string) (edgeproto.EdgeInfo, err
 	if resp.StatusCode != http.StatusOK {
 		var body edgeproto.ErrorBody
 		_ = dec.Decode(&body)
-		return edgeproto.EdgeInfo{}, fmt.Errorf("edgeagent: GET %s: %s %s", url, resp.Status, body.Error)
+		return edgeproto.EdgeInfo{}, fmt.Errorf("edgeagent: GET %s: %s %s", url, resp.Status, printableText(body.Error, maxDialMessage))
 	}
 	var info edgeproto.EdgeInfo
 	if err := dec.Decode(&info); err != nil {

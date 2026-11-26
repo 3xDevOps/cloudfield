@@ -586,16 +586,17 @@ func (a *Agent) Leave(ctx context.Context) error {
 const maxDialMessage = 1024
 
 // printableText is s from another party, safe to print, log and store:
-// invalid UTF-8 and control characters replaced, at most n bytes.
+// invalid UTF-8, control and format characters (bidi overrides among
+// them) and line and paragraph separators replaced, at most n bytes.
 func printableText(s string, n int) string {
 	s = strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
 			return '?'
 		}
 		return r
 	}, strings.ToValidUTF8(s, "?"))
 	if len(s) > n {
-		s = strings.ToValidUTF8(s[:n], "") + "..."
+		s = strings.ToValidUTF8(s[:n-len("...")], "") + "..."
 	}
 	return s
 }

@@ -267,12 +267,15 @@ func TestDialErrorTextIsPrintable(t *testing.T) {
 	}
 }
 
-func TestPrintableTextIsCapped(t *testing.T) {
-	if got := printableText(strings.Repeat("a", 5000), maxDialMessage); got != strings.Repeat("a", maxDialMessage)+"..." {
-		t.Errorf("printableText of 5000 bytes is %d bytes", len(got))
+func TestPrintableText(t *testing.T) {
+	if got := printableText(strings.Repeat("a", 5000), maxDialMessage); got != strings.Repeat("a", maxDialMessage-3)+"..." {
+		t.Errorf("printableText of 5000 bytes is %d bytes, want %d", len(got), maxDialMessage)
 	}
-	if got := printableText(strings.Repeat("é", 600), 1023); !strings.HasSuffix(got, "é...") || len(got) != 1022+3 {
-		t.Errorf("printableText split a rune: %q", got[len(got)-8:])
+	if got := printableText(strings.Repeat("é", 600), 1023); !strings.HasSuffix(got, "é...") || len(got) > 1023 {
+		t.Errorf("printableText of 1200 bytes capped at 1023 is %d bytes ending %q", len(got), got[len(got)-8:])
+	}
+	if got := printableText("ok\u202egnp.exe\u2028fake: connected\u2029\u200b", 100); got != "ok?gnp.exe?fake: connected??" {
+		t.Errorf("printableText kept a format character or separator: %q", got)
 	}
 }
 
@@ -303,6 +306,9 @@ func TestControlDialRefusalIsTyped(t *testing.T) {
 	_, _, err = dial(t.Context(), moved.URL+edgeproto.PathServerControl, nil, handshakeTimeout)
 	if !errors.As(err, &de) || de.Status != http.StatusFound || followed.Load() || de.Message != "Location: "+elsewhere.URL+edgeproto.PathServerControl {
 		t.Fatalf("dial a redirect: %v, followed %v", err, followed.Load())
+	}
+	if _, err = FetchEdgeInfo(t.Context(), srv.URL); err == nil || !strings.HasSuffix(err.Error(), "410 Gone https://old.example.test is retired") {
+		t.Fatalf("edge info refused: %v", err)
 	}
 	if _, err = FetchEdgeInfo(t.Context(), moved.URL); err == nil || followed.Load() || !strings.Contains(err.Error(), "302 Found") {
 		t.Fatalf("edge info behind a redirect: %v, followed %v", err, followed.Load())
