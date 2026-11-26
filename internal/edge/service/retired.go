@@ -43,7 +43,7 @@ type retiredHost struct {
 	// short is body without the commands, for a WebSocket upgrade, whose
 	// refusal a client reads only 1024 bytes of.
 	body, short, page, join []byte
-	requests         [4]atomic.Uint64
+	requests                [4]atomic.Uint64
 }
 
 // RetiredRequest counts requests to one host of a retired pair.
