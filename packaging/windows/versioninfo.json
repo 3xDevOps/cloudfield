@@ -14,7 +14,7 @@
     "FileDescription": "Cloudfield client - self-hosted development environment for coding agents",
     "InternalName": "aether",
     "OriginalFilename": "aether.exe",
-    "LegalCopyright": "Copyright (C) 3xDevOps. Licensed under GPL-3.0.",
+    "LegalCopyright": "Copyright (C) 3xDevOps. Licensed under the MIT License.",
     "FileVersion": "0.0.0.0",
     "ProductVersion": "0.0.0.0"
   },

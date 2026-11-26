@@ -629,7 +629,7 @@ features.
 
 ## Licence and open source notices
 
-The app and the dashboard are under the GPL-3.0, and the libraries they use
+The app and the dashboard are under the MIT licence, and the libraries they use
 are listed with their licences in [notices.md](notices.md). The app's first
 screen links to both that page and the licence text.
 

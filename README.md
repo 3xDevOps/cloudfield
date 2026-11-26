@@ -5,7 +5,7 @@
 **A self-hostable development environment and controller for AI coding agents running in the cloud, for teams of engineers & *multiplayer* control.**
 
 [![Go 1.26+](https://img.shields.io/badge/Go-1.26%2B-6EE7D6?style=flat-square)](go.mod)
-[![License: GPL-3.0](https://img.shields.io/badge/license-GPL--3.0-4A6FA5?style=flat-square)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-4A6FA5?style=flat-square)](LICENSE)
 [![Latest release](https://img.shields.io/github/v/release/3xDevOps/cloudfield?include_prereleases&style=flat-square&color=4A6FA5)](https://github.com/3xDevOps/cloudfield/releases)
 ![Status: beta](https://img.shields.io/badge/status-beta-FF9D6B?style=flat-square)
 
@@ -132,4 +132,5 @@ Common documentation:
 
 ## License
 
-[GPL-3.0](LICENSE)
+[MIT](LICENSE). Earlier releases were published under the GPL-3.0 and
+remain available under it.

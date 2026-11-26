@@ -4,7 +4,7 @@
   "description": "Desktop shell for the Aether dashboard: spawns `aether gui` and renders its tokened loopback gateway.",
   "private": true,
   "homepage": "https://github.com/3xDevOps/cloudfield",
-  "license": "GPL-3.0",
+  "license": "MIT",
   "author": {
     "name": "3xDevOps",
     "email": "aether@users.noreply.github.com"

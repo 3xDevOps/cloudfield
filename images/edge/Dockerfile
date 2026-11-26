@@ -40,7 +40,7 @@ FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55
 LABEL org.opencontainers.image.title="aether-edge" \
       org.opencontainers.image.description="Aether edge: GitHub sign-in and relay for Aether servers" \
       org.opencontainers.image.source="https://github.com/3xDevOps/Aether" \
-      org.opencontainers.image.licenses="GPL-3.0"
+      org.opencontainers.image.licenses="MIT"
 COPY --from=build /out/aether-edge /usr/local/bin/aether-edge
 # Copied as an entry of its parent: copying the directory itself would
 # create the destination 0755 and drop its mode.

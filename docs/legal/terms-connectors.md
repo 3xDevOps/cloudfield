@@ -11,7 +11,7 @@ Effective: [date of publication]
 These terms govern your use of the Cloudfield connector at
 `https://edge.onaether.dev/mcp` and the project edge it runs through
 (`edge.onaether.dev`, `auth.onaether.dev`), operated by 3xDevOps
-("we"). The Cloudfield software itself is licensed under the GPL-3.0; these
+("we"). The Cloudfield software itself is licensed under the MIT License; these
 terms do not change that licence.
 
 ## What the service is

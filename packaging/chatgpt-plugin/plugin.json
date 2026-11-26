@@ -10,7 +10,7 @@
   },
   "homepage": "https://onaether.dev",
   "repository": "https://github.com/3xDevOps/cloudfield",
-  "license": "GPL-3.0",
+  "license": "MIT",
   "keywords": ["coding agents", "claude code", "codex", "pull requests", "self-hosted"],
   "extensions": {
     "com.openai": {
