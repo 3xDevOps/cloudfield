@@ -2,7 +2,7 @@ import { ApiError, codeNotFound, type Api } from '@/lib/api'
 import type { Watch, WatchCreateParams, WatchGetResult, WatchNotification, WatchResult, WatchUpdateParams } from '@/lib/types'
 import { isLive } from '@/lib/watches'
 import type { RootState, RootStore } from '@/store'
-import { capability } from '@/store/hooks'
+import { capability } from '@/lib/capability'
 import type { SliceCreator } from '@/store/slice'
 
 /** The viewer's own watches; the server lists no one else's, admins included. */

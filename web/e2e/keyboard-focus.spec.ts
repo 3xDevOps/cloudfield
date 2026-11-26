@@ -126,7 +126,7 @@ test('Escape closes a dialog on a run without leaving the run', async ({
   await openFirstRun(page, aether)
 
   // The shortcut stands down inside the terminal, which takes focus on mount.
-  await page.getByRole('heading', { name: task, exact: true }).click()
+  await page.getByRole('heading', { name: task, exact: true }).focus()
   await page.keyboard.press('?')
 
   const dialog = page.getByRole('dialog', { name: 'Keyboard shortcuts' })
@@ -158,7 +158,7 @@ test('Escape closes the footer menu without leaving the run', async ({
   await openFirstRun(page, aether)
 
   // The shortcut stands down inside the terminal, which takes focus on mount.
-  await page.getByRole('heading', { name: task, exact: true }).click()
+  await page.getByRole('heading', { name: task, exact: true }).focus()
 
   await page.getByRole('navigation', { name: 'Cloudfield' }).getByRole('button', { name: /, Live$/ }).click()
   const menu = page.getByRole('menu')

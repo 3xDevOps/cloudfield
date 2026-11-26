@@ -270,6 +270,7 @@ export function TerminalPane({
   imageUploadEnabled,
   writable = true,
   replaying = false,
+  scaled = false,
   surface,
   readingSurface,
   controlAppearance,
@@ -291,6 +292,8 @@ export function TerminalPane({
   writable?: boolean
   /** Whether replay is still parsing and the terminal surface must stay hidden. */
   replaying?: boolean
+  /** Draws the grid at the text size that fits the pane's width: for a desktop mirror, whose grid is its controller's. */
+  scaled?: boolean
   /** Run-only overlay; the shared xterm host keeps its measured geometry. */
   surface?: React.ReactNode
   /** Redirect tools and mute input while the visible surface is recorded output. */
@@ -311,8 +314,8 @@ export function TerminalPane({
   })
   const coarse = useMediaQuery(coarsePointer)
   const phone = useMediaQuery(phoneScreen)
-  useTerminalPan(controller.terminal, phone && !replaying && !readingSurface)
-  const fit = useTerminalFit(controller.terminal, phone)
+  useTerminalPan(controller.terminal, (phone || scaled) && !replaying && !readingSurface)
+  const fit = useTerminalFit(controller.terminal, phone || scaled, scaled)
   // A modifier left armed after losing write access would turn the next
   // typed character into a control code nobody pressed.
   const clearModifiers = controller.clearModifiers
@@ -396,7 +399,7 @@ export function TerminalPane({
           className,
         )}
         style={{
-          overflowY: phone ? 'auto' : 'hidden',
+          overflowY: phone || scaled ? 'auto' : 'hidden',
           overscrollBehaviorY: 'none',
           visibility: replaying || readingSurface ? 'hidden' : undefined,
         }}

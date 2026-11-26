@@ -14,7 +14,8 @@ import type { Workspace } from '@/lib/types'
 import { GitIdentityForm } from '@/routes/onboarding/git-identity'
 import { Step } from '@/routes/onboarding/layout'
 import { useStore } from '@/store'
-import { type Capability, useIsAdmin } from '@/store/hooks'
+import type { Capability } from '@/lib/capability'
+import { useIsAdmin } from '@/store/hooks'
 
 export function RepositoryStep({
   client,

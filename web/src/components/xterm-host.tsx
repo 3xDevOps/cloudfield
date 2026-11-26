@@ -19,7 +19,7 @@ import {
   terminalZoomKey,
   whenTerminalFontReady,
 } from '@/lib/term-font'
-import { clipboardKeys } from '@/lib/term-clipboard'
+import { clipboardKeys, registerTerminalCopy } from '@/lib/term-clipboard'
 import { standardGeometry } from '@/routes/terminal/attach'
 import { useStore } from '@/store'
 
@@ -539,6 +539,7 @@ export function useXterm({
       // would throw its scrollback away, so the size is applied below.
       fontSize: (appliedFontSize.current = useStore.getState().terminalFontSize),
       fontFamily: terminalFontFamily,
+      macOptionClickForcesSelection: true,
       scrollback: Math.max(0, Math.floor(scrollback)),
       scrollOnEraseInDisplay: true,
       cursorBlink: false,
@@ -580,6 +581,7 @@ export function useXterm({
       created.loadAddon(searchAddon)
       setSearch(searchAddon)
       created.open(host)
+      const unregisterCopy = registerTerminalCopy(created, host)
       liveTerminal.current = created
       setTerminal(created)
 
@@ -623,7 +625,16 @@ export function useXterm({
       // make the shared PTY smaller than this pane's requested geometry.
       const resize = () => {
         if (followRef.current) return
-        const proposed = fit.proposeDimensions()
+        // A mirror drawn scaled to its pane still asks for the grid its pane holds at the chosen text size.
+        const drawn = created.options.fontSize
+        let proposed = fit.proposeDimensions()
+        if (drawn !== appliedFontSize.current) {
+          const intent = captureViewport(created, viewportInteractionRevision.current)
+          created.options.fontSize = appliedFontSize.current
+          proposed = fit.proposeDimensions()
+          created.options.fontSize = drawn
+          restoreViewport(created, intent, viewportInteractionRevision.current)
+        }
         if (!proposed) return
         requestedSize.current = proposed
         if (!serverSize.current) created.resize(proposed.cols, proposed.rows)
@@ -688,6 +699,7 @@ export function useXterm({
       })
       observer.observe(host)
       teardown = () => {
+        unregisterCopy()
         host.removeEventListener('wheel', noteViewportInteraction)
         host.removeEventListener('touchmove', noteViewportInteraction)
         host.removeEventListener('pointerdown', noteScrollbarInteraction)

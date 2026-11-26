@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type * as React from 'react'
 import { useShallow } from 'zustand/react/shallow'
 import { VList, type VListHandle } from 'virtua'
@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Callout } from '@/components/ui/callout'
 import { Skeleton } from '@/components/ui/skeleton'
 import { RelativeTime } from '@/components/ui/relative-time'
+import { TilePressedContext } from '@/components/tiles/area'
 import { api } from '@/lib/api'
 import { useFileDrop, useRefuseStrayFileDrops } from '@/lib/file-drag'
 import { useDelayed } from '@/lib/hooks'
@@ -15,6 +16,7 @@ import { backgroundReason, liveStateOf, runLabel, stateTone } from '@/lib/status
 import { RunFileLinks } from '@/routes/files/path-link'
 import type { RoomMessage } from '@/lib/types'
 import { modeLabel } from '@/routes/run/agent-name'
+import { FrameFocusContext } from '@/routes/run/agent-context'
 import type { AgentTerminal } from '@/routes/run/agent-terminal'
 import { AgentsBar } from '@/routes/run/agents-bar'
 import { ChangesBar } from '@/routes/run/changes-bar'
@@ -246,6 +248,8 @@ export function SessionView({ run, agent, agentName, room, nav, active, textarea
   notesWide: boolean
 }) {
   useRefuseStrayFileDrops()
+  const tileFocused = useContext(FrameFocusContext)
+  const pressed = useContext(TilePressedContext)
   const enhanced = run.acp === true
   const showMessages = useStore((s) => !s.hiddenAgentMessages[run.id])
   const { rows, session, missingRoomImages } = useRows(run, enhanced, showMessages)
@@ -375,9 +379,9 @@ export function SessionView({ run, agent, agentName, room, nav, active, textarea
   const pendingCount = session?.pending.length ?? 0
   const hadPending = useRef(false)
   useEffect(() => {
-    if (pendingCount === 0 && hadPending.current && active && document.activeElement === document.body) textarea.current?.focus()
+    if (pendingCount === 0 && hadPending.current && active && tileFocused && document.activeElement === document.body) textarea.current?.focus()
     hadPending.current = pendingCount > 0
-  }, [pendingCount, active, textarea])
+  }, [pendingCount, active, tileFocused, textarea])
 
   const fetchOlder = () => {
     if (enhanced && session?.more) void loadOlderItems(useStore, api, run.id)
@@ -524,7 +528,7 @@ export function SessionView({ run, agent, agentName, room, nav, active, textarea
       <AgentsBar runID={run.id} />
       <ChangesBar run={run} />
       <CompletionPrompt run={run} className={cn(sessionColumn, 'pb-2')} />
-      <Composer run={run} agent={agent} room={room} textarea={textarea} autoFocus={focusComposer} onFocusChange={onComposing} dock={dock || undefined} onEscape={() => viewport.current?.focus()} onDropStatus={reportDropStatus} />
+      <Composer run={run} agent={agent} room={room} textarea={textarea} autoFocus={focusComposer} collapsed={!tileFocused || pressed} onFocusChange={onComposing} dock={dock || undefined} onEscape={() => viewport.current?.focus()} onDropStatus={reportDropStatus} />
       <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">{announcement}</span>
       {drop.count !== null && <DropOverlay count={drop.count} refused={drop.refused} blocked={dropStatus.blocked} limit={dropStatus.limit} />}
     </div>

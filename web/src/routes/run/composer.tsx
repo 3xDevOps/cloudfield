@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import type * as React from 'react'
 import { DictationButton } from '@/components/dictation/dictation-button'
 import { DictationNotice } from '@/components/dictation/dictation-notice'
@@ -45,15 +45,19 @@ interface ComposerProps {
   onFocusChange: (focused: boolean) => void
   /** The gate can keep the box unmounted, so focusing waits for it to mount. */
   autoFocus?: boolean
+  /** One line, for a tile the keyboard is not in; a docked one keeps a send button. The field is the same one, so a press on it keeps its focus when the box opens. */
+  collapsed?: boolean
+  /** Under a view other than Chat: the frame spans its tile below a seam. */
+  docked?: boolean
   dock?: React.ReactNode
   onEscape: () => void
   onDropStatus?: (status: { limit: number; blocked?: string; upload?: (files: File[]) => Promise<void> }) => void
 }
 
-function ComposerFrame({ children }: { children: React.ReactNode }) {
+function ComposerFrame({ docked, children }: { docked?: boolean; children: React.ReactNode }) {
   return (
-    <div className="shrink-0 bg-canvas pb-[max(0px,calc(var(--keyboard-inset,0px)-env(safe-area-inset-bottom)))]">
-      <div className={cn(sessionColumn, 'flex flex-col gap-2 pb-4')}>{children}</div>
+    <div className={cn('shrink-0 bg-canvas pb-[max(0px,calc(var(--keyboard-inset,0px)-env(safe-area-inset-bottom)))]', docked && 'border-t border-seam')}>
+      <div className={cn('flex flex-col gap-2', docked ? 'px-4 pt-2 pb-4' : cn(sessionColumn, 'pb-4'))}>{children}</div>
     </div>
   )
 }
@@ -111,9 +115,11 @@ const pillLook: Record<Pill, { label: string; Icon: typeof ArrowUp; variant: 'pr
   resume: { label: 'Resume', Icon: Play, variant: 'primary' },
 }
 
-function ComposerBox({ textarea, autoFocus, value, onChange, onCaret, onFocusChange, onSend, onQueue, onEscape, placeholder, describedBy, menu, onKeyDown, combobox, onPaste, readOnly, images, attach, footer }: {
+function ComposerBox({ textarea, autoFocus, collapsed, docked, value, onChange, onCaret, onFocusChange, onSend, onQueue, onEscape, placeholder, describedBy, menu, onKeyDown, combobox, onPaste, readOnly, images, attach, footer }: {
   textarea: React.RefObject<HTMLTextAreaElement | null>
   autoFocus?: boolean
+  collapsed?: boolean
+  docked?: boolean
   value: string
   onChange: (value: string, caret: number) => void
   onCaret?: (caret: number) => void
@@ -139,9 +145,31 @@ function ComposerBox({ textarea, autoFocus, value, onChange, onCaret, onFocusCha
   const [focused, setFocused] = useState(false)
   const caretPlaced = useRef(false)
   const dictating = useDictationState(textarea).active
+  const more = value.trimEnd().split('\n').length - 1
   useEffect(() => {
     if (autoFocus) textarea.current?.focus()
   }, [autoFocus, textarea])
+  // A draft shows its first line.
+  useLayoutEffect(() => {
+    if (collapsed) textarea.current?.scrollTo(0, 0)
+  }, [collapsed, textarea])
+  // The box opens with its footer where the one line was pressed: for 400ms or until the pointer moves the footer takes no press, or a double-click would open a menu.
+  const [was, setWas] = useState(collapsed)
+  const [opening, setOpening] = useState(false)
+  if (was !== collapsed) {
+    setWas(collapsed)
+    setOpening(!collapsed)
+  }
+  useEffect(() => {
+    if (!opening) return
+    const done = () => setOpening(false)
+    const timer = setTimeout(done, 400)
+    window.addEventListener('pointermove', done, { once: true })
+    return () => {
+      clearTimeout(timer)
+      window.removeEventListener('pointermove', done)
+    }
+  }, [opening])
   // The table stands plain keys down inside a field, so the textarea answers
   // Enter itself; this registration keeps Send listed in the shortcuts reference.
   useKeybindings('composer', focused && !coarse && !dictating ? {
@@ -161,8 +189,13 @@ function ComposerBox({ textarea, autoFocus, value, onChange, onCaret, onFocusCha
       <DictationNotice textarea={textarea} className="mb-2" />
       {menu}
       {drop.count !== null && <DropOverlay count={drop.count} refused={drop.refused} blocked={room.blocked} limit={room.limit} />}
-      <div className={cn('@container overflow-hidden rounded-composer border border-seam bg-chrome', focused && 'border-control')}>
-      {images}
+      <div
+        className={cn('@container overflow-hidden rounded-composer border border-seam bg-chrome', focused && 'border-control', collapsed && 'flex items-center pr-1')}
+        onMouseDown={(event) => {
+          if (opening && event.target === event.currentTarget) event.preventDefault()
+        }}
+      >
+      {!collapsed && images}
       <Textarea
         variant="embedded"
         ref={textarea}
@@ -173,12 +206,12 @@ function ComposerBox({ textarea, autoFocus, value, onChange, onCaret, onFocusCha
         aria-controls={combobox?.expanded ? combobox.controls : undefined}
         aria-activedescendant={combobox?.active}
         aria-autocomplete={combobox ? 'list' : undefined}
-        rows={2}
+        rows={collapsed ? 1 : 2}
         value={value}
         readOnly={readOnly}
         onPaste={onPaste}
-        placeholder={placeholder}
-        className="resize-none [field-sizing:content] max-md:[--composer-lines:7.5rem]"
+        placeholder={collapsed ? 'Message the agent' : placeholder}
+        className={cn('resize-none', collapsed ? 'my-2 h-5 min-h-0 flex-1 overflow-hidden py-0 whitespace-pre [mask-image:linear-gradient(to_right,black_calc(100%-1.5rem),transparent)] coarse:h-5' : '[field-sizing:content] max-md:[--composer-lines:7.5rem]')}
         style={{ maxHeight: 'var(--composer-lines, 12rem)' }}
         onFocus={(event) => {
           // A textarea that mounts with a draft starts its caret before the text.
@@ -208,7 +241,18 @@ function ComposerBox({ textarea, autoFocus, value, onChange, onCaret, onFocusCha
           }
         }}
       />
-      <div className="wrap-from-end min-w-0 items-center gap-1 px-2 pb-2">{footer}</div>
+      {collapsed ? (
+        <>
+          {more > 0 && <span className="shrink-0 px-1 text-ui-sm text-muted">+{more} {more === 1 ? 'line' : 'lines'}</span>}
+          {docked && (
+            <Button variant="ghost" size="icon-sm" label="Send" disabled={!value.trim() || readOnly} onClick={onSend}>
+              <ArrowUp />
+            </Button>
+          )}
+        </>
+      ) : (
+        <div className={cn('wrap-from-end min-w-0 items-center gap-1 px-2 pb-2', opening && 'pointer-events-none')}>{footer}</div>
+      )}
       </div>
     </div>
   )
@@ -263,7 +307,7 @@ function SendActions({ pill, label, hint, description, disabled, onClick, onCanc
   )
 }
 
-function StandardComposer({ run, agent, room, textarea, autoFocus, onFocusChange, onEscape, onDropStatus }: ComposerProps) {
+function StandardComposer({ run, agent, room, textarea, autoFocus, collapsed, onFocusChange, onEscape, onDropStatus }: ComposerProps) {
   const self = useSelf(run.workspace_id)
   const cap = useCapability()
   const steerOthers = useStore((s) => s.workspaces[run.workspace_id]?.steer_others)
@@ -321,6 +365,7 @@ function StandardComposer({ run, agent, room, textarea, autoFocus, onFocusChange
       <ComposerBox
         textarea={textarea}
         autoFocus={autoFocus}
+        collapsed={collapsed}
         value={body}
         readOnly={Boolean(draft.busy)}
         onChange={(next) => saveComposerDraft(run.id, { body: next })}
@@ -377,7 +422,7 @@ function useQueueHeld(active: boolean): boolean {
   return held
 }
 
-function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock, onEscape, onDropStatus }: ComposerProps) {
+function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, onFocusChange, dock, onEscape, onDropStatus }: ComposerProps) {
   const mobile = useIsMobile()
   const self = useSelf(run.workspace_id)
   const cap = useCapability()
@@ -540,6 +585,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
     }, () => void attempt(() => Promise.reject(new Error(optionUnsent))).then(resolve))
   })
 
+  if (docked && blocked) return null
   if (gate) {
     return (
       <ComposerFrame>
@@ -566,7 +612,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
   const keyHint = coarse || stops ? undefined : pill === 'steer' ? `${shortcutLabel('composer-send')}; ${shortcutLabel('composer-queue')} queues` : shortcutLabel(pill === 'queue' && state?.steering ? 'composer-queue' : 'composer-send')
 
   return (
-    <ComposerFrame>
+    <ComposerFrame docked={docked}>
       {dock}
       {images.uploadError && (
         <div role="alert" className="flex items-start gap-2 text-ui-sm text-state-failed">
@@ -584,6 +630,8 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, onFocusChange, dock
       <ComposerBox
         textarea={textarea}
         autoFocus={autoFocus}
+        collapsed={collapsed}
+        docked={docked}
         value={body}
         readOnly={busy}
         onPaste={images.onPaste}

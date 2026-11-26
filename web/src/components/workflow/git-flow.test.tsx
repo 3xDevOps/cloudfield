@@ -4,7 +4,7 @@ import { GitFlow } from '@/components/workflow/git-flow'
 import { api } from '@/lib/api'
 import type { RunGitLogResult, RunGitStatusResult, RunPRFeedbackResult, RunPullRequest } from '@/lib/types'
 import { refreshPullRequest } from '@/routes/diff/publish-pr'
-import { RunAgentContext } from '@/routes/run/agent-context'
+import { RunAgentContext, type RunSessionValue } from '@/routes/run/agent-context'
 import type { AgentTerminal } from '@/routes/run/agent-terminal'
 import { useStore } from '@/store'
 import { toRecord } from '@/store/runs'
@@ -57,7 +57,7 @@ function renderCard(over: Parameters<typeof run>[0] = {}) {
   const record = toRecord(run({ id: `run_git_${++sequence}`, ...over }))
   useStore.setState({ runs: { [record.id]: record } })
   render(
-    <RunAgentContext value={{ agent, agentName: 'Claude Code' }}>
+    <RunAgentContext value={{ agent, agentName: 'Claude Code' } as RunSessionValue}>
       <GitFlow runId={record.id} />
     </RunAgentContext>,
   )

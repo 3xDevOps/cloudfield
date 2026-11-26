@@ -423,6 +423,13 @@ Open a session to see its views:
 | **Files** | The session's checkout; **Save** writes your edit into it, and **Upload files…** or dropping files adds files to it |
 | **Browser** | A Chromium on the server beside the session, where `localhost` is the session's own app |
 
+On a desktop window, sessions and views sit side by side as tiles. Hover a
+session in the sidebar and click **Open to the side**, or drag it, a tab or a
+view such as **Changes** to an edge of the page. **Split right** and **Split
+down** are at the top right of the focused tile, with **Maximize** once there
+are two tiles. Closing a
+tab never ends its session.
+
 From the CLI, on your computer:
 
 - `cloudfield message <session-id> "also update the README"` messages the agent and

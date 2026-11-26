@@ -18,10 +18,11 @@ const fitStep = 0.25
  * into the pane, and lets two fingers choose a size. A phone follows the
  * PTY rather than sizing it (see docs/dashboard-frontend.md), so the grid
  * is as wide as the widest writer made it and only the text size can bring
- * it inside the screen.
+ * it inside the screen. `force` fits whatever the fit-to-width preference
+ * says, for a desktop mirror, whose grid is its controller's.
  */
-export function useTerminalFit(terminal: Terminal | null, enabled: boolean): TerminalFit {
-  const fitWidth = useStore((state) => state.terminalFitWidth)
+export function useTerminalFit(terminal: Terminal | null, enabled: boolean, force = false): TerminalFit {
+  const fitWidth = useStore((state) => state.terminalFitWidth) || force
   const chosen = useStore((state) => state.terminalFontSize)
   const [drawn, setDrawn] = useState(chosen)
   const [fitted, setFitted] = useState(chosen)
@@ -37,6 +38,8 @@ export function useTerminalFit(terminal: Terminal | null, enabled: boolean): Ter
       setDrawn(chosen)
       return
     }
+    // A desktop mirror stays readable: past 70% of the chosen size its grid scrolls sideways instead.
+    const floor = force ? Math.max(minFitTerminalFontSize, Math.ceil((chosen * 0.7) / fitStep) * fitStep) : minFitTerminalFontSize
     let widthFit = chosen
     let pinch: { distance: number; from: number; size: number } | null = null
 
@@ -56,10 +59,10 @@ export function useTerminalFit(terminal: Terminal | null, enabled: boolean): Ter
       if (width <= 0 || drawnWidth <= 0) return
       const proportional = Math.floor((current * width) / drawnWidth / fitStep) * fitStep
       if (!grow && proportional >= current) return
-      widthFit = Math.max(minFitTerminalFontSize, proportional)
+      widthFit = Math.max(floor, proportional)
       setFitted(widthFit)
       if (fitWidth) apply(Math.min(chosen, widthFit))
-      for (let step = 0; fitWidth && step < 8 && gridWidth() > width && (terminal.options.fontSize ?? 0) > minFitTerminalFontSize; step++) {
+      for (let step = 0; fitWidth && step < 8 && gridWidth() > width && (terminal.options.fontSize ?? 0) > floor; step++) {
         widthFit = (terminal.options.fontSize ?? current) - fitStep
         setFitted(widthFit)
         apply(widthFit)

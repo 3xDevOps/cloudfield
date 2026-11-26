@@ -89,6 +89,18 @@ test('the environment terminal opens on request, zooms and finds', async ({ page
   await find.press('Enter')
   await expect(dock.locator('.xterm-selection div').first()).toBeVisible()
 
+  // With the focus on the page, the copy shortcut still copies the
+  // terminal's selection. Read off the copy event, since clipboard-read is
+  // not granted.
+  await page.evaluate(() => {
+    window.addEventListener('copy', (event) => {
+      document.body.dataset.copied = event.clipboardData?.getData('text/plain')
+    }, { once: true })
+    ;(document.activeElement as HTMLElement).blur()
+  })
+  await page.keyboard.press('ControlOrMeta+C')
+  await expect(page.locator('body')).toHaveAttribute('data-copied', 'aether-found-me')
+
   await find.fill('no-such-output')
   await find.press('Enter')
   await expect(dock.getByText('No matches')).toBeVisible()

@@ -163,7 +163,7 @@ export function PortsControl({ runID, ports, available, onOpen }: {
           {count > 0 && <span className="tabular-nums">{count}</span>}
         </Button>
       </PopoverTrigger>
-      <PopoverContent data-browser align="end" className="flex w-80 flex-col gap-2">
+      <PopoverContent data-browser={runID} align="end" className="flex w-80 flex-col gap-2">
         <SectionLabel>Listening in this session</SectionLabel>
         {ports.error ? <p role="alert" className="break-words text-state-failed">{ports.error}</p>
           : !ports.list ? <Spinner label="Reading the session’s ports" />

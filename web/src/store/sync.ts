@@ -271,6 +271,7 @@ export async function hydrate(
     if (signal?.aborted) return false
     s.setHydrated(true)
     store.setState({ staleSince: null })
+    s.pruneTiles()
     const current = store.getState()
     const linked = current.route.params.runId
     const unknownLink = first && current.route === s.route && !!linked && !current.runs[linked]

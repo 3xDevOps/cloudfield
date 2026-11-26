@@ -1,6 +1,6 @@
 import type { ComponentType } from 'react'
 import { Bell, Bot, Brain, Cable, Eye, Gauge, Globe, Monitor, Network, Rocket, ServerCog, Settings, Sparkles } from '@/components/icons'
-import type { Capability } from '@/store/hooks'
+import type { Capability } from '@/lib/capability'
 
 export type CategoryID = 'general' | 'launch' | 'agents' | 'connections' | 'notifications' | 'watches' | 'memory' | 'assistant' | 'children' | 'usage' | 'this-computer' | 'server' | 'remote-access'
 

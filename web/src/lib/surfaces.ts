@@ -15,7 +15,7 @@ import {
   Users,
   type LucideIcon,
 } from '@/components/icons'
-import type { Capability } from '@/store/hooks'
+import type { Capability } from '@/lib/capability'
 
 interface Surface {
   /** The route name `navigate` takes. */

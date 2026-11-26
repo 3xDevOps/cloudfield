@@ -1,4 +1,4 @@
-import { useContext, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { useContext, useEffect, useMemo, useRef, useState } from 'react'
 import type * as React from 'react'
 import { MessageSquarePlus, X } from '@/components/icons'
 import { AssistantAccountCheck } from '@/components/assistant/account-check'
@@ -31,7 +31,7 @@ import { requestAnnouncement } from '@/routes/run/session-requests'
 import { useStore } from '@/store'
 import { assistantSessionID, assistantWaiting, cardPending, clampAssistantWidth, maxAssistantWidth, minAssistantWidth } from '@/store/assistant'
 import { connectAssistant, refreshAssistant } from '@/store/assistant-stream'
-import { useIdentityKnown } from '@/store/hooks'
+import { useIdentityKnown, useMainWidth } from '@/store/hooks'
 import { assistantShareView, syncViewContext, trackViewContext } from '@/store/view-context'
 
 const stateWord: Record<AssistantState, string> = {
@@ -254,10 +254,10 @@ function Content({ textarea, onClose }: { textarea: React.RefObject<HTMLTextArea
   return (
     <>
       <PaneHeader
-        className={sheet ? 'coarse:px-4 coarse:py-2' : undefined}
+        // Beside a session the header ends where the tile's two rows do: 32px each, 44px under a finger.
+        className={cn(sheet && 'coarse:px-4 coarse:py-2', onRun && (sheet ? 'h-14' : 'h-16 coarse:h-22'))}
         title="Assistant"
         level={2}
-        size={onRun ? 'run' : 'view'}
         stateLine={status && (
           <StateLine tone={waiting ? 'needs-you' : stateTone[status.state]} pulse={status.state === 'running' && !waiting}>
             {[agent, waiting ? 'Waiting for you' : stateWord[status.state]].filter(Boolean).join(' · ')}
@@ -297,18 +297,6 @@ function Content({ textarea, onClose }: { textarea: React.RefObject<HTMLTextArea
       )}
     </>
   )
-}
-
-function subscribeResize(notify: () => void) {
-  window.addEventListener('resize', notify)
-  return () => window.removeEventListener('resize', notify)
-}
-
-/** The width of `main` with nothing docked beside it. */
-function useMainWidth(): number {
-  const sidebar = useStore((s) => (s.sidebarCollapsed ? 0 : s.sidebarWidth))
-  const innerWidth = useSyncExternalStore(subscribeResize, () => window.innerWidth)
-  return innerWidth - sidebar
 }
 
 /** What a floating assistant leaves uncovered at the left of `main`. */

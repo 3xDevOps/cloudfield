@@ -13,6 +13,7 @@ import { useRunRoom } from '@/routes/run/room'
 import '@/routes/run'
 import { useStore } from '@/store'
 import { optimisticDeadlineMs } from '@/store/optimistic'
+import { emptyTiles } from '@/store/tiles'
 import { applyEvent } from '@/store/sync'
 import { agentInfo, alice, bob, fakeApi, roomMessage, run, serverInfo, workspace } from '@/test/fixtures'
 import { ApiError } from '@/lib/api'
@@ -74,8 +75,7 @@ beforeEach(() => {
     roomStatus: {},
     roomStatusControl: {},
     runViewMemory: {},
-    browserBeside: false,
-    browserBesideWidth: null,
+    tiles: emptyTiles(),
     browserRequests: {},
     sessionLogs: {},
     agentList: null,
@@ -113,9 +113,10 @@ describe('run frame', () => {
     await waitFor(() => expect(screen.getByRole('banner').textContent).toContain("On Bob's account (fallback)"))
   })
 
-  it('keeps the state time on the state line when no reason shows', async () => {
+  it('keeps the state time on the state line when no reason shows, and on the session tab', async () => {
     open({ paused: true })
-    await waitFor(() => expect(screen.getByTitle(/^Paused since /)).toBeDefined())
+    await waitFor(() => expect(within(screen.getByRole('banner')).getByTitle(/^Paused since /)).toBeDefined())
+    expect(within(screen.getByRole('tab', { name: /rewrite the checkout flow/ })).getByTitle(/ Paused since /)).toBeDefined()
   })
 
   it('keeps the model and effort out of the state line and in the agent tooltip', async () => {
@@ -138,11 +139,16 @@ describe('run frame', () => {
 
   it('remembers a phone tab selection when reopening a session', () => {
     atViewport(390, { pointer: 'coarse' })
-    const view = open()
+    const View = lookupRoute('run')!
+    const Routed = () => <View params={useStore((s) => s.route.params)} />
+    useStore.getState().upsertRun(run())
+    useStore.setState({ route: { name: 'run', params: { runId: 'run_1' } } })
+    const view = render(<Routed />)
     fireEvent.mouseDown(screen.getByRole('tab', { name: 'Changes' }))
     expect(useStore.getState().runViewMemory.run_1).toBe('changes')
     view.unmount()
-    open()
+    useStore.setState({ route: { name: 'run', params: { runId: 'run_1' } } })
+    render(<Routed />)
     expect(screen.getByRole('tab', { name: 'Changes' }).getAttribute('aria-selected')).toBe('true')
   })
 
@@ -177,7 +183,7 @@ describe('run frame', () => {
     open({ mode: 'acp' })
     const views = screen.getByRole('tablist', { name: 'Session views' })
     expect(within(views).getByRole('tab', { name: 'Chat' }).getAttribute('aria-selected')).toBe('true')
-    fireEvent.mouseDown(within(views).getByRole('tab', { name: 'Terminal' }))
+    fireEvent.click(within(views).getByRole('tab', { name: 'Terminal' }))
     expect(await screen.findByText('No agent terminal')).toBeDefined()
     expect(StubSocket.opened).toHaveLength(0)
   })
@@ -307,28 +313,18 @@ describe('the Files view', () => {
     expect(editor.closest('[inert]')).not.toBeNull()
   })
 
-  it('leaves the session’s control strip off, where no lease is used', () => {
+  it('keeps the session’s presence in the header row, which takes no room of its own', () => {
     const view = open({ mode: 'acp' }, 'session')
-    expect(screen.getByRole('group', { name: 'Multiplayer controls' })).toBeDefined()
+    const row = screen.getByRole('toolbar', { name: 'Session actions' })
+    expect(within(row).getByRole('group', { name: 'Multiplayer controls' })).toBeDefined()
     view.rerender(rerouted('files'))
-    expect(screen.queryByRole('group', { name: 'Multiplayer controls' })).toBeNull()
+    expect(within(row).getByRole('group', { name: 'Multiplayer controls' })).toBeDefined()
+    expect(row.closest('header')!.className).toContain('h-8')
   })
 })
 
 describe('the Browser view', () => {
   const views = () => within(screen.getByRole('tablist', { name: 'Session views' }))
-  /** Lays the run's frame out at `width`, which jsdom never does. */
-  function measured(width: number | ((target: Element) => number)) {
-    vi.stubGlobal('ResizeObserver', class {
-      constructor(private readonly report: ResizeObserverCallback) {}
-      observe(target: Element) {
-        const contentRect = { width: typeof width === 'number' ? width : width(target), height: 700 }
-        this.report([{ target, contentRect } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver)
-      }
-      unobserve() {}
-      disconnect() {}
-    })
-  }
 
   it('is offered for every live run the gateway can serve it for, before any browser has started', () => {
     open()
@@ -345,11 +341,12 @@ describe('the Browser view', () => {
     expect(views().queryByRole('tab', { name: 'Browser' })).toBeNull()
   })
 
-  it('leaves the session’s control strip off the Browser view', async () => {
+  it('keeps the session’s presence in the header row beside the Browser’s own toolbar', async () => {
     const view = open({ mode: 'acp' }, 'session')
-    expect(await screen.findByRole('group', { name: 'Multiplayer controls' })).toBeDefined()
+    const row = within(screen.getByRole('toolbar', { name: 'Session actions' }))
+    expect(await row.findByRole('group', { name: 'Multiplayer controls' })).toBeDefined()
     view.rerender(rerouted('browser'))
-    expect(screen.queryByRole('group', { name: 'Multiplayer controls' })).toBeNull()
+    expect(row.getByRole('group', { name: 'Multiplayer controls' })).toBeDefined()
     expect(screen.getByRole('toolbar', { name: 'Browser' })).toBeDefined()
   })
 
@@ -384,55 +381,6 @@ describe('the Browser view', () => {
     expect(useStore.getState().route.params.view).toBe('browser')
     expect(useStore.getState().browserRequests).toEqual({ run_1: '' })
     view.unmount()
-  })
-
-  it('sits beside the other views on a wide frame, from one remembered toggle', async () => {
-    measured(1200)
-    const view = open({ mode: 'acp' }, 'browser')
-    fireEvent.click(await screen.findByRole('button', { name: 'Show beside Chat' }))
-    expect(useStore.getState().browserBeside).toBe(true)
-    view.rerender(rerouted(useStore.getState().route.params.view!))
-    expect(views().queryByRole('tab', { name: 'Browser' })).toBeNull()
-    expect(views().getByRole('tab', { name: 'Chat' }).getAttribute('aria-selected')).toBe('true')
-    const beside = within(screen.getByRole('region', { name: 'Browser' }))
-    expect(beside.getByRole('toolbar', { name: 'Browser' })).toBeDefined()
-    expect(screen.getByRole('group', { name: 'Multiplayer controls' })).toBeDefined()
-
-    const divider = screen.getByRole('separator', { name: 'Resize the Browser' })
-    expect(divider.getAttribute('aria-valuenow')).toBe('600')
-    fireEvent.keyDown(divider, { key: 'ArrowLeft' })
-    expect(useStore.getState().browserBesideWidth).toBe(616)
-    fireEvent.keyDown(divider, { key: 'End' })
-    expect(useStore.getState().browserBesideWidth).toBe(880)
-
-    act(() => { openRunLink('run_1', 'http://localhost:3000/') })
-    expect(useStore.getState().route.params.view).toBe('session')
-
-    fireEvent.click(beside.getByRole('button', { name: 'Show the Browser as a tab' }))
-    view.rerender(rerouted('browser'))
-    expect(useStore.getState().browserBeside).toBe(false)
-    expect(views().getByRole('tab', { name: 'Browser' }).getAttribute('aria-selected')).toBe('true')
-    expect(screen.queryByRole('separator', { name: 'Resize the Browser' })).toBeNull()
-  })
-
-  it('moves notes from the rail to the strip when it narrows the Chat pane', async () => {
-    // The frame is wide enough for the rail; the views' pane beside the Browser is not.
-    measured((target) => (target.classList.contains('relative') ? 800 : 1400))
-    useStore.setState({ browserBeside: true })
-    vi.mocked(api.runRoomList).mockResolvedValue({ messages: [roomMessage({ id: 'c1', kind: 'comment', actor_id: bob.id, body: 'look here' })] })
-    open({ mode: 'acp' }, 'session')
-    expect(await screen.findByRole('button', { name: '1 note' })).toBeDefined()
-    expect(screen.getByRole('region', { name: 'Browser' })).toBeDefined()
-    expect(screen.queryByRole('list', { name: 'Notes' })).toBeNull()
-  })
-
-  it('stays a tab, with no toggle, on a frame too narrow for two panes', async () => {
-    measured(600)
-    useStore.setState({ browserBeside: true })
-    open({}, 'browser')
-    expect(views().getByRole('tab', { name: 'Browser' }).getAttribute('aria-selected')).toBe('true')
-    expect(await screen.findByRole('toolbar', { name: 'Browser' })).toBeDefined()
-    expect(screen.queryByRole('button', { name: /Show beside|as a tab/ })).toBeNull()
   })
 })
 
@@ -548,6 +496,26 @@ describe('run details', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Show details' }))
     return within(await screen.findByRole('dialog', { name: 'Session details' }))
   }
+
+  it('resizes the desktop details panel from its left edge and saves the bounded width', async () => {
+    atViewport(1600)
+    open()
+    const panel = await details()
+    const handle = panel.getByRole('separator', { name: 'Resize session details' })
+    expect(handle.getAttribute('aria-valuenow')).toBe('320')
+    handle.focus()
+    fireEvent.keyDown(handle, { key: 'ArrowLeft' })
+    expect(useStore.getState().runDetailsWidth).toBe(336)
+    fireEvent.pointerDown(handle, { clientX: 400 })
+    fireEvent.pointerMove(window, { clientX: 390 })
+    fireEvent.pointerUp(window)
+    expect(useStore.getState().runDetailsWidth).toBe(346)
+    fireEvent.keyDown(handle, { key: 'Home' })
+    expect(useStore.getState().runDetailsWidth).toBe(320)
+    fireEvent.keyDown(handle, { key: 'End' })
+    expect(useStore.getState().runDetailsWidth).toBe(560)
+    expect(JSON.parse(localStorage.getItem('aether.ui')!).state.runDetailsWidth).toBe(560)
+  })
 
   it('lists what waits on the viewer, the notes and the run record', async () => {
     open({ pending_inputs: [{ id: 'in_1', session_id: 's', kind: 'question' }] })

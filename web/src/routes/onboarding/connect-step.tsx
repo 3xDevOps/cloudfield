@@ -19,7 +19,7 @@ import { EdgeSignIn, JoinLink, LinkBeforeSignIn, LinkByCommand } from '@/routes/
 import { GitIdentityForm } from '@/routes/onboarding/git-identity'
 import { Step } from '@/routes/onboarding/layout'
 import { useStore } from '@/store'
-import type { Capability } from '@/store/hooks'
+import type { Capability } from '@/lib/capability'
 
 type Route = 'tailscale' | 'relay' | 'ssh'
 

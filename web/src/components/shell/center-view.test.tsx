@@ -21,7 +21,7 @@ const unmounts: Record<string, number> = {}
 const sockets: Record<string, Array<{ close: () => void }>> = {}
 let boardMounts = 0
 let boardUnmounts = 0
-const runIDs = ['run_a', 'run_b', 'run_c', 'run_d', 'run_e', 'run_f']
+const runIDs = ['run_a', 'run_b']
 
 class StubTerminal extends Component<RouteProps> {
   private readonly socket = { close: vi.fn() }
@@ -149,41 +149,15 @@ describe('CenterView route mounting', () => {
     expect(unmounts.run_a).toBeUndefined()
   })
 
-  it('disposes and remounts the terminal when the run ID changes', () => {
+  it('keeps the session view mounted when the run ID changes', () => {
     render(<CenterView />)
     setRoute('run', 'run_a')
-    const oldSocket = sockets.run_a[0]
 
     setRoute('run', 'run_b')
 
-    expect(screen.queryByTestId('terminal-run_a')).toBeNull()
-    expect(unmounts.run_a).toBe(1)
-    expect(oldSocket.close).toHaveBeenCalledOnce()
-    expect(mounts.run_b).toBe(1)
+    expect(mounts.run_a).toBe(1)
+    expect(unmounts.run_a).toBeUndefined()
     expect(screen.getByTestId('terminal-run_b')).toBeDefined()
-  })
-
-  it('keeps only the selected terminal mounted across more than the old cache limit', () => {
-    render(<CenterView />)
-
-    for (const id of runIDs) {
-      setRoute('run', id)
-      expect(screen.getByTestId(`terminal-${id}`)).toBeDefined()
-      for (const other of runIDs.filter((candidate) => candidate !== id)) {
-        expect(screen.queryByTestId(`terminal-${other}`)).toBeNull()
-      }
-    }
-
-    for (const id of runIDs.slice(0, -1)) {
-      expect(unmounts[id]).toBe(1)
-      expect(sockets[id][0].close).toHaveBeenCalledOnce()
-    }
-    expect(unmounts.run_f).toBeUndefined()
-
-    setRoute('run', 'run_a')
-    expect(mounts.run_a).toBe(2)
-    expect(unmounts.run_f).toBe(1)
-    expect(screen.getByTestId('terminal-run_a')).toBeDefined()
   })
 
   it('disposes and remounts the terminal when the store identity changes', () => {

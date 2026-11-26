@@ -118,6 +118,32 @@ function transcript(): SessionItem[] {
 }
 
 describe('subagents in the session view', () => {
+  const waiting = () => {
+    open()
+    act(() => useStore.getState().upsertRun(run({ mode: 'acp', acp: true, status: 'running', state: 'waiting-agents' })))
+    acpSocket().open({}, [item('turn_start', 1), launch(1, 'a1', 'Find usages', 'in_progress'), launch(1, 'a2', 'Check tests', 'in_progress')])
+    return screen.findByText('· 2 agents running')
+  }
+
+  const mode = () => screen.queryByText('Enhanced', { selector: 'header *' })
+
+  it('counts the running subagents once in the header row, on the Session tree chip', async () => {
+    const chip = await waiting()
+    expect(chip.closest('header')!.textContent).not.toContain('subagents running')
+    expect(mode()).not.toBeNull()
+  })
+
+  it('drops the reason whole when it has under 96px beside the view switch', async () => {
+    vi.stubGlobal('ResizeObserver', class extends SizedObserver {
+      observe(target: Element) {
+        SizedObserver.width = target.matches('header > div:not([role])') ? 80 : 736
+        super.observe(target)
+      }
+    })
+    await waiting()
+    expect(mode()).toBeNull()
+  })
+
   it('groups consecutive subagents into cards and opens one in the inspector', async () => {
     open()
     acpSocket().open({}, transcript())

@@ -2,7 +2,7 @@ import { ApiError, codeUnavailable, type Api } from '@/lib/api'
 import { message } from '@/lib/format'
 import type { LinearStatus } from '@/lib/types'
 import type { RootStore } from '@/store'
-import { capability } from '@/store/hooks'
+import { capability } from '@/lib/capability'
 import type { SliceCreator } from '@/store/slice'
 
 /** linear.status for the caller; null before it is read or when the server

@@ -35,7 +35,8 @@ function bindingGroups(singleKeys: boolean): { name: string; entries: [string, s
       entries: keybindings
         .filter((binding) => binding.scope === scope && listed(binding))
         .filter((binding) => singleKeys || !isSingleKey(binding))
-        .map((binding): [string, string] => [shortcutLabel(binding.id), binding.label]),
+        .filter((binding) => !/^tile-focus-[2-9]$/.test(binding.id))
+        .map((binding): [string, string] => [`${shortcutLabel(binding.id)}${binding.id === 'tile-focus-1' ? ' to 9' : ''}`, binding.label]),
     }))
     .filter((group) => group.entries.length > 0)
 }
@@ -54,6 +55,10 @@ const localGroups: { name: string; entries: [string, string][] }[] = [
         'Resize the sidebar, the assistant or a terminal 16px a press; Home and End are its limits, Enter collapses the sidebar',
       ],
     ],
+  },
+  {
+    name: 'Sidebar (on a session that has focus)',
+    entries: [[formatKeys('$mod+Enter'), 'Open the session to the side of the focused tile']],
   },
   {
     name: 'Changes (on a line number that has focus)',

@@ -1,6 +1,7 @@
 import type { Run, RunInputRequest, RunReviewPayload, RunStatus, RunStatusPayload } from '@/lib/types'
 import { nextActivity, type AgentPayload, type ToolActivity } from '@/store/activity'
 import type { SliceCreator } from '@/store/slice'
+import { closeRun, tilesAfter } from '@/store/tiles'
 
 /** A run plus its last execution-status change time, for sorting and acknowledgments. */
 export type RunRecord = Omit<Run, 'status_changed_at'> & {
@@ -163,6 +164,7 @@ export const createRunsSlice: SliceCreator<RunsSlice> = (set) => ({
       const { [runID]: _, ...runViewMemory } = s.runViewMemory
       return {
         runViewMemory,
+        ...tilesAfter(s, (layout) => closeRun(layout, runID)),
         savedRunViews: Object.fromEntries(Object.entries(s.savedRunViews).map(([who, { [runID]: __, ...views }]) => [who, views])),
         runs: pruneRuns(s.runs, other),
         deletingRuns: pruneRuns(s.deletingRuns, other),

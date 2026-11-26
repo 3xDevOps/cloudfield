@@ -232,12 +232,14 @@ in the address bar (see [URL state](#url-state)).
 one file each (`server`, `agent-models`, `workspaces`, `runs`, `members`, `env-terminal`,
 `terminal`, `board`, `palette`, `presence`, `cost`, `timeline`,
 `diff`, `files`, `collaboration`, `local`, `messages`,
-`sessions`, `ui`). A new feature adds a slice file and one spread in
+`sessions`, `tiles`, `ui`). A new feature adds a slice file and one spread in
 `createRootStore`. Slices are typed against the whole root state, so a slice
 may read another's data. Only view preferences and local progress (theme,
 text size, sidebar width and collapse state, dock height, Details open,
 terminal zoom, single-key shortcuts, diff wrap, `activeWorkspace`, the
-**Mine** toggle, each member's launch defaults, dismissed update versions, onboarding
+**Mine** toggle, each member's launch defaults and
+[tile layout](#session-tiles) (how the session page is split into panes),
+dismissed update versions, onboarding
 progress) are persisted under the `aether.ui` key; `persistedUi` in
 `store/index.ts` is the list that decides, and the key is written only when
 one of those values changes. Server data is always re-fetched.
@@ -344,7 +346,8 @@ The sidebar (`sidebar.tsx`) is a `nav` named "Cloudfield", 260px wide by default
 and resizable from 220px to 400px; older saved widths are clamped. `Mod+B`, the
 **Hide sidebar** button in its header and Enter on its splitter hide it
 completely; the content view's header then shows **Open sidebar** at its left
-edge. Hiding or showing it hands focus to the control that reverses it. From
+edge, and on a session page the first tile's strip does
+([Session tiles](#session-tiles)). Hiding or showing it hands focus to the control that reverses it. From
 top to bottom:
 
 1. **Workspace switcher and search.** The switcher
@@ -373,7 +376,10 @@ top to bottom:
    state; a change saves the member setting at once with `child.settings`
    `choice`, one save after another, and **Settings → Subsessions** shows the
    same menu. An account whose agents could not be listed is named, with the
-   server's error, below the row (`choices_error`).
+   server's error, below the row (`choices_error`). Drag the panel's right
+   edge, or focus **Resize launch panel** and press the arrow keys, to set its
+   width from 360px to 720px, never past the room right of the sidebar. The
+   width is saved on this browser.
 3. **Sessions** (`sidebar-runs.tsx`), a `region` with three groups, **Needs you**,
    **Working** and **Finished** (see [Session state](#session-state)), each an `h2`
    holding an `aria-expanded` disclosure button, a chevron that turns a
@@ -506,6 +512,14 @@ outside its buttons. The whole tree sits in
 Needs you while any member needs the viewer, but only those waiting sessions
 contribute to that group's count. Relationships come from the session snapshot's
 `parent_run_id`, not task text.
+
+On a desktop window with a fine pointer a row also arranges the
+[session tiles](#session-tiles). **Open to the side**, a button shown on
+hover, and `Mod+Enter` on a focused row open the session in a new tile right
+of the focused one, or as a tab of it when there is no room. A row dragged
+with a mouse or a pen drops onto a tile. A row whose session is the active
+tab of a tile on screen carries a 2px teal bar down its left edge; the
+selected row (`aria-current="page"`) is the focused tile's session.
 
 ### App header
 
@@ -731,7 +745,7 @@ launch sessions (`useAssistantAvailable`); the same check gates every entry poin
   square corners and, with a touch screen, a 16px header inset. Its composer sits at the bottom,
   above the soft keyboard (`--keyboard-inset`).
 - **Header:** an `h2`, because the view beside it owns the page's `h1`. It
-  takes the session header's height on a session and the view header's elsewhere, so
+  takes the height of a tile's strip and header row on a session and the view header's elsewhere, so
   the two seams line up. It holds the agent and state, **Actions**, **New conversation** (confirms, then
   `assistant.reset`) and **Close assistant**. While `auto_approve` is on, a
   line under it says the assistant acts without asking, with **Change in
@@ -920,7 +934,7 @@ different conversation starts at the bottom.
 
 `store/view-context.ts` builds the view context (see
 [assistant.md](assistant.md#what-it-sees)): the route's ids, the session view
-`RunFrame` reports through `setShownRunView`, the active file only on the
+the focused tile's `RunFrame` reports through `setShownRunView`, the active file only on the
 Files page or its own session's Files view, and `viewHistory`, the last 8 pages,
 recorded only while sharing is on and never persisted. While the panel is
 open and sharing is on, `syncViewContext` sends `syncedViewContext`, the
@@ -1030,7 +1044,9 @@ each onboarding step.
 **Landmarks.** The skip link "Skip to content" is the first tab stop; the
 header navigation is `nav` "Main navigation"; the sidebar is `nav` "Cloudfield"
 containing `region` "Sessions"; the content is the one `main`, with one `h1` per
-view from `PaneHeader` (`tabIndex=-1`). After a route
+view from `PaneHeader` (`tabIndex=-1`). A session page's `h1` is the focused
+tile's title, visually hidden; every other tile's title is an `h2`. An empty
+tile has no focusable title heading, and focus sent to it lands in the picker's search field. After a route
 change focus moves to that `h1`, unless the view took focus for itself. Unit
 and end-to-end tests select by these names.
 
@@ -1160,6 +1176,13 @@ or member, opens the board once the first hydration has the capabilities.
 These redirects replace the history entry (`redirectRoute`), so back does not
 return to the dead link.
 
+On a desktop the address names the focused tile's session and view; the
+[tile layout](#session-tiles) is not in it. A focus click, a tab switch, a
+close, a maximize or a moved tab replaces the history entry, so back never
+steps through them. Opening a tab pushes one; a pick or a drop that only moves or focuses a tab does not. Back and forward
+land in the layout as it is now, by the rules a link follows, and never
+rebuild a closed tile.
+
 ### Window size and overflow
 
 The shell is a fixed row - the sidebar and the content view - under the
@@ -1214,7 +1237,8 @@ A panel docked beside other content decides from room, not from the
 viewport. `minReadableWidth` (560px, `src/lib/breakpoints.ts`) is the width
 a session's content keeps beside one. The assistant docks only while `main` keeps
 it, and otherwise floats over `main` ([Assistant panel](#assistant-panel)).
-The session's Details and Subagent inspectors dock only while the session's row,
+The session's Details and Subagent inspectors dock only in a tile that is alone
+on screen, and only while the session's row,
 measured with `useElementSize` and with the inspector inside it, holds the
 inspector plus that width; otherwise they open as overlays
 ([Details](#details)). Measuring the row with the inspector inside it means
@@ -1267,10 +1291,16 @@ What gives way first:
   prompt's actions sit on their own row so long diagnostics never hide them.
 - **The sidebar** keeps the session list scrollable between its fixed header and
   its navigation rows and footer, from 220px wide up.
-- **The session header** truncates its title to one line and keeps its state
-  line on one line: the reason gives up its room first, then the owner, then
-  the mode word; the branch truncates only when it alone is wider than the
-  line. The view switch always sits on its own row (see [Header](#header)).
+- **A session tile** is never narrower than 420px or shorter than 400px. A
+  split with no room for that adds a tab instead, and a stored layout that no
+  longer fits shows the focused tile alone
+  ([Session tiles](#session-tiles)).
+- **The session header** is one row sized from its own width: under 800px the
+  view switch is icons, under 560px the reason and what follows it leave.
+  Above that the mode, the permission badge, the fallback account and
+  "Launched via" drop whole, last first, and the reason truncates last, never
+  below 96px. A tile's strip never scrolls: tabs that do not fit fold into a
+  menu ([Session tiles](#session-tiles)).
 - **The board** places its three columns side by side when its own width
   fits them and otherwise stacks them into one list (see [Board](#board)).
 
@@ -2154,14 +2184,14 @@ update for 30m", and `stateName` labels it **Stale wait** rather than Turn
 ended.
 
 The session header's state line shows the words beyond the label the Session tree
-chip under it already shows, a CI wait's age first ("42m · PR 12 checks";
+chip before it already shows, a CI wait's age first ("42m · PR 12 checks";
 a stale one's reason already says "No update for 30m"), since the header
 prints no age of its own; `stateTitle` is the tooltip of
-the space it fills, there even when the line is empty. The label stays in a
+the space it fills, there even when the line is empty. Beside the chip the label stays in a
 visually hidden `role=status` element, so a screen reader hears only a
-change of state. While a session waits for agents,
-the header counts the Enhanced session's running subagents, "2 subagents
-running".
+change of state; a tile without the session's controls shows the dot and label itself. While a session waits for agents,
+that tile's state line counts the Enhanced session's running subagents, "2 subagents
+running"; beside the chip, the chip's own count stands.
 
 | State | Dot | Comes from | Group |
 | --- | --- | --- | --- |
@@ -2985,7 +3015,8 @@ chose for the session, else `defaultView`. Choosing a view means picking a tab
 view, such as Review changes or a file path; an opened `?view=` address shows
 its view without choosing it, since a reload reopens one too. Reply is not a
 choice. Session rows, card titles and `u` open the last chosen view even when
-the session needs attention. Explicit actions, such as Open terminal or Review,
+the session needs attention. On a desktop a session that already has a
+[tab](#session-tiles) opens on that tab's view. Explicit actions, such as Open terminal or Review,
 open the view needed for that action without changing the choice. Back and
 forward show the view their entry names without choosing it. `runViewMemory`
 holds the choices, the newest 200 sessions per signed-in
@@ -2997,39 +3028,41 @@ Session for an Enhanced session or any session that streams a session (`acp: tru
 Terminal otherwise. Trace follows Chat for a session with `acp: true` only.
 Files is in the list while the session still has its
 checkout, on a gateway that serves `files.tree` (`hasFiles` in
-`src/routes/files/open.ts`): every session the Files tree lists, a completed one
+`src/routes/run/views.ts`): every session the Files tree lists, a completed one
 that is not yet merged or abandoned included. Browser is in the list for
 every session that has not finished, on a gateway that serves
-`dev.browser.status` (`hasBrowser` in `src/routes/browser/open.ts`); no
+`dev.browser.status` (`hasBrowser` in `views.ts`); no
 browser has to be running, and opening the view starts none. `isRunRoute` in
 `views.ts` keeps a sidebar row lit across views.
 
-The frame (header, view switch, Details) stays mounted while the view
-changes; `CenterView` remounts it only for another session, identity or event
-epoch. Session, Terminal, Changes and Files mount on first visit and stay
-mounted, laid out but `invisible` and `inert`: xterm hidden with
+`RunFrame` (`index.tsx`) is one view of a session: the header row, the view
+and Details. On a desktop each [tile](#session-tiles) on screen holds one; a
+phone holds one for the route's session. It stays mounted while its view
+changes, unless another tab already holds that view: then that tab's frame
+shows. `CenterView` remounts the tile area only for another identity or
+event epoch, and the area keys each session by its id, so a phone's frame
+remounts for another session. A phone's frame is the same tile's, drawn
+without its strip, so crossing 768px keeps the session, its attach and what
+is open in it. Session, Terminal, Changes and Files mount on first visit and
+stay mounted, laid out but `invisible` and `inert`: xterm hidden with
 `display: none` measures zero and would resize the shared PTY, a Publish
 draft (commit message, an uncertain pull request) must survive a view switch,
 and an open file keeps its scroll position, caret and undo history. Browser
 and Trace mount only while shown, so a hidden Browser streams no screencast
-and a hidden Trace derives nothing and ticks no clock.
+and a hidden Trace derives nothing and ticks no clock. A hidden view is
+dropped the moment another tab holds that view of the session, and the hidden
+Terminal lives only in the tile that mounts the session's one terminal: the
+tile showing Terminal, else the session's first.
 
-The Browser can also sit beside the other three views instead of being a tab:
-its toolbar's **Show beside Session** (**Show beside Terminal** on a Standard
-session) docks it at the right of the frame with a divider, and **Show the Browser
-as a tab** puts it back. The choice and the divider's position are view
-preferences (`browserBeside`, `browserBesideWidth`, persisted). Docked, it
-stays on screen across Session, Terminal and Changes, leaves the view switch,
-and each side keeps at least 320px (`BrowserDock` in
-`src/routes/browser/dock.tsx`). The frame is measured, not the window: the
-toggle is offered only while the space left by the sidebar and Details is at
-least 640px, and below that the Browser is a tab whatever the preference
-says. The divider is a `separator` that takes a drag or the arrow keys, Home
-and End.
-
-The agent's attach lives in `useAgentTerminal` at frame level, so switching
-views never reattaches, and `useRunRoom` reads the newest room page once per
-frame, then follows `workspace.room_message` events. An event naming a
+`RunSession` (`session-host.tsx`) is mounted once per session on screen,
+keyed by identity, event epoch, session id and `created_at`, and its frames
+read it through `RunAgentContext`. It owns the agent's attach
+(`useAgentTerminal`), the room (`useRunRoom`), the shells (`useRunShells`),
+the `TakeoverDialog` and the takeover status line, so switching views, moving
+the focus or showing the session in a second tile never reattaches. Each
+session on screen costs one attach socket, one presence poll and one shells
+poll, however many tiles show it. `useRunRoom` reads the newest room page
+once, then follows `workspace.room_message` events. An event naming a
 message the store already holds in the event's `state`, such as the author's
 own post, reads nothing, unless that message is a steering request, whose
 agent delivery the payload does not carry. After the event stream reconnects
@@ -3050,41 +3083,224 @@ last signal, so a closed tab or lost connection stops showing. A restored draft
 signals nothing until it changes. Typing is held in memory only and feeds no
 count, chart or timeline.
 
+### Session tiles
+
+The session page is the tile area (`components/tiles/`, `TileArea`). A **tile** is a pane showing one view of one session, and a
+**tab** is a session view a tile holds: a tile shows its active tab and keeps
+the others in its strip. One session opened once is one tile with one tab.
+The **focused tile** is the one the keyboard, the address and the sidebar
+selection follow. A phone (under 768px) shows the route's session alone, with
+no tile control: `TileArea` draws the one tile that shows it, without its
+strip, and the layout still follows the route.
+
+A tile is two 32px rows (44px on a coarse pointer) over the view: the strip
+(`tab-strip.tsx`), then the session's [header row](#header). Neither moves
+when the focus does. The strip is a `tablist` named "Sessions in this tile":
+
+- Each tab shows the state dot, the agent's glyph, the title and a lock for a
+  protected session; its tooltip is the full title, then the state and
+  reason, and its close
+  button ("Close `<title>`") sits beside it. A session with two or more tabs anywhere in the
+  layout adds " · " and the view's icon and name to each of them, and its
+  background tabs drop the glyph. A
+  background tab of a session that needs you swaps its dot for a **Needs you**
+  badge, which stands in for the view's name. A background tab's title
+  truncates at 240px. A tab keeps four letters of its title: its floor is 112px, or 192px
+  while it names its view or carries the badge. A strip with under 192px a
+  tab is tight: its background tabs show the view's icon without the name, on
+  a 128px floor that keeps it clear of the close button, and a gold dot for
+  the badge, all cut to one width. The strip never scrolls. Tabs that do not fit at
+  their floor fold into an "N more" menu before "+", the last background tab
+  first and those that need you last; the menu carries a gold dot while a
+  folded tab needs you, and picking a tab there activates it.
+- **Add a tab** ("+") opens the picker in a popover.
+- **Split right** and **Split down**, on the focused tile, open an empty
+  focused tile on that side. A press holds a strip as drawn: one that
+  focuses its tile keeps the strip without them, and one on a tab or its
+  close button, in any tile, keeps each tab at its width with its label as
+  it was and folds or unfolds none. So a first click on "+", a tab or a
+  tab's close button acts, and nothing moves under the pointer after it.
+  The strip is laid out once when the pointer is off it with no button down
+  and no popover or menu opened from it still open; a lifted finger and a
+  pointer that left the window count as off it. The Tab key, a resize of
+  the tile area and a tile that splits, closes, maximizes or restores let
+  it go at once, and a tab that was folded or is new takes its room at once.
+  Where the 420 by 400px floor leaves no room they open the picker instead,
+  hung from the button that was pressed and led by "No room to split right.
+  Add a tab here instead.", and the live region says "No room to split: adds
+  a tab".
+- **Maximize**, with two or more tiles.
+- **Open sidebar**, at the left of the first tile's strip while the sidebar is
+  hidden.
+
+Under 560px of tile width the strip drops the agent glyph and the badge, the
+Split buttons become icons, and an unfocused tile keeps only "+".
+
+The picker (`picker.tsx`) is headed "Open in this tile" over the search
+field "Find a session or view". It lists "Other views of `<title>`" for the
+tile's session, or the session an empty tile was split from, then the
+sessions in the sidebar's groups, then **Already on screen**. The list takes
+the height its tile leaves, or in a popover up to the window's, and fades over its last 32px where more lies below;
+**New session** stays under a seam at the foot. A session already on screen opens on its first view no tab holds;
+with none left its own tile takes the focus. An empty tile shows the picker
+as its body under a strip that reads "New tile" with **Close tile**, and its
+foot adds "or drag a session or a view here".
+
+A session shows each view once. A view that is the active tab of another
+tile carries an arrow in the view switch and the picker, with the tooltip
+"On screen in the tile at right" (or left, above, below) or "In a parked
+tile". Hovering or focusing it draws a dashed teal outline on that tile, and
+choosing it focuses that tile. A view held by a background tab has no arrow;
+choosing it activates that tab.
+
+**Focus.** A pointer press in a tile, or focus that follows a `Tab` key
+press, focuses it. The focused tile's strip is on `--canvas` with a 2px teal
+bar under its active tab or its "New tile" label; an unfocused strip is on
+`--chrome` with no bar, and a picker marks its active row only while the
+keyboard is in it.
+With two or more tiles on screen the focused one also has a 1px teal
+outline. When a navigation, a pick or a shortcut moves
+the focus while the keyboard sits in another tile, the keyboard moves to the
+new tile's heading. Only the focused tile answers the session's shortcuts,
+reads `agent`, `file`, `line`, `column`, `diff` and `focus` from the route,
+reports its view to the assistant and marks its session seen. `focus` is
+served once and then dropped from the route, so a tile that takes the focus
+again leaves the keyboard where the press put it.
+
+**Tear-off** is dragging a view out of a tile's view switch into a tile of
+its own. With a mouse or a pen, a sidebar row, a tab and every view but the
+one its tile shows can be dragged (`drag.tsx`); a press becomes a drag after
+4px. The outer fifth of a tile splits it on that side, its middle or strip
+adds a tab, and a tab over a strip moves to where the 2px line shows. A
+teal preview marks what the drop takes. A split's preview is the rectangle
+the new tile will have after the drop, seams moved for the floor and the
+room of a tile the drag empties included: it covers what is there now with a
+`--canvas` scrim and names what lands on a plate at its centre. The
+tile that stays is named in a strip at the top of the room it keeps, over
+the same scrim, which also dims a tile the drag takes the only tab of. An
+added tab shows as a dashed tab at the end of the strip, in place of the
+strip's buttons. A lifted tab leaves a dashed slot, as a lifted view does. A chip by the pointer, kept clear of a split preview's plate, names the
+drop:
+**Split left**, **Split right**, **Split up**, **Split down**, **Add as tab**
+(also where the floor forbids the split, and on a maximized tile) or **Move
+tab**. A view another tab already holds moves that tab; nothing opens twice.
+`Esc` cancels, shortcuts stand down mid-drag, and a release over what was
+lifted is still a click. Splitting left or up and reordering tabs are
+drag-only.
+
+**Seams.** The line between two tiles is a `Splitter` named "Resize the
+tiles": drag it, press the arrow keys for 16px, `Home` and `End` for the
+bounds, or double-click to even the two sides. Each side keeps the floor of
+what it holds.
+
+**Maximize and close.** **Maximize**, a double click on a tab or `x` fills
+the area with the focused tile. The other tiles are parked: hidden where
+they were and still mounted, so restoring them reloads nothing and resizes
+no terminal. They are listed as chips in a pill on the strip, those that need
+you first. A chip names the tile's tab that needs you, with the **Needs
+you** badge, else its active tab, and opens that tab; the tabs and the pill share the
+strip half and half, and a pill with under 112px a chip, or 192px for one
+that names its view or carries the badge, folds into an "N parked" menu.
+A chip swaps the maximized tile, and
+**Restore tiles**, `x` or `Esc` brings them back. A stored layout that does
+not fit the window is drawn the same way, with no **Restore tiles** and only
+the focused tile mounted, and the
+stored layout is kept for a wider window. Closing a tab (its close
+button, `w`, or `Delete` or `Backspace` on the focused tab) never ends the session. The
+next tab becomes active; a tile's last tab takes the tile with it and its
+neighbour takes the room and the focus. Closing the only tab of the only
+tile, or the last tab beside an empty tile, opens the board in place of the
+history entry. Details, the Session tree and the subagent inspector dock
+only in a tile that is alone on screen; beside other tiles they open as
+sheets. A parked tile keeps the shape, controls and composer it had, so
+maximizing docks nothing inside it.
+
+**Controls once per session.** When a session is in several tiles, its
+actions, presence and watch button sit in one of them: its
+focused tile, else its first in reading order. The others show the view
+switch and the state. Every tile draws the lines under the header (lineage,
+retention, connection and presence failures), so moving the focus changes no
+pane's height; a screen reader is read the connection and presence lines from
+the tile that carries the controls alone.
+
+**Layout and route.** The layout is `tiles` in the store
+(`store/tiles.ts`): a tree of splits, the focused tile and whether it is
+maximized. It is saved per signed-in member in `savedTiles` under
+`aether.ui`, restored on sign-in, and never written to the address. The tree
+is drawn flat, each tile absolutely positioned (`geometry.ts`), so a tile
+keeps its terminal and scroll position through splits and closes around it.
+`navigate('run', …)` lands in the layout, first match wins:
+
+1. a tab already holds the session on the named view: that tab;
+2. the focused tile shows the session: it changes view in place;
+3. another tile shows it: that tile;
+4. it is a background tab: the first one;
+5. otherwise it replaces the focused tile's active tab, or fills an empty
+   tile.
+
+The tab's tile takes the focus. A deep link and a reload follow the same
+rules against the restored layout. When a session stops offering a view, on
+finishing for instance, its tab falls back to the default view, and a tab
+that would then repeat another closes at once. A deleted session's tabs close when the
+store learns of it, and after a live hydration, never from a stale snapshot;
+until then its tile shows the [Missing run](#missing-run) page.
+
+Each tile is a `region` named "`<title>`, `<view>`, tile 2 of 3". A polite
+live region announces every split, close, move, maximize, restore and
+keyboard focus change. The keys are in
+[Keyboard and focus](#keyboard-and-focus), the motion in
+[styles.md](styles.md#session-state-and-motion).
+
 ### Header
 
-The header (`header.tsx`) is a 56px `PaneHeader size="run"`: the title (the
+The header (`header.tsx`) is one 32px row under the tile's strip (44px on a
+coarse pointer). The session's title is the tab's: the
 agent's last terminal or Enhanced session title,
 [until then](enhanced-sessions.md#status) a taskless Enhanced session's first message
 line, else the task's first line cut at 120 characters, with a lock for a
-protected session), then a one-line state line: the session branch with a copy
-icon (click copies the name), the agent's glyph and mode ("Standard"; the
-tooltip adds the `agent.list` display name, `run.model` and `run.effort`,
-"Claude Code · Standard · opus · high"), a **Root access** (needs-you tone) or
-**Isolated** badge for a session not at Default, whose tooltip says what the tier
-allows, "On `<name>`'s account (fallback)" when the session carries
-`requested_account_member_id` ([usage fallback](teams.md#usage-fallback);
-a `run.account` event updates it live when the session moves), the reason, and
-the owner. The state's dot and label are the Session tree chip's, on the row
-below. A subsession adds a `nav "Run lineage"` row under the header: its
+protected session. The row holds, from the left:
+
+- The view switch.
+- The state's dot and label. On the tile that carries the session's
+  controls, from 560px of row width, they are the
+  [Session tree panel](#session-tree-panel)'s chip.
+- From 560px of row width, the reason, then `repo +N` on a
+  [multi-repo session](#multi-repo-sessions), the mode ("Standard"; the
+  tooltip adds the `agent.list` display name, `run.model` and `run.effort`,
+  "Claude Code · Standard · opus · high"), "On `<name>`'s account (fallback)" when the session carries
+  `requested_account_member_id` ([usage fallback](teams.md#usage-fallback);
+  a `run.account` event updates it live when the session moves), "Launched via
+  `<name>`". Each part that does not fit drops whole,
+  last first; the reason truncates last, and with under 96px left for it
+  drops whole too, before the view switch gives way.
+- From 560px, the **Root access** (needs-you tone) or **Isolated** badge and,
+  on the tile that carries the session's controls, the watch button. Neither
+  yields to a long reason.
+- The actions, on the tile that carries the session's controls.
+
+The row measures itself, so a docked Details or Session tree counts against it.
+A subsession adds a `nav "Session lineage"` row under the header: its
 root and parent as links, then "This subsession", and **Detached** once it
-no longer counts toward its parent. The reason takes only the room left over, so a long command never
-moves or hides the branch; the owner goes below 32rem, and the mode word
-truncates before the branch does. The full task and the session record are in
-Details.
+no longer counts toward its parent. The branch, which its row copies on a
+click ("Copy branch `<name>`"), the owner, the full task and
+the session record are in Details.
 
 The actions, in order:
 
-1. The state's one primary action, the only filled button on the frame. It is
+1. The state's one primary action, filled in the focused tile and secondary
+   elsewhere. It is
    the label the condition names in `lib/needs-you.ts`, the same one the board
-   card and sidebar row show, performed inside the frame: **Reply** focuses the
-   Chat composer, **Open terminal** switches to Terminal and asks for the
+   card and sidebar row show, performed inside the frame: **Reply** opens Chat
+   with its composer focused, in whichever tile or tab holds the session's
+   Chat, and is absent on Chat while a request card waits there, **Open terminal** switches to Terminal and asks for the
    lease, **Answer** focuses the docked request on Session or reveals the
    question's card in Details, **Review message** reveals the queued message's
    card in Details, and **Review** opens Changes for a finish. On the Terminal view there is no terminal action in
    the header; the toolbar has **Take control**. Session rows and Details cards
    that send the member elsewhere use secondary buttons.
-2. **Show details** / **Hide details** (`Mod+.`).
-3. **More** (`components/run-actions.tsx`, an icon button on a phone): every
+2. Presence, on an Enhanced session ([Multiplayer controls](#multiplayer-controls)).
+3. **Show details** / **Hide details** (`Mod+.`), filled while Details is open.
+4. **More** (`components/run-actions.tsx`, an icon button): every
    session verb from `lib/commands.ts` except **Send a message to the agent…**,
    which the composer replaces, then **Hand off…**, **Leave a comment…**,
    the mode switch, **Open in editor…**, **Captures…** and
@@ -3095,10 +3311,11 @@ The actions, in order:
    **Allow subsessions** (`run.children.allow` `on`), and the owner or an
    admin **Turn off subsessions** on a session that allowed them.
    **Leave a comment…** opens Details with the cursor in the note field. On
-   a desktop layout, a right-click on Chat opens the same menu at the
-   cursor, except over selected text, a link, an input, code, an image or
-   a terminal, and on Shift+right-click, where the browser keeps its own
-   menu. The desktop app has no menu of its own there.
+   a desktop layout, a right-click on Chat in the tile that carries the
+   session's controls opens the same menu at the cursor, except over
+   selected text, a link, an input, code, an image or a terminal, and on
+   Shift+right-click, where the browser keeps its own menu. The desktop app
+   has no menu of its own there.
 
 Kill and Delete of a session with unfinished subsessions (live, not detached; the
 store's sessions whose `parent_run_id` is this session) say "Its 2 unfinished subsessions
@@ -3133,15 +3350,17 @@ package names (`run.mode.switch: scheduler: `) and keeps the server's
 sentence.
 
 The view switch is a segmented `tablist` named "Session views" with manual
-activation, on its own 32px row under the header at every width. When the
-row is too narrow for every tab, as on a phone whose session has a pull request,
+activation, at the left of the row. Under 800px of row width each view is
+its icon, named by its tooltip. When the
+row is too narrow for every tab
 the tabs scroll sideways (`ViewSwitch`): the shown view's tab is kept in
 sight as the view or the room changes, and the right edge fades while more
-tabs lie past it. The [Session tree panel](#session-tree-panel)'s chip follows the
-tabs. A phone has its own header and tabs; see [Phone session](#phone-session).
+tabs lie past it. A view opens on the click, not the press, so a press can
+become a [tear-off](#session-tiles). A phone has its own header and tabs; see
+[Phone session](#phone-session).
 
-A session with a pull request shows it at the right end of that row
-(`pull-request.tsx`): `#412`, a link to the pull request on GitHub, then the
+A session with a pull request shows it before the primary action
+(`pull-request.tsx`), and under **More** in a row under 560px: `#412`, a link to the pull request on GitHub, then the
 state of its checks as a button, **2 failing**, **Checks running**, **Checks
 passed** or **No checks**, and **Merged** or **Closed** once it is. Failing
 wins over running, and running over passed. An answer that failed part-way,
@@ -3168,30 +3387,44 @@ opens.
 
 ### Multiplayer controls
 
-Enhanced sessions render `MultiplayerControls` (`routes/run/multiplayer-controls.tsx`)
-below the view switch at frame level, so Session, Terminal and Changes share
-one control surface. The Browser view leaves it out: it is about who controls
-the agent's session, and the page has a lease of its own
-([Browser view](#browser-view)). The Files view leaves it out too: reading
-and saving a file uses no lease. With the Browser docked beside Session,
-Terminal or Changes the strip is back, above both. It shows the controller and every watcher
-with their member name and `Avatar`, protection and the existing
-`ControlButton`: take a free lease, release it, or hold for three seconds to
-request an occupied lease. A local lease acknowledgement takes precedence
+Enhanced sessions show who controls the agent's session and who watches it
+(`routes/run/multiplayer-controls.tsx`), on every view. A desktop draws
+`PresenceControls` in the header row's actions, on the tile that carries the
+session's controls:
+
+- Each watcher is an `Avatar` named by its tooltip.
+- The controller's avatar has a teal ring. When this tab controls, the
+  avatar is the **You control** menu, which holds **Release**; the words show
+  once the row is 960px wide.
+- Otherwise the existing `ControlButton` follows the controller: take a free
+  lease, or hold for three seconds to request an occupied one. A member who
+  may not steer reads **View only** where the words show.
+- The connection word shows only while the stream is not live.
+- While a teammate holds to request control, a 2px red line fills along the
+  row's bottom edge (`progressbar` "A teammate is holding to request
+  control"); under reduced motion it is full at once.
+
+Control, stream and presence failures are lines under the row
+(`PresenceErrors`). Details' people card lists everyone by name.
+
+A phone renders `MultiplayerControls`, a strip below the view switch on
+Chat, Trace and Changes. It shows the controller and every watcher
+with their member name and `Avatar`, protection and the
+`ControlButton`, with **Release** on the button. A local lease acknowledgement takes precedence
 over polled controller metadata; the controller's name remains visible
 beside **You control** or **You control in another session since <time>**.
 That text appears when `run.room.status` names your member with a
 `control_session_id` other than this tab's: another tab, device or
 `cloudfield attach`, held since the lease's `acquired_at`.
 **Multiplayer** still opens Details for shared notes and run facts.
-The strip is one row whenever the controls fit beside a 6rem roster, which
-covers desktop windows. Only when they cannot, as on a phone with
+The strip is one row whenever the controls fit beside a 6rem roster. Only
+when they cannot, as with
 **Protected** and a connection word, do the controls wrap to a second line
 rather than overlap the roster. The roster takes the space left between
 **Multiplayer** and the controls and scrolls horizontally rather than replacing names with a count;
 below a 34rem strip it shows avatars with the names kept for screen readers,
 and below 30rem **Multiplayer** keeps only its icon. The controller summary
-truncates instead of wrapping, at 12rem below a 48rem strip. Offline or
+truncates at 12rem instead of wrapping. Offline or
 failed presence reads mark the retained roster **(last known)**. Control and
 presence failures stay beside the action rather than inside a closed composer.
 With a mouse or touch pointer on the multiplayer strip, `useDotFade`
@@ -3235,7 +3468,8 @@ During a hold `--control-hold` moves a 4rem gradient mask that fades the
 `--control-light` dots out and a red copy in. In
 Enhanced sessions its appearance follows the acknowledged ACP lease, not the
 unused agent terminal's history or connection state, and it shows on every
-view that shows the strip. Voluntary release retracts it; takeover
+view that shows the strip; a desktop tile draws no matrix for an Enhanced
+session. Voluntary release retracts it; takeover
 feedback requires an explicit revocation matching the held session and
 generation. Disconnects, permission loss and other fencing return it to
 neutral immediately. The shared component supplies acquisition, holder
@@ -3282,6 +3516,20 @@ which drops those messages from the timeline; the choice is per session, in
 `hiddenAgentMessages`, until the page reloads. `Esc` in an empty composer focuses the list's
 viewport; the next `Esc` is the session's `leave-run`.
 
+In a [tile](#session-tiles) that is not the focused one the composer is one
+line: the same field showing a draft's first line, "+N lines" when it has
+more, and no toolbar. A press in the tile focuses it, and the composer opens
+when the press ends, so the click lands on what was pressed. For 400ms after
+it opens, or until the pointer moves, its toolbar takes no press: the second
+press of a double-click on the field opens no menu. A tile on Changes,
+Files or Trace keeps that one-line field, with a **Send** icon, under a seam, for an
+Enhanced session this tab may steer, while the session's Chat is not on
+screen, no request is pending and the agent's stream is live; it opens on a click or `c` and folds when
+the tile loses focus. A Browser or Terminal tile has none, so the page and
+the terminal keep their height.
+`c` goes to the session's Chat composer when Chat is on screen, else to this
+field, else it opens Chat. The header's **Reply** always opens Chat.
+
 The composer fills the Chat pane with 16px gutters on both sides; on wide
 screens, opening Details narrows the pane rather than overlaying the composer.
 Its focus highlight follows the outer border around the textarea and attachments.
@@ -3300,7 +3548,7 @@ and collapses; an X deletes it the same way with no scratch. Both buttons show
 on hover, focus, or touch and need the note's author, the session's owner, or
 an admin; there is no undo. A screen reader hears "Note completed." or "Note
 deleted." once the server accepts. When the Chat pane is below 1248px wide
-(Details or a docked Browser can narrow it), the rail becomes a strip above
+(Details or a narrow tile can do that), the rail becomes a strip above
 the composer, "N notes ▾", that expands to the same cards within its own
 bounded, scrolling list so expanding it cannot push the composer out of view,
 and Details keeps listing open notes as it always did. At 1248px and over,
@@ -4041,10 +4289,19 @@ terminal tabs (**Agent**, then each shell; one menu under 768px), **+ Shell**,
 the **Tools** menu, and on the right the presence summary with
 `ControlButton` (click to take a free lease, hold three seconds to request an
 occupied one; **Release** is a primary button) and the connection word only
-while a live session's attach is not live. A finished session reads "Container
+while a live session's attach is not live. On a desktop, a terminal this tab
+does not control is drawn scaled: at the text size that fits its
+controller's grid into the pane's width, scrolling when it is taller. The
+size stops at 70% of the chosen one; a wider grid scrolls sideways. Its
+presence moves to a line under the terminal that names the controller beside
+**Take control**, and the toolbar keeps the dot matrix only while this tab
+controls. The attach still asks the server for the grid the pane holds at
+the chosen text size, so **Take control** and a lone watcher get a terminal
+that fits. Tile focus changes nothing about a terminal: a focus click sends
+no resize and no reattach. A finished session reads "Container
 removed · read-only" in muted text there.
-Refusals, lost steering and presence errors are one line under the strip. A
-session with no agent terminal, such as an Enhanced session, shows "No agent
+Refusals, lost steering and presence errors are one line under the terminal
+toolbar. A session with no agent terminal, such as an Enhanced session, shows "No agent
 terminal" and the shell controls. Under 768px (`useIsMobile`), the first time
 the Terminal view shows for such a session `useRunningShellOnPhone` reads
 the shell list with `shells.refresh()`, whose revision counter drops a list
@@ -4061,7 +4318,7 @@ layout's breakpoint (`useIsMobile`, under 768px, any pointer), because they
 are layout. Fitting, read-first focus and the size stepper follow
 `phoneScreen` (a coarse pointer under 640px) instead: the same query that
 makes a terminal follow the PTY, which fitting needs, and the screens where
-focus raises a soft keyboard. The frame renders one `TakeoverDialog`
+focus raises a soft keyboard. `RunSession` renders one `TakeoverDialog`
 above every sheet and dialog for the holder's decision; the dialog restores
 the interrupted focus.
 
@@ -4127,7 +4384,8 @@ shells and the Environment share.
 `CenterView` mounts only the active route. A terminal key includes the route,
 the authenticated identity, the terminal data-generation epoch, and the session id,
 so a change of identity or epoch remounts the surface instead of reusing it.
-Leaving the session closes its WebSocket and disposes xterm; no hidden live
+Leaving the session page, closing the session's last tab on screen or parking
+its tile closes its WebSocket and disposes xterm; no hidden live
 terminal stays warm. A pinned view retains only its static presentation and
 history state. Returning attaches again at the compact current screen behind
 the saved reading surface, without replacing its content or position. A session
@@ -4384,8 +4642,8 @@ and the Environment keep native xterm scrollback.
   normalized output through `terminal.history`, independently of the attach.
   The dashboard does not download the raw archive.
 - **Controller lease and compact bootstrap.** A desktop owner's attach asks
-  for write once the
-  Terminal view has been shown; until then it is a mirror. Other members
+  for write once a tile has shown the session's default view
+  (Terminal for a Standard session); until then it is a mirror. Other members
   start as mirrors. The server grants write only
   when no controller exists; a second tab cannot become a second writer. A
   mirror shows who controls ("Nobody controls", "<name> controls", "You
@@ -4473,7 +4731,12 @@ and the Environment keep native xterm scrollback.
 - **Live Find, zoom, and clipboard share xterm's key handler.**
   `xterm-host.tsx` chains zoom, find, and `clipboardKeys` in that order; the
   first to claim a key stops it reaching the shell. `clipboardKeys` claims
-  copy shortcuts but leaves native paste alive. `Ctrl+Shift+F` opens the find bar
+  copy shortcuts but leaves native paste alive. A native copy reaches xterm
+  only while its input has the focus, so `registerTerminalCopy`
+  (`src/lib/term-clipboard.ts`) listens on the document and serves an
+  unhandled copy from the most recently used terminal that is on screen, not
+  under `[inert]` and holds a selection; with the focus inside a `[data-tile]`
+  only that tile's terminal qualifies. `Ctrl+Shift+F` opens the find bar
   `TerminalPane` (`src/components/terminal-pane.tsx`) places above the
   terminal. Live search uses `@xterm/addon-search`; while reading, the same
   bar delegates to loaded archive pages and frozen rows. **No matches** comes
@@ -4918,7 +5181,7 @@ gateway lists the `run.repos` method.
 ### Browser view
 
 `src/routes/browser/` is the session's **Browser**: a tab among the session's views,
-or a pane beside them (see [Chat view](#chat-view)), in the same bundle the
+which a [tile](#session-tiles) of its own puts beside the others, in the same bundle the
 local SSH gateway and the server-hosted tailnet gateway serve. It shows the
 session's own Chromium, which the server starts beside the session's container in the
 same network namespace, so `http://localhost:3000` is the app in the session, not
@@ -4958,8 +5221,6 @@ dev.browser.status: scheduler: the session has no live environment: the session 
 - **Viewport**, a menu: **Fit the pane**, **Desktop** 1280 × 800, **Tablet**
   820 × 1180, **Phone** 390 × 844. In a pane narrower than 480px the same
   choices head the **Browser actions** menu instead.
-- **Show beside Session** / **Show the Browser as a tab**, only on a frame
-  wide enough for both.
 - **Browser actions**: **New page**, **Screenshot**, **Release control**
   while this tab drives, **Close page…** and **Reset session…**.
 - Who is driving, when it is not nobody; see Control below.
@@ -4973,7 +5234,7 @@ and puts the caret in the address field.
 Under the chrome there is only the page. Before one is open the pane reads
 **Open a page** over the ports the session is listening on, each a button that
 opens it (see Ports below), and the address field has focus, except on a
-touch device and when the Browser is docked beside another view. A message
+touch device and in a tile that is not the focused one. A message
 about an action,
 such as a failed navigation or who is driving, is laid over the top of the
 page with a **Dismiss** button, so it never changes the page's size.
@@ -5065,12 +5326,12 @@ while the Browser is what its user is working in:
 - The user goes elsewhere: the tab releases its lease, so the agent or a
   teammate can drive. Elsewhere is the window losing focus or being hidden,
   the view or the dashboard being left, and focus or a key press landing in
-  another part of the dashboard, such as the composer beside a docked
-  Browser. A menu or a dialog does not count, since it may be the Browser's
+  another part of the dashboard, such as the composer in the tile beside a
+  Browser tile. A menu or a dialog does not count, since it may be the Browser's
   own. An action still running when focus or a key lands elsewhere in the
   dashboard, such as the first page opening, finishes and then gives its
   lease back, and takes no focus back with it; so does a terminal link
-  opened in a docked Browser while the keyboard stays in the terminal. A
+  opened in a Browser tile while the keyboard stays in the terminal's tile. A
   press on the page whose lease arrives after that is dropped with the
   lease. A press, a touch or a wheel in the Browser is a return to it,
   though none of them moves focus. A status read that finds this tab still
@@ -5131,13 +5392,14 @@ importing a personal browser profile.
 **Shortcuts.** The page receives every key pressed on it, so the four
 Browser bindings are matched first and kept from it; see
 [Keyboard and focus](#keyboard-and-focus). The address-bar shortcut shows the
-Browser first when it is neither selected nor docked. It is also the way out
+Browser first when no tile shows it. It is also the way out
 of the page for a keyboard user, since Tab goes to the page.
 
 **Links from a terminal.** `openRunLink` (`open.ts`) is the link handler of a
 session's agent terminal and shells. An `http(s)` link to `localhost`,
-`127.0.0.1`, `0.0.0.0` or `[::1]` is recorded in `browserRequests`; the session
-frame shows the Browser unless it is already docked, and the Browser opens
+`127.0.0.1`, `0.0.0.0` or `[::1]` is recorded in `browserRequests`; the tile
+that carries the session's controls shows the Browser, or the tile that
+already holds it takes the focus, and the Browser opens
 the address as if it had been typed. A path in the session's checkout opens in
 its [Files view](#files-in-a-session). Every other link opens in a new tab as
 before, and an OAuth callback link is still intercepted first. The
@@ -5267,13 +5529,22 @@ device run.
 
 ### Details
 
-While the session's row holds 320px for it plus `minReadableWidth` (560px),
-Details is a 320px `complementary "Run details"` beside the view, toggled by
+In a tile that is alone on screen, while the session's row holds 320px for it
+plus `minReadableWidth` (560px),
+Details is a `complementary "Session details"` beside the view, toggled by
 the header button or `Mod+.` and remembered (`detailsOpen`, persisted). When
 the row narrows, for example when the assistant docks, the inline panel goes
-and comes back once there is room again. Narrower rows open it as a side sheet and
-phones as a bottom sheet, each a `dialog "Run details"` that returns focus to
-whatever opened it. Sections (`details.tsx`):
+and comes back once there is room again. Narrower rows, and every tile
+beside another, open it as a side sheet over the window's right edge and
+phones as a bottom sheet, each a `dialog "Session details"` that returns focus to
+whatever opened it.
+
+Off a phone, the `separator "Resize session details"` on the panel's left edge
+sets its width from 320px to 560px by drag or arrow keys, 320px until then
+(`runDetailsWidth`, persisted). One width serves the inline panel and the
+sheet. Inline it is drawn no wider than leaves 560px for the view, less the
+320px Session tree rail when that is open beside it; the saved width is kept
+and applies again once there is room. Sections (`details.tsx`):
 
 - **Needs you**: `RequestCard`s for pending native inputs, teammate messages
   awaiting the controller with **Deny** / **Approve** through
@@ -5325,7 +5596,7 @@ whatever opened it. Sections (`details.tsx`):
 - **Notes**: a thread (`note-thread.tsx`) of teammates' `question` messages,
   human to human on the session, plus open `comment` messages too, unless
   Chat is the active view and its pane is 1248px or over (however Details or
-  a docked Browser narrowed it) - there, the rail already shows open
+  its tile narrowed it) - there, the rail already shows open
   comments, so the thread here holds only questions.
   Each note is a row: the author's `Avatar` ringed in their member colour, the name
   ("via ChatGPT" after it when a connector posted it, the name the message
@@ -5389,11 +5660,14 @@ The Session tree panel (`src/routes/run/workflow-panel.tsx`) shows what the sess
 and its agents are doing as a tree; the [Trace view](#trace-view) shows when
 they did it. "Workflow" in the dashboard's copy means a Claude Code workflow
 only; the panel's identifiers (`workflowOpen`, `WorkflowTree`) keep the old
-name. Its chip sits after the view switch, ends in a tree icon, and
+name. Its chip sits after the view switch, on the tile that carries
+the session's controls and in place of the state's dot and label, ends in a tree icon, and
 mirrors the session's state: `● Working · 2 agents running` (subagents and
 workflows running at any depth, a background one included) or
 `● Waiting for CI · 3 of 9 checks` (passing checks of the pull request's
-checks this tab last read). The chip toggles the panel. While the
+checks this tab last read). The chip toggles the panel; a header row under
+560px lists **Session tree** under **More** instead. In a tile that is alone on
+screen, while the
 session's row holds 320px for it plus `minReadableWidth`, the panel is a 320px
 `complementary "Session tree"` rail at the right of the frame, remembered per
 device (`workflowOpen`, persisted, closed until the chip first opens it). A
@@ -5480,7 +5754,9 @@ a skeleton, held behind `useDelayed` so a fast load never flashes one. Only
 once the store has hydrated does it say the session is not on the server, and
 offer **Back to board**. The launch paths seed the session they just started -
 both template launches and the onboarding first-session form, the way
-`launch-dialog.tsx` does - so a launch never lands on the deleted claim.
+`launch-dialog.tsx` does - so a launch never lands on the deleted claim. On
+a desktop it fills the tile whose tab names the session, and the tab closes
+with its own button.
 
 ## Activity and budgets
 
@@ -5981,8 +6257,8 @@ checkout under its branch name, with the tree, the editor, the tabs and the
 phone layout of the Files route (`FilesPane`, `closeTab` in `pane.tsx`). Its
 tabs are the open files of that session; they are the same tabs the Files route
 shows under **Session checkouts**. The base branch and Home stay
-on the Files route. The pane is measured: below 640px, with the Browser
-docked beside it for instance, it shows the tree until a file is open and
+on the Files route. The pane is measured: below 640px, in a narrow tile
+for instance, it shows the tree until a file is open and
 then the editor with **Browse**, as a phone does.
 
 A live session's checkout root, here and under **Session checkouts** on the Files
@@ -8024,10 +8300,18 @@ bindings in overlapping scopes share keys, or one begins the other's sequence.
 | `u` | global | Open the next session that needs you |
 | `j` / `k` | global | Focus the next or previous session in the sidebar |
 | `g` then `b`, `l`, `a`, `f`, `g`, `e`, `,` | global | Go to the board, all workspaces, activity, files, agents, environment, settings |
-| `[` / `]` | run | Show the previous or next session view, Trace included on an Enhanced session |
+| `[` / `]` | run | Show the previous or next session view in the focused tile, Trace included on an Enhanced session; views another tab holds are skipped |
 | `⌘.` / `Ctrl+.` | run | Show or hide session details |
-| `c` | run | Message the agent (focuses the Chat composer) |
-| `Esc` | run | Leave a session for the board |
+| `c` | run | Message the agent: the session's Chat composer when Chat is on screen, else the focused tile's one-line field |
+| `Esc` | run | Close the subagent inspector, else restore the tiles from maximize, else leave for the board |
+| `⌘\` / `Ctrl+\` | run | Split the focused tile right; works from a field, and a terminal keeps `Ctrl+\` |
+| `⌘Shift+\` / `Ctrl+Shift+\` | run | Split the focused tile down |
+| `⌘1` to `⌘9` / `Ctrl+1` to `Ctrl+9` | run | Focus a tile by its place in reading order, from a field or a terminal too; with two or more tiles |
+| `g` then `t` | run | Focus the next tile; with two or more tiles |
+| `x` | run | Maximize the focused tile, or restore the tiles; with two or more tiles |
+| `w` | run | Close the focused tab; with two or more tabs in the layout |
+| `s` | run | Pick a session or view to add to the focused tile |
+| `⌘Enter` / `Ctrl+Enter` | sidebar row | Open the session to the side of the focused tile |
 | `⌘L` / `Ctrl+L` | browser | Focus the Browser's address bar, from anywhere in the session |
 | `⌘R` / `Ctrl+R` | browser | Reload the page |
 | `⌘[` / `Alt+←` | browser | Go back |
@@ -8050,6 +8334,11 @@ innermost wins. A binding without a handler does
 nothing and is left out of the dialog: `n` is offered only to a member who
 may launch, and a `g` destination only when the gateway serves it. A session's
 keys are listed even from the board, where no session scope is on screen.
+The tile area registers the tile keys and the one `Esc` in the `run` scope;
+the focused tile's frame registers the view keys in the same scope, and an
+unfocused frame registers none. The split keys are off while a tile is
+maximized. A tile key says what it did through the area's live region, and
+every shortcut stands down while a tile drag is in flight.
 
 A dialog a shortcut opens has no trigger to return to, so `useReturnFocus` in
 `src/lib/hooks.ts` records what had focus when it opened and puts focus back
@@ -8146,7 +8435,10 @@ through `onTabListKeyDown` in `src/lib/keys.ts`. The terminal strip's Agent
 tab controls the agent pane and each shell tab the shell pane, both
 `tabpanel`s while a shell is open; with only the agent there is one terminal
 and no tab list. A removable dock tab and a shell tab advertise unmodified
-Delete and Backspace through `aria-keyshortcuts`.
+Delete and Backspace through `aria-keyshortcuts`. A tile's strip
+("Sessions in this tile") is a Radix `Tabs` too, with manual activation: its
+panel is the tile's body, and Delete or Backspace on a tab closes it and
+moves focus to the tab that became active.
 
 Those keys move focus and nothing else. Selection does not follow focus here,
 which the ARIA tab list pattern reserves for panels that are cheap to swap:
@@ -8186,7 +8478,7 @@ coarse pointer at all and the dock offers collapsed, half and full instead
 - **Typography and density.** DM Sans at 13px with 12px supporting copy, on
   the type scale in [styles.md](styles.md#type). JetBrainsMono NFM is the
   terminal's alone; code uses the system monospace stack. Use the 28px
-  control and row, 24px small control, 44px view header and 56px session header,
+  control and row, 24px small control, 44px view header and 32px tile strip and session header row,
   and avoid promotional titles or oversized cards.
 - **Flat shell and palette host.** One 220-400px sidebar beside the content
   view; under 768px a 48px top bar and the sidebar as a side sheet. Mount the
@@ -8324,6 +8616,33 @@ to its pinned button, on a held clock. Its live cases send `run.status`
 through the events socket: a session leaving above the view, one arriving
 above an open popover, and the focused lane folding into Finished.
 
+[Session tiles](#session-tiles): `src/store/tiles.test.ts` covers the layout
+operations, the five navigation rules, pruning only after a live hydration
+and the persisted layout; `src/components/tiles/geometry.test.ts` the
+rectangles, floors, fit and drop zones; `tiles.test.tsx` the strip, picker,
+focus, arrows, controls once per session, the header row's widths, the
+folded and docked composer, seams, maximize, closing, the sidebar,
+the glide and the tile keys; `tiles-drag.test.tsx` every drag source, zone
+and cancel, and a pressed tab's strip keeping its tabs and their widths;
+`tiles-control.test.tsx` no resize or reattach on a focus click,
+write control, the scaled terminal, the first click in a tile that is not
+focused ("+", a background tab, a tab's close button, the composer opening
+at the release), the strip keeping its layout until the pointer is off it
+or a double click maximizes its tile,
+a session's update rendering no other session's Chat, the right-click
+session menu only in the controls tile, and the glide's two-frame hold and
+empty pane; and `src/routes/run/session-host.test.tsx` the per-session host
+and what an unfocused frame leaves alone. `e2e/session-tiles.spec.ts` moves
+a real pointer over tiles whose sessions are answered in the browser: Split
+right and a pick, **Open to the side**, a sidebar row dropped on an edge, a
+tab dropped on a tile, a first click on "+", a background tab and a close
+button in a tile that is not focused, whose strip keeps its layout while
+the picker is open, a view torn off, a seam drag, the focus outline,
+maximize and restore, the strip and header row holding their place, a
+reload, a deep link and Back. Its last case attaches two real terminals,
+needs Docker, and checks that focus clicks open no socket and send no
+resize.
+
 `src/a11y.test.tsx` exercises the session tab strip, dock tabs and sidebar
 splitter with keyboard events: arrow navigation, Enter and Space activation,
 Delete and Backspace close, focus handoff, clamped resizing and collapse.
@@ -8414,7 +8733,7 @@ reconnection and its failure; `address.test.ts` covers the
 scheme rules; `ports.test.tsx` covers the port list in the empty pane, the
 toolbar and the address field, its polling, and opening a port on this
 computer or showing the command for it; and `src/routes/run/frame.test.tsx`
-covers when Browser and Files are offered, the docked layout and run-local
+covers when Browser and Files are offered and run-local
 terminal links.
 `src/routes/files/home.test.tsx` covers the Home tree: each row's menu,
 naming in place, delete, upload from the picker and from a drop, and moving

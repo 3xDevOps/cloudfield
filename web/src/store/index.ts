@@ -26,6 +26,7 @@ import { createSessionsSlice, type SessionsSlice } from '@/store/sessions'
 import { createWorkspacesSlice, type WorkspacesSlice } from '@/store/workspaces'
 import { createUpdatesSlice, type UpdatesSlice } from '@/store/updates'
 import { createTerminalSlice, type TerminalSlice } from '@/store/terminal'
+import { createTilesSlice, normalizeSavedTiles, type TilesSlice } from '@/store/tiles'
 import { createTraceSlice, type TraceSlice } from '@/store/trace-log'
 import { createTimelineSlice, type TimelineSlice } from '@/store/timeline'
 import { createMessagesSlice, type MessagesSlice } from '@/store/messages'
@@ -34,7 +35,11 @@ import { createWatchesSlice, type WatchesSlice } from '@/store/watches'
 import { createWorkflowSignalsSlice, type WorkflowSignalsSlice } from '@/store/workflow-signals'
 import {
   createUiSlice,
+  maxLaunchWidth,
+  maxRunDetailsWidth,
   maxSidebarWidth,
+  minLaunchWidth,
+  minRunDetailsWidth,
   minSidebarWidth,
   normalizeBoardMapFolded,
   normalizeBoardMapViewports,
@@ -77,6 +82,7 @@ export type RootState = ServerSlice &
   CostSlice &
   TimelineSlice &
   LanesSlice &
+  TilesSlice &
   FilesSlice &
   DiffSlice &
   CollaborationSlice &
@@ -96,6 +102,8 @@ const persistedUi = (s: RootState) => ({
   theme: s.theme,
   textSize: s.textSize,
   sidebarWidth: s.sidebarWidth,
+  launchWidth: s.launchWidth,
+  runDetailsWidth: s.runDetailsWidth,
   sidebarCollapsed: s.sidebarCollapsed,
   // A phone never reopens the sheet on load.
   assistantOpen: s.assistantOpen && !onPhone(),
@@ -103,8 +111,6 @@ const persistedUi = (s: RootState) => ({
   terminalDockHeight: s.terminalDockHeight,
   detailsOpen: s.detailsOpen,
   workflowOpen: s.workflowOpen,
-  browserBeside: s.browserBeside,
-  browserBesideWidth: s.browserBesideWidth,
   terminalFontSize: s.terminalFontSize,
   terminalFitWidth: s.terminalFitWidth,
   singleKeyShortcuts: s.singleKeyShortcuts,
@@ -121,6 +127,7 @@ const persistedUi = (s: RootState) => ({
   sessionsLanes: s.sessionsLanes,
   savedLaunchDefaults: s.savedLaunchDefaults,
   savedRunViews: s.savedRunViews,
+  savedTiles: s.savedTiles,
   dismissedUpdates: s.dismissedUpdates,
   sysboxNudgeDismissed: s.sysboxNudgeDismissed,
   onboarded: s.onboarded,
@@ -159,6 +166,7 @@ export function createRootStore() {
         ...createCostSlice(...a),
         ...createTimelineSlice(...a),
         ...createLanesSlice(...a),
+        ...createTilesSlice(...a),
         ...createDiffSlice(...a),
         ...createFilesSlice(...a),
         ...createCollaborationSlice(...a),
@@ -244,7 +252,10 @@ export function createRootStore() {
             laneGroup: stored.laneGroup === 'owner' ? 'owner' : 'status',
             laneHidden: normalizeLaneHidden(stored.laneHidden),
             sessionsLanes: stored.sessionsLanes === true,
+            savedTiles: normalizeSavedTiles(stored.savedTiles),
             sidebarWidth: Math.min(maxSidebarWidth, Math.max(minSidebarWidth, Number(stored.sidebarWidth) || current.sidebarWidth)),
+            launchWidth: Math.min(maxLaunchWidth, Math.max(minLaunchWidth, Number(stored.launchWidth) || current.launchWidth)),
+            runDetailsWidth: Math.min(maxRunDetailsWidth, Math.max(minRunDetailsWidth, Number(stored.runDetailsWidth) || current.runDetailsWidth)),
             // A card's notification opens the panel whatever was stored.
             assistantOpen: openedForACard() || (stored.assistantOpen === true && !onPhone()),
             assistantWidth: clampAssistantWidth(Number(stored.assistantWidth) || current.assistantWidth),

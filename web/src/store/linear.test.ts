@@ -87,7 +87,7 @@ describe('loadLinear', () => {
 describe('the Linear nav entry', () => {
   it('appears only for a member with a key', async () => {
     const { surfaces } = await import('@/lib/surfaces')
-    const { capability } = await import('@/store/hooks')
+    const { capability } = await import('@/lib/capability')
     const base = capability({ gateway: 'test', methods: ['linear.issues'], ws: [] })
     expect(surfaces({ ...base, linearConnected: false }).some((s) => s.name === 'linear')).toBe(false)
     expect(surfaces({ ...base, linearConnected: true }).some((s) => s.name === 'linear')).toBe(true)
@@ -97,7 +97,7 @@ describe('the Linear nav entry', () => {
 describe('the Linear page without a key', () => {
   it('is withheld only when the server lacks linear.issues', async () => {
     const { withheld } = await import('@/lib/surfaces')
-    const { capability } = await import('@/store/hooks')
+    const { capability } = await import('@/lib/capability')
     const without = capability({ gateway: 'test', methods: ['linear.status'], ws: [] })
     const withMethod = capability({ gateway: 'test', methods: ['linear.issues'], ws: [] })
     expect(withheld('linear', { ...withMethod, linearConnected: false })).toBe(false)

@@ -105,6 +105,19 @@ it('shows the pull request with its failing checks, and sends one check or one c
   expect(vi.mocked(api.runRoomPost).mock.calls[1][0].body).toContain('Inline review by bob: upload.go:42 (RIGHT)\nCap the retries.')
 })
 
+it('offers the same pull request as a More item that opens its checks, for a header too narrow for the row', async () => {
+  vi.mocked(api.runPRFeedback).mockResolvedValue(feedback({ checks: [lint] }))
+  const record = toRecord(run({ id: 'run_pr_more' }))
+  useStore.setState({ runs: { [record.id]: record } })
+  function Narrow() {
+    const { more, panel } = useRunPullRequest(record, agent, 'Claude Code')
+    return <>{panel}{more.map((item) => <button key={item.id} onClick={() => item.onSelect(null)}>{item.label}: {item.description}</button>)}</>
+  }
+  render(<Narrow />)
+  fireEvent.click(await screen.findByRole('button', { name: 'Pull request #7: 1 failing' }))
+  expect(await screen.findByRole('dialog', { name: 'Pull request #7' })).toBeTruthy()
+})
+
 const docs: RunPRCheck = { name: 'docs', status: 'completed', conclusion: 'success' }
 
 it.each<[Partial<RunPRFeedbackResult>, string]>([

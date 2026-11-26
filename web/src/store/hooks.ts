@@ -1,11 +1,12 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useSyncExternalStore } from 'react'
 import { useShallow } from 'zustand/react/shallow'
+import { capability, type Capability } from '@/lib/capability'
 import { useClock } from '@/lib/clock'
 import { deviceNeeds, type DeviceNeed, type StateContext } from '@/lib/needs-you'
 import { isAdminRole } from '@/lib/permissions'
 import { isSudo } from '@/lib/run-requests'
 import { presentRun, type PresentationState, type RunPresentation } from '@/lib/status'
-import type { GatewayCapabilities, Member, Run, RunStatusCause, RunWait, ServerInfo } from '@/lib/types'
+import type { Member, Run, RunStatusCause, RunWait, ServerInfo } from '@/lib/types'
 import { unansweredQuestions } from '@/store/collaboration'
 import { runPeople, runWatchers } from '@/store/presence'
 import type { RunRecord } from '@/store/runs'
@@ -138,59 +139,6 @@ export function useListedRuns(workspace: string): RunRow[] {
 
 const workspaceAccessFeature = 'workspace-access'
 
-export interface Capability {
-  hasMethod: (method: string) => boolean
-  hasLocal: (verb: string) => boolean
-  hasWS: (name: string) => boolean
-  /** The caller saved a Linear key; only `useCapability` knows. */
-  linearConnected?: boolean
-}
-
-/** For a gateway whose /capabilities did not answer: the read-and-steer set
- * every gateway serves, so an unknown gateway degrades to monitoring. */
-const LEGACY_REMOTE_METHODS: Record<string, true> = {
-  'server.info': true,
-  'workspace.list': true,
-  'workspace.get': true,
-  'member.list': true,
-  'run.launch': true,
-  'run.list': true,
-  'run.get': true,
-  'run.kill': true,
-  'run.pause': true,
-  'run.resume': true,
-  'run.inject': true,
-  'run.close': true,
-  'run.handoff': true,
-  'presence.roster': true,
-  'presence.heartbeat': true,
-  'presence.typing': true,
-  'workspace.timeline': true,
-  'cost.report': true,
-  'budget.get': true,
-  'run.overlaps': true,
-  'template.list': true,
-  'template.launch': true,
-}
-
-/** Null means a legacy remote monitor that predates /capabilities: the
- * fallback allowlist, both sockets, no local verbs. "*" means every method. */
-export function capability(caps: GatewayCapabilities | null): Capability {
-  if (caps === null) {
-    return {
-      hasMethod: (method) => LEGACY_REMOTE_METHODS[method] === true,
-      hasLocal: () => false,
-      hasWS: (name) => name === 'events' || name === 'attach',
-    }
-  }
-  const every = caps.methods.includes('*')
-  return {
-    hasMethod: (method) => every || caps.methods.includes(method),
-    hasLocal: (verb) => (caps.local ?? []).includes(verb),
-    hasWS: (name) => caps.ws.includes(name),
-  }
-}
-
 export function useCapability(): Capability {
   const caps = useStore((s) => s.capabilities)
   const linearConnected = useStore((s) => s.linear?.connected === true)
@@ -266,4 +214,16 @@ export function useHeaderPrimary(shown: boolean) {
 /** A saved snapshot is on screen: what it shows may be answered already, so nothing may act on it. */
 export function useStale(): boolean {
   return useStore((s) => s.staleSince !== null)
+}
+
+function subscribeResize(notify: () => void) {
+  window.addEventListener('resize', notify)
+  return () => window.removeEventListener('resize', notify)
+}
+
+/** The width of `main` with nothing docked beside it. */
+export function useMainWidth(): number {
+  const sidebar = useStore((s) => (s.sidebarCollapsed ? 0 : s.sidebarWidth))
+  const innerWidth = useSyncExternalStore(subscribeResize, () => window.innerWidth)
+  return innerWidth - sidebar
 }

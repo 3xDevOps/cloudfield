@@ -105,6 +105,12 @@
   visibility: inherit;
 }
 
+/* xterm paints its viewport black, which shows in the padding around the grid
+   and under a grid shorter than its pane. */
+div.xterm .xterm-viewport {
+  background-color: transparent;
+}
+
 @property --control-reach {
   syntax: '<number>';
   inherits: true;

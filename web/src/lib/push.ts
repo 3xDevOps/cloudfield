@@ -8,7 +8,7 @@ import { ApiError, type Api } from '@/lib/api'
 import { pushedEntry, routeFromQuery } from '@/lib/url-state'
 import { runRoute } from '@/routes/run/views'
 import type { RootStore } from '@/store'
-import { capability } from '@/store/hooks'
+import { capability } from '@/lib/capability'
 
 /** error is why the Android app's last attempt failed, in its own words. */
 export type PushState =
