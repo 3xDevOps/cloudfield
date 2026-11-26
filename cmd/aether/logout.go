@@ -40,15 +40,27 @@ func runLogout(args []string) error {
 	if *deleteAccount {
 		return deleteEdgeAccount(context.Background(), client, os.Stdout)
 	}
-	if err = client.Logout(context.Background()); err != nil {
+	unrevoked, err := client.Logout(context.Background())
+	if err != nil {
 		return err
 	}
-	fmt.Printf("signed out of %s: the device token is revoked at the edge and deleted here; the device key and your links stay\n", client.Host())
+	if unrevoked != nil {
+		fmt.Print(unrevokedText(client.Host(), unrevoked))
+	} else {
+		fmt.Printf("signed out of %s: the device token is revoked at the edge and deleted here; the device key and your links stay\n", client.Host())
+	}
 	dir, err := cli.Dir()
 	if err != nil {
 		return err
 	}
 	return printStillSignedIn(os.Stdout, dir)
+}
+
+// unrevokedText is what logout says after host, a retired address,
+// refused to revoke the token it deleted here.
+func unrevokedText(host string, u *edgeclient.Unrevoked) string {
+	return fmt.Sprintf("deleted the device token for %s here, but the edge did not confirm the sign-out: %s says it is retired and that its new address is %s.\n"+
+		"Device %s may still be signed in; revoke it on the Devices page of the sign-in origin of %s.\n", host, host, u.Replacement, u.Device.ID, u.Replacement)
 }
 
 // printStillSignedIn names the edges this machine still holds a token
