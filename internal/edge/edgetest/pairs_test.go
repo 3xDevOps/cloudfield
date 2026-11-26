@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"fmt"
 	"net/http"
 	"slices"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/cli"
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	"github.com/3xDevOps/cloudfield/internal/edge/relay"
+	edgestore "github.com/3xDevOps/cloudfield/internal/edge/store"
 	"github.com/3xDevOps/cloudfield/internal/version"
 )
 
@@ -98,9 +100,16 @@ func TestOriginPairs(t *testing.T) {
 	// through that pair's relay host; the one signed in at the second
 	// pair as issued there, though it also dialed through the first; the
 	// connector request at the relay origin it came in on.
-	rep, err := h.edgeStore().Retiring(context.Background(), time.Now())
-	if err != nil || len(rep.Origins) != 2 || rep.RecordingSince.IsZero() {
-		t.Fatalf("report = %+v, %v", rep, err)
+	var rep edgestore.Report
+	eventually(t, "the connector request recorded in the background", func() error {
+		rep, err = h.edgeStore().Retiring(context.Background(), time.Now())
+		if err == nil && (len(rep.Origins) != 2 || rep.Origins[1].ConnectorServers.Total != 1) {
+			err = fmt.Errorf("report %+v", rep)
+		}
+		return err
+	})
+	if rep.RecordingSince.IsZero() {
+		t.Fatalf("report = %+v", rep)
 	}
 	for i, want := range []struct {
 		relay, signin, server    string
