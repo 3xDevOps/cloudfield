@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 
@@ -14,6 +15,9 @@ import (
 
 	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
 )
+
+// longHost is a DNS name of the longest legal length, 253 bytes.
+var longHost = strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 61)
 
 var retiringCases = []struct {
 	value string
@@ -28,6 +32,7 @@ var retiringCases = []struct {
 	{"https://EDGE2.example.test", Retiring{}, false},
 	{"https://edge2.example.test/login?code=x", Retiring{}, false},
 	{"edge2.example.test", Retiring{}, false},
+	{"https://" + longHost + ":65535", Retiring{Replacement: "https://" + longHost + ":65535"}, true},
 }
 
 // TestRetiringHeader checks every value of Aether-Edge-Retiring an API
@@ -148,6 +153,7 @@ func TestRetiringNotice(t *testing.T) {
 		{"https://edge2.example.test", "2027-03-01", Retiring{Replacement: "https://edge2.example.test", Date: "2027-03-01"}, true},
 		{"https://edge2.example.test", "2027-13-01", Retiring{}, false},
 		{"https://edge2.example.test/", "", Retiring{}, false},
+		{"https://" + longHost + ":65535", "2027-03-01", Retiring{Replacement: "https://" + longHost + ":65535", Date: "2027-03-01"}, true},
 		{"https://edge2.example.test; date=2027-03-01", "", Retiring{}, false},
 		{"javascript:alert(1)", "", Retiring{}, false},
 		{"https://edge2.example.test\x1b]0;owned\x07", "", Retiring{}, false},

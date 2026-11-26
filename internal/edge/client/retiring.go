@@ -35,7 +35,7 @@ func (c *Client) RetiringNotice(ctx context.Context) (Retiring, bool, error) {
 	if err != nil || info.Retiring == "" {
 		return Retiring{}, false, err
 	}
-	if !printable(info.Retiring) || !canonicalOrigin(info.Retiring) || (info.RetiringDate != "" && !edgeproto.ValidDate(info.RetiringDate)) {
+	if clean(info.Retiring) != info.Retiring || !canonicalOrigin(info.Retiring) || (info.RetiringDate != "" && !edgeproto.ValidDate(info.RetiringDate)) {
 		return Retiring{}, false, nil
 	}
 	return Retiring{Replacement: info.Retiring, Date: info.RetiringDate}, true, nil
@@ -64,7 +64,7 @@ func (c *Client) observe(resp *http.Response) {
 
 func parseRetiring(value string) (Retiring, bool) {
 	replacement, date, ok := edgeproto.ParseRetiring(value)
-	if !ok || !printable(replacement) {
+	if !ok || clean(replacement) != replacement {
 		return Retiring{}, false
 	}
 	return Retiring{Replacement: replacement, Date: date}, true
