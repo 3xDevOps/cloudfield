@@ -27,6 +27,7 @@ func init() {
 			"cloudfield agent logins remove <login>\n" +
 			"cloudfield agent logins order <login>...\n" +
 			"cloudfield agent logins auto <login> on|off\n" +
+			"cloudfield agent logins share <login> on|off\n" +
 			"cloudfield agent add <name> [--enhanced] [--standard <argv>] [--background <argv>] [--acp <argv>] [--acp-mode <id>] [--login <path>]\n" +
 			"cloudfield agent remove <name>",
 		example: "cloudfield agent list --json\n" +

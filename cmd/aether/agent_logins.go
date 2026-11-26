@@ -88,6 +88,8 @@ func agentLogins(args []string) error {
 			return orderLogins(args[1:])
 		case "auto":
 			return automaticLogin(args[1:])
+		case "share":
+			return shareLogin(args[1:])
 		}
 	}
 	const usage = "usage: cloudfield agent logins [<agent>] [--json]"
@@ -290,6 +292,28 @@ func automaticLogin(args []string) error {
 			fmt.Printf("login %s: Cloudfield may choose it and move sessions onto it\n", args[0])
 		} else {
 			fmt.Printf("login %s: used only when you name it with cloudfield session --login %s\n", args[0], args[0])
+		}
+		return nil
+	})
+}
+
+func shareLogin(args []string) error {
+	if len(args) != 2 || (args[1] != "on" && args[1] != "off") {
+		return errors.New("usage: cloudfield agent logins share <login> on|off")
+	}
+	return withLogins(func(c *protocol.Client, logins []protocol.AgentLogin) error {
+		id, err := loginID(logins, args[0])
+		if err != nil {
+			return err
+		}
+		on := args[1] == "on"
+		if err := c.Call(protocol.MethodAgentLoginShare, protocol.AgentLoginShareParams{Agent: addedLoginsAgent, LoginID: id, Shared: on}, nil); err != nil {
+			return err
+		}
+		if on {
+			fmt.Printf("login %s: members you share your account with may run on it (cloudfield account list names them)\n", args[0])
+		} else {
+			fmt.Printf("login %s: only your own sessions run on it; Cloudfield moves teammates' sessions off it, and stops those no other login can run\n", args[0])
 		}
 		return nil
 	})
