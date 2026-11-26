@@ -833,7 +833,7 @@ open_app() {
 		;;
 	esac
 	if [ ! -f "$tmp/gui-build.out" ]; then
-		open_failure="\`aether gui build\` ran without its output being read: ${fifo_err}"
+		open_failure="\`aether gui build\` ran without its output being read: ${fifo_err:-tee did not write $tmp/gui-build.out}"
 		return 1
 	fi
 	launcher="$(sed -n "s/^${line} //p" "$tmp/gui-build.out" | tail -n 1)"

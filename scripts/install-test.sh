@@ -645,6 +645,13 @@ printed "  open Cloudfield from your applications to link your server, or in a t
 tail -n 1 "$out" | grep -q "^aether install: the desktop app is installed but did not open: \`aether gui build\` ran without its output being read: mkfifo: cannot create fifo '.*/gui-build.fifo': Operation not supported$" ||
 	fail "the last line is not mkfifo's error"
 
+# The checks for someone to see the app come first, so a run nobody watches
+# says nothing about the FIFO either.
+reset "--role client without FIFOs or a display says nothing about opening"
+STUB_MKFIFO_FAILS=1 AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
+ran "aether gui build"
+not_opened
+
 reset "--role client whose build fails does not open the app"
 GUI_FAILS=1 DISPLAY=:0 AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
 not_opened

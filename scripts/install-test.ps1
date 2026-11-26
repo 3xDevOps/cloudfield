@@ -570,6 +570,17 @@ func main() {
     if ([Console]::IsOutputRedirected) {
         Assert-AetherTest (-not (Test-AetherSomeoneToSee)) 'a redirected console counted as someone to see the app'
     }
+    else {
+        # Run by hand from a console: CI alone must refuse.
+        $oldCI = $env:CI
+        $env:CI = 'true'
+        try {
+            Assert-AetherTest (-not (Test-AetherSomeoneToSee)) 'CI counted as someone to see the app'
+        }
+        finally {
+            $env:CI = $oldCI
+        }
+    }
 
     # A token Windows treats as Administrator is elevated, so its label is
     # High; a hosted runner's is. An operator token can be elevated without
