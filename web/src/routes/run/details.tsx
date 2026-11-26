@@ -184,6 +184,7 @@ function Facts({ run, agent, agentName, inset }: { run: RunRecord; agent: AgentT
       <dl className="text-ui-sm">
         <Row label="Owner"><Person id={run.member_id} /></Row>
         {run.account_member_id && run.account_member_id !== run.member_id && <Row label="Agent account"><Person id={run.account_member_id} /></Row>}
+        {run.account_login_name && <Row label="Login">{run.account_login_name}{run.account_login_per_use && ', billed per use'}</Row>}
         <Row label="Agent">{agentName} · {modeLabel[run.mode] ?? run.mode}</Row>
         <Row label="Branch">
           <Button variant="quiet" size="sm" hint="Copy branch name" aria-label={`Copy branch ${run.branch}`} className="max-w-full" onClick={(event) => void copyText(run.branch, event.currentTarget)}>
