@@ -1128,9 +1128,13 @@ against the edge key it pinned, and otherwise keeps none; neither refuses the
 `ready`. It stores the list with the time it came beside the owner, in
 `<data dir>/edge/keys/sha256-<fingerprint>/notices.json`, and each `ready`
 replaces it, so a notice the edge stops sending is gone at the next connection.
-Pinning a key deletes that key's `notices.json` first; the file of the key it
-replaces stays in that key's directory, unread, until that key is pinned again,
-which deletes it. A list that arrived with the `ready` that pinned the key is
+A missing or bad signature and a signed empty list both clear the stored
+notices: whoever answers for a relay host can suppress a warning until the next
+real connection, but cannot add a notice or change a replacement.
+Pinning a key, by the first connection or `edge trust`, deletes the
+`notices.json` of the key it replaces and of the key it pins, and a list
+verified under an earlier pin is never written after it. Stored notices name
+the server id that verified them and count for no other. A list that arrived with the `ready` that pinned the key is
 trusted as that pin is, and only shown. An edge or a server that does not know
 the fields ignores them, and a server that sends no nonce gets the `ready` it
 got before.
