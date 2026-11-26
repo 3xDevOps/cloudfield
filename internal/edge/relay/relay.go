@@ -253,6 +253,9 @@ func New(ctx context.Context, cfg Config) (*Relay, error) {
 	if len(announced) > edgeproto.MaxRelayOrigins {
 		return nil, fmt.Errorf("relay: %d relay origins, limit %d", len(announced), edgeproto.MaxRelayOrigins)
 	}
+	if len(cfg.Notices) > edgeproto.MaxRelayOrigins {
+		return nil, fmt.Errorf("relay: %d notices, limit %d", len(cfg.Notices), edgeproto.MaxRelayOrigins)
+	}
 	for _, n := range cfg.Notices {
 		if !edgeproto.NoticeOrigin(n.Origin) || !edgeproto.NoticeOrigin(n.Replacement) {
 			return nil, fmt.Errorf("relay: the notice for %s names %s; a notice names origins of at most 267 bytes without a leading zero in the port", n.Origin, n.Replacement)

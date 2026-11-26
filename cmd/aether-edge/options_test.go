@@ -462,6 +462,11 @@ func TestRetiredPairs(t *testing.T) {
 	if _, err = parse(strings.Join(many, ",")); err == nil || err.Error() != "--retired-pairs names 17 pairs; an edge keeps at most 16" {
 		t.Errorf("17 retired pairs: %v", err)
 	}
+	_, err = parse(strings.Join(many[:16], ","), "--retiring-pairs", "https://edge3.example.net https://edge2.example.net")
+	if want := "--retiring-pairs and --retired-pairs name 17 pairs together, and a server is sent at most 16 notices: " +
+		"retire this pair once fewer pairs are retiring or retired"; err == nil || err.Error() != want {
+		t.Errorf("16 retired and 1 retiring: %v, want %q", err, want)
+	}
 }
 
 // Every AETHER_EDGE_ variable is also read as CLOUDFIELD_EDGE_, which wins

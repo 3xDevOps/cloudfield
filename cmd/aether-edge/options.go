@@ -381,6 +381,10 @@ func parseRetiredPairs(list, scheme, signin, relay string, more []edge.Pair, ret
 	if len(out) > maxRetiredPairs {
 		return nil, fmt.Errorf("--retired-pairs names %d pairs; an edge keeps at most %d", len(out), maxRetiredPairs)
 	}
+	if n := len(out) + len(retiring); n > edgeproto.MaxRelayOrigins {
+		return nil, fmt.Errorf("--retiring-pairs and --retired-pairs name %d pairs together, and a server is sent at most %d notices: "+
+			"retire this pair once fewer pairs are retiring or retired", n, edgeproto.MaxRelayOrigins)
+	}
 	return out, nil
 }
 

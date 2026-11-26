@@ -1,7 +1,9 @@
 package edge
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -10,6 +12,7 @@ import (
 	"testing"
 
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
+	"github.com/3xDevOps/cloudfield/internal/edge/relay"
 )
 
 // The retired pair of a test edge, which serves testSignin and testRelay.
@@ -401,5 +404,57 @@ func TestCanonicalOrigin(t *testing.T) {
 		if got := CanonicalOrigin(in); got != want {
 			t.Errorf("CanonicalOrigin(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestNoticeCap fills the notice list, one retiring pair and fifteen
+// retired: the relay starts and the signed ready goes over the wire and
+// verifies. One more retired pair is refused before the relay starts.
+func TestNoticeCap(t *testing.T) {
+	retired := func(n int) []Retired {
+		var out []Retired
+		for i := range n {
+			out = append(out, Retired{SigninOrigin: fmt.Sprintf("https://signin%d.old.example.test", i),
+				RelayOrigin: fmt.Sprintf("https://relay%d.old.example.test", i), Replacement: testRelay})
+		}
+		return out
+	}
+	configure := func(n int) func(*Config, *fakeProvider) {
+		return func(cfg *Config, p *fakeProvider) {
+			app := p.app()
+			app.ClientID, app.ClientSecret = "test-client-2", "test-secret-2"
+			cfg.MorePairs = []Pair{{SigninOrigin: testSignin2, RelayOrigin: testRelay2, GitHub: app}}
+			cfg.Retiring = []Retiring{{RelayOrigin: testRelay2, Replacement: testRelay}}
+			cfg.Retired = retired(n)
+		}
+	}
+	h := newHarness(t, configure(edgeproto.MaxRelayOrigins-1))
+	cfg := h.svc.RelayConfig(0)
+	rl, err := relay.New(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = rl.Shutdown(t.Context())
+	serverID, nonce := testServerID(t), bytes.Repeat([]byte{7}, edgeproto.NonceSize)
+	sig := edgeproto.SignNotices(h.svc.key, serverID, testRelay, nonce, cfg.Notices)
+	raw, err := edgeproto.EncodeControl(edgeproto.Ready{ServerID: serverID, State: edgeproto.StateClaimed,
+		EdgeKey: h.svc.EdgeKey(), Notices: cfg.Notices, NoticesSignature: sig})
+	if err != nil {
+		t.Fatalf("encode a ready with %d notices: %v", len(cfg.Notices), err)
+	}
+	m, err := edgeproto.DecodeControl(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready := m.(edgeproto.Ready)
+	if len(ready.Notices) != edgeproto.MaxRelayOrigins ||
+		edgeproto.VerifyNotices(h.svc.EdgeKey(), serverID, testRelay, nonce, ready.Notices, ready.NoticesSignature) != nil {
+		t.Errorf("decoded ready: %d notices, signature verifies: %v", len(ready.Notices),
+			edgeproto.VerifyNotices(h.svc.EdgeKey(), serverID, testRelay, nonce, ready.Notices, ready.NoticesSignature))
+	}
+
+	h = newHarness(t, configure(edgeproto.MaxRelayOrigins))
+	if _, err = relay.New(t.Context(), h.svc.RelayConfig(0)); err == nil || err.Error() != "relay: 17 notices, limit 16" {
+		t.Errorf("17 notices: %v", err)
 	}
 }

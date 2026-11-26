@@ -1,0 +1,610 @@
+// Package relay is the edge's relay. It enrolls servers over their control
+// channel and splices client SSH connections to them without decrypting
+// them, and forwards MCP connector requests to them over pooled http
+// connections. docs/edge.md describes the edge; internal/edge/proto holds
+// the wire contract.
+package relay
+
+import (
+	"cmp"
+	"context"
+	"crypto/ed25519"
+	"errors"
+	"fmt"
+	"log/slog"
+	"maps"
+	"net/http"
+	"net/netip"
+	"slices"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
+	"github.com/coder/websocket"
+)
+
+// Directory is what the relay needs from the edge's account service.
+// Every error it returns for a refusal is an edgeproto.Refusal; any other
+// error is logged and answered as an internal error.
+type Directory interface {
+	// Authenticate returns the account and device a device token belongs
+	// to, or edgeproto.RefusalTokenRevoked for a token it does not hold.
+	Authenticate(ctx context.Context, token string) (edgeproto.Account, edgeproto.Device, error)
+	// Admit returns nil when account may open an ssh connection to
+	// serverID, edgeproto.RefusalUnknownServer when serverID is not
+	// claimed, and edgeproto.RefusalNotMember otherwise.
+	Admit(ctx context.Context, serverID string, account edgeproto.Account) error
+	// Known returns nil when serverID is claimed at this edge, and
+	// edgeproto.RefusalUnknownServer otherwise.
+	Known(ctx context.Context, serverID string) error
+	// AdmitClaim returns nil when account, connecting from addr, may open
+	// a claim connection to serverID: edgeproto.RefusalTooMany past a
+	// limit per account, per address or per server, and
+	// edgeproto.RefusalClaimed when serverID has an owner.
+	AdmitClaim(ctx context.Context, serverID string, account edgeproto.Account, addr netip.Addr) error
+	// Enroll reports whether serverID is claimed, and records name,
+	// policy and agentVersion, from its hello, and origin, the relay
+	// origin it enrolled at, for a server that is. It returns
+	// edgeproto.RefusalServerBlocked for a server id the operator
+	// blocked.
+	Enroll(ctx context.Context, serverID, name string, policy edgeproto.AccessPolicy, origin, agentVersion string) (claimed bool, err error)
+	// ReplaceDirectory stores the directory a claimed server pushed.
+	ReplaceDirectory(ctx context.Context, serverID string, entries []edgeproto.DirectoryEntry) error
+	// Unenroll forgets serverID after its operator ran
+	// `aether-server edge leave`.
+	Unenroll(ctx context.Context, serverID string) error
+	// RecordClaim records owner as the owner of serverID, which has none,
+	// after serverID reported that a claim connection the relay opened
+	// for owner presented its claim code. name, policy and agentVersion
+	// are from its hello, and origin the relay origin it enrolled at.
+	RecordClaim(ctx context.Context, serverID, name string, policy edgeproto.AccessPolicy, owner edgeproto.Account, origin, agentVersion string) error
+	// TransferOwner records owner as the owner of the claimed server
+	// serverID, which reported the transfer.
+	TransferOwner(ctx context.Context, serverID string, owner edgeproto.Principal) error
+	// DropOwner records that the claimed server serverID reported it has
+	// no owner.
+	DropOwner(ctx context.Context, serverID string) error
+	// PendingDeletions returns the account deletions owed to serverID,
+	// and DeletionApplied forgets one once serverID applied it.
+	PendingDeletions(ctx context.Context, serverID string) ([]edgeproto.AccountDeleted, error)
+	DeletionApplied(ctx context.Context, serverID string, d edgeproto.AccountDeleted) error
+}
+
+// ConnectorRecorder records that the claimed server serverID got a
+// connector request through the relay origin origin.
+type ConnectorRecorder interface {
+	ConnectorUsed(ctx context.Context, serverID, origin string) error
+}
+
+// EgressStore persists the monthly egress counter so the budget survives
+// a restart. A month is "2006-01" in UTC.
+type EgressStore interface {
+	Egress(ctx context.Context, month string) (int64, error)
+	AddEgress(ctx context.Context, month string, n int64) error
+}
+
+// Config configures a Relay.
+type Config struct {
+	// Origin is the edge's relay origin. Servers sign it to enroll, and
+	// grants name it as their issuer. MoreOrigins are further relay
+	// origins of the same edge, each on its own host name: a server
+	// enrolls at the origin whose host it dialed, and every grant for it
+	// names that origin, whichever origin the client came in on.
+	Origin      string
+	MoreOrigins []string
+	// Notices go into every Ready to a server that sent a notice nonce,
+	// signed for it. Each names two of the relay origins.
+	Notices []edgeproto.Notice
+	// EdgeKey signs grants. Servers pin its public half.
+	EdgeKey   ed25519.PrivateKey
+	Directory Directory
+	Egress    EgressStore
+	// Connectors, when set, records connector requests at most once a
+	// connectorUseInterval per server and relay origin.
+	Connectors ConnectorRecorder
+	// EgressBudget is how many bytes the relay sends in a calendar month
+	// (UTC) before it throttles every splice. Zero means no budget.
+	EgressBudget int64
+	// DirectoryInterval overrides the least time between two stores of
+	// one server's directory. Zero keeps the default.
+	DirectoryInterval time.Duration
+	// ReturnWait overrides edgeproto.HTTPReturnWait. Zero keeps it.
+	ReturnWait time.Duration
+}
+
+const (
+	handshakeTimeout = 10 * time.Second
+	writeTimeout     = 10 * time.Second
+	directoryTimeout = 10 * time.Second
+	// directoryInterval is the least time between two stores of one
+	// server's directory. A store holds the edge database's write lock,
+	// which sign-ins and connections of every account also take, so no
+	// server may take it at will; a push in between waits, and only the
+	// latest waiting push is stored.
+	directoryInterval = 5 * time.Second
+	egressFlushEvery  = time.Minute
+	// throttledRate is the bytes per second every splice together may
+	// carry once the egress budget is spent: dozens of terminals, no bulk
+	// transfer, and at most about 650 GiB over a 31-day month.
+	throttledRate = 256 << 10
+	// throttledChunk bounds one throttled read, and so how long a read of
+	// one server holds back another server's.
+	throttledChunk = 4 << 10
+	// maxUnclaimed bounds unclaimed registrations edge-wide. Each holds a
+	// control socket for up to UnclaimedTTL, and the limits per address
+	// block do not bound a sender holding many blocks.
+	maxUnclaimed = 10000
+	// maxConnsPerAddress bounds the public listener's open connections
+	// from one edgeproto.RateLimitKey block. It sits far above what an
+	// office behind one NAT address holds: MaxConnsPerDevice SSH streams
+	// per install, plus sign-in pages.
+	maxConnsPerAddress = 1024
+	// drainRetryAfter and drainJitter are the reconnect hint drain gives
+	// servers: long enough for a restarted edge to listen again, and
+	// spread so its servers do not enroll at once.
+	drainRetryAfter = 3 * time.Second
+	drainJitter     = 5 * time.Second
+	// spliceGrace is how long Shutdown lets relayed connections finish
+	// before it closes them.
+	spliceGrace = 2 * time.Second
+)
+
+// Relay is the edge relay. Register its HTTP endpoints on the edge's mux
+// and serve the edge's HTTPS on Listener.
+type Relay struct {
+	origin string
+	// origins holds each relay origin by host name. announced lists them
+	// for Ready, nil while the edge has one.
+	origins   map[string]string
+	announced []string
+	notices   []edgeproto.Notice
+	key       ed25519.PrivateKey
+	pub       ed25519.PublicKey
+	dir       Directory
+	store     EgressStore
+	budget    int64
+	ctx       context.Context
+	stop      context.CancelCauseFunc
+	flushed   chan struct{}
+
+	// Durations, rates and limits that tests shorten.
+	attachDeadline     time.Duration
+	httpConnWait       time.Duration
+	returnWait         time.Duration
+	unclaimedTTL       time.Duration
+	pingInterval       time.Duration
+	idleTimeout        time.Duration
+	directoryInterval  time.Duration
+	throttleRate       int64
+	maxUnclaimed       int
+	maxConnsPerAddress int
+
+	mu      sync.Mutex
+	closing bool
+	servers map[string]*registration
+	conns   map[string]*relayConn
+	// httpWaiting counts, per server id, the requests waiting for one of
+	// its http connections or for it to enroll again.
+	httpWaiting map[string]int
+	// httpLimited holds, per server id, when a request to it was last
+	// refused with errHTTPLimit, for httpLimitQuiet.
+	httpLimited map[string]time.Time
+	// away holds, per claimed server whose control channel ended within
+	// returnWait, when it ended and a channel closed when the server
+	// enrolls again.
+	away map[string]*absence
+	// claims holds, by connection id, the claim connections a server may
+	// still report as claimed.
+	claims map[string]claimGrant
+	// directories holds, per server id, the directory waiting to be
+	// stored.
+	directories map[string]*directoryWrite
+	// connectors records connector requests, and connectorUsed holds,
+	// for each server and relay origin, when one was last recorded, is
+	// being recorded, or may next be tried after a failure, less
+	// connectorUseInterval. connectorPruneAt is the size at which expired
+	// entries are next dropped.
+	connectors       ConnectorRecorder
+	connectorUsed    map[connectorUse]time.Time
+	connectorPruneAt int
+	// recording holds the connector writes under way, which Shutdown
+	// waits for before the store behind connectors closes.
+	recording sync.WaitGroup
+
+	addrMu    sync.Mutex
+	addrConns map[netip.Prefix]int
+
+	// http pools the http connections of every server, keyed by server
+	// id as the host of the request URL.
+	http *http.Transport
+
+	pace pacer
+
+	flushMu sync.Mutex // serializes saves and month changes
+	// ended and endedBytes are the month that ended and what it is still
+	// owed, guarded by flushMu.
+	ended      string
+	endedBytes int64
+	egress     egressMeter
+	bytes      atomic.Uint64
+	// refusalsMu guards refusalsMap and connectorMap.
+	refusalsMu   sync.Mutex
+	refusalsMap  map[string]uint64
+	connectorMap map[ConnectorKey]uint64
+}
+
+// New returns a relay and starts its egress accounting.
+func New(ctx context.Context, cfg Config) (*Relay, error) {
+	origins := map[string]string{}
+	var announced []string
+	for _, o := range append([]string{cfg.Origin}, cfg.MoreOrigins...) {
+		c, err := edgeproto.Origin(o)
+		if err != nil {
+			return nil, fmt.Errorf("relay: %w", err)
+		}
+		host := edgeproto.OriginHost(c)
+		if origins[host] != "" {
+			return nil, fmt.Errorf("relay: relay origins %s and %s share the host name %s", origins[host], c, host)
+		}
+		origins[host] = c
+		announced = append(announced, c)
+	}
+	if len(announced) > edgeproto.MaxRelayOrigins {
+		return nil, fmt.Errorf("relay: %d relay origins, limit %d", len(announced), edgeproto.MaxRelayOrigins)
+	}
+	for _, n := range cfg.Notices {
+		if !edgeproto.NoticeOrigin(n.Origin) || !edgeproto.NoticeOrigin(n.Replacement) {
+			return nil, fmt.Errorf("relay: the notice for %s names %s; a notice names origins of at most 267 bytes without a leading zero in the port", n.Origin, n.Replacement)
+		}
+		if n.State == edgeproto.NoticeRetired && (slices.Contains(announced, n.Origin) || !slices.Contains(announced, n.Replacement)) {
+			return nil, fmt.Errorf("relay: the retired notice for %s names %s: %s must not be a relay origin of this edge, and %s must be one", n.Origin, n.Replacement, n.Origin, n.Replacement)
+		}
+		if n.State != edgeproto.NoticeRetired && (!slices.Contains(announced, n.Origin) || !slices.Contains(announced, n.Replacement)) {
+			return nil, fmt.Errorf("relay: the notice for %s names %s, and both must be relay origins of this edge", n.Origin, n.Replacement)
+		}
+	}
+	origin := announced[0]
+	if len(announced) == 1 {
+		announced = nil
+	}
+	switch {
+	case len(cfg.EdgeKey) != ed25519.PrivateKeySize:
+		return nil, fmt.Errorf("relay: edge key is %d bytes, want %d", len(cfg.EdgeKey), ed25519.PrivateKeySize)
+	case cfg.Directory == nil || cfg.Egress == nil:
+		return nil, errors.New("relay: directory and egress store are required")
+	case cfg.EgressBudget < 0:
+		return nil, fmt.Errorf("relay: egress budget %d is negative", cfg.EgressBudget)
+	}
+	month := monthOf(time.Now())
+	used, err := cfg.Egress.Egress(ctx, month)
+	if err != nil {
+		return nil, fmt.Errorf("relay: load egress for %s: %w", month, err)
+	}
+	r := &Relay{
+		origin:             origin,
+		origins:            origins,
+		announced:          announced,
+		notices:            cfg.Notices,
+		key:                cfg.EdgeKey,
+		pub:                cfg.EdgeKey.Public().(ed25519.PublicKey),
+		dir:                cfg.Directory,
+		store:              cfg.Egress,
+		budget:             cfg.EgressBudget,
+		flushed:            make(chan struct{}),
+		attachDeadline:     edgeproto.AttachDeadline,
+		httpConnWait:       edgeproto.HTTPConnWait,
+		returnWait:         cmp.Or(cfg.ReturnWait, edgeproto.HTTPReturnWait),
+		unclaimedTTL:       edgeproto.UnclaimedTTL,
+		pingInterval:       edgeproto.PingInterval,
+		idleTimeout:        edgeproto.ControlIdleTimeout,
+		directoryInterval:  directoryInterval,
+		throttleRate:       throttledRate,
+		maxUnclaimed:       maxUnclaimed,
+		maxConnsPerAddress: maxConnsPerAddress,
+		servers:            map[string]*registration{},
+		conns:              map[string]*relayConn{},
+		httpWaiting:        map[string]int{},
+		httpLimited:        map[string]time.Time{},
+		away:               map[string]*absence{},
+		claims:             map[string]claimGrant{},
+		directories:        map[string]*directoryWrite{},
+		connectors:         cfg.Connectors,
+		connectorUsed:      map[connectorUse]time.Time{},
+		connectorPruneAt:   connectorPruneMin,
+		addrConns:          map[netip.Prefix]int{},
+		refusalsMap:        map[string]uint64{},
+		connectorMap:       map[ConnectorKey]uint64{},
+	}
+	if cfg.DirectoryInterval > 0 {
+		r.directoryInterval = cfg.DirectoryInterval
+	}
+	r.http = &http.Transport{
+		DialContext:         r.dialHTTP,
+		MaxConnsPerHost:     edgeproto.MaxHTTPConnsPerServer,
+		MaxIdleConnsPerHost: edgeproto.MaxHTTPConnsPerServer,
+		IdleConnTimeout:     edgeproto.HTTPIdleTimeout,
+		DisableCompression:  true,
+	}
+	r.egress.month, r.egress.used = month, used
+	r.ctx, r.stop = context.WithCancelCause(context.Background())
+	go r.flushLoop()
+	return r, nil
+}
+
+// signNotices returns the relay's notices and their signature for the
+// server serverID, which dialed origin and sent nonce in its hello;
+// nothing when the nonce is not NonceSize bytes, as from a server that
+// does not know notices.
+func (r *Relay) signNotices(serverID, origin string, nonce []byte) (edgeproto.Notices, []byte) {
+	if len(nonce) != edgeproto.NonceSize {
+		return nil, nil
+	}
+	return r.notices, edgeproto.SignNotices(r.key, serverID, origin, nonce, r.notices)
+}
+
+// Register adds the control, data, connect, claim and MCP endpoints to
+// mux, which serves the relay origin.
+func (r *Relay) Register(mux *http.ServeMux) {
+	mux.HandleFunc("GET "+edgeproto.PathServerControl, r.serveControl)
+	mux.HandleFunc("GET "+edgeproto.PathServerData, r.serveData)
+	mux.HandleFunc("GET "+edgeproto.PathConnect, func(w http.ResponseWriter, req *http.Request) {
+		r.serveConnect(w, req, edgeproto.KindSSH)
+	})
+	mux.HandleFunc("GET "+edgeproto.PathClaimConnect, func(w http.ResponseWriter, req *http.Request) {
+		r.serveConnect(w, req, edgeproto.KindClaim)
+	})
+	for _, p := range []string{edgeproto.PathMCP, edgeproto.PathMCP + "/", edgeproto.PathMCPResourceMetadata, edgeproto.PathMCPAuthServerMetadata} {
+		mux.HandleFunc(p, r.serveHTTP)
+	}
+}
+
+// Compression is off: the streams are already encrypted end to end, and
+// compressing attacker-influenced data beside secrets is how CRIME works.
+var acceptOptions = &websocket.AcceptOptions{CompressionMode: websocket.CompressionDisabled}
+
+// originOf is the relay origin req came in on. A host that names none of
+// them gets Origin: the edge's handler refuses such a host before it
+// reaches the relay.
+func (r *Relay) originOf(req *http.Request) string {
+	if o, ok := r.origins[edgeproto.RequestHost(req)]; ok {
+		return o
+	}
+	return r.origin
+}
+
+// Origin is the relay origin the claimed server serverID enrolled at,
+// which its grants and connector assertions must name, "" when it holds
+// no control channel.
+func (r *Relay) Origin(serverID string) string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	reg := r.servers[serverID]
+	if reg == nil || !reg.claimed || reg.ctx.Err() != nil {
+		return ""
+	}
+	return reg.origin
+}
+
+// Online reports whether serverID is claimed and holds a control channel.
+func (r *Relay) Online(serverID string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	reg := r.servers[serverID]
+	return reg != nil && reg.claimed && reg.ctx.Err() == nil
+}
+
+// Metrics is a snapshot of the relay's counters.
+type Metrics struct {
+	// Servers counts claimed servers holding a control channel;
+	// UnclaimedServers the unclaimed ones; ServersByProtocol all of them
+	// by the protocol version negotiated with each.
+	Servers           int
+	UnclaimedServers  int
+	ServersByProtocol map[int]int
+	// Draining is set once Shutdown started.
+	Draining bool
+	// MCPWaiting counts connector requests waiting for a connection of
+	// their server or for it to enroll again.
+	MCPWaiting int
+	// Splices counts attached connections.
+	Splices int
+	// BytesRelayed counts bytes sent to either side since the relay
+	// started; EgressThisMonth the calendar month's total, persisted.
+	BytesRelayed    uint64
+	EgressThisMonth int64
+	Throttled       bool
+	// Refusals counts refused connections and enrollments by reason.
+	Refusals map[string]uint64
+	// ServersByOrigin counts servers holding a control channel by the
+	// relay origin they enrolled at, every relay origin included.
+	// ConnectorRequests counts connector requests since the relay
+	// started by the relay origin they came in on and the protocol
+	// version of the server they were for, 0 when it was not connected.
+	ServersByOrigin   map[string]int
+	ConnectorRequests map[ConnectorKey]uint64
+}
+
+// ConnectorKey is a ConnectorRequests counter.
+type ConnectorKey struct {
+	Origin   string
+	Protocol int
+}
+
+// Metrics returns the relay's counters.
+func (r *Relay) Metrics() Metrics {
+	m := Metrics{ServersByProtocol: map[int]int{}, ServersByOrigin: map[string]int{}}
+	for _, o := range r.origins {
+		m.ServersByOrigin[o] = 0
+	}
+	r.mu.Lock()
+	m.Draining = r.closing
+	for _, reg := range r.servers {
+		m.ServersByProtocol[reg.version]++
+		m.ServersByOrigin[reg.origin]++
+		if reg.claimed {
+			m.Servers++
+		} else {
+			m.UnclaimedServers++
+		}
+	}
+	for _, c := range r.conns {
+		if c.spliced {
+			m.Splices++
+		}
+	}
+	for _, n := range r.httpWaiting {
+		m.MCPWaiting += n
+	}
+	r.mu.Unlock()
+	m.BytesRelayed = r.bytes.Load()
+	m.EgressThisMonth = r.egress.usage()
+	m.Throttled = r.throttled()
+	r.refusalsMu.Lock()
+	m.Refusals = maps.Clone(r.refusalsMap)
+	m.ConnectorRequests = maps.Clone(r.connectorMap)
+	r.refusalsMu.Unlock()
+	return m
+}
+
+func (r *Relay) countRefusal(reason string) {
+	r.refusalsMu.Lock()
+	r.refusalsMap[reason]++
+	r.refusalsMu.Unlock()
+}
+
+// RevokeDevice closes every live connection of a device whose token was
+// revoked and tells each server it reached.
+func (r *Relay) RevokeDevice(deviceID string) {
+	servers := r.closeConns(func(c *relayConn) bool { return c.deviceID == deviceID }, edgeproto.RefusalTokenRevoked)
+	for _, reg := range servers {
+		if err := reg.send(edgeproto.DeviceRevoked{DeviceID: deviceID}); err != nil {
+			slog.Warn("relay: device revocation not delivered", "server", reg.id, "error", err)
+		}
+	}
+}
+
+// AccountDeleted closes every live connection of the deleted account a and
+// sends each connected server among servers the deletions it is owed.
+func (r *Relay) AccountDeleted(a edgeproto.Account, servers []string) {
+	r.closeConns(func(c *relayConn) bool { return sameAccount(c.account, a) }, edgeproto.RefusalTokenRevoked)
+	r.mu.Lock()
+	var regs []*registration
+	for _, id := range servers {
+		if reg := r.servers[id]; reg != nil {
+			regs = append(regs, reg)
+		}
+	}
+	r.mu.Unlock()
+	for _, reg := range regs {
+		go r.deliverDeletions(reg)
+	}
+}
+
+func sameAccount(a, b edgeproto.Account) bool {
+	return a.Provider == b.Provider && a.Subject == b.Subject
+}
+
+// CloseServer closes every live connection to serverID.
+func (r *Relay) CloseServer(serverID string) {
+	r.closeConns(func(c *relayConn) bool { return c.serverID == serverID }, edgeproto.RefusalNotConnected)
+}
+
+// Unenroll tells serverID that its owner removed it at the edge, closes
+// its control channel and closes its connections.
+func (r *Relay) Unenroll(serverID string) {
+	r.mu.Lock()
+	reg := r.servers[serverID]
+	if reg != nil {
+		reg.unenrolled = true
+	}
+	if a := r.away[serverID]; a != nil {
+		close(a.back)
+		delete(r.away, serverID)
+	}
+	r.mu.Unlock()
+	if reg != nil {
+		if err := reg.send(edgeproto.Unenroll{}); err != nil {
+			slog.Warn("relay: unenroll not delivered", "server", serverID, "error", err)
+		}
+		reg.cancel(errUnenrolled)
+	}
+	r.CloseServer(serverID)
+}
+
+// closeConns cancels the connections match selects with cause and returns
+// the registrations of the servers they were for.
+func (r *Relay) closeConns(match func(*relayConn) bool, cause error) []*registration {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var regs []*registration
+	seen := map[string]bool{}
+	for _, c := range r.conns {
+		if !match(c) {
+			continue
+		}
+		c.cancel(cause)
+		if reg := r.servers[c.serverID]; reg != nil && !seen[c.serverID] {
+			seen[c.serverID] = true
+			regs = append(regs, reg)
+		}
+	}
+	return regs
+}
+
+// Shutdown refuses new control channels and connections, closes idle http
+// connections, sends drain to every server while relayed connections get
+// spliceGrace to finish, closes every control channel and connection, and
+// saves the egress counter. A drain still unsent when ctx ends is
+// abandoned.
+func (r *Relay) Shutdown(ctx context.Context) error {
+	r.mu.Lock()
+	r.closing = true
+	regs := make([]*registration, 0, len(r.servers))
+	for _, reg := range r.servers {
+		regs = append(regs, reg)
+	}
+	r.mu.Unlock()
+
+	r.http.CloseIdleConnections()
+	drain := edgeproto.Drain{RetryAfterMS: drainRetryAfter.Milliseconds(), JitterMS: drainJitter.Milliseconds()}
+	var wg sync.WaitGroup
+	wg.Go(func() { r.closeSplices(ctx) })
+	wg.Go(r.recording.Wait)
+	for _, reg := range regs {
+		wg.Go(func() {
+			if err := reg.sendWithin(ctx, drain); err != nil {
+				slog.Warn("relay: drain not delivered", "server", reg.id, "error", err)
+			}
+			reg.cancel(errDraining)
+		})
+	}
+	wg.Wait()
+	r.stop(errDraining)
+	<-r.flushed
+	return r.flushEgress(ctx, time.Now())
+}
+
+// closeSplices waits up to spliceGrace, or until ctx ends, for relayed
+// connections to end on their own, then closes the rest.
+func (r *Relay) closeSplices(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, spliceGrace)
+	defer cancel()
+	t := time.NewTicker(50 * time.Millisecond)
+	defer t.Stop()
+	for {
+		r.mu.Lock()
+		if len(r.conns) == 0 || ctx.Err() != nil {
+			for _, c := range r.conns {
+				c.cancel(edgeproto.RefusalNotConnected)
+			}
+			r.mu.Unlock()
+			return
+		}
+		r.mu.Unlock()
+		select {
+		case <-ctx.Done():
+		case <-t.C:
+		}
+	}
+}
