@@ -91,6 +91,9 @@ type Report struct {
 	// LastMessage is the agent's last message of the turn an Idle report
 	// ends, for a subsession's parent.
 	LastMessage string `json:"-"`
+	// SessionEnd marks the Idle report of a session's end. It ends no turn:
+	// Esc cuts one off with no stop.
+	SessionEnd bool `json:"-"`
 }
 
 const ReporterCommand = coordtransport.BinaryPath
@@ -223,7 +226,7 @@ func fromClaudeHook(hook claudeHook) (Report, bool) {
 		if hook.AgentID != "" {
 			return Report{InputUpdates: []domain.RunInputUpdate{{Operation: "clear", SessionID: session}}}, true
 		}
-		return Report{State: Idle, Reason: ReasonIdle, InputUpdates: []domain.RunInputUpdate{{
+		return Report{State: Idle, Reason: ReasonIdle, SessionEnd: true, InputUpdates: []domain.RunInputUpdate{{
 			Operation: "replace", Requests: []domain.RunInputRequest{},
 		}}}, true
 	}

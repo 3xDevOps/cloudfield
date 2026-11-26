@@ -1641,9 +1641,12 @@ provisional report ([subsessions](#subsessions)). The server sets
 Only there does a Claude Code `Stop` hook's `run.report` carry `last_message`,
 the first 4 KiB of the payload's `last_assistant_message`. For a stop that was
 held, the server forwards the held stop's message, not the one that follows
-the reminder, unless a prompt started a new turn first, as after Esc: that
-turn's end forwards its own message. For Codex, which loads no hooks, the
-server reads the last agent message of the thread's last turn from the
+the reminder, unless a prompt started a new turn first, typed into the
+reminder's continuation or after Esc: that turn's end forwards its own
+message. A Claude Code `SessionEnd` hook's `run.report` carries
+`session_end: true` and forwards nothing: `/clear` and `/exit` end no turn,
+and a turn cut off with Esc sends no `Stop`. For Codex, which loads no hooks,
+the server reads the last agent message of the thread's last turn from the
 app-server, for a subsession only and only when that turn completed. If the
 read fails, the report reads `(none)` and the server logs the error. A
 session with no parent sends and reads

@@ -292,7 +292,8 @@ func (s *Service) Report(ctx context.Context, run domain.RunID, p protocol.RunRe
 	}
 	report := agentstatus.Report{State: state, Reason: reportReason(p.Reason), InputUpdates: p.InputUpdates, SessionID: p.SessionID,
 		UsageLimit: p.UsageLimit && state == agentstatus.Idle, Tools: p.Tools && state == agentstatus.Working, Subagent: p.Subagent,
-		TurnStart: p.TurnStart && state == agentstatus.Working, LastMessage: p.LastMessage}
+		TurnStart: p.TurnStart && state == agentstatus.Working, LastMessage: p.LastMessage,
+		SessionEnd: p.SessionEnd && state == agentstatus.Idle}
 	if report.SessionID != "" && !domain.ValidAgentSessionID(report.SessionID) {
 		slog.Warn("coord: run.report carries an unusable agent conversation id; ignoring it", "run", run, "bytes", len(report.SessionID))
 		report.SessionID = ""

@@ -172,24 +172,34 @@ func TestSendStartsATurnOrSteersTheRunningOne(t *testing.T) {
 }
 
 // The last message is a completed turn's last agent message: a turn cut off
-// with Esc has none, and a list the app-server refuses is an error.
+// with Esc has none, and a list the app-server refuses is an error. It is
+// read from the thread asked for, whichever one the terminal shows.
 func TestLastMessageNeedsACompletedTurn(t *testing.T) {
 	srv := codexmock.New()
 	c, _ := dial(t, srv, "")
 	srv.StartThread("main", false, "")
 	waitThread(t, c)
 	ctx := t.Context()
-	if got, err := c.LastMessage(ctx); err == nil {
+	if got, err := c.LastMessage(ctx, "main"); err == nil {
 		t.Fatalf("last message before any turn = %q, want the app-server's refusal", got)
 	}
-	for _, tc := range []struct{ status, want string }{{"completed", "done"}, {"interrupted", ""}} {
+	for _, tc := range []struct{ status, want string }{{"interrupted", ""}, {"completed", "done"}} {
 		if err := c.Send(ctx, "go"); err != nil {
 			t.Fatal(err)
 		}
 		srv.EndTurn("main", tc.status, "looking", "done")
-		if got, err := c.LastMessage(ctx); err != nil || got != tc.want {
+		if got, err := c.LastMessage(ctx, "main"); err != nil || got != tc.want {
 			t.Fatalf("last message of a turn that %s = %q, %v; want %q", tc.status, got, err, tc.want)
 		}
+	}
+	srv.StartThread("second", false, "")
+	for deadline := time.Now().Add(5 * time.Second); c.Thread() != "second"; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the client never followed the terminal's new thread")
+		}
+	}
+	if got, err := c.LastMessage(ctx, "main"); err != nil || got != "done" {
+		t.Fatalf("last message of the thread the terminal left = %q, %v; want done", got, err)
 	}
 }
 

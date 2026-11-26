@@ -250,16 +250,18 @@ func (s *Scheduler) applyAgentReportIf(ctx context.Context, run domain.RunID, re
 			entry.parkedAt, entry.postParkActivity = time.Time{}, time.Time{}
 		}
 		if turnStarts {
-			// A held stop's message is not the next turn's: Esc ends the
-			// stop's continuation with no idle report.
+			// A held stop's continuation starts no turn. A prompt does,
+			// typed into it or after Esc ended it with no idle report, and
+			// that turn's end forwards its own message.
 			entry.heldMessage = ""
 		}
 	case agentstatus.Idle:
-		// An Enhanced run's session forwards its own turn ends, and a
-		// session's end repeats the idle report. turnEnded reads the store,
-		// so it runs off s.mu, for the turn that ends here.
-		if entry.launchMode == domain.LaunchTUI && turnEnd(execution) && priorReport.State == agentstatus.Working {
-			go s.turnEnded(entry, entry.turnStartedAt, cmp.Or(entry.heldMessage, report.LastMessage))
+		// An Enhanced run's session forwards its own turn ends. A session's
+		// end is none: it follows a stop, or a turn cut off with no report.
+		// forwardTurnEnd reads the store, so it runs off s.mu, for the turn
+		// that ends here.
+		if entry.launchMode == domain.LaunchTUI && turnEnd(execution) && priorReport.State == agentstatus.Working && !report.SessionEnd {
+			go s.forwardTurnEnd(entry, entry.turnStartedAt, cmp.Or(entry.heldMessage, report.LastMessage))
 		}
 		entry.stopHeld, entry.heldMessage = false, ""
 		if !finishes {

@@ -60,7 +60,7 @@ func TestClaudeDoesNotInventInput(t *testing.T) {
 	}
 	for _, event := range []string{"Stop", "StopFailure"} {
 		got, ok := FromClaudeHook([]byte(`{"hook_event_name":"` + event + `","session_id":"root"}`))
-		if !ok || got.State != Idle || len(got.InputUpdates) != 0 {
+		if !ok || got.State != Idle || got.SessionEnd || len(got.InputUpdates) != 0 {
 			t.Errorf("%s must only end execution: %+v", event, got)
 		}
 	}
@@ -91,8 +91,8 @@ func TestClaudeDoesNotInventInput(t *testing.T) {
 		}
 	}
 	got, ok := FromClaudeHook([]byte(`{"hook_event_name":"SessionEnd","session_id":"root"}`))
-	if !ok || len(got.InputUpdates) != 1 || got.InputUpdates[0].Operation != "replace" || got.InputUpdates[0].Requests == nil {
-		t.Fatalf("terminated session did not clear its request snapshot: %+v", got)
+	if !ok || !got.SessionEnd || len(got.InputUpdates) != 1 || got.InputUpdates[0].Operation != "replace" || got.InputUpdates[0].Requests == nil {
+		t.Fatalf("terminated session did not clear its request snapshot as a session's end: %+v", got)
 	}
 }
 

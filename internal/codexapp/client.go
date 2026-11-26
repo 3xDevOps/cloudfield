@@ -213,11 +213,10 @@ func (c *Client) runningTurn(ctx context.Context, thread string) string {
 	return turns.Data[0].ID
 }
 
-// LastMessage is the last agent message of the followed thread's last turn.
-// It is empty unless that turn completed: one cut off with Esc leaves the
-// thread idle too.
-func (c *Client) LastMessage(ctx context.Context) (string, error) {
-	thread := c.Thread()
+// LastMessage is the last agent message of thread's last turn. It is empty
+// unless that turn completed: one cut off with Esc leaves the thread idle
+// too.
+func (c *Client) LastMessage(ctx context.Context, thread string) (string, error) {
 	turns, err := acp.SendRequest[struct {
 		Data []struct {
 			Status string `json:"status"`

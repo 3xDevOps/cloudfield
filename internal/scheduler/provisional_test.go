@@ -93,7 +93,8 @@ func TestEnhancedChildRunForwardsItsLastMessageToItsParent(t *testing.T) {
 
 // A Standard subsession's container is marked as one, and its turn end is
 // forwarded once, with the agent's last message: that of the stop held for a
-// report when one was held. A session with no parent forwards nothing.
+// report when one was held. A session with no parent forwards nothing, and
+// neither does a session's end.
 func TestStandardChildRunForwardsItsTurnEndToItsParent(t *testing.T) {
 	shortProvisionalGrace(t)
 	e := newTestEnv(t, withServerBinary(fakeServerBinary(t, "#!/bin/sh\necho aether\n")))
@@ -113,6 +114,7 @@ func TestStandardChildRunForwardsItsTurnEndToItsParent(t *testing.T) {
 	idle := func(message string) agentstatus.Report {
 		return agentstatus.Report{State: agentstatus.Idle, Reason: agentstatus.ReasonIdle, LastMessage: message}
 	}
+	sessionEnd := agentstatus.Report{State: agentstatus.Idle, Reason: agentstatus.ReasonIdle, SessionEnd: true}
 	forwarded := func() []string {
 		var messages []string
 		for _, call := range c.provisionalReports() {
@@ -136,12 +138,12 @@ func TestStandardChildRunForwardsItsTurnEndToItsParent(t *testing.T) {
 	report(child.ID, working)
 	hold("pong")
 	report(child.ID, idle("I have nothing to report"))
-	// The session's end repeats the idle report.
+	// pi and omp repeat the idle report with every input update.
 	report(child.ID, idle(""))
 	waitFor(t, "the held stop's message", func() bool { return len(forwarded()) == 1 })
 
-	// Esc ends a held stop's continuation with no report, so the prompt
-	// after it starts a turn that forwards its own message.
+	// A prompt typed into a held stop's continuation, or after Esc ended it
+	// with no report, starts a turn that forwards its own message.
 	report(child.ID, working)
 	hold("cut off")
 	report(child.ID, working)
@@ -154,7 +156,11 @@ func TestStandardChildRunForwardsItsTurnEndToItsParent(t *testing.T) {
 	report(child.ID, working)
 	report(child.ID, idle("pang"))
 	waitFor(t, "the last turn's message", func() bool { return len(forwarded()) == 3 })
-	time.Sleep(provisionalGrace / 2)
+
+	// Esc sends no stop, so the session's end after it is no turn end.
+	report(child.ID, working)
+	report(child.ID, sessionEnd)
+	time.Sleep(provisionalGrace * 3 / 2)
 	if got := forwarded(); !slices.Equal(got, []string{"pong", "ping", "pang"}) {
 		t.Fatalf("forwarded %q, want each turn's message once", got)
 	}

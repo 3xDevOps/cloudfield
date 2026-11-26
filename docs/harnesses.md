@@ -992,8 +992,9 @@ report, as from an Enhanced subsession
 message for Claude Code, from the Stop hook, and for Codex, from the
 app-server. pi, oh-my-pi and OpenCode report the turn end without a message,
 so the report reads `(none)`; it still wakes the parent. So does a Codex turn
-you cut off with Esc, which leaves the thread idle like a finished one. An
-agent without status reporting forwards nothing.
+you cut off with Esc, which leaves the thread idle like a finished one. A
+Claude Code turn you cut off with Esc runs no Stop hook and forwards nothing.
+An agent without status reporting forwards nothing.
 
 ## Agent configuration: import and Files
 

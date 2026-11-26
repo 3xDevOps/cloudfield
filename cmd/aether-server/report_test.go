@@ -167,6 +167,17 @@ func TestReportClaudeSendsASubsessionsLastMessage(t *testing.T) {
 	}
 }
 
+// A session's end is sent as one: the server takes it for no turn end.
+func TestReportClaudeMarksASessionsEnd(t *testing.T) {
+	sock := newFakeCoordSocket(t)
+	withStdin(t, `{"hook_event_name":"SessionEnd","session_id":"abc"}`, true)
+	report([]string{"claude", "--socket", sock.path})
+	var params protocol.RunReportParams
+	if err := json.Unmarshal((<-sock.requests).Params, &params); err != nil || !params.SessionEnd || params.State != "waiting" {
+		t.Fatalf("run.report params = %+v, %v; want a waiting report marked as a session's end", params, err)
+	}
+}
+
 // TestReportClaudeIgnoresUnmappedEvents: an event that says nothing about
 // the agent's state costs no round trip at all.
 func TestReportClaudeIgnoresUnmappedEvents(t *testing.T) {

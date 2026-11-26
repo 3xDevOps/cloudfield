@@ -709,8 +709,9 @@ as `harness_session_id` so [a mode switch](enhanced-sessions.md#switching-a-runn
 can resume it. One that is not 1-128 characters of letters, digits, `.`,
 `_`, `:` and `-` is ignored and the rest of the report applies. An optional
 `last_message` on a `waiting` report is the agent's last message of the turn,
-which only a subsession's reporter sends
-([coordination.md](coordination.md#lifecycle-status-is-separate)).
+which only a subsession's reporter sends. An optional `session_end: true`
+marks a `waiting` report sent as the agent's session ends, which is not a turn
+end ([coordination.md](coordination.md#lifecycle-status-is-separate)).
 
 | Operation | Fields | Meaning |
 | --- | --- | --- |

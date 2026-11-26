@@ -118,9 +118,10 @@ func TestRunReportCarriesUsableSessionIDs(t *testing.T) {
 	}
 }
 
-// TestRunReportCarriesTurnStart: a prompt's turn start reaches the
-// scheduler on a working report and nowhere else.
-func TestRunReportCarriesTurnStart(t *testing.T) {
+// TestRunReportCarriesTurnStartAndSessionEnd: a prompt's turn start reaches
+// the scheduler on a working report, a session's end on an idle one, and
+// neither anywhere else.
+func TestRunReportCarriesTurnStartAndSessionEnd(t *testing.T) {
 	sink := &fakeSink{}
 	h := newHarness(t, 1, func(c *Config) { c.Reports = sink })
 	h.start()
@@ -130,13 +131,13 @@ func TestRunReportCarriesTurnStart(t *testing.T) {
 	}
 	client := h.dial(t, run)
 	for _, state := range []agentstatus.State{agentstatus.Working, agentstatus.Idle} {
-		if err := client.Call(protocol.MethodRunReport, protocol.RunReportParams{State: string(state), TurnStart: true}, nil); err != nil {
-			t.Fatalf("run.report %s turn_start: %v", state, err)
+		if err := client.Call(protocol.MethodRunReport, protocol.RunReportParams{State: string(state), TurnStart: true, SessionEnd: true}, nil); err != nil {
+			t.Fatalf("run.report %s turn_start session_end: %v", state, err)
 		}
 	}
 	_, got := sink.reports()
-	if len(got) != 2 || !got[0].TurnStart || got[1].TurnStart {
-		t.Fatalf("reports %+v, want turn start only on the working report", got)
+	if len(got) != 2 || !got[0].TurnStart || got[1].TurnStart || got[0].SessionEnd || !got[1].SessionEnd {
+		t.Fatalf("reports %+v, want turn start only on the working report and session end only on the idle one", got)
 	}
 }
 

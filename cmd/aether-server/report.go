@@ -120,6 +120,7 @@ func report(args []string) {
 		TurnStart:    rep.TurnStart,
 		Stop:         rep.Stop && harness == "claude",
 		LastMessage:  rep.LastMessage,
+		SessionEnd:   rep.SessionEnd,
 	}, &result)
 	if err != nil {
 		warn("report %s: %v", harness, err)
