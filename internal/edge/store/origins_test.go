@@ -190,14 +190,37 @@ func TestOriginWriters(t *testing.T) {
 	if err := s.CreateDeviceAuth(ctx, auth); err != nil {
 		t.Fatal(err)
 	}
+	if a, err := s.PendingDeviceAuth(ctx, auth.UserCodeHash, testNow); err != nil || a.SigninOrigin != testSignin {
+		t.Fatalf("pending authorization = %+v, %v; want its origin", a, err)
+	}
+	if a, err := s.PollDeviceAuth(ctx, auth.CodeHash, testNow); err != nil || a.SigninOrigin != testSignin {
+		t.Fatalf("polled authorization = %+v, %v; want its origin", a, err)
+	}
 	if err := s.DecideDeviceAuth(ctx, auth.UserCodeHash, id, true, testNow); err != nil {
 		t.Fatal(err)
 	}
 	if got := nullString(t, s, `SELECT signin_origin FROM device_authorizations WHERE code_hash = 'code-new'`); got.String != testSignin {
 		t.Fatalf("device authorization started at %s records %q", testSignin, got.String)
 	}
-	if d, err := s.RedeemDeviceAuth(ctx, auth.CodeHash, Device{ID: "new", TokenHash: "new-hash"}, testNow); err != nil || d.SigninOrigin != testSignin {
+	if d, err := s.RedeemDeviceAuth(ctx, auth.CodeHash, Device{ID: "new", TokenHash: "new-hash"}, true, testNow); err != nil || d.SigninOrigin != testSignin {
 		t.Fatalf("redeemed device = %+v, %v; want the authorization's origin", d, err)
+	}
+	off := DeviceAuth{CodeHash: "code-off", UserCodeHash: "user-off", Label: "tablet", Key: "ssh-ed25519 DDDD",
+		CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour), SigninOrigin: testSignin}
+	if err := s.CreateDeviceAuth(ctx, off); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DecideDeviceAuth(ctx, off.UserCodeHash, id, true, testNow); err != nil {
+		t.Fatal(err)
+	}
+	if d, err := s.RedeemDeviceAuth(ctx, off.CodeHash, Device{ID: "off", TokenHash: "off-hash"}, false, testNow); err != nil || d.SigninOrigin != "" {
+		t.Fatalf("device redeemed with recording off = %+v, %v; want no origin", d, err)
+	}
+	if got := nullString(t, s, `SELECT signin_origin FROM devices WHERE id = 'off'`); got.Valid {
+		t.Fatalf("device redeemed with recording off records %q", got.String)
+	}
+	if _, err := s.db.Exec(`DELETE FROM devices WHERE id = 'off'`); err != nil {
+		t.Fatal(err)
 	}
 	if _, err := s.db.Exec(`INSERT INTO devices (id, token_hash, account_id, public_key, label, created_at, last_used_at)
 		VALUES ('bare', 'bare-hash', ?, 'ssh-ed25519 CCCC', 'old', 0, 0)`, id); err != nil {
