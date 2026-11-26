@@ -247,6 +247,55 @@ describe('agents page', () => {
   })
 })
 
+describe('Claude Code logins', () => {
+  const claudeRow = () => within(screen.getByRole('list', { name: 'Agents' })).getAllByRole('listitem')[0]
+
+  beforeEach(() => {
+    useStore.setState({ capabilities: { gateway: 'local', methods: ['*'], ws: ['events', 'attach', 'terminal'] } })
+  })
+
+  it('leaves the row of a member with only the default login as it was, plus Add login', async () => {
+    useStore.setState({ capabilities: { gateway: 'local', methods: ['agent.list', 'agent.install', 'agent.remove', 'run.launch'], ws: ['events', 'attach', 'terminal'] } })
+    const view = mount()
+    await flush()
+    const before = claudeRow().textContent
+    expect(within(claudeRow()).queryByRole('button', { name: 'Add login' })).toBeNull()
+    view.unmount()
+
+    useStore.setState({ capabilities: { gateway: 'local', methods: ['*'], ws: ['events', 'attach', 'terminal'] } })
+    mount()
+    await flush()
+    expect(api.agentLoginList).toHaveBeenCalledWith('claude')
+    expect(within(claudeRow()).getByRole('button', { name: 'Add login' })).toBeDefined()
+    expect(claudeRow().textContent?.replace('Add login', '')).toBe(before)
+    expect(screen.queryByRole('region', { name: 'Claude Code logins' })).toBeNull()
+    expect(api.accountList).not.toHaveBeenCalled()
+  })
+
+  it('lists several logins under the Claude Code row and names the teammates shares reach', async () => {
+    vi.mocked(api.agentLoginList).mockResolvedValue([
+      { id: 'default', name: 'default', kind: 'subscription', automatic: true, shared: true, position: 0 },
+      { id: 'lgn-work0000001', name: 'work', kind: 'subscription', automatic: true, shared: true, position: 1 },
+    ])
+    vi.mocked(api.accountList).mockResolvedValue({ accounts: [], shared_with: [{ id: 'mem-bob', display_name: 'Bob' } as never] })
+    mount()
+    await flush()
+    const logins = within(claudeRow()).getByRole('region', { name: 'Claude Code logins' })
+    expect(within(logins).getAllByRole('listitem').map((item) => item.getAttribute('aria-label'))).toEqual(['Login default', 'Login work'])
+    await waitFor(() => expect(logins.textContent).toContain('Your account is shared with Bob'))
+    expect(within(logins).getByRole('link', { name: 'What they say' }).getAttribute('href')).toContain('docs/agents.md#several-logins')
+  })
+
+  it('opens Add login in the page', async () => {
+    mount()
+    await flush()
+    fireEvent.click(within(claudeRow()).getByRole('button', { name: 'Add login' }))
+    expect(screen.getByRole('form', { name: 'Add a Claude Code login' })).toBeDefined()
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
+    expect(screen.getByRole('list', { name: 'Agents' })).toBeDefined()
+  })
+})
+
 describe('agent config files', () => {
   const writeText = vi.fn<(text: string) => Promise<void>>()
 
