@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -82,7 +83,7 @@ func (n Notice) validate() error {
 	switch {
 	case n.State != NoticeRetiring && n.State != NoticeRetired:
 		return fmt.Errorf("unknown notice state %q", n.State)
-	case !canonical(n.Origin) || !canonical(n.Replacement):
+	case !NoticeOrigin(n.Origin) || !NoticeOrigin(n.Replacement):
 		return fmt.Errorf("notice origins %q and %q must be canonical edge origins", n.Origin, n.Replacement)
 	case n.Origin == n.Replacement:
 		return fmt.Errorf("notice for %s names itself as the replacement", n.Origin)
@@ -92,9 +93,23 @@ func (n Notice) validate() error {
 	return nil
 }
 
-func canonical(origin string) bool {
+// maxNoticeOrigin is the longest origin a notice names: https://, a
+// 253-byte DNS name and :65535.
+const maxNoticeOrigin = len("https://") + 253 + len(":65535")
+
+// NoticeOrigin reports whether origin may stand in a notice: a canonical
+// origin of at most maxNoticeOrigin bytes whose port, when it has one,
+// has no leading zero.
+func NoticeOrigin(origin string) bool {
+	if len(origin) > maxNoticeOrigin {
+		return false
+	}
 	o, err := Origin(origin)
-	return err == nil && o == origin
+	if err != nil || o != origin {
+		return false
+	}
+	u, err := url.Parse(origin)
+	return err == nil && !strings.HasPrefix(u.Port(), "0")
 }
 
 // ValidDate reports whether s is a real date written YYYY-MM-DD.
@@ -163,9 +178,11 @@ func FormatRetiring(replacement, date string) string {
 }
 
 // ParseRetiring reads a HeaderRetiring value. ok is false unless the
-// replacement is a canonical origin and the date, when present, a real
-// date.
+// replacement is a NoticeOrigin and the date, when present, a real date.
 func ParseRetiring(value string) (replacement, date string, ok bool) {
+	if len(value) > maxNoticeOrigin+len("; date=2006-01-02") {
+		return "", "", false
+	}
 	replacement, rest, dated := strings.Cut(value, ";")
 	replacement = strings.TrimSpace(replacement)
 	if dated {
@@ -175,7 +192,7 @@ func ParseRetiring(value string) (replacement, date string, ok bool) {
 			return "", "", false
 		}
 	}
-	if !canonical(replacement) {
+	if !NoticeOrigin(replacement) {
 		return "", "", false
 	}
 	return replacement, date, true

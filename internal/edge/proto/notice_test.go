@@ -244,6 +244,18 @@ func TestHelloNoticeNonceNeverRefuses(t *testing.T) {
 	}
 }
 
+func TestNoticeOrigin(t *testing.T) {
+	longest := "https://" + strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 61) + ":65535"
+	if len(longest) != maxNoticeOrigin || !NoticeOrigin(longest) {
+		t.Errorf("the longest valid origin, %d bytes, is refused", len(longest))
+	}
+	for _, o := range []string{longest + "0", "https://a.example:" + strings.Repeat("0", 300) + "1", "https://a.example:01", "https://A.example"} {
+		if NoticeOrigin(o) {
+			t.Errorf("NoticeOrigin(%.40q) accepted", o)
+		}
+	}
+}
+
 func TestParseRetiring(t *testing.T) {
 	for _, c := range []struct{ value, replacement, date string }{
 		{"https://edge2.example", "https://edge2.example", ""},
@@ -262,6 +274,8 @@ func TestParseRetiring(t *testing.T) {
 		"http://edge2.example", "https://edge2.example; date=", "https://edge2.example; date=2027-02-30",
 		"https://edge2.example; date=2027-3-1", "https://edge2.example; on=2027-03-01", "https://edge2.example; date=2027-03-01; x=y",
 		"https://edge2.example\x1b[2J", "https://<new-relay-host>",
+		"https://edge2.example:0443", "https://a.example:" + strings.Repeat("0", 400) + "1",
+		"https://" + strings.Repeat("a", 63) + "." + strings.Repeat("b", 63) + "." + strings.Repeat("c", 63) + "." + strings.Repeat("d", 61) + ":065535",
 	} {
 		if r, d, ok := ParseRetiring(v); ok {
 			t.Errorf("ParseRetiring(%q) = %q, %q, true; want refused", v, r, d)

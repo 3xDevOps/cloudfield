@@ -32,6 +32,7 @@ var retiringCases = []struct {
 	{"https://EDGE2.example.test", Retiring{}, false},
 	{"https://edge2.example.test/login?code=x", Retiring{}, false},
 	{"edge2.example.test", Retiring{}, false},
+	{"https://edge2.example.test:" + strings.Repeat("0", 400) + "1", Retiring{}, false},
 	{"https://" + longHost + ":65535", Retiring{Replacement: "https://" + longHost + ":65535"}, true},
 }
 
@@ -165,6 +166,7 @@ func TestRetiringNotice(t *testing.T) {
 		{"https://edge2.example.test", "2027-03-01", Retiring{Replacement: "https://edge2.example.test", Date: "2027-03-01"}, true},
 		{"https://edge2.example.test", "2027-13-01", Retiring{}, false},
 		{"https://edge2.example.test/", "", Retiring{}, false},
+		{"https://edge2.example.test:" + strings.Repeat("0", 400) + "1", "", Retiring{}, false},
 		{"https://" + longHost + ":65535", "2027-03-01", Retiring{Replacement: "https://" + longHost + ":65535", Date: "2027-03-01"}, true},
 		{"https://edge2.example.test; date=2027-03-01", "", Retiring{}, false},
 		{"javascript:alert(1)", "", Retiring{}, false},

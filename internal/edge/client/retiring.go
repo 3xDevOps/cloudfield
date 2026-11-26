@@ -35,15 +35,10 @@ func (c *Client) RetiringNotice(ctx context.Context) (Retiring, bool, error) {
 	if err != nil || info.Retiring == "" {
 		return Retiring{}, false, err
 	}
-	if clean(info.Retiring) != info.Retiring || !canonicalOrigin(info.Retiring) || (info.RetiringDate != "" && !edgeproto.ValidDate(info.RetiringDate)) {
+	if clean(info.Retiring) != info.Retiring || !edgeproto.NoticeOrigin(info.Retiring) || (info.RetiringDate != "" && !edgeproto.ValidDate(info.RetiringDate)) {
 		return Retiring{}, false, nil
 	}
 	return Retiring{Replacement: info.Retiring, Date: info.RetiringDate}, true, nil
-}
-
-func canonicalOrigin(origin string) bool {
-	o, err := edgeproto.Origin(origin)
-	return err == nil && o == origin
 }
 
 // observe records the notice of resp, an answer of the edge, which

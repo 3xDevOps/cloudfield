@@ -76,6 +76,12 @@ func TestNoticesNameRelayOrigins(t *testing.T) {
 			t.Errorf("New with the notice %+v = %v", n, err)
 		}
 	}
+	_, err := New(t.Context(), Config{Origin: "https://edge.example.test:0443", MoreOrigins: []string{"https://edge2.example.test"},
+		EdgeKey: key, Directory: &fakeDir{}, Egress: &fakeEgress{months: map[string]int64{}},
+		Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: "https://edge.example.test:0443", Replacement: "https://edge2.example.test"}}})
+	if err == nil || !strings.Contains(err.Error(), "without a leading zero in the port") {
+		t.Errorf("New with a notice for a zero-padded port = %v", err)
+	}
 }
 
 // TestRelayedAnswerCarriesTheEdgesNotice forwards a connector request to
