@@ -388,7 +388,6 @@ func parseRetiredPairs(list, scheme, signin, relay string, more []edge.Pair, ret
 	return out, nil
 }
 
-
 // host is the lowercase host name of a valid origin.
 func host(origin string) string {
 	u, _ := url.Parse(origin) // parseOptions checked it
