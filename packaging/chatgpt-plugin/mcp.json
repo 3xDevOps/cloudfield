@@ -3,7 +3,7 @@
   "mcpServers": {
     "aether": {
       "type": "streamable-http",
-      "url": "https://edge.onaether.dev/mcp",
+      "url": "https://edge.cloudfield.ai/mcp",
       "extensions": {
         "com.openai": {
           "auth": {

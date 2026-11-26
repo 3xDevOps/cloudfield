@@ -259,6 +259,35 @@ CREATE TABLE account_reach (
 	server_id TEXT NOT NULL,
 	PRIMARY KEY (provider, subject, server_id)
 ) WITHOUT ROWID;
+`}, {floor: 1, sql: `
+ALTER TABLE servers ADD COLUMN relay_origin TEXT;
+ALTER TABLE servers ADD COLUMN enrolled_at INTEGER;
+ALTER TABLE servers ADD COLUMN agent_version TEXT;
+ALTER TABLE device_authorizations ADD COLUMN signin_origin TEXT;
+ALTER TABLE devices ADD COLUMN signin_origin TEXT;
+ALTER TABLE devices ADD COLUMN signin_origin_seen INTEGER;
+ALTER TABLE web_sessions ADD COLUMN signin_origin TEXT;
+ALTER TABLE web_sessions ADD COLUMN signin_origin_seen INTEGER;
+
+CREATE TABLE connector_use (
+	server_id    TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+	relay_origin TEXT NOT NULL,
+	last_used_at INTEGER NOT NULL,
+	PRIMARY KEY (server_id, relay_origin)
+) WITHOUT ROWID;
+
+CREATE TABLE origin_pairs (
+	relay_origin  TEXT PRIMARY KEY,
+	signin_origin TEXT NOT NULL,
+	served_at     INTEGER NOT NULL
+);
+
+CREATE TABLE origin_recording (
+	id         INTEGER PRIMARY KEY CHECK (id = 1),
+	since      INTEGER NOT NULL,
+	started_at INTEGER NOT NULL,
+	stopped_at INTEGER
+);
 `}}
 
 // Schema is a database's schema version and the compat floor recorded
@@ -329,7 +358,7 @@ func prepare(db *sql.DB, path string, steps []migration) error {
 // hasFloorColumn reports whether schema_migrations records compat floors.
 // In one made before they existed, each recorded step counts as its own
 // version's floor.
-func hasFloorColumn(db *sql.DB) (bool, error) {
+func hasFloorColumn(db rowQuerier) (bool, error) {
 	var n int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('schema_migrations') WHERE name = 'compat_floor'`).Scan(&n); err != nil {
 		return false, fmt.Errorf("edgestore: read schema_migrations columns: %w", err)
@@ -339,7 +368,12 @@ func hasFloorColumn(db *sql.DB) (bool, error) {
 
 // readSchema reads the schema without changing the database. A step
 // recorded without a floor counts as its own version.
-func readSchema(db *sql.DB) (Schema, error) {
+// rowQuerier is a *sql.DB or a *sql.Tx.
+type rowQuerier interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+func readSchema(db rowQuerier) (Schema, error) {
 	var tables int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'schema_migrations'`).Scan(&tables); err != nil {
 		return Schema{}, fmt.Errorf("edgestore: read schema version: %w", err)

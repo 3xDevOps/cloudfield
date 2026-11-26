@@ -18,8 +18,8 @@ import (
 
 	"golang.org/x/oauth2"
 
-	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
-	edgestore "github.com/3xDevOps/Aether/internal/edge/store"
+	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
+	edgestore "github.com/3xDevOps/cloudfield/internal/edge/store"
 )
 
 const (
@@ -193,7 +193,7 @@ func (s *Service) startSession(w http.ResponseWriter, r *http.Request, account e
 	}
 	token := edgeproto.NewToken()
 	if err := s.store.CreateSession(ctx, edgeproto.NewConnID(), edgeproto.HashToken(token), accountID,
-		now, now.Add(edgeproto.SessionIdle)); err != nil {
+		s.signinOrigin(ctx), now, now.Add(edgeproto.SessionIdle)); err != nil {
 		return err
 	}
 	setCookie(w, sessionCookie, token, int(edgeproto.SessionIdle.Seconds()))

@@ -361,6 +361,10 @@ import (
 )
 
 func main() {
+    if len(os.Args) == 3 && os.Args[1] == "launched" {
+        _ = os.WriteFile(os.Args[2], []byte("launched"), 0644)
+        return
+    }
     logPath := os.Getenv("AETHER_FIXTURE_LOG")
     if logPath != "" {
         _ = os.WriteFile(logPath, []byte("invoked"), 0644)
@@ -370,6 +374,9 @@ func main() {
         os.Exit(64)
     }
     fmt.Println("fixture stdout progress")
+    if launcher := os.Getenv("AETHER_FIXTURE_LAUNCHER"); launcher != "" {
+        fmt.Println("launcher " + launcher)
+    }
     fmt.Fprintln(os.Stderr, "fixture stderr progress")
     if os.Getenv("CLOUDFIELD_BIN") != "" {
         fmt.Fprintln(os.Stderr, "CLOUDFIELD_BIN reached the build")
@@ -540,11 +547,121 @@ func main() {
             '[3/3] installing the desktop app (the build output follows)',
             'fixture stdout progress',
             ('      installed {0}' -f $freshDesktop),
+            '  open Cloudfield from the Start menu, or link from a new terminal:',
             'aether link <server-host>      # on a tailnet: the server''s tailnet name',
             'aether link --claim <code>     # with the claim link server setup printed',
             ('done: Aether {0} installed in ' -f $version))) {
         Assert-AetherTest ($result.Stdout.Contains($expected)) ("fresh install output lacks [{0}]: {1}" -f $expected, $result.Output)
     }
+    # Its console is redirected, so nobody is there to see the app.
+    foreach ($unexpected in @('Cloudfield is starting', 'did not open')) {
+        Assert-AetherTest (-not $result.Output.Contains($unexpected)) ("redirected install tried to open the app: " + $result.Output)
+    }
+
+    # Every installer run here has a redirected console, so the launch is
+    # tested on the installer's own functions. The shortcut starts the fixture,
+    # which records that it ran and exits: no app is left running.
+    $installerAst = [Management.Automation.Language.Parser]::ParseFile($installer, [ref]$null, [ref]$null)
+    foreach ($name in @('Invoke-AetherGuiBuild', 'Test-AetherElevated', 'Test-AetherHighIntegrity', 'Test-AetherSomeoneToSee', 'Open-AetherDesktop')) {
+        $definition = $installerAst.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
+        Assert-AetherTest ($null -ne $definition) ("install.ps1 has no function {0}" -f $name)
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+    # Each gate is checked on its own: CI is cleared or set alone, and the
+    # runner's elevated token is stood in for by one that is not, so neither
+    # can answer for the gate under test.
+    $realElevated = ${function:Test-AetherElevated}
+    ${function:Test-AetherElevated} = { $false }
+    $oldCI = $env:CI
+    try {
+        if ([Console]::IsOutputRedirected) {
+            $env:CI = $null
+            Assert-AetherTest (-not (Test-AetherSomeoneToSee)) 'a redirected console counted as someone to see the app'
+        }
+        else {
+            $env:CI = 'true'
+            Assert-AetherTest (-not (Test-AetherSomeoneToSee)) 'CI counted as someone to see the app'
+        }
+    }
+    finally {
+        $env:CI = $oldCI
+        ${function:Test-AetherElevated} = $realElevated
+    }
+
+    # A token Windows treats as Administrator is elevated, so its label is
+    # High; a hosted runner's is. An operator token can be elevated without
+    # Administrators, so only this direction holds.
+    $principal = New-Object Security.Principal.WindowsPrincipal ([Security.Principal.WindowsIdentity]::GetCurrent())
+    if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        # Unreadable labels also answer elevated, so first prove this one reads.
+        $label = & (Join-Path ([Environment]::GetFolderPath('System')) 'whoami.exe') /groups /fo csv /nh
+        Assert-AetherTest (@(@($label) -match '"S-1-16-(12288|16384)"').Count -gt 0) ("an Administrator token has no High or System label: " + ($label -join "`n"))
+        $global:LASTEXITCODE = 7
+        Assert-AetherTest (Test-AetherElevated) 'an Administrator token was not read as elevated'
+    }
+    else {
+        $global:LASTEXITCODE = 7
+        [void](Test-AetherElevated)
+    }
+    Assert-AetherEqual 7 $global:LASTEXITCODE 'the elevation check changed LASTEXITCODE'
+    # The Actions step exits with whatever LASTEXITCODE is left.
+    $global:LASTEXITCODE = 0
+    $users = '"BUILTIN\Users","Alias","S-1-5-32-545","Mandatory group, Enabled by default, Enabled group"'
+    foreach ($case in @(
+            @{ Label = 'S-1-16-8192'; Elevated = $false },
+            @{ Label = 'S-1-16-8448'; Elevated = $false },
+            @{ Label = 'S-1-16-12288'; Elevated = $true },
+            @{ Label = 'S-1-16-16384'; Elevated = $true },
+            @{ Label = 'S-1-16-20480'; Elevated = $true })) {
+        $groups = @($users, ('"Mandatory Label\Some Level","Label","{0}",""' -f $case.Label))
+        Assert-AetherEqual $case.Elevated (Test-AetherHighIntegrity $groups) ("integrity label {0}" -f $case.Label)
+    }
+    Assert-AetherTest (Test-AetherHighIntegrity @($users)) 'a token with no integrity label was not treated as elevated'
+    Assert-AetherTest (Test-AetherHighIntegrity $null) 'no whoami output was not treated as elevated'
+    $launchCase = Join-Path $root 'launch-case'
+    New-Item -ItemType Directory -Path $launchCase -Force | Out-Null
+    # A profile path outside the console code page reaches the installer intact.
+    $env:AETHER_FIXTURE_LAUNCHER = Join-Path $launchCase ("J{0}rg {1}\Cloudfield.lnk" -f [char]0x00F6, [char]0x6771)
+    try {
+        $printedLauncher = Invoke-AetherGuiBuild $fixture
+    }
+    finally {
+        $expectedLauncher = $env:AETHER_FIXTURE_LAUNCHER
+        Remove-Item -LiteralPath 'Env:AETHER_FIXTURE_LAUNCHER' -ErrorAction SilentlyContinue
+    }
+    # Only a process with a console can switch its code page; a person
+    # running the installer always has one.
+    $hasConsole = $true
+    try { [Console]::OutputEncoding = [Console]::OutputEncoding } catch { $hasConsole = $false }
+    if ($hasConsole) {
+        Assert-AetherEqual $expectedLauncher $printedLauncher 'a non-ASCII launcher path did not survive the build output'
+    }
+    else {
+        Write-Host 'install-test: no console, so the non-ASCII launcher path is not checked'
+    }
+    $launchShortcut = Join-Path $launchCase 'Cloudfield.lnk'
+    $env:AETHER_FIXTURE_LAUNCHER = $launchShortcut
+    try {
+        $printedLauncher = Invoke-AetherGuiBuild $fixture
+    }
+    finally {
+        Remove-Item -LiteralPath 'Env:AETHER_FIXTURE_LAUNCHER' -ErrorAction SilentlyContinue
+    }
+    Assert-AetherEqual $launchShortcut $printedLauncher 'the installer did not read the launcher gui build printed'
+    $launched = Join-Path $launchCase 'launched.txt'
+    $link = (New-Object -ComObject WScript.Shell).CreateShortcut($launchShortcut)
+    $link.TargetPath = $fixture
+    $link.Arguments = 'launched "{0}"' -f $launched
+    $link.WorkingDirectory = $launchCase
+    $link.Save()
+    Assert-AetherEqual $null (Open-AetherDesktop $launchShortcut) 'the shortcut did not start'
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    while (-not (Test-Path -LiteralPath $launched) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+    Assert-AetherTest (Test-Path -LiteralPath $launched) 'the shortcut did not start its target'
+    $missingFailure = Open-AetherDesktop (Join-Path $launchCase 'missing.lnk')
+    Assert-AetherTest (-not [string]::IsNullOrWhiteSpace($missingFailure)) 'a missing shortcut was reported as started'
+    Assert-AetherEqual '`aether gui build` printed no launcher' (Open-AetherDesktop $null) 'no launcher was not reported'
+
     Assert-AetherTest ($result.Stderr.Contains('fixture stderr progress')) ("desktop build stderr did not reach the console: " + $result.Output)
     Assert-AetherTest (-not $result.Stderr.Contains('NativeCommandError')) ("desktop build stderr became an error record: " + $result.Stderr)
     Assert-AetherTest ((Get-AetherTestUserPath).StartsWith($freshUserPath)) 'fresh install altered unrelated PATH entries'

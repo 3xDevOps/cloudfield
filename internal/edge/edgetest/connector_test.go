@@ -19,15 +19,15 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"golang.org/x/oauth2"
 
-	"github.com/3xDevOps/Aether/internal/domain"
-	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
-	"github.com/3xDevOps/Aether/internal/events"
-	agentharness "github.com/3xDevOps/Aether/internal/harness"
-	"github.com/3xDevOps/Aether/internal/protocol"
-	"github.com/3xDevOps/Aether/internal/scheduler"
-	"github.com/3xDevOps/Aether/internal/sshd"
-	"github.com/3xDevOps/Aether/internal/store"
-	"github.com/3xDevOps/Aether/internal/version"
+	"github.com/3xDevOps/cloudfield/internal/domain"
+	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
+	"github.com/3xDevOps/cloudfield/internal/events"
+	agentharness "github.com/3xDevOps/cloudfield/internal/harness"
+	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/scheduler"
+	"github.com/3xDevOps/cloudfield/internal/sshd"
+	"github.com/3xDevOps/cloudfield/internal/store"
+	"github.com/3xDevOps/cloudfield/internal/version"
 )
 
 // connectorClient is the client registration ChatGPT and Claude make: a
@@ -118,7 +118,7 @@ func (launcher) SettleSleep(context.Context, domain.RunID) error              { 
 func (launcher) DefaultMode(context.Context, domain.MemberID, domain.MemberID, string) (domain.LaunchMode, error) {
 	return domain.LaunchACP, nil
 }
-func (launcher) LoginProblem(domain.MemberID, string, agentharness.Profile) (string, bool, error) {
+func (launcher) LoginProblem(domain.MemberID, domain.MemberID, string, agentharness.Profile) (string, bool, error) {
 	return "", false, nil
 }
 func (launcher) PendingInputs(domain.RunID) []domain.RunInputRequest          { return nil }

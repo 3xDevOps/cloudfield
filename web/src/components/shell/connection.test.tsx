@@ -61,10 +61,10 @@ describe('where the gateway says the failure happened', () => {
       connection: 'reconnecting',
       linkStatus: edgeLink,
       unreachable: 'edge-refused',
-      unreachableAt: { layer: 'server-registration', server_id: 'srv123', edge: 'edge.onaether.dev' },
+      unreachableAt: { layer: 'server-registration', server_id: 'srv123', edge: 'edge.cloudfield.ai' },
     })
     expect(renderHook(useConnectionProblem).result.current).toBe(
-      'Server registration failed · edge.onaether.dev refused the connection to server srv123',
+      'Server registration failed · edge.cloudfield.ai refused the connection to server srv123',
     )
   })
 

@@ -23,7 +23,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
+	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 )
 
 // fakeProvider is GitHub's OAuth and user API. It checks the PKCE
@@ -261,7 +261,7 @@ func (h *harness) claim(t *testing.T, id, name string, owner edgeproto.Account) 
 	if _, err := h.svc.store.SignIn(ctx, owner, h.clock.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.svc.RecordClaim(ctx, id, name, edgeproto.PolicyAccount, owner); err != nil {
+	if err := h.svc.RecordClaim(ctx, id, name, edgeproto.PolicyAccount, owner, testRelay, "v1.0.0"); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -155,3 +155,21 @@ describe('environment terminal methods', () => {
     })
   })
 })
+
+describe('linear methods', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('posts the key to linear.connect and unwraps the lists', async () => {
+    const fetchSpy = fakeFetch({ teams: [{ key: 'ENG', name: 'Engineering' }], issues: [] })
+    vi.stubGlobal('fetch', fetchSpy)
+
+    await api.linearConnect('lin_api_x')
+    expect(fetchSpy.mock.calls[0][0]).toBe('/api/v1/linear.connect')
+    expect(fetchSpy.mock.calls[0][1]?.body).toBe(JSON.stringify({ api_key: 'lin_api_x' }))
+    expect(await api.linearTeams()).toEqual([{ key: 'ENG', name: 'Engineering' }])
+    expect(await api.linearIssues({ team: 'ENG', query: 'x' })).toEqual([])
+    expect(fetchSpy.mock.calls[2][1]?.body).toBe(JSON.stringify({ team: 'ENG', query: 'x' }))
+  })
+})

@@ -18,13 +18,13 @@ import (
 
 	"github.com/dustin/go-humanize"
 
-	"github.com/3xDevOps/Aether/internal/selfupdate"
-	"github.com/3xDevOps/Aether/internal/server"
-	"github.com/3xDevOps/Aether/internal/serversetup"
-	"github.com/3xDevOps/Aether/internal/serverunit"
-	"github.com/3xDevOps/Aether/internal/serverupdate"
-	"github.com/3xDevOps/Aether/internal/store"
-	"github.com/3xDevOps/Aether/internal/version"
+	"github.com/3xDevOps/cloudfield/internal/selfupdate"
+	"github.com/3xDevOps/cloudfield/internal/server"
+	"github.com/3xDevOps/cloudfield/internal/serversetup"
+	"github.com/3xDevOps/cloudfield/internal/serverunit"
+	"github.com/3xDevOps/cloudfield/internal/serverupdate"
+	"github.com/3xDevOps/cloudfield/internal/store"
+	"github.com/3xDevOps/cloudfield/internal/version"
 )
 
 const (

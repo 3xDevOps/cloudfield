@@ -6,9 +6,9 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/3xDevOps/Aether/internal/coordtransport"
-	"github.com/3xDevOps/Aether/internal/envname"
-	"github.com/3xDevOps/Aether/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/coordtransport"
+	"github.com/3xDevOps/cloudfield/internal/envname"
+	"github.com/3xDevOps/cloudfield/internal/protocol"
 )
 
 // Roles a role card is written for.
@@ -92,6 +92,16 @@ const (
 	// SubagentPeerRule lets a subagent coordinate its own edits.
 	SubagentPeerRule = "Before editing files another session may touch, check aether_status or `aether-internal status` for overlapping peers and send them a short coordination note; replies land in the parent agent's inbox."
 	MemoryLine       = "Before deciding something a teammate or an earlier session may have settled, search team memory: `aether-internal memory search <words>`."
+)
+
+// When a session splits work across its own subagents and when it starts a
+// subsession, shared by the role card, the skill and the MCP bridge.
+const (
+	OneSessionRule = "The majority of straightforward tasks can be done in one session: split parallel or bulky parts across your own subagents or workflows. " +
+		"They share your checkout, start in seconds, and their results land in your working tree."
+	ReviewerRule   = "That includes reviews: a fresh subagent that did not write the change is an independent reviewer."
+	SubsessionRule = "Reserve a subsession for a large, independent stream of work that needs its own branch or pull request, would run for hours, or needs another agent, model, or harness. " +
+		"Don't use subsessions in excess unless there is a need to use them over subagents/singular session workflows."
 )
 
 // MemoryRule frames everything team memory shows an agent: the brief, search
@@ -265,11 +275,9 @@ func RoleCard(g Guide) string {
 			"Ask it with `%s ask --to %s` before asking the user; your final report reaches it. If you sit idle or waiting for over an hour, it is told and may wake you or stop you.\n", g.Parent, g.cli(), g.Parent)
 	}
 	if g.Parent == "" && !g.Background {
-		write("The majority of straightforward tasks can be done in one session: split parallel or bulky parts across your own subagents or workflows. " +
-			"They share your checkout, start in seconds, and their results land in your working tree. " +
-			"A subsession (`aether-internal subsession start`) is a separate session with its own container, branch and setup time; its report wakes you. " +
-			"Reserve it for a large, independent stream of work that needs its own branch or pull request, would run for hours, or needs another agent, model, or harness. " +
-			"Don't use subsessions in excess unless there is a need to use them over subagents/singular session workflows. `aether-internal skill subsessions` says how.\n")
+		write(OneSessionRule + " " + ReviewerRule + " " +
+			"A subsession (`aether-internal subsession start`) is a separate session with its own sandbox, branch and setup time; its report wakes you. " +
+			SubsessionRule + " `aether-internal skill subsessions` says how.\n")
 	}
 	if g.LinearIssue != "" {
 		fmt.Fprintf(&b, "This session is linked to Linear issue %s (%s). Put \"Fixes %s\" in the description of any pull request you open, so Linear links the pull request and closes the issue when it merges.\n", g.LinearIssue, g.LinearIssueURL, g.LinearIssue)

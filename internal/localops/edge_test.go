@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/3xDevOps/Aether/internal/cli"
-	"github.com/3xDevOps/Aether/internal/shellquote"
-	"github.com/3xDevOps/Aether/internal/syncd"
-	"github.com/3xDevOps/Aether/internal/testhome"
+	"github.com/3xDevOps/cloudfield/internal/cli"
+	"github.com/3xDevOps/cloudfield/internal/shellquote"
+	"github.com/3xDevOps/cloudfield/internal/syncd"
+	"github.com/3xDevOps/cloudfield/internal/testhome"
 )
 
 const testServerID = "wqc4lsjvzdzrwq3k5dabdtajwj"

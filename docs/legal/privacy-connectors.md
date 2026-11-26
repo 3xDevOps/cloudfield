@@ -6,7 +6,7 @@
 > privacy policy URL of the Claude listing
 > ([claude-connector.md](../claude-connector.md)). The facts below describe
 > origin/main at cabcf962; recheck each against the code at the commit that
-> is deployed to `edge.onaether.dev` before publishing. Bracketed items are
+> is deployed to `edge.cloudfield.ai` before publishing. Bracketed items are
 > decisions for the owner.
 
 Effective: [date of publication]
@@ -15,20 +15,24 @@ Effective: [date of publication]
 
 The Cloudfield connector lets ChatGPT, from OpenAI, and Claude, from Anthropic,
 read and act on the coding agents running on a Cloudfield server you are a
-member of. It is reached at `https://edge.onaether.dev/mcp`. This policy
+member of. It is reached at `https://edge.cloudfield.ai/mcp`. This policy
 covers what the connector collects, returns, stores and logs. The Cloudfield
 Android app, the dashboard and the edge's other functions are covered by
 the [Cloudfield privacy policy](../privacy.md).
+
+As of 2026-11-26 the project edge also answers at `edge.onaether.dev` and
+`auth.onaether.dev`, and at `https://edge.onaether.dev/mcp` for connectors
+set up there; this policy covers those addresses too.
 
 Cloudfield is self-hosted. Three parties handle connector data:
 
 | Party | Role |
 | --- | --- |
-| 3xDevOps, publisher of Cloudfield, operating `edge.onaether.dev` and `auth.onaether.dev` (the project edge) | Signs you in with GitHub and relays each connector request to your server |
+| 3xDevOps, publisher of Cloudfield, operating `edge.cloudfield.ai` and `auth.cloudfield.ai` (the project edge) | Signs you in with GitHub and relays each connector request to your server |
 | The administrator of the Cloudfield server you connect | Runs the server that executes every tool call and holds your runs. 3xDevOps does not operate it unless it is your administrator |
 | OpenAI (ChatGPT) or Anthropic (Claude), whichever app you connect | Sends tool calls and receives tool results inside your conversation, under its own privacy policy |
 
-Contact for this policy: [team@onaether.dev]. Issues:
+Contact for this policy: [team@cloudfield.ai]. Issues:
 <https://github.com/3xDevOps/cloudfield/issues>.
 
 ## What the connector receives from ChatGPT or Claude
@@ -91,9 +95,9 @@ to train models. The code does none of these.]
 - Revoke a connector in the Cloudfield app under **Settings → ChatGPT and
   Claude**, or with `cloudfield mcp revoke <id>`. Removing it in ChatGPT or
   Claude alone does not revoke it on the server.
-- Delete your edge account at `https://auth.onaether.dev/account`.
+- Delete your edge account at `https://auth.cloudfield.ai/account`.
 - Ask your server administrator for data held on your server, and
-  [team@onaether.dev] for data held by the project edge.
+  [team@cloudfield.ai] for data held by the project edge.
 
 ## Children
 

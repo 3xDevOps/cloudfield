@@ -154,6 +154,14 @@ func (c *Client) Issue(ctx context.Context, key, identifier string) (Issue, erro
 	return Issue(data.Issue), nil
 }
 
+// RefusedKey starts every error that says Linear itself refused the key.
+// The dashboard matches it to tell a refusal from a transport failure.
+const RefusedKey = "linear: Linear refused the API key: "
+
+func isAuthError(text string) bool {
+	return strings.Contains(strings.ToLower(text), "authenticat")
+}
+
 // do posts one GraphQL operation. Linear reports a refused key or a bad
 // query in the errors array, usually with a 4xx status and sometimes with
 // 200, so the array is read first and its messages are returned as Linear
@@ -181,18 +189,29 @@ func (c *Client) do(ctx context.Context, key, query string, vars map[string]any,
 	var reply struct {
 		Data   json.RawMessage `json:"data"`
 		Errors []struct {
-			Message string `json:"message"`
+			Message    string `json:"message"`
+			Extensions struct {
+				Type string `json:"type"`
+			} `json:"extensions"`
 		} `json:"errors"`
 	}
 	decodeErr := json.Unmarshal(raw, &reply)
 	if len(reply.Errors) > 0 {
 		msgs := make([]string, len(reply.Errors))
+		refused := false
 		for i, e := range reply.Errors {
 			msgs[i] = e.Message
+			refused = refused || isAuthError(e.Message) || isAuthError(e.Extensions.Type)
+		}
+		if refused {
+			return fmt.Errorf("%s%s", RefusedKey, strings.Join(msgs, "; "))
 		}
 		return fmt.Errorf("linear: %s", strings.Join(msgs, "; "))
 	}
 	if resp.StatusCode != http.StatusOK {
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return fmt.Errorf("%s%s: %s", RefusedKey, resp.Status, strings.TrimSpace(string(raw)))
+		}
 		return fmt.Errorf("linear: %s: %s", resp.Status, strings.TrimSpace(string(raw)))
 	}
 	if decodeErr != nil {

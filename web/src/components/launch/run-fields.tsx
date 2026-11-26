@@ -137,6 +137,7 @@ export function RunFields({
   disabled = false,
   autoFocus = false,
   shared = false,
+  linked,
   account,
   owner,
 }: {
@@ -148,6 +149,7 @@ export function RunFields({
   disabled?: boolean
   autoFocus?: boolean
   shared?: boolean
+  linked?: React.ReactNode
   account?: React.ReactNode
   owner?: string
 }) {
@@ -155,7 +157,7 @@ export function RunFields({
   const shown = agents ?? lastAgents
   return (
     <>
-      <TaskField mode={mode} task={task} onTask={onTask} autoFocus={autoFocus} shared={shared} />
+      <TaskField mode={mode} task={task} onTask={onTask} autoFocus={autoFocus} shared={shared} linked={linked} />
       {shown === null ? (
         <div className="flex flex-col gap-1">
           <Label asChild>
@@ -183,12 +185,13 @@ export function RunFields({
 }
 
 /** `shared` marks text another app handed over, which shows whole until edited. */
-export function TaskField({ mode, task, onTask, autoFocus = false, shared = false, brief = false, disabled = false }: {
+export function TaskField({ mode, task, onTask, autoFocus = false, shared = false, linked, brief = false, disabled = false }: {
   mode: LaunchMode
   task: string
   onTask: (task: string) => void
   autoFocus?: boolean
   shared?: boolean
+  linked?: React.ReactNode
   /** One-word help, for a phone. */
   brief?: boolean
   disabled?: boolean
@@ -206,9 +209,12 @@ export function TaskField({ mode, task, onTask, autoFocus = false, shared = fals
           {characters} {characters === 1 ? 'character' : 'characters'}, {lines} {lines === 1 ? 'line' : 'lines'}. Nothing runs until you choose Launch.
         </Callout>
       )}
-      <FormField label="Task" help={help}>
-        <TaskBox className={cn('[field-sizing:content]', !shared && 'max-h-48')} autoFocus={autoFocus} readOnly={disabled} required={headless} value={task} onTask={onTask} />
-      </FormField>
+      <div className="flex min-w-0 flex-col gap-2">
+        {linked}
+        <FormField label="Task" help={help}>
+          <TaskBox className={cn('[field-sizing:content]', !shared && 'max-h-48')} autoFocus={autoFocus} readOnly={disabled} required={headless} value={task} onTask={onTask} />
+        </FormField>
+      </div>
     </>
   )
 }

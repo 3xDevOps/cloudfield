@@ -2,20 +2,20 @@
 <resources>
     <!-- The dashboard's own background token (web/src/index.css), so the
          window does not flash a different color before the page paints. -->
-    <color name="window_background">#ffffff</color>
+    <color name="window_background">#eff1f5</color>
     <!-- The dashboard defaults to dark, so the WebView and its frame hold
          its dark canvas colour until the page paints, whatever the system theme. -->
-    <color name="page_background">#070b11</color>
+    <color name="page_background">#181825</color>
     <color name="error_text">#b3261e</color>
     <!-- The update notice wears the dashboard's raised surface, seam, text
          and accent tokens, so it reads as part of the page beneath it. -->
-    <color name="raised">#ffffff</color>
-    <color name="seam">#14000000</color>
-    <color name="text">#1f1f1f</color>
-    <color name="text_muted">#6b6b6b</color>
-    <color name="accent_fill">#367f77</color>
-    <color name="accent_text">#306f69</color>
-    <color name="on_accent">#ffffff</color>
+    <color name="raised">#eff1f5</color>
+    <color name="seam">#1f4c4f69</color>
+    <color name="text">#303246</color>
+    <color name="text_muted">#5c5f77</color>
+    <color name="accent_fill">#a44007</color>
+    <color name="accent_text">#03668e</color>
+    <color name="on_accent">#eff1f5</color>
     <!-- The fill of cloudfield-android-background.svg. -->
     <color name="ic_launcher_background">#000000</color>
 </resources>

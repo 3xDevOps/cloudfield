@@ -480,7 +480,7 @@ function main() {
         : { frame: false }),
       // The dashboard's default dark --canvas, so a frameless window does not
       // flash another colour before the SPA paints.
-      backgroundColor: '#070b11',
+      backgroundColor: '#181825',
       webPreferences: {
         contextIsolation: true,
         nodeIntegration: false,

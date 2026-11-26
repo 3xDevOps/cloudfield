@@ -10,8 +10,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/3xDevOps/Aether/internal/domain"
-	"github.com/3xDevOps/Aether/internal/events"
+	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/events"
 )
 
 const snapshotPublishedRef = "refs/aether/published"

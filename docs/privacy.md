@@ -2,7 +2,7 @@
 
 Cloudfield is self-hosted software. Nothing about you reaches the people who
 publish it unless you sign in to the edge they run, at `auth.cloudfield.ai`
-and `edge.cloudfield.ai`, or `auth.onaether.dev` and `edge.onaether.dev`
+and `edge.cloudfield.ai`, or at that edge's older addresses
 ([What an edge stores](#what-an-edge-stores)). This page is the privacy
 policy for the Cloudfield Android app (package `io.aether.android`), whether it
 came from a GitHub release or from Google Play, for the dashboard the app
@@ -13,7 +13,7 @@ shows, and for that edge. Effective 2026-10-16.
 Cloudfield is published by 3xDevOps, <https://github.com/3xDevOps>. Questions
 about this policy go to <https://github.com/3xDevOps/cloudfield/issues>.
 Privacy requests about what the project's edge holds, such as a copy or a
-deletion, go to <team@onaether.dev>; deleting your own account needs no
+deletion, go to <team@cloudfield.ai>; deleting your own account needs no
 request ([What an edge stores](#what-an-edge-stores)).
 
 ## What the app stores on the phone
@@ -289,16 +289,20 @@ or removing the bot does not delete messages already sent. The tokens stay in
 An **edge** is the relay and sign-in service that lets a computer running
 `cloudfield` reach a server over SSH without Tailscale ([edge.md](edge.md)). The
 Android app uses it only in Edge mode. Whoever runs an edge, the publisher for
-`auth.cloudfield.ai`, `edge.cloudfield.ai`, `auth.onaether.dev` and
-`edge.onaether.dev`, holds the following. The edge cannot read terminal,
-agent, file or dashboard content you reach over SSH, which is encrypted end to
-end between your computer and your server. An MCP
+`auth.cloudfield.ai` and `edge.cloudfield.ai`, holds the following. The edge
+cannot read terminal, agent, file or dashboard content you reach over SSH,
+which is encrypted end to end between your computer and your server. An MCP
 connector's traffic is different: TLS ends at the edge, which decrypts each
 request, answer and token in memory to relay it ([edge.md](edge.md#mcp-connectors))
 and keeps none of them. Its journal logs requests it refuses before relaying,
 with the path and, from outside its trusted proxies, the client address, and
 internal relay failures; the nginx in front of it logs every request's client
 address, path, status and user agent.
+
+As of 2026-11-26 the project's edge also answers at `auth.onaether.dev` and
+`edge.onaether.dev`, for servers, devices and connectors set up there.
+Everything this page says about the project's edge applies at those
+addresses too.
 
 | What | Why | Kept |
 | --- | --- | --- |
@@ -314,6 +318,14 @@ address, path, status and user agent.
 | A server id the operator blocked, and when | To refuse that server | Until the operator unblocks it |
 | An account the operator blocked: its GitHub user id, and when | To refuse its sign-ins and claims | Until the operator unblocks it, also after the account is deleted |
 | The edge's log: server ids, error messages, and the IP addresses of refused connections and failed TLS handshakes | To operate and defend the edge | For the retention period its operator sets |
+| Only while its operator retires one of its addresses: which of the edge's own sign-in addresses (`https://<host>`: the edge's own address, not the device's IP address) each pending sign-in, signed-in device and browser sign-in was made at; for a device or browser sign-in made earlier, the address it was next used at, and for a device sign-in started earlier, the address it completed at, marked as such | To count, and later end, the devices and sign-ins left on an address the operator retires | As long as the sign-in or device |
+| Only while its operator retires one of its addresses: each claimed server's last connection or claim, which of the edge's relay addresses it was made to, when, and the `cloudfield-server` build it reported | To list the servers still on that address (`aether-edge retiring`) | Replaced at each connection; removed with the server |
+| Only while its operator retires one of its addresses: for each claimed server and each of the edge's relay addresses it got MCP connector requests through, when the last one the edge sent on to the server came, recorded at most once an hour, whether or not the server accepted it | To count the connectors still on that address | Until the server is removed |
+| Only while its operator retires one of its addresses: each pair of the edge's own addresses, when it last started with it, and when its current recording period began and last stopped | To report on a pair after it is taken out of service | Indefinitely |
+
+A backup of `edge.db` (`aether-edge backup`, and the copy the edge takes
+before each schema upgrade in `backups/`) holds all of the above except the
+log, as it was when the copy was made.
 
 Rate limits count requests per IP address, or per /64 for IPv6, in memory
 only; nothing is written. While you are connected, the edge also sees your
@@ -324,13 +336,13 @@ accepted connections only at debug level, which the server does not emit.
 
 Revoking your devices removes them from the edge; the account record stays.
 To delete it yourself, open the edge's Account page,
-`https://auth.cloudfield.ai/account` or `https://auth.onaether.dev/account`
-for the project's edge; `cloudfield logout --delete-account` prints that address. The page asks you to sign in with
-GitHub in that browser within the last 5 minutes and to type your
-login ([edge.md](edge.md#deleting-an-account)). The edge then deletes the
+`https://auth.cloudfield.ai/account` for the project's edge;
+`cloudfield logout --delete-account` prints the page's address. The page asks
+you to sign in with GitHub in that browser within the last 5 minutes and to
+type your login ([edge.md](edge.md#deleting-an-account)). The edge then deletes the
 account, its devices and sessions, and tells each server it reached to
 remove your identity there; what a server holds is its administrator's.
-You can also ask the edge's operator, `team@onaether.dev` for the
+You can also ask the edge's operator, `team@cloudfield.ai` for the
 project's edge, who runs `aether-edge accounts delete`.
 
 ## Remote-development data
