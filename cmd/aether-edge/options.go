@@ -503,9 +503,9 @@ func readSecretFile(path string) (string, error) {
 }
 
 // olderImageServes refuses a retired host that an edge image older than
-// --retired-pairs would serve: such an image reads the origins only from
-// the AETHER_EDGE_ names, so one that a CLOUDFIELD_EDGE_ name shadows here
-// is still what it serves after a rollback. getenv reads the environment
+// v0.8.7 would serve: such an image reads the origins only from the
+// AETHER_EDGE_ names, so one that a CLOUDFIELD_EDGE_ name shadows here is
+// still what it serves after a rollback. getenv reads the environment
 // without the CLOUDFIELD_EDGE_ names.
 func olderImageServes(o options, getenv func(string) string) error {
 	retired := map[string]bool{}
