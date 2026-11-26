@@ -56,7 +56,7 @@ func TestEdgeStatusRetiringRow(t *testing.T) {
 		{name: "retired since", status: edgeagent.Status{Edge: old, Error: gone, Since: since}, notices: edgeagent.StoredNotices{Notices: []edgeproto.Notice{dated}},
 			row:        "retiring     " + old + " is retiring on 2027-03-01; move this server with: sudo cloudfield-server edge move " + other,
 			connection: "connection   disconnected since " + since.Local().Format(time.DateTime) + ": " + gone, err: errNotConnected},
-		{name: "control characters", status: edgeagent.Status{Edge: old, Error: gone + "\r\x1b[2K\nconnected‮", Since: since},
+		{name: "control characters", status: edgeagent.Status{Edge: old, Error: gone + "\r\x1b[2K\nconnected\u202e", Since: since},
 			connection: "connection   disconnected since " + since.Local().Format(time.DateTime) + ": " + gone + "[2Kconnected", err: errNotConnected},
 	}
 	for _, tt := range tests {
