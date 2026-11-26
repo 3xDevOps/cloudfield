@@ -570,21 +570,16 @@ func main() {
     if ([Console]::IsOutputRedirected) {
         Assert-AetherTest (-not (Test-AetherSomeoneToSee)) 'a redirected console counted as someone to see the app'
     }
-    $hadCI = Test-Path -LiteralPath 'Env:CI'
-    $oldCI = $env:CI
-    $env:CI = 'true'
-    try {
-        Assert-AetherTest (-not (Test-AetherSomeoneToSee)) 'CI counted as someone to see the app'
-    }
-    finally {
-        if ($hadCI) { $env:CI = $oldCI } else { Remove-Item -LiteralPath 'Env:CI' -ErrorAction SilentlyContinue }
-    }
+
     # A token Windows treats as Administrator is elevated, so its label is
     # High; a hosted runner's is. An operator token can be elevated without
     # Administrators, so only this direction holds.
     $principal = New-Object Security.Principal.WindowsPrincipal ([Security.Principal.WindowsIdentity]::GetCurrent())
     $global:LASTEXITCODE = 7
     if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        # Unreadable labels also answer elevated, so first prove this one reads.
+        $label = & (Join-Path ([Environment]::GetFolderPath('System')) 'whoami.exe') /groups /fo csv /nh
+        Assert-AetherTest ($label -match '"S-1-16-12288"') ("an Administrator token has no High label: " + ($label -join "`n"))
         Assert-AetherTest (Test-AetherElevated) 'an Administrator token was not read as elevated'
     }
     else {

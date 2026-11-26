@@ -344,7 +344,7 @@ cat >"$bin/launchctl" <<'EOF'
 #!/bin/sh
 echo "${STUB_MANAGER:-Aqua}"
 EOF
-# STUB_MKFIFO_FAILS is a temp directory on a filesystem without FIFOs.
+# STUB_MKFIFO_FAILS makes mkfifo fail as it does on a filesystem without FIFOs.
 cat >"$bin/mkfifo" <<'EOF'
 #!/bin/sh
 if [ -n "${STUB_MKFIFO_FAILS:-}" ]; then
@@ -639,8 +639,11 @@ reset "--role client without FIFOs still builds and does not open the app"
 STUB_MKFIFO_FAILS=1 DISPLAY=:0 AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
 ran "aether gui build"
 printed "launcher $home/.local/share/applications/aether-desktop.desktop"
-not_opened
+not_ran "gio "
+not_printed "Cloudfield is starting"
 printed "  open Cloudfield from your applications to link your server, or in a terminal:"
+tail -n 1 "$out" | grep -q "^aether install: the desktop app is installed but did not open: \`aether gui build\` ran without its output being read: mkfifo: cannot create fifo '.*/gui-build.fifo': Operation not supported$" ||
+	fail "the last line is not mkfifo's error"
 
 reset "--role client whose build fails does not open the app"
 GUI_FAILS=1 DISPLAY=:0 AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"

@@ -54,7 +54,7 @@ SYSTEM_BIN_DIR="${AETHER_SYSTEM_BIN_DIR:-/usr/local/bin}"
 USER_BIN_DIR="${HOME:-}/.local/bin"
 
 die() {
-	echo "aether install: $*" >&2
+	printf 'aether install: %s\n' "$*" >&2
 	exit 1
 }
 
@@ -798,7 +798,7 @@ run_gui_build() {
 	# no FIFO can be made the build runs without one and the app is not
 	# opened.
 	build_status=0
-	if mkfifo "$tmp/gui-build.fifo" 2>/dev/null; then
+	if fifo_err="$(mkfifo "$tmp/gui-build.fifo" 2>&1)"; then
 		tee "$tmp/gui-build.out" <"$tmp/gui-build.fifo" &
 		tee_pid=$!
 		run_interactive "${BIN_DIR}/aether" gui build >"$tmp/gui-build.fifo" || build_status=$?
@@ -818,20 +818,25 @@ run_gui_build() {
 app_opened=no
 open_failure=""
 open_app() {
-	[ "$have_tty" = yes ] && [ -z "${CI:-}" ] && [ -f "$tmp/gui-build.out" ] &&
+	[ "$have_tty" = yes ] && [ -z "${CI:-}" ] &&
 		[ -z "${SUDO_USER:-}${DOAS_USER:-}${PKEXEC_UID:-}" ] && [ "$(id -u)" -ne 0 ] || return 1
 	case "$os" in
 	linux)
 		[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || return 1
-		launcher="$(sed -n 's/^launcher //p' "$tmp/gui-build.out" | tail -n 1)"
+		line=launcher
 		;;
 	darwin)
 		# Aqua is a GUI login; an SSH login is Background.
 		[ "$(launchctl managername 2>/dev/null)" = Aqua ] || return 1
 		# The bundle is the launcher Finder and Spotlight list.
-		launcher="$(sed -n 's/^installed //p' "$tmp/gui-build.out" | tail -n 1)"
+		line=installed
 		;;
 	esac
+	if [ ! -f "$tmp/gui-build.out" ]; then
+		open_failure="\`aether gui build\` ran without its output being read: ${fifo_err}"
+		return 1
+	fi
+	launcher="$(sed -n "s/^${line} //p" "$tmp/gui-build.out" | tail -n 1)"
 	case "$os:$launcher" in
 	linux:/*.desktop) ;;
 	darwin:/*.app) set -- open "$launcher" ;;
