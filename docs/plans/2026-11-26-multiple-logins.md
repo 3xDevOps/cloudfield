@@ -6,8 +6,7 @@ running session to the next when the vendor reports the current one has run
 out, in the open: every session shows which login it is on and every move is
 recorded with the vendor's reason.
 
-**Status:** proposed 2026-11-26. Claude Code only. Decisions marked
-**Owner** wait for the owner; the build proceeds on the stated default.
+**Status:** proposed 2026-11-26. Claude Code only.
 The [Review](#review) section lists what review changed.
 
 A **login** is one sign-in of an agent CLI. Claude Code keeps one in any of
@@ -129,13 +128,37 @@ moved between automatically is undecided by the text.
 - Each login has an **automatic** switch. Off means Cloudfield uses the
   login only when the member picks it for a launch, and never moves a
   session onto it.
-- **Owner:** a second personal subscription (plan `pro` or `max` while
-  another of the member's logins is `pro` or `max`) is added with
-  automatic **on**, after the CLI and dashboard show what Anthropic's
-  pages do and do not say, with the links above. The alternative is
-  automatic off for that case until the member turns it on. It is one
-  constant. Review argued for off: a move puts a personal login into a
-  session that workspace collaborators can steer (section 6).
+- **Unsettled pairs are off by default.** Decided 2026-11-26 by the
+  owner's liaison on the owner's delegation ("do whatever you think is
+  best"); the owner can overturn it. Cloudfield goes from login F to login
+  L on its own, at launch or in a running session, only when Anthropic's
+  pages clearly allow the pair:
+  - L is a Console login (billed to Console credits), which Anthropic
+    itself suggests at a subscription limit; or
+  - F and L are in different organisations and are not both personal
+    subscriptions (plan `pro` or `max`): a seat in another organisation
+    the member belongs to.
+
+  Every other pair is unsettled: two personal subscriptions, two seats of
+  one organisation, and any pair where Cloudfield cannot read the plan or
+  the organisation of one of them. For those the member has one setting,
+  **Switch between these logins automatically**, off by default, shown
+  beside the logins it governs with this text and the link: "Anthropic's
+  usage policy does not say whether moving between two of your own
+  subscriptions at a usage limit is permitted. It forbids using several
+  accounts to get around its restrictions. This is your decision." It is
+  shown once where the logins are listed, never as a prompt.
+- The rule governs the launch-time choice as well as the move of a running
+  session. Both go to another login for the same reason, that the first
+  is at its limit, so nothing in Anthropic's pages makes one clearer than
+  the other. Picking a login by hand for a launch is not governed: holding
+  several accounts and choosing between them is what Claude Code's own
+  documentation describes.
+- What Cloudfield can read: the plan (`subscriptionType` in the login
+  file: `pro`, `max`, `team`, `enterprise`), and the organisation id and
+  email Claude Code caches as `oauthAccount` at sign-in. A login signed in
+  before this feature, such as the default one, may have neither on
+  record until its next sign-in; it then counts as unsettled.
 
 ### 2. Storage
 
@@ -201,7 +224,8 @@ dialog) or, by default, the member's first automatic login. The requested
 login is used unless a successful usage read shows a window at 95% or
 more, or the vendor reported it run out as below. Then, in order:
 
-1. the member's other automatic logins, in their order: the first that can
+1. the member's other automatic logins that decision 1 allows from the
+   requested one, in their order: the first that can
    sign in and whose usage reads below 95%, or cannot be read (a Console
    login, for which Anthropic exposes no usage, or a subscription login
    whose access token expired while idle and which holds a refresh token);
@@ -233,8 +257,9 @@ continuation prompt naming both logins.
   container mounts. Processes the agent left running in the old container
   and its terminals end with it, as in every move today.
 - A login the session already used is not tried again in that session.
-- Under the lock that records the move, the chosen login must still exist
-  and still be automatic. Otherwise the next candidate is tried.
+- Under the lock that records the move, the chosen login must still exist,
+  still be automatic and still be allowed from the current one by
+  decision 1. Otherwise the next candidate is tried.
 - A session whose home is not the login owner's own (after a handoff)
   never moves to an added login, and a session on an added login cannot
   be handed off: the handoff is refused with the reason.
@@ -257,8 +282,9 @@ reset time among them when a usage read gave one.
 - Every move: a `run.account` event with both logins and the vendor's
   message, an item-log notice, a room note, and a new account segment.
   Cost stays with the segment that spent it.
-- Off switches: per login (automatic), per launch (`--no-fallback`), and
-  the saved launch default.
+- Switches: per login (automatic), the member's setting for unsettled
+  pairs (off by default), per launch (`--no-fallback`), and the saved
+  launch default.
 
 ### 5. Sharing and precedence
 
