@@ -171,7 +171,7 @@ func endDevices(ctx context.Context, s *edgestore.Store, before time.Time, in io
 	if err := w.Flush(); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(out, "end these %d device tokens, as signing out does? Type yes to end them: ", len(list)); err != nil {
+	if _, err := fmt.Fprintf(out, "end the %d device tokens listed, as signing out does? Type yes to end them: ", len(list)); err != nil {
 		return err
 	}
 	answer, err := bufio.NewReader(in).ReadString('\n')
@@ -186,6 +186,6 @@ func endDevices(ctx context.Context, s *edgestore.Store, before time.Time, in io
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(out, "ended %d device tokens; %d used since the list was read stay\n", len(ended), len(ids)-len(ended))
+	_, err = fmt.Fprintf(out, "device tokens ended: %d; kept because they were used since the list was read: %d\n", len(ended), len(ids)-len(ended))
 	return err
 }
