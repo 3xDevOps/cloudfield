@@ -1264,7 +1264,10 @@ were not used while the pair was retiring. It logs `edge: deleted the sign-ins
 of retired pairs and those with no recorded origin devices=<n> sessions=<n>
 authorizations=<n>`. A server keeps its record of each device and its approval,
 as after a sign-out; the person signs the device in again at the replacement.
-Deleted tokens and sessions stay deleted when the option is removed.
+Deleted tokens and sessions stay deleted when the option is removed. An image
+rollback, or any run without either option, issues rows without a recorded
+origin, and the next start with `--retired-pairs` deletes those on the kept
+pairs too.
 
 Keep the entry after the pair's DNS records are gone: a database restored from
 a backup taken before the retirement holds the deleted tokens again, and the
@@ -1276,8 +1279,10 @@ checks only that an edge presents the edge key it pinned.
 
 A device sign-in from a client that names its relay origin (`relay_origin` in
 the start request) is refused unless that is the relay origin of the pair the
-request arrived at. While origins are recorded, a pending sign-in is confirmed,
-polled and redeemed only on the pair it was started at.
+request arrived at, whatever the options. Binding the pending sign-in to that
+pair needs its recorded origin: while either option is set, it is confirmed,
+polled and redeemed only on the pair it was started at; with neither set, any
+pair confirms and redeems it, as before.
 
 ### Firewall
 
