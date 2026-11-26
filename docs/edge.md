@@ -1101,7 +1101,9 @@ fix, when:
 - the replacement is the entry's own pair, or is itself retiring;
 - a host name is named in two entries, whatever its port, or with another
   port than the served origin's; a replacement may repeat;
-- the date is not a real date written `YYYY-MM-DD`.
+- the date is not a real date written `YYYY-MM-DD`;
+- an origin of an entry is longer than 267 bytes or spells its port with a
+  leading zero, such as `:0443`.
 
 Origins are compared in canonical form: case and a default `:443` do not
 matter. Remove the entry and restart the edge to undo it. An older edge image
@@ -1132,17 +1134,20 @@ A missing or bad signature and a signed empty list both clear the stored
 notices: whoever answers for a relay host can suppress a warning until the next
 real connection, but cannot add a notice or change a replacement.
 Pinning a key, by the first connection or `edge trust`, deletes the
-`notices.json` of the key it replaces and of the key it pins, and writes the
-pin file `edge_key.json` with a new random `id` beside the key. That id is the
-one other local change with the option unset; an older binary ignores it. A
-list verified under a pin this build wrote is never written after that pin was
-replaced, and stored notices count only while the pin that stored them, by its
-id, is the current one, so a pin an older binary wrote again without an id
-shows none until the next connection. Stored notices also name the server id
-that verified them and count for no other. A list that arrived with the
-`ready` that pinned the key is trusted as that pin is, and only shown. An edge
-or a server that does not know the fields ignores them, and a server that sends
-no nonce gets the `ready` it got before.
+`notices.json` of the key it replaces and of the key it pins. What binds stored
+notices to a pin is the pin file itself: every pin, by this build or an older
+one, replaces `edge_key.json` by a rename, so each pin is a new file. Beside
+`notices.json` the server keeps `notices.pin`, a hard link to the pin file the
+notices were stored under, and reads the notices only while that link is the
+current `edge_key.json`; a list verified under one pin file is never written
+once another has replaced it. A pin by an older binary therefore shows no
+notices until the next connection, and nothing in this build rewrites the pin
+file except a pin. Where the file system cannot hard-link, the server stores no
+notices. Stored notices also name the server id that verified them and count
+for no other. A list that arrived with the `ready` that pinned the key is
+trusted as that pin is, and only shown. An edge or a server that does not know
+the fields ignores them, and a server that sends no nonce gets the `ready` it
+got before.
 
 While a pair is retiring:
 
