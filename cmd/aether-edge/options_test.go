@@ -354,7 +354,7 @@ func TestRetiringPairs(t *testing.T) {
 		{"https://edge.example.test https://edge2.example.net 2027-3-1", `the date "2027-3-1" of https://edge.example.test is not a real date`},
 		{"https://edge.example.test https://edge2.example.net 01/03/2027", `the date "01/03/2027" of https://edge.example.test is not a real date`},
 	} {
-		if _, err := parse(tt.retiring); err == nil || !strings.Contains(err.Error(), tt.want) {
+		if _, err = parse(tt.retiring); err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("--retiring-pairs %q: %v, want %q", tt.retiring, err, tt.want)
 		}
 	}

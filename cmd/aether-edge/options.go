@@ -239,10 +239,10 @@ func parseRetiringPairs(list, scheme, relay string, more []edge.Pair) ([]edge.Re
 			"serve its replacement first with --origin-pairs (AETHER_EDGE_ORIGIN_PAIRS)")
 	}
 	relays := map[string]string{sameOrigin(relay): relay}
-	signins := map[string]string{}
+	signinOrigins := map[string]string{}
 	for _, p := range more {
 		relays[sameOrigin(p.RelayOrigin)] = p.RelayOrigin
-		signins[sameOrigin(p.SigninOrigin)] = p.RelayOrigin
+		signinOrigins[sameOrigin(p.SigninOrigin)] = p.RelayOrigin
 	}
 	served := func(origin string) (string, error) {
 		if err := checkOrigin("--retiring-pairs", origin, scheme); err != nil {
@@ -252,7 +252,7 @@ func parseRetiringPairs(list, scheme, relay string, more []edge.Pair) ([]edge.Re
 			c, _ := edgeproto.Origin(r) // checked as an origin above
 			return c, nil
 		}
-		if r, ok := signins[sameOrigin(origin)]; ok {
+		if r, ok := signinOrigins[sameOrigin(origin)]; ok {
 			return "", fmt.Errorf("--retiring-pairs: %s is a sign-in origin; name the relay origin of its pair, %s", origin, r)
 		}
 		return "", fmt.Errorf("--retiring-pairs: %s is not a relay origin of this edge; name one of --relay-origin and the relay origins of --origin-pairs", origin)

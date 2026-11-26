@@ -41,8 +41,8 @@ func TestNoticesAreVerifiedAndStored(t *testing.T) {
 		t.Fatal(err)
 	}
 	a.minBackoff, a.maxBackoff = 10*time.Millisecond, 50*time.Millisecond
-	if got, err := a.Notices(); got != nil || err != nil {
-		t.Fatalf("notices before enrolling: %+v, %v", got, err)
+	if got, nerr := a.Notices(); got != nil || nerr != nil {
+		t.Fatalf("notices before enrolling: %+v, %v", got, nerr)
 	}
 	stop, _ := run(t, a)
 	ec := edge.nextControl(t)
@@ -60,8 +60,8 @@ func TestNoticesAreVerifiedAndStored(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info, err := os.Stat(a.state.path(name)); err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("notices file: %v %v, want mode 0600", info, err)
+	if info, serr := os.Stat(a.state.path(name)); serr != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("notices file: %v %v, want mode 0600", info, serr)
 	}
 	stop()
 

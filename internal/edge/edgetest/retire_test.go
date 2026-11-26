@@ -63,8 +63,8 @@ func TestRetiringPair(t *testing.T) {
 	if got, ok := alA.edge.Retiring(); !ok || got != retiring {
 		t.Errorf("client at A after a relayed connection: %+v, %v; want %+v", got, ok, retiring)
 	}
-	if got, ok, err := alA.edge.RetiringNotice(context.Background()); err != nil || !ok || got != retiring {
-		t.Errorf("client at A from %s: %+v, %v, %v", edgeproto.PathEdgeInfo, got, ok, err)
+	if got, ok, nerr := alA.edge.RetiringNotice(context.Background()); nerr != nil || !ok || got != retiring {
+		t.Errorf("client at A from %s: %+v, %v, %v", edgeproto.PathEdgeInfo, got, ok, nerr)
 	}
 
 	h.signinURL, h.relayURL = signinB, relayB
@@ -73,12 +73,12 @@ func TestRetiringPair(t *testing.T) {
 	if got := h.readyTo(t, b, from).Notices; len(got) != 1 || !sameNotice(got[0], want) {
 		t.Fatalf("ready to the server at B carries notices %+v, want the one for A", got)
 	}
-	if got, err := b.agent.Notices(); err != nil || len(got) != 1 || !sameNotice(got[0], want) {
-		t.Fatalf("server at B stored notices %+v, %v; want the one for A", got, err)
+	if got, nerr := b.agent.Notices(); nerr != nil || len(got) != 1 || !sameNotice(got[0], want) {
+		t.Fatalf("server at B stored notices %+v, %v; want the one for A", got, nerr)
 	}
 	alB := h.login(alice)[0]
 	h.claimServer(alB, b)
-	if _, err := alB.edge.Servers(context.Background()); err != nil {
+	if _, err = alB.edge.Servers(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	conn, err = alB.edge.Dial(context.Background(), b.id)
@@ -115,7 +115,7 @@ func TestRetiringPair(t *testing.T) {
 		return nil
 	})
 	for _, origin := range []string{relayA, relayB} {
-		raw, ready := rawReady(t, h, origin)
+		raw, ready := rawReady(t, origin)
 		old, err := edgeproto.EncodeControl(edgeproto.Ready{ServerID: ready.ServerID, State: ready.State, EdgeKey: ready.EdgeKey, RelayOrigins: ready.RelayOrigins})
 		if err != nil {
 			t.Fatal(err)
@@ -157,7 +157,7 @@ func headerNames(t *testing.T, url string) []string {
 
 // rawReady enrolls a new server at origin by hand and returns the ready
 // the edge sent, as bytes and decoded.
-func rawReady(t *testing.T, h *harness, origin string) ([]byte, edgeproto.Ready) {
+func rawReady(t *testing.T, origin string) ([]byte, edgeproto.Ready) {
 	t.Helper()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -190,7 +190,7 @@ func rawReady(t *testing.T, h *harness, origin string) ([]byte, edgeproto.Ready)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ws.Write(t.Context(), websocket.MessageText, hello); err != nil {
+	if err = ws.Write(t.Context(), websocket.MessageText, hello); err != nil {
 		t.Fatal(err)
 	}
 	_, raw, err := ws.Read(t.Context())
