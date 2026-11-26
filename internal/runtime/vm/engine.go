@@ -55,6 +55,9 @@ const (
 	stateDiskBytes = 1 << 30
 	minMemoryMiB   = 256
 	bootTimeout    = 90 * time.Second
+	// helperRedial is how often a wait for a booting or restored guest's
+	// helper ends the client's reconnect backoff.
+	helperRedial = 10 * time.Millisecond
 	// guestOverheadMiB is what the guest keeps out of the session's limit
 	// beyond a 32nd of it (guestMiB): 288 MiB for what the kernel and the
 	// helper hold (at most 265 MiB, at a 3 GiB limit, once sessions of 1 to
@@ -765,8 +768,12 @@ func (e *engine) waitHelper(ctx context.Context, key string, h helper) error {
 	}()
 	tick := time.NewTicker(250 * time.Millisecond)
 	defer tick.Stop()
+	redial := time.NewTicker(helperRedial)
+	defer redial.Stop()
 	for {
 		select {
+		case <-redial.C:
+			h.Redial()
 		case err := <-answered:
 			if e.rebooted(key) {
 				return e.restarted(key)
