@@ -91,7 +91,7 @@ export function PhoneRunHeader({ run, view, views, nav, agentName, keyboard, pri
             <StatusDot tone={toneOf(shown)} pulse={shown.state === 'working'} />
             <span className={keyboard ? 'whitespace-nowrap max-[399px]:sr-only' : 'min-w-0 truncate'}>
               <span role="status">{state}</span>
-              {!keyboard && <span> · {agentName} · {modeLabel[run.mode] ?? run.mode}</span>}
+              {!keyboard && <span> · {agentName} · {modeLabel[run.mode] ?? run.mode}{run.account_login_name && ` · login ${run.account_login_name}`}{run.account_login_per_use && ' · billed per use'}</span>}
             </span>
             {!keyboard && <RunLinearIssue run={run} compact className="coarse:h-auto coarse:px-0" />}
           </p>
