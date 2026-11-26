@@ -482,7 +482,7 @@ more than one workspace exists`. `cloudfield sessions` lists sessions from every
 | `cloudfield attach [--read-only] <session>` | Attach to a session's terminal. Several people can attach at once |
 | `cloudfield message <session> "..."` | Message a session's agent. It shows as a banner in your color |
 | `cloudfield pause`, `resume`, `kill <session>` | Suspend, thaw or stop a session. The checkout and transcript survive a kill |
-| `cloudfield sessions --needs-you` | Sessions waiting on you, then what each needs with the command that answers it. `cloudfield sessions <session-id>` shows that for one session, with its agent, mode, parent, unacknowledged mail, controller and wait conditions |
+| `cloudfield sessions --needs-you` | Sessions waiting on you, then on stderr what each needs with the command that answers it, or that it waits on another member. `cloudfield sessions <session-id>` shows that for one session, with its agent, mode, parent, unacknowledged mail, controller and wait conditions |
 | `cloudfield timeline` | The workspace history. `cloudfield timeline <session-id>` shows one session's. Filter with `--member`, `--type`, `--limit`. `--jsonl` exports |
 | `cloudfield changes` | Session changes since a cursor: status, reports, mail, pull requests and lifecycle. `--follow` keeps polling ([coordination.md](coordination.md#follow-changes-from-a-cursor)) |
 | `cloudfield cost --runs` | Token spend per member and run |
@@ -864,7 +864,8 @@ change.
 switch in the launch panel, allows or stops them for that one session without changing your
 setting. Only the session's owner allows it, and a handoff to another member voids
 it. An admin can turn it off. Handing a session to another member detaches it from
-its parent and from its subsessions, so no lineage spans two owners.
+its parent and from its subsessions, so no lineage spans two owners;
+`cloudfield sessions` then shows the subsession's `PARENT` with `(detached)`.
 
 The quick-launch button beside **New session** launches your last agent again
 with no task, and always allows subsessions for that session.
