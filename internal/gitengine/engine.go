@@ -275,7 +275,7 @@ func (e *Engine) RemoveWorkspaceRepo(ctx context.Context, ws domain.WorkspaceID)
 	if err := os.RemoveAll(removed); err != nil {
 		return fmt.Errorf("gitengine: remove workspace repository: %w", err)
 	}
-	if e.cfg.VM != nil {
+	if e.cfg.VM != nil && e.cfg.VM.Disks != nil {
 		if err := e.cfg.VM.Disks.ForgetCheckoutDisks(string(ws)); err != nil {
 			return fmt.Errorf("gitengine: remove workspace repository: %w", err)
 		}
