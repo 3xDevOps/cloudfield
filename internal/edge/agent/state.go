@@ -59,9 +59,10 @@ type State struct {
 	// writeNotices links the pin file and pinFirst publishes one; tests
 	// pin a key there as an older binary, which takes no lock, would.
 	beforeLink, beforePublish func()
-	// linkFile replaces os.Link when set; tests make it fail as a file
-	// system without hard links does.
-	linkFile func(oldname, newname string) error
+	// linkFile and renameNoReplace replace os.Link and the rename that
+	// replaces nothing when set; tests make them fail as a file system
+	// without them does.
+	linkFile, renameNoReplace func(oldname, newname string) error
 }
 
 // OpenState returns the state under dataDir. Nothing is created until a
@@ -227,11 +228,32 @@ func (s *State) Pin(key ed25519.PublicKey) error {
 	return s.write(pinFile, pin{Key: key})
 }
 
+func (s *State) noReplace(oldname, newname string) error {
+	if s.renameNoReplace != nil {
+		return s.renameNoReplace(oldname, newname)
+	}
+	return renameNoReplace(oldname, newname)
+}
+
+// unsupported reports whether err says the file system or the kernel
+// does not offer the operation.
+func unsupported(err error) bool {
+	return errors.Is(err, errors.ErrUnsupported) || errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENOSYS) ||
+		errors.Is(err, syscall.EOPNOTSUPP)
+}
+
 func (s *State) link(oldname, newname string) error {
 	if s.linkFile != nil {
 		return s.linkFile(oldname, newname)
 	}
 	return os.Link(oldname, newname)
+}
+
+// sameRegular reports whether path itself, not a file a symbolic link
+// there names, is the regular file held.
+func sameRegular(path string, held os.FileInfo) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode().IsRegular() && os.SameFile(info, held)
 }
 
 // forgetNotices deletes the stored notices of each key.
@@ -295,16 +317,20 @@ func (s *State) publishPin(key ed25519.PublicKey) (pin, bool, error) {
 	if s.beforePublish != nil {
 		s.beforePublish()
 	}
-	err = s.link(tmp, s.path(pinFile))
+	// Put the pin in place only where none is: a rename that replaces
+	// nothing, else a hard link. A file system with neither pins by a
+	// plain rename, as builds before notices did, which can replace a pin
+	// another process wrote in the same instant.
+	err = s.noReplace(tmp, s.path(pinFile))
+	if unsupported(err) {
+		if err = s.link(tmp, s.path(pinFile)); err != nil && !errors.Is(err, fs.ErrExist) {
+			err = os.Rename(tmp, s.path(pinFile))
+		}
+	}
 	if errors.Is(err, fs.ErrExist) {
 		_ = f.Close()
 		p, oerr := openPin(s.path(pinFile))
 		return p, false, oerr
-	}
-	// A file system without hard links pins by a rename, as builds
-	// before notices did.
-	if err != nil {
-		err = os.Rename(tmp, s.path(pinFile))
 	}
 	if err != nil {
 		_ = f.Close()
@@ -458,8 +484,7 @@ func (s *State) Notices(serverID string) (StoredNotices, error) {
 	if err != nil || cur.Key == nil {
 		return StoredNotices{}, err
 	}
-	stored, err := os.Stat(s.path(keyDirFile(cur.Key, noticesPinFile)))
-	if err != nil || !os.SameFile(stored, cur.file) {
+	if !sameRegular(s.path(pinFile), cur.file) || !sameRegular(s.path(keyDirFile(cur.Key, noticesPinFile)), cur.file) {
 		return StoredNotices{}, nil
 	}
 	var n StoredNotices
@@ -483,7 +508,7 @@ func (s *State) writeNotices(p pin, n StoredNotices) error {
 		return err
 	}
 	defer unlock()
-	if cur, serr := os.Stat(s.path(pinFile)); serr != nil || !os.SameFile(cur, p.file) {
+	if !sameRegular(s.path(pinFile), p.file) {
 		return nil
 	}
 	name, link := keyDirFile(p.Key, noticesFile), keyDirFile(p.Key, noticesPinFile)
@@ -511,8 +536,7 @@ func (s *State) writeNotices(p pin, n StoredNotices) error {
 		return nil
 	}
 	defer os.Remove(candidate) //nolint:errcheck // gone after a successful rename
-	linked, err := os.Stat(candidate)
-	if err != nil || !os.SameFile(linked, p.file) {
+	if !sameRegular(candidate, p.file) {
 		return nil
 	}
 	if err := os.Rename(payload, s.path(name)); err != nil {

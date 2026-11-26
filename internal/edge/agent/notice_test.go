@@ -366,23 +366,28 @@ func TestOlderBinarysPinDuringTheLinkStoresNothing(t *testing.T) {
 func TestFirstPinDoesNotTakeAnOlderBinarysPin(t *testing.T) {
 	a, _, _ := ed25519.GenerateKey(rand.Reader)
 	b, _, _ := ed25519.GenerateKey(rand.Reader)
-	for name, older := range map[string]ed25519.PublicKey{"another key": b, "the same key": a} {
-		s := OpenState(t.TempDir())
-		s.beforePublish = func() { writeOlderPin(t, s, older) }
-		p, created, err := s.pinFirst(a)
-		t.Cleanup(p.close)
-		if got, kerr := s.PinnedKey(); kerr != nil || !got.Equal(older) {
-			t.Fatalf("%s: pinned key %x, %v; want the older binary's", name, got, kerr)
-		}
-		if !older.Equal(a) {
-			if err == nil {
-				t.Errorf("%s: pinFirst took the older binary's pin of another key", name)
+	for _, path := range []string{"rename without replacing", "hard link"} {
+		for name, older := range map[string]ed25519.PublicKey{"another key": b, "the same key": a} {
+			s := OpenState(t.TempDir())
+			if path == "hard link" {
+				s.renameNoReplace = func(string, string) error { return syscall.ENOSYS }
 			}
-			continue
-		}
-		cur, serr := os.Stat(s.path(pinFile))
-		if err != nil || created || serr != nil || !os.SameFile(cur, p.file) {
-			t.Errorf("%s: pinFirst = created %v, %v; want the pin file in place, not created", name, created, err)
+			s.beforePublish = func() { writeOlderPin(t, s, older) }
+			p, created, err := s.pinFirst(a)
+			t.Cleanup(p.close)
+			if got, kerr := s.PinnedKey(); kerr != nil || !got.Equal(older) {
+				t.Fatalf("%s, %s: pinned key %x, %v; want the older binary's", path, name, got, kerr)
+			}
+			if !older.Equal(a) {
+				if err == nil {
+					t.Errorf("%s, %s: pinFirst took the older binary's pin of another key", path, name)
+				}
+				continue
+			}
+			cur, serr := os.Stat(s.path(pinFile))
+			if err != nil || created || serr != nil || !os.SameFile(cur, p.file) {
+				t.Errorf("%s, %s: pinFirst = created %v, %v; want the pin file in place, not created", path, name, created, err)
+			}
 		}
 	}
 }
@@ -408,32 +413,67 @@ func TestFirstPinHoldsThePinItPublished(t *testing.T) {
 	}
 }
 
+// withoutLinks makes s's file system offer neither a rename that
+// replaces nothing nor hard links, failing the link with linkErr.
+func withoutLinks(s *State, linkErr syscall.Errno) {
+	s.renameNoReplace = func(string, string) error { return syscall.ENOSYS }
+	s.linkFile = func(oldname, newname string) error {
+		return &os.LinkError{Op: "link", Old: oldname, New: newname, Err: linkErr}
+	}
+}
+
 // TestNoHardLinks pins and stores notices where hard links fail, as on
 // vfat or a FUSE file system: the first pin falls back to a rename and
 // holds the file it put in place, and no notices are stored.
 func TestNoHardLinks(t *testing.T) {
+	for _, linkErr := range []syscall.Errno{syscall.EPERM, syscall.EOPNOTSUPP} {
+		s := OpenState(t.TempDir())
+		withoutLinks(s, linkErr)
+		key, _, _ := ed25519.GenerateKey(rand.Reader)
+		p, created, err := s.pinFirst(key)
+		if err != nil || !created || !p.Key.Equal(key) {
+			t.Fatalf("%v: pinFirst without hard links = %x, created %v, %v", linkErr, p.Key, created, err)
+		}
+		t.Cleanup(p.close)
+		if cur, err := os.Stat(s.path(pinFile)); err != nil || !os.SameFile(cur, p.file) {
+			t.Fatalf("%v: the pin returned is not the pin file in place: %v", linkErr, err)
+		}
+		if err := s.writeNotices(p, testStored()); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := s.Notices(noticeServerID); err != nil || got.Notices != nil || noticesFileExists(t, s, key) {
+			t.Fatalf("%v: notices stored without hard links: %+v, %v", linkErr, got, err)
+		}
+		leftovers, _ := filepath.Glob(filepath.Join(filepath.Dir(s.path(keyDirFile(key, noticesFile))), ".*"))
+		if len(leftovers) != 0 {
+			t.Errorf("%v: temporary files left: %v", linkErr, leftovers)
+		}
+	}
+}
+
+// TestSymlinkedPinStoresNoNotices points edge_key.json at a pin file
+// elsewhere: the server pins and stores no notices, so replacing the
+// link's target cannot keep notices readable.
+func TestSymlinkedPinStoresNoNotices(t *testing.T) {
 	s := OpenState(t.TempDir())
-	s.linkFile = func(oldname, newname string) error {
-		return &os.LinkError{Op: "link", Old: oldname, New: newname, Err: syscall.EPERM}
-	}
 	key, _, _ := ed25519.GenerateKey(rand.Reader)
-	p, created, err := s.pinFirst(key)
-	if err != nil || !created || !p.Key.Equal(key) {
-		t.Fatalf("pinFirst without hard links = %x, created %v, %v", p.Key, created, err)
+	pinNow(t, s, key)
+	target := filepath.Join(t.TempDir(), "edge_key.json")
+	if err := os.Rename(s.path(pinFile), target); err != nil {
+		t.Fatal(err)
 	}
-	t.Cleanup(p.close)
-	if cur, err := os.Stat(s.path(pinFile)); err != nil || !os.SameFile(cur, p.file) {
-		t.Fatalf("the pin returned is not the pin file in place: %v", err)
+	if err := os.Symlink(target, s.path(pinFile)); err != nil {
+		t.Fatal(err)
+	}
+	p := heldPin(t, s)
+	if !p.Key.Equal(key) {
+		t.Fatalf("pin through the link %x", p.Key)
 	}
 	if err := s.writeNotices(p, testStored()); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := s.Notices(noticeServerID); err != nil || got.Notices != nil || noticesFileExists(t, s, key) {
-		t.Fatalf("notices stored without hard links: %+v, %v", got, err)
-	}
-	leftovers, _ := filepath.Glob(filepath.Join(filepath.Dir(s.path(keyDirFile(key, noticesFile))), ".*"))
-	if len(leftovers) != 0 {
-		t.Errorf("temporary files left: %v", leftovers)
+		t.Fatalf("notices stored under a symlinked pin: %+v, %v", got, err)
 	}
 }
 
@@ -563,9 +603,7 @@ func TestEnrollsWithoutHardLinks(t *testing.T) {
 		return list, edgeproto.SignNotices(edge.priv, id, edge.origin, nonce, list)
 	}
 	a := newAgent(t, edge.srv.URL, t.TempDir(), newFakeSSH())
-	a.state.linkFile = func(oldname, newname string) error {
-		return &os.LinkError{Op: "link", Old: oldname, New: newname, Err: syscall.EPERM}
-	}
+	withoutLinks(a.state, syscall.EPERM)
 	run(t, a)
 	ec := edge.nextControl(t)
 	ec.send(edgeproto.Ping{})
