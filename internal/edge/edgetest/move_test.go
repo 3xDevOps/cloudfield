@@ -3,14 +3,20 @@ package edgetest
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	edgeagent "github.com/3xDevOps/cloudfield/internal/edge/agent"
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
+	edge "github.com/3xDevOps/cloudfield/internal/edge/service"
 	"github.com/3xDevOps/cloudfield/internal/sshd"
 )
 
@@ -308,4 +314,99 @@ func moveAgent(t *testing.T, s *serverNode, from string) *edgeagent.Agent {
 		t.Fatal(err)
 	}
 	return a
+}
+
+// A server whose edge-url answers the control dial with 410 moves to an
+// address of its edge whose own ready signs, with the edge key and for
+// this probe's nonce, that the old address is retired in favour of it.
+// Until pull request 3 the edge sends no retired notice, so the proxy
+// signs one with the edge's key, as the edge will; a 410 from someone
+// who holds the old host name but not the key moves nothing.
+func TestEdgeMoveFromARetiredAddress(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	s := h.newServer(edgeproto.PolicyAccount)
+	h.claimServer(h.login(alice)[0], s)
+	relayA := h.relayURL
+	hostA := strings.TrimPrefix(relayA, "http://")
+	gone := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusGone)
+		_ = json.NewEncoder(w).Encode(edgeproto.ErrorBody{Error: "retired; this edge is at " + relayA})
+	}))
+	t.Cleanup(gone.Close)
+	from := gone.URL
+	_, wrongKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	signWith := func(key ed25519.PrivateKey, replacement string) {
+		var mu sync.Mutex
+		nonces := map[*controlLink][]byte{}
+		h.proxy.setTamper(t, func(e logEntry) (edgeproto.Message, bool) {
+			mu.Lock()
+			defer mu.Unlock()
+			switch m := e.msg.(type) {
+			case edgeproto.Hello:
+				nonces[e.link] = m.NoticeNonce
+			case edgeproto.Ready:
+				if e.link.host == hostA {
+					m.Notices = edgeproto.Notices{{State: edgeproto.NoticeRetired, Origin: from, Replacement: replacement}}
+					m.NoticesSignature = edgeproto.SignNotices(key, m.ServerID, relayA, nonces[e.link], m.Notices)
+					return m, true
+				}
+			}
+			return e.msg, true
+		})
+	}
+	refused := fmt.Sprintf("dial %s/v1/server/control: 410 Gone: retired; this edge is at %s; the edge at %s sends no notice signed with the pinned key "+
+		"that %s is retired, and a refusal alone does not show it, so nothing changed", from, relayA, relayA, from)
+
+	if _, _, err = moveAgent(t, s, from).Move(t.Context(), relayA); err == nil || err.Error() != refused {
+		t.Errorf("a 410 alone: %v\nwant: %s", err, refused)
+	}
+	backOnline(t, h, s)
+	signWith(wrongKey, relayA)
+	if _, _, err = moveAgent(t, s, from).Move(t.Context(), relayA); err == nil || err.Error() != refused {
+		t.Errorf("a notice signed with another key: %v\nwant: %s", err, refused)
+	}
+	backOnline(t, h, s)
+	signWith(h.edgeKey(), "http://127.0.0.3:9")
+	want := fmt.Sprintf("the edge at %s says, signed with the pinned key, that %s is retired in favour of http://127.0.0.3:9; "+
+		"move there instead: edge move http://127.0.0.3:9", relayA, from)
+	if _, _, err = moveAgent(t, s, from).Move(t.Context(), relayA); err == nil || err.Error() != want {
+		t.Errorf("a notice naming another replacement: %v\nwant: %s", err, want)
+	}
+	backOnline(t, h, s)
+	signWith(h.edgeKey(), relayA)
+	to, retired, err := moveAgent(t, s, from).Move(t.Context(), relayA)
+	if err != nil || to != relayA || !retired {
+		t.Fatalf("move off the retired address: %q, %v, %v", to, retired, err)
+	}
+	backOnline(t, h, s)
+}
+
+// A target the edge itself marks retiring is refused with its
+// replacement, from the edge's own signed notice.
+func TestEdgeMoveRefusesARetiringTarget(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.stopEdge()
+	h.pairB = true
+	h.startEdge()
+	relayA, relayB := h.relayURL, h.relayB
+	h.stopEdge()
+	h.retiring = []edge.Retiring{{RelayOrigin: relayB, Replacement: relayA, Date: "2027-03-01"}}
+	h.startEdge()
+	s := h.newServer(edgeproto.PolicyAccount)
+	h.claimServer(h.login(alice)[0], s)
+	_, _, err := moveAgent(t, s, relayA).Move(t.Context(), relayB)
+	if want := fmt.Sprintf("the edge at %s says, signed with the pinned key, that %s is retiring on 2027-03-01; move there instead: edge move %s",
+		relayB, relayB, relayA); err == nil || err.Error() != want {
+		t.Errorf("move to a retiring address: %v\nwant: %s", err, want)
+	}
+	backOnline(t, h, s)
+	if st, _, err := s.state().Status(); err != nil || st.Edge != relayA {
+		t.Errorf("status names edge %q (%v), want %s", st.Edge, err, relayA)
+	}
 }
