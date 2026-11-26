@@ -153,11 +153,13 @@ function contrast(a: string, b: string): number {
 }
 
 const states = ['state-working', 'state-needs-you', 'state-failed', 'state-done', 'state-paused']
+const agentHues = ['agent-claude', 'agent-pi', 'agent-omp', 'agent-cursor']
 const pairs: [fg: string, bg: string, min: number][] = [
   ...['text', 'text-muted'].flatMap((fg) =>
     ['canvas', 'chrome', 'raised', 'hover', 'hover-chrome'].map((bg): [string, string, number] => [fg, bg, 4.5]),
   ),
   ['text', 'selection', 4.5],
+  ['text-muted', 'selection', 4.5],
   ['accent-text', 'canvas', 4.5],
   ['accent-text', 'chrome', 4.5],
   ['on-accent', 'accent-fill', 4.5],
@@ -166,12 +168,16 @@ const pairs: [fg: string, bg: string, min: number][] = [
   ['on-failed', 'state-failed', 4.5],
   ['on-done', 'state-done', 4.5],
   ...[...states, 'diff-add', 'diff-del'].map((fg): [string, string, number] => [fg, 'canvas', 4.5]),
-  ['control-border', 'canvas', 3],
-  ['control-border', 'raised', 3],
+  ...['canvas', 'raised', 'hover', 'hover-chrome'].map((bg): [string, string, number] => ['control-border', bg, 3]),
   ...['canvas', 'chrome', 'raised', 'hover', 'hover-chrome', 'selection'].map((bg): [string, string, number] => ['focus-ring', bg, 3]),
   ['icon-faint', 'canvas', 3],
-  ...['claude', 'pi', 'omp', 'cursor'].map((agent): [string, string, number] => [`agent-${agent}`, 'canvas', 3]),
+  ...agentHues.flatMap((agent) =>
+    ['canvas', 'chrome', 'raised', 'hover', 'hover-chrome', 'selection'].map((bg): [string, string, number] => [agent, bg, 3]),
+  ),
+  ...[1, 2, 3, 4, 5, 6, 7, 8].map((n): [string, string, number] => [`series-${n}`, 'canvas', 3]),
+  ['series-other', 'canvas', 3],
 ]
+const reserved = [...states, 'accent-fill', 'accent-mark', 'accent-text']
 
 describe.each([
   ['light', ':root'],
@@ -182,6 +188,32 @@ describe.each([
     expect(colours[fg], `--${fg} is not a hex colour in ${selector}`).toMatch(/^#/)
     expect(colours[bg], `--${bg} is not a hex colour in ${selector}`).toMatch(/^#/)
     expect(contrast(colours[fg], colours[bg])).toBeGreaterThanOrEqual(min)
+  })
+  it.each(agentHues)('%s is no state, accent or primary colour', (agent) => {
+    expect(reserved.map((token) => colours[token])).not.toContain(colours[agent])
+  })
+  it.each([1, 2, 3, 4, 5, 8])('series-%i is not the primary colour', (n) => {
+    expect(colours[`series-${n}`]).not.toBe(colours['accent-fill'])
+  })
+  it('text stands apart from muted text', () => {
+    expect(contrast(colours.text, colours['text-muted'])).toBeGreaterThanOrEqual(1.5)
+  })
+  it.each(
+    [...states.map((state) => [state, state]), ['accent-text', 'accent-mark']].flatMap(([fg, fill]) =>
+      ['canvas', 'chrome'].map((bg) => [fg, fill, bg]),
+    ),
+  )('%s on the soft %s fill over %s', (fg, fill, bg) => {
+    const soft = Number(themeBlock(selector).match(/--tone-soft:\s*(\d+)%;/)?.[1]) / 100
+    expect(soft).toBeGreaterThan(0)
+    expect(contrast(colours[fg], over(colours[fill], colours[bg], soft))).toBeGreaterThanOrEqual(4.5)
+  })
+  it('sticky note text and name on the note', () => {
+    const fill = Number(css.match(/\.sticky-note \{[^}]*var\(--accent-mark\) (\d+)%, var\(--canvas\)/)?.[1]) / 100
+    const name = Number(css.match(/\.sticky-note__header \{[^}]*var\(--accent-mark\) (\d+)%, var\(--text\)/)?.[1]) / 100
+    expect(fill * name).toBeGreaterThan(0)
+    const note = over(colours['accent-mark'], colours.canvas, fill)
+    expect(contrast(colours.text, note)).toBeGreaterThanOrEqual(4.5)
+    expect(contrast(over(colours['accent-mark'], colours.text, name), note)).toBeGreaterThanOrEqual(4.5)
   })
   it.each([...states, 'accent-text', 'text-muted'])('text on a %s lane bar', (fill) => {
     const tint = Number(themeBlock(selector).match(/--lane-tint:\s*(\d+)%;/)?.[1]) / 100

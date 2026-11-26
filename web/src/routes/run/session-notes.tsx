@@ -101,7 +101,7 @@ function ScratchStrokes({ draw }: { draw: React.RefObject<SVGSVGElement | null> 
           key={y}
           d={`M2 ${y} Q 50 ${y + (i % 2 === 0 ? 4 : -4)} 98 ${y}`}
           fill="none"
-          stroke="var(--scratch-stroke)"
+          stroke="var(--diff-del)"
           strokeWidth={2.2}
           strokeLinecap="round"
           style={{ opacity: 0 }}
@@ -204,11 +204,11 @@ function StickyCard({ note, index, run, error, retryable, onResolve, onDismissEr
         <Avatar name={name} color={member?.color} size="header" />
         <span className="sticky-note__header min-w-0 truncate font-medium">
           {name}
-          {note.via && <span className="font-normal opacity-80"> via {note.via}</span>}
+          {note.via && <span className="font-normal"> via {note.via}</span>}
         </span>
         {isProvisional(note)
-          ? <span className="ml-auto shrink-0 pl-2 text-ui-sm opacity-80">Sending…</span>
-          : <RelativeTime at={note.created_at} className="ml-auto shrink-0 pl-2 text-ui-sm tabular-nums opacity-80" />}
+          ? <span className="ml-auto shrink-0 pl-2 text-ui-sm">Sending…</span>
+          : <RelativeTime at={note.created_at} className="ml-auto shrink-0 pl-2 text-ui-sm tabular-nums" />}
         {may && (
           <div className="flex shrink-0 items-center gap-0.5 opacity-0 group-focus-within/note:opacity-100 group-hover/note:opacity-100 coarse:opacity-100">
             <Button variant="ghost" size="icon-sm" label="Complete note" disabled={isProvisional(note)} onClick={() => act('done')}><Check /></Button>
