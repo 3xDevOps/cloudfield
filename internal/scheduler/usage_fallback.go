@@ -421,7 +421,8 @@ func (s *Scheduler) goMove(move func()) {
 // continueTerminalRun takes a Standard run's report that its agent stopped
 // on the usage limit, and reports whether it did. The move runs behind the
 // agent's hook, which must return at once; when the run is not moved, the
-// report applies as it would have without fallback.
+// report applies as it would have without fallback. An error is the input
+// updates' alone: the move has started by then.
 func (s *Scheduler) continueTerminalRun(ctx context.Context, run domain.RunID, report agentstatus.Report) (bool, error) {
 	s.mu.Lock()
 	entry := s.runs[run]
