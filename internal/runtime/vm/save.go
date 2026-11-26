@@ -99,7 +99,7 @@ func (e *engine) save(ctx context.Context, key string) error {
 		return e.resumeAfter(ctx, api, key, cause)
 	}
 	dir := e.path(key, snapshotDir)
-	if err = os.RemoveAll(dir); err != nil {
+	if err = errors.Join(os.RemoveAll(dir), os.RemoveAll(e.path(key, usedSnapshotDir))); err != nil {
 		return resumeAfter(err)
 	}
 	if err = os.Mkdir(dir, 0o700); err != nil {
@@ -386,30 +386,21 @@ func (e *engine) restore(ctx context.Context, key string) error {
 	if storeErr := e.store(rec); storeErr != nil {
 		return errors.Join(err, storeErr)
 	}
-	return errors.Join(err, e.discardUsedSnapshot(key))
-}
-
-// discardUsedSnapshot moves the saved state a wake used out of the next
-// save's way and deletes it behind the wake: unlinking 0.9 GiB of saved
-// memory took 200 ms. A copy a server that stopped mid-delete left goes
-// first.
-func (e *engine) discardUsedSnapshot(key string) error {
+	// Deleted behind the wake: unlinking 0.9 GiB of saved memory took
+	// 200 ms. The next save removes what a host that stopped meanwhile left.
 	used := e.path(key, usedSnapshotDir)
-	if err := os.RemoveAll(used); err != nil {
-		return err
-	}
-	if err := os.Rename(e.path(key, snapshotDir), used); err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil
+	if renameErr := os.Rename(dir, used); renameErr != nil {
+		if errors.Is(renameErr, fs.ErrNotExist) {
+			return err
 		}
-		return err
+		return errors.Join(err, renameErr)
 	}
 	go func() {
-		if err := os.RemoveAll(used); err != nil {
-			slog.Warn("vm runtime: delete the saved state a wake used", "vm", key, "error", err)
+		if rmErr := os.RemoveAll(used); rmErr != nil {
+			slog.Warn("vm runtime: delete the saved state a wake used", "vm", key, "error", rmErr)
 		}
 	}()
-	return nil
+	return err
 }
 
 // diskTimes is when each disk the saved guest in dir may write was last
