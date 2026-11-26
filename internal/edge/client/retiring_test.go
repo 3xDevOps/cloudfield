@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/coder/websocket"
+
 	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
 )
 
@@ -28,9 +30,9 @@ var retiringCases = []struct {
 	{"edge2.example.test", Retiring{}, false},
 }
 
-// TestRetiringHeader checks every value of Aether-Edge-Retiring an answer
-// may carry, on an API answer and on a refused relayed connection, and
-// that an answer from something in between changes nothing.
+// TestRetiringHeader checks every value of Aether-Edge-Retiring an API
+// answer may carry, and that an answer from something in between changes
+// nothing.
 func TestRetiringHeader(t *testing.T) {
 	var mu sync.Mutex
 	value, fromEdge := "", true
@@ -51,10 +53,6 @@ func TestRetiringHeader(t *testing.T) {
 			writeJSON(w, http.StatusOK, edgeproto.ServersResponse{})
 		}
 	})
-	edge.mux.HandleFunc("GET "+edgeproto.PathConnect, func(w http.ResponseWriter, r *http.Request) {
-		set(w)
-		writeJSON(w, http.StatusNotFound, edgeproto.ErrorBody{Error: string(edgeproto.RefusalUnknownServer)})
-	})
 	c := newTestClient(t, edge)
 	signIn(t, c)
 	if _, ok := c.Retiring(); ok {
@@ -69,12 +67,6 @@ func TestRetiringHeader(t *testing.T) {
 		}
 		if got, ok := c.Retiring(); got != tc.want || ok != tc.ok {
 			t.Errorf("API answer with %q: Retiring() = %+v, %v; want %+v, %v", tc.value, got, ok, tc.want, tc.ok)
-		}
-		if _, err := c.Dial(context.Background(), testServerID); err == nil {
-			t.Fatal("Dial of an unknown server succeeded")
-		}
-		if got, ok := c.Retiring(); got != tc.want || ok != tc.ok {
-			t.Errorf("refused connection with %q: Retiring() = %+v, %v; want %+v, %v", tc.value, got, ok, tc.want, tc.ok)
 		}
 	}
 
@@ -92,6 +84,51 @@ func TestRetiringHeader(t *testing.T) {
 	}
 	if got, ok := c.Retiring(); !ok || got.Replacement != "https://edge2.example.test" {
 		t.Errorf("an answer without the edge's protocol version changed the notice: %+v, %v", got, ok)
+	}
+}
+
+// TestRetiringHeaderOnRelayedConnections checks the header on the answer
+// to a relayed connection, accepted and refused, each from a client that
+// has seen no other answer.
+func TestRetiringHeaderOnRelayedConnections(t *testing.T) {
+	var mu sync.Mutex
+	value, accept := "", false
+	edge := newFakeEdge(t)
+	edge.mux.HandleFunc("GET "+edgeproto.PathConnect, func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		v, ok := value, accept
+		mu.Unlock()
+		if v != "" {
+			w.Header().Set(edgeproto.HeaderRetiring, v)
+		}
+		w.Header().Set(edgeproto.HeaderVersion, "1")
+		if !ok {
+			writeJSON(w, http.StatusNotFound, edgeproto.ErrorBody{Error: string(edgeproto.RefusalUnknownServer)})
+			return
+		}
+		c, err := websocket.Accept(w, r, nil)
+		if err == nil {
+			_ = c.CloseNow()
+		}
+	})
+	for _, accepted := range []bool{true, false} {
+		for _, tc := range retiringCases {
+			mu.Lock()
+			value, accept = tc.value, accepted
+			mu.Unlock()
+			c := newTestClient(t, edge)
+			signIn(t, c)
+			conn, err := c.Dial(context.Background(), testServerID)
+			if (err == nil) != accepted {
+				t.Fatalf("accepted %v: Dial = %v", accepted, err)
+			}
+			if conn != nil {
+				_ = conn.Close()
+			}
+			if got, ok := c.Retiring(); got != tc.want || ok != tc.ok {
+				t.Errorf("accepted %v, %q: Retiring() = %+v, %v; want %+v, %v", accepted, tc.value, got, ok, tc.want, tc.ok)
+			}
+		}
 	}
 }
 

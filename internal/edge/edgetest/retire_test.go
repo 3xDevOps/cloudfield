@@ -55,12 +55,7 @@ func TestRetiringPair(t *testing.T) {
 	if got, ok := alA.edge.Retiring(); !ok || got != retiring {
 		t.Errorf("client at A after an API answer: %+v, %v; want %+v", got, ok, retiring)
 	}
-	conn, err := alA.edge.Dial(context.Background(), a.id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = conn.Close()
-	if got, ok := alA.edge.Retiring(); !ok || got != retiring {
+	if got, ok := dialFresh(t, alA, relayA, a.id); !ok || got != retiring {
 		t.Errorf("client at A after a relayed connection: %+v, %v; want %+v", got, ok, retiring)
 	}
 	if got, ok, nerr := alA.edge.RetiringNotice(context.Background()); nerr != nil || !ok || got != retiring {
@@ -78,16 +73,14 @@ func TestRetiringPair(t *testing.T) {
 	}
 	alB := h.login(alice)[0]
 	h.claimServer(alB, b)
-	if _, err = alB.edge.Servers(context.Background()); err != nil {
+	if _, err := alB.edge.Servers(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	conn, err = alB.edge.Dial(context.Background(), b.id)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = conn.Close()
 	if got, ok := alB.edge.Retiring(); ok {
 		t.Errorf("client at B sees a notice %+v", got)
+	}
+	if got, ok := dialFresh(t, alB, relayB, b.id); ok {
+		t.Errorf("client at B sees a notice on a relayed connection %+v", got)
 	}
 	if got, ok, err := alB.edge.RetiringNotice(context.Background()); err != nil || ok {
 		t.Errorf("client at B from %s: %+v, %v, %v", edgeproto.PathEdgeInfo, got, ok, err)
@@ -135,6 +128,23 @@ func TestRetiringPair(t *testing.T) {
 			t.Errorf("with nothing retiring %s%s answers with %v, %s%s with %v", p.a, p.path, got, p.b, p.path, other)
 		}
 	}
+}
+
+// dialFresh opens a relayed connection to serverID from a new client of
+// c's install at relay, which has seen no other answer, and returns the
+// notice of the edge's answer.
+func dialFresh(t *testing.T, c *client, relay, serverID string) (edgeclient.Retiring, bool) {
+	t.Helper()
+	fresh, err := edgeclient.New(c.dir, relay)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := fresh.Dial(context.Background(), serverID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.Close()
+	return fresh.Retiring()
 }
 
 // headerNames are the sorted names of the headers of the answer to GET
