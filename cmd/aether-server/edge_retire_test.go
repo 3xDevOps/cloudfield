@@ -73,7 +73,12 @@ func TestEdgeStatusRetiringRow(t *testing.T) {
 			}
 			writeJSON(t, filepath.Join(edgeagent.StateDir(dir), "status.json"), tt.status)
 			if tt.notices.Notices != nil {
-				tt.notices.Received, tt.notices.ServerID = since, id
+				var pinned struct{ ID string }
+				data, err := os.ReadFile(filepath.Join(edgeagent.StateDir(dir), "edge_key.json"))
+				if err != nil || json.Unmarshal(data, &pinned) != nil {
+					t.Fatalf("pin: %s, %v", data, err)
+				}
+				tt.notices.Received, tt.notices.ServerID, tt.notices.PinID = since, id, pinned.ID
 				writeJSON(t, noticesPath(dir, pub), tt.notices)
 			}
 			config := tt.config

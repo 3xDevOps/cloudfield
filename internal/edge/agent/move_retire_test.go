@@ -154,8 +154,11 @@ func TestMoveFromARetiredAddress(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := a.state.writeNotices(p, StoredNotices{ServerID: a.serverID, Received: time.Now(), Notices: tc.stored(from, to)}); err != nil {
+				if err := a.state.writeNotices(p, StoredNotices{ServerID: a.serverID, PinID: p.ID, Received: time.Now(), Notices: tc.stored(from, to)}); err != nil {
 					t.Fatal(err)
+				}
+				if got, err := a.Notices(); err != nil || len(got.Notices) == 0 {
+					t.Fatalf("stored notices %+v, %v", got, err)
 				}
 			}
 			got, retired, err := a.Move(t.Context(), to)
