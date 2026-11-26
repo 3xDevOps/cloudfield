@@ -43,7 +43,7 @@ func TestLinearUsesTheCallersOwnKey(t *testing.T) {
 	}
 	var issues protocol.LinearIssuesResult
 	issuesErr := aliceC.Call(protocol.MethodLinearIssues, nil, &issues)
-	if rpcCode(issuesErr) != protocol.CodeInvalidState || !strings.Contains(issuesErr.Error(), "Linear is not connected: save a personal API key in Settings → Linear") {
+	if rpcCode(issuesErr) != protocol.CodeInvalidState || !strings.Contains(issuesErr.Error(), "Linear is not connected: save a personal API key in Settings → Connections → Linear") {
 		t.Fatalf("alice's issues without a key = %v", issuesErr)
 	}
 	if err := aliceC.Call(protocol.MethodLinearConnect, protocol.LinearConnectParams{APIKey: "key-wrong"}, nil); err == nil || !strings.Contains(err.Error(), "Authentication required") {

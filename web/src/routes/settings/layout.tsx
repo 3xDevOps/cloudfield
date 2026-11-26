@@ -19,7 +19,7 @@ export function SettingsSection({ title, id: sectionID, heading = 'h3', scope, t
         <SectionLabel as={heading} id={id} tabIndex={-1} className="outline-none">{title}</SectionLabel>
         {scope && <Badge>{scope}</Badge>}
       </div>
-      <div className={cn('flex min-w-0 flex-col divide-y divide-seam rounded-panel border transition-colors group-data-highlight/section:bg-selection motion-reduce:transition-none', tone === 'danger' ? 'border-state-failed/40' : 'border-seam')}>{children}</div>
+      <div className={cn('flex min-w-0 flex-col divide-y divide-seam rounded-panel border transition-colors group-data-highlight/section:bg-hover motion-reduce:transition-none', tone === 'danger' ? 'border-state-failed/40' : 'border-seam')}>{children}</div>
     </section>
   )
 }
@@ -31,6 +31,7 @@ export function SettingRow({
   control,
   children,
   labelFor,
+  stackControl,
 }: {
   id?: string
   label: ReactNode
@@ -38,6 +39,8 @@ export function SettingRow({
   control?: ReactNode
   children?: ReactNode
   labelFor?: string
+  /** Puts the control under the text on a phone even when it would fit beside it. */
+  stackControl?: boolean
 }) {
   const Caption = labelFor ? 'label' : 'p'
   return (
@@ -47,7 +50,7 @@ export function SettingRow({
           <Caption htmlFor={labelFor} className="text-ui font-medium text-text">{label}</Caption>
           {help && <div className="text-ui-sm text-muted">{help}</div>}
         </div>
-        {control && <div className="flex shrink-0 items-center gap-2 max-sm:has-[[data-slot=select-trigger]]:basis-full">{control}</div>}
+        {control && <div className={cn('flex shrink-0 items-center gap-2 max-sm:has-[[data-slot=select-trigger]]:basis-full', stackControl && 'max-sm:basis-full')}>{control}</div>}
       </div>
       {children}
     </div>

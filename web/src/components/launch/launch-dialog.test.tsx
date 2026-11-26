@@ -37,6 +37,8 @@ beforeEach(() => {
     workspaces: { [workspace.id]: workspace },
     activeWorkspace: workspace.id,
     paletteDialog: 'launch',
+    paletteLaunchTask: '',
+    paletteLaunchLinear: null,
     launchDraft: null,
     launchDraftError: null,
     linkStatus: null,
@@ -576,6 +578,131 @@ describe('new run', () => {
     await userEvent.type(screen.getByLabelText('Task'), 'write the changelog')
     await userEvent.click(launchButton())
     await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith(expect.objectContaining({ limits: { memory_bytes: 1.5 * 2 ** 30, pids: 256 } })))
+  })
+
+  const url = 'https://linear.app/acme/issue/ENG-123'
+  const eng123 = { identifier: 'ENG-123', url }
+  const eng9 = { identifier: 'ENG-9', url: 'https://linear.app/acme/issue/ENG-9' }
+
+  it('launches from a Linear issue with its URL passed explicitly and no shared-text notice', async () => {
+    useStore.getState().openLaunchWithTask('ENG-123 Fix rounding', eng123)
+    await open()
+    expect((screen.getByLabelText('Task') as HTMLTextAreaElement).value).toBe('ENG-123 Fix rounding')
+    expect(screen.queryByText(/Shared from another app/)).toBeNull()
+    expect(screen.getByText(/will be linked/)).toBeTruthy()
+    fireEvent.click(launchButton())
+
+    await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith(expect.objectContaining({ task: 'ENG-123 Fix rounding', linear_issue_url: url })))
+  })
+
+  it('sends no Linear link and no URL in the task once the member unlinks the issue', async () => {
+    useStore.getState().openLaunchWithTask('ENG-123 Fix rounding', eng123)
+    await open()
+    fireEvent.click(screen.getByRole('button', { name: 'Unlink ENG-123' }))
+    expect(screen.queryByText(/will be linked/)).toBeNull()
+    fireEvent.click(launchButton())
+
+    await waitFor(() => expect(api.runLaunch).toHaveBeenCalled())
+    const sent = vi.mocked(api.runLaunch).mock.calls[0]![0]
+    expect(sent).not.toHaveProperty('linear_issue_url')
+    expect(sent.task).not.toContain('linear.app')
+  })
+
+  it('offers the same issue again, instead of launching unlinked, when Start session is pressed after Unlink', async () => {
+    useStore.getState().openLaunchWithTask('ENG-123 Fix rounding', eng123)
+    await open()
+    fireEvent.click(screen.getByRole('button', { name: 'Unlink ENG-123' }))
+    expect(screen.queryByRole('button', { name: 'Use ENG-123 instead' })).toBeNull()
+    act(() => useStore.getState().openLaunchWithTask('ENG-123 Fix rounding', { ...eng123 }))
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Use ENG-123 instead' }))
+
+    expect(screen.getByText(/will be linked/).textContent).toContain('ENG-123')
+    expect(screen.queryByRole('button', { name: 'Use ENG-123 instead' })).toBeNull()
+    fireEvent.click(launchButton())
+    await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith(expect.objectContaining({ linear_issue_url: url })))
+  })
+
+  it('shows a link to the issue in the chip and a secondary Use button', async () => {
+    useStore.setState({ launchDraft: draft({ task: 'old draft' }) })
+    useStore.getState().openLaunchWithTask('ENG-9 Other', eng9)
+    await open()
+
+    expect(screen.getByRole('button', { name: 'Use ENG-9 instead' }).className).not.toContain('bg-action')
+  })
+
+  it('links the chip identifier to Linear', async () => {
+    useStore.getState().openLaunchWithTask('ENG-123 Fix rounding', eng123)
+    await open()
+
+    expect(screen.getByRole('link', { name: 'ENG-123' }).getAttribute('href')).toBe(url)
+  })
+
+  it('saves the linked issue in the draft', async () => {
+    useStore.getState().openLaunchWithTask('ENG-123 Fix rounding', eng123)
+    await open()
+    await waitFor(() => expect(useStore.getState().launchDraft?.linear).toEqual(eng123))
+    fireEvent.click(screen.getByRole('button', { name: 'Unlink ENG-123' }))
+    await waitFor(() => expect(useStore.getState().launchDraft?.linear).toBeUndefined())
+  })
+
+  it('does not re-offer the issue a restored draft is already linked to after Unlink', async () => {
+    useStore.setState({ launchDraft: draft({ task: 'ENG-123 Fix rounding', linear: eng123 }) })
+    useStore.getState().openLaunchWithTask('ENG-123 Fix rounding', { ...eng123 })
+    await open()
+    expect(screen.queryByRole('button', { name: 'Use ENG-123 instead' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Unlink ENG-123' }))
+
+    expect(screen.queryByText(/will be linked/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Use ENG-123 instead' })).toBeNull()
+  })
+
+  it('restores a draft with its link chip and keeps it when another issue is picked', async () => {
+    useStore.setState({ launchDraft: draft({ task: 'ENG-123 Fix rounding', linear: eng123 }) })
+    useStore.getState().openLaunchWithTask('ENG-9 Other', eng9)
+    await open()
+    expect(screen.getByText(/will be linked/).textContent).toContain('ENG-123')
+    expect(screen.getByRole('status', { name: '' }).textContent).toContain('Your unfinished ENG-123 draft was kept.')
+    expect(screen.getByRole('status', { name: '' }).textContent).toContain('ENG-9 was not loaded.')
+    expect((screen.getByLabelText('Task') as HTMLTextAreaElement).value).toBe('ENG-123 Fix rounding')
+    fireEvent.click(launchButton())
+
+    await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith(expect.objectContaining({ task: 'ENG-123 Fix rounding', linear_issue_url: url })))
+  })
+
+  it('names a link-less draft "session" and replaces its task and link on Use instead', async () => {
+    useStore.setState({ launchDraft: draft({ task: 'old draft' }) })
+    useStore.getState().openLaunchWithTask('ENG-9 Other', eng9)
+    await open()
+    expect(screen.queryByText(/will be linked/)).toBeNull()
+    expect(screen.getByRole('status', { name: '' }).textContent).toContain('Your unfinished session draft was kept.')
+    fireEvent.click(screen.getByRole('button', { name: 'Use ENG-9 instead' }))
+    expect((screen.getByLabelText('Task') as HTMLTextAreaElement).value).toBe('ENG-9 Other')
+    expect(screen.getByText(/will be linked/).textContent).toContain('ENG-9')
+    expect(screen.queryByRole('button', { name: /Use ENG-9 instead/ })).toBeNull()
+    fireEvent.click(launchButton())
+
+    await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith(expect.objectContaining({ task: 'ENG-9 Other', linear_issue_url: eng9.url })))
+  })
+
+  it('offers the issue picked while a collapsed draft is already mounted, and keeps the draft meanwhile', async () => {
+    useStore.setState({ launchDraft: draft({ task: 'old draft' }) })
+    await open()
+    expect(screen.queryByRole('button', { name: /Use ENG-123 instead/ })).toBeNull()
+    act(() => useStore.getState().openLaunchWithTask('ENG-123 Fix rounding', eng123))
+    expect(await screen.findByRole('button', { name: 'Use ENG-123 instead' })).toBeTruthy()
+    expect((screen.getByLabelText('Task') as HTMLTextAreaElement).value).toBe('old draft')
+  })
+
+  it('keeps the first issue linked and offers the second', async () => {
+    useStore.getState().openLaunchWithTask('ENG-123 Fix rounding', eng123)
+    await open()
+    act(() => useStore.getState().openLaunchWithTask('ENG-9 Other', eng9))
+    expect(await screen.findByRole('button', { name: 'Use ENG-9 instead' })).toBeTruthy()
+    expect(screen.getByRole('status', { name: '' }).textContent).toContain('Your unfinished ENG-123 draft was kept.')
+    fireEvent.click(launchButton())
+
+    await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith(expect.objectContaining({ linear_issue_url: url })))
   })
 
   it('launches a never-launched agent in Enhanced when available and remembers the choice', async () => {

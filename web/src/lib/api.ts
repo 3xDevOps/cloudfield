@@ -8,6 +8,9 @@ import type {
   AgentModelsResult,
   AgentRemoveResult,
   AgentInfo,
+  LinearIssue,
+  LinearStatus,
+  LinearTeam,
   AttentionItem,
   BudgetReport,
   ChildLimits,
@@ -537,6 +540,8 @@ export const api = {
   runWithPullRequests: (runID: string) =>
     call<{ run: Run; pull_requests?: RecordedPullRequest[] }>('run.get', { run_id: runID }),
   runLaunch: (params: {
+    /** A linear.app issue URL; the server links the run to it. */
+    linear_issue_url?: string
     workspace_id: string
     task?: string
     harness: string
@@ -553,6 +558,13 @@ export const api = {
     /** Overrides the server's run limits for this run. */
     limits?: RunLimits
   }) => call<{ run: Run }>('run.launch', params).then((r) => r.run),
+  linearStatus: () => call<LinearStatus>('linear.status'),
+  linearConnect: (apiKey: string) => call<LinearStatus>('linear.connect', { api_key: apiKey }),
+  linearDisconnect: () => call<unknown>('linear.disconnect'),
+  linearTeams: () => call<{ teams: LinearTeam[] }>('linear.teams').then((r) => r.teams),
+  linearIssues: (params: { team?: string; query?: string } = {}) =>
+    call<{ issues: LinearIssue[] }>('linear.issues', params).then((r) => r.issues),
+  linearIssue: (identifier: string) => call<LinearIssue>('linear.issue', { identifier }),
   runKill: (runID: string) => call<unknown>('run.kill', { run_id: runID }),
   childSettings: (params: ChildSettingsParams = {}) => call<ChildSettings>('child.settings', params),
   launchDefaultsGet: () => call<LaunchDefaultsResult>('launch.defaults.get'),

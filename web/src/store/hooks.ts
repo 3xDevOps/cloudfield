@@ -141,7 +141,8 @@ const workspaceAccessFeature = 'workspace-access'
 
 export function useCapability(): Capability {
   const caps = useStore((s) => s.capabilities)
-  return useMemo(() => capability(caps), [caps])
+  const linearConnected = useStore((s) => s.linear?.connected === true)
+  return useMemo(() => ({ ...capability(caps), linearConnected }), [caps, linearConnected])
 }
 
 /** Null before hydration. An admin affordance needs this as well as the

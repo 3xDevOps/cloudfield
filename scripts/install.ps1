@@ -9,7 +9,8 @@
   temporary directory, checked against checksums.txt and aether-release.json,
   then copied beside and atomically swapped into the installed CLI path.  The
   desktop app is installed by the new CLI's `gui build`, whose output is shown
-  as it runs.
+  as it runs, and opened from its Start Menu shortcut when the installer runs
+  in a console that is not elevated or redirected.
 
 .EXAMPLE
   powershell -NoProfile -File .\scripts\install.ps1
@@ -885,6 +886,7 @@ function Invoke-AetherGuiBuild {
     $oldCloudfieldBin = [Environment]::GetEnvironmentVariable('CLOUDFIELD_BIN', 'Process')
     $previousExit = Get-Variable LASTEXITCODE -Scope Global -ValueOnly -ErrorAction SilentlyContinue
     $oldEap = $ErrorActionPreference
+    $oldOutputEncoding = [Console]::OutputEncoding
     $rerun = "& '{0}' gui build" -f $CliPath.Replace("'", "''")
     try {
         [Environment]::SetEnvironmentVariable('AETHER_BIN', $CliPath, 'Process')
@@ -892,7 +894,16 @@ function Invoke-AetherGuiBuild {
         # npm and electron-builder write progress to stderr; under Windows
         # PowerShell 5.1 that must not become an installer error.
         $ErrorActionPreference = 'Continue'
-        & $CliPath gui build
+        # PowerShell decodes a native command's piped stdout with the console
+        # code page; the CLI writes UTF-8, as a non-ASCII profile path needs.
+        # Without a console, as under CI, the setter throws; nothing then
+        # depends on it.
+        try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch { }
+        $launcher = $null
+        & $CliPath gui build | ForEach-Object {
+            Write-Host $_
+            if ($_ -like 'launcher *') { $launcher = $_.Substring('launcher '.Length) }
+        }
         $exitCode = [int]$global:LASTEXITCODE
     }
     catch {
@@ -900,6 +911,7 @@ function Invoke-AetherGuiBuild {
     }
     finally {
         $ErrorActionPreference = $oldEap
+        try { [Console]::OutputEncoding = $oldOutputEncoding } catch { }
         if ($hadAetherBin) {
             [Environment]::SetEnvironmentVariable('AETHER_BIN', $oldAetherBin, 'Process')
         }
@@ -919,6 +931,72 @@ function Invoke-AetherGuiBuild {
     if ($exitCode -ne 0) {
         throw ("aether gui build exited with code {0}. The CLI is installed; rerun: {1}" -f $exitCode, $rerun)
     }
+    return $launcher
+}
+
+# Whether this process's token is elevated, read from its integrity label
+# (S-1-16-<level>, High from 12288 up) rather than from Administrators
+# membership, which misses operator groups UAC also elevates. whoami is
+# found through the OS's System folder, not the SystemRoot variable. A token
+# whose label cannot be read counts as elevated.
+function Test-AetherElevated {
+    $previousExit = Get-Variable LASTEXITCODE -Scope Global -ValueOnly -ErrorAction SilentlyContinue
+    try {
+        $groups = & (Join-Path ([Environment]::GetFolderPath('System')) 'whoami.exe') /groups /fo csv /nh
+        if ($global:LASTEXITCODE -ne 0) { return $true }
+        return Test-AetherHighIntegrity $groups
+    }
+    catch {
+        return $true
+    }
+    finally {
+        if ($null -ne $previousExit) {
+            $global:LASTEXITCODE = $previousExit
+        }
+        else {
+            Remove-Variable LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+        }
+    }
+}
+
+# Whether `whoami /groups /fo csv` output carries a High or higher integrity
+# label, or none at all.
+function Test-AetherHighIntegrity {
+    param([AllowNull()][string[]] $Groups)
+    $levels = @($Groups | ForEach-Object { if ($_ -match '"S-1-16-(\d+)"') { [int]$Matches[1] } })
+    if ($levels.Count -eq 0) { return $true }
+    return [bool](@($levels | Where-Object { $_ -ge 12288 }).Count)
+}
+
+# A person at this machine's screen runs the installer as themselves: CI and
+# scripts redirect the console, a service has no desktop, and an elevated
+# token would start the app elevated.
+function Test-AetherSomeoneToSee {
+    if (-not [string]::IsNullOrEmpty($env:CI)) { return $false }
+    if ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected) { return $false }
+    if (-not [Environment]::UserInteractive -or [Diagnostics.Process]::GetCurrentProcess().SessionId -eq 0) { return $false }
+    return -not (Test-AetherElevated)
+}
+
+# Starts the app through the Start Menu shortcut `gui build` printed, as the
+# Start Menu would. Returns why it did not, or $null.
+function Open-AetherDesktop {
+    param([AllowNull()][string] $Launcher)
+    if ([string]::IsNullOrEmpty($Launcher) -or -not [IO.Path]::IsPathRooted($Launcher) -or -not $Launcher.EndsWith('.lnk', [StringComparison]::OrdinalIgnoreCase)) {
+        return '`aether gui build` printed no launcher'
+    }
+    $start = New-Object System.Diagnostics.ProcessStartInfo $Launcher
+    $start.UseShellExecute = $true
+    try {
+        $process = [Diagnostics.Process]::Start($start)
+        if ($null -ne $process) { $process.Dispose() }
+    }
+    catch {
+        $failure = $_.Exception
+        if ($null -ne $failure.InnerException) { $failure = $failure.InnerException }
+        return $failure.Message
+    }
+    return $null
 }
 
 function Get-AetherUserPathRaw {
@@ -1133,6 +1211,8 @@ function Invoke-AetherInstall {
     }
     $destination = $wanted.Installed
     $desktopPaths = @($desktopDirs | ForEach-Object { Join-Path $_ 'aether-desktop.exe' })
+    $opened = $false
+    $openFailure = $null
     $script:AetherStep = 0
     $script:AetherSteps = if ($role -eq 'client') { 3 } else { 2 }
     $scope = if ($role -eq 'client') { 'CLI and desktop app' } else { 'CLI only' }
@@ -1193,19 +1273,29 @@ function Invoke-AetherInstall {
 
         if ($role -eq 'client') {
             Write-AetherStep 'installing the desktop app (the build output follows)'
-            Invoke-AetherGuiBuild $destination
+            $launcher = Invoke-AetherGuiBuild $destination
             # Both folders can exist; the one the install filled was written last.
             $installed = @($desktopPaths | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Sort-Object { (Get-Item -LiteralPath (Split-Path -Parent $_)).LastWriteTimeUtc })
             Write-AetherDetail ('installed {0}' -f $(if ($installed.Count -gt 0) { $installed[-1] } else { $desktopPaths[0] }))
+            if (Test-AetherSomeoneToSee) {
+                $openFailure = Open-AetherDesktop $launcher
+                $opened = $null -eq $openFailure
+            }
         }
         Write-Host 'next:'
-        if ($role -eq 'client') {
+        if ($opened) {
+            Write-Host '  Cloudfield is starting: link your server in its window, or from a new terminal:'
+        }
+        elseif ($role -eq 'client') {
             Write-Host '  open Cloudfield from the Start menu, or link from a new terminal:'
         }
         Write-Host '  aether link <server-host>      # on a tailnet: the server''s tailnet name'
         Write-Host '  aether login                   # otherwise, sign in to the edge, Cloudfield''s relay'
         Write-Host '  aether link --claim <code>     # with the claim link server setup printed'
         Write-Host '  aether link ''<invite link>''    # or with an invite link from an admin'
+        if ($null -ne $openFailure) {
+            Write-Host ('aether install: the desktop app is installed but did not open: {0}' -f $openFailure)
+        }
         Write-AetherStatus 'done:' Green ('Aether {0} installed in {1}' -f $release.Tag, (Format-AetherSeconds $total))
     }
     finally {
