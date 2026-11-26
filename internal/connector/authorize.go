@@ -607,6 +607,7 @@ code{font-family:var(--font-code);font-size:.875em;background:var(--chrome);bord
 .note{color:var(--text-muted);font-size:15px}
 .error,.retiring{padding:12px 16px;background:var(--chrome);border-left:2px solid var(--state-failed);border-radius:0 var(--radius-control) var(--radius-control) 0}
 .retiring{border-left-color:var(--state-needs-you)}
+time{white-space:nowrap}
 fieldset{margin:0 0 16px;padding:4px 16px 0;border:1px solid var(--seam);border-radius:var(--radius-control)}
 legend{padding:0 4px;color:var(--text-muted);font-size:15px;font-weight:500}
 fieldset label{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;cursor:pointer}
@@ -638,7 +639,7 @@ button:hover{background:var(--accent-fill-hover)}
 <p class="error">{{.Error}}</p>
 {{else}}
 <h1>Connect <strong>{{.Client}}</strong> to <strong>{{.Server}}</strong>{{if .Member}} as <strong>{{.Member}}</strong>{{end}}</h1>
-{{with .Retiring}}<p class="retiring">This address is retiring{{with .Date}} on {{.}}{{end}}. Add the connector at <code>{{.URL}}</code> instead.</p>
+{{with .Retiring}}<p class="retiring">This address is retiring{{with .Date}} on <time>{{.}}</time>{{end}}. Add the connector at <code>{{.URL}}</code> instead.</p>
 {{end}}<p>Server <strong>{{.Server}}</strong> <code>{{.ServerID}}</code>{{if .Member}}, member <strong>{{.Member}}</strong>{{end}}, client <strong>{{.Client}}</strong>.</p>
 <p>It acts as you. It can always list workspaces, agents and runs and read run history; every member can read every run on this server, so it can read all of them.</p>
 {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
