@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -131,7 +132,7 @@ func TestRetiringReport(t *testing.T) {
 	empty := retiringEdge(t, nil)
 	wantEmpty := `no origin pairs recorded: the edge records them from its first start with an option that retires a pair
 
-unknown origin: 0 claimed servers not seen since recording began
+unknown origin: 0 claimed servers not enrolled or claimed since recording began
 
 LAST USED WITHIN         1 DAY  7 DAYS  30 DAYS  TOTAL
 device tokens            0      0       0        0
@@ -162,16 +163,16 @@ accounts with a session  0      0       0        0
 
 relay origin ` + pairRelayA + `, sign-in origin ` + pairSigninA + `
 
-no server last seen here
+no server last enrolled or claimed here
 
-LAST USED WITHIN                                             1 DAY  7 DAYS  30 DAYS  TOTAL
-device tokens issued here                                    0      0       0        0
-device tokens issued earlier, first seen here                0      0       0        0
-accounts with a session here                                 0      0       0        0
-accounts with device tokens here and none at another origin  0      0       0        0
-servers with connector requests through here                 0      0       0        0
+LAST USED WITHIN                                                      1 DAY  7 DAYS  30 DAYS  TOTAL
+device tokens issued here                                             0      0       0        0
+device tokens issued earlier, first seen here                         0      0       0        0
+accounts with a session here                                          0      0       0        0
+accounts with device tokens here and none recorded at another origin  0      0       0        0
+servers with connector requests through here                          0      0       0        0
 
-unknown origin: 0 claimed servers not seen since recording began
+unknown origin: 0 claimed servers not enrolled or claimed since recording began
 
 LAST USED WITHIN         1 DAY  7 DAYS  30 DAYS  TOTAL
 device tokens            0      0       0        0
@@ -187,31 +188,31 @@ accounts with a session  0      0       0        0
 	wantA := `
 relay origin ` + pairRelayA + `, sign-in origin ` + pairSigninA + `
 
-SERVER ID                   NAME  OWNER LOGIN  BUILD   LAST SEEN
+SERVER ID                   NAME  OWNER LOGIN  BUILD   LAST ENROLLED OR CLAIMED
 bbbbbbbbbbbbbbbbbbbbbbbbbb  lab   -            v0.9.0  2026-11-20T08:00:00Z
 
-LAST USED WITHIN                                             1 DAY  7 DAYS  30 DAYS  TOTAL
-device tokens issued here                                    0      0       1        2
-device tokens issued earlier, first seen here                0      1       1        1
-accounts with a session here                                 0      1       1        1
-accounts with device tokens here and none at another origin  0      1       1        1
-servers with connector requests through here                 1      2       2        2
+LAST USED WITHIN                                                      1 DAY  7 DAYS  30 DAYS  TOTAL
+device tokens issued here                                             0      0       1        2
+device tokens issued earlier, first seen here                         0      1       1        1
+accounts with a session here                                          0      1       1        1
+accounts with device tokens here and none recorded at another origin  0      1       1        1
+servers with connector requests through here                          1      2       2        2
 `
 	wantB := `
 relay origin ` + pairRelayB + `, sign-in origin ` + pairSigninB + `
 
-SERVER ID                   NAME         OWNER LOGIN  BUILD   LAST SEEN
+SERVER ID                   NAME         OWNER LOGIN  BUILD   LAST ENROLLED OR CLAIMED
 aaaaaaaaaaaaaaaaaaaaaaaaaa  workstation  octo         v0.9.1  2026-11-20T08:00:00Z
 
-LAST USED WITHIN                                             1 DAY  7 DAYS  30 DAYS  TOTAL
-device tokens issued here                                    1      1       1        1
-device tokens issued earlier, first seen here                0      0       0        0
-accounts with a session here                                 0      0       0        0
-accounts with device tokens here and none at another origin  0      0       0        0
-servers with connector requests through here                 0      0       0        0
+LAST USED WITHIN                                                      1 DAY  7 DAYS  30 DAYS  TOTAL
+device tokens issued here                                             1      1       1        1
+device tokens issued earlier, first seen here                         0      0       0        0
+accounts with a session here                                          0      0       0        0
+accounts with device tokens here and none recorded at another origin  0      0       0        0
+servers with connector requests through here                          0      0       0        0
 `
 	unknown := `
-unknown origin: 0 claimed servers not seen since recording began
+unknown origin: 0 claimed servers not enrolled or claimed since recording began
 
 LAST USED WITHIN         1 DAY  7 DAYS  30 DAYS  TOTAL
 device tokens            0      1       1        1
@@ -259,5 +260,60 @@ accounts with a session  0      0       0        0
 		if !strings.Contains(out, key) {
 			t.Errorf("JSON report lacks %s:\n%s", key, out)
 		}
+	}
+}
+
+// TestRetiringOnSchema1 reports on a stopped edge's schema 1 database
+// without migrating it or backing it up.
+func TestRetiringOnSchema1(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "edge.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = db.Exec(`CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, applied_at INTEGER NOT NULL, compat_floor INTEGER);
+		INSERT INTO schema_migrations VALUES (1, 0, 1)`); err != nil {
+		t.Fatal(err)
+	}
+	if err = db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runRetiring(t, dir)
+	if want := "nothing is recorded yet: edgestore: the database records no origins: " + path +
+		" is at schema version 1, and an edge records origins from schema 2 on\n"; err != nil || out != want {
+		t.Fatalf("report on schema 1:\n%s%v\nwant:\n%s", out, err, want)
+	}
+	if s, err := edgestore.ReadSchema(path); err != nil || s.Version != 1 {
+		t.Fatalf("schema after the report = %+v, %v", s, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, edgestore.BackupDir)); !os.IsNotExist(err) {
+		t.Fatalf("the report made a backups directory: %v", err)
+	}
+}
+
+// TestRetiringQuotesNames prints a server name holding a bidi control
+// quoted, so it cannot reorder the line.
+func TestRetiringQuotesNames(t *testing.T) {
+	dir := retiringEdge(t, map[string]string{pairRelayA: pairSigninA})
+	s, err := edgestore.Open(filepath.Join(dir, "edge.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	octo := edgeproto.Account{Provider: edgeproto.ProviderGitHub, Subject: "42", Login: "octo"}
+	if _, err = s.SignIn(ctx, octo, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.RecordClaim(ctx, testServer, "lab\u202eexe.txt", edgeproto.PolicyAccount, edgeproto.AccountPrincipal(octo),
+		edgestore.Enrollment{RelayOrigin: pairRelayA, AgentVersion: "v1\u200b", At: enrolledAt}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runRetiring(t, dir)
+	if err != nil || !strings.Contains(out, testServer+`  "lab\u202eexe.txt"  octo         "v1\u200b"  2026-11-20T08:00:00Z`) {
+		t.Fatalf("report with a bidi control in a name:\n%s%v", out, err)
 	}
 }

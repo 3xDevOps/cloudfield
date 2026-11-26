@@ -7,9 +7,11 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
 
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	edgestore "github.com/3xDevOps/cloudfield/internal/edge/store"
@@ -17,14 +19,16 @@ import (
 
 // retiringCaveat ends every text report: what the edge cannot see.
 const retiringCaveat = `An empty list is not proof that nobody is left: the edge records only while an
-option that retires a pair is set, a server that has not enrolled since then
-and a device token or session not used since then have no origin, and an
-unclaimed server has no row at all (aether_edge_servers_by_origin counts those
-connected now).
+option that retires a pair is set; a server that has not enrolled or been
+claimed since, and a device token or session not used since, have no origin;
+an older image run in between records nothing; and an unclaimed server has no
+row at all (aether_edge_servers_by_origin counts those connected now).
+Connector counts include requests that were refused or carried no valid token.
 `
 
 // retiring prints who the edge last saw on each origin pair it recorded,
-// or on the pair of one relay origin.
+// or on the pair of one relay origin. It reads the database through a
+// read-only connection, so it neither migrates nor writes.
 func retiring(args []string, getenv func(string) string, out io.Writer) error {
 	fs := flag.NewFlagSet("aether-edge retiring", flag.ContinueOnError)
 	dataDir := fs.String("data", dataDirDefault(getenv), "data directory of the edge")
@@ -44,14 +48,22 @@ func retiring(args []string, getenv func(string) string, out io.Writer) error {
 		}
 		want = o
 	}
-	s, unlock, err := openStore(*dataDir)
+	db, err := edgeDB(*dataDir)
+	if err != nil {
+		return err
+	}
+	unlock, err := lockDB(*dataDir)
 	if err != nil {
 		return err
 	}
 	defer unlock()
 	now := time.Now().UTC()
-	rep, err := s.Retiring(context.Background(), now)
-	if err = errors.Join(err, s.Close()); err != nil {
+	rep, err := edgestore.ReadRetiring(context.Background(), db, now)
+	if errors.Is(err, edgestore.ErrNoOrigins) {
+		_, err = fmt.Fprintf(out, "nothing is recorded yet: %v, and an edge records origins from schema %d on\n", err, edgestore.OriginsSchema)
+		return err
+	}
+	if err != nil {
 		return err
 	}
 	if want != "" {
@@ -85,24 +97,27 @@ func retiring(args []string, getenv func(string) string, out io.Writer) error {
 	for _, r := range rep.Origins {
 		fmt.Fprintf(w, "\nrelay origin %s, sign-in origin %s\n\n", r.RelayOrigin, r.SigninOrigin) //nolint:errcheck // Flush reports it
 		if len(r.Servers) == 0 {
-			fmt.Fprintln(w, "no server last seen here") //nolint:errcheck // Flush reports it
+			fmt.Fprintln(w, "no server last enrolled or claimed here") //nolint:errcheck // Flush reports it
 		} else {
-			fmt.Fprintln(w, "SERVER ID\tNAME\tOWNER LOGIN\tBUILD\tLAST SEEN") //nolint:errcheck // Flush reports it
+			fmt.Fprintln(w, "SERVER ID\tNAME\tOWNER LOGIN\tBUILD\tLAST ENROLLED OR CLAIMED") //nolint:errcheck // Flush reports it
 			for _, e := range r.Servers {
-				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", e.ID, dash(e.Name), dash(e.OwnerLogin), //nolint:errcheck // Flush reports it
-					dash(e.AgentVersion), e.LastSeenAt.Format(time.RFC3339))
+				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", e.ID, printable(e.Name), printable(e.OwnerLogin), //nolint:errcheck // Flush reports it
+					printable(e.AgentVersion), e.LastSeenAt.Format(time.RFC3339))
 			}
 		}
 		fmt.Fprintln(w) //nolint:errcheck // Flush reports it
-		printCounts(w, []namedCounts{
-			{"device tokens issued here", r.DeviceTokens},
-			{"device tokens issued earlier, first seen here", r.DeviceTokensSeen},
-			{"accounts with a session here", r.SessionAccounts},
-			{"accounts with device tokens here and none at another origin", r.DeviceOnlyAccounts},
-			{"servers with connector requests through here", r.ConnectorServers},
-		})
+		if r.SigninCountedUnder != "" {
+			fmt.Fprintf(w, "device tokens and sessions of %s are counted under relay origin %s, which the edge pairs with it more recently\n\n", //nolint:errcheck // Flush reports it
+				r.SigninOrigin, r.SigninCountedUnder)
+		}
+		printCounts(w, append(signinRows(r.SigninCounts, " here"),
+			namedCounts{"servers with connector requests through here", r.ConnectorServers}))
 	}
-	fmt.Fprintf(w, "\nunknown origin: %d claimed servers not seen since recording began\n\n", rep.Unknown.Servers) //nolint:errcheck // Flush reports it
+	for _, u := range rep.Unpaired {
+		fmt.Fprintf(w, "\nrecorded at an address this edge no longer pairs: %s\n\n", u.SigninOrigin) //nolint:errcheck // Flush reports it
+		printCounts(w, signinRows(u.SigninCounts, " there"))
+	}
+	fmt.Fprintf(w, "\nunknown origin: %d claimed servers not enrolled or claimed since recording began\n\n", rep.Unknown.Servers) //nolint:errcheck // Flush reports it
 	printCounts(w, []namedCounts{
 		{"device tokens", rep.Unknown.DeviceTokens},
 		{"accounts with a session", rep.Unknown.SessionAccounts},
@@ -116,9 +131,28 @@ type namedCounts struct {
 	n     edgestore.Counts
 }
 
+func signinRows(c edgestore.SigninCounts, where string) []namedCounts {
+	return []namedCounts{
+		{"device tokens issued" + where, c.DeviceTokens},
+		{"device tokens issued earlier, first seen" + where, c.DeviceTokensSeen},
+		{"accounts with a session" + where, c.SessionAccounts},
+		{"accounts with device tokens" + where + " and none recorded at another origin", c.DeviceOnlyAccounts},
+	}
+}
+
 func printCounts(w io.Writer, rows []namedCounts) {
 	fmt.Fprintln(w, "LAST USED WITHIN\t1 DAY\t7 DAYS\t30 DAYS\tTOTAL") //nolint:errcheck // the tabwriter's Flush reports it
 	for _, c := range rows {
 		fmt.Fprintf(w, "%s\t%d\t%d\t%d\t%d\n", c.label, c.n.Day, c.n.Week, c.n.Month, c.n.Total) //nolint:errcheck // the tabwriter's Flush reports it
 	}
+}
+
+// printable is s for a terminal: "-" when empty, quoted with escapes when
+// it holds a rune that does not print, such as a bidi control a server
+// may put in its name.
+func printable(s string) string {
+	if strings.IndexFunc(s, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
+		return strconv.Quote(s)
+	}
+	return dash(s)
 }
