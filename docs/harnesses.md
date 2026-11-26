@@ -999,7 +999,7 @@ mounts.
 - Codex subagents do not nest in the Enhanced timeline.
 - No idle wake exists for Copilot, Gemini or Cursor, and Antigravity has no
   hooks at all. A [subsession](teams.md#subsessions) refuses them Standard, so they run
-  Enhanced there.
+  Enhanced there, or Background for Antigravity.
 - Standard Codex needs Codex 0.131.0 or newer. Its app-server ends with its
   terminal, so a `codex resume` in the shell runs without Cloudfield's status
   and message delivery.

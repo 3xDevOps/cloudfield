@@ -812,7 +812,10 @@ Subsessions go one level deep: a subsession cannot start subsessions. A parent m
 a Standard or Enhanced session that wakes when mail arrives; `subsession start` from a
 Standard session of an agent with no idle wake is refused with
 `<agent> in Standard mode has no idle wake; start it in Enhanced`. A
-Background session cannot start subsessions.
+Background session cannot start subsessions, so Antigravity, which has no
+Enhanced mode, cannot be a parent. A subsession must wake on mail too:
+`--mode standard` for a subsession of such an agent is refused the same way,
+and it runs Enhanced, or Background for Antigravity.
 
 ### Turn subsessions off
 
