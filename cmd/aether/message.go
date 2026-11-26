@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode"
 
 	"github.com/3xDevOps/cloudfield/internal/cli"
 	"github.com/3xDevOps/cloudfield/internal/domain"
@@ -57,9 +58,11 @@ func parseMessage(args []string, stdin io.Reader) (func(*protocol.Client, io.Wri
 	}
 	for _, word := range fs.Args()[1:] {
 		name, _, _ := strings.Cut(strings.TrimLeft(word, "-"), "=")
-		if strings.HasPrefix(word, "-") && fs.Lookup(name) != nil {
+		// A quoted message is one argument with spaces in it; only a bare word can be a misplaced flag.
+		if strings.HasPrefix(word, "-") && !strings.ContainsFunc(word, unicode.IsSpace) && fs.Lookup(name) != nil {
 			return nil, fmt.Errorf("message: %s comes after the session id, where it would be sent as message text; "+
-				"put flags before %s, or quote the whole message to send it as written", word, fs.Arg(0))
+				"put flags before %s, or to send it as written quote the whole message, "+
+				"or pipe a one-word message on stdin with -", word, fs.Arg(0))
 		}
 	}
 	if len(attach) > protocol.CollaborationMaxAttachments {

@@ -62,7 +62,7 @@ func TestMessageSteersAndAttachesUploadedFiles(t *testing.T) {
 		protocol.MethodTerminalFile:  {result: protocol.TerminalUploadResult{Path: fileRef}},
 		protocol.MethodRunInject:     {result: protocol.RunRoomPostResult{Message: protocol.RoomMessage{ID: "m1", State: protocol.RoomMessageSent}}},
 	}
-	send, err := parseMessage([]string{"--steer", "--attach", shot, "--attach", notes, "r1", "-v", "is", "broken"}, nil)
+	send, err := parseMessage([]string{"--steer", "--attach", shot, "--attach", notes, "r1", "--steer=true is ignored,", "-v", "too"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +76,7 @@ func TestMessageSteersAndAttachesUploadedFiles(t *testing.T) {
 	for method, want := range map[string]any{
 		protocol.MethodTerminalImage: protocol.TerminalImageParams{RunID: "r1", Content: base64.StdEncoding.EncodeToString(png)},
 		protocol.MethodTerminalFile:  protocol.TerminalFileParams{RunID: "r1", Name: "notes.txt", Content: base64.StdEncoding.EncodeToString(text)},
-		protocol.MethodRunInject: protocol.RunInjectParams{RunID: "r1", Message: "-v is broken", Attachments: []string{imageRef, fileRef},
+		protocol.MethodRunInject: protocol.RunInjectParams{RunID: "r1", Message: "--steer=true is ignored, -v too", Attachments: []string{imageRef, fileRef},
 			IdempotencyKey: sent.IdempotencyKey, Steer: true},
 	} {
 		wantJSON, err := json.Marshal(want)
@@ -112,6 +112,7 @@ func TestMessageRefusesWhatItCannotSendBeforeDialing(t *testing.T) {
 		"message: --attach comes after the session id":          {"r1", "use this mock", "--attach", "mock.png"},
 		"message: --steer comes after the session id":           {"r1", "--steer", "stop editing the README"},
 		"message: -attach=mock.png comes after the session id":  {"r1", "-attach=mock.png", "use this mock"},
+		"or pipe a one-word message on stdin with -":            {"r1", "--steer"},
 	} {
 		if _, err := parseMessage(args, nil); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("message %v = %v, want %q", args, err, want)

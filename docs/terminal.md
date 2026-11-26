@@ -172,7 +172,8 @@ eight files per message.
   after it is the message:
   `cloudfield message --attach shot.png <session-id> "match this layout"`.
   A `--steer` or `--attach` word after the session id is refused, not sent
-  as text; quote the whole message to send one as written.
+  as text. To send one as written, quote the whole message; a one-word
+  message goes on stdin with `-`.
 - If you cannot message the agent, the composer says why: **This session has
   finished.**, **The agent is still starting.**, **This session is protected: only
   its owner or an admin can message the agent.** or **You can watch this session but
