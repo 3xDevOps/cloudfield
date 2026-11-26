@@ -267,9 +267,13 @@ func (m Ready) validate() error {
 // usableOrigins keeps the canonical origins of list, MaxRelayOrigins at
 // most. A list the server cannot use never refuses the ready it came in:
 // a later edge may send more origins, or forms this build does not
-// accept.
+// accept. It is nil only for a list that names nothing, and empty, not
+// nil, for one that names only origins it cannot use.
 func usableOrigins(list []string) []string {
-	var out []string
+	if len(list) == 0 {
+		return nil
+	}
+	out := []string{}
 	for _, o := range list {
 		if c, err := Origin(o); err == nil && c == o && len(out) < MaxRelayOrigins {
 			out = append(out, o)

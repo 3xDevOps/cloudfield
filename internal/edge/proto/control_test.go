@@ -329,3 +329,29 @@ func TestReadyKeepsUsableRelayOrigins(t *testing.T) {
 		t.Fatalf("relay origins kept %v, want the first %d canonical ones", got, MaxRelayOrigins)
 	}
 }
+
+// TestReadyTellsUnusableOriginsFromNone checks that a ready whose relay
+// origins are all unusable decodes with an empty list, and one without
+// the member with none, so a server tells the two apart.
+func TestReadyTellsUnusableOriginsFromNone(t *testing.T) {
+	for _, tc := range []struct {
+		origins any
+		wantNil bool
+	}{{nil, true}, {[]string{}, true}, {[]string{"edge.example.test", "https://EDGE.example.test"}, false}} {
+		fields := map[string]any{"type": "ready", "server_id": "7ozstx3hvprfzhna3cakjwhdnw", "state": StateClaimed, "edge_key": edgeKey(1).Public()}
+		if tc.origins != nil {
+			fields["relay_origins"] = tc.origins
+		}
+		data, err := json.Marshal(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, err := DecodeControl(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := m.(Ready).RelayOrigins; (got == nil) != tc.wantNil || len(got) != 0 {
+			t.Errorf("relay_origins %v: decoded %#v, want nil %v and empty", tc.origins, got, tc.wantNil)
+		}
+	}
+}
