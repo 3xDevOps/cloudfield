@@ -17,7 +17,7 @@
       "interface": {
         "displayName": "Cloudfield Coding Agents",
         "shortDescription": "Run and steer coding agents",
-        "longDescription": "Cloudfield is self-hosted software that runs coding agents such as Claude Code, Codex and opencode in containers on your own server. This plugin connects ChatGPT to the Cloudfield server you signed in to through the Cloudfield edge.\n\nAsk what needs you, what your agents did today, or what a session changed, and read a session's conversation, pull request checks and review comments. With the write scope, launch a session on a task, message a session, answer an agent's question, and pause, resume or accept a session. With the control scope, which is off by default, allow or deny an agent's permission request once, stop or close a session, or merge a session's pull request.\n\nWho it is for: developers whose team already runs a Cloudfield server. It needs a Cloudfield account on that server; it does not host agents itself.\n\nLimitations: agents run with the access you gave them on your server, so a launched agent can push branches and open pull requests. ChatGPT asks before tools that are not read-only unless you chose to always allow them. No plugin tool installs Cloudfield, changes server settings or deletes repositories; an agent you instruct can do what its credentials allow. Text written by agents, teammates and GitHub users is returned as untrusted data.",
+        "longDescription": "Cloudfield is self-hosted software that runs coding agents such as Claude Code, Codex and opencode in containers on your own server. This plugin connects ChatGPT to the Cloudfield server you signed in to through the Cloudfield edge.\n\nAsk what needs you, what your agents did today, or what a session changed, and read a session's conversation, pull request checks and review comments. With the write scope, launch a session on a task, message a session, answer an agent's question, and pause, resume or accept a session. With the control scope, which is off by default, allow or deny an agent's permission request once, stop or close a session, or open and merge a session's pull request.\n\nWho it is for: developers whose team already runs a Cloudfield server. It needs a Cloudfield account on that server; it does not host agents itself.\n\nLimitations: agents run with the access you gave them on your server, so a launched agent can push branches and open pull requests. ChatGPT asks before tools that are not read-only unless you chose to always allow them. No plugin tool installs Cloudfield, changes server settings or deletes repositories; an agent you instruct can do what its credentials allow. Text written by agents, teammates and GitHub users is returned as untrusted data.",
         "developerName": "3xDevOps",
         "category": "Developer Tools",
         "capabilities": [
@@ -29,7 +29,7 @@
           "Search sessions and the team memory of a workspace",
           "Launch a session on a task",
           "Message a session, answer an agent's question, and pause or resume a session",
-          "Allow or deny a permission request once, stop or close a session"
+          "Allow or deny a permission request once, stop or close a session, open and merge its pull request"
         ],
         "websiteURL": "https://cloudfield.ai",
         "supportURL": "https://github.com/3xDevOps/cloudfield/issues",
