@@ -599,8 +599,9 @@ Claude Code prompted it again
 that ended a turn from one sent mid-turn.
 
 The Markdown report has a row per scenario: sessions passed, subsession starts,
-start attempts, the agents the starts asked for, subagents started (`subagent_stats.spawned` in
-Claude Code's result), report outcomes, socket requests, latency and cost. Cost
+start attempts, the starts wanted, the agents the starts asked for, subagents
+started (`subagent_stats.spawned` in Claude Code's result), report outcomes,
+socket requests, latency and cost. Cost
 is the figure `claude` reports. The bridge itself makes two `coord.status`
 requests when it starts, so every session records at least those. Below the
 table are the failed checks and, per session, the agent's own tool calls by

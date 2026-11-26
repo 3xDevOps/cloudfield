@@ -32,7 +32,8 @@ const (
 	helperEnv = "SESSIONEVAL_HELPER"
 	socketEnv = "SESSIONEVAL_SOCKET"
 	// argsEnv names the file the command appends each call's arguments to.
-	argsEnv = "SESSIONEVAL_ARGS"
+	argsEnv  = "SESSIONEVAL_ARGS"
+	argsFile = "command-args.jsonl"
 
 	helperCLI = "cli"
 	helperMCP = "mcp"
@@ -43,8 +44,6 @@ var fixture embed.FS
 
 // A go.mod under testdata would make the fixture a module of its own, which
 // cannot be embedded.
-const argsFile = "command-args.jsonl"
-
 const fixtureModule = "module example.com/shop\n\ngo 1.21\n"
 
 // Helper runs the real in-container command or MCP bridge against the
@@ -78,7 +77,7 @@ func logArgs(path string, args []string) error {
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
 	if err != nil {
 		return fmt.Errorf("sessioneval: log the command's arguments: %w", err)
 	}
@@ -107,9 +106,6 @@ type Launch struct {
 // for help, as the command reads it, is not one.
 func (l *Launch) CommandStarts() (int, error) {
 	raw, err := os.ReadFile(filepath.Join(l.dir, argsFile))
-	if errors.Is(err, fs.ErrNotExist) {
-		return 0, nil
-	}
 	if err != nil {
 		return 0, err
 	}
@@ -222,6 +218,9 @@ func Stage(ctx context.Context, helper string, s Scenario) (_ *Launch, err error
 		}
 	}()
 	if err = os.Mkdir(bin, 0o755); err != nil {
+		return nil, err
+	}
+	if err = os.WriteFile(filepath.Join(dir, argsFile), nil, 0o600); err != nil {
 		return nil, err
 	}
 	script := fmt.Sprintf("#!/bin/sh\n%s=%s %s=%s %s=%s exec %s \"$@\"\n", helperEnv, helperCLI, socketEnv, shellquote.Quote(coord.Path),

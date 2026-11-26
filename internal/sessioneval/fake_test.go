@@ -100,7 +100,7 @@ func TestStagedSessionThroughTheRealCommand(t *testing.T) {
 		}
 	}
 
-	for _, args := range [][]string{{"subsession", "start", "--help"}, {"subsession", "start", "--harness", "codex"}, {"skill", "subsessions"}} {
+	for _, args := range [][]string{{"subsession", "start", "--help"}, {"subsession", "start", "--harness", "codex", "-h"}, {"subsession", "start", "--harness", "codex"}, {"skill", "subsessions"}} {
 		cli(t, l, args...)
 	}
 	if n, err := l.CommandStarts(); err != nil || n != 4 {
