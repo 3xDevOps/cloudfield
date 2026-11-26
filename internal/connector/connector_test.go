@@ -967,6 +967,7 @@ type edgeAt struct {
 	mu      sync.Mutex
 	relays  []string
 	notices edgeagent.StoredNotices
+	err     error
 }
 
 func (e *edgeAt) Origin() string   { return e.origin }
@@ -984,7 +985,13 @@ func (e *edgeAt) RelayOrigins() []string {
 func (e *edgeAt) Notices() (edgeagent.StoredNotices, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return e.notices, nil
+	return e.notices, e.err
+}
+
+func (e *edgeAt) setErr(err error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.err = err
 }
 
 func (e *edgeAt) set(relays []string, notices edgeagent.StoredNotices) {

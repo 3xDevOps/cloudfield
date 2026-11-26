@@ -547,14 +547,9 @@ type consentPage struct {
 }
 
 // retiring is the edge's notice that res's address is retiring, nil when
-// there is none or the notices cannot be read, which leaves the page as
-// it is.
+// there is none.
 func (h *handler) retiring(res resource) *protocol.ConnectorNotice {
-	n, err := h.ssh.ConnectorNotice(res.base)
-	if err != nil {
-		slog.Warn("connector: consent page without the edge's notices", "error", err)
-		return nil
-	}
+	n := h.ssh.ConnectorNotice(res.base)
 	if n == nil || n.State != edgeproto.NoticeRetiring {
 		return nil
 	}
@@ -605,10 +600,10 @@ h1{margin:0 0 16px;font-size:22px;font-weight:600;line-height:1.3}
 strong{font-weight:600}
 code{font-family:var(--font-code);font-size:.875em;background:var(--chrome);border:1px solid var(--seam);border-radius:var(--radius-chip);padding:0 4px}
 .note{color:var(--text-muted);font-size:15px}
-.error,.retiring{padding:12px 16px;background:var(--chrome);border-left:2px solid var(--state-failed);border-radius:0 var(--radius-control) var(--radius-control) 0}
-.retiring{border-left-color:var(--state-needs-you)}
+.error{padding:12px 16px;background:var(--chrome);border-left:2px solid var(--state-failed);border-radius:0 var(--radius-control) var(--radius-control) 0}
+{{if .Retiring}}.retiring{padding:12px 16px;background:var(--chrome);border-left:2px solid var(--state-needs-you);border-radius:0 var(--radius-control) var(--radius-control) 0}
 time{white-space:nowrap}
-fieldset{margin:0 0 16px;padding:4px 16px 0;border:1px solid var(--seam);border-radius:var(--radius-control)}
+{{end}}fieldset{margin:0 0 16px;padding:4px 16px 0;border:1px solid var(--seam);border-radius:var(--radius-control)}
 legend{padding:0 4px;color:var(--text-muted);font-size:15px;font-weight:500}
 fieldset label{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;cursor:pointer}
 input[type=checkbox]{appearance:none;display:grid;place-content:center;width:20px;height:20px;margin:2px 0 0;border:1px solid var(--control-border);border-radius:var(--radius-chip);background:var(--chrome);cursor:pointer}
@@ -639,7 +634,7 @@ button:hover{background:var(--accent-fill-hover)}
 <p class="error">{{.Error}}</p>
 {{else}}
 <h1>Connect <strong>{{.Client}}</strong> to <strong>{{.Server}}</strong>{{if .Member}} as <strong>{{.Member}}</strong>{{end}}</h1>
-{{with .Retiring}}<p class="retiring">This address is retiring{{with .Date}} on <time>{{.}}</time>{{end}}. Add the connector at <code>{{.URL}}</code> instead. Connecting here still works until it is retired.</p>
+{{with .Retiring}}<p class="retiring">This address is retiring{{with .Date}} on <time>{{.}}</time>{{end}}.{{with .URL}} Add the connector at <code>{{.}}</code> instead.{{else}} Ask this server's admin where to add the connector instead.{{end}} Connecting here still works until it is retired.</p>
 {{end}}<p>Server <strong>{{.Server}}</strong> <code>{{.ServerID}}</code>{{if .Member}}, member <strong>{{.Member}}</strong>{{end}}, client <strong>{{.Client}}</strong>.</p>
 <p>It acts as you. It can always list workspaces, agents and runs and read run history; every member can read every run on this server, so it can read all of them.</p>
 {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}

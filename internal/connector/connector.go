@@ -121,7 +121,7 @@ type handler struct {
 	long            *ops.LongCalls
 
 	// mu guards codes, nonces, wrong, wrongAll, wrongSwept, writes,
-	// writesSwept and noticed.
+	// writesSwept, noticed and noticedSwept.
 	mu    sync.Mutex
 	codes map[string]authCode
 	// nonces holds the nonces of the edge assertions consent pages were
@@ -137,7 +137,8 @@ type handler struct {
 	// noticed is when each connector's tool result last carried the
 	// notice that its address is retiring. It does not survive a restart,
 	// so the next result after one carries it again.
-	noticed map[string]time.Time
+	noticed      map[string]time.Time
+	noticedSwept time.Time
 }
 
 // New returns the handler for every path under the base URL's path, the
@@ -311,7 +312,9 @@ func (h *handler) server(r *http.Request) *mcp.Server {
 	srv.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
 		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
 			res, err := next(ctx, method, req)
-			if call, ok := res.(*mcp.CallToolResult); ok && err == nil && !call.IsError {
+			// search and fetch answer with JSON alone, which clients may
+			// decode as such, so the notice waits for another tool.
+			if call, ok := res.(*mcp.CallToolResult); ok && err == nil && !call.IsError && !jsonOnly(req) {
 				if text := h.retiringNotice(c, h.now()); text != "" {
 					call.Content = append(call.Content, &mcp.TextContent{Text: text})
 				}
@@ -322,26 +325,33 @@ func (h *handler) server(r *http.Request) *mcp.Server {
 	return srv
 }
 
+func jsonOnly(req mcp.Request) bool {
+	call, ok := req.(*mcp.CallToolRequest)
+	return ok && (call.Params.Name == "search" || call.Params.Name == "fetch")
+}
+
 // retiringNotice is the text a tool result of connector c adds when the
-// edge says the address c was added at is retiring and the notice was
-// not added in the last noticeEvery; empty otherwise.
+// edge says the address c was added at is retiring, names where the
+// server takes it instead, and the notice was not added in the last
+// noticeEvery; empty otherwise. Records older than noticeEvery are swept
+// at most once a minute, as allowWrite sweeps its buckets.
 func (h *handler) retiringNotice(c *store.Connector, now time.Time) string {
 	recent := func() bool {
 		last, ok := h.noticed[c.ID]
 		return ok && now.Sub(last) < noticeEvery
 	}
 	h.mu.Lock()
+	if now.Sub(h.noticedSwept) >= time.Minute {
+		maps.DeleteFunc(h.noticed, func(_ string, last time.Time) bool { return now.Sub(last) >= noticeEvery })
+		h.noticedSwept = now
+	}
 	skip := recent()
 	h.mu.Unlock()
 	if skip {
 		return ""
 	}
-	n, err := h.ssh.ConnectorNotice(c.Resource)
-	if err != nil {
-		slog.Warn("connector: tool result without the edge's notices", "connector", c.ID, "error", err)
-		return ""
-	}
-	if n == nil || n.State != edgeproto.NoticeRetiring {
+	n := h.ssh.ConnectorNotice(c.Resource)
+	if n == nil || n.State != edgeproto.NoticeRetiring || n.URL == "" {
 		return ""
 	}
 	h.mu.Lock()
@@ -349,7 +359,6 @@ func (h *handler) retiringNotice(c *store.Connector, now time.Time) string {
 	if recent() {
 		return ""
 	}
-	maps.DeleteFunc(h.noticed, func(_ string, last time.Time) bool { return now.Sub(last) >= noticeEvery })
 	h.noticed[c.ID] = now
 	on := ""
 	if n.Date != "" {

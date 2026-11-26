@@ -153,32 +153,53 @@ func connectorCodeHash(code string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// edgeNotices are the verified notices of the server's edge, by the
-// relay origin each is about; none while the server has no edge or the
-// edge sent none.
-func (s *Server) edgeNotices() (map[string]edgeproto.Notice, error) {
+// edgeNotices are the verified notices of the server's edge by the relay
+// origin each is about, and the relay origins the edge takes connectors
+// at now: none unless the control connection is up at
+// edgeproto.VersionRelayOrigin or later, which announces them.
+type edgeNotices struct {
+	byOrigin map[string]edgeproto.Notice
+	firstUse bool
+	relays   []string
+}
+
+// edgeNotices reads the edge's notices. One that cannot be read is
+// logged, and connectors are then shown as if there were none.
+func (s *Server) edgeNotices() edgeNotices {
 	edge := s.currentEdgeOwner()
 	if edge == nil {
-		return nil, nil
+		return edgeNotices{}
 	}
 	stored, err := edge.Notices()
 	if err != nil {
-		return nil, fmt.Errorf("sshd: read the edge's notices: %w", err)
+		slog.Warn("sshd: connectors shown without the edge's notices", "error", err)
+		return edgeNotices{}
 	}
-	out := make(map[string]edgeproto.Notice, len(stored.Notices))
+	if len(stored.Notices) == 0 {
+		return edgeNotices{}
+	}
+	out := edgeNotices{byOrigin: make(map[string]edgeproto.Notice, len(stored.Notices)), firstUse: stored.FirstUse}
 	for _, n := range stored.Notices {
-		out[n.Origin] = n
+		out.byOrigin[n.Origin] = n
 	}
-	return out, nil
+	if edge.EdgeVersion() >= edgeproto.VersionRelayOrigin {
+		out.relays = edge.RelayOrigins()
+	}
+	return out
 }
 
 // noticeFor is what notices say about the connector URL u of this
-// server, nil when they say nothing.
-func (s *Server) noticeFor(notices map[string]edgeproto.Notice, u string) *protocol.ConnectorNotice {
-	for origin, n := range notices {
+// server, nil when they say nothing. Its URL, u's path at the
+// replacement, is set only while the edge takes connectors there.
+func (s *Server) noticeFor(notices edgeNotices, u string) *protocol.ConnectorNotice {
+	for origin, n := range notices.byOrigin {
 		path, ok := strings.CutPrefix(u, origin)
 		if ok && (path == edgeproto.PathUniversalMCP || path == edgeproto.MCPPath(edgeproto.ServerID(s.hostKey.PublicKey()))) {
-			return &protocol.ConnectorNotice{State: n.State, URL: n.Replacement + path, Date: n.Date}
+			out := &protocol.ConnectorNotice{State: n.State, Date: n.Date}
+			if slices.Contains(notices.relays, n.Replacement) {
+				out.URL = n.Replacement + path
+			}
+			return out
 		}
 	}
 	return nil
@@ -186,26 +207,16 @@ func (s *Server) noticeFor(notices map[string]edgeproto.Notice, u string) *proto
 
 // ConnectorNotice is what the edge's verified notices say about the
 // connector URL u of this server, nil when they say nothing.
-func (s *Server) ConnectorNotice(u string) (*protocol.ConnectorNotice, error) {
-	notices, err := s.edgeNotices()
-	if err != nil {
-		return nil, err
-	}
-	return s.noticeFor(notices, u), nil
+func (s *Server) ConnectorNotice(u string) *protocol.ConnectorNotice {
+	return s.noticeFor(s.edgeNotices(), u)
 }
 
 // offered is the connector URL u at the address notices name instead of
-// u's, when the edge takes connectors there, and u otherwise.
-func (s *Server) offered(notices map[string]edgeproto.Notice, u string) string {
-	edge := s.currentEdgeOwner()
-	if len(notices) == 0 || edge == nil {
-		return u
-	}
-	relays := edge.RelayOrigins()
-	for origin, n := range notices {
-		if path, ok := strings.CutPrefix(u, origin); ok && strings.HasPrefix(path, "/") && slices.Contains(relays, n.Replacement) {
-			return n.Replacement + path
-		}
+// u's, when the edge takes connectors there and the notices did not come
+// with the pin, and u otherwise.
+func (s *Server) offered(notices edgeNotices, u string) string {
+	if n := s.noticeFor(notices, u); n != nil && n.URL != "" && !notices.firstUse {
+		return n.URL
 	}
 	return u
 }
@@ -215,7 +226,7 @@ func (s *Server) offered(notices map[string]edgeproto.Notice, u string) string {
 // since the edge offers a server there only to the accounts it lists for
 // it, and the server's own URL otherwise; either at the address notices
 // name instead of a retiring or retired one.
-func (s *Server) connectorURLFor(ctx context.Context, member domain.MemberID, notices map[string]edgeproto.Notice) (string, error) {
+func (s *Server) connectorURLFor(ctx context.Context, member domain.MemberID, notices edgeNotices) (string, error) {
 	universal := s.UniversalConnectorURL()
 	if universal == "" {
 		return s.offered(notices, s.ConnectorURL()), nil
@@ -279,10 +290,7 @@ func (s *Server) connectorCode(ctx context.Context, member domain.MemberID, _ js
 			"%s: edge %s speaks edge protocol %d and cannot forward connectors; its operator upgrades it",
 			method, edge.Origin(), version)}
 	}
-	notices, err := s.edgeNotices()
-	if err != nil {
-		return nil, rpcError(err)
-	}
+	notices := s.edgeNotices()
 	connectorURL, err := s.connectorURLFor(ctx, member, notices)
 	if err != nil {
 		return nil, rpcError(err)
@@ -389,10 +397,7 @@ func (s *Server) connectorList(ctx context.Context, member domain.MemberID, _ js
 	if err != nil {
 		return nil, rpcError(err)
 	}
-	notices, err := s.edgeNotices()
-	if err != nil {
-		return nil, rpcError(err)
-	}
+	notices := s.edgeNotices()
 	connectorURL, err := s.connectorURLFor(ctx, member, notices)
 	if err != nil {
 		return nil, rpcError(err)
