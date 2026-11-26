@@ -297,11 +297,15 @@ func runShow(c *protocol.Client, w io.Writer, runID string, asJSON bool) error {
 	if asJSON {
 		return writeJSON(w, v)
 	}
-	names, err := memberNames(c)
-	if err != nil {
-		return err
+	var controller string
+	if v.ControllerMemberID != "" {
+		names, nerr := memberNames(c)
+		if nerr != nil {
+			return nerr
+		}
+		controller = nameOrID(names, v.ControllerMemberID)
 	}
-	if err = printRunView(w, v, items, nameOrID(names, v.ControllerMemberID)); err != nil {
+	if err = printRunView(w, v, items, controller); err != nil {
 		return err
 	}
 	if waitsOnAnother(r, items) {
