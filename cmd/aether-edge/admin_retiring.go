@@ -12,6 +12,8 @@ import (
 	"text/tabwriter"
 	"time"
 	"unicode"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	edgestore "github.com/3xDevOps/cloudfield/internal/edge/store"
@@ -60,6 +62,18 @@ func retiring(args []string, getenv func(string) string, out io.Writer) error {
 	now := time.Now().UTC()
 	rep, err := edgestore.ReadRetiring(context.Background(), db, now)
 	if errors.Is(err, edgestore.ErrNoOrigins) {
+		if *asJSON {
+			sch, serr := edgestore.ReadSchema(db)
+			if serr != nil {
+				return serr
+			}
+			return writeJSON(out, struct {
+				At            time.Time `json:"at"`
+				Status        string    `json:"status"`
+				Schema        int       `json:"schema"`
+				OriginsSchema int       `json:"origins_schema"`
+			}{now, "not_recorded", sch.Version, edgestore.OriginsSchema})
+		}
 		_, err = fmt.Fprintf(out, "nothing is recorded yet: %v, and an edge records origins from schema %d on\n", err, edgestore.OriginsSchema)
 		return err
 	}
@@ -81,18 +95,22 @@ func retiring(args []string, getenv func(string) string, out io.Writer) error {
 		rep.Origins = match
 	}
 	if *asJSON {
-		enc := json.NewEncoder(out)
-		enc.SetIndent("", "  ")
-		return enc.Encode(struct {
-			At time.Time `json:"at"`
+		return writeJSON(out, struct {
+			At     time.Time `json:"at"`
+			Status string    `json:"status"`
 			edgestore.Report
-		}{now, rep})
+		}{now, "recorded", rep})
 	}
 	w := tabwriter.NewWriter(out, 0, 0, 2, ' ', 0)
 	if rep.RecordingSince.IsZero() {
 		fmt.Fprintln(w, "no origin pairs recorded: the edge records them from its first start with an option that retires a pair") //nolint:errcheck // Flush reports it
 	} else {
-		fmt.Fprintf(w, "recording since %s\n", rep.RecordingSince.Format(time.RFC3339)) //nolint:errcheck // Flush reports it
+		end := "the edge is recording now, or stopped uncleanly"
+		if !rep.RecordingStopped.Before(rep.RecordingStarted) {
+			end = "stopped cleanly " + rep.RecordingStopped.Format(time.RFC3339)
+		}
+		fmt.Fprintf(w, "last known recording period: since %s, last started %s; %s\n", //nolint:errcheck // Flush reports it
+			rep.RecordingSince.Format(time.RFC3339), rep.RecordingStarted.Format(time.RFC3339), end)
 	}
 	for _, r := range rep.Origins {
 		fmt.Fprintf(w, "\nrelay origin %s, sign-in origin %s\n\n", r.RelayOrigin, r.SigninOrigin) //nolint:errcheck // Flush reports it
@@ -145,6 +163,30 @@ func printCounts(w io.Writer, rows []namedCounts) {
 	for _, c := range rows {
 		fmt.Fprintf(w, "%s\t%d\t%d\t%d\t%d\n", c.label, c.n.Day, c.n.Week, c.n.Month, c.n.Total) //nolint:errcheck // the tabwriter's Flush reports it
 	}
+}
+
+// writeJSON writes v indented, with every non-ASCII rune that does not
+// print, such as a bidi control, escaped: encoding/json writes those raw.
+func writeJSON(out io.Writer, v any) error {
+	data, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		return err
+	}
+	var b strings.Builder
+	for _, r := range string(data) {
+		switch {
+		case r < utf8.RuneSelf || unicode.IsPrint(r):
+			b.WriteRune(r)
+		case r > 0xffff:
+			r1, r2 := utf16.EncodeRune(r)
+			fmt.Fprintf(&b, `\u%04x\u%04x`, r1, r2)
+		default:
+			fmt.Fprintf(&b, `\u%04x`, r)
+		}
+	}
+	b.WriteByte('\n')
+	_, err = io.WriteString(out, b.String())
+	return err
 }
 
 // printable is s for a terminal: "-" when empty, quoted with escapes when

@@ -159,7 +159,7 @@ accounts with a session  0      0       0        0
 	}
 
 	one := retiringEdge(t, map[string]string{pairRelayA: pairSigninA})
-	want := `recording since 2026-11-01T00:00:00Z
+	want := `last known recording period: since 2026-11-01T00:00:00Z, last started 2026-11-01T00:00:00Z; the edge is recording now, or stopped uncleanly
 
 relay origin ` + pairRelayA + `, sign-in origin ` + pairSigninA + `
 
@@ -219,10 +219,10 @@ device tokens            0      1       1        1
 accounts with a session  0      0       0        0
 
 ` + retiringCaveat
-	if out, err = runRetiring(t, two); err != nil || out != "recording since 2026-11-01T00:00:00Z\n"+wantA+wantB+unknown {
+	if out, err = runRetiring(t, two); err != nil || out != "last known recording period: since 2026-11-01T00:00:00Z, last started 2026-11-01T00:00:00Z; the edge is recording now, or stopped uncleanly\n"+wantA+wantB+unknown {
 		t.Fatalf("report of two pairs:\n%s%v\nwant:\n%s%s%s", out, err, wantA, wantB, unknown)
 	}
-	if out, err = runRetiring(t, two, "--origin", strings.ToUpper(pairRelayB)); err != nil || out != "recording since 2026-11-01T00:00:00Z\n"+wantB+unknown {
+	if out, err = runRetiring(t, two, "--origin", strings.ToUpper(pairRelayB)); err != nil || out != "last known recording period: since 2026-11-01T00:00:00Z, last started 2026-11-01T00:00:00Z; the edge is recording now, or stopped uncleanly\n"+wantB+unknown {
 		t.Fatalf("report of --origin %s:\n%s%v", pairRelayB, out, err)
 	}
 	if _, err = runRetiring(t, two, "--origin", pairSigninA); err == nil ||
@@ -284,6 +284,17 @@ func TestRetiringOnSchema1(t *testing.T) {
 		" is at schema version 1, and an edge records origins from schema 2 on\n"; err != nil || out != want {
 		t.Fatalf("report on schema 1:\n%s%v\nwant:\n%s", out, err, want)
 	}
+	out, err = runRetiring(t, dir, "--json")
+	var status struct {
+		At            time.Time `json:"at"`
+		Status        string    `json:"status"`
+		Schema        int       `json:"schema"`
+		OriginsSchema int       `json:"origins_schema"`
+	}
+	if err != nil || json.Unmarshal([]byte(out), &status) != nil || status.At.IsZero() ||
+		status.Status != "not_recorded" || status.Schema != 1 || status.OriginsSchema != 2 {
+		t.Fatalf("JSON report on schema 1:\n%s%v", out, err)
+	}
 	if s, err := edgestore.ReadSchema(path); err != nil || s.Version != 1 {
 		t.Fatalf("schema after the report = %+v, %v", s, err)
 	}
@@ -309,11 +320,26 @@ func TestRetiringQuotesNames(t *testing.T) {
 		edgestore.Enrollment{RelayOrigin: pairRelayA, AgentVersion: "v1\u200b", At: enrolledAt}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
+	if err = s.StopRecording(ctx, recordingSince.Add(24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	if err = s.Close(); err != nil {
 		t.Fatal(err)
 	}
 	out, err := runRetiring(t, dir)
-	if err != nil || !strings.Contains(out, testServer+`  "lab\u202eexe.txt"  octo         "v1\u200b"  2026-11-20T08:00:00Z`) {
+	if err != nil || !strings.Contains(out, testServer+`  "lab\u202eexe.txt"  octo         "v1\u200b"  2026-11-20T08:00:00Z`) ||
+		!strings.HasPrefix(out, "last known recording period: since 2026-11-01T00:00:00Z, last started 2026-11-01T00:00:00Z; stopped cleanly 2026-11-02T00:00:00Z\n") {
 		t.Fatalf("report with a bidi control in a name:\n%s%v", out, err)
+	}
+	out, err = runRetiring(t, dir, "--json")
+	var got struct {
+		Status  string                   `json:"status"`
+		Origins []edgestore.OriginReport `json:"origins"`
+	}
+	if err != nil || strings.ContainsAny(out, "\u202e\u200b") || !strings.Contains(out, `"name": "lab\u202eexe.txt"`) ||
+		!strings.Contains(out, `"build": "v1\u200b"`) || json.Unmarshal([]byte(out), &got) != nil || got.Status != "recorded" ||
+		len(got.Origins) != 1 || len(got.Origins[0].Servers) != 1 ||
+		got.Origins[0].Servers[0].Name != "lab\u202eexe.txt" || got.Origins[0].Servers[0].AgentVersion != "v1\u200b" {
+		t.Fatalf("JSON report with a bidi control in a name:\n%s%v", out, err)
 	}
 }
