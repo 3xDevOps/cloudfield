@@ -567,19 +567,21 @@ func main() {
         Assert-AetherTest ($null -ne $definition) ("install.ps1 has no function {0}" -f $name)
         . ([scriptblock]::Create($definition.Extent.Text))
     }
-    if ([Console]::IsOutputRedirected) {
-        Assert-AetherTest (-not (Test-AetherSomeoneToSee)) 'a redirected console counted as someone to see the app'
-    }
-    else {
-        # Run by hand from a console: CI alone must refuse.
-        $oldCI = $env:CI
-        $env:CI = 'true'
-        try {
+    # Each gate is checked with CI cleared or set on its own, so the CI=true
+    # the runner sets cannot answer for the redirection check.
+    $oldCI = $env:CI
+    try {
+        if ([Console]::IsOutputRedirected) {
+            $env:CI = $null
+            Assert-AetherTest (-not (Test-AetherSomeoneToSee)) 'a redirected console counted as someone to see the app'
+        }
+        else {
+            $env:CI = 'true'
             Assert-AetherTest (-not (Test-AetherSomeoneToSee)) 'CI counted as someone to see the app'
         }
-        finally {
-            $env:CI = $oldCI
-        }
+    }
+    finally {
+        $env:CI = $oldCI
     }
 
     # A token Windows treats as Administrator is elevated, so its label is
@@ -589,7 +591,7 @@ func main() {
     if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         # Unreadable labels also answer elevated, so first prove this one reads.
         $label = & (Join-Path ([Environment]::GetFolderPath('System')) 'whoami.exe') /groups /fo csv /nh
-        Assert-AetherTest ($label -match '"S-1-16-12288"') ("an Administrator token has no High label: " + ($label -join "`n"))
+        Assert-AetherTest (@($label -match '"S-1-16-(12288|16384)"').Count -gt 0) ("an Administrator token has no High or System label: " + ($label -join "`n"))
         $global:LASTEXITCODE = 7
         Assert-AetherTest (Test-AetherElevated) 'an Administrator token was not read as elevated'
     }
@@ -598,6 +600,8 @@ func main() {
         [void](Test-AetherElevated)
     }
     Assert-AetherEqual 7 $global:LASTEXITCODE 'the elevation check changed LASTEXITCODE'
+    # The Actions step exits with whatever LASTEXITCODE is left.
+    $global:LASTEXITCODE = 0
     $users = '"BUILTIN\Users","Alias","S-1-5-32-545","Mandatory group, Enabled by default, Enabled group"'
     foreach ($case in @(
             @{ Label = 'S-1-16-8192'; Elevated = $false },

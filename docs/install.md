@@ -224,7 +224,8 @@ name only where that link exists and its directory is on `PATH`.
   starts with `Cloudfield is starting`. It does this only when you run it from
   a terminal, as yourself rather than as root or through `sudo`, `doas` or
   `pkexec`, in a desktop session (`DISPLAY` or `WAYLAND_DISPLAY` set on Linux,
-  a login window session on macOS, not SSH), with `CI` empty or unset.
+  which over SSH means X forwarding; a login window session on macOS, never
+  SSH), with `CI` empty or unset.
   Otherwise `next:` says to open Cloudfield from your applications. If the
   launcher fails, or the temp directory cannot hold the FIFO the build's output
   is read through, the last line shows that error and the script still exits 0.
