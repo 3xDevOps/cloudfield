@@ -65,7 +65,7 @@ type Config struct {
 	Reviewer *ReviewerAccount
 	// RecordOrigins has the edge record which origin pair each server,
 	// device token, session and connector request is on, for aether-edge
-	// retiring.
+	// retiring. Retired turns it on too.
 	RecordOrigins bool
 }
 
@@ -341,7 +341,7 @@ func New(cfg Config) (*Service, error) {
 		openAIChallenge:   cfg.OpenAIChallenge,
 		clientHosts:       cfg.ConnectorClientHosts,
 		reviewer:          cfg.Reviewer,
-		recordOrigins:     cfg.RecordOrigins,
+		recordOrigins:     cfg.RecordOrigins || len(cfg.Retired) > 0,
 		reviewerChecks:    make(chan struct{}, reviewerMaxChecks),
 	}
 	s.tokenLimit.scale = func(k serverBlock) int { return edgeproto.RateLimitScale(k.block) }

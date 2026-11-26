@@ -289,9 +289,12 @@ func TestRetiredDeletesSignIns(t *testing.T) {
 	}
 
 	svc, err := New(Config{DataDir: h.dataDir, SigninOrigin: testSignin, RelayOrigin: testRelay, GitHub: h.provider.app(), Clock: h.clock.Now,
-		Retired: []Retired{{SigninOrigin: testSignin2 + ":443", RelayOrigin: testRelay2, Replacement: testRelay}}, RecordOrigins: true})
+		Retired: []Retired{{SigninOrigin: testSignin2 + ":443", RelayOrigin: testRelay2, Replacement: testRelay}}})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !svc.recordOrigins {
+		t.Error("an edge with a retired pair does not record origins")
 	}
 	t.Cleanup(func() { _ = svc.Close() })
 	for q, want := range map[string]string{
