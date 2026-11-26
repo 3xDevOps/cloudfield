@@ -13,8 +13,8 @@ export function EdgeMoveSteps({ need }: { need: EdgeNeed }) {
   if (!need.move) {
     return (
       <div className="flex min-w-0 flex-col gap-1.5 text-ui-sm">
-        <p>The edge names a new address that is not a plain https address, so no command is shown. It is not a command to run:</p>
-        <code className="min-w-0 rounded-control border border-seam bg-canvas px-2.5 py-1 font-code break-all">{need.notice.replacement}</code>
+        <p>The edge sent a new address that is not a plain https address, so there is no command to run:</p>
+        <code className="min-w-0 border-l-2 border-current pl-2.5 font-code text-muted break-all">{need.notice.replacement}</code>
         <p>Confirm the new address with whoever runs the edge.</p>
       </div>
     )
@@ -48,7 +48,7 @@ export function EdgeNoticeCard({ need }: { need: EdgeNeed }) {
       </div>
       <div className={cn('mt-2 flex min-w-0 items-center gap-1.5 text-ui-sm text-muted', wideIndent)}>
         <StatusDot tone={tone} label={need.notice.state === 'retired' ? 'Retired' : 'Retiring'} />
-        <span className="min-w-0 flex-1 truncate">{need.notice.state === 'retired' ? 'Retired' : 'Retiring'} · Run on the server's host</span>
+        <span className="min-w-0 flex-1 break-words">{need.notice.state === 'retired' ? 'Retired' : 'Retiring'} · Run on the server's host</span>
         <Button variant="ghost" size="sm" onClick={() => navigate('settings', { section: 'edge' })}>Remote access</Button>
       </div>
     </Card>
