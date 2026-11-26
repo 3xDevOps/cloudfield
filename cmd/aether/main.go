@@ -13,6 +13,7 @@ import (
 	"text/tabwriter"
 
 	"github.com/3xDevOps/cloudfield/docs"
+	edgeclient "github.com/3xDevOps/cloudfield/internal/edge/client"
 	"github.com/3xDevOps/cloudfield/internal/selfupdate"
 	"github.com/3xDevOps/cloudfield/internal/version"
 )
@@ -27,7 +28,7 @@ func main() {
 			fmt.Fprintf(os.Stderr, "setup script output:\n%s\n", strings.TrimRight(output, "\n"))
 		}
 	}
-	printRetiring(os.Stderr)
+	printRetiring(os.Stderr, edgeclient.Seen())
 	if err != nil {
 		code := 1
 		var status *exitStatusError

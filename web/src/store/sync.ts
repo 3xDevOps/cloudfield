@@ -120,7 +120,8 @@ function edgeHop(detail: string, refusal: EdgeRefusal | undefined, store: RootSt
 function noteUnreachable(store: RootStore, client: Api, err: unknown, signal: AbortSignal | undefined): void {
   if (signal?.aborted) return
   const data = err instanceof ApiError ? err.data : undefined
-  recordUnreachable(store, client, classifyUnreachable(err, store), data?.refusal?.approval_code, measuredAt(store, data))
+  const retiredText = data?.retired ? data.refusal?.refusal : undefined
+  recordUnreachable(store, client, classifyUnreachable(err, store), data?.refusal?.approval_code, measuredAt(store, data), retiredText)
 }
 
 /** The kinds that refuse this member or device access, not just a route to it. */
@@ -136,9 +137,10 @@ function recordUnreachable(
   kind: UnreachableKind | null,
   approvalCode: string | undefined,
   at: Partial<EdgePath> | undefined,
+  retiredText?: string,
 ): void {
   if (kind && accessRefusals.has(kind)) refuseSnapshot(store)
-  store.getState().setUnreachable(kind, approvalCode, at)
+  store.getState().setUnreachable(kind, approvalCode, at, retiredText)
   const linked = store.getState().linkStatus?.server_id
   if (!at?.server_id || !linked || at.server_id === linked) return
   if (!store.getState().capabilities?.local?.includes('link.status')) return
@@ -149,7 +151,7 @@ function recordUnreachable(
       if (status.server_id === s.linkStatus?.server_id) return
       s.setLinkStatus(status)
       s.reconnect()
-      if (status.server_id === at.server_id) s.setUnreachable(kind, approvalCode, at)
+      if (status.server_id === at.server_id) s.setUnreachable(kind, approvalCode, at, retiredText)
     })
     .catch(ignore)
 }

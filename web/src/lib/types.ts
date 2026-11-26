@@ -1413,9 +1413,21 @@ export interface EdgeLogin {
   error?: string
 }
 
+/** edge.status's `retiring`: what an edge address says of itself, that it
+ * is retiring or, as a refusal, retired, and the address to use instead.
+ * Nothing authenticates it. `known` is whether this computer already has
+ * its own reason to know `replacement`: a sign-in there, a saved link
+ * naming it, or the built-in default edge. */
+export interface EdgeNotice {
+  state: 'retiring' | 'retired'
+  replacement: string
+  date?: string
+  known: boolean
+}
+
 /** edge.status: every edge this machine is signed in to. */
 export interface EdgeStatus {
-  edges: { edge: string; signin_origin?: string; account?: EdgeAccount; error?: string }[]
+  edges: { edge: string; signin_origin?: string; account?: EdgeAccount; error?: string; retiring?: EdgeNotice }[]
   login?: EdgeLogin
 }
 
@@ -1515,6 +1527,10 @@ export interface ServerEdge {
   owner: { provider: string; login: string } | null
   connected: boolean
   claimed: boolean
+  /** The notice for the server's own edge address, verified against the
+   * edge key the server pinned; `first_use` when that key was pinned by
+   * the same handshake. Absent from servers without it. */
+  retiring?: { state: 'retiring' | 'retired'; origin: string; replacement: string; date?: string; first_use?: boolean }
 }
 
 /** server.edge.claimcode: a claim code bound to the calling admin. */

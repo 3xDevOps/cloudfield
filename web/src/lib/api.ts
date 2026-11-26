@@ -293,7 +293,9 @@ async function uploadTerminalFile(file: File, runID?: string): Promise<{ path: s
 
 /** A JSON-RPC error's data. The local gateway sets `refusal` on every
  * failure on the edge path; other fields belong to the method. */
-export type ApiErrorData = { refusal?: EdgeRefusal; edge_path?: EdgePath } & Record<string, unknown>
+/** `retired` is set when the edge address dialed refused as retired; its
+ * text is `refusal.refusal`. */
+export type ApiErrorData = { refusal?: EdgeRefusal; edge_path?: EdgePath; retired?: { replacement: string } } & Record<string, unknown>
 
 // internal/protocol's error codes.
 export const codeNotFound = -32000

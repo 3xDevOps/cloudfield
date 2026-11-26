@@ -59,6 +59,29 @@ describe('a local link through an edge', () => {
     expect(store.getState().unreachable).toBe(kind)
   })
 
+  it('keeps the edge text of a refusal from a retired address, and only then', async () => {
+    const text = 'https://old.example.test is retired; this edge is at https://new.example.test'
+    for (const retired of [{ replacement: 'https://new.example.test' }, undefined]) {
+      const store = createRootStore()
+      store.getState().setLinkStatus(edgeLink)
+      await hydrate(
+        store,
+        fakeApi({
+          serverInfo: vi.fn(() =>
+            Promise.reject(
+              new ApiError(503, `server.info: server unreachable: ${text}`, -32004, {
+                refusal: { kind: 'edge-refused', refusal: text },
+                retired,
+              }),
+            ),
+          ),
+        }),
+      )
+      expect(store.getState().unreachable).toBe('edge-refused')
+      expect(store.getState().retiredText).toBe(retired ? text : null)
+    }
+  })
+
   it('names the edge when it does not answer', async () => {
     const store = createRootStore()
     store.getState().setLinkStatus(edgeLink)

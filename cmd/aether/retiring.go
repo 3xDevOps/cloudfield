@@ -7,18 +7,17 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/3xDevOps/Aether/internal/cli"
-	edgeclient "github.com/3xDevOps/Aether/internal/edge/client"
-	"github.com/3xDevOps/Aether/internal/localops"
-	"github.com/3xDevOps/Aether/internal/shellquote"
+	"github.com/3xDevOps/cloudfield/internal/cli"
+	edgeclient "github.com/3xDevOps/cloudfield/internal/edge/client"
+	"github.com/3xDevOps/cloudfield/internal/localops"
+	"github.com/3xDevOps/cloudfield/internal/shellquote"
 )
 
-// printRetiring tells, once per run, of every edge whose answer this run
-// said its address is retiring. The notice is the old address's own,
+// printRetiring tells, once per run, of notices, the edges whose answers
+// this run said their address is retiring. A notice is the old address's own,
 // unauthenticated word, so commands are printed only for a replacement
 // this machine already knows, and nothing is changed or signed in.
-func printRetiring(w io.Writer) {
-	notices := edgeclient.Seen()
+func printRetiring(w io.Writer, notices map[string]edgeclient.Retiring) {
 	if len(notices) == 0 {
 		return
 	}
