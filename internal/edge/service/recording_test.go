@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
+	edgestore "github.com/3xDevOps/cloudfield/internal/edge/store"
 )
 
 // column reads one origin column of the edge's database, "" for NULL.
@@ -281,6 +282,9 @@ func TestRedemptionAfterRecordingStarts(t *testing.T) {
 	}
 	t.Cleanup(func() { restarted.Close() }) //nolint:errcheck // test cleanup
 	restarted.SetLink(h.link)
+	if err := restarted.StartRecording(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	body, err := json.Marshal(edgeproto.DeviceTokenRequest{DeviceCode: start.DeviceCode})
 	if err != nil {
 		t.Fatal(err)
@@ -307,6 +311,12 @@ func TestRecordingStartsWhenServing(t *testing.T) {
 		GitHub: &OAuthApp{ClientID: "id", ClientSecret: "secret"}, RecordOrigins: true})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if got := svc.signinOrigin(context.WithValue(context.Background(), pairKey{}, svc.pairs[0])); got != "" {
+		t.Errorf("sign-in origin recorded before the run started: %q", got)
+	}
+	if e := svc.enrollment(testRelay, "v1.0.0"); e != (edgestore.Enrollment{}) {
+		t.Errorf("enrollment recorded before the run started: %+v", e)
 	}
 	if err := svc.Close(); err != nil {
 		t.Fatal(err)

@@ -196,9 +196,9 @@ func (s *Service) RecordClaim(ctx context.Context, serverID, name string, policy
 }
 
 // enrollment is what the store records of an enrollment at origin now:
-// nothing when the edge does not record origins.
+// nothing before a recording run started (StartRecording).
 func (s *Service) enrollment(origin, agentVersion string) edgestore.Enrollment {
-	if !s.recordOrigins {
+	if !s.recording.Load() {
 		return edgestore.Enrollment{}
 	}
 	return edgestore.Enrollment{RelayOrigin: origin, AgentVersion: agentVersion, At: s.now()}

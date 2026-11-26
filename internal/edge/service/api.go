@@ -167,7 +167,7 @@ func (s *Service) apiDeviceToken(r *http.Request) (any, error) {
 		ID:           edgeproto.NewConnID(),
 		TokenHash:    edgeproto.HashToken(token),
 		SigninOrigin: s.signinOrigin(ctx),
-	}, s.recordOrigins, now)
+	}, s.recording.Load(), now)
 	if errors.Is(err, edgestore.ErrNotFound) {
 		return nil, deviceState(edgeproto.DeviceExpired)
 	}

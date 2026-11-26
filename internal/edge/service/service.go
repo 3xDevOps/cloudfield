@@ -94,10 +94,10 @@ type pair struct {
 type pairKey struct{}
 
 // signinOrigin is the sign-in origin of the pair Handler picked for the
-// request ctx belongs to, "" when the edge does not record origins or no
-// pair was picked.
+// request ctx belongs to, "" before a recording run started
+// (StartRecording) or when no pair was picked.
 func (s *Service) signinOrigin(ctx context.Context) string {
-	if p, ok := ctx.Value(pairKey{}).(*pair); ok && s.recordOrigins {
+	if p, ok := ctx.Value(pairKey{}).(*pair); ok && s.recording.Load() {
 		return p.signin
 	}
 	return ""

@@ -163,7 +163,8 @@ func serve(args []string) (err error) {
 		return fmt.Errorf("metrics listener: %w", err)
 	}
 
-	var public net.Listener
+	var public, edgeLn net.Listener
+	var serveEdge func() error
 	switch {
 	case o.devListen != "":
 		var ln net.Listener
@@ -171,7 +172,7 @@ func serve(args []string) (err error) {
 			return fmt.Errorf("development listener: %w", err)
 		}
 		slog.Warn("aether-edge: development mode: plain HTTP, no certificates", "listen", ln.Addr())
-		go func() { errc <- listener.serve("edge", web, ln) }()
+		edgeLn, serveEdge = ln, func() error { return listener.serve("edge", web, ln) }
 	case o.proxyListen != "":
 		var ln net.Listener
 		if ln, err = net.Listen("tcp", o.proxyListen); err != nil {
@@ -184,7 +185,7 @@ func serve(args []string) (err error) {
 		}
 		slog.Info("aether-edge: behind a reverse proxy: plain HTTP, client addresses from "+relay.HeaderForwardedFor,
 			"listen", ln.Addr(), "proxies", proxies)
-		go func() { errc <- listener.serve("edge", web, ln) }()
+		edgeLn, serveEdge = ln, func() error { return listener.serve("edge", web, ln) }
 	default:
 		tlsConfig := edgeTLS(o)
 		if public, err = net.Listen("tcp", o.listen); errors.Is(err, fs.ErrPermission) {
@@ -193,8 +194,15 @@ func serve(args []string) (err error) {
 		} else if err != nil {
 			return fmt.Errorf("public listener: %w", err)
 		}
-		go func() { errc <- listener.serve("edge", web, tls.NewListener(rl.Listener(public), tlsConfig)) }()
+		edgeLn, serveEdge = public, func() error { return listener.serve("edge", web, tls.NewListener(rl.Listener(public), tlsConfig)) }
 	}
+	// Recording begins with the listeners bound and before the first
+	// request, so every request it records falls in a recorded run, and a
+	// start that fails to bind records no period.
+	if err = svc.StartRecording(context.Background()); err != nil {
+		return errors.Join(err, edgeLn.Close(), metricsLn.Close())
+	}
+	go func() { errc <- serveEdge() }()
 	// The metrics listener serves /healthz, so it answers only once the
 	// edge's own listener is up.
 	go func() { errc <- serveHTTP("metrics", metrics, metricsLn) }()
@@ -207,14 +215,10 @@ func serve(args []string) (err error) {
 			"signin", o.signinOrigin+edge.PathReviewerSignin)
 	}
 
-	// Recording begins once the listeners are bound, so a start that
-	// fails to bind records no period.
-	if err = svc.StartRecording(context.Background()); err == nil {
-		select {
-		case <-ctx.Done():
-			err = nil
-		case err = <-errc:
-		}
+	select {
+	case <-ctx.Done():
+		err = nil
+	case err = <-errc:
 	}
 	// A second signal during the drain kills the edge.
 	stop()
