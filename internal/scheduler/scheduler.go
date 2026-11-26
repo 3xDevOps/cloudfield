@@ -553,7 +553,7 @@ type supervised struct {
 	// reportAsked is the turnStartedAt of the last turn whose end was held
 	// for a missing report (HoldTurnEnd), and stopHeld marks a Standard run
 	// whose held stop no idle report has followed yet. heldMessage is the
-	// agent's last message at that stop.
+	// agent's last message at that stop, until a turn starts.
 	reportAsked time.Time
 	stopHeld    bool
 	heldMessage string

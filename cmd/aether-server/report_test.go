@@ -145,6 +145,7 @@ func TestReportClaudeBlocksAStopTheServerHolds(t *testing.T) {
 // Claude Code's last message leaves the session only from a subsession, cut
 // to a message body.
 func TestReportClaudeSendsASubsessionsLastMessage(t *testing.T) {
+	t.Setenv(coordtransport.SubsessionEnv, "")
 	sock := newFakeCoordSocket(t)
 	stop := `{"hook_event_name":"Stop","session_id":"abc","last_assistant_message":"a` + strings.Repeat("é", protocol.CoordMaxBodyBytes) + `"}`
 	sent := func() string {

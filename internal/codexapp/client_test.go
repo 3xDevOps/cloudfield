@@ -172,23 +172,23 @@ func TestSendStartsATurnOrSteersTheRunningOne(t *testing.T) {
 }
 
 // The last message is a completed turn's last agent message: a turn cut off
-// with Esc has none.
+// with Esc has none, and a list the app-server refuses is an error.
 func TestLastMessageNeedsACompletedTurn(t *testing.T) {
 	srv := codexmock.New()
 	c, _ := dial(t, srv, "")
 	srv.StartThread("main", false, "")
 	waitThread(t, c)
 	ctx := t.Context()
-	if got := c.LastMessage(ctx); got != "" {
-		t.Fatalf("last message before any turn = %q", got)
+	if got, err := c.LastMessage(ctx); err == nil {
+		t.Fatalf("last message before any turn = %q, want the app-server's refusal", got)
 	}
 	for _, tc := range []struct{ status, want string }{{"completed", "done"}, {"interrupted", ""}} {
 		if err := c.Send(ctx, "go"); err != nil {
 			t.Fatal(err)
 		}
 		srv.EndTurn("main", tc.status, "looking", "done")
-		if got := c.LastMessage(ctx); got != tc.want {
-			t.Fatalf("last message of a turn that %s = %q, want %q", tc.status, got, tc.want)
+		if got, err := c.LastMessage(ctx); err != nil || got != tc.want {
+			t.Fatalf("last message of a turn that %s = %q, %v; want %q", tc.status, got, err, tc.want)
 		}
 	}
 }

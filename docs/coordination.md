@@ -1331,7 +1331,10 @@ last message to the parent as a provisional report; the subsession's own later
 report retires it while unread. A Standard subsession forwards Claude Code's
 and Codex's last message; pi, oh-my-pi and OpenCode give none, so their report
 reads `(none)` and still wakes the parent
-([what a turn end sends](#lifecycle-status-is-separate)). A subsession that ends without a final report sends
+([what a turn end sends](#lifecycle-status-is-separate)). A Standard
+subsession of an agent without
+[status reporting](harnesses.md#status-reporting) forwards nothing. A
+subsession that ends without a final report sends
 one message saying so, with its latest report of any outcome (summary and
 time) and its branch. A live attached subsession that has been waiting (for
 anything), `answered`, or waiting on a `needs-input` answer for over an hour
@@ -1638,9 +1641,12 @@ provisional report ([subsessions](#subsessions)). The server sets
 Only there does a Claude Code `Stop` hook's `run.report` carry `last_message`,
 the first 4 KiB of the payload's `last_assistant_message`. For a stop that was
 held, the server forwards the held stop's message, not the one that follows
-the reminder. For Codex, which loads no hooks, the server reads the last agent
-message of the thread's last turn from the app-server, for a subsession only
-and only when that turn completed. A session with no parent sends and reads
+the reminder, unless a prompt started a new turn first, as after Esc: that
+turn's end forwards its own message. For Codex, which loads no hooks, the
+server reads the last agent message of the thread's last turn from the
+app-server, for a subsession only and only when that turn completed. If the
+read fails, the report reads `(none)` and the server logs the error. A
+session with no parent sends and reads
 neither. A subsession that a handoff detached from its parent still does, and
 the server discards the message.
 

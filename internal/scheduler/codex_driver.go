@@ -377,8 +377,12 @@ func (d *appServerDriver) status(entry *supervised, r *appServerRun, thread stri
 				// A status seen while connecting has no client yet.
 				if client != nil && d.s.hasParent(entry.runID) {
 					ctx, cancel := context.WithTimeout(r.ctx, acpSteerTimeout)
-					report.LastMessage = client.LastMessage(ctx)
+					message, err := client.LastMessage(ctx)
 					cancel()
+					if err != nil {
+						slog.Warn("scheduler: read a Codex subsession's last message", "run", entry.runID, "error", err)
+					}
+					report.LastMessage = message
 				}
 			}
 			if status == codexapp.Idle || status == codexapp.Failed {

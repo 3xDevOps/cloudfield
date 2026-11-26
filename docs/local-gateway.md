@@ -726,7 +726,7 @@ pending requests per session. Unknown operations/kinds, missing identities, and
 conflicting operation fields are rejected rather than normalized or truncated.
 `open`/`close` do not accept nonempty `requests`; `clear` accepts no request
 identity or request list; `replace` accepts no top-level request identity.
-Reports carry only correlation metadata, never prompts, answers, paths, or
+Input updates carry only correlation metadata, never prompts, answers, paths, or
 transcripts.
 
 A Default session's `sudo` command waiting for a person

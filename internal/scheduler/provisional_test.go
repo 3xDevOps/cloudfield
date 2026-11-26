@@ -124,22 +124,38 @@ func TestStandardChildRunForwardsItsTurnEndToItsParent(t *testing.T) {
 		return messages
 	}
 
+	hold := func(message string) {
+		t.Helper()
+		if reminder, err := e.sched.HoldTurnEnd(t.Context(), child.ID, message); err != nil || reminder == "" {
+			t.Fatalf("HoldTurnEnd = %q, %v; want the reminder", reminder, err)
+		}
+	}
+
 	report(parent.ID, working)
 	report(parent.ID, idle("the parent's own"))
 	report(child.ID, working)
-	if reminder, err := e.sched.HoldTurnEnd(t.Context(), child.ID, "pong"); err != nil || reminder == "" {
-		t.Fatalf("HoldTurnEnd = %q, %v; want the reminder", reminder, err)
-	}
+	hold("pong")
 	report(child.ID, idle("I have nothing to report"))
 	// The session's end repeats the idle report.
 	report(child.ID, idle(""))
 	waitFor(t, "the held stop's message", func() bool { return len(forwarded()) == 1 })
 
+	// Esc ends a held stop's continuation with no report, so the prompt
+	// after it starts a turn that forwards its own message.
+	report(child.ID, working)
+	hold("cut off")
 	report(child.ID, working)
 	report(child.ID, idle("ping"))
-	waitFor(t, "the next turn's message", func() bool { return len(forwarded()) == 2 })
+	waitFor(t, "the message of the turn after a held stop", func() bool { return len(forwarded()) == 2 })
+
+	// A turn that starts within the grace keeps the one before it back.
+	report(child.ID, working)
+	report(child.ID, idle("kept back"))
+	report(child.ID, working)
+	report(child.ID, idle("pang"))
+	waitFor(t, "the last turn's message", func() bool { return len(forwarded()) == 3 })
 	time.Sleep(provisionalGrace / 2)
-	if got := forwarded(); !slices.Equal(got, []string{"pong", "ping"}) {
+	if got := forwarded(); !slices.Equal(got, []string{"pong", "ping", "pang"}) {
 		t.Fatalf("forwarded %q, want each turn's message once", got)
 	}
 }
