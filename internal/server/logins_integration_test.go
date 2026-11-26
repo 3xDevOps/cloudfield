@@ -113,6 +113,16 @@ func TestIntegrationSpentFirstLoginLaunchesOnTheSecond(t *testing.T) {
 		t.Fatalf("the container does not mount login second's credentials as a subpath; mounts %+v", c.spec.Mounts)
 	}
 
+	// Before a share, Bo learns nothing about Ada's logins: the launch is
+	// refused for the share alone.
+	boCtrl0, boClient0 := srv.control(t, e.bo.key)
+	defer boClient0.Close()
+	if err := boCtrl0.Call(protocol.MethodRunLaunch, protocol.RunLaunchParams{
+		WorkspaceID: string(e.ws.ID), Task: "no share", Harness: "claude", Mode: string(domain.LaunchHeadless), AccountMemberID: string(e.ada.id),
+	}, &launched); err == nil || !strings.Contains(err.Error(), "has not shared their account with you") {
+		t.Fatalf("Bo's launch without a share: %v; want the share refusal", err)
+	}
+
 	// Only a login's owner names it: Bo, who holds a share, cannot.
 	if _, err := srv.srv.Store().ShareAccount(ctx, e.ada.id, e.bo.id); err != nil {
 		t.Fatal(err)
@@ -125,5 +135,50 @@ func TestIntegrationSpentFirstLoginLaunchesOnTheSecond(t *testing.T) {
 	}, &launched)
 	if err == nil || !strings.Contains(err.Error(), "only a login's owner names it") {
 		t.Fatalf("Bo naming Ada's login: %v; want the refusal", err)
+	}
+}
+
+// TestIntegrationRunningSessionsStayOnTheirLogin: until moves between an
+// account's logins check what such a move needs, a running session that
+// runs out on Ada's default login does not move to her second login.
+func TestIntegrationRunningSessionsStayOnTheirLogin(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	usage := &stubLoginUsage{used: map[domain.Account]float64{}}
+	rt := newE2ERuntime()
+	e := &coordEnv{rt: rt, image: "e2e/fake", usage: usage}
+	srv := e.seed(ctx, t, false)
+	addLogin(ctx, t, srv, e.dataDir, e.ada.id, "lgn-second0000", "second")
+	limit, err := os.ReadFile(filepath.Join("..", "adapter", "testdata", "claude_usage_limit.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	const task = "run out on the default login"
+	rt.script(task, func(c *e2eContainer) {
+		c.output(strings.ReplaceAll(string(limit), "\n", "\r\n"))
+		time.Sleep(500 * time.Millisecond)
+		c.exitNow(1)
+	})
+	ctrl, client := srv.control(t, e.ada.key)
+	defer client.Close()
+	var launched protocol.RunResult
+	if err := ctrl.Call(protocol.MethodRunLaunch, protocol.RunLaunchParams{
+		WorkspaceID: string(e.ws.ID), Task: task, Harness: "claude", Mode: string(domain.LaunchHeadless), Login: "default",
+	}, &launched); err != nil {
+		t.Fatalf("run.launch: %v", err)
+	}
+	var run protocol.RunResult
+	deadline := time.Now().Add(time.Minute)
+	for run.Run.Status != string(domain.RunFailed) {
+		if err := ctrl.Call(protocol.MethodRunGet, protocol.RunIDParams{RunID: launched.Run.ID}, &run); err != nil {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("run %s on login %q (%s); want it failed on the default login", run.Run.Status, run.Run.AccountLogin, run.Run.Reason)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if run.Run.AccountLogin != "" || !strings.HasPrefix(run.Run.Reason, "Usage limit reached on Ada's account") {
+		t.Fatalf("run failed on login %q with %q; want the default login and the usage-limit reason", run.Run.AccountLogin, run.Run.Reason)
 	}
 }

@@ -104,7 +104,12 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 	// The parent's login is checked again here: its owner may have turned
 	// it off for shares, or it may have stopped signing in, since the
 	// subsession was queued.
-	login, err := s.cfg.Runs.ChildLogin(ctx, c.OwnerID, domain.Account{Member: c.AccountID, Login: c.AccountLogin}, c.Harness, c.Mode)
+	login, err := s.cfg.Runs.ChildLogin(ctx, c.WorkspaceID, c.OwnerID, c.AccountID, c.AccountLogin, c.Harness, c.Mode)
+	if err != nil {
+		refuse(err.Error())
+		return
+	}
+	byEnv, err := s.cfg.Runs.EnvironmentSignsIn(ctx, c.WorkspaceID, c.Harness, c.Mode)
 	if err != nil {
 		refuse(err.Error())
 		return
@@ -133,7 +138,7 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 		return
 	}
 	chosen, excluded := fallback.Select(ctx, s.cfg.Store, measured, c.OwnerID, domain.Account{Member: requested, Login: login}, c.Harness, workspaces, c.Fallback, func(ctx context.Context, account domain.Account) (bool, error) {
-		if p.settings.Off.Covers(c.Harness, account.Member) {
+		if p.settings.Off.Covers(c.Harness, account.Member) || (byEnv && account.Login.Added()) {
 			return false, nil
 		}
 		return s.cfg.Runs.FallbackLaunchable(ctx, c.OwnerID, requested, account, c.Harness, c.Mode)

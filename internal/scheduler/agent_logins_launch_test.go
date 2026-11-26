@@ -109,6 +109,15 @@ func TestATeammatesSessionMountsTheSharedAddedLogin(t *testing.T) {
 	if err != nil || sc.LoginMember != string(e.owner.ID) || sc.LoginID != work.Login {
 		t.Fatalf("sidecar login %q %q, %v; want Grace's work", sc.LoginMember, sc.LoginID, err)
 	}
+	startScheduler(t, e.sched)
+	waitFor(t, "recovery", func() bool {
+		select {
+		case <-e.sched.recoveryReady:
+			return true
+		default:
+			return false
+		}
+	})
 	if inUse, err := e.sched.LoginInUse(t.Context(), work); err != nil || !slices.Contains(inUse, run.ID) {
 		t.Fatalf("LoginInUse = %v, %v; want the session", inUse, err)
 	}
@@ -193,27 +202,101 @@ func TestStartLoginAndChildLogin(t *testing.T) {
 	if err := e.db.SetAgentLoginShared(ctx, e.owner.ID, "claude", domain.DefaultLogin, false); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := e.sched.StartLogin(ctx, e.member.ID, e.owner.ID, "claude", domain.LaunchTUI); err != nil || got != work.Login {
+	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.owner.ID, "claude", domain.LaunchTUI); err != nil || got != work.Login {
 		t.Fatalf("Ada's start on Grace's account = %q, %v; want work, the first shared", got, err)
 	}
-	if got, err := e.sched.StartLogin(ctx, e.owner.ID, e.owner.ID, "claude", domain.LaunchTUI); err != nil || got != "" {
+	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.owner.ID, e.owner.ID, "claude", domain.LaunchTUI); err != nil || got != "" {
 		t.Fatalf("Grace's own start = %q, %v; want her default", got, err)
 	}
-	if got, err := e.sched.ChildLogin(ctx, e.owner.ID, work, "claude", domain.LaunchTUI); err != nil || got != work.Login {
+	if got, err := e.sched.ChildLogin(ctx, e.ws.ID, e.owner.ID, e.owner.ID, work.Login, "claude", domain.LaunchTUI); err != nil || got != work.Login {
 		t.Fatalf("a subsession of a session on work = %q, %v; want work inherited", got, err)
 	}
-	if got, err := e.sched.ChildLogin(ctx, e.owner.ID, console, "claude", domain.LaunchTUI); err != nil || got != "" {
+	if got, err := e.sched.ChildLogin(ctx, e.ws.ID, e.owner.ID, e.owner.ID, console.Login, "claude", domain.LaunchTUI); err != nil || got != "" {
 		t.Fatalf("a subsession of a session on a Console login = %q, %v; want the first eligible, not the per-use login", got, err)
+	}
+	// A teammate's subsession that names the account is served in the
+	// owner's order, never by a login the owner did not leave automatic.
+	if err := e.db.SetAgentLoginShared(ctx, e.owner.ID, "claude", domain.DefaultLogin, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.db.SetAgentLoginAutomatic(ctx, e.owner.ID, "claude", domain.DefaultLogin, false); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.sched.ChildLogin(ctx, e.ws.ID, e.member.ID, e.owner.ID, "", "claude", domain.LaunchTUI); err != nil || got != work.Login {
+		t.Fatalf("Ada's subsession naming Grace's account = %q, %v; want work", got, err)
+	}
+	if got, err := e.sched.ChildLogin(ctx, e.ws.ID, e.member.ID, e.owner.ID, domain.DefaultLogin, "claude", domain.LaunchTUI); err != nil || got != work.Login {
+		t.Fatalf("Ada's subsession inheriting Grace's default, automatic off = %q, %v; want work", got, err)
 	}
 	for _, id := range []domain.LoginID{work.Login, console.Login} {
 		if err := e.db.SetAgentLoginShared(ctx, e.owner.ID, "claude", id, false); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := e.sched.StartLogin(ctx, e.member.ID, e.owner.ID, "claude", domain.LaunchTUI); !errors.Is(err, permissions.ErrDenied) {
+	// On her own account Grace with no usable automatic login launches on
+	// the default login, never on one she did not pick.
+	if err := e.db.SetAgentLoginAutomatic(ctx, e.owner.ID, "claude", work.Login, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.db.SetAgentLoginAutomatic(ctx, e.owner.ID, "claude", console.Login, false); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.owner.ID, e.owner.ID, "claude", domain.LaunchTUI); err != nil || got != "" {
+		t.Fatalf("Grace's start with no automatic login = %q, %v; want her default", got, err)
+	}
+	if _, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.owner.ID, "claude", domain.LaunchTUI); !errors.Is(err, permissions.ErrDenied) {
 		t.Fatalf("Ada's start with no shared login: %v; want denied", err)
 	}
-	if got, err := e.sched.ChildLogin(ctx, e.member.ID, work, "claude", domain.LaunchTUI); !errors.Is(err, permissions.ErrDenied) {
+	if got, err := e.sched.ChildLogin(ctx, e.ws.ID, e.member.ID, e.owner.ID, work.Login, "claude", domain.LaunchTUI); !errors.Is(err, permissions.ErrDenied) {
 		t.Fatalf("a subsession of Ada's on Grace's unshared login = %q, %v; want denied", got, err)
+	}
+	// A workspace variable that signs Claude Code in pays: no login is
+	// chosen.
+	if err := e.db.SetWorkspaceEnvironment(ctx, e.ws.ID, domain.WorkspaceEnvironment{Variables: map[string]string{"ANTHROPIC_API_KEY": "test-not-a-key"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.owner.ID, "claude", domain.LaunchTUI); err != nil || got != "" {
+		t.Fatalf("a start where a variable pays = %q, %v; want the default login", got, err)
+	}
+}
+
+// A login's other store is read-only to sessions on it, and a login whose
+// files no longer hold what it signed in as is not mounted.
+func TestAnAddedLoginIsMountedByItsShape(t *testing.T) {
+	e := newLoginShareEnv(t)
+	work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+	run, err := e.launchOn(t, work, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the session's container", func() bool { return e.rt.byName(string(run.ID)) != nil })
+	spec := e.rt.byName(string(run.ID)).spec
+	for _, m := range spec.Mounts {
+		switch m.Subpath {
+		case memberhome.LoginCredentials:
+			if m.ReadOnly {
+				t.Error("a subscription login's credentials are read-only; its refresh would fail")
+			}
+		case memberhome.LoginAnthropic:
+			if !m.ReadOnly {
+				t.Error("a subscription login's Anthropic profile directory is writable")
+			}
+		}
+	}
+	dir, _ := e.logins.Path(e.member.ID, "claude", work.Login)
+	writeHomeFile(t, dir, memberhome.LoginCredentials, "")
+	writeHomeFile(t, dir, "anthropic/configs/default.json", `{"authentication":{"type":"user_oauth"}}`)
+	writeHomeFile(t, dir, "anthropic/credentials/default.json", `{"access_token":"test-planted"}`)
+	planted, err := e.launchOn(t, work, "")
+	if err == nil {
+		waitFor(t, "the planted launch to settle", func() bool {
+			r, getErr := e.db.GetRun(t.Context(), planted.ID)
+			return getErr == nil && r.Status.Terminal()
+		})
+		r, _ := e.db.GetRun(t.Context(), planted.ID)
+		err = errors.New(r.Reason)
+	}
+	if err == nil || (!strings.Contains(err.Error(), "no longer holds") && !errors.Is(err, ErrSignedOut)) {
+		t.Fatalf("a launch on a login planted with another kind: %v; want refused", err)
 	}
 }

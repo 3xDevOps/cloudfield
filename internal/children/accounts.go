@@ -1,6 +1,7 @@
 package children
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -182,7 +183,7 @@ func (s *Service) choose(ctx context.Context, p *policy, req protocol.ChildStart
 	case req.AccountMemberID != "":
 		account = domain.MemberID(req.AccountMemberID)
 	case req.Harness == p.parent.Harness && p.parent.HomeMember() == p.owner:
-		account, login = p.parent.AccountMember(), p.parent.AccountLogin
+		account, login = p.parent.AccountMember(), cmp.Or(p.parent.AccountLogin, domain.DefaultLogin)
 	}
 	if err := s.admit(ctx, p, account); err != nil {
 		return launchSpec{}, rpcErr(protocol.MethodChildStart, err)

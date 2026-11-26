@@ -706,7 +706,10 @@ func (s *Scheduler) chooseMove(ctx context.Context, entry *supervised, f *UsageF
 		off = settings.Off
 	}
 	to, excluded := fallback.Select(ctx, s.cfg.Store, measured, run.MemberID, from, run.Harness, workspaces, run.Fallback, func(ctx context.Context, account domain.Account) (bool, error) {
-		if off.Covers(run.Harness, account.Member) {
+		// Moves between an account's logins, and onto an added login, need
+		// the checks a move between logins makes; until then a running
+		// session moves only between members' default logins.
+		if off.Covers(run.Harness, account.Member) || account.Login.Added() || account.Member == from.Member {
 			return false, nil
 		}
 		if home != run.MemberID {
@@ -796,7 +799,8 @@ func (s *Scheduler) commitMove(ctx context.Context, entry *supervised, f *UsageF
 		if launchErr := s.mayLaunch(ctx, member, workspaces); launchErr != nil {
 			return 0, launchErr
 		}
-		if _, authErr := fallback.ResolveLaunchAccountIn(ctx, s.cfg.Store, member, string(to.Member), workspaces); authErr != nil {
+		target := &domain.Run{AccountMemberID: to.Member, AccountLogin: to.Login, Harness: run.Harness}
+		if authErr := fallback.ResolveRunLogin(ctx, s.cfg.Store, member, target, workspaces); authErr != nil {
 			return 0, authErr
 		}
 	}
@@ -887,7 +891,7 @@ func (s *Scheduler) replaceContainer(ctx context.Context, entry *supervised, f *
 		return failed(err)
 	}
 	next := *run
-	next.AccountMemberID = to.Member
+	next.AccountMemberID, next.AccountLogin = to.Member, to.Login
 	profile, _, err := s.launchProfile(ctx, home.ID, to.Member, run.Harness)
 	if err != nil {
 		return failed(err)

@@ -104,7 +104,11 @@ func (f *fakeRuns) FallbackLaunchable(context.Context, domain.MemberID, domain.M
 	return true, nil
 }
 
-func (f *fakeRuns) ChildLogin(context.Context, domain.MemberID, domain.Account, string, domain.LaunchMode) (domain.LoginID, error) {
+func (f *fakeRuns) EnvironmentSignsIn(context.Context, domain.WorkspaceID, string, domain.LaunchMode) (bool, error) {
+	return false, nil
+}
+
+func (f *fakeRuns) ChildLogin(context.Context, domain.WorkspaceID, domain.MemberID, domain.MemberID, domain.LoginID, string, domain.LaunchMode) (domain.LoginID, error) {
 	return "", nil
 }
 
