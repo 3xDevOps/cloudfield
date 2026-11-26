@@ -1142,10 +1142,17 @@ pin file the notices were verified under, made last and only while that file is
 still `edge_key.json`, and reads the notices only while the link is the current
 `edge_key.json`. A pin by an older binary therefore shows no notices until the
 next connection, and nothing in this build rewrites the pin file except a pin.
-Where the file system cannot hard-link, as on vfat or many FUSE file
-systems, the first connection pins by a rename, as builds before notices did,
-and the server stores no notices. A restore that does not keep hard links drops
-the stored notices until the next connection. Stored notices also name the server id that verified them and count
+The first connection puts its pin in place by a rename that replaces nothing,
+or else a hard link. Where the file system offers neither, as on vfat or many
+FUSE file systems, it pins by a plain rename, as builds before notices did,
+which can replace a pin another process wrote in the same instant: pin with
+`sudo cloudfield-server edge trust` before the first start there. Without hard
+links the server stores no notices, and a symbolic link at `edge_key.json`
+stores none either. To restore the data directory, stop the server, restore it
+into a new, empty directory and swap that in: copying a backup over an existing
+tree can keep that tree's `notices.pin` and so bring back its notices, or its
+pin. A restore that does not keep hard links drops the stored notices until the
+next connection. Stored notices also name the server id that verified them and count
 for no other. A list that arrived with the `ready` that pinned the key is
 trusted as that pin is, and only shown. An edge or a server that does not know
 the fields ignores them, and a server that sends no nonce gets the `ready` it
