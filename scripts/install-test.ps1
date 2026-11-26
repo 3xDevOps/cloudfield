@@ -567,8 +567,11 @@ func main() {
         Assert-AetherTest ($null -ne $definition) ("install.ps1 has no function {0}" -f $name)
         . ([scriptblock]::Create($definition.Extent.Text))
     }
-    # Each gate is checked with CI cleared or set on its own, so the CI=true
-    # the runner sets cannot answer for the redirection check.
+    # Each gate is checked on its own: CI is cleared or set alone, and the
+    # runner's elevated token is stood in for by one that is not, so neither
+    # can answer for the gate under test.
+    $realElevated = ${function:Test-AetherElevated}
+    ${function:Test-AetherElevated} = { $false }
     $oldCI = $env:CI
     try {
         if ([Console]::IsOutputRedirected) {
@@ -582,6 +585,7 @@ func main() {
     }
     finally {
         $env:CI = $oldCI
+        ${function:Test-AetherElevated} = $realElevated
     }
 
     # A token Windows treats as Administrator is elevated, so its label is
@@ -591,7 +595,7 @@ func main() {
     if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         # Unreadable labels also answer elevated, so first prove this one reads.
         $label = & (Join-Path ([Environment]::GetFolderPath('System')) 'whoami.exe') /groups /fo csv /nh
-        Assert-AetherTest (@($label -match '"S-1-16-(12288|16384)"').Count -gt 0) ("an Administrator token has no High or System label: " + ($label -join "`n"))
+        Assert-AetherTest (@(@($label) -match '"S-1-16-(12288|16384)"').Count -gt 0) ("an Administrator token has no High or System label: " + ($label -join "`n"))
         $global:LASTEXITCODE = 7
         Assert-AetherTest (Test-AetherElevated) 'an Administrator token was not read as elevated'
     }
