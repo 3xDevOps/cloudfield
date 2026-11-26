@@ -91,12 +91,12 @@ reconnects with the sign-in.
 
 ### Older edge address
 
-As of 2026-11-26 the project edge's address is `https://edge.cloudfield.ai`.
-It still answers at `https://edge.onaether.dev`, and connectors added there
-keep working.
+As of 2026-11-26 the project edge still answers at its older address,
+`https://edge.onaether.dev`, and connectors added there keep working.
 
-Where `cloudfield mcp` (`aether mcp` before v0.9.0) or Settings shows a URL
-that starts with `https://edge.onaether.dev`, the server is enrolled there:
+Where the URL that `cloudfield mcp` (`aether mcp` is the same command under
+its older name) or Settings offers for a new connector starts with
+`https://edge.onaether.dev`, the server is enrolled there:
 
 - On a server at v0.8.7 or later, add the connector at the same URL with
   `https://edge.cloudfield.ai` in its place: the universal URL, or the
@@ -104,20 +104,15 @@ that starts with `https://edge.onaether.dev`, the server is enrolled there:
   place, since each new code, from Settings or `cloudfield mcp`, replaces
   your earlier one.
 - On an older server, an admin first runs `sudo aether-server update`. Until
-  then both URLs fail at the new address. The universal URL returns the
-  OAuth error `invalid_target`, `resource must be
-  https://edge.onaether.dev/mcp`, or, below edge protocol 4, the edge's
-  sign-in page lists the server under **Not available**: `its aether-server
-  is too old for this URL; an admin runs sudo aether-server update`. The
-  server's own URL serves a protected-resource document whose `resource` is
-  the old URL, which Claude refuses.
+  then the server refuses a connector at the new address: at the universal
+  URL with the OAuth error `invalid_target`, `resource must be
+  https://edge.onaether.dev/mcp`.
 
-Settings sees a connector at the universal URL of either address and marks
-it **Universal URL**. At the
-server's own URL of the other address it keeps waiting and ends with `The
-last code expired.` although the connector connected: it is listed as
-**This server's own URL**, `https://edge.cloudfield.ai/mcp/<server id>`, and
-`cloudfield mcp` prints `at https://edge.cloudfield.ai/mcp/<server id>`.
+While Settings waits for a connector added at the server's own URL of the
+other address, it does not see it and ends with `The last code expired.`
+although the connector connected: it is listed as **This server's own URL**,
+`https://edge.cloudfield.ai/mcp/<server id>`, and `cloudfield mcp` prints
+`at https://edge.cloudfield.ai/mcp/<server id>`.
 
 To make the server show the new address, an admin moves it on v0.9.0 or
 later with `sudo cloudfield-server edge move https://edge.cloudfield.ai`,
@@ -131,9 +126,9 @@ Custom MCP servers are added on the web only, at chatgpt.com
 
 1. Open [ChatGPT Plugins](https://chatgpt.com/plugins).
 2. Select the plus button, then **Add custom MCP server**.
-3. Name it `Aether`, paste the URL from `cloudfield mcp` as the server URL, and
-   choose **OAuth** (for a URL at `https://edge.onaether.dev`, see
-   [Older edge address](#older-edge-address)).
+3. Name it `Aether`, paste the URL from `cloudfield mcp` as the server URL
+   (if it starts with `https://edge.onaether.dev`, apply
+   [Older edge address](#older-edge-address) first), and choose **OAuth**.
 4. Select **Create as a plugin**, then install it.
 5. On the [universal URL](#the-universal-url), the edge's page opens: sign in
    with GitHub and select **Continue with <server>**. A page from your server
@@ -151,10 +146,10 @@ On claude.ai
 ([Anthropic: add a custom connector](https://claude.com/docs/connectors/custom/add-unlisted)):
 
 1. Free, Pro and Max: open **Customize → Connectors**, select **Add custom
-   connector**, name it `Aether`, paste the URL from `cloudfield mcp`, leave
-   **Advanced settings** empty and select **Add** (for a URL at
-   `https://edge.onaether.dev`, see [Older edge address](#older-edge-address)).
-   Free allows one custom connector.
+   connector**, name it `Aether`, paste the URL from `cloudfield mcp` (if it
+   starts with `https://edge.onaether.dev`, apply
+   [Older edge address](#older-edge-address) first), leave **Advanced
+   settings** empty and select **Add**. Free allows one custom connector.
 2. Team and Enterprise: an Owner opens **Organization settings → Connectors**,
    selects **Add**, **Custom**, then **Web**, and pastes the same URL. Each member
    then selects **Connect** under **Customize → Connectors**.
