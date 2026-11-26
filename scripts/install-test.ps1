@@ -572,6 +572,25 @@ func main() {
     }
     $launchCase = Join-Path $root 'launch-case'
     New-Item -ItemType Directory -Path $launchCase -Force | Out-Null
+    # A profile path outside the console code page reaches the installer intact.
+    $env:AETHER_FIXTURE_LAUNCHER = Join-Path $launchCase ("J{0}rg {1}\Cloudfield.lnk" -f [char]0x00F6, [char]0x6771)
+    try {
+        $printedLauncher = Invoke-AetherGuiBuild $fixture
+    }
+    finally {
+        $expectedLauncher = $env:AETHER_FIXTURE_LAUNCHER
+        Remove-Item -LiteralPath 'Env:AETHER_FIXTURE_LAUNCHER' -ErrorAction SilentlyContinue
+    }
+    # Only a process with a console can switch its code page; a person
+    # running the installer always has one.
+    $hasConsole = $true
+    try { [Console]::OutputEncoding = [Console]::OutputEncoding } catch { $hasConsole = $false }
+    if ($hasConsole) {
+        Assert-AetherEqual $expectedLauncher $printedLauncher 'a non-ASCII launcher path did not survive the build output'
+    }
+    else {
+        Write-Host 'install-test: no console, so the non-ASCII launcher path is not checked'
+    }
     $launchShortcut = Join-Path $launchCase 'Cloudfield.lnk'
     $env:AETHER_FIXTURE_LAUNCHER = $launchShortcut
     try {

@@ -886,6 +886,7 @@ function Invoke-AetherGuiBuild {
     $oldCloudfieldBin = [Environment]::GetEnvironmentVariable('CLOUDFIELD_BIN', 'Process')
     $previousExit = Get-Variable LASTEXITCODE -Scope Global -ValueOnly -ErrorAction SilentlyContinue
     $oldEap = $ErrorActionPreference
+    $oldOutputEncoding = [Console]::OutputEncoding
     $rerun = "& '{0}' gui build" -f $CliPath.Replace("'", "''")
     try {
         [Environment]::SetEnvironmentVariable('AETHER_BIN', $CliPath, 'Process')
@@ -893,6 +894,11 @@ function Invoke-AetherGuiBuild {
         # npm and electron-builder write progress to stderr; under Windows
         # PowerShell 5.1 that must not become an installer error.
         $ErrorActionPreference = 'Continue'
+        # PowerShell decodes a native command's piped stdout with the console
+        # code page; the CLI writes UTF-8, as a non-ASCII profile path needs.
+        # Without a console, as under CI, the setter throws; nothing then
+        # depends on it.
+        try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false } catch { }
         $launcher = $null
         & $CliPath gui build | ForEach-Object {
             Write-Host $_
@@ -905,6 +911,7 @@ function Invoke-AetherGuiBuild {
     }
     finally {
         $ErrorActionPreference = $oldEap
+        try { [Console]::OutputEncoding = $oldOutputEncoding } catch { }
         if ($hadAetherBin) {
             [Environment]::SetEnvironmentVariable('AETHER_BIN', $oldAetherBin, 'Process')
         }

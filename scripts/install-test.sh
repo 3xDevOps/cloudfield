@@ -391,9 +391,10 @@ export AETHER_UNIT_PATH="$tmp/aether-server.service"
 export AETHER_SYSTEM_BIN_DIR="$sysbin" HOME="$home"
 export AETHER_VERSION="v0.0.0-test" AETHER_BIN_DIR="$bindir"
 export PATH="$bin:$gio_dir:$gtk_dir:$node:$bindir:$PATH"
-# No desktop session unless a case sets one, so whether the app opens never
-# depends on the machine running the tests.
+# No desktop session and no sudo unless a case sets one, so whether the app
+# opens never depends on the machine running the tests.
 export DISPLAY="" WAYLAND_DISPLAY=""
+unset SUDO_USER
 
 # --- harness -------------------------------------------------------------
 
