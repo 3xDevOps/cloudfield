@@ -35,6 +35,7 @@ func register(c command) {
 // handler that acts first, or that never parses the help flag, stays out.
 var flagSubcommands = []string{
 	"template list", "template save", "template delete",
+	"agent login",
 	"budget set",
 	"schedule list", "schedule delete",
 	"workspace init", "workspace add", "workspace delete", "workspace settings", "workspace origin",

@@ -21,25 +21,42 @@ const loginExitMark = "aether-login-exit"
 var loginExitLine = regexp.MustCompile(`^` + loginExitMark + ` ([0-9]+)$`)
 
 func agentLogin(args []string) error {
-	if len(args) != 1 || args[0] == "" || args[0][0] == '-' {
-		return errors.New("usage: cloudfield agent login <name>")
+	const usage = "usage: cloudfield agent login <name> [--as <login>]"
+	fs := newFlagSet("agent login")
+	as := fs.String("as", "", "add another login of the agent under this name instead of signing in its default login (Claude Code only; cloudfield agent logins lists them)")
+	name := ""
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		name, args = args[0], args[1:]
+	}
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if name == "" || fs.NArg() > 0 {
+		return errors.New(usage)
 	}
 	var agent protocol.AgentInfo
 	found := false
 	if err := withControl(func(c *protocol.Client) error {
 		var err error
-		agent, found, err = lookupAgent(c, args[0])
+		agent, found, err = lookupAgent(c, name)
 		return err
 	}); err != nil {
 		return err
 	}
 	switch {
 	case !found:
-		return fmt.Errorf("no agent %q; aether agent list shows yours", args[0])
+		return fmt.Errorf("no agent %q; aether agent list shows yours", name)
 	case agent.LoginCommand == "":
 		return fmt.Errorf("agent %s has no sign-in command Cloudfield knows; run its own login in aether terminal", agent.Name)
 	case !agent.Installed:
 		return fmt.Errorf("agent %s is not installed in your environment; run aether agent add %s first", agent.Name, agent.Name)
+	}
+	if *as != "" {
+		if !term.IsTerminal(int(os.Stdin.Fd())) {
+			return fmt.Errorf("%s signs in with %s, which needs typed input, so it needs a terminal. The human runs this in their own terminal:\n"+
+				"  cloudfield agent login %s --as %s", agent.Name, agent.LoginCommand, agent.Name, *as)
+		}
+		return addLogin(os.Stdout, agent, *as)
 	}
 	if term.IsTerminal(int(os.Stdin.Fd())) {
 		return typeInTerminal(agent.LoginCommand)

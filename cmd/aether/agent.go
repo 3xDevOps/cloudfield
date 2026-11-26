@@ -18,15 +18,23 @@ import (
 func init() {
 	register(command{
 		name:  "agent",
-		short: "manage agents: add, list, models, login, remove",
+		short: "manage agents: add, list, models, login, logins, remove",
 		usage: "cloudfield agent list [--json]\n" +
 			"cloudfield agent models <name> [--account <member-id>] [--refresh] [--json]\n" +
-			"cloudfield agent login <name>\n" +
+			"cloudfield agent login <name> [--as <login>]\n" +
+			"cloudfield agent logins [<agent>] [--json]\n" +
+			"cloudfield agent logins rename <login> <new-name>\n" +
+			"cloudfield agent logins remove <login>\n" +
+			"cloudfield agent logins order <login>...\n" +
+			"cloudfield agent logins auto <login> on|off\n" +
 			"cloudfield agent add <name> [--enhanced] [--standard <argv>] [--background <argv>] [--acp <argv>] [--acp-mode <id>] [--login <path>]\n" +
 			"cloudfield agent remove <name>",
 		example: "cloudfield agent list --json\n" +
 			"cloudfield agent models claude --refresh\n" +
 			"cloudfield agent login claude\n" +
+			"cloudfield agent login claude --as work\n" +
+			"cloudfield agent logins\n" +
+			"cloudfield agent logins order work default\n" +
 			"cloudfield agent add codex --enhanced\n" +
 			"cloudfield agent remove codex",
 		run: runAgent,
@@ -35,7 +43,7 @@ func init() {
 
 func runAgent(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: cloudfield agent <add|list|models|login|remove>")
+		return fmt.Errorf("usage: cloudfield agent <add|list|models|login|logins|remove>")
 	}
 	switch args[0] {
 	case "add":
@@ -46,6 +54,8 @@ func runAgent(args []string) error {
 		return agentModels(args[1:])
 	case "login":
 		return agentLogin(args[1:])
+	case "logins":
+		return agentLogins(args[1:])
 	case "remove":
 		return agentRemove(args[1:])
 	default:
