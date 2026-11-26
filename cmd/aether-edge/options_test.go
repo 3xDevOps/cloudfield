@@ -344,7 +344,7 @@ func TestRetiringPairs(t *testing.T) {
 		{"https://edge9.example.net https://edge2.example.net", "--retiring-pairs: https://edge9.example.net is not a relay origin of this edge; name one of --relay-origin and the relay origins of --origin-pairs"},
 		{"https://edge.example.test https://edge9.example.net", "--retiring-pairs: https://edge9.example.net is not a relay origin of this edge"},
 		{"https://auth2.example.net https://edge.example.test", "--retiring-pairs: https://auth2.example.net is a sign-in origin; name the relay origin of its pair, https://edge2.example.net"},
-		{"https://auth.example.test https://edge2.example.net", "--retiring-pairs: https://auth.example.test is not a relay origin of this edge"},
+		{"https://auth.example.test https://edge2.example.net", "--retiring-pairs: https://auth.example.test is a sign-in origin; name the relay origin of its pair, https://edge.example.test"},
 		{"https://edge.example.test https://EDGE.example.test", "--retiring-pairs: https://edge.example.test names its own pair as its replacement; name the relay origin of a pair that stays"},
 		{"https://edge.example.test https://edge2.example.net,https://edge2.example.net https://edge3.example.net",
 			"--retiring-pairs: https://edge2.example.net, the replacement of https://edge.example.test, is retiring too; name a pair that stays"},
@@ -361,6 +361,16 @@ func TestRetiringPairs(t *testing.T) {
 		if _, err = parse(tt.retiring); err == nil || !strings.Contains(err.Error(), tt.want) {
 			t.Errorf("--retiring-pairs %q: %v, want %q", tt.retiring, err, tt.want)
 		}
+	}
+	devPairs := []string{"--dev-listen", "127.0.0.1:8080", "--signin-origin", "http://localhost:443", "--relay-origin", "http://127.0.0.1:443",
+		"--origin-pairs", "http://127.0.0.2:8080 http://127.0.0.3:8080 fake-id-2 " + secret}
+	if _, err = parseOptions(append(slices.Clone(devPairs), "--retiring-pairs", "http://127.0.0.1 http://127.0.0.3:8080"), envOf(nil)); err == nil ||
+		!strings.Contains(err.Error(), "http://127.0.0.1 has the host name of the relay origin http://127.0.0.1:443; write that origin") {
+		t.Errorf("plain HTTP origin without its port :443: %v", err)
+	}
+	if o, err = parseOptions(append(slices.Clone(devPairs), "--retiring-pairs", "http://127.0.0.1:443 http://127.0.0.3:8080"), envOf(nil)); err != nil ||
+		!reflect.DeepEqual(o.retiring, []edge.Retiring{{RelayOrigin: "http://127.0.0.1:443", Replacement: "http://127.0.0.3:8080"}}) {
+		t.Errorf("plain HTTP origin on port 443: %+v, %v", o.retiring, err)
 	}
 	_, err = parseOptions(append(slices.Clone(origins), "--retiring-pairs", "https://edge.example.test https://edge2.example.net"), envOf(nil))
 	if err == nil || err.Error() != "--retiring-pairs: this edge serves one address pair, which cannot retire; serve its replacement first with --origin-pairs (AETHER_EDGE_ORIGIN_PAIRS)" {

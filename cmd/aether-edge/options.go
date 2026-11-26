@@ -161,7 +161,7 @@ func parseOptions(args []string, getenv func(string) string) (options, error) {
 		}
 	}
 	if *retiring != "" {
-		if o.retiring, err = parseRetiringPairs(*retiring, scheme, o.relayOrigin, o.morePairs); err != nil {
+		if o.retiring, err = parseRetiringPairs(*retiring, scheme, o.signinOrigin, o.relayOrigin, o.morePairs); err != nil {
 			return options{}, err
 		}
 	}
@@ -232,14 +232,14 @@ func parseOriginPairs(list, scheme, signin, relay string) ([]edge.Pair, error) {
 }
 
 // parseRetiringPairs parses --retiring-pairs against the served pairs:
-// relay is --relay-origin's, more --origin-pairs'.
-func parseRetiringPairs(list, scheme, relay string, more []edge.Pair) ([]edge.Retiring, error) {
+// signin and relay are the first pair's, more --origin-pairs'.
+func parseRetiringPairs(list, scheme, signin, relay string, more []edge.Pair) ([]edge.Retiring, error) {
 	if len(more) == 0 {
 		return nil, errors.New("--retiring-pairs: this edge serves one address pair, which cannot retire; " +
 			"serve its replacement first with --origin-pairs (AETHER_EDGE_ORIGIN_PAIRS)")
 	}
 	relays := map[string]string{host(relay): relay}
-	signinOrigins := map[string]string{}
+	signinOrigins := map[string]string{host(signin): relay}
 	for _, p := range more {
 		relays[host(p.RelayOrigin)] = p.RelayOrigin
 		signinOrigins[host(p.SigninOrigin)] = p.RelayOrigin
@@ -305,10 +305,13 @@ func parseRetiringPairs(list, scheme, relay string, more []edge.Pair) ([]edge.Re
 }
 
 // sameOrigin is a valid origin in the form two spellings of one origin
-// share: canonical, without the default https port.
+// share: canonical, and without the port when it is https's default.
 func sameOrigin(origin string) string {
 	c, _ := edgeproto.Origin(origin) // parseOptions checked it
-	return strings.TrimSuffix(c, ":443")
+	if strings.HasPrefix(c, "https://") {
+		return strings.TrimSuffix(c, ":443")
+	}
+	return c
 }
 
 // host is the lowercase host name of a valid origin.
