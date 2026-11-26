@@ -367,3 +367,46 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 		t.Fatalf("rows after removing the last added login: %+v", got)
 	}
 }
+
+// TestIntegrationSessionOnANamedLogin launches through the CLI on a login
+// named by --login and lists it with cloudfield sessions; a session on the
+// default login lists its account as before.
+func TestIntegrationSessionOnANamedLogin(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	e := &coordEnv{rt: newE2ERuntime(), image: "e2e/fake", usage: &stubLoginUsage{used: map[domain.Account]float64{}}}
+	srv := e.seed(ctx, t, false)
+	second := domain.LoginID("lgn-second0000")
+	addLogin(ctx, t, srv, e.dataDir, e.ada.id, second, "second")
+	aether := buildCLIBinary(t)
+	ada := &cliUser{sshUser: newSSHUser(t, aether, srv.addr, e.keyPath), aether: aether}
+
+	_, stderr, code := ada.cli("session", "on no login", "--agent", "claude", "--mode", "background", "--login", "nope")
+	if code == 0 || !strings.Contains(stderr, `--login: you have no login named "nope"; cloudfield agent logins lists yours`) {
+		t.Fatalf("session --login nope = %d %q", code, stderr)
+	}
+	out, stderr, code := ada.cli("session", "on the second login", "--agent", "claude", "--mode", "background", "--login", "second")
+	t.Logf("$ cloudfield session \"on the second login\" --agent claude --mode background --login second\n%s%s", out, stderr)
+	if code != 0 {
+		t.Fatalf("session --login second = %d %q %q", code, out, stderr)
+	}
+	onSecond := strings.Fields(out)[1]
+	ctrl, client := srv.control(t, e.ada.key)
+	defer func() { _ = client.Close() }()
+	onDefault := e.launch(t, ctrl, "on the default login", "claude").ID
+
+	out, stderr, code = ada.cli("sessions")
+	t.Logf("$ cloudfield sessions\n%s", out)
+	if code != 0 {
+		t.Fatalf("sessions = %d %q", code, stderr)
+	}
+	for _, row := range strings.Split(out, "\n") {
+		fields := strings.Fields(row)
+		switch {
+		case strings.HasPrefix(row, onSecond) && !strings.Contains(row, " Ada, login second "):
+			t.Errorf("the session on login second lists %q; want its account and login", row)
+		case strings.HasPrefix(row, onDefault) && (len(fields) < 5 || fields[4] != "Ada"):
+			t.Errorf("the session on the default login lists %q; want its account as before", row)
+		}
+	}
+}
