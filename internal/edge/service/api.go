@@ -150,15 +150,18 @@ func (s *Service) apiDeviceToken(r *http.Request) (any, error) {
 	ctx := r.Context()
 	hash := edgeproto.HashToken(req.DeviceCode)
 	now := s.now()
-	a, err := s.store.PollDeviceAuth(ctx, hash, now)
+	a, err := s.store.DeviceAuth(ctx, hash)
+	if err == nil {
+		if p := s.pair(r); a.SigninOrigin != "" && !sameOrigin(a.SigninOrigin, p.signin) {
+			return nil, pageErr(http.StatusBadRequest, "this sign-in was started at %s, not at %s; finish it there", a.SigninOrigin, p.signin)
+		}
+		a, err = s.store.PollDeviceAuth(ctx, hash, now)
+	}
 	if errors.Is(err, edgestore.ErrNotFound) {
 		return nil, deviceState(edgeproto.DeviceExpired)
 	}
 	if err != nil {
 		return nil, err
-	}
-	if p := s.pair(r); a.SigninOrigin != "" && !sameOrigin(a.SigninOrigin, p.signin) {
-		return nil, pageErr(http.StatusBadRequest, "this sign-in was started at %s, not at %s; finish it there", a.SigninOrigin, p.signin)
 	}
 	if !now.Before(a.ExpiresAt) || a.Status == edgestore.AuthDenied {
 		if err = s.store.DeleteDeviceAuth(ctx, hash); err != nil {

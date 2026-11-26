@@ -371,6 +371,9 @@ func TestDeviceAuthBoundToPair(t *testing.T) {
 	if status, msg := poll(testSignin2); status != http.StatusBadRequest || msg != wantPoll {
 		t.Errorf("poll on %s: %d %q, want 400 %q", testSignin2, status, msg, wantPoll)
 	}
+	if got := h.column(t, `SELECT last_poll_at FROM device_authorizations`); got != "0" {
+		t.Errorf("a poll refused on %s recorded last_poll_at %s", testSignin2, got)
+	}
 	b := h.browser(t)
 	b.signIn(t)
 	if resp, page := b.post(t, "/device/confirm", url.Values{"user_code": {start.UserCode}, "decision": {"approve"}}); resp.StatusCode != http.StatusOK {

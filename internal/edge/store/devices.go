@@ -101,6 +101,17 @@ func (s *Store) DecideDeviceAuth(ctx context.Context, userCodeHash string, accou
 	return err
 }
 
+// DeviceAuth returns the authorization under codeHash without recording
+// a poll.
+func (s *Store) DeviceAuth(ctx context.Context, codeHash string) (DeviceAuth, error) {
+	a, err := scanDeviceAuth(s.db.QueryRowContext(ctx, `SELECT `+deviceAuthCols+`
+		FROM device_authorizations WHERE code_hash = ?`, codeHash))
+	if err != nil && !errors.Is(err, ErrNotFound) {
+		err = fmt.Errorf("edgestore: find device authorization: %w", err)
+	}
+	return a, err
+}
+
 // PollDeviceAuth records a poll at now and returns the authorization as it
 // was before, so LastPollAt is the previous poll.
 func (s *Store) PollDeviceAuth(ctx context.Context, codeHash string, now time.Time) (DeviceAuth, error) {
