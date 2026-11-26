@@ -307,6 +307,39 @@ func TestStandardCodexWithoutItsAppServerShowsWhy(t *testing.T) {
 	}
 }
 
+func TestInterruptStopsAStandardCodexTurnAndTypesNoKeyElsewhere(t *testing.T) {
+	t.Parallel()
+	e, rt, _ := newCodexEnv(t)
+	run, _ := e.launchOn(t, "codex")
+	srv, _ := rt.bridge(t, 1)
+	dialed(t, srv, 1)
+	srv.StartThread("thread-1", false, "")
+	waitFor(t, "the connected client", func() bool { return e.sched.Wakeable(run.ID) })
+	if _, err := e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "add a test"}, false, nil); err != nil {
+		t.Fatalf("Inject: %v", err)
+	}
+	e.waitStoreStatus(t, run.ID, domain.RunRunning)
+	if err := e.sched.Interrupt(t.Context(), run); err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	interrupts := srv.Requests("turn/interrupt")
+	if len(interrupts) != 1 || string(interrupts[0]) != `{"threadId":"thread-1","turnId":"turn-1"}` {
+		t.Fatalf("turn/interrupt = %s, want one for turn-1 of thread-1", interrupts)
+	}
+	e.waitStoreStatus(t, run.ID, domain.RunNeedsAttention)
+
+	other, _ := e.launchOn(t, "claude")
+	err := e.sched.Interrupt(t.Context(), other)
+	if !errors.Is(err, ErrNoInterrupt) || !strings.Contains(err.Error(), "cloudfield attach "+string(other.ID)) {
+		t.Fatalf("Interrupt of a Standard Claude Code session = %v, want ErrNoInterrupt naming cloudfield attach", err)
+	}
+	e.pty.mu.Lock()
+	defer e.pty.mu.Unlock()
+	if len(e.pty.injects) != 0 {
+		t.Fatalf("terminal injects = %+v, want no key typed into a terminal", e.pty.injects)
+	}
+}
+
 func promptTexts(t *testing.T, params []json.RawMessage) []string {
 	t.Helper()
 	var out []string

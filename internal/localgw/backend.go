@@ -362,6 +362,7 @@ var noReplay = map[string]bool{
 	protocol.MethodRunInputAnswer:  true,
 	protocol.MethodRunInputRespond: true,
 	protocol.MethodRunACPCancel:    true,
+	protocol.MethodRunInterrupt:    true,
 	protocol.MethodTemplateLaunch:  true,
 	protocol.MethodTemplateDelete:  true,
 	protocol.MethodScheduleDelete:  true,

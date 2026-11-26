@@ -186,6 +186,24 @@ func (s *Scheduler) ACPCancel(ctx context.Context, run domain.RunID) error {
 	return sess.Cancel(ctx)
 }
 
+// ErrNoInterrupt refuses an agent that stops a turn only on a key pressed
+// in its own terminal: typing a guessed key there could quit it instead.
+var ErrNoInterrupt = errors.New("scheduler: the session's agent takes an interrupt only in its own terminal")
+
+// Interrupt stops the turn run's agent is in: an Enhanced session's over
+// ACP, a Standard Codex terminal's through its app-server.
+func (s *Scheduler) Interrupt(ctx context.Context, run *domain.Run) error {
+	if run.ACP {
+		return s.ACPCancel(ctx, run.ID)
+	}
+	if s.attachedAppServer(run.ID) {
+		if client := s.appServer.connected(run.ID); client != nil {
+			return client.Interrupt(ctx)
+		}
+	}
+	return fmt.Errorf("%w: run cloudfield attach %s and press the agent's own interrupt key", ErrNoInterrupt, run.ID)
+}
+
 func (s *Scheduler) ACPSetOption(ctx context.Context, run domain.RunID, optionID string, value any) error {
 	awake, err := s.holdAwakeNow(run)
 	if err != nil {

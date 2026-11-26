@@ -38,7 +38,12 @@ type Server struct {
 	requests []Request
 	// failSteer makes turn/steer fail as it does when the turn ends first.
 	failSteer bool
+	// lateInterrupt ends a turn before its turn/interrupt arrives.
+	lateInterrupt bool
 }
+
+// unanswered is the result of a request the app-server never answers.
+type unanswered struct{}
 
 func New() *Server {
 	return &Server{threads: make(map[string]*thread)}
@@ -50,6 +55,14 @@ func (s *Server) FailSteers() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.failSteer = true
+}
+
+// LateInterrupts makes every later turn/interrupt reach its turn after the
+// turn ended.
+func (s *Server) LateInterrupts() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lateInterrupt = true
 }
 
 // Serve answers the requests read from in on out, until in ends.
@@ -71,7 +84,7 @@ func (s *Server) Serve(in io.Reader, out io.Writer) {
 		s.mu.Lock()
 		s.requests = append(s.requests, Request{Method: msg.Method, Params: msg.Params})
 		result, failure := s.answer(msg.Method, msg.Params)
-		if msg.ID != nil {
+		if _, never := result.(unanswered); msg.ID != nil && !never {
 			reply := map[string]any{"id": msg.ID}
 			if failure != "" {
 				reply["error"] = map[string]any{"code": -32600, "message": failure}
@@ -128,6 +141,16 @@ func (s *Server) answer(method string, raw json.RawMessage) (any, string) {
 			return nil, "expected active turn id " + p.ExpectedTurnID
 		}
 		return map[string]any{"turnId": p.ExpectedTurnID}, ""
+	case "turn/interrupt":
+		last := &t.turns[len(t.turns)-1]
+		s.setStatus(t, "idle")
+		if s.lateInterrupt {
+			// Codex 0.167.2 never answers an interrupt of a turn that ended.
+			last.status = "completed"
+			return unanswered{}, ""
+		}
+		last.status = "interrupted"
+		return map[string]any{}, ""
 	}
 	return nil, "unsupported method " + method
 }

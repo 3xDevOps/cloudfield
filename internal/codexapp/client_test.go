@@ -190,6 +190,57 @@ func TestSendStartsATurnWhenTheSteerMisses(t *testing.T) {
 	}
 }
 
+func TestInterruptStopsTheRunningTurn(t *testing.T) {
+	srv := codexmock.New()
+	c, changes := dial(t, srv, "")
+	srv.StartThread("main", false, "")
+	waitThread(t, c)
+	if err := c.Interrupt(t.Context()); err != nil {
+		t.Fatalf("Interrupt with no turn running: %v", err)
+	}
+	if got := srv.Requests("turn/interrupt"); len(got) != 0 {
+		t.Fatalf("turn/interrupt with no turn running = %s", got)
+	}
+	if err := c.Send(t.Context(), "first"); err != nil {
+		t.Fatal(err)
+	}
+	if got := next(t, changes); got != (statusChange{"main", codexapp.Working}) {
+		t.Fatalf("status change = %+v, want the turn working", got)
+	}
+	if err := c.Interrupt(t.Context()); err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	if got := next(t, changes); got != (statusChange{"main", codexapp.Idle}) {
+		t.Fatalf("status change = %+v, want the thread idle", got)
+	}
+	interrupts := srv.Requests("turn/interrupt")
+	if len(interrupts) != 1 || string(interrupts[0]) != `{"threadId":"main","turnId":"turn-1"}` {
+		t.Fatalf("turn/interrupt = %s, want one for turn-1 of main", interrupts)
+	}
+}
+
+// The app-server never answers an interrupt that reaches a turn after it
+// ended, which is the turn stopped all the same.
+func TestInterruptOfATurnThatEndedFirstIsNotAFailure(t *testing.T) {
+	srv := codexmock.New()
+	c, changes := dial(t, srv, "")
+	srv.StartThread("main", false, "")
+	waitThread(t, c)
+	if err := c.Send(t.Context(), "first"); err != nil {
+		t.Fatal(err)
+	}
+	next(t, changes)
+	srv.LateInterrupts()
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	if err := c.Interrupt(ctx); err != nil {
+		t.Fatalf("Interrupt of a turn that ended first: %v", err)
+	}
+	if len(srv.Requests("turn/interrupt")) != 1 || c.Busy() {
+		t.Fatalf("turn/interrupt requests = %s, busy = %v; want one unanswered and the thread idle", srv.Requests("turn/interrupt"), c.Busy())
+	}
+}
+
 func waitThread(t *testing.T, c *codexapp.Client) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)

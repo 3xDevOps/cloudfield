@@ -56,3 +56,22 @@ func TestRunActionsPrintTheStatusAndNameMissingRuns(t *testing.T) {
 		t.Fatalf("kill of an unknown run printed %q", out.String())
 	}
 }
+
+func TestInterruptSaysItStoppedTheTurnOrWhyNot(t *testing.T) {
+	reply := &fakeReply{result: struct{}{}}
+	c := fakeControlMethods(t, map[string]*fakeReply{protocol.MethodRunInterrupt: reply})
+	var out bytes.Buffer
+	if err := interruptSession(c, &out, "r1"); err != nil || out.String() != "session r1 interrupted\n" {
+		t.Fatalf("interrupt printed %q (%v), want session r1 interrupted", out.String(), err)
+	}
+	if got := string(reply.params()); got != `{"run_id":"r1"}` {
+		t.Fatalf("run.interrupt params = %s", got)
+	}
+
+	reason := "scheduler: the session's agent takes an interrupt only in its own terminal: run cloudfield attach r2 and press the agent's own interrupt key"
+	c = fakeControlMethods(t, map[string]*fakeReply{protocol.MethodRunInterrupt: {err: &protocol.Error{Code: protocol.CodeInvalidState, Message: reason}}})
+	out.Reset()
+	if err := interruptSession(c, &out, "r2"); err == nil || !strings.Contains(err.Error(), reason) || out.Len() != 0 {
+		t.Fatalf("interrupt of a Standard session = %v, printed %q; want the server's reason and nothing printed", err, out.String())
+	}
+}

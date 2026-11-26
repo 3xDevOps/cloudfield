@@ -377,7 +377,8 @@ same session through that app-server: Codex reports the start and end of each
 turn, and mail and your messages from the dashboard or `cloudfield message` arrive
 as a new turn when Codex is idle, or as a steer added to the running turn. They
 show in the terminal as prompts, under Cloudfield's attribution banner. Press
-Esc in the terminal to stop a turn. Cloudfield loads no hooks into Standard
+Esc in the terminal to stop a turn, or run `cloudfield interrupt <session-id>`,
+which stops it through the app-server. Cloudfield loads no hooks into Standard
 Codex, so remove any copy of its hooks from `~/.codex/hooks.json`: it would
 announce mail twice.
 

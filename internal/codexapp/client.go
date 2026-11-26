@@ -17,7 +17,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/version"
 )
 
-// sendTimeout bounds a message's turn request once it is sent.
+// sendTimeout bounds a turn request once it is sent.
 const sendTimeout = 15 * time.Second
 
 // Status is what the app-server reports of the terminal's thread.
@@ -194,6 +194,25 @@ func (c *Client) Send(ctx context.Context, text string) error {
 	}
 	if _, err := acp.SendRequest[json.RawMessage](c.conn, ctx, "turn/start", map[string]any{"threadId": thread, "input": input}); err != nil {
 		return fmt.Errorf("codex app-server: start a turn: %w", err)
+	}
+	return nil
+}
+
+// Interrupt stops the running turn of the terminal's thread, and does
+// nothing when none runs.
+func (c *Client) Interrupt(ctx context.Context) error {
+	thread := c.Thread()
+	turn := c.runningTurn(ctx, thread)
+	if turn == "" {
+		return ctx.Err()
+	}
+	// The app-server answers once the turn stops, and never when the turn
+	// ended before the interrupt reached it.
+	ctx, cancel := context.WithTimeout(ctx, sendTimeout)
+	defer cancel()
+	_, err := acp.SendRequest[json.RawMessage](c.conn, ctx, "turn/interrupt", map[string]any{"threadId": thread, "turnId": turn})
+	if err != nil && c.Busy() {
+		return fmt.Errorf("codex app-server: interrupt the turn: %w", err)
 	}
 	return nil
 }

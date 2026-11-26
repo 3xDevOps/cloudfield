@@ -295,6 +295,7 @@ cloudfield sessions <session-id> --json
 cloudfield wait <session-id> --timeout 30m
 cloudfield logs <session-id>
 cloudfield message <session-id> "<reply>"
+cloudfield interrupt <session-id>
 ```
 
 `cloudfield wait` exits 0 when the session finished, 1 when it failed, 3 when it needs
@@ -309,6 +310,13 @@ A permission request is the human's: show it with its options, and run the
 `cloudfield answer <session-id> <request-id> <option-id>` they pick. It allows or
 rejects once, never always. Relay a session's question to the human unless the
 task they gave you already answers it.
+
+`cloudfield interrupt` stops the agent's current turn and leaves the session
+open; `cloudfield message` then starts the next one. It works on an Enhanced
+session and on a Standard Codex session. Any other Standard agent stops only
+on its own key, so the command fails and names `cloudfield attach <session-id>`:
+**Human:** press the key there. While another member controls the session it
+fails with their name.
 
 ## Bring results back and publish
 
