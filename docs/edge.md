@@ -227,7 +227,8 @@ pinned edge key signs in each `ready`, and:
 - `edge status` prints `retiring     <old> is retiring on <date>; move this
   server with: sudo cloudfield-server edge move <new>`, with `--config <file>`
   when it read another config file, unless a `running` row says the server runs,
-  or last dialed, at another address. A notice that came with the connection
+  or last dialed, at another address. A stored notice that would not pass in a
+  `ready` is no notice. A notice that came with the connection
   that pinned the edge key ends with `(the edge sent this with the connection
   that pinned its key, so it is trusted on first use and shown only)`. A
   notices file it cannot read prints `notices      unreadable, so none is
@@ -261,17 +262,26 @@ apply it with:
 Until the restart `edge status` prints `running      the server last dialed
 <old>; restart to apply edge-url: sudo systemctl restart aether-server`.
 
-`edge move` enrolls only under the key pinned when it starts, never pins one,
-and writes `edge-url` only while that key is still pinned. With no key pinned,
-after a `410` without a signed `retired` notice, or when the old address does
-not answer (connection refused or no handshake within 10 seconds), it changes
-nothing and its refusal ends with the manual steps: `If <old> no longer answers
-for this edge: confirm <new> and the edge key's fingerprint with whoever runs
-the edge, then run sudo cloudfield-server config set edge-url <new> and sudo
-systemctl restart aether-server`, with `--config <file>` when it read another
-config file. A TLS or protocol failure at the old address gets no manual steps.
-Setting `edge-url` keeps a pinned key, so the server still refuses another key
-at `<new>`.
+`edge move` holds the pin file open from its start. Each enrollment, and the
+write of `edge-url`, needs that same pin file still in place, so a key pinned
+meanwhile refuses the move even when it is the same key again; the write also
+needs the config file's `edge-url` and `data-dir` to be what they were when the
+move began. It prints `enrolled at ...` only after the write. An older binary's
+`edge trust` writes the pin without the state lock, so a pin it writes between
+that check and the write is outside this guarantee.
+
+With no key pinned, after a `410` without a signed `retired` notice, or when the
+old address does not answer (connection refused or no handshake within 10
+seconds), it changes nothing and its refusal ends with the manual steps: `If
+<old> no longer answers for this edge: confirm <new> and the edge key's
+fingerprint with whoever runs the edge, then run sudo cloudfield-server config
+set edge-url <new> and sudo systemctl restart aether-server`, with `--config
+<file>` when it read another config file. With no key pinned, `sudo
+cloudfield-server edge trust` comes before the restart, so the key pinned is
+the one whose fingerprint was confirmed. A refusal whose status arrived counts
+as an answer, and a TLS or protocol failure at the old address gets no manual
+steps. Setting `edge-url` keeps a pinned key, so the server still refuses
+another key at `<new>`.
 
 ### Server id and claiming
 
