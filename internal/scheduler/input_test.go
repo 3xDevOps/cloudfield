@@ -521,22 +521,33 @@ func TestInputRequestsCannotSurviveEndedLifetime(t *testing.T) {
 	}
 }
 
-// A message typed into a terminal that shows a question would answer it.
+// A message typed into a terminal that shows a question would answer it. The
+// second question's answer is never reported: the end of its turn stands in.
 func TestInjectIsRefusedWhileAStandardAgentAsks(t *testing.T) {
 	t.Parallel()
 	e := newReportingEnv(t, nil)
 	run, _ := e.launchReporting(t)
-	question := domain.RunInputRequest{SessionID: "session", Kind: "question", ID: "asked"}
+	asks := `{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","session_id":"session","tool_use_id":"asked"}`
+	typed := 0
 	for _, step := range []struct {
-		operation string
-		typed     int
-	}{{"open", 0}, {"close", 1}} {
-		if err := e.sched.ReportAgentState(t.Context(), run.ID, agentstatus.Report{InputUpdates: []domain.RunInputUpdate{inputUpdate(step.operation, question)}}); err != nil {
+		hook    string
+		refused bool
+	}{
+		{asks, true},
+		{`{"hook_event_name":"PostToolUse","tool_name":"AskUserQuestion","session_id":"session","tool_use_id":"asked"}`, false},
+		{asks, true},
+		{`{"hook_event_name":"Stop","session_id":"session"}`, false},
+	} {
+		report, _ := agentstatus.FromClaudeHook([]byte(step.hook))
+		if err := e.sched.ReportAgentState(t.Context(), run.ID, report); err != nil {
 			t.Fatal(err)
 		}
+		if !step.refused {
+			typed++
+		}
 		_, err := e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "also run the tests"}, false, nil)
-		if refused := errors.Is(err, domain.ErrPromptNotSent); refused != (step.typed == 0) || len(e.pty.injected()) != step.typed {
-			t.Fatalf("question %s: Inject = %v, typed %+v, want %d typed", step.operation, err, e.pty.injected(), step.typed)
+		if errors.Is(err, domain.ErrPromptNotSent) != step.refused || len(e.pty.injected()) != typed {
+			t.Fatalf("after %s: Inject = %v, typed %+v, want %d typed", step.hook, err, e.pty.injected(), typed)
 		}
 	}
 }

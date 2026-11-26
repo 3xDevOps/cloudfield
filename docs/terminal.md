@@ -158,12 +158,15 @@ eight files per message.
 - While the agent reports an open question or permission request in its
   terminal (**Question: answer in the terminal** or **Permission: answer in
   the terminal** under **Needs you**), a message is **Not sent**: typed
-  there, it would become the answer. The row, the composer and
-  `cloudfield message` give the reason, `agent prompt was not sent: the agent
-  is waiting for an answer in its terminal; answer it there, then send the
-  message again`, and the composer keeps your draft. A prompt the agent does
-  not report still gets the message typed into it: Claude Code's permission
-  prompts, and every prompt of an agent without
+  there, it would become the answer. The row, the composer,
+  `cloudfield message` and the Slack bot give the reason, `agent prompt was
+  not sent: the agent is waiting for an answer in its terminal; answer it
+  there, then send the message again`. A message refused as you send it stays
+  in the composer as your draft. One that waited for the controller is refused
+  when it is approved or comes due, and its text stays only in its row. If
+  Claude Code's report of an answer is lost, the request ends with that turn.
+  A prompt the agent does not report still gets the message typed into it:
+  Claude Code's permission prompts, and every prompt of an agent without
   [status reporting](harnesses.md#status-reporting).
 - Standard Codex takes the message through its app-server instead, as a new
   turn when idle or a steer added to the running turn

@@ -202,15 +202,21 @@ func fromClaudeHook(hook claudeHook) (Report, bool) {
 		if held > 0 {
 			return Report{State: Working, Reason: BackgroundReason(held), Tools: agents == 0}, true
 		}
+		// A dialog blocks the turn it opens in, so an ended turn shows none:
+		// this closes a request whose own close was never reported.
+		var closed []domain.RunInputUpdate
+		if session != "" {
+			closed = []domain.RunInputUpdate{{Operation: "clear", SessionID: session}}
+		}
 		if hook.Event == "Stop" {
-			return Report{State: Idle, Reason: ReasonIdle, Stop: !hook.StopHookActive}, true
+			return Report{State: Idle, Reason: ReasonIdle, InputUpdates: closed, Stop: !hook.StopHookActive}, true
 		}
 		// "rate_limit" also covers transient 429s; only the vendor's
 		// usage-limit wording marks the account's limit.
 		if hook.Error == "rate_limit" && IsUsageLimitMessage(hook.LastAssistantMessage) {
-			return Report{State: Idle, Reason: hook.LastAssistantMessage, UsageLimit: true}, true
+			return Report{State: Idle, Reason: hook.LastAssistantMessage, InputUpdates: closed, UsageLimit: true}, true
 		}
-		return Report{State: Idle, Reason: ReasonFailed}, true
+		return Report{State: Idle, Reason: ReasonFailed, InputUpdates: closed}, true
 	case "SessionEnd":
 		if hook.SessionID == "" {
 			return Report{}, false

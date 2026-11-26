@@ -230,6 +230,15 @@ func TestThreadReplyReachesRun(t *testing.T) {
 	if last := posts[len(posts)-1]; !strings.Contains(last.Text, "not linked") || len(h.local.calls(protocol.MethodRunInject)) != 1 {
 		t.Fatalf("unlinked user: reply %q, %d injects; want the not-linked message and no new inject", last.Text, len(h.local.calls(protocol.MethodRunInject)))
 	}
+
+	h.local.mu.Lock()
+	h.local.inject = `{"message":{"id":"m2","state":"not_sent","failure":{"code":"prompt_not_sent","message":"the agent is waiting for an answer in its terminal"}}}`
+	h.local.mu.Unlock()
+	h.svc.handle(bg, eventEnvelope("e3", "Ev11", threadReply("U1", "use eu-west", ts)))
+	posts = h.slack.posts()
+	if last, want := posts[len(posts)-1], "The message is not_sent: the agent is waiting for an answer in its terminal."; last.Text != want {
+		t.Fatalf("refused reply = %q, want %q", last.Text, want)
+	}
 }
 
 func TestRevokedGrantStopsActions(t *testing.T) {

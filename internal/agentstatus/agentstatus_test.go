@@ -60,8 +60,8 @@ func TestClaudeDoesNotInventInput(t *testing.T) {
 	}
 	for _, event := range []string{"Stop", "StopFailure"} {
 		got, ok := FromClaudeHook([]byte(`{"hook_event_name":"` + event + `","session_id":"root"}`))
-		if !ok || got.State != Idle || len(got.InputUpdates) != 0 {
-			t.Errorf("%s must only end execution: %+v", event, got)
+		if !ok || got.State != Idle || !reflect.DeepEqual(got.InputUpdates, []domain.RunInputUpdate{{Operation: "clear", SessionID: "root"}}) {
+			t.Errorf("%s must end execution and the main agent's requests: %+v", event, got)
 		}
 	}
 	if got, _ := FromClaudeHook([]byte(`{"hook_event_name":"Stop","session_id":"root"}`)); !got.Stop {
@@ -134,12 +134,13 @@ func TestClaudeSubagentHooksLeaveTheTurnAlone(t *testing.T) {
 // 429 that shares its error kind.
 func TestClaudeStopFailureUsageLimit(t *testing.T) {
 	limit := "You've hit your session limit · resets 3pm (UTC)"
+	ended := []domain.RunInputUpdate{{Operation: "clear", SessionID: "s1"}}
 	got, ok := FromClaudeHook([]byte(`{"session_id":"s1","transcript_path":"/root/.claude/projects/x/s1.jsonl","cwd":"/workspace","hook_event_name":"StopFailure","error":"rate_limit","last_assistant_message":"` + limit + `"}`))
-	if want := (Report{State: Idle, Reason: limit, SessionID: "s1", UsageLimit: true}); !ok || !reflect.DeepEqual(got, want) {
+	if want := (Report{State: Idle, Reason: limit, InputUpdates: ended, SessionID: "s1", UsageLimit: true}); !ok || !reflect.DeepEqual(got, want) {
 		t.Fatalf("usage limit = %+v, mapped=%v; want %+v", got, ok, want)
 	}
 	got, ok = FromClaudeHook([]byte(`{"session_id":"s1","hook_event_name":"StopFailure","error":"rate_limit","last_assistant_message":"API Error: Server is temporarily limiting requests (not your usage limit) · Rate limited"}`))
-	if want := (Report{State: Idle, Reason: "agent failed", SessionID: "s1"}); !ok || !reflect.DeepEqual(got, want) {
+	if want := (Report{State: Idle, Reason: "agent failed", InputUpdates: ended, SessionID: "s1"}); !ok || !reflect.DeepEqual(got, want) {
 		t.Fatalf("transient 429 = %+v, mapped=%v; want %+v", got, ok, want)
 	}
 }
