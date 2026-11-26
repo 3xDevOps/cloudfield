@@ -251,7 +251,9 @@ func TestEdgeStatusNoticeSlowEdge(t *testing.T) {
 	g, _ := noticeGateway(t)
 	edge := newNoticeEdge(t)
 	signInTo(t, edge.URL)
-	edge.set(func(e *noticeEdge) { e.retiring, e.delay = "https://new.example.test", noticeTimeout+500*time.Millisecond })
+	edge.set(func(e *noticeEdge) {
+		e.retiring, e.delay = "https://new.example.test", noticeTimeout+500*time.Millisecond
+	})
 	start := time.Now()
 	if got := retiringOf(t, g, edge.URL); got != "" {
 		t.Fatalf("retiring = %s", got)

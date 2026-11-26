@@ -15,7 +15,7 @@ import { ApiError, type Api } from '@/lib/api'
 import { parseClaim, parseJoin } from '@/lib/claim-link'
 import { edgeHost, message, providerName } from '@/lib/format'
 import { isApprovalCode, shellQuote } from '@/lib/shell'
-import type { EdgeAccount, EdgeLinkResult, EdgeLogin, EdgeNotice, EdgeRefusal, EdgeServer, ServerEdge } from '@/lib/types'
+import type { EdgeAccount, EdgeLinkResult, EdgeLogin, EdgeStatusNotice, EdgeRefusal, EdgeServer, ServerEdge } from '@/lib/types'
 import type { HandedLink } from '@/lib/url-state'
 import { useStore } from '@/store'
 import type { Capability } from '@/lib/capability'
@@ -28,7 +28,7 @@ type Phase =
   | { name: 'waiting'; login: EdgeLogin }
   | { name: 'signed-in'; edges: SignedInEdge[]; chosen: string | null }
 
-type SignedInEdge = { edge: string; account: EdgeAccount; retiring?: EdgeNotice }
+type SignedInEdge = { edge: string; account: EdgeAccount; retiring?: EdgeStatusNotice }
 
 // Pre-wrapped: a server's refusal lists the commands that fix it, one per line.
 function ErrorLine({ children }: { children: string }) {
@@ -452,9 +452,9 @@ function JoinPanel({
 
 /** Whether the linked server's own notice, verified against the edge key it
  * pinned before this handshake, names the same move. */
-function serverConfirms(server: ServerEdge | null, edge: string, notice: EdgeNotice): boolean {
-  const own = server?.retiring
-  return !!own && !own.first_use && sameOrigin(own.origin, edge) && sameOrigin(own.replacement, notice.replacement)
+function serverConfirms(server: ServerEdge | null, edge: string, notice: EdgeStatusNotice): boolean {
+  const own = server?.notice
+  return !!own && !own.first_use && sameOrigin(server.edge_url, edge) && sameOrigin(own.replacement, notice.replacement)
 }
 
 function sameOrigin(a: string, b: string): boolean {
@@ -468,7 +468,7 @@ function sameOrigin(a: string, b: string): boolean {
 /** What an edge address says of itself. Nothing authenticates it, so the
  * new address is filled in only when this computer, or the linked server's
  * verified notice, already names it; signing in stays the person's step. */
-export function RetiringNotice({ edge, notice, signIn }: { edge: string; notice: EdgeNotice; signIn: SignIn }) {
+export function RetiringNotice({ edge, notice, signIn }: { edge: string; notice: EdgeStatusNotice; signIn: SignIn }) {
   const server = useStore((s) => s.edge)
   const known = notice.known || serverConfirms(server, edge, notice)
   const [target, setTarget] = useState('')

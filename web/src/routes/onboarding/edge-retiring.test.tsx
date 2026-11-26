@@ -1,5 +1,5 @@
 import { fireEvent, render, screen } from '@testing-library/react'
-import type { EdgeNotice, EdgeStatus, GatewayCapabilities, LinkStatus, ServerEdge } from '@/lib/types'
+import type { EdgeStatusNotice, EdgeStatus, GatewayCapabilities, LinkStatus, ServerEdge } from '@/lib/types'
 import { forgetHandedLink } from '@/lib/url-state'
 import { OnboardingRoute } from '@/routes/onboarding'
 import { useStore } from '@/store'
@@ -44,7 +44,7 @@ function seed(server: ServerEdge | null = null) {
   })
 }
 
-async function open(retiring?: EdgeNotice) {
+async function open(retiring?: EdgeStatusNotice) {
   const status: EdgeStatus = { edges: [{ edge, account, retiring }] }
   const client = fakeApi({
     localLinkStatus: vi.fn(async () => unlinked),
@@ -109,19 +109,19 @@ describe('a signed-in edge that says its address is retiring', () => {
   })
 
   it('fills in the replacement the linked server verified', async () => {
-    seed({ ...serverEdge, retiring: { state: 'retiring', origin: edge, replacement: next } })
+    seed({ ...serverEdge, notice: { state: 'retiring', replacement: next } })
     await open({ state: 'retiring', replacement: next, known: false })
     expect((screen.getByLabelText('Sign in at') as HTMLInputElement).value).toBe(next)
   })
 
   it('does not fill in a replacement from a notice the server trusted on first use', async () => {
-    seed({ ...serverEdge, retiring: { state: 'retiring', origin: edge, replacement: next, first_use: true } })
+    seed({ ...serverEdge, notice: { state: 'retiring', replacement: next, first_use: true } })
     await open({ state: 'retiring', replacement: next, known: false })
     expect((screen.getByLabelText('Sign in at') as HTMLInputElement).value).toBe('')
   })
 
   it('does not fill in a replacement the server names differently', async () => {
-    seed({ ...serverEdge, retiring: { state: 'retiring', origin: edge, replacement: 'https://other.example.test' } })
+    seed({ ...serverEdge, notice: { state: 'retiring', replacement: 'https://other.example.test' } })
     await open({ state: 'retiring', replacement: next, known: false })
     expect((screen.getByLabelText('Sign in at') as HTMLInputElement).value).toBe('')
   })

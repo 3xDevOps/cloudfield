@@ -1418,7 +1418,7 @@ export interface EdgeLogin {
  * Nothing authenticates it. `known` is whether this computer already has
  * its own reason to know `replacement`: a sign-in there, a saved link
  * naming it, or the built-in default edge. */
-export interface EdgeNotice {
+export interface EdgeStatusNotice {
   state: 'retiring' | 'retired'
   replacement: string
   date?: string
@@ -1427,7 +1427,7 @@ export interface EdgeNotice {
 
 /** edge.status: every edge this machine is signed in to. */
 export interface EdgeStatus {
-  edges: { edge: string; signin_origin?: string; account?: EdgeAccount; error?: string; retiring?: EdgeNotice }[]
+  edges: { edge: string; signin_origin?: string; account?: EdgeAccount; error?: string; retiring?: EdgeStatusNotice }[]
   login?: EdgeLogin
 }
 
@@ -1527,10 +1527,10 @@ export interface ServerEdge {
   owner: { provider: string; login: string } | null
   connected: boolean
   claimed: boolean
-  /** The notice for the server's own edge address, verified against the
-   * edge key the server pinned; `first_use` when that key was pinned by
-   * the same handshake. Absent from servers without it. */
-  retiring?: { state: 'retiring' | 'retired'; origin: string; replacement: string; date?: string; first_use?: boolean }
+  /** The notice for `edge_url`, verified against the edge key the server
+   * pinned; `first_use` when that key was pinned by the same handshake.
+   * Absent from servers without one. */
+  notice?: { state: 'retiring' | 'retired'; replacement: string; date?: string; first_use?: boolean }
 }
 
 /** server.edge.claimcode: a claim code bound to the calling admin. */
