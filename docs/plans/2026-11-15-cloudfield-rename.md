@@ -859,8 +859,9 @@ container on a Compose one. The steps give the systemd commands.
    server's id from `sudo cloudfield-server edge status` on it. On the edge
    host, `sudo -u aether-edge aether-edge reviewer --login <random-login>
    --server-id <server id> /var/lib/aether-edge/reviewer.json` (Compose:
-   the same command after `sudo docker exec aether-edge`), and note the
-   password it prints. Set
+   `sudo docker exec aether-edge aether-edge reviewer` with the same
+   arguments; the file lands in `./data`), and note the password it
+   prints. Set
    `AETHER_EDGE_REVIEWER_ACCOUNT_FILE=/var/lib/aether-edge/reviewer.json`
    and restart the edge: `sudo systemctl restart aether-edge`, or recreate
    the container on Compose. Its log says
@@ -891,8 +892,8 @@ container on a Compose one. The steps give the systemd commands.
    pending. After a review ends, and with a shared password after both
    end: `cloudfield member unlink <member-id> reviewer:<random-login>`, run
    the reviewer command again for a new password, restart the edge
-   (Compose: recreate it), and bind the login again. A new password alone does not revoke connectors
-   already authorized; the unlink does.
+   (Compose: recreate it), and bind the login again. A new password alone
+   does not revoke connectors already authorized; the unlink does.
 5. Build the packages: `make claude-connector` and `make chatgpt-plugin`.
    Each prints a warning per `PLACEHOLDER:` value left.
 6. Test at the new address, with `url=https://edge.cloudfield.ai/mcp` in
