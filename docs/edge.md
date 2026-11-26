@@ -172,9 +172,10 @@ server's `edge-access`, so the edge's record of the server stays as it was.
 | The edge speaks edge protocol 6 or later | `<url> speaks edge protocol <n>; a server moved to <address> would accept connector tokens only for that address, so connectors registered at <url> would stop working. Moving needs edge protocol 6 or later: the edge's operator upgrades it` |
 | The edge announces both addresses | `the edge at <url> announces the relay addresses <list>; moving needs both <url> and <address> among them: the edge's operator adds the address first` |
 | The new address presents the pinned key | `<address> presents edge key <fingerprint>, but this server pinned <fingerprint> for its edge at <url>, which announced it: another edge answers there. edge move only changes the address of one edge; changing edges is in docs/edge.md#turning-it-on` |
-| The new address is not retiring | `the edge at <address> says, signed with the pinned key, that <address> is retiring on <date>; move there instead: edge move <replacement>` |
-| After a `410` at `<url>`: the new address signs that `<url>` is retired | `dial <url>/v1/server/control: 410 Gone: <text>; the edge at <address> sends no notice signed with the pinned key that <url> is retired, and a refusal alone does not show it, so nothing changed` |
-| After a `410`: the notice names the new address | `the edge at <address> says, signed with the pinned key, that <url> is retired in favour of <replacement>; move there instead: edge move <replacement>` |
+| Neither enrollment's notices name the new address retiring or retired | `the edge says, signed with the pinned key, that <address> is retiring on <date>; move there instead: sudo cloudfield-server edge move <replacement>`, or `... that <address> is retired; ...`, or, when the replacement is `<url>`, `the edge says, signed with the pinned key, that <address> is retiring on <date> and names <url>, where this server already is; nothing changed` |
+| The pinned key stays the same while it runs | `the pinned edge key changed from <fingerprint> while this ran; nothing changed, run it again` |
+| After a `410` at `<url>`: the new address signs that `<url>` is retired | `dial <url>/v1/server/control: 410 Gone: <text>; the edge at <address> sends no notice signed with the pinned key that <url> is retired, and a refusal alone does not show it, so nothing changed. If <url> no longer answers for this edge: ...` and the manual steps below |
+| After a `410`: the notice names the new address | `the edge at <address> says, signed with the pinned key, that <url> is retired in favour of <replacement>; move there instead: sudo cloudfield-server edge move <replacement>` |
 | After a `410`: the new address speaks edge protocol 6 or later | `<address> speaks edge protocol <n>; moving needs edge protocol 6 or later: the edge's operator upgrades it` |
 | After a `410`: the new address announces itself | `the edge at <address> announces the relay addresses <list>; moving needs <address> among them: the edge's operator adds the address first` |
 
@@ -221,29 +222,34 @@ When the edge's operator marks the server's address
 pinned edge key signs in each `ready`, and:
 
 - logs at each connection `edge: <old> is retiring on <date>; move this server
-  with: sudo cloudfield-server edge move <new>`;
+  with: sudo cloudfield-server edge move <new> (with the service's --config
+  <file>, if it has one)`;
 - `edge status` prints `retiring     <old> is retiring on <date>; move this
-  server with: sudo cloudfield-server edge move <new>`, unless a `running` row
-  says the running server is at another address. A notice that came with the
-  connection that pinned the edge key ends with `(the edge sent this with the
-  connection that pinned its key, so it is trusted on first use and shown
-  only)`;
+  server with: sudo cloudfield-server edge move <new>`, with `--config <file>`
+  when it read another config file, unless a `running` row says the server runs,
+  or last dialed, at another address. A notice that came with the connection
+  that pinned the edge key ends with `(the edge sent this with the connection
+  that pinned its key, so it is trusted on first use and shown only)`. A
+  notices file it cannot read prints `notices      unreadable, so none is
+  shown: <error>` instead, and the dashboard shows no notice;
 - Settings › Remote access and Needs you show super admins the same with the
   commands to run on the server's host; other members see the notice without
   them.
 
-Without a date, `on <date>` is left out. Move with the steps above.
+Without a date, `on <date>` is left out. Move with the steps above. A move off
+a retiring address prints no `to move back` line: `edge move` refuses the way
+back.
 
 A retired address answers the control path with `410 Gone`. The server keeps
 retrying, and `edge status` exits 3 with `connection   disconnected since
-<time>: dial <old>/v1/server/control: 410 Gone: <text>`, control characters
-removed, and still prints the `retiring` row from the notice stored before.
-`sudo cloudfield-server edge move <new>` then skips the old address. It moves
-only when the new address's own `ready` in this run, verified against the
-pinned key and the nonce of that enrollment, carries a `retired` notice for the
-old address that names `<new>`. A `410`, its text or a stored notice moves
-nothing: whoever holds the old host name can answer `410`. It prints no way
-back, since nothing made at the old address works any more:
+<time>: dial <old>/v1/server/control: 410 Gone: <text>`, each control or
+line-separator character shown as `?`, and still prints the `retiring` row from
+the notice stored before. `sudo cloudfield-server edge move <new>` then skips the
+old address. It moves only when the new address's own `ready` in this run,
+verified against the pinned key and the nonce of that enrollment, carries a
+`retired` notice for the old address that names `<new>`. A `410`, its text or a
+stored notice moves nothing: whoever holds the old host name can answer `410`.
+It prints no way back, since nothing made at the old address works any more:
 
 ```
 enrolled at <new>, an address of the same edge (edge key SHA256:<fingerprint>, still pinned); the edge says <old> is retired
@@ -252,12 +258,20 @@ apply it with:
   sudo systemctl restart aether-server
 ```
 
-With no key pinned, or when the old address does not answer at all, `edge move`
-changes nothing and its refusal ends with the manual steps: `If <old> no longer
-answers for this edge: confirm <new> and the edge key's fingerprint with whoever
-runs the edge, then run sudo cloudfield-server config set edge-url <new> and sudo
-systemctl restart aether-server`. Setting `edge-url` keeps a pinned key, so
-the server still refuses another key at `<new>`.
+Until the restart `edge status` prints `running      the server last dialed
+<old>; restart to apply edge-url: sudo systemctl restart aether-server`.
+
+`edge move` enrolls only under the key pinned when it starts, never pins one,
+and writes `edge-url` only while that key is still pinned. With no key pinned,
+after a `410` without a signed `retired` notice, or when the old address does
+not answer (connection refused or no handshake within 10 seconds), it changes
+nothing and its refusal ends with the manual steps: `If <old> no longer answers
+for this edge: confirm <new> and the edge key's fingerprint with whoever runs
+the edge, then run sudo cloudfield-server config set edge-url <new> and sudo
+systemctl restart aether-server`, with `--config <file>` when it read another
+config file. A TLS or protocol failure at the old address gets no manual steps.
+Setting `edge-url` keeps a pinned key, so the server still refuses another key
+at `<new>`.
 
 ### Server id and claiming
 
