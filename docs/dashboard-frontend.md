@@ -526,7 +526,7 @@ selected row (`aria-current="page"`) is the focused tile's session.
 `top-bar.tsx` is a `banner` at every window width, padded by `--safe-top`.
 Its first row shows the Cloudfield mark on the left
 ([Styles](styles.md#type)), then **Board**,
-**Activity**, **Insights**, **Memory**, **Files**, **Environment**, **Agents** and
+**Activity**, **Insights**, **Linear** (once the member saved a Linear key), **Memory**, **Files**, **Environment**, **Agents** and
 **Templates** in `nav` "Main navigation". These use the sidebar's `ListRow`
 styling and current-page selection. A `ResizeObserver` measures the row and
 its buttons, including font and text-size changes. Destinations that do not
@@ -5925,6 +5925,58 @@ in **Needs you**.
   the heartbeat's read, and a read unanswered after 10 seconds is aborted and
   shown as the gauge's error: the loopback gateway speaks HTTP/1.1, so a
   stuck read there holds one of the browser's six connections to the host.
+
+## Linear
+
+`src/routes/linear/` is **Linear** (`?page=linear`), the member's open Linear
+issues from `linear.issues` with a title search and a `linear.teams` filter. It
+is in the navigation only when `linear.status` (read into the store's `linear`
+slice on hydration, without holding it, and by Settings › Connections › Linear)
+reports a saved key. The server's `linear.status` answers an empty status
+when no key exists, so `readLinear` in `src/store/linear.ts` treats any
+failure that is an `ApiError` with a JSON-RPC code other than `codeUnavailable`
+and whose message carries the server's `linear: ` text as a saved key:
+`connected` stays true with the `error`, and `refused` is set only when that
+text starts `Linear refused the API key: ` (the server's marker for an
+authentication error in Linear's `errors` array or a 401/403 from Linear; a Go
+transport error such as `Post "...": Forbidden` from a proxy lacks it), so Settings can say `Linear refused
+your saved key` or `Could not reach Linear` and offer **Disconnect** and
+**Replace key** for both. An unconfigured service (`codeUnavailable`) and any
+error without the server's text (a proxy's 401, a transport failure) are not
+matched at all: `connected` is false with the `error`, so the
+entry and **Disconnect** stay away and Settings shows `Cloudfield could not
+check the connection. Your key is unchanged.` with **Retry**. The
+entry stays hidden until a key is saved by design: Settings › Connections ›
+Linear is the way in. `?page=linear` without a key
+still opens and shows **Linear is not connected** with the server's error and a
+button to Settings; with a refused key it shows **Linear refused your API key** in the failed tone, as Settings does (gold is for not connected),
+**Open Linear settings** as the primary button, **Retry** second, and no
+search or team filter. The page holds a header primary while an error with a
+filled button shows, so the phone's **New** pill is not gold beside it. Status
+badges are neutral: Linear's own status glyph (`status-icon.tsx`, by state
+type) in muted text, never a session-state colour. The page and the Settings section are keyed by
+`identityKey`, and a Connect or Disconnect that finishes after an identity
+switch is dropped.
+
+**Start session** calls `openLaunchWithTask("<ID> <title>", { identifier, url })`.
+The task carries no URL: `run.launch` links the first Linear URL in the task
+when `linear_issue_url` is omitted, so a URL there would link a session the
+member unlinked. The launch dialog sends the link as `linear_issue_url` and,
+unlike text shared from another app, shows no review notice. A chip above Task
+says the session will be linked, with **Unlink**. The draft carries the link
+(`LaunchDraft.linear`), so a restored draft shows its own chip. The chip's `<ID>` links to the issue. When Start
+session is pressed for another issue while a draft is open, or for the same
+issue again after **Unlink** (offers are compared by identity, not identifier),
+a neutral callout says the draft was kept and offers a secondary **Use `<ID>`
+instead**, which replaces the task and link; phone and desktop share one component.
+
+The page picks the table or the stacked list from its own width (920px), shows
+the subtitle in the page on a phone, and shows **Open session**, with a working
+dot, in place of **Start session** for an issue with a live linked session (the run's canonical `linear_issue_url` equals the issue's URL without its slug, so the same ID in another workspace does not match).
+`src/routes/run/linear-issue.tsx` is the link to `run.linear_issue_url`: the
+identifier alone in the session header and the phone header, and in the Details
+panel's **Linear** row with the status from `linear.issue` as muted text beside
+the accent `<ID>` link (never a status dot, which belongs to session state). [linear.md](linear.md) covers the behavior.
 
 ## Insights
 

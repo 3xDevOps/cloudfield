@@ -1,6 +1,6 @@
 import type { Fallback, ChildRunsChoice } from '@/components/launch/launch-options'
 import type { LimitsDraft } from '@/components/launch/run-limits'
-import type { LaunchMode, Permission } from '@/lib/types'
+import type { LaunchMode, LinearLink, Permission } from '@/lib/types'
 import { message } from '@/lib/format'
 
 export interface LaunchDraft {
@@ -18,6 +18,8 @@ export interface LaunchDraft {
   model: string
   effort: string
   task: string
+  /** The Linear issue the launch will link; absent for none. */
+  linear?: LinearLink
 }
 
 export const launchDraftLinkStatusPending = 'Could not confirm this browser gateway link; launch drafts are staying in memory.'
@@ -34,6 +36,7 @@ export function readLaunchDraft(identity: string, persistent = true): { draft: L
       !strings(draft.extras) || !draft.fallback || typeof draft.fallback.off !== 'boolean' ||
       !(draft.fallback.order === null || strings(draft.fallback.order)) || !strings(draft.fallback.excluded) ||
       !['root', 'default', 'isolated'].includes(draft.permission) || !['', 'on', 'off'].includes(draft.childRuns) ||
+      !(draft.linear === undefined || (typeof draft.linear?.identifier === 'string' && typeof draft.linear.url === 'string')) ||
       !['tui', 'acp', 'headless'].includes(draft.mode) || !draft.limits ||
       !['cpus', 'memory', 'pids'].every((key) => typeof draft.limits[key as keyof LimitsDraft] === 'string')) {
       return draft === null ? { draft: null, error: null } : { draft: null, error: 'Saved launch draft has an invalid format.' }

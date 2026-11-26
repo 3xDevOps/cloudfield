@@ -11,6 +11,7 @@ import { automaticFallback, ChildRunsSwitch, type ChildRunsChoice, fallbackParam
 import { PermissionControl, permissionFeature } from '@/components/launch/permission-control'
 import { ExtraRepos } from '@/components/launch/extra-repos'
 import { PhoneLaunchSheet } from '@/components/launch/phone-launch'
+import { LinkedIssue, OfferedIssue } from '@/components/launch/linked-issue'
 import { AgentOptions, needsTask, RunFields, useAgentChoice } from '@/components/launch/run-fields'
 import { emptyLimits, parseLimits, useServerRunLimits } from '@/components/launch/run-limits'
 import { fallbackFromSaved, fallbackToSaved, SaveAccountDefault, SavedIssues } from '@/components/launch/saved-defaults'
@@ -109,8 +110,22 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   const permissionPicked = useRef(false)
   const choice = useAgentChoice({ account, ownAccountID, saved: savedRead, hold: preset === 'pending', pick, fallback: last?.harness, initial: restored ?? undefined, open })
   const { agents, agentError, harness, mode, model, effort, noAgents } = choice
-  const [shared] = useState(() => useStore.getState().paletteLaunchTask)
-  const [task, setTask] = useState(restored?.task ?? shared)
+  const [prefill] = useState(() => useStore.getState().paletteLaunchTask)
+  const offeredTask = useStore((s) => s.paletteLaunchTask)
+  const offered = useStore((s) => s.paletteLaunchLinear)
+  // The offer the form took, by identity: the same issue offered again after Unlink is a new offer. A draft already linked to it has taken it.
+  const [taken, setTaken] = useState(() => (restored && restored.linear?.url !== offered?.url ? null : offered))
+  const [link, setLink] = useState(restored ? restored.linear ?? null : offered)
+  const pending = offered && offered !== taken && offered.url !== link?.url ? offered : null
+  // Text from the Linear page is the member's own pick, not text shared from another app.
+  const [shared] = useState(() => (offered ? '' : prefill))
+  const linked = (
+    <>
+      {link && <LinkedIssue link={link} onUnlink={() => setLink(null)} />}
+      {pending && <OfferedIssue draft={link} offered={pending} onUse={() => { setTask(offeredTask); setLink(pending); setTaken(pending) }} />}
+    </>
+  )
+  const [task, setTask] = useState(restored?.task ?? prefill)
   const [error, setError] = useState<string | null>(null)
   const [setup, setSetup] = useState<string | null>(null)
   const [unadopted, setUnadopted] = useState<{ workspace: string; command: string } | null>(null)
@@ -182,11 +197,12 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
     const draft: LaunchDraft = {
       version: 1, id: draftID, workspace: workspaceID, extras, account, fallback,
       permission, childRuns, limits, harness, mode, model, effort, task,
+      ...(link ? { linear: link } : {}),
     }
     const failure = state.setLaunchDraft(draft, !launchDraftError)
     if (failure && !storageFailed.current) toast.error(`Draft could not be saved in this browser: ${failure}`)
     storageFailed.current = failure !== null
-  }, [identityKey, draftID, open, workspaceID, extras, account, fallback, permission, childRuns, limits, harness, mode, model, effort, task, launchDraftError, linkStatus])
+  }, [identityKey, draftID, open, workspaceID, extras, account, fallback, permission, childRuns, limits, harness, mode, model, effort, task, link, launchDraftError, linkStatus])
 
   const collapse = () => {
     setPickedWorkspace(workspaceID)
@@ -254,6 +270,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
       ...(chosenModel ? { model: chosenModel } : {}),
       ...(effort ? { effort } : {}),
       ...(permissionOffered ? { permission } : {}),
+      ...(link ? { linear_issue_url: link.url } : {}),
       ...(sharedAccount ? { account_member_id: account } : {}),
       ...fallbackParams(fallback, accounts, account),
       ...extraRepos,
@@ -391,6 +408,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
         task={task}
         onTask={setTask}
         shared={shared !== '' && task === shared}
+        linked={linked}
         choice={choice}
         onAgent={(name) => { setError(null); choice.choose(name) }}
         workspaces={allWorkspaces}
@@ -456,7 +474,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
           onSubmit={(event) => { event.preventDefault(); if (!dictating) void submit() }}
         >
           {permissionOffered && <PermissionControl value={permission} onChange={choosePermission} disabled={launching} />}
-          <RunFields choice={choice} task={task} onTask={setTask} onSetUp={setUp} onChoice={() => { choiceEdited.current = true; setError(null) }} disabled={launching} autoFocus shared={shared !== '' && task === shared} account={accountChoice} owner={sharedAccount ? accountName : undefined} />
+          <RunFields choice={choice} task={task} onTask={setTask} onSetUp={setUp} onChoice={() => { choiceEdited.current = true; setError(null) }} disabled={launching} autoFocus shared={shared !== '' && task === shared} linked={linked} account={accountChoice} owner={sharedAccount ? accountName : undefined} />
           {limitsOffered && <RunLimitsOption value={limits} onChange={setLimits} effective={serverLimits.limits?.effective} disabled={launching} />}
           {childRunsOffered && <ChildRunsSwitch value={childRuns} onChange={setChildRuns} enabled={childSettings?.enabled} settings={childSettings} readError={childReadError} unavailable={mode === 'headless' ? 'Background sessions cannot start subsessions.' : undefined} disabled={launching} />}
           {reposOffered && <ExtraRepos options={extraOptions} value={extras} onChange={setExtras} disabled={launching} />}

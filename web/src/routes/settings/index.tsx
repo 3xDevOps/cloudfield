@@ -18,6 +18,7 @@ import { ConnectorsSection } from '@/routes/settings/connectors'
 import { GeneralSections } from '@/routes/settings/general'
 import { GitHubSection } from '@/routes/settings/github'
 import { LaunchDefaultsSection } from '@/routes/settings/launch'
+import { LinearSection } from '@/routes/settings/linear'
 import { SettingsNav } from '@/routes/settings/nav'
 import { MemorySection } from '@/routes/settings/memory'
 import { NotificationSections } from '@/routes/settings/notifications'
@@ -34,7 +35,7 @@ const bodies: Record<CategoryID, (client: Api) => ReactNode> = {
   general: () => <GeneralSections />,
   launch: (client) => <LaunchDefaultsSection client={client} />,
   agents: (client) => <AgentsSection client={client} />,
-  connections: (client) => <><ConnectorsSection client={client} /><GitHubSection client={client} /></>,
+  connections: (client) => <><ConnectorsSection client={client} /><LinearSection client={client} /><GitHubSection client={client} /></>,
   notifications: (client) => <NotificationSections client={client} />,
   watches: (client) => <WatchesSection client={client} />,
   memory: (client) => <MemorySection client={client} />,
