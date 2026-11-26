@@ -44,7 +44,7 @@ describe('login list', () => {
     expect(client.accountUsage).toHaveBeenCalledWith({})
     expect(client.accountUsage).toHaveBeenCalledWith({ login: 'lgn-work0000001' })
 
-    expect(within(row('default')).queryByRole('button', { name: 'Rename default' })).toBeNull()
+    expect(within(row('default')).getByRole('button', { name: 'Rename default' })).toHaveProperty('disabled', true)
     expect(within(row('default')).queryByRole('button', { name: 'Remove default' })).toBeNull()
     expect(within(row('default')).getByRole('button', { name: 'Move default up' })).toHaveProperty('disabled', true)
     expect(within(row('console')).getByRole('button', { name: 'Move console down' })).toHaveProperty('disabled', true)
@@ -102,6 +102,16 @@ describe('login list', () => {
     show()
     expect(within(row('work')).getByRole('switch', { name: 'Use for shares' })).toHaveProperty('disabled', true)
     expect(within(row('work')).getByRole('switch', { name: 'Use for shares' }).getAttribute('aria-checked')).toBe('false')
+  })
+
+  it('turns Use for shares through the share call', async () => {
+    const user = userEvent.setup()
+    const client = fakeApi({ agentLoginShare: vi.fn(async () => ({})) })
+    const onChanged = vi.fn()
+    render(<LoginList logins={logins} sharedWith={[bob]} client={client} onChanged={onChanged} onShare={(login, on) => client.agentLoginShare('claude', login.id, on)} />)
+    await user.click(within(row('work')).getByRole('switch', { name: 'Use for shares' }))
+    expect(client.agentLoginShare).toHaveBeenCalledWith('claude', 'lgn-work0000001', true)
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
   })
 
   it('confirms a removal, says Anthropic keeps the sign-in, and shows a refusal verbatim', async () => {

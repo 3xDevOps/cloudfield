@@ -56,7 +56,7 @@ export function AgentList({
             <IconTile className="size-8">
               <AgentGlyph agent={agent.glyph ?? agent.name} colored className="size-5" />
             </IconTile>
-            <span className="flex min-w-[60%] flex-1 flex-col">
+            <span className="flex min-w-48 flex-1 flex-col">
               <span className="truncate text-ui font-medium text-text">{name}</span>
               <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-ui-sm text-muted">
                 <StatusDot tone={ready(agent) ? 'done' : agent.installed === true && agent.login_problem ? 'needs-you' : 'neutral'} />
@@ -66,7 +66,7 @@ export function AgentList({
               </span>
               {agent.installed === true && agent.login_problem && <span className="font-code text-ui-sm break-words text-muted">{agent.login_problem}</span>}
             </span>
-            <span className="ml-auto flex items-center gap-2">
+            <span className="ml-auto flex flex-wrap items-center gap-2">
               {extra?.(agent)}
               {(runnable || onSetUp) && (
                 <Button

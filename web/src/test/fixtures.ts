@@ -785,6 +785,7 @@ export function fakeApi(over: Partial<Api> = {}): Api {
     agentLoginRemove: vi.fn<Api['agentLoginRemove']>(async () => needsOverride('agentLoginRemove')),
     agentLoginOrder: vi.fn<Api['agentLoginOrder']>(async () => needsOverride('agentLoginOrder')),
     agentLoginAutomatic: vi.fn<Api['agentLoginAutomatic']>(async () => needsOverride('agentLoginAutomatic')),
+    agentLoginShare: vi.fn<Api['agentLoginShare']>(async () => needsOverride('agentLoginShare')),
     agentRegister: vi.fn(async () => ({})),
     agentInstall: vi.fn(async () => ({ log_tail: 'installed\n', installed: true, enhanced_installed: false })),
     agentRemove: vi.fn(async () => ({})),

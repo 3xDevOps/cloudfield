@@ -74,11 +74,15 @@ function reach(login: AgentLogin, sharedWith: Member[]): string {
   return `Shares reach it: ${names(sharedWith)}`
 }
 
+/** The server's own rule: the default login is the files in the member's home. */
+const defaultFixed = 'The default login is the one in your home; it is not renamed or removed here'
+
 type Usage = { provider?: UsageProvider; error?: string }
 
 function useLoginUsage(client: Pick<Api, 'accountUsage'>, logins: AgentLogin[]): Record<string, Usage> {
   const [usage, setUsage] = useState<Record<string, Usage>>({})
-  const ids = logins.map((login) => login.id).join(' ')
+  // Sorted, so a reorder reads nothing again.
+  const ids = logins.map((login) => login.id).sort().join(' ')
   useEffect(() => {
     let live = true
     for (const id of ids.split(' ')) {
@@ -217,14 +221,12 @@ function LoginRow({ login, index, count, usage, sharedWith, busy, onMove, onAuto
           <label htmlFor={`${id}-share`} className="text-ui-sm text-text">Use for shares</label>
           <Switch id={`${id}-share`} checked={login.shared} disabled={busy || !onShare} onCheckedChange={onShare} />
         </span>
-        {added && (
-          <span className="flex items-center gap-1">
-            <Button variant="ghost" size="sm" disabled={busy} aria-label={`Rename ${login.name}`} onClick={onRename}>Rename</Button>
-            <Button variant="ghost" size="icon-sm" label={`Remove ${login.name}`} disabled={busy} onClick={onRemove}>
-              <Trash2 />
-            </Button>
-          </span>
-        )}
+        <span className="flex items-center gap-1">
+          <Button variant="ghost" size="sm" disabled={busy || !added} hint={added ? undefined : defaultFixed} aria-label={`Rename ${login.name}`} onClick={onRename}>Rename</Button>
+          <Button variant="ghost" size="icon-sm" label={added ? `Remove ${login.name}` : defaultFixed} disabled={busy || !added} onClick={onRemove}>
+            <Trash2 />
+          </Button>
+        </span>
       </div>
     </li>
   )
@@ -255,7 +257,7 @@ export function LoginList({ logins, sharedWith, client, onChanged, onShare }: {
     act(client.agentLoginOrder(loginAgent, ids))
   }
   return (
-    <section aria-label="Claude Code logins" className="flex basis-full flex-col gap-3 border-t border-seam pt-3 sm:pl-11">
+    <section aria-label="Claude Code logins" className="flex min-w-0 basis-full flex-col gap-3 border-t border-seam pt-3 sm:pl-11">
       <p className="text-ui-sm text-muted">
         Sessions start on the first login with usage left and move down the list when one runs out. A login with Automatic off is used only when you pick it at launch.{' '}
         {sharedWith.length > 0
