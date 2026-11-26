@@ -139,6 +139,14 @@ moved between automatically is undecided by the text.
     subscriptions (plan `pro` or `max`): a seat in another organisation
     the member belongs to.
 
+  A candidate is judged against **every** login the session has run on,
+  and at launch against the requested one, not only the login it would
+  leave: otherwise a Console login in the middle would carry a session
+  from one personal subscription to another. A Console login has no plan
+  and counts as not personal. A default login that holds more than one
+  kind of sign-in has no kind Cloudfield can name, and every pair with it
+  is unsettled.
+
   Every other pair is unsettled: two personal subscriptions, two seats of
   one organisation, and any pair where Cloudfield cannot read the plan or
   the organisation of one of them. For those the member has one setting,
@@ -154,11 +162,19 @@ moved between automatically is undecided by the text.
   the other. Picking a login by hand for a launch is not governed: holding
   several accounts and choosing between them is what Claude Code's own
   documentation describes.
-- What Cloudfield can read: the plan (`subscriptionType` in the login
-  file: `pro`, `max`, `team`, `enterprise`), and the organisation id and
-  email Claude Code caches as `oauthAccount` at sign-in. A login signed in
-  before this feature, such as the default one, may have neither on
-  record until its next sign-in; it then counts as unsettled.
+- What Cloudfield can read: the plan (`subscriptionType`, read from the
+  login file each time), and the organisation id and email Claude Code
+  cached as `oauthAccount`: for an added login as recorded when its
+  sign-in ended, for the default login from the member's `~/.claude.json`
+  when the pair is judged. A login with either missing is unsettled.
+  These are what Claude Code wrote, not proof: a member who signs a login
+  in again as another account from inside a session changes the file and
+  not the record. The rule guards a member against a default they did not
+  choose; it is not enforcement against the member.
+- A move carries the conversation with it: the next login's organisation
+  receives the whole transcript on resume. The setting's text and
+  `security.md` say so, because a seat in another organisation, which
+  the rule allows, can be another employer's.
 
 ### 2. Storage
 
@@ -186,10 +202,21 @@ moved between automatically is undecided by the text.
   legacy `~/.claude/.config.json` masked. The container's agent then finds
   one login. The inode of each mounted login file is checked before the
   agent starts, as for a shared login today, so a dropped mount fails the
-  launch instead of running on the default login under another name. A
+  launch instead of running on the default login under another name. The
+  check today covers a login mounted as a subpath of a volume; every
+  mount an added login adds is made that way or checked likewise. A
   runtime that cannot make or verify these mounts (the plan's builder
   checks the microVM guest) refuses a launch on an added login with the
   reason.
+- **Which store Claude Code prefers when it finds more than one is not
+  known from its documentation.** Before pull request 2 merges, a test
+  runs the real, unmodified Claude Code against a local stand-in for
+  Anthropic's API, with made-up values and no real login, in each layout
+  a session can have (subscription login added over each kind of default;
+  Console login added over each kind of default) and shows the request
+  carries the added login's credential. A layout that cannot be shown is
+  refused at launch, and if no Console layout can be, Console logins
+  leave this plan.
 - A keyless Console login is a whole directory, so an Isolated session
   refuses it with the reason, as it refuses a teammate's whole-directory
   login today.
@@ -228,10 +255,12 @@ moved between automatically is undecided by the text.
 ### 3. When Cloudfield switches
 
 **At launch.** The launch asks for a login (`--login <name>`, the launch
-dialog) or, by default, the member's first automatic login, or their
-first login when none is automatic. A run stored before this feature, or
-by a client that sends no login, is on the default login and is rebuilt on
-it. The requested
+dialog; the default login is named `default`). A launch that names none,
+from any client, gets the member's first automatic login, or their first
+login when none is automatic. A stored run with an empty `account_login`
+is on the default login and is rebuilt on it; the wire's "none named" and
+the row's "default" are never confused, because the server resolves the
+first into the second before it stores the run. The requested
 login is used unless a successful usage read shows a window at 95% or
 more, or the vendor reported it run out as below. Then, in order:
 
@@ -259,9 +288,11 @@ default login.
 the vendor's message, from its exported list, ending the turn. Between a
 member's own logins only the depletion messages move a session ("You've
 hit your", "You've reached your", "You're out of usage credits", "You're
-out of extra usage"). The organisation, seat, group and model messages
-are an administrator's or a plan's restriction, not a spent window: the
-session parks with the message and moves nowhere on its own. Cloudfield
+out of extra usage", "Your org is out of usage"). The seat, allocation,
+group and model messages are an administrator's or a plan's restriction,
+not a spent balance: the session parks with the message and moves
+nowhere on its own. Either way a login whose usage cannot be read is
+passed over for the 30 minutes above. Cloudfield
 then does what it does today for a teammate's account, with the member's
 logins first in the candidate order: stop the agent, replace the container
 with one on the next login, resume the same conversation and send one
@@ -272,10 +303,14 @@ continuation prompt naming both logins.
   transcript, which lives in the member's home and is the same under every
   login. The prompt is not sent again. The continuation prompt is sent
   **at most once**: the marker records that it is being sent before it is
-  sent, and a send whose outcome is unknown (an error, a restart between
-  the two) parks the session with "the session moved to <login>; the
-  continuation prompt may not have been delivered" instead of sending
-  again. Today the marker is cleared after the send
+  sent. An error that proves nothing was sent leaves it owed, and a
+  usage-limit error from the next login starts the next move, both as
+  today. After a restart that finds it marked as being sent, Cloudfield
+  does not send again and does not stop the agent, which may be working
+  on it: it clears the marker and writes "the session moved to <login>;
+  the continuation prompt may not have been delivered" to the session's
+  log. A headless session's continuation is its resume command, so it is
+  delivered by starting the container the marker names. Today the marker is cleared after the send
   (`internal/scheduler/acp_driver.go` `sendContinuation`), so a restart
   between the two sends it twice; this plan changes that for every move.
 - A signal is acted on only for the container and agent process that
@@ -285,9 +320,13 @@ continuation prompt naming both logins.
   container mounts. Processes the agent left running in the old container
   and its terminals end with it, as in every move today.
 - A login the session already used is not tried again in that session.
-- Under the lock that records the move, the chosen login must still exist,
-  still be automatic and still be allowed from the current one by
-  decision 1. Otherwise the next candidate is tried.
+- A move chooses its target under the launch authorisation lock, where
+  the login must exist, be automatic and be allowed by decision 1, and
+  writes the marker there. From then the move is committed to that login:
+  the marker blocks its removal, and turning automatic or the member's
+  setting off afterwards governs the next choice, not the move in flight.
+  The old container is gone by the time the move is recorded, so there is
+  no later point at which another candidate could still be tried.
 - A session whose home is not the login owner's own (after a handoff)
   never moves to an added login, and a session on an added login cannot
   be handed off: the handoff is refused with the reason.
@@ -338,12 +377,18 @@ when no usage read gave one.
   owner's own and the parent still runs in that owner's home; otherwise
   it starts on the account's default login. The check runs again when a
   queued sub-session is dispatched.
-- **Reaching a running session.** Today a member who may steer a session
-  and holds a share of its account may open terminals in it, relaunch it
-  when retained, and take it in a handoff
-  (`internal/sshd/development.go` `developmentAuthority`). A share covers
-  the default login only, so for a session on an added login each of
-  those, and wake and reopen, admit the login's owner alone.
+- **Steering a running session.** A member who may steer a session can
+  make its agent act: send it prompts, answer its questions, write files
+  into its worktree, and, with a share of its account, open terminals in
+  it (`internal/sshd/guard.go` `checkSteer`,
+  `internal/sshd/development.go` `developmentAuthority`). An agent told to
+  print its login file will. A share covers the default login only, so a
+  session on an added login is steered by the login's owner alone: every
+  operation that needs steer, and relaunch, wake, reopen and handoff,
+  refuse anyone else with the reason while the session is on that login.
+  Reading the session is unchanged. A session that moves to an added
+  login says so in its log, where collaborators see why they can no
+  longer steer it.
 
 ### 6. Security
 
@@ -453,3 +498,24 @@ changed these further points:
 Answered, not changed: the default login's files stay readable inside the
 member's own sessions on another login (the boundary is the member); an
 older server binary refuses a newer database, as after every migration.
+
+A fresh Opus review of the revised plan (`claude-opus-5-5`) changed:
+
+- Judged hop by hop, a Console login between two personal subscriptions
+  made the unsettled pair reachable. Candidates are judged against every
+  login a session ran on.
+- Steer alone lets a collaborator have the agent print its login, so
+  gating terminals was not enough. A session on an added login is steered
+  by its owner alone.
+- The second check "under the lock that records the move" had nowhere to
+  fall back to. The choice is the commitment.
+- Parking a session whose continuation may have been delivered would stop
+  an agent at work. It is logged instead.
+- An organisation out of usage is depletion, not a restriction.
+- Which store Claude Code prefers is unverified; a test with the real
+  binary now gates pull request 2.
+- "No login named" and "the default login" were confused.
+
+Recorded, not changed: the rule allows a move to a seat in another
+organisation, which carries the transcript there. That is the liaison's
+decision; the setting's text says what moves.
