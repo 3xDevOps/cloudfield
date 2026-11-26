@@ -59,6 +59,9 @@ type State struct {
 	// writeNotices links the pin file and pinFirst publishes one; tests
 	// pin a key there as an older binary, which takes no lock, would.
 	beforeLink, beforePublish func()
+	// linkFile replaces os.Link when set; tests make it fail as a file
+	// system without hard links does.
+	linkFile func(oldname, newname string) error
 }
 
 // OpenState returns the state under dataDir. Nothing is created until a
@@ -224,6 +227,13 @@ func (s *State) Pin(key ed25519.PublicKey) error {
 	return s.write(pinFile, pin{Key: key})
 }
 
+func (s *State) link(oldname, newname string) error {
+	if s.linkFile != nil {
+		return s.linkFile(oldname, newname)
+	}
+	return os.Link(oldname, newname)
+}
+
 // forgetNotices deletes the stored notices of each key.
 func (s *State) forgetNotices(keys ...ed25519.PublicKey) error {
 	for _, k := range keys {
@@ -285,11 +295,16 @@ func (s *State) publishPin(key ed25519.PublicKey) (pin, bool, error) {
 	if s.beforePublish != nil {
 		s.beforePublish()
 	}
-	err = os.Link(tmp, s.path(pinFile))
+	err = s.link(tmp, s.path(pinFile))
 	if errors.Is(err, fs.ErrExist) {
 		_ = f.Close()
 		p, oerr := openPin(s.path(pinFile))
 		return p, false, oerr
+	}
+	// A file system without hard links pins by a rename, as builds
+	// before notices did.
+	if err != nil {
+		err = os.Rename(tmp, s.path(pinFile))
 	}
 	if err != nil {
 		_ = f.Close()
@@ -475,6 +490,11 @@ func (s *State) writeNotices(p pin, n StoredNotices) error {
 	if err = s.forgetNotices(p.Key); err != nil {
 		return err
 	}
+	// Only this build writes them, under the lock: any left is a crash's.
+	stale, _ := filepath.Glob(filepath.Join(filepath.Dir(s.path(name)), "."+noticesFile+".*"))
+	for _, f := range stale {
+		_ = os.Remove(f)
+	}
 	if len(n.Notices) == 0 {
 		return nil
 	}
@@ -487,7 +507,7 @@ func (s *State) writeNotices(p pin, n StoredNotices) error {
 	if s.beforeLink != nil {
 		s.beforeLink()
 	}
-	if os.Link(s.path(pinFile), candidate) != nil {
+	if s.link(s.path(pinFile), candidate) != nil {
 		return nil
 	}
 	defer os.Remove(candidate) //nolint:errcheck // gone after a successful rename

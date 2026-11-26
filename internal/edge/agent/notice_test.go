@@ -13,9 +13,11 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -406,6 +408,61 @@ func TestFirstPinHoldsThePinItPublished(t *testing.T) {
 	}
 }
 
+// TestNoHardLinks pins and stores notices where hard links fail, as on
+// vfat or a FUSE file system: the first pin falls back to a rename and
+// holds the file it put in place, and no notices are stored.
+func TestNoHardLinks(t *testing.T) {
+	s := OpenState(t.TempDir())
+	s.linkFile = func(oldname, newname string) error {
+		return &os.LinkError{Op: "link", Old: oldname, New: newname, Err: syscall.EPERM}
+	}
+	key, _, _ := ed25519.GenerateKey(rand.Reader)
+	p, created, err := s.pinFirst(key)
+	if err != nil || !created || !p.Key.Equal(key) {
+		t.Fatalf("pinFirst without hard links = %x, created %v, %v", p.Key, created, err)
+	}
+	t.Cleanup(p.close)
+	if cur, err := os.Stat(s.path(pinFile)); err != nil || !os.SameFile(cur, p.file) {
+		t.Fatalf("the pin returned is not the pin file in place: %v", err)
+	}
+	if err := s.writeNotices(p, testStored()); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.Notices(noticeServerID); err != nil || got.Notices != nil || noticesFileExists(t, s, key) {
+		t.Fatalf("notices stored without hard links: %+v, %v", got, err)
+	}
+	leftovers, _ := filepath.Glob(filepath.Join(filepath.Dir(s.path(keyDirFile(key, noticesFile))), ".*"))
+	if len(leftovers) != 0 {
+		t.Errorf("temporary files left: %v", leftovers)
+	}
+}
+
+// TestCrashLeftoversAreRemoved leaves a temporary notices file, as a
+// crash would, and stores notices: the leftover is gone.
+func TestCrashLeftoversAreRemoved(t *testing.T) {
+	s := OpenState(t.TempDir())
+	key, _, _ := ed25519.GenerateKey(rand.Reader)
+	p := pinNow(t, s, key)
+	dir := filepath.Dir(s.path(keyDirFile(key, noticesFile)))
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"." + noticesFile + ".123", "." + noticesFile + ".123.pin"} {
+		if err := os.WriteFile(filepath.Join(dir, f), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := s.writeNotices(p, testStored()); err != nil {
+		t.Fatal(err)
+	}
+	if leftovers, _ := filepath.Glob(filepath.Join(dir, "."+noticesFile+".*")); len(leftovers) != 0 {
+		t.Errorf("crash leftovers kept: %v", leftovers)
+	}
+	if got, err := s.Notices(noticeServerID); err != nil || len(got.Notices) != 1 {
+		t.Errorf("notices after removing leftovers: %+v, %v", got, err)
+	}
+}
+
 // TestDialErrorTextIsPrintable refuses a dial with text that would drive
 // a terminal or forge a log line, and with too much of it.
 func TestDialErrorTextIsPrintable(t *testing.T) {
@@ -494,5 +551,29 @@ func TestControlDialRefusalIsTyped(t *testing.T) {
 	}
 	if _, err = FetchEdgeInfo(t.Context(), moved.URL); err == nil || followed.Load() || !strings.Contains(err.Error(), "302 Found") {
 		t.Fatalf("edge info behind a redirect: %v, followed %v", err, followed.Load())
+	}
+}
+
+// TestEnrollsWithoutHardLinks enrolls a fresh server where hard links
+// fail: it pins, connects and stores no notices.
+func TestEnrollsWithoutHardLinks(t *testing.T) {
+	edge := newFakeEdge(t)
+	list := edgeproto.Notices{{State: edgeproto.NoticeRetiring, Origin: edge.origin, Replacement: "https://edge2.example.test"}}
+	edge.notices = func(id string, nonce []byte) (edgeproto.Notices, []byte) {
+		return list, edgeproto.SignNotices(edge.priv, id, edge.origin, nonce, list)
+	}
+	a := newAgent(t, edge.srv.URL, t.TempDir(), newFakeSSH())
+	a.state.linkFile = func(oldname, newname string) error {
+		return &os.LinkError{Op: "link", Old: oldname, New: newname, Err: syscall.EPERM}
+	}
+	run(t, a)
+	ec := edge.nextControl(t)
+	ec.send(edgeproto.Ping{})
+	expect[edgeproto.Pong](t, ec)
+	if key, err := a.state.PinnedKey(); err != nil || !key.Equal(edge.pub) {
+		t.Fatalf("pinned key %x, %v; want the edge's", key, err)
+	}
+	if got, err := a.Notices(); err != nil || got.Notices != nil {
+		t.Fatalf("notices stored without hard links: %+v, %v", got, err)
 	}
 }
