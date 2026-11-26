@@ -22,10 +22,7 @@ the [Cloudfield privacy policy](../privacy.md).
 
 As of 2026-11-26 the project edge also answers at `edge.onaether.dev` and
 `auth.onaether.dev`, and at `https://edge.onaether.dev/mcp` for connectors
-set up there; this policy covers those addresses too. A server older than
-v0.8.7 that is enrolled at `edge.onaether.dev` accepts a connector only at
-`https://edge.onaether.dev/mcp`; its administrator must update it to v0.8.7
-or later before a connector at `https://edge.cloudfield.ai/mcp` works.
+set up there; this policy covers those addresses too.
 
 Cloudfield is self-hosted. Three parties handle connector data:
 
