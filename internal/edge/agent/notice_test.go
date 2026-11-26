@@ -139,10 +139,18 @@ func pinNow(t *testing.T, s *State, key ed25519.PublicKey) pin {
 	if err := s.Pin(key); err != nil {
 		t.Fatal(err)
 	}
-	p, err := s.pinned()
+	return heldPin(t, s)
+}
+
+// heldPin opens the current pin as a handshake does, holding its file
+// open until the test ends.
+func heldPin(t *testing.T, s *State) pin {
+	t.Helper()
+	p, err := openPin(s.path(pinFile))
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(p.close)
 	return p
 }
 
@@ -275,10 +283,7 @@ func TestNoticesAcrossAnOlderBinarysRepin(t *testing.T) {
 		p := pinNow(t, s, a)
 		if older {
 			writeOlderPin(t, s, a)
-			var err error
-			if p, err = s.pinned(); err != nil {
-				t.Fatal(err)
-			}
+			p = heldPin(t, s)
 		}
 		if err := s.writeNotices(p, testStored()); err != nil {
 			t.Fatal(err)
@@ -302,10 +307,7 @@ func TestOlderBinarysTrustDuringAWriteStands(t *testing.T) {
 	a, _, _ := ed25519.GenerateKey(rand.Reader)
 	b, _, _ := ed25519.GenerateKey(rand.Reader)
 	writeOlderPin(t, s, a)
-	read, err := s.pinned()
-	if err != nil {
-		t.Fatal(err)
-	}
+	read := heldPin(t, s)
 	writeOlderPin(t, s, b)
 	trusted, err := os.ReadFile(s.path(pinFile))
 	if err != nil {
@@ -352,6 +354,55 @@ func TestOlderBinarysPinDuringTheLinkStoresNothing(t *testing.T) {
 		if _, err := os.Stat(s.path(keyDirFile(a, noticesPinFile))); err == nil {
 			t.Errorf("%s: notices.pin left", name)
 		}
+	}
+}
+
+// TestFirstPinDoesNotTakeAnOlderBinarysPin lets an older binary pin
+// just before pinFirst publishes its first pin: another key stays pinned
+// and is refused as a changed key; the same key is used, not created, and
+// the returned pin holds the file in place.
+func TestFirstPinDoesNotTakeAnOlderBinarysPin(t *testing.T) {
+	a, _, _ := ed25519.GenerateKey(rand.Reader)
+	b, _, _ := ed25519.GenerateKey(rand.Reader)
+	for name, older := range map[string]ed25519.PublicKey{"another key": b, "the same key": a} {
+		s := OpenState(t.TempDir())
+		s.beforePublish = func() { writeOlderPin(t, s, older) }
+		p, created, err := s.pinFirst(a)
+		t.Cleanup(p.close)
+		if got, kerr := s.PinnedKey(); kerr != nil || !got.Equal(older) {
+			t.Fatalf("%s: pinned key %x, %v; want the older binary's", name, got, kerr)
+		}
+		if !older.Equal(a) {
+			if err == nil {
+				t.Errorf("%s: pinFirst took the older binary's pin of another key", name)
+			}
+			continue
+		}
+		cur, serr := os.Stat(s.path(pinFile))
+		if err != nil || created || serr != nil || !os.SameFile(cur, p.file) {
+			t.Errorf("%s: pinFirst = created %v, %v; want the pin file in place, not created", name, created, err)
+		}
+	}
+}
+
+// TestFirstPinHoldsThePinItPublished pins with pinFirst, then lets an
+// older binary pin another key: the pin pinFirst returned is still the
+// file it published, so notices stored under it are not stored.
+func TestFirstPinHoldsThePinItPublished(t *testing.T) {
+	s := OpenState(t.TempDir())
+	a, _, _ := ed25519.GenerateKey(rand.Reader)
+	b, _, _ := ed25519.GenerateKey(rand.Reader)
+	p, created, err := s.pinFirst(a)
+	if err != nil || !created || !p.Key.Equal(a) {
+		t.Fatalf("pinFirst = %x, created %v, %v", p.Key, created, err)
+	}
+	t.Cleanup(p.close)
+	writeOlderPin(t, s, b)
+	if err := s.writeNotices(p, testStored()); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.Notices(noticeServerID); err != nil || got.Notices != nil || noticesFileExists(t, s, b) || noticesFileExists(t, s, a) {
+		t.Fatalf("notices stored under the older binary's pin: %+v, %v", got, err)
 	}
 }
 

@@ -1,7 +1,6 @@
 package edgeagent
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
 	crand "crypto/rand"
@@ -162,7 +161,8 @@ type enrollment struct {
 	// pinned is set when this enrollment pinned the edge key, so its
 	// notices are trusted on first use, as the pin is.
 	pinned bool
-	// pin is the pin the notices were verified under.
+	// pin is the pin the notices were verified under, its file held open
+	// until the enrollment's owner calls pin.close.
 	pin pin
 }
 
@@ -234,24 +234,21 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn, origin string)
 	if ready.ServerID != a.serverID {
 		return enrollment{}, fmt.Errorf("edge enrolled server %s, this server is %s", ready.ServerID, a.serverID)
 	}
-	cur, err := a.state.pinned()
+	cur, err := a.state.PinnedKey()
 	if err != nil {
 		return enrollment{}, err
 	}
-	e := enrollment{ready: ready, protocol: protocol, pin: cur}
-	switch {
-	case cur.Key == nil:
+	if cur == nil {
 		if err = a.state.refuseEarlierPins(); err != nil {
 			return enrollment{}, err
 		}
-		if e.pin, e.pinned, err = a.state.pinFirst(ready.EdgeKey); err != nil {
-			return enrollment{}, err
-		}
-		if e.pinned {
-			slog.Info("edge: pinned edge key", "edge", origin, "fingerprint", edgeproto.EdgeKeyFingerprint(ready.EdgeKey))
-		}
-	case !bytes.Equal(cur.Key, ready.EdgeKey):
-		return enrollment{}, pinMismatch(cur.Key, ready.EdgeKey)
+	}
+	e := enrollment{ready: ready, protocol: protocol}
+	if e.pin, e.pinned, err = a.state.pinFirst(ready.EdgeKey); err != nil {
+		return enrollment{}, err
+	}
+	if e.pinned {
+		slog.Info("edge: pinned edge key", "edge", origin, "fingerprint", edgeproto.EdgeKeyFingerprint(ready.EdgeKey))
 	}
 	if edgeproto.VerifyNotices(ready.EdgeKey, a.serverID, origin, noticeNonce, ready.Notices, ready.NoticesSignature) == nil {
 		e.notices = ready.Notices
@@ -266,6 +263,7 @@ func (a *Agent) session(ctx context.Context) (time.Duration, error) {
 	if err != nil {
 		return 0, err
 	}
+	defer e.pin.close()
 	ready, protocol := e.ready, e.protocol
 	defer cancel()
 	defer c.CloseNow() //nolint:errcheck // the close error of a dead session is not actionable
@@ -569,10 +567,11 @@ func (a *Agent) serve(run, ctx context.Context, s *session) error {
 // Leave tells the edge the operator removed this server, then forgets the
 // owner and the claim code. The pinned edge key is kept.
 func (a *Agent) Leave(ctx context.Context) error {
-	c, cancel, _, err := a.enroll(ctx, a.origin)
+	c, cancel, e, err := a.enroll(ctx, a.origin)
 	if err != nil {
 		return fmt.Errorf("edgeagent: leave %s: %w", a.origin, err)
 	}
+	e.pin.close()
 	defer cancel()
 	s := &session{c: c}
 	if err := s.send(edgeproto.Unenroll{}); err != nil {

@@ -102,6 +102,7 @@ func (a *Agent) probe(ctx context.Context, origin string) (enrollment, error) {
 		return enrollment{}, fmt.Errorf("edgeagent: enroll at %s: %w", origin, err)
 	}
 	defer cancel()
+	e.pin.close()
 	_ = c.Close(websocket.StatusNormalClosure, "")
 	return e, nil
 }
