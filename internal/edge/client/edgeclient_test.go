@@ -683,7 +683,7 @@ func TestLogoutRevokesThenForgets(t *testing.T) {
 	})
 	c := newTestClient(t, edge)
 	token := signIn(t, c)
-	if err := c.Logout(context.Background()); err != nil {
+	if _, err := c.Logout(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if revoked != "Bearer "+token {
@@ -721,7 +721,10 @@ func TestLogoutKeepsConcurrentSignIn(t *testing.T) {
 				t.Fatal(err)
 			}
 			done := make(chan error, 1)
-			go func() { done <- c.Logout(context.Background()) }()
+			go func() {
+				_, err := c.Logout(context.Background())
+				done <- err
+			}()
 			select {
 			case auth := <-revoked:
 				if auth != "Bearer "+oldToken {
@@ -773,7 +776,7 @@ func TestLogoutKeepsTokenWhenEdgeIsUnreachable(t *testing.T) {
 	c := newTestClient(t, edge)
 	token := signIn(t, c)
 	edge.Close()
-	err := c.Logout(context.Background())
+	_, err := c.Logout(context.Background())
 	if err == nil || !strings.Contains(err.Error(), "still valid") {
 		t.Fatalf("Logout error = %v, want it to say the token is still valid", err)
 	}

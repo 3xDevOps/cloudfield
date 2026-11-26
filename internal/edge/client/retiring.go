@@ -2,7 +2,9 @@ package edgeclient
 
 import (
 	"context"
+	"maps"
 	"net/http"
+	"sync"
 
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 )
@@ -58,6 +60,26 @@ func (c *Client) observe(resp *http.Response) {
 	c.mu.Lock()
 	c.retiring = notice
 	c.mu.Unlock()
+	if notice != nil {
+		seen.Lock()
+		seen.by[c.origin] = *notice
+		seen.Unlock()
+	}
+}
+
+// seen holds the latest notice any client of this process received, by
+// the relay origin it was received for.
+var seen = struct {
+	sync.Mutex
+	by map[string]Retiring
+}{by: map[string]Retiring{}}
+
+// Seen is every notice an edge answer to this process carried, by the
+// relay origin of the client that received it.
+func Seen() map[string]Retiring {
+	seen.Lock()
+	defer seen.Unlock()
+	return maps.Clone(seen.by)
 }
 
 func parseRetiring(value string) (Retiring, bool) {

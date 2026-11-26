@@ -182,7 +182,7 @@ func TestTokenReachesOnlyTheTwoOriginsThatIssuedIt(t *testing.T) {
 	if _, err := c.Dial(context.Background(), testServerID); err == nil {
 		t.Fatal("Dial followed a redirect")
 	}
-	if err := c.Logout(context.Background()); err == nil {
+	if _, err := c.Logout(context.Background()); err == nil {
 		t.Fatal("Logout followed a redirect")
 	}
 	if got := elsewhere.seen(); len(got) != 0 {

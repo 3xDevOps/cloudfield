@@ -186,6 +186,9 @@ type RefusedError struct {
 	// protocol version. Without either it came from something in
 	// between, such as a captive portal, a proxy or a firewall.
 	FromEdge bool
+	// Retired is the replacement relay origin a 410 from a retired
+	// address named, empty unless it is a canonical origin.
+	Retired string
 }
 
 func (e *RefusedError) Error() string {
@@ -206,7 +209,12 @@ func (e *RefusedError) Is(target error) bool {
 // refusal builds the error for a response from origin that is not a
 // success. body is what could be read of the response.
 func (c *Client) refusal(op, origin string, resp *http.Response, body []byte) *RefusedError {
-	var eb edgeproto.ErrorBody
+	var eb struct {
+		edgeproto.ErrorBody
+		Retired *struct {
+			Replacement string `json:"replacement"`
+		} `json:"retired"`
+	}
 	status := resp.StatusCode
 	msg := http.StatusText(status)
 	fromEdge := resp.Header.Get(edgeproto.HeaderVersion) != ""
@@ -218,7 +226,11 @@ func (c *Client) refusal(op, origin string, resp *http.Response, body []byte) *R
 	if len(msg) > maxShownText {
 		msg = msg[:maxShownText] + "..."
 	}
-	return &RefusedError{Edge: HostOf(origin), URL: c.origin, Op: op, Status: status, Message: clean(msg), FromEdge: fromEdge}
+	var retired string
+	if status == http.StatusGone && eb.Retired != nil && printable(eb.Retired.Replacement) && canonicalOrigin(eb.Retired.Replacement) {
+		retired = eb.Retired.Replacement
+	}
+	return &RefusedError{Edge: HostOf(origin), URL: c.origin, Op: op, Status: status, Message: clean(msg), FromEdge: fromEdge, Retired: retired}
 }
 
 // clean replaces control characters and invalid UTF-8 in text the edge

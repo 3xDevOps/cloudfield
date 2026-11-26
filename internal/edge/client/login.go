@@ -42,7 +42,8 @@ func (c *Client) StartLogin(ctx context.Context, label string) (*Login, error) {
 	if err != nil {
 		return nil, err
 	}
-	req := edgeproto.DeviceStartRequest{Label: label, Key: edgeproto.DeviceKeyLine(signer.PublicKey())}
+	relay, _ := Canonical(c.origin)
+	req := edgeproto.DeviceStartRequest{Label: label, Key: edgeproto.DeviceKeyLine(signer.PublicKey()), RelayOrigin: relay}
 	if err = req.Validate(); err != nil {
 		return nil, fmt.Errorf("sign in: device label %q: %w", label, err)
 	}
@@ -167,22 +168,39 @@ func (c *Client) store(l *Login, resp edgeproto.DeviceTokenResponse) (Session, e
 	return s.Session, nil
 }
 
+// Unrevoked is a device token Logout deleted although the edge did not
+// revoke it: the address that issued it answered that it is retired, and
+// Replacement is the relay origin it named, unauthenticated text.
+type Unrevoked struct {
+	Device      edgeproto.Device
+	Replacement string
+}
+
 // Logout revokes this machine's device token at the sign-in origin that
 // issued it and deletes it from TokensFile. A token the edge already
-// refuses is deleted too. When the edge cannot be reached the token is
-// kept, so the revocation can be retried. The device key stays: servers
-// know this device by it.
-func (c *Client) Logout(ctx context.Context) error {
+// refuses is deleted too, and so is one whose address answers that it is
+// retired, which Logout then returns as Unrevoked. When the edge cannot
+// be reached the token is kept, so the revocation can be retried. The
+// device key stays: servers know this device by it.
+func (c *Client) Logout(ctx context.Context) (*Unrevoked, error) {
 	s, err := c.session()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	err = c.call(ctx, "sign out", http.MethodPost, s.SigninOrigin, edgeproto.PathLogout, s.Token, nil, nil)
-	var refused *RefusedError
-	if err != nil && (!errors.As(err, &refused) || refused.Status != http.StatusUnauthorized) {
-		return fmt.Errorf("%w; the token is still valid and kept in %s so you can retry", err, tokensPath(c.dir))
+	var (
+		refused   *RefusedError
+		unrevoked *Unrevoked
+	)
+	switch {
+	case err == nil:
+	case errors.As(err, &refused) && refused.Status == http.StatusUnauthorized:
+	case errors.As(err, &refused) && refused.Status == http.StatusGone && refused.Retired != "":
+		unrevoked = &Unrevoked{Device: s.Device, Replacement: refused.Retired}
+	default:
+		return nil, fmt.Errorf("%w; the token is still valid and kept in %s so you can retry", err, tokensPath(c.dir))
 	}
-	return updateTokens(c.dir, func(f tokensFile) {
+	return unrevoked, updateTokens(c.dir, func(f tokensFile) {
 		// A sign-in may have replaced the token while revocation was in
 		// flight. Forget only the credential this logout revoked.
 		if current := f.Edges[c.origin]; current.Token == s.Token && current.SigninOrigin == s.SigninOrigin {
