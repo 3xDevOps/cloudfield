@@ -283,7 +283,13 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protocol.RunLaunchParams, mode domain.LaunchMode, policy domain.AccountFallback,
 	created func(domain.RunID), skipped *[]protocol.SkippedAccount) (*domain.Run, *protocol.Error) {
 	ctx = runtime.WithSteps(ctx)
+	var warming sync.WaitGroup
+	if mirrors := s.cfg.Services.Mirrors; mirrors != nil && p.CachedBase == "" {
+		// The launch's own base capture reports a refresh that fails.
+		warming.Go(func() { _ = mirrors.Warm(ctx, domain.WorkspaceID(p.WorkspaceID)) })
+	}
 	measured, err := fallback.Measure(ctx, s.cfg.Store, s.cfg.Services.Usage, member, p.AccountMemberID, p.Harness, policy)
+	warming.Wait()
 	if err != nil {
 		return nil, rpcError(err)
 	}
