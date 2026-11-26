@@ -2,6 +2,7 @@ package edgeagent
 
 import (
 	"bufio"
+	"bytes"
 	"cmp"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -240,7 +241,7 @@ func TestFirstPinKeepsAKeyPinnedMeanwhile(t *testing.T) {
 	if err != nil || !created {
 		t.Fatalf("pinFirst with nothing pinned: created %v, %v", created, err)
 	}
-	if again, created, err := s.pinFirst(trusted); err != nil || created || again.ID != first.ID || !again.Key.Equal(first.Key) {
+	if again, created, err := s.pinFirst(trusted); err != nil || created || !os.SameFile(again.file, first.file) || !again.Key.Equal(first.Key) {
 		t.Fatalf("pinFirst of the pinned key: %+v, created %v, %v; want the same pin, not created", again, created, err)
 	}
 	if _, _, err := s.pinFirst(presented); err == nil {
@@ -251,9 +252,9 @@ func TestFirstPinKeepsAKeyPinnedMeanwhile(t *testing.T) {
 	}
 }
 
-// writeLegacyPin writes key as a build before pin ids, or an older
-// binary's edge trust, does: the key alone.
-func writeLegacyPin(t *testing.T, s *State, key ed25519.PublicKey) {
+// writeOlderPin writes key as an older binary's `edge trust` does: the
+// key alone, by a rename, without the state lock.
+func writeOlderPin(t *testing.T, s *State, key ed25519.PublicKey) {
 	t.Helper()
 	if err := s.write(pinFile, struct {
 		Key ed25519.PublicKey `json:"key"`
@@ -262,40 +263,65 @@ func writeLegacyPin(t *testing.T, s *State, key ed25519.PublicKey) {
 	}
 }
 
-// TestNoticesAcrossAnOlderBinarysRepin stores notices, then lets an older
-// binary pin another key and the first again without an id, as after a
-// rollback: the stored notices are none until a new enrollment stores
-// its own under a pin with an id.
+// TestNoticesAcrossAnOlderBinarysRepin stores notices under a pin this
+// build wrote and under one an older binary wrote, then lets an older
+// binary pin another key and the first again, as after a rollback: the
+// stored notices are none.
 func TestNoticesAcrossAnOlderBinarysRepin(t *testing.T) {
-	for _, legacyFirst := range []bool{false, true} {
+	for _, older := range []bool{false, true} {
 		s := OpenState(t.TempDir())
 		a, _, _ := ed25519.GenerateKey(rand.Reader)
 		b, _, _ := ed25519.GenerateKey(rand.Reader)
 		p := pinNow(t, s, a)
-		if legacyFirst {
-			writeLegacyPin(t, s, a)
-			if err := s.writeNotices(pin{Key: a}, testStored()); err == nil {
-				t.Fatal("notices stored under a pin without an id")
-			}
+		if older {
+			writeOlderPin(t, s, a)
 			var err error
-			if p, err = s.identify(pin{Key: a}); err != nil || p.ID == "" {
-				t.Fatalf("identify a legacy pin: %+v, %v", p, err)
+			if p, err = s.pinned(); err != nil {
+				t.Fatal(err)
 			}
 		}
 		if err := s.writeNotices(p, testStored()); err != nil {
 			t.Fatal(err)
 		}
 		if got, err := s.Notices(noticeServerID); err != nil || len(got.Notices) != 1 {
-			t.Fatalf("legacy first %v: stored notices %+v, %v", legacyFirst, got, err)
+			t.Fatalf("pin by an older binary %v: stored notices %+v, %v", older, got, err)
 		}
-		writeLegacyPin(t, s, b)
-		writeLegacyPin(t, s, a)
+		writeOlderPin(t, s, b)
+		writeOlderPin(t, s, a)
 		if got, err := s.Notices(noticeServerID); err != nil || got.Notices != nil {
-			t.Fatalf("legacy first %v: read %d notice(s) from before the old-format re-pin", legacyFirst, len(got.Notices))
+			t.Fatalf("pin by an older binary %v: read %d notice(s) from before the old-format re-pin", older, len(got.Notices))
 		}
-		if _, err := s.identify(pin{Key: b}); err == nil {
-			t.Fatal("identify gave an id to a pin of another key")
-		}
+	}
+}
+
+// TestOlderBinarysTrustDuringAWriteStands lets an older binary's edge
+// trust pin B between this build's read of the pin A and its notices
+// write: B stays pinned, its file untouched, and no notices are stored.
+func TestOlderBinarysTrustDuringAWriteStands(t *testing.T) {
+	s := OpenState(t.TempDir())
+	a, _, _ := ed25519.GenerateKey(rand.Reader)
+	b, _, _ := ed25519.GenerateKey(rand.Reader)
+	writeOlderPin(t, s, a)
+	read, err := s.pinned()
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeOlderPin(t, s, b)
+	trusted, err := os.ReadFile(s.path(pinFile))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.writeNotices(read, testStored()); err != nil {
+		t.Fatal(err)
+	}
+	if after, err := os.ReadFile(s.path(pinFile)); err != nil || !bytes.Equal(after, trusted) {
+		t.Fatalf("the pin file changed after the notices write: %s, %v", after, err)
+	}
+	if got, err := s.PinnedKey(); err != nil || !got.Equal(b) {
+		t.Fatalf("pinned key %x, %v; want the one edge trust pinned", got, err)
+	}
+	if got, err := s.Notices(noticeServerID); err != nil || got.Notices != nil || noticesFileExists(t, s, a) {
+		t.Fatalf("notices stored across the older binary's pin: %+v, %v", got, err)
 	}
 }
 

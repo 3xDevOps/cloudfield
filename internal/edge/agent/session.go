@@ -253,11 +253,6 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn, origin string)
 	case !bytes.Equal(cur.Key, ready.EdgeKey):
 		return enrollment{}, pinMismatch(cur.Key, ready.EdgeKey)
 	}
-	if e.pin.ID == "" {
-		if e.pin, err = a.state.identify(e.pin); err != nil {
-			return enrollment{}, err
-		}
-	}
 	if edgeproto.VerifyNotices(ready.EdgeKey, a.serverID, origin, noticeNonce, ready.Notices, ready.NoticesSignature) == nil {
 		e.notices = ready.Notices
 	}

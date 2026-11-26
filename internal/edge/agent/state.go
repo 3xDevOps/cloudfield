@@ -2,12 +2,11 @@ package edgeagent
 
 import (
 	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/subtle"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
@@ -37,8 +36,11 @@ const (
 	// the key last reported for this server.
 	edgeStateFile = "edge_state.json"
 	// noticesFile, beside ownerFile, holds the verified notices of the
-	// latest enrollment at the edge holding the key.
-	noticesFile = "notices.json"
+	// latest enrollment at the edge holding the key; noticesPinFile, a
+	// hard link to the pin file they were stored under, binds them to
+	// that pin.
+	noticesFile    = "notices.json"
+	noticesPinFile = "notices.pin"
 )
 
 // State is the agent's persistent state: the pinned edge key, the owner,
@@ -124,24 +126,48 @@ func (c ClaimCode) Usable(now time.Time) bool {
 	return c.Hash != "" && c.AttemptsLeft > 0 && !now.After(c.ExpiresAt)
 }
 
-// pin is the pinned edge key. ID is new at every Pin, so a write that
-// read one pin cannot land after the key was pinned again; a pin written
-// before IDs existed has none.
+// pin is the pinned edge key. file is the pin file it was read from:
+// every pin, by this build or an older one, replaces the file by a
+// rename, so a later pin, even of the same key, is another file.
 type pin struct {
-	Key ed25519.PublicKey `json:"key"`
-	ID  string            `json:"id,omitempty"`
+	Key  ed25519.PublicKey `json:"key"`
+	file os.FileInfo
+}
+
+// samePin reports whether a and b were read from one pin file. A file
+// number is reused once its file is gone, as after a pin of another key
+// and a pin of the first again, so the write time, new at every pin, must
+// match too.
+func samePin(a, b pin) bool {
+	return a.file != nil && b.file != nil && os.SameFile(a.file, b.file) && a.file.ModTime().Equal(b.file.ModTime())
 }
 
 // pinned returns the pin, with a nil Key when none is pinned.
 func (s *State) pinned() (pin, error) {
+	f, err := os.Open(s.path(pinFile))
+	if errors.Is(err, fs.ErrNotExist) {
+		return pin{}, nil
+	}
+	if err != nil {
+		return pin{}, fmt.Errorf("edgeagent: %w", err)
+	}
+	defer f.Close() //nolint:errcheck // read-only
+	info, err := f.Stat()
+	if err != nil {
+		return pin{}, fmt.Errorf("edgeagent: %w", err)
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return pin{}, fmt.Errorf("edgeagent: read %s: %w", f.Name(), err)
+	}
 	var p pin
-	ok, err := s.read(pinFile, &p)
-	if err != nil || !ok {
-		return pin{}, err
+	if err := json.Unmarshal(data, &p); err != nil {
+		return pin{}, fmt.Errorf("edgeagent: parse %s: %w", f.Name(), err)
 	}
 	if len(p.Key) != ed25519.PublicKeySize {
-		return pin{}, fmt.Errorf("edgeagent: %s holds a %d-byte key, want %d", s.path(pinFile), len(p.Key), ed25519.PublicKeySize)
+		return pin{}, fmt.Errorf("edgeagent: %s holds a %d-byte key, want %d", f.Name(), len(p.Key), ed25519.PublicKeySize)
 	}
+	p.file = info
 	return p, nil
 }
 
@@ -189,34 +215,6 @@ func (s *State) pinFirst(key ed25519.PublicKey) (pin, bool, error) {
 	return cur, false, nil
 }
 
-// identify gives p, a pin written without an id, as by a build before
-// pin ids or an older binary's `edge trust`, an id, and returns it. When
-// another key was pinned meanwhile it is refused as a changed edge key.
-func (s *State) identify(p pin) (pin, error) {
-	unlock, err := s.lock()
-	if err != nil {
-		return pin{}, err
-	}
-	defer unlock()
-	cur, err := s.pinned()
-	switch {
-	case err != nil:
-		return pin{}, err
-	case !cur.Key.Equal(p.Key):
-		return pin{}, pinMismatch(cur.Key, p.Key)
-	case cur.ID != "":
-		return cur, nil
-	}
-	cur.ID = newPinID()
-	return cur, s.write(pinFile, cur)
-}
-
-func newPinID() string {
-	id := make([]byte, 16)
-	_, _ = rand.Read(id) // crypto/rand.Read never returns an error.
-	return hex.EncodeToString(id)
-}
-
 // pinLocked pins key under the state lock.
 func (s *State) pinLocked(key ed25519.PublicKey) (pin, error) {
 	cur, err := s.pinned()
@@ -227,12 +225,16 @@ func (s *State) pinLocked(key ed25519.PublicKey) (pin, error) {
 		if k == nil {
 			continue
 		}
-		if err := s.remove(keyDirFile(k, noticesFile)); err != nil {
-			return pin{}, err
+		for _, file := range []string{noticesFile, noticesPinFile} {
+			if err := s.remove(keyDirFile(k, file)); err != nil {
+				return pin{}, err
+			}
 		}
 	}
-	p := pin{Key: key, ID: newPinID()}
-	return p, s.write(pinFile, p)
+	if err := s.write(pinFile, pin{Key: key}); err != nil {
+		return pin{}, err
+	}
+	return s.pinned()
 }
 
 // refuseEarlierPins refuses a first pin while an edge key pinned by a
@@ -348,30 +350,35 @@ func (s *State) writeEdgeState(serverID, state string) error {
 }
 
 // StoredNotices are the notices of the latest enrollment at the edge
-// holding the pinned key, verified against it for the server ServerID
-// under the pin whose id is PinID, and when they came. FirstUse is set
+// holding the pinned key, verified against it for the server ServerID,
+// and when they came. FirstUse is set
 // when that enrollment pinned the key, so they are trusted as the pin
 // is: on first use, for display only.
 type StoredNotices struct {
 	ServerID string             `json:"server_id"`
-	PinID    string             `json:"pin_id"`
 	Received time.Time          `json:"received"`
 	FirstUse bool               `json:"first_use,omitempty"`
 	Notices  []edgeproto.Notice `json:"notices"`
 }
 
 // Notices returns the stored notices of the pinned key for the server
-// serverID, none when the latest enrollment had none, no key is pinned,
-// they were verified for another server id, which is this server before
-// its host key changed, or under another pin, as when an older binary
-// pinned the key again without an id.
+// serverID. They are none when the latest enrollment had none, no key is
+// pinned, they were verified for another server id, which is this server
+// before its host key changed, or they were stored under another pin
+// file, as when any build pinned a key since: notices.pin, the hard link
+// made when they were stored, must be the current pin file, which the
+// link keeps from being reused.
 func (s *State) Notices(serverID string) (StoredNotices, error) {
 	cur, err := s.pinned()
-	if err != nil || cur.Key == nil || cur.ID == "" {
+	if err != nil || cur.Key == nil {
 		return StoredNotices{}, err
 	}
+	stored, err := os.Stat(s.path(keyDirFile(cur.Key, noticesPinFile)))
+	if err != nil || !os.SameFile(stored, cur.file) {
+		return StoredNotices{}, nil
+	}
 	var n StoredNotices
-	if _, err = s.read(keyDirFile(cur.Key, noticesFile), &n); err != nil || n.ServerID != serverID || n.PinID != cur.ID {
+	if _, err = s.read(keyDirFile(cur.Key, noticesFile), &n); err != nil || n.ServerID != serverID {
 		return StoredNotices{}, err
 	}
 	return n, nil
@@ -379,27 +386,33 @@ func (s *State) Notices(serverID string) (StoredNotices, error) {
 
 // writeNotices replaces the stored notices of p's key, which verified
 // them, with n, and forgets them when n holds none. It writes nothing
-// once the key was pinned again, or another key pinned, since p was
-// read: the notices are not that pin's.
+// once any build pinned a key, the same one included, since p was read:
+// the notices are not that pin's. Where the pin file cannot be hard
+// linked, it stores none.
 func (s *State) writeNotices(p pin, n StoredNotices) error {
-	if p.ID == "" {
-		return errors.New("edgeagent: notices are stored only under a pin with an id")
-	}
 	unlock, err := s.lock()
 	if err != nil {
 		return err
 	}
 	defer unlock()
 	cur, err := s.pinned()
-	if err != nil || cur.ID != p.ID || !cur.Key.Equal(p.Key) {
+	if err != nil || !samePin(cur, p) {
 		return err
 	}
-	name := keyDirFile(p.Key, noticesFile)
+	name, link := keyDirFile(p.Key, noticesFile), keyDirFile(p.Key, noticesPinFile)
+	if err := s.remove(link); err != nil {
+		return err
+	}
 	if len(n.Notices) == 0 {
 		return s.remove(name)
 	}
-	n.PinID = p.ID
-	return s.write(name, n)
+	if err := s.write(name, n); err != nil {
+		return err
+	}
+	if os.Link(s.path(pinFile), s.path(link)) != nil {
+		return s.remove(name)
+	}
+	return nil
 }
 
 // writeOwner records owner for the pinned key.
