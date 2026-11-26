@@ -1,6 +1,7 @@
 package edgetest
 
 import (
+	"context"
 	"crypto/ed25519"
 	"errors"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/cli"
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	"github.com/3xDevOps/cloudfield/internal/edge/relay"
+	"github.com/3xDevOps/cloudfield/internal/version"
 )
 
 // An edge that starts serving a second origin pair keeps serving the
@@ -23,7 +25,7 @@ import (
 func TestOriginPairs(t *testing.T) {
 	t.Parallel()
 	h := newHarness(t)
-	relayA := h.relayURL
+	signinA, relayA := h.signinURL, h.relayURL
 	from := h.proxy.mark()
 	a := h.newServer(edgeproto.PolicyAccount)
 	ready := h.readyTo(t, a, from)
@@ -88,6 +90,26 @@ func TestOriginPairs(t *testing.T) {
 	}
 	if logins := h.node.svc.DeviceLogins(); logins[signinB] != 1 {
 		t.Fatalf("device logins %v, want one at %s", logins, signinB)
+	}
+
+	// The edge recorded each server at the relay origin it enrolled at,
+	// each device token at the sign-in origin that issued it, though both
+	// were used through the other pair, and the connector request at the
+	// relay origin it came in on.
+	reports, err := h.edgeStore().OriginReports(context.Background(), time.Now())
+	if err != nil || len(reports) != 2 {
+		t.Fatalf("origin reports = %+v, %v", reports, err)
+	}
+	for i, want := range []struct {
+		relay, signin, server string
+		connectors            int
+	}{{relayA, signinA, a.id, 0}, {relayB, signinB, b.id, 1}} {
+		r := reports[i]
+		if r.RelayOrigin != want.relay || r.SigninOrigin != want.signin || len(r.Servers) != 1 || r.Servers[0].ID != want.server ||
+			r.Servers[0].AgentVersion != version.Version || r.Servers[0].OwnerLogin != alice.Login ||
+			r.DeviceTokens.Day != 1 || r.DeviceTokens.Total != 1 || r.DeviceOnlyAccounts.Total != 0 || r.ConnectorServers.Total != want.connectors {
+			t.Errorf("report of %s: %+v, want server %s, one device token, %d servers with connector requests", want.relay, r, want.server, want.connectors)
+		}
 	}
 }
 
