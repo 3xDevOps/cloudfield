@@ -16,8 +16,8 @@ surfaces; the server gateway authenticates each request with Tailscale WhoIs
 and no browser token.
 
 The visual contract is a dense developer workbench on neutral surfaces: in
-the dark theme blue-black, with a teal accent and a gold primary button, as
-on the website, and in the light one white with a teal accent: flat panes, compact controls, restrained elevation and short
+the dark theme Catppuccin Mocha and in the light one Catppuccin Latte, each
+with a sky accent and a peach primary button: flat panes, compact controls, restrained elevation and short
 token-driven motion. `docs/styles.md` defines the tokens, type and motion.
 
 The gateways and their transport boundaries are documented in
@@ -518,7 +518,7 @@ On a desktop window with a fine pointer a row also arranges the
 hover, and `Mod+Enter` on a focused row open the session in a new tile right
 of the focused one, or as a tab of it when there is no room. A row dragged
 with a mouse or a pen drops onto a tile. A row whose session is the active
-tab of a tile on screen carries a 2px teal bar down its left edge and has
+tab of a tile on screen carries a 2px sky bar down its left edge and has
 square left corners, so the bar meets the selected fill; the selected row
 (`aria-current="page"`) is the focused tile's session.
 
@@ -3109,10 +3109,10 @@ when the focus does. The strip is a `tablist` named "Sessions in this tile":
   truncates at 240px. A tab keeps four letters of its title: its floor is 112px, or 192px
   while it names its view or carries the badge. A strip with under 192px a
   tab is tight: its background tabs show the view's icon without the name, on
-  a 128px floor that keeps it clear of the close button, and a gold dot for
+  a 128px floor that keeps it clear of the close button, and a peach dot for
   the badge, all cut to one width. The strip never scrolls. Tabs that do not fit at
   their floor fold into an "N more" menu before "+", the last background tab
-  first and those that need you last; the menu carries a gold dot while a
+  first and those that need you last; the menu carries a peach dot while a
   folded tab needs you, and picking a tab there activates it.
 - **Add a tab** ("+") opens the picker in a popover.
 - **Split right** and **Split down**, on the focused tile, open an empty
@@ -3150,16 +3150,16 @@ foot adds "or drag a session or a view here".
 A session shows each view once. A view that is the active tab of another
 tile carries an arrow in the view switch and the picker, with the tooltip
 "On screen in the tile at right" (or left, above, below) or "In a parked
-tile". Hovering or focusing it draws a dashed teal outline on that tile, and
+tile". Hovering or focusing it draws a dashed sky outline on that tile, and
 choosing it focuses that tile. A view held by a background tab has no arrow;
 choosing it activates that tab.
 
 **Focus.** A pointer press in a tile, or focus that follows a `Tab` key
-press, focuses it. The focused tile's strip is on `--canvas` with a 2px teal
+press, focuses it. The focused tile's strip is on `--canvas` with a 2px sky
 bar under its active tab or its "New tile" label; an unfocused strip is on
 `--chrome` with no bar, and a picker marks its active row only while the
 keyboard is in it.
-With two or more tiles on screen the focused one also has a 1px teal
+With two or more tiles on screen the focused one also has a 1px sky
 outline. When a navigation, a pick or a shortcut moves
 the focus while the keyboard sits in another tile, the keyboard moves to the
 new tile's heading. Only the focused tile answers the session's shortcuts,
@@ -3173,7 +3173,7 @@ its own. With a mouse or a pen, a sidebar row, a tab and every view but the
 one its tile shows can be dragged (`drag.tsx`); a press becomes a drag after
 4px. The outer fifth of a tile splits it on that side, its middle or strip
 adds a tab, and a tab over a strip moves to where the 2px line shows. A
-teal preview marks what the drop takes. A split's preview is the rectangle
+sky preview marks what the drop takes. A split's preview is the rectangle
 the new tile will have after the drop, seams moved for the floor and the
 room of a tile the drag empties included: it covers what is there now with a
 `--canvas` scrim and names what lands on a plate at its centre. The
@@ -3394,7 +3394,7 @@ Enhanced sessions show who controls the agent's session and who watches it
 session's controls:
 
 - Each watcher is an `Avatar` named by its tooltip.
-- The controller's avatar has a teal ring. When this tab controls, the
+- The controller's avatar has a sky ring. When this tab controls, the
   avatar is the **You control** menu, which holds **Release**; the words show
   once the row is 960px wide.
 - Otherwise the existing `ControlButton` follows the controller: take a free
@@ -5953,10 +5953,10 @@ check the connection. Your key is unchanged.` with **Retry**. The
 entry stays hidden until a key is saved by design: Settings › Connections ›
 Linear is the way in. `?page=linear` without a key
 still opens and shows **Linear is not connected** with the server's error and a
-button to Settings; with a refused key it shows **Linear refused your API key** in the failed tone, as Settings does (gold is for not connected),
+button to Settings; with a refused key it shows **Linear refused your API key** in the failed tone, as Settings does (peach is for not connected),
 **Open Linear settings** as the primary button, **Retry** second, and no
 search or team filter. The page holds a header primary while an error with a
-filled button shows, so the phone's **New** pill is not gold beside it. Status
+filled button shows, so the phone's **New** pill is not peach beside it. Status
 badges are neutral: Linear's own status glyph (`status-icon.tsx`, by state
 type) in muted text, never a session-state colour. The page and the Settings section are keyed by
 `identityKey`, and a Connect or Disconnect that finishes after an identity

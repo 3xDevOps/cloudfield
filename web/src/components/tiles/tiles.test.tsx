@@ -438,7 +438,7 @@ describe('a session in two tiles', () => {
 
 describe('the header row', () => {
   const header = (n: number) => tiles()[n - 1].querySelector('header')!
-  const gold = () => [...document.querySelectorAll('header [data-slot=button]')].filter((button) => button.className.includes('bg-action'))
+  const primary = () => [...document.querySelectorAll('header [data-slot=button]')].filter((button) => button.className.includes('bg-action'))
   const asking = { ...enhanced, status: 'needs-attention', state: 'needs-you' } as const
 
   it('keeps the strip and the view row where they are when focus moves between tiles', async () => {
@@ -461,7 +461,7 @@ describe('the header row', () => {
     }
   })
 
-  it('shows a session its controls once, its other tile the state alone, and one gold action on screen', async () => {
+  it('shows a session its controls once, its other tile the state alone, and one primary action on screen', async () => {
     act(() => state().upsertRun(run({ ...asking, id: 'run_5', task: 'pick a port', reason: 'needs input: Which port?' })))
     show('run_3')
     beside('run_3', 'changes')
@@ -472,7 +472,7 @@ describe('the header row', () => {
     expect(within(header(2)).queryAllByRole('button')).toEqual([])
     expect(within(header(2)).getByText('Needs you').getAttribute('role')).toBeNull()
     expect(within(header(1)).getByRole('button', { name: 'Reply' }).className).not.toContain('bg-action')
-    expect(gold()).toEqual([within(header(3)).getByRole('button', { name: 'Reply' })])
+    expect(primary()).toEqual([within(header(3)).getByRole('button', { name: 'Reply' })])
 
     fireEvent.click(tile(3).getByRole('button', { name: 'Maximize' }))
     expect(frames.get('run_3:session')).toMatchObject({ controls: true, arrows: { changes: { where: 'On screen in the tile at right' } } })
@@ -480,7 +480,7 @@ describe('the header row', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Restore tiles' }))
     fireEvent.pointerDown(tiles()[1])
     expect(toolbars()).toEqual([0, 1, 1])
-    expect(gold()).toEqual([within(header(2)).getByRole('button', { name: 'Reply' })])
+    expect(primary()).toEqual([within(header(2)).getByRole('button', { name: 'Reply' })])
   })
 
   it('sizes the row from its own width: icons for the view names under 800px, and under 560px no reason and Session tree under More', async () => {
