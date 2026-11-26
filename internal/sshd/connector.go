@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
-	edgeagent "github.com/3xDevOps/cloudfield/internal/edge/agent"
 	edgeclient "github.com/3xDevOps/cloudfield/internal/edge/client"
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
@@ -158,10 +157,8 @@ func connectorCodeHash(code string) string {
 // relay origin each is about; none while the server has no edge or the
 // edge sent none.
 func (s *Server) edgeNotices() (map[string]edgeproto.Notice, error) {
-	edge, ok := s.currentEdgeOwner().(interface {
-		Notices() (edgeagent.StoredNotices, error)
-	})
-	if !ok {
+	edge := s.currentEdgeOwner()
+	if edge == nil {
 		return nil, nil
 	}
 	stored, err := edge.Notices()

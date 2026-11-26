@@ -25,6 +25,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/acphost/acpmock"
 	"github.com/3xDevOps/cloudfield/internal/connector"
 	"github.com/3xDevOps/cloudfield/internal/domain"
+	edgeagent "github.com/3xDevOps/cloudfield/internal/edge/agent"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
 	"github.com/3xDevOps/cloudfield/internal/sshd"
 )
@@ -40,6 +41,9 @@ func (e localEdge) Origin() string         { return e.origin }
 func (localEdge) Connected() bool          { return true }
 func (localEdge) EdgeVersion() int         { return 2 }
 func (e localEdge) RelayOrigins() []string { return []string{e.origin} }
+func (localEdge) Notices() (edgeagent.StoredNotices, error) {
+	return edgeagent.StoredNotices{}, nil
+}
 
 var consentRequest = regexp.MustCompile(`name="request" value="([^"]+)"`)
 
