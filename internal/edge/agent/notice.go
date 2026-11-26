@@ -2,8 +2,7 @@ package edgeagent
 
 import (
 	"fmt"
-	"strings"
-	"unicode"
+	"math"
 
 	edgeclient "github.com/3xDevOps/cloudfield/internal/edge/client"
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
@@ -27,16 +26,10 @@ func noticeFor(notices []edgeproto.Notice, origin string) (edgeproto.Notice, boo
 	return edgeproto.Notice{}, false
 }
 
-// MoveCommand moves a server off an address n names, on the server's
-// host.
-func MoveCommand(n edgeproto.Notice) string {
-	return "sudo cloudfield-server edge move " + n.Replacement
-}
-
-// NoticeLine says what n means for a server enrolled at its origin and
-// how to move it.
-func NoticeLine(n edgeproto.Notice) string {
-	return retiringClause(n) + "; move this server with: " + MoveCommand(n)
+// NoticeLine says what n means for a server enrolled at its origin, and
+// that move moves it.
+func NoticeLine(n edgeproto.Notice, move string) string {
+	return retiringClause(n) + "; move this server with: " + move
 }
 
 func retiringClause(n edgeproto.Notice) string {
@@ -49,14 +42,7 @@ func retiringClause(n edgeproto.Notice) string {
 	return n.Origin + " is retiring"
 }
 
-// Clean removes control and format characters, which can rewrite a
-// terminal line, from text an edge, or whatever answered in its place,
-// sent.
-func Clean(text string) string {
-	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
-			return -1
-		}
-		return r
-	}, text)
-}
+// Clean replaces the characters that can rewrite a terminal line, as a
+// refused dial's text already has them, in text an edge, or whatever
+// answered in its place, sent.
+func Clean(text string) string { return printableText(text, math.MaxInt) }

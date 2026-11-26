@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,7 +21,7 @@ import (
 // for the address edge-url names, unless the running server is at another
 // address, and cleans the error text of a refused dial.
 func TestEdgeStatusRetiringRow(t *testing.T) {
-	t.Setenv("SUDO_USER", "")
+	t.Setenv("SUDO_USER", "ubuntu")
 	const old, other = "https://edge-old.example.test", "https://edge-new.example.test"
 	now := time.Now()
 	since := now.Add(-time.Hour)
@@ -35,6 +36,8 @@ func TestEdgeStatusRetiringRow(t *testing.T) {
 		status     edgeagent.Status
 		notices    edgeagent.StoredNotices
 		config     string
+		// raw, when set, is written as the notices file instead.
+		raw        string
 		row        string
 		connection string
 		err        error
@@ -52,12 +55,19 @@ func TestEdgeStatusRetiringRow(t *testing.T) {
 				" (the edge sent this with the connection that pinned its key, so it is trusted on first use and shown only)"},
 		{name: "the running server is elsewhere", status: edgeagent.Status{Edge: other, Connected: true, Since: since, PID: os.Getpid(), Heartbeat: now},
 			notices: edgeagent.StoredNotices{Notices: []edgeproto.Notice{dated}},
-			row:     "running      the running server is at " + other + "; restart to apply edge-url: systemctl restart aether-server"},
+			row:     "running      the running server is at " + other + "; restart to apply edge-url: sudo systemctl restart aether-server"},
+		{name: "moved off a retired address, not restarted", status: edgeagent.Status{Edge: other, Error: gone, Since: since},
+			notices: edgeagent.StoredNotices{Notices: []edgeproto.Notice{dated}},
+			row:     "running      the server last dialed " + other + "; restart to apply edge-url: sudo systemctl restart aether-server",
+			connection: "connection   disconnected since " + since.Local().Format(time.DateTime) + ": " + gone, err: errNotConnected},
+		{name: "an unreadable notices file", status: connected, raw: "{not json",
+			row:        "notices      unreadable, so none is shown: edgeagent: ",
+			connection: "connection   connected since " + since.Local().Format(time.DateTime) + "; the edge last answered 0s ago"},
 		{name: "retired since", status: edgeagent.Status{Edge: old, Error: gone, Since: since}, notices: edgeagent.StoredNotices{Notices: []edgeproto.Notice{dated}},
 			row:        "retiring     " + old + " is retiring on 2027-03-01; move this server with: sudo cloudfield-server edge move " + other,
 			connection: "connection   disconnected since " + since.Local().Format(time.DateTime) + ": " + gone, err: errNotConnected},
-		{name: "control characters", status: edgeagent.Status{Edge: old, Error: gone + "\r\x1b[2K\nconnected\u202e", Since: since},
-			connection: "connection   disconnected since " + since.Local().Format(time.DateTime) + ": " + gone + "[2Kconnected", err: errNotConnected},
+		{name: "control characters", status: edgeagent.Status{Edge: old, Error: gone + "\r\x1b[2K\nconnected\u202e\u2028", Since: since},
+			connection: "connection   disconnected since " + since.Local().Format(time.DateTime) + ": " + gone + "??[2K?connected??", err: errNotConnected},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -81,6 +91,14 @@ func TestEdgeStatusRetiringRow(t *testing.T) {
 				tt.notices.Received, tt.notices.ServerID, tt.notices.PinID = since, id, pinned.ID
 				writeJSON(t, noticesPath(dir, pub), tt.notices)
 			}
+			if tt.raw != "" {
+				if err := os.MkdirAll(filepath.Dir(noticesPath(dir, pub)), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(noticesPath(dir, pub), []byte(tt.raw), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			config := tt.config
 			if config == "" {
 				config = serversetup.DefaultConfigPath
@@ -89,17 +107,24 @@ func TestEdgeStatusRetiringRow(t *testing.T) {
 			if err := edgeStatus(&out, dir, old, config, edgeproto.PolicyAccount, now); err != tt.err {
 				t.Fatalf("status = %v, want %v", err, tt.err)
 			}
-			var rows []string
+			var rows, connections []string
 			for line := range strings.SplitSeq(out.String(), "\n") {
-				if strings.HasPrefix(line, "retiring") || strings.HasPrefix(line, "running") {
+				switch {
+				case strings.HasPrefix(line, "retiring"), strings.HasPrefix(line, "running"), strings.HasPrefix(line, "notices"):
 					rows = append(rows, line)
-				}
-				if tt.connection != "" && strings.HasPrefix(line, "connection") && line != tt.connection {
-					t.Errorf("connection row:\n%q\nwant\n%q", line, tt.connection)
+				case strings.HasPrefix(line, "connection"):
+					connections = append(connections, line)
 				}
 			}
-			if want := []string{tt.row}; tt.row == "" && len(rows) != 0 || tt.row != "" && (len(rows) != 1 || rows[0] != want[0]) {
-				t.Errorf("rows:\n%q\nwant\n%q\nin:\n%s", rows, tt.row, out.String())
+			want := []string{}
+			if tt.row != "" {
+				want = []string{tt.row}
+			}
+			if len(rows) != len(want) || len(want) == 1 && (rows[0] != want[0] && !(tt.raw != "" && strings.HasPrefix(rows[0], want[0]))) {
+				t.Errorf("rows:\n%q\nwant\n%q\nin:\n%s", rows, want, out.String())
+			}
+			if len(connections) != 1 || tt.connection != "" && connections[0] != tt.connection {
+				t.Errorf("connection rows:\n%q\nwant one: %q", connections, tt.connection)
 			}
 		})
 	}
@@ -126,32 +151,54 @@ func noticesPath(dataDir string, pub ed25519.PublicKey) string {
 	return filepath.Join(edgeagent.StateDir(dataDir), "keys", "sha256-"+id, "notices.json")
 }
 
-// A move off a retired address writes edge-url and says how to apply it,
-// with no way back and no claim that what was made there keeps working.
-func TestApplyMoveFromARetiredAddress(t *testing.T) {
+// A move off a retired or retiring address writes edge-url and says how
+// to apply it, with no way back; off a retired one with no claim that
+// what was made there keeps working. Under another pin it writes nothing.
+func TestApplyMoveFromARetiringOrRetiredAddress(t *testing.T) {
 	t.Setenv("SUDO_USER", "ubuntu")
-	dir := t.TempDir()
-	path := filepath.Join(dir, "server.conf")
 	const from, to = "https://edge-old.example.test", "https://edge-new.example.test"
-	if err := serversetup.WriteConfig(path, map[string]string{"data-dir": dir, "edge-url": from}); err != nil {
-		t.Fatal(err)
-	}
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
-	if err := edgeagent.OpenState(dir).Pin(pub); err != nil {
-		t.Fatal(err)
-	}
-	var out bytes.Buffer
-	if err := applyMove(&out, dir, from, to, path, true); err != nil {
-		t.Fatal(err)
-	}
-	want := "enrolled at " + to + ", an address of the same edge (edge key " + edgeproto.EdgeKeyFingerprint(pub) + ", still pinned); " +
-		"the edge says " + from + " is retired\n" +
-		path + ": edge-url = " + to + " (was " + from + ")\n" +
-		"apply it with:\n  sudo systemctl restart aether-server\n"
-	if out.String() != want {
-		t.Errorf("move output:\n%s\nwant:\n%s", out.String(), want)
-	}
-	if got, err := serversetup.Load(path); err != nil || got["edge-url"] != to {
-		t.Errorf("config after the move: %v, %v", got, err)
+	other, _, _ := ed25519.GenerateKey(rand.Reader)
+	enrolled := "enrolled at " + to + ", an address of the same edge (edge key " + edgeproto.EdgeKeyFingerprint(pub) + ", still pinned); "
+	for _, tc := range []struct {
+		name   string
+		moved  edgeagent.Moved
+		pinned ed25519.PublicKey
+		want   string
+		err    string
+	}{
+		{name: "retired", moved: edgeagent.Moved{To: to, Key: pub, Retired: true}, pinned: pub,
+			want: enrolled + "the edge says " + from + " is retired\n"},
+		{name: "retiring", moved: edgeagent.Moved{To: to, Key: pub, Retiring: true}, pinned: pub,
+			want: enrolled + "the edge announces " + from + " too, so links and connectors made there keep working until it is retired; " +
+				"it is retiring, so there is no moving back\n"},
+		{name: "another pin since", moved: edgeagent.Moved{To: to, Key: pub, Retired: true}, pinned: other,
+			want: enrolled + "the edge says " + from + " is retired\n",
+			err:  "the pinned edge key changed from " + edgeproto.EdgeKeyFingerprint(pub) + " while this ran; nothing changed, run it again"},
+	} {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "server.conf")
+		if err := serversetup.WriteConfig(path, map[string]string{"data-dir": dir, "edge-url": from}); err != nil {
+			t.Fatal(err)
+		}
+		if err := edgeagent.OpenState(dir).Pin(tc.pinned); err != nil {
+			t.Fatal(err)
+		}
+		var out bytes.Buffer
+		err := applyMove(&out, dir, from, path, tc.moved)
+		want, wantURL := tc.want, from
+		if tc.err == "" {
+			want += path + ": edge-url = " + to + " (was " + from + ")\napply it with:\n  sudo systemctl restart aether-server\n"
+			wantURL = to
+		}
+		if tc.err == "" && err != nil || tc.err != "" && fmt.Sprint(err) != tc.err {
+			t.Errorf("%s: %v, want %q", tc.name, err, tc.err)
+		}
+		if out.String() != want {
+			t.Errorf("%s: move output:\n%s\nwant:\n%s", tc.name, out.String(), want)
+		}
+		if got, err := serversetup.Load(path); err != nil || got["edge-url"] != wantURL {
+			t.Errorf("%s: config after the move: %v, %v", tc.name, got, err)
+		}
 	}
 }

@@ -7,8 +7,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -106,7 +109,7 @@ func TestMoveFromARetiredAddress(t *testing.T) {
 			return edgeproto.Notices{{State: edgeproto.NoticeRetired, Origin: from, Replacement: "https://edge3.example.test"}}
 		}, want: func(from, to string) string {
 			return fmt.Sprintf("the edge at %s says, signed with the pinned key, that %s is retired in favour of https://edge3.example.test; "+
-				"move there instead: edge move https://edge3.example.test", to, from)
+				"move there instead: sudo cloudfield-server edge move https://edge3.example.test", to, from)
 		}},
 		{name: "protocol 5", version: edgeproto.VersionRelayOrigin - 1, notices: func(from, to string) edgeproto.Notices {
 			return edgeproto.Notices{{State: edgeproto.NoticeRetired, Origin: from, Replacement: to}}
@@ -161,10 +164,10 @@ func TestMoveFromARetiredAddress(t *testing.T) {
 					t.Fatalf("stored notices %+v, %v", got, err)
 				}
 			}
-			got, retired, err := a.Move(t.Context(), to)
+			got, err := a.Move(t.Context(), to, testCommands)
 			if tc.want == nil {
-				if err != nil || got != to || !retired {
-					t.Fatalf("move to %s: %q, %v, %v; want it, from a retired address", to, got, retired, err)
+				if want := (Moved{To: to, Key: edge.pub, Retired: true}); err != nil || !reflect.DeepEqual(got, want) {
+					t.Fatalf("move to %s: %+v, %v; want %+v", to, got, err, want)
 				}
 				return
 			}
@@ -175,10 +178,22 @@ func TestMoveFromARetiredAddress(t *testing.T) {
 	}
 }
 
+// testCommands spell the commands as an admin types them under sudo with
+// the default config file.
+var testCommands = Commands{
+	Server:  func(args string) string { return "sudo cloudfield-server " + args },
+	Restart: "sudo systemctl restart aether-server",
+}
+
+func manualSteps(from, to string) string {
+	return "If " + from + " no longer answers for this edge: confirm " + to + " and the edge key's fingerprint with whoever runs the edge, " +
+		"then run sudo cloudfield-server config set edge-url " + to + " and sudo systemctl restart aether-server"
+}
+
 func noRetiredNotice(text string) func(from, to string) string {
 	return func(from, to string) string {
 		return fmt.Sprintf("dial %s/v1/server/control: 410 Gone: %s; the edge at %s sends no notice signed with the pinned key "+
-			"that %s is retired, and a refusal alone does not show it, so nothing changed", from, text, to, from)
+			"that %s is retired, and a refusal alone does not show it, so nothing changed. %s", from, text, to, from, manualSteps(from, to))
 	}
 }
 
@@ -192,10 +207,10 @@ func TestMoveFromARetiredAddressNeedsThePinnedKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, err = moveAgentAt(t, from, pinned).Move(t.Context(), edge.origin)
-	if want := fmt.Sprintf("%s presents edge key %s, but this server pinned %s for its edge at %s, which announced it: another edge answers there. "+
+	_, err = moveAgentAt(t, from, pinned).Move(t.Context(), edge.origin, testCommands)
+	if want := fmt.Sprintf("%s presents edge key %s, but this server pinned %s for its edge: another edge answers there. "+
 		"edge move only changes the address of one edge; changing edges is in docs/edge.md#turning-it-on",
-		edge.origin, edgeproto.EdgeKeyFingerprint(edge.pub), edgeproto.EdgeKeyFingerprint(pinned), from); err == nil || err.Error() != want {
+		edge.origin, edgeproto.EdgeKeyFingerprint(edge.pub), edgeproto.EdgeKeyFingerprint(pinned)); err == nil || err.Error() != want {
 		t.Fatalf("move: %v\nwant: %s", err, want)
 	}
 }
@@ -209,7 +224,7 @@ func TestMoveFollowsNoRedirect(t *testing.T) {
 	for _, status := range []int{http.StatusFound, http.StatusPermanentRedirect} {
 		srv := httptest.NewServer(http.RedirectHandler(edge.origin+edgeproto.PathServerControl, status))
 		t.Cleanup(srv.Close)
-		_, _, err := moveAgentAt(t, srv.URL, edge.pub).Move(t.Context(), edge.origin)
+		_, err := moveAgentAt(t, srv.URL, edge.pub).Move(t.Context(), edge.origin, testCommands)
 		if want := fmt.Sprintf("edgeagent: enroll at %s: dial %s/v1/server/control: %d %s: Location: %s/v1/server/control",
 			srv.URL, srv.URL, status, http.StatusText(status), edge.origin); err == nil || err.Error() != want {
 			t.Errorf("redirect %d: %v, want %q", status, err, want)
@@ -223,24 +238,59 @@ func TestMoveFollowsNoRedirect(t *testing.T) {
 }
 
 // With no key pinned, or no answer at the old address, nothing changes
-// and the refusal gives the manual steps.
+// and the refusal gives the manual steps; an answer that fails TLS or the
+// protocol gets none.
 func TestMoveGivesTheManualSteps(t *testing.T) {
 	edge := newFakeEdge(t)
-	manual := func(from string) string {
-		return "If " + from + " no longer answers for this edge: confirm " + edge.origin + " and the edge key's fingerprint with whoever runs the edge, " +
-			"then run sudo cloudfield-server config set edge-url " + edge.origin + " and sudo systemctl restart aether-server"
-	}
 	from := retiredHost(t, "retired")
-	_, _, err := moveAgentAt(t, from, nil).Move(t.Context(), edge.origin)
+	_, err := moveAgentAt(t, from, nil).Move(t.Context(), edge.origin, testCommands)
 	if want := "no edge key is pinned for " + from + " yet, so nothing shows that " + edge.origin + " is the same edge; " +
-		"start the server, let it connect once, and run edge move again. " + manual(from); err == nil || err.Error() != want {
+		"start the server, let it connect once, and run edge move again. " + manualSteps(from, edge.origin); err == nil || err.Error() != want {
 		t.Errorf("no key pinned: %v\nwant: %s", err, want)
 	}
-	const silent = "http://127.0.0.1:1"
-	_, _, err = moveAgentAt(t, silent, edge.pub).Move(t.Context(), edge.origin)
-	if err == nil || !strings.HasPrefix(err.Error(), "edgeagent: enroll at "+silent+": dial "+silent+"/v1/server/control: ") ||
-		!strings.HasSuffix(err.Error(), ". "+manual(silent)) || strings.Contains(err.Error(), "\n") {
-		t.Errorf("no answer: %v", err)
+
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refusing := "http://" + closed.Addr().String()
+	_ = closed.Close()
+	silent, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = silent.Close() })
+	held := make(chan net.Conn, 4)
+	t.Cleanup(func() {
+		close(held)
+		for c := range held {
+			_ = c.Close()
+		}
+	})
+	go func() {
+		for {
+			c, err := silent.Accept()
+			if err != nil {
+				return
+			}
+			held <- c
+		}
+	}()
+	tlsHost := httptest.NewTLSServer(http.NotFoundHandler())
+	t.Cleanup(tlsHost.Close)
+	for _, tc := range []struct {
+		name, from string
+		steps      bool
+	}{
+		{"connection refused", refusing, true},
+		{"no handshake in time", "http://" + silent.Addr().String(), true},
+		{"an untrusted certificate", tlsHost.URL, false},
+	} {
+		_, err := moveAgentAt(t, tc.from, edge.pub).Move(t.Context(), edge.origin, testCommands)
+		if err == nil || !strings.HasPrefix(err.Error(), "edgeagent: enroll at "+tc.from+": dial "+tc.from+"/v1/server/control: ") ||
+			strings.HasSuffix(err.Error(), ". "+manualSteps(tc.from, edge.origin)) != tc.steps || strings.Contains(err.Error(), "\n") {
+			t.Errorf("%s: %v; want the manual steps: %v", tc.name, err, tc.steps)
+		}
 	}
 }
 
@@ -258,17 +308,17 @@ func TestMoveRefusesARetiringTarget(t *testing.T) {
 		date string
 		want string
 	}{
-		{name: "signed", key: from.priv, want: fmt.Sprintf("the edge at %s says, signed with the pinned key, that %s is retiring; "+
-			"move there instead: edge move https://edge3.example.test", to.origin, to.origin)},
-		{name: "signed, with a date", key: from.priv, date: "2027-03-01", want: fmt.Sprintf("the edge at %s says, signed with the pinned key, "+
-			"that %s is retiring on 2027-03-01; move there instead: edge move https://edge3.example.test", to.origin, to.origin)},
+		{name: "signed", key: from.priv, want: fmt.Sprintf("the edge says, signed with the pinned key, that %s is retiring; "+
+			"move there instead: sudo cloudfield-server edge move https://edge3.example.test", to.origin)},
+		{name: "signed, with a date", key: from.priv, date: "2027-03-01", want: fmt.Sprintf("the edge says, signed with the pinned key, "+
+			"that %s is retiring on 2027-03-01; move there instead: sudo cloudfield-server edge move https://edge3.example.test", to.origin)},
 		{name: "unsigned"},
 	} {
 		signedNotices(to, tc.key, edgeproto.Notices{{State: edgeproto.NoticeRetiring, Origin: to.origin, Replacement: "https://edge3.example.test", Date: tc.date}})
-		got, retired, err := moveAgentAt(t, from.origin, from.pub).Move(t.Context(), to.origin)
+		got, err := moveAgentAt(t, from.origin, from.pub).Move(t.Context(), to.origin, testCommands)
 		if tc.want == "" {
-			if err != nil || got != to.origin || retired {
-				t.Errorf("%s: %q, %v, %v; want the move", tc.name, got, retired, err)
+			if want := (Moved{To: to.origin, Key: from.pub}); err != nil || !reflect.DeepEqual(got, want) {
+				t.Errorf("%s: %+v, %v; want %+v", tc.name, got, err, want)
 			}
 			continue
 		}
@@ -340,12 +390,115 @@ func TestConnectWarnsOfARetiringAddress(t *testing.T) {
 		{"no notice", nil, nil},
 		{"another address", edgeproto.Notices{{State: edgeproto.NoticeRetiring, Origin: "https://edge0.example.test", Replacement: "https://edge2.example.test"}}, nil},
 		{"retiring", edgeproto.Notices{{State: edgeproto.NoticeRetiring, Origin: edge.origin, Replacement: "https://edge2.example.test"}},
-			[]string{"edge: " + edge.origin + " is retiring; move this server with: sudo cloudfield-server edge move https://edge2.example.test"}},
+			[]string{"edge: " + edge.origin + " is retiring; move this server with: sudo cloudfield-server edge move https://edge2.example.test (with the service's --config <file>, if it has one)"}},
 		{"retiring on a date", edgeproto.Notices{{State: edgeproto.NoticeRetiring, Origin: edge.origin, Replacement: "https://edge2.example.test", Date: "2027-03-01"}},
-			[]string{"edge: " + edge.origin + " is retiring on 2027-03-01; move this server with: sudo cloudfield-server edge move https://edge2.example.test"}},
+			[]string{"edge: " + edge.origin + " is retiring on 2027-03-01; move this server with: sudo cloudfield-server edge move https://edge2.example.test (with the service's --config <file>, if it has one)"}},
 	} {
 		if got := connect(tc.list); !slices.Equal(got, tc.want) {
 			t.Errorf("%s: warnings %q, want %q", tc.name, got, tc.want)
 		}
+	}
+}
+
+// Either probe's verified notices that name the target retiring or
+// retired refuse the move; a replacement that is where the server already
+// is says so. A move off an address the notices name retiring says it.
+func TestMoveReadsBothProbesNotices(t *testing.T) {
+	from := newFakeEdge(t)
+	to := newFakeEdgeWithKey(t, from.priv)
+	for _, e := range []*fakeEdge{from, to} {
+		e.relayOrigins = []string{from.origin, to.origin, "https://edge3.example.test"}
+	}
+	for _, tc := range []struct {
+		name     string
+		at       *fakeEdge
+		notice   edgeproto.Notice
+		want     string
+		retiring bool
+	}{
+		{name: "the target retired, from the first probe", at: from,
+			notice: edgeproto.Notice{State: edgeproto.NoticeRetired, Origin: to.origin, Replacement: "https://edge3.example.test"},
+			want: "the edge says, signed with the pinned key, that " + to.origin + " is retired; move there instead: sudo cloudfield-server edge move https://edge3.example.test"},
+		{name: "the target retiring in favour of the address in use", at: to,
+			notice: edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: to.origin, Replacement: from.origin},
+			want: "the edge says, signed with the pinned key, that " + to.origin + " is retiring and names " + from.origin + ", where this server already is; nothing changed"},
+		{name: "the address in use retiring", at: from,
+			notice: edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: from.origin, Replacement: to.origin}, retiring: true},
+	} {
+		signedNotices(from, nil, nil)
+		signedNotices(to, nil, nil)
+		signedNotices(tc.at, tc.at.priv, edgeproto.Notices{tc.notice})
+		got, err := moveAgentAt(t, from.origin, from.pub).Move(t.Context(), to.origin, testCommands)
+		if tc.want != "" {
+			if err == nil || err.Error() != tc.want {
+				t.Errorf("%s: %v\nwant: %s", tc.name, err, tc.want)
+			}
+			continue
+		}
+		if want := (Moved{To: to.origin, Key: from.pub, Retiring: tc.retiring}); err != nil || !reflect.DeepEqual(got, want) {
+			t.Errorf("%s: %+v, %v; want %+v", tc.name, got, err, want)
+		}
+	}
+}
+
+// Move enrolls only under the key pinned when it started and never pins
+// one: a pin changed or removed while it runs refuses the move, and
+// WhilePinned refuses to write under another pin.
+func TestMoveIsBoundToThePinItStartedWith(t *testing.T) {
+	edge := newFakeEdge(t)
+	other := newFakeEdgeWithKey(t, edge.priv)
+	for _, e := range []*fakeEdge{edge, other} {
+		e.relayOrigins = []string{edge.origin, other.origin}
+	}
+	_, otherKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := "edgeagent: enroll at " + edge.origin + ": the pinned edge key changed from " + edgeproto.EdgeKeyFingerprint(edge.pub) +
+		" while this ran; nothing changed, run it again"
+	for _, tc := range []struct {
+		name   string
+		change func(s *State) error
+	}{
+		{"another key pinned", func(s *State) error { return s.Pin(otherKey.Public().(ed25519.PublicKey)) }},
+		{"the pin removed", func(s *State) error { return os.Remove(s.path(pinFile)) }},
+	} {
+		a := moveAgentAt(t, edge.origin, edge.pub)
+		edge.mu.Lock()
+		edge.notices = func(string, []byte) (edgeproto.Notices, []byte) {
+			if err := tc.change(a.state); err != nil {
+				t.Error(err)
+			}
+			return nil, nil
+		}
+		edge.mu.Unlock()
+		if _, err := a.Move(t.Context(), other.origin, testCommands); err == nil || err.Error() != changed {
+			t.Errorf("%s: %v\nwant: %s", tc.name, err, changed)
+		}
+		if key, err := a.state.PinnedKey(); err != nil || key.Equal(edge.pub) {
+			t.Errorf("%s: the move pinned %s, %v", tc.name, edgeproto.EdgeKeyFingerprint(key), err)
+		}
+		wrote := false
+		if err := a.state.WhilePinned(edge.pub, func() error { wrote = true; return nil }); err == nil || wrote {
+			t.Errorf("%s: WhilePinned wrote under another pin: %v", tc.name, err)
+		}
+	}
+}
+
+// An edge that lists relay origins, none of them usable, announces none:
+// only one that lists nothing serves a single pair.
+func TestMoveFromRetiredNeedsAUsableList(t *testing.T) {
+	const from, to = "https://edge-old.example.test", "https://edge-new.example.test"
+	refused := &DialError{URL: from + edgeproto.PathServerControl, Status: http.StatusGone}
+	retired := []edgeproto.Notice{{State: edgeproto.NoticeRetired, Origin: from, Replacement: to}}
+	single := enrollment{protocol: edgeproto.Version, notices: retired}
+	if err := checkMoveFromRetired(single, refused, testCommands, from, to); err != nil {
+		t.Errorf("one served pair: %v", err)
+	}
+	unusable := single
+	unusable.ready.RelayOrigins = []string{}
+	if err := checkMoveFromRetired(unusable, refused, testCommands, from, to); err == nil ||
+		err.Error() != "the edge at "+to+" announces the relay addresses ; moving needs "+to+" among them: the edge's operator adds the address first" {
+		t.Errorf("only unusable origins: %v", err)
 	}
 }

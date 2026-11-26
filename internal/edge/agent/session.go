@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand/v2"
+	"net"
 	"net/http"
 	"os"
 	"slices"
@@ -92,6 +93,16 @@ func (e *DialError) Error() string {
 	return fmt.Sprintf("dial %s: %s: %s", e.URL, status, e.Message)
 }
 
+// errNoAnswer is a dial nothing answered: no connection could be made, or
+// no handshake came in time. A TLS or protocol failure is an answer.
+var errNoAnswer = errors.New("no answer")
+
+type noAnswer struct{ error }
+
+func (noAnswer) Is(target error) bool { return target == errNoAnswer }
+
+func (n noAnswer) Unwrap() error { return n.error }
+
 // noRedirect keeps every dial and probe on the origin it named.
 var noRedirect = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
@@ -109,7 +120,7 @@ func dial(ctx context.Context, url string, header http.Header, timeout time.Dura
 			_ = c.CloseNow()
 		}
 		cancel()
-		return nil, nil, fmt.Errorf("dial %s: no handshake within %s", url, timeout)
+		return nil, nil, noAnswer{fmt.Errorf("dial %s: no handshake within %s", url, timeout)}
 	}
 	if err != nil {
 		cancel()
@@ -123,6 +134,9 @@ func dial(ctx context.Context, url string, header http.Header, timeout time.Dura
 				msg = strings.TrimSpace(msg + " Location: " + loc)
 			}
 			return nil, nil, &DialError{URL: url, Status: resp.StatusCode, Message: printableText(msg, maxDialMessage)}
+		}
+		if op := (*net.OpError)(nil); errors.As(err, &op) && op.Op == "dial" {
+			return nil, nil, noAnswer{fmt.Errorf("dial %s: %w", url, err)}
 		}
 		return nil, nil, fmt.Errorf("dial %s: %w", url, err)
 	}
@@ -169,13 +183,15 @@ type enrollment struct {
 // enroll dials the control endpoint at origin and answers the challenge.
 // It returns the enrolled connection and what the enrollment proved once
 // the edge key matches the pinned one, pinning it on first enrollment.
-func (a *Agent) enroll(ctx context.Context, origin string) (*websocket.Conn, context.CancelFunc, enrollment, error) {
+// With only set, it neither pins nor names a pin, and refuses unless only
+// is still the pin file in place and its key the one the edge presents.
+func (a *Agent) enroll(ctx context.Context, origin string, only *pin) (*websocket.Conn, context.CancelFunc, enrollment, error) {
 	c, cancel, err := dial(ctx, origin+edgeproto.PathServerControl, nil, handshakeTimeout)
 	if err != nil {
 		return nil, nil, enrollment{}, err
 	}
 	c.SetReadLimit(edgeproto.MaxControlMessageSize)
-	e, err := a.handshake(ctx, c, origin)
+	e, err := a.handshake(ctx, c, origin, only)
 	if err != nil {
 		_ = c.Close(websocket.StatusPolicyViolation, truncate(err.Error(), 120))
 		cancel()
@@ -184,7 +200,7 @@ func (a *Agent) enroll(ctx context.Context, origin string) (*websocket.Conn, con
 	return c, cancel, e, nil
 }
 
-func (a *Agent) handshake(ctx context.Context, c *websocket.Conn, origin string) (enrollment, error) {
+func (a *Agent) handshake(ctx context.Context, c *websocket.Conn, origin string, only *pin) (enrollment, error) {
 	m, err := readMessage(ctx, c, handshakeTimeout)
 	if err != nil {
 		return enrollment{}, fmt.Errorf("read challenge: %w", err)
@@ -234,6 +250,19 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn, origin string)
 	if ready.ServerID != a.serverID {
 		return enrollment{}, fmt.Errorf("edge enrolled server %s, this server is %s", ready.ServerID, a.serverID)
 	}
+	if only != nil {
+		if err = a.state.stillPinned(*only); err != nil {
+			return enrollment{}, err
+		}
+		if !only.Key.Equal(ready.EdgeKey) {
+			return enrollment{}, pinMismatch(only.Key, ready.EdgeKey)
+		}
+		e := enrollment{ready: ready, protocol: protocol}
+		if edgeproto.VerifyNotices(ready.EdgeKey, a.serverID, origin, noticeNonce, ready.Notices, ready.NoticesSignature) == nil {
+			e.notices = ready.Notices
+		}
+		return e, nil
+	}
 	cur, err := a.state.PinnedKey()
 	if err != nil {
 		return enrollment{}, err
@@ -259,7 +288,7 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn, origin string)
 // session runs one control connection until it ends and returns how long
 // it stayed enrolled with an accepted edge key.
 func (a *Agent) session(ctx context.Context) (time.Duration, error) {
-	c, cancel, e, err := a.enroll(ctx, a.origin)
+	c, cancel, e, err := a.enroll(ctx, a.origin, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -283,7 +312,7 @@ func (a *Agent) session(ctx context.Context) (time.Duration, error) {
 		return time.Since(start), err
 	}
 	if n, ok := noticeFor(e.notices, a.origin); ok {
-		slog.Warn("edge: "+NoticeLine(n), "edge", a.origin, "replacement", n.Replacement, "date", n.Date, "first_use", e.pinned)
+		slog.Warn("edge: "+NoticeLine(n, "sudo cloudfield-server edge move "+n.Replacement+" (with the service's --config <file>, if it has one)"), "edge", a.origin, "replacement", n.Replacement, "date", n.Date, "first_use", e.pinned)
 	}
 	if err = a.reconcileOwner(s, ready.State); err != nil {
 		return time.Since(start), err
@@ -570,7 +599,7 @@ func (a *Agent) serve(run, ctx context.Context, s *session) error {
 // Leave tells the edge the operator removed this server, then forgets the
 // owner and the claim code. The pinned edge key is kept.
 func (a *Agent) Leave(ctx context.Context) error {
-	c, cancel, e, err := a.enroll(ctx, a.origin)
+	c, cancel, e, err := a.enroll(ctx, a.origin, nil)
 	if err != nil {
 		return fmt.Errorf("edgeagent: leave %s: %w", a.origin, err)
 	}
