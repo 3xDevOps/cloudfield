@@ -387,3 +387,19 @@ func TestDeviceAuthBoundToPair(t *testing.T) {
 		t.Errorf("approve on %s without recording: %s\n%s", testSignin2, resp.Status, page)
 	}
 }
+
+func TestCanonicalOrigin(t *testing.T) {
+	for in, want := range map[string]string{
+		"https://Auth.Example.test":      "https://auth.example.test",
+		"https://auth.example.test:443":  "https://auth.example.test",
+		"https://auth.example.test:8443": "https://auth.example.test:8443",
+		"http://127.0.0.1:443":           "http://127.0.0.1:443",
+		"http://localhost:80":            "http://localhost",
+		"https://[2001:DB8:0::1]:443":    "https://[2001:db8::1]",
+		"https://[2001:db8::1]:8443":     "https://[2001:db8::1]:8443",
+	} {
+		if got := CanonicalOrigin(in); got != want {
+			t.Errorf("CanonicalOrigin(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

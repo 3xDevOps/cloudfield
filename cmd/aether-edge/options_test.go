@@ -439,6 +439,8 @@ func TestRetiredPairs(t *testing.T) {
 			"--retired-pairs: https://auth2.example.net is a sign-in origin; name the relay origin of its pair, https://edge2.example.net"},
 		{"https://auth9.example.org https://edge9.example.org https://auth.example.test",
 			"--retired-pairs: https://auth.example.test is a sign-in origin; name the relay origin of its pair, https://edge.example.test"},
+		{"https://[2001:db8::1] https://edge9.example.org https://edge2.example.net",
+			"--retired-pairs: https://[2001:db8::1] is an IPv6 address; a retired pair is named by host names"},
 		{"https://auth9.example.org https://edge9.example.org https://edge2.example.net:8443",
 			"--retired-pairs: https://edge2.example.net:8443 has the host name of the relay origin https://edge2.example.net; write that origin"},
 	} {

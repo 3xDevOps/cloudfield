@@ -318,7 +318,7 @@ func servedRelay(flagName, origin, scheme string, relays, signinHosts map[string
 	}
 	r, ok := relays[host(origin)]
 	switch {
-	case ok && sameOrigin(r) != sameOrigin(origin):
+	case ok && edge.CanonicalOrigin(r) != edge.CanonicalOrigin(origin):
 		return "", fmt.Errorf("%s: %s has the host name of the relay origin %s; write that origin", flagName, origin, r)
 	case ok:
 		c, _ := edgeproto.Origin(r) // parseOptions checked it
@@ -350,6 +350,9 @@ func parseRetiredPairs(list, scheme, signin, relay string, more []edge.Pair, ret
 				return nil, err
 			}
 			h := host(origin)
+			if a, err := netip.ParseAddr(h); err == nil && a.Is6() {
+				return nil, fmt.Errorf("--retired-pairs: %s is an IPv6 address; a retired pair is named by host names", origin)
+			}
 			_, isRelay := relays[h]
 			_, isSignin := signinHosts[h]
 			switch {
@@ -373,7 +376,7 @@ func parseRetiredPairs(list, scheme, signin, relay string, more []edge.Pair, ret
 				return nil, fmt.Errorf("--retired-pairs: %s, the replacement of %s, is retiring; name a pair that stays", replacement, fields[1])
 			}
 		}
-		out = append(out, edge.Retired{SigninOrigin: sameOrigin(fields[0]), RelayOrigin: sameOrigin(fields[1]), Replacement: replacement})
+		out = append(out, edge.Retired{SigninOrigin: edge.CanonicalOrigin(fields[0]), RelayOrigin: edge.CanonicalOrigin(fields[1]), Replacement: replacement})
 	}
 	if len(out) > maxRetiredPairs {
 		return nil, fmt.Errorf("--retired-pairs names %d pairs; an edge keeps at most %d", len(out), maxRetiredPairs)
@@ -381,15 +384,6 @@ func parseRetiredPairs(list, scheme, signin, relay string, more []edge.Pair, ret
 	return out, nil
 }
 
-// sameOrigin is a valid origin in the form two spellings of one origin
-// share: canonical, and without the port when it is https's default.
-func sameOrigin(origin string) string {
-	c, _ := edgeproto.Origin(origin) // parseOptions checked it
-	if strings.HasPrefix(c, "https://") {
-		return strings.TrimSuffix(c, ":443")
-	}
-	return c
-}
 
 // host is the lowercase host name of a valid origin.
 func host(origin string) string {

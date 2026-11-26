@@ -14,6 +14,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -123,10 +124,42 @@ func (s *Service) signinOrigin(ctx context.Context) string {
 	return ""
 }
 
-// sameOrigin reports whether a and b, canonical origins, name one origin,
-// with or without the default https port.
+// CanonicalOrigin is a valid origin in the form every spelling of it
+// shares: lowercase, an IP address in its standard form, and no port when
+// it is the scheme's default.
+func CanonicalOrigin(origin string) string {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return origin
+	}
+	return u.Scheme + "://" + canonicalHostPort(u)
+}
+
+// canonicalHostPort is u's host as CanonicalOrigin writes it, with its port
+// unless it is the default of u's scheme.
+func canonicalHostPort(u *url.URL) string {
+	host := canonicalHost(u.Hostname())
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	if p := u.Port(); p != "" && (u.Scheme != "https" || p != "443") && (u.Scheme != "http" || p != "80") {
+		host += ":" + p
+	}
+	return host
+}
+
+// canonicalHost is a host name in lowercase, or an IP address in its
+// standard form.
+func canonicalHost(host string) string {
+	if a, err := netip.ParseAddr(host); err == nil {
+		return a.String()
+	}
+	return strings.ToLower(host)
+}
+
+// sameOrigin reports whether a and b, valid origins, name one origin.
 func sameOrigin(a, b string) bool {
-	return strings.TrimSuffix(a, ":443") == strings.TrimSuffix(b, ":443")
+	return CanonicalOrigin(a) == CanonicalOrigin(b)
 }
 
 // pair is the pair Handler picked for r, or the first for a request
