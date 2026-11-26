@@ -166,7 +166,7 @@ func (s *Service) apiDeviceToken(r *http.Request) (any, error) {
 	d, err := s.store.RedeemDeviceAuth(ctx, hash, edgestore.Device{
 		ID:        edgeproto.NewConnID(),
 		TokenHash: edgeproto.HashToken(token),
-	}, now)
+	}, s.recordOrigins, now)
 	if errors.Is(err, edgestore.ErrNotFound) {
 		return nil, deviceState(edgeproto.DeviceExpired)
 	}

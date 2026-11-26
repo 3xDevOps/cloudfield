@@ -1,9 +1,13 @@
 package edge
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"path/filepath"
 	"testing"
@@ -201,5 +205,40 @@ func TestOriginsNotRecordedByDefault(t *testing.T) {
 	}
 	if got := h.column(t, `SELECT COUNT(*) FROM devices`); got != "1" {
 		t.Fatalf("devices: %s, want the one signed in", got)
+	}
+}
+
+// TestRedemptionAfterRecordingStops starts a device sign-in while the edge
+// records origins and redeems it once it no longer does, on the same
+// database: the device records no origin.
+func TestRedemptionAfterRecordingStops(t *testing.T) {
+	h := newRecordingHarness(t)
+	b := signedInBrowser(t, h)
+	start := startDevice(t, h)
+	if got := h.column(t, `SELECT signin_origin FROM device_authorizations`); got != testSignin {
+		t.Fatalf("authorization started while recording: %q", got)
+	}
+	b.post(t, "/device/confirm", url.Values{"user_code": {start.UserCode}, "decision": {"approve"}})
+	h.clock.Advance(pollInterval)
+	restarted, err := New(Config{DataDir: h.dataDir, SigninOrigin: testSignin, RelayOrigin: testRelay, GitHub: h.provider.app(), Clock: h.clock.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { restarted.Close() }) //nolint:errcheck // test cleanup
+	restarted.SetLink(h.link)
+	body, err := json.Marshal(edgeproto.DeviceTokenRequest{DeviceCode: start.DeviceCode})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, testSignin+edgeproto.PathDeviceToken, bytes.NewReader(body))
+	req.Header.Set(edgeproto.HeaderVersion, fmt.Sprint(edgeproto.Version))
+	rec := httptest.NewRecorder()
+	restarted.Handler().ServeHTTP(rec, req)
+	var tok edgeproto.DeviceTokenResponse
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &tok) != nil {
+		t.Fatalf("poll after the restart: %d %s", rec.Code, rec.Body)
+	}
+	if got := h.column(t, `SELECT signin_origin FROM devices WHERE id = ?`, tok.Device.ID); got != "" {
+		t.Fatalf("device redeemed after recording stopped records %q", got)
 	}
 }

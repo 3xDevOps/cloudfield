@@ -53,7 +53,7 @@ func addDevice(t *testing.T, s *Store, accountID int64, deviceID, tokenHash stri
 	if err := s.DecideDeviceAuth(ctx, auth.UserCodeHash, accountID, true, testNow); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.RedeemDeviceAuth(ctx, auth.CodeHash, Device{ID: deviceID, TokenHash: tokenHash}, testNow); err != nil {
+	if _, err := s.RedeemDeviceAuth(ctx, auth.CodeHash, Device{ID: deviceID, TokenHash: tokenHash}, true, testNow); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -53,13 +53,13 @@ func (s *Store) CreateDeviceAuth(ctx context.Context, a DeviceAuth) error {
 }
 
 const deviceAuthCols = `code_hash, user_code_hash, label, public_key, client_addr, status,
-	created_at, expires_at, last_poll_at`
+	created_at, expires_at, last_poll_at, COALESCE(signin_origin, '')`
 
 func scanDeviceAuth(row *sql.Row) (DeviceAuth, error) {
 	var a DeviceAuth
 	var created, expires, polled int64
 	err := row.Scan(&a.CodeHash, &a.UserCodeHash, &a.Label, &a.Key, &a.ClientAddr, &a.Status,
-		&created, &expires, &polled)
+		&created, &expires, &polled, &a.SigninOrigin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return DeviceAuth{}, ErrNotFound
 	}
@@ -154,9 +154,9 @@ type Device struct {
 
 // RedeemDeviceAuth consumes the approved, unexpired authorization under
 // codeHash and creates d from it, in one transaction, so an authorization
-// yields at most one device. d's account, key, label and sign-in origin
-// come from the authorization.
-func (s *Store) RedeemDeviceAuth(ctx context.Context, codeHash string, d Device, now time.Time) (Device, error) {
+// yields at most one device. d's account, key and label come from the
+// authorization, and its sign-in origin too when record is set.
+func (s *Store) RedeemDeviceAuth(ctx context.Context, codeHash string, d Device, record bool, now time.Time) (Device, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Device{}, fmt.Errorf("edgestore: redeem device authorization: %w", err)
@@ -164,7 +164,7 @@ func (s *Store) RedeemDeviceAuth(ctx context.Context, codeHash string, d Device,
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
 	err = tx.QueryRowContext(ctx, `DELETE FROM device_authorizations
 		WHERE code_hash = ? AND status = ? AND expires_at > ?
-		RETURNING account_id, public_key, label, COALESCE(signin_origin, '')`, codeHash, AuthApproved, unix(now)).
+		RETURNING account_id, public_key, label, CASE WHEN ? THEN COALESCE(signin_origin, '') ELSE '' END`, codeHash, AuthApproved, unix(now), record).
 		Scan(&d.AccountID, &d.Key, &d.Label, &d.SigninOrigin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Device{}, ErrNotFound
