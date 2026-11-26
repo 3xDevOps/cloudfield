@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
+	edgeagent "github.com/3xDevOps/cloudfield/internal/edge/agent"
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
 )
@@ -82,5 +83,41 @@ func TestServerEdgeClaimCode(t *testing.T) {
 	if err := admin.Call(method, struct{}{}, nil); !errors.As(err, &pe) || pe.Code != protocol.CodeInvalidState ||
 		!strings.Contains(pe.Message, "already owned at its edge by github octo") {
 		t.Fatalf("claim code on an owned server = %v, want CodeInvalidState", err)
+	}
+}
+
+// server.edge carries the notice the edge signed for the server's own
+// address, to any member, and nothing for another address or none.
+func TestServerEdgeNotice(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t, nil)
+	bobKey, _ := addMember(t, e, "Bob", domain.RoleViewer, false)
+	bob := controlAs(t, e, bobKey)
+	const own, other = "https://edge.example", "https://edge2.example"
+	elsewhere := edgeproto.Notice{State: edgeproto.NoticeRetired, Origin: "https://edge0.example", Replacement: other}
+	for _, tc := range []struct {
+		name    string
+		notices edgeagent.StoredNotices
+		want    string
+	}{
+		{"none", edgeagent.StoredNotices{}, ""},
+		{"another address", edgeagent.StoredNotices{Notices: []edgeproto.Notice{elsewhere}}, ""},
+		{"retiring", edgeagent.StoredNotices{Notices: []edgeproto.Notice{elsewhere, {State: edgeproto.NoticeRetiring, Origin: own, Replacement: other}}},
+			`{"state":"retiring","replacement":"https://edge2.example"}`},
+		{"retiring on a date", edgeagent.StoredNotices{Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: own, Replacement: other, Date: "2027-03-01"}}},
+			`{"state":"retiring","replacement":"https://edge2.example","date":"2027-03-01"}`},
+		{"first use", edgeagent.StoredNotices{FirstUse: true, Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: own, Replacement: other}}},
+			`{"state":"retiring","replacement":"https://edge2.example","first_use":true}`},
+		{"retired", edgeagent.StoredNotices{Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetired, Origin: own, Replacement: other}}},
+			`{"state":"retired","replacement":"https://edge2.example"}`},
+	} {
+		e.srv.SetEdgeOwner(&fakeEdgeOwner{owner: &octo, state: edgeproto.StateClaimed, notices: tc.notices})
+		var raw map[string]json.RawMessage
+		if err := bob.Call(protocol.MethodServerEdge, struct{}{}, &raw); err != nil {
+			t.Fatal(err)
+		}
+		if got := string(raw["notice"]); got != tc.want {
+			t.Errorf("%s: notice %s, want %q", tc.name, got, tc.want)
+		}
 	}
 }

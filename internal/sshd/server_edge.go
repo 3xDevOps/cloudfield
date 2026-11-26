@@ -27,9 +27,16 @@ func (s *Server) serverEdge(context.Context, domain.MemberID, json.RawMessage) (
 	if err != nil {
 		return nil, &protocol.Error{Code: protocol.CodeUnavailable, Message: protocol.MethodServerEdge + ": " + err.Error()}
 	}
+	notices, err := edge.Notices()
+	if err != nil {
+		return nil, &protocol.Error{Code: protocol.CodeUnavailable, Message: protocol.MethodServerEdge + ": " + err.Error()}
+	}
 	out.EdgeURL, out.Connected, out.Claimed = edge.Origin(), edge.Connected(), edge.EdgeState() == edgeproto.StateClaimed
 	if owner != nil {
 		out.Owner = &protocol.EdgeAccount{Provider: owner.Provider, Login: owner.Login}
+	}
+	if n, ok := notices.For(out.EdgeURL); ok {
+		out.Notice = &protocol.EdgeNotice{State: n.State, Replacement: n.Replacement, Date: n.Date, FirstUse: notices.FirstUse}
 	}
 	return out, nil
 }
