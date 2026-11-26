@@ -541,6 +541,29 @@ func waitDiff(t *testing.T, diffs <-chan events.Event, path string, within time.
 	}
 }
 
+func TestKVMPreparedCheckoutDiskOutlivesItsLastSession(t *testing.T) {
+	h := newCheckoutHost(t)
+	const files = 2000
+	ws := domain.WorkspaceID("wskept" + strconv.Itoa(files))
+	base := h.workspace(t, ws, files)
+	prefix := fmt.Sprintf("run-vmkp-%x", time.Now().Unix())
+	built := h.session(t, ws, prefix+"-a", base)
+	prepared := filepath.Join(filepath.Dir(h.repos), "vm", "images", "prepared", "checkout-"+string(ws)+"-"+base+"-1000-1000", "disk.raw")
+	before, err := os.Stat(prepared)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = h.e.destroy(t.Context(), prefix+"-a"); err != nil {
+		t.Fatal(err)
+	}
+	kept := h.session(t, ws, prefix+"-b", base)
+	after, err := os.Stat(prepared)
+	if err != nil || !os.SameFile(before, after) || !before.ModTime().Equal(after.ModTime()) {
+		t.Fatalf("the prepared disk of the base was built again after its only session was destroyed: %v", err)
+	}
+	t.Logf("%d files: creating the VM took %s with the prepared checkout disk built in it, and %s for the next session after the first was destroyed", files, built, kept)
+}
+
 func hasEntry(entries []gitengine.TreeEntry, name string) bool {
 	for _, e := range entries {
 		if e.Name == name {

@@ -604,6 +604,13 @@ by the session's user. The first session on a base builds it (1.7 seconds for
 `<data dir>/checkouts/<run-id>/disk.qcow2` in constant time (17 ms). That disk
 follows the checkout's retention, not the VM's.
 
+A prepared disk is deleted once no session disk is over it, except the one of
+the base branch's current commit: the server keeps that per workspace and
+owner, linked under `<data dir>/vm/images/kept/<workspace>/<uid>-<gid>`, until
+the workspace is deleted. When a source mirror moves the base branch, the
+server builds the new commit's prepared disk in the background for every owner
+kept there, so the next launch does not build it.
+
 The helper mounts each checkout disk on `/run/aether-guest/checkouts/<key>`,
 binds its `checkout/` at `/run/aether-guest/data/git/<key>` for the git
 service and at the target for the session.

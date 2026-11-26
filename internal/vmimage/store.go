@@ -551,6 +551,7 @@ func (s *Store) tmpDir() string      { return filepath.Join(s.dir, "tmp") }
 func (s *Store) basesDir() string    { return filepath.Join(s.dir, "bases") }
 func (s *Store) helpersDir() string  { return filepath.Join(s.dir, "helpers") }
 func (s *Store) preparedDir() string { return filepath.Join(s.dir, "prepared") }
+func (s *Store) keptDir() string     { return filepath.Join(s.dir, "kept") }
 func (s *Store) tagsPath() string    { return filepath.Join(s.dir, "tags.json") }
 
 func dirName(id string) string { return strings.ReplaceAll(id, ":", "-") }
