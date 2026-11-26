@@ -271,7 +271,17 @@ const describers: Record<EventType, (p: Payload, event: Event) => ReactNode> = {
     return e.actor_id ? <><Who id={e.actor_id} /> released control</> : 'Control released'
   },
   'run.mode': (p) => modeLine(p),
-  'run.account': (p) => <>Moved from <AccountOf id={p.previous_account_member_id} /> to <AccountOf id={p.account_member_id} /></>,
+  'run.account': (p) => {
+    // Both logins are named once either is an added one; an empty name is the default login.
+    const logins = text(p.login) !== '' || text(p.previous_login) !== ''
+    const login = (name: unknown) => logins && `, login ${text(name) || 'default'}`
+    return (
+      <>
+        Moved from <AccountOf id={p.previous_account_member_id} />{login(p.previous_login_name)} to <AccountOf id={p.account_member_id} />{login(p.login_name)}
+        {p.per_use === true && ', billed per use'}
+      </>
+    )
+  },
   'run.usage_limit': (p) => (text(p.message) ? `Usage limit reached: ${bounded(p.message, 160)}` : 'Usage limit reached'),
   'run.model': (p) => (text(p.model) ? <>Model set to <Quote>{bounded(p.model, 160)}</Quote></> : "Model refused, so the agent's default runs"),
   'run.effort': (p) => <>Effort set to <Quote>{bounded(p.effort, 160)}</Quote></>,

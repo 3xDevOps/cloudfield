@@ -113,6 +113,22 @@ describe('run frame', () => {
     await waitFor(() => expect(screen.getByRole('banner').textContent).toContain("On Bob's account (fallback)"))
   })
 
+  it('names the login a run is on, and says when it is billed per use', async () => {
+    open({ account_member_id: alice.id, account_login: 'lgn-console0001', account_login_name: 'console', account_login_per_use: true })
+    await waitFor(() => expect(screen.getByRole('banner').textContent).toContain("On Alice's account, login console·Billed per use"))
+  })
+
+  it('names the login a run.account event moves the run to', async () => {
+    open({ account_member_id: alice.id })
+    await act(() => applyEvent(useStore, {
+      id: 'evt_2', seq: 2, time: '2026-08-14T11:00:00Z', workspace_id: workspace.id, run_id: 'run_1', actor_id: '',
+      type: 'run.account',
+      payload: { account_member_id: alice.id, previous_account_member_id: alice.id, login: 'lgn-work0000001', previous_login: '', login_name: 'work', previous_login_name: '' },
+    }, api))
+    await waitFor(() => expect(screen.getByRole('banner').textContent).toContain("On Alice's account, login work"))
+    expect(screen.getByRole('banner').textContent).not.toContain('Billed per use')
+  })
+
   it('keeps the state time on the state line when no reason shows, and on the session tab', async () => {
     open({ paused: true })
     await waitFor(() => expect(within(screen.getByRole('banner')).getByTitle(/^Paused since /)).toBeDefined())

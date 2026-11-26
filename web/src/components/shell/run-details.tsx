@@ -5,6 +5,7 @@ import { StatusDot } from '@/components/ui/status-dot'
 import { useIsMobile } from '@/lib/breakpoints'
 import { coarsePointer, useMediaQuery } from '@/lib/hooks'
 import { memberName, resolveMember } from '@/lib/member-name'
+import { runAccountWords } from '@/lib/run-account'
 import { clipLabel, runLabel, stateTitle, toneOf, type PresentationState } from '@/lib/status'
 import { cn, surface } from '@/lib/utils'
 import { modeLabel } from '@/routes/run/agent-name'
@@ -92,6 +93,7 @@ function Details({ run, state, waiting, reason, next, cause, wait, since, counts
   const mergedInto = useStore((s) => s.mergedInto)
   const workspace = useStore((s) => s.workspaces[run.workspace_id]?.name ?? run.workspace_id)
   const agent = useStore((s) => s.agentList?.agents.find((a) => a.name === run.harness)?.display_name) || run.harness
+  const account = runAccountWords(run, memberName({ members, mergedInto }, run.account_member_id || run.member_id))
   const name = (id: string) => `${memberName({ members, mergedInto }, id)}${id === self ? ' (you)' : ''}`
   const person = (id: string) => (
     <span className="flex min-w-0 items-center gap-1.5">
@@ -162,6 +164,12 @@ function Details({ run, state, waiting, reason, next, cause, wait, since, counts
         )}
         <dt>Owner</dt>
         <dd>{person(run.member_id)}</dd>
+        {account && (
+          <>
+            <dt>Account</dt>
+            <dd className="break-words">{account}{run.account_login_per_use && ', billed per use'}</dd>
+          </>
+        )}
       </dl>
       {(people.length > 0 || unattended) && (
         <div className="flex flex-col gap-1 border-t border-seam pt-2.5">

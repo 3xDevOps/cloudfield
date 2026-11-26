@@ -791,7 +791,7 @@ describe('terminal view', () => {
     act(() => StubSocket.last().onclose?.({ code: 1000, reason: 'session ended' }))
     expect(StubSocket.opened).toHaveLength(1)
 
-    act(() => useStore.getState().applyRunAccount('run_1', bob.id, alice.id))
+    act(() => useStore.getState().applyRunAccount('run_1', { account_member_id: bob.id, previous_account_member_id: alice.id, requested_account_member_id: alice.id }))
 
     await waitFor(() => expect(StubSocket.opened).toHaveLength(2))
     view.unmount()

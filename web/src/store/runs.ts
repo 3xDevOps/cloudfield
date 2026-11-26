@@ -1,4 +1,4 @@
-import type { Run, RunInputRequest, RunReviewPayload, RunStatus, RunStatusPayload } from '@/lib/types'
+import type { Run, RunAccountPayload, RunInputRequest, RunReviewPayload, RunStatus, RunStatusPayload } from '@/lib/types'
 import { nextActivity, type AgentPayload, type ToolActivity } from '@/store/activity'
 import type { SliceCreator } from '@/store/slice'
 import { closeRun, tilesAfter } from '@/store/tiles'
@@ -126,7 +126,7 @@ export interface RunsSlice {
   applyRunEffort: (runID: string, effort: string) => void
   applyRunProtected: (runID: string, isProtected: boolean) => void
   applyRunController: (runID: string, memberID: string, lastMemberID?: string) => void
-  applyRunAccount: (runID: string, accountID: string, requestedID?: string) => void
+  applyRunAccount: (runID: string, p: RunAccountPayload) => void
   applyRunArchived: (
     runID: string,
     archivedAt: string | null,
@@ -318,14 +318,21 @@ export const createRunsSlice: SliceCreator<RunsSlice> = (set) => ({
         },
       }
     }),
-  applyRunAccount: (runID, accountID, requestedID) =>
+  applyRunAccount: (runID, p) =>
     set((s) => {
       const current = s.runs[runID]
       if (!current) return {}
       return {
         runs: {
           ...s.runs,
-          [runID]: { ...current, account_member_id: accountID, requested_account_member_id: requestedID },
+          [runID]: {
+            ...current,
+            account_member_id: p.account_member_id,
+            requested_account_member_id: p.requested_account_member_id,
+            account_login: p.login,
+            account_login_name: p.login_name,
+            account_login_per_use: p.per_use,
+          },
         },
       }
     }),
