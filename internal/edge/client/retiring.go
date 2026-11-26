@@ -46,16 +46,19 @@ func canonicalOrigin(origin string) bool {
 	return err == nil && o == origin
 }
 
-// observe records the notice of resp, an answer of the edge; an answer
-// without the edge's protocol version came from something in between and
-// says nothing.
+// observe records the notice of resp, an answer of the edge, which
+// counts only as the one value of its header; an answer without the
+// edge's protocol version came from something in between and says
+// nothing.
 func (c *Client) observe(resp *http.Response) {
 	if resp.Header.Get(edgeproto.HeaderVersion) == "" {
 		return
 	}
 	var notice *Retiring
-	if r, ok := parseRetiring(resp.Header.Get(edgeproto.HeaderRetiring)); ok {
-		notice = &r
+	if v := resp.Header.Values(edgeproto.HeaderRetiring); len(v) == 1 {
+		if r, ok := parseRetiring(v[0]); ok {
+			notice = &r
+		}
 	}
 	c.mu.Lock()
 	c.retiring = notice

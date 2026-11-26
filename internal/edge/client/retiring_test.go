@@ -44,8 +44,10 @@ func TestRetiringHeader(t *testing.T) {
 	set := func(w http.ResponseWriter) {
 		mu.Lock()
 		defer mu.Unlock()
-		if value != "" {
-			w.Header().Set(edgeproto.HeaderRetiring, value)
+		for v := range strings.SplitSeq(value, "\x00") {
+			if v != "" {
+				w.Header().Add(edgeproto.HeaderRetiring, v)
+			}
 		}
 		if !fromEdge {
 			w.WriteHeader(http.StatusBadGateway)
@@ -89,6 +91,16 @@ func TestRetiringHeader(t *testing.T) {
 	}
 	if got, ok := c.Retiring(); !ok || got.Replacement != "https://edge2.example.test" {
 		t.Errorf("an answer without the edge's protocol version changed the notice: %+v, %v", got, ok)
+	}
+
+	mu.Lock()
+	value, fromEdge = "https://edge2.example.test\x00https://edge3.example.test", true
+	mu.Unlock()
+	if _, err := c.Servers(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := c.Retiring(); ok {
+		t.Errorf("an answer with two %s values gave the notice %+v", edgeproto.HeaderRetiring, got)
 	}
 }
 
