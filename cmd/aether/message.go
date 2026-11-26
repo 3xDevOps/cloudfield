@@ -7,9 +7,11 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/3xDevOps/cloudfield/internal/cli"
+	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
 )
 
@@ -20,6 +22,7 @@ func init() {
 		usage: "cloudfield message [--steer] [--attach <path>]... <session-id> <message...>\n" +
 			"cloudfield message [--steer] [--attach <path>]... <session-id> -\n" +
 			"  flags go before <session-id>: every word after it is the message\n" +
+			"  a --steer or --attach word after <session-id> is refused, not sent as text\n" +
 			"  with --attach the message is optional",
 		example: "cloudfield message run-d6ay38tj8j run the tests again\n" +
 			"cloudfield message run-d6ay38tj8j -\n" +
@@ -30,6 +33,16 @@ func init() {
 }
 
 func runMessage(args []string) error {
+	send, err := parseMessage(args, os.Stdin)
+	if err != nil {
+		return err
+	}
+	return withControl(func(c *protocol.Client) error { return send(c, os.Stdout) })
+}
+
+// parseMessage checks a message command's arguments and attachments before
+// anything dials the server.
+func parseMessage(args []string, stdin io.Reader) (func(*protocol.Client, io.Writer) error, error) {
 	fs := newFlagSet("message")
 	steer := fs.Bool("steer", false, "add the message to an Enhanced agent's running turn instead of queueing it behind that turn; "+
 		"changes nothing in a Standard session, when no turn runs, when the agent cannot steer, or while the message waits for the member in control")
@@ -37,30 +50,59 @@ func runMessage(args []string) error {
 	fs.Var(&attach, "attach", "upload the file at `path` and send it with the message "+
 		"(repeatable, at most 8; images up to 8 MiB, other files up to 64 MiB)")
 	if err := fs.Parse(args); err != nil {
-		return err
+		return nil, err
 	}
 	if fs.NArg() == 0 || fs.NArg() == 1 && len(attach) == 0 {
-		return fmt.Errorf("usage: cloudfield message [--steer] [--attach <path>]... <session-id> <message...>|-")
+		return nil, fmt.Errorf("usage: cloudfield message [--steer] [--attach <path>]... <session-id> <message...>|-")
+	}
+	for _, word := range fs.Args()[1:] {
+		name, _, _ := strings.Cut(strings.TrimLeft(word, "-"), "=")
+		if strings.HasPrefix(word, "-") && fs.Lookup(name) != nil {
+			return nil, fmt.Errorf("message: %s comes after the session id, where it would be sent as message text; "+
+				"put flags before %s, or quote the whole message to send it as written", word, fs.Arg(0))
+		}
 	}
 	if len(attach) > protocol.CollaborationMaxAttachments {
-		return fmt.Errorf("message: %d files attached, at most %d", len(attach), protocol.CollaborationMaxAttachments)
+		return nil, fmt.Errorf("message: %d files attached, at most %d", len(attach), protocol.CollaborationMaxAttachments)
 	}
 	for _, path := range attach {
 		info, err := os.Stat(path)
 		if err != nil {
-			return err
+			return nil, err
 		}
-		if info.Size() > configMaxFileBytes {
-			return fmt.Errorf("attach %s: %d bytes is over the 64 MiB limit", path, info.Size())
+		if !info.Mode().IsRegular() {
+			return nil, fmt.Errorf("attach %s: not a regular file", path)
+		}
+		f, err := os.Open(path)
+		if err != nil {
+			return nil, err
+		}
+		// http.DetectContentType looks at no more than 512 bytes.
+		head, err := io.ReadAll(io.LimitReader(f, 512))
+		_ = f.Close()
+		if err != nil {
+			return nil, err
+		}
+		limit, what := int64(configMaxFileBytes), "64 MiB"
+		if terminalImage(head) {
+			limit, what = domain.MaxImageBytes, "8 MiB image"
+		}
+		if info.Size() > limit {
+			return nil, fmt.Errorf("attach %s: %d bytes is over the %s limit", path, info.Size(), what)
 		}
 	}
-	text, err := stdinText(strings.Join(fs.Args()[1:], " "), "message", os.Stdin)
+	text, err := stdinText(strings.Join(fs.Args()[1:], " "), "message", stdin)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return withControl(func(c *protocol.Client) error {
-		return sendMessage(c, os.Stdout, fs.Arg(0), text, attach, *steer, cli.NewControlSessionID())
-	})
+	return func(c *protocol.Client, w io.Writer) error {
+		return sendMessage(c, w, fs.Arg(0), text, attach, *steer, cli.NewControlSessionID())
+	}, nil
+}
+
+// terminal.image accepts only these four formats.
+func terminalImage(data []byte) bool {
+	return slices.Contains([]string{"image/png", "image/jpeg", "image/gif", "image/webp"}, http.DetectContentType(data))
 }
 
 func sendMessage(c *protocol.Client, w io.Writer, runID, text string, attach []string, steer bool, key string) error {
@@ -72,10 +114,9 @@ func sendMessage(c *protocol.Client, w io.Writer, runID, text string, attach []s
 		}
 		content := base64.StdEncoding.EncodeToString(data)
 		var uploaded protocol.TerminalUploadResult
-		switch http.DetectContentType(data) {
-		case "image/png", "image/jpeg", "image/gif", "image/webp":
+		if terminalImage(data) {
 			err = c.Call(protocol.MethodTerminalImage, protocol.TerminalImageParams{RunID: runID, Content: content}, &uploaded)
-		default:
+		} else {
 			err = c.Call(protocol.MethodTerminalFile, protocol.TerminalFileParams{RunID: runID, Name: filepath.Base(path), Content: content}, &uploaded)
 		}
 		if err != nil {

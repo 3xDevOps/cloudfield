@@ -11,8 +11,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
-	"github.com/3xDevOps/cloudfield/internal/testhome"
 )
 
 func TestMessagePrintsTheReceipt(t *testing.T) {
@@ -62,14 +62,22 @@ func TestMessageSteersAndAttachesUploadedFiles(t *testing.T) {
 		protocol.MethodTerminalFile:  {result: protocol.TerminalUploadResult{Path: fileRef}},
 		protocol.MethodRunInject:     {result: protocol.RunRoomPostResult{Message: protocol.RoomMessage{ID: "m1", State: protocol.RoomMessageSent}}},
 	}
-	if err := sendMessage(fakeControlMethods(t, replies), io.Discard, "r1", "look", []string{shot, notes}, true, "k-1"); err != nil {
+	send, err := parseMessage([]string{"--steer", "--attach", shot, "--attach", notes, "r1", "-v", "is", "broken"}, nil)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if err := send(fakeControlMethods(t, replies), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	var sent protocol.RunInjectParams
+	if err := json.Unmarshal(replies[protocol.MethodRunInject].params(), &sent); err != nil || sent.IdempotencyKey == "" {
+		t.Fatalf("run.inject params = %s (%v), want an idempotency key", replies[protocol.MethodRunInject].params(), err)
 	}
 	for method, want := range map[string]any{
 		protocol.MethodTerminalImage: protocol.TerminalImageParams{RunID: "r1", Content: base64.StdEncoding.EncodeToString(png)},
 		protocol.MethodTerminalFile:  protocol.TerminalFileParams{RunID: "r1", Name: "notes.txt", Content: base64.StdEncoding.EncodeToString(text)},
-		protocol.MethodRunInject: protocol.RunInjectParams{RunID: "r1", Message: "look", Attachments: []string{imageRef, fileRef},
-			IdempotencyKey: "k-1", Steer: true},
+		protocol.MethodRunInject: protocol.RunInjectParams{RunID: "r1", Message: "-v is broken", Attachments: []string{imageRef, fileRef},
+			IdempotencyKey: sent.IdempotencyKey, Steer: true},
 	} {
 		wantJSON, err := json.Marshal(want)
 		if err != nil {
@@ -81,20 +89,31 @@ func TestMessageSteersAndAttachesUploadedFiles(t *testing.T) {
 	}
 }
 
-func TestMessageRefusesAttachmentsItCannotSendBeforeDialing(t *testing.T) {
-	testhome.Isolate(t)
-	big := filepath.Join(t.TempDir(), "big.bin")
+func TestMessageRefusesWhatItCannotSendBeforeDialing(t *testing.T) {
+	dir := t.TempDir()
+	big, shot := filepath.Join(dir, "big.bin"), filepath.Join(dir, "shot.png")
 	if err := os.WriteFile(big, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Truncate(big, configMaxFileBytes+1); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(shot, []byte("\x89PNG\r\n\x1a\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(shot, domain.MaxImageBytes+1); err != nil {
+		t.Fatal(err)
+	}
 	for want, args := range map[string][]string{
-		"big.bin: 67108865 bytes is over the 64 MiB limit": {"--attach", big, "r1", "hi"},
-		"message: 9 files attached, at most 8":             append(slices.Repeat([]string{"--attach", big}, 9), "r1"),
+		"big.bin: 67108865 bytes is over the 64 MiB limit":      {"--attach", big, "r1", "hi"},
+		"shot.png: 8388609 bytes is over the 8 MiB image limit": {"--attach", shot, "r1", "hi"},
+		"attach " + dir + ": not a regular file":                {"--attach", dir, "r1"},
+		"message: 9 files attached, at most 8":                  append(slices.Repeat([]string{"--attach", big}, 9), "r1"),
+		"message: --attach comes after the session id":          {"r1", "use this mock", "--attach", "mock.png"},
+		"message: --steer comes after the session id":           {"r1", "--steer", "stop editing the README"},
+		"message: -attach=mock.png comes after the session id":  {"r1", "-attach=mock.png", "use this mock"},
 	} {
-		if err := runMessage(args); err == nil || !strings.Contains(err.Error(), want) {
+		if _, err := parseMessage(args, nil); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("message %v = %v, want %q", args, err, want)
 		}
 	}
