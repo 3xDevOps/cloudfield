@@ -8,7 +8,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 	"unicode"
@@ -55,7 +54,9 @@ const maxIdentityField = 256
 // clean drops a field that is too long or holds a control character.
 func (a LoginIdentity) clean() LoginIdentity {
 	for _, field := range []*string{&a.Kind, &a.Plan, &a.Email, &a.OrganizationID, &a.OrganizationName} {
-		if len(*field) > maxIdentityField || !utf8.ValidString(*field) || strings.ContainsFunc(*field, unicode.IsControl) {
+		if len(*field) > maxIdentityField || !utf8.ValidString(*field) || strings.ContainsFunc(*field, func(r rune) bool {
+			return unicode.IsControl(r) || unicode.Is(unicode.Cf, r)
+		}) {
 			*field = ""
 		}
 	}
@@ -414,10 +415,6 @@ func (m *Manager) DefaultIdentity(member domain.MemberID, agent string) (LoginId
 // AnthropicProfileDir is where Claude Code keeps a keyless Console sign-in
 // in a home unless ANTHROPIC_CONFIG_DIR moves it.
 const AnthropicProfileDir = anthropicProfileDir
-
-// profileName is an Anthropic profile name Cloudfield reads; any other
-// active_config content, which a container wrote, is never made a path.
-var profileName = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$`)
 
 // maxIdentityConfigBytes bounds the configuration file read for the account
 // Claude Code cached; a larger one leaves the account unknown.

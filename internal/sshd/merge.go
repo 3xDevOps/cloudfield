@@ -689,7 +689,12 @@ func snapshotToWire(snap store.MergeSnapshot, home, full bool) protocol.MergeMem
 	m := snap.Member
 	out := protocol.MergeMember{ID: string(m.ID), DisplayName: m.DisplayName, Role: string(m.Role), TailnetLogin: m.TailnetLogin,
 		Identities: []protocol.MergeIdentity{}, Devices: []protocol.MergeDevice{}, Runs: snap.Runs, Schedules: snap.Schedules,
-		Settings: settingsToWire(snap.Settings, home, full), OwnedWorkspaces: []string{}, GrantedWorkspaces: []string{}}
+		Settings: settingsToWire(snap.Settings, home, full), OwnedWorkspaces: []string{}, GrantedWorkspaces: []string{}, Logins: []protocol.MergeLogin{}}
+	for _, l := range snap.Logins {
+		if l.ID.Added() {
+			out.Logins = append(out.Logins, protocol.MergeLogin{Agent: l.Agent, ID: string(l.ID), Name: l.Name})
+		}
+	}
 	for _, w := range snap.OwnedWorkspaces {
 		out.OwnedWorkspaces = append(out.OwnedWorkspaces, string(w))
 	}

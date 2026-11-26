@@ -231,10 +231,10 @@ func TestIdentityKeepsOnlyCleanFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeLoginFile(t, dir, LoginCredentials, subscriptionLogin)
-	writeLoginFile(t, dir, LoginConfig, `{"oauthAccount":{"emailAddress":"ada@example.test\u001b[31m","organizationUuid":"`+strings.Repeat("o", 300)+`","organizationName":"Ada's Org"}}`)
+	writeLoginFile(t, dir, LoginConfig, `{"oauthAccount":{"emailAddress":"ada@example.test\u001b[31m","organizationUuid":"`+strings.Repeat("o", 300)+`","organizationName":"Ada's \u202eOrg"}}`)
 	got, err := l.Inspect("mem-ada", "claude", "lgn-one0000000")
-	if err != nil || got != (LoginIdentity{Kind: LoginSubscription, Plan: "max", OrganizationName: "Ada's Org"}) {
-		t.Fatalf("Inspect = %+v, %v; want the control-character email and the long organisation dropped", got, err)
+	if err != nil || got != (LoginIdentity{Kind: LoginSubscription, Plan: "max"}) {
+		t.Fatalf("Inspect = %+v, %v; want the control-character email, the long organisation and the bidirectional override dropped", got, err)
 	}
 	console, err := l.Add("mem-ada", "claude", "lgn-two0000000")
 	if err != nil {

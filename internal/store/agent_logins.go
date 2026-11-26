@@ -120,17 +120,21 @@ func (d *DB) AddAgentLogin(ctx context.Context, login domain.AgentLogin, before 
 			next = 1
 		}
 		if before != "" {
+			// A login removed meanwhile is no place to go before: the new one
+			// goes last.
+			var at int
 			err := tx.QueryRowContext(ctx, `SELECT position FROM agent_logins WHERE member_id = ? AND agent = ? AND id = ?`,
-				login.MemberID, login.Agent, before).Scan(&next)
-			if errors.Is(err, sql.ErrNoRows) {
-				return fmt.Errorf("%w: login %s", ErrNotFound, before)
-			}
-			if err != nil {
+				login.MemberID, login.Agent, before).Scan(&at)
+			switch {
+			case errors.Is(err, sql.ErrNoRows):
+			case err != nil:
 				return err
-			}
-			if _, err := tx.ExecContext(ctx, `UPDATE agent_logins SET position = position + 1 WHERE member_id = ? AND agent = ? AND position >= ?`,
-				login.MemberID, login.Agent, next); err != nil {
-				return err
+			default:
+				next = at
+				if _, err := tx.ExecContext(ctx, `UPDATE agent_logins SET position = position + 1 WHERE member_id = ? AND agent = ? AND position >= ?`,
+					login.MemberID, login.Agent, next); err != nil {
+					return err
+				}
 			}
 		}
 		if _, err := tx.ExecContext(ctx, insert, login.MemberID, login.Agent, login.ID, login.Name, next, created); err != nil {
