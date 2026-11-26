@@ -532,7 +532,7 @@ func olderImageServes(o options, getenv func(string) string) error {
 				if err != nil || !retired[strings.ToLower(u.Hostname())] {
 					continue
 				}
-				return fmt.Errorf("%s names %s, which --retired-pairs retires: an edge image older than --retired-pairs reads only the AETHER_EDGE_ names "+
+				return fmt.Errorf("%s names %s, which --retired-pairs retires: an edge image older than v0.8.7 reads only the AETHER_EDGE_ names "+
 					"and would serve it in full after a rollback. Remove %s, or set it to the value of %s", v.name, origin, v.name, envname.New(v.name))
 			}
 		}

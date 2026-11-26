@@ -650,7 +650,7 @@ func TestOlderImageServes(t *testing.T) {
 		want string
 	}{
 		{"stale first pair", map[string]string{"AETHER_EDGE_SIGNIN_ORIGIN": "https://auth.example.test", "AETHER_EDGE_RELAY_ORIGIN": "https://edge2.example.net"}, nil,
-			"AETHER_EDGE_SIGNIN_ORIGIN names https://auth.example.test, which --retired-pairs retires: an edge image older than --retired-pairs reads only the AETHER_EDGE_ names " +
+			"AETHER_EDGE_SIGNIN_ORIGIN names https://auth.example.test, which --retired-pairs retires: an edge image older than v0.8.7 reads only the AETHER_EDGE_ names " +
 				"and would serve it in full after a rollback. Remove AETHER_EDGE_SIGNIN_ORIGIN, or set it to the value of CLOUDFIELD_EDGE_SIGNIN_ORIGIN"},
 		{"stale relay origin", map[string]string{"AETHER_EDGE_RELAY_ORIGIN": "https://EDGE.example.test:8443"}, nil,
 			"AETHER_EDGE_RELAY_ORIGIN names https://EDGE.example.test:8443, which --retired-pairs retires"},
