@@ -190,7 +190,7 @@ func (r *Relay) enroll(ws *websocket.Conn, addr netip.Prefix, origin string) (*r
 	if err != nil {
 		return nil, err
 	}
-	claimed, err := r.dir.Enroll(ctx, id, hello.Name, policy)
+	claimed, err := r.dir.Enroll(ctx, id, hello.Name, policy, origin, hello.AgentVersion)
 	var refusal edgeproto.Refusal
 	if errors.As(err, &refusal) {
 		return nil, refusal
@@ -454,7 +454,7 @@ func (r *Relay) claimReported(reg *registration, m edgeproto.Claimed) error {
 		return reportRefused("the owner is not the account connection %s was opened for", m.ConnID)
 	}
 	return r.recordOwner(reg, func(ctx context.Context) error {
-		return r.dir.RecordClaim(ctx, reg.id, reg.name, reg.policy, g.account)
+		return r.dir.RecordClaim(ctx, reg.id, reg.name, reg.policy, g.account, reg.origin, reg.agentVersion)
 	})
 }
 

@@ -1184,6 +1184,24 @@ answers. `aether_edge_egress_month_bytes`,
 requests waiting for a connection or for their server to return) are also
 exported.
 
+`aether-edge retiring` reads `edge.db` and prints, for each origin pair the edge
+has served since it started recording them (or for the pair of `--origin <relay
+origin>`), the servers whose last enrollment was at its relay origin (id, name,
+owner login, build, when; a server that moved shows at its new origin only), and
+how many were last used within 1, 7 and 30 days and in all of: device tokens
+issued at its sign-in origin, accounts with an unexpired session issued there,
+accounts with a device token there and none recorded at another origin, and
+claimed servers that got connector requests through its relay origin. The edge
+records a device token's or session's sign-in origin when it issues it, and for
+one issued earlier at its next use; a connector request at most once an hour per
+server and relay origin, while the server is connected. The command maps a relay
+origin to its sign-in origin by the pairs the edge recorded when it last started.
+`--json` prints the same as `{"at", "origins": [{"relay_origin",
+"signin_origin", "servers": [{"id", "name", "owner_login", "build",
+"last_enrolled_at"}], "device_tokens", "session_accounts",
+"device_only_accounts", "connector_servers"}]}`, each count as `{"1d", "7d",
+"30d", "total"}`.
+
 `/healthz` (`aether-edge healthcheck`) is liveness. `/readyz` (`aether-edge
 healthcheck --ready`) answers 200 when the database answers within a second, the
 public listener serves and the edge is not stopping, and 503 otherwise. From
@@ -1493,6 +1511,8 @@ sudo -u aether-edge aether-edge accounts list
 sudo -u aether-edge aether-edge accounts block github:<user id>
 sudo -u aether-edge aether-edge accounts unblock github:<user id>
 sudo -u aether-edge aether-edge accounts delete github:<user id>
+sudo -u aether-edge aether-edge retiring [--origin <relay origin>] [--json]
+sudo -u aether-edge aether-edge devices end --no-address --unused-since <YYYY-MM-DD>
 sudo -u aether-edge aether-edge reviewer --login <login> --server-id <server id> <file>
 ```
 
@@ -1502,6 +1522,8 @@ sudo -u aether-edge aether-edge reviewer --login <login> --server-id <server id>
 | `servers block` | Does what `remove` does, and refuses the id at enrollment with `server is blocked by this edge's operator` |
 | `accounts block` | Deletes the account's sessions, device tokens and pending sign-ins, and refuses its sign-ins with `account is blocked by this edge's operator`. Servers it owns stay claimed |
 | `accounts delete` | What the person's own deletion does, except that it closes no live connection and each server receives the deletion at its next enrollment. A block stays |
+| `retiring` | Prints who is left on each origin pair ([Monitoring](#monitoring)). It changes nothing |
+| `devices end` | Lists the device tokens that have no recorded sign-in origin and were last used before the date (UTC), asks you to type `yes`, then deletes them as `cloudfield logout` does. A token used since the list was read stays. Like `accounts delete` it closes no live connection: run it with `docker exec -it`, so it can ask, and restart the edge afterwards to close them. A device it ends signs in again with `cloudfield login` |
 | `reviewer` | Writes a [reviewer account](#reviewer-account) file, mode 0600, with a new random password, and prints the password once. It touches no database; the edge reads the file at start |
 
 `servers unblock` and `accounts unblock` lift a block. Connections already open

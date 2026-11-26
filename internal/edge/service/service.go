@@ -268,6 +268,14 @@ func New(cfg Config) (*Service, error) {
 		s.store.Close() //nolint:errcheck // the key error takes precedence
 		return nil, err
 	}
+	served := map[string]string{}
+	for _, p := range pairs {
+		served[p.relay] = p.signin
+	}
+	if err = s.store.RecordPairs(context.Background(), served, now()); err != nil {
+		s.store.Close() //nolint:errcheck // the record error takes precedence
+		return nil, err
+	}
 	return s, nil
 }
 

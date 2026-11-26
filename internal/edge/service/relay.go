@@ -57,8 +57,8 @@ func (d relayDirectory) AdmitClaim(ctx context.Context, serverID string, account
 	return d.s.store.RecordReach(ctx, serverID, account)
 }
 
-func (d relayDirectory) Enroll(ctx context.Context, serverID, name string, policy edgeproto.AccessPolicy) (bool, error) {
-	state, err := d.s.ServerConnected(ctx, serverID, name, policy)
+func (d relayDirectory) Enroll(ctx context.Context, serverID, name string, policy edgeproto.AccessPolicy, origin, agentVersion string) (bool, error) {
+	state, err := d.s.ServerConnected(ctx, serverID, name, policy, origin, agentVersion)
 	return state == edgeproto.StateClaimed, err
 }
 
@@ -70,8 +70,12 @@ func (d relayDirectory) Unenroll(ctx context.Context, serverID string) error {
 	return d.s.RemoveServer(ctx, serverID)
 }
 
-func (d relayDirectory) RecordClaim(ctx context.Context, serverID, name string, policy edgeproto.AccessPolicy, owner edgeproto.Account) error {
-	return d.s.RecordClaim(ctx, serverID, name, policy, owner)
+func (d relayDirectory) RecordClaim(ctx context.Context, serverID, name string, policy edgeproto.AccessPolicy, owner edgeproto.Account, origin, agentVersion string) error {
+	return d.s.RecordClaim(ctx, serverID, name, policy, owner, origin, agentVersion)
+}
+
+func (d relayDirectory) ConnectorUsed(ctx context.Context, serverID, origin string) error {
+	return d.s.store.UseConnector(ctx, serverID, origin, d.s.now())
 }
 
 func (d relayDirectory) TransferOwner(ctx context.Context, serverID string, owner edgeproto.Principal) error {

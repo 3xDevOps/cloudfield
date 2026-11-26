@@ -221,18 +221,37 @@ func (r *Relay) forward(w http.ResponseWriter, req *http.Request, serverID strin
 	}
 }
 
+// connectorUseInterval is the least time between two records of
+// connector requests to one server through one relay origin.
+const connectorUseInterval = time.Hour
+
+type connectorUse struct{ serverID, origin string }
+
 // countConnector counts a connector request to serverID by the relay
-// origin it came in on and the server's protocol version.
+// origin it came in on and the server's protocol version, and records it
+// for a connected, claimed server at most once a connectorUseInterval.
 func (r *Relay) countConnector(req *http.Request, serverID string) {
 	k := ConnectorKey{Origin: r.originOf(req)}
+	use := connectorUse{serverID, k.Origin}
+	now := time.Now()
+	record := false
 	r.mu.Lock()
 	if reg := r.servers[serverID]; reg != nil {
 		k.Protocol = reg.version
+		if reg.claimed && now.Sub(r.connectorUsed[use]) >= connectorUseInterval {
+			maps.DeleteFunc(r.connectorUsed, func(_ connectorUse, at time.Time) bool { return now.Sub(at) >= connectorUseInterval })
+			r.connectorUsed[use], record = now, true
+		}
 	}
 	r.mu.Unlock()
 	r.refusalsMu.Lock()
 	r.connectorMap[k]++
 	r.refusalsMu.Unlock()
+	if record {
+		if err := r.dir.ConnectorUsed(req.Context(), serverID, k.Origin); err != nil {
+			slog.Warn("relay: connector request not recorded", "server", serverID, "origin", k.Origin, "error", err)
+		}
+	}
 }
 
 // forwardOnce sends req to serverID and writes the answer, or the

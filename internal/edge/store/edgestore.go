@@ -259,6 +259,25 @@ CREATE TABLE account_reach (
 	server_id TEXT NOT NULL,
 	PRIMARY KEY (provider, subject, server_id)
 ) WITHOUT ROWID;
+`}, {floor: 1, sql: `
+ALTER TABLE servers ADD COLUMN relay_origin TEXT;
+ALTER TABLE servers ADD COLUMN enrolled_at INTEGER;
+ALTER TABLE servers ADD COLUMN agent_version TEXT;
+ALTER TABLE devices ADD COLUMN signin_origin TEXT;
+ALTER TABLE web_sessions ADD COLUMN signin_origin TEXT;
+
+CREATE TABLE connector_use (
+	server_id    TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+	relay_origin TEXT NOT NULL,
+	last_used_at INTEGER NOT NULL,
+	PRIMARY KEY (server_id, relay_origin)
+) WITHOUT ROWID;
+
+CREATE TABLE origin_pairs (
+	relay_origin  TEXT PRIMARY KEY,
+	signin_origin TEXT NOT NULL,
+	served_at     INTEGER NOT NULL
+);
 `}}
 
 // Schema is a database's schema version and the compat floor recorded

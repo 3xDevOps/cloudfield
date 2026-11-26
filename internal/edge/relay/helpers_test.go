@@ -46,6 +46,11 @@ type fakeDir struct {
 	// recordErr, when set, is what recording an owner fails with.
 	recordErr error
 	pending   map[string][]edgeproto.AccountDeleted
+	// enrollments are "<server id> <relay origin> <agent version>" for
+	// each Enroll and RecordClaim, and connectorUses "<server id>
+	// <relay origin>" for each ConnectorUsed.
+	enrollments   []string
+	connectorUses []string
 }
 
 type tokenEntry struct {
@@ -116,9 +121,10 @@ func (d *fakeDir) AdmitClaim(_ context.Context, serverID string, _ edgeproto.Acc
 	return nil
 }
 
-func (d *fakeDir) Enroll(_ context.Context, serverID, _ string, policy edgeproto.AccessPolicy) (bool, error) {
+func (d *fakeDir) Enroll(_ context.Context, serverID, _ string, policy edgeproto.AccessPolicy, origin, agentVersion string) (bool, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.enrollments = append(d.enrollments, serverID+" "+origin+" "+agentVersion)
 	if d.blocked[serverID] {
 		return false, edgeproto.RefusalServerBlocked
 	}
@@ -128,9 +134,17 @@ func (d *fakeDir) Enroll(_ context.Context, serverID, _ string, policy edgeproto
 	return d.owners[serverID], nil
 }
 
-func (d *fakeDir) RecordClaim(_ context.Context, serverID, _ string, policy edgeproto.AccessPolicy, owner edgeproto.Account) error {
+func (d *fakeDir) ConnectorUsed(_ context.Context, serverID, origin string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.connectorUses = append(d.connectorUses, serverID+" "+origin)
+	return nil
+}
+
+func (d *fakeDir) RecordClaim(_ context.Context, serverID, _ string, policy edgeproto.AccessPolicy, owner edgeproto.Account, origin, agentVersion string) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.enrollments = append(d.enrollments, serverID+" "+origin+" "+agentVersion)
 	if d.recordErr != nil {
 		return d.recordErr
 	}

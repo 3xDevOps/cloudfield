@@ -90,27 +90,28 @@ type Session struct {
 	SignedInAt time.Time
 }
 
-// CreateSession stores a session under the hash of its cookie token and
-// drops expired sessions.
-func (s *Store) CreateSession(ctx context.Context, id, tokenHash string, accountID int64, now, expires time.Time) error {
+// CreateSession stores a session signed in at the sign-in origin signin
+// under the hash of its cookie token, and drops expired sessions.
+func (s *Store) CreateSession(ctx context.Context, id, tokenHash string, accountID int64, signin string, now, expires time.Time) error {
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM web_sessions WHERE expires_at <= ?`, unix(now)); err != nil {
 		return fmt.Errorf("edgestore: drop expired sessions: %w", err)
 	}
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO web_sessions (id, token_hash, account_id, created_at, expires_at)
-		VALUES (?, ?, ?, ?, ?)`, id, tokenHash, accountID, unix(now), unix(expires)); err != nil {
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO web_sessions (id, token_hash, account_id, created_at, expires_at, signin_origin)
+		VALUES (?, ?, ?, ?, ?, NULLIF(?, ''))`, id, tokenHash, accountID, unix(now), unix(expires), signin); err != nil {
 		return fmt.Errorf("edgestore: create session: %w", err)
 	}
 	return nil
 }
 
 // UseSession returns the unexpired session of an account that is not
-// blocked stored under tokenHash, and moves its expiry to expires.
-func (s *Store) UseSession(ctx context.Context, tokenHash string, now, expires time.Time) (Session, error) {
+// blocked stored under tokenHash, moves its expiry to expires, and
+// records the sign-in origin signin for a session that has none.
+func (s *Store) UseSession(ctx context.Context, tokenHash, signin string, now, expires time.Time) (Session, error) {
 	var sess Session
 	var created int64
-	err := s.db.QueryRowContext(ctx, `UPDATE web_sessions SET expires_at = ?
+	err := s.db.QueryRowContext(ctx, `UPDATE web_sessions SET expires_at = ?, signin_origin = COALESCE(signin_origin, NULLIF(?, ''))
 		WHERE token_hash = ? AND expires_at > ? AND `+notBlocked("web_sessions.account_id")+` RETURNING id, account_id, created_at`,
-		unix(expires), tokenHash, unix(now)).Scan(&sess.ID, &sess.AccountID, &created)
+		unix(expires), signin, tokenHash, unix(now)).Scan(&sess.ID, &sess.AccountID, &created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Session{}, ErrNotFound
 	}

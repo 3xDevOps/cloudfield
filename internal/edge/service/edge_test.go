@@ -261,7 +261,7 @@ func (h *harness) claim(t *testing.T, id, name string, owner edgeproto.Account) 
 	if _, err := h.svc.store.SignIn(ctx, owner, h.clock.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.svc.RecordClaim(ctx, id, name, edgeproto.PolicyAccount, owner); err != nil {
+	if err := h.svc.RecordClaim(ctx, id, name, edgeproto.PolicyAccount, owner, testRelay, "v1.0.0"); err != nil {
 		t.Fatal(err)
 	}
 }

@@ -46,7 +46,9 @@ type Directory interface {
 	// policy, from its hello, for a server that is. It returns
 	// edgeproto.RefusalServerBlocked for a server id the operator
 	// blocked.
-	Enroll(ctx context.Context, serverID, name string, policy edgeproto.AccessPolicy) (claimed bool, err error)
+	// origin is the relay origin it enrolled at and agentVersion the
+	// build its hello reported.
+	Enroll(ctx context.Context, serverID, name string, policy edgeproto.AccessPolicy, origin, agentVersion string) (claimed bool, err error)
 	// ReplaceDirectory stores the directory a claimed server pushed.
 	ReplaceDirectory(ctx context.Context, serverID string, entries []edgeproto.DirectoryEntry) error
 	// Unenroll forgets serverID after its operator ran
@@ -55,8 +57,11 @@ type Directory interface {
 	// RecordClaim records owner as the owner of serverID, which has none,
 	// after serverID reported that a claim connection the relay opened
 	// for owner presented its claim code. name and policy are from its
-	// hello.
-	RecordClaim(ctx context.Context, serverID, name string, policy edgeproto.AccessPolicy, owner edgeproto.Account) error
+	// hello, and origin the relay origin it enrolled at.
+	RecordClaim(ctx context.Context, serverID, name string, policy edgeproto.AccessPolicy, owner edgeproto.Account, origin, agentVersion string) error
+	// ConnectorUsed records a connector request to the claimed server
+	// serverID through the relay origin origin.
+	ConnectorUsed(ctx context.Context, serverID, origin string) error
 	// TransferOwner records owner as the owner of the claimed server
 	// serverID, which reported the transfer.
 	TransferOwner(ctx context.Context, serverID string, owner edgeproto.Principal) error
@@ -185,6 +190,9 @@ type Relay struct {
 	// directories holds, per server id, the directory waiting to be
 	// stored.
 	directories map[string]*directoryWrite
+	// connectorUsed holds when a connector request to a claimed server
+	// through a relay origin was last recorded (Directory.ConnectorUsed).
+	connectorUsed map[connectorUse]time.Time
 
 	addrMu    sync.Mutex
 	addrConns map[netip.Prefix]int
@@ -271,6 +279,7 @@ func New(ctx context.Context, cfg Config) (*Relay, error) {
 		away:               map[string]*absence{},
 		claims:             map[string]claimGrant{},
 		directories:        map[string]*directoryWrite{},
+		connectorUsed:      map[connectorUse]time.Time{},
 		addrConns:          map[netip.Prefix]int{},
 		refusalsMap:        map[string]uint64{},
 		connectorMap:       map[ConnectorKey]uint64{},

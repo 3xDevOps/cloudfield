@@ -193,7 +193,7 @@ func (s *Service) startSession(w http.ResponseWriter, r *http.Request, account e
 	}
 	token := edgeproto.NewToken()
 	if err := s.store.CreateSession(ctx, edgeproto.NewConnID(), edgeproto.HashToken(token), accountID,
-		now, now.Add(edgeproto.SessionIdle)); err != nil {
+		s.pair(r).signin, now, now.Add(edgeproto.SessionIdle)); err != nil {
 		return err
 	}
 	setCookie(w, sessionCookie, token, int(edgeproto.SessionIdle.Seconds()))

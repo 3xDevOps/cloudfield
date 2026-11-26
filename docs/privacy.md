@@ -318,6 +318,15 @@ addresses too.
 | A server id the operator blocked, and when | To refuse that server | Until the operator unblocks it |
 | An account the operator blocked: its GitHub user id, and when | To refuse its sign-ins and claims | Until the operator unblocks it, also after the account is deleted |
 | The edge's log: server ids, error messages, and the IP addresses of refused connections and failed TLS handshakes | To operate and defend the edge | For the retention period its operator sets |
+| Which of the edge's own sign-in addresses (`https://<host>`, not an IP address) each signed-in device's token was issued at, or first used at for a token issued before the edge recorded it | To count and end the devices on an address the operator retires | As long as the device |
+| Which of the edge's own sign-in addresses each browser sign-in was issued at | To count the accounts signed in on an address the operator retires | As long as the sign-in |
+| Each claimed server's last enrollment: which of the edge's relay addresses it connected to, when, and the `cloudfield-server` build it reported | To list the servers still on an address the operator retires (`aether-edge retiring`) | Replaced at each enrollment; removed with the server |
+| For each claimed server and each of the edge's relay addresses it got MCP connector requests through: when the last one came, recorded at most once an hour | To count the connectors still on an address the operator retires | Until the server is removed |
+| Each pair of its own addresses the edge has served, and when it last started with it | To report on a pair after it is taken out of service | Indefinitely |
+
+A backup of `edge.db` (`aether-edge backup`, and the copy the edge takes
+before each schema upgrade in `backups/`) holds all of the above except the
+log, as it was when the copy was made.
 
 Rate limits count requests per IP address, or per /64 for IPv6, in memory
 only; nothing is written. While you are connected, the edge also sees your
