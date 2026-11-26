@@ -222,14 +222,21 @@ func (r *Relay) forward(w http.ResponseWriter, req *http.Request, serverID strin
 }
 
 // connectorUseInterval is the least time between two records of
-// connector requests to one server through one relay origin.
-const connectorUseInterval = time.Hour
+// connector requests to one server through one relay origin, and
+// connectorPruneMin the least size of connectorUsed that drops expired
+// entries.
+const (
+	connectorUseInterval = time.Hour
+	connectorPruneMin    = 64
+)
 
 type connectorUse struct{ serverID, origin string }
 
 // countConnector counts a connector request to serverID by the relay
-// origin it came in on and the server's protocol version, and records it
-// for a connected, claimed server at most once a connectorUseInterval.
+// origin it came in on and the server's protocol version. With a
+// ConnectorRecorder it also records the request, for a connected, claimed
+// server, at most once a connectorUseInterval and without waiting for the
+// write.
 func (r *Relay) countConnector(req *http.Request, serverID string) {
 	k := ConnectorKey{Origin: r.originOf(req)}
 	use := connectorUse{serverID, k.Origin}
@@ -238,8 +245,11 @@ func (r *Relay) countConnector(req *http.Request, serverID string) {
 	r.mu.Lock()
 	if reg := r.servers[serverID]; reg != nil {
 		k.Protocol = reg.version
-		if reg.claimed && now.Sub(r.connectorUsed[use]) >= connectorUseInterval {
-			maps.DeleteFunc(r.connectorUsed, func(_ connectorUse, at time.Time) bool { return now.Sub(at) >= connectorUseInterval })
+		if r.connectors != nil && reg.claimed && now.Sub(r.connectorUsed[use]) >= connectorUseInterval {
+			if len(r.connectorUsed) >= r.connectorPruneAt {
+				maps.DeleteFunc(r.connectorUsed, func(_ connectorUse, at time.Time) bool { return now.Sub(at) >= connectorUseInterval })
+				r.connectorPruneAt = max(2*len(r.connectorUsed), connectorPruneMin)
+			}
 			r.connectorUsed[use], record = now, true
 		}
 	}
@@ -248,10 +258,26 @@ func (r *Relay) countConnector(req *http.Request, serverID string) {
 	r.connectorMap[k]++
 	r.refusalsMu.Unlock()
 	if record {
-		if err := r.dir.ConnectorUsed(req.Context(), serverID, k.Origin); err != nil {
-			slog.Warn("relay: connector request not recorded", "server", serverID, "origin", k.Origin, "error", err)
-		}
+		go r.recordConnector(context.WithoutCancel(req.Context()), use, now)
 	}
+}
+
+// recordConnector writes use, reserved at reserved in connectorUsed, and
+// drops the reservation when the write fails, so the next request tries
+// again.
+func (r *Relay) recordConnector(ctx context.Context, use connectorUse, reserved time.Time) {
+	ctx, cancel := context.WithTimeout(ctx, directoryTimeout)
+	defer cancel()
+	err := r.connectors.ConnectorUsed(ctx, use.serverID, use.origin)
+	if err == nil {
+		return
+	}
+	slog.Warn("relay: connector request not recorded", "server", use.serverID, "origin", use.origin, "error", err)
+	r.mu.Lock()
+	if r.connectorUsed[use].Equal(reserved) {
+		delete(r.connectorUsed, use)
+	}
+	r.mu.Unlock()
 }
 
 // forwardOnce sends req to serverID and writes the answer, or the

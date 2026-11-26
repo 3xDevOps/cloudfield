@@ -58,9 +58,6 @@ type Directory interface {
 	// for owner presented its claim code. name, policy and agentVersion
 	// are from its hello, and origin the relay origin it enrolled at.
 	RecordClaim(ctx context.Context, serverID, name string, policy edgeproto.AccessPolicy, owner edgeproto.Account, origin, agentVersion string) error
-	// ConnectorUsed records a connector request to the claimed server
-	// serverID through the relay origin origin.
-	ConnectorUsed(ctx context.Context, serverID, origin string) error
 	// TransferOwner records owner as the owner of the claimed server
 	// serverID, which reported the transfer.
 	TransferOwner(ctx context.Context, serverID string, owner edgeproto.Principal) error
@@ -71,6 +68,12 @@ type Directory interface {
 	// and DeletionApplied forgets one once serverID applied it.
 	PendingDeletions(ctx context.Context, serverID string) ([]edgeproto.AccountDeleted, error)
 	DeletionApplied(ctx context.Context, serverID string, d edgeproto.AccountDeleted) error
+}
+
+// ConnectorRecorder records that the claimed server serverID got a
+// connector request through the relay origin origin.
+type ConnectorRecorder interface {
+	ConnectorUsed(ctx context.Context, serverID, origin string) error
 }
 
 // EgressStore persists the monthly egress counter so the budget survives
@@ -93,6 +96,9 @@ type Config struct {
 	EdgeKey   ed25519.PrivateKey
 	Directory Directory
 	Egress    EgressStore
+	// Connectors, when set, records connector requests at most once a
+	// connectorUseInterval per server and relay origin.
+	Connectors ConnectorRecorder
 	// EgressBudget is how many bytes the relay sends in a calendar month
 	// (UTC) before it throttles every splice. Zero means no budget.
 	EgressBudget int64
@@ -189,9 +195,13 @@ type Relay struct {
 	// directories holds, per server id, the directory waiting to be
 	// stored.
 	directories map[string]*directoryWrite
-	// connectorUsed holds when a connector request to a claimed server
-	// through a relay origin was last recorded (Directory.ConnectorUsed).
-	connectorUsed map[connectorUse]time.Time
+	// connectors records connector requests, and connectorUsed holds,
+	// for each server and relay origin, when one was last recorded or
+	// is being recorded. connectorPruneAt is the size at which expired
+	// entries are next dropped.
+	connectors       ConnectorRecorder
+	connectorUsed    map[connectorUse]time.Time
+	connectorPruneAt int
 
 	addrMu    sync.Mutex
 	addrConns map[netip.Prefix]int
@@ -278,7 +288,9 @@ func New(ctx context.Context, cfg Config) (*Relay, error) {
 		away:               map[string]*absence{},
 		claims:             map[string]claimGrant{},
 		directories:        map[string]*directoryWrite{},
+		connectors:         cfg.Connectors,
 		connectorUsed:      map[connectorUse]time.Time{},
+		connectorPruneAt:   connectorPruneMin,
 		addrConns:          map[netip.Prefix]int{},
 		refusalsMap:        map[string]uint64{},
 		connectorMap:       map[ConnectorKey]uint64{},

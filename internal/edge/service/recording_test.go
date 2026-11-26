@@ -149,7 +149,7 @@ func TestEnrollmentRecordsOrigin(t *testing.T) {
 			t.Errorf("enrolled at %s with %s, records %q", e.origin, e.build, got)
 		}
 	}
-	if err := relay.ConnectorUsed(context.Background(), id, testRelay2); err != nil {
+	if err := h.svc.RelayConfig(0).Connectors.ConnectorUsed(context.Background(), id, testRelay2); err != nil {
 		t.Fatal(err)
 	}
 	if got := h.column(t, `SELECT relay_origin FROM connector_use WHERE server_id = ?`, id); got != testRelay2 {
@@ -189,8 +189,8 @@ func TestOriginsNotRecordedByDefault(t *testing.T) {
 	if _, err := relay.Enroll(ctx, id, "workstation", edgeproto.PolicyAccount, testRelay2, "v2.0.0"); err != nil {
 		t.Fatal(err)
 	}
-	if err := relay.ConnectorUsed(ctx, id, testRelay2); err != nil {
-		t.Fatal(err)
+	if c := h.svc.RelayConfig(0).Connectors; c != nil {
+		t.Errorf("relay configuration without RecordOrigins records connectors with %T", c)
 	}
 	for _, q := range []string{
 		`SELECT COUNT(*) FROM origin_pairs`,

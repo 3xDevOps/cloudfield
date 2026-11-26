@@ -287,6 +287,7 @@ func newEnvWith(t *testing.T, budget int64, egress *fakeEgress) *env {
 		EdgeKey:      key,
 		Directory:    e.dir,
 		Egress:       e.egress,
+		Connectors:   e.dir,
 		EgressBudget: budget,
 	})
 	if err != nil {
