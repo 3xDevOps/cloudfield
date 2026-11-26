@@ -71,7 +71,9 @@ func (r *saveRuntime) command(id runtime.ID) []string {
 
 func (r *saveRuntime) SavedMemory(runtime.ID) (uint64, error) { return 0, nil }
 
-func (r *saveRuntime) Save(_ context.Context, id runtime.ID) error {
+// held runs the saving hook and reports saveErr, for a save and for the
+// pause an idle sleep makes in its place.
+func (r *saveRuntime) held() error {
 	r.saveMu.Lock()
 	saving, release, saveErr := r.saving, r.release, r.saveErr
 	r.saveMu.Unlock()
@@ -79,8 +81,19 @@ func (r *saveRuntime) Save(_ context.Context, id runtime.ID) error {
 		saving <- struct{}{}
 		<-release
 	}
-	if saveErr != nil {
-		return saveErr
+	return saveErr
+}
+
+func (r *saveRuntime) Pause(ctx context.Context, id runtime.ID) error {
+	if err := r.held(); err != nil {
+		return err
+	}
+	return r.acpRuntime.Pause(ctx, id)
+}
+
+func (r *saveRuntime) Save(_ context.Context, id runtime.ID) error {
+	if err := r.held(); err != nil {
+		return err
 	}
 	c, err := r.get(id)
 	if err != nil {
@@ -175,6 +188,21 @@ func (e *testEnv) onGuestCPU(percent string) {
 	}
 }
 
+// saveRun puts run to sleep and saves its VM to disk, as the memory guard
+// saves one the sleep sweep left paused in memory.
+func (e *testEnv) saveRun(t *testing.T, run domain.RunID) {
+	t.Helper()
+	e.sleepRun(t, run)
+	e.sched.mu.Lock()
+	entry := e.sched.runs[run]
+	e.sched.mu.Unlock()
+	entry.lifecycleMu.Lock()
+	defer entry.lifecycleMu.Unlock()
+	if err := e.sched.saveAsleepRunning(t.Context(), entry); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func (e *testEnv) cid(t *testing.T, run domain.RunID) runtime.ID {
 	t.Helper()
 	return e.container(t, run).id
@@ -205,7 +233,7 @@ func TestAVMSleepsBySavingAndWakesWithItsAgentRunning(t *testing.T) {
 	run := e.launchACP(t, "say pong")
 	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
 
-	e.sleepRun(t, run.ID)
+	e.saveRun(t, run.ID)
 	if !sr.isSaved(e.cid(t, run.ID)) || !e.sched.Sleep(run.ID).Saved {
 		t.Fatalf("an asleep VM was not saved: %+v", e.sched.Sleep(run.ID))
 	}
@@ -228,6 +256,53 @@ func TestAVMSleepsBySavingAndWakesWithItsAgentRunning(t *testing.T) {
 	}
 	waitItems(t, e.sched, run.ID, "a turn after the wake", turnEnded("end_turn", 2))
 	waitItems(t, e.sched, run.ID, "the wake's notice", noticed("Woke from sleep", "carry on where they were"))
+}
+
+// An idle VM is only paused in the host's memory, and sleeps there with
+// every process. A server restart leaves it paused, and the next prompt
+// resumes it with its agent: nothing is restored.
+func TestAnIdleVMIsPausedInMemoryAndResumesWithItsAgent(t *testing.T) {
+	t.Parallel()
+	e, rt, sr := newSaveEnv(t, false)
+	run := e.launchACP(t, "say pong")
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+
+	e.sleepRun(t, run.ID)
+	cid := e.cid(t, run.ID)
+	if state := containerState(e.container(t, run.ID)); state != "paused" || sr.isSaved(cid) {
+		t.Fatalf("an idle VM is %s, saved %v; want it paused in memory", state, sr.isSaved(cid))
+	}
+	if state := e.sched.Sleep(run.ID); state.AsleepSince == nil || !state.Saved || !state.InMemory {
+		t.Fatalf("a VM paused in memory sleeps as %+v, want every process kept in memory", state)
+	}
+	s2 := e.restartACP(t)
+	if state := containerState(e.container(t, run.ID)); state != "paused" || sr.isSaved(cid) {
+		t.Fatalf("after a restart the VM is %s, saved %v; want it still paused in memory", state, sr.isSaved(cid))
+	}
+
+	if _, err := s2.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "after the pause"}, false, nil); err != nil {
+		t.Fatalf("a prompt to a paused session: %v", err)
+	}
+	if state := containerState(e.container(t, run.ID)); state != "running" || !adopted(rt) {
+		t.Fatalf("the prompt left the VM %s with %d agents, want it resumed with the one it had", state, len(rt.all()))
+	}
+	waitItems(t, s2, run.ID, "a turn after the pause", turnEnded("end_turn", 2))
+	waitItems(t, s2, run.ID, "the wake's notice", noticed("Woke from sleep", "paused this idle session in the server's memory"))
+}
+
+// A VM that stopped while paused in memory, as with its host, is taken up
+// asleep on its disks.
+func TestAPausedVMThatStoppedWithItsHostSleepsOnItsDisks(t *testing.T) {
+	t.Parallel()
+	e, _, _ := newSaveEnv(t, true)
+	run := e.launchACP(t, "say pong")
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	e.sleepRun(t, run.ID)
+	e.container(t, run.ID).endProcess(137)
+	s2 := e.restartACP(t)
+	if state := s2.Sleep(run.ID); state.AsleepSince == nil || state.Saved || state.InMemory {
+		t.Fatalf("after its VM stopped the session is %+v, want it asleep with its processes stopped", state)
+	}
 }
 
 // A save keeps every process, so a dev server keeps a VM awake only while
@@ -254,7 +329,7 @@ func TestOnlyBusyWorkKeepsAVMAwake(t *testing.T) {
 	e.waitIdle(t, run.ID)
 	e.stayAwake(t, run.ID, "the guest was busy")
 	cpu.Store("20")
-	e.sleepRun(t, run.ID)
+	e.saveRun(t, run.ID)
 	if !sr.isSaved(e.cid(t, run.ID)) {
 		t.Fatal("the VM was not saved once idle")
 	}
@@ -361,7 +436,7 @@ func TestKillingOrClosingASleepingVMWakesItFirst(t *testing.T) {
 			e, _, sr := newSaveEnv(t, false)
 			run := e.launchACP(t, "say pong")
 			waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
-			e.sleepRun(t, run.ID)
+			e.saveRun(t, run.ID)
 			c := e.container(t, run.ID)
 			var mu sync.Mutex
 			var committedUp []bool
@@ -404,7 +479,7 @@ func TestKillingASleepingVMThatCannotWakeEndsIt(t *testing.T) {
 	e, _, sr := newSaveEnv(t, false)
 	run := e.launchACP(t, "say pong")
 	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
-	e.sleepRun(t, run.ID)
+	e.saveRun(t, run.ID)
 	sr.saveMu.Lock()
 	sr.restoreErr = errors.New("restore: monitor exited")
 	sr.saveMu.Unlock()
@@ -429,7 +504,7 @@ func TestMailWakesASleepingStandardVM(t *testing.T) {
 	e.sched.mu.Lock()
 	e.sched.runs[run.ID].activity = domain.ActivityAnswered
 	e.sched.mu.Unlock()
-	e.sleepRun(t, run.ID)
+	e.saveRun(t, run.ID)
 	if !sr.isSaved(e.cid(t, run.ID)) {
 		t.Fatal("a Standard VM was not saved")
 	}
@@ -449,7 +524,7 @@ func TestAVMWhoseStateCannotBeRestoredStartsFromItsDisk(t *testing.T) {
 	e, rt, sr := newSaveEnv(t, true)
 	run := e.launchACP(t, "say pong")
 	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
-	e.sleepRun(t, run.ID)
+	e.saveRun(t, run.ID)
 	sr.saveMu.Lock()
 	sr.restoreErr = errors.New("restore: the saved state was written by another kernel\nconsole.log:\nKernel panic")
 	sr.saveMu.Unlock()
@@ -481,7 +556,7 @@ func TestAColdStartWhoseReattachFailsNotesTheLostProcesses(t *testing.T) {
 	e, rt, sr := newSaveEnv(t, true)
 	run := e.launchACP(t, "say pong")
 	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
-	e.sleepRun(t, run.ID)
+	e.saveRun(t, run.ID)
 	sr.saveMu.Lock()
 	sr.restoreErr = errors.New("restore: the saved state was written by another kernel\nconsole.log:\nKernel panic")
 	sr.saveMu.Unlock()
@@ -510,7 +585,7 @@ func TestAFailedRestoreOfAnAgentThatCannotResumeKeepsItsState(t *testing.T) {
 	e, rt, sr := newSaveEnv(t, false)
 	run := e.launchACP(t, "say pong")
 	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
-	e.sleepRun(t, run.ID)
+	e.saveRun(t, run.ID)
 	sr.saveMu.Lock()
 	sr.restoreErr = errors.New("restore: monitor exited")
 	sr.saveMu.Unlock()
@@ -541,7 +616,7 @@ func TestAWakeStartsAVMThatStoppedBeforeItWasSavedFromItsDisk(t *testing.T) {
 	e, _, sr := newSaveEnv(t, false)
 	run := e.launchACP(t, "say pong")
 	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
-	e.sleepRun(t, run.ID)
+	e.saveRun(t, run.ID)
 	sr.saveMu.Lock()
 	delete(sr.saved, e.cid(t, run.ID))
 	sr.saveMu.Unlock()
@@ -563,7 +638,7 @@ func TestAWakeTakesUpAGuestAFailedRestoreLeftRunning(t *testing.T) {
 	e, rt, sr := newSaveEnv(t, false)
 	run := e.launchACP(t, "say pong")
 	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
-	e.sleepRun(t, run.ID)
+	e.saveRun(t, run.ID)
 	sr.saveMu.Lock()
 	sr.restoreErr, sr.restoreLate = errors.New("restore: set the clock"), true
 	sr.saveMu.Unlock()
@@ -637,7 +712,7 @@ func TestAVMStartedFromItsDiskStartsANewConversationWhenTheAgentCannotRestoreIts
 					_, err = e.sched.Relaunch(t.Context(), run.ID, e.member.ID)
 				}
 			} else {
-				e.sleepRun(t, run.ID)
+				e.saveRun(t, run.ID)
 				if err = sr.Stop(t.Context(), e.cid(t, run.ID), 0); err == nil {
 					_, err = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "wake"}, false, nil)
 				}
@@ -769,7 +844,7 @@ func TestASavedRunWakesWithItsAgentAfterARestart(t *testing.T) {
 	e, rt, sr := newSaveEnv(t, false)
 	run := e.launchACP(t, "say pong")
 	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
-	e.sleepRun(t, run.ID)
+	e.saveRun(t, run.ID)
 	s2 := e.restartACP(t)
 	if state := s2.Sleep(run.ID); state.AsleepSince == nil || !state.Saved {
 		t.Fatalf("the restart lost the session's sleep: %+v", state)
@@ -791,7 +866,7 @@ func TestAStopDuringAWakesReattachKeepsTheAgentForTheNextServer(t *testing.T) {
 	e, rt, _ := newSaveEnv(t, false)
 	run := e.launchACP(t, "say pong")
 	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
-	e.sleepRun(t, run.ID)
+	e.saveRun(t, run.ID)
 	rt.mu.Lock()
 	rt.onAttach = func() error {
 		e.sched.superCancel()
@@ -827,7 +902,7 @@ func TestDiskReclaimRemovesAClosedVMBeforeAnOpenSessionsSavedMemory(t *testing.T
 	e, _, sr := newSaveEnv(t, true)
 	open := e.launchACP(t, "say pong")
 	waitItems(t, e.sched, open.ID, "the open session's turn", turnEnded("end_turn", 1))
-	e.sleepRun(t, open.ID)
+	e.saveRun(t, open.ID)
 	var closed [2]*domain.Run
 	for i := range closed {
 		closed[i] = e.launchACP(t, "say pong")
@@ -855,7 +930,7 @@ func TestDiskReclaimDropsASavedStateAndTheWakeStartsFromDisk(t *testing.T) {
 	e, rt, sr := newSaveEnv(t, true)
 	run := e.launchACP(t, "say pong")
 	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
-	e.sleepRun(t, run.ID)
+	e.saveRun(t, run.ID)
 	saved := e.sched.savedByAge()
 	if len(saved) != 1 {
 		t.Fatalf("saved sessions = %d, want 1", len(saved))

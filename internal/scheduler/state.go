@@ -483,7 +483,9 @@ type sidecar struct {
 	// last wake's failure.
 	AsleepSince *time.Time `json:"asleep_since,omitempty"`
 	AsleepSaved bool       `json:"asleep_saved,omitempty"`
-	WakeError   string     `json:"wake_error,omitempty"`
+	// AsleepResident is a sleeping VM paused in memory.
+	AsleepResident bool   `json:"asleep_resident,omitempty"`
+	WakeError      string `json:"wake_error,omitempty"`
 }
 
 // sidecar snapshots the entry's durable state. Caller must hold s.mu.
@@ -574,6 +576,7 @@ func (e *supervised) sidecar() sidecar {
 		UsageLimit:          e.usageLimit,
 		AsleepSince:         asleepSince,
 		AsleepSaved:         e.asleepSaved,
+		AsleepResident:      e.asleepResident,
 		WakeError:           wakeError,
 	}
 }

@@ -242,12 +242,13 @@ func (c memoryCandidate) rank() int {
 }
 
 // memoryCandidates lists the running session VMs in the order a save takes
-// them: closed ones and those of runs recorded asleep, then open ones whose
-// agent is idle, the longest idle first, then the rest, the one holding the
-// most memory first. A run that must stay awake whatever the host is short
-// of, a Background one, and one whose save failed within memorySaveRetry
-// are left out, as is one being saved: writing is the memory of those, which
-// their saves have yet to write to disk.
+// them: closed ones and those of runs recorded asleep, the longest asleep
+// first, then open ones whose agent is idle, the longest idle first, then
+// the rest, the one holding the most memory first. A run that must stay
+// awake whatever the host is short of, a Background one, and one whose save
+// failed within memorySaveRetry are left out, as is one being saved:
+// writing is the memory of those, which their saves have yet to write to
+// disk.
 func (s *Scheduler) memoryCandidates(ctx context.Context) (out []memoryCandidate, writing uint64) {
 	type open struct {
 		e        *supervised
@@ -271,7 +272,7 @@ func (s *Scheduler) memoryCandidates(ctx context.Context) (out []memoryCandidate
 		switch {
 		case !e.asleepSince.IsZero():
 			if !e.asleepSaved && memory[e.containerID] > 0 {
-				out = append(out, memoryCandidate{e: e, cid: e.containerID, closed: e.retained, asleep: true, idle: true, memory: memory[e.containerID]})
+				out = append(out, memoryCandidate{e: e, cid: e.containerID, closed: e.retained, asleep: true, idle: true, since: e.asleepSince, memory: memory[e.containerID]})
 			}
 		case e.retained && e.paused && !e.destroyPending && !e.evidencePending && e.retainedUntil != nil:
 			out = append(out, memoryCandidate{e: e, cid: e.containerID, closed: true, idle: true, memory: memory[e.containerID]})
@@ -420,7 +421,7 @@ func (s *Scheduler) saveCandidate(ctx context.Context, c memoryCandidate, workin
 		return false
 	}
 	if !working {
-		return s.savedForMemory(ctx, c.e, s.saveLive(ctx, c.e, saver), memorySavedIdleNote)
+		return s.savedForMemory(ctx, c.e, s.saveLive(ctx, c.e, saver, false), memorySavedIdleNote)
 	}
 	if !frozen {
 		frozen = s.freezeToSave(c.e, cid)
@@ -442,7 +443,7 @@ func (s *Scheduler) saveCandidate(ctx context.Context, c memoryCandidate, workin
 			return false
 		}
 	}
-	return s.savedForMemory(ctx, c.e, s.saveMarked(ctx, c.e, saver, frozen), note)
+	return s.savedForMemory(ctx, c.e, s.saveMarked(ctx, c.e, saver, frozen, false), note)
 }
 
 // savedForMemory logs a save under memory pressure, or a closed session's

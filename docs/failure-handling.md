@@ -374,7 +374,7 @@ parse refuses launches with `scheduler: host capacity unavailable`, like the
 other probes.
 
 A launch or wake that memory refuses first saves idle session VMs to disk,
-the longest idle first, until twice the floor plus what the start and the
+those paused in memory first and then the longest idle, until twice the floor plus what the start and the
 starts in flight take is free, then checks once more. It waits at most 30
 seconds for any one save: a save still running then goes on alone, and the
 check runs at once, so the launch or wake is likely refused until that save
@@ -855,9 +855,19 @@ no dashboard setting.
 
 ### Sessions in VMs
 
-With `--session-runtime vm`, a sleep saves the session's whole VM to disk,
-with every process in it, and a wake restores it where it was. Nothing is
-lost, so more sessions sleep, sooner:
+With `--session-runtime vm`, a sleep pauses the session's whole VM in the
+server's memory, with every process in it, and a wake resumes it: on a
+hosted test runner a paused VM returned its first command 30 to 42 ms after
+the resume began (`TestKVMIdleVMPausedInMemoryAnswersAtOnce`). A paused VM
+keeps the memory it holds, 369 to 403 MiB in that test, which every
+launch's memory check counts as used. When the server runs short of memory
+it saves paused VMs to disk first, the longest paused first ([Recover from
+memory pressure](#recover-from-memory-pressure)): 1.6 to 2.0 seconds each
+in that test. A wake restores a saved VM where it was. A server restart or
+update leaves a paused VM paused. Its memory is gone with the host's: after
+a host reboot the session shows **Asleep since · processes stopped** and
+starts again from its disk on its next use. Nothing is lost otherwise, so
+more sessions sleep, sooner:
 
 - Every agent sleeps, and Standard sessions too. Background sessions never
   do.
@@ -874,7 +884,7 @@ lost, so more sessions sleep, sooner:
   wakes a VM: a tunnel such as `cloudflared` or `ngrok`, a webhook receiver,
   or a quiet download or remote `ssh` job freezes with it and may lose its
   connection, so keep such a session in use, or set `--run-sleep-after` to
-  `0`. A save that fails leaves the session running; Cloudfield tries again
+  `0`. A pause that fails leaves the session running; Cloudfield tries again
   after another `--run-sleep-after`.
 - A closed session's VM is stopped as soon as the close finishes, whatever
   `--run-sleep-after` is, and keeps its disks without its memory
@@ -903,8 +913,11 @@ sleeping session, Standard or Enhanced: mail, `cloudfield-internal report
 
 A Standard session's Chat and Terminal views, and an Enhanced session's
 Chat view, show **Asleep since** with a **Wake** button while it sleeps.
+Selecting the row says whether the VM is paused in the server's memory or
+saved to disk, as do the session's details and
+`cloudfield sessions <session-id>`.
 
-A wake reads all of the saved memory before the VM runs. On a hosted test
+The wake of a saved VM reads all of the saved memory before the VM runs. On a hosted test
 runner, a VM with 1.3 GiB of saved memory woke in 1.9 to 8.5 seconds with
 the file read from disk, and in about 1 second with it still in the host's
 page cache. Cloud Hypervisor can also load the memory on demand, which ran
@@ -917,7 +930,9 @@ message to a sleeping Claude Code or Codex session running a dev server and
 a `docker compose` stack was accepted 0.7 to 1.5 seconds after it was sent,
 and a start from disk after a failed restore took 5 seconds. The Chat view
 and the session's terminal say
-`Cloudfield had saved this session to disk and restored it`.
+`Cloudfield had saved this session to disk and restored it`, or
+`Cloudfield had paused this idle session in the server's memory and resumed
+it` for a VM that was only paused.
 
 When the saved state cannot be restored, because the server now runs
 another Cloud Hypervisor or guest kernel, or the file is gone or damaged,

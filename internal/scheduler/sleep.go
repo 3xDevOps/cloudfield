@@ -41,11 +41,13 @@ const (
 var ErrClosedAsleep = fmt.Errorf("%w: the session is closed and its container is asleep; reopen it", ErrInvalidTransition)
 
 // SleepState is a live run's idle sleep: when its container was stopped or
-// its VM saved, whether the saved VM keeps every process, whether a wake is
-// starting it, and the last wake's failure.
+// its VM paused or saved, whether the VM keeps every process, whether it is
+// only paused in the host's memory, whether a wake is starting it, and the
+// last wake's failure.
 type SleepState struct {
 	AsleepSince *time.Time
 	Saved       bool
+	InMemory    bool
 	Waking      bool
 	WakeError   string
 }
@@ -60,7 +62,7 @@ func (s *Scheduler) Sleep(run domain.RunID) SleepState {
 		return SleepState{}
 	}
 	since := entry.asleepSince
-	state := SleepState{AsleepSince: &since, Saved: entry.asleepSaved, Waking: entry.waking != nil}
+	state := SleepState{AsleepSince: &since, Saved: entry.asleepSaved || entry.asleepResident, InMemory: entry.residentLocked(), Waking: entry.waking != nil}
 	if entry.wakeErr != nil {
 		state.WakeError = entry.wakeErr.Error()
 	}
@@ -294,10 +296,15 @@ func (s *Scheduler) wakeLive(ctx context.Context, entry *supervised) (woke, erro
 		return woke{}, fmt.Errorf("%w: the session is ending", ErrNoLiveEnvironment)
 	}
 	cid := entry.containerID
+	resident := entry.residentLocked()
 	entry.admitting = true
 	s.mu.Unlock()
 
-	release, err := s.reserveWake(ctx, cid)
+	// A VM paused in memory holds what it wakes with.
+	release, err := func() {}, error(nil)
+	if !resident {
+		release, err = s.reserveWake(ctx, cid)
+	}
 	if err == nil {
 		defer release()
 		defer s.needGuest(cid)()
@@ -430,7 +437,7 @@ func (s *Scheduler) publishSleep(entry *supervised) {
 	s.publish(context.Background(), events.Event{
 		WorkspaceID: entry.workspaceID,
 		RunID:       entry.runID,
-		Payload:     events.RunSleepPayload{AsleepSince: state.AsleepSince, AsleepSaved: state.Saved, Waking: state.Waking, WakeError: state.WakeError},
+		Payload:     events.RunSleepPayload{AsleepSince: state.AsleepSince, AsleepSaved: state.Saved, AsleepInMemory: state.InMemory, Waking: state.Waking, WakeError: state.WakeError},
 	})
 }
 
@@ -755,7 +762,7 @@ func (s *Scheduler) sleepLive(ctx context.Context, entry *supervised) error {
 		return err
 	}
 	if saving {
-		return s.saveLive(ctx, entry, saver)
+		return s.saveLive(ctx, entry, saver, true)
 	}
 	undo := func(cause error) error {
 		undoCtx := context.WithoutCancel(ctx)
@@ -846,7 +853,7 @@ func (s *Scheduler) markAsleep(entry *supervised) error {
 	defer s.mu.Unlock()
 	entry.asleepSince = time.Now().UTC()
 	entry.wakeErr = nil
-	entry.asleepSaved = false
+	entry.asleepSaved, entry.asleepResident = false, false
 	entry.memorySaved = 0
 	if err := s.writeSidecar(entry.sidecar()); err != nil {
 		entry.asleepSince = time.Time{}
@@ -916,6 +923,11 @@ func (s *Scheduler) recoverAsleep(ctx context.Context, r *domain.Run, sc sidecar
 	if errors.Is(err, runtime.ErrNotFound) {
 		return false
 	}
+	// A VM that stopped while paused in memory, as with its host, sleeps
+	// on its disks.
+	if err != nil || info.Exited {
+		sc.AsleepResident = false
+	}
 	// Installed without waiting on or attaching to the container.
 	var entry *supervised
 	s.mu.Lock()
@@ -930,8 +942,8 @@ func (s *Scheduler) recoverAsleep(ctx context.Context, r *domain.Run, sc sidecar
 	// restart interrupted: this process holds none of its streams. A VM the
 	// memory guard marked to wake, one it was saving or the brake left
 	// frozen, is the guard's to save frozen or wake: a save here would let
-	// it run first.
-	if entry != nil && err == nil && !info.Exited && sc.MemorySaved == 0 {
+	// it run first. One the sleep sweep paused in memory stays there.
+	if entry != nil && err == nil && !info.Exited && sc.MemorySaved == 0 && !sc.AsleepResident {
 		s.stopRecoveredAsleep(ctx, entry)
 	}
 	return true
