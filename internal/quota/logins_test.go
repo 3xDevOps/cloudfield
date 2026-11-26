@@ -22,16 +22,16 @@ func TestReadLoginKeepsTwoLoginsOfOneMemberApart(t *testing.T) {
 	}
 	sub, console := domain.LoginID("lgn-sub0000000"), domain.LoginID("lgn-console000")
 	for id, identity := range map[domain.LoginID]memberhome.LoginIdentity{sub: {Kind: memberhome.LoginSubscription}, console: {Kind: memberhome.LoginConsole}} {
-		dir, err := logins.Create(member, "claude", id)
-		if err != nil {
-			t.Fatal(err)
+		dir, addErr := logins.Add(member, "claude", id)
+		if addErr != nil {
+			t.Fatal(addErr)
 		}
 		if id == sub {
-			if err := os.WriteFile(filepath.Join(dir, memberhome.LoginCredentials), []byte(`{"claudeAiOauth":{"accessToken":"test-access-two","expiresAt":4102444800000,"scopes":["user:inference"]}}`), 0o600); err != nil {
+			if err = os.WriteFile(filepath.Join(dir, memberhome.LoginCredentials), []byte(`{"claudeAiOauth":{"accessToken":"test-access-two","expiresAt":4102444800000,"scopes":["user:inference"]}}`), 0o600); err != nil {
 				t.Fatal(err)
 			}
 		}
-		if err := logins.Settle(member, "claude", id, identity); err != nil {
+		if err = logins.Settle(member, "claude", id, identity); err != nil {
 			t.Fatal(err)
 		}
 	}

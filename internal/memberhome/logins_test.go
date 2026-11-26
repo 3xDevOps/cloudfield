@@ -41,11 +41,11 @@ const (
 // one member never share one.
 func TestLoginDirectoriesAreOwnerOnlyAndSeparate(t *testing.T) {
 	l := newTestLogins(t)
-	one, err := l.Create("mem-ada", "claude", "lgn-one0000000")
+	one, err := l.Add("mem-ada", "claude", "lgn-one0000000")
 	if err != nil {
 		t.Fatal(err)
 	}
-	two, err := l.Create("mem-ada", "claude", "lgn-two0000000")
+	two, err := l.Add("mem-ada", "claude", "lgn-two0000000")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestLoginDirectoriesAreOwnerOnlyAndSeparate(t *testing.T) {
 	if os.SameFile(a, b) {
 		t.Fatal("two logins share one credentials file")
 	}
-	if _, err := l.Create("mem-ada", "claude", "lgn-one0000000"); err == nil {
+	if _, err := l.Add("mem-ada", "claude", "lgn-one0000000"); err == nil {
 		t.Fatal("creating a login over an existing one succeeded")
 	}
 	for _, bad := range []struct {
@@ -104,7 +104,7 @@ func TestInspectReadsWhatTheSignInSaved(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			l := newTestLogins(t)
-			dir, err := l.Create("mem-ada", "claude", "lgn-one0000000")
+			dir, err := l.Add("mem-ada", "claude", "lgn-one0000000")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -123,7 +123,7 @@ func TestInspectReadsWhatTheSignInSaved(t *testing.T) {
 // so the configuration copy that held an account and any backups of it go.
 func TestSettleKeepsTheIdentityAndDropsTheScratch(t *testing.T) {
 	l := newTestLogins(t)
-	dir, err := l.Create("mem-ada", "claude", "lgn-one0000000")
+	dir, err := l.Add("mem-ada", "claude", "lgn-one0000000")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,16 +135,16 @@ func TestSettleKeepsTheIdentityAndDropsTheScratch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := l.Settle("mem-ada", "claude", "lgn-one0000000", identity); err != nil {
+	if err = l.Settle("mem-ada", "claude", "lgn-one0000000", identity); err != nil {
 		t.Fatal(err)
 	}
 	for _, gone := range []string{LoginConfig, LoginBackups, loginLegacyMask} {
-		if _, err := os.Lstat(filepath.Join(dir, gone)); !errors.Is(err, fs.ErrNotExist) {
-			t.Errorf("%s after Settle: %v; want it gone", gone, err)
+		if _, statErr := os.Lstat(filepath.Join(dir, gone)); !errors.Is(statErr, fs.ErrNotExist) {
+			t.Errorf("%s after Settle: %v; want it gone", gone, statErr)
 		}
 	}
-	if got, err := l.Identity("mem-ada", "claude", "lgn-one0000000"); err != nil || got != identity {
-		t.Fatalf("Identity = %+v, %v; want %+v", got, err, identity)
+	if got, idErr := l.Identity("mem-ada", "claude", "lgn-one0000000"); idErr != nil || got != identity {
+		t.Fatalf("Identity = %+v, %v; want %+v", got, idErr, identity)
 	}
 	data, err := l.ReadCredential("mem-ada", "claude", "lgn-one0000000", 1<<20)
 	if err != nil || string(data) != subscriptionLogin {
@@ -155,7 +155,7 @@ func TestSettleKeepsTheIdentityAndDropsTheScratch(t *testing.T) {
 // A login file planted as a symlink is refused, not followed.
 func TestLoginReadsRefuseASymlink(t *testing.T) {
 	l := newTestLogins(t)
-	dir, err := l.Create("mem-ada", "claude", "lgn-one0000000")
+	dir, err := l.Add("mem-ada", "claude", "lgn-one0000000")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestLoginReadsRefuseASymlink(t *testing.T) {
 // A malformed login file's error names the file and never quotes it.
 func TestLoginParseErrorsQuoteNothing(t *testing.T) {
 	l := newTestLogins(t)
-	dir, err := l.Create("mem-ada", "claude", "lgn-one0000000")
+	dir, err := l.Add("mem-ada", "claude", "lgn-one0000000")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +198,7 @@ func containsAny(s string, subs ...string) bool {
 func TestLoginsListAndMove(t *testing.T) {
 	l := newTestLogins(t)
 	for _, id := range []domain.LoginID{"lgn-one0000000", "lgn-two0000000"} {
-		if _, err := l.Create("mem-bo", "claude", id); err != nil {
+		if _, err := l.Add("mem-bo", "claude", id); err != nil {
 			t.Fatal(err)
 		}
 	}

@@ -92,11 +92,11 @@ func (d *DB) AddAgentLogin(ctx context.Context, login domain.AgentLogin, before 
 	if !login.ID.Added() {
 		return domain.AgentLogin{}, fmt.Errorf("store: add login: %q is not an added login's id", login.ID)
 	}
-	created, err := encodeTime(login.CreatedAt)
-	if err != nil {
-		return domain.AgentLogin{}, fmt.Errorf("store: add login: %w", err)
+	created, timeErr := encodeTime(login.CreatedAt)
+	if timeErr != nil {
+		return domain.AgentLogin{}, fmt.Errorf("store: add login: %w", timeErr)
 	}
-	err = d.inTx(ctx, func(tx *sql.Tx) error {
+	err := d.inTx(ctx, func(tx *sql.Tx) error {
 		var next int
 		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(position) + 1, 0) FROM agent_logins WHERE member_id = ? AND agent = ?`,
 			login.MemberID, login.Agent).Scan(&next); err != nil {
@@ -151,16 +151,16 @@ func (d *DB) DeleteAgentLogin(ctx context.Context, member domain.MemberID, agent
 		return fmt.Errorf("store: remove login: %w", ErrNotFound)
 	}
 	err := d.inTx(ctx, func(tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `DELETE FROM agent_logins WHERE member_id = ? AND agent = ? AND id = ?`, member, agent, id)
-		if err != nil {
-			return err
+		res, delErr := tx.ExecContext(ctx, `DELETE FROM agent_logins WHERE member_id = ? AND agent = ? AND id = ?`, member, agent, id)
+		if delErr != nil {
+			return delErr
 		}
-		if err := requireRow(res, "remove login"); err != nil {
-			return err
+		if rowErr := requireRow(res, "remove login"); rowErr != nil {
+			return rowErr
 		}
-		_, err = tx.ExecContext(ctx, `DELETE FROM agent_logins WHERE member_id = ?1 AND agent = ?2 AND id = ?3
+		_, delErr = tx.ExecContext(ctx, `DELETE FROM agent_logins WHERE member_id = ?1 AND agent = ?2 AND id = ?3
 			AND NOT EXISTS (SELECT 1 FROM agent_logins WHERE member_id = ?1 AND agent = ?2 AND id <> ?3)`, member, agent, domain.DefaultLogin)
-		return err
+		return delErr
 	})
 	if err != nil {
 		return fmt.Errorf("store: remove login: %w", err)
@@ -232,32 +232,20 @@ func (d *DB) AgentLoginOwner(ctx context.Context, agent string, id domain.LoginI
 }
 
 // mergeAgentLogins gives survivor absorbed's added logins, after its own,
-// renaming one whose name survivor uses. absorbed's default login is its
-// home, which the merge archives, so its row goes.
+// renaming one whose name survivor uses, each off for shares: survivor never
+// chose to share them. absorbed's default login is its home, which the
+// merge archives, so its row goes.
 func mergeAgentLogins(ctx context.Context, tx *sql.Tx, survivor, absorbed domain.MemberID) error {
-	rows, err := tx.QueryContext(ctx, `SELECT DISTINCT agent FROM agent_logins WHERE member_id = ? AND id <> ?`, absorbed, domain.DefaultLogin)
+	agents, err := queryStrings(ctx, tx, `SELECT DISTINCT agent FROM agent_logins WHERE member_id = ? AND id <> ?`, absorbed, domain.DefaultLogin)
 	if err != nil {
 		return err
 	}
-	var agents []string
-	for rows.Next() {
-		var agent string
-		if err := rows.Scan(&agent); err != nil {
-			_ = rows.Close()
-			return err
-		}
-		agents = append(agents, agent)
-	}
-	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
-		return err
-	}
 	for _, agent := range agents {
-		moved, err := listAgentLogins(ctx, tx, absorbed, agent)
-		if err != nil {
+		var moved, kept []domain.AgentLogin
+		if moved, err = listAgentLogins(ctx, tx, absorbed, agent); err != nil {
 			return err
 		}
-		kept, err := listAgentLogins(ctx, tx, survivor, agent)
-		if err != nil {
+		if kept, err = listAgentLogins(ctx, tx, survivor, agent); err != nil {
 			return err
 		}
 		names := map[string]bool{}
@@ -266,11 +254,11 @@ func mergeAgentLogins(ctx context.Context, tx *sql.Tx, survivor, absorbed domain
 		}
 		next := len(kept)
 		if next == 0 {
-			created, err := encodeTime(moved[0].CreatedAt)
-			if err != nil {
+			var created int64
+			if created, err = encodeTime(moved[0].CreatedAt); err != nil {
 				return err
 			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO agent_logins (`+agentLoginColumns+`) VALUES (?, ?, ?, ?, 0, 1, 1, ?)`,
+			if _, err = tx.ExecContext(ctx, `INSERT INTO agent_logins (`+agentLoginColumns+`) VALUES (?, ?, ?, ?, 0, 1, 1, ?)`,
 				survivor, agent, domain.DefaultLogin, domain.DefaultLogin, created); err != nil {
 				return err
 			}
@@ -285,7 +273,7 @@ func mergeAgentLogins(ctx context.Context, tx *sql.Tx, survivor, absorbed domain
 				name = fmt.Sprintf("%.21s-%s", name, l.ID[len("lgn-"):])
 			}
 			names[name] = true
-			if _, err := tx.ExecContext(ctx, `UPDATE agent_logins SET member_id = ?, name = ?, position = ? WHERE member_id = ? AND agent = ? AND id = ?`,
+			if _, err = tx.ExecContext(ctx, `UPDATE agent_logins SET member_id = ?, name = ?, position = ?, shared = 0 WHERE member_id = ? AND agent = ? AND id = ?`,
 				survivor, name, next, absorbed, agent, l.ID); err != nil {
 				return err
 			}

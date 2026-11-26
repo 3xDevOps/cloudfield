@@ -115,10 +115,10 @@ func (l *Logins) Path(member domain.MemberID, agent string, id domain.LoginID) (
 	return filepath.Join(l.root, filepath.FromSlash(rel)), nil
 }
 
-// Create makes the directory of a new login with an empty credentials file
+// Add makes the directory of a new login with an empty credentials file
 // and Anthropic profile directory for a sign-in to fill. It refuses a
 // directory already there.
-func (l *Logins) Create(member domain.MemberID, agent string, id domain.LoginID) (string, error) {
+func (l *Logins) Add(member domain.MemberID, agent string, id domain.LoginID) (string, error) {
 	rel, err := l.rel(member, agent, id)
 	if err != nil {
 		return "", err
@@ -128,10 +128,10 @@ func (l *Logins) Create(member domain.MemberID, agent string, id domain.LoginID)
 		return "", fmt.Errorf("memberhome: open logins root: %w", err)
 	}
 	defer func() { _ = root.Close() }()
-	if err := ensureDir(root, path.Dir(rel)); err != nil {
+	if err = ensureDir(root, path.Dir(rel)); err != nil {
 		return "", fmt.Errorf("memberhome: create login directory: %w", err)
 	}
-	if err := root.Mkdir(rel, 0o700); err != nil {
+	if err = root.Mkdir(rel, 0o700); err != nil {
 		return "", fmt.Errorf("memberhome: create login directory: %w", err)
 	}
 	dir, err := rootfs.OpenRoot(root, rel)

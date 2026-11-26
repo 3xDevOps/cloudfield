@@ -40,7 +40,7 @@ func newLoginEnv(t *testing.T) *loginEnv {
 // seed adds a settled login as a finished sign-in would.
 func (e *loginEnv) seed(t *testing.T, member domain.MemberID, id domain.LoginID, name, email string) {
 	t.Helper()
-	dir, err := e.logins.Create(member, "claude", id)
+	dir, err := e.logins.Add(member, "claude", id)
 	if err != nil {
 		t.Fatal(err)
 	}

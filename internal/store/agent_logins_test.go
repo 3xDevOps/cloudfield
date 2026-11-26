@@ -56,19 +56,19 @@ func TestAgentLoginsOrderAndLeaveNoRowWhenNoneAreLeft(t *testing.T) {
 	if err != nil || !slices.Equal(loginIDs(logins), []domain.LoginID{domain.DefaultLogin, work.ID, spare.ID}) || !logins[0].Automatic || !logins[2].Automatic {
 		t.Fatalf("logins = %+v, %v; want default, work, spare, all automatic", logins, err)
 	}
-	if _, err := db.AddAgentLogin(ctx, domain.AgentLogin{MemberID: ada.ID, Agent: "claude", ID: "lgn-other00000", Name: "work", CreatedAt: time.Now()}, ""); !errors.Is(err, ErrConflict) {
+	if _, err = db.AddAgentLogin(ctx, domain.AgentLogin{MemberID: ada.ID, Agent: "claude", ID: "lgn-other00000", Name: "work", CreatedAt: time.Now()}, ""); !errors.Is(err, ErrConflict) {
 		t.Fatalf("a second login named work: %v; want ErrConflict", err)
 	}
-	if err := db.RenameAgentLogin(ctx, ada.ID, "claude", spare.ID, "work"); !errors.Is(err, ErrConflict) {
+	if err = db.RenameAgentLogin(ctx, ada.ID, "claude", spare.ID, "work"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("rename onto a taken name: %v; want ErrConflict", err)
 	}
-	if err := db.OrderAgentLogins(ctx, ada.ID, "claude", []domain.LoginID{spare.ID, domain.DefaultLogin}); !errors.Is(err, ErrConflict) {
+	if err = db.OrderAgentLogins(ctx, ada.ID, "claude", []domain.LoginID{spare.ID, domain.DefaultLogin}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("an order missing a login: %v; want ErrConflict", err)
 	}
-	if err := db.OrderAgentLogins(ctx, ada.ID, "claude", []domain.LoginID{spare.ID, domain.DefaultLogin, work.ID}); err != nil {
+	if err = db.OrderAgentLogins(ctx, ada.ID, "claude", []domain.LoginID{spare.ID, domain.DefaultLogin, work.ID}); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SetAgentLoginAutomatic(ctx, ada.ID, "claude", work.ID, false); err != nil {
+	if err = db.SetAgentLoginAutomatic(ctx, ada.ID, "claude", work.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	perUse, err := db.AddAgentLogin(ctx, domain.AgentLogin{MemberID: ada.ID, Agent: "claude", ID: "lgn-peruse0000", Name: "console", CreatedAt: time.Now()}, "")
@@ -124,8 +124,8 @@ func TestAgentLoginsAreKeyedByTheMember(t *testing.T) {
 }
 
 // A merge gives the survivor the absorbed member's added logins after its
-// own, renaming one whose name it uses; the absorbed member's default
-// login is its archived home and does not come along.
+// own, renaming one whose name it uses and off for shares; the absorbed
+// member's default login is its archived home and does not come along.
 func TestMergeGivesTheSurvivorTheAddedLogins(t *testing.T) {
 	db := openTestDB(t)
 	ctx := context.Background()
@@ -140,9 +140,6 @@ func TestMergeGivesTheSurvivorTheAddedLogins(t *testing.T) {
 	aWork := addLogin(t, db, a.ID, "work")
 	bWork := addLogin(t, db, b.ID, "work")
 	bSpare := addLogin(t, db, b.ID, "spare")
-	if err := db.SetAgentLoginShared(ctx, b.ID, "claude", bSpare.ID, false); err != nil {
-		t.Fatal(err)
-	}
 	if err := db.CreateMergeCode(ctx, a.ID, "code", now, now.Add(time.Minute)); err != nil {
 		t.Fatal(err)
 	}
@@ -175,7 +172,7 @@ func TestMergeGivesTheSurvivorTheAddedLogins(t *testing.T) {
 	if rest, err := db.ListAgentLogins(ctx, merge.AbsorbedID, "claude"); err != nil || len(rest) != 0 {
 		t.Fatalf("absorbed member's logins = %v, %v; want none", rest, err)
 	}
-	if !logins[2].Shared || logins[3].Shared {
-		t.Fatalf("shared = %v %v; want each login's own switch kept", logins[2].Shared, logins[3].Shared)
+	if !logins[0].Shared || !logins[1].Shared || logins[2].Shared || logins[3].Shared {
+		t.Fatalf("shared = %+v; want the survivor's own logins as they were and the merged ones off for shares", logins)
 	}
 }

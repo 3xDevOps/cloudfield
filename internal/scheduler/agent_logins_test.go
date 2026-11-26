@@ -100,7 +100,7 @@ func (e *signInEnv) signIn(t *testing.T, name string, save func(spec runtime.Spe
 		return att, nil
 	}
 	e.rt.mu.Unlock()
-	if _, err := e.sched.StartLoginSignIn(ctx, e.member.ID, id, 80, 24); err != nil {
+	if _, err = e.sched.StartLoginSignIn(ctx, e.member.ID, id, 80, 24); err != nil {
 		t.Fatal(err)
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -283,7 +283,7 @@ func TestReconcileRemovesOnlyLoginsWithoutARow(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	orphan, err := e.logins.Create(e.member.ID, "claude", "lgn-orphan0000")
+	orphan, err := e.logins.Add(e.member.ID, "claude", "lgn-orphan0000")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -133,8 +133,8 @@ func (s *Scheduler) StartLoginSignIn(ctx context.Context, member domain.MemberID
 	sign.started = true
 	sign.timer.Stop()
 	sign.timer = time.AfterFunc(loginSignInTimeout, func() {
-		if err := s.removeByCreationKey(context.Background(), loginSignInCreationKey(id)); err != nil {
-			slog.Warn("scheduler: end a sign-in that ran too long", "login", id, "error", err)
+		if removeErr := s.removeByCreationKey(context.Background(), loginSignInCreationKey(id)); removeErr != nil {
+			slog.Warn("scheduler: end a sign-in that ran too long", "login", id, "error", removeErr)
 		}
 	})
 	s.mu.Unlock()
@@ -165,7 +165,7 @@ func (s *Scheduler) startSignInContainer(ctx context.Context, sign *loginSignIn,
 	if err != nil {
 		return nil, err
 	}
-	if _, err := s.cfg.Logins.Create(sign.member, sign.agent, sign.id); err != nil {
+	if _, err = s.cfg.Logins.Add(sign.member, sign.agent, sign.id); err != nil {
 		return nil, err
 	}
 	unlock := s.lockRunCaches(member.ID, member.ID)
@@ -175,7 +175,7 @@ func (s *Scheduler) startSignInContainer(ctx context.Context, sign *loginSignIn,
 	if err != nil {
 		return nil, err
 	}
-	if err := s.reserveTerminalUser(ctx, holder, plan.User); err != nil {
+	if err = s.reserveTerminalUser(ctx, holder, plan.User); err != nil {
 		return nil, err
 	}
 	s.mu.Lock()
@@ -183,7 +183,7 @@ func (s *Scheduler) startSignInContainer(ctx context.Context, sign *loginSignIn,
 		holder.userReservation.owner = "the sign-in of login " + string(sign.id)
 	}
 	s.mu.Unlock()
-	if err := s.applyRunOwnership(nil, &domain.Run{}, member.ID, plan.Mounts, plan.User); err != nil {
+	if err = s.applyRunOwnership(nil, &domain.Run{}, member.ID, plan.Mounts, plan.User); err != nil {
 		return nil, err
 	}
 	limits, err := s.runLimits(ctx, domain.RunLimits{})
@@ -278,7 +278,7 @@ func (s *Scheduler) settleLoginSignIn(ctx context.Context, sign *loginSignIn) (d
 	case "":
 		return domain.AgentLogin{}, errors.New("the sign-in ended before Claude Code saved a login; nothing was added")
 	case memberhome.LoginAPIKey:
-		return domain.AgentLogin{}, errors.New("Claude Code saved an Anthropic Console API key, which Cloudfield does not keep as an added login: Claude Code copies it into backups in your home, where it would outlive the login. Keep the key as your default login or as a workspace secret (docs/harnesses.md#use-an-api-key); nothing was added")
+		return domain.AgentLogin{}, errors.New("the sign-in saved an Anthropic Console API key, which Cloudfield does not keep as an added login: Claude Code copies it into backups in your home, where it would outlive the login. Keep the key as your default login or as a workspace secret (docs/harnesses.md#use-an-api-key); nothing was added")
 	}
 	lock := s.memberLock(&s.loginLocks, sign.member)
 	lock.Lock()
@@ -301,7 +301,7 @@ func (s *Scheduler) settleLoginSignIn(ctx context.Context, sign *loginSignIn) (d
 			return domain.AgentLogin{}, same(l.Name)
 		}
 	}
-	if err := s.cfg.Logins.Settle(sign.member, sign.agent, sign.id, identity); err != nil {
+	if err = s.cfg.Logins.Settle(sign.member, sign.agent, sign.id, identity); err != nil {
 		return domain.AgentLogin{}, err
 	}
 	login, err := s.cfg.Store.AddAgentLogin(ctx, domain.AgentLogin{
@@ -396,6 +396,9 @@ func (s *Scheduler) addedLoginMounts(run *domain.Run, profile harness.Profile, h
 	if _, err := s.addedLoginProfile(profile.Name); err != nil {
 		return nil, fmt.Errorf("scheduler: %w", err)
 	}
+	if s.sessionVMs() {
+		return nil, errors.New("scheduler: session VMs cannot verify an added login's mounts yet, so they do not run on one; launch on your default login")
+	}
 	member := run.AccountMemberID
 	dir, err := s.cfg.Logins.Path(member, profile.Name, run.AccountLogin)
 	if err != nil {
@@ -408,35 +411,63 @@ func (s *Scheduler) addedLoginMounts(run *domain.Run, profile harness.Profile, h
 	if err != nil || len(paths) != 1 {
 		return nil, fmt.Errorf("scheduler: %s has no single login file to mount an added login over", profile.Name)
 	}
-	if err := s.cfg.Homes.PrepareLoginMountpoint(member, paths[0], false); err != nil {
+	if err = s.cfg.Homes.PrepareLoginMountpoint(member, paths[0], false); err != nil {
 		return nil, fmt.Errorf("scheduler: %w", err)
 	}
-	if err := s.cfg.Homes.PrepareLoginMountpoint(member, memberhome.AnthropicProfileDir, true); err != nil {
+	if err = s.cfg.Homes.PrepareLoginMountpoint(member, memberhome.AnthropicProfileDir, true); err != nil {
 		return nil, fmt.Errorf("scheduler: %w", err)
 	}
+	// Subpath mounts: the runtime checks each one's inode in the container
+	// before the agent starts, so a dropped mount fails the launch instead of
+	// signing the agent in with the default login under this one's name.
 	mounts := []runtime.Mount{
-		{HostPath: filepath.Join(dir, memberhome.LoginCredentials), ContainerPath: path.Join(home, paths[0])},
-		{HostPath: filepath.Join(dir, memberhome.LoginAnthropic), ContainerPath: path.Join(home, memberhome.AnthropicProfileDir)},
+		{HostPath: dir, Subpath: memberhome.LoginCredentials, ContainerPath: path.Join(home, paths[0])},
+		{HostPath: dir, Subpath: memberhome.LoginAnthropic, ContainerPath: path.Join(home, memberhome.AnthropicProfileDir)},
 	}
 	configDir := filepath.Join(s.accountConfigRoot(), string(run.ID))
 	if purpose == EnvironmentPurposeLogin {
 		configDir = dir
 		backups := path.Join(profile.AccountConfig.Dir, memberhome.LoginBackups)
-		if err := os.Mkdir(filepath.Join(dir, memberhome.LoginBackups), 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		if err = os.Mkdir(filepath.Join(dir, memberhome.LoginBackups), 0o700); err != nil && !errors.Is(err, os.ErrExist) {
 			return nil, fmt.Errorf("scheduler: %w", err)
 		}
-		if err := s.cfg.Homes.PrepareLoginMountpoint(member, backups, true); err != nil {
+		if err = s.cfg.Homes.PrepareLoginMountpoint(member, backups, true); err != nil {
 			return nil, fmt.Errorf("scheduler: %w", err)
 		}
-		mounts = append(mounts, runtime.Mount{HostPath: filepath.Join(dir, memberhome.LoginBackups), ContainerPath: path.Join(home, backups)})
+		mounts = append(mounts, runtime.Mount{HostPath: dir, Subpath: memberhome.LoginBackups, ContainerPath: path.Join(home, backups)})
 	}
 	config, err := s.accountConfigMounts(configDir, member, profile, home)
 	if err != nil {
 		return nil, err
 	}
+	for i, m := range config {
+		if !m.ReadOnly {
+			config[i].HostPath, config[i].Subpath = filepath.Dir(m.HostPath), filepath.Base(m.HostPath)
+		}
+	}
 	env[profile.AccountConfig.Env] = path.Join(home, profile.AccountConfig.Dir)
 	env["ANTHROPIC_CONFIG_DIR"] = path.Join(home, memberhome.AnthropicProfileDir)
 	return append(mounts, config...), nil
+}
+
+// addedLoginPath reports whether host is where an added login's mounts come
+// from: its directory, or the session's copy of the configuration. Only what
+// such a subpath mount exposes is handed to the container's user, never the
+// directory around it.
+func (s *Scheduler) addedLoginPath(host string) bool {
+	for _, root := range []string{s.accountConfigRoot(), loginsRoot(s.cfg.Logins)} {
+		if rel, err := filepath.Rel(root, host); root != "" && err == nil && rel != "." && filepath.IsLocal(rel) {
+			return true
+		}
+	}
+	return false
+}
+
+func loginsRoot(l *memberhome.Logins) string {
+	if l == nil {
+		return ""
+	}
+	return l.Root()
 }
 
 // ReconcileLogins makes the login directories match the rows at start: a
