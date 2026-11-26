@@ -16,7 +16,8 @@ terms do not change that licence.
 
 As of 2026-11-26 the project edge also answers at `edge.onaether.dev` and
 `auth.onaether.dev`, and the connector at `https://edge.onaether.dev/mcp`,
-for servers and connectors set up there; these terms govern their use too.
+for servers and connectors set up there. These terms also apply when you use
+the connector or the project edge at those addresses.
 
 ## What the service is
 
