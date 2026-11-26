@@ -574,11 +574,12 @@ type fakeEdgeOwner struct {
 	state string
 	// issuedFor is the admin of the last IssueClaimCode.
 	issuedFor domain.MemberID
-	// notices is what Notices returns.
-	notices edgeagent.StoredNotices
+	// notices and noticesErr are what Notices returns.
+	notices    edgeagent.StoredNotices
+	noticesErr error
 }
 
-func (f *fakeEdgeOwner) Notices() (edgeagent.StoredNotices, error) { return f.notices, nil }
+func (f *fakeEdgeOwner) Notices() (edgeagent.StoredNotices, error) { return f.notices, f.noticesErr }
 
 func (f *fakeEdgeOwner) IssueClaimCode(admin domain.MemberID) (string, time.Time, error) {
 	f.mu.Lock()

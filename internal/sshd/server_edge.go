@@ -29,7 +29,7 @@ func (s *Server) serverEdge(context.Context, domain.MemberID, json.RawMessage) (
 	}
 	notices, err := edge.Notices()
 	if err != nil {
-		return nil, &protocol.Error{Code: protocol.CodeUnavailable, Message: protocol.MethodServerEdge + ": " + err.Error()}
+		slog.Warn("sshd: server.edge shows no edge notice: the stored notices are unreadable", "error", err)
 	}
 	out.EdgeURL, out.Connected, out.Claimed = edge.Origin(), edge.Connected(), edge.EdgeState() == edgeproto.StateClaimed
 	if owner != nil {

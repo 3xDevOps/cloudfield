@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -98,26 +99,31 @@ func TestServerEdgeNotice(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
 		notices edgeagent.StoredNotices
+		err     error
 		want    string
 	}{
-		{"none", edgeagent.StoredNotices{}, ""},
-		{"another address", edgeagent.StoredNotices{Notices: []edgeproto.Notice{elsewhere}}, ""},
-		{"retiring", edgeagent.StoredNotices{Notices: []edgeproto.Notice{elsewhere, {State: edgeproto.NoticeRetiring, Origin: own, Replacement: other}}},
+		{"unreadable", edgeagent.StoredNotices{}, errors.New("edgeagent: read /var/lib/aether/edge/keys/x/notices.json: unexpected end of JSON input"), ""},
+		{"none", edgeagent.StoredNotices{}, nil, ""},
+		{"another address", edgeagent.StoredNotices{Notices: []edgeproto.Notice{elsewhere}}, nil, ""},
+		{"retiring", edgeagent.StoredNotices{Notices: []edgeproto.Notice{elsewhere, {State: edgeproto.NoticeRetiring, Origin: own, Replacement: other}}}, nil,
 			`{"state":"retiring","replacement":"https://edge2.example"}`},
-		{"retiring on a date", edgeagent.StoredNotices{Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: own, Replacement: other, Date: "2027-03-01"}}},
+		{"retiring on a date", edgeagent.StoredNotices{Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: own, Replacement: other, Date: "2027-03-01"}}}, nil,
 			`{"state":"retiring","replacement":"https://edge2.example","date":"2027-03-01"}`},
-		{"first use", edgeagent.StoredNotices{FirstUse: true, Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: own, Replacement: other}}},
+		{"first use", edgeagent.StoredNotices{FirstUse: true, Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: own, Replacement: other}}}, nil,
 			`{"state":"retiring","replacement":"https://edge2.example","first_use":true}`},
-		{"retired", edgeagent.StoredNotices{Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetired, Origin: own, Replacement: other}}},
+		{"retired", edgeagent.StoredNotices{Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetired, Origin: own, Replacement: other}}}, nil,
 			`{"state":"retired","replacement":"https://edge2.example"}`},
 	} {
-		e.srv.SetEdgeOwner(&fakeEdgeOwner{owner: &octo, state: edgeproto.StateClaimed, notices: tc.notices})
+		e.srv.SetEdgeOwner(&fakeEdgeOwner{owner: &octo, state: edgeproto.StateClaimed, notices: tc.notices, noticesErr: tc.err})
 		var raw map[string]json.RawMessage
 		if err := bob.Call(protocol.MethodServerEdge, struct{}{}, &raw); err != nil {
 			t.Fatal(err)
 		}
 		if got := string(raw["notice"]); got != tc.want {
 			t.Errorf("%s: notice %s, want %q", tc.name, got, tc.want)
+		}
+		if got := fmt.Sprint(raw); strings.Contains(got, "notices.json") || raw["edge_url"] == nil {
+			t.Errorf("%s: server.edge = %s", tc.name, got)
 		}
 	}
 }
