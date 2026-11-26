@@ -525,18 +525,17 @@ Each run stages a session in a temporary directory and removes it afterwards:
   ever starts. It refuses what the server refuses: a start from a session that
   is itself a subsession, and a `success` report while a subsession is
   unfinished.
-- `aether-internal` and `cloudfield-internal` on `PATH` and the MCP server
-  `aether`. All are the test
-  binary run again as `coordcli.Run` and `mcpbridge.Run`, pointed at the fake
-  socket.
+- `aether-internal` and `cloudfield-internal` on `PATH` and, in `enhanced`
+  mode, the MCP server `aether`. All are the test binary run again as
+  `coordcli.Run` and `mcpbridge.Run`, pointed at the fake socket.
 
 It then runs the real Claude Code CLI with the `claude` profile's Background
 command line (`claude -p --output-format stream-json --verbose
 --dangerously-skip-permissions`), the scenario's prompt as the task, the role
-card of a Standard session in `--append-system-prompt`, and the variables a
-Standard launch sets (`AETHER_RUN_ID`, `AETHER_WORKSPACE_ID`,
-`AETHER_ACCOUNT_MEMBER_ID`, `AETHER_HARNESS`, `AETHER_ROLE_CARD`,
-`AETHER_IDLE_WAKE`, `AETHER_MANAGED_HOOKS` and the profile's own). The agent
+card of an interactive session in `--append-system-prompt`, and the variables
+a launch sets (`AETHER_RUN_ID`, `AETHER_WORKSPACE_ID`,
+`AETHER_ACCOUNT_MEMBER_ID`, `AETHER_HARNESS`, `AETHER_ROLE_CARD`, the mode's own
+and the profile's own). The agent
 keeps all of its tools, so it can edit, commit and start subagents.
 
 The agent runs with `--dangerously-skip-permissions` on your machine, not in a
@@ -563,6 +562,7 @@ CLOUDFIELD_SESSION_EVAL_LABEL=main \
 | --- | --- | --- |
 | `CLOUDFIELD_SESSION_EVAL_LABEL` | `unlabeled` | Names the output files; use the commit or branch under test |
 | `CLOUDFIELD_SESSION_EVAL_RUNS` | `3` | Sessions per scenario |
+| `CLOUDFIELD_SESSION_EVAL_MODE` | `enhanced` | `standard` or `enhanced`: which kind of session to stage |
 | `CLOUDFIELD_SESSION_EVAL_MODEL` | Claude Code's default | Passed to `claude --model`; the report names the model the harness reports |
 | `CLOUDFIELD_SESSION_EVAL_ONLY` | all | Comma-separated scenario ids |
 | `CLOUDFIELD_SESSION_EVAL_PARALLEL` | `4` | Concurrent agent sessions |
@@ -581,6 +581,13 @@ A session also stops after 10 minutes, or one minute before the test's
 | `two-subsessions` | The user asks for exactly two subsessions | 2 |
 | `codex-review` | The user asks for a review by Codex | 1, on `codex` |
 | `subsession` | The session is itself a subsession, and must get its change reviewed | 0 |
+| `separate-prs` | Two large streams that each need their own pull request; nobody mentions subsessions | 1 or 2 |
+| `hours-of-work` | A quick fix beside an independent stream described as hours of work | 1 |
+| `another-agent` | A check by an agent from a different vendor | 1 |
+
+The first four ask whether the agent starts a subsession where none is wanted;
+the last three whether it starts one unasked where the role card says to. The
+fixture is small, so the last three state the size of the work in the prompt.
 
 A start counts when the socket accepted it or refused it by policy; a retry of
 the same idempotency key and a request with invalid parameters do not. Where no
@@ -601,6 +608,8 @@ that ended a turn from one sent mid-turn.
 The Markdown report has a row per scenario: sessions passed, subsession starts,
 start attempts, the starts wanted, the agents the starts asked for, subagents
 started (`subagent_stats.spawned` in Claude Code's result), report outcomes,
+reports sent by the tool and by the command, nudges (Claude Code's `[Your
+previous response had no visible output...]` prompts),
 socket requests, latency and cost. Cost
 is the figure `claude` reports. The bridge itself makes two `coord.status`
 requests when it starts, so every session records at least those. Below the
@@ -609,7 +618,7 @@ name, every recorded request with its parameters, and the reply, with the
 questions a person should answer from them. Results are rewritten after every
 session.
 
-What a real Standard session has and the eval does not:
+What a real session has and the eval does not:
 
 - The co-author rule and the team memory brief the scheduler appends to the
   role card.
@@ -618,9 +627,13 @@ What a real Standard session has and the eval does not:
   says the launch loaded them, because `AETHER_MANAGED_HOOKS=1` is set.
 - A container. The agent sees your machine's tools and paths.
 
-The eval registers the MCP bridge, which an Enhanced session gets and a
-Standard session only has when its owner [registers
-it](mcp-bridge.md#registration).
+The two modes differ in what the agent can report with. `enhanced` registers
+the MCP bridge, so the agent has `aether_report`, and sets `AETHER_ENHANCED`.
+`standard` registers no MCP server, so the agent reports with the command, and
+sets `AETHER_IDLE_WAKE` and `AETHER_MANAGED_HOOKS`; a real Standard session has
+the bridge only when its owner [registers it](mcp-bridge.md#registration).
+Both run `claude -p`: a real Enhanced session drives Claude Code through its
+ACP adapter, which the eval does not.
 
 Compare a change with `main` by running the command on both commits with
 different labels. Model output varies between sessions, so a few sessions per

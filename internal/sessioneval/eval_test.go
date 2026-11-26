@@ -39,6 +39,10 @@ func TestSessionEval(t *testing.T) {
 	if err != nil || maxUSD <= 0 {
 		t.Fatalf("CLOUDFIELD_SESSION_EVAL_MAX_USD must be a positive number")
 	}
+	mode := Mode(envOr("CLOUDFIELD_SESSION_EVAL_MODE", string(ModeEnhanced)))
+	if mode != ModeStandard && mode != ModeEnhanced {
+		t.Fatalf("CLOUDFIELD_SESSION_EVAL_MODE must be %s or %s", ModeStandard, ModeEnhanced)
+	}
 	model := os.Getenv("CLOUDFIELD_SESSION_EVAL_MODEL")
 	label := strings.NewReplacer("/", "-", " ", "-").Replace(envOr("CLOUDFIELD_SESSION_EVAL_LABEL", "unlabeled"))
 	out := envOr("CLOUDFIELD_SESSION_EVAL_OUT", filepath.Join(os.TempDir(), "session-eval"))
@@ -73,7 +77,7 @@ func TestSessionEval(t *testing.T) {
 		if i := slices.IndexFunc(results, func(r Result) bool { return r.Model != "" }); i >= 0 {
 			used = results[i].Model
 		}
-		md := Summary("real Claude Code (model "+used+"), "+label+", "+strconv.Itoa(runs)+" sessions per scenario", picked, results)
+		md := Summary("real Claude Code (model "+used+"), "+string(mode)+" session, "+label+", "+strconv.Itoa(runs)+" sessions per scenario", picked, results)
 		raw, _ := json.MarshalIndent(results, "", " ")
 		if err := os.WriteFile(filepath.Join(out, label+".json"), raw, 0o600); err != nil {
 			t.Error(err)
@@ -98,7 +102,7 @@ func TestSessionEval(t *testing.T) {
 					ctx, stop = context.WithDeadline(ctx, deadline.Add(-time.Minute))
 					defer stop()
 				}
-				r := RunOnce(ctx, agent, helper, s, n)
+				r := RunOnce(ctx, agent, helper, s, mode, n)
 				mu.Lock()
 				if err := os.WriteFile(filepath.Join(out, label+"-"+s.ID+"-"+strconv.Itoa(n)+".jsonl"), r.Transcript, 0o600); err != nil {
 					t.Error(err)

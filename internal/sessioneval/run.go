@@ -88,6 +88,16 @@ func logArgs(path string, args []string) error {
 	return f.Close()
 }
 
+// Mode is which kind of session a run stages.
+type Mode string
+
+const (
+	// ModeStandard has no MCP bridge: the agent reports with the command.
+	ModeStandard Mode = "standard"
+	// ModeEnhanced has the MCP bridge, and with it the aether_report tool.
+	ModeEnhanced Mode = "enhanced"
+)
+
 // Launch is one staged session: a repository to work in, the fake socket
 // behind the in-container command and the MCP bridge, and the environment a
 // Standard Claude Code launch sets.
@@ -105,6 +115,15 @@ type Launch struct {
 // command, including the ones it refused before the socket. A call that asks
 // for help, as the command reads it, is not one.
 func (l *Launch) CommandStarts() (int, error) {
+	return l.commandCalls("subsession", "start")
+}
+
+// CommandReports counts the `report` calls of the in-container command.
+func (l *Launch) CommandReports() (int, error) {
+	return l.commandCalls("report")
+}
+
+func (l *Launch) commandCalls(command ...string) (int, error) {
 	raw, err := os.ReadFile(filepath.Join(l.dir, argsFile))
 	if err != nil {
 		return 0, err
@@ -115,7 +134,7 @@ func (l *Launch) CommandStarts() (int, error) {
 		if err := json.Unmarshal(line, &args); err != nil {
 			return 0, fmt.Errorf("sessioneval: %s: %w", argsFile, err)
 		}
-		if len(args) >= 2 && args[0] == "subsession" && args[1] == "start" && args[len(args)-1] != "-h" && args[len(args)-1] != "--help" {
+		if len(args) >= len(command) && slices.Equal(args[:len(command)], command) && args[len(args)-1] != "-h" && args[len(args)-1] != "--help" {
 			n++
 		}
 	}
@@ -129,16 +148,20 @@ func (l *Launch) Close() {
 
 // sessionEnv are the variables the scheduler and a native Claude Code launch
 // set in a Standard session's container.
-func sessionEnv() map[string]string {
-	return map[string]string{
-		coordtransport.RunIDEnv:        runID,
-		"AETHER_WORKSPACE_ID":          workspaceID,
-		"AETHER_ACCOUNT_MEMBER_ID":     memberID,
-		coordtransport.HarnessEnv:      "claude",
-		coordtransport.ManagedHooksEnv: "1",
-		coordtransport.WakeEnv:         "1",
-		coordtransport.RoleCardEnv:     "1",
+func sessionEnv(mode Mode) map[string]string {
+	env := map[string]string{
+		coordtransport.RunIDEnv:    runID,
+		"AETHER_WORKSPACE_ID":      workspaceID,
+		"AETHER_ACCOUNT_MEMBER_ID": memberID,
+		coordtransport.HarnessEnv:  "claude",
+		coordtransport.RoleCardEnv: "1",
 	}
+	if mode == ModeEnhanced {
+		env[coordtransport.EnhancedEnv] = "1"
+		return env
+	}
+	env[coordtransport.ManagedHooksEnv], env[coordtransport.WakeEnv] = "1", "1"
+	return env
 }
 
 // claudeLoginEnv are the CLAUDE* variables that say where Claude Code's login
@@ -166,7 +189,7 @@ func hostEnv() []string {
 
 // Stage builds the session of s. helper is the test binary, which Helper
 // turns into `aether-internal` on PATH and into the "aether" MCP server.
-func Stage(ctx context.Context, helper string, s Scenario) (_ *Launch, err error) {
+func Stage(ctx context.Context, helper string, s Scenario, mode Mode) (_ *Launch, err error) {
 	dir, err := os.MkdirTemp("", "sessioneval-")
 	if err != nil {
 		return nil, err
@@ -184,7 +207,7 @@ func Stage(ctx context.Context, helper string, s Scenario) (_ *Launch, err error
 		"GIT_AUTHOR_EMAIL=eval@example.com", "GIT_COMMITTER_EMAIL=eval@example.com",
 		"CLAUDE_CODE_DISABLE_AUTO_MEMORY=1")
 	profile, _ := harness.Lookup("claude")
-	for _, vars := range []map[string]string{profile.Env, sessionEnv()} {
+	for _, vars := range []map[string]string{profile.Env, sessionEnv(mode)} {
 		for _, name := range slices.Sorted(maps.Keys(vars)) {
 			env = append(env, name+"="+vars[name])
 		}
@@ -231,11 +254,13 @@ func Stage(ctx context.Context, helper string, s Scenario) (_ *Launch, err error
 			return nil, err
 		}
 	}
-	bridgeEnv := sessionEnv()
-	bridgeEnv[helperEnv], bridgeEnv[socketEnv] = helperMCP, coord.Path
-	config, err := json.Marshal(map[string]any{"mcpServers": map[string]any{
-		mcpbridge.ServerName: map[string]any{"type": "stdio", "command": helper, "args": []string{}, "env": bridgeEnv},
-	}})
+	servers := map[string]any{}
+	if mode == ModeEnhanced {
+		bridgeEnv := sessionEnv(mode)
+		bridgeEnv[helperEnv], bridgeEnv[socketEnv] = helperMCP, coord.Path
+		servers[mcpbridge.ServerName] = map[string]any{"type": "stdio", "command": helper, "args": []string{}, "env": bridgeEnv}
+	}
+	config, err := json.Marshal(map[string]any{"mcpServers": servers})
 	if err != nil {
 		return nil, err
 	}
@@ -246,7 +271,13 @@ func Stage(ctx context.Context, helper string, s Scenario) (_ *Launch, err error
 	return &Launch{Repo: repo, Prompt: s.Prompt, Instructions: coordhooks.RoleCard(s.Guide()), MCPConfig: mcpConfig, Env: env, Coord: coord, dir: dir}, nil
 }
 
-const startTool = "mcp__" + mcpbridge.ServerName + "__aether_subsession_start"
+const (
+	startTool  = "mcp__" + mcpbridge.ServerName + "__aether_subsession_start"
+	reportTool = "mcp__" + mcpbridge.ServerName + "__aether_report"
+	// nudge is how Claude Code's prompt after a model call without text
+	// starts.
+	nudge = "[Your previous response had no visible output"
+)
 
 // Reply is what one agent run produced besides its coordination calls.
 type Reply struct {
@@ -259,8 +290,12 @@ type Reply struct {
 	Tools map[string]int
 	// Subagents is how many subagents the harness says the agent started.
 	Subagents int
-	// ToolStarts counts the agent's calls of the bridge's start tool.
-	ToolStarts int
+	// ToolStarts and ToolReports count the agent's calls of the bridge's
+	// start and report tools.
+	ToolStarts, ToolReports int
+	// Nudges counts the times Claude Code prompted the agent again because a
+	// model call ended without text.
+	Nudges int
 	// Transcript is the harness's raw output.
 	Transcript []byte
 }
@@ -324,6 +359,10 @@ func parseStream(out []byte) (reply Reply, resulted bool, err error) {
 			continue
 		}
 		switch msg.Type {
+		case "user":
+			if bytes.Contains(msg.Message.Content, []byte(nudge)) {
+				reply.Nudges++
+			}
 		case "assistant":
 			var blocks []struct {
 				Type string `json:"type"`
@@ -335,8 +374,11 @@ func parseStream(out []byte) (reply Reply, resulted bool, err error) {
 					continue
 				}
 				reply.Tools[b.Name]++
-				if b.Name == startTool {
+				switch b.Name {
+				case startTool:
 					reply.ToolStarts++
+				case reportTool:
+					reply.ToolReports++
 				}
 			}
 		case "result":
@@ -358,6 +400,7 @@ func parseStream(out []byte) (reply Reply, resulted bool, err error) {
 // Result is one agent run of one scenario.
 type Result struct {
 	Scenario string        `json:"scenario"`
+	Mode     Mode          `json:"mode"`
 	Run      int           `json:"run"`
 	Checks   []CheckResult `json:"checks"`
 	Pass     bool          `json:"pass"`
@@ -368,20 +411,26 @@ type Result struct {
 	Subagents int            `json:"subagents"`
 	// StartAttempts counts the agent's attempts to start a subsession through
 	// the bridge's tool or the command, whatever became of them.
-	StartAttempts int           `json:"start_attempts"`
-	Answer        string        `json:"answer"`
-	Model         string        `json:"model,omitempty"`
-	Latency       time.Duration `json:"latency_ns"`
-	CostUSD       *float64      `json:"cost_usd,omitempty"`
-	Error         string        `json:"error,omitempty"`
+	StartAttempts int `json:"start_attempts"`
+	// ToolReports and CommandReports count the reports the agent sent through
+	// the bridge's tool and through the command.
+	ToolReports    int `json:"tool_reports"`
+	CommandReports int `json:"command_reports"`
+	// Nudges counts Claude Code's prompts after a model call without text.
+	Nudges  int           `json:"nudges"`
+	Answer  string        `json:"answer"`
+	Model   string        `json:"model,omitempty"`
+	Latency time.Duration `json:"latency_ns"`
+	CostUSD *float64      `json:"cost_usd,omitempty"`
+	Error   string        `json:"error,omitempty"`
 	// Transcript is the harness's raw output, kept out of the JSON report.
 	Transcript []byte `json:"-"`
 }
 
 // RunOnce runs scenario s once in a fresh staged session and scores it.
-func RunOnce(ctx context.Context, agent Agent, helper string, s Scenario, n int) Result {
-	res := Result{Scenario: s.ID, Run: n}
-	l, err := Stage(ctx, helper, s)
+func RunOnce(ctx context.Context, agent Agent, helper string, s Scenario, mode Mode, n int) Result {
+	res := Result{Scenario: s.ID, Mode: mode, Run: n}
+	l, err := Stage(ctx, helper, s, mode)
 	if err != nil {
 		res.Error = err.Error()
 		return res
@@ -399,6 +448,11 @@ func RunOnce(ctx context.Context, agent Agent, helper string, s Scenario, n int)
 	if cerr != nil && res.Error == "" {
 		res.Error = cerr.Error()
 	}
+	res.CommandReports, cerr = l.CommandReports()
+	if cerr != nil && res.Error == "" {
+		res.Error = cerr.Error()
+	}
+	res.ToolReports, res.Nudges = reply.ToolReports, reply.Nudges
 	res.StartAttempts = reply.ToolStarts + commandStarts
 	res.Checks = Score(s, res.Calls, res.StartAttempts)
 	res.Pass = res.Error == ""
