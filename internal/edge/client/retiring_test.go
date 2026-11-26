@@ -13,7 +13,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
+	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 )
 
 // longHost is a DNS name of the longest legal length, 253 bytes.

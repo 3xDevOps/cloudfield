@@ -16,9 +16,9 @@ import (
 	"github.com/coder/websocket"
 	"golang.org/x/crypto/ssh"
 
-	edgeclient "github.com/3xDevOps/Aether/internal/edge/client"
-	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
-	edge "github.com/3xDevOps/Aether/internal/edge/service"
+	edgeclient "github.com/3xDevOps/cloudfield/internal/edge/client"
+	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
+	edge "github.com/3xDevOps/cloudfield/internal/edge/service"
 )
 
 // TestRetiringPair serves two pairs with the first, A, retiring in

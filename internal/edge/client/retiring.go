@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
+	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 )
 
 // Retiring is an edge's notice that the address pair this client uses

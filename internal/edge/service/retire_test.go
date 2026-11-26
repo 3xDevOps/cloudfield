@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
+	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 )
 
 // newRetiringHarness serves two pairs and marks the first retiring in
