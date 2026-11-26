@@ -36,6 +36,8 @@ func consentStates() []consentState {
 	retiring.Retiring = &protocol.ConnectorNotice{State: "retiring", URL: "https://relay-new.example.test/mcp/q3k7m2xw4vbn6hzt5rjc8pdyfa", Date: "2027-03-01"}
 	retiringMember := member
 	retiringMember.Retiring = &protocol.ConnectorNotice{State: "retiring", URL: "https://relay-new.example.test/mcp"}
+	unannounced := code
+	unannounced.Retiring = &protocol.ConnectorNotice{State: "retiring", Date: "2027-03-01"}
 	return []consentState{
 		{"consent-code", code},
 		{"consent-code-error", codeErr},
@@ -43,6 +45,7 @@ func consentStates() []consentState {
 		{"consent-long", long},
 		{"consent-retiring", retiring},
 		{"consent-retiring-member", retiringMember},
+		{"consent-retiring-unannounced", unannounced},
 		{"consent-failed", consentPage{Failed: true, Server: "moss", Error: "This form was not issued by this server. Start the connection again from ChatGPT or Claude."}},
 	}
 }
