@@ -275,6 +275,10 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 		t.Fatalf("login directories before any login was added: %v", entries)
 	}
 
+	if _, stderr, code := ada.cli("agent", "logins", "share", "default", "off"); code == 0 || !strings.Contains(stderr, "you have only the default login; add a login first") {
+		t.Fatalf("agent logins share default off with only the default login = %d %q", code, stderr)
+	}
+
 	// Add a login on a terminal: the code typed reaches the sign-in, and
 	// the CLI prints the login the server added.
 	saveAs := func(email, org string) func(string, string) {
@@ -329,6 +333,7 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 		{[]string{"rename", "work", "job"}, "renamed login work to job\n"},
 		{[]string{"order", "job", "default"}, "login order: 1 job, 2 default\n"},
 		{[]string{"auto", "job", "off"}, "login job: used only when you name it with cloudfield session --login job\n"},
+		{[]string{"share", "job", "off"}, "login job: only your own sessions run on it; Cloudfield moves teammates' sessions off it, and stops those no other login can run\n"},
 	} {
 		out, stderr, code := ada.cli(append([]string{"agent", "logins"}, step.args...)...)
 		t.Logf("$ cloudfield agent logins %s\n%s%s", strings.Join(step.args, " "), out, stderr)
@@ -337,7 +342,7 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 		}
 	}
 	if out := logins(); out != "#  LOGIN    KIND          PLAN  EMAIL                  USAGE   AUTOMATIC  SHARES  BILLED\n"+
-		"1  job      subscription  max   ada@work.example.test  5h 40%  off        on      -\n"+
+		"1  job      subscription  max   ada@work.example.test  5h 40%  off        off     -\n"+
 		"2  default  -             -     -                      5h 12%  on         on      -\n" {
 		t.Fatalf("agent logins after rename, order and auto:\n%s", out)
 	}
