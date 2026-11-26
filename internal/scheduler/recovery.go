@@ -1438,7 +1438,7 @@ func (s *Scheduler) recoverSupervised(ctx context.Context, r *domain.Run) {
 			if swap.Continuation == "" {
 				s.dropAccountSwap(r.ID, &sc)
 			}
-		case r.AccountMember() == swap.To:
+		case r.Account() == swap.to():
 			s.didNotSurvive(ctx, r, runtime.ID(sc.ContainerID))
 			return
 		default:

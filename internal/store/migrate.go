@@ -2667,6 +2667,24 @@ ALTER TABLE server_update_state ADD COLUMN declined_hotfix INTEGER NOT NULL DEFA
 	`
 ALTER TABLE runs ADD COLUMN linear_issue_url TEXT NOT NULL DEFAULT '';
 `,
+	// v115: a member's logins of an agent beside the one in their home, in
+	// the order Cloudfield tries them. A member who adds none has no row;
+	// adding the first also writes the home login's row, id 'default'.
+	// shared is whether the member's account shares reach the login.
+	`
+CREATE TABLE agent_logins (
+	member_id  TEXT NOT NULL REFERENCES members(id) ON DELETE CASCADE,
+	agent      TEXT NOT NULL,
+	id         TEXT NOT NULL,
+	name       TEXT NOT NULL,
+	position   INTEGER NOT NULL,
+	automatic  INTEGER NOT NULL,
+	shared     INTEGER NOT NULL,
+	created_at INTEGER NOT NULL,
+	PRIMARY KEY (member_id, agent, id),
+	UNIQUE (member_id, agent, name)
+);
+`,
 }
 
 // existingDatabaseMigrations run after their version's migration, in the

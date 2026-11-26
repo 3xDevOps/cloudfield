@@ -289,6 +289,11 @@ func (s *Server) memberRemove(ctx context.Context, member domain.MemberID, param
 				keyErr = s.cfg.Signing.Remove(id)
 			}
 			linearErr = s.disconnectLinear(id)
+			if s.cfg.Logins != nil {
+				if err := s.cfg.Logins.RemoveMember(id); err != nil {
+					slog.Warn("sshd: member logins cleanup failed", "member", id, "error", err)
+				}
+			}
 			if s.cfg.Homes != nil {
 				if err := s.cfg.Homes.Remove(ctx, id); err != nil {
 					slog.Warn("sshd: member home cleanup failed", "member", id, "error", err)

@@ -408,6 +408,10 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 	if herr != nil {
 		return nil, fmt.Errorf("server: create member homes: %w", herr)
 	}
+	logins, lerr := memberhome.NewLogins(filepath.Join(cfg.DataDir, "logins"))
+	if lerr != nil {
+		return nil, fmt.Errorf("server: create member logins: %w", lerr)
+	}
 	names := make([]string, 0, len(harness.Profiles()))
 	for _, p := range harness.Profiles() {
 		names = append(names, p.Name)
@@ -469,6 +473,7 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 		StateDir:       filepath.Join(cfg.DataDir, "scheduler"),
 		DataDir:        cfg.DataDir,
 		Homes:          homes,
+		Logins:         logins,
 		OMPBrokers:     ompBrokers,
 		Signing:        s.signing,
 		Memory:         mem,
@@ -543,6 +548,7 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 		Runs:              s.sched,
 		Control:           s.control,
 		Homes:             homes,
+		Logins:            logins,
 		Signing:           s.signing,
 		Secrets:           secrets,
 		WhoIs:             whois,
@@ -575,7 +581,7 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 	sshCfg.EdgeReviewer = cfg.EdgeReviewer
 	sshCfg.Services.Usage = cfg.Usage
 	if sshCfg.Services.Usage == nil {
-		sshCfg.Services.Usage = quota.New(homes)
+		sshCfg.Services.Usage = quota.New(homes, logins)
 	}
 	// The name the edge agent announces; an unreadable one leaves refusals
 	// unnamed.
@@ -620,6 +626,9 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 	}
 	if err = s.ssh.RecoverMergeArchives(ctx); err != nil {
 		return nil, err
+	}
+	if err = s.sched.ReconcileLogins(ctx, ""); err != nil {
+		return nil, fmt.Errorf("server: reconcile member logins: %w", err)
 	}
 	if err = s.signing.Migrate(ctx, members); err != nil {
 		return nil, fmt.Errorf("server: move signing keys out of member homes: %w", err)

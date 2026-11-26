@@ -619,7 +619,7 @@ func TestUnconfirmedSharedLoginDoesNotUseUpTheAccount(t *testing.T) {
 		t.Fatalf("the container back on Grace's account = account %q, mounts %+v; want only Grace's login", spec.Env["AETHER_ACCOUNT_MEMBER_ID"], spec.Mounts)
 	}
 	sc, err := e.sched.readSidecar(run.ID)
-	if err != nil || sc.LoginMember != string(e.owner.ID) || !slices.Equal(sc.VerifiedLogins, []domain.MemberID{lin.ID, e.owner.ID}) {
+	if err != nil || sc.LoginMember != string(e.owner.ID) || !slices.Equal(sc.VerifiedLogins, []domain.Account{domain.AccountOf(lin.ID), domain.AccountOf(e.owner.ID)}) {
 		t.Fatalf("sidecar = login %q verified %v, %v; want Grace's login, Lin and Grace confirmed", sc.LoginMember, sc.VerifiedLogins, err)
 	}
 
@@ -1469,7 +1469,7 @@ func TestStartStoppedDuringTheEventLogReadIsClean(t *testing.T) {
 
 // Each stop reason names why no account took the run.
 func TestNoFallbackReason(t *testing.T) {
-	ada, grace := domain.MemberID("ada"), domain.MemberID("grace")
+	ada, grace := domain.AccountOf("ada"), domain.AccountOf("grace")
 	for _, tc := range []struct {
 		harness  string
 		measured fallback.Measured

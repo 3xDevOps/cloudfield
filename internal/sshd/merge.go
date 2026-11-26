@@ -391,6 +391,13 @@ func (s *Server) afterMerge(ctx context.Context, caller domain.MemberID, merge *
 		slog.Warn("sshd: absorbed member's assistant cleanup failed", "merge", merge.ID, "error", err)
 	}
 	linearErr := s.disconnectLinear(merge.AbsorbedID)
+	// The merge gave the survivor the absorbed member's added logins; their
+	// directories follow, here or at the next start.
+	if signIns, ok := s.cfg.Runs.(LoginSignIns); ok {
+		if err := signIns.ReconcileLogins(ctx, merge.AbsorbedID); err != nil {
+			slog.Warn("sshd: move the absorbed member's logins; the next start moves them", "merge", merge.ID, "error", err)
+		}
+	}
 	s.cfg.Runs.ForgetOMPAccount(ctx, merge.AbsorbedID)
 	var agentErr error
 	if s.cfg.Signing != nil {

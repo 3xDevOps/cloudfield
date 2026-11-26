@@ -20,7 +20,7 @@ import (
 var ErrSignedOut = errors.New("login is signed out")
 
 type loginKey struct {
-	account domain.MemberID
+	account domain.Account
 	agent   string
 }
 
@@ -45,7 +45,7 @@ func (s *Scheduler) LoginProblem(account domain.MemberID, agent string, profile 
 	if err != nil || problem != "" {
 		return problem, problem != "", err
 	}
-	key := loginKey{account, agent}
+	key := loginKey{domain.AccountOf(account), agent}
 	s.mu.Lock()
 	refusal, refused := s.loginRefusals[key]
 	s.mu.Unlock()
@@ -114,7 +114,7 @@ func (s *Scheduler) loginRefused(account domain.MemberID, agent, stamp string, c
 	if s.loginRefusals == nil {
 		s.loginRefusals = make(map[loginKey]loginRefusal)
 	}
-	s.loginRefusals[loginKey{account, agent}] = loginRefusal{problem: problem, stamp: stamp, at: time.Now()}
+	s.loginRefusals[loginKey{domain.AccountOf(account), agent}] = loginRefusal{problem: problem, stamp: stamp, at: time.Now()}
 }
 
 // signInSteps is where the owner of an account signs agent in again. Only a
@@ -264,7 +264,7 @@ func (s *Scheduler) turnWorked(ctx context.Context, runID domain.RunID) {
 	if err != nil {
 		return
 	}
-	key := loginKey{run.AccountMember(), run.Harness}
+	key := loginKey{run.Account(), run.Harness}
 	s.mu.Lock()
 	refusal, refused := s.loginRefusals[key]
 	s.mu.Unlock()

@@ -124,12 +124,13 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 		refuse(err.Error())
 		return
 	}
-	account, excluded := fallback.Select(ctx, s.cfg.Store, measured, c.OwnerID, requested, workspaces, c.Fallback, func(ctx context.Context, account domain.MemberID) (bool, error) {
-		if p.settings.Off.Covers(c.Harness, account) {
+	chosen, excluded := fallback.Select(ctx, s.cfg.Store, measured, c.OwnerID, domain.AccountOf(requested), workspaces, c.Fallback, func(ctx context.Context, account domain.Account) (bool, error) {
+		if p.settings.Off.Covers(c.Harness, account.Member) {
 			return false, nil
 		}
-		return s.cfg.Runs.FallbackLaunchable(ctx, c.OwnerID, requested, account, c.Harness, c.Mode)
+		return s.cfg.Runs.FallbackLaunchable(ctx, c.OwnerID, requested, account.Member, c.Harness, c.Mode)
 	})
+	account := chosen.Member
 	if excluded != nil {
 		slog.Warn("subsessions: fallback accounts left out of a subsession launch", "child", c.RunID, "error", excluded)
 	}

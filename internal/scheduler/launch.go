@@ -700,8 +700,8 @@ func (s *Scheduler) startRunContainer(ctx context.Context, entry *supervised, ru
 		return nil, s.failContainer(ctx, entry, cid, "start container", serr)
 	}
 	s.mu.Lock()
-	if entry.loginMember != "" && !slices.Contains(entry.verifiedLogins, entry.loginMember) {
-		entry.verifiedLogins = append(entry.verifiedLogins, entry.loginMember)
+	if login := domain.AccountOf(entry.loginMember); entry.loginMember != "" && !slices.Contains(entry.verifiedLogins, login) {
+		entry.verifiedLogins = append(entry.verifiedLogins, login)
 	}
 	sc := entry.sidecar()
 	s.mu.Unlock()

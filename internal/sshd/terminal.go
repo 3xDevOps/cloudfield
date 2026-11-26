@@ -213,7 +213,7 @@ func (s *Server) serveTerminal(ctx context.Context, member domain.MemberID, st *
 	key := ptyhost.TerminalSession(member, tab)
 	s.authorizationMu.Lock()
 	admissionErr := s.checkMember(ctx, member)
-	if admissionErr == nil && req.AssistantLogin == "" {
+	if admissionErr == nil && req.AssistantLogin == "" && req.AgentLogin == "" {
 		if _, admissionErr = s.cfg.Runs.EnsureTerminal(ctx, member); admissionErr == nil {
 			admissionErr = s.cfg.Runs.EnsureTerminalTab(ctx, member, tab, cols, rows)
 		}
@@ -223,6 +223,13 @@ func (s *Server) serveTerminal(ctx context.Context, member domain.MemberID, st *
 	// the assistant's own lock orders it with the member's removal.
 	if admissionErr == nil && req.AssistantLogin != "" {
 		admissionErr = s.startAssistantLogin(ctx, member, req.AssistantLogin, cols, rows, &key)
+	}
+	if admissionErr == nil && req.AgentLogin != "" {
+		if signIns, perr := s.loginSignIns(); perr != nil {
+			admissionErr = perr
+		} else {
+			key, admissionErr = signIns.StartLoginSignIn(ctx, member, domain.LoginID(req.AgentLogin), cols, rows)
+		}
 	}
 	if admissionErr != nil {
 		e := rpcError(admissionErr)

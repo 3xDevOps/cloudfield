@@ -81,6 +81,8 @@ type Config struct {
 	// Homes owns the persistent per-member home directories. It is optional
 	// in narrow unit-test configurations.
 	Homes *memberhome.Manager
+	// Logins keeps members' added logins; nil keeps none.
+	Logins *memberhome.Logins
 
 	// Signing holds members' commit signing keys. Nil leaves the commits
 	// the server makes unsigned.
