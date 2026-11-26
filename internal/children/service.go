@@ -26,7 +26,10 @@ type Runs interface {
 	CloseRun(ctx context.Context, run domain.RunID, actor domain.MemberID, outcome domain.RunStatus) error
 	Review(ctx context.Context, run domain.RunID, actor domain.MemberID, action string, reportedOnly bool) (*domain.Run, error)
 	DefaultMode(ctx context.Context, member, account domain.MemberID, harnessName string) (domain.LaunchMode, error)
-	FallbackLaunchable(ctx context.Context, member, requested, account domain.MemberID, harnessName string, mode domain.LaunchMode) (bool, error)
+	// ChildLogin is the login a subsession of owner starts from on its
+	// parent's account.
+	ChildLogin(ctx context.Context, owner domain.MemberID, parent domain.Account, harness string, mode domain.LaunchMode) (domain.LoginID, error)
+	FallbackLaunchable(ctx context.Context, member, requested domain.MemberID, account domain.Account, harnessName string, mode domain.LaunchMode) (bool, error)
 	AgentModels(ctx context.Context, member, account domain.MemberID, name string, refresh bool) (protocol.AgentModelsResult, error)
 	Paused(run domain.RunID) bool
 }

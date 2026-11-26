@@ -158,7 +158,7 @@ func (s *Service) start(ctx context.Context, run domain.RunID, req protocol.Chil
 	}
 	c := &domain.ChildReservation{
 		ParentRunID: p.parent.ID, RootRunID: p.root, TreeKey: p.treeKey, WorkspaceID: p.parent.WorkspaceID,
-		OwnerID: p.owner, AccountID: spec.account, Harness: spec.harness, Mode: spec.mode, Model: spec.model,
+		OwnerID: p.owner, AccountID: spec.account, AccountLogin: spec.login, Harness: spec.harness, Mode: spec.mode, Model: spec.model,
 		Purpose: req.Purpose, Task: req.Task, BaseCommit: base, BaseBranch: p.parent.Branch,
 		Fallback: spec.fallback, IdempotencyKey: req.IdempotencyKey, RequestHash: requestHash(req),
 	}

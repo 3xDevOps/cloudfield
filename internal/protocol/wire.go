@@ -19,11 +19,15 @@ type Run struct {
 	// AccountMemberID's vendor login backs the run; MemberID remains the
 	// owner and actor.
 	AccountMemberID string `json:"account_member_id"`
-	Task            string `json:"task"`
-	Title           string `json:"title,omitempty"`
-	Harness         string `json:"harness"`
-	Mode            string `json:"mode"`
-	Model           string `json:"model,omitempty"`
+	// AccountLogin is the added login of the account the run spends, and
+	// AccountLoginName its name; both empty for the default login.
+	AccountLogin     string `json:"account_login,omitempty"`
+	AccountLoginName string `json:"account_login_name,omitempty"`
+	Task             string `json:"task"`
+	Title            string `json:"title,omitempty"`
+	Harness          string `json:"harness"`
+	Mode             string `json:"mode"`
+	Model            string `json:"model,omitempty"`
 	// RefusedModel is the model the run asked for and the agent refused,
 	// ModelError why; Model is then the one the session runs on, empty for
 	// the agent's default.
@@ -298,6 +302,7 @@ func RunFromDomain(r *domain.Run) Run {
 		BaseCheckedAt:       rfc3339ValuePtr(r.BaseCheckedAt),
 
 		RequestedAccountMemberID: string(r.RequestedAccountMemberID),
+		AccountLogin:             string(r.AccountLogin),
 		FallbackAccountMemberIDs: FallbackIDs(r.Fallback),
 		NoFallback:               r.Fallback.Disabled,
 	}
@@ -506,6 +511,10 @@ type RunLaunchParams struct {
 	Permission string `json:"permission,omitempty"`
 	// Empty means the caller's own account.
 	AccountMemberID string `json:"account_member_id,omitempty"`
+	// Login names one of the account's logins, "default" or an added
+	// login's id; only the account's owner may name one. Empty starts from
+	// the account's first login the launcher may use, in its owner's order.
+	Login string `json:"login,omitempty"`
 	// CachedBase retries a transient base-capture failure with the accepted
 	// mirror commit; one launch consumes it.
 	CachedBase string `json:"cached_base,omitempty"`

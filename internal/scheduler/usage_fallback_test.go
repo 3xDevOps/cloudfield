@@ -928,7 +928,7 @@ func TestRestartSettlesAnInterruptedAccountMove(t *testing.T) {
 			if err = e.sched.Close(); err != nil {
 				t.Fatal(err)
 			}
-			if _, err = e.db.SetRunAccount(t.Context(), run.ID, e.owner.ID, usageLimitSegment, time.Now()); err != nil {
+			if _, err = e.db.SetRunAccount(t.Context(), run.ID, domain.AccountOf(e.owner.ID), usageLimitSegment, time.Now()); err != nil {
 				t.Fatal(err)
 			}
 			sc, err := e.sched.readSidecar(run.ID)

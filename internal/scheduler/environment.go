@@ -57,8 +57,10 @@ type EnvironmentPlan struct {
 	// checkout of hard-linked objects must not be.
 	Worktrees []runtime.Mount
 	// LoginMember is the account owner whose login paths are mounted, empty
-	// when the plan mounts nothing from another member's home.
+	// when the plan mounts nothing from another member's home or logins.
+	// LoginID is the added login of theirs mounted, empty for the default.
 	LoginMember domain.MemberID
+	LoginID     domain.LoginID
 	// SecretEnv names the workspace secrets in Env.
 	SecretEnv []string
 	Egress    bool
@@ -191,7 +193,7 @@ func (s *Scheduler) BuildEnvironmentPlan(ctx context.Context, run *domain.Run, w
 			}
 		}
 		plan.Mounts = append(plan.Mounts, homeMount)
-		if isolated && (run.AccountMemberID == "" || run.AccountMemberID == member.ID) {
+		if isolated && !run.AccountLogin.Added() && (run.AccountMemberID == "" || run.AccountMemberID == member.ID) {
 			logins, loginErr := ownLoginFiles(s.cfg.Homes, member.ID, profile, homePath, home)
 			if loginErr != nil {
 				return nil, loginErr
@@ -202,7 +204,7 @@ func (s *Scheduler) BuildEnvironmentPlan(ctx context.Context, run *domain.Run, w
 			// A shared login that is a whole directory would stay writable, and
 			// the account owner's later sessions load settings and extensions
 			// from it.
-			if isolated {
+			if isolated && !run.AccountLogin.Added() {
 				shared, err := s.accountLogins(ctx, run.AccountMemberID, profile)
 				if err != nil {
 					return nil, err
@@ -213,11 +215,20 @@ func (s *Scheduler) BuildEnvironmentPlan(ctx context.Context, run *domain.Run, w
 					}
 				}
 			}
-			logins, err := s.loginMounts(ctx, member.ID, run.AccountMemberID, profile, home)
+			var logins []runtime.Mount
+			var err error
+			if run.AccountLogin.Added() {
+				logins, err = s.addedLoginMounts(run, member.ID, profile, home, env, purpose, isolated)
+				plan.LoginMember, plan.LoginID = run.AccountMemberID, run.AccountLogin
+			} else {
+				logins, err = s.loginMounts(ctx, member.ID, run.AccountMemberID, profile, home)
+			}
 			if err != nil {
 				return nil, err
 			}
-			if len(logins) > 0 {
+			if run.AccountLogin.Added() {
+				plan.Mounts = append(plan.Mounts, logins...)
+			} else if len(logins) > 0 {
 				plan.Mounts = append(plan.Mounts, logins...)
 				plan.LoginMember = run.AccountMemberID
 				if ac := profile.AccountConfig; ac != nil {
@@ -240,11 +251,8 @@ func (s *Scheduler) BuildEnvironmentPlan(ctx context.Context, run *domain.Run, w
 				env["PATH"] += ":" + path.Join(home, accountBin)
 			}
 		}
-		if run != nil && run.AccountLogin.Added() {
-			if run.AccountMemberID != member.ID {
-				return nil, errors.New("scheduler: an added login is used only in its owner's own home")
-			}
-			logins, loginErr := s.addedLoginMounts(run, profile, home, env, purpose)
+		if run != nil && run.AccountLogin.Added() && run.AccountMemberID == member.ID {
+			logins, loginErr := s.addedLoginMounts(run, member.ID, profile, home, env, purpose, isolated)
 			if loginErr != nil {
 				return nil, loginErr
 			}
@@ -899,18 +907,27 @@ func (s *Scheduler) DefaultMode(ctx context.Context, member, account domain.Memb
 // installation, whose executables only a launcher who picked that account
 // has agreed to run, and never moves a launch that relied on requested's
 // installation to an account where the agent is missing, nor onto a login a
-// live container holds under another uid:gid. It reads member homes and the
-// scheduler's own state only, never the runtime or the vendor.
-func (s *Scheduler) FallbackLaunchable(ctx context.Context, member, requested, account domain.MemberID, harnessName string, mode domain.LaunchMode) (bool, error) {
-	state, _, err := s.CheckSharedLaunch(ctx, member, account, harnessName)
-	if err != nil || state != SharedLaunchable || s.cfg.Homes == nil {
-		return err == nil && state == SharedLaunchable, err
+// live container holds under another uid:gid. An added login is judged by
+// its own file, never its owner's default login. It reads member homes,
+// login directories and the scheduler's own state only, never the runtime or
+// the vendor.
+func (s *Scheduler) FallbackLaunchable(ctx context.Context, member, requested domain.MemberID, login domain.Account, harnessName string, mode domain.LaunchMode) (bool, error) {
+	account := login.Member
+	if login.Login.Added() {
+		if usable, err := s.addedLoginUsable(ctx, member, login, harnessName); err != nil || !usable {
+			return false, err
+		}
+	} else {
+		state, _, err := s.CheckSharedLaunch(ctx, member, account, harnessName)
+		if err != nil || state != SharedLaunchable || s.cfg.Homes == nil {
+			return err == nil && state == SharedLaunchable, err
+		}
 	}
 	profile, argvs, err := s.launchProfile(ctx, member, account, harnessName)
 	if err != nil {
 		return false, err
 	}
-	if _, blocks, loginErr := s.LoginProblem(account, harnessName, profile); loginErr == nil && blocks {
+	if _, blocks, loginErr := s.LoginProblem(account, harnessName, profile); loginErr == nil && blocks && !login.Login.Added() {
 		return false, nil
 	}
 	if mode == domain.LaunchACP {

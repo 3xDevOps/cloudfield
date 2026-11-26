@@ -281,7 +281,11 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 
 func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protocol.RunLaunchParams, mode domain.LaunchMode, policy domain.AccountFallback,
 	created func(domain.RunID), skipped *[]protocol.SkippedAccount) (*domain.Run, *protocol.Error) {
-	measured, err := fallback.Measure(ctx, s.cfg.Store, s.cfg.Services.Usage, member, p.AccountMemberID, p.Harness, policy)
+	login, perr := s.launchLogin(ctx, member, domain.MemberID(p.AccountMemberID), p.Harness, p.Login, mode)
+	if perr != nil {
+		return nil, perr
+	}
+	measured, err := fallback.Measure(ctx, s.cfg.Store, s.cfg.Services.Usage, member, domain.Account{Member: domain.MemberID(p.AccountMemberID), Login: login}, p.Harness, policy)
 	if err != nil {
 		return nil, rpcError(err)
 	}
@@ -302,8 +306,8 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 			return nil, rpcError(err)
 		}
 	}
-	chosen, excluded := fallback.Select(ctx, s.cfg.Store, measured, member, domain.AccountOf(requested), workspaces, policy, func(ctx context.Context, account domain.Account) (bool, error) {
-		return s.cfg.Runs.FallbackLaunchable(ctx, member, requested, account.Member, p.Harness, mode)
+	chosen, excluded := fallback.Select(ctx, s.cfg.Store, measured, member, domain.Account{Member: requested, Login: login}, p.Harness, workspaces, policy, func(ctx context.Context, account domain.Account) (bool, error) {
+		return s.cfg.Runs.FallbackLaunchable(ctx, member, requested, account, p.Harness, mode)
 	})
 	account := chosen.Member
 	if excluded != nil {
@@ -317,7 +321,7 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 	permission := cmp.Or(domain.Permission(p.Permission), domain.PermissionDefault)
 	run, err := launchWithOptions(ctx, s.cfg.Runs, domain.WorkspaceID(p.WorkspaceID), member, account, p.Task, p.Harness, mode, domain.LaunchOptions{
 		Limits:     limits,
-		CachedBase: p.CachedBase, Model: p.Model, Effort: p.Effort, Permission: permission, RequestedAccount: requested, Fallback: policy,
+		CachedBase: p.CachedBase, Model: p.Model, Effort: p.Effort, Permission: permission, RequestedAccount: requested, AccountLogin: chosen.Login, Fallback: policy,
 		Admitted: unlockAuthorization, Created: created,
 		ExtraWorkspaces: workspaceIDs(p.ExtraWorkspaceIDs), LinearIssueURL: p.LinearIssueURL,
 	})
@@ -414,6 +418,14 @@ func (s *Server) runGet(ctx context.Context, member domain.MemberID, params json
 // protection or launch response must not erase input learned from the stream.
 func (s *Server) runSnapshot(run *domain.Run) protocol.Run {
 	out := protocol.RunFromDomain(run)
+	if run.AccountLogin.Added() {
+		logins, err := s.cfg.Store.ListAgentLogins(context.Background(), run.AccountMember(), run.Harness)
+		if err == nil {
+			if l, perr := addedLogin(logins, string(run.AccountLogin)); perr == nil {
+				out.AccountLoginName = l.Name
+			}
+		}
+	}
 	if s.cfg.Runs != nil {
 		out.Paused = s.cfg.Runs.Paused(run.ID)
 		if sleep := s.cfg.Runs.Sleep(run.ID); sleep.AsleepSince != nil {
@@ -680,7 +692,7 @@ func (s *Server) runRelaunch(ctx context.Context, member domain.MemberID, params
 			}
 		}
 	}
-	if _, err = fallback.ResolveLaunchAccountIn(ctx, s.cfg.Store, member, string(run.AccountMember()), workspaces); err != nil {
+	if err = fallback.ResolveRunLogin(ctx, s.cfg.Store, member, run, workspaces); err != nil {
 		return nil, rpcError(err)
 	}
 	reopened, err := s.cfg.Runs.Relaunch(ctx, id, member)

@@ -79,7 +79,10 @@ type RunController interface {
 	// FallbackLaunchable reports whether member's launch of harness in mode
 	// on account can stand in for one on requested as a usage fallback,
 	// which never borrows the owner's installation.
-	FallbackLaunchable(ctx context.Context, member, requested, account domain.MemberID, harness string, mode domain.LaunchMode) (bool, error)
+	// StartLogin is the login a launch by member on account starts from
+	// when it names none.
+	StartLogin(ctx context.Context, member, account domain.MemberID, harness string, mode domain.LaunchMode) (domain.LoginID, error)
+	FallbackLaunchable(ctx context.Context, member, requested domain.MemberID, account domain.Account, harness string, mode domain.LaunchMode) (bool, error)
 	// LoginProblem is why agent's login in account's home cannot sign it
 	// in, empty when the server knows of none, and whether a launch is
 	// refused over it.

@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -16,7 +17,9 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/harness"
 	"github.com/3xDevOps/cloudfield/internal/memberhome"
+	"github.com/3xDevOps/cloudfield/internal/permissions"
 	"github.com/3xDevOps/cloudfield/internal/ptyhost"
+	"github.com/3xDevOps/cloudfield/internal/quota"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
 	"github.com/3xDevOps/cloudfield/internal/store"
 )
@@ -392,21 +395,30 @@ func (r endingReader) Read(p []byte) (int, error) {
 // without the account keys, as a session on a shared account gets. A
 // sign-in's copy is scratch in the login's directory, and Claude Code's
 // backups of it stay there too, out of the member's home.
-func (s *Scheduler) addedLoginMounts(run *domain.Run, profile harness.Profile, home string, env map[string]string, purpose EnvironmentPurpose) ([]runtime.Mount, error) {
+func (s *Scheduler) addedLoginMounts(run *domain.Run, launcher domain.MemberID, profile harness.Profile, home string, env map[string]string, purpose EnvironmentPurpose, isolated bool) ([]runtime.Mount, error) {
 	if _, err := s.addedLoginProfile(profile.Name); err != nil {
 		return nil, fmt.Errorf("scheduler: %w", err)
 	}
 	if s.sessionVMs() {
 		return nil, errors.New("scheduler: session VMs cannot verify an added login's mounts yet, so they do not run on one; launch on your default login")
 	}
-	member := run.AccountMemberID
-	dir, err := s.cfg.Logins.Path(member, profile.Name, run.AccountLogin)
+	dir, err := s.cfg.Logins.Path(run.AccountMemberID, profile.Name, run.AccountLogin)
 	if err != nil {
 		return nil, err
 	}
 	if info, statErr := os.Lstat(dir); statErr != nil || !info.IsDir() {
 		return nil, fmt.Errorf("scheduler: login %s has no directory on this server; it was removed", run.AccountLogin)
 	}
+	if isolated {
+		identity, idErr := s.cfg.Logins.Identity(run.AccountMemberID, profile.Name, run.AccountLogin)
+		if idErr != nil {
+			return nil, idErr
+		}
+		if identity.Kind == memberhome.LoginConsole {
+			return nil, errors.New("scheduler: an Isolated session cannot use a Console login: it is a whole directory the session could change for later sessions; launch it at Default, or on another login")
+		}
+	}
+	member := launcher
 	paths, err := profile.LoginPaths()
 	if err != nil || len(paths) != 1 {
 		return nil, fmt.Errorf("scheduler: %s has no single login file to mount an added login over", profile.Name)
@@ -447,20 +459,27 @@ func (s *Scheduler) addedLoginMounts(run *domain.Run, profile harness.Profile, h
 	}
 	env[profile.AccountConfig.Env] = path.Join(home, profile.AccountConfig.Dir)
 	env["ANTHROPIC_CONFIG_DIR"] = path.Join(home, memberhome.AnthropicProfileDir)
+	// The login's own profile is its directory's active one; a workspace
+	// variable naming another would sign Claude Code in with none.
+	delete(env, "ANTHROPIC_PROFILE")
 	return append(mounts, config...), nil
 }
 
-// addedLoginPath reports whether host is where an added login's mounts come
-// from: its directory, or the session's copy of the configuration. Only what
-// such a subpath mount exposes is handed to the container's user, never the
-// directory around it.
-func (s *Scheduler) addedLoginPath(host string) bool {
-	for _, root := range []string{s.accountConfigRoot(), loginsRoot(s.cfg.Logins)} {
-		if rel, err := filepath.Rel(root, host); root != "" && err == nil && rel != "." && filepath.IsLocal(rel) {
-			return true
-		}
+// addedLoginPath reports whether host is where an added login's subpath
+// mounts come from, and whose ownership pass hands them over: owner's, for
+// a directory of owner's logins, or the session's own, empty, for its copy
+// of the configuration. Only what such a mount exposes is handed to the
+// container's user, never the directory around it.
+func (s *Scheduler) addedLoginPath(host string) (owner domain.MemberID, ok bool) {
+	if rel, err := filepath.Rel(s.accountConfigRoot(), host); err == nil && rel != "." && filepath.IsLocal(rel) {
+		return "", true
 	}
-	return false
+	root := loginsRoot(s.cfg.Logins)
+	if rel, err := filepath.Rel(root, host); root != "" && err == nil && rel != "." && filepath.IsLocal(rel) {
+		first, _, _ := strings.Cut(filepath.ToSlash(rel), "/")
+		return domain.MemberID(first), true
+	}
+	return "", false
 }
 
 func loginsRoot(l *memberhome.Logins) string {
@@ -468,6 +487,189 @@ func loginsRoot(l *memberhome.Logins) string {
 		return ""
 	}
 	return l.Root()
+}
+
+// addedLoginProblem is why an added login cannot sign its agent in, read
+// from its own files; empty when it can.
+func (s *Scheduler) addedLoginProblem(account domain.Account, agent string) (string, error) {
+	identity, err := s.cfg.Logins.Inspect(account.Member, agent, account.Login)
+	if err != nil {
+		return "", err
+	}
+	switch identity.Kind {
+	case memberhome.LoginConsole:
+		return "", nil
+	case memberhome.LoginSubscription:
+		data, err := s.cfg.Logins.ReadCredential(account.Member, agent, account.Login, 1<<20)
+		if err != nil {
+			return "", err
+		}
+		return quota.LoginProblem(agent, data, time.Now()), nil
+	}
+	return "its sign-in never finished", nil
+}
+
+// addedLoginUsable reports whether a session in member's home can run on
+// the added login: it still exists, member owns it or it is on for shares,
+// the runtime can verify its mounts, and it can sign in.
+func (s *Scheduler) addedLoginUsable(ctx context.Context, member domain.MemberID, account domain.Account, agent string) (bool, error) {
+	if _, err := s.addedLoginProfile(agent); err != nil || s.sessionVMs() {
+		return false, nil
+	}
+	logins, err := s.cfg.Store.ListAgentLogins(ctx, account.Member, agent)
+	if err != nil {
+		return false, err
+	}
+	i := slices.IndexFunc(logins, func(l domain.AgentLogin) bool { return l.ID == account.Login })
+	if i < 0 || (member != account.Member && !logins[i].Shared) {
+		return false, nil
+	}
+	problem, err := s.addedLoginProblem(account, agent)
+	return err == nil && problem == "", err
+}
+
+// checkAddedLogin refuses a launch in member's home on an added login that
+// member may not use or that cannot sign its agent in.
+func (s *Scheduler) checkAddedLogin(ctx context.Context, member domain.MemberID, account domain.Account, agent string) error {
+	if _, err := s.addedLoginProfile(agent); err != nil {
+		return fmt.Errorf("scheduler: %w", err)
+	}
+	if s.sessionVMs() {
+		return errors.New("scheduler: session VMs cannot verify an added login's mounts yet, so they do not run on one; launch on the default login")
+	}
+	logins, err := s.cfg.Store.ListAgentLogins(ctx, account.Member, agent)
+	if err != nil {
+		return err
+	}
+	i := slices.IndexFunc(logins, func(l domain.AgentLogin) bool { return l.ID == account.Login })
+	if i < 0 || (member != account.Member && !logins[i].Shared) {
+		return fmt.Errorf("%w: login %s of this account is not available to you", permissions.ErrDenied, account.Login)
+	}
+	problem, err := s.addedLoginProblem(account, agent)
+	if err != nil {
+		return err
+	}
+	if problem != "" {
+		return fmt.Errorf("scheduler: %w: login %s: %s; its owner signs in again with cloudfield agent login %s", ErrSignedOut, account.Login, problem, agent)
+	}
+	return nil
+}
+
+// checkDefaultLoginShared refuses a launch in member's home on another
+// member's default login when its owner turned it off for shares.
+func (s *Scheduler) checkDefaultLoginShared(ctx context.Context, member, account domain.MemberID, agent string) error {
+	if member == account {
+		return nil
+	}
+	logins, err := s.cfg.Store.ListAgentLogins(ctx, account, agent)
+	if err != nil {
+		return err
+	}
+	if i := slices.IndexFunc(logins, func(l domain.AgentLogin) bool { return l.ID == domain.DefaultLogin }); i >= 0 && !logins[i].Shared {
+		return fmt.Errorf("%w: the default login of this account is not available to you", permissions.ErrDenied)
+	}
+	return nil
+}
+
+// StartLogin is the login a launch by member on account starts from when
+// none is named: the account's first login in its owner's order that member
+// may use without naming it, automatic and, for a teammate, on for shares.
+// An account none of whose logins member may use is not shared with them;
+// on their own account the first login serves, and its launch says why it
+// cannot sign in.
+func (s *Scheduler) StartLogin(ctx context.Context, member, account domain.MemberID, harness string, mode domain.LaunchMode) (domain.LoginID, error) {
+	logins, err := s.cfg.Store.ListAgentLogins(ctx, account, harness)
+	if err != nil || len(logins) == 0 {
+		return "", err
+	}
+	for _, l := range logins {
+		if !l.Automatic || (account != member && !l.Shared) {
+			continue
+		}
+		login := domain.Account{Member: account, Login: loginOf(l.ID)}
+		if ok, launchErr := s.FallbackLaunchable(ctx, member, account, login, harness, mode); launchErr == nil && ok {
+			return login.Login, nil
+		}
+	}
+	if account == member {
+		return loginOf(logins[0].ID), nil
+	}
+	return "", fmt.Errorf("%w: none of this account's logins is available to you, so it is not shared with you", permissions.ErrDenied)
+}
+
+// ChildLogin is the login a subsession of owner starts from on its
+// parent's account: the parent's current login when owner owns it or holds
+// a share that reaches it, it can still run, and it is not billed per use;
+// otherwise the one a launch that names none starts from.
+func (s *Scheduler) ChildLogin(ctx context.Context, owner domain.MemberID, parent domain.Account, harness string, mode domain.LaunchMode) (domain.LoginID, error) {
+	logins, err := s.cfg.Store.ListAgentLogins(ctx, parent.Member, harness)
+	if err != nil || len(logins) == 0 {
+		return "", err
+	}
+	id := parent.Login
+	if id == "" {
+		id = domain.DefaultLogin
+	}
+	i := slices.IndexFunc(logins, func(l domain.AgentLogin) bool { return l.ID == id })
+	inherits := i >= 0 && (owner == parent.Member || logins[i].Shared)
+	if inherits && parent.Login.Added() {
+		identity, idErr := s.cfg.Logins.Identity(parent.Member, harness, parent.Login)
+		inherits = idErr == nil && !identity.PerUse()
+	}
+	if inherits {
+		if ok, launchErr := s.FallbackLaunchable(ctx, owner, parent.Member, parent, harness, mode); launchErr == nil && ok {
+			return parent.Login, nil
+		}
+	}
+	return s.StartLogin(ctx, owner, parent.Member, harness, mode)
+}
+
+func loginOf(id domain.LoginID) domain.LoginID {
+	if id.Added() {
+		return id
+	}
+	return ""
+}
+
+// LoginInUse lists the sessions a removal of an added login must wait for:
+// those on it that have not ended, those a move is taking to it, and the
+// subsessions queued or launching on it. Callers hold the launch
+// authorization mutex, under which launches and moves choose their login.
+func (s *Scheduler) LoginInUse(ctx context.Context, account domain.Account) ([]domain.RunID, error) {
+	runs, err := s.cfg.Store.ListActiveRuns(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var ids []domain.RunID
+	for _, r := range runs {
+		if r.Account() == account {
+			ids = append(ids, r.ID)
+		}
+	}
+	s.mu.Lock()
+	for id, entry := range s.runs {
+		if entry.accountSwap != nil && entry.accountSwap.to() == account {
+			ids = append(ids, id)
+		}
+	}
+	s.mu.Unlock()
+	if children, ok := s.cfg.Store.(interface {
+		ChildrenInState(context.Context, domain.ChildState) ([]*domain.ChildReservation, error)
+	}); ok {
+		for _, state := range []domain.ChildState{domain.ChildQueued, domain.ChildLaunching} {
+			reserved, listErr := children.ChildrenInState(ctx, state)
+			if listErr != nil {
+				return nil, listErr
+			}
+			for _, c := range reserved {
+				if (domain.Account{Member: c.AccountID, Login: c.AccountLogin}) == account {
+					ids = append(ids, c.RunID)
+				}
+			}
+		}
+	}
+	slices.Sort(ids)
+	return slices.Compact(ids), nil
 }
 
 // ReconcileLogins makes the login directories match the rows at start: a

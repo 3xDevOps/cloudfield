@@ -6,9 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/memberhome"
+	"github.com/3xDevOps/cloudfield/internal/permissions"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
 	"github.com/3xDevOps/cloudfield/internal/ptyhost"
 	"github.com/3xDevOps/cloudfield/internal/store"
@@ -33,6 +35,9 @@ type LoginSignIns interface {
 	// ReconcileLogins moves the login directories a merge gave another
 	// member to them and removes those with no row.
 	ReconcileLogins(ctx context.Context, member domain.MemberID) error
+	// LoginInUse lists the sessions on an added login, moving to it, or
+	// queued to start on it.
+	LoginInUse(ctx context.Context, account domain.Account) ([]domain.RunID, error)
 }
 
 var errNoAddedLogins = &protocol.Error{Code: protocol.CodeUnavailable, Message: "this server keeps no added logins"}
@@ -205,6 +210,19 @@ func (s *Server) agentLoginRemove(ctx context.Context, member domain.MemberID, r
 	if perr != nil {
 		return nil, perr
 	}
+	if signIns, ok := s.cfg.Runs.(LoginSignIns); ok {
+		inUse, err := signIns.LoginInUse(ctx, domain.Account{Member: member, Login: login.ID})
+		if err != nil {
+			return nil, rpcError(err)
+		}
+		if len(inUse) > 0 {
+			ids := make([]string, len(inUse))
+			for i, id := range inUse {
+				ids[i] = string(id)
+			}
+			return nil, &protocol.Error{Code: protocol.CodeConflict, Message: fmt.Sprintf("login %q is in use by %s; end those sessions first", login.Name, strings.Join(ids, ", "))}
+		}
+	}
 	if err := s.cfg.Store.DeleteAgentLogin(ctx, member, p.Agent, login.ID); err != nil {
 		return nil, rpcError(err)
 	}
@@ -263,4 +281,41 @@ func (s *Server) agentLoginAutomatic(ctx context.Context, member domain.MemberID
 	}
 	noteChange(ctx)
 	return struct{}{}, nil
+}
+
+// launchLogin resolves the login a launch by member on account starts
+// from: the one its owner named, or the account's first login in its
+// owner's order that member may use without naming it. Only a login's owner
+// may name it. An account none of whose logins member may use is not shared
+// with them; on their own account the first login serves when none is
+// usable, and its launch says why.
+func (s *Server) launchLogin(ctx context.Context, member, account domain.MemberID, harness, named string, mode domain.LaunchMode) (domain.LoginID, *protocol.Error) {
+	if account == "" {
+		account = member
+	}
+	logins, err := s.cfg.Store.ListAgentLogins(ctx, account, harness)
+	if err != nil {
+		return "", rpcError(err)
+	}
+	if named != "" {
+		if account != member {
+			return "", &protocol.Error{Code: protocol.CodeDenied, Message: protocol.MethodRunLaunch + ": only a login's owner names it; a launch on a teammate's account is served in their order"}
+		}
+		if domain.LoginID(named) == domain.DefaultLogin {
+			return "", nil
+		}
+		login, perr := addedLogin(logins, named)
+		if perr != nil {
+			return "", perr
+		}
+		return login.ID, nil
+	}
+	login, err := s.cfg.Runs.StartLogin(ctx, member, account, harness, mode)
+	if errors.Is(err, permissions.ErrDenied) {
+		return "", &protocol.Error{Code: protocol.CodeDenied, Message: protocol.MethodRunLaunch + ": " + err.Error()}
+	}
+	if err != nil {
+		return "", rpcError(err)
+	}
+	return login, nil
 }

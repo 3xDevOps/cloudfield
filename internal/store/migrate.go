@@ -2685,6 +2685,14 @@ CREATE TABLE agent_logins (
 	UNIQUE (member_id, agent, name)
 );
 `,
+	// v116: the added login of its account a run, an account segment and a
+	// queued subsession spend; empty for the default login, so every
+	// existing row keeps meaning what it meant.
+	`
+ALTER TABLE runs ADD COLUMN account_login TEXT NOT NULL DEFAULT '';
+ALTER TABLE run_account_segments ADD COLUMN account_login TEXT NOT NULL DEFAULT '';
+ALTER TABLE run_children ADD COLUMN account_login TEXT NOT NULL DEFAULT '';
+`,
 }
 
 // existingDatabaseMigrations run after their version's migration, in the

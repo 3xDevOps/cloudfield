@@ -137,7 +137,7 @@ func (s *Service) agentChoices(ctx context.Context, owner, account domain.Member
 
 // usedPercent is the account's quota use for harness, when readable.
 func (s *Service) usedPercent(ctx context.Context, owner, account domain.MemberID, harness string) (float64, bool) {
-	measured, err := fallback.Measure(ctx, s.cfg.Store, s.cfg.Usage, owner, string(account), harness, domain.AccountFallback{})
+	measured, err := fallback.Measure(ctx, s.cfg.Store, s.cfg.Usage, owner, domain.AccountOf(account), harness, domain.AccountFallback{})
 	if err != nil {
 		return 0, false
 	}
@@ -157,6 +157,7 @@ func (s *Service) memberName(ctx context.Context, id domain.MemberID) (string, e
 type launchSpec struct {
 	harness  string
 	account  domain.MemberID
+	login    domain.LoginID
 	mode     domain.LaunchMode
 	model    string
 	fallback domain.AccountFallback
@@ -176,11 +177,12 @@ func (s *Service) choose(ctx context.Context, p *policy, req protocol.ChildStart
 		return launchSpec{}, invalid("%s", err.Error())
 	}
 	account := p.owner
+	var login domain.LoginID
 	switch {
 	case req.AccountMemberID != "":
 		account = domain.MemberID(req.AccountMemberID)
 	case req.Harness == p.parent.Harness && p.parent.HomeMember() == p.owner:
-		account = p.parent.AccountMember()
+		account, login = p.parent.AccountMember(), p.parent.AccountLogin
 	}
 	if err := s.admit(ctx, p, account); err != nil {
 		return launchSpec{}, rpcErr(protocol.MethodChildStart, err)
@@ -201,7 +203,7 @@ func (s *Service) choose(ctx context.Context, p *policy, req protocol.ChildStart
 			return launchSpec{}, denied("%s", c.Detail)
 		}
 	}
-	spec := launchSpec{harness: req.Harness, account: account, mode: mode, model: req.Model, fallback: p.parent.Fallback}
+	spec := launchSpec{harness: req.Harness, account: account, login: login, mode: mode, model: req.Model, fallback: p.parent.Fallback}
 	defaultMode, err := s.cfg.Runs.DefaultMode(ctx, p.owner, spec.account, spec.harness)
 	if err != nil {
 		return launchSpec{}, invalid("agent %q: %s; aether-internal subsession options lists the agents", req.Harness, err.Error())
