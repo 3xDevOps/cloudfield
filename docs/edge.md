@@ -1222,7 +1222,10 @@ requests, the server control path included, get, before any handshake:
 ```
 
 The error names the origin of the host asked, the sign-in origin on the sign-in
-host. A browser page request (a `GET` with `Accept: text/html` outside `/v1/`)
+host. A WebSocket upgrade, and any request under `/v1/server/` or
+`/v1/connect/`, gets the error without the two commands, `<old> is retired;
+this edge is at <new>`, since a client reads only the first 1024 bytes of a
+refused upgrade. A browser page request (a `GET` with `Accept: text/html` outside `/v1/`)
 gets a static page with the same commands, naming the replacement's sign-in
 origin on the sign-in host and its relay origin on the relay host; on a join
 link it says to ask whoever sent the link for a new one. The page loads nothing,
@@ -1235,7 +1238,8 @@ Every `ready` carries, beside the retiring notices,
 "https://<relay-host-2>"}`, signed with the rest of the list. A retired relay
 origin is not in `relay_origins`, so a server refuses connector requests said
 to come from it. A server still enrolled there shows `dial
-https://<relay-host-1>/v1/server/control: 410 Gone: <error>` in `edge status`.
+https://<relay-host-1>/v1/server/control: 410 Gone: https://<relay-host-1> is
+retired; this edge is at https://<relay-host-2>` in `edge status`.
 
 Before it serves, an edge with `--retired-pairs` set deletes, in one
 transaction, the device tokens, browser sessions and pending device sign-ins

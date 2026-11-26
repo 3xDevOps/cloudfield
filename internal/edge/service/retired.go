@@ -39,8 +39,10 @@ const retiredCSP = "default-src 'none'; base-uri 'none'; frame-ancestors 'none';
 // retiredHost is one host of a retired pair, with its answers rendered at
 // start, so no answer depends on the request.
 type retiredHost struct {
-	origin           string
-	body, page, join []byte
+	origin string
+	// short is body without the commands, for a WebSocket upgrade, whose
+	// refusal a client reads only 1024 bytes of.
+	body, short, page, join []byte
 	requests         [4]atomic.Uint64
 }
 
@@ -106,6 +108,13 @@ func (s *Service) retiredAnswers(origin string, repl *pair, signin bool) (*retir
 		return nil, err
 	}
 	h.body = append(body, '\n')
+	if h.short, err = json.Marshal(edgeproto.ErrorBody{
+		Error:   fmt.Sprintf("%s is retired; this edge is at %s", origin, repl.relay),
+		Retired: &edgeproto.Retired{Replacement: repl.relay},
+	}); err != nil {
+		return nil, err
+	}
+	h.short = append(h.short, '\n')
 	address := repl.relay
 	if signin {
 		address = repl.signin
@@ -222,6 +231,10 @@ func (s *Service) serveRetired(w http.ResponseWriter, r *http.Request, h *retire
 		hdr.Set(edgeproto.HeaderVersion, strconv.Itoa(edgeproto.Version))
 		hdr.Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusGone)
+		if r.Header.Get("Upgrade") != "" || strings.HasPrefix(r.URL.Path, "/v1/server/") || strings.HasPrefix(r.URL.Path, "/v1/connect/") {
+			_, _ = w.Write(h.short)
+			return
+		}
 		_, _ = w.Write(h.body)
 		return
 	}

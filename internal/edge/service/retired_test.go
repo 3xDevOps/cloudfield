@@ -3,6 +3,7 @@ package edge
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -31,6 +32,10 @@ func newRetiredHarness(t *testing.T) *harness {
 func retiredJSON(old string) string {
 	return `{"error":"` + old + ` is retired; this edge is at ` + testRelay + `. Move a server with: cloudfield-server edge move ` + testRelay +
 		`. Sign a device in with: cloudfield login --edge ` + testRelay + `","retired":{"replacement":"` + testRelay + `"}}` + "\n"
+}
+
+func retiredShortJSON(old string) string {
+	return `{"error":"` + old + ` is retired; this edge is at ` + testRelay + `","retired":{"replacement":"` + testRelay + `"}}` + "\n"
 }
 
 func retiredPage(old, address string, signin, join bool) string {
@@ -117,6 +122,7 @@ func TestRetiredAnswers(t *testing.T) {
 		{http.MethodGet, oldRelay, "/no/such/page", html, retiredPage(oldRelay, testRelay, false, false), RetiredBrowser},
 		{http.MethodGet, oldRelay, edgeproto.PathServerControl, ws, "", RetiredServer},
 		{http.MethodGet, oldRelay, "/v1/server/data/conn-1", ws, "", RetiredServer},
+		{http.MethodGet, oldRelay, edgeproto.PathServerControl, nil, "", RetiredServer},
 		{http.MethodGet, oldRelay, edgeproto.ConnectPath(serverID), ws, "", RetiredClient},
 		{http.MethodGet, oldRelay, edgeproto.PathEdgeInfo, nil, "", RetiredClient},
 		{http.MethodPost, oldRelay, "/mcp/" + serverID, api, "", RetiredConnector},
@@ -141,7 +147,11 @@ func TestRetiredAnswers(t *testing.T) {
 			t.Errorf("%s headers %v", name, hdr)
 		}
 		if tt.page == "" {
-			if want := retiredJSON(tt.origin); body != want || hdr.Get("Content-Type") != "application/json" || hdr.Values("Set-Cookie") != nil {
+			want := retiredJSON(tt.origin)
+			if tt.header.Get("Upgrade") != "" || strings.HasPrefix(tt.path, "/v1/server/") || strings.HasPrefix(tt.path, "/v1/connect/") {
+				want = retiredShortJSON(tt.origin)
+			}
+			if body != want || hdr.Get("Content-Type") != "application/json" || hdr.Values("Set-Cookie") != nil {
 				t.Errorf("%s: %s %q %q\nwant %s", name, hdr.Get("Content-Type"), hdr.Values("Set-Cookie"), body, want)
 			}
 		} else {
@@ -552,6 +562,35 @@ func TestRetiredContradictsRecordedPair(t *testing.T) {
 		h := newRecordingHarness(t)
 		if _, err := h.restartRetiring(t, tt.retired); err == nil || err.Error() != tt.want {
 			t.Errorf("%+v: %v, want %q", tt.retired, err, tt.want)
+		}
+	}
+}
+
+// TestRetiredShortFormFits renders the answers of a retired pair whose
+// origins and replacement have the longest legal host names and ports:
+// the answer to a WebSocket upgrade fits the 1024 bytes a client reads of
+// a refused upgrade.
+func TestRetiredShortFormFits(t *testing.T) {
+	h := newHarness(t)
+	long := func(c byte) string {
+		label := strings.Repeat(string(c), 63)
+		return "https://" + label + "." + label + "." + label + "." + strings.Repeat(string(c), 61) + ":65535"
+	}
+	if host := strings.TrimSuffix(strings.TrimPrefix(long('a'), "https://"), ":65535"); len(host) != 253 {
+		t.Fatalf("host name of %d bytes", len(host))
+	}
+	repl := &pair{signin: long('b'), relay: long('c')}
+	for _, signin := range []bool{true, false} {
+		a, err := h.svc.retiredAnswers(long('a'), repl, signin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body edgeproto.ErrorBody
+		if len(a.short) > 1024 || json.Unmarshal(a.short, &body) != nil || body.Retired == nil || body.Retired.Replacement != long('c') {
+			t.Errorf("short answer of %d bytes: %s", len(a.short), a.short)
+		}
+		if json.Unmarshal(a.body, &body) != nil || body.Retired.Replacement != long('c') || !strings.Contains(body.Error, "cloudfield login --edge "+long('c')) {
+			t.Errorf("full answer: %s", a.body)
 		}
 	}
 }

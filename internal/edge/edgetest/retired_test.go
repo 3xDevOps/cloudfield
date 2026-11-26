@@ -109,6 +109,7 @@ func TestRetiredPair(t *testing.T) {
 
 	text := relayA + " is retired; this edge is at " + relayB + ". Move a server with: cloudfield-server edge move " + relayB +
 		". Sign a device in with: cloudfield login --edge " + relayB
+	short := relayA + " is retired; this edge is at " + relayB
 	for _, p := range []struct{ origin, path string }{
 		{signinA, "/signin"}, {signinA, "/servers"}, {signinA, edgeproto.PathServers}, {signinA, edgeproto.PathDeviceStart},
 		{relayA, edgeproto.PathEdgeInfo}, {relayA, edgeproto.PathServerControl}, {relayA, edgeproto.ConnectPath(moves.id)},
@@ -120,6 +121,9 @@ func TestRetiredPair(t *testing.T) {
 			old = signinA
 		}
 		want := strings.Replace(text, relayA+" is retired", old+" is retired", 1)
+		if strings.HasPrefix(p.path, "/v1/server/") || strings.HasPrefix(p.path, "/v1/connect/") {
+			want = short
+		}
 		if resp.StatusCode != http.StatusGone || !strings.Contains(body, want) || !strings.Contains(body, `"retired":{"replacement":"`+relayB+`"}`) ||
 			resp.Header.Get("Location") != "" || resp.Header.Get("WWW-Authenticate") != "" || resp.Header.Get("Cache-Control") != "no-store" {
 			t.Errorf("GET %s%s: %s %v %s", p.origin, p.path, resp.Status, resp.Header, body)
@@ -160,7 +164,7 @@ func TestRetiredPair(t *testing.T) {
 		t.Errorf("device at A: %v, want 410 %q", err, want)
 	}
 	stays.waitStatus("the server that stayed at A reads the 410", func(st edgeagent.Status) error {
-		if want := "410 Gone: " + text; !strings.Contains(st.Error, want) {
+		if want := "410 Gone: " + short; !strings.Contains(st.Error, want) {
 			return fmt.Errorf("status error %q lacks %q", st.Error, want)
 		}
 		return nil
