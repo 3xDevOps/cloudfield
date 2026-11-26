@@ -46,8 +46,8 @@ func TestRetiredPair(t *testing.T) {
 	count := func(query string, args ...any) int {
 		t.Helper()
 		var n int
-		if err := edgeDB.QueryRow(query, args...).Scan(&n); err != nil {
-			t.Fatalf("%s: %v", query, err)
+		if qerr := edgeDB.QueryRow(query, args...).Scan(&n); qerr != nil {
+			t.Fatalf("%s: %v", query, qerr)
 		}
 		return n
 	}

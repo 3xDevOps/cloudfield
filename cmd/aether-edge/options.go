@@ -251,9 +251,9 @@ func parseRetiringPairs(list, scheme, signin, relay string, more []edge.Pair) ([
 		return nil, errors.New("--retiring-pairs: this edge serves one address pair, which cannot retire; " +
 			"serve its replacement first with --origin-pairs (AETHER_EDGE_ORIGIN_PAIRS)")
 	}
-	relays, signins := servedHosts(signin, relay, more)
+	relays, signinHosts := servedHosts(signin, relay, more)
 	served := func(origin string) (string, error) {
-		return servedRelay("--retiring-pairs", origin, scheme, relays, signins)
+		return servedRelay("--retiring-pairs", origin, scheme, relays, signinHosts)
 	}
 	var out []edge.Retiring
 	for entry := range strings.SplitSeq(list, ",") {
@@ -301,18 +301,18 @@ func parseRetiringPairs(list, scheme, signin, relay string, more []edge.Pair) ([
 // servedHosts maps the host names of the served relay origins to those
 // origins, and the host names of the served sign-in origins to their
 // pairs' relay origins; signin and relay are the first pair's.
-func servedHosts(signin, relay string, more []edge.Pair) (relays, signins map[string]string) {
-	relays, signins = map[string]string{host(relay): relay}, map[string]string{host(signin): relay}
+func servedHosts(signin, relay string, more []edge.Pair) (relays, signinHosts map[string]string) {
+	relays, signinHosts = map[string]string{host(relay): relay}, map[string]string{host(signin): relay}
 	for _, p := range more {
 		relays[host(p.RelayOrigin)] = p.RelayOrigin
-		signins[host(p.SigninOrigin)] = p.RelayOrigin
+		signinHosts[host(p.SigninOrigin)] = p.RelayOrigin
 	}
-	return relays, signins
+	return relays, signinHosts
 }
 
 // servedRelay is origin, which flagName names, as the served relay origin
 // it is.
-func servedRelay(flagName, origin, scheme string, relays, signins map[string]string) (string, error) {
+func servedRelay(flagName, origin, scheme string, relays, signinHosts map[string]string) (string, error) {
 	if err := checkOrigin(flagName, origin, scheme); err != nil {
 		return "", err
 	}
@@ -324,7 +324,7 @@ func servedRelay(flagName, origin, scheme string, relays, signins map[string]str
 		c, _ := edgeproto.Origin(r) // parseOptions checked it
 		return c, nil
 	}
-	if r, ok := signins[host(origin)]; ok {
+	if r, ok := signinHosts[host(origin)]; ok {
 		return "", fmt.Errorf("%s: %s is a sign-in origin; name the relay origin of its pair, %s", flagName, origin, r)
 	}
 	return "", fmt.Errorf("%s: %s is not a relay origin of this edge; name one of --relay-origin and the relay origins of --origin-pairs", flagName, origin)
@@ -334,7 +334,7 @@ func servedRelay(flagName, origin, scheme string, relays, signins map[string]str
 // signin and relay the first one's, more --origin-pairs', and the
 // retiring ones.
 func parseRetiredPairs(list, scheme, signin, relay string, more []edge.Pair, retiring []edge.Retiring) ([]edge.Retired, error) {
-	relays, signins := servedHosts(signin, relay, more)
+	relays, signinHosts := servedHosts(signin, relay, more)
 	var out []edge.Retired
 	hosts := map[string]string{}
 	for entry := range strings.SplitSeq(list, ",") {
@@ -351,7 +351,7 @@ func parseRetiredPairs(list, scheme, signin, relay string, more []edge.Pair, ret
 			}
 			h := host(origin)
 			_, isRelay := relays[h]
-			_, isSignin := signins[h]
+			_, isSignin := signinHosts[h]
 			switch {
 			case h == host(signin) || h == host(relay):
 				return nil, fmt.Errorf("--retired-pairs: %s is still served as --signin-origin or --relay-origin; "+
@@ -364,7 +364,7 @@ func parseRetiredPairs(list, scheme, signin, relay string, more []edge.Pair, ret
 			}
 			hosts[h] = origin
 		}
-		replacement, err := servedRelay("--retired-pairs", fields[2], scheme, relays, signins)
+		replacement, err := servedRelay("--retired-pairs", fields[2], scheme, relays, signinHosts)
 		if err != nil {
 			return nil, err
 		}

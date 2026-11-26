@@ -272,7 +272,7 @@ func TestRetiredDeletesSignIns(t *testing.T) {
 	id := testServerID(t)
 	h.claim(t, id, "workstation", edgeproto.Account{Provider: edgeproto.ProviderGitHub, Subject: "1", Login: "owner"})
 	h.exec(t, `INSERT INTO devices (id, token_hash, account_id, public_key, label, created_at, last_used_at)
-		SELECT 'dev-no-origin', 'hash-no-origin', account_id, public_key, label, created_at, last_used_at FROM devices LIMIT 1`)
+		SELECT ?, 'hash-no-origin', account_id, public_key, label, created_at, last_used_at FROM devices LIMIT 1`, "dev-no-origin")
 	h.exec(t, `INSERT INTO web_sessions (id, token_hash, account_id, created_at, expires_at)
 		SELECT 'sess-no-origin', 'hash-no-origin', account_id, created_at, expires_at FROM web_sessions LIMIT 1`)
 	h.exec(t, `INSERT INTO device_authorizations (code_hash, user_code_hash, label, public_key, client_addr, status, created_at, expires_at, last_poll_at)
