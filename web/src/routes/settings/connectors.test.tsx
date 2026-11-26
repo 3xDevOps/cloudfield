@@ -571,6 +571,7 @@ it('tells the member to revoke a connector at a retired address, with no move', 
   const old: Connector = { ...claude, resource: oldUniversal, notice: { state: 'retired', url: newUniversal } }
   show({ connectorList: vi.fn().mockResolvedValue({ connectors: [old], ...movedEdge, universal_urls: [newUniversal] }) })
   const callout = (await screen.findByText('This address is retired')).closest('[data-slot=callout]')
+  expect(screen.getByText(oldUniversal).closest('span')?.textContent).toBe(`Added at ${oldUniversal}`)
   expect(callout?.textContent).toContain('This connector no longer works. Reconnect adds it again at this URL and revokes this one once the new one calls Cloudfield; remove the old connector in Claude too.')
   expect(within(callout as HTMLElement).getByText(newUniversal)).toBeTruthy()
   expect(screen.queryByRole('button', { name: /^Move Claude/ })).toBeNull()

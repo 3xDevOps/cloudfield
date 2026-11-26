@@ -535,7 +535,7 @@ function Connectors({ client }: { client: Api }) {
             help={(
               <>
                 <span className="block">{scopeList(c)}</span>
-                {c.resource && <span className="block">{universal ? 'Universal URL' : <>This server’s own URL, <Code>{c.resource}</Code></>}</span>}
+                {c.resource && <span className="block">{universal ? 'Universal URL' : c.notice ? <>Added at <Code>{c.resource}</Code></> : <>This server’s own URL, <Code>{c.resource}</Code></>}</span>}
                 Added <RelativeTime at={c.created_at} />
                 {' · '}{c.last_used_at ? <>last used <RelativeTime at={c.last_used_at} /></> : 'never used'}
               </>
