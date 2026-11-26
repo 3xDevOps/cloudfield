@@ -27,7 +27,7 @@ import { commandSuggestions, currentChoice, OptionPills, SuggestionList, trigger
 import { beginDraftRequest, composerBlock, composerDraft, draftSendKey, enhancedBlock, pillFor, pillHint, saveComposerDraft, sentDraft, useComposerDraft, type ComposerDraft, type Pill } from '@/routes/run/composer-state'
 import { TemplateInsert } from '@/routes/run/composer-templates'
 import type { RunRoom } from '@/routes/run/room'
-import { TypingIndicator, useTypingSignal } from '@/routes/run/typing'
+import { TypingIndicator, useTypingSignal, useWakeOnTyping } from '@/routes/run/typing'
 import { sessionColumn } from '@/routes/run/session-rows'
 import { sameIdentity, useStore } from '@/store'
 import { useCapability, useSelf } from '@/store/hooks'
@@ -317,6 +317,7 @@ function StandardComposer({ run, agent, room, textarea, autoFocus, onFocusChange
   const dictating = useDictationState(textarea).active
   const hintID = useId()
   const maySteer = allowed('steer', self, { owner: run.member_id, protected: run.protected, steerOthers })
+  useWakeOnTyping(run, body, maySteer)
   const block = composerBlock(run, maySteer, maySteer && cap.hasMethod('run.relaunch') && canReopenRun(run))
   const images = useComposerImages(run.id, !block && cap.hasMethod('terminal.file'))
   const attachOff = busy || !cap.hasMethod('terminal.file')
@@ -442,6 +443,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
   const queueHeld = useQueueHeld(focused)
 
   const maySteer = allowed('steer', self, { owner: run.member_id, protected: run.protected, steerOthers })
+  useWakeOnTyping(run, body, maySteer)
   const state = session?.state
   const stream = session?.stream
   const connecting = stream === 'live' || stream === 'refused' ? undefined : stream === 'reconnecting' || stream === 'offline' ? 'Reconnecting to the agent…' : 'Connecting to the agent…'

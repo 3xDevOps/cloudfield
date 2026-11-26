@@ -1,10 +1,10 @@
 import { act, render, screen } from '@testing-library/react'
 import { api } from '@/lib/api'
-import { TypingIndicator, useTypingSignal } from '@/routes/run/typing'
+import { TypingIndicator, useTypingSignal, useWakeOnTyping } from '@/routes/run/typing'
 import { useStore } from '@/store'
 import { applyEvent } from '@/store/sync'
 import { typingThrottleMs, typingTtlMs } from '@/store/typing'
-import { alice, bob, serverInfo, vera } from '@/test/fixtures'
+import { alice, bob, run, runRecords, serverInfo, vera } from '@/test/fixtures'
 
 vi.mock('@/lib/api', async () => {
   const { fakeApi } = await import('@/test/fixtures')
@@ -131,5 +131,37 @@ describe('useTypingSignal', () => {
     expect(api.presenceTyping).toHaveBeenLastCalledWith(runID)
     view.unmount()
     expect(api.presenceTyping).toHaveBeenLastCalledWith(runID, true)
+  })
+})
+
+describe('useWakeOnTyping', () => {
+  const asleep = (fields: Parameters<typeof run>[0] = {}) =>
+    runRecords(run({ id: runID, status: 'needs-attention', asleep_since: '2026-11-11T09:00:00Z', ...fields }))[runID]!
+
+  function Wake({ record, body, maySteer = true }: { record: ReturnType<typeof asleep>; body: string; maySteer?: boolean }) {
+    useWakeOnTyping(record, body, maySteer)
+    return null
+  }
+
+  beforeEach(() => void vi.mocked(api.runWake).mockClear())
+
+  it('wakes a sleeping session once, at the first keystroke', () => {
+    const view = render(<Wake record={asleep()} body="" />)
+    expect(api.runWake).not.toHaveBeenCalled()
+    view.rerender(<Wake record={asleep()} body="h" />)
+    view.rerender(<Wake record={asleep()} body="he" />)
+    expect(api.runWake).toHaveBeenCalledTimes(1)
+    expect(api.runWake).toHaveBeenCalledWith(runID)
+  })
+
+  it('leaves alone a saved draft, an awake or closed session, and one the member cannot steer', () => {
+    render(<Wake record={asleep()} body="a draft from before" />)
+    const awake = render(<Wake record={asleep({ asleep_since: undefined })} body="" />)
+    awake.rerender(<Wake record={asleep({ asleep_since: undefined })} body="h" />)
+    const closed = render(<Wake record={asleep({ status: 'merged' })} body="" />)
+    closed.rerender(<Wake record={asleep({ status: 'merged' })} body="h" />)
+    const viewer = render(<Wake record={asleep()} body="" maySteer={false} />)
+    viewer.rerender(<Wake record={asleep()} body="h" maySteer={false} />)
+    expect(api.runWake).not.toHaveBeenCalled()
   })
 })

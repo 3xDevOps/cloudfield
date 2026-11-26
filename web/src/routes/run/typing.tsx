@@ -4,6 +4,7 @@ import { memberName } from '@/lib/member-name'
 import { useStore } from '@/store'
 import { useCapability, useSelf } from '@/store/hooks'
 import { runWatchers } from '@/store/presence'
+import { isTerminal, type RunRecord } from '@/store/runs'
 import { activeTypers, nextTypingExpiry, typingLabel, typingThrottleMs } from '@/store/typing'
 
 /** Tells the run's other watchers this member is typing: at most once per throttle window, and once more when the draft is sent or cleared. */
@@ -35,6 +36,23 @@ export function useTypingSignal(runID: string, body: string): void {
   useEffect(() => () => {
     if (sentAt.current !== undefined) void api.presenceTyping(runID, true).catch(() => {})
   }, [runID])
+}
+
+/** Starts a sleeping session's wake at the first keystroke of a member who may steer it, so it runs while they write: once per sleep, and never for a draft that was already there. */
+export function useWakeOnTyping(run: RunRecord, body: string, maySteer: boolean): void {
+  const since = run.asleep_since
+  const asleep = maySteer && since !== undefined && !run.waking && !isTerminal(run.status)
+  const previous = useRef(body)
+  const woke = useRef<string | undefined>(undefined)
+
+  useEffect(() => {
+    const changed = previous.current !== body
+    previous.current = body
+    if (!changed || !asleep || !body.trim() || woke.current === since) return
+    woke.current = since
+    // The server puts a failed wake on the run, where the sleep notice shows it.
+    void api.runWake(run.id).catch(() => {})
+  }, [asleep, body, run.id, since])
 }
 
 /** Who else is typing in this run, dropping each name when its entry expires. */
