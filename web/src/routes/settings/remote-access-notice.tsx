@@ -13,11 +13,11 @@ export function EdgeMoveSteps({ need }: { need: EdgeNeed }) {
   return (
     <div className="flex min-w-0 flex-col gap-1.5 text-ui-sm">
       <p>Move this server to {need.notice.replacement}, another address of the same edge. Run on the server's host:</p>
-      <CopyableCommand command={need.move} />
+      <CopyableCommand command={need.move} wrap />
       <p>then apply it:</p>
       <CopyableCommand command={need.restart} />
       {need.notice.first_use && (
-        <p className="text-muted">The edge sent this with the connection that pinned its key, so it is trusted on first use only.</p>
+        <p className="text-muted">This came with the server's first connection to the edge, when it pinned the edge's key: confirm the new address with whoever runs the edge before you move.</p>
       )}
     </div>
   )
@@ -37,8 +37,8 @@ export function EdgeNoticeCard({ need }: { need: EdgeNeed }) {
         <EdgeMoveSteps need={need} />
       </div>
       <div className={cn('mt-2 flex min-w-0 items-center gap-1.5 text-ui-sm text-muted', wideIndent)}>
-        <StatusDot tone={tone} label="Needs you" />
-        <span className="min-w-0 flex-1 truncate">Needs you · on the server's host</span>
+        <StatusDot tone={tone} label={need.notice.state === 'retired' ? 'Retired' : 'Retiring'} />
+        <span className="min-w-0 flex-1 truncate">Run on the server's host</span>
         <Button variant="ghost" size="sm" onClick={() => navigate('settings', { section: 'edge' })}>Remote access</Button>
       </div>
     </Card>

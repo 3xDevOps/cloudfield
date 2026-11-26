@@ -63,7 +63,7 @@ export function RemoteAccessSection({ client }: { client: Api }) {
   return (
     <SettingsSection title="Edge" id="edge">
       {notice && admin && (
-        <Callout tone={notice.notice.state === 'retired' ? 'failed' : 'needs-you'} role="status" title={notice.reason}>
+        <Callout tone={notice.notice.state === 'retired' ? 'failed' : 'needs-you'} role="status" title={notice.reason} className="rounded-none px-4 py-3">
           <EdgeMoveSteps need={notice} />
         </Callout>
       )}

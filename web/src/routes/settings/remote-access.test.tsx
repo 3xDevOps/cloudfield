@@ -184,13 +184,13 @@ describe('a retiring or retired edge address', () => {
     expect(within(callout).getByText(`Move this server to ${replacement}, another address of the same edge. Run on the server's host:`)).toBeTruthy()
     expect(within(callout).getByText(move)).toBeTruthy()
     expect(within(callout).getByText('sudo systemctl restart aether-server')).toBeTruthy()
-    expect(within(callout).queryByText(/trusted on first use/)).toBeNull()
+    expect(within(callout).queryByText(/first connection to the edge/)).toBeNull()
   })
 
   it('says a first-use notice is trusted on first use only', () => {
     seed('super_admin', { ...claimed, notice: { state: 'retiring', replacement, first_use: true } })
     render(<RemoteAccessSection client={api()} />)
-    expect(within(screen.getByRole('status')).getByText('The edge sent this with the connection that pinned its key, so it is trusted on first use only.')).toBeTruthy()
+    expect(within(screen.getByRole('status')).getByText("This came with the server's first connection to the edge, when it pinned the edge's key: confirm the new address with whoever runs the edge before you move.")).toBeTruthy()
   })
 
   it('gives other members a plain row without the command', () => {
