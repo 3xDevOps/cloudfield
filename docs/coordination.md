@@ -447,7 +447,29 @@ kind, delivery (Sent, Delivered, Acknowledged), and a search over the loaded
 bodies. Sender, Recipient and Thread narrow it; **Show all** reads older
 pages. The ordinary Activity feed shows each send as a row without the body.
 
-Members read agent mail on the control channel with `coord.messages.list`.
+From a terminal, `cloudfield messages` prints the workspace's mail, and
+`cloudfield messages <session-id>` the mail that session sent or received:
+
+```text
+$ cloudfield messages run-child
+2026-11-26 04:25:51  run-child -> run-parent  question  acknowledged  thread msg-wkvws2www3
+  which branch do I target?
+2026-11-26 04:25:51  run-parent -> run-child  reply  delivered  thread msg-wkvws2www3
+  target main
+2026-11-26 04:25:52  run-child -> run-parent  report  sent  thread rpt-b5hv1drf21
+  tests pass, fix pushed
+  outcome: success
+  next action: review the branch
+```
+
+It prints the newest 50, oldest first, with control characters in a body
+replaced by spaces. `--thread <id>` keeps one question and its replies, or
+one report, `--limit` takes up to 100, and `--workspace <name>` picks the
+workspace when there are several. When older mail remains, the last line, on
+stderr, is `older messages: add --before <cursor>`. `--json` prints the
+rows described below.
+
+The command reads `coord.messages.list` on the control channel.
 It needs View on the workspace, so every member of the workspace can read
 message bodies, the same audience the workspace timeline has.
 
@@ -482,7 +504,8 @@ the kind, then sender → recipient and, once the message is loaded, its
 delivery word, such as `run-child → run-parent · Delivered`. An
 acknowledgement shows as `run-child → run-parent · Acknowledged`.
 `cloudfield timeline` prints the send as `<from-run> -> <to-run> · question`.
-Neither shows the body. Bodies come from `coord.messages.list`.
+Neither shows the body. Bodies come from `cloudfield messages` and
+`coord.messages.list`.
 Board > **Lanes** marks each send on the sender's and recipient's lanes at
 the time it was sent, draws it as a link for the focused lane, and clicking
 it shows the bodies
