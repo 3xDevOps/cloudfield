@@ -370,14 +370,21 @@ kills out of the session's.
 after the one before succeeded:
 
 1. With `nested_docker`, and when the image has `dockerd` and `docker` on
-   Docker's default `PATH`, `dockerd -H unix:///var/run/docker.sock --group
-   <main gid> --cgroup-parent /session` as root, logging to
-   `/var/log/aether-dockerd.log`. It gets the main process's environment
-   with that `PATH`, never the session's, which starts in the member's home. It must answer within
-   60 seconds.
+   Docker's default `PATH`, `dockerd -H fd:// --cgroup-parent /session` as
+   root, logging to `/var/log/aether-dockerd.log`, which the main process's
+   group can read. It gets the main process's environment with that `PATH`,
+   never the session's, which starts in the member's home. `Boot` does not
+   wait for it, which would add about a second to every launch: the helper
+   listens on `/var/run/docker.sock` itself, mode `0660` with the main
+   process's group, and passes the socket to dockerd as systemd's socket
+   activation does (`LISTEN_FDS`, set by the `/bin/sh` that becomes dockerd).
+   A `docker` command run before dockerd serves waits for its answer. When dockerd exits before the main process does, the helper
+   logs its exit code and the end of its log on the serial console, and
+   `docker` commands fail with `Cannot connect to the Docker daemon`.
 2. The setup script, as `/bin/sh -ec "exec 2>&1; <script>"` with the main
    process's user, environment and directory, and no input. A nonzero exit returns its code
-   and the last 16 KiB of its output, and the main process never starts.
+   and the last 16 KiB of its output, followed by dockerd's exit code and the
+   end of its log when dockerd has exited, and the main process never starts.
 3. The main process, under the ID `main`.
 
 A later `Boot` call, also from a restarted server, returns the first call's
