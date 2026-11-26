@@ -1,7 +1,13 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,6 +15,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/acme/autocert"
 
@@ -401,11 +408,6 @@ func TestRetiredPairs(t *testing.T) {
 	if err != nil || !reflect.DeepEqual(o.retired, want) {
 		t.Fatalf("two retired pairs: %+v %v, want %+v", o.retired, err, want)
 	}
-	hosts := []string{"auth.example.test", "edge.example.test", "auth2.example.net", "edge2.example.net", "auth3.example.net", "edge3.example.net",
-		"auth9.example.org", "edge9.example.org", "auth8.example.org", "edge8.example.org"}
-	if got := certHosts(o); !slices.Equal(got, hosts) {
-		t.Errorf("certificate hosts %v, want %v", got, hosts)
-	}
 	o, err = parseOptions(origins, envOf(map[string]string{
 		"AETHER_EDGE_RETIRED_PAIRS": "https://auth9.example.org https://edge9.example.org https://edge.example.test"}))
 	if err != nil || !reflect.DeepEqual(o.retired, []edge.Retired{{SigninOrigin: "https://auth9.example.org", RelayOrigin: "https://edge9.example.org", Replacement: "https://edge.example.test"}}) {
@@ -560,6 +562,52 @@ func TestEveryVariableTakesItsCloudfieldName(t *testing.T) {
 		}
 		if got := parse(emptyNew); !reflect.DeepEqual(got, want) {
 			t.Errorf("configuration %d with empty CLOUDFIELD_ names must read AETHER_ ones:\n got %+v\nwant %+v", i, got, want)
+		}
+	}
+}
+
+// TestCertPolicy admits a served host always, and a retired host only
+// while the ACME cache holds an unexpired certificate for it.
+func TestCertPolicy(t *testing.T) {
+	o, err := parseOptions(append(slices.Clone(origins), "--retired-pairs",
+		"https://auth9.example.org https://edge9.example.org https://edge.example.test"), envOf(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := autocert.DirCache(t.TempDir())
+	now := time.Date(2027, 3, 1, 0, 0, 0, 0, time.UTC)
+	put := func(key string, notAfter time.Time) {
+		priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: big.NewInt(1), DNSNames: []string{key},
+			NotBefore: notAfter.Add(-90 * 24 * time.Hour), NotAfter: notAfter}, &x509.Certificate{SerialNumber: big.NewInt(1)}, &priv.PublicKey, priv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		keyDER, err := x509.MarshalECPrivateKey(priv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data := append(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})...)
+		if err = cache.Put(t.Context(), key, data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put("auth9.example.org", now.Add(24*time.Hour))
+	put("edge9.example.org+rsa", now.Add(-time.Hour))
+	policy := certPolicy(o, cache, func() time.Time { return now })
+	for name, want := range map[string]string{
+		"auth.example.test": "",
+		"edge.example.test": "",
+		"auth9.example.org": "",
+		"edge9.example.org": "acme/autocert: edge9.example.org is the host of a retired pair and the cache holds no unexpired certificate for it; the edge orders none",
+		"other.example.org": `acme/autocert: host "other.example.org" not configured in HostWhitelist`,
+	} {
+		err := policy(t.Context(), name)
+		if got := fmt.Sprint(err); (want == "" && err != nil) || (want != "" && got != want) {
+			t.Errorf("%s: %v, want %q", name, err, want)
 		}
 	}
 }

@@ -1189,8 +1189,10 @@ AETHER_EDGE_RETIRED_PAIRS=https://<signin-host-1> https://<relay-host-1> https:/
 
 Set it in the environment file, not as a flag: an older image ignores an
 unknown variable and refuses an unknown flag. An older image does not serve the
-pair either, so it answers `421 Misdirected Request` on those hosts. A retired
-pair needs no GitHub OAuth app. The edge turns on recording of origins
+pair either: behind a reverse proxy that still holds the certificates it
+answers `421 Misdirected Request` on those hosts, and with its own certificates
+it refuses the TLS handshake for them. A retired pair needs no GitHub OAuth
+app. The edge turns on recording of origins
 ([Monitoring](#monitoring)) while either option is set.
 
 The first pair (`--signin-origin`, `--relay-origin`, `--github-client-id`)
@@ -1210,8 +1212,11 @@ entry and the fix, when:
 - the replacement is not a relay origin of a served pair, or is retiring;
 - there are more than 16 entries.
 
-The edge keeps certificates for both host names and answers them before it
-looks for a served pair. Every request to either host except `GET /healthz` gets
+The edge answers both host names before it looks for a served pair. With its
+own certificates it uses and renews a retired host's certificate while the
+ACME cache holds an unexpired one, and orders none: a retired host whose
+certificate lapsed, because nothing connected to it for the renewal window,
+refuses the TLS handshake. Every request to either host except `GET /healthz` gets
 `410 Gone` with `Cache-Control: no-store` and no `Location` or
 `WWW-Authenticate` header. Nothing is relayed, signed in or issued, and no such
 request reads the database or reaches a server. API, WebSocket and connector

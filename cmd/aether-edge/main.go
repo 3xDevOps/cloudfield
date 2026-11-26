@@ -6,6 +6,8 @@ package main
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -16,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -246,10 +249,11 @@ func serve(args []string) (err error) {
 // edgeTLS obtains certificates for exactly the edge's host names with
 // TLS-ALPN-01.
 func edgeTLS(o options) *tls.Config {
+	cache := autocert.DirCache(filepath.Join(o.dataDir, "acme"))
 	m := &autocert.Manager{
 		Prompt:     autocert.AcceptTOS,
-		Cache:      autocert.DirCache(filepath.Join(o.dataDir, "acme")),
-		HostPolicy: autocert.HostWhitelist(certHosts(o)...),
+		Cache:      cache,
+		HostPolicy: certPolicy(o, cache, time.Now),
 		Email:      o.acmeEmail,
 		Client:     &acme.Client{DirectoryURL: o.acmeDirectory},
 	}
@@ -258,19 +262,54 @@ func edgeTLS(o options) *tls.Config {
 	return cfg
 }
 
-// certHosts are the host names the edge obtains certificates for: two per
-// origin pair, served or retired. A certificate is obtained at the first
-// handshake for its host, so one that fails fails only that host's
-// handshakes.
+// certHosts are the host names of the served pairs, which the edge
+// obtains certificates for.
 func certHosts(o options) []string {
 	hosts := []string{host(o.signinOrigin), host(o.relayOrigin)}
 	for _, p := range o.morePairs {
 		hosts = append(hosts, host(p.SigninOrigin), host(p.RelayOrigin))
 	}
-	for _, r := range o.retired {
-		hosts = append(hosts, host(r.SigninOrigin), host(r.RelayOrigin))
-	}
 	return hosts
+}
+
+// certPolicy admits the served hosts, and a retired pair's host while
+// cache holds an unexpired certificate for it: that certificate is used
+// and renewed, but none is ordered for a retired host, whose DNS records
+// may be gone.
+func certPolicy(o options, cache autocert.Cache, now func() time.Time) autocert.HostPolicy {
+	served := autocert.HostWhitelist(certHosts(o)...)
+	retired := map[string]bool{}
+	for _, r := range o.retired {
+		retired[host(r.SigninOrigin)], retired[host(r.RelayOrigin)] = true, true
+	}
+	return func(ctx context.Context, name string) error {
+		err := served(ctx, name)
+		if err == nil || !retired[strings.ToLower(name)] {
+			return err
+		}
+		for _, key := range []string{name, name + "+rsa"} {
+			if data, cerr := cache.Get(ctx, key); cerr == nil && unexpired(data, now()) {
+				return nil
+			}
+		}
+		return fmt.Errorf("acme/autocert: %s is the host of a retired pair and the cache holds no unexpired certificate for it; the edge orders none", name)
+	}
+}
+
+// unexpired reports whether data, an autocert cache entry, holds a
+// certificate valid at now.
+func unexpired(data []byte, now time.Time) bool {
+	for rest := data; ; {
+		var b *pem.Block
+		if b, rest = pem.Decode(rest); b == nil {
+			return false
+		}
+		if b.Type != "CERTIFICATE" {
+			continue
+		}
+		c, err := x509.ParseCertificate(b.Bytes)
+		return err == nil && now.After(c.NotBefore) && now.Before(c.NotAfter)
+	}
 }
 
 func serveHTTP(name string, srv *http.Server, ln net.Listener) error {
