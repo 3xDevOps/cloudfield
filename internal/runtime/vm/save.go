@@ -85,6 +85,10 @@ func (e *engine) save(ctx context.Context, key string) error {
 	if synced {
 		// The second sync writes what the session wrote during the wait.
 		e.awaitReported(ctx, key)
+		// The guest still runs, so a caller that gave up loses nothing.
+		if err = ctx.Err(); err != nil {
+			return fmt.Errorf("vm runtime: save VM %s: %w", key, err)
+		}
 		synced = e.syncGuest(ctx, key)
 	}
 	if !paused {

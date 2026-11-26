@@ -964,7 +964,9 @@ sooner:
   or a quiet download or remote `ssh` job freezes with it and may lose its
   connection, so keep such a session in use, or set `--run-sleep-after` to
   `0`. A pause that fails leaves the session running; Cloudfield tries again
-  after another `--run-sleep-after`.
+  after another `--run-sleep-after`. A message, or any other use, that
+  arrives while a VM is being paused or saved ends that sleep if the guest
+  has not stopped yet, and the session stays awake.
 - A closed session's VM is stopped as soon as the close finishes, whatever
   `--run-sleep-after` is, and keeps its disks without its memory
   ([Relaunching a closed session](#relaunching-a-closed-session)). Closing

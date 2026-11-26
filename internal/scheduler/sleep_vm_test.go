@@ -73,19 +73,23 @@ func (r *saveRuntime) SavedMemory(runtime.ID) (uint64, error) { return 0, nil }
 
 // held runs the saving hook and reports saveErr, for a save and for the
 // pause an idle sleep makes in its place.
-func (r *saveRuntime) held() error {
+func (r *saveRuntime) held(ctx context.Context) error {
 	r.saveMu.Lock()
 	saving, release, saveErr := r.saving, r.release, r.saveErr
 	r.saveMu.Unlock()
 	if saving != nil {
 		saving <- struct{}{}
-		<-release
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
 	return saveErr
 }
 
 func (r *saveRuntime) Pause(ctx context.Context, id runtime.ID) error {
-	if err := r.held(); err != nil {
+	if err := r.held(ctx); err != nil {
 		return err
 	}
 	return r.acpRuntime.Pause(ctx, id)
@@ -93,8 +97,8 @@ func (r *saveRuntime) Pause(ctx context.Context, id runtime.ID) error {
 
 func (r *saveRuntime) Park(ctx context.Context, id runtime.ID) error { return r.Pause(ctx, id) }
 
-func (r *saveRuntime) Save(_ context.Context, id runtime.ID) error {
-	if err := r.held(); err != nil {
+func (r *saveRuntime) Save(ctx context.Context, id runtime.ID) error {
+	if err := r.held(ctx); err != nil {
 		return err
 	}
 	c, err := r.get(id)
@@ -426,6 +430,38 @@ func TestAFailedSaveLeavesTheSessionAwake(t *testing.T) {
 		t.Fatal("the agent was restarted after the failed save")
 	}
 	waitItems(t, e.sched, run.ID, "a turn after the failed save", turnEnded("end_turn", 2))
+}
+
+// A prompt that arrives while an idle VM falls asleep does not wait for the
+// sleep: it ends it before the guest is paused, and the agent it had
+// answers.
+func TestAPromptEndsASleepThatHasNotPausedTheGuest(t *testing.T) {
+	t.Parallel()
+	e, rt, sr := newSaveEnv(t, false)
+	run := e.launchACP(t, "say pong")
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	sr.saveMu.Lock()
+	sr.saving, sr.release = make(chan struct{}), make(chan struct{})
+	sr.saveMu.Unlock()
+	waitFor(t, "a sleep under way", func() bool {
+		e.sched.sleepIdle(t.Context())
+		select {
+		case <-sr.saving:
+			return true
+		case <-time.After(20 * time.Millisecond):
+			return false
+		}
+	})
+	sr.saveMu.Lock()
+	sr.saving = nil
+	sr.saveMu.Unlock()
+	if _, err := e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "not yet"}, false, nil); err != nil {
+		t.Fatalf("a prompt to a session falling asleep: %v", err)
+	}
+	if state := containerState(e.container(t, run.ID)); state != "running" || !adopted(rt) {
+		t.Fatalf("the prompt left the VM %s with %d agents, want it running with the one it had", state, len(rt.all()))
+	}
+	waitItems(t, e.sched, run.ID, "a turn after the ended sleep", turnEnded("end_turn", 2))
 }
 
 // A server that shuts down while a VM is being saved lets the save finish
