@@ -477,12 +477,12 @@ more than one workspace exists`. `cloudfield sessions` lists sessions from every
 
 | Command | What it does |
 | --- | --- |
-| `cloudfield sessions` | Every session you can see, colored by owner, with its `MODE`, the `PARENT` of a subsession, the count of agent `MAIL` it has not acknowledged, and an `OVERLAP` column. `--needs-you` lists only sessions that need you |
+| `cloudfield sessions` | Every session you can see, colored by owner, with its `MODE`, the `PARENT` of a subsession, the count of agent `MAIL` it has not acknowledged, and an `OVERLAP` column. `--needs-you` lists only sessions that need a member |
 | `cloudfield who` | Who is online and which sessions they watch |
 | `cloudfield attach [--read-only] <session>` | Attach to a session's terminal. Several people can attach at once |
 | `cloudfield message <session> "..."` | Message a session's agent. It shows as a banner in your color |
 | `cloudfield pause`, `resume`, `kill <session>` | Suspend, thaw or stop a session. The checkout and transcript survive a kill |
-| `cloudfield sessions --needs-you` | Sessions waiting on you, then on stderr what each needs with the command that answers it, or that it waits on another member. `cloudfield sessions <session-id>` shows that for one session, with its agent, mode, parent, unacknowledged mail, controller and wait conditions |
+| `cloudfield sessions --needs-you` | Sessions waiting on a member, then on stderr what each needs from you with the command that answers it, or that it waits on another member. `cloudfield sessions <session-id>` prints that for one session on stdout, with its agent, mode, parent, unacknowledged mail, controller and wait conditions |
 | `cloudfield timeline` | The workspace history. `cloudfield timeline <session-id>` shows one session's. Filter with `--member`, `--type`, `--limit`. `--jsonl` exports |
 | `cloudfield changes` | Session changes since a cursor: status, reports, mail, pull requests and lifecycle. `--follow` keeps polling ([coordination.md](coordination.md#follow-changes-from-a-cursor)) |
 | `cloudfield cost --runs` | Token spend per member and run |

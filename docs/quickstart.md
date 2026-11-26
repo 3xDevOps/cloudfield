@@ -509,9 +509,9 @@ while the session waits on agents, CI or a process. When Cloudfield cannot vouch
 it says so once on stderr: `session <session-id> still waits, but <condition>: status
 unknown (last read 12m ago): <error>`. It also exits 1 on its
 own error, such as an unknown session id, with the error on stderr and nothing on
-stdout. `cloudfield sessions --needs-you` lists the sessions waiting on you, then on stderr what each
-needs with the command that answers it, or that it waits on another member, and
-`cloudfield sessions <session-id>` shows that for one session. `cloudfield answer` allows a
+stdout. `cloudfield sessions --needs-you` lists the sessions waiting on a member, then on stderr what each
+needs from you with the command that answers it, or that it waits on another member, and
+`cloudfield sessions <session-id>` prints that for one session on stdout. `cloudfield answer` allows a
 permission request once or denies it once, never always.
 `--json` on `cloudfield sessions <session-id>` and `cloudfield wait` prints the session as one JSON
 object.

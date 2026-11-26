@@ -24,7 +24,7 @@ import (
 func init() {
 	register(command{
 		name:  "sessions",
-		short: "list sessions (--needs-you: sessions that need you; --archived: only archived), or show one: cloudfield sessions <session-id>",
+		short: "list sessions (--needs-you: sessions that need a member; --archived: only archived), or show one: cloudfield sessions <session-id>",
 		usage: "cloudfield sessions [--needs-you|--archived] [--json]\n" +
 			"cloudfield sessions <session-id> [--json]",
 		example: "cloudfield sessions --json\n" +
@@ -304,11 +304,15 @@ func runShow(c *protocol.Client, w io.Writer, runID string, asJSON bool) error {
 	if err = printRunView(w, v, items, nameOrID(names, v.ControllerMemberID)); err != nil {
 		return err
 	}
-	// attention.list leaves out a run only another member can answer.
-	if needsYou(r) && !slices.ContainsFunc(items, func(it protocol.AttentionItem) bool { return it.RunID == r.ID }) {
+	if waitsOnAnother(r, items) {
 		_, err = fmt.Fprintf(w, "%s waits on another member\n", r.ID)
 	}
 	return err
+}
+
+// attention.list leaves out a run only another member can answer.
+func waitsOnAnother(r protocol.Run, items []protocol.AttentionItem) bool {
+	return needsYou(r) && !slices.ContainsFunc(items, func(it protocol.AttentionItem) bool { return it.RunID == r.ID })
 }
 
 // needsYou selects the runs that need a member, by the rule push
@@ -384,12 +388,10 @@ func renderRuns(w, stderr io.Writer, runs []protocol.Run, memberName func(string
 		if !onlyNeedsYou {
 			continue
 		}
-		before := needs.Len()
 		if err := printNeeds(&needs, r.ID, items); err != nil {
 			return err
 		}
-		// attention.list leaves out a run only another member can answer.
-		if needs.Len() == before {
+		if waitsOnAnother(r, items) {
 			_, _ = fmt.Fprintf(&needs, "%s waits on another member; aether sessions %s shows its state\n", r.ID, r.ID)
 		}
 	}
@@ -460,7 +462,7 @@ var statusLabels = map[domain.RunStatus]string{
 
 func runRuns(args []string) error {
 	fs := newFlagSet("sessions")
-	onlyNeedsYou := fs.Bool("needs-you", false, "list only sessions that need you (state needs-you or disconnected, or an unseen failure; never paused, never a finished session awaiting review), then on stderr what each needs with the command that answers it")
+	onlyNeedsYou := fs.Bool("needs-you", false, "list only sessions that need a member (state needs-you or disconnected, or an unseen failure; never paused, never a finished session awaiting review), then on stderr what each needs from you with the command that answers it, or that it waits on another member")
 	archived := fs.Bool("archived", false, "list only archived sessions")
 	asJSON := fs.Bool("json", false, "print a JSON array, or with a session id one JSON object: id, workspace_id, workspace, status, state, reason, pending_inputs, branch, report, agent, mode, parent_run_id, unacked_messages, wait_conditions, controller_member_id")
 	runID := ""
@@ -557,7 +559,7 @@ func listRuns(c *protocol.Client, stdout, stderr io.Writer, onlyNeedsYou, archiv
 	// The notice goes to stderr so it never lands in a pipeline reading
 	// the table, and it is skipped when the table already is the answer.
 	if waiting > 0 && !onlyNeedsYou && !archived {
-		_, _ = fmt.Fprintf(stderr, "\n%s waiting for you: aether sessions --needs-you\n",
+		_, _ = fmt.Fprintf(stderr, "\n%s waiting for a member: aether sessions --needs-you\n",
 			plural(waiting, "session"))
 	}
 	return nil

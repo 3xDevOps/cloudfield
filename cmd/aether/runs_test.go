@@ -259,7 +259,7 @@ func TestNeedsYouSaysOnStderrWhatEachListedSessionNeeds(t *testing.T) {
 	if attention.params() != nil {
 		t.Error("sessions without --needs-you called attention.list")
 	}
-	if got, want := stderr.String(), "\n2 sessions are waiting for you: aether sessions --needs-you\n"; got != want {
+	if got, want := stderr.String(), "\n2 sessions are waiting for a member: aether sessions --needs-you\n"; got != want {
 		t.Errorf("sessions stderr = %q, want %q", got, want)
 	}
 

@@ -299,10 +299,11 @@ you, 4 when it is parked with nothing pending (its turn ended without a
 report, or it went silent) and a message continues it, 5 when its wait broke
 (a condition resolved and the wake never reached the agent, or its source
 went unread for an hour), and 124 on
-timeout. `cloudfield sessions --needs-you` prints its table on stdout, then on
-stderr what each listed session needs with the command that answers it, or
-that it waits on another member. `cloudfield sessions <session-id>` shows that
-for one session. With `--json` a session carries its `agent`, its `mode`
+timeout. `cloudfield sessions --needs-you` prints on stdout a table of the
+sessions waiting on a member, then on stderr what each needs from you with the
+command that answers it, or that it waits on another member. `cloudfield
+sessions <session-id>` prints that for one session on stdout. With `--json` a
+session carries its `agent`, its `mode`
 (`standard`, `enhanced` or `background`, as `--mode` takes it),
 `unacked_messages` (agent mail it has not acknowledged) and, when set,
 `parent_run_id` (on a subsession, with `detached` once it runs on its own),
