@@ -56,13 +56,13 @@ type Challenge struct {
 // signs Ready.Notices for; an edge that does not know it, or gets
 // another size, signs none.
 type Hello struct {
-	Version      int          `json:"version"`
-	HostKey      []byte       `json:"host_key"`
-	Signature    []byte       `json:"signature"`
-	AgentVersion string       `json:"agent_version"`
-	Name         string       `json:"name"`
-	AccessPolicy AccessPolicy `json:"access_policy"`
-	NoticeNonce  []byte       `json:"notice_nonce,omitempty"`
+	Version      int           `json:"version"`
+	HostKey      []byte        `json:"host_key"`
+	Signature    []byte        `json:"signature"`
+	AgentVersion string        `json:"agent_version"`
+	Name         string        `json:"name"`
+	AccessPolicy AccessPolicy  `json:"access_policy"`
+	NoticeNonce  OptionalBytes `json:"notice_nonce,omitempty"`
 }
 
 // PublicKey parses HostKey.
@@ -88,7 +88,7 @@ type Ready struct {
 	EdgeKey          ed25519.PublicKey `json:"edge_key"`
 	RelayOrigins     []string          `json:"relay_origins,omitempty"`
 	Notices          Notices           `json:"notices,omitempty"`
-	NoticesSignature []byte            `json:"notices_signature,omitempty"`
+	NoticesSignature OptionalBytes     `json:"notices_signature,omitempty"`
 }
 
 // MaxRelayOrigins bounds the relay origins an edge serves, and the

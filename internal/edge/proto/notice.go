@@ -33,24 +33,38 @@ type Notice struct {
 	Date        string `json:"date,omitempty"`
 }
 
-// Notices decodes leniently: an entry that does not decode or validate
-// is dropped, and so is everything past MaxRelayOrigins entries, so a
-// later edge's notices never refuse the ready they came in. A list that
-// lost an entry no longer matches its signature.
+// Notices decodes leniently, so a later edge's notices never refuse the
+// ready they came in: an entry that does not decode or validate is
+// dropped, and a list of more than MaxRelayOrigins entries is dropped
+// whole. A list that lost an entry no longer matches its signature.
 type Notices []Notice
 
 // UnmarshalJSON keeps the valid entries of data and never fails.
 func (n *Notices) UnmarshalJSON(data []byte) error {
 	var raw []json.RawMessage
 	*n = nil
-	if json.Unmarshal(data, &raw) != nil {
+	if json.Unmarshal(data, &raw) != nil || len(raw) > MaxRelayOrigins {
 		return nil
 	}
 	for _, r := range raw {
 		var x Notice
-		if len(*n) < MaxRelayOrigins && json.Unmarshal(r, &x) == nil && x.validate() == nil {
+		if json.Unmarshal(r, &x) == nil && x.validate() == nil {
 			*n = append(*n, x)
 		}
+	}
+	return nil
+}
+
+// OptionalBytes is a base64 field a peer may leave out: a value that is
+// not a base64 string decodes as absent, never as an error.
+type OptionalBytes []byte
+
+// UnmarshalJSON decodes data, or nothing when it is not a base64 string.
+func (b *OptionalBytes) UnmarshalJSON(data []byte) error {
+	var v []byte
+	*b = nil
+	if len(data) > 0 && data[0] == '"' && json.Unmarshal(data, &v) == nil {
+		*b = v
 	}
 	return nil
 }

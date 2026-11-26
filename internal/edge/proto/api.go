@@ -2,6 +2,7 @@ package edgeproto
 
 import (
 	"crypto/ed25519"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -283,6 +284,32 @@ func (i EdgeInfo) Validate() error {
 		return fmt.Errorf("edgeproto: edge speaks versions %d to %d", i.MinVersion, i.Version)
 	}
 	return nil
+}
+
+// UnmarshalJSON decodes an EdgeInfo, leaving Retiring and RetiringDate
+// empty when either is not a string: a notice an edge sends in a form
+// this build does not read never fails the rest.
+func (i *EdgeInfo) UnmarshalJSON(data []byte) error {
+	type plain EdgeInfo
+	var v struct {
+		plain
+		Retiring     json.RawMessage `json:"retiring"`
+		RetiringDate json.RawMessage `json:"retiring_date"`
+	}
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*i = EdgeInfo(v.plain)
+	var retiring, date string
+	if optionalString(v.Retiring, &retiring) && optionalString(v.RetiringDate, &date) {
+		i.Retiring, i.RetiringDate = retiring, date
+	}
+	return nil
+}
+
+// optionalString decodes raw into s, true when raw is absent or a string.
+func optionalString(raw json.RawMessage, s *string) bool {
+	return raw == nil || json.Unmarshal(raw, s) == nil
 }
 
 // RequestHost is the host name r names, lowercase, without a port or a

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -172,23 +173,58 @@ func TestReadyWithoutNoticesUnchanged(t *testing.T) {
 	}
 }
 
-func TestReadyKeepsMaxRelayOriginsNotices(t *testing.T) {
-	var sent []Notice
-	for i := range MaxRelayOrigins + 3 {
-		sent = append(sent, Notice{State: NoticeRetiring, Origin: fmt.Sprintf("https://old%d.example", i), Replacement: "https://edge2.example"})
+// TestReadyNoticesCap checks that a list of MaxRelayOrigins notices is
+// kept, and a longer one dropped whole without refusing the ready.
+func TestReadyNoticesCap(t *testing.T) {
+	for _, n := range []int{MaxRelayOrigins, MaxRelayOrigins + 1} {
+		var sent []Notice
+		for i := range n {
+			sent = append(sent, Notice{State: NoticeRetiring, Origin: fmt.Sprintf("https://old%d.example", i), Replacement: "https://edge2.example"})
+		}
+		data, err := json.Marshal(map[string]any{"type": "ready", "server_id": noticeServer, "state": StateClaimed,
+			"edge_key": edgeKey(1).Public(), "notices": sent, "notices_signature": bytes.Repeat([]byte{1}, 200)})
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, err := DecodeControl(data)
+		if err != nil {
+			t.Fatalf("ready with %d notices or a long signature refused: %v", n, err)
+		}
+		got := m.(Ready).Notices
+		if want := sent; n > MaxRelayOrigins {
+			if got != nil {
+				t.Errorf("%d notices: kept %d, want none", n, len(got))
+			}
+		} else if !slices.Equal(got, want) {
+			t.Errorf("%d notices: kept %d, want all", n, len(got))
+		}
 	}
-	data, err := json.Marshal(map[string]any{"type": "ready", "server_id": noticeServer, "state": StateClaimed,
-		"edge_key": edgeKey(1).Public(), "notices": sent, "notices_signature": bytes.Repeat([]byte{1}, 200)})
-	if err != nil {
-		t.Fatal(err)
+}
+
+// TestEdgeInfoIgnoresANoticeOfAnotherType decodes edge metadata whose
+// retiring fields are not strings: the rest decodes, the notice is gone.
+func TestEdgeInfoIgnoresANoticeOfAnotherType(t *testing.T) {
+	key := edgeKey(1).Public().(ed25519.PublicKey)
+	for _, extra := range []string{
+		`"retiring":5`, `"retiring":"https://edge2.example","retiring_date":20270301`, `"retiring":{"origin":"https://edge2.example"}`,
+	} {
+		base, err := json.Marshal(EdgeInfo{SigninOrigin: "https://auth.example", Key: key, Fingerprint: EdgeKeyFingerprint(key), Version: 6, MinVersion: 1})
+		if err != nil {
+			t.Fatal(err)
+		}
+		data := strings.TrimSuffix(string(base), "}") + "," + extra + "}"
+		var info EdgeInfo
+		if err := json.Unmarshal([]byte(data), &info); err != nil {
+			t.Fatalf("%s: %v", data, err)
+		}
+		if info.Retiring != "" || info.RetiringDate != "" || info.SigninOrigin != "https://auth.example" || info.Validate() != nil {
+			t.Errorf("%s decodes as %+v", data, info)
+		}
 	}
-	m, err := DecodeControl(data)
-	if err != nil {
-		t.Fatalf("ready with too many notices or a long signature refused: %v", err)
-	}
-	got := m.(Ready).Notices
-	if len(got) != MaxRelayOrigins || got[0] != sent[0] || got[MaxRelayOrigins-1] != sent[MaxRelayOrigins-1] {
-		t.Fatalf("kept %d notices, want the first %d", len(got), MaxRelayOrigins)
+	var info EdgeInfo
+	if err := json.Unmarshal([]byte(`{"signin_origin":"https://auth.example","retiring":"https://edge2.example","retiring_date":"2027-03-01"}`), &info); err != nil ||
+		info.Retiring != "https://edge2.example" || info.RetiringDate != "2027-03-01" {
+		t.Errorf("string fields decode as %+v, %v", info, err)
 	}
 }
 

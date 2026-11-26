@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -131,5 +132,28 @@ func TestRetiringNotice(t *testing.T) {
 		if err != nil || got != tc.want || ok != tc.ok {
 			t.Errorf("edge info retiring %q date %q: %+v, %v, %v; want %+v, %v", tc.retiring, tc.date, got, ok, err, tc.want, tc.ok)
 		}
+	}
+}
+
+// TestRetiringNoticeOfAnotherType reads edge metadata whose retiring
+// fields are not strings: the metadata is read and the notice ignored.
+func TestRetiringNoticeOfAnotherType(t *testing.T) {
+	key, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		info := map[string]any{"signin_origin": "http://127.0.0.1:1", "key": key, "fingerprint": edgeproto.EdgeKeyFingerprint(key),
+			"version": edgeproto.Version, "min_version": edgeproto.MinVersion, "retiring": map[string]string{"origin": "https://edge2.example.test"}, "retiring_date": 20270301}
+		w.Header().Set(edgeproto.HeaderVersion, "1")
+		_ = json.NewEncoder(w).Encode(info)
+	}))
+	t.Cleanup(srv.Close)
+	c, err := New(t.TempDir(), srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok, err := c.RetiringNotice(context.Background()); err != nil || ok {
+		t.Fatalf("RetiringNotice = %+v, %v, %v; want no notice and no error", got, ok, err)
 	}
 }
