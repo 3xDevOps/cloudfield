@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"maps"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -608,6 +609,52 @@ func TestCertPolicy(t *testing.T) {
 		err := policy(t.Context(), name)
 		if got := fmt.Sprint(err); (want == "" && err != nil) || (want != "" && got != want) {
 			t.Errorf("%s: %v, want %q", name, err, want)
+		}
+	}
+}
+
+// TestOlderImageServes reads one environment both ways: the CLOUDFIELD_EDGE_
+// names this image reads first retire pair A, while the AETHER_EDGE_ names an
+// older image reads alone still serve it.
+func TestOlderImageServes(t *testing.T) {
+	dir := t.TempDir()
+	secret := filepath.Join(dir, "github-client-secret")
+	if err := os.WriteFile(secret, []byte("fake-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	newer := map[string]string{
+		"CLOUDFIELD_EDGE_SIGNIN_ORIGIN": "https://auth2.example.net", "CLOUDFIELD_EDGE_RELAY_ORIGIN": "https://edge2.example.net",
+		"AETHER_EDGE_RETIRED_PAIRS":    "https://auth.example.test https://edge.example.test https://edge2.example.net",
+		"AETHER_EDGE_GITHUB_CLIENT_ID": "fake-id", "AETHER_EDGE_GITHUB_CLIENT_SECRET_FILE": secret,
+	}
+	for _, tt := range []struct {
+		name string
+		env  map[string]string
+		args []string
+		want string
+	}{
+		{"stale first pair", map[string]string{"AETHER_EDGE_SIGNIN_ORIGIN": "https://auth.example.test", "AETHER_EDGE_RELAY_ORIGIN": "https://edge2.example.net"}, nil,
+			"AETHER_EDGE_SIGNIN_ORIGIN names https://auth.example.test, which --retired-pairs retires: an edge image older than --retired-pairs reads only the AETHER_EDGE_ names " +
+				"and would serve it in full after a rollback. Remove AETHER_EDGE_SIGNIN_ORIGIN, or set it to the value of CLOUDFIELD_EDGE_SIGNIN_ORIGIN"},
+		{"stale relay origin", map[string]string{"AETHER_EDGE_RELAY_ORIGIN": "https://EDGE.example.test:8443"}, nil,
+			"AETHER_EDGE_RELAY_ORIGIN names https://EDGE.example.test:8443, which --retired-pairs retires"},
+		{"stale more pairs", map[string]string{"AETHER_EDGE_ORIGIN_PAIRS": "https://auth.example.test https://edge.example.test fake-id " + secret,
+			"CLOUDFIELD_EDGE_ORIGIN_PAIRS": "https://auth3.example.net https://edge3.example.net fake-id " + secret}, nil,
+			"AETHER_EDGE_ORIGIN_PAIRS names https://auth.example.test, which --retired-pairs retires"},
+		{"aligned", map[string]string{"AETHER_EDGE_SIGNIN_ORIGIN": "https://auth2.example.net", "AETHER_EDGE_RELAY_ORIGIN": "https://edge2.example.net"}, nil, ""},
+		{"flag wins in both images", map[string]string{"AETHER_EDGE_SIGNIN_ORIGIN": "https://auth.example.test"},
+			[]string{"--signin-origin", "https://auth2.example.net"}, ""},
+	} {
+		env := maps.Clone(newer)
+		maps.Copy(env, tt.env)
+		raw := func(k string) string { return env[k] }
+		o, err := parseOptions(tt.args, func(name string) string { return envname.Get(raw, name) })
+		if err != nil {
+			t.Fatalf("%s: %v", tt.name, err)
+		}
+		err = olderImageServes(o, raw)
+		if (tt.want == "" && err != nil) || (tt.want != "" && (err == nil || !strings.HasPrefix(err.Error(), tt.want))) {
+			t.Errorf("%s: %v, want %q", tt.name, err, tt.want)
 		}
 	}
 }

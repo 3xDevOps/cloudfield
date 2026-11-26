@@ -1210,7 +1210,15 @@ entry and the fix, when:
   remove its pair from `--origin-pairs`, or swap first for the first pair;
 - a host name is named in two entries;
 - the replacement is not a relay origin of a served pair, or is retiring;
-- there are more than 16 entries.
+- there are more than 16 entries, or more than 16 with `--retiring-pairs`;
+- `AETHER_EDGE_SIGNIN_ORIGIN`, `AETHER_EDGE_RELAY_ORIGIN` or
+  `AETHER_EDGE_ORIGIN_PAIRS` names a retired host while a `CLOUDFIELD_EDGE_`
+  name or a flag overrides it here: an older image reads only the
+  `AETHER_EDGE_` names and would serve the pair after a rollback;
+- the edge recorded the pair's origins in the other roles or in another pair;
+- rows without a recorded origin exist and the edge has never recorded
+  origins: run it with `--retiring-pairs` first, for as long as you give
+  people to move.
 
 The edge answers both host names before it looks for a served pair. With its
 own certificates it uses and renews a retired host's certificate while the

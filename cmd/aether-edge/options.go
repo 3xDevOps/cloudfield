@@ -18,6 +18,7 @@ import (
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	"github.com/3xDevOps/cloudfield/internal/edge/relay"
 	edge "github.com/3xDevOps/cloudfield/internal/edge/service"
+	"github.com/3xDevOps/cloudfield/internal/envname"
 )
 
 // options is the edge's configuration. Every option is a flag whose
@@ -47,6 +48,8 @@ type options struct {
 	retiring []edge.Retiring
 	// retired are the pairs --retired-pairs names.
 	retired []edge.Retired
+	// flags are the options set on the command line.
+	flags map[string]bool
 	// openAIChallenge is OpenAI's domain verification token for the
 	// relay host, served at edgeproto.PathOpenAIChallenge.
 	openAIChallenge string
@@ -117,6 +120,8 @@ func parseOptions(args []string, getenv func(string) string) (options, error) {
 	if fs.NArg() != 0 {
 		return options{}, fmt.Errorf("unexpected argument %q", fs.Arg(0))
 	}
+	o.flags = map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { o.flags[f.Name] = true })
 
 	var err error
 	if o.egressBudget, err = strconv.ParseInt(*budget, 10, 64); err != nil || o.egressBudget < 0 {
@@ -495,4 +500,42 @@ func readSecretFile(path string) (string, error) {
 		return "", fmt.Errorf("%s is larger than %d bytes", path, maxSecretFileSize)
 	}
 	return strings.TrimSpace(string(data)), nil
+}
+
+// olderImageServes refuses a retired host that an edge image older than
+// --retired-pairs would serve: such an image reads the origins only from
+// the AETHER_EDGE_ names, so one that a CLOUDFIELD_EDGE_ name shadows here
+// is still what it serves after a rollback. getenv reads the environment
+// without the CLOUDFIELD_EDGE_ names.
+func olderImageServes(o options, getenv func(string) string) error {
+	retired := map[string]bool{}
+	for _, r := range o.retired {
+		retired[host(r.SigninOrigin)], retired[host(r.RelayOrigin)] = true, true
+	}
+	if len(retired) == 0 {
+		return nil
+	}
+	for _, v := range []struct{ flag, name string }{
+		{"signin-origin", "AETHER_EDGE_SIGNIN_ORIGIN"}, {"relay-origin", "AETHER_EDGE_RELAY_ORIGIN"}, {"origin-pairs", "AETHER_EDGE_ORIGIN_PAIRS"},
+	} {
+		value := getenv(v.name)
+		if o.flags[v.flag] || value == "" {
+			continue
+		}
+		for entry := range strings.SplitSeq(value, ",") {
+			fields := strings.Fields(entry)
+			if v.name != "AETHER_EDGE_ORIGIN_PAIRS" {
+				fields = []string{strings.TrimSpace(entry)}
+			}
+			for _, origin := range fields[:min(2, len(fields))] {
+				u, err := url.Parse(origin)
+				if err != nil || !retired[strings.ToLower(u.Hostname())] {
+					continue
+				}
+				return fmt.Errorf("%s names %s, which --retired-pairs retires: an edge image older than --retired-pairs reads only the AETHER_EDGE_ names "+
+					"and would serve it in full after a rollback. Remove %s, or set it to the value of %s", v.name, origin, v.name, envname.New(v.name))
+			}
+		}
+	}
+	return nil
 }
