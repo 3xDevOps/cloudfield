@@ -161,6 +161,13 @@ type edgePath struct {
 	Online   []edgeproto.ServerInfo `json:"online,omitempty"`
 }
 
+// retiredAddress is the error data "retired": the edge refused because
+// the address dialed is retired, and Replacement is the address it named.
+// The refusal's own text is in "refusal".
+type retiredAddress struct {
+	Replacement string `json:"replacement"`
+}
+
 // refusalData is the error data of a failure on the edge path, nil for
 // any other: "refusal", an *edgeproto.Refused, when the server, the edge
 // or this client refused, and "edge_path" when the failure is a
@@ -171,6 +178,7 @@ func refusalData(err error) json.RawMessage {
 		data struct {
 			Refusal  *edgeproto.Refused `json:"refusal,omitempty"`
 			EdgePath *edgePath          `json:"edge_path,omitempty"`
+			Retired  *retiredAddress    `json:"retired,omitempty"`
 		}
 		edgeRefused *edgeclient.RefusedError
 		path        *cli.EdgePathError
@@ -179,6 +187,9 @@ func refusalData(err error) json.RawMessage {
 	case errors.As(err, &data.Refusal):
 	case errors.As(err, &edgeRefused):
 		data.Refusal = edgeproto.RefusedBy(edgeproto.Refusal(edgeRefused.Message))
+		if edgeRefused.Retired != "" {
+			data.Retired = &retiredAddress{Replacement: edgeRefused.Retired}
+		}
 	case errors.Is(err, edgeclient.ErrNotSignedIn):
 		data.Refusal = &edgeproto.Refused{Kind: edgeproto.RefusedNotSignedIn}
 	}
@@ -230,9 +241,10 @@ type signedInEdge struct {
 	Account      *edgeproto.AccountInfo `json:"account,omitempty"`
 	Device       *edgeproto.Device      `json:"device,omitempty"`
 	Error        string                 `json:"error,omitempty"`
+	Retiring     *edgeNotice            `json:"retiring,omitempty"`
 }
 
-func (g *Gateway) localEdgeStatus(*http.Request, []byte) (any, *protocol.Error) {
+func (g *Gateway) localEdgeStatus(r *http.Request, _ []byte) (any, *protocol.Error) {
 	dir, err := cli.Dir()
 	if err != nil {
 		return nil, &protocol.Error{Code: protocol.CodeInternal, Message: err.Error()}
@@ -252,10 +264,37 @@ func (g *Gateway) localEdgeStatus(*http.Request, []byte) (any, *protocol.Error) 
 		}
 		edges = append(edges, entry)
 	}
+	if perr := g.addNotices(r.Context(), dir, edges); perr != nil {
+		return nil, perr
+	}
 	return struct {
 		Edges []signedInEdge `json:"edges"`
 		Login *loginView     `json:"login,omitempty"`
 	}{Edges: edges, Login: g.local.edge.view()}, nil
+}
+
+// addNotices sets each edge's notice, with whether this machine already
+// knows the replacement.
+func (g *Gateway) addNotices(ctx context.Context, dir string, edges []signedInEdge) *protocol.Error {
+	origins := make([]string, len(edges))
+	for i, e := range edges {
+		origins[i] = e.Edge
+	}
+	notices := g.local.notices.lookup(ctx, dir, origins)
+	if len(notices) == 0 {
+		return nil
+	}
+	holdings, err := cli.LoadEdgeHoldings(dir)
+	if err != nil {
+		return &protocol.Error{Code: protocol.CodeInternal, Message: err.Error()}
+	}
+	for i := range edges {
+		if notice, ok := notices[edges[i].Edge]; ok {
+			notice.Known = holdings.Known(notice.Replacement)
+			edges[i].Retiring = &notice
+		}
+	}
+	return nil
 }
 
 func sessionOn(dir, origin string) (edgeclient.Session, error) {
@@ -264,6 +303,19 @@ func sessionOn(dir, origin string) (edgeclient.Session, error) {
 		return edgeclient.Session{}, err
 	}
 	return client.Session()
+}
+
+// logoutAnswer is edge.logout's answer. Unrevoked is set when the token
+// was deleted here although the edge did not revoke it, because the
+// address that issued it answered that it is retired.
+type logoutAnswer struct {
+	Edge      string           `json:"edge"`
+	Unrevoked *unrevokedDevice `json:"unrevoked,omitempty"`
+}
+
+type unrevokedDevice struct {
+	DeviceID    string `json:"device_id"`
+	Replacement string `json:"replacement"`
 }
 
 func (g *Gateway) localEdgeLogout(r *http.Request, body []byte) (any, *protocol.Error) {
@@ -278,12 +330,16 @@ func (g *Gateway) localEdgeLogout(r *http.Request, body []byte) (any, *protocol.
 		return nil, perr
 	}
 	g.local.edge.forget(client.URL())
-	if err := client.Logout(r.Context()); err != nil {
+	unrevoked, err := client.Logout(r.Context())
+	if err != nil {
 		return nil, edgeError(err)
 	}
-	return struct {
-		Edge string `json:"edge"`
-	}{Edge: client.URL()}, nil
+	g.local.notices.forget(client.URL())
+	answer := logoutAnswer{Edge: client.URL()}
+	if unrevoked != nil {
+		answer.Unrevoked = &unrevokedDevice{DeviceID: unrevoked.Device.ID, Replacement: unrevoked.Replacement}
+	}
+	return answer, nil
 }
 
 func (g *Gateway) localEdgeServers(r *http.Request, body []byte) (any, *protocol.Error) {

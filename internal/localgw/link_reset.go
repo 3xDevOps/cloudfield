@@ -19,6 +19,7 @@ func (g *Gateway) localLinkReset(*http.Request, []byte) (any, *protocol.Error) {
 	g.local.switching.Lock()
 	defer g.local.switching.Unlock()
 	g.local.edge.reset()
+	g.local.notices.reset()
 	g.moveTo(cli.Config{}, nil)
 	if err := os.RemoveAll(dir); err != nil {
 		return nil, &protocol.Error{Code: protocol.CodeInternal, Message: fmt.Sprintf("delete %s: %v", dir, err)}

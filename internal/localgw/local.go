@@ -99,13 +99,14 @@ type localState struct {
 	sync    *localops.SyncManager
 	forward *localops.ForwardManager
 	edge    edgeLogin
+	notices *edgeNotices
 }
 
 // newLocalState seeds the verb state from the gateway config. It never
 // fails: an unlinked (zero) cli.Config simply reports linked:false and
 // refuses the verbs that need a repo.
 func newLocalState(cfg Config) *localState {
-	state := &localState{cfg: cfg.CLI, sync: localops.NewSyncManager(), forward: localops.NewForwardManager()}
+	state := &localState{cfg: cfg.CLI, sync: localops.NewSyncManager(), forward: localops.NewForwardManager(), notices: newEdgeNotices()}
 	if path, err := cli.Path(); err == nil {
 		state.raw, _ = os.ReadFile(path)
 	}
