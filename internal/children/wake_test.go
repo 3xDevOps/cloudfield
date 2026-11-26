@@ -10,12 +10,14 @@ import (
 	"github.com/3xDevOps/Aether/internal/protocol"
 )
 
+var wakeRefusals = map[string]string{
+	"gemini":      "gemini in Standard mode has no idle wake; start it in Enhanced",
+	"antigravity": "antigravity in Standard mode has no idle wake, and it has no Enhanced mode; as a subsession it runs only in Background, and a session that waits for mail needs another agent",
+}
+
 func TestParentsMustWakeOnMail(t *testing.T) {
 	h := newHarness(t)
-	for agent, want := range map[string]string{
-		"gemini":      "gemini in Standard mode has no idle wake; start it in Enhanced",
-		"antigravity": "antigravity in Standard mode has no idle wake, and it has no Enhanced mode; a session that waits for mail needs another agent",
-	} {
+	for agent, want := range wakeRefusals {
 		parent := h.run(h.ada.ID, domain.LaunchTUI, "standard "+agent)
 		parent.Harness = agent
 		if err := h.db.UpdateRun(h.ctx, parent); err != nil {
@@ -33,12 +35,16 @@ func TestSubsessionsMustWakeOnMail(t *testing.T) {
 	h.agents.more = []protocol.AgentInfo{{Name: "gemini", Installed: true, EnhancedInstalled: true}, {Name: "antigravity", Installed: true}}
 	parent := h.run(h.ada.ID, domain.LaunchACP, "parent")
 
-	_, err := h.start(parent.ID, protocol.ChildStartParams{Harness: "gemini", Mode: "standard"})
-	if code(err) != protocol.CodeDenied || !strings.Contains(err.Error(), "gemini in Standard mode has no idle wake; start it in Enhanced") {
-		t.Fatalf("a Standard gemini subsession = %v, want the no-idle-wake refusal", err)
+	for agent, want := range wakeRefusals {
+		_, err := h.start(parent.ID, protocol.ChildStartParams{Harness: agent, Mode: "standard"})
+		if code(err) != protocol.CodeDenied || !strings.HasSuffix(err.Error(), want) {
+			t.Fatalf("a Standard %s subsession = %v, want it refused with %q", agent, err, want)
+		}
 	}
-	if got := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "antigravity"}); got.Mode != "background" {
-		t.Fatalf("an antigravity subsession with no mode runs %s, want background", got.Mode)
+	for _, mode := range []string{"", "background"} {
+		if got := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "antigravity", Mode: mode}); got.Mode != "background" {
+			t.Fatalf("an antigravity subsession with mode %q runs %s, want background", mode, got.Mode)
+		}
 	}
 
 	raw, _ := json.Marshal(protocol.ChildOptionsParams{})

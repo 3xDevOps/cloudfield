@@ -1268,9 +1268,9 @@ Background one may start subsessions. A parent must wake when
 mail arrives, so `subsession start` from a Standard session of an agent with no idle
 wake is refused with `<agent> in Standard mode has no idle wake; start it in
 Enhanced`, or for Antigravity, which has no Enhanced mode, with `antigravity
-in Standard mode has no idle wake, and it has no Enhanced mode; a session that
-waits for mail needs another agent`. Who may turn them off is in
-[teams.md](teams.md#subsessions).
+in Standard mode has no idle wake, and it has no Enhanced mode; as a
+subsession it runs only in Background, and a session that waits for mail needs
+another agent`. Who may turn them off is in [teams.md](teams.md#subsessions).
 
 ```sh
 /usr/local/bin/aether-internal subsession options
@@ -1295,10 +1295,10 @@ waits for mail needs another agent`. Who may turn them off is in
   dashboard) and `--task` or `--task-file` (at most 24 KiB, so the escaped request fits the socket's 64 KiB; `-` reads
   standard input), plus optional `--model`, `--mode
   standard|enhanced|background` and `--account <member-id>`. Without `--mode`
-  the subsession runs Enhanced where the agent's Enhanced mode is installed,
-  else Standard, or Background for an agent with no idle wake. `--mode
-  standard` for such an agent is refused with the same message as a Standard
-  parent of that agent. Without
+  the subsession runs Enhanced where the agent's Enhanced mode is installed.
+  Where it is not, the subsession runs Standard, or Background if the agent
+  has no idle wake. `--mode standard` for an agent with no idle wake is
+  refused with the same message as a Standard parent of that agent. Without
   `--account`, a subsession of the parent's agent starts on the parent's
   account, and any other agent on the owner's own account. A parent handed over
   from another member is refused: it still runs the previous owner's agent on
