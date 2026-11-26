@@ -16,8 +16,8 @@ surfaces; the server gateway authenticates each request with Tailscale WhoIs
 and no browser token.
 
 The visual contract is a dense developer workbench on neutral surfaces: in
-the dark theme blue-black, with a teal accent and a gold primary button, as
-on the website, and in the light one white with a teal accent: flat panes, compact controls, restrained elevation and short
+the dark theme Catppuccin Mocha and in the light one Catppuccin Latte, each
+with a sky accent and a peach primary button: flat panes, compact controls, restrained elevation and short
 token-driven motion. `docs/styles.md` defines the tokens, type and motion.
 
 The gateways and their transport boundaries are documented in
@@ -270,13 +270,20 @@ message's delivery (`DeliveryCountdown`), is its own small component and
 re-renders only its text.
 
 The `messages` slice holds agent mail (`coord.messages.list`) per workspace
-or run scope, merged by message ID. A scope's list is held only while
-a view that shows it is mounted (`useMessageList`); the last one to unmount
-drops it and the messages no other list holds. Messages list oldest first;
+or run scope, merged by message ID. A view that shows a scope's list reads
+it when it mounts (`useMessageList`). A workspace or thread list is dropped,
+with the messages no other list holds, when the last such view unmounts. A
+session's list is kept when its last view unmounts, without any read error
+it held, so its Chat returns with the rows it left with. It is dropped once
+the session is no longer in `runs`, whether a removal, a snapshot or a reset
+took it out, and no view shows it; the tab holds one list per session it has
+shown. Messages list oldest first;
 those created at the same instant keep the order the server inserted them,
 which it reports newest first. A `coord.message` event
 carries no body, so every held scope the message belongs to re-reads its
-newest page; a scope whose first read failed is held empty so it re-reads too.
+newest page, a kept session list included: a view that mounts on one finds
+it current. A scope whose first read failed is held empty so it re-reads too.
+A failed read records its error only while a view shows the list.
 `coord.message.acked` stamps the row. Both re-read the recipient session for its
 `unacked_messages`.
 
@@ -518,8 +525,9 @@ On a desktop window with a fine pointer a row also arranges the
 hover, and `Mod+Enter` on a focused row open the session in a new tile right
 of the focused one, or as a tab of it when there is no room. A row dragged
 with a mouse or a pen drops onto a tile. A row whose session is the active
-tab of a tile on screen carries a 2px teal bar down its left edge; the
-selected row (`aria-current="page"`) is the focused tile's session.
+tab of a tile on screen carries a 2px sky bar down its left edge and has
+square left corners, so the bar meets the selected fill; the selected row
+(`aria-current="page"`) is the focused tile's session.
 
 ### App header
 
@@ -2718,7 +2726,7 @@ The launch form lives in `components/launch/`. It asks for a
 task, an agent, an account when one is shared with the caller, a mode and a
 model. The agent picker is a list of rows from `agent.list`: the vendor glyph
 in its colour, the display name, and "Ready" or "Sign in after launch"
-for a shipped agent (`login_found` checks the launch home for login files, not
+for a shipped agent (`login_found` checks the launch home for a login, not
 for a working session; a server that does not report it shows nothing), or
 "Signed out" in the needs-you colour, with `login_problem` as its tooltip,
 for any agent whose login file cannot sign it in (`login_blocks_launch`), or
@@ -3071,10 +3079,16 @@ closed; each older page merges below the pages before it, so same-instant
 messages keep the server's order. It polls presence every ten seconds with an abortable 15-second
 deadline.
 
-While other members watch the session, the composer shows a line above the
-message box, in the space of its own fixed height: `Alice is typing...`,
+While another member types in the session, the composer shows a 16px line
+above the message box: `Alice is typing...`,
 `Alice and Bob are typing...`, `Alice, Bob and Carol are typing...`, and
-`Several people are typing...` past three. The dots animate unless
+`Several people are typing...` past three. The line takes no room while
+nobody types, so the conversation and the bars above the composer move up
+24px when a name appears and back when the last one lapses, while the
+message box stays put; reserving the room instead left a gap above the box
+of every shared session. Its `role="status"` region stays mounted and
+empty meanwhile, so a screen reader announces a name when it arrives. The
+dots animate unless
 `prefers-reduced-motion` is set. Your own typing is never listed. Each
 keystroke in a draft calls `presence.typing` (Steer on the session), at most once
 every 3 seconds; clearing the draft, sending it or closing the composer calls
@@ -3108,10 +3122,10 @@ when the focus does. The strip is a `tablist` named "Sessions in this tile":
   truncates at 240px. A tab keeps four letters of its title: its floor is 112px, or 192px
   while it names its view or carries the badge. A strip with under 192px a
   tab is tight: its background tabs show the view's icon without the name, on
-  a 128px floor that keeps it clear of the close button, and a gold dot for
+  a 128px floor that keeps it clear of the close button, and a peach dot for
   the badge, all cut to one width. The strip never scrolls. Tabs that do not fit at
   their floor fold into an "N more" menu before "+", the last background tab
-  first and those that need you last; the menu carries a gold dot while a
+  first and those that need you last; the menu carries a peach dot while a
   folded tab needs you, and picking a tab there activates it.
 - **Add a tab** ("+") opens the picker in a popover.
 - **Split right** and **Split down**, on the focused tile, open an empty
@@ -3149,16 +3163,16 @@ foot adds "or drag a session or a view here".
 A session shows each view once. A view that is the active tab of another
 tile carries an arrow in the view switch and the picker, with the tooltip
 "On screen in the tile at right" (or left, above, below) or "In a parked
-tile". Hovering or focusing it draws a dashed teal outline on that tile, and
+tile". Hovering or focusing it draws a dashed sky outline on that tile, and
 choosing it focuses that tile. A view held by a background tab has no arrow;
 choosing it activates that tab.
 
 **Focus.** A pointer press in a tile, or focus that follows a `Tab` key
-press, focuses it. The focused tile's strip is on `--canvas` with a 2px teal
+press, focuses it. The focused tile's strip is on `--canvas` with a 2px sky
 bar under its active tab or its "New tile" label; an unfocused strip is on
 `--chrome` with no bar, and a picker marks its active row only while the
 keyboard is in it.
-With two or more tiles on screen the focused one also has a 1px teal
+With two or more tiles on screen the focused one also has a 1px sky
 outline. When a navigation, a pick or a shortcut moves
 the focus while the keyboard sits in another tile, the keyboard moves to the
 new tile's heading. Only the focused tile answers the session's shortcuts,
@@ -3172,7 +3186,7 @@ its own. With a mouse or a pen, a sidebar row, a tab and every view but the
 one its tile shows can be dragged (`drag.tsx`); a press becomes a drag after
 4px. The outer fifth of a tile splits it on that side, its middle or strip
 adds a tab, and a tab over a strip moves to where the 2px line shows. A
-teal preview marks what the drop takes. A split's preview is the rectangle
+sky preview marks what the drop takes. A split's preview is the rectangle
 the new tile will have after the drop, seams moved for the floor and the
 room of a tile the drag empties included: it covers what is there now with a
 `--canvas` scrim and names what lands on a plate at its centre. The
@@ -3393,7 +3407,7 @@ Enhanced sessions show who controls the agent's session and who watches it
 session's controls:
 
 - Each watcher is an `Avatar` named by its tooltip.
-- The controller's avatar has a teal ring. When this tab controls, the
+- The controller's avatar has a sky ring. When this tab controls, the
   avatar is the **You control** menu, which holds **Release**; the words show
   once the row is 960px wide.
 - Otherwise the existing `ControlButton` follows the controller: take a free
@@ -3479,7 +3493,12 @@ progress, takeover loss and reduced-motion behavior.
 
 The Chat view (`session-view.tsx`) is the session's conversation: what was said
 to the agent, what it did and asked, and the session's notes. It is a `virtua`
-list in a 736px column over `rowsForRun` (`store/sessions.ts`). For a Standard
+list in a 736px column over `rowsForRun` (`store/sessions.ts`). The list
+remounts on every switch between sessions, so each session's measured row
+heights are kept in a module-level map with the keys of the rows they were
+measured for, until the session leaves the store. A Chat that mounts with
+those same rows starts from the kept heights and paints its first frame at
+its final scroll position; with any other rows it measures again. For a Standard
 session the rows come from the session's `run.agent`, `workspace.timeline`,
 `run.status` and `run.review` events (read with `workspace.timeline` filtered by session and type,
 then kept live by sync), room messages, the session record and its pending inputs:
@@ -3516,16 +3535,16 @@ which drops those messages from the timeline; the choice is per session, in
 `hiddenAgentMessages`, until the page reloads. `Esc` in an empty composer focuses the list's
 viewport; the next `Esc` is the session's `leave-run`.
 
-In a [tile](#session-tiles) that is not the focused one the composer is one
-line: the same field showing a draft's first line, "+N lines" when it has
-more, and no toolbar. A press in the tile focuses it, and the composer opens
-when the press ends, so the click lands on what was pressed. For 400ms after
-it opens, or until the pointer moves, its toolbar takes no press: the second
-press of a double-click on the field opens no menu. A tile on Changes,
-Files or Trace keeps that one-line field, with a **Send** icon, under a seam, for an
+The Chat composer is the same height in every [tile](#session-tiles),
+focused or not, so focusing a tile moves nothing in its Chat. A tile on Changes,
+Files or Trace docks a one-line field under a seam: a draft's first line,
+"+N lines" when it has more, and a **Send** icon, for an
 Enhanced session this tab may steer, while the session's Chat is not on
-screen, no request is pending and the agent's stream is live; it opens on a click or `c` and folds when
-the tile loses focus. A Browser or Terminal tile has none, so the page and
+screen, no request is pending and the agent's stream is live. It opens to
+the whole composer on a click or `c`, stays open when the tile loses focus,
+and folds on `Esc` in an empty field. For 400ms after
+it opens, or until the pointer moves, its toolbar takes no press: the second
+press of a double-click on the field opens no menu. A Browser or Terminal tile has none, so the page and
 the terminal keep their height.
 `c` goes to the session's Chat composer when Chat is on screen, else to this
 field, else it opens Chat. The header's **Reply** always opens Chat.
@@ -3564,23 +3583,26 @@ the note, the card shows the error without **Retry**, and **Dismiss** removes
 it.
 
 The subagents bar (`agents-bar.tsx`, a `region "Subagents and workflows"`)
-sits above the changes bar in Chat at every width, and is absent until the
-session has a subagent or workflow. It lists every one the main agent
-launched, and any whose launch is not loaded; a workflow is one row. Its
-header is the launch step's summary ("3 subagents and 1 workflow · 2
-running, 1 failed"). It starts collapsed (`expandedRows[runID]['agents-bar']`,
-not persisted). Expanded, at most 192px tall (30% of the viewport on a
-phone), each row shows the dot, the label, and the state with its elapsed
-time, or `3 of 8 agents done` for a workflow that reports rows. Running rows
-come first, oldest launch first, then failed, stopped and the rest, each
-newest first (`topAgents` in `store/subagents.ts`, which returns one string
-so the bar re-renders only when a row's state changes). A row opens the
-subagent inspector; the open one carries `aria-current`.
+sits between the changes bar and the composer in Chat at every width, and
+is absent until the session has a subagent or workflow. It lists every one
+the main agent launched, and any whose launch is not loaded; a workflow is
+one row. Its header is the launch step's summary ("3 subagents and 1
+workflow · 2 running, 1 failed"). It starts collapsed
+(`expandedRows[runID]['agents-bar']`, not persisted). Expanded, at most
+192px tall (30% of the viewport on a phone), each row shows the dot, the
+label, and the state with its elapsed time, or `3 of 8 agents done` for a
+workflow that reports rows. Running rows come first, oldest launch first,
+then failed, stopped and the rest, each newest first (`topAgents` in
+`store/subagents.ts`, which returns one string so the bar re-renders only
+when a row's state changes). A row opens the subagent inspector; the open
+one carries `aria-current`.
 
-The changes bar (`changes-bar.tsx`) sits above the composer: one line,
-"14 files changed +612 −140" and **Review**. It counts the session's whole
-worktree against its base, the Changes view's **All changes**, so
-edits made by shell commands count too. Its source is the newest `run.diff`
+The changes bar (`changes-bar.tsx`) sits above the subagents bar, or above
+the composer when there is none: one line, "14 files changed +612 −140" and
+**Review**, in a bordered box like the subagents bar's so the two
+disclosure arrows line up. It counts the session's whole worktree against
+its base, the Changes view's **All changes**, so edits made by shell
+commands count too. Its source is the newest `run.diff`
 stat set. Until the page has received one live, it reads the newest with
 `workspace.timeline` (`types: ["run.diff"]`, `newest: true`, `limit: 1`)
 on load and again whenever the connection returns, since the page may hold
@@ -5949,10 +5971,10 @@ check the connection. Your key is unchanged.` with **Retry**. The
 entry stays hidden until a key is saved by design: Settings › Connections ›
 Linear is the way in. `?page=linear` without a key
 still opens and shows **Linear is not connected** with the server's error and a
-button to Settings; with a refused key it shows **Linear refused your API key** in the failed tone, as Settings does (gold is for not connected),
+button to Settings; with a refused key it shows **Linear refused your API key** in the failed tone, as Settings does (peach is for not connected),
 **Open Linear settings** as the primary button, **Retry** second, and no
 search or team filter. The page holds a header primary while an error with a
-filled button shows, so the phone's **New** pill is not gold beside it. Status
+filled button shows, so the phone's **New** pill is not peach beside it. Status
 badges are neutral: Linear's own status glyph (`status-icon.tsx`, by state
 type) in muted text, never a session-state colour. The page and the Settings section are keyed by
 `identityKey`, and a Connect or Disconnect that finishes after an identity
@@ -8625,8 +8647,8 @@ the glide and the tile keys; `tiles-drag.test.tsx` every drag source, zone
 and cancel, and a pressed tab's strip keeping its tabs and their widths;
 `tiles-control.test.tsx` no resize or reattach on a focus click,
 write control, the scaled terminal, the first click in a tile that is not
-focused ("+", a background tab, a tab's close button, the composer opening
-at the release), the strip keeping its layout until the pointer is off it
+focused ("+", a background tab, a tab's close button, the tile's controls
+appearing at the release), the strip keeping its layout until the pointer is off it
 or a double click maximizes its tile,
 a session's update rendering no other session's Chat, the right-click
 session menu only in the controls tile, and the glide's two-frame hold and
@@ -8723,7 +8745,8 @@ covers the Session rows; `src/store/session-rows.test.ts`,
 Enhanced rows and their blocks of steps, store, stream client, composer and
 requests, and
 `src/store/session-perf.test.tsx` (`RUN_PERF=1`) streams 5,000 items and
-opens 2,000. `src/routes/browser/index.test.tsx` covers the first page,
+opens 2,000. `e2e/chat-switch.spec.ts` reads a returned Chat's scroll
+position on every frame. `src/routes/browser/index.test.tsx` covers the first page,
 silent acquisition, takeover, release on blur and on focus elsewhere, the
 address field and its queue, shortcuts, fit-to-pane and presets, the page
 strip, close/reset identity fencing and raw refusals; `surface.test.tsx`

@@ -1016,7 +1016,7 @@ func (*fakeRuns) DefaultMode(context.Context, domain.MemberID, domain.MemberID, 
 	return domain.LaunchACP, nil
 }
 func (*fakeRuns) PendingInputs(domain.RunID) []domain.RunInputRequest { return nil }
-func (*fakeRuns) LoginProblem(domain.MemberID, string, harness.Profile) (string, bool, error) {
+func (*fakeRuns) LoginProblem(domain.MemberID, domain.MemberID, string, harness.Profile) (string, bool, error) {
 	return "", false, nil
 }
 func (*fakeRuns) Cause(domain.RunID, domain.RunActivity) events.RunStatusCause { return "" }

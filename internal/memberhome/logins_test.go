@@ -241,8 +241,13 @@ func TestIdentityKeepsOnlyCleanFields(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeLoginFile(t, console, "anthropic/active_config", "test-not-a-name/../"+strings.Repeat("x", 400))
-	if got, err := l.Inspect("mem-ada", "claude", "lgn-two0000000"); err != nil || got.Kind != "" {
+	got, err = l.Inspect("mem-ada", "claude", "lgn-two0000000")
+	if got.Kind != "" || (err != nil && strings.Contains(err.Error(), "test-not-a-name")) {
 		t.Fatalf("Inspect with a damaged selector = %+v, %v; want no login and no error quoting it", got, err)
+	}
+	writeLoginFile(t, console, "anthropic/active_config", "test-not-a-name/../x")
+	if got, err := l.Inspect("mem-ada", "claude", "lgn-two0000000"); err != nil || got.Kind != "" {
+		t.Fatalf("Inspect with a path for a selector = %+v, %v; want no login", got, err)
 	}
 }
 

@@ -57,7 +57,7 @@ describe.each([{ mode: 'tui', acp: false }, { mode: 'acp', acp: true }] as const
   it('offers Relaunch inside the retention grace and returns to a live run', async () => {
     vi.mocked(api.runRelaunch).mockResolvedValue(run({ ...kind, id: 'run_1', status: 'running', reason: undefined, finished_at: undefined, status_seq: 99 }))
     mount({ ...kind, ...closed })
-    expect(screen.getByRole('status').textContent).toMatch(/Relaunch it before .+ to continue the chat and files\./)
+    expect(screen.getByText(/Relaunch it before .+ to continue the chat and files\./).role).toBe('status')
 
     fireEvent.click(screen.getByRole('button', { name: 'Relaunch' }))
 
@@ -79,7 +79,7 @@ describe.each([{ mode: 'tui', acp: false }, { mode: 'acp', acp: true }] as const
 
   it('offers nothing once the container is released', () => {
     mount({ ...kind, ...closed, reason: 'closed', container_retained_until: undefined })
-    expect(screen.getByRole('status').textContent).toBe('This session has finished.')
+    expect(screen.getByText('This session has finished.').role).toBe('status')
     expect(screen.queryByRole('button', { name: 'Relaunch' })).toBeNull()
   })
 

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 	"unicode"
 	"unicode/utf8"
 
@@ -412,7 +413,7 @@ func (m *Manager) DefaultIdentity(member domain.MemberID, agent string) (LoginId
 
 // AnthropicProfileDir is where Claude Code keeps a keyless Console sign-in
 // in a home unless ANTHROPIC_CONFIG_DIR moves it.
-const AnthropicProfileDir = ".config/anthropic"
+const AnthropicProfileDir = anthropicProfileDir
 
 // profileName is an Anthropic profile name Cloudfield reads; any other
 // active_config content, which a container wrote, is never made a path.
@@ -421,12 +422,6 @@ var profileName = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$`)
 // maxIdentityConfigBytes bounds the configuration file read for the account
 // Claude Code cached; a larger one leaves the account unknown.
 const maxIdentityConfigBytes = 8 << 20
-
-const (
-	claudeConfigPath       = ".claude.json"
-	claudeLegacyConfigPath = ".claude/.config.json"
-	maxProfileBytes        = 1 << 20
-)
 
 // claudeIdentity reads a Claude Code login below root: the subscription
 // sign-in file oauth, the first of configs that holds anything (Claude
@@ -521,45 +516,8 @@ func readLoginFile(root *os.Root, rel string) ([]byte, error) {
 }
 
 // anthropicProfileSignedIn reports whether the active Anthropic profile in
-// dir, the one active_config names or "default", is an interactive sign-in
-// holding a token.
+// dir is an interactive sign-in that can sign Claude Code in.
 func anthropicProfileSignedIn(root *os.Root, dir string) (bool, error) {
-	active, err := readLoginFile(root, dir+"/active_config")
-	if err != nil {
-		return false, err
-	}
-	name := strings.TrimSpace(string(active))
-	if name == "" {
-		name = "default"
-	}
-	if !profileName.MatchString(name) {
-		return false, nil
-	}
-	config, err := readLoginFile(root, dir+"/configs/"+name+".json")
-	if err != nil || len(config) == 0 {
-		return false, err
-	}
-	var profile struct {
-		Authentication struct {
-			Type string `json:"type"`
-		} `json:"authentication"`
-	}
-	if json.Unmarshal(config, &profile) != nil {
-		return false, notJSON(dir + "/configs/" + name + ".json")
-	}
-	if profile.Authentication.Type != "user_oauth" {
-		return false, nil
-	}
-	credentials, err := readLoginFile(root, dir+"/credentials/"+name+".json")
-	if err != nil || len(credentials) == 0 {
-		return false, err
-	}
-	var tokens struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-	}
-	if json.Unmarshal(credentials, &tokens) != nil {
-		return false, notJSON(dir + "/credentials/" + name + ".json")
-	}
-	return strings.TrimSpace(tokens.AccessToken) != "" || strings.TrimSpace(tokens.RefreshToken) != "", nil
+	login, err := anthropicProfileLogin(root, dir, time.Now())
+	return login != nil, err
 }

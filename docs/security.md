@@ -331,7 +331,19 @@ file is yours before their agent starts. Their own login is mounted in place in
 all their containers, so a refresh in another of their sessions cannot replace the
 file yours is mounted over and detach it. For `claude` that is
 `~/.claude/.credentials.json`;
-[harnesses.md](harnesses.md#per-agent-setup) gives each agent's path. When
+[harnesses.md](harnesses.md#per-agent-setup) gives each agent's path. A Claude
+Code sign-in through the Anthropic Console lives elsewhere in your home
+(`primaryApiKey` in `~/.claude.json`, or `~/.config/anthropic`) and is never
+mounted into their session. The server reads it to decide whether the account
+is signed in and keeps a digest of it, never the key or token. A member the
+account is shared with can learn that the sign-in exists, which of
+`~/.claude.json`, `~/.claude/.config.json` and `~/.config/anthropic` holds it,
+and roughly when it changes: the
+refusal of their launch and the account's usage row name it. Their own
+`~/.config/anthropic` stays in their home, which their session on your
+account mounts: Claude Code there uses a profile that `ANTHROPIC_PROFILE`
+names in place of your login, and their active profile once your login stops
+working, and the API then bills them. When
 they have no installation of the agent in their own `~/.local/bin`, they also
 get yours, read-only, with your whole `~/.local/bin` on their `PATH` after
 their own entries.

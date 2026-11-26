@@ -32,7 +32,7 @@ export function ChangesBar({ run }: { run: RunRecord }) {
   const snapshot = latest ?? persisted
   if (!snapshot && error) {
     return (
-      <div role="alert" className={cn(sessionColumn, 'flex shrink-0 items-center gap-2 pb-1 text-ui-sm text-state-failed')}>
+      <div role="alert" className={cn(sessionColumn, 'flex shrink-0 items-center gap-2 pb-2 text-ui-sm text-state-failed')}>
         <span className="min-w-0 flex-1 break-words">Changes could not be read: {error}</span>
         <Button variant="quiet" onClick={() => void readPersistedDiff(useStore, api, run)}>Retry</Button>
       </div>
@@ -47,27 +47,29 @@ export function ChangesBar({ run }: { run: RunRecord }) {
       aria-label="Changes"
       title="Files changed in this session's worktree since its fork point"
       data-slot="changes-bar"
-      className={cn(sessionColumn, 'flex shrink-0 flex-col pb-1')}
+      className={cn(sessionColumn, 'flex shrink-0 flex-col pb-2')}
     >
-      <div className="flex min-w-0 items-center gap-3">
-        <div className="min-w-0 flex-1">
-          <WorkGroup
-            summary={`${files.length} ${files.length === 1 ? 'file' : 'files'} changed`}
-            trailing={truncated ? undefined : <Counts {...totals} />}
-            expanded={expanded}
-            controls={listID}
-            onToggle={() => useStore.getState().toggleChanges(run.id)}
-          />
+      <div className="flex flex-col rounded-control border border-seam bg-chrome px-2">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="min-w-0 flex-1">
+            <WorkGroup
+              summary={`${files.length} ${files.length === 1 ? 'file' : 'files'} changed`}
+              trailing={truncated ? undefined : <Counts {...totals} />}
+              expanded={expanded}
+              controls={listID}
+              onToggle={() => useStore.getState().toggleChanges(run.id)}
+            />
+          </div>
+          <Button variant="link" size="sm" onClick={() => open({ diff: 'current' })}>Review</Button>
         </div>
-        <Button variant="link" size="sm" onClick={() => open({ diff: 'current' })}>Review</Button>
+        <ul id={listID} hidden={!expanded} className="max-h-48 overflow-y-auto pb-1 max-md:max-h-[30dvh]">
+          {expanded && files.map((file) => (
+            <li key={file.path}>
+              <ChangedFileRow inset file={file} counts={!truncated} onOpen={(path) => open({ file: path })} />
+            </li>
+          ))}
+        </ul>
       </div>
-      <ul id={listID} hidden={!expanded} className="max-h-48 overflow-y-auto max-md:max-h-[30dvh]">
-        {expanded && files.map((file) => (
-          <li key={file.path}>
-            <ChangedFileRow file={file} counts={!truncated} onOpen={(path) => open({ file: path })} />
-          </li>
-        ))}
-      </ul>
     </section>
   )
 }

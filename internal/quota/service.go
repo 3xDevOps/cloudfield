@@ -123,7 +123,9 @@ type credential struct {
 	plan      string
 	expired   bool
 	// signedOut: the file holds an OAuth login the agent cannot sign in with.
-	signedOut   bool
+	signedOut bool
+	// absent: the file holds no OAuth login the server can read.
+	absent      bool
 	fingerprint string
 }
 
@@ -241,7 +243,7 @@ func (s *Service) readCredentials(ctx context.Context, account domain.Account) (
 		return credentials{}, err
 	}
 	return credentials{
-		claude: parseClaudeCredential(claudeBytes, claudeErr, s.now()),
+		claude: s.consoleCredential(account.Member, parseClaudeCredential(claudeBytes, claudeErr, s.now())),
 		codex:  parseCodexCredential(codexBytes, codexErr, s.now()),
 	}, nil
 }
@@ -260,6 +262,30 @@ func (s *Service) loginCredentials(account domain.Account) credentials {
 	}
 	data, readErr := s.logins.ReadCredential(account.Member, "claude", account.Login, maxCredentialBytes)
 	return credentials{claude: parseClaudeCredential(data, readErr, s.now()), codex: codex}
+}
+
+// consoleCredential replaces a missing or signed-out subscription login
+// with the Anthropic Console sign-in Claude Code then uses, which the API
+// bills and no usage window measures. A sign-in the server cannot read
+// leaves what the login file says; the row is read by everyone the account
+// is shared with, so it does not carry the error.
+func (s *Service) consoleCredential(account domain.MemberID, cred credential) credential {
+	if !cred.absent && !cred.signedOut {
+		return cred
+	}
+	own, err := s.homes.OwnerLogin(account, "claude")
+	switch {
+	case err != nil:
+		cred.err += "; a sign-in outside the login file cannot be read"
+		return cred
+	case own == nil:
+		return cred
+	}
+	return credential{
+		status:      "unsupported",
+		err:         "Anthropic Console sign-in (~/" + own.File + ") is billed by the API and has no usage windows",
+		fingerprint: fingerprint("claude-console", own.File, own.Stamp),
+	}
 }
 
 func (c credentials) fingerprints() [2]string {

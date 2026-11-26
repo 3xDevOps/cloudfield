@@ -953,8 +953,10 @@ type AgentInfo struct {
 	// Executable is the command the agent runs, which a member's agent may
 	// name differently from the agent.
 	Executable string `json:"executable"`
-	// LoginFound checks the launch home for login paths, not for a working
-	// session. Nil when the agent declares no login path.
+	// LoginFound checks the launch home for login paths, and on the
+	// member's own account for a login the agent keeps elsewhere in the
+	// home, not for a working session. Nil when the agent declares no login
+	// path.
 	LoginFound *bool `json:"login_found,omitempty"`
 	// LoginProblem is why the login cannot sign the agent in: what its file
 	// holds, or the agent's own refusal of a turn. Empty when the server

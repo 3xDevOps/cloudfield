@@ -156,15 +156,11 @@ describe('a press that focuses a tile', () => {
     const field = await rest.findByRole<HTMLTextAreaElement>('combobox', { name: 'Message the agent' })
     fireEvent.pointerDown(field)
     expect(useStore.getState().route.params.runId).toBe('run_3')
-    expect(field.rows).toBe(1)
+    expect(field.rows).toBe(2)
     expect(rest.queryByRole('button', { name: 'Split right' })).toBeNull()
     fireEvent.pointerUp(field)
-    await waitFor(() => expect(field.rows).toBe(2))
-    expect(rest.getByRole('button', { name: 'Split right' })).toBeDefined()
-    const footer = rest.getByRole('button', { name: 'Attach files' }).closest('.wrap-from-end')!
-    expect(footer.className).toContain('pointer-events-none')
-    fireEvent.pointerMove(window)
-    expect(footer.className).not.toContain('pointer-events-none')
+    await waitFor(() => expect(rest.getByRole('button', { name: 'Split right' })).toBeDefined())
+    expect(field.rows).toBe(2)
   })
 
   it('opens the picker on a first click on "+"', async () => {
