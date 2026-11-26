@@ -113,6 +113,10 @@ func TestMoveFromARetiredAddress(t *testing.T) {
 		}, want: func(_, to string) string {
 			return fmt.Sprintf("%s speaks edge protocol 5; moving needs edge protocol 6 or later: the edge's operator upgrades it", to)
 		}},
+		{name: "one served pair, no relay origins announced", announce: func(string, string) []string { return nil },
+			notices: func(from, to string) edgeproto.Notices {
+				return edgeproto.Notices{{State: edgeproto.NoticeRetired, Origin: from, Replacement: to}}
+			}},
 		{name: "the target not announced", announce: func(string, string) []string { return []string{"https://edge3.example.test"} },
 			notices: func(from, to string) edgeproto.Notices {
 				return edgeproto.Notices{{State: edgeproto.NoticeRetired, Origin: from, Replacement: to}}
