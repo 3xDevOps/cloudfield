@@ -29,6 +29,16 @@ server hosts the connector endpoint and signs you in.
   tailnet connection. Under `edge-access account`, any registered device works.
 - A ChatGPT or Claude plan that allows custom connectors (see below).
 
+As of 2026-11-26 the project edge's connector URL is
+`https://edge.cloudfield.ai/mcp`; add new connectors there. The edge still
+answers at `edge.onaether.dev`, and connectors added at
+`https://edge.onaether.dev/mcp` keep working. A server older than v0.8.7
+enrolled at `edge.onaether.dev` accepts a connector only at that address: at
+`https://edge.cloudfield.ai/mcp` it sends ChatGPT or Claude back the OAuth
+error `invalid_target`, `resource must be https://edge.onaether.dev/mcp`. Its
+admin updates it to v0.8.7 or later with `sudo aether-server update`; the
+server does not need to move to the new address.
+
 ## Get the URL
 
 In the app, open **Settings → ChatGPT and Claude**, or pick **Connect ChatGPT
@@ -57,7 +67,7 @@ cloudfield mcp
 
 ```
 Install Cloudfield from the ChatGPT or Claude directory where it is listed, or add this URL as a custom connector:
-  URL   https://edge.onaether.dev/mcp
+  URL   https://edge.cloudfield.ai/mcp
   No code: on the page that opens, sign in to the edge with GitHub, pick this server and select Allow
 Connected:
   con-7k2m9q4xbd  ChatGPT (chatgpt.com)  scopes read,write  added 2026-10-18  last used 2h ago  universal URL
@@ -74,7 +84,7 @@ code` line:
 The URL is the same for both apps and every server on the edge. On the
 server, `sudo cloudfield-server edge status` also prints it. Before edge protocol
 3, and for a member with no GitHub account linked, it is the server's own URL,
-`https://edge.onaether.dev/mcp/<server id>`. The code works once, within 10
+`https://edge.cloudfield.ai/mcp/<server id>`. The code works once, within 10
 minutes. Running `cloudfield mcp` again replaces a code you have not used.
 
 That URL's page asks for a code even when the universal URL needs none, so a
@@ -195,7 +205,7 @@ only at the host it was added at
 Claude Code connects at the same URLs:
 
 ```sh
-claude mcp add --transport http aether https://edge.onaether.dev/mcp
+claude mcp add --transport http aether https://edge.cloudfield.ai/mcp
 ```
 
 Then run `/mcp` in Claude Code and authenticate. Its client metadata document,

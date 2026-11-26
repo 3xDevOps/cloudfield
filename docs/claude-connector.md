@@ -3,9 +3,13 @@
 For the project's maintainers. Claude's connector directory is Anthropic's
 catalog of MCP servers that Claude users add with one click. Cloudfield's
 listing points at the same URL as the [ChatGPT plugin](chatgpt-plugin.md),
-`https://edge.onaether.dev/mcp`, the project edge's universal connector URL
+`https://edge.cloudfield.ai/mcp`, the project edge's universal connector URL
 ([connectors.md](connectors.md#the-universal-url)). This page covers the
 listing, Anthropic's requirements, testing and review.
+
+As of 2026-11-26 the listing uses `edge.cloudfield.ai`. The project edge
+still answers at `edge.onaether.dev`, and connectors added there keep
+working.
 
 Anthropic's sources, read 2026-10-26:
 [building](https://claude.com/docs/connectors/building),
@@ -19,15 +23,17 @@ Recheck them before submitting; the quotes below are what they said then.
 
 ## Requirements and where Cloudfield stands
 
-"Code" is origin/main at cabcf962; "live" is `curl` against
-`edge.onaether.dev` on 2026-10-26.
+"Code" is origin/main at cabcf962; "live" is `curl` against the old address,
+`edge.onaether.dev`, on 2026-10-26. The edge serves the metadata in the host
+the request came in on (`internal/edge/service/universal.go`), so the values
+below name `edge.cloudfield.ai`; nobody has checked them live there yet.
 
 | Requirement | Anthropic | Cloudfield |
 | --- | --- | --- |
 | Transport | "Use Streamable HTTP, which the MCP specification defines for remote servers." ([building](https://claude.com/docs/connectors/building)) | Streamable HTTP at `/mcp` (live) |
-| IPv4 | "Connectors are IPv4-only, so a hostname that only publishes `AAAA` records can't be reached" ([troubleshooting](https://claude.com/docs/connectors/building/troubleshooting)) | `edge.onaether.dev` has an A record (live) |
-| 401 starts sign-in | "A `401` is required to start sign-in, and Claude ignores a `WWW-Authenticate` header on a `200` response" ([authentication](https://claude.com/docs/connectors/building/authentication)) | `401` with `WWW-Authenticate: Bearer resource_metadata="https://edge.onaether.dev/.well-known/oauth-protected-resource/mcp"` (live) |
-| Resource | "the document's `resource` field must equal the URL as the user enters it in Claude, including any path component" ([authentication](https://claude.com/docs/connectors/building/authentication)) | `"resource":"https://edge.onaether.dev/mcp"` (live) |
+| IPv4 | "Connectors are IPv4-only, so a hostname that only publishes `AAAA` records can't be reached" ([troubleshooting](https://claude.com/docs/connectors/building/troubleshooting)) | `edge.onaether.dev` had an A record (live); not checked for `edge.cloudfield.ai` |
+| 401 starts sign-in | "A `401` is required to start sign-in, and Claude ignores a `WWW-Authenticate` header on a `200` response" ([authentication](https://claude.com/docs/connectors/building/authentication)) | `401` with `WWW-Authenticate: Bearer resource_metadata="https://edge.cloudfield.ai/.well-known/oauth-protected-resource/mcp"` (code) |
+| Resource | "the document's `resource` field must equal the URL as the user enters it in Claude, including any path component" ([authentication](https://claude.com/docs/connectors/building/authentication)) | `"resource":"https://edge.cloudfield.ai/mcp"` (code; `TestConnectorAtEveryRelayOrigin`). A server older than v0.8.7 enrolled at the old address refuses it ([connectors.md](connectors.md#prerequisites)) |
 | PKCE | "Your authorization server must support S256 PKCE." ([authentication](https://claude.com/docs/connectors/building/authentication)) | `code_challenge_methods_supported: ["S256"]` (live) |
 | CIMD | "Claude selects CIMD only when your authorization server metadata advertises both `"client_id_metadata_document_supported": true` and `"none"` in `token_endpoint_auth_methods_supported`" ([authentication](https://claude.com/docs/connectors/building/authentication)) | Both advertised, no registration endpoint (live). The listing's auth type is `oauth_cimd` |
 | Callback | "register exactly this redirect URI: `https://claude.ai/api/mcp/auth_callback`" ([authentication](https://claude.com/docs/connectors/building/authentication)) | Taken from Claude's client metadata document, which lists it; only `claude.ai` and `chatgpt.com` clients are accepted (code: `internal/connector/authorize.go`) |
@@ -107,7 +113,7 @@ directory connectors"
 **In Claude.** As a maintainer on the demo server:
 
 1. In claude.ai, **Customize → Connectors → Add custom connector**, URL
-   `https://edge.onaether.dev/mcp`, no advanced settings.
+   `https://edge.cloudfield.ai/mcp`, no advanced settings.
 2. **Connect**, sign in at the edge, pick the demo server, **Allow** with
    both scopes.
 3. Check the connector shows **Connected** and all 26 tools appear under
@@ -124,10 +130,10 @@ test, run this on a machine no one else uses (`ps` shows the token in the
 Inspector's arguments), and revoke the connector when done:
 
 ```sh
-url=https://edge.onaether.dev/mcp
+url=https://edge.cloudfield.ai/mcp
 curl -si -X POST "$url" -H 'content-type: application/json' -d '{}' | grep -i www-authenticate
-curl -s https://edge.onaether.dev/.well-known/oauth-protected-resource/mcp
-curl -s https://edge.onaether.dev/.well-known/oauth-authorization-server/mcp
+curl -s https://edge.cloudfield.ai/.well-known/oauth-protected-resource/mcp
+curl -s https://edge.cloudfield.ai/.well-known/oauth-authorization-server/mcp
 
 verifier=$(openssl rand -base64 48 | tr -d '=+/\n' | cut -c1-64)
 challenge=$(printf %s "$verifier" | openssl dgst -sha256 -binary | openssl base64 | tr '+/' '-_' | tr -d '=\n')
@@ -238,7 +244,7 @@ data practices or endpoints.
 ## External prerequisites
 
 Nothing here is submitted or approved. "Merged" is origin/main; "deployed" is
-what `edge.onaether.dev` serves.
+what the project edge serves, checked at `edge.onaether.dev` on 2026-10-26.
 
 | Item | Merged | Deployed | Submitted | Approved |
 | --- | --- | --- | --- | --- |
@@ -249,7 +255,7 @@ what `edge.onaether.dev` serves.
 | Privacy policy hosted at a public URL | Draft in [legal/](legal/privacy-connectors.md) | No | No | No |
 | Terms hosted at a public URL | Draft in [legal/](legal/terms-connectors.md) | No | No | No |
 | Demo server with sample data | n/a | No | n/a | n/a |
-| Reviewer account that needs no email code | Built in Cloudfield; not enabled on edge.onaether.dev: `aether-edge serve --reviewer-account-file` | No | No | No |
+| Reviewer account that needs no email code | Built in Cloudfield; not enabled on the project edge: `aether-edge serve --reviewer-account-file` | No | No | No |
 | Claude Code loopback redirects | No | No | n/a | n/a |
 | Live test from claude.ai through Anthropic's egress `160.79.104.0/21` | n/a | Not run | n/a | n/a |
 | Owner accepts the seven acknowledgments | n/a | n/a | No | No |
