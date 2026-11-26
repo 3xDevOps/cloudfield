@@ -41,7 +41,7 @@ func (s *Service) deviceByToken(ctx context.Context, token string) (Client, int6
 	if !edgeproto.ValidToken(token) {
 		return Client{}, 0, edgeproto.RefusalTokenRevoked
 	}
-	d, err := s.store.UseDevice(ctx, edgeproto.HashToken(token), s.now())
+	d, err := s.store.UseDevice(ctx, edgeproto.HashToken(token), s.signinOrigin(ctx), s.now())
 	if errors.Is(err, edgestore.ErrNotFound) {
 		return Client{}, 0, edgeproto.RefusalTokenRevoked
 	}
@@ -135,9 +135,10 @@ func (s *Service) AdmitClaim(ctx context.Context, serverID string, account edgep
 }
 
 // ServerConnected records the name and access policy an enrolled server
-// announced and returns its state for edgeproto.Ready, or
+// announced, the relay origin it enrolled at and the build it reported,
+// and returns its state for edgeproto.Ready, or
 // edgeproto.RefusalServerBlocked for a server id the operator blocked.
-func (s *Service) ServerConnected(ctx context.Context, serverID, name string, policy edgeproto.AccessPolicy) (string, error) {
+func (s *Service) ServerConnected(ctx context.Context, serverID, name string, policy edgeproto.AccessPolicy, origin, agentVersion string) (string, error) {
 	blocked, err := s.store.ServerBlocked(ctx, serverID)
 	if err != nil {
 		return "", err
@@ -145,7 +146,7 @@ func (s *Service) ServerConnected(ctx context.Context, serverID, name string, po
 	if blocked {
 		return "", edgeproto.RefusalServerBlocked
 	}
-	claimed, err := s.store.EnrollServer(ctx, serverID, name, policy)
+	claimed, err := s.store.EnrollServer(ctx, serverID, name, policy, s.enrollment(origin, agentVersion))
 	if err != nil {
 		return "", err
 	}
@@ -181,15 +182,26 @@ func ownerRefusal(err error) error {
 }
 
 // RecordClaim records owner as the owner of serverID after the server
-// reported that owner's claim connection presented its claim code; name
-// and policy are from its hello. It records nothing, and fails with an
+// reported that owner's claim connection presented its claim code; name,
+// policy and agentVersion are from its hello, and origin the relay
+// origin it enrolled at. It records nothing, and fails with an
 // edgeproto.Refusal, when the server or the account is blocked, the
 // account no longer exists, or the server has an owner.
-func (s *Service) RecordClaim(ctx context.Context, serverID, name string, policy edgeproto.AccessPolicy, owner edgeproto.Account) error {
+func (s *Service) RecordClaim(ctx context.Context, serverID, name string, policy edgeproto.AccessPolicy, owner edgeproto.Account, origin, agentVersion string) error {
 	if !edgeproto.ValidServerID(serverID) {
 		return fmt.Errorf("edge: record claim: invalid server id %q", serverID)
 	}
-	return ownerRefusal(s.store.RecordClaim(ctx, serverID, name, policy, edgeproto.AccountPrincipal(owner), s.now()))
+	return ownerRefusal(s.store.RecordClaim(ctx, serverID, name, policy, edgeproto.AccountPrincipal(owner),
+		s.enrollment(origin, agentVersion), s.now()))
+}
+
+// enrollment is what the store records of an enrollment at origin now:
+// nothing before a recording run started (StartRecording).
+func (s *Service) enrollment(origin, agentVersion string) edgestore.Enrollment {
+	if !s.recording.Load() {
+		return edgestore.Enrollment{}
+	}
+	return edgestore.Enrollment{RelayOrigin: origin, AgentVersion: agentVersion, At: s.now()}
 }
 
 // TransferOwner records owner as the owner of the claimed server

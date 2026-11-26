@@ -40,6 +40,7 @@ var commands = map[string]func(args []string) error{
 	"healthcheck": func(args []string) error { return healthcheck(args, envname.Getenv, os.Stdout) },
 	"servers":     func(args []string) error { return servers(args, envname.Getenv, os.Stdout) },
 	"accounts":    func(args []string) error { return accounts(args, envname.Getenv, os.Stdout) },
+	"retiring":    func(args []string) error { return retiring(args, envname.Getenv, os.Stdout) },
 	"schema":      func(args []string) error { return schemaCmd(args, envname.Getenv, os.Stdout) },
 	"backup":      func(args []string) error { return backupCmd(args, envname.Getenv, os.Stdout, os.Stderr) },
 	"restore":     func(args []string) error { return restoreCmd(args, envname.Getenv, os.Stdout) },
@@ -90,6 +91,7 @@ commands:
   healthcheck    exit 0 when the edge on this machine answers (--ready: is ready), 1 with the reason
   servers        list, remove, block and unblock servers
   accounts       list, block, unblock and delete accounts
+  retiring       who the edge last saw on each origin pair: retiring [--origin <relay origin>] [--json]
   schema         print the database's schema version and compat floor [--json]
   backup         copy the database while the edge runs: backup [--with-key] <file|dir|->
   restore        replace the database of a stopped edge: restore [--key <file>] <file>
@@ -161,7 +163,8 @@ func serve(args []string) (err error) {
 		return fmt.Errorf("metrics listener: %w", err)
 	}
 
-	var public net.Listener
+	var public, edgeLn net.Listener
+	var serveEdge func() error
 	switch {
 	case o.devListen != "":
 		var ln net.Listener
@@ -169,7 +172,7 @@ func serve(args []string) (err error) {
 			return fmt.Errorf("development listener: %w", err)
 		}
 		slog.Warn("aether-edge: development mode: plain HTTP, no certificates", "listen", ln.Addr())
-		go func() { errc <- listener.serve("edge", web, ln) }()
+		edgeLn, serveEdge = ln, func() error { return listener.serve("edge", web, ln) }
 	case o.proxyListen != "":
 		var ln net.Listener
 		if ln, err = net.Listen("tcp", o.proxyListen); err != nil {
@@ -182,7 +185,7 @@ func serve(args []string) (err error) {
 		}
 		slog.Info("aether-edge: behind a reverse proxy: plain HTTP, client addresses from "+relay.HeaderForwardedFor,
 			"listen", ln.Addr(), "proxies", proxies)
-		go func() { errc <- listener.serve("edge", web, ln) }()
+		edgeLn, serveEdge = ln, func() error { return listener.serve("edge", web, ln) }
 	default:
 		tlsConfig := edgeTLS(o)
 		if public, err = net.Listen("tcp", o.listen); errors.Is(err, fs.ErrPermission) {
@@ -191,8 +194,15 @@ func serve(args []string) (err error) {
 		} else if err != nil {
 			return fmt.Errorf("public listener: %w", err)
 		}
-		go func() { errc <- listener.serve("edge", web, tls.NewListener(rl.Listener(public), tlsConfig)) }()
+		edgeLn, serveEdge = public, func() error { return listener.serve("edge", web, tls.NewListener(rl.Listener(public), tlsConfig)) }
 	}
+	// Recording begins with the listeners bound and before the first
+	// request, so every request it records falls in a recorded run, and a
+	// start that fails to bind records no period.
+	if err = svc.StartRecording(context.Background()); err != nil {
+		return errors.Join(err, edgeLn.Close(), metricsLn.Close())
+	}
+	go func() { errc <- serveEdge() }()
 	// The metrics listener serves /healthz, so it answers only once the
 	// edge's own listener is up.
 	go func() { errc <- serveHTTP("metrics", metrics, metricsLn) }()

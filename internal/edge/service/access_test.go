@@ -177,14 +177,14 @@ func TestOwnershipComesFromServerReports(t *testing.T) {
 	owner := edgeproto.Account{Provider: edgeproto.ProviderGitHub, Subject: "1", Login: "owner"}
 	heir := edgeproto.Account{Provider: edgeproto.ProviderGitHub, Subject: "2", Login: "heir"}
 
-	if err := h.svc.RecordClaim(ctx, id, "workstation", edgeproto.PolicyAccount, owner); !errors.Is(err, refusalNoOwnerAccount) {
+	if err := h.svc.RecordClaim(ctx, id, "workstation", edgeproto.PolicyAccount, owner, testRelay, "v1.0.0"); !errors.Is(err, refusalNoOwnerAccount) {
 		t.Fatalf("claim by an account the edge does not hold: %v", err)
 	}
 	h.claim(t, id, "workstation", owner)
 	if _, err := h.svc.store.SignIn(ctx, heir, h.clock.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.svc.RecordClaim(ctx, id, "workstation", edgeproto.PolicyAccount, heir); !errors.Is(err, edgeproto.RefusalClaimed) {
+	if err := h.svc.RecordClaim(ctx, id, "workstation", edgeproto.PolicyAccount, heir, testRelay, "v1.0.0"); !errors.Is(err, edgeproto.RefusalClaimed) {
 		t.Fatalf("second claim: %v", err)
 	}
 	if err := h.svc.TransferOwner(ctx, id, edgeproto.Principal{Type: edgeproto.PrincipalAccount,
@@ -206,7 +206,7 @@ func TestOwnershipComesFromServerReports(t *testing.T) {
 	if err := h.svc.AdmitClaim(ctx, id, owner, netip.MustParseAddr("192.0.2.1")); err != nil {
 		t.Fatalf("claim connection to an ownerless server: %v", err)
 	}
-	if err := h.svc.RecordClaim(ctx, id, "workstation", edgeproto.PolicyApprovedDevices, owner); err != nil {
+	if err := h.svc.RecordClaim(ctx, id, "workstation", edgeproto.PolicyApprovedDevices, owner, testRelay, "v1.0.0"); err != nil {
 		t.Fatalf("claim of an ownerless server: %v", err)
 	}
 
@@ -214,10 +214,10 @@ func TestOwnershipComesFromServerReports(t *testing.T) {
 	if err := h.svc.store.BlockServer(ctx, blocked, h.clock.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.svc.RecordClaim(ctx, blocked, "blocked", edgeproto.PolicyAccount, owner); !errors.Is(err, edgeproto.RefusalServerBlocked) {
+	if err := h.svc.RecordClaim(ctx, blocked, "blocked", edgeproto.PolicyAccount, owner, testRelay, "v1.0.0"); !errors.Is(err, edgeproto.RefusalServerBlocked) {
 		t.Fatalf("claim of a blocked server: %v", err)
 	}
-	if _, err := h.svc.ServerConnected(ctx, blocked, "blocked", edgeproto.PolicyAccount); !errors.Is(err, edgeproto.RefusalServerBlocked) {
+	if _, err := h.svc.ServerConnected(ctx, blocked, "blocked", edgeproto.PolicyAccount, testRelay, "v1.0.0"); !errors.Is(err, edgeproto.RefusalServerBlocked) {
 		t.Fatalf("blocked server enrolls: %v", err)
 	}
 	if err := h.svc.DropOwner(ctx, testServerID(t)); !errors.Is(err, refusalNeverClaimed) {
@@ -369,7 +369,7 @@ func TestRemoveServer(t *testing.T) {
 	if len(h.link.unenroll) != 1 || h.link.unenroll[0] != mine {
 		t.Errorf("unenrolled = %v, want [%s]", h.link.unenroll, mine)
 	}
-	if state, err := h.svc.ServerConnected(ctx, mine, "mine", edgeproto.PolicyAccount); err != nil || state != edgeproto.StateUnclaimed {
+	if state, err := h.svc.ServerConnected(ctx, mine, "mine", edgeproto.PolicyAccount, testRelay, "v1.0.0"); err != nil || state != edgeproto.StateUnclaimed {
 		t.Errorf("removed server state = %q, %v", state, err)
 	}
 }

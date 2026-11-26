@@ -274,7 +274,7 @@ func TestServersList(t *testing.T) {
 		t.Errorf("servers = %+v, want [%+v]", servers.Servers, want)
 	}
 	// A later enrollment announces another policy.
-	if _, err := h.svc.ServerConnected(context.Background(), id, "renamed", edgeproto.PolicyApprovedDevices); err != nil {
+	if _, err := h.svc.ServerConnected(context.Background(), id, "renamed", edgeproto.PolicyApprovedDevices, testRelay, "v1.0.0"); err != nil {
 		t.Fatal(err)
 	}
 	h.apiCall(t, http.MethodGet, edgeproto.PathServers, tok.Token, nil, &servers)

@@ -15,7 +15,7 @@ import (
 // store. budget is the monthly egress budget in bytes, 0 for none.
 func (s *Service) RelayConfig(budget int64) relay.Config {
 	d := relayDirectory{s}
-	return relay.Config{
+	cfg := relay.Config{
 		Origin:       s.pairs[0].relay,
 		MoreOrigins:  s.moreRelayOrigins(),
 		EdgeKey:      s.key,
@@ -23,6 +23,10 @@ func (s *Service) RelayConfig(budget int64) relay.Config {
 		Egress:       d,
 		EgressBudget: budget,
 	}
+	if s.recordOrigins {
+		cfg.Connectors = d
+	}
+	return cfg
 }
 
 // relayDirectory is the Service as relay.Directory and relay.EgressStore.
@@ -57,8 +61,8 @@ func (d relayDirectory) AdmitClaim(ctx context.Context, serverID string, account
 	return d.s.store.RecordReach(ctx, serverID, account)
 }
 
-func (d relayDirectory) Enroll(ctx context.Context, serverID, name string, policy edgeproto.AccessPolicy) (bool, error) {
-	state, err := d.s.ServerConnected(ctx, serverID, name, policy)
+func (d relayDirectory) Enroll(ctx context.Context, serverID, name string, policy edgeproto.AccessPolicy, origin, agentVersion string) (bool, error) {
+	state, err := d.s.ServerConnected(ctx, serverID, name, policy, origin, agentVersion)
 	return state == edgeproto.StateClaimed, err
 }
 
@@ -70,8 +74,15 @@ func (d relayDirectory) Unenroll(ctx context.Context, serverID string) error {
 	return d.s.RemoveServer(ctx, serverID)
 }
 
-func (d relayDirectory) RecordClaim(ctx context.Context, serverID, name string, policy edgeproto.AccessPolicy, owner edgeproto.Account) error {
-	return d.s.RecordClaim(ctx, serverID, name, policy, owner)
+func (d relayDirectory) RecordClaim(ctx context.Context, serverID, name string, policy edgeproto.AccessPolicy, owner edgeproto.Account, origin, agentVersion string) error {
+	return d.s.RecordClaim(ctx, serverID, name, policy, owner, origin, agentVersion)
+}
+
+func (d relayDirectory) ConnectorUsed(ctx context.Context, serverID, origin string) error {
+	if !d.s.recording.Load() {
+		return nil
+	}
+	return d.s.store.UseConnector(ctx, serverID, origin, d.s.now())
 }
 
 func (d relayDirectory) TransferOwner(ctx context.Context, serverID string, owner edgeproto.Principal) error {
