@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
+	"fmt"
 	"net/http"
 	"path/filepath"
 	"slices"
@@ -148,4 +149,60 @@ func (h *harness) readyTo(t *testing.T, s *serverNode, from int) edgeproto.Ready
 		return ok && e.fromEdge && r.ServerID == s.id
 	})
 	return e.msg.(edgeproto.Ready)
+}
+
+// TestConnectorRequestRecordedAtItsRelayOrigin sends, on a two-pair edge
+// that records origins, a connector request through the second pair to a
+// server enrolled at the first that accepts it, and one the server
+// refuses: the store records the first at the second pair's relay origin
+// only, and not the second.
+func TestConnectorRequestRecordedAtItsRelayOrigin(t *testing.T) {
+	t.Parallel()
+	h := newHarness(t)
+	h.stopEdge()
+	h.pairB, h.recordOrigins = true, true
+	h.startEdge()
+	relayA, relayB := h.relayURL, h.relayB
+	accepts := h.newMCPServer(edgeproto.PolicyAccount, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("{}"))
+	}))
+	refuses := h.newServer(edgeproto.PolicyAccount)
+	al := h.login(alice)[0]
+	h.claimServer(al, accepts)
+	h.claimServer(al, refuses)
+	for _, s := range []*serverNode{refuses, accepts} {
+		resp, err := http.Post(relayB+edgeproto.MCPPath(s.id), "application/json", strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if s == accepts && resp.StatusCode != http.StatusOK {
+			t.Fatalf("connector request to the accepting server: %s", resp.Status)
+		}
+	}
+	path := filepath.Join(h.edgeDir, "edge.db")
+	counts := func() (map[string]int, error) {
+		rep, err := edgestore.ReadRetiring(context.Background(), path, time.Now())
+		if err != nil {
+			return nil, err
+		}
+		out := map[string]int{}
+		for _, r := range rep.Origins {
+			out[r.RelayOrigin] = r.ConnectorServers.Total
+		}
+		return out, nil
+	}
+	eventually(t, "the accepted request recorded at "+relayB, func() error {
+		got, err := counts()
+		if err == nil && got[relayB] == 0 {
+			err = fmt.Errorf("servers with connector requests by relay origin: %v", got)
+		}
+		return err
+	})
+	time.Sleep(200 * time.Millisecond)
+	got, err := counts()
+	if err != nil || got[relayA] != 0 || got[relayB] != 1 {
+		t.Fatalf("servers with connector requests by relay origin: %v, %v; want %s 1 and %s 0", got, err, relayB, relayA)
+	}
 }
