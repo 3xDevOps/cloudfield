@@ -168,18 +168,14 @@ func (s *Service) deleteRetiredSignIns(ctx context.Context, path string, retired
 			"people to move, such as 30 days: each token or session used in that time is recorded and kept. A shorter run lets this start pass "+
 			"but signs out everyone who did not use the edge during it", without.Devices, without.Sessions, without.Authorizations)
 	}
+	recorded, err := s.store.SignInOrigins(ctx)
+	if err != nil {
+		return err
+	}
 	var origins []string
-	for _, r := range retired {
-		origins = append(origins, r.SigninOrigin)
-	}
-	for _, o := range rep.Origins {
-		if signinHosts[originHost(o.SigninOrigin)] {
-			origins = append(origins, o.SigninOrigin)
-		}
-	}
-	for _, u := range rep.Unpaired {
-		if signinHosts[originHost(u.SigninOrigin)] {
-			origins = append(origins, u.SigninOrigin)
+	for _, o := range recorded {
+		if signinHosts[originHost(o)] {
+			origins = append(origins, o)
 		}
 	}
 	n, err := s.store.DeleteSignIns(ctx, origins)

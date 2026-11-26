@@ -511,13 +511,15 @@ func TestRetiredDeletesByHost(t *testing.T) {
 			SELECT ?, ?, account_id, 'key', 'label', created_at, created_at, ? FROM web_sessions LIMIT 1`, fmt.Sprintf("dev-%d", i), fmt.Sprintf("hash-%d", i), origin)
 		h.exec(t, `INSERT INTO web_sessions (id, token_hash, account_id, created_at, expires_at, signin_origin)
 			SELECT ?, ?, account_id, created_at, expires_at, ? FROM web_sessions LIMIT 1`, fmt.Sprintf("sess-%d", i), fmt.Sprintf("hash-%d", i), origin)
+		h.exec(t, `INSERT INTO device_authorizations (code_hash, user_code_hash, label, public_key, client_addr, status, created_at, expires_at, last_poll_at, signin_origin)
+			SELECT ?, ?, 'label', 'key', '127.0.0.1', 'pending', created_at, expires_at, 0, ? FROM web_sessions LIMIT 1`, fmt.Sprintf("code-%d", i), fmt.Sprintf("user-%d", i), origin)
 	}
 	if err := h.restartRetiring(t, Retired{SigninOrigin: testSignin2, RelayOrigin: testRelay2, Replacement: testRelay},
 		Retired{SigninOrigin: "https://[2001:db8::1]", RelayOrigin: "https://[2001:db8::2]", Replacement: testRelay}); err != nil {
 		t.Fatal(err)
 	}
-	for _, table := range []string{"devices", "web_sessions"} {
-		got := h.column(t, `SELECT group_concat(signin_origin, ' ') FROM (SELECT signin_origin FROM `+table+` WHERE id LIKE '%-%' ORDER BY signin_origin)`)
+	for table, key := range map[string]string{"devices": "id", "web_sessions": "id", "device_authorizations": "code_hash"} {
+		got := h.column(t, `SELECT group_concat(signin_origin, ' ') FROM (SELECT signin_origin FROM `+table+` WHERE `+key+` LIKE '%-%' ORDER BY signin_origin)`)
 		if want := testSignin + " https://signin2.example.test.other.example"; got != want {
 			t.Errorf("%s left: %q, want %q", table, got, want)
 		}

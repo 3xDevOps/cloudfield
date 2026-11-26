@@ -122,6 +122,30 @@ func (s *Store) DeleteSignIns(ctx context.Context, origins []string) (SignIns, e
 	return out, nil
 }
 
+// SignInOrigins lists the sign-in origins that device tokens, sessions and
+// device authorizations record.
+func (s *Store) SignInOrigins(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT signin_origin FROM devices WHERE signin_origin IS NOT NULL
+		UNION SELECT signin_origin FROM web_sessions WHERE signin_origin IS NOT NULL
+		UNION SELECT signin_origin FROM device_authorizations WHERE signin_origin IS NOT NULL ORDER BY 1`)
+	if err != nil {
+		return nil, fmt.Errorf("edgestore: list sign-in origins: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only
+	var out []string
+	for rows.Next() {
+		var o string
+		if err := rows.Scan(&o); err != nil {
+			return nil, fmt.Errorf("edgestore: list sign-in origins: %w", err)
+		}
+		out = append(out, o)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("edgestore: list sign-in origins: %w", err)
+	}
+	return out, nil
+}
+
 // SignInsWithoutOrigin counts the device tokens, sessions and device
 // authorizations that have no recorded sign-in origin.
 func (s *Store) SignInsWithoutOrigin(ctx context.Context) (SignIns, error) {
