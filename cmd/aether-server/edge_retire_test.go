@@ -83,12 +83,7 @@ func TestEdgeStatusRetiringRow(t *testing.T) {
 			}
 			writeJSON(t, filepath.Join(edgeagent.StateDir(dir), "status.json"), tt.status)
 			if tt.notices.Notices != nil {
-				var pinned struct{ ID string }
-				data, err := os.ReadFile(filepath.Join(edgeagent.StateDir(dir), "edge_key.json"))
-				if err != nil || json.Unmarshal(data, &pinned) != nil {
-					t.Fatalf("pin: %s, %v", data, err)
-				}
-				tt.notices.Received, tt.notices.ServerID, tt.notices.PinID = since, id, pinned.ID
+				tt.notices.Received, tt.notices.ServerID = since, id
 				writeJSON(t, noticesPath(dir, pub), tt.notices)
 			}
 			if tt.raw != "" {
@@ -96,6 +91,13 @@ func TestEdgeStatusRetiringRow(t *testing.T) {
 					t.Fatal(err)
 				}
 				if err := os.WriteFile(noticesPath(dir, pub), []byte(tt.raw), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.notices.Notices != nil || tt.raw != "" {
+				// The agent binds its notices to the pin file it verified them under.
+				pinLink := filepath.Join(filepath.Dir(noticesPath(dir, pub)), "notices.pin")
+				if err := os.Link(filepath.Join(edgeagent.StateDir(dir), "edge_key.json"), pinLink); err != nil {
 					t.Fatal(err)
 				}
 			}

@@ -142,8 +142,8 @@ func checkMove(e enrollment, origin, from, to string) error {
 	}
 	announced, canonical := announcedOrigins(e, origin)
 	if !slices.Contains(canonical, from) || !slices.Contains(canonical, to) {
-		return fmt.Errorf("the edge at %s announces the relay addresses %s; moving needs both %s and %s among them: the edge's operator adds the address first",
-			origin, strings.Join(announced, ", "), from, to)
+		return fmt.Errorf("the edge at %s announces %s; moving needs both %s and %s among them: the edge's operator adds the address first",
+			origin, announcedText(announced), from, to)
 	}
 	return nil
 }
@@ -158,8 +158,8 @@ func checkMoveFromRetired(e enrollment, refused *DialError, cmds Commands, from,
 			to, e.protocol, edgeproto.VersionRelayOrigin)
 	}
 	if announced, canonical := announcedOrigins(e, to); !slices.Contains(canonical, to) {
-		return fmt.Errorf("the edge at %s announces the relay addresses %s; moving needs %s among them: the edge's operator adds the address first",
-			to, strings.Join(announced, ", "), to)
+		return fmt.Errorf("the edge at %s announces %s; moving needs %s among them: the edge's operator adds the address first",
+			to, announcedText(announced), to)
 	}
 	n, ok := noticeFor(e.notices, from)
 	if !ok || n.State != edgeproto.NoticeRetired {
@@ -188,6 +188,13 @@ func announcedOrigins(e enrollment, origin string) (announced, canonical []strin
 		}
 	}
 	return announced, canonical
+}
+
+func announcedText(announced []string) string {
+	if len(announced) == 0 {
+		return "no relay address this server can use"
+	}
+	return "the relay addresses " + strings.Join(announced, ", ")
 }
 
 // manualMove is what an administrator does when edge move cannot prove

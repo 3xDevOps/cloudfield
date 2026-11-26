@@ -120,6 +120,13 @@ func TestMoveFromARetiredAddress(t *testing.T) {
 			notices: func(from, to string) edgeproto.Notices {
 				return edgeproto.Notices{{State: edgeproto.NoticeRetired, Origin: from, Replacement: to}}
 			}},
+		{name: "only unusable relay origins announced", announce: func(string, string) []string { return []string{"ftp://edge3.example.test"} },
+			notices: func(from, to string) edgeproto.Notices {
+				return edgeproto.Notices{{State: edgeproto.NoticeRetired, Origin: from, Replacement: to}}
+			}, want: func(_, to string) string {
+				return fmt.Sprintf("the edge at %s announces no relay address this server can use; moving needs %s among them: "+
+					"the edge's operator adds the address first", to, to)
+			}},
 		{name: "the target not announced", announce: func(string, string) []string { return []string{"https://edge3.example.test"} },
 			notices: func(from, to string) edgeproto.Notices {
 				return edgeproto.Notices{{State: edgeproto.NoticeRetired, Origin: from, Replacement: to}}
@@ -157,7 +164,7 @@ func TestMoveFromARetiredAddress(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := a.state.writeNotices(p, StoredNotices{ServerID: a.serverID, PinID: p.ID, Received: time.Now(), Notices: tc.stored(from, to)}); err != nil {
+				if err := a.state.writeNotices(p, StoredNotices{ServerID: a.serverID, Received: time.Now(), Notices: tc.stored(from, to)}); err != nil {
 					t.Fatal(err)
 				}
 				if got, err := a.Notices(); err != nil || len(got.Notices) == 0 {
@@ -498,7 +505,7 @@ func TestMoveFromRetiredNeedsAUsableList(t *testing.T) {
 	unusable := single
 	unusable.ready.RelayOrigins = []string{}
 	if err := checkMoveFromRetired(unusable, refused, testCommands, from, to); err == nil ||
-		err.Error() != "the edge at "+to+" announces the relay addresses ; moving needs "+to+" among them: the edge's operator adds the address first" {
+		err.Error() != "the edge at "+to+" announces no relay address this server can use; moving needs "+to+" among them: the edge's operator adds the address first" {
 		t.Errorf("only unusable origins: %v", err)
 	}
 }
