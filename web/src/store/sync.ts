@@ -1017,6 +1017,7 @@ export function connect(store: RootStore, client: Api = api): () => void {
       coalesce(store, 'devices', () => loadDevices(store, client).catch(ignore))
       coalesce(store, 'watches', () => loadWatches(store, client).catch(ignore))
       coalesce(store, 'merges', () => loadMergeProposals(store, client))
+      coalesce(store, 'edge', () => loadEdge(store, client).catch(ignore))
       return
     }
     clearTimeout(retryTimer)

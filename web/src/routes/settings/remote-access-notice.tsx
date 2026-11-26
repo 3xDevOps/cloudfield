@@ -10,9 +10,16 @@ import { useStore } from '@/store'
 
 /** How a super admin moves the server off the address `need` names. */
 export function EdgeMoveSteps({ need }: { need: EdgeNeed }) {
+  if (!need.move) {
+    return (
+      <p className="min-w-0 break-all text-ui-sm">
+        The edge names a new address that is not a plain https address, so no command is shown: {need.notice.replacement}. Confirm the new address with whoever runs the edge.
+      </p>
+    )
+  }
   return (
     <div className="flex min-w-0 flex-col gap-1.5 text-ui-sm">
-      <p>Move this server to {need.notice.replacement}, another address of the same edge. Run on the server's host:</p>
+      <p>Move this server to {need.notice.replacement}, another address of the same edge. Run on the server's host, adding the service's --config &lt;file&gt; if it has one:</p>
       <CopyableCommand command={need.move} wrap />
       <p>then apply it:</p>
       <CopyableCommand command={need.restart} />

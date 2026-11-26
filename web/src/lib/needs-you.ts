@@ -347,9 +347,20 @@ export interface EdgeNeed {
   /** The address the server is enrolled at and the notice is about. */
   edgeURL: string
   reason: string
-  /** Run on the server's host, then restart. */
-  move: string
+  /** Run on the server's host, then restart; no command when the replacement is not a bare https origin. */
+  move?: string
   restart: string
+}
+
+/** `value` is exactly `https://host[:port]`: nothing a shell or a reader could take for more. */
+export function bareOrigin(value: string): boolean {
+  if (/[^\x21-\x7e]/.test(value)) return false
+  try {
+    const url = new URL(value)
+    return url.protocol === 'https:' && !url.username && !url.password && url.origin === value
+  } catch {
+    return false
+  }
 }
 
 /** The notice the server's pinned edge key signed about the address the server is enrolled at. */
@@ -363,7 +374,7 @@ export function edgeNotice(edge: ServerEdge | null): EdgeNeed | undefined {
     notice,
     edgeURL: edge.edge_url,
     reason,
-    move: `sudo cloudfield-server edge move ${notice.replacement}`,
+    ...(bareOrigin(notice.replacement) && { move: `sudo cloudfield-server edge move ${notice.replacement}` }),
     restart: 'sudo systemctl restart aether-server',
   }
 }

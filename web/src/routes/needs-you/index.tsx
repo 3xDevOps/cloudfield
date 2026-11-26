@@ -39,6 +39,7 @@ import { EdgeNoticeCard } from '@/routes/settings/remote-access-notice'
 import { choicePlan } from '@/routes/run/request-options'
 import { FormFields, missingRequired } from '@/routes/run/session-form'
 import { useStore } from '@/store'
+import { loadEdge } from '@/store/edge'
 import type { RunRecord } from '@/store/runs'
 import { stateContextOf } from '@/store/selectors'
 import { stillWaiting, usePastDeadline } from '@/store/optimistic'
@@ -367,6 +368,7 @@ function NeedsYou() {
       return
     }
     void refreshAttention()
+    void loadEdge(useStore, api).catch(() => undefined)
   }, [supported, hydrated])
   const items = useAttention((s) => s.items)
   const error = useAttention((s) => s.error)

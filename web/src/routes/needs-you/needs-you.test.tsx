@@ -128,14 +128,16 @@ describe('a retiring edge address', () => {
   }
   const replacement = 'https://edge-new.example.test'
 
-  async function show(role: 'super_admin' | 'collaborator', notice?: { state: 'retiring' | 'retired'; replacement: string; date?: string }) {
+  async function show(role: 'super_admin' | 'collaborator', notice?: { state: 'retiring' | 'retired'; replacement: string; date?: string }, hydrated = notice) {
     atViewport(390, { pointer: 'coarse' })
     useStore.getState().setOnboarded(true)
     await hydrate(useStore, fakeApi({
       workspaceListFull: vi.fn(async () => [workspace]),
       serverInfo: vi.fn(async () => ({ ...serverInfo, member: { ...serverInfo.member, role } })),
-      serverEdge: vi.fn(async () => ({ ...edge, notice })),
+      serverEdge: vi.fn(async () => ({ ...edge, notice: hydrated })),
     }))
+    const read = vi.spyOn(api, 'serverEdge').mockResolvedValue({ ...edge, notice })
+    onTestFinished(() => read.mockRestore())
     useStore.setState({ runs: {}, route: { name: 'needs-you', params: {} }, capabilities: { gateway: 'local', methods: ['*'], ws: ['events'], local: [] } })
     const list = vi.spyOn(api, 'attentionList').mockResolvedValue({ items: [] })
     onTestFinished(() => {
@@ -149,10 +151,15 @@ describe('a retiring edge address', () => {
     await show('super_admin', { state: 'retiring', replacement, date: '2027-03-01' })
     const card = (await screen.findByText('https://edge-old.example.test is retiring on 2027-03-01')).closest('[data-edge-notice]') as HTMLElement
     expect(within(card).getByText(`sudo cloudfield-server edge move ${replacement}`)).toBeTruthy()
-    expect(within(card).getByText(`Move this server to ${replacement}, another address of the same edge. Run on the server's host:`)).toBeTruthy()
+    expect(within(card).getByText(`Move this server to ${replacement}, another address of the same edge. Run on the server's host, adding the service's --config <file> if it has one:`)).toBeTruthy()
     expect(screen.queryByText('Nothing needs you')).toBeNull()
     fireEvent.click(within(card).getByRole('button', { name: 'Remote access' }))
     expect(useStore.getState().route).toEqual({ name: 'settings', params: { section: 'edge' } })
+  })
+
+  it('reads server.edge again on entering, so a notice that arrived since shows', async () => {
+    await show('super_admin', { state: 'retiring', replacement }, undefined)
+    await screen.findByText('https://edge-old.example.test is retiring')
   })
 
   it('shows a retired address the same way', async () => {

