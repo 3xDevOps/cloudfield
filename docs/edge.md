@@ -1190,16 +1190,21 @@ or on the pair of `--origin <relay origin>`. On a database below schema 2 it
 prints that nothing is recorded yet. The edge records only while an option that
 retires a pair is set, then for every pair: each claimed server's relay origin,
 time and build at each enrollment or claim; each pending sign-in's, device
-token's and session's sign-in origin when it is issued, and for one issued
-earlier the origin it is next used at, on the API or through the relay, marked
-as first seen there; a connector request at most once an hour per server and
-relay origin, while the server is connected. Connector counts include requests
-that were refused or carried no valid token.
+token's and session's sign-in origin when it is issued; for a device token or
+session issued earlier, the origin it is next used at, on the API or through the
+relay, and for a device sign-in started earlier and completed while recording,
+the origin it completes at, each marked as first seen there; a connector request
+at most once an hour per server and relay origin, when a connected server is
+sent it. Connector counts include requests that were refused or carried no
+valid token. `--json` prints `"status": "not_recorded"` with the schema below
+schema 2, and `"status": "recorded"` with the report otherwise.
 
-The report starts with the start of the current recording period: a restart
-keeps it, but a stop of more than 10 minutes, an unclean stop or a run without
-the option starts a new one. An image rolled back during that time records
-nothing, and what it issued has no origin. Per pair the report lists the servers
+The report starts with the last known recording period: when it began, when the
+edge last started recording, and its last clean stop, if any since. A recording
+start more than 10 minutes after the last clean stop, or after an unclean stop,
+begins a new period. A shorter run without the option in between writes
+nothing, so the period does not show it, and neither does an image rolled back
+in that time; what such a run issued has no origin. Per pair the report lists the servers
 last enrolled or claimed at its relay origin (id, name, owner login, build,
 when; a name or build that holds a non-printing character is printed quoted),
 and counts by last use within 1, 7 and 30 days and in all: device tokens issued
@@ -1212,13 +1217,14 @@ names any more are listed apart, then what has no origin yet. An empty list is
 not proof that nobody is left: an unclaimed server has no row
 (`aether_edge_servers_by_origin` counts the connected ones), and anything not
 used since recording began has no origin. `--json` prints the same as
-`{"at", "recording_since", "origins": [{"relay_origin", "signin_origin",
-"signin_counted_under", "servers": [{"id", "name", "owner_login", "build",
+`{"at", "status", "recording_since", "recording_started", "recording_stopped",
+"origins": [{"relay_origin", "signin_origin", "signin_counted_under", "servers": [{"id", "name", "owner_login", "build",
 "last_seen_at"}], "device_tokens", "device_tokens_seen", "session_accounts",
 "device_only_accounts", "connector_servers"}], "unpaired": [{"signin_origin",
 "device_tokens", "device_tokens_seen", "session_accounts",
 "device_only_accounts"}], "unknown": {"device_tokens", "session_accounts",
-"servers"}}`, each count as `{"1d", "7d", "30d", "total"}`.
+"servers"}}`, each count as `{"1d", "7d", "30d", "total"}`, with non-printing
+characters escaped as `\uXXXX`.
 
 `/healthz` (`aether-edge healthcheck`) is liveness. `/readyz` (`aether-edge
 healthcheck --ready`) answers 200 when the database answers within a second, the

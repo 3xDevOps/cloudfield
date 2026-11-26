@@ -167,6 +167,7 @@ func TestEnrollmentRecordsOrigin(t *testing.T) {
 // without RecordOrigins: nothing that schema 2 adds is written.
 func TestOriginsNotRecordedByDefault(t *testing.T) {
 	h := newPairsHarness(t)
+	h.exec(t, `INSERT INTO origin_recording (id, since, started_at, stopped_at) VALUES (1, 1, 2, 3)`)
 	h.setGitHubUser(1, "owner", "owner@example.test", true)
 	b := h.browser(t)
 	b.origin = testSignin2
@@ -204,7 +205,6 @@ func TestOriginsNotRecordedByDefault(t *testing.T) {
 	}
 	for _, q := range []string{
 		`SELECT COUNT(*) FROM origin_pairs`,
-		`SELECT COUNT(*) FROM origin_recording`,
 		`SELECT COUNT(*) FROM device_authorizations WHERE signin_origin IS NOT NULL`,
 		`SELECT COUNT(*) FROM connector_use`,
 		`SELECT COUNT(*) FROM servers WHERE relay_origin IS NOT NULL OR agent_version IS NOT NULL OR enrolled_at IS NOT NULL`,
@@ -221,8 +221,8 @@ func TestOriginsNotRecordedByDefault(t *testing.T) {
 	if err := h.svc.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if got := h.column(t, `SELECT COUNT(*) FROM origin_recording`); got != "0" {
-		t.Fatalf("closing an edge that does not record wrote %s recording rows", got)
+	if got := h.column(t, `SELECT since || ' ' || started_at || ' ' || stopped_at FROM origin_recording`); got != "1 2 3" {
+		t.Fatalf("an edge that does not record changed the recorded period to %s", got)
 	}
 }
 
@@ -258,5 +258,38 @@ func TestRedemptionAfterRecordingStops(t *testing.T) {
 	}
 	if got := h.column(t, `SELECT signin_origin FROM devices WHERE id = ?`, tok.Device.ID); got != "" {
 		t.Fatalf("device redeemed after recording stopped records %q", got)
+	}
+}
+
+// TestRedemptionAfterRecordingStarts starts a device sign-in while the
+// edge does not record origins and redeems it once it does, on the same
+// database: the device takes the redemption's pair, marked as seen.
+func TestRedemptionAfterRecordingStarts(t *testing.T) {
+	h := newHarness(t)
+	b := signedInBrowser(t, h)
+	start := startDevice(t, h)
+	b.post(t, "/device/confirm", url.Values{"user_code": {start.UserCode}, "decision": {"approve"}})
+	h.clock.Advance(pollInterval)
+	restarted, err := New(Config{DataDir: h.dataDir, SigninOrigin: testSignin, RelayOrigin: testRelay, GitHub: h.provider.app(),
+		Clock: h.clock.Now, RecordOrigins: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { restarted.Close() }) //nolint:errcheck // test cleanup
+	restarted.SetLink(h.link)
+	body, err := json.Marshal(edgeproto.DeviceTokenRequest{DeviceCode: start.DeviceCode})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, testSignin+edgeproto.PathDeviceToken, bytes.NewReader(body))
+	req.Header.Set(edgeproto.HeaderVersion, fmt.Sprint(edgeproto.Version))
+	rec := httptest.NewRecorder()
+	restarted.Handler().ServeHTTP(rec, req)
+	var tok edgeproto.DeviceTokenResponse
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &tok) != nil {
+		t.Fatalf("poll after the restart: %d %s", rec.Code, rec.Body)
+	}
+	if got := h.column(t, `SELECT signin_origin || ' ' || signin_origin_seen FROM devices WHERE id = ?`, tok.Device.ID); got != testSignin+" 1" {
+		t.Fatalf("device redeemed once recording began records %q, want %s seen", got, testSignin)
 	}
 }
