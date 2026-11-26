@@ -267,15 +267,16 @@ edge and connector. The hosted edge follows the stable channel, so this
 phase starts once the release that carries them is stable and promoted to
 the edge's `:stable` image.
 
-End of phase 2 (2026-11-26): the owner's server moved with `sudo
-aether-server edge move https://edge.cloudfield.ai` at 05:48 UTC, the
-first run against the real edge. It enrolled at `edge.cloudfield.ai` as an
+End of phase 2 (2026-11-26, as the owner's liaison reported it): the
+owner's server moved with `sudo aether-server edge move
+https://edge.cloudfield.ai` at 05:48 UTC, the first run against the real
+edge. It enrolled at `edge.cloudfield.ai` as an
 address of the same edge, with the same edge key and owner; only
 server.conf's `edge-url` line changed. Connector addresses are now under
 `edge.cloudfield.ai/mcp`, and a connector registered at the old address
-still answers. For about a second after the restart, `aether-server edge status`
-exits 3 with `disconnected since ...: server stopped`, so a script waits
-for exit 0.
+still answers. For about a second after the restart, `cloudfield-server
+edge status` exits 3 with `disconnected since ...: server stopped`, so a
+script waits for exit 0.
 
 ### Phase 3: the names people type
 
@@ -318,10 +319,12 @@ End of phase 4 (2026-11-26): the Go module path is
 linker's `-X` flags, the linter and CI read only the new path; a binary
 stamped through the old path would print `dev (unknown)`. Still written
 the old way, on purpose: `https://github.com/3xDevOps/Aether` links, which
-GitHub redirects and which the systemd unit text compares byte for byte,
+GitHub redirects, among them the systemd units' `Documentation=` lines
+that the server compares byte for byte and the edge image's source label;
+the promotion predicate type and the two-name signer checks (item 22);
 and `3xDevOps/Aether` repository names in test fixtures. A branch cut
 before 4983519d6 that changes Go files rebases with the lines posted on
-its pull request.
+its pull request on 2026-11-26 (#1128, #1129, #1131, #1133).
 
 ### Phase 5: names inside sessions
 
