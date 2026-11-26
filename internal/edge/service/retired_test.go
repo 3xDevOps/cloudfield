@@ -10,6 +10,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"slices"
 	"strings"
@@ -623,6 +624,38 @@ func TestRetiredOptionsStar(t *testing.T) {
 		_ = conn.Close()
 		if got := resp.Proto + " " + resp.Status; got != want {
 			t.Errorf("OPTIONS * on %s: %s, want %s", host, got, want)
+		}
+	}
+}
+
+// TestRetiredBehindProxy composes the handler with relay.Forwarded, as
+// --proxy-listen does: the proxy checks come first, and an admitted
+// request to a retired host gets 410.
+func TestRetiredBehindProxy(t *testing.T) {
+	h := newRetiredHarness(t)
+	rl, err := relay.New(t.Context(), h.svc.RelayConfig(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rl.Shutdown(context.Background()) })
+	for _, tt := range []struct {
+		name, peer, forwarded string
+		proxies               []netip.Prefix
+		want                  int
+	}{
+		{"from the proxy", "127.0.0.1:5000", "192.0.2.7", nil, http.StatusGone},
+		{"from the proxy without a client address", "127.0.0.1:5000", "", nil, http.StatusBadRequest},
+		{"from outside the trusted proxies", "198.51.100.1:5000", "192.0.2.7", []netip.Prefix{netip.MustParsePrefix("10.0.0.5/32")}, http.StatusForbidden},
+	} {
+		req := httptest.NewRequest(http.MethodGet, oldRelay+edgeproto.PathEdgeInfo, nil)
+		req.RemoteAddr = tt.peer
+		if tt.forwarded != "" {
+			req.Header.Set(relay.HeaderForwardedFor, tt.forwarded)
+		}
+		rec := httptest.NewRecorder()
+		rl.Forwarded(tt.proxies, h.svc.Handler()).ServeHTTP(rec, req)
+		if rec.Code != tt.want {
+			t.Errorf("%s: %d %s, want %d", tt.name, rec.Code, rec.Body, tt.want)
 		}
 	}
 }

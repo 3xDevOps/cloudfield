@@ -1231,7 +1231,10 @@ origin on the sign-in host and its relay origin on the relay host; on a join
 link it says to ask whoever sent the link for a new one. The page loads nothing,
 shows nothing of the request, and clears the edge's `__Host-` cookies on that
 host with `Max-Age=0`. Behind a reverse proxy, keep both hosts' `server` blocks
-and certificates until the pair is removed.
+and certificates until the pair is removed. The edge's own refusals of a
+connection come before the 410: too many open connections from one address
+(`429`), a request from the proxy without a client address (`400`), and with
+`--trusted-proxies` a request from another peer (`403`).
 
 Every `ready` carries, beside the retiring notices,
 `{"state": "retired", "origin": "https://<relay-host-1>", "replacement":
