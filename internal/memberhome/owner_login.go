@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"strings"
 	"syscall"
 	"time"
@@ -145,7 +146,7 @@ func anthropicProfileLogin(home *os.Root, dir string, now time.Time) (*OwnerLogi
 	if name == "" {
 		name = "default"
 	}
-	if !profileName.MatchString(name) {
+	if name != path.Base(name) || name == "." || name == ".." || len(name) > maxProfileName {
 		return nil, nil
 	}
 	config, err := readProfileFile(home, dir, "configs/"+name+".json", maxProfileBytes)
@@ -209,14 +210,23 @@ func readProfileFile(home *os.Root, dir, rel string, limit int64) ([]byte, error
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("%s: the active profile's file cannot be opened", where)
+		return nil, fmt.Errorf("%s: %w", where, withoutPath(err))
 	}
 	defer func() { _ = parent.Close() }()
 	data, err := readRegularFile(parent, leaf, limit)
 	if err != nil {
-		return nil, fmt.Errorf("%s: the active profile's file cannot be read", where)
+		return nil, fmt.Errorf("%s: %w", where, withoutPath(err))
 	}
 	return data, nil
+}
+
+// withoutPath is err without the file name it carries, which can hold a
+// profile name read from a file.
+func withoutPath(err error) error {
+	if pathErr := (*fs.PathError)(nil); errors.As(err, &pathErr) {
+		return fmt.Errorf("%s: %w", pathErr.Op, pathErr.Err)
+	}
+	return errors.New("it is not a single regular file within the size limit")
 }
 
 func loginDigest(parts ...string) string {

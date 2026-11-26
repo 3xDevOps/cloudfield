@@ -427,3 +427,53 @@ func TestTheDuplicateCheckFailsClosed(t *testing.T) {
 		t.Fatalf("sign-in with an unreadable login beside it: %v; want refused", err)
 	}
 }
+
+// A sign-in whose member was removed before its terminal opened recreates
+// neither a home nor a login directory.
+func TestASignInOfAMemberRemovedBeforeItStartsMakesNothing(t *testing.T) {
+	e := newSignInEnv(t)
+	other := &domain.Member{DisplayName: "Bo", PublicKey: testPublicKey(t), Color: "#3cb44b", Role: domain.RoleCollaborator}
+	if err := e.db.CreateMember(t.Context(), other); err != nil {
+		t.Fatal(err)
+	}
+	id, err := e.sched.BeginLoginSignIn(t.Context(), other.ID, "claude", "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.db.DeleteMember(t.Context(), other.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.sched.StartLoginSignIn(t.Context(), other.ID, id, 80, 24); err == nil {
+		t.Fatal("the sign-in of a removed member started")
+	}
+	dir, _ := e.logins.Path(other.ID, "claude", id)
+	if _, err := os.Lstat(dir); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the removed member's login directory: %v; want none", err)
+	}
+	if has, err := e.cfg.Homes.HasHome(other.ID); err != nil || has {
+		t.Fatalf("the removed member's home exists = %v, %v; want none", has, err)
+	}
+}
+
+// A login row whose directory is gone holds nothing to duplicate, so it
+// does not block the next sign-in.
+func TestALoginWithoutADirectoryDoesNotBlockASignIn(t *testing.T) {
+	e := newSignInEnv(t)
+	save := func(email string) func(runtime.Spec) {
+		return func(spec runtime.Spec) {
+			dir, _ := e.logins.Path(e.member.ID, "claude", domain.LoginID(strings.TrimPrefix(spec.Name, "aether-login-")))
+			writeHomeFile(t, dir, memberhome.LoginCredentials, addedLoginFile)
+			writeHomeFile(t, dir, memberhome.LoginConfig, cachedAccount(email, "org-"+email))
+		}
+	}
+	first, _, err := e.signIn(t, "work", save("ada@work.example.test"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.logins.Remove(e.member.ID, "claude", first); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.signIn(t, "spare", save("ada@spare.example.test")); err != nil {
+		t.Fatalf("a sign-in beside a login whose directory is gone: %v", err)
+	}
+}

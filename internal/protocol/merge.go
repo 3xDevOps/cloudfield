@@ -103,6 +103,9 @@ type MergeMember struct {
 	// owns and was granted; the survivor takes both.
 	OwnedWorkspaces   []string `json:"owned_workspaces"`
 	GrantedWorkspaces []string `json:"granted_workspaces"`
+	// Logins are the member's added logins; the absorbed member's move to
+	// the survivor, off for shares.
+	Logins []MergeLogin `json:"logins"`
 }
 
 // MergeChoice is the outcome of keeping one member's settings: that member
@@ -212,4 +215,11 @@ type MemberMergeAcceptResult struct {
 // MemberMergeListResult is the result of member.merge.list, newest first.
 type MemberMergeListResult struct {
 	Merges []MemberMerge `json:"merges"`
+}
+
+// MergeLogin is an added login a merge would move.
+type MergeLogin struct {
+	Agent string `json:"agent"`
+	ID    string `json:"id"`
+	Name  string `json:"name"`
 }

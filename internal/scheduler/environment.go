@@ -335,8 +335,10 @@ func (s *Scheduler) BuildEnvironmentPlan(ctx context.Context, run *domain.Run, w
 			}
 			inheritCacheEnvironment(env, inherited)
 		}
-		if err := s.cfg.Homes.ProtectLegacyCaches(member.ID, explicitHomeCachePaths(env, home)); err != nil {
-			return nil, fmt.Errorf("scheduler: protect explicit home caches: %w", err)
+		if purpose != EnvironmentPurposeLogin {
+			if err := s.cfg.Homes.ProtectLegacyCaches(member.ID, explicitHomeCachePaths(env, home)); err != nil {
+				return nil, fmt.Errorf("scheduler: protect explicit home caches: %w", err)
+			}
 		}
 		applyCacheEnvironment(env)
 		applyInstallEnvironment(env, home)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path"
@@ -45,15 +46,17 @@ type loginSignIn struct {
 	id     domain.LoginID
 	name   string
 	// started: its terminal opened; created: this attempt made the login's
-	// directory, which only it may remove.
-	started bool
-	created bool
-	ended   bool
-	timer   *time.Timer
-	holder  *terminalSupervision
-	done    chan struct{}
-	login   domain.AgentLogin
-	err     error
+	// directory, which only it may remove; cancelled: its member is being
+	// removed or merged, so it must not provision further.
+	started   bool
+	created   bool
+	cancelled bool
+	ended     bool
+	timer     *time.Timer
+	holder    *terminalSupervision
+	done      chan struct{}
+	login     domain.AgentLogin
+	err       error
 }
 
 func loginSignInCreationKey(id domain.LoginID) string { return "login-signin-" + string(id) }
@@ -196,6 +199,11 @@ func (s *Scheduler) startSignInContainer(ctx context.Context, sign *loginSignIn,
 	s.mu.Lock()
 	sign.created = true
 	s.mu.Unlock()
+	// A removal that finished while the directory was made must not leave a
+	// home or login recreated for a member who is gone.
+	if err = s.signInGoes(ctx, sign); err != nil {
+		return nil, err
+	}
 	run := &domain.Run{MemberID: member.ID, AccountMemberID: member.ID, AccountLogin: sign.id, Harness: sign.agent}
 	plan, err := s.BuildEnvironmentPlan(ctx, run, nil, member, profile, EnvironmentPurposeLogin)
 	if err != nil {
@@ -216,6 +224,9 @@ func (s *Scheduler) startSignInContainer(ctx context.Context, sign *loginSignIn,
 	if err != nil {
 		return nil, err
 	}
+	if err = s.signInGoes(ctx, sign); err != nil {
+		return nil, err
+	}
 	cid, err := s.createContainer(ctx, runtime.Spec{
 		Name:             "aether-login-" + string(sign.id),
 		Image:            plan.Image,
@@ -232,10 +243,28 @@ func (s *Scheduler) startSignInContainer(ctx context.Context, sign *loginSignIn,
 	if err != nil {
 		return nil, err
 	}
-	if err := s.cfg.Runtime.Start(ctx, cid); err != nil {
+	if err = s.cfg.Runtime.Start(ctx, cid); err != nil {
+		return nil, err
+	}
+	if err = s.signInGoes(ctx, sign); err != nil {
 		return nil, err
 	}
 	return s.cfg.Runtime.ExecTTY(ctx, cid, strings.Fields(profile.LoginCommand), plan.Home, cols, rows)
+}
+
+// signInGoes refuses to provision further a sign-in whose member is gone or
+// being removed or merged.
+func (s *Scheduler) signInGoes(ctx context.Context, sign *loginSignIn) error {
+	s.mu.Lock()
+	cancelled := sign.cancelled
+	s.mu.Unlock()
+	if cancelled {
+		return errors.New("the member was removed or merged; nothing was added")
+	}
+	if _, err := s.cfg.Store.GetMember(ctx, sign.member); err != nil {
+		return fmt.Errorf("the member was removed or merged; nothing was added: %w", err)
+	}
+	return nil
 }
 
 // cleanUpSignIn removes a sign-in's container, retrying a failed removal,
@@ -303,6 +332,13 @@ func (s *Scheduler) endLoginSignIn(sign *loginSignIn, login domain.AgentLogin, e
 	sign.login, sign.err = login, err
 	close(sign.done)
 	s.mu.Unlock()
+	// A merge that committed while the login was added gave its row to the
+	// survivor and left the directory, which its reconcile skipped then.
+	if err == nil {
+		if reconcileErr := s.ReconcileLogins(context.Background(), sign.member); reconcileErr != nil {
+			slog.Warn("scheduler: reconcile the logins of a finished sign-in", "login", sign.id, "error", reconcileErr)
+		}
+	}
 	time.AfterFunc(loginSignInKept, func() {
 		s.mu.Lock()
 		if s.loginSignIns[sign.id] == sign {
@@ -328,7 +364,7 @@ func (s *Scheduler) EndLoginSignIns(ctx context.Context, member domain.MemberID)
 	for _, sign := range running {
 		s.mu.Lock()
 		started := sign.started
-		sign.started = true
+		sign.started, sign.cancelled = true, true
 		s.mu.Unlock()
 		if !started {
 			s.endLoginSignIn(sign, domain.AgentLogin{}, errors.New("the member was removed or merged; nothing was added"))
@@ -378,6 +414,10 @@ func (s *Scheduler) settleLoginSignIn(ctx context.Context, sign *loginSignIn) (d
 			continue
 		}
 		other, otherErr := s.cfg.Logins.Identity(sign.member, sign.agent, l.ID)
+		if errors.Is(otherErr, fs.ErrNotExist) {
+			// A row whose directory is gone holds no login to duplicate.
+			continue
+		}
 		if otherErr != nil {
 			return domain.AgentLogin{}, unread(l.Name, otherErr)
 		}
@@ -525,15 +565,6 @@ func (s *Scheduler) addedLoginMounts(run *domain.Run, profile harness.Profile, h
 			return nil, fmt.Errorf("scheduler: %w", err)
 		}
 		mounts = append(mounts, runtime.Mount{HostPath: dir, Subpath: memberhome.LoginBackups, ContainerPath: path.Join(home, backups)})
-		// The home's own configuration, where a default login's API key
-		// lives, is read-only to the sign-in, which writes the copy instead.
-		if _, statErr := s.cfg.Homes.LoginPathIsDir(member, profile.AccountConfig.File); statErr == nil {
-			homePath, pathErr := s.cfg.Homes.Path(member)
-			if pathErr != nil {
-				return nil, fmt.Errorf("scheduler: %w", pathErr)
-			}
-			mounts = append(mounts, runtime.Mount{HostPath: homePath, Subpath: profile.AccountConfig.File, ContainerPath: path.Join(home, profile.AccountConfig.File), ReadOnly: true})
-		}
 	}
 	config, err := s.accountConfigMounts(configDir, member, profile, home)
 	if err != nil {

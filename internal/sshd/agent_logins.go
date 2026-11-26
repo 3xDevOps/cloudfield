@@ -190,7 +190,7 @@ func (s *Server) agentLoginRename(ctx context.Context, member domain.MemberID, r
 	return struct{}{}, nil
 }
 
-// agentLoginRemove deletes an added login's row and then its directory,
+// agentLoginRemove deletes an added login's directory and then its row,
 // under the launch authorization lock. It does not sign the login out at
 // Anthropic.
 func (s *Server) agentLoginRemove(ctx context.Context, member domain.MemberID, raw json.RawMessage) (any, *protocol.Error) {

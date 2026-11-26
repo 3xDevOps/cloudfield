@@ -241,3 +241,14 @@ func TestALoginIDBelongsToOneMember(t *testing.T) {
 		t.Fatalf("Bo taking Ada's login id: %v; want ErrConflict", err)
 	}
 }
+
+// A login added before one that was removed meanwhile goes last.
+func TestAddBeforeARemovedLoginGoesLast(t *testing.T) {
+	db := openTestDB(t)
+	ada := mustCreateMember(t, db)
+	work := addLogin(t, db, ada.ID, "work")
+	l, err := db.AddAgentLogin(context.Background(), domain.AgentLogin{MemberID: ada.ID, Agent: "claude", ID: "lgn-late000000", Name: "late", CreatedAt: time.Now()}, "lgn-gone000000")
+	if err != nil || l.Position <= work.Position {
+		t.Fatalf("added = %+v, %v; want it after work", l, err)
+	}
+}
