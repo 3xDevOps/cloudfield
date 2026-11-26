@@ -72,7 +72,7 @@ func TestNoticesAreVerifiedAndStored(t *testing.T) {
 		t.Fatalf("notices of a later enrollment: %+v, %v; want %+v, not on first use", got, err, list)
 	}
 	stop()
-	if got, err = OpenState(cfg.DataDir).Notices(); err != nil || !slices.Equal(got.Notices, list) {
+	if got, err = OpenState(cfg.DataDir).Notices(a.serverID); err != nil || !slices.Equal(got.Notices, list) {
 		t.Fatalf("notices after the server stopped: %+v, %v", got, err)
 	}
 
@@ -122,69 +122,129 @@ func TestNoticesAreVerifiedAndStored(t *testing.T) {
 	}
 }
 
-// TestNoticesDoNotSurviveAPin checks that pinning a key, even the same
-// one again, forgets its stored notices.
+const noticeServerID = "7ozstx3hvprfzhna3cakjwhdnw"
+
+func testStored() StoredNotices {
+	return StoredNotices{ServerID: noticeServerID, Received: time.Now().UTC(),
+		Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: "https://edge.example.test", Replacement: "https://edge2.example.test"}}}
+}
+
+// pinNow pins key and returns the pin a handshake would read.
+func pinNow(t *testing.T, s *State, key ed25519.PublicKey) pin {
+	t.Helper()
+	if err := s.Pin(key); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.pinned()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func noticesFileExists(t *testing.T, s *State, key ed25519.PublicKey) bool {
+	t.Helper()
+	_, err := os.Stat(s.path(keyDirFile(key, noticesFile)))
+	return err == nil
+}
+
+// TestNoticesDoNotSurviveAPin checks that pinning a key, the same one
+// again or another, deletes the notices of the key it replaces and of the
+// key it pins.
 func TestNoticesDoNotSurviveAPin(t *testing.T) {
 	s := OpenState(t.TempDir())
 	key, _, _ := ed25519.GenerateKey(rand.Reader)
 	other, _, _ := ed25519.GenerateKey(rand.Reader)
-	n := StoredNotices{Received: time.Now().UTC(), Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: "https://edge.example.test", Replacement: "https://edge2.example.test"}}}
+	n := testStored()
 	for _, again := range []ed25519.PublicKey{key, other} {
-		if err := s.Pin(key); err != nil {
+		if err := s.writeNotices(pinNow(t, s, key), n); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.writeNotices(key, n); err != nil {
-			t.Fatal(err)
-		}
-		if got, err := s.Notices(); err != nil || !slices.Equal(got.Notices, n.Notices) {
+		if got, err := s.Notices(noticeServerID); err != nil || !slices.Equal(got.Notices, n.Notices) {
 			t.Fatalf("stored notices %+v, %v", got, err)
 		}
-		if err := s.Pin(again); err != nil {
-			t.Fatal(err)
+		pinNow(t, s, again)
+		if noticesFileExists(t, s, key) {
+			t.Fatalf("pinning %x left the notices of the key it replaced", again[:4])
 		}
-		if err := s.Pin(key); err != nil {
-			t.Fatal(err)
-		}
-		if got, err := s.Notices(); err != nil || got.Notices != nil {
+		pinNow(t, s, key)
+		if got, err := s.Notices(noticeServerID); err != nil || got.Notices != nil {
 			t.Fatalf("notices after pinning %x: %+v, %v", again[:4], got, err)
 		}
 	}
 }
 
-// TestNoticesOfAnEarlierPinAreNotWritten writes, after another key was
-// pinned, notices verified under the key before: the new key's store
-// stays empty, and so does the first key's once pinned again.
+// TestNoticesOfAnEarlierPinAreNotWritten writes notices verified under a
+// pin after the state was pinned again: nothing is written, the first
+// key's file does not come back even once that key is pinned again, and
+// a late empty write does not delete the current pin's notices.
 func TestNoticesOfAnEarlierPinAreNotWritten(t *testing.T) {
 	s := OpenState(t.TempDir())
 	a, _, _ := ed25519.GenerateKey(rand.Reader)
 	b, _, _ := ed25519.GenerateKey(rand.Reader)
-	n := StoredNotices{Received: time.Now().UTC(), Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: "https://edge.example.test", Replacement: "https://edge2.example.test"}}}
-	if err := s.Pin(b); err != nil {
+	n := testStored()
+
+	verified := pinNow(t, s, a)
+	pinNow(t, s, b)
+	pinNow(t, s, a)
+	if err := s.writeNotices(verified, n); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.writeNotices(b, n); err != nil {
+	if noticesFileExists(t, s, a) {
+		t.Fatal("a late write under an earlier pin of the same key stored its notices")
+	}
+
+	stale := pinNow(t, s, a)
+	current := pinNow(t, s, b)
+	if err := s.writeNotices(current, n); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Pin(a); err != nil {
+	if err := s.writeNotices(stale, StoredNotices{ServerID: noticeServerID, Received: n.Received}); err != nil {
 		t.Fatal(err)
 	}
-	// The enrollment verified under a; edge trust pins b before its write.
-	if err := s.Pin(b); err != nil {
+	if err := s.writeNotices(stale, n); err != nil {
 		t.Fatal(err)
 	}
-	for _, late := range []StoredNotices{n, {Received: n.Received}} {
-		if err := s.writeNotices(a, late); err != nil {
-			t.Fatal(err)
-		}
-		if got, err := s.Notices(); err != nil || got.Notices != nil {
-			t.Fatalf("store of the key pinned since, after a late write of %d notices: %+v, %v", len(late.Notices), got, err)
-		}
+	if noticesFileExists(t, s, a) {
+		t.Fatal("a late write under an earlier pin stored notices for its key")
 	}
-	if err := s.Pin(a); err != nil {
+	if got, err := s.Notices(noticeServerID); err != nil || !slices.Equal(got.Notices, n.Notices) {
+		t.Fatalf("a late write under an earlier pin changed the current pin's notices: %+v, %v", got, err)
+	}
+}
+
+// TestNoticesOfAnotherServerID checks that notices stored for one server
+// id are none for another, as after the host key changed.
+func TestNoticesOfAnotherServerID(t *testing.T) {
+	s := OpenState(t.TempDir())
+	key, _, _ := ed25519.GenerateKey(rand.Reader)
+	if err := s.writeNotices(pinNow(t, s, key), testStored()); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := s.Notices(); err != nil || got.Notices != nil {
-		t.Fatalf("store of the first key pinned again: %+v, %v", got, err)
+	if got, err := s.Notices("aaaaaaaaaaaaaaaaaaaaaaaaaa"); err != nil || got.Notices != nil {
+		t.Fatalf("notices for another server id: %+v, %v", got, err)
+	}
+}
+
+// TestFirstPinKeepsAKeyPinnedMeanwhile pins a key with pinFirst after
+// another was pinned since the caller found none: it is refused, and the
+// pinned key stays.
+func TestFirstPinKeepsAKeyPinnedMeanwhile(t *testing.T) {
+	s := OpenState(t.TempDir())
+	trusted, _, _ := ed25519.GenerateKey(rand.Reader)
+	presented, _, _ := ed25519.GenerateKey(rand.Reader)
+	first, err := s.pinFirst(trusted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, err := s.pinFirst(trusted); err != nil || again.ID != first.ID || !again.Key.Equal(first.Key) {
+		t.Fatalf("pinFirst of the pinned key: %+v, %v; want the same pin", again, err)
+	}
+	if _, err := s.pinFirst(presented); err == nil {
+		t.Fatal("pinFirst replaced a pinned key")
+	}
+	if got, err := s.PinnedKey(); err != nil || !got.Equal(trusted) {
+		t.Fatalf("pinned key %x, %v; want the one pinned first", got, err)
 	}
 }
 

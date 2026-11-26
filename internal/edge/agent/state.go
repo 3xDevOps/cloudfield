@@ -2,7 +2,9 @@ package edgeagent
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -122,27 +124,35 @@ func (c ClaimCode) Usable(now time.Time) bool {
 	return c.Hash != "" && c.AttemptsLeft > 0 && !now.After(c.ExpiresAt)
 }
 
+// pin is the pinned edge key. ID is new at every Pin, so a write that
+// read one pin cannot land after the key was pinned again; a pin written
+// before IDs existed has none.
 type pin struct {
 	Key ed25519.PublicKey `json:"key"`
+	ID  string            `json:"id,omitempty"`
+}
+
+// pinned returns the pin, with a nil Key when none is pinned.
+func (s *State) pinned() (pin, error) {
+	var p pin
+	ok, err := s.read(pinFile, &p)
+	if err != nil || !ok {
+		return pin{}, err
+	}
+	if len(p.Key) != ed25519.PublicKeySize {
+		return pin{}, fmt.Errorf("edgeagent: %s holds a %d-byte key, want %d", s.path(pinFile), len(p.Key), ed25519.PublicKeySize)
+	}
+	return p, nil
 }
 
 // PinnedKey returns the pinned edge key, nil when none is pinned.
 func (s *State) PinnedKey() (ed25519.PublicKey, error) {
-	var p pin
-	ok, err := s.read(pinFile, &p)
-	if err != nil || !ok {
-		return nil, err
-	}
-	if len(p.Key) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("edgeagent: %s holds a %d-byte key, want %d", s.path(pinFile), len(p.Key), ed25519.PublicKeySize)
-	}
-	return p.Key, nil
+	p, err := s.pinned()
+	return p.Key, err
 }
 
-// Pin replaces the pinned edge key. It first deletes the notices stored
-// for key, so none survives a change of pin; those of the key it replaces
-// stay on disk and are read again only if that key is pinned, which
-// deletes them first.
+// Pin replaces the pinned edge key. It deletes the notices stored for the
+// key it replaces and for key, so none survives a change of pin.
 func (s *State) Pin(key ed25519.PublicKey) error {
 	if len(key) != ed25519.PublicKeySize {
 		return fmt.Errorf("edgeagent: edge key is %d bytes, want %d", len(key), ed25519.PublicKeySize)
@@ -152,10 +162,49 @@ func (s *State) Pin(key ed25519.PublicKey) error {
 		return err
 	}
 	defer unlock()
-	if err := s.remove(keyDirFile(key, noticesFile)); err != nil {
-		return err
+	_, err = s.pinLocked(key)
+	return err
+}
+
+// pinFirst pins key when no key is pinned and returns the pin; when key
+// already is pinned it returns that pin. Another pinned key, as when
+// `edge trust` pinned one since the caller looked, is refused.
+func (s *State) pinFirst(key ed25519.PublicKey) (pin, error) {
+	unlock, err := s.lock()
+	if err != nil {
+		return pin{}, err
 	}
-	return s.write(pinFile, pin{Key: key})
+	defer unlock()
+	cur, err := s.pinned()
+	switch {
+	case err != nil:
+		return pin{}, err
+	case cur.Key == nil:
+		return s.pinLocked(key)
+	case !cur.Key.Equal(key):
+		return pin{}, pinMismatch(cur.Key, key)
+	}
+	return cur, nil
+}
+
+// pinLocked pins key under the state lock.
+func (s *State) pinLocked(key ed25519.PublicKey) (pin, error) {
+	cur, err := s.pinned()
+	if err != nil {
+		return pin{}, err
+	}
+	for _, k := range []ed25519.PublicKey{cur.Key, key} {
+		if k == nil {
+			continue
+		}
+		if err := s.remove(keyDirFile(k, noticesFile)); err != nil {
+			return pin{}, err
+		}
+	}
+	id := make([]byte, 16)
+	_, _ = rand.Read(id) // crypto/rand.Read never returns an error.
+	p := pin{Key: key, ID: hex.EncodeToString(id)}
+	return p, s.write(pinFile, p)
 }
 
 // refuseEarlierPins refuses a first pin while an edge key pinned by a
@@ -271,41 +320,47 @@ func (s *State) writeEdgeState(serverID, state string) error {
 }
 
 // StoredNotices are the notices of the latest enrollment at the edge
-// holding the pinned key, verified against it, and when they came.
-// FirstUse is set when that enrollment pinned the key, so they are
-// trusted as the pin is: on first use, for display only.
+// holding the pinned key, verified against it for the server ServerID,
+// and when they came. FirstUse is set when that enrollment pinned the
+// key, so they are trusted as the pin is: on first use, for display only.
 type StoredNotices struct {
+	ServerID string             `json:"server_id"`
 	Received time.Time          `json:"received"`
 	FirstUse bool               `json:"first_use,omitempty"`
 	Notices  []edgeproto.Notice `json:"notices"`
 }
 
-// Notices returns the stored notices of the pinned key, none when the
-// latest enrollment had none or no key is pinned.
-func (s *State) Notices() (StoredNotices, error) {
+// Notices returns the stored notices of the pinned key for the server
+// serverID, none when the latest enrollment had none, no key is pinned,
+// or they were verified for another server id, which is this server
+// before its host key changed.
+func (s *State) Notices(serverID string) (StoredNotices, error) {
 	name, err := s.keyFile(noticesFile)
 	if err != nil || name == "" {
 		return StoredNotices{}, err
 	}
 	var n StoredNotices
-	_, err = s.read(name, &n)
-	return n, err
+	if _, err = s.read(name, &n); err != nil || n.ServerID != serverID {
+		return StoredNotices{}, err
+	}
+	return n, nil
 }
 
-// writeNotices replaces the stored notices of key, which verified them,
-// with n, and forgets them when n holds none. It writes nothing once
-// another key is pinned: the notices are not that key's.
-func (s *State) writeNotices(key ed25519.PublicKey, n StoredNotices) error {
+// writeNotices replaces the stored notices of p's key, which verified
+// them, with n, and forgets them when n holds none. It writes nothing
+// once the key was pinned again, or another key pinned, since p was
+// read: the notices are not that pin's.
+func (s *State) writeNotices(p pin, n StoredNotices) error {
 	unlock, err := s.lock()
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	pinned, err := s.PinnedKey()
-	if err != nil || !pinned.Equal(key) {
+	cur, err := s.pinned()
+	if err != nil || cur.ID != p.ID || !cur.Key.Equal(p.Key) {
 		return err
 	}
-	name := keyDirFile(key, noticesFile)
+	name := keyDirFile(p.Key, noticesFile)
 	if len(n.Notices) == 0 {
 		return s.remove(name)
 	}

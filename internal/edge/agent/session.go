@@ -162,6 +162,8 @@ type enrollment struct {
 	// pinned is set when this enrollment pinned the edge key, so its
 	// notices are trusted on first use, as the pin is.
 	pinned bool
+	// pin is the pin the notices were verified under.
+	pin pin
 }
 
 // enroll dials the control endpoint at origin and answers the challenge.
@@ -232,23 +234,23 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn, origin string)
 	if ready.ServerID != a.serverID {
 		return enrollment{}, fmt.Errorf("edge enrolled server %s, this server is %s", ready.ServerID, a.serverID)
 	}
-	pinned, err := a.state.PinnedKey()
+	cur, err := a.state.pinned()
 	if err != nil {
 		return enrollment{}, err
 	}
-	e := enrollment{ready: ready, protocol: protocol}
+	e := enrollment{ready: ready, protocol: protocol, pin: cur}
 	switch {
-	case pinned == nil:
-		if err := a.state.refuseEarlierPins(); err != nil {
+	case cur.Key == nil:
+		if err = a.state.refuseEarlierPins(); err != nil {
 			return enrollment{}, err
 		}
-		if err := a.state.Pin(ready.EdgeKey); err != nil {
+		if e.pin, err = a.state.pinFirst(ready.EdgeKey); err != nil {
 			return enrollment{}, err
 		}
 		e.pinned = true
 		slog.Info("edge: pinned edge key", "edge", origin, "fingerprint", edgeproto.EdgeKeyFingerprint(ready.EdgeKey))
-	case !bytes.Equal(pinned, ready.EdgeKey):
-		return enrollment{}, pinMismatch(pinned, ready.EdgeKey)
+	case !bytes.Equal(cur.Key, ready.EdgeKey):
+		return enrollment{}, pinMismatch(cur.Key, ready.EdgeKey)
 	}
 	if edgeproto.VerifyNotices(ready.EdgeKey, a.serverID, origin, noticeNonce, ready.Notices, ready.NoticesSignature) == nil {
 		e.notices = ready.Notices
@@ -278,7 +280,7 @@ func (a *Agent) session(ctx context.Context) (time.Duration, error) {
 	if err = a.setEdgeState(ready.State); err != nil {
 		return time.Since(start), err
 	}
-	if err = a.state.writeNotices(ready.EdgeKey, StoredNotices{Received: start, FirstUse: e.pinned, Notices: e.notices}); err != nil {
+	if err = a.state.writeNotices(e.pin, StoredNotices{ServerID: a.serverID, Received: start, FirstUse: e.pinned, Notices: e.notices}); err != nil {
 		return time.Since(start), err
 	}
 	if err = a.reconcileOwner(s, ready.State); err != nil {
@@ -433,7 +435,7 @@ func (a *Agent) RelayOrigins() []string {
 
 // Notices are the verified notices of the server's latest enrollment at
 // the edge holding the pinned key.
-func (a *Agent) Notices() (StoredNotices, error) { return a.state.Notices() }
+func (a *Agent) Notices() (StoredNotices, error) { return a.state.Notices(a.serverID) }
 
 // EdgeKey is the key of the edge the control connection is enrolled
 // with, nil while there is none.
