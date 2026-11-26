@@ -503,3 +503,71 @@ it('retries a move for its own app and still takes a replacement that appeared b
   await vi.advanceTimersByTimeAsync(3000)
   await waitFor(() => expect(client.connectorRevoke).toHaveBeenCalledWith('con-7k2m9q4xbd'))
 })
+
+const oldUniversal = 'https://relay-old.example.test/mcp'
+const newUniversal = 'https://relay-new.example.test/mcp'
+const newOwn = 'https://relay-new.example.test/mcp/srv'
+const movedEdge = { url: newUniversal, universal_url: newUniversal, universal_urls: [oldUniversal, newUniversal], sign_in: true }
+
+it('shows no address notice for a connector the edge says nothing about', async () => {
+  show({ connectorList: vi.fn().mockResolvedValue({ connectors: [{ ...claude, resource: newUniversal }], ...movedEdge }) })
+  expect(await screen.findByText('Universal URL')).toBeTruthy()
+  expect(screen.queryByText(/This address is retir/)).toBeNull()
+  expect(screen.queryByRole('button', { name: /to the new address/ })).toBeNull()
+})
+
+it('moves a connector at a retiring address to the new one, skipping one added again at the old address', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true, now: Date.parse('2026-11-26T12:00:00Z') })
+  const old: Connector = { ...claude, resource: oldUniversal, notice: { state: 'retiring', url: newUniversal, date: '2027-03-01' } }
+  const again: Connector = { ...old, id: 'con-oldagain01', last_used_at: '2026-11-26T12:00:01Z' }
+  const added: Connector = { ...claude, id: 'con-newaddr001', resource: newUniversal, last_used_at: '2026-11-26T12:00:05Z' }
+  const client = show({
+    connectorList: vi.fn().mockResolvedValueOnce({ connectors: [old], ...movedEdge }).mockResolvedValueOnce({ connectors: [old], ...movedEdge })
+      .mockResolvedValueOnce({ connectors: [old, again], ...movedEdge })
+      .mockResolvedValue({ connectors: [old, again, added], ...movedEdge }),
+  })
+  const callout = (await screen.findByText('This address is retiring on 2027-03-01')).closest('[data-slot=callout]')
+  expect(callout?.textContent).toContain(`Add it again at ${newUniversal}, check it works, remove the old Aether connector in Claude, then revoke this one. Move revokes it for you once the new one calls Cloudfield.`)
+  expect(screen.getByText('Universal URL')).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Move Claude (claude.ai) to the universal URL' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: 'Move Claude (claude.ai) to the new address' }))
+  const dialog = await screen.findByRole('alertdialog')
+  expect(within(dialog).getByText('Move Claude (claude.ai) to the new address?')).toBeTruthy()
+  expect(dialog.textContent).toContain(`Add Aether again in Claude with ${newUniversal} and sign in. Once the new connection calls Cloudfield, this connector is revoked; remove the old Aether connector in Claude too.`)
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Move' }))
+  const panel = await screen.findByRole('tabpanel', { name: 'Claude' })
+  expect(await within(panel).findByText(newUniversal)).toBeTruthy()
+  expect(within(panel).getByText(/No code is needed/)).toBeTruthy()
+  await vi.advanceTimersByTimeAsync(3000)
+  expect(client.connectorRevoke).not.toHaveBeenCalled()
+  await vi.advanceTimersByTimeAsync(3000)
+  await waitFor(() => expect(client.connectorRevoke).toHaveBeenCalledWith(old.id))
+  expect(client.connectorRevoke).toHaveBeenCalledTimes(1)
+  expect(client.connectorCode).not.toHaveBeenCalled()
+})
+
+it('reconnects a connector at a retiring own URL at the same path on the new address, with a code', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true, now: Date.parse('2026-11-26T12:00:00Z') })
+  const old: Connector = { ...chatgpt, resource: 'https://relay-old.example.test/mcp/srv', notice: { state: 'retiring', url: newOwn } }
+  const client = show({
+    connectorList: vi.fn().mockResolvedValue({ connectors: [old], url: newOwn, universal_url: newUniversal, universal_urls: [oldUniversal, newUniversal] }),
+    connectorCode: vi.fn(async () => ({ url: newOwn, code: 'ABCD-EFGH', expires_at: '2026-11-26T12:10:00Z' })),
+  })
+  const callout = (await screen.findByText('This address is retiring')).closest('[data-slot=callout]')
+  expect(callout?.textContent).toContain(`Add it again at ${newOwn}, check it works`)
+  fireEvent.click(screen.getByRole('button', { name: 'Reconnect ChatGPT (chatgpt.com)' }))
+  fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Reconnect' }))
+  expect(await screen.findByText('ABCD-EFGH')).toBeTruthy()
+  const panel = screen.getByRole('tabpanel', { name: 'ChatGPT' })
+  expect(within(panel).getByText(newOwn)).toBeTruthy()
+  expect(client.connectorRevoke).not.toHaveBeenCalled()
+})
+
+it('tells the member to revoke a connector at a retired address, with no move', async () => {
+  const old: Connector = { ...claude, resource: oldUniversal, notice: { state: 'retired', url: newUniversal } }
+  show({ connectorList: vi.fn().mockResolvedValue({ connectors: [old], ...movedEdge, universal_urls: [newUniversal] }) })
+  const callout = (await screen.findByText('This address is retired')).closest('[data-slot=callout]')
+  expect(callout?.textContent).toContain('This connector no longer works. Revoke it, and remove the old Aether connector in Claude.')
+  expect(screen.queryByRole('button', { name: /^Move Claude/ })).toBeNull()
+  expect(screen.getByRole('button', { name: 'Revoke Claude (claude.ai)' })).toBeTruthy()
+})

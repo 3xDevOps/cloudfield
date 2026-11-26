@@ -151,6 +151,10 @@ const atUniversal = (info: ListInfo, url?: string | null) =>
 // page, the same sign-in, and a connector added at one counts at another.
 const sameURL = (info: ListInfo, a?: string, b?: string) => a === b || (atUniversal(info, a) && atUniversal(info, b))
 
+// Where a move or reconnect of c adds its replacement.
+const moveTo = (info: ListInfo, c: Connector, kind: Target['kind']) =>
+  c.notice?.url ?? (kind === 'move' ? info.universal_url : c.resource ?? info.url)
+
 const signsInAt = (info: ListInfo, url?: string) => !!info.sign_in && (!url || sameURL(info, url, info.url))
 
 function Setup({
@@ -316,7 +320,9 @@ function Connectors({ client }: { client: Api }) {
       }
       // A replacement that called Aether wins over one whose tokens may
       // never have arrived.
-      const candidates = next.filter((c) => !attempt.known.has(c.id) && sameURL(attempt.info, c.resource, attempt.into) &&
+      // One at a retiring address replaces nothing, though its universal
+      // URL is the same place.
+      const candidates = next.filter((c) => !attempt.known.has(c.id) && !c.notice && sameURL(attempt.info, c.resource, attempt.into) &&
         (old.client_id ? c.client_id === old.client_id : c.redirect_host === old.redirect_host))
       let added: Connector | undefined
       try {
@@ -397,9 +403,10 @@ function Connectors({ client }: { client: Api }) {
     setConnectors(fresh)
     setListError(null)
     // A move goes to the universal URL; a reconnect stays where its
-    // connector was added. At the server's own URL the page asks for a
-    // code even when the universal URL takes the sign-in.
-    const into = next?.kind === 'move' ? rest.universal_url : next?.replaces.resource ?? rest.url
+    // connector was added. Either goes to the address the edge names
+    // instead of a retiring or retired one. At the server's own URL the
+    // page asks for a code even when the universal URL takes the sign-in.
+    const into = next ? moveTo(rest, next.replaces, next.kind) : rest.url
     const at = into && into !== rest.url ? into : undefined
     const signIn = signsInAt(rest, at)
     const code = signIn ? null : await client.connectorCode()
@@ -520,7 +527,7 @@ function Connectors({ client }: { client: Api }) {
       )}
       {connectors?.map((c) => {
         const universal = atUniversal(info, c.resource)
-        const movable = !!c.resource && !!info.universal_url && !universal && info.url === info.universal_url
+        const movable = !c.notice && !!c.resource && !!info.universal_url && !universal && info.url === info.universal_url
         return (
           <SettingRow
             key={c.id}
@@ -541,13 +548,27 @@ function Connectors({ client }: { client: Api }) {
             )}
           >
             {movable && <Button size="sm" variant="secondary" className="self-start" aria-label={`Move ${label(c)} to the universal URL`} disabled={busy || target !== null} onClick={() => setConfirming({ connector: c, action: 'move' })}>Move to the universal URL</Button>}
+            {c.notice?.state === 'retiring' && (
+              <Callout
+                tone="needs-you"
+                title={`This address is retiring${c.notice.date ? ` on ${c.notice.date}` : ''}`}
+                actions={<Button size="sm" variant="secondary" aria-label={`Move ${label(c)} to the new address`} disabled={busy || target !== null} onClick={() => setConfirming({ connector: c, action: 'move' })}>Move to the new address</Button>}
+              >
+                Add it again at <Code>{c.notice.url}</Code>, check it works, remove the old Aether connector in {c.client_name}, then revoke this one. Move revokes it for you once the new one calls Cloudfield.
+              </Callout>
+            )}
+            {c.notice?.state === 'retired' && (
+              <Callout tone="failed" title="This address is retired">
+                This connector no longer works. Revoke it, and remove the old Aether connector in {c.client_name}.
+              </Callout>
+            )}
           </SettingRow>
         )
       })}
       {confirming?.action === 'move' && (
         <Confirm
-          title={`Move ${label(confirming.connector)} to the universal URL?`}
-          description={`Add Aether again in ${confirming.connector.client_name} with ${info.universal_url}${info.sign_in ? ' and sign in' : ' and paste the code'}. Once the new connection calls Cloudfield, this connector is revoked; remove the old Aether connector in ${confirming.connector.client_name} too.`}
+          title={`Move ${label(confirming.connector)} to ${confirming.connector.notice ? 'the new address' : 'the universal URL'}?`}
+          description={`Add Aether again in ${confirming.connector.client_name} with ${moveTo(info, confirming.connector, 'move')}${signsInAt(info, moveTo(info, confirming.connector, 'move')) ? ' and sign in' : ' and paste the code'}. Once the new connection calls Cloudfield, this connector is revoked; remove the old Aether connector in ${confirming.connector.client_name} too.`}
           action="Move"
           pending="Starting…"
           onConfirm={async () => {

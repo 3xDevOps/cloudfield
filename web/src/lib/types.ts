@@ -2341,6 +2341,20 @@ export interface Connector {
   scopes: string[]
   created_at: string
   last_used_at?: string
+  /** Set when the server's edge says the address of `resource` is retiring or retired. */
+  notice?: ConnectorNotice
+}
+
+/**
+ * What the server's edge says about the address a connector was added at:
+ * `retiring` still works, `retired` no longer does. `url` is the
+ * connector's path at the address the edge names instead; `date`,
+ * YYYY-MM-DD, is text for people.
+ */
+export interface ConnectorNotice {
+  state: 'retiring' | 'retired'
+  url: string
+  date?: string
 }
 
 /**
@@ -2349,7 +2363,8 @@ export interface Connector {
  * which differs from `url` until the member links a GitHub account;
  * `universal_urls` that URL at every address of the edge, `universal_url`
  * among them; `sign_in` means the consent page takes the edge sign-in,
- * no code.
+ * no code. `url` and `universal_url` avoid an address the edge names as
+ * retiring or retired when it takes connectors at the replacement.
  */
 export interface ConnectorList {
   connectors: Connector[]
