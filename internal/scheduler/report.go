@@ -258,9 +258,11 @@ func (s *Scheduler) applyAgentReportIf(ctx context.Context, run domain.RunID, re
 	case agentstatus.Idle:
 		// An Enhanced run's session forwards its own turn ends. A session's
 		// end is none: it follows a stop, or a turn cut off with no report.
+		// Neither is the idle report of a turn that was cut off.
 		// forwardTurnEnd reads the store, so it runs off s.mu, for the turn
 		// that ends here.
-		if entry.launchMode == domain.LaunchTUI && turnEnd(execution) && priorReport.State == agentstatus.Working && !report.SessionEnd {
+		if entry.launchMode == domain.LaunchTUI && turnEnd(execution) && priorReport.State == agentstatus.Working &&
+			!report.SessionEnd && !report.Interrupted {
 			go s.forwardTurnEnd(entry, entry.turnStartedAt, cmp.Or(entry.heldMessage, report.LastMessage))
 		}
 		entry.stopHeld, entry.heldMessage = false, ""

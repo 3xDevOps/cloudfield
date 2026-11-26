@@ -94,6 +94,9 @@ type Report struct {
 	// SessionEnd marks the Idle report of a session's end. It ends no turn:
 	// Esc cuts one off with no stop.
 	SessionEnd bool `json:"-"`
+	// Interrupted marks the Idle report of a turn that was cut off, which is
+	// not forwarded to a subsession's parent.
+	Interrupted bool `json:"-"`
 }
 
 const ReporterCommand = coordtransport.BinaryPath

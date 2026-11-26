@@ -247,7 +247,7 @@ func TestStandardCodexKeepsAQuestionThroughAMailTurn(t *testing.T) {
 }
 
 // A Standard Codex subsession's finished turn forwards the last agent
-// message of its thread.
+// message of its thread. A turn cut off with Esc forwards nothing.
 func TestStandardCodexChildForwardsItsLastMessage(t *testing.T) {
 	shortProvisionalGrace(t)
 	e, rt, coord := newCodexEnv(t)
@@ -256,10 +256,21 @@ func TestStandardCodexChildForwardsItsLastMessage(t *testing.T) {
 	srv, _ := rt.bridge(t, 1)
 	dialed(t, srv, 1)
 	srv.StartThread("thread-1", false, "")
-	if _, err := e.sched.Inject(t.Context(), child.ID, e.member.ID, domain.AgentPrompt{Text: "say pong"}, false, nil); err != nil {
-		t.Fatal(err)
+	prompt := func() {
+		t.Helper()
+		if _, err := e.sched.Inject(t.Context(), child.ID, e.member.ID, domain.AgentPrompt{Text: "say pong"}, false, nil); err != nil {
+			t.Fatal(err)
+		}
+		e.waitAgentWorking(t, child.ID)
 	}
-	e.waitAgentWorking(t, child.ID)
+	prompt()
+	srv.EndTurn("thread-1", "interrupted", "looking")
+	e.waitStoreStatus(t, child.ID, domain.RunNeedsAttention)
+	time.Sleep(provisionalGrace * 3 / 2)
+	if calls := coord.provisionalReports(); len(calls) != 0 {
+		t.Fatalf("provisional reports %+v after a turn cut off, want none", calls)
+	}
+	prompt()
 	srv.EndTurn("thread-1", "completed", "pong")
 	waitFor(t, "the thread's last message at the parent", func() bool {
 		calls := coord.provisionalReports()

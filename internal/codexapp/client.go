@@ -213,10 +213,10 @@ func (c *Client) runningTurn(ctx context.Context, thread string) string {
 	return turns.Data[0].ID
 }
 
-// LastMessage is the last agent message of thread's last turn. It is empty
-// unless that turn completed: one cut off with Esc leaves the thread idle
-// too.
-func (c *Client) LastMessage(ctx context.Context, thread string) (string, error) {
+// LastMessage is the last agent message of thread's last turn, empty unless
+// that turn completed. interrupted says the turn was cut off, as with Esc,
+// which leaves the thread idle too.
+func (c *Client) LastMessage(ctx context.Context, thread string) (message string, interrupted bool, err error) {
 	turns, err := acp.SendRequest[struct {
 		Data []struct {
 			Status string `json:"status"`
@@ -227,17 +227,21 @@ func (c *Client) LastMessage(ctx context.Context, thread string) (string, error)
 		} `json:"data"`
 	}](c.conn, ctx, "thread/turns/list", map[string]any{"threadId": thread, "limit": 1, "itemsView": "summary"})
 	if err != nil {
-		return "", fmt.Errorf("codex app-server: list the last turn of thread %s: %w", thread, err)
+		return "", false, fmt.Errorf("codex app-server: list the last turn of thread %s: %w", thread, err)
 	}
-	if len(turns.Data) == 0 || turns.Data[0].Status != "completed" {
-		return "", nil
+	if len(turns.Data) == 0 {
+		return "", false, nil
 	}
-	for _, item := range slices.Backward(turns.Data[0].Items) {
+	last := turns.Data[0]
+	if last.Status != "completed" {
+		return "", last.Status == "interrupted", nil
+	}
+	for _, item := range slices.Backward(last.Items) {
 		if item.Type == "agentMessage" {
-			return item.Text, nil
+			return item.Text, false, nil
 		}
 	}
-	return "", nil
+	return "", false, nil
 }
 
 func (c *Client) read(ctx context.Context, id string) (thread, error) {

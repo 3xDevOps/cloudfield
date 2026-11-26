@@ -172,24 +172,28 @@ func TestSendStartsATurnOrSteersTheRunningOne(t *testing.T) {
 }
 
 // The last message is a completed turn's last agent message: a turn cut off
-// with Esc has none, and a list the app-server refuses is an error. It is
-// read from the thread asked for, whichever one the terminal shows.
+// with Esc has none and reads as interrupted, and a list the app-server
+// refuses is an error. It is read from the thread asked for, whichever one
+// the terminal shows.
 func TestLastMessageNeedsACompletedTurn(t *testing.T) {
 	srv := codexmock.New()
 	c, _ := dial(t, srv, "")
 	srv.StartThread("main", false, "")
 	waitThread(t, c)
 	ctx := t.Context()
-	if got, err := c.LastMessage(ctx, "main"); err == nil {
+	if got, _, err := c.LastMessage(ctx, "main"); err == nil {
 		t.Fatalf("last message before any turn = %q, want the app-server's refusal", got)
 	}
-	for _, tc := range []struct{ status, want string }{{"interrupted", ""}, {"completed", "done"}} {
+	for _, tc := range []struct {
+		status, want string
+		interrupted  bool
+	}{{"interrupted", "", true}, {"completed", "done", false}} {
 		if err := c.Send(ctx, "go"); err != nil {
 			t.Fatal(err)
 		}
 		srv.EndTurn("main", tc.status, "looking", "done")
-		if got, err := c.LastMessage(ctx, "main"); err != nil || got != tc.want {
-			t.Fatalf("last message of a turn that %s = %q, %v; want %q", tc.status, got, err, tc.want)
+		if got, interrupted, err := c.LastMessage(ctx, "main"); err != nil || got != tc.want || interrupted != tc.interrupted {
+			t.Fatalf("last message of a turn that %s = %q, interrupted %v, %v; want %q, %v", tc.status, got, interrupted, err, tc.want, tc.interrupted)
 		}
 	}
 	srv.StartThread("second", false, "")
@@ -198,7 +202,7 @@ func TestLastMessageNeedsACompletedTurn(t *testing.T) {
 			t.Fatal("the client never followed the terminal's new thread")
 		}
 	}
-	if got, err := c.LastMessage(ctx, "main"); err != nil || got != "done" {
+	if got, _, err := c.LastMessage(ctx, "main"); err != nil || got != "done" {
 		t.Fatalf("last message of the thread the terminal left = %q, %v; want done", got, err)
 	}
 }
