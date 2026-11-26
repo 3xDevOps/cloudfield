@@ -144,7 +144,7 @@ What each person redoes afterwards:
 - Member on the Android app: nothing.
 - Member on the desktop app: nothing.
 - Someone holding an unused join link: nothing; it works until it expires.
-- Claude or ChatGPT connector user: nothing. The listing packages name
+- Claude or ChatGPT connector user: nothing. New connectors use
   `https://edge.cloudfield.ai/mcp`, and a connector registered at
   `https://edge.onaether.dev/mcp` keeps working (as of 2026-11-26).
 
@@ -191,10 +191,7 @@ After the move:
   it. Until the restart it also prints `running      the running server is at
   <old address>; restart to apply edge-url: sudo systemctl restart aether-server`.
 - Connectors registered at the old address keep working while the edge
-  announces it. The Claude and ChatGPT listing packages name
-  `https://edge.cloudfield.ai/mcp`; a server on v0.8.7 or later accepts a
-  connector at either address, whichever it is enrolled at. A server below
-  v0.8.7 accepts a connector only at the address it is enrolled at
+  announces it. New connectors use the new address
   ([connectors.md](connectors.md#prerequisites)).
 - CLI and device links, join links and claim codes made at the old address keep
   working: the edge relays a client at either address to a server enrolled at
