@@ -454,7 +454,9 @@ func (s *Service) moreRelayOrigins() []string {
 // the other is refused with 421 Misdirected Request naming the right
 // origin, so no signed-in page, cookie or API answer is served on the
 // relay host.
-// GET /healthz answers on any host. Call SetLink first.
+// GET /healthz answers on any host, and OPTIONS * on any host that is not
+// retired, for a server with DisableGeneralOptionsHandler set, which an
+// edge with a retired pair needs. Call SetLink first.
 func (s *Service) Handler() http.Handler {
 	pages := http.NewServeMux()
 	pages.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
@@ -515,6 +517,10 @@ func (s *Service) Handler() http.Handler {
 		host := edgeproto.RequestHost(r)
 		if h := s.retired[host]; h != nil {
 			s.serveRetired(w, r, h)
+			return
+		}
+		if r.Method == http.MethodOptions && r.RequestURI == "*" {
+			w.Header().Set("Content-Length", "0")
 			return
 		}
 		p := s.byHost[host]

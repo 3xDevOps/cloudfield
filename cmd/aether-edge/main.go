@@ -153,7 +153,9 @@ func serve(args []string) (err error) {
 		ReadHeaderTimeout: 10 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 		MaxHeaderBytes:    64 << 10,
-		ErrorLog:          slog.NewLogLogger(slog.Default().Handler(), slog.LevelWarn),
+		// net/http answers OPTIONS * itself, on any host, before Handler.
+		DisableGeneralOptionsHandler: len(o.retired) > 0,
+		ErrorLog:                     slog.NewLogLogger(slog.Default().Handler(), slog.LevelWarn),
 	}
 	var listener listenerState
 	metrics := &http.Server{Handler: metricsHandler(svc, rl, &listener), ReadHeaderTimeout: 10 * time.Second}

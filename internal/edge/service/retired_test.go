@@ -1,12 +1,15 @@
 package edge
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"slices"
 	"strings"
@@ -591,6 +594,35 @@ func TestRetiredShortFormFits(t *testing.T) {
 		}
 		if json.Unmarshal(a.body, &body) != nil || body.Retired.Replacement != long('c') || !strings.Contains(body.Error, "cloudfield login --edge "+long('c')) {
 			t.Errorf("full answer: %s", a.body)
+		}
+	}
+}
+
+// TestRetiredOptionsStar sends OPTIONS * through a real http.Server with
+// DisableGeneralOptionsHandler set, as aether-edge serve sets it with a
+// retired pair: a retired host answers 410, a served one 200 as net/http
+// does.
+func TestRetiredOptionsStar(t *testing.T) {
+	h := newRetiredHarness(t)
+	ts := httptest.NewUnstartedServer(h.svc.Handler())
+	ts.Config.DisableGeneralOptionsHandler = true
+	ts.Start()
+	t.Cleanup(ts.Close)
+	for host, want := range map[string]string{"signin-old.example.test": "HTTP/1.1 410 Gone", "relay-old.example.test": "HTTP/1.1 410 Gone",
+		"signin.example.test": "HTTP/1.1 200 OK", "relay.example.test": "HTTP/1.1 200 OK"} {
+		conn, err := net.Dial("tcp", ts.Listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.WriteString(conn, "OPTIONS * HTTP/1.1\r\nHost: "+host+"\r\nConnection: close\r\n\r\n")
+		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		_ = conn.Close()
+		if got := resp.Proto + " " + resp.Status; got != want {
+			t.Errorf("OPTIONS * on %s: %s, want %s", host, got, want)
 		}
 	}
 }
