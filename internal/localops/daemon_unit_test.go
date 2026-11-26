@@ -40,7 +40,7 @@ func TestInstalledDaemonArgs(t *testing.T) {
 		t.Fatalf("before install: %q, %v", args, err)
 	}
 	repo := t.TempDir()
-	if _, _, err := InstallDaemon(syncd.Config{ServerID: "srv", EdgeURL: "https://edge.example.test", RepoPath: repo}); err != nil {
+	if _, _, err = InstallDaemon(syncd.Config{ServerID: "srv", EdgeURL: "https://edge.example.test", RepoPath: repo}); err != nil {
 		t.Fatal(err)
 	}
 	args, err = InstalledDaemonArgs()

@@ -722,8 +722,8 @@ func TestLogoutKeepsConcurrentSignIn(t *testing.T) {
 			}
 			done := make(chan error, 1)
 			go func() {
-				_, err := c.Logout(context.Background())
-				done <- err
+				_, logoutErr := c.Logout(context.Background())
+				done <- logoutErr
 			}()
 			select {
 			case auth := <-revoked:
