@@ -4,8 +4,8 @@ An **edge** is a relay that lets members reach a server through a public host
 name with a GitHub sign-in. The server and the client both dial out to it, so
 a laptop reaches a server with no Tailscale, no open router port and no SSH
 key to copy. The project runs one at `https://edge.cloudfield.ai`, and
-`aether-edge` runs your own. Servers set up before that address existed use
-the same edge at `https://edge.onaether.dev`, which keeps working
+`aether-edge` runs your own. A server still enrolled at its former address,
+`https://edge.onaether.dev`, keeps working there (as of 2026-11-26)
 ([Moving to another address of the edge](#moving-to-another-address-of-the-edge)).
 
 - [Using an edge](#using-an-edge) is for members and server administrators.
@@ -144,8 +144,9 @@ What each person redoes afterwards:
 - Member on the Android app: nothing.
 - Member on the desktop app: nothing.
 - Someone holding an unused join link: nothing; it works until it expires.
-- Claude or ChatGPT connector user: nothing. The directory listings stay at
-  `https://edge.onaether.dev/mcp` on purpose.
+- Claude or ChatGPT connector user: nothing. A connector registered at the
+  old address keeps working (as of 2026-11-26), and new ones are added at the
+  new address ([connectors.md](connectors.md#prerequisites)).
 
 Grants name the address the server is enrolled at and are checked whichever
 address the client used, and connector tokens are checked against the address
@@ -190,8 +191,8 @@ After the move:
   it. Until the restart it also prints `running      the running server is at
   <old address>; restart to apply edge-url: sudo systemctl restart aether-server`.
 - Connectors registered at the old address keep working while the edge
-  announces it. The Claude and ChatGPT listings stay at
-  `https://edge.onaether.dev/mcp`.
+  announces it. New ones are added at the new address
+  ([connectors.md](connectors.md#prerequisites)).
 - CLI and device links, join links and claim codes made at the old address keep
   working: the edge relays a client at either address to a server enrolled at
   either.

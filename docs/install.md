@@ -492,9 +492,10 @@ Setup starts nothing; it ends on `next:`: start the service, then on your
 machine link it. On a tailnet that is `cloudfield link <MagicDNS name>`, or
 **Tailscale** in the app's Connect step; through the edge, `cloudfield login` and
 `cloudfield link --claim <code>`, or **Cloudfield relay** with the claim link; with
-neither, `cloudfield link <this-host>:2222`. When the edge is not the project's,
-at `https://edge.cloudfield.ai` or `https://edge.onaether.dev`, both client
-commands carry `--edge <url>`, because a claim code names no edge.
+neither, `cloudfield link <this-host>:2222`. When the edge is not the project's
+at `https://edge.cloudfield.ai`, both client commands carry `--edge <url>`,
+because a claim code names no edge; as of 2026-11-26 the edge's former
+address, `https://edge.onaether.dev`, counts as the project's too.
 
 ```sh
 sudo systemctl daemon-reload && sudo systemctl enable --now aether-server
