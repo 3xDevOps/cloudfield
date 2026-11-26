@@ -272,11 +272,14 @@ owner's server moved with `sudo aether-server edge move
 https://edge.cloudfield.ai` at 05:48 UTC, the first run against the real
 edge. It enrolled at `edge.cloudfield.ai` as an
 address of the same edge, with the same edge key and owner; only
-server.conf's `edge-url` line changed. Connector addresses are now under
-`edge.cloudfield.ai/mcp`, and a connector registered at the old address
-still answers. For about a second after the restart, `cloudfield-server
-edge status` exits 3 with `disconnected since ...: server stopped`, so a
-script waits for exit 0.
+server.conf's `edge-url` line changed. `edge move` does not restart the
+server; the owner restarted it with `sudo systemctl restart
+aether-server` at 05:48:31 and it connected at 05:48:32. Connector
+addresses are now under `edge.cloudfield.ai/mcp`, and a connector
+registered at the old address still answers. In that restart,
+`cloudfield-server edge status` exited 3 with `disconnected since ...:
+server stopped` for about a second, so a script restarts first, then
+retries `edge status` while it exits 3.
 
 ### Phase 3: the names people type
 
@@ -319,8 +322,10 @@ End of phase 4 (2026-11-26): the Go module path is
 linker's `-X` flags, the linter and CI read only the new path; a binary
 stamped through the old path would print `dev (unknown)`. Still written
 the old way, on purpose: `https://github.com/3xDevOps/Aether` links, which
-GitHub redirects, among them the systemd units' `Documentation=` lines
-that the server compares byte for byte and the edge image's source label;
+GitHub redirects, among them the `Documentation=` lines of
+`aether-server.service` and `aether.slice`, which the server compares
+byte for byte, those of the edge's systemd units, and the edge image's
+source label;
 the promotion predicate type and the two-name signer checks (item 22);
 and `3xDevOps/Aether` repository names in test fixtures. A branch cut
 before 4983519d6 that changes Go files rebases with the lines posted on
