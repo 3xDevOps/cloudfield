@@ -8,10 +8,10 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/3xDevOps/Aether/internal/domain"
-	"github.com/3xDevOps/Aether/internal/harness"
-	"github.com/3xDevOps/Aether/internal/memberhome"
-	"github.com/3xDevOps/Aether/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/harness"
+	"github.com/3xDevOps/cloudfield/internal/memberhome"
+	"github.com/3xDevOps/cloudfield/internal/protocol"
 )
 
 func installInHome(t *testing.T, homes *memberhome.Manager, member domain.MemberID, files ...string) {
@@ -118,6 +118,64 @@ func TestAgentListReportsEnhancedModeAndLogin(t *testing.T) {
 		// owner's, who has none.
 		"codex": {true, false, "acp", true},
 	})
+}
+
+// Claude Code keeps an Anthropic Console sign-in outside its login file. It
+// is a login on the member's own account and not on one shared with them,
+// whose launches carry the owner's login file alone.
+func TestAgentListCountsAConsoleSignInOnTheMembersOwnAccountOnly(t *testing.T) {
+	t.Parallel()
+	s, owner := newAgentTestServer(t)
+	ctx := context.Background()
+	grantee := &domain.Member{DisplayName: "grantee", TailnetLogin: "grantee@example.com", Role: domain.RoleCollaborator}
+	if err := s.cfg.Store.CreateMember(ctx, grantee); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.cfg.Store.ShareAccount(ctx, owner.ID, grantee.ID); err != nil {
+		t.Fatal(err)
+	}
+	homes, err := memberhome.New(filepath.Join(t.TempDir(), "homes"), t.TempDir(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.cfg.Homes = homes
+	s.cfg.Runs = &fakeRuns{}
+	loginFound := func(member, account domain.MemberID) bool {
+		t.Helper()
+		raw, marshalErr := json.Marshal(protocol.AgentListParams{AccountMemberID: string(account)})
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
+		}
+		result, perr := s.agentList(ctx, member, raw)
+		if perr != nil {
+			t.Fatal(perr)
+		}
+		for _, agent := range result.(protocol.AgentListResult).Agents {
+			if agent.Name == "claude" && agent.LoginFound != nil {
+				return *agent.LoginFound
+			}
+		}
+		t.Fatal("agent.list has no claude with login_found")
+		return false
+	}
+	installInHome(t, homes, owner.ID, ".local/bin/claude")
+	installInHome(t, homes, grantee.ID, ".local/bin/claude")
+	if loginFound(owner.ID, owner.ID) {
+		t.Fatal("login_found before any sign-in")
+	}
+	ownerHome, err := homes.Path(owner.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(ownerHome, ".claude.json"), []byte(`{"primaryApiKey":"fixture-key"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !loginFound(owner.ID, owner.ID) {
+		t.Fatal("the owner's Console sign-in is not a login on their own account")
+	}
+	if loginFound(grantee.ID, owner.ID) {
+		t.Fatal("the owner's Console sign-in counts as a login for a member the account is shared with")
+	}
 }
 
 func TestAgentListLeavesHomesAloneAndSurvivesAnUnreadableLogin(t *testing.T) {

@@ -6,8 +6,8 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/3xDevOps/Aether/internal/domain"
-	"github.com/3xDevOps/Aether/internal/events"
+	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/events"
 )
 
 // idleCloseAfter is how long a live session goes without activity before the

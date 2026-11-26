@@ -7,11 +7,12 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/netip"
 	"time"
 
-	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
+	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	"github.com/coder/websocket"
 )
 
@@ -190,7 +191,7 @@ func (r *Relay) enroll(ws *websocket.Conn, addr netip.Prefix, origin string) (*r
 	if err != nil {
 		return nil, err
 	}
-	claimed, err := r.dir.Enroll(ctx, id, hello.Name, policy)
+	claimed, err := r.dir.Enroll(ctx, id, hello.Name, policy, origin, hello.AgentVersion)
 	var refusal edgeproto.Refusal
 	if errors.As(err, &refusal) {
 		return nil, refusal
@@ -454,7 +455,7 @@ func (r *Relay) claimReported(reg *registration, m edgeproto.Claimed) error {
 		return reportRefused("the owner is not the account connection %s was opened for", m.ConnID)
 	}
 	return r.recordOwner(reg, func(ctx context.Context) error {
-		return r.dir.RecordClaim(ctx, reg.id, reg.name, reg.policy, g.account)
+		return r.dir.RecordClaim(ctx, reg.id, reg.name, reg.policy, g.account, reg.origin, reg.agentVersion)
 	})
 }
 
@@ -491,6 +492,9 @@ func (r *Relay) recordOwner(reg *registration, record func(ctx context.Context) 
 	r.mu.Lock()
 	if !reg.claimed {
 		reg.claimed = true
+		// A server removed and claimed again within the hour is a new
+		// row that its earlier marks would keep unrecorded.
+		maps.DeleteFunc(r.connectorUsed, func(u connectorUse, _ time.Time) bool { return u.serverID == reg.id })
 		if reg.hasDirectory {
 			r.queueDirectoryLocked(reg, reg.directory)
 			reg.directory, reg.hasDirectory = nil, false

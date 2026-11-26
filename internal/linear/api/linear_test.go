@@ -63,6 +63,32 @@ func TestErrorsArrayWinsOverStatus(t *testing.T) {
 	}
 }
 
+func TestRefusedKeyIsMarkedAndTransportFailureIsNot(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status int
+		reply  string
+	}{
+		"authentication message": {400, `{"errors":[{"message":"Authentication required, not authenticated"}]}`},
+		"authentication type":    {200, `{"errors":[{"message":"nope","extensions":{"type":"authentication error"}}]}`},
+		"403 status":             {403, "denied"},
+		"401 status":             {401, "{}"},
+	} {
+		c, _ := fakeLinear(t, tc.status, tc.reply)
+		_, err := c.Teams(context.Background(), "bad")
+		if err == nil || !strings.HasPrefix(err.Error(), RefusedKey) {
+			t.Errorf("%s: err = %v, want prefix %q", name, err, RefusedKey)
+		}
+	}
+	c, _ := fakeLinear(t, 502, "bad gateway")
+	if _, err := c.Teams(context.Background(), "k"); err == nil || strings.HasPrefix(err.Error(), RefusedKey) {
+		t.Errorf("502: err = %v, want no refusal marker", err)
+	}
+	c.URL = "http://127.0.0.1:1"
+	if _, err := c.Teams(context.Background(), "k"); err == nil || strings.HasPrefix(err.Error(), RefusedKey) {
+		t.Errorf("transport: err = %v, want no refusal marker", err)
+	}
+}
+
 func TestNonJSONFailureNamesTheStatus(t *testing.T) {
 	c, _ := fakeLinear(t, 502, "bad gateway")
 	_, err := c.Teams(context.Background(), "k")

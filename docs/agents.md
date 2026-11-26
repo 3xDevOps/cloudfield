@@ -187,10 +187,13 @@ The agent signs in inside the human's environment on the server:
 
 Check with `cloudfield agent list --json` (`login_found`) and
 `cloudfield account usage`, which asks the vendor whether the login works. Both
-look only for a login file. A key set with `cloudfield workspace env set --secret`
-writes none, so `login_found` stays false, `account usage` reports the agent
-unauthenticated, and `cloudfield status` keeps naming `aether agent login`; go on
-to step 6.
+look only for a login in your home. A key set with
+`cloudfield workspace env set --secret` writes none, so `login_found` stays
+false, `account usage` reports the agent unauthenticated, and `cloudfield status`
+keeps naming `aether agent login`; go on to step 6. A Claude Code sign-in
+through the Anthropic Console is a login: `login_found` is true, and
+`account usage` reports `unsupported`, because the API bills it and no usage
+window measures it ([harnesses.md](harnesses.md#claude-code)).
 
 ### 6. Launch the first session
 

@@ -56,9 +56,6 @@ export interface TileAreaValue {
 
 export const TileAreaContext = createContext<TileAreaValue | null>(null)
 
-/** The press that focused a tile is still down: the one-line Chat field opens after it, or it would move what was pressed out from under its click. */
-export const TilePressedContext = createContext(false)
-
 /**
  * Applies a layout change a tile control asked for, then points the route at
  * the focused tab. `push` adds a history entry when the change opened a tab;

@@ -14,8 +14,8 @@ import (
 	"net/url"
 	"strings"
 
-	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
-	edgestore "github.com/3xDevOps/Aether/internal/edge/store"
+	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
+	edgestore "github.com/3xDevOps/cloudfield/internal/edge/store"
 )
 
 const (
@@ -116,7 +116,7 @@ func (s *Service) visitor(r *http.Request) (visitor, bool, error) {
 		return visitor{}, false, nil
 	}
 	now := s.now()
-	sess, err := s.store.UseSession(r.Context(), edgeproto.HashToken(c.Value), now, now.Add(edgeproto.SessionIdle))
+	sess, err := s.store.UseSession(r.Context(), edgeproto.HashToken(c.Value), s.signinOrigin(r.Context()), now, now.Add(edgeproto.SessionIdle))
 	if errors.Is(err, edgestore.ErrNotFound) {
 		return visitor{}, false, nil
 	}

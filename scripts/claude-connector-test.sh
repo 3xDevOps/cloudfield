@@ -38,7 +38,7 @@ refuse "a 2001-character description" "description is 2001 characters, at most 2
 refuse "six categories" "categories needs 1 to 5 entries" '.categories = ["a", "b", "c", "d", "e", "f"]'
 refuse "no categories" "categories needs 1 to 5 entries" '.categories = []'
 refuse "an uppercase slug" "slug must be lowercase" '.slug = "Aether"'
-refuse "another server URL" "differs from the ChatGPT plugin URL" '.server_url = "https://edge.onaether.dev/mcp/srv-1"'
+refuse "another server URL" "differs from the ChatGPT plugin URL" '.server_url = "https://edge.cloudfield.ai/mcp/srv-1"'
 refuse "dynamic client registration" "want oauth_cimd" '.auth_type = "oauth_dcr"'
 refuse "an http privacy policy" "privacy_policy_url is not an https URL" '.privacy_policy_url = "http://example.com/privacy"'
 refuse "two use cases" "use_cases needs at least 3" '.use_cases |= .[:2]'

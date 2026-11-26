@@ -11,12 +11,12 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/3xDevOps/Aether/internal/domain"
-	"github.com/3xDevOps/Aether/internal/fallback"
-	"github.com/3xDevOps/Aether/internal/harness"
-	"github.com/3xDevOps/Aether/internal/permissions"
-	"github.com/3xDevOps/Aether/internal/protocol"
-	"github.com/3xDevOps/Aether/internal/store"
+	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/fallback"
+	"github.com/3xDevOps/cloudfield/internal/harness"
+	"github.com/3xDevOps/cloudfield/internal/permissions"
+	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/store"
 )
 
 func init() {
@@ -262,7 +262,7 @@ func (s *Server) launchDefaultsResult(ctx context.Context, member domain.MemberI
 			}
 			unknown("agents."+name, name, name+"'s login on this account is signed out: "+problem+"; sign in with: "+way)
 		} else if login := agents[i].LoginFound; login != nil && !*login {
-			unknown("agents."+name, name, "no "+name+" login file was found on this account; it launches only if an API key in the environment signs it in")
+			unknown("agents."+name, name, "no "+name+" login was found on this account; it launches only if an API key in the environment signs it in")
 		}
 		if a.Mode == domain.LaunchACP && !agents[i].EnhancedInstalled {
 			issue("agents."+name+".mode", string(a.Mode), name+"'s enhanced mode is not installed on this account; install it from the launch dialog")

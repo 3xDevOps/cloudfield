@@ -19,7 +19,7 @@ shown beside the status says why it is there.
 | A server update is interrupted, or the new version cannot boot | `cloudfield server update --status` shows `failed` or `rolled_back`. | Replaces nothing until every binary is verified. Rolls back a version that cannot finish booting. | [Recover from a failed server update](#recover-from-a-failed-server-update). |
 | Free disk falls toward the floor | Launch refused with `scheduler: insufficient disk headroom: ...`. | Frees space on its own first, in a fixed order. | [Recover from disk pressure](#recover-from-disk-pressure). |
 | Host memory is low, or the server stalls on memory | Launch refused with `scheduler: insufficient host memory headroom: ...`. | For low available memory, saves idle session VMs to disk and checks once more before it refuses. Below the floor it freezes every session VM at once, so none takes more memory, then saves awake session VMs to disk and thaws the rest; it never kills one. | [Recover from memory pressure](#recover-from-memory-pressure). |
-| An Enhanced Claude Code session is idle for `--run-sleep-after` (30 minutes) | The Chat view shows **Asleep since <time>**; `cloudfield sessions` shows `(asleep)`. | Stops the container with `docker stop`, freeing its memory and CPU, and keeps its disk and checkout. | Nothing. The next message wakes it ([Idle sleep](#idle-sleep)). |
+| An Enhanced Claude Code session is idle for `--run-sleep-after` (30 minutes) | The Chat view shows **Asleep since &lt;time&gt;**; `cloudfield sessions` shows `(asleep)`. | Stops the container with `docker stop`, freeing its memory and CPU, and keeps its disk and checkout. | Nothing. The next message wakes it ([Idle sleep](#idle-sleep)). |
 | A Standard or Enhanced session in a VM is idle for `--run-sleep-after` (5 minutes) | As above. | Saves the whole VM to disk with every process in it, freeing its memory and CPU. | Nothing. The next message restores it ([Sessions in VMs](#sessions-in-vms)). |
 | An agent goes silent | `needs-attention`, reason `stalled: no output or file changes for <duration>`, state **Waiting**. An Enhanced session is **Possibly stalled**: `stalled: possibly — no progress for <duration>, <phase>, transport open`. | Keeps the session supervised. It returns to `running` as soon as the agent writes output, makes progress or changes a file. | Attach (`cloudfield attach <session-id>`) or send a message. See [Picking a stall threshold](#picking-a-stall-threshold). |
 | A Standard agent exits | The session stays live and its terminal shows a login shell. | Opens a shell in place of the agent. It never restarts the agent. | Start the agent again in that shell, or close the session. |
@@ -793,6 +793,12 @@ a REPL (a shell at its prompt does not count); a session that waits for a
 process; a session you paused; a session that hit its usage limit; a session
 switching modes or accounts; and a session started in Standard and switched
 to Enhanced, whose container would rerun its launch command.
+
+While it sleeps, the Chat view shows a one-row notice, **Asleep since
+&lt;time&gt; · processes stopped**, with **Wake** at its end. Selecting the
+row unfolds what the sleep kept and what it stopped. A session VM saved to
+disk reads **Asleep since &lt;time&gt;** alone, because its processes are
+saved. While the session wakes, the row reads **Waking…**.
 
 The session wakes when you send a message, change its model, mail
 reaches it, you type in its terminal, open a shell tab, use its Browser tab,

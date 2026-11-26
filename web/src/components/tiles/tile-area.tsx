@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { focusView } from '@/components/shell/center-view'
-import { changeTiles, focusInTile, narrowBelow, TileAreaContext, tileNode, TilePressedContext, viewsElsewhere, type TileAreaValue } from '@/components/tiles/area'
+import { changeTiles, focusInTile, narrowBelow, TileAreaContext, tileNode, viewsElsewhere, type TileAreaValue } from '@/components/tiles/area'
 import { TileDragLayer } from '@/components/tiles/drag'
 import { fits, tileRects, type Rect } from '@/components/tiles/geometry'
 import { Tile } from '@/components/tiles/tile'
@@ -174,7 +174,6 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
   const [said, say] = useState('')
   const [picking, setPicking] = useState<string | null>(null)
   const [noRoom, setNoRoom] = useState<TileSide | null>(null)
-  const [pressed, setPressed] = useState(false)
   const [resting, setResting] = useState<TileAreaValue['resting']>(null)
   const pick = useCallback((tileId: string | null) => {
     setPicking(tileId)
@@ -336,9 +335,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
         return
       }
       byHand.current = tileId
-      const down = event.type === 'pointerdown'
-      setPressed(down)
-      if (down) hold(tileId, false)
+      if (event.type === 'pointerdown') hold(tileId, false)
       else letGo()
       changeTiles((before) => focusTile(before, tileId))
     }
@@ -352,10 +349,7 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
       letGo()
     }
     // After the click that follows the release.
-    const release = (event: PointerEvent) => setTimeout(() => {
-      setPressed(false)
-      settle(event)
-    })
+    const release = (event: PointerEvent) => setTimeout(() => settle(event))
     const press = (event: Event) => {
       tabbed = event instanceof KeyboardEvent && event.key === 'Tab'
       if (tabbed) letGo()
@@ -454,7 +448,6 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
 
   return (
     <TileAreaContext value={value}>
-      <TilePressedContext value={pressed}>
       <div
         ref={areaRef}
         className="relative h-full min-h-0 overflow-hidden"
@@ -530,7 +523,6 @@ export function TileArea({ params, Frame }: { params: Record<string, string>; Fr
         <span role="status" aria-live="polite" className="sr-only">{said}</span>
         <TileDragLayer />
       </div>
-      </TilePressedContext>
     </TileAreaContext>
   )
 }

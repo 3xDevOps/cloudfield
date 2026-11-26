@@ -244,7 +244,7 @@ describe('onboarding link through an edge', () => {
       localLinkStatus: vi.fn(async () => unlinked),
       localEdgeLogin: vi.fn(() =>
         Promise.reject(
-          new ApiError(503, 'edge.login: sign in: Post "https://edge.onaether.dev/v1/device": dial tcp: i/o timeout'),
+          new ApiError(503, 'edge.login: sign in: Post "https://edge.cloudfield.ai/v1/device": dial tcp: i/o timeout'),
         ),
       ),
     })
@@ -255,7 +255,7 @@ describe('onboarding link through an edge', () => {
 
     expect(
       await screen.findByText(
-        'edge.login: sign in: Post "https://edge.onaether.dev/v1/device": dial tcp: i/o timeout',
+        'edge.login: sign in: Post "https://edge.cloudfield.ai/v1/device": dial tcp: i/o timeout',
       ),
     ).toBeDefined()
     expect(screen.getByRole('button', { name: 'Sign in with GitHub' })).toBeDefined()

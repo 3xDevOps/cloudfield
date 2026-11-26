@@ -2,7 +2,7 @@
 
 For the project's maintainers. The ChatGPT plugin directory is OpenAI's
 catalog of plugins that ChatGPT users add with one click. Cloudfield's listing
-points every user at one MCP endpoint, `https://edge.onaether.dev/mcp`, the
+points every user at one MCP endpoint, `https://edge.cloudfield.ai/mcp`, the
 project edge's universal connector URL; ChatGPT signs in through OAuth and
 reaches the user's own server through the edge. The tools are the connector's
 ([connectors.md](connectors.md)); this page covers packaging, submission and
@@ -16,6 +16,10 @@ OpenAI's sources: [submission](https://developers.openai.com/plugins/deploy/subm
 read 2026-10-26. The same URL is listed in Claude's directory
 ([claude-connector.md](claude-connector.md)).
 
+As of 2026-11-26 the package uses `edge.cloudfield.ai`. The project edge
+still answers at `edge.onaether.dev`, and connectors added there keep
+working.
+
 ## The package
 
 `packaging/chatgpt-plugin/` holds the two files of an Agent Plugins package:
@@ -23,7 +27,7 @@ read 2026-10-26. The same URL is listed in Claude's directory
 | File | Holds |
 | --- | --- |
 | `plugin.json` | Identity (`name: aether`), listing text and links under `extensions.com.openai.interface`, review test cases under `extensions.com.openai.review` |
-| `mcp.json` | One server, `aether`: `streamable-http` at `https://edge.onaether.dev/mcp`, OAuth with `client.mode: cimd` |
+| `mcp.json` | One server, `aether`: `streamable-http` at `https://edge.cloudfield.ai/mcp`, OAuth with `client.mode: cimd` |
 
 OpenAI accepts `extensions` on a server in `mcp.json` although the published
 `mcp.schema.json` does not list it; their auth reference requires it there.
@@ -52,7 +56,7 @@ real URL.
 ## External prerequisites
 
 Nothing here is submitted or approved. "Merged" is origin/main; "deployed" is
-what `edge.onaether.dev` serves.
+what the project edge serves, checked at `edge.onaether.dev` on 2026-10-26.
 
 | Item | Field or system | Merged | Deployed | Submitted | Approved |
 | --- | --- | --- | --- | --- | --- |
@@ -60,12 +64,12 @@ what `edge.onaether.dev` serves.
 | Edge with protocol 4: the sign-in assertion bound to the browser and kept out of URLs and logs ([Security notes](#security-notes)) | aether-edge, server | No: #590 open | No | n/a | n/a |
 | Per-method scope enforcement: every connector call checked against its granted scopes. The listing's scope sentences are true only once it is deployed | Server | No: #591 open | No | n/a | n/a |
 | `scopes_supported` in the protected resource metadata. OpenAI lists it under "Key fields you must populate" as an "optional list that helps ChatGPT explain the permissions it is going to ask the user for" ([authentication](https://developers.openai.com/plugins/build/auth)); the live document has only `resource` and `authorization_servers` | aether-edge | No: pending code change (edge metadata) | No | n/a | n/a |
-| Challenge token served as plain text at `https://edge.onaether.dev/.well-known/openai-apps-challenge` with `aether-edge serve --openai-challenge <token>` or `AETHER_EDGE_OPENAI_CHALLENGE` | aether-edge | Yes | No: answers 404 (2026-10-26) | No | No |
+| Challenge token served as plain text at `https://edge.cloudfield.ai/.well-known/openai-apps-challenge` with `aether-edge serve --openai-challenge <token>` or `AETHER_EDGE_OPENAI_CHALLENGE` | aether-edge | Yes | No: answers 404 at `edge.onaether.dev` (2026-10-26) | No | No |
 | Business verification for 3xDevOps | OpenAI organization settings | n/a | n/a | No | No |
 | Privacy policy at a public URL, from [legal/privacy-connectors.md](legal/privacy-connectors.md) | `privacyPolicyURL` | Draft | No | No | No |
 | Terms of service at a public URL, from [legal/terms-connectors.md](legal/terms-connectors.md) | `termsOfServiceURL` | Draft | No | No | No |
 | Demo server with sample data ([Reviewer setup](#reviewer-setup)) | Project edge | n/a | No | n/a | n/a |
-| Reviewer account that needs no email code ([Reviewer setup](#reviewer-setup)) | Review details | Built in Cloudfield; not enabled on edge.onaether.dev: `aether-edge serve --reviewer-account-file` | No | No | No |
+| Reviewer account that needs no email code ([Reviewer setup](#reviewer-setup)) | Review details | Built in Cloudfield; not enabled on the project edge: `aether-edge serve --reviewer-account-file` | No | No | No |
 | Walkthrough video of the five positive test cases | `review.demo_recording_url` | n/a | No | No | No |
 | Live test from chatgpt.com | n/a | n/a | Not run | n/a | n/a |
 
@@ -82,7 +86,8 @@ what `edge.onaether.dev` serves.
 4. In **MCPs**, select `aether`, then **Connect**. Check the URL and that
    authentication is OAuth with CIMD. Set the token the portal shows as
    `AETHER_EDGE_OPENAI_CHALLENGE` (or `aether-edge serve --openai-challenge`)
-   on the `edge.onaether.dev` edge, restart it, and verify the domain. Connect and sign in as the reviewer account.
+   on the project edge, restart it, and verify the domain. The edge serves
+   the one token on every relay host, `edge.cloudfield.ai` included. Connect and sign in as the reviewer account.
 5. Wait for **Scan Tools** to list the tools. Fix findings on the server,
    deploy, and select **Rescan**. Enter each tool's hint justifications from
    [Tool hints](#tool-hints).
@@ -191,7 +196,7 @@ address. Each attempt writes one line, with the client address, to the
 edge's log (`edge: reviewer signed in` or `edge: reviewer sign-in
 refused`). Only the right login counts toward the lock, so a `429` tells a
 guesser the login was right: pick one nobody would guess and share it only
-with the review, like the password. Turning it on for `edge.onaether.dev` is the owner's step; this
+with the review, like the password. Turning it on for the project edge is the owner's step; this
 repository does not do it.
 
 Set it up, with the demo server's id from `cloudfield-server edge status` or

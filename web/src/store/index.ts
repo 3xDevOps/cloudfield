@@ -14,6 +14,7 @@ import { createEdgeSlice, type EdgeSlice } from '@/store/edge'
 import { createFilesSlice, type FilesSlice } from '@/store/files'
 import { createEnvTerminalSlice, type EnvTerminalSlice } from '@/store/env-terminal'
 import { createLanesSlice, normalizeLaneHidden, normalizeLaneWindow, type LanesSlice } from '@/store/lanes'
+import { createLinearSlice, type LinearSlice } from '@/store/linear'
 import { createLocalSlice, type LocalSlice } from '@/store/local'
 import { createMembersSlice, type MembersSlice } from '@/store/members'
 import { createPaletteSlice, type PaletteSlice } from '@/store/palette'
@@ -28,7 +29,7 @@ import { createTerminalSlice, type TerminalSlice } from '@/store/terminal'
 import { createTilesSlice, normalizeSavedTiles, type TilesSlice } from '@/store/tiles'
 import { createTraceSlice, type TraceSlice } from '@/store/trace-log'
 import { createTimelineSlice, type TimelineSlice } from '@/store/timeline'
-import { createMessagesSlice, type MessagesSlice } from '@/store/messages'
+import { createMessagesSlice, messageListViewed, type MessagesSlice } from '@/store/messages'
 import { createViewContextSlice, type ViewContextSlice } from '@/store/view-context'
 import { createWatchesSlice, type WatchesSlice } from '@/store/watches'
 import { createWorkflowSignalsSlice, type WorkflowSignalsSlice } from '@/store/workflow-signals'
@@ -86,6 +87,7 @@ export type RootState = ServerSlice &
   DiffSlice &
   CollaborationSlice &
   LocalSlice &
+  LinearSlice &
   UpdatesSlice &
   MessagesSlice &
   SessionsSlice &
@@ -144,7 +146,7 @@ type PersistedState = Partial<ReturnType<typeof persistedUi>>
 export function createRootStore() {
   const storage = createJSONStorage<PersistedState>(() => localStorage)
   let written: PersistedState | undefined
-  return create<RootState>()(
+  const store = create<RootState>()(
     batched(persist(
       (...a) => ({
         ...createServerSlice(...a),
@@ -169,6 +171,7 @@ export function createRootStore() {
         ...createFilesSlice(...a),
         ...createCollaborationSlice(...a),
         ...createLocalSlice(...a),
+        ...createLinearSlice(...a),
         ...createUpdatesSlice(...a),
         ...createMessagesSlice(...a),
         ...createSessionsSlice(...a),
@@ -274,6 +277,14 @@ export function createRootStore() {
       },
     )),
   )
+  // A session leaves by a removal, a snapshot without it, or a reset; its kept message list goes with it.
+  store.subscribe((state, previous) => {
+    if (state.runs === previous.runs) return
+    for (const [key, { scope }] of Object.entries(state.messageLists)) {
+      if (scope.kind === 'run' && !(scope.runID in state.runs) && !messageListViewed(key)) state.dropMessageList(key)
+    }
+  })
+  return store
 }
 
 export type RootStore = ReturnType<typeof createRootStore>

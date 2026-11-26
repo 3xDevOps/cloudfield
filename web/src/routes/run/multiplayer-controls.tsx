@@ -160,7 +160,7 @@ export function MultiplayerControls({ run, agent, onPeople }: {
 
 /**
  * The strip folded into a desktop tile's header row: people are avatars named
- * by their tooltips, the controller's has the teal ring, and Release is inside
+ * by their tooltips, the controller's has the sky ring, and Release is inside
  * the "You control" menu.
  */
 export function PresenceControls({ run, agent, wide }: {

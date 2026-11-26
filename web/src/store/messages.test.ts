@@ -3,7 +3,7 @@ import type { Event, RunMessage } from '@/lib/types'
 import { createRootStore } from '@/store'
 import { loadMessagePage, scopeMessages, useMessageList, type MessageScope } from '@/store/messages'
 import { applyEvent, hydrate } from '@/store/sync'
-import { fakeApi, workspace } from '@/test/fixtures'
+import { fakeApi, run, workspace } from '@/test/fixtures'
 
 function runMessage(over: Partial<RunMessage> = {}): RunMessage {
   return {
@@ -25,20 +25,51 @@ const runScope: MessageScope = { kind: 'run', workspaceID: workspace.id, runID: 
 const ids = (messages: RunMessage[]) => messages.map((m) => m.id)
 
 describe('messages slice', () => {
-  it('holds a list while any viewer shows it and releases it with the last', async () => {
+  it('keeps a session\'s list after its last viewer, until the session leaves the store, and drops a thread\'s with its last', async () => {
     const store = createRootStore()
+    store.getState().upsertRun(run())
     const client = fakeApi({ coordMessagesList: vi.fn(async () => ({ messages: [runMessage({ id: 'a' })] })) })
     const first = renderHook(() => useMessageList(store, client, runScope))
     const second = renderHook(() => useMessageList(store, client, { ...runScope }))
+    const thread = renderHook(() => useMessageList(store, client, threadScope))
     await waitFor(() => expect(ids(scopeMessages(store.getState(), runScope))).toEqual(['a']))
+    await waitFor(() => expect(ids(scopeMessages(store.getState(), threadScope))).toEqual(['a']))
 
+    thread.unmount()
+    expect(store.getState().messageLists['thread:corr-1']).toBeUndefined()
     first.unmount()
-    expect(store.getState().messageLists['run:run_1']).toBeDefined()
     second.unmount()
+    expect(ids(scopeMessages(store.getState(), runScope))).toEqual(['a'])
+
+    store.getState().setRuns([])
     expect(store.getState().messageLists['run:run_1']).toBeUndefined()
     expect(store.getState().runMessages).toEqual({})
   })
 
+  it('keeps a list on screen when its session leaves the store, and drops it with its last viewer', async () => {
+    const store = createRootStore()
+    store.getState().upsertRun(run())
+    const client = fakeApi({ coordMessagesList: vi.fn(async () => ({ messages: [runMessage({ id: 'a' })] })) })
+    const viewer = renderHook(() => useMessageList(store, client, runScope))
+    await waitFor(() => expect(ids(scopeMessages(store.getState(), runScope))).toEqual(['a']))
+
+    store.setState({ runs: {} })
+    expect(ids(scopeMessages(store.getState(), runScope))).toEqual(['a'])
+    viewer.unmount()
+    expect(store.getState().messageLists['run:run_1']).toBeUndefined()
+  })
+
+  it('forgets a kept list\'s failed read when its last viewer leaves', async () => {
+    const store = createRootStore()
+    store.getState().upsertRun(run())
+    const client = fakeApi({ coordMessagesList: vi.fn().mockRejectedValue(new Error('coord.messages.list: server unreachable')) })
+    const viewer = renderHook(() => useMessageList(store, client, runScope))
+    await waitFor(() => expect(store.getState().messageErrors['run:run_1']).toContain('server unreachable'))
+
+    viewer.unmount()
+    expect(store.getState().messageErrors['run:run_1']).toBeUndefined()
+    expect(store.getState().messageLists['run:run_1']).toBeDefined()
+  })
 
   it('merges pages by id, oldest first, and pages back to exhaustion', () => {
     const store = createRootStore()
@@ -111,8 +142,8 @@ describe('messages slice', () => {
     ])
     expect(ids(scopeMessages(store.getState(), threadScope))).toEqual(['msg-0', 'msg-1'])
 
-    await loadMessagePage(store, client, threadScope)
-    expect(store.getState().messageErrors['thread:corr-1']).toContain('server unreachable')
+    renderHook(() => useMessageList(store, client, threadScope))
+    await waitFor(() => expect(store.getState().messageErrors['thread:corr-1']).toContain('server unreachable'))
   })
 })
 
@@ -128,12 +159,16 @@ describe('agent message events', () => {
     payload,
   })
 
-  it('re-reads every loaded list the message belongs to', async () => {
+  it('re-reads every loaded list the message belongs to, on screen or kept', async () => {
     const store = createRootStore()
     await hydrate(store, fakeApi())
-    store.getState().setMessagePage(runScope, [], undefined)
-    store.getState().setMessagePage(threadScope, [], undefined)
-    store.getState().setMessagePage({ kind: 'run', workspaceID: workspace.id, runID: 'run_other' }, [], undefined)
+    store.getState().upsertRun(run({ id: 'run_worker' }))
+    const empty = fakeApi()
+    for (const scope of [runScope, threadScope, { kind: 'run', workspaceID: workspace.id, runID: 'run_other' } as const]) renderHook(() => useMessageList(store, empty, scope))
+    const offScreen = renderHook(() => useMessageList(store, empty, { kind: 'run', workspaceID: workspace.id, runID: 'run_worker' }))
+    await waitFor(() => expect(Object.keys(store.getState().messageLists)).toHaveLength(4))
+    offScreen.unmount()
+    expect(store.getState().messageLists['run:run_worker']).toBeDefined()
 
     const arrived = runMessage({ id: 'msg-2', kind: 'question' })
     const list = vi.fn(async (_: { correlation_id?: string; run_id?: string }) => ({ messages: [arrived] }))
@@ -144,12 +179,27 @@ describe('agent message events', () => {
     }
 
     expect(await applyEvent(store, messageEvent(8, payload), client)).toBe(true)
-    expect(list.mock.calls.map(([params]) => params.correlation_id ?? params.run_id).sort()).toEqual(['corr-1', 'run_1'])
+    expect(list.mock.calls.map(([params]) => params.correlation_id ?? params.run_id).sort()).toEqual(['corr-1', 'run_1', 'run_worker'])
     expect(ids(scopeMessages(store.getState(), runScope))).toEqual(['msg-2'])
+    expect(ids(scopeMessages(store.getState(), { kind: 'run', workspaceID: workspace.id, runID: 'run_worker' }))).toEqual(['msg-2'])
 
     const acked = { message_id: 'msg-2', to_run_id: 'run_1', acked_at: '2026-10-05T10:01:00Z' }
     expect(await applyEvent(store, messageEvent(9, acked, 'coord.message.acked'), client)).toBe(true)
     expect(store.getState().runMessages['msg-2'].acked_at).toBe('2026-10-05T10:01:00Z')
+  })
+
+  it('records no error for a kept list whose re-read fails off screen', async () => {
+    const store = createRootStore()
+    await hydrate(store, fakeApi())
+    store.getState().upsertRun(run())
+    renderHook(() => useMessageList(store, fakeApi(), runScope)).unmount()
+    await waitFor(() => expect(store.getState().messageLists['run:run_1']).toBeDefined())
+
+    const client = fakeApi({ coordMessagesList: vi.fn().mockRejectedValue(new Error('coord.messages.list: server unreachable')) })
+    const payload = { message_id: 'msg-2', workspace_id: workspace.id, from_run_id: 'run_worker', to_run_id: 'run_1', kind: 'message' }
+    expect(await applyEvent(store, messageEvent(8, payload), client)).toBe(true)
+    expect(client.coordMessagesList).toHaveBeenCalledTimes(1)
+    expect(store.getState().messageErrors['run:run_1']).toBeUndefined()
   })
 
   it('re-reads a list whose first read failed when a message arrives', async () => {
@@ -160,8 +210,8 @@ describe('agent message events', () => {
       .mockRejectedValueOnce(new Error('coord.messages.list: server unreachable'))
       .mockResolvedValueOnce({ messages: [arrived] })
     const client = fakeApi({ coordMessagesList: list })
-    await loadMessagePage(store, client, threadScope)
-    expect(store.getState().messageErrors['thread:corr-1']).toContain('server unreachable')
+    renderHook(() => useMessageList(store, client, threadScope))
+    await waitFor(() => expect(store.getState().messageErrors['thread:corr-1']).toContain('server unreachable'))
 
     const payload = { message_id: 'msg-2', workspace_id: workspace.id, correlation_id: 'corr-1', from_run_id: 'run_worker', to_run_id: 'run_1', kind: 'message' }
     expect(await applyEvent(store, messageEvent(8, payload), client)).toBe(true)

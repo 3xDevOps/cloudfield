@@ -45,7 +45,7 @@ export function AgentsBar({ runID }: { runID: string }) {
   const kinds = agents.split('\n')
   const tone = kinds.some((kind) => kind.includes(':running:')) ? 'working' : kinds.some((kind) => kind.includes(':failed:')) ? 'failed' : kinds.every((kind) => kind.includes(':done:')) ? 'done' : 'neutral'
   return (
-    <section aria-label="Subagents and workflows" data-slot="agents-bar" className={cn(sessionColumn, 'flex shrink-0 flex-col pb-1')}>
+    <section aria-label="Subagents and workflows" data-slot="agents-bar" className={cn(sessionColumn, 'flex shrink-0 flex-col pb-2')}>
       <div className="flex flex-col rounded-control border border-seam bg-chrome px-2">
       <WorkGroup
         summary={<span className="flex min-w-0 items-center gap-2"><StatusDot tone={tone} pulse={tone === 'working'} /><span className="truncate">{summary(kinds)}</span></span>}
@@ -53,7 +53,7 @@ export function AgentsBar({ runID }: { runID: string }) {
         controls={listID}
         onToggle={() => useStore.getState().setSessionRow(runID, rowID, !open)}
       />
-      <ul id={listID} hidden={!open} className="max-h-48 overflow-y-auto max-md:max-h-[30dvh]">
+      <ul id={listID} hidden={!open} className="max-h-48 overflow-y-auto pb-1 max-md:max-h-[30dvh]">
         {open && kinds.map((kind) => {
           const id = kind.slice(kind.indexOf(':', 2) + 1)
           return <BarRow key={id} runID={runID} id={id} />
