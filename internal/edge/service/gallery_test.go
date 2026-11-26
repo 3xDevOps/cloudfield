@@ -168,6 +168,12 @@ func TestEveryPageRenders(t *testing.T) {
 			if n := strings.Count(body, "<h1"); n != 1 {
 				t.Errorf("%d h1 elements, want 1", n)
 			}
+			if b := st.view.Retiring; b != nil && !strings.Contains(body, "</p>\n<h1>") {
+				t.Errorf("page does not show the retiring banner for %s on its own line", b.Address)
+			}
+			if st.view.Retiring == nil && !strings.Contains(body, "<main>\n<h1>") {
+				t.Error("a page with nothing retiring does not open <main> as it did before the banner existed")
+			}
 			if b := st.view.Retiring; b != nil && !strings.Contains(body, "Its new address is <code>"+b.Address+"</code>") {
 				t.Errorf("page does not show the retiring banner for %s", b.Address)
 			}

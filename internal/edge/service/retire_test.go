@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"reflect"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -226,5 +227,39 @@ func TestRetiringBannerIsText(t *testing.T) {
 	line = line[:strings.Index(line, "</p>")]
 	if strings.Contains(line, "<a") || strings.Contains(line, "href") || line != html.UnescapeString(line) {
 		t.Errorf("banner %q carries a link or markup beyond <code>", line)
+	}
+}
+
+// TestPagesWithoutBannerUnchanged renders every page state with nothing
+// retiring, once with the layout and once with the layout without the
+// banner's block: the bytes are the same.
+func TestPagesWithoutBannerUnchanged(t *testing.T) {
+	pages, err := parsePages()
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout, err := templateFS.ReadFile("templates/layout.html")
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := regexp.MustCompile(`(?s)\{\{with \.Retiring\}\}.*?\{\{end -\}\}\n`)
+	if !block.Match(layout) {
+		t.Fatal("no banner block in templates/layout.html")
+	}
+	without, err := pages.Clone()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = without.Parse(string(block.ReplaceAll(layout, nil))); err != nil {
+		t.Fatal(err)
+	}
+	for _, st := range galleryStates(t) {
+		if st.view.Retiring != nil {
+			continue
+		}
+		got, want := renderState(t, &Service{pages: pages}, st), renderState(t, &Service{pages: without}, st)
+		if got.Body.String() != want.Body.String() {
+			t.Errorf("%s with nothing retiring differs from the page without the banner:\n%s\nwant\n%s", st.name, got.Body, want.Body)
+		}
 	}
 }
