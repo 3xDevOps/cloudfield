@@ -160,7 +160,7 @@ func parseOptions(args []string, getenv func(string) string) (options, error) {
 			return options{}, err
 		}
 	}
-	if *retiring != "" {
+	if strings.TrimSpace(*retiring) != "" {
 		if o.retiring, err = parseRetiringPairs(*retiring, scheme, o.signinOrigin, o.relayOrigin, o.morePairs); err != nil {
 			return options{}, err
 		}

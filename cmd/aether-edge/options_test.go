@@ -335,6 +335,11 @@ func TestRetiringPairs(t *testing.T) {
 	if o, err = parseOptions(append(slices.Clone(origins), "--origin-pairs", pairs), envOf(nil)); err != nil || o.retiring != nil {
 		t.Fatalf("unset: %+v %v", o.retiring, err)
 	}
+	for _, blank := range []string{" ", "\t "} {
+		if o, err = parseOptions(append(slices.Clone(origins), "--origin-pairs", pairs), envOf(map[string]string{"AETHER_EDGE_RETIRING_PAIRS": blank})); err != nil || o.retiring != nil {
+			t.Fatalf("blank %q: %+v %v, want unset", blank, o.retiring, err)
+		}
+	}
 	for _, tt := range []struct{ retiring, want string }{
 		{"https://edge.example.test", `--retiring-pairs: "https://edge.example.test" is not <relay origin> <replacement relay origin> [<YYYY-MM-DD>]`},
 		{"https://edge.example.test https://edge2.example.net 2027-03-01 extra", `--retiring-pairs: "https://edge.example.test https://edge2.example.net 2027-03-01 extra" is not <relay origin>`},
