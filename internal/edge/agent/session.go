@@ -204,6 +204,13 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn, origin string)
 	case !bytes.Equal(pinned, ready.EdgeKey):
 		return edgeproto.Ready{}, 0, pinMismatch(pinned, ready.EdgeKey)
 	}
+	var verified edgeproto.Notices
+	for _, n := range ready.Notices {
+		if err := edgeproto.VerifyNotice(ready.EdgeKey, a.serverID, ch.Nonce, n); err == nil {
+			verified = append(verified, n)
+		}
+	}
+	ready.Notices = verified
 	return ready, protocol, nil
 }
 
@@ -226,6 +233,9 @@ func (a *Agent) session(ctx context.Context) (time.Duration, error) {
 	s := &session{c: c, edgeKey: ready.EdgeKey, protocol: protocol, origins: origins, since: start, beats: make(chan time.Time, 1),
 		transfers: map[string]chan edgeproto.OwnerTransferResult{}}
 	if err = a.setEdgeState(ready.State); err != nil {
+		return time.Since(start), err
+	}
+	if err = a.state.writeNotices(ready.Notices); err != nil {
 		return time.Since(start), err
 	}
 	if err = a.reconcileOwner(s, ready.State); err != nil {
@@ -377,6 +387,10 @@ func (a *Agent) RelayOrigins() []string {
 	}
 	return slices.Clone(a.live.origins)
 }
+
+// Notices are the notices the edge holding the pinned key sent at the
+// server's latest enrollment there, each verified against that key.
+func (a *Agent) Notices() ([]edgeproto.Notice, error) { return a.state.Notices() }
 
 // EdgeKey is the key of the edge the control connection is enrolled
 // with, nil while there is none.

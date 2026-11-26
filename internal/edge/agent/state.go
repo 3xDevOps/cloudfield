@@ -34,6 +34,9 @@ const (
 	// edgeStateFile, beside ownerFile, records the state the edge holding
 	// the key last reported for this server.
 	edgeStateFile = "edge_state.json"
+	// noticesFile, beside ownerFile, holds the verified notices of the
+	// edge holding the key, from the latest enrollment that sent any.
+	noticesFile = "notices.json"
 )
 
 // State is the agent's persistent state: the pinned edge key, the owner,
@@ -249,6 +252,40 @@ func (s *State) writeEdgeState(serverID, state string) error {
 		return errors.New("edgeagent: no edge key is pinned, so no edge state can be recorded")
 	}
 	return s.write(name, edgeStateRecord{ServerID: serverID, State: state})
+}
+
+// Notices returns the notices the edge holding the pinned key sent at
+// the latest enrollment, each verified against that key when it came;
+// nil when it sent none or no key is pinned.
+func (s *State) Notices() ([]edgeproto.Notice, error) {
+	name, err := s.keyFile(noticesFile)
+	if err != nil || name == "" {
+		return nil, err
+	}
+	var n []edgeproto.Notice
+	_, err = s.read(name, &n)
+	return n, err
+}
+
+// writeNotices records notices, verified against the pinned key, as the
+// latest the edge holding it sent, and forgets them when there are none.
+func (s *State) writeNotices(notices []edgeproto.Notice) error {
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	name, err := s.keyFile(noticesFile)
+	if err != nil {
+		return err
+	}
+	if name == "" {
+		return errors.New("edgeagent: no edge key is pinned, so no notices can be recorded")
+	}
+	if len(notices) == 0 {
+		return s.remove(name)
+	}
+	return s.write(name, notices)
 }
 
 // writeOwner records owner for the pinned key.
