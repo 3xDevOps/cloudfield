@@ -6,8 +6,9 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/3xDevOps/Aether/internal/coordtransport"
-	"github.com/3xDevOps/Aether/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/coordhooks"
+	"github.com/3xDevOps/cloudfield/internal/coordtransport"
+	"github.com/3xDevOps/cloudfield/internal/protocol"
 )
 
 // registerChildTools adds the child-run tools when this run's server offers
@@ -31,9 +32,8 @@ func registerChildTools(ctx context.Context, srv *mcp.Server, socket string) {
 	})
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: "aether_subsession_start",
-		Description: "Start a subsession: a separate Cloudfield session with a fresh context and its own container and branch from your last published commit (commit first), on any installed agent and model, on this session's account for this session's agent or your session owner's own account otherwise, or on an account aether_subsession_options lists. " +
-			"The majority of straightforward tasks can be done in one session: split parallel or bulky parts across your own subagents or workflows. They share your checkout, start in seconds, and their results land in your working tree. " +
-			"Reserve a subsession for a large, independent stream of work that needs its own branch or pull request, would run for hours, or needs another agent, model, or harness. Don't use subsessions in excess unless there is a need to use them over subagents/singular session workflows. " +
+		Description: "Start a subsession: a separate Cloudfield session with a fresh context and its own sandbox and branch from your last published commit (commit first), on any installed agent and model, on this session's account for this session's agent or your session owner's own account otherwise, or on an account aether_subsession_options lists. " +
+			coordhooks.OneSessionRule + " " + coordhooks.ReviewerRule + " " + coordhooks.SubsessionRule + " " +
 			"The subsession sees only task: state the goal, the files it owns and must not touch, how to verify and what to report, with repository-relative paths. Its report arrives in aether_inbox and wakes you; follow the receipt's next. A subsession cannot start subsessions. " +
 			"Honor the number of subsessions and the agents the user asks for. A retry with the same idempotency_key returns the first receipt.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in protocol.ChildStartParams) (*mcp.CallToolResult, protocol.ChildReceipt, error) {

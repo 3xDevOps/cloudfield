@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/3xDevOps/Aether/internal/runtime"
+	"github.com/3xDevOps/cloudfield/internal/runtime"
 )
 
 // TestKVMClosedSessionStartsAgainFromItsDisks closes a session VM the way

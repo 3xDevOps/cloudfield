@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/3xDevOps/Aether/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/domain"
 )
 
 // RunAccountSegment is the stretch of a run spent on one account. Segment 0
@@ -17,6 +17,11 @@ type RunAccountSegment struct {
 	AccountMemberID domain.MemberID
 	Reason          string
 	StartedAt       time.Time
+}
+
+// Account is the login the segment spent.
+func (s *RunAccountSegment) Account() domain.Account {
+	return domain.AccountOf(s.AccountMemberID)
 }
 
 // RunAccountLaunchReason is segment 0's reason.

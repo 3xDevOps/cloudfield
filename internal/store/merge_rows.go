@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/3xDevOps/Aether/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/domain"
 )
 
 // mergeRows moves what grants access or carries ongoing work from absorbed
@@ -79,6 +79,9 @@ func mergeRows(ctx context.Context, tx *sql.Tx, survivor, absorbed domain.Member
 		if _, err := tx.ExecContext(ctx, s.query, abs, sur); err != nil {
 			return fmt.Errorf("store: merge %s: %w", s.what, err)
 		}
+	}
+	if err := mergeAgentLogins(ctx, tx, sur, abs); err != nil {
+		return fmt.Errorf("store: merge logins: %w", err)
 	}
 	if survivor.PublicKey == "" {
 		survivor.PublicKey = absorbed.PublicKey

@@ -32,6 +32,7 @@ import { RunLineage, useChildRunsItems } from '@/routes/run/child-runs'
 import { useModeSwitch } from '@/routes/run/mode-switch'
 import { PresenceControls, PresenceErrors } from '@/routes/run/multiplayer-controls'
 import { useOpenInEditor } from '@/routes/run/open-in-editor'
+import { RunLinearIssue } from '@/routes/run/linear-issue'
 import { useRunPullRequest } from '@/routes/run/pull-request'
 import { requestCardID } from '@/routes/run/requests'
 import { PhoneRunHeader } from '@/routes/run/phone-header'
@@ -177,6 +178,12 @@ function StateLine({ run, agentName, narrow, controls, chip }: { run: RunRecord;
               <span className={part}>
                 <span aria-hidden>·</span>
                 <span className={asks && !run.switching ? 'min-w-0 truncate text-text' : 'min-w-0 truncate'}>{detail}</span>
+              </span>
+            )}
+            {run.linear_issue && (
+              <span className={part}>
+                <span aria-hidden>·</span>
+                <RunLinearIssue run={run} />
               </span>
             )}
             {extraRepoCount(run) > 0 && (

@@ -147,13 +147,13 @@ You do this once per agent, per person.
    ```
 
    ```text
-   AGENT        SOURCE   INSTALLED  ENHANCED       LOGIN FILE
+   AGENT        SOURCE   INSTALLED  ENHANCED       LOGIN
    claude       shipped  yes        not installed  not found
    codex        shipped  yes        installed      found
    myagent      member   yes        none           -
    ```
 
-   `LOGIN FILE` only looks for the login file in your home; `-` means the agent
+   `LOGIN` only looks for the login in your home; `-` means the agent
    declares none, and `signed out` that the server knows the login cannot
    sign the agent in ([When a login is signed out](#when-a-login-is-signed-out)). `--json` prints the agents as `agent.list` returns them
    ([local-gateway.md](local-gateway.md)). The **Agents** page shows the same
@@ -217,13 +217,17 @@ server learns of it in two ways, for the account a session runs on:
   no access token is signed out, and so is a Claude Code login whose token
   expired with no refresh token. An expired token with a refresh token is
   not: the agent renews it. Codex's file records no expiry. A file with an
-  API key, or with no OAuth login at all, is not judged.
+  API key, or with no OAuth login at all, is not judged. On your own
+  account a Claude Code sign-in through the Anthropic Console
+  ([Claude Code](#claude-code)) signs the agent in whatever the file holds,
+  so the file is not judged then either.
 - **A refusal.** An agent that answers a turn, or the opening of its
   conversation, with `Authentication required` is remembered for that
   account and agent, for any agent that runs over ACP (Enhanced, and
   Background where it uses the Enhanced adapter). Only the agent's own
-  message is kept. It is forgotten when the login file changes or a turn on
-  the account ends normally, unless a workspace variable signed that turn
+  message is kept. It is forgotten when the login file or a Claude Code
+  Console sign-in changes, which a token refresh also does, or a turn on the
+  account ends normally, unless a workspace variable signed that turn
   in. A server restart forgets it too.
 
 The other agents' files are only checked for presence, and a Standard session
@@ -237,7 +241,7 @@ While the server knows a login is signed out:
 | Dashboard, for your own account | **\<Agent\> is signed out** (the login file) or **\<Agent\>'s sign-in was refused** (a refusal) with the problem and **Sign in on Agents**, on every page but Agents and the refused session, which show it themselves |
 | **Agents** page, **Settings → Agents** | **Signed out** or **Sign-in refused** with the problem, and **Log in** |
 | Launch dialog | **Signed out** or **Sign-in refused** on the account or agent, with the problem and the way to sign in |
-| `cloudfield agent list` | `signed out` under `LOGIN FILE`, then `claude is signed out: <problem>` and `sign in again: ...` |
+| `cloudfield agent list` | `signed out` under `LOGIN`, then `claude is signed out: <problem>` and `sign in again: ...` |
 | `cloudfield status` | `agent: claude: installed, signed out: <problem>` and `next:` naming `aether agent login claude` |
 | `cloudfield agent list --json`, `agent.list` | `login_problem`, and `login_blocks_launch` |
 | Connector `aether_launch_options`, `aether_list_workspaces` | `signed_in: false` and `signed_out` with the problem, the way to sign in, and whether a launch is refused until then |
@@ -310,7 +314,31 @@ pass through, such as Claude Code's `ANTHROPIC_AUTH_TOKEN`, goes in a
 
 Run `claude auth login`, or start `claude` and use `/login`. Either prints a URL
 to open in your own browser and takes a code back. `/status` shows which
-credential is active. The login lands in `~/.claude/.credentials.json`.
+credential is active. Where the login lands depends on the account:
+
+| Sign-in | Where Claude Code keeps it | Usage windows | Shared with an [account share](teams.md#agent-accounts) |
+| --- | --- | --- | --- |
+| Claude subscription (claude.ai) | `~/.claude/.credentials.json` | Yes | Yes |
+| Anthropic Console, creating an API key | `primaryApiKey` in `~/.claude.json` | No: the API bills it | No |
+| Anthropic Console, without an API key | An Anthropic profile: `~/.config/anthropic/credentials/<profile>.json`, for the profile `~/.config/anthropic/active_config` names, or `default` | No: the API bills it | No |
+
+All three sign in your own Standard, Enhanced and Background sessions, which
+mount your whole home, and count as **Login found**. An
+Isolated session works on a copy of your home that it
+discards: a profile token Claude Code renews there is not written back, so
+sign in again if the Console sign-in stops working after one. A session on an account
+shared with you carries the owner's `~/.claude/.credentials.json` alone, so a
+Console sign-in never leaves its owner's sessions: sharing needs a
+subscription login. A Console sign-in the server cannot read is not counted:
+a symlink on its path, a file with another hard link or that is not JSON, a
+configuration file over 64 MiB, or a profile file over 1 MiB. A profile whose
+token has expired and holds no refresh token is not counted either. A launch
+refused over a signed-out login file then names the file that could not be
+read; a profile directory behind a symlink, such as a symlinked `~/.config`,
+is skipped without a message. The server reads nothing through a `~/.claude`
+that is a symlink leaving your home. Cloudfield reads the profile directory at
+`~/.config/anthropic`; a workspace variable `ANTHROPIC_CONFIG_DIR` or
+`ANTHROPIC_PROFILE` that points Claude Code elsewhere is not followed.
 
 For an API key, set `ANTHROPIC_API_KEY` in the server's environment, and
 `ANTHROPIC_BASE_URL` for a gateway. A `CLAUDE_CODE_OAUTH_TOKEN` from
@@ -557,7 +585,9 @@ server, run `sudo cloudfield-server config set agent-update false`, then restart
 The dashboard shows how much of a subscription is used for Claude Code and
 Codex. The server reads the native login in your home and asks the vendor's
 usage endpoint. Credentials and the vendor's responses never reach the browser
-or a session. Only native subscription logins count: API keys, pi, oh-my-pi,
+or a session. Only native subscription logins count: API keys, a Claude Code
+sign-in through the Anthropic Console (`unsupported`, with where the sign-in
+is), pi, oh-my-pi,
 OpenCode, Copilot, Gemini, Cursor and Antigravity have no quota display. A row
 can read `unauthenticated`, `unsupported`, `unavailable`, `stale` or `error`.
 Missing data is never shown as zero. Re-authenticating is up to you, in your

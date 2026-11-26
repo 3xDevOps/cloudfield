@@ -17,16 +17,16 @@ import (
 
 	acp "github.com/coder/acp-go-sdk"
 
-	"github.com/3xDevOps/Aether/internal/acphost/acpmock"
-	"github.com/3xDevOps/Aether/internal/agentstatus"
-	"github.com/3xDevOps/Aether/internal/disk"
-	"github.com/3xDevOps/Aether/internal/domain"
-	"github.com/3xDevOps/Aether/internal/events"
-	"github.com/3xDevOps/Aether/internal/fallback"
-	"github.com/3xDevOps/Aether/internal/quota"
-	"github.com/3xDevOps/Aether/internal/runtime"
-	"github.com/3xDevOps/Aether/internal/secretstore"
-	"github.com/3xDevOps/Aether/internal/store"
+	"github.com/3xDevOps/cloudfield/internal/acphost/acpmock"
+	"github.com/3xDevOps/cloudfield/internal/agentstatus"
+	"github.com/3xDevOps/cloudfield/internal/disk"
+	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/events"
+	"github.com/3xDevOps/cloudfield/internal/fallback"
+	"github.com/3xDevOps/cloudfield/internal/quota"
+	"github.com/3xDevOps/cloudfield/internal/runtime"
+	"github.com/3xDevOps/cloudfield/internal/secretstore"
+	"github.com/3xDevOps/cloudfield/internal/store"
 )
 
 // claudeUsage reports each account's used share of its Claude five-hour
@@ -619,7 +619,7 @@ func TestUnconfirmedSharedLoginDoesNotUseUpTheAccount(t *testing.T) {
 		t.Fatalf("the container back on Grace's account = account %q, mounts %+v; want only Grace's login", spec.Env["AETHER_ACCOUNT_MEMBER_ID"], spec.Mounts)
 	}
 	sc, err := e.sched.readSidecar(run.ID)
-	if err != nil || sc.LoginMember != string(e.owner.ID) || !slices.Equal(sc.VerifiedLogins, []domain.MemberID{lin.ID, e.owner.ID}) {
+	if err != nil || sc.LoginMember != string(e.owner.ID) || !slices.Equal(sc.VerifiedLogins, []domain.Account{domain.AccountOf(lin.ID), domain.AccountOf(e.owner.ID)}) {
 		t.Fatalf("sidecar = login %q verified %v, %v; want Grace's login, Lin and Grace confirmed", sc.LoginMember, sc.VerifiedLogins, err)
 	}
 
@@ -1469,7 +1469,7 @@ func TestStartStoppedDuringTheEventLogReadIsClean(t *testing.T) {
 
 // Each stop reason names why no account took the run.
 func TestNoFallbackReason(t *testing.T) {
-	ada, grace := domain.MemberID("ada"), domain.MemberID("grace")
+	ada, grace := domain.AccountOf("ada"), domain.AccountOf("grace")
 	for _, tc := range []struct {
 		harness  string
 		measured fallback.Measured

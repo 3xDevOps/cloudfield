@@ -11,7 +11,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/3xDevOps/Aether/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/domain"
 )
 
 // Manager owns persistent member homes and separately reclaimable cache pools.
@@ -25,6 +25,8 @@ type Manager struct {
 	// archived holds the members whose home Archive moved, so a write
 	// that passed its checks before the move cannot create a new home.
 	archived map[domain.MemberID]bool
+	// apiKeyLogins caches claudeAPIKeyLogin by the file it read.
+	apiKeyLogins map[domain.MemberID]apiKeyLoginRead
 }
 
 // New creates a manager with separate home and cache roots. Neither root is

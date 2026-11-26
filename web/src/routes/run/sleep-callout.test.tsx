@@ -31,6 +31,7 @@ describe('SleepCallout', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Wake' }))
     await waitFor(() => expect(wake).toHaveBeenCalledWith('run_1'))
     expect(await screen.findByText('Wake failed')).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Wake' })).toBeDefined()
     expect(screen.getByText(/insufficient host memory headroom: 1.2 GiB available/)).toBeDefined()
   })
 
@@ -44,15 +45,31 @@ describe('SleepCallout', () => {
     expect(container.textContent).toBe('')
   })
 
-  it('says a saved session keeps its processes', () => {
+  it('keeps the explanation folded behind the Asleep since row', () => {
     render(<SleepCallout run={record({ asleep_since: since, asleep_saved: true })} />)
-    expect(screen.getByText(/Its processes, terminals, files and conversation come back where they were; connections to outside the session may not/)).toBeDefined()
+    const row = screen.getByRole('button', { name: /Asleep since/ })
+    expect(row.getAttribute('aria-expanded')).toBe('false')
+    const about = screen.getByText(/Its processes, terminals, files and conversation come back where they were; connections to outside the session may not/)
+    expect(row.getAttribute('aria-controls')).toBe(about.id)
+    expect(about.hidden).toBe(true)
+    fireEvent.click(row)
+    expect(row.getAttribute('aria-expanded')).toBe('true')
+    expect(about.hidden).toBe(false)
     expect(screen.queryByText(/running processes are not/)).toBeNull()
+    expect(row.textContent).not.toContain('processes stopped')
+  })
+
+  it('says on the folded row that a stopped container lost its processes', () => {
+    render(<SleepCallout run={record({ asleep_since: since })} />)
+    const row = screen.getByRole('button', { name: /Asleep since .* · processes stopped/ })
+    expect(row.querySelector('.truncate')).toBeNull()
+    fireEvent.click(row)
+    expect(screen.getByText(/running processes are not/).hidden).toBe(false)
   })
 
   it('shows a wake in progress without offering another', () => {
     render(<SleepCallout run={record({ asleep_since: since, waking: true })} />)
-    expect(screen.getByText('Waking…')).toBeDefined()
-    expect(screen.queryByRole('button', { name: 'Wake' })).toBeNull()
+    expect(screen.getByText('Waking… Starting the container and restoring the agent’s conversation.')).toBeDefined()
+    expect(screen.queryByRole('button')).toBeNull()
   })
 })

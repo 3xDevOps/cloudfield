@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/3xDevOps/Aether/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/domain"
 )
 
 // memberRefs classifies every column that holds a member id. A merge
@@ -38,6 +38,7 @@ var memberRefs = map[string]bool{
 	"run_children.owner_member_id":             true,
 	"run_children.account_member_id":           true,
 	"child_settings.member_id":                 false,
+	"agent_logins.member_id":                   true,
 	"schedules.member_id":                      true,
 	"slack_links.member_id":                    true,
 	"audit.member_id":                          false,

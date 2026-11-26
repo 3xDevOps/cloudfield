@@ -27,21 +27,21 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	"github.com/3xDevOps/Aether/internal/cli"
-	"github.com/3xDevOps/Aether/internal/connector"
-	"github.com/3xDevOps/Aether/internal/domain"
-	edgeagent "github.com/3xDevOps/Aether/internal/edge/agent"
-	edgeclient "github.com/3xDevOps/Aether/internal/edge/client"
-	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
-	"github.com/3xDevOps/Aether/internal/edge/relay"
-	edge "github.com/3xDevOps/Aether/internal/edge/service"
-	edgestore "github.com/3xDevOps/Aether/internal/edge/store"
-	"github.com/3xDevOps/Aether/internal/events"
-	"github.com/3xDevOps/Aether/internal/protocol"
-	"github.com/3xDevOps/Aether/internal/sshd"
-	"github.com/3xDevOps/Aether/internal/store"
-	"github.com/3xDevOps/Aether/internal/store/storetest"
-	"github.com/3xDevOps/Aether/internal/timeline"
+	"github.com/3xDevOps/cloudfield/internal/cli"
+	"github.com/3xDevOps/cloudfield/internal/connector"
+	"github.com/3xDevOps/cloudfield/internal/domain"
+	edgeagent "github.com/3xDevOps/cloudfield/internal/edge/agent"
+	edgeclient "github.com/3xDevOps/cloudfield/internal/edge/client"
+	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
+	"github.com/3xDevOps/cloudfield/internal/edge/relay"
+	edge "github.com/3xDevOps/cloudfield/internal/edge/service"
+	edgestore "github.com/3xDevOps/cloudfield/internal/edge/store"
+	"github.com/3xDevOps/cloudfield/internal/events"
+	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/sshd"
+	"github.com/3xDevOps/cloudfield/internal/store"
+	"github.com/3xDevOps/cloudfield/internal/store/storetest"
+	"github.com/3xDevOps/cloudfield/internal/timeline"
 )
 
 // waitTimeout bounds every wait for something asynchronous: a directory
@@ -85,6 +85,8 @@ type harness struct {
 	pairB           bool
 	signinB, relayB string
 	pairBAddrs      [2]string
+	// recordOrigins sets edge.Config.RecordOrigins.
+	recordOrigins bool
 
 	mu        sync.Mutex
 	skew      time.Duration
@@ -183,6 +185,7 @@ func (h *harness) startEdge() {
 	svc, err := edge.New(edge.Config{
 		DataDir: h.edgeDir, SigninOrigin: h.signinURL, RelayOrigin: h.relayURL, MorePairs: morePairs,
 		GitHub: h.github.app(), Clock: h.now, ConnectorClientHosts: []string{"127.0.0.1"}, Reviewer: h.reviewer,
+		RecordOrigins: h.recordOrigins,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -209,6 +212,9 @@ func (h *harness) startEdge() {
 	go func() { _ = n.front.Serve(front) }()
 	for _, ln := range frontB {
 		go func() { _ = n.front.Serve(ln) }()
+	}
+	if err := svc.StartRecording(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 	h.mu.Lock()
 	h.node = n

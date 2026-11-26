@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/3xDevOps/Aether/internal/domain"
-	"github.com/3xDevOps/Aether/internal/linear/api"
-	"github.com/3xDevOps/Aether/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/linear/api"
+	"github.com/3xDevOps/cloudfield/internal/protocol"
 )
 
 // Each member's Linear methods use only their own key, and a connector is
@@ -43,7 +43,7 @@ func TestLinearUsesTheCallersOwnKey(t *testing.T) {
 	}
 	var issues protocol.LinearIssuesResult
 	issuesErr := aliceC.Call(protocol.MethodLinearIssues, nil, &issues)
-	if rpcCode(issuesErr) != protocol.CodeInvalidState || !strings.Contains(issuesErr.Error(), "Linear is not connected: save a personal API key in Settings → Linear") {
+	if rpcCode(issuesErr) != protocol.CodeInvalidState || !strings.Contains(issuesErr.Error(), "Linear is not connected: save a personal API key in Settings → Connections → Linear") {
 		t.Fatalf("alice's issues without a key = %v", issuesErr)
 	}
 	if err := aliceC.Call(protocol.MethodLinearConnect, protocol.LinearConnectParams{APIKey: "key-wrong"}, nil); err == nil || !strings.Contains(err.Error(), "Authentication required") {

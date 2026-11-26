@@ -16,40 +16,40 @@ import (
 	"sync"
 	"time"
 
-	"github.com/3xDevOps/Aether/internal/adapter"
-	"github.com/3xDevOps/Aether/internal/assistant"
-	"github.com/3xDevOps/Aether/internal/assistant/tools"
-	"github.com/3xDevOps/Aether/internal/collab"
-	"github.com/3xDevOps/Aether/internal/connector"
-	"github.com/3xDevOps/Aether/internal/control"
-	"github.com/3xDevOps/Aether/internal/domain"
-	edgeagent "github.com/3xDevOps/Aether/internal/edge/agent"
-	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
-	"github.com/3xDevOps/Aether/internal/egress"
-	"github.com/3xDevOps/Aether/internal/events"
-	"github.com/3xDevOps/Aether/internal/evidence"
-	"github.com/3xDevOps/Aether/internal/fallback"
-	"github.com/3xDevOps/Aether/internal/gitengine"
-	"github.com/3xDevOps/Aether/internal/guest"
-	"github.com/3xDevOps/Aether/internal/harness"
-	"github.com/3xDevOps/Aether/internal/memberhome"
-	"github.com/3xDevOps/Aether/internal/ompbroker"
-	"github.com/3xDevOps/Aether/internal/preference"
-	"github.com/3xDevOps/Aether/internal/profile"
-	"github.com/3xDevOps/Aether/internal/ptyhost"
-	"github.com/3xDevOps/Aether/internal/quota"
-	"github.com/3xDevOps/Aether/internal/reachability"
-	"github.com/3xDevOps/Aether/internal/runtime"
-	"github.com/3xDevOps/Aether/internal/runtime/vm"
-	"github.com/3xDevOps/Aether/internal/scheduler"
-	"github.com/3xDevOps/Aether/internal/secretstore"
-	"github.com/3xDevOps/Aether/internal/servergw"
-	"github.com/3xDevOps/Aether/internal/serversetup"
-	"github.com/3xDevOps/Aether/internal/serverupdate"
-	"github.com/3xDevOps/Aether/internal/signing"
-	"github.com/3xDevOps/Aether/internal/sshd"
-	"github.com/3xDevOps/Aether/internal/store"
-	"github.com/3xDevOps/Aether/internal/version"
+	"github.com/3xDevOps/cloudfield/internal/adapter"
+	"github.com/3xDevOps/cloudfield/internal/assistant"
+	"github.com/3xDevOps/cloudfield/internal/assistant/tools"
+	"github.com/3xDevOps/cloudfield/internal/collab"
+	"github.com/3xDevOps/cloudfield/internal/connector"
+	"github.com/3xDevOps/cloudfield/internal/control"
+	"github.com/3xDevOps/cloudfield/internal/domain"
+	edgeagent "github.com/3xDevOps/cloudfield/internal/edge/agent"
+	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
+	"github.com/3xDevOps/cloudfield/internal/egress"
+	"github.com/3xDevOps/cloudfield/internal/events"
+	"github.com/3xDevOps/cloudfield/internal/evidence"
+	"github.com/3xDevOps/cloudfield/internal/fallback"
+	"github.com/3xDevOps/cloudfield/internal/gitengine"
+	"github.com/3xDevOps/cloudfield/internal/guest"
+	"github.com/3xDevOps/cloudfield/internal/harness"
+	"github.com/3xDevOps/cloudfield/internal/memberhome"
+	"github.com/3xDevOps/cloudfield/internal/ompbroker"
+	"github.com/3xDevOps/cloudfield/internal/preference"
+	"github.com/3xDevOps/cloudfield/internal/profile"
+	"github.com/3xDevOps/cloudfield/internal/ptyhost"
+	"github.com/3xDevOps/cloudfield/internal/quota"
+	"github.com/3xDevOps/cloudfield/internal/reachability"
+	"github.com/3xDevOps/cloudfield/internal/runtime"
+	"github.com/3xDevOps/cloudfield/internal/runtime/vm"
+	"github.com/3xDevOps/cloudfield/internal/scheduler"
+	"github.com/3xDevOps/cloudfield/internal/secretstore"
+	"github.com/3xDevOps/cloudfield/internal/servergw"
+	"github.com/3xDevOps/cloudfield/internal/serversetup"
+	"github.com/3xDevOps/cloudfield/internal/serverupdate"
+	"github.com/3xDevOps/cloudfield/internal/signing"
+	"github.com/3xDevOps/cloudfield/internal/sshd"
+	"github.com/3xDevOps/cloudfield/internal/store"
+	"github.com/3xDevOps/cloudfield/internal/version"
 )
 
 // Defaults for the server configuration.
@@ -408,6 +408,10 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 	if herr != nil {
 		return nil, fmt.Errorf("server: create member homes: %w", herr)
 	}
+	logins, lerr := memberhome.NewLogins(filepath.Join(cfg.DataDir, "logins"))
+	if lerr != nil {
+		return nil, fmt.Errorf("server: create member logins: %w", lerr)
+	}
 	names := make([]string, 0, len(harness.Profiles()))
 	for _, p := range harness.Profiles() {
 		names = append(names, p.Name)
@@ -469,6 +473,7 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 		StateDir:       filepath.Join(cfg.DataDir, "scheduler"),
 		DataDir:        cfg.DataDir,
 		Homes:          homes,
+		Logins:         logins,
 		OMPBrokers:     ompBrokers,
 		Signing:        s.signing,
 		Memory:         mem,
@@ -543,6 +548,8 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 		Runs:              s.sched,
 		Control:           s.control,
 		Homes:             homes,
+		Logins:            logins,
+		LoginSignIns:      s.sched,
 		Signing:           s.signing,
 		Secrets:           secrets,
 		WhoIs:             whois,
@@ -575,7 +582,7 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 	sshCfg.EdgeReviewer = cfg.EdgeReviewer
 	sshCfg.Services.Usage = cfg.Usage
 	if sshCfg.Services.Usage == nil {
-		sshCfg.Services.Usage = quota.New(homes)
+		sshCfg.Services.Usage = quota.New(homes, logins)
 	}
 	// The name the edge agent announces; an unreadable one leaves refusals
 	// unnamed.
@@ -620,6 +627,11 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 	}
 	if err = s.ssh.RecoverMergeArchives(ctx); err != nil {
 		return nil, err
+	}
+	// A login left behind is retried at the next start; it never keeps the
+	// server down.
+	if reconcileErr := s.sched.ReconcileLogins(ctx, ""); reconcileErr != nil {
+		slog.Warn("server: reconcile member logins", "error", reconcileErr)
 	}
 	if err = s.signing.Migrate(ctx, members); err != nil {
 		return nil, fmt.Errorf("server: move signing keys out of member homes: %w", err)
