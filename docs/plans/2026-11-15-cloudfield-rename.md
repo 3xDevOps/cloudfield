@@ -724,14 +724,13 @@ address, and steps 10 and 14 do not apply.
 
 The fields that change, by the rule `edge.cloudfield.ai`,
 `https://cloudfield.ai`, `team@cloudfield.ai`. They are in the packages once
-the pull request that moves the connector guides and packages, in progress
-on 2026-11-26, merges; until then the files hold the old values.
+#1123 merges; until then the files hold the old values.
 
 | File | Field | Old | New |
 | --- | --- | --- | --- |
 | `packaging/claude-connector/listing.json` | `server_url` | `https://edge.onaether.dev/mcp` | `https://edge.cloudfield.ai/mcp` |
 | | `description` | "through the Cloudfield edge at edge.onaether.dev" | "through the Cloudfield edge at edge.cloudfield.ai" |
-| | `prerequisites` | "a Cloudfield server linked to edge.onaether.dev" | "a Cloudfield server linked to edge.cloudfield.ai" |
+| | `prerequisites` | "a Cloudfield server linked to edge.onaether.dev" | "a Cloudfield server, v0.8.7 or later, linked to the Cloudfield edge" |
 | | `company.website` | `https://onaether.dev` | `https://cloudfield.ai` |
 | | `company.contact` | `team@onaether.dev` | `team@cloudfield.ai` |
 | `packaging/chatgpt-plugin/plugin.json` | `author.email` | `team@onaether.dev` | `team@cloudfield.ai` |
