@@ -1,13 +1,12 @@
 import { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import type * as React from 'react'
 import { useShallow } from 'zustand/react/shallow'
-import { VList, type VListHandle } from 'virtua'
+import { VList, type CacheSnapshot, type VListHandle } from 'virtua'
 import type { Tone } from '@/components/ui/status-dot'
 import { Button } from '@/components/ui/button'
 import { Callout } from '@/components/ui/callout'
 import { Skeleton } from '@/components/ui/skeleton'
 import { RelativeTime } from '@/components/ui/relative-time'
-import { TilePressedContext } from '@/components/tiles/area'
 import { api } from '@/lib/api'
 import { useFileDrop, useRefuseStrayFileDrops } from '@/lib/file-drag'
 import { useDelayed } from '@/lib/hooks'
@@ -47,6 +46,18 @@ const emptyRoom: RoomMessage[] = []
 const noRows: SessionRow[] = []
 const emptyIDs: string[] = []
 const bottomSlack = 24
+
+/** Row heights each session's Chat last measured, with the rows they belong to: virtua matches a snapshot by index. */
+const measured = new Map<string, { rows: string; cache: CacheSnapshot }>()
+
+function rowSignature(flat: readonly { key: string }[], older: boolean): string {
+  return `${older}\n${flat.map((item) => item.key).join('\n')}`
+}
+
+useStore.subscribe((state, previous) => {
+  if (state.runs === previous.runs) return
+  for (const runID of measured.keys()) if (!(runID in state.runs)) measured.delete(runID)
+})
 const historyViewports = 3
 const userScrollWindow = 600
 const scrollKeys = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', 'Tab'])
@@ -249,7 +260,6 @@ export function SessionView({ run, agent, agentName, room, nav, active, textarea
 }) {
   useRefuseStrayFileDrops()
   const tileFocused = useContext(FrameFocusContext)
-  const pressed = useContext(TilePressedContext)
   const enhanced = run.acp === true
   const showMessages = useStore((s) => !s.hiddenAgentMessages[run.id])
   const { rows, session, missingRoomImages } = useRows(run, enhanced, showMessages)
@@ -315,6 +325,17 @@ export function SessionView({ run, agent, agentName, room, nav, active, textarea
     previous.current = { flat, older }
     if (anchor) list.current?.scrollToIndex(anchor.index, { align: 'start', offset: anchor.offset })
   })
+  const [cache] = useState(() => {
+    const kept = measured.get(run.id)
+    return kept?.rows === rowSignature(flat, older) ? kept.cache : undefined
+  })
+  useLayoutEffect(() => {
+    const handle = list.current
+    if (!handle) return
+    return () => {
+      if (run.id in useStore.getState().runs) measured.set(run.id, { rows: rowSignature(previous.current.flat, previous.current.older), cache: handle.cache })
+    }
+  }, [run.id])
   const announcement = useAnnouncement(run, rows, session, agentName)
 
   const ctx = useRowContext(run, agent, nav, room)
@@ -466,6 +487,7 @@ export function SessionView({ run, agent, agentName, room, nav, active, textarea
         {loading ? skeleton && <LoadingChat /> : enhanced && count === 0 && <SessionWelcome run={run} agentName={agentName} />}
         <VList
           ref={list}
+          cache={cache}
           role="log"
           aria-live="off"
           aria-label="Chat"
@@ -528,7 +550,7 @@ export function SessionView({ run, agent, agentName, room, nav, active, textarea
       <ChangesBar run={run} />
       <AgentsBar runID={run.id} />
       <CompletionPrompt run={run} className={cn(sessionColumn, 'pb-2')} />
-      <Composer run={run} agent={agent} room={room} textarea={textarea} autoFocus={focusComposer} collapsed={!tileFocused || pressed} onFocusChange={onComposing} dock={dock || undefined} onEscape={() => viewport.current?.focus()} onDropStatus={reportDropStatus} />
+      <Composer run={run} agent={agent} room={room} textarea={textarea} autoFocus={focusComposer} onFocusChange={onComposing} dock={dock || undefined} onEscape={() => viewport.current?.focus()} onDropStatus={reportDropStatus} />
       <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">{announcement}</span>
       {drop.count !== null && <DropOverlay count={drop.count} refused={drop.refused} blocked={dropStatus.blocked} limit={dropStatus.limit} />}
     </div>

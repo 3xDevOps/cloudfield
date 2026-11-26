@@ -51,17 +51,14 @@ function useTypers(runID: string): string[] {
   return activeTypers(entries, Math.max(now, Date.now()), self.id ?? '')
 }
 
-/** The row keeps its height while others watch the run, so a name appearing never moves the composer. */
+/** The region is always mounted, so a screen reader hears a name arrive; it takes room only while someone types. */
 export function TypingIndicator({ runID }: { runID: string }) {
-  const self = useSelf()
   const typers = useTypers(runID)
-  const shared = useStore((s) => runWatchers(s.presence, runID).some((id) => id !== self.id))
   const members = useStore((s) => s.members)
   const mergedInto = useStore((s) => s.mergedInto)
-  if (!shared && typers.length === 0) return null
   const label = typingLabel(typers.map((id) => memberName({ members, mergedInto }, id)))
   return (
-    <p role="status" aria-live="polite" className="h-4 truncate px-4 text-ui-sm leading-4 text-muted">
+    <p role="status" aria-live="polite" className={label ? 'h-4 truncate px-4 text-ui-sm leading-4 text-muted' : 'sr-only'}>
       {label && (
         <>
           {label}
