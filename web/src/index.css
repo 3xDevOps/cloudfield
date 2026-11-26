@@ -243,52 +243,52 @@ div.xterm .xterm-viewport {
      where `env()` is unsupported; a bare `env()` would void them. */
   --safe-top: env(safe-area-inset-top, 0px);
 
-  --canvas: #ffffff;
-  --chrome: #f7f7f7;
-  --hover: #f3f3f3;
-  --hover-chrome: #ececec;
-  --raised: #ffffff;
-  --seam: rgb(0 0 0 / 0.08);
-  --control-border: #8a8a8a;
-  --text: #1f1f1f;
-  --text-muted: #6b6b6b;
-  --icon-faint: #8a8a8a;
-  --accent-fill: #367f77;
-  --accent-mark: #367f77;
-  --control-light: #367f77;
+  --canvas: #eff1f5;
+  --chrome: #e6e9ef;
+  --hover: #e2e5ec;
+  --hover-chrome: #dce0e8;
+  --raised: #eff1f5;
+  --seam: rgb(76 79 105 / 0.12);
+  --control-border: #797c8f;
+  --text: #303246;
+  --text-muted: #5c5f77;
+  --icon-faint: #7c7f93;
+  --accent-fill: #a44007;
+  --accent-mark: #0375a3;
+  --control-light: #a44007;
   --control-dots: 100%;
-  --accent-text: #306f69;
-  --focus-ring: #367f77;
-  --on-accent: #ffffff;
-  --selection: #dfebe9;
+  --accent-text: #03668e;
+  --focus-ring: #0375a3;
+  --on-accent: #eff1f5;
+  --selection: #cee6f3;
 
-  --state-working: #1b65c2;
-  --state-needs-you: #8a5d00;
-  --state-failed: #c8321f;
-  --state-done: #1a7a36;
-  --state-paused: #6e6e6e;
-  --on-failed: #ffffff;
-  --on-done: #ffffff;
+  --state-working: #7a33d7;
+  --state-needs-you: #a44007;
+  --state-failed: #bb0d33;
+  --state-done: #2c6e1d;
+  --state-paused: #5d5f73;
+  --on-failed: #eff1f5;
+  --on-done: #eff1f5;
 
-  --series-1: #2a78d6;
-  --series-2: #eb6834;
-  --series-3: #1baf7a;
-  --series-4: #eda100;
-  --series-5: #e87ba4;
-  --series-6: #008300;
-  --series-7: #4a3aa7;
-  --series-8: #e34948;
-  --series-other: #8f8f8f;
-  --series-rest: #c9c9c9;
+  --series-1: #1e66f5;
+  --series-2: #3f9e2b;
+  --series-3: #179299;
+  --series-4: #c17b19;
+  --series-5: #cd67b2;
+  --series-6: #ec5d0a;
+  --series-7: #8839ef;
+  --series-8: #d20f39;
+  --series-other: #878a9b;
+  --series-rest: #ccd0da;
 
-  --diff-add: #1a7a36;
-  --diff-del: #c8321f;
+  --diff-add: #2c6e1d;
+  --diff-del: #bb0d33;
   --diff-bg: 8%;
 
-  --agent-claude: #b4532a;
-  --agent-pi: #8a3fb8;
-  --agent-omp: #1f7a8c;
-  --agent-cursor: #9a6a00;
+  --agent-claude: #bc6666;
+  --agent-pi: #6577e0;
+  --agent-omp: #168d94;
+  --agent-cursor: #b17117;
   --tone-soft: 8%;
   --lane-tint: 16%;
 
@@ -306,52 +306,52 @@ div.xterm .xterm-viewport {
 .dark {
   color-scheme: dark;
 
-  --canvas: #070b11;
-  --chrome: #0c141f;
-  --hover: #121924;
-  --hover-chrome: #1c2531;
-  --raised: #151d2a;
-  --seam: rgb(247 240 228 / 0.09);
-  --control-border: #717c8d;
-  --text: #f7f0e4;
-  --text-muted: #97a3b5;
-  --icon-faint: #798699;
-  --accent-fill: #f5c542;
-  --accent-mark: #54e0d0;
-  --control-light: #f5c542;
+  --canvas: #181825;
+  --chrome: #11111b;
+  --hover: #252536;
+  --hover-chrome: #2a2b3c;
+  --raised: #222233;
+  --seam: rgb(205 214 244 / 0.1);
+  --control-border: #8c91a8;
+  --text: #cdd6f4;
+  --text-muted: #a6adc8;
+  --icon-faint: #7f849c;
+  --accent-fill: #fab387;
+  --accent-mark: #89dceb;
+  --control-light: #fab387;
   --control-dots: 70%;
-  --accent-text: #54e0d0;
-  --focus-ring: #54e0d0;
-  --on-accent: #070b11;
-  --selection: #0c3b36;
+  --accent-text: #89dceb;
+  --focus-ring: #89dceb;
+  --on-accent: #11111b;
+  --selection: #314351;
 
-  --state-working: #4a9eff;
-  --state-needs-you: #f5c542;
-  --state-failed: #f05c4a;
-  --state-done: #45c26a;
-  --state-paused: #798699;
-  --on-failed: #070b11;
-  --on-done: #070b11;
+  --state-working: #cba6f7;
+  --state-needs-you: #fab387;
+  --state-failed: #f38ba8;
+  --state-done: #a6e3a1;
+  --state-paused: #9399b2;
+  --on-failed: #11111b;
+  --on-done: #11111b;
 
-  --series-1: #3987e5;
-  --series-2: #d95926;
-  --series-3: #199e70;
-  --series-4: #c98500;
-  --series-5: #8fbaff;
-  --series-6: #008300;
-  --series-7: #9085e9;
-  --series-8: #e66767;
-  --series-other: #6e798a;
-  --series-rest: #3e4958;
+  --series-1: #89b4fa;
+  --series-2: #a6e3a1;
+  --series-3: #94e2d5;
+  --series-4: #f9e2af;
+  --series-5: #f5c2e7;
+  --series-6: #fab387;
+  --series-7: #cba6f7;
+  --series-8: #f38ba8;
+  --series-other: #7f849c;
+  --series-rest: #45475a;
 
-  --diff-add: #45c26a;
-  --diff-del: #f05c4a;
+  --diff-add: #a6e3a1;
+  --diff-del: #f38ba8;
   --diff-bg: 10%;
 
-  --agent-claude: #e0835e;
-  --agent-pi: #c792ea;
-  --agent-omp: #5ec4d6;
-  --agent-cursor: #e8b84a;
+  --agent-claude: #f2cdcd;
+  --agent-pi: #b4befe;
+  --agent-omp: #94e2d5;
+  --agent-cursor: #f9e2af;
   --tone-soft: 12%;
   --lane-tint: 26%;
 
@@ -562,7 +562,7 @@ div.xterm .xterm-viewport {
     display: grid;
     place-items: center;
     overflow: hidden;
-    background: #070b11;
+    background: #181825;
     opacity: 1;
     transition: opacity 260ms cubic-bezier(0.4, 0, 1, 1);
   }
@@ -682,13 +682,12 @@ div.xterm .xterm-viewport {
   /* Sticky note colors derive from accent-mark so dark and light themes
      both track the live theme rather than a fixed palette. */
   .sticky-note {
-    --scratch-stroke: #ff9b8a;
-    background: color-mix(in srgb, var(--accent-mark) 30%, var(--canvas));
+    background: color-mix(in srgb, var(--accent-mark) 24%, var(--canvas));
     border-color: color-mix(in srgb, var(--accent-mark) 38%, transparent);
   }
 
   .sticky-note__header {
-    color: color-mix(in srgb, var(--accent-mark) 65%, var(--text));
+    color: color-mix(in srgb, var(--accent-mark) 50%, var(--text));
   }
 }
 

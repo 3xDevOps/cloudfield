@@ -2,11 +2,14 @@
 
 ## Workbench language
 
-The dashboard is a dense developer workbench on neutral surfaces. The dark
-theme, the default, follows the Cloudfield website: blue-black surfaces,
-Cream `#f7f0e4` text, teal `#54e0d0` as the accent, and one warm colour,
-gold `#f5c542`, for the primary button and for
-what needs a person. The light theme is white and grey with a teal accent.
+The dashboard is a dense developer workbench on neutral surfaces. Both themes
+use the [Catppuccin](https://catppuccin.com/palette) palette. The dark theme,
+the default, is Mocha on surfaces one step darker than stock Mocha: text
+`#cdd6f4`, sky `#89dceb` as the accent, and one warm colour, peach `#fab387`,
+for the primary button and for what needs a person. The light theme is Latte
+with its text and colours darkened for contrast, which
+`web/src/design-system.test.ts` checks. [Semantic palette](#semantic-palette)
+lists the values that are not stock Catppuccin.
 Adjoining panes are flat and quiet. Elevation is restrained: cards and
 secondary buttons carry a light shadow, floating surfaces a deeper one, panes
 none. Do not add saturated colours beyond the tokens, gradients or backdrop
@@ -103,31 +106,43 @@ the system theme over the native error and update panels.
 
 | Token | Utility | Light | Dark | Use |
 | --- | --- | --- | --- | --- |
-| `--canvas` | `bg-canvas` | `#ffffff` | `#070b11` | Main view, fields |
-| `--chrome` | `bg-chrome` | `#f7f7f7` | `#0c141f` | Sidebar, app header, toolbars, code, browser chrome |
-| `--hover` | `bg-hover` | `#f3f3f3` | `#121924` | Hovered rows and cards on canvas |
-| `--hover-chrome` | `bg-hover-chrome` | `#ececec` | `#1c2531` | Hover on chrome and raised surfaces: sidebar and list rows, menu items, ghost and secondary buttons |
-| `--raised` | `bg-raised` | `#ffffff` | `#151d2a` | Floating surfaces, secondary buttons |
-| `--seam` | `border-seam` | black 8% | Cream 9% | Every border; the default border colour |
-| `--control-border` | `border-control` | `#8a8a8a` | `#717c8d` | Fields, checkboxes, radios |
+| `--canvas` | `bg-canvas` | `#eff1f5` | `#181825` | Main view, fields |
+| `--chrome` | `bg-chrome` | `#e6e9ef` | `#11111b` | Sidebar, app header, toolbars, code, browser chrome |
+| `--hover` | `bg-hover` | `#e2e5ec` | `#252536` | Hovered rows and cards on canvas |
+| `--hover-chrome` | `bg-hover-chrome` | `#dce0e8` | `#2a2b3c` | Hover on chrome and raised surfaces: sidebar and list rows, menu items, ghost and secondary buttons |
+| `--raised` | `bg-raised` | `#eff1f5` | `#222233` | Floating surfaces, secondary buttons |
+| `--seam` | `border-seam` | `#4c4f69` 12% | `#cdd6f4` 10% | Every border; the default border colour |
+| `--control-border` | `border-control` | `#797c8f` | `#8c91a8` | Fields, checkboxes, radios |
 | `--scrim` | `bg-scrim` | black 56% | black 56% | Dialogs and sheets |
 | `--scrim-strong` | `bg-scrim-strong` | black 85% | black 85% | ACP image viewer |
-| `--text` | `text-text` | `#1f1f1f` | `#f7f0e4` | Text |
-| `--text-muted` | `text-muted` | `#6b6b6b` | `#97a3b5` | Placeholders, timestamps, meta |
-| `--icon-faint` | `text-icon-faint` | `#8a8a8a` | `#798699` | Disabled text, decorative icons, scrollbar thumbs, tree connectors |
-| `--accent-fill` | `bg-action` | `#367f77` | `#f5c542` | The one primary button |
-| `--accent-mark` | `bg-accent`, `border-accent`, `outline-accent` | `#367f77` | `#54e0d0` | What is selected or active: checked controls, the current tab, progress, control outlines |
-| `--focus-ring` | `outline-focus` | `#367f77` | `#54e0d0` | Keyboard focus ring; 3:1 on every surface and on the selected row in both themes |
-| `--accent-text` | `text-accent` | `#306f69` | `#54e0d0` | Links, accent text |
-| `--on-accent` | `text-on-accent` | `#ffffff` | `#070b11` | Text on `bg-action` and `bg-accent` |
-| `--selection` | `bg-selection` | `#dfebe9` | `#0c3b36` | Selected rows |
+| `--text` | `text-text` | `#303246` | `#cdd6f4` | Text |
+| `--text-muted` | `text-muted` | `#5c5f77` | `#a6adc8` | Placeholders, timestamps, meta |
+| `--icon-faint` | `text-icon-faint` | `#7c7f93` | `#7f849c` | Disabled text, decorative icons, scrollbar thumbs, tree connectors |
+| `--accent-fill` | `bg-action` | `#a44007` | `#fab387` | The one primary button |
+| `--accent-mark` | `bg-accent`, `border-accent`, `outline-accent` | `#0375a3` | `#89dceb` | What is selected or active: checked controls, the current tab, progress, control outlines |
+| `--focus-ring` | `outline-focus` | `#0375a3` | `#89dceb` | Keyboard focus ring; 3:1 on every surface and on the selected row in both themes |
+| `--accent-text` | `text-accent` | `#03668e` | `#89dceb` | Links, accent text |
+| `--on-accent` | `text-on-accent` | `#eff1f5` | `#11111b` | Text on `bg-action` and `bg-accent` |
+| `--selection` | `bg-selection` | `#cee6f3` | `#314351` | Selected rows |
+
+These values are not stock Catppuccin, so do not reset them to it. Dark:
+`--canvas` and `--chrome` are Mocha mantle and crust, one step darker than
+stock; `--hover`, `--hover-chrome`, `--raised` and `--control-border` are
+set between Mocha steps. Light: sky, peach, the state colours, and the chart
+series and agent colours that need it, are the Latte colour darkened until
+the contrast test passes, which leaves the light primary a rust rather than
+a pastel peach; `--text` is Latte text darkened until it stands 2:1 from
+`--text-muted` (Latte subtext 1); `--hover` is set between Latte steps and
+`--control-border` is darkened until it holds 3:1 on a hovered row. In both
+themes `--selection` is a sky tint of the canvas, 22% in dark so a selected
+row stands apart from a hovered one.
 
 `accent` is a fill for backgrounds and borders but the link colour for text;
 `bg-action` is the primary button's own fill and `bg-action-hover` darkens it
-under the pointer. In the light theme both are the same teal. In the dark
-theme the primary button is gold and the accent is teal: the accent marks
+under the pointer. In both themes the primary button is peach and the accent
+is sky: the accent marks
 selection, focus, links and the Finished: review state, nothing else, and
-gold is on the one primary button per view and on Needs you. Inside a selected row, secondary text uses `text-text`. A floating
+peach is on the one primary button per view and on Needs you. Inside a selected row, secondary text uses `text-text`. A floating
 surface is `bg-raised`, a 1px seam and `shadow-overlay`; dialogs, the
 palette and sheets take `shadow-dialog` and sit over `bg-scrim`.
 [Geometry](#geometry-and-responsive-behavior) lists every shadow.
@@ -137,32 +152,42 @@ The session states (see
 state lines, badges, callouts and request cards. Finished: review, a reported
 success awaiting its owner, takes the accent and a filled check circle; it
 asks nothing, so it never takes the needs-you colour. That colour, also the
-dashboard's warning colour, is amber in the light theme and gold in the dark
-one, where it is also the primary button's fill; a warning is an outlined
+dashboard's warning colour, is peach, also the primary button's fill; a warning is an outlined
 chip, a ring or text with an icon, never a filled button. A subsession's
 success, which is for its
 parent agent only, draws the done check in `icon-faint` (the `held` tone):
 
 | State | Utility | Light | Dark |
 | --- | --- | --- | --- |
-| Needs you | `state-needs-you` | `#8a5d00` | `#f5c542` |
-| Working | `state-working` | `#1b65c2` | `#4a9eff` |
-| Paused | `state-paused` | `#6e6e6e` | `#798699` |
-| Done | `state-done` | `#1a7a36` | `#45c26a` |
-| Failed | `state-failed` | `#c8321f` | `#f05c4a` |
-| Finished: review | `text-accent`, `bg-accent-soft` (`review` tone) | `#306f69` | `#54e0d0` |
+| Needs you | `state-needs-you` | `#a44007` | `#fab387` |
+| Working | `state-working` | `#7a33d7` | `#cba6f7` |
+| Paused | `state-paused` | `#5d5f73` | `#9399b2` |
+| Done | `state-done` | `#2c6e1d` | `#a6e3a1` |
+| Failed | `state-failed` | `#bb0d33` | `#f38ba8` |
+| Finished: review | `text-accent`, `bg-accent-soft` (`review` tone) | `#03668e` | `#89dceb` |
 
 Each state has a `-soft` fill (`bg-state-failed-soft`) at 8% light, 12% dark;
 `bg-accent-soft` likewise. `text-on-failed` is the text on a `bg-state-failed`
 fill, and `text-on-done` on a `bg-state-done` fill. Diffs use `text-diff-add`/`text-diff-del` (the done and failed colours)
-and `bg-diff-add-bg`/`bg-diff-del-bg` at 8% light, 10% dark.
+and `bg-diff-add-bg`/`bg-diff-del-bg` at 8% light, 10% dark. A state's
+colour is text on its own soft fill, over canvas and over chrome, so the
+contrast test holds each of those pairs to 4.5:1.
 
 Agent vendor colours (`text-agent-claude`, `-pi`, `-omp`, `-cursor`) appear
 only on the Agents page, the launch picker and the head of a Board card,
 through `AgentGlyph colored`. Codex, OpenCode and Copilot glyphs take
 `text-text` there instead: OpenAI, OpenCode and GitHub forbid recolouring
 their marks. Gemini CLI and Antigravity CLI show Google's full-colour icon
-files there, unchanged.
+files there, unchanged. No agent colour equals a state, accent or primary
+colour: Claude is flamingo, Pi lavender, OMP teal and Cursor yellow. Teal
+sits near sky and lavender near mauve, so judge a new agent colour beside
+the status dots; the test only rejects an exact match.
+
+The chart series (`--series-1` to `-8`) are Catppuccin hues in a fixed
+order. Peach is slot 6. The line charts and mail marks name slots 1 to 5
+and 8, so none draws in the primary button's colour; only the resources
+donut, which hands the slots out in order, reaches peach, at its sixth
+session.
 
 Member colours are the only arbitrary server data applied inline: avatar
 rings, the owner rail in session lists, the owner mark on sidebar session rows and
@@ -335,7 +360,7 @@ bars take the `-soft` fill and border of `state-working`, `state-failed`,
 with a seam border, holding `icon-faint` model time and accent tool density
 at 50%, 75% and 100% for one, two and three or more calls at once. The session's
 own bar is its state history in the `-soft` state fills. A running bar
-carries `trace-live`, the live shimmer's band in working blue; history that
+carries `trace-live`, the live shimmer's band in the working colour; history that
 is not loaded is hatched (`trace-unknown`). A duration that would run past
 the track sits inside the bar's end, on the bar's own fill. The **Slowest**
 pill is neutral, `bg-hover-chrome` and muted: it is not a warning.
@@ -436,10 +461,16 @@ buttons still has one. The test also fails
 when a listed file already complies, so the lists only shrink.
 
 The same file checks contrast in both themes: `text` and `text-muted` on
-every surface, `text` on `selection`, accent text on canvas and chrome,
+every surface and on `selection`, accent text on canvas and chrome,
 `on-accent` on the primary fill and on the accent mark, `on-failed` and `on-done` on their fills, and the
-states and diff colours on canvas at 4.5:1; control borders, `icon-faint`
-and the agent colours on canvas at 3:1. It also checks that every `text-*`
+states and diff colours on canvas at 4.5:1; each state and the accent text
+on its own soft fill over canvas and chrome, and the sticky note's text and
+name on the note, at 4.5:1; control borders on canvas, raised and both
+hover fills, `icon-faint` and the chart series on canvas, and the agent
+colours on every surface and on `selection`, at 3:1. It fails when `text`
+is under 1.5:1 from `text-muted`, when an agent colour equals a state,
+accent or primary colour, or when a chart series the code names (1 to 5 and 8)
+equals the primary fill. It also checks that every `text-*`
 and `bg-*` class in `components/ui/` names a token defined in `index.css`.
 
 ## Icons
@@ -478,7 +509,9 @@ Use compact workbench geometry rather than landing-page ornament:
   keys, inline code and checkboxes; `--radius-control` 8px (`rounded-sm`,
   `rounded-control`) for buttons, fields, rows, menu items and tooltips;
   `--radius-panel` 12px (`rounded-md` and up, `rounded-panel`) for cards,
-  callouts, dialogs, menus, popovers, toasts and the palette; and
+  callouts, dialogs, menus, popovers, toasts and the palette (the asleep
+  notice sits in the bar stack above the composer and takes the bars' 8px);
+  and
   `--radius-composer` 14px (`rounded-composer`) for the session composer and
   Board's column wells. A radius nested
   in another is the outer one minus the inset: a 12px menu with 4px padding
@@ -628,9 +661,9 @@ or more tiles on screen, a 1px inset accent outline; an unfocused strip is on
 `--chrome` with no bar. Focus never dims a tile: no opacity. A tile whose
 view an arrow points at wears the same outline dashed. Seams between tiles
 are 1px `--seam` lines with a 7px grab reach. A sidebar row whose session is
-on screen has a 2px accent bar down its left edge. A drag shows a 1px accent
-border over an `--accent-soft` fill where the drop lands, and a raised chip
-by the pointer that names the action in accent.
+on screen has a 2px accent bar down its left edge and square left corners.
+A drag shows a 1px accent border over an `--accent-soft` fill where the drop
+lands, and a raised chip by the pointer that names the action in accent.
 
 The session header row leads with the view switch (Chat, Trace on an
 Enhanced session, Terminal, Changes, Files, Browser), a segmented tab list,
@@ -807,7 +840,7 @@ shimmer leaves plain muted text, the spinner shows a still arc and a
 skeleton a flat fill. Holds and timers do not change. `useReducedMotion()` and `prefersReducedMotion()` in
 `web/src/lib/hooks.ts` answer the query in scripts.
 
-The desktop launch splash plays the website's opening on `#070b11` in every
+The desktop launch splash plays the website's opening on `#181825` in every
 theme. Its keyframes are scoped to `launch-splash` in `web/src/index.css`.
 `web/src/components/launch-splash-opening.tsx` inlines
 `web/public/cloudfield-logo-small.svg` at build time and splits it into the
@@ -826,10 +859,10 @@ the splash's first paint:
 | 820ms | The field wakes outward from the c's centre over 620ms |
 
 The field is the website's slope field: one stroke per 12px lattice point,
-turned along four drifting vortices and coloured in the website's teal and
-blue field palette: `#8fbaff` at the top left through `#266ce1`,
-`#4a8dff`, `#4bb9ea` and `#54e0d0` to `#aaf5ea` at the bottom right, the run
-stretched about its middle so the pale ends reach the corners. On a window
+turned along four drifting vortices and coloured in six Mocha hues:
+mauve `#cba6f7` at the top left through `#b4befe`,
+`#89b4fa`, `#74c7ec` and `#89dceb` to teal `#94e2d5` at the bottom right, the run
+stretched about its middle so the mauve and teal ends reach the corners. On a window
 large enough for more than 15,000 strokes the lattice widens to stay under
 that. Until it wakes, every stroke is a short flat dash at 2/6 opacity, drawn
 once; the frame loop starts at the wake.

@@ -18,9 +18,9 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/3xDevOps/Aether/internal/domain"
-	"github.com/3xDevOps/Aether/internal/rootfs"
-	"github.com/3xDevOps/Aether/internal/runtime"
+	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/rootfs"
+	"github.com/3xDevOps/cloudfield/internal/runtime"
 )
 
 // inodeKey identifies one filesystem object across every hardlink to it.
@@ -46,7 +46,8 @@ type inodeKey struct{ dev, ino uint64 }
 // container with another uid takes the login back here, and a recipient's
 // live run on it loses access. Subpath mounts are skipped: a login pinned in
 // the member's own home is chowned with that home, and a login mounted from
-// another member's home is applyLoginOwnership's.
+// another member's home is applyLoginOwnership's. An added login's subpath
+// mounts are chowned here, each entry alone and never its directory.
 func (s *Scheduler) applyRunOwnership(ws *domain.Workspace, run *domain.Run, home domain.MemberID, mounts []runtime.Mount, user string) error {
 	if user == "" {
 		return nil
@@ -80,7 +81,16 @@ func (s *Scheduler) applyRunOwnership(ws *domain.Workspace, run *domain.Run, hom
 	lock.Lock()
 	defer lock.Unlock()
 	for _, m := range mounts {
-		if m.ReadOnly || m.Subpath != "" {
+		if m.ReadOnly {
+			continue
+		}
+		if m.Subpath != "" {
+			if !s.addedLoginPath(m.HostPath) {
+				continue
+			}
+			if err := chownSubpath(m.HostPath, m.Subpath, uid, gid); err != nil {
+				return err
+			}
 			continue
 		}
 		if info, err := os.Lstat(m.HostPath); err == nil && info.Mode().IsRegular() {

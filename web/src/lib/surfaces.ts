@@ -8,6 +8,7 @@ import {
   FolderTree,
   History,
   LayoutGrid,
+  Linear,
   MonitorSmartphone,
   Settings,
   SquareTerminal,
@@ -36,6 +37,8 @@ export function surfaces(cap: Capability): Surface[] {
   // A server older than insights.get still reports disk use, which Insights › System shows.
   if (cap.hasMethod('insights.get') || cap.hasMethod('server.disk'))
     list.push({ name: 'insights', label: 'Insights', Icon: ChartColumn, place: 'nav', keywords: 'Statistics outcomes' })
+  if (cap.hasMethod('linear.issues') && cap.linearConnected)
+    list.push({ name: 'linear', label: 'Linear', Icon: Linear, place: 'nav', keywords: 'issues tickets assigned' })
   if (cap.hasMethod('memory.search'))
     list.push({ name: 'memory', label: 'Memory', Icon: BookMarked, place: 'nav', keywords: 'Team memory notes brief pins' })
   if (cap.hasMethod('files.tree') || cap.hasMethod('home.tree'))
@@ -58,14 +61,15 @@ export function surfaces(cap: Capability): Surface[] {
   return list
 }
 
-const everything: Capability = { hasMethod: () => true, hasLocal: () => true, hasWS: () => true }
+const everything: Capability = { hasMethod: () => true, hasLocal: () => true, hasWS: () => true, linearConnected: true }
 
 export function pageOf(name: string): string {
   return surfaces(everything).find((surface) => surface.tabs?.includes(name))?.name ?? name
 }
 
-/** A page this gateway or member is not offered, such as a stale shared link. */
+/** A page this gateway or member is not offered, such as a stale shared link.
+ * The Linear page stays reachable without a key; it explains how to connect. */
 export function withheld(name: string, cap: Capability): boolean {
   const named = (list: Surface[]) => list.some((surface) => surface.name === name)
-  return named(surfaces(everything)) && !named(surfaces(cap))
+  return named(surfaces(everything)) && !named(surfaces({ ...cap, linearConnected: true }))
 }

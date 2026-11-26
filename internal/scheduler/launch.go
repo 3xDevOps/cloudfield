@@ -11,15 +11,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/3xDevOps/Aether/internal/codexapp"
-	"github.com/3xDevOps/Aether/internal/coordtransport"
-	"github.com/3xDevOps/Aether/internal/domain"
-	"github.com/3xDevOps/Aether/internal/envname"
-	"github.com/3xDevOps/Aether/internal/gitengine"
-	"github.com/3xDevOps/Aether/internal/harness"
-	"github.com/3xDevOps/Aether/internal/mirror"
-	"github.com/3xDevOps/Aether/internal/runtime"
-	"github.com/3xDevOps/Aether/internal/store"
+	"github.com/3xDevOps/cloudfield/internal/codexapp"
+	"github.com/3xDevOps/cloudfield/internal/coordtransport"
+	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/envname"
+	"github.com/3xDevOps/cloudfield/internal/gitengine"
+	"github.com/3xDevOps/cloudfield/internal/harness"
+	"github.com/3xDevOps/cloudfield/internal/mirror"
+	"github.com/3xDevOps/cloudfield/internal/runtime"
+	"github.com/3xDevOps/cloudfield/internal/store"
 )
 
 // imageUserResolver is implemented by *runtime.Docker. Runtimes without it
@@ -313,7 +313,7 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 			return nil, getErr
 		}
 	}
-	if err = s.checkLogin(ctx, workspace, account, harness, profile, mode); err != nil {
+	if err = s.checkLogin(ctx, workspace, member, account, harness, profile, mode); err != nil {
 		return nil, err
 	}
 	release, err := s.reserveCapacity(ctx)
@@ -700,8 +700,8 @@ func (s *Scheduler) startRunContainer(ctx context.Context, entry *supervised, ru
 		return nil, s.failContainer(ctx, entry, cid, "start container", serr)
 	}
 	s.mu.Lock()
-	if entry.loginMember != "" && !slices.Contains(entry.verifiedLogins, entry.loginMember) {
-		entry.verifiedLogins = append(entry.verifiedLogins, entry.loginMember)
+	if login := domain.AccountOf(entry.loginMember); entry.loginMember != "" && !slices.Contains(entry.verifiedLogins, login) {
+		entry.verifiedLogins = append(entry.verifiedLogins, login)
 	}
 	sc := entry.sidecar()
 	s.mu.Unlock()

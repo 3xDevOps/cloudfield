@@ -212,7 +212,7 @@ export function AgentSetup({
           </ul>
         )}
         {checked && agent.installed === true && (agent.login_found === false || agent.login_problem) && (
-          <p className="text-ui-sm text-muted">{agent.login_problem ? 'This login cannot sign the agent in' : "Cloudfield looks for the agent's login file in your environment"}; log in above, then check again.</p>
+          <p className="text-ui-sm text-muted">{agent.login_problem ? 'This login cannot sign the agent in' : "Cloudfield looks for the agent's login in your environment"}; log in above, then check again.</p>
         )}
         {error && <Callout tone="failed" role="alert">{error}</Callout>}
         <div className="flex flex-wrap items-center gap-2">

@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
+	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	"github.com/coder/websocket"
 )
 
@@ -331,6 +332,12 @@ func TestClaimConnection(t *testing.T) {
 	eventually(t, "claim recorded", func() bool { return e.r.Online(a.id) })
 	if owner, ok := e.dir.owner(a.id); !ok || owner != edgeproto.AccountPrincipal(acct) {
 		t.Fatalf("owner %+v", owner)
+	}
+	e.dir.mu.Lock()
+	enrollments := slices.Clone(e.dir.enrollments)
+	e.dir.mu.Unlock()
+	if want := a.id + " " + e.origin + " test"; !slices.Equal(enrollments, []string{want, want}) {
+		t.Fatalf("enrollment and claim recorded %q, want the relay origin and build twice", enrollments)
 	}
 	eventually(t, "directory stored", func() bool {
 		e.dir.mu.Lock()

@@ -14,7 +14,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	edgestore "github.com/3xDevOps/Aether/internal/edge/store"
+	edgestore "github.com/3xDevOps/cloudfield/internal/edge/store"
 )
 
 // keyFile holds the edge signing key in OpenSSH format, so that

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
+	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 )
 
 // Device authorization states.
@@ -31,6 +31,10 @@ type DeviceAuth struct {
 	CreatedAt  time.Time
 	ExpiresAt  time.Time
 	LastPollAt time.Time
+	// SigninOrigin is the sign-in origin the request was made at, ""
+	// when the edge does not record origins. Redemption copies it to the
+	// device.
+	SigninOrigin string
 }
 
 // CreateDeviceAuth stores a pending authorization and drops expired ones.
@@ -40,22 +44,22 @@ func (s *Store) CreateDeviceAuth(ctx context.Context, a DeviceAuth) error {
 		return fmt.Errorf("edgestore: drop expired device authorizations: %w", err)
 	}
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO device_authorizations
-		(code_hash, user_code_hash, label, public_key, client_addr, status, created_at, expires_at, last_poll_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)`,
-		a.CodeHash, a.UserCodeHash, a.Label, a.Key, a.ClientAddr, AuthPending, unix(a.CreatedAt), unix(a.ExpiresAt)); err != nil {
+		(code_hash, user_code_hash, label, public_key, client_addr, status, created_at, expires_at, last_poll_at, signin_origin)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULLIF(?, ''))`,
+		a.CodeHash, a.UserCodeHash, a.Label, a.Key, a.ClientAddr, AuthPending, unix(a.CreatedAt), unix(a.ExpiresAt), a.SigninOrigin); err != nil {
 		return fmt.Errorf("edgestore: create device authorization: %w", conflict(err))
 	}
 	return nil
 }
 
 const deviceAuthCols = `code_hash, user_code_hash, label, public_key, client_addr, status,
-	created_at, expires_at, last_poll_at`
+	created_at, expires_at, last_poll_at, COALESCE(signin_origin, '')`
 
 func scanDeviceAuth(row *sql.Row) (DeviceAuth, error) {
 	var a DeviceAuth
 	var created, expires, polled int64
 	err := row.Scan(&a.CodeHash, &a.UserCodeHash, &a.Label, &a.Key, &a.ClientAddr, &a.Status,
-		&created, &expires, &polled)
+		&created, &expires, &polled, &a.SigninOrigin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return DeviceAuth{}, ErrNotFound
 	}
@@ -142,31 +146,49 @@ type Device struct {
 	Label      string
 	CreatedAt  time.Time
 	LastUsedAt time.Time
+	// SigninOrigin is the sign-in origin the token was issued at, or
+	// first seen at for one issued while the edge did not record origins;
+	// "" while unknown.
+	SigninOrigin string
 }
 
 // RedeemDeviceAuth consumes the approved, unexpired authorization under
 // codeHash and creates d from it, in one transaction, so an authorization
 // yields at most one device. d's account, key and label come from the
-// authorization.
-func (s *Store) RedeemDeviceAuth(ctx context.Context, codeHash string, d Device, now time.Time) (Device, error) {
+// authorization. When record is set, so does its sign-in origin, or for
+// an authorization started while the edge did not record origins,
+// d.SigninOrigin, marked as seen there.
+func (s *Store) RedeemDeviceAuth(ctx context.Context, codeHash string, d Device, record bool, now time.Time) (Device, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Device{}, fmt.Errorf("edgestore: redeem device authorization: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+	var issuedAt string
 	err = tx.QueryRowContext(ctx, `DELETE FROM device_authorizations
 		WHERE code_hash = ? AND status = ? AND expires_at > ?
-		RETURNING account_id, public_key, label`, codeHash, AuthApproved, unix(now)).
-		Scan(&d.AccountID, &d.Key, &d.Label)
+		RETURNING account_id, public_key, label, COALESCE(signin_origin, '')`, codeHash, AuthApproved, unix(now)).
+		Scan(&d.AccountID, &d.Key, &d.Label, &issuedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Device{}, ErrNotFound
 	}
 	if err != nil {
 		return Device{}, fmt.Errorf("edgestore: redeem device authorization: %w", err)
 	}
+	var seen sql.NullInt64
+	switch {
+	case !record:
+		d.SigninOrigin = ""
+	case issuedAt != "":
+		d.SigninOrigin = issuedAt
+	case d.SigninOrigin != "":
+		seen = sql.NullInt64{Int64: 1, Valid: true}
+	}
 	d.CreatedAt, d.LastUsedAt = now, now
-	if _, err := tx.ExecContext(ctx, `INSERT INTO devices (id, token_hash, account_id, public_key, label, created_at, last_used_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)`, d.ID, d.TokenHash, d.AccountID, d.Key, d.Label, unix(now), unix(now)); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO devices
+		(id, token_hash, account_id, public_key, label, created_at, last_used_at, signin_origin, signin_origin_seen)
+		VALUES (?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?)`,
+		d.ID, d.TokenHash, d.AccountID, d.Key, d.Label, unix(now), unix(now), d.SigninOrigin, seen); err != nil {
 		return Device{}, fmt.Errorf("edgestore: create device: %w", err)
 	}
 	var id int64
@@ -180,12 +202,18 @@ func (s *Store) RedeemDeviceAuth(ctx context.Context, codeHash string, d Device,
 	return d, nil
 }
 
-const deviceCols = `d.id, d.token_hash, d.public_key, d.label, d.created_at, d.last_used_at, ` + accountCols
+// seenAt records the sign-in origin given twice as a parameter on a row
+// that has none, marked as seen rather than issued there. SQLite reads the
+// row's old values on the right of every assignment.
+const seenAt = `signin_origin_seen = CASE WHEN signin_origin IS NULL AND ? <> '' THEN 1 ELSE signin_origin_seen END,
+	signin_origin = COALESCE(signin_origin, NULLIF(?, ''))`
+
+const deviceCols = `d.id, d.token_hash, d.public_key, d.label, d.created_at, d.last_used_at, COALESCE(d.signin_origin, ''), ` + accountCols
 
 func scanDevice(row interface{ Scan(...any) error }) (Device, error) {
 	var d Device
 	var created, used int64
-	dest := append([]any{&d.ID, &d.TokenHash, &d.Key, &d.Label, &created, &used}, accountDest(&d.AccountID, &d.Account)...)
+	dest := append([]any{&d.ID, &d.TokenHash, &d.Key, &d.Label, &created, &used, &d.SigninOrigin}, accountDest(&d.AccountID, &d.Account)...)
 	if err := row.Scan(dest...); err != nil {
 		return Device{}, err
 	}
@@ -194,10 +222,11 @@ func scanDevice(row interface{ Scan(...any) error }) (Device, error) {
 }
 
 // UseDevice returns the device holding the token that hashes to tokenHash,
-// when its account is not blocked, and records its use at now.
-func (s *Store) UseDevice(ctx context.Context, tokenHash string, now time.Time) (Device, error) {
-	err := oneRow(s.db.ExecContext(ctx, `UPDATE devices SET last_used_at = ?
-		WHERE token_hash = ? AND `+notBlocked("devices.account_id"), unix(now), tokenHash))
+// when its account is not blocked, and records its use at now. A device
+// with no sign-in origin is recorded as seen at signin, unless signin is
+// "".
+func (s *Store) UseDevice(ctx context.Context, tokenHash, signin string, now time.Time) (Device, error) {
+	err := oneRow(s.db.ExecContext(ctx, useDeviceQuery, unix(now), signin, signin, tokenHash))
 	if errors.Is(err, ErrNotFound) {
 		return Device{}, err
 	}
@@ -214,6 +243,11 @@ func (s *Store) UseDevice(ctx context.Context, tokenHash string, now time.Time) 
 	}
 	return d, nil
 }
+
+// useDeviceQuery runs on every request and connection a device token
+// makes.
+var useDeviceQuery = `UPDATE devices SET last_used_at = ?, ` + seenAt + `
+	WHERE token_hash = ? AND ` + notBlocked("devices.account_id")
 
 // Devices lists an account's devices, newest first.
 func (s *Store) Devices(ctx context.Context, accountID int64) ([]Device, error) {

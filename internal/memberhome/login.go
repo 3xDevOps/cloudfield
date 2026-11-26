@@ -12,8 +12,8 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/3xDevOps/Aether/internal/domain"
-	"github.com/3xDevOps/Aether/internal/rootfs"
+	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/rootfs"
 )
 
 // LoginPathIsDir reports whether the home-relative login path rel in
@@ -175,6 +175,17 @@ func (m *Manager) StateWithout(member domain.MemberID, rel string, drop []string
 }
 
 func readState(home *os.Root, rel string) ([]byte, error) {
+	return readStateUpTo(home, rel, maxStateBytes)
+}
+
+type stateTooLarge struct{ size, limit int64 }
+
+func (e stateTooLarge) Error() string {
+	return fmt.Sprintf("it is %d bytes, over the %d MiB Cloudfield copies; remove old entries from it (Claude Code's grows with its \"projects\" history)", e.size, e.limit>>20)
+}
+
+// readStateUpTo is readState with its own size limit.
+func readStateUpTo(home *os.Root, rel string, limit int64) ([]byte, error) {
 	parent, leaf, err := openLoginParent(home, rel)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
@@ -197,10 +208,10 @@ func readState(home *os.Root, rel string) ([]byte, error) {
 		return nil, err
 	case hasMultipleLinks(info):
 		return nil, errors.New("it has another hard link")
-	case info.Size() > maxStateBytes:
-		return nil, fmt.Errorf("it is %d bytes, over the %d MiB Cloudfield copies; remove old entries from it (Claude Code's grows with its \"projects\" history)", info.Size(), maxStateBytes>>20)
+	case info.Size() > limit:
+		return nil, stateTooLarge{size: info.Size(), limit: limit}
 	}
-	return io.ReadAll(io.LimitReader(f, maxStateBytes))
+	return io.ReadAll(io.LimitReader(f, limit))
 }
 
 // LoginFound reports whether any of the home-relative login paths rels

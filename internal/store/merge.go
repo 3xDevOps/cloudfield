@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/3xDevOps/Aether/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/domain"
 )
 
 // MergeStore keeps member merges: the code one member mints, the proposal
@@ -107,6 +107,9 @@ type MergeSnapshot struct {
 	OpenInvitations   []domain.InvitationID `json:"open_invitations"`
 	OwnedWorkspaces   []domain.WorkspaceID  `json:"owned_workspaces"`
 	GrantedWorkspaces []domain.WorkspaceID  `json:"granted_workspaces"`
+	// Logins are the member's logins of every agent; a merge gives the
+	// absorbed member's added ones to the survivor.
+	Logins []domain.AgentLogin `json:"logins"`
 }
 
 // MergePlan is what merging two members would do. Minted is the member
@@ -488,6 +491,9 @@ func mergeSnapshot(ctx context.Context, tx *sql.Tx, id domain.MemberID) (*MergeS
 	snap := &MergeSnapshot{Member: *m}
 	s := &snap.Settings
 	s.DisplayName, s.Color, s.GitName, s.GitEmail, s.Image = m.DisplayName, m.Color, m.GitName, m.GitEmail, m.Image
+	if snap.Logins, err = mergeLogins(ctx, tx, id); err != nil {
+		return nil, fmt.Errorf("store: plan merge: logins: %w", err)
+	}
 	rows, err := tx.QueryContext(ctx, `SELECT `+identityCols+` FROM member_identities WHERE member_id = ? ORDER BY provider, subject`, id)
 	if err != nil {
 		return nil, fmt.Errorf("store: plan merge: identities: %w", err)

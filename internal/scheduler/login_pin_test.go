@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/3xDevOps/Aether/internal/domain"
-	"github.com/3xDevOps/Aether/internal/harness"
-	"github.com/3xDevOps/Aether/internal/runtime"
+	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/harness"
+	"github.com/3xDevOps/cloudfield/internal/runtime"
 )
 
 const (
@@ -282,6 +282,21 @@ func TestCheckSharedLaunchMatchesLaunch(t *testing.T) {
 	}
 	if got := check(e.member.ID, e.owner.ID, "aider"); got != SharedOwnDefinitionOnly {
 		t.Fatalf("the launcher's own definition on a shared account = %v, want SharedOwnDefinitionOnly", got)
+	}
+	// The owner's Anthropic Console sign-in is not shared, and the refusal
+	// says so.
+	if err := os.WriteFile(filepath.Join(e.ownerHome, ".claude.json"), []byte(`{"primaryApiKey":"fixture-key"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := check(e.member.ID, e.owner.ID, "claude"); got != SharedLoginMissing {
+		t.Fatalf("claude with only the owner's Console sign-in = %v, want SharedLoginMissing", got)
+	}
+	wantRefusal := "is not logged in to claude with a login Cloudfield shares: ~/.claude.json holds an Anthropic Console sign-in"
+	if _, err := e.launch(t, "claude"); err == nil || !strings.Contains(err.Error(), wantRefusal) {
+		t.Fatalf("launch with only the owner's Console sign-in = %v, want %q", err, wantRefusal)
+	}
+	if err := os.Remove(filepath.Join(e.ownerHome, ".claude.json")); err != nil {
+		t.Fatal(err)
 	}
 	if got := check(e.member.ID, e.member.ID, "aider"); got != SharedLaunchable {
 		t.Fatalf("the launcher's own definition on their own account = %v, want SharedLaunchable", got)

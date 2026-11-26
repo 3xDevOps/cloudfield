@@ -13,10 +13,10 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/3xDevOps/Aether/internal/domain"
-	"github.com/3xDevOps/Aether/internal/permissions"
-	"github.com/3xDevOps/Aether/internal/protocol"
-	"github.com/3xDevOps/Aether/internal/ptyhost"
+	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/permissions"
+	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/ptyhost"
 )
 
 func init() {
@@ -210,10 +210,14 @@ func (s *Server) serveTerminal(ctx context.Context, member domain.MemberID, st *
 		cols, rows = 80, 24
 	}
 
+	if req.AssistantLogin != "" && req.AgentLogin != "" {
+		_ = writeJSONLine(ch, protocol.TerminalResponse{Code: protocol.CodeInvalidParams, Error: "assistant_login and agent_login cannot both be set"})
+		return
+	}
 	key := ptyhost.TerminalSession(member, tab)
 	s.authorizationMu.Lock()
 	admissionErr := s.checkMember(ctx, member)
-	if admissionErr == nil && req.AssistantLogin == "" {
+	if admissionErr == nil && req.AssistantLogin == "" && req.AgentLogin == "" {
 		if _, admissionErr = s.cfg.Runs.EnsureTerminal(ctx, member); admissionErr == nil {
 			admissionErr = s.cfg.Runs.EnsureTerminalTab(ctx, member, tab, cols, rows)
 		}
@@ -223,6 +227,15 @@ func (s *Server) serveTerminal(ctx context.Context, member domain.MemberID, st *
 	// the assistant's own lock orders it with the member's removal.
 	if admissionErr == nil && req.AssistantLogin != "" {
 		admissionErr = s.startAssistantLogin(ctx, member, req.AssistantLogin, cols, rows, &key)
+	}
+	if admissionErr == nil && req.AgentLogin != "" {
+		if signIns, perr := s.loginSignIns(); perr != nil {
+			admissionErr = perr
+		} else if perr = s.mayLaunch(ctx, member, "agent sign-in"); perr != nil {
+			admissionErr = perr
+		} else {
+			key, admissionErr = signIns.StartLoginSignIn(ctx, member, domain.LoginID(req.AgentLogin), cols, rows)
+		}
 	}
 	if admissionErr != nil {
 		e := rpcError(admissionErr)

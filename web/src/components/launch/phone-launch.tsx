@@ -21,6 +21,7 @@ export function PhoneLaunchSheet({
   task,
   onTask,
   shared,
+  linked,
   choice,
   onAgent,
   workspaces,
@@ -43,6 +44,7 @@ export function PhoneLaunchSheet({
   task: string
   onTask: (task: string) => void
   shared: boolean
+  linked: ReactNode
   choice: ReturnType<typeof useAgentChoice>
   onAgent: (name: string) => void
   workspaces: Workspace[]
@@ -73,7 +75,7 @@ export function PhoneLaunchSheet({
           <DialogDescription className="sr-only">Starts an agent in its own sandbox on the workspace&apos;s base branch.</DialogDescription>
         </div>
         <form id="launch-form" className="-mx-1 flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto px-1 py-1 [&>*]:shrink-0" onSubmit={(event) => { event.preventDefault(); onSubmit() }}>
-          <TaskField mode={mode} task={task} onTask={onTask} autoFocus shared={shared} brief disabled={disabled} />
+          <TaskField mode={mode} task={task} onTask={onTask} autoFocus shared={shared} linked={linked} brief disabled={disabled} />
           {workspaces.length === 0 && (
             <Callout tone="neutral" title="No workspace to launch in yet." actions={<Button type="button" size="sm" onClick={onAddWorkspace}>Add a workspace</Button>}>
               A session runs on a workspace&apos;s repository.

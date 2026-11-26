@@ -16,12 +16,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/3xDevOps/Aether/internal/control"
-	"github.com/3xDevOps/Aether/internal/domain"
-	"github.com/3xDevOps/Aether/internal/events"
-	"github.com/3xDevOps/Aether/internal/memberhome"
-	"github.com/3xDevOps/Aether/internal/protocol"
-	"github.com/3xDevOps/Aether/internal/store"
+	"github.com/3xDevOps/cloudfield/internal/control"
+	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/events"
+	"github.com/3xDevOps/cloudfield/internal/memberhome"
+	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/store"
 )
 
 func init() {
@@ -391,6 +391,16 @@ func (s *Server) afterMerge(ctx context.Context, caller domain.MemberID, merge *
 		slog.Warn("sshd: absorbed member's assistant cleanup failed", "merge", merge.ID, "error", err)
 	}
 	linearErr := s.disconnectLinear(merge.AbsorbedID)
+	// The merge gave the survivor the absorbed member's added logins; their
+	// directories follow, here or at the next start.
+	if signIns := s.cfg.LoginSignIns; signIns != nil {
+		if err := signIns.EndLoginSignIns(ctx, merge.AbsorbedID); err != nil {
+			slog.Warn("sshd: end the absorbed member's sign-ins", "merge", merge.ID, "error", err)
+		}
+		if err := signIns.ReconcileLogins(ctx, merge.AbsorbedID); err != nil {
+			slog.Warn("sshd: move the absorbed member's logins; the next start moves them", "merge", merge.ID, "error", err)
+		}
+	}
 	s.cfg.Runs.ForgetOMPAccount(ctx, merge.AbsorbedID)
 	var agentErr error
 	if s.cfg.Signing != nil {
@@ -679,7 +689,12 @@ func snapshotToWire(snap store.MergeSnapshot, home, full bool) protocol.MergeMem
 	m := snap.Member
 	out := protocol.MergeMember{ID: string(m.ID), DisplayName: m.DisplayName, Role: string(m.Role), TailnetLogin: m.TailnetLogin,
 		Identities: []protocol.MergeIdentity{}, Devices: []protocol.MergeDevice{}, Runs: snap.Runs, Schedules: snap.Schedules,
-		Settings: settingsToWire(snap.Settings, home, full), OwnedWorkspaces: []string{}, GrantedWorkspaces: []string{}}
+		Settings: settingsToWire(snap.Settings, home, full), OwnedWorkspaces: []string{}, GrantedWorkspaces: []string{}, Logins: []protocol.MergeLogin{}}
+	for _, l := range snap.Logins {
+		if l.ID.Added() {
+			out.Logins = append(out.Logins, protocol.MergeLogin{Agent: l.Agent, ID: string(l.ID), Name: l.Name})
+		}
+	}
 	for _, w := range snap.OwnedWorkspaces {
 		out.OwnedWorkspaces = append(out.OwnedWorkspaces, string(w))
 	}

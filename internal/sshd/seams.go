@@ -5,13 +5,13 @@ import (
 	"errors"
 	"io"
 
-	"github.com/3xDevOps/Aether/internal/acphost"
-	"github.com/3xDevOps/Aether/internal/domain"
-	"github.com/3xDevOps/Aether/internal/events"
-	"github.com/3xDevOps/Aether/internal/harness"
-	"github.com/3xDevOps/Aether/internal/protocol"
-	"github.com/3xDevOps/Aether/internal/ptyhost"
-	"github.com/3xDevOps/Aether/internal/scheduler"
+	"github.com/3xDevOps/cloudfield/internal/acphost"
+	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/events"
+	"github.com/3xDevOps/cloudfield/internal/harness"
+	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/ptyhost"
+	"github.com/3xDevOps/cloudfield/internal/scheduler"
 )
 
 // GitTransport is the SSH server's view of the git engine (*gitengine.Engine).
@@ -81,9 +81,9 @@ type RunController interface {
 	// which never borrows the owner's installation.
 	FallbackLaunchable(ctx context.Context, member, requested, account domain.MemberID, harness string, mode domain.LaunchMode) (bool, error)
 	// LoginProblem is why agent's login in account's home cannot sign it
-	// in, empty when the server knows of none, and whether a launch is
-	// refused over it.
-	LoginProblem(account domain.MemberID, agent string, profile harness.Profile) (problem string, blocks bool, err error)
+	// in for a launch by member, empty when the server knows of none, and
+	// whether a launch is refused over it.
+	LoginProblem(member, account domain.MemberID, agent string, profile harness.Profile) (problem string, blocks bool, err error)
 	// DefaultMode is the mode member's launch of harness on account starts
 	// in when it names none: Enhanced where the agent's ACP server is
 	// installed, else Standard.

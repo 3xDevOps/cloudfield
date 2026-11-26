@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/3xDevOps/Aether/internal/domain"
-	"github.com/3xDevOps/Aether/internal/fallback"
-	"github.com/3xDevOps/Aether/internal/permissions"
-	"github.com/3xDevOps/Aether/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/fallback"
+	"github.com/3xDevOps/cloudfield/internal/permissions"
+	"github.com/3xDevOps/cloudfield/internal/protocol"
 )
 
 const (
@@ -141,7 +141,7 @@ func (s *Service) usedPercent(ctx context.Context, owner, account domain.MemberI
 	if err != nil {
 		return 0, false
 	}
-	used, ok := measured[account]
+	used, ok := measured[domain.AccountOf(account)]
 	return used, ok
 }
 

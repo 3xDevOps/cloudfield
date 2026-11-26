@@ -1,29 +1,30 @@
-/* Tokens: the website's design rule (docs/design-cloudfield.md on
-   feat/cloudfield-site, f2a108dda) and the app's dark theme (web/src/index.css
-   .dark, PR #1008, a6ddfc3ad), named as the app names them. Every colour on
-   these pages is one of them; internal/connector/authorize.go mirrors them. */
+/* Colour tokens: the app's dark theme (web/src/index.css .dark), named as
+   the app names them. Every colour on these pages is one of them;
+   internal/connector/authorize.go mirrors them. The type sizes, spacing and
+   layout widths are not the app's: they come from the website's design rule
+   (docs/design-cloudfield.md on feat/cloudfield-site, f2a108dda). */
 :root {
-  --canvas: #070b11;
-  --chrome: #0c141f;
-  --hover: #121924;
-  --raised: #151d2a;
-  --hover-chrome: #1c2531;
-  --seam: rgb(247 240 228 / 0.09);
-  --control-border: #717c8d;
-  --text: #f7f0e4;
-  --text-muted: #97a3b5;
-  --icon-faint: #798699;
-  --accent-fill: #f5c542;
-  --accent-fill-hover: #d8ad3a;
-  --on-accent: #070b11;
-  --accent-text: #54e0d0;
-  --focus-ring: #54e0d0;
-  --state-done: #45c26a;
-  --state-paused: #798699;
-  --state-failed: #f05c4a;
-  --state-failed-hover: #d95444;
-  --on-failed: #070b11;
-  --state-needs-you: #f5c542;
+  --canvas: #181825;
+  --chrome: #11111b;
+  --hover: #252536;
+  --raised: #222233;
+  --hover-chrome: #2a2b3c;
+  --seam: rgb(205 214 244 / 0.1);
+  --control-border: #8c91a8;
+  --text: #cdd6f4;
+  --text-muted: #a6adc8;
+  --icon-faint: #7f849c;
+  --accent-fill: #fab387;
+  --accent-fill-hover: #dc9e77;
+  --on-accent: #11111b;
+  --accent-text: #89dceb;
+  --focus-ring: #89dceb;
+  --state-done: #a6e3a1;
+  --state-paused: #9399b2;
+  --state-failed: #f38ba8;
+  --state-failed-hover: #dd809b;
+  --on-failed: #11111b;
+  --state-needs-you: #fab387;
 
   --button-shadow: 0 2px 3.5px -1px rgb(0 0 0 / 0.67);
   --button-hover-shadow: 0 2px 4px -1px rgb(0 0 0 / 0.75);

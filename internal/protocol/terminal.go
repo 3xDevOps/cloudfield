@@ -24,10 +24,13 @@ const (
 // means the same as it does in AttachRequest: render at the session's size
 // and impose none. AssistantLogin names an agent to sign in for the
 // assistant instead: the stream is that agent's sign-in, run in the member's
-// assistant container, and Tab is ignored.
+// assistant container, and Tab is ignored. AgentLogin is the login id
+// agent.login.add returned: the stream is that login's sign-in, run in a
+// container of its own, and Tab is ignored.
 type TerminalRequest struct {
 	Tab            string `json:"tab,omitempty"`
 	AssistantLogin string `json:"assistant_login,omitempty"`
+	AgentLogin     string `json:"agent_login,omitempty"`
 	Cols           uint   `json:"cols,omitempty"`
 	Rows           uint   `json:"rows,omitempty"`
 	Follow         bool   `json:"follow,omitempty"`

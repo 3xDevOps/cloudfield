@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/3xDevOps/Aether/internal/domain"
-	"github.com/3xDevOps/Aether/internal/protocol"
-	"github.com/3xDevOps/Aether/internal/quota"
-	"github.com/3xDevOps/Aether/internal/store/storetest"
+	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/quota"
+	"github.com/3xDevOps/cloudfield/internal/store/storetest"
 )
 
 // usageByName answers each account's Claude quota from its display name; an
@@ -158,17 +158,17 @@ func TestSelect(t *testing.T) {
 			}
 			var launchable Launchable
 			if tc.failing != "" {
-				launchable = func(_ context.Context, account domain.MemberID) (bool, error) {
-					if account == ids[tc.failing] {
+				launchable = func(_ context.Context, account domain.Account) (bool, error) {
+					if account.Member == ids[tc.failing] {
 						return false, errors.New("read the installation: input/output error")
 					}
 					return true, nil
 				}
 			}
-			got, excluded := Select(ctx, db, measured, launcher, ids[tc.requested], []domain.WorkspaceID{ws.ID}, policy, launchable)
-			if got != ids[tc.want] || (excluded != nil) != (tc.failing != "") ||
+			got, excluded := Select(ctx, db, measured, launcher, domain.AccountOf(ids[tc.requested]), []domain.WorkspaceID{ws.ID}, policy, launchable)
+			if got != domain.AccountOf(ids[tc.want]) || (excluded != nil) != (tc.failing != "") ||
 				(excluded != nil && !strings.Contains(excluded.Error(), "input/output error")) {
-				t.Fatalf("Select = %s, excluded %v; want %s", names[got], excluded, tc.want)
+				t.Fatalf("Select = %s, excluded %v; want %s", names[got.Member], excluded, tc.want)
 			}
 			skipped := Skipped(excluded)
 			if tc.failing != "" && (len(skipped) != 1 || skipped[0].AccountMemberID != string(ids[tc.failing]) ||
@@ -182,8 +182,8 @@ func TestSelect(t *testing.T) {
 func TestSkippedGivesFixedReasons(t *testing.T) {
 	t.Parallel()
 	excluded := errors.Join(
-		&Skip{Account: "mem-a", Reason: ReasonAccess, Err: errors.New("get member mem-b: database is locked")},
-		&Skip{Account: "mem-c", Reason: ReasonAgent, Err: errors.New("open /var/lib/aether/memberhome/mem-c/.claude: permission denied")},
+		&Skip{Account: domain.AccountOf("mem-a"), Reason: ReasonAccess, Err: errors.New("get member mem-b: database is locked")},
+		&Skip{Account: domain.AccountOf("mem-c"), Reason: ReasonAgent, Err: errors.New("open /var/lib/aether/memberhome/mem-c/.claude: permission denied")},
 		errors.New("list fallback accounts: database is locked"))
 	got := Skipped(excluded)
 	want := []protocol.SkippedAccount{{AccountMemberID: "mem-a", Error: ReasonAccess}, {AccountMemberID: "mem-c", Error: ReasonAgent}, {Error: ReasonList}}
@@ -252,9 +252,9 @@ func TestMeasureNextTriesUnknownUsageLast(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			used := make([]domain.MemberID, 0, len(tc.used))
+			used := make([]domain.Account, 0, len(tc.used))
 			for _, name := range tc.used {
-				used = append(used, ids[name])
+				used = append(used, domain.AccountOf(ids[name]))
 			}
 			usage := usageByName{t: t, names: names, used: tc.quota, modelOnly: map[string]bool{}, failing: map[string]bool{}, reset: future}
 			for _, name := range tc.modelOnly {
@@ -267,12 +267,12 @@ func TestMeasureNextTriesUnknownUsageLast(t *testing.T) {
 			if harness == "" {
 				harness = "claude"
 			}
-			measured, err := MeasureNext(ctx, db, usage, launcher, ids["Ada"], used, harness, policy)
+			measured, err := MeasureNext(ctx, db, usage, launcher, domain.AccountOf(ids["Ada"]), used, harness, policy)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got, excluded := Select(ctx, db, measured, launcher, ids["Ada"], nil, policy, nil); got != ids[tc.want] || excluded != nil {
-				t.Fatalf("Select = %s, excluded %v; want %s", names[got], excluded, tc.want)
+			if got, excluded := Select(ctx, db, measured, launcher, domain.AccountOf(ids["Ada"]), nil, policy, nil); got != domain.AccountOf(ids[tc.want]) || excluded != nil {
+				t.Fatalf("Select = %s, excluded %v; want %s", names[got.Member], excluded, tc.want)
 			}
 		})
 	}

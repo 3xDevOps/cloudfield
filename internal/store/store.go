@@ -8,7 +8,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/3xDevOps/Aether/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/domain"
 )
 
 var (
@@ -43,6 +43,7 @@ var (
 // may have any of them.
 type Store interface {
 	WorkspaceAccessStore
+	AgentLoginStore
 
 	CreateWorkspace(ctx context.Context, w *domain.Workspace) error
 	GetWorkspace(ctx context.Context, id domain.WorkspaceID) (*domain.Workspace, error)
