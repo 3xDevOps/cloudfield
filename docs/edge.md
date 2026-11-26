@@ -1142,9 +1142,10 @@ pin file the notices were verified under, made last and only while that file is
 still `edge_key.json`, and reads the notices only while the link is the current
 `edge_key.json`. A pin by an older binary therefore shows no notices until the
 next connection, and nothing in this build rewrites the pin file except a pin.
-Where the file system cannot hard-link, the server stores no notices, and a
-restore that does not keep hard links drops the stored notices until the next
-connection. Stored notices also name the server id that verified them and count
+Where the file system cannot hard-link, as on vfat or many FUSE file
+systems, the first connection pins by a rename, as builds before notices did,
+and the server stores no notices. A restore that does not keep hard links drops
+the stored notices until the next connection. Stored notices also name the server id that verified them and count
 for no other. A list that arrived with the `ready` that pinned the key is
 trusted as that pin is, and only shown. An edge or a server that does not know
 the fields ignores them, and a server that sends no nonce gets the `ready` it
