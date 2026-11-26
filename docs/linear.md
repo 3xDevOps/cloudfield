@@ -77,14 +77,13 @@ and custom harnesses are not told; the link still shows in the dashboard and
 them.
 
 A linked session shows the identifier with the Linear mark in its header,
-under the title on a wide screen and at the end of the status line on a phone,
+after the state on a wide screen and at the end of the status line on a phone,
 and in the **Linear** row of its Details panel next to **Branch**. It links to
-the issue and appears before any pull request exists. With a saved key the
-issue's status shows in two places: the desktop header when the status line
-is wide enough (32rem), and always in the Details panel, where the whole
-`<ID> <status>` is one link titled with the issue title. The phone header shows
-the identifier only. If Linear refuses the status read, the status is left out
-and Linear's error is the link's tooltip.
+the issue and appears before any pull request exists. The headers show the
+identifier only. With a saved key the Details panel adds the issue's status,
+and the whole `<ID> <status>` is one link titled with the issue title. If
+Linear refuses the status read, the status is left out and Linear's error is
+the link's tooltip.
 
 **Settings**, **Connections**, **Linear** shows `Connected as <name>` with
 **View issues** and **Disconnect**. `linear.status` answers an empty status

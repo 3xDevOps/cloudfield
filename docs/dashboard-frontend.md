@@ -5973,11 +5973,10 @@ instead**, which replaces the task and link; phone and desktop share one compone
 The page picks the table or the stacked list from its own width (920px), shows
 the subtitle in the page on a phone, and shows **Open session**, with a working
 dot, in place of **Start session** for an issue with a live linked session (the run's canonical `linear_issue_url` equals the issue's URL without its slug, so the same ID in another workspace does not match).
-`src/routes/run/linear-issue.tsx` is the link to `run.linear_issue_url`: in the
-session header with the status text from `linear.issue` where the header line
-has 32rem, in the Details panel's **Linear** row always with the status as muted text beside the accent `<ID>` link, and
-without status or lookup in the phone header (never a status dot, which belongs
-to session state). [linear.md](linear.md) covers the behavior.
+`src/routes/run/linear-issue.tsx` is the link to `run.linear_issue_url`: the
+identifier alone in the session header and the phone header, and in the Details
+panel's **Linear** row with the status from `linear.issue` as muted text beside
+the accent `<ID>` link (never a status dot, which belongs to session state). [linear.md](linear.md) covers the behavior.
 
 ## Insights
 

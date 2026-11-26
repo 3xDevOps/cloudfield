@@ -19,12 +19,14 @@ describe('run header Linear link', () => {
     expect(client.linearIssue).not.toHaveBeenCalled()
   })
 
-  it('shows the issue status when a key is saved', async () => {
+  it('names the issue status and title without showing the status when a key is saved', async () => {
     useStore.setState({ linear: { connected: true } })
     const client = fakeApi({ linearIssue: vi.fn(async () => ({ identifier: 'ENG-123', title: 't', url: run.linear_issue_url, state: { name: 'In Progress', type: 'started' } })) })
     render(<RunLinearIssue run={run} client={client} />)
 
-    expect((await screen.findByRole('link', { name: 'Linear issue ENG-123, In Progress' })).textContent).toContain('In Progress')
+    const link = await screen.findByRole('link', { name: 'Linear issue ENG-123, In Progress' })
+    expect(link.textContent).toBe('ENG-123')
+    expect(link.getAttribute('title')).toBe('t')
     expect(client.linearIssue).toHaveBeenCalledWith('ENG-123')
   })
 

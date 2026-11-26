@@ -26,9 +26,9 @@ function useIssue(client: Api, identifier: string, enabled: boolean): Lookup {
 }
 
 /**
- * The run's Linear issue as a link to Linear. The header shows the issue's
- * status when it is wide enough; `details` always does, as one link; `compact`
- * (the phone header) reads and shows none.
+ * The run's Linear issue as a link to Linear. `details` adds the issue's
+ * status; the header shows the identifier with the issue title as its tooltip;
+ * `compact` (the phone header) reads nothing.
  */
 export function RunLinearIssue({ run, client = api, compact = false, details = false, className }: { run: Pick<Run, 'linear_issue' | 'linear_issue_url'>; client?: Api; compact?: boolean; details?: boolean; className?: string }) {
   const identifier = run.linear_issue ?? ''
@@ -61,7 +61,6 @@ export function RunLinearIssue({ run, client = api, compact = false, details = f
     >
       <Linear aria-hidden className="size-3.5" />
       <span className="tabular-nums">{identifier}</span>
-      {issue && <span className="hidden pl-1 @lg/state:inline">{issue.state.name}</span>}
     </a>
   )
 }
