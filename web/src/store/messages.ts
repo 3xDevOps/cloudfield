@@ -116,8 +116,16 @@ export function scopeMessages(state: MessagesSlice, scope: MessageScope): RunMes
   return list ? list.ids.map((id) => state.runMessages[id]) : []
 }
 
+const viewers = new Map<string, number>()
+
+/** Whether something on screen shows this list. */
+export function messageListViewed(key: string): boolean {
+  return viewers.has(key)
+}
+
 export async function loadMessagePage(store: RootStore, client: Api, scope: MessageScope, older = false): Promise<void> {
-  const before = store.getState().messageLists[messageScopeKey(scope)]?.nextBefore
+  const key = messageScopeKey(scope)
+  const before = store.getState().messageLists[key]?.nextBefore
   if (older && !before) return
   try {
     const page = await client.coordMessagesList({
@@ -129,21 +137,24 @@ export async function loadMessagePage(store: RootStore, client: Api, scope: Mess
     store.getState().setMessagePage(scope, page.messages ?? [], page.next_before, older)
     store.getState().setMessageError(scope)
   } catch (err) {
-    store.getState().setMessageError(scope, message(err))
+    // A kept list re-read with no viewer would show a stale error to its next one.
+    if (viewers.has(key)) store.getState().setMessageError(scope, message(err))
     // An empty list still hears coord.message events, which re-read it.
-    if (!store.getState().messageLists[messageScopeKey(scope)]) store.getState().setMessagePage(scope, [], undefined)
+    if (!store.getState().messageLists[key]) store.getState().setMessagePage(scope, [], undefined)
   }
 }
 
-const viewers = new Map<string, number>()
-
-/** Every coord.message re-reads each held list it belongs to, so a list is
- * held only while something on screen shows it. */
+/** A session's list outlives its viewers, so its Chat returns with the rows it
+ * left with; coord.message keeps it current, and it goes when the session
+ * leaves the store. Workspace and thread lists are dropped with their last viewer. */
 export function useMessageList(store: RootStore, client: Api, scope: MessageScope): void {
   const key = messageScopeKey(scope)
   useEffect(() => {
     const release = () => {
-      if (!viewers.has(key)) store.getState().dropMessageList(key)
+      if (viewers.has(key)) return
+      const state = store.getState()
+      if (scope.kind !== 'run' || !(scope.runID in state.runs)) state.dropMessageList(key)
+      else if (state.messageErrors[key]) state.setMessageError(scope)
     }
     const held = viewers.has(key)
     viewers.set(key, (viewers.get(key) ?? 0) + 1)

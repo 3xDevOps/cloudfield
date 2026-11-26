@@ -270,13 +270,20 @@ message's delivery (`DeliveryCountdown`), is its own small component and
 re-renders only its text.
 
 The `messages` slice holds agent mail (`coord.messages.list`) per workspace
-or run scope, merged by message ID. A scope's list is held only while
-a view that shows it is mounted (`useMessageList`); the last one to unmount
-drops it and the messages no other list holds. Messages list oldest first;
+or run scope, merged by message ID. A view that shows a scope's list reads
+it when it mounts (`useMessageList`). A workspace or thread list is dropped,
+with the messages no other list holds, when the last such view unmounts. A
+session's list is kept when its last view unmounts, without any read error
+it held, so its Chat returns with the rows it left with. It is dropped once
+the session is no longer in `runs`, whether a removal, a snapshot or a reset
+took it out, and no view shows it; the tab holds one list per session it has
+shown. Messages list oldest first;
 those created at the same instant keep the order the server inserted them,
 which it reports newest first. A `coord.message` event
 carries no body, so every held scope the message belongs to re-reads its
-newest page; a scope whose first read failed is held empty so it re-reads too.
+newest page, a kept session list included: a view that mounts on one finds
+it current. A scope whose first read failed is held empty so it re-reads too.
+A failed read records its error only while a view shows the list.
 `coord.message.acked` stamps the row. Both re-read the recipient session for its
 `unacked_messages`.
 
@@ -3072,10 +3079,16 @@ closed; each older page merges below the pages before it, so same-instant
 messages keep the server's order. It polls presence every ten seconds with an abortable 15-second
 deadline.
 
-While other members watch the session, the composer shows a line above the
-message box, in the space of its own fixed height: `Alice is typing...`,
+While another member types in the session, the composer shows a 16px line
+above the message box: `Alice is typing...`,
 `Alice and Bob are typing...`, `Alice, Bob and Carol are typing...`, and
-`Several people are typing...` past three. The dots animate unless
+`Several people are typing...` past three. The line takes no room while
+nobody types, so the conversation and the bars above the composer move up
+24px when a name appears and back when the last one lapses, while the
+message box stays put; reserving the room instead left a gap above the box
+of every shared session. Its `role="status"` region stays mounted and
+empty meanwhile, so a screen reader announces a name when it arrives. The
+dots animate unless
 `prefers-reduced-motion` is set. Your own typing is never listed. Each
 keystroke in a draft calls `presence.typing` (Steer on the session), at most once
 every 3 seconds; clearing the draft, sending it or closing the composer calls
@@ -3480,7 +3493,12 @@ progress, takeover loss and reduced-motion behavior.
 
 The Chat view (`session-view.tsx`) is the session's conversation: what was said
 to the agent, what it did and asked, and the session's notes. It is a `virtua`
-list in a 736px column over `rowsForRun` (`store/sessions.ts`). For a Standard
+list in a 736px column over `rowsForRun` (`store/sessions.ts`). The list
+remounts on every switch between sessions, so each session's measured row
+heights are kept in a module-level map with the keys of the rows they were
+measured for, until the session leaves the store. A Chat that mounts with
+those same rows starts from the kept heights and paints its first frame at
+its final scroll position; with any other rows it measures again. For a Standard
 session the rows come from the session's `run.agent`, `workspace.timeline`,
 `run.status` and `run.review` events (read with `workspace.timeline` filtered by session and type,
 then kept live by sync), room messages, the session record and its pending inputs:
@@ -3517,16 +3535,16 @@ which drops those messages from the timeline; the choice is per session, in
 `hiddenAgentMessages`, until the page reloads. `Esc` in an empty composer focuses the list's
 viewport; the next `Esc` is the session's `leave-run`.
 
-In a [tile](#session-tiles) that is not the focused one the composer is one
-line: the same field showing a draft's first line, "+N lines" when it has
-more, and no toolbar. A press in the tile focuses it, and the composer opens
-when the press ends, so the click lands on what was pressed. For 400ms after
-it opens, or until the pointer moves, its toolbar takes no press: the second
-press of a double-click on the field opens no menu. A tile on Changes,
-Files or Trace keeps that one-line field, with a **Send** icon, under a seam, for an
+The Chat composer is the same height in every [tile](#session-tiles),
+focused or not, so focusing a tile moves nothing in its Chat. A tile on Changes,
+Files or Trace docks a one-line field under a seam: a draft's first line,
+"+N lines" when it has more, and a **Send** icon, for an
 Enhanced session this tab may steer, while the session's Chat is not on
-screen, no request is pending and the agent's stream is live; it opens on a click or `c` and folds when
-the tile loses focus. A Browser or Terminal tile has none, so the page and
+screen, no request is pending and the agent's stream is live. It opens to
+the whole composer on a click or `c`, stays open when the tile loses focus,
+and folds on `Esc` in an empty field. For 400ms after
+it opens, or until the pointer moves, its toolbar takes no press: the second
+press of a double-click on the field opens no menu. A Browser or Terminal tile has none, so the page and
 the terminal keep their height.
 `c` goes to the session's Chat composer when Chat is on screen, else to this
 field, else it opens Chat. The header's **Reply** always opens Chat.
@@ -8629,8 +8647,8 @@ the glide and the tile keys; `tiles-drag.test.tsx` every drag source, zone
 and cancel, and a pressed tab's strip keeping its tabs and their widths;
 `tiles-control.test.tsx` no resize or reattach on a focus click,
 write control, the scaled terminal, the first click in a tile that is not
-focused ("+", a background tab, a tab's close button, the composer opening
-at the release), the strip keeping its layout until the pointer is off it
+focused ("+", a background tab, a tab's close button, the tile's controls
+appearing at the release), the strip keeping its layout until the pointer is off it
 or a double click maximizes its tile,
 a session's update rendering no other session's Chat, the right-click
 session menu only in the controls tile, and the glide's two-frame hold and
@@ -8727,7 +8745,8 @@ covers the Session rows; `src/store/session-rows.test.ts`,
 Enhanced rows and their blocks of steps, store, stream client, composer and
 requests, and
 `src/store/session-perf.test.tsx` (`RUN_PERF=1`) streams 5,000 items and
-opens 2,000. `src/routes/browser/index.test.tsx` covers the first page,
+opens 2,000. `e2e/chat-switch.spec.ts` reads a returned Chat's scroll
+position on every frame. `src/routes/browser/index.test.tsx` covers the first page,
 silent acquisition, takeover, release on blur and on focus elsewhere, the
 address field and its queue, shortcuts, fit-to-pane and presets, the page
 strip, close/reset identity fencing and raw refusals; `surface.test.tsx`
