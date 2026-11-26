@@ -32,10 +32,10 @@ func TestEdgeStatusRetiringRow(t *testing.T) {
 	dated.Date = "2027-03-01"
 	elsewhere := edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: "https://edge-third.example.test", Replacement: other}
 	tests := []struct {
-		name       string
-		status     edgeagent.Status
-		notices    edgeagent.StoredNotices
-		config     string
+		name    string
+		status  edgeagent.Status
+		notices edgeagent.StoredNotices
+		config  string
 		// raw, when set, is written as the notices file instead.
 		raw        string
 		row        string
@@ -57,8 +57,8 @@ func TestEdgeStatusRetiringRow(t *testing.T) {
 			notices: edgeagent.StoredNotices{Notices: []edgeproto.Notice{dated}},
 			row:     "running      the running server is at " + other + "; restart to apply edge-url: sudo systemctl restart aether-server"},
 		{name: "moved off a retired address, not restarted", status: edgeagent.Status{Edge: other, Error: gone, Since: since},
-			notices: edgeagent.StoredNotices{Notices: []edgeproto.Notice{dated}},
-			row:     "running      the server last dialed " + other + "; restart to apply edge-url: sudo systemctl restart aether-server",
+			notices:    edgeagent.StoredNotices{Notices: []edgeproto.Notice{dated}},
+			row:        "running      the server last dialed " + other + "; restart to apply edge-url: sudo systemctl restart aether-server",
 			connection: "connection   disconnected since " + since.Local().Format(time.DateTime) + ": " + gone, err: errNotConnected},
 		{name: "an unreadable notices file", status: connected, raw: "{not json",
 			row:        "notices      unreadable, so none is shown: edgeagent: ",

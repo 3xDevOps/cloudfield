@@ -418,10 +418,10 @@ func TestMoveReadsBothProbesNotices(t *testing.T) {
 	}{
 		{name: "the target retired, from the first probe", at: from,
 			notice: edgeproto.Notice{State: edgeproto.NoticeRetired, Origin: to.origin, Replacement: "https://edge3.example.test"},
-			want: "the edge says, signed with the pinned key, that " + to.origin + " is retired; move there instead: sudo cloudfield-server edge move https://edge3.example.test"},
+			want:   "the edge says, signed with the pinned key, that " + to.origin + " is retired; move there instead: sudo cloudfield-server edge move https://edge3.example.test"},
 		{name: "the target retiring in favour of the address in use", at: to,
 			notice: edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: to.origin, Replacement: from.origin},
-			want: "the edge says, signed with the pinned key, that " + to.origin + " is retiring and names " + from.origin + ", where this server already is; nothing changed"},
+			want:   "the edge says, signed with the pinned key, that " + to.origin + " is retiring and names " + from.origin + ", where this server already is; nothing changed"},
 		{name: "the address in use retiring", at: from,
 			notice: edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: from.origin, Replacement: to.origin}, retiring: true},
 	} {
