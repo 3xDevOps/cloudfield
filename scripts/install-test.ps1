@@ -562,7 +562,7 @@ func main() {
     # tested on the installer's own functions. The shortcut starts the fixture,
     # which records that it ran and exits: no app is left running.
     $installerAst = [Management.Automation.Language.Parser]::ParseFile($installer, [ref]$null, [ref]$null)
-    foreach ($name in @('Invoke-AetherGuiBuild', 'Test-AetherSomeoneToSee', 'Open-AetherDesktop')) {
+    foreach ($name in @('Invoke-AetherGuiBuild', 'Test-AetherElevated', 'Test-AetherSomeoneToSee', 'Open-AetherDesktop')) {
         $definition = $installerAst.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
         Assert-AetherTest ($null -ne $definition) ("install.ps1 has no function {0}" -f $name)
         . ([scriptblock]::Create($definition.Extent.Text))
@@ -570,6 +570,12 @@ func main() {
     if ([Console]::IsOutputRedirected) {
         Assert-AetherTest (-not (Test-AetherSomeoneToSee)) 'a redirected console counted as someone to see the app'
     }
+    # The integrity label agrees with what Windows says about this token; on a
+    # hosted runner both say elevated.
+    $principal = New-Object Security.Principal.WindowsPrincipal ([Security.Principal.WindowsIdentity]::GetCurrent())
+    $global:LASTEXITCODE = 7
+    Assert-AetherEqual $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) (Test-AetherElevated) 'the integrity label disagrees with the token''s elevation'
+    Assert-AetherEqual 7 $global:LASTEXITCODE 'the elevation check changed LASTEXITCODE'
     $launchCase = Join-Path $root 'launch-case'
     New-Item -ItemType Directory -Path $launchCase -Force | Out-Null
     # A profile path outside the console code page reaches the installer intact.

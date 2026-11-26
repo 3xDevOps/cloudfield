@@ -802,6 +802,7 @@ run_gui_build() {
 	tee "$tmp/gui-build.out" <"$tmp/gui-build.fifo" &
 	tee_pid=$!
 	run_interactive "${BIN_DIR}/aether" gui build >"$tmp/gui-build.fifo" || {
+		wait "$tee_pid" || true
 		gui_failure="\`aether gui build\` exited ${interactive_status}; its error is above"
 		return 1
 	}

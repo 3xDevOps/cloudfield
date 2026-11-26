@@ -331,6 +331,8 @@ for tool in "$gio_dir/gio" "$gtk_dir/gtk-launch" "$bin/open"; do
 #!/bin/sh
 printf '%s %s\n' "${0##*/}" "$*" >>"$CMD_LOG"
 [ "${0##*/}" != gtk-launch ] || printf 'gtk-launch data %s\n' "${XDG_DATA_HOME:-}" >>"$CMD_LOG"
+{ true <&3; } 2>/dev/null && echo "launcher inherited fd 3" >>"$CMD_LOG"
+{ true >&4; } 2>/dev/null && echo "launcher inherited fd 4" >>"$CMD_LOG"
 if [ -n "${STUB_OPEN_FAILS:-}" ]; then
 	echo "${0##*/}: cannot open the app" >&2
 	exit 2
@@ -568,6 +570,7 @@ not_opened() {
 reset "--role client on a desktop opens the app"
 DISPLAY=:0 AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
 ran "gio launch $home/.local/share/applications/aether-desktop.desktop"
+not_ran "launcher inherited fd"
 printed "$started"
 not_printed "open Cloudfield from your applications"
 printed "  cloudfield link <server-host>  # on a tailnet: the server's tailnet name"
@@ -612,6 +615,10 @@ not_opened
 
 reset "--role client through doas does not open the app"
 DOAS_USER=tester DISPLAY=:0 AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
+not_opened
+
+reset "--role client through pkexec does not open the app"
+PKEXEC_UID=1000 DISPLAY=:0 AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
 not_opened
 
 reset "--role client whose build fails does not open the app"

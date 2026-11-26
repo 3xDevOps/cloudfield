@@ -934,22 +934,37 @@ function Invoke-AetherGuiBuild {
     return $launcher
 }
 
+# Whether this process's token is elevated, read from its integrity label
+# (High S-1-16-12288, System S-1-16-16384) rather than from Administrators
+# membership, which misses operator groups UAC also elevates. A token whose
+# label cannot be read counts as elevated.
+function Test-AetherElevated {
+    $previousExit = Get-Variable LASTEXITCODE -Scope Global -ValueOnly -ErrorAction SilentlyContinue
+    try {
+        $groups = & (Join-Path $env:SystemRoot 'System32\whoami.exe') /groups /fo csv /nh
+        if ($LASTEXITCODE -ne 0 -or -not ($groups -match '"S-1-16-')) { return $true }
+        return [bool]($groups -match '"S-1-16-(12288|16384)"')
+    }
+    catch {
+        return $true
+    }
+    finally {
+        if ($null -ne $previousExit) {
+            $global:LASTEXITCODE = $previousExit
+        }
+        else {
+            Remove-Variable LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
+        }
+    }
+}
+
 # A person at this machine's screen runs the installer as themselves: CI and
 # scripts redirect the console, a service has no desktop, and an elevated
-# token would start the app elevated. Elevation is read from the token's
-# integrity label (High S-1-16-12288, System S-1-16-16384), which also
-# catches operator groups that are not Administrators.
+# token would start the app elevated.
 function Test-AetherSomeoneToSee {
     if ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected) { return $false }
     if (-not [Environment]::UserInteractive -or [Diagnostics.Process]::GetCurrentProcess().SessionId -eq 0) { return $false }
-    try {
-        $groups = & (Join-Path $env:SystemRoot 'System32\whoami.exe') /groups /fo csv /nh
-    }
-    catch {
-        return $false
-    }
-    if ($LASTEXITCODE -ne 0 -or -not ($groups -match 'S-1-16-')) { return $false }
-    return -not ($groups -match '"S-1-16-(12288|16384)"')
+    return -not (Test-AetherElevated)
 }
 
 # Starts the app through the Start Menu shortcut `gui build` printed, as the
