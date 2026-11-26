@@ -361,6 +361,10 @@ import (
 )
 
 func main() {
+    if len(os.Args) == 3 && os.Args[1] == "launched" {
+        _ = os.WriteFile(os.Args[2], []byte("launched"), 0644)
+        return
+    }
     logPath := os.Getenv("AETHER_FIXTURE_LOG")
     if logPath != "" {
         _ = os.WriteFile(logPath, []byte("invoked"), 0644)
@@ -370,6 +374,9 @@ func main() {
         os.Exit(64)
     }
     fmt.Println("fixture stdout progress")
+    if launcher := os.Getenv("AETHER_FIXTURE_LAUNCHER"); launcher != "" {
+        fmt.Println("launcher " + launcher)
+    }
     fmt.Fprintln(os.Stderr, "fixture stderr progress")
     if os.Getenv("CLOUDFIELD_BIN") != "" {
         fmt.Fprintln(os.Stderr, "CLOUDFIELD_BIN reached the build")
@@ -540,11 +547,54 @@ func main() {
             '[3/3] installing the desktop app (the build output follows)',
             'fixture stdout progress',
             ('      installed {0}' -f $freshDesktop),
+            '  open Cloudfield from the Start menu, or link from a new terminal:',
             'aether link <server-host>      # on a tailnet: the server''s tailnet name',
             'aether link --claim <code>     # with the claim link server setup printed',
             ('done: Aether {0} installed in ' -f $version))) {
         Assert-AetherTest ($result.Stdout.Contains($expected)) ("fresh install output lacks [{0}]: {1}" -f $expected, $result.Output)
     }
+    # Its console is redirected, so nobody is there to see the app.
+    foreach ($unexpected in @('Cloudfield is starting', 'did not open')) {
+        Assert-AetherTest (-not $result.Output.Contains($unexpected)) ("redirected install tried to open the app: " + $result.Output)
+    }
+
+    # Every installer run here has a redirected console, so the launch is
+    # tested on the installer's own functions. The shortcut starts the fixture,
+    # which records that it ran and exits: no app is left running.
+    $installerAst = [Management.Automation.Language.Parser]::ParseFile($installer, [ref]$null, [ref]$null)
+    foreach ($name in @('Invoke-AetherGuiBuild', 'Test-AetherSomeoneToSee', 'Open-AetherDesktop')) {
+        $definition = $installerAst.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
+        Assert-AetherTest ($null -ne $definition) ("install.ps1 has no function {0}" -f $name)
+        . ([scriptblock]::Create($definition.Extent.Text))
+    }
+    if ([Console]::IsOutputRedirected) {
+        Assert-AetherTest (-not (Test-AetherSomeoneToSee)) 'a redirected console counted as someone to see the app'
+    }
+    $launchCase = Join-Path $root 'launch-case'
+    New-Item -ItemType Directory -Path $launchCase -Force | Out-Null
+    $launchShortcut = Join-Path $launchCase 'Cloudfield.lnk'
+    $env:AETHER_FIXTURE_LAUNCHER = $launchShortcut
+    try {
+        $printedLauncher = Invoke-AetherGuiBuild $fixture
+    }
+    finally {
+        Remove-Item -LiteralPath 'Env:AETHER_FIXTURE_LAUNCHER' -ErrorAction SilentlyContinue
+    }
+    Assert-AetherEqual $launchShortcut $printedLauncher 'the installer did not read the launcher gui build printed'
+    $launched = Join-Path $launchCase 'launched.txt'
+    $link = (New-Object -ComObject WScript.Shell).CreateShortcut($launchShortcut)
+    $link.TargetPath = $fixture
+    $link.Arguments = 'launched "{0}"' -f $launched
+    $link.WorkingDirectory = $launchCase
+    $link.Save()
+    Assert-AetherEqual $null (Open-AetherDesktop $launchShortcut) 'the shortcut did not start'
+    $deadline = [DateTime]::UtcNow.AddSeconds(30)
+    while (-not (Test-Path -LiteralPath $launched) -and [DateTime]::UtcNow -lt $deadline) { Start-Sleep -Milliseconds 100 }
+    Assert-AetherTest (Test-Path -LiteralPath $launched) 'the shortcut did not start its target'
+    $missingFailure = Open-AetherDesktop (Join-Path $launchCase 'missing.lnk')
+    Assert-AetherTest (-not [string]::IsNullOrWhiteSpace($missingFailure)) 'a missing shortcut was reported as started'
+    Assert-AetherEqual '`aether gui build` printed no launcher' (Open-AetherDesktop $null) 'no launcher was not reported'
+
     Assert-AetherTest ($result.Stderr.Contains('fixture stderr progress')) ("desktop build stderr did not reach the console: " + $result.Output)
     Assert-AetherTest (-not $result.Stderr.Contains('NativeCommandError')) ("desktop build stderr became an error record: " + $result.Stderr)
     Assert-AetherTest ((Get-AetherTestUserPath).StartsWith($freshUserPath)) 'fresh install altered unrelated PATH entries'

@@ -50,8 +50,15 @@ if [ "${GUI_INTERRUPTS:-0}" = 1 ] && [ "${1:-}" = gui ]; then
 	exit 130
 fi
 printf 'aether %s\n' "$*" >>"$CMD_LOG"
-echo "installed /home/tester/.local/share/cloudfield/desktop"
-echo "open it from your application menu as Cloudfield"
+# The last lines the real build prints, which name the launcher.
+if [ "${STUB_OS:-Linux}" = Darwin ]; then
+	echo "installed $HOME/Applications/Cloudfield.app"
+	echo "open it from Spotlight as Cloudfield"
+else
+	echo "installed $HOME/.local/share/cloudfield/desktop"
+	echo "launcher $HOME/.local/share/applications/aether-desktop.desktop"
+	echo "open it from your application menu as Cloudfield"
+fi
 EOF
 
 # Stands in for the real binary. A completed setup writes the systemd unit,
@@ -314,6 +321,27 @@ fi
 exec "$@"
 EOF
 
+# Every program the installer opens the app with only logs, so no case
+# starts a real app. STUB_OPEN_FAILS is one that refuses; STUB_MANAGER is
+# the macOS login session launchctl reports.
+gio_dir="$tmp/gio" gtk_dir="$tmp/gtk-launch"
+mkdir -p "$gio_dir" "$gtk_dir"
+for tool in "$gio_dir/gio" "$gtk_dir/gtk-launch" "$bin/open"; do
+	cat >"$tool" <<'EOF'
+#!/bin/sh
+printf '%s %s\n' "${0##*/}" "$*" >>"$CMD_LOG"
+if [ -n "${STUB_OPEN_FAILS:-}" ]; then
+	echo "${0##*/}: cannot open the app" >&2
+	exit 2
+fi
+EOF
+	chmod 0755 "$tool"
+done
+cat >"$bin/launchctl" <<'EOF'
+#!/bin/sh
+echo "${STUB_MANAGER:-Aqua}"
+EOF
+
 for tool in npm npx; do
 	cat >"$node/$tool" <<EOF
 #!/bin/sh
@@ -327,7 +355,8 @@ chmod 0755 "$bin"/* "$node"/* "$fixtures/aether" "$fixtures/aether-server"
 # client role builds the app on a machine without Node. Dropping the
 # directories that carry npm would also drop sh, awk and mktemp, so those
 # directories are mirrored into a shadow of symlinks with npm and npx left
-# out.
+# out. gio and gtk-launch are left out the same way, for the cases that
+# open the app without them.
 shadow="$tmp/no-node"
 mkdir -p "$shadow"
 no_node_path=""
@@ -335,13 +364,13 @@ oldifs="$IFS"
 IFS=:
 for d in $PATH; do
 	[ -d "$d" ] || continue
-	if [ ! -x "$d/npm" ] && [ ! -x "$d/npx" ]; then
+	if [ ! -x "$d/npm" ] && [ ! -x "$d/npx" ] && [ ! -x "$d/gio" ] && [ ! -x "$d/gtk-launch" ]; then
 		no_node_path="${no_node_path:+$no_node_path:}$d"
 		continue
 	fi
 	for f in "$d"/*; do
 		base="${f##*/}"
-		case "$base" in npm | npx | '*') continue ;; esac
+		case "$base" in npm | npx | gio | gtk-launch | '*') continue ;; esac
 		[ -e "$shadow/$base" ] || ln -s "$f" "$shadow/$base" 2>/dev/null || true
 	done
 	case ":${no_node_path}:" in
@@ -350,6 +379,7 @@ for d in $PATH; do
 	esac
 done
 IFS="$oldifs"
+no_launcher_path="$bin:$node:$bindir:$no_node_path"
 no_node_path="$bin:$bindir:$no_node_path"
 
 export CMD_LOG="$log" FIXTURES="$fixtures" REQ_LOG="$reqs"
@@ -360,7 +390,10 @@ export AETHER_UNIT_PATH="$tmp/aether-server.service"
 # write to the real /usr/local/bin or the real ~/.local/bin.
 export AETHER_SYSTEM_BIN_DIR="$sysbin" HOME="$home"
 export AETHER_VERSION="v0.0.0-test" AETHER_BIN_DIR="$bindir"
-export PATH="$bin:$node:$bindir:$PATH"
+export PATH="$bin:$gio_dir:$gtk_dir:$node:$bindir:$PATH"
+# No desktop session unless a case sets one, so whether the app opens never
+# depends on the machine running the tests.
+export DISPLAY="" WAYLAND_DISPLAY=""
 
 # --- harness -------------------------------------------------------------
 
@@ -514,6 +547,91 @@ reset "--role client, gui build fails"
 GUI_FAILS=1 sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
 ends_with "aether install: the aether CLI is installed in $bindir; the desktop app is not: \`aether gui build\` exited 1; its error is above"
 not_printed "The desktop app was not built"
+
+# --- a client run from a terminal on the desktop opens the app -----------
+#
+# Through the launcher `gui build` printed, and only for a person at the
+# screen running the installer as themselves. Otherwise the closing lines
+# are the ones above, with nothing about opening the app.
+
+started="  Cloudfield is starting: link your server in its window, or in a terminal:"
+not_opened() {
+	not_ran "gio "
+	not_ran "gtk-launch "
+	not_ran "open "
+	not_printed "Cloudfield is starting"
+	not_printed "did not open"
+}
+
+reset "--role client on a desktop opens the app"
+DISPLAY=:0 AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
+ran "gio launch $home/.local/share/applications/aether-desktop.desktop"
+printed "$started"
+not_printed "open Cloudfield from your applications"
+printed "  cloudfield link <server-host>  # on a tailnet: the server's tailnet name"
+ends_with "  cloudfield link '<invite link>' # or with an invite link from an admin"
+
+reset "--role client on Wayland opens the app"
+WAYLAND_DISPLAY=wayland-0 AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
+ran "gio launch $home/.local/share/applications/aether-desktop.desktop"
+
+reset "--role client without gio opens the app with gtk-launch"
+PATH="$gtk_dir:$no_launcher_path" DISPLAY=:0 AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
+ran "gtk-launch aether-desktop"
+printed "$started"
+
+reset "--role client on a Mac desktop opens the app"
+STUB_OS=Darwin AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
+ran "open $home/Applications/Cloudfield.app"
+printed "$started"
+
+reset "--role client with no display does not open the app"
+AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
+not_opened
+printed "  open Cloudfield from your applications to link your server, or in a terminal:"
+
+reset "--role client over SSH to a Mac does not open the app"
+STUB_OS=Darwin STUB_MANAGER=Background AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
+not_opened
+printed "  open Cloudfield from your applications to link your server, or in a terminal:"
+
+reset "--role client with no terminal does not open the app"
+DISPLAY=:0 AETHER_TTY="$tmp/no-such-tty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
+not_opened
+
+reset "--role client as root does not open the app"
+STUB_UID=0 DISPLAY=:0 AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
+not_opened
+
+reset "--role client through sudo does not open the app"
+SUDO_USER=tester DISPLAY=:0 AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
+not_opened
+
+reset "--role client whose build fails does not open the app"
+GUI_FAILS=1 DISPLAY=:0 AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
+not_opened
+ends_with "aether install: the aether CLI is installed in $bindir; the desktop app is not: \`aether gui build\` exited 1; its error is above"
+
+reset "--role server on a desktop does not open the app"
+DISPLAY=:0 AETHER_TTY="$faketty" sh "$script" --role server >"$out" 2>&1 || fail "installer exited non-zero"
+not_opened
+
+reset "--role none on a desktop does not open the app"
+DISPLAY=:0 AETHER_TTY="$faketty" sh "$script" --role none >"$out" 2>&1 || fail "installer exited non-zero"
+not_opened
+
+# A launch that fails is reported with its own error and fails nothing.
+reset "--role client whose app does not open"
+STUB_OPEN_FAILS=1 DISPLAY=:0 AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
+ran "gio launch $home/.local/share/applications/aether-desktop.desktop"
+printed "  open Cloudfield from your applications to link your server, or in a terminal:"
+not_printed "Cloudfield is starting"
+ends_with "aether install: the desktop app is installed but did not open: \`gio launch $home/.local/share/applications/aether-desktop.desktop\` exited 2: gio: cannot open the app"
+
+reset "--role client with neither gio nor gtk-launch"
+PATH="$no_launcher_path" DISPLAY=:0 AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
+printed "  open Cloudfield from your applications to link your server, or in a terminal:"
+ends_with "aether install: the desktop app is installed but did not open: neither gio nor gtk-launch is installed"
 
 # --- --role none: binaries only ------------------------------------------
 

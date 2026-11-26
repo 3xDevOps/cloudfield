@@ -22,7 +22,8 @@
 # picks what is installed and where: a client gets the CLI alone in
 # ~/.local/bin, which the desktop app can replace on update without sudo. It
 # then finishes that role's setup: `aether-server setup` on a server,
-# `aether gui build` on a client. Pass --role none to skip both.
+# `aether gui build` on a client, which then opens the app when run from a
+# terminal on the desktop. Pass --role none to skip both.
 
 set -eu
 
@@ -793,10 +794,67 @@ run_gui_build() {
 	fi
 	echo
 	say "building the desktop app - this downloads Electron and takes a few minutes"
-	run_interactive "${BIN_DIR}/aether" gui build || {
+	# A copy of its stdout keeps the launcher it prints for open_app.
+	mkfifo "$tmp/gui-build.fifo" || {
+		gui_failure="mkfifo failed, so \`aether gui build\` did not run; its error is above"
+		return 1
+	}
+	tee "$tmp/gui-build.out" <"$tmp/gui-build.fifo" &
+	tee_pid=$!
+	run_interactive "${BIN_DIR}/aether" gui build >"$tmp/gui-build.fifo" || {
+		wait "$tee_pid" || true
 		gui_failure="\`aether gui build\` exited ${interactive_status}; its error is above"
 		return 1
 	}
+	wait "$tee_pid" || true
+}
+
+# Opens the app through the launcher `gui build` printed, only when a person
+# at this machine's screen is running the installer as themselves.
+app_opened=no
+open_failure=""
+open_app() {
+	[ "$have_tty" = yes ] && [ "$(id -u)" -ne 0 ] && [ -z "${SUDO_USER:-}" ] || return 1
+	case "$os" in
+	linux)
+		[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || return 1
+		launcher="$(sed -n 's/^launcher //p' "$tmp/gui-build.out" | tail -n 1)"
+		;;
+	darwin)
+		# Aqua is a GUI login; an SSH login is Background.
+		[ "$(launchctl managername 2>/dev/null)" = Aqua ] || return 1
+		# The bundle is the launcher Finder and Spotlight list.
+		launcher="$(sed -n 's/^installed //p' "$tmp/gui-build.out" | tail -n 1)"
+		;;
+	esac
+	case "$os:$launcher" in
+	linux:/*.desktop) ;;
+	darwin:/*.app) set -- open "$launcher" ;;
+	*)
+		open_failure="\`aether gui build\` printed no launcher"
+		return 1
+		;;
+	esac
+	if [ "$os" = linux ]; then
+		if command -v gio >/dev/null 2>&1; then
+			set -- gio launch "$launcher"
+		elif command -v gtk-launch >/dev/null 2>&1; then
+			launcher="${launcher##*/}"
+			set -- gtk-launch "${launcher%.desktop}"
+		else
+			open_failure="neither gio nor gtk-launch is installed"
+			return 1
+		fi
+	fi
+	# The app inherits these descriptors, so none of them is the terminal:
+	# closing it must not take the app down.
+	open_status=0
+	"$@" </dev/null >/dev/null 2>"$tmp/open.err" || open_status=$?
+	if [ "$open_status" -ne 0 ]; then
+		open_failure="\`$*\` exited ${open_status}: $(cat "$tmp/open.err")"
+		return 1
+	fi
+	app_opened=yes
 }
 
 # --- PATH, and an older CLI that would shadow this one -----------------
@@ -862,6 +920,7 @@ server)
 client)
 	run_gui_build && gui_built=yes || true
 	check_path
+	[ "$gui_built" = no ] || open_app || true
 	;;
 *) check_path ;;
 esac
@@ -928,7 +987,9 @@ server)
 	link_steps "then, on your computer:" "<this-host>" aether
 	;;
 client)
-	if [ "$gui_built" = yes ]; then
+	if [ "$app_opened" = yes ]; then
+		link_steps "Cloudfield is starting: link your server in its window, or in a terminal:" "<server-host>" "$cli_name"
+	elif [ "$gui_built" = yes ]; then
 		link_steps "open Cloudfield from your applications to link your server, or in a terminal:" "<server-host>" "$cli_name"
 	else
 		link_steps "link your server:" "<server-host>" "$cli_name"
@@ -939,6 +1000,10 @@ client)
 	if [ -n "$gui_failure" ]; then
 		echo
 		say "the aether CLI is installed in ${BIN_DIR}; the desktop app is not: ${gui_failure}"
+	fi
+	if [ -n "$open_failure" ]; then
+		echo
+		say "the desktop app is installed but did not open: ${open_failure}"
 	fi
 	;;
 *)
