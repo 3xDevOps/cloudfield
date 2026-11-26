@@ -6,8 +6,6 @@ package main
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
-	"encoding/pem"
 	"errors"
 	"flag"
 	"fmt"
@@ -256,12 +254,13 @@ func edgeTLS(o options) *tls.Config {
 	m := &autocert.Manager{
 		Prompt:     autocert.AcceptTOS,
 		Cache:      cache,
-		HostPolicy: certPolicy(o, cache, time.Now),
+		HostPolicy: autocert.HostWhitelist(certHosts(o)...),
 		Email:      o.acmeEmail,
 		Client:     &acme.Client{DirectoryURL: o.acmeDirectory},
 	}
 	cfg := m.TLSConfig()
 	cfg.MinVersion = tls.VersionTLS12
+	cfg.GetCertificate = retiredCertificates(o, cache, time.Now, cfg.GetCertificate)
 	return cfg
 }
 
@@ -275,43 +274,36 @@ func certHosts(o options) []string {
 	return hosts
 }
 
-// certPolicy admits the served hosts, and a retired pair's host while
-// cache holds an unexpired certificate for it: that certificate is used
-// and renewed, but none is ordered for a retired host, whose DNS records
-// may be gone.
-func certPolicy(o options, cache autocert.Cache, now func() time.Time) autocert.HostPolicy {
-	served := autocert.HostWhitelist(certHosts(o)...)
+// retiredCertificates answers a handshake for a retired pair's host
+// with a certificate from cache that is valid at now and that the client
+// supports, and fails it when there is none; any other host goes to next.
+// A retired host never reaches the autocert manager, which would order a
+// certificate for it, as it does for a key type it has none of.
+func retiredCertificates(o options, cache autocert.Cache, now func() time.Time,
+	next func(*tls.ClientHelloInfo) (*tls.Certificate, error)) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 	retired := map[string]bool{}
 	for _, r := range o.retired {
 		retired[host(r.SigninOrigin)], retired[host(r.RelayOrigin)] = true, true
 	}
-	return func(ctx context.Context, name string) error {
-		err := served(ctx, name)
-		if err == nil || !retired[strings.ToLower(name)] {
-			return err
+	return func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		name := strings.TrimSuffix(strings.ToLower(hello.ServerName), ".")
+		if !retired[name] {
+			return next(hello)
 		}
 		for _, key := range []string{name, name + "+rsa"} {
-			if data, cerr := cache.Get(ctx, key); cerr == nil && unexpired(data, now()) {
-				return nil
+			data, err := cache.Get(context.Background(), key)
+			if err != nil {
+				continue
+			}
+			cert, err := tls.X509KeyPair(data, data)
+			if err != nil || cert.Leaf == nil || now().Before(cert.Leaf.NotBefore) || !now().Before(cert.Leaf.NotAfter) {
+				continue
+			}
+			if hello.SupportsCertificate(&cert) == nil {
+				return &cert, nil
 			}
 		}
-		return fmt.Errorf("acme/autocert: %s is the host of a retired pair and the cache holds no unexpired certificate for it; the edge orders none", name)
-	}
-}
-
-// unexpired reports whether data, an autocert cache entry, holds a
-// certificate valid at now.
-func unexpired(data []byte, now time.Time) bool {
-	for rest := data; ; {
-		var b *pem.Block
-		if b, rest = pem.Decode(rest); b == nil {
-			return false
-		}
-		if b.Type != "CERTIFICATE" {
-			continue
-		}
-		c, err := x509.ParseCertificate(b.Bytes)
-		return err == nil && now.After(c.NotBefore) && now.Before(c.NotAfter)
+		return nil, fmt.Errorf("%s is the host of a retired pair and the ACME cache holds no unexpired certificate for it that the client supports; the edge orders none", name)
 	}
 }
 

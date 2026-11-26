@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
@@ -567,9 +568,11 @@ func TestEveryVariableTakesItsCloudfieldName(t *testing.T) {
 	}
 }
 
-// TestCertPolicy admits a served host always, and a retired host only
-// while the ACME cache holds an unexpired certificate for it.
-func TestCertPolicy(t *testing.T) {
+// TestRetiredCertificates answers handshakes for retired hosts from the
+// ACME cache alone: a cached certificate the client supports and that is
+// unexpired, else a failed handshake, and never the autocert manager, even
+// for a client that offers RSA only while the cache holds ECDSA.
+func TestRetiredCertificates(t *testing.T) {
 	o, err := parseOptions(append(slices.Clone(origins), "--retired-pairs",
 		"https://auth9.example.org https://edge9.example.org https://edge.example.test"), envOf(nil))
 	if err != nil {
@@ -582,8 +585,9 @@ func TestCertPolicy(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		der, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{SerialNumber: big.NewInt(1), DNSNames: []string{key},
-			NotBefore: notAfter.Add(-90 * 24 * time.Hour), NotAfter: notAfter}, &x509.Certificate{SerialNumber: big.NewInt(1)}, &priv.PublicKey, priv)
+		tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), DNSNames: []string{strings.TrimSuffix(key, "+rsa")},
+			NotBefore: notAfter.Add(-90 * 24 * time.Hour), NotAfter: notAfter}
+		der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -597,19 +601,31 @@ func TestCertPolicy(t *testing.T) {
 		}
 	}
 	put("auth9.example.org", now.Add(24*time.Hour))
-	put("edge9.example.org+rsa", now.Add(-time.Hour))
-	policy := certPolicy(o, cache, func() time.Time { return now })
-	for name, want := range map[string]string{
-		"auth.example.test": "",
-		"edge.example.test": "",
-		"auth9.example.org": "",
-		"edge9.example.org": "acme/autocert: edge9.example.org is the host of a retired pair and the cache holds no unexpired certificate for it; the edge orders none",
-		"other.example.org": `acme/autocert: host "other.example.org" not configured in HostWhitelist`,
-	} {
-		err := policy(t.Context(), name)
-		if got := fmt.Sprint(err); (want == "" && err != nil) || (want != "" && got != want) {
-			t.Errorf("%s: %v, want %q", name, err, want)
+	put("edge9.example.org", now.Add(-time.Hour))
+	var managed []string
+	get := retiredCertificates(o, cache, func() time.Time { return now }, func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		managed = append(managed, hello.ServerName)
+		return &tls.Certificate{}, nil
+	})
+	ecdsaHello := func(name string) *tls.ClientHelloInfo {
+		return &tls.ClientHelloInfo{ServerName: name, SupportedVersions: []uint16{tls.VersionTLS12},
+			CipherSuites:     []uint16{tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256},
+			SignatureSchemes: []tls.SignatureScheme{tls.ECDSAWithP256AndSHA256}, SupportedCurves: []tls.CurveID{tls.CurveP256}}
+	}
+	rsaOnly := &tls.ClientHelloInfo{ServerName: "auth9.example.org", SupportedVersions: []uint16{tls.VersionTLS12},
+		CipherSuites:     []uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256},
+		SignatureSchemes: []tls.SignatureScheme{tls.PKCS1WithSHA256, tls.PSSWithSHA256}, SupportedCurves: []tls.CurveID{tls.CurveP256}}
+	if cert, err := get(ecdsaHello("AUTH9.example.org")); err != nil || cert.Leaf == nil || cert.Leaf.DNSNames[0] != "auth9.example.org" {
+		t.Errorf("ECDSA client at a retired host with a cached certificate: %v", err)
+	}
+	for name, hello := range map[string]*tls.ClientHelloInfo{"RSA-only client": rsaOnly, "expired certificate": ecdsaHello("edge9.example.org")} {
+		host := hello.ServerName
+		if _, err := get(hello); err == nil || err.Error() != host+" is the host of a retired pair and the ACME cache holds no unexpired certificate for it that the client supports; the edge orders none" {
+			t.Errorf("%s: %v", name, err)
 		}
+	}
+	if _, err := get(ecdsaHello("edge.example.test")); err != nil || !slices.Equal(managed, []string{"edge.example.test"}) {
+		t.Errorf("served host: %v; the manager saw %v, want only edge.example.test", err, managed)
 	}
 }
 

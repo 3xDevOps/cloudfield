@@ -1221,10 +1221,11 @@ entry and the fix, when:
   people to move.
 
 The edge answers both host names before it looks for a served pair. With its
-own certificates it uses and renews a retired host's certificate while the
-ACME cache holds an unexpired one, and orders none: a retired host whose
-certificate lapsed, because nothing connected to it for the renewal window,
-refuses the TLS handshake. Every request to either host except `GET /healthz` gets
+own certificates it answers a retired host's TLS handshake only with a
+certificate already in its ACME cache that is unexpired and of a key type the
+client supports, and neither orders nor renews one: once that certificate
+expires, or for a client that supports none of those cached, the handshake
+fails. Behind a reverse proxy the proxy's certificates apply. Every request to either host except `GET /healthz` gets
 `410 Gone` with `Cache-Control: no-store` and no `Location` or
 `WWW-Authenticate` header. Nothing is relayed, signed in or issued, and no such
 request reads the database or reaches a server. API, WebSocket and connector
