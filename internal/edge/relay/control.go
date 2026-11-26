@@ -229,7 +229,7 @@ func (r *Relay) enroll(ws *websocket.Conn, addr netip.Prefix, origin string) (*r
 	if claimed {
 		state = edgeproto.StateClaimed
 	}
-	if err := reg.write(edgeproto.Ready{ServerID: id, State: state, EdgeKey: r.pub, RelayOrigins: r.announced}); err != nil {
+	if err := reg.write(edgeproto.Ready{ServerID: id, State: state, EdgeKey: r.pub, RelayOrigins: r.announced, Notices: r.signedNotices(id, nonce)}); err != nil {
 		r.unregister(reg, err)
 		return nil, err
 	}

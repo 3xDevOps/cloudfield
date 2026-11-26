@@ -15,6 +15,7 @@ import (
 	"maps"
 	"net/http"
 	"net/netip"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -92,6 +93,9 @@ type Config struct {
 	// names that origin, whichever origin the client came in on.
 	Origin      string
 	MoreOrigins []string
+	// Notices, unsigned, go into every Ready, each signed for the server
+	// and the handshake. Each names two of the relay origins.
+	Notices []edgeproto.Notice
 	// EdgeKey signs grants. Servers pin its public half.
 	EdgeKey   ed25519.PrivateKey
 	Directory Directory
@@ -154,6 +158,7 @@ type Relay struct {
 	// for Ready, nil while the edge has one.
 	origins   map[string]string
 	announced []string
+	notices   []edgeproto.Notice
 	key       ed25519.PrivateKey
 	pub       ed25519.PublicKey
 	dir       Directory
@@ -248,6 +253,11 @@ func New(ctx context.Context, cfg Config) (*Relay, error) {
 	if len(announced) > edgeproto.MaxRelayOrigins {
 		return nil, fmt.Errorf("relay: %d relay origins, limit %d", len(announced), edgeproto.MaxRelayOrigins)
 	}
+	for _, n := range cfg.Notices {
+		if !slices.Contains(announced, n.Origin) || !slices.Contains(announced, n.Replacement) {
+			return nil, fmt.Errorf("relay: the notice for %s names %s, and both must be relay origins of this edge", n.Origin, n.Replacement)
+		}
+	}
 	origin := announced[0]
 	if len(announced) == 1 {
 		announced = nil
@@ -269,6 +279,7 @@ func New(ctx context.Context, cfg Config) (*Relay, error) {
 		origin:             origin,
 		origins:            origins,
 		announced:          announced,
+		notices:            cfg.Notices,
 		key:                cfg.EdgeKey,
 		pub:                cfg.EdgeKey.Public().(ed25519.PublicKey),
 		dir:                cfg.Directory,
@@ -313,6 +324,16 @@ func New(ctx context.Context, cfg Config) (*Relay, error) {
 	r.ctx, r.stop = context.WithCancelCause(context.Background())
 	go r.flushLoop()
 	return r, nil
+}
+
+// signedNotices are the relay's notices signed for the server serverID in
+// the handshake whose challenge carried nonce, nil when it has none.
+func (r *Relay) signedNotices(serverID string, nonce []byte) edgeproto.Notices {
+	var out edgeproto.Notices
+	for _, n := range r.notices {
+		out = append(out, edgeproto.SignNotice(r.key, serverID, nonce, n))
+	}
+	return out
 }
 
 // Register adds the control, data, connect, claim and MCP endpoints to

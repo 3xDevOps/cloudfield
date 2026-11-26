@@ -43,6 +43,8 @@ type options struct {
 	// morePairs are the origin pairs --origin-pairs names, served beside
 	// --signin-origin and --relay-origin.
 	morePairs []edge.Pair
+	// retiring are the pairs --retiring-pairs marks retiring.
+	retiring []edge.Retiring
 	// openAIChallenge is OpenAI's domain verification token for the
 	// relay host, served at edgeproto.PathOpenAIChallenge.
 	openAIChallenge string
@@ -98,6 +100,9 @@ func parseOptions(args []string, getenv func(string) string) (options, error) {
 		"more origin pairs to serve beside --signin-origin and --relay-origin, comma-separated. Each is four fields separated by spaces: "+
 			"<signin origin> <relay origin> <GitHub client id> <file holding that OAuth app's client secret>. "+
 			"A request is served by the pair its host name belongs to; every host name of every pair differs")
+	retiring := fs.String("retiring-pairs", env("AETHER_EDGE_RETIRING_PAIRS", ""),
+		"address pairs that are retiring, comma-separated. Each is <relay origin> <replacement relay origin> [<YYYY-MM-DD>], both relay origins of pairs "+
+			"this edge serves: every answer and page of the pair names the replacement, and the date when set. The edge never acts on the date")
 	if err := fs.Parse(args); err != nil {
 		return options{}, err
 	}
@@ -152,6 +157,11 @@ func parseOptions(args []string, getenv func(string) string) (options, error) {
 	}
 	if *morePairs != "" {
 		if o.morePairs, err = parseOriginPairs(*morePairs, scheme, o.signinOrigin, o.relayOrigin); err != nil {
+			return options{}, err
+		}
+	}
+	if *retiring != "" {
+		if o.retiring, err = parseRetiringPairs(*retiring, scheme, o.relayOrigin, o.morePairs); err != nil {
 			return options{}, err
 		}
 	}
@@ -219,6 +229,82 @@ func parseOriginPairs(list, scheme, signin, relay string) ([]edge.Pair, error) {
 			len(pairs), len(pairs)+1, edgeproto.MaxRelayOrigins)
 	}
 	return pairs, nil
+}
+
+// parseRetiringPairs parses --retiring-pairs against the served pairs:
+// relay is --relay-origin's, more --origin-pairs'.
+func parseRetiringPairs(list, scheme, relay string, more []edge.Pair) ([]edge.Retiring, error) {
+	if len(more) == 0 {
+		return nil, errors.New("--retiring-pairs: this edge serves one address pair, which cannot retire; " +
+			"serve its replacement first with --origin-pairs (AETHER_EDGE_ORIGIN_PAIRS)")
+	}
+	relays := map[string]string{sameOrigin(relay): relay}
+	signins := map[string]string{}
+	for _, p := range more {
+		relays[sameOrigin(p.RelayOrigin)] = p.RelayOrigin
+		signins[sameOrigin(p.SigninOrigin)] = p.RelayOrigin
+	}
+	served := func(origin string) (string, error) {
+		if err := checkOrigin("--retiring-pairs", origin, scheme); err != nil {
+			return "", err
+		}
+		if r, ok := relays[sameOrigin(origin)]; ok {
+			c, _ := edgeproto.Origin(r) // checked as an origin above
+			return c, nil
+		}
+		if r, ok := signins[sameOrigin(origin)]; ok {
+			return "", fmt.Errorf("--retiring-pairs: %s is a sign-in origin; name the relay origin of its pair, %s", origin, r)
+		}
+		return "", fmt.Errorf("--retiring-pairs: %s is not a relay origin of this edge; name one of --relay-origin and the relay origins of --origin-pairs", origin)
+	}
+	var out []edge.Retiring
+	for entry := range strings.SplitSeq(list, ",") {
+		fields := strings.Fields(entry)
+		if len(fields) == 0 {
+			return nil, fmt.Errorf("--retiring-pairs %q has an empty entry: remove the extra comma", list)
+		}
+		if len(fields) > 3 || len(fields) < 2 {
+			return nil, fmt.Errorf("--retiring-pairs: %q is not <relay origin> <replacement relay origin> [<YYYY-MM-DD>]", strings.TrimSpace(entry))
+		}
+		r := edge.Retiring{}
+		var err error
+		if r.RelayOrigin, err = served(fields[0]); err != nil {
+			return nil, err
+		}
+		if r.Replacement, err = served(fields[1]); err != nil {
+			return nil, err
+		}
+		if r.RelayOrigin == r.Replacement {
+			return nil, fmt.Errorf("--retiring-pairs: %s names its own pair as its replacement; name the relay origin of a pair that stays", fields[0])
+		}
+		if len(fields) == 3 {
+			if !edgeproto.ValidDate(fields[2]) {
+				return nil, fmt.Errorf("--retiring-pairs: the date %q of %s is not a real date written YYYY-MM-DD, such as 2027-03-01", fields[2], fields[0])
+			}
+			r.Date = fields[2]
+		}
+		for _, o := range out {
+			if o.RelayOrigin == r.RelayOrigin {
+				return nil, fmt.Errorf("--retiring-pairs names %s twice; keep one entry for it", fields[0])
+			}
+		}
+		out = append(out, r)
+	}
+	for _, r := range out {
+		for _, o := range out {
+			if r.Replacement == o.RelayOrigin {
+				return nil, fmt.Errorf("--retiring-pairs: %s, the replacement of %s, is retiring too; name a pair that stays", r.Replacement, r.RelayOrigin)
+			}
+		}
+	}
+	return out, nil
+}
+
+// sameOrigin is a valid origin in the form two spellings of one origin
+// share: canonical, without the default https port.
+func sameOrigin(origin string) string {
+	c, _ := edgeproto.Origin(origin) // parseOptions checked it
+	return strings.TrimSuffix(c, ":443")
 }
 
 // host is the lowercase host name of a valid origin.

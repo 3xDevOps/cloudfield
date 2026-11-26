@@ -12,6 +12,7 @@ import (
 
 	"golang.org/x/crypto/acme/autocert"
 
+	edge "github.com/3xDevOps/cloudfield/internal/edge/service"
 	"github.com/3xDevOps/cloudfield/internal/envname"
 )
 
@@ -308,6 +309,61 @@ func TestOriginPairs(t *testing.T) {
 	}
 }
 
+func TestRetiringPairs(t *testing.T) {
+	dir := t.TempDir()
+	secret := filepath.Join(dir, "github-client-secret")
+	if err := os.WriteFile(secret, []byte("fake-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pairs := "https://auth2.example.net https://edge2.example.net fake-id-2 " + secret + ",https://auth3.example.net https://edge3.example.net fake-id-3 " + secret
+	parse := func(retiring string) (options, error) {
+		return parseOptions(append(slices.Clone(origins), "--origin-pairs", pairs, "--retiring-pairs", retiring), envOf(nil))
+	}
+	o, err := parse("https://EDGE.example.test:443 https://edge2.example.net 2027-03-01, https://edge3.example.net https://edge2.example.net")
+	want := []edge.Retiring{
+		{RelayOrigin: "https://edge.example.test", Replacement: "https://edge2.example.net", Date: "2027-03-01"},
+		{RelayOrigin: "https://edge3.example.net", Replacement: "https://edge2.example.net"},
+	}
+	if err != nil || !reflect.DeepEqual(o.retiring, want) {
+		t.Fatalf("two retiring pairs: %+v %v, want %+v", o.retiring, err, want)
+	}
+	o, err = parseOptions(append(slices.Clone(origins), "--origin-pairs", pairs), envOf(map[string]string{
+		"AETHER_EDGE_RETIRING_PAIRS": "https://edge2.example.net https://edge.example.test"}))
+	if err != nil || !reflect.DeepEqual(o.retiring, []edge.Retiring{{RelayOrigin: "https://edge2.example.net", Replacement: "https://edge.example.test"}}) {
+		t.Fatalf("AETHER_EDGE_RETIRING_PAIRS: %+v %v", o.retiring, err)
+	}
+	if o, err = parseOptions(append(slices.Clone(origins), "--origin-pairs", pairs), envOf(nil)); err != nil || o.retiring != nil {
+		t.Fatalf("unset: %+v %v", o.retiring, err)
+	}
+	for _, tt := range []struct{ retiring, want string }{
+		{"https://edge.example.test", `--retiring-pairs: "https://edge.example.test" is not <relay origin> <replacement relay origin> [<YYYY-MM-DD>]`},
+		{"https://edge.example.test https://edge2.example.net 2027-03-01 extra", `--retiring-pairs: "https://edge.example.test https://edge2.example.net 2027-03-01 extra" is not <relay origin>`},
+		{"https://edge.example.test https://edge2.example.net,", "has an empty entry: remove the extra comma"},
+		{"edge.example.test https://edge2.example.net", `--retiring-pairs must be https://host[:port], not "edge.example.test"`},
+		{"https://edge.example.test https://<relay-host-2>", "--retiring-pairs: edgeproto: edge url"},
+		{"https://edge9.example.net https://edge2.example.net", "--retiring-pairs: https://edge9.example.net is not a relay origin of this edge; name one of --relay-origin and the relay origins of --origin-pairs"},
+		{"https://edge.example.test https://edge9.example.net", "--retiring-pairs: https://edge9.example.net is not a relay origin of this edge"},
+		{"https://auth2.example.net https://edge.example.test", "--retiring-pairs: https://auth2.example.net is a sign-in origin; name the relay origin of its pair, https://edge2.example.net"},
+		{"https://auth.example.test https://edge2.example.net", "--retiring-pairs: https://auth.example.test is not a relay origin of this edge"},
+		{"https://edge.example.test https://EDGE.example.test", "--retiring-pairs: https://edge.example.test names its own pair as its replacement; name the relay origin of a pair that stays"},
+		{"https://edge.example.test https://edge2.example.net,https://edge2.example.net https://edge3.example.net",
+			"--retiring-pairs: https://edge2.example.net, the replacement of https://edge.example.test, is retiring too; name a pair that stays"},
+		{"https://edge.example.test https://edge2.example.net,https://edge.example.test:443 https://edge3.example.net",
+			"--retiring-pairs names https://edge.example.test:443 twice; keep one entry for it"},
+		{"https://edge.example.test https://edge2.example.net 2027-02-30", `--retiring-pairs: the date "2027-02-30" of https://edge.example.test is not a real date written YYYY-MM-DD, such as 2027-03-01`},
+		{"https://edge.example.test https://edge2.example.net 2027-3-1", `the date "2027-3-1" of https://edge.example.test is not a real date`},
+		{"https://edge.example.test https://edge2.example.net 01/03/2027", `the date "01/03/2027" of https://edge.example.test is not a real date`},
+	} {
+		if _, err := parse(tt.retiring); err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("--retiring-pairs %q: %v, want %q", tt.retiring, err, tt.want)
+		}
+	}
+	_, err = parseOptions(append(slices.Clone(origins), "--retiring-pairs", "https://edge.example.test https://edge2.example.net"), envOf(nil))
+	if err == nil || err.Error() != "--retiring-pairs: this edge serves one address pair, which cannot retire; serve its replacement first with --origin-pairs (AETHER_EDGE_ORIGIN_PAIRS)" {
+		t.Errorf("one pair: %v", err)
+	}
+}
+
 // Every AETHER_EDGE_ variable is also read as CLOUDFIELD_EDGE_, which wins
 // when both are set and falls back when it is empty, as serve reads them
 // through envname.Getenv.
@@ -342,6 +398,14 @@ func TestEveryVariableTakesItsCloudfieldName(t *testing.T) {
 	}, {
 		"AETHER_EDGE_DEV_LISTEN": "127.0.0.1:9090", "AETHER_EDGE_SIGNIN_ORIGIN": "http://localhost:9090", "AETHER_EDGE_RELAY_ORIGIN": "http://127.0.0.1:9090",
 		"AETHER_EDGE_GITHUB_CLIENT_ID": "other-id", "AETHER_EDGE_GITHUB_CLIENT_SECRET_FILE": filepath.Join(dir, "missing"),
+	}}, {{
+		"AETHER_EDGE_SIGNIN_ORIGIN": "https://auth.example.test", "AETHER_EDGE_RELAY_ORIGIN": "https://edge.example.test",
+		"AETHER_EDGE_ORIGIN_PAIRS":   "https://auth2.example.net https://edge2.example.net fake-id-2 " + secretFile,
+		"AETHER_EDGE_RETIRING_PAIRS": "https://edge.example.test https://edge2.example.net 2027-03-01",
+	}, {
+		"AETHER_EDGE_SIGNIN_ORIGIN": "https://auth.example.test", "AETHER_EDGE_RELAY_ORIGIN": "https://edge.example.test",
+		"AETHER_EDGE_ORIGIN_PAIRS":   "https://auth2.example.net https://edge2.example.net fake-id-2 " + secretFile,
+		"AETHER_EDGE_RETIRING_PAIRS": "https://edge.example.test https://edge2.example.net 2027-04-01",
 	}}, {{
 		"AETHER_EDGE_SIGNIN_ORIGIN": "https://auth.example.test", "AETHER_EDGE_RELAY_ORIGIN": "https://edge.example.test",
 		"AETHER_EDGE_REVIEWER_ACCOUNT_FILE": filepath.Join(dir, "reviewer-a.json"),
