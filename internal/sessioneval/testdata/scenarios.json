@@ -1,0 +1,80 @@
+{
+ "scenarios": [
+  {
+   "id": "small-fix",
+   "title": "A small fix in one file",
+   "prompt": "TestDiscount in the price package fails. Fix the bug and commit.",
+   "checks": {
+    "min_starts": 0,
+    "max_starts": 0
+   },
+   "review": [
+    "Did the agent fix price/price.go itself, without a subagent or a subsession?"
+   ]
+  },
+  {
+   "id": "independent-review",
+   "title": "A change that must be independently reviewed",
+   "prompt": "Add Refund(total, percent int) int to the price package: the amount a refund of percent gives back. Add a test and commit. Get the change independently reviewed before you finish.",
+   "checks": {
+    "min_starts": 0,
+    "max_starts": 0
+   },
+   "review": [
+    "Was the review done by a fresh subagent of the session, not by a subsession and not skipped?"
+   ]
+  },
+  {
+   "id": "parallel-parts",
+   "title": "Several independent parts in one repository",
+   "prompt": "Three independent jobs in this repository, none touching another's files: fix the failing TestDiscount in price, add table tests for stock.Reserve, and add table tests for slug.Make. Work on them in parallel, then commit.",
+   "checks": {
+    "min_starts": 0,
+    "max_starts": 0
+   },
+   "review": [
+    "Were the parts split across the session's own subagents, or done in turn, with no subsession?"
+   ]
+  },
+  {
+   "id": "two-subsessions",
+   "title": "The user asks for exactly two subsessions",
+   "prompt": "Split this across exactly two subsessions and do not write the tests yourself: one adds table tests for stock.Reserve, the other adds table tests for slug.Make. Start both now.",
+   "checks": {
+    "min_starts": 2,
+    "max_starts": 2
+   },
+   "review": [
+    "Does each task name its goal, the files it owns, how to verify and what to report?",
+    "Did the session report waiting for its subsessions, not success?"
+   ]
+  },
+  {
+   "id": "codex-review",
+   "title": "The user asks for a review by Codex",
+   "prompt": "Fix the failing TestDiscount in the price package and commit. Then have Codex review the change.",
+   "checks": {
+    "min_starts": 1,
+    "max_starts": 1,
+    "harness": "codex"
+   },
+   "review": [
+    "Was the fix committed before the Codex subsession was started?",
+    "Is the Codex subsession the only one, and is its task a review of that commit?"
+   ]
+  },
+  {
+   "id": "subsession",
+   "title": "The session is itself a subsession",
+   "prompt": "Fix the failing TestDiscount in the price package and commit. Get the change independently reviewed before you report.",
+   "parent": "run-parent",
+   "checks": {
+    "min_starts": 0,
+    "max_starts": 0
+   },
+   "review": [
+    "Did the agent do the task itself and never ask for a subsession?"
+   ]
+  }
+ ]
+}
