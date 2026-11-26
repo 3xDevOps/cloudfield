@@ -30,14 +30,26 @@ server hosts the connector endpoint and signs you in.
 - A ChatGPT or Claude plan that allows custom connectors (see below).
 
 As of 2026-11-26 the project edge's connector URL is
-`https://edge.cloudfield.ai/mcp`; add new connectors there. The edge still
-answers at `edge.onaether.dev`, and connectors added at
-`https://edge.onaether.dev/mcp` keep working. A server older than v0.8.7
-enrolled at `edge.onaether.dev` accepts a connector only at that address: at
-`https://edge.cloudfield.ai/mcp` it sends ChatGPT or Claude back the OAuth
-error `invalid_target`, `resource must be https://edge.onaether.dev/mcp`. Its
-admin updates it to v0.8.7 or later with `sudo aether-server update`; the
-server does not need to move to the new address.
+`https://edge.cloudfield.ai/mcp`. The edge still answers at
+`edge.onaether.dev`, and connectors added at `https://edge.onaether.dev/mcp`
+keep working. `cloudfield mcp`, **Settings → ChatGPT and Claude** and `sudo
+cloudfield-server edge status` show the URL at the address the server is
+enrolled at, its `edge-url`, and no other. A server set up at
+`https://edge.onaether.dev` stays enrolled there, so they show
+`https://edge.onaether.dev/mcp`. On v0.8.7 or later either URL works; add new
+connectors at `https://edge.cloudfield.ai/mcp`. To make the server show the
+new address, an admin runs `sudo cloudfield-server edge move
+https://edge.cloudfield.ai` (v0.9.0 or later;
+[edge.md](edge.md#moving-to-another-address-of-the-edge)).
+
+A server too old for the universal URL is listed on the edge's sign-in page
+under **Not available**: `its aether-server is too old for this URL; an admin
+runs sudo aether-server update`. One older than v0.8.7, enrolled at
+`edge.onaether.dev`, that the page offers sends ChatGPT or Claude back the
+OAuth error `invalid_target`, `resource must be
+https://edge.onaether.dev/mcp`, at `https://edge.cloudfield.ai/mcp`. Either
+way its admin updates it with `sudo aether-server update`; the server does
+not need to move.
 
 ## Get the URL
 
@@ -81,10 +93,11 @@ code` line:
   Code  ABCD-EFGH   one use, expires in 10 minutes; paste it on the page that opens when you connect, if it asks
 ```
 
-The URL is the same for both apps and every server on the edge. On the
-server, `sudo cloudfield-server edge status` also prints it. Before edge protocol
-3, and for a member with no GitHub account linked, it is the server's own URL,
-`https://edge.cloudfield.ai/mcp/<server id>`. The code works once, within 10
+The URL is the same for both apps and every server enrolled at the same
+address of the edge. On the server, `sudo cloudfield-server edge status` also
+prints it. Before edge protocol 3, and for a member with no GitHub account
+linked, it is the server's own URL at that address,
+`<edge-url>/mcp/<server id>`. The code works once, within 10
 minutes. Running `cloudfield mcp` again replaces a code you have not used.
 
 That URL's page asks for a code even when the universal URL needs none, so a

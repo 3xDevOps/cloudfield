@@ -23,9 +23,11 @@ Recheck them before submitting; the quotes below are what they said then.
 
 ## Requirements and where Cloudfield stands
 
-"Code" is origin/main at cabcf962; "live" is `curl` against the old address,
-`edge.onaether.dev`, on 2026-10-26. The edge serves the metadata in the host
-the request came in on (`internal/edge/service/universal.go`), so the values
+"Code" is origin/main at cabcf962, except in the 401 and Resource rows, which
+are origin/main at 81d14a23, after address pairs (#970, e28e43ee2) and
+connectors at every relay address (#974, b42026e7b). "Live" is `curl`
+against the old address, `edge.onaether.dev`, on 2026-10-26. The edge serves
+the metadata in the host the request came in on (`internal/edge/service/universal.go`), so the values
 below name `edge.cloudfield.ai`; nobody has checked them live there yet.
 
 | Requirement | Anthropic | Cloudfield |
