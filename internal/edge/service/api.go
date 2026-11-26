@@ -91,6 +91,16 @@ func (s *Service) apiDeviceStart(r *http.Request) (any, error) {
 	if err := req.Validate(); err != nil {
 		return nil, pageErr(http.StatusBadRequest, "%v", err)
 	}
+	if p := s.pair(r); req.RelayOrigin != "" {
+		relay, err := edgeproto.Origin(req.RelayOrigin)
+		if err != nil {
+			return nil, pageErr(http.StatusBadRequest, "relay_origin: %v", err)
+		}
+		if !sameOrigin(relay, p.relay) {
+			return nil, pageErr(http.StatusBadRequest,
+				"%s signs devices in for the relay origin %s, not for %s; sign in with: cloudfield login --edge <the relay origin you use>", p.signin, p.relay, relay)
+		}
+	}
 	key, _ := edgeproto.ParseDeviceKey(req.Key) // Validate parsed it.
 	deviceCode := edgeproto.NewToken()
 	now := s.now()
@@ -146,6 +156,9 @@ func (s *Service) apiDeviceToken(r *http.Request) (any, error) {
 	}
 	if err != nil {
 		return nil, err
+	}
+	if p := s.pair(r); a.SigninOrigin != "" && !sameOrigin(a.SigninOrigin, p.signin) {
+		return nil, pageErr(http.StatusBadRequest, "this sign-in was started at %s, not at %s; finish it there", a.SigninOrigin, p.signin)
 	}
 	if !now.Before(a.ExpiresAt) || a.Status == edgestore.AuthDenied {
 		if err = s.store.DeleteDeviceAuth(ctx, hash); err != nil {

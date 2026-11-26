@@ -46,6 +46,10 @@ type Config struct {
 	MorePairs []Pair
 	// Retiring marks pairs retiring, each by its relay origin.
 	Retiring []Retiring
+	// Retired are pairs taken out of service. New deletes the device
+	// tokens, sessions and device authorizations issued at their sign-in
+	// origins, and those with no recorded origin.
+	Retired []Retired
 	// Clock is time.Now when nil.
 	Clock func() time.Time
 	// OpenAIChallenge is the token the relay origin serves at
@@ -117,6 +121,12 @@ func (s *Service) signinOrigin(ctx context.Context) string {
 		return p.signin
 	}
 	return ""
+}
+
+// sameOrigin reports whether a and b, canonical origins, name one origin,
+// with or without the default https port.
+func sameOrigin(a, b string) bool {
+	return strings.TrimSuffix(a, ":443") == strings.TrimSuffix(b, ":443")
 }
 
 // pair is the pair Handler picked for r, or the first for a request
@@ -205,6 +215,12 @@ type Service struct {
 	recordOrigins   bool
 	// recording is set once StartRecording began a recording run.
 	recording atomic.Bool
+	// retired holds the hosts of the retired pairs by host name;
+	// retiredHosts lists them in the order Config names them.
+	retired      map[string]*retiredHost
+	retiredHosts []*retiredHost
+	// notices are the unsigned notices of the retiring and retired pairs.
+	notices []edgeproto.Notice
 
 	signinLimit *limiter[netip.Prefix]
 	startLimit  *limiter[netip.Prefix]
@@ -303,6 +319,11 @@ func New(cfg Config) (*Service, error) {
 	if s.pages, err = parsePages(); err != nil {
 		return nil, err
 	}
+	retired, err := s.newRetired(cfg.Retired)
+	if err != nil {
+		return nil, err
+	}
+	s.notices = noticesOf(pairs, retired)
 	if err = os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("edge: create data directory: %w", err)
 	}
@@ -312,6 +333,12 @@ func New(cfg Config) (*Service, error) {
 	if s.key, err = loadKey(cfg.DataDir, s.store); err != nil {
 		s.store.Close() //nolint:errcheck // the key error takes precedence
 		return nil, err
+	}
+	if len(retired) > 0 {
+		if err = s.deleteRetiredSignIns(context.Background(), retired); err != nil {
+			s.store.Close() //nolint:errcheck // the delete error takes precedence
+			return nil, err
+		}
 	}
 	return s, nil
 }
@@ -364,13 +391,17 @@ func (s *Service) DeviceLogins() map[string]uint64 {
 	return out
 }
 
-// notices are the unsigned notices of the retiring pairs.
-func (s *Service) notices() []edgeproto.Notice {
+// noticesOf are the unsigned notices of the retiring pairs among pairs
+// and of the retired pairs.
+func noticesOf(pairs []*pair, retired []Retired) []edgeproto.Notice {
 	var out []edgeproto.Notice
-	for _, p := range s.pairs {
+	for _, p := range pairs {
 		if p.retiring != nil {
 			out = append(out, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: p.relay, Replacement: p.retiring.relay, Date: p.retiring.date})
 		}
+	}
+	for _, r := range retired {
+		out = append(out, edgeproto.Notice{State: edgeproto.NoticeRetired, Origin: r.RelayOrigin, Replacement: r.Replacement})
 	}
 	return out
 }
@@ -449,6 +480,10 @@ func (s *Service) Handler() http.Handler {
 			return
 		}
 		host := edgeproto.RequestHost(r)
+		if h := s.retired[host]; h != nil {
+			s.serveRetired(w, r, h)
+			return
+		}
 		p := s.byHost[host]
 		if p == nil {
 			http.Error(w, fmt.Sprintf("this edge serves %s, not the host %q", s.originList(), host), http.StatusMisdirectedRequest)

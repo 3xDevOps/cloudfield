@@ -257,7 +257,10 @@ func New(ctx context.Context, cfg Config) (*Relay, error) {
 		if !edgeproto.NoticeOrigin(n.Origin) || !edgeproto.NoticeOrigin(n.Replacement) {
 			return nil, fmt.Errorf("relay: the notice for %s names %s; a notice names origins of at most 267 bytes without a leading zero in the port", n.Origin, n.Replacement)
 		}
-		if !slices.Contains(announced, n.Origin) || !slices.Contains(announced, n.Replacement) {
+		if n.State == edgeproto.NoticeRetired && (slices.Contains(announced, n.Origin) || !slices.Contains(announced, n.Replacement)) {
+			return nil, fmt.Errorf("relay: the retired notice for %s names %s: %s must not be a relay origin of this edge, and %s must be one", n.Origin, n.Replacement, n.Origin, n.Replacement)
+		}
+		if n.State != edgeproto.NoticeRetired && (!slices.Contains(announced, n.Origin) || !slices.Contains(announced, n.Replacement)) {
 			return nil, fmt.Errorf("relay: the notice for %s names %s, and both must be relay origins of this edge", n.Origin, n.Replacement)
 		}
 	}

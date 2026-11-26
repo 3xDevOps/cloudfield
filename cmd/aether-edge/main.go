@@ -130,7 +130,8 @@ func serve(args []string) (err error) {
 
 	svc, err := edge.New(edge.Config{
 		DataDir: o.dataDir, SigninOrigin: o.signinOrigin, RelayOrigin: o.relayOrigin,
-		GitHub: o.github, MorePairs: o.morePairs, Retiring: o.retiring, OpenAIChallenge: o.openAIChallenge, Reviewer: o.reviewer,
+		GitHub: o.github, MorePairs: o.morePairs, Retiring: o.retiring, Retired: o.retired, OpenAIChallenge: o.openAIChallenge, Reviewer: o.reviewer,
+		RecordOrigins: len(o.retiring) > 0 || len(o.retired) > 0,
 	})
 	if err != nil {
 		return err
@@ -213,6 +214,9 @@ func serve(args []string) (err error) {
 	for _, r := range o.retiring {
 		slog.Info("aether-edge: retiring", "relay", r.RelayOrigin, "replacement", r.Replacement, "date", r.Date)
 	}
+	for _, r := range o.retired {
+		slog.Info("aether-edge: retired", "signin", r.SigninOrigin, "relay", r.RelayOrigin, "replacement", r.Replacement)
+	}
 	if o.reviewer != nil {
 		slog.Warn("aether-edge: reviewer account on", "login", o.reviewer.Login, "server", o.reviewer.ServerID,
 			"signin", o.signinOrigin+edge.PathReviewerSignin)
@@ -253,11 +257,16 @@ func edgeTLS(o options) *tls.Config {
 }
 
 // certHosts are the host names the edge obtains certificates for: two per
-// origin pair.
+// origin pair, served or retired. A certificate is obtained at the first
+// handshake for its host, so one that fails fails only that host's
+// handshakes.
 func certHosts(o options) []string {
 	hosts := []string{host(o.signinOrigin), host(o.relayOrigin)}
 	for _, p := range o.morePairs {
 		hosts = append(hosts, host(p.SigninOrigin), host(p.RelayOrigin))
+	}
+	for _, r := range o.retired {
+		hosts = append(hosts, host(r.SigninOrigin), host(r.RelayOrigin))
 	}
 	return hosts
 }
