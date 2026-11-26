@@ -527,7 +527,7 @@ it('moves a connector at a retiring address to the new one, skipping one added a
       .mockResolvedValue({ connectors: [old, again, added], ...movedEdge }),
   })
   const callout = (await screen.findByText('This address is retiring on 2027-03-01')).closest('[data-slot=callout]')
-  expect(callout?.textContent).toContain(`Add it again at ${newUniversal}, check it works, remove the old Aether connector in Claude, then revoke this one. Move revokes it for you once the new one calls Cloudfield.`)
+  expect(callout?.textContent).toContain(`Add it again at ${newUniversal}, check it works, remove the old connector in Claude, then revoke this one. Move revokes it for you once the new one calls Cloudfield.`)
   expect(screen.getByText('Universal URL')).toBeTruthy()
   expect(screen.queryByRole('button', { name: 'Move Claude (claude.ai) to the universal URL' })).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Move Claude (claude.ai) to the new address' }))
@@ -567,7 +567,7 @@ it('tells the member to revoke a connector at a retired address, with no move', 
   const old: Connector = { ...claude, resource: oldUniversal, notice: { state: 'retired', url: newUniversal } }
   show({ connectorList: vi.fn().mockResolvedValue({ connectors: [old], ...movedEdge, universal_urls: [newUniversal] }) })
   const callout = (await screen.findByText('This address is retired')).closest('[data-slot=callout]')
-  expect(callout?.textContent).toContain('This connector no longer works. Revoke it, and remove the old Aether connector in Claude.')
+  expect(callout?.textContent).toContain('This connector no longer works. Revoke it, and remove the old connector in Claude.')
   expect(screen.queryByRole('button', { name: /^Move Claude/ })).toBeNull()
   expect(screen.getByRole('button', { name: 'Revoke Claude (claude.ai)' })).toBeTruthy()
 })

@@ -554,12 +554,12 @@ function Connectors({ client }: { client: Api }) {
                 title={`This address is retiring${c.notice.date ? ` on ${c.notice.date}` : ''}`}
                 actions={<Button size="sm" variant="secondary" aria-label={`Move ${label(c)} to the new address`} disabled={busy || target !== null} onClick={() => setConfirming({ connector: c, action: 'move' })}>Move to the new address</Button>}
               >
-                Add it again at <Code>{c.notice.url}</Code>, check it works, remove the old Aether connector in {c.client_name}, then revoke this one. Move revokes it for you once the new one calls Cloudfield.
+                Add it again at <Code>{c.notice.url}</Code>, check it works, remove the old connector in {c.client_name}, then revoke this one. Move revokes it for you once the new one calls Cloudfield.
               </Callout>
             )}
             {c.notice?.state === 'retired' && (
               <Callout tone="failed" title="This address is retired">
-                This connector no longer works. Revoke it, and remove the old Aether connector in {c.client_name}.
+                This connector no longer works. Revoke it, and remove the old connector in {c.client_name}.
               </Callout>
             )}
           </SettingRow>
