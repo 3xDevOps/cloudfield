@@ -1434,6 +1434,12 @@ func (s *Scheduler) recoverSupervised(ctx context.Context, r *domain.Run) {
 	// recorded the account and the run carries on where it was.
 	if swap := sc.AccountSwap; swap != nil {
 		switch {
+		case sc.ContainerID == swap.Container && swap.Sending:
+			// The agent may be working on the continuation; sending it again
+			// would repeat it, so the session only says it may be missing.
+			s.acp.switchNotice(r.ID, "warning", "The continuation prompt may not have been delivered",
+				"The session moved to "+s.accountLabel(ctx, swap.to(), r.Harness)+"; the continuation prompt may not have been delivered.")
+			s.dropAccountSwap(r.ID, &sc)
 		case sc.ContainerID == swap.Container:
 			if swap.Continuation == "" {
 				s.dropAccountSwap(r.ID, &sc)

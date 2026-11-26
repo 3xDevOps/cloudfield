@@ -27,6 +27,14 @@ type RunAccountPayload struct {
 	Account   domain.MemberID `json:"account_member_id"`
 	Previous  domain.MemberID `json:"previous_account_member_id"`
 	Requested domain.MemberID `json:"requested_account_member_id,omitempty"`
+	// Login and PreviousLogin are the added logins of those accounts, empty
+	// for a default login, with their names; PerUse is a login that now
+	// pays per use.
+	Login             domain.LoginID `json:"login,omitempty"`
+	PreviousLogin     domain.LoginID `json:"previous_login,omitempty"`
+	LoginName         string         `json:"login_name,omitempty"`
+	PreviousLoginName string         `json:"previous_login_name,omitempty"`
+	PerUse            bool           `json:"per_use,omitempty"`
 }
 
 func (RunAccountPayload) EventType() Type { return TypeRunAccount }

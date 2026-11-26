@@ -752,6 +752,22 @@ func (s *Server) runHandoff(ctx context.Context, member domain.MemberID, params 
 	if derr := checkLaunchIn(recipientActor, runWorkspaces(run)); derr != nil {
 		return nil, invalidParams(fmt.Sprintf("cannot hand off to %s: they have no access to every workspace of this session", recipient.DisplayName))
 	}
+	// A session on a login that is off for shares goes only to its owner.
+	if to != run.AccountMember() {
+		logins, lerr := s.cfg.Store.ListAgentLogins(ctx, run.AccountMember(), run.Harness)
+		if lerr != nil {
+			return nil, rpcError(lerr)
+		}
+		id := run.AccountLogin
+		if id == "" {
+			id = domain.DefaultLogin
+		}
+		for _, l := range logins {
+			if l.ID == id && !l.Shared {
+				return nil, invalidParams(fmt.Sprintf("cannot hand off to %s: the session is on a login its owner keeps out of shares", recipient.DisplayName))
+			}
+		}
+	}
 	from := run.MemberID
 	outbox, ok := s.cfg.Store.(store.HandoffOutboxStore)
 	if !ok {

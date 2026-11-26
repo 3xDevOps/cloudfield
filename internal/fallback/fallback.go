@@ -140,6 +140,9 @@ func Measure(ctx context.Context, st store.Store, usage QuotaReader, launcher do
 	}
 	requested.Member = account
 	used, ok := usedPercent(ctx, usage, requested, harness)
+	if !ok && ranOutRecently(requested, time.Now()) {
+		used, ok = 100, true
+	}
 	if !ok {
 		return nil, nil
 	}
@@ -214,7 +217,9 @@ func measureCandidates(ctx context.Context, st store.Store, usage QuotaReader, l
 			if !ok && !unknown && c.group == otherAccounts && !c.account.Login.Added() {
 				return
 			}
-			if !ok {
+			if !ok && ranOutRecently(c.account, time.Now()) {
+				used = 100
+			} else if !ok {
 				used = Unknown
 			}
 			mu.Lock()
@@ -512,4 +517,31 @@ func ResolveRunLogin(ctx context.Context, st store.Store, actor domain.MemberID,
 		}
 	}
 	return fmt.Errorf("%w: the login this session is on is not shared with you", permissions.ErrDenied)
+}
+
+// runOutFor is how long a login whose usage cannot be read is passed over
+// after its owner's session reported it run out.
+const runOutFor = 30 * time.Minute
+
+var runOuts = struct {
+	sync.Mutex
+	at map[domain.Account]time.Time
+}{at: map[domain.Account]time.Time{}}
+
+// NoteRunOut records that account, whose usage cannot be read, ran out at.
+func NoteRunOut(account domain.Account, at time.Time) {
+	runOuts.Lock()
+	defer runOuts.Unlock()
+	runOuts.at[account] = at
+}
+
+func ranOutRecently(account domain.Account, now time.Time) bool {
+	runOuts.Lock()
+	defer runOuts.Unlock()
+	at, ok := runOuts.at[account]
+	if ok && now.Sub(at) >= runOutFor {
+		delete(runOuts.at, account)
+		return false
+	}
+	return ok
 }

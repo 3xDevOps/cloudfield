@@ -24,6 +24,7 @@ func init() {
 	registerMethod(protocol.MethodAgentLoginRemove, (*Server).agentLoginRemove)
 	registerMethod(protocol.MethodAgentLoginOrder, (*Server).agentLoginOrder)
 	registerMethod(protocol.MethodAgentLoginAutomatic, (*Server).agentLoginAutomatic)
+	registerMethod(protocol.MethodAgentLoginShare, (*Server).agentLoginShare)
 }
 
 // LoginSignIns runs the sign-ins of new logins, each in a container of its
@@ -41,6 +42,9 @@ type LoginSignIns interface {
 	// LoginInUse lists the sessions on an added login, moving to it, or
 	// queued to start on it.
 	LoginInUse(ctx context.Context, account domain.Account) ([]domain.RunID, error)
+	// RevokeLogin moves teammates' running sessions off a login its owner
+	// turned off for shares.
+	RevokeLogin(login domain.Account)
 }
 
 var errNoAddedLogins = &protocol.Error{Code: protocol.CodeUnavailable, Message: "this server keeps no added logins"}
@@ -346,4 +350,35 @@ func (s *Server) mayLaunch(ctx context.Context, member domain.MemberID, method s
 		return &protocol.Error{Code: protocol.CodeDenied, Message: method + ": " + err.Error()}
 	}
 	return nil
+}
+
+func (s *Server) agentLoginShare(ctx context.Context, member domain.MemberID, raw json.RawMessage) (any, *protocol.Error) {
+	p, perr := decodeParams[protocol.AgentLoginShareParams](raw)
+	if perr != nil {
+		return nil, perr
+	}
+	s.authorizationMu.Lock()
+	defer s.authorizationMu.Unlock()
+	logins, perr := s.agentLoginCaller(ctx, member, p.Agent)
+	if perr != nil {
+		return nil, perr
+	}
+	if len(logins) == 0 {
+		return nil, invalidParams("you have only the default login; add a login first")
+	}
+	if err := s.cfg.Store.SetAgentLoginShared(ctx, member, p.Agent, domain.LoginID(p.LoginID), p.Shared); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, &protocol.Error{Code: protocol.CodeNotFound, Message: fmt.Sprintf("you have no login %q", p.LoginID)}
+		}
+		return nil, rpcError(err)
+	}
+	noteChange(ctx)
+	if !p.Shared && s.cfg.LoginSignIns != nil {
+		login := domain.Account{Member: member}
+		if id := domain.LoginID(p.LoginID); id.Added() {
+			login.Login = id
+		}
+		s.cfg.LoginSignIns.RevokeLogin(login)
+	}
+	return struct{}{}, nil
 }
