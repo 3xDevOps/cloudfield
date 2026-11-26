@@ -95,8 +95,8 @@ func reports(calls []Call) []string {
 }
 
 // Score checks the recorded calls of one run against the scenario. attempts
-// is how many of the agent's tool calls tried to start a subsession; where
-// none is wanted, each counts, whatever became of it.
+// is how many times the agent tried to start a subsession; where none is
+// wanted, each counts, whatever became of it.
 func Score(s Scenario, calls []Call, attempts int) []CheckResult {
 	var res []CheckResult
 	add := func(name string, pass bool, detail string) {

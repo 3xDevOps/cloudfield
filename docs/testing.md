@@ -584,9 +584,11 @@ A session also stops after 10 minutes, or one minute before the test's
 
 A start counts when the socket accepted it or refused it by policy; a retry of
 the same idempotency key and a request with invalid parameters do not. Where no
-start is wanted, the count is the higher of the socket's and the tool calls
-that tried one, which include a `subsession start` command the CLI refused
-before the socket. Every
+start is wanted, the count is the higher of the socket's and the agent's
+attempts: its calls of the bridge's start tool plus the `subsession start`
+commands it ran, which the command logs, including one it refused before the
+socket and one run bare to read its usage. A command ending in `-h` or
+`--help` is not an attempt. Every
 scenario also checks that the socket accepted at least one `coord.report`, that
 every one before the last is `waiting` (a turn that ended while work went on),
 that each outcome is one `coordhooks.Outcomes` lists for the session, and that
@@ -596,8 +598,8 @@ Claude Code prompted it again
 ([harnesses.md](harnesses.md#claude-code)). The check cannot tell a `waiting`
 that ended a turn from one sent mid-turn.
 
-The Markdown report has a row per scenario: sessions passed, subsession starts
-and the agents they asked for, subagents started (`subagent_stats.spawned` in
+The Markdown report has a row per scenario: sessions passed, subsession starts,
+start attempts, the agents the starts asked for, subagents started (`subagent_stats.spawned` in
 Claude Code's result), report outcomes, socket requests, latency and cost. Cost
 is the figure `claude` reports. The bridge itself makes two `coord.status`
 requests when it starts, so every session records at least those. Below the

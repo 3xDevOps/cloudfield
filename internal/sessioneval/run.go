@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -32,6 +31,8 @@ import (
 const (
 	helperEnv = "SESSIONEVAL_HELPER"
 	socketEnv = "SESSIONEVAL_SOCKET"
+	// argsEnv names the file the command appends each call's arguments to.
+	argsEnv = "SESSIONEVAL_ARGS"
 
 	helperCLI = "cli"
 	helperMCP = "mcp"
@@ -42,6 +43,8 @@ var fixture embed.FS
 
 // A go.mod under testdata would make the fixture a module of its own, which
 // cannot be embedded.
+const argsFile = "command-args.jsonl"
+
 const fixtureModule = "module example.com/shop\n\ngo 1.21\n"
 
 // Helper runs the real in-container command or MCP bridge against the
@@ -50,6 +53,10 @@ func Helper(kind string, args []string) int {
 	socket := os.Getenv(socketEnv)
 	switch kind {
 	case helperCLI:
+		if err := logArgs(os.Getenv(argsEnv), args); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
 		code, err := coordcli.Run(context.Background(), args, coordcli.Config{Socket: socket})
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -66,6 +73,22 @@ func Helper(kind string, args []string) int {
 	return 2
 }
 
+func logArgs(path string, args []string) error {
+	line, err := json.Marshal(args)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("sessioneval: log the command's arguments: %w", err)
+	}
+	if _, err = f.Write(append(line, '\n')); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("sessioneval: log the command's arguments: %w", err)
+	}
+	return f.Close()
+}
+
 // Launch is one staged session: a repository to work in, the fake socket
 // behind the in-container command and the MCP bridge, and the environment a
 // Standard Claude Code launch sets.
@@ -77,6 +100,30 @@ type Launch struct {
 	Env          []string
 	Coord        *Coord
 	dir          string
+}
+
+// CommandStarts counts the `subsession start` calls of the in-container
+// command, including the ones it refused before the socket. A call that asks
+// for help, as the command reads it, is not one.
+func (l *Launch) CommandStarts() (int, error) {
+	raw, err := os.ReadFile(filepath.Join(l.dir, argsFile))
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	n := 0
+	for line := range bytes.Lines(raw) {
+		var args []string
+		if err := json.Unmarshal(line, &args); err != nil {
+			return 0, fmt.Errorf("sessioneval: %s: %w", argsFile, err)
+		}
+		if len(args) >= 2 && args[0] == "subsession" && args[1] == "start" && args[len(args)-1] != "-h" && args[len(args)-1] != "--help" {
+			n++
+		}
+	}
+	return n, nil
 }
 
 func (l *Launch) Close() {
@@ -177,7 +224,8 @@ func Stage(ctx context.Context, helper string, s Scenario) (_ *Launch, err error
 	if err = os.Mkdir(bin, 0o755); err != nil {
 		return nil, err
 	}
-	script := fmt.Sprintf("#!/bin/sh\n%s=%s %s=%s exec %s \"$@\"\n", helperEnv, helperCLI, socketEnv, shellquote.Quote(coord.Path), shellquote.Quote(helper))
+	script := fmt.Sprintf("#!/bin/sh\n%s=%s %s=%s %s=%s exec %s \"$@\"\n", helperEnv, helperCLI, socketEnv, shellquote.Quote(coord.Path),
+		argsEnv, shellquote.Quote(filepath.Join(dir, argsFile)), shellquote.Quote(helper))
 	// The real CLI and bridge name whichever command this machine has.
 	for _, name := range []string{coordhooks.OldCLI, coordhooks.NewCLI} {
 		if err = os.WriteFile(filepath.Join(bin, name), []byte(script), 0o755); err != nil {
@@ -201,11 +249,6 @@ func Stage(ctx context.Context, helper string, s Scenario) (_ *Launch, err error
 
 const startTool = "mcp__" + mcpbridge.ServerName + "__aether_subsession_start"
 
-var (
-	startCommand = regexp.MustCompile(`-internal subsession start([^|;&\n]*)`)
-	helpFlag     = regexp.MustCompile(`(^|\s)(-h|--help)(\s|$)`)
-)
-
 // Reply is what one agent run produced besides its coordination calls.
 type Reply struct {
 	Answer string
@@ -217,9 +260,8 @@ type Reply struct {
 	Tools map[string]int
 	// Subagents is how many subagents the harness says the agent started.
 	Subagents int
-	// StartAttempts counts the agent's tool calls that tried to start a
-	// subsession, including ones the CLI refused before the socket.
-	StartAttempts int
+	// ToolStarts counts the agent's calls of the bridge's start tool.
+	ToolStarts int
 	// Transcript is the harness's raw output.
 	Transcript []byte
 }
@@ -285,11 +327,8 @@ func parseStream(out []byte) (reply Reply, resulted bool, err error) {
 		switch msg.Type {
 		case "assistant":
 			var blocks []struct {
-				Type  string `json:"type"`
-				Name  string `json:"name"`
-				Input struct {
-					Command string `json:"command"`
-				} `json:"input"`
+				Type string `json:"type"`
+				Name string `json:"name"`
 			}
 			_ = json.Unmarshal(msg.Message.Content, &blocks)
 			for _, b := range blocks {
@@ -298,12 +337,7 @@ func parseStream(out []byte) (reply Reply, resulted bool, err error) {
 				}
 				reply.Tools[b.Name]++
 				if b.Name == startTool {
-					reply.StartAttempts++
-				}
-				for _, m := range startCommand.FindAllStringSubmatch(b.Input.Command, -1) {
-					if !helpFlag.MatchString(m[1]) {
-						reply.StartAttempts++
-					}
+					reply.ToolStarts++
 				}
 			}
 		case "result":
@@ -333,11 +367,14 @@ type Result struct {
 	// Tools counts the agent's own tool calls by name.
 	Tools     map[string]int `json:"tools,omitempty"`
 	Subagents int            `json:"subagents"`
-	Answer    string         `json:"answer"`
-	Model     string         `json:"model,omitempty"`
-	Latency   time.Duration  `json:"latency_ns"`
-	CostUSD   *float64       `json:"cost_usd,omitempty"`
-	Error     string         `json:"error,omitempty"`
+	// StartAttempts counts the agent's attempts to start a subsession through
+	// the bridge's tool or the command, whatever became of them.
+	StartAttempts int           `json:"start_attempts"`
+	Answer        string        `json:"answer"`
+	Model         string        `json:"model,omitempty"`
+	Latency       time.Duration `json:"latency_ns"`
+	CostUSD       *float64      `json:"cost_usd,omitempty"`
+	Error         string        `json:"error,omitempty"`
 	// Transcript is the harness's raw output, kept out of the JSON report.
 	Transcript []byte `json:"-"`
 }
@@ -359,8 +396,13 @@ func RunOnce(ctx context.Context, agent Agent, helper string, s Scenario, n int)
 		res.Error = err.Error()
 	}
 	res.Calls = l.Coord.Calls()
-	res.Checks = Score(s, res.Calls, reply.StartAttempts)
-	res.Pass = err == nil
+	commandStarts, cerr := l.CommandStarts()
+	if cerr != nil && res.Error == "" {
+		res.Error = cerr.Error()
+	}
+	res.StartAttempts = reply.ToolStarts + commandStarts
+	res.Checks = Score(s, res.Calls, res.StartAttempts)
+	res.Pass = res.Error == ""
 	for _, c := range res.Checks {
 		res.Pass = res.Pass && c.Pass
 	}

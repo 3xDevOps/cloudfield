@@ -99,6 +99,13 @@ func TestStagedSessionThroughTheRealCommand(t *testing.T) {
 			t.Errorf("check %q failed: %s", c.Name, c.Detail)
 		}
 	}
+
+	for _, args := range [][]string{{"subsession", "start", "--help"}, {"subsession", "start", "--harness", "codex"}, {"skill", "subsessions"}} {
+		cli(t, l, args...)
+	}
+	if n, err := l.CommandStarts(); err != nil || n != 4 {
+		t.Fatalf("CommandStarts = %d, %v, want the three sent, the one the command refused and no help request", n, err)
+	}
 }
 
 func TestSubsessionCannotStartSubsessions(t *testing.T) {

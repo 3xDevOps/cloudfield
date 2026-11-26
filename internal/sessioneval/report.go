@@ -14,8 +14,8 @@ import (
 func Summary(label string, scenarios []Scenario, results []Result) string {
 	w := &strings.Builder{}
 	fmt.Fprintf(w, "# Session prompt eval: %s\n\n", label)
-	fmt.Fprintln(w, "| scenario | pass | subsession starts | wanted | harnesses | subagents | reports | socket calls | latency | cost |")
-	fmt.Fprintln(w, "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+	fmt.Fprintln(w, "| scenario | pass | subsession starts | start attempts | wanted | harnesses | subagents | reports | socket calls | latency | cost |")
+	fmt.Fprintln(w, "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
 	var pass, total int
 	for _, s := range scenarios {
 		var rs []Result
@@ -28,7 +28,7 @@ func Summary(label string, scenarios []Scenario, results []Result) string {
 			continue
 		}
 		var p, calls, costed int
-		var asked, harnesses, subagents, reported []string
+		var asked, attempts, harnesses, subagents, reported []string
 		var lat time.Duration
 		var cost float64
 		for _, r := range rs {
@@ -37,6 +37,7 @@ func Summary(label string, scenarios []Scenario, results []Result) string {
 			}
 			started := starts(r.Calls, true)
 			asked = append(asked, fmt.Sprint(len(started)))
+			attempts = append(attempts, fmt.Sprint(r.StartAttempts))
 			for _, st := range started {
 				if !slices.Contains(harnesses, st.Harness) {
 					harnesses = append(harnesses, st.Harness)
@@ -65,10 +66,10 @@ func Summary(label string, scenarios []Scenario, results []Result) string {
 		if costed > 0 {
 			costCol = fmt.Sprintf("$%.3f", cost/float64(costed))
 		}
-		fmt.Fprintf(w, "| %s | %d/%d | %s | %s | %s | %s | %s | %d | %s | %s |\n", s.ID, p, n, strings.Join(asked, ", "), wanted,
+		fmt.Fprintf(w, "| %s | %d/%d | %s | %s | %s | %s | %s | %s | %d | %s | %s |\n", s.ID, p, n, strings.Join(asked, ", "), strings.Join(attempts, ", "), wanted,
 			strings.Join(harnesses, ", "), strings.Join(subagents, ", "), strings.Join(reported, ", "), calls/n, (lat / time.Duration(n)).Round(time.Second), costCol)
 	}
-	fmt.Fprintf(w, "\n%d/%d runs passed. Subsession starts, subagents and reports list one entry per run; socket calls, latency and cost are per-run means.\n", pass, total)
+	fmt.Fprintf(w, "\n%d/%d runs passed. Subsession starts, start attempts, subagents and reports list one entry per run; socket calls, latency and cost are per-run means.\n", pass, total)
 
 	fmt.Fprintln(w, "\n## Failed checks")
 	for _, r := range results {
