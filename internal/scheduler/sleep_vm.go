@@ -133,6 +133,12 @@ func (s *Scheduler) saveMarked(ctx context.Context, entry *supervised, saver run
 		<-detached
 		if agent != nil {
 			agent.release()
+			// As detach does: a callback of the session still running would
+			// report on the saved run, after a shutdown too.
+			select {
+			case <-agent.session.Done():
+			case <-saveCtx.Done():
+			}
 		}
 	} else {
 		detachErr = s.detachForSave(saveCtx, entry)
