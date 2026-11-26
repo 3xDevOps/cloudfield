@@ -936,12 +936,20 @@ function Invoke-AetherGuiBuild {
 
 # A person at this machine's screen runs the installer as themselves: CI and
 # scripts redirect the console, a service has no desktop, and an elevated
-# token would start the app with administrator rights.
+# token would start the app elevated. Elevation is read from the token's
+# integrity label (High S-1-16-12288, System S-1-16-16384), which also
+# catches operator groups that are not Administrators.
 function Test-AetherSomeoneToSee {
     if ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected) { return $false }
     if (-not [Environment]::UserInteractive -or [Diagnostics.Process]::GetCurrentProcess().SessionId -eq 0) { return $false }
-    $principal = New-Object Security.Principal.WindowsPrincipal ([Security.Principal.WindowsIdentity]::GetCurrent())
-    return -not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    try {
+        $groups = & (Join-Path $env:SystemRoot 'System32\whoami.exe') /groups /fo csv /nh
+    }
+    catch {
+        return $false
+    }
+    if ($LASTEXITCODE -ne 0 -or -not ($groups -match 'S-1-16-')) { return $false }
+    return -not ($groups -match '"S-1-16-(12288|16384)"')
 }
 
 # Starts the app through the Start Menu shortcut `gui build` printed, as the

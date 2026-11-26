@@ -802,7 +802,6 @@ run_gui_build() {
 	tee "$tmp/gui-build.out" <"$tmp/gui-build.fifo" &
 	tee_pid=$!
 	run_interactive "${BIN_DIR}/aether" gui build >"$tmp/gui-build.fifo" || {
-		wait "$tee_pid" || true
 		gui_failure="\`aether gui build\` exited ${interactive_status}; its error is above"
 		return 1
 	}
@@ -814,7 +813,8 @@ run_gui_build() {
 app_opened=no
 open_failure=""
 open_app() {
-	[ "$have_tty" = yes ] && [ "$(id -u)" -ne 0 ] && [ -z "${SUDO_USER:-}" ] || return 1
+	[ "$have_tty" = yes ] && [ "$(id -u)" -ne 0 ] &&
+		[ -z "${SUDO_USER:-}${DOAS_USER:-}${PKEXEC_UID:-}" ] || return 1
 	case "$os" in
 	linux)
 		[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || return 1
@@ -839,8 +839,10 @@ open_app() {
 		if command -v gio >/dev/null 2>&1; then
 			set -- gio launch "$launcher"
 		elif command -v gtk-launch >/dev/null 2>&1; then
-			launcher="${launcher##*/}"
-			set -- gtk-launch "${launcher%.desktop}"
+			# gtk-launch takes an ID, not a file; pin the data directory
+			# `gui build` wrote the entry under so no other one answers.
+			id="${launcher##*/}"
+			set -- env XDG_DATA_HOME="${launcher%/applications/*}" gtk-launch "${id%.desktop}"
 		else
 			open_failure="neither gio nor gtk-launch is installed"
 			return 1
@@ -856,7 +858,7 @@ open_app() {
 		set -- setsid "$@"
 	fi
 	open_status=0
-	"$@" </dev/null >/dev/null 2>"$tmp/open.err" || open_status=$?
+	"$@" </dev/null >/dev/null 2>"$tmp/open.err" 3<&- 4>&- || open_status=$?
 	if [ "$open_status" -ne 0 ]; then
 		open_failure="\`${launch}\` exited ${open_status}: $(cat "$tmp/open.err")"
 		return 1

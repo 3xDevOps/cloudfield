@@ -330,6 +330,7 @@ for tool in "$gio_dir/gio" "$gtk_dir/gtk-launch" "$bin/open"; do
 	cat >"$tool" <<'EOF'
 #!/bin/sh
 printf '%s %s\n' "${0##*/}" "$*" >>"$CMD_LOG"
+[ "${0##*/}" != gtk-launch ] || printf 'gtk-launch data %s\n' "${XDG_DATA_HOME:-}" >>"$CMD_LOG"
 if [ -n "${STUB_OPEN_FAILS:-}" ]; then
 	echo "${0##*/}: cannot open the app" >&2
 	exit 2
@@ -394,7 +395,7 @@ export PATH="$bin:$gio_dir:$gtk_dir:$node:$bindir:$PATH"
 # No desktop session and no sudo unless a case sets one, so whether the app
 # opens never depends on the machine running the tests.
 export DISPLAY="" WAYLAND_DISPLAY=""
-unset SUDO_USER
+unset SUDO_USER DOAS_USER PKEXEC_UID
 
 # --- harness -------------------------------------------------------------
 
@@ -579,6 +580,7 @@ ran "gio launch $home/.local/share/applications/aether-desktop.desktop"
 reset "--role client without gio opens the app with gtk-launch"
 PATH="$gtk_dir:$no_launcher_path" DISPLAY=:0 AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
 ran "gtk-launch aether-desktop"
+grep -Fxq "gtk-launch data $home/.local/share" "$log" || fail "gtk-launch did not get the data directory gui build wrote to"
 printed "$started"
 
 reset "--role client on a Mac desktop opens the app"
@@ -606,6 +608,10 @@ not_opened
 
 reset "--role client through sudo does not open the app"
 SUDO_USER=tester DISPLAY=:0 AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
+not_opened
+
+reset "--role client through doas does not open the app"
+DOAS_USER=tester DISPLAY=:0 AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
 not_opened
 
 reset "--role client whose build fails does not open the app"
