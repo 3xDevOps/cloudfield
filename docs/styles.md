@@ -478,7 +478,9 @@ Use compact workbench geometry rather than landing-page ornament:
   keys, inline code and checkboxes; `--radius-control` 8px (`rounded-sm`,
   `rounded-control`) for buttons, fields, rows, menu items and tooltips;
   `--radius-panel` 12px (`rounded-md` and up, `rounded-panel`) for cards,
-  callouts, dialogs, menus, popovers, toasts and the palette; and
+  callouts, dialogs, menus, popovers, toasts and the palette (the asleep
+  notice sits in the bar stack above the composer and takes the bars' 8px);
+  and
   `--radius-composer` 14px (`rounded-composer`) for the session composer and
   Board's column wells. A radius nested
   in another is the outer one minus the inset: a 12px menu with 4px padding
@@ -628,9 +630,9 @@ or more tiles on screen, a 1px inset accent outline; an unfocused strip is on
 `--chrome` with no bar. Focus never dims a tile: no opacity. A tile whose
 view an arrow points at wears the same outline dashed. Seams between tiles
 are 1px `--seam` lines with a 7px grab reach. A sidebar row whose session is
-on screen has a 2px accent bar down its left edge. A drag shows a 1px accent
-border over an `--accent-soft` fill where the drop lands, and a raised chip
-by the pointer that names the action in accent.
+on screen has a 2px accent bar down its left edge and square left corners.
+A drag shows a 1px accent border over an `--accent-soft` fill where the drop
+lands, and a raised chip by the pointer that names the action in accent.
 
 The session header row leads with the view switch (Chat, Trace on an
 Enhanced session, Terminal, Changes, Files, Browser), a segmented tab list,

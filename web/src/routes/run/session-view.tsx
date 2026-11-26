@@ -525,8 +525,8 @@ export function SessionView({ run, agent, agentName, room, nav, active, textarea
         <SleepCallout run={run} />
       </div>
       {!notesWide && <NotesStrip run={run} room={room} className={cn(sessionColumn, 'pb-2')} />}
-      <AgentsBar runID={run.id} />
       <ChangesBar run={run} />
+      <AgentsBar runID={run.id} />
       <CompletionPrompt run={run} className={cn(sessionColumn, 'pb-2')} />
       <Composer run={run} agent={agent} room={room} textarea={textarea} autoFocus={focusComposer} collapsed={!tileFocused || pressed} onFocusChange={onComposing} dock={dock || undefined} onEscape={() => viewport.current?.focus()} onDropStatus={reportDropStatus} />
       <span role="status" aria-live="polite" aria-atomic="true" className="sr-only">{announcement}</span>

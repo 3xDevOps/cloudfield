@@ -518,8 +518,9 @@ On a desktop window with a fine pointer a row also arranges the
 hover, and `Mod+Enter` on a focused row open the session in a new tile right
 of the focused one, or as a tab of it when there is no room. A row dragged
 with a mouse or a pen drops onto a tile. A row whose session is the active
-tab of a tile on screen carries a 2px teal bar down its left edge; the
-selected row (`aria-current="page"`) is the focused tile's session.
+tab of a tile on screen carries a 2px teal bar down its left edge and has
+square left corners, so the bar meets the selected fill; the selected row
+(`aria-current="page"`) is the focused tile's session.
 
 ### App header
 
@@ -3564,23 +3565,26 @@ the note, the card shows the error without **Retry**, and **Dismiss** removes
 it.
 
 The subagents bar (`agents-bar.tsx`, a `region "Subagents and workflows"`)
-sits above the changes bar in Chat at every width, and is absent until the
-session has a subagent or workflow. It lists every one the main agent
-launched, and any whose launch is not loaded; a workflow is one row. Its
-header is the launch step's summary ("3 subagents and 1 workflow · 2
-running, 1 failed"). It starts collapsed (`expandedRows[runID]['agents-bar']`,
-not persisted). Expanded, at most 192px tall (30% of the viewport on a
-phone), each row shows the dot, the label, and the state with its elapsed
-time, or `3 of 8 agents done` for a workflow that reports rows. Running rows
-come first, oldest launch first, then failed, stopped and the rest, each
-newest first (`topAgents` in `store/subagents.ts`, which returns one string
-so the bar re-renders only when a row's state changes). A row opens the
-subagent inspector; the open one carries `aria-current`.
+sits between the changes bar and the composer in Chat at every width, and
+is absent until the session has a subagent or workflow. It lists every one
+the main agent launched, and any whose launch is not loaded; a workflow is
+one row. Its header is the launch step's summary ("3 subagents and 1
+workflow · 2 running, 1 failed"). It starts collapsed
+(`expandedRows[runID]['agents-bar']`, not persisted). Expanded, at most
+192px tall (30% of the viewport on a phone), each row shows the dot, the
+label, and the state with its elapsed time, or `3 of 8 agents done` for a
+workflow that reports rows. Running rows come first, oldest launch first,
+then failed, stopped and the rest, each newest first (`topAgents` in
+`store/subagents.ts`, which returns one string so the bar re-renders only
+when a row's state changes). A row opens the subagent inspector; the open
+one carries `aria-current`.
 
-The changes bar (`changes-bar.tsx`) sits above the composer: one line,
-"14 files changed +612 −140" and **Review**. It counts the session's whole
-worktree against its base, the Changes view's **All changes**, so
-edits made by shell commands count too. Its source is the newest `run.diff`
+The changes bar (`changes-bar.tsx`) sits above the subagents bar, or above
+the composer when there is none: one line, "14 files changed +612 −140" and
+**Review**, in a bordered box like the subagents bar's so the two
+disclosure arrows line up. It counts the session's whole worktree against
+its base, the Changes view's **All changes**, so edits made by shell
+commands count too. Its source is the newest `run.diff`
 stat set. Until the page has received one live, it reads the newest with
 `workspace.timeline` (`types: ["run.diff"]`, `newest: true`, `limit: 1`)
 on load and again whenever the connection returns, since the page may hold
