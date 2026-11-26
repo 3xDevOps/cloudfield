@@ -570,11 +570,26 @@ func main() {
     if ([Console]::IsOutputRedirected) {
         Assert-AetherTest (-not (Test-AetherSomeoneToSee)) 'a redirected console counted as someone to see the app'
     }
-    # The integrity label agrees with what Windows says about this token; on a
-    # hosted runner both say elevated.
+    $hadCI = Test-Path -LiteralPath 'Env:CI'
+    $oldCI = $env:CI
+    $env:CI = 'true'
+    try {
+        Assert-AetherTest (-not (Test-AetherSomeoneToSee)) 'CI counted as someone to see the app'
+    }
+    finally {
+        if ($hadCI) { $env:CI = $oldCI } else { Remove-Item -LiteralPath 'Env:CI' -ErrorAction SilentlyContinue }
+    }
+    # A token Windows treats as Administrator is elevated, so its label is
+    # High; a hosted runner's is. An operator token can be elevated without
+    # Administrators, so only this direction holds.
     $principal = New-Object Security.Principal.WindowsPrincipal ([Security.Principal.WindowsIdentity]::GetCurrent())
     $global:LASTEXITCODE = 7
-    Assert-AetherEqual $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator) (Test-AetherElevated) 'the integrity label disagrees with the token''s elevation'
+    if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+        Assert-AetherTest (Test-AetherElevated) 'an Administrator token was not read as elevated'
+    }
+    else {
+        [void](Test-AetherElevated)
+    }
     Assert-AetherEqual 7 $global:LASTEXITCODE 'the elevation check changed LASTEXITCODE'
     $launchCase = Join-Path $root 'launch-case'
     New-Item -ItemType Directory -Path $launchCase -Force | Out-Null

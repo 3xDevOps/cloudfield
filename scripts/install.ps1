@@ -935,15 +935,17 @@ function Invoke-AetherGuiBuild {
 }
 
 # Whether this process's token is elevated, read from its integrity label
-# (High S-1-16-12288, System S-1-16-16384) rather than from Administrators
-# membership, which misses operator groups UAC also elevates. A token whose
-# label cannot be read counts as elevated.
+# (S-1-16-<level>, High from 12288 up) rather than from Administrators
+# membership, which misses operator groups UAC also elevates. whoami is
+# found through the OS's System folder, not the SystemRoot variable. A token
+# whose label cannot be read counts as elevated.
 function Test-AetherElevated {
     $previousExit = Get-Variable LASTEXITCODE -Scope Global -ValueOnly -ErrorAction SilentlyContinue
     try {
-        $groups = & (Join-Path $env:SystemRoot 'System32\whoami.exe') /groups /fo csv /nh
-        if ($LASTEXITCODE -ne 0 -or -not ($groups -match '"S-1-16-')) { return $true }
-        return [bool]($groups -match '"S-1-16-(12288|16384)"')
+        $groups = & (Join-Path ([Environment]::GetFolderPath('System')) 'whoami.exe') /groups /fo csv /nh
+        $levels = @($groups | ForEach-Object { if ($_ -match '"S-1-16-(\d+)"') { [int]$Matches[1] } })
+        if ($LASTEXITCODE -ne 0 -or $levels.Count -eq 0) { return $true }
+        return [bool](@($levels | Where-Object { $_ -ge 12288 }).Count)
     }
     catch {
         return $true
@@ -962,6 +964,7 @@ function Test-AetherElevated {
 # scripts redirect the console, a service has no desktop, and an elevated
 # token would start the app elevated.
 function Test-AetherSomeoneToSee {
+    if (-not [string]::IsNullOrEmpty($env:CI)) { return $false }
     if ([Console]::IsInputRedirected -or [Console]::IsOutputRedirected) { return $false }
     if (-not [Environment]::UserInteractive -or [Diagnostics.Process]::GetCurrentProcess().SessionId -eq 0) { return $false }
     return -not (Test-AetherElevated)

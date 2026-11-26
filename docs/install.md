@@ -224,9 +224,9 @@ name only where that link exists and its directory is on `PATH`.
   starts with `Cloudfield is starting`. It does this only when you run it from
   a terminal, as yourself rather than as root or through `sudo`, in a desktop
   session: `DISPLAY` or `WAYLAND_DISPLAY` set on Linux, a login window session
-  on macOS, not SSH. Otherwise `next:` says to open Cloudfield from your
-  applications. If the app does not start, the last line shows the launcher's
-  error and the script still exits 0.
+  on macOS, not SSH, and not in CI (`CI` set). Otherwise `next:` says to open
+  Cloudfield from your applications. If the launcher fails, the last line shows
+  its error and the script still exits 0.
 
 | Flag | Variable | Effect |
 | --- | --- | --- |
@@ -265,9 +265,10 @@ against `checksums.txt` and `aether-release.json`, installs it as
 user `PATH`. Then it runs `aether gui build`, which installs the
 [desktop app](#desktop-app) and adds **Cloudfield** to the Start Menu, then
 opens Cloudfield through that Start Menu entry. It opens it only from a
-PowerShell window that is not elevated and whose output is not redirected, as
-it is in CI; otherwise `next:` says to open Cloudfield from the Start menu. If
-the app does not start, the line before `done:` shows the error. It does not
+PowerShell window that is not elevated, outside CI (`CI` set), and whose
+output is not redirected; otherwise `next:` says to open Cloudfield from the
+Start menu. If the shortcut fails to start, the line before `done:` shows the
+error. It does not
 ask for administrator rights or change the execution policy or Defender
 settings: `-ExecutionPolicy Bypass` applies to that one process only. Open a
 new terminal afterwards: open ones keep their old `PATH`.

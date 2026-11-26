@@ -59,7 +59,7 @@ die() {
 }
 
 say() {
-	echo "aether install: $*"
+	printf 'aether install: %s\n' "$*"
 }
 
 while [ $# -gt 0 ]; do
@@ -794,28 +794,32 @@ run_gui_build() {
 	fi
 	echo
 	say "building the desktop app - this downloads Electron and takes a few minutes"
-	# A copy of its stdout keeps the launcher it prints for open_app.
-	mkfifo "$tmp/gui-build.fifo" || {
-		gui_failure="mkfifo failed, so \`aether gui build\` did not run; its error is above"
-		return 1
-	}
-	tee "$tmp/gui-build.out" <"$tmp/gui-build.fifo" &
-	tee_pid=$!
-	run_interactive "${BIN_DIR}/aether" gui build >"$tmp/gui-build.fifo" || {
+	# A copy of its stdout keeps the launcher it prints for open_app. Where
+	# no FIFO can be made the build runs without one and the app is not
+	# opened.
+	build_status=0
+	if mkfifo "$tmp/gui-build.fifo" 2>/dev/null; then
+		tee "$tmp/gui-build.out" <"$tmp/gui-build.fifo" &
+		tee_pid=$!
+		run_interactive "${BIN_DIR}/aether" gui build >"$tmp/gui-build.fifo" || build_status=$?
 		wait "$tee_pid" || true
-		gui_failure="\`aether gui build\` exited ${interactive_status}; its error is above"
+	else
+		run_interactive "${BIN_DIR}/aether" gui build || build_status=$?
+	fi
+	if [ "$build_status" -ne 0 ]; then
+		gui_failure="\`aether gui build\` exited ${build_status}; its error is above"
 		return 1
-	}
-	wait "$tee_pid" || true
+	fi
 }
 
 # Opens the app through the launcher `gui build` printed, only when a person
-# at this machine's screen is running the installer as themselves.
+# at this machine's screen is running the installer as themselves. CI with a
+# terminal and a virtual display is still CI.
 app_opened=no
 open_failure=""
 open_app() {
-	[ "$have_tty" = yes ] && [ "$(id -u)" -ne 0 ] &&
-		[ -z "${SUDO_USER:-}${DOAS_USER:-}${PKEXEC_UID:-}" ] || return 1
+	[ "$have_tty" = yes ] && [ -z "${CI:-}" ] && [ -f "$tmp/gui-build.out" ] &&
+		[ -z "${SUDO_USER:-}${DOAS_USER:-}${PKEXEC_UID:-}" ] && [ "$(id -u)" -ne 0 ] || return 1
 	case "$os" in
 	linux)
 		[ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || return 1

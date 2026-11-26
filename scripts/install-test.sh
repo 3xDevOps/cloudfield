@@ -334,7 +334,7 @@ printf '%s %s\n' "${0##*/}" "$*" >>"$CMD_LOG"
 { true <&3; } 2>/dev/null && echo "launcher inherited fd 3" >>"$CMD_LOG"
 { true >&4; } 2>/dev/null && echo "launcher inherited fd 4" >>"$CMD_LOG"
 if [ -n "${STUB_OPEN_FAILS:-}" ]; then
-	echo "${0##*/}: cannot open the app" >&2
+	printf '%s: cannot open \\the app\n' "${0##*/}" >&2
 	exit 2
 fi
 EOF
@@ -344,6 +344,16 @@ cat >"$bin/launchctl" <<'EOF'
 #!/bin/sh
 echo "${STUB_MANAGER:-Aqua}"
 EOF
+# STUB_MKFIFO_FAILS is a temp directory on a filesystem without FIFOs.
+cat >"$bin/mkfifo" <<'EOF'
+#!/bin/sh
+if [ -n "${STUB_MKFIFO_FAILS:-}" ]; then
+	echo "mkfifo: cannot create fifo '$1': Operation not supported" >&2
+	exit 1
+fi
+exec /usr/bin/env -i PATH=/usr/bin:/bin mkfifo "$@"
+EOF
+chmod 0755 "$bin/mkfifo"
 
 for tool in npm npx; do
 	cat >"$node/$tool" <<EOF
@@ -397,7 +407,7 @@ export PATH="$bin:$gio_dir:$gtk_dir:$node:$bindir:$PATH"
 # No desktop session and no sudo unless a case sets one, so whether the app
 # opens never depends on the machine running the tests.
 export DISPLAY="" WAYLAND_DISPLAY=""
-unset SUDO_USER DOAS_USER PKEXEC_UID
+unset SUDO_USER DOAS_USER PKEXEC_UID CI
 
 # --- harness -------------------------------------------------------------
 
@@ -621,6 +631,17 @@ reset "--role client through pkexec does not open the app"
 PKEXEC_UID=1000 DISPLAY=:0 AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
 not_opened
 
+reset "--role client in CI with a terminal and a display does not open the app"
+CI=true DISPLAY=:0 AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
+not_opened
+
+reset "--role client without FIFOs still builds and does not open the app"
+STUB_MKFIFO_FAILS=1 DISPLAY=:0 AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
+ran "aether gui build"
+printed "launcher $home/.local/share/applications/aether-desktop.desktop"
+not_opened
+printed "  open Cloudfield from your applications to link your server, or in a terminal:"
+
 reset "--role client whose build fails does not open the app"
 GUI_FAILS=1 DISPLAY=:0 AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
 not_opened
@@ -640,7 +661,7 @@ STUB_OPEN_FAILS=1 DISPLAY=:0 AETHER_TTY="$faketty" sh "$script" --role client >"
 ran "gio launch $home/.local/share/applications/aether-desktop.desktop"
 printed "  open Cloudfield from your applications to link your server, or in a terminal:"
 not_printed "Cloudfield is starting"
-ends_with "aether install: the desktop app is installed but did not open: \`gio launch $home/.local/share/applications/aether-desktop.desktop\` exited 2: gio: cannot open the app"
+ends_with "aether install: the desktop app is installed but did not open: \`gio launch $home/.local/share/applications/aether-desktop.desktop\` exited 2: gio: cannot open \\the app"
 
 reset "--role client with neither gio nor gtk-launch"
 PATH="$no_launcher_path" DISPLAY=:0 AETHER_TTY="$faketty" sh "$script" --role client >"$out" 2>&1 || fail "installer exited non-zero"
