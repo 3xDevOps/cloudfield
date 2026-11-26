@@ -63,7 +63,7 @@ func populate(t *testing.T, dir string) {
 	octo := edgeproto.Account{Provider: edgeproto.ProviderGitHub, Subject: "42", Login: "octo"}
 	mona := edgeproto.Account{Provider: edgeproto.ProviderGitHub, Subject: "43", Login: "mona"}
 	for _, a := range []edgeproto.Account{octo, mona} {
-		if _, err := s.SignIn(ctx, a, now); err != nil {
+		if _, err = s.SignIn(ctx, a, now); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -71,27 +71,27 @@ func populate(t *testing.T, dir string) {
 		id, name string
 		owner    edgeproto.Account
 	}{{testServer, "workstation", octo}, {testServer2, "lab", mona}} {
-		if err := s.RecordClaim(ctx, c.id, c.name, edgeproto.PolicyAccount, edgeproto.AccountPrincipal(c.owner),
+		if err = s.RecordClaim(ctx, c.id, c.name, edgeproto.PolicyAccount, edgeproto.AccountPrincipal(c.owner),
 			edgestore.Enrollment{RelayOrigin: pairRelayA, AgentVersion: "v0.9.0", At: enrolledAt}, now); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.EnrollServer(ctx, testServer, "workstation", edgeproto.PolicyAccount,
+	if _, err = s.EnrollServer(ctx, testServer, "workstation", edgeproto.PolicyAccount,
 		edgestore.Enrollment{RelayOrigin: pairRelayB, AgentVersion: "v0.9.1", At: enrolledAt}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DropOwner(ctx, testServer2); err != nil {
+	if err = s.DropOwner(ctx, testServer2); err != nil {
 		t.Fatal(err)
 	}
 	for _, u := range []struct {
 		id  string
 		age time.Duration
 	}{{testServer, 3 * 24 * time.Hour}, {testServer2, 2 * time.Hour}} {
-		if err := s.UseConnector(ctx, u.id, pairRelayA, now.Add(-u.age)); err != nil {
+		if err = s.UseConnector(ctx, u.id, pairRelayA, now.Add(-u.age)); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := s.Close(); err != nil {
+	if err = s.Close(); err != nil {
 		t.Fatal(err)
 	}
 	db, err := sql.Open("sqlite", filepath.Join(dir, "edge.db"))
@@ -112,7 +112,7 @@ func populate(t *testing.T, dir string) {
 		{`INSERT INTO web_sessions (id, token_hash, account_id, created_at, expires_at, signin_origin) SELECT 'mona-s', 'h5', id, 0, ?, ? FROM accounts WHERE login = 'mona'`,
 			[]any{now.UnixNano() - 5*day + int64(edgeproto.SessionIdle), pairSigninA}},
 	} {
-		if _, err := db.Exec(q.sql, q.args...); err != nil {
+		if _, err = db.Exec(q.sql, q.args...); err != nil {
 			t.Fatalf("%s: %v", q.sql, err)
 		}
 	}
@@ -152,7 +152,7 @@ accounts with a session  0      0       0        0
 		empt.Origins == nil || len(empt.Origins) != 0 || !strings.Contains(out, `"origins": [],`) {
 		t.Fatalf("JSON report of an empty store:\n%s%v", out, err)
 	}
-	if _, err := runRetiring(t, empty, "--origin", pairRelayA); err == nil ||
+	if _, err = runRetiring(t, empty, "--origin", pairRelayA); err == nil ||
 		err.Error() != pairRelayA+" is not a relay origin this edge has recorded; it has recorded: -" {
 		t.Fatalf("--origin on an empty store: %v", err)
 	}
@@ -178,7 +178,7 @@ device tokens            0      0       0        0
 accounts with a session  0      0       0        0
 
 ` + retiringCaveat
-	if out, err := runRetiring(t, one); err != nil || out != want {
+	if out, err = runRetiring(t, one); err != nil || out != want {
 		t.Fatalf("report of one pair:\n%s%v\nwant:\n%s", out, err, want)
 	}
 
@@ -218,17 +218,17 @@ device tokens            0      1       1        1
 accounts with a session  0      0       0        0
 
 ` + retiringCaveat
-	if out, err := runRetiring(t, two); err != nil || out != "recording since 2026-11-01T00:00:00Z\n"+wantA+wantB+unknown {
+	if out, err = runRetiring(t, two); err != nil || out != "recording since 2026-11-01T00:00:00Z\n"+wantA+wantB+unknown {
 		t.Fatalf("report of two pairs:\n%s%v\nwant:\n%s%s%s", out, err, wantA, wantB, unknown)
 	}
-	if out, err := runRetiring(t, two, "--origin", strings.ToUpper(pairRelayB)); err != nil || out != "recording since 2026-11-01T00:00:00Z\n"+wantB+unknown {
+	if out, err = runRetiring(t, two, "--origin", strings.ToUpper(pairRelayB)); err != nil || out != "recording since 2026-11-01T00:00:00Z\n"+wantB+unknown {
 		t.Fatalf("report of --origin %s:\n%s%v", pairRelayB, out, err)
 	}
-	if _, err := runRetiring(t, two, "--origin", pairSigninA); err == nil ||
+	if _, err = runRetiring(t, two, "--origin", pairSigninA); err == nil ||
 		err.Error() != pairSigninA+" is not a relay origin this edge has recorded; it has recorded: "+pairRelayA+", "+pairRelayB {
 		t.Fatalf("--origin of a sign-in origin: %v", err)
 	}
-	if _, err := runRetiring(t, two, "--origin", "edge-a.example.test"); err == nil || !strings.HasPrefix(err.Error(), "--origin: ") {
+	if _, err = runRetiring(t, two, "--origin", "edge-a.example.test"); err == nil || !strings.HasPrefix(err.Error(), "--origin: ") {
 		t.Fatalf("--origin without a scheme: %v", err)
 	}
 

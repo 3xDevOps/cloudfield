@@ -45,9 +45,9 @@ func (s *Store) UseConnector(ctx context.Context, serverID, relay string, now ti
 	return nil
 }
 
-// Signins counts device tokens, browser sessions and pending device
+// SignIns counts device tokens, browser sessions and pending device
 // authorizations.
-type Signins struct {
+type SignIns struct {
 	Devices        int `json:"devices"`
 	Sessions       int `json:"sessions"`
 	Authorizations int `json:"authorizations"`
@@ -55,13 +55,13 @@ type Signins struct {
 
 var signinTables = []string{"devices", "web_sessions", "device_authorizations"}
 
-// DeleteSignins deletes, in one transaction, the device tokens, sessions
+// DeleteSignIns deletes, in one transaction, the device tokens, sessions
 // and device authorizations whose sign-in origin is one of origins or
 // that have none, and returns how many it deleted.
-func (s *Store) DeleteSignins(ctx context.Context, origins []string) (Signins, error) {
+func (s *Store) DeleteSignIns(ctx context.Context, origins []string) (SignIns, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
-		return Signins{}, fmt.Errorf("edgestore: delete sign-ins: %w", err)
+		return SignIns{}, fmt.Errorf("edgestore: delete sign-ins: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
 	where := `signin_origin IS NULL`
@@ -72,34 +72,34 @@ func (s *Store) DeleteSignins(ctx context.Context, origins []string) (Signins, e
 	for i, o := range origins {
 		args[i] = o
 	}
-	var out Signins
+	var out SignIns
 	for i, n := range []*int{&out.Devices, &out.Sessions, &out.Authorizations} {
 		res, err := tx.ExecContext(ctx, `DELETE FROM `+signinTables[i]+` WHERE `+where, args...)
 		if err != nil {
-			return Signins{}, fmt.Errorf("edgestore: delete sign-ins: %s: %w", signinTables[i], err)
+			return SignIns{}, fmt.Errorf("edgestore: delete sign-ins: %s: %w", signinTables[i], err)
 		}
 		deleted, err := res.RowsAffected()
 		if err != nil {
-			return Signins{}, fmt.Errorf("edgestore: delete sign-ins: %s: %w", signinTables[i], err)
+			return SignIns{}, fmt.Errorf("edgestore: delete sign-ins: %s: %w", signinTables[i], err)
 		}
 		*n = int(deleted)
 	}
 	if err := tx.Commit(); err != nil {
-		return Signins{}, fmt.Errorf("edgestore: delete sign-ins: %w", err)
+		return SignIns{}, fmt.Errorf("edgestore: delete sign-ins: %w", err)
 	}
 	return out, nil
 }
 
-// SigninsWithoutOrigin counts the device tokens, sessions and device
+// SignInsWithoutOrigin counts the device tokens, sessions and device
 // authorizations that have no recorded sign-in origin.
-func (s *Store) SigninsWithoutOrigin(ctx context.Context) (Signins, error) {
-	var out Signins
+func (s *Store) SignInsWithoutOrigin(ctx context.Context) (SignIns, error) {
+	var out SignIns
 	if err := s.db.QueryRowContext(ctx, `SELECT
 		(SELECT COUNT(*) FROM devices WHERE signin_origin IS NULL),
 		(SELECT COUNT(*) FROM web_sessions WHERE signin_origin IS NULL),
 		(SELECT COUNT(*) FROM device_authorizations WHERE signin_origin IS NULL)`).
 		Scan(&out.Devices, &out.Sessions, &out.Authorizations); err != nil {
-		return Signins{}, fmt.Errorf("edgestore: count sign-ins without an origin: %w", err)
+		return SignIns{}, fmt.Errorf("edgestore: count sign-ins without an origin: %w", err)
 	}
 	return out, nil
 }

@@ -397,21 +397,21 @@ func TestRetiringReport(t *testing.T) {
 		got.Origins[0].Servers == nil || len(got.Origins[0].Servers) != 0 || got.Origins[0].DeviceTokens != (Counts{}) {
 		t.Fatalf("report of one pair with nobody on it = %+v, %v", got, err)
 	}
-	if err := s.RecordPairs(ctx, map[string]string{testRelay: testSignin, testRelay2: testSignin2}, testNow); err != nil {
+	if err = s.RecordPairs(ctx, map[string]string{testRelay: testSignin, testRelay2: testSignin2}, testNow); err != nil {
 		t.Fatal(err)
 	}
 
 	me, other := owner(), edgeproto.Account{Provider: edgeproto.ProviderGitHub, Subject: "2", Login: "other"}
 	claim(t, s, serverA, "alpha", me)
 	claim(t, s, serverB, "beta", other)
-	if _, err := s.EnrollServer(ctx, serverA, "alpha", edgeproto.PolicyAccount,
+	if _, err = s.EnrollServer(ctx, serverA, "alpha", edgeproto.PolicyAccount,
 		Enrollment{RelayOrigin: testRelay2, AgentVersion: "v2.0.0", At: testNow}); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.DropOwner(ctx, serverB); err != nil {
+	if err = s.DropOwner(ctx, serverB); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RecordClaim(ctx, "cccccccccccccccccccccccccc", "gamma", edgeproto.PolicyAccount, edgeproto.AccountPrincipal(me), Enrollment{}, testNow); err != nil {
+	if err = s.RecordClaim(ctx, "cccccccccccccccccccccccccc", "gamma", edgeproto.PolicyAccount, edgeproto.AccountPrincipal(me), Enrollment{}, testNow); err != nil {
 		t.Fatal(err)
 	}
 	myID, _ := s.SignIn(ctx, me, testNow)
@@ -432,7 +432,7 @@ func TestRetiringReport(t *testing.T) {
 		{"d6", otherID, nil, nil, 0},
 		{"d7", otherID, nil, nil, 8 * day},
 	} {
-		if _, err := s.db.Exec(`INSERT INTO devices (id, token_hash, account_id, public_key, label, created_at, last_used_at, signin_origin, signin_origin_seen)
+		if _, err = s.db.Exec(`INSERT INTO devices (id, token_hash, account_id, public_key, label, created_at, last_used_at, signin_origin, signin_origin_seen)
 			VALUES (?, ?, ?, 'ssh-ed25519 AAAA', 'laptop', 0, ?, ?, ?)`,
 			d.id, d.id+"-hash", d.account, unix(testNow.Add(-d.age)), d.origin, d.seen); err != nil {
 			t.Fatal(err)
@@ -451,7 +451,7 @@ func TestRetiringReport(t *testing.T) {
 		{"s5", otherID, "", 2 * day},
 	} {
 		used := testNow.Add(-sess.age)
-		if err := s.CreateSession(ctx, sess.id, sess.id+"-hash", sess.account, sess.origin, used, used.Add(edgeproto.SessionIdle)); err != nil {
+		if err = s.CreateSession(ctx, sess.id, sess.id+"-hash", sess.account, sess.origin, used, used.Add(edgeproto.SessionIdle)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -463,7 +463,7 @@ func TestRetiringReport(t *testing.T) {
 		{serverA, testRelay2, 0},
 		{serverB, testRelay, 29 * day},
 	} {
-		if err := s.UseConnector(ctx, u.id, u.origin, testNow.Add(-u.age)); err != nil {
+		if err = s.UseConnector(ctx, u.id, u.origin, testNow.Add(-u.age)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -504,10 +504,10 @@ func TestRetiringReport(t *testing.T) {
 	}
 }
 
-// TestDeleteSignins deletes, in one call, the device tokens, sessions and
+// TestDeleteSignIns deletes, in one call, the device tokens, sessions and
 // pending authorizations of the given origins and those with none, and
 // counts what has none.
-func TestDeleteSignins(t *testing.T) {
+func TestDeleteSignIns(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()
 	id, err := s.SignIn(ctx, owner(), testNow)
@@ -532,10 +532,10 @@ func TestDeleteSignins(t *testing.T) {
 		UPDATE device_authorizations SET signin_origin = NULL WHERE signin_origin = '<nil>'`); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := s.SigninsWithoutOrigin(ctx); err != nil || got != (Signins{Devices: 2, Sessions: 2, Authorizations: 2}) {
+	if got, err := s.SignInsWithoutOrigin(ctx); err != nil || got != (SignIns{Devices: 2, Sessions: 2, Authorizations: 2}) {
 		t.Fatalf("without an origin: %+v, %v", got, err)
 	}
-	if got, err := s.DeleteSignins(ctx, []string{testSignin2}); err != nil || got != (Signins{Devices: 3, Sessions: 3, Authorizations: 3}) {
+	if got, err := s.DeleteSignIns(ctx, []string{testSignin2}); err != nil || got != (SignIns{Devices: 3, Sessions: 3, Authorizations: 3}) {
 		t.Fatalf("deleted %+v, %v; want the three of each at %s or with no origin", got, err, testSignin2)
 	}
 	for _, table := range []string{"devices", "web_sessions", "device_authorizations"} {
@@ -543,7 +543,7 @@ func TestDeleteSignins(t *testing.T) {
 			t.Errorf("%s left: %q, want only %s", table, got.String, testSignin)
 		}
 	}
-	if got, err := s.DeleteSignins(ctx, nil); err != nil || got != (Signins{}) {
+	if got, err := s.DeleteSignIns(ctx, nil); err != nil || got != (SignIns{}) {
 		t.Fatalf("delete with no origins and nothing without one: %+v, %v", got, err)
 	}
 }

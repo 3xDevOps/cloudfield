@@ -42,12 +42,11 @@ type Directory interface {
 	// limit per account, per address or per server, and
 	// edgeproto.RefusalClaimed when serverID has an owner.
 	AdmitClaim(ctx context.Context, serverID string, account edgeproto.Account, addr netip.Addr) error
-	// Enroll reports whether serverID is claimed, and records name and
-	// policy, from its hello, for a server that is. It returns
+	// Enroll reports whether serverID is claimed, and records name,
+	// policy and agentVersion, from its hello, and origin, the relay
+	// origin it enrolled at, for a server that is. It returns
 	// edgeproto.RefusalServerBlocked for a server id the operator
 	// blocked.
-	// origin is the relay origin it enrolled at and agentVersion the
-	// build its hello reported.
 	Enroll(ctx context.Context, serverID, name string, policy edgeproto.AccessPolicy, origin, agentVersion string) (claimed bool, err error)
 	// ReplaceDirectory stores the directory a claimed server pushed.
 	ReplaceDirectory(ctx context.Context, serverID string, entries []edgeproto.DirectoryEntry) error
@@ -56,8 +55,8 @@ type Directory interface {
 	Unenroll(ctx context.Context, serverID string) error
 	// RecordClaim records owner as the owner of serverID, which has none,
 	// after serverID reported that a claim connection the relay opened
-	// for owner presented its claim code. name and policy are from its
-	// hello, and origin the relay origin it enrolled at.
+	// for owner presented its claim code. name, policy and agentVersion
+	// are from its hello, and origin the relay origin it enrolled at.
 	RecordClaim(ctx context.Context, serverID, name string, policy edgeproto.AccessPolicy, owner edgeproto.Account, origin, agentVersion string) error
 	// ConnectorUsed records a connector request to the claimed server
 	// serverID through the relay origin origin.
