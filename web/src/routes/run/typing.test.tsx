@@ -154,6 +154,16 @@ describe('useWakeOnTyping', () => {
     expect(api.runWake).toHaveBeenCalledWith(runID)
   })
 
+  it('wakes the session again on its next sleep, and not while it wakes', () => {
+    const view = render(<Wake record={asleep()} body="" />)
+    view.rerender(<Wake record={asleep()} body="h" />)
+    view.rerender(<Wake record={asleep({ waking: true })} body="he" />)
+    view.rerender(<Wake record={asleep({ asleep_since: '2026-11-11T10:00:00Z', waking: true })} body="hel" />)
+    expect(api.runWake).toHaveBeenCalledTimes(1)
+    view.rerender(<Wake record={asleep({ asleep_since: '2026-11-11T10:00:00Z' })} body="hell" />)
+    expect(api.runWake).toHaveBeenCalledTimes(2)
+  })
+
   it('leaves alone a saved draft, an awake or closed session, and one the member cannot steer', () => {
     render(<Wake record={asleep()} body="a draft from before" />)
     const awake = render(<Wake record={asleep({ asleep_since: undefined })} body="" />)

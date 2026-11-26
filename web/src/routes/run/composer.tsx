@@ -443,7 +443,8 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
   const queueHeld = useQueueHeld(focused)
 
   const maySteer = allowed('steer', self, { owner: run.member_id, protected: run.protected, steerOthers })
-  useWakeOnTyping(run, body, maySteer)
+  // A docked composer unmounts while a wake resubscribes the agent stream, which would take the field from under the member.
+  useWakeOnTyping(run, body, maySteer && !docked)
   const state = session?.state
   const stream = session?.stream
   const connecting = stream === 'live' || stream === 'refused' ? undefined : stream === 'reconnecting' || stream === 'offline' ? 'Reconnecting to the agent…' : 'Connecting to the agent…'

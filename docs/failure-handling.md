@@ -797,9 +797,8 @@ row unfolds what the sleep kept and what it stopped. A session VM saved to
 disk reads **Asleep since &lt;time&gt;** alone, because its processes are
 saved. While the session wakes, the row reads **Waking…**.
 
-The session wakes when you send a message or start typing one in the
-dashboard's composer, so it wakes while you write, change its model, mail
-reaches it, you type in its terminal, open a shell tab, use its Browser tab,
+The session wakes when you start typing a message in the Chat view's
+composer or send one, change its model, mail reaches it, you type in its terminal, open a shell tab, use its Browser tab,
 start `cloudfield ssh` or a port forward to it, run `cloudfield resume <session-id>`,
 or choose **Wake** in the Chat view. Opening the session or its Browser tab
 without acting does not wake it. A port forward wakes the session, but a server

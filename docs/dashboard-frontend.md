@@ -3097,6 +3097,11 @@ last signal, so a closed tab or lost connection stops showing. A restored draft
 signals nothing until it changes. Typing is held in memory only and feeds no
 count, chart or timeline.
 
+The first change to a draft in the Chat view's composer of a sleeping
+session also calls `run.wake`, once per sleep, so the wake runs while the
+member writes. The composer docked under Changes, Files and Trace does not:
+it unmounts while a wake resubscribes the agent stream.
+
 ### Session tiles
 
 The session page is the tile area (`components/tiles/`, `TileArea`). A **tile** is a pane showing one view of one session, and a
