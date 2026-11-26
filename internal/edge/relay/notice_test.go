@@ -3,6 +3,8 @@ package relay
 import (
 	"bytes"
 	"crypto/ed25519"
+	"io"
+	"net/http"
 	"slices"
 	"strings"
 	"testing"
@@ -72,5 +74,39 @@ func TestNoticesNameRelayOrigins(t *testing.T) {
 		if err == nil || !strings.Contains(err.Error(), "both must be relay origins of this edge") {
 			t.Errorf("New with the notice %+v = %v", n, err)
 		}
+	}
+}
+
+// TestRelayedAnswerCarriesTheEdgesNotice forwards a connector request to
+// a server that answers with its own Aether-Edge-Retiring: that value
+// never passes, and the answer carries the edge's when the relay origin
+// is retiring.
+func TestRelayedAnswerCarriesTheEdgesNotice(t *testing.T) {
+	e := newEnv(t)
+	a := claimedAgent(t, e)
+	serveData(t, a, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n"+edgeproto.HeaderRetiring+": https://evil.example.test\r\nContent-Length: 2\r\n\r\n{}")
+	get := func() []string {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, e.base+edgeproto.MCPPath(a.id), strings.NewReader("{}"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("answer %s", resp.Status)
+		}
+		return resp.Header.Values(edgeproto.HeaderRetiring)
+	}
+	if got := get(); got != nil {
+		t.Errorf("nothing retiring: the answer carries %s %q", edgeproto.HeaderRetiring, got)
+	}
+	e.r.notices = []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: "https://edge2.example.test", Date: "2027-03-01"}}
+	if got := get(); !slices.Equal(got, []string{"https://edge2.example.test; date=2027-03-01"}) {
+		t.Errorf("retiring: the answer carries %s %q, want the edge's value alone", edgeproto.HeaderRetiring, got)
 	}
 }

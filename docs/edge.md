@@ -1136,8 +1136,9 @@ While a pair is retiring:
   date=2027-03-01`, without the `; date=` part when no date is set, and `GET
   /v1/edge` carries `"retiring": "https://<relay-host-2>"` and
   `"retiring_date": "2027-03-01"`. A client uses the value only when it is a
-  canonical origin and a real date, and only shows it. Connector answers that
-  the relay passes on from a server do not carry the header.
+  canonical origin and a real date, and only shows it. A connector answer
+  the relay passes on from a server carries the edge's value, never the
+  server's.
 - Every edge page of the pair shows `This address of the edge is retiring on
   2027-03-01. Its new address is https://<signin-host-2>: sign in there.` on the
   sign-in host, the device pages included, and the replacement's relay origin
