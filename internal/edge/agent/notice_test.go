@@ -9,11 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -474,6 +476,41 @@ func TestSymlinkedPinStoresNoNotices(t *testing.T) {
 	}
 	if got, err := s.Notices(noticeServerID); err != nil || got.Notices != nil || noticesFileExists(t, s, key) {
 		t.Fatalf("notices stored under a symlinked pin: %+v, %v", got, err)
+	}
+}
+
+// TestFirstPinOverADanglingLink pins where edge_key.json is a symbolic
+// link to a missing file: the error says so and names the repair.
+func TestFirstPinOverADanglingLink(t *testing.T) {
+	s := OpenState(t.TempDir())
+	if err := s.mkdir(s.dir); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(t.TempDir(), "missing"), s.path(pinFile)); err != nil {
+		t.Fatal(err)
+	}
+	key, _, _ := ed25519.GenerateKey(rand.Reader)
+	_, _, err := s.pinFirst(key)
+	want := s.path(pinFile) + " exists but names no readable pin file"
+	if err == nil || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "edge trust") || strings.Contains(err.Error(), "edge key changed") {
+		t.Fatalf("pinFirst over a dangling link = %v", err)
+	}
+}
+
+// TestNoReplaceErrorNamesTheFiles renames onto a missing directory: the
+// error names both files and still matches the errno.
+func TestNoReplaceErrorNamesTheFiles(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the rename that replaces nothing is Linux's renameat2")
+	}
+	dir := t.TempDir()
+	old, dst := filepath.Join(dir, "a"), filepath.Join(dir, "missing", "b")
+	if err := os.WriteFile(old, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	err := renameNoReplace(old, dst)
+	if err == nil || !strings.Contains(err.Error(), old) || !strings.Contains(err.Error(), dst) || !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("renameNoReplace = %v", err)
 	}
 }
 

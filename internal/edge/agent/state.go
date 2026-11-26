@@ -330,6 +330,10 @@ func (s *State) publishPin(key ed25519.PublicKey) (pin, bool, error) {
 	if errors.Is(err, fs.ErrExist) {
 		_ = f.Close()
 		p, oerr := openPin(s.path(pinFile))
+		if oerr == nil && p.Key == nil {
+			oerr = fmt.Errorf("edgeagent: %s exists but names no readable pin file, as a symbolic link to a missing file does; "+
+				"pin the edge's key with `aether-server edge trust`", s.path(pinFile))
+		}
 		return p, false, oerr
 	}
 	if err != nil {
