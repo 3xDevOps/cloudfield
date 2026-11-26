@@ -1018,7 +1018,9 @@ control, or the caller in control from another tab or terminal, it acts;
 while another member holds control it answers `-32003` with
 `data: {"reason":"control_held","member_id":"..."}` and the controller's name
 in the message. An enhanced session is cancelled as by `run.acp.cancel`. A
-Standard Codex session takes `turn/interrupt` through its app-server. Any
+Standard Codex session takes `turn/interrupt` through its app-server; one that
+is paused answers `-32002`, and one whose app-server is not connected answers
+`-32004`. A sleeping session of either kind has no turn and answers `{}`. Any
 other Standard session answers `-32002`: its agent stops only on its own key,
 so the message names `cloudfield attach <session-id>` and no key is typed into
 the terminal. A connector is refused it (`-32001`), and the gateway does not

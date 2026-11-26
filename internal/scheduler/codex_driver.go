@@ -30,7 +30,7 @@ const (
 
 var (
 	errAppServerPaused      = errors.New("the container is paused")
-	errAppServerUnavailable = errors.New("scheduler: the session's Codex app-server is not connected")
+	ErrAppServerUnavailable = errors.New("scheduler: the session's Codex app-server is not connected")
 )
 
 // appServerDriver hosts a Standard Codex run. The primary PTY runs Codex's
@@ -115,7 +115,7 @@ func (d *appServerDriver) Deliver(ctx context.Context, run *domain.Run, member *
 func (d *appServerDriver) wake(ctx context.Context, run domain.RunID, prompt string) error {
 	client := d.connected(run)
 	if client == nil {
-		return errAppServerUnavailable
+		return ErrAppServerUnavailable
 	}
 	d.serverTurn(run, true)
 	err := client.Send(ctx, prompt)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -219,8 +220,18 @@ func TestInterruptStopsTheRunningTurn(t *testing.T) {
 	}
 }
 
-// The app-server never answers an interrupt that reaches a turn after it
-// ended, which is the turn stopped all the same.
+func TestInterruptThatCannotFindTheRunningTurnShowsTheAppServersError(t *testing.T) {
+	srv := codexmock.New()
+	c, changes := dial(t, srv, "")
+	srv.StartThread("main", false, "")
+	srv.SetStatus("main", "active")
+	next(t, changes)
+	err := c.Interrupt(t.Context())
+	if err == nil || !strings.Contains(err.Error(), "thread main is not materialized yet") {
+		t.Fatalf("Interrupt of a working thread whose turns cannot be listed = %v, want the app-server's error", err)
+	}
+}
+
 func TestInterruptOfATurnThatEndedFirstIsNotAFailure(t *testing.T) {
 	srv := codexmock.New()
 	c, changes := dial(t, srv, "")

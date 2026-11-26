@@ -313,10 +313,11 @@ task they gave you already answers it.
 
 `cloudfield interrupt` stops the agent's current turn and leaves the session
 open; `cloudfield message` then starts the next one. It works on an Enhanced
-session and on a Standard Codex session. Any other Standard agent stops only
-on its own key, so the command fails and names `cloudfield attach <session-id>`:
-**Human:** press the key there. While another member controls the session it
-fails with their name.
+session and on a Standard Codex session that is not paused; with no turn
+running there, as in a sleeping session, it does nothing and exits 0. Any
+other Standard agent stops only on its own key, so the command fails and names
+`cloudfield attach <session-id>`: **Human:** press the key there. While another
+member controls the session it fails with their name.
 
 ## Bring results back and publish
 

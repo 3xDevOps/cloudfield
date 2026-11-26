@@ -191,17 +191,31 @@ func (s *Scheduler) ACPCancel(ctx context.Context, run domain.RunID) error {
 var ErrNoInterrupt = errors.New("scheduler: the session's agent takes an interrupt only in its own terminal")
 
 // Interrupt stops the turn run's agent is in: an Enhanced session's over
-// ACP, a Standard Codex terminal's through its app-server.
+// ACP, a Standard Codex terminal's through its app-server. A sleeping
+// session has no turn to stop.
 func (s *Scheduler) Interrupt(ctx context.Context, run *domain.Run) error {
 	if run.ACP {
 		return s.ACPCancel(ctx, run.ID)
 	}
-	if s.attachedAppServer(run.ID) {
-		if client := s.appServer.connected(run.ID); client != nil {
-			return client.Interrupt(ctx)
-		}
+	s.mu.Lock()
+	entry := s.runs[run.ID]
+	appServer := entry != nil && entry.appServer
+	asleep := appServer && (entry.sleeping || !entry.asleepSince.IsZero())
+	paused := appServer && entry.paused
+	s.mu.Unlock()
+	switch {
+	case !appServer:
+		return fmt.Errorf("%w: run cloudfield attach %s and press the agent's own interrupt key", ErrNoInterrupt, run.ID)
+	case asleep:
+		return nil
+	case paused:
+		return fmt.Errorf("%w: the session is paused: run cloudfield resume %s first", ErrInvalidTransition, run.ID)
 	}
-	return fmt.Errorf("%w: run cloudfield attach %s and press the agent's own interrupt key", ErrNoInterrupt, run.ID)
+	client := s.appServer.connected(run.ID)
+	if client == nil {
+		return ErrAppServerUnavailable
+	}
+	return client.Interrupt(ctx)
 }
 
 func (s *Scheduler) ACPSetOption(ctx context.Context, run domain.RunID, optionID string, value any) error {

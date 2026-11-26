@@ -61,4 +61,8 @@ func TestRunInterruptNeedsNoLeaseAndYieldsToAnotherMembersControl(t *testing.T) 
 	if perr := interrupt(e.member.ID, e.run.ID); perr == nil || perr.Code != protocol.CodeInvalidState {
 		t.Fatalf("interrupt of an agent that takes none = %+v, want CodeInvalidState", perr)
 	}
+	e.runs.setErr(scheduler.ErrAppServerUnavailable)
+	if perr := interrupt(e.member.ID, e.run.ID); perr == nil || perr.Code != protocol.CodeUnavailable {
+		t.Fatalf("interrupt of a Codex session with no app-server client = %+v, want CodeUnavailable", perr)
+	}
 }

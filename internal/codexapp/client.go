@@ -176,7 +176,7 @@ func (c *Client) Send(ctx context.Context, text string) error {
 	if thread == "" {
 		return errors.New("codex app-server: the terminal has not opened a thread yet")
 	}
-	turn := c.runningTurn(ctx, thread)
+	turn, _ := c.runningTurn(ctx, thread)
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -201,16 +201,19 @@ func (c *Client) Send(ctx context.Context, text string) error {
 // Interrupt stops the running turn of the terminal's thread, and does
 // nothing when none runs.
 func (c *Client) Interrupt(ctx context.Context) error {
-	thread := c.Thread()
-	turn := c.runningTurn(ctx, thread)
-	if turn == "" {
-		return ctx.Err()
-	}
-	// The app-server answers once the turn stops, and never when the turn
-	// ended before the interrupt reached it.
+	// A frozen app-server answers nothing, and a running one never answers
+	// an interrupt that reaches its turn after the turn ended.
 	ctx, cancel := context.WithTimeout(ctx, sendTimeout)
 	defer cancel()
-	_, err := acp.SendRequest[json.RawMessage](c.conn, ctx, "turn/interrupt", map[string]any{"threadId": thread, "turnId": turn})
+	thread := c.Thread()
+	turn, err := c.runningTurn(ctx, thread)
+	if turn == "" {
+		if err != nil && (c.Busy() || ctx.Err() != nil) {
+			return fmt.Errorf("codex app-server: find the turn to interrupt: %w", err)
+		}
+		return nil
+	}
+	_, err = acp.SendRequest[json.RawMessage](c.conn, ctx, "turn/interrupt", map[string]any{"threadId": thread, "turnId": turn})
 	if err != nil && c.Busy() {
 		return fmt.Errorf("codex app-server: interrupt the turn: %w", err)
 	}
@@ -219,7 +222,7 @@ func (c *Client) Interrupt(ctx context.Context) error {
 
 // runningTurn is empty when the thread has no turn in progress, or none yet:
 // the app-server lists no turns before the first message.
-func (c *Client) runningTurn(ctx context.Context, thread string) string {
+func (c *Client) runningTurn(ctx context.Context, thread string) (string, error) {
 	turns, err := acp.SendRequest[struct {
 		Data []struct {
 			ID     string `json:"id"`
@@ -227,9 +230,9 @@ func (c *Client) runningTurn(ctx context.Context, thread string) string {
 		} `json:"data"`
 	}](c.conn, ctx, "thread/turns/list", map[string]any{"threadId": thread, "limit": 1, "itemsView": "notLoaded"})
 	if err != nil || len(turns.Data) == 0 || turns.Data[0].Status != "inProgress" {
-		return ""
+		return "", err
 	}
-	return turns.Data[0].ID
+	return turns.Data[0].ID, nil
 }
 
 func (c *Client) read(ctx context.Context, id string) (thread, error) {

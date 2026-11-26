@@ -340,6 +340,29 @@ func TestInterruptStopsAStandardCodexTurnAndTypesNoKeyElsewhere(t *testing.T) {
 	}
 }
 
+func TestInterruptOfAStandardCodexSessionItCannotReachGivesTheRealReason(t *testing.T) {
+	t.Parallel()
+	e, rt, _ := newCodexEnv(t)
+	rt.startErr = errors.New("no such container")
+	run, _ := e.launchOn(t, "codex")
+	e.waitStoreStatus(t, run.ID, domain.RunNeedsAttention)
+	if err := e.sched.Interrupt(t.Context(), run); !errors.Is(err, ErrAppServerUnavailable) {
+		t.Fatalf("Interrupt with no app-server client = %v, want ErrAppServerUnavailable", err)
+	}
+	if err := e.sched.Pause(t.Context(), run.ID, e.member.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.sched.Interrupt(t.Context(), run); !errors.Is(err, ErrInvalidTransition) || !strings.Contains(err.Error(), "the session is paused") {
+		t.Fatalf("Interrupt of a paused session = %v, want it refused as paused", err)
+	}
+	e.sched.mu.Lock()
+	e.sched.runs[run.ID].asleepSince = time.Now().UTC()
+	e.sched.mu.Unlock()
+	if err := e.sched.Interrupt(t.Context(), run); err != nil {
+		t.Fatalf("Interrupt of a sleeping session = %v, want no turn to stop", err)
+	}
+}
+
 func promptTexts(t *testing.T, params []json.RawMessage) []string {
 	t.Helper()
 	var out []string
