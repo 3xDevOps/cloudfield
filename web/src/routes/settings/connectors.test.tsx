@@ -527,8 +527,10 @@ it('moves a connector at a retiring address to the new one, skipping one added a
       .mockResolvedValue({ connectors: [old, again, added], ...movedEdge }),
   })
   const callout = (await screen.findByText('This address is retiring on 2027-03-01')).closest('[data-slot=callout]')
-  expect(callout?.textContent).toContain(`Add it again at ${newUniversal}, check it works, remove the old connector in Claude, then revoke this one. Move revokes it for you once the new one calls Cloudfield.`)
+  expect(callout?.textContent).toContain('Add it again at this URL, then remove the old connector in Claude. Move revokes this one once the new one calls Cloudfield.')
+  expect(within(callout as HTMLElement).getByText(newUniversal)).toBeTruthy()
   expect(screen.getByText('Universal URL')).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Reconnect Claude (claude.ai)' })).toBeNull()
   expect(screen.queryByRole('button', { name: 'Move Claude (claude.ai) to the universal URL' })).toBeNull()
   fireEvent.click(screen.getByRole('button', { name: 'Move Claude (claude.ai) to the new address' }))
   const dialog = await screen.findByRole('alertdialog')
@@ -546,7 +548,7 @@ it('moves a connector at a retiring address to the new one, skipping one added a
   expect(client.connectorCode).not.toHaveBeenCalled()
 })
 
-it('reconnects a connector at a retiring own URL at the same path on the new address, with a code', async () => {
+it('moves a connector at a retiring own URL to the same path on the new address, with a code', async () => {
   vi.useFakeTimers({ shouldAdvanceTime: true, now: Date.parse('2026-11-26T12:00:00Z') })
   const old: Connector = { ...chatgpt, resource: 'https://relay-old.example.test/mcp/srv', notice: { state: 'retiring', url: newOwn } }
   const client = show({
@@ -554,9 +556,11 @@ it('reconnects a connector at a retiring own URL at the same path on the new add
     connectorCode: vi.fn(async () => ({ url: newOwn, code: 'ABCD-EFGH', expires_at: '2026-11-26T12:10:00Z' })),
   })
   const callout = (await screen.findByText('This address is retiring')).closest('[data-slot=callout]')
-  expect(callout?.textContent).toContain(`Add it again at ${newOwn}, check it works`)
-  fireEvent.click(screen.getByRole('button', { name: 'Reconnect ChatGPT (chatgpt.com)' }))
-  fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Reconnect' }))
+  expect(within(callout as HTMLElement).getByText(newOwn)).toBeTruthy()
+  fireEvent.click(screen.getByRole('button', { name: 'Move ChatGPT (chatgpt.com) to the new address' }))
+  const dialog = await screen.findByRole('alertdialog')
+  expect(dialog.textContent).toContain(`Add Aether again in ChatGPT with ${newOwn} and paste the code.`)
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Move' }))
   expect(await screen.findByText('ABCD-EFGH')).toBeTruthy()
   const panel = screen.getByRole('tabpanel', { name: 'ChatGPT' })
   expect(within(panel).getByText(newOwn)).toBeTruthy()
@@ -567,7 +571,9 @@ it('tells the member to revoke a connector at a retired address, with no move', 
   const old: Connector = { ...claude, resource: oldUniversal, notice: { state: 'retired', url: newUniversal } }
   show({ connectorList: vi.fn().mockResolvedValue({ connectors: [old], ...movedEdge, universal_urls: [newUniversal] }) })
   const callout = (await screen.findByText('This address is retired')).closest('[data-slot=callout]')
-  expect(callout?.textContent).toContain('This connector no longer works. Revoke it, and remove the old connector in Claude.')
+  expect(callout?.textContent).toContain('This connector no longer works. Add it again at this URL, then revoke this one and remove the old connector in Claude.')
+  expect(within(callout as HTMLElement).getByText(newUniversal)).toBeTruthy()
   expect(screen.queryByRole('button', { name: /^Move Claude/ })).toBeNull()
+  expect(screen.getByRole('button', { name: 'Reconnect Claude (claude.ai)' })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Revoke Claude (claude.ai)' })).toBeTruthy()
 })

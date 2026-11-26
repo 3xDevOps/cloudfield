@@ -542,7 +542,7 @@ function Connectors({ client }: { client: Api }) {
             )}
             control={(
               <>
-                <Button size="sm" variant="ghost" aria-label={`Reconnect ${label(c)}`} disabled={busy || target !== null} onClick={() => setConfirming({ connector: c, action: 'reconnect' })}>Reconnect</Button>
+                {c.notice?.state !== 'retiring' && <Button size="sm" variant="ghost" aria-label={`Reconnect ${label(c)}`} disabled={busy || target !== null} onClick={() => setConfirming({ connector: c, action: 'reconnect' })}>Reconnect</Button>}
                 <Button size="sm" variant="ghost" aria-label={`Revoke ${label(c)}`} disabled={busy} onClick={() => setConfirming({ connector: c, action: 'revoke' })}>Revoke</Button>
               </>
             )}
@@ -554,12 +554,18 @@ function Connectors({ client }: { client: Api }) {
                 title={`This address is retiring${c.notice.date ? ` on ${c.notice.date}` : ''}`}
                 actions={<Button size="sm" variant="secondary" aria-label={`Move ${label(c)} to the new address`} disabled={busy || target !== null} onClick={() => setConfirming({ connector: c, action: 'move' })}>Move to the new address</Button>}
               >
-                Add it again at <Code>{c.notice.url}</Code>, check it works, remove the old connector in {c.client_name}, then revoke this one. Move revokes it for you once the new one calls Cloudfield.
+                <div className="flex min-w-0 flex-col gap-1.5">
+                  <p>Add it again at this URL, then remove the old connector in {c.client_name}. Move revokes this one once the new one calls Cloudfield.</p>
+                  <CopyableCommand command={c.notice.url} />
+                </div>
               </Callout>
             )}
             {c.notice?.state === 'retired' && (
               <Callout tone="failed" title="This address is retired">
-                This connector no longer works. Revoke it, and remove the old connector in {c.client_name}.
+                <div className="flex min-w-0 flex-col gap-1.5">
+                  <p>This connector no longer works. Add it again at this URL, then revoke this one and remove the old connector in {c.client_name}.</p>
+                  <CopyableCommand command={c.notice.url} />
+                </div>
               </Callout>
             )}
           </SettingRow>
@@ -568,7 +574,7 @@ function Connectors({ client }: { client: Api }) {
       {confirming?.action === 'move' && (
         <Confirm
           title={`Move ${label(confirming.connector)} to ${confirming.connector.notice ? 'the new address' : 'the universal URL'}?`}
-          description={`Add Aether again in ${confirming.connector.client_name} with ${moveTo(info, confirming.connector, 'move')}${signsInAt(info, moveTo(info, confirming.connector, 'move')) ? ' and sign in' : ' and paste the code'}. Once the new connection calls Cloudfield, this connector is revoked; remove the old Aether connector in ${confirming.connector.client_name} too.`}
+          description={<>Add Aether again in {confirming.connector.client_name} with <Code>{moveTo(info, confirming.connector, 'move')}</Code>{signsInAt(info, moveTo(info, confirming.connector, 'move')) ? ' and sign in' : ' and paste the code'}. Once the new connection calls Cloudfield, this connector is revoked; remove the old Aether connector in {confirming.connector.client_name} too.</>}
           action="Move"
           pending="Starting…"
           onConfirm={async () => {
