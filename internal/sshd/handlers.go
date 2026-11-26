@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -284,9 +285,13 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 
 func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protocol.RunLaunchParams, mode domain.LaunchMode, policy domain.AccountFallback,
 	created func(domain.RunID), skipped *[]protocol.SkippedAccount) (*domain.Run, *protocol.Error) {
-	login, perr := s.launchLogin(ctx, member, domain.MemberID(p.AccountMemberID), p.Harness, p.Login, mode)
+	login, perr := s.launchLogin(ctx, domain.WorkspaceID(p.WorkspaceID), member, domain.MemberID(p.AccountMemberID), p.Harness, p.Login, mode)
 	if perr != nil {
 		return nil, perr
+	}
+	byEnv, err := s.cfg.Runs.EnvironmentSignsIn(ctx, domain.WorkspaceID(p.WorkspaceID), p.Harness, mode)
+	if err != nil {
+		return nil, rpcError(err)
 	}
 	measured, err := fallback.Measure(ctx, s.cfg.Store, s.cfg.Services.Usage, member, domain.Account{Member: domain.MemberID(p.AccountMemberID), Login: login}, p.Harness, policy)
 	if err != nil {
@@ -310,6 +315,9 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 		}
 	}
 	chosen, excluded := fallback.Select(ctx, s.cfg.Store, measured, member, domain.Account{Member: requested, Login: login}, p.Harness, workspaces, policy, func(ctx context.Context, account domain.Account) (bool, error) {
+		if byEnv && account.Login.Added() {
+			return false, nil
+		}
 		return s.cfg.Runs.FallbackLaunchable(ctx, member, requested, account, p.Harness, mode)
 	})
 	account := chosen.Member
@@ -699,8 +707,16 @@ func (s *Server) runRelaunch(ctx context.Context, member domain.MemberID, params
 			}
 		}
 	}
-	if err = fallback.ResolveRunLogin(ctx, s.cfg.Store, member, run, workspaces); err != nil {
-		return nil, rpcError(err)
+	// The member who reopens it must reach its login, and on an added login
+	// so must the session's owner and the member whose home it mounts.
+	reach := []domain.MemberID{member}
+	if run.AccountLogin.Added() {
+		reach = slices.Compact([]domain.MemberID{member, run.MemberID, run.HomeMember()})
+	}
+	for _, who := range reach {
+		if err = fallback.ResolveRunLogin(ctx, s.cfg.Store, who, run, workspaces); err != nil {
+			return nil, rpcError(err)
+		}
 	}
 	reopened, err := s.cfg.Runs.Relaunch(ctx, id, member)
 	if err != nil {

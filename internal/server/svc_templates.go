@@ -40,5 +40,14 @@ func (g guardedRuns) LaunchWithOptions(ctx context.Context, workspace domain.Wor
 	if !ok {
 		return nil, errors.New("templates: the session controller cannot launch with options")
 	}
+	// A template names no login: like any launch that names none, it
+	// starts from the account's first eligible login.
+	if opts.AccountLogin == "" {
+		login, err := g.ssh.Runs.StartLogin(ctx, workspace, member, account, harness, mode)
+		if err != nil {
+			return nil, err
+		}
+		opts.AccountLogin = login
+	}
 	return runs.LaunchWithOptions(ctx, workspace, member, account, task, harness, mode, opts)
 }

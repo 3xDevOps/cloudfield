@@ -911,7 +911,7 @@ func (s *Scheduler) replaceContainer(ctx context.Context, entry *supervised, f *
 		return failed(err)
 	}
 	next := *run
-	next.AccountMemberID = to.Member
+	next.AccountMemberID, next.AccountLogin = to.Member, to.Login
 	profile, _, err := s.launchProfile(ctx, home.ID, to.Member, run.Harness)
 	if err != nil {
 		return failed(err)

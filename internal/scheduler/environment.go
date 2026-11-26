@@ -929,6 +929,9 @@ func (s *Scheduler) FallbackLaunchable(ctx context.Context, member, requested do
 			return false, err
 		}
 	} else {
+		if shareErr := s.checkDefaultLoginShared(ctx, member, account, harnessName); shareErr != nil {
+			return false, nil
+		}
 		state, _, err := s.CheckSharedLaunch(ctx, member, account, harnessName)
 		if err != nil || state != SharedLaunchable || s.cfg.Homes == nil {
 			return err == nil && state == SharedLaunchable, err

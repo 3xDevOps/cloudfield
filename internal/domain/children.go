@@ -60,8 +60,10 @@ type ChildReservation struct {
 	WorkspaceID WorkspaceID
 	OwnerID     MemberID
 	AccountID   MemberID
-	// AccountLogin is the parent's added login of AccountID the child starts
-	// from, checked again at dispatch; empty for the first one eligible.
+	// AccountLogin is the parent's login of AccountID the child would
+	// inherit ("default" for its default login), checked again at
+	// dispatch; empty when the child named the account and starts from its
+	// first eligible login.
 	AccountLogin   LoginID
 	Harness        string
 	Mode           LaunchMode

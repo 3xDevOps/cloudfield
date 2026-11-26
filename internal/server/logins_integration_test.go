@@ -115,6 +115,16 @@ func TestIntegrationSpentFirstLoginLaunchesOnTheSecond(t *testing.T) {
 		t.Fatalf("the container does not mount login second's credentials as a subpath; mounts %+v", c.spec.Mounts)
 	}
 
+	// Before a share, Bo learns nothing about Ada's logins: the launch is
+	// refused for the share alone.
+	boCtrl0, boClient0 := srv.control(t, e.bo.key)
+	defer boClient0.Close()
+	if err := boCtrl0.Call(protocol.MethodRunLaunch, protocol.RunLaunchParams{
+		WorkspaceID: string(e.ws.ID), Task: "no share", Harness: "claude", Mode: string(domain.LaunchHeadless), AccountMemberID: string(e.ada.id),
+	}, &launched); err == nil || !strings.Contains(err.Error(), "has not shared their account with you") {
+		t.Fatalf("Bo's launch without a share: %v; want the share refusal", err)
+	}
+
 	// Only a login's owner names it: Bo, who holds a share, cannot.
 	if _, err := srv.srv.Store().ShareAccount(ctx, e.ada.id, e.bo.id); err != nil {
 		t.Fatal(err)
