@@ -287,8 +287,8 @@ func (i EdgeInfo) Validate() error {
 }
 
 // UnmarshalJSON decodes an EdgeInfo, leaving Retiring and RetiringDate
-// empty when either is present and not a string, null included: a notice an edge sends in a form
-// this build does not read never fails the rest.
+// empty when either is present and not a string, null included: a notice
+// an edge sends in a form this build does not read never fails the rest.
 func (i *EdgeInfo) UnmarshalJSON(data []byte) error {
 	type plain EdgeInfo
 	var v struct {

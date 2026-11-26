@@ -1089,10 +1089,10 @@ AETHER_EDGE_RETIRING_PAIRS=https://<relay-host-1> https://<relay-host-2> 2027-03
 
 Set it in the environment file, not as a flag: an older edge image ignores an
 unknown variable and refuses an unknown flag. A retiring pair keeps working in
-full. The date is text for people; the edge
-never acts on it. At start the edge logs `aether-edge: retiring relay=<relay
-origin> replacement=<relay origin> date=<date>` for each entry, and it refuses to
-start, naming the entry and the fix, when:
+full. The date is text for people; the edge never acts on it. At start the edge
+logs `aether-edge: retiring relay=<relay origin> replacement=<relay origin>
+date=<date>` for each entry, and it refuses to start, naming the entry and the
+fix, when:
 
 - it serves one pair only;
 - an entry does not have two or three fields, or an origin does not parse;
@@ -1132,12 +1132,17 @@ A missing or bad signature and a signed empty list both clear the stored
 notices: whoever answers for a relay host can suppress a warning until the next
 real connection, but cannot add a notice or change a replacement.
 Pinning a key, by the first connection or `edge trust`, deletes the
-`notices.json` of the key it replaces and of the key it pins, and a list
-verified under an earlier pin is never written after it. Stored notices name
-the server id that verified them and count for no other. A list that arrived with the `ready` that pinned the key is
-trusted as that pin is, and only shown. An edge or a server that does not know
-the fields ignores them, and a server that sends no nonce gets the `ready` it
-got before.
+`notices.json` of the key it replaces and of the key it pins, and writes the
+pin file `edge_key.json` with a new random `id` beside the key. That id is the
+one other local change with the option unset; an older binary ignores it. A
+list verified under a pin this build wrote is never written after that pin was
+replaced, and stored notices count only while the pin that stored them, by its
+id, is the current one, so a pin an older binary wrote again without an id
+shows none until the next connection. Stored notices also name the server id
+that verified them and count for no other. A list that arrived with the
+`ready` that pinned the key is trusted as that pin is, and only shown. An edge
+or a server that does not know the fields ignores them, and a server that sends
+no nonce gets the `ready` it got before.
 
 While a pair is retiring:
 
@@ -1145,10 +1150,10 @@ While a pair is retiring:
   handshakes included, carries `Aether-Edge-Retiring: https://<relay-host-2>;
   date=2027-03-01`, without the `; date=` part when no date is set, and `GET
   /v1/edge` carries `"retiring": "https://<relay-host-2>"` and
-  `"retiring_date": "2027-03-01"`. `/healthz` carries no header. A client uses the value only when it is a
-  canonical origin and a real date, and only shows it. A connector answer
-  the relay passes on from a server carries the edge's value, never the
-  server's.
+  `"retiring_date": "2027-03-01"`. `/healthz` carries no header. A client
+  uses the value only when it is a canonical origin and a real date, and only
+  shows it. A connector answer the relay passes on from a server carries the
+  edge's value, never the server's.
 - Every edge page of the pair shows `This address of the edge is retiring on
   2027-03-01. Its new address is https://<signin-host-2>: sign in there.` on the
   sign-in host, the device pages included, and the replacement's relay origin
