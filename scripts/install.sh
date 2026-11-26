@@ -846,12 +846,19 @@ open_app() {
 			return 1
 		fi
 	fi
-	# The app inherits these descriptors, so none of them is the terminal:
-	# closing it must not take the app down.
+	launch="$*"
+	# The app is the launcher's child. In a session of its own, with none of
+	# these descriptors on the terminal, it outlives the terminal; an
+	# installer that leads its session, as under `ssh -t`, would otherwise
+	# take it down on exit. setsid runs in place, as its caller is not a
+	# process group leader, so the launcher's exit status is the one seen.
+	if [ "$os" = linux ] && command -v setsid >/dev/null 2>&1; then
+		set -- setsid "$@"
+	fi
 	open_status=0
 	"$@" </dev/null >/dev/null 2>"$tmp/open.err" || open_status=$?
 	if [ "$open_status" -ne 0 ]; then
-		open_failure="\`$*\` exited ${open_status}: $(cat "$tmp/open.err")"
+		open_failure="\`${launch}\` exited ${open_status}: $(cat "$tmp/open.err")"
 		return 1
 	fi
 	app_opened=yes
