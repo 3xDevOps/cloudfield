@@ -6,6 +6,7 @@ import { Callout } from '@/components/ui/callout'
 import { Code } from '@/components/ui/code'
 import { type Api, ApiError } from '@/lib/api'
 import { message } from '@/lib/format'
+import { cn } from '@/lib/utils'
 import { edgeNotice } from '@/lib/needs-you'
 import type { EdgeAccount, EdgeLogin, ServerEdge } from '@/lib/types'
 import { SettingRow, SettingsSection, TryAgain } from '@/routes/settings/layout'
@@ -53,8 +54,14 @@ export function RemoteAccessSection({ client }: { client: Api }) {
   const notice = edgeNotice(edge)
   return (
     <SettingsSection title="Edge" id="edge">
+      {error && (
+        <Callout tone="failed" role="alert" title="Showing the last answer: reading the server's edge again failed"
+          className="whitespace-pre-wrap rounded-none rounded-t-[inherit] px-4 py-3" actions={<TryAgain onClick={retry} />}>
+          {error}
+        </Callout>
+      )}
       {notice && admin && (
-        <Callout tone={notice.notice.state === 'retired' ? 'failed' : 'needs-you'} role="status" title={notice.reason} className="rounded-none rounded-t-[inherit] px-4 py-3">
+        <Callout tone={notice.notice.state === 'retired' ? 'failed' : 'needs-you'} role="status" title={notice.reason} className={cn('rounded-none px-4 py-3', !error && 'rounded-t-[inherit]')}>
           <EdgeMoveSteps need={notice} />
         </Callout>
       )}
@@ -77,12 +84,6 @@ export function RemoteAccessSection({ client }: { client: Api }) {
           ))}
       </SettingRow>
       {edge.edge_url && <SettingRow label="Connection" help={connection(edge)} />}
-      {error && (
-        <Callout tone="failed" role="alert" title="Showing the last answer: reading remote access again failed" className="whitespace-pre-wrap rounded-none">
-          {error}
-          <TryAgain onClick={retry} />
-        </Callout>
-      )}
     </SettingsSection>
   )
 }

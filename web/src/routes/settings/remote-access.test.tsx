@@ -210,7 +210,7 @@ describe('a retiring or retired edge address', () => {
     const client = api({ serverEdge: vi.fn<Api['serverEdge']>().mockRejectedValueOnce(new Error('server.edge: connection reset')).mockResolvedValue(claimed) })
     render(<RemoteAccessSection client={client} />)
     const alert = await screen.findByRole('alert')
-    expect(within(alert).getByText('Showing the last answer: reading remote access again failed')).toBeTruthy()
+    expect(within(alert).getByText("Showing the last answer: reading the server's edge again failed")).toBeTruthy()
     expect(within(alert).getByText('server.edge: connection reset')).toBeTruthy()
     expect(screen.getByText(`${edgeURL} is retiring`)).toBeTruthy()
     fireEvent.click(within(alert).getByRole('button', { name: 'Try again' }))
