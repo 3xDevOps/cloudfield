@@ -992,6 +992,7 @@ and names the problem, such as `no GitHub OAuth app is configured; set
 | `--dev-listen` | `AETHER_EDGE_DEV_LISTEN` | None. Plain HTTP on a loopback address for local testing |
 | none | `AETHER_EDGE_GITHUB_CLIENT_SECRET` | None. The secret itself, instead of a file; setting both is refused |
 | `--origin-pairs` | `AETHER_EDGE_ORIGIN_PAIRS` | None. More origin pairs, each with its own GitHub OAuth app ([More than one address pair](#more-than-one-address-pair)) |
+| `--retiring-pairs` | `AETHER_EDGE_RETIRING_PAIRS` | None. Pairs that are retiring, each with its replacement and an optional date ([Retiring an address pair](#retiring-an-address-pair)) |
 
 ### More than one address pair
 
@@ -1073,6 +1074,65 @@ holding a control channel by the relay origin they enrolled at),
 and `aether_edge_connector_requests_total{origin,protocol}` (connector requests
 by the relay origin they came in on and the protocol version of the server they
 were for, `0` when it was not connected).
+
+### Retiring an address pair
+
+Before an edge stops serving one of its pairs, mark the pair retiring so that
+whoever still uses it is told where to go. `--retiring-pairs`
+(`AETHER_EDGE_RETIRING_PAIRS`) lists the retiring pairs, comma-separated, each
+as its relay origin, the relay origin of the pair that replaces it, and an
+optional date:
+
+```sh
+AETHER_EDGE_RETIRING_PAIRS=https://<relay-host-1> https://<relay-host-2> 2027-03-01
+```
+
+A retiring pair keeps working in full. The date is text for people; the edge
+never acts on it. At start the edge logs `aether-edge: retiring relay=<relay
+origin> replacement=<relay origin> date=<date>` for each entry, and it refuses to
+start, naming the entry and the fix, when:
+
+- it serves one pair only;
+- an entry does not have two or three fields, or an origin does not parse;
+- an origin is not a relay origin of a served pair; a sign-in origin is refused
+  with the relay origin of its pair;
+- the replacement is the entry's own pair, or is itself retiring;
+- a relay origin is named twice;
+- the date is not a real date written `YYYY-MM-DD`.
+
+Origins are compared in canonical form: case and a default `:443` do not
+matter. Remove the entry and restart the edge to undo it. An older edge image
+ignores the option and loses only the notices below.
+
+While a pair is retiring:
+
+- Every `ready` to every server, at any pair, carries a notice for each
+  retiring relay origin. A server that does not know the field ignores it.
+
+  ```json
+  "notices": [{"state": "retiring", "origin": "https://<relay-host-1>", "replacement": "https://<relay-host-2>", "date": "2027-03-01", "signature": "<base64>"}]
+  ```
+
+  The edge key signs each entry over `aether-edge-notice-v1`, the server id,
+  the handshake nonce, the state, both origins and the date, so a notice is
+  good for one server and one connection. The server keeps only the entries
+  that verify against the edge key it pinned, stores them beside the owner in
+  `<data dir>/edge/keys/sha256-<fingerprint>/notices.json`, and removes the
+  file when the edge stops sending them. An entry it cannot read is dropped and
+  never refuses the `ready`.
+- Every answer on both host names of the pair, API answers and WebSocket
+  handshakes included, carries `Aether-Edge-Retiring: https://<relay-host-2>;
+  date=2027-03-01`, without the `; date=` part when no date is set, and `GET
+  /v1/edge` carries `"retiring": "https://<relay-host-2>"` and
+  `"retiring_date": "2027-03-01"`. A client uses the value only when it is a
+  canonical origin and a real date, and only shows it. Connector answers that
+  the relay passes on from a server do not carry the header.
+- Every edge page of the pair shows `This address of the edge is retiring on
+  2027-03-01. Its new address is https://<signin-host-2>: sign in there.` on the
+  sign-in host, the device pages included, and the replacement's relay origin
+  on the join page. The address is text, not a link, and no request is
+  redirected: sign-in, token and join paths carry codes and tokens that must
+  not reach another origin.
 
 ### Firewall
 
