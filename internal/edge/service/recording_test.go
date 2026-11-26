@@ -155,6 +155,12 @@ func TestEnrollmentRecordsOrigin(t *testing.T) {
 	if got := h.column(t, `SELECT relay_origin FROM connector_use WHERE server_id = ?`, id); got != testRelay2 {
 		t.Errorf("connector use records %q", got)
 	}
+	if err := h.svc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.column(t, `SELECT stopped_at = ? FROM origin_recording`, h.clock.Now().UnixNano()); got != "1" {
+		t.Errorf("a recording edge's close did not record when it stopped")
+	}
 }
 
 // TestOriginsNotRecordedByDefault runs every writer on a two-pair edge
@@ -178,6 +184,10 @@ func TestOriginsNotRecordedByDefault(t *testing.T) {
 		t.Fatalf("device token: %d %s", status, msg)
 	}
 	h.apiCallOn(t, testSignin2, http.MethodGet, edgeproto.PathServers, tok.Token, nil, nil)
+	if status, msg := h.apiCallOn(t, testSignin2, http.MethodPost, edgeproto.PathDeviceStart, "",
+		edgeproto.DeviceStartRequest{Key: newDeviceKey(t), Label: "phone"}, &start); status != http.StatusOK {
+		t.Fatalf("second device start: %d %s", status, msg)
+	}
 	b.get(t, "/servers")
 	relay := relayDirectory{h.svc}
 	ctx := context.WithValue(context.Background(), pairKey{}, h.svc.byHost[edgeproto.OriginHost(testRelay2)])
@@ -194,6 +204,8 @@ func TestOriginsNotRecordedByDefault(t *testing.T) {
 	}
 	for _, q := range []string{
 		`SELECT COUNT(*) FROM origin_pairs`,
+		`SELECT COUNT(*) FROM origin_recording`,
+		`SELECT COUNT(*) FROM device_authorizations WHERE signin_origin IS NOT NULL`,
 		`SELECT COUNT(*) FROM connector_use`,
 		`SELECT COUNT(*) FROM servers WHERE relay_origin IS NOT NULL OR agent_version IS NOT NULL OR enrolled_at IS NOT NULL`,
 		`SELECT COUNT(*) FROM devices WHERE signin_origin IS NOT NULL OR signin_origin_seen IS NOT NULL`,
@@ -203,8 +215,14 @@ func TestOriginsNotRecordedByDefault(t *testing.T) {
 			t.Errorf("%s = %s without RecordOrigins, want 0", q, got)
 		}
 	}
-	if got := h.column(t, `SELECT COUNT(*) FROM devices`); got != "1" {
-		t.Fatalf("devices: %s, want the one signed in", got)
+	if got := h.column(t, `SELECT COUNT(*) FROM devices`) + " " + h.column(t, `SELECT COUNT(*) FROM device_authorizations`); got != "1 1" {
+		t.Fatalf("devices and pending sign-ins: %s, want the one signed in and the one pending", got)
+	}
+	if err := h.svc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.column(t, `SELECT COUNT(*) FROM origin_recording`); got != "0" {
+		t.Fatalf("closing an edge that does not record wrote %s recording rows", got)
 	}
 }
 

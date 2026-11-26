@@ -301,8 +301,15 @@ func New(cfg Config) (*Service, error) {
 // a request.
 func (s *Service) SetLink(l ServerLink) { s.link = l }
 
-// Close closes the store.
-func (s *Service) Close() error { return s.store.Close() }
+// Close records the end of origin recording, when the edge records
+// origins, and closes the store.
+func (s *Service) Close() error {
+	var err error
+	if s.recordOrigins {
+		err = s.store.StopRecording(context.Background(), s.now())
+	}
+	return errors.Join(err, s.store.Close())
+}
 
 // Ping checks that the edge database answers a read.
 func (s *Service) Ping(ctx context.Context) error { return s.store.Ping(ctx) }

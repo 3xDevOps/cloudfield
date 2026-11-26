@@ -111,8 +111,7 @@ func (s *Store) CreateSession(ctx context.Context, id, tokenHash string, account
 func (s *Store) UseSession(ctx context.Context, tokenHash, signin string, now, expires time.Time) (Session, error) {
 	var sess Session
 	var created int64
-	err := s.db.QueryRowContext(ctx, `UPDATE web_sessions SET expires_at = ?, `+seenAt+`
-		WHERE token_hash = ? AND expires_at > ? AND `+notBlocked("web_sessions.account_id")+` RETURNING id, account_id, created_at`,
+	err := s.db.QueryRowContext(ctx, useSessionQuery,
 		unix(expires), signin, signin, tokenHash, unix(now)).Scan(&sess.ID, &sess.AccountID, &created)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Session{}, ErrNotFound
@@ -128,6 +127,10 @@ func (s *Store) UseSession(ctx context.Context, tokenHash, signin string, now, e
 	}
 	return sess, nil
 }
+
+// useSessionQuery runs on every signed-in page.
+var useSessionQuery = `UPDATE web_sessions SET expires_at = ?, ` + seenAt + `
+	WHERE token_hash = ? AND expires_at > ? AND ` + notBlocked("web_sessions.account_id") + ` RETURNING id, account_id, created_at`
 
 // DeleteSession signs a session out.
 func (s *Store) DeleteSession(ctx context.Context, id string) error {

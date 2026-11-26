@@ -212,8 +212,7 @@ func scanDevice(row interface{ Scan(...any) error }) (Device, error) {
 // with no sign-in origin is recorded as seen at signin, unless signin is
 // "".
 func (s *Store) UseDevice(ctx context.Context, tokenHash, signin string, now time.Time) (Device, error) {
-	err := oneRow(s.db.ExecContext(ctx, `UPDATE devices SET last_used_at = ?, `+seenAt+`
-		WHERE token_hash = ? AND `+notBlocked("devices.account_id"), unix(now), signin, signin, tokenHash))
+	err := oneRow(s.db.ExecContext(ctx, useDeviceQuery, unix(now), signin, signin, tokenHash))
 	if errors.Is(err, ErrNotFound) {
 		return Device{}, err
 	}
@@ -230,6 +229,11 @@ func (s *Store) UseDevice(ctx context.Context, tokenHash, signin string, now tim
 	}
 	return d, nil
 }
+
+// useDeviceQuery runs on every request and connection a device token
+// makes.
+var useDeviceQuery = `UPDATE devices SET last_used_at = ?, ` + seenAt + `
+	WHERE token_hash = ? AND ` + notBlocked("devices.account_id")
 
 // Devices lists an account's devices, newest first.
 func (s *Store) Devices(ctx context.Context, accountID int64) ([]Device, error) {

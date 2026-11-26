@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -369,14 +370,7 @@ func TestOriginRowsGoWithTheirParent(t *testing.T) {
 // record origins on every device, session, enrollment and connector use.
 func TestOriginWritesUseIndexes(t *testing.T) {
 	s := openStore(t)
-	for _, q := range []string{
-		`UPDATE devices SET last_used_at = ?, ` + seenAt + ` WHERE token_hash = ? AND ` + notBlocked("devices.account_id"),
-		`UPDATE web_sessions SET expires_at = ?, ` + seenAt + ` WHERE token_hash = ? AND expires_at > ? AND ` + notBlocked("web_sessions.account_id"),
-		`UPDATE servers SET name = ?, access_policy = ?,
-			relay_origin = COALESCE(?, relay_origin), agent_version = COALESCE(?, agent_version), enrolled_at = COALESCE(?, enrolled_at) WHERE id = ?`,
-		`INSERT INTO connector_use (server_id, relay_origin, last_used_at) SELECT id, ?, ? FROM servers WHERE id = ?
-			ON CONFLICT (server_id, relay_origin) DO UPDATE SET last_used_at = excluded.last_used_at`,
-	} {
+	for _, q := range []string{useDeviceQuery, useSessionQuery, enrollQuery, useConnectorQuery} {
 		args := make([]any, strings.Count(q, "?"))
 		rows, err := s.db.Query(`EXPLAIN QUERY PLAN `+q, args...)
 		if err != nil {
@@ -419,6 +413,9 @@ func TestRetiringReport(t *testing.T) {
 	if err != nil || len(got.Origins) != 1 || got.Origins[0].RelayOrigin != testRelay || got.Origins[0].SigninOrigin != testSignin ||
 		got.Origins[0].Servers == nil || len(got.Origins[0].Servers) != 0 || got.Origins[0].DeviceTokens != (Counts{}) {
 		t.Fatalf("report of one pair with nobody on it = %+v, %v", got, err)
+	}
+	if err = s.StopRecording(ctx, testNow.Add(-5*time.Minute)); err != nil {
+		t.Fatal(err)
 	}
 	if err = s.RecordPairs(ctx, map[string]string{testRelay: testSignin, testRelay2: testSignin2}, testNow); err != nil {
 		t.Fatal(err)
@@ -502,17 +499,21 @@ func TestRetiringReport(t *testing.T) {
 	}
 	want := []OriginReport{{
 		RelayOrigin: testRelay, SigninOrigin: testSignin,
-		Servers:            []SeenServer{{ID: serverB, Name: "beta", AgentVersion: "v1.0.0", LastSeenAt: testNow}},
-		DeviceTokens:       Counts{Day: 1, Week: 1, Month: 2, Total: 3},
-		DeviceTokensSeen:   Counts{Day: 0, Week: 1, Month: 1, Total: 1},
-		SessionAccounts:    Counts{Day: 0, Week: 1, Month: 1, Total: 1},
-		DeviceOnlyAccounts: Counts{Day: 0, Week: 0, Month: 1, Total: 1},
-		ConnectorServers:   Counts{Day: 0, Week: 1, Month: 2, Total: 2},
+		Servers: []SeenServer{{ID: serverB, Name: "beta", AgentVersion: "v1.0.0", LastSeenAt: testNow}},
+		SigninCounts: SigninCounts{
+			DeviceTokens:       Counts{Day: 1, Week: 1, Month: 2, Total: 3},
+			DeviceTokensSeen:   Counts{Day: 0, Week: 1, Month: 1, Total: 1},
+			SessionAccounts:    Counts{Day: 0, Week: 1, Month: 1, Total: 1},
+			DeviceOnlyAccounts: Counts{Day: 0, Week: 0, Month: 1, Total: 1},
+		},
+		ConnectorServers: Counts{Day: 0, Week: 1, Month: 2, Total: 2},
 	}, {
 		RelayOrigin: testRelay2, SigninOrigin: testSignin2,
-		Servers:          []SeenServer{{ID: serverA, Name: "alpha", OwnerLogin: "Owner", AgentVersion: "v2.0.0", LastSeenAt: testNow}},
-		DeviceTokens:     Counts{Day: 1, Week: 1, Month: 1, Total: 1},
-		SessionAccounts:  Counts{Day: 1, Week: 1, Month: 1, Total: 1},
+		Servers: []SeenServer{{ID: serverA, Name: "alpha", OwnerLogin: "Owner", AgentVersion: "v2.0.0", LastSeenAt: testNow}},
+		SigninCounts: SigninCounts{
+			DeviceTokens:    Counts{Day: 1, Week: 1, Month: 1, Total: 1},
+			SessionAccounts: Counts{Day: 1, Week: 1, Month: 1, Total: 1},
+		},
 		ConnectorServers: Counts{Day: 1, Week: 1, Month: 1, Total: 1},
 	}}
 	if len(got.Origins) != len(want) {
@@ -520,8 +521,7 @@ func TestRetiringReport(t *testing.T) {
 	}
 	for i := range want {
 		if g, w := got.Origins[i], want[i]; !slices.Equal(g.Servers, w.Servers) || g.RelayOrigin != w.RelayOrigin || g.SigninOrigin != w.SigninOrigin ||
-			g.DeviceTokens != w.DeviceTokens || g.DeviceTokensSeen != w.DeviceTokensSeen || g.SessionAccounts != w.SessionAccounts ||
-			g.DeviceOnlyAccounts != w.DeviceOnlyAccounts || g.ConnectorServers != w.ConnectorServers {
+			g.SigninCountedUnder != "" || g.SigninCounts != w.SigninCounts || g.ConnectorServers != w.ConnectorServers {
 			t.Errorf("report = %+v\nwant     %+v", g, w)
 		}
 	}
@@ -568,5 +568,116 @@ func TestDeleteSignIns(t *testing.T) {
 	}
 	if got, err := s.DeleteSignIns(ctx, nil); err != nil || got != (SignIns{}) {
 		t.Fatalf("delete with no origins and nothing without one: %+v, %v", got, err)
+	}
+}
+
+// TestRecordingPeriod keeps one recording period across a clean restart
+// and starts a new one after a longer gap or an unclean stop.
+func TestRecordingPeriod(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	pairs := map[string]string{testRelay: testSignin}
+	since := func() time.Time {
+		t.Helper()
+		rep, err := s.Retiring(ctx, testNow)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return rep.RecordingSince
+	}
+	start := testNow.Add(-48 * time.Hour)
+	for _, step := range []struct {
+		stop, start time.Time
+		want        time.Time
+	}{
+		{time.Time{}, start, start},
+		{start.Add(time.Hour), start.Add(time.Hour + 5*time.Minute), start},
+		{start.Add(2 * time.Hour), start.Add(3 * time.Hour), start.Add(3 * time.Hour)},
+		{time.Time{}, start.Add(4 * time.Hour), start.Add(4 * time.Hour)},
+	} {
+		if !step.stop.IsZero() {
+			if err := s.StopRecording(ctx, step.stop); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := s.RecordPairs(ctx, pairs, step.start); err != nil {
+			t.Fatal(err)
+		}
+		if got := since(); !got.Equal(step.want) {
+			t.Errorf("stopped %v, started %v: recording since %v, want %v", step.stop, step.start, got, step.want)
+		}
+	}
+}
+
+// TestReportAcrossRepairing pairs a relay origin with another sign-in
+// origin, and then a second relay origin with the same sign-in origin:
+// tokens of a sign-in origin no pair names are reported apart, and a
+// sign-in origin two pairs name is counted under the newer pair only.
+func TestReportAcrossRepairing(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	id, err := s.SignIn(ctx, owner(), testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.RecordPairs(ctx, map[string]string{testRelay: testSignin}, testNow.Add(-2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.db.Exec(`INSERT INTO devices (id, token_hash, account_id, public_key, label, created_at, last_used_at, signin_origin)
+		VALUES ('old', 'old-hash', ?, 'k', 'laptop', 0, ?, ?)`, id, unix(testNow), testSignin); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.RecordPairs(ctx, map[string]string{testRelay: testSignin2}, testNow.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := s.Retiring(ctx, testNow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	one := Counts{Day: 1, Week: 1, Month: 1, Total: 1}
+	if len(rep.Origins) != 1 || rep.Origins[0].SigninOrigin != testSignin2 || rep.Origins[0].DeviceTokens != (Counts{}) ||
+		len(rep.Unpaired) != 1 || rep.Unpaired[0].SigninOrigin != testSignin || rep.Unpaired[0].DeviceTokens != one {
+		t.Fatalf("after re-pairing %s with %s: %+v", testRelay, testSignin2, rep)
+	}
+
+	if err = s.RecordPairs(ctx, map[string]string{testRelay: testSignin2, testRelay2: testSignin}, testNow.Add(-30*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.RecordPairs(ctx, map[string]string{testRelay: testSignin}, testNow); err != nil {
+		t.Fatal(err)
+	}
+	if rep, err = s.Retiring(ctx, testNow); err != nil {
+		t.Fatal(err)
+	}
+	if len(rep.Origins) != 2 || len(rep.Unpaired) != 0 {
+		t.Fatalf("two pairs naming %s: %+v", testSignin, rep)
+	}
+	newer, older := rep.Origins[0], rep.Origins[1]
+	if newer.RelayOrigin != testRelay || newer.SigninCountedUnder != "" || newer.DeviceTokens != one ||
+		older.RelayOrigin != testRelay2 || older.SigninCountedUnder != testRelay || older.DeviceTokens != (Counts{}) {
+		t.Fatalf("two pairs naming %s: %+v", testSignin, rep.Origins)
+	}
+}
+
+// TestReadRetiringDoesNotMigrate reads a schema 1 database through
+// ReadRetiring: it reports that nothing is recorded and leaves the
+// database and its backups as they were.
+func TestReadRetiringDoesNotMigrate(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "edge.db")
+	closeStore(t, openSteps(t, path, migrations[:1]))
+	_, err := ReadRetiring(context.Background(), path, testNow)
+	if !errors.Is(err, ErrNoOrigins) || err.Error() != "edgestore: the database records no origins: "+path+" is at schema version 1" {
+		t.Fatalf("ReadRetiring at schema 1 = %v", err)
+	}
+	if sch, err := ReadSchema(path); err != nil || sch.Version != 1 {
+		t.Fatalf("schema after the report = %+v, %v", sch, err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, BackupDir)); !os.IsNotExist(err) {
+		t.Fatalf("the report made a backups directory: %v", err)
+	}
+	closeStore(t, openSteps(t, path, migrations))
+	if rep, err := ReadRetiring(context.Background(), path, testNow); err != nil || rep.Origins == nil {
+		t.Fatalf("ReadRetiring at schema 2 = %+v, %v", rep, err)
 	}
 }

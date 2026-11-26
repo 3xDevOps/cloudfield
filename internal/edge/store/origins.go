@@ -2,6 +2,7 @@ package edgestore
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
@@ -10,9 +11,19 @@ import (
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 )
 
-// RecordPairs records that the edge serves each relay origin with the
-// sign-in origin it names, as of now. A relay origin keeps its row, and
-// when it was first recorded, after the edge stops serving it.
+// OriginsSchema is the first schema version that records origins.
+const OriginsSchema = 2
+
+// recordingGap is the longest time between a recording edge's clean stop
+// and its next start with recording on that keeps one recording period: a
+// restart fits, a run without recording or a long outage does not.
+const recordingGap = 10 * time.Minute
+
+// RecordPairs records, as of now, that the edge serves each relay origin
+// with the sign-in origin it names and records origins. A relay origin
+// keeps its row after the edge stops serving it. The recording period
+// goes on when the edge stopped cleanly (StopRecording) within
+// recordingGap, and starts at now otherwise.
 func (s *Store) RecordPairs(ctx context.Context, relayToSignin map[string]string, now time.Time) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -20,11 +31,17 @@ func (s *Store) RecordPairs(ctx context.Context, relayToSignin map[string]string
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
 	for relay, signin := range relayToSignin {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO origin_pairs (relay_origin, signin_origin, first_served_at, served_at) VALUES (?, ?, ?, ?)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO origin_pairs (relay_origin, signin_origin, served_at) VALUES (?, ?, ?)
 			ON CONFLICT (relay_origin) DO UPDATE SET signin_origin = excluded.signin_origin, served_at = excluded.served_at`,
-			relay, signin, unix(now), unix(now)); err != nil {
+			relay, signin, unix(now)); err != nil {
 			return fmt.Errorf("edgestore: record origin pair %s %s: %w", signin, relay, err)
 		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO origin_recording (id, since) VALUES (1, ?)
+		ON CONFLICT (id) DO UPDATE SET stopped_at = NULL,
+			since = CASE WHEN stopped_at IS NOT NULL AND stopped_at >= ? THEN since ELSE excluded.since END`,
+		unix(now), unix(now.Add(-recordingGap))); err != nil {
+		return fmt.Errorf("edgestore: record origin pairs: recording period: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("edgestore: record origin pairs: %w", err)
@@ -32,14 +49,25 @@ func (s *Store) RecordPairs(ctx context.Context, relayToSignin map[string]string
 	return nil
 }
 
+// StopRecording records that the edge, which records origins, stops at
+// now.
+func (s *Store) StopRecording(ctx context.Context, now time.Time) error {
+	if _, err := s.db.ExecContext(ctx, `UPDATE origin_recording SET stopped_at = ?`, unix(now)); err != nil {
+		return fmt.Errorf("edgestore: record the end of origin recording: %w", err)
+	}
+	return nil
+}
+
+// useConnectorQuery runs at most once an hour per server and relay origin.
+const useConnectorQuery = `INSERT INTO connector_use (server_id, relay_origin, last_used_at)
+	SELECT id, ?, ? FROM servers WHERE id = ?
+	ON CONFLICT (server_id, relay_origin) DO UPDATE SET last_used_at = excluded.last_used_at`
+
 // UseConnector records a connector request at now for the claimed server
 // serverID through the relay origin relay. A server that is not claimed
 // records nothing.
 func (s *Store) UseConnector(ctx context.Context, serverID, relay string, now time.Time) error {
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO connector_use (server_id, relay_origin, last_used_at)
-		SELECT id, ?, ? FROM servers WHERE id = ?
-		ON CONFLICT (server_id, relay_origin) DO UPDATE SET last_used_at = excluded.last_used_at`,
-		relay, unix(now), serverID); err != nil {
+	if _, err := s.db.ExecContext(ctx, useConnectorQuery, relay, unix(now), serverID); err != nil {
 		return fmt.Errorf("edgestore: record connector request to %s through %s: %w", serverID, relay, err)
 	}
 	return nil
@@ -53,11 +81,13 @@ type SignIns struct {
 	Authorizations int `json:"authorizations"`
 }
 
-var signinTables = []string{"devices", "web_sessions", "device_authorizations"}
+var signInTables = []string{"devices", "web_sessions", "device_authorizations"}
 
 // DeleteSignIns deletes, in one transaction, the device tokens, sessions
 // and device authorizations whose sign-in origin is one of origins or
-// that have none, and returns how many it deleted.
+// that have none, and returns how many it deleted. With no origins it
+// still deletes every row without one: call it only for an edge that
+// retires a pair.
 func (s *Store) DeleteSignIns(ctx context.Context, origins []string) (SignIns, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -74,13 +104,13 @@ func (s *Store) DeleteSignIns(ctx context.Context, origins []string) (SignIns, e
 	}
 	var out SignIns
 	for i, n := range []*int{&out.Devices, &out.Sessions, &out.Authorizations} {
-		res, err := tx.ExecContext(ctx, `DELETE FROM `+signinTables[i]+` WHERE `+where, args...)
+		res, err := tx.ExecContext(ctx, `DELETE FROM `+signInTables[i]+` WHERE `+where, args...)
 		if err != nil {
-			return SignIns{}, fmt.Errorf("edgestore: delete sign-ins: %s: %w", signinTables[i], err)
+			return SignIns{}, fmt.Errorf("edgestore: delete sign-ins: %s: %w", signInTables[i], err)
 		}
 		deleted, err := res.RowsAffected()
 		if err != nil {
-			return SignIns{}, fmt.Errorf("edgestore: delete sign-ins: %s: %w", signinTables[i], err)
+			return SignIns{}, fmt.Errorf("edgestore: delete sign-ins: %s: %w", signInTables[i], err)
 		}
 		*n = int(deleted)
 	}
@@ -113,7 +143,7 @@ type Counts struct {
 	Total int `json:"total"`
 }
 
-// SeenServer is a claimed server and its last enrollment.
+// SeenServer is a claimed server and its last enrollment or claim.
 type SeenServer struct {
 	ID           string    `json:"id"`
 	Name         string    `json:"name"`
@@ -122,12 +152,8 @@ type SeenServer struct {
 	LastSeenAt   time.Time `json:"last_seen_at"`
 }
 
-// OriginReport is who the edge last saw on one origin pair.
-type OriginReport struct {
-	RelayOrigin  string `json:"relay_origin"`
-	SigninOrigin string `json:"signin_origin"`
-	// Servers last enrolled at the relay origin.
-	Servers []SeenServer `json:"servers"`
+// SigninCounts are the device tokens and sessions of one sign-in origin.
+type SigninCounts struct {
 	// DeviceTokens were issued at the sign-in origin, and
 	// DeviceTokensSeen issued while the edge did not record origins and
 	// first used there since; by last use.
@@ -137,16 +163,37 @@ type OriginReport struct {
 	// the sign-in origin, by its last use.
 	SessionAccounts Counts `json:"session_accounts"`
 	// DeviceOnlyAccounts have a device token at the sign-in origin and
-	// none recorded at another, by its last use.
+	// none recorded at another, by its last use; a token with no
+	// recorded origin does not count as another.
 	DeviceOnlyAccounts Counts `json:"device_only_accounts"`
+}
+
+// OriginReport is who the edge last saw on one origin pair.
+type OriginReport struct {
+	RelayOrigin  string `json:"relay_origin"`
+	SigninOrigin string `json:"signin_origin"`
+	// SigninCountedUnder is the relay origin of the pair the sign-in
+	// origin is counted under when the edge pairs it with that one more
+	// recently; this pair's sign-in counts are then zero.
+	SigninCountedUnder string `json:"signin_counted_under,omitempty"`
+	// Servers last enrolled or claimed at the relay origin.
+	Servers []SeenServer `json:"servers"`
+	SigninCounts
 	// ConnectorServers had connector requests through the relay origin,
 	// by the last one.
 	ConnectorServers Counts `json:"connector_servers"`
 }
 
+// UnpairedSignin is a sign-in origin that device tokens or sessions name
+// and that no recorded pair names any more.
+type UnpairedSignin struct {
+	SigninOrigin string `json:"signin_origin"`
+	SigninCounts
+}
+
 // Unknown is what has no recorded origin: device tokens and accounts with
-// an unexpired session by last use, and claimed servers that have not
-// enrolled since the edge began recording.
+// an unexpired session by last use, and claimed servers not seen since the
+// edge began recording.
 type Unknown struct {
 	DeviceTokens    Counts `json:"device_tokens"`
 	SessionAccounts Counts `json:"session_accounts"`
@@ -154,33 +201,82 @@ type Unknown struct {
 }
 
 // Report is who the edge saw on each origin pair it recorded, ordered by
-// relay origin, since RecordingSince, the first time it recorded a pair
-// (zero when it never did).
+// relay origin. RecordingSince is the start of the current recording
+// period, zero when the edge never recorded.
 type Report struct {
-	RecordingSince time.Time      `json:"recording_since"`
-	Origins        []OriginReport `json:"origins"`
-	Unknown        Unknown        `json:"unknown"`
+	RecordingSince time.Time        `json:"recording_since"`
+	Origins        []OriginReport   `json:"origins"`
+	Unpaired       []UnpairedSignin `json:"unpaired"`
+	Unknown        Unknown          `json:"unknown"`
 }
 
-// Retiring reports, as of now, who the edge saw on each origin pair.
+// ErrNoOrigins reports a database at a schema that records no origins.
+var ErrNoOrigins = errors.New("edgestore: the database records no origins")
+
+// ReadRetiring reports, as of now, who the edge at path saw on each origin
+// pair, through a read-only connection and one read transaction, so it
+// neither migrates nor locks the database. It returns ErrNoOrigins below
+// OriginsSchema.
+func ReadRetiring(ctx context.Context, path string, now time.Time) (Report, error) {
+	db, err := openRO(path)
+	if err != nil {
+		return Report{}, err
+	}
+	defer db.Close() //nolint:errcheck // read-only
+	sch, err := readSchema(db)
+	switch {
+	case err != nil:
+		return Report{}, err
+	case sch.Version < OriginsSchema:
+		return Report{}, fmt.Errorf("%w: %s is at schema version %d", ErrNoOrigins, path, sch.Version)
+	case sch.CompatFloor > SchemaVersion():
+		return Report{}, fmt.Errorf("edgestore: %s is at schema version %d with compat floor %d, and this binary supports %d",
+			path, sch.Version, sch.CompatFloor, SchemaVersion())
+	}
+	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return Report{}, fmt.Errorf("edgestore: read origins: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // read-only
+	return retiring(ctx, tx, now)
+}
+
+// Retiring reports, as of now, who the edge saw on each origin pair, in
+// one read transaction.
 func (s *Store) Retiring(ctx context.Context, now time.Time) (Report, error) {
-	out := Report{Origins: []OriginReport{}}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return Report{}, fmt.Errorf("edgestore: read origins: %w", err)
+	}
+	defer tx.Rollback() //nolint:errcheck // read-only
+	return retiring(ctx, tx, now)
+}
+
+func retiring(ctx context.Context, tx *sql.Tx, now time.Time) (Report, error) {
+	out := Report{Origins: []OriginReport{}, Unpaired: []UnpairedSignin{}}
 	var since *int64
-	if err := s.db.QueryRowContext(ctx, `SELECT MIN(first_served_at) FROM origin_pairs`).Scan(&since); err != nil {
-		return Report{}, fmt.Errorf("edgestore: read origin pairs: %w", err)
+	if err := tx.QueryRowContext(ctx, `SELECT MAX(since) FROM origin_recording`).Scan(&since); err != nil {
+		return Report{}, fmt.Errorf("edgestore: read the recording period: %w", err)
 	}
 	if since != nil {
 		out.RecordingSince = fromUnix(*since)
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT relay_origin, signin_origin FROM origin_pairs ORDER BY relay_origin`)
+	rows, err := tx.QueryContext(ctx, `SELECT p.relay_origin, p.signin_origin, (
+			SELECT o.relay_origin FROM origin_pairs o WHERE o.signin_origin = p.signin_origin
+			ORDER BY o.served_at DESC, o.relay_origin LIMIT 1)
+		FROM origin_pairs p ORDER BY p.relay_origin`)
 	if err != nil {
 		return Report{}, fmt.Errorf("edgestore: read origin pairs: %w", err)
 	}
 	for rows.Next() {
 		var r OriginReport
-		if err := rows.Scan(&r.RelayOrigin, &r.SigninOrigin); err != nil {
+		var owner string
+		if err := rows.Scan(&r.RelayOrigin, &r.SigninOrigin, &owner); err != nil {
 			rows.Close() //nolint:errcheck // the scan error takes precedence
 			return Report{}, fmt.Errorf("edgestore: read origin pairs: %w", err)
+		}
+		if owner != r.RelayOrigin {
+			r.SigninCountedUnder = owner
 		}
 		out.Origins = append(out.Origins, r)
 	}
@@ -188,34 +284,57 @@ func (s *Store) Retiring(ctx context.Context, now time.Time) (Report, error) {
 		return Report{}, fmt.Errorf("edgestore: read origin pairs: %w", err)
 	}
 	for i := range out.Origins {
-		if err := s.fillReport(ctx, &out.Origins[i], now); err != nil {
-			return Report{}, fmt.Errorf("edgestore: report on %s: %w", out.Origins[i].RelayOrigin, err)
+		r := &out.Origins[i]
+		if err := servers(ctx, tx, r); err != nil {
+			return Report{}, fmt.Errorf("edgestore: report on %s: %w", r.RelayOrigin, err)
+		}
+		if err := count(ctx, tx, &r.ConnectorServers, now, `SELECT last_used_at FROM connector_use WHERE relay_origin = ?`, r.RelayOrigin); err != nil {
+			return Report{}, fmt.Errorf("edgestore: report on %s: %w", r.RelayOrigin, err)
+		}
+		if r.SigninCountedUnder == "" {
+			if err := signinCounts(ctx, tx, &r.SigninCounts, r.SigninOrigin, now); err != nil {
+				return Report{}, fmt.Errorf("edgestore: report on %s: %w", r.SigninOrigin, err)
+			}
 		}
 	}
-	idle := int64(edgeproto.SessionIdle)
-	for _, c := range []countQuery{
-		{&out.Unknown.DeviceTokens, `SELECT last_used_at FROM devices WHERE signin_origin IS NULL`, nil},
-		{&out.Unknown.SessionAccounts, `SELECT MAX(expires_at) - ? FROM web_sessions WHERE signin_origin IS NULL AND expires_at > ?
-			GROUP BY account_id`, []any{idle, unix(now)}},
-	} {
-		if err := s.count(ctx, c, now); err != nil {
-			return Report{}, fmt.Errorf("edgestore: report on sign-ins without an origin: %w", err)
+	unpaired, err := tx.QueryContext(ctx, `SELECT signin_origin FROM devices WHERE signin_origin IS NOT NULL
+		UNION SELECT signin_origin FROM web_sessions WHERE signin_origin IS NOT NULL
+		EXCEPT SELECT signin_origin FROM origin_pairs ORDER BY 1`)
+	if err != nil {
+		return Report{}, fmt.Errorf("edgestore: read unpaired sign-in origins: %w", err)
+	}
+	for unpaired.Next() {
+		var u UnpairedSignin
+		if err := unpaired.Scan(&u.SigninOrigin); err != nil {
+			unpaired.Close() //nolint:errcheck // the scan error takes precedence
+			return Report{}, fmt.Errorf("edgestore: read unpaired sign-in origins: %w", err)
+		}
+		out.Unpaired = append(out.Unpaired, u)
+	}
+	if err := errors.Join(unpaired.Err(), unpaired.Close()); err != nil {
+		return Report{}, fmt.Errorf("edgestore: read unpaired sign-in origins: %w", err)
+	}
+	for i := range out.Unpaired {
+		u := &out.Unpaired[i]
+		if err := signinCounts(ctx, tx, &u.SigninCounts, u.SigninOrigin, now); err != nil {
+			return Report{}, fmt.Errorf("edgestore: report on %s: %w", u.SigninOrigin, err)
 		}
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM servers WHERE relay_origin IS NULL`).Scan(&out.Unknown.Servers); err != nil {
+	if err := count(ctx, tx, &out.Unknown.DeviceTokens, now, `SELECT last_used_at FROM devices WHERE signin_origin IS NULL`); err != nil {
+		return Report{}, fmt.Errorf("edgestore: report on sign-ins without an origin: %w", err)
+	}
+	if err := count(ctx, tx, &out.Unknown.SessionAccounts, now, `SELECT MAX(expires_at) - ? FROM web_sessions
+		WHERE signin_origin IS NULL AND expires_at > ? GROUP BY account_id`, int64(edgeproto.SessionIdle), unix(now)); err != nil {
+		return Report{}, fmt.Errorf("edgestore: report on sign-ins without an origin: %w", err)
+	}
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM servers WHERE relay_origin IS NULL`).Scan(&out.Unknown.Servers); err != nil {
 		return Report{}, fmt.Errorf("edgestore: report on servers without an origin: %w", err)
 	}
 	return out, nil
 }
 
-type countQuery struct {
-	dst   *Counts
-	query string
-	args  []any
-}
-
-func (s *Store) fillReport(ctx context.Context, r *OriginReport, now time.Time) error {
-	rows, err := s.db.QueryContext(ctx, `SELECT s.id, s.name, COALESCE(a.login, ''), COALESCE(s.agent_version, ''), s.enrolled_at
+func servers(ctx context.Context, tx *sql.Tx, r *OriginReport) error {
+	rows, err := tx.QueryContext(ctx, `SELECT s.id, s.name, COALESCE(a.login, ''), COALESCE(s.agent_version, ''), s.enrolled_at
 		FROM servers s LEFT JOIN accounts a ON a.id = s.owner_account_id
 		WHERE s.relay_origin = ? ORDER BY s.id`, r.RelayOrigin)
 	if err != nil {
@@ -232,30 +351,34 @@ func (s *Store) fillReport(ctx context.Context, r *OriginReport, now time.Time) 
 		e.LastSeenAt = fromUnix(at)
 		r.Servers = append(r.Servers, e)
 	}
-	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
-		return err
-	}
-	for _, c := range []countQuery{
-		{&r.DeviceTokens, `SELECT last_used_at FROM devices WHERE signin_origin = ? AND signin_origin_seen IS NULL`, []any{r.SigninOrigin}},
-		{&r.DeviceTokensSeen, `SELECT last_used_at FROM devices WHERE signin_origin = ? AND signin_origin_seen = 1`, []any{r.SigninOrigin}},
-		{&r.SessionAccounts, `SELECT MAX(expires_at) - ? FROM web_sessions WHERE signin_origin = ? AND expires_at > ? GROUP BY account_id`,
-			[]any{int64(edgeproto.SessionIdle), r.SigninOrigin, unix(now)}},
-		{&r.DeviceOnlyAccounts, `SELECT MAX(d.last_used_at) FROM devices d WHERE d.signin_origin = ? AND NOT EXISTS (
+	return errors.Join(rows.Err(), rows.Close())
+}
+
+func signinCounts(ctx context.Context, tx *sql.Tx, c *SigninCounts, signin string, now time.Time) error {
+	for _, q := range []struct {
+		dst   *Counts
+		query string
+		args  []any
+	}{
+		{&c.DeviceTokens, `SELECT last_used_at FROM devices WHERE signin_origin = ? AND signin_origin_seen IS NULL`, []any{signin}},
+		{&c.DeviceTokensSeen, `SELECT last_used_at FROM devices WHERE signin_origin = ? AND signin_origin_seen = 1`, []any{signin}},
+		{&c.SessionAccounts, `SELECT MAX(expires_at) - ? FROM web_sessions WHERE signin_origin = ? AND expires_at > ? GROUP BY account_id`,
+			[]any{int64(edgeproto.SessionIdle), signin, unix(now)}},
+		{&c.DeviceOnlyAccounts, `SELECT MAX(d.last_used_at) FROM devices d WHERE d.signin_origin = ? AND NOT EXISTS (
 			SELECT 1 FROM devices o WHERE o.account_id = d.account_id AND o.signin_origin IS NOT NULL AND o.signin_origin <> d.signin_origin)
-			GROUP BY d.account_id`, []any{r.SigninOrigin}},
-		{&r.ConnectorServers, `SELECT last_used_at FROM connector_use WHERE relay_origin = ?`, []any{r.RelayOrigin}},
+			GROUP BY d.account_id`, []any{signin}},
 	} {
-		if err := s.count(ctx, c, now); err != nil {
+		if err := count(ctx, tx, q.dst, now, q.query, q.args...); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-// count fills c.dst from c.query, which returns one last-use time per
-// thing counted.
-func (s *Store) count(ctx context.Context, c countQuery, now time.Time) error {
-	rows, err := s.db.QueryContext(ctx, c.query, c.args...)
+// count fills dst from query, which returns one last-use time per thing
+// counted.
+func count(ctx context.Context, tx *sql.Tx, dst *Counts, now time.Time, query string, args ...any) error {
+	rows, err := tx.QueryContext(ctx, query, args...)
 	if err != nil {
 		return err
 	}
@@ -266,15 +389,15 @@ func (s *Store) count(ctx context.Context, c countQuery, now time.Time) error {
 			return err
 		}
 		age := now.Sub(fromUnix(used))
-		c.dst.Total++
+		dst.Total++
 		if age <= 30*24*time.Hour {
-			c.dst.Month++
+			dst.Month++
 		}
 		if age <= 7*24*time.Hour {
-			c.dst.Week++
+			dst.Week++
 		}
 		if age <= 24*time.Hour {
-			c.dst.Day++
+			dst.Day++
 		}
 	}
 	return errors.Join(rows.Err(), rows.Close())

@@ -67,9 +67,7 @@ func (e Enrollment) columns() (origin, build sql.NullString, at sql.NullInt64) {
 // is claimed. An unclaimed server records nothing.
 func (s *Store) EnrollServer(ctx context.Context, id, name string, policy edgeproto.AccessPolicy, e Enrollment) (claimed bool, err error) {
 	origin, build, at := e.columns()
-	err = oneRow(s.db.ExecContext(ctx, `UPDATE servers SET name = ?, access_policy = ?,
-		relay_origin = COALESCE(?, relay_origin), agent_version = COALESCE(?, agent_version), enrolled_at = COALESCE(?, enrolled_at)
-		WHERE id = ?`, name, policy, origin, build, at, id))
+	err = oneRow(s.db.ExecContext(ctx, enrollQuery, name, policy, origin, build, at, id))
 	switch {
 	case errors.Is(err, ErrNotFound):
 		return false, nil
@@ -78,6 +76,11 @@ func (s *Store) EnrollServer(ctx context.Context, id, name string, policy edgepr
 	}
 	return true, nil
 }
+
+// enrollQuery runs at every enrollment.
+const enrollQuery = `UPDATE servers SET name = ?, access_policy = ?,
+	relay_origin = COALESCE(?, relay_origin), agent_version = COALESCE(?, agent_version), enrolled_at = COALESCE(?, enrolled_at)
+	WHERE id = ?`
 
 // ownerAccount returns the row id of the existing account a principal
 // names, ErrNoAccount when it has none, or ErrAccountBlocked.

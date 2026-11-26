@@ -277,10 +277,15 @@ CREATE TABLE connector_use (
 ) WITHOUT ROWID;
 
 CREATE TABLE origin_pairs (
-	relay_origin    TEXT PRIMARY KEY,
-	signin_origin   TEXT NOT NULL,
-	first_served_at INTEGER NOT NULL,
-	served_at       INTEGER NOT NULL
+	relay_origin  TEXT PRIMARY KEY,
+	signin_origin TEXT NOT NULL,
+	served_at     INTEGER NOT NULL
+);
+
+CREATE TABLE origin_recording (
+	id         INTEGER PRIMARY KEY CHECK (id = 1),
+	since      INTEGER NOT NULL,
+	stopped_at INTEGER
 );
 `}}
 
