@@ -14,7 +14,7 @@ import (
 func init() {
 	register(command{
 		name:    "messages",
-		short:   "read the messages agents sent each other (cloudfield message sends yours to an agent)",
+		short:   "read the messages agents sent each other (not the ones you send with cloudfield message)",
 		usage:   "cloudfield messages [<session-id>] [--workspace <name>] [--thread <id>] [--limit <n>] [--before <cursor>] [--json]",
 		example: "cloudfield messages run-d6ay38tj8j",
 		flags:   true,
@@ -23,6 +23,14 @@ func init() {
 }
 
 func runMessages(args []string) error {
+	call, err := parseMessages(args)
+	if err != nil {
+		return err
+	}
+	return withControl(func(c *protocol.Client) error { return call(c, os.Stdout, os.Stderr) })
+}
+
+func parseMessages(args []string) (func(c *protocol.Client, w, errOut io.Writer) error, error) {
 	fs := newFlagSet("messages")
 	workspace := fs.String("workspace", "", "workspace ID or name (default: the session's, or the only workspace)")
 	thread := fs.String("thread", "", "only this thread: a question and its replies, or one report")
@@ -34,65 +42,63 @@ func runMessages(args []string) error {
 		run, args = args[0], args[1:]
 	}
 	if err := fs.Parse(args); err != nil {
-		return err
+		return nil, err
 	}
 	switch {
 	case fs.NArg() > 1, fs.NArg() == 1 && run != "":
-		return errors.New("usage: cloudfield messages [<session-id>] [flags]")
+		return nil, errors.New("usage: cloudfield messages [<session-id>] [flags]")
 	case fs.NArg() == 1:
 		run = fs.Arg(0)
 	}
-	return withControl(func(c *protocol.Client) error {
-		return printMessages(c, os.Stdout, *workspace, protocol.CoordMessagesListParams{RunID: run, CorrelationID: *thread, Before: *before, Limit: *limit}, *asJSON)
-	})
-}
-
-func printMessages(c *protocol.Client, w io.Writer, workspace string, p protocol.CoordMessagesListParams, asJSON bool) error {
-	var err error
-	if p.WorkspaceID, err = timelineWorkspace(c, workspace, p.RunID); err != nil {
-		return err
-	}
-	var res protocol.CoordMessagesListResult
-	if err = c.Call(protocol.MethodCoordMessagesList, p, &res); err != nil {
-		return err
-	}
-	if asJSON {
-		return writeJSON(w, res)
-	}
-	var out string
-	for _, m := range slices.Backward(res.Messages) {
-		head := fmt.Sprintf("%s  %s -> %s  %s  ", shortTime(m.CreatedAt), m.FromRunID, m.ToRunID, m.Kind)
-		switch {
-		case m.AckedAt != nil:
-			head += "acknowledged"
-		case m.DeliveredAt != nil:
-			head += "delivered"
-		default:
-			head += "sent"
+	return func(c *protocol.Client, w, errOut io.Writer) error {
+		wsID, err := timelineWorkspace(c, *workspace, run)
+		if err != nil {
+			return err
 		}
-		if m.CorrelationID != "" {
-			head += "  thread " + m.CorrelationID
+		var res protocol.CoordMessagesListResult
+		if err = c.Call(protocol.MethodCoordMessagesList, protocol.CoordMessagesListParams{
+			WorkspaceID: wsID, RunID: run, CorrelationID: *thread, Before: *before, Limit: *limit,
+		}, &res); err != nil {
+			return err
 		}
-		out += printable(head) + "\n"
-		text := strings.Split(strings.TrimRight(m.Body, "\n"), "\n")
-		if m.Outcome != "" {
-			text = append(text, "outcome: "+m.Outcome)
+		if *asJSON {
+			return writeJSON(w, res)
 		}
-		if m.NextAction != "" {
-			text = append(text, "next action: "+m.NextAction)
+		var out strings.Builder
+		for _, m := range slices.Backward(res.Messages) {
+			head := fmt.Sprintf("%s  %s -> %s  %s  ", shortTime(m.CreatedAt), m.FromRunID, m.ToRunID, m.Kind)
+			switch {
+			case m.AckedAt != nil:
+				head += "acknowledged"
+			case m.DeliveredAt != nil:
+				head += "delivered"
+			default:
+				head += "sent"
+			}
+			if m.CorrelationID != "" {
+				head += "  thread " + m.CorrelationID
+			}
+			out.WriteString(printable(head) + "\n")
+			text := strings.Split(strings.TrimRight(m.Body, "\n"), "\n")
+			if m.Outcome != "" {
+				text = append(text, "outcome: "+m.Outcome)
+			}
+			if m.NextAction != "" {
+				text = append(text, "next action: "+m.NextAction)
+			}
+			for _, line := range text {
+				out.WriteString("  " + printable(line) + "\n")
+			}
 		}
-		for _, line := range text {
-			out += "  " + printable(line) + "\n"
+		if out.Len() == 0 {
+			out.WriteString("no agent messages\n")
 		}
-	}
-	if out == "" {
-		out = "no agent messages\n"
-	}
-	if _, err = io.WriteString(w, out); err != nil {
-		return err
-	}
-	if res.NextBefore != "" {
-		_, _ = fmt.Fprintln(os.Stderr, "older messages: add --before "+res.NextBefore)
-	}
-	return nil
+		if _, err = io.WriteString(w, out.String()); err != nil {
+			return err
+		}
+		if res.NextBefore != "" {
+			_, _ = fmt.Fprintln(errOut, "older messages: add --before "+res.NextBefore)
+		}
+		return nil
+	}, nil
 }

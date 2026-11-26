@@ -467,7 +467,8 @@ replaced by spaces. `--thread <id>` keeps one question and its replies, or
 one report, `--limit` takes up to 100, and `--workspace <name>` picks the
 workspace when there are several. When older mail remains, the last line, on
 stderr, is `older messages: add --before <cursor>`. `--json` prints the
-rows described below.
+rows described below. A person's `cloudfield message` reaches the agent as a
+prompt, not as mail, and is not listed.
 
 The command reads `coord.messages.list` on the control channel.
 It needs View on the workspace, so every member of the workspace can read
@@ -487,7 +488,9 @@ Each row has `id`, `workspace_id`, `from_run_id`, `to_run_id`,
 `kind`, `correlation_id`, `body`, `created_at`, `delivered_at`, and
 `acked_at`. `kind` is `message`, `question`, `reply`, or `report`: a subsession
 session's report forwarded to its parent lists as `report` and adds the report's
-`outcome`, `summary`, and `next_action`. `delivered_at` is when the
+`outcome`, `summary`, and `next_action`. A row from a session to itself is
+server-written: the wake for a [session wait](watches.md#session-waits) or a
+[relayed watch notice](watches.md#relaying-notices). `delivered_at` is when the
 recipient's inbox first returned the batch and `acked_at` when the agent
 acknowledged it; neither proves the model read the body.
 

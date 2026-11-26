@@ -8,6 +8,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"unicode"
 
 	"golang.org/x/term"
 
@@ -167,12 +168,12 @@ func printTimeline(c *protocol.Client, params protocol.WorkspaceTimelineParams, 
 	return tw.Flush()
 }
 
-// printable neutralizes control characters (the class internal/sshd's
-// hasControlChars guards against) so agent-authored event text cannot
-// drive the operator's terminal or break the table.
+// printable neutralizes control characters so agent-authored text cannot
+// drive the operator's terminal or break a table. That includes C1
+// (U+0080-U+009F), which some terminals act on when it arrives as UTF-8.
 func printable(s string) string {
 	return strings.Map(func(r rune) rune {
-		if r < 0x20 || r == 0x7f {
+		if unicode.IsControl(r) {
 			return ' '
 		}
 		return r
