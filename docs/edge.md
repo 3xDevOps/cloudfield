@@ -1107,35 +1107,41 @@ Origins are compared in canonical form: case and a default `:443` do not
 matter. Remove the entry and restart the edge to undo it. An older edge image
 ignores the option and loses only the notices below.
 
+Notices reach servers whether or not a pair is retiring, and this is the one
+addition to the wire with the option unset. A server's `hello` carries
+`notice_nonce`, 32 random bytes it draws for each enrollment. To a server that
+sent one, every `ready`, at any pair, carries a notice for each retiring relay
+origin, none when nothing is retiring, and one signature over the whole list,
+an empty list included, so that a missing or unsigned list can never stand for
+"no notices":
+
+```json
+"notices": [{"state": "retiring", "origin": "https://<relay-host-1>", "replacement": "https://<relay-host-2>", "date": "2027-03-01"}],
+"notices_signature": "<base64>"
+```
+
+The edge key signs `aether-edge-notices-v1`, the server id, the relay origin the
+server dialed, its nonce and every entry's state, origins and date, so the list
+is good for one server and one connection and never verifies as a grant or a
+connector assertion. The server keeps the list only when the signature verifies
+against the edge key it pinned, and otherwise keeps none; neither refuses the
+`ready`. It stores the list with the time it came beside the owner, in
+`<data dir>/edge/keys/sha256-<fingerprint>/notices.json`, and each `ready`
+replaces it, so a notice the edge stops sending is gone at the next connection.
+Pinning a key deletes that key's `notices.json` first; the file of the key it
+replaces stays in that key's directory, unread, until that key is pinned again,
+which deletes it. A list that arrived with the `ready` that pinned the key is
+trusted as that pin is, and only shown. An edge or a server that does not know
+the fields ignores them, and a server that sends no nonce gets the `ready` it
+got before.
+
 While a pair is retiring:
 
-- A server's `hello` carries `notice_nonce`, 32 random bytes it draws for each
-  enrollment. To a server that sent one, every `ready`, at any pair, carries a
-  notice for each retiring relay origin and one signature over the whole list,
-  an empty list included:
-
-  ```json
-  "notices": [{"state": "retiring", "origin": "https://<relay-host-1>", "replacement": "https://<relay-host-2>", "date": "2027-03-01"}],
-  "notices_signature": "<base64>"
-  ```
-
-  The edge key signs `aether-edge-notices-v1`, the server id, the relay origin
-  the server dialed, its nonce and every entry's state, origins and date, so
-  the list is good for one server and one connection and never verifies as a
-  grant or a connector assertion. The server keeps the list only when the
-  signature verifies against the edge key it pinned, and otherwise keeps none;
-  neither refuses the `ready`. It stores the list with the time it came beside
-  the owner, in `<data dir>/edge/keys/sha256-<fingerprint>/notices.json`, and
-  each `ready` replaces it, so a notice the edge stops sending is gone at the
-  next connection. Pinning a key forgets its notices. A list that arrived with
-  the `ready` that pinned the key is trusted as that pin is, and only shown.
-  An edge or a server that does not know the fields ignores them, and a server
-  that sends no nonce gets the `ready` it got before.
 - Every answer on both host names of the pair, API answers and WebSocket
   handshakes included, carries `Aether-Edge-Retiring: https://<relay-host-2>;
   date=2027-03-01`, without the `; date=` part when no date is set, and `GET
   /v1/edge` carries `"retiring": "https://<relay-host-2>"` and
-  `"retiring_date": "2027-03-01"`. A client uses the value only when it is a
+  `"retiring_date": "2027-03-01"`. `/healthz` carries no header. A client uses the value only when it is a
   canonical origin and a real date, and only shows it. A connector answer
   the relay passes on from a server carries the edge's value, never the
   server's.
