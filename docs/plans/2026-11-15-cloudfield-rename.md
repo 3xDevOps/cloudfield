@@ -7,8 +7,8 @@ keeps running, keeps reaching its edge, and still finds its update.
 **Status:** approved by the owner, 2026-11-16. The rename and the new
 domain are the owner's decisions of 2026-11-15; the choices under
 [Decisions](#decisions-2026-11-16) are the owner's of 2026-11-16. Phases 0,
-1 and 5 and the code of phase 2 are merged. Phase 2 waits on the owner's
-switch steps, phase 3 on item 20 (#1025) and phase 4 on item 23 (#1026).
+1, 3, 4 and 5 and the code of phase 2 are merged; phase 2's owner step,
+moving the owner's server to `edge.cloudfield.ai`, was done on 2026-11-26.
 [Decision 12](#12-everything-published-moves-to-cloudfieldai), the owner's
 of 2026-11-26, moves everything the project publishes to `cloudfield.ai`,
 the directory listings' connector address included. It supersedes the
@@ -267,6 +267,20 @@ edge and connector. The hosted edge follows the stable channel, so this
 phase starts once the release that carries them is stable and promoted to
 the edge's `:stable` image.
 
+End of phase 2 (2026-11-26, as the owner's liaison reported it): the
+owner's server moved with `sudo aether-server edge move
+https://edge.cloudfield.ai` at 05:48 UTC, the first run against the real
+edge. It enrolled at `edge.cloudfield.ai` as an
+address of the same edge, with the same edge key and owner; only
+server.conf's `edge-url` line changed. `edge move` does not restart the
+server (`sudo systemctl restart aether-server` does); it was restarted
+at 05:48:31 and connected at 05:48:32. Connector
+addresses are now under `edge.cloudfield.ai/mcp`, and a connector
+registered at the old address still answers. In that restart,
+`cloudfield-server edge status` exited 3 with `disconnected since ...:
+server stopped` for about a second, so a script restarts first, then
+retries `edge status` while it exits 3.
+
 ### Phase 3: the names people type
 
 Docs, help text and agent prompts use `cloudfield`, `cloudfield-server`,
@@ -302,6 +316,20 @@ Conditions that hold from now on: the old repository names are never
 created again, the organisation is not renamed, old releases and tags are
 not deleted, and the release signing key and the `channels` release stay in
 the renamed repository.
+
+End of phase 4 (2026-11-26): the Go module path is
+`github.com/3xDevOps/cloudfield` (#1026, merged as 4983519d6). Go, the
+linker's `-X` flags, the linter and CI read only the new path; a binary
+stamped through the old path would print `dev (unknown)`. Still written
+the old way, on purpose: `https://github.com/3xDevOps/Aether` links, which
+GitHub redirects, among them the `Documentation=` lines of
+`aether-server.service` and `aether.slice`, which the server compares
+byte for byte, those of the edge's systemd units, and the edge image's
+source label;
+the promotion predicate type and the two-name signer checks (item 22);
+and `3xDevOps/Aether` repository names in test fixtures. A branch cut
+before 4983519d6 that changes Go files rebases with the lines posted on
+its pull request on 2026-11-26 (#1128, #1129, #1131, #1133).
 
 ### Phase 5: names inside sessions
 
