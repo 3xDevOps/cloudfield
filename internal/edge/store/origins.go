@@ -271,7 +271,7 @@ func retiring(ctx context.Context, tx *sql.Tx, now time.Time) (Report, error) {
 	for rows.Next() {
 		var r OriginReport
 		var owner string
-		if err := rows.Scan(&r.RelayOrigin, &r.SigninOrigin, &owner); err != nil {
+		if err = rows.Scan(&r.RelayOrigin, &r.SigninOrigin, &owner); err != nil {
 			rows.Close() //nolint:errcheck // the scan error takes precedence
 			return Report{}, fmt.Errorf("edgestore: read origin pairs: %w", err)
 		}
@@ -280,19 +280,19 @@ func retiring(ctx context.Context, tx *sql.Tx, now time.Time) (Report, error) {
 		}
 		out.Origins = append(out.Origins, r)
 	}
-	if err := errors.Join(rows.Err(), rows.Close()); err != nil {
+	if err = errors.Join(rows.Err(), rows.Close()); err != nil {
 		return Report{}, fmt.Errorf("edgestore: read origin pairs: %w", err)
 	}
 	for i := range out.Origins {
 		r := &out.Origins[i]
-		if err := servers(ctx, tx, r); err != nil {
+		if err = servers(ctx, tx, r); err != nil {
 			return Report{}, fmt.Errorf("edgestore: report on %s: %w", r.RelayOrigin, err)
 		}
-		if err := count(ctx, tx, &r.ConnectorServers, now, `SELECT last_used_at FROM connector_use WHERE relay_origin = ?`, r.RelayOrigin); err != nil {
+		if err = count(ctx, tx, &r.ConnectorServers, now, `SELECT last_used_at FROM connector_use WHERE relay_origin = ?`, r.RelayOrigin); err != nil {
 			return Report{}, fmt.Errorf("edgestore: report on %s: %w", r.RelayOrigin, err)
 		}
 		if r.SigninCountedUnder == "" {
-			if err := signinCounts(ctx, tx, &r.SigninCounts, r.SigninOrigin, now); err != nil {
+			if err = signinCounts(ctx, tx, &r.SigninCounts, r.SigninOrigin, now); err != nil {
 				return Report{}, fmt.Errorf("edgestore: report on %s: %w", r.SigninOrigin, err)
 			}
 		}
@@ -305,29 +305,29 @@ func retiring(ctx context.Context, tx *sql.Tx, now time.Time) (Report, error) {
 	}
 	for unpaired.Next() {
 		var u UnpairedSignin
-		if err := unpaired.Scan(&u.SigninOrigin); err != nil {
+		if err = unpaired.Scan(&u.SigninOrigin); err != nil {
 			unpaired.Close() //nolint:errcheck // the scan error takes precedence
 			return Report{}, fmt.Errorf("edgestore: read unpaired sign-in origins: %w", err)
 		}
 		out.Unpaired = append(out.Unpaired, u)
 	}
-	if err := errors.Join(unpaired.Err(), unpaired.Close()); err != nil {
+	if err = errors.Join(unpaired.Err(), unpaired.Close()); err != nil {
 		return Report{}, fmt.Errorf("edgestore: read unpaired sign-in origins: %w", err)
 	}
 	for i := range out.Unpaired {
 		u := &out.Unpaired[i]
-		if err := signinCounts(ctx, tx, &u.SigninCounts, u.SigninOrigin, now); err != nil {
+		if err = signinCounts(ctx, tx, &u.SigninCounts, u.SigninOrigin, now); err != nil {
 			return Report{}, fmt.Errorf("edgestore: report on %s: %w", u.SigninOrigin, err)
 		}
 	}
-	if err := count(ctx, tx, &out.Unknown.DeviceTokens, now, `SELECT last_used_at FROM devices WHERE signin_origin IS NULL`); err != nil {
+	if err = count(ctx, tx, &out.Unknown.DeviceTokens, now, `SELECT last_used_at FROM devices WHERE signin_origin IS NULL`); err != nil {
 		return Report{}, fmt.Errorf("edgestore: report on sign-ins without an origin: %w", err)
 	}
-	if err := count(ctx, tx, &out.Unknown.SessionAccounts, now, `SELECT MAX(expires_at) - ? FROM web_sessions
+	if err = count(ctx, tx, &out.Unknown.SessionAccounts, now, `SELECT MAX(expires_at) - ? FROM web_sessions
 		WHERE signin_origin IS NULL AND expires_at > ? GROUP BY account_id`, int64(edgeproto.SessionIdle), unix(now)); err != nil {
 		return Report{}, fmt.Errorf("edgestore: report on sign-ins without an origin: %w", err)
 	}
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM servers WHERE relay_origin IS NULL`).Scan(&out.Unknown.Servers); err != nil {
+	if err = tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM servers WHERE relay_origin IS NULL`).Scan(&out.Unknown.Servers); err != nil {
 		return Report{}, fmt.Errorf("edgestore: report on servers without an origin: %w", err)
 	}
 	return out, nil
