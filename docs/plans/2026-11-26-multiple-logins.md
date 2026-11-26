@@ -116,7 +116,7 @@ calls it neither allowed nor forbidden.
 - A member's **default login** is what they have today: the files in their
   home, of any of the three kinds. It is never moved, copied or renamed. A
   member who adds no login has no new row, file or code path, and their
-  launches and moves choose exactly as today.
+  launches and moves choose exactly as today, by today's code paths.
 - An **added login** is a subscription sign-in or a keyless Console
   sign-in. A Console API key is not accepted as an added login: Claude Code
   keeps it in `~/.claude.json`, and a copy of that file reaches the
@@ -158,14 +158,15 @@ calls it neither allowed nor forbidden.
   `anthropic/` (the keyless Console profile) and `identity.json` (plan,
   email, organisation; no secret).
 - One `agent_logins` table: member, agent, id, name, position, automatic,
-  created. Additive migration. Runs and account segments gain an
+  use for shares, created. Additive migration. Runs and account segments gain an
   `account_login` column holding the login id, empty for the default
   login, so every existing row already means what it meant.
 - **One type names an account everywhere it is a key:** member plus login
   id. The usage cache, `fallback.Measured`, the remembered login refusals
   and verified logins, the `account_swap` marker, recovery's comparison of
-  a run's account with the marker, and the "is this a move" test all key
-  on it. Today they key on the member and could not tell two logins of one
+  a run's account with the marker, the "is this a move" test, the revoke
+  sweep, and the "account changed" checks of the run repository and of
+  terminals in a session all key on it. Today they key on the member and could not tell two logins of one
   member apart.
 - A session on an added login gets, from the login's directory:
   `credentials.json` mounted over `~/.claude/.credentials.json`;
@@ -214,8 +215,9 @@ calls it neither allowed nor forbidden.
   is removed. The server never sees a password, runs no OAuth of its own
   and never refreshes a token.
 - **Removing** a login deletes its directory and row, under the launch
-  authorisation lock. It is refused while any session that still has a
-  container is on it, a queued launch asks for it, a sign-in is open on
+  authorisation lock. It is refused while any session that is starting,
+  running, asleep or still has a container is on it, a queued launch
+  asks for it, a sign-in is open on
   it, or an `account_swap` marker names it, listing the sessions. The
   marker, written when a move chooses its target, is the reservation. A
   rename changes the name only; ids and paths never change, and a removed
@@ -223,68 +225,100 @@ calls it neither allowed nor forbidden.
   so.
 - `member remove` deletes the member's logins. A member merge moves the
   merged member's added logins to the surviving member, renaming on a
-  clash, in the step that moves the home.
+  clash, in the step that moves the home, with use for shares **off**:
+  the merge drops the shares the merged member granted, and the
+  survivor's teammates were never given these logins.
 
 ### 3. When Cloudfield switches
+
+**Who may use a login.** Two members matter for a session: its owner, and
+the member whose home its container mounts (they differ after a handoff).
+A login is **eligible** for a session when all of these hold:
+
+- each of those two members owns it, or holds a share of its account
+  while the login is on for shares;
+- it is automatic, or its owner named it for this launch;
+- it can sign in (read from its file, apart from whether its usage can be
+  read): not signed out, not expired without a refresh token, its sign-in
+  finished;
+- the session can mount it: an Isolated session cannot mount a Console
+  login's directory, a runtime may not support the mounts, and a
+  teammate's session can be given only a subscription default login, as
+  today, since a default login kept as an API key or a Console profile
+  has no file a share mounts.
+
+An account none of whose logins is eligible for a launcher is treated as
+not shared with them: the launch is refused with that reason, never
+served by a login that failed a test.
 
 **At launch.** A launch names an account, as today, and its owner may
 also name one of their logins (`--login <name>`, the launch dialog; the
 default login is named `default`). A launch that names no login, from any
-client, gets the account's first automatic login in its owner's order (for
-a teammate's account: the first that is also on for shares), or the first
-login when none is automatic. A stored run with an empty `account_login`
-is on the default login and is rebuilt on it; the wire's "none named" and
-the row's "default" are never confused, because the server resolves the
-first into the second before it stores the run.
+client, starts from the account's first eligible login in its owner's
+order. A stored run with an empty `account_login` is on the default login
+and is rebuilt on it; the wire's "none named" and the row's "default" are
+never confused, because the server resolves the first into the second
+before it stores the run.
 
-The chosen login is used unless a successful usage read shows a window at
-95% or more, or the vendor reported it run out as below. Then, in order:
+That login is used unless a successful usage read shows a window at 95%
+or more, or the vendor reported it run out as below. Then the candidates
+are every other eligible login of:
 
-1. the other logins of the same account, in their owner's order, that are
-   automatic (and on for shares when the launcher is not the owner): the
-   first that can sign in and whose usage reads below 95%, or cannot be
-   read (a Console login, for which Anthropic exposes no usage, or a
-   subscription login whose access token expired while idle and which
-   holds a refresh token);
-2. when the account is a teammate's: the launcher's own logins, in their
-   order, by the same test;
-3. the other accounts shared with the launcher, by most usage left as
-   today, each standing for its logins that are automatic and on for
-   shares, in its owner's order.
+1. the same account, in its owner's order;
+2. the launcher's own account, when the first was a teammate's and the
+   launcher has added logins, in their order;
+3. the other accounts shared with the launcher, ranked as today by most
+   usage left, each account scored by its first eligible login whose
+   usage reads below 95%.
 
-So a member's sessions use up their own logins before a teammate's.
+The first candidate whose usage reads below 95% is taken. **A login whose
+usage cannot be read is taken only when no candidate with readable usage
+is left**, as an unreadable account is today: among those, in the same 1,
+2, 3 sequence. That covers a login billed per use (a Console login, for
+which Anthropic exposes no usage) and a subscription login whose access
+token expired while idle and which holds a refresh token. So a session
+uses up every readable subscription it may use, its own before another
+teammate's, before it touches anything billed per use. When nothing
+qualifies the launch stays where it started, as today.
 
-Whether a login can sign in is read from its file, apart from whether its
-usage can be read. A login that is signed out, expired without a refresh
-token, or whose sign-in never finished is never chosen. When nothing qualifies the launch stays on the requested login, as
-today. A login whose usage cannot be read and which the vendor reported
-run out in some session is passed over for 30 minutes, so a Console login
-out of credit is not chosen again by every launch.
+A launcher with no added login keeps today's ranking exactly: their own
+account is ranked with the teammates' by usage, as it is now.
 
 The per-launch order (`--fallback <member-id,...>`) keeps naming members
-and stays the whole list of what may be used. A member's id stands for
-that account's logins as above; without the launcher's own id none of
-their other logins is used.
+and stays the whole list of the *other* accounts that may be used, each
+standing for its eligible logins. The other logins of the account a
+session is on are always candidates; `--no-fallback` turns every
+automatic change off, between logins of one account too.
 
 **A login billed per use never runs out the way a window does.** What
-bounds it: it sits last in the order unless its owner moves it, so it is
-reached only when every subscription login before it is spent; its
-automatic and use-for-shares switches; the credit its owner bought in the
-Console, whose exhaustion is the vendor's "out of usage credits" message
-and moves the session on like any run-out; and workspace budgets where a
-session's cost is metered, which today is headless sessions only. A
-session that lands on such a login, at launch or by a move, says so in
-its header (`billed per use`), in its log and in the room note, and the
-login's owner gets the notification a move sends today.
+holds it back: it is taken only when no readable subscription is left
+(above); its automatic and use-for-shares switches; and a sub-session of
+a session on one does not inherit it but is chosen for anew. The one hard
+stop is the vendor's: the credit its owner bought in the Console, whose
+exhaustion is the "out of usage credits" message and moves the session on
+like any run-out. Cloudfield's workspace budgets refuse new sessions at
+the cap and do not stop a running one, and a session that has reached a
+per-use login stays on it until it ends. A session that lands on such a
+login, at launch or by a move, says so in its header (`billed per use`),
+in its log and in the room note, and the login's owner gets the
+notification a move sends today.
+
+A login whose usage cannot be read and which the vendor reported run out
+is passed over for 30 minutes, so a Console login out of credit is not
+chosen again by every launch. Only a report from a session its owner
+owns sets that mark: another member's session cannot push the owner's
+launches off a login.
 
 **In a running session.** The signal is the existing one and only that:
-the vendor's message, from its exported list, ending the turn. Between
-the logins of one account only the depletion messages move a session ("You've
+the vendor's message, from its exported list, ending the turn. To
+another login of the same account only the depletion messages move a
+session ("You've
 hit your", "You've reached your", "You're out of usage credits", "You're
 out of extra usage", "Your org is out of usage"). The seat, allocation,
 group and model messages are an administrator's or a plan's restriction,
-not a spent balance: the session parks with the message and moves
-nowhere on its own. Either way a login whose usage cannot be read is
+not a spent balance: on those the account's other logins are skipped,
+and the session moves to another account or parks exactly as it does
+today. Either way a login whose usage cannot be read is
 passed over for the 30 minutes above. Cloudfield
 then does what it does today for a teammate's account, with the
 candidates in the order above: stop the agent, replace the container
@@ -314,15 +348,26 @@ continuation prompt naming both logins.
   and its terminals end with it, as in every move today.
 - A login the session already used is not tried again in that session.
 - A move chooses its target under the launch authorisation lock, where
-  the login must exist, be automatic and, for a launcher who is not its
-  owner, be on for shares and the share still stand, and writes the
-  marker there. From then the move is committed to that login:
-  the marker blocks its removal, and turning automatic off afterwards
-  governs the next choice, not the move in flight.
+  the login must be eligible, and writes the marker there. From then the move is committed to that login:
+  the marker blocks its removal, and reordering or turning automatic off
+  afterwards governs the next choice, not the move in flight. Losing the
+  right to the login is different: the check of the share that exists
+  today when the move is recorded stays and covers use for shares, and
+  its failure ends as a revoke in that gap ends today.
   The old container is gone by the time the move is recorded, so there is
   no later point at which another candidate could still be tried.
-- A handoff of a session is refused, with the reason, unless the
-  recipient owns the login it is on or holds a share that reaches it.
+- **A teammate's signal is checked.** The signal comes from inside the
+  container and can be forged. When the session's owner is not the
+  login's owner, Cloudfield reads the login's usage afresh, every window
+  including the per-model ones, before it acts: it moves the session only
+  when the read shows a window at 95% or more, and otherwise parks it with
+  "the agent reported a usage limit that <owner>'s usage does not show".
+  A teammate's session is therefore never moved off a login billed per
+  use on its own word, nor walked through the owner's logins by a forged
+  signal. The owner's own sessions are moved on the signal alone, as
+  today.
+- A handoff works as today, with one refusal: a session on a login that
+  is off for shares is not handed to anyone but that login's owner.
 
 **When all are spent.** The session parks at `needs-attention` (headless:
 fails) with the reason Cloudfield composes today, the logins tried, and
@@ -357,28 +402,41 @@ when no usage read gave one.
 ### 5. Sharing and precedence
 
 - **A share shares them all.** `cloudfield account share <member>` lets
-  that member's sessions run on any of the owner's logins that is on for
-  shares, which is all of them unless the owner turned one off. Which one
-  serves a teammate is the owner's order and Cloudfield's choice, never
-  the teammate's: only a login's owner may name it for a launch, and the
-  server refuses a login named by anyone else. A login travels by id on
-  the wire, so a name two members both use cannot resolve against the
-  wrong member.
+  that member's sessions run on any of the owner's logins that is
+  eligible for them (section 3), which is every automatic login unless
+  the owner turned use for shares off on it. Which one serves a teammate
+  is the owner's order and Cloudfield's choice, never the teammate's:
+  only a login's owner may name it for a launch, and the server refuses a
+  login named by anyone else. A login travels by id on the wire, so a
+  name two members both use cannot resolve against the wrong member.
 - A teammate's session on an added login gets the mounts of section 2 from
   the owner's login directory, exactly as it gets the owner's default
   login file from the owner's home today.
 - Turning **use for shares** off for a login, like revoking a share, moves
-  teammates' running sessions off it by the existing revoke path, or
-  stops them when nothing else can run them. The owner's own sessions
-  stay.
+  teammates' sessions off it by the existing revoke path, or stops them
+  when nothing else can run them. The sweep is keyed by login, and it
+  covers sessions whose move marker names the login as their target and
+  sessions that are asleep. The owner's own sessions stay.
+- The sweep and a relaunch check **both** the session's owner and the
+  member whose home it mounts. Today they check one, so a session handed
+  to a teammate stays on the first owner's login after that teammate's
+  share is revoked (`internal/scheduler/account_revoke.go`,
+  `internal/sshd/handlers.go` relaunch); this plan fixes that for every
+  login.
+- Waking a sleeping session restores a container that holds its login.
+  The restore itself, whoever or whatever asked for it, checks that the
+  login is still eligible for the session and hands the session to the
+  revoke path when it is not (`internal/scheduler/sleep.go`).
 - Every check that asks today "does this member hold a share of the run's
-  account" (terminals in the session, relaunch, wake, reopen, run
-  repository commit and push, handoff) also asks that the run's login is
-  on for shares, unless the member owns it.
-- A sub-session starts on its parent's current account and login when its
-  owner owns that login or holds a share that reaches it; otherwise the
-  login is chosen as for a launch that names none. The check runs again
-  when a queued sub-session is dispatched.
+  account" (terminals in the session, relaunch, run repository commit and
+  push) also asks that the run's login is on for shares, unless the
+  member owns it.
+- A sub-session is a new admission. It starts on its parent's current
+  account and login when that login is eligible for it and is not billed
+  per use; otherwise it is chosen for as a launch that names none. The
+  check runs again when a queued sub-session is dispatched, and a
+  reopened session whose login is gone or no longer eligible is chosen
+  for the same way, with a line in its log.
 - **Steering.** A member who may steer a session can make its agent act:
   send it prompts, answer its questions, write files into its worktree
   (`internal/sshd/guard.go` `checkSteer`). An agent told to print its
@@ -398,17 +456,26 @@ when no usage read gave one.
 - Logs, events, reports, room notes and error text carry a login's id
   and name, never file content. The quota cache
   keeps its fingerprint, not the token.
-- **What a share can reach.** A grantee's session holds the refresh token
-  of the one login it runs on, as it holds the owner's default login
-  today, and by the owner's decision a share now reaches every login the
-  owner left on for shares. A grantee cannot name, list the email or
-  organisation of, or read the files of the owner's logins; cannot reach
-  a login that is off for shares by any path (launch, order, sub-session,
-  handoff, move, relaunch); and cannot make the server choose a
-  particular one. A grantee can make their session run out, or forge the
-  signal, and be moved through the owner's shared logins in order, each
-  move recorded; a login billed per use is in that chain unless its owner
-  takes it out.
+- **What a share can reach, and what the switches do not do.** A
+  teammate's session holds the refresh token of the one login it runs on,
+  as it holds the owner's default login today, and by the owner's
+  decision a share now reaches every login left on for shares.
+  - The server lists the email and organisation of a login to its owner
+    only, and a teammate cannot name a login or make the server choose a
+    particular one. A teammate's session can still learn who the login
+    it runs on belongs to: Claude Code fetches the profile and keeps it
+    in its own files in the teammate's home.
+  - **Use for shares off** means Cloudfield never mounts that login for a
+    session a teammate owns or whose home is a teammate's. It does not
+    wall the owner's own sessions: whoever may steer one of those can
+    have its agent print the login it is on, and a session handed to a
+    teammate still runs in the owner's home.
+  - Revoking a share, turning the switch off or removing a login stops
+    Cloudfield mounting it. It does not recall a token a teammate's
+    session already copied, which stays valid until Anthropic expires or
+    the owner revokes it, as `security.md` says of a share today.
+  - A teammate's session cannot be moved through the owner's logins on a
+    forged signal (section 3).
 - **A member's own sessions are not walled from each other.** They share
   the home, so code a session plants there runs in the next container,
   and a session with sudo can unmount what covers the default login. A
@@ -533,3 +600,28 @@ judging of a login against every login a session ran on); "a share
 reaches the default login only"; and "a session on an added login is
 steered by its owner alone". Sections 1, 3, 5 and 6 are rewritten for it
 and were reviewed again before those parts were built.
+
+The rewritten sections were reviewed again by Claude Opus
+(`claude-opus-5-5`) and by oh-my-pi on `openai-codex/gpt-6.2-astra`
+(its harness's model field). What that changed:
+
+- "The first login when none is automatic" let a teammate land on a login
+  that was off for shares. Eligibility is now one definition, and an
+  account with no eligible login is not shared.
+- A teammate's per-use login was taken while the launcher's own
+  subscription had usage. Unreadable usage is again held back until
+  nothing readable is left, as today's code does.
+- A teammate could forge the run-out signal and be walked through the
+  owner's logins, onto the per-use one. A teammate's signal is now
+  checked against a fresh usage read.
+- The switches were described as walls they are not. Section 6 says what
+  they stop and what they do not.
+- Revoke after a handoff checked one member where two matter; waking a
+  session restored a login without asking; a move's target was not swept
+  when its sharing was withdrawn. All three are fenced.
+- The handoff rule would have broken today's handoffs; it now refuses one
+  case only.
+- A saved fallback order skipped the member's own second login; the
+  restriction messages contradicted "as today"; a merge handed logins to
+  the survivor's teammates; budgets were described wrongly; removal
+  missed a session still starting.
