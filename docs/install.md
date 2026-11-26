@@ -218,6 +218,17 @@ name only where that link exists and its directory is on `PATH`.
 - When the desktop build fails, the script still exits 0 and its last line says
   the CLI is installed and the app is not, with the exit status of
   `cloudfield gui build`.
+- When the desktop build succeeds, the script opens Cloudfield through the
+  launcher the build installed: `gio launch`, or `gtk-launch` without `gio`, on
+  the `.desktop` entry on Linux, and `open` on the `.app` on macOS. `next:` then
+  starts with `Cloudfield is starting`. It does this only when you run it from
+  a terminal, as yourself rather than as root or through `sudo`, `doas` or
+  `pkexec`, in a desktop session (`DISPLAY` or `WAYLAND_DISPLAY` set on Linux,
+  which over SSH means X forwarding; a login window session on macOS, never
+  SSH), with `CI` empty or unset.
+  Otherwise `next:` says to open Cloudfield from your applications. If the
+  launcher fails, or the temp directory cannot hold the FIFO the build's output
+  is read through, the last line shows that error and the script still exits 0.
 
 | Flag | Variable | Effect |
 | --- | --- | --- |
@@ -254,10 +265,15 @@ x64 or ARM64 CLI from the newest complete release, checks its SHA-256 and size
 against `checksums.txt` and `aether-release.json`, installs it as
 `%LOCALAPPDATA%\Programs\Aether\aether.exe`, and adds that directory to your
 user `PATH`. Then it runs `aether gui build`, which installs the
-[desktop app](#desktop-app) and adds **Cloudfield** to the Start Menu. It does not
-ask for administrator rights or change the execution policy or Defender
-settings: `-ExecutionPolicy Bypass` applies to that one process only. Open a
-new terminal afterwards: open ones keep their old `PATH`.
+[desktop app](#desktop-app) and adds **Cloudfield** to the Start Menu, then
+opens Cloudfield through that Start Menu entry. It opens it only from a
+PowerShell window that is not elevated, with `CI` empty or unset, and whose
+input and output are not redirected; otherwise `next:` says to open Cloudfield
+from the Start menu. If the shortcut fails to start, the line before `done:`
+shows the error. It does not ask for administrator rights or change the
+execution policy or Defender settings: `-ExecutionPolicy Bypass` applies to
+that one process only. Open a new terminal afterwards: open ones keep their
+old `PATH`.
 
 Beside `aether.exe` it writes `cloudfield.cmd`, which runs `aether.exe` with
 the same arguments, unless something already holds that name. `next:` keeps
@@ -492,9 +508,10 @@ Setup starts nothing; it ends on `next:`: start the service, then on your
 machine link it. On a tailnet that is `cloudfield link <MagicDNS name>`, or
 **Tailscale** in the app's Connect step; through the edge, `cloudfield login` and
 `cloudfield link --claim <code>`, or **Cloudfield relay** with the claim link; with
-neither, `cloudfield link <this-host>:2222`. When the edge is not the project's,
-at `https://edge.cloudfield.ai` or `https://edge.onaether.dev`, both client
-commands carry `--edge <url>`, because a claim code names no edge.
+neither, `cloudfield link <this-host>:2222`. When the edge is not the project's
+at `https://edge.cloudfield.ai`, both client commands carry `--edge <url>`,
+because a claim code names no edge; as of 2026-11-26 the edge's former
+address, `https://edge.onaether.dev`, counts as the project's too.
 
 ```sh
 sudo systemctl daemon-reload && sudo systemctl enable --now aether-server

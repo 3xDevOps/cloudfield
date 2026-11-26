@@ -619,7 +619,7 @@ chosen agent on that account meets:
 | --- | --- |
 | `<n>% used` | Launches; the fullest usage window, `· stale` when the last read failed |
 | **Ready** | Launches; no usage is measured for it |
-| **Sign in after launch** | Your own account has no login file for the agent; it launches and the agent asks you to sign in |
+| **Sign in after launch** | Your own account has no login for the agent; it launches and the agent asks you to sign in |
 | **Needs `<owner>`'s login** | The owner has no login for the agent; the launch is refused |
 | **Not installed**, **Your account only**, **Unavailable** | The launch is refused; hover **Unavailable** for the reason |
 | **Not checked** | The dashboard could not read the account's agents; hover for the error |
@@ -659,6 +659,13 @@ lists exactly what is shared.
 - An owner with no login shows **Needs `<owner>`'s login**. A CLI launch fails with `Grace
   is not logged in to claude: no login at ~/.claude/.credentials.json in their
   home; Grace logs in to claude in their own environment terminal`.
+- A Claude Code sign-in through the Anthropic Console is never shared
+  ([harnesses.md](harnesses.md#claude-code)): it holds an API key or a token
+  for the API, which stays in its owner's sessions. An owner with only that
+  sign-in shows **Needs `<owner>`'s login**, and a CLI launch fails with `Grace
+  is not logged in to claude with a login Cloudfield shares: ~/.claude.json
+  holds an Anthropic Console sign-in, which stays in Grace's own sessions;
+  sharing needs a subscription login at ~/.claude/.credentials.json`.
 - Every member's containers mount their own Claude Code and Gemini login files
   in place, so a token refresh rewrites the file instead of replacing it. A
   server on Docker Engine older than 26.0 mounts none, and cannot share either.
@@ -694,7 +701,9 @@ not run on reads **Skipped:** and the reason. Your own account with no login
 file for the agent reads **No saved login**: a launch may still fall back to
 it, last, and the agent asks you to sign in, but a running session moves
 there only if an API key (`ANTHROPIC_API_KEY`, or `CODEX_API_KEY` in
-Background) signs the agent in. From the CLI:
+Background) signs the agent in. A Claude Code sign-in through the Anthropic
+Console is a login on your own account, so a session can fall back to it, and
+the API then bills that session. From the CLI:
 
 ```sh
 # If Grace's account is exhausted, try Lin's, then your own
@@ -763,7 +772,7 @@ stopped sharing with you. `unknown` lists what it could not check:
   which launches accept;
 - a model for your own agent definition, which a launch passes only if the
   definition sets model arguments;
-- an agent with no login file, which still launches if an API key in the
+- an agent with no login, which still launches if an API key in the
   environment signs it in;
 - every saved agent, when the account's agents could not be listed.
 

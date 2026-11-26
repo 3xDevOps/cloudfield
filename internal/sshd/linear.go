@@ -7,11 +7,11 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/3xDevOps/Aether/internal/domain"
-	"github.com/3xDevOps/Aether/internal/linear/api"
-	"github.com/3xDevOps/Aether/internal/permissions"
-	"github.com/3xDevOps/Aether/internal/protocol"
-	"github.com/3xDevOps/Aether/internal/store"
+	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/linear/api"
+	"github.com/3xDevOps/cloudfield/internal/permissions"
+	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/store"
 )
 
 // LinearService is the seam for members' Linear connections. Satisfied by
@@ -119,7 +119,7 @@ func linearMethod[P any](call func(LinearService, context.Context, domain.Member
 		out, err := call(svc, ctx, member, p)
 		if errors.Is(err, api.ErrNotConnected) {
 			return nil, &protocol.Error{Code: protocol.CodeInvalidState,
-				Message: "Linear is not connected: save a personal API key in Settings → Linear"}
+				Message: "Linear is not connected: save a personal API key in Settings → Connections → Linear"}
 		}
 		if err != nil {
 			return nil, rpcError(err)

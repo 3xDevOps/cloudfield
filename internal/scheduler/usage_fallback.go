@@ -9,16 +9,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/3xDevOps/Aether/internal/acphost"
-	"github.com/3xDevOps/Aether/internal/adapter"
-	"github.com/3xDevOps/Aether/internal/agentstatus"
-	"github.com/3xDevOps/Aether/internal/domain"
-	"github.com/3xDevOps/Aether/internal/events"
-	"github.com/3xDevOps/Aether/internal/fallback"
-	"github.com/3xDevOps/Aether/internal/permissions"
-	"github.com/3xDevOps/Aether/internal/ptyhost"
-	"github.com/3xDevOps/Aether/internal/runtime"
-	"github.com/3xDevOps/Aether/internal/store"
+	"github.com/3xDevOps/cloudfield/internal/acphost"
+	"github.com/3xDevOps/cloudfield/internal/adapter"
+	"github.com/3xDevOps/cloudfield/internal/agentstatus"
+	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/events"
+	"github.com/3xDevOps/cloudfield/internal/fallback"
+	"github.com/3xDevOps/cloudfield/internal/permissions"
+	"github.com/3xDevOps/cloudfield/internal/ptyhost"
+	"github.com/3xDevOps/cloudfield/internal/runtime"
+	"github.com/3xDevOps/cloudfield/internal/store"
 )
 
 // UsageFallback wires reactive usage fallback: a live run whose agent hit
@@ -726,6 +726,15 @@ func (s *Scheduler) chooseMove(ctx context.Context, entry *supervised, f *UsageF
 			signedIn, loginErr := s.cfg.Homes.LoginFound(account, paths)
 			if loginErr != nil {
 				return false, loginErr
+			}
+			if !signedIn {
+				// One the server cannot read is not counted; a workspace
+				// variable may still sign the agent in.
+				own, ownErr := s.cfg.Homes.OwnerLogin(account, run.Harness)
+				if ownErr != nil {
+					slog.Warn("scheduler: cannot read the login the agent keeps outside its login file", "agent", run.Harness, "account", account, "error", ownErr)
+				}
+				signedIn = own != nil
 			}
 			if !signedIn {
 				if byEnv, envErr := s.environmentSignsIn(ctx, run.WorkspaceID, run.Harness, profile, mode); envErr != nil || !byEnv {

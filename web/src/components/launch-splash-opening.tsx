@@ -22,7 +22,7 @@ const LEVEL = 0.85
 /** Near the lockup strokes are shorter and at this opacity, easing back over CALM_EASE px. */
 const CALM_FLOOR = 0.46
 const CALM_EASE = 95
-const FIELD_STOPS = ['#aaf5ea', '#54e0d0', '#4bb9ea', '#4a8dff', '#266ce1', '#8fbaff']
+const FIELD_STOPS = ['#94e2d5', '#89dceb', '#74c7ec', '#89b4fa', '#b4befe', '#cba6f7']
 const COLOURS = 40
 const ALPHAS = 6
 const PALETTE = Array.from({ length: COLOURS }, (_, i) => {

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,8 +18,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
-	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
-	edgestore "github.com/3xDevOps/Aether/internal/edge/store"
+	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
+	edgestore "github.com/3xDevOps/cloudfield/internal/edge/store"
 )
 
 // newEdge makes a data directory with a database holding one account and
@@ -216,7 +217,7 @@ func TestDataLock(t *testing.T) {
 	}
 	defer unlock()
 	_, err = run(t, dir, "accounts", "list")
-	if err == nil || !strings.Contains(err.Error(), "is at schema version 99 with compat floor 99, and this binary supports 1; an edge is running on "+dir+
+	if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("is at schema version 99 with compat floor 99, and this binary supports %d; an edge is running on ", edgestore.SchemaVersion())+dir+
 		", so run this command with the same image or binary as the running edge") {
 		t.Fatalf("accounts list at another schema: %v", err)
 	}
