@@ -183,6 +183,7 @@ func (s *Scheduler) holdAwake(ctx context.Context, run domain.RunID) (release fu
 // wake starts entry's stopped container, once however many callers ask at
 // the same time: the first runs the wake and the others wait for its result.
 func (s *Scheduler) wake(ctx context.Context, entry *supervised) error {
+	timed := runtime.WithSteps(s.superCtx)
 	for {
 		s.mu.Lock()
 		switch {
@@ -232,7 +233,8 @@ func (s *Scheduler) wake(ctx context.Context, entry *supervised) error {
 			saved, _ := saver.SavedMemory(cid)
 			limit += time.Duration(saved/restoreRate) * time.Second
 		}
-		wakeCtx, cancel := context.WithTimeout(s.superCtx, limit)
+		wakeCtx, cancel := context.WithTimeout(timed, limit)
+		runtime.Step(wakeCtx, "wait_for_save")
 		how, err := s.wakeLive(wakeCtx, entry)
 		cancel()
 		if err != nil {
@@ -257,6 +259,7 @@ func (s *Scheduler) wake(ctx context.Context, entry *supervised) error {
 			slog.Warn("scheduler: wake a sleeping session", "run", entry.runID, "error", err)
 			return err
 		}
+		runtime.LogSteps(wakeCtx, "scheduler: wake steps", "run", entry.runID)
 		s.noteWake(ctx, entry.runID, how)
 		return nil
 	}
@@ -308,6 +311,7 @@ func (s *Scheduler) wakeLive(ctx context.Context, entry *supervised) (woke, erro
 	if err != nil {
 		return woke{}, err
 	}
+	runtime.Step(ctx, "admission")
 	how, err := s.startAsleep(ctx, entry)
 	if err != nil {
 		if errors.Is(err, runtime.ErrNotFound) {
@@ -319,6 +323,7 @@ func (s *Scheduler) wakeLive(ctx context.Context, entry *supervised) (woke, erro
 	}
 	up, stop := s.untilExit(ctx, cid)
 	err = s.reattach(up, entry, how.restored)
+	runtime.Step(ctx, "reattach")
 	exited := context.Cause(up)
 	stop()
 	if err != nil {

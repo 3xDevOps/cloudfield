@@ -244,6 +244,7 @@ func (e *engine) create(ctx context.Context, key string, spec runtime.Spec, opts
 	if err != nil {
 		return "", fmt.Errorf("vm runtime: base disk for %s: %w", spec.Image, err)
 	}
+	runtime.Step(ctx, "image")
 	index := offline
 	if !opts.Offline {
 		if index, err = e.allocateNet(); err != nil {
@@ -273,10 +274,12 @@ func (e *engine) create(ctx context.Context, key string, spec runtime.Spec, opts
 			return "", fmt.Errorf("vm runtime: cache disk: %w", err)
 		}
 	}
+	runtime.Step(ctx, "disks")
 	disks, shared, err := e.checkoutDisks(ctx, spec)
 	if err != nil {
 		return "", err
 	}
+	runtime.Step(ctx, "checkout_disk")
 	state, err := e.stateDisk(ctx, spec.Mounts)
 	if err != nil {
 		return "", err
@@ -414,15 +417,18 @@ func (e *engine) startLocked(ctx context.Context, key string) (err error) {
 	if err = e.attachPrograms(rec); err != nil {
 		return err
 	}
+	runtime.Step(ctx, "prepare")
 	l, err := e.bootLaunch(ctx, rec)
 	if err != nil {
 		return err
 	}
+	runtime.Step(ctx, "helper_disk")
 	if rec.Net != offline {
 		if err = e.ensureNetwork(ctx); err != nil {
 			return err
 		}
 	}
+	runtime.Step(ctx, "network")
 	rec.Booted, rec.Exited, rec.Frozen = true, false, false
 	rec.CacheRan, rec.CacheSynced = rec.Cache.Path != "", false
 	rec.Boots++
@@ -432,6 +438,7 @@ func (e *engine) startLocked(ctx context.Context, key string) (err error) {
 	if err = e.launch(ctx, rec, l); err != nil {
 		return err
 	}
+	runtime.Step(ctx, "unit")
 	defer func() {
 		if err != nil {
 			e.kill(context.WithoutCancel(ctx), key)
@@ -661,6 +668,8 @@ func (e *engine) boot(ctx context.Context, rec *record) error {
 	if err = e.waitHelper(ctx, rec.Key, h); err != nil {
 		return err
 	}
+	e.stepHypervisor(ctx, rec.Key)
+	runtime.Step(ctx, "guest_boot")
 	upCtx, stop, _ := e.whileUp(ctx, rec.Key)
 	defer stop()
 	stopped := func(err error) error {
@@ -716,6 +725,7 @@ func (e *engine) boot(ctx context.Context, rec *record) error {
 	if e.flag(e.capture, rec.Key) {
 		argv, script = captureMain, ""
 	}
+	runtime.Step(ctx, "guest_setup")
 	e.setFlag(e.booting, rec.Key, true)
 	err = h.Boot(upCtx, guest.BootSpec{
 		Main: guest.ProcessSpec{
@@ -735,7 +745,16 @@ func (e *engine) boot(ctx context.Context, rec *record) error {
 	if err != nil {
 		return stopped(fmt.Errorf("vm runtime: boot VM %s: %w", rec.Key, err))
 	}
+	runtime.Step(ctx, "helper_boot")
 	return nil
+}
+
+// stepHypervisor ends the timed step of the hypervisor's start at the time
+// Cloud Hypervisor made its API socket, the first thing it does.
+func (e *engine) stepHypervisor(ctx context.Context, key string) {
+	if info, err := os.Stat(e.path(key, apiSocket)); err == nil {
+		runtime.StepAt(ctx, "hypervisor", info.ModTime())
+	}
 }
 
 // startKept is start, with a failure that is not the VM's own (its root

@@ -412,7 +412,9 @@ func (r *Runtime) Restore(ctx context.Context, id runtime.ID) error {
 	if !ok {
 		return errors.New("vm runtime: only a session VM can be restored; Docker containers cannot")
 	}
-	return r.vms.restore(ctx, key)
+	err := r.vms.restore(ctx, key)
+	runtime.Step(ctx, "saved_state")
+	return err
 }
 
 func (r *Runtime) SetCommand(_ context.Context, id runtime.ID, command []string) error {
