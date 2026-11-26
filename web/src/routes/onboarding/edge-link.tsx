@@ -480,7 +480,7 @@ export function RetiringNotice({ edge, notice, signIn }: { edge: string; notice:
     <Callout tone={notice.state === 'retired' ? 'failed' : 'needs-you'} className="self-stretch">
       <p>
         <span className="font-code">{edgeHost(edge)}</span> says it {when} and that its new address is{' '}
-        <span className="break-all font-code">{notice.replacement}</span>.
+        <span className="break-words font-code">{notice.replacement}</span>.
       </p>
       <p className="text-muted">
         {known
