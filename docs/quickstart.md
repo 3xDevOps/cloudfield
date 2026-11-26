@@ -503,7 +503,7 @@ an `answered` report or no report or it went silent, and a message continues it 
 <session-id> "<reply>"`), 5 when its wait broke (a condition it waited on resolved
 and the wake never reached the agent, or its source went unread for an hour; see [Waits Cloudfield can
 check](failure-handling.md#waits-cloudfield-can-check)), and 124 on timeout.
-Before exiting it prints `run
+Before exiting it prints `session
 <session-id> <state>: <reason>`, with the state as `cloudfield sessions` labels it. It keeps waiting
 while the session waits on agents, CI or a process. When Cloudfield cannot vouch for that wait
 it says so once on stderr: `session <session-id> still waits, but <condition>: status
@@ -514,6 +514,12 @@ sessions <session-id>` shows what one needs with the command that answers it. `c
 answer` allows a permission request once or denies it once, never always.
 `--json` on `cloudfield sessions <session-id>` and `cloudfield wait` prints the session as one JSON
 object.
+
+`cloudfield wait <session-id> <session-id> ...` waits on several sessions. It returns when the
+first of them would end a wait on it alone, prints that session and exits with its code; when
+more than one would, the first in the order given. A session that already finished or needs
+you ends the wait at once, so leave it out to wait on the rest. On timeout it prints one line
+per session, and with `--json` nothing.
 
 ## Prove the plumbing without an agent subscription
 

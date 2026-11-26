@@ -62,7 +62,7 @@ func TestWaitExitsWithTheRunsOutcome(t *testing.T) {
 				protocol.MethodWorkspaceTimeline: {result: protocol.WorkspaceTimelineResult{}},
 			})
 			var out bytes.Buffer
-			err := waitRun(c, &out, io.Discard, "r1", false, make(chan struct{}), time.Hour, tc.deadline, time.Minute)
+			err := waitRun(c, &out, io.Discard, []string{"r1"}, false, make(chan struct{}), time.Hour, tc.deadline, time.Minute)
 			code := 0
 			var status *exitStatusError
 			if errors.As(err, &status) {
@@ -85,6 +85,71 @@ func TestWaitExitsWithTheRunsOutcome(t *testing.T) {
 	}
 }
 
+// Of several sessions the first in argument order with an outcome ends the
+// wait and is the one printed. A timeout prints each session's line, and
+// with --json nothing, so stdout never holds two documents.
+func TestWaitOnSeveralSessions(t *testing.T) {
+	timedOut := make(chan time.Time)
+	close(timedOut)
+	runs := map[string]protocol.Run{
+		"r1": {Status: "running", Activity: "working"},
+		"r2": {Status: "failed", Reason: "agent exited 1: boom"},
+		"r3": {Status: "completed"},
+		"r4": {Status: "needs-attention", Activity: "waiting-ci"},
+	}
+	for _, tc := range []struct {
+		name   string
+		ids    []string
+		asJSON bool
+		code   int
+		out    string
+		err    string
+	}{
+		{name: "first with an outcome", ids: []string{"r1", "r2", "r3"}, code: waitFailed,
+			out: "session r2 Failed: agent exited 1: boom\n", err: "session r2 failed"},
+		{name: "timeout", ids: []string{"r1", "r4"}, code: waitTimedOut,
+			out: "session r1 Working\nsession r4 Waiting for CI\n", err: "timed out after 1m0s waiting for sessions r1, r4"},
+		{name: "timeout as JSON", ids: []string{"r1", "r4"}, asJSON: true, code: waitTimedOut,
+			err: "timed out after 1m0s waiting for sessions r1, r4"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := fakeControlMethods(t, map[string]*fakeReply{
+				protocol.MethodRunGet: {byParams: func(params json.RawMessage) any {
+					var p protocol.RunIDParams
+					_ = json.Unmarshal(params, &p)
+					r := runs[p.RunID]
+					r.ID, r.WorkspaceID = p.RunID, "ws1"
+					return protocol.RunResult{Run: r}
+				}},
+				protocol.MethodAttentionList:     {result: protocol.AttentionListResult{}},
+				protocol.MethodWorkspaceList:     {result: protocol.WorkspaceListResult{}},
+				protocol.MethodWorkspaceTimeline: {result: protocol.WorkspaceTimelineResult{}},
+			})
+			var out bytes.Buffer
+			err := waitRun(c, &out, io.Discard, tc.ids, tc.asJSON, make(chan struct{}), time.Hour, timedOut, time.Minute)
+			var status *exitStatusError
+			if !errors.As(err, &status) || status.code != tc.code || err.Error() != tc.err {
+				t.Fatalf("wait = %v, want exit %d: %s", err, tc.code, tc.err)
+			}
+			if out.String() != tc.out {
+				t.Errorf("wait printed %q, want %q", out.String(), tc.out)
+			}
+		})
+	}
+}
+
+// Subscribed to every session's status events, the wait wakes only on the
+// ones it names.
+func TestWaitWakesOnlyOnItsSessions(t *testing.T) {
+	for runID, want := range map[string]bool{"r2": true, "r9": false} {
+		changed := make(chan struct{}, 1)
+		signalLines(strings.NewReader(`{"type":"run.status","run_id":"`+runID+`"}`+"\n"), []string{"r1", "r2"}, changed)
+		if _, woke := <-changed; woke != want {
+			t.Errorf("a status event of %s woke the wait = %v, want %v", runID, woke, want)
+		}
+	}
+}
+
 // A status event wakes the wait instead of its recheck interval.
 func TestWaitWakesOnAStatusEvent(t *testing.T) {
 	run := &fakeReply{result: protocol.RunResult{Run: protocol.Run{ID: "r1", WorkspaceID: "ws1", Status: "running", Activity: "working"}}}
@@ -96,7 +161,9 @@ func TestWaitWakesOnAStatusEvent(t *testing.T) {
 	})
 	changed := make(chan struct{}, 1)
 	done := make(chan error, 1)
-	go func() { done <- waitRun(c, &bytes.Buffer{}, io.Discard, "r1", false, changed, time.Hour, nil, 0) }()
+	go func() {
+		done <- waitRun(c, &bytes.Buffer{}, io.Discard, []string{"r1"}, false, changed, time.Hour, nil, 0)
+	}()
 	for run.params() == nil {
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -130,7 +197,7 @@ func TestWaitWarnsOnceOnAnUnknownSource(t *testing.T) {
 	changed := make(chan struct{})
 	var out, stderr bytes.Buffer
 	done := make(chan error, 1)
-	go func() { done <- waitRun(c, &out, &stderr, "r1", true, changed, time.Hour, nil, 0) }()
+	go func() { done <- waitRun(c, &out, &stderr, []string{"r1"}, true, changed, time.Hour, nil, 0) }()
 	for run.params() == nil {
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -167,14 +234,14 @@ func TestWaitWarnsOnceOnAnUnknownSource(t *testing.T) {
 func TestWaitCutConnectionTimesOut(t *testing.T) {
 	stalled := errors.New("EOF")
 	var status *exitStatusError
-	if err := timedOutAfterCut(stalled, true, time.Minute, "r1"); !errors.As(err, &status) || status.code != waitTimedOut {
+	if err := timedOutAfterCut(stalled, true, time.Minute, []string{"r1"}); !errors.As(err, &status) || status.code != waitTimedOut {
 		t.Fatalf("cut connection = %v, want exit %d", err, waitTimedOut)
 	}
-	if err := timedOutAfterCut(stalled, false, time.Minute, "r1"); err != stalled {
+	if err := timedOutAfterCut(stalled, false, time.Minute, []string{"r1"}); err != stalled {
 		t.Fatalf("uncut connection = %v, want the call's error", err)
 	}
 	needsYou := &exitStatusError{code: waitNeedsYou, err: errors.New("session r1 needs you")}
-	if err := timedOutAfterCut(needsYou, true, time.Minute, "r1"); err != needsYou {
+	if err := timedOutAfterCut(needsYou, true, time.Minute, []string{"r1"}); err != needsYou {
 		t.Fatalf("outcome after cut = %v, want it unchanged", err)
 	}
 }

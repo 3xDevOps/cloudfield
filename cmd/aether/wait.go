@@ -2,10 +2,13 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"slices"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -18,8 +21,8 @@ import (
 func init() {
 	register(command{
 		name:    "wait",
-		short:   "wait until a session finishes, needs you or ends its turn (exit 0 finished, 1 failed, 3 needs you, 4 parked until a message, 5 its wait broke, 124 timed out)",
-		usage:   "cloudfield wait <session-id> [--timeout <duration>] [--json]",
+		short:   "wait until a session, or the first of several, finishes, needs you or ends its turn (exit 0 finished, 1 failed, 3 needs you, 4 parked until a message, 5 its wait broke, 124 timed out)",
+		usage:   "cloudfield wait <session-id> [<session-id>...] [--timeout <duration>] [--json]",
 		example: "cloudfield wait run-d6ay38tj8j --timeout 30m --json",
 		flags:   true,
 		run:     runWait,
@@ -51,12 +54,18 @@ func runWait(args []string) error {
 	fs := newFlagSet("wait")
 	timeout := fs.Duration("timeout", 0, "give up after this long and exit 124, e.g. 30m (default: no limit)")
 	asJSON := fs.Bool("json", false, "print the session as cloudfield sessions <session-id> --json does")
-	runID, err := parseLeadingArg(fs, args)
-	if err != nil {
-		return fmt.Errorf("%w\nusage: cloudfield wait <session-id> [--timeout <duration>] [--json]", err)
+	var runIDs []string
+	for {
+		if err := fs.Parse(args); err != nil {
+			return fmt.Errorf("%w\nusage: cloudfield wait <session-id> [<session-id>...] [--timeout <duration>] [--json]", err)
+		}
+		if fs.NArg() == 0 {
+			break
+		}
+		runIDs, args = append(runIDs, fs.Arg(0)), fs.Args()[1:]
 	}
-	if runID == "" {
-		return fmt.Errorf("usage: cloudfield wait <session-id> [--timeout <duration>] [--json]")
+	if len(runIDs) == 0 {
+		return fmt.Errorf("usage: cloudfield wait <session-id> [<session-id>...] [--timeout <duration>] [--json]")
 	}
 	var deadline <-chan time.Time
 	end := time.Now().Add(*timeout)
@@ -86,34 +95,52 @@ func runWait(args []string) error {
 	}
 	c, err := conn.Control()
 	if err != nil {
-		return timedOutAfterCut(err, cutOff.Load(), *timeout, runID)
+		return timedOutAfterCut(err, cutOff.Load(), *timeout, runIDs)
 	}
 	defer func() { _ = c.Close() }()
 	changed, every := make(chan struct{}, 1), waitPoll
-	stream, err := conn.EventsStream(protocol.SubscribeRequest{RunID: runID, Types: []string{string(events.TypeRunStatus)}})
+	// A subscription names one session at most, so several take every
+	// session's status and signalLines keeps theirs.
+	subscribe := protocol.SubscribeRequest{Types: []string{string(events.TypeRunStatus)}}
+	if len(runIDs) == 1 {
+		subscribe.RunID = runIDs[0]
+	}
+	stream, err := conn.EventsStream(subscribe)
 	if err == nil {
 		defer func() { _ = stream.Close() }()
-		go signalLines(stream, changed)
+		go signalLines(stream, runIDs, changed)
 		every = waitRecheck
 	}
-	err = waitRun(c, os.Stdout, os.Stderr, runID, *asJSON, changed, every, deadline, *timeout)
-	return timedOutAfterCut(err, cutOff.Load(), *timeout, runID)
+	err = waitRun(c, os.Stdout, os.Stderr, runIDs, *asJSON, changed, every, deadline, *timeout)
+	return timedOutAfterCut(err, cutOff.Load(), *timeout, runIDs)
 }
 
-func timedOutAfterCut(err error, cut bool, timeout time.Duration, runID string) error {
+func sessionsNamed(runIDs []string) string {
+	if len(runIDs) == 1 {
+		return "session " + runIDs[0]
+	}
+	return "sessions " + strings.Join(runIDs, ", ")
+}
+
+func timedOutAfterCut(err error, cut bool, timeout time.Duration, runIDs []string) error {
 	var status *exitStatusError
 	if err == nil || !cut || errors.As(err, &status) {
 		return err
 	}
-	return &exitStatusError{code: waitTimedOut, err: fmt.Errorf("timed out after %s waiting for session %s: the server stopped answering: %w", timeout, runID, err)}
+	return &exitStatusError{code: waitTimedOut, err: fmt.Errorf("timed out after %s waiting for %s: the server stopped answering: %w", timeout, sessionsNamed(runIDs), err)}
 }
 
-func signalLines(stream io.Reader, changed chan<- struct{}) {
+func signalLines(stream io.Reader, runIDs []string, changed chan<- struct{}) {
 	defer close(changed)
 	r := bufio.NewReaderSize(stream, 64<<10)
 	for {
-		if _, err := protocol.ReadLine(r); err != nil {
+		line, err := protocol.ReadLine(r)
+		if err != nil {
 			return
+		}
+		var ev protocol.Event
+		if json.Unmarshal(line, &ev) != nil || !slices.Contains(runIDs, ev.RunID) {
+			continue
 		}
 		select {
 		case changed <- struct{}{}:
@@ -122,29 +149,45 @@ func signalLines(stream io.Reader, changed chan<- struct{}) {
 	}
 }
 
-func waitRun(c *protocol.Client, w, stderr io.Writer, runID string, asJSON bool, changed <-chan struct{}, every time.Duration, deadline <-chan time.Time, timeout time.Duration) error {
+type waitedRun struct {
+	run   protocol.Run
+	items []protocol.AttentionItem
+}
+
+func waitRun(c *protocol.Client, w, stderr io.Writer, runIDs []string, asJSON bool, changed <-chan struct{}, every time.Duration, deadline <-chan time.Time, timeout time.Duration) error {
 	tick := time.NewTicker(every)
 	defer tick.Stop()
-	var doubt string
+	doubt := map[string]string{}
 	for {
-		r, err := getRun(c, runID)
-		if err != nil {
-			return err
-		}
-		// A wait Aether cannot vouch for keeps waiting, said once on stderr.
-		// The source's error text can change on every read, so it does not
-		// make the doubt new.
-		if r.Wait != nil && (r.Wait.Kind == domain.WaitSourceUnknown || r.Wait.Kind == domain.WaitFault) {
-			if key := string(r.Wait.Kind) + "|" + r.Wait.Detail; key != doubt {
-				doubt = key
-				_, _ = fmt.Fprintf(stderr, "session %s still waits, but %s\n", r.ID, printable(r.Wait.Text(time.Now())))
+		var (
+			waited []waitedRun
+			code   int
+			done   bool
+		)
+		for _, id := range runIDs {
+			r, err := getRun(c, id)
+			if err != nil {
+				return err
 			}
+			// A wait Aether cannot vouch for keeps waiting, said once on stderr.
+			// The source's error text can change on every read, so it does not
+			// make the doubt new.
+			if r.Wait != nil && (r.Wait.Kind == domain.WaitSourceUnknown || r.Wait.Kind == domain.WaitFault) {
+				if key := string(r.Wait.Kind) + "|" + r.Wait.Detail; key != doubt[id] {
+					doubt[id] = key
+					_, _ = fmt.Fprintf(stderr, "session %s still waits, but %s\n", r.ID, printable(r.Wait.Text(time.Now())))
+				}
+			}
+			items, err := attentionItems(c, r.WorkspaceID)
+			if err != nil {
+				return err
+			}
+			if code, done = waitOutcome(r, items); done {
+				waited = []waitedRun{{r, items}}
+				break
+			}
+			waited = append(waited, waitedRun{r, items})
 		}
-		items, err := attentionItems(c, r.WorkspaceID)
-		if err != nil {
-			return err
-		}
-		code, done := waitOutcome(r, items)
 		timedOut := false
 		if !done {
 			select {
@@ -160,16 +203,23 @@ func waitRun(c *protocol.Client, w, stderr io.Writer, runID string, asJSON bool,
 				code, timedOut = waitTimedOut, true
 			}
 		}
-		v, err := runViewOf(c, r, items)
-		if err != nil {
-			return err
+		// Stdout holds one JSON document at most, so a timeout on several
+		// sessions prints none.
+		if !asJSON || len(waited) == 1 {
+			for _, s := range waited {
+				v, err := runViewOf(c, s.run, s.items)
+				if err != nil {
+					return err
+				}
+				if err := printWaited(w, v, s.run, s.items, code, asJSON); err != nil {
+					return err
+				}
+			}
 		}
-		if err := printWaited(w, v, r, items, code, asJSON); err != nil {
-			return err
-		}
+		r := waited[0].run
 		switch {
 		case timedOut:
-			return &exitStatusError{code: code, err: fmt.Errorf("timed out after %s waiting for session %s", timeout, r.ID)}
+			return &exitStatusError{code: code, err: fmt.Errorf("timed out after %s waiting for %s", timeout, sessionsNamed(runIDs))}
 		case code == waitFailed:
 			return &exitStatusError{code: code, err: fmt.Errorf("session %s failed", r.ID)}
 		case code == waitNeedsYou:
