@@ -958,9 +958,9 @@ runners. In the Docker-heavy jobs, the runner's Docker daemon and
 the buildx builders pull Docker Hub images through `mirror.gcr.io` and fall
 back to Docker Hub, so a Docker Hub outage alone does not fail them.
 
-Every job runs on a GitHub-hosted runner: `ubuntu-latest` for the Linux jobs,
-`ubuntu-24.04-arm` for the arm64 ones, and GitHub's Windows runners. Outside
-contributors' runs wait for a maintainer's approval
+Every job runs on a GitHub-hosted runner: `ubuntu-latest` and
+`ubuntu-24.04-arm` for the Linux jobs, `windows-latest` and `windows-11-arm`
+for the Windows ones. Outside contributors' runs wait for a maintainer's approval
 (`gh api repos/3xDevOps/cloudfield/actions/permissions/fork-pr-contributor-approval`
 reports `all_external_contributors`; organization members and repository
 collaborators are not asked). A fork can edit the workflows, so read its
