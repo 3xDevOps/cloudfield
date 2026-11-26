@@ -35,7 +35,7 @@ const (
 	// the key last reported for this server.
 	edgeStateFile = "edge_state.json"
 	// noticesFile, beside ownerFile, holds the verified notices of the
-	// edge holding the key, from the latest enrollment that sent any.
+	// latest enrollment at the edge holding the key.
 	noticesFile = "notices.json"
 )
 
@@ -139,12 +139,20 @@ func (s *State) PinnedKey() (ed25519.PublicKey, error) {
 	return p.Key, nil
 }
 
-// Pin replaces the pinned edge key.
+// Pin replaces the pinned edge key and forgets the notices stored for
+// it: none survives a change of pin.
 func (s *State) Pin(key ed25519.PublicKey) error {
 	if len(key) != ed25519.PublicKeySize {
 		return fmt.Errorf("edgeagent: edge key is %d bytes, want %d", len(key), ed25519.PublicKeySize)
 	}
-	return s.write(pinFile, pin{Key: key})
+	if err := s.write(pinFile, pin{Key: key}); err != nil {
+		return err
+	}
+	name, err := s.keyFile(noticesFile)
+	if err != nil {
+		return err
+	}
+	return s.remove(name)
 }
 
 // refuseEarlierPins refuses a first pin while an edge key pinned by a
@@ -254,22 +262,31 @@ func (s *State) writeEdgeState(serverID, state string) error {
 	return s.write(name, edgeStateRecord{ServerID: serverID, State: state})
 }
 
-// Notices returns the notices the edge holding the pinned key sent at
-// the latest enrollment, each verified against that key when it came;
-// nil when it sent none or no key is pinned.
-func (s *State) Notices() ([]edgeproto.Notice, error) {
+// StoredNotices are the notices of the latest enrollment at the edge
+// holding the pinned key, verified against it, and when they came.
+// FirstUse is set when that enrollment pinned the key, so they are
+// trusted as the pin is: on first use, for display only.
+type StoredNotices struct {
+	Received time.Time          `json:"received"`
+	FirstUse bool               `json:"first_use,omitempty"`
+	Notices  []edgeproto.Notice `json:"notices"`
+}
+
+// Notices returns the stored notices of the pinned key, none when the
+// latest enrollment had none or no key is pinned.
+func (s *State) Notices() (StoredNotices, error) {
 	name, err := s.keyFile(noticesFile)
 	if err != nil || name == "" {
-		return nil, err
+		return StoredNotices{}, err
 	}
-	var n []edgeproto.Notice
+	var n StoredNotices
 	_, err = s.read(name, &n)
 	return n, err
 }
 
-// writeNotices records notices, verified against the pinned key, as the
-// latest the edge holding it sent, and forgets them when there are none.
-func (s *State) writeNotices(notices []edgeproto.Notice) error {
+// writeNotices replaces the stored notices of the pinned key with n, and
+// forgets them when n holds none.
+func (s *State) writeNotices(n StoredNotices) error {
 	unlock, err := s.lock()
 	if err != nil {
 		return err
@@ -282,10 +299,10 @@ func (s *State) writeNotices(notices []edgeproto.Notice) error {
 	if name == "" {
 		return errors.New("edgeagent: no edge key is pinned, so no notices can be recorded")
 	}
-	if len(notices) == 0 {
+	if len(n.Notices) == 0 {
 		return s.remove(name)
 	}
-	return s.write(name, notices)
+	return s.write(name, n)
 }
 
 // writeOwner records owner for the pinned key.

@@ -67,10 +67,11 @@ func (a *Agent) Move(ctx context.Context, target string) (string, error) {
 // and to, all canonical: the edge at either address must, since a client
 // may come in on either.
 func (a *Agent) probeMove(ctx context.Context, origin, from, to string) error {
-	ready, protocol, err := a.probe(ctx, origin)
+	e, err := a.probe(ctx, origin)
 	if err != nil {
 		return err
 	}
+	ready, protocol := e.ready, e.protocol
 	if protocol < edgeproto.VersionRelayOrigin {
 		return fmt.Errorf("%s speaks edge protocol %d; a server moved to %s would accept connector tokens only for that address, "+
 			"so connectors registered at %s would stop working. Moving needs edge protocol %d or later: the edge's operator upgrades it",
@@ -94,13 +95,13 @@ func (a *Agent) probeMove(ctx context.Context, origin, from, to string) error {
 }
 
 // probe enrolls at origin and closes the connection once the edge is
-// ready.
-func (a *Agent) probe(ctx context.Context, origin string) (edgeproto.Ready, int, error) {
-	c, cancel, ready, protocol, err := a.enroll(ctx, origin)
+// ready. Its notices are those of this probe's own ready, verified.
+func (a *Agent) probe(ctx context.Context, origin string) (enrollment, error) {
+	c, cancel, e, err := a.enroll(ctx, origin)
 	if err != nil {
-		return edgeproto.Ready{}, 0, fmt.Errorf("edgeagent: enroll at %s: %w", origin, err)
+		return enrollment{}, fmt.Errorf("edgeagent: enroll at %s: %w", origin, err)
 	}
 	defer cancel()
 	_ = c.Close(websocket.StatusNormalClosure, "")
-	return ready, protocol, nil
+	return e, nil
 }

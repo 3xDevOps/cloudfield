@@ -238,21 +238,25 @@ func parseRetiringPairs(list, scheme, relay string, more []edge.Pair) ([]edge.Re
 		return nil, errors.New("--retiring-pairs: this edge serves one address pair, which cannot retire; " +
 			"serve its replacement first with --origin-pairs (AETHER_EDGE_ORIGIN_PAIRS)")
 	}
-	relays := map[string]string{sameOrigin(relay): relay}
+	relays := map[string]string{host(relay): relay}
 	signinOrigins := map[string]string{}
 	for _, p := range more {
-		relays[sameOrigin(p.RelayOrigin)] = p.RelayOrigin
-		signinOrigins[sameOrigin(p.SigninOrigin)] = p.RelayOrigin
+		relays[host(p.RelayOrigin)] = p.RelayOrigin
+		signinOrigins[host(p.SigninOrigin)] = p.RelayOrigin
 	}
 	served := func(origin string) (string, error) {
 		if err := checkOrigin("--retiring-pairs", origin, scheme); err != nil {
 			return "", err
 		}
-		if r, ok := relays[sameOrigin(origin)]; ok {
-			c, _ := edgeproto.Origin(r) // checked as an origin above
+		r, ok := relays[host(origin)]
+		switch {
+		case ok && sameOrigin(r) != sameOrigin(origin):
+			return "", fmt.Errorf("--retiring-pairs: %s has the host name of the relay origin %s; write that origin", origin, r)
+		case ok:
+			c, _ := edgeproto.Origin(r) // parseOptions checked it
 			return c, nil
 		}
-		if r, ok := signinOrigins[sameOrigin(origin)]; ok {
+		if r, ok := signinOrigins[host(origin)]; ok {
 			return "", fmt.Errorf("--retiring-pairs: %s is a sign-in origin; name the relay origin of its pair, %s", origin, r)
 		}
 		return "", fmt.Errorf("--retiring-pairs: %s is not a relay origin of this edge; name one of --relay-origin and the relay origins of --origin-pairs", origin)
@@ -285,7 +289,7 @@ func parseRetiringPairs(list, scheme, relay string, more []edge.Pair) ([]edge.Re
 		}
 		for _, o := range out {
 			if o.RelayOrigin == r.RelayOrigin {
-				return nil, fmt.Errorf("--retiring-pairs names %s twice; keep one entry for it", fields[0])
+				return nil, fmt.Errorf("--retiring-pairs names the host %s in two entries; keep one entry for it", host(r.RelayOrigin))
 			}
 		}
 		out = append(out, r)

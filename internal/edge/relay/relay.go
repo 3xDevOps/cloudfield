@@ -93,8 +93,8 @@ type Config struct {
 	// names that origin, whichever origin the client came in on.
 	Origin      string
 	MoreOrigins []string
-	// Notices, unsigned, go into every Ready, each signed for the server
-	// and the handshake. Each names two of the relay origins.
+	// Notices go into every Ready to a server that sent a notice nonce,
+	// signed for it. Each names two of the relay origins.
 	Notices []edgeproto.Notice
 	// EdgeKey signs grants. Servers pin its public half.
 	EdgeKey   ed25519.PrivateKey
@@ -326,14 +326,15 @@ func New(ctx context.Context, cfg Config) (*Relay, error) {
 	return r, nil
 }
 
-// signedNotices are the relay's notices signed for the server serverID in
-// the handshake whose challenge carried nonce, nil when it has none.
-func (r *Relay) signedNotices(serverID string, nonce []byte) edgeproto.Notices {
-	var out edgeproto.Notices
-	for _, n := range r.notices {
-		out = append(out, edgeproto.SignNotice(r.key, serverID, nonce, n))
+// signNotices returns the relay's notices and their signature for the
+// server serverID, which dialed origin and sent nonce in its hello;
+// nothing when the nonce is not NonceSize bytes, as from a server that
+// does not know notices.
+func (r *Relay) signNotices(serverID, origin string, nonce []byte) (edgeproto.Notices, []byte) {
+	if len(nonce) != edgeproto.NonceSize {
+		return nil, nil
 	}
-	return out
+	return r.notices, edgeproto.SignNotices(r.key, serverID, origin, nonce, r.notices)
 }
 
 // Register adds the control, data, connect, claim and MCP endpoints to

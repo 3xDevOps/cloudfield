@@ -10,133 +10,200 @@ import (
 	"testing"
 )
 
-const noticeServer = "7ozstx3hvprfzhna3cakjwhdnw"
+const (
+	noticeServer = "7ozstx3hvprfzhna3cakjwhdnw"
+	noticeOrigin = "https://edge.example"
+)
 
-func testNotice() Notice {
-	return Notice{State: NoticeRetiring, Origin: "https://edge.example", Replacement: "https://edge2.example", Date: "2027-03-01"}
+func testNotices() []Notice {
+	return []Notice{
+		{State: NoticeRetiring, Origin: "https://edge.example", Replacement: "https://edge2.example", Date: "2027-03-01"},
+		{State: NoticeRetired, Origin: "https://edge0.example", Replacement: "https://edge2.example"},
+	}
 }
 
-func TestNoticeSignature(t *testing.T) {
-	key, nonce := edgeKey(1), bytes.Repeat([]byte{1}, NonceSize)
-	pub := edgeKey(1).Public().(ed25519.PublicKey)
-	signed := SignNotice(key, noticeServer, nonce, testNotice())
-	if err := VerifyNotice(pub, noticeServer, nonce, signed); err != nil {
-		t.Fatalf("VerifyNotice of a signed notice: %v", err)
+func TestNoticesSignature(t *testing.T) {
+	key, nonce := edgeKey(1), bytes.Repeat([]byte{2}, NonceSize)
+	pub := key.Public().(ed25519.PublicKey)
+	list := testNotices()
+	sig := SignNotices(key, noticeServer, noticeOrigin, nonce, list)
+	if err := VerifyNotices(pub, noticeServer, noticeOrigin, nonce, list, sig); err != nil {
+		t.Fatalf("VerifyNotices of a signed list: %v", err)
 	}
-	undated := SignNotice(key, noticeServer, nonce, Notice{State: NoticeRetired, Origin: "https://edge.example", Replacement: "https://edge2.example"})
-	if err := VerifyNotice(pub, noticeServer, nonce, undated); err != nil {
-		t.Fatalf("VerifyNotice of a signed notice without a date: %v", err)
+	empty := SignNotices(key, noticeServer, noticeOrigin, nonce, nil)
+	if err := VerifyNotices(pub, noticeServer, noticeOrigin, nonce, nil, empty); err != nil {
+		t.Fatalf("VerifyNotices of a signed empty list: %v", err)
 	}
 
-	otherNonce := bytes.Repeat([]byte{2}, NonceSize)
-	refused := map[string]func() error{
-		"state": func() error { n := signed; n.State = NoticeRetired; return VerifyNotice(pub, noticeServer, nonce, n) },
-		"origin": func() error {
-			n := signed
-			n.Origin = "https://edge3.example"
-			return VerifyNotice(pub, noticeServer, nonce, n)
-		},
-		"replacement": func() error {
-			n := signed
-			n.Replacement = "https://edge3.example"
-			return VerifyNotice(pub, noticeServer, nonce, n)
-		},
-		"date":         func() error { n := signed; n.Date = "2027-03-02"; return VerifyNotice(pub, noticeServer, nonce, n) },
-		"date removed": func() error { n := signed; n.Date = ""; return VerifyNotice(pub, noticeServer, nonce, n) },
-		"origin and replacement swapped": func() error {
-			n := signed
-			n.Origin, n.Replacement = n.Replacement, n.Origin
-			return VerifyNotice(pub, noticeServer, nonce, n)
-		},
-		"wrong key": func() error {
-			return VerifyNotice(edgeKey(2).Public().(ed25519.PublicKey), noticeServer, nonce, signed)
-		},
-		"wrong server id": func() error { return VerifyNotice(pub, "aaaaaaaaaaaaaaaaaaaaaaaaaa", nonce, signed) },
-		"wrong nonce":     func() error { return VerifyNotice(pub, noticeServer, otherNonce, signed) },
-		"short nonce":     func() error { return VerifyNotice(pub, noticeServer, nonce[:16], signed) },
-		"no signature":    func() error { n := signed; n.Signature = nil; return VerifyNotice(pub, noticeServer, nonce, n) },
-		"short key":       func() error { return VerifyNotice(pub[:16], noticeServer, nonce, signed) },
+	edited := func(edit func(l []Notice) []Notice) []Notice {
+		return edit(append([]Notice(nil), list...))
 	}
-	for name, verify := range refused {
-		if err := verify(); err == nil {
-			t.Errorf("%s: VerifyNotice accepted a notice that does not match its signature", name)
+	refused := map[string]error{
+		"state": VerifyNotices(pub, noticeServer, noticeOrigin, nonce, edited(func(l []Notice) []Notice { l[0].State = NoticeRetired; return l }), sig),
+		"origin": VerifyNotices(pub, noticeServer, noticeOrigin, nonce,
+			edited(func(l []Notice) []Notice { l[0].Origin = "https://edge3.example"; return l }), sig),
+		"replacement": VerifyNotices(pub, noticeServer, noticeOrigin, nonce,
+			edited(func(l []Notice) []Notice { l[1].Replacement = "https://edge3.example"; return l }), sig),
+		"date":            VerifyNotices(pub, noticeServer, noticeOrigin, nonce, edited(func(l []Notice) []Notice { l[0].Date = "2027-03-02"; return l }), sig),
+		"date removed":    VerifyNotices(pub, noticeServer, noticeOrigin, nonce, edited(func(l []Notice) []Notice { l[0].Date = ""; return l }), sig),
+		"entry dropped":   VerifyNotices(pub, noticeServer, noticeOrigin, nonce, list[:1], sig),
+		"all dropped":     VerifyNotices(pub, noticeServer, noticeOrigin, nonce, nil, sig),
+		"entries swapped": VerifyNotices(pub, noticeServer, noticeOrigin, nonce, []Notice{list[1], list[0]}, sig),
+		"entry added": VerifyNotices(pub, noticeServer, noticeOrigin, nonce,
+			append(edited(func(l []Notice) []Notice { return l }), Notice{State: NoticeRetiring, Origin: "https://edge3.example", Replacement: "https://edge2.example"}), sig),
+		"empty list for a full one": VerifyNotices(pub, noticeServer, noticeOrigin, nonce, list, empty),
+		"wrong key":                 VerifyNotices(edgeKey(2).Public().(ed25519.PublicKey), noticeServer, noticeOrigin, nonce, list, sig),
+		"wrong server id":           VerifyNotices(pub, "aaaaaaaaaaaaaaaaaaaaaaaaaa", noticeOrigin, nonce, list, sig),
+		"wrong origin":              VerifyNotices(pub, noticeServer, "https://edge2.example", nonce, list, sig),
+		"wrong nonce":               VerifyNotices(pub, noticeServer, noticeOrigin, bytes.Repeat([]byte{3}, NonceSize), list, sig),
+		"short nonce":               VerifyNotices(pub, noticeServer, noticeOrigin, nonce[:16], list, sig),
+		"no signature":              VerifyNotices(pub, noticeServer, noticeOrigin, nonce, list, nil),
+		"short signature":           VerifyNotices(pub, noticeServer, noticeOrigin, nonce, list, sig[:32]),
+		"short key":                 VerifyNotices(pub[:16], noticeServer, noticeOrigin, nonce, list, sig),
+	}
+	for name, err := range refused {
+		if err == nil {
+			t.Errorf("%s: VerifyNotices accepted notices that do not match their signature", name)
 		}
 	}
 }
 
-// TestNoticeFieldsCannotShift checks that moving bytes from one field to
-// the next changes what is signed.
-func TestNoticeFieldsCannotShift(t *testing.T) {
+// TestNoticesFieldsCannotShift checks that moving bytes between fields,
+// or between entries, changes what is signed.
+func TestNoticesFieldsCannotShift(t *testing.T) {
 	nonce := bytes.Repeat([]byte{1}, NonceSize)
-	a := noticeMessage(noticeServer, nonce, Notice{State: "retiring", Origin: "https://a.example", Replacement: "https://b.example", Date: ""})
-	b := noticeMessage(noticeServer, nonce, Notice{State: "retiring", Origin: "https://a.example", Replacement: "", Date: "https://b.example"})
-	if bytes.Equal(a, b) {
-		t.Fatal("two different notices sign the same message")
+	a := noticesMessage(noticeServer, noticeOrigin, nonce, []Notice{{State: "retiring", Origin: "https://a.example", Replacement: "https://b.example"}})
+	b := noticesMessage(noticeServer, noticeOrigin, nonce, []Notice{{State: "retiring", Origin: "https://a.example", Date: "https://b.example"}})
+	c := noticesMessage(noticeServer, noticeOrigin+"x", nonce[:NonceSize-1], nil)
+	if bytes.Equal(a, b) || bytes.HasPrefix(a, c) {
+		t.Fatal("two different notice lists sign the same message")
+	}
+}
+
+// TestNoticesContextIsItsOwn checks that a notice signature can never
+// verify as a grant, a connector assertion or an enrollment: every
+// message the edge key or a host key signs starts with its own context,
+// and no context is a prefix of another.
+func TestNoticesContextIsItsOwn(t *testing.T) {
+	contexts := []string{noticesContext, grantContext, assertionContext, enrollContext}
+	for i, a := range contexts {
+		for j, b := range contexts {
+			if i != j && strings.HasPrefix(b, a) {
+				t.Errorf("signing context %q is a prefix of %q", a, b)
+			}
+		}
+	}
+	if msg := noticesMessage(noticeServer, noticeOrigin, make([]byte, NonceSize), nil); !bytes.HasPrefix(msg, []byte(noticesContext)) {
+		t.Errorf("notices message %q does not start with its context", msg)
 	}
 }
 
 func TestReadyNoticesRoundTrip(t *testing.T) {
-	nonce := bytes.Repeat([]byte{1}, NonceSize)
-	n := SignNotice(edgeKey(1), noticeServer, nonce, testNotice())
-	r := Ready{ServerID: noticeServer, State: StateClaimed, EdgeKey: edgeKey(1).Public().(ed25519.PublicKey), Notices: Notices{n}}
+	nonce := bytes.Repeat([]byte{2}, NonceSize)
+	list := testNotices()
+	r := Ready{ServerID: noticeServer, State: StateClaimed, EdgeKey: edgeKey(1).Public().(ed25519.PublicKey), Notices: list,
+		NoticesSignature: SignNotices(edgeKey(1), noticeServer, noticeOrigin, nonce, list)}
 	data, err := EncodeControl(r)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(data), `"notices":[{"state":"retiring","origin":"https://edge.example","replacement":"https://edge2.example","date":"2027-03-01","signature":"`) {
+	if !strings.Contains(string(data), `"notices":[{"state":"retiring","origin":"https://edge.example","replacement":"https://edge2.example","date":"2027-03-01"},`+
+		`{"state":"retired","origin":"https://edge0.example","replacement":"https://edge2.example"}],"notices_signature":"`) {
 		t.Fatalf("ready encodes notices as %s", data)
 	}
 	m, err := DecodeControl(data)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := m.(Ready).Notices; len(got) != 1 || VerifyNotice(r.EdgeKey, noticeServer, nonce, got[0]) != nil {
-		t.Fatalf("decoded notices %+v do not verify", got)
+	got := m.(Ready)
+	if err := VerifyNotices(r.EdgeKey, noticeServer, noticeOrigin, nonce, got.Notices, got.NoticesSignature); err != nil {
+		t.Fatalf("decoded notices do not verify: %v", err)
 	}
 
 	bad := r
-	bad.Notices = Notices{{State: "moved", Origin: n.Origin, Replacement: n.Replacement, Signature: n.Signature}}
+	bad.Notices = Notices{{State: "moved", Origin: list[0].Origin, Replacement: list[0].Replacement}}
 	if _, err := EncodeControl(bad); err == nil {
 		t.Fatal("EncodeControl sent a notice with an unknown state")
 	}
 }
 
+// TestNoticeFixturesVerify checks the signed fixture, and the fixture
+// whose notices hold entries this build cannot read: that ready is
+// accepted, and the list it keeps no longer matches the signature.
+func TestNoticeFixturesVerify(t *testing.T) {
+	for name, valid := range map[string]bool{"ready_notices": true, "ready_bad_notices": false, "ready_notices_not_a_list": false} {
+		data, err := os.ReadFile("testdata/v1/" + name + ".json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, err := DecodeControl(bytes.TrimSpace(data))
+		if err != nil {
+			t.Fatalf("%s refused: %v", name, err)
+		}
+		r := m.(Ready)
+		err = VerifyNotices(r.EdgeKey, noticeServer, noticeOrigin, bytes.Repeat([]byte{2}, NonceSize), r.Notices, r.NoticesSignature)
+		if (err == nil) != valid {
+			t.Errorf("%s: VerifyNotices = %v, want valid %v", name, err, valid)
+		}
+	}
+}
+
 // TestReadyWithoutNoticesUnchanged checks that a ready without notices
-// encodes as builds before notices sent it.
+// encodes as builds before notices sent it, and a hello without a notice
+// nonce as before.
 func TestReadyWithoutNoticesUnchanged(t *testing.T) {
-	want, err := os.ReadFile("testdata/v1/ready.json")
-	if err != nil {
-		t.Fatal(err)
-	}
-	got, err := EncodeControl(Ready{ServerID: noticeServer, State: StateUnclaimed, EdgeKey: unb64(t, "zswVB9wd3XKVlRwpCIjwla25BE0bc9aW5t8GXWg71Pw=")})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(got, bytes.TrimSpace(want)) {
-		t.Fatalf("ready without notices encodes as\n%s\nwant\n%s", got, want)
+	for name, m := range map[string]Message{
+		"ready": Ready{ServerID: noticeServer, State: StateUnclaimed, EdgeKey: unb64(t, "zswVB9wd3XKVlRwpCIjwla25BE0bc9aW5t8GXWg71Pw=")},
+		"hello": Hello{Version: 1, HostKey: unb64(t, "AAAAC3NzaC1lZDI1NTE5AAAAIM7MFQfcHd1ylZUcKQiI8JWtuQRNG3PWlubfBl1oO9T8"),
+			Signature:    unb64(t, "AAAAC3NzaC1lZDI1NTE5AAAAQAr+l1EewoxI2CWsih4ooJYBCv6geC+TUnQv7ztyto9FL/JTiIUc6J9ik4XCjDkVueYu9iV2IrOKJfC6n/Y4tAc="),
+			AgentVersion: "v0.0.0-test", Name: "devbox"},
+	} {
+		want, err := os.ReadFile("testdata/v1/" + name + ".json")
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := EncodeControl(m)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, bytes.TrimSpace(want)) {
+			t.Errorf("%s without the new fields encodes as\n%s\nwant\n%s", name, got, want)
+		}
 	}
 }
 
 func TestReadyKeepsMaxRelayOriginsNotices(t *testing.T) {
-	nonce := bytes.Repeat([]byte{1}, NonceSize)
 	var sent []Notice
 	for i := range MaxRelayOrigins + 3 {
-		n := testNotice()
-		n.Origin = fmt.Sprintf("https://old%d.example", i)
-		sent = append(sent, SignNotice(edgeKey(1), noticeServer, nonce, n))
+		sent = append(sent, Notice{State: NoticeRetiring, Origin: fmt.Sprintf("https://old%d.example", i), Replacement: "https://edge2.example"})
 	}
 	data, err := json.Marshal(map[string]any{"type": "ready", "server_id": noticeServer, "state": StateClaimed,
-		"edge_key": edgeKey(1).Public(), "notices": sent})
+		"edge_key": edgeKey(1).Public(), "notices": sent, "notices_signature": bytes.Repeat([]byte{1}, 200)})
 	if err != nil {
 		t.Fatal(err)
 	}
 	m, err := DecodeControl(data)
 	if err != nil {
-		t.Fatalf("ready with too many notices refused: %v", err)
+		t.Fatalf("ready with too many notices or a long signature refused: %v", err)
 	}
 	got := m.(Ready).Notices
-	if len(got) != MaxRelayOrigins || got[0].Origin != sent[0].Origin || got[MaxRelayOrigins-1].Origin != sent[MaxRelayOrigins-1].Origin {
+	if len(got) != MaxRelayOrigins || got[0] != sent[0] || got[MaxRelayOrigins-1] != sent[MaxRelayOrigins-1] {
 		t.Fatalf("kept %d notices, want the first %d", len(got), MaxRelayOrigins)
+	}
+}
+
+func TestHelloNoticeNonceNeverRefuses(t *testing.T) {
+	data, err := os.ReadFile("testdata/v1/hello.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	odd := strings.Replace(string(bytes.TrimSpace(data)), `"access_policy":""`, `"access_policy":"","notice_nonce":"AQID"`, 1)
+	m, err := DecodeControl([]byte(odd))
+	if err != nil {
+		t.Fatalf("hello with a short notice nonce refused: %v", err)
+	}
+	if n := m.(Hello).NoticeNonce; len(n) != 3 {
+		t.Fatalf("notice nonce %x", n)
 	}
 }
 

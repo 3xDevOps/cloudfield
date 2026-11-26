@@ -16,28 +16,27 @@ const (
 	NoticeRetired  = "retired"
 )
 
-// HeaderRetiring is on every API answer and WebSocket handshake answer
-// of a retiring address pair: FormatRetiring's value, the replacement
-// relay origin with an optional date.
+// HeaderRetiring is on every answer of a retiring address pair:
+// FormatRetiring's value, the replacement relay origin with an optional
+// date.
 const HeaderRetiring = "Aether-Edge-Retiring"
 
-const noticeContext = "aether-edge-notice-v1\x00"
+const noticesContext = "aether-edge-notices-v1\x00"
 
 // Notice is one entry of Ready.Notices: the relay origin Origin is in
 // State, and Replacement is the relay origin of the same edge to use
-// instead. Date, "YYYY-MM-DD" or empty, is text for people. Signature is
-// SignNotice's, for one server and one handshake.
+// instead. Date, "YYYY-MM-DD" or empty, is text for people.
 type Notice struct {
 	State       string `json:"state"`
 	Origin      string `json:"origin"`
 	Replacement string `json:"replacement"`
 	Date        string `json:"date,omitempty"`
-	Signature   []byte `json:"signature"`
 }
 
 // Notices decodes leniently: an entry that does not decode or validate
 // is dropped, and so is everything past MaxRelayOrigins entries, so a
-// later edge's notices never refuse the ready they came in.
+// later edge's notices never refuse the ready they came in. A list that
+// lost an entry no longer matches its signature.
 type Notices []Notice
 
 // UnmarshalJSON keeps the valid entries of data and never fails.
@@ -66,8 +65,6 @@ func (n Notice) validate() error {
 		return fmt.Errorf("notice for %s names itself as the replacement", n.Origin)
 	case n.Date != "" && !ValidDate(n.Date):
 		return fmt.Errorf("notice date %q is not a YYYY-MM-DD date", n.Date)
-	case len(n.Signature) != ed25519.SignatureSize:
-		return fmt.Errorf("notice signature is %d bytes, want %d", len(n.Signature), ed25519.SignatureSize)
 	}
 	return nil
 }
@@ -83,46 +80,52 @@ func ValidDate(s string) bool {
 	return err == nil && t.Format(time.DateOnly) == s
 }
 
-// noticeMessage is what the edge key signs for one notice:
-// "aether-edge-notice-v1\x00" || server id || "\x00" || nonce || state ||
-// "\x00" || origin || "\x00" || replacement || "\x00" || date. The nonce
-// has a fixed size and no other field can hold a NUL byte.
-func noticeMessage(serverID string, nonce []byte, n Notice) []byte {
-	msg := make([]byte, 0, len(noticeContext)+len(serverID)+len(nonce)+len(n.State)+len(n.Origin)+len(n.Replacement)+len(n.Date)+4)
-	msg = append(msg, noticeContext...)
+// noticesMessage is what the edge key signs for a notice list:
+// "aether-edge-notices-v1\x00" || server id || "\x00" || origin || "\x00"
+// || nonce, then for each notice state || "\x00" || origin || "\x00" ||
+// replacement || "\x00" || date || "\x00". The nonce has a fixed size and
+// no other field can hold a NUL byte.
+func noticesMessage(serverID, origin string, nonce []byte, notices []Notice) []byte {
+	msg := []byte(noticesContext)
 	msg = append(msg, serverID...)
 	msg = append(msg, 0)
+	msg = append(msg, origin...)
+	msg = append(msg, 0)
 	msg = append(msg, nonce...)
-	for i, f := range []string{n.State, n.Origin, n.Replacement, n.Date} {
-		if i > 0 {
+	for _, n := range notices {
+		for _, f := range []string{n.State, n.Origin, n.Replacement, n.Date} {
+			msg = append(msg, f...)
 			msg = append(msg, 0)
 		}
-		msg = append(msg, f...)
 	}
 	return msg
 }
 
-// SignNotice returns n signed with the edge key for the server serverID
-// in the handshake whose challenge carried nonce.
-func SignNotice(edgeKey ed25519.PrivateKey, serverID string, nonce []byte, n Notice) Notice {
-	n.Signature = ed25519.Sign(edgeKey, noticeMessage(serverID, nonce, n))
-	return n
+// SignNotices signs notices, an empty list included, with the edge key
+// for the server serverID, which dialed origin and sent nonce as
+// Hello.NoticeNonce. The result is Ready.NoticesSignature.
+func SignNotices(edgeKey ed25519.PrivateKey, serverID, origin string, nonce []byte, notices []Notice) []byte {
+	return ed25519.Sign(edgeKey, noticesMessage(serverID, origin, nonce, notices))
 }
 
-// VerifyNotice checks n's signature by edgeKey for the server serverID in
-// the handshake whose challenge carried nonce.
-func VerifyNotice(edgeKey ed25519.PublicKey, serverID string, nonce []byte, n Notice) error {
+// VerifyNotices checks that the edge key signed notices for the server
+// serverID, which dialed origin and drew nonce for this handshake.
+func VerifyNotices(edgeKey ed25519.PublicKey, serverID, origin string, nonce []byte, notices []Notice, signature []byte) error {
 	switch {
 	case len(edgeKey) != ed25519.PublicKeySize:
 		return fmt.Errorf("edgeproto: edge key is %d bytes, want %d", len(edgeKey), ed25519.PublicKeySize)
 	case len(nonce) != NonceSize || !ValidServerID(serverID):
-		return errors.New("edgeproto: a notice is verified for a server id and a handshake nonce")
+		return errors.New("edgeproto: notices are verified for a server id and the nonce it drew")
+	case len(signature) == 0:
+		return errors.New("edgeproto: the notices are not signed")
 	}
-	if err := n.validate(); err != nil {
-		return fmt.Errorf("edgeproto: %w", err)
+	for _, n := range notices {
+		if err := n.validate(); err != nil {
+			return fmt.Errorf("edgeproto: %w", err)
+		}
 	}
-	if !ed25519.Verify(edgeKey, noticeMessage(serverID, nonce, n), n.Signature) {
-		return fmt.Errorf("edgeproto: the notice for %s is not signed by the edge key", n.Origin)
+	if !ed25519.Verify(edgeKey, noticesMessage(serverID, origin, nonce, notices), signature) {
+		return errors.New("edgeproto: the notices are not signed by the edge key for this server, address and nonce")
 	}
 	return nil
 }
@@ -136,8 +139,7 @@ func FormatRetiring(replacement, date string) string {
 	return replacement + "; date=" + date
 }
 
-// ParseRetiring reads a HeaderRetiring value, or EdgeInfo's Retiring and
-// RetiringDate joined by FormatRetiring. ok is false unless the
+// ParseRetiring reads a HeaderRetiring value. ok is false unless the
 // replacement is a canonical origin and the date, when present, a real
 // date.
 func ParseRetiring(value string) (replacement, date string, ok bool) {

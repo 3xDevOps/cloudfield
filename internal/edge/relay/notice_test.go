@@ -1,47 +1,63 @@
 package relay
 
 import (
+	"bytes"
 	"crypto/ed25519"
+	"slices"
 	"strings"
 	"testing"
 
 	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
 )
 
-// TestReadyCarriesSignedNotices enrolls a server at a relay with one
-// retiring origin: its ready holds that origin's notice, signed for this
-// server and this handshake.
+// TestReadyCarriesSignedNotices enrolls claimed servers at a relay with one
+// retiring origin: a server that sends a notice nonce gets the notices
+// signed for it, its origin and its nonce; one that sends none gets a
+// ready without them.
 func TestReadyCarriesSignedNotices(t *testing.T) {
 	e := newEnv(t)
-	if a := enroll(t, e, newSigner(t)); a.ready.Notices != nil {
-		t.Fatalf("ready with nothing retiring carries notices %+v", a.ready.Notices)
-	}
-	want := edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: "https://edge2.example.test", Date: "2027-03-01"}
-	e.r.notices = []edgeproto.Notice{want}
-
-	signer := newSigner(t)
-	ws := dialControl(t, e)
-	c := challenge(t, ws)
-	send(t, ws, helloFor(t, signer, e.origin, c.Nonce))
-	m, err := recv(t.Context(), ws)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ready := m.(edgeproto.Ready)
-	if len(ready.Notices) != 1 {
-		t.Fatalf("ready carries notices %+v, want one", ready.Notices)
-	}
-	got := ready.Notices[0]
 	pub := e.edgeKey.Public().(ed25519.PublicKey)
-	if err := edgeproto.VerifyNotice(pub, ready.ServerID, c.Nonce, got); err != nil {
-		t.Fatalf("notice does not verify for this server and handshake: %v", err)
+	enrollWith := func(nonce []byte) edgeproto.Ready {
+		t.Helper()
+		signer := newSigner(t)
+		e.dir.mu.Lock()
+		e.dir.owners[edgeproto.ServerID(signer.PublicKey())] = true
+		e.dir.mu.Unlock()
+		ws := dialControl(t, e)
+		c := challenge(t, ws)
+		hello := helloFor(t, signer, e.origin, c.Nonce)
+		hello.NoticeNonce = nonce
+		send(t, ws, hello)
+		m, err := recv(t.Context(), ws)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m.(edgeproto.Ready)
 	}
-	if got.State != want.State || got.Origin != want.Origin || got.Replacement != want.Replacement || got.Date != want.Date {
-		t.Errorf("notice %+v, want %+v", got, want)
+	nonce := bytes.Repeat([]byte{7}, edgeproto.NonceSize)
+
+	r := enrollWith(nonce)
+	if r.Notices != nil || edgeproto.VerifyNotices(pub, r.ServerID, e.origin, nonce, nil, r.NoticesSignature) != nil {
+		t.Fatalf("ready with nothing retiring: notices %+v, signature %x; want a signed empty list", r.Notices, r.NoticesSignature)
 	}
-	other := enroll(t, e, newSigner(t))
-	if edgeproto.VerifyNotice(pub, ready.ServerID, c.Nonce, other.ready.Notices[0]) == nil {
-		t.Error("the notice of another server verifies for this one")
+
+	want := []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: "https://edge2.example.test", Date: "2027-03-01"}}
+	e.r.notices = want
+	r = enrollWith(nonce)
+	if !slices.Equal(r.Notices, want) {
+		t.Fatalf("ready carries notices %+v, want %+v", r.Notices, want)
+	}
+	if err := edgeproto.VerifyNotices(pub, r.ServerID, e.origin, nonce, r.Notices, r.NoticesSignature); err != nil {
+		t.Fatalf("notices do not verify for this server, origin and nonce: %v", err)
+	}
+	other := enrollWith(nonce)
+	if edgeproto.VerifyNotices(pub, r.ServerID, e.origin, nonce, other.Notices, other.NoticesSignature) == nil {
+		t.Error("the notices signed for another server verify for this one")
+	}
+	for _, n := range [][]byte{nil, nonce[:16]} {
+		if r := enrollWith(n); r.Notices != nil || r.NoticesSignature != nil {
+			t.Errorf("hello with notice nonce %x: ready carries notices %+v, signature %x", n, r.Notices, r.NoticesSignature)
+		}
 	}
 }
 

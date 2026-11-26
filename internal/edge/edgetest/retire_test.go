@@ -40,11 +40,11 @@ func TestRetiringPair(t *testing.T) {
 
 	from := h.proxy.mark()
 	a := h.newServer(edgeproto.PolicyAccount)
-	if got := h.readyTo(t, a, from).Notices; len(got) != 1 || !sameNotice(got[0], want) {
+	if got := h.readyTo(t, a, from).Notices; !slices.Equal(got, edgeproto.Notices{want}) {
 		t.Fatalf("ready to the server at A carries notices %+v, want %+v", got, want)
 	}
-	if got, err := a.agent.Notices(); err != nil || len(got) != 1 || !sameNotice(got[0], want) {
-		t.Fatalf("server at A stored notices %+v, %v; want %+v", got, err, want)
+	if got, err := a.agent.Notices(); err != nil || !slices.Equal(got.Notices, []edgeproto.Notice{want}) || !got.FirstUse {
+		t.Fatalf("server at A stored notices %+v, %v; want %+v on first use", got, err, want)
 	}
 	alA := h.login(alice)[0]
 	h.claimServer(alA, a)
@@ -70,10 +70,10 @@ func TestRetiringPair(t *testing.T) {
 	h.signinURL, h.relayURL = signinB, relayB
 	from = h.proxy.mark()
 	b := h.newServer(edgeproto.PolicyAccount)
-	if got := h.readyTo(t, b, from).Notices; len(got) != 1 || !sameNotice(got[0], want) {
+	if got := h.readyTo(t, b, from).Notices; !slices.Equal(got, edgeproto.Notices{want}) {
 		t.Fatalf("ready to the server at B carries notices %+v, want the one for A", got)
 	}
-	if got, nerr := b.agent.Notices(); nerr != nil || len(got) != 1 || !sameNotice(got[0], want) {
+	if got, nerr := b.agent.Notices(); nerr != nil || !slices.Equal(got.Notices, []edgeproto.Notice{want}) {
 		t.Fatalf("server at B stored notices %+v, %v; want the one for A", got, nerr)
 	}
 	alB := h.login(alice)[0]
@@ -102,20 +102,21 @@ func TestRetiringPair(t *testing.T) {
 		}
 	}
 
-	// Unset again, the edge sends what it sent before notices existed.
+	// Unset again, the edge sends a server that sends no notice nonce what
+	// it sent before notices existed, and one that does a signed empty list.
 	h.stopEdge()
 	h.retiring = nil
 	h.startEdge()
 	eventually(t, "the servers forget the notice", func() error {
 		for _, s := range []*serverNode{a, b} {
-			if got, err := s.agent.Notices(); err != nil || got != nil {
+			if got, err := s.agent.Notices(); err != nil || got.Notices != nil {
 				return fmt.Errorf("server %s holds notices %+v, %v", s.id, got, err)
 			}
 		}
 		return nil
 	})
 	for _, origin := range []string{relayA, relayB} {
-		raw, ready := rawReady(t, origin)
+		raw, ready := rawReady(t, origin, nil)
 		old, err := edgeproto.EncodeControl(edgeproto.Ready{ServerID: ready.ServerID, State: ready.State, EdgeKey: ready.EdgeKey, RelayOrigins: ready.RelayOrigins})
 		if err != nil {
 			t.Fatal(err)
@@ -123,16 +124,17 @@ func TestRetiringPair(t *testing.T) {
 		if !bytes.Equal(raw, old) {
 			t.Errorf("ready at %s with nothing retiring:\n%s\nwant\n%s", origin, raw, old)
 		}
+		nonce := bytes.Repeat([]byte{9}, edgeproto.NonceSize)
+		if _, ready = rawReady(t, origin, nonce); ready.Notices != nil ||
+			edgeproto.VerifyNotices(ready.EdgeKey, ready.ServerID, origin, nonce, nil, ready.NoticesSignature) != nil {
+			t.Errorf("ready at %s to a server that sent a notice nonce: notices %+v, signature %x; want a signed empty list", origin, ready.Notices, ready.NoticesSignature)
+		}
 	}
 	for _, p := range pages {
 		if got, other := headerNames(t, p.a+p.path), headerNames(t, p.b+p.path); !slices.Equal(got, other) || slices.Contains(got, edgeproto.HeaderRetiring) {
 			t.Errorf("with nothing retiring %s%s answers with %v, %s%s with %v", p.a, p.path, got, p.b, p.path, other)
 		}
 	}
-}
-
-func sameNotice(got, want edgeproto.Notice) bool {
-	return got.State == want.State && got.Origin == want.Origin && got.Replacement == want.Replacement && got.Date == want.Date
 }
 
 // headerNames are the sorted names of the headers of the answer to GET
@@ -155,9 +157,10 @@ func headerNames(t *testing.T, url string) []string {
 	return slices.Sorted(maps.Keys(resp.Header))
 }
 
-// rawReady enrolls a new server at origin by hand and returns the ready
-// the edge sent, as bytes and decoded.
-func rawReady(t *testing.T, origin string) ([]byte, edgeproto.Ready) {
+// rawReady enrolls a new server at origin by hand, with nonce as its
+// hello's notice nonce, and returns the ready the edge sent, as bytes and
+// decoded.
+func rawReady(t *testing.T, origin string, nonce []byte) ([]byte, edgeproto.Ready) {
 	t.Helper()
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
@@ -186,7 +189,7 @@ func rawReady(t *testing.T, origin string) ([]byte, edgeproto.Ready) {
 		t.Fatal(err)
 	}
 	hello, err := edgeproto.EncodeControl(edgeproto.Hello{Version: edgeproto.Version, HostKey: signer.PublicKey().Marshal(), Signature: sig,
-		AgentVersion: "test", Name: "raw", AccessPolicy: edgeproto.PolicyAccount})
+		AgentVersion: "test", Name: "raw", AccessPolicy: edgeproto.PolicyAccount, NoticeNonce: nonce})
 	if err != nil {
 		t.Fatal(err)
 	}

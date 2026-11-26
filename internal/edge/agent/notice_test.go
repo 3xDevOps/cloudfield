@@ -1,10 +1,16 @@
 package edgeagent
 
 import (
+	"cmp"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
-	"reflect"
+	"slices"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,49 +18,44 @@ import (
 )
 
 // TestNoticesAreVerifiedAndStored enrolls at an edge whose ready carries
-// one notice signed by its key for this handshake, and others that are
-// not: only the first is kept, it survives a restart, and it is gone
-// once the edge stops sending it.
+// notices: they are kept only when signed by the pinned key for this
+// server, its origin and its nonce; they survive a restart, and each
+// ready replaces them.
 func TestNoticesAreVerifiedAndStored(t *testing.T) {
 	edge := newFakeEdge(t)
 	_, other, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	retiring := edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: edge.origin, Replacement: "https://edge2.example.test", Date: "2027-03-01"}
-	edge.notices = func(id string, nonce []byte) edgeproto.Notices {
-		otherNonce := make([]byte, edgeproto.NonceSize)
-		retired := edgeproto.Notice{State: edgeproto.NoticeRetired, Origin: "https://edge0.example.test", Replacement: "https://edge2.example.test"}
-		forged := edgeproto.SignNotice(edge.priv, id, nonce, retired)
-		forged.Replacement = "https://evil.example.test"
-		return edgeproto.Notices{
-			edgeproto.SignNotice(other, id, nonce, retired),
-			edgeproto.SignNotice(edge.priv, id, otherNonce, retired),
-			edgeproto.SignNotice(edge.priv, "aaaaaaaaaaaaaaaaaaaaaaaaaa", nonce, retired),
-			forged,
-			edgeproto.SignNotice(edge.priv, id, nonce, retiring),
-		}
+	list := edgeproto.Notices{{State: edgeproto.NoticeRetiring, Origin: edge.origin, Replacement: "https://edge2.example.test", Date: "2027-03-01"}}
+	setNotices := func(f func(id string, nonce []byte) (edgeproto.Notices, []byte)) {
+		edge.mu.Lock()
+		defer edge.mu.Unlock()
+		edge.notices = f
 	}
+	setNotices(func(id string, nonce []byte) (edgeproto.Notices, []byte) {
+		return list, edgeproto.SignNotices(edge.priv, id, edge.origin, nonce, list)
+	})
 	cfg := Config{EdgeURL: edge.srv.URL, DataDir: t.TempDir(), SSH: newFakeSSH(), HostKey: newHostKey(t)}
-	a, err := New(cfg)
-	if err != nil {
-		t.Fatal(err)
+	start := func() (*Agent, func()) {
+		t.Helper()
+		a, nerr := New(cfg)
+		if nerr != nil {
+			t.Fatal(nerr)
+		}
+		a.minBackoff, a.maxBackoff = 10*time.Millisecond, 50*time.Millisecond
+		stop, _ := run(t, a)
+		ec := edge.nextControl(t)
+		ec.send(edgeproto.Ping{})
+		expect[edgeproto.Pong](t, ec)
+		return a, stop
 	}
-	a.minBackoff, a.maxBackoff = 10*time.Millisecond, 50*time.Millisecond
-	if got, nerr := a.Notices(); got != nil || nerr != nil {
-		t.Fatalf("notices before enrolling: %+v, %v", got, nerr)
-	}
-	stop, _ := run(t, a)
-	ec := edge.nextControl(t)
-	ec.send(edgeproto.Ping{})
-	expect[edgeproto.Pong](t, ec)
+
+	before := time.Now()
+	a, stop := start()
 	got, err := a.Notices()
-	if err != nil || len(got) != 1 {
-		t.Fatalf("notices %+v, %v; want the one verified notice", got, err)
-	}
-	got[0].Signature = nil
-	if !reflect.DeepEqual(got[0], retiring) {
-		t.Fatalf("stored notice %+v, want %+v", got[0], retiring)
+	if err != nil || !slices.Equal(got.Notices, list) || !got.FirstUse || got.Received.Before(before) {
+		t.Fatalf("notices of the enrollment that pinned the key: %+v, %v; want %+v on first use", got, err, list)
 	}
 	name, err := a.state.keyFile(noticesFile)
 	if err != nil {
@@ -65,50 +66,119 @@ func TestNoticesAreVerifiedAndStored(t *testing.T) {
 	}
 	stop()
 
-	restarted, err := New(cfg)
-	if err != nil {
-		t.Fatal(err)
+	a, stop = start()
+	if got, err = a.Notices(); err != nil || !slices.Equal(got.Notices, list) || got.FirstUse {
+		t.Fatalf("notices of a later enrollment: %+v, %v; want %+v, not on first use", got, err, list)
 	}
-	if got, err := restarted.Notices(); err != nil || len(got) != 1 || got[0].Origin != retiring.Origin {
-		t.Fatalf("notices after a restart: %+v, %v", got, err)
+	stop()
+	if got, err = OpenState(cfg.DataDir).Notices(); err != nil || !slices.Equal(got.Notices, list) {
+		t.Fatalf("notices after the server stopped: %+v, %v", got, err)
 	}
 
-	edge.mu.Lock()
-	edge.notices = nil
-	edge.mu.Unlock()
-	restarted.minBackoff, restarted.maxBackoff = 10*time.Millisecond, 50*time.Millisecond
-	run(t, restarted)
-	ec = edge.nextControl(t)
-	ec.send(edgeproto.Ping{})
-	expect[edgeproto.Pong](t, ec)
-	if got, err := restarted.Notices(); got != nil || err != nil {
-		t.Fatalf("notices once the edge sends none: %+v, %v", got, err)
+	more := append(slices.Clone(list), edgeproto.Notice{State: edgeproto.NoticeRetired, Origin: "https://edge0.example.test", Replacement: "https://edge2.example.test"})
+	for _, tc := range []struct {
+		name     string
+		sent     edgeproto.Notices
+		signed   []edgeproto.Notice
+		key      ed25519.PrivateKey
+		serverID string
+		origin   string
+		nonce    []byte
+		unsigned bool
+	}{
+		{name: "another key", sent: list, signed: list, key: other},
+		{name: "another nonce", sent: list, signed: list, nonce: make([]byte, edgeproto.NonceSize)},
+		{name: "another server", sent: list, signed: list, serverID: "aaaaaaaaaaaaaaaaaaaaaaaaaa"},
+		{name: "another origin", sent: list, signed: list, origin: "https://edge2.example.test"},
+		{name: "an entry added", sent: more, signed: list},
+		{name: "no signature", sent: list, unsigned: true},
+		{name: "none sent", unsigned: true},
+		{name: "a signed none"},
+	} {
+		setNotices(func(id string, nonce []byte) (edgeproto.Notices, []byte) {
+			return list, edgeproto.SignNotices(edge.priv, id, edge.origin, nonce, list)
+		})
+		_, stop = start()
+		stop()
+		setNotices(func(id string, nonce []byte) (edgeproto.Notices, []byte) {
+			if tc.unsigned {
+				return tc.sent, nil
+			}
+			key := edge.priv
+			if tc.key != nil {
+				key = tc.key
+			}
+			if tc.nonce != nil {
+				nonce = tc.nonce
+			}
+			return tc.sent, edgeproto.SignNotices(key, cmp.Or(tc.serverID, id), cmp.Or(tc.origin, edge.origin), nonce, tc.signed)
+		})
+		a, stop = start()
+		if got, err := a.Notices(); err != nil || got.Notices != nil {
+			t.Errorf("%s: notices %+v, %v; want the stored ones replaced by none", tc.name, got, err)
+		}
+		stop()
 	}
 }
 
-// TestNoticesFollowThePinnedKey checks that notices are kept per edge
-// key: pinning another key shows none of the first edge's.
-func TestNoticesFollowThePinnedKey(t *testing.T) {
+// TestNoticesDoNotSurviveAPin checks that pinning a key, even the same
+// one again, forgets its stored notices.
+func TestNoticesDoNotSurviveAPin(t *testing.T) {
 	s := OpenState(t.TempDir())
-	first, _, _ := ed25519.GenerateKey(rand.Reader)
-	second, _, _ := ed25519.GenerateKey(rand.Reader)
-	if err := s.Pin(first); err != nil {
-		t.Fatal(err)
+	key, _, _ := ed25519.GenerateKey(rand.Reader)
+	other, _, _ := ed25519.GenerateKey(rand.Reader)
+	n := StoredNotices{Received: time.Now().UTC(), Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: "https://edge.example.test", Replacement: "https://edge2.example.test"}}}
+	for _, again := range []ed25519.PublicKey{key, other} {
+		if err := s.Pin(key); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.writeNotices(n); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := s.Notices(); err != nil || !slices.Equal(got.Notices, n.Notices) {
+			t.Fatalf("stored notices %+v, %v", got, err)
+		}
+		if err := s.Pin(again); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.Pin(key); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := s.Notices(); err != nil || got.Notices != nil {
+			t.Fatalf("notices after pinning %x: %+v, %v", again[:4], got, err)
+		}
 	}
-	n := []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: "https://edge.example.test", Replacement: "https://edge2.example.test"}}
-	if err := s.writeNotices(n); err != nil {
-		t.Fatal(err)
+}
+
+// TestControlDialRefusalIsTyped checks that a refused upgrade reports its
+// HTTP status as a *DialError, and that a redirect is not followed.
+func TestControlDialRefusalIsTyped(t *testing.T) {
+	var followed atomic.Bool
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { followed.Store(true) }))
+	t.Cleanup(elsewhere.Close)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusGone)
+		_, _ = w.Write([]byte(`{"error":"https://old.example.test is retired"}`))
+	}))
+	t.Cleanup(srv.Close)
+	moved := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+r.URL.Path, http.StatusFound)
+	}))
+	t.Cleanup(moved.Close)
+	_, _, err := dial(t.Context(), srv.URL+edgeproto.PathServerControl, nil, handshakeTimeout)
+	var de *DialError
+	if !errors.As(err, &de) || de.Status != http.StatusGone || de.Message != "https://old.example.test is retired" {
+		t.Fatalf("dial a 410: %v", err)
 	}
-	if err := s.Pin(second); err != nil {
-		t.Fatal(err)
+	if want := "dial " + srv.URL + edgeproto.PathServerControl + ": 410 Gone: https://old.example.test is retired"; err.Error() != want {
+		t.Errorf("dial a 410: %q, want %q", err, want)
 	}
-	if got, err := s.Notices(); got != nil || err != nil {
-		t.Fatalf("notices under another key: %+v, %v", got, err)
+	_, _, err = dial(t.Context(), moved.URL+edgeproto.PathServerControl, nil, handshakeTimeout)
+	if !errors.As(err, &de) || de.Status != http.StatusFound || followed.Load() {
+		t.Fatalf("dial a redirect: %v, followed %v", err, followed.Load())
 	}
-	if err := s.Pin(first); err != nil {
-		t.Fatal(err)
-	}
-	if got, err := s.Notices(); err != nil || !reflect.DeepEqual(got, n) {
-		t.Fatalf("notices of the first key pinned again: %+v, %v", got, err)
+	if _, err = FetchEdgeInfo(t.Context(), moved.URL); err == nil || followed.Load() || !strings.Contains(err.Error(), "302 Found") {
+		t.Fatalf("edge info behind a redirect: %v, followed %v", err, followed.Load())
 	}
 }
