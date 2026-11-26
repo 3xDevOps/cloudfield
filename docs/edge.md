@@ -1184,29 +1184,41 @@ answers. `aether_edge_egress_month_bytes`,
 requests waiting for a connection or for their server to return) are also
 exported.
 
-`aether-edge retiring` reads `edge.db` and prints who the edge last saw on each
-origin pair, or on the pair of `--origin <relay origin>`. The edge records it
-only while `--retiring-pairs` or `--retired-pairs` is set, then for every pair:
-each claimed server's relay origin, time and build at each enrollment; each
-pending sign-in's, device token's and session's sign-in origin when it is
-issued, and for one issued earlier the origin it is next used at, on the API or
-through the relay, marked as first seen there; a connector request at most once
-an hour per server and relay origin, while the server is connected. The report
-starts with the time recording began, lists per pair the servers last seen at
-its relay origin (id, name, owner login, build, when), and counts by last use
-within 1, 7 and 30 days and in all: device tokens issued at its sign-in origin,
-those first seen there, accounts with an unexpired session there, accounts with
-device tokens there and none at another origin, and claimed servers that got
-connector requests through its relay origin. Then it counts what has no origin
-yet. An empty list is not proof that nobody is left: an unclaimed server has no
-row (`aether_edge_servers_by_origin` counts the connected ones), and anything not
+`aether-edge retiring` reads `edge.db` through a read-only connection, so it
+never migrates or writes, and prints who the edge last saw on each origin pair,
+or on the pair of `--origin <relay origin>`. On a database below schema 2 it
+prints that nothing is recorded yet. The edge records only while an option that
+retires a pair is set, then for every pair: each claimed server's relay origin,
+time and build at each enrollment or claim; each pending sign-in's, device
+token's and session's sign-in origin when it is issued, and for one issued
+earlier the origin it is next used at, on the API or through the relay, marked
+as first seen there; a connector request at most once an hour per server and
+relay origin, while the server is connected. Connector counts include requests
+that were refused or carried no valid token.
+
+The report starts with the start of the current recording period: a restart
+keeps it, but a stop of more than 10 minutes, an unclean stop or a run without
+the option starts a new one. An image rolled back during that time records
+nothing, and what it issued has no origin. Per pair the report lists the servers
+last enrolled or claimed at its relay origin (id, name, owner login, build,
+when; a name or build that holds a non-printing character is printed quoted),
+and counts by last use within 1, 7 and 30 days and in all: device tokens issued
+at its sign-in origin, those first seen there, accounts with an unexpired
+session there, accounts with device tokens there and none recorded at another
+origin, and claimed servers that got connector requests through its relay
+origin. A sign-in origin that two pairs name is counted under the one the edge
+started with last. Tokens and sessions of a sign-in origin no recorded pair
+names any more are listed apart, then what has no origin yet. An empty list is
+not proof that nobody is left: an unclaimed server has no row
+(`aether_edge_servers_by_origin` counts the connected ones), and anything not
 used since recording began has no origin. `--json` prints the same as
 `{"at", "recording_since", "origins": [{"relay_origin", "signin_origin",
-"servers": [{"id", "name", "owner_login", "build", "last_seen_at"}],
+"signin_counted_under", "servers": [{"id", "name", "owner_login", "build",
+"last_seen_at"}], "device_tokens", "device_tokens_seen", "session_accounts",
+"device_only_accounts", "connector_servers"}], "unpaired": [{"signin_origin",
 "device_tokens", "device_tokens_seen", "session_accounts",
-"device_only_accounts", "connector_servers"}], "unknown": {"device_tokens",
-"session_accounts", "servers"}}`, each count as `{"1d", "7d", "30d",
-"total"}`.
+"device_only_accounts"}], "unknown": {"device_tokens", "session_accounts",
+"servers"}}`, each count as `{"1d", "7d", "30d", "total"}`.
 
 `/healthz` (`aether-edge healthcheck`) is liveness. `/readyz` (`aether-edge
 healthcheck --ready`) answers 200 when the database answers within a second, the
