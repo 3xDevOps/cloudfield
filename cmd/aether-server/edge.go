@@ -116,7 +116,7 @@ func edgeCmd(args []string) error {
 	}
 	switch sub {
 	case "status":
-		return edgeStatus(os.Stdout, *o.dataDir, edgeURL, edgeproto.AccessPolicy(*o.edgeAccess), time.Now())
+		return edgeStatus(os.Stdout, *o.dataDir, edgeURL, configPath, edgeproto.AccessPolicy(*o.edgeAccess), time.Now())
 	case "claim-code":
 		return edgeClaimCode(os.Stdout, *o.dataDir, edgeURL, domain.MemberID(*admin))
 	case "trust":
@@ -151,7 +151,7 @@ func describeAccount(a edgeproto.Account) string {
 // still tell it from an error.
 var errNotConnected = errors.New("the server is not connected to the edge")
 
-func edgeStatus(w io.Writer, dataDir, edgeURL string, policy edgeproto.AccessPolicy, now time.Time) error {
+func edgeStatus(w io.Writer, dataDir, edgeURL, configPath string, policy edgeproto.AccessPolicy, now time.Time) error {
 	id, err := serverID(dataDir)
 	if err != nil {
 		return err
@@ -177,14 +177,26 @@ func edgeStatus(w io.Writer, dataDir, edgeURL string, policy edgeproto.AccessPol
 	if err != nil {
 		return err
 	}
+	notices, err := state.Notices()
+	if err != nil {
+		return err
+	}
 
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintf(tw, "edge\t%s\n", edgeURL)
 	_, _ = fmt.Fprintf(tw, "edge access\t%s\n", policy)
 	_, _ = fmt.Fprintf(tw, "server id\t%s\n", id)
 	stale := status.Stale(now)
-	if status.Connected && stale == nil && status.Edge != "" && status.Edge != origin {
+	notice, noticed := notices.For(origin)
+	switch {
+	case status.Connected && stale == nil && status.Edge != "" && status.Edge != origin:
 		_, _ = fmt.Fprintf(tw, "running\tthe running server is at %s; restart to apply edge-url: %s%s\n", status.Edge, sudoPrefix(), serversetup.RestartCommand)
+	case noticed:
+		line := edgeagent.NoticeLine(notice) + configFlag(configPath)
+		if notices.FirstUse {
+			line += " (the edge sent this with the connection that pinned its key, so it is trusted on first use and shown only)"
+		}
+		_, _ = fmt.Fprintf(tw, "retiring\t%s\n", line)
 	}
 	_, _ = fmt.Fprintf(tw, "connector\t%s  (add it to ChatGPT or Claude; get a code: aether mcp)\n", origin+edgeproto.MCPPath(id))
 	if status.Connected && stale == nil && status.Protocol >= edgeproto.VersionUniversalMCP {
@@ -220,7 +232,7 @@ func edgeStatus(w io.Writer, dataDir, edgeURL string, policy edgeproto.AccessPol
 		_, _ = fmt.Fprintf(tw, "connection\tconnected since %s; the edge last answered %s ago\n",
 			status.Since.Local().Format(time.DateTime), now.Sub(status.Heartbeat).Round(time.Second))
 	default:
-		_, _ = fmt.Fprintf(tw, "connection\tdisconnected since %s: %s\n", status.Since.Local().Format(time.DateTime), status.Error)
+		_, _ = fmt.Fprintf(tw, "connection\tdisconnected since %s: %s\n", status.Since.Local().Format(time.DateTime), edgeagent.Clean(status.Error))
 	}
 	if ran {
 		_, _ = fmt.Fprintln(tw, "measures\tthe server->edge control connection; it does not prove clients can reach the server")
@@ -414,19 +426,25 @@ func edgeMove(w io.Writer, dataDir, edgeURL string, policy edgeproto.AccessPolic
 	if err != nil {
 		return err
 	}
-	to, err := agent.Move(context.Background(), target)
+	to, retired, err := agent.Move(context.Background(), target)
 	if err != nil {
 		return err
 	}
-	return applyMove(w, dataDir, edgeURL, to, configPath)
+	return applyMove(w, dataDir, edgeURL, to, configPath, retired)
 }
 
 // applyMove writes to, the address edgeagent.Agent.Move checked, as
-// edge-url and says how to apply and undo it.
-func applyMove(w io.Writer, dataDir, edgeURL, to, configPath string) error {
+// edge-url and says how to apply it and, unless edgeURL is retired, how
+// to undo it.
+func applyMove(w io.Writer, dataDir, edgeURL, to, configPath string, retired bool) error {
 	pinned, err := edgeagent.OpenState(dataDir).PinnedKey()
 	if err != nil {
 		return err
+	}
+	if retired {
+		_, _ = fmt.Fprintf(w, "enrolled at %s, an address of the same edge (edge key %s, still pinned); the edge says %s is retired\n",
+			to, edgeproto.EdgeKeyFingerprint(pinned), edgeURL)
+		return configSet(w, configPath, "edge-url", to)
 	}
 	_, _ = fmt.Fprintf(w, "enrolled at %s, an address of the same edge (edge key %s, still pinned); the edge announces %s too, so links and connectors made there keep working\n",
 		to, edgeproto.EdgeKeyFingerprint(pinned), edgeURL)

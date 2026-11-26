@@ -74,7 +74,7 @@ func TestEdgeStatusAndClaimCode(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Reset()
-	if err := edgeStatus(&out, dir, edgeagent.DefaultURL, edgeproto.PolicyApprovedDevices, time.Now()); !errors.Is(err, errNotConnected) {
+	if err := edgeStatus(&out, dir, edgeagent.DefaultURL, serversetup.DefaultConfigPath, edgeproto.PolicyApprovedDevices, time.Now()); !errors.Is(err, errNotConnected) {
 		t.Fatalf("status of a server that never connected = %v, want %v", err, errNotConnected)
 	}
 	for _, want := range []string{id, edgeproto.EdgeKeyFingerprint(pub), "valid for 30 min, until ", "5 attempts left", "edge access  approved-devices",
@@ -134,7 +134,7 @@ func TestEdgeStatusReportsAStaleConnection(t *testing.T) {
 				t.Fatal(err)
 			}
 			var out bytes.Buffer
-			if err := edgeStatus(&out, dir, edgeagent.DefaultURL, edgeproto.PolicyApprovedDevices, now); err != tt.err {
+			if err := edgeStatus(&out, dir, edgeagent.DefaultURL, serversetup.DefaultConfigPath, edgeproto.PolicyApprovedDevices, now); err != tt.err {
 				t.Fatalf("status = %v, want %v", err, tt.err)
 			}
 			for _, want := range append(tt.want, "measures     the server->edge control connection; it does not prove clients can reach the server") {
@@ -268,7 +268,7 @@ func TestApplyMoveAndThePendingRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := applyMove(&out, dir, from, to, path); err != nil {
+	if err := applyMove(&out, dir, from, to, path, false); err != nil {
 		t.Fatal(err)
 	}
 	want := "enrolled at " + to + ", an address of the same edge (edge key " + edgeproto.EdgeKeyFingerprint(pub) + ", still pinned); " +
@@ -294,7 +294,7 @@ func TestApplyMoveAndThePendingRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	out.Reset()
-	if err := edgeStatus(&out, dir, to, edgeproto.PolicyAccount, time.Now()); err != nil {
+	if err := edgeStatus(&out, dir, to, serversetup.DefaultConfigPath, edgeproto.PolicyAccount, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	if want := "running      the running server is at " + from + "; restart to apply edge-url: sudo systemctl restart aether-server\n"; !strings.Contains(out.String(), want) {

@@ -282,6 +282,9 @@ func (a *Agent) session(ctx context.Context) (time.Duration, error) {
 	if err = a.state.writeNotices(e.pin, StoredNotices{ServerID: a.serverID, Received: start, FirstUse: e.pinned, Notices: e.notices}); err != nil {
 		return time.Since(start), err
 	}
+	if n, ok := noticeFor(e.notices, a.origin); ok {
+		slog.Warn("edge: "+NoticeLine(n), "edge", a.origin, "replacement", n.Replacement, "date", n.Date, "first_use", e.pinned)
+	}
 	if err = a.reconcileOwner(s, ready.State); err != nil {
 		return time.Since(start), err
 	}

@@ -39,12 +39,12 @@ func TestEdgeMove(t *testing.T) {
 	}
 
 	unserved := "http://127.0.0.3:9"
-	_, err = moveAgent(t, s, relayA).Move(t.Context(), unserved)
+	_, _, err = moveAgent(t, s, relayA).Move(t.Context(), unserved)
 	if want := fmt.Sprintf("the edge at %s announces the relay addresses %s; moving needs both %s and %s among them: the edge's operator adds the address first",
 		relayA, relayA, relayA, unserved); err == nil || err.Error() != want {
 		t.Errorf("move to an address the edge does not serve: %v, want %q", err, want)
 	}
-	_, err = moveAgent(t, s, relayA).Move(t.Context(), relayA)
+	_, _, err = moveAgent(t, s, relayA).Move(t.Context(), relayA)
 	if want := "edge-url already is " + relayA; err == nil || err.Error() != want {
 		t.Errorf("move to the address in use: %v, want %q", err, want)
 	}
@@ -68,7 +68,7 @@ func TestEdgeMove(t *testing.T) {
 	// URL at the address the server is leaving.
 	universalA := universalAt(t, h, client, al, s, policy, h.signinURL, relayA)
 
-	to, err := moveAgent(t, s, relayA).Move(t.Context(), relayB)
+	to, _, err := moveAgent(t, s, relayA).Move(t.Context(), relayB)
 	if err != nil || to != relayB {
 		t.Fatalf("move to %s: %q, %v", relayB, to, err)
 	}
@@ -109,7 +109,7 @@ func TestEdgeMove(t *testing.T) {
 	atB := connectAt(t, h, client, al, s, relayB+edgeproto.MCPPath(s.id))
 	mustCall(t, baseA, before.AccessToken)
 
-	to, err = moveAgent(t, s, relayB).Move(t.Context(), relayA)
+	to, _, err = moveAgent(t, s, relayB).Move(t.Context(), relayA)
 	if err != nil || to != relayA {
 		t.Fatalf("move back to %s: %q, %v", relayA, to, err)
 	}
@@ -134,7 +134,7 @@ func TestEdgeMoveKeepsAPendingClaimCode(t *testing.T) {
 	s := h.newServer(edgeproto.PolicyAccount)
 	relayA, relayB := h.relayURL, h.relayB
 	code := s.claimCode(t, time.Now())
-	if _, err := moveAgent(t, s, relayA).Move(t.Context(), relayB); err != nil {
+	if _, _, err := moveAgent(t, s, relayA).Move(t.Context(), relayB); err != nil {
 		t.Fatalf("move to %s: %v", relayB, err)
 	}
 	s.edge = relayB
@@ -164,7 +164,7 @@ func TestEdgeMoveRefusesBelowProtocol6(t *testing.T) {
 	h.pairB = true
 	h.startEdge()
 	backOnline(t, h, s)
-	_, err := moveAgent(t, s, relayA).Move(t.Context(), h.relayB)
+	_, _, err := moveAgent(t, s, relayA).Move(t.Context(), h.relayB)
 	if want := fmt.Sprintf("%s speaks edge protocol 5; a server moved to %s would accept connector tokens only for that address, "+
 		"so connectors registered at %s would stop working. Moving needs edge protocol 6 or later: the edge's operator upgrades it",
 		relayA, h.relayB, relayA); err == nil || err.Error() != want {
@@ -191,7 +191,7 @@ func TestEdgeMoveRefusesAnotherEdge(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = moveAgent(t, s, relayA).Move(t.Context(), other.relayURL)
+	_, _, err = moveAgent(t, s, relayA).Move(t.Context(), other.relayURL)
 	want := fmt.Sprintf("%s presents edge key %s, but this server pinned %s for its edge at %s, which announced it: another edge answers there. "+
 		"edge move only changes the address of one edge; changing edges is in docs/edge.md#turning-it-on",
 		other.relayURL, edgeproto.EdgeKeyFingerprint(other.edgeKey().Public().(ed25519.PublicKey)), edgeproto.EdgeKeyFingerprint(pinned), relayA)
@@ -234,7 +234,7 @@ func TestEdgeMoveRefusesAMissingOrUnreachableAddress(t *testing.T) {
 			}
 			return e.msg, true
 		})
-		_, err := moveAgent(t, s, relayA).Move(t.Context(), unreachable)
+		_, _, err := moveAgent(t, s, relayA).Move(t.Context(), unreachable)
 		if tc.want != nil && !tc.want(err) || tc.want == nil && (err == nil || err.Error() != tc.wantText) {
 			t.Errorf("announced %v: %v, want %q", tc.announced, err, tc.wantText)
 		}
@@ -288,7 +288,7 @@ func TestEdgeMoveChecksTheTargetToo(t *testing.T) {
 			}
 			return tc.tamper(e.msg), true
 		})
-		if _, err := moveAgent(t, s, relayA).Move(t.Context(), relayB); err == nil || err.Error() != tc.want {
+		if _, _, err := moveAgent(t, s, relayA).Move(t.Context(), relayB); err == nil || err.Error() != tc.want {
 			t.Errorf("%s: %v, want %q", tc.name, err, tc.want)
 		}
 		backOnline(t, h, s)
