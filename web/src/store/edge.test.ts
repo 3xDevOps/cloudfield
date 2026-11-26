@@ -1,0 +1,62 @@
+import type { ServerEdge } from '@/lib/types'
+import { createRootStore } from '@/store'
+import { loadEdge } from '@/store/edge'
+import { fakeApi } from '@/test/fixtures'
+
+const edge: ServerEdge = {
+  edge_url: 'https://edge-old.example.test', server_id: 'wqc4lsjvzdzrwq3k5dabdtajwj', access_policy: 'approved-devices',
+  owner: null, connected: true, claimed: true, notice: { state: 'retiring', replacement: 'https://edge-new.example.test' },
+}
+
+function seeded() {
+  const store = createRootStore()
+  store.setState({ identityKey: 'alice@server', capabilities: { gateway: 'local', methods: ['*'], ws: ['events'], local: [] } })
+  return store
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void
+  let reject!: (err: Error) => void
+  const promise = new Promise<T>((yes, no) => {
+    resolve = yes
+    reject = no
+  })
+  return { promise, resolve, reject }
+}
+
+it('keeps the last good answer and records the error when a read fails', async () => {
+  const store = seeded()
+  const serverEdge = vi.fn<() => Promise<ServerEdge>>().mockResolvedValueOnce(edge).mockRejectedValueOnce(new Error('server.edge: connection reset'))
+  await loadEdge(store, fakeApi({ serverEdge }))
+  await expect(loadEdge(store, fakeApi({ serverEdge }))).rejects.toThrow('connection reset')
+  expect(store.getState().edge).toEqual(edge)
+  expect(store.getState().edgeError).toBe('server.edge: connection reset')
+})
+
+it('lands an older read that succeeds after a newer one failed', async () => {
+  const store = seeded()
+  const older = deferred<ServerEdge>()
+  const newer = deferred<ServerEdge>()
+  const serverEdge = vi.fn<() => Promise<ServerEdge>>().mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise)
+  const client = fakeApi({ serverEdge })
+  const first = loadEdge(store, client)
+  const second = loadEdge(store, client).catch(() => undefined)
+  newer.reject(new Error('server.edge: 502 Bad Gateway'))
+  await second
+  older.resolve(edge)
+  await first
+  expect(store.getState().edge).toEqual(edge)
+  expect(store.getState().edgeError).toBeNull()
+})
+
+it('drops an older answer once a newer one landed', async () => {
+  const store = seeded()
+  const older = deferred<ServerEdge>()
+  const serverEdge = vi.fn<() => Promise<ServerEdge>>().mockReturnValueOnce(older.promise).mockResolvedValueOnce({ ...edge, notice: undefined })
+  const client = fakeApi({ serverEdge })
+  const first = loadEdge(store, client)
+  await loadEdge(store, client)
+  older.resolve(edge)
+  await first
+  expect(store.getState().edge?.notice).toBeUndefined()
+})
