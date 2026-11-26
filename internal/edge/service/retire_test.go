@@ -217,16 +217,27 @@ func TestRetiringNeedsTwoServedPairs(t *testing.T) {
 
 // The banner is text only: the address is escaped and is no link.
 func TestRetiringBannerIsText(t *testing.T) {
-	h := newRetiringHarness(t, "")
-	_, page := h.browser(t).get(t, "/signin")
+	pages, err := parsePages()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const hostile = `https://x.example"><a href="https://evil.example/?code=1">sign in</a><script>alert(1)</script>`
+	st := galleryState{name: "hostile", page: "signin", status: 200,
+		view: view{Title: "Sign in", Data: signinData{GitHub: "/signin/github"}, Retiring: &banner{Address: hostile, Date: `<b>2027</b>`, SignIn: true}}}
+	page := renderState(t, &Service{pages: pages}, st).Body.String()
 	i := strings.Index(page, "This address of the edge is retiring")
 	if i < 0 {
 		t.Fatalf("no banner:\n%s", page)
 	}
 	line := page[i:]
 	line = line[:strings.Index(line, "</p>")]
-	if strings.Contains(line, "<a") || strings.Contains(line, "href") || line != html.UnescapeString(line) {
-		t.Errorf("banner %q carries a link or markup beyond <code>", line)
+	for _, markup := range []string{"<a", "<script", "<b>"} {
+		if strings.Contains(line, markup) {
+			t.Errorf("banner %q carries %s", line, markup)
+		}
+	}
+	if !strings.Contains(line, html.EscapeString(hostile)) || !strings.Contains(line, "&lt;b&gt;2027&lt;/b&gt;") {
+		t.Errorf("banner %q does not show the address and date as escaped text", line)
 	}
 }
 
