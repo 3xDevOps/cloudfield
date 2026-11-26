@@ -2348,12 +2348,13 @@ export interface Connector {
 /**
  * What the server's edge says about the address a connector was added at:
  * `retiring` still works, `retired` no longer does. `url` is the
- * connector's path at the address the edge names instead; `date`,
+ * connector's path at the address the edge names instead, set only while
+ * the server takes connectors there; `date`,
  * YYYY-MM-DD, is text for people.
  */
 export interface ConnectorNotice {
   state: 'retiring' | 'retired'
-  url: string
+  url?: string
   date?: string
 }
 

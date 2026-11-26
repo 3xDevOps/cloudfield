@@ -322,7 +322,10 @@ function Connectors({ client }: { client: Api }) {
       // never have arrived.
       // One at a retiring address replaces nothing, though its universal
       // URL is the same place.
-      const candidates = next.filter((c) => !attempt.known.has(c.id) && !c.notice && sameURL(attempt.info, c.resource, attempt.into) &&
+      // A move off a retiring or retired address takes only a connector
+      // at its exact new URL.
+      const candidates = next.filter((c) => !attempt.known.has(c.id) && !c.notice &&
+        (old.notice ? c.resource === attempt.into : sameURL(attempt.info, c.resource, attempt.into)) &&
         (old.client_id ? c.client_id === old.client_id : c.redirect_host === old.redirect_host))
       let added: Connector | undefined
       try {
@@ -402,6 +405,17 @@ function Connectors({ client }: { client: Api }) {
     setInfo(rest)
     setConnectors(fresh)
     setListError(null)
+    if (next) {
+      // What the dialog showed may be stale: the server may have changed
+      // or withdrawn the connector's new address since.
+      const id = next.replaces.id
+      const now = fresh.find((c) => c.id === id)
+      if (!now || now.notice?.state !== next.replaces.notice?.state || now.notice?.url !== next.replaces.notice?.url) {
+        setTarget(null)
+        throw new Error(`${label(next.replaces)} changed on the server since this was shown. Check its row and start again.`)
+      }
+      next = { ...next, replaces: now }
+    }
     // A move goes to the universal URL; a reconnect stays where its
     // connector was added. Either goes to the address the edge names
     // instead of a retiring or retired one. At the server's own URL the
@@ -448,7 +462,7 @@ function Connectors({ client }: { client: Api }) {
   }
 
   // A connector on the server's own URL reconnects there, with a code.
-  const signsIn = (c: Connector) => signsInAt(info, c.resource)
+  const signsIn = (c: Connector) => signsInAt(info, moveTo(info, c, 'reconnect'))
   const tooOld = listError?.old === true
   const edgeNote = edge && !edge.edge_url
     ? <p className="text-muted">This server has no edge, so ChatGPT and Claude cannot reach it. An admin turns one on: <Link href={`${docs}/edge.md#turning-it-on`}>Edge guide</Link>.</p>
@@ -542,7 +556,7 @@ function Connectors({ client }: { client: Api }) {
             )}
             control={(
               <>
-                {c.notice?.state !== 'retiring' && <Button size="sm" variant="ghost" aria-label={`Reconnect ${label(c)}`} disabled={busy || target !== null} onClick={() => setConfirming({ connector: c, action: 'reconnect' })}>Reconnect</Button>}
+                {(!c.notice || (c.notice.state === 'retired' && c.notice.url)) && <Button size="sm" variant="ghost" aria-label={`Reconnect ${label(c)}`} disabled={busy || target !== null} onClick={() => setConfirming({ connector: c, action: 'reconnect' })}>Reconnect</Button>}
                 <Button size="sm" variant="ghost" aria-label={`Revoke ${label(c)}`} disabled={busy} onClick={() => setConfirming({ connector: c, action: 'revoke' })}>Revoke</Button>
               </>
             )}
@@ -552,20 +566,28 @@ function Connectors({ client }: { client: Api }) {
               <Callout
                 tone="needs-you"
                 title={`This address is retiring${c.notice.date ? ` on ${c.notice.date}` : ''}`}
-                actions={<Button size="sm" variant="secondary" aria-label={`Move ${label(c)} to the new address`} disabled={busy || target !== null} onClick={() => setConfirming({ connector: c, action: 'move' })}>Move to the new address</Button>}
+                actions={c.notice.url && <Button size="sm" variant="secondary" aria-label={`Move ${label(c)} to the new address`} disabled={busy || target !== null} onClick={() => setConfirming({ connector: c, action: 'move' })}>Move to the new address</Button>}
               >
-                <div className="flex min-w-0 flex-col gap-1.5">
-                  <p>Select <strong>Move to the new address</strong>, add it again in {c.client_name} at this URL and remove the old connector there. This one is revoked once the new one calls Cloudfield.</p>
-                  <CopyableCommand command={c.notice.url} />
-                </div>
+                {c.notice.url
+                  ? (
+                      <div className="flex min-w-0 flex-col gap-1.5">
+                        <p>Select <strong>Move to the new address</strong>, add it again in {c.client_name} at this URL and remove the old connector there. This one is revoked once the new one calls Cloudfield.</p>
+                        <CopyableCommand command={c.notice.url} />
+                      </div>
+                    )
+                  : <p>This server does not take connectors at the new address yet. Ask its admin where to add it again.</p>}
               </Callout>
             )}
             {c.notice?.state === 'retired' && (
               <Callout tone="failed" title="This address is retired">
-                <div className="flex min-w-0 flex-col gap-1.5">
-                  <p>This connector no longer works. <strong>Reconnect</strong> adds it again at this URL and revokes this one once the new one calls Cloudfield; remove the old connector in {c.client_name} too.</p>
-                  <CopyableCommand command={c.notice.url} />
-                </div>
+                {c.notice.url
+                  ? (
+                      <div className="flex min-w-0 flex-col gap-1.5">
+                        <p>This connector no longer works. <strong>Reconnect</strong> adds it again at this URL and revokes this one once the new one calls Cloudfield; remove the old connector in {c.client_name} too.</p>
+                        <CopyableCommand command={c.notice.url} />
+                      </div>
+                    )
+                  : <p>This connector no longer works. Revoke it, and remove the old connector in {c.client_name}.</p>}
               </Callout>
             )}
           </SettingRow>

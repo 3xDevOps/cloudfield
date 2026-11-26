@@ -578,3 +578,56 @@ it('tells the member to revoke a connector at a retired address, with no move', 
   expect(screen.getByRole('button', { name: 'Reconnect Claude (claude.ai)' })).toBeTruthy()
   expect(screen.getByRole('button', { name: 'Revoke Claude (claude.ai)' })).toBeTruthy()
 })
+
+it('settles a move off a retiring address only on a connector at the exact new URL', async () => {
+  vi.useFakeTimers({ shouldAdvanceTime: true, now: Date.parse('2026-11-26T12:00:00Z') })
+  const third = 'https://relay-third.example.test/mcp'
+  const atThree = { ...movedEdge, universal_urls: [oldUniversal, newUniversal, third] }
+  const old: Connector = { ...claude, resource: oldUniversal, notice: { state: 'retiring', url: newUniversal } }
+  const elsewhere: Connector = { ...claude, id: 'con-thirdaddr1', resource: third, last_used_at: '2026-11-26T12:00:01Z' }
+  const client = show({
+    connectorList: vi.fn().mockResolvedValueOnce({ connectors: [old], ...atThree }).mockResolvedValueOnce({ connectors: [old], ...atThree })
+      .mockResolvedValue({ connectors: [old, elsewhere], ...atThree }),
+  })
+  fireEvent.click(await screen.findByRole('button', { name: 'Move Claude (claude.ai) to the new address' }))
+  fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Move' }))
+  expect(await screen.findByText('Waiting for Claude to connect…')).toBeTruthy()
+  await vi.advanceTimersByTimeAsync(9000)
+  expect(client.connectorRevoke).not.toHaveBeenCalled()
+})
+
+it('stops a move whose new address changed after the dialog was shown', async () => {
+  const old: Connector = { ...claude, resource: oldUniversal, notice: { state: 'retiring', url: newUniversal } }
+  const client = show({
+    connectorList: vi.fn().mockResolvedValueOnce({ connectors: [old], ...movedEdge })
+      .mockResolvedValue({ connectors: [{ ...old, notice: { state: 'retiring' } }], ...movedEdge }),
+  })
+  fireEvent.click(await screen.findByRole('button', { name: 'Move Claude (claude.ai) to the new address' }))
+  const dialog = await screen.findByRole('alertdialog')
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Move' }))
+  expect((await within(dialog).findByRole('alert')).textContent).toBe('Claude (claude.ai) changed on the server since this was shown. Check its row and start again.')
+  expect(client.connectorCode).not.toHaveBeenCalled()
+  expect(screen.queryByText('Waiting for Claude to connect…')).toBeNull()
+})
+
+it('offers no move or reconnect while the server takes no connectors at the new address', async () => {
+  const old: Connector = { ...claude, resource: oldUniversal, notice: { state: 'retiring', date: '2027-03-01' } }
+  show({ connectorList: vi.fn().mockResolvedValue({ connectors: [old], url: oldUniversal, universal_url: oldUniversal, universal_urls: [oldUniversal], sign_in: true }) })
+  const callout = (await screen.findByText('This address is retiring on 2027-03-01')).closest('[data-slot=callout]')
+  expect(callout?.textContent).toContain('This server does not take connectors at the new address yet. Ask its admin where to add it again.')
+  expect(screen.queryByRole('button', { name: /new address/ })).toBeNull()
+  expect(screen.queryByRole('button', { name: 'Reconnect Claude (claude.ai)' })).toBeNull()
+  expect(screen.getByRole('button', { name: 'Revoke Claude (claude.ai)' })).toBeTruthy()
+})
+
+it('reconnects a retired universal connector by signing in at the new address, as its dialog says', async () => {
+  const old: Connector = { ...claude, resource: oldUniversal, notice: { state: 'retired', url: newUniversal } }
+  const client = show({ connectorList: vi.fn().mockResolvedValue({ connectors: [old], ...movedEdge, universal_urls: [newUniversal] }) })
+  fireEvent.click(await screen.findByRole('button', { name: 'Reconnect Claude (claude.ai)' }))
+  const dialog = await screen.findByRole('alertdialog')
+  expect(dialog.textContent).toContain('Connect Aether again in Claude and sign in')
+  fireEvent.click(within(dialog).getByRole('button', { name: 'Reconnect' }))
+  const panel = await screen.findByRole('tabpanel', { name: 'Claude' })
+  expect(await within(panel).findByText(newUniversal)).toBeTruthy()
+  expect(client.connectorCode).not.toHaveBeenCalled()
+})
