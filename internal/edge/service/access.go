@@ -41,11 +41,7 @@ func (s *Service) deviceByToken(ctx context.Context, token string) (Client, int6
 	if !edgeproto.ValidToken(token) {
 		return Client{}, 0, edgeproto.RefusalTokenRevoked
 	}
-	var signin string
-	if p, ok := ctx.Value(pairKey{}).(*pair); ok {
-		signin = p.signin
-	}
-	d, err := s.store.UseDevice(ctx, edgeproto.HashToken(token), signin, s.now())
+	d, err := s.store.UseDevice(ctx, edgeproto.HashToken(token), s.signinOrigin(ctx), s.now())
 	if errors.Is(err, edgestore.ErrNotFound) {
 		return Client{}, 0, edgeproto.RefusalTokenRevoked
 	}
@@ -150,7 +146,7 @@ func (s *Service) ServerConnected(ctx context.Context, serverID, name string, po
 	if blocked {
 		return "", edgeproto.RefusalServerBlocked
 	}
-	claimed, err := s.store.EnrollServer(ctx, serverID, name, policy, edgestore.Enrollment{RelayOrigin: origin, AgentVersion: agentVersion, At: s.now()})
+	claimed, err := s.store.EnrollServer(ctx, serverID, name, policy, s.enrollment(origin, agentVersion))
 	if err != nil {
 		return "", err
 	}
@@ -195,9 +191,17 @@ func (s *Service) RecordClaim(ctx context.Context, serverID, name string, policy
 	if !edgeproto.ValidServerID(serverID) {
 		return fmt.Errorf("edge: record claim: invalid server id %q", serverID)
 	}
-	now := s.now()
 	return ownerRefusal(s.store.RecordClaim(ctx, serverID, name, policy, edgeproto.AccountPrincipal(owner),
-		edgestore.Enrollment{RelayOrigin: origin, AgentVersion: agentVersion, At: now}, now))
+		s.enrollment(origin, agentVersion), s.now()))
+}
+
+// enrollment is what the store records of an enrollment at origin now:
+// nothing when the edge does not record origins.
+func (s *Service) enrollment(origin, agentVersion string) edgestore.Enrollment {
+	if !s.recordOrigins {
+		return edgestore.Enrollment{}
+	}
+	return edgestore.Enrollment{RelayOrigin: origin, AgentVersion: agentVersion, At: s.now()}
 }
 
 // TransferOwner records owner as the owner of the claimed server

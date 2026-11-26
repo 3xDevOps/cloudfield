@@ -56,6 +56,10 @@ type Config struct {
 	// Reviewer, when set, is the reviewer account an app directory's
 	// reviewer signs in with at PathReviewerSignin. Nil serves 404 there.
 	Reviewer *ReviewerAccount
+	// RecordOrigins has the edge record which origin pair each server,
+	// device token, session and connector request is on, for aether-edge
+	// retiring.
+	RecordOrigins bool
 }
 
 // OAuthApp is a GitHub OAuth app. AuthURL, TokenURL and APIURL, the base
@@ -88,6 +92,16 @@ type pair struct {
 }
 
 type pairKey struct{}
+
+// signinOrigin is the sign-in origin of the pair Handler picked for the
+// request ctx belongs to, "" when the edge does not record origins or no
+// pair was picked.
+func (s *Service) signinOrigin(ctx context.Context) string {
+	if p, ok := ctx.Value(pairKey{}).(*pair); ok && s.recordOrigins {
+		return p.signin
+	}
+	return ""
+}
 
 // pair is the pair Handler picked for r, or the first for a request
 // handed to a handler directly.
@@ -172,6 +186,7 @@ type Service struct {
 	githubErrors    atomic.Uint64
 	openAIChallenge string
 	clientHosts     []string
+	recordOrigins   bool
 
 	signinLimit *limiter[netip.Prefix]
 	startLimit  *limiter[netip.Prefix]
@@ -248,6 +263,7 @@ func New(cfg Config) (*Service, error) {
 		openAIChallenge:   cfg.OpenAIChallenge,
 		clientHosts:       cfg.ConnectorClientHosts,
 		reviewer:          cfg.Reviewer,
+		recordOrigins:     cfg.RecordOrigins,
 		reviewerChecks:    make(chan struct{}, reviewerMaxChecks),
 	}
 	s.tokenLimit.scale = func(k serverBlock) int { return edgeproto.RateLimitScale(k.block) }
@@ -268,13 +284,15 @@ func New(cfg Config) (*Service, error) {
 		s.store.Close() //nolint:errcheck // the key error takes precedence
 		return nil, err
 	}
-	served := map[string]string{}
-	for _, p := range pairs {
-		served[p.relay] = p.signin
-	}
-	if err = s.store.RecordPairs(context.Background(), served, now()); err != nil {
-		s.store.Close() //nolint:errcheck // the record error takes precedence
-		return nil, err
+	if s.recordOrigins {
+		served := map[string]string{}
+		for _, p := range pairs {
+			served[p.relay] = p.signin
+		}
+		if err = s.store.RecordPairs(context.Background(), served, now()); err != nil {
+			s.store.Close() //nolint:errcheck // the record error takes precedence
+			return nil, err
+		}
 	}
 	return s, nil
 }

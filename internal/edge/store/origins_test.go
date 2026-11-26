@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -100,7 +101,8 @@ func TestOriginsBackupAndRestore(t *testing.T) {
 	if err := s.RecordPairs(ctx, map[string]string{testRelay: testSignin}, testNow); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec(`INSERT INTO devices VALUES ('dev', 'token-hash', 1, 'ssh-ed25519 AAAA', 'laptop', 0, 0, ?)`, testSignin); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO devices (id, token_hash, account_id, public_key, label, created_at, last_used_at, signin_origin)
+		VALUES ('dev', 'token-hash', 1, 'ssh-ed25519 AAAA', 'laptop', 0, 0, ?)`, testSignin); err != nil {
 		t.Fatal(err)
 	}
 	closeStore(t, s)
@@ -161,23 +163,44 @@ func TestOriginWriters(t *testing.T) {
 	if n := countRows(t, s, "servers"); n != 1 {
 		t.Fatalf("enrolling an unclaimed server created a row: %d servers", n)
 	}
+	if _, err := s.EnrollServer(ctx, serverA, "renamed", edgeproto.PolicyAccount, Enrollment{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRow(`SELECT relay_origin, agent_version, enrolled_at FROM servers WHERE id = ?`, serverA).
+		Scan(&origin, &build, &at); err != nil || origin != testRelay2 || build != "v2.0.0" || !fromUnix(at).Equal(later) {
+		t.Fatalf("server after enrolling with nothing to record = %s %s %v, %v", origin, build, fromUnix(at), err)
+	}
+	claim(t, s, serverB, "beta", me)
+	if err := s.DropOwner(ctx, serverB); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordClaim(ctx, serverB, "beta", edgeproto.PolicyAccount, edgeproto.AccountPrincipal(me), Enrollment{}, later); err != nil {
+		t.Fatal(err)
+	}
+	if got := nullString(t, s, `SELECT relay_origin || ' ' || agent_version FROM servers WHERE id = ?`, serverB); got.String != testRelay+" v1.0.0" {
+		t.Fatalf("server claimed again with nothing to record = %q, want its earlier enrollment kept", got.String)
+	}
 
 	addDevice(t, s, id, "issued", "issued-hash")
 	if _, err := s.db.Exec(`UPDATE devices SET signin_origin = ? WHERE id = 'issued'`, testSignin2); err != nil {
 		t.Fatal(err)
 	}
 	auth := DeviceAuth{CodeHash: "code-new", UserCodeHash: "user-new", Label: "phone", Key: "ssh-ed25519 BBBB",
-		CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour)}
+		CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour), SigninOrigin: testSignin}
 	if err := s.CreateDeviceAuth(ctx, auth); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.DecideDeviceAuth(ctx, auth.UserCodeHash, id, true, testNow); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.RedeemDeviceAuth(ctx, auth.CodeHash, Device{ID: "new", TokenHash: "new-hash", SigninOrigin: testSignin}, testNow); err != nil {
-		t.Fatal(err)
+	if got := nullString(t, s, `SELECT signin_origin FROM device_authorizations WHERE code_hash = 'code-new'`); got.String != testSignin {
+		t.Fatalf("device authorization started at %s records %q", testSignin, got.String)
 	}
-	if _, err := s.db.Exec(`INSERT INTO devices VALUES ('bare', 'bare-hash', ?, 'ssh-ed25519 CCCC', 'old', 0, 0, NULL)`, id); err != nil {
+	if d, err := s.RedeemDeviceAuth(ctx, auth.CodeHash, Device{ID: "new", TokenHash: "new-hash"}, testNow); err != nil || d.SigninOrigin != testSignin {
+		t.Fatalf("redeemed device = %+v, %v; want the authorization's origin", d, err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO devices (id, token_hash, account_id, public_key, label, created_at, last_used_at)
+		VALUES ('bare', 'bare-hash', ?, 'ssh-ed25519 CCCC', 'old', 0, 0)`, id); err != nil {
 		t.Fatal(err)
 	}
 	for _, tt := range []struct {
@@ -193,6 +216,9 @@ func TestOriginWriters(t *testing.T) {
 		if err != nil || d.SigninOrigin != tt.want || !d.LastUsedAt.Equal(later) {
 			t.Errorf("use %s at %q = %q last used %v, %v; want %q", tt.hash, tt.signin, d.SigninOrigin, d.LastUsedAt, err, tt.want)
 		}
+	}
+	if got := nullString(t, s, `SELECT group_concat(id || ':' || COALESCE(signin_origin_seen, 'issued'), ' ') FROM (SELECT * FROM devices ORDER BY id)`); got.String != "bare:1 issued:issued new:issued" {
+		t.Errorf("devices issued and seen: %q", got.String)
 	}
 
 	if err := s.CreateSession(ctx, "issued", "session-issued", id, testSignin2, testNow, testNow.Add(time.Hour)); err != nil {
@@ -216,6 +242,9 @@ func TestOriginWriters(t *testing.T) {
 		if got := nullString(t, s, `SELECT signin_origin FROM web_sessions WHERE id = ?`, sess.ID); got.String != tt.want {
 			t.Errorf("use session %s at %q: origin %q, want %q", tt.hash, tt.signin, got.String, tt.want)
 		}
+	}
+	if got := nullString(t, s, `SELECT group_concat(id || ':' || COALESCE(signin_origin_seen, 'issued'), ' ') FROM (SELECT * FROM web_sessions ORDER BY id)`); got.String != "bare:1 issued:issued" {
+		t.Errorf("sessions issued and seen: %q", got.String)
 	}
 }
 
@@ -318,9 +347,10 @@ func TestOriginRowsGoWithTheirParent(t *testing.T) {
 func TestOriginWritesUseIndexes(t *testing.T) {
 	s := openStore(t)
 	for _, q := range []string{
-		`UPDATE devices SET last_used_at = ?, signin_origin = COALESCE(signin_origin, NULLIF(?, '')) WHERE token_hash = ? AND ` + notBlocked("devices.account_id"),
-		`UPDATE web_sessions SET expires_at = ?, signin_origin = COALESCE(signin_origin, NULLIF(?, '')) WHERE token_hash = ? AND expires_at > ? AND ` + notBlocked("web_sessions.account_id"),
-		`UPDATE servers SET name = ?, access_policy = ?, relay_origin = ?, agent_version = ?, enrolled_at = ? WHERE id = ?`,
+		`UPDATE devices SET last_used_at = ?, ` + seenAt + ` WHERE token_hash = ? AND ` + notBlocked("devices.account_id"),
+		`UPDATE web_sessions SET expires_at = ?, ` + seenAt + ` WHERE token_hash = ? AND expires_at > ? AND ` + notBlocked("web_sessions.account_id"),
+		`UPDATE servers SET name = ?, access_policy = ?,
+			relay_origin = COALESCE(?, relay_origin), agent_version = COALESCE(?, agent_version), enrolled_at = COALESCE(?, enrolled_at) WHERE id = ?`,
 		`INSERT INTO connector_use (server_id, relay_origin, last_used_at) SELECT id, ?, ? FROM servers WHERE id = ?
 			ON CONFLICT (server_id, relay_origin) DO UPDATE SET last_used_at = excluded.last_used_at`,
 	} {
@@ -350,21 +380,21 @@ func TestOriginWritesUseIndexes(t *testing.T) {
 	}
 }
 
-// TestOriginReports reports an empty store, then two pairs: a server that
-// moved shows at its new relay origin only, and each count falls in the
-// windows its last use is within.
-func TestOriginReports(t *testing.T) {
+// TestRetiringReport reports an empty store, then two pairs: a server that
+// moved shows at its new relay origin only, each count falls in the
+// windows its last use is within, and what has no origin is unknown.
+func TestRetiringReport(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()
-	if got, err := s.OriginReports(ctx, testNow); err != nil || got != nil {
-		t.Fatalf("reports of an empty store = %+v, %v", got, err)
+	if got, err := s.Retiring(ctx, testNow); err != nil || !got.RecordingSince.IsZero() || got.Origins == nil || len(got.Origins) != 0 || got.Unknown != (Unknown{}) {
+		t.Fatalf("report of an empty store = %+v, %v", got, err)
 	}
-	if err := s.RecordPairs(ctx, map[string]string{testRelay: testSignin}, testNow); err != nil {
+	if err := s.RecordPairs(ctx, map[string]string{testRelay: testSignin}, testNow.Add(-90*24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
-	got, err := s.OriginReports(ctx, testNow)
-	if err != nil || len(got) != 1 || got[0].RelayOrigin != testRelay || got[0].SigninOrigin != testSignin ||
-		len(got[0].Servers) != 0 || got[0].DeviceTokens != (Counts{}) || got[0].ConnectorServers != (Counts{}) {
+	got, err := s.Retiring(ctx, testNow)
+	if err != nil || len(got.Origins) != 1 || got.Origins[0].RelayOrigin != testRelay || got.Origins[0].SigninOrigin != testSignin ||
+		got.Origins[0].Servers == nil || len(got.Origins[0].Servers) != 0 || got.Origins[0].DeviceTokens != (Counts{}) {
 		t.Fatalf("report of one pair with nobody on it = %+v, %v", got, err)
 	}
 	if err := s.RecordPairs(ctx, map[string]string{testRelay: testSignin, testRelay2: testSignin2}, testNow); err != nil {
@@ -381,6 +411,9 @@ func TestOriginReports(t *testing.T) {
 	if err := s.DropOwner(ctx, serverB); err != nil {
 		t.Fatal(err)
 	}
+	if err := s.RecordClaim(ctx, "cccccccccccccccccccccccccc", "gamma", edgeproto.PolicyAccount, edgeproto.AccountPrincipal(me), Enrollment{}, testNow); err != nil {
+		t.Fatal(err)
+	}
 	myID, _ := s.SignIn(ctx, me, testNow)
 	otherID, _ := s.SignIn(ctx, other, testNow)
 	day := 24 * time.Hour
@@ -388,17 +421,20 @@ func TestOriginReports(t *testing.T) {
 		id      string
 		account int64
 		origin  any
+		seen    any
 		age     time.Duration
 	}{
-		{"d1", myID, testSignin, time.Hour},
-		{"d2", myID, testSignin, 2 * day},
-		{"d3", myID, testSignin2, 0},
-		{"d4", otherID, testSignin, 10 * day},
-		{"d5", otherID, testSignin, 40 * day},
-		{"d6", otherID, nil, 0},
+		{"d1", myID, testSignin, nil, time.Hour},
+		{"d2", myID, testSignin, 1, 2 * day},
+		{"d3", myID, testSignin2, nil, 0},
+		{"d4", otherID, testSignin, nil, 10 * day},
+		{"d5", otherID, testSignin, nil, 40 * day},
+		{"d6", otherID, nil, nil, 0},
+		{"d7", otherID, nil, nil, 8 * day},
 	} {
-		if _, err := s.db.Exec(`INSERT INTO devices VALUES (?, ?, ?, 'ssh-ed25519 AAAA', 'laptop', 0, ?, ?)`,
-			d.id, d.id+"-hash", d.account, unix(testNow.Add(-d.age)), d.origin); err != nil {
+		if _, err := s.db.Exec(`INSERT INTO devices (id, token_hash, account_id, public_key, label, created_at, last_used_at, signin_origin, signin_origin_seen)
+			VALUES (?, ?, ?, 'ssh-ed25519 AAAA', 'laptop', 0, ?, ?, ?)`,
+			d.id, d.id+"-hash", d.account, unix(testNow.Add(-d.age)), d.origin, d.seen); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -412,6 +448,7 @@ func TestOriginReports(t *testing.T) {
 		{"s2", myID, testSignin, 20 * day},
 		{"s3", otherID, testSignin, 31 * day},
 		{"s4", otherID, testSignin2, 0},
+		{"s5", otherID, "", 2 * day},
 	} {
 		used := testNow.Add(-sess.age)
 		if err := s.CreateSession(ctx, sess.id, sess.id+"-hash", sess.account, sess.origin, used, used.Add(edgeproto.SessionIdle)); err != nil {
@@ -431,83 +468,82 @@ func TestOriginReports(t *testing.T) {
 		}
 	}
 
-	got, err = s.OriginReports(ctx, testNow)
+	got, err = s.Retiring(ctx, testNow)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if !got.RecordingSince.Equal(testNow.Add(-90*day)) || got.Unknown != (Unknown{
+		DeviceTokens: Counts{Day: 1, Week: 1, Month: 2, Total: 2}, SessionAccounts: Counts{Day: 0, Week: 1, Month: 1, Total: 1}, Servers: 1,
+	}) {
+		t.Errorf("recording since %v, unknown %+v", got.RecordingSince, got.Unknown)
+	}
 	want := []OriginReport{{
 		RelayOrigin: testRelay, SigninOrigin: testSignin,
-		Servers:            []EnrolledServer{{ID: serverB, Name: "beta", AgentVersion: "v1.0.0", EnrolledAt: testNow}},
-		DeviceTokens:       Counts{Day: 1, Week: 2, Month: 3, Total: 4},
+		Servers:            []SeenServer{{ID: serverB, Name: "beta", AgentVersion: "v1.0.0", LastSeenAt: testNow}},
+		DeviceTokens:       Counts{Day: 1, Week: 1, Month: 2, Total: 3},
+		DeviceTokensSeen:   Counts{Day: 0, Week: 1, Month: 1, Total: 1},
 		SessionAccounts:    Counts{Day: 0, Week: 1, Month: 1, Total: 1},
 		DeviceOnlyAccounts: Counts{Day: 0, Week: 0, Month: 1, Total: 1},
 		ConnectorServers:   Counts{Day: 0, Week: 1, Month: 2, Total: 2},
 	}, {
 		RelayOrigin: testRelay2, SigninOrigin: testSignin2,
-		Servers:            []EnrolledServer{{ID: serverA, Name: "alpha", OwnerLogin: "Owner", AgentVersion: "v2.0.0", EnrolledAt: testNow}},
-		DeviceTokens:       Counts{Day: 1, Week: 1, Month: 1, Total: 1},
-		SessionAccounts:    Counts{Day: 1, Week: 1, Month: 1, Total: 1},
-		DeviceOnlyAccounts: Counts{},
-		ConnectorServers:   Counts{Day: 1, Week: 1, Month: 1, Total: 1},
+		Servers:          []SeenServer{{ID: serverA, Name: "alpha", OwnerLogin: "Owner", AgentVersion: "v2.0.0", LastSeenAt: testNow}},
+		DeviceTokens:     Counts{Day: 1, Week: 1, Month: 1, Total: 1},
+		SessionAccounts:  Counts{Day: 1, Week: 1, Month: 1, Total: 1},
+		ConnectorServers: Counts{Day: 1, Week: 1, Month: 1, Total: 1},
 	}}
-	if len(got) != len(want) {
-		t.Fatalf("reports = %+v, want %+v", got, want)
+	if len(got.Origins) != len(want) {
+		t.Fatalf("reports = %+v, want %+v", got.Origins, want)
 	}
 	for i := range want {
-		if g, w := got[i], want[i]; !slices.Equal(g.Servers, w.Servers) || g.RelayOrigin != w.RelayOrigin || g.SigninOrigin != w.SigninOrigin ||
-			g.DeviceTokens != w.DeviceTokens || g.SessionAccounts != w.SessionAccounts ||
+		if g, w := got.Origins[i], want[i]; !slices.Equal(g.Servers, w.Servers) || g.RelayOrigin != w.RelayOrigin || g.SigninOrigin != w.SigninOrigin ||
+			g.DeviceTokens != w.DeviceTokens || g.DeviceTokensSeen != w.DeviceTokensSeen || g.SessionAccounts != w.SessionAccounts ||
 			g.DeviceOnlyAccounts != w.DeviceOnlyAccounts || g.ConnectorServers != w.ConnectorServers {
 			t.Errorf("report = %+v\nwant     %+v", g, w)
 		}
 	}
 }
 
-// TestEndUnaddressedDevices lists and ends only the device tokens with no
-// sign-in origin last used before the date, and keeps one used since the
-// list was read.
-func TestEndUnaddressedDevices(t *testing.T) {
+// TestDeleteSignins deletes, in one call, the device tokens, sessions and
+// pending authorizations of the given origins and those with none, and
+// counts what has none.
+func TestDeleteSignins(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()
 	id, err := s.SignIn(ctx, owner(), testNow)
 	if err != nil {
 		t.Fatal(err)
 	}
-	before := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
-	for _, d := range []struct {
-		id     string
-		origin any
-		used   time.Time
-	}{
-		{"old-bare", nil, before.Add(-time.Hour)},
-		{"older-bare", nil, before.Add(-48 * time.Hour)},
-		{"raced", nil, before.Add(-2 * time.Hour)},
-		{"old-addressed", testSignin, before.Add(-time.Hour)},
-		{"new-bare", nil, before},
-	} {
-		if _, err := s.db.Exec(`INSERT INTO devices VALUES (?, ?, ?, 'ssh-ed25519 AAAA', 'laptop', 0, ?, ?)`,
-			d.id, d.id+"-hash", id, unix(d.used), d.origin); err != nil {
+	for _, origin := range []any{testSignin, testSignin2, nil, nil} {
+		n := countRows(t, s, "devices")
+		if _, err := s.db.Exec(`INSERT INTO devices (id, token_hash, account_id, public_key, label, created_at, last_used_at, signin_origin)
+			VALUES (?, ?, ?, 'k', 'laptop', 0, 0, ?)`, n, n, id, origin); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.CreateSession(ctx, strconv.Itoa(n), strconv.Itoa(n), id, fmt.Sprint(origin), testNow, testNow.Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		if err := s.CreateDeviceAuth(ctx, DeviceAuth{CodeHash: strconv.Itoa(n), UserCodeHash: strconv.Itoa(n), Label: "l", Key: "k",
+			CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour), SigninOrigin: fmt.Sprint(origin)}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	list, err := s.UnaddressedDevices(ctx, before)
-	if err != nil {
+	if _, err := s.db.Exec(`UPDATE web_sessions SET signin_origin = NULL WHERE signin_origin = '<nil>';
+		UPDATE device_authorizations SET signin_origin = NULL WHERE signin_origin = '<nil>'`); err != nil {
 		t.Fatal(err)
 	}
-	var ids []string
-	for _, d := range list {
-		ids = append(ids, d.ID)
+	if got, err := s.SigninsWithoutOrigin(ctx); err != nil || got != (Signins{Devices: 2, Sessions: 2, Authorizations: 2}) {
+		t.Fatalf("without an origin: %+v, %v", got, err)
 	}
-	if want := []string{"older-bare", "raced", "old-bare"}; !slices.Equal(ids, want) || list[0].Account.Login != "Owner" {
-		t.Fatalf("unaddressed devices = %+v, want %v", list, want)
+	if got, err := s.DeleteSignins(ctx, []string{testSignin2}); err != nil || got != (Signins{Devices: 3, Sessions: 3, Authorizations: 3}) {
+		t.Fatalf("deleted %+v, %v; want the three of each at %s or with no origin", got, err, testSignin2)
 	}
-	if _, err := s.UseDevice(ctx, "raced-hash", testSignin2, testNow); err != nil {
-		t.Fatal(err)
+	for _, table := range []string{"devices", "web_sessions", "device_authorizations"} {
+		if got := nullString(t, s, `SELECT group_concat(signin_origin) FROM `+table); got.String != testSignin {
+			t.Errorf("%s left: %q, want only %s", table, got.String, testSignin)
+		}
 	}
-	ended, err := s.EndUnaddressedDevices(ctx, ids, before)
-	if err != nil || !slices.Equal(ended, []string{"older-bare", "old-bare"}) {
-		t.Fatalf("ended = %v, %v", ended, err)
-	}
-	if n := countRows(t, s, "devices"); n != 3 {
-		t.Fatalf("%d devices left, want raced, old-addressed and new-bare", n)
+	if got, err := s.DeleteSignins(ctx, nil); err != nil || got != (Signins{}) {
+		t.Fatalf("delete with no origins and nothing without one: %+v, %v", got, err)
 	}
 }

@@ -40,7 +40,6 @@ var commands = map[string]func(args []string) error{
 	"healthcheck": func(args []string) error { return healthcheck(args, envname.Getenv, os.Stdout) },
 	"servers":     func(args []string) error { return servers(args, envname.Getenv, os.Stdout) },
 	"accounts":    func(args []string) error { return accounts(args, envname.Getenv, os.Stdout) },
-	"devices":     func(args []string) error { return devices(args, envname.Getenv, os.Stdin, os.Stdout) },
 	"retiring":    func(args []string) error { return retiring(args, envname.Getenv, os.Stdout) },
 	"schema":      func(args []string) error { return schemaCmd(args, envname.Getenv, os.Stdout) },
 	"backup":      func(args []string) error { return backupCmd(args, envname.Getenv, os.Stdout, os.Stderr) },
@@ -92,8 +91,7 @@ commands:
   healthcheck    exit 0 when the edge on this machine answers (--ready: is ready), 1 with the reason
   servers        list, remove, block and unblock servers
   accounts       list, block, unblock and delete accounts
-  devices        end device tokens with no recorded sign-in origin: devices end --no-address --unused-since <YYYY-MM-DD>
-  retiring       who is left on each origin pair: retiring [--origin <relay origin>] [--json]
+  retiring       who the edge last saw on each origin pair: retiring [--origin <relay origin>] [--json]
   schema         print the database's schema version and compat floor [--json]
   backup         copy the database while the edge runs: backup [--with-key] <file|dir|->
   restore        replace the database of a stopped edge: restore [--key <file>] <file>

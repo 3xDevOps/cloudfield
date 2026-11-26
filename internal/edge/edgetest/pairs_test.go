@@ -36,7 +36,7 @@ func TestOriginPairs(t *testing.T) {
 	h.claimServer(alA, a)
 
 	h.stopEdge()
-	h.pairB = true
+	h.pairB, h.recordOrigins = true, true
 	from = h.proxy.mark()
 	h.startEdge()
 	signinB, relayB := h.signinB, h.relayB
@@ -92,23 +92,26 @@ func TestOriginPairs(t *testing.T) {
 		t.Fatalf("device logins %v, want one at %s", logins, signinB)
 	}
 
-	// The edge recorded each server at the relay origin it enrolled at,
-	// each device token at the sign-in origin that issued it, though both
-	// were used through the other pair, and the connector request at the
-	// relay origin it came in on.
-	reports, err := h.edgeStore().OriginReports(context.Background(), time.Now())
-	if err != nil || len(reports) != 2 {
-		t.Fatalf("origin reports = %+v, %v", reports, err)
+	// Recording began with the second pair. The edge recorded each server
+	// at the relay origin it enrolled at; the device token signed in at
+	// the first pair before recording as seen there, at its first dial
+	// through that pair's relay host; the one signed in at the second
+	// pair as issued there, though it also dialed through the first; the
+	// connector request at the relay origin it came in on.
+	rep, err := h.edgeStore().Retiring(context.Background(), time.Now())
+	if err != nil || len(rep.Origins) != 2 || rep.RecordingSince.IsZero() {
+		t.Fatalf("report = %+v, %v", rep, err)
 	}
 	for i, want := range []struct {
-		relay, signin, server string
-		connectors            int
-	}{{relayA, signinA, a.id, 0}, {relayB, signinB, b.id, 1}} {
-		r := reports[i]
+		relay, signin, server    string
+		issued, seen, connectors int
+	}{{relayA, signinA, a.id, 0, 1, 0}, {relayB, signinB, b.id, 1, 0, 1}} {
+		r := rep.Origins[i]
 		if r.RelayOrigin != want.relay || r.SigninOrigin != want.signin || len(r.Servers) != 1 || r.Servers[0].ID != want.server ||
 			r.Servers[0].AgentVersion != version.Version || r.Servers[0].OwnerLogin != alice.Login ||
-			r.DeviceTokens.Day != 1 || r.DeviceTokens.Total != 1 || r.DeviceOnlyAccounts.Total != 0 || r.ConnectorServers.Total != want.connectors {
-			t.Errorf("report of %s: %+v, want server %s, one device token, %d servers with connector requests", want.relay, r, want.server, want.connectors)
+			r.DeviceTokens.Total != want.issued || r.DeviceTokensSeen.Total != want.seen || r.ConnectorServers.Total != want.connectors {
+			t.Errorf("report of %s: %+v, want server %s, %d device tokens issued, %d seen, %d servers with connector requests",
+				want.relay, r, want.server, want.issued, want.seen, want.connectors)
 		}
 	}
 }

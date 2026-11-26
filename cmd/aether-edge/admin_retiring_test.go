@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
-	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -23,7 +22,10 @@ const (
 	testServer2 = "bbbbbbbbbbbbbbbbbbbbbbbbbb"
 )
 
-var enrolledAt = time.Date(2026, 11, 20, 8, 0, 0, 0, time.UTC)
+var (
+	enrolledAt     = time.Date(2026, 11, 20, 8, 0, 0, 0, time.UTC)
+	recordingSince = time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+)
 
 // retiringEdge is a data directory whose edge served pairs, with no one
 // on them.
@@ -35,7 +37,7 @@ func retiringEdge(t *testing.T, pairs map[string]string) string {
 		t.Fatal(err)
 	}
 	if pairs != nil {
-		if err := s.RecordPairs(context.Background(), pairs, time.Now()); err != nil {
+		if err := s.RecordPairs(context.Background(), pairs, recordingSince); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -47,8 +49,9 @@ func retiringEdge(t *testing.T, pairs map[string]string) string {
 
 // populate puts on the two pairs: octo's server, which moved from A to B,
 // and an ownerless one on A; three device tokens of octo's (one on each
-// pair, one without an origin) and one of mona's on A; a session of
-// mona's on A; connector requests to both servers through A.
+// pair, one without an origin) and two of mona's on A, one of them
+// first seen there; a session of mona's on A; connector requests to both
+// servers through A.
 func populate(t *testing.T, dir string) {
 	t.Helper()
 	s, err := edgestore.Open(filepath.Join(dir, "edge.db"))
@@ -101,12 +104,12 @@ func populate(t *testing.T, dir string) {
 		sql  string
 		args []any
 	}{
-		{`INSERT INTO devices SELECT 'octo-a', 'h1', id, 'k', 'laptop', 0, ?, ? FROM accounts WHERE login = 'octo'`, []any{now.UnixNano() - 10*day, pairSigninA}},
-		{`INSERT INTO devices SELECT 'octo-b', 'h2', id, 'k', 'laptop', 0, ?, ? FROM accounts WHERE login = 'octo'`, []any{now.UnixNano(), pairSigninB}},
-		{`INSERT INTO devices SELECT 'octo-bare', 'h3', id, 'k', 'old pc', 0, ?, NULL FROM accounts WHERE login = 'octo'`,
-			[]any{time.Date(2026, 10, 1, 9, 30, 0, 0, time.UTC).UnixNano()}},
-		{`INSERT INTO devices SELECT 'mona-a', 'h4', id, 'k', 'desk', 0, ?, ? FROM accounts WHERE login = 'mona'`, []any{now.UnixNano() - 40*day, pairSigninA}},
-		{`INSERT INTO web_sessions SELECT 'mona-s', 'h5', id, 0, ?, ? FROM accounts WHERE login = 'mona'`,
+		{insertDevice + `'octo-a', 'h1', id, 'k', 'laptop', 0, ?, ?, NULL FROM accounts WHERE login = 'octo'`, []any{now.UnixNano() - 10*day, pairSigninA}},
+		{insertDevice + `'octo-b', 'h2', id, 'k', 'laptop', 0, ?, ?, NULL FROM accounts WHERE login = 'octo'`, []any{now.UnixNano(), pairSigninB}},
+		{insertDevice + `'octo-bare', 'h3', id, 'k', 'old pc', 0, ?, NULL, NULL FROM accounts WHERE login = 'octo'`, []any{now.UnixNano() - 2*day}},
+		{insertDevice + `'mona-a', 'h4', id, 'k', 'desk', 0, ?, ?, NULL FROM accounts WHERE login = 'mona'`, []any{now.UnixNano() - 40*day, pairSigninA}},
+		{insertDevice + `'mona-seen', 'h6', id, 'k', 'desk', 0, ?, ?, 1 FROM accounts WHERE login = 'mona'`, []any{now.UnixNano() - 6*day, pairSigninA}},
+		{`INSERT INTO web_sessions (id, token_hash, account_id, created_at, expires_at, signin_origin) SELECT 'mona-s', 'h5', id, 0, ?, ? FROM accounts WHERE login = 'mona'`,
 			[]any{now.UnixNano() - 5*day + int64(edgeproto.SessionIdle), pairSigninA}},
 	} {
 		if _, err := db.Exec(q.sql, q.args...); err != nil {
@@ -114,6 +117,8 @@ func populate(t *testing.T, dir string) {
 		}
 	}
 }
+
+const insertDevice = `INSERT INTO devices (id, token_hash, account_id, public_key, label, created_at, last_used_at, signin_origin, signin_origin_seen) SELECT `
 
 func runRetiring(t *testing.T, dir string, args ...string) (string, error) {
 	t.Helper()
@@ -124,69 +129,103 @@ func runRetiring(t *testing.T, dir string, args ...string) (string, error) {
 
 func TestRetiringReport(t *testing.T) {
 	empty := retiringEdge(t, nil)
-	if out, err := runRetiring(t, empty); err != nil || out != "no origin pairs recorded: the edge records the pairs it serves when it starts\n" {
-		t.Fatalf("report of an empty store:\n%s%v", out, err)
+	wantEmpty := `no origin pairs recorded: the edge records them from its first start with an option that retires a pair
+
+unknown origin: 0 claimed servers not seen since recording began
+
+LAST USED WITHIN         1 DAY  7 DAYS  30 DAYS  TOTAL
+device tokens            0      0       0        0
+accounts with a session  0      0       0        0
+
+` + retiringCaveat
+	if out, err := runRetiring(t, empty); err != nil || out != wantEmpty {
+		t.Fatalf("report of an empty store:\n%s%v\nwant:\n%s", out, err, wantEmpty)
 	}
 	out, err := runRetiring(t, empty, "--json")
 	var empt struct {
-		At      time.Time         `json:"at"`
-		Origins []json.RawMessage `json:"origins"`
+		At             time.Time         `json:"at"`
+		RecordingSince time.Time         `json:"recording_since"`
+		Origins        []json.RawMessage `json:"origins"`
+		Unknown        edgestore.Unknown `json:"unknown"`
 	}
-	if err != nil || json.Unmarshal([]byte(out), &empt) != nil || empt.At.IsZero() || empt.Origins == nil || len(empt.Origins) != 0 {
+	if err != nil || json.Unmarshal([]byte(out), &empt) != nil || empt.At.IsZero() || !empt.RecordingSince.IsZero() ||
+		empt.Origins == nil || len(empt.Origins) != 0 || !strings.Contains(out, `"origins": [],`) {
 		t.Fatalf("JSON report of an empty store:\n%s%v", out, err)
 	}
 	if _, err := runRetiring(t, empty, "--origin", pairRelayA); err == nil ||
-		err.Error() != pairRelayA+" is not a relay origin this edge has served; it has served: -" {
+		err.Error() != pairRelayA+" is not a relay origin this edge has recorded; it has recorded: -" {
 		t.Fatalf("--origin on an empty store: %v", err)
 	}
 
 	one := retiringEdge(t, map[string]string{pairRelayA: pairSigninA})
-	want := "relay origin " + pairRelayA + ", sign-in origin " + pairSigninA + `
+	want := `recording since 2026-11-01T00:00:00Z
 
-no server last enrolled here
+relay origin ` + pairRelayA + `, sign-in origin ` + pairSigninA + `
 
-LAST USED WITHIN                                       1 DAY  7 DAYS  30 DAYS  TOTAL
-device tokens issued here                              0      0       0        0
-accounts with a session issued here                    0      0       0        0
-accounts with devices here and none at another origin  0      0       0        0
-servers with connector requests through here           0      0       0        0
-`
+no server last seen here
+
+LAST USED WITHIN                                             1 DAY  7 DAYS  30 DAYS  TOTAL
+device tokens issued here                                    0      0       0        0
+device tokens issued earlier, first seen here                0      0       0        0
+accounts with a session here                                 0      0       0        0
+accounts with device tokens here and none at another origin  0      0       0        0
+servers with connector requests through here                 0      0       0        0
+
+unknown origin: 0 claimed servers not seen since recording began
+
+LAST USED WITHIN         1 DAY  7 DAYS  30 DAYS  TOTAL
+device tokens            0      0       0        0
+accounts with a session  0      0       0        0
+
+` + retiringCaveat
 	if out, err := runRetiring(t, one); err != nil || out != want {
 		t.Fatalf("report of one pair:\n%s%v\nwant:\n%s", out, err, want)
 	}
 
 	two := retiringEdge(t, map[string]string{pairRelayA: pairSigninA, pairRelayB: pairSigninB})
 	populate(t, two)
-	wantA := "relay origin " + pairRelayA + ", sign-in origin " + pairSigninA + `
+	wantA := `
+relay origin ` + pairRelayA + `, sign-in origin ` + pairSigninA + `
 
-SERVER ID                   NAME  OWNER LOGIN  BUILD   LAST ENROLLED
+SERVER ID                   NAME  OWNER LOGIN  BUILD   LAST SEEN
 bbbbbbbbbbbbbbbbbbbbbbbbbb  lab   -            v0.9.0  2026-11-20T08:00:00Z
 
-LAST USED WITHIN                                       1 DAY  7 DAYS  30 DAYS  TOTAL
-device tokens issued here                              0      0       1        2
-accounts with a session issued here                    0      1       1        1
-accounts with devices here and none at another origin  0      0       0        1
-servers with connector requests through here           1      2       2        2
+LAST USED WITHIN                                             1 DAY  7 DAYS  30 DAYS  TOTAL
+device tokens issued here                                    0      0       1        2
+device tokens issued earlier, first seen here                0      1       1        1
+accounts with a session here                                 0      1       1        1
+accounts with device tokens here and none at another origin  0      1       1        1
+servers with connector requests through here                 1      2       2        2
 `
-	wantB := "relay origin " + pairRelayB + ", sign-in origin " + pairSigninB + `
+	wantB := `
+relay origin ` + pairRelayB + `, sign-in origin ` + pairSigninB + `
 
-SERVER ID                   NAME         OWNER LOGIN  BUILD   LAST ENROLLED
+SERVER ID                   NAME         OWNER LOGIN  BUILD   LAST SEEN
 aaaaaaaaaaaaaaaaaaaaaaaaaa  workstation  octo         v0.9.1  2026-11-20T08:00:00Z
 
-LAST USED WITHIN                                       1 DAY  7 DAYS  30 DAYS  TOTAL
-device tokens issued here                              1      1       1        1
-accounts with a session issued here                    0      0       0        0
-accounts with devices here and none at another origin  0      0       0        0
-servers with connector requests through here           0      0       0        0
+LAST USED WITHIN                                             1 DAY  7 DAYS  30 DAYS  TOTAL
+device tokens issued here                                    1      1       1        1
+device tokens issued earlier, first seen here                0      0       0        0
+accounts with a session here                                 0      0       0        0
+accounts with device tokens here and none at another origin  0      0       0        0
+servers with connector requests through here                 0      0       0        0
 `
-	if out, err := runRetiring(t, two); err != nil || out != wantA+"\n"+wantB {
-		t.Fatalf("report of two pairs:\n%s%v\nwant:\n%s\n%s", out, err, wantA, wantB)
+	unknown := `
+unknown origin: 0 claimed servers not seen since recording began
+
+LAST USED WITHIN         1 DAY  7 DAYS  30 DAYS  TOTAL
+device tokens            0      1       1        1
+accounts with a session  0      0       0        0
+
+` + retiringCaveat
+	if out, err := runRetiring(t, two); err != nil || out != "recording since 2026-11-01T00:00:00Z\n"+wantA+wantB+unknown {
+		t.Fatalf("report of two pairs:\n%s%v\nwant:\n%s%s%s", out, err, wantA, wantB, unknown)
 	}
-	if out, err := runRetiring(t, two, "--origin", strings.ToUpper(pairRelayB)); err != nil || out != wantB {
+	if out, err := runRetiring(t, two, "--origin", strings.ToUpper(pairRelayB)); err != nil || out != "recording since 2026-11-01T00:00:00Z\n"+wantB+unknown {
 		t.Fatalf("report of --origin %s:\n%s%v", pairRelayB, out, err)
 	}
 	if _, err := runRetiring(t, two, "--origin", pairSigninA); err == nil ||
-		err.Error() != pairSigninA+" is not a relay origin this edge has served; it has served: "+pairRelayA+", "+pairRelayB {
+		err.Error() != pairSigninA+" is not a relay origin this edge has recorded; it has recorded: "+pairRelayA+", "+pairRelayB {
 		t.Fatalf("--origin of a sign-in origin: %v", err)
 	}
 	if _, err := runRetiring(t, two, "--origin", "edge-a.example.test"); err == nil || !strings.HasPrefix(err.Error(), "--origin: ") {
@@ -200,85 +239,25 @@ servers with connector requests through here           0      0       0        0
 	if err != nil || json.Unmarshal([]byte(out), &got) != nil || len(got.Origins) != 1 {
 		t.Fatalf("JSON report of %s:\n%s%v", pairRelayA, out, err)
 	}
-	for _, key := range []string{`"relay_origin": "` + pairRelayA + `"`, `"signin_origin": "` + pairSigninA + `"`,
+	for _, key := range []string{`"recording_since": "2026-11-01T00:00:00Z"`, `"relay_origin": "` + pairRelayA + `"`, `"signin_origin": "` + pairSigninA + `"`,
 		`"servers": [`, `"id": "` + testServer2 + `"`, `"name": "lab"`, `"owner_login": ""`, `"build": "v0.9.0"`,
-		`"last_enrolled_at": "2026-11-20T08:00:00Z"`,
+		`"last_seen_at": "2026-11-20T08:00:00Z"`,
 		`"device_tokens": {
         "1d": 0,
         "7d": 0,
         "30d": 1,
         "total": 2
-      }`, `"session_accounts": {`, `"device_only_accounts": {`, `"connector_servers": {
+      }`, `"device_tokens_seen": {`, `"session_accounts": {`, `"device_only_accounts": {`, `"connector_servers": {
         "1d": 1,
-        "7d": 2,`} {
+        "7d": 2,`, `"unknown": {
+    "device_tokens": {
+      "1d": 0,
+      "7d": 1,
+      "30d": 1,
+      "total": 1
+    },`, `"servers": 0`} {
 		if !strings.Contains(out, key) {
 			t.Errorf("JSON report lacks %s:\n%s", key, out)
 		}
-	}
-}
-
-func runDevicesEnd(t *testing.T, dir, answer string, args ...string) (string, error) {
-	t.Helper()
-	var out bytes.Buffer
-	err := devices(append([]string{"end", "--data", dir}, args...), envOf(nil), strings.NewReader(answer), &out)
-	return out.String(), err
-}
-
-func deviceIDs(t *testing.T, dir string) string {
-	t.Helper()
-	db, err := sql.Open("sqlite", filepath.Join(dir, "edge.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close() //nolint:errcheck // test
-	var ids string
-	if err := db.QueryRow(`SELECT group_concat(id, ' ') FROM (SELECT id FROM devices ORDER BY id)`).Scan(&ids); err != nil {
-		t.Fatal(err)
-	}
-	return ids
-}
-
-func TestDevicesEnd(t *testing.T) {
-	dir := retiringEdge(t, map[string]string{pairRelayA: pairSigninA, pairRelayB: pairSigninB})
-	populate(t, dir)
-	const all = "mona-a octo-a octo-b octo-bare"
-
-	for _, bad := range []struct {
-		args []string
-		err  string
-	}{
-		{[]string{"--unused-since", "2026-11-01"}, "aether-edge devices end ends only device tokens with no recorded sign-in origin: pass --no-address"},
-		{[]string{"--no-address"}, `--unused-since "" is not a YYYY-MM-DD date: parsing time "" as "2006-01-02": cannot parse "" as "2006"`},
-		{[]string{"--no-address", "--unused-since", "2026-02-30"}, `--unused-since "2026-02-30" is not a YYYY-MM-DD date: parsing time "2026-02-30": day out of range`},
-		{[]string{"--no-address", "--unused-since", "2026-11-01", "extra"}, "aether-edge devices end takes no arguments after its flags, got 1"},
-	} {
-		if _, err := runDevicesEnd(t, dir, "yes\n", bad.args...); err == nil || err.Error() != bad.err {
-			t.Errorf("devices end %v: %v, want %s", bad.args, err, bad.err)
-		}
-	}
-	if err := devices([]string{"list"}, envOf(nil), strings.NewReader(""), &bytes.Buffer{}); !errors.Is(err, errUsage) {
-		t.Errorf("devices list: %v, want the usage", err)
-	}
-
-	out, err := runDevicesEnd(t, dir, "yes\n", "--no-address", "--unused-since", "2026-10-01")
-	if err != nil || out != "no device token without a sign-in origin was last used before 2026-10-01\n" || deviceIDs(t, dir) != all {
-		t.Fatalf("devices end before the bare device's last use:\n%s%v", out, err)
-	}
-
-	list := `DEVICE ID  ACCOUNT    LOGIN OR EMAIL  LABEL   LAST USED
-octo-bare  github:42  octo            old pc  2026-10-01T09:30:00Z
-end the 1 device tokens listed, as signing out does? Type yes to end them: `
-	for _, answer := range []string{"", "no\n", "y\n", "YES\n"} {
-		out, err := runDevicesEnd(t, dir, answer, "--no-address", "--unused-since", "2026-10-02")
-		if err != nil || out != list+"\nended nothing\n" || deviceIDs(t, dir) != all {
-			t.Fatalf("devices end answered %q:\n%s%v; devices %s", answer, out, err, deviceIDs(t, dir))
-		}
-	}
-	out, err = runDevicesEnd(t, dir, "yes\n", "--no-address", "--unused-since", "2026-10-02")
-	if err != nil || out != list+"device tokens ended: 1; kept because they were used since the list was read: 0\n" {
-		t.Fatalf("devices end answered yes:\n%s%v", out, err)
-	}
-	if got := deviceIDs(t, dir); got != "mona-a octo-a octo-b" {
-		t.Fatalf("devices after ending: %s", got)
 	}
 }

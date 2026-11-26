@@ -85,6 +85,8 @@ type harness struct {
 	pairB           bool
 	signinB, relayB string
 	pairBAddrs      [2]string
+	// recordOrigins sets edge.Config.RecordOrigins.
+	recordOrigins bool
 
 	mu        sync.Mutex
 	skew      time.Duration
@@ -183,6 +185,7 @@ func (h *harness) startEdge() {
 	svc, err := edge.New(edge.Config{
 		DataDir: h.edgeDir, SigninOrigin: h.signinURL, RelayOrigin: h.relayURL, MorePairs: morePairs,
 		GitHub: h.github.app(), Clock: h.now, ConnectorClientHosts: []string{"127.0.0.1"}, Reviewer: h.reviewer,
+		RecordOrigins: h.recordOrigins,
 	})
 	if err != nil {
 		t.Fatal(err)

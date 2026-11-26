@@ -75,6 +75,9 @@ func (d relayDirectory) RecordClaim(ctx context.Context, serverID, name string, 
 }
 
 func (d relayDirectory) ConnectorUsed(ctx context.Context, serverID, origin string) error {
+	if !d.s.recordOrigins {
+		return nil
+	}
 	return d.s.store.UseConnector(ctx, serverID, origin, d.s.now())
 }
 

@@ -263,8 +263,11 @@ CREATE TABLE account_reach (
 ALTER TABLE servers ADD COLUMN relay_origin TEXT;
 ALTER TABLE servers ADD COLUMN enrolled_at INTEGER;
 ALTER TABLE servers ADD COLUMN agent_version TEXT;
+ALTER TABLE device_authorizations ADD COLUMN signin_origin TEXT;
 ALTER TABLE devices ADD COLUMN signin_origin TEXT;
+ALTER TABLE devices ADD COLUMN signin_origin_seen INTEGER;
 ALTER TABLE web_sessions ADD COLUMN signin_origin TEXT;
+ALTER TABLE web_sessions ADD COLUMN signin_origin_seen INTEGER;
 
 CREATE TABLE connector_use (
 	server_id    TEXT NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
@@ -274,9 +277,10 @@ CREATE TABLE connector_use (
 ) WITHOUT ROWID;
 
 CREATE TABLE origin_pairs (
-	relay_origin  TEXT PRIMARY KEY,
-	signin_origin TEXT NOT NULL,
-	served_at     INTEGER NOT NULL
+	relay_origin    TEXT PRIMARY KEY,
+	signin_origin   TEXT NOT NULL,
+	first_served_at INTEGER NOT NULL,
+	served_at       INTEGER NOT NULL
 );
 `}}
 

@@ -105,6 +105,7 @@ func (s *Service) apiDeviceStart(r *http.Request) (any, error) {
 			Label:        req.Label,
 			Key:          edgeproto.DeviceKeyLine(key),
 			ClientAddr:   clientAddr(r).String(),
+			SigninOrigin: s.signinOrigin(r.Context()),
 			CreatedAt:    now,
 			ExpiresAt:    now.Add(deviceCodeTTL),
 		})
@@ -163,9 +164,8 @@ func (s *Service) apiDeviceToken(r *http.Request) (any, error) {
 	}
 	token := edgeproto.NewToken()
 	d, err := s.store.RedeemDeviceAuth(ctx, hash, edgestore.Device{
-		ID:           edgeproto.NewConnID(),
-		TokenHash:    edgeproto.HashToken(token),
-		SigninOrigin: s.pair(r).signin,
+		ID:        edgeproto.NewConnID(),
+		TokenHash: edgeproto.HashToken(token),
 	}, now)
 	if errors.Is(err, edgestore.ErrNotFound) {
 		return nil, deviceState(edgeproto.DeviceExpired)

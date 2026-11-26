@@ -116,7 +116,7 @@ func (s *Service) visitor(r *http.Request) (visitor, bool, error) {
 		return visitor{}, false, nil
 	}
 	now := s.now()
-	sess, err := s.store.UseSession(r.Context(), edgeproto.HashToken(c.Value), s.pair(r).signin, now, now.Add(edgeproto.SessionIdle))
+	sess, err := s.store.UseSession(r.Context(), edgeproto.HashToken(c.Value), s.signinOrigin(r.Context()), now, now.Add(edgeproto.SessionIdle))
 	if errors.Is(err, edgestore.ErrNotFound) {
 		return visitor{}, false, nil
 	}
