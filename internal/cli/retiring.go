@@ -1,7 +1,7 @@
 package cli
 
 import (
-	edgeclient "github.com/3xDevOps/Aether/internal/edge/client"
+	edgeclient "github.com/3xDevOps/cloudfield/internal/edge/client"
 )
 
 // EdgeHoldings is what this machine holds at edges: the relay origins it

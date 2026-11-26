@@ -6,8 +6,8 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/3xDevOps/Aether/internal/syncd"
-	"github.com/3xDevOps/Aether/internal/testhome"
+	"github.com/3xDevOps/cloudfield/internal/syncd"
+	"github.com/3xDevOps/cloudfield/internal/testhome"
 )
 
 // unitArgs reads back the argv every OS's unit was rendered with,

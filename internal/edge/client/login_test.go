@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
+	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 )
 
 // An edge that predates the relay origin field decodes the request into

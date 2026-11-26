@@ -227,7 +227,7 @@ func (c *Client) refusal(op, origin string, resp *http.Response, body []byte) *R
 		msg = msg[:maxShownText] + "..."
 	}
 	var retired string
-	if status == http.StatusGone && eb.Retired != nil && printable(eb.Retired.Replacement) && canonicalOrigin(eb.Retired.Replacement) {
+	if status == http.StatusGone && eb.Retired != nil && clean(eb.Retired.Replacement) == eb.Retired.Replacement && edgeproto.NoticeOrigin(eb.Retired.Replacement) {
 		retired = eb.Retired.Replacement
 	}
 	return &RefusedError{Edge: HostOf(origin), URL: c.origin, Op: op, Status: status, Message: clean(msg), FromEdge: fromEdge, Retired: retired}
