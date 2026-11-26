@@ -33,12 +33,16 @@ func (h *harness) column(t *testing.T, query string, args ...any) string {
 // newRecordingHarness is newPairsHarness with RecordOrigins set.
 func newRecordingHarness(t *testing.T) *harness {
 	t.Helper()
-	return newHarness(t, func(cfg *Config, p *fakeProvider) {
+	h := newHarness(t, func(cfg *Config, p *fakeProvider) {
 		app := p.app()
 		app.ClientID, app.ClientSecret = "test-client-2", "test-secret-2"
 		cfg.MorePairs = []Pair{{SigninOrigin: testSignin2, RelayOrigin: testRelay2, GitHub: app}}
 		cfg.RecordOrigins = true
 	})
+	if err := h.svc.StartRecording(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return h
 }
 
 func (h *harness) exec(t *testing.T, query string, args ...any) {
@@ -291,5 +295,26 @@ func TestRedemptionAfterRecordingStarts(t *testing.T) {
 	}
 	if got := h.column(t, `SELECT signin_origin || ' ' || signin_origin_seen FROM devices WHERE id = ?`, tok.Device.ID); got != testSignin+" 1" {
 		t.Fatalf("device redeemed once recording began records %q, want %s seen", got, testSignin)
+	}
+}
+
+// TestRecordingStartsWhenServing opens a recording edge that never starts
+// serving, as when its listener fails to bind: closing it records no
+// pairs and no period.
+func TestRecordingStartsWhenServing(t *testing.T) {
+	dir := t.TempDir()
+	svc, err := New(Config{DataDir: dir, SigninOrigin: testSignin, RelayOrigin: testRelay,
+		GitHub: &OAuthApp{ClientID: "id", ClientSecret: "secret"}, RecordOrigins: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	h := &harness{dataDir: dir}
+	for _, table := range []string{"origin_pairs", "origin_recording"} {
+		if got := h.column(t, `SELECT COUNT(*) FROM `+table); got != "0" {
+			t.Errorf("%s holds %s rows after a start that never served", table, got)
+		}
 	}
 }

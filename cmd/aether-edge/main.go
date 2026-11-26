@@ -207,10 +207,14 @@ func serve(args []string) (err error) {
 			"signin", o.signinOrigin+edge.PathReviewerSignin)
 	}
 
-	select {
-	case <-ctx.Done():
-		err = nil
-	case err = <-errc:
+	// Recording begins once the listeners are bound, so a start that
+	// fails to bind records no period.
+	if err = svc.StartRecording(context.Background()); err == nil {
+		select {
+		case <-ctx.Done():
+			err = nil
+		case err = <-errc:
+		}
 	}
 	// A second signal during the drain kills the edge.
 	stop()

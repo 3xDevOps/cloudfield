@@ -187,6 +187,8 @@ type Service struct {
 	openAIChallenge string
 	clientHosts     []string
 	recordOrigins   bool
+	// recording is set once StartRecording began a recording run.
+	recording atomic.Bool
 
 	signinLimit *limiter[netip.Prefix]
 	startLimit  *limiter[netip.Prefix]
@@ -284,16 +286,6 @@ func New(cfg Config) (*Service, error) {
 		s.store.Close() //nolint:errcheck // the key error takes precedence
 		return nil, err
 	}
-	if s.recordOrigins {
-		served := map[string]string{}
-		for _, p := range pairs {
-			served[p.relay] = p.signin
-		}
-		if err = s.store.RecordPairs(context.Background(), served, now()); err != nil {
-			s.store.Close() //nolint:errcheck // the record error takes precedence
-			return nil, err
-		}
-	}
 	return s, nil
 }
 
@@ -301,11 +293,29 @@ func New(cfg Config) (*Service, error) {
 // a request.
 func (s *Service) SetLink(l ServerLink) { s.link = l }
 
-// Close records the end of origin recording, when the edge records
-// origins, and closes the store.
+// StartRecording records, when the edge records origins, the pairs it
+// serves and the start of its recording run. Call it once the edge's
+// listeners are bound.
+func (s *Service) StartRecording(ctx context.Context) error {
+	if !s.recordOrigins {
+		return nil
+	}
+	served := map[string]string{}
+	for _, p := range s.pairs {
+		served[p.relay] = p.signin
+	}
+	if err := s.store.RecordPairs(ctx, served, s.now()); err != nil {
+		return err
+	}
+	s.recording.Store(true)
+	return nil
+}
+
+// Close records the end of a recording run StartRecording began and
+// closes the store.
 func (s *Service) Close() error {
 	var err error
-	if s.recordOrigins {
+	if s.recording.Load() {
 		err = s.store.StopRecording(context.Background(), s.now())
 	}
 	return errors.Join(err, s.store.Close())

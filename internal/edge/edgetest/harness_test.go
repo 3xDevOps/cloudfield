@@ -213,6 +213,9 @@ func (h *harness) startEdge() {
 	for _, ln := range frontB {
 		go func() { _ = n.front.Serve(ln) }()
 	}
+	if err := svc.StartRecording(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	h.mu.Lock()
 	h.node = n
 	h.mu.Unlock()
