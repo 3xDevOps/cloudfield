@@ -18,8 +18,10 @@ plan's choice and stands unless the owner changes it.
 ## Rules
 
 - Nothing changes for any edge until its operator sets a new option. No
-  date, host name or state is built in. An edge with one pair cannot use
-  the options, and no edge records anything new until one is set.
+  date, host name or state is built in. An edge that has only ever served
+  one pair has nothing to retire, and no edge records anything new until
+  an option is set. An edge left with one served pair after retiring
+  another keeps its `--retired-pairs` entry.
 - A date is text shown to people. The edge never acts on it: only the
   operator's own edit moves a pair to the next state.
 - Retirement redirects no request to another origin, on any path, in any
