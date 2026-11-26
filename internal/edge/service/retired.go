@@ -134,8 +134,9 @@ func (s *Service) retiredAnswers(origin string, repl *pair, signin bool) (*retir
 
 // deleteRetiredSignIns deletes the device tokens, sessions and pending
 // device authorizations whose recorded sign-in origin has the host name of
-// a retired sign-in origin, whatever its port, and those with no recorded
-// origin. It refuses a retired pair whose origins contradict the pairs the
+// a retired sign-in origin, or of any sign-in origin the edge recorded
+// beside a retired relay origin, whatever its port, and those with no
+// recorded origin. It refuses a retired pair whose origins contradict the pairs the
 // edge recorded, and rows without an origin when the edge never recorded
 // origins, since every row would have none.
 func (s *Service) deleteRetiredSignIns(ctx context.Context, path string, retired []Retired) error {
@@ -167,6 +168,19 @@ func (s *Service) deleteRetiredSignIns(ctx context.Context, path string, retired
 			"pending device sign-ins %d), since this edge has never recorded which pair issued them. Serve the pair again (in --origin-pairs, with --retired-pairs unset) and run it with --retiring-pairs naming the pair, for as long as you give "+
 			"people to move, such as 30 days: each token or session used in that time is recorded and kept. A shorter run lets this start pass "+
 			"but signs out everyone who did not use the edge during it", without.Devices, without.Sessions, without.Authorizations)
+	}
+	pairings, err := s.store.Pairings(ctx)
+	if err != nil {
+		return err
+	}
+	retiredRelays := map[string]bool{}
+	for _, r := range retired {
+		retiredRelays[originHost(r.RelayOrigin)] = true
+	}
+	for _, p := range pairings {
+		if retiredRelays[originHost(p.RelayOrigin)] {
+			signinHosts[originHost(p.SigninOrigin)] = true
+		}
 	}
 	recorded, err := s.store.SignInOrigins(ctx)
 	if err != nil {

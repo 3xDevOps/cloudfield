@@ -59,10 +59,10 @@ func TestMigrationFromVersion1(t *testing.T) {
 	closeStore(t, old)
 
 	s := openSteps(t, path, migrations)
-	if got, err := ReadSchema(path); err != nil || got != (Schema{Version: 2, CompatFloor: 1}) {
-		t.Fatalf("schema = %+v, %v; want version 2 at floor 1", got, err)
+	if got, err := ReadSchema(path); err != nil || got != (Schema{Version: SchemaVersion(), CompatFloor: 1}) {
+		t.Fatalf("schema = %+v, %v; want version %d at floor 1", got, err, SchemaVersion())
 	}
-	if names := backupsIn(t, dir); len(names) != 1 || !strings.HasPrefix(names[0], "edge-v1-v2-") {
+	if names := backupsIn(t, dir); len(names) != 1 || !strings.HasPrefix(names[0], fmt.Sprintf("edge-v1-v%d-", SchemaVersion())) {
 		t.Fatalf("backups = %v, want one taken before migrating 1 to 2", names)
 	}
 	for _, q := range []string{
@@ -742,5 +742,32 @@ func TestRecordingPeriodClockStep(t *testing.T) {
 	rep, err := s.Retiring(ctx, testNow)
 	if err != nil || !rep.RecordingSince.Equal(testNow) || !rep.RecordingStarted.Equal(testNow) || !rep.RecordingStopped.IsZero() {
 		t.Fatalf("after a stop in the future: since %v, started %v, stopped %v, %v", rep.RecordingSince, rep.RecordingStarted, rep.RecordingStopped, err)
+	}
+}
+
+// TestPairingsKeepEarlierSigninOrigins pairs one relay origin with two
+// sign-in origins in turn: Pairings lists both, and a pairing recorded
+// before origin_pair_history existed, which only origin_pairs holds.
+func TestPairingsKeepEarlierSigninOrigins(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	now := time.Unix(1_800_000_000, 0)
+	for _, signin := range []string{"https://auth-early.example.test", "https://auth.example.test"} {
+		if err := s.RecordPairs(ctx, map[string]string{"https://edge.example.test": signin}, now); err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(time.Hour)
+	}
+	if _, err := s.db.Exec(`INSERT INTO origin_pairs (relay_origin, signin_origin, served_at) VALUES ('https://edge2.example.test', 'https://auth2.example.test', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Pairings(ctx)
+	want := []Pairing{
+		{"https://edge.example.test", "https://auth-early.example.test"},
+		{"https://edge.example.test", "https://auth.example.test"},
+		{"https://edge2.example.test", "https://auth2.example.test"},
+	}
+	if err != nil || !slices.Equal(got, want) {
+		t.Errorf("Pairings = %v, %v; want %v", got, err, want)
 	}
 }

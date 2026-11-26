@@ -23,7 +23,8 @@ const recordingGap = 10 * time.Minute
 
 // RecordPairs records, as of now, that the edge serves each relay origin
 // with the sign-in origin it names and records origins. A relay origin
-// keeps its row after the edge stops serving it. The recording period
+// keeps its row after the edge stops serving it, and every pairing ever
+// recorded stays in origin_pair_history (Pairings). The recording period
 // goes on when the edge's last recording run stopped cleanly
 // (StopRecording) within recordingGap, and starts at now otherwise.
 func (s *Store) RecordPairs(ctx context.Context, relayToSignin map[string]string, now time.Time) error {
@@ -37,6 +38,11 @@ func (s *Store) RecordPairs(ctx context.Context, relayToSignin map[string]string
 			ON CONFLICT (relay_origin) DO UPDATE SET signin_origin = excluded.signin_origin, served_at = excluded.served_at`,
 			relay, signin, unix(now)); err != nil {
 			return fmt.Errorf("edgestore: record origin pair %s %s: %w", signin, relay, err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO origin_pair_history (relay_origin, signin_origin, first_served_at, served_at) VALUES (?, ?, ?, ?)
+			ON CONFLICT (relay_origin, signin_origin) DO UPDATE SET served_at = excluded.served_at`,
+			relay, signin, unix(now), unix(now)); err != nil {
+			return fmt.Errorf("edgestore: record origin pair %s %s: history: %w", signin, relay, err)
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO origin_recording (id, since, started_at) VALUES (1, ?, ?)
@@ -142,6 +148,36 @@ func (s *Store) SignInOrigins(ctx context.Context) ([]string, error) {
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("edgestore: list sign-in origins: %w", err)
+	}
+	return out, nil
+}
+
+// Pairing is a relay origin and a sign-in origin the edge recorded
+// serving together.
+type Pairing struct {
+	RelayOrigin, SigninOrigin string
+}
+
+// Pairings lists every pairing the edge recorded serving, current and
+// earlier. origin_pairs holds the current ones, also those recorded before
+// origin_pair_history existed or by a binary that does not know it.
+func (s *Store) Pairings(ctx context.Context) ([]Pairing, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT relay_origin, signin_origin FROM origin_pair_history
+		UNION SELECT relay_origin, signin_origin FROM origin_pairs ORDER BY 1, 2`)
+	if err != nil {
+		return nil, fmt.Errorf("edgestore: list origin pairings: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only
+	var out []Pairing
+	for rows.Next() {
+		var p Pairing
+		if err := rows.Scan(&p.RelayOrigin, &p.SigninOrigin); err != nil {
+			return nil, fmt.Errorf("edgestore: list origin pairings: %w", err)
+		}
+		out = append(out, p)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("edgestore: list origin pairings: %w", err)
 	}
 	return out, nil
 }

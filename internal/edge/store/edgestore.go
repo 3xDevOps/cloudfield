@@ -288,6 +288,14 @@ CREATE TABLE origin_recording (
 	started_at INTEGER NOT NULL,
 	stopped_at INTEGER
 );
+`}, {floor: 1, sql: `
+CREATE TABLE origin_pair_history (
+	relay_origin    TEXT NOT NULL,
+	signin_origin   TEXT NOT NULL,
+	first_served_at INTEGER NOT NULL,
+	served_at       INTEGER NOT NULL,
+	PRIMARY KEY (relay_origin, signin_origin)
+) WITHOUT ROWID;
 `}}
 
 // Schema is a database's schema version and the compat floor recorded

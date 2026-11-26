@@ -1260,8 +1260,10 @@ retired; this edge is at https://<relay-host-2>` in `edge status`.
 
 Before it serves, an edge with `--retired-pairs` set deletes, in one
 transaction, the device tokens, browser sessions and pending device sign-ins
-issued at a retired sign-in origin, and those with no recorded origin, which
-were not used while the pair was retiring. It logs `edge: deleted the sign-ins
+issued at a retired sign-in origin, or at any sign-in origin the edge recorded
+beside the retired relay origin earlier, matched by host name whatever the
+port, and those with no recorded origin, which were not used while the pair
+was retiring. It logs `edge: deleted the sign-ins
 of retired pairs and those with no recorded origin devices=<n> sessions=<n>
 authorizations=<n>`. A server keeps its record of each device and its approval,
 as after a sign-out; the person signs the device in again at the replacement.

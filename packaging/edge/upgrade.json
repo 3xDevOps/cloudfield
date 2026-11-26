@@ -1,5 +1,5 @@
 {
-  "store_schema": 2,
+  "store_schema": 3,
   "store_compat_floor": 1,
   "protocol": {
     "version": 6,
