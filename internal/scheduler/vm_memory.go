@@ -56,7 +56,9 @@ func (s *Scheduler) watchVMMemory(ctx context.Context) {
 }
 
 // guardVMMemory saves session VMs to disk before the host's OOM killer ends
-// one, and never stops one. It starts once available memory falls below
+// one, and never stops one. While less than twice the floor is free it
+// saves the VMs of sleeping and closed sessions, one a check. For the
+// others it starts once available memory falls below
 // admission's floor, or the host has stalled on memory as systemd-oomd
 // measures it, and stops once twice the floor is free and the stall has
 // eased. Until then it saves one VM a check while less than twice the floor
@@ -102,9 +104,31 @@ func (s *Scheduler) checkVMMemory(ctx context.Context) (uint64, bool) {
 		return 0, false
 	}
 	if !calm {
+		if available < 2*floor {
+			s.saveAsleepVM(ctx)
+		}
 		return 0, false
 	}
 	return available - 2*floor, true
+}
+
+// saveAsleepVM saves one VM nobody uses, as the sleep sweep left paused in
+// memory, while less than twice the floor is free: its memory is back
+// before the host is short and the brake freezes the sessions that work.
+// Caller holds vmMemoryMu.
+func (s *Scheduler) saveAsleepVM(ctx context.Context) {
+	candidates, writing := s.memoryCandidates(ctx)
+	for _, c := range candidates {
+		if c.rank() > 0 {
+			return
+		}
+		if !s.saveFits(c, writing) {
+			continue
+		}
+		if saved, held := s.heldSave(c, false); saved || held {
+			return
+		}
+	}
 }
 
 // hostMemory is the host's available memory, read from /proc/meminfo with

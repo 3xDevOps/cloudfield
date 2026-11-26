@@ -300,8 +300,13 @@ func (s *Scheduler) wakeLive(ctx context.Context, entry *supervised) (woke, erro
 	entry.admitting = true
 	s.mu.Unlock()
 
-	// A VM paused in memory holds what it wakes with.
+	// A VM paused in memory holds what it wakes with, unless it stopped
+	// meanwhile: that one starts from its disks and must be admitted.
 	release, err := func() {}, error(nil)
+	if resident {
+		info, inspectErr := s.cfg.Runtime.Inspect(ctx, cid)
+		resident = inspectErr == nil && !info.Exited
+	}
 	if !resident {
 		release, err = s.reserveWake(ctx, cid)
 	}
@@ -404,7 +409,7 @@ func (s *Scheduler) startAsleep(ctx context.Context, entry *supervised) (woke, e
 	if err := s.cfg.Runtime.Start(ctx, cid); err != nil {
 		return woke{}, err
 	}
-	s.superviseWoken(entry)
+	s.superviseWoken(entry, false)
 	return how, nil
 }
 

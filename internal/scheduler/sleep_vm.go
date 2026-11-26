@@ -56,7 +56,7 @@ func (w woke) notice() string {
 	}
 	switch {
 	case w.resident:
-		return "Cloudfield had paused this idle session in the server's memory and resumed it. Its processes, terminals and conversation carry on where they were."
+		return "Cloudfield had paused this idle session in the server's memory and resumed it. Its processes, terminals and conversation carry on where they were; connections to outside the session may have dropped while it was paused."
 	case w.restored:
 		return "Cloudfield had saved this session to disk and restored it. Its processes, terminals and conversation carry on where they were; connections to outside the session may have dropped while it slept."
 	case w.restoreErr != nil:
@@ -253,7 +253,7 @@ func (s *Scheduler) reattach(ctx context.Context, entry *supervised, restored bo
 // capacity.
 func (s *Scheduler) restoreAsleep(ctx context.Context, entry *supervised, saver runtime.SaveRuntime) (woke, error) {
 	s.mu.Lock()
-	cid, closed, resident := entry.containerID, entry.retained, entry.asleepResident
+	cid, closed, resident := entry.containerID, entry.retained, entry.residentLocked()
 	s.mu.Unlock()
 	restoreErr := saver.Restore(ctx, cid)
 	if restoreErr == nil {
@@ -262,12 +262,13 @@ func (s *Scheduler) restoreAsleep(ctx context.Context, entry *supervised, saver 
 			if err := s.cfg.Runtime.Resume(ctx, cid); err != nil {
 				return woke{}, fmt.Errorf("resume the restored session: %w", err)
 			}
-		} else if resident {
-			// As below: only a guest saved with its processes frozen is
-			// still paused.
+		} else {
+			// As below. Not decided from the sidecar: one a restart read
+			// before the guard's save was recorded would leave a session
+			// that was paused in memory frozen for good.
 			_ = s.cfg.Runtime.Resume(ctx, cid)
 		}
-		s.superviseWoken(entry)
+		s.superviseWoken(entry, false)
 		return woke{restored: true}, nil
 	}
 	if errors.Is(restoreErr, runtime.ErrNotFound) {
@@ -287,7 +288,7 @@ func (s *Scheduler) restoreAsleep(ctx context.Context, entry *supervised, saver 
 	}
 	if !info.Exited {
 		_ = s.cfg.Runtime.Resume(ctx, cid)
-		s.superviseWoken(entry)
+		s.superviseWoken(entry, resident)
 		return woke{restored: true, resident: resident}, nil
 	}
 	// A shutdown cut the restore short before the guest ran: its saved state
@@ -341,7 +342,7 @@ func (s *Scheduler) restoreAsleep(ctx context.Context, entry *supervised, saver 
 	// conversation rather than trying to reattach.
 	entry.agentExec, entry.agentKeeper = nil, nil
 	s.mu.Unlock()
-	s.superviseWoken(entry)
+	s.superviseWoken(entry, false)
 	return how, nil
 }
 
@@ -435,13 +436,19 @@ func (s *Scheduler) coldStartRefusal(ctx context.Context, entry *supervised) (st
 	return "", nil
 }
 
-// superviseWoken waits on entry's container again after a wake started or
-// restored it.
-func (s *Scheduler) superviseWoken(entry *supervised) {
+// superviseWoken waits on entry's container again after a wake started,
+// restored or, with resident, only resumed it.
+func (s *Scheduler) superviseWoken(entry *supervised, resident bool) {
 	s.mu.Lock()
 	// The ACP driver will not exec into a container it thinks is frozen.
 	entry.paused = false
 	entry.asleepSaved, entry.asleepResident = false, false
+	// A VM paused in memory never stopped: the wait from before the pause
+	// still holds, unless a server restart came between.
+	if resident && entry.waitStarted {
+		s.mu.Unlock()
+		return
+	}
 	entry.sleepGen++
 	entry.waitStarted = true
 	s.wg.Add(1)

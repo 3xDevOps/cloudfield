@@ -855,6 +855,9 @@ func TestASavedRunWakesWithItsAgentAfterARestart(t *testing.T) {
 	if sr.restores != 1 || !adopted(rt) {
 		t.Fatalf("the wake after a restart did not reattach to the saved agent: %d restores, %d agents", sr.restores, len(rt.all()))
 	}
+	if state := containerState(e.container(t, run.ID)); state != "running" {
+		t.Fatalf("the wake left the VM, saved paused, %s", state)
+	}
 	waitItems(t, s2, run.ID, "a turn after the restart", turnEnded("end_turn", 2))
 }
 

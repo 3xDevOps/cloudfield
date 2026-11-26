@@ -481,11 +481,10 @@ type sidecar struct {
 	UsageLimit  string        `json:"usage_limit,omitempty"`
 	// AsleepSince is when idleness stopped the container; WakeError is the
 	// last wake's failure.
-	AsleepSince *time.Time `json:"asleep_since,omitempty"`
-	AsleepSaved bool       `json:"asleep_saved,omitempty"`
-	// AsleepResident is a sleeping VM paused in memory.
-	AsleepResident bool   `json:"asleep_resident,omitempty"`
-	WakeError      string `json:"wake_error,omitempty"`
+	AsleepSince    *time.Time `json:"asleep_since,omitempty"`
+	AsleepSaved    bool       `json:"asleep_saved,omitempty"`
+	AsleepResident bool       `json:"asleep_resident,omitempty"`
+	WakeError      string     `json:"wake_error,omitempty"`
 }
 
 // sidecar snapshots the entry's durable state. Caller must hold s.mu.

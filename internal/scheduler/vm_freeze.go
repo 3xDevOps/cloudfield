@@ -118,6 +118,9 @@ func (s *Scheduler) settleFrozen(ctx context.Context, vms runtime.FreezeRuntime,
 		case s.guestsNeeded[cid] > 0:
 		case busy && !e.admitting || e.status == domain.RunProvisioning || !e.retained && (e.status.Terminal() || e.killRequested || e.finalizing):
 			s.thawBraked(vms, cid)
+		// Frozen too, a VM paused in memory would take a thaw, one a check,
+		// ahead of a working one.
+		case e.residentLocked():
 		default:
 			s.vmBrakeTargets = append(s.vmBrakeTargets, cid)
 			if slices.Contains(froze, cid) && !e.retained && !e.paused && now.Sub(e.frozenNotedAt) >= memoryFrozenNoteEvery {

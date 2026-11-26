@@ -708,7 +708,8 @@ what it creates to the checkout's owner, and keeps its staging under
 `/run/aether-guest/data/git/mutagen`. Live sync to a sleeping session wakes
 it and holds it awake while the overlay runs.
 
-While the VM does not run, because the session sleeps or ended, its Files
+While the VM does not run, because the session sleeps saved to disk or
+ended, its Files
 view and diffs come from the last snapshot the server recorded: nothing can
 have changed the checkout since. A Files write or upload to a sleeping
 session wakes it first; one to an ended session, whose VM was removed,

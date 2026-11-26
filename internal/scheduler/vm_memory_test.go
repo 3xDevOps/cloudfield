@@ -338,6 +338,32 @@ func TestTheMemoryGuardSavesTheLongestIdleVMFirst(t *testing.T) {
 	}
 }
 
+// A VM the sleep sweep paused in memory is saved while less than twice the
+// floor is free, before the host is short; one whose session is awake is
+// left alone until then.
+func TestTheMemoryGuardSavesAPausedVMBeforeTheHostIsShort(t *testing.T) {
+	t.Parallel()
+	e, mr := newMemoryEnv(t)
+	paused := e.launchVM(t, mr, "say pong", 1<<30)
+	after := e.sched.cfg.VMSleepAfter
+	e.sched.cfg.VMSleepAfter = time.Nanosecond
+	e.sleepRun(t, e.runOf(t, paused))
+	e.sched.cfg.VMSleepAfter = after
+	idle := e.launchVM(t, mr, "say pong", 1<<30)
+	if mr.isSaved(paused) {
+		t.Fatal("the idle sleep saved the VM instead of pausing it")
+	}
+	mr.setAvailable(5 << 30)
+
+	e.guard(t)
+	if !mr.isSaved(paused) || mr.isSaved(idle) {
+		t.Fatalf("with 5 GiB available the paused VM is saved %v and the awake one %v, want only the paused one", mr.isSaved(paused), mr.isSaved(idle))
+	}
+	if state := e.sched.Sleep(e.runOf(t, paused)); !state.Saved || state.InMemory {
+		t.Fatalf("the saved VM sleeps as %+v, want it saved to disk", state)
+	}
+}
+
 func TestTheMemoryGuardSavesAWorkingVMWhenNoneIsIdleAndWakesEachOnceItsMemoryFits(t *testing.T) {
 	t.Parallel()
 	e, mr := newMemoryEnv(t)
