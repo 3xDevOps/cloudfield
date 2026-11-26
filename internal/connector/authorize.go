@@ -22,6 +22,7 @@ import (
 
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	"github.com/3xDevOps/cloudfield/internal/ops"
+	"github.com/3xDevOps/cloudfield/internal/protocol"
 	"github.com/3xDevOps/cloudfield/internal/sshd"
 )
 
@@ -188,7 +189,7 @@ func (h *handler) authorizePage(w http.ResponseWriter, r *http.Request, res reso
 		h.redirectError(w, r, req, "invalid_target", "resource must be "+res.base)
 		return
 	}
-	page := consentPage{Client: clientLabel(req), Write: true, Universal: res.universal()}
+	page := consentPage{Client: clientLabel(req), Write: true, Universal: res.universal(), Retiring: h.retiring(res)}
 	bound := h.ssh.EdgeBindsSignIn()
 	if bound && r.Method == http.MethodGet && q.Has(edgeproto.ParamAssertion) {
 		h.renderError(w, "The edge put its sign-in in the URL, where logs and browser history keep it, so it is refused. "+
@@ -325,7 +326,7 @@ func (h *handler) authorizeAllow(w http.ResponseWriter, r *http.Request, res res
 		return
 	}
 	scopes := grantedScopes(r.PostForm["scope"])
-	page := consentPage{Request: signed, Client: clientLabel(req), Universal: res.universal(),
+	page := consentPage{Request: signed, Client: clientLabel(req), Universal: res.universal(), Retiring: h.retiring(res),
 		Write: slices.Contains(scopes, string(ops.ScopeWrite)), Control: slices.Contains(scopes, string(ops.ScopeControl))}
 	now := h.now()
 	if req.Asserted != nil {
@@ -540,6 +541,24 @@ type consentPage struct {
 	Control bool
 	// Failed shows only Error, for a request that cannot continue.
 	Failed bool
+	// Retiring is the edge's notice that the address the page is at is
+	// retiring, nil when there is none.
+	Retiring *protocol.ConnectorNotice
+}
+
+// retiring is the edge's notice that res's address is retiring, nil when
+// there is none or the notices cannot be read, which leaves the page as
+// it is.
+func (h *handler) retiring(res resource) *protocol.ConnectorNotice {
+	n, err := h.ssh.ConnectorNotice(res.base)
+	if err != nil {
+		slog.Warn("connector: consent page without the edge's notices", "error", err)
+		return nil
+	}
+	if n == nil || n.State != edgeproto.NoticeRetiring {
+		return nil
+	}
+	return n
 }
 
 // consentLogo is web/public/cloudfield-logo-small.svg, inlined because the
@@ -586,7 +605,8 @@ h1{margin:0 0 16px;font-size:22px;font-weight:600;line-height:1.3}
 strong{font-weight:600}
 code{font-family:var(--font-code);font-size:.875em;background:var(--chrome);border:1px solid var(--seam);border-radius:var(--radius-chip);padding:0 4px}
 .note{color:var(--text-muted);font-size:15px}
-.error{padding:12px 16px;background:var(--chrome);border-left:2px solid var(--state-failed);border-radius:0 var(--radius-control) var(--radius-control) 0}
+.error,.retiring{padding:12px 16px;background:var(--chrome);border-left:2px solid var(--state-failed);border-radius:0 var(--radius-control) var(--radius-control) 0}
+.retiring{border-left-color:var(--state-needs-you)}
 fieldset{margin:0 0 16px;padding:4px 16px 0;border:1px solid var(--seam);border-radius:var(--radius-control)}
 legend{padding:0 4px;color:var(--text-muted);font-size:15px;font-weight:500}
 fieldset label{display:grid;grid-template-columns:auto minmax(0,1fr);gap:12px;cursor:pointer}
@@ -618,7 +638,8 @@ button:hover{background:var(--accent-fill-hover)}
 <p class="error">{{.Error}}</p>
 {{else}}
 <h1>Connect <strong>{{.Client}}</strong> to <strong>{{.Server}}</strong>{{if .Member}} as <strong>{{.Member}}</strong>{{end}}</h1>
-<p>Server <strong>{{.Server}}</strong> <code>{{.ServerID}}</code>{{if .Member}}, member <strong>{{.Member}}</strong>{{end}}, client <strong>{{.Client}}</strong>.</p>
+{{with .Retiring}}<p class="retiring">This address is retiring{{with .Date}} on {{.}}{{end}}. Add the connector at <code>{{.URL}}</code> instead.</p>
+{{end}}<p>Server <strong>{{.Server}}</strong> <code>{{.ServerID}}</code>{{if .Member}}, member <strong>{{.Member}}</strong>{{end}}, client <strong>{{.Client}}</strong>.</p>
 <p>It acts as you. It can always list workspaces, agents and runs and read run history; every member can read every run on this server, so it can read all of them.</p>
 {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
 <form method="post">

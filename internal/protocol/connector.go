@@ -42,6 +42,20 @@ type Connector struct {
 	Scopes     []string `json:"scopes"`
 	CreatedAt  string   `json:"created_at"`
 	LastUsedAt string   `json:"last_used_at,omitempty"`
+	// Notice is set when the edge's verified notices say the address of
+	// Resource is retiring or retired.
+	Notice *ConnectorNotice `json:"notice,omitempty"`
+}
+
+// ConnectorNotice is what the server's edge says about the address a
+// connector was added at. State is "retiring", where it still works, or
+// "retired", where it no longer does; URL is Resource's path at the
+// address the edge names instead. Date, YYYY-MM-DD or empty, is when the
+// edge's operator plans to retire it, text for people.
+type ConnectorNotice struct {
+	State string `json:"state"`
+	URL   string `json:"url"`
+	Date  string `json:"date,omitempty"`
 }
 
 // ConnectorListResult is the caller's connectors and how the caller adds
@@ -50,7 +64,9 @@ type Connector struct {
 // the edge does not serve it, and differs from URL for a member with no
 // GitHub account bound. UniversalURLs are the universal URLs at every
 // relay origin of the edge the server takes connectors at, UniversalURL
-// among them; a connector at any of them is at the universal URL. SignIn
+// among them; a connector at any of them is at the universal URL. URL and
+// UniversalURL are at the address the edge names instead of a retiring or
+// retired one, when the edge takes connectors there. SignIn
 // is set when URL's consent page takes the caller's edge sign-in instead
 // of a pairing code.
 type ConnectorListResult struct {

@@ -56,6 +56,9 @@ const (
 	// parallel launches, then one more every writeRefill.
 	writeBurst  = 30
 	writeRefill = 2 * time.Second
+	// A connector at a retiring address gets the notice on a tool result
+	// at most once every noticeEvery.
+	noticeEvery = 24 * time.Hour
 )
 
 var b64 = base64.RawURLEncoding
@@ -117,8 +120,8 @@ type handler struct {
 	now             func() time.Time
 	long            *ops.LongCalls
 
-	// mu guards codes, nonces, wrong, wrongAll, wrongSwept, writes and
-	// writesSwept.
+	// mu guards codes, nonces, wrong, wrongAll, wrongSwept, writes,
+	// writesSwept and noticed.
 	mu    sync.Mutex
 	codes map[string]authCode
 	// nonces holds the nonces of the edge assertions consent pages were
@@ -131,6 +134,10 @@ type handler struct {
 	wrongSwept  time.Time
 	writes      map[string]*rate.Limiter
 	writesSwept time.Time
+	// noticed is when each connector's tool result last carried the
+	// notice that its address is retiring. It does not survive a restart,
+	// so the next result after one carries it again.
+	noticed map[string]time.Time
 }
 
 // New returns the handler for every path under the base URL's path, the
@@ -167,8 +174,8 @@ func New(cfg Config) (http.Handler, error) {
 			return http.ErrUseLastResponse
 		}},
 		mux: http.NewServeMux(), now: time.Now, started: cmp.Or(cfg.Started, time.Now()), codes: map[string]authCode{}, nonces: map[string]nonceUse{}, wrong: map[netip.Prefix]wrongCodes{},
-		writes: map[string]*rate.Limiter{},
-		long:   &ops.LongCalls{After: edgeproto.HTTPShortCall, Max: edgeproto.MaxHTTPLongCallsPerServer}}
+		writes: map[string]*rate.Limiter{}, noticed: map[string]time.Time{},
+		long: &ops.LongCalls{After: edgeproto.HTTPShortCall, Max: edgeproto.MaxHTTPLongCallsPerServer}}
 
 	streamable := mcp.NewStreamableHTTPHandler(h.server, &mcp.StreamableHTTPOptions{
 		Stateless:    true,
@@ -301,7 +308,55 @@ func (h *handler) server(r *http.Request) *mcp.Server {
 			"target", callTarget(raw), "result", result)
 		return err
 	}, func(s ops.Scope) bool { return slices.Contains(c.Scopes, string(s)) }, h.long)
+	srv.AddReceivingMiddleware(func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			res, err := next(ctx, method, req)
+			if call, ok := res.(*mcp.CallToolResult); ok && err == nil && !call.IsError {
+				if text := h.retiringNotice(c, h.now()); text != "" {
+					call.Content = append(call.Content, &mcp.TextContent{Text: text})
+				}
+			}
+			return res, err
+		}
+	})
 	return srv
+}
+
+// retiringNotice is the text a tool result of connector c adds when the
+// edge says the address c was added at is retiring and the notice was
+// not added in the last noticeEvery; empty otherwise.
+func (h *handler) retiringNotice(c *store.Connector, now time.Time) string {
+	recent := func() bool {
+		last, ok := h.noticed[c.ID]
+		return ok && now.Sub(last) < noticeEvery
+	}
+	h.mu.Lock()
+	skip := recent()
+	h.mu.Unlock()
+	if skip {
+		return ""
+	}
+	n, err := h.ssh.ConnectorNotice(c.Resource)
+	if err != nil {
+		slog.Warn("connector: tool result without the edge's notices", "connector", c.ID, "error", err)
+		return ""
+	}
+	if n == nil || n.State != edgeproto.NoticeRetiring {
+		return ""
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if recent() {
+		return ""
+	}
+	maps.DeleteFunc(h.noticed, func(_ string, last time.Time) bool { return now.Sub(last) >= noticeEvery })
+	h.noticed[c.ID] = now
+	on := ""
+	if n.Date != "" {
+		on = " on " + n.Date
+	}
+	return "Notice for the user: this connector was added at " + c.Resource + ", an address that is retiring" + on +
+		". It must be added again at " + n.URL + "."
 }
 
 func call(ctx context.Context, local *sshd.Local, member domain.MemberID, method string, raw json.RawMessage, out any) error {
