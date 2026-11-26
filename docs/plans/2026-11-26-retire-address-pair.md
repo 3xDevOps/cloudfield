@@ -19,10 +19,11 @@ plan's choice and stands unless the owner changes it.
 
 - Nothing changes for any edge until its operator sets a new option. No
   date, host name or state is built in. An edge with one pair cannot use
-  the options, and records nothing new.
+  the options, and no edge records anything new until one is set.
 - A date is text shown to people. The edge never acts on it: only the
   operator's own edit moves a pair to the next state.
-- No request is redirected to another origin, on any path, in any state.
+- Retirement redirects no request to another origin, on any path, in any
+  state.
   Sign-in, token, callback, join and connector paths carry codes or tokens,
   and the edge client refuses redirects
   (`internal/edge/client/edgeclient.go`). A retired pair answers with an
@@ -36,6 +37,11 @@ plan's choice and stands unless the owner changes it.
   signs in, links or changes its configuration because of one.
 - An older edge image must fail closed: after a rollback a retired pair is
   not served, and never comes back into service.
+- Retirement never makes it safe to give up a host name. A server or
+  client that never moved still dials it, and a server checks that an
+  edge presents the pinned public key, not that it holds the private one.
+  The steps below remove what the edge can remove; the operator keeps
+  control of the names.
 
 ## States
 
@@ -44,7 +50,7 @@ plan's choice and stands unless the owner changes it.
 | active | default | As today |
 | retiring | `--retiring-pairs`, with an optional date | Everything works. The edge tells servers, clients and browsers that the pair is retiring and names the replacement |
 | retired | the operator takes the pair out of the served pairs and names it in `--retired-pairs` | Every request on either host gets `410` naming the replacement. Nothing is relayed, signed in or issued. Device tokens and browser sessions that were issued there are deleted |
-| removed | the operator deletes the entry and the DNS records | The host names answer nothing. No product state |
+| removed | the operator deletes the DNS records and keeps the `--retired-pairs` entry | The host names answer nothing. The entry stays so that a restored backup is cleaned at start |
 
 retiring to active and retired to retiring are undone by editing the
 options and restarting the edge. Device tokens and browser sessions
@@ -75,8 +81,11 @@ most 16 retired pairs.
 The edge refuses to start, naming the entry and the fix, when an origin
 does not parse, a retiring origin or a replacement is not a served relay
 origin, a replacement is the entry's own pair or is itself retiring, a
-retired origin is still served, an origin appears twice, or a date is not
-a real `YYYY-MM-DD` date. Origins are compared in canonical form.
+retired origin is still served, a host name appears in two entries
+whatever its port (requests are routed by host name), or a date is not a
+real `YYYY-MM-DD` date. A replacement may repeat. Set both options in the
+environment file, not as flags: an older image ignores an unknown
+variable and refuses an unknown flag.
 
 The first pair (`--signin-origin`, `--relay-origin`,
 `--github-client-id`) is required, so it cannot be taken out of the
@@ -99,9 +108,9 @@ connectors at more than one address from v0.8.7 (edge protocol 6);
 | 4 | Device signed in at the old pair: CLI | Every answer from the old pair carries `Aether-Edge-Retiring`; the CLI prints the notice on stderr once per run, with the commands | `cloudfield login --edge <new>`; `cloudfield link --edge <new> [--name <name>] [--addr <addr>] <server id>` for each saved link at the old address; `cloudfield daemon install` again where the sync daemon was installed from such a link; then `cloudfield logout --edge <old>` | `<old> refused: <text> (HTTP 410)`. `logout --edge <old>` then removes the local token | Count of devices issued at the old sign-in origin, by last use |
 | 5 | The same on an older CLI or app | Nothing | As 4 | The same 410 text on the CLI; the older dashboard shows only `<edge> refused the connection to <server>` | Counted with 4 |
 | 6 | The same in the desktop or Android app, on a build with this plan | The local gateway asks `GET /v1/edge` for each signed-in edge and reports the notice on `edge.status`; the dashboard shows it beside the signed-in edge, as text, with the new address filled into the existing sign-in field for the person to confirm | Sign in at the new address there, then link again | The 410 text in the same place | Counted with 4 |
-| 7 | Connector added at `<old>/mcp...` (Claude, ChatGPT, Claude Code and others) | The consent page at the old address; `cloudfield mcp` marks each of the member's connectors at the old address and prints the URL to add instead; one extra text block on a tool result, at most once a day per connector | Add the connector again at `<new>/mcp...`, then `cloudfield mcp revoke <id>`. The grant is bound to the address and is not moved | `410` with the retired text on every connector path; the client shows a failed connection. `cloudfield mcp` marks the connector retired | Count of servers that got connector requests through the old relay origin, by last use |
+| 7 | Connector added at `<old>/mcp...` (Claude, ChatGPT, Claude Code and others) | The consent page at the old address; `cloudfield mcp` marks each of the member's connectors at the old address and prints the URL to add instead, with the same path; one extra text block on a tool result, at most once a day per connector | Add the connector again at the same path on `<new>`, check it works, remove the old connector in the app, then `cloudfield mcp revoke <id>`. The grant is bound to the address and is not moved | `410` with the retired text on every connector path; the client shows a failed connection. `cloudfield mcp` marks the connector retired | Count of servers that got connector requests through the old relay origin, by last use |
 | 8 | Browser signed in at the old sign-in origin | A banner on every edge page there, the device page included | Sign in at the new sign-in origin. Cookies are per host | A page with status 410 that names the new address as text and clears the edge's cookies on that host | Count of accounts with a session issued there, by last use |
-| 9 | Links made at the old pair: join links, claim links, saved or printed | The join page shows the banner | A link the server makes after it has moved. A claim code lasts 30 minutes and an invitation 7 days | The 410 page: open the same link with the new host name in place of the old one, or ask for a new invitation | Not counted: the edge stores no link |
+| 9 | Links made at the old pair: join links, claim links, saved or printed | The join page shows the banner | A new invitation or claim link from the server after it has moved. A claim code lasts 30 minutes and an invitation 7 days | The 410 page: ask whoever sent the link for a new one | Not counted: the edge stores no link |
 | 10 | A server enrolled at the new pair with connectors at the old one | As 7: its `ready` carries the notice for the old origin | As 7 | As 7 | As 7 |
 
 Outside the product, in the runbook and in order there: the updater's
@@ -123,16 +132,20 @@ protocol version changes and `Ready.state` keeps its two values:
 
 It lists every retiring and retired relay origin, so a server knows that
 its own address is retiring and which connector addresses are retiring or
-retired. The edge signs each entry with its key over a domain string, the
-server id, the handshake nonce, and the entry's fields, under a signing
-context of its own so that a notice never verifies as a grant or an
-assertion. The server keeps an entry only when the signature verifies
-against the pinned key and drops any other without refusing the `ready`.
-It stores the kept entries per pinned key, and each `ready` replaces the
-whole set, an empty one included, so a notice the edge stops sending is
-gone at the next connect and none survives `edge trust`. What the server
-shows comes from that store. A first `ready` pins the key it arrives
-with, so its notices are trusted as the pin is: on first use.
+retired. The edge's challenge nonce is the edge's own, so it proves
+nothing fresh to the server: `hello` gains an optional nonce the server
+draws for each enrollment and probe. The edge signs the whole list, an
+empty one included, with its key over a signing context of its own, the
+server id, the origin the server dialed and that nonce, so a notice never
+verifies as a grant or an assertion and an old `ready` cannot be replayed.
+The server keeps the list only when the signature verifies against the
+pinned key and its own nonce, and otherwise keeps none, without refusing
+the `ready`. It stores the list per pinned key, and each `ready` replaces
+it, so a notice the edge stops sending is gone at the next connect and
+none survives a change of pin. What the server shows comes from that
+store, with the time it was received. A first `ready` pins the key it
+arrives with, so its notices are trusted as the pin is: on first use, and
+for display only.
 
 Someone with DNS and a certificate for a relay host and the edge's public
 key can complete a handshake and send no notices, which hides a warning
@@ -148,14 +161,19 @@ in `edge status` and retries with a backoff that reaches a minute.
 
 `edge move`, on a build with this plan:
 
-- refuses a target that a verified notice names as retiring or retired;
-- when the address it is leaving answers `410`, skips that probe, and at
+- follows no redirect in its probes and decides only on what the probes
+  of this run prove, never on the store;
+- refuses a target whose own `ready` names it as retiring;
+- when the control dial to the address it is leaving is answered with
+  HTTP status 410 (the status, not text), skips that probe, and at
   the target requires the pinned key, edge protocol 6, the target among
   the announced origins, and in that probe's own `ready`, never from the
   store, a verified `retired` notice whose origin is the address it is
-  leaving and whose replacement is the target. With no key pinned it
-  prints `cloudfield-server config set edge-url <new>` and the restart
-  instead;
+  leaving and whose replacement is the target. With no key pinned, or
+  when the old address does not answer at all, it changes nothing and
+  points to the guide's manual steps: confirm the new address and the
+  edge key's fingerprint with whoever runs the edge, then
+  `cloudfield-server config set edge-url <new>` and a restart;
 - prints no `to move back` line and no "links and connectors made there
   keep working" for a retired address.
 
@@ -172,7 +190,10 @@ The client checks that the value is a canonical origin and a real date,
 prints it as text, and does nothing else.
 
 A retired pair answers every path except `/healthz`, on both hosts, with
-`410 Gone` and no `Location` or `WWW-Authenticate`. The only cookies it
+`410 Gone`, `Cache-Control: no-store`, and no `Location` or
+`WWW-Authenticate`. The page is static, loads nothing, reflects no part
+of the request, and carries the edge's usual page headers. The only
+cookies it
 sets are the edge's own `__Host-` cookies with `Max-Age=0`, on the
 browser page:
 
@@ -185,6 +206,15 @@ A browser gets a static page with the same text. On a 410 that carries
 the edge did not confirm it, with the device id and where to revoke it:
 the Devices page at the new address. A 410 without the field keeps the
 token, as any other refusal does today.
+
+Device sign-in gains one check. Today a client learns the sign-in origin
+from the relay origin it was given and the sign-in origin never hears
+which relay the token is for, so a relay host in other hands could send a
+person through the real sign-in and receive the token. A client with this
+plan sends its relay origin with the device start, and the edge refuses
+one that is not the relay origin of the pair the request arrived at. The
+authorization row records that pair, and approval, polling and redemption
+are bound to it.
 
 A client cannot authenticate a notice, and after a pair is removed the
 host name may answer for someone else. So the client labels it as the old
@@ -201,29 +231,40 @@ A device token has no expiry and is valid at every pair, and the edge
 records no address for it today. A client sends its token only to the pair
 that issued it, and every sign-in makes a new device row. So:
 
-- `devices` and `web_sessions` each gain a nullable column for the sign-in
-  origin they were issued at, written at issue on an edge that serves
-  more than one pair or lists a retired one. A row without one is given
-  the origin of the pair it is next used at, on the API and on the relay
-  path alike.
-- At start, the edge deletes the device tokens and sessions whose origin
-  is a retired sign-in origin, as signing out there would. The server's
-  record of the device and its approval is untouched.
-- `aether-edge devices end --no-address` ends the tokens that name no
-  address: those not used since the columns arrived. A device it ends
-  signs in again. An edge that starts with a retired pair and such rows
-  logs their count and this command at each start.
+- `devices`, `web_sessions` and `device_authorizations` each gain a
+  nullable column for the sign-in origin they were issued at, written at
+  issue once either option is set. A device or session row without one is
+  given the origin of the pair it is next used at, on the API and on the
+  relay path alike, marked as seen rather than issued.
+- At start, before it serves, an edge that lists a retired pair deletes in
+  one transaction the device tokens, sessions and pending authorizations
+  whose origin is a retired sign-in origin, and those with no origin at
+  all: they were not used during the whole retiring period. It logs the
+  counts. The server's record of a device and its approval is untouched;
+  a device deleted this way signs in again.
 
-After that, nothing a later holder of the old host names could receive
-from a device or browser is valid at the edge. Connector tokens are held
-by servers, bound to the old URL, and reach a server only through an edge
-that serves the old origin, which no image does once the pair is out of
-the served pairs.
+That removes every device token and session the edge can tie to the old
+pair. It does not cover a token stolen earlier and used at another pair,
+which was valid everywhere before retirement too.
+
+The entry stays in `--retired-pairs` after the pair is removed, because a
+database restored from a backup taken before retirement holds the deleted
+tokens again and the start-up deletion is what removes them. Restoring
+such a backup under an image older than this plan would accept them at a
+served pair: the edge guide says to roll back the image only, never the
+database, across a retirement.
+
+Connector tokens are held by servers and bound to the old URL. A server
+accepts them only from an edge connection that announces the old origin,
+which no image does once the pair is out of the served pairs. A client
+that keeps the old connector configured still sends its token to the old
+host name, so the guide has the person remove the old connector in the
+app as well as revoke it on the server.
 
 A join link's secret is in the URL fragment, which the join page's script
-reads. The runbook keeps the retired pair answering for at least the
-invitation lifetime of 7 days after the last server left it, and
-recommends keeping the domain registered.
+reads, and a server that has not moved can still issue links at the old
+address. The 410 page therefore never suggests reusing a link: the person
+asks for a new invitation.
 
 ### Counting
 
@@ -238,19 +279,22 @@ every addition, and rows go with their parent by foreign key):
 | The sign-in origin a device token or session was issued at | columns above | at issue, or at next use |
 | The last connector request for a server through a relay origin | a table keyed by server and origin | at most once an hour per row |
 
-These are written only on an edge that serves more than one pair or
-lists a retired one, and then for every pair, so the counts exist before
-a pair is marked retiring. `docs/privacy.md` gains the rows, and says
-that a backup holds them. An unclaimed server has no row and is counted
-from the live relay registration only (`aether_edge_servers_by_origin`).
+These are written only once either option is set, and then for every
+pair. Counts therefore start when a pair is marked retiring; the report
+prints the time of the first record so the operator knows how long it
+has watched. `docs/privacy.md` gains the rows, and says that a backup
+holds them. An unclaimed server has no row and is counted from the live
+relay registration only (`aether_edge_servers_by_origin`).
 
 `aether-edge retiring [--data <dir>] [--origin <relay origin>] [--json]`
 prints for an origin: servers last enrolled there (id, name, owner login
 or none, build, when), and counts by last use in 1, 7 and 30 days and in
 total of device tokens issued there, accounts with a session issued
 there, accounts with a device there and none at another origin, and
-servers with connector requests through it. A server that moved shows at
-its new origin only. `aether_edge_retired_requests_total{origin,kind}`
+servers with connector requests through it. Each server shows at the
+origin of its last enrollment, which an `edge move` probe also is, with
+the time; the report calls it last seen, prints rows without an origin as
+unknown, and states that an empty list is not proof that nobody is left. `aether_edge_retired_requests_total{origin,kind}`
 counts what still arrives at a retired host, by server, client, connector
 and browser paths, with no ids.
 
@@ -286,17 +330,19 @@ and browser paths, with no ids.
    show notices as text.
 6. Device tokens and sessions carry the address that issued them and are
    deleted when it is retired.
-7. Counting is on for an edge with more than one pair and holds no more
-   than an address, a time and a build per row the edge already has.
-8. *Assumption:* no in-product mail to server owners. The report gives the
+7. Recording starts when an option is set and holds no more than an
+   address, a time and a build per row the edge already has.
+8. Giving up a retired host name is never made safe by this plan.
+9. *Assumption:* no in-product mail to server owners. The report gives the
    operator the owner logins the edge already shows.
 
 ## For the owner to decide
 
 - Whether `onaether.dev` stays registered after its host names stop
-  answering. This plan recommends keeping it: the steps above remove what
-  a later holder could use, but an install that never updated still dials
-  it, and a printed join link still opens it.
+  answering. This plan says it must: an install that never moved still
+  dials it and would hand its holder a server's control connection, a
+  device token or a connector token, and a printed join link still opens
+  it. Counts cannot show that nobody is left.
 - Whether the operator may write to owners of servers that have not moved,
   using the addresses the edge holds. The privacy page would have to
   allow it.
@@ -308,8 +354,8 @@ Each carries its tests and the documentation of what it changes.
 | # | Change | Depends on |
 | --- | --- | --- |
 | 1 | Edge and protocol: `--retiring-pairs`, signed notices in `ready` and their verified store in the server's edge agent, the client header and `GET /v1/edge` fields and their parser in the edge client, page banners | none |
-| 2 | Edge store: the migration, its writers, `aether-edge retiring`, `devices end`, `docs/privacy.md` | none |
-| 3 | Edge: `--retired-pairs`, the 410 answers, `retired` notices, deleting tokens and sessions of a retired origin, the metric, the end-to-end test with two pairs that retires one | 1, 2 |
+| 2 | Edge store: the migration, its writers, `aether-edge retiring`, `docs/privacy.md` | none |
+| 3 | Edge: `--retired-pairs`, the 410 answers, `retired` notices, the start-up deletion, the relay origin check at device sign-in, the metric, the end-to-end test with two pairs that retires one | 1, 2 |
 | 4 | Server: log, `edge status`, `server.edge`, the dashboard warning, `edge move` to and from a retiring or retired address | 1 |
 | 5 | Client: the CLI lines, `logout` at a retired pair, the gateway's `edge.status`, the dashboard notice | 1 |
 | 6 | Connector: consent page, `connector.list` and `cloudfield mcp`, the tool-result notice | 1 |
@@ -345,6 +391,24 @@ store, `edge move` reading the notice from its own probe, no command or
 filled-in field from an unauthenticated client notice unless the address
 is already known, `logout` wording, and no new records on an edge with
 one pair.
+
+A review by a second model (gpt-6.2-astra) added: a server-drawn nonce so
+a signed notice list cannot be replayed, the relay origin check at device
+sign-in, deleting tokens with no address as part of retiring instead of
+an optional command, recording only once an option is set, the retired
+entry outliving the DNS records because of restored backups, host names
+unique across entries whatever the port, no reuse of a link from the 410
+page, `no-store` on the 410, removing the old connector in the app, and
+the rule that a host name is never safe to give up.
+
+Answered, not changed: the 410 text keeps its two commands. It is the
+only channel to builds older than this plan, it comes from the host the
+person already dialed, and whoever holds that host can write any text
+whatever this plan sends. A client offers a command for an address it
+already holds a token or a saved link for because the person already
+uses that edge. An edge proving possession of its key to a server at
+every connect, rather than presenting the public key, is a change to the
+existing handshake and is left to its own plan.
 
 Not changed: `FormerURL` stays in the client's choice of a hosted edge
 until the hosted pair is removed, since it only orders addresses a
