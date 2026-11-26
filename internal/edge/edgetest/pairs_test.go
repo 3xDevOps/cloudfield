@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/ed25519"
 	"errors"
-	"fmt"
 	"net/http"
 	"path/filepath"
 	"slices"
@@ -99,23 +98,17 @@ func TestOriginPairs(t *testing.T) {
 	// at the relay origin it enrolled at; the device token signed in at
 	// the first pair before recording as seen there, at its first dial
 	// through that pair's relay host; the one signed in at the second
-	// pair as issued there, though it also dialed through the first; the
-	// connector request at the relay origin it came in on.
-	var rep edgestore.Report
-	eventually(t, "the connector request recorded in the background", func() error {
-		rep, err = edgestore.ReadRetiring(context.Background(), filepath.Join(h.edgeDir, "edge.db"), time.Now())
-		if err == nil && (len(rep.Origins) != 2 || rep.Origins[1].ConnectorServers.Total != 1) {
-			err = fmt.Errorf("report %+v", rep)
-		}
-		return err
-	})
-	if rep.RecordingSince.IsZero() {
-		t.Fatalf("report = %+v", rep)
+	// pair as issued there, though it also dialed through the first. The
+	// connector request is not recorded: this server refuses connector
+	// connections, so it was never written to the server.
+	rep, err := edgestore.ReadRetiring(context.Background(), filepath.Join(h.edgeDir, "edge.db"), time.Now())
+	if err != nil || len(rep.Origins) != 2 || rep.RecordingSince.IsZero() {
+		t.Fatalf("report = %+v, %v", rep, err)
 	}
 	for i, want := range []struct {
 		relay, signin, server    string
 		issued, seen, connectors int
-	}{{relayA, signinA, a.id, 0, 1, 0}, {relayB, signinB, b.id, 1, 0, 1}} {
+	}{{relayA, signinA, a.id, 0, 1, 0}, {relayB, signinB, b.id, 1, 0, 0}} {
 		r := rep.Origins[i]
 		if r.RelayOrigin != want.relay || r.SigninOrigin != want.signin || len(r.Servers) != 1 || r.Servers[0].ID != want.server ||
 			r.Servers[0].AgentVersion != version.Version || r.Servers[0].OwnerLogin != alice.Login ||
