@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/3xDevOps/cloudfield/internal/protocol"
 )
 
 type consentState struct {
@@ -30,11 +32,17 @@ func consentStates() []consentState {
 	long.Server = "team-build-server-in-the-frankfurt-region-number-two"
 	long.Member, long.Account = "a.very.long.address.for.a.person@subdomain.example.com", "a.very.long.address.for.a.person@subdomain.example.com"
 	long.Control = true
+	retiring := code
+	retiring.Retiring = &protocol.ConnectorNotice{State: "retiring", URL: "https://relay-new.example.test/mcp/q3k7m2xw4vbn6hzt5rjc8pdyfa", Date: "2027-03-01"}
+	retiringMember := member
+	retiringMember.Retiring = &protocol.ConnectorNotice{State: "retiring", URL: "https://relay-new.example.test/mcp"}
 	return []consentState{
 		{"consent-code", code},
 		{"consent-code-error", codeErr},
 		{"consent-member", member},
 		{"consent-long", long},
+		{"consent-retiring", retiring},
+		{"consent-retiring-member", retiringMember},
 		{"consent-failed", consentPage{Failed: true, Server: "moss", Error: "This form was not issued by this server. Start the connection again from ChatGPT or Claude."}},
 	}
 }
