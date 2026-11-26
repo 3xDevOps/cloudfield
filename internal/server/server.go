@@ -549,6 +549,7 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 		Control:           s.control,
 		Homes:             homes,
 		Logins:            logins,
+		LoginSignIns:      s.sched,
 		Signing:           s.signing,
 		Secrets:           secrets,
 		WhoIs:             whois,
@@ -627,8 +628,10 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 	if err = s.ssh.RecoverMergeArchives(ctx); err != nil {
 		return nil, err
 	}
-	if err = s.sched.ReconcileLogins(ctx, ""); err != nil {
-		return nil, fmt.Errorf("server: reconcile member logins: %w", err)
+	// A login left behind is retried at the next start; it never keeps the
+	// server down.
+	if reconcileErr := s.sched.ReconcileLogins(ctx, ""); reconcileErr != nil {
+		slog.Warn("server: reconcile member logins", "error", reconcileErr)
 	}
 	if err = s.signing.Migrate(ctx, members); err != nil {
 		return nil, fmt.Errorf("server: move signing keys out of member homes: %w", err)

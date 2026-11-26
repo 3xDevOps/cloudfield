@@ -2684,6 +2684,7 @@ CREATE TABLE agent_logins (
 	PRIMARY KEY (member_id, agent, id),
 	UNIQUE (member_id, agent, name)
 );
+CREATE UNIQUE INDEX idx_agent_logins_id ON agent_logins (agent, id) WHERE id <> 'default';
 `,
 }
 

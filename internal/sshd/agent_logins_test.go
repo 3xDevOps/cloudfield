@@ -217,3 +217,14 @@ func TestAgentLoginAddNeedsTheSignInSeam(t *testing.T) {
 		t.Fatalf("agent.login.add with a bad name: %v; want invalid params", perr)
 	}
 }
+
+// Only Claude Code keeps added logins: a method naming another agent is
+// refused rather than answered with a made-up default login.
+func TestAgentLoginMethodsNameClaudeOnly(t *testing.T) {
+	e := newLoginEnv(t)
+	for _, agent := range []string{"", "codex", "Claude"} {
+		if _, perr := e.call(t, e.member.ID, protocol.MethodAgentLoginList, protocol.AgentLoginParams{Agent: agent}); perr == nil || perr.Code != protocol.CodeInvalidParams {
+			t.Errorf("agent.login.list for %q: %v; want invalid params", agent, perr)
+		}
+	}
+}

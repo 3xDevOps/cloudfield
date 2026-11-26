@@ -8,7 +8,10 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/rootfs"
@@ -42,6 +45,20 @@ type LoginIdentity struct {
 	Email            string `json:"email,omitempty"`
 	OrganizationID   string `json:"organization_id,omitempty"`
 	OrganizationName string `json:"organization_name,omitempty"`
+}
+
+// maxIdentityField bounds each field of an identity, which comes from files
+// a sign-in container wrote and reaches the owner's terminal and dashboard.
+const maxIdentityField = 256
+
+// clean drops a field that is too long or holds a control character.
+func (a LoginIdentity) clean() LoginIdentity {
+	for _, field := range []*string{&a.Kind, &a.Plan, &a.Email, &a.OrganizationID, &a.OrganizationName} {
+		if len(*field) > maxIdentityField || !utf8.ValidString(*field) || strings.ContainsFunc(*field, unicode.IsControl) {
+			*field = ""
+		}
+	}
+	return a
 }
 
 // PerUse reports whether the login is billed per use: a Console sign-in or
@@ -369,7 +386,7 @@ func (l *Logins) Identity(member domain.MemberID, agent string, id domain.LoginI
 			return LoginIdentity{}, fmt.Errorf("memberhome: read login %s: %w", id, notJSON(loginIdentity))
 		}
 	}
-	return identity, nil
+	return identity.clean(), nil
 }
 
 // DefaultIdentity is what Claude Code recorded about member's default login,
@@ -397,6 +414,14 @@ func (m *Manager) DefaultIdentity(member domain.MemberID, agent string) (LoginId
 // in a home unless ANTHROPIC_CONFIG_DIR moves it.
 const AnthropicProfileDir = ".config/anthropic"
 
+// profileName is an Anthropic profile name Cloudfield reads; any other
+// active_config content, which a container wrote, is never made a path.
+var profileName = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9._-]{0,63}$`)
+
+// maxIdentityConfigBytes bounds the configuration file read for the account
+// Claude Code cached; a larger one leaves the account unknown.
+const maxIdentityConfigBytes = 8 << 20
+
 const (
 	claudeConfigPath       = ".claude.json"
 	claudeLegacyConfigPath = ".claude/.config.json"
@@ -409,8 +434,7 @@ const (
 // the Anthropic profile directory profile. A subscription sign-in wins over
 // a Console API key, which wins over a keyless Console sign-in, as Claude
 // Code itself picks them.
-func claudeIdentity(root *os.Root, oauth string, configs []string, profile string) (LoginIdentity, error) {
-	var identity LoginIdentity
+func claudeIdentity(root *os.Root, oauth string, configs []string, profile string) (identity LoginIdentity, err error) {
 	var config struct {
 		PrimaryAPIKey string `json:"primaryApiKey"`
 		OAuthAccount  *struct {
@@ -420,7 +444,13 @@ func claudeIdentity(root *os.Root, oauth string, configs []string, profile strin
 		} `json:"oauthAccount"`
 	}
 	for _, rel := range configs {
-		data, err := readState(root, rel)
+		var data []byte
+		data, err = readStateUpTo(root, rel, maxIdentityConfigBytes)
+		if errors.As(err, new(stateTooLarge)) {
+			// Too large to read for an identity: the account it caches
+			// stays unknown, as for a login signed in before this feature.
+			break
+		}
 		if err != nil {
 			return LoginIdentity{}, fmt.Errorf("%s: %w", rel, err)
 		}
@@ -435,6 +465,7 @@ func claudeIdentity(root *os.Root, oauth string, configs []string, profile strin
 	if a := config.OAuthAccount; a != nil {
 		identity.Email, identity.OrganizationID, identity.OrganizationName = a.EmailAddress, a.OrganizationUUID, a.OrganizationName
 	}
+	defer func() { identity = identity.clean() }()
 	data, err := readLoginFile(root, oauth)
 	if err != nil {
 		return LoginIdentity{}, err
@@ -501,7 +532,7 @@ func anthropicProfileSignedIn(root *os.Root, dir string) (bool, error) {
 	if name == "" {
 		name = "default"
 	}
-	if name != path.Base(name) || name == "." || name == ".." {
+	if !profileName.MatchString(name) {
 		return false, nil
 	}
 	config, err := readLoginFile(root, dir+"/configs/"+name+".json")

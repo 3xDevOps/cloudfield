@@ -105,7 +105,7 @@ func (e *signInEnv) signIn(t *testing.T, name string, save func(spec runtime.Spe
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	login, err := e.sched.LoginSignInResult(waitCtx, e.member.ID, id)
+	login, err := e.sched.LoginSignInResult(waitCtx, e.member.ID, "claude", id)
 	return id, login, err
 }
 
@@ -158,8 +158,16 @@ func TestSignInAddsTheLoginItSavedAndTouchesNoOtherLogin(t *testing.T) {
 		if spec.Env["CLAUDE_CONFIG_DIR"] != path.Join(spec.Env["HOME"], ".claude") || spec.Env["ANTHROPIC_CONFIG_DIR"] != path.Join(spec.Env["HOME"], ".config/anthropic") {
 			t.Errorf("env CLAUDE_CONFIG_DIR %q ANTHROPIC_CONFIG_DIR %q; want both at the mounted stores", spec.Env["CLAUDE_CONFIG_DIR"], spec.Env["ANTHROPIC_CONFIG_DIR"])
 		}
-		if _, ok := spec.Env["ANTHROPIC_API_KEY"]; ok || spec.Sudo {
-			t.Errorf("the sign-in container has ANTHROPIC_API_KEY %v or sudo %v; want neither", ok, spec.Sudo)
+		if key, ok := spec.Env["ANTHROPIC_API_KEY"]; !ok || key != "" || spec.Sudo {
+			t.Errorf("the sign-in container has ANTHROPIC_API_KEY %q (set %v) and sudo %v; want it set empty, over any image ENV, and no sudo", key, ok, spec.Sudo)
+		}
+		for _, m := range spec.Mounts {
+			if m.ContainerPath == "/aether-cache" {
+				t.Error("the sign-in container mounts a cache pool")
+			}
+			if m.ContainerPath == path.Join(spec.Env["HOME"], ".claude.json") && !m.ReadOnly {
+				t.Error("the home's ~/.claude.json is writable in the sign-in container")
+			}
 		}
 		config, readErr := os.ReadFile(filepath.Join(dir, memberhome.LoginConfig))
 		if readErr != nil || strings.Contains(string(config), "oauthAccount") {
@@ -244,7 +252,7 @@ func TestSignInIsTheMembersOwn(t *testing.T) {
 	if _, err := e.sched.StartLoginSignIn(t.Context(), "mem-other", id, 80, 24); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("another member starting the sign-in: %v; want not found", err)
 	}
-	if _, err := e.sched.LoginSignInResult(t.Context(), "mem-other", id); !errors.Is(err, store.ErrNotFound) {
+	if _, err := e.sched.LoginSignInResult(t.Context(), "mem-other", "claude", id); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("another member reading the result: %v; want not found", err)
 	}
 	if _, err := e.sched.BeginLoginSignIn(t.Context(), e.member.ID, "codex", "work"); !errors.Is(err, ErrNoAddedLogins) {
@@ -296,5 +304,126 @@ func TestReconcileRemovesOnlyLoginsWithoutARow(t *testing.T) {
 	keptDir, _ := e.logins.Path(e.member.ID, "claude", kept)
 	if _, err := os.Lstat(keptDir); err != nil {
 		t.Fatalf("added login's directory: %v; want it kept", err)
+	}
+}
+
+// A member runs one sign-in at a time, and one that ended frees its name at
+// once: a new sign-in under it starts.
+func TestASignInThatEndedFreesItsName(t *testing.T) {
+	e := newSignInEnv(t)
+	if _, err := e.sched.BeginLoginSignIn(t.Context(), e.member.ID, "claude", "other"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.sched.BeginLoginSignIn(t.Context(), e.member.ID, "claude", "work"); !errors.Is(err, store.ErrConflict) {
+		t.Fatalf("a second sign-in while one is pending: %v; want a conflict", err)
+	}
+	if err := e.sched.EndLoginSignIns(t.Context(), e.member.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := e.signIn(t, "work", func(runtime.Spec) {}); err == nil || !strings.Contains(err.Error(), "before Claude Code saved a login") {
+		t.Fatalf("an empty sign-in: %v", err)
+	}
+	if _, err := e.sched.BeginLoginSignIn(t.Context(), e.member.ID, "claude", "work"); err != nil {
+		t.Fatalf("a sign-in under the name of one that ended: %v", err)
+	}
+}
+
+// When the sign-in's container cannot be removed, nothing is added and its
+// directory stays, so the next start finds the container by it; a later
+// reconcile removes both once the container goes.
+func TestASignInWhoseContainerStaysAddsNothing(t *testing.T) {
+	e := newSignInEnv(t)
+	removeErr := errors.New("test: destroy unavailable")
+	var dir string
+	id, _, err := e.signIn(t, "work", func(spec runtime.Spec) {
+		dir, _ = e.logins.Path(e.member.ID, "claude", domain.LoginID(strings.TrimPrefix(spec.Name, "aether-login-")))
+		writeHomeFile(t, dir, memberhome.LoginCredentials, addedLoginFile)
+		writeHomeFile(t, dir, memberhome.LoginConfig, cachedAccount("ada@work.example.test", "org-work"))
+		e.rt.mu.Lock()
+		e.rt.destroyErr = removeErr
+		e.rt.mu.Unlock()
+	})
+	if err == nil || !strings.Contains(err.Error(), "could not be removed") {
+		t.Fatalf("sign-in error = %v; want the kept container named", err)
+	}
+	if logins, _ := e.db.ListAgentLogins(t.Context(), e.member.ID, "claude"); len(logins) != 0 {
+		t.Fatalf("logins = %+v; want none added", logins)
+	}
+	if _, statErr := os.Lstat(dir); statErr != nil {
+		t.Fatalf("the directory of a sign-in whose container lives: %v; want it kept", statErr)
+	}
+	if err := e.sched.ReconcileLogins(t.Context(), ""); err == nil {
+		t.Fatal("reconcile reported nothing while the container stays")
+	}
+	if _, statErr := os.Lstat(dir); statErr != nil {
+		t.Fatalf("after a failed reconcile the directory: %v; want it kept", statErr)
+	}
+	e.rt.mu.Lock()
+	e.rt.destroyErr = nil
+	e.rt.mu.Unlock()
+	if err := e.sched.ReconcileLogins(t.Context(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, statErr := os.Lstat(dir); !errors.Is(statErr, fs.ErrNotExist) || e.rt.byName("aether-login-"+string(id)) != nil {
+		t.Fatalf("after the container went: directory %v; want both gone", statErr)
+	}
+}
+
+// A sign-in that ends after its member was removed adds nothing.
+func TestASignInOfARemovedMemberAddsNothing(t *testing.T) {
+	e := newSignInEnv(t)
+	_, _, err := e.signIn(t, "work", func(spec runtime.Spec) {
+		dir, _ := e.logins.Path(e.member.ID, "claude", domain.LoginID(strings.TrimPrefix(spec.Name, "aether-login-")))
+		writeHomeFile(t, dir, memberhome.LoginCredentials, addedLoginFile)
+		writeHomeFile(t, dir, memberhome.LoginConfig, cachedAccount("ada@work.example.test", "org-work"))
+		if delErr := e.db.DeleteMember(t.Context(), e.member.ID, ""); delErr != nil {
+			t.Error(delErr)
+		}
+	})
+	if err == nil || !strings.Contains(err.Error(), "removed or merged") {
+		t.Fatalf("sign-in error = %v; want the member gone", err)
+	}
+}
+
+// A sign-in whose login id already has a directory removes nothing of it.
+func TestASignInNeverRemovesADirectoryItDidNotCreate(t *testing.T) {
+	e := newSignInEnv(t)
+	id, err := e.sched.BeginLoginSignIn(t.Context(), e.member.ID, "claude", "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, err := e.logins.Add(e.member.ID, "claude", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.sched.StartLoginSignIn(t.Context(), e.member.ID, id, 80, 24); err == nil {
+		t.Fatal("a sign-in over an existing directory started")
+	}
+	if _, err := os.Lstat(dir); err != nil {
+		t.Fatalf("the existing directory: %v; want it kept", err)
+	}
+}
+
+// The duplicate check fails closed: a login whose identity cannot be read
+// refuses the sign-in rather than letting a duplicate in.
+func TestTheDuplicateCheckFailsClosed(t *testing.T) {
+	e := newSignInEnv(t)
+	first, _, err := e.signIn(t, "work", func(spec runtime.Spec) {
+		dir, _ := e.logins.Path(e.member.ID, "claude", domain.LoginID(strings.TrimPrefix(spec.Name, "aether-login-")))
+		writeHomeFile(t, dir, memberhome.LoginCredentials, addedLoginFile)
+		writeHomeFile(t, dir, memberhome.LoginConfig, cachedAccount("ada@work.example.test", "org-work"))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstDir, _ := e.logins.Path(e.member.ID, "claude", first)
+	writeHomeFile(t, firstDir, "identity.json", "{torn")
+	_, _, err = e.signIn(t, "spare", func(spec runtime.Spec) {
+		dir, _ := e.logins.Path(e.member.ID, "claude", domain.LoginID(strings.TrimPrefix(spec.Name, "aether-login-")))
+		writeHomeFile(t, dir, memberhome.LoginCredentials, addedLoginFile)
+		writeHomeFile(t, dir, memberhome.LoginConfig, cachedAccount("ada@spare.example.test", "org-spare"))
+	})
+	if err == nil || !strings.Contains(err.Error(), `your login "work" could not be read`) {
+		t.Fatalf("sign-in with an unreadable login beside it: %v; want refused", err)
 	}
 }

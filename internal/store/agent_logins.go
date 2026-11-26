@@ -97,6 +97,16 @@ func (d *DB) AddAgentLogin(ctx context.Context, login domain.AgentLogin, before 
 		return domain.AgentLogin{}, fmt.Errorf("store: add login: %w", timeErr)
 	}
 	err := d.inTx(ctx, func(tx *sql.Tx) error {
+		// A sign-in that ends after its member was removed or merged into
+		// another adds nothing: no one could list, use or remove it.
+		var mergedInto string
+		err := tx.QueryRowContext(ctx, `SELECT merged_into FROM members WHERE id = ?`, login.MemberID).Scan(&mergedInto)
+		if errors.Is(err, sql.ErrNoRows) || (err == nil && mergedInto != "") {
+			return fmt.Errorf("%w: member %s", ErrNotFound, login.MemberID)
+		}
+		if err != nil {
+			return err
+		}
 		var next int
 		if err := tx.QueryRowContext(ctx, `SELECT COALESCE(MAX(position) + 1, 0) FROM agent_logins WHERE member_id = ? AND agent = ?`,
 			login.MemberID, login.Agent).Scan(&next); err != nil {
@@ -231,6 +241,19 @@ func (d *DB) AgentLoginOwner(ctx context.Context, agent string, id domain.LoginI
 	return member, nil
 }
 
+// mergeLogins lists member's logins of every agent, for a merge plan.
+func mergeLogins(ctx context.Context, tx *sql.Tx, member domain.MemberID) ([]domain.AgentLogin, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT `+agentLoginColumns+` FROM agent_logins WHERE member_id = ? ORDER BY agent, position, id`, member)
+	if err != nil {
+		return nil, err
+	}
+	logins, err := collect(rows, scanAgentLogin)
+	if err != nil {
+		return nil, err
+	}
+	return derefAll(logins), nil
+}
+
 // mergeAgentLogins gives survivor absorbed's added logins, after its own,
 // renaming one whose name survivor uses, each off for shares: survivor never
 // chose to share them. absorbed's default login is its home, which the
@@ -249,10 +272,11 @@ func mergeAgentLogins(ctx context.Context, tx *sql.Tx, survivor, absorbed domain
 			return err
 		}
 		names := map[string]bool{}
+		next := 0
 		for _, l := range kept {
 			names[l.Name] = true
+			next = max(next, l.Position+1)
 		}
-		next := len(kept)
 		if next == 0 {
 			var created int64
 			if created, err = encodeTime(moved[0].CreatedAt); err != nil {
@@ -269,8 +293,9 @@ func mergeAgentLogins(ctx context.Context, tx *sql.Tx, survivor, absorbed domain
 				continue
 			}
 			name := l.Name
-			if names[name] {
-				name = fmt.Sprintf("%.21s-%s", name, l.ID[len("lgn-"):])
+			for n := 2; names[name]; n++ {
+				suffix := fmt.Sprintf("-%d", n)
+				name = l.Name[:min(len(l.Name), domain.MaxLoginNameLen-len(suffix))] + suffix
 			}
 			names[name] = true
 			if _, err = tx.ExecContext(ctx, `UPDATE agent_logins SET member_id = ?, name = ?, position = ?, shared = 0 WHERE member_id = ? AND agent = ? AND id = ?`,
