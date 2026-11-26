@@ -1358,3 +1358,41 @@ describe('saved launch defaults across devices', () => {
     await waitFor(() => expect(api.launchDefaultsSet).toHaveBeenCalledWith({ defaults: { account_member_id: '', fallback: { policy: 'ordered', order: [bob.id] } }, revision: 0 }))
   })
 })
+
+describe('login', () => {
+  const logins = [
+    { id: 'default', name: 'default', kind: 'subscription' as const, automatic: false, shared: true, position: 0 },
+    { id: 'lgn-work0000001', name: 'work', kind: 'subscription' as const, automatic: true, shared: true, position: 1 },
+    { id: 'lgn-console0001', name: 'console', kind: 'console' as const, per_use: true, automatic: true, shared: true, position: 2 },
+  ]
+  beforeEach(() => useStore.getState().setCapabilities({ gateway: 'remote', methods: ['*'], ws: [] }))
+
+  it('adds nothing for a member with one login', async () => {
+    await open()
+    expect(screen.queryByRole('combobox', { name: 'Login' })).toBeNull()
+    setTask('one login')
+    fireEvent.click(launchButton())
+    await waitFor(() => expect(api.runLaunch).toHaveBeenCalled())
+    expect(vi.mocked(api.runLaunch).mock.calls[0]![0]).not.toHaveProperty('login')
+  })
+
+  it('starts automatically, naming the first automatic login, and sends a login only when one is picked', async () => {
+    vi.mocked(api.agentLoginList).mockResolvedValue(logins)
+    await open()
+    const picker = await screen.findByRole('combobox', { name: 'Login' })
+    expect(picker.textContent).toBe('Automatic: starts on work')
+    await pickOption(picker, 'console · billed per use')
+    setTask('on console')
+    fireEvent.click(launchButton())
+    await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith(expect.objectContaining({ login: 'lgn-console0001' })))
+  })
+
+  it('offers no login on a teammate account', async () => {
+    vi.mocked(api.agentLoginList).mockResolvedValue(logins)
+    vi.mocked(api.accountList).mockResolvedValue({ accounts: [alice, bob], shared_with: [] })
+    await open()
+    expect(await screen.findByRole('combobox', { name: 'Login' })).toBeDefined()
+    fireEvent.click(screen.getByRole('radio', { name: new RegExp(bob.display_name) }))
+    await waitFor(() => expect(screen.queryByRole('combobox', { name: 'Login' })).toBeNull())
+  })
+})

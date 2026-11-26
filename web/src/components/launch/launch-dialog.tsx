@@ -7,6 +7,8 @@ import { launchDraftLinkStatusPending, type LaunchDraft } from '@/components/lau
 import { RefusalNotes, SignedOutNote } from '@/components/launch/agent-picker'
 import { AccountPicker, readiness, useAccountStatus } from '@/components/launch/account-picker'
 import { agentLabel } from '@/components/launch/modes'
+import { loginAgent } from '@/components/agents/agent-logins'
+import { LoginPicker, useOwnLogins } from '@/components/launch/login-picker'
 import { automaticFallback, ChildRunsSwitch, type ChildRunsChoice, fallbackParams, FallbackOptions, RunLimitsOption, WorkspaceLine } from '@/components/launch/launch-options'
 import { PermissionControl, permissionFeature } from '@/components/launch/permission-control'
 import { ExtraRepos } from '@/components/launch/extra-repos'
@@ -136,6 +138,9 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   const errorCallout = useRef<HTMLDivElement>(null)
   const shown = useRef(true)
   const sharedAccount = account !== '' && account !== ownAccountID
+  const ownLogins = useOwnLogins(api, open && !sharedAccount && harness === loginAgent && cap.hasMethod('agent.login.list'))
+  const [login, setLogin] = useState('')
+  const pickedLogin = ownLogins && ownLogins.length > 1 && ownLogins.some((item) => item.id === login) ? login : ''
   const accountName = accounts.find((member) => member.id === account)?.display_name ?? account
   const taskMissing = needsTask(mode, task)
   const dictating = useDictating()
@@ -272,6 +277,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
       ...(permissionOffered ? { permission } : {}),
       ...(link ? { linear_issue_url: link.url } : {}),
       ...(sharedAccount ? { account_member_id: account } : {}),
+      ...(pickedLogin ? { login: pickedLogin } : {}),
       ...fallbackParams(fallback, accounts, account),
       ...extraRepos,
       ...(childRunsOffered && childRuns && mode !== 'headless' ? { children: childRuns } : {}),
@@ -366,11 +372,18 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   useClock()
   const now = Date.now()
   const accountReadiness = (member: Member) => readiness(accountStatus[member.id], harness, member.id === ownAccountID ? undefined : member.display_name, now)
-  const accountChoice = accounts.length > 1 && (
+  const loginChoice = ownLogins && ownLogins.length > 1 && <LoginPicker logins={ownLogins} value={pickedLogin} onChange={setLogin} disabled={launching} />
+  const accountChoice = (accounts.length > 1 || loginChoice) && (
     <div className="flex flex-col gap-2">
-      <AccountPicker accounts={accounts} ownAccountID={ownAccountID} value={account} onChange={(next) => { accountPicked.current = true; setError(null); setAccount(next) }} agentName={harness ? agentLabel(choice.agent, harness) : ''} status={accountReadiness} disabled={launching} />
-      <FallbackOptions accounts={accounts} ownAccountID={ownAccountID} account={account} fallback={fallback} onFallback={(next) => { fallbackPicked.current = true; setFallback(next) }} status={accountReadiness} />
-      {savesDefaults && <SaveAccountDefault choice={JSON.stringify([account, fallback])} onSave={saveAccountDefault} />}
+      {accounts.length > 1 && (
+        <>
+          <AccountPicker accounts={accounts} ownAccountID={ownAccountID} value={account} onChange={(next) => { accountPicked.current = true; setError(null); setAccount(next) }} agentName={harness ? agentLabel(choice.agent, harness) : ''} status={accountReadiness} disabled={launching} />
+          {loginChoice}
+          <FallbackOptions accounts={accounts} ownAccountID={ownAccountID} account={account} fallback={fallback} onFallback={(next) => { fallbackPicked.current = true; setFallback(next) }} status={accountReadiness} />
+          {savesDefaults && <SaveAccountDefault choice={JSON.stringify([account, fallback])} onSave={saveAccountDefault} />}
+        </>
+      )}
+      {accounts.length <= 1 && loginChoice}
     </div>
   )
 

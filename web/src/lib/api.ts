@@ -552,6 +552,8 @@ export const api = {
     effort?: string
     permission?: Permission
     account_member_id?: string
+    /** One of the caller's own logins, `default` or `lgn-…`; absent lets the server choose. */
+    login?: string
     fallback_account_member_ids?: string[]
     no_fallback?: boolean
     extra_workspace_ids?: string[]
@@ -1011,6 +1013,9 @@ export const api = {
   agentLoginOrder: (agent: string, loginIDs: string[]) => call<unknown>('agent.login.order', { agent, login_ids: loginIDs }),
   agentLoginAutomatic: (agent: string, loginID: string, automatic: boolean) =>
     call<unknown>('agent.login.automatic', { agent, login_id: loginID, automatic }),
+  /** Off moves teammates' sessions off the login. */
+  agentLoginShare: (agent: string, loginID: string, shared: boolean) =>
+    call<unknown>('agent.login.share', { agent, login_id: loginID, shared }),
   agentModels: (name: string, accountMemberID?: string, refresh?: boolean) =>
     call<AgentModelsResult>('agent.models', {
       name,
