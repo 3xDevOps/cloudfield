@@ -1021,7 +1021,8 @@ carries `agent_delivery: "queued"` until the agent takes it
 A message the server could not hand to the agent at all is `not_sent` with
 `failure.message` the real error and `failure.code`: `session_unavailable`
 (no running agent, or a mode switch in flight), `prompt_not_sent` (such as a
-sleeping session that failed to wake), `unsupported_image`,
+sleeping session that failed to wake, or a Standard session whose agent shows
+a question in its terminal), `unsupported_image`,
 `session_protected`, `steer_denied` or `access_revoked` (the sender lost
 **Steer** or membership before delivery), or `control_changed` (the session's
 control lease changed before delivery).

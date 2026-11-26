@@ -155,6 +155,16 @@ eight files per message.
 - If the agent has turned on bracketed paste, the message arrives as one paste
   and Enter follows 200 ms later, so a multi-line message is sent whole and
   once. Otherwise it is typed as written, then Enter.
+- While the agent reports an open question or permission request in its
+  terminal (**Question: answer in the terminal** or **Permission: answer in
+  the terminal** under **Needs you**), a message is **Not sent**: typed
+  there, it would become the answer. The row, the composer and
+  `cloudfield message` give the reason, `agent prompt was not sent: the agent
+  is waiting for an answer in its terminal; answer it there, then send the
+  message again`, and the composer keeps your draft. A prompt the agent does
+  not report still gets the message typed into it: Claude Code's permission
+  prompts, and every prompt of an agent without
+  [status reporting](harnesses.md#status-reporting).
 - Standard Codex takes the message through its app-server instead, as a new
   turn when idle or a steer added to the running turn
   ([Codex](harnesses.md#codex)). **Sent** then means Codex accepted it.
@@ -162,7 +172,7 @@ eight files per message.
   message.
 - `cloudfield message <session-id> "<text>"` (or `-` for stdin) prints the receipt:
   `delivered`, `queued for the member in control` with when it is delivered,
-  or the denial reason.
+  or the reason it was denied or not sent.
 - If you cannot message the agent, the composer says why: **This session has
   finished.**, **The agent is still starting.**, **This session is protected: only
   its owner or an admin can message the agent.** or **You can watch this session but

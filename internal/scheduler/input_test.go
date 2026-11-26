@@ -520,3 +520,23 @@ func TestInputRequestsCannotSurviveEndedLifetime(t *testing.T) {
 		})
 	}
 }
+
+// A message typed into a terminal that shows a question would answer it.
+func TestInjectIsRefusedWhileAStandardAgentAsks(t *testing.T) {
+	t.Parallel()
+	e := newReportingEnv(t, nil)
+	run, _ := e.launchReporting(t)
+	question := domain.RunInputRequest{SessionID: "session", Kind: "question", ID: "asked"}
+	for _, step := range []struct {
+		operation string
+		typed     int
+	}{{"open", 0}, {"close", 1}} {
+		if err := e.sched.ReportAgentState(t.Context(), run.ID, agentstatus.Report{InputUpdates: []domain.RunInputUpdate{inputUpdate(step.operation, question)}}); err != nil {
+			t.Fatal(err)
+		}
+		_, err := e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "also run the tests"}, false, nil)
+		if refused := errors.Is(err, domain.ErrPromptNotSent); refused != (step.typed == 0) || len(e.pty.injected()) != step.typed {
+			t.Fatalf("question %s: Inject = %v, typed %+v, want %d typed", step.operation, err, e.pty.injected(), step.typed)
+		}
+	}
+}
