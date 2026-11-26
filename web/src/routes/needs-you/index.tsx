@@ -31,10 +31,11 @@ import type { AttentionItem, RoomPostResult, RunInputRespondResult } from '@/lib
 import { targetRoute } from '@/routes/board/card-action'
 import { runRoute } from '@/routes/run/views'
 import { ProposalsReadError } from '@/routes/members/sign-ins'
-import { asking, finished, refreshAttention, useAccountNeeds, useAttention, useAttentionFeed, useAttentionSupported } from '@/routes/needs-you/attention'
+import { asking, finished, refreshAttention, useAccountNeeds, useAttention, useAttentionFeed, useAttentionSupported, useEdgeNeed } from '@/routes/needs-you/attention'
 import { DeviceCard } from '@/routes/board/device-card'
 import { MergeProposalCard } from '@/routes/board/merge-card'
 import { registerRoute } from '@/routes/registry'
+import { EdgeNoticeCard } from '@/routes/settings/remote-access-notice'
 import { choicePlan } from '@/routes/run/request-options'
 import { FormFields, missingRequired } from '@/routes/run/session-form'
 import { useStore } from '@/store'
@@ -372,6 +373,7 @@ function NeedsYou() {
   const asks = items ? asking(items) : []
   const done = items ? finished(items) : []
   const { devices, merges } = useAccountNeeds()
+  const edge = useEdgeNeed()
   const mergeError = useStore((s) => s.mergeProposalsError)
   const stale = useStore((s) => s.staleSince !== null)
   // While saved data shows, the banner's own error already says the server is unreachable.
@@ -396,6 +398,7 @@ function NeedsYou() {
           </Callout>
         )}
         {mergeError && <div className="mb-3"><ProposalsReadError /></div>}
+        {edge && <div className="mb-3"><EdgeNoticeCard need={edge} /></div>}
         {(merges.length > 0 || devices.length > 0) && (
           <ul aria-label="Approvals" className="mb-3 flex flex-col gap-3">
             {merges.map((proposal) => <li key={proposal.id}><MergeProposalCard proposal={proposal} /></li>)}
@@ -408,7 +411,7 @@ function NeedsYou() {
             <Skeleton className="h-32 rounded-panel" />
           </div>
         )}
-        {items && !error && !mergeError && !stale && asks.length === 0 && merges.length === 0 && devices.length === 0 && <EmptyState title="Nothing needs you" className="py-10">Requests from your sessions, devices and sign-in merges show up here.</EmptyState>}
+        {items && !error && !mergeError && !stale && asks.length === 0 && merges.length === 0 && devices.length === 0 && !edge && <EmptyState title="Nothing needs you" className="py-10">Requests from your sessions, devices and sign-in merges show up here.</EmptyState>}
         {asks.length > 0 && (
           <ul aria-label="Needs you" className="flex flex-col gap-3">
             {asks.map((item) => <AttentionCard key={item.run_id} item={item} />)}

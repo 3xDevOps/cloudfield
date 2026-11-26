@@ -1515,6 +1515,18 @@ export interface ServerEdge {
   owner: { provider: string; login: string } | null
   connected: boolean
   claimed: boolean
+  /** What the pinned edge key signed about edge_url; absent when it said nothing. */
+  notice?: EdgeNotice
+}
+
+/** The server's edge address is retiring or retired; `replacement` is the address of the same edge to move to. */
+export interface EdgeNotice {
+  state: 'retiring' | 'retired'
+  replacement: string
+  /** YYYY-MM-DD, text for people. */
+  date?: string
+  /** Came with the connection that pinned the edge key: trusted on first use only. */
+  first_use?: boolean
 }
 
 /** server.edge.claimcode: a claim code bound to the calling admin. */

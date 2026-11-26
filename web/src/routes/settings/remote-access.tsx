@@ -6,8 +6,10 @@ import { Callout } from '@/components/ui/callout'
 import { Code } from '@/components/ui/code'
 import { type Api, ApiError } from '@/lib/api'
 import { message } from '@/lib/format'
+import { edgeNotice } from '@/lib/needs-you'
 import type { EdgeAccount, EdgeLogin, ServerEdge } from '@/lib/types'
 import { SettingRow, SettingsSection, TryAgain } from '@/routes/settings/layout'
+import { EdgeMoveSteps } from '@/routes/settings/remote-access-notice'
 import { useStore } from '@/store'
 import { loadEdge } from '@/store/edge'
 import { useCapability, useIsSuperAdmin } from '@/store/hooks'
@@ -57,9 +59,18 @@ export function RemoteAccessSection({ client }: { client: Api }) {
   }
   const connectable = admin && edge.edge_url !== '' && edge.owner === null
   const local = caps.hasLocal('edge.status') && caps.hasLocal('edge.login') && caps.hasLocal('edge.claim')
+  const notice = edgeNotice(edge)
   return (
     <SettingsSection title="Edge" id="edge">
+      {notice && admin && (
+        <Callout tone={notice.notice.state === 'retired' ? 'failed' : 'needs-you'} role="status" title={notice.reason}>
+          <EdgeMoveSteps need={notice} />
+        </Callout>
+      )}
       <SettingRow label="Edge URL" help={edge.edge_url || 'Off'} />
+      {notice && !admin && (
+        <SettingRow label="Address" help={`${notice.reason}; its new address is ${notice.notice.replacement}. A super admin moves the server.`} />
+      )}
       <SettingRow label="Server id">
         <CopyableCommand command={edge.server_id} />
       </SettingRow>

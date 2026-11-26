@@ -4,6 +4,7 @@ import { needsInputPrefix, plainReason } from '@/lib/reasons'
 import { isSudo } from '@/lib/run-requests'
 import type {
   Device,
+  EdgeNotice,
   Member,
   RoomMessage,
   RoomStatusResult,
@@ -339,4 +340,30 @@ export function deviceNeeds(
       }
     })
     .sort((a, b) => a.waitingSince.localeCompare(b.waitingSince) || a.device.id.localeCompare(b.device.id))
+}
+
+export interface EdgeNeed {
+  notice: EdgeNotice
+  /** The address the server is enrolled at and the notice is about. */
+  edgeURL: string
+  reason: string
+  /** Run on the server's host, then restart. */
+  move: string
+  restart: string
+}
+
+/** The notice the server's pinned edge key signed about the address the server is enrolled at. */
+export function edgeNotice(edge: ServerEdge | null): EdgeNeed | undefined {
+  const notice = edge?.notice
+  if (!edge?.edge_url || !notice) return undefined
+  const reason = notice.state === 'retired'
+    ? `${edge.edge_url} is retired`
+    : notice.date ? `${edge.edge_url} is retiring on ${notice.date}` : `${edge.edge_url} is retiring`
+  return {
+    notice,
+    edgeURL: edge.edge_url,
+    reason,
+    move: `sudo cloudfield-server edge move ${notice.replacement}`,
+    restart: 'sudo systemctl restart aether-server',
+  }
 }

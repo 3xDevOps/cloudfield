@@ -1,6 +1,6 @@
-import { deviceNeeds, needsYou, needsYouConditions, waitingOn, type AttentionState, type NeedsYouID } from '@/lib/needs-you'
+import { deviceNeeds, edgeNotice, needsYou, needsYouConditions, waitingOn, type AttentionState, type NeedsYouID } from '@/lib/needs-you'
 import { groupOf, presentRun } from '@/lib/status'
-import type { Run } from '@/lib/types'
+import type { Run, ServerEdge } from '@/lib/types'
 import { toRecord, type RunRecord } from '@/store/runs'
 import {
   alice,
@@ -462,5 +462,30 @@ describe('device cards', () => {
       admits: 'admits as: Bob (collaborator)',
       waitingSince: device.created_at,
     }])
+  })
+})
+
+describe('edgeNotice', () => {
+  const edge: ServerEdge = {
+    edge_url: 'https://edge-old.example.test', server_id: 'wqc4lsjvzdzrwq3k5dabdtajwj', access_policy: 'approved-devices',
+    owner: null, connected: true, claimed: true,
+  }
+  const replacement = 'https://edge-new.example.test'
+  const move = `sudo cloudfield-server edge move ${replacement}`
+  const restart = 'sudo systemctl restart aether-server'
+
+  it('is nothing without a notice or an edge', () => {
+    expect(edgeNotice(null)).toBeUndefined()
+    expect(edgeNotice(edge)).toBeUndefined()
+    expect(edgeNotice({ ...edge, edge_url: '', notice: { state: 'retiring', replacement } })).toBeUndefined()
+  })
+
+  it.each([
+    [{ state: 'retiring', replacement } as const, 'https://edge-old.example.test is retiring'],
+    [{ state: 'retiring', replacement, date: '2027-03-01' } as const, 'https://edge-old.example.test is retiring on 2027-03-01'],
+    [{ state: 'retired', replacement } as const, 'https://edge-old.example.test is retired'],
+    [{ state: 'retiring', replacement, first_use: true } as const, 'https://edge-old.example.test is retiring'],
+  ])('says what %o means and how to move', (notice, reason) => {
+    expect(edgeNotice({ ...edge, notice })).toEqual({ notice, edgeURL: edge.edge_url, reason, move, restart })
   })
 })

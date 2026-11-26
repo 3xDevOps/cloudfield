@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { toast } from 'sonner'
 import { type Api, ApiError } from '@/lib/api'
 import type { ServerEdge } from '@/lib/types'
@@ -156,4 +156,48 @@ it('refreshes the owner and shows remote_error when the clone remote was not upd
   fireEvent.click(await screen.findByRole('button', { name: 'Connect my GitHub account (octo)' }))
   await screen.findByText('octo (github)')
   expect(toast.error).toHaveBeenCalledWith("the link is saved, but the clone's aether remote was not updated: no such directory")
+})
+
+describe('a retiring or retired edge address', () => {
+  const replacement = 'https://edge-new.example.test'
+  const move = `sudo cloudfield-server edge move ${replacement}`
+  const claimed: ServerEdge = { ...ownerless, owner: { provider: 'github', login: 'octo' }, claimed: true }
+
+  it('shows nothing without a notice', () => {
+    seed('super_admin', claimed)
+    render(<RemoteAccessSection client={api()} />)
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.queryByText(/retir/)).toBeNull()
+    expect(screen.queryByText(/cloudfield-server/)).toBeNull()
+  })
+
+  it.each([
+    [{ state: 'retiring', replacement } as const, `${edgeURL} is retiring`, 'needs-you'],
+    [{ state: 'retiring', replacement, date: '2027-03-01' } as const, `${edgeURL} is retiring on 2027-03-01`, 'needs-you'],
+    [{ state: 'retired', replacement } as const, `${edgeURL} is retired`, 'failed'],
+  ])('warns a super admin with the commands for %o', (notice, title, tone) => {
+    seed('super_admin', { ...claimed, notice })
+    render(<RemoteAccessSection client={api()} />)
+    const callout = screen.getByRole('status')
+    expect(callout.getAttribute('data-tone')).toBe(tone)
+    expect(within(callout).getByText(title)).toBeTruthy()
+    expect(within(callout).getByText(`Move this server to ${replacement}, another address of the same edge. Run on the server's host:`)).toBeTruthy()
+    expect(within(callout).getByText(move)).toBeTruthy()
+    expect(within(callout).getByText('sudo systemctl restart aether-server')).toBeTruthy()
+    expect(within(callout).queryByText(/trusted on first use/)).toBeNull()
+  })
+
+  it('says a first-use notice is trusted on first use only', () => {
+    seed('super_admin', { ...claimed, notice: { state: 'retiring', replacement, first_use: true } })
+    render(<RemoteAccessSection client={api()} />)
+    expect(within(screen.getByRole('status')).getByText('The edge sent this with the connection that pinned its key, so it is trusted on first use only.')).toBeTruthy()
+  })
+
+  it('gives other members a plain row without the command', () => {
+    seed('collaborator', { ...claimed, notice: { state: 'retiring', replacement, date: '2027-03-01' } })
+    render(<RemoteAccessSection client={api()} />)
+    expect(screen.queryByRole('status')).toBeNull()
+    expect(screen.getByText(`${edgeURL} is retiring on 2027-03-01; its new address is ${replacement}. A super admin moves the server.`)).toBeTruthy()
+    expect(screen.queryByText(/cloudfield-server/)).toBeNull()
+  })
 })
