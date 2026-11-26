@@ -192,10 +192,11 @@ func listLogins(c *protocol.Client, agent string) ([]protocol.AgentLogin, error)
 	return list.Logins, nil
 }
 
-// loginID resolves the name of one of the caller's logins to its id.
+// loginID resolves the name of one of the caller's logins to its id; an
+// id resolves to itself, so a retry a launch printed names the same login.
 func loginID(logins []protocol.AgentLogin, name string) (string, error) {
 	for _, l := range logins {
-		if l.Name == name {
+		if l.Name == name || l.ID == name {
 			return l.ID, nil
 		}
 	}

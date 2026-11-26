@@ -55,7 +55,7 @@ func TestDescribeLoginNamesWhatTheSignInRecorded(t *testing.T) {
 	}
 }
 
-func TestLoginIDResolvesTheCallersOwnName(t *testing.T) {
+func TestLoginIDResolvesTheCallersOwnLogin(t *testing.T) {
 	logins := []protocol.AgentLogin{{ID: "default", Name: "default"}, {ID: "lgn-test1", Name: "work"}}
 	if id, err := loginID(logins, "work"); err != nil || id != "lgn-test1" {
 		t.Fatalf("loginID(work) = %q, %v", id, err)
@@ -63,7 +63,10 @@ func TestLoginIDResolvesTheCallersOwnName(t *testing.T) {
 	if id, err := loginID(logins, "default"); err != nil || id != "default" {
 		t.Fatalf("loginID(default) = %q, %v", id, err)
 	}
-	if _, err := loginID(logins, "lgn-test1"); err == nil || err.Error() != `you have no login named "lgn-test1"; cloudfield agent logins lists yours` {
-		t.Fatalf("loginID(an id) = %v; want the names it takes", err)
+	if id, err := loginID(logins, "lgn-test1"); err != nil || id != "lgn-test1" {
+		t.Fatalf("loginID(an id) = %q, %v; want the id", id, err)
+	}
+	if _, err := loginID(logins, "personal"); err == nil || err.Error() != `you have no login named "personal"; cloudfield agent logins lists yours` {
+		t.Fatalf("loginID(personal) = %v; want the names it takes", err)
 	}
 }
