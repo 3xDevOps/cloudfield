@@ -244,13 +244,19 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn, origin string)
 		if err = a.state.refuseEarlierPins(); err != nil {
 			return enrollment{}, err
 		}
-		if e.pin, err = a.state.pinFirst(ready.EdgeKey); err != nil {
+		if e.pin, e.pinned, err = a.state.pinFirst(ready.EdgeKey); err != nil {
 			return enrollment{}, err
 		}
-		e.pinned = true
-		slog.Info("edge: pinned edge key", "edge", origin, "fingerprint", edgeproto.EdgeKeyFingerprint(ready.EdgeKey))
+		if e.pinned {
+			slog.Info("edge: pinned edge key", "edge", origin, "fingerprint", edgeproto.EdgeKeyFingerprint(ready.EdgeKey))
+		}
 	case !bytes.Equal(cur.Key, ready.EdgeKey):
 		return enrollment{}, pinMismatch(cur.Key, ready.EdgeKey)
+	}
+	if e.pin.ID == "" {
+		if e.pin, err = a.state.identify(e.pin); err != nil {
+			return enrollment{}, err
+		}
 	}
 	if edgeproto.VerifyNotices(ready.EdgeKey, a.serverID, origin, noticeNonce, ready.Notices, ready.NoticesSignature) == nil {
 		e.notices = ready.Notices

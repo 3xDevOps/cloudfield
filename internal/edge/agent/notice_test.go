@@ -236,18 +236,66 @@ func TestFirstPinKeepsAKeyPinnedMeanwhile(t *testing.T) {
 	s := OpenState(t.TempDir())
 	trusted, _, _ := ed25519.GenerateKey(rand.Reader)
 	presented, _, _ := ed25519.GenerateKey(rand.Reader)
-	first, err := s.pinFirst(trusted)
-	if err != nil {
-		t.Fatal(err)
+	first, created, err := s.pinFirst(trusted)
+	if err != nil || !created {
+		t.Fatalf("pinFirst with nothing pinned: created %v, %v", created, err)
 	}
-	if again, err := s.pinFirst(trusted); err != nil || again.ID != first.ID || !again.Key.Equal(first.Key) {
-		t.Fatalf("pinFirst of the pinned key: %+v, %v; want the same pin", again, err)
+	if again, created, err := s.pinFirst(trusted); err != nil || created || again.ID != first.ID || !again.Key.Equal(first.Key) {
+		t.Fatalf("pinFirst of the pinned key: %+v, created %v, %v; want the same pin, not created", again, created, err)
 	}
-	if _, err := s.pinFirst(presented); err == nil {
+	if _, _, err := s.pinFirst(presented); err == nil {
 		t.Fatal("pinFirst replaced a pinned key")
 	}
 	if got, err := s.PinnedKey(); err != nil || !got.Equal(trusted) {
 		t.Fatalf("pinned key %x, %v; want the one pinned first", got, err)
+	}
+}
+
+// writeLegacyPin writes key as a build before pin ids, or an older
+// binary's edge trust, does: the key alone.
+func writeLegacyPin(t *testing.T, s *State, key ed25519.PublicKey) {
+	t.Helper()
+	if err := s.write(pinFile, struct {
+		Key ed25519.PublicKey `json:"key"`
+	}{key}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestNoticesAcrossAnOlderBinarysRepin stores notices, then lets an older
+// binary pin another key and the first again without an id, as after a
+// rollback: the stored notices are none until a new enrollment stores
+// its own under a pin with an id.
+func TestNoticesAcrossAnOlderBinarysRepin(t *testing.T) {
+	for _, legacyFirst := range []bool{false, true} {
+		s := OpenState(t.TempDir())
+		a, _, _ := ed25519.GenerateKey(rand.Reader)
+		b, _, _ := ed25519.GenerateKey(rand.Reader)
+		p := pinNow(t, s, a)
+		if legacyFirst {
+			writeLegacyPin(t, s, a)
+			if err := s.writeNotices(pin{Key: a}, testStored()); err == nil {
+				t.Fatal("notices stored under a pin without an id")
+			}
+			var err error
+			if p, err = s.identify(pin{Key: a}); err != nil || p.ID == "" {
+				t.Fatalf("identify a legacy pin: %+v, %v", p, err)
+			}
+		}
+		if err := s.writeNotices(p, testStored()); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := s.Notices(noticeServerID); err != nil || len(got.Notices) != 1 {
+			t.Fatalf("legacy first %v: stored notices %+v, %v", legacyFirst, got, err)
+		}
+		writeLegacyPin(t, s, b)
+		writeLegacyPin(t, s, a)
+		if got, err := s.Notices(noticeServerID); err != nil || got.Notices != nil {
+			t.Fatalf("legacy first %v: read %d notice(s) from before the old-format re-pin", legacyFirst, len(got.Notices))
+		}
+		if _, err := s.identify(pin{Key: b}); err == nil {
+			t.Fatal("identify gave an id to a pin of another key")
+		}
 	}
 }
 
