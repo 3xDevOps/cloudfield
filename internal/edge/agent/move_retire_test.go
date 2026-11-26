@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -160,20 +161,22 @@ func TestMoveFromARetiredAddress(t *testing.T) {
 			}
 			a := moveAgentAt(t, from, edge.pub)
 			if tc.stored != nil {
-				p, err := a.state.pinned()
+				held, err := a.state.HoldPin()
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := a.state.writeNotices(p, StoredNotices{ServerID: a.serverID, Received: time.Now(), Notices: tc.stored(from, to)}); err != nil {
+				err = a.state.writeNotices(held.p, StoredNotices{ServerID: a.serverID, Received: time.Now(), Notices: tc.stored(from, to)})
+				held.Close()
+				if err != nil {
 					t.Fatal(err)
 				}
 				if got, err := a.Notices(); err != nil || len(got.Notices) == 0 {
 					t.Fatalf("stored notices %+v, %v", got, err)
 				}
 			}
-			got, err := a.Move(t.Context(), to, testCommands)
+			got, err := moveHeld(t, a, to)
 			if tc.want == nil {
-				if want := (Moved{To: to, Key: edge.pub, Retired: true}); err != nil || !reflect.DeepEqual(got, want) {
+				if want := (Moved{To: to, Retired: true}); err != nil || !reflect.DeepEqual(got, want) {
 					t.Fatalf("move to %s: %+v, %v; want %+v", to, got, err, want)
 				}
 				return
@@ -183,6 +186,17 @@ func TestMoveFromARetiredAddress(t *testing.T) {
 			}
 		})
 	}
+}
+
+// moveHeld runs a.Move under the pin in place, as edge move does.
+func moveHeld(t *testing.T, a *Agent, target string) (Moved, error) {
+	t.Helper()
+	held, err := a.state.HoldPin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	return a.Move(t.Context(), target, held, testCommands)
 }
 
 // testCommands spell the commands as an admin types them under sudo with
@@ -214,7 +228,7 @@ func TestMoveFromARetiredAddressNeedsThePinnedKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = moveAgentAt(t, from, pinned).Move(t.Context(), edge.origin, testCommands)
+	_, err = moveHeld(t, moveAgentAt(t, from, pinned), edge.origin)
 	if want := fmt.Sprintf("%s presents edge key %s, but this server pinned %s for its edge: another edge answers there. "+
 		"edge move only changes the address of one edge; changing edges is in docs/edge.md#turning-it-on",
 		edge.origin, edgeproto.EdgeKeyFingerprint(edge.pub), edgeproto.EdgeKeyFingerprint(pinned)); err == nil || err.Error() != want {
@@ -231,7 +245,7 @@ func TestMoveFollowsNoRedirect(t *testing.T) {
 	for _, status := range []int{http.StatusFound, http.StatusPermanentRedirect} {
 		srv := httptest.NewServer(http.RedirectHandler(edge.origin+edgeproto.PathServerControl, status))
 		t.Cleanup(srv.Close)
-		_, err := moveAgentAt(t, srv.URL, edge.pub).Move(t.Context(), edge.origin, testCommands)
+		_, err := moveHeld(t, moveAgentAt(t, srv.URL, edge.pub), edge.origin)
 		if want := fmt.Sprintf("edgeagent: enroll at %s: dial %s/v1/server/control: %d %s: Location: %s/v1/server/control",
 			srv.URL, srv.URL, status, http.StatusText(status), edge.origin); err == nil || err.Error() != want {
 			t.Errorf("redirect %d: %v, want %q", status, err, want)
@@ -250,9 +264,11 @@ func TestMoveFollowsNoRedirect(t *testing.T) {
 func TestMoveGivesTheManualSteps(t *testing.T) {
 	edge := newFakeEdge(t)
 	from := retiredHost(t, "retired")
-	_, err := moveAgentAt(t, from, nil).Move(t.Context(), edge.origin, testCommands)
+	_, err := moveHeld(t, moveAgentAt(t, from, nil), edge.origin)
 	if want := "no edge key is pinned for " + from + " yet, so nothing shows that " + edge.origin + " is the same edge; " +
-		"start the server, let it connect once, and run edge move again. " + manualSteps(from, edge.origin); err == nil || err.Error() != want {
+		"start the server, let it connect once, and run edge move again. If " + from + " no longer answers for this edge: confirm " + edge.origin +
+		" and the edge key's fingerprint with whoever runs the edge, then run sudo cloudfield-server config set edge-url " + edge.origin +
+		", sudo cloudfield-server edge trust (it shows the fingerprint to compare; type yes) and sudo systemctl restart aether-server"; err == nil || err.Error() != want {
 		t.Errorf("no key pinned: %v\nwant: %s", err, want)
 	}
 
@@ -293,7 +309,7 @@ func TestMoveGivesTheManualSteps(t *testing.T) {
 		{"no handshake in time", "http://" + silent.Addr().String(), true},
 		{"an untrusted certificate", tlsHost.URL, false},
 	} {
-		_, err := moveAgentAt(t, tc.from, edge.pub).Move(t.Context(), edge.origin, testCommands)
+		_, err := moveHeld(t, moveAgentAt(t, tc.from, edge.pub), edge.origin)
 		if err == nil || !strings.HasPrefix(err.Error(), "edgeagent: enroll at "+tc.from+": dial "+tc.from+"/v1/server/control: ") ||
 			strings.HasSuffix(err.Error(), ". "+manualSteps(tc.from, edge.origin)) != tc.steps || strings.Contains(err.Error(), "\n") {
 			t.Errorf("%s: %v; want the manual steps: %v", tc.name, err, tc.steps)
@@ -322,9 +338,9 @@ func TestMoveRefusesARetiringTarget(t *testing.T) {
 		{name: "unsigned"},
 	} {
 		signedNotices(to, tc.key, edgeproto.Notices{{State: edgeproto.NoticeRetiring, Origin: to.origin, Replacement: "https://edge3.example.test", Date: tc.date}})
-		got, err := moveAgentAt(t, from.origin, from.pub).Move(t.Context(), to.origin, testCommands)
+		got, err := moveHeld(t, moveAgentAt(t, from.origin, from.pub), to.origin)
 		if tc.want == "" {
-			if want := (Moved{To: to.origin, Key: from.pub}); err != nil || !reflect.DeepEqual(got, want) {
+			if want := (Moved{To: to.origin}); err != nil || !reflect.DeepEqual(got, want) {
 				t.Errorf("%s: %+v, %v; want %+v", tc.name, got, err, want)
 			}
 			continue
@@ -429,20 +445,22 @@ func TestMoveReadsBothProbesNotices(t *testing.T) {
 		{name: "the target retiring in favour of the address in use", at: to,
 			notice: edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: to.origin, Replacement: from.origin},
 			want:   "the edge says, signed with the pinned key, that " + to.origin + " is retiring and names " + from.origin + ", where this server already is; nothing changed"},
+		{name: "the address in use signed retired while it still answers", at: from,
+			notice: edgeproto.Notice{State: edgeproto.NoticeRetired, Origin: from.origin, Replacement: to.origin}},
 		{name: "the address in use retiring", at: from,
 			notice: edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: from.origin, Replacement: to.origin}, retiring: true},
 	} {
 		signedNotices(from, nil, nil)
 		signedNotices(to, nil, nil)
 		signedNotices(tc.at, tc.at.priv, edgeproto.Notices{tc.notice})
-		got, err := moveAgentAt(t, from.origin, from.pub).Move(t.Context(), to.origin, testCommands)
+		got, err := moveHeld(t, moveAgentAt(t, from.origin, from.pub), to.origin)
 		if tc.want != "" {
 			if err == nil || err.Error() != tc.want {
 				t.Errorf("%s: %v\nwant: %s", tc.name, err, tc.want)
 			}
 			continue
 		}
-		if want := (Moved{To: to.origin, Key: from.pub, Retiring: tc.retiring}); err != nil || !reflect.DeepEqual(got, want) {
+		if want := (Moved{To: to.origin, Retired: tc.notice.State == edgeproto.NoticeRetired, Retiring: tc.retiring}); err != nil || !reflect.DeepEqual(got, want) {
 			t.Errorf("%s: %+v, %v; want %+v", tc.name, got, err, want)
 		}
 	}
@@ -461,16 +479,28 @@ func TestMoveIsBoundToThePinItStartedWith(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	otherPub := otherKey.Public().(ed25519.PublicKey)
 	changed := "edgeagent: enroll at " + edge.origin + ": the pinned edge key changed from " + edgeproto.EdgeKeyFingerprint(edge.pub) +
 		" while this ran; nothing changed, run it again"
 	for _, tc := range []struct {
 		name   string
 		change func(s *State) error
+		after  ed25519.PublicKey
 	}{
-		{"another key pinned", func(s *State) error { return s.Pin(otherKey.Public().(ed25519.PublicKey)) }},
-		{"the pin removed", func(s *State) error { return os.Remove(s.path(pinFile)) }},
+		{"another key pinned", func(s *State) error { return s.Pin(otherPub) }, otherPub},
+		{"the pin removed", func(s *State) error { return os.Remove(s.path(pinFile)) }, nil},
+		{"another key, then the same key again", func(s *State) error {
+			if err := s.Pin(otherPub); err != nil {
+				return err
+			}
+			return s.Pin(edge.pub)
+		}, edge.pub},
 	} {
 		a := moveAgentAt(t, edge.origin, edge.pub)
+		held, err := a.state.HoldPin()
+		if err != nil {
+			t.Fatal(err)
+		}
 		edge.mu.Lock()
 		edge.notices = func(string, []byte) (edgeproto.Notices, []byte) {
 			if err := tc.change(a.state); err != nil {
@@ -479,16 +509,17 @@ func TestMoveIsBoundToThePinItStartedWith(t *testing.T) {
 			return nil, nil
 		}
 		edge.mu.Unlock()
-		if _, err := a.Move(t.Context(), other.origin, testCommands); err == nil || err.Error() != changed {
+		if _, err := a.Move(t.Context(), other.origin, held, testCommands); err == nil || err.Error() != changed {
 			t.Errorf("%s: %v\nwant: %s", tc.name, err, changed)
 		}
-		if key, err := a.state.PinnedKey(); err != nil || key.Equal(edge.pub) {
-			t.Errorf("%s: the move pinned %s, %v", tc.name, edgeproto.EdgeKeyFingerprint(key), err)
+		if key, err := a.state.PinnedKey(); err != nil || !key.Equal(tc.after) {
+			t.Errorf("%s: pinned %s after the move, %v", tc.name, edgeproto.EdgeKeyFingerprint(key), err)
 		}
 		wrote := false
-		if err := a.state.WhilePinned(edge.pub, func() error { wrote = true; return nil }); err == nil || wrote {
-			t.Errorf("%s: WhilePinned wrote under another pin: %v", tc.name, err)
+		if err := a.state.WhilePinned(held, func() error { wrote = true; return nil }); err == nil || err.Error() != strings.TrimPrefix(changed, "edgeagent: enroll at "+edge.origin+": ") || wrote {
+			t.Errorf("%s: WhilePinned under a replaced pin: %v, wrote %v", tc.name, err, wrote)
 		}
+		held.Close()
 	}
 }
 
@@ -507,5 +538,59 @@ func TestMoveFromRetiredNeedsAUsableList(t *testing.T) {
 	if err := checkMoveFromRetired(unusable, refused, testCommands, from, to); err == nil ||
 		err.Error() != "the edge at "+to+" announces no relay address this server can use; moving needs "+to+" among them: the edge's operator adds the address first" {
 		t.Errorf("only unusable origins: %v", err)
+	}
+}
+
+// A target the first probe's notices rule out is refused before anything
+// dials it.
+func TestMoveDoesNotProbeATargetRuledOut(t *testing.T) {
+	from := newFakeEdge(t)
+	to := newFakeEdgeWithKey(t, from.priv)
+	from.relayOrigins = []string{from.origin, to.origin}
+	signedNotices(from, from.priv, edgeproto.Notices{{State: edgeproto.NoticeRetired, Origin: to.origin, Replacement: from.origin}})
+	_, err := moveHeld(t, moveAgentAt(t, from.origin, from.pub), to.origin)
+	if want := "the edge says, signed with the pinned key, that " + to.origin + " is retired and names " + from.origin +
+		", where this server already is; nothing changed"; err == nil || err.Error() != want {
+		t.Fatalf("move: %v\nwant: %s", err, want)
+	}
+	select {
+	case h := <-to.hellos:
+		t.Fatalf("the target was probed: %+v", h)
+	default:
+	}
+}
+
+// A refusal whose status arrived before the deadline is reported as that
+// status, even when its body is still coming when the deadline passes.
+func TestDialHonoursAStatusThatArrived(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusGone)
+		_, _ = w.Write([]byte(`{"error":"ret`))
+		w.(http.Flusher).Flush()
+		<-release
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+	_, _, err := dial(t.Context(), srv.URL+edgeproto.PathServerControl, nil, 200*time.Millisecond)
+	var refused *DialError
+	if !errors.As(err, &refused) || refused.Status != http.StatusGone || errors.Is(err, errNoAnswer) {
+		t.Fatalf("dial: %v, want a 410 refusal", err)
+	}
+}
+
+// A stored entry that would not pass in a ready is no notice.
+func TestStoredNoticesIgnoreDamagedEntries(t *testing.T) {
+	const own = "https://edge-old.example.test"
+	for _, n := range []edgeproto.Notice{
+		{State: "gone", Origin: own, Replacement: "https://edge-new.example.test"},
+		{State: edgeproto.NoticeRetiring, Origin: own, Replacement: "not-a-url"},
+		{State: edgeproto.NoticeRetiring, Origin: own, Replacement: "https://edge-new.example.test; rm -rf /"},
+		{State: edgeproto.NoticeRetiring, Origin: own, Replacement: own},
+		{State: edgeproto.NoticeRetiring, Origin: own, Replacement: "https://edge-new.example.test", Date: "2027-02-30"},
+	} {
+		if got, ok := (StoredNotices{Notices: []edgeproto.Notice{n}}).For(own); ok {
+			t.Errorf("%+v read as %+v", n, got)
+		}
 	}
 }

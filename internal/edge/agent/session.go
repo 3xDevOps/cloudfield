@@ -115,15 +115,13 @@ func dial(ctx context.Context, url string, header http.Header, timeout time.Dura
 	ctx, cancel := context.WithCancel(ctx)
 	timer := time.AfterFunc(timeout, cancel)
 	c, resp, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: header, HTTPClient: noRedirect})
-	if !timer.Stop() {
-		if c != nil {
-			_ = c.CloseNow()
-		}
-		cancel()
-		return nil, nil, noAnswer{fmt.Errorf("dial %s: no handshake within %s", url, timeout)}
+	expired := !timer.Stop()
+	if err == nil && expired {
+		_ = c.CloseNow()
 	}
-	if err != nil {
+	if err != nil || expired {
 		cancel()
+		// A status that arrived is the answer, whenever the timer fired.
 		if resp != nil && resp.StatusCode != http.StatusSwitchingProtocols {
 			var body edgeproto.ErrorBody
 			if resp.Body != nil {
@@ -134,6 +132,9 @@ func dial(ctx context.Context, url string, header http.Header, timeout time.Dura
 				msg = strings.TrimSpace(msg + " Location: " + loc)
 			}
 			return nil, nil, &DialError{URL: url, Status: resp.StatusCode, Message: printableText(msg, maxDialMessage)}
+		}
+		if expired {
+			return nil, nil, noAnswer{fmt.Errorf("dial %s: no handshake within %s", url, timeout)}
 		}
 		if op := (*net.OpError)(nil); errors.As(err, &op) && op.Op == "dial" {
 			return nil, nil, noAnswer{fmt.Errorf("dial %s: %w", url, err)}
@@ -311,8 +312,10 @@ func (a *Agent) session(ctx context.Context) (time.Duration, error) {
 	if err = a.state.writeNotices(e.pin, StoredNotices{ServerID: a.serverID, Received: start, FirstUse: e.pinned, Notices: e.notices}); err != nil {
 		return time.Since(start), err
 	}
-	if n, ok := noticeFor(e.notices, a.origin); ok {
-		slog.Warn("edge: "+NoticeLine(n, "sudo cloudfield-server edge move "+n.Replacement+" (with the service's --config <file>, if it has one)"), "edge", a.origin, "replacement", n.Replacement, "date", n.Date, "first_use", e.pinned)
+	if stored, serr := a.state.Notices(a.serverID); serr == nil && !stored.Received.Before(start) {
+		if n, ok := stored.For(a.origin); ok {
+			slog.Warn("edge: "+NoticeLine(n, "sudo cloudfield-server edge move "+n.Replacement+" (with the service's --config <file>, if it has one)"), "edge", a.origin, "replacement", n.Replacement, "date", n.Date, "first_use", e.pinned)
+		}
 	}
 	if err = a.reconcileOwner(s, ready.State); err != nil {
 		return time.Since(start), err

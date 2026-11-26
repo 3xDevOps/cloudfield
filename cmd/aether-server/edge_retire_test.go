@@ -60,6 +60,11 @@ func TestEdgeStatusRetiringRow(t *testing.T) {
 			notices:    edgeagent.StoredNotices{Notices: []edgeproto.Notice{dated}},
 			row:        "running      the server last dialed " + other + "; restart to apply edge-url: sudo systemctl restart aether-server",
 			connection: "connection   disconnected since " + since.Local().Format(time.DateTime) + ": " + gone, err: errNotConnected},
+		{name: "a damaged entry that still parses", status: connected,
+			notices: edgeagent.StoredNotices{Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: old, Replacement: "not-a-url"}}}},
+		{name: "a stale connection at another address", status: edgeagent.Status{Edge: other, Connected: true, Since: since, PID: os.Getpid(), Heartbeat: now.Add(-time.Hour)},
+			notices: edgeagent.StoredNotices{Notices: []edgeproto.Notice{dated}},
+			row:     "running      the server last dialed " + other + "; restart to apply edge-url: sudo systemctl restart aether-server", err: errNotConnected},
 		{name: "an unreadable notices file", status: connected, raw: "{not json",
 			row:        "notices      unreadable, so none is shown: edgeagent: ",
 			connection: "connection   connected since " + since.Local().Format(time.DateTime) + "; the edge last answered 0s ago"},
@@ -164,32 +169,60 @@ func TestApplyMoveFromARetiringOrRetiredAddress(t *testing.T) {
 	other, _, _ := ed25519.GenerateKey(rand.Reader)
 	enrolled := "enrolled at " + to + ", an address of the same edge (edge key " + edgeproto.EdgeKeyFingerprint(pub) + ", still pinned); "
 	for _, tc := range []struct {
-		name   string
-		moved  edgeagent.Moved
-		pinned ed25519.PublicKey
-		want   string
-		err    string
+		name  string
+		moved edgeagent.Moved
+		// meanwhile changes the state or config while the move runs.
+		meanwhile func(dir, path string) error
+		want      string
+		err       string
 	}{
-		{name: "retired", moved: edgeagent.Moved{To: to, Key: pub, Retired: true}, pinned: pub,
+		{name: "retired", moved: edgeagent.Moved{To: to, Retired: true},
 			want: enrolled + "the edge says " + from + " is retired\n"},
-		{name: "retiring", moved: edgeagent.Moved{To: to, Key: pub, Retiring: true}, pinned: pub,
+		{name: "retiring", moved: edgeagent.Moved{To: to, Retiring: true},
 			want: enrolled + "the edge announces " + from + " too, so links and connectors made there keep working until it is retired; " +
 				"it is retiring, so there is no moving back\n"},
-		{name: "another pin since", moved: edgeagent.Moved{To: to, Key: pub, Retired: true}, pinned: other,
-			want: enrolled + "the edge says " + from + " is retired\n",
-			err:  "the pinned edge key changed from " + edgeproto.EdgeKeyFingerprint(pub) + " while this ran; nothing changed, run it again"},
+		{name: "another pin since", moved: edgeagent.Moved{To: to, Retired: true},
+			meanwhile: func(dir, _ string) error { return edgeagent.OpenState(dir).Pin(other) },
+			err:       "the pinned edge key changed from " + edgeproto.EdgeKeyFingerprint(pub) + " while this ran; nothing changed, run it again"},
+		{name: "the same key pinned again since", moved: edgeagent.Moved{To: to},
+			meanwhile: func(dir, _ string) error { return edgeagent.OpenState(dir).Pin(pub) },
+			err:       "the pinned edge key changed from " + edgeproto.EdgeKeyFingerprint(pub) + " while this ran; nothing changed, run it again"},
+		{name: "the edge turned off since", moved: edgeagent.Moved{To: to},
+			meanwhile: func(dir, path string) error {
+				return serversetup.WriteConfig(path, map[string]string{"data-dir": dir, "edge-url": ""})
+			}},
 	} {
 		dir := t.TempDir()
 		path := filepath.Join(dir, "server.conf")
 		if err := serversetup.WriteConfig(path, map[string]string{"data-dir": dir, "edge-url": from}); err != nil {
 			t.Fatal(err)
 		}
-		if err := edgeagent.OpenState(dir).Pin(tc.pinned); err != nil {
+		state := edgeagent.OpenState(dir)
+		if err := state.Pin(pub); err != nil {
 			t.Fatal(err)
 		}
+		before, err := serversetup.Load(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		held, err := state.HoldPin()
+		if err != nil {
+			t.Fatal(err)
+		}
+		wantURL := from
+		if tc.meanwhile != nil {
+			if err := tc.meanwhile(dir, path); err != nil {
+				t.Fatal(err)
+			}
+			if tc.err == "" {
+				tc.err = path + ` changed while edge move ran: edge-url is now "", was "` + from + `"; nothing changed, run it again`
+				wantURL = ""
+			}
+		}
 		var out bytes.Buffer
-		err := applyMove(&out, dir, from, path, tc.moved)
-		want, wantURL := tc.want, from
+		err = applyMove(&out, dir, from, path, before, held, tc.moved)
+		held.Close()
+		want := tc.want
 		if tc.err == "" {
 			want += path + ": edge-url = " + to + " (was " + from + ")\napply it with:\n  sudo systemctl restart aether-server\n"
 			wantURL = to

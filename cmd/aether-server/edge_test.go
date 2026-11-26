@@ -246,7 +246,8 @@ func TestEdgeMoveNeedsAPinnedKey(t *testing.T) {
 	if want := "no edge key is pinned for https://edge.onaether.dev yet, so nothing shows that https://edge.cloudfield.ai is the same edge; " +
 		"start the server, let it connect once, and run edge move again. If https://edge.onaether.dev no longer answers for this edge: " +
 		"confirm https://edge.cloudfield.ai and the edge key's fingerprint with whoever runs the edge, " +
-		"then run sudo cloudfield-server config set edge-url https://edge.cloudfield.ai --config " + path + " and sudo systemctl restart aether-server"; err == nil || err.Error() != want {
+		"then run sudo cloudfield-server config set edge-url https://edge.cloudfield.ai --config " + path +
+		", sudo cloudfield-server edge trust --config " + path + " (it shows the fingerprint to compare; type yes) and sudo systemctl restart aether-server"; err == nil || err.Error() != want {
 		t.Errorf("move without a pinned key: %v, want %q", err, want)
 	}
 	if got, err := serversetup.Load(path); err != nil || got["edge-url"] != "https://edge.onaether.dev" {
@@ -271,7 +272,16 @@ func TestApplyMoveAndThePendingRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	if err := applyMove(&out, dir, from, path, edgeagent.Moved{To: to, Key: pub}); err != nil {
+	before, err := serversetup.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := edgeagent.OpenState(dir).HoldPin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	if err := applyMove(&out, dir, from, path, before, held, edgeagent.Moved{To: to}); err != nil {
 		t.Fatal(err)
 	}
 	want := "enrolled at " + to + ", an address of the same edge (edge key " + edgeproto.EdgeKeyFingerprint(pub) + ", still pinned); " +

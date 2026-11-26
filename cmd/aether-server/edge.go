@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"cmp"
 	"context"
 	"errors"
@@ -189,7 +190,7 @@ func edgeStatus(w io.Writer, dataDir, edgeURL, configPath string, policy edgepro
 	switch {
 	case status.Connected && stale == nil && status.Edge != "" && status.Edge != origin:
 		_, _ = fmt.Fprintf(tw, "running\tthe running server is at %s; restart to apply edge-url: %s\n", status.Edge, cmds.Restart)
-	case ran && !status.Connected && status.Edge != "" && status.Edge != origin:
+	case status.Edge != "" && status.Edge != origin:
 		_, _ = fmt.Fprintf(tw, "running\tthe server last dialed %s; restart to apply edge-url: %s\n", status.Edge, cmds.Restart)
 	case noticesErr != nil:
 		_, _ = fmt.Fprintf(tw, "notices\tunreadable, so none is shown: %s\n", edgeagent.Clean(noticesErr.Error()))
@@ -428,11 +429,20 @@ func edgeMove(w io.Writer, dataDir, edgeURL string, policy edgeproto.AccessPolic
 	if err != nil {
 		return err
 	}
-	moved, err := agent.Move(context.Background(), target, serverCommands(configPath))
+	before, err := serversetup.Load(configPath)
 	if err != nil {
 		return err
 	}
-	return applyMove(w, dataDir, edgeURL, configPath, moved)
+	held, err := edgeagent.OpenState(dataDir).HoldPin()
+	if err != nil {
+		return err
+	}
+	defer held.Close()
+	moved, err := agent.Move(context.Background(), target, held, serverCommands(configPath))
+	if err != nil {
+		return err
+	}
+	return applyMove(w, dataDir, edgeURL, configPath, before, held, moved)
 }
 
 // serverCommands spell cloudfield-server and the restart as an admin
@@ -445,10 +455,28 @@ func serverCommands(configPath string) edgeagent.Commands {
 }
 
 // applyMove writes m.To, the address edgeagent.Agent.Move checked, as
-// edge-url while m.Key is still the pinned key, and says how to apply it
-// and, unless edgeURL is retired or retiring, how to undo it.
-func applyMove(w io.Writer, dataDir, edgeURL, configPath string, m edgeagent.Moved) error {
-	enrolled := fmt.Sprintf("enrolled at %s, an address of the same edge (edge key %s, still pinned); ", m.To, edgeproto.EdgeKeyFingerprint(m.Key))
+// edge-url while held is still the pin in place and the config file still
+// names the edge-url and data-dir it had, before, when the move began. It
+// then says what it did, how to apply it and, unless edgeURL is retired
+// or retiring, how to undo it.
+func applyMove(w io.Writer, dataDir, edgeURL, configPath string, before map[string]string, held *edgeagent.HeldPin, m edgeagent.Moved) error {
+	var written bytes.Buffer
+	err := edgeagent.OpenState(dataDir).WhilePinned(held, func() error {
+		now, err := serversetup.Load(configPath)
+		if err != nil {
+			return err
+		}
+		for _, key := range []string{"edge-url", "data-dir"} {
+			if now[key] != before[key] {
+				return fmt.Errorf("%s changed while edge move ran: %s is now %q, was %q; nothing changed, run it again", configPath, key, now[key], before[key])
+			}
+		}
+		return configSet(&written, configPath, "edge-url", m.To)
+	})
+	if err != nil {
+		return err
+	}
+	enrolled := fmt.Sprintf("enrolled at %s, an address of the same edge (edge key %s, still pinned); ", m.To, edgeproto.EdgeKeyFingerprint(held.Key()))
 	switch {
 	case m.Retired:
 		enrolled += "the edge says " + edgeURL + " is retired"
@@ -458,11 +486,10 @@ func applyMove(w io.Writer, dataDir, edgeURL, configPath string, m edgeagent.Mov
 		enrolled += "the edge announces " + edgeURL + " too, so links and connectors made there keep working"
 	}
 	_, _ = fmt.Fprintln(w, enrolled)
-	err := edgeagent.OpenState(dataDir).WhilePinned(m.Key, func() error { return configSet(w, configPath, "edge-url", m.To) })
-	if err != nil || m.Retired || m.Retiring {
-		return err
+	_, _ = written.WriteTo(w)
+	if !m.Retired && !m.Retiring {
+		_, _ = fmt.Fprintf(w, "to move back:\n  %saether-server edge move %s%s\n", sudoPrefix(), edgeURL, configFlag(configPath))
 	}
-	_, _ = fmt.Fprintf(w, "to move back:\n  %saether-server edge move %s%s\n", sudoPrefix(), edgeURL, configFlag(configPath))
 	return nil
 }
 

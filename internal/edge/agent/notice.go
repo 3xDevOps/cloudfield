@@ -8,9 +8,17 @@ import (
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 )
 
-// For is the stored notice for the relay origin origin.
+// For is the stored notice for the relay origin origin. A stored entry
+// that would not pass as a notice in a ready, as after the file was
+// damaged, is none.
 func (n StoredNotices) For(origin string) (edgeproto.Notice, bool) {
-	return noticeFor(n.Notices, origin)
+	x, ok := noticeFor(n.Notices, origin)
+	if !ok || (x.State != edgeproto.NoticeRetiring && x.State != edgeproto.NoticeRetired) ||
+		!edgeproto.NoticeOrigin(x.Origin) || !edgeproto.NoticeOrigin(x.Replacement) || x.Origin == x.Replacement ||
+		x.Date != "" && !edgeproto.ValidDate(x.Date) {
+		return edgeproto.Notice{}, false
+	}
+	return x, true
 }
 
 func noticeFor(notices []edgeproto.Notice, origin string) (edgeproto.Notice, bool) {
