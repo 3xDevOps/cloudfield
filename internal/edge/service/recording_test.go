@@ -282,7 +282,7 @@ func TestRedemptionAfterRecordingStarts(t *testing.T) {
 	}
 	t.Cleanup(func() { restarted.Close() }) //nolint:errcheck // test cleanup
 	restarted.SetLink(h.link)
-	if err := restarted.StartRecording(context.Background()); err != nil {
+	if err = restarted.StartRecording(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	body, err := json.Marshal(edgeproto.DeviceTokenRequest{DeviceCode: start.DeviceCode})
