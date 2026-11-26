@@ -1134,16 +1134,17 @@ A missing or bad signature and a signed empty list both clear the stored
 notices: whoever answers for a relay host can suppress a warning until the next
 real connection, but cannot add a notice or change a replacement.
 Pinning a key, by the first connection or `edge trust`, deletes the
-`notices.json` of the key it replaces and of the key it pins. What binds stored
-notices to a pin is the pin file itself: every pin, by this build or an older
-one, replaces `edge_key.json` by a rename, so each pin is a new file. Beside
-`notices.json` the server keeps `notices.pin`, a hard link to the pin file the
-notices were stored under, and reads the notices only while that link is the
-current `edge_key.json`; a list verified under one pin file is never written
-once another has replaced it. A pin by an older binary therefore shows no
-notices until the next connection, and nothing in this build rewrites the pin
-file except a pin. Where the file system cannot hard-link, the server stores no
-notices. Stored notices also name the server id that verified them and count
+`notices.json` of the key it replaces and of the key it pins, and the first
+connection pins only where no pin file is. Stored notices are bound to the pin
+file: every pin, by this build or an older one, puts a new `edge_key.json` in
+place. Beside `notices.json` the server keeps `notices.pin`, a hard link to the
+pin file the notices were verified under, made last and only while that file is
+still `edge_key.json`, and reads the notices only while the link is the current
+`edge_key.json`. A pin by an older binary therefore shows no notices until the
+next connection, and nothing in this build rewrites the pin file except a pin.
+Where the file system cannot hard-link, the server stores no notices, and a
+restore that does not keep hard links drops the stored notices until the next
+connection. Stored notices also name the server id that verified them and count
 for no other. A list that arrived with the `ready` that pinned the key is
 trusted as that pin is, and only shown. An edge or a server that does not know
 the fields ignores them, and a server that sends no nonce gets the `ready` it
