@@ -211,7 +211,7 @@ func TestApplyMoveFromARetiringOrRetiredAddress(t *testing.T) {
 		}
 		wantURL := from
 		if tc.meanwhile != nil {
-			if err := tc.meanwhile(dir, path); err != nil {
+			if err = tc.meanwhile(dir, path); err != nil {
 				t.Fatal(err)
 			}
 			if tc.err == "" {

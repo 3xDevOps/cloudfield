@@ -272,13 +272,13 @@ func TestApplyMoveAndThePendingRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	before, err := serversetup.Load(path)
-	if err != nil {
-		t.Fatal(err)
+	before, lerr := serversetup.Load(path)
+	if lerr != nil {
+		t.Fatal(lerr)
 	}
-	held, err := edgeagent.OpenState(dir).HoldPin()
-	if err != nil {
-		t.Fatal(err)
+	held, herr := edgeagent.OpenState(dir).HoldPin()
+	if herr != nil {
+		t.Fatal(herr)
 	}
 	defer held.Close()
 	if err := applyMove(&out, dir, from, path, before, held, edgeagent.Moved{To: to}); err != nil {
