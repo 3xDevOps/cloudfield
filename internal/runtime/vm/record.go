@@ -39,6 +39,8 @@ const (
 	eventsFile    = "events.json"
 	monitorLog    = "monitor.log"
 	snapshotDir   = "snapshot"
+	// usedSnapshotDir is the saved state a wake used, until it is deleted.
+	usedSnapshotDir = "snapshot.used"
 )
 
 // offline is the Net of a VM with no network device.

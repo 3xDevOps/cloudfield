@@ -547,8 +547,9 @@ cap, and the wake around it 1 second per 20 MiB of saved memory beyond its
 3 minutes. The resume and the answer of the guest's helper then get 90
 seconds.
 
-The engine keeps a saved state until the restored guest's helper answers.
-A saved state matches the VM's disks only until the guest writes one:
+The engine keeps a saved state until the restored guest's helper answers,
+then renames it to `snapshot.used` and deletes it after the restore has
+returned: unlinking 0.9 GiB of saved memory took 200 ms. A saved state matches the VM's disks only until the guest writes one:
 saved memory restored over newer disks would corrupt them. So before it
 resumes the guest, a restore records in the VM's record (`resumed`) the
 modification time of every disk the saved `config.json` lets the guest

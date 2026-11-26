@@ -29,6 +29,9 @@ const (
 	// is about 30 s.
 	reportSettled = 16 << 20
 	reportTimeout = 40 * time.Second
+	// restorePoll is how often a restore asks Cloud Hypervisor whether it
+	// holds the VM, which takes no process, unlike asking the unit.
+	restorePoll = 10 * time.Millisecond
 	// snapshotRate is the slowest write a snapshot gets time for: a 24 GiB
 	// guest gets over 20 minutes. A monitor still busy after that is taken
 	// to hang; the VM it holds paused is resumed by the next wake.
@@ -383,7 +386,30 @@ func (e *engine) restore(ctx context.Context, key string) error {
 	if storeErr := e.store(rec); storeErr != nil {
 		return errors.Join(err, storeErr)
 	}
-	return errors.Join(err, os.RemoveAll(dir))
+	return errors.Join(err, e.discardUsedSnapshot(key))
+}
+
+// discardUsedSnapshot moves the saved state a wake used out of the next
+// save's way and deletes it behind the wake: unlinking 0.9 GiB of saved
+// memory took 200 ms. A copy a server that stopped mid-delete left goes
+// first.
+func (e *engine) discardUsedSnapshot(key string) error {
+	used := e.path(key, usedSnapshotDir)
+	if err := os.RemoveAll(used); err != nil {
+		return err
+	}
+	if err := os.Rename(e.path(key, snapshotDir), used); err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	go func() {
+		if err := os.RemoveAll(used); err != nil {
+			slog.Warn("vm runtime: delete the saved state a wake used", "vm", key, "error", err)
+		}
+	}()
+	return nil
 }
 
 // diskTimes is when each disk the saved guest in dir may write was last
@@ -422,18 +448,22 @@ func diskTimes(dir string) (map[string]int64, error) {
 // awaitRestored waits until Cloud Hypervisor holds the restored, still
 // paused VM.
 func (e *engine) awaitRestored(ctx context.Context, key string, api chAPI) error {
+	asked := time.Now()
 	for {
 		state, err := api.state(ctx)
 		if err == nil && state == "Paused" {
 			return nil
 		}
-		if up, upErr := e.running(ctx, key); upErr == nil && !up {
-			return fmt.Errorf("vm runtime: VM %s stopped while restoring%s", key, e.logTail(key))
+		if time.Since(asked) >= waitPoll {
+			asked = time.Now()
+			if up, upErr := e.running(ctx, key); upErr == nil && !up {
+				return fmt.Errorf("vm runtime: VM %s stopped while restoring%s", key, e.logTail(key))
+			}
 		}
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("vm runtime: restore VM %s: %w (last state %q, %v)%s", key, ctx.Err(), state, err, e.logTail(key))
-		case <-time.After(waitPoll):
+		case <-time.After(restorePoll):
 		}
 	}
 }
