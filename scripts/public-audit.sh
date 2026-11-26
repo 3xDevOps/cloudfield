@@ -63,7 +63,7 @@ fi
 # something called Aether and goes when that thing is renamed: the
 # connector entry a member adds in ChatGPT or Claude, the Slack bot, the
 # wake prompt the server sends, the symbol fonts, two listing images not
-# yet shot again, the edge's request headers, the line the server asks pull
+# yet shot again, the edge's headers, the line the server asks pull
 # requests to end with, and the old desktop app and CLI directory that
 # install.md tells people to find and remove.
 check_old_name() {
@@ -77,7 +77,7 @@ check_old_name() {
 			-e "^docs/connectors\\.md:[0-9]+:(.*[Nn]ame it \`Aether\`|Aether connector in ChatGPT or Claude)" \
 			-e "^docs/slack\\.md:[0-9]+:[[:space:]]+(name|display_name): Aether\$" \
 			-e "^docs/styles\\.md:[0-9]+:.*\`Aether (Nerd )?Symbols\`" \
-			-e "^docs/edge\\.md:[0-9]+:.*[\`']Aether-Edge-(Version|Browser|Relay-Origin)" \
+			-e "^docs/edge\\.md:[0-9]+:.*[\`']Aether-Edge-(Version|Browser|Relay-Origin|Retiring)" \
 			-e "^docs/coordination\\.md:[0-9]+:.*\`Opened from Aether session <session id>\`" \
 			-e "^docs/install\\.md:[0-9]+:(.*(Programs\\\\Aether|Aether\\.(app|lnk)|Aether Desktop|app was named Aether|next start removes Aether\\.)|Aether beside Cloudfield)"); then
 		printf '%s\n' "$matches"
