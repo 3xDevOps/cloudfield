@@ -101,7 +101,7 @@ func TestMoveFromARetiredAddress(t *testing.T) {
 		{name: "a retiring notice", notices: func(from, to string) edgeproto.Notices {
 			return edgeproto.Notices{{State: edgeproto.NoticeRetiring, Origin: from, Replacement: to}}
 		}, want: noRetiredNotice(text)},
-		{name: "control characters in the refusal", text: "gone\r\x1b[2K\nmoved", want: noRetiredNotice("gone[2Kmoved")},
+		{name: "control characters in the refusal", text: "gone\r\x1b[2K\nmoved", want: noRetiredNotice("gone??[2K?moved")},
 		{name: "another replacement", notices: func(from, to string) edgeproto.Notices {
 			return edgeproto.Notices{{State: edgeproto.NoticeRetired, Origin: from, Replacement: "https://edge3.example.test"}}
 		}, want: func(from, to string) string {
@@ -150,7 +150,11 @@ func TestMoveFromARetiredAddress(t *testing.T) {
 			}
 			a := moveAgentAt(t, from, edge.pub)
 			if tc.stored != nil {
-				if err := a.state.writeNotices(StoredNotices{Received: time.Now(), Notices: tc.stored(from, to)}); err != nil {
+				p, err := a.state.pinned()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := a.state.writeNotices(p, StoredNotices{ServerID: a.serverID, Received: time.Now(), Notices: tc.stored(from, to)}); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -203,7 +207,8 @@ func TestMoveFollowsNoRedirect(t *testing.T) {
 		srv := httptest.NewServer(http.RedirectHandler(edge.origin+edgeproto.PathServerControl, status))
 		t.Cleanup(srv.Close)
 		_, _, err := moveAgentAt(t, srv.URL, edge.pub).Move(t.Context(), edge.origin)
-		if want := fmt.Sprintf("edgeagent: enroll at %s: dial %s/v1/server/control: %d %s", srv.URL, srv.URL, status, http.StatusText(status)); err == nil || err.Error() != want {
+		if want := fmt.Sprintf("edgeagent: enroll at %s: dial %s/v1/server/control: %d %s: Location: %s/v1/server/control",
+			srv.URL, srv.URL, status, http.StatusText(status), edge.origin); err == nil || err.Error() != want {
 			t.Errorf("redirect %d: %v, want %q", status, err, want)
 		}
 	}

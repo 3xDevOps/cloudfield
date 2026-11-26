@@ -62,7 +62,8 @@ func TestEdgeStatusRetiringRow(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dir := t.TempDir()
-			if _, err := serverID(dir); err != nil {
+			id, err := serverID(dir)
+			if err != nil {
 				t.Fatal(err)
 			}
 			pub, _, _ := ed25519.GenerateKey(rand.Reader)
@@ -72,7 +73,7 @@ func TestEdgeStatusRetiringRow(t *testing.T) {
 			}
 			writeJSON(t, filepath.Join(edgeagent.StateDir(dir), "status.json"), tt.status)
 			if tt.notices.Notices != nil {
-				tt.notices.Received = since
+				tt.notices.Received, tt.notices.ServerID = since, id
 				writeJSON(t, noticesPath(dir, pub), tt.notices)
 			}
 			config := tt.config

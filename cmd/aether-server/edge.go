@@ -177,7 +177,7 @@ func edgeStatus(w io.Writer, dataDir, edgeURL, configPath string, policy edgepro
 	if err != nil {
 		return err
 	}
-	notices, err := state.Notices()
+	notices, err := state.Notices(id)
 	if err != nil {
 		return err
 	}
