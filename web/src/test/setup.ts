@@ -46,6 +46,20 @@ afterEach(async () => {
   await new Promise((resolve) => realSetTimeout(resolve, 0))
 })
 
+// sonner marks a toast `data-removed` as it leaves, then drops it from React
+// state on a 200 ms timer that unmounting the Toaster does not cancel. Fired
+// after the file environment is gone, that setState throws "window is not
+// defined" and the suite fails with every assertion already passed.
+const sonnerRemovalMs = 200
+let toastLeft = false
+new MutationObserver(() => {
+  toastLeft = true
+}).observe(document, { subtree: true, attributeFilter: ['data-removed'] })
+
+afterAll(async () => {
+  if (toastLeft) await new Promise((resolve) => realSetTimeout(resolve, sonnerRemovalMs))
+})
+
 // Radix measures, scrolls and captures the pointer over whatever it pops out -
 // an open select, a dialog, a menu - xterm's fit addon measures its host, and
 // the session timeline's virtualizer scrolls its list.
