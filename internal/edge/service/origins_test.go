@@ -1,205 +1,121 @@
 package edge
 
 import (
-	"context"
-	"database/sql"
+	"encoding/json"
 	"net/http"
 	"net/url"
-	"path/filepath"
+	"strings"
 	"testing"
 
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 )
 
-// column reads one origin column of the edge's database, "" for NULL.
-func (h *harness) column(t *testing.T, query string, args ...any) string {
-	t.Helper()
-	db, err := sql.Open("sqlite", filepath.Join(h.dataDir, "edge.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close() //nolint:errcheck // test
-	var v sql.NullString
-	if err := db.QueryRow(query, args...).Scan(&v); err != nil {
-		t.Fatalf("%s: %v", query, err)
-	}
-	return v.String
-}
-
-// newRecordingHarness is newPairsHarness with RecordOrigins set.
-func newRecordingHarness(t *testing.T) *harness {
-	t.Helper()
-	return newHarness(t, func(cfg *Config, p *fakeProvider) {
-		app := p.app()
-		app.ClientID, app.ClientSecret = "test-client-2", "test-secret-2"
-		cfg.MorePairs = []Pair{{SigninOrigin: testSignin2, RelayOrigin: testRelay2, GitHub: app}}
-		cfg.RecordOrigins = true
-	})
-}
-
-func (h *harness) exec(t *testing.T, query string, args ...any) {
-	t.Helper()
-	db, err := sql.Open("sqlite", filepath.Join(h.dataDir, "edge.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer db.Close() //nolint:errcheck // test
-	if _, err := db.Exec(query, args...); err != nil {
-		t.Fatalf("%s: %v", query, err)
-	}
-}
-
-// TestOriginsRecordedPerPair signs a browser and a device in on each pair
-// of a two-pair edge: each records the sign-in origin it was issued at,
-// and keeps it when used at the other pair. A row without one takes the
-// pair it is next used at, on the sign-in host or, for a device, through
-// the relay host.
-func TestOriginsRecordedPerPair(t *testing.T) {
-	h := newRecordingHarness(t)
-	h.setGitHubUser(1, "owner", "owner@example.test", true)
-	if got := h.column(t, `SELECT group_concat(relay_origin || ' ' || signin_origin, ', ') FROM (SELECT * FROM origin_pairs ORDER BY relay_origin)`); got != testRelay+" "+testSignin+", "+testRelay2+" "+testSignin2 {
-		t.Fatalf("origin pairs recorded at start: %q", got)
-	}
-	pairs := []struct{ signin, relay, other string }{{testSignin, testRelay, testSignin2}, {testSignin2, testRelay2, testSignin}}
-	tokens := map[string]string{}
-	for _, p := range pairs {
-		b := h.browser(t)
-		b.origin = p.signin
-		b.signIn(t)
-		if got := h.column(t, `SELECT signin_origin FROM web_sessions ORDER BY created_at DESC, rowid DESC LIMIT 1`); got != p.signin {
-			t.Errorf("session signed in on %s records %q", p.signin, got)
-		}
-
-		var start edgeproto.DeviceStartResponse
-		if status, msg := h.apiCallOn(t, p.signin, http.MethodPost, edgeproto.PathDeviceStart, "",
-			edgeproto.DeviceStartRequest{Key: newDeviceKey(t), Label: "laptop"}, &start); status != http.StatusOK {
-			t.Fatalf("device start on %s: %d %s", p.signin, status, msg)
-		}
-		if got := h.column(t, `SELECT signin_origin FROM device_authorizations`); got != p.signin {
-			t.Errorf("device authorization started on %s records %q", p.signin, got)
-		}
-		b.post(t, "/device/confirm", url.Values{"user_code": {start.UserCode}, "decision": {"approve"}})
-		h.clock.Advance(pollInterval)
-		var tok edgeproto.DeviceTokenResponse
-		if status, msg := h.apiCallOn(t, p.signin, http.MethodPost, edgeproto.PathDeviceToken, "",
-			edgeproto.DeviceTokenRequest{DeviceCode: start.DeviceCode}, &tok); status != http.StatusOK {
-			t.Fatalf("device token on %s: %d %s", p.signin, status, msg)
-		}
-		tokens[p.signin] = tok.Token
-		if got := h.column(t, `SELECT signin_origin FROM devices WHERE id = ?`, tok.Device.ID); got != p.signin {
-			t.Errorf("device token issued on %s records %q", p.signin, got)
-		}
-		if status, msg := h.apiCallOn(t, p.other, http.MethodGet, edgeproto.PathServers, tok.Token, nil, nil); status != http.StatusOK {
-			t.Fatalf("token of %s on %s: %d %s", p.signin, p.other, status, msg)
-		}
-		if got := h.column(t, `SELECT signin_origin FROM devices WHERE id = ?`, tok.Device.ID); got != p.signin {
-			t.Errorf("device token of %s used on %s records %q", p.signin, p.other, got)
-		}
-
-		h.exec(t, `UPDATE web_sessions SET signin_origin = NULL`)
-		b.origin = p.other
-		b.get(t, "/servers")
-		b.origin = p.signin
-		if resp, _ := b.get(t, "/servers"); resp.StatusCode != http.StatusOK {
-			t.Fatalf("/servers on %s: %s", p.signin, resp.Status)
-		}
-		if got := h.column(t, `SELECT group_concat(signin_origin) FROM web_sessions`); got != p.signin {
-			t.Errorf("sessions without an origin, one used on %s and on %s: origins %q, want only %s", p.other, p.signin, got, p.signin)
-		}
-	}
-
-	h.exec(t, `UPDATE devices SET signin_origin = NULL`)
-	if status, msg := h.apiCallOn(t, testSignin2, http.MethodGet, edgeproto.PathServers, tokens[testSignin], nil, nil); status != http.StatusOK {
-		t.Fatalf("token on %s: %d %s", testSignin2, status, msg)
-	}
-	relay := relayDirectory{h.svc}
-	ctx := context.WithValue(context.Background(), pairKey{}, h.svc.byHost[edgeproto.OriginHost(testRelay)])
-	if _, _, err := relay.Authenticate(ctx, tokens[testSignin2]); err != nil {
-		t.Fatal(err)
-	}
-	if _, _, err := relay.Authenticate(context.Background(), tokens[testSignin]); err != nil {
-		t.Fatal(err)
-	}
-	got := h.column(t, `SELECT group_concat(signin_origin || ':' || signin_origin_seen, ' ') FROM (SELECT * FROM devices ORDER BY created_at, id)`)
-	if got != testSignin2+":1 "+testSignin+":1" {
-		t.Errorf("devices without an origin next used on %s and through %s record %q, want %s then %s", testSignin2, testRelay, got, testSignin2, testSignin)
-	}
-}
-
-// TestEnrollmentRecordsOrigin enrolls a claimed server at each relay
-// origin: the last enrollment's origin and build are what the store
-// holds.
-func TestEnrollmentRecordsOrigin(t *testing.T) {
-	h := newRecordingHarness(t)
-	id := testServerID(t)
-	h.claim(t, id, "workstation", edgeproto.Account{Provider: edgeproto.ProviderGitHub, Subject: "1", Login: "owner"})
-	if got := h.column(t, `SELECT relay_origin || ' ' || agent_version FROM servers WHERE id = ?`, id); got != testRelay+" v1.0.0" {
-		t.Fatalf("claimed server records %q", got)
-	}
-	relay := relayDirectory{h.svc}
-	for _, e := range []struct{ origin, build string }{{testRelay2, "v2.0.0"}, {testRelay, "v2.1.0"}} {
-		if claimed, err := relay.Enroll(context.Background(), id, "workstation", edgeproto.PolicyAccount, e.origin, e.build); err != nil || !claimed {
-			t.Fatalf("enroll at %s: %v %v", e.origin, claimed, err)
-		}
-		if got := h.column(t, `SELECT relay_origin || ' ' || agent_version FROM servers WHERE id = ?`, id); got != e.origin+" "+e.build {
-			t.Errorf("enrolled at %s with %s, records %q", e.origin, e.build, got)
-		}
-	}
-	if err := relay.ConnectorUsed(context.Background(), id, testRelay2); err != nil {
-		t.Fatal(err)
-	}
-	if got := h.column(t, `SELECT relay_origin FROM connector_use WHERE server_id = ?`, id); got != testRelay2 {
-		t.Errorf("connector use records %q", got)
-	}
-}
-
-// TestOriginsNotRecordedByDefault runs every writer on a two-pair edge
-// without RecordOrigins: nothing that schema 2 adds is written.
-func TestOriginsNotRecordedByDefault(t *testing.T) {
-	h := newPairsHarness(t)
-	h.setGitHubUser(1, "owner", "owner@example.test", true)
-	b := h.browser(t)
-	b.origin = testSignin2
-	b.signIn(t)
-	var start edgeproto.DeviceStartResponse
-	if status, msg := h.apiCallOn(t, testSignin2, http.MethodPost, edgeproto.PathDeviceStart, "",
-		edgeproto.DeviceStartRequest{Key: newDeviceKey(t), Label: "laptop"}, &start); status != http.StatusOK {
-		t.Fatalf("device start: %d %s", status, msg)
-	}
-	b.post(t, "/device/confirm", url.Values{"user_code": {start.UserCode}, "decision": {"approve"}})
-	h.clock.Advance(pollInterval)
-	var tok edgeproto.DeviceTokenResponse
-	if status, msg := h.apiCallOn(t, testSignin2, http.MethodPost, edgeproto.PathDeviceToken, "",
-		edgeproto.DeviceTokenRequest{DeviceCode: start.DeviceCode}, &tok); status != http.StatusOK {
-		t.Fatalf("device token: %d %s", status, msg)
-	}
-	h.apiCallOn(t, testSignin2, http.MethodGet, edgeproto.PathServers, tok.Token, nil, nil)
-	b.get(t, "/servers")
-	relay := relayDirectory{h.svc}
-	ctx := context.WithValue(context.Background(), pairKey{}, h.svc.byHost[edgeproto.OriginHost(testRelay2)])
-	if _, _, err := relay.Authenticate(ctx, tok.Token); err != nil {
-		t.Fatal(err)
-	}
-	id := testServerID(t)
-	h.claim(t, id, "workstation", edgeproto.Account{Provider: edgeproto.ProviderGitHub, Subject: "1", Login: "owner"})
-	if _, err := relay.Enroll(ctx, id, "workstation", edgeproto.PolicyAccount, testRelay2, "v2.0.0"); err != nil {
-		t.Fatal(err)
-	}
-	if err := relay.ConnectorUsed(ctx, id, testRelay2); err != nil {
-		t.Fatal(err)
-	}
-	for _, q := range []string{
-		`SELECT COUNT(*) FROM origin_pairs`,
-		`SELECT COUNT(*) FROM connector_use`,
-		`SELECT COUNT(*) FROM servers WHERE relay_origin IS NOT NULL OR agent_version IS NOT NULL OR enrolled_at IS NOT NULL`,
-		`SELECT COUNT(*) FROM devices WHERE signin_origin IS NOT NULL OR signin_origin_seen IS NOT NULL`,
-		`SELECT COUNT(*) FROM web_sessions WHERE signin_origin IS NOT NULL OR signin_origin_seen IS NOT NULL`,
+func TestOriginsMustBeTwoHosts(t *testing.T) {
+	for _, tt := range []struct {
+		signin, relay, want string
+	}{
+		{testSignin, testSignin, "must have different host names"},
+		{"https://edge.example.test:8443", "https://edge.example.test", "must have different host names"},
+		{"https://EDGE.example.test", "https://edge.example.test", "must have different host names"},
+		{"", testRelay, "sign-in origin"},
+		{testSignin, "https://relay.example.test/path", "relay origin"},
+		{"http://signin.example.test", testRelay, "must use https"},
 	} {
-		if got := h.column(t, q); got != "0" {
-			t.Errorf("%s = %s without RecordOrigins, want 0", q, got)
+		_, err := New(Config{DataDir: t.TempDir(), SigninOrigin: tt.signin, RelayOrigin: tt.relay,
+			GitHub: &OAuthApp{ClientID: "id", ClientSecret: "secret"}})
+		if err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("New(%q, %q) = %v, want an error containing %q", tt.signin, tt.relay, err, tt.want)
 		}
 	}
-	if got := h.column(t, `SELECT COUNT(*) FROM devices`); got != "1" {
-		t.Fatalf("devices: %s, want the one signed in", got)
+}
+
+// TestEachOriginServesOnlyItsOwnPaths checks that no page, cookie or
+// client API answers on the relay host, and no relay endpoint on the
+// sign-in host.
+func TestEachOriginServesOnlyItsOwnPaths(t *testing.T) {
+	h := newHarness(t)
+	serverID := testServerID(t)
+	for _, tt := range []struct {
+		origin, method, path string
+		status               int
+		want                 string
+	}{
+		{testRelay, http.MethodGet, "/signin", http.StatusMisdirectedRequest, "/signin is served on " + testSignin},
+		{testRelay, http.MethodGet, "/signin/github", http.StatusMisdirectedRequest, "is served on " + testSignin},
+		{testRelay, http.MethodGet, "/signin/github/callback?code=x&state=y", http.StatusMisdirectedRequest, "is served on " + testSignin},
+		{testRelay, http.MethodGet, "/servers", http.StatusMisdirectedRequest, "is served on " + testSignin},
+		{testRelay, http.MethodPost, "/account/delete", http.StatusMisdirectedRequest, "is served on " + testSignin},
+		{testRelay, http.MethodPost, edgeproto.PathDeviceStart, http.StatusMisdirectedRequest, "is served on " + testSignin},
+		{testRelay, http.MethodGet, edgeproto.PathServers, http.StatusMisdirectedRequest, "is served on " + testSignin},
+		{testSignin, http.MethodGet, edgeproto.ConnectPath(serverID), http.StatusMisdirectedRequest, "is served on " + testRelay},
+		{testSignin, http.MethodGet, edgeproto.PathEdgeInfo, http.StatusMisdirectedRequest, "is served on " + testRelay},
+		{testRelay, http.MethodGet, edgeproto.ConnectPath(serverID), http.StatusOK, "relayed"},
+		{testRelay, http.MethodGet, "/nothing-here", http.StatusNotFound, "404 page not found"},
+		{"https://other.example.test", http.MethodGet, "/signin", http.StatusMisdirectedRequest,
+			"this edge serves " + testSignin + " and " + testRelay + `, not the host "other.example.test"`},
+		{testSignin, http.MethodGet, "/healthz", http.StatusOK, "ok"},
+		{testRelay, http.MethodGet, "/healthz", http.StatusOK, "ok"},
+		{"https://other.example.test", http.MethodGet, "/healthz", http.StatusOK, "ok"},
+	} {
+		b := h.browser(t)
+		b.origin = tt.origin
+		resp, body := b.do(t, tt.method, tt.path, url.Values{}, nil)
+		var e edgeproto.ErrorBody
+		if json.Unmarshal([]byte(body), &e) == nil && e.Error != "" {
+			body = e.Error
+		}
+		if resp.StatusCode != tt.status || !strings.Contains(body, tt.want) {
+			t.Errorf("%s %s%s: %s %q, want %d with %q", tt.method, tt.origin, tt.path, resp.Status, body, tt.status, tt.want)
+		}
+		if len(b.setCookies) != 0 {
+			t.Errorf("%s %s%s set cookies %q", tt.method, tt.origin, tt.path, b.setCookies)
+		}
+	}
+}
+
+// TestOAuthCallbackIsOnTheSigninOrigin checks the redirect address GitHub
+// is sent, which must match the callback URL of the edge's OAuth app.
+// Sign-in with Google, which builds from the v0.5.2-alpha.3 tag offered,
+// has no route.
+func TestOAuthCallbackIsOnTheSigninOrigin(t *testing.T) {
+	h := newHarness(t)
+	resp, _ := h.browser(t).get(t, "/signin/github")
+	loc, err := url.Parse(resp.Header.Get("Location"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := loc.Query().Get("redirect_uri"), testSignin+"/signin/github/callback"; got != want {
+		t.Errorf("redirect_uri = %q, want %q", got, want)
+	}
+	for _, path := range []string{"/signin/google", "/signin/google/callback?code=x&state=y"} {
+		if resp, _ := h.browser(t).get(t, path); resp.StatusCode != http.StatusNotFound {
+			t.Errorf("%s: %s, want 404", path, resp.Status)
+		}
+	}
+}
+
+// TestCookiesAreHostOnly collects every cookie the sign-in origin sets
+// through a sign-in, a device approval and a sign-out. Each must be bound
+// to the sign-in host alone: the __Host- prefix, which browsers refuse
+// with a Domain attribute, Secure, and Path=/. A cookie with a Domain
+// would reach every host under that domain.
+func TestCookiesAreHostOnly(t *testing.T) {
+	h := newHarness(t)
+	b := signedInBrowser(t, h)
+	approvedDevice(t, h, b)
+	b.get(t, "/account")
+	b.post(t, "/signout", url.Values{})
+	if len(b.setCookies) < 3 {
+		t.Fatalf("only %d Set-Cookie lines: %q", len(b.setCookies), b.setCookies)
+	}
+	for _, line := range b.setCookies {
+		c, err := http.ParseSetCookie(line)
+		if err != nil {
+			t.Fatalf("Set-Cookie %q: %v", line, err)
+		}
+		if !strings.HasPrefix(c.Name, "__Host-") || c.Domain != "" || strings.Contains(strings.ToLower(line), "domain=") ||
+			!c.Secure || c.Path != "/" || !c.HttpOnly {
+			t.Errorf("Set-Cookie %q is not a host-only __Host- cookie", line)
+		}
 	}
 }
