@@ -243,7 +243,9 @@ func TestEdgeMoveNeedsAPinnedKey(t *testing.T) {
 	}
 	err := edgeCmd([]string{"move", "https://edge.cloudfield.ai", "--config", path})
 	if want := "no edge key is pinned for https://edge.onaether.dev yet, so nothing shows that https://edge.cloudfield.ai is the same edge; " +
-		"start the server, let it connect once, and run edge move again"; err == nil || err.Error() != want {
+		"start the server, let it connect once, and run edge move again. If https://edge.onaether.dev no longer answers for this edge: " +
+		"confirm https://edge.cloudfield.ai and the edge key's fingerprint with whoever runs the edge, " +
+		"then run sudo cloudfield-server config set edge-url https://edge.cloudfield.ai and sudo systemctl restart aether-server"; err == nil || err.Error() != want {
 		t.Errorf("move without a pinned key: %v, want %q", err, want)
 	}
 	if got, err := serversetup.Load(path); err != nil || got["edge-url"] != "https://edge.onaether.dev" {
