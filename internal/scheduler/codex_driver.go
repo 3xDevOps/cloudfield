@@ -355,9 +355,13 @@ func (d *appServerDriver) status(entry *supervised, r *appServerRun, thread stri
 	r.reporting = true
 	d.mu.Unlock()
 	go func() {
+		// A status seen while dialing waits for serve to store the client
+		// that reads its thread. A dial that fails stores none, and the next
+		// connection reports the thread's status again.
+		<-r.ready
 		for {
 			d.mu.Lock()
-			if len(r.pending) == 0 || r.stopping {
+			if len(r.pending) == 0 || r.stopping || r.client == nil {
 				r.pending, r.reporting = nil, false
 				d.mu.Unlock()
 				return
@@ -374,8 +378,7 @@ func (d *appServerDriver) status(entry *supervised, r *appServerRun, thread stri
 			case codexapp.Failed:
 				report.Reason = agentstatus.ReasonFailed
 			case codexapp.Idle:
-				// A status seen while connecting has no client yet.
-				if client != nil && d.s.hasParent(entry.runID) {
+				if d.s.hasParent(entry.runID) {
 					ctx, cancel := context.WithTimeout(r.ctx, acpSteerTimeout)
 					message, interrupted, err := client.LastMessage(ctx, thread)
 					cancel()

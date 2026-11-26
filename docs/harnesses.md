@@ -1012,8 +1012,8 @@ asking the agent to report
 ([coordination.md](coordination.md#lifecycle-status-is-separate)). Enhanced
 sessions get a [report reminder](enhanced-sessions.md#report-reminder) prompt
 instead. Standard sessions of other agents are not held: Codex sessions load no
-hooks, and the app-server reports an idle thread the same way after a
-finished turn and after you press Esc.
+hooks, and the app-server gives a thread the same `idle` status after a
+finished turn and after you press Esc. Only the turn's own status differs.
 
 When a Standard [subsession](teams.md#subsessions) of an agent with status
 reporting ends a turn without an outcome report, its parent gets a provisional
@@ -1023,8 +1023,9 @@ message for Claude Code, from the Stop hook, and for Codex, from the
 app-server. pi, oh-my-pi and OpenCode report the turn end without a message,
 so the report reads `(none)`; it still wakes the parent. A Claude Code or
 Codex turn you cut off with Esc forwards nothing: Claude Code runs no Stop
-hook, and the app-server marks the turn `interrupted`. An agent without
-status reporting forwards nothing.
+hook, and the app-server marks the turn `interrupted`. A turn that
+[a mode switch](enhanced-sessions.md#switching-a-running-agent) interrupts
+forwards nothing either. An agent without status reporting forwards nothing.
 
 ## Agent configuration: import and Files
 

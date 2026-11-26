@@ -114,6 +114,9 @@ func TestStandardCodexRunsThroughItsAppServer(t *testing.T) {
 	srv.SetStatus("thread-1", "active")
 	srv.SetStatus("thread-1", "idle")
 	e.waitStoreStatus(t, run.ID, domain.RunNeedsAttention)
+	if reads := srv.Requests("thread/turns/list"); len(reads) != 0 {
+		t.Fatalf("thread/turns/list = %s, want no read of a session with no parent", reads)
+	}
 	waitFor(t, "the recorded session", func() bool {
 		r, err := e.db.GetRun(t.Context(), run.ID)
 		return err == nil && r.HarnessSessionID == "thread-1"
@@ -247,13 +250,14 @@ func TestStandardCodexKeepsAQuestionThroughAMailTurn(t *testing.T) {
 }
 
 // A Standard Codex subsession's finished turn forwards the last agent
-// message of its thread. A turn cut off with Esc forwards nothing.
+// message of its thread, also when it finished while the bridge was lost. A
+// turn cut off with Esc forwards nothing.
 func TestStandardCodexChildForwardsItsLastMessage(t *testing.T) {
 	shortProvisionalGrace(t)
 	e, rt, coord := newCodexEnv(t)
 	parent, _ := e.launchFake(t, "parent")
 	child := launchChildRun(t, e, parent, "codex", domain.LaunchTUI)
-	srv, _ := rt.bridge(t, 1)
+	srv, bridge := rt.bridge(t, 1)
 	dialed(t, srv, 1)
 	srv.StartThread("thread-1", false, "")
 	prompt := func() {
@@ -275,6 +279,13 @@ func TestStandardCodexChildForwardsItsLastMessage(t *testing.T) {
 	waitFor(t, "the thread's last message at the parent", func() bool {
 		calls := coord.provisionalReports()
 		return len(calls) == 1 && calls[0].run == child.ID && calls[0].message == "pong"
+	})
+	prompt()
+	_ = bridge.agentOut.Close()
+	srv.EndTurn("thread-1", "completed", "pang")
+	waitFor(t, "the message of the turn that ended while the bridge was lost", func() bool {
+		calls := coord.provisionalReports()
+		return len(calls) == 2 && calls[1].message == "pang"
 	})
 }
 

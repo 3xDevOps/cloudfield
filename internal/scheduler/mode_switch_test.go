@@ -15,6 +15,7 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 
 	"github.com/3xDevOps/cloudfield/internal/acphost"
+	"github.com/3xDevOps/cloudfield/internal/acphost/acpmock"
 	"github.com/3xDevOps/cloudfield/internal/agentstatus"
 	"github.com/3xDevOps/cloudfield/internal/control"
 	"github.com/3xDevOps/cloudfield/internal/coordtransport"
@@ -324,6 +325,43 @@ func TestSwitchEnhancedRunToStandardAndBack(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitItems(t, e.sched, run.ID, "a turn after switching back", turnEnded("end_turn", 2))
+}
+
+// A switch cuts a subsession's turn off, so the parent gets no turn end for
+// it, whichever way the switch goes.
+func TestSwitchingASubsessionMidTurnForwardsNoTurnEnd(t *testing.T) {
+	shortProvisionalGrace(t)
+	e := newSwitchEnv(t)
+	parent := e.launch(t, "parent", domain.LaunchACP)
+	child := launchChildRun(t, e.testEnv, parent, "omp", domain.LaunchACP)
+	e.sup.run = child.ID
+	waitFor(t, "the task's turn at the parent", func() bool { return len(e.coord.provisionalReports()) == 1 })
+	switchTo := func(mode domain.LaunchMode) {
+		t.Helper()
+		if err := e.sched.SwitchMode(t.Context(), child.ID, e.member.ID, mode, admitNow); err != nil {
+			t.Fatalf("switch to %s: %v", modeName(mode), err)
+		}
+	}
+	cutOffBy := func(mode domain.LaunchMode) {
+		t.Helper()
+		e.waitAgentWorking(t, child.ID)
+		switchTo(mode)
+		time.Sleep(provisionalGrace * 3 / 2)
+		if calls := e.coord.provisionalReports(); len(calls) != 1 {
+			t.Fatalf("provisional reports %+v after the switch to %s cut a turn off, want only the task's turn", calls, modeName(mode))
+		}
+	}
+
+	switchTo(domain.LaunchTUI)
+	if err := e.sched.ReportAgentState(t.Context(), child.ID, agentstatus.Report{State: agentstatus.Working, TurnStart: true}); err != nil {
+		t.Fatal(err)
+	}
+	cutOffBy(domain.LaunchACP)
+
+	if _, err := e.sched.Inject(t.Context(), child.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptWait}, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	cutOffBy(domain.LaunchTUI)
 }
 
 func TestSwitchToStandardRestoresEnhancedWhenTheTerminalExits(t *testing.T) {

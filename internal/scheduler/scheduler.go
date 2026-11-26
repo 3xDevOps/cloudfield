@@ -1176,9 +1176,6 @@ func (s *Scheduler) containerSpec(run *domain.Run, member *domain.Member, argv [
 	if run.Mode == domain.LaunchHeadless {
 		env[coordtransport.BackgroundEnv] = "1"
 	}
-	if s.hasParent(run.ID) {
-		env[coordtransport.SubsessionEnv] = "1"
-	}
 	if run.Mode.Interactive() || run.ACP {
 		argv = wrapTUICommand(argv)
 	}
