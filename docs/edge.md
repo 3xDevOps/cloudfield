@@ -1194,9 +1194,10 @@ token's and session's sign-in origin when it is issued; for a device token or
 session issued earlier, the origin it is next used at, on the API or through the
 relay, and for a device sign-in started earlier and completed while recording,
 the origin it completes at, each marked as first seen there; a connector request
-at most once an hour per server and relay origin, when a connected server is
-sent it. Connector counts include requests that were refused or carried no
-valid token. `--json` prints `"status": "not_recorded"` with the schema below
+at most once an hour per server and relay origin, when the edge sends it on to
+a connected, claimed server. Connector counts are those requests, which the
+server may still have refused, for example for carrying no valid token;
+requests the edge refused itself are not counted. `--json` prints `"status": "not_recorded"` with the schema below
 schema 2, and `"status": "recorded"` with the report otherwise.
 
 The report starts with the last known recording period: when it began, when the

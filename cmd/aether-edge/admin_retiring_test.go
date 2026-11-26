@@ -343,3 +343,23 @@ func TestRetiringQuotesNames(t *testing.T) {
 		t.Fatalf("JSON report with a bidi control in a name:\n%s%v", out, err)
 	}
 }
+
+// TestRetiringCleanStopAfterClockStep reports a run that stopped cleanly
+// at a time before its start, as after the clock stepped back, as stopped.
+func TestRetiringCleanStopAfterClockStep(t *testing.T) {
+	dir := retiringEdge(t, map[string]string{pairRelayA: pairSigninA})
+	s, err := edgestore.Open(filepath.Join(dir, "edge.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.StopRecording(context.Background(), recordingSince.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runRetiring(t, dir)
+	if want := "last known recording period: since 2026-11-01T00:00:00Z, last started 2026-11-01T00:00:00Z; stopped cleanly 2026-10-31T23:00:00Z\n"; err != nil || !strings.HasPrefix(out, want) {
+		t.Fatalf("report after a clean stop before the start:\n%s%v\nwant it to start with:\n%s", out, err, want)
+	}
+}

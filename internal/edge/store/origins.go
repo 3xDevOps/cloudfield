@@ -204,8 +204,9 @@ type Unknown struct {
 
 // Report is who the edge saw on each origin pair it recorded, ordered by
 // relay origin. The last known recording period began at RecordingSince;
-// its last run started at RecordingStarted and, when RecordingStopped is
-// not before it, stopped cleanly then. Each is zero when unknown.
+// its last run started at RecordingStarted and stopped cleanly at
+// RecordingStopped, zero while it runs or after an unclean stop. Each is
+// zero when unknown.
 type Report struct {
 	RecordingSince   time.Time        `json:"recording_since"`
 	RecordingStarted time.Time        `json:"recording_started"`

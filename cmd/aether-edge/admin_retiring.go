@@ -25,7 +25,8 @@ option that retires a pair is set; a server that has not enrolled or been
 claimed since, and a device token or session not used since, have no origin;
 an older image run in between records nothing; and an unclaimed server has no
 row at all (aether_edge_servers_by_origin counts those connected now).
-Connector counts include requests that were refused or carried no valid token.
+Connector counts are requests the edge sent on to a connected, claimed server,
+which the server may still have refused; requests the edge refused are not.
 `
 
 // retiring prints who the edge last saw on each origin pair it recorded,
@@ -103,7 +104,7 @@ func retiring(args []string, getenv func(string) string, out io.Writer) error {
 		fmt.Fprintln(w, "no origin pairs recorded: the edge records them from its first start with an option that retires a pair") //nolint:errcheck // Flush reports it
 	} else {
 		end := "the edge is recording now, or stopped uncleanly"
-		if !rep.RecordingStopped.Before(rep.RecordingStarted) {
+		if !rep.RecordingStopped.IsZero() {
 			end = "stopped cleanly " + rep.RecordingStopped.Format(time.RFC3339)
 		}
 		fmt.Fprintf(w, "last known recording period: since %s, last started %s; %s\n", //nolint:errcheck // Flush reports it
