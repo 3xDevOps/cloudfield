@@ -142,9 +142,9 @@ func TestAgentListCountsAConsoleSignInOnTheMembersOwnAccountOnly(t *testing.T) {
 	s.cfg.Runs = &fakeRuns{}
 	loginFound := func(member, account domain.MemberID) bool {
 		t.Helper()
-		raw, err := json.Marshal(protocol.AgentListParams{AccountMemberID: string(account)})
-		if err != nil {
-			t.Fatal(err)
+		raw, marshalErr := json.Marshal(protocol.AgentListParams{AccountMemberID: string(account)})
+		if marshalErr != nil {
+			t.Fatal(marshalErr)
 		}
 		result, perr := s.agentList(ctx, member, raw)
 		if perr != nil {

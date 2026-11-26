@@ -107,7 +107,7 @@ func (m *Manager) claudeAPIKeyLogin(member domain.MemberID, home *os.Root) (*Own
 			PrimaryAPIKey string `json:"primaryApiKey"`
 		}
 		if len(data) > 0 {
-			if err := json.Unmarshal(data, &config); err != nil {
+			if err = json.Unmarshal(data, &config); err != nil {
 				return nil, fmt.Errorf("%s: %w", rel, err)
 			}
 		}
@@ -158,7 +158,7 @@ func anthropicProfileLogin(home *os.Root, now time.Time) (*OwnerLogin, error) {
 			Type string `json:"type"`
 		} `json:"authentication"`
 	}
-	if err := json.Unmarshal(config, &profile); err != nil {
+	if err = json.Unmarshal(config, &profile); err != nil {
 		return nil, fmt.Errorf("%s/configs/%s.json: %w", anthropicProfileDir, name, err)
 	}
 	if profile.Authentication.Type != "user_oauth" {
@@ -179,7 +179,7 @@ func anthropicProfileLogin(home *os.Root, now time.Time) (*OwnerLogin, error) {
 	if len(credentials) == 0 {
 		return nil, nil
 	}
-	if err := json.Unmarshal(credentials, &tokens); err != nil {
+	if err = json.Unmarshal(credentials, &tokens); err != nil {
 		return nil, fmt.Errorf("%s/%s: %w", anthropicProfileDir, rel, err)
 	}
 	renews := strings.TrimSpace(tokens.RefreshToken) != ""

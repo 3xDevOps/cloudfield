@@ -79,10 +79,10 @@ func TestReadReportsAConsoleSignInAsAPIBilling(t *testing.T) {
 				t.Fatal(err)
 			}
 			for rel, body := range tc.files {
-				if err := os.MkdirAll(filepath.Dir(filepath.Join(home, rel)), 0o700); err != nil {
+				if err = os.MkdirAll(filepath.Dir(filepath.Join(home, rel)), 0o700); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(filepath.Join(home, rel), []byte(body), 0o600); err != nil {
+				if err = os.WriteFile(filepath.Join(home, rel), []byte(body), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
