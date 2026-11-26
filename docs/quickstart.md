@@ -434,6 +434,9 @@ From the CLI, on your computer:
 
 - `cloudfield message <session-id> "also update the README"` messages the agent and
   prints the receipt (`delivered`, or `queued` for the member in control).
+  Before the session id, `--attach <path>` sends a file with it and `--steer`
+  adds it to an Enhanced agent's running turn
+  ([Messages and notes](terminal.md#messages-and-notes)).
 - `cloudfield logs <session-id>` prints what the agent did as plain text.
 - `cloudfield attach <session-id>` attaches your terminal to a Standard session's agent.
   Every key, Ctrl-C included, goes to the agent; close the terminal to detach,

@@ -2,10 +2,17 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/json"
+	"io"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/testhome"
 )
 
 func TestMessagePrintsTheReceipt(t *testing.T) {
@@ -26,7 +33,7 @@ func TestMessagePrintsTheReceipt(t *testing.T) {
 	} {
 		c := fakeControlMethods(t, map[string]*fakeReply{protocol.MethodRunInject: {result: protocol.RunRoomPostResult{Message: tc.message}}})
 		var out bytes.Buffer
-		err := sendMessage(c, &out, "r1", "hi", "k-1")
+		err := sendMessage(c, &out, "r1", "hi", nil, false, "k-1")
 		if tc.err != "" {
 			if err == nil || err.Error() != tc.err {
 				t.Errorf("%s message: error %v, want %q", tc.message.State, err, tc.err)
@@ -35,6 +42,60 @@ func TestMessagePrintsTheReceipt(t *testing.T) {
 		}
 		if err != nil || out.String() != tc.out {
 			t.Errorf("%s message: printed %q (%v), want %q", tc.message.State, out.String(), err, tc.out)
+		}
+	}
+}
+
+func TestMessageSteersAndAttachesUploadedFiles(t *testing.T) {
+	dir := t.TempDir()
+	shot, notes := filepath.Join(dir, "shot.png"), filepath.Join(dir, "notes.txt")
+	png, text := []byte("\x89PNG\r\n\x1a\npixels"), []byte("line one\n")
+	if err := os.WriteFile(shot, png, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(notes, text, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const imageRef, fileRef = "/root/.aether/terminal-images/a.png", "/root/.aether/terminal-files/b/notes.txt"
+	replies := map[string]*fakeReply{
+		protocol.MethodTerminalImage: {result: protocol.TerminalUploadResult{Path: imageRef}},
+		protocol.MethodTerminalFile:  {result: protocol.TerminalUploadResult{Path: fileRef}},
+		protocol.MethodRunInject:     {result: protocol.RunRoomPostResult{Message: protocol.RoomMessage{ID: "m1", State: protocol.RoomMessageSent}}},
+	}
+	if err := sendMessage(fakeControlMethods(t, replies), io.Discard, "r1", "look", []string{shot, notes}, true, "k-1"); err != nil {
+		t.Fatal(err)
+	}
+	for method, want := range map[string]any{
+		protocol.MethodTerminalImage: protocol.TerminalImageParams{RunID: "r1", Content: base64.StdEncoding.EncodeToString(png)},
+		protocol.MethodTerminalFile:  protocol.TerminalFileParams{RunID: "r1", Name: "notes.txt", Content: base64.StdEncoding.EncodeToString(text)},
+		protocol.MethodRunInject: protocol.RunInjectParams{RunID: "r1", Message: "look", Attachments: []string{imageRef, fileRef},
+			IdempotencyKey: "k-1", Steer: true},
+	} {
+		wantJSON, err := json.Marshal(want)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := replies[method].params(); string(got) != string(wantJSON) {
+			t.Errorf("%s params = %s, want %s", method, got, wantJSON)
+		}
+	}
+}
+
+func TestMessageRefusesAttachmentsItCannotSendBeforeDialing(t *testing.T) {
+	testhome.Isolate(t)
+	big := filepath.Join(t.TempDir(), "big.bin")
+	if err := os.WriteFile(big, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(big, configMaxFileBytes+1); err != nil {
+		t.Fatal(err)
+	}
+	for want, args := range map[string][]string{
+		"big.bin: 67108865 bytes is over the 64 MiB limit": {"--attach", big, "r1", "hi"},
+		"message: 9 files attached, at most 8":             append(slices.Repeat([]string{"--attach", big}, 9), "r1"),
+	} {
+		if err := runMessage(args); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("message %v = %v, want %q", args, err, want)
 		}
 	}
 }

@@ -305,6 +305,11 @@ went unread for an hour), and 124 on
 timeout. `cloudfield sessions <session-id>` shows what a session needs, each
 with the command that answers it.
 
+`cloudfield message --attach <path> <session-id> "<text>"` sends a file from
+this computer with the message, and `--steer` adds the message to an Enhanced
+agent's running turn instead of queueing it. Both flags go before the session
+id: every word after it is the message.
+
 A permission request is the human's: show it with its options, and run the
 `cloudfield answer <session-id> <request-id> <option-id>` they pick. It allows or
 rejects once, never always. Relay a session's question to the human unless the
