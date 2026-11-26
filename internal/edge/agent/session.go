@@ -272,7 +272,7 @@ func (a *Agent) session(ctx context.Context) (time.Duration, error) {
 	if err = a.setEdgeState(ready.State); err != nil {
 		return time.Since(start), err
 	}
-	if err = a.state.writeNotices(StoredNotices{Received: start, FirstUse: e.pinned, Notices: e.notices}); err != nil {
+	if err = a.state.writeNotices(ready.EdgeKey, StoredNotices{Received: start, FirstUse: e.pinned, Notices: e.notices}); err != nil {
 		return time.Since(start), err
 	}
 	if err = a.reconcileOwner(s, ready.State); err != nil {

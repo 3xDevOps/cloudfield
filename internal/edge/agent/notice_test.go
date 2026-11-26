@@ -132,7 +132,7 @@ func TestNoticesDoNotSurviveAPin(t *testing.T) {
 		if err := s.Pin(key); err != nil {
 			t.Fatal(err)
 		}
-		if err := s.writeNotices(n); err != nil {
+		if err := s.writeNotices(key, n); err != nil {
 			t.Fatal(err)
 		}
 		if got, err := s.Notices(); err != nil || !slices.Equal(got.Notices, n.Notices) {
@@ -147,6 +147,43 @@ func TestNoticesDoNotSurviveAPin(t *testing.T) {
 		if got, err := s.Notices(); err != nil || got.Notices != nil {
 			t.Fatalf("notices after pinning %x: %+v, %v", again[:4], got, err)
 		}
+	}
+}
+
+// TestNoticesOfAnEarlierPinAreNotWritten writes, after another key was
+// pinned, notices verified under the key before: the new key's store
+// stays empty, and so does the first key's once pinned again.
+func TestNoticesOfAnEarlierPinAreNotWritten(t *testing.T) {
+	s := OpenState(t.TempDir())
+	a, _, _ := ed25519.GenerateKey(rand.Reader)
+	b, _, _ := ed25519.GenerateKey(rand.Reader)
+	n := StoredNotices{Received: time.Now().UTC(), Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: "https://edge.example.test", Replacement: "https://edge2.example.test"}}}
+	if err := s.Pin(b); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.writeNotices(b, n); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Pin(a); err != nil {
+		t.Fatal(err)
+	}
+	// The enrollment verified under a; edge trust pins b before its write.
+	if err := s.Pin(b); err != nil {
+		t.Fatal(err)
+	}
+	for _, late := range []StoredNotices{n, {Received: n.Received}} {
+		if err := s.writeNotices(a, late); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := s.Notices(); err != nil || got.Notices != nil {
+			t.Fatalf("store of the key pinned since, after a late write of %d notices: %+v, %v", len(late.Notices), got, err)
+		}
+	}
+	if err := s.Pin(a); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.Notices(); err != nil || got.Notices != nil {
+		t.Fatalf("store of the first key pinned again: %+v, %v", got, err)
 	}
 }
 

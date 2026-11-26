@@ -139,20 +139,23 @@ func (s *State) PinnedKey() (ed25519.PublicKey, error) {
 	return p.Key, nil
 }
 
-// Pin replaces the pinned edge key and forgets the notices stored for
-// it: none survives a change of pin.
+// Pin replaces the pinned edge key. It first deletes the notices stored
+// for key, so none survives a change of pin; those of the key it replaces
+// stay on disk and are read again only if that key is pinned, which
+// deletes them first.
 func (s *State) Pin(key ed25519.PublicKey) error {
 	if len(key) != ed25519.PublicKeySize {
 		return fmt.Errorf("edgeagent: edge key is %d bytes, want %d", len(key), ed25519.PublicKeySize)
 	}
-	if err := s.write(pinFile, pin{Key: key}); err != nil {
-		return err
-	}
-	name, err := s.keyFile(noticesFile)
+	unlock, err := s.lock()
 	if err != nil {
 		return err
 	}
-	return s.remove(name)
+	defer unlock()
+	if err := s.remove(keyDirFile(key, noticesFile)); err != nil {
+		return err
+	}
+	return s.write(pinFile, pin{Key: key})
 }
 
 // refuseEarlierPins refuses a first pin while an edge key pinned by a
@@ -218,8 +221,13 @@ func (s *State) keyFile(file string) (string, error) {
 	if err != nil || key == nil {
 		return "", err
 	}
+	return keyDirFile(key, file), nil
+}
+
+// keyDirFile is file in key's directory.
+func keyDirFile(key ed25519.PublicKey, file string) string {
 	id := strings.NewReplacer("+", "-", "/", "_").Replace(strings.TrimPrefix(edgeproto.EdgeKeyFingerprint(key), "SHA256:"))
-	return filepath.Join(keysDir, "sha256-"+id, file), nil
+	return filepath.Join(keysDir, "sha256-"+id, file)
 }
 
 type edgeStateRecord struct {
@@ -284,21 +292,20 @@ func (s *State) Notices() (StoredNotices, error) {
 	return n, err
 }
 
-// writeNotices replaces the stored notices of the pinned key with n, and
-// forgets them when n holds none.
-func (s *State) writeNotices(n StoredNotices) error {
+// writeNotices replaces the stored notices of key, which verified them,
+// with n, and forgets them when n holds none. It writes nothing once
+// another key is pinned: the notices are not that key's.
+func (s *State) writeNotices(key ed25519.PublicKey, n StoredNotices) error {
 	unlock, err := s.lock()
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	name, err := s.keyFile(noticesFile)
-	if err != nil {
+	pinned, err := s.PinnedKey()
+	if err != nil || !pinned.Equal(key) {
 		return err
 	}
-	if name == "" {
-		return errors.New("edgeagent: no edge key is pinned, so no notices can be recorded")
-	}
+	name := keyDirFile(key, noticesFile)
 	if len(n.Notices) == 0 {
 		return s.remove(name)
 	}
