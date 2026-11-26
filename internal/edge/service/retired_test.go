@@ -483,8 +483,8 @@ func TestNoticeCap(t *testing.T) {
 }
 
 // restartRetiring closes h's edge and starts one on its data directory
-// that serves the first pair and retires retired.
-func (h *harness) restartRetiring(t *testing.T, retired ...Retired) (*Service, error) {
+// that serves the first pair and retires retired, returning New's error.
+func (h *harness) restartRetiring(t *testing.T, retired ...Retired) error {
 	t.Helper()
 	if err := h.svc.Close(); err != nil {
 		t.Fatal(err)
@@ -494,7 +494,7 @@ func (h *harness) restartRetiring(t *testing.T, retired ...Retired) (*Service, e
 	if svc != nil {
 		t.Cleanup(func() { _ = svc.Close() })
 	}
-	return svc, err
+	return err
 }
 
 // TestRetiredDeletesByHost deletes every row whose recorded sign-in
@@ -512,7 +512,7 @@ func TestRetiredDeletesByHost(t *testing.T) {
 		h.exec(t, `INSERT INTO web_sessions (id, token_hash, account_id, created_at, expires_at, signin_origin)
 			SELECT ?, ?, account_id, created_at, expires_at, ? FROM web_sessions LIMIT 1`, fmt.Sprintf("sess-%d", i), fmt.Sprintf("hash-%d", i), origin)
 	}
-	if _, err := h.restartRetiring(t, Retired{SigninOrigin: testSignin2, RelayOrigin: testRelay2, Replacement: testRelay},
+	if err := h.restartRetiring(t, Retired{SigninOrigin: testSignin2, RelayOrigin: testRelay2, Replacement: testRelay},
 		Retired{SigninOrigin: "https://[2001:db8::1]", RelayOrigin: "https://[2001:db8::2]", Replacement: testRelay}); err != nil {
 		t.Fatal(err)
 	}
@@ -533,7 +533,7 @@ func TestRetiredRefusedWithoutRecording(t *testing.T) {
 	b := h.browser(t)
 	b.signIn(t)
 	startDevice(t, h)
-	_, err := h.restartRetiring(t, Retired{SigninOrigin: testSignin2, RelayOrigin: testRelay2, Replacement: testRelay})
+	err := h.restartRetiring(t, Retired{SigninOrigin: testSignin2, RelayOrigin: testRelay2, Replacement: testRelay})
 	want := "edge: --retired-pairs would delete, on every pair, the sign-ins with no recorded origin (device tokens 0, browser sessions 1, " +
 		"pending device sign-ins 1), since this edge has never recorded which pair issued them. Run it first with --retiring-pairs naming the pair, for as long as you give " +
 		"people to move, such as 30 days: each token or session used in that time is recorded and kept. A shorter run lets this start pass " +
@@ -545,7 +545,7 @@ func TestRetiredRefusedWithoutRecording(t *testing.T) {
 		t.Errorf("the refused start deleted sessions: %s left", got)
 	}
 	h = newPairsHarness(t)
-	if _, err = h.restartRetiring(t, Retired{SigninOrigin: testSignin2, RelayOrigin: testRelay2, Replacement: testRelay}); err != nil {
+	if err = h.restartRetiring(t, Retired{SigninOrigin: testSignin2, RelayOrigin: testRelay2, Replacement: testRelay}); err != nil {
 		t.Errorf("never recorded, nothing to delete: %v", err)
 	}
 }
@@ -564,7 +564,7 @@ func TestRetiredContradictsRecordedPair(t *testing.T) {
 			"edge: --retired-pairs pairs " + testRelay2 + " with https://signin9.example.test, but the edge served it with the sign-in origin " + testSignin2 + ": name that one"},
 	} {
 		h := newRecordingHarness(t)
-		if _, err := h.restartRetiring(t, tt.retired); err == nil || err.Error() != tt.want {
+		if err := h.restartRetiring(t, tt.retired); err == nil || err.Error() != tt.want {
 			t.Errorf("%+v: %v, want %q", tt.retired, err, tt.want)
 		}
 	}
