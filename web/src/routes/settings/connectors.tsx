@@ -549,33 +549,30 @@ function Connectors({ client }: { client: Api }) {
             help={(
               <>
                 <span className="block">{scopeList(c)}</span>
-                {c.resource && <span className="block">{universal ? 'Universal URL' : c.notice ? <>Added at <Code>{c.resource}</Code></> : <>This server’s own URL, <Code>{c.resource}</Code></>}</span>}
+                {c.resource && <span className="block">{c.notice ? <>Added at <Code>{c.resource}</Code></> : universal ? 'Universal URL' : <>This server’s own URL, <Code>{c.resource}</Code></>}</span>}
                 Added <RelativeTime at={c.created_at} />
                 {' · '}{c.last_used_at ? <>last used <RelativeTime at={c.last_used_at} /></> : 'never used'}
               </>
             )}
             control={(
               <>
-                {(!c.notice || (c.notice.state === 'retired' && c.notice.url)) && <Button size="sm" variant="ghost" aria-label={`Reconnect ${label(c)}`} disabled={busy || target !== null} onClick={() => setConfirming({ connector: c, action: 'reconnect' })}>Reconnect</Button>}
+                {!c.notice && <Button size="sm" variant="ghost" aria-label={`Reconnect ${label(c)}`} disabled={busy || target !== null} onClick={() => setConfirming({ connector: c, action: 'reconnect' })}>Reconnect</Button>}
                 <Button size="sm" variant="ghost" aria-label={`Revoke ${label(c)}`} disabled={busy} onClick={() => setConfirming({ connector: c, action: 'revoke' })}>Revoke</Button>
               </>
             )}
           >
             {movable && <Button size="sm" variant="secondary" className="self-start" aria-label={`Move ${label(c)} to the universal URL`} disabled={busy || target !== null} onClick={() => setConfirming({ connector: c, action: 'move' })}>Move to the universal URL</Button>}
             {c.notice?.state === 'retiring' && (
-              <Callout
-                tone="needs-you"
-                title={`This address is retiring${c.notice.date ? ` on ${c.notice.date}` : ''}`}
-                actions={c.notice.url && <Button size="sm" variant="secondary" aria-label={`Move ${label(c)} to the new address`} disabled={busy || target !== null} onClick={() => setConfirming({ connector: c, action: 'move' })}>Move to the new address</Button>}
-              >
+              <Callout tone="needs-you" title={`This address is retiring${c.notice.date ? ` on ${c.notice.date}` : ''}`}>
                 {c.notice.url
                   ? (
                       <div className="flex min-w-0 flex-col gap-1.5">
-                        <p>Select <strong>Move to the new address</strong>, add it again in {c.client_name} at this URL and remove the old connector there. This one is revoked once the new one calls Cloudfield.</p>
+                        <p>First select <strong>Move to the new address</strong>, then add it again in {c.client_name} at this URL and remove the old connector there. This one is revoked once the new one calls Cloudfield.</p>
+                        <Button size="sm" variant="secondary" className="self-start" aria-label={`Move ${label(c)} to the new address`} disabled={busy || target !== null} onClick={() => setConfirming({ connector: c, action: 'move' })}>Move to the new address</Button>
                         <CopyableCommand command={c.notice.url} />
                       </div>
                     )
-                  : <p>This server does not take connectors at the new address yet. Ask its admin where to add it again.</p>}
+                  : <p>It keeps working until then. This server does not take connectors at the new address yet; ask its admin where to add it again.</p>}
               </Callout>
             )}
             {c.notice?.state === 'retired' && (
@@ -583,7 +580,8 @@ function Connectors({ client }: { client: Api }) {
                 {c.notice.url
                   ? (
                       <div className="flex min-w-0 flex-col gap-1.5">
-                        <p>This connector no longer works. <strong>Reconnect</strong> adds it again at this URL and revokes this one once the new one calls Cloudfield; remove the old connector in {c.client_name} too.</p>
+                        <p>This connector no longer works. First select <strong>Reconnect</strong>, then add it again in {c.client_name} at this URL and remove the old connector there. This one is revoked once the new one calls Cloudfield.</p>
+                        <Button size="sm" variant="secondary" className="self-start" aria-label={`Reconnect ${label(c)}`} disabled={busy || target !== null} onClick={() => setConfirming({ connector: c, action: 'reconnect' })}>Reconnect</Button>
                         <CopyableCommand command={c.notice.url} />
                       </div>
                     )
