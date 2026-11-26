@@ -43,11 +43,11 @@ func TestConsentPageAtRetiringAddress(t *testing.T) {
 	}{
 		{"no notice", edgeagent.StoredNotices{}, ""},
 		{"retiring with a date", stored(false, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: newRelay, Date: "2027-03-01"}),
-			`<p class="retiring">This address is retiring on <time>2027-03-01</time>. Add the connector at <code>` + newRelay + path + `</code> instead.</p>`},
+			`<p class="retiring">This address is retiring on <time>2027-03-01</time>. Add the connector at <code>` + newRelay + path + `</code> instead. Connecting here still works until it is retired.</p>`},
 		{"retiring without a date", stored(false, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: newRelay}),
-			`<p class="retiring">This address is retiring. Add the connector at <code>` + newRelay + path + `</code> instead.</p>`},
+			`<p class="retiring">This address is retiring. Add the connector at <code>` + newRelay + path + `</code> instead. Connecting here still works until it is retired.</p>`},
 		{"first use", stored(true, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: newRelay}),
-			`<p class="retiring">This address is retiring. Add the connector at <code>` + newRelay + path + `</code> instead.</p>`},
+			`<p class="retiring">This address is retiring. Add the connector at <code>` + newRelay + path + `</code> instead. Connecting here still works until it is retired.</p>`},
 		{"another address retiring", stored(false, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: oldRelay, Replacement: e.origin}), ""},
 		{"another address retired", stored(false, edgeproto.Notice{State: edgeproto.NoticeRetired, Origin: oldRelay, Replacement: e.origin}), ""},
 	} {

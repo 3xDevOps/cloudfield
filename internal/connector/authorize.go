@@ -639,7 +639,7 @@ button:hover{background:var(--accent-fill-hover)}
 <p class="error">{{.Error}}</p>
 {{else}}
 <h1>Connect <strong>{{.Client}}</strong> to <strong>{{.Server}}</strong>{{if .Member}} as <strong>{{.Member}}</strong>{{end}}</h1>
-{{with .Retiring}}<p class="retiring">This address is retiring{{with .Date}} on <time>{{.}}</time>{{end}}. Add the connector at <code>{{.URL}}</code> instead.</p>
+{{with .Retiring}}<p class="retiring">This address is retiring{{with .Date}} on <time>{{.}}</time>{{end}}. Add the connector at <code>{{.URL}}</code> instead. Connecting here still works until it is retired.</p>
 {{end}}<p>Server <strong>{{.Server}}</strong> <code>{{.ServerID}}</code>{{if .Member}}, member <strong>{{.Member}}</strong>{{end}}, client <strong>{{.Client}}</strong>.</p>
 <p>It acts as you. It can always list workspaces, agents and runs and read run history; every member can read every run on this server, so it can read all of them.</p>
 {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}

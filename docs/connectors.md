@@ -105,12 +105,13 @@ Connected:
 
 The new URL keeps the connector's path, `/mcp` or `/mcp/<server id>`. In
 Settings the connector shows **This address is retiring on 2027-03-01** with
-a **Move to the new address** button, which adds it again there and revokes
-the old one once the new one calls Cloudfield; a retired one shows **This
-address is retired**.
+the new URL to copy and a **Move to the new address** button, which adds it
+again there and revokes the old one once the new one calls Cloudfield. A
+retired one shows **This address is retired** with the URL to add it at.
 
 The consent page at a retiring address says `This address is retiring on
-2027-03-01. Add the connector at <url> instead.` and still connects. At most
+2027-03-01. Add the connector at <url> instead. Connecting here still works
+until it is retired.` At most
 once a day per connector, a tool result of a connector at a retiring address
 carries a second text block after the usual one:
 
