@@ -287,7 +287,7 @@ func (i EdgeInfo) Validate() error {
 }
 
 // UnmarshalJSON decodes an EdgeInfo, leaving Retiring and RetiringDate
-// empty when either is not a string: a notice an edge sends in a form
+// empty when either is present and not a string, null included: a notice an edge sends in a form
 // this build does not read never fails the rest.
 func (i *EdgeInfo) UnmarshalJSON(data []byte) error {
 	type plain EdgeInfo
@@ -307,9 +307,10 @@ func (i *EdgeInfo) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// optionalString decodes raw into s, true when raw is absent or a string.
+// optionalString decodes raw into s, true when raw is absent or a
+// string; null is neither.
 func optionalString(raw json.RawMessage, s *string) bool {
-	return raw == nil || json.Unmarshal(raw, s) == nil
+	return raw == nil || (raw[0] == '"' && json.Unmarshal(raw, s) == nil)
 }
 
 // RequestHost is the host name r names, lowercase, without a port or a

@@ -207,6 +207,7 @@ func TestEdgeInfoIgnoresANoticeOfAnotherType(t *testing.T) {
 	key := edgeKey(1).Public().(ed25519.PublicKey)
 	for _, extra := range []string{
 		`"retiring":5`, `"retiring":"https://edge2.example","retiring_date":20270301`, `"retiring":{"origin":"https://edge2.example"}`,
+		`"retiring":"https://edge2.example","retiring_date":null`, `"retiring":null,"retiring_date":"2027-03-01"`,
 	} {
 		base, err := json.Marshal(EdgeInfo{SigninOrigin: "https://auth.example", Key: key, Fingerprint: EdgeKeyFingerprint(key), Version: 6, MinVersion: 1})
 		if err != nil {
