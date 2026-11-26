@@ -22,7 +22,7 @@ func TestRenderRunsStripsControlCharacters(t *testing.T) {
 		Title:  "t\x1b]0;spoof\x07",
 		Task:   "x\r\x1b[2K",
 	}}
-	if err := renderRuns(&b, runs, func(string) string { return "m" }, map[string]string{}, false, false); err != nil {
+	if err := renderRuns(&b, runs, func(string) string { return "m" }, map[string]string{}, nil, false, false); err != nil {
 		t.Fatal(err)
 	}
 	if strings.ContainsAny(b.String(), "\x1b\x07\r") {

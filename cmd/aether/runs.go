@@ -1,12 +1,14 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -67,6 +69,21 @@ type runView struct {
 	AsleepSince *string `json:"asleep_since,omitempty"`
 	AsleepSaved bool    `json:"asleep_saved,omitempty"`
 	WakeError   string  `json:"wake_error,omitempty"`
+	// Agent and Mode are the values --agent and --mode take, not the wire's
+	// harness and mode.
+	Agent              string                   `json:"agent"`
+	Mode               string                   `json:"mode"`
+	Model              string                   `json:"model,omitempty"`
+	Effort             string                   `json:"effort,omitempty"`
+	ParentRunID        string                   `json:"parent_run_id,omitempty"`
+	RootRunID          string                   `json:"root_run_id,omitempty"`
+	ChildPurpose       string                   `json:"child_purpose,omitempty"`
+	Detached           bool                     `json:"detached,omitempty"`
+	Children           string                   `json:"children,omitempty"`
+	UnackedMessages    int                      `json:"unacked_messages"`
+	OldestUnackedAt    *string                  `json:"oldest_unacked_at,omitempty"`
+	WaitConditions     []protocol.WaitCondition `json:"wait_conditions,omitempty"`
+	ControllerMemberID string                   `json:"controller_member_id,omitempty"`
 }
 
 // pendingInput.Options are those aether answer accepts; a standard run's
@@ -87,6 +104,10 @@ func viewOf(r protocol.Run, workspace string, items []protocol.AttentionItem, re
 		ID: r.ID, WorkspaceID: r.WorkspaceID, Workspace: workspace, Status: displayStatus(r), State: r.Status,
 		Reason: r.Reason, Wait: r.Wait, WaitText: r.Wait.Text(time.Now()), Branch: r.Branch, PendingInputs: []pendingInput{},
 		AsleepSince: r.AsleepSince, AsleepSaved: r.AsleepSaved, WakeError: r.WakeError,
+		Agent: r.Harness, Mode: modeName(r.Mode), Model: r.Model, Effort: r.Effort,
+		ParentRunID: r.ParentRunID, RootRunID: r.RootRunID, ChildPurpose: r.ChildPurpose, Detached: r.Detached, Children: r.Children,
+		UnackedMessages: r.UnackedMessages, OldestUnackedAt: r.OldestUnackedAt,
+		WaitConditions: r.WaitConditions, ControllerMemberID: r.ControllerMemberID,
 	}
 	offered := map[string][]protocol.AttentionOption{}
 	for _, it := range items {
@@ -207,7 +228,7 @@ func statusLine(v runView) string {
 	return line
 }
 
-func printRunView(w io.Writer, v runView, items []protocol.AttentionItem) error {
+func printRunView(w io.Writer, v runView, items []protocol.AttentionItem, controller string) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
 	_, _ = fmt.Fprintf(tw, "run\t%s\n", v.ID)
 	_, _ = fmt.Fprintf(tw, "status\t%s\n", v.Status)
@@ -234,6 +255,20 @@ func printRunView(w io.Writer, v runView, items []protocol.AttentionItem) error 
 	_, _ = fmt.Fprintf(tw, "workspace\t%s (%s)\n", v.Workspace, v.WorkspaceID)
 	_, _ = fmt.Fprintf(tw, "branch\t%s\n", v.Branch)
 	_, _ = fmt.Fprintf(tw, "state\t%s\n", v.State)
+	_, _ = fmt.Fprintf(tw, "agent\t%s\n", v.Agent)
+	_, _ = fmt.Fprintf(tw, "mode\t%s\n", v.Mode)
+	if v.ParentRunID != "" {
+		_, _ = fmt.Fprintf(tw, "parent\t%s\n", v.ParentRunID)
+	}
+	if v.OldestUnackedAt != nil {
+		_, _ = fmt.Fprintf(tw, "mail\t%d not acknowledged, oldest sent %s\n", v.UnackedMessages, *v.OldestUnackedAt)
+	}
+	if controller != "" {
+		_, _ = fmt.Fprintf(tw, "controller\t%s\n", controller)
+	}
+	for _, wc := range v.WaitConditions {
+		_, _ = fmt.Fprintf(tw, "until\t%s %s %s\n", wc.ID, wc.Spec, cmp.Or(wc.Outcome, wc.State))
+	}
 	if v.Report != nil {
 		_, _ = fmt.Fprintf(tw, "report\t%s: %s\n", v.Report.Outcome, printable(v.Report.Summary))
 	}
@@ -263,7 +298,11 @@ func runShow(runID string, asJSON bool) error {
 		if asJSON {
 			return writeJSON(os.Stdout, v)
 		}
-		return printRunView(os.Stdout, v, items)
+		names, err := memberNames(c)
+		if err != nil {
+			return err
+		}
+		return printRunView(os.Stdout, v, items, nameOrID(names, v.ControllerMemberID))
 	})
 }
 
@@ -290,12 +329,14 @@ func plural(n int, noun string) string {
 	return fmt.Sprintf("%d %ss are", n, noun)
 }
 
-// renderRuns writes the table, filtering archived runs independently of status.
-func renderRuns(w io.Writer, runs []protocol.Run, memberName func(string) string, overlapOf map[string]string, onlyNeedsYou, archived bool) error {
+// renderRuns writes the table, filtering archived runs independently of
+// status, then what items asks of each listed run.
+func renderRuns(w io.Writer, runs []protocol.Run, memberName func(string) string, overlapOf map[string]string, items []protocol.AttentionItem, onlyNeedsYou, archived bool) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "ID\tSTATUS\tAGENT\tMEMBER\tACCOUNT\tOVERLAP\tTITLE\tTASK"); err != nil {
+	if _, err := fmt.Fprintln(tw, "ID\tSTATUS\tAGENT\tMODE\tMEMBER\tACCOUNT\tPARENT\tMAIL\tOVERLAP\tTITLE\tTASK"); err != nil {
 		return err
 	}
+	var needs strings.Builder
 	for _, r := range runs {
 		if (r.ArchivedAt != nil) != archived {
 			continue
@@ -317,12 +358,26 @@ func renderRuns(w io.Writer, runs []protocol.Run, memberName func(string) string
 		if r.AsleepSince != nil {
 			status += " (asleep)"
 		}
-		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-			r.ID, status, r.Harness, memberName(r.MemberID), account, overlapOf[r.ID], title, task); err != nil {
+		mail := ""
+		if r.UnackedMessages > 0 {
+			mail = strconv.Itoa(r.UnackedMessages)
+		}
+		if _, err := fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			r.ID, status, r.Harness, modeName(r.Mode), memberName(r.MemberID), account, r.ParentRunID, mail, overlapOf[r.ID], title, task); err != nil {
+			return err
+		}
+		if err := printNeeds(&needs, r.ID, items); err != nil {
 			return err
 		}
 	}
-	return tw.Flush()
+	if err := tw.Flush(); err != nil {
+		return err
+	}
+	if needs.Len() == 0 {
+		return nil
+	}
+	_, err := fmt.Fprint(w, "\n", needs.String())
+	return err
 }
 
 // displayStatus is the dashboard's label for a live run's state, else for
@@ -382,9 +437,9 @@ var statusLabels = map[domain.RunStatus]string{
 
 func runRuns(args []string) error {
 	fs := newFlagSet("sessions")
-	onlyNeedsYou := fs.Bool("needs-you", false, "list only sessions that need you (state needs-you or disconnected, or an unseen failure; never paused, never a finished session awaiting review)")
+	onlyNeedsYou := fs.Bool("needs-you", false, "list only sessions that need you (state needs-you or disconnected, or an unseen failure; never paused, never a finished session awaiting review), then what each needs with the command that answers it")
 	archived := fs.Bool("archived", false, "list only archived sessions")
-	asJSON := fs.Bool("json", false, "print a JSON array, or with a session id one JSON object: id, workspace_id, workspace, status, state, reason, pending_inputs, branch, report")
+	asJSON := fs.Bool("json", false, "print a JSON array, or with a session id one JSON object: id, workspace_id, workspace, status, state, reason, pending_inputs, branch, report, agent, mode, parent_run_id, unacked_messages, wait_conditions, controller_member_id")
 	runID := ""
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		runID, args = args[0], args[1:]
@@ -460,7 +515,14 @@ func runRuns(args []string) error {
 				waiting++
 			}
 		}
-		if err := renderRuns(os.Stdout, rl.Runs, memberName, overlapOf, *onlyNeedsYou, *archived); err != nil {
+		var items []protocol.AttentionItem
+		if *onlyNeedsYou {
+			var err error
+			if items, err = attentionItems(c, ""); err != nil {
+				return err
+			}
+		}
+		if err := renderRuns(os.Stdout, rl.Runs, memberName, overlapOf, items, *onlyNeedsYou, *archived); err != nil {
 			return err
 		}
 		// The notice goes to stderr so it never lands in a pipeline reading

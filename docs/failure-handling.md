@@ -104,6 +104,9 @@ condition under **Waiting until** with what the server last read, when it
 checks next, its failures and whether the wake reached the agent, and
 **Cancel** ends a pending one
 ([dashboard-frontend.md](dashboard-frontend.md#details)).
+`cloudfield sessions <session-id>` prints each condition as an `until` line
+with its id, its spec and `pending` or how it ended, and `--json` carries them
+whole as `wait_conditions`.
 
 A broken wait is the only one that needs you, because only then can nothing
 but a person move the session. While another of its conditions is still pending

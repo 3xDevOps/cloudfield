@@ -494,6 +494,8 @@ backward from `before_seq` (zero: the log head; pass the previous page's
 addressed to the session. A session snapshot's
 `unacked_messages` counts mail addressed to the session that it has not
 acknowledged, and `oldest_unacked_at` is when the oldest of it was sent.
+`cloudfield sessions` shows the count in its `MAIL` column, and `cloudfield
+sessions <session-id>` shows both on its `mail` line.
 
 Mail stays as history until its session is explicitly deleted, including through
 workspace deletion. When a session's sandbox is released, mail it never

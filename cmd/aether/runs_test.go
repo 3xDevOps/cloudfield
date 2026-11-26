@@ -17,10 +17,11 @@ import (
 func TestRenderRuns(t *testing.T) {
 	archivedAt := "2026-09-10T00:00:00Z"
 	runs := []protocol.Run{
-		{ID: "r1", Status: "running", Activity: "working", Harness: "claude", MemberID: "m1", AccountMemberID: "m1", Title: "Title one", Task: "task one"},
-		{ID: "r2", Status: "needs-attention", Activity: "needs-you", Harness: "claude", MemberID: "m2", AccountMemberID: "m1", RequestedAccountMemberID: "m2",
+		{ID: "r1", Status: "running", Activity: "working", Harness: "claude", Mode: "tui", MemberID: "m1", AccountMemberID: "m1", Title: "Title one", Task: "task one"},
+		{ID: "r2", Status: "needs-attention", Activity: "needs-you", Harness: "claude", Mode: "acp", MemberID: "m2", AccountMemberID: "m1", RequestedAccountMemberID: "m2",
 			Title: "Title two", Task: "task two"},
-		{ID: "r4", Status: "needs-attention", Activity: "waiting-agents", Harness: "claude", MemberID: "m1", AccountMemberID: "m1", Title: "Integrate", Task: "task four"},
+		{ID: "r4", Status: "needs-attention", Activity: "waiting-agents", Harness: "claude", Mode: "headless", UnackedMessages: 2, MemberID: "m1", AccountMemberID: "m1",
+			Title: "Integrate", Task: "task four"},
 		{ID: "r6", Status: "needs-attention", Activity: "failed", OutcomeUnseen: true, Harness: "claude", MemberID: "m1", AccountMemberID: "m1", Title: "Parked", Task: "task six"},
 		{ID: "r7", Status: "failed", Harness: "claude", MemberID: "m1", AccountMemberID: "m1", Title: "Ended", Task: "task seven"},
 		{ID: "r8", Status: "needs-attention", Activity: "finished", Review: "ready", Harness: "claude", MemberID: "m1", AccountMemberID: "m1", Title: "Done", Task: "task eight"},
@@ -41,9 +42,12 @@ func TestRenderRuns(t *testing.T) {
 	}
 	memberName := func(id string) string { return id }
 	overlapOf := map[string]string{"r2": "a.go with bob"}
+	asked := permissionItem()
+	asked.RunID = "r2"
 
 	cases := []struct {
 		name     string
+		items    []protocol.AttentionItem
 		needsYou bool
 		archived bool
 		want     string
@@ -51,29 +55,40 @@ func TestRenderRuns(t *testing.T) {
 	}{
 		{
 			name: "default hides archived sessions",
-			want: "ID   STATUS                           AGENT   MEMBER  ACCOUNT        OVERLAP        TITLE      TASK\n" +
-				"r1   Working                          claude  m1      m1                            Title one  task one\n" +
-				"r2   Needs you                        claude  m2      m1 (fallback)  a.go with bob  Title two  task two\n" +
-				"r4   Waiting for agents               claude  m1      m1                            Integrate  task four\n" +
-				"r6   Failed                           claude  m1      m1                            Parked     task six\n" +
-				"r7   Failed                           claude  m1      m1                            Ended      task seven\n" +
-				"r8   Finished: review                 claude  m1      m1                            Done       task eight\n" +
-				"r9   Finished: review                 claude  m1      m1                            Later      task nine\n" +
-				"r10  Waiting for CI (status unknown)  claude  m1      m1                            CI         task ten\n" +
-				"r11  Waiting                          claude  m1      m1                            Legacy     task eleven\n" +
-				"r12  Waiting                          claude  m1      m1                            Parked     task twelve\n" +
-				"r13  Needs you                        claude  m1      m1                            Blocked    task thirteen\n" +
-				"r14  Needs you                        claude  m1      m1                            Paused     task fourteen\n" +
-				"r15  Answered                         claude  m1      m1                            Q&A        task fifteen\n" +
-				"r16  Waiting for process              claude  m1      m1                            Build      task sixteen\n" +
-				"r17  Waiting for CI                   claude  m1      m1                            Sub        task seventeen\n" +
-				"r18  Failed                           claude  m1      m1                            Held       task eighteen\n" +
-				"r19  Failed                           claude  m1      m1                            Detached   task nineteen\n",
+			want: "ID   STATUS                           AGENT   MODE        MEMBER  ACCOUNT        PARENT  MAIL  OVERLAP        TITLE      TASK\n" +
+				"r1   Working                          claude  standard    m1      m1                                          Title one  task one\n" +
+				"r2   Needs you                        claude  enhanced    m2      m1 (fallback)                a.go with bob  Title two  task two\n" +
+				"r4   Waiting for agents               claude  background  m1      m1                     2                    Integrate  task four\n" +
+				"r6   Failed                           claude              m1      m1                                          Parked     task six\n" +
+				"r7   Failed                           claude              m1      m1                                          Ended      task seven\n" +
+				"r8   Finished: review                 claude              m1      m1                                          Done       task eight\n" +
+				"r9   Finished: review                 claude              m1      m1                                          Later      task nine\n" +
+				"r10  Waiting for CI (status unknown)  claude              m1      m1                                          CI         task ten\n" +
+				"r11  Waiting                          claude              m1      m1                                          Legacy     task eleven\n" +
+				"r12  Waiting                          claude              m1      m1                                          Parked     task twelve\n" +
+				"r13  Needs you                        claude              m1      m1                                          Blocked    task thirteen\n" +
+				"r14  Needs you                        claude              m1      m1                                          Paused     task fourteen\n" +
+				"r15  Answered                         claude              m1      m1                                          Q&A        task fifteen\n" +
+				"r16  Waiting for process              claude              m1      m1                                          Build      task sixteen\n" +
+				"r17  Waiting for CI                   claude              m1      m1             r4                           Sub        task seventeen\n" +
+				"r18  Failed                           claude              m1      m1             r4                           Held       task eighteen\n" +
+				"r19  Failed                           claude              m1      m1             r4                           Detached   task nineteen\n",
 		},
 		{
-			name:     "--needs-you hides archived, waiting, worker, ended, finished and held subsession runs",
+			name:     "--needs-you hides archived, waiting, worker, ended, finished and held subsession runs, and ends with what the rest need",
+			items:    []protocol.AttentionItem{permissionItem(), asked, {Kind: protocol.AttentionKindBlocked, RunID: "r13", Reason: "blocked: no token"}},
 			needsYou: true,
-			wantIDs:  []string{"r2", "r6", "r13", "r19"},
+			want: "ID   STATUS     AGENT   MODE      MEMBER  ACCOUNT        PARENT  MAIL  OVERLAP        TITLE      TASK\n" +
+				"r2   Needs you  claude  enhanced  m2      m1 (fallback)                a.go with bob  Title two  task two\n" +
+				"r6   Failed     claude            m1      m1                                          Parked     task six\n" +
+				"r13  Needs you  claude            m1      m1                                          Blocked    task thirteen\n" +
+				"r19  Failed     claude            m1      m1             r4                           Detached   task nineteen\n" +
+				"\n" +
+				"r2 permission req-1: Run rm -rf build\n" +
+				"  aether answer r2 req-1 allow-1    # Allow once\n" +
+				"  aether answer r2 req-1 reject-1    # Reject\n" +
+				"r13 blocked: blocked: no token\n" +
+				"  aether message r13 \"<reply>\"\n",
 		},
 		{
 			name:     "--archived shows only archived sessions",
@@ -84,7 +99,7 @@ func TestRenderRuns(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			if err := renderRuns(&buf, runs, memberName, overlapOf, tc.needsYou, tc.archived); err != nil {
+			if err := renderRuns(&buf, runs, memberName, overlapOf, tc.items, tc.needsYou, tc.archived); err != nil {
 				t.Fatalf("renderRuns: %v", err)
 			}
 			if got := buf.String(); tc.want != "" && got != tc.want {
@@ -142,8 +157,12 @@ func TestRunViewShowsReportAndAnswerableOptions(t *testing.T) {
 			reportEvent(t, "r1", "failure", "older"), reportEvent(t, "r1", "blocked", "no build dir"),
 		}}},
 	})
+	oldest := "2026-11-26T10:00:00Z"
 	r := protocol.Run{ID: "r1", WorkspaceID: "ws1", Status: "needs-attention", Activity: "needs-you", Reason: "needs input: which build dir?",
-		Branch: "aether/run-x", PendingInputs: []domain.RunInputRequest{{ID: "req-1", Kind: "permission"}}}
+		Branch: "aether/run-x", PendingInputs: []domain.RunInputRequest{{ID: "req-1", Kind: "permission"}},
+		Harness: "claude", Mode: "acp", Model: "opus", ParentRunID: "r0", RootRunID: "r0", ChildPurpose: "fix the build", Children: "off",
+		UnackedMessages: 2, OldestUnackedAt: &oldest, ControllerMemberID: "m1",
+		WaitConditions: []protocol.WaitCondition{{ID: "wat-1", Spec: "pr:acme/app#7:checks", Kind: protocol.WaitKindPRChecks, State: "resolved", Outcome: "failed"}}}
 	items := []protocol.AttentionItem{permissionItem()}
 	v, err := runViewOf(c, r, items)
 	if err != nil {
@@ -165,20 +184,27 @@ func TestRunViewShowsReportAndAnswerableOptions(t *testing.T) {
 			map[string]any{"id": "reject-1", "label": "Reject", "kind": "reject_once"},
 		}}},
 		"report": map[string]any{"outcome": "blocked", "summary": "no build dir"},
+		"agent":  "claude", "mode": "enhanced", "model": "opus", "parent_run_id": "r0", "root_run_id": "r0", "child_purpose": "fix the build",
+		"children": "off", "unacked_messages": float64(2), "oldest_unacked_at": oldest, "controller_member_id": "m1",
+		"wait_conditions": []any{map[string]any{"id": "wat-1", "revision": float64(0), "spec": "pr:acme/app#7:checks", "kind": "pr_checks",
+			"state": "resolved", "outcome": "failed", "observed": map[string]any{}, "summary": "", "created_at": "",
+			"consecutive_failures": float64(0), "delivery_attempts": float64(0), "expires_at": ""}},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("runs <id> --json = %s\nwant %v", buf.String(), want)
 	}
 
 	buf.Reset()
-	if err := printRunView(&buf, v, items); err != nil {
+	if err := printRunView(&buf, v, items, "Ada"); err != nil {
 		t.Fatal(err)
 	}
 	text := buf.String()
-	if !strings.HasPrefix(text, "run        r1\nstatus     Needs you\nreason     needs input: which build dir?\n") {
+	if !strings.HasPrefix(text, "run         r1\nstatus      Needs you\nreason      needs input: which build dir?\n") {
 		t.Errorf("runs <id> = %q, want it to lead with the state and reason", text)
 	}
-	for _, line := range []string{"report     blocked: no build dir\n", "pending    permission req-1\n",
+	for _, line := range []string{"agent       claude\n", "mode        enhanced\n", "parent      r0\n",
+		"mail        2 not acknowledged, oldest sent 2026-11-26T10:00:00Z\n", "controller  Ada\n", "until       wat-1 pr:acme/app#7:checks failed\n",
+		"report      blocked: no build dir\n", "pending     permission req-1\n",
 		"r1 permission req-1: Run rm -rf build\n", "  aether answer r1 req-1 allow-1    # Allow once\n", "  aether answer r1 req-1 reject-1    # Reject\n"} {
 		if !strings.Contains(text, line) {
 			t.Errorf("runs <id> = %q, want the line %q", text, line)

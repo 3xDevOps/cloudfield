@@ -477,12 +477,12 @@ more than one workspace exists`. `cloudfield sessions` lists sessions from every
 
 | Command | What it does |
 | --- | --- |
-| `cloudfield sessions` | Every session you can see, colored by owner, with an overlap column. `--needs-you` lists only sessions that need you |
+| `cloudfield sessions` | Every session you can see, colored by owner, with its `MODE`, the `PARENT` of a subsession, the count of agent `MAIL` it has not acknowledged, and an `OVERLAP` column. `--needs-you` lists only sessions that need you |
 | `cloudfield who` | Who is online and which sessions they watch |
 | `cloudfield attach [--read-only] <session>` | Attach to a session's terminal. Several people can attach at once |
 | `cloudfield message <session> "..."` | Message a session's agent. It shows as a banner in your color |
 | `cloudfield pause`, `resume`, `kill <session>` | Suspend, thaw or stop a session. The checkout and transcript survive a kill |
-| `cloudfield sessions --needs-you` | Sessions waiting on you. `cloudfield sessions <session-id>` shows what one needs and the command that answers it |
+| `cloudfield sessions --needs-you` | Sessions waiting on you, then what each needs with the command that answers it. `cloudfield sessions <session-id>` shows that for one session, with its agent, mode, parent, unacknowledged mail, controller and wait conditions |
 | `cloudfield timeline` | The workspace history. `cloudfield timeline <session-id>` shows one session's. Filter with `--member`, `--type`, `--limit`. `--jsonl` exports |
 | `cloudfield changes` | Session changes since a cursor: status, reports, mail, pull requests and lifecycle. `--follow` keeps polling ([coordination.md](coordination.md#follow-changes-from-a-cursor)) |
 | `cloudfield cost --runs` | Token spend per member and run |
@@ -798,7 +798,8 @@ subsessions, because it still runs the previous owner's agent on their home;
 launch a session of your own to use them. The
 agent can pick your account or any account shared with you whose owner reaches
 the session's workspaces instead. The subsession appears under its parent in the
-dashboard, with its purpose, agent, model, account and state, and you open,
+dashboard, with its purpose, agent, model, account and state, and
+`cloudfield sessions` names its parent in the `PARENT` column. You open,
 message, take over or stop it like any session. Its result reaches the parent's
 inbox, as does a notice when it has sat idle or waiting for over an hour, or
 stopped on an error such as a signed-out login for a minute, so the parent can
