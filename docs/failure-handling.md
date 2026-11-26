@@ -649,8 +649,10 @@ binaries by hand as described in [install.md](install.md#upgrading).
 A workspace with a mirror refreshes it from the upstream before a launch, unless
 a refresh succeeded in the 10 seconds before: that launch starts from the
 commit the refresh accepted, so a commit pushed upstream in those seconds is
-not in it. The session records the time of the refresh it started from as
-`base_checked_at`. If the refresh fails, the launch is refused and no session is
+not in it. The dashboard refreshes the mirror when the launch panel opens and
+at most every 5 seconds while you edit the task, so a launch right after
+typing does not wait for the upstream. The session records the time of the
+refresh it started from as `base_checked_at`. If the refresh fails, the launch is refused and no session is
 created; Cloudfield never starts from an older accepted commit on its own. When
 an accepted commit exists, the CLI prints a one-off retry from it:
 

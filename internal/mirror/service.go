@@ -461,9 +461,11 @@ func (s *Service) PurgeWorkspace(ctx context.Context, workspace domain.Workspace
 	return nil
 }
 
-// Warm refreshes a configured mirror unless a Capture would already start
-// from its last refresh. A launch calls it before taking the locks its
-// Capture runs under, so those are not held across the fetch.
+// Warm refreshes a configured mirror unless its last refresh is in the first
+// half of captureFresh, so a Capture in the other half still starts from
+// it. A launch calls it before taking the locks its Capture runs under, so
+// those are not held across the fetch, and a client calls it while a member
+// prepares a launch.
 func (s *Service) Warm(ctx context.Context, workspace domain.WorkspaceID) error {
 	unlock := s.workspaceLock(workspace)
 	defer unlock()
@@ -477,22 +479,22 @@ func (s *Service) Warm(ctx context.Context, workspace domain.WorkspaceID) error 
 	if m.Status == domain.MirrorStatusDisabling {
 		return nil
 	}
-	if _, fresh := s.fresh(ctx, workspace, *m); fresh {
+	if _, fresh := s.fresh(ctx, workspace, *m, captureFresh/2); fresh {
 		return nil
 	}
 	_, err = s.refreshLocked(ctx, workspace, *m)
 	return err
 }
 
-// fresh reports when the source was last fetched, if that is recent enough
-// for a launch to start from the accepted commit.
-func (s *Service) fresh(ctx context.Context, workspace domain.WorkspaceID, m domain.WorkspaceMirror) (time.Time, bool) {
+// fresh reports when the source was last fetched, if that is less than
+// within ago and the accepted commit is still the base.
+func (s *Service) fresh(ctx context.Context, workspace domain.WorkspaceID, m domain.WorkspaceMirror, within time.Duration) (time.Time, bool) {
 	at, ok := s.fetched.Load(workspace)
 	if !ok || m.Status != domain.MirrorStatusReady || m.AcceptedCommit == "" {
 		return time.Time{}, false
 	}
 	fetched := at.(time.Time)
-	if age := s.now().Sub(fetched); age < 0 || age >= captureFresh {
+	if age := s.now().Sub(fetched); age < 0 || age >= within {
 		return time.Time{}, false
 	}
 	current, err := s.git.WorkspaceBranchCommit(ctx, workspace, m.Branch)
@@ -554,7 +556,7 @@ func (s *Service) Capture(ctx context.Context, workspace domain.WorkspaceID, cac
 		checked := s.now().UTC()
 		return captureResult(workspace, cachedCommit, m.Branch, m.SourceURL, checked, true, true), nil
 	}
-	if fetched, fresh := s.fresh(ctx, workspace, *m); fresh {
+	if fetched, fresh := s.fresh(ctx, workspace, *m, captureFresh); fresh {
 		return captureResult(workspace, m.AcceptedCommit, m.Branch, m.SourceURL, fetched, true, false), nil
 	}
 	// Refresh is called while this workspace lock is held; use the unlocked

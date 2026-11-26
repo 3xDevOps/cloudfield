@@ -1240,6 +1240,7 @@ The dashboard also calls these methods through the same route:
 | `workspace.mirror.refresh` | `WorkspaceMirrorParams` (`{"workspace_id":"..."}`) | `WorkspaceMirrorResult` after fetching the configured source branch |
 | `workspace.mirror.adopt` | `WorkspaceMirrorAdoptParams` (`{"workspace_id":"...","generation":7,"expected_commit":"<full-reviewed-sha>"}`; all fields required) | `WorkspaceMirrorResult` after explicitly accepting exactly the reviewed retained candidate |
 | `workspace.mirror.disable` | `WorkspaceMirrorParams` (`{"workspace_id":"..."}`) | `WorkspaceMirrorResult` with `enabled:false`; the workspace becomes local-only |
+| `workspace.mirror.warm` | `WorkspaceMirrorParams` (`{"workspace_id":"..."}`) | `{}`. For any member who may launch in the workspace. Fetches the configured source branch unless a fetch succeeded in the last 5 seconds, and does nothing in a workspace without a mirror, so a launch in the next seconds starts without fetching ([failure-handling.md](failure-handling.md#launch-and-mirror-failures)) |
 | `github.connect` | none | `GitHubConnectResult` (`{"login":"...","signing_key":"ssh-ed25519 ...","fingerprint":"SHA256:..."}`) - finishes the GitHub connection for the calling member |
 | `github.probe` | none | `GitHubProbeResult` (`{"status":"ok","version":"2.100.0","minimum":"2.81.0","detail":"gh version 2.100.0 (2026-09-03)\nhttps://github.com/cli/cli/releases/tag/v2.100.0","image":"ghcr.io/3xdevops/aether-standard:v0.2.0-alpha.7"}`) - the gh in the calling member's environment terminal |
 | `github.oauth.start` | `{}` | `GitHubOAuthResult`; admin-only, starts or returns the calling member's active authorization attempt |
@@ -2180,7 +2181,8 @@ the server snapshot from loading.
   reads authoritative `link.status` before showing the connected clone.
 - `workspace.mirror.status` requires read access; admitted collaborators and
   viewers can inspect the existing public result without changing a mirror.
-  `configure`, `refresh`, `adopt`, and `disable` remain admin-only.
+  `configure`, `refresh`, `adopt`, and `disable` remain admin-only. `warm`
+  is for any member who may launch in the workspace.
   `configure` receives the verified source URL, branch, auth mode, and (for
   generic SSH) the `known_hosts` file contents; the server generates and stores
   any deploy key.

@@ -21,6 +21,7 @@ func init() {
 	registerGuarded(protocol.MethodWorkspaceMirrorRefresh, permissions.WorkspaceAdmin, workspaceTarget, (*Server).workspaceMirrorRefresh)
 	registerGuarded(protocol.MethodWorkspaceMirrorAdopt, permissions.WorkspaceAdmin, workspaceTarget, (*Server).workspaceMirrorAdopt)
 	registerGuarded(protocol.MethodWorkspaceMirrorDisable, permissions.WorkspaceAdmin, workspaceTarget, (*Server).workspaceMirrorDisable)
+	registerGuarded(protocol.MethodWorkspaceMirrorWarm, permissions.Launch, workspaceTarget, (*Server).workspaceMirrorWarm)
 }
 
 // MirrorService is the control-channel and launch view of
@@ -65,6 +66,24 @@ func (s *Server) workspaceMirrorStatus(ctx context.Context, _ domain.MemberID, p
 		return nil, rpcError(err)
 	}
 	return protocol.WorkspaceMirrorResultFromDomain(result.Mirror, true, result.PublicKey, result.Warning), nil
+}
+
+func (s *Server) workspaceMirrorWarm(ctx context.Context, _ domain.MemberID, params json.RawMessage) (any, *protocol.Error) {
+	p, perr := decodeParams[protocol.WorkspaceMirrorParams](params)
+	if perr != nil {
+		return nil, perr
+	}
+	if p.WorkspaceID == "" {
+		return nil, invalidParams("workspace_id is required")
+	}
+	svc, perr := s.mirrors()
+	if perr != nil {
+		return nil, perr
+	}
+	if err := svc.Warm(ctx, domain.WorkspaceID(p.WorkspaceID)); err != nil {
+		return nil, rpcError(err)
+	}
+	return struct{}{}, nil
 }
 
 func (s *Server) workspaceMirrorConfigure(ctx context.Context, member domain.MemberID, params json.RawMessage) (any, *protocol.Error) {
