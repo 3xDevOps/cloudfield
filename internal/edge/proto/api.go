@@ -251,13 +251,18 @@ type AccountSummary struct {
 
 // EdgeInfo answers GET PathEdgeInfo on the relay origin: the sign-in
 // origin, the key grants are signed with and its EdgeKeyFingerprint, and
-// the protocol versions the edge speaks.
+// the protocol versions the edge speaks. Retiring, set only while the
+// operator marks this origin's pair retiring, is the replacement relay
+// origin, with RetiringDate as in HeaderRetiring; Validate does not read
+// them, and a reader checks them with ParseRetiring.
 type EdgeInfo struct {
 	SigninOrigin string            `json:"signin_origin"`
 	Key          ed25519.PublicKey `json:"key"`
 	Fingerprint  string            `json:"fingerprint"`
 	Version      int               `json:"version"`
 	MinVersion   int               `json:"min_version"`
+	Retiring     string            `json:"retiring,omitempty"`
+	RetiringDate string            `json:"retiring_date,omitempty"`
 }
 
 // Validate checks that SigninOrigin is a canonical Origin, that Key is an

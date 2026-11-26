@@ -74,12 +74,15 @@ func (h Hello) PublicKey() (ssh.PublicKey, error) {
 // signed with; the server pins it. RelayOrigins, sent only by an edge that
 // serves more than one relay origin, lists every one of them, the origin
 // the server enrolled at among them. A server that does not know the
-// member ignores it.
+// member ignores it. Notices, sent only by an edge whose operator marked
+// a relay origin retiring, holds a signed Notice for each such origin; a
+// server that does not know the member ignores it.
 type Ready struct {
 	ServerID     string            `json:"server_id"`
 	State        string            `json:"state"`
 	EdgeKey      ed25519.PublicKey `json:"edge_key"`
 	RelayOrigins []string          `json:"relay_origins,omitempty"`
+	Notices      Notices           `json:"notices,omitempty"`
 }
 
 // MaxRelayOrigins bounds the relay origins an edge serves, and the
@@ -244,6 +247,13 @@ func (m Ready) validate() error {
 		return fmt.Errorf("unknown server state %q", m.State)
 	case len(m.EdgeKey) != ed25519.PublicKeySize:
 		return fmt.Errorf("edge key is %d bytes, want %d", len(m.EdgeKey), ed25519.PublicKeySize)
+	case len(m.Notices) > MaxRelayOrigins:
+		return fmt.Errorf("%d notices, limit %d", len(m.Notices), MaxRelayOrigins)
+	}
+	for _, n := range m.Notices {
+		if err := n.validate(); err != nil {
+			return err
+		}
 	}
 	return nil
 }

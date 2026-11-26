@@ -230,6 +230,10 @@ func TestDecodesVersion1Fixtures(t *testing.T) {
 	hello := Hello{Version: 1, HostKey: unb64(t, "AAAAC3NzaC1lZDI1NTE5AAAAIM7MFQfcHd1ylZUcKQiI8JWtuQRNG3PWlubfBl1oO9T8"),
 		Signature:    unb64(t, "AAAAC3NzaC1lZDI1NTE5AAAAQAr+l1EewoxI2CWsih4ooJYBCv6geC+TUnQv7ztyto9FL/JTiIUc6J9ik4XCjDkVueYu9iV2IrOKJfC6n/Y4tAc="),
 		AgentVersion: "v0.0.0-test", Name: "devbox"}
+	retiring := Notice{State: NoticeRetiring, Origin: "https://edge.example", Replacement: "https://edge2.example", Date: "2027-03-01",
+		Signature: unb64(t, "tkGJsBG9jYKpNvU/r41b7yQKoL1yA585YiCuYxAPtqG2R0hYekc/W7b6Ty24AM1H8u4UZzLgQ9aO0KOOfeQqCw==")}
+	retired := Notice{State: NoticeRetired, Origin: "https://edge0.example", Replacement: "https://edge2.example",
+		Signature: unb64(t, "FcgA593YnKIZPA8M69ETh+WU0jOP3H4COXRRsA5iPbRH/JhJBgLZRasIpB3+74zyuRQsHw08OZlhhPu0xOWMCQ==")}
 	want := map[string]Message{
 		"account_deleted":          AccountDeleted{Provider: ProviderGitHub, Subject: "1001"},
 		"account_deletion_applied": AccountDeletionApplied{Provider: ProviderGitHub, Subject: "1001"},
@@ -254,7 +258,12 @@ func TestDecodesVersion1Fixtures(t *testing.T) {
 		"ping":                  Ping{},
 		"pong":                  Pong{},
 		"ready":                 Ready{ServerID: "7ozstx3hvprfzhna3cakjwhdnw", State: StateUnclaimed, EdgeKey: unb64(t, "zswVB9wd3XKVlRwpCIjwla25BE0bc9aW5t8GXWg71Pw=")},
-		"unenroll":              Unenroll{},
+		"ready_notices": Ready{ServerID: "7ozstx3hvprfzhna3cakjwhdnw", State: StateClaimed, EdgeKey: unb64(t, "zswVB9wd3XKVlRwpCIjwla25BE0bc9aW5t8GXWg71Pw="),
+			RelayOrigins: []string{"https://edge.example", "https://edge2.example"}, Notices: Notices{retiring, retired}},
+		"ready_bad_notices": Ready{ServerID: "7ozstx3hvprfzhna3cakjwhdnw", State: StateClaimed, EdgeKey: unb64(t, "zswVB9wd3XKVlRwpCIjwla25BE0bc9aW5t8GXWg71Pw="),
+			Notices: Notices{retiring}},
+		"ready_notices_not_a_list": Ready{ServerID: "7ozstx3hvprfzhna3cakjwhdnw", State: StateClaimed, EdgeKey: unb64(t, "zswVB9wd3XKVlRwpCIjwla25BE0bc9aW5t8GXWg71Pw=")},
+		"unenroll":                 Unenroll{},
 	}
 	files, err := filepath.Glob("testdata/v1/*.json")
 	if err != nil || len(files) != len(want)+1 {
