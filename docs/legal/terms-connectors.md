@@ -9,10 +9,15 @@
 Effective: [date of publication]
 
 These terms govern your use of the Cloudfield connector at
-`https://edge.onaether.dev/mcp` and the project edge it runs through
-(`edge.onaether.dev`, `auth.onaether.dev`), operated by 3xDevOps
+`https://edge.cloudfield.ai/mcp` and the project edge it runs through
+(`edge.cloudfield.ai`, `auth.cloudfield.ai`), operated by 3xDevOps
 ("we"). The Cloudfield software itself is licensed under the GPL-3.0; these
 terms do not change that licence.
+
+As of 2026-11-26 the project edge also answers at `edge.onaether.dev` and
+`auth.onaether.dev`, and the connector at `https://edge.onaether.dev/mcp`,
+for servers and connectors set up there. These terms also apply when you use
+the connector or the project edge at those addresses.
 
 ## What the service is
 
@@ -71,4 +76,4 @@ See the [connector privacy policy](privacy-connectors.md).
 
 ## Contact
 
-[team@onaether.dev]
+[team@cloudfield.ai]

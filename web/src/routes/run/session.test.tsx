@@ -421,6 +421,35 @@ describe('the Enhanced session view', () => {
     expect(log.scrollTo).toHaveBeenLastCalledWith({ top: log.scrollTop, behavior: 'instant' })
   })
 
+  it('returns to a session at the row heights it measured, and measures again when its rows changed', async () => {
+    const top = async (text: string) => {
+      const log = await screen.findByRole('log', { name: 'Chat' })
+      return (await within(log).findByText(text)).closest<HTMLElement>('[role=article]')!.parentElement!.style.top
+    }
+    open()
+    acpSocket().open({}, [
+      item('turn_start', 1), say(1, 'user', 'Round the totals'), ...Array.from({ length: 6 }, (_, n) => say(1, 'assistant', `Reply ${n}`)),
+      item('turn_end', 1, { stop_reason: 'end_turn' }),
+    ])
+    const measured = await top('Reply 5')
+
+    cleanup()
+    // Rows report no size from here on, so a row's place can only come from what was kept.
+    vi.stubGlobal('ResizeObserver', class extends SizedObserver {
+      observe(target: Element) {
+        if ((target as HTMLElement).style.overflowY) super.observe(target)
+      }
+    })
+    open()
+    expect(await top('Reply 5')).toBe(measured)
+
+    cleanup()
+    act(() => useStore.getState().upsertRoomMessage(roomMessage({ id: 'msg_late', kind: 'steer_request', body: 'one more row', agent_delivery: 'queued', created_at: '2026-10-06T11:00:00Z' })))
+    open()
+    expect(await top('one more row')).toBeDefined()
+    expect(await top('Reply 5')).not.toBe(measured)
+  })
+
   it('scrolls to a turn’s prompt another view asks for after a room message took its row', async () => {
     SizedObserver.viewport = 240
     const [start, prompt] = [item('turn_start', 1), say(1, 'user', 'Round the totals')]

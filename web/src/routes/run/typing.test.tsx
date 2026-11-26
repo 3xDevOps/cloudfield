@@ -58,10 +58,16 @@ describe('TypingIndicator', () => {
     expect(screen.getByRole('status').textContent).toBe('Several people are typing...')
   })
 
-  it('renders nothing on a run nobody else watches', () => {
-    seed([alice.id])
-    const { container } = render(<TypingIndicator runID={runID} />)
-    expect(container.firstChild).toBeNull()
+  it('keeps its live region mounted and out of the layout until someone else types', () => {
+    seed()
+    render(<TypingIndicator runID={runID} />)
+    const region = screen.getByRole('status')
+    expect(region.className).toBe('sr-only')
+    act(() => useStore.getState().noteTyping(runID, alice.id))
+    expect(region.className).toBe('sr-only')
+    act(() => useStore.getState().noteTyping(runID, bob.id))
+    expect(screen.getByRole('status')).toBe(region)
+    expect(region.className).toContain('h-4')
   })
 
   it('shows a typing event from the stream and clears it on the typist’s stop event', async () => {

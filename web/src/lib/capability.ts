@@ -4,6 +4,8 @@ export interface Capability {
   hasMethod: (method: string) => boolean
   hasLocal: (verb: string) => boolean
   hasWS: (name: string) => boolean
+  /** The caller saved a Linear key; only `useCapability` knows. */
+  linearConnected?: boolean
 }
 
 /** For a gateway whose /capabilities did not answer: the read-and-steer set

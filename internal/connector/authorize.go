@@ -20,9 +20,9 @@ import (
 	"strings"
 	"time"
 
-	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
-	"github.com/3xDevOps/Aether/internal/ops"
-	"github.com/3xDevOps/Aether/internal/sshd"
+	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
+	"github.com/3xDevOps/cloudfield/internal/ops"
+	"github.com/3xDevOps/cloudfield/internal/sshd"
 )
 
 const (
@@ -555,17 +555,17 @@ var consentTemplate = template.Must(template.New("consent").Funcs(template.FuncM
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="theme-color" content="#070b11">
+<meta name="theme-color" content="#181825">
 <title>{{if .Failed}}Cannot connect{{else}}Connect {{.Client}} to {{.Server}}{{if .Member}} as {{.Member}}{{end}}{{end}}</title>
 <style>
 /* These tokens mirror internal/edge/service/templates/edge.css. */
 :root{
---canvas:#070b11;--chrome:#0c141f;--raised:#151d2a;
---seam:rgb(247 240 228 / 0.09);--control-border:#717c8d;
---text:#f7f0e4;--text-muted:#97a3b5;
---accent-fill:#f5c542;--accent-fill-hover:#d8ad3a;--on-accent:#070b11;
---accent-text:#54e0d0;--focus-ring:#54e0d0;
---state-failed:#f05c4a;--state-needs-you:#f5c542;
+--canvas:#181825;--chrome:#11111b;--raised:#222233;
+--seam:rgb(205 214 244 / 0.1);--control-border:#8c91a8;
+--text:#cdd6f4;--text-muted:#a6adc8;
+--accent-fill:#fab387;--accent-fill-hover:#dc9e77;--on-accent:#11111b;
+--accent-text:#89dceb;--focus-ring:#89dceb;
+--state-failed:#f38ba8;--state-needs-you:#fab387;
 --card-shadow:0 1px 2px rgb(0 0 0 / 0.4);
 --radius-chip:5px;--radius-control:8px;--radius-panel:12px;
 --duration-hover:150ms;--ease-hover:cubic-bezier(0.25,0.1,0.25,1);

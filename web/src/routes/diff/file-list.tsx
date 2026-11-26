@@ -15,11 +15,14 @@ export function ChangedFileRow({
   file,
   selected = false,
   counts = true,
+  inset = false,
   onOpen,
 }: {
   file: { path: string; status?: FileStatus; additions: number; deletions: number }
   selected?: boolean
   counts?: boolean
+  /** Indents the row's content, not its hit area, under a disclosure arrow. */
+  inset?: boolean
   onOpen: (path: string) => void
 }) {
   const slash = file.path.lastIndexOf('/')
@@ -30,7 +33,7 @@ export function ChangedFileRow({
       title={file.path}
       onClick={() => onOpen(file.path)}
       leading={
-        <span aria-hidden className={cn('w-3 shrink-0 text-center font-code text-ui-sm', status?.tone)}>
+        <span aria-hidden className={cn('w-3 shrink-0 text-center font-code text-ui-sm', inset && 'ml-3.5', status?.tone)}>
           {status?.letter}
         </span>
       }

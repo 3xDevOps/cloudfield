@@ -13,9 +13,9 @@ import (
 
 	acp "github.com/coder/acp-go-sdk"
 
-	"github.com/3xDevOps/Aether/internal/acphost"
-	"github.com/3xDevOps/Aether/internal/domain"
-	"github.com/3xDevOps/Aether/internal/harness"
+	"github.com/3xDevOps/cloudfield/internal/acphost"
+	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/harness"
 )
 
 const (
@@ -58,7 +58,7 @@ func signedIn() string {
 func loginProblem(t *testing.T, e *testEnv) (string, bool) {
 	t.Helper()
 	profile, _ := harness.Lookup("claude")
-	problem, blocks, err := e.sched.LoginProblem(e.member.ID, "claude", profile)
+	problem, blocks, err := e.sched.LoginProblem(e.member.ID, e.member.ID, "claude", profile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,6 +233,119 @@ func TestRefusalsWarnWithoutBlockingLaunchesUntilTheMemberSignsInAgain(t *testin
 	}
 }
 
+// homeOf is the home of the test's member.
+func homeOf(t *testing.T, e *testEnv) string {
+	t.Helper()
+	home, err := e.sched.cfg.Homes.Path(e.member.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return home
+}
+
+// Claude Code keeps an Anthropic Console sign-in outside its login file,
+// which stays the empty placeholder Cloudfield mounts: in its configuration
+// file when it created an API key, in an Anthropic profile when it did not.
+var consoleSignIns = map[string]map[string]string{
+	"API key": {".claude.json": `{"primaryApiKey":"fixture-key"}`},
+	"profile": {
+		".config/anthropic/configs/default.json":     `{"authentication":{"type":"user_oauth"}}`,
+		".config/anthropic/credentials/default.json": `{"access_token":"fixture-access","refresh_token":"fixture-refresh"}`,
+	},
+}
+
+// A member whose agent was refused for want of a sign-in, and who then
+// signs in through the Anthropic Console, is no longer told the agent
+// refused.
+func TestAConsoleSignInClearsARememberedRefusal(t *testing.T) {
+	t.Parallel()
+	for name, files := range consoleSignIns {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e, rt, run := newClaudeACPEnv(t)
+			writeClaudeLogin(t, e, "")
+			before := len(rt.all())
+			rt.fixture.RefuseNext.Store(1)
+			refuse(t, e, run.ID)
+			waitFor(t, "the restarted agent", func() bool { return len(rt.all()) == before+1 && e.sched.acp.session(run.ID) != nil })
+			if problem, blocks := loginProblem(t, e); problem != refusedProblem || blocks {
+				t.Fatalf("after the refusal = %q, %v, want %q without blocking a launch", problem, blocks, refusedProblem)
+			}
+			writeHomeFile(t, homeOf(t, e), ".claude.json", `{"numStartups":2}`)
+			if problem, _ := loginProblem(t, e); problem != refusedProblem {
+				t.Fatalf("after the agent rewrote its configuration file = %q, want %q still", problem, refusedProblem)
+			}
+
+			for rel, body := range files {
+				writeHomeFile(t, homeOf(t, e), rel, body)
+			}
+			if problem, blocks := loginProblem(t, e); problem != "" || blocks {
+				t.Fatalf("after the Console sign-in = %q, %v, want no problem", problem, blocks)
+			}
+		})
+	}
+}
+
+// A Console sign-in signs in the owner's own launches whatever the login
+// file holds. A launch by a member the account is shared with carries the
+// login file alone, so the file's problem still refuses it.
+func TestAConsoleSignInSignsInTheOwnersOwnLaunchesOnly(t *testing.T) {
+	t.Parallel()
+	for name, files := range consoleSignIns {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e := newTestEnv(t, nil)
+			writeClaudeLogin(t, e, fixtureNoToken)
+			for rel, body := range files {
+				writeHomeFile(t, homeOf(t, e), rel, body)
+			}
+			if problem, blocks := loginProblem(t, e); problem != "" || blocks {
+				t.Fatalf("the owner's own launch = %q, %v, want no problem", problem, blocks)
+			}
+			if _, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "task", "claude", domain.LaunchTUI); err != nil {
+				t.Fatalf("Launch on a Console sign-in = %v", err)
+			}
+			profile, _ := harness.Lookup("claude")
+			problem, blocks, err := e.sched.LoginProblem("mem-borrower", e.member.ID, "claude", profile)
+			if err != nil || problem != noTokenProblem || !blocks {
+				t.Fatalf("a borrower's launch = %q, %v, %v, want %q blocking it", problem, blocks, err, noTokenProblem)
+			}
+		})
+	}
+}
+
+// A Console sign-in the server cannot read proves nothing: the login file's
+// problem still refuses the launch, and a remembered refusal still stands
+// and still clears when the login file changes.
+func TestAnUnreadableConsoleSignInLeavesTheLoginFileInCharge(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t, nil)
+	writeClaudeLogin(t, e, fixtureNoToken)
+	writeHomeFile(t, homeOf(t, e), ".claude.json", `{"primaryApiKey":`)
+	want := noTokenProblem + `; a sign-in outside that file cannot be read: memberhome: read claude login of "` + string(e.member.ID) + `": .claude.json: unexpected end of JSON input`
+	if problem, blocks := loginProblem(t, e); problem != want || !blocks {
+		t.Fatalf("signed out beside an unreadable configuration file = %q, %v, want %q blocking a launch", problem, blocks, want)
+	}
+	if _, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "task", "claude", domain.LaunchTUI); !errors.Is(err, ErrSignedOut) {
+		t.Fatalf("Launch = %v, want the signed-out refusal", err)
+	}
+
+	writeClaudeLogin(t, e, signedIn())
+	profile, _ := harness.Lookup("claude")
+	stamp, err := e.sched.loginStamp(e.member.ID, "claude", profile)
+	if err != nil {
+		t.Fatalf("loginStamp beside an unreadable configuration file = %v", err)
+	}
+	e.sched.loginRefused(e.member.ID, "claude", stamp, acp.NewAuthRequired(nil))
+	if problem, blocks := loginProblem(t, e); problem != refusedProblem || blocks {
+		t.Fatalf("after the refusal = %q, %v, want %q", problem, blocks, refusedProblem)
+	}
+	writeClaudeLogin(t, e, signedIn())
+	if problem, _ := loginProblem(t, e); problem != "" {
+		t.Fatalf("after signing in again = %q, want no problem", problem)
+	}
+}
+
 // A turn that a workspace variable signed in says nothing about the
 // account's login, so it does not clear a refusal.
 func TestATurnSignedInByTheWorkspaceKeepsTheRefusal(t *testing.T) {
@@ -284,7 +397,7 @@ func TestBackgroundRefusalSaysHowToSignIn(t *testing.T) {
 		t.Fatalf("reason %q, want %q", got.Reason, want)
 	}
 	profile, _ := harness.Lookup(enhancedAgent)
-	if problem, _, err := e.sched.LoginProblem(e.member.ID, enhancedAgent, profile); err != nil || problem != refusedProblem {
+	if problem, _, err := e.sched.LoginProblem(e.member.ID, e.member.ID, enhancedAgent, profile); err != nil || problem != refusedProblem {
 		t.Fatalf("LoginProblem = %q, %v, want %q", problem, err, refusedProblem)
 	}
 }

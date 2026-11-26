@@ -4,8 +4,8 @@ An **edge** is a relay that lets members reach a server through a public host
 name with a GitHub sign-in. The server and the client both dial out to it, so
 a laptop reaches a server with no Tailscale, no open router port and no SSH
 key to copy. The project runs one at `https://edge.cloudfield.ai`, and
-`aether-edge` runs your own. Servers set up before that address existed use
-the same edge at `https://edge.onaether.dev`, which keeps working
+`aether-edge` runs your own. A server still enrolled at its former address,
+`https://edge.onaether.dev`, keeps working there (as of 2026-11-26)
 ([Moving to another address of the edge](#moving-to-another-address-of-the-edge)).
 
 - [Using an edge](#using-an-edge) is for members and server administrators.
@@ -144,8 +144,9 @@ What each person redoes afterwards:
 - Member on the Android app: nothing.
 - Member on the desktop app: nothing.
 - Someone holding an unused join link: nothing; it works until it expires.
-- Claude or ChatGPT connector user: nothing. The directory listings stay at
-  `https://edge.onaether.dev/mcp` on purpose.
+- Claude or ChatGPT connector user: nothing. A connector registered at the
+  old address keeps working (as of 2026-11-26), and new ones are added at the
+  new address ([connectors.md](connectors.md#prerequisites)).
 
 Grants name the address the server is enrolled at and are checked whichever
 address the client used, and connector tokens are checked against the address
@@ -190,8 +191,8 @@ After the move:
   it. Until the restart it also prints `running      the running server is at
   <old address>; restart to apply edge-url: sudo systemctl restart aether-server`.
 - Connectors registered at the old address keep working while the edge
-  announces it. The Claude and ChatGPT listings stay at
-  `https://edge.onaether.dev/mcp`.
+  announces it. New ones are added at the new address
+  ([connectors.md](connectors.md#prerequisites)).
 - CLI and device links, join links and claim codes made at the old address keep
   working: the edge relays a client at either address to a server enrolled at
   either.
@@ -1183,6 +1184,49 @@ answers. `aether_edge_egress_month_bytes`,
 requests waiting for a connection or for their server to return) are also
 exported.
 
+`aether-edge retiring` reads `edge.db` through a read-only connection, so it
+never migrates or writes, and prints who the edge last saw on each origin pair,
+or on the pair of `--origin <relay origin>`. On a database below schema 2 it
+prints that nothing is recorded yet. The edge records only while an option that
+retires a pair is set, then for every pair: each claimed server's relay origin,
+time and build at each enrollment or claim; each pending sign-in's, device
+token's and session's sign-in origin when it is issued; for a device token or
+session issued earlier, the origin it is next used at, on the API or through the
+relay, and for a device sign-in started earlier and completed while recording,
+the origin it completes at, each marked as first seen there; a connector request
+at most once an hour per server and relay origin, when the edge sends it on to
+a connected, claimed server. Connector counts are those requests, which the
+server may still have refused, for example for carrying no valid token;
+requests the edge refused itself are not counted. `--json` prints `"status": "not_recorded"` with the schema below
+schema 2, and `"status": "recorded"` with the report otherwise.
+
+The report starts with the last known recording period: when it began, when the
+edge last started recording, and its last clean stop, if any since. A recording
+start more than 10 minutes after the last clean stop, or after an unclean stop,
+begins a new period. A shorter run without the option in between writes
+nothing, so the period does not show it, and neither does an image rolled back
+in that time; what such a run issued has no origin. Per pair the report lists the servers
+last enrolled or claimed at its relay origin (id, name, owner login, build,
+when; a name or build that holds a non-printing character is printed quoted),
+and counts by last use within 1, 7 and 30 days and in all: device tokens issued
+at its sign-in origin, those first seen there, accounts with an unexpired
+session there, accounts with device tokens there and none recorded at another
+origin, and claimed servers that got connector requests through its relay
+origin. A sign-in origin that two pairs name is counted under the one the edge
+started with last. Tokens and sessions of a sign-in origin no recorded pair
+names any more are listed apart, then what has no origin yet. An empty list is
+not proof that nobody is left: an unclaimed server has no row
+(`aether_edge_servers_by_origin` counts the connected ones), and anything not
+used since recording began has no origin. `--json` prints the same as
+`{"at", "status", "recording_since", "recording_started", "recording_stopped",
+"origins": [{"relay_origin", "signin_origin", "signin_counted_under", "servers": [{"id", "name", "owner_login", "build",
+"last_seen_at"}], "device_tokens", "device_tokens_seen", "session_accounts",
+"device_only_accounts", "connector_servers"}], "unpaired": [{"signin_origin",
+"device_tokens", "device_tokens_seen", "session_accounts",
+"device_only_accounts"}], "unknown": {"device_tokens", "session_accounts",
+"servers"}}`, each count as `{"1d", "7d", "30d", "total"}`, with non-printing
+characters escaped as `\uXXXX`.
+
 `/healthz` (`aether-edge healthcheck`) is liveness. `/readyz` (`aether-edge
 healthcheck --ready`) answers 200 when the database answers within a second, the
 public listener serves and the edge is not stopping, and 503 otherwise. From
@@ -1492,6 +1536,7 @@ sudo -u aether-edge aether-edge accounts list
 sudo -u aether-edge aether-edge accounts block github:<user id>
 sudo -u aether-edge aether-edge accounts unblock github:<user id>
 sudo -u aether-edge aether-edge accounts delete github:<user id>
+sudo -u aether-edge aether-edge retiring [--origin <relay origin>] [--json]
 sudo -u aether-edge aether-edge reviewer --login <login> --server-id <server id> <file>
 ```
 
@@ -1501,6 +1546,7 @@ sudo -u aether-edge aether-edge reviewer --login <login> --server-id <server id>
 | `servers block` | Does what `remove` does, and refuses the id at enrollment with `server is blocked by this edge's operator` |
 | `accounts block` | Deletes the account's sessions, device tokens and pending sign-ins, and refuses its sign-ins with `account is blocked by this edge's operator`. Servers it owns stay claimed |
 | `accounts delete` | What the person's own deletion does, except that it closes no live connection and each server receives the deletion at its next enrollment. A block stays |
+| `retiring` | Prints who the edge last saw on each origin pair ([Monitoring](#monitoring)). It changes nothing |
 | `reviewer` | Writes a [reviewer account](#reviewer-account) file, mode 0600, with a new random password, and prints the password once. It touches no database; the edge reads the file at start |
 
 `servers unblock` and `accounts unblock` lift a block. Connections already open

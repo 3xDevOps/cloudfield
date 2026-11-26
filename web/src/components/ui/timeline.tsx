@@ -170,12 +170,14 @@ export function WorkGroup({
   trailing,
   expanded,
   controls,
+  wrap,
   onToggle,
 }: {
   summary: React.ReactNode
   trailing?: React.ReactNode
   expanded: boolean
   controls?: string
+  wrap?: boolean
   onToggle: () => void
 }) {
   return (
@@ -187,11 +189,12 @@ export function WorkGroup({
       onClick={onToggle}
       className={cn(
         focusRingInset,
-        'flex h-6 w-full min-w-0 items-center gap-2 rounded-control text-left text-ui-sm text-muted hover:text-text coarse:h-11',
+        'flex w-full min-w-0 items-center gap-2 rounded-control text-left text-ui-sm text-muted hover:text-text',
+        wrap ? 'min-h-6 py-0.5 coarse:min-h-11' : 'h-6 coarse:h-11',
       )}
     >
       <ChevronRight className={cn('size-3.5 shrink-0 transition-transform duration-200 ease-standard motion-reduce:transition-none', expanded && 'rotate-90')} />
-      <span className="min-w-0 flex-1 truncate">{summary}</span>
+      <span className={cn('min-w-0 flex-1', wrap ? 'break-words' : 'truncate')}>{summary}</span>
       {trailing !== undefined && <span className="shrink-0 tabular-nums">{trailing}</span>}
     </button>
   )

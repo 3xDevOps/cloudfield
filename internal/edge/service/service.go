@@ -22,8 +22,8 @@ import (
 
 	"golang.org/x/oauth2"
 
-	edgeproto "github.com/3xDevOps/Aether/internal/edge/proto"
-	edgestore "github.com/3xDevOps/Aether/internal/edge/store"
+	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
+	edgestore "github.com/3xDevOps/cloudfield/internal/edge/store"
 )
 
 // Config configures a Service. Client ids and secrets come from the
@@ -56,6 +56,10 @@ type Config struct {
 	// Reviewer, when set, is the reviewer account an app directory's
 	// reviewer signs in with at PathReviewerSignin. Nil serves 404 there.
 	Reviewer *ReviewerAccount
+	// RecordOrigins has the edge record which origin pair each server,
+	// device token, session and connector request is on, for aether-edge
+	// retiring.
+	RecordOrigins bool
 }
 
 // OAuthApp is a GitHub OAuth app. AuthURL, TokenURL and APIURL, the base
@@ -88,6 +92,16 @@ type pair struct {
 }
 
 type pairKey struct{}
+
+// signinOrigin is the sign-in origin of the pair Handler picked for the
+// request ctx belongs to, "" before a recording run started
+// (StartRecording) or when no pair was picked.
+func (s *Service) signinOrigin(ctx context.Context) string {
+	if p, ok := ctx.Value(pairKey{}).(*pair); ok && s.recording.Load() {
+		return p.signin
+	}
+	return ""
+}
 
 // pair is the pair Handler picked for r, or the first for a request
 // handed to a handler directly.
@@ -172,6 +186,9 @@ type Service struct {
 	githubErrors    atomic.Uint64
 	openAIChallenge string
 	clientHosts     []string
+	recordOrigins   bool
+	// recording is set once StartRecording began a recording run.
+	recording atomic.Bool
 
 	signinLimit *limiter[netip.Prefix]
 	startLimit  *limiter[netip.Prefix]
@@ -248,6 +265,7 @@ func New(cfg Config) (*Service, error) {
 		openAIChallenge:   cfg.OpenAIChallenge,
 		clientHosts:       cfg.ConnectorClientHosts,
 		reviewer:          cfg.Reviewer,
+		recordOrigins:     cfg.RecordOrigins,
 		reviewerChecks:    make(chan struct{}, reviewerMaxChecks),
 	}
 	s.tokenLimit.scale = func(k serverBlock) int { return edgeproto.RateLimitScale(k.block) }
@@ -275,8 +293,33 @@ func New(cfg Config) (*Service, error) {
 // a request.
 func (s *Service) SetLink(l ServerLink) { s.link = l }
 
-// Close closes the store.
-func (s *Service) Close() error { return s.store.Close() }
+// StartRecording records, when the edge records origins, the pairs it
+// serves and the start of its recording run. Call it once the edge's
+// listeners are bound.
+func (s *Service) StartRecording(ctx context.Context) error {
+	if !s.recordOrigins {
+		return nil
+	}
+	served := map[string]string{}
+	for _, p := range s.pairs {
+		served[p.relay] = p.signin
+	}
+	if err := s.store.RecordPairs(ctx, served, s.now()); err != nil {
+		return err
+	}
+	s.recording.Store(true)
+	return nil
+}
+
+// Close records the end of a recording run StartRecording began and
+// closes the store.
+func (s *Service) Close() error {
+	var err error
+	if s.recording.Load() {
+		err = s.store.StopRecording(context.Background(), s.now())
+	}
+	return errors.Join(err, s.store.Close())
+}
 
 // Ping checks that the edge database answers a read.
 func (s *Service) Ping(ctx context.Context) error { return s.store.Ping(ctx) }

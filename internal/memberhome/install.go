@@ -10,8 +10,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/3xDevOps/Aether/internal/domain"
-	"github.com/3xDevOps/Aether/internal/harness"
+	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/harness"
 )
 
 // Installation returns whose ~/.local/bin/<executable> a launch by launcher
