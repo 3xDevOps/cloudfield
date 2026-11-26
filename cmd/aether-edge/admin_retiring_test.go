@@ -316,7 +316,7 @@ func TestRetiringQuotesNames(t *testing.T) {
 	if _, err = s.SignIn(ctx, octo, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.RecordClaim(ctx, testServer, "lab\u202eexe.txt", edgeproto.PolicyAccount, edgeproto.AccountPrincipal(octo),
+	if err = s.RecordClaim(ctx, testServer, "lab\u202eexe.txt\x7f", edgeproto.PolicyAccount, edgeproto.AccountPrincipal(octo),
 		edgestore.Enrollment{RelayOrigin: pairRelayA, AgentVersion: "v1\u200b", At: enrolledAt}, time.Now()); err != nil {
 		t.Fatal(err)
 	}
@@ -327,7 +327,7 @@ func TestRetiringQuotesNames(t *testing.T) {
 		t.Fatal(err)
 	}
 	out, err := runRetiring(t, dir)
-	if err != nil || !strings.Contains(out, testServer+`  "lab\u202eexe.txt"  octo         "v1\u200b"  2026-11-20T08:00:00Z`) ||
+	if err != nil || !strings.Contains(out, testServer+`  "lab\u202eexe.txt\x7f"  octo         "v1\u200b"  2026-11-20T08:00:00Z`) ||
 		!strings.HasPrefix(out, "last known recording period: since 2026-11-01T00:00:00Z, last started 2026-11-01T00:00:00Z; stopped cleanly 2026-11-02T00:00:00Z\n") {
 		t.Fatalf("report with a bidi control in a name:\n%s%v", out, err)
 	}
@@ -336,10 +336,10 @@ func TestRetiringQuotesNames(t *testing.T) {
 		Status  string                   `json:"status"`
 		Origins []edgestore.OriginReport `json:"origins"`
 	}
-	if err != nil || strings.ContainsAny(out, "\u202e\u200b") || !strings.Contains(out, `"name": "lab\u202eexe.txt"`) ||
+	if err != nil || strings.ContainsAny(out, "\u202e\u200b\x7f") || !strings.Contains(out, `"name": "lab\u202eexe.txt\u007f"`) ||
 		!strings.Contains(out, `"build": "v1\u200b"`) || json.Unmarshal([]byte(out), &got) != nil || got.Status != "recorded" ||
 		len(got.Origins) != 1 || len(got.Origins[0].Servers) != 1 ||
-		got.Origins[0].Servers[0].Name != "lab\u202eexe.txt" || got.Origins[0].Servers[0].AgentVersion != "v1\u200b" {
+		got.Origins[0].Servers[0].Name != "lab\u202eexe.txt\x7f" || got.Origins[0].Servers[0].AgentVersion != "v1\u200b" {
 		t.Fatalf("JSON report with a bidi control in a name:\n%s%v", out, err)
 	}
 }

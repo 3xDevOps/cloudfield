@@ -40,9 +40,9 @@ func (s *Store) RecordPairs(ctx context.Context, relayToSignin map[string]string
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO origin_recording (id, since, started_at) VALUES (1, ?, ?)
-		ON CONFLICT (id) DO UPDATE SET started_at = excluded.started_at,
-			since = CASE WHEN stopped_at >= started_at AND stopped_at >= ? THEN since ELSE excluded.since END`,
-		unix(now), unix(now), unix(now.Add(-recordingGap))); err != nil {
+		ON CONFLICT (id) DO UPDATE SET started_at = excluded.started_at, stopped_at = NULL,
+			since = CASE WHEN stopped_at >= started_at AND stopped_at BETWEEN ? AND ? THEN since ELSE excluded.since END`,
+		unix(now), unix(now), unix(now.Add(-recordingGap)), unix(now)); err != nil {
 		return fmt.Errorf("edgestore: record origin pairs: recording period: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
@@ -216,7 +216,21 @@ type Report struct {
 }
 
 // ErrNoOrigins reports a database at a schema that records no origins.
+// ReadRetiring returns it as a *NoOriginsError.
 var ErrNoOrigins = errors.New("edgestore: the database records no origins")
+
+// NoOriginsError is ErrNoOrigins for the database at Path, at schema
+// version Schema as read in the report's transaction.
+type NoOriginsError struct {
+	Path   string
+	Schema int
+}
+
+func (e *NoOriginsError) Error() string {
+	return fmt.Sprintf("%v: %s is at schema version %d", ErrNoOrigins, e.Path, e.Schema)
+}
+
+func (e *NoOriginsError) Unwrap() error { return ErrNoOrigins }
 
 // ReadRetiring reports, as of now, who the edge at path saw on each origin
 // pair, through a read-only connection and one read transaction, so it
@@ -238,7 +252,7 @@ func ReadRetiring(ctx context.Context, path string, now time.Time) (Report, erro
 	case err != nil:
 		return Report{}, err
 	case sch.Version < OriginsSchema:
-		return Report{}, fmt.Errorf("%w: %s is at schema version %d", ErrNoOrigins, path, sch.Version)
+		return Report{}, &NoOriginsError{Path: path, Schema: sch.Version}
 	case sch.CompatFloor > SchemaVersion():
 		return Report{}, fmt.Errorf("edgestore: %s is at schema version %d with compat floor %d, and this binary supports %d",
 			path, sch.Version, sch.CompatFloor, SchemaVersion())

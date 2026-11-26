@@ -61,18 +61,15 @@ func retiring(args []string, getenv func(string) string, out io.Writer) error {
 	defer unlock()
 	now := time.Now().UTC()
 	rep, err := edgestore.ReadRetiring(context.Background(), db, now)
-	if errors.Is(err, edgestore.ErrNoOrigins) {
+	var none *edgestore.NoOriginsError
+	if errors.As(err, &none) {
 		if *asJSON {
-			sch, serr := edgestore.ReadSchema(db)
-			if serr != nil {
-				return serr
-			}
 			return writeJSON(out, struct {
 				At            time.Time `json:"at"`
 				Status        string    `json:"status"`
 				Schema        int       `json:"schema"`
 				OriginsSchema int       `json:"origins_schema"`
-			}{now, "not_recorded", sch.Version, edgestore.OriginsSchema})
+			}{now, "not_recorded", none.Schema, edgestore.OriginsSchema})
 		}
 		_, err = fmt.Fprintf(out, "nothing is recorded yet: %v, and an edge records origins from schema %d on\n", err, edgestore.OriginsSchema)
 		return err
@@ -165,8 +162,9 @@ func printCounts(w io.Writer, rows []namedCounts) {
 	}
 }
 
-// writeJSON writes v indented, with every non-ASCII rune that does not
-// print, such as a bidi control, escaped: encoding/json writes those raw.
+// writeJSON writes v indented, with DEL and every non-ASCII rune that
+// does not print, such as a bidi control, escaped: encoding/json writes
+// those raw.
 func writeJSON(out io.Writer, v any) error {
 	data, err := json.MarshalIndent(v, "", "  ")
 	if err != nil {
@@ -175,7 +173,7 @@ func writeJSON(out io.Writer, v any) error {
 	var b strings.Builder
 	for _, r := range string(data) {
 		switch {
-		case r < utf8.RuneSelf || unicode.IsPrint(r):
+		case r < utf8.RuneSelf && r != 0x7f || unicode.IsPrint(r):
 			b.WriteRune(r)
 		case r > 0xffff:
 			r1, r2 := utf16.EncodeRune(r)

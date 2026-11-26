@@ -483,9 +483,9 @@ func TestRetiringReport(t *testing.T) {
 	}{
 		{"s1", myID, testSignin, 3 * day},
 		{"s2", myID, testSignin, 20 * day},
-		{"s3", otherID, testSignin, 31 * day},
 		{"s4", otherID, testSignin2, 0},
 		{"s5", otherID, "", 2 * day},
+		{"s3", otherID, testSignin, 31 * day},
 	} {
 		used := testNow.Add(-sess.age)
 		if err = s.CreateSession(ctx, sess.id, sess.id+"-hash", sess.account, sess.origin, used, used.Add(edgeproto.SessionIdle)); err != nil {
@@ -505,6 +505,9 @@ func TestRetiringReport(t *testing.T) {
 		}
 	}
 
+	if n := countRows(t, s, "web_sessions"); n != 5 {
+		t.Fatalf("%d sessions, want the expired one kept for the report to leave out", n)
+	}
 	got, err = s.Retiring(ctx, testNow)
 	if err != nil {
 		t.Fatal(err)
@@ -718,4 +721,26 @@ func (s *Store) Retiring(ctx context.Context, now time.Time) (Report, error) {
 	}
 	defer tx.Rollback() //nolint:errcheck // read-only
 	return retiring(ctx, tx, now)
+}
+
+// TestRecordingPeriodClockStep starts recording again after a clean stop
+// that lies in the future, as after the clock stepped back: a new period
+// begins, and a running edge never reads as stopped.
+func TestRecordingPeriodClockStep(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	pairs := map[string]string{testRelay: testSignin}
+	if err := s.RecordPairs(ctx, pairs, testNow.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.StopRecording(ctx, testNow.Add(5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordPairs(ctx, pairs, testNow); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := s.Retiring(ctx, testNow)
+	if err != nil || !rep.RecordingSince.Equal(testNow) || !rep.RecordingStarted.Equal(testNow) || !rep.RecordingStopped.IsZero() {
+		t.Fatalf("after a stop in the future: since %v, started %v, stopped %v, %v", rep.RecordingSince, rep.RecordingStarted, rep.RecordingStopped, err)
+	}
 }
