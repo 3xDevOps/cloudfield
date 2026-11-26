@@ -273,8 +273,8 @@ https://edge.cloudfield.ai` at 05:48 UTC, the first run against the real
 edge. It enrolled at `edge.cloudfield.ai` as an
 address of the same edge, with the same edge key and owner; only
 server.conf's `edge-url` line changed. `edge move` does not restart the
-server; the owner restarted it with `sudo systemctl restart
-aether-server` at 05:48:31 and it connected at 05:48:32. Connector
+server (`sudo systemctl restart aether-server` does); it was restarted
+at 05:48:31 and connected at 05:48:32. Connector
 addresses are now under `edge.cloudfield.ai/mcp`, and a connector
 registered at the old address still answers. In that restart,
 `cloudfield-server edge status` exited 3 with `disconnected since ...:
