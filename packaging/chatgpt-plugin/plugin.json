@@ -5,10 +5,10 @@
   "description": "Launch, watch and steer the coding agents on your own Cloudfield server from ChatGPT.",
   "author": {
     "name": "3xDevOps",
-    "email": "team@onaether.dev",
+    "email": "team@cloudfield.ai",
     "url": "https://github.com/3xDevOps"
   },
-  "homepage": "https://onaether.dev",
+  "homepage": "https://cloudfield.ai",
   "repository": "https://github.com/3xDevOps/cloudfield",
   "license": "GPL-3.0",
   "keywords": ["coding agents", "claude code", "codex", "pull requests", "self-hosted"],
@@ -31,7 +31,7 @@
           "Message a session, answer an agent's question, and pause or resume a session",
           "Allow or deny a permission request once, stop or close a session"
         ],
-        "websiteURL": "https://onaether.dev",
+        "websiteURL": "https://cloudfield.ai",
         "supportURL": "https://github.com/3xDevOps/cloudfield/issues",
         "privacyPolicyURL": "PLACEHOLDER: hosted privacy policy covering this plugin; see docs/chatgpt-plugin.md",
         "termsOfServiceURL": "PLACEHOLDER: hosted terms of service; see docs/chatgpt-plugin.md",
