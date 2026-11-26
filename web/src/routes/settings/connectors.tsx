@@ -555,7 +555,7 @@ function Connectors({ client }: { client: Api }) {
                 actions={<Button size="sm" variant="secondary" aria-label={`Move ${label(c)} to the new address`} disabled={busy || target !== null} onClick={() => setConfirming({ connector: c, action: 'move' })}>Move to the new address</Button>}
               >
                 <div className="flex min-w-0 flex-col gap-1.5">
-                  <p>Add it again at this URL, then remove the old connector in {c.client_name}. Move revokes this one once the new one calls Cloudfield.</p>
+                  <p>Select <strong>Move to the new address</strong>, add it again in {c.client_name} at this URL and remove the old connector there. This one is revoked once the new one calls Cloudfield.</p>
                   <CopyableCommand command={c.notice.url} />
                 </div>
               </Callout>
@@ -563,7 +563,7 @@ function Connectors({ client }: { client: Api }) {
             {c.notice?.state === 'retired' && (
               <Callout tone="failed" title="This address is retired">
                 <div className="flex min-w-0 flex-col gap-1.5">
-                  <p>This connector no longer works. Add it again at this URL, then revoke this one and remove the old connector in {c.client_name}.</p>
+                  <p>This connector no longer works. <strong>Reconnect</strong> adds it again at this URL and revokes this one once the new one calls Cloudfield; remove the old connector in {c.client_name} too.</p>
                   <CopyableCommand command={c.notice.url} />
                 </div>
               </Callout>
