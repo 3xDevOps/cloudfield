@@ -350,7 +350,7 @@ func (s *Scheduler) setBootCommand(ctx context.Context, entry *supervised, saver
 		}
 		sw := modeSwitch{s: s, c: c, entry: entry, run: run, profile: profile, cid: cid}
 		var launch map[string][]byte
-		out, launch, _, scriptErr = sw.terminalScript(ctx, nonce, argv, run.Model)
+		out, launch, _, _, scriptErr = sw.terminalScript(ctx, nonce, argv, run.Model)
 		maps.Copy(files, launch)
 		return out, scriptErr
 	}

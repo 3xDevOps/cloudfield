@@ -68,15 +68,12 @@ func TestNativeCoordinationLaunchBoundaries(t *testing.T) {
 					}
 					return
 				}
-				if boundary != "interactive" {
+				if boundary != "interactive" && boundary != "taskless" {
 					if asset != nil || spec.Env["AETHER_MANAGED_NATIVE_WAKE"] != "" || spec.Env[coordtransport.ManagedHooksEnv] != "" {
 						t.Fatalf("%s acquired a native receiver", boundary)
 					}
 					if bytes.Contains(settings, []byte("hook claude wake")) {
 						t.Fatalf("%s wrote the claude wake hook: %s", boundary, settings)
-					}
-					if name == "claude" && boundary == "taskless" && (!bytes.Equal(settings, agentstatus.ClaudeSettings) || countOf(argv, "--settings") != 1) {
-						t.Fatalf("taskless claude settings = %s with argv %v, want the status reporter alone", settings, argv)
 					}
 					if boundary == "override" && !slices.Contains(argv, "--no-extensions") {
 						t.Fatalf("user disable argument lost: %v", argv)
@@ -113,6 +110,12 @@ func TestNativeCoordinationLaunchBoundaries(t *testing.T) {
 				}
 				if spec.Env[coordtransport.ManagedHooksEnv] != "1" {
 					t.Fatalf("%s run lacks %s", name, coordtransport.ManagedHooksEnv)
+				}
+				if name == "opencode" {
+					if asset == nil || !slices.Contains(argv, coordtransport.MountDir+"/opencode-native-launch.sh") {
+						t.Fatalf("opencode argv = %v, want the version wrapper and the staged mailbox plugin", argv)
+					}
+					return
 				}
 				want, err := coordhooks.Files.ReadFile(name + ".ts")
 				if err != nil {

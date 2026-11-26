@@ -232,19 +232,30 @@ func TestEnhancedTurnQueuedBehindTheReminderIsReminded(t *testing.T) {
 	}
 }
 
-// A taskless Standard launch loads no idle-wake hook, so its reminder never
-// offers waiting.
-func TestStandardTasklessReminderOffersNoWaiting(t *testing.T) {
+// A Standard launch's reminder offers waiting only when the launch loaded an
+// idle wake, with or without a task. The fake agent has none.
+func TestStandardReminderOffersWaitingOnlyWithAnIdleWake(t *testing.T) {
 	t.Parallel()
-	e := newTestEnv(t, withServerBinary(fakeServerBinary(t, "#!/bin/sh\necho aether\n")))
-	withCoordination(t, e)
-	run, _ := e.launchFake(t, "")
-	if err := e.sched.ReportAgentState(t.Context(), run.ID, agentstatus.Report{State: agentstatus.Working, TurnStart: true}); err != nil {
-		t.Fatal(err)
-	}
-	reminder, err := e.sched.HoldTurnEnd(t.Context(), run.ID)
-	if err != nil || reminder != reminderPrefix+" (answered, needs-input, blocked, success or failure) before ending the turn." {
-		t.Fatalf("HoldTurnEnd = %q, %v; want a reminder without waiting", reminder, err)
+	for agent, outcomes := range map[string]string{
+		"claude": "answered, waiting, needs-input, blocked, success or failure",
+		"fake":   "answered, needs-input, blocked, success or failure",
+	} {
+		t.Run(agent, func(t *testing.T) {
+			t.Parallel()
+			e := newTestEnv(t, withServerBinary(fakeServerBinary(t, "#!/bin/sh\necho aether\n")))
+			withCoordination(t, e)
+			run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", agent, domain.LaunchTUI)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = e.sched.ReportAgentState(t.Context(), run.ID, agentstatus.Report{State: agentstatus.Working, TurnStart: true}); err != nil {
+				t.Fatal(err)
+			}
+			reminder, err := e.sched.HoldTurnEnd(t.Context(), run.ID)
+			if err != nil || reminder != reminderPrefix+" ("+outcomes+") before ending the turn." {
+				t.Fatalf("HoldTurnEnd = %q, %v; want the outcomes %s", reminder, err, outcomes)
+			}
+		})
 	}
 }
 

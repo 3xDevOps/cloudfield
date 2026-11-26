@@ -37,8 +37,8 @@ func (n NativeLaunch) Command(argv []string) []string {
 	return append(slices.Clone(n.Wrapper), argv...)
 }
 
-// PrepareNativeLaunch is called only for coordinated, task-bearing interactive
-// runs. The registry capability, not the profile name alone, authorizes loading.
+// PrepareNativeLaunch is called only for coordinated Standard runs. The
+// registry capability, not the profile name alone, authorizes loading.
 // Every launch that loads managed files or arguments also gets the
 // AETHER_MANAGED_HOOKS marker.
 func (p Profile) PrepareNativeLaunch(dir string, argv []string, env map[string]string) (NativeLaunch, error) {

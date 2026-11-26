@@ -509,10 +509,16 @@ func TestRestartRecordsAModeTheRunRowMissed(t *testing.T) {
 	if sc, err := e.sched.readSidecar(run.ID); err != nil || sc.Mode != domain.LaunchTUI || sc.Switch == nil {
 		t.Fatalf("sidecar %+v (%v), want Standard with the switch kept", sc, err)
 	}
+	if bodies := e.sup.ran(); len(bodies) != 1 || !strings.Contains(bodies[0], "export "+coordtransport.WakeEnv+"='1'\n") {
+		t.Fatalf("supervisor ran %q, want the taskless terminal's idle wake", bodies)
+	}
 
 	s2 := e.restart(t)
 	if row, _ := e.db.GetRun(t.Context(), run.ID); row.Mode != domain.LaunchTUI || row.ACP {
 		t.Fatalf("row mode %q acp %v, want the switch recorded on restart", row.Mode, row.ACP)
+	}
+	if sc, err := s2.readSidecar(run.ID); err != nil || !sc.IdleWake {
+		t.Fatalf("sidecar %+v (%v), want the terminal's idle wake recorded on restart", sc, err)
 	}
 	if s2.acp.session(run.ID) != nil {
 		t.Fatal("recovery started an ACP server beside the resumed terminal")
@@ -732,7 +738,7 @@ func TestStandardCommandKeepsTheOpenCodeConfig(t *testing.T) {
 	entry := e.sched.runs[run.ID]
 	e.sched.mu.Unlock()
 	sw := modeSwitch{s: e.sched, c: e.sched.coordinationSeam(), entry: entry, run: run, profile: profile, session: "ses_1"}
-	if _, _, err := sw.writeTerminal(t.Context()); err != nil {
+	if _, _, _, err := sw.writeTerminal(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	var config string

@@ -625,7 +625,7 @@ func (s *Scheduler) runPlan(ctx context.Context, entry *supervised, run *domain.
 func (s *Scheduler) startRunContainer(ctx context.Context, entry *supervised, run *domain.Run, actor *domain.Member, argv []string, profile harness.Profile, plan *EnvironmentPlan, unlockCaches func()) (AgentDriver, error) {
 	var native harness.NativeLaunch
 	coordination := s.coordinationSeam()
-	if coordination != nil && coordination.enabled && run.Mode == domain.LaunchTUI && run.Task != "" {
+	if coordination != nil && coordination.enabled && run.Mode == domain.LaunchTUI {
 		var err error
 		native, err = profile.PrepareNativeLaunch(coordtransport.MountDir, argv, plan.Env)
 		if err != nil {
@@ -676,7 +676,7 @@ func (s *Scheduler) startRunContainer(ctx context.Context, entry *supervised, ru
 		maps.Copy(plan.Env, proxyEnv)
 	}
 	s.mu.Lock()
-	entry.appServer = appServer
+	entry.appServer, entry.idleWake = appServer, native.IdleWake
 	s.mu.Unlock()
 	limits, err := s.runLimits(ctx, run.Limits)
 	if err != nil {

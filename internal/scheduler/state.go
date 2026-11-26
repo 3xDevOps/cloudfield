@@ -423,6 +423,7 @@ type sidecar struct {
 	Mode            domain.LaunchMode `json:"mode,omitempty"`
 	AppServer       bool              `json:"app_server,omitempty"`
 	ServerTurn      bool              `json:"server_turn,omitempty"`
+	IdleWake        bool              `json:"idle_wake,omitempty"`
 	Paused          bool              `json:"paused"`
 	DiskHeld        bool              `json:"disk_held,omitempty"`
 	MemorySaved     uint64            `json:"memory_saved,omitempty"`
@@ -527,6 +528,7 @@ func (e *supervised) sidecar() sidecar {
 		Mode:                e.launchMode,
 		AppServer:           e.appServer,
 		ServerTurn:          e.serverTurn,
+		IdleWake:            e.idleWake,
 		Paused:              e.paused,
 		DiskHeld:            e.diskHeld,
 		MemorySaved:         e.memorySaved,

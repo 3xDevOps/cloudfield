@@ -30,9 +30,7 @@ func (s *Scheduler) HoldTurnEnd(ctx context.Context, run domain.RunID) (string, 
 		s.mu.Unlock()
 		return "", nil
 	}
-	// Mail wakes an Enhanced session, and a Standard launch with a task
-	// loads the idle-wake hook; a taskless one does not.
-	started, wake := entry.turnStartedAt, entry.launchMode == domain.LaunchACP || entry.task != ""
+	started, wake := entry.turnStartedAt, entry.launchMode == domain.LaunchACP || entry.idleWake
 	s.mu.Unlock()
 	last, err := s.cfg.Store.LastCoordReportAt(ctx, run)
 	if err != nil {

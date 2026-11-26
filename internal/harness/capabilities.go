@@ -51,7 +51,7 @@ const (
 	HooksNone Hooks = iota
 	// HooksByHand: Aether ships the hooks, and the member installs them.
 	HooksByHand
-	// HooksManaged: a coordinated Standard launch with a task loads them.
+	// HooksManaged: a coordinated Standard launch loads them.
 	HooksManaged
 )
 

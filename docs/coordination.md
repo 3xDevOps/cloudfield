@@ -784,7 +784,8 @@ See [agent installation](harnesses.md#incoming-coordination-hooks) for each
 destination, and [authoring an integration](harness-integration.md) for an
 unsupported agent.
 
-Coordinated, task-bearing Claude Code Standard sessions need no installation:
+Coordinated Claude Code Standard sessions, with or without a task, need no
+installation:
 their [managed launch](harnesses.md#incoming-coordination-hooks) loads the
 `claude.json` hooks next to the status reporter and an idle-wake waiter. It
 leaves out the inbox `Stop` hook: Claude Code runs all `Stop` hooks in
