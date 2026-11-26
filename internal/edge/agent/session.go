@@ -13,8 +13,10 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	"github.com/3xDevOps/cloudfield/internal/version"
@@ -74,8 +76,9 @@ func (s *session) send(m edgeproto.Message) error {
 }
 
 // DialError is a WebSocket upgrade the edge, or something in between,
-// answered with Status instead of 101; Message is the edge's error text,
-// when its body carried one.
+// answered with Status instead of 101. Message is the error text its
+// body carried, and for a redirect the Location it named, with control
+// characters replaced and at most maxDialMessage bytes long.
 type DialError struct {
 	URL     string
 	Status  int
@@ -112,12 +115,15 @@ func dial(ctx context.Context, url string, header http.Header, timeout time.Dura
 	if err != nil {
 		cancel()
 		if resp != nil && resp.StatusCode != http.StatusSwitchingProtocols {
-			de := &DialError{URL: url, Status: resp.StatusCode}
 			var body edgeproto.ErrorBody
-			if resp.Body != nil && json.NewDecoder(resp.Body).Decode(&body) == nil {
-				de.Message = body.Error
+			if resp.Body != nil {
+				_ = json.NewDecoder(resp.Body).Decode(&body)
 			}
-			return nil, nil, de
+			msg := body.Error
+			if loc := resp.Header.Get("Location"); loc != "" && resp.StatusCode/100 == 3 {
+				msg = strings.TrimSpace(msg + " Location: " + loc)
+			}
+			return nil, nil, &DialError{URL: url, Status: resp.StatusCode, Message: printableText(msg, maxDialMessage)}
 		}
 		return nil, nil, fmt.Errorf("dial %s: %w", url, err)
 	}
@@ -572,6 +578,24 @@ func (a *Agent) Leave(ctx context.Context) error {
 	}
 	_ = c.Close(websocket.StatusNormalClosure, "")
 	return errors.Join(a.setEdgeState(edgeproto.StateUnclaimed), a.state.ClearOwner(), a.state.RemoveClaimCode())
+}
+
+// maxDialMessage bounds the refusal text a DialError keeps.
+const maxDialMessage = 1024
+
+// printableText is s from another party, safe to print, log and store:
+// invalid UTF-8 and control characters replaced, at most n bytes.
+func printableText(s string, n int) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return '?'
+		}
+		return r
+	}, strings.ToValidUTF8(s, "?"))
+	if len(s) > n {
+		s = strings.ToValidUTF8(s[:n], "") + "..."
+	}
+	return s
 }
 
 func truncate(s string, n int) string {

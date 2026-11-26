@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"crypto/ed25519"
 	"crypto/rand"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -187,6 +188,34 @@ func TestNoticesOfAnEarlierPinAreNotWritten(t *testing.T) {
 	}
 }
 
+// TestDialErrorTextIsPrintable refuses a dial with text that would drive
+// a terminal or forge a log line, and with too much of it.
+func TestDialErrorTextIsPrintable(t *testing.T) {
+	for raw, want := range map[string]string{
+		"x\x1b[2J\r\nfake: connected": "x?[2J??fake: connected",
+	} {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusGone)
+			_ = json.NewEncoder(w).Encode(edgeproto.ErrorBody{Error: raw})
+		}))
+		_, _, err := dial(t.Context(), srv.URL+edgeproto.PathServerControl, nil, handshakeTimeout)
+		srv.Close()
+		var de *DialError
+		if !errors.As(err, &de) || de.Message != want {
+			t.Errorf("refusal %.20q: %v", raw, err)
+		}
+	}
+}
+
+func TestPrintableTextIsCapped(t *testing.T) {
+	if got := printableText(strings.Repeat("a", 5000), maxDialMessage); got != strings.Repeat("a", maxDialMessage)+"..." {
+		t.Errorf("printableText of 5000 bytes is %d bytes", len(got))
+	}
+	if got := printableText(strings.Repeat("é", 600), 1023); !strings.HasSuffix(got, "é...") || len(got) != 1022+3 {
+		t.Errorf("printableText split a rune: %q", got[len(got)-8:])
+	}
+}
+
 // TestControlDialRefusalIsTyped checks that a refused upgrade reports its
 // HTTP status as a *DialError, and that a redirect is not followed.
 func TestControlDialRefusalIsTyped(t *testing.T) {
@@ -212,7 +241,7 @@ func TestControlDialRefusalIsTyped(t *testing.T) {
 		t.Errorf("dial a 410: %q, want %q", err, want)
 	}
 	_, _, err = dial(t.Context(), moved.URL+edgeproto.PathServerControl, nil, handshakeTimeout)
-	if !errors.As(err, &de) || de.Status != http.StatusFound || followed.Load() {
+	if !errors.As(err, &de) || de.Status != http.StatusFound || followed.Load() || de.Message != "Location: "+elsewhere.URL+edgeproto.PathServerControl {
 		t.Fatalf("dial a redirect: %v, followed %v", err, followed.Load())
 	}
 	if _, err = FetchEdgeInfo(t.Context(), moved.URL); err == nil || followed.Load() || !strings.Contains(err.Error(), "302 Found") {
