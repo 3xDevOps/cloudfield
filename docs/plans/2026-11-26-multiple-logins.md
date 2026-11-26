@@ -8,9 +8,13 @@ recorded with the vendor's reason.
 
 **Status:** proposed 2026-11-26. Claude Code only. Decisions marked
 **Owner** wait for the owner; the build proceeds on the stated default.
+The [Review](#review) section lists what review changed.
 
-A **login** is one sign-in of an agent CLI: for Claude Code, a claude.ai
-subscription sign-in, a Console API key, or a keyless Console sign-in. An
+A **login** is one sign-in of an agent CLI. Claude Code keeps one in any of
+three places on Linux: a claude.ai subscription sign-in
+(`~/.claude/.credentials.json`), a Console API key (`primaryApiKey` in
+`~/.claude.json`), and a keyless Console sign-in (an Anthropic profile under
+`ANTHROPIC_CONFIG_DIR`, by default `~/.config/anthropic`). An
 **account** stays what it is today: a member, whose login a session spends
 (`runs.account_member_id`). This plan makes a session's account a member
 *and* one of that member's logins.
@@ -29,9 +33,12 @@ Most of the machinery is built and stays:
   `rate_limit_event` plus an error `result`, the ACP `-32603` error with
   `errorKind == "rate_limit"`, and the `StopFailure` hook, all gated on
   Claude Code's exported usage-limit prefixes
-  (`internal/agentstatus/agentstatus.go`). A transient 429 ("not your usage
-  limit"), an overloaded model, a network error, a refused prompt and a
-  signed-out login match none of them and never move a session.
+  (`internal/agentstatus/agentstatus.go`). The list is the vendor's: it
+  holds the subscription limits and also "You're out of usage credits",
+  the organisation, seat and group messages, each meaning this login
+  cannot pay for the turn. A transient 429 ("not your usage limit"), an
+  overloaded model, a network error, a refused prompt and a signed-out
+  login match none of them and never move a session.
 - A session on another member's account mounts that member's login file
   over the launcher's and gets its own copy of `~/.claude.json` with the
   account keys removed, at `CLAUDE_CONFIG_DIR`
@@ -98,80 +105,124 @@ moved between automatically is undecided by the text.
 ### 1. Logins
 
 - A member's **default login** is what they have today: the files in their
-  home. It is never moved, copied or renamed. A member who adds no login
-  has no new row, file or code path.
-- An **added login** has a name the member chooses (`[a-z0-9][a-z0-9-]*`,
-  at most 32 characters, unique per member and agent; `default` is
-  reserved), a kind read from its files (`subscription`, `api-key`,
-  `console`), and, for display to its owner only, the plan and the
-  signed-in email and organisation Claude Code cached.
-- Logins are **ordered**. The first is preferred; the default login is
-  first until the member reorders. Each login has an **automatic** switch:
-  off means Cloudfield uses it only when the member picks it for a launch.
+  home, of any of the three kinds. It is never moved, copied or renamed. A
+  member who adds no login has no new row, file or code path, and their
+  launches and moves choose exactly as today.
+- An **added login** is a subscription sign-in or a keyless Console
+  sign-in. A Console API key is not accepted as an added login: Claude Code
+  keeps it in `~/.claude.json`, and a copy of that file reaches the
+  member's home (its `backups/`), where it would outlive the login. A
+  member who pays by API key keeps it as their default login or as a
+  workspace secret, as today.
+- An added login has an id (`lgn-…`, what rows, markers and the wire
+  carry), a name the member chooses (`[a-z0-9][a-z0-9-]*`, at most 32
+  characters, unique per member and agent; `default` is reserved), a kind
+  read from its files, and the plan, email and organisation Claude Code
+  reported at sign-in. Its owner sees all of it. Another member sees only
+  that a session is on an added login of that member, never its name.
+- A sign-in that reports the email and organisation of a login the member
+  already has is refused, naming that login.
+- Logins are **ordered**, the default login included: adding the first
+  login also writes the default login's row (id `default`, no directory),
+  so order and the automatic switch have one home. New logins go last. The
+  first is preferred.
+- Each login has an **automatic** switch. Off means Cloudfield uses the
+  login only when the member picks it for a launch, and never moves a
+  session onto it.
 - **Owner:** a second personal subscription (plan `pro` or `max` while
   another of the member's logins is `pro` or `max`) is added with
   automatic **on**, after the CLI and dashboard show what Anthropic's
   pages do and do not say, with the links above. The alternative is
   automatic off for that case until the member turns it on. It is one
-  default; the build makes it a single constant.
+  constant. Review argued for off: a move puts a personal login into a
+  session that workspace collaborators can steer (section 6).
 
 ### 2. Storage
 
 - An added login lives at
   `<data-dir>/logins/<member-id>/<agent>/<login-id>/`, outside every member
-  home, mode `0700`, files `0600`, with the ownership a member home's login
-  file has. It holds the three places Claude Code keeps a login on Linux:
-  `credentials.json` (the `claudeAiOauth` sign-in), `account.json` (the
-  account keys of `~/.claude.json`, which include a Console API key as
-  `primaryApiKey`), and `anthropic/` (the keyless Console profile Claude
-  Code keeps under `ANTHROPIC_CONFIG_DIR`).
+  home, mode `0700`, files `0600`, owned and reserved the way a member
+  home is. It holds `credentials.json` (the `claudeAiOauth` sign-in),
+  `anthropic/` (the keyless Console profile) and `identity.json` (plan,
+  email, organisation; no secret).
 - One `agent_logins` table: member, agent, id, name, position, automatic,
   created. Additive migration. Runs and account segments gain an
-  `account_login` column, empty for the default login, so every existing
-  row already means what it meant.
-- A session on an added login gets what a session on a teammate's shared
-  account gets today, from the login's directory instead of a teammate's
-  home: `credentials.json` mounted over `~/.claude/.credentials.json`, a
-  per-session copy of `~/.claude.json` carrying this login's account keys
-  at `CLAUDE_CONFIG_DIR`, and `anthropic/` at `ANTHROPIC_CONFIG_DIR`. The
-  default login's three stores are covered or masked in that container, so
-  the agent sees exactly one login. Nothing else is mounted or copied.
+  `account_login` column holding the login id, empty for the default
+  login, so every existing row already means what it meant.
+- **One type names an account everywhere it is a key:** member plus login
+  id. The usage cache, `fallback.Measured`, the remembered login refusals
+  and verified logins, the `account_swap` marker, recovery's comparison of
+  a run's account with the marker, and the "is this a move" test all key
+  on it. Today they key on the member and could not tell two logins of one
+  member apart.
+- A session on an added login gets, from the login's directory:
+  `credentials.json` mounted over `~/.claude/.credentials.json`;
+  `anthropic/` mounted at `ANTHROPIC_CONFIG_DIR`; and the per-session copy
+  of `~/.claude.json` a shared-account session gets today, with the
+  account keys removed and no key added, at `CLAUDE_CONFIG_DIR`, with the
+  legacy `~/.claude/.config.json` masked. The container's agent then finds
+  one login. The inode of each mounted login file is checked before the
+  agent starts, as for a shared login today, so a dropped mount fails the
+  launch instead of running on the default login under another name.
+- A keyless Console login is a whole directory, so an Isolated session
+  refuses it with the reason, as it refuses a teammate's whole-directory
+  login today.
+- When the session's environment carries `ANTHROPIC_API_KEY` (a workspace
+  secret or the server's), Claude Code uses that key whatever the login.
+  Such a launch chooses and moves between no logins, and the session
+  header says the key pays.
 - Two sessions on one login share its file, as two sessions on the default
   login do today (pinned mount, rewrite in place). Two logins never share a
   file, so a refresh of one cannot overwrite another.
 - **Signing in** is Claude Code's own flow. `cloudfield agent login claude
-  --as <name>` creates the empty login and opens a terminal in the
-  member's environment with that login's stores mounted as above, running
-  `claude auth login`. The server never sees a password, runs no OAuth of
-  its own and never refreshes a token.
-- **Removing** a login deletes its directory and row. It is refused while a
-  live session is on it, naming the sessions. It does not sign the login
-  out at Anthropic; the command says so.
+  --as <name>` creates the login and runs `claude auth login` in a
+  terminal in its own short-lived container, built by the function that
+  builds a session's mounts for that login, with a scratch `.claude.json`
+  under the login's directory. The member's environment terminal and the
+  default login's three stores are not in it or are masked, so a sign-in
+  cannot overwrite or sign out another login. When the command ends the
+  server reads the kind and `oauthAccount` from the scratch file, writes
+  `identity.json`, and removes the container. A login that never signed in
+  is removed. The server never sees a password, runs no OAuth of its own
+  and never refreshes a token.
+- **Removing** a login deletes its directory and row, under the launch
+  authorisation lock. It is refused while any session that still has a
+  container is on it or an `account_swap` marker names it, listing the
+  sessions. It does not sign the login out at Anthropic; the command says
+  so.
+- `member remove` deletes the member's logins. A member merge moves the
+  merged member's added logins to the surviving member, renaming on a
+  clash, in the step that moves the home.
 
 ### 3. When Cloudfield switches
 
 **At launch.** The launch asks for a login (`--login <name>`, the launch
-dialog) or, by default, the member's first automatic login. The existing
-rule then applies with logins as candidates: the requested login is used
-unless a successful usage read shows a window at 95% or more. Then, in
-order:
+dialog) or, by default, the member's first automatic login. The requested
+login is used unless a successful usage read shows a window at 95% or
+more, or the vendor reported it run out as below. Then, in order:
 
-1. the member's other automatic logins, in their order: the first whose
-   usage reads below 95%, or which is an API-key or Console login
-   (Anthropic exposes no usage for those, and the member placed it in the
-   order);
+1. the member's other automatic logins, in their order: the first that can
+   sign in and whose usage reads below 95%, or cannot be read (a Console
+   login, for which Anthropic exposes no usage, or a subscription login
+   whose access token expired while idle and which holds a refresh token);
 2. accounts teammates shared, by most usage left, as today.
 
-A login that is signed out, expired without a refresh token or unreadable
-is never chosen. When nothing qualifies the launch stays on the requested
-login, as today.
+A login that is signed out, or expired without a refresh token, is never
+chosen. When nothing qualifies the launch stays on the requested login, as
+today. A login whose usage cannot be read and which the vendor reported
+run out in some session is passed over for 30 minutes, so a Console login
+out of credit is not chosen again by every launch.
+
+The per-launch order (`--fallback <member-id,...>`) keeps naming members.
+The launcher's own id stands for their automatic logins in order; another
+member's id stands for that member's default login.
 
 **In a running session.** The signal is the existing one and only that:
-the vendor's usage-limit error ending the turn. Cloudfield then does what
-it does today for a teammate's account, with the member's logins first in
-the candidate order: stop the agent, replace the container with one on the
-next login, resume the same conversation and send one continuation prompt
-naming both logins.
+the vendor's message, from its exported list, ending the turn. Cloudfield
+then does what it does today for a teammate's account, with the member's
+logins first in the candidate order: stop the agent, replace the container
+with one on the next login, resume the same conversation and send one
+continuation prompt naming both logins.
 
 - The turn has already ended with the vendor's error when the signal
   arrives, so no tool call is in flight. Finished tool calls are in the
@@ -179,10 +230,14 @@ naming both logins.
   login. The prompt is not sent again; the continuation prompt is sent
   once, guarded by the `account_swap` marker across a server restart.
 - Files the turn wrote are in the session's worktree, which the new
-  container mounts.
+  container mounts. Processes the agent left running in the old container
+  and its terminals end with it, as in every move today.
 - A login the session already used is not tried again in that session.
+- Under the lock that records the move, the chosen login must still exist
+  and still be automatic. Otherwise the next candidate is tried.
 - A session whose home is not the login owner's own (after a handoff)
-  never moves to an added login.
+  never moves to an added login, and a session on an added login cannot
+  be handed off: the handoff is refused with the reason.
 
 **When all are spent.** The session parks at `needs-attention` (headless:
 fails) with the vendor's own message, the logins tried, and the earliest
@@ -194,58 +249,68 @@ reset time among them when a usage read gave one.
   [claude]` (name, kind, plan, email, usage windows, automatic, order,
   sessions on it), `cloudfield agent logins rename|remove|order|auto`.
 - Agents page: the Claude Code row lists its logins with usage, **Add
-  login** and per-login **Remove** as visible buttons, drag to order, the
+  login** and per-login **Remove** as visible buttons, reordering, the
   automatic toggle.
 - Session header, `cloudfield sessions` and the session snapshot: `On
-  <member>'s account, login <name>`, and for an API-key or Console login
-  `billed to Console credits`.
+  <member>'s account, login <name>`, and for a Console login `billed to
+  Console credits`.
 - Every move: a `run.account` event with both logins and the vendor's
   message, an item-log notice, a room note, and a new account segment.
   Cost stays with the segment that spent it.
 - Off switches: per login (automatic), per launch (`--no-fallback`), and
-  the saved launch default, all existing or above.
+  the saved launch default.
 
 ### 5. Sharing and precedence
 
 - A share reaches the owner's **default login only**, exactly what it
-  reaches today. An added login is used only by its owner's own sessions,
-  in the owner's own home. No wire field lets a grantee name another
-  member's login; the server ignores a login on an account that is not the
-  caller's.
-- A launch on a teammate's account that is spent moves as today; the
-  launcher's own logins come before other teammates' accounts.
-- A sub-session inherits its parent's requested login and is chosen for
-  like any launch. A swarm worker is authorised against the swarm's
-  accountable human, whose logins are the candidates.
+  reaches today. An added login is used only by sessions its owner owns,
+  in the owner's own home.
+- The server **refuses** a launch, a sub-session or a fallback order that
+  names a login when the account is not the run owner's own. A login is
+  named by id on the wire, so a name that two members both use cannot be
+  resolved against the wrong member.
+- A launch on a teammate's account that is spent moves as today; when the
+  launcher has added logins, their own logins come before other
+  teammates' accounts.
+- A sub-session starts on its parent's current account. It inherits the
+  parent's current login only when that account is the sub-session
+  owner's own; otherwise it starts on the account's default login.
 
 ### 6. Security
 
-- An API key and a refresh token are bearer secrets. They exist only in
-  the login's directory and, for the one login a session runs on, in that
-  session's container, as today for the default login.
+- A refresh token is a bearer secret. An added login's exists only in the
+  login's directory and in the containers of sessions running on it.
 - The server reads a login only through the allowlisted reader
   (`memberhome.ReadCredential`'s rules: fixed names, opened through a
   root, size limit) to read usage and the login's kind. No RPC returns a
-  credential. List responses carry name, kind, plan, email and
-  organisation, to the login's owner only; another member sees none of it.
-- Logs, events, reports, room notes and error text carry a login's name
-  and id, never file content. The quota cache keeps its fingerprint, not
-  the token.
-- A session on login A cannot read login B: B is outside the home and not
-  mounted. A sub-session and a handed-off session get no more than their
-  own login. The environment terminal holds the default login only, except
-  the sign-in terminal, which holds the one login being signed in.
-- The run-out signal comes from inside the container and can be forged, as
-  today. Forging it moves the session only to a login its owner marked
-  automatic, and each move is recorded.
+  credential.
+- Logs, events, reports, room notes and error text carry a login's id,
+  and its name only to its owner, never file content. The quota cache
+  keeps its fingerprint, not the token.
+- **The boundary is the member, not the session.** Another member, a
+  grantee of a share and a workspace admin cannot name, mount or read an
+  added login. The member's own sessions are not walled from each other:
+  they share the home, so code a session plants there runs in the next
+  container, and a session with sudo can unmount what covers the default
+  login. A compromised or prompt-injected session can therefore reach, in
+  time, every login Cloudfield will put a session on, and can forge the
+  run-out signal to be moved onto the next. That is today's exposure of
+  the default login, multiplied by the logins marked automatic. A login
+  with automatic off is reached only by a launch the member aimed at it.
+  Isolated sessions do not write to the home and narrow this.
+- **Collaborators.** A workspace collaborator who may steer a member's
+  session, or open a terminal in it, reaches the login that session is
+  on, as today. A move can put a second login there. The session header
+  shows it; `security.md` says it; a login kept for other work is given
+  automatic off.
 
 ## Pull requests
 
 | # | Scope | Proves |
 | --- | --- | --- |
-| 1 | Storage and naming: `agent_logins`, the login directory, list, add, rename, remove, order; usage read per login | Two logins never share a file; one login means no new row or file |
-| 2 | Launch-time choice: `account_login` on runs and segments, mounts, candidates | A spent first login launches on the second; a grantee cannot name an owner's login |
-| 3 | In-session move between a member's logins, reset time in the parked reason | Forced races of the signal against turn end and server restart: no replayed prompt, one continuation |
+| 1 | Storage and naming: `agent_logins`, the login directory, the account key type, list, add (sign-in container), rename, remove, order; usage read per login; member remove and merge | Two logins never share a file; one login means no new row or file; a sign-in cannot touch another login |
+| 2 | Launch-time choice: `account_login` on runs and segments, mounts and the inode check, candidates | A spent first login launches on the second; a grantee, a sub-session and a fallback order cannot name an owner's login |
+| 3 | In-session move between a member's logins, reset time in the parked reason, handoff refusal | Forced races of the signal against turn end, removal, automatic off and server restart: no replayed prompt, one continuation, recovery tells two logins of one member apart |
 | 4 | CLI | Integration test of the commands |
 | 5 | Dashboard | Dark-mode design review at desktop, 430 and 360 widths |
 | 6 | Docs (`agents.md`, `harnesses.md`, `teams.md`, `security.md`, `privacy.md`, `notices.md`) and an end-to-end test with a stand-in agent that reports "run out" on cue | Add, launch, run out, move, all spent |
@@ -256,8 +321,37 @@ reset time among them when a usage read gave one.
 
 - Other agents. The table and wire fields carry the agent, so Codex can
   follow.
-- Sharing an added login with a teammate.
-- A Console login that runs out of credit: Claude Code reports it with
-  another error, which is shown as it is and moves nothing until its
-  signal is read from the vendor's source and fixtured.
+- A Console API key as an added login, and sharing an added login with a
+  teammate.
+- Limiting a login to named workspaces.
 - Continuing on the same login after its reset.
+
+## Review
+
+A security review by Claude Opus (`claude-opus-5-5`, fresh context)
+changed the first draft:
+
+- A Console API key would have been copied into the member's home through
+  Claude Code's backups of `~/.claude.json` and outlived its login. API
+  keys are no longer accepted as added logins.
+- "A session on login A cannot read login B" was not a boundary inside one
+  member's sessions. Section 6 now says what the boundary is.
+- Collaborators and handoff recipients could reach an added login. Handoff
+  of a session on an added login is refused; the collaborator exposure is
+  stated and has the automatic switch as its control.
+- Move, recovery and the caches keyed on the member. They key on member
+  and login.
+- The fallback order, sub-session inheritance and login names could
+  resolve against another member. Logins travel by id and a mismatch is
+  refused.
+- An idle login's expired access token made it unchoosable. It now counts
+  as usage unknown when it holds a refresh token.
+- The vendor's list holds more than subscription limits. The plan says so,
+  and remembers a vendor-reported run-out for logins with no readable
+  usage.
+- Removal and the automatic switch raced a move. Both are checked under
+  the lock that records the move.
+- The sign-in terminal, the Isolated rule for a directory login, member
+  removal and merge, the inode check, `ANTHROPIC_API_KEY` in the
+  environment, and the default login's row were undecided. They are
+  decided above.
