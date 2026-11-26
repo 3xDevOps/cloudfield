@@ -825,7 +825,10 @@ type Run struct {
 	// differs from AccountMemberID because that account's usage was
 	// exhausted; empty otherwise.
 	RequestedAccountMemberID MemberID
-	Fallback                 AccountFallback
+	// AccountLogin is the added login of AccountMemberID the run spends;
+	// empty for their default login.
+	AccountLogin LoginID
+	Fallback     AccountFallback
 	// HomeMemberID is whose home the container mounts: the launcher. A
 	// handoff changes MemberID, never this. Empty on rows created before
 	// account shares were narrowed.
@@ -975,6 +978,11 @@ func (r *Run) AccountMember() MemberID {
 		return r.AccountMemberID
 	}
 	return r.MemberID
+}
+
+// Account is the login the run spends.
+func (r *Run) Account() Account {
+	return Account{Member: r.AccountMember(), Login: r.AccountLogin}
 }
 
 // HomeMember returns whose persistent home the run's container mounts.

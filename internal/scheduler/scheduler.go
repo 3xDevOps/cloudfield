@@ -90,6 +90,8 @@ type Config struct {
 	// callers may omit it to use StateDir.
 	DataDir string
 	Homes   *memberhome.Manager
+	// Logins keeps members' added logins; nil keeps none.
+	Logins *memberhome.Logins
 	// OMPBrokers run omp's auth broker for session VMs; nil in Docker.
 	OMPBrokers *ompbroker.Manager
 	// Signing holds members' commit signing keys and serves each member's
@@ -271,6 +273,9 @@ type Scheduler struct {
 	guestsNeeded map[runtime.ID]int
 	// loginRefusals are the sign-in refusals agents gave on an account.
 	loginRefusals map[loginKey]loginRefusal
+	// loginSignIns are the sign-ins of new logins, from agent.login.add
+	// until their result is collected.
+	loginSignIns map[domain.LoginID]*loginSignIn
 	// retentionPublished tracks only nonempty runtime metadata under mu.
 	retentionPublished map[domain.RunID]events.RunRetentionPayload
 	// archiveMu serializes SetArchived against Relaunch restoring an archived run.
@@ -295,6 +300,7 @@ type Scheduler struct {
 	terminalLocks         map[domain.MemberID]*sync.Mutex
 	assistantLocks        map[domain.MemberID]*sync.Mutex
 	assistantLoginLocks   map[domain.MemberID]*sync.Mutex
+	loginLocks            map[domain.MemberID]*sync.Mutex
 	terminals             map[domain.MemberID]*terminalSupervision
 	credentialUsers       map[*credentialUserReservation]struct{}
 	// unstartableImages maps a saved environment image that failed to start
@@ -402,7 +408,7 @@ type supervised struct {
 	loginMember domain.MemberID
 	// verifiedLogins are the account owners whose own login a container of
 	// this run was started with, as the runtime confirmed at start.
-	verifiedLogins []domain.MemberID
+	verifiedLogins []domain.Account
 	// reporter is recovered from the sidecar, since only the launch or mode
 	// switch knew which command the container runs.
 	reporter harness.Reporter

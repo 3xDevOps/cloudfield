@@ -6,8 +6,11 @@ const MethodAccountUsage = "account.usage"
 // AccountUsageParams selects the account whose vendor quota is read. An empty
 // account_member_id means the authenticated member's own account. Refresh
 // bypasses the normal successful-result cache when the server permits it.
+// Login names one of the caller's own logins of Claude Code: "default" or
+// an added login's id; empty is the default login.
 type AccountUsageParams struct {
 	AccountMemberID string `json:"account_member_id,omitempty"`
+	Login           string `json:"login,omitempty"`
 	Refresh         bool   `json:"refresh,omitempty"`
 }
 
@@ -15,6 +18,7 @@ type AccountUsageParams struct {
 // JSON array, including when no provider row is available.
 type AccountUsageResult struct {
 	AccountMemberID string          `json:"account_member_id"`
+	Login           string          `json:"login,omitempty"`
 	Providers       []UsageProvider `json:"providers"`
 }
 

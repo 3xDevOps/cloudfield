@@ -439,7 +439,7 @@ type sidecar struct {
 	LoginMember string `json:"login_member,omitempty"`
 	// VerifiedLogins are the account owners whose own login the runtime
 	// confirmed in a container of this run.
-	VerifiedLogins      []domain.MemberID        `json:"verified_logins,omitempty"`
+	VerifiedLogins      []domain.Account         `json:"verified_logins,omitempty"`
 	Reporter            harness.Reporter         `json:"reporter,omitempty"`
 	Egress              bool                     `json:"egress,omitempty"`
 	AgentState          agentstatus.State        `json:"agent_state,omitempty"`

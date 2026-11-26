@@ -28,9 +28,15 @@ func AssistantLoginSession(member domain.MemberID, agent string) SessionKey {
 	return SessionKey("assistant-login:" + string(member) + ":" + agent)
 }
 
+// LoginSignInSession returns the key for the sign-in of a member's new login.
+func LoginSignInSession(member domain.MemberID, login domain.LoginID) SessionKey {
+	return SessionKey("login-signin:" + string(member) + ":" + string(login))
+}
+
 // Run returns the run ID when k identifies an agent run session.
 func (k SessionKey) Run() (domain.RunID, bool) {
-	if strings.HasPrefix(string(k), "terminal:") || strings.HasPrefix(string(k), "run-shell:") || strings.HasPrefix(string(k), "assistant-login:") {
+	if strings.HasPrefix(string(k), "terminal:") || strings.HasPrefix(string(k), "run-shell:") || strings.HasPrefix(string(k), "assistant-login:") ||
+		strings.HasPrefix(string(k), "login-signin:") {
 		return "", false
 	}
 	return domain.RunID(k), true
@@ -41,5 +47,5 @@ func (k SessionKey) Run() (domain.RunID, bool) {
 // a run-shell tab or a sign-in is always a fresh process whose old
 // scrollback would mislead.
 func (k SessionKey) seedsReplay() bool {
-	return !strings.HasPrefix(string(k), "run-shell:") && !strings.HasPrefix(string(k), "assistant-login:")
+	return !strings.HasPrefix(string(k), "run-shell:") && !strings.HasPrefix(string(k), "assistant-login:") && !strings.HasPrefix(string(k), "login-signin:")
 }

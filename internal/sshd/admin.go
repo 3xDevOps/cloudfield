@@ -289,6 +289,20 @@ func (s *Server) memberRemove(ctx context.Context, member domain.MemberID, param
 				keyErr = s.cfg.Signing.Remove(id)
 			}
 			linearErr = s.disconnectLinear(id)
+			signInsEnded := true
+			if s.cfg.LoginSignIns != nil {
+				if err := s.cfg.LoginSignIns.EndLoginSignIns(ctx, id); err != nil {
+					// The next start finds a sign-in's container through its
+					// directory, so the directories stay until then.
+					slog.Warn("sshd: end the removed member's sign-ins; their logins are removed at the next start", "member", id, "error", err)
+					signInsEnded = false
+				}
+			}
+			if s.cfg.Logins != nil && signInsEnded {
+				if err := s.cfg.Logins.RemoveMember(id); err != nil {
+					slog.Warn("sshd: member logins cleanup failed", "member", id, "error", err)
+				}
+			}
 			if s.cfg.Homes != nil {
 				if err := s.cfg.Homes.Remove(ctx, id); err != nil {
 					slog.Warn("sshd: member home cleanup failed", "member", id, "error", err)

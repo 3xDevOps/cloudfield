@@ -19,6 +19,11 @@ type RunAccountSegment struct {
 	StartedAt       time.Time
 }
 
+// Account is the login the segment spent.
+func (s *RunAccountSegment) Account() domain.Account {
+	return domain.AccountOf(s.AccountMemberID)
+}
+
 // RunAccountLaunchReason is segment 0's reason.
 const RunAccountLaunchReason = "launch"
 

@@ -43,6 +43,7 @@ var (
 // may have any of them.
 type Store interface {
 	WorkspaceAccessStore
+	AgentLoginStore
 
 	CreateWorkspace(ctx context.Context, w *domain.Workspace) error
 	GetWorkspace(ctx context.Context, id domain.WorkspaceID) (*domain.Workspace, error)
