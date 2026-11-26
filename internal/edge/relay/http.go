@@ -333,6 +333,7 @@ func (r *Relay) forwardOnce(w http.ResponseWriter, req *http.Request, serverID s
 	req.ContentLength = int64(len(body))
 	req.GetBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(body)), nil }
 	addr, origin := clientAddr(req.RemoteAddr), r.originOf(client)
+	retiring := r.retiringHeader(origin)
 	var unsent error
 	proxy := &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
@@ -353,10 +354,14 @@ func (r *Relay) forwardOnce(w http.ResponseWriter, req *http.Request, serverID s
 				unsent = err
 				return
 			}
+			// A 1xx answer before the failure cleared the header map.
+			if retiring != "" {
+				w.Header().Set(edgeproto.HeaderRetiring, retiring)
+			}
 			r.refuseHTTP(w, client, serverID, err)
 		},
 	}
-	proxy.ServeHTTP(&responseFilter{ResponseWriter: w, retiring: r.retiringHeader(origin)}, req)
+	proxy.ServeHTTP(&responseFilter{ResponseWriter: w, retiring: retiring}, req)
 	return unsent
 }
 

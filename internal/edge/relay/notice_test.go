@@ -1,6 +1,7 @@
 package relay
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/ed25519"
 	"io"
@@ -108,5 +109,39 @@ func TestRelayedAnswerCarriesTheEdgesNotice(t *testing.T) {
 	e.r.notices = []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: "https://edge2.example.test", Date: "2027-03-01"}}
 	if got := get(); !slices.Equal(got, []string{"https://edge2.example.test; date=2027-03-01"}) {
 		t.Errorf("retiring: the answer carries %s %q, want the edge's value alone", edgeproto.HeaderRetiring, got)
+	}
+}
+
+// TestRelayFailureAfterEarlyHintsCarriesTheEdgesNotice forwards a
+// connector request to a server that sends a 1xx answer and then drops
+// the connection: the edge's own error answer still carries its notice.
+func TestRelayFailureAfterEarlyHintsCarriesTheEdgesNotice(t *testing.T) {
+	e := newEnv(t)
+	e.r.notices = []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: "https://edge2.example.test"}}
+	a := claimedAgent(t, e)
+	go func() {
+		select {
+		case nc := <-a.data:
+			_, _ = http.ReadRequest(bufio.NewReader(nc))
+			_, _ = io.WriteString(nc, "HTTP/1.1 103 Early Hints\r\nLink: </x.css>; rel=preload\r\n\r\n")
+			_ = nc.Close()
+		case <-t.Context().Done():
+		}
+	}()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, e.base+edgeproto.MCPPath(a.id), strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode < 500 {
+		t.Fatalf("answer %s, want the edge's error", resp.Status)
+	}
+	if got := resp.Header.Values(edgeproto.HeaderRetiring); !slices.Equal(got, []string{"https://edge2.example.test"}) {
+		t.Errorf("the edge's error answer carries %s %q", edgeproto.HeaderRetiring, got)
 	}
 }
