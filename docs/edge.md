@@ -1217,8 +1217,8 @@ entry and the fix, when:
   `AETHER_EDGE_` names and would serve the pair after a rollback;
 - the edge recorded the pair's origins in the other roles or in another pair;
 - rows without a recorded origin exist and the edge has never recorded
-  origins: run it with `--retiring-pairs` first, for as long as you give
-  people to move.
+  origins: serve the pair again, run the edge with `--retiring-pairs` naming
+  it for as long as you give people to move, then retire it.
 
 The edge answers both host names before it looks for a served pair. With its
 own certificates it answers a retired host's TLS handshake only with a

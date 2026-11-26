@@ -537,7 +537,7 @@ func TestRetiredRefusedWithoutRecording(t *testing.T) {
 	startDevice(t, h)
 	err := h.restartRetiring(t, Retired{SigninOrigin: testSignin2, RelayOrigin: testRelay2, Replacement: testRelay})
 	want := "edge: --retired-pairs would delete, on every pair, the sign-ins with no recorded origin (device tokens 0, browser sessions 1, " +
-		"pending device sign-ins 1), since this edge has never recorded which pair issued them. Run it first with --retiring-pairs naming the pair, for as long as you give " +
+		"pending device sign-ins 1), since this edge has never recorded which pair issued them. Serve the pair again (in --origin-pairs, with --retired-pairs unset) and run it with --retiring-pairs naming the pair, for as long as you give " +
 		"people to move, such as 30 days: each token or session used in that time is recorded and kept. A shorter run lets this start pass " +
 		"but signs out everyone who did not use the edge during it"
 	if err == nil || err.Error() != want {

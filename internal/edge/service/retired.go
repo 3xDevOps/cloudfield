@@ -164,7 +164,7 @@ func (s *Service) deleteRetiredSignIns(ctx context.Context, path string, retired
 	}
 	if n := without.Devices + without.Sessions + without.Authorizations; n > 0 && rep.RecordingSince.IsZero() {
 		return fmt.Errorf("edge: --retired-pairs would delete, on every pair, the sign-ins with no recorded origin (device tokens %d, browser sessions %d, "+
-			"pending device sign-ins %d), since this edge has never recorded which pair issued them. Run it first with --retiring-pairs naming the pair, for as long as you give "+
+			"pending device sign-ins %d), since this edge has never recorded which pair issued them. Serve the pair again (in --origin-pairs, with --retired-pairs unset) and run it with --retiring-pairs naming the pair, for as long as you give "+
 			"people to move, such as 30 days: each token or session used in that time is recorded and kept. A shorter run lets this start pass "+
 			"but signs out everyone who did not use the edge during it", without.Devices, without.Sessions, without.Authorizations)
 	}
