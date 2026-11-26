@@ -249,19 +249,19 @@ func (r *Relay) countConnector(req *http.Request, serverID string) {
 }
 
 // noteConnector records, with a ConnectorRecorder, a connector request
-// through origin written to serverID, connected and claimed: at most once
-// a connectorUseInterval, in the background, and never once the relay is
+// through origin that the edge sent on to reg, the claimed server's
+// registration that admitted its connection: at most once a
+// connectorUseInterval, in the background, and never once the relay is
 // closing.
-func (r *Relay) noteConnector(ctx context.Context, serverID, origin string) {
+func (r *Relay) noteConnector(ctx context.Context, reg *registration, origin string) {
 	if r.connectors == nil {
 		return
 	}
-	use := connectorUse{serverID, origin}
+	use := connectorUse{reg.id, origin}
 	now := time.Now()
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	reg := r.servers[serverID]
-	if r.closing || reg == nil || !reg.claimed || now.Sub(r.connectorUsed[use]) < connectorUseInterval {
+	if r.closing || now.Sub(r.connectorUsed[use]) < connectorUseInterval {
 		return
 	}
 	if len(r.connectorUsed) >= r.connectorPruneAt {
@@ -300,12 +300,20 @@ func (r *Relay) forwardOnce(w http.ResponseWriter, req *http.Request, serverID s
 	defer cancel(nil)
 	cw := &connWait{r: r, serverID: serverID, cancel: cancel}
 	defer cw.got(false)
+	// admitted is the registration that admitted the connection the
+	// request goes out on: only a claimed server's admits one.
+	var admitted *registration
 	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
 		GetConn: func(string) { cw.wait() },
-		GotConn: func(httptrace.GotConnInfo) { cw.got(true) },
+		GotConn: func(info httptrace.GotConnInfo) {
+			if h, ok := info.Conn.(*httpConn); ok {
+				admitted = h.c.reg
+			}
+			cw.got(true)
+		},
 		WroteRequest: func(info httptrace.WroteRequestInfo) {
-			if info.Err == nil {
-				r.noteConnector(client.Context(), serverID, r.originOf(client))
+			if info.Err == nil && admitted != nil {
+				r.noteConnector(client.Context(), admitted, r.originOf(client))
 			}
 		},
 	})

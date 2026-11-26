@@ -270,7 +270,8 @@ func (r *Relay) mark() (time.Time, bool) {
 // on a relay built without a ConnectorRecorder.
 func TestConnectorUseWithoutRecorder(t *testing.T) {
 	r := relayWith(t, nil)
-	r.noteConnector(t.Context(), recID, recOrigin)
+	reg := r.servers[recID]
+	r.noteConnector(t.Context(), reg, recOrigin)
 	if _, ok := r.mark(); ok {
 		t.Fatal("a relay without a recorder keeps a mark")
 	}
@@ -284,10 +285,11 @@ func TestConnectorUseWithoutRecorder(t *testing.T) {
 func TestConnectorUseWrite(t *testing.T) {
 	rec := &recorder{release: make(chan struct{}), err: errors.New("database is locked")}
 	r := relayWith(t, rec)
+	reg := r.servers[recID]
 	client, hangUp := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
-		r.noteConnector(client, recID, recOrigin)
+		r.noteConnector(client, reg, recOrigin)
 		close(done)
 	}()
 	select {
@@ -303,7 +305,7 @@ func TestConnectorUseWrite(t *testing.T) {
 	if err := worker.Err(); err != nil {
 		t.Fatalf("the client's hang-up reached the write: %v", err)
 	}
-	r.noteConnector(t.Context(), recID, recOrigin)
+	r.noteConnector(t.Context(), reg, recOrigin)
 	if n := rec.count(); n != 1 {
 		t.Fatalf("a request during the write started another: %d writes", n)
 	}
@@ -315,20 +317,20 @@ func TestConnectorUseWrite(t *testing.T) {
 	rec.mu.Lock()
 	rec.release, rec.err = nil, nil
 	rec.mu.Unlock()
-	r.noteConnector(t.Context(), recID, recOrigin)
+	r.noteConnector(t.Context(), reg, recOrigin)
 	if n := rec.count(); n != 1 {
 		t.Fatalf("a request within the retry time wrote: %d writes", n)
 	}
 	r.mu.Lock()
 	r.connectorUsed[connectorUse{recID, recOrigin}] = time.Now().Add(-connectorUseInterval)
 	r.mu.Unlock()
-	r.noteConnector(t.Context(), recID, recOrigin)
+	r.noteConnector(t.Context(), reg, recOrigin)
 	eventually(t, "the request after the retry time writes", func() bool { return rec.count() == 2 })
 	eventually(t, "the successful write keeps its mark", func() bool {
 		at, ok := r.mark()
 		return ok && time.Since(at) < time.Minute
 	})
-	r.noteConnector(t.Context(), recID, recOrigin)
+	r.noteConnector(t.Context(), reg, recOrigin)
 
 	block := make(chan struct{})
 	rec.mu.Lock()
@@ -337,7 +339,7 @@ func TestConnectorUseWrite(t *testing.T) {
 	r.mu.Lock()
 	r.connectorUsed[connectorUse{recID, recOrigin}] = time.Now().Add(-connectorUseInterval)
 	r.mu.Unlock()
-	r.noteConnector(t.Context(), recID, recOrigin)
+	r.noteConnector(t.Context(), reg, recOrigin)
 	eventually(t, "a third write under way", func() bool { return rec.count() == 3 })
 	r.mu.Lock()
 	delete(r.servers, recID)
@@ -354,10 +356,9 @@ func TestConnectorUseWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.mu.Lock()
-	r.servers[recID] = &registration{id: recID, claimed: true, version: edgeproto.Version}
 	r.connectorUsed[connectorUse{recID, recOrigin}] = time.Now().Add(-connectorUseInterval)
 	r.mu.Unlock()
-	r.noteConnector(t.Context(), recID, recOrigin)
+	r.noteConnector(t.Context(), reg, recOrigin)
 	time.Sleep(50 * time.Millisecond)
 	if n := rec.count(); n != 3 {
 		t.Fatalf("a closing relay started a write: %d writes", n)
