@@ -193,7 +193,9 @@ After the move:
 - Connectors registered at the old address keep working while the edge
   announces it. The Claude and ChatGPT listings name
   `https://edge.cloudfield.ai/mcp`; a server on v0.8.7 or later accepts a
-  connector at either address, whichever it is enrolled at.
+  connector at either address, whichever it is enrolled at. A server below
+  v0.8.7 accepts a connector only at the address it is enrolled at
+  ([connectors.md](connectors.md#prerequisites)).
 - CLI and device links, join links and claim codes made at the old address keep
   working: the edge relays a client at either address to a server enrolled at
   either.
