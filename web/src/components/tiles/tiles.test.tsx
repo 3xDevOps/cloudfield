@@ -438,7 +438,7 @@ describe('a session in two tiles', () => {
 
 describe('the header row', () => {
   const header = (n: number) => tiles()[n - 1].querySelector('header')!
-  const gold = () => [...document.querySelectorAll('header [data-slot=button]')].filter((button) => button.className.includes('bg-action'))
+  const primary = () => [...document.querySelectorAll('header [data-slot=button]')].filter((button) => button.className.includes('bg-action'))
   const asking = { ...enhanced, status: 'needs-attention', state: 'needs-you' } as const
 
   it('keeps the strip and the view row where they are when focus moves between tiles', async () => {
@@ -461,7 +461,7 @@ describe('the header row', () => {
     }
   })
 
-  it('shows a session its controls once, its other tile the state alone, and one gold action on screen', async () => {
+  it('shows a session its controls once, its other tile the state alone, and one primary action on screen', async () => {
     act(() => state().upsertRun(run({ ...asking, id: 'run_5', task: 'pick a port', reason: 'needs input: Which port?' })))
     show('run_3')
     beside('run_3', 'changes')
@@ -472,7 +472,7 @@ describe('the header row', () => {
     expect(within(header(2)).queryAllByRole('button')).toEqual([])
     expect(within(header(2)).getByText('Needs you').getAttribute('role')).toBeNull()
     expect(within(header(1)).getByRole('button', { name: 'Reply' }).className).not.toContain('bg-action')
-    expect(gold()).toEqual([within(header(3)).getByRole('button', { name: 'Reply' })])
+    expect(primary()).toEqual([within(header(3)).getByRole('button', { name: 'Reply' })])
 
     fireEvent.click(tile(3).getByRole('button', { name: 'Maximize' }))
     expect(frames.get('run_3:session')).toMatchObject({ controls: true, arrows: { changes: { where: 'On screen in the tile at right' } } })
@@ -480,7 +480,7 @@ describe('the header row', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Restore tiles' }))
     fireEvent.pointerDown(tiles()[1])
     expect(toolbars()).toEqual([0, 1, 1])
-    expect(gold()).toEqual([within(header(2)).getByRole('button', { name: 'Reply' })])
+    expect(primary()).toEqual([within(header(2)).getByRole('button', { name: 'Reply' })])
   })
 
   it('sizes the row from its own width: icons for the view names under 800px, and under 560px no reason and Session tree under More', async () => {
@@ -622,7 +622,7 @@ describe('the composer', () => {
     await waitFor(() => expect(fields(n)).toHaveLength(1))
   }
 
-  it('is whole in the focused Chat tile and one line in the other, and keeps the draft between the two', async () => {
+  it('is whole in every Chat tile, focused or not, and keeps the draft between the two', async () => {
     show()
     beside('run_2')
     await settled()
@@ -631,24 +631,23 @@ describe('the composer', () => {
     const [field] = fields(2)
     expect(field.rows).toBe(2)
     expect(tile(2).getByRole('button', { name: 'Attach files' })).toBeDefined()
-    expect(fields(1)[0].rows).toBe(1)
-    expect(tile(1).queryByRole('button', { name: 'Attach files' })).toBeNull()
-    expect(tile(1).queryByRole('button', { name: 'Send' })).toBeNull()
+    expect(fields(1)[0].rows).toBe(2)
+    expect(tile(1).getByRole('button', { name: 'Attach files' })).toBeDefined()
 
     fireEvent.change(field, { target: { value: 'ship it\nthen rest' } })
     fireEvent.pointerDown(tiles()[0])
     expect(fields(2)).toEqual([field])
-    expect(field.rows).toBe(1)
-    expect(tile(2).getByText('+1 line')).toBeDefined()
+    expect(field.rows).toBe(2)
+    expect(tile(2).queryByText('+1 line')).toBeNull()
+    expect(tile(2).getByRole('button', { name: 'Attach files' })).toBeDefined()
     expect(field.value).toBe('ship it\nthen rest')
-    expect(fields(1)[0].rows).toBe(1)
     await userEvent.click(tiles()[1])
-    await waitFor(() => expect(field.rows).toBe(2))
+    expect(field.rows).toBe(2)
     expect(field.value).toBe('ship it\nthen rest')
     fireEvent.change(field, { target: { value: '' } })
   })
 
-  it('docks one line under another view that c opens, and leaves the session with one field once its Chat is on screen', async () => {
+  it('docks one line under another view until c opens it with a toolbar that takes no press before the pointer moves, keeps it open when its tile loses focus, and leaves the session with one field once its Chat is on screen', async () => {
     show('run_1', 'changes')
     await settled()
     expect(tile(1).queryByText('Connecting to the agent…')).toBeNull()
@@ -659,16 +658,20 @@ describe('the composer', () => {
     expect(document.activeElement).toBe(docked)
     expect(docked.rows).toBe(2)
     expect(state().route.params.view).toBe('changes')
+    const footer = tile(1).getByRole('button', { name: 'Attach files' }).closest('.wrap-from-end')!
+    expect(footer.className).toContain('pointer-events-none')
+    fireEvent.pointerMove(window)
+    expect(footer.className).not.toContain('pointer-events-none')
 
     beside('run_2')
     await settled()
+    expect(fields(1)).toEqual([docked])
+    expect(docked.rows).toBe(2)
+    fireEvent.keyDown(docked, { key: 'Escape' })
     expect(docked.rows).toBe(1)
     fireEvent.change(docked, { target: { value: 'ship it' } })
     await userEvent.click(tile(1).getByRole('button', { name: 'Send' }))
     expect(StubSocket.opened.find((socket) => socket.url.includes('/ws/acp/run_1'))!.frames().at(-1)).toMatchObject({ type: 'control', write: true })
-    fireEvent.pointerDown(tiles()[0])
-    expect(fields(1)).toEqual([docked])
-    expect(docked.rows).toBe(1)
     arrange((layout) => closeTile(layout, tiles()[1].dataset.tile!))
     await settled()
 
@@ -677,11 +680,10 @@ describe('the composer', () => {
     expect(fields(1)).toEqual([])
     expect(fields(2)).toHaveLength(1)
     await userEvent.click(tiles()[0])
-    expect(fields(2)[0].rows).toBe(1)
+    expect(fields(2)[0].rows).toBe(2)
     press('c')
     expect(state().route.params).toMatchObject({ runId: 'run_1', view: 'session' })
     await waitFor(() => expect(document.activeElement).toBe(fields(2)[0]))
-    await waitFor(() => expect(fields(2)[0].rows).toBe(2))
   })
 
   it('opens Chat for the header Reply even where a docked field could take the answer', async () => {

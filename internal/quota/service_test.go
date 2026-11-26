@@ -1,6 +1,7 @@
 package quota
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -21,6 +22,81 @@ import (
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) { return fn(req) }
+
+// A member signed in through the Anthropic Console is billed by the API:
+// usage says so, and neither calls them signed out nor asks the vendor.
+func TestReadReportsAConsoleSignInAsAPIBilling(t *testing.T) {
+	oldTransport := usageHTTPClient.Transport
+	usageHTTPClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return nil, fmt.Errorf("unexpected request to %s", req.URL)
+	})
+	t.Cleanup(func() { usageHTTPClient.Transport = oldTransport })
+	for name, tc := range map[string]struct {
+		login      string
+		files      map[string]string
+		wantStatus string
+		want       string
+	}{
+		"API key": {
+			files: map[string]string{".claude.json": `{"primaryApiKey":"fixture-key"}`},
+			want:  "Anthropic Console sign-in (~/.claude.json) is billed by the API and has no usage windows",
+		},
+		"API key beside a signed-out login file": {
+			login: `{"claudeAiOauth":{"accessToken":"","refreshToken":""}}`,
+			files: map[string]string{".claude.json": `{"primaryApiKey":"fixture-key"}`},
+			want:  "Anthropic Console sign-in (~/.claude.json) is billed by the API and has no usage windows",
+		},
+		"API key beside a login file that is not JSON": {
+			login: `not json`,
+			files: map[string]string{".claude.json": `{"primaryApiKey":"fixture-key"}`},
+			want:  "Anthropic Console sign-in (~/.claude.json) is billed by the API and has no usage windows",
+		},
+		"profile": {
+			files: map[string]string{
+				".config/anthropic/configs/default.json":     `{"authentication":{"type":"user_oauth"}}`,
+				".config/anthropic/credentials/default.json": `{"access_token":"fixture-access"}`,
+			},
+			want: "Anthropic Console sign-in (~/.config/anthropic) is billed by the API and has no usage windows",
+		},
+		// Claude Code renews an expired login that has a refresh token, so
+		// the subscription is still the login in use.
+		"API key beside a login the agent renews": {
+			login:      `{"claudeAiOauth":{"accessToken":"fixture-access","refreshToken":"fixture-refresh","expiresAt":1}}`,
+			files:      map[string]string{".claude.json": `{"primaryApiKey":"fixture-key"}`},
+			wantStatus: "unauthenticated",
+			want:       "Claude OAuth credential is expired",
+		},
+		"sign-in the server cannot read": {
+			files:      map[string]string{".claude.json": `not json`},
+			wantStatus: "unauthenticated",
+			want:       "Claude OAuth credential not found; a sign-in outside the login file cannot be read",
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			homes, member := fixtureHomes(t, tc.login, "")
+			home, err := homes.Path(member)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for rel, body := range tc.files {
+				if err = os.MkdirAll(filepath.Dir(filepath.Join(home, rel)), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err = os.WriteFile(filepath.Join(home, rel), []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			providers, err := New(homes, nil).Read(context.Background(), member, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			claude := providers[0]
+			if claude.Provider != "claude" || claude.Status != cmp.Or(tc.wantStatus, "unsupported") || claude.Error != tc.want || len(claude.Windows) != 0 {
+				t.Fatalf("Claude provider = %#v, want %s with %q", claude, cmp.Or(tc.wantStatus, "unsupported"), tc.want)
+			}
+		})
+	}
+}
 
 func TestReadCollectsClaudeAndCodexWithoutLeakingCredentialBodies(t *testing.T) {
 	homes, member := fixtureHomes(t, `{"claudeAiOauth":{"accessToken":"claude-secret","expiresAt":4102444800000,"scopes":["user:inference"],"subscriptionType":"max"}}`, `{"tokens":{"access_token":"codex-secret","account_id":"acct-1"}}`)

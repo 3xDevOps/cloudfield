@@ -29,7 +29,7 @@ import { createTerminalSlice, type TerminalSlice } from '@/store/terminal'
 import { createTilesSlice, normalizeSavedTiles, type TilesSlice } from '@/store/tiles'
 import { createTraceSlice, type TraceSlice } from '@/store/trace-log'
 import { createTimelineSlice, type TimelineSlice } from '@/store/timeline'
-import { createMessagesSlice, type MessagesSlice } from '@/store/messages'
+import { createMessagesSlice, messageListViewed, type MessagesSlice } from '@/store/messages'
 import { createViewContextSlice, type ViewContextSlice } from '@/store/view-context'
 import { createWatchesSlice, type WatchesSlice } from '@/store/watches'
 import { createWorkflowSignalsSlice, type WorkflowSignalsSlice } from '@/store/workflow-signals'
@@ -146,7 +146,7 @@ type PersistedState = Partial<ReturnType<typeof persistedUi>>
 export function createRootStore() {
   const storage = createJSONStorage<PersistedState>(() => localStorage)
   let written: PersistedState | undefined
-  return create<RootState>()(
+  const store = create<RootState>()(
     batched(persist(
       (...a) => ({
         ...createServerSlice(...a),
@@ -277,6 +277,14 @@ export function createRootStore() {
       },
     )),
   )
+  // A session leaves by a removal, a snapshot without it, or a reset; its kept message list goes with it.
+  store.subscribe((state, previous) => {
+    if (state.runs === previous.runs) return
+    for (const [key, { scope }] of Object.entries(state.messageLists)) {
+      if (scope.kind === 'run' && !(scope.runID in state.runs) && !messageListViewed(key)) state.dropMessageList(key)
+    }
+  })
+  return store
 }
 
 export type RootStore = ReturnType<typeof createRootStore>

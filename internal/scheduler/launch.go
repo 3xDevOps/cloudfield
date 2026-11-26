@@ -322,7 +322,7 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 			}
 		}
 	} else if err = s.checkDefaultLoginShared(ctx, member, account, harness); err == nil {
-		err = s.checkLogin(ctx, workspace, account, harness, profile, mode)
+		err = s.checkLogin(ctx, workspace, member, account, harness, profile, mode)
 	}
 	if err != nil {
 		return nil, err

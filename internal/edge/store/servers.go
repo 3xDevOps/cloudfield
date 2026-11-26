@@ -44,11 +44,30 @@ func (s *Store) Server(ctx context.Context, id string) (Server, error) {
 	return srv, nil
 }
 
+// Enrollment is where and when a server last enrolled, and the build it
+// reported. A zero Enrollment records nothing.
+type Enrollment struct {
+	RelayOrigin  string
+	AgentVersion string
+	At           time.Time
+}
+
+// columns are e's values for servers.relay_origin, agent_version and
+// enrolled_at: all NULL for a zero e.
+func (e Enrollment) columns() (origin, build sql.NullString, at sql.NullInt64) {
+	if e.RelayOrigin == "" {
+		return
+	}
+	return sql.NullString{String: e.RelayOrigin, Valid: true}, sql.NullString{String: e.AgentVersion, Valid: true},
+		sql.NullInt64{Int64: unix(e.At), Valid: true}
+}
+
 // EnrollServer records the name and access policy a claimed server
-// announced when it enrolled, and reports whether it is claimed. An
-// unclaimed server records nothing.
-func (s *Store) EnrollServer(ctx context.Context, id, name string, policy edgeproto.AccessPolicy) (claimed bool, err error) {
-	err = oneRow(s.db.ExecContext(ctx, `UPDATE servers SET name = ?, access_policy = ? WHERE id = ?`, name, policy, id))
+// announced when it enrolled, with its enrollment, and reports whether it
+// is claimed. An unclaimed server records nothing.
+func (s *Store) EnrollServer(ctx context.Context, id, name string, policy edgeproto.AccessPolicy, e Enrollment) (claimed bool, err error) {
+	origin, build, at := e.columns()
+	err = oneRow(s.db.ExecContext(ctx, enrollQuery, name, policy, origin, build, at, id))
 	switch {
 	case errors.Is(err, ErrNotFound):
 		return false, nil
@@ -57,6 +76,11 @@ func (s *Store) EnrollServer(ctx context.Context, id, name string, policy edgepr
 	}
 	return true, nil
 }
+
+// enrollQuery runs at every enrollment.
+const enrollQuery = `UPDATE servers SET name = ?, access_policy = ?,
+	relay_origin = COALESCE(?, relay_origin), agent_version = COALESCE(?, agent_version), enrolled_at = COALESCE(?, enrolled_at)
+	WHERE id = ?`
 
 // ownerAccount returns the row id of the existing account a principal
 // names, ErrNoAccount when it has none, or ErrAccountBlocked.
@@ -83,10 +107,11 @@ func ownerAccount(ctx context.Context, tx *sql.Tx, owner edgeproto.Principal) (i
 // RecordClaim records owner, an existing account, as the owner of server
 // id, which has none: a server never claimed here, created with name and
 // policy as a self-hosted server, or a claimed server that is ownerless.
-// It fails, recording nothing, with ErrServerBlocked, ErrNoAccount,
-// ErrAccountBlocked, or ErrHasOwner.
+// It records the enrollment e the claim was made on, and fails, recording
+// nothing, with ErrServerBlocked, ErrNoAccount, ErrAccountBlocked, or
+// ErrHasOwner.
 func (s *Store) RecordClaim(ctx context.Context, id, name string, policy edgeproto.AccessPolicy,
-	owner edgeproto.Principal, now time.Time) error {
+	owner edgeproto.Principal, e Enrollment, now time.Time) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("edgestore: record claim: %w", err)
@@ -104,14 +129,18 @@ func (s *Store) RecordClaim(ctx context.Context, id, name string, policy edgepro
 	if err != nil {
 		return fmt.Errorf("edgestore: record claim: %w", err)
 	}
+	origin, build, at := e.columns()
 	err = oneRow(tx.ExecContext(ctx, `INSERT INTO servers
-			(id, name, kind, access_policy, owner_type, owner_account_id, claimed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+			(id, name, kind, access_policy, owner_type, owner_account_id, claimed_at, relay_origin, agent_version, enrolled_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (id) DO UPDATE SET
 			name = excluded.name, access_policy = excluded.access_policy, owner_type = excluded.owner_type,
-			owner_account_id = excluded.owner_account_id, claimed_at = excluded.claimed_at
+			owner_account_id = excluded.owner_account_id, claimed_at = excluded.claimed_at,
+			relay_origin = COALESCE(excluded.relay_origin, servers.relay_origin),
+			agent_version = COALESCE(excluded.agent_version, servers.agent_version),
+			enrolled_at = COALESCE(excluded.enrolled_at, servers.enrolled_at)
 		WHERE servers.owner_account_id IS NULL`,
-		id, name, edgeproto.ServerSelfHosted, policy, owner.Type, ownerID, unix(now)))
+		id, name, edgeproto.ServerSelfHosted, policy, owner.Type, ownerID, unix(now), origin, build, at))
 	if errors.Is(err, ErrNotFound) {
 		return ErrHasOwner
 	}

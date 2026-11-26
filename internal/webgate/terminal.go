@@ -29,7 +29,7 @@ func (g *Gateway) handleTerminal(w http.ResponseWriter, r *http.Request) {
 	}
 	login := r.URL.Query().Get("assistant_login")
 	agentLogin := r.URL.Query().Get("agent_login")
-	if !terminalTabName.MatchString(tab) || login != "" && !terminalTabName.MatchString(login) || agentLogin != "" && !terminalTabName.MatchString(agentLogin) {
+	if !terminalTabName.MatchString(tab) || login != "" && !terminalTabName.MatchString(login) || agentLogin != "" && !terminalTabName.MatchString(agentLogin) || login != "" && agentLogin != "" {
 		_ = s.WriteJSON(protocol.TerminalResponse{Code: protocol.CodeInvalidParams, Error: "invalid terminal tab"})
 		_ = s.Conn.Close(websocket.StatusPolicyViolation, "terminal refused")
 		return

@@ -393,7 +393,10 @@ func (s *Server) afterMerge(ctx context.Context, caller domain.MemberID, merge *
 	linearErr := s.disconnectLinear(merge.AbsorbedID)
 	// The merge gave the survivor the absorbed member's added logins; their
 	// directories follow, here or at the next start.
-	if signIns, ok := s.cfg.Runs.(LoginSignIns); ok {
+	if signIns := s.cfg.LoginSignIns; signIns != nil {
+		if err := signIns.EndLoginSignIns(ctx, merge.AbsorbedID); err != nil {
+			slog.Warn("sshd: end the absorbed member's sign-ins", "merge", merge.ID, "error", err)
+		}
 		if err := signIns.ReconcileLogins(ctx, merge.AbsorbedID); err != nil {
 			slog.Warn("sshd: move the absorbed member's logins; the next start moves them", "merge", merge.ID, "error", err)
 		}

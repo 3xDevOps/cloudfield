@@ -176,3 +176,68 @@ func TestMergeGivesTheSurvivorTheAddedLogins(t *testing.T) {
 		t.Fatalf("shared = %+v; want the survivor's own logins as they were and the merged ones off for shares", logins)
 	}
 }
+
+// A merge after removals places the absorbed member's logins after every
+// one of the survivor's, picks a free name for a clash, and the plan it
+// confirms lists the logins it moves.
+func TestMergeAfterGapsAndClashes(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	a := &domain.Member{DisplayName: "A", TailnetLogin: "a@", Color: "#3cb44b", Role: domain.RoleAdmin}
+	b := &domain.Member{DisplayName: "B", PublicKey: testKey(t, "b"), Color: "#ffe119", Role: domain.RoleAdmin}
+	for _, m := range []*domain.Member{a, b} {
+		if err := db.CreateMember(ctx, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gone := addLogin(t, db, a.ID, "gone")
+	addLogin(t, db, a.ID, "work")
+	addLogin(t, db, a.ID, "work-2")
+	if err := db.DeleteAgentLogin(ctx, a.ID, "claude", gone.ID); err != nil {
+		t.Fatal(err)
+	}
+	bWork := addLogin(t, db, b.ID, "work")
+	if err := db.CreateMergeCode(ctx, a.ID, "code", now, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := db.PlanMerge(ctx, "code", b.ID, "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if side := plan.Side(b.ID); side == nil || len(side.Logins) != 2 || side.Logins[1].ID != bWork.ID {
+		t.Fatalf("the plan's view of B's logins = %+v; want default and work", side)
+	}
+	pm, err := db.ProposeMerge(ctx, MergeProposal{CodeHash: "code", Proposer: b.ID, Keep: a.ID, Digest: plan.Digest, Now: now, Expires: now.Add(time.Minute)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	merge, err := db.AcceptMerge(ctx, MergeAccept{ProposalID: pm.ProposalID, Caller: a.ID, Digest: plan.Digest, Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	logins, err := db.ListAgentLogins(ctx, merge.SurvivorID, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := logins[len(logins)-1]
+	if last.ID != bWork.ID || last.Name != "work-3" {
+		t.Fatalf("logins = %+v; want B's work last, renamed work-3", logins)
+	}
+	if _, err := db.AddAgentLogin(ctx, domain.AgentLogin{MemberID: merge.AbsorbedID, Agent: "claude", ID: "lgn-late000000", Name: "late", CreatedAt: now}, ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a login added for the absorbed member: %v; want ErrNotFound", err)
+	}
+}
+
+// Two members never hold one login id.
+func TestALoginIDBelongsToOneMember(t *testing.T) {
+	db := openTestDB(t)
+	ctx := context.Background()
+	ada, bo := mustCreateMember(t, db), mustCreateMember(t, db)
+	if _, err := db.AddAgentLogin(ctx, domain.AgentLogin{MemberID: ada.ID, Agent: "claude", ID: "lgn-same000000", Name: "work", CreatedAt: time.Now()}, ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.AddAgentLogin(ctx, domain.AgentLogin{MemberID: bo.ID, Agent: "claude", ID: "lgn-same000000", Name: "work", CreatedAt: time.Now()}, ""); !errors.Is(err, ErrConflict) {
+		t.Fatalf("Bo taking Ada's login id: %v; want ErrConflict", err)
+	}
+}

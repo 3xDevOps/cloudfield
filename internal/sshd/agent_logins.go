@@ -31,7 +31,10 @@ func init() {
 type LoginSignIns interface {
 	BeginLoginSignIn(ctx context.Context, member domain.MemberID, agent, name string) (domain.LoginID, error)
 	StartLoginSignIn(ctx context.Context, member domain.MemberID, id domain.LoginID, cols, rows uint) (ptyhost.SessionKey, error)
-	LoginSignInResult(ctx context.Context, member domain.MemberID, id domain.LoginID) (domain.AgentLogin, error)
+	LoginSignInResult(ctx context.Context, member domain.MemberID, agent string, id domain.LoginID) (domain.AgentLogin, error)
+	// EndLoginSignIns ends member's running sign-ins before the member is
+	// removed or merged into another.
+	EndLoginSignIns(ctx context.Context, member domain.MemberID) error
 	// ReconcileLogins moves the login directories a merge gave another
 	// member to them and removes those with no row.
 	ReconcileLogins(ctx context.Context, member domain.MemberID) error
@@ -43,18 +46,17 @@ type LoginSignIns interface {
 var errNoAddedLogins = &protocol.Error{Code: protocol.CodeUnavailable, Message: "this server keeps no added logins"}
 
 func (s *Server) loginSignIns() (LoginSignIns, *protocol.Error) {
-	signIns, ok := s.cfg.Runs.(LoginSignIns)
-	if !ok || s.cfg.Logins == nil {
+	if s.cfg.LoginSignIns == nil || s.cfg.Logins == nil {
 		return nil, errNoAddedLogins
 	}
-	return signIns, nil
+	return s.cfg.LoginSignIns, nil
 }
 
 // agentLoginCaller checks the caller and the agent, and returns the
 // caller's logins of it.
 func (s *Server) agentLoginCaller(ctx context.Context, member domain.MemberID, agent string) ([]domain.AgentLogin, *protocol.Error) {
-	if agent == "" {
-		return nil, invalidParams("agent is required")
+	if agent != "claude" {
+		return nil, invalidParams("agent must be claude: only Claude Code keeps added logins")
 	}
 	if err := s.checkMember(ctx, member); err != nil {
 		return nil, rpcError(err)
@@ -136,6 +138,9 @@ func (s *Server) agentLoginAdd(ctx context.Context, member domain.MemberID, raw 
 	if perr != nil {
 		return nil, perr
 	}
+	if perr = s.mayLaunch(ctx, member, protocol.MethodAgentLoginAdd); perr != nil {
+		return nil, perr
+	}
 	id, err := signIns.BeginLoginSignIn(ctx, member, p.Agent, p.Name)
 	if err != nil {
 		return nil, rpcError(err)
@@ -155,7 +160,7 @@ func (s *Server) agentLoginResult(ctx context.Context, member domain.MemberID, r
 	if perr != nil {
 		return nil, perr
 	}
-	login, err := signIns.LoginSignInResult(ctx, member, domain.LoginID(p.LoginID))
+	login, err := signIns.LoginSignInResult(ctx, member, p.Agent, domain.LoginID(p.LoginID))
 	if err != nil {
 		return nil, rpcError(err)
 	}
@@ -210,7 +215,7 @@ func (s *Server) agentLoginRemove(ctx context.Context, member domain.MemberID, r
 	if perr != nil {
 		return nil, perr
 	}
-	if signIns, ok := s.cfg.Runs.(LoginSignIns); ok {
+	if signIns := s.cfg.LoginSignIns; signIns != nil {
 		inUse, err := signIns.LoginInUse(ctx, domain.Account{Member: member, Login: login.ID})
 		if err != nil {
 			return nil, rpcError(err)
@@ -223,13 +228,23 @@ func (s *Server) agentLoginRemove(ctx context.Context, member domain.MemberID, r
 			return nil, &protocol.Error{Code: protocol.CodeConflict, Message: fmt.Sprintf("login %q is in use by %s; end those sessions first", login.Name, strings.Join(ids, ", "))}
 		}
 	}
+	// The directory goes first, wherever a merge left it, so a removal that
+	// fails half way keeps the row and can be asked again.
+	stored, err := s.cfg.Logins.List("")
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	for _, l := range stored {
+		if l.Agent == p.Agent && l.ID == login.ID {
+			if err := s.cfg.Logins.Remove(l.Member, l.Agent, l.ID); err != nil {
+				return nil, rpcError(fmt.Errorf("remove login %q: %w", login.Name, err))
+			}
+		}
+	}
 	if err := s.cfg.Store.DeleteAgentLogin(ctx, member, p.Agent, login.ID); err != nil {
 		return nil, rpcError(err)
 	}
 	noteChange(ctx)
-	if err := s.cfg.Logins.Remove(member, p.Agent, login.ID); err != nil {
-		slog.Warn("sshd: remove a login's directory; the next start removes it", "member", member, "login", login.ID, "error", err)
-	}
 	return struct{}{}, nil
 }
 
@@ -318,4 +333,17 @@ func (s *Server) launchLogin(ctx context.Context, member, account domain.MemberI
 		return "", rpcError(err)
 	}
 	return login, nil
+}
+
+// mayLaunch requires the permission a launch needs: a sign-in runs a
+// container, as a session does.
+func (s *Server) mayLaunch(ctx context.Context, member domain.MemberID, method string) *protocol.Error {
+	actor, err := resolveActor(ctx, s.cfg.Store, member)
+	if err != nil {
+		return rpcError(err)
+	}
+	if err := permissions.Check(permissions.Launch, actor, permissions.Target{}); err != nil {
+		return &protocol.Error{Code: protocol.CodeDenied, Message: method + ": " + err.Error()}
+	}
+	return nil
 }

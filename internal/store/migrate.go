@@ -2684,6 +2684,7 @@ CREATE TABLE agent_logins (
 	PRIMARY KEY (member_id, agent, id),
 	UNIQUE (member_id, agent, name)
 );
+CREATE UNIQUE INDEX idx_agent_logins_id ON agent_logins (agent, id) WHERE id <> 'default';
 `,
 	// v116: the added login of its account a run, an account segment and a
 	// queued subsession spend; empty for the default login, so every

@@ -736,6 +736,15 @@ func (s *Scheduler) chooseMove(ctx context.Context, entry *supervised, f *UsageF
 				return false, loginErr
 			}
 			if !signedIn {
+				// One the server cannot read is not counted; a workspace
+				// variable may still sign the agent in.
+				own, ownErr := s.cfg.Homes.OwnerLogin(account.Member, run.Harness)
+				if ownErr != nil {
+					slog.Warn("scheduler: cannot read the login the agent keeps outside its login file", "agent", run.Harness, "account", account, "error", ownErr)
+				}
+				signedIn = own != nil
+			}
+			if !signedIn {
 				if byEnv, envErr := s.environmentSignsIn(ctx, run.WorkspaceID, run.Harness, profile, mode); envErr != nil || !byEnv {
 					return false, envErr
 				}

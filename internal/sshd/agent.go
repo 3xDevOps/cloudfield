@@ -12,6 +12,7 @@ import (
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/harness"
+	"github.com/3xDevOps/cloudfield/internal/memberhome"
 	"github.com/3xDevOps/cloudfield/internal/permissions"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
 	"github.com/3xDevOps/cloudfield/internal/scheduler"
@@ -232,13 +233,18 @@ func (s *Server) describeAgent(member, account domain.MemberID, profile harness.
 		// A launch on another member's account signs in with the owner's
 		// login, so that is the home to look in.
 		found, loginErr := s.cfg.Homes.LoginFound(account, logins)
+		if loginErr == nil && !found && account == member {
+			var own *memberhome.OwnerLogin
+			own, loginErr = s.cfg.Homes.OwnerLogin(account, profile.Name)
+			found = own != nil
+		}
 		if loginErr != nil {
 			slog.Warn("sshd: agent.list cannot check the login", "agent", profile.Name, "account", account, "error", loginErr)
 		}
 		info.LoginFound = &found
 	}
 	var problemErr error
-	if info.LoginProblem, info.LoginBlocksLaunch, problemErr = s.cfg.Runs.LoginProblem(account, profile.Name, profile); problemErr != nil {
+	if info.LoginProblem, info.LoginBlocksLaunch, problemErr = s.cfg.Runs.LoginProblem(member, account, profile.Name, profile); problemErr != nil {
 		slog.Warn("sshd: agent.list cannot check the login", "agent", profile.Name, "account", account, "error", problemErr)
 	}
 	return info, nil

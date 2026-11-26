@@ -220,3 +220,48 @@ func TestLoginsListAndMove(t *testing.T) {
 		t.Fatalf("Bo's logins after removal = %+v, %v; want none", bo, err)
 	}
 }
+
+// What a sign-in container wrote reaches the owner's terminal and
+// dashboard only when it is short and printable, and a profile selector is
+// never made a path unless it is a plain name.
+func TestIdentityKeepsOnlyCleanFields(t *testing.T) {
+	l := newTestLogins(t)
+	dir, err := l.Add("mem-ada", "claude", "lgn-one0000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeLoginFile(t, dir, LoginCredentials, subscriptionLogin)
+	writeLoginFile(t, dir, LoginConfig, `{"oauthAccount":{"emailAddress":"ada@example.test\u001b[31m","organizationUuid":"`+strings.Repeat("o", 300)+`","organizationName":"Ada's Org"}}`)
+	got, err := l.Inspect("mem-ada", "claude", "lgn-one0000000")
+	if err != nil || got != (LoginIdentity{Kind: LoginSubscription, Plan: "max", OrganizationName: "Ada's Org"}) {
+		t.Fatalf("Inspect = %+v, %v; want the control-character email and the long organisation dropped", got, err)
+	}
+	console, err := l.Add("mem-ada", "claude", "lgn-two0000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeLoginFile(t, console, "anthropic/active_config", "test-not-a-name/../"+strings.Repeat("x", 400))
+	got, err = l.Inspect("mem-ada", "claude", "lgn-two0000000")
+	if got.Kind != "" || (err != nil && strings.Contains(err.Error(), "test-not-a-name")) {
+		t.Fatalf("Inspect with a damaged selector = %+v, %v; want no login and no error quoting it", got, err)
+	}
+	writeLoginFile(t, console, "anthropic/active_config", "test-not-a-name/../x")
+	if got, err := l.Inspect("mem-ada", "claude", "lgn-two0000000"); err != nil || got.Kind != "" {
+		t.Fatalf("Inspect with a path for a selector = %+v, %v; want no login", got, err)
+	}
+}
+
+// A configuration file too large to read for an identity leaves the
+// account unknown and still tells the kind from the login file.
+func TestIdentityOfAnOversizedConfiguration(t *testing.T) {
+	l := newTestLogins(t)
+	dir, err := l.Add("mem-ada", "claude", "lgn-one0000000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeLoginFile(t, dir, LoginCredentials, subscriptionLogin)
+	writeLoginFile(t, dir, LoginConfig, `{"pad":"`+strings.Repeat("p", maxIdentityConfigBytes)+`"}`)
+	if got, err := l.Inspect("mem-ada", "claude", "lgn-one0000000"); err != nil || got != (LoginIdentity{Kind: LoginSubscription, Plan: "max"}) {
+		t.Fatalf("Inspect = %+v, %v", got, err)
+	}
+}

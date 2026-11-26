@@ -575,6 +575,11 @@ func (h *Host) RemoveSessionTranscript(ctx context.Context, key SessionKey) erro
 	}
 	h.mu.Lock()
 	delete(h.snapshots, key)
+	// A login's sign-in runs once under its key, and its final screen shows
+	// the sign-in URL and code: nothing of it is kept.
+	if strings.HasPrefix(string(key), "login-signin:") {
+		delete(h.sessions, key)
+	}
 	h.mu.Unlock()
 	return nil
 }

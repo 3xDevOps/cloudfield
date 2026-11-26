@@ -495,7 +495,7 @@ func (f *fakeRuns) DefaultMode(context.Context, domain.MemberID, domain.MemberID
 	return domain.LaunchACP, nil
 }
 
-func (f *fakeRuns) LoginProblem(domain.MemberID, string, harness.Profile) (string, bool, error) {
+func (f *fakeRuns) LoginProblem(domain.MemberID, domain.MemberID, string, harness.Profile) (string, bool, error) {
 	return f.loginProblem, f.loginProblem != "", nil
 }
 

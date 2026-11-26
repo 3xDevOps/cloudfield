@@ -210,6 +210,10 @@ func (s *Server) serveTerminal(ctx context.Context, member domain.MemberID, st *
 		cols, rows = 80, 24
 	}
 
+	if req.AssistantLogin != "" && req.AgentLogin != "" {
+		_ = writeJSONLine(ch, protocol.TerminalResponse{Code: protocol.CodeInvalidParams, Error: "assistant_login and agent_login cannot both be set"})
+		return
+	}
 	key := ptyhost.TerminalSession(member, tab)
 	s.authorizationMu.Lock()
 	admissionErr := s.checkMember(ctx, member)
@@ -226,6 +230,8 @@ func (s *Server) serveTerminal(ctx context.Context, member domain.MemberID, st *
 	}
 	if admissionErr == nil && req.AgentLogin != "" {
 		if signIns, perr := s.loginSignIns(); perr != nil {
+			admissionErr = perr
+		} else if perr = s.mayLaunch(ctx, member, "agent sign-in"); perr != nil {
 			admissionErr = perr
 		} else {
 			key, admissionErr = signIns.StartLoginSignIn(ctx, member, domain.LoginID(req.AgentLogin), cols, rows)

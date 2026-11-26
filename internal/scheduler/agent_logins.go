@@ -25,10 +25,12 @@ import (
 )
 
 // loginSignInOpenWithin is how long a sign-in agent.login.add reserved
-// waits for its terminal; loginSignInTimeout is how long the sign-in may
-// then run; loginSignInKept is how long its result waits to be collected.
+// waits for its terminal; loginSignInProvision bounds starting its
+// container; loginSignInTimeout is how long the sign-in may then run;
+// loginSignInKept is how long its result waits to be collected.
 const (
 	loginSignInOpenWithin = 10 * time.Minute
+	loginSignInProvision  = 5 * time.Minute
 	loginSignInTimeout    = 15 * time.Minute
 	loginSignInKept       = 10 * time.Minute
 )
@@ -37,16 +39,20 @@ const (
 // keeps none.
 var ErrNoAddedLogins = errors.New("only Claude Code keeps added logins")
 
-// loginSignIn is the sign-in of one new login. done closes once login or
-// err is set.
+// loginSignIn is the sign-in of one new login. done closes once ended is
+// set, with login or err.
 type loginSignIn struct {
-	member  domain.MemberID
-	agent   string
-	id      domain.LoginID
-	name    string
+	member domain.MemberID
+	agent  string
+	id     domain.LoginID
+	name   string
+	// started: its terminal opened; created: this attempt made the login's
+	// directory, which only it may remove.
 	started bool
+	created bool
 	ended   bool
 	timer   *time.Timer
+	holder  *terminalSupervision
 	done    chan struct{}
 	login   domain.AgentLogin
 	err     error
@@ -64,7 +70,8 @@ func (s *Scheduler) addedLoginProfile(agent string) (harness.Profile, error) {
 }
 
 // BeginLoginSignIn reserves a new login of agent named name for member and
-// returns its id; the terminal opened with that id runs the sign-in.
+// returns its id; the terminal opened with that id runs the sign-in. A
+// member runs one sign-in at a time.
 func (s *Scheduler) BeginLoginSignIn(ctx context.Context, member domain.MemberID, agent, name string) (domain.LoginID, error) {
 	if _, err := s.addedLoginProfile(agent); err != nil {
 		return "", err
@@ -89,8 +96,8 @@ func (s *Scheduler) BeginLoginSignIn(ctx context.Context, member domain.MemberID
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, other := range s.loginSignIns {
-		if other.member == member && other.agent == agent && other.name == name {
-			return "", fmt.Errorf("%w: a sign-in of a login named %q is already running", store.ErrConflict, name)
+		if other.member == member && !other.ended {
+			return "", fmt.Errorf("%w: the sign-in of login %q is still running; finish it first", store.ErrConflict, other.name)
 		}
 	}
 	if s.loginSignIns == nil {
@@ -110,6 +117,7 @@ func (s *Scheduler) BeginLoginSignIn(ctx context.Context, member domain.MemberID
 }
 
 // signInOf returns member's sign-in id; another member's reads as unknown.
+// Caller holds s.mu.
 func (s *Scheduler) signInOf(member domain.MemberID, id domain.LoginID) (*loginSignIn, error) {
 	sign := s.loginSignIns[id]
 	if sign == nil || sign.member != member {
@@ -121,13 +129,22 @@ func (s *Scheduler) signInOf(member domain.MemberID, id domain.LoginID) (*loginS
 // StartLoginSignIn runs the sign-in member reserved as id: it creates the
 // login's directory and a container of its own that mounts the member's
 // home with the new login over the default one, and runs the agent's own
-// sign-in command there on a PTY session it returns. When the command ends
-// the container goes, and the login is added when the agent saved one.
+// sign-in command there on a PTY session it returns. A terminal opened
+// again while the sign-in runs reattaches to it. When the command ends the
+// container goes, and the login is added when the agent saved one.
 func (s *Scheduler) StartLoginSignIn(ctx context.Context, member domain.MemberID, id domain.LoginID, cols, rows uint) (ptyhost.SessionKey, error) {
+	key := ptyhost.LoginSignInSession(member, id)
 	s.mu.Lock()
 	sign, err := s.signInOf(member, id)
-	if err == nil && sign.started {
-		err = fmt.Errorf("%w: the sign-in of login %s has started already", store.ErrConflict, id)
+	switch {
+	case err != nil:
+	case sign.ended:
+		err = fmt.Errorf("%w: the sign-in of login %s has ended; add the login again", store.ErrConflict, id)
+	case sign.started && slices.Contains(s.cfg.PTY.ActiveSessions(string(key)), key):
+		s.mu.Unlock()
+		return key, nil
+	case sign.started:
+		err = fmt.Errorf("%w: the sign-in of login %s is starting; open its terminal again in a moment", store.ErrConflict, id)
 	}
 	if err != nil {
 		s.mu.Unlock()
@@ -135,31 +152,33 @@ func (s *Scheduler) StartLoginSignIn(ctx context.Context, member domain.MemberID
 	}
 	sign.started = true
 	sign.timer.Stop()
-	sign.timer = time.AfterFunc(loginSignInTimeout, func() {
-		if removeErr := s.removeByCreationKey(context.Background(), loginSignInCreationKey(id)); removeErr != nil {
-			slog.Warn("scheduler: end a sign-in that ran too long", "login", id, "error", removeErr)
-		}
-	})
+	sign.holder = &terminalSupervision{member: member}
 	s.mu.Unlock()
-	key := ptyhost.LoginSignInSession(member, id)
-	holder := &terminalSupervision{member: member}
-	att, err := s.startSignInContainer(ctx, sign, holder, cols, rows)
+	att, err := s.startSignInContainer(ctx, sign, cols, rows)
 	if err == nil {
-		ending := &endingAttachment{Attachment: att, end: func() { go s.finishLoginSignIn(sign, holder) }}
+		ending := &endingAttachment{Attachment: att, end: func() { go s.finishLoginSignIn(sign) }}
 		if err = s.cfg.PTY.StartSession(ctx, key, ending); err != nil {
 			_ = att.Close()
 		}
 	}
 	if err != nil {
 		err = fmt.Errorf("scheduler: start the sign-in of login %s: %w", id, err)
-		s.cleanUpSignIn(context.WithoutCancel(ctx), sign, holder)
-		s.endLoginSignIn(sign, domain.AgentLogin{}, err)
+		s.endLoginSignIn(sign, domain.AgentLogin{}, errors.Join(err, s.cleanUpSignIn(context.WithoutCancel(ctx), sign)))
 		return "", err
 	}
+	s.mu.Lock()
+	sign.timer = time.AfterFunc(loginSignInTimeout, func() {
+		if removeErr := s.removeByCreationKey(context.Background(), loginSignInCreationKey(id)); removeErr != nil {
+			slog.Warn("scheduler: end a sign-in that ran too long", "login", id, "error", removeErr)
+		}
+	})
+	s.mu.Unlock()
 	return key, nil
 }
 
-func (s *Scheduler) startSignInContainer(ctx context.Context, sign *loginSignIn, holder *terminalSupervision, cols, rows uint) (runtime.Attachment, error) {
+func (s *Scheduler) startSignInContainer(ctx context.Context, sign *loginSignIn, cols, rows uint) (runtime.Attachment, error) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), loginSignInProvision)
+	defer cancel()
 	profile, err := s.addedLoginProfile(sign.agent)
 	if err != nil {
 		return nil, err
@@ -168,22 +187,28 @@ func (s *Scheduler) startSignInContainer(ctx context.Context, sign *loginSignIn,
 	if err != nil {
 		return nil, err
 	}
+	release, err := s.reserveCapacity(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
 	if _, err = s.cfg.Logins.Add(sign.member, sign.agent, sign.id); err != nil {
 		return nil, err
 	}
-	unlock := s.lockRunCaches(member.ID, member.ID)
-	defer unlock()
+	s.mu.Lock()
+	sign.created = true
+	s.mu.Unlock()
 	run := &domain.Run{MemberID: member.ID, AccountMemberID: member.ID, AccountLogin: sign.id, Harness: sign.agent}
 	plan, err := s.BuildEnvironmentPlan(ctx, run, nil, member, profile, EnvironmentPurposeLogin)
 	if err != nil {
 		return nil, err
 	}
-	if err = s.reserveTerminalUser(ctx, holder, plan.User); err != nil {
+	if err = s.reserveTerminalUser(ctx, sign.holder, plan.User); err != nil {
 		return nil, err
 	}
 	s.mu.Lock()
-	if holder.userReservation != nil {
-		holder.userReservation.owner = "the sign-in of login " + string(sign.id)
+	if sign.holder.userReservation != nil {
+		sign.holder.userReservation.owner = "the sign-in of login " + string(sign.id)
 	}
 	s.mu.Unlock()
 	if err = s.applyRunOwnership(nil, &domain.Run{}, member.ID, plan.Mounts, plan.User); err != nil {
@@ -215,43 +240,63 @@ func (s *Scheduler) startSignInContainer(ctx context.Context, sign *loginSignIn,
 	return s.cfg.Runtime.ExecTTY(ctx, cid, strings.Fields(profile.LoginCommand), plan.Home, cols, rows)
 }
 
-// cleanUpSignIn removes a sign-in's container and its hold on the member's
-// container user.
-func (s *Scheduler) cleanUpSignIn(ctx context.Context, sign *loginSignIn, holder *terminalSupervision) {
-	if err := s.removeByCreationKey(ctx, loginSignInCreationKey(sign.id)); err != nil {
-		slog.Warn("scheduler: remove a sign-in's container", "login", sign.id, "error", err)
+// cleanUpSignIn removes a sign-in's container, retrying a failed removal,
+// and only once it is gone releases the member's container user and the
+// sign-in's transcript. While the container may live, its directory stays:
+// the next start finds the container by it.
+func (s *Scheduler) cleanUpSignIn(ctx context.Context, sign *loginSignIn) error {
+	var err error
+	for wait := time.Second; ; wait *= 2 {
+		if err = s.removeByCreationKey(ctx, loginSignInCreationKey(sign.id)); err == nil || wait > 4*time.Second {
+			break
+		}
+		select {
+		case <-time.After(wait):
+		case <-ctx.Done():
+			return errors.Join(err, ctx.Err())
+		}
 	}
-	s.releaseTerminalReservation(holder)
+	if err != nil {
+		s.mu.Lock()
+		sign.created = false
+		s.mu.Unlock()
+		return fmt.Errorf("its container could not be removed, so nothing was added; the server removes it at its next start: %w", err)
+	}
+	s.releaseTerminalReservation(sign.holder)
+	if err := s.cfg.PTY.RemoveSessionTranscript(ctx, ptyhost.LoginSignInSession(sign.member, sign.id)); err != nil {
+		slog.Warn("scheduler: remove a sign-in's transcript", "login", sign.id, "error", err)
+	}
+	return nil
 }
 
 // finishLoginSignIn runs once the sign-in command ended: it removes the
 // container, then adds the login the agent saved or removes its directory.
-func (s *Scheduler) finishLoginSignIn(sign *loginSignIn, holder *terminalSupervision) {
+func (s *Scheduler) finishLoginSignIn(sign *loginSignIn) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	s.mu.Lock()
 	sign.timer.Stop()
 	s.mu.Unlock()
-	s.cleanUpSignIn(ctx, sign, holder)
-	if err := s.cfg.PTY.RemoveSessionTranscript(ctx, ptyhost.LoginSignInSession(sign.member, sign.id)); err != nil {
-		slog.Warn("scheduler: remove a sign-in's transcript", "login", sign.id, "error", err)
+	if err := s.cleanUpSignIn(ctx, sign); err != nil {
+		s.endLoginSignIn(sign, domain.AgentLogin{}, err)
+		return
 	}
 	login, err := s.settleLoginSignIn(ctx, sign)
 	s.endLoginSignIn(sign, login, err)
 }
 
-// endLoginSignIn records the sign-in's first result, removing the login's
-// directory when it failed, and forgets the sign-in once the result has
-// waited long enough to be collected.
+// endLoginSignIn records the sign-in's first result, removing a failed
+// login's directory when this attempt created it, and forgets the sign-in
+// once the result has waited long enough to be collected.
 func (s *Scheduler) endLoginSignIn(sign *loginSignIn, login domain.AgentLogin, err error) {
 	s.mu.Lock()
-	ended := sign.ended
+	ended, created := sign.ended, sign.created
 	sign.ended = true
 	s.mu.Unlock()
 	if ended {
 		return
 	}
-	if err != nil {
+	if err != nil && created {
 		if removeErr := s.cfg.Logins.Remove(sign.member, sign.agent, sign.id); removeErr != nil {
 			slog.Warn("scheduler: remove a login that was not added", "login", sign.id, "error", removeErr)
 		}
@@ -267,6 +312,33 @@ func (s *Scheduler) endLoginSignIn(sign *loginSignIn, login domain.AgentLogin, e
 		}
 		s.mu.Unlock()
 	})
+}
+
+// EndLoginSignIns ends member's running sign-ins, before the member is
+// removed or merged into another: each one's container goes, and the login
+// it would have added is refused once the member is gone.
+func (s *Scheduler) EndLoginSignIns(ctx context.Context, member domain.MemberID) error {
+	s.mu.Lock()
+	var running []*loginSignIn
+	for _, sign := range s.loginSignIns {
+		if sign.member == member && !sign.ended {
+			running = append(running, sign)
+		}
+	}
+	s.mu.Unlock()
+	var errs []error
+	for _, sign := range running {
+		s.mu.Lock()
+		started := sign.started
+		sign.started = true
+		s.mu.Unlock()
+		if !started {
+			s.endLoginSignIn(sign, domain.AgentLogin{}, errors.New("the member was removed or merged; nothing was added"))
+			continue
+		}
+		errs = append(errs, s.removeByCreationKey(ctx, loginSignInCreationKey(sign.id)))
+	}
+	return errors.Join(errs...)
 }
 
 // settleLoginSignIn adds the login the sign-in saved. It refuses a Console
@@ -293,14 +365,25 @@ func (s *Scheduler) settleLoginSignIn(ctx context.Context, sign *loginSignIn) (d
 	same := func(name string) error {
 		return fmt.Errorf("this sign-in is the account and organisation your login %q is signed in to, so it was not added; sign in to another account to add a login", name)
 	}
-	if def, defErr := s.cfg.Homes.DefaultIdentity(sign.member, sign.agent); defErr == nil && identity.SameAccount(def) {
+	unread := func(name string, err error) error {
+		return fmt.Errorf("your login %q could not be read to check this sign-in is another account, so it was not added: %w", name, err)
+	}
+	def, err := s.cfg.Homes.DefaultIdentity(sign.member, sign.agent)
+	if err != nil {
+		return domain.AgentLogin{}, unread(string(domain.DefaultLogin), err)
+	}
+	if def.Kind != "" && identity.SameAccount(def) {
 		return domain.AgentLogin{}, same(string(domain.DefaultLogin))
 	}
 	for _, l := range logins {
 		if !l.ID.Added() {
 			continue
 		}
-		if other, otherErr := s.cfg.Logins.Identity(sign.member, sign.agent, l.ID); otherErr == nil && identity.SameAccount(other) {
+		other, otherErr := s.cfg.Logins.Identity(sign.member, sign.agent, l.ID)
+		if otherErr != nil {
+			return domain.AgentLogin{}, unread(l.Name, otherErr)
+		}
+		if identity.SameAccount(other) {
 			return domain.AgentLogin{}, same(l.Name)
 		}
 	}
@@ -310,8 +393,11 @@ func (s *Scheduler) settleLoginSignIn(ctx context.Context, sign *loginSignIn) (d
 	login, err := s.cfg.Store.AddAgentLogin(ctx, domain.AgentLogin{
 		MemberID: sign.member, Agent: sign.agent, ID: sign.id, Name: sign.name, CreatedAt: time.Now().UTC(),
 	}, s.addedLoginPlace(sign, identity, logins))
-	if errors.Is(err, store.ErrConflict) {
+	switch {
+	case errors.Is(err, store.ErrConflict):
 		return domain.AgentLogin{}, fmt.Errorf("the name %q was taken while you signed in; add the login again under another name", sign.name)
+	case errors.Is(err, store.ErrNotFound):
+		return domain.AgentLogin{}, errors.New("the member was removed or merged while signing in; nothing was added")
 	}
 	return login, err
 }
@@ -343,9 +429,12 @@ func (s *Scheduler) addedLoginPlace(sign *loginSignIn, identity memberhome.Login
 
 // LoginSignInResult waits for member's sign-in id to end and returns the
 // login it added, or why it added none.
-func (s *Scheduler) LoginSignInResult(ctx context.Context, member domain.MemberID, id domain.LoginID) (domain.AgentLogin, error) {
+func (s *Scheduler) LoginSignInResult(ctx context.Context, member domain.MemberID, agent string, id domain.LoginID) (domain.AgentLogin, error) {
 	s.mu.Lock()
 	sign, err := s.signInOf(member, id)
+	if err == nil && sign.agent != agent {
+		err = fmt.Errorf("%w: no sign-in of a %s login %s", store.ErrNotFound, agent, id)
+	}
 	s.mu.Unlock()
 	if err != nil {
 		return domain.AgentLogin{}, err
@@ -447,6 +536,15 @@ func (s *Scheduler) addedLoginMounts(run *domain.Run, launcher domain.MemberID, 
 			return nil, fmt.Errorf("scheduler: %w", err)
 		}
 		mounts = append(mounts, runtime.Mount{HostPath: dir, Subpath: memberhome.LoginBackups, ContainerPath: path.Join(home, backups)})
+		// The home's own configuration, where a default login's API key
+		// lives, is read-only to the sign-in, which writes the copy instead.
+		if _, statErr := s.cfg.Homes.LoginPathIsDir(member, profile.AccountConfig.File); statErr == nil {
+			homePath, pathErr := s.cfg.Homes.Path(member)
+			if pathErr != nil {
+				return nil, fmt.Errorf("scheduler: %w", pathErr)
+			}
+			mounts = append(mounts, runtime.Mount{HostPath: homePath, Subpath: profile.AccountConfig.File, ContainerPath: path.Join(home, profile.AccountConfig.File), ReadOnly: true})
+		}
 	}
 	config, err := s.accountConfigMounts(configDir, member, profile, home)
 	if err != nil {
@@ -672,9 +770,11 @@ func (s *Scheduler) LoginInUse(ctx context.Context, account domain.Account) ([]d
 	return slices.Compact(ids), nil
 }
 
-// ReconcileLogins makes the login directories match the rows at start: a
-// directory a merge gave another member moves to them, and one with no row,
-// a sign-in the server stopped during, goes with its container.
+// ReconcileLogins makes the login directories match the rows: a directory
+// a merge gave another member moves to them, and one with no row, a
+// sign-in that ended or that the server stopped during, goes with its
+// container and transcript. A directory stays while its container may
+// live, so a later reconcile finds the container again.
 func (s *Scheduler) ReconcileLogins(ctx context.Context, member domain.MemberID) error {
 	if s.cfg.Logins == nil {
 		return nil
@@ -686,17 +786,25 @@ func (s *Scheduler) ReconcileLogins(ctx context.Context, member domain.MemberID)
 	var errs []error
 	for _, l := range stored {
 		s.mu.Lock()
-		_, signing := s.loginSignIns[l.ID]
+		sign := s.loginSignIns[l.ID]
+		running := sign != nil && !sign.ended
 		s.mu.Unlock()
-		if signing {
+		if running {
 			continue
 		}
 		owner, err := s.cfg.Store.AgentLoginOwner(ctx, l.Agent, l.ID)
 		switch {
 		case errors.Is(err, store.ErrNotFound):
-			errs = append(errs, s.removeByCreationKey(ctx, loginSignInCreationKey(l.ID)), s.cfg.Logins.Remove(l.Member, l.Agent, l.ID))
+			if removeErr := s.removeByCreationKey(ctx, loginSignInCreationKey(l.ID)); removeErr != nil {
+				errs = append(errs, fmt.Errorf("login %s: %w", l.ID, removeErr))
+				continue
+			}
+			if s.cfg.PTY != nil {
+				errs = append(errs, s.cfg.PTY.RemoveSessionTranscript(ctx, ptyhost.LoginSignInSession(l.Member, l.ID)))
+			}
+			errs = append(errs, s.cfg.Logins.Remove(l.Member, l.Agent, l.ID))
 		case err != nil:
-			errs = append(errs, err)
+			errs = append(errs, fmt.Errorf("login %s: %w", l.ID, err))
 		case owner != l.Member:
 			errs = append(errs, s.cfg.Logins.Move(l.Member, owner, l.Agent, l.ID))
 		}

@@ -351,9 +351,9 @@ func printStatus(w io.Writer, r statusReport) {
 		case a.LoginFound == nil:
 			line("agent", "%s: installed, declares no login file", a.Name)
 		case *a.LoginFound:
-			line("agent", "%s: installed, login file found", a.Name)
+			line("agent", "%s: installed, login found", a.Name)
 		default:
-			line("agent", "%s: installed, no login file found", a.Name)
+			line("agent", "%s: installed, no login found", a.Name)
 		}
 	}
 	switch {

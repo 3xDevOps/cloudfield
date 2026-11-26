@@ -107,7 +107,7 @@ const outcomeTone: Partial<Record<PresentationState, Tone>> = {
   closed: 'closed',
 }
 
-/** A finished run's working spans take its outcome's colour, so only live work reads blue. */
+/** A finished run's working spans take its outcome's colour, so only live work takes the working colour. */
 export function segmentTone(state: SegmentState, outcome?: PresentationState): Tone | 'starting' | 'unloaded' {
   if (state === 'starting' || state === 'unloaded') return state
   if (state === 'needed-attention') return 'needs-you'

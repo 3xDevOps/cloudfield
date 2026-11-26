@@ -221,8 +221,21 @@ func (r *Relay) forward(w http.ResponseWriter, req *http.Request, serverID strin
 	}
 }
 
-// countConnector counts a connector request to serverID by the relay
-// origin it came in on and the server's protocol version.
+// connectorUseInterval is the least time between two records of
+// connector requests to one server through one relay origin,
+// connectorRetry the least time before one that failed is tried again,
+// and connectorPruneMin the least size of connectorUsed that drops
+// expired entries.
+const (
+	connectorUseInterval = time.Hour
+	connectorRetry       = time.Minute
+	connectorPruneMin    = 64
+)
+
+type connectorUse struct{ serverID, origin string }
+
+// countConnector counts a connector request to serverID, as it arrives,
+// by the relay origin it came in on and the server's protocol version.
 func (r *Relay) countConnector(req *http.Request, serverID string) {
 	k := ConnectorKey{Origin: r.originOf(req)}
 	r.mu.Lock()
@@ -235,6 +248,48 @@ func (r *Relay) countConnector(req *http.Request, serverID string) {
 	r.refusalsMu.Unlock()
 }
 
+// noteConnector records, with a ConnectorRecorder, a connector request
+// through origin that the edge sent on to reg, the claimed server's
+// registration that admitted its connection: at most once a
+// connectorUseInterval, in the background, and never once the relay is
+// closing.
+func (r *Relay) noteConnector(ctx context.Context, reg *registration, origin string) {
+	if r.connectors == nil {
+		return
+	}
+	use := connectorUse{reg.id, origin}
+	now := time.Now()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closing || now.Sub(r.connectorUsed[use]) < connectorUseInterval {
+		return
+	}
+	if len(r.connectorUsed) >= r.connectorPruneAt {
+		maps.DeleteFunc(r.connectorUsed, func(_ connectorUse, at time.Time) bool { return now.Sub(at) >= connectorUseInterval })
+		r.connectorPruneAt = max(2*len(r.connectorUsed), connectorPruneMin)
+	}
+	r.connectorUsed[use] = now
+	r.recording.Go(func() { r.recordConnector(context.WithoutCancel(ctx), use, now) })
+}
+
+// recordConnector writes use, reserved at reserved in connectorUsed. A
+// failed write keeps the reservation for connectorRetry only, so the next
+// request after that tries again.
+func (r *Relay) recordConnector(ctx context.Context, use connectorUse, reserved time.Time) {
+	ctx, cancel := context.WithTimeout(ctx, directoryTimeout)
+	defer cancel()
+	err := r.connectors.ConnectorUsed(ctx, use.serverID, use.origin)
+	if err == nil {
+		return
+	}
+	slog.Warn("relay: connector request not recorded", "server", use.serverID, "origin", use.origin, "error", err)
+	r.mu.Lock()
+	if r.connectorUsed[use].Equal(reserved) {
+		r.connectorUsed[use] = time.Now().Add(connectorRetry - connectorUseInterval)
+	}
+	r.mu.Unlock()
+}
+
 // forwardOnce sends req to serverID and writes the answer, or the
 // refusal, to w. It writes nothing and returns the refusal when the edge
 // refused the request as not connected before it was written to the
@@ -245,9 +300,22 @@ func (r *Relay) forwardOnce(w http.ResponseWriter, req *http.Request, serverID s
 	defer cancel(nil)
 	cw := &connWait{r: r, serverID: serverID, cancel: cancel}
 	defer cw.got(false)
+	// admitted is the registration that admitted the connection the
+	// request goes out on: only a claimed server's admits one.
+	var admitted *registration
 	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
 		GetConn: func(string) { cw.wait() },
-		GotConn: func(httptrace.GotConnInfo) { cw.got(true) },
+		GotConn: func(info httptrace.GotConnInfo) {
+			if h, ok := info.Conn.(*httpConn); ok {
+				admitted = h.c.reg
+			}
+			cw.got(true)
+		},
+		WroteRequest: func(info httptrace.WroteRequestInfo) {
+			if info.Err == nil && admitted != nil {
+				r.noteConnector(client.Context(), admitted, r.originOf(client))
+			}
+		},
 	})
 	req = req.WithContext(ctx)
 	req.Body = io.NopCloser(bytes.NewReader(body))

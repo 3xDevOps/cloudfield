@@ -154,8 +154,9 @@ func (s *Scheduler) BuildEnvironmentPlan(ctx context.Context, run *domain.Run, w
 		return nil, err
 	}
 	if purpose == EnvironmentPurposeLogin {
+		// Empty, not absent: an image's own ENV would fill an absent one.
 		for _, key := range profile.EnvPassthrough {
-			delete(env, key)
+			env[key] = ""
 		}
 	}
 	if run != nil {
@@ -295,21 +296,25 @@ func (s *Scheduler) BuildEnvironmentPlan(ctx context.Context, run *domain.Run, w
 		if purpose != EnvironmentPurposeRun {
 			pool = "terminal"
 		}
-		cachePath, cacheErr := s.cfg.Homes.CachePath(member.ID, pool)
-		if cacheErr != nil {
-			return nil, fmt.Errorf("scheduler: resolve member cache: %w", cacheErr)
-		}
-		cacheMount := runtime.Mount{HostPath: cachePath, ContainerPath: "/aether-cache"}
-		if purpose == EnvironmentPurposeRun {
-			cacheMount.Kind = runtime.MountCache
-		}
-		if isolated {
-			var overlayErr error
-			if cacheMount.Overlay, overlayErr = s.ensureOverlay(run.ID, "cache"); overlayErr != nil {
-				return nil, overlayErr
+		// A sign-in gets no cache: its container is no cache pool's owner, so
+		// collection could remove a pool it mounted.
+		if purpose != EnvironmentPurposeLogin {
+			cachePath, cacheErr := s.cfg.Homes.CachePath(member.ID, pool)
+			if cacheErr != nil {
+				return nil, fmt.Errorf("scheduler: resolve member cache: %w", cacheErr)
 			}
+			cacheMount := runtime.Mount{HostPath: cachePath, ContainerPath: "/aether-cache"}
+			if purpose == EnvironmentPurposeRun {
+				cacheMount.Kind = runtime.MountCache
+			}
+			if isolated {
+				var overlayErr error
+				if cacheMount.Overlay, overlayErr = s.ensureOverlay(run.ID, "cache"); overlayErr != nil {
+					return nil, overlayErr
+				}
+			}
+			plan.Mounts = append(plan.Mounts, cacheMount)
 		}
-		plan.Mounts = append(plan.Mounts, cacheMount)
 		scratch := ""
 		switch {
 		case purpose == EnvironmentPurposeLogin:
@@ -831,6 +836,10 @@ func (s *Scheduler) accountLogins(ctx context.Context, account domain.MemberID, 
 	for i, rel := range paths {
 		shown[i] = "~/" + rel
 	}
+	if own, ownErr := s.cfg.Homes.OwnerLogin(account, profile.Name); ownErr == nil && own != nil {
+		return nil, fmt.Errorf("scheduler: %s is %w to %s with a login Cloudfield shares: ~/%s holds an Anthropic Console sign-in, which stays in %s's own sessions; sharing needs a subscription login at %s",
+			owner.DisplayName, errNotLoggedIn, profile.Name, own.File, owner.DisplayName, strings.Join(shown, ", "))
+	}
 	return nil, fmt.Errorf("scheduler: %s is %w to %s: no login at %s in their home; %s logs in to %s in their own environment terminal",
 		owner.DisplayName, errNotLoggedIn, profile.Name, strings.Join(shown, ", "), owner.DisplayName, profile.Name)
 }
@@ -927,7 +936,7 @@ func (s *Scheduler) FallbackLaunchable(ctx context.Context, member, requested do
 	if err != nil {
 		return false, err
 	}
-	if _, blocks, loginErr := s.LoginProblem(account, harnessName, profile); loginErr == nil && blocks && !login.Login.Added() {
+	if _, blocks, loginErr := s.LoginProblem(member, account, harnessName, profile); loginErr == nil && blocks && !login.Login.Added() {
 		return false, nil
 	}
 	if mode == domain.LaunchACP {
