@@ -14,8 +14,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/3xDevOps/Aether/internal/runtime"
-	"github.com/3xDevOps/Aether/internal/sysstats"
+	"github.com/3xDevOps/cloudfield/internal/runtime"
+	"github.com/3xDevOps/cloudfield/internal/sysstats"
 )
 
 const (

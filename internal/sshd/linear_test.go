@@ -11,9 +11,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/3xDevOps/Aether/internal/domain"
-	"github.com/3xDevOps/Aether/internal/linear/api"
-	"github.com/3xDevOps/Aether/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/linear/api"
+	"github.com/3xDevOps/cloudfield/internal/protocol"
 )
 
 // Each member's Linear methods use only their own key, and a connector is

@@ -33,13 +33,13 @@ import (
 	"github.com/coder/websocket/wsjson"
 	"golang.org/x/net/http2"
 
-	"github.com/3xDevOps/Aether/internal/domain"
-	edgeagent "github.com/3xDevOps/Aether/internal/edge/agent"
-	"github.com/3xDevOps/Aether/internal/protocol"
-	"github.com/3xDevOps/Aether/internal/reachability"
-	"github.com/3xDevOps/Aether/internal/servergw"
-	"github.com/3xDevOps/Aether/internal/sshd"
-	"github.com/3xDevOps/Aether/internal/webgate"
+	"github.com/3xDevOps/cloudfield/internal/domain"
+	edgeagent "github.com/3xDevOps/cloudfield/internal/edge/agent"
+	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/reachability"
+	"github.com/3xDevOps/cloudfield/internal/servergw"
+	"github.com/3xDevOps/cloudfield/internal/sshd"
+	"github.com/3xDevOps/cloudfield/internal/webgate"
 )
 
 // TestIntegrationServerGateway drives the server-hosted dashboard gateway
