@@ -59,8 +59,6 @@ type options struct {
 
 const maxSecretFileSize = 4 << 10
 
-const maxRetiredPairs = 16
-
 func parseOptions(args []string, getenv func(string) string) (options, error) {
 	var o options
 	fs := flag.NewFlagSet("aether-edge serve", flag.ContinueOnError)
@@ -383,8 +381,8 @@ func parseRetiredPairs(list, scheme, signin, relay string, more []edge.Pair, ret
 		}
 		out = append(out, edge.Retired{SigninOrigin: edge.CanonicalOrigin(fields[0]), RelayOrigin: edge.CanonicalOrigin(fields[1]), Replacement: replacement})
 	}
-	if len(out) > maxRetiredPairs {
-		return nil, fmt.Errorf("--retired-pairs names %d pairs; an edge keeps at most %d", len(out), maxRetiredPairs)
+	if len(out) > edgeproto.MaxRelayOrigins {
+		return nil, fmt.Errorf("--retired-pairs names %d pairs; an edge keeps at most %d", len(out), edgeproto.MaxRelayOrigins)
 	}
 	if n := len(out) + len(retiring); n > edgeproto.MaxRelayOrigins {
 		return nil, fmt.Errorf("--retiring-pairs and --retired-pairs name %d pairs together, and a server is sent at most %d notices: "+
