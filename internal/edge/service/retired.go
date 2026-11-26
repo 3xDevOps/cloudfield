@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync/atomic"
 
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
+	edgestore "github.com/3xDevOps/cloudfield/internal/edge/store"
 )
 
 // Retired is a pair taken out of the served pairs: every request to its
@@ -122,16 +124,53 @@ func (s *Service) retiredAnswers(origin string, repl *pair, signin bool) (*retir
 }
 
 // deleteRetiredSignIns deletes the device tokens, sessions and pending
-// device authorizations issued at a retired sign-in origin or with no
-// recorded origin.
-func (s *Service) deleteRetiredSignIns(ctx context.Context, retired []Retired) error {
-	origins := make([]string, 0, 2*len(retired))
+// device authorizations whose recorded sign-in origin has the host name of
+// a retired sign-in origin, whatever its port, and those with no recorded
+// origin. It refuses a retired pair whose origins contradict the pairs the
+// edge recorded, and rows without an origin when the edge never recorded
+// origins, since every row would have none.
+func (s *Service) deleteRetiredSignIns(ctx context.Context, path string, retired []Retired) error {
+	rep, err := edgestore.ReadRetiring(ctx, path, s.now())
+	if err != nil {
+		return err
+	}
+	signinHosts := map[string]bool{}
+	for _, r := range retired {
+		signinHosts[originHost(r.SigninOrigin)] = true
+		for _, o := range rep.Origins {
+			relay, signin := originHost(o.RelayOrigin), originHost(o.SigninOrigin)
+			switch {
+			case relay == originHost(r.SigninOrigin) || signin == originHost(r.RelayOrigin):
+				return fmt.Errorf("edge: --retired-pairs names %s as a sign-in origin and %s as a relay origin, but the edge served them the other way round, "+
+					"in the pair %s %s: write <sign-in origin> <relay origin> <replacement relay origin>", r.SigninOrigin, r.RelayOrigin, o.SigninOrigin, o.RelayOrigin)
+			case relay == originHost(r.RelayOrigin) && signin != originHost(r.SigninOrigin):
+				return fmt.Errorf("edge: --retired-pairs pairs %s with %s, but the edge served it with the sign-in origin %s: name that one",
+					r.RelayOrigin, r.SigninOrigin, o.SigninOrigin)
+			}
+		}
+	}
+	without, err := s.store.SignInsWithoutOrigin(ctx)
+	if err != nil {
+		return err
+	}
+	if n := without.Devices + without.Sessions + without.Authorizations; n > 0 && rep.RecordingSince.IsZero() {
+		return fmt.Errorf("edge: --retired-pairs would delete, on every pair, the sign-ins with no recorded origin (device tokens %d, browser sessions %d, "+
+			"pending device sign-ins %d), since this edge has never recorded which pair issued them. Run it first with --retiring-pairs naming the pair, for as long as you give "+
+			"people to move, such as 30 days: each token or session used in that time is recorded and kept. A shorter run lets this start pass "+
+			"but signs out everyone who did not use the edge during it", without.Devices, without.Sessions, without.Authorizations)
+	}
+	var origins []string
 	for _, r := range retired {
 		origins = append(origins, r.SigninOrigin)
-		if base, ok := strings.CutSuffix(r.SigninOrigin, ":443"); ok {
-			origins = append(origins, base)
-		} else if strings.HasPrefix(r.SigninOrigin, "https://") && !strings.Contains(strings.TrimPrefix(r.SigninOrigin, "https://"), ":") {
-			origins = append(origins, r.SigninOrigin+":443")
+	}
+	for _, o := range rep.Origins {
+		if signinHosts[originHost(o.SigninOrigin)] {
+			origins = append(origins, o.SigninOrigin)
+		}
+	}
+	for _, u := range rep.Unpaired {
+		if signinHosts[originHost(u.SigninOrigin)] {
+			origins = append(origins, u.SigninOrigin)
 		}
 	}
 	n, err := s.store.DeleteSignIns(ctx, origins)
@@ -141,6 +180,16 @@ func (s *Service) deleteRetiredSignIns(ctx context.Context, retired []Retired) e
 	slog.Info("edge: deleted the sign-ins of retired pairs and those with no recorded origin",
 		"devices", n.Devices, "sessions", n.Sessions, "authorizations", n.Authorizations)
 	return nil
+}
+
+// originHost is the host name of origin as canonicalHost writes it, ""
+// when origin does not parse.
+func originHost(origin string) string {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return ""
+	}
+	return canonicalHost(u.Hostname())
 }
 
 // retiredKind is the kind of request path is, for the retired request

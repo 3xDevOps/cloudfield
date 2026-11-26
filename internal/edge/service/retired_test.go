@@ -298,11 +298,14 @@ func TestRetiredDeletesSignIns(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = svc.Close() })
 	for q, want := range map[string]string{
-		`SELECT group_concat(signin_origin) FROM devices`:               testSignin,
-		`SELECT group_concat(signin_origin) FROM web_sessions`:          testSignin,
-		`SELECT group_concat(signin_origin) FROM device_authorizations`: testSignin,
-		`SELECT COUNT(*) FROM servers WHERE id = '` + id + `'`:          "1",
-		`SELECT COUNT(*) FROM accounts`:                                 "1",
+		`SELECT COUNT(*) FROM devices WHERE signin_origin IS NULL OR signin_origin <> '` + testSignin + `'`:               "0",
+		`SELECT COUNT(*) FROM web_sessions WHERE signin_origin IS NULL OR signin_origin <> '` + testSignin + `'`:          "0",
+		`SELECT COUNT(*) FROM device_authorizations WHERE signin_origin IS NULL OR signin_origin <> '` + testSignin + `'`: "0",
+		`SELECT group_concat(signin_origin) FROM devices`:                                                                 testSignin,
+		`SELECT group_concat(signin_origin) FROM web_sessions`:                                                            testSignin,
+		`SELECT group_concat(signin_origin) FROM device_authorizations`:                                                   testSignin,
+		`SELECT COUNT(*) FROM servers WHERE id = '` + id + `'`:                                                            "1",
+		`SELECT COUNT(*) FROM accounts`:                                                                                   "1",
 	} {
 		if got := count(q); got != want {
 			t.Errorf("after start with %s retired: %s = %q, want %q", testSignin2, q, got, want)
@@ -462,5 +465,93 @@ func TestNoticeCap(t *testing.T) {
 	h = newHarness(t, configure(edgeproto.MaxRelayOrigins))
 	if _, err = relay.New(t.Context(), h.svc.RelayConfig(0)); err == nil || err.Error() != "relay: 17 notices, limit 16" {
 		t.Errorf("17 notices: %v", err)
+	}
+}
+
+// restartRetiring closes h's edge and starts one on its data directory
+// that serves the first pair and retires retired.
+func (h *harness) restartRetiring(t *testing.T, retired ...Retired) (*Service, error) {
+	t.Helper()
+	if err := h.svc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	svc, err := New(Config{DataDir: h.dataDir, SigninOrigin: testSignin, RelayOrigin: testRelay, GitHub: h.provider.app(), Clock: h.clock.Now,
+		Retired: retired})
+	if svc != nil {
+		t.Cleanup(func() { _ = svc.Close() })
+	}
+	return svc, err
+}
+
+// TestRetiredDeletesByHost deletes every row whose recorded sign-in
+// origin has a retired sign-in host name, whatever its port, case or IPv6
+// spelling, and keeps rows of other hosts.
+func TestRetiredDeletesByHost(t *testing.T) {
+	h := newRecordingHarness(t)
+	h.setGitHubUser(1, "owner", "owner@example.test", true)
+	b := h.browser(t)
+	b.signIn(t)
+	for i, origin := range []string{testSignin, testSignin2 + ":8443", "https://SIGNIN2.example.test:443", "https://[2001:DB8::1]:443",
+		"https://[2001:db8::1]:8443", "https://signin2.example.test.other.example"} {
+		h.exec(t, `INSERT INTO devices (id, token_hash, account_id, public_key, label, created_at, last_used_at, signin_origin)
+			SELECT ?, ?, account_id, 'key', 'label', created_at, created_at, ? FROM web_sessions LIMIT 1`, fmt.Sprintf("dev-%d", i), fmt.Sprintf("hash-%d", i), origin)
+		h.exec(t, `INSERT INTO web_sessions (id, token_hash, account_id, created_at, expires_at, signin_origin)
+			SELECT ?, ?, account_id, created_at, expires_at, ? FROM web_sessions LIMIT 1`, fmt.Sprintf("sess-%d", i), fmt.Sprintf("hash-%d", i), origin)
+	}
+	if _, err := h.restartRetiring(t, Retired{SigninOrigin: testSignin2, RelayOrigin: testRelay2, Replacement: testRelay},
+		Retired{SigninOrigin: "https://[2001:db8::1]", RelayOrigin: "https://[2001:db8::2]", Replacement: testRelay}); err != nil {
+		t.Fatal(err)
+	}
+	for _, table := range []string{"devices", "web_sessions"} {
+		got := h.column(t, `SELECT group_concat(signin_origin, ' ') FROM (SELECT signin_origin FROM `+table+` WHERE id LIKE '%-%' ORDER BY signin_origin)`)
+		if want := testSignin + " https://signin2.example.test.other.example"; got != want {
+			t.Errorf("%s left: %q, want %q", table, got, want)
+		}
+	}
+}
+
+// TestRetiredRefusedWithoutRecording refuses to delete sign-ins with no
+// origin on an edge that never recorded origins, and starts when there
+// are none.
+func TestRetiredRefusedWithoutRecording(t *testing.T) {
+	h := newPairsHarness(t)
+	h.setGitHubUser(1, "owner", "owner@example.test", true)
+	b := h.browser(t)
+	b.signIn(t)
+	startDevice(t, h)
+	_, err := h.restartRetiring(t, Retired{SigninOrigin: testSignin2, RelayOrigin: testRelay2, Replacement: testRelay})
+	want := "edge: --retired-pairs would delete, on every pair, the sign-ins with no recorded origin (device tokens 0, browser sessions 1, " +
+		"pending device sign-ins 1), since this edge has never recorded which pair issued them. Run it first with --retiring-pairs naming the pair, for as long as you give " +
+		"people to move, such as 30 days: each token or session used in that time is recorded and kept. A shorter run lets this start pass " +
+		"but signs out everyone who did not use the edge during it"
+	if err == nil || err.Error() != want {
+		t.Errorf("never recorded: %v, want %q", err, want)
+	}
+	if got := h.column(t, `SELECT COUNT(*) FROM web_sessions`); got != "1" {
+		t.Errorf("the refused start deleted sessions: %s left", got)
+	}
+	h = newPairsHarness(t)
+	if _, err = h.restartRetiring(t, Retired{SigninOrigin: testSignin2, RelayOrigin: testRelay2, Replacement: testRelay}); err != nil {
+		t.Errorf("never recorded, nothing to delete: %v", err)
+	}
+}
+
+// TestRetiredContradictsRecordedPair refuses a retired pair whose origins
+// the edge recorded in other roles or other pairs.
+func TestRetiredContradictsRecordedPair(t *testing.T) {
+	for _, tt := range []struct {
+		retired Retired
+		want    string
+	}{
+		{Retired{SigninOrigin: testRelay2, RelayOrigin: testSignin2, Replacement: testRelay},
+			"edge: --retired-pairs names " + testRelay2 + " as a sign-in origin and " + testSignin2 + " as a relay origin, but the edge served them the other way round, " +
+				"in the pair " + testSignin2 + " " + testRelay2 + ": write <sign-in origin> <relay origin> <replacement relay origin>"},
+		{Retired{SigninOrigin: "https://signin9.example.test", RelayOrigin: testRelay2, Replacement: testRelay},
+			"edge: --retired-pairs pairs " + testRelay2 + " with https://signin9.example.test, but the edge served it with the sign-in origin " + testSignin2 + ": name that one"},
+	} {
+		h := newRecordingHarness(t)
+		if _, err := h.restartRetiring(t, tt.retired); err == nil || err.Error() != tt.want {
+			t.Errorf("%+v: %v, want %q", tt.retired, err, tt.want)
+		}
 	}
 }
