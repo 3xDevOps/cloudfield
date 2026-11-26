@@ -963,7 +963,8 @@ Every job runs on a GitHub-hosted runner: `ubuntu-latest` for the Linux jobs,
 contributors' runs wait for a maintainer's approval
 (`gh api repos/3xDevOps/cloudfield/actions/permissions/fork-pr-contributor-approval`
 reports `all_external_contributors`; organization members and repository
-collaborators are not asked). The release workflow builds the browser and
+collaborators are not asked). A fork can edit the workflows, so read its
+`.github/` changes before approving. The release workflow builds the browser and
 standard images without a build cache, so no cache another workflow wrote
 reaches a published image.
 
