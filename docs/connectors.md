@@ -33,19 +33,26 @@ As of 2026-11-26 the project edge's connector URL is
 `https://edge.cloudfield.ai/mcp`. The edge still answers at
 `edge.onaether.dev`, and connectors added at `https://edge.onaether.dev/mcp`
 keep working. `cloudfield mcp`, **Settings → ChatGPT and Claude** and `sudo
-cloudfield-server edge status` show the URL at the address the server is
-enrolled at, its `edge-url`, and no other. A server set up at
-`https://edge.onaether.dev` stays enrolled there, so they show
-`https://edge.onaether.dev/mcp`. On v0.8.7 or later a connector works at
-either address. Where the URL shown is the universal URL,
-`https://edge.onaether.dev/mcp`, add new connectors at
-`https://edge.cloudfield.ai/mcp`: Settings still sees the connection and marks
-it **Universal URL**. Use the server's own URL,
-`https://edge.onaether.dev/mcp/<server id>`, as shown: Settings sees a new
-connector there only at the address it shows. To make the server show the
+cloudfield-server edge status` show the URLs for new connectors at the
+address the server is enrolled at, its `edge-url`; Settings and `cloudfield
+mcp` list existing connectors at the URL each was added at. A server set up
+at `https://edge.onaether.dev` stays enrolled there, so the URL offered starts
+with `https://edge.onaether.dev`. On v0.8.7 or later a connector works at
+either address, at the universal URL and at the server's own. Where the URL
+shown starts with `https://edge.onaether.dev`, add a new connector at the same
+URL with `https://edge.cloudfield.ai` in its place:
+`https://edge.cloudfield.ai/mcp`, or
+`https://edge.cloudfield.ai/mcp/<server id>` with the pairing code shown; a
+code is not tied to an address. Settings sees a universal URL at either
+address and marks the connector **Universal URL**. It watches for a new
+connector at the server's own URL only at the address it shows: at the other,
+it waits until the code expires, then shows `The last code expired.` and lists
+the connector as **This server's own URL**,
+`https://edge.cloudfield.ai/mcp/<server id>`, which `cloudfield mcp` prints as
+`at https://edge.cloudfield.ai/mcp/<server id>`. To make the server show the
 new address, an admin runs `sudo cloudfield-server edge move
-https://edge.cloudfield.ai` (v0.9.0 or later;
-[edge.md](edge.md#moving-to-another-address-of-the-edge)).
+https://edge.cloudfield.ai`, then `sudo systemctl restart aether-server`
+(v0.9.0 or later; [edge.md](edge.md#moving-to-another-address-of-the-edge)).
 
 A server too old for the universal URL is listed on the edge's sign-in page
 under **Not available**: `its aether-server is too old for this URL; an admin
@@ -100,8 +107,8 @@ code` line:
 
 The URL is the same for both apps and every server enrolled at the same
 address of the edge. On the server, `sudo cloudfield-server edge status` also
-prints it. Before edge protocol 3, and for a member with no GitHub account
-linked, it is the server's own URL at that address,
+prints it while the server is connected. Before edge protocol 3, and for a
+member with no GitHub account linked, it is the server's own URL at that address,
 `<edge-url>/mcp/<server id>`. The code works once, within 10
 minutes. Running `cloudfield mcp` again replaces a code you have not used.
 
@@ -120,8 +127,9 @@ Custom MCP servers are added on the web only, at chatgpt.com
 1. Open [ChatGPT Plugins](https://chatgpt.com/plugins).
 2. Select the plus button, then **Add custom MCP server**.
 3. Name it `Aether`, paste the URL from `cloudfield mcp` as the server URL, and
-   choose **OAuth**. Where that URL is `https://edge.onaether.dev/mcp`, paste
-   `https://edge.cloudfield.ai/mcp` ([Prerequisites](#prerequisites)).
+   choose **OAuth**. Where that URL starts with `https://edge.onaether.dev`,
+   paste it with `https://edge.cloudfield.ai` in its place
+   ([Prerequisites](#prerequisites)).
 4. Select **Create as a plugin**, then install it.
 5. On the [universal URL](#the-universal-url), the edge's page opens: sign in
    with GitHub and select **Continue with <server>**. A page from your server
@@ -140,9 +148,10 @@ On claude.ai
 
 1. Free, Pro and Max: open **Customize → Connectors**, select **Add custom
    connector**, name it `Aether`, paste the URL from `cloudfield mcp`, leave
-   **Advanced settings** empty and select **Add**. Where that URL is
-   `https://edge.onaether.dev/mcp`, paste `https://edge.cloudfield.ai/mcp`
-   ([Prerequisites](#prerequisites)). Free allows one custom connector.
+   **Advanced settings** empty and select **Add**. Where that URL starts with
+   `https://edge.onaether.dev`, paste it with `https://edge.cloudfield.ai` in
+   its place ([Prerequisites](#prerequisites)). Free allows one custom
+   connector.
 2. Team and Enterprise: an Owner opens **Organization settings → Connectors**,
    selects **Add**, **Custom**, then **Web**, and pastes the same URL. Each member
    then selects **Connect** under **Customize → Connectors**.
@@ -186,7 +195,9 @@ nobody. [edge.md](edge.md#mcp-connectors) has the details.
 The sign-in page lists a server only to the GitHub accounts bound to its
 members. So the app and `cloudfield mcp` show the universal URL only to a member with a
 GitHub account bound, and `<edge>/mcp/<server id>` to one with only a member
-SSH key or tailnet login. `sudo cloudfield-server edge status` prints both.
+SSH key or tailnet login. `sudo cloudfield-server edge status` prints the
+server's own URL, and the universal URL while the server is connected at
+edge protocol 3 or later.
 
 A connector added without a code stops working when the server switches to
 `approved-devices`, when its GitHub account is unbound from the member
@@ -839,7 +850,9 @@ A connector also stops working at its next request when:
   approved
 - its refresh token goes unused for 30 days (`cloudfield mcp` then no longer lists
   it)
-- the edge moved to another origin, which changes the connector URL
+- the server moved to another edge, or its edge no longer announces the
+  address the connector was added at; an `edge move` to another address of
+  the same edge keeps it working
 
 A connector whose code was minted over a member SSH key or a tailnet
 connection has no device, so revoking a device never cuts it off. Revoke it
