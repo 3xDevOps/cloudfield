@@ -273,7 +273,7 @@ func (d *acpDriver) askReport(entry *supervised, st acphost.TurnState, forward b
 		return false, nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), acpSteerTimeout)
-	reminder, err := d.s.HoldTurnEnd(ctx, entry.runID)
+	reminder, err := d.s.HoldTurnEnd(ctx, entry.runID, "")
 	cancel()
 	if err != nil {
 		slog.Warn("scheduler: check the ending turn's report", "run", entry.runID, "error", err)

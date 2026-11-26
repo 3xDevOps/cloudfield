@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -249,7 +250,12 @@ func (s *Scheduler) applyAgentReportIf(ctx context.Context, run domain.RunID, re
 			entry.parkedAt, entry.postParkActivity = time.Time{}, time.Time{}
 		}
 	case agentstatus.Idle:
-		entry.stopHeld = false
+		// An Enhanced run's session forwards its own turn ends, and a
+		// session's end repeats the idle report. TurnEnded takes s.mu.
+		if entry.launchMode == domain.LaunchTUI && turnEnd(execution) && priorReport.State == agentstatus.Working {
+			go s.TurnEnded(run, cmp.Or(entry.heldMessage, report.LastMessage))
+		}
+		entry.stopHeld, entry.heldMessage = false, ""
 		if !finishes {
 			entry.parkedAt, entry.postParkActivity = time.Now().UTC(), time.Time{}
 		}

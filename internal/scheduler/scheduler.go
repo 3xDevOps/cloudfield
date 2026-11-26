@@ -552,9 +552,11 @@ type supervised struct {
 	turnStartedAt time.Time
 	// reportAsked is the turnStartedAt of the last turn whose end was held
 	// for a missing report (HoldTurnEnd), and stopHeld marks a Standard run
-	// whose held stop no idle report has followed yet.
+	// whose held stop no idle report has followed yet. heldMessage is the
+	// agent's last message at that stop.
 	reportAsked time.Time
 	stopHeld    bool
+	heldMessage string
 	// relaunchedAt is when the last relaunch reopened the run; a report
 	// finalized before it belongs to the launch that relaunch ended.
 	relaunchedAt time.Time
@@ -1167,6 +1169,9 @@ func (s *Scheduler) containerSpec(run *domain.Run, member *domain.Member, argv [
 	}
 	if run.Mode == domain.LaunchHeadless {
 		env[coordtransport.BackgroundEnv] = "1"
+	}
+	if s.hasParent(run.ID) {
+		env[coordtransport.SubsessionEnv] = "1"
 	}
 	if run.Mode.Interactive() || run.ACP {
 		argv = wrapTUICommand(argv)

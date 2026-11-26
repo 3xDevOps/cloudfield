@@ -227,7 +227,7 @@ func TestStandardCodexKeepsAQuestionThroughAMailTurn(t *testing.T) {
 		defer e.sched.mu.Unlock()
 		return e.sched.runs[run.ID].agentReport.State == agentstatus.Working
 	})
-	srv.EndTurn("thread-1")
+	srv.EndTurn("thread-1", "completed")
 	waitFor(t, "the mail turn's end", func() bool {
 		e.sched.mu.Lock()
 		defer e.sched.mu.Unlock()
@@ -244,6 +244,27 @@ func TestStandardCodexKeepsAQuestionThroughAMailTurn(t *testing.T) {
 	if reason := e.idleReason(run.ID); reason != "" {
 		t.Fatalf("idle reason %q after the answer reached Codex, want none", reason)
 	}
+}
+
+// A Standard Codex subsession's finished turn forwards the last agent
+// message of its thread.
+func TestStandardCodexChildForwardsItsLastMessage(t *testing.T) {
+	shortProvisionalGrace(t)
+	e, rt, coord := newCodexEnv(t)
+	parent, _ := e.launchFake(t, "parent")
+	child := launchChildRun(t, e, parent, "codex", domain.LaunchTUI)
+	srv, _ := rt.bridge(t, 1)
+	dialed(t, srv, 1)
+	srv.StartThread("thread-1", false, "")
+	if _, err := e.sched.Inject(t.Context(), child.ID, e.member.ID, domain.AgentPrompt{Text: "say pong"}, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	e.waitAgentWorking(t, child.ID)
+	srv.EndTurn("thread-1", "completed", "pong")
+	waitFor(t, "the thread's last message at the parent", func() bool {
+		calls := coord.provisionalReports()
+		return len(calls) == 1 && calls[0].run == child.ID && calls[0].message == "pong"
+	})
 }
 
 // A bridge whose attachment is lost while the terminal goes on is replaced.

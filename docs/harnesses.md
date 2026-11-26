@@ -985,6 +985,15 @@ instead. Standard sessions of other agents are not held: Codex sessions load no
 hooks, and the app-server reports an idle thread the same way after a
 finished turn and after you press Esc.
 
+When a Standard [subsession](teams.md#subsessions) ends a turn without an
+outcome report, its parent gets a provisional report, as from an Enhanced
+subsession ([coordination.md](coordination.md#subsessions)). It carries the
+agent's last message for Claude Code, from the Stop hook, and for Codex, from
+the app-server. pi, oh-my-pi and OpenCode report the turn end without a
+message, so the report reads `(none)`; it still wakes the parent. So does a
+Codex turn you cut off with Esc, which leaves the thread idle like a finished
+one.
+
 ## Agent configuration: import and Files
 
 `cloudfield config push` uploads an agent's configuration directory from your

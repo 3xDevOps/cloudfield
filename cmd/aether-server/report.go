@@ -7,10 +7,12 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/3xDevOps/Aether/internal/agentstatus"
 	"github.com/3xDevOps/Aether/internal/coordtransport"
+	"github.com/3xDevOps/Aether/internal/envname"
 	"github.com/3xDevOps/Aether/internal/protocol"
 )
 
@@ -99,6 +101,13 @@ func report(args []string) {
 	if !mapped {
 		return
 	}
+	// Only a subsession's parent is owed the agent's last message. The cut
+	// keeps the request under the socket's line limit.
+	if envname.Getenv(coordtransport.SubsessionEnv) != "1" {
+		rep.LastMessage = ""
+	} else if len(rep.LastMessage) > protocol.CoordMaxBodyBytes {
+		rep.LastMessage = strings.ToValidUTF8(rep.LastMessage[:protocol.CoordMaxBodyBytes], "")
+	}
 	var result protocol.RunReportResult
 	err := coordtransport.Call(ctx, *socket, protocol.MethodRunReport, protocol.RunReportParams{
 		State:        string(rep.State),
@@ -110,6 +119,7 @@ func report(args []string) {
 		Subagent:     rep.Subagent,
 		TurnStart:    rep.TurnStart,
 		Stop:         rep.Stop && harness == "claude",
+		LastMessage:  rep.LastMessage,
 	}, &result)
 	if err != nil {
 		warn("report %s: %v", harness, err)

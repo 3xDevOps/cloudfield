@@ -1328,7 +1328,10 @@ its complete report summary, and `correlation_id` is the report ID. It uses the 
 acknowledgement as peer messages; if the inbox is full, report publication
 retries until it fits. A turn that ends without a report forwards the subsession's
 last message to the parent as a provisional report; the subsession's own later
-report retires it while unread. A subsession that ends without a final report sends
+report retires it while unread. A Standard subsession forwards Claude Code's
+and Codex's last message; pi, oh-my-pi and OpenCode give none, so their report
+reads `(none)` and still wakes the parent
+([what a turn end sends](#lifecycle-status-is-separate)). A subsession that ends without a final report sends
 one message saying so, with its latest report of any outcome (summary and
 time) and its branch. A live attached subsession that has been waiting (for
 anything), `answered`, or waiting on a `needs-input` answer for over an hour
@@ -1627,6 +1630,19 @@ nor terminal output follows the hold for a minute, as when the answer never
 reached Claude Code, the server ends the turn itself. Enhanced sessions get
 the same rule as a [report reminder](enhanced-sessions.md#report-reminder)
 prompt. Background sessions, and Standard sessions of other agents, are not held.
+
+`run.report` carries the agent's last message in one case: the turn end of a
+Standard subsession, which the server forwards to its parent as the
+provisional report ([subsessions](#subsessions)). The server sets
+`AETHER_SUBSESSION=1` in the container of a session another session started.
+Only there does a Claude Code `Stop` hook's `run.report` carry `last_message`,
+the first 4 KiB of the payload's `last_assistant_message`. For a stop that was
+held, the server forwards the held stop's message, not the one that follows
+the reminder. For Codex, which loads no hooks, the server reads the last agent
+message of the thread's last turn from the app-server, for a subsession only
+and only when that turn completed. A session with no parent sends and reads
+neither. A subsession that a handoff detached from its parent still does, and
+the server discards the message.
 
 Coordination also does not provide a universal inbound terminal hook. When a
 human messages a Standard session, Cloudfield delivers the message through the

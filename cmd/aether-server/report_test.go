@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/3xDevOps/Aether/internal/coordtransport"
 	"github.com/3xDevOps/Aether/internal/protocol"
 )
 
@@ -138,6 +139,30 @@ func TestReportClaudeBlocksAStopTheServerHolds(t *testing.T) {
 	var continued protocol.RunReportParams
 	if err := json.Unmarshal((<-sock.requests).Params, &continued); err != nil || continued.Stop {
 		t.Fatalf("continued stop params = %+v, %v; want one Aether may not hold", continued, err)
+	}
+}
+
+// Claude Code's last message leaves the session only from a subsession, cut
+// to a message body.
+func TestReportClaudeSendsASubsessionsLastMessage(t *testing.T) {
+	sock := newFakeCoordSocket(t)
+	stop := `{"hook_event_name":"Stop","session_id":"abc","last_assistant_message":"a` + strings.Repeat("é", protocol.CoordMaxBodyBytes) + `"}`
+	sent := func() string {
+		t.Helper()
+		withStdin(t, stop, true)
+		report([]string{"claude", "--socket", sock.path})
+		var params protocol.RunReportParams
+		if err := json.Unmarshal((<-sock.requests).Params, &params); err != nil {
+			t.Fatal(err)
+		}
+		return params.LastMessage
+	}
+	if got := sent(); got != "" {
+		t.Fatalf("a session with no parent sent its last message: %d bytes", len(got))
+	}
+	t.Setenv(coordtransport.SubsessionEnv, "1")
+	if got, want := sent(), "a"+strings.Repeat("é", protocol.CoordMaxBodyBytes/2-1); got != want {
+		t.Fatalf("a subsession sent %d bytes of its last message, want the %d that end on a whole character", len(got), len(want))
 	}
 }
 

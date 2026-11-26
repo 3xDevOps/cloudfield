@@ -88,6 +88,9 @@ type Report struct {
 	// Stop marks the Idle report of a main agent's stop that a hook may
 	// hold back, once: not one already continuing for a stop hook.
 	Stop bool `json:"stop,omitempty"`
+	// LastMessage is the agent's last message of the turn an Idle report
+	// ends, for a subsession's parent.
+	LastMessage string `json:"-"`
 }
 
 const ReporterCommand = coordtransport.BinaryPath
@@ -118,14 +121,16 @@ type claudeHook struct {
 	BackgroundTasks []struct {
 		Type string `json:"type"`
 	} `json:"background_tasks"`
-	// Error and LastAssistantMessage are StopFailure's; the message is the
-	// API error Claude Code showed, read only for a usage limit.
+	// Error is StopFailure's. LastAssistantMessage is the API error Claude
+	// Code showed on a StopFailure, read only for a usage limit, and the
+	// agent's last message on a Stop.
 	Error                string `json:"error"`
 	LastAssistantMessage string `json:"last_assistant_message"`
 }
 
 // FromClaudeHook reads identifiers only, never tool inputs, answers or
-// transcripts, plus the usage-limit message of a StopFailure.
+// transcripts, plus the usage-limit message of a StopFailure and the last
+// message of a Stop, which the reporter sends only from a subsession.
 // PermissionRequest explicitly lacks tool_use_id; Notification is advisory.
 // Neither can establish a correlated request using the command-hook contract.
 func FromClaudeHook(stdin []byte) (Report, bool) {
@@ -203,7 +208,7 @@ func fromClaudeHook(hook claudeHook) (Report, bool) {
 			return Report{State: Working, Reason: BackgroundReason(held), Tools: agents == 0}, true
 		}
 		if hook.Event == "Stop" {
-			return Report{State: Idle, Reason: ReasonIdle, Stop: !hook.StopHookActive}, true
+			return Report{State: Idle, Reason: ReasonIdle, Stop: !hook.StopHookActive, LastMessage: hook.LastAssistantMessage}, true
 		}
 		// "rate_limit" also covers transient 429s; only the vendor's
 		// usage-limit wording marks the account's limit.

@@ -362,7 +362,7 @@ func (d *appServerDriver) status(entry *supervised, r *appServerRun, thread stri
 				d.mu.Unlock()
 				return
 			}
-			thread, status := r.pending[0].thread, r.pending[0].status
+			thread, status, client := r.pending[0].thread, r.pending[0].status, r.client
 			r.pending = r.pending[1:]
 			d.mu.Unlock()
 			report := agentstatus.Report{State: agentstatus.Idle, Reason: agentstatus.ReasonIdle, SessionID: thread}
@@ -373,6 +373,13 @@ func (d *appServerDriver) status(entry *supervised, r *appServerRun, thread stri
 				report.Reason = appServerAskingReason
 			case codexapp.Failed:
 				report.Reason = agentstatus.ReasonFailed
+			case codexapp.Idle:
+				// A status seen while connecting has no client yet.
+				if client != nil && d.s.hasParent(entry.runID) {
+					ctx, cancel := context.WithTimeout(r.ctx, acpSteerTimeout)
+					report.LastMessage = client.LastMessage(ctx)
+					cancel()
+				}
 			}
 			if status == codexapp.Idle || status == codexapp.Failed {
 				d.serverTurn(entry.runID, false)
