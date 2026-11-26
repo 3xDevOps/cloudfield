@@ -204,6 +204,36 @@ func TestRunViewShowsReportAndAnswerableOptions(t *testing.T) {
 	}
 }
 
+// attention.list returns nothing for a session only another member can
+// answer, so the one-session view says so in place of the answer commands.
+func TestRunShowSaysWhenTheSessionWaitsOnAnotherMember(t *testing.T) {
+	run := &fakeReply{result: protocol.RunResult{Run: protocol.Run{ID: "r5", WorkspaceID: "ws1", Status: "needs-attention", Activity: "needs-you",
+		Reason: "blocked: no token", Harness: "codex", Mode: "tui"}}}
+	c := fakeControlMethods(t, map[string]*fakeReply{
+		protocol.MethodRunGet:            run,
+		protocol.MethodAttentionList:     {result: protocol.AttentionListResult{}},
+		protocol.MethodWorkspaceList:     {result: protocol.WorkspaceListResult{}},
+		protocol.MethodWorkspaceTimeline: {result: protocol.WorkspaceTimelineResult{}},
+		protocol.MethodMemberList:        {result: protocol.MemberListResult{}},
+	})
+	var buf bytes.Buffer
+	if err := runShow(c, &buf, "r5", false); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(buf.String(), "\nr5 waits on another member\n") {
+		t.Errorf("sessions r5 = %q, want it to end saying it waits on another member", buf.String())
+	}
+
+	run.answer(protocol.RunResult{Run: protocol.Run{ID: "r5", WorkspaceID: "ws1", Status: "running", Activity: "working", Harness: "codex", Mode: "tui"}})
+	buf.Reset()
+	if err := runShow(c, &buf, "r5", false); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(buf.String(), "another member") {
+		t.Errorf("sessions r5 = %q, want no such line for a working session", buf.String())
+	}
+}
+
 // A pipeline reading the --needs-you table sees the table alone: what the
 // listed sessions need goes to stderr, and a session only another member can
 // answer, for which attention.list returns nothing, says so.

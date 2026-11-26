@@ -301,7 +301,14 @@ func runShow(c *protocol.Client, w io.Writer, runID string, asJSON bool) error {
 	if err != nil {
 		return err
 	}
-	return printRunView(w, v, items, nameOrID(names, v.ControllerMemberID))
+	if err = printRunView(w, v, items, nameOrID(names, v.ControllerMemberID)); err != nil {
+		return err
+	}
+	// attention.list leaves out a run only another member can answer.
+	if needsYou(r) && !slices.ContainsFunc(items, func(it protocol.AttentionItem) bool { return it.RunID == r.ID }) {
+		_, err = fmt.Fprintf(w, "%s waits on another member\n", r.ID)
+	}
+	return err
 }
 
 // needsYou selects the runs that need a member, by the rule push
