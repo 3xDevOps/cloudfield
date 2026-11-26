@@ -943,9 +943,8 @@ function Test-AetherElevated {
     $previousExit = Get-Variable LASTEXITCODE -Scope Global -ValueOnly -ErrorAction SilentlyContinue
     try {
         $groups = & (Join-Path ([Environment]::GetFolderPath('System')) 'whoami.exe') /groups /fo csv /nh
-        $levels = @($groups | ForEach-Object { if ($_ -match '"S-1-16-(\d+)"') { [int]$Matches[1] } })
-        if ($LASTEXITCODE -ne 0 -or $levels.Count -eq 0) { return $true }
-        return [bool](@($levels | Where-Object { $_ -ge 12288 }).Count)
+        if ($global:LASTEXITCODE -ne 0) { return $true }
+        return Test-AetherHighIntegrity $groups
     }
     catch {
         return $true
@@ -958,6 +957,15 @@ function Test-AetherElevated {
             Remove-Variable LASTEXITCODE -Scope Global -ErrorAction SilentlyContinue
         }
     }
+}
+
+# Whether `whoami /groups /fo csv` output carries a High or higher integrity
+# label, or none at all.
+function Test-AetherHighIntegrity {
+    param([AllowNull()][string[]] $Groups)
+    $levels = @($Groups | ForEach-Object { if ($_ -match '"S-1-16-(\d+)"') { [int]$Matches[1] } })
+    if ($levels.Count -eq 0) { return $true }
+    return [bool](@($levels | Where-Object { $_ -ge 12288 }).Count)
 }
 
 # A person at this machine's screen runs the installer as themselves: CI and

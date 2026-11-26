@@ -562,7 +562,7 @@ func main() {
     # tested on the installer's own functions. The shortcut starts the fixture,
     # which records that it ran and exits: no app is left running.
     $installerAst = [Management.Automation.Language.Parser]::ParseFile($installer, [ref]$null, [ref]$null)
-    foreach ($name in @('Invoke-AetherGuiBuild', 'Test-AetherElevated', 'Test-AetherSomeoneToSee', 'Open-AetherDesktop')) {
+    foreach ($name in @('Invoke-AetherGuiBuild', 'Test-AetherElevated', 'Test-AetherHighIntegrity', 'Test-AetherSomeoneToSee', 'Open-AetherDesktop')) {
         $definition = $installerAst.Find({ param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $name }, $true)
         Assert-AetherTest ($null -ne $definition) ("install.ps1 has no function {0}" -f $name)
         . ([scriptblock]::Create($definition.Extent.Text))
@@ -575,17 +575,30 @@ func main() {
     # High; a hosted runner's is. An operator token can be elevated without
     # Administrators, so only this direction holds.
     $principal = New-Object Security.Principal.WindowsPrincipal ([Security.Principal.WindowsIdentity]::GetCurrent())
-    $global:LASTEXITCODE = 7
     if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
         # Unreadable labels also answer elevated, so first prove this one reads.
         $label = & (Join-Path ([Environment]::GetFolderPath('System')) 'whoami.exe') /groups /fo csv /nh
         Assert-AetherTest ($label -match '"S-1-16-12288"') ("an Administrator token has no High label: " + ($label -join "`n"))
+        $global:LASTEXITCODE = 7
         Assert-AetherTest (Test-AetherElevated) 'an Administrator token was not read as elevated'
     }
     else {
+        $global:LASTEXITCODE = 7
         [void](Test-AetherElevated)
     }
     Assert-AetherEqual 7 $global:LASTEXITCODE 'the elevation check changed LASTEXITCODE'
+    $users = '"BUILTIN\Users","Alias","S-1-5-32-545","Mandatory group, Enabled by default, Enabled group"'
+    foreach ($case in @(
+            @{ Label = 'S-1-16-8192'; Elevated = $false },
+            @{ Label = 'S-1-16-8448'; Elevated = $false },
+            @{ Label = 'S-1-16-12288'; Elevated = $true },
+            @{ Label = 'S-1-16-16384'; Elevated = $true },
+            @{ Label = 'S-1-16-20480'; Elevated = $true })) {
+        $groups = @($users, ('"Mandatory Label\Some Level","Label","{0}",""' -f $case.Label))
+        Assert-AetherEqual $case.Elevated (Test-AetherHighIntegrity $groups) ("integrity label {0}" -f $case.Label)
+    }
+    Assert-AetherTest (Test-AetherHighIntegrity @($users)) 'a token with no integrity label was not treated as elevated'
+    Assert-AetherTest (Test-AetherHighIntegrity $null) 'no whoami output was not treated as elevated'
     $launchCase = Join-Path $root 'launch-case'
     New-Item -ItemType Directory -Path $launchCase -Force | Out-Null
     # A profile path outside the console code page reaches the installer intact.
