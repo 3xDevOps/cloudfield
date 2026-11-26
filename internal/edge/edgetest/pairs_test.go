@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
@@ -102,7 +103,7 @@ func TestOriginPairs(t *testing.T) {
 	// connector request at the relay origin it came in on.
 	var rep edgestore.Report
 	eventually(t, "the connector request recorded in the background", func() error {
-		rep, err = h.edgeStore().Retiring(context.Background(), time.Now())
+		rep, err = edgestore.ReadRetiring(context.Background(), filepath.Join(h.edgeDir, "edge.db"), time.Now())
 		if err == nil && (len(rep.Origins) != 2 || rep.Origins[1].ConnectorServers.Total != 1) {
 			err = fmt.Errorf("report %+v", rep)
 		}

@@ -155,26 +155,40 @@ type Device struct {
 // RedeemDeviceAuth consumes the approved, unexpired authorization under
 // codeHash and creates d from it, in one transaction, so an authorization
 // yields at most one device. d's account, key and label come from the
-// authorization, and its sign-in origin too when record is set.
+// authorization. When record is set, so does its sign-in origin, or for
+// an authorization started while the edge did not record origins,
+// d.SigninOrigin, marked as seen there.
 func (s *Store) RedeemDeviceAuth(ctx context.Context, codeHash string, d Device, record bool, now time.Time) (Device, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return Device{}, fmt.Errorf("edgestore: redeem device authorization: %w", err)
 	}
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
+	var issuedAt string
 	err = tx.QueryRowContext(ctx, `DELETE FROM device_authorizations
 		WHERE code_hash = ? AND status = ? AND expires_at > ?
-		RETURNING account_id, public_key, label, CASE WHEN ? THEN COALESCE(signin_origin, '') ELSE '' END`, codeHash, AuthApproved, unix(now), record).
-		Scan(&d.AccountID, &d.Key, &d.Label, &d.SigninOrigin)
+		RETURNING account_id, public_key, label, COALESCE(signin_origin, '')`, codeHash, AuthApproved, unix(now)).
+		Scan(&d.AccountID, &d.Key, &d.Label, &issuedAt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Device{}, ErrNotFound
 	}
 	if err != nil {
 		return Device{}, fmt.Errorf("edgestore: redeem device authorization: %w", err)
 	}
+	var seen sql.NullInt64
+	switch {
+	case !record:
+		d.SigninOrigin = ""
+	case issuedAt != "":
+		d.SigninOrigin = issuedAt
+	case d.SigninOrigin != "":
+		seen = sql.NullInt64{Int64: 1, Valid: true}
+	}
 	d.CreatedAt, d.LastUsedAt = now, now
-	if _, err := tx.ExecContext(ctx, `INSERT INTO devices (id, token_hash, account_id, public_key, label, created_at, last_used_at, signin_origin)
-		VALUES (?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''))`, d.ID, d.TokenHash, d.AccountID, d.Key, d.Label, unix(now), unix(now), d.SigninOrigin); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO devices
+		(id, token_hash, account_id, public_key, label, created_at, last_used_at, signin_origin, signin_origin_seen)
+		VALUES (?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?)`,
+		d.ID, d.TokenHash, d.AccountID, d.Key, d.Label, unix(now), unix(now), d.SigninOrigin, seen); err != nil {
 		return Device{}, fmt.Errorf("edgestore: create device: %w", err)
 	}
 	var id int64

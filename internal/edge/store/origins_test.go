@@ -223,6 +223,23 @@ func TestOriginWriters(t *testing.T) {
 	if _, err := s.db.Exec(`DELETE FROM devices WHERE id = 'off'`); err != nil {
 		t.Fatal(err)
 	}
+	before := DeviceAuth{CodeHash: "code-before", UserCodeHash: "user-before", Label: "tablet", Key: "ssh-ed25519 EEEE",
+		CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour)}
+	if err := s.CreateDeviceAuth(ctx, before); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.DecideDeviceAuth(ctx, before.UserCodeHash, id, true, testNow); err != nil {
+		t.Fatal(err)
+	}
+	if d, err := s.RedeemDeviceAuth(ctx, before.CodeHash, Device{ID: "before", TokenHash: "before-hash", SigninOrigin: testSignin2}, true, testNow); err != nil || d.SigninOrigin != testSignin2 {
+		t.Fatalf("device redeemed once recording began = %+v, %v; want the redemption's origin", d, err)
+	}
+	if got := nullString(t, s, `SELECT signin_origin || ' ' || signin_origin_seen FROM devices WHERE id = 'before'`); got.String != testSignin2+" 1" {
+		t.Fatalf("device redeemed once recording began records %q, want %s seen", got.String, testSignin2)
+	}
+	if _, err := s.db.Exec(`DELETE FROM devices WHERE id = 'before'`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := s.db.Exec(`INSERT INTO devices (id, token_hash, account_id, public_key, label, created_at, last_used_at)
 		VALUES ('bare', 'bare-hash', ?, 'ssh-ed25519 CCCC', 'old', 0, 0)`, id); err != nil {
 		t.Fatal(err)
@@ -585,6 +602,9 @@ func TestRecordingPeriod(t *testing.T) {
 		}
 		return rep.RecordingSince
 	}
+	if rep, err := s.Retiring(ctx, testNow); err != nil || !rep.RecordingSince.IsZero() || !rep.RecordingStarted.IsZero() || !rep.RecordingStopped.IsZero() {
+		t.Fatalf("recording period before any recording = %+v, %v", rep, err)
+	}
 	start := testNow.Add(-48 * time.Hour)
 	for _, step := range []struct {
 		stop, start time.Time
@@ -606,6 +626,14 @@ func TestRecordingPeriod(t *testing.T) {
 		if got := since(); !got.Equal(step.want) {
 			t.Errorf("stopped %v, started %v: recording since %v, want %v", step.stop, step.start, got, step.want)
 		}
+	}
+	if err := s.StopRecording(ctx, start.Add(5*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := s.Retiring(ctx, testNow)
+	if err != nil || !rep.RecordingSince.Equal(start.Add(4*time.Hour)) || !rep.RecordingStarted.Equal(start.Add(4*time.Hour)) ||
+		!rep.RecordingStopped.Equal(start.Add(5*time.Hour)) {
+		t.Fatalf("last known recording period = since %v, started %v, stopped %v, %v", rep.RecordingSince, rep.RecordingStarted, rep.RecordingStopped, err)
 	}
 }
 
@@ -680,4 +708,14 @@ func TestReadRetiringDoesNotMigrate(t *testing.T) {
 	if rep, err := ReadRetiring(context.Background(), path, testNow); err != nil || rep.Origins == nil {
 		t.Fatalf("ReadRetiring at schema 2 = %+v, %v", rep, err)
 	}
+}
+
+// Retiring is ReadRetiring on an open store.
+func (s *Store) Retiring(ctx context.Context, now time.Time) (Report, error) {
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return Report{}, err
+	}
+	defer tx.Rollback() //nolint:errcheck // read-only
+	return retiring(ctx, tx, now)
 }
