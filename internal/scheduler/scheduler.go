@@ -518,8 +518,8 @@ type supervised struct {
 	// started there, which does not answer a shown question.
 	appServer  bool
 	serverTurn bool
-	// idleWake marks a Standard run whose launch or switch loaded an idle
-	// wake (harness.NativeLaunch.IdleWake).
+	// idleWake marks a Standard run whose terminal loads an idle wake
+	// (harness.NativeLaunch.IdleWake).
 	idleWake bool
 	// switching is the mode a mode switch is moving the run to, empty when
 	// none is in flight. The switch holds lifecycleMu throughout.
