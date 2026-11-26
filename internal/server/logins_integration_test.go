@@ -90,7 +90,7 @@ func TestIntegrationSpentFirstLoginLaunchesOnTheSecond(t *testing.T) {
 	}, &launched); err != nil {
 		t.Fatalf("run.launch: %v", err)
 	}
-	if launched.Run.AccountMemberID != string(e.ada.id) || launched.Run.AccountLogin != string(second) || launched.Run.AccountLoginName != "second" {
+	if launched.Run.AccountMemberID != string(e.ada.id) || launched.Run.AccountLogin != string(second) || launched.Run.AccountLoginName != "second" || launched.Run.AccountLoginPerUse {
 		t.Fatalf("run account %s login %q (%q); want Ada's login second", launched.Run.AccountMemberID, launched.Run.AccountLogin, launched.Run.AccountLoginName)
 	}
 	var c *e2eContainer

@@ -48,6 +48,9 @@ func (s *Server) serverInfo(ctx context.Context, member domain.MemberID, _ json.
 	if s.dictationInstalled() {
 		features = append(features, protocol.FeatureDictation)
 	}
+	if s.cfg.Logins != nil && s.cfg.LoginSignIns != nil {
+		features = append(features, protocol.FeatureLogins)
+	}
 	floor := s.minClient()
 	return protocol.ServerInfoResult{
 		ServerVersion:         s.cfg.release,
@@ -424,6 +427,10 @@ func (s *Server) runSnapshot(run *domain.Run) protocol.Run {
 			if l, perr := addedLogin(logins, string(run.AccountLogin)); perr == nil {
 				out.AccountLoginName = l.Name
 			}
+		}
+		if s.cfg.Logins != nil {
+			identity, idErr := s.cfg.Logins.Identity(run.AccountMember(), run.Harness, run.AccountLogin)
+			out.AccountLoginPerUse = idErr == nil && identity.PerUse()
 		}
 	}
 	if s.cfg.Runs != nil {

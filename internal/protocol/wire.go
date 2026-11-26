@@ -23,11 +23,14 @@ type Run struct {
 	// AccountLoginName its name; both empty for the default login.
 	AccountLogin     string `json:"account_login,omitempty"`
 	AccountLoginName string `json:"account_login_name,omitempty"`
-	Task             string `json:"task"`
-	Title            string `json:"title,omitempty"`
-	Harness          string `json:"harness"`
-	Mode             string `json:"mode"`
-	Model            string `json:"model,omitempty"`
+	// AccountLoginPerUse: the added login is billed per use (a Console
+	// login), not by a subscription's windows.
+	AccountLoginPerUse bool   `json:"account_login_per_use,omitempty"`
+	Task               string `json:"task"`
+	Title              string `json:"title,omitempty"`
+	Harness            string `json:"harness"`
+	Mode               string `json:"mode"`
+	Model              string `json:"model,omitempty"`
 	// RefusedModel is the model the run asked for and the agent refused,
 	// ModelError why; Model is then the one the session runs on, empty for
 	// the agent's default.
@@ -388,6 +391,11 @@ const FeaturePermission = "permission"
 // reports its administrator as super_admin and serves workspace.access.*. An
 // older server reports admin for the same role.
 const FeatureWorkspaceAccess = "workspace-access"
+
+// FeatureLogins marks a server that keeps added logins: it serves
+// agent.login.*, honours login on run.launch and reports account_login on
+// runs. An older server ignores login and launches on the default login.
+const FeatureLogins = "logins"
 
 // CapabilityRunRepos is listed in a gateway's capability methods but is not an RPC method.
 const CapabilityRunRepos = "run.repos"

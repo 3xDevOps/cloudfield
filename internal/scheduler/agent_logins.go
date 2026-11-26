@@ -744,13 +744,24 @@ func (s *Scheduler) LoginInUse(ctx context.Context, account domain.Account) ([]d
 			ids = append(ids, r.ID)
 		}
 	}
+	var held []domain.RunID
 	s.mu.Lock()
 	for id, entry := range s.runs {
 		if entry.accountSwap != nil && entry.accountSwap.to() == account {
 			ids = append(ids, id)
 		}
+		if entry.containerID != "" {
+			held = append(held, id)
+		}
 	}
 	s.mu.Unlock()
+	// A session that ended keeps its container while it may be reopened,
+	// still mounting the login.
+	for _, id := range held {
+		if r, getErr := s.cfg.Store.GetRun(ctx, id); getErr == nil && r.Account() == account {
+			ids = append(ids, id)
+		}
+	}
 	if children, ok := s.cfg.Store.(interface {
 		ChildrenInState(context.Context, domain.ChildState) ([]*domain.ChildReservation, error)
 	}); ok {
