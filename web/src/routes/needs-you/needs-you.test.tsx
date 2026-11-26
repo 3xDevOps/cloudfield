@@ -128,15 +128,18 @@ describe('a retiring edge address', () => {
   }
   const replacement = 'https://edge-new.example.test'
 
-  async function show(role: 'super_admin' | 'collaborator', notice?: { state: 'retiring' | 'retired'; replacement: string; date?: string }, hydrated = notice) {
+  type Notice = { state: 'retiring' | 'retired'; replacement: string; date?: string }
+  /** `later`, when given, is what the read on entering Needs you answers; a rejected promise is a failed read. */
+  async function show(role: 'super_admin' | 'collaborator', notice?: Notice, later?: () => Promise<typeof edge & { notice?: Notice }>) {
     atViewport(390, { pointer: 'coarse' })
     useStore.getState().setOnboarded(true)
     await hydrate(useStore, fakeApi({
       workspaceListFull: vi.fn(async () => [workspace]),
       serverInfo: vi.fn(async () => ({ ...serverInfo, member: { ...serverInfo.member, role } })),
-      serverEdge: vi.fn(async () => ({ ...edge, notice: hydrated })),
+      serverEdge: vi.fn(async () => ({ ...edge, notice })),
     }))
-    const read = vi.spyOn(api, 'serverEdge').mockResolvedValue({ ...edge, notice })
+    expect(useStore.getState().edge?.notice).toEqual(notice)
+    const read = vi.spyOn(api, 'serverEdge').mockImplementation(later ?? (async () => ({ ...edge, notice })))
     onTestFinished(() => read.mockRestore())
     useStore.setState({ runs: {}, route: { name: 'needs-you', params: {} }, capabilities: { gateway: 'local', methods: ['*'], ws: ['events'], local: [] } })
     const list = vi.spyOn(api, 'attentionList').mockResolvedValue({ items: [] })
@@ -158,8 +161,24 @@ describe('a retiring edge address', () => {
   })
 
   it('reads server.edge again on entering, so a notice that arrived since shows', async () => {
-    await show('super_admin', { state: 'retiring', replacement }, undefined)
+    await show('super_admin', undefined, async () => ({ ...edge, notice: { state: 'retiring', replacement } }))
     await screen.findByText('https://edge-old.example.test is retiring')
+    expect(api.serverEdge).toHaveBeenCalled()
+  })
+
+  it('keeps the last notice and offers Retry when the read on entering fails', async () => {
+    await show('super_admin', { state: 'retiring', replacement }, async () => {
+      throw new Error('server.edge: connection reset')
+    })
+    const alert = await screen.findByRole('alert')
+    expect(within(alert).getByText("Showing the last answer: reading the server's edge again failed")).toBeTruthy()
+    expect(within(alert).getByText('server.edge: connection reset')).toBeTruthy()
+    expect(screen.getByText('https://edge-old.example.test is retiring')).toBeTruthy()
+    expect(screen.queryByText('Nothing needs you')).toBeNull()
+    vi.mocked(api.serverEdge).mockResolvedValue({ ...edge })
+    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }))
+    await screen.findByText('Nothing needs you')
+    expect(document.querySelector('[data-edge-notice]')).toBeNull()
   })
 
   it('shows a retired address the same way', async () => {

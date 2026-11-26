@@ -494,17 +494,40 @@ describe('bareOrigin', () => {
   it.each([
     ['https://edge.example.test', true],
     ['https://edge.example.test:8443', true],
+    ['https://edge.example.test:443', true],
+    ['https://192.0.2.1', true],
+    ['https://[2001:db8::1]:8443', true],
+    ['https://edge.example.test:0', false],
+    ['https://edge.example.test:65536', false],
+    ['https://edge.example.test:123456', false],
     ['https://edge.example.test/', false],
     ['https://edge.example.test/path', false],
     ['https://edge.example.test?x=1', false],
     ['https://user@edge.example.test', false],
     ['http://edge.example.test', false],
+    ['https://edge;notice.example', false],
+    ['https://edge.example.test;id', false],
+    ['https://$(id).example.test', false],
+    ['https://edge`id`.example.test', false],
+    ['https://edge.example.test|sh', false],
+    ['https://edge.example.test&', false],
     ['https://edge.example.test; rm -rf /', false],
     ['https://edge.example.test\n', false],
+    ['https://edge.example.test\t', false],
     ['https://EDGE.example.test', false],
+    ['https://-edge.example.test', false],
+    ['https://[2001:db8::1;id]', false],
     ['x', false],
   ])('%s: %s', (value, want) => {
     expect(bareOrigin(value)).toBe(want)
+  })
+
+  it('quotes an IPv6 replacement, whose brackets a shell would glob', () => {
+    const need = edgeNotice({
+      edge_url: 'https://edge-old.example.test', server_id: 'wqc4lsjvzdzrwq3k5dabdtajwj', access_policy: 'approved-devices',
+      owner: null, connected: true, claimed: true, notice: { state: 'retiring', replacement: 'https://[2001:db8::1]:8443' },
+    })
+    expect(need?.move).toBe("sudo cloudfield-server edge move 'https://[2001:db8::1]:8443'")
   })
 
   it('gives no command for a replacement that is not one', () => {

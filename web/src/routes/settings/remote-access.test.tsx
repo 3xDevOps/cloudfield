@@ -205,6 +205,19 @@ describe('a retiring or retired edge address', () => {
     expect(within(callout).queryByText(/cloudfield-server/)).toBeNull()
   })
 
+  it('keeps the last answer when a read fails, with the error and Try again', async () => {
+    seed('super_admin', { ...claimed, notice: { state: 'retiring', replacement } })
+    const client = api({ serverEdge: vi.fn<Api['serverEdge']>().mockRejectedValueOnce(new Error('server.edge: connection reset')).mockResolvedValue(claimed) })
+    render(<RemoteAccessSection client={client} />)
+    const alert = await screen.findByRole('alert')
+    expect(within(alert).getByText('Showing the last answer: reading remote access again failed')).toBeTruthy()
+    expect(within(alert).getByText('server.edge: connection reset')).toBeTruthy()
+    expect(screen.getByText(`${edgeURL} is retiring`)).toBeTruthy()
+    fireEvent.click(within(alert).getByRole('button', { name: 'Try again' }))
+    await waitFor(() => expect(screen.queryByText(`${edgeURL} is retiring`)).toBeNull())
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+
   it('gives other members a plain row without the command', () => {
     seed('collaborator', { ...claimed, notice: { state: 'retiring', replacement, date: '2027-03-01' } })
     render(<RemoteAccessSection client={api()} />)

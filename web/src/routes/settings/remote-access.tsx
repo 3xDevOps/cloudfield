@@ -31,28 +31,19 @@ export function RemoteAccessSection({ client }: { client: Api }) {
   const edge = useStore((s) => s.edge)
   const admin = useIsSuperAdmin()
   const caps = useCapability()
-  const [error, setError] = useState<string | null>(null)
+  const error = useStore((s) => s.edgeError)
   const [attempt, setAttempt] = useState(0)
   useEffect(() => {
-    let live = true
-    loadEdge(useStore, client).then(
-      () => {
-        if (live) setError(null)
-      },
-      (err: unknown) => {
-        if (live) setError(message(err))
-      },
-    )
-    return () => {
-      live = false
-    }
+    // A failure lands in the store's edgeError.
+    loadEdge(useStore, client).catch(() => undefined)
   }, [client, attempt])
+  const retry = () => setAttempt((n) => n + 1)
   if (!edge) {
     return (
       <SettingsSection title="Edge" id="edge">
         <SettingRow label="Remote access" help={error ? null : 'Reading remote access…'}>
           {error && <Callout tone="failed" role="alert" className="whitespace-pre-wrap">{error}</Callout>}
-          {error && <TryAgain onClick={() => { setError(null); setAttempt((n) => n + 1) }} />}
+          {error && <TryAgain onClick={retry} />}
         </SettingRow>
       </SettingsSection>
     )
@@ -86,7 +77,12 @@ export function RemoteAccessSection({ client }: { client: Api }) {
           ))}
       </SettingRow>
       {edge.edge_url && <SettingRow label="Connection" help={connection(edge)} />}
-      {error && <Callout tone="failed" role="alert" className="whitespace-pre-wrap">{error}</Callout>}
+      {error && (
+        <Callout tone="failed" role="alert" title="Showing the last answer: reading remote access again failed" className="whitespace-pre-wrap rounded-none">
+          {error}
+          <TryAgain onClick={retry} />
+        </Callout>
+      )}
     </SettingsSection>
   )
 }

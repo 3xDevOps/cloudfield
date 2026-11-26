@@ -40,6 +40,7 @@ import { choicePlan } from '@/routes/run/request-options'
 import { FormFields, missingRequired } from '@/routes/run/session-form'
 import { useStore } from '@/store'
 import { loadEdge } from '@/store/edge'
+import { useIsSuperAdmin } from '@/store/hooks'
 import type { RunRecord } from '@/store/runs'
 import { stateContextOf } from '@/store/selectors'
 import { stillWaiting, usePastDeadline } from '@/store/optimistic'
@@ -376,6 +377,8 @@ function NeedsYou() {
   const done = items ? finished(items) : []
   const { devices, merges } = useAccountNeeds()
   const edge = useEdgeNeed()
+  const edgeError = useStore((s) => s.edgeError)
+  const superAdmin = useIsSuperAdmin()
   const mergeError = useStore((s) => s.mergeProposalsError)
   const stale = useStore((s) => s.staleSince !== null)
   // While saved data shows, the banner's own error already says the server is unreachable.
@@ -400,6 +403,17 @@ function NeedsYou() {
           </Callout>
         )}
         {mergeError && <div className="mb-3"><ProposalsReadError /></div>}
+        {superAdmin && edgeError && (
+          <Callout
+            tone="failed"
+            role="alert"
+            title={edge ? "Showing the last answer: reading the server's edge again failed" : "Could not read the server's edge"}
+            className="mb-3"
+            actions={<Button size="sm" variant="secondary" onClick={() => void loadEdge(useStore, api).catch(() => undefined)}>Retry</Button>}
+          >
+            {edgeError}
+          </Callout>
+        )}
         {edge && <div className="mb-3"><EdgeNoticeCard need={edge} /></div>}
         {(merges.length > 0 || devices.length > 0) && (
           <ul aria-label="Approvals" className="mb-3 flex flex-col gap-3">
@@ -413,7 +427,7 @@ function NeedsYou() {
             <Skeleton className="h-32 rounded-panel" />
           </div>
         )}
-        {items && !error && !mergeError && !stale && asks.length === 0 && merges.length === 0 && devices.length === 0 && !edge && <EmptyState title="Nothing needs you" className="py-10">Requests from your sessions, devices and sign-in merges show up here.</EmptyState>}
+        {items && !error && !mergeError && !stale && asks.length === 0 && merges.length === 0 && devices.length === 0 && !edge && !(superAdmin && edgeError) && <EmptyState title="Nothing needs you" className="py-10">Requests from your sessions, devices and sign-in merges show up here.</EmptyState>}
         {asks.length > 0 && (
           <ul aria-label="Needs you" className="flex flex-col gap-3">
             {asks.map((item) => <AttentionCard key={item.run_id} item={item} />)}

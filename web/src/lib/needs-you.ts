@@ -352,15 +352,13 @@ export interface EdgeNeed {
   restart: string
 }
 
-/** `value` is exactly `https://host[:port]`: nothing a shell or a reader could take for more. */
+const label = '[a-z0-9](?:[a-z0-9-]*[a-z0-9])?'
+const httpsOrigin = new RegExp(`^https://(?:${label}(?:\\.${label})*|\\[[0-9a-f:.]+\\])(?::([0-9]{1,5}))?$`)
+
+/** `value` is `https://` with a lowercase DNS name, an IPv4 address or a bracketed IPv6 address, and an optional port: nothing a shell or a reader could take for more. */
 export function bareOrigin(value: string): boolean {
-  if (/[^\x21-\x7e]/.test(value)) return false
-  try {
-    const url = new URL(value)
-    return url.protocol === 'https:' && !url.username && !url.password && url.origin === value
-  } catch {
-    return false
-  }
+  const match = httpsOrigin.exec(value)
+  return match !== null && (match[1] === undefined || (Number(match[1]) >= 1 && Number(match[1]) <= 65535))
 }
 
 /** The notice the server's pinned edge key signed about the address the server is enrolled at. */
@@ -374,7 +372,10 @@ export function edgeNotice(edge: ServerEdge | null): EdgeNeed | undefined {
     notice,
     edgeURL: edge.edge_url,
     reason,
-    ...(bareOrigin(notice.replacement) && { move: `sudo cloudfield-server edge move ${notice.replacement}` }),
+    // Brackets are shell glob characters, so an IPv6 address is quoted.
+    ...(bareOrigin(notice.replacement) && {
+      move: `sudo cloudfield-server edge move ${notice.replacement.includes('[') ? `'${notice.replacement}'` : notice.replacement}`,
+    }),
     restart: 'sudo systemctl restart aether-server',
   }
 }
