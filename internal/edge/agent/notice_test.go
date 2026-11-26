@@ -1,11 +1,14 @@
 package edgeagent
 
 import (
+	"bufio"
 	"cmp"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -276,6 +279,30 @@ func TestPrintableText(t *testing.T) {
 	}
 	if got := printableText("ok\u202egnp.exe\u2028fake: connected\u2029\u200b", 100); got != "ok?gnp.exe?fake: connected??" {
 		t.Errorf("printableText kept a format character or separator: %q", got)
+	}
+}
+
+// TestEdgeInfoRefusalIgnoresTheReasonPhrase refuses GET /v1/edge with a
+// status line whose reason phrase would drive a terminal: the error names
+// the status by its number and standard text only.
+func TestEdgeInfoRefusalIgnoresTheReasonPhrase(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		c, aerr := ln.Accept()
+		if aerr != nil {
+			return
+		}
+		defer c.Close() //nolint:errcheck // test server
+		_, _ = http.ReadRequest(bufio.NewReader(c))
+		_, _ = io.WriteString(c, "HTTP/1.1 410 \x1b[2Jfake: connected\u2028x\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+	}()
+	_, err = FetchEdgeInfo(t.Context(), "http://"+ln.Addr().String())
+	if err == nil || !strings.HasSuffix(err.Error(), ": 410 Gone ") || strings.ContainsAny(err.Error(), "\x1b\u2028") {
+		t.Fatalf("FetchEdgeInfo = %q", err)
 	}
 }
 
