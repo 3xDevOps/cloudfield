@@ -11,8 +11,9 @@ domain are the owner's decisions of 2026-11-15; the choices under
 switch steps, phase 3 on item 20 (#1025) and phase 4 on item 23 (#1026).
 [Decision 12](#12-everything-published-moves-to-cloudfieldai), the owner's
 of 2026-11-26, moves everything the project publishes to `cloudfield.ai`,
-the directory listings' connector address included, and supersedes the
-passages that kept the listings at the old address.
+the directory listings' connector address included. It supersedes the
+passages that kept the listings at the old address, and keeps the old
+addresses until the owner names a date.
 
 ## The rule
 
@@ -22,10 +23,12 @@ no visible gain.
 
 A changed name that anything already installed depends on gets the new name
 **beside** the old one. The old name keeps working with no end date unless
-this plan gives one. Three things can never be renamed safely, because an
-old updater cannot be told about the change: the signed manifest
-`aether-release.json`, the release file names, and the names an old binary
-uses after a rollback.
+this plan gives one. For the `onaether.dev` addresses this is superseded by
+[decision 12](#12-everything-published-moves-to-cloudfieldai): they are
+kept until the owner names a date; none is named. Three things can never
+be renamed safely, because an old updater cannot be told about the change:
+the signed manifest `aether-release.json`, the release file names, and the
+names an old binary uses after a rollback.
 
 Terms used below. A **shim** is a change that makes the software accept a
 new name before anything uses it. The server's **update trial** starts the
@@ -191,7 +194,7 @@ redirect after a repository rename.
 | `AETHER_*` set inside sessions | Still set, under the old name only. Readers accept both, and setting one name keeps an override such as `AETHER_X=… cmd` unambiguous | Docs name the variable `AETHER_RUN_ID` and its siblings as they are | n/a |
 | Variables in a host's env files | An edge host or server that rolls back runs a binary that reads `AETHER_*` only | The docs keep `AETHER_*` for `/etc/aether/aether-server.env`, `/etc/aether-edge/aether-edge.env` and the edge updater's file until the release that reads both names is the oldest a rollback can reach | n/a |
 | The CLI's config directory | Still read | The CLI uses the `cloudfield` directory when it exists, else the old one. It never moves the directory, because an older CLI on the same machine would lose its links | Never |
-| Hosted edge address | The edge keeps serving `edge.onaether.dev` and `auth.onaether.dev`. A server that enrolled there keeps receiving grants issued in that name | [The domain move](#the-domain-move) | Not while the hosted edge exists. Since [decision 12](#12-everything-published-moves-to-cloudfieldai): kept until the owner names a date; none is named |
+| Hosted edge address | The edge keeps serving `edge.onaether.dev` and `auth.onaether.dev`. A server that enrolled there keeps receiving grants issued in that name | [The domain move](#the-domain-move) | Not while the hosted edge exists (superseded by [decision 12](#12-everything-published-moves-to-cloudfieldai): kept until the owner names a date; none is named) |
 | Connector address | A server accepts connector tokens only for `<its edge address>/mcp` | A server learns every address of its edge and accepts each; the listings keep the old address (superseded by [decision 12](#12-everything-published-moves-to-cloudfieldai): they move to `https://edge.cloudfield.ai/mcp`) | [The domain move](#the-domain-move) |
 | Edge update signer | An edge host's `edge-update.sh` accepts promotions signed by a workflow in `3xDevOps/aether` only | A script that accepts that identity and the renamed repository's, installed on every edge host before the first promotion after the rename. `scripts/edge-attestation.sh` accepts a build attested under either name, because a promotion must still verify images built before the rename; `promote-edge.yml` verifies its own run under the current name only | When no edge host runs the old script |
 | Container images | Each server pulls the image tagged with its own version, already published. Packages belong to the organisation, not the repository | Not renamed | Never deleted |
@@ -408,19 +411,19 @@ Each step can be undone.
 
 ### How the old hostnames keep working
 
-Since [decision 12](#12-everything-published-moves-to-cloudfieldai), each
-of these is kept until the owner names a date, in place of "no end date";
-none is named.
-
-- `onaether.dev` stays registered and renewing with no end date. Whoever
-  held it later could not forge grants, because servers pin the edge's key,
-  but would receive device tokens and connector sign-ins from every install
-  that still dials it.
+- `onaether.dev` stays registered and renewing with no end date
+  (superseded by [decision 12](#12-everything-published-moves-to-cloudfieldai):
+  until the owner names a date; none is named). Whoever held it later
+  could not forge grants, because servers pin the edge's key, but would
+  receive device tokens and connector sign-ins from every install that
+  still dials it.
 - `edge.onaether.dev` and `auth.onaether.dev` stay served by the hosted
   edge. Retiring them would cut off every server that has not moved, every
   CLI link made there, every connector registered there and every printed
   join link, so they are not retired while the hosted edge exists
-  ([decision 7](#7-repository-names-and-the-old-domain)).
+  ([decision 7](#7-repository-names-and-the-old-domain)). Superseded by
+  [decision 12](#12-everything-published-moves-to-cloudfieldai): they are
+  kept until the owner names a date; none is named.
 - `team@onaether.dev` keeps receiving.
 - A self-hosted edge uses its operator's own addresses and is not affected.
 
@@ -587,7 +590,7 @@ The `aether-*` release files and image names stay. The release page and
 This repository becomes `cloudfield`, in the same organisation. No
 repository is created at an old name again. `onaether.dev` stays registered
 with no end date, and the old edge addresses stay served while the hosted
-edge exists. Changed by
+edge exists. Superseded by
 [decision 12](#12-everything-published-moves-to-cloudfieldai): both are kept
 until the owner names a date; none is named.
 
@@ -650,22 +653,26 @@ This reverses step 6 of [Order of the switch](#order-of-the-switch), which
 kept the listings at `https://edge.onaether.dev/mcp` until the per-address
 counters showed no connector calls reaching servers below the connector
 change, and the address part of
-[decision 11](#11-first-release-and-directory-listings). It changes "no end
-date" in [decision 7](#7-repository-names-and-the-old-domain) and
-[How the old hostnames keep working](#how-the-old-hostnames-keep-working)
-to "kept until the owner names a date". Each of those passages points here.
+[decision 11](#11-first-release-and-directory-listings). For the
+`onaether.dev` addresses it replaces "no end date" and "while the hosted
+edge exists" with "kept until the owner names a date" in
+[The rule](#the-rule), the Hosted edge address row of
+[Compatibility of each changed name](#compatibility-of-each-changed-name),
+[decision 7](#7-repository-names-and-the-old-domain) and
+[How the old hostnames keep working](#how-the-old-hostnames-keep-working).
+Each of those passages points here.
 
 | Not taken | Cost |
 | --- | --- |
-| Step 6 as written: the listings keep the old address until the counters show no connector calls reaching servers below `v0.8.7` | The directories keep sending every new user to the domain the owner means to retire, and the move waits on a count nobody has read |
+| Step 6 as written: the listings keep the old address until the counters show no connector calls reaching servers below `v0.8.7` | The directories keep sending every new user to a domain the project no longer publishes, and the move waits on a count nobody has read |
 
 **Whether step 6's reason still binds.** Technically, for servers below
 `v0.8.7` only.
 
 - #974 (`b42026e7b`, edge protocol 6) makes a server accept a connector at
   every relay address its edge announces. It is first in `v0.8.7-beta.15`
-  and stable `v0.8.7` (2026-11-16) by `git tag --contains`; stable `v0.9.0`
-  followed on 2026-11-25. `TestConnectorAtEveryRelayOrigin`
+  and stable `v0.8.7` (released 2026-11-17 UTC) by `git tag --contains`;
+  stable `v0.9.0` followed on 2026-11-25. `TestConnectorAtEveryRelayOrigin`
   (`internal/edge/edgetest/connector_pairs_test.go`) checks that a server
   enrolled at one relay address of a two-pair edge answers at both, at its
   own URL and at the universal one, with metadata, issuer and tokens in the
@@ -678,18 +685,25 @@ to "kept until the owner names a date". Each of those passages points here.
   the address it enrolled at, which is `edge.onaether.dev`: the new address
   became the default for setup, and `edge move` arrived, only in `v0.9.0`
   (#1003). Reached at `https://edge.cloudfield.ai/mcp`, it answers
-  `invalid_target` with `resource must be https://edge.onaether.dev/mcp`
-  (`internal/connector/authorize.go:186-187` at `b42026e7b^`;
-  `TestConnectorAtEdgeProtocol5`).
+  `invalid_target` with `resource must be https://edge.onaether.dev/mcp`.
+  That is read from the code, not from a test: the edge's choose page
+  offers any server at protocol 4 or later (`mcpChoose` in
+  `internal/edge/service/universal.go`), and the server refuses the
+  resource at `internal/connector/authorize.go:186-187` at `b42026e7b^`.
+  `TestConnectorAtEdgeProtocol5`
+  (`internal/edge/edgetest/connector_pairs_test.go`) asserts the same
+  refusal, `resource must be` the address the server enrolled at, at the
+  token endpoint of the server's own URL at the second address.
 - How many users that leaves was not measured. Step 6 waited on
   `aether_edge_connector_requests_total{origin,protocol}`
   (`cmd/aether-edge/metrics.go`), whose `protocol="5"` series counts
   connector requests for such servers since the edge last started. It is
   served only on the edge host's loopback metrics listener
   ([edge.md](../edge.md#monitoring)), and nobody read it for this decision,
-  which touched no live host. Known without it: the project's own server
-  moved to `edge.cloudfield.ai` on 2026-11-26 and runs
-  `v0.9.0-nightly.21`, and the hosted edge serves both address pairs.
+  which touched no live host. Reported by the owner on 2026-11-26 and not
+  checked for this decision: the project's own server moved to
+  `edge.cloudfield.ai` on 2026-11-26 and runs `v0.9.0-nightly.21`, and the
+  hosted edge serves both address pairs.
 
 **What the admin of a server below `v0.8.7` does.** Update the server to
 `v0.8.7` or later; `v0.9.0` is the current stable
@@ -704,10 +718,10 @@ The server does not need `edge move`. Until it updates, a connector
 registered at `https://edge.onaether.dev/mcp` keeps working for it; one
 added from a listing at the new address does not.
 
-**Out of scope, owned elsewhere.** The shutdown path: warnings for whoever
-is still on an old address, counts of who is left, the switch that turns
-the old addresses off, and a migration guide. It is planned in
-`docs/plans/2026-11-26-retire-address-pair.md`. This decision sets no date.
+**Out of scope, owned elsewhere.** Retiring the old addresses: warnings
+for whoever is still on an old address, counts of who is left, the switch
+that turns the old addresses off, and a migration guide. It is planned
+separately in pull request #1122. This decision sets no date.
 
 ### Resubmitting the listings (owner's checklist)
 
@@ -764,9 +778,13 @@ The fields that change, by the rule `edge.cloudfield.ai`,
    --server-id <server id> /var/lib/aether-edge/reviewer.json`, then
    `AETHER_EDGE_REVIEWER_ACCOUNT_FILE=/var/lib/aether-edge/reviewer.json` in
    `/etc/aether-edge/aether-edge.env` and `sudo systemctl restart
-   aether-edge` on a systemd install; on the demo server, `sudo
-   cloudfield-server config set edge-reviewer true` and a restart, then
-   `cloudfield member link --reviewer <random-login> <member-id>`. The page
+   aether-edge` on a systemd install. The demo server must run `v0.8.7` or
+   later so it answers at `https://edge.cloudfield.ai/mcp`. On it, `sudo
+   cloudfield-server config set edge-access account` (under
+   `approved-devices` the consent page asks the reviewer for a pairing
+   code), `sudo cloudfield-server config set edge-reviewer true` and `sudo
+   systemctl restart aether-server`, then `cloudfield member link
+   --reviewer <random-login> <member-id>`. The page
    is at `https://<sign-in host>/connectors/reviewer`, and a connector at
    `https://edge.cloudfield.ai/mcp` signs in at its own pair, so the
    reviewer's steps name `https://auth.cloudfield.ai/connectors/reviewer`.
@@ -779,7 +797,15 @@ The fields that change, by the rule `edge.cloudfield.ai`,
    add it as a custom connector in Claude and run every example prompt,
    then the Inspector steps and the checklist there. Both metadata
    documents must name `https://edge.cloudfield.ai/mcp` as `resource` and
-   `issuer`. Run the live test from chatgpt.com too; the guides record it as
+   `issuer`; fetch them at the new host, whatever host the guide's lines
+   name:
+
+   ```sh
+   curl -s https://edge.cloudfield.ai/.well-known/oauth-protected-resource/mcp
+   curl -s https://edge.cloudfield.ai/.well-known/oauth-authorization-server/mcp
+   ```
+
+   Run the live test from chatgpt.com too; the guides record it as
    not run.
 
 **Anthropic's directory**
@@ -814,10 +840,10 @@ The fields that change, by the rule `edge.cloudfield.ai`,
     holds one token and serves it at `/.well-known/openai-apps-challenge`
     on every relay host (`internal/edge/service/universal.go`), so the new
     token is also what `edge.onaether.dev` serves from then on. The guides
-    record that address answering 404 on 2026-10-26, so no earlier
-    verification is known to be lost. If OpenAI verified
-    `edge.onaether.dev` with another token since, that host no longer
-    serves it; whether OpenAI checks again is unknown: not in the source.
+    record the challenge path answering 404 on 2026-10-26, checked at
+    `edge.onaether.dev`, so no earlier verification is known to be lost.
+    If OpenAI verified `edge.onaether.dev` with another token since, that
+    host no longer serves it; whether OpenAI checks again is unknown: not in the source.
 13. Enter the hint justifications, the reviewer login, password and steps
     naming `https://auth.cloudfield.ai/connectors/reviewer` in **Review
     details**, submit, and publish once approved.
@@ -933,9 +959,9 @@ Each is one session. Phase and dependencies are in brackets.
    `internal/sshd/connector.go`, `internal/edge/agent`. It raises the edge
    protocol version, because pull request 5 counts connector calls per
    address and per negotiated protocol version, and step 6 of the switch,
-   as first written, read that count. The count tells old servers from new only while the
-   edge runs a release with this pull request. `internal/edge/proto`.
-   [0; after 5]
+   as first written, read that count. The count tells old servers from new
+   only while the edge runs a release with this pull request.
+   `internal/edge/proto`. [0; after 5]
 7. `feat(edge)`: `edge-update.sh` accepts a promotion signed under either
    repository name, and `edge-attestation.sh` a build attested under
    either; `promote-edge.yml` keeps verifying its own run under the current
