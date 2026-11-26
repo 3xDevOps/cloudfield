@@ -196,12 +196,16 @@ type Relay struct {
 	// stored.
 	directories map[string]*directoryWrite
 	// connectors records connector requests, and connectorUsed holds,
-	// for each server and relay origin, when one was last recorded or
-	// is being recorded. connectorPruneAt is the size at which expired
+	// for each server and relay origin, when one was last recorded, is
+	// being recorded, or may next be tried after a failure, less
+	// connectorUseInterval. connectorPruneAt is the size at which expired
 	// entries are next dropped.
 	connectors       ConnectorRecorder
 	connectorUsed    map[connectorUse]time.Time
 	connectorPruneAt int
+	// recording holds the connector writes under way, which Shutdown
+	// waits for before the store behind connectors closes.
+	recording sync.WaitGroup
 
 	addrMu    sync.Mutex
 	addrConns map[netip.Prefix]int
@@ -538,6 +542,7 @@ func (r *Relay) Shutdown(ctx context.Context) error {
 	drain := edgeproto.Drain{RetryAfterMS: drainRetryAfter.Milliseconds(), JitterMS: drainJitter.Milliseconds()}
 	var wg sync.WaitGroup
 	wg.Go(func() { r.closeSplices(ctx) })
+	wg.Go(r.recording.Wait)
 	for _, reg := range regs {
 		wg.Go(func() {
 			if err := reg.sendWithin(ctx, drain); err != nil {

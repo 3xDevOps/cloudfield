@@ -425,7 +425,12 @@ func enrollAt(t *testing.T, e *env, signer ssh.Signer, version int) *agent {
 // attaches every open.
 func claimedAgent(t *testing.T, e *env) *agent {
 	t.Helper()
-	signer := newSigner(t)
+	return claimedAgentWith(t, e, newSigner(t))
+}
+
+// claimedAgentWith is claimedAgent with the host key signer.
+func claimedAgentWith(t *testing.T, e *env, signer ssh.Signer) *agent {
+	t.Helper()
 	id := edgeproto.ServerID(signer.PublicKey())
 	e.dir.mu.Lock()
 	e.dir.owners[id] = true

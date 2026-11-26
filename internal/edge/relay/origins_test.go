@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
@@ -18,8 +17,7 @@ import (
 )
 
 // TestEnrollmentPassesOrigin checks that the directory gets the relay
-// origin and the build of every enrollment, claimed or not, and of a
-// claim.
+// origin and the build of every enrollment, claimed or not.
 func TestEnrollmentPassesOrigin(t *testing.T) {
 	e := newEnv(t)
 	a := enroll(t, e, newSigner(t))
@@ -85,11 +83,67 @@ func TestConnectorUseIsRecordedHourly(t *testing.T) {
 	eventually(t, "the request recorded again after an hour", func() bool { return slices.Equal(uses(), append(one, one...)) })
 }
 
+// TestHeldConnectorRequestIsRecorded holds a connector request while its
+// server reconnects: it is recorded when the server takes it, not before.
+func TestHeldConnectorRequestIsRecorded(t *testing.T) {
+	e := newEnv(t)
+	signer := newSigner(t)
+	a := claimedAgentWith(t, e, signer)
+	if err := a.ws.CloseNow(); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, "the server away", func() bool {
+		e.r.mu.Lock()
+		defer e.r.mu.Unlock()
+		return e.r.away[a.id] != nil
+	})
+	done := make(chan int, 1)
+	go func() {
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, e.base+edgeproto.MCPPath(a.id), strings.NewReader("{}"))
+		if err != nil {
+			done <- 0
+			return
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			done <- 0
+			return
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+		done <- resp.StatusCode
+	}()
+	eventually(t, "the request held", func() bool {
+		e.r.mu.Lock()
+		defer e.r.mu.Unlock()
+		return e.r.httpWaiting[a.id] > 0
+	})
+	e.dir.mu.Lock()
+	early := len(e.dir.connectorUses)
+	e.dir.mu.Unlock()
+	if early != 0 {
+		t.Fatalf("a held request was recorded before its server took it: %d", early)
+	}
+	b := enroll(t, e, signer)
+	b.attach = true
+	go b.run()
+	serveData(t, b, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}")
+	if status := <-done; status != http.StatusOK {
+		t.Fatalf("held request: %d", status)
+	}
+	eventually(t, "the held request recorded", func() bool {
+		e.dir.mu.Lock()
+		defer e.dir.mu.Unlock()
+		return slices.Equal(e.dir.connectorUses, []string{a.id + " " + e.origin})
+	})
+}
+
 // recorder is a ConnectorRecorder whose writes wait for release and then
 // fail with err.
 type recorder struct {
 	mu      sync.Mutex
 	calls   []string
+	ctx     context.Context
 	release chan struct{}
 	err     error
 }
@@ -97,6 +151,7 @@ type recorder struct {
 func (c *recorder) ConnectorUsed(ctx context.Context, serverID, origin string) error {
 	c.mu.Lock()
 	c.calls = append(c.calls, serverID+" "+origin)
+	c.ctx = ctx
 	release, err := c.release, c.err
 	c.mu.Unlock()
 	if release != nil {
@@ -115,80 +170,129 @@ func (c *recorder) count() int {
 	return len(c.calls)
 }
 
+const (
+	recID     = "aaaaaaaaaaaaaaaaaaaaaaaaaa"
+	recOrigin = "https://relay.example.test"
+)
+
 // relayWith is a relay whose recorder is rec, holding a claimed
-// registration for id, and a request for it on the relay origin.
-func relayWith(t *testing.T, rec ConnectorRecorder, id string) (*Relay, *http.Request) {
+// registration for recID.
+func relayWith(t *testing.T, rec ConnectorRecorder) *Relay {
 	t.Helper()
 	_, key, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	r, err := New(t.Context(), Config{Origin: "https://relay.example.test", EdgeKey: key, Directory: &fakeDir{},
+	r, err := New(t.Context(), Config{Origin: recOrigin, EdgeKey: key, Directory: &fakeDir{},
 		Egress: &fakeEgress{months: map[string]int64{}}, Connectors: rec})
 	if err != nil {
 		t.Fatal(err)
 	}
-	r.servers[id] = &registration{id: id, claimed: true, version: edgeproto.Version}
-	return r, httptest.NewRequest(http.MethodPost, "https://relay.example.test"+edgeproto.MCPPath(id), nil)
+	r.servers[recID] = &registration{id: recID, claimed: true, version: edgeproto.Version}
+	return r
+}
+
+func (r *Relay) mark() (time.Time, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	at, ok := r.connectorUsed[connectorUse{recID, recOrigin}]
+	return at, ok
 }
 
 // TestConnectorUseWithoutRecorder keeps no record, in memory or written,
-// on a relay built without a ConnectorRecorder, and still counts.
+// on a relay built without a ConnectorRecorder.
 func TestConnectorUseWithoutRecorder(t *testing.T) {
-	const id = "aaaaaaaaaaaaaaaaaaaaaaaaaa"
-	r, req := relayWith(t, nil, id)
-	r.countConnector(req, id)
-	r.mu.Lock()
-	n := len(r.connectorUsed)
-	r.mu.Unlock()
-	if n != 0 {
-		t.Fatalf("the guard holds %d entries without a recorder", n)
-	}
-	if got := r.Metrics().ConnectorRequests[ConnectorKey{Origin: "https://relay.example.test", Protocol: edgeproto.Version}]; got != 1 {
-		t.Fatalf("connector requests counted: %d, want 1", got)
+	r := relayWith(t, nil)
+	r.noteConnector(t.Context(), recID, recOrigin)
+	if _, ok := r.mark(); ok {
+		t.Fatal("a relay without a recorder keeps a mark")
 	}
 }
 
-// TestConnectorUseWriteIsBackground checks that countConnector does not
-// wait for the write, that a client hanging up does not cancel it, that
-// requests during it start no second write, and that a failed write is
-// tried again by the next request.
-func TestConnectorUseWriteIsBackground(t *testing.T) {
-	const id = "aaaaaaaaaaaaaaaaaaaaaaaaaa"
+// TestConnectorUseWrite checks that noteConnector does not wait for the
+// write, that the write runs on a context the client's hang-up does not
+// cancel, that requests during it start no second write, that a failed
+// write is tried again after connectorRetry and not before, and that
+// Shutdown waits for a write under way.
+func TestConnectorUseWrite(t *testing.T) {
 	rec := &recorder{release: make(chan struct{}), err: errors.New("database is locked")}
-	r, req := relayWith(t, rec, id)
-	ctx, hangUp := context.WithCancel(t.Context())
+	r := relayWith(t, rec)
+	client, hangUp := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	go func() {
-		r.countConnector(req.WithContext(ctx), id)
+		r.noteConnector(client, recID, recOrigin)
 		close(done)
 	}()
 	select {
 	case <-done:
 	case <-time.After(5 * time.Second):
-		t.Fatal("countConnector waited for the write")
+		t.Fatal("noteConnector waited for the write")
 	}
-	hangUp()
 	eventually(t, "the write started", func() bool { return rec.count() == 1 })
-	r.countConnector(req, id)
+	hangUp()
+	rec.mu.Lock()
+	worker := rec.ctx
+	rec.mu.Unlock()
+	if err := worker.Err(); err != nil {
+		t.Fatalf("the client's hang-up reached the write: %v", err)
+	}
+	r.noteConnector(t.Context(), recID, recOrigin)
 	if n := rec.count(); n != 1 {
 		t.Fatalf("a request during the write started another: %d writes", n)
 	}
 	close(rec.release)
-	eventually(t, "the failed write's reservation dropped", func() bool {
-		r.mu.Lock()
-		defer r.mu.Unlock()
-		_, ok := r.connectorUsed[connectorUse{id, "https://relay.example.test"}]
-		return !ok
+	eventually(t, "the failed write's mark moved to the retry time", func() bool {
+		at, ok := r.mark()
+		return ok && time.Until(at.Add(connectorUseInterval)) <= connectorRetry && time.Until(at.Add(connectorUseInterval)) > 0
 	})
 	rec.mu.Lock()
 	rec.release, rec.err = nil, nil
 	rec.mu.Unlock()
-	r.countConnector(req, id)
-	eventually(t, "the next request writes again", func() bool { return rec.count() == 2 })
-	r.countConnector(req, id)
+	r.noteConnector(t.Context(), recID, recOrigin)
+	if n := rec.count(); n != 1 {
+		t.Fatalf("a request within the retry time wrote: %d writes", n)
+	}
+	r.mu.Lock()
+	r.connectorUsed[connectorUse{recID, recOrigin}] = time.Now().Add(-connectorUseInterval)
+	r.mu.Unlock()
+	r.noteConnector(t.Context(), recID, recOrigin)
+	eventually(t, "the request after the retry time writes", func() bool { return rec.count() == 2 })
+	eventually(t, "the successful write keeps its mark", func() bool {
+		at, ok := r.mark()
+		return ok && time.Since(at) < time.Minute
+	})
+	r.noteConnector(t.Context(), recID, recOrigin)
+
+	block := make(chan struct{})
+	rec.mu.Lock()
+	rec.release = block
+	rec.mu.Unlock()
+	r.mu.Lock()
+	r.connectorUsed[connectorUse{recID, recOrigin}] = time.Now().Add(-connectorUseInterval)
+	r.mu.Unlock()
+	r.noteConnector(t.Context(), recID, recOrigin)
+	eventually(t, "a third write under way", func() bool { return rec.count() == 3 })
+	r.mu.Lock()
+	delete(r.servers, recID)
+	r.mu.Unlock()
+	stopped := make(chan error, 1)
+	go func() { stopped <- r.Shutdown(context.Background()) }()
+	select {
+	case err := <-stopped:
+		t.Fatalf("Shutdown returned with a write under way: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(block)
+	if err := <-stopped; err != nil {
+		t.Fatal(err)
+	}
+	r.mu.Lock()
+	r.servers[recID] = &registration{id: recID, claimed: true, version: edgeproto.Version}
+	r.connectorUsed[connectorUse{recID, recOrigin}] = time.Now().Add(-connectorUseInterval)
+	r.mu.Unlock()
+	r.noteConnector(t.Context(), recID, recOrigin)
 	time.Sleep(50 * time.Millisecond)
-	if n := rec.count(); n != 2 {
-		t.Fatalf("a request after a successful write wrote again: %d writes", n)
+	if n := rec.count(); n != 3 {
+		t.Fatalf("a closing relay started a write: %d writes", n)
 	}
 }
