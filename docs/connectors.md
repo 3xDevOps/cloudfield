@@ -36,8 +36,13 @@ keep working. `cloudfield mcp`, **Settings → ChatGPT and Claude** and `sudo
 cloudfield-server edge status` show the URL at the address the server is
 enrolled at, its `edge-url`, and no other. A server set up at
 `https://edge.onaether.dev` stays enrolled there, so they show
-`https://edge.onaether.dev/mcp`. On v0.8.7 or later either URL works; add new
-connectors at `https://edge.cloudfield.ai/mcp`. To make the server show the
+`https://edge.onaether.dev/mcp`. On v0.8.7 or later a connector works at
+either address. Where the URL shown is the universal URL,
+`https://edge.onaether.dev/mcp`, add new connectors at
+`https://edge.cloudfield.ai/mcp`: Settings still sees the connection and marks
+it **Universal URL**. Use the server's own URL,
+`https://edge.onaether.dev/mcp/<server id>`, as shown: Settings sees a new
+connector there only at the address it shows. To make the server show the
 new address, an admin runs `sudo cloudfield-server edge move
 https://edge.cloudfield.ai` (v0.9.0 or later;
 [edge.md](edge.md#moving-to-another-address-of-the-edge)).
@@ -115,7 +120,8 @@ Custom MCP servers are added on the web only, at chatgpt.com
 1. Open [ChatGPT Plugins](https://chatgpt.com/plugins).
 2. Select the plus button, then **Add custom MCP server**.
 3. Name it `Aether`, paste the URL from `cloudfield mcp` as the server URL, and
-   choose **OAuth**.
+   choose **OAuth**. Where that URL is `https://edge.onaether.dev/mcp`, paste
+   `https://edge.cloudfield.ai/mcp` ([Prerequisites](#prerequisites)).
 4. Select **Create as a plugin**, then install it.
 5. On the [universal URL](#the-universal-url), the edge's page opens: sign in
    with GitHub and select **Continue with <server>**. A page from your server
@@ -134,10 +140,11 @@ On claude.ai
 
 1. Free, Pro and Max: open **Customize → Connectors**, select **Add custom
    connector**, name it `Aether`, paste the URL from `cloudfield mcp`, leave
-   **Advanced settings** empty and select **Add**. Free allows one custom
-   connector.
+   **Advanced settings** empty and select **Add**. Where that URL is
+   `https://edge.onaether.dev/mcp`, paste `https://edge.cloudfield.ai/mcp`
+   ([Prerequisites](#prerequisites)). Free allows one custom connector.
 2. Team and Enterprise: an Owner opens **Organization settings → Connectors**,
-   selects **Add**, **Custom**, then **Web**, and pastes the URL. Each member
+   selects **Add**, **Custom**, then **Web**, and pastes the same URL. Each member
    then selects **Connect** under **Customize → Connectors**.
 3. Select **Connect**. On the [universal URL](#the-universal-url), the
    edge's page opens: sign in with GitHub and select **Continue with
@@ -196,6 +203,8 @@ A connector keeps the URL it was added at. Settings marks each one
 `universal URL` or `at <url>`. Once Settings shows the universal URL for you,
 **Move to the universal URL** next to a connector on the server's own URL
 starts a new connection: add Cloudfield again in the app with the universal URL.
+Where Settings or the CLI names it at `https://edge.onaether.dev/mcp`, use
+`https://edge.cloudfield.ai/mcp` ([Prerequisites](#prerequisites)).
 Settings revokes the old connector once a new one from the same client, such as
 ChatGPT or Claude, connects at the universal URL and calls Cloudfield. If none
 calls within 10 minutes, it leaves the old one and says so. Remove the old
