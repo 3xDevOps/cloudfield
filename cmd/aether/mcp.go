@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
 )
 
@@ -115,10 +116,24 @@ func printConnectors(w io.Writer, list protocol.ConnectorListResult, code *proto
 			at = "  universal URL"
 		default:
 			at = "  at " + c.Resource
-			own = append(own, c.ID)
+			if c.Notice == nil {
+				own = append(own, c.ID)
+			}
 		}
 		_, _ = fmt.Fprintf(w, "  %s  %s (%s)  scopes %s  added %s  %s%s\n", c.ID, c.ClientName, c.RedirectHost, strings.Join(c.Scopes, ","),
 			added.Local().Format(time.DateOnly), used, at)
+		switch {
+		case c.Notice == nil:
+		case c.Notice.State == edgeproto.NoticeRetired:
+			_, _ = fmt.Fprintf(w, "    retired: remove it with: aether mcp revoke %s\n", c.ID)
+		case c.Notice.State == edgeproto.NoticeRetiring:
+			on := ""
+			if c.Notice.Date != "" {
+				on = " on " + c.Notice.Date
+			}
+			_, _ = fmt.Fprintf(w, "    retiring%s: add it again at %s, check it works, remove the old one in the app, then: aether mcp revoke %s\n",
+				on, c.Notice.URL, c.ID)
+		}
 	}
 	if len(own) > 0 && connectorURL == list.UniversalURL {
 		_, _ = fmt.Fprintf(w, "Move %s to the universal URL: connect again at %s, then aether mcp revoke <id>\n", strings.Join(own, ", "), list.UniversalURL)

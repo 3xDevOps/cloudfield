@@ -70,3 +70,82 @@ Remove one: aether mcp revoke <id>
 		}
 	}
 }
+
+func TestPrintConnectorsAtRetiringAddress(t *testing.T) {
+	now := time.Date(2026, 11, 26, 12, 0, 0, 0, time.Local)
+	const (
+		oldUniversal, oldOwn = "https://relay-old.example.test/mcp", "https://relay-old.example.test/mcp/abc"
+		newUniversal, newOwn = "https://relay-new.example.test/mcp", "https://relay-new.example.test/mcp/abc"
+	)
+	added := now.UTC().Format(time.RFC3339)
+	at := func(id, resource string, notice *protocol.ConnectorNotice) protocol.Connector {
+		return protocol.Connector{ID: id, ClientName: "Claude", RedirectHost: "claude.ai", Resource: resource, Scopes: []string{"read"},
+			CreatedAt: added, Notice: notice}
+	}
+	code := &protocol.ConnectorCodeResult{URL: newOwn, Code: "ABCD-EFGH", ExpiresAt: now.Add(10 * time.Minute).UTC().Format(time.RFC3339)}
+	for _, tt := range []struct {
+		name string
+		list protocol.ConnectorListResult
+		code *protocol.ConnectorCodeResult
+		want string
+	}{
+		{"no notice", protocol.ConnectorListResult{Connectors: []protocol.Connector{at("con-1", newUniversal, nil)}, URL: newUniversal,
+			UniversalURL: newUniversal, UniversalURLs: []string{oldUniversal, newUniversal}, SignIn: true}, nil,
+			`Install Cloudfield from the ChatGPT or Claude directory where it is listed, or add this URL as a custom connector:
+  URL   https://relay-new.example.test/mcp
+  No code: on the page that opens, sign in to the edge with GitHub, pick this server and select Allow
+Connected:
+  con-1  Claude (claude.ai)  scopes read  added 2026-11-26  never used  universal URL
+Remove one: aether mcp revoke <id>
+`},
+		{"enrolled at the retiring address", protocol.ConnectorListResult{Connectors: []protocol.Connector{
+			at("con-1", oldUniversal, &protocol.ConnectorNotice{State: "retiring", URL: newUniversal, Date: "2027-03-01"}),
+			at("con-2", oldOwn, &protocol.ConnectorNotice{State: "retiring", URL: newOwn, Date: "2027-03-01"}),
+			at("con-3", newUniversal, nil),
+		}, URL: newUniversal, UniversalURL: newUniversal, UniversalURLs: []string{oldUniversal, newUniversal}, SignIn: true}, nil,
+			`Install Cloudfield from the ChatGPT or Claude directory where it is listed, or add this URL as a custom connector:
+  URL   https://relay-new.example.test/mcp
+  No code: on the page that opens, sign in to the edge with GitHub, pick this server and select Allow
+Connected:
+  con-1  Claude (claude.ai)  scopes read  added 2026-11-26  never used  universal URL
+    retiring on 2027-03-01: add it again at https://relay-new.example.test/mcp, check it works, remove the old one in the app, then: aether mcp revoke con-1
+  con-2  Claude (claude.ai)  scopes read  added 2026-11-26  never used  at https://relay-old.example.test/mcp/abc
+    retiring on 2027-03-01: add it again at https://relay-new.example.test/mcp/abc, check it works, remove the old one in the app, then: aether mcp revoke con-2
+  con-3  Claude (claude.ai)  scopes read  added 2026-11-26  never used  universal URL
+Remove one: aether mcp revoke <id>
+`},
+		{"retiring without a date, own URL", protocol.ConnectorListResult{Connectors: []protocol.Connector{
+			at("con-2", oldOwn, &protocol.ConnectorNotice{State: "retiring", URL: newOwn}),
+		}, URL: newOwn}, code,
+			`Add this server to ChatGPT or Claude as a custom connector:
+  URL   https://relay-new.example.test/mcp/abc
+  Code  ABCD-EFGH   one use, expires in 10 minutes; paste it on the page that opens when you connect, if it asks
+Connected:
+  con-2  Claude (claude.ai)  scopes read  added 2026-11-26  never used  at https://relay-old.example.test/mcp/abc
+    retiring: add it again at https://relay-new.example.test/mcp/abc, check it works, remove the old one in the app, then: aether mcp revoke con-2
+Remove one: aether mcp revoke <id>
+`},
+		{"enrolled at the replacement of a retired address", protocol.ConnectorListResult{Connectors: []protocol.Connector{
+			at("con-1", oldUniversal, &protocol.ConnectorNotice{State: "retired", URL: newUniversal}),
+			at("con-2", oldOwn, &protocol.ConnectorNotice{State: "retired", URL: newOwn}),
+		}, URL: newUniversal, UniversalURL: newUniversal, UniversalURLs: []string{newUniversal}, SignIn: true}, nil,
+			`Install Cloudfield from the ChatGPT or Claude directory where it is listed, or add this URL as a custom connector:
+  URL   https://relay-new.example.test/mcp
+  No code: on the page that opens, sign in to the edge with GitHub, pick this server and select Allow
+Connected:
+  con-1  Claude (claude.ai)  scopes read  added 2026-11-26  never used  at https://relay-old.example.test/mcp
+    retired: remove it with: aether mcp revoke con-1
+  con-2  Claude (claude.ai)  scopes read  added 2026-11-26  never used  at https://relay-old.example.test/mcp/abc
+    retired: remove it with: aether mcp revoke con-2
+Remove one: aether mcp revoke <id>
+`},
+	} {
+		var out strings.Builder
+		if err := printConnectors(&out, tt.list, tt.code, now); err != nil {
+			t.Fatal(err)
+		}
+		if out.String() != tt.want {
+			t.Errorf("%s: output:\n%s\nwant:\n%s", tt.name, out.String(), tt.want)
+		}
+	}
+}
