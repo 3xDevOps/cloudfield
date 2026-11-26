@@ -197,7 +197,6 @@ func (r *Relay) Version(serverID string) int {
 // again.
 func (r *Relay) forward(w http.ResponseWriter, req *http.Request, serverID string, body []byte, browser string, check func() error) {
 	r.countConnector(req, serverID)
-	origin := r.originOf(req)
 	var until time.Time
 	if _, err := r.awaitReturn(req.Context(), serverID, &until); err != nil {
 		r.refuseHTTP(w, req, serverID, err)
@@ -210,7 +209,6 @@ func (r *Relay) forward(w http.ResponseWriter, req *http.Request, serverID strin
 				return
 			}
 		}
-		r.noteConnector(req.Context(), serverID, origin)
 		unsent := r.forwardOnce(w, req, serverID, body, browser)
 		if unsent == nil {
 			return
@@ -251,9 +249,9 @@ func (r *Relay) countConnector(req *http.Request, serverID string) {
 }
 
 // noteConnector records, with a ConnectorRecorder, a connector request
-// through origin that serverID, connected and claimed, is about to be
-// sent: at most once a connectorUseInterval, in the background, and never
-// once the relay is closing.
+// through origin written to serverID, connected and claimed: at most once
+// a connectorUseInterval, in the background, and never once the relay is
+// closing.
 func (r *Relay) noteConnector(ctx context.Context, serverID, origin string) {
 	if r.connectors == nil {
 		return
@@ -305,6 +303,11 @@ func (r *Relay) forwardOnce(w http.ResponseWriter, req *http.Request, serverID s
 	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{
 		GetConn: func(string) { cw.wait() },
 		GotConn: func(httptrace.GotConnInfo) { cw.got(true) },
+		WroteRequest: func(info httptrace.WroteRequestInfo) {
+			if info.Err == nil {
+				r.noteConnector(client.Context(), serverID, r.originOf(client))
+			}
+		},
 	})
 	req = req.WithContext(ctx)
 	req.Body = io.NopCloser(bytes.NewReader(body))

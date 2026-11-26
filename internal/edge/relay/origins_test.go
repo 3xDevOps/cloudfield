@@ -38,25 +38,8 @@ func TestConnectorUseIsRecordedHourly(t *testing.T) {
 	a := claimedAgent(t, e)
 	serveData(t, a, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}")
 	unclaimed := enroll(t, e, newSigner(t))
-	post := func(id string) int {
-		t.Helper()
-		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, e.base+edgeproto.MCPPath(id), strings.NewReader("{}"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
-		return resp.StatusCode
-	}
-	uses := func() []string {
-		e.dir.mu.Lock()
-		defer e.dir.mu.Unlock()
-		return slices.Clone(e.dir.connectorUses)
-	}
+	post := func(id string) int { return postMCP(t, e, id) }
+	uses := func() []string { return connectorUses(e) }
 	one := []string{a.id + " " + e.origin}
 	for range 3 {
 		if status := post(a.id); status != http.StatusOK {
@@ -81,6 +64,90 @@ func TestConnectorUseIsRecordedHourly(t *testing.T) {
 	}
 	post(a.id)
 	eventually(t, "the request recorded again after an hour", func() bool { return slices.Equal(uses(), append(one, one...)) })
+}
+
+const okAnswer = "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}"
+
+// postMCP sends a connector request for id and returns its status.
+func postMCP(t *testing.T, e *env, id string) int {
+	t.Helper()
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, e.base+edgeproto.MCPPath(id), strings.NewReader("{}"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	_ = resp.Body.Close()
+	return resp.StatusCode
+}
+
+func connectorUses(e *env) []string {
+	e.dir.mu.Lock()
+	defer e.dir.mu.Unlock()
+	return slices.Clone(e.dir.connectorUses)
+}
+
+// TestRefusedConnectorRequestIsNotRecorded sends a connector request the
+// edge itself refuses, to a claimed server whose protocol predates
+// connector requests: the server never gets it, so nothing is recorded.
+func TestRefusedConnectorRequestIsNotRecorded(t *testing.T) {
+	e := newEnv(t)
+	signer := newSigner(t)
+	id := edgeproto.ServerID(signer.PublicKey())
+	e.dir.mu.Lock()
+	e.dir.owners[id] = true
+	e.dir.ownerOf[id] = edgeproto.AccountPrincipal(account("owner"))
+	e.dir.mu.Unlock()
+	a := enrollAt(t, e, signer, edgeproto.VersionHTTP-1)
+	go a.run()
+	if status := postMCP(t, e, id); status == http.StatusOK {
+		t.Fatalf("request to a server before protocol %d: %d", edgeproto.VersionHTTP, status)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if got := connectorUses(e); len(got) != 0 {
+		t.Fatalf("a request the edge refused was recorded: %q", got)
+	}
+}
+
+// TestReclaimedServerIsRecordedAgain records a connector request, has the
+// server removed and claimed again within the hour, and records its next
+// request: the claim drops the earlier mark.
+func TestReclaimedServerIsRecordedAgain(t *testing.T) {
+	e := newEnv(t)
+	signer := newSigner(t)
+	a := claimedAgentWith(t, e, signer)
+	serveData(t, a, okAnswer)
+	if status := postMCP(t, e, a.id); status != http.StatusOK {
+		t.Fatalf("connector request: %d", status)
+	}
+	eventually(t, "the first request recorded", func() bool { return len(connectorUses(e)) == 1 })
+
+	e.dir.mu.Lock()
+	delete(e.dir.owners, a.id)
+	delete(e.dir.ownerOf, a.id)
+	e.dir.mu.Unlock()
+	if err := a.ws.CloseNow(); err != nil {
+		t.Fatal(err)
+	}
+	b := enroll(t, e, signer)
+	b.attach = true
+	go b.run()
+	acct := account("7")
+	_, token := e.addDevice(t, acct, "dev-7")
+	client, server := e.connectPath(t, b, edgeproto.ClaimConnectPath(b.id), token)
+	open := next[edgeproto.Open](t, b)
+	_ = client.Close()
+	_ = server.Close()
+	send(t, b.ws, edgeproto.Claimed{ConnID: open.ConnID, Owner: edgeproto.AccountPrincipal(acct)})
+	eventually(t, "the claim recorded", func() bool { return e.r.Online(b.id) })
+	serveData(t, b, okAnswer)
+	if status := postMCP(t, e, b.id); status != http.StatusOK {
+		t.Fatalf("connector request after the claim: %d", status)
+	}
+	eventually(t, "the request after the claim recorded", func() bool { return len(connectorUses(e)) == 2 })
 }
 
 // TestHeldConnectorRequestIsRecorded holds a connector request while its
@@ -127,7 +194,7 @@ func TestHeldConnectorRequestIsRecorded(t *testing.T) {
 	b := enroll(t, e, signer)
 	b.attach = true
 	go b.run()
-	serveData(t, b, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\n\r\n{}")
+	serveData(t, b, okAnswer)
 	if status := <-done; status != http.StatusOK {
 		t.Fatalf("held request: %d", status)
 	}

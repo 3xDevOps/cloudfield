@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/netip"
 	"time"
@@ -453,9 +454,17 @@ func (r *Relay) claimReported(reg *registration, m edgeproto.Claimed) error {
 	case m.Owner != edgeproto.AccountPrincipal(g.account):
 		return reportRefused("the owner is not the account connection %s was opened for", m.ConnID)
 	}
-	return r.recordOwner(reg, func(ctx context.Context) error {
+	if err := r.recordOwner(reg, func(ctx context.Context) error {
 		return r.dir.RecordClaim(ctx, reg.id, reg.name, reg.policy, g.account, reg.origin, reg.agentVersion)
-	})
+	}); err != nil {
+		return err
+	}
+	// A server removed and claimed again within the hour is a new row
+	// that its earlier marks would keep unrecorded.
+	r.mu.Lock()
+	maps.DeleteFunc(r.connectorUsed, func(u connectorUse, _ time.Time) bool { return u.serverID == reg.id })
+	r.mu.Unlock()
+	return nil
 }
 
 // transferReported records the owner a server reported after an admin
