@@ -151,7 +151,7 @@ describe('a retiring edge address', () => {
     await show('super_admin', { state: 'retiring', replacement, date: '2027-03-01' })
     const card = (await screen.findByText('https://edge-old.example.test is retiring on 2027-03-01')).closest('[data-edge-notice]') as HTMLElement
     expect(within(card).getByText(`sudo cloudfield-server edge move ${replacement}`)).toBeTruthy()
-    expect(within(card).getByText(`Move this server to ${replacement}, another address of the same edge. Run on the server's host, adding the service's --config <file> if it has one:`)).toBeTruthy()
+    expect(within(card).getByText(`Move this server to ${replacement}, another address of the same edge. Run on the server's host, adding the service's --config <file> if it has one.`)).toBeTruthy()
     expect(screen.queryByText('Nothing needs you')).toBeNull()
     fireEvent.click(within(card).getByRole('button', { name: 'Remote access' }))
     expect(useStore.getState().route).toEqual({ name: 'settings', params: { section: 'edge' } })

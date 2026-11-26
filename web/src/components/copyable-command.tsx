@@ -17,7 +17,7 @@ export function CopyableCommand({ command, wrap = false }: { command: string; wr
         className={cn(
           focusRing,
           'min-w-0 flex-1 px-1 font-code text-ui-sm leading-5 text-text select-text',
-          wrap ? 'whitespace-pre-wrap break-all' : 'overflow-x-auto whitespace-pre',
+          wrap ? 'whitespace-pre-wrap [overflow-wrap:anywhere]' : 'overflow-x-auto whitespace-pre',
         )}
       >
         {command}

@@ -12,20 +12,23 @@ import { useStore } from '@/store'
 export function EdgeMoveSteps({ need }: { need: EdgeNeed }) {
   if (!need.move) {
     return (
-      <p className="min-w-0 break-words text-ui-sm">
-        The edge names a new address that is not a plain https address, so no command is shown: <span className="break-all font-code">{need.notice.replacement}</span>. Confirm the new address with whoever runs the edge.
-      </p>
+      <div className="flex min-w-0 flex-col gap-1.5 text-ui-sm">
+        <p>The edge names a new address that is not a plain https address, so no command is shown. It is not a command to run:</p>
+        <code className="min-w-0 rounded-control border border-seam bg-canvas px-2.5 py-1 font-code break-all">{need.notice.replacement}</code>
+        <p>Confirm the new address with whoever runs the edge.</p>
+      </div>
     )
   }
   return (
     <div className="flex min-w-0 flex-col gap-1.5 text-ui-sm">
-      <p>Move this server to {need.notice.replacement}, another address of the same edge. Run on the server's host, adding the service's --config &lt;file&gt; if it has one:</p>
-      <CopyableCommand command={need.move} wrap />
-      <p>then apply it:</p>
-      <CopyableCommand command={need.restart} />
+      <p>Move this server to {need.notice.replacement}, another address of the same edge. Run on the server's host, adding the service's --config &lt;file&gt; if it has one.</p>
       {need.notice.first_use && (
-        <p className="text-muted">This came with the server's first connection to the edge, when it pinned the edge's key: confirm the new address with whoever runs the edge before you move.</p>
+        <p>This came with the server's first connection to the edge, when it pinned the edge's key: confirm the new address with whoever runs the edge before you move.</p>
       )}
+      <p>1. Move the server:</p>
+      <CopyableCommand command={need.move} wrap />
+      <p>2. Restart it to apply:</p>
+      <CopyableCommand command={need.restart} />
     </div>
   )
 }
@@ -45,7 +48,7 @@ export function EdgeNoticeCard({ need }: { need: EdgeNeed }) {
       </div>
       <div className={cn('mt-2 flex min-w-0 items-center gap-1.5 text-ui-sm text-muted', wideIndent)}>
         <StatusDot tone={tone} label={need.notice.state === 'retired' ? 'Retired' : 'Retiring'} />
-        <span className="min-w-0 flex-1 truncate">Run on the server's host</span>
+        <span className="min-w-0 flex-1 truncate">{need.notice.state === 'retired' ? 'Retired' : 'Retiring'} · Run on the server's host</span>
         <Button variant="ghost" size="sm" onClick={() => navigate('settings', { section: 'edge' })}>Remote access</Button>
       </div>
     </Card>
