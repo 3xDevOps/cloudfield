@@ -1,6 +1,7 @@
 package edgeproto
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"encoding/json"
 	"errors"
@@ -39,19 +40,27 @@ type Notice struct {
 // whole. A list that lost an entry no longer matches its signature.
 type Notices []Notice
 
-// UnmarshalJSON keeps the valid entries of data and never fails.
+// UnmarshalJSON keeps the valid entries of data and never fails. It
+// decodes one entry at a time and stops at the first past the cap, so a
+// long list costs no more than a full one.
 func (n *Notices) UnmarshalJSON(data []byte) error {
-	var raw []json.RawMessage
 	*n = nil
-	if json.Unmarshal(data, &raw) != nil || len(raw) > MaxRelayOrigins {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	if tok, err := dec.Token(); err != nil || tok != json.Delim('[') {
 		return nil
 	}
-	for _, r := range raw {
+	var out Notices
+	for i := 0; dec.More(); i++ {
+		var raw json.RawMessage
+		if i == MaxRelayOrigins || dec.Decode(&raw) != nil {
+			return nil
+		}
 		var x Notice
-		if json.Unmarshal(r, &x) == nil && x.validate() == nil {
-			*n = append(*n, x)
+		if json.Unmarshal(raw, &x) == nil && x.validate() == nil {
+			out = append(out, x)
 		}
 	}
+	*n = out
 	return nil
 }
 

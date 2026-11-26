@@ -273,3 +273,29 @@ func TestParseRetiring(t *testing.T) {
 		t.Errorf("FormatRetiring without a date = %q", got)
 	}
 }
+
+// TestNoticesDecodingStopsAtTheCap checks that decoding a list far past
+// the cap allocates no more than decoding one just past it: the entries
+// after the cap are never built.
+func TestNoticesDecodingStopsAtTheCap(t *testing.T) {
+	list := func(n int) []byte {
+		var entries []string
+		for i := range n {
+			entries = append(entries, fmt.Sprintf(`{"state":"retiring","origin":"https://old%d.example","replacement":"https://edge2.example"}`, i))
+		}
+		return []byte("[" + strings.Join(entries, ",") + "]")
+	}
+	short, long := list(MaxRelayOrigins+1), list(20000)
+	allocs := func(data []byte) float64 {
+		return testing.AllocsPerRun(20, func() {
+			var n Notices
+			_ = n.UnmarshalJSON(data)
+			if n != nil {
+				t.Fatal("a list past the cap was kept")
+			}
+		})
+	}
+	if s, l := allocs(short), allocs(long); l > s+8 {
+		t.Errorf("decoding %d notices allocates %.0f times, %d notices %.0f times: want the same bound", 20000, l, MaxRelayOrigins+1, s)
+	}
+}
