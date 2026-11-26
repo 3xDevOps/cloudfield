@@ -19,6 +19,7 @@ pull request sessions are in
 | How an agent CLI is launched (`internal/harness`) | [Real-agent smoke tests](#real-agent-smoke-tests) | Docker |
 | How a session drives, reads or wakes its agent | [Real agents against a mock model](#real-agents-against-a-mock-model) | Docker, git |
 | The assistant's instructions or tools (`internal/assistant/instructions.md`, `internal/ops`) | [Assistant eval](#assistant-eval) | Claude Code signed in, spends tokens |
+| The role card or the guidance behind it (`internal/coordhooks/guide.go`, `internal/coordcli`, `internal/mcpbridge`) | [Session prompt eval](#session-prompt-eval) | Claude Code signed in, git, Go, spends tokens |
 | Native hook adapters (the `.mjs` files in `internal/coordhooks` and `internal/agentstatus`) | `make test-native-hooks` | Node 22.13+ |
 | `cmd/aether-edge`, `internal/edge` | `go test -race ./internal/edge/edgetest/` | Go |
 | `images/edge/Dockerfile` | [The edge image](#the-edge-image) | Docker, curl |
@@ -505,6 +506,124 @@ Compare a change with `main` by running the command on both commits with
 different labels. Model output varies between sessions, so a few sessions per scenario
 shows a direction, not a proof. Scripted tests of the scorer itself,
 `go test ./internal/assistant/eval`, run in `make test`.
+
+## Session prompt eval
+
+`internal/sessioneval` measures what a session's agent does with its role card:
+the text `coordhooks.RoleCard` puts in the agent's system prompt, and the
+guidance it points to, `aether-internal skill` and the MCP bridge's tool
+descriptions. A subsession is a separate session an agent starts for part of
+its task; the scenarios target an agent that starts one where its own
+subagents would do.
+
+Each run stages a session in a temporary directory and removes it afterwards:
+
+- A git repository built from `internal/sessioneval/testdata/fixture`, three
+  small Go packages with one failing test.
+- A fake session socket that speaks coordination wire v3, records every
+  request and answers `child.start` with a made-up receipt, so no subsession
+  ever starts. It refuses what the server refuses: a start from a session that
+  is itself a subsession, and a `success` report while a subsession is
+  unfinished.
+- `aether-internal` and `cloudfield-internal` on `PATH` and the MCP server
+  `aether`. All are the test
+  binary run again as `coordcli.Run` and `mcpbridge.Run`, pointed at the fake
+  socket.
+
+It then runs the real Claude Code CLI with the `claude` profile's Background
+command line (`claude -p --output-format stream-json --verbose
+--dangerously-skip-permissions`), the scenario's prompt as the task, the role
+card of a Standard session in `--append-system-prompt`, and the variables a
+Standard launch sets (`AETHER_RUN_ID`, `AETHER_WORKSPACE_ID`,
+`AETHER_ACCOUNT_MEMBER_ID`, `AETHER_HARNESS`, `AETHER_ROLE_CARD`,
+`AETHER_IDLE_WAKE`, `AETHER_MANAGED_HOOKS` and the profile's own). The agent
+keeps all of its tools, so it can edit, commit and start subagents.
+
+The agent runs with `--dangerously-skip-permissions` on your machine, not in a
+container. `--setting-sources project`, `--strict-mcp-config`,
+`--no-session-persistence`, `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` and
+`GIT_CONFIG_GLOBAL=/dev/null` keep your own settings, plugins, hooks, skills,
+MCP servers, memory and git configuration out of the run. Of the `CLAUDE*`
+variables only `CLAUDE_CONFIG_DIR`, `CLAUDE_CODE_OAUTH_TOKEN`,
+`CLAUDE_CODE_USE_BEDROCK` and `CLAUDE_CODE_USE_VERTEX` are passed on, and none of the variables a session launch sets
+(`AETHER_RUN_ID` and the others in `coordtransport.SessionEnv`, under either
+prefix) of a surrounding session is, so the eval can be started from
+inside a session.
+
+It spends model tokens, so it is behind the `sessioneval` build tag and no CI
+job runs it. Claude Code, git and Go must be on `PATH`, and Claude Code signed
+in:
+
+```sh
+CLOUDFIELD_SESSION_EVAL_LABEL=main \
+  go test -count=1 -tags sessioneval -run TestSessionEval -timeout 60m ./internal/sessioneval
+```
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `CLOUDFIELD_SESSION_EVAL_LABEL` | `unlabeled` | Names the output files; use the commit or branch under test |
+| `CLOUDFIELD_SESSION_EVAL_RUNS` | `3` | Sessions per scenario |
+| `CLOUDFIELD_SESSION_EVAL_MODEL` | Claude Code's default | Passed to `claude --model`; the report names the model the harness reports |
+| `CLOUDFIELD_SESSION_EVAL_ONLY` | all | Comma-separated scenario ids |
+| `CLOUDFIELD_SESSION_EVAL_PARALLEL` | `4` | Concurrent agent sessions |
+| `CLOUDFIELD_SESSION_EVAL_MAX_USD` | `5` | Passed to `claude --max-budget-usd`: one session stops when it has spent this |
+| `CLOUDFIELD_SESSION_EVAL_OUT` | `$TMPDIR/session-eval` | Where `<label>.md`, `<label>.json` and each session's `<label>-<scenario>-<n>.jsonl` transcript go |
+
+A session also stops after 10 minutes, or one minute before the test's
+`-timeout`. The scenarios are in
+`internal/sessioneval/testdata/scenarios.json`:
+
+| Scenario | Task | Subsession starts wanted |
+| --- | --- | --- |
+| `small-fix` | Fix one failing test | 0 |
+| `independent-review` | Add a function and get it independently reviewed | 0 |
+| `parallel-parts` | Three independent parts, worked on in parallel | 0 |
+| `two-subsessions` | The user asks for exactly two subsessions | 2 |
+| `codex-review` | The user asks for a review by Codex | 1, on `codex` |
+| `subsession` | The session is itself a subsession, and must get its change reviewed | 0 |
+
+A start counts when the socket accepted it or refused it by policy; a retry of
+the same idempotency key and a request with invalid parameters do not. Where no
+start is wanted, the count is the higher of the socket's and the tool calls
+that tried one, which include a `subsession start` command the CLI refused
+before the socket. Every
+scenario also checks that the socket accepted at least one `coord.report`, that
+every one before the last is `waiting` (a turn that ended while work went on),
+that each outcome is one `coordhooks.Outcomes` lists for the session, and that
+the last report is the last request on the socket. A `success` followed by
+`answered` means the agent ended a turn with a report and no reply text, so
+Claude Code prompted it again
+([harnesses.md](harnesses.md#claude-code)). The check cannot tell a `waiting`
+that ended a turn from one sent mid-turn.
+
+The Markdown report has a row per scenario: sessions passed, subsession starts
+and the agents they asked for, subagents started (`subagent_stats.spawned` in
+Claude Code's result), report outcomes, socket requests, latency and cost. Cost
+is the figure `claude` reports. The bridge itself makes two `coord.status`
+requests when it starts, so every session records at least those. Below the
+table are the failed checks and, per session, the agent's own tool calls by
+name, every recorded request with its parameters, and the reply, with the
+questions a person should answer from them. Results are rewritten after every
+session.
+
+What a real Standard session has and the eval does not:
+
+- The co-author rule and the team memory brief the scheduler appends to the
+  role card.
+- The hooks a launch loads: the inbox, status and wake hooks, and the server's
+  reminder to a turn that ends without a report. `aether-internal skill` still
+  says the launch loaded them, because `AETHER_MANAGED_HOOKS=1` is set.
+- A container. The agent sees your machine's tools and paths.
+
+The eval registers the MCP bridge, which an Enhanced session gets and a
+Standard session only has when its owner [registers
+it](mcp-bridge.md#registration).
+
+Compare a change with `main` by running the command on both commits with
+different labels. Model output varies between sessions, so a few sessions per
+scenario shows a direction, not a proof. Tests of the scorer and of the fake
+socket through the real command and bridge, `go test ./internal/sessioneval`,
+run in `make test`.
 
 ## Native hook tests
 
