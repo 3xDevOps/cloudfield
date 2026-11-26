@@ -733,8 +733,11 @@ first: `{id, session_id: "aether-sudo", kind: "permission", title}`, where
 saved; a server restart ends the shim's wait. A report cannot open, close or
 replace one: the session ID and a `title` are refused.
 
-Repeated opens, closes, and unchanged replacements are idempotent. Turn
-completion, silence, prose, and idle execution do not clear outstanding input.
+Repeated opens, closes, and unchanged replacements are idempotent. Only an
+update clears outstanding input: a `waiting` state, silence, prose, and idle
+execution do not. Claude Code's reporter sends `replace` with `[]` when its
+main agent's turn ends with no background task it waits for: a dialog blocks
+the turn it opens in, so none is open then.
 The pending set is persisted independently from the last execution report and
 survives server restart for still-live sessions. Actual terminated or relaunched
 session lifetimes discard it; stale saved snapshots cannot restore a previous

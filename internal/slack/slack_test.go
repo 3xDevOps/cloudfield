@@ -232,11 +232,11 @@ func TestThreadReplyReachesRun(t *testing.T) {
 	}
 
 	h.local.mu.Lock()
-	h.local.inject = `{"message":{"id":"m2","state":"not_sent","failure":{"code":"prompt_not_sent","message":"the agent is waiting for an answer in its terminal"}}}`
+	h.local.inject = `{"message":{"id":"m2","state":"not_sent","failure":{"code":"prompt_not_sent","message":"agent prompt was not sent: the agent is waiting for an answer in its terminal; answer it there, then send the message again"}}}`
 	h.local.mu.Unlock()
 	h.svc.handle(bg, eventEnvelope("e3", "Ev11", threadReply("U1", "use eu-west", ts)))
 	posts = h.slack.posts()
-	if last, want := posts[len(posts)-1], "The message is not_sent: the agent is waiting for an answer in its terminal."; last.Text != want {
+	if last, want := posts[len(posts)-1], "The message is not sent: agent prompt was not sent: the agent is waiting for an answer in its terminal; answer it there, then send the message again."; last.Text != want {
 		t.Fatalf("refused reply = %q, want %q", last.Text, want)
 	}
 }

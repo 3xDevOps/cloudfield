@@ -164,7 +164,10 @@ eight files per message.
   there, then send the message again`. A message refused as you send it stays
   in the composer as your draft. One that waited for the controller is refused
   when it is approved or comes due, and its text stays only in its row. If
-  Claude Code's report of an answer is lost, the request ends with that turn.
+  Claude Code's report of an answer is lost, its terminal shows no question
+  and messages stay refused until its main agent finishes a turn: type the
+  message into the terminal to start one. A turn you interrupt, or one that
+  ends as `working in background`, does not end the request.
   A prompt the agent does not report still gets the message typed into it:
   Claude Code's permission prompts, and every prompt of an agent without
   [status reporting](harnesses.md#status-reporting).

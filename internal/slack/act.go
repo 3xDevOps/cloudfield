@@ -117,7 +117,7 @@ func (s *Service) message(ctx context.Context, cb eventCallback) string {
 	case m.State == protocol.RoomMessageSent:
 		return "Sent to the session."
 	case m.Failure != nil:
-		return fmt.Sprintf("The message is %s: %s.", m.State, m.Failure.Message)
+		return fmt.Sprintf("The message is %s: %s.", strings.ReplaceAll(string(m.State), "_", " "), m.Failure.Message)
 	default:
 		return fmt.Sprintf("The message is %s.", m.State)
 	}

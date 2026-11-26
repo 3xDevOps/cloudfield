@@ -522,7 +522,8 @@ func TestInputRequestsCannotSurviveEndedLifetime(t *testing.T) {
 }
 
 // A message typed into a terminal that shows a question would answer it. The
-// second question's answer is never reported: the end of its turn stands in.
+// second question is a subagent's and its answer is never reported: the end of
+// the main agent's turn stands in.
 func TestInjectIsRefusedWhileAStandardAgentAsks(t *testing.T) {
 	t.Parallel()
 	e := newReportingEnv(t, nil)
@@ -535,7 +536,7 @@ func TestInjectIsRefusedWhileAStandardAgentAsks(t *testing.T) {
 	}{
 		{asks, true},
 		{`{"hook_event_name":"PostToolUse","tool_name":"AskUserQuestion","session_id":"session","tool_use_id":"asked"}`, false},
-		{asks, true},
+		{`{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","session_id":"session","agent_id":"subagent","tool_use_id":"asked"}`, true},
 		{`{"hook_event_name":"Stop","session_id":"session"}`, false},
 	} {
 		report, _ := agentstatus.FromClaudeHook([]byte(step.hook))

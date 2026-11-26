@@ -202,12 +202,10 @@ func fromClaudeHook(hook claudeHook) (Report, bool) {
 		if held > 0 {
 			return Report{State: Working, Reason: BackgroundReason(held), Tools: agents == 0}, true
 		}
-		// A dialog blocks the turn it opens in, so an ended turn shows none:
-		// this closes a request whose own close was never reported.
-		var closed []domain.RunInputUpdate
-		if session != "" {
-			closed = []domain.RunInputUpdate{{Operation: "clear", SessionID: session}}
-		}
+		// A dialog blocks the turn it opens in and no held task means no
+		// subagent runs, so none is open: this closes a request whose own
+		// close was never reported.
+		closed := []domain.RunInputUpdate{{Operation: "replace", Requests: []domain.RunInputRequest{}}}
 		if hook.Event == "Stop" {
 			return Report{State: Idle, Reason: ReasonIdle, InputUpdates: closed, Stop: !hook.StopHookActive}, true
 		}
