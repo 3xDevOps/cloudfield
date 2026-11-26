@@ -646,7 +646,7 @@ Decided the same day:
 - `team@cloudfield.ai` exists and receives mail, so every contact line
   names it.
 - `onaether.dev`, `edge.onaether.dev`, `auth.onaether.dev` and
-  `team@onaether.dev` keep working until the owner names a shutdown date.
+  `team@onaether.dev` keep working until the owner names a date.
   None is named.
 
 This reverses step 6 of [Order of the switch](#order-of-the-switch), which
@@ -692,18 +692,19 @@ only.
   `internal/edge/service/universal.go`). For a server enrolled at
   `edge.onaether.dev`, an OAuth request at `https://edge.cloudfield.ai/mcp`
   names that URL as its resource, and the server answers `invalid_target` with
-  `resource must be https://edge.onaether.dev/mcp`: the authorization
-  request at `internal/connector/authorize.go:186-187` at `b42026e7b^`,
-  read from the code; the token request in `TestConnectorAtEdgeProtocol5`
-  (`internal/edge/edgetest/connector_pairs_test.go`).
+  `resource must be https://edge.onaether.dev/mcp`, read from the code at
+  `b42026e7b^`: `internal/connector/authorize.go:186-187` for the
+  authorization request, `internal/connector/token.go:49-50` for the token
+  request. `TestConnectorAtEdgeProtocol5`
+  (`internal/edge/edgetest/connector_pairs_test.go`) shows the same
+  `invalid_target` at a server's own URL; no test covers the universal URL.
 - How many users that leaves was not measured. Step 6 waited on
   `aether_edge_connector_requests_total{origin,protocol}`
   (`cmd/aether-edge/metrics.go`), whose series with `protocol` `1` to `5`
   count connector requests for such servers since the edge last started
   (`0` is a server that was not connected); it counts requests, not users. It is
-  served only on the edge host's loopback metrics listener
-  ([edge.md](../edge.md#monitoring)), and nobody read it for this decision,
-  which touched no live host. Reported by the owner on 2026-11-26 and not
+  served only on the edge process's loopback metrics listener (C9), and
+  nobody read it for this decision, which touched no live host. Reported by the owner on 2026-11-26 and not
   checked for this decision: the project's own server moved to
   `edge.cloudfield.ai` on 2026-11-26 and runs `v0.9.0-nightly.21`, and the
   hosted edge serves both address pairs.
@@ -717,10 +718,10 @@ sudo cloudfield-server update    # on the server host
 sudo aether-server update        # the same, where the cloudfield-server link does not exist yet
 ```
 
-The server does not need `edge move`. Until it updates, it accepts a
-connector only at the address it is enrolled at, so for one enrolled at
-`edge.onaether.dev` a connector at `https://edge.onaether.dev/mcp` keeps
-working and one added from a listing at the new address does not.
+The server does not need `edge move`. A server without #974 at edge
+protocol 4 or 5 serves the universal URL only at the address it is enrolled
+at; one below protocol 4 is not offered at the universal URL at all
+(`internal/edge/service/universal.go:297,320-330`) and must update for it.
 
 **Out of scope, owned elsewhere.** Retiring the old addresses: warnings
 for whoever is still on an old address, counts of who is left, the switch
@@ -738,9 +739,12 @@ package or a pull request; on the edge host it goes only in the protected
 secret files the guides name.
 
 **A. The fields that change**, by the rule `edge.cloudfield.ai`,
-`https://cloudfield.ai`, `team@cloudfield.ai`, and because #1123 lets the
-control scope open and merge a session's pull request. They are in the
-packages only once #1123 merges.
+`https://cloudfield.ai`, `team@cloudfield.ai`; the `prerequisites` row
+follows [decision 12](#12-everything-published-moves-to-cloudfieldai), and
+the tool wording follows #1123, which corrects the listings to describe the
+control tools `aether_pr_create` and `aether_pr_merge` already on `main`
+(`internal/ops/pr.go:31-37`). They are in the packages only once #1123
+merges.
 
 | File | Field | Old | New |
 | --- | --- | --- | --- |
@@ -830,11 +834,12 @@ neither listing can go to review until both are done.
     reviewer's member `aether-demo`, which it cannot reach otherwise:
     `cloudfield workspace grant aether-demo <member-id>`
     ([teams.md](../teams.md#workspace-access):390-410).
-  - chatgpt-plugin.md:204-207 and :221-222 apply the reviewer file only
-    through `/etc/aether-edge/aether-edge.env` and "restart the edge"; on
-    Compose see C3. The edge reads the file only at start and holds one
+  - chatgpt-plugin.md:204-207 and :221-222 have no Compose instructions
+    (C3). The edge reads the reviewer file only at start and holds one
     login and password (`cmd/aether-edge/reviewer.go:15-17,51-59`), so
-    writing it again while a review is pending locks that reviewer out.
+    while either review is pending do not rewrite the file and restart, and
+    do not unlink the login; a new password stops new sign-ins, not
+    connectors already authorized (chatgpt-plugin.md:216-222).
     claude-connector.md:195-196 says to give "each new review a fresh
     password"; reviews pending at once share one password, changed only
     when none is pending.
@@ -852,6 +857,21 @@ neither listing can go to review until both are done.
     ([assistant.md](../assistant.md#first-use):88-93); the demo recipe
     (chatgpt-plugin.md:227-246) does not do it, so "each tool at least
     once" (claude-connector.md:115-116) fails for them.
+  - `docs/legal/privacy-connectors.md:66,88-90` still describe #590 and #591
+    as pending; recheck what it says the proxy logs against the shipped
+    config (`packaging/nginx/aether-edge.conf.example:17-22`,
+    `internal/edge/service/universal.go:272-276`).
+  - chatgpt-plugin.md:343 "reusing a rotated token revokes" omits the
+    minute in which reuse returns `invalid_grant` without revoking
+    (`internal/connector/token.go:153-160`).
+  - chatgpt-plugin.md:255 and `packaging/chatgpt-plugin/plugin.json`:55
+    expect a dashboard link from test 1; the launch receipt has none when
+    the server has no dashboard URL (`internal/ops/launch.go:134,150`,
+    `internal/ops/ops.go:543-547`).
+  - The data inventory, chatgpt-plugin.md:296-324, omits the prompt, card
+    id, decision and card text `aether_ask_assistant` and
+    `aether_decide_assistant_card` send and the reply and pending cards
+    they return (`internal/ops/ask.go:10-20,37-54,65-70`).
 
 **C. Because the address is new**, in order.
 
@@ -871,15 +891,19 @@ Build and check again after any change to `packaging/`, such as B1's URLs.
 not in the source. Recheck the Anthropic and OpenAI sources each guide
 links; its quotes are from 2026-10-26.
 
-- At `https://claude.ai/directory/manage`, look for a Cloudfield listing
-  in any status. If one exists, do not **Submit new**: the directory policy
+- At `https://claude.ai/directory/manage`, look for a listing named
+  Cloudfield or Aether, its name before the rename, or with the slug
+  `aether`, permanent once published
+  ([claude-connector.md](../claude-connector.md):63), in any status. If one
+  exists, do not **Submit new**: the directory policy
   requires telling Anthropic about "material changes" to tools, data
   practices or endpoints, and renaming a published listing "requires
   re-review" ([claude-connector.md](../claude-connector.md#submit-in-the-portal));
   escalate to `mcp-review@anthropic.com`. Whether the portal lets a listing
   change its URL is unknown: not in the source.
-- At [Plugins](https://platform.openai.com/plugins), look for a Cloudfield
-  plugin or its `aether` MCP server. If one exists: "To change an existing
+- At [Plugins](https://platform.openai.com/plugins), look for a plugin
+  named Cloudfield Coding Agents or Aether Coding Agents, or its `aether`
+  MCP server. If one exists: "To change an existing
   MCP server's URL, contact support; the current update flow does not
   support URL changes"
   ([chatgpt-plugin.md](../chatgpt-plugin.md#external-prerequisites)).
@@ -917,10 +941,20 @@ its own GitHub OAuth app (callback
 `https://auth.cloudfield.ai/signin/github/callback`) and that app's secret
 file ([edge.md](../edge.md#more-than-one-address-pair)); under systemd in
 `/etc/aether-edge/aether-edge.env`, the secret loaded by a
-`LoadCredential=` drop-in. `aether-edge version --json` must show
-`protocol.version` 6 or more, or a server answers only at the address it
-is enrolled at. The owner reported on 2026-11-26 that the hosted edge
-serves both pairs; this step checks it.
+`LoadCredential=` drop-in. From any machine, each relay host must answer
+for its own pair (`internal/edge/service/api.go:207-215`):
+
+```sh
+curl -fsS -H 'Aether-Edge-Version: 6' https://edge.cloudfield.ai/v1/edge
+curl -fsS -H 'Aether-Edge-Version: 6' https://edge.onaether.dev/v1/edge
+```
+
+`signin_origin` must be `https://auth.cloudfield.ai` and
+`https://auth.onaether.dev`, `fingerprint` the same in both, and `version`
+6 or more, or a server answers only at the address it is enrolled at. A
+host the edge does not serve answers 421
+(`internal/edge/service/service.go:370-374`). The owner reported on
+2026-11-26 that the hosted edge serves both pairs; this step checks it.
 
 **C5. Check what the new address serves**, from any machine. In the first
 document `resource` and `authorization_servers`, in the second `issuer`,
@@ -932,14 +966,17 @@ curl -s https://edge.cloudfield.ai/.well-known/oauth-protected-resource/mcp
 curl -s https://edge.cloudfield.ai/.well-known/oauth-authorization-server/mcp
 ```
 
-**C6. The demo server runs `v0.8.7` or later**, so it answers at the new
-address whatever address it is enrolled at
-([decision 12](#12-everything-published-moves-to-cloudfieldai)).
+**C6. The demo server runs `v0.8.7` or later**: `cloudfield server update
+--status` shows its version ([install.md](../install.md#update-the-server)).
 
 **C7. The OpenAI challenge token.** The edge holds one token, set with
 `AETHER_EDGE_OPENAI_CHALLENGE` or `--openai-challenge`, and serves it on
 every relay host (`internal/edge/service/universal.go:42-48`), so the one
-the portal shows for the new host replaces the old host's. First:
+the portal shows for the new host replaces the old host's. It is set only
+at step 4 of chatgpt-plugin.md's
+[Submit in the portal](../chatgpt-plugin.md#submit-in-the-portal) (C8),
+subject to C2; with an existing registration, in the order support
+authorises. Before then:
 
 ```sh
 curl -sS -o /dev/null -w '%{http_code}\n' https://edge.onaether.dev/.well-known/openai-apps-challenge
@@ -952,7 +989,7 @@ stop and find out before replacing it.
 **C8. Follow the guides with the new address**:
 [claude-connector.md](../claude-connector.md#submit-in-the-portal) and
 [chatgpt-plugin.md](../chatgpt-plugin.md#submit-in-the-portal), corrected
-as in B2.
+as in B2, setting the challenge token as C7 says.
 
 - The connector URL in each portal and every test is
   `https://edge.cloudfield.ai/mcp`; run the guides' `curl` lines at that
