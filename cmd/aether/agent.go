@@ -96,7 +96,7 @@ func agentList(args []string) error {
 }
 
 // printAgents labels the login column for what agent.list checks: a login
-// file in the home, not whether the vendor accepts it. A login the server
+// in the home, not whether the vendor accepts it. A login the server
 // knows cannot sign the agent in is listed under the table with the way
 // back in.
 func printAgents(w io.Writer, agents []protocol.AgentInfo) error {
@@ -105,7 +105,7 @@ func printAgents(w io.Writer, agents []protocol.AgentInfo) error {
 		return err
 	}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "AGENT\tSOURCE\tINSTALLED\tENHANCED\tLOGIN FILE")
+	_, _ = fmt.Fprintln(tw, "AGENT\tSOURCE\tINSTALLED\tENHANCED\tLOGIN")
 	for _, a := range agents {
 		installed, enhanced, login := "no", "none", "-"
 		if a.Installed {

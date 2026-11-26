@@ -81,9 +81,9 @@ type RunController interface {
 	// which never borrows the owner's installation.
 	FallbackLaunchable(ctx context.Context, member, requested, account domain.MemberID, harness string, mode domain.LaunchMode) (bool, error)
 	// LoginProblem is why agent's login in account's home cannot sign it
-	// in, empty when the server knows of none, and whether a launch is
-	// refused over it.
-	LoginProblem(account domain.MemberID, agent string, profile harness.Profile) (problem string, blocks bool, err error)
+	// in for a launch by member, empty when the server knows of none, and
+	// whether a launch is refused over it.
+	LoginProblem(member, account domain.MemberID, agent string, profile harness.Profile) (problem string, blocks bool, err error)
 	// DefaultMode is the mode member's launch of harness on account starts
 	// in when it names none: Enhanced where the agent's ACP server is
 	// installed, else Standard.

@@ -2718,7 +2718,7 @@ The launch form lives in `components/launch/`. It asks for a
 task, an agent, an account when one is shared with the caller, a mode and a
 model. The agent picker is a list of rows from `agent.list`: the vendor glyph
 in its colour, the display name, and "Ready" or "Sign in after launch"
-for a shipped agent (`login_found` checks the launch home for login files, not
+for a shipped agent (`login_found` checks the launch home for a login, not
 for a working session; a server that does not report it shows nothing), or
 "Signed out" in the needs-you colour, with `login_problem` as its tooltip,
 for any agent whose login file cannot sign it in (`login_blocks_launch`), or

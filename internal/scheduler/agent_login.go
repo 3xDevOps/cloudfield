@@ -35,13 +35,13 @@ type loginRefusal struct {
 }
 
 // LoginProblem is why the login of agent, which profile describes, in
-// account's home cannot sign the agent in: what its file holds, or the
-// agent's own refusal. It is empty when the server knows of none, which a
-// missing login is not. blocks is whether a launch is refused over it: only
-// the file proves a login unusable, since a refusing agent may hold a stale
-// copy of a sound one.
-func (s *Scheduler) LoginProblem(account domain.MemberID, agent string, profile harness.Profile) (problem string, blocks bool, err error) {
-	problem, err = s.loginFileProblem(account, agent, profile)
+// account's home cannot sign the agent in for a launch by member: what its
+// file holds, or the agent's own refusal. It is empty when the server knows
+// of none, which a missing login is not. blocks is whether a launch is
+// refused over it: only the file proves a login unusable, since a refusing
+// agent may hold a stale copy of a sound one.
+func (s *Scheduler) LoginProblem(member, account domain.MemberID, agent string, profile harness.Profile) (problem string, blocks bool, err error) {
+	problem, err = s.loginFileProblem(member, account, agent, profile)
 	if err != nil || problem != "" {
 		return problem, problem != "", err
 	}
@@ -52,8 +52,7 @@ func (s *Scheduler) LoginProblem(account domain.MemberID, agent string, profile 
 	if !refused {
 		return "", false, nil
 	}
-	paths, _ := profile.LoginPaths()
-	stamp, err := s.loginStamp(account, paths)
+	stamp, err := s.loginStamp(account, agent, profile)
 	if err != nil {
 		return "", false, err
 	}
@@ -68,8 +67,12 @@ func (s *Scheduler) LoginProblem(account domain.MemberID, agent string, profile 
 	return "", false, nil
 }
 
-// loginFileProblem is LoginProblem from the login file alone.
-func (s *Scheduler) loginFileProblem(account domain.MemberID, agent string, profile harness.Profile) (string, error) {
+// loginFileProblem is LoginProblem from the login file alone, for a session
+// whose container mounts member's home. On member's own account a login the
+// agent keeps elsewhere in the home signs it in whatever the file holds; an
+// account share carries the file only. Such a login the server cannot read
+// leaves the file's problem standing.
+func (s *Scheduler) loginFileProblem(member, account domain.MemberID, agent string, profile harness.Profile) (string, error) {
 	file := quota.LoginFile(agent)
 	paths, err := profile.LoginPaths()
 	if s.cfg.Homes == nil || err != nil || !slices.Contains(paths, file) {
@@ -83,17 +86,42 @@ func (s *Scheduler) loginFileProblem(account domain.MemberID, agent string, prof
 	if err != nil {
 		return "", err
 	}
-	if problem := quota.LoginProblem(agent, data, time.Now()); problem != "" {
-		return "~/" + file + ": " + problem, nil
-	}
-	return "", nil
-}
-
-func (s *Scheduler) loginStamp(account domain.MemberID, paths []string) (string, error) {
-	if s.cfg.Homes == nil || len(paths) == 0 {
+	problem := quota.LoginProblem(agent, data, time.Now())
+	if problem == "" {
 		return "", nil
 	}
-	return s.cfg.Homes.LoginStamp(account, paths)
+	problem = "~/" + file + ": " + problem
+	if member != account {
+		return problem, nil
+	}
+	own, ownErr := s.cfg.Homes.OwnerLogin(account, agent)
+	switch {
+	case ownErr != nil:
+		return problem + "; a sign-in outside that file cannot be read: " + ownErr.Error(), nil
+	case own != nil:
+		return "", nil
+	}
+	return problem, nil
+}
+
+// loginStamp changes when a login of agent in account's home does: a login
+// file, or a login the agent keeps elsewhere in the home. One of those the
+// server cannot read is stamped like none, so the login file is still
+// watched and a file that only became unreadable is no new sign-in.
+func (s *Scheduler) loginStamp(account domain.MemberID, agent string, profile harness.Profile) (string, error) {
+	if s.cfg.Homes == nil {
+		return "", nil
+	}
+	paths, _ := profile.LoginPaths()
+	stamp, err := s.cfg.Homes.LoginStamp(account, paths)
+	if err != nil {
+		return "", err
+	}
+	own, err := s.cfg.Homes.OwnerLogin(account, agent)
+	if err != nil || own == nil {
+		return stamp, nil
+	}
+	return stamp + own.File + " " + own.Stamp + "\n", nil
 }
 
 // loginRefused records that agent refused on account for want of a sign-in,
@@ -156,9 +184,9 @@ func (s *Scheduler) environmentSignsIn(ctx context.Context, workspace domain.Wor
 
 // checkLogin refuses a launch of agent on account whose login cannot sign it
 // in, unless the workspace's environment does.
-func (s *Scheduler) checkLogin(ctx context.Context, workspace domain.WorkspaceID, account domain.MemberID, agent string, profile harness.Profile, mode domain.LaunchMode) error {
+func (s *Scheduler) checkLogin(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, agent string, profile harness.Profile, mode domain.LaunchMode) error {
 	// A login the server cannot read is provisioning's refusal to make.
-	problem, blocks, err := s.LoginProblem(account, agent, profile)
+	problem, blocks, err := s.LoginProblem(member, account, agent, profile)
 	if err != nil || !blocks {
 		return nil
 	}
@@ -198,11 +226,10 @@ func (s *Scheduler) runLogin(ctx context.Context, runID domain.RunID) runLogin {
 	if byEnv, envErr := s.environmentSignsIn(ctx, run.WorkspaceID, login.agent, login.profile, run.Mode); envErr != nil || byEnv {
 		return runLogin{}
 	}
-	if login.fileProblem, err = s.loginFileProblem(login.account, login.agent, login.profile); err != nil {
+	if login.fileProblem, err = s.loginFileProblem(run.HomeMember(), login.account, login.agent, login.profile); err != nil {
 		return runLogin{}
 	}
-	paths, _ := login.profile.LoginPaths()
-	if login.stamp, err = s.loginStamp(login.account, paths); err != nil {
+	if login.stamp, err = s.loginStamp(login.account, login.agent, login.profile); err != nil {
 		return runLogin{}
 	}
 	login.known, login.owner, login.label = true, s.memberName(ctx, login.account), cmp.Or(login.profile.Label(), run.Harness)
