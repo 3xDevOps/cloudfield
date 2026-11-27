@@ -51,11 +51,13 @@ type LoginIdentity struct {
 // a sign-in container wrote and reaches the owner's terminal and dashboard.
 const maxIdentityField = 256
 
-// clean drops a field that is too long or holds a control character.
+// clean drops a field that is too long or holds a control, format or line
+// or paragraph separator character. Format characters include the zero-width
+// joiners some scripts write names with: such a name is dropped too.
 func (a LoginIdentity) clean() LoginIdentity {
 	for _, field := range []*string{&a.Kind, &a.Plan, &a.Email, &a.OrganizationID, &a.OrganizationName} {
 		if len(*field) > maxIdentityField || !utf8.ValidString(*field) || strings.ContainsFunc(*field, func(r rune) bool {
-			return unicode.IsControl(r) || unicode.Is(unicode.Cf, r)
+			return unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)
 		}) {
 			*field = ""
 		}
