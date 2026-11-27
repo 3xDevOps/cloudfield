@@ -436,9 +436,15 @@ func subpathVolumeName(hostPath string) string {
 	return "aether-home-" + hex.EncodeToString(sum[:])[:32]
 }
 
+// volumeRemoveTimeout bounds a volume removal as a cleanup's container
+// removal is bounded, so a daemon that stops answering holds no caller.
+var volumeRemoveTimeout = 30 * time.Second
+
 // RemoveSubpathVolume removes the volume subpath mounts of hostPath come
 // from, once no container uses it; one that is gone already is no error.
 func (d *Docker) RemoveSubpathVolume(ctx context.Context, hostPath string) error {
+	ctx, cancel := context.WithTimeout(ctx, volumeRemoveTimeout)
+	defer cancel()
 	if _, err := d.cli.VolumeRemove(ctx, subpathVolumeName(hostPath), client.VolumeRemoveOptions{}); err != nil && !cerrdefs.IsNotFound(err) {
 		return fmt.Errorf("runtime: remove the volume of %s: %w", hostPath, err)
 	}
