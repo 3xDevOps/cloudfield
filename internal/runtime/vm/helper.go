@@ -11,6 +11,7 @@ import (
 
 type helper interface {
 	Ping(context.Context) (guest.Info, error)
+	Redial()
 	Boot(context.Context, guest.BootSpec) error
 	Spawn(context.Context, guest.ProcessSpec) (process, error)
 	Process(id string) process

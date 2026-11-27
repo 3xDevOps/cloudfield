@@ -48,6 +48,10 @@ In order, as PID 1:
     only (vsock CID 2): a process in the VM that reached it through vsock
     loopback could start processes as root.
 
+While it waits for a booting or restored VM, the server retries a failed
+connection to that port every 10 ms. At other times its client reconnects with
+a backoff that grows from 50 ms to 1 s.
+
 A step that fails is logged on the serial console and reported by the API's
 `Info` as `boot_error`; the helper still serves, so the server can show the
 error. When it cannot serve at all, it powers the VM off.
