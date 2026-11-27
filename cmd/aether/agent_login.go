@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/rand"
 	"errors"
+	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -34,6 +35,11 @@ func agentLogin(args []string) error {
 	if name == "" || fs.NArg() > 0 {
 		return errors.New(usage)
 	}
+	adding := false
+	fs.Visit(func(f *flag.Flag) { adding = adding || f.Name == "as" })
+	if adding && *as == "" {
+		return errors.New("--as needs a name: cloudfield agent login " + name + " --as <name>")
+	}
 	var agent protocol.AgentInfo
 	found := false
 	if err := withControl(func(c *protocol.Client) error {
@@ -51,7 +57,7 @@ func agentLogin(args []string) error {
 	case !agent.Installed:
 		return fmt.Errorf("agent %s is not installed in your environment; run aether agent add %s first", agent.Name, agent.Name)
 	}
-	if *as != "" {
+	if adding {
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
 			return fmt.Errorf("%s signs in with %s, which needs typed input, so it needs a terminal. The human runs this in their own terminal:\n"+
 				"  cloudfield agent login %s --as %s", agent.Name, agent.LoginCommand, agent.Name, *as)

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/3xDevOps/cloudfield/internal/cli"
+	"github.com/3xDevOps/cloudfield/internal/envname"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
 )
 
@@ -68,5 +70,22 @@ func TestLoginIDResolvesTheCallersOwnLogin(t *testing.T) {
 	}
 	if _, err := loginID(logins, "personal"); err == nil || err.Error() != `you have no login named "personal"; cloudfield agent logins lists yours` {
 		t.Fatalf("loginID(personal) = %v; want the names it takes", err)
+	}
+}
+
+// unlinked points the CLI at an empty config directory, so a command that
+// reaches the server fails with cli.ErrNotLinked instead of dialling one.
+func unlinked(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(cli.ConfigDirEnv, dir)
+	t.Setenv(envname.New(cli.ConfigDirEnv), dir)
+}
+
+func TestAgentLoginRefusesAnEmptyAs(t *testing.T) {
+	unlinked(t)
+	for _, args := range [][]string{{"claude", "--as="}, {"claude", "--as", ""}} {
+		if err := agentLogin(args); err == nil || err.Error() != "--as needs a name: cloudfield agent login claude --as <name>" {
+			t.Errorf("agentLogin(%q) = %v; want the empty name refused before any sign-in", args, err)
+		}
 	}
 }
