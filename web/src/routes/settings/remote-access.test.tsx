@@ -197,17 +197,7 @@ describe('a retiring or retired edge address', () => {
     expect(caution.compareDocumentPosition(callout.getByText(/^Move this server to/)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
-  it('says to change the service flag when edge_url came from --edge-url', () => {
-    seed('super_admin', { ...claimed, notice: { state: 'retiring', replacement, edge_url_flag: true } })
-    render(<RemoteAccessSection client={api()} />)
-    const callout = within(screen.getByRole('status'))
-    expect(callout.getByText(`The service starts the server with --edge-url ${edgeURL}, and a restart keeps that flag, so edge move does not apply. Change the flag to ${replacement} where the service starts cloudfield-server serve, then restart it on the server's host:`)).toBeTruthy()
-    expect(callout.getByText('sudo systemctl restart aether-server')).toBeTruthy()
-    expect(callout.queryByText(/edge move https/)).toBeNull()
-  })
-
   it.each([
-    ['the service flag', { edge_url_flag: true }],
     ['a move waiting for a restart', { restart_pending: true, moved_to: replacement }],
   ] as const)('cautions a first-use notice and refuses an unusable address before %s', (_, extra) => {
     seed('super_admin', { ...claimed, notice: { state: 'retiring', replacement, first_use: true, ...extra } })
@@ -226,7 +216,7 @@ describe('a retiring or retired edge address', () => {
   it('tells other members a move waits for a restart', () => {
     seed('collaborator', { ...claimed, notice: { state: 'retiring', replacement, restart_pending: true } })
     render(<RemoteAccessSection client={api()} />)
-    expect(screen.getByText(`${edgeURL} is retiring; its new address is ${replacement}. The server is moved and takes the new address when it restarts.`)).toBeTruthy()
+    expect(screen.getByText(`${edgeURL} is retiring; the edge recommends ${replacement}. A change of the server's edge address is configured and waits for a restart.`)).toBeTruthy()
   })
 
   it('says to restart once the options file names the new address', () => {
@@ -266,7 +256,7 @@ describe('a retiring or retired edge address', () => {
     seed('collaborator', { ...claimed, notice: { state: 'retiring', replacement, date: '2027-03-01' } })
     render(<RemoteAccessSection client={api()} />)
     expect(screen.queryByRole('status')).toBeNull()
-    expect(screen.getByText(`${edgeURL} is retiring on 2027-03-01; its new address is ${replacement}. A super admin moves the server.`)).toBeTruthy()
+    expect(screen.getByText(`${edgeURL} is retiring on 2027-03-01; the edge recommends ${replacement}. A super admin moves the server.`)).toBeTruthy()
     expect(screen.queryByText(/cloudfield-server/)).toBeNull()
   })
 })

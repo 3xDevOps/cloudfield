@@ -67,7 +67,7 @@ export function RemoteAccessSection({ client }: { client: Api }) {
       )}
       <SettingRow label="Edge URL" help={edge.edge_url || 'Off'} />
       {notice && !admin && (
-        <SettingRow label="Address" help={`${notice.reason}; its new address is ${notice.notice.replacement}. ${notice.notice.restart_pending ? 'The server is moved and takes the new address when it restarts.' : 'A super admin moves the server.'}`} />
+        <SettingRow label="Address" help={`${notice.reason}; the edge recommends ${notice.notice.replacement}. ${notice.notice.restart_pending ? "A change of the server's edge address is configured and waits for a restart." : 'A super admin moves the server.'}`} />
       )}
       <SettingRow label="Server id">
         <CopyableCommand command={edge.server_id} />
