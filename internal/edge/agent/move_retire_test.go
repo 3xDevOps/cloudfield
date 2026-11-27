@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -192,17 +193,21 @@ func TestMoveFromARetiredAddress(t *testing.T) {
 	}
 }
 
-// at443 serves e over TLS as origin, an https origin written with :443,
-// for the rest of the test: every dial of its host reaches e.
-func at443(t *testing.T, e *fakeEdge, origin string) {
+// servedAs serves e over TLS as origin, an https origin on a host name
+// of its own, for the rest of the test: every dial of that host reaches e,
+// on any port.
+func servedAs(t *testing.T, e *fakeEdge, origin string) {
 	t.Helper()
 	srv := httptest.NewTLSServer(e.srv.Config.Handler)
 	t.Cleanup(srv.Close)
-	host := strings.TrimPrefix(origin, "https://")
+	u, err := url.Parse(origin)
+	if err != nil {
+		t.Fatal(err)
+	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // the test edge's certificate names 127.0.0.1
 	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
-		if addr == host {
+		if host, _, _ := net.SplitHostPort(addr); host == u.Hostname() {
 			addr = srv.Listener.Addr().String()
 		}
 		return (&net.Dialer{}).DialContext(ctx, network, addr)
@@ -211,19 +216,20 @@ func at443(t *testing.T, e *fakeEdge, origin string) {
 	http.DefaultTransport = transport
 	t.Cleanup(func() { http.DefaultTransport = prev })
 	e.origin = origin
+	e.refuseBadSignatures = true
 }
 
 // An edge that writes a relay origin with :443 verifies the enrollment
 // against that spelling: edge move enrolls there and writes it, whether
-// the target was typed with the port or without, and whether the old
-// address still answers or refuses with 410.
+// the target was typed with the port or without, the old address still
+// answers or refuses with 410, and whatever spelling a stored notice has.
 func TestMoveToAnOriginWrittenWith443(t *testing.T) {
-	const target = "https://target.example.test:443"
+	const target, bare = "https://target.example.test:443", "https://target.example.test"
 	for _, retired := range []bool{false, true} {
-		for _, typed := range []string{target, "https://target.example.test"} {
+		for _, typed := range []string{target, bare} {
 			from := newFakeEdge(t)
 			to := newFakeEdgeWithKey(t, from.priv)
-			at443(t, to, target)
+			servedAs(t, to, target)
 			origin := from.origin
 			for _, e := range []*fakeEdge{from, to} {
 				e.relayOrigins = []string{origin, target}
@@ -234,23 +240,34 @@ func TestMoveToAnOriginWrittenWith443(t *testing.T) {
 				signedNotices(to, to.priv, edgeproto.Notices{{State: edgeproto.NoticeRetired, Origin: origin, Replacement: target}})
 			}
 			a := moveAgentAt(t, origin, from.pub)
-			if retired {
-				held, err := a.state.HoldPin()
-				if err != nil {
-					t.Fatal(err)
-				}
-				err = a.state.writeNotices(held.p, StoredNotices{ServerID: a.serverID, Received: time.Now(),
-					Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: origin, Replacement: target}}})
-				held.Close()
-				if err != nil {
-					t.Fatal(err)
-				}
+			held, err := a.state.HoldPin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = a.state.writeNotices(held.p, StoredNotices{ServerID: a.serverID, Received: time.Now(),
+				Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: origin, Replacement: bare}}})
+			held.Close()
+			if err != nil {
+				t.Fatal(err)
 			}
 			got, err := moveHeld(t, a, typed)
 			if want := (Moved{To: target, Retired: retired}); err != nil || got != want {
 				t.Errorf("retired %v, typed %s: %+v, %v; want %+v", retired, typed, got, err, want)
 			}
 		}
+	}
+}
+
+// An edge that verifies neither spelling refuses the move, and the error
+// names both spellings tried.
+func TestMoveTriesBothSpellingsOf443(t *testing.T) {
+	const bare = "https://target.example.test"
+	from := retiredHost(t, "retired")
+	to := newFakeEdge(t)
+	servedAs(t, to, "https://target.example.test:8443")
+	got, err := moveHeld(t, moveAgentAt(t, from, to.pub), bare)
+	if err == nil || !strings.HasSuffix(err.Error(), "; tried "+bare+" and "+bare+":443") {
+		t.Fatalf("move: %+v, %v; want both spellings named", got, err)
 	}
 }
 

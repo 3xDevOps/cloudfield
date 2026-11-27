@@ -47,6 +47,9 @@ type fakeEdge struct {
 	// relayOrigins is Ready.RelayOrigins.
 	version      int
 	relayOrigins []string
+	// refuseBadSignatures closes a connection whose enrollment signature
+	// does not verify, as a relay does, instead of failing the test.
+	refuseBadSignatures bool
 
 	mu      sync.Mutex
 	tickets map[string]string
@@ -132,7 +135,9 @@ func (e *fakeEdge) control(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := edgeproto.VerifyEnrollment(key, e.origin, nonce, hello.Signature)
 	if err != nil {
-		e.t.Errorf("enrollment signature: %v", err)
+		if !e.refuseBadSignatures {
+			e.t.Errorf("enrollment signature: %v", err)
+		}
 		return
 	}
 	e.mu.Lock()

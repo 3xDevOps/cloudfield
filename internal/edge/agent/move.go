@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"net/http"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -131,14 +132,6 @@ func (a *Agent) Move(ctx context.Context, target string, held *HeldPin, cmds Com
 	moved := Moved{Retired: errors.As(err, &refused) && refused.Status == http.StatusGone}
 	switch {
 	case moved.Retired:
-		// The stored notices only tell how the edge spells to; the move
-		// still rests on this run's probe.
-		stored, _ := a.state.Notices(a.serverID)
-		replacements := make([]string, 0, len(stored.Notices))
-		for _, n := range stored.Notices {
-			replacements = append(replacements, n.Replacement)
-		}
-		spelled = spelling(replacements, to, spelled)
 	case errors.Is(err, errNoAnswer):
 		return Moved{}, fmt.Errorf("%w. %s", err, manualMove(cmds, from, to, true))
 	case err != nil:
@@ -152,7 +145,6 @@ func (a *Agent) Move(ctx context.Context, target string, held *HeldPin, cmds Com
 		}
 		spelled = spelling(first.ready.RelayOrigins, to, spelled)
 	}
-	moved.To = spelled
 	info, err := FetchEdgeInfo(ctx, spelled)
 	if err != nil {
 		return Moved{}, err
@@ -167,9 +159,19 @@ func (a *Agent) Move(ctx context.Context, target string, held *HeldPin, cmds Com
 			to, edgeproto.EdgeKeyFingerprint(info.Key), edgeproto.EdgeKeyFingerprint(pinned), source)
 	}
 	second, err := a.probe(ctx, spelled, &held.p)
+	if other, ok := otherSpelling(spelled); err != nil && ok {
+		// The edge verifies the signature against its own spelling, with
+		// or without :443, which nothing before this probe tells.
+		var retryErr error
+		if second, retryErr = a.probe(ctx, other, &held.p); retryErr != nil {
+			return Moved{}, fmt.Errorf("%w; tried %s and %s", err, spelled, other)
+		}
+		spelled, err = other, nil
+	}
 	if err != nil {
 		return Moved{}, err
 	}
+	moved.To = spelled
 	if err = refuseRetiringTarget(second.notices, cmds, from, to); err != nil {
 		return Moved{}, err
 	}
@@ -204,6 +206,22 @@ func refuseRetiringTarget(notices []edgeproto.Notice, cmds Commands, from, to st
 	}
 	return fmt.Errorf("the edge says, signed with the pinned key, that %s; move there instead: %s",
 		retiringClause(n), cmds.Server("edge move "+shellquote.Quote(n.Replacement)))
+}
+
+// otherSpelling is the https origin spelled with :443 when it has no port,
+// and without when it has :443.
+func otherSpelling(origin string) (string, bool) {
+	u, err := url.Parse(origin)
+	if err != nil || u.Scheme != "https" {
+		return "", false
+	}
+	switch u.Port() {
+	case "":
+		return origin + ":443", true
+	case "443":
+		return strings.TrimSuffix(origin, ":443"), true
+	}
+	return "", false
 }
 
 // spelling is how origins, as an edge writes them, spell the canonical
