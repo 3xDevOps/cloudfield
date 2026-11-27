@@ -1360,7 +1360,8 @@ another agent`. Who may turn them off is in [teams.md](teams.md#subsessions).
 - A subsession the server has no memory or disk for is not refused. It
   returns to `queued` with the refusal in `error`, such as `scheduler:
   insufficient host memory headroom: ...`, and its parent's inbox says once
-  that it is waiting. The server tries it again every 30 seconds, never
+  that it is waiting. `cloudfield subsessions` prints the refusal after
+  `waiting for room:`. The server tries it again every 30 seconds, never
   ahead of an older queued subsession of the same parent, and it starts when
   there is room. It is `refused` with the last refusal when there is still
   none 24 hours after it was asked for.

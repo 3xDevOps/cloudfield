@@ -1133,6 +1133,7 @@ func TestSubsessionWithNoRoomWaitsAndStartsLater(t *testing.T) {
 	parent := h.run(h.ada.ID, domain.LaunchACP, "parent")
 	refusal := fmt.Errorf("%w: 100 available bytes; reserve 200 bytes", errNoRoom)
 	h.runs.full = refusal
+	h.mail.db = h.db
 	first := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex", Task: "first"})
 	h.settle()
 	second := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex", Task: "second"})
@@ -1156,8 +1157,18 @@ func TestSubsessionWithNoRoomWaitsAndStartsLater(t *testing.T) {
 		t.Fatalf("waiting notices = %d, want 1", waiting)
 	}
 
+	// The next refusal names other figures; the parent is not told again.
+	h.runs.mu.Lock()
+	h.runs.full = fmt.Errorf("%w: 150 available bytes; reserve 200 bytes", errNoRoom)
+	h.runs.mu.Unlock()
 	h.now = h.now.Add(capacityRetryEvery)
 	h.settle()
+	if child, err = h.db.GetChild(h.ctx, domain.RunID(first.RunID)); err != nil || !strings.Contains(child.Error, "150 available") {
+		t.Fatalf("subsession refused again = %+v, %v; want the latest refusal", child, err)
+	}
+	if len(h.mail.errs) != 0 {
+		t.Fatalf("notices refused by the mailbox = %v, want none sent twice", h.mail.errs)
+	}
 	if h.runs.attempts != 3 {
 		t.Fatalf("launch attempts after the retry floor = %d, want 3: one more for each subsession", h.runs.attempts)
 	}

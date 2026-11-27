@@ -27,12 +27,15 @@ func (s *Service) dispatch(ctx context.Context) error {
 	}
 	parents := map[domain.RunID][]*domain.ChildReservation{}
 	var order []domain.RunID
+	waiting := map[domain.RunID]bool{}
 	for _, c := range queued {
+		waiting[c.RunID] = true
 		if parents[c.ParentRunID] == nil {
 			order = append(order, c.ParentRunID)
 		}
 		parents[c.ParentRunID] = append(parents[c.ParentRunID], c)
 	}
+	s.forgetRetries(waiting)
 	for _, parent := range order {
 		list := parents[parent]
 		limits, err := s.cfg.Store.WorkspaceChildLimits(ctx, list[0].WorkspaceID)
@@ -51,7 +54,8 @@ func (s *Service) dispatch(ctx context.Context) error {
 				break
 			}
 			list = list[1:]
-			if err := s.cfg.Store.SetChildState(ctx, c.RunID, domain.ChildLaunching, "", domain.ChildQueued); err != nil {
+			// A subsession tried again keeps the refusal it waits on in sight.
+			if err := s.cfg.Store.SetChildState(ctx, c.RunID, domain.ChildLaunching, c.Error, domain.ChildQueued); err != nil {
 				if errors.Is(err, store.ErrConflict) {
 					free++
 					continue
@@ -152,9 +156,12 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 		},
 	})
 	if err != nil && !created {
+		// Queued again before the lock goes, so a cancel behind it finds
+		// the subsession in the queue.
+		waits := s.cfg.Runs.CapacityRefused(err) && s.cfg.Now().Sub(c.CreatedAt) < capacityWaitLimit && s.wait(ctx, c, err.Error())
 		unlock()
-		if s.cfg.Runs.CapacityRefused(err) && s.cfg.Now().Sub(c.CreatedAt) < capacityWaitLimit {
-			s.wait(ctx, c, err.Error())
+		if waits {
+			s.toldWaiting(ctx, c, err.Error())
 			return
 		}
 		refuse(err.Error())
@@ -173,20 +180,42 @@ const (
 )
 
 // wait returns a subsession the server had no room for to the queue, to be
-// tried again after capacityRetryEvery, and tells its parent once.
-func (s *Service) wait(ctx context.Context, c *domain.ChildReservation, reason string) {
+// tried again after capacityRetryEvery, and reports whether it did.
+func (s *Service) wait(ctx context.Context, c *domain.ChildReservation, reason string) bool {
 	s.mu.Lock()
 	s.retryAt[c.RunID] = s.cfg.Now().Add(capacityRetryEvery)
 	s.mu.Unlock()
 	if err := s.cfg.Store.SetChildState(ctx, c.RunID, domain.ChildQueued, reason, domain.ChildLaunching); err != nil {
 		slog.Warn("subsessions: queue a subsession the server had no room for", "child", c.RunID, "error", err)
-		return
+		return false
 	}
 	slog.Info("subsessions: no room to start a subsession; it waits", "child", c.RunID, "parent", c.ParentRunID, "reason", reason)
+	return true
+}
+
+// toldWaiting tells subscribers a subsession waits for room, and its parent
+// the first time it does.
+func (s *Service) toldWaiting(ctx context.Context, c *domain.ChildReservation, reason string) {
 	s.publish(ctx, c.ParentRunID, "")
+	key := "child-waiting:" + string(c.RunID)
+	if _, err := s.cfg.Store.GetRunMessageByIdempotency(ctx, c.ParentRunID, key); !errors.Is(err, store.ErrNotFound) {
+		return
+	}
 	_ = s.notify(ctx, c.ParentRunID, c.ParentRunID,
 		fmt.Sprintf("Subsession %s (%s) is waiting to start: %s\nIt starts by itself when the server has room, and is refused if it has none within %s of your request. To stop waiting: aether-internal subsession cancel --run-id %s",
-			c.RunID, c.Purpose, reason, capacityWaitLimit, c.RunID), "child-waiting:"+string(c.RunID))
+			c.RunID, c.Purpose, reason, capacityWaitLimit, c.RunID), key)
+}
+
+// forgetRetries drops the retry times that are due of subsessions no longer
+// in the queue: cancelled, or stopped with their parent.
+func (s *Service) forgetRetries(queued map[domain.RunID]bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for run, at := range s.retryAt {
+		if !queued[run] && !s.cfg.Now().Before(at) {
+			delete(s.retryAt, run)
+		}
+	}
 }
 
 // retryLater reports whether run waits for room and its next attempt is not
