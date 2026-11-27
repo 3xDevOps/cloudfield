@@ -459,6 +459,89 @@ describe('Claude Code logins', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(screen.getByRole('list', { name: 'Agents' })).toBeDefined()
   })
+
+  describe('order', () => {
+    const three = [
+      { id: 'default', name: 'default', kind: 'subscription' as const, automatic: true, shared: true, position: 0 },
+      { id: 'lgn-work0000001', name: 'work', kind: 'subscription' as const, automatic: true, shared: true, position: 1 },
+      { id: 'lgn-console0001', name: 'console', kind: 'console' as const, per_use: true, automatic: false, shared: true, position: 2 },
+    ]
+    let served = three
+    // Each read answers when the test says, with the logins the server keeps then.
+    let reads: ((error?: Error) => void)[] = []
+    const answer = (index: number, error?: Error) => act(async () => reads[index]!(error))
+    const row = (name: string) => screen.getByRole('listitem', { name: `Login ${name}` })
+    const arrows = () => within(screen.getByRole('list', { name: 'Claude Code logins in priority order' })).getAllByRole('button', { name: /^Move / })
+    const shownOrder = () => within(screen.getByRole('list', { name: 'Claude Code logins in priority order' })).getAllByRole('listitem').map((item) => item.getAttribute('aria-label'))
+
+    beforeEach(() => {
+      served = three
+      reads = []
+      vi.mocked(api.agentLoginList).mockImplementation(() => new Promise((resolve, reject) => {
+        reads.push((error) => (error ? reject(error) : resolve(served.map((login, position) => ({ ...login, position })))))
+      }))
+      vi.mocked(api.accountList).mockResolvedValue({ accounts: [], shared_with: [] })
+      onTestFinished(() => { vi.mocked(api.agentLoginList).mockResolvedValue(two) })
+    })
+
+    it('keeps the arrows off until a list read after the move lands, and builds the next move on it', async () => {
+      let ordered = () => {}
+      let switched = () => {}
+      vi.mocked(api.agentLoginOrder).mockImplementation((_agent, ids) => new Promise((resolve) => {
+        ordered = () => {
+          served = ids.map((id) => served.find((login) => login.id === id)!)
+          resolve({})
+        }
+      }))
+      vi.mocked(api.agentLoginAutomatic).mockImplementation((_agent, id, on) => new Promise((resolve) => {
+        switched = () => {
+          served = served.map((login) => (login.id === id ? { ...login, automatic: on } : login))
+          resolve({})
+        }
+      }))
+      mount()
+      await flush()
+      await answer(0)
+      fireEvent.click(within(row('default')).getByRole('button', { name: 'Move default down' }))
+      fireEvent.click(within(row('console')).getByRole('switch', { name: 'Automatic' }))
+      await act(async () => ordered())
+      await act(async () => switched())
+      expect(reads).toHaveLength(3)
+      // The move's read answers last but one, and is dropped for the switch's newer read.
+      await answer(1)
+      expect(shownOrder()).toEqual(['Login default', 'Login work', 'Login console'])
+      expect(arrows().every((arrow) => arrow.hasAttribute('disabled'))).toBe(true)
+      await answer(2)
+      expect(shownOrder()).toEqual(['Login work', 'Login default', 'Login console'])
+      expect(within(row('default')).getByRole('button', { name: 'Move default down' })).toHaveProperty('disabled', false)
+
+      fireEvent.click(within(row('default')).getByRole('button', { name: 'Move default down' }))
+      expect(api.agentLoginOrder).toHaveBeenLastCalledWith('claude', ['lgn-work0000001', 'lgn-console0001', 'default'])
+    })
+
+    it('keeps the arrows off with the read error and Retry when the read after a committed move fails', async () => {
+      vi.mocked(api.agentLoginOrder).mockImplementation(async (_agent, ids) => {
+        served = ids.map((id) => served.find((login) => login.id === id)!)
+        return {}
+      })
+      mount()
+      await flush()
+      await answer(0)
+      fireEvent.click(within(row('default')).getByRole('button', { name: 'Move default down' }))
+      await waitFor(() => expect(reads).toHaveLength(2))
+      await answer(1, new Error('agent.login.list: server unreachable: dial tcp: connection refused'))
+      const failed = within(claudeRow()).getByRole('alert')
+      expect(failed.textContent).toContain('Logins not read: agent.login.list: server unreachable: dial tcp: connection refused')
+      expect(shownOrder()).toEqual(['Login default', 'Login work', 'Login console'])
+      expect(within(row('default')).queryByRole('status')).toBeNull()
+      expect(arrows().every((arrow) => arrow.hasAttribute('disabled'))).toBe(true)
+
+      fireEvent.click(within(failed).getByRole('button', { name: 'Retry' }))
+      await answer(2)
+      expect(shownOrder()).toEqual(['Login work', 'Login default', 'Login console'])
+      expect(within(row('default')).getByRole('button', { name: 'Move default down' })).toHaveProperty('disabled', false)
+    })
+  })
 })
 
 describe('agent config files', () => {

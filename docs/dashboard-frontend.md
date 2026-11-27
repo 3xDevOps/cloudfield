@@ -6716,10 +6716,12 @@ one at either end drawn without a frame
 (see [Actions](#actions)): while its call and the read of the list after it
 are pending, it alone is locked and shows "Saving…" beside a switch or
 "Moving…" in the moved row, then "Still waiting for the server…" past the
-deadline. Every arrow waits for an order call, since the next move is built
-from the order the server keeps. Any outcome of a change, an answer, a
-refusal or a failure that may hide a committed change, reads the list again,
-and only the newest read of the list lands. Each login shows its name, kind and plan, "· tried
+deadline. Any outcome of a change, an answer, a refusal or a failure that
+may hide a committed change, reads the list again, and only the newest read
+of the list lands; a call waits for that newest read. Every arrow waits for
+an order call until a list read after it lands, since the next move is built
+from the order the server keeps: if that read fails, the arrows stay off
+under the "Logins not read" error until **Retry** lands a list. Each login shows its name, kind and plan, "· tried
 first" in the same muted text on the first login with Automatic on (the login a launch that
 names none starts from before usage is weighed), a **Billed per use** badge,
 and, in the needs-you colour with a gauge icon, "At its limit (<window>) ·

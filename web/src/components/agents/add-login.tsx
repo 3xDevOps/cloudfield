@@ -35,7 +35,7 @@ function AddedSwitches({ login, sharedWith, client, onChanged }: {
   login: AgentLogin
   sharedWith: Member[] | null
   client: Pick<Api, 'agentLoginAutomatic' | 'agentLoginShare'>
-  onChanged: () => Promise<void>
+  onChanged: () => Promise<unknown>
 }) {
   const { pending, error, act } = useLoginControls(onChanged)
   return (
@@ -69,7 +69,7 @@ export function AddLogin({ client, sharedWith, logins, onChanged, running, ended
   /** Whom the account is shared with; null until read. */
   sharedWith: Member[] | null
   logins: AgentLogin[] | null
-  onChanged: () => Promise<void>
+  onChanged: () => Promise<unknown>
   running: LoginSignIn | null
   ended: { id: string; outcome: LoginSignInOutcome } | null
   resume?: boolean

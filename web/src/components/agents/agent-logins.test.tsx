@@ -33,7 +33,7 @@ const logins: AgentLogin[] = [
 
 function show(over: Parameters<typeof fakeApi>[0] = {}, sharedWith: Member[] | null = [bob]) {
   const client = fakeApi(over)
-  const onChanged = vi.fn(async () => {})
+  const onChanged = vi.fn(async () => true)
   render(<LoginList logins={logins} sharedWith={sharedWith} client={client} onChanged={onChanged} />)
   return { client, onChanged }
 }
@@ -130,7 +130,7 @@ describe('login list', () => {
   it('keeps the arrows off until the list is read again after a move, and reads it again after a refused one', async () => {
     const user = userEvent.setup()
     let reread = () => {}
-    const onChanged = vi.fn(() => new Promise<void>((resolve) => { reread = resolve }))
+    const onChanged = vi.fn(() => new Promise<boolean>((resolve) => { reread = () => resolve(true) }))
     const client = fakeApi({
       agentLoginOrder: vi.fn<Api['agentLoginOrder']>().mockResolvedValueOnce({}).mockRejectedValueOnce(new Error('login_ids must name each of your logins once, default included')),
     })
@@ -202,20 +202,20 @@ describe('login list', () => {
 
   it('says sessions can move onto a login billed per use and whom that charges, and whose sessions it serves', () => {
     const client = fakeApi()
-    const { unmount } = render(<LoginList logins={logins.map((login) => ({ ...login, automatic: true }))} sharedWith={[]} client={client} onChanged={async () => {}} />)
+    const { unmount } = render(<LoginList logins={logins.map((login) => ({ ...login, automatic: true }))} sharedWith={[]} client={client} onChanged={async () => true} />)
     expect(row('console').textContent).toContain('Sessions can move here when the automatic logins above it run out, charged per use to Alice API.')
     expect(row('work').textContent).not.toContain('Sessions can move here')
     unmount()
 
     const carol = { ...bob, id: 'member-carol', display_name: 'Carol' }
     const shared = logins.map((login) => ({ ...login, automatic: true }))
-    const { unmount: again } = render(<LoginList logins={shared} sharedWith={[bob, carol]} client={client} onChanged={async () => {}} />)
+    const { unmount: again } = render(<LoginList logins={shared} sharedWith={[bob, carol]} client={client} onChanged={async () => true} />)
     expect(row('console').textContent).toContain(`Sessions of ${bob.display_name} and Carol can run here too, charged per use to Alice API.`)
     expect(row('default').textContent).toContain(`Sessions of ${bob.display_name} and Carol can run here too.`)
     expect(row('default').textContent).not.toContain('charged')
     again()
 
-    render(<LoginList logins={shared.map((login) => ({ ...login, organization_name: undefined }))} sharedWith={[bob]} client={client} onChanged={async () => {}} />)
+    render(<LoginList logins={shared.map((login) => ({ ...login, organization_name: undefined }))} sharedWith={[bob]} client={client} onChanged={async () => true} />)
     expect(row('console').textContent).toContain(`Sessions of ${bob.display_name} can run here too, charged per use to login console.`)
     expect(within(row('console')).getByTitle('Billed per use to login console')).toBeDefined()
   })
@@ -224,14 +224,14 @@ describe('login list', () => {
     const client = fakeApi()
     const shared = logins.map((login) => ({ ...login, automatic: true }))
     const describedBy = (name: string) => within(row('console')).getByRole('switch', { name }).getAttribute('aria-describedby')
-    const wide = render(<LoginList logins={shared} sharedWith={[bob]} client={client} onChanged={async () => {}} />)
+    const wide = render(<LoginList logins={shared} sharedWith={[bob]} client={client} onChanged={async () => true} />)
     expect(describedBy('Automatic')).toBeNull()
     expect(describedBy('Use for shares')).toBeNull()
     expect(row('console').textContent).toContain('Sessions can move here when the automatic logins above it run out, charged per use to Alice API.')
     wide.unmount()
 
     atViewport(1023)
-    render(<LoginList logins={shared} sharedWith={[bob]} client={client} onChanged={async () => {}} />)
+    render(<LoginList logins={shared} sharedWith={[bob]} client={client} onChanged={async () => true} />)
     expect(document.getElementById(describedBy('Automatic')!)!.textContent).toBe('Sessions can move here when the automatic logins above it run out, charged per use to Alice API.')
     expect(document.getElementById(describedBy('Use for shares')!)!.textContent).toBe(`Sessions of ${bob.display_name} can run here too, charged per use to Alice API.`)
   })
@@ -266,20 +266,20 @@ describe('login list', () => {
   })
 
   it('claims nothing about shares while whom the account is shared with is unread, and shows why it is', () => {
-    const { unmount } = render(<LoginList logins={logins} sharedWith={null} client={fakeApi()} onChanged={async () => {}} />)
+    const { unmount } = render(<LoginList logins={logins} sharedWith={null} client={fakeApi()} onChanged={async () => true} />)
     const section = screen.getByRole('region', { name: 'Claude Code logins' })
     expect(section.textContent).not.toContain('not shared')
     expect(section.textContent).not.toContain('Sessions of')
     unmount()
 
-    render(<LoginList logins={logins} sharedWith={null} sharedError="account.list: server unreachable: dial tcp: connection refused" client={fakeApi()} onChanged={async () => {}} />)
+    render(<LoginList logins={logins} sharedWith={null} sharedError="account.list: server unreachable: dial tcp: connection refused" client={fakeApi()} onChanged={async () => true} />)
     expect(screen.getByRole('region', { name: 'Claude Code logins' }).textContent).toContain('Whom your account is shared with was not read: account.list: server unreachable: dial tcp: connection refused')
     expect(screen.getByRole('region', { name: 'Claude Code logins' }).textContent).not.toContain('not shared with anyone')
   })
 
   it('says a share cannot use a default login kept as an API key or a Console profile', () => {
     for (const kind of ['api_key', 'console'] as const) {
-      const { unmount } = render(<LoginList logins={[{ ...logins[0]!, kind, plan: undefined }, logins[1]!]} sharedWith={[bob]} client={fakeApi()} onChanged={async () => {}} />)
+      const { unmount } = render(<LoginList logins={[{ ...logins[0]!, kind, plan: undefined }, logins[1]!]} sharedWith={[bob]} client={fakeApi()} onChanged={async () => true} />)
       expect(row('default').textContent).toContain('A share cannot use this kind of login.')
       expect(row('default').textContent).not.toContain('Sessions of')
       unmount()
@@ -378,7 +378,7 @@ describe('login list reads', () => {
     const answers: ((list: AgentLogin[]) => void)[] = []
     const client = fakeApi({ agentLoginList: vi.fn(() => new Promise<AgentLogin[]>((resolve) => { answers.push(resolve) })) })
     const { result } = renderHook(() => useAgentLogins(client, true))
-    let newest = Promise.resolve()
+    let newest = Promise.resolve(true)
     act(() => { newest = result.current.reload() })
     await act(async () => {
       answers[1]!(logins)
@@ -412,7 +412,7 @@ describe('login list reads', () => {
     const user = userEvent.setup()
     const named = { ...logins[1]!, name: 'run-abcdefghij' }
     const client = fakeApi({ agentLoginRemove: vi.fn(async () => { throw new Error('login "run-abcdefghij" is in use by your sessions run-7kq2m9x4ab, run-8kq2m9x4ab (end them)') }) })
-    render(<LoginList logins={[logins[0]!, named]} sharedWith={[]} client={client} onChanged={async () => {}} />)
+    render(<LoginList logins={[logins[0]!, named]} sharedWith={[]} client={client} onChanged={async () => true} />)
     await user.click(screen.getByRole('button', { name: 'Remove run-abcdefghij' }))
     const dialog = screen.getByRole('alertdialog')
     await user.click(within(dialog).getByRole('button', { name: 'Remove' }))
@@ -478,7 +478,7 @@ describe('add login', () => {
       agentLoginAutomatic: vi.fn(() => new Promise<unknown>((resolve) => { answer = () => resolve({}) })),
       agentLoginShare: vi.fn(async () => { throw new Error('agent.login.share: store: not found') }),
     })
-    const onChanged = vi.fn(async () => {})
+    const onChanged = vi.fn(async () => true)
     const { rerender } = addLogin({ client, sharedWith: [bob], onChanged, ended: { id: login.id, outcome: { login } }, running: { id: login.id, name: 'api' }, resume: true })
     expect(screen.getByText(`Sessions of ${bob.display_name} can run here too, charged per use to Alice API.`)).toBeDefined()
     expect(screen.getByTitle('Billed per use to Alice API')).toBeDefined()
