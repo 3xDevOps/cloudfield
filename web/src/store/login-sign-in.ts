@@ -6,7 +6,7 @@ import type { AgentLogin } from '@/lib/types'
 import { sameIdentity, useStore } from '@/store'
 import { unanswered } from '@/store/optimistic'
 
-/** A sign-in of a new Claude Code login. `opened` is when its terminal first opened in this tab, which starts the server's 15 minutes. */
+/** A sign-in of a new Claude Code login. `opened` is when its terminal first opened in this tab, just after its container started the server's 15 minutes. */
 export type LoginSignIn = { id: string; name: string; opened?: number }
 export type LoginSignInOutcome = { login: AgentLogin } | { refused: string }
 

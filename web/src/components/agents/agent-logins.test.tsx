@@ -62,7 +62,7 @@ describe('login list', () => {
     expect(row('work').textContent).not.toContain('your sessions')
     expect(within(row('work')).queryByText('Billed per use')).toBeNull()
     expect(within(row('console')).getByTitle('Billed per use to Alice API').textContent).toContain('Billed per use')
-    expect(row('console').textContent).toContain('No share reaches it while Automatic is off.')
+    expect(row('console').textContent).toContain('No new teammate session starts or moves onto it while Automatic is off; one already on it keeps running.')
     expect(row('console').textContent).not.toContain('Automatic sessions can move here')
     expect(screen.getByText(`Your account is shared with ${bob.display_name}: logins on for shares serve their sessions too.`, { exact: false })).toBeDefined()
     expect(client.accountUsage).toHaveBeenCalledWith({})
@@ -510,7 +510,7 @@ describe('add login', () => {
     expect(onChanged).toHaveBeenCalledTimes(1)
     rerender(<AddLogin client={client} sharedWith={[bob]} logins={[{ ...login, automatic: false }]} onChanged={onChanged} running={null} ended={{ id: login.id, outcome: { login } }} onRunning={() => {}} onOpened={() => {}} onClose={() => {}} />)
     expect(screen.getByRole('switch', { name: 'Automatic' }).getAttribute('aria-checked')).toBe('false')
-    expect(screen.getByText('No share reaches it while Automatic is off.')).toBeDefined()
+    expect(screen.getByText('No new teammate session starts or moves onto it while Automatic is off; one already on it keeps running.')).toBeDefined()
 
     await user.click(screen.getByRole('switch', { name: 'Use for shares' }))
     expect(client.agentLoginShare).toHaveBeenCalledWith('claude', login.id, false)
@@ -619,7 +619,7 @@ describe('add login', () => {
     await user.type(screen.getByRole('textbox', { name: 'Name' }), 'spare')
     await user.click(screen.getByRole('button', { name: 'Start sign-in' }))
     const panel = await screen.findByRole('region', { name: 'Sign in to Claude Code' })
-    expect(panel.textContent).toContain('You can leave this page: the sign-in keeps running until 15 minutes after its start, and Add login offers Return to the sign-in.')
+    expect(panel.textContent).toContain('You can leave this page: the sign-in keeps running until about 15 minutes after it started, and Add login offers Return to the sign-in.')
     await waitFor(() => expect(signInSockets()).toHaveLength(1))
     accept(signInSockets()[0]!)
     expect(onOpened).toHaveBeenCalledWith('lgn-new00000004')
@@ -627,7 +627,7 @@ describe('add login', () => {
 
     const opened = Date.now() - 5 * 60_000
     addLogin({ client, running: { id: 'lgn-new00000004', name: 'spare', opened }, resume: true, onOpened })
-    expect(screen.getByRole('region', { name: 'Sign in to Claude Code' }).textContent).toContain('keeps running for 10 more minutes, and')
+    expect(screen.getByRole('region', { name: 'Sign in to Claude Code' }).textContent).toContain('keeps running for about 10 more minutes, and')
     await waitFor(() => expect(signInSockets()).toHaveLength(2))
     accept(signInSockets()[1]!)
     expect(onOpened).toHaveBeenCalledTimes(1)

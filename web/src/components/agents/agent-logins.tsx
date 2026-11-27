@@ -94,7 +94,7 @@ export function shareWords(login: AgentLogin, sharedWith: Member[] | null): stri
 export function reach(login: AgentLogin, sharedWith: Member[] | null): string | null {
   if (!login.shared) return null
   if (login.id === 'default' && (login.kind === 'api_key' || login.kind === 'console')) return 'A share cannot use this kind of login.'
-  if (!login.automatic) return 'No share reaches it while Automatic is off.'
+  if (!login.automatic) return 'No new teammate session starts or moves onto it while Automatic is off; one already on it keeps running.'
   return sharedWith?.length ? shareWords(login, sharedWith) : null
 }
 

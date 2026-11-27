@@ -3000,8 +3000,9 @@ moves to the first other one with usage left when it runs out." (the Agents
 page's lead says the same), and a picked login "The session starts on this
 login, and moves to the first other automatic login in your order with usage
 left when it runs out.", or, for a login billed per use, which has no usage
-windows, "… It has no usage windows, so it moves only when its credit is
-spent, to the first other automatic login …", or, when the dialog read it at
+windows, "… It has no usage windows, so it moves to the first other
+automatic login … only if Anthropic reports it out of credit with a
+usage-limit message; otherwise it stops with Anthropic's error.", or, when the dialog read it at
 its limit, "This login is at its limit, so the session may start on the
 first other automatic login in your order with usage left." A move goes only
 to a login with Automatic on, whatever the session started on. With
@@ -3016,8 +3017,8 @@ one, "Can start on <name>, billed per use to <organisation>." when the first
 automatic login is, and, while moves are on and another login with Automatic
 on that a move could reach is billed per use, "Can move to <name>, billed per
 use to <organisation>, when the automatic logins before it run out." ("when
-<picked> runs out" for a picked login, "when <picked>'s credit is spent" for
-one billed per use). Under those lines sits the dialog's one
+<picked> runs out" for a picked login, "if Anthropic reports <picked> out of
+credit" for one billed per use). Under those lines sits the dialog's one
 control for moves, the **Let this session move to another login** switch
 (**… login or account** when another account is shared with the caller;
 `MoveSwitch` in `login-picker.tsx`), for Automatic and for a picked login
@@ -6746,8 +6747,8 @@ organisation; with Use for shares on, a line only where it adds a fact
 beyond the switch: whom the share serves, "Sessions of <teammates> can run
 here too." (the teammates from `account.list` `shared_with`), which for a
 login billed per use adds ", charged per use to <organisation>" ("login
-<name>" when it has no organisation); "No share reaches it while Automatic
-is off."; or "A share cannot use this kind of login." for a default login
+<name>" when it has no organisation); "No new teammate session starts or
+moves onto it while Automatic is off; one already on it keeps running."; or "A share cannot use this kind of login." for a default login
 kept as an API key or a Console profile, which has no file a share mounts.
 Nothing is said while `account.list` is unanswered, whose error the list's
 lead shows verbatim, or when the account is shared with nobody, which the
@@ -6800,7 +6801,8 @@ and verbatim refusal as on its row, each with a line on what it does for
 this login: "Sessions can move here when the automatic logins above it run
 out.", adding ", charged per use to <organisation>" for a login billed per
 use, and "Sessions of <teammates> can run here too", with the same addition
-("No share reaches it while Automatic is off." once Automatic is off). The
+("No new teammate session starts or moves onto it while Automatic is off;
+one already on it keeps running." once Automatic is off). The
 callout is as wide as the form.
 The switches show the login as the page's read of the list holds it, which
 each change reads again. A refused sign-in shows the refusal with **Start
@@ -6815,8 +6817,9 @@ terminal is still starting, the panel says it is cancelling and sends it as
 soon as the terminal is up. A dropped socket reconnects to the same sign-in
 ("Reconnecting to the sign-in…") instead of ending it. A line under the
 buttons says the member can leave the page and how long the sign-in keeps
-running: "for <n> more minutes" when this tab opened its terminal, else
-"until 15 minutes after its start". While a sign-in runs, the Claude Code row
+running: "for about <n> more minutes" when this tab opened its terminal,
+else "until about 15 minutes after it started"; the server's 15 minutes run
+from the sign-in's container start, a little before its terminal opens. While a sign-in runs, the Claude Code row
 says "Sign-in for <name> is still running." with **Return to the sign-in**, which reattaches its terminal, and
 Add login leads with the same callout, its primary button and **Close**,
 which leaves the sign-in running, and hides the form until that sign-in ends. The server refuses another add

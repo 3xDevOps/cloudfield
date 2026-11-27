@@ -1449,7 +1449,7 @@ describe('login', () => {
     await pickOption(picker, 'console')
     expect(picker.textContent).toBe('console')
     expect(screen.getByText(/is billed per use to/).textContent).toBe('console is billed per use to Alice API.')
-    expect(screen.getByText(/^The session starts on this login/).textContent).toBe('The session starts on this login. It has no usage windows, so it moves only when its credit is spent, to the first other automatic login in your order with usage left.')
+    expect(screen.getByText(/^The session starts on this login/).textContent).toBe("The session starts on this login. It has no usage windows, so it moves to the first other automatic login in your order with usage left only if Anthropic reports it out of credit with a usage-limit message; otherwise it stops with Anthropic's error.")
     expect(screen.getByRole('switch', { name: 'Let this session move to another login' })).toBeDefined()
     expect(screen.queryByText(/^Can move to/)).toBeNull()
     setTask('on console')

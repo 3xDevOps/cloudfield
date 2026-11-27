@@ -16,7 +16,7 @@ import type { LoginSignIn, LoginSignInOutcome } from '@/store/login-sign-in'
 // The server refuses a second sign-in while one runs, naming it; its terminal reattaches until it ends.
 const runningSignIn = /the sign-in of login "([^"]+)" \((lgn-[^)\s]+)\) is still running/
 
-/** The server's AgentLoginSignInTimeout, counted from the terminal's first opening. */
+/** The server's AgentLoginSignInTimeout, counted from the sign-in's container start, a little before its terminal first opens. */
 const signInRunsMs = 15 * 60_000
 
 function LeaveNote({ opened }: { opened?: number }) {
@@ -24,7 +24,7 @@ function LeaveNote({ opened }: { opened?: number }) {
   const minutes = opened === undefined ? undefined : Math.max(1, Math.ceil((opened + signInRunsMs - Date.now()) / 60_000))
   return (
     <>
-      You can leave this page: the sign-in keeps running {minutes === undefined ? 'until 15 minutes after its start' : `for ${minutes} more minute${minutes === 1 ? '' : 's'}`}, and{' '}
+      You can leave this page: the sign-in keeps running {minutes === undefined ? 'until about 15 minutes after it started' : `for about ${minutes} more minute${minutes === 1 ? '' : 's'}`}, and{' '}
       <strong className="font-medium">Add login</strong> offers <strong className="font-medium">Return to the sign-in</strong>.
     </>
   )
@@ -49,7 +49,7 @@ function AddedSwitches({ login, sharedWith, client, onChanged }: {
       />
       <SwitchRow
         label="Use for shares"
-        detail={login.automatic ? shareWords(login, sharedWith) : 'No share reaches it while Automatic is off.'}
+        detail={login.automatic ? shareWords(login, sharedWith) : 'No new teammate session starts or moves onto it while Automatic is off; one already on it keeps running.'}
         checked={login.shared}
         pending={`shared:${login.id}` in pending}
         onChange={(on) => act(`shared:${login.id}`, '', client.agentLoginShare(loginAgent, login.id, on))}
