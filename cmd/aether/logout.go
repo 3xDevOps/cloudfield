@@ -54,7 +54,7 @@ func runLogout(args []string) error {
 	}
 	fmt.Printf("deleted the device token for %s here, but the edge did not confirm the sign-out: it answered that this address is retired and that its new address is %s.\n",
 		client.Host(), unrevoked.Replacement)
-	fmt.Printf("Device %s may still be signed in; %s.\n", unrevoked.Device.ID, devicesPage(dir, client.URL(), unrevoked.Replacement))
+	fmt.Printf("Device %s may still be signed in; %s.\n", edgeclient.Clean(unrevoked.Device.ID), devicesPage(dir, client.URL(), unrevoked.Replacement))
 	return printStillSignedIn(os.Stdout, dir)
 }
 
@@ -97,7 +97,7 @@ func devicesPage(dir, old, replacement string) string {
 	if page == "" {
 		return "revoke it on the Devices page of the sign-in origin of " + replacement
 	}
-	return "revoke it on " + page + "/devices"
+	return "revoke it on " + edgeclient.Clean(page) + "/devices"
 }
 
 // printStillSignedIn names the edges this machine still holds a token

@@ -227,16 +227,16 @@ func (c *Client) refusal(op, origin string, resp *http.Response, body []byte) *R
 		msg = msg[:maxShownText] + "..."
 	}
 	var retired string
-	if status == http.StatusGone && decoded && resp.Header.Get(edgeproto.HeaderVersion) != "" && eb.Retired != nil && clean(eb.Retired.Replacement) == eb.Retired.Replacement && edgeproto.NoticeOrigin(eb.Retired.Replacement) {
+	if status == http.StatusGone && decoded && resp.Header.Get(edgeproto.HeaderVersion) != "" && eb.Retired != nil && Clean(eb.Retired.Replacement) == eb.Retired.Replacement && edgeproto.NoticeOrigin(eb.Retired.Replacement) {
 		retired = eb.Retired.Replacement
 	}
-	return &RefusedError{Edge: HostOf(origin), URL: c.origin, Op: op, Status: status, Message: clean(msg), FromEdge: fromEdge, Retired: retired}
+	return &RefusedError{Edge: HostOf(origin), URL: c.origin, Op: op, Status: status, Message: Clean(msg), FromEdge: fromEdge, Retired: retired}
 }
 
-// clean replaces control and format characters, line and paragraph
+// Clean replaces control and format characters, line and paragraph
 // separators and invalid UTF-8 in text the edge sent before it reaches a
 // terminal or a page.
-func clean(s string) string {
+func Clean(s string) string {
 	s = strings.ToValidUTF8(s, "?")
 	return strings.Map(func(r rune) rune {
 		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
@@ -257,7 +257,7 @@ func checkVersion(host string, resp *http.Response) error {
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil {
-		return fmt.Errorf("%s sent protocol version %q", host, clean(v))
+		return fmt.Errorf("%s sent protocol version %q", host, Clean(v))
 	}
 	if err := edgeproto.CheckVersion(n); err != nil {
 		return fmt.Errorf("%s speaks edge protocol %d: %w", host, n, err)
@@ -376,5 +376,5 @@ func (c *Client) Servers(ctx context.Context) ([]edgeproto.ServerInfo, error) {
 // printable reports whether text from the edge is safe to print: short,
 // valid UTF-8, and free of control characters.
 func printable(s string) bool {
-	return len(s) <= 256 && clean(s) == s
+	return len(s) <= 256 && Clean(s) == s
 }

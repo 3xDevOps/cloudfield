@@ -60,7 +60,7 @@ func (c *Client) StartLogin(ctx context.Context, label string) (*Login, error) {
 	// edge may only send the person to its own sign-in pages.
 	if !onOrigin(resp.VerificationURI, signin) || !printable(resp.VerificationURI) {
 		return nil, fmt.Errorf("sign in: %s sent verification address %q, which is not on %s",
-			host, clean(resp.VerificationURI), signin)
+			host, Clean(resp.VerificationURI), signin)
 	}
 	if resp.DeviceCode == "" || resp.UserCode == "" || !printable(resp.UserCode) || !printable(resp.DeviceCode) {
 		return nil, fmt.Errorf("sign in: %s sent a malformed device authorization", host)

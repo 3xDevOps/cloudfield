@@ -272,6 +272,8 @@ func TestLogoutAtARetiredAddress(t *testing.T) {
 			map[string]string{newEdge + ":443": "https://other.new.example.test"}, "dev-1",
 			notified + "Device dev-1 may still be signed in; revoke it on https://other.new.example.test/devices.\n" +
 				"still signed in to new.example.test:443; sign out there with: aether logout --edge https://new.example.test:443\n", ""},
+		{"retired, a device id an older release stored", http.StatusGone, retired, nil, "dev-1\u202e\x1b[2J",
+			notified + "Device dev-1??[2J may still be signed in; ask whoever runs the edge for the address of its Devices page and revoke it there.\n", ""},
 		{"gone without retired", http.StatusGone, `{"error":"gone"}`, nil, "dev-1", "", "sign out: SIGNIN refused: gone (HTTP 410); the token is still valid and kept in "},
 		{"forbidden", http.StatusForbidden, `{"error":"no"}`, nil, "dev-1", "", "sign out: SIGNIN refused: no (HTTP 403); the token is still valid and kept in "},
 	} {
