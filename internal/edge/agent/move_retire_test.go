@@ -18,6 +18,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -574,15 +575,19 @@ func TestMoveDoesNotProbeATargetRuledOut(t *testing.T) {
 	to := newFakeEdgeWithKey(t, from.priv)
 	from.relayOrigins = []string{from.origin, to.origin}
 	signedNotices(from, from.priv, edgeproto.Notices{{State: edgeproto.NoticeRetired, Origin: to.origin, Replacement: from.origin}})
+	var requests atomic.Int32
+	inner := to.srv.Config.Handler
+	to.srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		inner.ServeHTTP(w, r)
+	})
 	_, err := moveHeld(t, moveAgentAt(t, from.origin, from.pub), to.origin)
 	if want := "the edge says, signed with the pinned key, that " + to.origin + " is retired and names " + from.origin +
 		", where this server already is; nothing changed"; err == nil || err.Error() != want {
 		t.Fatalf("move: %v\nwant: %s", err, want)
 	}
-	select {
-	case h := <-to.hellos:
-		t.Fatalf("the target was probed: %+v", h)
-	default:
+	if n := requests.Load(); n != 0 {
+		t.Fatalf("the target got %d requests", n)
 	}
 }
 
