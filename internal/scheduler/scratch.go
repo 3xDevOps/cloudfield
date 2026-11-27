@@ -20,7 +20,7 @@ const (
 	// accountConfigVolume, in a run's account config directory, marks one a
 	// session's mounts came through a volume of.
 	accountConfigVolume = "volume"
-	terminalScratchTag   = "terminal-"
+	terminalScratchTag  = "terminal-"
 	// A directory is planned before its owner is registered.
 	scratchOrphanAge = time.Hour
 )
