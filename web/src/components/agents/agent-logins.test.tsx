@@ -108,6 +108,24 @@ describe('login list', () => {
     await user.click(within(row('work')).getByRole('switch', { name: 'Use for shares' }))
     expect(client.agentLoginShare).toHaveBeenCalledWith('claude', 'lgn-work0000001', true)
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
+    await user.click(within(row('default')).getByRole('switch', { name: 'Use for shares' }))
+    expect(client.agentLoginShare).toHaveBeenLastCalledWith('claude', 'default', false)
+    expect((await screen.findByRole('alert')).textContent).toBe(refusal)
+    expect(onChanged).toHaveBeenCalledTimes(1)
+  })
+
+  it("shows a login's usage error verbatim when it has no windows", async () => {
+    show({
+      accountUsage: vi.fn(async (params: { login?: string } = {}) => ({
+        account_member_id: alice.id,
+        login: params.login,
+        providers: params.login === 'lgn-console0001'
+          ? [{ provider: 'claude' as const, status: 'unsupported' as const, windows: [], checked_at: '2026-11-26T10:00:00Z', error: 'claude: a Console login reports no usage windows' }]
+          : [],
+      })),
+    })
+    expect(await within(row('console')).findByText('claude: a Console login reports no usage windows')).toBeDefined()
+    expect(row('console').textContent).toContain('Usage not read: ')
   })
 
   it('confirms a removal, says Anthropic keeps the sign-in, and shows a refusal verbatim', async () => {

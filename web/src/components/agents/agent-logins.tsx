@@ -182,6 +182,7 @@ function LoginRow({ login, index, count, usage, sharedWith, busy, onMove, onAuto
 }) {
   const id = useId()
   const windows = currentWindows(usage?.provider, Date.now())
+  const usageError = usage?.error ?? (windows.length === 0 ? usage?.provider?.error : undefined)
   const added = login.id !== 'default'
   const who = [login.email, login.organization_name].filter(Boolean).join(' · ')
   return (
@@ -196,7 +197,7 @@ function LoginRow({ login, index, count, usage, sharedWith, busy, onMove, onAuto
         )}
         {who && <span className="min-w-0 truncate text-ui-sm text-muted" title={who}>{who}</span>}
         <span className="text-ui-sm text-muted">{reach(login, sharedWith)}</span>
-        {usage?.error && <span className="text-ui-sm text-muted">Usage not read: <span className="font-code">{usage.error}</span></span>}
+        {usageError && <span className="text-ui-sm text-muted">Usage not read: <span className="font-code">{usageError}</span></span>}
         {windows.length > 0 && (
           <div className="mt-1.5 max-w-sm">
             <UsageMeters label={`Login ${login.name}`} windows={windows} now={Date.now()} />
