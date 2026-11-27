@@ -4262,9 +4262,9 @@ you** shows one link, "1 request, shown below the timeline", that closes a
 Details sheet and focuses the card; on other views it lists the cards. `routes/run/session-failure.tsx` shows an adapter failure with
 **Retry Enhanced** and **Open in Standard**, and a sign-in failure with the
 agent's auth methods. **Open in Standard** that starts a replacement launches
-it on the owner's account, login, fallback and subsession setting; the login
-only while the run is on the owner's own account, not one a fallback moved it
-to. On a run on the viewer's own account it adds **Sign in
+it on the owner's account, fallback and subsession setting, naming no
+login: a run does not say whether its login was named at launch or chosen by
+the server, so the replacement is chosen as a launch that names none. On a run on the viewer's own account it adds **Sign in
 on Agents**, and when that agent's `agent.list` row has `login_problem` its
 title is the alert's ("Claude Code is signed out" or "Claude Code's sign-in
 was refused"); a login-file problem shows verbatim, while a refusal is
