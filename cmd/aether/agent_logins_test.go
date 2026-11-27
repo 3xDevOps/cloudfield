@@ -387,6 +387,18 @@ func TestSessionRefusesALoginItWouldNotUse(t *testing.T) {
 	}
 }
 
+func TestSessionReadsNoFlagInATaskAfterTheDashes(t *testing.T) {
+	unlinked(t)
+	for _, args := range [][]string{
+		{"--agent", "claude", "--", "--login=x is broken"},
+		{"--agent", "claude", "--", "--login"},
+	} {
+		if err := runRun(args); !errors.Is(err, cli.ErrNotLinked) {
+			t.Errorf("cloudfield session %q = %v; want the task launched as given", args, err)
+		}
+	}
+}
+
 func TestLaunchLoginSendsAnIDAsGiven(t *testing.T) {
 	noList := fakeControlMethods(t, map[string]*fakeReply{})
 	for _, tc := range []struct{ agent, account, value string }{

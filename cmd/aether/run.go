@@ -74,15 +74,19 @@ func runRun(args []string) error {
 	if loginGiven && *login == "" {
 		return errors.New("--login needs a name: cloudfield agent logins lists yours")
 	}
-	if i := slices.IndexFunc(fs.Args(), func(arg string) bool {
+	rest := fs.Args()
+	if task == "" && len(rest) > 0 {
+		rest = rest[1:]
+	}
+	if i := slices.IndexFunc(rest, func(arg string) bool {
 		name, _, _ := strings.Cut(arg, "=")
 		return name == "--login" || name == "-login"
 	}); i >= 0 {
-		stop := "--"
-		if i > 0 {
-			stop = fs.Arg(0)
+		stop := fs.Arg(0)
+		if parsed := len(args) - fs.NArg(); parsed > 0 && args[parsed-1] == "--" {
+			stop = "--"
 		}
-		return fmt.Errorf("%s comes after %q, where cloudfield session reads no more flags, so it would be ignored; give it before %q", fs.Arg(i), stop, stop)
+		return fmt.Errorf("%s comes after %q, where cloudfield session reads no more flags, so it would be ignored; give it before %q", rest[i], stop, stop)
 	}
 	if task == "" && fs.NArg() == 1 {
 		task = fs.Arg(0)
