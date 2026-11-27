@@ -29,3 +29,18 @@ func TestAdviseHugePagesOnlyRaisesNever(t *testing.T) {
 		t.Error("a host without the policy file: no error")
 	}
 }
+
+func TestPlainPagesChangesOnlyTheHugePageRequest(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(path, []byte(`{"cpus":{"boot_vcpus":1},"memory":{"size":9311354880,"shared":true,"thp":true},"disks":[{"path":"/d"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := plainPages(dir); err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"cpus":{"boot_vcpus":1},"disks":[{"path":"/d"}],"memory":{"shared":true,"size":9311354880,"thp":false}}`
+	if got, _ := os.ReadFile(path); string(got) != want {
+		t.Errorf("the saved configuration reads %s, want %s", got, want)
+	}
+}

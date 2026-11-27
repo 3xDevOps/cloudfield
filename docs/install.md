@@ -112,6 +112,13 @@ path, or a development build, keeps the kernel already there. With
 `/usr/local/libexec/aether/omp`: replace either, and the next start puts the
 pinned one back, the omp in the background after the server is up. The server
 also adds the system user `aether-omp` that omp's auth brokers run as.
+Every start with `session-runtime vm` also sets
+`/sys/kernel/mm/transparent_hugepage/shmem_enabled` to `advise` when it reads
+`never`, and logs the change, so the host backs a booting guest's memory with
+2 MiB pages ([vm-guest.md](vm-guest.md#memory-the-guest-returns)). Under
+`advise` only shared memory that asks for huge pages gets them. The setting
+lasts until the host reboots; any other value is left as it is, so write
+`deny` there to keep guest memory on 4 KiB pages.
 `install` leaves
 Sysbox out: sessions and environment terminals run their own Docker daemon in
 their VM.

@@ -679,7 +679,7 @@ func TestSaveRefusesSharesAndRestoresAVMWithout(t *testing.T) {
 	}
 	disk := filepath.Join(t.TempDir(), "root.img")
 	if err := errors.Join(os.WriteFile(disk, nil, 0o600),
-		os.WriteFile(h.engine.path("run-d", snapshotDir+"/config.json"), fmt.Appendf(nil, `{"disks":[{"path":%q,"readonly":false}]}`, disk), 0o600)); err != nil {
+		os.WriteFile(h.engine.path("run-d", snapshotDir+"/config.json"), fmt.Appendf(nil, `{"disks":[{"path":%q,"readonly":false}],"memory":{"thp":true}}`, disk), 0o600)); err != nil {
 		t.Fatal(err)
 	}
 	h.units.rebootOnResume = true
