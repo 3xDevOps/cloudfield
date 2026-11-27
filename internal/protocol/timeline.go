@@ -31,9 +31,13 @@ type WorkspaceTimelineParams struct {
 // remains after NextSeq - a page can be empty and still have more, since
 // filtered-out events advance the cursor too. A Newest page sets NextSeq
 // to the log head, and More reports older history before OlderSeq.
+// OlderTime is the time of the event at OlderSeq, when the read stopped on
+// one: the page covers everything after it, including what a filter left
+// out, so a reader can tell a stretch with nothing to show from one not read.
 type WorkspaceTimelineResult struct {
-	Events   []Event `json:"events"`
-	NextSeq  uint64  `json:"next_seq"`
-	More     bool    `json:"more"`
-	OlderSeq uint64  `json:"older_seq,omitempty"`
+	Events    []Event `json:"events"`
+	NextSeq   uint64  `json:"next_seq"`
+	More      bool    `json:"more"`
+	OlderSeq  uint64  `json:"older_seq,omitempty"`
+	OlderTime string  `json:"older_time,omitempty"`
 }

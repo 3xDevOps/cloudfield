@@ -494,7 +494,9 @@ backward from `before_seq` (zero: the log head; pass the previous page's
 addressed to the session. `no_rereads: true` leaves out the `run.status`
 rereads that a `types` filter naming `run.status` otherwise returns
 ([failure-handling.md](failure-handling.md)); a server that predates the
-field ignores it. A session snapshot's
+field ignores it. A backward page that has `more` also carries `older_time`,
+the time of the event at `older_seq`: the page covers everything after it,
+including events a filter left out. A session snapshot's
 `unacked_messages` counts mail addressed to the session that it has not
 acknowledged, and `oldest_unacked_at` is when the oldest of it was sent.
 

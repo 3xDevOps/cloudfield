@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
@@ -314,5 +315,59 @@ func TestWorkspaceTimelineLeavesRereadsOutWhenAsked(t *testing.T) {
 	}
 	if got := page(true); len(got.Events) != 2 || rereads(got) != 0 || got.More {
 		t.Fatalf("without rereads: %d events, %d rereads, more %v; want the 2 status changes in one page and no more", len(got.Events), rereads(got), got.More)
+	}
+}
+
+// A page that stops inside a run of filtered-out rereads says how far back
+// it read, so a view does not call that stretch unread.
+func TestWorkspaceTimelineSaysHowFarBackAFilteredPageRead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	log, err := events.OpenSQLiteLog(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatalf("event log: %v", err)
+	}
+	t.Cleanup(func() { _ = log.Close() })
+	bus, err := events.NewInProc(ctx, log)
+	if err != nil {
+		t.Fatalf("bus: %v", err)
+	}
+	t.Cleanup(func() { _ = bus.Close() })
+	e := newTestEnv(t, func(c *Config) {
+		c.Bus = bus
+		c.Services.Timeline = timeline.NewReader(log)
+	})
+	publish := func(payload events.RunStatusPayload) {
+		t.Helper()
+		if _, perr := bus.Publish(ctx, events.Event{WorkspaceID: e.ws.ID, RunID: e.run.ID, Payload: payload}); perr != nil {
+			t.Fatalf("publish: %v", perr)
+		}
+	}
+	publish(events.RunStatusPayload{From: domain.RunQueued, To: domain.RunRunning})
+	// More rereads than one read's scan budget for a one-event page.
+	for range 200 {
+		publish(events.RunStatusPayload{From: domain.RunRunning, To: domain.RunRunning, Reread: true})
+	}
+	publish(events.RunStatusPayload{From: domain.RunRunning, To: domain.RunCompleted})
+
+	var page protocol.WorkspaceTimelineResult
+	if err := controlClient(t, e).Call(protocol.MethodWorkspaceTimeline, protocol.WorkspaceTimelineParams{
+		WorkspaceID: string(e.ws.ID), Types: []string{string(events.TypeRunStatus)}, Newest: true, Limit: 2, NoRereads: true,
+	}, &page); err != nil {
+		t.Fatalf("workspace.timeline: %v", err)
+	}
+	if len(page.Events) != 1 || !page.More || page.OlderSeq == 0 {
+		t.Fatalf("page = %d events, more %v, older_seq %d; want the newest change alone with more behind it", len(page.Events), page.More, page.OlderSeq)
+	}
+	reached, err := time.Parse(time.RFC3339Nano, page.OlderTime)
+	if err != nil {
+		t.Fatalf("older_time %q: %v", page.OlderTime, err)
+	}
+	newest, err := time.Parse(time.RFC3339Nano, page.Events[0].Time)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reached.Before(newest) {
+		t.Fatalf("older_time %v is not before the page's only event %v: the rereads read past it are not counted", reached, newest)
 	}
 }

@@ -64,6 +64,9 @@ func (s *Server) workspaceTimeline(ctx context.Context, member domain.MemberID, 
 		More:     page.More,
 		OlderSeq: page.OlderSeq,
 	}
+	if !page.OlderTime.IsZero() {
+		out.OlderTime = page.OlderTime.UTC().Format(time.RFC3339Nano)
+	}
 	for _, ev := range page.Events {
 		payload, merr := json.Marshal(ev.Payload)
 		if merr != nil {

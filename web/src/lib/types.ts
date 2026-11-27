@@ -1118,6 +1118,8 @@ export interface TimelinePage {
   next_seq: number
   more: boolean
   older_seq?: number
+  /** When the event at `older_seq` happened: the page covers everything after it, shown or filtered out. */
+  older_time?: string
 }
 
 export interface TimelineQuery {

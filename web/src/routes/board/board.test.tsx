@@ -955,6 +955,37 @@ describe('lanes view', () => {
     expect(useStore.getState().laneHistory[workspace.id].events.map((event) => event.seq)).toEqual([1, 900])
   })
 
+  it('counts the stretch a page read with nothing to show as loaded, and stops there', async () => {
+    seed([working])
+    const now = Date.now()
+    const mail: Event = {
+      id: 'evt_900', seq: 900, time: new Date(now - 60_000).toISOString(), workspace_id: workspace.id,
+      run_id: working.id, actor_id: '', type: 'coord.message', payload: {},
+    }
+    const reached = now - 3 * 24 * 60 * 60_000
+    vi.mocked(api.workspaceTimeline).mockResolvedValueOnce({ events: [mail], next_seq: 0, more: true, older_seq: 500, older_time: new Date(reached).toISOString() })
+    await openLanes()
+    await waitFor(() => expect(useStore.getState().laneHistory[workspace.id]).toMatchObject({ floor: reached, loading: false }))
+    expect(api.workspaceTimeline).toHaveBeenCalledTimes(1)
+  })
+
+  it('asks for no more history than its budget has room for', async () => {
+    seed([working])
+    const start = Date.now() - 30 * 60_000
+    const mail = (seq: number): Event => ({
+      id: `evt_${seq}`, seq, time: new Date(start + seq).toISOString(), workspace_id: workspace.id,
+      run_id: working.id, actor_id: '', type: 'coord.message', payload: {},
+    })
+    const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => mail(from + i))
+    vi.mocked(api.workspaceTimeline)
+      .mockResolvedValueOnce({ events: range(1001, historyBudget + 500), next_seq: 0, more: true, older_seq: 1001 })
+      .mockResolvedValueOnce({ events: range(501, 1000), next_seq: 0, more: true, older_seq: 501 })
+    await openLanes()
+    expect(await screen.findByText('Older history not loaded')).toBeDefined()
+    expect(vi.mocked(api.workspaceTimeline).mock.calls.map(([query]) => query.limit)).toEqual([1000, 500])
+    expect(useStore.getState().laneHistory[workspace.id].events).toHaveLength(historyBudget)
+  })
+
   it('drops an older history page read while live events trimmed held history, so no gap reads as loaded', async () => {
     seed([working])
     const start = Date.now() - 30 * 60_000

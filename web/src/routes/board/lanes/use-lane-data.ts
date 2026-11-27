@@ -42,13 +42,15 @@ async function readBack(workspaceID: string, floor: number): Promise<void> {
         no_rereads: true,
         newest: true,
         before_seq: history.olderSeq,
-        limit: pageSize,
+        limit: Math.min(pageSize, historyBudget - history.events.length),
       })
       const latest = useStore.getState().laneHistory[workspaceID]
       if (!latest || !owns() || !same()) return
       // Live events past the budget dropped the oldest held events during this read, so the page no longer meets them.
       if (latest.olderSeq !== history.olderSeq) continue
-      const oldest = page.events[0] ? Date.parse(page.events[0].time) : history.floor
+      // A server that filters rereads out says how far back it read; an older one's first event is that far.
+      const reached = page.older_time ?? page.events[0]?.time
+      const oldest = reached ? Date.parse(reached) : history.floor
       setLaneHistory(
         workspaceID,
         { olderSeq: page.more ? page.older_seq : undefined, floor: page.more ? Math.min(history.floor, oldest) : -Infinity },
