@@ -281,16 +281,22 @@ func TestMoveTriesBothSpellingsOf443(t *testing.T) {
 // the other spelling.
 func TestMoveDoesNotRetryAnAnswer(t *testing.T) {
 	const bare = "https://target.example.test"
-	from := retiredHost(t, "retired")
-	to := newFakeEdge(t)
-	servedAs(t, to, bare)
-	to.readyKey, _, _ = ed25519.GenerateKey(rand.Reader)
-	got, err := moveHeld(t, moveAgentAt(t, from, to.pub), bare)
-	if err == nil || strings.Contains(err.Error(), "; tried") {
-		t.Fatalf("move: %+v, %v; want a refusal without a retry", got, err)
-	}
-	if hellos := len(to.hellos); hellos != 1 {
-		t.Errorf("%d enrollments at the target, want 1", hellos)
+	otherKey, _, _ := ed25519.GenerateKey(rand.Reader)
+	for name, answer := range map[string]func(e *fakeEdge){
+		"another key":      func(e *fakeEdge) { e.readyKey = otherKey },
+		"an invalid ready": func(e *fakeEdge) { e.rawReady = `{"type":"ready"}` },
+	} {
+		from := retiredHost(t, "retired")
+		to := newFakeEdge(t)
+		servedAs(t, to, bare)
+		answer(to)
+		got, err := moveHeld(t, moveAgentAt(t, from, to.pub), bare)
+		if err == nil || strings.Contains(err.Error(), "; tried") {
+			t.Errorf("%s: move %+v, %v; want a refusal without a retry", name, got, err)
+		}
+		if hellos := len(to.hellos); hellos != 1 {
+			t.Errorf("%s: %d enrollments at the target, want 1", name, hellos)
+		}
 	}
 }
 
