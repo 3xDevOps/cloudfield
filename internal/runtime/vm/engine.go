@@ -467,6 +467,8 @@ func (e *engine) startLocked(ctx context.Context, key string) (err error) {
 var (
 	scratchBin    string
 	scratchMemory = "shared=on"
+	// scratchUnitExtraMiB raises the unit's memory cap.
+	scratchUnitExtraMiB int64
 )
 
 func (e *engine) bootLaunch(ctx context.Context, rec *record) (launch, error) {
@@ -646,7 +648,7 @@ func (e *engine) launch(ctx context.Context, rec *record, l launch) error {
 		// behind the guest's back. No OOMScoreAdjust, unlike a container's
 		// 500: a host OOM kill of the monitor ends the whole session, not
 		// one process in it.
-		fmt.Sprintf("MemoryMax=%dM", unitMemoryMiB(rec)), "MemorySwapMax=0",
+		fmt.Sprintf("MemoryMax=%dM", unitMemoryMiB(rec)+scratchUnitExtraMiB), "MemorySwapMax=0",
 		"StandardOutput=append:" + logPath, "StandardError=append:" + logPath,
 	}
 	if rec.CPULimit > 0 {

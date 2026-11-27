@@ -100,7 +100,8 @@ func lazyField(out, name string) string {
 }
 
 func (r *lazyRun) logs(why string) {
-	host, _ := exec.Command("sh", "-c", "dmesg | grep -iE 'oom|killed process|segfault|cloud-hyperv|userfault|sigbus' | tail -8").CombinedOutput()
+	host, _ := exec.Command("sh", "-c", "dmesg | grep -iE 'oom|killed process|segfault|cloud-hyperv|userfault|sigbus|type=1326|traps:' | tail -8; "+
+		"journalctl -u "+unitName(lazyKey)+" -n 6 --no-pager -o short-precise 2>&1 | sed 's/^/journal: /'").CombinedOutput()
 	for line := range strings.SplitSeq(strings.TrimSpace(string(host)), "\n") {
 		r.say("LOG why=%q file=host-dmesg | %s", why, line)
 	}
@@ -641,10 +642,12 @@ func TestKVMZZLazy(t *testing.T) {
 	t.Cleanup(func() { _ = e.destroy(context.Background(), lazyKey) })
 	cold, warm := env("LAZY_COLD", 30), env("LAZY_WARM", 10)
 	budget := time.Duration(env("LAZY_BUDGET_MIN", 300)) * time.Minute
+	scratchUnitExtraMiB = int64(env("LAZY_UNIT_EXTRA_MIB", 0))
 	var statfs unix.Statfs_t
 	_ = unix.Statfs(e.root, &statfs)
 	shmem, _ := os.ReadFile("/sys/kernel/mm/transparent_hugepage/shmem_enabled")
 	thp, _ := os.ReadFile("/sys/kernel/mm/transparent_hugepage/enabled")
+	r.say("ENV unit_memory_max_mib=%d (the engine's %d plus %d)", unitMemoryMiB(&record{MemoryMiB: int64(r.mib)})+scratchUnitExtraMiB, unitMemoryMiB(&record{MemoryMiB: int64(r.mib)}), scratchUnitExtraMiB)
 	r.say("ENV arm=%+v cold=%d warm=%d data=%s fs_magic=%#x free_gib=%d host_thp=%q host_shmem_thp=%q",
 		arm, cold, warm, e.root, statfs.Type, statfs.Bavail*uint64(statfs.Bsize)>>30, strings.TrimSpace(string(thp)), strings.TrimSpace(string(shmem)))
 

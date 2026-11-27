@@ -22,6 +22,9 @@ on:
         default: '30'
       warm:
         default: '10'
+      unit_extra_mib:
+        description: MiB added to the VM unit's MemoryMax
+        default: '0'
 
 permissions:
   contents: read
@@ -85,6 +88,7 @@ jobs:
           LAZY_MIB: ${{ matrix.mib }}
           LAZY_COLD: ${{ inputs.cold || '30' }}
           LAZY_WARM: ${{ inputs.warm || '10' }}
+          LAZY_UNIT_EXTRA_MIB: ${{ inputs.unit_extra_mib || '0' }}
         run: |
           work=/tmp
           if [ "$(df --output=avail /mnt 2>/dev/null | tail -1)" -gt "$(df --output=avail /tmp | tail -1)" ]; then work=/mnt/lazy; sudo mkdir -p "$work"; fi
@@ -92,6 +96,6 @@ jobs:
           echo "LAZY-ENV fs: $(df -T "$work" | tail -1)"
           echo "LAZY-ENV userfaultfd: $(ls -l /dev/userfaultfd 2>&1) unprivileged=$(cat /proc/sys/vm/unprivileged_userfaultfd)"
           echo "LAZY-ENV host agents: $(ps -eo pid,user,comm | grep -iE 'provjob|hosted-compute|Runner|walinux|mdsd|defender' | tr '\n' ';')"
-          sudo env "PATH=$PATH" "HOME=$HOME" GOFLAGS=-v "TMPDIR=$work" "LAZY_ARM=$LAZY_ARM" "LAZY_MIB=$LAZY_MIB" "LAZY_COLD=$LAZY_COLD" "LAZY_WARM=$LAZY_WARM" \
+          sudo env "PATH=$PATH" "HOME=$HOME" GOFLAGS=-v "TMPDIR=$work" "LAZY_ARM=$LAZY_ARM" "LAZY_MIB=$LAZY_MIB" "LAZY_COLD=$LAZY_COLD" "LAZY_WARM=$LAZY_WARM" "LAZY_UNIT_EXTRA_MIB=$LAZY_UNIT_EXTRA_MIB" \
             LAZY_CH55=/usr/local/bin/cloud-hypervisor-v55 LAZY_BUDGET_MIN=290 \
             make test-kvm KVM_RUN=^TestKVMZZLazy KVM_PKGS=./internal/runtime/vm KVM_TIMEOUT=340m
