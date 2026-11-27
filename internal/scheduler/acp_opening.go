@@ -42,9 +42,9 @@ func (d *acpDriver) openBehindLaunch(ctx context.Context, entry *supervised) boo
 	go func() {
 		defer d.s.wg.Done()
 		defer needed()
-		timed := runtime.WithSteps(ctx)
-		d.connectLocked(timed, entry, openNew)
-		runtime.LogSteps(timed, "scheduler: agent start", "run", entry.runID)
+		d.connectLocked(ctx, entry, openNew)
+		runtime.Step(ctx, "agent_start")
+		runtime.LogSteps(ctx, "scheduler: agent start", "run", entry.runID)
 		unlock()
 		for {
 			d.mu.Lock()

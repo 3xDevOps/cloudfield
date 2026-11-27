@@ -757,15 +757,17 @@ launch retried on an older image, is on the line twice.
 An Enhanced session's launch returns before its agent has started. The start
 logs its own line when it ends, also when it failed, in which case
 `scheduler: enhanced session failed` with the error comes before it.
-`total_ms` is how long the start took: until the agent's conversation is
-open with its mode, model and effort set and the task sent:
+The line repeats the launch's steps and adds `agent_start_ms`, how long the
+start took: from the launch attaching to the agent until the agent's
+conversation is open with its mode, model and effort set and the task sent.
+`total_ms` on this line runs from the launch request to that point:
 
 ```sh
 sudo journalctl -u aether-server | grep 'scheduler: agent start'
 ```
 
 ```
-INFO scheduler: agent start run=<run id> total_ms=...
+INFO scheduler: agent start run=<run id> total_ms=... admission_ms=... ... agent_ms=... agent_start_ms=...
 ```
 
 ## Enhanced sessions
