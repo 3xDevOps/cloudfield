@@ -328,17 +328,20 @@ func (s *Scheduler) awaitUsageLimit(entry *supervised) bool {
 
 // markUsageLimit records the adapter's usage-limit signal for a headless
 // run, in the sidecar too, so a restart that finds the agent exited still
-// knows why.
-func (s *Scheduler) markUsageLimit(run domain.RunID, message, session string) {
+// knows why. A signal read while a move replaces the container, or from a
+// container on another login than the run's now, is the replaced one's and
+// is dropped.
+func (s *Scheduler) markUsageLimit(run domain.RunID, limit events.RunUsageLimitPayload) {
 	s.mu.Lock()
 	entry := s.runs[run]
-	live := entry != nil && entry.launchMode == domain.LaunchHeadless && !entry.acp
-	newSession := live && domain.ValidAgentSessionID(session) && entry.agentSessionID != session
+	live := entry != nil && entry.launchMode == domain.LaunchHeadless && !entry.acp && !entry.moving &&
+		(limit.Account == "" || (domain.Account{Member: limit.Account, Login: limit.Login}) == entry.account)
+	newSession := live && domain.ValidAgentSessionID(limit.SessionID) && entry.agentSessionID != limit.SessionID
 	if live {
 		if newSession {
-			entry.agentSessionID = session
+			entry.agentSessionID = limit.SessionID
 		}
-		s.setUsageLimitLocked(entry, message)
+		s.setUsageLimitLocked(entry, limit.Message)
 	}
 	s.mu.Unlock()
 	if newSession {
@@ -535,7 +538,7 @@ func (s *Scheduler) consumeUsageLimits(ctx context.Context, sub events.Subscript
 				return last
 			}
 			if p, isLimit := e.Payload.(events.RunUsageLimitPayload); isLimit {
-				s.markUsageLimit(e.RunID, p.Message, p.SessionID)
+				s.markUsageLimit(e.RunID, p)
 			}
 			last = max(last, e.Seq)
 		}

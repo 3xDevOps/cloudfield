@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"os"
 	"slices"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/agentstatus"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
+	"github.com/3xDevOps/cloudfield/internal/quota"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
 )
 
@@ -407,5 +409,109 @@ func TestRestartAtEachStepOfALoginMove(t *testing.T) {
 				t.Fatalf("after the restart %d continuations and %d user prompts; want %d and none", continuations, prompts, want)
 			}
 		})
+	}
+}
+
+// A headless session moved to Ada's second login: a usage-limit event the
+// replaced container's output still produced arrives once the replacement
+// runs. It is dropped, so the replacement's own failure ends the session as
+// that failure; the replacement's own limit is followed.
+func TestALateLimitFromTheReplacedContainerIsDropped(t *testing.T) {
+	t.Parallel()
+	for _, from := range []string{"the replaced container", "the replacement"} {
+		t.Run(from, func(t *testing.T) {
+			t.Parallel()
+			e, _, notes, _, second := newLoginMoveEnv(t, func(cfg *Config) { delete(cfg.Harnesses, "claude") })
+			startScheduler(t, e.sched)
+			<-e.sched.RecoveryReady()
+			run := e.launchOwn(t, domain.LaunchHeadless)
+			e.publishLimit(t, run.ID)
+			waitFor(t, "the limit recorded", func() bool {
+				sc, err := e.sched.readSidecar(run.ID)
+				return err == nil && sc.UsageLimit != ""
+			})
+			e.rt.byName(string(run.ID)).exitNow(1)
+			e.assertMovedOnceTo(t, run.ID, second, notes, continuedOnSecond)
+
+			late := events.RunUsageLimitPayload{Message: sessionLimit, SessionID: "sess-1", Account: e.member.ID}
+			if from == "the replacement" {
+				late.Login = second.Login
+			}
+			if _, err := e.bus.Publish(t.Context(), events.Event{WorkspaceID: e.ws.ID, RunID: run.ID, Payload: late}); err != nil {
+				t.Fatal(err)
+			}
+			if from == "the replacement" {
+				waitFor(t, "the replacement's limit recorded", func() bool {
+					sc, err := e.sched.readSidecar(run.ID)
+					return err == nil && sc.UsageLimit != ""
+				})
+			} else {
+				time.Sleep(300 * time.Millisecond)
+				if sc, err := e.sched.readSidecar(run.ID); err != nil || sc.UsageLimit != "" {
+					t.Fatalf("sidecar limit %q, %v; want the replaced container's dropped", sc.UsageLimit, err)
+				}
+			}
+			e.rt.byName(string(run.ID)).exitNow(1)
+			got := e.waitStoreStatus(t, run.ID, domain.RunFailed)
+			limited := strings.HasPrefix(got.Reason, usageLimitReason)
+			if limited != (from == "the replacement") || got.Account() != second {
+				t.Fatalf("run on %s failed with %q; want the usage limit only when the replacement reported it", got.Account(), got.Reason)
+			}
+		})
+	}
+}
+
+// hookedLoginUsage runs during before the first usage read, which a move
+// makes while the session's old agent still runs.
+type hookedLoginUsage struct {
+	*loginUsage
+	once   sync.Once
+	during func()
+}
+
+func (u *hookedLoginUsage) ReadLogin(ctx context.Context, account domain.Account, refresh bool) ([]quota.Provider, error) {
+	u.once.Do(u.during)
+	return u.loginUsage.ReadLogin(ctx, account, refresh)
+}
+
+func (u *hookedLoginUsage) Read(ctx context.Context, member domain.MemberID, refresh bool) ([]quota.Provider, error) {
+	return u.ReadLogin(ctx, domain.AccountOf(member), refresh)
+}
+
+// An Enhanced session's agent fails a second turn on its usage limit while
+// the move to Ada's second login holds the session: that limit is the
+// replaced agent's, and the session moves once, its replacement told once.
+func TestARepeatedLimitFromTheReplacedAgentIsDropped(t *testing.T) {
+	t.Parallel()
+	e, rt, notes, usage, second := newLoginMoveEnv(t, enhancedClaude)
+	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+	first := rt.all()[0]
+	e.sched.UseUsageFallback(UsageFallback{Usage: &hookedLoginUsage{loginUsage: usage, during: func() {
+		_, _ = e.sched.Inject(context.Background(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
+		waitFor(t, "the repeat", func() bool { return len(sentPrompts(t, first)) == 2 })
+		time.Sleep(200 * time.Millisecond)
+	}}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+	_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
+	waitFor(t, "the session on the second login", func() bool {
+		row, rowErr := e.db.GetRun(t.Context(), run.ID)
+		sc, scErr := e.sched.readSidecar(run.ID)
+		_, liveErr := e.sched.acp.live(t.Context(), run.ID)
+		return rowErr == nil && scErr == nil && liveErr == nil && row.Account() == second && sc.AccountSwap == nil
+	})
+	time.Sleep(300 * time.Millisecond)
+	execs := rt.all()
+	segments, err := e.db.ListRunAccountSegments(t.Context(), run.ID)
+	row, rowErr := e.db.GetRun(t.Context(), run.ID)
+	switch {
+	case err != nil || len(segments) != 2 || len(execs) != 2:
+		t.Fatalf("segments %+v, %v, %d agents; want one move", segments, err, len(execs))
+	case !slices.Equal(sentPrompts(t, execs[1]), []string{continuedOnSecond}):
+		t.Fatalf("the replacement was prompted %q; want the continuation once", sentPrompts(t, execs[1]))
+	case rowErr != nil || row.Status.Terminal() || row.Account() != second || len(notes.all()) != 1:
+		t.Fatalf("run = %+v, %v, notes %v; want it live on the second login", row, rowErr, notes.all())
 	}
 }

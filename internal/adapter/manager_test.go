@@ -476,3 +476,30 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 	}
 	t.Fatalf("timed out waiting for %s", what)
 }
+
+// A usage limit read from a session's output names the account and login
+// that session was tapped on, so the scheduler can drop one a replaced
+// container reports after a move.
+func TestManagerNamesTheLoginAUsageLimitWasReportedOn(t *testing.T) {
+	data, err := os.ReadFile("testdata/claude_usage_limit.jsonl")
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	const run = domain.RunID("run_1")
+	bus := newTestBus(t)
+	runs := &fakeRuns{runs: map[domain.RunID]*domain.Run{
+		run: {ID: run, WorkspaceID: "ws_1", Harness: "claude", Mode: domain.LaunchHeadless, Status: domain.RunRunning,
+			AccountMemberID: "mem_a", AccountLogin: "lgn-second0000"},
+	}}
+	sub, err := bus.Subscribe(t.Context(), events.SubscribeOptions{Filter: events.Filter{Types: []events.Type{events.TypeRunUsageLimit}}})
+	if err != nil {
+		t.Fatalf("subscribe: %v", err)
+	}
+	defer func() { _ = sub.Close() }()
+	startManager(t, bus, runs, &fakeTap{output: map[domain.RunID][]byte{run: data}})
+	publishRunning(t, bus, run)
+	limit, ok := collect(t, sub, 1, 5*time.Second)[0].Payload.(events.RunUsageLimitPayload)
+	if !ok || limit.Account != "mem_a" || limit.Login != "lgn-second0000" || limit.Message == "" {
+		t.Fatalf("usage limit = %+v; want it on mem_a's lgn-second0000", limit)
+	}
+}

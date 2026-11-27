@@ -7,10 +7,14 @@ import "github.com/3xDevOps/cloudfield/internal/domain"
 const TypeRunUsageLimit Type = "run.usage_limit"
 
 // RunUsageLimitPayload carries the agent's own usage-limit message and the
-// session it stopped, which a move to another account resumes.
+// session it stopped, which a move to another account resumes. Account and
+// Login are the account and login the container whose output reported it
+// ran on; empty Login is the default login.
 type RunUsageLimitPayload struct {
-	Message   string `json:"message"`
-	SessionID string `json:"session_id,omitempty"`
+	Message   string          `json:"message"`
+	SessionID string          `json:"session_id,omitempty"`
+	Account   domain.MemberID `json:"account_member_id,omitempty"`
+	Login     domain.LoginID  `json:"login,omitempty"`
 }
 
 func (RunUsageLimitPayload) EventType() Type { return TypeRunUsageLimit }

@@ -1972,6 +1972,7 @@ func (s *Scheduler) entryFromSidecar(r *domain.Run, sc sidecar) *supervised {
 		memberID:       r.HomeMember(),
 		loginMember:    domain.MemberID(sc.LoginMember),
 		loginID:        sc.LoginID,
+		account:        r.Account(),
 		verifiedLogins: sc.VerifiedLogins,
 		// Reattaching makes a full-screen agent repaint; without the saved
 		// report that repaint would read as work resuming.
