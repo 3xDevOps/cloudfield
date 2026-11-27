@@ -59,8 +59,8 @@ const (
 	// A connector at a retiring address gets the notice on a tool result
 	// at most once every noticeEvery.
 	noticeEvery = 24 * time.Hour
-	// The edge's notices for one connector URL are read at most once every
-	// noticeReadEvery, so a change shows up to noticeReadEvery late.
+	// A connector URL the edge's notices say nothing about is not read
+	// again for noticeReadEvery, so a new notice shows up to that late.
 	noticeReadEvery = time.Minute
 )
 
@@ -124,7 +124,7 @@ type handler struct {
 	long            *ops.LongCalls
 
 	// mu guards codes, nonces, wrong, wrongAll, wrongSwept, writes,
-	// writesSwept, noticed, noticeReads and noticedSwept.
+	// writesSwept, noticed, unnoticed and noticedSwept.
 	mu    sync.Mutex
 	codes map[string]authCode
 	// nonces holds the nonces of the edge assertions consent pages were
@@ -141,15 +141,10 @@ type handler struct {
 	// notice that its address is retiring. It does not survive a restart,
 	// so the next result after one carries it again.
 	noticed map[string]time.Time
-	// noticeReads is the last read of the edge's notices for each
+	// unnoticed is when the edge's notices last said nothing about each
 	// connector URL.
-	noticeReads  map[string]noticeRead
+	unnoticed    map[string]time.Time
 	noticedSwept time.Time
-}
-
-type noticeRead struct {
-	at     time.Time
-	notice *protocol.ConnectorNotice
 }
 
 // New returns the handler for every path under the base URL's path, the
@@ -186,7 +181,7 @@ func New(cfg Config) (http.Handler, error) {
 			return http.ErrUseLastResponse
 		}},
 		mux: http.NewServeMux(), now: time.Now, started: cmp.Or(cfg.Started, time.Now()), codes: map[string]authCode{}, nonces: map[string]nonceUse{}, wrong: map[netip.Prefix]wrongCodes{},
-		writes: map[string]*rate.Limiter{}, noticed: map[string]time.Time{}, noticeReads: map[string]noticeRead{},
+		writes: map[string]*rate.Limiter{}, noticed: map[string]time.Time{}, unnoticed: map[string]time.Time{},
 		long: &ops.LongCalls{After: edgeproto.HTTPShortCall, Max: edgeproto.MaxHTTPLongCallsPerServer}}
 
 	streamable := mcp.NewStreamableHTTPHandler(h.server, &mcp.StreamableHTTPOptions{
@@ -341,32 +336,37 @@ func jsonOnly(req mcp.Request) bool {
 	return ok && (call.Params.Name == "search" || call.Params.Name == "fetch")
 }
 
-// noticeAt is what the edge's notices say about the connector URL u,
-// read again only once the last read of them is noticeReadEvery old.
+// noticeAt is what the edge's notices say about the connector URL u.
+// Only an answer of none is kept, for noticeReadEvery: a notice, and any
+// URL it names, is read again on every call.
 func (h *handler) noticeAt(u string, now time.Time) *protocol.ConnectorNotice {
 	h.mu.Lock()
 	h.sweepNotices(now)
-	last, ok := h.noticeReads[u]
+	last, ok := h.unnoticed[u]
 	h.mu.Unlock()
-	if ok && now.Sub(last.at) < noticeReadEvery {
-		return last.notice
+	if ok && now.Sub(last) < noticeReadEvery {
+		return nil
 	}
 	n := h.ssh.ConnectorNotice(u)
 	h.mu.Lock()
-	h.noticeReads[u] = noticeRead{at: now, notice: n}
+	if n == nil {
+		h.unnoticed[u] = now
+	} else {
+		delete(h.unnoticed, u)
+	}
 	h.mu.Unlock()
 	return n
 }
 
 // sweepNotices drops, at most once a minute as allowWrite sweeps its
-// buckets, the records noticed and noticeReads no longer use. h.mu is
+// buckets, the records noticed and unnoticed no longer use. h.mu is
 // held.
 func (h *handler) sweepNotices(now time.Time) {
 	if now.Sub(h.noticedSwept) < time.Minute {
 		return
 	}
 	maps.DeleteFunc(h.noticed, func(_ string, last time.Time) bool { return now.Sub(last) >= noticeEvery })
-	maps.DeleteFunc(h.noticeReads, func(_ string, last noticeRead) bool { return now.Sub(last.at) >= noticeReadEvery })
+	maps.DeleteFunc(h.unnoticed, func(_ string, last time.Time) bool { return now.Sub(last) >= noticeReadEvery })
 	h.noticedSwept = now
 }
 

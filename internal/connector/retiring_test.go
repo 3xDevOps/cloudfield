@@ -126,7 +126,7 @@ func TestConsentPageWithoutNoticeIsUnchanged(t *testing.T) {
 	}
 }
 
-func TestConsentPageReadsNoticesOncePerMinute(t *testing.T) {
+func TestConsentPageKeepsOnlyNoNotice(t *testing.T) {
 	e := newEnv(t)
 	e.edge.version.Store(int64(edgeproto.VersionRelayOrigin))
 	page := func() string {
@@ -142,18 +142,21 @@ func TestConsentPageReadsNoticesOncePerMinute(t *testing.T) {
 		return page
 	}
 	retiring := `<p class="retiring">This address is retiring.`
-	e.edge.set(nil, stored(false, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: newRelay}))
-	if !strings.Contains(page(), retiring) {
-		t.Fatal("consent page does not warn")
+	if strings.Contains(page(), "retiring") {
+		t.Fatal("consent page warns with no notice")
 	}
-	e.edge.set(nil, edgeagent.StoredNotices{})
+	e.edge.set(nil, stored(false, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: newRelay}))
 	e.skew.Add(int64(noticeReadEvery - time.Second))
-	if !strings.Contains(page(), retiring) {
-		t.Fatal("consent page read the notices again within a minute")
+	if strings.Contains(page(), "retiring") {
+		t.Fatal("consent page read the notices again within a minute of finding none")
 	}
 	e.skew.Add(int64(time.Second))
+	if !strings.Contains(page(), retiring) {
+		t.Fatal("consent page does not warn a minute after the notice came")
+	}
+	e.edge.set(nil, edgeagent.StoredNotices{})
 	if strings.Contains(page(), "retiring") {
-		t.Fatal("consent page still warns a minute after the notice went")
+		t.Fatal("consent page kept a notice the edge withdrew")
 	}
 }
 
