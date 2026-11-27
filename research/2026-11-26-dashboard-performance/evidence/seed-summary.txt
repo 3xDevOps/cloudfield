@@ -1,0 +1,21 @@
+sessions 600 (live 24) in 4 workspaces, events 73462, first seq 1
+     161  busy workspace, last 1h: coord.message
+     166  busy workspace, last 1h: coord.message.acked
+     148  busy workspace, last 1h: run.status
+    1163  busy workspace, last 1h: run.status (reread)
+    1310  busy workspace, last 24h: coord.message
+    1306  busy workspace, last 24h: coord.message.acked
+    1909  busy workspace, last 24h: run.status
+   15331  busy workspace, last 24h: run.status (reread)
+     792  busy workspace, last 6h: coord.message
+     798  busy workspace, last 6h: coord.message.acked
+     815  busy workspace, last 6h: run.status
+    7281  busy workspace, last 6h: run.status (reread)
+    1339  busy workspace, last 7d: coord.message
+    1334  busy workspace, last 7d: coord.message.acked
+    3978  busy workspace, last 7d: run.status
+   29214  busy workspace, last 7d: run.status (reread)
+    1363  coord.message
+    1358  coord.message.acked
+    8690  run.status
+   62051  run.status (reread)

@@ -1,0 +1,59 @@
+# main (6abcb62ee), 150 ms per round trip between gateway and server
+one small call (server.info), one after another: median 453 ms = 3.0 round trips (min 452, max 455, n=15)
+six calls at once: median 455 ms = 3.0 round trips (min 453, max 456, n=5)
+Lanes history chain, 5 pages of 1,000 events in series: median 2330 ms = 15.5 round trips (min 2328, max 2342, n=3)
+## cold open (Board)
+requests 25, bytes 368346, waves 5, sockets opened /ws/events
+shown after 2892 ms, last response at 3954 ms (delay 0 ms per request)
+## List to Lanes (default window)
+requests 2, bytes 371972, waves 1, sockets opened none
+last response at 563 ms (delay 0 ms per request)
+## open a finished session
+requests 7, bytes 455, waves 2, sockets opened /ws/attach/<run>
+last response at 1059 ms (delay 0 ms per request)
+## reload on a session (deep link)
+requests 37, bytes 371756, waves 4, sockets opened /ws/attach/<run> /ws/events
+last response at 3625 ms (delay 0 ms per request)
+   t(ms)  loading  unloaded px  drawn px  unloaded share
+     125  yes          9481         0  100%
+     736  yes          8760       667  93%
+    1284  yes          8220      1169  88%
+    1974  yes          7659      1693  82%
+    2596  yes          7050      2272  76%
+    3073  no           6489      2788  70%
+settled after 3073 ms; capped: yes
+renderer CPU while filling: script 0.68 s, layout 0.02 s, style 0.11 s, all tasks 1.84 s
+lanes: 14 requests, 4439336 bytes
+    12    4439215  workspace.timeline
+     1        119  server.sysbox.status
+     1          2  push.active
+
+# perf/gateway-reuse-control-channels (33230cd0c), same link
+one small call (server.info), one after another: median 152 ms = 1.0 round trips (min 151, max 153, n=15)
+six calls at once: median 153 ms = 1.0 round trips (min 152, max 454, n=5)
+Lanes history chain, 5 pages of 1,000 events in series: median 836 ms = 5.6 round trips (min 821, max 943, n=3)
+## cold open (Board)
+requests 25, bytes 368330, waves 5, sockets opened /ws/events
+shown after 2172 ms, last response at 2573 ms (delay 0 ms per request)
+## List to Lanes (default window)
+requests 2, bytes 371972, waves 1, sockets opened none
+last response at 272 ms (delay 0 ms per request)
+## open a finished session
+requests 7, bytes 455, waves 2, sockets opened /ws/attach/<run>
+last response at 602 ms (delay 0 ms per request)
+## reload on a session (deep link)
+requests 37, bytes 371742, waves 4, sockets opened /ws/attach/<run> /ws/events
+last response at 2383 ms (delay 0 ms per request)
+   t(ms)  loading  unloaded px  drawn px  unloaded share
+      83  yes          9481         0  100%
+     256  yes          8809       621  93%
+     455  yes          8760       667  93%
+     591  yes          8220      1169  88%
+     889  yes          7659      1693  82%
+    1205  yes          7050      2272  76%
+    1433  no           6489      2788  70%
+settled after 1618 ms; capped: yes
+renderer CPU while filling: script 0.80 s, layout 0.02 s, style 0.11 s, all tasks 1.69 s
+lanes: 14 requests, 4439340 bytes
+    12    4439219  workspace.timeline
+     1        119  server.sysbox.status

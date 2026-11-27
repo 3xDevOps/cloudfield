@@ -1,0 +1,38 @@
+# Running totals: seeded store (600 sessions, 4 workspaces), 150 ms per round trip between gateway and server
+# Lanes: all workspaces, Finished unfolded; two runs per window (first line pair: settle time and timeline requests+bytes; last line: time, loading, px not loaded, px drawn, share not loaded)
+
+## Before: gateway, dashboard and server built from main at 6abcb62ee (before #1178, #1180, #1196)
+== Lanes 6h
+settled after 257486 ms; capped: no
+     1     373648  workspace.timeline
+    3193  no           9001     11660  44%
+== Lanes 24h
+settled after 2929 ms; capped: yes
+    12    4439217  workspace.timeline
+    2772  no           6489      2788  70%
+== Lanes 7d
+settled after 2904 ms; capped: yes
+    20    7445810  workspace.timeline
+    2868  no            907       418  68%
+== cold open
+cold open: sessions shown median 2562 ms (min 2528, max 2586); hydrated median 2894 ms (min 2778, max 2974); quiet at median 4354 ms; requests 25; budget.get 4 (4 workspaces); n=7
+reload (snapshot painted first): sessions shown median 530 ms (min 489, max 846); hydrated median 459 ms (min 429, max 727); quiet at median 5102 ms; requests 31; budget.get 8 (4 workspaces); n=7
+
+Note: the first 6h run on the old build took 257 s because one workspace.timeline request hung; not investigated. The second run is the comparable one.
+
+## Now: branch of #1196 on main at b0dfb92e7 (#1178, #1180, #1189 merged)
+== Lanes 6h
+settled after 1564 ms; capped: no
+     6    1750622  workspace.timeline
+    1292  no              0     20699  0%
+== Lanes 24h
+settled after 2041 ms; capped: no
+     8    2350370  workspace.timeline
+    1867  no              0      8772  0%
+== Lanes 7d
+settled after 2110 ms; capped: no
+    10    2943751  workspace.timeline
+    1971  no              0      1250  0%
+== cold open
+cold open: sessions shown median 1538 ms (min 1503, max 1585); hydrated median 1552 ms (min 1492, max 1600); quiet at median 2641 ms; requests 25; budget.get 4 (4 workspaces); n=7
+reload (snapshot painted first): sessions shown median 458 ms (min 439, max 508); hydrated median 426 ms (min 402, max 461); quiet at median 2676 ms; requests 31; budget.get 8 (4 workspaces); n=7

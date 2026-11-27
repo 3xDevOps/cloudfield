@@ -1,0 +1,41 @@
+   t(ms)  loading  unloaded px  drawn px  unloaded share
+     488  yes          8220      1168  88%
+     894  yes          7659      1692  82%
+    1117  yes          7050      2271  76%
+    1296  no           6489      2788  70%
+settled after 1555 ms; capped: yes
+renderer CPU while filling: script 0.90 s, layout 0.02 s, style 0.13 s, all tasks 1.78 s
+lanes: 14 requests, 4439339 bytes
+    12    4439218  workspace.timeline
+     1        119  server.sysbox.status
+     1          2  push.active
+
+   t(ms)  loading  unloaded px  drawn px  unloaded share
+      89  yes          9479         0  100%
+     594  yes          8809       620  93%
+     701  yes          8760       666  93%
+    1102  yes          8220      1168  88%
+    1623  yes          7659      1692  82%
+    2151  yes          7050      2271  76%
+    2683  no           6489      2788  70%
+settled after 2683 ms; capped: yes
+renderer CPU while filling: script 0.64 s, layout 0.01 s, style 0.12 s, all tasks 1.52 s
+lanes: 14 requests, 4439339 bytes
+    12    4439218  workspace.timeline
+     1        119  server.sysbox.status
+     1          2  push.active
+
+   t(ms)  loading  unloaded px  drawn px  unloaded share
+     148  yes         20792         0  100%
+     528  yes         18193      2531  88%
+     646  yes         17996      2724  87%
+    1108  yes         15834      4842  77%
+    1641  yes         13584      7051  66%
+    2186  yes         11148      9458  54%
+    2821  no           8902     11655  43%
+settled after 2822 ms; capped: yes
+renderer CPU while filling: script 0.63 s, layout 0.02 s, style 0.21 s, all tasks 1.92 s
+lanes: 10 requests, 2943555 bytes
+     8    2943434  workspace.timeline
+     1        119  server.sysbox.status
+     1          2  push.active
