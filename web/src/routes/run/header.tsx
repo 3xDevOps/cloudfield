@@ -14,8 +14,7 @@ import { TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Tooltip } from '@/components/ui/tooltip'
 import { StatusDot } from '@/components/ui/status-dot'
 import { useIsMobile } from '@/lib/breakpoints'
-import { runAccountWords } from '@/lib/run-account'
-import { memberName } from '@/lib/member-name'
+import { useRunAccountWords } from '@/lib/run-account'
 import { extraRepoCount, repoLabel } from '@/lib/repos'
 import { isSudo } from '@/lib/run-requests'
 import type { AgentInfo } from '@/lib/types'
@@ -145,8 +144,7 @@ function StateLine({ run, agentName, narrow, controls, chip }: { run: RunRecord;
   ]
     .filter(Boolean)
     .join(' · ')
-  const accountOwner = useStore((s) => memberName(s, run.account_member_id || run.member_id))
-  const account = runAccountWords(run, accountOwner)
+  const account = useRunAccountWords(run)
   const mode = modeLabel[run.mode] ?? run.mode
   const watch = useStore((s) => runWatch(s, run.id))
   const navigate = useStore((s) => s.navigate)
@@ -206,12 +204,6 @@ function StateLine({ run, agentName, narrow, controls, chip }: { run: RunRecord;
                 <span className="min-w-0 truncate">{account}</span>
               </span>
             )}
-            {run.account_login_per_use && (
-              <span className={part}>
-                <span aria-hidden>·</span>
-                <span className="min-w-0 truncate">Billed per use</span>
-              </span>
-            )}
             {run.via && (
               <span className={part}>
                 <span aria-hidden>·</span>
@@ -221,6 +213,8 @@ function StateLine({ run, agentName, narrow, controls, chip }: { run: RunRecord;
           </>
         )}
       </div>
+      {/* What the session costs stays when every other part has gone. */}
+      {run.account_login_per_use && <Badge className="shrink-0">Billed per use</Badge>}
       {!narrow && run.permission && run.permission !== 'default' && (
         <Badge tone={run.permission === 'root' ? 'needs-you' : 'neutral'} className="shrink-0" title={permissions.find((p) => p.value === run.permission)?.detail}>{permissionLabel(run.permission)}</Badge>
       )}

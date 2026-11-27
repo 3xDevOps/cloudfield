@@ -275,11 +275,15 @@ const describers: Record<EventType, (p: Payload, event: Event) => ReactNode> = {
     // Both logins are named once either is an added one; an empty or `default` id is the default login.
     const added = (id: unknown) => text(id) !== '' && text(id) !== 'default'
     const logins = added(p.login) || added(p.previous_login)
-    const login = (id: unknown, name: unknown) => logins && `, login ${text(name) || (added(id) ? text(id) : 'default')}`
+    const login = (id: unknown, name: unknown) => `login ${text(name) || (added(id) ? text(id) : 'default')}`
+    const perUse = p.per_use === true && ' · billed per use'
+    if (logins && text(p.account_member_id) === text(p.previous_account_member_id)) {
+      return <>Moved from {login(p.previous_login, p.previous_login_name)} to {login(p.login, p.login_name)}{perUse}</>
+    }
     return (
       <>
-        Moved from <AccountOf id={p.previous_account_member_id} />{login(p.previous_login, p.previous_login_name)} to <AccountOf id={p.account_member_id} />{login(p.login, p.login_name)}
-        {p.per_use === true && ', billed per use'}
+        Moved from <AccountOf id={p.previous_account_member_id} />{logins && `, ${login(p.previous_login, p.previous_login_name)}`} to <AccountOf id={p.account_member_id} />{logins && `, ${login(p.login, p.login_name)}`}
+        {perUse}
       </>
     )
   },

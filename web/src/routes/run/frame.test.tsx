@@ -113,16 +113,23 @@ describe('run frame', () => {
     await waitFor(() => expect(screen.getByRole('banner').textContent).toContain("On Bob's account (fallback)"))
   })
 
-  it('names the login a run is on, and says when it is billed per use', async () => {
+  it('names the login a run is on, and badges it when it is billed per use', async () => {
     open({ account_member_id: alice.id, account_login: 'lgn-console0001', account_login_name: 'console', account_login_per_use: true })
-    await waitFor(() => expect(screen.getByRole('banner').textContent).toContain("On Alice's account, login console·Billed per use"))
+    await waitFor(() => expect(screen.getByRole('banner').textContent).toContain('On your account, login console'))
+    expect(within(screen.getByRole('banner')).getByText('Billed per use').dataset.slot).toBe('badge')
+  })
+
+  it("names a teammate's account by name", async () => {
+    open({ account_member_id: bob.id, account_login: 'lgn-work0000001', account_login_name: 'work' })
+    await waitFor(() => expect(screen.getByRole('banner').textContent).toContain("On Bob's account, login work"))
   })
 
   it("puts the member and the login a phone session pays with on a line of their own under the title", async () => {
     atViewport(360, { pointer: 'coarse' })
     open({ account_member_id: alice.id, account_login: 'lgn-console0001', account_login_name: 'console', account_login_per_use: true })
-    const line = await screen.findByText("On Alice's account, login console, billed per use")
+    const line = (await screen.findByText(/^On your account, login console/)).closest('p')!
     expect(line.className).not.toContain('truncate')
+    expect(within(line).getByText('Billed per use').dataset.slot).toBe('badge')
     expect(screen.getByRole('banner').textContent).not.toContain('console')
   })
 
@@ -133,7 +140,7 @@ describe('run frame', () => {
       type: 'run.account',
       payload: { account_member_id: alice.id, previous_account_member_id: alice.id, login: 'lgn-work0000001', previous_login: '', login_name: 'work', previous_login_name: '' },
     }, api))
-    await waitFor(() => expect(screen.getByRole('banner').textContent).toContain("On Alice's account, login work"))
+    await waitFor(() => expect(screen.getByRole('banner').textContent).toContain('On your account, login work'))
     expect(screen.getByRole('banner').textContent).not.toContain('Billed per use')
   })
 
