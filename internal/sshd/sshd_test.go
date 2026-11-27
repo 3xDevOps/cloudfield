@@ -371,7 +371,6 @@ type fakeRuns struct {
 	terminalAddr    string
 	terminalAddrErr error
 	terminalStopErr error
-	// interruptAnswer, when set, is the wait for an interrupt's answer.
 	interruptAnswer func() error
 	calls           []string
 	// revokes lists each RevokeAccount as owner:grantee.

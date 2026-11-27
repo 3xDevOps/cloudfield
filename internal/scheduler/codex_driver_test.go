@@ -16,6 +16,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/codexapp"
 	"github.com/3xDevOps/cloudfield/internal/codexapp/codexmock"
 	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/events"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
 )
 
@@ -338,8 +339,12 @@ func TestInterruptStopsAStandardCodexTurnAndTypesNoKeyElsewhere(t *testing.T) {
 		t.Fatalf("Inject: %v", err)
 	}
 	e.waitStoreStatus(t, run.ID, domain.RunRunning)
+	sub := e.subscribe(t)
 	if err := e.interrupt(t, run); err != nil {
 		t.Fatalf("Interrupt: %v", err)
+	}
+	if ev := waitTimelineEvent(t, sub, run.ID, events.TimelineNote); ev.ActorID != e.member.ID || ev.Payload.(events.TimelinePayload).Message != "sent an interrupt" {
+		t.Fatalf("timeline note = %+v, want the interrupt recorded with who sent it", ev)
 	}
 	interrupts := srv.Requests("turn/interrupt")
 	if len(interrupts) != 1 || string(interrupts[0]) != `{"threadId":"thread-1","turnId":"turn-1"}` {
@@ -365,6 +370,7 @@ func TestInterruptOfAStandardCodexSessionItCannotReachGivesTheRealReason(t *test
 	rt.startErr = errors.New("no such container")
 	run, _ := e.launchOn(t, "codex")
 	e.waitStoreStatus(t, run.ID, domain.RunNeedsAttention)
+	sub := e.subscribe(t)
 	if err := e.interrupt(t, run); !errors.Is(err, ErrAppServerUnavailable) {
 		t.Fatalf("Interrupt with no app-server client = %v, want ErrAppServerUnavailable", err)
 	}
@@ -399,6 +405,22 @@ func TestInterruptOfAStandardCodexSessionItCannotReachGivesTheRealReason(t *test
 			t.Fatalf("Interrupt of a %s session = %v, want ErrNoLiveEnvironment naming its status", status, err)
 		}
 	}
+	marker, err := e.bus.Publish(t.Context(), events.Event{
+		WorkspaceID: e.ws.ID, RunID: run.ID,
+		Payload: events.TimelinePayload{Kind: events.TimelineNote, Message: "end of interrupts"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorded := 0
+	for ev := waitTimelineEvent(t, sub, run.ID, events.TimelineNote); ev.ID != marker.ID; ev = waitTimelineEvent(t, sub, run.ID, events.TimelineNote) {
+		if ev.Payload.(events.TimelinePayload).Message == "sent an interrupt" {
+			recorded++
+		}
+	}
+	if recorded != 1 {
+		t.Fatalf("interrupts on the timeline = %d, want only the one that was not refused", recorded)
+	}
 }
 
 func TestInterruptOfAStandardCodexVMTheMemoryBrakeFrozeIsRefusedUnasked(t *testing.T) {
@@ -427,7 +449,7 @@ func TestInterruptOfAStandardCodexVMTheMemoryBrakeFrozeIsRefusedUnasked(t *testi
 
 func (e *testEnv) interrupt(t *testing.T, run *domain.Run) error {
 	t.Helper()
-	stopped, err := e.sched.Interrupt(t.Context(), run)
+	stopped, err := e.sched.Interrupt(t.Context(), run, e.member.ID)
 	if err != nil {
 		return err
 	}

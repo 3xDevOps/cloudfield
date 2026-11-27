@@ -149,7 +149,7 @@ type RunController interface {
 	// Interrupt asks run's agent to stop the turn it is in, or returns
 	// scheduler.ErrNoInterrupt for an agent that takes none from outside
 	// its terminal. stopped waits for the agent's answer.
-	Interrupt(ctx context.Context, run *domain.Run) (stopped func() error, err error)
+	Interrupt(ctx context.Context, run *domain.Run, actor domain.MemberID) (stopped func() error, err error)
 	ACPSetOption(ctx context.Context, run domain.RunID, optionID string, value any) error
 	// ACPSetModelEffort sets an enhanced run's model, then its effort, by
 	// value, and returns the two as the agent then reports them; an empty

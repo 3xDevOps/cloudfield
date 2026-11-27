@@ -181,8 +181,8 @@ func (f *fakeRuns) ACPCancel(_ context.Context, run domain.RunID) error {
 	return f.record(fmt.Sprintf("acp.cancel:%s", run))
 }
 
-func (f *fakeRuns) Interrupt(_ context.Context, run *domain.Run) (func() error, error) {
-	if err := f.record("interrupt:" + string(run.ID)); err != nil {
+func (f *fakeRuns) Interrupt(_ context.Context, run *domain.Run, actor domain.MemberID) (func() error, error) {
+	if err := f.record(fmt.Sprintf("interrupt:%s:%s", run.ID, actor)); err != nil {
 		return nil, err
 	}
 	if f.interruptAnswer != nil {
