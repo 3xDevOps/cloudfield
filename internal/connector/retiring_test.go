@@ -659,3 +659,51 @@ func TestNoNoteMarkIsPerConnector(t *testing.T) {
 		t.Fatalf("another member's connector at the same URL got %d content blocks within the minute, want 2", n)
 	}
 }
+
+func TestNoNoteMarkIsNotPerMember(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	ada, err := e.db.GetMemberByIdentity(ctx, "github", "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	// at is a session of a connector of Ada's added at resource.
+	at := func(resource, token string) *mcp.ClientSession {
+		t.Helper()
+		c := &store.Connector{Member: ada.ID, ClientID: e.clientID, ClientName: "Test client", RedirectHost: e.clientHost,
+			Resource: resource, Scopes: []string{"read"}, CreatedAt: now}
+		if err := e.db.CreateConnector(ctx, c, store.ConnectorTokens{Access: tokenHash(token), AccessExpiresAt: now.Add(time.Hour),
+			Refresh: tokenHash(token + "r"), RefreshExpiresAt: now.Add(time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+		client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "v0"}, nil)
+		httpClient := &http.Client{Transport: &oauth2.Transport{Source: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})}}
+		cs, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: resource, HTTPClient: httpClient, DisableStandaloneSSE: true}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = cs.Close() })
+		return cs
+	}
+	blocks := func(cs *mcp.ClientSession) int {
+		t.Helper()
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "aether_list_workspaces"})
+		if err != nil || res.IsError {
+			t.Fatalf("aether_list_workspaces = %+v %v", res, err)
+		}
+		return len(res.Content)
+	}
+	universal, own := at(e.origin+edgeproto.PathUniversalMCP, "ada-universal"), at(e.base, "ada-own")
+	if _, err := e.db.UnlinkIdentity(ctx, ada.ID, "github", "1"); err != nil {
+		t.Fatal(err)
+	}
+	e.edge.version.Store(int64(edgeproto.VersionRelayOrigin))
+	e.edge.set([]string{e.origin, newRelay}, stored(false, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: newRelay}))
+	if n := blocks(universal); n != 1 {
+		t.Fatalf("the universal connector of a member without GitHub got %d content blocks, want 1", n)
+	}
+	if n := blocks(own); n != 2 {
+		t.Fatalf("the same member's own-URL connector got %d content blocks within the minute, want 2", n)
+	}
+}
