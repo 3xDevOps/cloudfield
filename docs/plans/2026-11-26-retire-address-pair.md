@@ -307,8 +307,9 @@ and browser paths, with no ids.
   `cloudfield: <old> says it is retiring[ on <date>] and that its new address is <new>.`
   then, when the replacement is known as above and this machine holds no
   token for exactly that address, `Sign in there with: cloudfield login
-  --edge <new>`; otherwise `Confirm that address with whoever runs the
-  edge before you sign in there.` Then, as facts, each saved link and the
+  --edge <new>`; when it holds one, neither line; when the replacement is
+  not known, `Confirm that address with whoever runs the edge before you
+  sign in there.` Then, as facts, each saved link and the
   sync daemon that still name the old address, and a pointer to the
   guide for moving them and signing out. No link, daemon or logout
   command is generated.
