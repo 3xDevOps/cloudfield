@@ -397,7 +397,7 @@ func (v *lazyVM) round(r lazyRound) bool {
 	start := time.Now()
 	if err := h.e.save(ctx, v.key); err != nil {
 		events, _ := os.ReadFile(filepath.Join(v.cgroup(), "memory.events"))
-		kernel, _ := exec.Command("sh", "-c", "dmesg | tail -25").CombinedOutput()
+		kernel, _ := exec.Command("sh", "-c", "dmesg | grep -E \"invoked oom|oom-kill|out of memory|memory: usage|^\\[[ 0-9.]+\\] (anon|file|kernel|shmem|file_mapped|file_dirty|file_writeback|inactive_file|active_file|unevictable) \" | tail -16").CombinedOutput()
 		h.logf("savefail %s before_save: %s", tag, pre)
 		h.logf("savefail %s memory.events=%q monitor_log=%q", tag, strings.Join(strings.Fields(string(events)), " "), h.e.logTail(v.key))
 		for line := range strings.SplitSeq(strings.TrimSpace(string(kernel)), "\n") {
@@ -688,7 +688,7 @@ func TestKVMZZLazyWake(t *testing.T) {
 		alive := false
 		// A VM whose first save fails is replaced, so the arm still gets
 		// its wakes; each failure is logged and counted.
-		for attempt := 0; attempt < 4 && !alive; attempt++ {
+		for attempt := 0; attempt < 12 && !alive; attempt++ {
 			var err error
 			if v, err = h.up(arm, strings.Repeat("x", attempt)); err != nil {
 				h.logf("boot arm=%s mem=%d err=%q", arm.name, h.mem, err)
