@@ -75,11 +75,48 @@ func newSessionCgroup(root string, git bool, limit uint64) (*sessionCgroup, erro
 	if err = os.WriteFile(filepath.Join(dir, "memory.max"), []byte(strconv.FormatUint(memoryMax, 10)), 0); err != nil {
 		return nil, fmt.Errorf("cap the session's memory: %w", err)
 	}
+	if err = newAgentCgroup(dir, procs); err != nil {
+		return nil, fmt.Errorf("create the agent's cgroup: %w", err)
+	}
 	f, err := os.Open(procs)
 	if err != nil {
 		return nil, err
 	}
 	return &sessionCgroup{dir: dir, procs: f, memoryMax: memoryMax}, nil
+}
+
+// agentMemoryMin is the memory of the agent's cgroup that the session's own
+// limit never reclaims: what a long-running Claude Code and its adapter hold.
+// It protects only memory the agent uses, so a small agent takes nothing
+// from the session.
+const agentMemoryMin = 512 << 20
+
+// agentPids are the processes and threads the agent's cgroup may hold on top
+// of the session's process limit.
+const agentPids = 256
+
+// newAgentCgroup creates the agent leaf beside procs in the session cgroup
+// dir, where an agent's keeper puts itself (acpkeeper.AgentCgroup), and lets
+// any session process move itself from there to procs, as the keeper's
+// command wrapper does: the kernel asks for write access to cgroup.procs of
+// the destination and of the common ancestor.
+func newAgentCgroup(dir, procs string) error {
+	agent := filepath.Join(dir, "agent")
+	if err := os.Mkdir(agent, 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, "cgroup.subtree_control"), []byte("+pids +memory"), 0); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(agent, "memory.min"), []byte(strconv.Itoa(agentMemoryMin)), 0); err != nil {
+		return err
+	}
+	for _, d := range []string{dir, procs} {
+		if err := os.Chmod(filepath.Join(d, "cgroup.procs"), 0o666); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // gitCgroupDir holds the git service and every git it runs: beside the
@@ -99,14 +136,18 @@ func newGitCgroup(root string) (*os.File, error) {
 	return os.Open(dir)
 }
 
-// setLimit sets the session's process limit; 0 is unlimited.
+// setLimit sets the session's process limit; 0 is unlimited. The limit is
+// procs's, and the session's is agentPids above it, so processes that fill
+// procs leave the agent room to start one.
 func (c *sessionCgroup) setLimit(limit int64) error {
-	value := "max"
+	work, session := "max", "max"
 	if limit > 0 {
-		value = strconv.FormatInt(limit, 10)
+		work, session = strconv.FormatInt(limit, 10), strconv.FormatInt(limit+agentPids, 10)
 	}
-	if err := os.WriteFile(filepath.Join(c.dir, "pids.max"), []byte(value), 0); err != nil {
-		return fmt.Errorf("set the process limit: %w", err)
+	for name, value := range map[string]string{"pids.max": session, "procs/pids.max": work} {
+		if err := os.WriteFile(filepath.Join(c.dir, name), []byte(value), 0); err != nil {
+			return fmt.Errorf("set the process limit: %w", err)
+		}
 	}
 	c.limit.Store(max(limit, 0))
 	return nil
