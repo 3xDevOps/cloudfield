@@ -677,7 +677,8 @@ feedback and **Watch PR**, would crowd the tabs, so it sits in a 44px row of
 its own under them on the Changes tab only. A session on an added login, or
 moved to another account by a fallback, has the account on a line of its own
 under the title, wrapping rather than cut: "On your account, login console"
-with a **Billed per use** badge, or "On Ada's account, …" on a teammate's.
+with a **Billed per use** badge, or "On Ada's account, …" on a teammate's;
+a removed login is named by its id.
 
 **More** opens with a **Views** group (Trace, Files, Browser, **Session
 details**, **Session tree**, **Search…**, **Assistant**), then the session's
@@ -2971,14 +2972,20 @@ owner's when the caller has none.
 
 **Login** (`login-picker.tsx`) is a select under Account for Claude Code on
 the caller's own account, where `server.info` lists the `logins` feature and
-`agent.login.list` returns more than one login. **Automatic: starts on
-<name>**, the first login with Automatic on, sends no `login`; when a later
-login with Automatic on is billed per use it adds ", can move to <name>,
-billed per use", and the line under the select says a session can reach it.
-A picked login sends its id as `run.launch` `login`, and on a phone the
-closed **More options** summary names it. Each option's billing and an
-Automatic that is off show as muted detail. A teammate's account never shows
-it: only a login's owner names one.
+`agent.login.list` returns more than one login. Its value is short:
+**Automatic**, which sends no `login`, or the picked login's name, which it
+sends as `run.launch` `login`. Under the select, on lines of their own led by
+a coins icon, it says what can cost: "Can move to <name>, billed per use,
+when the logins before it run out." when a later login with Automatic on is
+billed per use, or "<name> is billed per use." for a picked one. On a phone
+the closed **More options** summary carries the same: "Automatic, can reach
+<name> (billed per use)" or the picked login. The menu is as wide as the
+field and its options wrap; each shows as muted detail "Tries <name> first"
+for Automatic, and for a login its billing, an Automatic that is off, and
+"At its limit (<window>) · resets in …" when the dialog already read its
+usage (the default login's, read with the account's when there are several
+accounts; the dialog reads no usage per login). A teammate's account never
+shows it: only a login's owner names one.
 
 Where the server offers `run.children.allow`, the form has a **Child
 sessions** select: **Use my setting** (naming it, "(off)"), **Allow for this
@@ -3299,11 +3306,14 @@ protected session. The row holds, from the left:
   `requested_account_member_id` ([usage fallback](teams.md#usage-fallback);
   a `run.account` event updates it live when the session moves), "On
   `<name>`'s account, login `<login>`", or "On your account, …" to its
-  owner, when it is on an added login (`account_login_name`), "Launched via
+  owner, when it is on an added login (`account_login_name`, or the
+  `account_login` id once that login is removed, as the activity line
+  names it), "Launched via
   `<name>`". Each part that does not fit drops whole,
   last first; the reason truncates last, and with under 96px left for it
   drops whole too, before the view switch gives way. A session on a login
-  billed per use (`account_login_per_use`) has a **Billed per use** badge
+  billed per use (`account_login_per_use`) has a **Billed per use** badge,
+  led by a coins icon (`PerUseBadge`, the same on every surface),
   after those parts, which stays at every width.
 - From 560px, the **Root access** (needs-you tone) or **Isolated** badge and,
   on the tile that carries the session's controls, the watch button. Neither
@@ -6599,25 +6609,35 @@ signed in offers its terminal login method, typed as the ACP server command
 installed Claude Code row adds **Add login**. A member with only the default
 login sees nothing else new. With more, the row's status reads "Installed · 3
 logins" and the row lists `agent.login.list` in priority order
-(`agent-logins.tsx`). Each login has its rank (1, 2, 3) with **Move up** and
-**Move down** arrows beside it (`agent.login.order`, every id); its name, kind
-and plan, "Tried first" on the first login with Automatic on, a **Billed per
-use** badge; email and organisation; the Use for shares state and whom it
+(`agent-logins.tsx`). Each login has its rank (1, 2, 3) with framed
+**Move <name> up** and **Move <name> down** arrows under it
+(`agent.login.order`, every id). The arrows stay off until the list has been
+read again after an order call, so the next move starts from the order the
+server keeps; a refused call reads the list again too, and only the newest
+read of the list lands. Each login shows its name, kind and plan, a "Tried
+first" badge on the first login with Automatic on (the login a launch that
+names none starts from before usage is weighed), a **Billed per use** badge,
+and, in the needs-you colour with a gauge icon, "At its limit (<window>) ·
+resets in …" while one of its current usage windows is at 95% or more (the
+server's `ExhaustedPercent`), naming the window that resets last; email and
+organisation; the Use for shares state and whom it
 reaches ("Off for shares", "On for shares: your account is not shared", "On
 for shares: no share reaches it while Automatic is off", or "On for shares:
 also serves" the teammates from `account.list` `shared_with`); its
 **Automatic** (`agent.login.automatic`) and **Use for shares**
 (`agent.login.share`) switches, each a row of its own; and its usage windows
-(`account.usage` with `login`). A Console login, whose usage the server
+(`account.usage` with `login`), whose reset reads in days and hours past 48
+hours ("resets in 3d 18h"). A Console login, whose usage the server
 reports `unsupported`, reads "No usage windows: billed per use"; any other
 read error shows verbatim. A login billed per use with Automatic on, below
 the first automatic login, adds "Automatic sessions can move here when the
 logins above it run out." An added login has **Rename** (inline,
 `agent.login.rename`) and **Remove** as icon buttons on its name line;
-**Remove** confirms first, saying it does not sign the login out at
-Anthropic (`agent.login.remove`). A refusal shows verbatim, disables
-**Remove** until the dialog is opened again, links each of the caller's
-sessions it names, and, when it names `cloudfield account revoke`, links
+**Remove** confirms first, naming the account the login is signed in as and
+saying it does not sign the login out at Anthropic (`agent.login.remove`). A
+refusal shows verbatim, turns **Remove** into a disabled secondary button
+until the dialog is opened again, links each of the caller's sessions it
+lists after "your sessions", and, when it names `cloudfield account revoke`, links
 Members, where a share is revoked. The default login has neither button and
 says why: it is the one `cloudfield agent login claude` signs in. On a
 phone the switches sit under the facts and above the usage bars.
@@ -6625,14 +6645,24 @@ phone the switches sit under the facts and above the usage bars.
 **Add login** (`add-login.tsx`) asks for a name, calls `agent.login.add`,
 and runs the sign-in under the heading "Sign in to <name>" in the
 assistant's sign-in terminal on `/ws/terminal?agent_login=<id>`, then shows
-`agent.login.result`: the login added, or the refusal with **Start again**.
-The panel's one way to end the sign-in is **Cancel sign-in**, which sends
-Ctrl-C; a line under it says leaving the page keeps the sign-in running, for
-up to 15 minutes from its start. While a sign-in this page started runs, the
-Claude Code row says so with **Return to the sign-in**, which reattaches its
-terminal, and Add login offers the same as its primary button with **Start
-sign-in** disabled. The server refuses another add while one runs, naming
-it; the refusal does the same. Every refusal shows verbatim.
+how it ended: the login added, or the refusal with **Start again**. The
+running sign-in is kept in `store/login-sign-in.ts` while the member moves
+between pages, and the Agents page holds the one `agent.login.result` wait
+for it, which the panel reads; an answer the server did not give (the
+gateway's `server did not answer`, `server unreachable`, a failed fetch) is
+no outcome, and the page waits again. The panel's one way to end the
+sign-in is **Cancel sign-in**, which sends Ctrl-C; pressed while the
+terminal is still starting, the panel says it is cancelling and sends it as
+soon as the terminal is up. A dropped socket reconnects to the same sign-in
+("Reconnecting to the sign-in…") instead of ending it. A line under the
+buttons says the member can leave the page and how long the sign-in keeps
+running: the minutes left of its 15 when this tab opened its terminal, else
+"up to 15 minutes from its start". While a sign-in runs, the Claude Code row
+says so with **Return to the sign-in**, which reattaches its terminal, and
+Add login offers the same as its primary button with the name field and
+**Start sign-in** disabled. The server refuses another add while one runs,
+naming it; the refusal shows the same way, with the server's words
+verbatim. Every other refusal shows verbatim under "Sign-in not started".
 
 **Signed-out logins.** `SignedOutAlert` (`components/shell/signed-out-alert.tsx`),
 mounted by `AppShell` under `StaleBanner`, shows while any installed agent in
