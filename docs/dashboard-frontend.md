@@ -386,7 +386,14 @@ top to bottom:
    server's error, below the row (`choices_error`). Drag the panel's right
    edge, or focus **Resize launch panel** and press the arrow keys, to set its
    width from 360px to 720px, never past the room right of the sidebar. The
-   width is saved on this browser.
+   width is saved on this browser. While the panel is open it calls
+   `workspace.mirror.warm` for its workspace, once when the panel opens or
+   the workspace changes and at most every 5 seconds as the task is edited
+   (`launch/warm-base.ts`), so a launch right after typing starts from a
+   source mirror the server has just refreshed and does not wait for the
+   upstream. One call runs at a time, and after one fails the panel makes no
+   more until the workspace changes or the panel is reopened. Nothing is
+   shown; the launch reports a source that cannot be fetched.
 3. **Sessions** (`sidebar-runs.tsx`), a `region` with three groups, **Needs you**,
    **Working** and **Finished** (see [Session state](#session-state)), each an `h2`
    holding an `aria-expanded` disclosure button, a chevron that turns a
@@ -2100,13 +2107,19 @@ a time (the Session tree panel's announcer, `src/lib/use-announcement.ts`).
 the view is mounted and reads `workspace.timeline` backward with
 `types: ["run.status", "coord.message", "coord.message.acked"]` and
 `no_rereads: true`, 1000 a page,
-until it passes the window's start, the log's start or 5000 events per
-workspace; "Older history not loaded" marks the last case. History counts as read back to the page's `older_time` (how far the server
+until it passes the window's start, the log's start or the budget per
+workspace: 5000 events for a window up to 6h, 10,000 up to 24h, 25,000
+beyond (`historyBudgetFor`; an event held costs the browser about 0.3 KB).
+"Older history not loaded" marks the last case, with **Load more** beside
+it, which adds 10,000 to the budget and reads on. Both show only while the
+window reaches back past what is held and no read has failed (a failed read
+shows **Retry**). The budget only rises while a view holds history; a server
+switch or a new signed-in member puts it back to the window's own. History counts as read back to the page's `older_time` (how far the server
 read, rereads included), or to its first event when a server does not send
 one. Of a page that would pass the budget only the newest events that fit
 are kept, and history then counts as read back to the oldest of those. `sync.ts` appends
 live events of those types, rereads left out, to held history, which keeps a workspace's newest
-5000 and moves its loaded boundary past what it drops; the last view to leave
+events up to the budget and moves its loaded boundary past what it drops; the last view to leave
 drops it, and a server switch or a new signed-in member clears it for a fresh
 read. Lane geometry comes from the model
 (`model.ts`, `segments.ts`, `edges.ts`, `axis.ts`), never from DOM
@@ -2209,6 +2222,7 @@ running"; beside the chip, the chip's own count stands.
 | State | Dot | Comes from | Group |
 | --- | --- | --- | --- |
 | Working | filled circle, pulses | `state` `working` (a turn is in progress), or `queued` / `provisioning` ("Queued", "Starting") | Working |
+| Starting | filled circle, pulses | A `running` session whose `aether-acp` stream is live in this tab and last acked `starting`: the launch returned before the agent started | Working |
 | Waiting for agents | clock | `waiting-agents`: held background subagents or workflows, ACP Task agents, a session with live subsessions, or a `waiting --for agents` report | Working |
 | Waiting for CI | clock | `waiting-ci`: a `waiting --for ci` report | Working |
 | Waiting for process | clock | `waiting-tools`: a background task the agent holds, such as Claude's Monitor, or a `waiting --for process` report | Working |
@@ -4144,8 +4158,10 @@ Escape already closes sheets and an accidental reject cancels the tool call.
 The header's **Answer** focuses the docked card on every screen. While Session shows the dock, Details' **Needs
 you** shows one link, "1 request, shown below the timeline", that closes a
 Details sheet and focuses the card; on other views it lists the cards. `routes/run/session-failure.tsx` shows an adapter failure with
-**Retry Enhanced** and **Open in Standard**, and a sign-in failure with the
-agent's auth methods. On a run on the viewer's own account it adds **Sign in
+**Retry Enhanced** and **Open in Standard**, which starts a new Standard
+session when the switch is refused with `session_not_reported`, and a sign-in failure with the
+agent's auth methods, plus **Retry Enhanced** when the agent failed to start,
+since signing in does not start it. On a run on the viewer's own account it adds **Sign in
 on Agents**, and when that agent's `agent.list` row has `login_problem` its
 title is the alert's ("Claude Code is signed out" or "Claude Code's sign-in
 was refused"); a login-file problem shows verbatim, while a refusal is

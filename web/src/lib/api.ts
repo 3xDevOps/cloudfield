@@ -940,6 +940,10 @@ export const api = {
     call<WorkspaceMirrorResult>('workspace.mirror.refresh', {
       workspace_id: workspaceID,
     }),
+  workspaceMirrorWarm: (workspaceID: string) =>
+    call<Record<string, never>>('workspace.mirror.warm', {
+      workspace_id: workspaceID,
+    }),
   workspaceMirrorAdopt: (workspaceID: string, generation: number, expectedCommit: string) =>
     call<WorkspaceMirrorResult>('workspace.mirror.adopt', {
       workspace_id: workspaceID,

@@ -123,7 +123,7 @@ function WaitLine({ run }: { run: RunRecord }) {
 }
 
 /** The state's dot and label, for which `chip` stands in, then on a wide row the reason and what the session runs as. */
-function StateLine({ run, agentName, narrow, controls, chip }: { run: RunRecord; agentName: string; narrow: boolean; controls: boolean; chip?: React.ReactNode }) {
+export function StateLine({ run, agentName, narrow, controls, chip }: { run: RunRecord; agentName: string; narrow: boolean; controls: boolean; chip?: React.ReactNode }) {
   const presented = useRunPresentation(run)
   const asks = useNeedsYouRuns([run.id]).has(run.id)
   const presentation = run.switching

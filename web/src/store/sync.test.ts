@@ -234,6 +234,23 @@ describe('hydrate', () => {
     expect(Object.keys(store.getState().terminalControlSessions)).toEqual(['run_1'])
   })
 
+  it('drops a lane history that a view started for the member before, while the link status was awaited', async () => {
+    const store = createRootStore()
+    store.setState({ identityKey: 'someone-else' })
+    const client = fakeApi()
+    const link = Promise.withResolvers<LinkStatus>()
+    client.capabilities = vi.fn(async () => ({ gateway: 'local', methods: ['*'], ws: ['events'], local: ['link.status'] }))
+    client.localLinkStatus = vi.fn(() => link.promise)
+    const pending = hydrate(store, client)
+    await vi.waitFor(() => expect(client.localLinkStatus).toHaveBeenCalled())
+    // The identity change has cleared lane history; a mounted Lanes view starts its read again before the new identity is published.
+    store.getState().setLaneHistory(workspace.id, { loading: true })
+    link.resolve({ server_configured: true, linked: true, addr: 'a', user: 'u', repo: 'r' })
+    expect(await pending).toBe(true)
+    expect(store.getState().identityKey).not.toBe('someone-else')
+    expect(store.getState().laneHistory).toEqual({})
+  })
+
   it('does not publish link status or clear current errors after disposal during a local poll', async () => {
     const store = createRootStore()
     const staleClient = fakeApi()
