@@ -58,4 +58,7 @@ jobs:
       - name: VM tests (real Cloud Hypervisor VMs)
         env:
           GOFLAGS: -v
-        run: sudo env "PATH=$PATH" "HOME=$HOME" "GOFLAGS=$GOFLAGS" make test-kvm
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/ch54" https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v54.1/cloud-hypervisor-static
+          echo "f9ffb9646783233d1f0fb09e77db1fca66499d1041e63bc011b90683c0d49933  $RUNNER_TEMP/ch54" | sha256sum -c
+          sudo env "PATH=$PATH" "HOME=$HOME" "GOFLAGS=$GOFLAGS" "AETHER_ZZ_CH54=$RUNNER_TEMP/ch54" make test-kvm KVM_RUN=^TestKVMZZ KVM_PKGS=./internal/runtime/vm
