@@ -403,7 +403,7 @@ func candidates(ctx context.Context, st store.Store, launcher domain.MemberID, r
 			members = append(members, owner.ID)
 		}
 	}
-	ownGroup := requested.Member != launcher && len(own) > 0 && slices.Contains(members, launcher)
+	ownGroup := requested.Member != launcher && hasAddedLogin(own) && slices.Contains(members, launcher)
 	if ownGroup {
 		if _, err := add(launcher, launcherOwn); err != nil {
 			return nil, err
