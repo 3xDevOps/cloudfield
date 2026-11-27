@@ -14,6 +14,7 @@ import (
 
 	"github.com/3xDevOps/cloudfield/internal/cli"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/shellquote"
 	"golang.org/x/term"
 )
 
@@ -40,11 +41,11 @@ func agentLogin(args []string) error {
 	case adding && attaching:
 		return errors.New("--as starts a sign-in and --attach returns to one; give one of them")
 	case adding && *as == "":
-		return errors.New("--as needs a name: cloudfield agent login " + name + " --as <name>")
+		return errors.New("--as needs a name: cloudfield agent login " + shellquote.Quote(name) + " --as <name>")
 	case attaching && *attach == "":
-		return errors.New("--attach needs the login id cloudfield agent login " + name + " --as printed")
+		return errors.New("--attach needs the login id cloudfield agent login " + shellquote.Quote(name) + " --as printed")
 	case (adding || attaching) && name != addedLoginsAgent:
-		return fmt.Errorf("only Claude Code keeps added logins, so %s has none; cloudfield agent login %s signs in its one login", name, name)
+		return fmt.Errorf("only Claude Code keeps added logins, so %s has none; cloudfield agent login %s signs in its one login", name, shellquote.Quote(name))
 	}
 	added := ""
 	switch {
@@ -72,7 +73,7 @@ func agentLogin(args []string) error {
 	}
 	if adding || attaching {
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
-			command := "cloudfield agent login " + agent.Name + " --as " + *as
+			command := signInCommand(agent.Name, "--as", *as)
 			if attaching {
 				command = attachCommand(agent.Name, *attach)
 			}

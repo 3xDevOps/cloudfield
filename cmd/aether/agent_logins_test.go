@@ -407,3 +407,23 @@ func TestLaunchLoginSendsAnIDAsGiven(t *testing.T) {
 		t.Errorf("launchLogin(nope) = %v", err)
 	}
 }
+
+func TestPrintedSignInCommandsQuoteTheirValues(t *testing.T) {
+	if got, want := signInCommand("claude", "--as", "two words"), "cloudfield agent login claude --as 'two words'"; got != want {
+		t.Errorf("signInCommand = %q, want %q", got, want)
+	}
+	if got, want := attachCommand("claude", "lgn-test1;true"), "cloudfield agent login claude --attach 'lgn-test1;true'"; got != want {
+		t.Errorf("attachCommand = %q, want %q", got, want)
+	}
+	unlinked(t)
+	for args, want := range map[string]string{
+		"two words|--as=":            "--as needs a name: cloudfield agent login 'two words' --as <name>",
+		"two words|--attach=":        "--attach needs the login id cloudfield agent login 'two words' --as printed",
+		"two words|--as=work":        "only Claude Code keeps added logins, so two words has none; cloudfield agent login 'two words' signs in its one login",
+		"claude;true|--attach=lgn-x": "only Claude Code keeps added logins, so claude;true has none; cloudfield agent login 'claude;true' signs in its one login",
+	} {
+		if err := agentLogin(strings.Split(args, "|")); err == nil || err.Error() != want {
+			t.Errorf("agentLogin(%q) = %v; want %q", args, err, want)
+		}
+	}
+}

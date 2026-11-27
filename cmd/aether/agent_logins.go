@@ -17,6 +17,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/cli"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/shellquote"
 )
 
 // addedLoginsAgent is the one agent whose logins the subcommands of
@@ -50,8 +51,14 @@ func attachLogin(out io.Writer, agent protocol.AgentInfo, id string) error {
 	})
 }
 
+// signInCommand is the cloudfield agent login line that passes value to
+// flag, quoted for a shell.
+func signInCommand(agent, flag, value string) string {
+	return "cloudfield agent login " + shellquote.Quote(agent) + " " + flag + " " + shellquote.Quote(value)
+}
+
 func attachCommand(agent, id string) string {
-	return "cloudfield agent login " + agent + " --attach " + id
+	return signInCommand(agent, "--attach", id)
 }
 
 // withSignIn runs fn on a connection and its control channel. An
@@ -230,7 +237,7 @@ func addRefused(err error, agent string) error {
 	if ids := loginIDText.FindAllString(rpc.Message, -1); len(ids) > 0 {
 		return fmt.Errorf("%w\n%s; to finish it sooner, return to it with:\n  %s", err, ends, attachCommand(agent, ids[len(ids)-1]))
 	}
-	return fmt.Errorf("%w\n%s; to finish it sooner, run the %s line it printed when it started", err, ends, attachCommand(agent, "<login-id>"))
+	return fmt.Errorf("%w\n%s; to finish it sooner, run the cloudfield agent login %s --attach <login-id> line it printed when it started", err, ends, shellquote.Quote(agent))
 }
 
 // describeLogin is a login's name and what Claude Code recorded at sign-in.
@@ -497,7 +504,7 @@ func automaticLogin(args []string) error {
 		if on {
 			fmt.Printf("login %s: Cloudfield may choose it and move sessions onto it\n", args[0])
 		} else {
-			fmt.Printf("login %s: used only when you name it with cloudfield session --login %s\n", args[0], args[0])
+			fmt.Printf("login %s: used only when you name it with cloudfield session --login %s\n", args[0], shellquote.Quote(args[0]))
 		}
 		return nil
 	})
