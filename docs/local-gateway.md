@@ -988,6 +988,7 @@ call is refused with `-32602`, and with a lease another session holds with
 | `run.acp.item` | `{run_id, seq}` (View) | `{item: {...}}`, whole; expired IDs return unavailable with an explicit retained-history expiry message, missing IDs return not-found |
 | `run.mode.switch` | `{run_id, mode, control_session_id, control_generation}`; `mode` is `tui` (Standard) or `acp` (Enhanced); the lease may be omitted while nobody holds the session's control | `{run: {...}}` once the switch is done; see [Switching a running agent](enhanced-sessions.md#switching-a-running-agent) |
 | `run.interrupt` | `{run_id}`; **Steer**, no lease | `{}`; a session with no turn running answers the same |
+| `run.option.set` | `{run_id, model, effort}`, at least one of `model` and `effort`; **Steer**, no lease | `{model, effort}` as the agent reports them afterwards; each is recorded as by `run.acp.set_option` |
 
 Use the option IDs and values from the session's `config_options` snapshot,
 including selectors synthesized from an agent's separate `models` or `modes`.
@@ -1033,6 +1034,22 @@ other Standard session answers `-32002`: its agent stops only on its own key,
 so the message names `cloudfield attach <session-id>` and no key is typed into
 the terminal. A connector is refused it (`-32001`), and the gateway does not
 replay it.
+`run.option.set` changes an enhanced session's model, effort or both for a
+caller with no stream and so no option IDs, such as `cloudfield session set`.
+It is admitted as `run.interrupt` is. `model` is a value of the agent's model
+option, native or synthesized from its `models`, and `effort` a value of its
+`thought_level` option. The result is the session's model and effort as the
+agent reports them afterwards, which can differ from the values sent when the
+agent takes one under another name; an effort the agent does not report is
+omitted. The model is set first and stays changed if the effort then fails;
+the message says which one failed, with the agent's error when it refused the
+value. A session whose agent has no option for one answers `-32602`
+`scheduler: the session's agent offers no such option: effort`. A Standard
+session answers `-32002`: its model and effort change only inside the agent's
+own terminal, so the message names `cloudfield attach <session-id>` and
+`cloudfield session switch <session-id> --mode enhanced`. A Background
+session with `acp: false` answers `-32602`. A connector is refused it
+(`-32001`).
 `run.inject` takes `steer: true` to add a message to the agent's running
 turn, and `control_session_id`/`control_generation` to deliver it at once
 rather than after the room's moderation delay; its result's `outcome` is

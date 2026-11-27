@@ -3,6 +3,7 @@ package scheduler
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -361,6 +362,57 @@ func TestComposerEffortChoiceIsRecorded(t *testing.T) {
 			}
 		}
 		timer.Stop()
+	}
+}
+
+func TestModelAndEffortSetByValueAreRecorded(t *testing.T) {
+	t.Parallel()
+	e, rt := newACPEnv(t, withMockClaude)
+	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "say pong", "claude", domain.LaunchACP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	if _, _, err = e.sched.ACPSetModelEffort(t.Context(), run.ID, "opus", "medium"); err != nil {
+		t.Fatal(err)
+	}
+	if model, effort, err := e.sched.ACPSetModelEffort(t.Context(), run.ID, "", "low"); err != nil || model != "opus" || effort != "low" {
+		t.Fatalf("an effort alone leaves the session on model %q and effort %q (%v), want opus and low", model, effort, err)
+	}
+	if row, err := e.db.GetRun(t.Context(), run.ID); err != nil || row.Model != "opus" || row.Effort != "low" {
+		t.Fatalf("the session records model %q and effort %q (%v), want opus and low", row.Model, row.Effort, err)
+	}
+	exec := rt.all()[0]
+	if model, effort := exec.wire.setOption(t, "model"), exec.wire.setOption(t, "effort"); !slices.Equal(model, []any{"opus"}) || !slices.Equal(effort, []any{"medium", "low"}) {
+		t.Fatalf("the agent's model option was set to %v and its effort option to %v, want [opus] and [medium low]", model, effort)
+	}
+	exec.wire.mu.Lock()
+	wire := exec.wire.data.String()
+	exec.wire.mu.Unlock()
+	if model, effort := strings.Index(wire, `"configId":"model"`), strings.Index(wire, `"configId":"effort"`); effort < model {
+		t.Fatalf("the effort was not set after the model: %s", wire)
+	}
+}
+
+func TestModelOrEffortTheAgentHasNoOptionForIsRefused(t *testing.T) {
+	t.Parallel()
+	e, rt := newACPEnv(t, withMockClaude)
+	rt.fixture.SessionNew = json.RawMessage(`{"sessionId":"legacy"}`)
+	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "say pong", "claude", domain.LaunchACP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	for _, set := range []struct{ model, effort, want string }{
+		{"opus", "high", "scheduler: the session's agent offers no such option: model"},
+		{"", "high", "scheduler: the session's agent offers no such option: effort"},
+	} {
+		if _, _, err = e.sched.ACPSetModelEffort(t.Context(), run.ID, set.model, set.effort); !errors.Is(err, ErrNoSuchOption) || err.Error() != set.want {
+			t.Fatalf("model %q and effort %q = %v, want %q", set.model, set.effort, err, set.want)
+		}
+	}
+	if methods := rt.all()[0].agent.Methods(); slices.Contains(methods, acp.AgentMethodSessionSetConfigOption) || slices.Contains(methods, "session/set_model") {
+		t.Fatalf("the agent was asked to change an option it does not offer: %v", methods)
 	}
 }
 

@@ -296,6 +296,7 @@ cloudfield wait <session-id> --timeout 30m
 cloudfield logs <session-id>
 cloudfield message <session-id> "<reply>"
 cloudfield interrupt <session-id>
+cloudfield session set <session-id> --model <model> --effort <level>
 ```
 
 `cloudfield wait` exits 0 when the session finished, 1 when it failed, 3 when it needs
@@ -320,6 +321,17 @@ keeps its turn: the command fails and names `cloudfield resume <session-id>`,
 which wakes it. Any other Standard agent stops only on its own key, so the
 command fails and names `cloudfield attach <session-id>`: **Human:** press the
 key there. While another member controls the session it fails with their name.
+
+`cloudfield session set` changes the model, the effort or both of a running
+Enhanced session, to values its agent offers: `cloudfield agent models <agent>`
+lists models, and `cloudfield agent list --json` each agent's `effort_levels`.
+It prints `session <session-id> set to model <model>, effort <level>` with the
+values the agent reports afterwards, which can differ from the ones passed. The
+model is set first and stays changed if the effort then fails. A Standard
+session changes them only inside the agent's own terminal, so the command
+fails and names `cloudfield attach <session-id>` and
+`cloudfield session switch <session-id> --mode enhanced`. While another member
+controls the session it fails with their name.
 
 ## Bring results back and publish
 

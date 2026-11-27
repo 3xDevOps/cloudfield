@@ -299,6 +299,43 @@ func (s *Scheduler) ACPSetOption(ctx context.Context, run domain.RunID, optionID
 	return nil
 }
 
+// ErrNoSuchOption refuses a model or an effort for a session whose agent
+// offers no option that sets it.
+var ErrNoSuchOption = errors.New("scheduler: the session's agent offers no such option")
+
+// ACPSetModelEffort is ACPSetOption for a caller that names a model, an
+// effort or both and has no option ids; an empty one is left as it is. It
+// returns the two as the agent reports them afterwards, which can differ
+// from the values asked for.
+func (s *Scheduler) ACPSetModelEffort(ctx context.Context, run domain.RunID, model, effort string) (nowModel, nowEffort string, err error) {
+	awake, err := s.holdAwakeNow(run)
+	if err != nil {
+		return "", "", err
+	}
+	defer awake()
+	sess, err := s.acp.live(ctx, run)
+	if err != nil {
+		return "", "", err
+	}
+	// The model goes first: the levels an agent offers can depend on it.
+	for _, option := range []struct {
+		name, value string
+		id          func() string
+	}{{"model", model, sess.ModelOptionID}, {"effort", effort, sess.EffortOptionID}} {
+		if option.value == "" {
+			continue
+		}
+		id := option.id()
+		if id == "" {
+			return "", "", fmt.Errorf("%w: %s", ErrNoSuchOption, option.name)
+		}
+		if err = s.ACPSetOption(ctx, run, id, option.value); err != nil {
+			return "", "", fmt.Errorf("set the session's %s: %w", option.name, err)
+		}
+	}
+	return sess.Model(), sess.Effort(), nil
+}
+
 var errACPBusy = errors.New("scheduler: the Enhanced agent is busy")
 
 // Wakeable reports whether the server can prompt run's agent session: an
