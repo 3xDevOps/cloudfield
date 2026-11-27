@@ -60,25 +60,44 @@ func runLogout(args []string) error {
 
 // devicesPage says where to revoke a device that old, a retired address,
 // named replacement as its successor for: the Devices page of the sign-in
-// origin this machine recorded at replacement, or of replacement's when
-// this machine knows it otherwise. An address it does not know is only
-// the old address's word.
+// origin this machine recorded for exactly replacement, else of the one it
+// recorded for every other spelling of it, else of replacement's when this
+// machine knows it otherwise. An address it does not know is only the old
+// address's word, and records that disagree name no page.
 func devicesPage(dir, old, replacement string) string {
+	const ask = "ask whoever runs the edge for the address of its Devices page and revoke it there"
 	holdings, err := cli.LoadEdgeHoldings(dir)
 	if err != nil || !holdings.Known(old, replacement) {
-		return "ask whoever runs the edge for the address of its Devices page and revoke it there"
+		return ask
 	}
+	signin := map[string]string{}
 	for _, origin := range holdings.SignedIn {
 		if !cli.SameEdge(origin, replacement) {
 			continue
 		}
-		if c, err := edgeclient.New(dir, origin); err == nil {
-			if s, err := c.Session(); err == nil {
-				return "revoke it on " + s.SigninOrigin + "/devices"
+		c, err := edgeclient.New(dir, origin)
+		if err != nil {
+			return ask
+		}
+		s, err := c.Session()
+		if err != nil {
+			return ask
+		}
+		signin[origin] = s.SigninOrigin
+	}
+	page, exact := signin[replacement]
+	if !exact {
+		for _, o := range signin {
+			if page != "" && o != page {
+				return ask
 			}
+			page = o
 		}
 	}
-	return "revoke it on the Devices page of the sign-in origin of " + replacement
+	if page == "" {
+		return "revoke it on the Devices page of the sign-in origin of " + replacement
+	}
+	return "revoke it on " + page + "/devices"
 }
 
 // printStillSignedIn names the edges this machine still holds a token

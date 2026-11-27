@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -131,7 +132,7 @@ func retiringEdge(t *testing.T, value string) *httptest.Server {
 
 // writeEdgeTokens stores a device token for each relay origin, issued
 // at the sign-in origin it maps to.
-func writeEdgeTokens(t *testing.T, signin map[string]string) string {
+func writeEdgeTokens(t *testing.T, deviceID string, signin map[string]string) string {
 	t.Helper()
 	dir, err := cli.Dir()
 	if err != nil {
@@ -142,7 +143,7 @@ func writeEdgeTokens(t *testing.T, signin map[string]string) string {
 	}
 	edges := map[string]any{}
 	for relay, origin := range signin {
-		edges[relay] = map[string]any{"token": edgeproto.NewToken(), "signin_origin": origin, "device": map[string]any{"id": "dev-1", "label": "laptop"}}
+		edges[relay] = map[string]any{"token": edgeproto.NewToken(), "signin_origin": origin, "device": map[string]any{"id": deviceID, "label": "laptop"}}
 	}
 	raw, err := json.Marshal(map[string]any{"edges": edges})
 	if err != nil {
@@ -187,7 +188,7 @@ func TestRetiringNoticeAfterACommand(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			testhome.Isolate(t)
 			edge := retiringEdge(t, tc.value)
-			writeEdgeTokens(t, map[string]string{edge.URL: edge.URL})
+			writeEdgeTokens(t, "dev-1", map[string]string{edge.URL: edge.URL})
 			out, err := captureStdout(t, func() error { return dispatch([]string{"servers", "--edge", edge.URL}) })
 			if err != nil {
 				t.Fatal(err)
@@ -247,22 +248,32 @@ func TestLogoutAtARetiredAddress(t *testing.T) {
 		notified  = "deleted the device token for RELAY here, but the edge did not confirm the sign-out: it answered that this address is retired and that its new address is https://new.example.test.\n"
 	)
 	for _, tc := range []struct {
-		name   string
-		status int
-		body   string
-		atNew  bool
-		stdout string
-		errMsg string
+		name     string
+		status   int
+		body     string
+		atNew    map[string]string
+		deviceID string
+		stdout   string
+		errMsg   string
 	}{
-		{"revoked", http.StatusNoContent, "", false, signedOut, ""},
-		{"already refused", http.StatusUnauthorized, `{"error":"token revoked"}`, false, signedOut, ""},
-		{"retired, replacement unknown", http.StatusGone, retired, false,
+		{"revoked", http.StatusNoContent, "", nil, "dev-1", signedOut, ""},
+		{"already refused", http.StatusUnauthorized, `{"error":"token revoked"}`, nil, "dev-1", signedOut, ""},
+		{"retired, replacement unknown", http.StatusGone, retired, nil, "dev-1",
 			notified + "Device dev-1 may still be signed in; ask whoever runs the edge for the address of its Devices page and revoke it there.\n", ""},
-		{"retired, signed in at the replacement", http.StatusGone, retired, true,
+		{"retired, signed in at the replacement", http.StatusGone, retired, map[string]string{newEdge: "https://auth.new.example.test"}, "dev-1",
 			notified + "Device dev-1 may still be signed in; revoke it on https://auth.new.example.test/devices.\n" +
 				"still signed in to new.example.test; sign out there with: aether logout --edge https://new.example.test\n", ""},
-		{"gone without retired", http.StatusGone, `{"error":"gone"}`, false, "", "sign out: SIGNIN refused: gone (HTTP 410); the token is still valid and kept in "},
-		{"forbidden", http.StatusForbidden, `{"error":"no"}`, false, "", "sign out: SIGNIN refused: no (HTTP 403); the token is still valid and kept in "},
+		{"retired, signed in at two spellings of the replacement", http.StatusGone, retired,
+			map[string]string{newEdge + ":443": "https://other.new.example.test", newEdge: "https://auth.new.example.test"}, "dev-1",
+			notified + "Device dev-1 may still be signed in; revoke it on https://auth.new.example.test/devices.\n" +
+				"still signed in to new.example.test; sign out there with: aether logout --edge https://new.example.test\n" +
+				"still signed in to new.example.test:443; sign out there with: aether logout --edge https://new.example.test:443\n", ""},
+		{"retired, signed in at the replacement's other spelling", http.StatusGone, retired,
+			map[string]string{newEdge + ":443": "https://other.new.example.test"}, "dev-1",
+			notified + "Device dev-1 may still be signed in; revoke it on https://other.new.example.test/devices.\n" +
+				"still signed in to new.example.test:443; sign out there with: aether logout --edge https://new.example.test:443\n", ""},
+		{"gone without retired", http.StatusGone, `{"error":"gone"}`, nil, "dev-1", "", "sign out: SIGNIN refused: gone (HTTP 410); the token is still valid and kept in "},
+		{"forbidden", http.StatusForbidden, `{"error":"no"}`, nil, "dev-1", "", "sign out: SIGNIN refused: no (HTTP 403); the token is still valid and kept in "},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			testhome.Isolate(t)
@@ -275,10 +286,8 @@ func TestLogoutAtARetiredAddress(t *testing.T) {
 			relay := httptest.NewServer(http.NotFoundHandler())
 			t.Cleanup(relay.Close)
 			tokens := map[string]string{relay.URL: signin.URL}
-			if tc.atNew {
-				tokens[newEdge] = "https://auth.new.example.test"
-			}
-			dir := writeEdgeTokens(t, tokens)
+			maps.Copy(tokens, tc.atNew)
+			dir := writeEdgeTokens(t, tc.deviceID, tokens)
 			hosts := strings.NewReplacer("RELAY", strings.TrimPrefix(relay.URL, "http://"), "SIGNIN", strings.TrimPrefix(signin.URL, "http://"))
 			out, err := captureStdout(t, func() error { return dispatch([]string{"logout", "--edge", relay.URL}) })
 			signedIn, readErr := edgeclient.SignedIn(dir)
