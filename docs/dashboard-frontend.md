@@ -3027,8 +3027,8 @@ shut or open. The menu is as wide as the
 field and its options wrap; each shows as muted detail "Tries <name> first"
 for Automatic, and for a login its kind and plan ("Subscription · pro",
 "Console · billed per use"), an Automatic that is off, and
-"At its limit (<window>) · resets in …" when the dialog already read its
-usage (the default login's, read with the account's when there are several
+"At its limit (<window>) · resets in …", by the same rule as the Agents
+page, when the dialog already read its usage (the default login's, read with the account's when there are several
 accounts; the dialog reads no usage per login). A teammate's account never
 shows it: only a login's owner names one.
 
@@ -6725,8 +6725,10 @@ under the "Logins not read" error until **Retry** lands a list. Each login shows
 first" in the same muted text on the first login with Automatic on (the login a launch that
 names none starts from before usage is weighed), a **Billed per use** badge,
 and, in the needs-you colour with a gauge icon, "At its limit (<window>) ·
-resets in …" while one of its current usage windows is at 95% or more (the
-server's `ExhaustedPercent`), naming the window that resets last; email and
+resets in …" while its 5-hour or 7-day window is at 95% or more (the
+server's `ExhaustedPercent`) in a current (`ok`) read, naming the window that
+resets last: those are the windows and the read the server starts and moves
+a session on, so a per-model window or a `stale` read shows as usage only; email and
 organisation; with Use for shares on, a line only where it adds a fact
 beyond the switch: whom the share serves, "Sessions of <teammates> can run
 here too." (the teammates from `account.list` `shared_with`), which for a

@@ -166,6 +166,25 @@ describe('login list', () => {
     expect(row('console').textContent).not.toContain('At its limit')
   })
 
+  it('says a login is at its limit only for the windows and the current read the server starts a session on', async () => {
+    const resets = new Date(Date.now() + 72 * 3_600_000).toISOString()
+    const usage: Record<string, { status: 'ok' | 'stale'; windows: { id: string; label: string; used_percent: number; resets_at: string }[] }> = {
+      default: { status: 'ok', windows: [{ id: 'five_hour', label: '5 hours', used_percent: 40, resets_at: resets }, { id: 'seven_day', label: '7 days', used_percent: 40, resets_at: resets }, { id: 'seven_day_opus', label: '7 days (Opus)', used_percent: 97, resets_at: resets }] },
+      'lgn-work0000001': { status: 'stale', windows: [{ id: 'five_hour', label: '5 hours', used_percent: 96, resets_at: resets }] },
+    }
+    show({
+      accountUsage: vi.fn(async (params: { login?: string } = {}) => ({
+        account_member_id: alice.id,
+        login: params.login,
+        providers: [{ provider: 'claude' as const, checked_at: resets, error: 'claude usage: 429 Too Many Requests', ...(usage[params.login ?? 'default'] ?? { status: 'ok' as const, windows: [] }) }],
+      })),
+    })
+    expect(await within(row('default')).findByRole('progressbar', { name: 'Login default 7 days (Opus) usage' })).toBeDefined()
+    expect(await within(row('work')).findByRole('progressbar', { name: 'Login work 5 hours usage' })).toBeDefined()
+    expect(row('default').textContent).not.toContain('At its limit')
+    expect(row('work').textContent).not.toContain('At its limit')
+  })
+
   it('turns Use for shares through agent.login.share, and shows its refusal verbatim and reads the list again', async () => {
     const user = userEvent.setup()
     const refusal = 'you have no login "lgn-work0000001"'

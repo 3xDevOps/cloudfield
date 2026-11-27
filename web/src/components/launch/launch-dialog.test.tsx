@@ -1487,6 +1487,31 @@ describe('login', () => {
     expect(api.accountUsage).not.toHaveBeenCalledWith(expect.objectContaining({ login: expect.anything() }))
   })
 
+  it('says nothing of a limit for a per-model window or a stale read, which the server does not start a session on', async () => {
+    vi.mocked(api.agentLoginList).mockResolvedValue(logins)
+    vi.mocked(api.accountList).mockResolvedValue({ accounts: [alice, bob], shared_with: [] })
+    const resets = new Date(Date.now() + 40 * 3_600_000).toISOString()
+    let status: 'ok' | 'stale' = 'ok'
+    let windows = [{ id: 'seven_day', label: '7 days', used_percent: 40, resets_at: resets }, { id: 'seven_day_opus', label: '7 days (Opus)', used_percent: 97, resets_at: resets }]
+    vi.mocked(api.accountUsage).mockImplementation(async (params = {}) => ({
+      account_member_id: params.account_member_id ?? alice.id,
+      providers: params.account_member_id ? [] : [{ provider: 'claude', status, checked_at: resets, windows }],
+    }))
+    const shows = async () => {
+      const view = render(<LaunchDialog />)
+      await waitFor(() => expect(api.accountUsage).toHaveBeenCalledWith({}))
+      await act(async () => {})
+      await pickOption(await screen.findByRole('combobox', { name: 'Login' }), 'default')
+      const help = screen.getByText(/^This login is at its limit|^The session starts on this login/).textContent
+      view.unmount()
+      return help
+    }
+    expect(await shows()).toBe('The session starts on this login, and moves to the first other automatic login in your order with usage left when it runs out.')
+    status = 'stale'
+    windows = [{ id: 'seven_day', label: '7 days', used_percent: 96, resets_at: resets }]
+    expect(await shows()).toBe('The session starts on this login, and moves to the first other automatic login in your order with usage left when it runs out.')
+  })
+
   it('sends no login for Automatic with several logins', async () => {
     vi.mocked(api.agentLoginList).mockResolvedValue(logins)
     await open()
