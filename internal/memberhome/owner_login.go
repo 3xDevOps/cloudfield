@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -77,8 +78,9 @@ type ClaudeSettings struct {
 	Env          map[string]string
 }
 
-// ClaudeSettings reads ~/.claude/settings.json in member's home. A home or
-// file that does not exist sets nothing.
+// ClaudeSettings reads ~/.claude/settings.json in member's home, as Claude
+// Code does through a symlink, here only one that stays in the home. A
+// home or file that does not exist sets nothing.
 func (m *Manager) ClaudeSettings(member domain.MemberID) (ClaudeSettings, error) {
 	home, err := m.openExistingHome(member)
 	if errors.Is(err, fs.ErrNotExist) {
@@ -88,7 +90,28 @@ func (m *Manager) ClaudeSettings(member domain.MemberID) (ClaudeSettings, error)
 		return ClaudeSettings{}, err
 	}
 	defer func() { _ = home.Close() }()
-	data, err := readStateUpTo(home, claudeSettingsPath, maxProfileBytes)
+	f, err := home.OpenFile(claudeSettingsPath, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if errors.Is(err, fs.ErrNotExist) {
+		return ClaudeSettings{}, nil
+	}
+	if err != nil {
+		return ClaudeSettings{}, fmt.Errorf("memberhome: %s of %q: %w", claudeSettingsPath, member, err)
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	switch {
+	case err != nil:
+	case !info.Mode().IsRegular():
+		err = errors.New("it is not a regular file")
+	case hasMultipleLinks(info):
+		err = errors.New("it has another hard link")
+	case info.Size() > maxProfileBytes:
+		err = stateTooLarge{size: info.Size(), limit: maxProfileBytes}
+	}
+	var data []byte
+	if err == nil {
+		data, err = io.ReadAll(io.LimitReader(f, maxProfileBytes))
+	}
 	if err != nil {
 		return ClaudeSettings{}, fmt.Errorf("memberhome: %s of %q: %w", claudeSettingsPath, member, err)
 	}
