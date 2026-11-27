@@ -76,7 +76,6 @@ function AgentMessages({ run, inset }: { run: RunRecord; inset: boolean }) {
   const [all, setAll] = useState(false)
   const [loading, setLoading] = useState(false)
   const [retrying, setRetrying] = useState(false)
-  const [olderFailed, setOlderFailed] = useState(false)
   const readable = useCapability().hasMethod('coord.messages.list')
   const hidden = useStore((s) => s.hiddenAgentMessages[run.id] === true)
   useMessageList(useStore, api, scope)
@@ -87,14 +86,11 @@ function AgentMessages({ run, inset }: { run: RunRecord; inset: boolean }) {
   const older = async () => {
     setLoading(true)
     await loadMessagePage(useStore, api, scope, true)
-    setOlderFailed(Boolean(useStore.getState().messageErrors[key]))
     setLoading(false)
   }
-  // Retry repeats the read that failed: the older page after Show older, else the newest.
   const retry = async () => {
     setRetrying(true)
-    await loadMessagePage(useStore, api, scope, olderFailed)
-    setOlderFailed(olderFailed && Boolean(useStore.getState().messageErrors[key]))
+    await loadMessagePage(useStore, api, scope)
     setRetrying(false)
   }
   return (

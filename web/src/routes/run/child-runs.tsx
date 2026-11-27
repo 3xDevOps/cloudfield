@@ -67,6 +67,7 @@ function useChildren(run: RunRecord, client: Api): { result: RunChildrenResult |
     ).finally(() => live && setReading(false))
     return () => {
       live = false
+      setReading(false)
     }
   }, [client, readable, run.id, changed, touched, retries])
   const shown = state.runID === run.id ? state : { result: null, error: null }
