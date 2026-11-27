@@ -444,3 +444,29 @@ func TestAnAgentDefinitionWithItsOwnExecutableCarriesNoAddedLogin(t *testing.T) 
 		t.Fatalf("the plan of a session on work under the definition: %v; want refused", err)
 	}
 }
+
+// The last check before a teammate's container starts asks for the
+// login's switches as well as the share: a login its owner turned
+// automatic off after the launch was admitted does not start.
+func TestALoginTurnedOffAfterAdmissionDoesNotStart(t *testing.T) {
+	e := newLoginShareEnv(t)
+	ctx := t.Context()
+	writeHomeFile(t, e.ownerHome, ".claude/.credentials.json", workLogin)
+	e.addLogin(t, e.owner.ID, "lgn-work000000", "work", workLogin)
+	if _, err := e.db.ShareAccount(ctx, e.owner.ID, e.member.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, err := e.sched.LaunchWithOptions(ctx, e.ws.ID, e.member.ID, e.owner.ID, "t", "claude", domain.LaunchTUI, domain.LaunchOptions{
+		Created: func(domain.RunID) {
+			if err := e.db.SetAgentLoginAutomatic(ctx, e.owner.ID, "claude", domain.DefaultLogin, false); err != nil {
+				t.Error(err)
+			}
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "not available to you") {
+		t.Fatalf("Ada's launch on Grace's default, turned automatic off once admitted: %v; want refused", err)
+	}
+	if n := e.containerCount(); n != 0 {
+		t.Fatalf("%d containers after the refused launch; want none", n)
+	}
+}

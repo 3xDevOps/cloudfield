@@ -360,3 +360,22 @@ func TestMemberRemovalThatCannotEndASignInStillRemovesTheOtherLogins(t *testing.
 		t.Fatalf("Bob's login directory before reconcile: %v; want it left to reconcile, not removed whole", err)
 	}
 }
+
+// A launch that names no login chooses its start again under the
+// authorization mutex, so a login that stopped serving while its usage was
+// read is not kept.
+func TestAnUnnamedStartIsChosenAgainUnderTheMutex(t *testing.T) {
+	e := newLoginEnv(t)
+	e.seed(t, e.member.ID, "lgn-work000000", "work", "ada@work.example.test")
+	e.runs.mu.Lock()
+	e.runs.startLogins = []domain.LoginID{"lgn-work000000", ""}
+	e.runs.mu.Unlock()
+	if _, perr := e.call(t, e.member.ID, protocol.MethodRunLaunch, protocol.RunLaunchParams{WorkspaceID: string(e.ws.ID), Task: "t", Harness: "claude"}); perr != nil {
+		t.Fatalf("run.launch: %v", perr)
+	}
+	e.runs.mu.Lock()
+	defer e.runs.mu.Unlock()
+	if n := len(e.runs.launchOptions); n != 1 || e.runs.launchOptions[0].AccountLogin != "" {
+		t.Fatalf("launches = %+v; want one on the login chosen under the mutex, the default", e.runs.launchOptions)
+	}
+}

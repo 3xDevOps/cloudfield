@@ -4,6 +4,7 @@
 package fallback
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -514,24 +515,44 @@ func ResolveRunLogin(ctx context.Context, st store.Store, actor domain.MemberID,
 	return fmt.Errorf("%w: the login this session is on is not shared with you", permissions.ErrDenied)
 }
 
-// ResolveRunRelaunch is ResolveRunLogin for reopening run, whose container
-// mounts its login again: an added login actor does not own must also be
-// automatic, as the session's provisioning requires, and is refused in the
-// words provisioning uses.
-func ResolveRunRelaunch(ctx context.Context, st store.Store, actor domain.MemberID, run *domain.Run, workspaces []domain.WorkspaceID) error {
-	account := run.Account()
-	if !account.Login.Added() || actor == account.Member {
-		return ResolveRunLogin(ctx, st, actor, run, workspaces)
-	}
-	if _, err := ResolveLaunchAccountIn(ctx, st, actor, string(account.Member), workspaces); err != nil {
+// ResolveLoginUse is ResolveLaunchAccountIn for a container that mounts
+// login in actor's session: a login actor does not own must also be on for
+// shares and automatic, as provisioning requires. A member who keeps no
+// login rows has only the default login, which needs the share alone.
+func ResolveLoginUse(ctx context.Context, st store.Store, actor domain.MemberID, login domain.Account, harness string, workspaces []domain.WorkspaceID) error {
+	if _, err := ResolveLaunchAccountIn(ctx, st, actor, string(login.Member), workspaces); err != nil || actor == login.Member {
 		return err
 	}
+	logins, err := st.ListAgentLogins(ctx, login.Member, harness)
+	if err != nil || (len(logins) == 0 && !login.Login.Added()) {
+		return err
+	}
+	id := cmp.Or(login.Login, domain.DefaultLogin)
+	if i := slices.IndexFunc(logins, func(l domain.AgentLogin) bool { return l.ID == id }); i < 0 || !logins[i].Shared || !logins[i].Automatic {
+		return fmt.Errorf("%w: login %s of this account is not available to you", permissions.ErrDenied, id)
+	}
+	return nil
+}
+
+// ResolveRunRelaunch is ResolveRunLogin for actor's reopening run, whose
+// container mounts its login again. When the account's owner keeps login
+// rows, actor, the session's owner and the member whose home it mounts each
+// need ResolveLoginUse. A member who keeps none has only the default login,
+// which needs actor's share alone, as before logins existed.
+func ResolveRunRelaunch(ctx context.Context, st store.Store, actor domain.MemberID, run *domain.Run, workspaces []domain.WorkspaceID) error {
+	account := run.Account()
 	logins, err := st.ListAgentLogins(ctx, account.Member, run.Harness)
 	if err != nil {
 		return err
 	}
-	if i := slices.IndexFunc(logins, func(l domain.AgentLogin) bool { return l.ID == account.Login }); i < 0 || !logins[i].Shared || !logins[i].Automatic {
-		return fmt.Errorf("%w: login %s of this account is not available to you", permissions.ErrDenied, account.Login)
+	if len(logins) == 0 && !account.Login.Added() {
+		_, err = ResolveLaunchAccountIn(ctx, st, actor, string(account.Member), workspaces)
+		return err
+	}
+	for _, member := range []domain.MemberID{actor, run.MemberID, run.HomeMember()} {
+		if err := ResolveLoginUse(ctx, st, member, account, run.Harness, workspaces); err != nil {
+			return err
+		}
 	}
 	return nil
 }

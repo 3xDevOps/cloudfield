@@ -393,6 +393,8 @@ type fakeRuns struct {
 	// whileTerminalStopped, when set, runs inside WithStoppedTerminal
 	// before its callback.
 	whileTerminalStopped func()
+	// startLogins are what StartLogin answers, one per call, then "".
+	startLogins []domain.LoginID
 }
 
 func (f *fakeRuns) Retention(run *domain.Run) (scheduler.RetentionInfo, error) {
@@ -490,7 +492,14 @@ func (f *fakeRuns) FallbackLaunchable(context.Context, domain.MemberID, domain.M
 }
 
 func (f *fakeRuns) StartLogin(context.Context, domain.WorkspaceID, domain.MemberID, domain.MemberID, string, domain.LaunchMode) (domain.LoginID, error) {
-	return "", nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.startLogins) == 0 {
+		return "", nil
+	}
+	login := f.startLogins[0]
+	f.startLogins = f.startLogins[1:]
+	return login, nil
 }
 
 func (f *fakeRuns) EnvironmentSignsIn(_ context.Context, workspace domain.WorkspaceID, _ string, _ domain.LaunchMode) (bool, error) {

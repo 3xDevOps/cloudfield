@@ -211,3 +211,40 @@ func TestResolveRunLoginNeedsTheLoginShared(t *testing.T) {
 		t.Fatalf("Bo, who holds no share: %v; want denied", err)
 	}
 }
+
+// Reopening a session on a login whose owner keeps login rows needs, for
+// the member reopening it, the session's owner and the member whose home
+// it mounts, the login on for shares and automatic unless they own it. An
+// owner who keeps no rows has only the default login, which needs the
+// reopening member's share alone, as before logins existed.
+func TestResolveRunRelaunchChecksEveryMemberAndBothSwitches(t *testing.T) {
+	w := newLoginWorld(t, "Ada/work")
+	ctx := context.Background()
+	lena, ada, bo := w.ids["Lena"], w.ids["Ada"], w.ids["Bo"]
+	onAdasDefault := &domain.Run{MemberID: lena, AccountMemberID: ada, Harness: "claude"}
+	if err := ResolveRunRelaunch(ctx, w.db, lena, onAdasDefault, nil); err != nil {
+		t.Fatalf("Lena reopening her session on Ada's default: %v", err)
+	}
+	if err := w.db.SetAgentLoginAutomatic(ctx, ada, "claude", domain.DefaultLogin, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := ResolveRunRelaunch(ctx, w.db, lena, onAdasDefault, nil); !errors.Is(err, permissions.ErrDenied) {
+		t.Fatalf("Lena reopening on Ada's default, automatic off: %v; want denied", err)
+	}
+	if err := w.db.SetAgentLoginAutomatic(ctx, ada, "claude", domain.DefaultLogin, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.db.RevokeAccountShare(ctx, ada, lena); err != nil {
+		t.Fatal(err)
+	}
+	if err := ResolveRunRelaunch(ctx, w.db, ada, onAdasDefault, nil); !errors.Is(err, permissions.ErrDenied) {
+		t.Fatalf("Ada reopening Lena's session on her default after revoking Lena's share: %v; want denied", err)
+	}
+	onBosDefault := &domain.Run{MemberID: lena, AccountMemberID: bo, Harness: "claude"}
+	if _, err := w.db.RevokeAccountShare(ctx, bo, lena); err != nil {
+		t.Fatal(err)
+	}
+	if err := ResolveRunRelaunch(ctx, w.db, bo, onBosDefault, nil); err != nil {
+		t.Fatalf("Bo, who keeps no login rows, reopening Lena's session on his default: %v; want allowed, as before logins existed", err)
+	}
+}

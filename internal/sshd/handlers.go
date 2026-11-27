@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"sync"
 	"time"
 
@@ -318,6 +317,13 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 	admission, perr := authorize()
 	if perr != nil {
 		return nil, perr
+	}
+	// An unnamed start is chosen again under the mutex: the login chosen
+	// before the usage read may have been turned off or removed meanwhile.
+	if p.Login == "" {
+		if login, perr = s.launchLogin(ctx, domain.WorkspaceID(p.WorkspaceID), member, domain.MemberID(p.AccountMemberID), p.Harness, p.Login, mode); perr != nil {
+			return nil, perr
+		}
 	}
 	requested := admission.Account.ID
 	if mode == "" {
@@ -720,16 +726,8 @@ func (s *Server) runRelaunch(ctx context.Context, member domain.MemberID, params
 			}
 		}
 	}
-	// The member who reopens it must reach its login, and on an added login
-	// so must the session's owner and the member whose home it mounts.
-	reach := []domain.MemberID{member}
-	if run.AccountLogin.Added() {
-		reach = slices.Compact([]domain.MemberID{member, run.MemberID, run.HomeMember()})
-	}
-	for _, who := range reach {
-		if err = fallback.ResolveRunRelaunch(ctx, s.cfg.Store, who, run, workspaces); err != nil {
-			return nil, rpcError(err)
-		}
+	if err = fallback.ResolveRunRelaunch(ctx, s.cfg.Store, member, run, workspaces); err != nil {
+		return nil, rpcError(err)
 	}
 	reopened, err := s.cfg.Runs.Relaunch(ctx, id, member)
 	if err != nil {

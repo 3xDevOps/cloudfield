@@ -15,6 +15,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/coordtransport"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/envname"
+	"github.com/3xDevOps/cloudfield/internal/fallback"
 	"github.com/3xDevOps/cloudfield/internal/gitengine"
 	"github.com/3xDevOps/cloudfield/internal/harness"
 	"github.com/3xDevOps/cloudfield/internal/mirror"
@@ -515,6 +516,9 @@ func (s *Scheduler) provisionSteps(ctx context.Context, entry *supervised, run *
 	}
 	if run.AccountMember() != run.HomeMember() {
 		if err = s.resolveRunAccount(ctx, run); err != nil {
+			return fmt.Errorf("check the account share: %w", err)
+		}
+		if err = fallback.ResolveLoginUse(ctx, s.cfg.Store, run.HomeMember(), run.Account(), run.Harness, runWorkspaces(run)); err != nil {
 			return fmt.Errorf("check the account share: %w", err)
 		}
 	}
