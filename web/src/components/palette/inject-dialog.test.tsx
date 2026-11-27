@@ -72,7 +72,6 @@ describe('inject dialog receipts', () => {
   it.each([
     ['queued', 'success', 'queued'],
     ['sent', 'success', 'Sent'],
-    ['not_sent', 'error', 'Not sent'],
     ['uncertain', 'error', 'Delivery uncertain'],
   ] as const)('reports a %s legacy injection receipt', async (state, toastKind, label) => {
     injectMocks.runInject.mockResolvedValue({
@@ -86,5 +85,25 @@ describe('inject dialog receipts', () => {
     await waitFor(() => expect(injectMocks.runInject).toHaveBeenCalledTimes(1))
 
     expect(toastMocks[toastKind]).toHaveBeenCalledWith(label)
+  })
+
+  it('keeps a refused message in the dialog with the server reason, and resends it under a fresh key', async () => {
+    const moving = 'ptyhost: no terminal for session: scheduler: the session is moving to another account or login; send the message when it finishes'
+    injectMocks.runInject.mockResolvedValueOnce({
+      message: roomMessage({ state: 'not_sent', failure: { code: 'session_unavailable', message: moving } }),
+      receipt: 'not_sent',
+    })
+    render(<InjectDialog />)
+
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'report this result' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect((await screen.findByRole('alert')).textContent).toBe(`Not sent: ${moving}`)
+    expect(screen.getByLabelText('Message')).toHaveProperty('value', 'report this result')
+    expect(useStore.getState().paletteDialog).toBe('inject')
+    expect(toastMocks.error).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+    await waitFor(() => expect(injectMocks.runInject).toHaveBeenCalledTimes(2))
+    expect(injectMocks.runInject.mock.calls[1]![2]).not.toBe(injectMocks.runInject.mock.calls[0]![2])
   })
 })

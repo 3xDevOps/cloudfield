@@ -1763,7 +1763,7 @@ both show:
 
 | Condition | Action |
 | --- | --- |
-| Enhanced turn interrupted or stopped short, or a `needs input:` question | **Reply**: on the card a popover composer whose message goes through `run.inject` (`Mod+Enter` sends); in the sidebar it opens the session's Chat view with the composer focused |
+| Enhanced turn interrupted or stopped short, or a `needs input:` question | **Reply**: on the card a popover composer whose message goes through `run.inject` (`Mod+Enter` sends), and which keeps its draft with "Message not sent: <the server's reason>" when the server does not send it; in the sidebar it opens the session's Chat view with the composer focused |
 | Native permission or question on a Standard session; blocked, held, or an Enhanced failure | **Open terminal** |
 | Native permission or question on an Enhanced session, or teammate question | **Answer** |
 | Usage limit with no account to move to | **Open** |
@@ -2728,7 +2728,9 @@ includes a caller-generated `idempotency_key`, which stays the same when the
 request is retried and changes only after the message payload changes or the
 submission succeeds. The server records the message as a room
 `steer_request`, so it follows the controller lease, 45-second queue,
-moderation and receipt rules. The launch and message forms are store dialogs
+moderation and receipt rules. A message the server did not send keeps the
+dialog open on its text, with "Not sent: <the server's reason>", such as
+the session moving to another account or login. The launch and message forms are store dialogs
 (`openPaletteDialog` on the `palette` slice) hosted by `AppShell`, so a
 button on any surface opens one by asking the store, with no dependence on
 the palette being on screen. The template form's open state lives with
