@@ -9,6 +9,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -256,21 +257,43 @@ func retiredKind(path string) int {
 }
 
 // acceptsHTML reports whether r's Accept header names text/html with a
-// nonzero quality.
+// valid nonzero quality.
 func acceptsHTML(r *http.Request) bool {
 	for _, v := range r.Header.Values("Accept") {
-		for media := range strings.SplitSeq(v, ",") {
+		for _, media := range mediaRanges(v) {
 			typ, params, err := mime.ParseMediaType(media)
 			if err != nil || typ != "text/html" {
 				continue
 			}
 			q, ok := params["q"]
-			if f, err := strconv.ParseFloat(q, 64); !ok || (err == nil && f > 0) {
+			if !ok || qvalue.MatchString(q) && strings.Trim(q, "0.") != "" {
 				return true
 			}
 		}
 	}
 	return false
+}
+
+// qvalue is an RFC 9110 quality value.
+var qvalue = regexp.MustCompile(`^(0(\.[0-9]{0,3})?|1(\.0{0,3})?)$`)
+
+// mediaRanges splits an Accept header at the commas outside quoted
+// strings.
+func mediaRanges(v string) []string {
+	var out []string
+	start, quoted := 0, false
+	for i := 0; i < len(v); i++ {
+		switch c := v[i]; {
+		case quoted && c == '\\':
+			i++
+		case c == '"':
+			quoted = !quoted
+		case c == ',' && !quoted:
+			out = append(out, v[start:i])
+			start = i + 1
+		}
+	}
+	return append(out, v[start:])
 }
 
 // serveRetired answers a request to a retired host: 410 Gone with the
