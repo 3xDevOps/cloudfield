@@ -650,9 +650,9 @@ func NormalizeOrigin(origin string) string {
 // OriginForNote returns origin when it is safe to show in a note every reader
 // of the workspace sees, and "" when it may hold a credential. Userinfo
 // (https://user:token@host, a token given as the ssh or scp-like user), a
-// query and a fragment can each carry one, and a mistyped address can put
-// one anywhere around an "@", so an origin with any of "@", "?" or "#" is
-// not shown at all.
+// query and a fragment can each carry one, so an origin with any of "@", "?"
+// or "#" is not shown at all. A token mistyped into the host or path with
+// none of those is not caught.
 func OriginForNote(origin string) string {
 	if strings.ContainsAny(origin, "@?#") {
 		return ""
