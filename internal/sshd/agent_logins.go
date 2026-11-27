@@ -341,6 +341,9 @@ func (s *Server) launchLogin(ctx context.Context, workspace domain.WorkspaceID, 
 		}
 		return login.ID, nil
 	}
+	if len(logins) == 0 {
+		return "", nil
+	}
 	login, err := s.cfg.Runs.StartLogin(ctx, workspace, member, account, harness, mode)
 	if errors.Is(err, permissions.ErrDenied) {
 		return "", &protocol.Error{Code: protocol.CodeDenied, Message: protocol.MethodRunLaunch + ": " + err.Error()}

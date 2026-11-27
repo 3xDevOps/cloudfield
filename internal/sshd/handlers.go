@@ -305,10 +305,9 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 	if perr != nil {
 		return nil, perr
 	}
-	byEnv, err := s.cfg.Runs.EnvironmentSignsIn(ctx, domain.WorkspaceID(p.WorkspaceID), p.Harness, mode)
-	if err != nil {
-		return nil, rpcError(err)
-	}
+	byEnv := sync.OnceValues(func() (bool, error) {
+		return s.cfg.Runs.EnvironmentSignsIn(ctx, domain.WorkspaceID(p.WorkspaceID), p.Harness, mode)
+	})
 	measured, err := fallback.Measure(ctx, s.cfg.Store, s.cfg.Services.Usage, member, domain.Account{Member: domain.MemberID(p.AccountMemberID), Login: login}, p.Harness, policy)
 	if err != nil {
 		return nil, rpcError(err)
@@ -327,8 +326,10 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 		}
 	}
 	chosen, excluded := fallback.Select(ctx, s.cfg.Store, measured, member, domain.Account{Member: requested, Login: login}, p.Harness, workspaces, policy, func(ctx context.Context, account domain.Account) (bool, error) {
-		if byEnv && account.Login.Added() {
-			return false, nil
+		if account.Login.Added() {
+			if signsIn, envErr := byEnv(); envErr != nil || signsIn {
+				return false, envErr
+			}
 		}
 		return s.cfg.Runs.FallbackLaunchable(ctx, member, requested, account, p.Harness, mode)
 	})
