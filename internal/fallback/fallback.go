@@ -545,3 +545,25 @@ func ranOutRecently(account domain.Account, now time.Time) bool {
 	}
 	return ok
 }
+
+// ResolveRunRelaunch is ResolveRunLogin for reopening run, whose container
+// mounts its login again: an added login actor does not own must also be
+// automatic, as the session's provisioning requires, and is refused in the
+// words provisioning uses.
+func ResolveRunRelaunch(ctx context.Context, st store.Store, actor domain.MemberID, run *domain.Run, workspaces []domain.WorkspaceID) error {
+	account := run.Account()
+	if !account.Login.Added() || actor == account.Member {
+		return ResolveRunLogin(ctx, st, actor, run, workspaces)
+	}
+	if _, err := ResolveLaunchAccountIn(ctx, st, actor, string(account.Member), workspaces); err != nil {
+		return err
+	}
+	logins, err := st.ListAgentLogins(ctx, account.Member, run.Harness)
+	if err != nil {
+		return err
+	}
+	if i := slices.IndexFunc(logins, func(l domain.AgentLogin) bool { return l.ID == account.Login }); i < 0 || !logins[i].Shared || !logins[i].Automatic {
+		return fmt.Errorf("%w: login %s of this account is not available to you", permissions.ErrDenied, account.Login)
+	}
+	return nil
+}

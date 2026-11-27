@@ -6,10 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
-	"github.com/3xDevOps/cloudfield/internal/fallback"
 	"github.com/3xDevOps/cloudfield/internal/memberhome"
 	"github.com/3xDevOps/cloudfield/internal/permissions"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
@@ -41,8 +41,8 @@ type LoginSignIns interface {
 	// member to them and removes those with no row.
 	ReconcileLogins(ctx context.Context, member domain.MemberID) error
 	// LoginInUse lists the sessions on an added login, moving to it, or
-	// queued to start on it.
-	LoginInUse(ctx context.Context, account domain.Account) ([]domain.RunID, error)
+	// queued to start on it, each with the member who owns it.
+	LoginInUse(ctx context.Context, account domain.Account) (map[domain.RunID]domain.MemberID, error)
 	// RevokeLogin moves teammates' running sessions off a login its owner
 	// turned off for shares.
 	RevokeLogin(login domain.Account)
@@ -230,21 +230,22 @@ func (s *Server) agentLoginRemove(ctx context.Context, member domain.MemberID, r
 			// named.
 			var own []string
 			teammates := 0
-			for _, id := range inUse {
-				if r, getErr := s.cfg.Store.GetRun(ctx, id); getErr == nil && r.MemberID == member {
+			for id, owner := range inUse {
+				if owner == member {
 					own = append(own, string(id))
 				} else {
 					teammates++
 				}
 			}
+			slices.Sort(own)
 			var parts []string
 			if len(own) > 0 {
-				parts = append(parts, "your sessions "+strings.Join(own, ", "))
+				parts = append(parts, "your sessions "+strings.Join(own, ", ")+" (end them)")
 			}
 			if teammates > 0 {
-				parts = append(parts, fmt.Sprintf("%d teammates' sessions", teammates))
+				parts = append(parts, fmt.Sprintf("%d of your teammates' sessions, which hold it until they end and their containers go (revoking the share you gave a teammate, with cloudfield account revoke <member-id>, moves their running sessions off it)", teammates))
 			}
-			return nil, &protocol.Error{Code: protocol.CodeConflict, Message: fmt.Sprintf("login %q is in use by %s; end your sessions, and turn its use for shares off to move teammates off it", login.Name, strings.Join(parts, " and "))}
+			return nil, &protocol.Error{Code: protocol.CodeConflict, Message: fmt.Sprintf("login %q is in use by %s", login.Name, strings.Join(parts, " and "))}
 		}
 	}
 	// The directory goes first, wherever a merge left it, so a removal that
@@ -317,22 +318,15 @@ func (s *Server) agentLoginAutomatic(ctx context.Context, member domain.MemberID
 	return struct{}{}, nil
 }
 
-// launchLogin resolves the login a launch by member on account starts
-// from: the one its owner named, or the account's first login in its
+// launchLogin resolves the login a launch by member on account, admitted
+// already, starts from: the one its owner named, or the account's first login in its
 // owner's order that member may use without naming it. Only a login's owner
 // may name it. An account none of whose logins member may use is not shared
-// with them; on their own account the first login serves when none is
-// usable, and its launch says why.
+// with them; on their own account the launch is refused, naming each login
+// and why it does not serve.
 func (s *Server) launchLogin(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, harness, named string, mode domain.LaunchMode) (domain.LoginID, *protocol.Error) {
 	if account == "" {
 		account = member
-	}
-	// Nothing of another member's logins is read before the share is.
-	if _, err := fallback.ResolveLaunchAccount(ctx, s.cfg.Store, member, string(account)); err != nil {
-		if errors.Is(err, permissions.ErrDenied) {
-			return "", &protocol.Error{Code: protocol.CodeDenied, Message: protocol.MethodRunLaunch + ": " + err.Error()}
-		}
-		return "", rpcError(err)
 	}
 	logins, err := s.cfg.Store.ListAgentLogins(ctx, account, harness)
 	if err != nil {

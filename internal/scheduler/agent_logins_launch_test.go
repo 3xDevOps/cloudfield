@@ -5,12 +5,12 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/harness"
 	"github.com/3xDevOps/cloudfield/internal/memberhome"
 	"github.com/3xDevOps/cloudfield/internal/permissions"
 )
@@ -118,7 +118,7 @@ func TestATeammatesSessionMountsTheSharedAddedLogin(t *testing.T) {
 			return false
 		}
 	})
-	if inUse, err := e.sched.LoginInUse(t.Context(), work); err != nil || !slices.Contains(inUse, run.ID) {
+	if inUse, err := e.sched.LoginInUse(t.Context(), work); err != nil || inUse[run.ID] != e.member.ID {
 		t.Fatalf("LoginInUse = %v, %v; want the session", inUse, err)
 	}
 }
@@ -233,16 +233,16 @@ func TestStartLoginAndChildLogin(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// On her own account Grace with no usable automatic login launches on
-	// the default login, never on one she did not pick.
+	// On her own account Grace with no automatic login is refused, never
+	// launched on one she did not pick.
 	if err := e.db.SetAgentLoginAutomatic(ctx, e.owner.ID, "claude", work.Login, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.db.SetAgentLoginAutomatic(ctx, e.owner.ID, "claude", console.Login, false); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.owner.ID, e.owner.ID, "claude", domain.LaunchTUI); err != nil || got != "" {
-		t.Fatalf("Grace's start with no automatic login = %q, %v; want her default", got, err)
+	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.owner.ID, e.owner.ID, "claude", domain.LaunchTUI); !errors.Is(err, ErrNoStartLogin) {
+		t.Fatalf("Grace's start with no automatic login = %q, %v; want refused", got, err)
 	}
 	if _, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.owner.ID, "claude", domain.LaunchTUI); !errors.Is(err, permissions.ErrDenied) {
 		t.Fatalf("Ada's start with no shared login: %v; want denied", err)
@@ -257,6 +257,85 @@ func TestStartLoginAndChildLogin(t *testing.T) {
 	}
 	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.owner.ID, "claude", domain.LaunchTUI); err != nil || got != "" {
 		t.Fatalf("a start where a variable pays = %q, %v; want the default login", got, err)
+	}
+}
+
+// A launch that names no login never lands on a login its owner turned
+// automatic off because nothing else served: it is refused, naming each
+// login and why, and the flag that names one. A member who added no login
+// has no row, so nothing of theirs is off and the launch starts on the
+// default login as before logins existed.
+func TestALaunchNamingNoLoginNeverFallsBackToALoginThatIsOff(t *testing.T) {
+	e := newLoginShareEnv(t)
+	ctx := t.Context()
+	expired := `{"claudeAiOauth":{"accessToken":"test-access-old","expiresAt":1}}`
+	writeHomeFile(t, e.ownerHome, ".claude/.credentials.json", expired)
+	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.owner.ID, e.owner.ID, "claude", domain.LaunchTUI); err != nil || got != "" {
+		t.Fatalf("Grace's start with no added login and a signed-out default = %q, %v; want the default login, whose launch says why", got, err)
+	}
+	work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", expired)
+	if err := e.db.OrderAgentLogins(ctx, e.member.ID, "claude", []domain.LoginID{work.Login, domain.DefaultLogin}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.db.SetAgentLoginAutomatic(ctx, e.member.ID, "claude", domain.DefaultLogin, false); err != nil {
+		t.Fatal(err)
+	}
+	_, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI)
+	if !errors.Is(err, ErrNoStartLogin) || !strings.Contains(err.Error(), ": work: ") || !strings.Contains(err.Error(), "default is automatic off; name one with cloudfield session --login <name>") {
+		t.Fatalf("Ada's start with work signed out and her API-key default automatic off: %v; want refused naming both", err)
+	}
+	dir, _ := e.logins.Path(e.member.ID, "claude", work.Login)
+	writeHomeFile(t, dir, memberhome.LoginCredentials, workLogin)
+	if err = e.db.SetAgentLoginAutomatic(ctx, e.member.ID, "claude", work.Login, false); err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI)
+	if !errors.Is(err, ErrNoStartLogin) || !strings.Contains(err.Error(), "work is automatic off; default is automatic off") {
+		t.Fatalf("Ada's start with every login automatic off: %v; want refused naming both", err)
+	}
+	if err := e.db.SetAgentLoginAutomatic(ctx, e.member.ID, "claude", domain.DefaultLogin, true); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI); err != nil || got != "" {
+		t.Fatalf("Ada's start with her default automatic again = %q, %v; want the default login", got, err)
+	}
+}
+
+// A teammate who picks an account whose owner added logins may still run
+// the owner's Claude Code installation, as before logins existed; only a
+// fallback the launcher did not pick refuses to borrow it.
+func TestATeammatesStartOnASharedAccountMayBorrowTheOwnersInstallation(t *testing.T) {
+	e := newLoginShareEnv(t)
+	ctx := t.Context()
+	writeHomeFile(t, e.ownerHome, ".claude/.credentials.json", workLogin)
+	installClaude(t, e.ownerHome)
+	if _, err := e.db.ShareAccount(ctx, e.owner.ID, e.member.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.owner.ID, "claude", domain.LaunchTUI); err != nil || got != "" {
+		t.Fatalf("Ada's start before Grace adds a login = %q, %v; want the default login", got, err)
+	}
+	work := e.addLogin(t, e.owner.ID, "lgn-work000000", "work", workLogin)
+	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.owner.ID, "claude", domain.LaunchTUI); err != nil || got != "" {
+		t.Fatalf("Ada's start after Grace adds a login = %q, %v; want the default login, first in Grace's order", got, err)
+	}
+	if err := e.db.SetAgentLoginShared(ctx, e.owner.ID, "claude", domain.DefaultLogin, false); err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.owner.ID, "claude", domain.LaunchTUI)
+	if err != nil || got != work.Login {
+		t.Fatalf("Ada's start with Grace's default off for shares = %q, %v; want work", got, err)
+	}
+	run, err := e.launchOn(t, work, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the session's container", func() bool { return e.rt.byName(string(run.ID)) != nil })
+	if spec := e.rt.byName(string(run.ID)).spec; !strings.HasSuffix(spec.Env["PATH"], ":/root/"+accountBin) {
+		t.Fatalf("PATH = %q; want Grace's installation borrowed", spec.Env["PATH"])
+	}
+	if ok, err := e.sched.FallbackLaunchable(ctx, e.member.ID, e.member.ID, work, "claude", domain.LaunchTUI); err != nil || ok {
+		t.Fatalf("work as a fallback Ada did not pick = %v, %v; want refused, as it borrows Grace's installation", ok, err)
 	}
 }
 
@@ -284,7 +363,17 @@ func TestAnAddedLoginIsMountedByItsShape(t *testing.T) {
 		}
 	}
 	dir, _ := e.logins.Path(e.member.ID, "claude", work.Login)
+	// Read while a session rewrites it in place, or after a sign-out, the
+	// file holds nothing: the login is not to be removed for it.
 	writeHomeFile(t, dir, memberhome.LoginCredentials, "")
+	profile, _ := harness.Lookup("claude")
+	gap := &domain.Run{ID: "run-gap", MemberID: e.member.ID, AccountMemberID: e.member.ID, AccountLogin: work.Login, Harness: "claude"}
+	if _, err = e.sched.addedLoginMounts(gap, e.member.ID, profile, "/root", map[string]string{}, EnvironmentPurposeRun, false); !errors.Is(err, ErrSignedOut) || !strings.Contains(err.Error(), "launch again") || strings.Contains(err.Error(), "adds it again") {
+		t.Fatalf("mounting a login whose file is empty: %v; want signed out right now, launch again", err)
+	}
+	if _, err = e.launchOn(t, work, ""); !errors.Is(err, ErrSignedOut) || !strings.Contains(err.Error(), "launch again") {
+		t.Fatalf("a launch on a login whose file is empty: %v; want signed out right now, launch again", err)
+	}
 	writeHomeFile(t, dir, "anthropic/configs/default.json", `{"authentication":{"type":"user_oauth"}}`)
 	writeHomeFile(t, dir, "anthropic/credentials/default.json", `{"access_token":"test-planted"}`)
 	planted, err := e.launchOn(t, work, "")
@@ -296,7 +385,24 @@ func TestAnAddedLoginIsMountedByItsShape(t *testing.T) {
 		r, _ := e.db.GetRun(t.Context(), planted.ID)
 		err = errors.New(r.Reason)
 	}
-	if err == nil || (!strings.Contains(err.Error(), "no longer holds") && !errors.Is(err, ErrSignedOut)) {
+	if err == nil || !strings.Contains(err.Error(), "no longer holds the subscription sign-in") {
 		t.Fatalf("a launch on a login planted with another kind: %v; want refused", err)
+	}
+}
+
+// A teammate whose shared logins are all signed out is told so, login by
+// login, rather than that the account is not shared.
+func TestATeammateIsToldWhyNoSharedLoginServes(t *testing.T) {
+	e := newLoginShareEnv(t)
+	ctx := t.Context()
+	expired := `{"claudeAiOauth":{"accessToken":"test-access-old","expiresAt":1}}`
+	writeHomeFile(t, e.ownerHome, ".claude/.credentials.json", expired)
+	e.addLogin(t, e.owner.ID, "lgn-work000000", "work", expired)
+	if _, err := e.db.ShareAccount(ctx, e.owner.ID, e.member.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.owner.ID, "claude", domain.LaunchTUI)
+	if !errors.Is(err, permissions.ErrDenied) || !strings.Contains(err.Error(), "work: ") || !strings.Contains(err.Error(), "expired") || strings.Contains(err.Error(), "not shared with you") {
+		t.Fatalf("Ada's start on Grace's signed-out logins: %v; want denied, naming work and why", err)
 	}
 }

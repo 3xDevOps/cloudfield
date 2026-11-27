@@ -4,6 +4,7 @@ package scheduler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/harness"
+	"github.com/3xDevOps/cloudfield/internal/runtime"
 )
 
 // mockMessages is a stand-in for Anthropic's Messages API that records the
@@ -105,20 +107,54 @@ func copyInto(t *testing.T, src, dst string) {
 }
 
 // containerView lays out below root what the container of plan sees in its
-// home: the member's home, then each mount below it, in order, over it.
-func containerView(t *testing.T, plan *EnvironmentPlan, root string) string {
+// home: the member's home, then each mount below it, in order, over it. It
+// returns the mounts laid out.
+func containerView(t *testing.T, plan *EnvironmentPlan, root string) []runtime.Mount {
 	t.Helper()
-	home := filepath.Join(root, plan.Home)
+	var laid []runtime.Mount
 	for _, m := range plan.Mounts {
 		if m.ContainerPath != plan.Home && !strings.HasPrefix(m.ContainerPath, plan.Home+"/") {
 			continue
 		}
 		copyInto(t, filepath.Join(m.HostPath, filepath.FromSlash(m.Subpath)), filepath.Join(root, m.ContainerPath))
+		laid = append(laid, m)
 	}
-	return home
+	return laid
 }
 
-func runRealClaude(t *testing.T, claude string, plan *EnvironmentPlan, root, base string) {
+// proxyLog records where a request that bypassed the stand-in API tried to
+// go, and sends it nowhere.
+type proxyLog struct {
+	mu    sync.Mutex
+	hosts []string
+}
+
+func (p *proxyLog) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	p.mu.Lock()
+	p.hosts = append(p.hosts, r.Method+" "+r.Host)
+	p.mu.Unlock()
+	http.Error(w, "no network in this test", http.StatusForbidden)
+}
+
+// mountScript bind-mounts each path it is given over itself, read-only
+// where asked, in a mount namespace of its own, checks that a read-only one
+// cannot be written, then runs the rest of its arguments. Over a mount, as
+// in a container, a write fails with EROFS and a rename with EBUSY.
+const mountScript = `while [ "$1" != -- ]; do
+	mount --bind "$2" "$2" || exit 96
+	if [ "$1" = ro ]; then
+		mount -o remount,bind,ro "$2" || exit 96
+		if [ -w "$2" ]; then echo "$2 is writable" >&2; exit 97; fi
+	fi
+	shift 2
+done
+shift
+exec "$@"`
+
+// runRealClaude runs claude in the container view below root, each laid out
+// mount bind-mounted as the container mounts it, and returns its output and
+// exit error.
+func runRealClaude(t *testing.T, claude string, plan *EnvironmentPlan, laid []runtime.Mount, root, base, proxy string) (string, error) {
 	t.Helper()
 	remap := func(p string) string {
 		if p == "" {
@@ -130,8 +166,12 @@ func runRealClaude(t *testing.T, claude string, plan *EnvironmentPlan, root, bas
 		"PATH=" + os.Getenv("PATH"),
 		"HOME=" + remap(plan.Home),
 		"ANTHROPIC_BASE_URL=" + base,
+		"HTTPS_PROXY=" + proxy,
+		"HTTP_PROXY=" + proxy,
+		"NO_PROXY=" + strings.TrimPrefix(base, "http://"),
 		"IS_SANDBOX=1",
 		"DISABLE_TELEMETRY=1",
+		"DISABLE_AUTOUPDATER=1",
 		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
 	}
 	for _, key := range []string{"CLAUDE_CONFIG_DIR", "ANTHROPIC_CONFIG_DIR"} {
@@ -139,15 +179,26 @@ func runRealClaude(t *testing.T, claude string, plan *EnvironmentPlan, root, bas
 			env = append(env, key+"="+remap(v))
 		}
 	}
-	cmd := exec.Command(claude, "-p", "say hi", "--output-format", "json")
+	args := []string{"-rm", "sh", "-c", mountScript, "sh"}
+	for _, m := range laid {
+		mode := "rw"
+		if m.ReadOnly {
+			mode = "ro"
+		}
+		args = append(args, mode, filepath.Join(root, m.ContainerPath))
+	}
+	args = append(args, "--", claude, "-p", "say hi", "--output-format", "json")
+	cmd := exec.Command("unshare", args...)
 	cmd.Env = env
 	cmd.Stdin = strings.NewReader("")
 	timer := time.AfterFunc(90*time.Second, func() { _ = cmd.Process.Kill() })
 	defer timer.Stop()
 	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Logf("claude: %v: %.400s", err, out)
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && (exit.ExitCode() == 96 || exit.ExitCode() == 97) {
+		t.Fatalf("lay out the mounts: %s", out)
 	}
+	return string(out), err
 }
 
 // defaultLogins are the kinds of login a member's home can hold, written
@@ -174,8 +225,11 @@ var defaultLogins = map[string]func(t *testing.T, home string){
 // Code against a local stand-in for Anthropic's API in the container view
 // of every layout a session on an added login can have: each kind of added
 // login over each kind of default login, in the owner's own session and in
-// a teammate's. Every request must carry the added login's credential. It
-// needs Claude Code on PATH; no real login is read or used.
+// a teammate's, each mount bind-mounted and read-only where the session's
+// is. Claude Code must succeed and every request must carry the added
+// login's credential. It needs Claude Code on PATH and unprivileged user
+// and mount namespaces; no real login is read or used, and a request to
+// anywhere but the stand-in goes to a proxy that refuses it.
 func TestIntegrationRealClaudeCodeUsesTheAddedLogin(t *testing.T) {
 	claude, err := exec.LookPath("claude")
 	if err != nil {
@@ -231,9 +285,22 @@ func TestIntegrationRealClaudeCodeUsesTheAddedLogin(t *testing.T) {
 					mock := &mockMessages{}
 					server := httptest.NewServer(mock)
 					defer server.Close()
+					proxy := &proxyLog{}
+					proxyServer := httptest.NewServer(proxy)
+					defer proxyServer.Close()
 					root := t.TempDir()
-					containerView(t, plan, root)
-					runRealClaude(t, claude, plan, root, server.URL)
+					laid := containerView(t, plan, root)
+					var readOnly []string
+					for _, m := range laid {
+						if m.ReadOnly {
+							readOnly = append(readOnly, strings.TrimPrefix(m.ContainerPath, plan.Home+"/"))
+						}
+					}
+					out, runErr := runRealClaude(t, claude, plan, laid, root, server.URL, proxyServer.URL)
+					t.Logf("read-only: %v; requests elsewhere: %v", readOnly, proxy.hosts)
+					if runErr != nil {
+						t.Errorf("claude: %v: %.600s", runErr, out)
+					}
 					seen := mock.seen()
 					if len(seen) == 0 {
 						t.Fatal("Claude Code sent no request")

@@ -1467,9 +1467,12 @@ func TestStartStoppedDuringTheEventLogReadIsClean(t *testing.T) {
 	}
 }
 
-// Each stop reason names why no account took the run.
+// Each stop reason names why no account took the run, and the logins with
+// usage left that a running session does not move to yet.
 func TestNoFallbackReason(t *testing.T) {
 	ada, grace := domain.AccountOf("ada"), domain.AccountOf("grace")
+	adaSecond, graceWork := domain.Account{Member: "ada", Login: "lgn-second0000"}, domain.Account{Member: "grace", Login: "lgn-work000000"}
+	name := func(a domain.Account) string { return string(a.Member) + "'s login " + string(a.Login) }
 	for _, tc := range []struct {
 		harness  string
 		measured fallback.Measured
@@ -1479,8 +1482,10 @@ func TestNoFallbackReason(t *testing.T) {
 		{"claude", fallback.Measured{ada: 100}, "no other account is shared to fall back on"},
 		{"claude", fallback.Measured{ada: 100, grace: 97}, "no fallback has usage left"},
 		{"claude", fallback.Measured{ada: 100, grace: fallback.Unknown}, "no account that may have usage left can run claude here"},
+		{"claude", fallback.Measured{ada: 100, adaSecond: 0}, "no other account is shared to fall back on; running sessions do not move to another login yet: start a new session to use ada's login lgn-second0000"},
+		{"claude", fallback.Measured{ada: 100, adaSecond: 100, grace: 97, graceWork: fallback.Unknown}, "no fallback has usage left; running sessions do not move to another login yet: start a new session to use grace's login lgn-work000000"},
 	} {
-		if got := noFallbackReason("Ada", tc.harness, tc.measured, ada); got != "Usage limit reached on Ada's account; "+tc.want {
+		if got := noFallbackReason("Ada", tc.harness, tc.measured, ada, name); got != "Usage limit reached on Ada's account; "+tc.want {
 			t.Errorf("%s %v: %q, want the reason to end %q", tc.harness, tc.measured, got, tc.want)
 		}
 	}

@@ -285,6 +285,22 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 
 func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protocol.RunLaunchParams, mode domain.LaunchMode, policy domain.AccountFallback,
 	created func(domain.RunID), skipped *[]protocol.SkippedAccount) (*domain.Run, *protocol.Error) {
+	workspaces := append([]domain.WorkspaceID{domain.WorkspaceID(p.WorkspaceID)}, workspaceIDs(p.ExtraWorkspaceIDs)...)
+	authorize := func() (LaunchAdmission, *protocol.Error) {
+		admission, err := AuthorizeLaunch(ctx, s.cfg.Store, member, p.AccountMemberID, workspaces)
+		if errors.Is(err, permissions.ErrDenied) {
+			return admission, &protocol.Error{Code: protocol.CodeDenied, Message: protocol.MethodRunLaunch + ": " + err.Error()}
+		}
+		if err != nil {
+			return admission, rpcError(err)
+		}
+		return admission, nil
+	}
+	// Admitted before anything of the workspace or the account's logins is
+	// read, and again under the mutex below.
+	if _, perr := authorize(); perr != nil {
+		return nil, perr
+	}
 	login, perr := s.launchLogin(ctx, domain.WorkspaceID(p.WorkspaceID), member, domain.MemberID(p.AccountMemberID), p.Harness, p.Login, mode)
 	if perr != nil {
 		return nil, perr
@@ -300,13 +316,9 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 	s.authorizationMu.Lock()
 	unlockAuthorization := sync.OnceFunc(s.authorizationMu.Unlock)
 	defer unlockAuthorization()
-	workspaces := append([]domain.WorkspaceID{domain.WorkspaceID(p.WorkspaceID)}, workspaceIDs(p.ExtraWorkspaceIDs)...)
-	admission, err := AuthorizeLaunch(ctx, s.cfg.Store, member, p.AccountMemberID, workspaces)
-	if err != nil {
-		if errors.Is(err, permissions.ErrDenied) {
-			return nil, &protocol.Error{Code: protocol.CodeDenied, Message: protocol.MethodRunLaunch + ": " + err.Error()}
-		}
-		return nil, rpcError(err)
+	admission, perr := authorize()
+	if perr != nil {
+		return nil, perr
 	}
 	requested := admission.Account.ID
 	if mode == "" {
@@ -714,7 +726,7 @@ func (s *Server) runRelaunch(ctx context.Context, member domain.MemberID, params
 		reach = slices.Compact([]domain.MemberID{member, run.MemberID, run.HomeMember()})
 	}
 	for _, who := range reach {
-		if err = fallback.ResolveRunLogin(ctx, s.cfg.Store, who, run, workspaces); err != nil {
+		if err = fallback.ResolveRunRelaunch(ctx, s.cfg.Store, who, run, workspaces); err != nil {
 			return nil, rpcError(err)
 		}
 	}

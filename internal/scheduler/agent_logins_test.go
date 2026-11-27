@@ -455,6 +455,89 @@ func TestASignInOfAMemberRemovedBeforeItStartsMakesNothing(t *testing.T) {
 	}
 }
 
+// A sign-in whose member is removed after its start read the member, while
+// its container is made, stops before the sign-in command runs and leaves
+// no login directory.
+func TestASignInOfAMemberRemovedWhileItStartsRunsNothing(t *testing.T) {
+	e := newSignInEnv(t)
+	other := &domain.Member{DisplayName: "Bo", PublicKey: testPublicKey(t), Color: "#3cb44b", Role: domain.RoleCollaborator}
+	if err := e.db.CreateMember(t.Context(), other); err != nil {
+		t.Fatal(err)
+	}
+	id, err := e.sched.BeginLoginSignIn(t.Context(), other.ID, "claude", "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.rt.mu.Lock()
+	e.rt.createHook = func() {
+		if delErr := e.db.DeleteMember(t.Context(), other.ID, ""); delErr != nil {
+			t.Error(delErr)
+		}
+	}
+	e.rt.execTTYHook = func(context.Context, runtime.ID, []string, string, uint, uint) (runtime.Attachment, error) {
+		t.Error("the sign-in command ran for a removed member")
+		return newSignInAttachment(), nil
+	}
+	e.rt.mu.Unlock()
+	if _, err := e.sched.StartLoginSignIn(t.Context(), other.ID, id, 80, 24); err == nil || !strings.Contains(err.Error(), "removed or merged") {
+		t.Fatalf("the sign-in of a member removed while it started: %v; want it stopped", err)
+	}
+	dir, _ := e.logins.Path(other.ID, "claude", id)
+	if _, err := os.Lstat(dir); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the removed member's login directory: %v; want none", err)
+	}
+}
+
+// When a removed member's running sign-in cannot be ended, reconciling
+// the member's logins keeps that sign-in's directory, by which the next
+// start finds its container, and removes the settled logins.
+func TestReconcileAfterASignInCouldNotEndKeepsOnlyItsDirectory(t *testing.T) {
+	e := newSignInEnv(t)
+	ctx := t.Context()
+	settled, err := e.logins.Add(e.member.ID, "claude", "lgn-settled000")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeHomeFile(t, settled, memberhome.LoginCredentials, addedLoginFile)
+	if err = e.logins.Settle(e.member.ID, "claude", "lgn-settled000", memberhome.LoginIdentity{Kind: memberhome.LoginSubscription}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = e.db.AddAgentLogin(ctx, domain.AgentLogin{MemberID: e.member.ID, Agent: "claude", ID: "lgn-settled000", Name: "settled", CreatedAt: time.Now()}, ""); err != nil {
+		t.Fatal(err)
+	}
+	id, err := e.sched.BeginLoginSignIn(ctx, e.member.ID, "claude", "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.rt.mu.Lock()
+	e.rt.execTTYHook = func(context.Context, runtime.ID, []string, string, uint, uint) (runtime.Attachment, error) {
+		return newSignInAttachment(), nil
+	}
+	e.rt.mu.Unlock()
+	if _, err := e.sched.StartLoginSignIn(ctx, e.member.ID, id, 80, 24); err != nil {
+		t.Fatal(err)
+	}
+	e.rt.mu.Lock()
+	e.rt.destroyErr = errors.New("test: destroy unavailable")
+	e.rt.mu.Unlock()
+	if err := e.db.DeleteMember(ctx, e.member.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.sched.EndLoginSignIns(ctx, e.member.ID); err == nil {
+		t.Fatal("ending a sign-in whose container cannot be removed reported nothing")
+	}
+	if err := e.sched.ReconcileLogins(ctx, e.member.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(settled); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the removed member's settled login: %v; want it gone", err)
+	}
+	signIn, _ := e.logins.Path(e.member.ID, "claude", id)
+	if _, err := os.Lstat(signIn); err != nil {
+		t.Fatalf("the directory of the sign-in whose container lives: %v; want it kept", err)
+	}
+}
+
 // A login row whose directory is gone holds nothing to duplicate, so it
 // does not block the next sign-in.
 func TestALoginWithoutADirectoryDoesNotBlockASignIn(t *testing.T) {

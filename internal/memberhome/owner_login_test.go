@@ -166,3 +166,16 @@ func TestOwnerLoginBesideSymlinkedDotDirectories(t *testing.T) {
 		t.Fatalf("OwnerLogin without a home = %+v, %v, want none", login, err)
 	}
 }
+
+// An error about the profile directory itself, which carries no profile
+// name, is kept as it is.
+func TestOwnerLoginKeepsAnErrorThatNamesNoProfile(t *testing.T) {
+	manager, home, _ := newLoginHomes(t)
+	writeHomeFile(t, home, ".config/anthropic/elsewhere/default.json", `{"authentication":{"type":"user_oauth"}}`)
+	if err := os.Symlink("elsewhere", filepath.Join(home, ".config/anthropic/configs")); err != nil {
+		t.Fatal(err)
+	}
+	if login, err := manager.OwnerLogin("owner", "claude"); err == nil || !strings.Contains(err.Error(), "configs is a symlink") {
+		t.Fatalf("OwnerLogin through a symlinked configs = %+v, %v; want the symlink named", login, err)
+	}
+}
