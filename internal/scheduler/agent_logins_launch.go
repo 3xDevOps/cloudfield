@@ -386,8 +386,10 @@ func (s *Scheduler) StartLogin(ctx context.Context, workspace domain.WorkspaceID
 // inherited is its parent's current login there ("default" for the
 // default login), or empty when the subsession named the account itself:
 // then, as for a launch that names none, the account's first eligible login
-// serves. The parent's login is inherited when owner owns it, or it is on
-// for shares and automatic, it can still run, and it is not billed per use.
+// serves. The parent's login is inherited when it is automatic, owner owns
+// it or it is on for shares, it can still run, and it is not billed per
+// use, whichever its id: one named for the parent alone, or billed per use,
+// is chosen for anew.
 func (s *Scheduler) ChildLogin(ctx context.Context, workspace domain.WorkspaceID, owner, account domain.MemberID, inherited domain.LoginID, harness string, mode domain.LaunchMode, permission domain.Permission) (domain.LoginID, error) {
 	logins, err := s.cfg.Store.ListAgentLogins(ctx, account, harness)
 	if err != nil || len(logins) == 0 || inherited == "" {
@@ -397,10 +399,17 @@ func (s *Scheduler) ChildLogin(ctx context.Context, workspace domain.WorkspaceID
 		return s.StartLogin(ctx, workspace, owner, account, harness, mode, permission)
 	}
 	i := slices.IndexFunc(logins, func(l domain.AgentLogin) bool { return l.ID == inherited })
-	inherits := i >= 0 && (owner == account || (logins[i].Shared && logins[i].Automatic))
+	inherits := i >= 0 && logins[i].Automatic && (owner == account || logins[i].Shared)
 	login := domain.Account{Member: account, Login: loginOf(inherited)}
-	if inherits && login.Login.Added() {
-		identity, idErr := s.cfg.Logins.Identity(account, harness, login.Login)
+	if inherits {
+		var identity memberhome.LoginIdentity
+		var idErr error
+		switch {
+		case login.Login.Added():
+			identity, idErr = s.cfg.Logins.Identity(account, harness, login.Login)
+		case s.cfg.Homes != nil:
+			identity, idErr = s.cfg.Homes.DefaultIdentity(account, harness)
+		}
 		inherits = idErr == nil && !identity.PerUse()
 	}
 	if byEnv, envErr := s.EnvironmentSignsIn(ctx, workspace, harness, mode); envErr != nil || byEnv {

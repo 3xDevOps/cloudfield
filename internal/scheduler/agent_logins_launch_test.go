@@ -560,3 +560,24 @@ func TestADefaultLoginWithNoSignInIsPassedOver(t *testing.T) {
 		t.Fatalf("Ada's start once her default login signed in = %q, %v; want the default login, her first", got, err)
 	}
 }
+
+// A subsession does not inherit its parent's login when that login is
+// billed per use, the default login included, or is automatic off and so
+// was named for the parent alone: it is chosen for anew.
+func TestASubsessionIsChosenForAnewOffAPerUseOrNamedLogin(t *testing.T) {
+	e := newLoginShareEnv(t)
+	ctx := t.Context()
+	work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+	if err := e.db.OrderAgentLogins(ctx, e.member.ID, "claude", []domain.LoginID{work.Login, domain.DefaultLogin}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.sched.ChildLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, domain.DefaultLogin, "claude", domain.LaunchTUI, ""); err != nil || got != work.Login {
+		t.Fatalf("a subsession of Ada's session on her API-key default = %q, %v; want work, chosen anew", got, err)
+	}
+	if err := e.db.SetAgentLoginAutomatic(ctx, e.member.ID, "claude", work.Login, false); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.sched.ChildLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, work.Login, "claude", domain.LaunchTUI, ""); err != nil || got != "" {
+		t.Fatalf("a subsession of Ada's session on work, named and automatic off = %q, %v; want her default, chosen anew", got, err)
+	}
+}
