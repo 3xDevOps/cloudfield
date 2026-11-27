@@ -139,7 +139,7 @@ function copyFor({ kind, dead, edge, serverID, approvalCode, retired }: Connecti
       title: `${edge ? edgeHost(edge) : 'The edge address'} says it is retired`,
       description: (
         <>
-          It refused the connection with the text below, which names its new address. Confirm that address with whoever
+          It refused the connection with the text under Technical details, which names its new address. Confirm that address with whoever
           runs the edge, sign in there with <Cmd>cloudfield login --edge &lt;new address&gt;</Cmd>, and link your server
           again.
         </>
