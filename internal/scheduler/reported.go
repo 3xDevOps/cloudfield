@@ -270,12 +270,13 @@ func (s *Scheduler) FinishReported(ctx context.Context, run domain.RunID, report
 	return nil
 }
 
-// TurnStartedAt is when run's current turn started, zero when unknown.
-func (s *Scheduler) TurnStartedAt(run domain.RunID) time.Time {
+// ReportsSince is when the stretch of run's work that its outcome reports
+// are compared within began, zero when unknown.
+func (s *Scheduler) ReportsSince(run domain.RunID) time.Time {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if entry := s.runs[run]; entry != nil {
-		return entry.turnStartedAt
+		return entry.reportsSince
 	}
 	return time.Time{}
 }
@@ -336,11 +337,6 @@ func (s *Scheduler) recordIdleReportLocked(ctx context.Context, entry *supervise
 		// Only after the fences: a refusal releases the report's key, which
 		// an older report must keep.
 		return coord.ErrHumanOpen
-	case strings.HasPrefix(reason, answeredReasonPrefix) && reportedIdleReason(entry.idleReason) &&
-		!entry.turnStartedAt.IsZero() && !entry.idleReportAt.Before(entry.turnStartedAt):
-		// The turn already reported success or failure; saying it replied
-		// takes nothing back.
-		return nil
 	}
 	old := entry.sidecar()
 	entry.idleReason, entry.idleShown = reason, false

@@ -201,7 +201,7 @@ func (s *Scheduler) Relaunch(ctx context.Context, run domain.RunID, actor domain
 	if sameEntry {
 		entry.reported = ""
 		entry.idleReason, entry.idleShown = "", false
-		entry.agentReport, entry.parkedAt = agentstatus.Report{}, time.Time{}
+		entry.agentReport, entry.parkedAt, entry.reportsSince = agentstatus.Report{}, time.Time{}, time.Time{}
 		entry.relaunchedAt = now
 		clearErr = s.writeSidecar(entry.sidecar())
 	}

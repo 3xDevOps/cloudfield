@@ -52,26 +52,35 @@ func (e *reportRepeatEnv) launch(task string) domain.RunID {
 	return domain.RunID(launched.Run.ID)
 }
 
-// family launches a parent whose first turn starts a subsession running
-// script, with $CLI naming the coordination command and PARENT the parent,
-// and returns both once the parent's turn ended. The script starts once the
-// server has the subsession's turn start, which waits for its launch to
-// finish.
+// family launches a parent whose first turn starts a subsession, and plays
+// script as the subsession's second turn, with $CLI naming the coordination
+// command and PARENT the parent. The second turn starts after the launch
+// finished, so the server has its start before script reports.
 func (e *reportRepeatEnv) family(script string) (parent, child domain.RunID) {
 	e.t.Helper()
 	e.n++
-	if strings.Contains(script, "'") {
-		e.t.Fatalf("script %q must not contain a single quote", script)
-	}
-	task := fmt.Sprintf("%sprintf '%%s' '%sCLI=%s; sleep 5; %s' | sed \"s/PARENT/$AETHER_RUN_ID/g\" >/tmp/task && %s subsession start --harness fake --mode enhanced --purpose 'report twice' --task-file /tmp/task --idempotency-key child-%d",
-		acpmock.PromptRun, acpmock.PromptRun, coordtransport.CLIPath, script, coordtransport.CLIPath, e.n)
-	parent = e.launch(task)
+	ready := acpmock.PromptRun + coordtransport.CLIPath + " report --outcome waiting --summary ready --idempotency-key ready"
+	parent = e.launch(fmt.Sprintf("%s%s subsession start --harness fake --mode enhanced --purpose 'report twice' --task '%s' --idempotency-key child-%d",
+		acpmock.PromptRun, coordtransport.CLIPath, ready, e.n))
 	items := waitTurns(e.ctx, e.t, e.srv, parent, 1)
 	var tree protocol.RunChildrenResult
 	if status := postJSON(e.t, e.web+"/api/v1/run.children", `{"run_id":"`+string(parent)+`"}`, &tree); status != http.StatusOK || len(tree.Children) != 1 {
 		e.t.Fatalf("run.children status %d: %+v; the parent said %q", status, tree, assistantText(items))
 	}
-	return parent, domain.RunID(tree.Children[0].RunID)
+	child = domain.RunID(tree.Children[0].RunID)
+	waitTurns(e.ctx, e.t, e.srv, child, 1)
+	prompt := acpmock.PromptRun + "CLI=" + coordtransport.CLIPath + "; " + strings.ReplaceAll(script, "PARENT", string(parent))
+	for {
+		err := e.srv.sched.WakeEnhanced(e.ctx, child, prompt)
+		if err == nil {
+			return parent, child
+		}
+		select {
+		case <-e.ctx.Done():
+			e.t.Fatalf("prompt %s: %v", child, err)
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
 }
 
 func (e *reportRepeatEnv) get(run domain.RunID) protocol.Run {
@@ -83,7 +92,7 @@ func (e *reportRepeatEnv) get(run domain.RunID) protocol.Run {
 	return got.Run
 }
 
-// mail is every message from sent to to, oldest first.
+// mail is every message from sent to to, newest first.
 func (e *reportRepeatEnv) mail(from, to domain.RunID) []string {
 	e.t.Helper()
 	page, err := e.srv.Store().ListRunMessages(e.ctx, store.RunMessageFilter{WorkspaceID: e.ws.ID, RunID: to, Limit: 50})
@@ -152,7 +161,7 @@ func TestIntegrationRepeatReports(t *testing.T) {
 		for _, fn := range started {
 			fn(parent, child)
 		}
-		waitTurns(ctx, t, e.srv, child, 1)
+		waitTurns(ctx, t, e.srv, child, 2)
 		time.Sleep(wait)
 		e.settle(child, parent)
 		return e.mail(child, parent), e.wakes(parent), e.get(child)

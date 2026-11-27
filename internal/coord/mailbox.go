@@ -822,19 +822,23 @@ func (s *Service) enqueueChildReport(ctx context.Context, report *store.CoordRep
 	if target == nil || target.WorkspaceID != report.WorkspaceID || target.ID == report.RunID {
 		return errors.New("subsession report parent is outside the reporting subsession's workspace")
 	}
-	sent, err := s.turnReport(ctx, report)
+	first, err := s.turnReport(ctx, report)
 	if err != nil {
 		return fmt.Errorf("enqueue subsession report: %w", err)
 	}
 	msg := &store.RunMessage{
 		WorkspaceID: report.WorkspaceID, FromRun: report.RunID, ToRun: target.ID,
-		Kind: store.RunMessageKindMessage, Body: sent.Summary, CorrelationID: sent.ID,
-		IdempotencyKey: "coord-report-" + string(sent.Outcome) + ":" + sent.ID + ":" + string(target.ID),
+		Kind: store.RunMessageKindMessage, Body: report.Summary, CorrelationID: report.ID,
+		IdempotencyKey: "coord-report-" + string(first.Outcome) + ":" + first.ID + ":" + string(target.ID),
 	}
 	if err = s.cfg.Mail.RetireProvisionalReports(ctx, report.RunID, target.ID, report.CreatedAt); err != nil {
 		return fmt.Errorf("enqueue subsession report: %w", err)
 	}
 	created, err := appendRunMessage(ctx, s.cfg.Mail, msg)
+	// The key holds another report of the turn: the parent has the outcome.
+	if errors.Is(err, store.ErrIdempotencyConflict) {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("enqueue subsession report: %w", err)
 	}
@@ -844,16 +848,17 @@ func (s *Service) enqueueChildReport(ctx context.Context, report *store.CoordRep
 	return nil
 }
 
-// turnReport is the report whose inbox message speaks for report: the first
+// turnReport is the report whose inbox message key report shares: the first
 // of the reports with report's outcome that the run made in a row in its
-// current turn without reading new mail in between. A parent that has that
-// message is not sent the outcome again, and one that does not gets it now.
-// A report from a turn the scheduler no longer holds speaks for itself.
+// current turn without reading new mail in between. A parent that has a
+// message under that key is not sent the outcome again, and one that has
+// none gets report. A report from a turn the scheduler no longer holds has
+// a key of its own.
 func (s *Service) turnReport(ctx context.Context, report *store.CoordReport) (*store.CoordReport, error) {
 	if s.cfg.Outcomes == nil {
 		return report, nil
 	}
-	since := s.cfg.Outcomes.TurnStartedAt(report.RunID)
+	since := s.cfg.Outcomes.ReportsSince(report.RunID)
 	if since.IsZero() || report.CreatedAt.Before(since) {
 		return report, nil
 	}

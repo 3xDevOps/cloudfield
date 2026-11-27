@@ -184,10 +184,13 @@ func (s *Scheduler) applyAgentReportIf(ctx context.Context, run domain.RunID, re
 
 	// The transition derives the run's activity from the state it applies.
 	priorReport, priorPending, priorTurn := entry.agentReport, entry.pendingInputs, entry.turnStartedAt
-	priorIdle, priorShown := entry.idleReason, entry.idleShown
+	priorIdle, priorShown, priorSince := entry.idleReason, entry.idleShown, entry.reportsSince
 	entry.agentReport, entry.pendingInputs = execution, pending
-	if turnStarts {
-		entry.turnStartedAt = turnAt
+	switch {
+	case turnStarts:
+		entry.turnStartedAt, entry.reportsSince = turnAt, turnAt
+	case report.State != "" && (execution.State != agentstatus.Working || execution.Reason != ""):
+		entry.reportsSince = now
 	}
 	switch {
 	case showsIdle:
@@ -224,7 +227,7 @@ func (s *Scheduler) applyAgentReportIf(ctx context.Context, run domain.RunID, re
 	}
 	if transitionErr != nil {
 		entry.agentReport, entry.pendingInputs, entry.turnStartedAt = priorReport, priorPending, priorTurn
-		entry.idleReason, entry.idleShown = priorIdle, priorShown
+		entry.idleReason, entry.idleShown, entry.reportsSince = priorIdle, priorShown, priorSince
 		if showsIdle {
 			// The native boundary is still true when parking its outcome
 			// fails. Keep it durable so the poll/recovery path can retry

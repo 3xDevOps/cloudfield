@@ -45,8 +45,10 @@ type OutcomeSink interface {
 	// empty for agents.
 	ReportWaiting(ctx context.Context, run domain.RunID, id, waitingFor, summary string, at time.Time) error
 	ReportAnswered(ctx context.Context, run domain.RunID, id, summary string, at time.Time) error
-	// TurnStartedAt is when run's current turn started, zero when unknown.
-	TurnStartedAt(run domain.RunID) time.Time
+	// ReportsSince is when the stretch of run's work that its reports are
+	// compared within began: its turn start, or the last time its agent
+	// stopped working on a prompt. Zero when unknown.
+	ReportsSince(run domain.RunID) time.Time
 }
 
 // UntilRegistry keeps the conditions a run waits on: the watch service.
@@ -173,7 +175,12 @@ func (s *Service) reportState(ctx context.Context, run domain.RunID, p protocol.
 		nextAction = "answer the agent's question"
 		err = s.cfg.Outcomes.ReportNeedsInput(ctx, run, id, reportText(summary), receipt.CreatedAt)
 	case protocol.CoordOutcomeAnswered:
-		err = s.cfg.Outcomes.ReportAnswered(ctx, run, id, reportReason(summary), receipt.CreatedAt)
+		// After a success or failure in the same turn, saying it replied
+		// takes nothing back.
+		var final bool
+		if final, err = s.reportedFinal(ctx, run); err == nil && !final {
+			err = s.cfg.Outcomes.ReportAnswered(ctx, run, id, reportReason(summary), receipt.CreatedAt)
+		}
 	default:
 		err = s.cfg.Outcomes.ReportWaiting(ctx, run, id, p.WaitingFor, reportReason(summary), receipt.CreatedAt)
 	}
@@ -227,6 +234,21 @@ func (s *Service) reportState(ctx context.Context, run domain.RunID, p protocol.
 		return protocol.CoordReportResult{}, internalError(method, fmt.Errorf("publish report timeline: %w", err))
 	}
 	return protocol.CoordReportResult{Outcome: p.Outcome, Summary: summary, NextAction: nextAction, Resolved: resolved}, nil
+}
+
+// reportedFinal reports whether the last success, failure or blocked report
+// of run's current turn is a success or failure that still stands.
+func (s *Service) reportedFinal(ctx context.Context, run domain.RunID) (bool, error) {
+	since := s.cfg.Outcomes.ReportsSince(run)
+	if since.IsZero() {
+		return false, nil
+	}
+	turn, err := s.cfg.Mail.CoordReportsSince(ctx, run, since)
+	if err != nil || len(turn) == 0 {
+		return false, err
+	}
+	last := turn[len(turn)-1]
+	return last.SupersededAt == nil && last.Outcome != store.CoordOutcomeBlocked, nil
 }
 
 // reusedKey refuses a report whose key another report of the run used.

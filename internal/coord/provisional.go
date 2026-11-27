@@ -16,8 +16,8 @@ const (
 	provisionalHeader = "Provisional report: this session ended its turn without `aether-internal report`. " +
 		"A report from it supersedes this one. Its last message:\n\n"
 	// provisionalStateHeader takes the outcome the turn reported.
-	provisionalStateHeader = "Provisional report: this session ended its turn after reporting %s. That report is not forwarded; " +
-		"a success, failure or blocked report from it supersedes this one. Its last message:\n\n"
+	provisionalStateHeader = "Provisional report: this session ended its turn after reporting %s. " +
+		"A success, failure or blocked report from it supersedes this one. Its last message:\n\n"
 )
 
 // ProvisionalReport forwards a child run's last message to its parent when
