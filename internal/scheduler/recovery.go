@@ -744,12 +744,20 @@ func (s *Scheduler) recoverRuns(ctx context.Context) error {
 // cleanupTerminalSidecars reconciles terminal sidecars. Unexpired retained
 // closes keep exact-container ownership; other sidecars
 // are destroyed idempotently. Failed destruction never releases ownership.
+// A pass that read every sidecar and left no container unowned marks the
+// retained containers listed, which removing a login waits for.
 func (s *Scheduler) cleanupTerminalSidecars(ctx context.Context) {
 	entries, err := os.ReadDir(s.cfg.StateDir)
 	if err != nil {
 		slog.Warn("scheduler: list sidecars during recovery", "error", err)
 		return
 	}
+	complete := true
+	defer func() {
+		if complete && ctx.Err() == nil {
+			s.retainedListed.Store(true)
+		}
+	}()
 	for _, entry := range entries {
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
 			continue
@@ -759,13 +767,16 @@ func (s *Scheduler) cleanupTerminalSidecars(ctx context.Context) {
 		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				sc, serr := s.readSidecar(run)
+				complete = complete && serr == nil
 				if serr == nil {
 					if derr := s.cleanupLeftoverContainer(ctx, runtime.ID(sc.ContainerID), run); derr != nil {
+						complete = false
 						slog.Warn("scheduler: retain orphan sidecar after destroy failure", "run", run, "error", derr)
 					}
 				}
 				continue
 			}
+			complete = false
 			slog.Warn("scheduler: load sidecar run during recovery", "run", run, "error", err)
 			continue
 		}
@@ -784,6 +795,7 @@ func (s *Scheduler) cleanupTerminalSidecars(ctx context.Context) {
 		if ferr != nil || !fresh.Status.Terminal() {
 			s.mu.Unlock()
 			if ferr != nil {
+				complete = false
 				slog.Warn("scheduler: reload terminal sidecar run", "run", run, "error", ferr)
 			}
 			continue
@@ -792,6 +804,7 @@ func (s *Scheduler) cleanupTerminalSidecars(ctx context.Context) {
 		if err == nil && sc.RunID != string(run) {
 			err = errors.New("scheduler: terminal sidecar ownership mismatch")
 		}
+		complete = complete && err == nil
 		if err == nil {
 			err = s.clampRetainedDeadlineLocked(fresh, &sc)
 			if err != nil {
@@ -923,6 +936,7 @@ func (s *Scheduler) cleanupTerminalSidecars(ctx context.Context) {
 			fresh, ferr := s.cfg.Store.GetRun(ctx, run)
 			if ferr != nil {
 				s.mu.Unlock()
+				complete = false
 				slog.Warn("scheduler: reload retained run after probe", "run", run, "error", ferr)
 				continue
 			}

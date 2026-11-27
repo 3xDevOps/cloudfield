@@ -585,3 +585,52 @@ func TestASubsessionIsChosenForAnewOffAPerUseOrNamedLogin(t *testing.T) {
 		t.Fatalf("a subsession of Ada's session on work, named and automatic off = %q, %v; want her default, chosen anew", got, err)
 	}
 }
+
+// Removing a login waits until every kept session container's record was
+// read, and a kept container whose session cannot be read holds the login:
+// neither is passed over as not on it.
+func TestLoginInUseFailsClosedOnAnUnreadSession(t *testing.T) {
+	e := newLoginShareEnv(t)
+	ctx := t.Context()
+	work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+	kept := &domain.Run{WorkspaceID: e.ws.ID, MemberID: e.member.ID, AccountMemberID: e.member.ID, Task: "t", Harness: "claude", Mode: domain.LaunchTUI, Status: domain.RunRunning}
+	if err := e.db.CreateRun(ctx, kept); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.UpdateRunStatus(ctx, kept.ID, domain.RunMerged, "closed; retained container", "", nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(e.sched.sidecarPath(kept.ID), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	startScheduler(t, e.sched)
+	waitFor(t, "recovery", func() bool {
+		select {
+		case <-e.sched.recoveryReady:
+			return true
+		default:
+			return false
+		}
+	})
+	if inUse, err := e.sched.LoginInUse(ctx, work); err == nil || !strings.Contains(err.Error(), "could not yet read") {
+		t.Fatalf("LoginInUse with an unreadable kept session = %v, %v; want refused", inUse, err)
+	}
+	if err := os.Remove(e.sched.sidecarPath(kept.ID)); err != nil {
+		t.Fatal(err)
+	}
+	e.sched.cleanupTerminalSidecars(ctx)
+	if inUse, err := e.sched.LoginInUse(ctx, work); err != nil || len(inUse) != 0 {
+		t.Fatalf("LoginInUse once every record was read = %v, %v; want none", inUse, err)
+	}
+	e.sched.mu.Lock()
+	e.sched.runs["run-gone"] = &supervised{runID: "run-gone", containerID: "container-gone", done: make(chan struct{})}
+	e.sched.mu.Unlock()
+	t.Cleanup(func() {
+		e.sched.mu.Lock()
+		delete(e.sched.runs, "run-gone")
+		e.sched.mu.Unlock()
+	})
+	if inUse, err := e.sched.LoginInUse(ctx, work); err == nil || !strings.Contains(err.Error(), "could not be read") {
+		t.Fatalf("LoginInUse with a kept container whose session cannot be read = %v, %v; want refused", inUse, err)
+	}
+}

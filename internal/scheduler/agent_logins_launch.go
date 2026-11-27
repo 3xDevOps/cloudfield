@@ -436,12 +436,15 @@ func loginOf(id domain.LoginID) domain.LoginID {
 // Callers hold the launch authorization mutex, under which launches and
 // moves choose their login.
 func (s *Scheduler) LoginInUse(ctx context.Context, account domain.Account) (map[domain.RunID]domain.MemberID, error) {
-	// Before recovery has rebuilt the live sessions, a retained container
-	// on the login could go unseen.
+	// Before recovery has rebuilt the live sessions and read every retained
+	// container's record, a retained container on the login could go unseen.
 	select {
 	case <-s.recoveryReady:
 	default:
 		return nil, errors.New("the server is still recovering its sessions; try again in a moment")
+	}
+	if !s.retainedListed.Load() {
+		return nil, errors.New("the server could not yet read the record of every kept session container, so one may still mount this login; try again in a few minutes, and see the server log if it persists")
 	}
 	runs, err := s.cfg.Store.ListActiveRuns(ctx)
 	if err != nil {
@@ -474,7 +477,12 @@ func (s *Scheduler) LoginInUse(ctx context.Context, account domain.Account) (map
 	// A session that ended keeps its container while it may be reopened,
 	// still mounting the login.
 	for _, id := range held {
-		if r, getErr := s.cfg.Store.GetRun(ctx, id); getErr == nil && r.Account() == account {
+		r, getErr := s.cfg.Store.GetRun(ctx, id)
+		if getErr != nil {
+			// Not named: it may be a teammate's session.
+			return nil, fmt.Errorf("a kept session container's session could not be read, so it may still mount this login: %w", getErr)
+		}
+		if r.Account() == account {
 			inUse[id] = r.MemberID
 		}
 	}

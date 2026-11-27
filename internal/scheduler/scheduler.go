@@ -224,6 +224,9 @@ type Scheduler struct {
 	// for it so overdue steers cannot claim before recovered PTYs are injectable.
 	recoveryReady     chan struct{}
 	recoveryReadyOnce sync.Once
+	// retainedListed is set once a pass over the terminal sidecars has read
+	// every one, so every retained container is in runs.
+	retainedListed atomic.Bool
 	// recovering is set while Start recovers runs.
 	recovering atomic.Bool
 	// superCtx bounds every supervision goroutine; cancelling it never stops a
