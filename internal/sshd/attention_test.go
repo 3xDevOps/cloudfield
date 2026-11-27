@@ -250,7 +250,7 @@ func TestAttentionListFindsRoomRequestsBeyondTheNewestPage(t *testing.T) {
 		t.Fatal(err)
 	}
 	if q := attentionItems(t, e, bob.ID, protocol.AttentionListParams{})[bobs.ID]; q.Kind != protocol.AttentionKindQueuedMessage || q.Message == nil || q.Message.ID != wake.ID ||
-		q.Message.Via != domain.ViaAgentMail || q.Reason != "The agent has unread mail, a line telling it to read its inbox is held" {
+		q.Message.Via != domain.ViaAgentMail || q.Reason != domain.AgentMailReason {
 		t.Errorf("a held mail wake on the controller's own session = %+v, want it listed as agent mail", q)
 	}
 

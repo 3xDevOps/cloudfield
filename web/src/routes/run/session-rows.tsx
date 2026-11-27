@@ -2,7 +2,7 @@ import { memo, useLayoutEffect, useMemo, useRef } from 'react'
 import type * as React from 'react'
 import { MessageRow as AgentMessage } from '@/components/messages/message-row'
 import { MessageAttachments } from '@/components/messages/message-images'
-import { DecisionButtons } from '@/components/decision-buttons'
+import { DecisionButtons, type DecisionAnswers } from '@/components/decision-buttons'
 import { Avatar } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { CopyButton } from '@/components/ui/copy-button'
@@ -112,7 +112,7 @@ export function rowGap(flat: FlatRow): string {
   if (flat.kind !== 'row') return 'pt-0'
   switch (flat.row.kind) {
     case 'user':
-      return 'pt-6'
+      return flat.row.via === agentMailVia ? 'pt-2' : 'pt-6'
     case 'note':
       return 'pt-4'
     case 'steps':
@@ -138,7 +138,11 @@ export interface RowContext {
 export function useRowContext(run: RunRecord, agent: AgentTerminal, nav: RunNavigation, room?: RunRoom): RowContext {
   const self = useSelf(run.workspace_id)
   const steerOthers = useStore((s) => s.workspaces[run.workspace_id]?.steer_others)
-  const free = useStore((s) => (run.controller_member_id !== undefined ? !run.controller_member_id : !s.roomStatus[run.id]?.controller))
+  // A lease the viewer holds from another device is theirs to move here.
+  const free = useStore((s) => {
+    const holder = run.controller_member_id ?? s.roomStatus[run.id]?.controller?.member_id
+    return !holder || holder === s.info?.member.id
+  })
   const latest = useRef({ agent, nav, room })
   latest.current = { agent, nav, room }
   const steer = !room ? undefined
@@ -168,26 +172,53 @@ function MailRow({ messageID, runID }: { messageID: string; runID: string }) {
   return <div className="pl-6"><AgentMessage message={m} flush label={(id) => (id === runID ? 'This session' : undefined)} /></div>
 }
 
+function SteerDecision({ steer, id, answers }: { steer: NonNullable<RowContext['steer']>; id: string; answers?: DecisionAnswers }) {
+  return 'decide' in steer
+    ? <DecisionButtons decide={(approve) => steer.decide(id, approve)} answers={answers} />
+    : <><StaleReason /><RequestAction label="Take control to decide" onClick={steer.takeControl} /></>
+}
+
+/** A held mail wake is the server's notice, not a message to the agent: it reads as an event, and what it will do shows only while it waits. */
+function MailWakeRow({ row, ctx }: { row: Extract<SessionRow, { kind: 'user' }>; ctx: RowContext }) {
+  const refusal = useStore((s) => s.roomActionError[row.id])
+  const waiting = row.deliverAfter !== undefined
+  return (
+    <EventRow
+      tone={waiting ? 'needs-you' : 'neutral'}
+      trailing={<RelativeTime at={row.at} />}
+      full
+      detail={waiting ? (
+        <>
+          {row.body}
+          {ctx.steer && <div className="mt-2 flex flex-wrap items-center gap-2"><SteerDecision steer={ctx.steer} id={row.id} answers={mailWakeAnswers} /></div>}
+          {refusal && <p role="alert" className="mt-2 text-state-failed">{refusal}</p>}
+        </>
+      ) : row.failure}
+    >
+      Agent mail · {waiting ? <DeliveryCountdown deliverAfter={row.deliverAfter} mail /> : row.delivery === 'Denied' ? 'Dismissed' : row.delivery}
+    </EventRow>
+  )
+}
+
 function UserRow({ row, ctx, name }: { row: Extract<SessionRow, { kind: 'user' }>; ctx: RowContext; name: (id: string) => string }) {
   const self = useStore((s) => s.info?.member.id)
   const body = row.body.startsWith(`${ctx.task}\n\n`) ? ctx.task : row.body
   const authorID = row.authorID ?? (row.images?.length || row.files?.length ? undefined : ctx.ownerID)
-  const mail = row.via === agentMailVia
-  const color = useStore((s) => (authorID && !mail ? resolveMember(s, authorID).member?.color : undefined))
-  const author = mail ? 'Agent mail' : authorID === self && !row.via ? undefined : `${authorID ? name(authorID) : 'User'}${row.via ? ` via ${row.via}` : ''}`
-  const other = mail || (authorID !== undefined && authorID !== self)
+  const color = useStore((s) => (authorID ? resolveMember(s, authorID).member?.color : undefined))
+  const author = authorID === self && !row.via ? undefined : `${authorID ? name(authorID) : 'User'}${row.via ? ` via ${row.via}` : ''}`
+  const other = authorID !== undefined && authorID !== self
   const asking = other && row.deliverAfter !== undefined
   const steer = asking ? ctx.steer : undefined
+  const refusal = useStore((s) => s.roomActionError[row.id])
   return (
     <MessageRow
       author={author}
       border={other ? { color, ...(asking && { from: row.at, until: row.deliverAfter }) } : undefined}
       actions={authorID && steer && (
         <>
-          {!mail && <Avatar name={name(authorID)} color={color} size="header" />}
-          {'decide' in steer
-            ? <DecisionButtons decide={(approve) => steer.decide(row.id, approve)} answers={mail ? mailWakeAnswers : undefined} />
-            : <><StaleReason /><RequestAction label="Take control to decide" onClick={steer.takeControl} /></>}
+          <Avatar name={name(authorID)} color={color} size="header" />
+          <SteerDecision steer={steer} id={row.id} />
+          {refusal && <p role="alert" className="basis-full text-right text-ui-sm text-state-failed">{refusal}</p>}
         </>
       )}
       attachments={row.images?.length || row.files?.length ? <MessageAttachments runID={ctx.runID} images={row.images} files={row.files} /> : undefined}
@@ -196,9 +227,8 @@ function UserRow({ row, ctx, name }: { row: Extract<SessionRow, { kind: 'user' }
           {author && <span aria-hidden className="-ml-1">·</span>}
           {row.delivery && (
             <>
-              <span className={cn('shrink-0', (row.delivery === 'Not sent' || row.delivery === 'Denied') && !mail && 'text-state-failed')}>
-                {row.delivery === 'Queued' && row.deliverAfter ? <DeliveryCountdown deliverAfter={row.deliverAfter} mail={mail} />
-                  : mail && row.delivery === 'Denied' ? 'Dismissed' : row.delivery}
+              <span className={cn('shrink-0', (row.delivery === 'Not sent' || row.delivery === 'Denied') && 'text-state-failed')}>
+                {row.delivery === 'Queued' && row.deliverAfter ? <DeliveryCountdown deliverAfter={row.deliverAfter} /> : row.delivery}
               </span>
               <span aria-hidden>·</span>
             </>
@@ -237,7 +267,7 @@ function Row({ row, open, ctx }: { row: SessionRow; open: boolean; ctx: RowConte
   const name = (id: string) => memberName({ members, mergedInto }, id)
   switch (row.kind) {
     case 'user':
-      return <UserRow row={row} ctx={ctx} name={name} />
+      return row.via === agentMailVia ? <MailWakeRow row={row} ctx={ctx} /> : <UserRow row={row} ctx={ctx} name={name} />
     case 'note':
       return (
         <NoteMessage authorID={row.authorID} authorName={row.authorName} via={row.via} question={row.question} at={row.at} body={row.body} status={row.pending ? 'Sending…' : undefined} />

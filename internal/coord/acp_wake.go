@@ -179,7 +179,7 @@ func (s *Service) wakeEnhanced(run domain.RunID) (retry bool) {
 				unread = "1 unread message from another agent"
 			}
 			held, settled, holdErr := s.cfg.HoldWake(ctx, run, "mail-wake-"+hex.EncodeToString(set[:]),
-				unread+". Cloudfield types a line into the terminal that tells the agent to read its inbox.")
+				unread+". Cloudfield will type a line telling the agent to read its inbox. It waits while you are typing in the terminal.")
 			if holdErr != nil {
 				slog.Debug("coord: typed wake not held for the member in control", "run", run, "error", holdErr)
 				return s.cfg.Waker.Wakeable(run)

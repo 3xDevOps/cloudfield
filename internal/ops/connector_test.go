@@ -525,7 +525,7 @@ func TestConnectorReadTools(t *testing.T) {
 	if sudoRow := items[3].(map[string]any); sudoRow["answer_id"] != "sudo-1" || sudoRow["answer_with"] != "aether_decide_approval" {
 		t.Fatalf("the sudo request = %v, want it answered with aether_decide_approval", sudoRow)
 	}
-	if wake := items[2].(map[string]any); wake["answer_id"] != "room-1" || !strings.HasPrefix(wake["reason"].(string), "The agent has unread mail;") {
+	if wake := items[2].(map[string]any); wake["answer_id"] != "room-1" || wake["reason"] != domain.AgentMailReason {
 		t.Fatalf("the held mail wake = %v, want it named as agent mail, not a member's message", wake)
 	}
 

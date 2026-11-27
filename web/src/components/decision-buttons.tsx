@@ -7,7 +7,7 @@ export interface DecisionAnswers {
   /** Each answer's label, at rest and while it is sent. */
   approve: [string, string]
   deny: [string, string]
-  /** A refusal is `danger`; putting something off is not. */
+  /** A refusal is `danger`; dismissing a notice is not. */
   denyVariant: 'danger' | 'secondary'
 }
 

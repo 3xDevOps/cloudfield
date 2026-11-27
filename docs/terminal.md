@@ -115,11 +115,12 @@ page, or when the lease lapses 15 seconds after the tab is killed. See
 Mail wakes an idle Standard Copilot, Gemini or Cursor session with one line
 the server types into its terminal. While you are connected in control, the
 line is held for 45 seconds and shown to you first, once the agent has
-stopped printing: **The agent has unread mail** under **Details → Needs
-you**, an **Agent mail** row in Chat and **Review agent mail** in the
-header. **Type it now** types it at once, joined to any text in the agent's
-input box, unless the agent keeps printing, and **Not now** dismisses it.
-Otherwise it is typed when the 45 seconds end, you have not typed in the
+stopped printing: **Unread agent mail** under **Details → Needs you**, an
+**Agent mail** row in Chat and **Agent mail** in the header. **Type it
+now** types it at once, joined to any text in the agent's input box, unless
+the agent keeps printing. **Dismiss** ends the notice; the agent still
+finds the mail the next time it reads its inbox.
+Otherwise the line is typed when the 45 seconds end, you have not typed in the
 terminal for 10 seconds, and you pressed Enter after the last thing you
 typed there. A subsession's mail gets no notice and waits as above
 ([harnesses.md](harnesses.md#typed-wake)).
@@ -159,15 +160,17 @@ eight files per message.
   controller decides sooner.**). It shows in the chat with a border in the
   sender's color that empties clockwise as the 45 seconds run out. Under it the
   controller gets **Deny** and **Approve**. While nobody controls the session,
-  anyone else who may steer gets **Take control to decide**. **Details → Needs
-  you** lists it too.
+  anyone else who may steer gets **Take control to decide**, as you do on a
+  device other than the one you control it from. **Details → Needs you**
+  lists it too.
 - The row ends as **Sent**, **Not sent**, **Delivery uncertain**, **Denied** or
   **Cancelled**. **Sent** means the terminal accepted the write, not that the
   agent read it.
-- An **Agent mail** row is not a person's message: it is the notice of a
-  [typed wake](harnesses.md#typed-wake) held for the member in control, who
-  gets **Not now** and **Type it now** under it. A dismissed one ends as
-  **Dismissed**.
+- An **Agent mail** row is not a person's message and is drawn as an event,
+  not a bubble: it is the notice of a [typed wake](harnesses.md#typed-wake)
+  held for the member in control, who gets **Dismiss** and **Type it now**
+  under it. It says what the server will type only while it waits. A
+  dismissed one ends as **Dismissed**.
 - If the agent has turned on bracketed paste, the message arrives as one paste
   and Enter follows 200 ms later, so a multi-line message is sent whole and
   once. Otherwise it is typed as written, then Enter.

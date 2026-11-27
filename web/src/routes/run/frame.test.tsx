@@ -627,24 +627,32 @@ describe('run details', () => {
     })))
   })
 
-  it('lets the member in control type a held mail wake now or dismiss it', async () => {
+  it('lets the member in control type a held mail wake now or dismiss it, and keeps a refused one with its reason', async () => {
     const wake = roomMessage({
       id: 'wake_1', kind: 'steer_request', state: 'queued', via: 'agent mail', deliver_after: '2099-01-01T00:00:00Z',
-      body: '2 unread messages from other agents. Cloudfield types a line into the terminal that tells the agent to read its inbox.',
+      body: '2 unread messages from other agents. Cloudfield will type a line telling the agent to read its inbox. It waits while you are typing in the terminal.',
     })
     vi.mocked(api.runRoomList).mockResolvedValue({ messages: [wake] })
     open({ controller_member_id: alice.id, harness: 'gemini' })
     attached(true)
-    fireEvent.click(await within(screen.getByRole('toolbar', { name: 'Session actions' })).findByRole('button', { name: 'Review agent mail' }))
+    fireEvent.click(await within(screen.getByRole('toolbar', { name: 'Session actions' })).findByRole('button', { name: 'Agent mail' }))
     const panel = within(await screen.findByRole('dialog', { name: 'Session details' }))
-    const card = within(panel.getByText('The agent has unread mail').closest('[data-slot=request-card]') as HTMLElement)
+    const card = within(panel.getByText('Unread agent mail').closest('[data-slot=request-card]') as HTMLElement)
     expect(card.getByText(wake.body)).toBeDefined()
-    expect(card.getByText(/^Typed in \d+s$/)).toBeDefined()
-    expect(card.getByRole('button', { name: 'Type it now' })).toBeDefined()
-    fireEvent.click(card.getByRole('button', { name: 'Not now' }))
+    expect(card.getByText(/^Types in \d+s$/)).toBeDefined()
+    expect(card.getByText('The agent still finds this mail the next time it reads its inbox.')).toBeDefined()
+
+    const refusal = 'The terminal may have text you have not sent. Press Enter there, then try again.'
+    vi.mocked(api.runRoomDecide).mockRejectedValueOnce(new Error(`run.room.decide: ${refusal}`))
+    fireEvent.click(card.getByRole('button', { name: 'Type it now' }))
+    expect((await card.findByRole('alert')).textContent).toBe(refusal)
+    expect(panel.getAllByRole('alert')).toHaveLength(1)
+
+    fireEvent.click(card.getByRole('button', { name: 'Dismiss' }))
     await waitFor(() => expect(api.runRoomDecide).toHaveBeenCalledWith(expect.objectContaining({
       message_id: 'wake_1', decision: 'deny', control_generation: 3,
     })))
+    expect(card.queryByRole('alert')).toBeNull()
   })
 
   async function waitingCards() {

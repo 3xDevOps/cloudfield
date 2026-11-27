@@ -1010,6 +1010,10 @@ func WakeShown(ctx context.Context) bool {
 // take the line now. The wake stays owed and a later try may type it.
 var ErrWakeHeld = errors.New("typed wake held")
 
+// AgentMailReason is why a session with a held mail wake needs its member
+// in control, on every surface.
+const AgentMailReason = "The agent has unread mail. Cloudfield will type a line telling it to read its inbox."
+
 // AccountMember returns the member whose agent account backs the run.
 func (r *Run) AccountMember() MemberID {
 	if r.AccountMemberID != "" {

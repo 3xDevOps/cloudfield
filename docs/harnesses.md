@@ -1047,9 +1047,9 @@ mail at their next boundary
 ([coordination.md](coordination.md#delivery-acknowledgement-and-retries)).
 Mail still unread when the agent stops printing gets the notice then, within
 30 seconds.
-Their dashboard lists **The agent has unread mail** under **Details → Needs
-you**, shows an **Agent mail** row in Chat that counts down, and offers
-**Review agent mail** in the header:
+Their dashboard lists **Unread agent mail** under **Details → Needs you**,
+shows an **Agent mail** row in Chat that counts down, and offers **Agent
+mail** in the header:
 
 - **Type it now** types the line at once, also right after the member typed
   in the terminal. The click moves focus off the terminal, which these CLIs
@@ -1057,17 +1057,18 @@ you**, shows an **Agent mail** row in Chat that counts down, and offers
   not 3 seconds, and waits up to 2 seconds for them. An agent that keeps
   printing, as a working one does, holds the line. Text in the agent's input
   box is submitted joined to the line. The other conditions above still
-  apply: if the terminal cannot take the line, the dashboard shows why and
-  the notice stays.
-- **Not now** dismisses the notice. The mail it was shown for is not typed
-  for again, and a server restart does not forget that. Mail that arrived
-  after the notice appeared makes a new notice.
+  apply: if the terminal cannot take the line, the card and the Chat row
+  show why and the notice stays.
+- **Dismiss** ends the notice. The mail it was shown for is not typed for
+  again, and a server restart does not forget that. The agent still finds
+  it the next time it reads its inbox. Mail that arrived after the notice
+  appeared makes a new notice.
 - With neither, the line is typed when the 45 seconds end and the conditions
   above hold. The server checks every second. While the member holds
   control, anything they typed in the terminal and did not press Enter
   after, before the notice appeared or since, also holds the line, so a
   prompt they are still writing is not sent half finished. The notice reads
-  **Typed when quiet** meanwhile. A dropped connection keeps control, and
+  **Waiting for a pause** meanwhile. A dropped connection keeps control, and
   that hold, for 15 seconds. Once they release control or it lapses, 10
   seconds without input are enough. A wake that fails for any other reason
   is logged as `collab: overdue delivery failed` with the cause and tried
@@ -1087,7 +1088,7 @@ What the server cannot see:
 - The agent's input box. The server sees keystrokes, not what they left
   there. Any key but Enter that the member in control pressed since their
   last Enter, Esc or an arrow included, holds the line like a draft until
-  they press Enter, use **Type it now** or **Not now**, or let go. Enter
+  they press Enter, use **Type it now** or **Dismiss**, or let go. Enter
   that picks a completion, such as an `@` file or a `/` command, counts as
   sending: the text it leaves in the box is submitted joined to the line
   unless they type again. So is text left by a member who no longer holds

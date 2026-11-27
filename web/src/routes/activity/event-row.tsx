@@ -1,6 +1,7 @@
 import { memo, type ReactNode } from 'react'
 import { describeEvent, Who } from '@/components/event-words'
 import { deliveryWord, MessageKindGlyph, Participants } from '@/components/messages/message-row'
+import { AgentGlyph } from '@/components/ui/agent-glyph'
 import { Avatar } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { RelativeTime } from '@/components/ui/relative-time'
@@ -10,6 +11,7 @@ import { liveStateOf, outcomeState, runLabel, stateTone } from '@/lib/status'
 import type { CoordMessageAckedPayload, CoordMessagePayload, Event, RunStatusPayload } from '@/lib/types'
 import type { Visit } from '@/routes/activity/visits'
 import { useStore } from '@/store'
+import { agentMailVia } from '@/store/collaboration'
 
 function statusTone({ to, state }: Partial<RunStatusPayload>): Tone | undefined {
   if (!to) return undefined
@@ -71,6 +73,11 @@ function Row({ time, dot, who, children, runID }: { time: string; dot?: Tone; wh
   )
 }
 
+function RunAgent({ runID }: { runID?: string }) {
+  const harness = useStore((s) => s.runs[runID ?? '']?.harness)
+  return harness ? <AgentGlyph agent={harness} /> : null
+}
+
 function MemberAvatar({ id }: { id: string }) {
   const member = useStore((s) => resolveMember(s, id).member)
   return member ? <Avatar name={member.display_name} color={member.color} /> : null
@@ -89,6 +96,8 @@ export const EventRow = memo(function EventRow({ event, raw }: { event: Event; r
   const status = event.type === 'run.status' ? statusTone((event.payload ?? {}) as Partial<RunStatusPayload>) : undefined
   const message = event.type === 'coord.message' || event.type === 'coord.message.acked'
   const kind = message ? ((event.payload as Partial<CoordMessagePayload>)?.kind ?? 'message') : ''
+  // The server writes a held mail wake as the session's owner, who did nothing.
+  const mailWake = event.type === 'workspace.room_message' && (event.payload as { via?: string } | undefined)?.via === agentMailVia
   if (raw) {
     return (
       <Row time={event.time} who={null} runID={event.run_id}>
@@ -101,7 +110,7 @@ export const EventRow = memo(function EventRow({ event, raw }: { event: Event; r
     <Row
       time={event.time}
       dot={status}
-      who={message ? <MessageKindGlyph kind={kind} /> : <MemberAvatar id={event.actor_id} />}
+      who={message ? <MessageKindGlyph kind={kind} /> : mailWake ? <RunAgent runID={event.run_id} /> : <MemberAvatar id={event.actor_id} />}
       runID={message ? undefined : event.run_id}
     >
       {body(event)}

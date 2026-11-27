@@ -208,7 +208,7 @@ export const needsYouConditions: NeedsYouCondition[] = [
     resolvers: (run, ctx) => [controller(run, ctx)],
     reason: (run, ctx) => {
       const message = queuedMessages(run, ctx)[0]
-      if (message?.via === agentMailVia) return 'The agent has unread mail, a line telling it to read its inbox is held'
+      if (message?.via === agentMailVia) return 'The agent has unread mail. Cloudfield will type a line telling it to read its inbox.'
       const sender = message ? message.actor_display_name ?? memberName(message.actor_id, ctx) : 'A teammate'
       return `${sender} sent a message, approve to deliver`
     },

@@ -74,7 +74,7 @@ func attentionRowOf(it protocol.AttentionItem, l links) attentionRow {
 		row.AnswerID = it.Message.ID
 		text.Text = clip(it.Message.Body, maxText)
 		if it.Message.Via == domain.ViaAgentMail {
-			row.Reason = "The agent has unread mail; a line telling it to read its inbox is typed into its terminal unless dismissed"
+			row.Reason = domain.AgentMailReason
 		}
 	}
 	row.AnswerWith = answerWith(it)

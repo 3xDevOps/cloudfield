@@ -35,15 +35,15 @@ const emptyMessages: RoomMessage[] = []
 const emptyRequests: SessionRequest[] = []
 
 const deliveryText = (remaining: number, mail: boolean) => mail
-  ? (remaining ? `Typed in ${remaining}s` : 'Typed when quiet')
+  ? (remaining ? `Types in ${remaining}s` : 'Waiting for a pause')
   : (remaining ? `Delivers in ${remaining}s` : 'Ready to deliver')
 
 export function DeliveryCountdown({ deliverAfter, mail = false }: { deliverAfter?: string; mail?: boolean }) {
   return <>{deliveryText(useSecondsUntil(deliverAfter), mail)}</>
 }
 
-/** A held mail wake is typed or put off, not approved or denied. */
-export const mailWakeAnswers: DecisionAnswers = { approve: ['Type it now', 'Typing…'], deny: ['Not now', 'Dismissing…'], denyVariant: 'secondary' }
+/** A held mail wake is typed or dismissed, not approved or denied. */
+export const mailWakeAnswers: DecisionAnswers = { approve: ['Type it now', 'Typing…'], deny: ['Dismiss', 'Dismissing…'], denyVariant: 'secondary' }
 
 export function useRunRequests(run: RunRecord) {
   const room = useStore((s) => s.roomMessages[run.id] ?? emptyMessages)
@@ -107,21 +107,24 @@ function SteerCard({ steer, name, harness, agent, room, openTerminal }: {
   const remaining = useSecondsUntil(steer.deliver_after)
   const total = steer.deliver_after ? Date.parse(steer.deliver_after) - Date.parse(steer.created_at) : 0
   const mail = steer.via === agentMailVia
+  const refusal = useStore((s) => s.roomActionError[steer.id])
   return (
     <RequestCard
       id={requestCardID.steer(steer.id)}
       avatar={mail ? <IconTile aria-hidden><AgentGlyph agent={harness} className="size-4" /></IconTile> : <MemberAvatar id={steer.actor_id} name={name} />}
-      title={mail ? 'The agent has unread mail' : `${name} sent the agent a message${steer.via ? ` via ${steer.via}` : ''}`}
+      title={mail ? 'Unread agent mail' : `${name} sent the agent a message${steer.via ? ` via ${steer.via}` : ''}`}
       meta={deliveryText(remaining, mail)}
       description={<Clamped className="max-h-[6lh]">{steer.body}</Clamped>}
       timeBar={remaining > 0 && total > 0 && <RequestTimeBar left={remaining * 1000} total={total} />}
       footer={(agent.localControl || (agent.steerable && agent.hasAgentTerminal)) && (
         <RequestFooter>
+          {mail && <p className="text-ui-sm text-muted">The agent still finds this mail the next time it reads its inbox.</p>}
           <RequestActions>
             {agent.localControl
               ? <DecisionButtons decide={(approve) => room.decide(steer.id, approve ? 'approve' : 'deny')} answers={mail ? mailWakeAnswers : undefined} />
               : <RequestAction label="Take control to decide" onClick={openTerminal} />}
           </RequestActions>
+          {refusal && <p role="alert" className="text-ui-sm text-state-failed">{refusal}</p>}
         </RequestFooter>
       )}
     />

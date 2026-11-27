@@ -97,7 +97,7 @@ export function usePrimaryAction(run: RunRecord, view: RunView, agent: AgentTerm
       const input = run.pending_inputs?.find((request) => isSudo(request) === (condition.id === 'sudo'))
       if (!steer && input && run.acp && !isSudo(input)) return { label: action.label, act: () => nav.focusRequest() }
       const card = steer ? requestCardID.steer(steer.id) : input ? requestCardID.input(input.id) : 'details-needs-you'
-      return { label: steer?.via === agentMailVia ? 'Review agent mail' : action.label, act: () => nav.reveal(card) }
+      return { label: steer?.via === agentMailVia ? 'Agent mail' : action.label, act: () => nav.reveal(card) }
     }
     case 'terminal':
       return openTerminal()

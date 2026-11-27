@@ -33,6 +33,7 @@ export interface CollaborationSlice {
   roomLoading: Record<string, boolean | undefined>
   /** Errors reading room history; presence and action failures live separately. */
   roomError: Record<string, string | undefined>
+  /** A failed post by its run, a failed decision by the message it decided. */
   roomActionError: Record<string, string | undefined>
   /** Bumped on every room message event, loaded room or not: the server's Needs you reads rooms this page never opened. */
   roomEvents: number
@@ -50,7 +51,7 @@ export interface CollaborationSlice {
   initializeRoomPagination: (runID: string) => void
   setRoomLoading: (runID: string, loading: boolean) => void
   setRoomError: (runID: string, error?: string) => void
-  setRoomActionError: (runID: string, error?: string) => void
+  setRoomActionError: (id: string, error?: string) => void
   setRoomPage: (runID: string, messages: RoomMessage[], nextBefore?: string, append?: boolean) => void
   upsertRoomMessage: (message: RoomMessage) => void
   dropRoomMessage: (runID: string, id: string) => void
@@ -239,8 +240,8 @@ export const createCollaborationSlice: SliceCreator<CollaborationSlice> = (set) 
     set((state) => ({ roomLoading: { ...state.roomLoading, [runID]: loading } })),
   setRoomError: (runID, error) =>
     set((state) => ({ roomError: { ...state.roomError, [runID]: error } })),
-  setRoomActionError: (runID, error) =>
-    set((state) => ({ roomActionError: { ...state.roomActionError, [runID]: error } })),
+  setRoomActionError: (id, error) =>
+    set((state) => ({ roomActionError: { ...state.roomActionError, [id]: error } })),
   setRoomStatusError: (runID, error) =>
     set((state) => ({ roomStatusError: { ...state.roomStatusError, [runID]: error } })),
   setRoomPage: (runID, messages, nextBefore, append = false) =>
