@@ -521,7 +521,9 @@ type StoredNotices struct {
 // after the read. It takes no lock and creates nothing: notices are stored
 // only beside a link to the pin file that verified them, each by a rename.
 func (s *State) Notices(serverID string) (StoredNotices, error) {
-	cur, err := s.pinned()
+	// Held open, the pin file's inode cannot be reused between the checks.
+	cur, err := openPin(s.path(pinFile))
+	defer cur.close()
 	if err != nil || cur.Key == nil {
 		return StoredNotices{}, err
 	}
