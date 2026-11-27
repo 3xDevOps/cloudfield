@@ -1357,11 +1357,13 @@ another agent`. Who may turn them off is in [teams.md](teams.md#subsessions).
   runs on and its cost when metered. `error` is why it was refused, or why a
   started subsession stopped, such as `enhanced session ended: the agent's ACP
   server exited with code 137`.
-- A subsession the server has no memory or disk for is not refused. It
+- A subsession the server has no memory or disk for, or could not measure
+  them for, is not refused. It
   returns to `queued` with the refusal in `error`, such as `scheduler:
-  insufficient host memory headroom: ...`, and its parent's inbox says once
+  insufficient host memory headroom: ...` or `scheduler: host capacity
+  unavailable: ...`, and its parent's inbox says once
   that it is waiting. `cloudfield subsessions` prints the refusal after
-  `waiting for room:`. Every 30 seconds the server tries the oldest waiting
+  `waiting to start:`. Every 30 seconds the server tries the oldest waiting
   subsession that has a free slot; when one starts, the next is tried at
   once. A younger subsession of the same parent does not start ahead of a
   waiting one, but a subsession asked for while others wait gets its own

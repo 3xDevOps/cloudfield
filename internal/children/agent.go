@@ -219,7 +219,7 @@ func (s *Service) receipt(ctx context.Context, c *domain.ChildReservation, err e
 	next := startNext
 	switch {
 	case child.State == protocol.ChildQueued && child.Error != "":
-		next = "Waiting for room on the server: " + child.Error + ". It starts by itself when there is room. " + next
+		next = "Waiting to start, which it does by itself when the server has room. " + next + " The server's refusal: " + child.Error
 	case child.State == protocol.ChildQueued:
 		next = "Queued until one of this session's subsessions finishes (aether-internal subsession options shows the limits). " + next
 	}
