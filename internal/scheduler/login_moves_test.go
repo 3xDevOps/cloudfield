@@ -375,10 +375,7 @@ func TestRestartNeverResendsAContinuationBeingSent(t *testing.T) {
 				log, readErr := os.ReadFile(e.pty.ItemLogPath(run.ID))
 				return readErr == nil && strings.Contains(string(log), "the continuation prompt may not have been delivered")
 			})
-			time.Sleep(2000 * time.Millisecond)
-			if log, err := os.ReadFile(e.pty.ItemLogPath(run.ID)); err == nil { t.Logf("LOG %s", log) }
-			row, _ := e.db.GetRun(t.Context(), run.ID)
-			t.Logf("ROW %s %q execs %d before %d", row.Status, row.Reason, len(rt.all()), before)
+			time.Sleep(500 * time.Millisecond)
 			for _, exec := range rt.all()[before:] {
 				if prompts := exec.wire.prompts(t); len(prompts) != 0 {
 					t.Fatalf("the restart sent %d prompts; want the continuation never sent again", len(prompts))
