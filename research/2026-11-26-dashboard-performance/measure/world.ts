@@ -9,7 +9,8 @@
 // PERF_LINK_DELAY_MS=75 puts a TCP relay between the gateway and the server
 // that holds every chunk for 75 ms in each direction, so one round trip
 // between them costs 150 ms, as a distant relay would. PERF_CLI names another
-// `aether` binary for the gateway, to compare two builds on the same world.
+// `aether` binary for the gateway and PERF_SERVER another `aether-server`, to
+// compare two builds on the same world.
 
 import { execFileSync } from 'node:child_process'
 import { copyFileSync, mkdtempSync, writeFileSync } from 'node:fs'
@@ -26,6 +27,8 @@ import { seedWorkspace } from '../../../web/e2e/harness/setup'
 
 const out = process.argv[2]
 if (!out) throw new Error('usage: world.ts <state-file> [seed flags...]')
+if (process.env.PERF_CLI) copyFileSync(process.env.PERF_CLI, binaries().cli)
+if (process.env.PERF_SERVER) copyFileSync(process.env.PERF_SERVER, binaries().server)
 const dir = mkdtempSync(path.join(tmpdir(), 'cf-perf-'))
 const server = await startServer(dir)
 const delay = Number(process.env.PERF_LINK_DELAY_MS ?? 0)
@@ -46,7 +49,7 @@ if (delay) {
   await new Promise<void>((resolve) => relay.listen(0, '127.0.0.1', resolve))
   link = `127.0.0.1:${(relay.address() as net.AddressInfo).port}`
 }
-if (process.env.PERF_CLI) copyFileSync(process.env.PERF_CLI, binaries().cli)
+
 const gateway = await startGateway(dir, 'admin')
 const api = new GatewayClient(gateway.addr, gateway.token)
 const admin = { name: 'admin', api, url: gateway.url, home: gateway.home } as never
