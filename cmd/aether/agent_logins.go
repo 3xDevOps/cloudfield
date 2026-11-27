@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"cmp"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
 	"github.com/3xDevOps/cloudfield/internal/shellquote"
+	"golang.org/x/term"
 )
 
 // addedLoginsAgent is the one agent whose logins the subcommands of
@@ -547,20 +549,37 @@ func renameLogin(args []string) error {
 }
 
 func removeLogin(args []string) error {
-	if len(args) != 1 {
-		return errors.New("usage: cloudfield agent logins remove <login>")
+	yes := len(args) == 2 && args[1] == "--yes"
+	if len(args) != 1 && !yes {
+		return errors.New("usage: cloudfield agent logins remove <login> [--yes]")
+	}
+	interactive := term.IsTerminal(int(os.Stdin.Fd()))
+	if !yes && !interactive {
+		return errors.New("--yes is required because cloudfield agent logins remove deletes the login's files from Cloudfield: cloudfield agent logins remove " + shellquote.Quote(args[0]) + " --yes")
 	}
 	return withLogins(func(c *protocol.Client, logins []protocol.AgentLogin) error {
-		id, err := loginID(logins, args[0])
-		if err != nil {
-			return err
-		}
-		if err := c.Call(protocol.MethodAgentLoginRemove, protocol.AgentLoginParams{Agent: addedLoginsAgent, LoginID: id}, nil); err != nil {
-			return err
-		}
-		fmt.Printf("removed login %s and its files from Cloudfield; this does not sign it out at Anthropic\n", args[0])
-		return nil
+		return removeLoginOf(c, logins, args[0], yes, os.Stdin, os.Stdout)
 	})
+}
+
+func removeLoginOf(c *protocol.Client, logins []protocol.AgentLogin, name string, yes bool, in io.Reader, out io.Writer) error {
+	id, err := loginID(logins, name)
+	if err != nil {
+		return err
+	}
+	if !yes {
+		login := logins[slices.IndexFunc(logins, func(l protocol.AgentLogin) bool { return l.ID == id })]
+		_, _ = fmt.Fprintf(out, "login %s\nRemoving it deletes its files from Cloudfield and does not sign it out at Anthropic; "+
+			"Cloudfield refuses while a session is on it. Remove? [y/N]: ", describeLogin(login))
+		if !yesAnswer(bufio.NewReader(in)) {
+			return errors.New("cloudfield agent logins remove: nothing was removed")
+		}
+	}
+	if err = c.Call(protocol.MethodAgentLoginRemove, protocol.AgentLoginParams{Agent: addedLoginsAgent, LoginID: id}, nil); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(out, "removed login %s and its files from Cloudfield; this does not sign it out at Anthropic\n", name)
+	return err
 }
 
 func orderLogins(args []string) error {

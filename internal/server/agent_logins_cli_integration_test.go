@@ -446,7 +446,8 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 		{[]string{"rename", "nope", "x"}, `you have no login named "nope"; cloudfield agent logins lists yours`},
 		{[]string{"order", "job"}, "login_ids must name each of your logins once, default included"},
 		{[]string{"rename", "job", "Bad Name"}, `login name "Bad Name": use lowercase letters, digits and '-', starting with a letter or digit`},
-		{[]string{"remove", "default"}, "the default login is the one in your home; it is not renamed or removed here"},
+		{[]string{"remove", "default", "--yes"}, "the default login is the one in your home; it is not renamed or removed here"},
+		{[]string{"remove", "job"}, "--yes is required because cloudfield agent logins remove deletes the login's files from Cloudfield: cloudfield agent logins remove job --yes"},
 	} {
 		_, stderr, code := ada.cli(append([]string{"agent", "logins"}, refused.args...)...)
 		t.Logf("$ cloudfield agent logins %s\n%s", strings.Join(refused.args, " "), stderr)
@@ -455,10 +456,12 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 		}
 	}
 
-	out, stderr, code = ada.cli("agent", "logins", "remove", "job")
-	t.Logf("$ cloudfield agent logins remove job\n%s", out)
-	if code != 0 || out != "removed login job and its files from Cloudfield; this does not sign it out at Anthropic\n" {
-		t.Fatalf("agent logins remove job = %d %q %q", code, out, stderr)
+	shown, code = ada.onTerminal(map[string]string{"Remove? [y/N]: ": "y\r"}, "agent", "logins", "remove", "job")
+	t.Logf("$ cloudfield agent logins remove job\n%s", shown)
+	if code != 0 || !strings.HasPrefix(shown, "login job: subscription, plan max, ada@work.example.test, organisation Test Org\n"+
+		"Removing it deletes its files from Cloudfield and does not sign it out at Anthropic; Cloudfield refuses while a session is on it. Remove? [y/N]: ") ||
+		!strings.HasSuffix(shown, "removed login job and its files from Cloudfield; this does not sign it out at Anthropic\n") {
+		t.Fatalf("agent logins remove job on a terminal = %d:\n%s", code, shown)
 	}
 	if got := rows(); len(got) != 0 {
 		t.Fatalf("rows after removing the last added login: %+v", got)

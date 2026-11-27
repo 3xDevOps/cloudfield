@@ -24,7 +24,7 @@ func init() {
 			"cloudfield agent login <name> [--as <login> | --attach <login-id>]\n" +
 			"cloudfield agent logins [<agent>] [--json]\n" +
 			"cloudfield agent logins rename <login> <new-name>\n" +
-			"cloudfield agent logins remove <login>\n" +
+			"cloudfield agent logins remove <login> [--yes]\n" +
 			"cloudfield agent logins order <login> [<login> ...]\n" +
 			"cloudfield agent logins auto <login> on|off\n" +
 			"cloudfield agent logins share <login> on|off\n" +

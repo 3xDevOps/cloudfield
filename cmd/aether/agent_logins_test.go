@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"reflect"
 	"strings"
 	"testing"
@@ -594,5 +595,51 @@ func TestAgentLoginOfAnAddedLoginOpensNoTerminalOnAServerWithoutLogins(t *testin
 	}
 	if got := asked(); !reflect.DeepEqual(got, []string{protocol.SubsystemControl, protocol.SubsystemControl}) {
 		t.Errorf("subsystems opened = %q; want the control channel only", got)
+	}
+}
+
+func TestRemoveLoginAsksBeforeRemoving(t *testing.T) {
+	logins := []protocol.AgentLogin{{ID: "default", Name: "default"}, {ID: "lgn-test1", Name: "work", Kind: "subscription", Plan: "max", Email: "ada@work.example.test"}}
+	const asked = "login work: subscription, plan max, ada@work.example.test\n" +
+		"Removing it deletes its files from Cloudfield and does not sign it out at Anthropic; Cloudfield refuses while a session is on it. Remove? [y/N]: "
+	const removed = "removed login work and its files from Cloudfield; this does not sign it out at Anthropic\n"
+	for _, tc := range []struct {
+		answer  string
+		yes     bool
+		out     string
+		err     string
+		removes bool
+	}{
+		{answer: "\n", out: asked, err: "cloudfield agent logins remove: nothing was removed"},
+		{answer: "y\n", out: asked + removed, removes: true},
+		{yes: true, out: removed, removes: true},
+	} {
+		remove := &fakeReply{}
+		c := fakeControlMethods(t, map[string]*fakeReply{protocol.MethodAgentLoginRemove: remove})
+		var out bytes.Buffer
+		err := removeLoginOf(c, logins, "work", tc.yes, strings.NewReader(tc.answer), &out)
+		if (err == nil) != (tc.err == "") || (err != nil && err.Error() != tc.err) {
+			t.Errorf("answer %q, --yes %v: err = %v, want %q", tc.answer, tc.yes, err, tc.err)
+		}
+		if out.String() != tc.out {
+			t.Errorf("answer %q, --yes %v: printed %q, want %q", tc.answer, tc.yes, out.String(), tc.out)
+		}
+		if got := remove.params() != nil; got != tc.removes {
+			t.Errorf("answer %q, --yes %v: removed %v, want %v", tc.answer, tc.yes, got, tc.removes)
+		}
+	}
+}
+
+func TestRemoveLoginWithoutATerminalNeedsYes(t *testing.T) {
+	null, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdin := os.Stdin
+	os.Stdin = null
+	t.Cleanup(func() { os.Stdin = stdin; _ = null.Close() })
+	err = removeLogin([]string{"work"})
+	if err == nil || err.Error() != "--yes is required because cloudfield agent logins remove deletes the login's files from Cloudfield: cloudfield agent logins remove work --yes" {
+		t.Fatalf("removeLogin without a terminal = %v; want --yes asked for before connecting", err)
 	}
 }
