@@ -179,3 +179,48 @@ func TestOwnerLoginKeepsAnErrorThatNamesNoProfile(t *testing.T) {
 		t.Fatalf("OwnerLogin through a symlinked configs = %+v, %v; want the symlink named", login, err)
 	}
 }
+
+// ~/.claude/settings.json, or ~/.claude itself, linked to a file elsewhere
+// in the home is read through the link, as Claude Code reads it. A link out
+// of the home, to anything but a regular file, or to a file that is not
+// JSON leaves the settings unreadable.
+func TestClaudeSettingsFollowALinkWithinTheHome(t *testing.T) {
+	manager, home, _ := newLoginHomes(t)
+	settings := filepath.Join(home, ".claude", "settings.json")
+	writeHomeFile(t, home, "dotfiles/claude/settings.json", `{"apiKeyHelper":"test-helper","env":{"ANTHROPIC_API_KEY":"test-settings-key"}}`)
+	if err := os.Symlink("../dotfiles/claude/settings.json", settings); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := manager.ClaudeSettings("owner"); err != nil || !got.APIKeyHelper || got.Env["ANTHROPIC_API_KEY"] == "" {
+		t.Fatalf("settings through a link to a file in the home = %+v, %v; want them read", got, err)
+	}
+	if err := os.RemoveAll(filepath.Join(home, ".claude")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("dotfiles/claude", filepath.Join(home, ".claude")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := manager.ClaudeSettings("owner"); err != nil || !got.APIKeyHelper {
+		t.Fatalf("settings in a linked ~/.claude in the home = %+v, %v; want them read", got, err)
+	}
+	if err := os.Remove(filepath.Join(home, ".claude")); err != nil {
+		t.Fatal(err)
+	}
+	outside := filepath.Join(t.TempDir(), "settings.json")
+	if err := os.WriteFile(outside, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeHomeFile(t, home, "notjson.json", `{"apiKeyHelper":`)
+	for target, why := range map[string]string{outside: "a file outside the home", "../dotfiles": "a directory", "../notjson.json": "a file that is not JSON"} {
+		if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		_ = os.Remove(settings)
+		if err := os.Symlink(target, settings); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := manager.ClaudeSettings("owner"); err == nil {
+			t.Errorf("settings linked to %s = %+v; want them unreadable", why, got)
+		}
+	}
+}

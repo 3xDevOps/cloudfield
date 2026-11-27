@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -74,6 +75,23 @@ func (s *Scheduler) LoginProblem(member, account domain.MemberID, agent string, 
 // account share carries the file only. Such a login the server cannot read
 // leaves the file's problem standing.
 func (s *Scheduler) loginFileProblem(member, account domain.MemberID, agent string, profile harness.Profile) (string, error) {
+	problem, err := s.signInFileProblem(account, agent, profile)
+	if err != nil || problem == "" || member != account {
+		return problem, err
+	}
+	own, ownErr := s.cfg.Homes.OwnerLogin(account, agent)
+	switch {
+	case ownErr != nil:
+		return problem + "; a sign-in outside that file cannot be read: " + ownErr.Error(), nil
+	case own != nil:
+		return "", nil
+	}
+	return problem, nil
+}
+
+// signInFileProblem is why the login file of agent in account's home cannot
+// sign it in, naming the file; empty when it can or there is none.
+func (s *Scheduler) signInFileProblem(account domain.MemberID, agent string, profile harness.Profile) (string, error) {
 	file := quota.LoginFile(agent)
 	paths, err := profile.LoginPaths()
 	if s.cfg.Homes == nil || err != nil || !slices.Contains(paths, file) {
@@ -87,22 +105,10 @@ func (s *Scheduler) loginFileProblem(member, account domain.MemberID, agent stri
 	if err != nil {
 		return "", err
 	}
-	problem := quota.LoginProblem(agent, data, time.Now())
-	if problem == "" {
-		return "", nil
+	if problem := quota.LoginProblem(agent, data, time.Now()); problem != "" {
+		return "~/" + file + ": " + problem, nil
 	}
-	problem = "~/" + file + ": " + problem
-	if member != account {
-		return problem, nil
-	}
-	own, ownErr := s.cfg.Homes.OwnerLogin(account, agent)
-	switch {
-	case ownErr != nil:
-		return problem + "; a sign-in outside that file cannot be read: " + ownErr.Error(), nil
-	case own != nil:
-		return "", nil
-	}
-	return problem, nil
+	return "", nil
 }
 
 // loginStamp changes when a login of agent in account's home does: a login
@@ -159,30 +165,44 @@ func signInSteps(agent string, profile harness.Profile) string {
 // agent in without the account's login: Claude Code's in every mode, Codex's
 // CODEX_API_KEY in Background runs only (docs/harnesses.md).
 func (s *Scheduler) environmentSignsIn(ctx context.Context, workspace domain.WorkspaceID, agent string, profile harness.Profile, mode domain.LaunchMode) (bool, error) {
-	if signInKeys(agent, mode) == nil {
+	var keys []string
+	switch {
+	case agent == "claude":
+		keys = []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"}
+	case agent == "codex" && mode == domain.LaunchHeadless:
+		keys = []string{"CODEX_API_KEY"}
+	default:
 		return false, nil
 	}
+	env, err := s.workspaceVariables(ctx, workspace, profile)
+	if err != nil {
+		return false, err
+	}
+	return slices.ContainsFunc(keys, func(key string) bool { return env[key] != "" }), nil
+}
+
+// workspaceVariables are the variables a session of profile in workspace
+// gets from the workspace and the server.
+func (s *Scheduler) workspaceVariables(ctx context.Context, workspace domain.WorkspaceID, profile harness.Profile) (map[string]string, error) {
 	ws, err := s.cfg.Store.GetWorkspace(ctx, workspace)
 	if err != nil {
-		return false, fmt.Errorf("read workspace environment: %w", err)
+		return nil, fmt.Errorf("read workspace environment: %w", err)
 	}
 	ws, secrets, err := s.workspaceEnvironment(ctx, ws)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	env, err := explicitEnvironment(profile, ws, secrets)
-	if err != nil {
-		return false, err
-	}
-	return signsIn(env, agent, mode), nil
+	return explicitEnvironment(profile, ws, secrets)
 }
 
 // signInKeys are the variables that sign agent in, in mode, whatever its
-// login.
+// login, as the installed agent names them.
 func signInKeys(agent string, mode domain.LaunchMode) []string {
 	switch {
 	case agent == "claude":
-		return []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY"}
+		return []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_FEDERATION_RULE_ID", "ANTHROPIC_ORGANIZATION_ID",
+			"CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX", "CLAUDE_CODE_USE_FOUNDRY", "CLAUDE_CODE_USE_ANTHROPIC_AWS",
+			"CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD", "CLAUDE_CODE_USE_MANTLE", "CLAUDE_CODE_USE_GATEWAY"}
 	case agent == "codex" && mode == domain.LaunchHeadless:
 		return []string{"CODEX_API_KEY"}
 	}
@@ -190,24 +210,96 @@ func signInKeys(agent string, mode domain.LaunchMode) []string {
 }
 
 // signsIn reports whether env signs agent in, in mode, whatever its login.
-// Claude Code reads a CLAUDE_CODE_USE_ switch as on only when it is 1, true,
-// yes or on, in any case.
 func signsIn(env map[string]string, agent string, mode domain.LaunchMode) bool {
-	return slices.ContainsFunc(signInKeys(agent, mode), func(key string) bool {
-		if strings.HasPrefix(key, "CLAUDE_CODE_USE_") {
-			return slices.Contains([]string{"1", "true", "yes", "on"}, strings.ToLower(strings.TrimSpace(env[key])))
-		}
-		return env[key] != ""
-	})
+	return signingKey(env, agent, mode) != ""
 }
 
-// ErrEnvironmentPays refuses an added login where a variable signs the agent
-// in: that variable would pay, not the login.
-var ErrEnvironmentPays = errors.New("a workspace or server variable signs the agent in here")
+// signingKey is the first variable of env that signs agent in, in mode,
+// whatever its login. Claude Code reads a CLAUDE_CODE_USE_ switch as on only
+// when it is 1, true, yes or on, in any case, and signs in by workload
+// identity federation only when both its rule and its organization are set.
+func signingKey(env map[string]string, agent string, mode domain.LaunchMode) string {
+	keys := signInKeys(agent, mode)
+	if i := slices.IndexFunc(keys, func(key string) bool {
+		switch {
+		case strings.HasPrefix(key, "CLAUDE_CODE_USE_"):
+			return slices.Contains([]string{"1", "true", "yes", "on"}, strings.ToLower(strings.TrimSpace(env[key])))
+		case key == "ANTHROPIC_FEDERATION_RULE_ID" || key == "ANTHROPIC_ORGANIZATION_ID":
+			return env["ANTHROPIC_FEDERATION_RULE_ID"] != "" && env["ANTHROPIC_ORGANIZATION_ID"] != ""
+		}
+		return env[key] != ""
+	}); i >= 0 {
+		return keys[i]
+	}
+	return ""
+}
 
-// EnvironmentPays is why a session in such a workspace cannot run on login.
-func EnvironmentPays(login domain.LoginID) error {
-	return fmt.Errorf("scheduler: %w, so login %s would not pay; launch on the default login", ErrEnvironmentPays, login)
+// ErrEnvironmentPays refuses an added login where another sign-in of the
+// agent would pay instead of it.
+var ErrEnvironmentPays = errors.New("a sign-in outside the login pays here")
+
+// EnvironmentPays is why a session cannot run on login while payer, a
+// loginPayer answer, signs its agent in.
+func EnvironmentPays(login domain.LoginID, payer string) error {
+	return fmt.Errorf("scheduler: %w: %s, so login %s would not pay; launch on the default login", ErrEnvironmentPays, payer, login)
+}
+
+// loginPayer is what signs agent in, in mode, in a session in home's home in
+// workspace, whatever added login it mounts: a workspace or server variable,
+// or home's ~/.claude/settings.json, which Claude Code prefers to a login
+// file. Empty when nothing does.
+func (s *Scheduler) loginPayer(ctx context.Context, workspace domain.WorkspaceID, home domain.MemberID, agent string, profile harness.Profile, mode domain.LaunchMode) (string, error) {
+	var env map[string]string
+	if signInKeys(agent, mode) != nil {
+		var err error
+		if env, err = s.workspaceVariables(ctx, workspace, profile); err != nil {
+			return "", err
+		}
+	}
+	return s.payer(env, home, agent, mode), nil
+}
+
+// payer is what signs agent in, in mode, whatever login a session in home's
+// home with the variables env mounts: one of env, or home's
+// ~/.claude/settings.json, whose env block Claude Code adds to them. A
+// settings file the server cannot read may sign it in.
+func (s *Scheduler) payer(env map[string]string, home domain.MemberID, agent string, mode domain.LaunchMode) string {
+	if signsIn(env, agent, mode) {
+		return "a workspace or server variable signs the agent in"
+	}
+	key, err := s.settingsSignIn(home, agent, env)
+	switch {
+	case err != nil:
+		return "~/.claude/settings.json may sign the agent in and cannot be read: " + err.Error()
+	case key == "apiKeyHelper":
+		return "apiKeyHelper in ~/.claude/settings.json signs the agent in"
+	case key == "ANTHROPIC_FEDERATION_RULE_ID":
+		return "ANTHROPIC_FEDERATION_RULE_ID and ANTHROPIC_ORGANIZATION_ID, set under env in ~/.claude/settings.json or by the workspace or server, sign the agent in"
+	case key != "":
+		return key + " under env in ~/.claude/settings.json signs the agent in"
+	}
+	return ""
+}
+
+// settingsSignIn is what home's ~/.claude/settings.json sets that signs
+// agent in, ahead of any login file, with the variables env beside it:
+// "apiKeyHelper", the first variable of its env block over env that does,
+// or empty for none.
+func (s *Scheduler) settingsSignIn(home domain.MemberID, agent string, env map[string]string) (string, error) {
+	if agent != "claude" || s.cfg.Homes == nil {
+		return "", nil
+	}
+	settings, err := s.cfg.Homes.ClaudeSettings(home)
+	switch {
+	case err != nil:
+		return "", err
+	case settings.APIKeyHelper:
+		return "apiKeyHelper", nil
+	}
+	merged := make(map[string]string, len(env)+len(settings.Env))
+	maps.Copy(merged, env)
+	maps.Copy(merged, settings.Env)
+	return signingKey(merged, agent, ""), nil
 }
 
 // checkLogin refuses a launch of agent on account whose login cannot sign it

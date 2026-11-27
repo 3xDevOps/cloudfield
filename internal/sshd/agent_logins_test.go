@@ -271,6 +271,8 @@ type fakeLoginSignIns struct {
 	reconciled []domain.MemberID
 	volumes    []domain.LoginID
 	volumeErr  error
+	// reconcileErr is what ReconcileLogins fails with, when set.
+	reconcileErr error
 }
 
 func (f *fakeLoginSignIns) RemoveLoginVolume(_ context.Context, _ domain.MemberID, _ string, id domain.LoginID) error {
@@ -288,7 +290,7 @@ func (f *fakeLoginSignIns) EndLoginSignIns(context.Context, domain.MemberID) err
 
 func (f *fakeLoginSignIns) ReconcileLogins(_ context.Context, member domain.MemberID) error {
 	f.reconciled = append(f.reconciled, member)
-	return nil
+	return f.reconcileErr
 }
 
 // A removal refused for a login in use names the owner's own sessions,
@@ -380,6 +382,33 @@ func TestRelaunchOnALoginTurnedAutomaticOffIsRefusedUpFront(t *testing.T) {
 	}
 	if _, perr := e.call(t, e.member.ID, protocol.MethodRunRelaunch, protocol.RunIDParams{RunID: string(run.ID)}); perr != nil {
 		t.Fatalf("relaunch once the login is automatic again: %v", perr)
+	}
+}
+
+// Removing a member removes each of their logins with its Docker volume,
+// and keeps the directory of one whose volume stays, so the next start
+// finds and removes both.
+func TestMemberRemovalRemovesEachLoginWithItsVolume(t *testing.T) {
+	for _, volumeStays := range []bool{false, true} {
+		e := newLoginEnv(t)
+		asSuperAdmin(t, e.testEnv)
+		_, bob := addMember(t, e.testEnv, "Bob", domain.RoleCollaborator, false)
+		e.seed(t, bob.ID, "lgn-work000000", "work", "bob@work.example.test")
+		signIns := &fakeLoginSignIns{}
+		if volumeStays {
+			signIns.reconcileErr = errors.New("login lgn-work000000: volume is in use")
+		}
+		e.srv.cfg.LoginSignIns = signIns
+		if err := controlClient(t, e.testEnv).Call(protocol.MethodMemberRemove, protocol.MemberRemoveParams{MemberID: string(bob.ID)}, nil); err != nil {
+			t.Fatalf("member.remove: %v", err)
+		}
+		if !slices.Equal(signIns.reconciled, []domain.MemberID{bob.ID}) {
+			t.Fatalf("logins reconciled for %v; want Bob's, which removes each with its volume", signIns.reconciled)
+		}
+		dir, _ := e.logins.Path(bob.ID, "claude", "lgn-work000000")
+		if _, err := os.Lstat(dir); volumeStays != (err == nil) {
+			t.Fatalf("volume stays %v: Bob's login directory: %v", volumeStays, err)
+		}
 	}
 }
 
@@ -483,6 +512,39 @@ func TestAnUnnamedStartBilledPerUseYieldsToReadableUsage(t *testing.T) {
 	defer e.runs.mu.Unlock()
 	if n := len(e.runs.launchOptions); n != 2 || e.runs.launchOptions[0].AccountLogin != "" || e.runs.launchOptions[1].AccountLogin != "lgn-console000" {
 		t.Fatalf("launches = %+v; want the unnamed one on the default login and the named one on console", e.runs.launchOptions)
+	}
+}
+
+// A default login billed per use because something outside its file signs
+// the agent in, such as an apiKeyHelper in its owner's settings, does not
+// send a launch that names none to a teammate's account: that payer pays
+// there too, so the launcher's own unspent account serves.
+func TestAnUnnamedStartAPayerSignsInStaysOnItsAccount(t *testing.T) {
+	e := newLoginEnv(t)
+	ctx := context.Background()
+	e.seed(t, e.member.ID, "lgn-work000000", "work", "ada@work.example.test")
+	_, grace := addMember(t, e.testEnv, "Grace", domain.RoleCollaborator, false)
+	if _, err := e.store.ShareAccount(ctx, grace.ID, e.member.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.store.GrantWorkspace(ctx, e.ws.ID, grace.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+	installUsageStub(e.testEnv, usageByLogin{domain.AccountOf(e.member.ID): 10, domain.AccountOf(grace.ID): 10})
+	e.runs.mu.Lock()
+	e.runs.perUse = map[domain.LoginID]bool{"": true}
+	e.runs.environmentPays = true
+	e.runs.mu.Unlock()
+	raw, perr := e.call(t, e.member.ID, protocol.MethodRunLaunch, protocol.RunLaunchParams{WorkspaceID: string(e.ws.ID), Task: "t", Harness: "claude"})
+	if perr != nil {
+		t.Fatalf("run.launch: %v", perr)
+	}
+	var result protocol.RunLaunchResult
+	if err := json.Unmarshal(raw, &result); err != nil {
+		t.Fatal(err)
+	}
+	if launches := e.runs.LaunchOptions(); result.Run.AccountMemberID != string(e.member.ID) || len(launches) != 1 || launches[0].AccountLogin != "" {
+		t.Fatalf("session on %s, launches %+v; want one on Ada's own default login", result.Run.AccountMemberID, launches)
 	}
 }
 

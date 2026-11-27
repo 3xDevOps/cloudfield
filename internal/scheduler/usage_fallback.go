@@ -84,6 +84,9 @@ type accountSwap struct {
 	// restart that finds Sending never sends it again.
 	Continuation string `json:"continuation,omitempty"`
 	Sending      bool   `json:"sending,omitempty"`
+	// perUse is whether To's login is billed per use, read before the old
+	// container goes so that no read can fail the move after it.
+	perUse bool
 }
 
 func (a *accountSwap) to() domain.Account {
@@ -747,15 +750,15 @@ func (s *Scheduler) chooseMove(ctx context.Context, entry *supervised, f *UsageF
 		}
 		off = settings.Off
 	}
-	byEnv := sync.OnceValues(func() (bool, error) { return s.EnvironmentSignsIn(ctx, run.WorkspaceID, run.Harness, mode) })
+	payer := sync.OnceValues(func() (string, error) { return s.LoginPayer(ctx, run.WorkspaceID, home, run.Harness, mode) })
 	to, excluded := fallback.Select(ctx, s.cfg.Store, measured, run.MemberID, from, run.Harness, workspaces, run.Fallback, func(ctx context.Context, account domain.Account) (bool, error) {
 		if off.Covers(run.Harness, account.Member) {
 			return false, nil
 		}
 		if account.Login.Added() {
 			// As at launch: a variable would pay instead of the login.
-			if signsIn, envErr := byEnv(); envErr != nil || signsIn {
-				return false, envErr
+			if paidBy, payerErr := payer(); payerErr != nil || paidBy != "" {
+				return false, payerErr
 			}
 		}
 		if account.Login.Added() && run.Permission == domain.PermissionIsolated {
@@ -813,7 +816,11 @@ func (s *Scheduler) chooseMove(ctx context.Context, entry *supervised, f *UsageF
 	if to == from {
 		return run, none, excluded, nil
 	}
-	swap := &accountSwap{From: from.Member, FromLogin: from.Login, To: to.Member, ToLogin: to.Login}
+	perUse, err := s.LoginPerUse(ctx, home, to, run.Harness)
+	if err != nil {
+		return nil, none, nil, err
+	}
+	swap := &accountSwap{From: from.Member, FromLogin: from.Login, To: to.Member, ToLogin: to.Login, perUse: perUse}
 	if run.ACP {
 		swap.Continuation = m.continuation(s.accountLabel(ctx, from, run.Harness), s.accountLabel(ctx, to, run.Harness))
 	}
@@ -861,13 +868,10 @@ func (s *Scheduler) commitMove(ctx context.Context, entry *supervised, f *UsageF
 	}
 	s.mu.Lock()
 	killed := entry.killRequested
+	perUse := entry.accountSwap != nil && entry.accountSwap.perUse
 	s.mu.Unlock()
 	if killed {
 		return 0, errors.New("the session is being killed")
-	}
-	perUse, err := s.LoginPerUse(ctx, run.HomeMember(), to, run.Harness)
-	if err != nil {
-		return 0, err
 	}
 	seq, err := s.cfg.Store.SetRunAccount(ctx, run.ID, to, perUse, m.segment(), time.Now().UTC())
 	if err != nil {

@@ -338,8 +338,14 @@ func (s *Scheduler) endLoginSignIn(sign *loginSignIn, login domain.AgentLogin, e
 	if ended {
 		return
 	}
+	// A directory whose volume stays is left for the next start's reconcile,
+	// which finds the volume through it.
 	if err != nil && created {
-		if removeErr := s.cfg.Logins.Remove(sign.member, sign.agent, sign.id); removeErr != nil {
+		removeErr := s.RemoveLoginVolume(context.Background(), sign.member, sign.agent, sign.id)
+		if removeErr == nil {
+			removeErr = s.cfg.Logins.Remove(sign.member, sign.agent, sign.id)
+		}
+		if removeErr != nil {
 			slog.Warn("scheduler: remove a login that was not added", "login", sign.id, "error", removeErr)
 		}
 	}
@@ -571,7 +577,13 @@ func (s *Scheduler) ReconcileLogins(ctx context.Context, member domain.MemberID)
 		case err != nil:
 			errs = append(errs, fmt.Errorf("login %s: %w", l.ID, err))
 		case owner != l.Member:
-			errs = append(errs, s.RemoveLoginVolume(ctx, l.Member, l.Agent, l.ID), s.cfg.Logins.Move(l.Member, owner, l.Agent, l.ID))
+			// Moved, the directory no longer names the volume of its old
+			// path, so it stays until that volume goes.
+			if volumeErr := s.RemoveLoginVolume(ctx, l.Member, l.Agent, l.ID); volumeErr != nil {
+				errs = append(errs, volumeErr)
+				continue
+			}
+			errs = append(errs, s.cfg.Logins.Move(l.Member, owner, l.Agent, l.ID))
 		}
 	}
 	return errors.Join(errs...)

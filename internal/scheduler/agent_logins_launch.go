@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -64,10 +65,11 @@ func (s *Scheduler) addedLoginMounts(run *domain.Run, launcher domain.MemberID, 
 		default:
 			return nil, fmt.Errorf("scheduler: login %s no longer holds the %s sign-in it was added with; its owner removes it and adds it again", run.AccountLogin, recorded.Kind)
 		}
-		// Checked again on the variables this plan sets: one added after the
-		// launch was admitted would pay instead of the login.
-		if signsIn(env, profile.Name, run.Mode) {
-			return nil, EnvironmentPays(run.AccountLogin)
+		// Checked again on the variables this plan sets and the home's
+		// settings: one added after the launch was admitted would pay instead
+		// of the login.
+		if payer := s.payer(env, launcher, profile.Name, run.Mode); payer != "" {
+			return nil, EnvironmentPays(run.AccountLogin, payer)
 		}
 		// Empty, not absent: an image's own ENV would fill an absent one.
 		for _, key := range append(slices.Clone(profile.EnvPassthrough), signInKeys(profile.Name, run.Mode)...) {
@@ -125,6 +127,11 @@ func (s *Scheduler) addedLoginMounts(run *domain.Run, launcher domain.MemberID, 
 	config, err := s.accountConfigMounts(configDir, member, profile, home, true)
 	if err != nil {
 		return nil, err
+	}
+	if purpose != EnvironmentPurposeLogin {
+		if err = writeFileIn(configDir, accountConfigVolume, nil); err != nil {
+			return nil, fmt.Errorf("scheduler: mark the session's account config volume: %w", err)
+		}
 	}
 	for i, m := range config {
 		if !m.ReadOnly {
@@ -228,15 +235,12 @@ func (s *Scheduler) loginRefusal(ctx context.Context, member domain.MemberID, lo
 	if problem, blocks, loginErr := s.LoginProblem(member, login.Member, harnessName, profile); loginErr == nil && blocks {
 		return problem, nil
 	}
-	// Beside added logins, a default login that holds no sign-in at all
-	// would start the agent signed out while another login could serve.
+	// Beside added logins, a default login that cannot sign in would start
+	// the agent signed out while another login could serve.
 	if added, err := s.keepsAddedLogin(ctx, harnessName, login.Member); err != nil || !added {
 		return "", err
 	}
-	if s.defaultSignInMissing(login.Member, harnessName) {
-		return "it holds no sign-in", nil
-	}
-	return "", nil
+	return s.defaultSignInProblem(login.Member, harnessName, profile)
 }
 
 // keepsAddedLogin reports whether any of members keeps an added login of
@@ -254,18 +258,42 @@ func (s *Scheduler) keepsAddedLogin(ctx context.Context, agent string, members .
 	return false, nil
 }
 
-// defaultSignInMissing reports whether member's default login of agent
-// holds no sign-in at all: no login file Cloudfield reads, and no
-// apiKeyHelper or variable that signs agent in set in
-// ~/.claude/settings.json. One whose files cannot be read is not reported.
-func (s *Scheduler) defaultSignInMissing(member domain.MemberID, agent string) bool {
+// defaultSignInProblem is why member's default login of agent, which
+// profile describes, cannot sign it in; empty when it can. It holds no
+// sign-in at all: no login file Cloudfield reads, and no apiKeyHelper or
+// variable that signs agent in set in ~/.claude/settings.json. Or its
+// subscription sign-in file is signed out, which Claude Code sends all the
+// same, ahead of a Console sign-in beside it. Files it cannot read are an
+// errLoginUnread.
+func (s *Scheduler) defaultSignInProblem(member domain.MemberID, agent string, profile harness.Profile) (string, error) {
 	identity, err := s.cfg.Homes.DefaultIdentity(member, agent)
-	if err != nil || identity.Kind != "" {
-		return false
+	if err != nil && identity.Kind != memberhome.LoginSubscription {
+		return "", fmt.Errorf("%w: %w", errLoginUnread, err)
 	}
-	settings, err := s.cfg.Homes.ClaudeSettings(member)
-	return err == nil && !settings.APIKeyHelper && !signsIn(settings.Env, agent, "")
+	var problem string
+	switch identity.Kind {
+	case "":
+		problem = "it holds no sign-in"
+	case memberhome.LoginSubscription:
+		problem, _ = s.signInFileProblem(member, agent, profile)
+	}
+	if problem == "" {
+		return "", nil
+	}
+	key, err := s.settingsSignIn(member, agent, nil)
+	if err != nil {
+		return "", fmt.Errorf("%w: %w", errLoginUnread, err)
+	}
+	if key != "" {
+		return "", nil
+	}
+	return problem, nil
 }
+
+// errLoginUnread marks a default login whose files cannot be read to tell
+// whether it signs in. A launch that names no login starts on it in its
+// place, counting its usage unknown.
+var errLoginUnread = errors.New("its files cannot be read")
 
 // addedLoginRefusal is loginRefusal for an added login: it must still
 // exist, be member's own or on for shares and automatic, have mounts the
@@ -358,14 +386,15 @@ func (s *Scheduler) addedLoginName(ctx context.Context, account domain.Account, 
 	return string(account.Login)
 }
 
-// EnvironmentSignsIn reports whether a variable of workspace signs agent
-// in, whatever login a session mounts.
-func (s *Scheduler) EnvironmentSignsIn(ctx context.Context, workspace domain.WorkspaceID, agent string, mode domain.LaunchMode) (bool, error) {
+// LoginPayer is what signs agent in, in mode, in a session in home's home in
+// workspace, whatever added login it mounts: a workspace or server
+// variable, or home's ~/.claude/settings.json. Empty when nothing does.
+func (s *Scheduler) LoginPayer(ctx context.Context, workspace domain.WorkspaceID, home domain.MemberID, agent string, mode domain.LaunchMode) (string, error) {
 	profile, ok := harness.Lookup(agent)
 	if !ok || workspace == "" {
-		return false, nil
+		return "", nil
 	}
-	return s.environmentSignsIn(ctx, workspace, agent, profile, mode)
+	return s.loginPayer(ctx, workspace, home, agent, profile, mode)
 }
 
 // checkDefaultLoginShared refuses a launch in member's home on another
@@ -396,10 +425,10 @@ func (s *Scheduler) StartLogin(ctx context.Context, workspace domain.WorkspaceID
 	if err != nil || len(logins) == 0 {
 		return "", err
 	}
-	// A workspace variable that signs the agent in pays whatever the login:
-	// such a launch chooses between no logins.
-	if byEnv, envErr := s.EnvironmentSignsIn(ctx, workspace, harness, mode); envErr != nil || byEnv {
-		return "", envErr
+	// A variable or a setting that signs the agent in pays whatever the
+	// login: such a launch chooses between no logins.
+	if payer, payerErr := s.LoginPayer(ctx, workspace, member, harness, mode); payerErr != nil || payer != "" {
+		return "", payerErr
 	}
 	var refused []string
 	for _, l := range logins {
@@ -412,6 +441,9 @@ func (s *Scheduler) StartLogin(ctx context.Context, workspace domain.WorkspaceID
 		}
 		login := domain.Account{Member: account, Login: loginOf(l.ID)}
 		refusal, refusalErr := s.loginRefusal(ctx, member, login, harness, permission == domain.PermissionIsolated)
+		if errors.Is(refusalErr, errLoginUnread) {
+			return login.Login, nil
+		}
 		if refusalErr != nil {
 			refusal = refusalErr.Error()
 		}
@@ -452,8 +484,8 @@ func (s *Scheduler) ChildLogin(ctx context.Context, workspace domain.WorkspaceID
 		perUse, perUseErr := s.LoginPerUse(ctx, owner, login, harness)
 		inherits = perUseErr == nil && !perUse
 	}
-	if byEnv, envErr := s.EnvironmentSignsIn(ctx, workspace, harness, mode); envErr != nil || byEnv {
-		return "", envErr
+	if payer, payerErr := s.LoginPayer(ctx, workspace, owner, harness, mode); payerErr != nil || payer != "" {
+		return "", payerErr
 	}
 	if inherits {
 		if refusal, refusalErr := s.loginRefusal(ctx, owner, login, harness, permission == domain.PermissionIsolated); refusalErr == nil && refusal == "" {
@@ -464,29 +496,53 @@ func (s *Scheduler) ChildLogin(ctx context.Context, workspace domain.WorkspaceID
 }
 
 // LoginPerUse reports whether login of agent, in a session in home's home,
-// is billed per use: a Console login, or home's own default login kept as
-// an API key or a Console profile once they keep login rows. Another
-// member's default login is shared only as a subscription, and a member
-// who keeps no rows is shown as before logins existed.
+// is billed per use: a Console login, or, once home keeps login rows, home's
+// own default login kept as an API key or a Console profile or signed in by
+// ~/.claude/settings.json other than with a subscription token, which Claude
+// Code prefers to its login file. Another member's default login is shared only as a subscription, and a
+// member who keeps no rows is shown as before logins existed. A default
+// login whose files cannot be read is not billed per use: the flag only
+// orders and labels, and the read must not fail what would run.
 func (s *Scheduler) LoginPerUse(ctx context.Context, home domain.MemberID, login domain.Account, agent string) (bool, error) {
-	var identity memberhome.LoginIdentity
-	var err error
-	switch {
-	case login.Login.Added():
-		identity, err = s.cfg.Logins.Identity(login.Member, agent, login.Login)
-	case login.Member != home || s.cfg.Homes == nil:
-		return false, nil
-	default:
-		var keeps []domain.AgentLogin
-		if keeps, err = s.cfg.Store.ListAgentLogins(ctx, login.Member, agent); err != nil || len(keeps) == 0 {
-			return false, err
+	perUse, _, err := s.loginBilling(ctx, home, login, agent)
+	return perUse, err
+}
+
+// LoginUsageUnknown reports whether a launch that names no login counts the
+// usage of login, its start, as unknown, so that it yields to a login with
+// usage known to be left: login is billed per use, or it is home's own
+// default login whose kind its files do not tell, beside added logins.
+func (s *Scheduler) LoginUsageUnknown(ctx context.Context, home domain.MemberID, login domain.Account, agent string) (bool, error) {
+	perUse, unread, err := s.loginBilling(ctx, home, login, agent)
+	return perUse || unread, err
+}
+
+// loginBilling is LoginPerUse, and whether login is a default login whose
+// kind cannot be read.
+func (s *Scheduler) loginBilling(ctx context.Context, home domain.MemberID, login domain.Account, agent string) (perUse, unread bool, err error) {
+	if login.Login.Added() {
+		identity, err := s.cfg.Logins.Identity(login.Member, agent, login.Login)
+		if err != nil {
+			return false, false, fmt.Errorf("scheduler: whether the login is billed per use: %w", err)
 		}
-		identity, err = s.cfg.Homes.DefaultIdentity(login.Member, agent)
+		return identity.PerUse(), false, nil
 	}
-	if err != nil {
-		return false, fmt.Errorf("scheduler: whether the login is billed per use: %w", err)
+	if login.Member != home || s.cfg.Homes == nil {
+		return false, false, nil
 	}
-	return identity.PerUse(), nil
+	if keeps, err := s.cfg.Store.ListAgentLogins(ctx, login.Member, agent); err != nil || len(keeps) == 0 {
+		return false, false, err
+	}
+	if settings, settingsErr := s.cfg.Homes.ClaudeSettings(home); settingsErr == nil && agent == "claude" {
+		// A subscription's own token, as `claude setup-token` makes it.
+		env := maps.Clone(settings.Env)
+		delete(env, "CLAUDE_CODE_OAUTH_TOKEN")
+		if settings.APIKeyHelper || signingKey(env, agent, "") != "" {
+			return true, false, nil
+		}
+	}
+	identity, idErr := s.cfg.Homes.DefaultIdentity(login.Member, agent)
+	return identity.PerUse(), idErr != nil && identity.Kind == "", nil
 }
 
 func loginOf(id domain.LoginID) domain.LoginID {

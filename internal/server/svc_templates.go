@@ -55,8 +55,9 @@ func (g guardedRuns) LaunchWithOptions(ctx context.Context, workspace domain.Wor
 	// account's other logins, measured before the mutex as run.launch does.
 	// The run keeps the template's own fallback for later moves.
 	policy := domain.AccountFallback{Order: []domain.MemberID{account}}
+	payer := sync.OnceValues(func() (string, error) { return g.ssh.Runs.LoginPayer(ctx, workspace, member, harness, mode) })
 	measure := func(login domain.LoginID) (fallback.Measured, error) {
-		return sshd.MeasureUnnamed(ctx, g.ssh, member, domain.Account{Member: account, Login: login}, harness, policy)
+		return sshd.MeasureUnnamed(ctx, g.ssh, member, domain.Account{Member: account, Login: login}, harness, policy, payer)
 	}
 	login, err := g.ssh.Runs.StartLogin(ctx, workspace, member, account, harness, mode, opts.Permission)
 	if err != nil {
@@ -82,9 +83,8 @@ func (g guardedRuns) LaunchWithOptions(ctx context.Context, workspace domain.Wor
 			return nil, err
 		}
 	}
-	byEnv := sync.OnceValues(func() (bool, error) { return g.ssh.Runs.EnvironmentSignsIn(ctx, workspace, harness, mode) })
 	chosen, excluded := fallback.Select(ctx, g.ssh.Store, measured, member, domain.Account{Member: account, Login: login}, harness, []domain.WorkspaceID{workspace}, policy,
-		sshd.Launchable(g.ssh.Runs, byEnv, member, account, harness, mode, opts.Permission))
+		sshd.Launchable(g.ssh.Runs, payer, member, account, harness, mode, opts.Permission))
 	if excluded != nil {
 		slog.Warn("templates: logins left out of a launch", "member", member, "error", excluded)
 	}

@@ -1553,3 +1553,33 @@ func TestMoveIsNotRecordedOnALoginTurnedOffMeanwhile(t *testing.T) {
 		})
 	}
 }
+
+// A move onto the home's own default login, whose kind cannot be read
+// beside an added login, is recorded: whether it is billed per use is read
+// before the old container goes, and an unreadable kind is not.
+func TestAMoveOntoAnUnreadableDefaultLoginIsRecorded(t *testing.T) {
+	t.Parallel()
+	e, _, notes := newFallbackEnv(t, enhancedClaude)
+	e.share(t)
+	e.sched.UseUsageFallback(UsageFallback{Usage: claudeUsage{e.owner.ID: 100}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+	if _, err := e.db.AddAgentLogin(t.Context(), domain.AgentLogin{MemberID: e.member.ID, Agent: "claude", ID: "lgn-work000000", Name: "work", CreatedAt: time.Now()}, ""); err != nil {
+		t.Fatal(err)
+	}
+	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.owner.ID, "", "claude", domain.LaunchACP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+	writeHomeFile(t, e.adaHome, ".claude.json", `{"primaryApiKey":"test-not-a-key-of-ada"`)
+	_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
+	waitFor(t, "the move to Ada's account", func() bool {
+		row, getErr := e.db.GetRun(t.Context(), run.ID)
+		if getErr == nil && row.Status.Terminal() {
+			t.Fatalf("run %s (%q); want it moved to Ada's default login", row.Status, row.Reason)
+		}
+		return getErr == nil && row.AccountMemberID == e.member.ID
+	})
+	if got, err := e.db.GetRun(t.Context(), run.ID); err != nil || got.AccountLoginPerUse {
+		t.Fatalf("moved run marked billed per use %v, %v; want not", got.AccountLoginPerUse, err)
+	}
+}

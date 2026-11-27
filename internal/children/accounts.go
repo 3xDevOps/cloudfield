@@ -63,20 +63,35 @@ func (s *Service) choices(ctx context.Context, p *policy) ([]protocol.ChildChoic
 				list[i].Status, list[i].Detail = choiceOff, offDetail(p.settings.Off, c.Harness, account, c.AccountName)
 				continue
 			}
-			var inherited domain.LoginID
-			if account == p.parent.AccountMember() && c.Harness == p.parent.Harness && p.parent.HomeMember() == p.owner {
-				inherited = cmp.Or(p.parent.AccountLogin, domain.DefaultLogin)
+			keeps, err := s.keepsLogins(ctx, account, c.Harness)
+			if err != nil {
+				return nil, err
 			}
-			// The listing reads the account's default login; a subsession that
-			// will run on an added login is judged by that login.
-			login := s.childLogin(ctx, p, account, inherited, c.Harness, p.parent.Mode)
-			if login.Added() {
-				list[i].Status, list[i].Detail = choiceReady, ""
+			start := domain.AccountOf(account)
+			// The listing reads the account's default login's files. Where the
+			// account's owner keeps logins, a subsession is judged as dispatch
+			// judges it: by the login it starts from, which signs in, and the
+			// login a spent one gives way to.
+			if keeps {
+				var inherited domain.LoginID
+				if account == p.parent.AccountMember() && c.Harness == p.parent.Harness && p.parent.HomeMember() == p.owner {
+					inherited = cmp.Or(p.parent.AccountLogin, domain.DefaultLogin)
+				}
+				login, loginErr := s.cfg.Runs.ChildLogin(ctx, p.parent.WorkspaceID, p.owner, account, inherited, c.Harness, p.parent.Mode, p.parent.Permission)
+				if loginErr != nil {
+					list[i].Status, list[i].Detail = choiceNotSignedIn, loginErr.Error()
+					continue
+				}
+				list[i].Status, list[i].Detail, start.Login = choiceReady, "", login
 			}
 			if list[i].Status != choiceReady {
 				continue
 			}
-			if used, ok := s.usedPercent(ctx, p.owner, domain.Account{Member: account, Login: login}, c.Harness); ok && used >= fallback.ExhaustedPercent {
+			used, ok := s.usedPercent(ctx, p.owner, start, c.Harness)
+			if keeps {
+				used, ok = s.dispatchUsed(ctx, p, start, c.Harness, p.parent.Mode)
+			}
+			if ok && used >= fallback.ExhaustedPercent {
 				list[i].Status, list[i].Detail = choiceExhausted, fmt.Sprintf("%s's %s usage is at %.0f%%", c.AccountName, c.Harness, used)
 			}
 		}
@@ -160,15 +175,37 @@ func (s *Service) usedPercent(ctx context.Context, owner domain.MemberID, login 
 	return used, ok
 }
 
-// childLogin is the login a subsession of p's owner would run harness on
-// in account, inheriting inherited when it may; empty for the default login
-// or when that cannot be told, which leaves the default login's judgement.
-func (s *Service) childLogin(ctx context.Context, p *policy, account domain.MemberID, inherited domain.LoginID, harness string, mode domain.LaunchMode) domain.LoginID {
-	login, err := s.cfg.Runs.ChildLogin(ctx, p.parent.WorkspaceID, p.owner, account, inherited, harness, mode, p.parent.Permission)
+// keepsLogins reports whether account's owner keeps login rows of harness.
+func (s *Service) keepsLogins(ctx context.Context, account domain.MemberID, harness string) (bool, error) {
+	rows, err := s.cfg.Store.ListAgentLogins(ctx, account, harness)
+	return len(rows) > 0, err
+}
+
+// dispatchUsed is the quota use, when readable, of the login dispatch runs
+// a subsession of p's owner on when it starts from start: start, or another
+// login of its account that start gives way to.
+func (s *Service) dispatchUsed(ctx context.Context, p *policy, start domain.Account, harness string, mode domain.LaunchMode) (float64, bool) {
+	unknown, err := s.cfg.Runs.LoginUsageUnknown(ctx, p.owner, start, harness)
 	if err != nil {
-		return ""
+		return 0, false
 	}
-	return login
+	payer, err := s.cfg.Runs.LoginPayer(ctx, p.parent.WorkspaceID, p.owner, harness, mode)
+	if err != nil {
+		return 0, false
+	}
+	policy := domain.AccountFallback{Disabled: p.parent.Fallback.Disabled, Order: []domain.MemberID{start.Member}}
+	measured, err := fallback.MeasureStart(ctx, s.cfg.Store, s.cfg.Usage, p.owner, start, harness, policy, unknown && payer == "")
+	if err != nil {
+		return 0, false
+	}
+	chosen, _ := fallback.Select(ctx, s.cfg.Store, measured, p.owner, start, harness, p.workspaces(), policy, func(ctx context.Context, login domain.Account) (bool, error) {
+		if payer != "" && login.Login.Added() {
+			return false, nil
+		}
+		return s.cfg.Runs.FallbackLaunchable(ctx, p.owner, start.Member, login, harness, mode, p.parent.Permission)
+	})
+	used, ok := measured[chosen]
+	return used, ok
 }
 
 func (s *Service) memberName(ctx context.Context, id domain.MemberID) (string, error) {
@@ -224,11 +261,12 @@ func (s *Service) choose(ctx context.Context, p *policy, req protocol.ChildStart
 	if err != nil {
 		return launchSpec{}, rpcErr(protocol.MethodChildStart, err)
 	}
+	keeps, err := s.keepsLogins(ctx, account, req.Harness)
+	if err != nil {
+		return launchSpec{}, rpcErr(protocol.MethodChildStart, err)
+	}
 	for _, c := range choices {
-		if c.Harness != req.Harness || (c.Status != choiceNotInstalled && c.Status != choiceNotSignedIn) {
-			continue
-		}
-		if c.Status == choiceNotSignedIn && s.childLogin(ctx, p, account, login, req.Harness, mode).Added() {
+		if c.Harness != req.Harness || (c.Status != choiceNotInstalled && c.Status != choiceNotSignedIn) || (keeps && c.Status == choiceNotSignedIn) {
 			continue
 		}
 		return launchSpec{}, denied("%s", c.Detail)
@@ -240,6 +278,13 @@ func (s *Service) choose(ctx context.Context, p *policy, req protocol.ChildStart
 	}
 	if spec.mode == "" {
 		spec.mode = defaultMode
+	}
+	// Where the account's owner keeps logins, the default login's files
+	// decide nothing: a subsession is refused only when no login serves it.
+	if keeps {
+		if _, err := s.cfg.Runs.ChildLogin(ctx, p.parent.WorkspaceID, p.owner, account, login, req.Harness, spec.mode, p.parent.Permission); err != nil {
+			return launchSpec{}, denied("%s", err.Error())
+		}
 	}
 	return spec, nil
 }

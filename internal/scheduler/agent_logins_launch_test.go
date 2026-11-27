@@ -156,6 +156,11 @@ func TestLaunchOnAnAddedLoginRefusals(t *testing.T) {
 		{name: "isolated Console", own: true, permission: domain.PermissionIsolated, wantText: "Isolated session cannot use a Console login"},
 		{name: "a workspace key pays", own: true, file: workLogin, variables: map[string]string{"ANTHROPIC_API_KEY": "test-not-a-key"}, wantText: "would not pay"},
 		{name: "Microsoft Foundry pays", own: true, file: workLogin, variables: map[string]string{"CLAUDE_CODE_USE_FOUNDRY": "True"}, wantText: "would not pay"},
+		{name: "Claude Platform on AWS pays", own: true, file: workLogin, variables: map[string]string{"CLAUDE_CODE_USE_ANTHROPIC_AWS": "1"}, wantText: "would not pay"},
+		{name: "Claude Platform on Google Cloud pays", own: true, file: workLogin, variables: map[string]string{"CLAUDE_CODE_USE_ANTHROPIC_GOOGLE_CLOUD": "yes"}, wantText: "would not pay"},
+		{name: "Bedrock Mantle pays", own: true, file: workLogin, variables: map[string]string{"CLAUDE_CODE_USE_MANTLE": "on"}, wantText: "would not pay"},
+		{name: "a gateway pays", own: true, file: workLogin, variables: map[string]string{"CLAUDE_CODE_USE_GATEWAY": "true"}, wantText: "would not pay"},
+		{name: "workload identity federation pays", own: true, file: workLogin, variables: map[string]string{"ANTHROPIC_FEDERATION_RULE_ID": "fdrl_test", "ANTHROPIC_ORGANIZATION_ID": "org-test"}, wantText: "would not pay"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e := newLoginShareEnv(t)
@@ -503,7 +508,7 @@ func TestAnAddedLoginSessionLeavesNoVariableToPay(t *testing.T) {
 	}
 	waitFor(t, "the session's container", func() bool { return e.rt.byName(string(run.ID)) != nil })
 	spec := e.rt.byName(string(run.ID)).spec
-	for _, key := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_PROFILE"} {
+	for _, key := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_PROFILE", "CLAUDE_CODE_USE_ANTHROPIC_AWS", "CLAUDE_CODE_USE_MANTLE", "ANTHROPIC_FEDERATION_RULE_ID", "ANTHROPIC_ORGANIZATION_ID"} {
 		if v, ok := spec.Env[key]; !ok || v != "" {
 			t.Errorf("%s = %q, set %v; want set empty", key, v, ok)
 		}
@@ -521,13 +526,58 @@ func TestAnAddedLoginSessionLeavesNoVariableToPay(t *testing.T) {
 	}
 }
 
+// Claude Code prefers what ~/.claude/settings.json in the session's home
+// signs it in with to any login file
+// (TestIntegrationRealClaudeCodePrefersHomeSettingsToAnAddedLogin). Where
+// that file holds an apiKeyHelper or a variable that signs in, or cannot
+// be read, a named added login is refused naming it, a launch that names
+// none chooses between no logins, and a plan built once it appears
+// refuses the login.
+func TestHomeSettingsThatSignInRefuseAnAddedLogin(t *testing.T) {
+	for _, tc := range []struct{ settings, want string }{
+		{`{"apiKeyHelper":"echo test-helper-key"}`, "apiKeyHelper in ~/.claude/settings.json signs the agent in"},
+		{`{"env":{"ANTHROPIC_API_KEY":"test-settings-key"}}`, "ANTHROPIC_API_KEY under env in ~/.claude/settings.json signs the agent in"},
+		{`{"env":{"CLAUDE_CODE_USE_MANTLE":"1"}}`, "CLAUDE_CODE_USE_MANTLE under env in ~/.claude/settings.json signs the agent in"},
+		{`{"env":{"ANTHROPIC_API_KEY":"test-settings-key"`, ".claude/settings.json is not valid JSON"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			e := newLoginShareEnv(t)
+			ctx := t.Context()
+			if err := os.Remove(filepath.Join(e.adaHome, ".claude.json")); err != nil {
+				t.Fatal(err)
+			}
+			writeHomeFile(t, e.adaHome, ".claude/.credentials.json", `{"claudeAiOauth":{"accessToken":"test-access-old","expiresAt":1}}`)
+			work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+			if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI, ""); err != nil || got != work.Login {
+				t.Fatalf("Ada's start past her signed-out default = %q, %v; want work", got, err)
+			}
+			_, err := e.sched.LaunchWithOptions(ctx, e.ws.ID, e.member.ID, e.member.ID, "t", "claude", domain.LaunchTUI, domain.LaunchOptions{
+				AccountLogin: work.Login,
+				Created: func(domain.RunID) {
+					writeHomeFile(t, e.adaHome, ".claude/settings.json", tc.settings)
+				},
+			})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("a launch on work once the settings appeared: %v; want refused with %q", err, tc.want)
+			}
+			if _, err = e.launchOn(t, work, ""); !errors.Is(err, ErrEnvironmentPays) || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "test-settings-key") {
+				t.Fatalf("a launch naming work: %v; want refused with %q and nothing of the file", err, tc.want)
+			}
+			if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI, ""); err != nil || got != "" {
+				t.Fatalf("Ada's start = %q, %v; want no login chosen", got, err)
+			}
+		})
+	}
+}
+
 // A workspace switch Claude Code reads as off pays nothing, so it leaves a
 // launch on an added login alone.
 func TestAWorkspaceSwitchSetOffLeavesAnAddedLoginToPay(t *testing.T) {
 	e := newLoginShareEnv(t)
 	work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
 	if err := e.db.SetWorkspaceEnvironment(t.Context(), e.ws.ID, domain.WorkspaceEnvironment{Variables: map[string]string{
-		"CLAUDE_CODE_USE_BEDROCK": "0", "CLAUDE_CODE_USE_VERTEX": "false", "CLAUDE_CODE_USE_FOUNDRY": "off",
+		"CLAUDE_CODE_USE_BEDROCK": "0", "CLAUDE_CODE_USE_VERTEX": "false", "CLAUDE_CODE_USE_FOUNDRY": "off", "CLAUDE_CODE_USE_MANTLE": "0",
+		"ANTHROPIC_FEDERATION_RULE_ID": "fdrl_test",
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -538,6 +588,24 @@ func TestAWorkspaceSwitchSetOffLeavesAnAddedLoginToPay(t *testing.T) {
 	waitFor(t, "the session's container", func() bool { return e.rt.byName(string(run.ID)) != nil })
 	if v := e.rt.byName(string(run.ID)).spec.Env["CLAUDE_CODE_USE_BEDROCK"]; v != "0" {
 		t.Fatalf("CLAUDE_CODE_USE_BEDROCK = %q; want the workspace's 0", v)
+	}
+}
+
+// Workload identity federation's rule set by the workspace and its
+// organisation under env in ~/.claude/settings.json sign Claude Code in
+// together, so a launch on an added login is refused.
+func TestAFederationSplitBetweenWorkspaceAndSettingsRefusesAnAddedLogin(t *testing.T) {
+	e := newLoginShareEnv(t)
+	work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+	if err := e.db.SetWorkspaceEnvironment(t.Context(), e.ws.ID, domain.WorkspaceEnvironment{Variables: map[string]string{"ANTHROPIC_FEDERATION_RULE_ID": "fdrl_test"}}); err != nil {
+		t.Fatal(err)
+	}
+	writeHomeFile(t, e.adaHome, ".claude/settings.json", `{"env":{"ANTHROPIC_ORGANIZATION_ID":"org-test"}}`)
+	if _, err := e.launchOn(t, work, ""); !errors.Is(err, ErrEnvironmentPays) || !strings.Contains(err.Error(), "ANTHROPIC_FEDERATION_RULE_ID and ANTHROPIC_ORGANIZATION_ID") {
+		t.Fatalf("a launch naming work: %v; want refused, naming both variables", err)
+	}
+	if payer, err := e.sched.LoginPayer(t.Context(), e.ws.ID, e.member.ID, "claude", domain.LaunchTUI); err != nil || payer == "" {
+		t.Fatalf("LoginPayer = %q, %v; want the federation named", payer, err)
 	}
 }
 
@@ -776,6 +844,73 @@ func TestAnAddedLoginSessionsConfigVolumeGoesWithItsContainer(t *testing.T) {
 	})
 }
 
+// A session on a teammate's default login, where nobody added a login,
+// mounted its configuration copy without a volume: it ends as before,
+// asking the runtime to remove none.
+func TestASharedDefaultSessionsConfigCopyGoesWithoutAVolume(t *testing.T) {
+	e := newShareEnv(t, nil)
+	writeHomeFiles(t, e.ownerHome, ".claude/.credentials.json")
+	run, err := e.launch(t, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the session's container", func() bool { return e.rt.byName(string(run.ID)) != nil })
+	dir := filepath.Join(e.sched.accountConfigRoot(), string(run.ID))
+	if _, err := os.Lstat(dir); err != nil {
+		t.Fatalf("the session's configuration copy: %v", err)
+	}
+	if err := e.sched.Kill(t.Context(), run.ID, e.member.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the configuration copy removed", func() bool {
+		_, statErr := os.Lstat(dir)
+		return errors.Is(statErr, fs.ErrNotExist)
+	})
+	e.rt.mu.Lock()
+	defer e.rt.mu.Unlock()
+	if len(e.rt.removedVolumes) != 0 {
+		t.Fatalf("volumes removed = %v; want none", e.rt.removedVolumes)
+	}
+}
+
+// A login a merge gave another member moves to them only once the volume
+// of its old path is gone: moved, its directory no longer names that
+// volume, so a later reconcile could not remove it.
+func TestAMergedLoginMovesOnlyOnceItsVolumeIsGone(t *testing.T) {
+	e := newLoginShareEnv(t)
+	ctx := t.Context()
+	work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+	old, _ := e.logins.Path(e.member.ID, "claude", work.Login)
+	moved, _ := e.logins.Path(e.owner.ID, "claude", work.Login)
+	if err := e.db.DeleteAgentLogin(ctx, e.member.ID, "claude", work.Login); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.db.AddAgentLogin(ctx, domain.AgentLogin{MemberID: e.owner.ID, Agent: "claude", ID: work.Login, Name: "work", CreatedAt: time.Now()}, ""); err != nil {
+		t.Fatal(err)
+	}
+	e.rt.mu.Lock()
+	e.rt.volumeErr = errors.New("test: daemon unreachable")
+	e.rt.mu.Unlock()
+	if err := e.sched.ReconcileLogins(ctx, ""); err == nil {
+		t.Fatal("reconcile reported nothing while the volume stays")
+	}
+	if _, err := os.Lstat(old); err != nil {
+		t.Fatalf("the login's directory while its volume stays: %v; want it left where it was", err)
+	}
+	e.rt.mu.Lock()
+	e.rt.volumeErr = nil
+	e.rt.mu.Unlock()
+	if err := e.sched.ReconcileLogins(ctx, ""); err != nil {
+		t.Fatal(err)
+	}
+	e.rt.mu.Lock()
+	removed := slices.Contains(e.rt.removedVolumes, old)
+	e.rt.mu.Unlock()
+	if _, err := os.Lstat(moved); !removed || err != nil {
+		t.Fatalf("volume of the old path removed %v, moved directory %v; want both", removed, err)
+	}
+}
+
 // A login directory whose row is gone goes with the volume its sessions'
 // mounts came from, which removing their containers leaves.
 func TestALoginWithNoRowGoesWithItsVolume(t *testing.T) {
@@ -830,5 +965,102 @@ func TestASessionRecordsWhetherItsLoginIsBilledPerUse(t *testing.T) {
 	}
 	if !perUse(console.Login) || perUse(work.Login) {
 		t.Fatal("want the Console login marked billed per use and the subscription login not")
+	}
+}
+
+// A default login whose kind cannot be read fails no launch and keeps its
+// place: it is not billed per use, and a launch that names none starts on
+// it ahead of a later login billed per use, counting its usage unknown, so
+// it yields only to a login with usage known to be left.
+func TestAnUnreadableDefaultLoginFailsNoLaunch(t *testing.T) {
+	e := newLoginShareEnv(t)
+	ctx := t.Context()
+	e.addLogin(t, e.member.ID, "lgn-console000", "console", "")
+	writeHomeFile(t, e.adaHome, ".claude.json", `{"primaryApiKey":"test-not-a-key-of-ada"`)
+	run, err := e.launchOn(t, domain.Account{Member: e.member.ID}, "")
+	if err != nil {
+		t.Fatalf("a launch on Ada's default login with an unreadable ~/.claude.json: %v", err)
+	}
+	if run.AccountLoginPerUse {
+		t.Fatal("a default login of unknown kind is marked billed per use")
+	}
+	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI, ""); err != nil || got != "" {
+		t.Fatalf("Ada's start = %q, %v; want the default login in its place, ahead of console", got, err)
+	}
+	if unknown, err := e.sched.LoginUsageUnknown(ctx, e.member.ID, domain.AccountOf(e.member.ID), "claude"); err != nil || !unknown {
+		t.Fatalf("the default login's usage unknown = %v, %v; want unknown", unknown, err)
+	}
+}
+
+// A default login whose subscription sign-in file is sound is a
+// subscription whatever ~/.claude.json holds: a hard-linked or half-written
+// one neither passes it over nor makes its usage unknown.
+func TestASubscriptionDefaultIsJudgedByItsSignInFile(t *testing.T) {
+	e := newLoginShareEnv(t)
+	ctx := t.Context()
+	e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+	writeHomeFile(t, e.adaHome, ".claude/.credentials.json", workLogin)
+	if err := os.Link(filepath.Join(e.adaHome, ".claude.json"), filepath.Join(e.adaHome, "claude-copy.json")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI, ""); err != nil || got != "" {
+		t.Fatalf("Ada's start = %q, %v; want her default subscription", got, err)
+	}
+	unknown, err := e.sched.LoginUsageUnknown(ctx, e.member.ID, domain.AccountOf(e.member.ID), "claude")
+	if err != nil || unknown {
+		t.Fatalf("the default subscription's usage unknown = %v, %v; want it read as any subscription's", unknown, err)
+	}
+}
+
+// A default login that ~/.claude/settings.json signs in, by an apiKeyHelper
+// or a key under env, is billed per use beside added logins: Claude Code
+// prefers either to the login file.
+func TestADefaultLoginSignedInBySettingsIsBilledPerUse(t *testing.T) {
+	for _, settings := range []string{`{"apiKeyHelper":"echo test-helper-key"}`, `{"env":{"ANTHROPIC_API_KEY":"test-settings-key"}}`} {
+		e := newLoginShareEnv(t)
+		writeHomeFile(t, e.adaHome, ".claude.json", `{"numStartups":2}`)
+		writeHomeFile(t, e.adaHome, ".claude/.credentials.json", workLogin)
+		e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+		writeHomeFile(t, e.adaHome, ".claude/settings.json", settings)
+		run, err := e.launchOn(t, domain.Account{Member: e.member.ID}, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !run.AccountLoginPerUse {
+			t.Errorf("Ada's default login with %s is not marked billed per use", settings)
+		}
+	}
+}
+
+// A subscription token set as CLAUDE_CODE_OAUTH_TOKEN under env in
+// ~/.claude/settings.json is no sign of a login billed per use.
+func TestADefaultLoginWithASubscriptionTokenInSettingsIsNotBilledPerUse(t *testing.T) {
+	e := newLoginShareEnv(t)
+	writeHomeFile(t, e.adaHome, ".claude.json", `{"numStartups":2}`)
+	writeHomeFile(t, e.adaHome, ".claude/.credentials.json", workLogin)
+	e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+	writeHomeFile(t, e.adaHome, ".claude/settings.json", `{"env":{"CLAUDE_CODE_OAUTH_TOKEN":"test-setup-token"}}`)
+	run, err := e.launchOn(t, domain.Account{Member: e.member.ID}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if run.AccountLoginPerUse {
+		t.Fatal("Ada's default login with a subscription token in her settings is marked billed per use")
+	}
+}
+
+// Claude Code sends a subscription sign-in that expired with no refresh
+// token ahead of a Console sign-in beside it, and fails. Beside added
+// logins such a default login is passed over by a launch that names none.
+func TestADefaultLoginWithADeadSubscriptionIsPassedOver(t *testing.T) {
+	e := newLoginShareEnv(t)
+	ctx := t.Context()
+	writeHomeFile(t, e.adaHome, ".claude.json", `{"numStartups":2}`)
+	writeHomeFile(t, e.adaHome, ".claude/.credentials.json", `{"claudeAiOauth":{"accessToken":"test-access-old","expiresAt":1}}`)
+	writeHomeFile(t, e.adaHome, ".config/anthropic/configs/default.json", `{"authentication":{"type":"user_oauth"}}`)
+	writeHomeFile(t, e.adaHome, ".config/anthropic/credentials/default.json", `{"access_token":"test-console-ada","refresh_token":"test-console-refresh-ada","expires_at":4102444800}`)
+	work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI, ""); err != nil || got != work.Login {
+		t.Fatalf("Ada's start = %q, %v; want work, past her dead subscription", got, err)
 	}
 }
