@@ -136,6 +136,10 @@ func TestSelectTriesTheAccountsLoginsThenTheLaunchersOwn(t *testing.T) {
 			map[string]float64{"Lena/default": 97, "Lena/work": 98, "Ada/default": 30}, "Ada/default"},
 		{"unreadable last of all", []string{"Lena/console", "Lena/work"}, "Lena/default",
 			map[string]float64{"Lena/default": 97, "Lena/work": 98, "Ada/default": 99, "Bo/default": 99}, "Lena/console"},
+		{"another account's unreadable default last of all", []string{"Lena/work"}, "Lena/default",
+			map[string]float64{"Lena/default": 97, "Lena/work": 98, "Bo/default": 99}, "Ada/default"},
+		{"no unreadable default when nobody added a login", nil, "Lena/default",
+			map[string]float64{"Lena/default": 97, "Bo/default": 99}, "Lena/default"},
 		{"a launch below the threshold stays", []string{"Lena/work"}, "Lena/default",
 			map[string]float64{"Lena/default": 50, "Lena/work": 0}, "Lena/default"},
 	} {
