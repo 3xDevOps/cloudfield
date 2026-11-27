@@ -188,9 +188,6 @@ func TestSSHBackendRedialsASilentConnectionWithKeptChannels(t *testing.T) {
 	shortenKeptFresh(t, 100*time.Millisecond)
 	// As in production, the keepalive drop (10 intervals) outlasts the watchdog.
 	shortenKeepalive(t, 100*time.Millisecond, 200*time.Millisecond)
-	old := callTimeout
-	callTimeout = 300 * time.Millisecond
-	t.Cleanup(func() { callTimeout = old })
 	home := testhome.Isolate(t)
 	server := listen(t)
 	connections := serveControl(t, server, nil)
@@ -205,6 +202,10 @@ func TestSSHBackendRedialsASilentConnectionWithKeptChannels(t *testing.T) {
 	}
 	path.silence()
 	time.Sleep(200 * time.Millisecond)
+	// Shortened only now, so a slow machine cannot time out the healthy call.
+	old := callTimeout
+	callTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { callTimeout = old })
 	if _, perr := b.Call(ctx, protocol.MethodServerInfo, nil); perr != nil {
 		t.Fatalf("call on a silent connection that holds a kept channel = %v, want it answered over a new one", perr)
 	}
