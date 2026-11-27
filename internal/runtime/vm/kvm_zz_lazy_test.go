@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -99,6 +100,10 @@ func lazyField(out, name string) string {
 }
 
 func (r *lazyRun) logs(why string) {
+	host, _ := exec.Command("sh", "-c", "dmesg | grep -iE 'oom|killed process|segfault|cloud-hyperv|userfault|sigbus' | tail -8").CombinedOutput()
+	for line := range strings.SplitSeq(strings.TrimSpace(string(host)), "\n") {
+		r.say("LOG why=%q file=host-dmesg | %s", why, line)
+	}
 	for _, name := range []string{monitorLog, consoleLog} {
 		data, _ := readNoFollow(r.e.path(lazyKey, name))
 		lines := strings.Split(strings.TrimRight(string(data), "\n"), "\n")
@@ -164,26 +169,15 @@ func (r *lazyRun) setup() error {
 		"head -c %dM /dev/urandom >/dev/shm/fill; echo SHM $(sha256sum </dev/shm/fill | cut -d' ' -f1); "+
 		"AETHER_LAZY_GUEST=work AETHER_LAZY_MIB=%d setsid %s </dev/null >/var/tmp/lazy-work.log 2>&1 & "+
 		"echo MEM $(awk '/^MemTotal:/ {print $2}' /proc/meminfo) $(cat /sys/fs/cgroup/session/memory.max 2>&1) $(cat /sys/kernel/mm/transparent_hugepage/enabled); "+
-		"grep 'System RAM' /proc/iomem | sed 's/^/IOMEM /'; grep -E ' (wall_clock|hv_clock_boot|_text|__bss_start|__bss_stop)$' /proc/kallsyms | sed 's/^/KSYM /'",
+		"grep 'System RAM' /proc/iomem | sed 's/^/IOMEM /'",
 		pattern, lazyGuest, shm, work, lazyGuest), 5*time.Minute)
 	if err != nil || code != 0 {
 		return fmt.Errorf("guest setup: exit %d, %v: %s", code, err, out)
 	}
 	r.shm = lazyField(out, "SHM")
-	// The guest kernel's wall_clock is the 12-byte struct pvclock_wall_clock
-	// it gave KVM by MSR_KVM_WALL_CLOCK_NEW; KVM writes it each time the
-	// MSR is set, as a restore does. The kernel is loaded unrelocated, so
-	// its physical address is the symbol's less __START_KERNEL_map.
-	r.explained = map[uint64][2]int{}
 	for line := range strings.SplitSeq(out, "\n") {
-		if strings.HasPrefix(line, "IOMEM ") || strings.HasPrefix(line, "KSYM ") || strings.HasPrefix(line, "MEM ") {
+		if strings.HasPrefix(line, "IOMEM ") || strings.HasPrefix(line, "MEM ") {
 			r.say("SETUP %s", line)
-		}
-		if m := regexp.MustCompile(`^KSYM ([0-9a-f]{16}) \S wall_clock$`).FindStringSubmatch(line); m != nil {
-			addr, _ := strconv.ParseUint(m[1], 16, 64)
-			if gpa := addr - 0xffffffff80000000; addr > 0xffffffff80000000 && gpa < 3<<30 {
-				r.explained[gpa&^4095] = [2]int{int(gpa & 4095), int(gpa&4095) + 12}
-			}
 		}
 	}
 	for deadline := time.Now().Add(3 * time.Minute); ; time.Sleep(time.Second) {
@@ -202,13 +196,49 @@ func (r *lazyRun) setup() error {
 	}
 	r.alive = lazyField(out, "ALIVE")
 	r.workIter = 0
-	pages := make([]string, 0, len(r.explained))
-	for off, span := range r.explained {
-		pages = append(pages, fmt.Sprintf("%#x[%#x,%#x)", off, span[0], span[1]))
-	}
-	r.say("SETUP booted_ms=%.0f pattern_mib=%d shm_mib=%d work_mib=%d bin=%q boot_memory=%q shm_sha256=%s alive=%q host_written_pages=%v",
-		ms(booted), pattern, shm, work, r.bin, scratchMemory, r.shm, r.alive, pages)
+	r.say("SETUP booted_ms=%.0f pattern_mib=%d shm_mib=%d work_mib=%d bin=%q boot_memory=%q shm_sha256=%s alive=%q",
+		ms(booted), pattern, shm, work, r.bin, scratchMemory, r.shm, r.alive)
 	return nil
+}
+
+// lazyKVMMSRs are the MSRs by which a guest gives KVM an address in its
+// memory that the host then writes.
+var lazyKVMMSRs = []struct {
+	index uint64
+	name  string
+}{
+	{0x4b564d00, "wall_clock"}, {0x4b564d01, "system_time"}, {0x4b564d02, "async_pf"}, {0x4b564d03, "steal_time"}, {0x4b564d04, "pv_eoi"},
+}
+
+// hostWritten reads from the saved vCPU state where the guest told KVM to
+// keep its wall clock, the 12-byte struct pvclock_wall_clock that KVM
+// writes whenever MSR_KVM_WALL_CLOCK_NEW is set, as a restore sets it. It
+// returns that byte range by the page's offset in the memory file.
+func (r *lazyRun) hostWritten(dir string, n int) map[uint64][2]int {
+	explained := map[uint64][2]int{}
+	state, err := os.ReadFile(filepath.Join(dir, "state.json"))
+	if err != nil {
+		r.say("MSR n=%d state.json: %v", n, err)
+		return explained
+	}
+	var found []string
+	for _, msr := range lazyKVMMSRs {
+		values := map[string]bool{}
+		for _, m := range regexp.MustCompile(fmt.Sprintf(`\\*"index\\*":\s*%d,\s*\\*"data\\*":\s*(\d+)`, msr.index)).FindAllSubmatch(state, -1) {
+			v, _ := strconv.ParseUint(string(m[1]), 10, 64)
+			values[fmt.Sprintf("%#x", v)] = true
+			if msr.name == "wall_clock" && v != 0 && v < 3<<30 {
+				explained[v&^4095] = [2]int{int(v & 4095), int(v&4095) + 12}
+			}
+		}
+		found = append(found, fmt.Sprintf("%s(%#x)=%v", msr.name, msr.index, slices.Sorted(maps.Keys(values))))
+	}
+	if len(explained) == 0 {
+		at := bytes.Index(state, []byte("1263947008"))
+		r.say("MSR n=%d no wall clock MSR found; state.json is %d bytes, index text at %d: %q", n, len(state), at, state[max(0, at-80):min(len(state), max(0, at)+160)])
+	}
+	r.say("MSR n=%d saved KVM MSRs: %s", n, strings.Join(found, " "))
+	return explained
 }
 
 const lazyAliveScript = "echo ALIVE $(cat /proc/sys/kernel/random/boot_id) $(for p in pattern work; do pid=$(pgrep -f \"^/usr/local/bin/lazyguest\" | while read q; do " +
@@ -354,6 +384,7 @@ func (r *lazyRun) cycle(n int, cold bool) bool {
 		r.say("SPARSE n=%d how=%s disk_before_mib=%d disk_after_mib=%d took_ms=%.0f", n, sparse, was>>20, onDisk>>20, ms(time.Since(start)))
 	}
 	r.say("SAVE n=%d temp=%s save_ms=%.0f file_mib=%d disk_mib=%d sparse=%s", n, temp, ms(saveTook), size>>20, onDisk>>20, sparse)
+	r.explained = r.hostWritten(dir, n)
 
 	// The page compare: restore, leave the guest paused, save again.
 	if err := r.prepareCache(cold, file); err != nil {
