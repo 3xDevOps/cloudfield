@@ -273,14 +273,21 @@ func writeJSONLine(w io.Writer, v any) error {
 	return err
 }
 
-type plainResponseKey struct{}
+type gzipKey struct{}
+
+// gzipAsked reports whether this request may still get a gzip frame: it
+// asked for one, for a listed method, and no handler has ruled it out.
+func gzipAsked(ctx context.Context) bool {
+	gzip, ok := ctx.Value(gzipKey{}).(*bool)
+	return ok && *gzip
+}
 
 // sendPlain keeps this request's response a JSON line even when the
 // caller asked for gzip: a handler calls it when the result mixes access
 // domains, which one compression context must not hold.
 func sendPlain(ctx context.Context) {
-	if plain, ok := ctx.Value(plainResponseKey{}).(*bool); ok {
-		*plain = true
+	if gzip, ok := ctx.Value(gzipKey{}).(*bool); ok {
+		*gzip = false
 	}
 }
 
@@ -290,15 +297,15 @@ func (s *Server) handleRequest(ctx context.Context, member domain.MemberID, line
 	if !valid {
 		return resp, false
 	}
-	plain := new(bool)
-	ctx = context.WithValue(ctx, plainResponseKey{}, plain)
+	gzip := req.AcceptEncoding == protocol.EncodingGzip && protocol.GzipMethods[req.Method]
+	ctx = context.WithValue(ctx, gzipKey{}, &gzip)
 	result, rpcErr := s.dispatch(ctx, member, req.Method, req.Params)
 	if rpcErr != nil {
 		resp.Error = rpcErr
 		return resp, false
 	}
 	resp.Result = result
-	return resp, req.AcceptEncoding == protocol.EncodingGzip && protocol.GzipMethods[req.Method] && !*plain
+	return resp, gzip
 }
 
 // dispatch runs one control-channel method for member: the SSH control

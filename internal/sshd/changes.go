@@ -148,7 +148,7 @@ func (s *Server) changesList(ctx context.Context, member domain.MemberID, raw js
 		Run:       domain.RunID(p.RunID),
 		Reader:    member,
 		NoRereads: true,
-		Scope:     s.eventScope(ctx, actor),
+		Scope:     s.eventScope(ctx, actor, newRunScopes(s.cfg.Store)),
 	}
 	if ws != "" && !live {
 		// A deleted workspace's log holds only its workspace.deleted, which

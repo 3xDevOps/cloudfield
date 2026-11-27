@@ -411,8 +411,9 @@ behind a `workspace.timeline` page matches one workspace, but the server
 filters each event per reader (`events.Reachable` in
 `internal/events/stream.go`), so a page can hold what only some of that
 workspace's readers see: anything addressed to one member (an assistant
-notice); every event of a session with a repository in another workspace, or
-of a deleted session; agent mail to such a session; another workspace's
+notice); every event of a session with a repository in another workspace;
+the events of a deleted session other than a single-repository session's own
+`run.deleted`, which every reader sees; agent mail to either kind of session; another workspace's
 repository (a branch, pull request or diff of an extra repository); member
 changes, shown only to readers who see that member; and overlap peers. The
 server sends a page holding any of them as a JSON line: `events.OneWorkspace`
@@ -420,10 +421,14 @@ asks `Reachable` itself whether the event passes a scope that reaches only
 the page's workspace, only sessions wholly inside it, and no member by name
 (`pageScope` in `internal/sshd/workspace_scope.go`, called from
 `internal/sshd/timeline.go`). A Lanes page (`run.status`, `coord.message`,
-`coord.message.acked`) compresses unless its window holds an event of a
-multi-repository or deleted session or mail to one. That a page asked for
-gzip came back plain tells a size observer such an event is in the window;
-plaintext sizes and the live event stream already show most of that.
+`coord.message.acked`) compresses unless the page holds an event of a
+multi-repository or deleted session or mail to one. The server runs this
+check only for a request that asked for gzip, stops at the first event that
+fails, and reads each session's workspaces once per request, shared with the
+filter that built the page. That a page asked for gzip came back plain tells
+a size observer the page holds such an event, a private notice, an overlap or
+a member change; plaintext sizes and the live event stream already show most
+of that.
 `run.list` and `changes.list` are not compressed: without a
 workspace they append every workspace the caller reaches into one response,
 so a member of one workspace could place text beside another workspace's

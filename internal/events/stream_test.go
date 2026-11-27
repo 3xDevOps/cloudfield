@@ -154,7 +154,7 @@ func TestOneWorkspace(t *testing.T) {
 		"extra repository branch":    {"run-1", "", GitBranchPayload{WorkspaceID: other, Repo: other}, false},
 		"extra repository PR":        {"run-1", "", RunPRPayload{Repo: other}, false},
 		"extra repository diff":      {"run-1", "", RunDiffPayload{Repo: other}, false},
-		"deleted, one workspace":     {"run-gone", "", RunDeletedPayload{ExtraWorkspaceIDs: []domain.WorkspaceID{ws}}, true},
+		"deleted, one repository":    {"run-gone", "", RunDeletedPayload{ExtraWorkspaceIDs: []domain.WorkspaceID{}}, true},
 		"deleted, extra repos":       {"run-gone", "", RunDeletedPayload{ExtraWorkspaceIDs: []domain.WorkspaceID{ws, other}}, false},
 		"deleted, old format":        {"run-gone", "", RunDeletedPayload{}, false},
 		"event of a deleted run":     {"run-gone", "", RunStatusPayload{To: domain.RunCompleted}, false},

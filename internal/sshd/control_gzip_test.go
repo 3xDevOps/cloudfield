@@ -255,3 +255,58 @@ func TestControlGzipSendsMultiRepositoryPagesPlain(t *testing.T) {
 		}
 	}
 }
+
+// Each gate of pageScope, on the real server and read as a super admin who
+// sees everything: beside a page that compresses, one more event only some
+// readers of the workspace see sends the page plain.
+func TestControlGzipPageScopeGates(t *testing.T) {
+	t.Parallel()
+	w := newScopeWorld(t)
+	ctx := context.Background()
+	publish := func(run domain.RunID, payload events.Payload) {
+		t.Helper()
+		if _, err := w.bus.Publish(ctx, events.Event{WorkspaceID: w.wsA.ID, RunID: run, Payload: payload}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := range 100 {
+		publish(w.runUA.ID, events.RunStatusPayload{From: domain.RunRunning, To: domain.RunRunning, StatusSeq: int64(i), Reason: fmt.Sprintf("agent-written reason %d", i)})
+	}
+	publish("", events.MemberChangedPayload{MemberID: w.b.ID, DisplayName: "B"})
+	publish(w.runUA.ID, events.RunDeletedPayload{ExtraWorkspaceIDs: []domain.WorkspaceID{w.wsB.ID}})
+	publish(w.runUA.ID, events.CoordMessagePayload{MessageID: "msg-1", WorkspaceID: w.wsA.ID, FromRunID: w.runUA.ID, ToRunID: noRun, Kind: "message"})
+
+	client, err := w.e.dialWith(w.signers["S"], nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	pipe := &tappedPipe{subsystemPipe: openSubsystem(t, client, protocol.SubsystemControl, nil)}
+	c := protocol.NewClient(pipe)
+	c.AcceptGzip()
+	for _, tc := range []struct {
+		gate  string
+		extra events.Type
+		gzip  bool
+	}{
+		{"none", "", true},
+		{"member sight", events.TypeMemberChanged, false},
+		{"another workspace", events.TypeRunDeleted, false},
+		{"unreadable run", events.TypeCoordMessage, false},
+	} {
+		types := []string{string(events.TypeRunStatus)}
+		if tc.extra != "" {
+			types = append(types, string(tc.extra))
+		}
+		pipe.got.Reset()
+		var page protocol.WorkspaceTimelineResult
+		if err := c.Call(protocol.MethodWorkspaceTimeline, protocol.WorkspaceTimelineParams{
+			WorkspaceID: string(w.wsA.ID), Newest: true, Limit: 1000, Types: types,
+		}, &page); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.HasPrefix(pipe.got.String(), "gzip "); got != tc.gzip || len(page.Events) < 100 || (tc.extra != "" && len(page.Events) != 101) {
+			t.Fatalf("%s: %d events, gzip frame %v, want %v", tc.gate, len(page.Events), got, tc.gzip)
+		}
+	}
+}

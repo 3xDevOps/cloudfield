@@ -40,6 +40,7 @@ func (s *Server) workspaceTimeline(ctx context.Context, member domain.MemberID, 
 	if err != nil {
 		return nil, rpcError(err)
 	}
+	runs := newRunScopes(s.cfg.Store)
 	filter := timeline.Filter{
 		Workspace: domain.WorkspaceID(p.WorkspaceID),
 		Run:       domain.RunID(p.RunID),
@@ -47,7 +48,7 @@ func (s *Server) workspaceTimeline(ctx context.Context, member domain.MemberID, 
 		Reader:    member,
 		Types:     types,
 		NoRereads: p.NoRereads,
-		Scope:     s.eventScope(ctx, actor),
+		Scope:     s.eventScope(ctx, actor, runs),
 	}
 	var page timeline.Page
 	if p.Newest {
@@ -67,11 +68,16 @@ func (s *Server) workspaceTimeline(ctx context.Context, member domain.MemberID, 
 	if !page.OlderTime.IsZero() {
 		out.OlderTime = page.OlderTime.UTC().Format(time.RFC3339Nano)
 	}
-	shared := s.pageScope(ctx, domain.WorkspaceID(p.WorkspaceID))
-	for _, ev := range page.Events {
-		if !events.OneWorkspace(ev, shared) {
-			sendPlain(ctx)
+	if gzipAsked(ctx) {
+		shared := pageScope(ctx, domain.WorkspaceID(p.WorkspaceID), runs)
+		for _, ev := range page.Events {
+			if !events.OneWorkspace(ev, shared) {
+				sendPlain(ctx)
+				break
+			}
 		}
+	}
+	for _, ev := range page.Events {
 		payload, merr := json.Marshal(ev.Payload)
 		if merr != nil {
 			return nil, rpcError(fmt.Errorf("sshd: encode %s payload of event %s: %w", ev.Type, ev.ID, merr))
