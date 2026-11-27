@@ -455,6 +455,39 @@ func TestASignInOfAMemberRemovedBeforeItStartsMakesNothing(t *testing.T) {
 	}
 }
 
+// A sign-in whose member is removed after its start read the member, while
+// its container is made, stops before the sign-in command runs and leaves
+// no login directory.
+func TestASignInOfAMemberRemovedWhileItStartsRunsNothing(t *testing.T) {
+	e := newSignInEnv(t)
+	other := &domain.Member{DisplayName: "Bo", PublicKey: testPublicKey(t), Color: "#3cb44b", Role: domain.RoleCollaborator}
+	if err := e.db.CreateMember(t.Context(), other); err != nil {
+		t.Fatal(err)
+	}
+	id, err := e.sched.BeginLoginSignIn(t.Context(), other.ID, "claude", "work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.rt.mu.Lock()
+	e.rt.createHook = func() {
+		if delErr := e.db.DeleteMember(t.Context(), other.ID, ""); delErr != nil {
+			t.Error(delErr)
+		}
+	}
+	e.rt.execTTYHook = func(context.Context, runtime.ID, []string, string, uint, uint) (runtime.Attachment, error) {
+		t.Error("the sign-in command ran for a removed member")
+		return newSignInAttachment(), nil
+	}
+	e.rt.mu.Unlock()
+	if _, err := e.sched.StartLoginSignIn(t.Context(), other.ID, id, 80, 24); err == nil || !strings.Contains(err.Error(), "removed or merged") {
+		t.Fatalf("the sign-in of a member removed while it started: %v; want it stopped", err)
+	}
+	dir, _ := e.logins.Path(other.ID, "claude", id)
+	if _, err := os.Lstat(dir); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the removed member's login directory: %v; want none", err)
+	}
+}
+
 // A login row whose directory is gone holds nothing to duplicate, so it
 // does not block the next sign-in.
 func TestALoginWithoutADirectoryDoesNotBlockASignIn(t *testing.T) {
