@@ -24,15 +24,6 @@ export function EdgeMoveSteps({ need }: { need: EdgeNeed }) {
   const caution = need.notice.first_use && (
     <p>This came with the server's first connection to the edge, when it pinned the edge's key: confirm the new address with whoever runs the edge before you move.</p>
   )
-  if (need.notice.edge_url_flag) {
-    return (
-      <div className="flex min-w-0 flex-col gap-1.5 text-ui-sm">
-        {caution}
-        <p className="break-words">The service starts the server with --edge-url {need.edgeURL}, and a restart keeps that flag, so edge move does not apply. Change the flag to {need.notice.replacement} where the service starts cloudfield-server serve, then restart it on the server's host:</p>
-        <CopyableCommand command={need.restart} />
-      </div>
-    )
-  }
   if (need.notice.moved_to) {
     return (
       <div className="flex min-w-0 flex-col gap-1.5 text-ui-sm">

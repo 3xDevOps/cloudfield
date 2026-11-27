@@ -132,9 +132,6 @@ type Config struct {
 	// ConfigPath is the options file the server read at start; server.edge
 	// reads its edge-url again to tell a move waiting for a restart.
 	ConfigPath string
-	// EdgeURLFlag is set when EdgeURL came from the --edge-url flag, which
-	// a restart keeps, so changing the file does not move the server.
-	EdgeURLFlag bool
 	// CoordinationDisabled turns the conflict coordination kill switch off.
 	// The zero value keeps coordination enabled, which is the shipped
 	// default.
@@ -588,7 +585,6 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 	sshCfg.EdgeAccess = cfg.EdgeAccess
 	sshCfg.EdgeReviewer = cfg.EdgeReviewer
 	sshCfg.ConfigPath = cfg.ConfigPath
-	sshCfg.EdgeURLFlag = cfg.EdgeURLFlag
 	sshCfg.Services.Usage = cfg.Usage
 	if sshCfg.Services.Usage == nil {
 		sshCfg.Services.Usage = quota.New(homes, logins)
@@ -752,7 +748,7 @@ func newEdgeAgent(cfg Config, db *store.DB, sshSrv *sshd.Server) (*edgeagent.Age
 		return nil, err
 	}
 	return edgeagent.New(edgeagent.Config{EdgeURL: cfg.EdgeURL, DataDir: cfg.DataDir, HostKey: hostKey, SSH: sshSrv,
-		HTTP: mcp, AccessPolicy: cfg.EdgeAccess, EdgeURLFlag: cfg.EdgeURLFlag})
+		HTTP: mcp, AccessPolicy: cfg.EdgeAccess})
 }
 
 // Store is the server's persistence layer.

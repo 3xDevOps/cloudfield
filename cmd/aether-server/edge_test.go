@@ -256,53 +256,6 @@ func TestEdgeMoveNeedsAPinnedKey(t *testing.T) {
 	}
 }
 
-// A service started with --edge-url and no edge-url in the file is on the
-// edge: edge status reports it instead of saying the edge is off.
-func TestEdgeStatusOfAServiceFlag(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "server.conf")
-	if err := serversetup.WriteConfig(path, map[string]string{"data-dir": dir}); err != nil {
-		t.Fatal(err)
-	}
-	if err := edgeCmd([]string{"status", "--config", path}); err == nil || !strings.Contains(err.Error(), "the edge is off") {
-		t.Fatalf("status with no edge: %v, want the edge off", err)
-	}
-	writeJSON(t, filepath.Join(edgeagent.StateDir(dir), "status.json"),
-		edgeagent.Status{Edge: "https://edge-flag.example.test", Error: "server stopped", Since: time.Now(), EdgeURLFlag: true})
-	if err := edgeCmd([]string{"status", "--config", path}); !errors.Is(err, errNotConnected) {
-		t.Fatalf("status of a service on the edge by its flag: %v, want %v", err, errNotConnected)
-	}
-}
-
-// A running server that took its edge-url from --edge-url refuses edge
-// move before it dials anything: the file it would write does not apply.
-func TestEdgeMoveRefusesAServiceFlag(t *testing.T) {
-	t.Setenv("SUDO_USER", "ubuntu")
-	dir := t.TempDir()
-	path := filepath.Join(dir, "server.conf")
-	const old = "https://edge-old.example.test"
-	if err := serversetup.WriteConfig(path, map[string]string{"data-dir": dir, "edge-url": old}); err != nil {
-		t.Fatal(err)
-	}
-	writeJSON(t, filepath.Join(edgeagent.StateDir(dir), "status.json"), edgeagent.Status{Edge: old, Connected: true, EdgeURLFlag: true})
-	err := edgeCmd([]string{"move", "https://edge-new.example.test", "--config", path})
-	if want := "the running server took its edge-url, " + old + ", from the --edge-url flag, which a restart keeps, so edge-url in " + path +
-		" would not apply; nothing changed. Change the service's --edge-url flag to https://edge-new.example.test, then run sudo systemctl restart aether-server"; fmt.Sprint(err) != want {
-		t.Errorf("move: %v\nwant: %s", err, want)
-	}
-	if _, err = os.Stat(server.HostKeyPath(dir)); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("the refused move made a host key: %v", err)
-	}
-	if err = serversetup.WriteConfig(path, map[string]string{"data-dir": dir}); err != nil {
-		t.Fatal(err)
-	}
-	err = edgeCmd([]string{"move", "https://edge-new.example.test", "--config", path})
-	if want := "the running server took its edge-url, " + old + ", from the --edge-url flag, which a restart keeps, so edge-url in " + path +
-		" would not apply; nothing changed. Change the service's --edge-url flag to https://edge-new.example.test, then run sudo systemctl restart aether-server"; fmt.Sprint(err) != want {
-		t.Errorf("move with no edge-url in the file: %v\nwant: %s", err, want)
-	}
-}
-
 // A flag that overrides the config's edge-url refuses edge move before it
 // dials anything, since the move would write the file the flag overrides.
 func TestEdgeMoveRefusesAFlagOverrideFirst(t *testing.T) {
@@ -314,6 +267,26 @@ func TestEdgeMoveRefusesAFlagOverrideFirst(t *testing.T) {
 	}
 	err := edgeCmd([]string{"move", "https://edge-new.example.test", "--config", path, "--edge-url", flagged})
 	if want := path + ` gives edge-url "` + file + `" and data-dir "` + dir + `", but edge move runs with "` + flagged + `" and "` + dir +
+		`" from its flags; nothing changed, run it again without --edge-url or --data-dir`; fmt.Sprint(err) != want {
+		t.Errorf("move: %v\nwant: %s", err, want)
+	}
+	if _, err = os.Stat(server.HostKeyPath(dir)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the refused move made a host key: %v", err)
+	}
+}
+
+// edge move decides on the one config it read at the start: a file
+// changed since to the address a flag gave does not turn a flag override
+// into a move, and nothing is dialed or created.
+func TestEdgeMoveDecidesOnTheConfigItRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "server.conf")
+	const read, flagged = "https://edge-old.example.test", "https://edge-flag.example.test"
+	if err := serversetup.WriteConfig(path, map[string]string{"data-dir": dir, "edge-url": flagged}); err != nil {
+		t.Fatal(err)
+	}
+	err := edgeMove(io.Discard, dir, flagged, edgeproto.PolicyAccount, "https://edge-new.example.test", path, map[string]string{"data-dir": dir, "edge-url": read})
+	if want := path + ` gives edge-url "` + read + `" and data-dir "` + dir + `", but edge move runs with "` + flagged + `" and "` + dir +
 		`" from its flags; nothing changed, run it again without --edge-url or --data-dir`; fmt.Sprint(err) != want {
 		t.Errorf("move: %v\nwant: %s", err, want)
 	}

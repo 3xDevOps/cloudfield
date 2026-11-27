@@ -428,12 +428,6 @@ func TestConnectWarnsOfARetiringAddress(t *testing.T) {
 			t.Errorf("%s: warnings %q, want %q", tc.name, got, tc.want)
 		}
 	}
-	cfg.EdgeURLFlag = true
-	retiring := edgeproto.Notices{{State: edgeproto.NoticeRetiring, Origin: edge.origin, Replacement: "https://edge2.example.test"}}
-	if got, want := connect(retiring), []string{"edge: " + edge.origin + " is retiring; move this server with: the service's --edge-url flag set to https://edge2.example.test " +
-		"(a restart keeps the flag, so edge move does not apply), then a restart"}; !slices.Equal(got, want) {
-		t.Errorf("edge-url from the flag: warnings %q, want %q", got, want)
-	}
 }
 
 // Either probe's verified notices that name the target retiring or

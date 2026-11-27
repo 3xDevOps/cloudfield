@@ -82,9 +82,6 @@ type Status struct {
 	Heartbeat time.Time `json:"heartbeat,omitzero"`
 	// Protocol is the edge protocol version of the connection.
 	Protocol int `json:"protocol,omitempty"`
-	// EdgeURLFlag is set when the server took Edge from its --edge-url
-	// flag, which a restart keeps.
-	EdgeURLFlag bool `json:"edge_url_flag,omitempty"`
 }
 
 // HeartbeatMaxAge is how old the heartbeat of a live control connection

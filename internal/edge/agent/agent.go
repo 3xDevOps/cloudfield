@@ -68,9 +68,6 @@ type Config struct {
 	// PolicyApprovedDevices. The server enforces it; the edge's copy is
 	// never an input to that.
 	AccessPolicy edgeproto.AccessPolicy
-	// EdgeURLFlag is set when EdgeURL came from serve's --edge-url flag,
-	// which a restart keeps, so edge status advises changing the flag.
-	EdgeURLFlag bool
 }
 
 const (
@@ -195,7 +192,7 @@ func (a *Agent) Run(ctx context.Context) {
 		if connected > 0 || down.IsZero() {
 			down = time.Now()
 		}
-		a.state.writeStatus(Status{Edge: a.origin, Error: err.Error(), Since: down, EdgeURLFlag: a.cfg.EdgeURLFlag})
+		a.state.writeStatus(Status{Edge: a.origin, Error: err.Error(), Since: down})
 		// The window is never empty, so servers an edge restart dropped
 		// together do not redial together.
 		wait := a.minBackoff + rand.N(backoff)
@@ -227,7 +224,7 @@ func (a *Agent) stop() {
 	for _, rc := range conns {
 		_ = rc.Close()
 	}
-	a.state.writeStatus(Status{Edge: a.origin, Error: "server stopped", Since: time.Now(), EdgeURLFlag: a.cfg.EdgeURLFlag})
+	a.state.writeStatus(Status{Edge: a.origin, Error: "server stopped", Since: time.Now()})
 }
 
 // firstUse records a grant's connection id and refuses one already

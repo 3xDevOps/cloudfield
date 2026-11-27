@@ -1531,8 +1531,6 @@ export interface EdgeNotice {
   restart_pending?: boolean
   /** Super admins only: that edge-url, canonical. */
   moved_to?: string
-  /** Super admins only: edge_url came from the service's --edge-url flag, which a restart keeps. */
-  edge_url_flag?: boolean
 }
 
 /** server.edge.claimcode: a claim code bound to the calling admin. */

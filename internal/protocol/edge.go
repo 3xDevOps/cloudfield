@@ -35,10 +35,6 @@ type EdgeNotice struct {
 	// canonical.
 	RestartPending bool   `json:"restart_pending,omitempty"`
 	MovedTo        string `json:"moved_to,omitempty"`
-	// EdgeURLFlag, for super admins only, is set when the running edge-url
-	// came from serve's --edge-url flag, which a restart keeps: moving
-	// the server means changing that flag.
-	EdgeURLFlag bool `json:"edge_url_flag,omitempty"`
 }
 
 // EdgeAccount is an account signed in at an edge.

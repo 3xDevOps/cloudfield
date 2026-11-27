@@ -44,9 +44,7 @@ func (s *Server) serverEdge(ctx context.Context, member domain.MemberID, _ json.
 	if n, ok := notices.For(out.EdgeURL); ok {
 		out.Notice = &protocol.EdgeNotice{State: n.State, Replacement: n.Replacement, Date: n.Date, FirstUse: notices.FirstUse}
 		admin := s.superAdmin(ctx, member)
-		if s.cfg.EdgeURLFlag {
-			out.Notice.EdgeURLFlag = admin
-		} else if moved := s.configuredEdgeURL(out.EdgeURL); moved != "" {
+		if moved := s.configuredEdgeURL(out.EdgeURL); moved != "" {
 			out.Notice.RestartPending = true
 			if admin {
 				out.Notice.MovedTo = moved
