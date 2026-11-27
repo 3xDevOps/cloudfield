@@ -250,10 +250,13 @@ func TestFirstPinKeepsAKeyPinnedMeanwhile(t *testing.T) {
 	trusted, _, _ := ed25519.GenerateKey(rand.Reader)
 	presented, _, _ := ed25519.GenerateKey(rand.Reader)
 	first, created, err := s.pinFirst(trusted)
+	t.Cleanup(first.close)
 	if err != nil || !created {
 		t.Fatalf("pinFirst with nothing pinned: created %v, %v", created, err)
 	}
-	if again, created, err := s.pinFirst(trusted); err != nil || created || !os.SameFile(again.file, first.file) || !again.Key.Equal(first.Key) {
+	again, created, err := s.pinFirst(trusted)
+	t.Cleanup(again.close)
+	if err != nil || created || !os.SameFile(again.file, first.file) || !again.Key.Equal(first.Key) {
 		t.Fatalf("pinFirst of the pinned key: %+v, created %v, %v; want the same pin, not created", again, created, err)
 	}
 	if _, _, err := s.pinFirst(presented); err == nil {
@@ -514,10 +517,66 @@ func TestNoReplaceErrorNamesTheFiles(t *testing.T) {
 	}
 }
 
+// TestFirstPinFallbacks makes the rename that replaces nothing and the
+// hard link fail in turn: a policy refusing the rename still pins by the
+// link and keeps a pin that appeared meanwhile; a file system without
+// either pins by a plain rename; and a real failure is an error that
+// writes no pin.
+func TestFirstPinFallbacks(t *testing.T) {
+	key, _, _ := ed25519.GenerateKey(rand.Reader)
+	other, _, _ := ed25519.GenerateKey(rand.Reader)
+	linkErr := func(e syscall.Errno) func(string, string) error {
+		return func(oldname, newname string) error {
+			return &os.LinkError{Op: "link", Old: oldname, New: newname, Err: e}
+		}
+	}
+	renameErr := func(e syscall.Errno) func(string, string) error {
+		return func(oldname, newname string) error {
+			return &os.LinkError{Op: "renameat2", Old: oldname, New: newname, Err: e}
+		}
+	}
+
+	s := OpenState(t.TempDir())
+	s.renameNoReplace = renameErr(syscall.EPERM)
+	p, created, err := s.pinFirst(key)
+	t.Cleanup(p.close)
+	if err != nil || !created || !p.Key.Equal(key) {
+		t.Fatalf("renameat2 refused by policy: pinFirst = created %v, %v; want a pin by hard link", created, err)
+	}
+	s = OpenState(t.TempDir())
+	s.renameNoReplace = renameErr(syscall.EACCES)
+	s.beforePublish = func() { writeOlderPin(t, s, other) }
+	if _, _, err = s.pinFirst(key); err == nil {
+		t.Fatal("renameat2 refused by policy: pinFirst replaced a pin that appeared meanwhile")
+	}
+	if got, _ := s.PinnedKey(); !got.Equal(other) {
+		t.Fatalf("pinned key %x; want the one that appeared meanwhile", got)
+	}
+
+	s = OpenState(t.TempDir())
+	s.renameNoReplace, s.linkFile = renameErr(syscall.ENOSYS), linkErr(syscall.EPERM)
+	p, created, err = s.pinFirst(key)
+	t.Cleanup(p.close)
+	if err != nil || !created {
+		t.Fatalf("no renameat2, links refused: pinFirst = created %v, %v; want the rename fallback", created, err)
+	}
+
+	for _, e := range []syscall.Errno{syscall.EIO, syscall.ENOSPC, syscall.EDQUOT} {
+		s = OpenState(t.TempDir())
+		s.renameNoReplace, s.linkFile = renameErr(syscall.ENOSYS), linkErr(e)
+		if _, _, err := s.pinFirst(key); !errors.Is(err, e) {
+			t.Errorf("no renameat2, link fails with %v: pinFirst = %v; want that error", e, err)
+		}
+		if got, err := s.PinnedKey(); err != nil || got != nil {
+			t.Errorf("link fails with %v: a pin was written: %x, %v", e, got, err)
+		}
+	}
+}
+
 // TestCrashLeftoversAreRemoved leaves a temporary notices file, as a
 // crash would, and stores notices: the leftover is gone.
 func TestCrashLeftoversAreRemoved(t *testing.T) {
-	s := OpenState(t.TempDir())
+	s := OpenState(filepath.Join(t.TempDir(), "server[1]"))
 	key, _, _ := ed25519.GenerateKey(rand.Reader)
 	p := pinNow(t, s, key)
 	dir := filepath.Dir(s.path(keyDirFile(key, noticesFile)))
@@ -532,8 +591,14 @@ func TestCrashLeftoversAreRemoved(t *testing.T) {
 	if err := s.writeNotices(p, testStored()); err != nil {
 		t.Fatal(err)
 	}
-	if leftovers, _ := filepath.Glob(filepath.Join(dir, "."+noticesFile+".*")); len(leftovers) != 0 {
-		t.Errorf("crash leftovers kept: %v", leftovers)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "."+noticesFile+".") {
+			t.Errorf("crash leftover kept: %s", e.Name())
+		}
 	}
 	if got, err := s.Notices(noticeServerID); err != nil || len(got.Notices) != 1 {
 		t.Errorf("notices after removing leftovers: %+v, %v", got, err)

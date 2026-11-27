@@ -242,6 +242,26 @@ func unsupported(err error) bool {
 		errors.Is(err, syscall.EOPNOTSUPP)
 }
 
+// noReplaceUnavailable reports whether err says the rename that
+// replaces nothing cannot be used here: unsupported, or refused by a
+// system call policy such as seccomp, which answers EPERM or EACCES.
+func noReplaceUnavailable(err error) bool {
+	return unsupported(err) || errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES)
+}
+
+// cannotLink reports whether err says this file system or policy makes
+// no hard link here: EOPNOTSUPP (ENOTSUP), ENOSYS, EPERM (vfat, or
+// protected hard links), EXDEV and EMLINK. Any other error, such as EIO,
+// ENOSPC or EDQUOT, is a failure.
+func cannotLink(err error) bool {
+	for _, e := range []syscall.Errno{syscall.EOPNOTSUPP, syscall.ENOSYS, syscall.EPERM, syscall.EXDEV, syscall.EMLINK} {
+		if errors.Is(err, e) {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *State) link(oldname, newname string) error {
 	if s.linkFile != nil {
 		return s.linkFile(oldname, newname)
@@ -322,8 +342,8 @@ func (s *State) publishPin(key ed25519.PublicKey) (pin, bool, error) {
 	// plain rename, as builds before notices did, which can replace a pin
 	// another process wrote in the same instant.
 	err = s.noReplace(tmp, s.path(pinFile))
-	if unsupported(err) {
-		if err = s.link(tmp, s.path(pinFile)); err != nil && !errors.Is(err, fs.ErrExist) {
+	if noReplaceUnavailable(err) {
+		if err = s.link(tmp, s.path(pinFile)); cannotLink(err) {
 			err = os.Rename(tmp, s.path(pinFile))
 		}
 	}
@@ -520,9 +540,12 @@ func (s *State) writeNotices(p pin, n StoredNotices) error {
 		return err
 	}
 	// Only this build writes them, under the lock: any left is a crash's.
-	stale, _ := filepath.Glob(filepath.Join(filepath.Dir(s.path(name)), "."+noticesFile+".*"))
-	for _, f := range stale {
-		_ = os.Remove(f)
+	dir := filepath.Dir(s.path(name))
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "."+noticesFile+".") {
+			_ = os.Remove(filepath.Join(dir, e.Name()))
+		}
 	}
 	if len(n.Notices) == 0 {
 		return nil
