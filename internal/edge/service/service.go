@@ -12,10 +12,13 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"log/slog"
 	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -46,6 +49,10 @@ type Config struct {
 	MorePairs []Pair
 	// Retiring marks pairs retiring, each by its relay origin.
 	Retiring []Retiring
+	// Retired are pairs taken out of service. New deletes the device
+	// tokens, sessions and device authorizations issued at their sign-in
+	// origins, and those with no recorded origin.
+	Retired []Retired
 	// Clock is time.Now when nil.
 	Clock func() time.Time
 	// OpenAIChallenge is the token the relay origin serves at
@@ -60,7 +67,8 @@ type Config struct {
 	Reviewer *ReviewerAccount
 	// RecordOrigins has the edge record which origin pair each server,
 	// device token, session and connector request is on, for aether-edge
-	// retiring.
+	// retiring. aether-edge serve sets it with --retiring-pairs; the edge
+	// records whenever Retired is set, whatever RecordOrigins says.
 	RecordOrigins bool
 }
 
@@ -117,6 +125,48 @@ func (s *Service) signinOrigin(ctx context.Context) string {
 		return p.signin
 	}
 	return ""
+}
+
+// CanonicalOrigin is a valid origin in the form every spelling of it
+// shares: lowercase, an IP address in its standard form, and no port when
+// it is the scheme's default.
+func CanonicalOrigin(origin string) string {
+	u, err := url.Parse(origin)
+	if err != nil {
+		return origin
+	}
+	return u.Scheme + "://" + canonicalHostPort(u)
+}
+
+// canonicalHostPort is u's host as CanonicalOrigin writes it, with its port
+// as a number unless it is the default of u's scheme.
+func canonicalHostPort(u *url.URL) string {
+	host := canonicalHost(u.Hostname())
+	if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	p := u.Port()
+	if n, err := strconv.Atoi(p); err == nil {
+		p = strconv.Itoa(n)
+	}
+	if p != "" && (u.Scheme != "https" || p != "443") && (u.Scheme != "http" || p != "80") {
+		host += ":" + p
+	}
+	return host
+}
+
+// canonicalHost is a host name in lowercase, or an IP address in its
+// standard form.
+func canonicalHost(host string) string {
+	if a, err := netip.ParseAddr(host); err == nil {
+		return a.String()
+	}
+	return strings.ToLower(host)
+}
+
+// sameOrigin reports whether a and b, valid origins, name one origin.
+func sameOrigin(a, b string) bool {
+	return CanonicalOrigin(a) == CanonicalOrigin(b)
 }
 
 // pair is the pair Handler picked for r, or the first for a request
@@ -205,6 +255,15 @@ type Service struct {
 	recordOrigins   bool
 	// recording is set once StartRecording began a recording run.
 	recording atomic.Bool
+	// retired holds the hosts of the retired pairs by host name;
+	// retiredHosts lists them in the order Config names them.
+	retired      map[string]*retiredHost
+	retiredHosts []*retiredHost
+	// retiredPairs are the retired pairs, whose sign-ins StartRecording
+	// deletes.
+	retiredPairs []Retired
+	// notices are the unsigned notices of the retiring and retired pairs.
+	notices []edgeproto.Notice
 
 	signinLimit *limiter[netip.Prefix]
 	startLimit  *limiter[netip.Prefix]
@@ -237,7 +296,7 @@ type Service struct {
 // on first start.
 func New(cfg Config) (*Service, error) {
 	var pairs []*pair
-	byHost := map[string]*pair{}
+	byHost, byCanonicalHost := map[string]*pair{}, map[string]*pair{}
 	for i, cp := range append([]Pair{{cfg.SigninOrigin, cfg.RelayOrigin, cfg.GitHub}}, cfg.MorePairs...) {
 		noApp := "edge: no GitHub OAuth app is configured; set --github-client-id and its client secret"
 		if i > 0 {
@@ -248,10 +307,10 @@ func New(cfg Config) (*Service, error) {
 			return nil, err
 		}
 		for _, host := range []string{p.signinHost, p.relayHost} {
-			if other := byHost[host]; other != nil {
-				return nil, fmt.Errorf("edge: the origin pairs %s %s and %s %s share the host name %s", other.signin, other.relay, p.signin, p.relay, host)
+			if other := byCanonicalHost[canonicalHost(host)]; other != nil {
+				return nil, fmt.Errorf("edge: the origin pairs %s %s and %s %s share the host name %s", other.signin, other.relay, p.signin, p.relay, canonicalHost(host))
 			}
-			byHost[host] = p
+			byHost[host], byCanonicalHost[canonicalHost(host)] = p, p
 		}
 		pairs = append(pairs, p)
 	}
@@ -292,7 +351,7 @@ func New(cfg Config) (*Service, error) {
 		openAIChallenge:   cfg.OpenAIChallenge,
 		clientHosts:       cfg.ConnectorClientHosts,
 		reviewer:          cfg.Reviewer,
-		recordOrigins:     cfg.RecordOrigins,
+		recordOrigins:     cfg.RecordOrigins || len(cfg.Retired) > 0,
 		reviewerChecks:    make(chan struct{}, reviewerMaxChecks),
 	}
 	s.tokenLimit.scale = func(k serverBlock) int { return edgeproto.RateLimitScale(k.block) }
@@ -303,6 +362,10 @@ func New(cfg Config) (*Service, error) {
 	if s.pages, err = parsePages(); err != nil {
 		return nil, err
 	}
+	if s.retiredPairs, err = s.newRetired(cfg.Retired); err != nil {
+		return nil, err
+	}
+	s.notices = noticesOf(pairs, s.retiredPairs)
 	if err = os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("edge: create data directory: %w", err)
 	}
@@ -320,19 +383,35 @@ func New(cfg Config) (*Service, error) {
 // a request.
 func (s *Service) SetLink(l ServerLink) { s.link = l }
 
-// StartRecording records, when the edge records origins, the pairs it
-// serves and the start of its recording run. Call it once the edge's
-// listeners are bound.
+// StartRecording, when the edge records origins, deletes the sign-ins of
+// the retired pairs and records the pairs it serves and the start of its
+// recording run, in one transaction. Call it once the edge's listeners are
+// bound, so a start that fails before it changes nothing. An edge with a
+// retired pair always records origins.
 func (s *Service) StartRecording(ctx context.Context) error {
 	if !s.recordOrigins {
 		return nil
 	}
-	served := map[string]string{}
+	run := edgestore.Run{Pairs: map[string]string{}, Retire: len(s.retiredPairs) > 0}
 	for _, p := range s.pairs {
-		served[p.relay] = p.signin
+		run.Pairs[p.relay] = p.signin
 	}
-	if err := s.store.RecordPairs(ctx, served, s.now()); err != nil {
+	if run.Retire {
+		pairings, err := s.store.Pairings(ctx)
+		if err != nil {
+			return err
+		}
+		if run.RetiredSignIns, err = s.retiredSignIns(ctx, s.retiredPairs, pairings); err != nil {
+			return err
+		}
+	}
+	n, err := s.store.RecordPairs(ctx, run, s.now())
+	if err != nil {
 		return err
+	}
+	if run.Retire {
+		slog.Info("edge: deleted the sign-ins of retired pairs and those with no recorded origin",
+			"devices", n.Devices, "sessions", n.Sessions, "authorizations", n.Authorizations)
 	}
 	s.recording.Store(true)
 	return nil
@@ -364,13 +443,17 @@ func (s *Service) DeviceLogins() map[string]uint64 {
 	return out
 }
 
-// notices are the unsigned notices of the retiring pairs.
-func (s *Service) notices() []edgeproto.Notice {
+// noticesOf are the unsigned notices of the retiring pairs among pairs
+// and of the retired pairs.
+func noticesOf(pairs []*pair, retired []Retired) []edgeproto.Notice {
 	var out []edgeproto.Notice
-	for _, p := range s.pairs {
+	for _, p := range pairs {
 		if p.retiring != nil {
 			out = append(out, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: p.relay, Replacement: p.retiring.relay, Date: p.retiring.date})
 		}
+	}
+	for _, r := range retired {
+		out = append(out, edgeproto.Notice{State: edgeproto.NoticeRetired, Origin: r.RelayOrigin, Replacement: r.Replacement})
 	}
 	return out
 }
@@ -390,7 +473,9 @@ func (s *Service) moreRelayOrigins() []string {
 // the other is refused with 421 Misdirected Request naming the right
 // origin, so no signed-in page, cookie or API answer is served on the
 // relay host.
-// GET /healthz answers on any host. Call SetLink first.
+// GET /healthz answers on any host, and OPTIONS * on any host that is not
+// retired, for a server with DisableGeneralOptionsHandler set, which an
+// edge with a retired pair needs. Call SetLink first.
 func (s *Service) Handler() http.Handler {
 	pages := http.NewServeMux()
 	pages.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
@@ -449,6 +534,14 @@ func (s *Service) Handler() http.Handler {
 			return
 		}
 		host := edgeproto.RequestHost(r)
+		if h := s.retired[host]; h != nil {
+			s.serveRetired(w, r, h)
+			return
+		}
+		if r.Method == http.MethodOptions && r.RequestURI == "*" {
+			w.Header().Set("Content-Length", "0")
+			return
+		}
 		p := s.byHost[host]
 		if p == nil {
 			http.Error(w, fmt.Sprintf("this edge serves %s, not the host %q", s.originList(), host), http.StatusMisdirectedRequest)

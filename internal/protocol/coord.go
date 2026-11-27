@@ -408,7 +408,7 @@ func CheckReportBody(sent string, result CoordReportResult) error {
 	if sent == "" || result.BodyBytes > 0 {
 		return nil
 	}
-	return errors.New("the report was recorded WITHOUT its body: this server is older than report bodies. Send the body's content with aether-internal send instead")
+	return errors.New("the report was recorded WITHOUT its body: this server is older than report bodies. Send the body's content with aether-internal send instead, in messages of at most 4096 bytes")
 }
 
 // RunReportParams carries independent execution and correlated input updates.

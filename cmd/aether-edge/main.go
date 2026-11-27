@@ -16,6 +16,8 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -106,6 +108,9 @@ func serve(args []string) (err error) {
 	if err != nil {
 		return err
 	}
+	if err = olderImageServes(o, envname.Legacy); err != nil {
+		return err
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if err = checkDataDir(o.dataDir); err != nil {
@@ -130,7 +135,8 @@ func serve(args []string) (err error) {
 
 	svc, err := edge.New(edge.Config{
 		DataDir: o.dataDir, SigninOrigin: o.signinOrigin, RelayOrigin: o.relayOrigin,
-		GitHub: o.github, MorePairs: o.morePairs, Retiring: o.retiring, OpenAIChallenge: o.openAIChallenge, Reviewer: o.reviewer,
+		GitHub: o.github, MorePairs: o.morePairs, Retiring: o.retiring, Retired: o.retired, OpenAIChallenge: o.openAIChallenge, Reviewer: o.reviewer,
+		RecordOrigins: len(o.retiring) > 0,
 	})
 	if err != nil {
 		return err
@@ -146,14 +152,7 @@ func serve(args []string) (err error) {
 	}
 	svc.SetLink(rl)
 
-	// No read or write timeout: relayed streams are long-lived WebSockets.
-	web := &http.Server{
-		Handler:           svc.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       2 * time.Minute,
-		MaxHeaderBytes:    64 << 10,
-		ErrorLog:          slog.NewLogLogger(slog.Default().Handler(), slog.LevelWarn),
-	}
+	web := webServer(o, svc.Handler())
 	var listener listenerState
 	metrics := &http.Server{Handler: metricsHandler(svc, rl, &listener), ReadHeaderTimeout: 10 * time.Second}
 
@@ -213,6 +212,9 @@ func serve(args []string) (err error) {
 	for _, r := range o.retiring {
 		slog.Info("aether-edge: retiring", "relay", r.RelayOrigin, "replacement", r.Replacement, "date", r.Date)
 	}
+	for _, r := range o.retired {
+		slog.Info("aether-edge: retired", "signin", r.SigninOrigin, "relay", r.RelayOrigin, "replacement", r.Replacement)
+	}
 	if o.reviewer != nil {
 		slog.Warn("aether-edge: reviewer account on", "login", o.reviewer.Login, "server", o.reviewer.ServerID,
 			"signin", o.signinOrigin+edge.PathReviewerSignin)
@@ -237,29 +239,102 @@ func serve(args []string) (err error) {
 	return errors.Join(err, web.Shutdown(shutdownCtx), metrics.Shutdown(shutdownCtx))
 }
 
+// webServer is the edge's HTTP server for handler. It has no read or
+// write timeout: relayed streams are long-lived WebSockets.
+func webServer(o options, handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    64 << 10,
+		// net/http answers OPTIONS * itself, on any host, before Handler.
+		DisableGeneralOptionsHandler: len(o.retired) > 0,
+		ErrorLog:                     slog.NewLogLogger(slog.Default().Handler(), slog.LevelWarn),
+	}
+}
+
 // edgeTLS obtains certificates for exactly the edge's host names with
 // TLS-ALPN-01.
 func edgeTLS(o options) *tls.Config {
+	cache := autocert.DirCache(filepath.Join(o.dataDir, "acme"))
 	m := &autocert.Manager{
 		Prompt:     autocert.AcceptTOS,
-		Cache:      autocert.DirCache(filepath.Join(o.dataDir, "acme")),
+		Cache:      cache,
 		HostPolicy: autocert.HostWhitelist(certHosts(o)...),
 		Email:      o.acmeEmail,
 		Client:     &acme.Client{DirectoryURL: o.acmeDirectory},
 	}
 	cfg := m.TLSConfig()
 	cfg.MinVersion = tls.VersionTLS12
+	cfg.GetCertificate = retiredCertificates(o, cache, time.Now, cfg.GetCertificate)
 	return cfg
 }
 
-// certHosts are the host names the edge obtains certificates for: two per
-// origin pair.
+// certHosts are the host names of the served pairs, which the edge
+// obtains certificates for.
 func certHosts(o options) []string {
 	hosts := []string{host(o.signinOrigin), host(o.relayOrigin)}
 	for _, p := range o.morePairs {
 		hosts = append(hosts, host(p.SigninOrigin), host(p.RelayOrigin))
 	}
 	return hosts
+}
+
+// retiredCertRetry is the least time before a retired host's certificate
+// that the cache did not hold, or that expired, is read again.
+const retiredCertRetry = 5 * time.Minute
+
+// retiredCertificates answers a handshake for a retired pair's host
+// with a certificate from cache that is valid at now and that the client
+// supports, and fails it when there is none; any other host goes to next.
+// A retired host never reaches the autocert manager, which would order a
+// certificate for it, as it does for a key type it has none of. A
+// certificate read from cache stays in memory until it expires; a missing
+// or expired one is read again after retiredCertRetry, so handshakes do not
+// each read the disk.
+func retiredCertificates(o options, cache autocert.Cache, now func() time.Time,
+	next func(*tls.ClientHelloInfo) (*tls.Certificate, error)) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	retired := map[string]bool{}
+	for _, r := range o.retired {
+		retired[host(r.SigninOrigin)], retired[host(r.RelayOrigin)] = true, true
+	}
+	type loaded struct {
+		cert *tls.Certificate
+		at   time.Time
+	}
+	var mu sync.Mutex
+	certs := map[string]loaded{}
+	load := func(key string) *tls.Certificate {
+		mu.Lock()
+		defer mu.Unlock()
+		if l, ok := certs[key]; ok && (now().Sub(l.at) < retiredCertRetry || l.cert != nil && now().Before(l.cert.Leaf.NotAfter)) {
+			return l.cert
+		}
+		l := loaded{at: now()}
+		if data, err := cache.Get(context.Background(), key); err == nil {
+			if cert, err := tls.X509KeyPair(data, data); err == nil && cert.Leaf != nil {
+				l.cert = &cert
+			}
+		}
+		certs[key] = l
+		return l.cert
+	}
+	return func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		name := strings.TrimSuffix(strings.ToLower(hello.ServerName), ".")
+		if !retired[name] {
+			return next(hello)
+		}
+		for _, key := range []string{name, name + "+rsa"} {
+			cert := load(key)
+			if cert == nil || now().Before(cert.Leaf.NotBefore) || !now().Before(cert.Leaf.NotAfter) {
+				continue
+			}
+			if hello.SupportsCertificate(cert) == nil {
+				return cert, nil
+			}
+		}
+		return nil, fmt.Errorf("%s is the host of a retired pair and the ACME cache holds no unexpired certificate for it that the client supports; the edge orders none", name)
+	}
 }
 
 func serveHTTP(name string, srv *http.Server, ln net.Listener) error {
