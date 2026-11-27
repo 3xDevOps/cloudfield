@@ -18,8 +18,8 @@ import (
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 )
 
-// noticeEdge answers GET /v1/edge with retiring and date, or with status
-// and body when status is set, after delay.
+// noticeEdge answers GET /v1/edge, and only that, with retiring and
+// date, or with status and body when status is set, after delay.
 type noticeEdge struct {
 	*httptest.Server
 	mu             sync.Mutex
@@ -37,6 +37,10 @@ func newNoticeEdge(t *testing.T) *noticeEdge {
 	e := &noticeEdge{open: map[net.Conn]bool{}}
 	pub := make([]byte, 32)
 	e.Server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != edgeproto.PathEdgeInfo {
+			http.NotFound(w, r)
+			return
+		}
 		e.mu.Lock()
 		status, body, delay := e.status, e.body, e.delay
 		info := edgeproto.EdgeInfo{SigninOrigin: e.URL, Key: pub, Fingerprint: edgeproto.EdgeKeyFingerprint(pub),
