@@ -2,9 +2,11 @@ package main
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -18,6 +20,7 @@ import (
 	"time"
 
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
+	edge "github.com/3xDevOps/cloudfield/internal/edge/service"
 )
 
 // TestMain makes the test binary aether-edge itself when
@@ -257,6 +260,66 @@ func TestServeHelpDescribesTheProxyOptions(t *testing.T) {
 	} {
 		if !strings.Contains(help, want) {
 			t.Errorf("aether-edge serve -h lacks %q:\n%s", want, out)
+		}
+	}
+}
+
+// TestServeDeletesNothingBeforeItServes starts serve with a retired pair
+// whose start fails, in option parsing and at the bind: the device token
+// issued at the retired sign-in origin stays.
+func TestServeDeletesNothingBeforeItServes(t *testing.T) {
+	dir := t.TempDir()
+	data := filepath.Join(dir, "data")
+	secret := filepath.Join(dir, "github-client-secret")
+	if err := os.WriteFile(secret, []byte(fakeSecret+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	svc, err := edge.New(edge.Config{DataDir: data, SigninOrigin: "http://localhost:8080", RelayOrigin: "http://127.0.0.1:8080",
+		GitHub: &edge.OAuthApp{ClientID: "fake-client-id", ClientSecret: fakeSecret}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", filepath.Join(data, "edge.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close() //nolint:errcheck // test
+	if _, err = db.Exec(`INSERT INTO accounts VALUES (1, 'acc', 'github', '1', 'owner@example.test', 'owner', 'Owner', 0, 0);
+		INSERT INTO devices (id, token_hash, account_id, public_key, label, created_at, last_used_at, signin_origin)
+		VALUES ('dev', 'hash', 1, 'key', 'laptop', 0, 0, 'http://127.0.0.2:8080')`); err != nil {
+		t.Fatal(err)
+	}
+	for k, v := range map[string]string{
+		"AETHER_EDGE_DATA": data, "AETHER_EDGE_METRICS_LISTEN": "127.0.0.1:0",
+		"AETHER_EDGE_SIGNIN_ORIGIN": "http://localhost:8080", "AETHER_EDGE_RELAY_ORIGIN": "http://127.0.0.1:8080",
+		"AETHER_EDGE_GITHUB_CLIENT_ID": "fake-client-id", "AETHER_EDGE_GITHUB_CLIENT_SECRET_FILE": secret,
+	} {
+		t.Setenv(k, v)
+	}
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer busy.Close() //nolint:errcheck // test
+	for _, tt := range []struct {
+		name, retired, want string
+	}{
+		{"port with a leading zero", "http://127.0.0.2:8080 http://127.0.0.3:08080 http://127.0.0.1:8080", "cannot be named in a signed notice"},
+		{"listener in use", "http://127.0.0.2:8080 http://127.0.0.3:8080 http://127.0.0.1:8080", "development listener"},
+	} {
+		err := serve([]string{"--dev-listen", busy.Addr().String(), "--retired-pairs", tt.retired})
+		if err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("%s: %v, want %q", tt.name, err, tt.want)
+		}
+		var n int
+		if err = db.QueryRow(`SELECT COUNT(*) FROM devices`).Scan(&n); err != nil || n != 1 {
+			t.Errorf("%s: %d devices, %v; a start that failed deleted the device token", tt.name, n, err)
 		}
 	}
 }

@@ -307,6 +307,9 @@ func TestRetiredDeletesSignIns(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err = svc.StartRecording(context.Background()); err != nil {
+		t.Fatal(err)
+	}
 	if !svc.recordOrigins {
 		t.Error("an edge with a retired pair does not record origins")
 	}
@@ -491,10 +494,11 @@ func (h *harness) restartRetiring(t *testing.T, retired ...Retired) error {
 	}
 	svc, err := New(Config{DataDir: h.dataDir, SigninOrigin: testSignin, RelayOrigin: testRelay, GitHub: h.provider.app(), Clock: h.clock.Now,
 		Retired: retired})
-	if svc != nil {
-		t.Cleanup(func() { _ = svc.Close() })
+	if err != nil {
+		return err
 	}
-	return err
+	t.Cleanup(func() { _ = svc.Close() })
+	return svc.StartRecording(context.Background())
 }
 
 // TestRetiredDeletesByHost deletes every row whose recorded sign-in

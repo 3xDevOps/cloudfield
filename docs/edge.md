@@ -1206,6 +1206,8 @@ replacement=<relay origin>` for each entry. It refuses to start, naming the
 entry and the fix, when:
 
 - an entry does not have three fields, or an origin does not parse;
+- an origin cannot stand in a signed notice: a port with a leading zero, or
+  a host name longer than 253 bytes;
 - a retired origin has the host name of a served origin, whatever the port:
   remove its pair from `--origin-pairs`, or swap first for the first pair;
 - a host name is named in two entries;
@@ -1259,15 +1261,16 @@ to come from it. A server still enrolled there shows `dial
 https://<relay-host-1>/v1/server/control: 410 Gone: https://<relay-host-1> is
 retired; this edge is at https://<relay-host-2>` in `edge status`.
 
-Before it serves, an edge with `--retired-pairs` set deletes, in one
-transaction, the device tokens, browser sessions and pending device sign-ins
+Once its listeners are bound and before it serves, an edge with
+`--retired-pairs` set deletes, in one transaction, the device tokens, browser sessions and pending device sign-ins
 issued at a retired sign-in origin, or at any sign-in origin the edge recorded
 beside the retired relay origin earlier, matched by host name whatever the
 port, and those with no recorded origin, which were not used while the pair
 was retiring. A sign-in origin that a served pair still uses keeps its rows,
 even when the edge once recorded it beside the retired relay origin; the edge
 logs `edge: keeping the sign-ins of a served sign-in origin once recorded
-beside a retired relay origin` naming it. It logs `edge: deleted the sign-ins
+beside a retired relay origin` naming it. A start that fails earlier, on a refused option or a listener that
+cannot bind, deletes nothing. It logs `edge: deleted the sign-ins
 of retired pairs and those with no recorded origin devices=<n> sessions=<n>
 authorizations=<n>`. A server keeps its record of each device and its approval,
 as after a sign-out; the person signs the device in again at the replacement.

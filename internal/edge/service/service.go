@@ -253,6 +253,9 @@ type Service struct {
 	// retiredHosts lists them in the order Config names them.
 	retired      map[string]*retiredHost
 	retiredHosts []*retiredHost
+	// retiredPairs are the retired pairs, whose sign-ins StartRecording
+	// deletes.
+	retiredPairs []Retired
 	// notices are the unsigned notices of the retiring and retired pairs.
 	notices []edgeproto.Notice
 
@@ -353,11 +356,10 @@ func New(cfg Config) (*Service, error) {
 	if s.pages, err = parsePages(); err != nil {
 		return nil, err
 	}
-	retired, err := s.newRetired(cfg.Retired)
-	if err != nil {
+	if s.retiredPairs, err = s.newRetired(cfg.Retired); err != nil {
 		return nil, err
 	}
-	s.notices = noticesOf(pairs, retired)
+	s.notices = noticesOf(pairs, s.retiredPairs)
 	if err = os.MkdirAll(cfg.DataDir, 0o700); err != nil {
 		return nil, fmt.Errorf("edge: create data directory: %w", err)
 	}
@@ -368,12 +370,6 @@ func New(cfg Config) (*Service, error) {
 		s.store.Close() //nolint:errcheck // the key error takes precedence
 		return nil, err
 	}
-	if len(retired) > 0 {
-		if err = s.deleteRetiredSignIns(context.Background(), retired); err != nil {
-			s.store.Close() //nolint:errcheck // the delete error takes precedence
-			return nil, err
-		}
-	}
 	return s, nil
 }
 
@@ -381,10 +377,16 @@ func New(cfg Config) (*Service, error) {
 // a request.
 func (s *Service) SetLink(l ServerLink) { s.link = l }
 
-// StartRecording records, when the edge records origins, the pairs it
-// serves and the start of its recording run. Call it once the edge's
-// listeners are bound.
+// StartRecording deletes the sign-ins of the retired pairs, then records,
+// when the edge records origins, the pairs it serves and the start of its
+// recording run. Call it once the edge's listeners are bound, so a start
+// that fails before it deletes nothing.
 func (s *Service) StartRecording(ctx context.Context) error {
+	if len(s.retiredPairs) > 0 {
+		if err := s.deleteRetiredSignIns(ctx, s.retiredPairs); err != nil {
+			return err
+		}
+	}
 	if !s.recordOrigins {
 		return nil
 	}

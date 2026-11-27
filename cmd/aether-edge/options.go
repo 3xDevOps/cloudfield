@@ -356,6 +356,10 @@ func parseRetiredPairs(list, scheme, signin, relay string, more []edge.Pair, ret
 			if a, err := netip.ParseAddr(h); err == nil && a.Is6() {
 				return nil, fmt.Errorf("--retired-pairs: %s is an IPv6 address; a retired pair is named by host names", origin)
 			}
+			if !edgeproto.NoticeOrigin(edge.CanonicalOrigin(origin)) {
+				return nil, fmt.Errorf("--retired-pairs: %s cannot be named in a signed notice to servers: write a host name of at most 253 bytes "+
+					"and a port without leading zeros", origin)
+			}
 			_, isRelay := relays[h]
 			_, isSignin := signinHosts[h]
 			switch {
@@ -373,6 +377,10 @@ func parseRetiredPairs(list, scheme, signin, relay string, more []edge.Pair, ret
 		replacement, err := servedRelay("--retired-pairs", fields[2], scheme, relays, signinHosts)
 		if err != nil {
 			return nil, err
+		}
+		if !edgeproto.NoticeOrigin(replacement) {
+			return nil, fmt.Errorf("--retired-pairs: %s, the replacement of %s, cannot be named in a signed notice to servers: "+
+				"write its relay origin with a port without leading zeros", replacement, fields[1])
 		}
 		for _, r := range retiring {
 			if r.RelayOrigin == replacement {
