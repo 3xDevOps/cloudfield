@@ -186,8 +186,9 @@ describe('a retiring edge address', () => {
       throw new Error('server.edge: connection reset')
     })
     await screen.findByRole('alert')
-    act(() => useStore.setState({ staleSince: 1, hydrationError: 'Cannot reach the server' }))
+    act(() => useStore.setState({ staleSince: 1 }))
     expect(screen.queryByText("Showing the last answer: reading the server's edge again failed")).toBeNull()
+    expect(screen.getAllByRole('button', { name: 'Retry' })).toHaveLength(1)
     expect(screen.getByText('https://edge-old.example.test is retiring')).toBeTruthy()
   })
 
