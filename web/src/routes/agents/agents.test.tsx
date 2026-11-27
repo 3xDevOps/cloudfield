@@ -9,8 +9,10 @@ import { lookupRoute } from '@/routes/registry'
 import '@/routes/agents'
 import { useStore } from '@/store'
 import { useLaunchDefaults } from '@/store/launch-defaults'
+import { useLoginSignIn } from '@/store/login-sign-in'
 import { agentInfo, serverInfo } from '@/test/fixtures'
 import { pickOption } from '@/test/select'
+import { StubSocket } from '@/test/stub-socket'
 
 // vi.mock factories are hoisted above static imports, so the fixture module
 // must be loaded inside the factory (same as terminal.test.tsx).
@@ -254,7 +256,17 @@ describe('Claude Code logins', () => {
   beforeEach(() => {
     useStore.setState({ capabilities: { gateway: 'local', methods: ['*'], ws: ['events', 'attach', 'terminal'] } })
     loginsServer()
+    useLoginSignIn.setState({ running: null, ended: null })
+    vi.mocked(api.agentLoginResult).mockReset()
+    StubSocket.install()
   })
+
+  const startSignIn = async (name: string) => {
+    fireEvent.click(within(claudeRow()).getByRole('button', { name: 'Add login' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), { target: { value: name } })
+    fireEvent.click(screen.getByRole('button', { name: 'Start sign-in' }))
+    expect(await screen.findByRole('heading', { name: `Sign in to ${name}` })).toBeDefined()
+  }
 
   it('shows no login controls and reads no logins on a server without added logins', async () => {
     useStore.setState({ info: { ...serverInfo, features: ['permission'] } })
@@ -300,26 +312,68 @@ describe('Claude Code logins', () => {
     expect(within(claudeRow()).queryByRole('link')).toBeNull()
   })
 
-  it('keeps a sign-in left running on the Claude Code row until it ends, and returns to it', async () => {
+  it('keeps a sign-in left running on the Claude Code row until it ends, and returns to it, with one wait on its result', async () => {
     let end: (login: never) => void = () => {}
     const result = new Promise<never>((resolve) => { end = resolve })
     vi.mocked(api.agentLoginAdd).mockResolvedValue({ login_id: 'lgn-spare000001' })
     vi.mocked(api.agentLoginResult).mockReturnValue(result)
     mount()
     await flush()
-    fireEvent.click(within(claudeRow()).getByRole('button', { name: 'Add login' }))
-    fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), { target: { value: 'spare' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Start sign-in' }))
-    expect(await screen.findByRole('heading', { name: 'Sign in to spare' })).toBeDefined()
+    await startSignIn('spare')
+    expect(api.agentLoginResult).toHaveBeenCalledTimes(1)
+    expect(api.agentLoginResult).toHaveBeenCalledWith('claude', 'lgn-spare000001', expect.any(AbortSignal))
     fireEvent.click(screen.getByRole('button', { name: 'All agents' }))
     expect(claudeRow().textContent).toContain('The sign-in of spare is still running.')
 
     fireEvent.click(within(claudeRow()).getByRole('button', { name: 'Return to the sign-in' }))
     expect(screen.getByRole('heading', { name: 'Sign in to spare' })).toBeDefined()
-    fireEvent.click(screen.getByRole('button', { name: 'All agents' }))
+    expect(api.agentLoginResult).toHaveBeenCalledTimes(1)
 
-    await act(async () => end({ id: 'lgn-spare000001', name: 'spare', automatic: true, shared: true, position: 1 } as never))
+    vi.mocked(api.agentLoginList).mockClear()
+    await act(async () => end({ id: 'lgn-spare000001', name: 'spare', kind: 'subscription', automatic: true, shared: true, position: 1 } as never))
+    expect(screen.getByText('Added login spare')).toBeDefined()
+    expect(api.agentLoginList).toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: 'All agents' }))
     expect(claudeRow().textContent).not.toContain('still running')
+  })
+
+  it('waits again when the gateway gives up on the result, and never calls the sign-in not added', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    onTestFinished(() => { vi.useRealTimers() })
+    let end: (login: never) => void = () => {}
+    vi.mocked(api.agentLoginAdd).mockResolvedValue({ login_id: 'lgn-spare000002' })
+    vi.mocked(api.agentLoginResult)
+      .mockRejectedValueOnce(new Error('agent.login.result: server did not answer agent.login.result within 31m0s'))
+      .mockReturnValueOnce(new Promise<never>((resolve) => { end = resolve }))
+    mount()
+    await flush()
+    await startSignIn('spare')
+    await act(async () => { await vi.advanceTimersByTimeAsync(2500) })
+    expect(api.agentLoginResult).toHaveBeenCalledTimes(2)
+    expect(screen.queryByText(/was not added/)).toBeNull()
+    expect(screen.getByRole('button', { name: 'Cancel sign-in' })).toBeDefined()
+    await act(async () => end({ id: 'lgn-spare000002', name: 'spare', kind: 'subscription', automatic: true, shared: true, position: 1 } as never))
+    expect(screen.getByText('Added login spare')).toBeDefined()
+  })
+
+  it('remembers a running sign-in on another page, and offers it on return before any refusal', async () => {
+    vi.mocked(api.agentLoginAdd).mockResolvedValue({ login_id: 'lgn-spare000003' })
+    vi.mocked(api.agentLoginResult).mockReturnValue(new Promise<never>(() => {}))
+    const first = mount()
+    await flush()
+    await startSignIn('spare')
+    first.unmount()
+
+    vi.mocked(api.agentLoginAdd).mockClear()
+    mount()
+    await flush()
+    expect(claudeRow().textContent).toContain('The sign-in of spare is still running.')
+    fireEvent.click(within(claudeRow()).getByRole('button', { name: 'Add login' }))
+    expect(screen.getByRole('status').textContent).toContain('The sign-in of spare is still running')
+    expect(screen.getByRole('button', { name: 'Start sign-in' })).toHaveProperty('disabled', true)
+    expect(api.agentLoginAdd).not.toHaveBeenCalled()
+    expect(api.agentLoginResult).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(api.agentLoginResult).mock.calls[0]![2]!.aborted).toBe(true)
   })
 
   it('opens Add login in the page', async () => {

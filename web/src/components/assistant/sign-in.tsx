@@ -35,13 +35,16 @@ export function AssistantSignIn({ agent, client, onDone, onBack, terminal = true
  * Runs an agent's sign-in on the terminal `socket` opens.
  * It offers the URL and code the sign-in prints; the terminal shows from the start only with `terminal`, and once the sign-in ends.
  */
-export function SignInTerminal({ agent, socket, onDone, back, cancel, terminal: terminalFirst = true, children }: {
+export function SignInTerminal({ agent, socket, onDone, back, cancel, reattaches, onAttached, terminal: terminalFirst = true, children }: {
   agent: { name: string; display_name: string }
   socket: () => string
   onDone: () => void
   back?: { label: string; onBack: () => void }
   /** Replaces Close, which leaves the sign-in running, with Cancel sign-in, which ends it; `note` says what leaving does. */
   cancel?: { onCancel: () => void; note: ReactNode }
+  /** The socket reattaches to the running sign-in, so a dropped one reconnects instead of ending it. */
+  reattaches?: boolean
+  onAttached?: () => void
   terminal?: boolean
   /** What the sign-in is for. */
   children: ReactNode
@@ -63,6 +66,13 @@ export function SignInTerminal({ agent, socket, onDone, back, cancel, terminal: 
   const [said, setSaid] = useState('')
   const [sent, setSent] = useState(false)
   const [attempt, setAttempt] = useState(0)
+  const [dropped, setDropped] = useState(false)
+  // Ctrl-C before the attach is accepted is dropped, so a cancel waits for it.
+  const [cancelling, setCancelling] = useState(false)
+  const cancelled = useRef<(() => void) | null>(null)
+  const isAttached = useRef(false)
+  const attachedHere = useRef(onAttached)
+  attachedHere.current = onAttached
   const codeText = useRef<HTMLElement>(null)
   const controller = useXterm({
     onData: (data) => attachment.current?.send(data),
@@ -89,6 +99,14 @@ export function SignInTerminal({ agent, socket, onDone, back, cancel, terminal: 
       },
       onAttached: () => {
         wasAttached = true
+        isAttached.current = true
+        if (cancelled.current) {
+          attached.send('\x03')
+          cancelled.current()
+          return
+        }
+        setDropped(false)
+        attachedHere.current?.()
         output.current = []
         decoder = new TextDecoder()
         text = ''
@@ -101,14 +119,22 @@ export function SignInTerminal({ agent, socket, onDone, back, cancel, terminal: 
         if (live.current) attached.resize(live.current.cols, live.current.rows)
       },
       // A reconnect after the sign-in finished while disconnected would
-      // start another sign-in and delete the one just made.
+      // start another sign-in and delete the one just made, unless the
+      // socket only ever reattaches.
       onState: (state) => {
-        if (state === 'reconnecting' && wasAttached) {
+        if (state === 'live' || !wasAttached) return
+        isAttached.current = false
+        if (reattaches) setDropped(true)
+        else if (state === 'reconnecting') {
           attached.close()
           setEnded(true)
         }
       },
-      onRefused: (detail) => setRefused(detail),
+      onRefused: (detail) => {
+        cancelled.current = null
+        setCancelling(false)
+        setRefused(detail)
+      },
       onWriteDenied: (detail) => setRefused(detail ?? 'Terminal input was denied'),
       // A reconnect after the sign-in exits would start another one.
       onExit: () => {
@@ -123,7 +149,7 @@ export function SignInTerminal({ agent, socket, onDone, back, cancel, terminal: 
       attached.close()
       attachment.current = null
     }
-  }, [agent.name, geometry, attempt])
+  }, [agent.name, geometry, attempt, reattaches])
   useEffect(() => {
     if (!terminal) return
     for (const chunk of output.current) terminal.write(chunk)
@@ -172,7 +198,7 @@ export function SignInTerminal({ agent, socket, onDone, back, cancel, terminal: 
           <code className="font-code break-words">{refused}</code>
         </Callout>
       )}
-      {!settled && (url ? (
+      {!settled && (url && !cancelling && !dropped ? (
         <div className="flex flex-col items-start gap-3">
           <a className={buttonVariants({ size: 'sm' })} href={url} target="_blank" rel="noopener noreferrer">Open {name} sign-in</a>
           {prompt.code && (
@@ -193,13 +219,22 @@ export function SignInTerminal({ agent, socket, onDone, back, cancel, terminal: 
           {sent && <p className="text-ui-sm text-muted">Code sent. The terminal below shows whether {name} accepted it.</p>}
         </div>
       ) : (
-        <p role="status" className="text-ui-sm text-muted">{prompt.url ? 'Open the link the sign-in printed in the terminal below.' : 'Starting the sign-in…'}</p>
+        <p role="status" className="text-ui-sm text-muted">
+          {cancelling
+            ? 'Cancelling: the sign-in ends as soon as its terminal is up.'
+            : dropped ? 'Reconnecting to the sign-in…' : prompt.url ? 'Open the link the sign-in printed in the terminal below.' : 'Starting the sign-in…'}
+        </p>
       ))}
       <div className="flex flex-wrap gap-2">
         {cancel && !ended ? (
-          <Button size="sm" variant="secondary" onClick={() => {
-            attachment.current?.send('\x03')
-            cancel.onCancel()
+          <Button size="sm" variant="secondary" disabled={cancelling} onClick={() => {
+            if (isAttached.current) {
+              attachment.current?.send('\x03')
+              cancel.onCancel()
+              return
+            }
+            cancelled.current = cancel.onCancel
+            setCancelling(true)
           }}>Cancel sign-in</Button>
         ) : (
           <Button size="sm" variant={ended ? 'primary' : 'secondary'} onClick={onDone}>{ended ? 'Done' : 'Close'}</Button>

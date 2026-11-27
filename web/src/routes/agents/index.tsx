@@ -1,6 +1,6 @@
 import { type ComponentProps, useEffect, useRef, useState } from 'react'
 import { AddAgent } from '@/components/agents/add-agent'
-import { AddLogin, type LoginSignIn } from '@/components/agents/add-login'
+import { AddLogin } from '@/components/agents/add-login'
 import { LoginList, loginAgent, useAgentLogins } from '@/components/agents/agent-logins'
 import { defaultMode, enhancedSupported, label } from '@/components/agents/agent-copy'
 import { AgentExtras } from '@/components/agents/agent-extras'
@@ -30,6 +30,7 @@ import { registerRoute, type RouteProps } from '@/routes/registry'
 import { useStore } from '@/store'
 import { rememberChoice, rememberedChoice, useLaunchDefaults, useLaunchDefaultsRead } from '@/store/launch-defaults'
 import { useCapability, useLoginsServer } from '@/store/hooks'
+import { noteLoginSignInOpened, rememberLoginSignIn, useLoginSignIn, useLoginSignInWait } from '@/store/login-sign-in'
 
 const addScreen = '@add'
 const githubScreen = '@github'
@@ -126,20 +127,10 @@ function AgentsRoute({ client = api }: RouteProps & { client?: Api }) {
     client.accountList().then((access) => live && setSharedWith(access.shared_with), () => {})
     return () => { live = false }
   }, [client, severalLogins])
-  const [signIn, setSignIn] = useState<LoginSignIn | null>(null)
+  const signIn = useLoginSignIn((s) => s.running)
+  const signInEnded = useLoginSignIn((s) => s.ended)
   const [resume, setResume] = useState(false)
-  const reloadLogins = logins.reload
-  useEffect(() => {
-    if (!signIn) return
-    let live = true
-    const ended = () => {
-      if (!live) return
-      setSignIn(null)
-      reloadLogins()
-    }
-    client.agentLoginResult(loginAgent, signIn.id).then(ended, ended)
-    return () => { live = false }
-  }, [client, signIn, reloadLogins])
+  useLoginSignInWait(client, loginAgent, () => void logins.reload())
   const addLogin = (again: boolean) => {
     setResume(again)
     setScreen(loginScreen)
@@ -178,7 +169,7 @@ function AgentsRoute({ client = api }: RouteProps & { client?: Api }) {
       <div className="min-h-0 flex-1 overflow-y-auto">
         <PageBody width="lg" className="gap-6">
           {screen === loginScreen ? (
-            <AddLogin client={client} running={signIn} resume={resume} onRunning={setSignIn} onClose={() => { logins.reload(); close() }} />
+            <AddLogin client={client} running={signIn} ended={signInEnded} resume={resume} onRunning={rememberLoginSignIn} onOpened={noteLoginSignInOpened} onClose={() => { void logins.reload(); close() }} />
           ) : screen === githubScreen ? (
             <GitHubConnect client={client} caps={caps} onConnected={setGithub} onClose={close} />
           ) : screen === addScreen ? (

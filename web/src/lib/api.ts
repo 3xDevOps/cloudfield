@@ -1006,7 +1006,7 @@ export const api = {
   /** Reserves the sign-in that agentLoginSocket then runs. */
   agentLoginAdd: (agent: string, name: string) => call<{ login_id: string }>('agent.login.add', { agent, name }),
   /** Waits for the sign-in to end: the new login, or the reason it was not added. */
-  agentLoginResult: (agent: string, loginID: string) => call<AgentLogin>('agent.login.result', { agent, login_id: loginID }),
+  agentLoginResult: (agent: string, loginID: string, signal?: AbortSignal) => call<AgentLogin>('agent.login.result', { agent, login_id: loginID }, signal),
   agentLoginRename: (agent: string, loginID: string, name: string) => call<unknown>('agent.login.rename', { agent, login_id: loginID, name }),
   agentLoginRemove: (agent: string, loginID: string) => call<unknown>('agent.login.remove', { agent, login_id: loginID }),
   /** Names every login once, `default` included, first to last. */

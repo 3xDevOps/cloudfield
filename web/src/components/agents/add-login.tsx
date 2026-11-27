@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from 'react'
+import { useId, useState } from 'react'
 import { loginAgent } from '@/components/agents/agent-logins'
 import { SignInTerminal } from '@/components/assistant/sign-in'
 import { Button } from '@/components/ui/button'
@@ -6,60 +6,61 @@ import { Callout } from '@/components/ui/callout'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import type { Api } from '@/lib/api'
+import { useClock } from '@/lib/clock'
 import { message } from '@/lib/format'
-import type { AgentLogin } from '@/lib/types'
 import { useHeaderPrimary } from '@/store/hooks'
-
-type Outcome = { login: AgentLogin } | { refused: string }
-
-/** A sign-in of a new login, which outlives the screen that started it. */
-export type LoginSignIn = { id: string; name: string }
+import type { LoginSignIn, LoginSignInOutcome } from '@/store/login-sign-in'
 
 // The server refuses a second sign-in while one runs, naming it; its terminal reattaches until it ends.
 const runningSignIn = /the sign-in of login "([^"]+)" \((lgn-[^)\s]+)\) is still running/
 
+/** The server's AgentLoginSignInTimeout, counted from the terminal's first opening. */
+const signInRunsMs = 15 * 60_000
+
+function LeaveNote({ opened }: { opened?: number }) {
+  useClock()
+  const minutes = opened === undefined ? undefined : Math.max(1, Math.ceil((opened + signInRunsMs - Date.now()) / 60_000))
+  return (
+    <>
+      You can leave this page: the sign-in keeps running for {minutes === undefined ? 'up to 15 minutes from its start' : `up to ${minutes} more minute${minutes === 1 ? '' : 's'}`}, and{' '}
+      <strong className="font-medium">Add login</strong> offers <strong className="font-medium">Return to the sign-in</strong>.
+    </>
+  )
+}
+
 /**
  * Names a new Claude Code login, runs its sign-in in a terminal of its own and shows what the server made of it.
- * `running` is a sign-in this page knows is still running, which `resume` opens at once.
+ * `running` is the sign-in the page knows is still running, which `resume` opens at once; the page waits on its result and passes it as `ended`.
  */
-export function AddLogin({ client, running, resume, onRunning, onClose }: {
-  client: Pick<Api, 'agentLoginAdd' | 'agentLoginResult' | 'agentLoginSocket'>
+export function AddLogin({ client, running, ended, resume, onRunning, onOpened, onClose }: {
+  client: Pick<Api, 'agentLoginAdd' | 'agentLoginSocket'>
   running: LoginSignIn | null
+  ended: { id: string; outcome: LoginSignInOutcome } | null
   resume?: boolean
   onRunning: (signIn: LoginSignIn) => void
+  /** The terminal of a sign-in this panel started opened for the first time. */
+  onOpened: (id: string) => void
   onClose: () => void
 }) {
   const [name, setName] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [signIn, setSignIn] = useState<LoginSignIn | null>(resume ? running : null)
-  const [outcome, setOutcome] = useState<Outcome | null>(null)
+  const [signIn, setSignIn] = useState<(LoginSignIn & { fresh?: boolean }) | null>(resume ? running : null)
   const field = useId()
   useHeaderPrimary(true)
 
-  useEffect(() => {
-    if (!signIn) return
-    let live = true
-    client.agentLoginResult(loginAgent, signIn.id).then(
-      (login) => live && setOutcome({ login }),
-      (err: unknown) => live && setOutcome({ refused: message(err) }),
-    )
-    return () => { live = false }
-  }, [client, signIn])
-
-  const again = () => {
-    setSignIn(null)
-    setOutcome(null)
-  }
   const open = (next: LoginSignIn) => {
     setError(null)
     setSignIn(next)
   }
 
-  const refusedBy = error ? runningSignIn.exec(error) : null
-  const blocking = refusedBy ? { id: refusedBy[2], name: refusedBy[1] } : running
+  const named = error ? runningSignIn.exec(error) : null
+  // A refusal naming a sign-in that has since ended no longer blocks.
+  const refusedBy = named && ended?.id !== named[2] ? { id: named[2], name: named[1] } : null
+  const blocking = refusedBy ?? running
 
   if (signIn) {
+    const outcome = ended?.id === signIn.id ? ended.outcome : null
     return (
       <div className="flex flex-col gap-3">
         <h2 className="text-title">Sign in to <span className="font-code">{signIn.name}</span></h2>
@@ -68,7 +69,7 @@ export function AddLogin({ client, running, resume, onRunning, onClose }: {
             {[outcome.login.kind === 'console' ? 'Console, billed per use' : outcome.login.plan ? `Subscription · ${outcome.login.plan}` : 'Subscription', outcome.login.email, outcome.login.organization_name].filter(Boolean).join(' · ')}
           </Callout>
         ) : (
-          <Callout tone="failed" role="alert" title={`Login ${signIn.name} was not added`} actions={<Button size="sm" variant="secondary" onClick={again}>Start again</Button>}>
+          <Callout tone="failed" role="alert" title={`Login ${signIn.name} was not added`} actions={<Button size="sm" variant="secondary" onClick={() => setSignIn(null)}>Start again</Button>}>
             <span className="font-code">{outcome.refused}</span>
           </Callout>
         ))}
@@ -76,11 +77,10 @@ export function AddLogin({ client, running, resume, onRunning, onClose }: {
           key={signIn.id}
           agent={{ name: loginAgent, display_name: 'Claude Code' }}
           socket={() => client.agentLoginSocket(signIn.id)}
+          reattaches
+          onAttached={signIn.fresh ? () => onOpened(signIn.id) : undefined}
           onDone={onClose}
-          cancel={outcome ? undefined : {
-            onCancel: onClose,
-            note: <>Leaving this page keeps the sign-in running, for up to 15 minutes from its start; <strong className="font-medium">Add login</strong> then offers <strong className="font-medium">Return to the sign-in</strong>.</>,
-          }}
+          cancel={outcome ? undefined : { onCancel: onClose, note: <LeaveNote opened={running?.id === signIn.id ? running.opened : undefined} /> }}
         >
           Sign in with the account for <span className="font-code">{signIn.name}</span>. The sign-in runs <span className="font-code">claude auth login</span> in a container of its own; your other logins are not touched.
         </SignInTerminal>
@@ -102,7 +102,7 @@ export function AddLogin({ client, running, resume, onRunning, onClose }: {
           ({ login_id: id }) => {
             setBusy(false)
             onRunning({ id, name: chosen })
-            setSignIn({ id, name: chosen })
+            setSignIn({ id, name: chosen, fresh: true })
           },
           (err: unknown) => {
             setBusy(false)
@@ -121,16 +121,16 @@ export function AddLogin({ client, running, resume, onRunning, onClose }: {
       </p>
       <div className="flex flex-col gap-1">
         <Label htmlFor={field}>Name</Label>
-        <Input id={field} value={name} autoFocus autoComplete="off" spellCheck={false} placeholder="work" className="max-w-xs" onChange={(event) => setName(event.target.value)} />
+        <Input id={field} value={name} autoFocus autoComplete="off" spellCheck={false} placeholder="work" disabled={blocking !== null} className="max-w-xs" onChange={(event) => setName(event.target.value)} />
         <p className="text-ui-sm text-muted">Lowercase letters, digits and <span className="font-code">-</span>, up to 32 characters.</p>
       </div>
-      {error ? (
-        <Callout tone="failed" role="alert" title="Not started" actions={returnButton}>
-          <span className="font-code">{error}</span>
+      {blocking && (refusedBy || !error) ? (
+        <Callout tone="neutral" role="status" title={<>The sign-in of <span className="font-code">{blocking.name}</span> is still running</>} actions={returnButton}>
+          {refusedBy ? <span className="font-code">{error}</span> : 'Finish or cancel it before you add another login.'}
         </Callout>
-      ) : running && (
-        <Callout tone="neutral" role="status" title={<>The sign-in of <span className="font-code">{running.name}</span> is still running</>} actions={returnButton}>
-          Finish or cancel it before you add another login.
+      ) : error && (
+        <Callout tone="failed" role="alert" title="Sign-in not started" actions={returnButton}>
+          <span className="font-code">{error}</span>
         </Callout>
       )}
       <div className="flex gap-2">
