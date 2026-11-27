@@ -21,6 +21,7 @@ import (
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	"github.com/3xDevOps/cloudfield/internal/server"
 	"github.com/3xDevOps/cloudfield/internal/serversetup"
+	"github.com/3xDevOps/cloudfield/internal/shellquote"
 	"github.com/3xDevOps/cloudfield/internal/sshd"
 	"github.com/3xDevOps/cloudfield/internal/store"
 	"golang.org/x/crypto/ssh"
@@ -198,7 +199,7 @@ func edgeStatus(w io.Writer, dataDir, edgeURL, configPath string, policy edgepro
 	case noticesErr != nil:
 		_, _ = fmt.Fprintf(tw, "notices\tunreadable, so none is shown: %s\n", edgeagent.Clean(noticesErr.Error()))
 	case noticed:
-		line := edgeagent.NoticeLine(notice, cmds.Server("edge move "+notice.Replacement))
+		line := edgeagent.NoticeLine(notice, cmds.Server("edge move "+shellquote.Quote(notice.Replacement)))
 		if notices.FirstUse {
 			line += " (the edge sent this with the connection that pinned its key, so it is trusted on first use and shown only)"
 		}
@@ -497,7 +498,7 @@ func applyMove(w io.Writer, dataDir, edgeURL, configPath string, held *edgeagent
 	_, _ = fmt.Fprintln(w, enrolled)
 	_, _ = written.WriteTo(w)
 	if !m.Retired && !m.Retiring {
-		_, _ = fmt.Fprintf(w, "to move back:\n  %saether-server edge move %s%s\n", sudoPrefix(), edgeURL, configFlag(configPath))
+		_, _ = fmt.Fprintf(w, "to move back:\n  %saether-server edge move %s%s\n", sudoPrefix(), shellquote.Quote(edgeURL), configFlag(configPath))
 	}
 	return nil
 }

@@ -271,6 +271,10 @@ func TestMoveGivesTheManualSteps(t *testing.T) {
 		", sudo cloudfield-server edge trust (it shows the fingerprint to compare; type yes) and sudo systemctl restart aether-server"; err == nil || err.Error() != want {
 		t.Errorf("no key pinned: %v\nwant: %s", err, want)
 	}
+	const v6 = "https://[2001:db8::1]:8443"
+	if _, err = moveHeld(t, moveAgentAt(t, from, nil), v6); err == nil || !strings.Contains(err.Error(), "config set edge-url '"+v6+"', ") {
+		t.Errorf("no key pinned, IPv6 target: %v, want the address quoted", err)
+	}
 
 	closed, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

@@ -19,6 +19,7 @@ import (
 	"unicode"
 
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
+	"github.com/3xDevOps/cloudfield/internal/shellquote"
 	"github.com/3xDevOps/cloudfield/internal/version"
 	"github.com/coder/websocket"
 )
@@ -314,7 +315,7 @@ func (a *Agent) session(ctx context.Context) (time.Duration, error) {
 	}
 	if stored, serr := a.state.Notices(a.serverID); serr == nil && !stored.Received.Before(start) {
 		if n, ok := stored.For(a.origin); ok {
-			slog.Warn("edge: "+NoticeLine(n, "sudo cloudfield-server edge move "+n.Replacement+" (with the service's --config <file>, if it has one)"), "edge", a.origin, "replacement", n.Replacement, "date", n.Date, "first_use", e.pinned)
+			slog.Warn("edge: "+NoticeLine(n, "sudo cloudfield-server edge move "+shellquote.Quote(n.Replacement)+" (with the service's --config <file>, if it has one)"), "edge", a.origin, "replacement", n.Replacement, "date", n.Date, "first_use", e.pinned)
 		}
 	}
 	if err = a.reconcileOwner(s, ready.State); err != nil {

@@ -15,6 +15,7 @@ import (
 
 	edgeclient "github.com/3xDevOps/cloudfield/internal/edge/client"
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
+	"github.com/3xDevOps/cloudfield/internal/shellquote"
 )
 
 // Commands spell the commands an administrator runs on this server's
@@ -185,7 +186,7 @@ func refuseRetiringTarget(notices []edgeproto.Notice, cmds Commands, from, to st
 			retiringClause(n), from)
 	}
 	return fmt.Errorf("the edge says, signed with the pinned key, that %s; move there instead: %s",
-		retiringClause(n), cmds.Server("edge move "+n.Replacement))
+		retiringClause(n), cmds.Server("edge move "+shellquote.Quote(n.Replacement)))
 }
 
 // checkMove checks that the edge answering at origin speaks
@@ -226,7 +227,7 @@ func checkMoveFromRetired(e enrollment, refused *DialError, cmds Commands, from,
 	}
 	if replacement, err := edgeclient.Canonical(n.Replacement); err != nil || replacement != to {
 		return fmt.Errorf("the edge at %s says, signed with the pinned key, that %s is retired in favour of %s; move there instead: %s",
-			to, from, n.Replacement, cmds.Server("edge move "+n.Replacement))
+			to, from, n.Replacement, cmds.Server("edge move "+shellquote.Quote(n.Replacement)))
 	}
 	return nil
 }
@@ -264,7 +265,7 @@ func manualMove(cmds Commands, from, to string, pinned bool) string {
 		trust = ", " + cmds.Server("edge trust") + " (it shows the fingerprint to compare; type yes)"
 	}
 	return fmt.Sprintf("If %s no longer answers for this edge: confirm %s and the edge key's fingerprint with whoever runs the edge, "+
-		"then run %s%s and %s", from, to, cmds.Server("config set edge-url "+to), trust, cmds.Restart)
+		"then run %s%s and %s", from, to, cmds.Server("config set edge-url "+shellquote.Quote(to)), trust, cmds.Restart)
 }
 
 // probe enrolls at origin under the pinned key only, and closes the
