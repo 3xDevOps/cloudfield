@@ -178,7 +178,8 @@ func TestIntegrationRunningSessionsStayOnTheirLogin(t *testing.T) {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if run.Run.AccountLogin != "" || !strings.HasPrefix(run.Run.Reason, "Usage limit reached on Ada's account") {
-		t.Fatalf("run failed on login %q with %q; want the default login and the usage-limit reason", run.Run.AccountLogin, run.Run.Reason)
+	const reason = "Usage limit reached on Ada's account; no other account is shared to fall back on; running sessions do not move to another login yet: start a new session to use Ada's login second"
+	if run.Run.AccountLogin != "" || run.Run.Reason != reason {
+		t.Fatalf("run failed on login %q with %q; want the default login and %q", run.Run.AccountLogin, run.Run.Reason, reason)
 	}
 }
