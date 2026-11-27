@@ -107,3 +107,21 @@ func TestProvisionalReportNamesWhatTheTurnReported(t *testing.T) {
 		t.Fatalf("inbox = %+v, %v; want %q", inbox, rpcErr, want)
 	}
 }
+
+// TestAnsweredAfterSuccessChangesNothing: a turn that reported success and
+// then that it replied keeps its success; the scheduler is not told.
+func TestAnsweredAfterSuccessChangesNothing(t *testing.T) {
+	outcomes := &recordingOutcomes{since: time.Now().UTC()}
+	h := newHarness(t, 1, func(c *Config) {
+		c.Evidence = &coordReportEvidenceCapture{id: "answered-packet"}
+		c.Outcomes = outcomes
+	})
+	run := h.run(0)
+	report(t, h, run, protocol.CoordOutcomeSuccess, "merged #7", "done")
+	report(t, h, run, protocol.CoordOutcomeAnswered, "said so", "replied")
+	outcomes.mu.Lock()
+	defer outcomes.mu.Unlock()
+	if len(outcomes.calls) != 1 || outcomes.calls[0].status != domain.RunCompleted {
+		t.Fatalf("scheduler got %+v, want only the success", outcomes.calls)
+	}
+}

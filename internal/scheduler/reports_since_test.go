@@ -45,6 +45,16 @@ func TestReportsSince(t *testing.T) {
 	if !next.After(started) {
 		t.Fatalf("the next turn's stretch began %v, want later than %v", next, started)
 	}
+	if since := state(permissionInput("open")); !since.IsZero() {
+		t.Fatalf("stretch still began %v after the agent asked a member", since)
+	}
+	if since := state(permissionInput("close")); !since.IsZero() {
+		t.Fatalf("stretch still began %v after a member answered", since)
+	}
+	next = state(agentstatus.Report{State: agentstatus.Working, TurnStart: true})
+	if next.IsZero() {
+		t.Fatal("the turn after a member's answer began no stretch")
+	}
 	if since := state(agentstatus.Report{State: agentstatus.Idle, Reason: agentstatus.ReasonIdle}); !since.After(next) {
 		t.Fatalf("the turn's end left the stretch at %v", since)
 	}
