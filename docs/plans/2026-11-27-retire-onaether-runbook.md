@@ -7,12 +7,12 @@ still on the old pair warned first, counted, and then answered with a `410`
 that names the new address.
 
 **Status:** written 2026-11-27, not run. Every step is the owner's, or an
-agent's he runs on the hosted edge's host. The retirement date is `<DATE>`
-(`YYYY-MM-DD`), which the owner chooses; the edge only shows it. It follows
+agent's he runs on the hosted edge's host. The retirement date is
+`2026-12-15`, which the owner chose on 2026-11-27; the edge only shows
+it. It follows
 [the retirement plan](2026-11-26-retire-address-pair.md) and the operator
 part of [edge-retire.md](../edge-retire.md#for-edge-operators). Sentences
-marked `TODO(after #1131)`, `TODO(after #1132)` or `TODO(after #1133)`
-describe pull requests that are not merged yet.
+marked `TODO(after #1131)` describe a pull request that is not merged yet.
 
 ## Assumptions
 
@@ -116,7 +116,7 @@ because the option names a pair by its relay origin. Retiring it later
 does need the swap (step 14). Add to the service's `environment:`:
 
 ```yaml
-      AETHER_EDGE_RETIRING_PAIRS: https://edge.onaether.dev https://edge.cloudfield.ai <DATE>
+      AETHER_EDGE_RETIRING_PAIRS: https://edge.onaether.dev https://edge.cloudfield.ai 2026-12-15
 ```
 
 ```sh
@@ -125,8 +125,8 @@ sudo docker logs aether-edge 2>&1 | grep 'aether-edge: retiring'
 ```
 
 Expect `aether-edge: retiring relay=https://edge.onaether.dev
-replacement=https://edge.cloudfield.ai date=<DATE>`. A date that is not
-real is refused: `aether-edge: --retiring-pairs: the date "<DATE>" of
+replacement=https://edge.cloudfield.ai date=2026-12-15`. A date that is not
+real is refused: `aether-edge: --retiring-pairs: the date "<date>" of
 https://edge.onaether.dev is not a real date written YYYY-MM-DD, such as
 2027-03-01`.
 
@@ -137,15 +137,20 @@ curl -sS -D - -o /dev/null -H 'Aether-Edge-Version: 6' https://edge.onaether.dev
 curl -s -H 'Accept: text/html' https://auth.onaether.dev/signin | grep 'is retiring'
 ```
 
-Expect `Aether-Edge-Retiring: https://edge.cloudfield.ai; date=<DATE>`, and
+Expect `Aether-Edge-Retiring: https://edge.cloudfield.ai; date=2026-12-15`, and
 `<p class="warning" role="status">This address of the edge is retiring on
-<DATE>. Its new address is <code>https://auth.cloudfield.ai</code>: sign in
+2026-12-15. Its new address is <code>https://auth.cloudfield.ai</code>: sign in
 there.</p>`. The same request to `https://edge.cloudfield.ai/v1/edge`
 carries no such header.
 
-TODO(after #1132): on a server enrolled at `https://edge.onaether.dev`,
-`sudo cloudfield-server edge status` shows a `retiring` row with the move
-command, and super admins see a warning in the dashboard.
+On a server enrolled at `https://edge.onaether.dev` whose build has #1132,
+once it has connected again, `sudo cloudfield-server edge status` prints
+`retiring     https://edge.onaether.dev is retiring on 2026-12-15; move this
+server with: sudo cloudfield-server edge move https://edge.cloudfield.ai`,
+the journal logs the same as a warning at each connection, and super admins
+see a warning with the move and restart commands on Settings, Remote access
+and a card on Needs you
+([edge-retire.md](../edge-retire.md#moving-a-server)).
 
 - Undo: remove the line and run the same `docker compose up`. Origins
   recorded meanwhile stay in `edge.db` ([privacy.md](../privacy.md)).
@@ -208,7 +213,7 @@ Recommendation, the owner decides: at least 30 days after step 4. A
 browser session ends after 30 days unused, and a device token never
 expires, so every token not used during the wait is deleted in step 15
 and its person signs in again. The edge's own refusal names 30 days as the
-example. `<DATE>` is only text: to change it, edit the line and restart.
+example. The date is only text: to change it, edit the line and restart.
 
 - Undo: n/a.
 - Cost to users: none.
@@ -333,7 +338,7 @@ its own app and secret. No pair is preferred: servers see only the order of
       AETHER_EDGE_GITHUB_CLIENT_ID: <onaether-client-id>
       AETHER_EDGE_GITHUB_CLIENT_SECRET_FILE: /run/secrets/github-client-secret
       AETHER_EDGE_ORIGIN_PAIRS: https://auth.cloudfield.ai https://edge.cloudfield.ai <cloudfield-client-id> /run/secrets/github-client-secret-2
-      AETHER_EDGE_RETIRING_PAIRS: https://edge.onaether.dev https://edge.cloudfield.ai <DATE>
+      AETHER_EDGE_RETIRING_PAIRS: https://edge.onaether.dev https://edge.cloudfield.ai 2026-12-15
 
       # after
       AETHER_EDGE_SIGNIN_ORIGIN: https://auth.cloudfield.ai
@@ -341,7 +346,7 @@ its own app and secret. No pair is preferred: servers see only the order of
       AETHER_EDGE_GITHUB_CLIENT_ID: <cloudfield-client-id>
       AETHER_EDGE_GITHUB_CLIENT_SECRET_FILE: /run/secrets/github-client-secret-2
       AETHER_EDGE_ORIGIN_PAIRS: https://auth.onaether.dev https://edge.onaether.dev <onaether-client-id> /run/secrets/github-client-secret
-      AETHER_EDGE_RETIRING_PAIRS: https://edge.onaether.dev https://edge.cloudfield.ai <DATE>
+      AETHER_EDGE_RETIRING_PAIRS: https://edge.onaether.dev https://edge.cloudfield.ai 2026-12-15
 ```
 
 On systemd, swap the two secret files' contents instead of the paths: the
@@ -444,9 +449,13 @@ before this step.
   A server still at `edge.onaether.dev` is unreachable through the edge
   until its admin moves it; connectors added at `https://edge.onaether.dev/mcp`
   fail; join and claim links made there stop working.
-  TODO(after #1132): `edge move` from the retired address works on a server
-  with that pull request. TODO(after #1133): `cloudfield logout --edge
-  https://edge.onaether.dev` removes the dead local token. TODO(after #1131):
+  On a server whose build has #1132, `sudo cloudfield-server edge move
+  https://edge.cloudfield.ai` still moves it, on the signed `retired` notice
+  the new address sends, and takes effect at the restart
+  ([edge-retire.md](../edge-retire.md#if-the-address-is-retired-before-the-server-moved)).
+  With a CLI that has #1133, `cloudfield logout --edge
+  https://edge.onaether.dev` deletes the dead local token and prints that
+  the edge did not confirm the sign-out. TODO(after #1131):
   `cloudfield mcp` marks connectors at the retired address.
 
 ## Phase 5: after
@@ -498,7 +507,7 @@ counts cannot show that nobody is left.
 | 4. Mark retiring | yes | Remove `AETHER_EDGE_RETIRING_PAIRS`, restart; recorded origins stay |
 | 5. Report | yes | Read-only |
 | 6. Metrics | yes | Read-only |
-| 7. Wait | yes | Change `<DATE>`, restart |
+| 7. Wait | yes | Change the date, restart |
 | 8. Contact owners | no | Mail cannot be recalled |
 | 9. Listings | partly | As each directory allows |
 | 10. Updater and probes | yes | Set the old URL back |
