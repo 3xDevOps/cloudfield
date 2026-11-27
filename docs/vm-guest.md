@@ -544,16 +544,24 @@ holds for it. A restore starts Cloud Hypervisor with `--restore` in its
 default mode, which writes every saved page into the guest's memory before
 the VM can be resumed.
 
-The page cache the snapshot writes is charged to the VM's unit, so the
-save writes `max` to the unit's `memory.max` once the guest is paused and
-can take no more memory. A save that fails writes the limit back before it
-resumes the guest; a saved VM's unit ends, and its next one starts with
-`MemoryMax`. Held to that limit, every save of a 2 GiB VM whose session
-held 1800 MiB reached it, and in 7 of 80 the kernel killed Cloud
-Hypervisor (`Memory cgroup out of memory: Killed process ...
-(cloud-hyperviso)`), which lost the session's memory; with the limit off,
-80 of 80 saved and woke
+The page cache the snapshot writes is charged to the VM's unit. Held to
+the unit's `MemoryMax`, the save of a VM whose session filled it reached
+the limit, and the kernel could then kill Cloud Hypervisor (`Memory cgroup
+out of memory: Killed process ... (cloud-hyperviso)`), which lost the
+session's memory. So the save writes `max` to the unit's `memory.max` once
+the guest is paused and can take no more memory
 (`TestKVMSaveOfAFullVMNeverReachesTheUnitsMemoryLimit`).
+
+A saved VM's unit ends, and its next one starts with `MemoryMax`. A guest
+that stays paused in its unit, after a save that failed or one a stopping
+server cut short, keeps `max` until it is resumed. The resume writes the
+limit from the VM's record once Cloud Hypervisor has answered, which it
+does only when it is done writing a snapshot, and once the files of a
+snapshot that saved nothing are removed: resumed with the limit under
+their page cache, the monitor was killed the same way
+(`TestKVMAResumeAfterASnapshotGivesTheUnitItsMemoryLimitBack`).
+`systemctl daemon-reload` during a snapshot is not covered: systemd writes
+a unit's `MemoryMax` again from its own state.
 
 Cloud Hypervisor v54.1 can load that memory on demand instead
 (`memory_restore_mode=ondemand`): it resumes at once and copies each page in
