@@ -152,16 +152,7 @@ func serve(args []string) (err error) {
 	}
 	svc.SetLink(rl)
 
-	// No read or write timeout: relayed streams are long-lived WebSockets.
-	web := &http.Server{
-		Handler:           svc.Handler(),
-		ReadHeaderTimeout: 10 * time.Second,
-		IdleTimeout:       2 * time.Minute,
-		MaxHeaderBytes:    64 << 10,
-		// net/http answers OPTIONS * itself, on any host, before Handler.
-		DisableGeneralOptionsHandler: len(o.retired) > 0,
-		ErrorLog:                     slog.NewLogLogger(slog.Default().Handler(), slog.LevelWarn),
-	}
+	web := webServer(o, svc.Handler())
 	var listener listenerState
 	metrics := &http.Server{Handler: metricsHandler(svc, rl, &listener), ReadHeaderTimeout: 10 * time.Second}
 
@@ -246,6 +237,20 @@ func serve(args []string) (err error) {
 		err = errors.Join(err, ignoreClosed(public.Close()))
 	}
 	return errors.Join(err, web.Shutdown(shutdownCtx), metrics.Shutdown(shutdownCtx))
+}
+
+// webServer is the edge's HTTP server for handler. It has no read or
+// write timeout: relayed streams are long-lived WebSockets.
+func webServer(o options, handler http.Handler) *http.Server {
+	return &http.Server{
+		Handler:           handler,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    64 << 10,
+		// net/http answers OPTIONS * itself, on any host, before Handler.
+		DisableGeneralOptionsHandler: len(o.retired) > 0,
+		ErrorLog:                     slog.NewLogLogger(slog.Default().Handler(), slog.LevelWarn),
+	}
 }
 
 // edgeTLS obtains certificates for exactly the edge's host names with

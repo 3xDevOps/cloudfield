@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -20,6 +22,7 @@ import (
 	"time"
 
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
+	"github.com/3xDevOps/cloudfield/internal/edge/relay"
 	edge "github.com/3xDevOps/cloudfield/internal/edge/service"
 )
 
@@ -320,6 +323,53 @@ func TestServeDeletesNothingBeforeItServes(t *testing.T) {
 		var n int
 		if err = db.QueryRow(`SELECT COUNT(*) FROM devices`).Scan(&n); err != nil || n != 1 {
 			t.Errorf("%s: %d devices, %v; a start that failed deleted the device token", tt.name, n, err)
+		}
+	}
+}
+
+// TestRetiredOptionsStar sends OPTIONS * to the server webServer builds
+// for an edge with a retired pair: a retired host answers 410, a served
+// one 200 as net/http does.
+func TestRetiredOptionsStar(t *testing.T) {
+	o, err := parseOptions([]string{"--dev-listen", "127.0.0.1:0", "--signin-origin", "http://localhost:8080", "--relay-origin", "http://127.0.0.1:8080",
+		"--github-client-id", "fake-client-id", "--retired-pairs", "http://127.0.0.2:8080 http://127.0.0.3:8080 http://127.0.0.1:8080"},
+		envOf(map[string]string{"AETHER_EDGE_GITHUB_CLIENT_SECRET": fakeSecret}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc, err := edge.New(edge.Config{DataDir: t.TempDir(), SigninOrigin: o.signinOrigin, RelayOrigin: o.relayOrigin, GitHub: o.github, Retired: o.retired})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = svc.Close() })
+	rl, err := relay.New(t.Context(), svc.RelayConfig(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rl.Shutdown(context.Background()) })
+	svc.SetLink(rl)
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	web := webServer(o, svc.Handler())
+	go func() { _ = web.Serve(ln) }()
+	t.Cleanup(func() { _ = web.Close() })
+	for host, want := range map[string]string{"127.0.0.2:8080": "HTTP/1.1 410 Gone", "127.0.0.3:8080": "HTTP/1.1 410 Gone",
+		"localhost:8080": "HTTP/1.1 200 OK", "127.0.0.1:8080": "HTTP/1.1 200 OK"} {
+		conn, err := net.Dial("tcp", ln.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.WriteString(conn, "OPTIONS * HTTP/1.1\r\nHost: "+host+"\r\nConnection: close\r\n\r\n")
+		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		_ = conn.Close()
+		if got := resp.Proto + " " + resp.Status; got != want {
+			t.Errorf("OPTIONS * on %s: %s, want %s", host, got, want)
 		}
 	}
 }

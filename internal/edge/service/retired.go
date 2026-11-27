@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"mime"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -246,6 +247,24 @@ func retiredKind(path string) int {
 	return 3
 }
 
+// acceptsHTML reports whether r's Accept header names text/html with a
+// nonzero quality.
+func acceptsHTML(r *http.Request) bool {
+	for _, v := range r.Header.Values("Accept") {
+		for media := range strings.SplitSeq(v, ",") {
+			typ, params, err := mime.ParseMediaType(media)
+			if err != nil || typ != "text/html" {
+				continue
+			}
+			q, ok := params["q"]
+			if f, err := strconv.ParseFloat(q, 64); !ok || (err == nil && f > 0) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // serveRetired answers a request to a retired host: 410 Gone with the
 // JSON error, or for a browser page the static page, which also clears
 // the edge's cookies on the host.
@@ -255,8 +274,7 @@ func (s *Service) serveRetired(w http.ResponseWriter, r *http.Request, h *retire
 	hdr.Set("Cache-Control", "no-store")
 	hdr.Set("X-Content-Type-Options", "nosniff")
 	hdr.Set("Referrer-Policy", "no-referrer")
-	page := r.Method == http.MethodGet && !strings.HasPrefix(r.URL.Path, "/v1/") && r.Header.Get("Upgrade") == "" &&
-		strings.Contains(strings.Join(r.Header.Values("Accept"), ","), "text/html")
+	page := r.Method == http.MethodGet && !strings.HasPrefix(r.URL.Path, "/v1/") && r.Header.Get("Upgrade") == "" && acceptsHTML(r)
 	if !page {
 		hdr.Set(edgeproto.HeaderVersion, strconv.Itoa(edgeproto.Version))
 		hdr.Set("Content-Type", "application/json")

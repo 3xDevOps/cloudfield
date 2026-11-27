@@ -1240,7 +1240,7 @@ client supports, and neither orders nor renews one: once that certificate
 expires, or for a client that supports none of those cached, the handshake
 fails. It reads each such certificate once and keeps it in memory, and looks
 for a missing one again at most every five minutes. Behind a reverse proxy the proxy's certificates apply. Every request to
-either host except `GET /healthz` gets `410 Gone` with `Cache-Control: no-store` and no `Location` or
+either host that net/http admits, except `GET /healthz`, gets `410 Gone` with `Cache-Control: no-store` and no `Location` or
 `WWW-Authenticate` header. Nothing is relayed, signed in or issued, and no such
 request reads the database or reaches a server. API, WebSocket and connector
 requests, the server control path included, get, before any handshake:
@@ -1253,8 +1253,8 @@ The error names the origin of the host asked, the sign-in origin on the sign-in
 host. A WebSocket upgrade, and any request under `/v1/server/` or
 `/v1/connect/`, gets the error without the two commands, `<old> is retired;
 this edge is at <new>`, since a client reads only the first 1024 bytes of a
-refused upgrade. A browser page request (a `GET` with `Accept: text/html`
-outside `/v1/`) gets a static page with the same commands, naming the replacement's sign-in
+refused upgrade. A browser page request (a `GET` outside `/v1/` whose
+`Accept` names `text/html` with a nonzero quality) gets a static page with the same commands, naming the replacement's sign-in
 origin on the sign-in host and its relay origin on the relay host; on a join
 link it says to ask whoever sent the link for a new one. The page loads nothing,
 shows nothing of the request, and clears the edge's `__Host-` cookies on that
