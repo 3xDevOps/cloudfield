@@ -56,22 +56,28 @@ function useChildren(run: RunRecord, client: Api): { result: RunChildrenResult |
   const touched = useChildTouches((s) => s.touched[run.id] ?? 0)
   const [state, setState] = useState<{ runID: string; result: RunChildrenResult | null; error: string | null }>({ runID: run.id, result: null, error: null })
   const [retries, setRetries] = useState(0)
-  const [reading, setReading] = useState(false)
+  const [retrying, setRetrying] = useState(false)
   useEffect(() => {
     if (!readable) return
     let live = true
-    setReading(true)
     client.runChildren(run.id).then(
       (result) => live && setState({ runID: run.id, result, error: null }),
       (err: unknown) => live && setState((current) => ({ runID: run.id, result: current.runID === run.id ? current.result : null, error: errorSentence(err) })),
-    ).finally(() => live && setReading(false))
+    ).finally(() => live && setRetrying(false))
     return () => {
       live = false
-      setReading(false)
     }
   }, [client, readable, run.id, changed, touched, retries])
   const shown = state.runID === run.id ? state : { result: null, error: null }
-  return { ...shown, retrying: reading && shown.error !== null, retry: () => setRetries((n) => n + 1) }
+  return {
+    ...shown,
+    // Only a press shows Retrying…; a read that stopped being possible has nothing in flight.
+    retrying: retrying && readable,
+    retry: () => {
+      setRetrying(true)
+      setRetries((n) => n + 1)
+    },
+  }
 }
 
 function Account({ child }: { child: Child }) {
