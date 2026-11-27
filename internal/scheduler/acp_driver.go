@@ -174,13 +174,22 @@ func (d *acpDriver) Resume(ctx context.Context, entry *supervised, att runtime.A
 	}
 	d.s.mu.Lock()
 	swap := entry.accountSwap
+	sending := swap != nil && swap.Sending
+	owed := swap != nil && swap.Continuation != "" && !sending
 	d.s.mu.Unlock()
-	if !d.continuationOwed(entry) {
+	switch {
+	case sending:
+		// A previous server process may have sent the continuation, which
+		// the agent may be working on: its conversation is taken up, never
+		// replaced, and nothing is sent.
+		d.connect(ctx, entry, openSent)
+		d.s.clearAccountSwap(entry, swap)
+	case owed:
+		d.connect(ctx, entry, openContinue)
+		d.sendContinuation(entry, swap)
+	default:
 		d.connect(ctx, entry, openRestore)
-		return nil
 	}
-	d.connect(ctx, entry, openContinue)
-	d.sendContinuation(entry, swap)
 	return nil
 }
 
@@ -402,6 +411,10 @@ const (
 	// saved, and fails rather than start a conversation the member did not
 	// have.
 	openWake
+	// openSent is openWake after a restart that found a move's continuation
+	// being sent, which the agent may be working on: a Background run's task
+	// is not started again either.
+	openSent
 )
 
 func (d *acpDriver) connect(ctx context.Context, entry *supervised, how acpOpen) {
@@ -496,7 +509,7 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 	var exec, bridge runtime.ManagedExec
 	var keeper *acpkeeper.Client
 	var adopt *acphost.Adoption
-	if (how == openRestore || how == openWake) && kept {
+	if (how == openRestore || how == openWake || how == openSent) && kept {
 		exec, keeper, bridge, err = d.reattach(ctx, entry, managed, cid)
 		if err == nil {
 			state := keeper.State()
@@ -576,7 +589,7 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 		Cwd:            d.s.cfg.WorktreeMount,
 		MCPServers:     mcp,
 		SessionID:      sessionID,
-		RequireRestore: how == openSwitch || how == openContinue || how == openWake,
+		RequireRestore: how == openSwitch || how == openContinue || how == openWake || how == openSent,
 		Logger:         slog.Default().With("run", runID),
 		AutoAllow:      oneShot,
 		SystemPrompt:   systemPrompt,
@@ -753,6 +766,8 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 	case oneShot && effortErr != nil:
 		d.endOneShot(entry, false, agentstatus.Report{State: agentstatus.Idle, Reason: "effort not set: " + effortErr.Error()})
 	case how == openContinue:
+	case oneShot && how == openSent:
+		// Its turn's end, or a member's prompt, decides how it ends.
 	case oneShot && adopt != nil && sess.State().TurnInFlight:
 		// The adopted turn runs on; its end ends the run.
 	case oneShot:

@@ -23,6 +23,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/memberhome"
 	"github.com/3xDevOps/cloudfield/internal/quota"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
+	acp "github.com/coder/acp-go-sdk"
 )
 
 // loginUsage reports each login's used share of its Claude five-hour window,
@@ -272,57 +273,124 @@ func TestAnIsolatedSessionDoesNotMoveToAConsoleLogin(t *testing.T) {
 	}
 }
 
+// readHook runs during once, on the first usage read.
+type readHook struct {
+	fallback.QuotaReader
+	once   sync.Once
+	during func()
+}
+
+func (u *readHook) Read(ctx context.Context, account domain.MemberID, refresh bool) ([]quota.Provider, error) {
+	u.once.Do(u.during)
+	return u.QuotaReader.Read(ctx, account, refresh)
+}
+
 // A restart that finds the continuation recorded as being sent does not
 // send it again, since the agent may be working on it: the session keeps
-// running and its log says the prompt may not have arrived.
+// running and its log says the prompt may not have arrived. A Background
+// session's last turn is the one that hit the limit: it is not ended by
+// that turn, nor given a new conversation.
 func TestRestartNeverResendsAContinuationBeingSent(t *testing.T) {
 	t.Parallel()
-	e, rt, _ := newFallbackEnv(t, enhancedClaude)
-	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP)
-	if err != nil {
-		t.Fatal(err)
-	}
-	waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
-	if err = e.sched.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if _, err = e.db.SetRunAccount(t.Context(), run.ID, domain.AccountOf(e.owner.ID), false, usageLimitSegment, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	sc, err := e.sched.readSidecar(run.ID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sc.AccountSwap = &accountSwap{From: e.member.ID, To: e.owner.ID, Continuation: continuedOnGrace, Sending: true, Container: sc.ContainerID}
-	if err = e.sched.writeSidecar(sc); err != nil {
-		t.Fatal(err)
-	}
-	before := len(rt.all())
-	cfg := e.cfg
-	cfg.PTY = newFakePTY()
-	cfg.PTY.(*fakePTY).logDir = e.pty.logDir
-	s2, err := New(cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = s2.Close() })
-	startScheduler(t, s2)
-	waitFor(t, "the marker cleared", func() bool {
-		sc, err := s2.readSidecar(run.ID)
-		return err == nil && sc.AccountSwap == nil
-	})
-	waitFor(t, "the notice", func() bool {
-		log, readErr := os.ReadFile(e.pty.ItemLogPath(run.ID))
-		return readErr == nil && strings.Contains(string(log), "the continuation prompt may not have been delivered")
-	})
-	time.Sleep(500 * time.Millisecond)
-	for _, exec := range rt.all()[before:] {
-		if prompts := exec.wire.prompts(t); len(prompts) != 0 {
-			t.Fatalf("the restart sent %d prompts; want the continuation never sent again", len(prompts))
-		}
-	}
-	if row, err := e.db.GetRun(t.Context(), run.ID); err != nil || row.Status.Terminal() {
-		t.Fatalf("run = %+v, %v; want it still live", row, err)
+	for _, mode := range []domain.LaunchMode{domain.LaunchACP, domain.LaunchHeadless} {
+		t.Run(string(mode), func(t *testing.T) {
+			t.Parallel()
+			// Codex runs Background sessions over ACP.
+			e, rt, _ := newFallbackEnv(t, func(cfg *Config) {
+				enhancedClaude(cfg)
+				cfg.Harnesses["codex"] = HarnessSpec{HeadlessArgs: []string{"fake-agent", "-p", "{task}"}, ACPArgs: []string{"acp-mock"}}
+			})
+			var run *domain.Run
+			var err error
+			if mode == domain.LaunchACP {
+				run, err = e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP)
+				if err != nil {
+					t.Fatal(err)
+				}
+				waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+				if err = e.sched.Close(); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				// The server stops while the move reads usage, after the
+				// task's turn ended on the limit.
+				e.share(t)
+				writeHomeFiles(t, e.ownerHome, ".codex/auth.json")
+				// A Background run's supervisor exits 0 on SIGUSR1 and 1 on
+				// SIGUSR2, as it ends the run.
+				e.rt.execHandler = func(id runtime.ID, argv []string) (int, string, error) {
+					c, err := e.rt.get(id)
+					if err != nil {
+						return 1, "", err
+					}
+					switch strings.Join(argv, " ") {
+					case "/bin/sh -c kill -USR1 1":
+						c.exitNow(0)
+					case "/bin/sh -c kill -USR2 1":
+						c.exitNow(1)
+					}
+					return 0, "", nil
+				}
+				stopped := make(chan struct{})
+				e.sched.UseUsageFallback(UsageFallback{Usage: &readHook{QuotaReader: codexUsage{}, during: func() {
+					go func() {
+						_ = e.sched.Close()
+						close(stopped)
+					}()
+					<-e.sched.superCtx.Done()
+				}}, AuthorizationMu: &sync.Mutex{}})
+				run, err = e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, acpmock.PromptUsageLimit, "codex", domain.LaunchHeadless)
+				if err != nil {
+					t.Fatal(err)
+				}
+				<-stopped
+			}
+			if _, err = e.db.SetRunAccount(t.Context(), run.ID, domain.AccountOf(e.owner.ID), false, usageLimitSegment, time.Now()); err != nil {
+				t.Fatal(err)
+			}
+			sc, err := e.sched.readSidecar(run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sc.UsageLimit = ""
+			sc.AccountSwap = &accountSwap{From: e.member.ID, To: e.owner.ID, Continuation: continuedOnGrace, Sending: true, Container: sc.ContainerID}
+			if err = e.sched.writeSidecar(sc); err != nil {
+				t.Fatal(err)
+			}
+			before := len(rt.all())
+			cfg := e.cfg
+			cfg.PTY = newFakePTY()
+			cfg.PTY.(*fakePTY).logDir = e.pty.logDir
+			s2, err := New(cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = s2.Close() })
+			startScheduler(t, s2)
+			waitFor(t, "the marker cleared", func() bool {
+				sc, err := s2.readSidecar(run.ID)
+				return err == nil && sc.AccountSwap == nil
+			})
+			waitFor(t, "the notice", func() bool {
+				log, readErr := os.ReadFile(e.pty.ItemLogPath(run.ID))
+				return readErr == nil && strings.Contains(string(log), "the continuation prompt may not have been delivered")
+			})
+			time.Sleep(2000 * time.Millisecond)
+			if log, err := os.ReadFile(e.pty.ItemLogPath(run.ID)); err == nil { t.Logf("LOG %s", log) }
+			row, _ := e.db.GetRun(t.Context(), run.ID)
+			t.Logf("ROW %s %q execs %d before %d", row.Status, row.Reason, len(rt.all()), before)
+			for _, exec := range rt.all()[before:] {
+				if prompts := exec.wire.prompts(t); len(prompts) != 0 {
+					t.Fatalf("the restart sent %d prompts; want the continuation never sent again", len(prompts))
+				}
+				if slices.Contains(exec.agent.Methods(), acp.AgentMethodSessionNew) {
+					t.Fatal("the restart started a new conversation")
+				}
+			}
+			if row, err := e.db.GetRun(t.Context(), run.ID); err != nil || row.Status.Terminal() {
+				t.Fatalf("run = %+v, %v; want it still live", row, err)
+			}
+		})
 	}
 }
 
