@@ -211,7 +211,7 @@ func TestNewWithKeepsNoticesOutOfSeen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := reader.RetiringNotice(context.Background()); err != nil {
+	if _, _, err = reader.RetiringNotice(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := reader.Retiring(); !ok {
@@ -224,7 +224,7 @@ func TestNewWithKeepsNoticesOutOfSeen(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := c.RetiringNotice(context.Background()); err != nil {
+	if _, _, err = c.RetiringNotice(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := Seen()[c.origin]; !ok {
