@@ -244,7 +244,7 @@ func (s *Service) reportState(ctx context.Context, run domain.RunID, p protocol.
 // repeatWindow is how long after a report another one can be its repeat.
 // Claude Code's second model call after a report follows within seconds; a
 // report made later is the result of more work, whatever caused it.
-const repeatWindow = 2 * time.Minute
+var repeatWindow = 2 * time.Minute
 
 // reportedFinal reports whether the last success, failure or blocked report
 // of run's current turn is a success or failure that still stands.

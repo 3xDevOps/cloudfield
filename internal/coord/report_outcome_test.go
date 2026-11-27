@@ -29,6 +29,8 @@ type recordingOutcomes struct {
 	err        error
 	calls      []outcomeCall
 	reportedAt []time.Time
+	// since answers ReportsSince.
+	since time.Time
 }
 
 func (o *recordingOutcomes) FinishReported(_ context.Context, run domain.RunID, reportID string, outcome domain.RunStatus, reportedAt time.Time) error {
@@ -75,7 +77,7 @@ func (o *recordingOutcomes) ReportWaiting(_ context.Context, run domain.RunID, i
 	return nil
 }
 
-func (o *recordingOutcomes) ReportsSince(domain.RunID) time.Time { return time.Time{} }
+func (o *recordingOutcomes) ReportsSince(domain.RunID) time.Time { return o.since }
 
 func (o *recordingOutcomes) ReportAnswered(_ context.Context, run domain.RunID, id, summary string, at time.Time) error {
 	o.mu.Lock()
