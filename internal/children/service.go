@@ -30,6 +30,9 @@ type Runs interface {
 	FallbackLaunchable(ctx context.Context, member, requested, account domain.MemberID, harnessName string, mode domain.LaunchMode) (bool, error)
 	AgentModels(ctx context.Context, member, account domain.MemberID, name string, refresh bool) (protocol.AgentModelsResult, error)
 	Paused(run domain.RunID) bool
+	// CapacityRefused reports whether a launch failed only because the
+	// server had no room for it.
+	CapacityRefused(err error) bool
 }
 
 // Git publishes run branches and copies a child's into its parent.
@@ -92,6 +95,9 @@ type Service struct {
 
 	mu   sync.Mutex
 	mail Mailer
+	// retryAt is when a subsession the server had no room for is next
+	// tried. A restart forgets it and tries each at once.
+	retryAt map[domain.RunID]time.Time
 	// settingsMu serializes read-modify-write of member settings and
 	// workspace limits.
 	settingsMu sync.Mutex
@@ -109,7 +115,7 @@ func New(cfg Config) (*Service, error) {
 	if cfg.Interval <= 0 {
 		cfg.Interval = 3 * time.Second
 	}
-	return &Service{cfg: cfg, kick: make(chan struct{}, 1)}, nil
+	return &Service{cfg: cfg, kick: make(chan struct{}, 1), retryAt: map[domain.RunID]time.Time{}}, nil
 }
 
 // Start recovers reservations a restart interrupted, then reconciles until

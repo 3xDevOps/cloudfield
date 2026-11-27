@@ -37,11 +37,26 @@ type fakeRuns struct {
 	killed   []domain.RunID
 	closed   []domain.RunID
 	paused   map[domain.RunID]bool
+	// full is the capacity refusal every launch gets while set, and
+	// attempts counts the launches asked for.
+	full     error
+	attempts int
 }
+
+var errNoRoom = errors.New("scheduler: insufficient host memory headroom")
+
+func (f *fakeRuns) CapacityRefused(err error) bool { return errors.Is(err, errNoRoom) }
 
 func (f *fakeRuns) LaunchWithOptions(ctx context.Context, ws domain.WorkspaceID, member, account domain.MemberID, task, harness string, mode domain.LaunchMode, opts domain.LaunchOptions) (*domain.Run, error) {
 	f.inflight.Add(1)
 	defer f.inflight.Add(-1)
+	f.mu.Lock()
+	f.attempts++
+	full := f.full
+	f.mu.Unlock()
+	if full != nil {
+		return nil, full
+	}
 	r := &domain.Run{ID: opts.ReservedRunID, WorkspaceID: ws, MemberID: member, AccountMemberID: account, Task: task, Harness: harness,
 		Mode: mode, Model: opts.Model, Status: domain.RunRunning, BaseCommit: opts.FromCommit}
 	if err := f.db.CreateRunWithID(ctx, r); err != nil {
@@ -1106,5 +1121,82 @@ func TestSubsessionInheritsTheParentsLinearIssue(t *testing.T) {
 	want := []string{"https://linear.app/acme/issue/ENG-1", "https://linear.app/acme/issue/ENG-2"}
 	if !slices.Equal(got, want) {
 		t.Fatalf("subsession Linear issues = %v, want %v", got, want)
+	}
+}
+
+// A subsession the server has no room for is not lost: it returns to the
+// queue with the refusal, its parent is told once, it is tried again no
+// sooner than capacityRetryEvery, and it starts when there is room.
+func TestSubsessionWithNoRoomWaitsAndStartsLater(t *testing.T) {
+	h := newHarness(t)
+	h.enable(h.ada.ID, protocol.ChildSettingsParams{Enabled: on()})
+	parent := h.run(h.ada.ID, domain.LaunchACP, "parent")
+	refusal := fmt.Errorf("%w: 100 available bytes; reserve 200 bytes", errNoRoom)
+	h.runs.full = refusal
+	first := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex", Task: "first"})
+	h.settle()
+	second := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex", Task: "second"})
+	h.settle()
+	h.settle()
+	child, err := h.db.GetChild(h.ctx, domain.RunID(first.RunID))
+	if err != nil || child.State != domain.ChildQueued || child.Error != refusal.Error() {
+		t.Fatalf("subsession with no room = %+v, %v; want it queued with the refusal", child, err)
+	}
+	if h.runs.attempts != 1 {
+		t.Fatalf("launch attempts inside the retry floor = %d, want 1: the younger subsession waits behind the first", h.runs.attempts)
+	}
+	waiting := 0
+	for _, m := range h.mail.sent {
+		if m.from != parent.ID || !strings.Contains(m.body, "is waiting to start") || !strings.Contains(m.body, refusal.Error()) {
+			t.Fatalf("notice = %+v, want only the waiting notice with the refusal", m)
+		}
+		waiting++
+	}
+	if waiting != 1 {
+		t.Fatalf("waiting notices = %d, want 1", waiting)
+	}
+
+	h.now = h.now.Add(capacityRetryEvery)
+	h.settle()
+	if h.runs.attempts != 3 {
+		t.Fatalf("launch attempts after the retry floor = %d, want 3: one more for each subsession", h.runs.attempts)
+	}
+	if len(h.mail.sent) != 2 {
+		t.Fatalf("notices after a second refusal = %d, want one for each subsession", len(h.mail.sent))
+	}
+
+	h.runs.mu.Lock()
+	h.runs.full = nil
+	h.runs.mu.Unlock()
+	h.now = h.now.Add(capacityRetryEvery)
+	h.settle()
+	for _, id := range []string{first.RunID, second.RunID} {
+		child, err = h.db.GetChild(h.ctx, domain.RunID(id))
+		if err != nil || child.State != domain.ChildStarted || child.Error != "" {
+			t.Fatalf("subsession once there is room = %+v, %v; want it started with no error", child, err)
+		}
+	}
+	if len(h.runs.launched) != 2 {
+		t.Fatalf("started %d sessions, want 2", len(h.runs.launched))
+	}
+}
+
+// After capacityWaitLimit a capacity refusal is final, as it was at once
+// before subsessions waited.
+func TestSubsessionWithNoRoomIsRefusedAfterADay(t *testing.T) {
+	h := newHarness(t)
+	h.enable(h.ada.ID, protocol.ChildSettingsParams{Enabled: on()})
+	parent := h.run(h.ada.ID, domain.LaunchACP, "parent")
+	h.runs.full = errNoRoom
+	c := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex"})
+	h.settle()
+	h.now = h.now.Add(capacityWaitLimit + time.Minute)
+	h.settle()
+	child, err := h.db.GetChild(h.ctx, domain.RunID(c.RunID))
+	if err != nil || child.State != domain.ChildRefused || child.Error != errNoRoom.Error() {
+		t.Fatalf("subsession with no room for a day = %+v, %v; want it refused with the last refusal", child, err)
+	}
+	if last := h.mail.sent[len(h.mail.sent)-1]; !strings.Contains(last.body, "did not start") {
+		t.Fatalf("last notice = %q, want the refusal", last.body)
 	}
 }

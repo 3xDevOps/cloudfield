@@ -29,6 +29,12 @@ var (
 	ErrCapacityUnknown    = errors.New("scheduler: host capacity unavailable")
 )
 
+// CapacityRefused reports whether err is a refusal for want of disk or
+// memory, or a failed measurement of them: a later attempt can succeed.
+func (s *Scheduler) CapacityRefused(err error) bool {
+	return errors.Is(err, ErrDiskFull) || errors.Is(err, ErrMemoryPressure) || errors.Is(err, ErrCapacityUnknown)
+}
+
 const (
 	capacityProbeTimeout        = 5 * time.Second
 	startupDiskBytes     uint64 = 1 << 30

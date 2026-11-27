@@ -1357,6 +1357,13 @@ another agent`. Who may turn them off is in [teams.md](teams.md#subsessions).
   runs on and its cost when metered. `error` is why it was refused, or why a
   started subsession stopped, such as `enhanced session ended: the agent's ACP
   server exited with code 137`.
+- A subsession the server has no memory or disk for is not refused. It
+  returns to `queued` with the refusal in `error`, such as `scheduler:
+  insufficient host memory headroom: ...`, and its parent's inbox says once
+  that it is waiting. The server tries it again every 30 seconds, never
+  ahead of an older queued subsession of the same parent, and it starts when
+  there is room. It is `refused` with the last refusal when there is still
+  none 24 hours after it was asked for.
 - `subsession cancel` stops a subsession or drops it from the queue; a subsession still
   starting answers `-32002`, so cancel again a few seconds later. A handoff of
   either session to another member detaches the subsession from its parent: the parent
