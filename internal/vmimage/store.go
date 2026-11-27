@@ -48,6 +48,9 @@ type Store struct {
 	dir    string
 	kernel string
 	docker DockerImages
+	// minFree overrides the reserve a cache promotion leaves free on the
+	// store's filesystem; negative, nothing is kept.
+	minFree int64
 
 	mu     sync.Mutex
 	builds singleflight.Group
@@ -56,6 +59,9 @@ type Store struct {
 	// helper is the helper binary HelperDisk last hashed, guarded by mu. The
 	// sweep keeps its disk, so a host without VMs does not rebuild it.
 	helper helperDigest
+	// promoting is what the cache promotions under way may still write,
+	// guarded by mu.
+	promoting uint64
 }
 
 type helperDigest struct {
@@ -102,9 +108,9 @@ type record struct {
 
 // Open opens the store at dir, creating it, and removes what an interrupted
 // build left behind. kernel is the guest kernel Kernel returns. docker may
-// be nil.
-func Open(dir, kernel string, docker DockerImages) (*Store, error) {
-	s := &Store{dir: dir, kernel: kernel, docker: docker}
+// be nil. minFree is the server's free-disk reserve override.
+func Open(dir, kernel string, docker DockerImages, minFree int64) (*Store, error) {
+	s := &Store{dir: dir, kernel: kernel, docker: docker, minFree: minFree}
 	if err := os.RemoveAll(s.tmpDir()); err != nil {
 		return nil, fmt.Errorf("vmimage: clear %s: %w", s.tmpDir(), err)
 	}

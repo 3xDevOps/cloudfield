@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/3xDevOps/cloudfield/internal/disk"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
 )
@@ -168,7 +169,7 @@ func (s *Scheduler) reclaimLevel(ctx context.Context, used uint64) (free uint64,
 		target := fs.TotalBytes / 100 * (100 - used)
 		// A floor the filesystem cannot hold is never met, so evicting
 		// toward it would only destroy reopenable runs and unsaved state.
-		if floor := diskReserve(fs.TotalBytes, s.cfg.MinFreeBytes) + reclaimHeadroom; floor < fs.TotalBytes {
+		if floor := disk.Reserve(fs.TotalBytes, s.cfg.MinFreeBytes) + reclaimHeadroom; floor < fs.TotalBytes {
 			target = max(target, floor)
 		}
 		if fs.FreeBytes < target {
