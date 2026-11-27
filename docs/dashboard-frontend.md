@@ -6815,7 +6815,7 @@ gateway's `server did not answer`, `server unreachable`, a failed fetch) is
 no outcome, and the page waits again. The panel's one way to end the
 sign-in is **Cancel sign-in**, which sends Ctrl-C; pressed while the
 terminal is still starting, the panel says it is cancelling and sends it as
-soon as the terminal is up. A dropped socket reconnects to the same sign-in
+soon as the terminal is up, also when the member has left the panel by then. A dropped socket reconnects to the same sign-in
 ("Reconnecting to the sign-in…") instead of ending it. A line under the
 buttons says the member can leave the page and how long the sign-in keeps
 running: "for about <n> more minutes" when this tab opened its terminal,

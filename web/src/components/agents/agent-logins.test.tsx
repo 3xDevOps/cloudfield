@@ -655,6 +655,21 @@ describe('add login', () => {
     expect(onClose).toHaveBeenCalledTimes(1)
   })
 
+  it('still sends a cancel queued while the terminal starts when the panel is left before it is up', async () => {
+    const user = userEvent.setup()
+    const onClose = vi.fn()
+    const { unmount } = addLogin({ client: fakeApi(), running: { id: 'lgn-run00000007', name: 'spare' }, resume: true, onClose })
+    await waitFor(() => expect(signInSockets()).toHaveLength(1))
+    const socket = signInSockets()[0]!
+    await user.click(screen.getByRole('button', { name: 'Cancel sign-in' }))
+    unmount()
+    expect(socket.closed).toBe(false)
+    accept(socket)
+    expect(inputs(socket)).toEqual([{ type: 'input', data: '\x03' }])
+    expect(socket.closed).toBe(true)
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
   it('sends Ctrl-C at once to a sign-in whose terminal is up', async () => {
     const user = userEvent.setup()
     const onClose = vi.fn()
