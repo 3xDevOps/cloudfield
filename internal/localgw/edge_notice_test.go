@@ -22,14 +22,14 @@ import (
 // and body when status is set, after delay.
 type noticeEdge struct {
 	*httptest.Server
-	mu               sync.Mutex
-	retiring, date   string
-	status           int
-	body             string
-	delay            time.Duration
-	asked, loggedOut int
-	open             map[net.Conn]bool
-	opened           int
+	mu             sync.Mutex
+	retiring, date string
+	status         int
+	body           string
+	delay          time.Duration
+	asked          int
+	open           map[net.Conn]bool
+	opened         int
 }
 
 func newNoticeEdge(t *testing.T) *noticeEdge {
@@ -41,23 +41,16 @@ func newNoticeEdge(t *testing.T) *noticeEdge {
 		status, body, delay := e.status, e.body, e.delay
 		info := edgeproto.EdgeInfo{SigninOrigin: e.URL, Key: pub, Fingerprint: edgeproto.EdgeKeyFingerprint(pub),
 			Version: edgeproto.Version, MinVersion: edgeproto.MinVersion, Retiring: e.retiring, RetiringDate: e.date}
-		if r.URL.Path == edgeproto.PathEdgeInfo {
-			e.asked++
-		} else {
-			e.loggedOut++
-		}
+		e.asked++
 		e.mu.Unlock()
 		time.Sleep(delay)
 		w.Header().Set(edgeproto.HeaderVersion, "1")
-		switch {
-		case r.URL.Path == edgeproto.PathLogout:
-			w.WriteHeader(http.StatusNoContent)
-		case status != 0:
+		if status != 0 {
 			w.WriteHeader(status)
 			_, _ = io.WriteString(w, body)
-		default:
-			_ = json.NewEncoder(w).Encode(info)
+			return
 		}
+		_ = json.NewEncoder(w).Encode(info)
 	}))
 	e.Config.ConnState = func(c net.Conn, state http.ConnState) {
 		e.mu.Lock()
@@ -148,10 +141,9 @@ func retiringOf(t *testing.T, g *Gateway, origin string) string {
 func TestEdgeStatusNotice(t *testing.T) {
 	const newEdge = "https://new.example.test"
 	for _, tc := range []struct {
-		name    string
-		setup   func(e *noticeEdge)
-		want    string
-		wantRaw bool
+		name  string
+		setup func(e *noticeEdge)
+		want  string
 	}{
 		{name: "no notice", setup: func(*noticeEdge) {}},
 		{name: "retiring", setup: func(e *noticeEdge) { e.retiring = newEdge },
