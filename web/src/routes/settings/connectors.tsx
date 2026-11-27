@@ -156,8 +156,9 @@ const sameClient = (old: Connector, c: Connector) => (old.client_id ? c.client_i
 
 // noticeStop is why a move or reconnect of old stops once c, old itself or
 // its replacement, is at an address the edge marks retiring or retired.
-const noticeStop = (c: Connector, old: Connector) =>
-  `The edge now says the address ${label(c)} was added at is ${c.notice?.state}, so ${label(old)} was not revoked. Follow the steps on its row in this list.`
+const noticeStop = (c: Connector, old: Connector) => c.id === old.id
+  ? `The edge now says the address ${label(c)} was added at is ${c.notice?.state}, so ${label(old)} was not revoked. Follow the steps on its row in this list.`
+  : `The edge says the address the new ${c.client_name} connector was added at is ${c.notice?.state}, so ${label(old)} was not revoked. Follow the steps on the new connector’s row in this list.`
 
 const signsInAt = (info: ListInfo, url?: string) => !!info.sign_in && (!url || sameURL(info, url, info.url))
 

@@ -603,7 +603,7 @@ it('stops a reconnect without revoking when its replacement is at a retiring add
   fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Reconnect' }))
   expect(await screen.findByText('Waiting for Claude to connect…')).toBeTruthy()
   await vi.advanceTimersByTimeAsync(3000)
-  expect((await screen.findByRole('alert')).textContent).toContain('so Claude (claude.ai) was not revoked.')
+  expect((await screen.findByRole('alert')).textContent).toContain('The edge says the address the new Claude connector was added at is retiring, so Claude (claude.ai) was not revoked. Follow the steps on the new connector’s row in this list.')
   await vi.advanceTimersByTimeAsync(6000)
   expect(client.connectorRevoke).not.toHaveBeenCalled()
 })
@@ -648,7 +648,7 @@ it('refuses to start a move when a connector added meanwhile is at a retiring ad
   fireEvent.click(await screen.findByRole('button', { name: 'Move ChatGPT (chatgpt.com) to the universal URL' }))
   const dialog = await screen.findByRole('alertdialog')
   fireEvent.click(within(dialog).getByRole('button', { name: 'Move' }))
-  expect((await within(dialog).findByRole('alert')).textContent).toContain('so ChatGPT (chatgpt.com) was not revoked.')
+  expect((await within(dialog).findByRole('alert')).textContent).toContain('the new ChatGPT connector was added at is retiring, so ChatGPT (chatgpt.com) was not revoked. Follow the steps on the new connector’s row')
   expect(client.connectorRevoke).not.toHaveBeenCalled()
 })
 
