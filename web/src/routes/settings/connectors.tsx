@@ -330,6 +330,8 @@ function Connectors({ client }: { client: Api }) {
       if (noticed) {
         finish()
         setTarget(null)
+        // A new code still on its way must not restart the stopped move.
+        starts.current++
         setPollError({ text: noticeStop(noticed, old), fix: <Link href={`${docs}/connectors.md#adding-a-connector-again-at-a-new-address`}>Adding a connector again</Link> })
         return
       }
@@ -425,7 +427,7 @@ function Connectors({ client }: { client: Api }) {
       const noticed = [fresh.find((c) => c.id === old.id), ...fresh.filter((c) => !known.has(c.id) && sameURL(rest, c.resource, into) && sameClient(old, c))]
         .find((c) => c?.notice)
       if (noticed) {
-        setAttempt(null)
+        setAttempt((a) => (next.id && a?.id === next.id ? null : a))
         setTarget(null)
         throw new Error(noticeStop(noticed, old))
       }
@@ -633,7 +635,9 @@ function Connectors({ client }: { client: Api }) {
       ) : (
         <Confirm
           title={`Revoke ${label(confirming.connector)}?`}
-          description={`Its next call fails, and ${confirming.connector.client_name} asks you to connect again${signsIn(confirming.connector) ? '' : ' with a new code'}. Removing it in ${confirming.connector.client_name} does not revoke it here.`}
+          description={confirming.connector.notice?.state === 'retired'
+            ? `Its address is retired, so its calls already fail there. Removing it in ${confirming.connector.client_name} does not revoke it here.`
+            : `Its next call fails, and ${confirming.connector.client_name} asks you to connect again${signsIn(confirming.connector) ? '' : ' with a new code'}. Removing it in ${confirming.connector.client_name} does not revoke it here.`}
           action="Revoke"
           pending="Revoking…"
           onConfirm={async () => {
