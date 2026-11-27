@@ -205,26 +205,30 @@ func lstatLogin(home *os.Root, rel string) (fs.FileInfo, error) {
 // the file only by its place, since a profile's name comes from a file.
 func readProfileFile(home *os.Root, dir, rel string, limit int64) ([]byte, error) {
 	where := dir + "/" + strings.SplitN(rel, "/", 2)[0]
-	parent, leaf, err := openLoginParent(home, dir+"/"+rel)
+	leaf := path.Base(rel)
+	parent, _, err := openLoginParent(home, dir+"/"+rel)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", where, withoutPath(err))
+		return nil, fmt.Errorf("%s: %w", where, withoutPath(err, leaf))
 	}
 	defer func() { _ = parent.Close() }()
 	data, err := readRegularFile(parent, leaf, limit)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", where, withoutPath(err))
+		return nil, fmt.Errorf("%s: %w", where, withoutPath(err, leaf))
 	}
 	return data, nil
 }
 
-// withoutPath is err without the file name it carries, which can hold a
-// profile name read from a file.
-func withoutPath(err error) error {
+// withoutPath is err without the file name leaf it may carry, which can
+// hold a profile name read from a file.
+func withoutPath(err error, leaf string) error {
 	if pathErr := (*fs.PathError)(nil); errors.As(err, &pathErr) {
 		return fmt.Errorf("%s: %w", pathErr.Op, pathErr.Err)
+	}
+	if !strings.Contains(err.Error(), leaf) {
+		return err
 	}
 	return errors.New("it is not a single regular file within the size limit")
 }
