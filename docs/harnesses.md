@@ -1010,8 +1010,9 @@ banner with the line, and the transcript records it.
 The line is typed only when all of these hold. Otherwise the wake stays owed
 and the server tries again, at least every 30 seconds:
 
-- The session is running: not paused, not protected. Mail wakes a sleeping
-  session VM first and types once its terminal is back.
+- The session is running: not paused, not protected, not ending and not
+  moving to another account. Mail wakes a sleeping session VM first and types
+  once its terminal is back.
 - The agent has turned on bracketed paste. The line arrives as one paste and
   Enter follows 200 ms later. With bracketed paste off nothing is typed: these
   CLIs leave a line that arrives together with its Enter unsent in the input
@@ -1022,7 +1023,9 @@ and the server tries again, at least every 30 seconds:
   as a sudo approval.
 - No member controls the session
   ([terminal.md](terminal.md#session-control)). The wake waits until they
-  release control or their lease lapses.
+  release control or their lease lapses. The owner's desktop Terminal view
+  takes control when it opens, so the wake waits while that view stays open.
+  Nothing tells the member or the sender that it waits.
 - The agent is not waiting in `cloudfield-internal inbox --wait`, which takes
   the mail itself.
 

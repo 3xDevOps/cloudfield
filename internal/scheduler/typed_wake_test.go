@@ -87,6 +87,8 @@ func TestATypedWakeWaitsForAQuietUnattendedTerminal(t *testing.T) {
 		{"a person typed 9 s ago", terminal(func() { sess.typed = time.Now().Add(-9 * time.Second) }), terminal(func() { sess.typed = time.Now().Add(-11 * time.Second) })},
 		{"the session resumed 2 s ago", session(func() { entry.quietFrom = time.Now().Add(-2 * time.Second) }), session(func() { entry.quietFrom = time.Now().Add(-4 * time.Second) })},
 		{"the session is paused", session(func() { entry.paused = true }), session(func() { entry.paused = false })},
+		{"the session is ending or moving account", session(func() { entry.finalizing = true }), session(func() { entry.finalizing = false })},
+		{"a stop was requested", session(func() { entry.killRequested = true }), session(func() { entry.killRequested = false })},
 		{"an input request is open", session(func() { entry.pendingInputs = []domain.RunInputRequest{{}} }), session(func() { entry.pendingInputs = nil })},
 		{"a sudo prompt is open", session(func() { entry.sudo = []*sudoRequest{{}} }), session(func() { entry.sudo = nil })},
 	} {
@@ -108,6 +110,12 @@ func TestATypedWakeWaitsForAQuietUnattendedTerminal(t *testing.T) {
 	}
 	if got := e.pty.injected(); len(got) != 1 || got[0].message != typedWakeLine(1) {
 		t.Fatalf("typed %+v, want the line once", got)
+	}
+	if err := e.sched.CloseRun(t.Context(), run, e.member.ID, domain.RunAbandoned); err != nil {
+		t.Fatalf("CloseRun: %v", err)
+	}
+	if e.sched.Wakeable(run) {
+		t.Fatal("the closed session whose container is kept is still wakeable, so every sweep retries its wake")
 	}
 }
 

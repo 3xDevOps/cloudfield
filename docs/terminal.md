@@ -114,8 +114,9 @@ page, or when the lease lapses 15 seconds after the tab is killed. See
 
 Mail wakes an idle Standard Copilot, Gemini or Cursor session with one line
 the server types into its terminal. While anyone controls the session that
-line waits the same way. Text still in the agent's input box after control is
-released is submitted joined to the line
+line waits until they release control or the lease lapses, and nothing shows
+that it waits: `held` marks only a subsession's mail. Text still in the
+agent's input box after control is released is submitted joined to the line
 ([harnesses.md](harnesses.md#typed-wake)).
 
 ### The Terminal toolbar

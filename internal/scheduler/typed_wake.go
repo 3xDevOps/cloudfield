@@ -25,7 +25,7 @@ func (s *Scheduler) TypedWake(run domain.RunID) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	entry := s.runs[run]
-	if entry == nil || entry.launchMode != domain.LaunchTUI || !entry.idleWake {
+	if entry == nil || entry.launchMode != domain.LaunchTUI || !entry.idleWake || entry.retained {
 		return false
 	}
 	profile, _ := harness.Lookup(entry.harness)
@@ -34,8 +34,9 @@ func (s *Scheduler) TypedWake(run domain.RunID) bool {
 
 // typeWake types line into run's terminal and submits it as the agent's
 // next prompt. It writes nothing and fails while a person may be typing
-// there, a request waits for an answer or the terminal is not at rest: the
-// line would join a draft, answer the request or stay unsent.
+// there, a request waits for an answer, the terminal is about to be replaced
+// or it is not at rest: the line would join a draft, answer the request, be
+// lost with the old terminal or stay unsent.
 func (s *Scheduler) typeWake(ctx context.Context, run domain.RunID, line string) error {
 	awake, err := s.holdAwakeNow(run)
 	if err != nil {
@@ -44,9 +45,10 @@ func (s *Scheduler) typeWake(ctx context.Context, run domain.RunID, line string)
 	defer awake()
 	s.mu.Lock()
 	entry := s.runs[run]
-	if entry == nil || entry.paused || entry.atPrompt() {
+	// A Standard session moving account is finalizing throughout.
+	if entry == nil || entry.paused || entry.finalizing || entry.killRequested || entry.atPrompt() {
 		s.mu.Unlock()
-		return errors.New("scheduler: typed wake held: the session is paused or waiting for an answer")
+		return errors.New("scheduler: typed wake held: the session is paused, ending, moving account or waiting for an answer")
 	}
 	quiet, agent, cid := entry.startedAt, entry.harness, entry.containerID
 	if entry.quietFrom.After(quiet) {

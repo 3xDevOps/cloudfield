@@ -45,8 +45,9 @@ const (
 	// BackgroundEnv is "1" in a Background run's container, whose agent
 	// has no human to ask.
 	BackgroundEnv = "AETHER_BACKGROUND"
-	// WakeEnv is "1" in a Standard run whose loaded native integration
-	// resumes the idle agent when mail arrives.
+	// WakeEnv is "1" in a Standard run whose idle agent is resumed when mail
+	// arrives: by a native integration the launch loads, by Codex's
+	// app-server or by a line typed into its terminal.
 	WakeEnv = "AETHER_IDLE_WAKE"
 	// RoleCardEnv is "1" where the launch carries the agent's role card in
 	// context it keeps through compaction, so hooks and the MCP bridge do
