@@ -365,8 +365,8 @@ Claude Code refuses `--dangerously-skip-permissions` as root, so every `claude`
 session gets `IS_SANDBOX=1`.
 
 Claude Code reruns a model call that ends without text, adding the hidden
-prompt `[Your previous response had no visible output...]`. A Cloudfield turn
-ends with a report and no text after it, so every `claude` session gets
+prompt `[Your previous response had no visible output...]`. A turn whose
+agent writes nothing after its report would be rerun, so every `claude` session gets
 `CLAUDE_CODE_TERMINAL_MCP_TOOLS=mcp__aether__aether_report`, which exempts a
 turn in which `aether_report` succeeded since the last user message. A report
 through `cloudfield-internal report` runs as the shell tool and still gets the

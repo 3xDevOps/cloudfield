@@ -767,7 +767,10 @@ session branches and pull requests go. A source URL must not contain credentials
   GitHub; revoke it there. Disabling a mirror does not log out the admin's gh.
 - Pushes to a mirrored base are refused. Only a forward refresh, or an admin
   adopting a new revision by its full commit SHA, moves it.
-- A failed refresh blocks the launch instead of starting from stale code
+- A failed refresh blocks the launch instead of starting from stale code. A
+  launch within 10 seconds of a successful refresh starts from that refresh, so
+  a credential revoked or a commit pushed upstream in those seconds does not
+  reach it
   ([Launch and mirror failures](failure-handling.md#launch-and-mirror-failures)).
 
 ## The dashboard gateways

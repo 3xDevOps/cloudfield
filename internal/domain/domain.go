@@ -829,9 +829,11 @@ type Run struct {
 	// exhausted; empty otherwise.
 	RequestedAccountMemberID MemberID
 	// AccountLogin is the added login of AccountMemberID the run spends;
-	// empty for their default login.
-	AccountLogin LoginID
-	Fallback     AccountFallback
+	// empty for their default login. AccountLoginPerUse: that login is
+	// billed per use, decided when the run's account is set.
+	AccountLogin       LoginID
+	AccountLoginPerUse bool
+	Fallback           AccountFallback
 	// HomeMemberID is whose home the container mounts: the launcher. A
 	// handoff changes MemberID, never this. Empty on rows created before
 	// account shares were narrowed.

@@ -44,6 +44,10 @@ type workspaceMirrorLister interface {
 
 const mirrorRollbackTimeout = 5 * time.Second
 
+// captureFresh is how old a mirror's last successful refresh may be for a
+// launch to start from its commit without asking the source again.
+const captureFresh = 10 * time.Second
+
 // Config wires the service.
 type Config struct {
 	Root  string
@@ -65,6 +69,10 @@ type Service struct {
 
 	locksMu sync.Mutex
 	locks   map[domain.WorkspaceID]*sync.Mutex
+
+	// fetched is when this process last refreshed each workspace's mirror
+	// with success.
+	fetched sync.Map
 }
 
 // ConfigureRequest is the administrator-supplied mirror source.
@@ -453,10 +461,49 @@ func (s *Service) PurgeWorkspace(ctx context.Context, workspace domain.Workspace
 	return nil
 }
 
-// Capture strictly refreshes a configured mirror unless cachedCommit is
-// supplied. A local-only workspace reads its normal base branch directly and
-// never makes a network claim. Cached mode verifies both persisted consent and
-// the current immutable branch object before returning it.
+// Warm refreshes a configured mirror unless a Capture would already start
+// from its last refresh. A launch calls it before taking the locks its
+// Capture runs under, so those are not held across the fetch.
+func (s *Service) Warm(ctx context.Context, workspace domain.WorkspaceID) error {
+	unlock := s.workspaceLock(workspace)
+	defer unlock()
+	m, err := s.store.GetWorkspaceMirror(ctx, workspace)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if m.Status == domain.MirrorStatusDisabling {
+		return nil
+	}
+	if _, fresh := s.fresh(ctx, workspace, *m); fresh {
+		return nil
+	}
+	_, err = s.refreshLocked(ctx, workspace, *m)
+	return err
+}
+
+// fresh reports when the source was last fetched, if that is recent enough
+// for a launch to start from the accepted commit.
+func (s *Service) fresh(ctx context.Context, workspace domain.WorkspaceID, m domain.WorkspaceMirror) (time.Time, bool) {
+	at, ok := s.fetched.Load(workspace)
+	if !ok || m.Status != domain.MirrorStatusReady || m.AcceptedCommit == "" {
+		return time.Time{}, false
+	}
+	fetched := at.(time.Time)
+	if age := s.now().Sub(fetched); age < 0 || age >= captureFresh {
+		return time.Time{}, false
+	}
+	current, err := s.git.WorkspaceBranchCommit(ctx, workspace, m.Branch)
+	return fetched, err == nil && current == m.AcceptedCommit
+}
+
+// Capture refreshes a configured mirror unless cachedCommit is supplied or
+// its last refresh succeeded within captureFresh. A local-only workspace
+// reads its normal base branch directly and never makes a network claim.
+// Cached mode verifies both persisted consent and the current immutable
+// branch object before returning it.
 func (s *Service) Capture(ctx context.Context, workspace domain.WorkspaceID, cachedCommit string) (CaptureResult, error) {
 	unlock := s.workspaceLock(workspace)
 	defer unlock()
@@ -507,6 +554,9 @@ func (s *Service) Capture(ctx context.Context, workspace domain.WorkspaceID, cac
 		checked := s.now().UTC()
 		return captureResult(workspace, cachedCommit, m.Branch, m.SourceURL, checked, true, true), nil
 	}
+	if fetched, fresh := s.fresh(ctx, workspace, *m); fresh {
+		return captureResult(workspace, m.AcceptedCommit, m.Branch, m.SourceURL, fetched, true, false), nil
+	}
 	// Refresh is called while this workspace lock is held; use the unlocked
 	// implementation to avoid recursively taking the same non-reentrant lock.
 	result, refreshErr := s.refreshLocked(ctx, workspace, *m)
@@ -526,6 +576,7 @@ func (s *Service) Capture(ctx context.Context, workspace domain.WorkspaceID, cac
 
 func (s *Service) refreshLocked(ctx context.Context, workspace domain.WorkspaceID, current domain.WorkspaceMirror) (Result, error) {
 	now := s.now().UTC()
+	s.fetched.Delete(workspace)
 	current.Status, current.LastError, current.LastAttemptAt = domain.MirrorStatusRefreshing, "", now
 	if err := s.store.SetWorkspaceMirror(ctx, &current); err != nil {
 		return Result{}, err
@@ -575,6 +626,7 @@ func (s *Service) refreshLocked(ctx context.Context, workspace domain.WorkspaceI
 	if err := s.store.SetWorkspaceMirror(ctx, &current); err != nil {
 		return s.result(current, s.publicKey(workspace, current)), fmt.Errorf("mirror: persist fetched Git state: %w", err)
 	}
+	s.fetched.Store(workspace, now)
 	return s.result(current, s.publicKey(workspace, current)), nil
 }
 

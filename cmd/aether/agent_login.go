@@ -9,11 +9,13 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
 	"github.com/3xDevOps/cloudfield/internal/cli"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/shellquote"
 	"golang.org/x/term"
 )
 
@@ -30,7 +32,7 @@ func agentLogin(args []string) error {
 	if err != nil {
 		return fmt.Errorf("%w\n%s", err, usage)
 	}
-	if name == "" {
+	if name == "" || name[0] == '-' || slices.Contains(args, "--") {
 		return errors.New(usage)
 	}
 	given := map[string]bool{}
@@ -40,15 +42,24 @@ func agentLogin(args []string) error {
 	case adding && attaching:
 		return errors.New("--as starts a sign-in and --attach returns to one; give one of them")
 	case adding && *as == "":
-		return errors.New("--as needs a name: cloudfield agent login " + name + " --as <name>")
+		return errors.New("--as needs a name: cloudfield agent login " + shellquote.Quote(name) + " --as <name>")
 	case attaching && *attach == "":
-		return errors.New("--attach needs the login id cloudfield agent login " + name + " --as printed")
+		return errors.New("--attach needs the login id cloudfield agent login " + shellquote.Quote(name) + " --as printed")
+	case (adding || attaching) && name != addedLoginsAgent:
+		return fmt.Errorf("only Claude Code keeps added logins, so %s has none; cloudfield agent login %s signs in its one login", name, shellquote.Quote(name))
+	}
+	added := ""
+	switch {
+	case adding:
+		added = "--as"
+	case attaching:
+		added = "--attach"
 	}
 	var agent protocol.AgentInfo
 	found := false
 	if err := withControl(func(c *protocol.Client) error {
 		var err error
-		agent, found, err = lookupAgent(c, name)
+		agent, found, err = loginAgent(c, name, added)
 		return err
 	}); err != nil {
 		return err
@@ -63,10 +74,7 @@ func agentLogin(args []string) error {
 	}
 	if adding || attaching {
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
-			if agent.Name != addedLoginsAgent {
-				return fmt.Errorf("only Claude Code keeps added logins, so %s has none; cloudfield agent login %s signs in its one login", agent.Name, agent.Name)
-			}
-			command := "cloudfield agent login " + agent.Name + " --as " + *as
+			command := signInCommand(agent.Name, "--as", *as)
 			if attaching {
 				command = attachCommand(agent.Name, *attach)
 			}
@@ -86,6 +94,24 @@ func agentLogin(args []string) error {
 			"An API key stored as a workspace secret works instead: docs/harnesses.md#use-an-api-key", agent.Name, agent.LoginCommand, agent.Name)
 	}
 	return deviceLogin(os.Stdout, agent)
+}
+
+// loginAgent looks up the agent to sign in. The sign-in of an added login,
+// asked for by the flag added, needs a server that keeps added logins: an
+// older one ignores the login in the terminal request and opens the
+// member's own terminal, where a code typed would sign in the default
+// login.
+func loginAgent(c *protocol.Client, name, added string) (protocol.AgentInfo, bool, error) {
+	if added != "" {
+		var info protocol.ServerInfoResult
+		if err := c.Call(protocol.MethodServerInfo, struct{}{}, &info); err != nil {
+			return protocol.AgentInfo{}, false, err
+		}
+		if err := requireLogins(info, added); err != nil {
+			return protocol.AgentInfo{}, false, err
+		}
+	}
+	return lookupAgent(c, name)
 }
 
 // deviceLogin runs the sign-in in a new tab each time: a tab found by name

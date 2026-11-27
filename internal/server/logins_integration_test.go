@@ -68,6 +68,19 @@ func addLogin(ctx context.Context, t *testing.T, srv *coordServer, dataDir strin
 	}
 }
 
+// signInDefault signs member's default login in with made-up values, so
+// only its usage can pass it over.
+func signInDefault(t *testing.T, dataDir string, member domain.MemberID) {
+	t.Helper()
+	dir := filepath.Join(dataDir, "homes", string(member), ".claude")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".credentials.json"), []byte(`{"claudeAiOauth":{"accessToken":"test-access-default","refreshToken":"test-refresh-default","expiresAt":4102444800000}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // TestIntegrationSpentFirstLoginLaunchesOnTheSecond: Ada keeps a second
 // login. Her default login is spent, so a launch that names no login starts
 // on the second one, whose files the container mounts, and the session
@@ -81,6 +94,7 @@ func TestIntegrationSpentFirstLoginLaunchesOnTheSecond(t *testing.T) {
 	srv := e.seed(ctx, t, false)
 	second := domain.LoginID("lgn-second0000")
 	addLogin(ctx, t, srv, e.dataDir, e.ada.id, second, "second")
+	signInDefault(t, e.dataDir, e.ada.id)
 	usage.set(domain.AccountOf(e.ada.id), 100)
 	usage.set(domain.Account{Member: e.ada.id, Login: second}, 10)
 
@@ -113,6 +127,16 @@ func TestIntegrationSpentFirstLoginLaunchesOnTheSecond(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("the container does not mount login second's credentials as a subpath; mounts %+v", c.spec.Mounts)
+	}
+
+	// Before a share, Bo learns nothing about Ada's logins: the launch is
+	// refused for the share alone.
+	boCtrl0, boClient0 := srv.control(t, e.bo.key)
+	defer boClient0.Close()
+	if err := boCtrl0.Call(protocol.MethodRunLaunch, protocol.RunLaunchParams{
+		WorkspaceID: string(e.ws.ID), Task: "no share", Harness: "claude", Mode: string(domain.LaunchHeadless), AccountMemberID: string(e.ada.id),
+	}, &launched); err == nil || !strings.Contains(err.Error(), "has not shared their account with you") {
+		t.Fatalf("Bo's launch without a share: %v; want the share refusal", err)
 	}
 
 	// Only a login's owner names it: Bo, who holds a share, cannot.
@@ -289,5 +313,33 @@ func TestIntegrationATeammatesSignalIsChecked(t *testing.T) {
 	ended := waitLoginRun(t, ctrl, launched.Run.ID, func(r protocol.Run) bool { return r.Status == string(domain.RunFailed) })
 	if ended.AccountLogin != string(work) || !strings.Contains(ended.Reason, "the agent reported a usage limit that Ada (work)'s usage does not show") {
 		t.Fatalf("run failed on %q with %q; want it kept on work with the checked reason", ended.AccountLogin, ended.Reason)
+	}
+}
+
+// TestIntegrationTemplateFallsBackToNextLogin: a template launch
+// names no login, so it starts from Ada's first login and, that one spent,
+// takes her second, as run.launch does.
+func TestIntegrationTemplateFallsBackToNextLogin(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	usage := &stubLoginUsage{used: map[domain.Account]float64{}}
+	e := &coordEnv{rt: newE2ERuntime(), image: "e2e/fake", usage: usage}
+	srv := e.seed(ctx, t, false)
+	second := domain.LoginID("lgn-second0000")
+	addLogin(ctx, t, srv, e.dataDir, e.ada.id, second, "second")
+	signInDefault(t, e.dataDir, e.ada.id)
+	usage.set(domain.AccountOf(e.ada.id), 100)
+	usage.set(domain.Account{Member: e.ada.id, Login: second}, 10)
+	if err := srv.srv.Store().SaveTemplate(ctx, &store.Template{WorkspaceID: e.ws.ID, Name: "nightly", Task: "nightly run", Harness: "claude", Mode: domain.LaunchHeadless}); err != nil {
+		t.Fatal(err)
+	}
+	ctrl, client := srv.control(t, e.ada.key)
+	defer client.Close()
+	var launched protocol.TemplateLaunchResult
+	if err := ctrl.Call(protocol.MethodTemplateLaunch, protocol.TemplateLaunchParams{WorkspaceID: string(e.ws.ID), Name: "nightly"}, &launched); err != nil {
+		t.Fatalf("template.launch: %v", err)
+	}
+	if launched.Run.AccountMemberID != string(e.ada.id) || launched.Run.AccountLogin != string(second) {
+		t.Fatalf("template run on %s login %q; want Ada's login second", launched.Run.AccountMemberID, launched.Run.AccountLogin)
 	}
 }

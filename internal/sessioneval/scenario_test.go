@@ -81,6 +81,8 @@ func TestParseStream(t *testing.T) {
 	out := `{"type":"system","subtype":"init"}
 {"type":"assistant","message":{"content":[{"type":"text","text":"on it"},{"type":"tool_use","name":"Bash","input":{}}]}}
 {"type":"user","message":{"content":"plain text"}}
+{"type":"user","message":{"content":[{"type":"text","text":"[Your previous response had no visible output. Please continue and produce a user-visible response.]"}]}}
+{"type":"assistant","message":{"content":[{"type":"tool_use","name":"mcp__aether__aether_report"}]}}
 {"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"},{"type":"tool_use","name":"Edit"}]}}
 {"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"grep 'aether-internal subsession start' notes"}},{"type":"tool_use","name":"mcp__aether__aether_subsession_start"}]}}
 {"type":"result","subtype":"success","is_error":false,"result":"fixed","total_cost_usd":0.25,"subagent_stats":{"spawned":2},"modelUsage":{"small":{"outputTokens":3},"large":{"outputTokens":90}}}
@@ -89,7 +91,7 @@ func TestParseStream(t *testing.T) {
 	if err != nil || !resulted {
 		t.Fatalf("parseStream: resulted %v, err %v", resulted, err)
 	}
-	if reply.Answer != "fixed" || reply.Model != "large" || reply.CostUSD == nil || *reply.CostUSD != 0.25 || reply.Tools["Bash"] != 3 || reply.Tools["Edit"] != 1 || reply.Subagents != 2 || reply.ToolStarts != 1 {
+	if reply.Answer != "fixed" || reply.Model != "large" || reply.CostUSD == nil || *reply.CostUSD != 0.25 || reply.Tools["Bash"] != 3 || reply.Tools["Edit"] != 1 || reply.Subagents != 2 || reply.ToolStarts != 1 || reply.ToolReports != 1 || reply.Nudges != 1 {
 		t.Fatalf("reply = %+v", reply)
 	}
 	if _, resulted, err := parseStream([]byte(`{"type":"result","subtype":"error_during_execution","is_error":true,"result":"boom"}`)); !resulted || err == nil || !strings.Contains(err.Error(), "boom") {

@@ -308,6 +308,7 @@ func TestARestoredVMReadsRunningBeforeItsGuestAnswers(t *testing.T) {
 	g.mu.Lock()
 	g.pingHold = hold
 	g.mu.Unlock()
+	g.redials.Store(0)
 	done := make(chan error, 1)
 	go func() { done <- h.engine.restore(t.Context(), "run-a") }()
 	deadline := time.After(10 * time.Second)
@@ -322,6 +323,13 @@ func TestARestoredVMReadsRunningBeforeItsGuestAnswers(t *testing.T) {
 	rec, _ := h.engine.load("run-a")
 	if err != nil || info.Exited || !rec.Saved || rec.Resumed == nil || rec.CacheSynced {
 		t.Errorf("a resumed VM whose guest has yet to answer inspects as exited=%v, %v, saved=%v resumed=%v cache synced=%v; want it running, its saved state kept and its cache unsynced", info.Exited, err, rec.Saved, rec.Resumed != nil, rec.CacheSynced)
+	}
+	for g.redials.Load() == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("the wait for the guest's helper did not redial")
+		case <-time.After(10 * time.Millisecond):
+		}
 	}
 	close(hold)
 	if err = <-done; err != nil {

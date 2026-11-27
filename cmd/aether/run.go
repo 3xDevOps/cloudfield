@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -46,7 +47,7 @@ func runRun(args []string) error {
 	permission := fs.String("permission", "", "root, default or isolated: root lets sudo run without asking, default asks you before each sudo, isolated keeps every change outside the checkout to the session (default: default)")
 	workspace := fs.String("workspace", "", "workspace ID or name (default: the only workspace)")
 	account := fs.String("account", "", "member ID whose shared agent account to use")
-	login := fs.String("login", "", "one of your own logins of the agent to launch on, by name; default is the login in your home, and cloudfield agent logins lists the others (default: your first login the order and its switches allow)")
+	login := fs.String("login", "", "one of your own logins of the agent to launch on, by name or id; default is the login in your home, and cloudfield agent logins lists the others (default: your first login the order and its switches allow)")
 	template := fs.String("template", "", "launch a saved task template instead of a prompt")
 	cachedBase := fs.String("cached-base", "", "retry a launch from an exact accepted base commit")
 	fallbackOrder := fs.String("fallback", "", fallbackHelp)
@@ -67,6 +68,25 @@ func runRun(args []string) error {
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	loginGiven := false
+	fs.Visit(func(f *flag.Flag) { loginGiven = loginGiven || f.Name == "login" })
+	if loginGiven && *login == "" {
+		return errors.New("--login needs a name: cloudfield agent logins lists yours")
+	}
+	rest := fs.Args()
+	if task == "" && len(rest) > 0 {
+		rest = rest[1:]
+	}
+	if i := slices.IndexFunc(rest, func(arg string) bool {
+		name, _, _ := strings.Cut(arg, "=")
+		return name == "--login" || name == "-login"
+	}); i >= 0 {
+		stop := fs.Arg(0)
+		if parsed := len(args) - fs.NArg(); parsed > 0 && args[parsed-1] == "--" {
+			stop = "--"
+		}
+		return fmt.Errorf("%s comes after %q, where cloudfield session reads no more flags, so it would be ignored; give it before %q", rest[i], stop, stop)
 	}
 	if task == "" && fs.NArg() == 1 {
 		task = fs.Arg(0)
@@ -119,24 +139,21 @@ func runRun(args []string) error {
 			if *permission != "" && !slices.Contains(info.Features, protocol.FeaturePermission) {
 				return fmt.Errorf("--permission: server %s runs every agent as root and has no permission tiers; update the server with aether server update", info.ServerVersion)
 			}
-			if *login != "" && !slices.Contains(info.Features, protocol.FeatureLogins) {
-				return fmt.Errorf("--login: server %s keeps only the login in your home; update the server with cloudfield server update", info.ServerVersion)
+			if *login != "" {
+				if err := requireLogins(info, "--login"); err != nil {
+					return err
+				}
 			}
 		}
 		var res protocol.RunLaunchResult
 		params := launchParams(wsID, task, *agent, *mode, *model, *effort, *account, *cachedBase)
 		params.FallbackAccountMemberIDs, params.NoFallback = fallbacks, *noFallback
-		// Only a login's owner names it, so a login named on a teammate's
-		// account goes as given, for the server to refuse.
-		params.Login = *login
-		if *login != "" && (*account == "" || *account == info.Member.ID) {
-			logins, err := listLogins(c, *agent)
+		if *login != "" {
+			id, err := launchLogin(c, info.Member.ID, *agent, *account, *login)
 			if err != nil {
 				return err
 			}
-			if params.Login, err = loginID(logins, *login); err != nil {
-				return fmt.Errorf("--login: %w", err)
-			}
+			params.Login = id
 		}
 		params.Children = *children
 		params.Permission = *permission
@@ -156,6 +173,7 @@ func runRun(args []string) error {
 			_, _ = fmt.Fprintf(os.Stderr, "idempotency key %s already launched session %s; nothing new was launched\n", params.IdempotencyKey, res.Run.ID)
 		}
 		fmt.Printf("session %s %s\n", res.Run.ID, res.Run.Status)
+		printLanded(c, res, *login)
 		return nil
 	})
 }

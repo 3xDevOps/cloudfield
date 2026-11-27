@@ -53,6 +53,14 @@ type Store struct {
 	builds singleflight.Group
 	// programs runs one program build at a time.
 	programs sync.Mutex
+	// helper is the helper binary HelperDisk last hashed, guarded by mu. The
+	// sweep keeps its disk, so a host without VMs does not rebuild it.
+	helper helperDigest
+}
+
+type helperDigest struct {
+	info os.FileInfo
+	sum  string
 }
 
 // DockerImages streams `docker save` of a local image. It supplies the
@@ -376,8 +384,8 @@ func (s *Store) Tags(repo string) ([]string, error) {
 }
 
 // Sweep deletes base disks that have no tag and no root disk, helper disks
-// no session links to, and caches that are neither a pool's newest nor
-// linked to by a session.
+// of an older binary that no session links to, and caches that are neither
+// a pool's newest nor linked to by a session.
 func (s *Store) Sweep() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -400,7 +408,7 @@ func (s *Store) sweepLocked() error {
 			return fmt.Errorf("vmimage: sweep: %w", err)
 		}
 		for _, e := range entries {
-			if tagged[e.Name()] && d.dir == s.basesDir() {
+			if tagged[e.Name()] && d.dir == s.basesDir() || e.Name() == s.helper.sum && d.dir == s.helpersDir() {
 				continue
 			}
 			dir := filepath.Join(d.dir, e.Name())
@@ -551,6 +559,7 @@ func (s *Store) tmpDir() string      { return filepath.Join(s.dir, "tmp") }
 func (s *Store) basesDir() string    { return filepath.Join(s.dir, "bases") }
 func (s *Store) helpersDir() string  { return filepath.Join(s.dir, "helpers") }
 func (s *Store) preparedDir() string { return filepath.Join(s.dir, "prepared") }
+func (s *Store) keptDir() string     { return filepath.Join(s.dir, "kept") }
 func (s *Store) tagsPath() string    { return filepath.Join(s.dir, "tags.json") }
 
 func dirName(id string) string { return strings.ReplaceAll(id, ":", "-") }

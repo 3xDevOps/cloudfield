@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import userEvent from '@testing-library/user-event'
 import { changeTiles } from '@/components/tiles/area'
 import { TileArea } from '@/components/tiles/tile-area'
+import type * as xtermHostModule from '@/components/xterm-host'
 import type * as apiModule from '@/lib/api'
 import * as fileDrag from '@/lib/file-drag'
 import * as motion from '@/lib/motion'
@@ -13,6 +14,14 @@ import { dropTab, emptyTiles, openTab, pickTab, splitTile, tileList } from '@/st
 import { ScriptedSession } from '@/test/acp-stream'
 import { alice, bob, run, serverInfo, workspace } from '@/test/fixtures'
 import { StubSocket } from '@/test/stub-socket'
+
+// A real xterm costs each mount of a tile most of its jsdom time, so only the
+// cases that read a terminal turn it on (docs/testing.md).
+const xterm = vi.hoisted(() => ({ enabled: false }))
+vi.mock('@/components/xterm-host', async (importOriginal) => {
+  const actual = await importOriginal<typeof xtermHostModule>()
+  return { ...actual, useXterm: (options: Parameters<typeof actual.useXterm>[0] = {}) => actual.useXterm({ ...options, enabled: xterm.enabled && options.enabled !== false }) }
+})
 
 vi.mock('@/lib/api', async (importOriginal) => {
   const actual = await importOriginal<typeof apiModule>()
@@ -63,6 +72,7 @@ const tile = (name: string) => screen.getByRole('region', { name: new RegExp(`^$
 const grid = (name: string) => tile(name).querySelector<HTMLElement>('[id^=run-agent-panel] .overflow-x-auto')!
 
 beforeEach(() => {
+  xterm.enabled = false
   StubSocket.install()
   useStore.setState({
     hydrated: true,
@@ -92,6 +102,10 @@ afterEach(() => {
 })
 
 describe('terminals in tiles', () => {
+  beforeEach(() => {
+    xterm.enabled = true
+  })
+
   it('sends nothing and keeps its attach when a click focuses its tile', () => {
     show('run_1')
     beside('run_2')

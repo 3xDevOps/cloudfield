@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -20,6 +21,7 @@ import (
 const (
 	claudeConfigPath       = ".claude.json"
 	claudeLegacyConfigPath = ".claude/.config.json"
+	claudeSettingsPath     = ".claude/settings.json"
 	anthropicProfileDir    = ".config/anthropic"
 	maxProfileBytes        = 1 << 20
 	// A profile is a file name; NAME_MAX is 255 with the ".json" suffix.
@@ -66,6 +68,77 @@ func (m *Manager) OwnerLogin(member domain.MemberID, agent string) (*OwnerLogin,
 		return nil, fmt.Errorf("memberhome: read %s login of %q: %w", agent, member, err)
 	}
 	return login, nil
+}
+
+// ClaudeSettings is what ~/.claude/settings.json sets that can sign Claude
+// Code in without any file Cloudfield reads for a login: an apiKeyHelper
+// command, and the variables of its env block.
+type ClaudeSettings struct {
+	APIKeyHelper bool
+	Env          map[string]string
+}
+
+// ClaudeSettings reads ~/.claude/settings.json in member's home, as Claude
+// Code does through a symlink, here only one that stays in the home. A
+// home or file that does not exist sets nothing.
+func (m *Manager) ClaudeSettings(member domain.MemberID) (ClaudeSettings, error) {
+	home, err := m.openExistingHome(member)
+	if errors.Is(err, fs.ErrNotExist) {
+		return ClaudeSettings{}, nil
+	}
+	if err != nil {
+		return ClaudeSettings{}, err
+	}
+	defer func() { _ = home.Close() }()
+	// Stat first: opening a device node a session planted there would act
+	// on the host's device.
+	before, err := home.Stat(claudeSettingsPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return ClaudeSettings{}, nil
+	}
+	if err == nil && !before.Mode().IsRegular() {
+		err = errors.New("it is not a regular file")
+	}
+	if err != nil {
+		return ClaudeSettings{}, fmt.Errorf("memberhome: %s of %q: %w", claudeSettingsPath, member, err)
+	}
+	f, err := home.OpenFile(claudeSettingsPath, os.O_RDONLY|syscall.O_NONBLOCK, 0)
+	if errors.Is(err, fs.ErrNotExist) {
+		return ClaudeSettings{}, nil
+	}
+	if err != nil {
+		return ClaudeSettings{}, fmt.Errorf("memberhome: %s of %q: %w", claudeSettingsPath, member, err)
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	switch {
+	case err != nil:
+	case !info.Mode().IsRegular() || !os.SameFile(before, info):
+		err = errors.New("it is not a regular file")
+	case hasMultipleLinks(info):
+		err = errors.New("it has another hard link")
+	case info.Size() > maxProfileBytes:
+		err = stateTooLarge{size: info.Size(), limit: maxProfileBytes}
+	}
+	var data []byte
+	if err == nil {
+		data, err = io.ReadAll(io.LimitReader(f, maxProfileBytes))
+	}
+	if err != nil {
+		return ClaudeSettings{}, fmt.Errorf("memberhome: %s of %q: %w", claudeSettingsPath, member, err)
+	}
+	var settings struct {
+		APIKeyHelper string         `json:"apiKeyHelper"`
+		Env          map[string]any `json:"env"`
+	}
+	if len(data) > 0 && json.Unmarshal(data, &settings) != nil {
+		return ClaudeSettings{}, fmt.Errorf("memberhome: %s of %q: %w", claudeSettingsPath, member, notJSON(claudeSettingsPath))
+	}
+	out := ClaudeSettings{APIKeyHelper: strings.TrimSpace(settings.APIKeyHelper) != "", Env: make(map[string]string, len(settings.Env))}
+	for key, value := range settings.Env {
+		out.Env[key] = fmt.Sprint(value)
+	}
+	return out, nil
 }
 
 // apiKeyLoginRead is what claudeAPIKeyLogin found in the file that was rel,
@@ -205,26 +278,30 @@ func lstatLogin(home *os.Root, rel string) (fs.FileInfo, error) {
 // the file only by its place, since a profile's name comes from a file.
 func readProfileFile(home *os.Root, dir, rel string, limit int64) ([]byte, error) {
 	where := dir + "/" + strings.SplitN(rel, "/", 2)[0]
-	parent, leaf, err := openLoginParent(home, dir+"/"+rel)
+	leaf := path.Base(rel)
+	parent, _, err := openLoginParent(home, dir+"/"+rel)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", where, withoutPath(err))
+		return nil, fmt.Errorf("%s: %w", where, withoutPath(err, leaf))
 	}
 	defer func() { _ = parent.Close() }()
 	data, err := readRegularFile(parent, leaf, limit)
 	if err != nil {
-		return nil, fmt.Errorf("%s: %w", where, withoutPath(err))
+		return nil, fmt.Errorf("%s: %w", where, withoutPath(err, leaf))
 	}
 	return data, nil
 }
 
-// withoutPath is err without the file name it carries, which can hold a
-// profile name read from a file.
-func withoutPath(err error) error {
+// withoutPath is err without the file name leaf it may carry, which can
+// hold a profile name read from a file.
+func withoutPath(err error, leaf string) error {
 	if pathErr := (*fs.PathError)(nil); errors.As(err, &pathErr) {
 		return fmt.Errorf("%s: %w", pathErr.Op, pathErr.Err)
+	}
+	if !strings.Contains(err.Error(), leaf) {
+		return err
 	}
 	return errors.New("it is not a single regular file within the size limit")
 }

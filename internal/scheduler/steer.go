@@ -636,6 +636,10 @@ func (s *Scheduler) Cause(run domain.RunID, activity domain.RunActivity) events.
 	return ""
 }
 
+// ErrMoving refuses a message to a session moving to another account or
+// login.
+var ErrMoving = errors.New("scheduler: the session is moving")
+
 // Inject delivers a steering message to the live run's agent through its
 // driver; the tui driver ends it with the harness's submit sequence so the
 // text reaches the agent's conversation rather than sitting in its input box.
@@ -645,6 +649,26 @@ func (s *Scheduler) Inject(ctx context.Context, run domain.RunID, actor domain.M
 	if entry != nil && entry.switching != "" {
 		s.mu.Unlock()
 		return "", fmt.Errorf("%w: %w; send the message when it finishes", ptyhost.ErrNoSession, ErrSwitching)
+	}
+	// The agent a move replaces would take the message, and the move would
+	// stop it mid-turn.
+	if entry != nil && entry.moving {
+		var to domain.MemberID
+		if entry.accountSwap != nil {
+			to = entry.accountSwap.To
+		}
+		s.mu.Unlock()
+		// Members of a move where nobody keeps added logins never see the word.
+		where := "another account"
+		if r, err := s.cfg.Store.GetRun(ctx, run); err == nil {
+			for _, member := range []domain.MemberID{r.MemberID, r.HomeMember(), r.AccountMember(), to} {
+				if logins, listErr := s.cfg.Store.ListAgentLogins(ctx, member, r.Harness); member != "" && listErr == nil && len(logins) > 0 {
+					where += " or login"
+					break
+				}
+			}
+		}
+		return "", fmt.Errorf("%w: %w to %s; send the message when it finishes", ptyhost.ErrNoSession, ErrMoving, where)
 	}
 	if entry != nil && (entry.status == domain.RunRunning || entry.status == domain.RunNeedsAttention) {
 		workspace := entry.workspaceID

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"sync"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
 	"github.com/3xDevOps/cloudfield/internal/fallback"
+	"github.com/3xDevOps/cloudfield/internal/memberhome"
 	"github.com/3xDevOps/cloudfield/internal/permissions"
 	"github.com/3xDevOps/cloudfield/internal/ptyhost"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
@@ -82,6 +84,9 @@ type accountSwap struct {
 	// restart that finds Sending never sends it again.
 	Continuation string `json:"continuation,omitempty"`
 	Sending      bool   `json:"sending,omitempty"`
+	// perUse is whether To's login is billed per use, read before the old
+	// container goes so that no read can fail the move after it.
+	perUse bool
 }
 
 func (a *accountSwap) to() domain.Account {
@@ -177,6 +182,10 @@ func (s *Scheduler) continueLiveRun(entry *supervised, terminal bool, message st
 	}
 	if s.releaseMoveClaim(entry) {
 		return usageEnded, ""
+	}
+	// The claim may have kept an earlier move from sending its continuation.
+	if swap := s.acp.owedContinuation(entry); swap != nil {
+		s.goMove(func() { s.acp.sendContinuation(entry, swap) })
 	}
 	return usageNoFallback, reason
 }
@@ -326,17 +335,20 @@ func (s *Scheduler) awaitUsageLimit(entry *supervised) bool {
 
 // markUsageLimit records the adapter's usage-limit signal for a headless
 // run, in the sidecar too, so a restart that finds the agent exited still
-// knows why.
-func (s *Scheduler) markUsageLimit(run domain.RunID, message, session string) {
+// knows why. A signal read while a move replaces the container, or from a
+// container on another login than the run's now, is the replaced one's and
+// is dropped.
+func (s *Scheduler) markUsageLimit(run domain.RunID, limit events.RunUsageLimitPayload) {
 	s.mu.Lock()
 	entry := s.runs[run]
-	live := entry != nil && entry.launchMode == domain.LaunchHeadless && !entry.acp
-	newSession := live && domain.ValidAgentSessionID(session) && entry.agentSessionID != session
+	live := entry != nil && entry.launchMode == domain.LaunchHeadless && !entry.acp && !entry.moving &&
+		(limit.Account == "" || (domain.Account{Member: limit.Account, Login: limit.Login}) == entry.account)
+	newSession := live && domain.ValidAgentSessionID(limit.SessionID) && entry.agentSessionID != limit.SessionID
 	if live {
 		if newSession {
-			entry.agentSessionID = session
+			entry.agentSessionID = limit.SessionID
 		}
-		s.setUsageLimitLocked(entry, message)
+		s.setUsageLimitLocked(entry, limit.Message)
 	}
 	s.mu.Unlock()
 	if newSession {
@@ -533,7 +545,7 @@ func (s *Scheduler) consumeUsageLimits(ctx context.Context, sub events.Subscript
 				return last
 			}
 			if p, isLimit := e.Payload.(events.RunUsageLimitPayload); isLimit {
-				s.markUsageLimit(e.RunID, p.Message, p.SessionID)
+				s.markUsageLimit(e.RunID, p)
 			}
 			last = max(last, e.Seq)
 		}
@@ -569,10 +581,14 @@ func (s *Scheduler) tryMove(ctx context.Context, entry *supervised, m accountMov
 	stop := func(cause string) (usageOutcome, string) {
 		return usageNoFallback, m.cannotContinue(fromName, cause)
 	}
+	f := s.usageFallbackSeam()
+	logins, listErr := s.cfg.Store.ListAgentLogins(ctx, from.Member, run.Harness)
+	if !m.revoked && len(logins) > 0 && f != nil && f.Usage != nil {
+		s.noteRunOut(ctx, f, run, from)
+	}
 	if run.Fallback.Disabled {
 		return usageNoFallback, m.stopped(fromName) + "fallback is off for this session"
 	}
-	f := s.usageFallbackSeam()
 	if f == nil || f.Usage == nil {
 		return stop("usage fallback is not configured on this server")
 	}
@@ -602,6 +618,9 @@ func (s *Scheduler) tryMove(ctx context.Context, entry *supervised, m accountMov
 		}
 	}
 	var measured fallback.Measured
+	// reported is the vendor's message as a move off an account with added
+	// logins keeps it in the item log; it is empty otherwise.
+	var reported string
 	if m.revoked {
 		measured, err = fallback.MeasureAway(ctx, s.cfg.Store, f.Usage, run.MemberID, from, run.Harness, run.Fallback)
 	} else {
@@ -627,28 +646,35 @@ func (s *Scheduler) tryMove(ctx context.Context, entry *supervised, m accountMov
 		s.mu.Lock()
 		message := entry.usageLimit
 		s.mu.Unlock()
-		logins, listErr := s.cfg.Store.ListAgentLogins(ctx, from.Member, run.Harness)
 		if listErr != nil {
 			return stop(listErr.Error())
 		}
+		restricted := false
 		if len(logins) > 0 {
+			reported = vendorLine(message)
 			if refusal := s.checkTeammateSignal(ctx, f, run, from); refusal != "" {
 				return usageNoFallback, m.stopped(fromName) + refusal
 			}
-			s.noteRunOut(ctx, f, run, from)
 			// A seat, allocation, group or model message is a restriction
-			// on the account, not a spent balance: its other logins share it.
-			if !agentstatus.IsDepletionMessage(message) {
-				for _, l := range logins {
-					used = append(used, domain.Account{Member: from.Member, Login: loginOf(l.ID)})
-				}
-			}
+			// on the account, not a spent balance: its other logins share it
+			// and are no candidates.
+			restricted = !agentstatus.IsDepletionMessage(message)
+		}
+		if restricted {
+			s.noteRestricted(entry, from.Member)
+			m.restricted = true
 		}
 		measured, err = fallback.MeasureNext(ctx, s.cfg.Store, f.Usage, run.MemberID, from, used, run.Harness, run.Fallback)
 	}
 	if err != nil {
 		return stop("read fallback usage: " + err.Error())
 	}
+	s.mu.Lock()
+	left := slices.Clone(entry.restricted)
+	s.mu.Unlock()
+	maps.DeleteFunc(measured, func(account domain.Account, _ float64) bool {
+		return account != from && slices.Contains(left, account.Member)
+	})
 	// Admitted like a launch, and held until the replacement has started.
 	release, err := s.reserveCapacity(ctx)
 	if err != nil {
@@ -664,11 +690,11 @@ func (s *Scheduler) tryMove(ctx context.Context, entry *supervised, m accountMov
 	case to.Member == "" && m.revoked:
 		return usageNoFallback, m.stopped(fromName) + "no other account can run " + run.Harness
 	case to.Member == "":
-		return usageNoFallback, noFallbackReason(fromName, run.Harness, measured, from) + s.triedLogins(ctx, f, run, measured, from)
+		return usageNoFallback, noFallbackReason(fromName, run.Harness, measured, from) + s.triedLogins(ctx, f, run, m)
 	case excluded != nil:
 		slog.Warn("scheduler: fallback accounts left out of a move", "run", run.ID, "error", excluded)
 	}
-	return s.replaceContainer(ctx, entry, f, m, run, from, to, session)
+	return s.replaceContainer(ctx, entry, f, m, run, from, to, session, reported)
 }
 
 // mayLaunch is the launch admission a member's own standing needs in every
@@ -728,9 +754,25 @@ func (s *Scheduler) chooseMove(ctx context.Context, entry *supervised, f *UsageF
 		}
 		off = settings.Off
 	}
+	payer := sync.OnceValues(func() (string, error) { return s.LoginPayer(ctx, run.WorkspaceID, home, run.Harness, mode) })
 	to, excluded := fallback.Select(ctx, s.cfg.Store, measured, run.MemberID, from, run.Harness, workspaces, run.Fallback, func(ctx context.Context, account domain.Account) (bool, error) {
 		if off.Covers(run.Harness, account.Member) {
 			return false, nil
+		}
+		if account.Login.Added() {
+			// As at launch: a variable would pay instead of the login.
+			if paidBy, payerErr := payer(); payerErr != nil || paidBy != "" {
+				return false, payerErr
+			}
+		}
+		if account.Login.Added() && run.Permission == domain.PermissionIsolated {
+			if s.cfg.Logins == nil {
+				return false, nil
+			}
+			identity, idErr := s.cfg.Logins.Identity(account.Member, run.Harness, account.Login)
+			if idErr != nil || identity.Kind == memberhome.LoginConsole {
+				return false, idErr
+			}
 		}
 		if home != run.MemberID {
 			if _, authErr := fallback.ResolveLaunchAccountIn(ctx, s.cfg.Store, home, string(account.Member), workspaces); authErr != nil {
@@ -773,12 +815,16 @@ func (s *Scheduler) chooseMove(ctx context.Context, entry *supervised, f *UsageF
 				}
 			}
 		}
-		return s.FallbackLaunchable(ctx, home, from.Member, account, run.Harness, mode)
+		return s.FallbackLaunchable(ctx, home, from.Member, account, run.Harness, mode, run.Permission)
 	})
 	if to == from {
 		return run, none, excluded, nil
 	}
-	swap := &accountSwap{From: from.Member, FromLogin: from.Login, To: to.Member, ToLogin: to.Login}
+	perUse, err := s.LoginPerUse(ctx, home, to, run.Harness)
+	if err != nil {
+		return nil, none, nil, err
+	}
+	swap := &accountSwap{From: from.Member, FromLogin: from.Login, To: to.Member, ToLogin: to.Login, perUse: perUse}
 	if run.ACP {
 		swap.Continuation = m.continuation(s.accountLabel(ctx, from, run.Harness), s.accountLabel(ctx, to, run.Harness))
 	}
@@ -803,7 +849,8 @@ func (s *Scheduler) chooseMove(ctx context.Context, entry *supervised, f *UsageF
 // the authorization mutex, as a launch is admitted: the run's owner and home
 // member are admitted again and to must still be shared with both, so a
 // handoff, revocation or kill since chooseMove fails the move rather than
-// record an account the run never ran on.
+// record an account the run never ran on. to need not still be automatic:
+// that switch governs the next choice, not a move that chose it.
 func (s *Scheduler) commitMove(ctx context.Context, entry *supervised, f *UsageFallback, m accountMove, run *domain.Run, to domain.Account) (int, error) {
 	f.AuthorizationMu.Lock()
 	defer f.AuthorizationMu.Unlock()
@@ -819,18 +866,18 @@ func (s *Scheduler) commitMove(ctx context.Context, entry *supervised, f *UsageF
 		if launchErr := s.mayLaunch(ctx, member, workspaces); launchErr != nil {
 			return 0, launchErr
 		}
-		target := &domain.Run{AccountMemberID: to.Member, AccountLogin: to.Login, Harness: run.Harness}
-		if authErr := fallback.ResolveRunLogin(ctx, s.cfg.Store, member, target, workspaces); authErr != nil {
+		if authErr := fallback.ResolveLoginShared(ctx, s.cfg.Store, member, to, run.Harness, workspaces); authErr != nil {
 			return 0, authErr
 		}
 	}
 	s.mu.Lock()
 	killed := entry.killRequested
+	perUse := entry.accountSwap != nil && entry.accountSwap.perUse
 	s.mu.Unlock()
 	if killed {
 		return 0, errors.New("the session is being killed")
 	}
-	seq, err := s.cfg.Store.SetRunAccount(ctx, run.ID, to, m.segment(), time.Now().UTC())
+	seq, err := s.cfg.Store.SetRunAccount(ctx, run.ID, to, perUse, m.segment(), time.Now().UTC())
 	if err != nil {
 		return 0, fmt.Errorf("record the session's account: %w", err)
 	}
@@ -839,7 +886,8 @@ func (s *Scheduler) commitMove(ctx context.Context, entry *supervised, f *UsageF
 
 // replaceContainer removes the run's container, records the run on to, and
 // starts the replacement on to's login. A failure leaves no replacement.
-func (s *Scheduler) replaceContainer(ctx context.Context, entry *supervised, f *UsageFallback, m accountMove, run *domain.Run, from, to domain.Account, session string) (usageOutcome, string) {
+// reported, when set, goes to an Enhanced session's item log only.
+func (s *Scheduler) replaceContainer(ctx context.Context, entry *supervised, f *UsageFallback, m accountMove, run *domain.Run, from, to domain.Account, session, reported string) (usageOutcome, string) {
 	fromName, toName := s.accountLabel(ctx, from, run.Harness), s.accountLabel(ctx, to, run.Harness)
 	failure := func(err error) string {
 		return fmt.Sprintf("%scontinuing on %s's account failed: %v", m.stopped(fromName), toName, err)
@@ -898,8 +946,16 @@ func (s *Scheduler) replaceContainer(ctx context.Context, entry *supervised, f *
 	if err != nil {
 		return failed(err)
 	}
+	billed, perUse := s.billedPerUse(ctx, run.HomeMember(), to, run.Harness)
 	if run.ACP {
-		s.acp.switchNotice(run.ID, "info", "Continued on "+toName+"'s account", m.because(fromName)+".")
+		description := m.because(fromName) + "."
+		if reported != "" {
+			description += " The agent reported: " + reported
+		}
+		if perUse {
+			description += " " + billed
+		}
+		s.acp.switchNotice(run.ID, "info", "Continued on "+toName+"'s account", description)
 	}
 
 	ws, err := s.cfg.Store.GetWorkspace(ctx, run.WorkspaceID)
@@ -911,7 +967,7 @@ func (s *Scheduler) replaceContainer(ctx context.Context, entry *supervised, f *
 		return failed(err)
 	}
 	next := *run
-	next.AccountMemberID = to.Member
+	next.AccountMemberID, next.AccountLogin = to.Member, to.Login
 	profile, _, err := s.launchProfile(ctx, home.ID, to.Member, run.Harness)
 	if err != nil {
 		return failed(err)
@@ -974,15 +1030,21 @@ func (s *Scheduler) replaceContainer(ctx context.Context, entry *supervised, f *
 			return usageNoFallback, fmt.Sprintf("%sthe session is on %s's account and its conversation could not be restored: %v", m.stopped(fromName), toName, err)
 		}
 	}
+	if perUse && !run.ACP {
+		s.annotateRun(ctx, run.ID, billed)
+	}
 	if f.Note != nil {
 		body := fmt.Sprintf("Continued on %s's account because %s.", toName, m.because(fromName))
+		if perUse {
+			body += " " + billed
+		}
 		if err := f.Note(ctx, run, body, fmt.Sprintf("%s:account:%d", run.ID, seq)); err != nil {
 			slog.Warn("scheduler: post the account move to the room", "run", run.ID, "error", err)
 		}
 	}
 	switch {
 	case again == "" && run.ACP:
-		s.acp.sendContinuation(entry)
+		s.acp.sendContinuation(entry, swap)
 	case again == "":
 	case run.ACP:
 		// The follow-up move supersedes the continuation this one owed.
@@ -1027,12 +1089,9 @@ func (s *Scheduler) publishAccount(ctx context.Context, id domain.RunID, from do
 		Account: run.AccountMember(), Previous: from.Member, Requested: run.RequestedAccountMemberID,
 		Login: run.AccountLogin, PreviousLogin: from.Login,
 	}
+	payload.PerUse = run.AccountLoginPerUse
 	if l, ok := s.loginRow(ctx, run.Account(), run.Harness); ok && run.AccountLogin.Added() {
 		payload.LoginName = l.Name
-		if s.cfg.Logins != nil {
-			identity, idErr := s.cfg.Logins.Identity(run.AccountMember(), run.Harness, run.AccountLogin)
-			payload.PerUse = idErr == nil && identity.PerUse()
-		}
 	}
 	if l, ok := s.loginRow(ctx, from, run.Harness); ok && from.Login.Added() {
 		payload.PreviousLoginName = l.Name

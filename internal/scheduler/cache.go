@@ -212,6 +212,7 @@ func (s *Scheduler) touchCache(member domain.MemberID, pool string) {
 // vmImageSweeper is a runtime that keeps the disks VMs boot from.
 type vmImageSweeper interface {
 	SweepImages() error
+	DropKeptCheckoutDisks() error
 }
 
 // sweepCaches is shared by startup, the existing hourly maintenance and one

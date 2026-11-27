@@ -136,6 +136,10 @@ func TestSelectTriesTheAccountsLoginsThenTheLaunchersOwn(t *testing.T) {
 			map[string]float64{"Lena/default": 97, "Lena/work": 98, "Ada/default": 30}, "Ada/default"},
 		{"unreadable last of all", []string{"Lena/console", "Lena/work"}, "Lena/default",
 			map[string]float64{"Lena/default": 97, "Lena/work": 98, "Ada/default": 99, "Bo/default": 99}, "Lena/console"},
+		{"another account's unreadable default last of all", []string{"Lena/work"}, "Lena/default",
+			map[string]float64{"Lena/default": 97, "Lena/work": 98, "Bo/default": 99}, "Ada/default"},
+		{"no unreadable default when nobody added a login", nil, "Lena/default",
+			map[string]float64{"Lena/default": 97, "Bo/default": 99}, "Lena/default"},
 		{"a launch below the threshold stays", []string{"Lena/work"}, "Lena/default",
 			map[string]float64{"Lena/default": 50, "Lena/work": 0}, "Lena/default"},
 	} {
@@ -209,5 +213,110 @@ func TestResolveRunLoginNeedsTheLoginShared(t *testing.T) {
 	}
 	if err := ResolveRunLogin(ctx, w.db, w.ids["Bo"], run, nil); !errors.Is(err, permissions.ErrDenied) {
 		t.Fatalf("Bo, who holds no share: %v; want denied", err)
+	}
+}
+
+// Reopening a session on a login whose owner keeps login rows needs, for
+// the member reopening it, the session's owner and the member whose home
+// it mounts, the login on for shares and automatic unless they own it. An
+// owner who keeps no rows has only the default login, which needs the
+// reopening member's share alone, as before logins existed.
+func TestResolveRunRelaunchChecksEveryMemberAndBothSwitches(t *testing.T) {
+	w := newLoginWorld(t, "Ada/work")
+	ctx := context.Background()
+	lena, ada, bo := w.ids["Lena"], w.ids["Ada"], w.ids["Bo"]
+	onAdasDefault := &domain.Run{MemberID: lena, AccountMemberID: ada, Harness: "claude"}
+	if err := ResolveRunRelaunch(ctx, w.db, lena, onAdasDefault, nil); err != nil {
+		t.Fatalf("Lena reopening her session on Ada's default: %v", err)
+	}
+	if err := w.db.SetAgentLoginAutomatic(ctx, ada, "claude", domain.DefaultLogin, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := ResolveRunRelaunch(ctx, w.db, lena, onAdasDefault, nil); !errors.Is(err, permissions.ErrDenied) {
+		t.Fatalf("Lena reopening on Ada's default, automatic off: %v; want denied", err)
+	}
+	if err := w.db.SetAgentLoginAutomatic(ctx, ada, "claude", domain.DefaultLogin, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.db.RevokeAccountShare(ctx, ada, lena); err != nil {
+		t.Fatal(err)
+	}
+	if err := ResolveRunRelaunch(ctx, w.db, ada, onAdasDefault, nil); !errors.Is(err, permissions.ErrDenied) {
+		t.Fatalf("Ada reopening Lena's session on her default after revoking Lena's share: %v; want denied", err)
+	}
+	onBosDefault := &domain.Run{MemberID: lena, AccountMemberID: bo, Harness: "claude"}
+	if _, err := w.db.RevokeAccountShare(ctx, bo, lena); err != nil {
+		t.Fatal(err)
+	}
+	if err := ResolveRunRelaunch(ctx, w.db, bo, onBosDefault, nil); err != nil {
+		t.Fatalf("Bo, who keeps no login rows, reopening Lena's session on his default: %v; want allowed, as before logins existed", err)
+	}
+}
+
+// A launch that named no login and starts on one billed per use takes the
+// first candidate with readable usage left, in the same order, before it,
+// and stays on it when none is left.
+func TestAStartBilledPerUseIsTakenOnlyWhenNoReadableLoginIsLeft(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		added     []string
+		requested string
+		usage     map[string]float64
+		want      string
+	}{
+		{"the account's next login", []string{"Lena/console", "Lena/work"}, "Lena/console",
+			map[string]float64{"Lena/default": 99, "Lena/work": 40, "Ada/default": 0}, "Lena/work"},
+		{"the launcher's own login before a teammate's", []string{"Ada/console", "Lena/work"}, "Ada/console",
+			map[string]float64{"Ada/default": 97, "Lena/default": 99, "Lena/work": 30, "Bo/default": 0}, "Lena/work"},
+		{"another account", []string{"Lena/console"}, "Lena/console",
+			map[string]float64{"Lena/default": 97, "Ada/default": 60, "Bo/default": 20}, "Bo/default"},
+		{"stays when nothing readable is left", []string{"Lena/console", "Lena/spare"}, "Lena/console",
+			map[string]float64{"Lena/default": 97, "Ada/default": 99, "Bo/default": 99}, "Lena/console"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newLoginWorld(t, tc.added...)
+			ctx := context.Background()
+			reader := usageByLogin{}
+			for name, used := range tc.usage {
+				reader[w.logins[name]] = used
+			}
+			launcher, requested := w.ids["Lena"], w.logins[tc.requested]
+			measured, err := MeasureStart(ctx, w.db, reader, launcher, requested, "claude", domain.AccountFallback{}, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, excluded := Select(ctx, w.db, measured, launcher, requested, "claude", []domain.WorkspaceID{w.ws}, domain.AccountFallback{}, nil)
+			if excluded != nil || w.name(got) != tc.want {
+				t.Fatalf("chose %s, %v; want %s", w.name(got), excluded, tc.want)
+			}
+		})
+	}
+}
+
+// A login whose owner's session ran out on it is passed over by launches of
+// that agent only, and no longer once one of the member's logins of that
+// agent is removed.
+func TestARunOutIsPassedOverForItsAgentOnly(t *testing.T) {
+	w := newLoginWorld(t, "Ada/console")
+	ada, console := w.ids["Ada"], w.logins["Ada/console"]
+	t.Cleanup(func() { ForgetRunOuts(ada, "claude") })
+	measure := func(agent string) Measured {
+		t.Helper()
+		measured, err := Measure(context.Background(), w.db, usageByLogin{}, ada, console, agent, domain.AccountFallback{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return measured
+	}
+	NoteRunOut(console, "claude", time.Now())
+	if got := measure("claude")[console]; got != 100 {
+		t.Fatalf("claude's console login measured %v; want it passed over at 100", got)
+	}
+	if got, ok := measure("codex")[console]; ok {
+		t.Fatalf("codex's console login measured %v; want Claude Code's run-out kept to Claude Code", got)
+	}
+	ForgetRunOuts(ada, "claude")
+	if got, ok := measure("claude")[console]; ok {
+		t.Fatalf("after a removal claude's console login measured %v; want the run-out forgotten", got)
 	}
 }

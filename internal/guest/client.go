@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/backoff"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 )
@@ -149,6 +150,15 @@ func Dial(vsockPath string) (*Client, error) {
 		return nil, err
 	}
 	return &Client{conn: conn, api: guestpb.NewGuestClient(conn)}, nil
+}
+
+// Redial ends the reconnect backoff of a client whose last connection
+// failed. ResetConnectBackoff reads gRPC's connection set unlocked, so it
+// is called only in the state in which gRPC does not change that set.
+func (c *Client) Redial() {
+	if c.conn.GetState() == connectivity.TransientFailure {
+		c.conn.ResetConnectBackoff()
+	}
 }
 
 func dial(vsockPath string, port uint32) (*grpc.ClientConn, error) {

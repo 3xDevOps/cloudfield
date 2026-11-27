@@ -7,13 +7,17 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/cli"
+	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/shellquote"
 )
 
 // addedLoginsAgent is the one agent whose logins the subcommands of
@@ -47,8 +51,14 @@ func attachLogin(out io.Writer, agent protocol.AgentInfo, id string) error {
 	})
 }
 
+// signInCommand is the cloudfield agent login line that passes value to
+// flag, quoted for a shell.
+func signInCommand(agent, flag, value string) string {
+	return "cloudfield agent login " + shellquote.Quote(agent) + " " + flag + " " + shellquote.Quote(value)
+}
+
 func attachCommand(agent, id string) string {
-	return "cloudfield agent login " + agent + " --attach " + id
+	return signInCommand(agent, "--attach", id)
 }
 
 // withSignIn runs fn on a connection and its control channel. An
@@ -81,37 +91,125 @@ func withSignIn(fn func(conn *cli.Conn, c *protocol.Client) error) error {
 // names the command that returns to it.
 func signIn(out io.Writer, conn *cli.Conn, c *protocol.Client, agent, id string) error {
 	cols, rows := termSize()
-	var stream *cli.TerminalStream
-	err := interruptibly(func() (err error) {
-		stream, _, err = conn.TerminalStream(protocol.TerminalRequest{AgentLogin: id, Cols: cols, Rows: rows})
-		return err
+	return followSignIn(out, os.Stderr, c, agent, id, func() (*cli.TerminalStream, protocol.TerminalResponse, error) {
+		return conn.TerminalStream(protocol.TerminalRequest{AgentLogin: id, Cols: cols, Rows: rows})
 	})
-	if errors.Is(err, errInterrupted) {
-		return mayStillRun(err, agent, id)
-	}
-	if err == nil {
-		err = describeTerminalEnd(copyRaw(stream, 0))
-	}
-	return signInResult(out, os.Stderr, c, agent, id, err)
 }
 
-// signInResult prints how the sign-in terminal failed, if it did, and then
-// what the server made of the sign-in.
-func signInResult(out, errOut io.Writer, c *protocol.Client, agent, id string, terminalErr error) error {
-	if terminalErr != nil {
-		if _, err := fmt.Fprintf(errOut, "%v\nwaiting for the sign-in of login %s to end; Ctrl-C stops waiting and leaves it running\n", terminalErr, id); err != nil {
-			return err
-		}
-	}
+// signInRetryPause is how long a refused sign-in terminal waits for the
+// sign-in's result before it is opened again; signInRetryLimit bounds the
+// retries of a sign-in still starting, the opens included.
+var (
+	signInRetryPause = 5 * time.Second
+	signInRetryLimit = time.Minute
+)
+
+var (
+	errNotEnded      = errors.New("the sign-in has not ended")
+	errStillStarting = errors.New("the sign-in is still starting")
+)
+
+// followSignIn waits for the sign-in's result while it opens the terminal:
+// the server refuses a sign-in that ended and one still starting with the
+// same code, and only one that ended has a result. A terminal refused as
+// unavailable belongs to a sign-in that is ending, which has a result
+// soon.
+func followSignIn(out, errOut io.Writer, c *protocol.Client, agent, id string, open func() (*cli.TerminalStream, protocol.TerminalResponse, error)) error {
 	var login protocol.AgentLogin
-	if err := callInterruptibly(c, protocol.MethodAgentLoginResult, protocol.AgentLoginParams{Agent: agent, LoginID: id}, &login); err != nil {
+	result := make(chan error, 1)
+	go func() {
+		result <- c.Call(protocol.MethodAgentLoginResult, protocol.AgentLoginParams{Agent: agent, LoginID: id}, &login)
+	}()
+	ended := func(wait <-chan time.Time) error {
+		return interruptibly(func() error {
+			select {
+			case err := <-result:
+				return err
+			case <-wait:
+				return errNotEnded
+			}
+		})
+	}
+	var deadline time.Time
+	for {
+		var stream *cli.TerminalStream
+		var ack protocol.TerminalResponse
+		err := interruptibly(func() error {
+			var expired <-chan time.Time
+			if !deadline.IsZero() {
+				expired = time.After(time.Until(deadline))
+			}
+			opened := make(chan error, 1)
+			go func() {
+				s, a, err := open()
+				stream, ack = s, a
+				opened <- err
+			}()
+			select {
+			case err := <-opened:
+				return err
+			case <-expired:
+				return errStillStarting
+			}
+		})
+		switch {
+		case errors.Is(err, errInterrupted):
+			return mayStillRun(err, agent, id)
+		case errors.Is(err, errStillStarting):
+			return stillStarting(agent, id)
+		case err == nil:
+			err = describeTerminalEnd(copyRaw(stream, 0))
+		case ack.Code == protocol.CodeNotFound:
+			return err
+		case ack.Code != 0 && ack.Code != protocol.CodeUnavailable:
+			starting := ack.Code == protocol.CodeConflict
+			first := starting && deadline.IsZero()
+			if first {
+				deadline = time.Now().Add(signInRetryLimit)
+			}
+			wait := signInRetryPause
+			if starting {
+				wait = min(wait, time.Until(deadline))
+			}
+			resultErr := ended(time.After(wait))
+			switch {
+			case !errors.Is(resultErr, errNotEnded):
+				return signInEnded(out, agent, id, &login, resultErr)
+			case !starting:
+				return err
+			case !time.Now().Before(deadline):
+				return stillStarting(agent, id)
+			case first:
+				if _, werr := fmt.Fprintf(errOut, "%v\ntrying again every %v for up to %v; Ctrl-C stops trying and leaves the sign-in running\n", err, signInRetryPause, signInRetryLimit); werr != nil {
+					return werr
+				}
+			}
+			continue
+		}
+		if err != nil {
+			if _, werr := fmt.Fprintf(errOut, "%v\nwaiting for the sign-in of login %s to end; Ctrl-C stops waiting and leaves it running\n", err, id); werr != nil {
+				return werr
+			}
+		}
+		return signInEnded(out, agent, id, &login, ended(nil))
+	}
+}
+
+func stillStarting(agent, id string) error {
+	return fmt.Errorf("the sign-in of login %s is still starting after %v; open its terminal again with:\n  %s", id, signInRetryLimit, attachCommand(agent, id))
+}
+
+// signInEnded prints the login the sign-in added, or returns why it added
+// none.
+func signInEnded(out io.Writer, agent, id string, login *protocol.AgentLogin, err error) error {
+	if err != nil {
 		var rpc *protocol.Error
 		if errors.As(err, &rpc) {
 			return err
 		}
 		return mayStillRun(err, agent, id)
 	}
-	_, err := fmt.Fprintf(out, "added login %s\n", describeLogin(login))
+	_, err = fmt.Fprintf(out, "added login %s\n", describeLogin(*login))
 	return err
 }
 
@@ -123,15 +221,23 @@ func mayStillRun(err error, agent, id string) error {
 	return err
 }
 
+// loginIDText is the form of an added login's id.
+var loginIDText = regexp.MustCompile(`lgn-[a-z0-9]+`)
+
 // addRefused adds to the refusal of a second sign-in how the first one
-// ends: the server names the running sign-in, not its id.
+// ends. A login's name may look like an id, so the id is the last one the
+// server names; a server that names none leaves the person the line the
+// first sign-in printed.
 func addRefused(err error, agent string) error {
 	var rpc *protocol.Error
 	if !errors.As(err, &rpc) || rpc.Code != protocol.CodeConflict || !strings.Contains(rpc.Message, "is still running") {
 		return err
 	}
-	return fmt.Errorf("%w\nthat sign-in ends by itself 15 minutes after its terminal opened, or 10 minutes after it started if none did; "+
-		"to finish it sooner, run the %s line it printed when it started", err, attachCommand(agent, "<login-id>"))
+	const ends = "that sign-in ends by itself 15 minutes after its terminal opened, or 10 minutes after it started if none did"
+	if ids := loginIDText.FindAllString(rpc.Message, -1); len(ids) > 0 {
+		return fmt.Errorf("%w\n%s; to finish it sooner, return to it with:\n  %s", err, ends, attachCommand(agent, ids[len(ids)-1]))
+	}
+	return fmt.Errorf("%w\n%s; to finish it sooner, run the cloudfield agent login %s --attach <login-id> line it printed when it started", err, ends, shellquote.Quote(agent))
 }
 
 // describeLogin is a login's name and what Claude Code recorded at sign-in.
@@ -169,7 +275,7 @@ func agentLogins(args []string) error {
 	}
 	const usage = "usage: cloudfield agent logins [<agent>] [--json]"
 	fs := newFlagSet("agent logins")
-	jsonOut := fs.Bool("json", false, "print the logins and their usage as JSON")
+	jsonOut := fs.Bool("json", false, "print the logins, their usage and the ids of your sessions on each as JSON")
 	agent := addedLoginsAgent
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		agent, args = args[0], args[1:]
@@ -181,42 +287,72 @@ func agentLogins(args []string) error {
 		return errors.New(usage)
 	}
 	return withControl(func(c *protocol.Client) error {
-		logins, err := listLogins(c, agent)
+		logins, err := readLogins(c, agent, os.Stderr)
 		if err != nil {
 			return err
 		}
-		usage := make([]loginUsage, len(logins))
-		for i, l := range logins {
-			usage[i].AgentLogin = l
-			var read protocol.AccountUsageResult
-			if err := c.Call(protocol.MethodAccountUsage, protocol.AccountUsageParams{Login: l.ID}, &read); err != nil {
-				usage[i].UsageError = err.Error()
-				continue
-			}
-			for _, p := range read.Providers {
-				if p.Provider == agent {
-					usage[i].Usage = &p
-				}
-			}
-		}
 		if *jsonOut {
-			return json.NewEncoder(os.Stdout).Encode(usage)
+			return json.NewEncoder(os.Stdout).Encode(logins)
 		}
-		return printLogins(os.Stdout, usage)
+		return printLogins(os.Stdout, logins)
 	})
 }
 
-// loginUsage is a login and its usage as account.usage read it, or the
-// error it returned.
+// loginUsage is a login, its usage as account.usage read it or the error it
+// returned, and the caller's sessions on it that have not ended, nil when
+// they could not be read.
 type loginUsage struct {
 	protocol.AgentLogin
 	Usage      *protocol.UsageProvider `json:"usage,omitempty"`
 	UsageError string                  `json:"usage_error,omitempty"`
+	Sessions   []string                `json:"sessions"`
+}
+
+// readLogins writes to errOut why the caller's sessions could not be read,
+// and lists the logins without them.
+func readLogins(c *protocol.Client, agent string, errOut io.Writer) ([]loginUsage, error) {
+	logins, err := listLogins(c, agent)
+	if err != nil {
+		return nil, err
+	}
+	var info protocol.ServerInfoResult
+	var runs protocol.RunListResult
+	sessionsErr := c.Call(protocol.MethodServerInfo, struct{}{}, &info)
+	if sessionsErr == nil {
+		sessionsErr = c.Call(protocol.MethodRunList, protocol.RunListParams{MemberID: info.Member.ID, ActiveOnly: true}, &runs)
+	}
+	if sessionsErr != nil {
+		_, _ = fmt.Fprintf(errOut, "your sessions on each login could not be read: %v\n", sessionsErr)
+	}
+	usage := make([]loginUsage, len(logins))
+	for i, l := range logins {
+		usage[i].AgentLogin = l
+		if sessionsErr == nil {
+			usage[i].Sessions = []string{}
+		}
+		for _, r := range runs.Runs {
+			// A run on the default login records no login.
+			if r.AccountMemberID == info.Member.ID && r.Harness == agent && cmp.Or(r.AccountLogin, string(domain.DefaultLogin)) == l.ID {
+				usage[i].Sessions = append(usage[i].Sessions, r.ID)
+			}
+		}
+		var read protocol.AccountUsageResult
+		if err := c.Call(protocol.MethodAccountUsage, protocol.AccountUsageParams{Login: l.ID}, &read); err != nil {
+			usage[i].UsageError = err.Error()
+			continue
+		}
+		for _, p := range read.Providers {
+			if p.Provider == agent {
+				usage[i].Usage = &p
+			}
+		}
+	}
+	return usage, nil
 }
 
 func printLogins(w io.Writer, logins []loginUsage) error {
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(tw, "#\tLOGIN\tKIND\tPLAN\tEMAIL\tORGANISATION\tUSAGE\tAUTOMATIC\tSHARES\tBILLED")
+	_, _ = fmt.Fprintln(tw, "#\tLOGIN\tKIND\tPLAN\tEMAIL\tORGANISATION\tUSAGE\tAUTOMATIC\tSHARES\tBILLED\tYOUR SESSIONS")
 	var problems []string
 	for i, l := range logins {
 		usage := "-"
@@ -240,8 +376,12 @@ func printLogins(w io.Writer, logins []loginUsage) error {
 		if l.PerUse {
 			billed = "per use"
 		}
-		_, _ = fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", i+1, l.Name, cmp.Or(l.Kind, "-"), cmp.Or(l.Plan, "-"), cmp.Or(l.Email, "-"),
-			cmp.Or(l.OrganizationName, l.OrganizationID, "-"), usage, onOff(l.Automatic), onOff(l.Shared), billed)
+		sessions := "-"
+		if l.Sessions != nil {
+			sessions = strconv.Itoa(len(l.Sessions))
+		}
+		_, _ = fmt.Fprintf(tw, "%d\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", i+1, l.Name, cmp.Or(l.Kind, "-"), cmp.Or(l.Plan, "-"), cmp.Or(l.Email, "-"),
+			cmp.Or(l.OrganizationName, l.OrganizationID, "-"), usage, onOff(l.Automatic), onOff(l.Shared), billed, sessions)
 	}
 	if err := tw.Flush(); err != nil {
 		return err
@@ -261,6 +401,14 @@ func onOff(on bool) string {
 	return "off"
 }
 
+// requireLogins refuses flag on a server that keeps no added logins.
+func requireLogins(info protocol.ServerInfoResult, flag string) error {
+	if slices.Contains(info.Features, protocol.FeatureLogins) {
+		return nil
+	}
+	return fmt.Errorf("%s: server %s lacks the %q feature, so it keeps only the login in your home; update the server with cloudfield server update", flag, info.ServerVersion, protocol.FeatureLogins)
+}
+
 func listLogins(c *protocol.Client, agent string) ([]protocol.AgentLogin, error) {
 	var list protocol.AgentLoginListResult
 	if err := c.Call(protocol.MethodAgentLoginList, protocol.AgentLoginParams{Agent: agent}, &list); err != nil {
@@ -270,22 +418,92 @@ func listLogins(c *protocol.Client, agent string) ([]protocol.AgentLogin, error)
 }
 
 // loginID resolves one of the caller's logins, named by its id or its name,
-// to its id; a retry a launch printed names the login by id. A name may
-// look like an id, so a value that is one login's id and another's name is
-// refused.
+// to its id. An id wins: a name taken before ids were reserved may look
+// like another login's id, and the id is how either is still reached.
 func loginID(logins []protocol.AgentLogin, name string) (string, error) {
-	byID := slices.IndexFunc(logins, func(l protocol.AgentLogin) bool { return l.ID == name })
-	byName := slices.IndexFunc(logins, func(l protocol.AgentLogin) bool { return l.Name == name })
-	switch {
-	case byID >= 0 && byName >= 0 && byID != byName:
-		return "", fmt.Errorf("%q names two of your logins, as the id of login %s and as the name of the login with id %s; use %s or %s",
-			name, logins[byID].Name, logins[byName].ID, logins[byID].Name, logins[byName].ID)
-	case byID >= 0:
-		return logins[byID].ID, nil
-	case byName >= 0:
-		return logins[byName].ID, nil
+	if i := slices.IndexFunc(logins, func(l protocol.AgentLogin) bool { return l.ID == name }); i >= 0 {
+		return logins[i].ID, nil
+	}
+	if i := slices.IndexFunc(logins, func(l protocol.AgentLogin) bool { return l.Name == name }); i >= 0 {
+		return logins[i].ID, nil
 	}
 	return "", fmt.Errorf("you have no login named %q; cloudfield agent logins lists yours", name)
+}
+
+var loginIDForm = regexp.MustCompile(`^` + loginIDText.String() + `$`)
+
+// launchLogin is the login run.launch names for the --login value. An id
+// goes as given, so the retry a launch printed still names its login after
+// a rename or a removal; so does a value on a teammate's account, which
+// only its owner names and the server refuses. A name of one of the
+// caller's own logins resolves here.
+func launchLogin(c *protocol.Client, me, agent, account, value string) (string, error) {
+	if value == string(domain.DefaultLogin) || loginIDForm.MatchString(value) || (account != "" && account != me) {
+		return value, nil
+	}
+	logins, err := listLogins(c, agent)
+	if err != nil {
+		return "", err
+	}
+	id, err := loginID(logins, value)
+	if err != nil {
+		return "", fmt.Errorf("--login: %w", err)
+	}
+	return id, nil
+}
+
+// landedLines say where a launch that named a login started when that is
+// not the login named, which fallback accounts it left out, and for any
+// launch that its login is billed per use.
+func landedLines(res protocol.RunLaunchResult, named string, nameOf func(memberID string) string) []string {
+	run := res.Run
+	landed := cmp.Or(run.AccountLogin, string(domain.DefaultLogin))
+	moved := named != "" && (run.RequestedAccountMemberID != "" || (named != landed && named != run.AccountLoginName))
+	var lines []string
+	if moved || run.AccountLoginPerUse {
+		where := "your login "
+		if run.AccountMemberID != run.MemberID {
+			where = nameOf(run.AccountMemberID) + "'s account, login "
+		}
+		line := "started on " + where + cmp.Or(run.AccountLoginName, landed)
+		if moved {
+			line += ", not " + named
+		}
+		if run.AccountLoginPerUse {
+			line += "; billed per use"
+		}
+		lines = append(lines, line)
+	}
+	if named == "" {
+		return lines
+	}
+	for _, s := range res.SkippedFallbackAccounts {
+		if s.AccountMemberID == "" {
+			lines = append(lines, s.Error)
+			continue
+		}
+		lines = append(lines, "left out "+nameOf(s.AccountMemberID)+"'s account: "+s.Error)
+	}
+	return lines
+}
+
+// printLanded prints landedLines, reading member names only if a line
+// needs one; a failed read leaves the member's id and its error on stderr.
+func printLanded(c *protocol.Client, res protocol.RunLaunchResult, named string) {
+	var names map[string]string
+	nameOf := func(id string) string {
+		if names == nil {
+			var err error
+			if names, err = memberNames(c); err != nil {
+				_, _ = fmt.Fprintln(os.Stderr, err)
+				names = map[string]string{}
+			}
+		}
+		return nameOrID(names, id)
+	}
+	for _, line := range landedLines(res, named, nameOf) {
+		fmt.Println(line)
+	}
 }
 
 // withLogins runs fn with the caller's logins of Claude Code.
@@ -335,7 +553,7 @@ func removeLogin(args []string) error {
 
 func orderLogins(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: cloudfield agent logins order <login>...")
+		return errors.New("usage: cloudfield agent logins order <login> [<login> ...]")
 	}
 	return withLogins(func(c *protocol.Client, logins []protocol.AgentLogin) error {
 		ids := make([]string, len(args))
@@ -368,13 +586,13 @@ func automaticLogin(args []string) error {
 			return err
 		}
 		on := args[1] == "on"
-		if err := c.Call(protocol.MethodAgentLoginAutomatic, protocol.AgentLoginAutomaticParams{Agent: addedLoginsAgent, LoginID: id, Automatic: on}, nil); err != nil {
+		if err := c.Call(protocol.MethodAgentLoginAutomatic, protocol.AgentLoginAutomaticParams{Agent: addedLoginsAgent, LoginID: id, Automatic: &on}, nil); err != nil {
 			return err
 		}
 		if on {
 			fmt.Printf("login %s: Cloudfield may choose it and move sessions onto it\n", args[0])
 		} else {
-			fmt.Printf("login %s: used only when you name it with cloudfield session --login %s\n", args[0], args[0])
+			fmt.Printf("login %s: used only when you name it with cloudfield session --login %s\n", args[0], shellquote.Quote(args[0]))
 		}
 		return nil
 	})
@@ -390,7 +608,7 @@ func shareLogin(args []string) error {
 			return err
 		}
 		on := args[1] == "on"
-		if err := c.Call(protocol.MethodAgentLoginShare, protocol.AgentLoginShareParams{Agent: addedLoginsAgent, LoginID: id, Shared: on}, nil); err != nil {
+		if err := c.Call(protocol.MethodAgentLoginShare, protocol.AgentLoginShareParams{Agent: addedLoginsAgent, LoginID: id, Shared: &on}, nil); err != nil {
 			return err
 		}
 		if on {

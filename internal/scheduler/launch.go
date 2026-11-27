@@ -15,6 +15,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/coordtransport"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/envname"
+	"github.com/3xDevOps/cloudfield/internal/fallback"
 	"github.com/3xDevOps/cloudfield/internal/gitengine"
 	"github.com/3xDevOps/cloudfield/internal/harness"
 	"github.com/3xDevOps/cloudfield/internal/mirror"
@@ -266,6 +267,7 @@ func (s *Scheduler) Launch(ctx context.Context, workspace domain.WorkspaceID, me
 // LaunchWithOptions captures the base before the run row is created, so a
 // failed capture leaves no durable or in-memory run state.
 func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, task, harness string, mode domain.LaunchMode, opts domain.LaunchOptions) (*domain.Run, error) {
+	ctx = runtime.WithSteps(ctx)
 	for _, id := range append([]domain.WorkspaceID{workspace}, opts.ExtraWorkspaces...) {
 		lock := s.workspaceLock(id)
 		lock.RLock()
@@ -314,11 +316,11 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 		}
 	}
 	if opts.AccountLogin.Added() {
-		err = s.checkAddedLogin(ctx, member, domain.Account{Member: account, Login: opts.AccountLogin}, harness)
+		err = s.checkAddedLogin(ctx, member, domain.Account{Member: account, Login: opts.AccountLogin}, harness, opts.Permission == domain.PermissionIsolated)
 		if err == nil {
-			var byEnv bool
-			if byEnv, err = s.environmentSignsIn(ctx, workspace, harness, profile, mode); err == nil && byEnv {
-				err = fmt.Errorf("scheduler: a workspace variable signs %s in here, so login %s would not pay; launch on the default login", harness, opts.AccountLogin)
+			var payer string
+			if payer, err = s.loginPayer(ctx, workspace, member, harness, profile, mode); err == nil && payer != "" {
+				err = EnvironmentPays(opts.AccountLogin, payer)
 			}
 		}
 	} else if err = s.checkDefaultLoginShared(ctx, member, account, harness); err == nil {
@@ -327,11 +329,16 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 	if err != nil {
 		return nil, err
 	}
+	perUse, err := s.LoginPerUse(ctx, member, domain.Account{Member: account, Login: opts.AccountLogin}, harness)
+	if err != nil {
+		return nil, err
+	}
 	release, err := s.reserveCapacity(ctx)
 	if err != nil {
 		return nil, err
 	}
 	defer release()
+	runtime.Step(ctx, "admission")
 	s.mu.Lock()
 	bases := s.cfg.Bases
 	s.mu.Unlock()
@@ -356,6 +363,7 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 	if extrasCh != nil {
 		extras = <-extrasCh
 	}
+	runtime.Step(ctx, "base")
 	if err != nil {
 		return nil, &BaseCaptureError{Capture: base, Err: err}
 	}
@@ -405,6 +413,7 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 		Extras:          extras.repos,
 		LinearIssueURL:  opts.LinearIssueURL,
 	}
+	run.AccountLoginPerUse = perUse
 	if opts.RequestedAccount != account {
 		run.RequestedAccountMemberID = opts.RequestedAccount
 	}
@@ -431,6 +440,7 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 	if err := s.provision(ctx, run, ws, actor, argv, profile); err != nil {
 		return nil, err
 	}
+	runtime.LogSteps(ctx, "scheduler: launch steps", "run", run.ID)
 	return s.freshen(ctx, run), nil
 }
 
@@ -490,6 +500,7 @@ func (s *Scheduler) provisionSteps(ctx context.Context, entry *supervised, run *
 	if err != nil {
 		return fmt.Errorf("create checkout: %w", err)
 	}
+	runtime.Step(ctx, "checkout")
 	run.Worktree, run.Branch = checkout, branch
 	if updateErr := s.cfg.Store.SetRunCheckout(ctx, run.ID, checkout, branch); updateErr != nil {
 		return fmt.Errorf("record checkout: %w", updateErr)
@@ -504,6 +515,7 @@ func (s *Scheduler) provisionSteps(ctx context.Context, entry *supervised, run *
 	}
 	unlockCaches := sync.OnceFunc(s.lockRunCaches(run.HomeMember(), run.AccountMember()))
 	defer unlockCaches()
+	runtime.Step(ctx, "cache_lock")
 	plan, err := s.runPlan(ctx, entry, run, ws, actor, profile)
 	if err != nil {
 		return err
@@ -517,6 +529,9 @@ func (s *Scheduler) provisionSteps(ctx context.Context, entry *supervised, run *
 		if err = s.resolveRunAccount(ctx, run); err != nil {
 			return fmt.Errorf("check the account share: %w", err)
 		}
+		if err = fallback.ResolveLoginUse(ctx, s.cfg.Store, run.HomeMember(), run.Account(), run.Harness, runWorkspaces(run)); err != nil {
+			return fmt.Errorf("check the account share: %w", err)
+		}
 	}
 	s.updateHarness(run, plan, profile)
 	// Recorded before coordination is provisioned, because the co-author
@@ -527,6 +542,10 @@ func (s *Scheduler) provisionSteps(ctx context.Context, entry *supervised, run *
 	entry.gitAuthorEmail = actor.GitIdentity().Email
 	entry.egress = plan.Egress
 	s.mu.Unlock()
+	billed, perUse := s.billedPerUse(ctx, run.HomeMember(), run.Account(), run.Harness)
+	if perUse && run.ACP {
+		s.acp.switchNotice(run.ID, "info", "Billed per use", billed)
+	}
 	driver, err := s.startRunContainer(ctx, entry, run, actor, argv, profile, plan, unlockCaches)
 	if err != nil {
 		canRetry := func() bool {
@@ -575,6 +594,9 @@ func (s *Scheduler) provisionSteps(ctx context.Context, entry *supervised, run *
 	}
 	run.Status = domain.RunRunning
 	s.startSupervision(entry)
+	if perUse {
+		s.notePerUse(ctx, run, billed)
+	}
 	s.leaveIfRevoked(ctx, entry, run)
 	return nil
 }
@@ -610,7 +632,7 @@ func (s *Scheduler) runPlan(ctx context.Context, entry *supervised, run *domain.
 	}
 	s.mu.Lock()
 	entry.home = plan.Home
-	entry.loginMember, entry.loginID = plan.LoginMember, plan.LoginID
+	entry.loginMember, entry.loginID, entry.account = plan.LoginMember, plan.LoginID, run.Account()
 	s.mu.Unlock()
 	if reserveErr := s.reserveRunUser(ctx, entry, plan.User, len(plan.Mounts) > 0); reserveErr != nil {
 		return nil, reserveErr
@@ -694,6 +716,7 @@ func (s *Scheduler) startRunContainer(ctx context.Context, entry *supervised, ru
 	if err != nil {
 		return nil, err
 	}
+	runtime.Step(ctx, "plan")
 	cid, err := s.createContainer(ctx, s.containerSpec(run, actor, argv, plan, limits))
 	if err != nil {
 		return nil, fmt.Errorf("create container: %w", err)
@@ -730,6 +753,7 @@ func (s *Scheduler) startRunContainer(ctx context.Context, entry *supervised, ru
 		_ = att.Close()
 		return nil, s.failContainer(ctx, entry, cid, "start terminal", perr)
 	}
+	runtime.Step(ctx, "agent")
 	return driver, nil
 }
 

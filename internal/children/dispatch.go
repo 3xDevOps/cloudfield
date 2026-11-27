@@ -104,12 +104,32 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 	// The parent's login is checked again here: its owner may have turned
 	// it off for shares, or it may have stopped signing in, since the
 	// subsession was queued.
-	login, err := s.cfg.Runs.ChildLogin(ctx, c.OwnerID, domain.Account{Member: c.AccountID, Login: c.AccountLogin}, c.Harness, c.Mode)
+	login, err := s.cfg.Runs.ChildLogin(ctx, c.WorkspaceID, c.OwnerID, c.AccountID, c.AccountLogin, c.Harness, c.Mode, p.parent.Permission)
 	if err != nil {
 		refuse(err.Error())
 		return
 	}
-	measured, err := fallback.Measure(ctx, s.cfg.Store, s.cfg.Usage, c.OwnerID, domain.Account{Member: c.AccountID, Login: login}, c.Harness, c.Fallback)
+	payer := sync.OnceValues(func() (string, error) {
+		return s.cfg.Runs.LoginPayer(ctx, c.WorkspaceID, c.OwnerID, c.Harness, c.Mode)
+	})
+	// A subsession names no login, so one billed per use, or whose kind
+	// cannot be read, serves it only when no login with readable usage left
+	// can, unless something else signs the agent in: that pays on every
+	// account.
+	unknown, err := s.cfg.Runs.LoginUsageUnknown(ctx, c.OwnerID, domain.Account{Member: c.AccountID, Login: login}, c.Harness)
+	if err != nil {
+		refuse(err.Error())
+		return
+	}
+	if unknown {
+		paidBy, payerErr := payer()
+		if payerErr != nil {
+			refuse(payerErr.Error())
+			return
+		}
+		unknown = paidBy == ""
+	}
+	measured, err := fallback.MeasureStart(ctx, s.cfg.Store, s.cfg.Usage, c.OwnerID, domain.Account{Member: c.AccountID, Login: login}, c.Harness, c.Fallback, unknown)
 	if err != nil {
 		refuse(err.Error())
 		return
@@ -136,7 +156,12 @@ func (s *Service) launch(ctx context.Context, c *domain.ChildReservation) {
 		if p.settings.Off.Covers(c.Harness, account.Member) {
 			return false, nil
 		}
-		return s.cfg.Runs.FallbackLaunchable(ctx, c.OwnerID, requested, account, c.Harness, c.Mode)
+		if account.Login.Added() {
+			if paidBy, payerErr := payer(); payerErr != nil || paidBy != "" {
+				return false, payerErr
+			}
+		}
+		return s.cfg.Runs.FallbackLaunchable(ctx, c.OwnerID, requested, account, c.Harness, c.Mode, parent.Permission)
 	})
 	account := chosen.Member
 	if excluded != nil {

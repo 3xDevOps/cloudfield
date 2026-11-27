@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
@@ -71,13 +72,16 @@ type Filter struct {
 // pass as the next call's afterSeq; More reports that history remains past
 // it. A page read backward by Before sets NextSeq to the log head, More to
 // older history remaining, and OlderSeq to the next call's beforeSeq.
-// Head is the log head the read was bounded by.
+// OlderTime is when the event at OlderSeq happened: the read covered
+// everything after it, kept or filtered out. It is zero when the read
+// stopped between events. Head is the log head the read was bounded by.
 type Page struct {
-	Events   []events.Event
-	NextSeq  uint64
-	More     bool
-	OlderSeq uint64
-	Head     uint64
+	Events    []events.Event
+	NextSeq   uint64
+	More      bool
+	OlderSeq  uint64
+	OlderTime time.Time
+	Head      uint64
 }
 
 // Reader pages a workspace's history out of the event log.
@@ -157,6 +161,7 @@ func (r *Reader) Before(ctx context.Context, f Filter, beforeSeq uint64, limit i
 	out := make([]events.Event, 0, limit)
 	scanned := 0
 	windowed := f.Workspace == ""
+	var reached time.Time
 	for reads := 0; len(out) < limit && cursor > 1 && scanned < limit*scanBudget && (!windowed || reads < scanWindows); reads++ {
 		var after uint64
 		if windowed && cursor > scanWindow {
@@ -170,6 +175,7 @@ func (r *Reader) Before(ctx context.Context, f Filter, beforeSeq uint64, limit i
 		for _, e := range got {
 			consumed++
 			cursor = e.Seq
+			reached = e.Time
 			scanned++
 			if !f.keeps(e) {
 				continue
@@ -181,12 +187,14 @@ func (r *Reader) Before(ctx context.Context, f Filter, beforeSeq uint64, limit i
 		}
 		if consumed == len(got) && len(got) < batch {
 			cursor = after + 1
+			reached = time.Time{}
 		}
 	}
 	slices.Reverse(out)
 	page := Page{Events: out, NextSeq: head, More: cursor > 1, Head: head}
 	if page.More {
 		page.OlderSeq = cursor
+		page.OlderTime = reached
 	}
 	return page, nil
 }

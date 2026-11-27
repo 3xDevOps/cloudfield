@@ -224,6 +224,12 @@ type Scheduler struct {
 	// for it so overdue steers cannot claim before recovered PTYs are injectable.
 	recoveryReady     chan struct{}
 	recoveryReadyOnce sync.Once
+	// retainedListed is set once a pass over the terminal sidecars has read
+	// every one, so every retained container is in runs. Until then
+	// retainedUnread holds the latest pass's first sidecar it could not
+	// settle, with why.
+	retainedListed atomic.Bool
+	retainedUnread atomic.Value
 	// recovering is set while Start recovers runs.
 	recovering atomic.Bool
 	// superCtx bounds every supervision goroutine; cancelling it never stops a
@@ -409,9 +415,14 @@ type supervised struct {
 	// loginID is loginMember's added login the container mounts; empty for
 	// their default login.
 	loginID domain.LoginID
+	// account is the run's account and login the container was planned on.
+	account domain.Account
 	// verifiedLogins are the account owners whose own login a container of
 	// this run was started with, as the runtime confirmed at start.
 	verifiedLogins []domain.Account
+	// restricted are the accounts this run left on a restriction message,
+	// whose logins it does not move to again.
+	restricted []domain.MemberID
 	// reporter is recovered from the sidecar, since only the launch or mode
 	// switch knew which command the container runs.
 	reporter harness.Reporter
@@ -615,9 +626,13 @@ type supervised struct {
 	// memorySaving counts the saves running that sleeping does not mark: one
 	// the memory guard or an admission started, also once heldSave stopped
 	// waiting for it, and the save again after a failed wake.
-	asleepSaved  bool
-	saveFailedAt time.Time
-	memorySaving int
+	asleepSaved bool
+	// asleepResident is set while a sleeping VM is paused in the host's
+	// memory, where the sleep sweep left it, until the memory guard saves
+	// it or it stops.
+	asleepResident bool
+	saveFailedAt   time.Time
+	memorySaving   int
 	// frozenNotedAt is when the timeline last said the memory brake froze
 	// the session's VM. frozenSave is set while the memory guard saves the
 	// VM frozen, and admitting while a wake holding the lifecycle lock
