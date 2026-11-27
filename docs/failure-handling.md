@@ -877,19 +877,20 @@ first, until twice the floor is free again ([Recover from memory
 pressure](#recover-from-memory-pressure)): 1.6 to 2.3 seconds each in that
 test. So paused VMs hold only memory above that line, and a small host
 saves most of them soon after they pause. A session the server saved while
-it worked wakes on its own into the room paused VMs hold: its wake saves
-them. A paused VM is saved only while the data filesystem has its reserve,
-4 GiB and the VM's memory free. On a fuller disk it stays paused, launches
-are refused for memory, and at the floor working sessions stay frozen:
-free disk space or close sessions
+it worked wakes on its own into the room paused VMs hold: the server saves
+them first. A paused VM is saved only while the data filesystem has its
+reserve, 4 GiB and the VM's memory free. On a fuller disk it stays paused,
+a launch that needs its memory is refused, and at the floor working
+sessions stay frozen: free disk space or close sessions
 ([Recover from disk pressure](#recover-from-disk-pressure)). A wake
 restores a saved VM where it was. A server restart or update leaves a
 paused VM paused. Wake paused sessions before `cloudfield server update
 --allow-downgrade` to a release that saved idle VMs: that release restores
-a paused VM with its processes still frozen. Its memory is gone with the host's: after a host reboot,
-or once the kernel's OOM killer ended its hypervisor, the session starts
-again from its disk on its next use, without its processes. Nothing is
-lost otherwise, so more sessions sleep, sooner:
+a paused VM with its processes still frozen. Its memory is gone with the
+host's: after a host reboot, or once the kernel's OOM killer ended its
+hypervisor, the session starts again from its disk on its next use,
+without its processes. Nothing is lost otherwise, so more sessions sleep,
+sooner:
 
 - Every agent sleeps, and Standard sessions too. Background sessions never
   do.

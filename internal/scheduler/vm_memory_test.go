@@ -377,7 +377,7 @@ func TestTheMemoryGuardSavesPausedVMsBeforeTheHostIsShort(t *testing.T) {
 }
 
 // A session the guard saved while it worked wakes on its own into the room
-// a paused VM holds, and the paused VM is saved for it.
+// a paused VM holds, once the guard has saved that VM for it.
 func TestTheMemoryGuardWakesAVMItSavedIntoTheRoomPausedVMsHold(t *testing.T) {
 	t.Parallel()
 	e, mr := newMemoryEnv(t)
@@ -395,12 +395,11 @@ func TestTheMemoryGuardWakesAVMItSavedIntoTheRoomPausedVMsHold(t *testing.T) {
 	// 0.6 GiB above the stop level, and 3 GiB more in the paused VM.
 	mr.setAvailable(7 << 30)
 	e.guard(t)
-	if e.asleep(workingRun) {
-		t.Fatal("the guard left the VM it saved asleep although a paused VM held the room it needs")
+	if !mr.isSaved(paused) || e.asleep(workingRun) {
+		t.Fatalf("the paused VM is saved %v and the VM the guard saved asleep %v, want the first saved to wake the second", mr.isSaved(paused), e.asleep(workingRun))
 	}
-	e.guard(t)
-	if !mr.isSaved(paused) {
-		t.Fatal("the guard did not save the paused VM once the woken one took its room")
+	if available, floor, _ := e.sched.hostMemory(); available < 2*floor {
+		t.Fatalf("the wake left %d available, below twice the floor", available)
 	}
 }
 

@@ -57,13 +57,13 @@ func (s *Scheduler) watchVMMemory(ctx context.Context) {
 
 // guardVMMemory saves session VMs to disk before the host's OOM killer ends
 // one, and never stops one. While less than twice the floor is free it
-// saves the VMs paused in memory. For the others it starts once available memory falls below
+// first saves the VMs paused in memory. For the others it starts once available memory falls below
 // admission's floor, or the host has stalled on memory as systemd-oomd
 // measures it, and stops once twice the floor is free and the stall has
 // eased. Until then it saves one VM a check while less than twice the floor
 // is free, and one more each time a stall lasts again. After it, it wakes
 // the VMs it saved while they worked, one at a time, each once its memory
-// fits above twice the floor. The wake runs on its own, outside vmMemoryMu:
+// fits above twice the floor, for which it saves paused VMs too. The wake runs on its own, outside vmMemoryMu:
 // its admission may save idle VMs, and a wake that hangs must not keep the
 // guard from saving the other VMs.
 func (s *Scheduler) guardVMMemory(ctx context.Context) {
@@ -82,6 +82,12 @@ func (s *Scheduler) checkVMMemory(ctx context.Context) (uint64, bool) {
 	if err != nil {
 		slog.Warn("scheduler: memory guard: measure host memory", "error", err)
 		return 0, false
+	}
+	if available < 2*floor {
+		if available, err = s.savePausedVMs(ctx, 2*floor); err != nil {
+			slog.Warn("scheduler: memory guard: measure host memory", "error", err)
+			return 0, false
+		}
 	}
 	calm := available >= 2*floor && stall < memoryStallLimit
 	switch {
@@ -103,39 +109,52 @@ func (s *Scheduler) checkVMMemory(ctx context.Context) (uint64, bool) {
 		return 0, false
 	}
 	if !calm {
-		if available < 2*floor {
-			s.savePausedVMs(ctx)
-		}
 		return 0, false
 	}
-	// A wake's admission saves the paused VMs for the room it lacks.
-	var paused uint64
-	candidates, writing := s.memoryCandidates(ctx)
-	for _, c := range candidates {
-		if c.resident && s.saveFits(c, writing, false) {
-			paused += c.memory
+	// A session saved while it worked wakes into the room the paused VMs
+	// give back.
+	if want := s.memoryWanted(); want > available-2*floor {
+		if available, err = s.savePausedVMs(ctx, 2*floor+want); err != nil || available < 2*floor {
+			return 0, false
 		}
 	}
-	return available - 2*floor + paused, true
+	return available - 2*floor, true
+}
+
+// memoryWanted is the least memory a session the guard saved while it
+// worked needs to wake, or 0 when none waits.
+func (s *Scheduler) memoryWanted() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var least uint64
+	for _, e := range s.runs {
+		if e.asleepSaved && !e.retained && e.memorySaved > 0 && (least == 0 || e.memorySaved < least) {
+			least = e.memorySaved
+		}
+	}
+	return least
 }
 
 // savePausedVMs saves the VMs the sleep sweep left paused in memory, the
-// longest asleep first, until twice the floor is free: their memory is
-// back before the host is short and the brake freezes the sessions that
-// work. Caller holds vmMemoryMu.
-func (s *Scheduler) savePausedVMs(ctx context.Context) {
+// longest asleep first, until target is available or none is left, and
+// reports what is available then. Saving one costs nobody anything, so
+// their memory is back before the host is short and the brake freezes the
+// sessions that work. Caller holds vmMemoryMu.
+func (s *Scheduler) savePausedVMs(ctx context.Context, target uint64) (uint64, error) {
 	candidates, writing := s.memoryCandidates(ctx)
 	for _, c := range candidates {
-		if available, floor, err := s.hostMemory(); err != nil || available >= 2*floor || ctx.Err() != nil {
-			return
+		if available, _, err := s.hostMemory(); err != nil || available >= target || ctx.Err() != nil {
+			return available, err
 		}
 		if !c.resident || !s.saveFits(c, writing, false) {
 			continue
 		}
 		if _, held := s.heldSave(c, false); held {
-			return
+			break
 		}
 	}
+	available, _, err := s.hostMemory()
+	return available, err
 }
 
 // hostMemory is the host's available memory, read from /proc/meminfo with
