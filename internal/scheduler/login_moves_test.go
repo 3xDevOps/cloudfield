@@ -713,3 +713,27 @@ func TestALoginTurnedOffForSharesSaysSoWhenTheSessionMoves(t *testing.T) {
 		t.Fatalf("run = %+v, %v; want it live off the work login", row, err)
 	}
 }
+
+// A workspace variable that signs Claude Code in would pay instead of an
+// added login, so a move never chooses one: Ada's session on her default
+// login stays in its container rather than lose it to a move that cannot
+// start.
+func TestAMoveSkipsAddedLoginsWhereAVariablePays(t *testing.T) {
+	t.Parallel()
+	e, _, notes, _, _ := newLoginMoveEnv(t, enhancedClaude)
+	if err := e.db.SetWorkspaceEnvironment(t.Context(), e.ws.ID, domain.WorkspaceEnvironment{Variables: map[string]string{"ANTHROPIC_API_KEY": "test-not-a-key"}}); err != nil {
+		t.Fatal(err)
+	}
+	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+	first := e.rt.byName(string(run.ID))
+	_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
+	got := e.waitStoreStatus(t, run.ID, domain.RunNeedsAttention)
+	want := "Usage limit reached on Ada's account; no account that may have usage left can run claude here"
+	if got.Reason != want || got.Account() != domain.AccountOf(e.member.ID) || e.rt.byName(string(run.ID)) != first || len(notes.all()) != 0 {
+		t.Fatalf("run on %s with %q, container kept %v, notes %v; want it kept where it was with %q", got.Account(), got.Reason, e.rt.byName(string(run.ID)) == first, notes.all(), want)
+	}
+}

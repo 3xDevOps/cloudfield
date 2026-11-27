@@ -738,9 +738,16 @@ func (s *Scheduler) chooseMove(ctx context.Context, entry *supervised, f *UsageF
 		}
 		off = settings.Off
 	}
+	byEnv := sync.OnceValues(func() (bool, error) { return s.EnvironmentSignsIn(ctx, run.WorkspaceID, run.Harness, mode) })
 	to, excluded := fallback.Select(ctx, s.cfg.Store, measured, run.MemberID, from, run.Harness, workspaces, run.Fallback, func(ctx context.Context, account domain.Account) (bool, error) {
 		if off.Covers(run.Harness, account.Member) {
 			return false, nil
+		}
+		if account.Login.Added() {
+			// As at launch: a variable would pay instead of the login.
+			if signsIn, envErr := byEnv(); envErr != nil || signsIn {
+				return false, envErr
+			}
 		}
 		if account.Login.Added() && run.Permission == domain.PermissionIsolated {
 			if s.cfg.Logins == nil {
