@@ -877,7 +877,7 @@ func TestAPromptDuringAMoveBetweenAccountsNamesNoLogin(t *testing.T) {
 	}
 	waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
 	var injectErr error
-	e.sched.UseUsageFallback(UsageFallback{Usage: &hookedLoginUsage{loginUsage: newLoginUsage(nil), during: func() {
+	e.sched.UseUsageFallback(UsageFallback{Usage: &hookedLoginUsage{loginUsage: newLoginUsage(), during: func() {
 		_, injectErr = e.sched.Inject(context.Background(), run.ID, e.member.ID, domain.AgentPrompt{Text: "run a long tool"}, false, nil)
 	}}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
 	_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)

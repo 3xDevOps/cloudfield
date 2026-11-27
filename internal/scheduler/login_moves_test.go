@@ -37,11 +37,8 @@ type loginUsage struct {
 	noReset map[domain.Account]bool
 }
 
-func newLoginUsage(used map[domain.Account]float64) *loginUsage {
-	if used == nil {
-		used = map[domain.Account]float64{}
-	}
-	return &loginUsage{used: used, fresh: map[domain.Account]int{}, resets: time.Now().Add(time.Hour).Truncate(time.Second)}
+func newLoginUsage() *loginUsage {
+	return &loginUsage{used: map[domain.Account]float64{}, fresh: map[domain.Account]int{}, resets: time.Now().Add(time.Hour).Truncate(time.Second)}
 }
 
 func (u *loginUsage) Read(ctx context.Context, member domain.MemberID, refresh bool) ([]quota.Provider, error) {
@@ -90,7 +87,7 @@ func newLoginMoveEnv(t *testing.T, mutate func(*Config)) (*loginShareEnv, *acpRu
 	})
 	le := &loginShareEnv{shareEnv: e, logins: logins}
 	second := le.addLogin(t, e.member.ID, "lgn-second0000", "second", workLogin)
-	usage := newLoginUsage(nil)
+	usage := newLoginUsage()
 	e.sched.UseUsageFallback(UsageFallback{Usage: usage, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
 	return le, rt, notes, usage, second
 }
@@ -267,7 +264,7 @@ func TestAnIsolatedSessionDoesNotMoveToAConsoleLogin(t *testing.T) {
 	})
 	e := &loginShareEnv{shareEnv: fe, logins: logins}
 	e.addLogin(t, e.member.ID, "lgn-console000", "console", "")
-	e.sched.UseUsageFallback(UsageFallback{Usage: newLoginUsage(nil), AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+	e.sched.UseUsageFallback(UsageFallback{Usage: newLoginUsage(), AuthorizationMu: &sync.Mutex{}, Note: notes.post})
 	run, err := e.launchOn(t, domain.AccountOf(e.member.ID), domain.PermissionIsolated)
 	if err != nil {
 		t.Fatal(err)
@@ -440,7 +437,7 @@ func TestALoginBilledPerUseIsSaidSo(t *testing.T) {
 			})
 			e := &loginShareEnv{shareEnv: fe, logins: logins}
 			console := e.addLogin(t, e.member.ID, "lgn-console000", "console", "")
-			e.sched.UseUsageFallback(UsageFallback{Usage: newLoginUsage(nil), AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+			e.sched.UseUsageFallback(UsageFallback{Usage: newLoginUsage(), AuthorizationMu: &sync.Mutex{}, Note: notes.post})
 			sub, err := e.bus.Subscribe(t.Context(), events.SubscribeOptions{Filter: events.Filter{Types: []events.Type{events.TypeRunAccount}}})
 			if err != nil {
 				t.Fatal(err)

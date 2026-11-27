@@ -148,12 +148,12 @@ func TestRestartLetsAContinuationsTurnFinish(t *testing.T) {
 	markContinuationSending(t, e.sched, run.ID, e.owner.ID, e.member.ID)
 	s2 := restartOn(t, e.testEnv)
 	waitFor(t, "the marker cleared", func() bool {
-		sc, err := s2.readSidecar(run.ID)
-		return err == nil && sc.AccountSwap == nil
+		sc, scErr := s2.readSidecar(run.ID)
+		return scErr == nil && sc.AccountSwap == nil
 	})
 	time.Sleep(300 * time.Millisecond)
-	if row, err := e.db.GetRun(t.Context(), run.ID); err != nil || row.Status.Terminal() || !s2.acp.session(run.ID).State().TurnInFlight {
-		t.Fatalf("run = %+v, %v; want it live in its turn", row, err)
+	if row, rowErr := e.db.GetRun(t.Context(), run.ID); rowErr != nil || row.Status.Terminal() || !s2.acp.session(run.ID).State().TurnInFlight {
+		t.Fatalf("run = %+v, %v; want it live in its turn", row, rowErr)
 	}
 	if err = s2.ACPCancel(t.Context(), run.ID); err != nil {
 		t.Fatal(err)
