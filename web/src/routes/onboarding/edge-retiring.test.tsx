@@ -94,7 +94,7 @@ describe('a signed-in edge that says its address is retiring', () => {
     seed()
     const client = await open({ state: 'retiring', replacement: next, date: '2027-03-01', known: true })
     expect(noticeText()).toBe(
-      'old.example.test says it is retiring on 2027-03-01 and that its new address is https://new.example.test. / Confirm that address with whoever runs the edge before you sign in there. Sign in there with cloudfield login --edge <new address>.',
+      'old.example.test says it is retiring on 2027-03-01 and that its new address is https://new.example.test. / Confirm that address with whoever runs the edge before you sign in there. Then run cloudfield login --edge <new address>.',
     )
     expect(noticeCallout()!.querySelector('input, button')).toBeNull()
     expect(screen.queryByRole('textbox', { name: /sign in/i })).toBeNull()
@@ -120,7 +120,7 @@ describe('a signed-in edge that says its address is retiring', () => {
     seed()
     await open({ state: 'retired', replacement: next, known: false }, [], new Error('edge.servers: list servers: old.example.test refused: retired (HTTP 410)'))
     expect(noticeText()).toBe(
-      'old.example.test says it is retired and that its new address is https://new.example.test. / Confirm that address with whoever runs the edge before you sign in there. Sign in there with cloudfield login --edge <new address>.',
+      'old.example.test says it is retired and that its new address is https://new.example.test. / Confirm that address with whoever runs the edge before you sign in there. Then run cloudfield login --edge <new address>.',
     )
     const refusal = await screen.findByText(/refused: retired \(HTTP 410\)/)
     expect(refusal.compareDocumentPosition(noticeCallout()!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()

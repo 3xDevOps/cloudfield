@@ -500,8 +500,8 @@ export function RetiringNotice({ edge, notice, signedInThere }: { edge: string; 
           </>
         ) : (
           <>
-            Confirm that address with whoever runs the edge before you sign in there. Sign in there with{' '}
-            <span className="font-code">cloudfield login --edge &lt;new address&gt;</span>.
+            Confirm that address with whoever runs the edge before you sign in there. Then run{' '}
+            <span className="whitespace-nowrap font-code">cloudfield login --edge &lt;new address&gt;</span>.
           </>
         )}
       </p>
