@@ -557,12 +557,12 @@ func TestDialRefusalCarriesEdgeMessageAndHost(t *testing.T) {
 func TestRefusalTextCannotDriveTheTerminal(t *testing.T) {
 	edge := newFakeEdge(t)
 	edge.mux.HandleFunc("GET "+edgeproto.PathServers, func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusForbidden, edgeproto.ErrorBody{Error: "nope\x1b]0;owned\x07"})
+		writeJSON(w, http.StatusForbidden, edgeproto.ErrorBody{Error: "nope\x1b]0;owned\x07 \u202egro.elpmaxe\u2028\u200b"})
 	})
 	c := newTestClient(t, edge)
 	signIn(t, c)
 	_, err := c.Servers(context.Background())
-	if err == nil || strings.ContainsAny(err.Error(), "\x1b\x07") {
+	if err == nil || strings.ContainsAny(err.Error(), "\x1b\x07\u202e\u2028\u200b") {
 		t.Fatalf("Servers error = %q, want control characters replaced", err)
 	}
 }

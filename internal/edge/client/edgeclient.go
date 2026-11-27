@@ -228,12 +228,13 @@ func (c *Client) refusal(op, origin string, resp *http.Response, body []byte) *R
 	return &RefusedError{Edge: HostOf(origin), URL: c.origin, Op: op, Status: status, Message: clean(msg), FromEdge: fromEdge, Retired: retired}
 }
 
-// clean replaces control characters and invalid UTF-8 in text the edge
-// sent before it reaches a terminal.
+// clean replaces control and format characters, line and paragraph
+// separators and invalid UTF-8 in text the edge sent before it reaches a
+// terminal or a page.
 func clean(s string) string {
 	s = strings.ToValidUTF8(s, "?")
 	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
 			return '?'
 		}
 		return r
