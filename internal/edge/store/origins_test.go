@@ -776,10 +776,13 @@ func TestPairingsKeepEarlierSigninOrigins(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := s.Pairings(ctx)
+	for i := range got {
+		got[i].ServedAt = time.Time{}
+	}
 	want := []Pairing{
-		{"https://edge.example.test", "https://auth-early.example.test", false},
-		{"https://edge.example.test", "https://auth.example.test", true},
-		{"https://edge2.example.test", "https://auth2.example.test", true},
+		{RelayOrigin: "https://edge.example.test", SigninOrigin: "https://auth-early.example.test", Current: false},
+		{RelayOrigin: "https://edge.example.test", SigninOrigin: "https://auth.example.test", Current: true},
+		{RelayOrigin: "https://edge2.example.test", SigninOrigin: "https://auth2.example.test", Current: true},
 	}
 	if err != nil || !slices.Equal(got, want) {
 		t.Errorf("Pairings = %v, %v; want %v", got, err, want)
@@ -805,93 +808,15 @@ func TestPairingHistoryAcrossUpgrade(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err := s.Pairings(context.Background())
+	for i := range got {
+		got[i].ServedAt = time.Time{}
+	}
 	want := []Pairing{
-		{"https://edge.example.test", "https://auth1.example.test", false},
-		{"https://edge.example.test", "https://auth2.example.test", false},
-		{"https://edge.example.test", "https://auth3.example.test", true},
+		{RelayOrigin: "https://edge.example.test", SigninOrigin: "https://auth1.example.test", Current: false},
+		{RelayOrigin: "https://edge.example.test", SigninOrigin: "https://auth2.example.test", Current: false},
+		{RelayOrigin: "https://edge.example.test", SigninOrigin: "https://auth3.example.test", Current: true},
 	}
 	if err != nil || !slices.Equal(got, want) {
 		t.Errorf("Pairings = %v, %v; want %v", got, err, want)
-	}
-}
-
-// TestRepairingDeletesDeviceAuthorizations deletes the device
-// authorizations of a sign-in origin recorded with another relay origin
-// before, and keeps those of a sign-in origin whose relay stays.
-func TestRepairingDeletesDeviceAuthorizations(t *testing.T) {
-	s := openStore(t)
-	ctx := context.Background()
-	now := time.Unix(1_800_000_000, 0)
-	record := func(pairs map[string]string) {
-		t.Helper()
-		if _, err := s.RecordPairs(ctx, Run{Pairs: pairs}, now); err != nil {
-			t.Fatal(err)
-		}
-		now = now.Add(time.Minute)
-	}
-	authorize := func(code, signin string) {
-		t.Helper()
-		if _, err := s.db.Exec(`INSERT INTO device_authorizations (code_hash, user_code_hash, label, public_key, client_addr, status, created_at, expires_at, last_poll_at, signin_origin)
-			VALUES (?, ?, 'laptop', 'key', '127.0.0.1', 'pending', 0, 9000000000000000000, 0, ?)`, code, "user-"+code, signin); err != nil {
-			t.Fatal(err)
-		}
-	}
-	codes := func() []string {
-		t.Helper()
-		rows, err := s.db.Query(`SELECT code_hash FROM device_authorizations ORDER BY 1`)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer rows.Close() //nolint:errcheck // test
-		var out []string
-		for rows.Next() {
-			var c string
-			if err := rows.Scan(&c); err != nil {
-				t.Fatal(err)
-			}
-			out = append(out, c)
-		}
-		return out
-	}
-	record(map[string]string{"https://edge1.example.test": "https://auth.example.test", "https://edge2.example.test": "https://auth2.example.test"})
-	authorize("moved", "https://auth.example.test")
-	authorize("stays", "https://auth2.example.test")
-	record(map[string]string{"https://edge3.example.test": "https://auth.example.test", "https://edge2.example.test": "https://auth2.example.test"})
-	if got := codes(); !slices.Equal(got, []string{"stays"}) {
-		t.Fatalf("after re-pairing auth.example.test: %v, want [stays]", got)
-	}
-	authorize("new", "https://auth.example.test")
-	record(map[string]string{"https://edge3.example.test": "https://auth.example.test", "https://edge2.example.test": "https://auth2.example.test"})
-	if got := codes(); !slices.Equal(got, []string{"new", "stays"}) {
-		t.Fatalf("after a restart with the same pairs: %v, want [new stays]", got)
-	}
-}
-
-// TestRepairingAfterRelayTakenOver deletes the device authorizations of a
-// sign-in origin whose relay origin another sign-in origin took over in
-// between, which origin_pairs no longer shows.
-func TestRepairingAfterRelayTakenOver(t *testing.T) {
-	s := openStore(t)
-	ctx := context.Background()
-	now := time.Unix(1_800_000_000, 0)
-	for _, pairs := range []map[string]string{
-		{"https://edge1.example.test": "https://auth.example.test"},
-		{"https://edge1.example.test": "https://auth2.example.test"},
-	} {
-		if _, err := s.RecordPairs(ctx, Run{Pairs: pairs}, now); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := s.db.Exec(`INSERT OR IGNORE INTO device_authorizations (code_hash, user_code_hash, label, public_key, client_addr, status, created_at, expires_at, last_poll_at, signin_origin)
-			VALUES ('started', 'user-started', 'laptop', 'key', '127.0.0.1', 'pending', 0, 9000000000000000000, 0, 'https://auth.example.test')`); err != nil {
-			t.Fatal(err)
-		}
-		now = now.Add(time.Minute)
-	}
-	if _, err := s.RecordPairs(ctx, Run{Pairs: map[string]string{"https://edge3.example.test": "https://auth.example.test"}}, now); err != nil {
-		t.Fatal(err)
-	}
-	var n int
-	if err := s.db.QueryRow(`SELECT COUNT(*) FROM device_authorizations`).Scan(&n); err != nil || n != 0 {
-		t.Fatalf("%d device authorizations, %v: one started on edge1 survived auth.example.test moving to edge3", n, err)
 	}
 }

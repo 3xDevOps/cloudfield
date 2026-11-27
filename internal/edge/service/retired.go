@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
+	edgestore "github.com/3xDevOps/cloudfield/internal/edge/store"
 )
 
 // Retired is a pair taken out of the served pairs: every request to its
@@ -141,11 +142,7 @@ func (s *Service) retiredAnswers(origin string, repl *pair, signin bool) (*retir
 // origins contradict the pairs the edge recorded, and rows without an
 // origin when the edge never recorded origins, since every row would have
 // none.
-func (s *Service) retiredSignIns(ctx context.Context, retired []Retired) ([]string, error) {
-	pairings, err := s.store.Pairings(ctx)
-	if err != nil {
-		return nil, err
-	}
+func (s *Service) retiredSignIns(ctx context.Context, retired []Retired, pairings []edgestore.Pairing) ([]string, error) {
 	signinHosts := map[string]bool{}
 	for _, r := range retired {
 		signin, relay := originHost(r.SigninOrigin), originHost(r.RelayOrigin)

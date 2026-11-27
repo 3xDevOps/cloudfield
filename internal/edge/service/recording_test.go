@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"testing"
+	"time"
 
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	edgestore "github.com/3xDevOps/cloudfield/internal/edge/store"
@@ -325,6 +326,45 @@ func TestRecordingStartsWhenServing(t *testing.T) {
 	for _, table := range []string{"origin_pairs", "origin_recording"} {
 		if got := h.column(t, `SELECT COUNT(*) FROM `+table); got != "0" {
 			t.Errorf("%s holds %s rows after a start that never served", table, got)
+		}
+	}
+}
+
+// TestMovedSignInsDeleteDeviceAuthorizations starts recording after the
+// edge recorded a served sign-in origin with another relay origin: its
+// device authorizations, in every spelling, are deleted. A relay origin
+// spelled with its default port is the same relay.
+func TestMovedSignInsDeleteDeviceAuthorizations(t *testing.T) {
+	const relay9 = "https://relay9.example.test"
+	for _, tt := range []struct {
+		name    string
+		history []map[string]string
+		auths   []string
+		kept    string
+	}{
+		{"same pairs", nil, []string{testSignin}, "1"},
+		{"relay changed", []map[string]string{{relay9: testSignin}}, []string{testSignin}, "0"},
+		{"relay taken over", []map[string]string{{relay9: testSignin}, {relay9: "https://signin9.example.test"}}, []string{testSignin}, "0"},
+		{"sign-in spelled with its port", []map[string]string{{relay9: testSignin + ":443"}}, []string{testSignin, testSignin + ":443"}, "0"},
+		{"relay spelled with its port", []map[string]string{{testRelay + ":443": testSignin}}, []string{testSignin, testSignin + ":443"}, "2"},
+	} {
+		h := newRecordingHarness(t)
+		for _, pairs := range tt.history {
+			h.clock.Advance(time.Minute)
+			if _, err := h.svc.store.RecordPairs(context.Background(), edgestore.Run{Pairs: pairs}, h.clock.Now()); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for i, origin := range tt.auths {
+			h.exec(t, `INSERT INTO device_authorizations (code_hash, user_code_hash, label, public_key, client_addr, status, created_at, expires_at, last_poll_at, signin_origin)
+				VALUES (?, ?, 'laptop', 'key', '127.0.0.1', 'pending', 0, 9000000000000000000, 0, ?)`, fmt.Sprint("code-", i), fmt.Sprint("user-", i), origin)
+		}
+		h.clock.Advance(time.Minute)
+		if err := h.svc.StartRecording(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		if got := h.column(t, `SELECT COUNT(*) FROM device_authorizations`); got != tt.kept {
+			t.Errorf("%s: %s device authorizations left, want %s", tt.name, got, tt.kept)
 		}
 	}
 }

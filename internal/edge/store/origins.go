@@ -30,14 +30,15 @@ type Run struct {
 	// whose sign-in origin is one of RetiredSignIns or that have none.
 	Retire         bool
 	RetiredSignIns []string
+	// MovedSignIns are sign-in origins whose device authorizations are
+	// deleted, since the pair that started them is no longer theirs.
+	MovedSignIns []string
 }
 
 // RecordPairs deletes the sign-ins run retires and records, as of now,
 // that the edge serves each relay origin of run.Pairs with the sign-in
 // origin it names and records origins, all in one transaction, and
-// returns how many sign-ins it deleted. It deletes the
-// device authorizations of a sign-in origin last recorded with another
-// relay origin, which would otherwise complete on the new pair. A relay origin
+// returns how many sign-ins it retired. A relay origin
 // keeps its row after the edge stops serving it, and every pairing ever
 // written to origin_pairs, by any binary, stays in origin_pair_history
 // (Pairings). The recording period
@@ -55,11 +56,9 @@ func (s *Store) RecordPairs(ctx context.Context, run Run, now time.Time) (SignIn
 			return SignIns{}, err
 		}
 	}
-	for relay, signin := range run.Pairs {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM device_authorizations WHERE signin_origin = ?1
-			AND ?2 <> (SELECT relay_origin FROM origin_pair_history WHERE signin_origin = ?1 ORDER BY served_at DESC, relay_origin LIMIT 1)`,
-			signin, relay); err != nil {
-			return SignIns{}, fmt.Errorf("edgestore: delete the device sign-ins of %s, now paired with %s: %w", signin, relay, err)
+	for _, signin := range run.MovedSignIns {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM device_authorizations WHERE signin_origin = ?`, signin); err != nil {
+			return SignIns{}, fmt.Errorf("edgestore: delete the device sign-ins of %s: %w", signin, err)
 		}
 	}
 	for relay, signin := range run.Pairs {
@@ -167,9 +166,11 @@ func (s *Store) SignInOrigins(ctx context.Context) ([]string, error) {
 }
 
 // Pairing is a relay origin and a sign-in origin the edge recorded
-// serving together. Current is set when it is the relay origin's latest.
+// serving together, last at ServedAt. Current is set when it is the relay
+// origin's latest.
 type Pairing struct {
 	RelayOrigin, SigninOrigin string
+	ServedAt                  time.Time
 	Current                   bool
 }
 
@@ -177,10 +178,10 @@ type Pairing struct {
 // earlier. origin_pairs also holds a pairing written to a database
 // restored from before origin_pair_history existed.
 func (s *Store) Pairings(ctx context.Context) ([]Pairing, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT h.relay_origin, h.signin_origin, EXISTS (SELECT 1 FROM origin_pairs o
+	rows, err := s.db.QueryContext(ctx, `SELECT h.relay_origin, h.signin_origin, MAX(h.served_at), EXISTS (SELECT 1 FROM origin_pairs o
 			WHERE o.relay_origin = h.relay_origin AND o.signin_origin = h.signin_origin)
-		FROM (SELECT relay_origin, signin_origin FROM origin_pair_history
-			UNION SELECT relay_origin, signin_origin FROM origin_pairs) h ORDER BY 1, 2`)
+		FROM (SELECT relay_origin, signin_origin, served_at FROM origin_pair_history
+			UNION ALL SELECT relay_origin, signin_origin, served_at FROM origin_pairs) h GROUP BY 1, 2 ORDER BY 1, 2`)
 	if err != nil {
 		return nil, fmt.Errorf("edgestore: list origin pairings: %w", err)
 	}
@@ -188,9 +189,11 @@ func (s *Store) Pairings(ctx context.Context) ([]Pairing, error) {
 	var out []Pairing
 	for rows.Next() {
 		var p Pairing
-		if err := rows.Scan(&p.RelayOrigin, &p.SigninOrigin, &p.Current); err != nil {
+		var servedAt int64
+		if err := rows.Scan(&p.RelayOrigin, &p.SigninOrigin, &servedAt, &p.Current); err != nil {
 			return nil, fmt.Errorf("edgestore: list origin pairings: %w", err)
 		}
+		p.ServedAt = fromUnix(servedAt)
 		out = append(out, p)
 	}
 	if err := rows.Err(); err != nil {
