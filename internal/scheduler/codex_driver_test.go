@@ -86,12 +86,31 @@ func dialed(t *testing.T, srv *codexmock.Server, n int) {
 	waitFor(t, "the client to connect", func() bool { return len(srv.Requests("thread/loaded/list")) >= n })
 }
 
-func newCodexEnv(t *testing.T) (*testEnv, *codexRuntime, *fakeCoordinator) {
+// frozenCodexRuntime lists as frozen the VMs a test says the memory brake
+// froze.
+type frozenCodexRuntime struct {
+	*codexRuntime
+	frozen []runtime.ID
+}
+
+func (r *frozenCodexRuntime) Freeze(runtime.ID) (bool, error) { return false, nil }
+func (r *frozenCodexRuntime) Thaw(runtime.ID) error           { return nil }
+
+func (r *frozenCodexRuntime) Frozen() []runtime.ID {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Clone(r.frozen)
+}
+
+func newCodexEnv(t *testing.T, opts ...func(*Config)) (*testEnv, *codexRuntime, *fakeCoordinator) {
 	t.Helper()
 	rt := &codexRuntime{fakeRuntime: newFakeRuntime(), servers: make(map[runtime.ID]*codexmock.Server)}
 	e := newTestEnv(t, func(cfg *Config) {
 		cfg.ServerBinary = fakeServerBinary(t, "#!/bin/sh\necho aether\n")
 		cfg.Runtime = rt
+		for _, opt := range opts {
+			opt(cfg)
+		}
 	})
 	e.rt = rt.fakeRuntime
 	coord, _ := withCoordination(t, e)
@@ -367,6 +386,12 @@ func TestInterruptOfAStandardCodexSessionItCannotReachGivesTheRealReason(t *test
 	if err := e.interrupt(t, run); !errors.Is(err, ErrInvalidTransition) || !strings.Contains(err.Error(), "cloudfield resume "+string(run.ID)) {
 		t.Fatalf("Interrupt of a session saved while it worked = %v, want it refused naming cloudfield resume", err)
 	}
+	e.sched.mu.Lock()
+	e.sched.runs[run.ID].memorySaved, e.sched.runs[run.ID].activity = 0, domain.ActivityWorking
+	e.sched.mu.Unlock()
+	if err := e.interrupt(t, run); !errors.Is(err, ErrInvalidTransition) || !strings.Contains(err.Error(), "cloudfield resume "+string(run.ID)) {
+		t.Fatalf("Interrupt of a working session whose failed wake dropped the guard's mark = %v, want it refused naming cloudfield resume", err)
+	}
 	for _, status := range []domain.RunStatus{domain.RunProvisioning, domain.RunCompleted} {
 		gone := *run
 		gone.Status = status
@@ -376,7 +401,30 @@ func TestInterruptOfAStandardCodexSessionItCannotReachGivesTheRealReason(t *test
 	}
 }
 
-// interrupt is Interrupt and the wait for its answer.
+func TestInterruptOfAStandardCodexVMTheMemoryBrakeFrozeIsRefusedUnasked(t *testing.T) {
+	t.Parallel()
+	var fr *frozenCodexRuntime
+	e, rt, _ := newCodexEnv(t, func(cfg *Config) {
+		fr = &frozenCodexRuntime{codexRuntime: cfg.Runtime.(*codexRuntime)}
+		cfg.Runtime = fr
+		cfg.hostMemory = func() (total, available uint64, err error) { return 32 << 30, 24 << 30, nil }
+	})
+	run, c := e.launchOn(t, "codex")
+	srv, _ := rt.bridge(t, 1)
+	dialed(t, srv, 1)
+	srv.StartThread("thread-1", false, "")
+	waitFor(t, "the connected client", func() bool { return e.sched.Wakeable(run.ID) })
+	fr.mu.Lock()
+	fr.frozen = []runtime.ID{c.id}
+	fr.mu.Unlock()
+	if err := e.interrupt(t, run); !errors.Is(err, ErrInvalidTransition) || !strings.Contains(err.Error(), "froze the session's VM") {
+		t.Fatalf("Interrupt of a session whose VM the memory brake froze = %v, want it refused as frozen", err)
+	}
+	if asked := srv.Requests("thread/turns/list"); len(asked) != 0 {
+		t.Fatalf("requests to the frozen app-server = %s, want none", asked)
+	}
+}
+
 func (e *testEnv) interrupt(t *testing.T, run *domain.Run) error {
 	t.Helper()
 	stopped, err := e.sched.Interrupt(t.Context(), run)

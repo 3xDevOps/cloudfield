@@ -198,10 +198,13 @@ var ErrNoInterrupt = errors.New("scheduler: the session's agent takes an interru
 func (s *Scheduler) Interrupt(ctx context.Context, run *domain.Run) (stopped func() error, err error) {
 	s.mu.Lock()
 	var appServer, sleeping, asleep, midTurn, paused bool
+	var cid runtime.ID
 	if entry := s.runs[run.ID]; entry != nil {
-		appServer, sleeping, paused = entry.appServer, entry.sleeping, entry.paused
+		appServer, sleeping, paused, cid = entry.appServer, entry.sleeping, entry.paused, entry.containerID
 		asleep = !entry.asleepSince.IsZero()
-		midTurn = asleep && entry.memorySaved > 0
+		// A failed wake drops the memory guard's mark and saves a working
+		// VM again with its turn.
+		midTurn = asleep && (entry.memorySaved > 0 || entry.activity == domain.ActivityWorking)
 	}
 	s.mu.Unlock()
 	stopped = func() error { return nil }
@@ -211,7 +214,7 @@ func (s *Scheduler) Interrupt(ctx context.Context, run *domain.Run) (stopped fun
 	case !run.ACP && !appServer:
 		return nil, fmt.Errorf("%w: run cloudfield attach %s and press the agent's own interrupt key", ErrNoInterrupt, run.ID)
 	case midTurn:
-		return nil, fmt.Errorf("%w: the session was saved to disk under memory pressure, and a turn it was in carries on when it wakes: run cloudfield resume %s first", ErrInvalidTransition, run.ID)
+		return nil, fmt.Errorf("%w: the session was saved to disk under memory pressure, and any turn it was in carries on when it wakes: run cloudfield resume %s first", ErrInvalidTransition, run.ID)
 	case run.ACP:
 		return stopped, s.ACPCancel(ctx, run.ID)
 	case sleeping:
@@ -220,6 +223,10 @@ func (s *Scheduler) Interrupt(ctx context.Context, run *domain.Run) (stopped fun
 		return stopped, nil
 	case paused:
 		return nil, fmt.Errorf("%w: the session is paused: run cloudfield resume %s first", ErrInvalidTransition, run.ID)
+	case s.vmFrozen(cid):
+		// A frozen app-server answers nothing, and the caller holds control
+		// admission until this returns.
+		return nil, fmt.Errorf("%w: the server froze the session's VM while it is short of memory, and it carries on by itself once memory is free again: interrupt it then", ErrInvalidTransition)
 	}
 	client := s.appServer.connected(run.ID)
 	if client == nil {

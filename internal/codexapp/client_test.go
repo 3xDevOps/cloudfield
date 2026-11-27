@@ -256,7 +256,6 @@ func TestInterruptOfATurnThatEndedFirstIsNotAFailure(t *testing.T) {
 	}
 }
 
-// interrupt is Interrupt and the wait for its answer.
 func interrupt(t *testing.T, c *codexapp.Client) error {
 	t.Helper()
 	stopped, err := c.Interrupt(t.Context())
