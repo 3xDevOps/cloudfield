@@ -25,6 +25,8 @@
 </nav>{{end}}
 </header>
 <main>
+{{with .Retiring}}<p class="warning" role="status">This address of the edge is retiring{{if .Date}} on {{.Date}}{{end}}. Its new address is <code>{{.Address}}</code>{{if .SignIn}}: sign in there{{end}}.</p>
+{{end -}}
 <h1>{{.Title}}</h1>
 {{if and .Error (ne .Title "Account")}}<p class="error" role="alert">{{.Error}}</p>{{end}}
 {{end}}

@@ -349,8 +349,8 @@ Claude Code refuses `--dangerously-skip-permissions` as root, so every `claude`
 session gets `IS_SANDBOX=1`.
 
 Claude Code reruns a model call that ends without text, adding the hidden
-prompt `[Your previous response had no visible output...]`. A Cloudfield turn
-ends with a report and no text after it, so every `claude` session gets
+prompt `[Your previous response had no visible output...]`. A turn whose
+agent writes nothing after its report would be rerun, so every `claude` session gets
 `CLAUDE_CODE_TERMINAL_MCP_TOOLS=mcp__aether__aether_report`, which exempts a
 turn in which `aether_report` succeeded since the last user message. A report
 through `cloudfield-internal report` runs as the shell tool and still gets the
@@ -509,8 +509,8 @@ Google sign-in inside a session sandbox.
 ### Install hooks by hand
 
 Claude Code, Copilot, pi, oh-my-pi and OpenCode load Cloudfield's inbox hooks
-for you on a Standard session that has a task. Codex needs none: its app-server
-hands it mail. Gemini CLI and Cursor CLI do not load hooks.
+for you on a Standard session, with or without a task. Codex needs none: its
+app-server hands it mail. Gemini CLI and Cursor CLI do not load hooks.
 Without hooks, mail reaches those agents only when they run
 `cloudfield-internal inbox`.
 
@@ -967,8 +967,8 @@ a finished tool call. **Idle wake** starts a new turn in a session that has been
 waiting. Which agents get which is in the table above. Both are managed for you,
 except where [Install hooks by hand](#install-hooks-by-hand) says otherwise.
 
-Hooks work only for a coordinated session that has a task, in Standard mode. A
-taskless launch, a Background session, a session with `--conflict-coordination=false`,
+Hooks work only for a coordinated session in Standard mode, with or without a
+task. A Background session, a session with `--conflict-coordination=false`,
 and an agent whose command an administrator overrode do not get them. Enhanced
 sessions do not use hooks: the server prompts the idle session instead. So does a
 Standard Codex run, through its app-server, with or without a task: the server
@@ -977,11 +977,14 @@ steer mid-turn. Without any of these, the agent reads mail only when it runs
 `cloudfield-internal inbox`.
 
 Claude Code is the one with a hook-based idle wake in Standard mode. Its wake
-starts a turn with no human input, and the terminal shows **Stop hook feedback**.
+starts a turn with no human input, also in a session you have not typed into
+yet, and the terminal shows **Stop hook feedback**.
 That wording is Claude Code's own framing, not an error. After you press Esc, a
 wake pauses until a turn completes. Copilot has no idle wake, so mail waits for
 the next hook boundary. pi, oh-my-pi and OpenCode wake only their main
-session, and only while idle.
+session, and only while idle. OpenCode's wake starts after the session's first
+turn, so a session opened without a task is not woken until you have prompted
+it once.
 
 Hooks that you installed yourself and Cloudfield's managed ones do not double up
 for Claude Code. If an OpenCode, pi or oh-my-pi setting disables extensions,
@@ -1029,7 +1032,7 @@ mounts.
 - Codex subagents do not nest in the Enhanced timeline.
 - No idle wake exists for Copilot, Gemini or Cursor, and Antigravity has no
   hooks at all. A [subsession](teams.md#subsessions) refuses them Standard, so they run
-  Enhanced there.
+  Enhanced there, or Background for Antigravity.
 - Standard Codex needs Codex 0.131.0 or newer. Its app-server ends with its
   terminal, so a `codex resume` in the shell runs without Cloudfield's status
   and message delivery.

@@ -230,6 +230,11 @@ func TestDecodesVersion1Fixtures(t *testing.T) {
 	hello := Hello{Version: 1, HostKey: unb64(t, "AAAAC3NzaC1lZDI1NTE5AAAAIM7MFQfcHd1ylZUcKQiI8JWtuQRNG3PWlubfBl1oO9T8"),
 		Signature:    unb64(t, "AAAAC3NzaC1lZDI1NTE5AAAAQAr+l1EewoxI2CWsih4ooJYBCv6geC+TUnQv7ztyto9FL/JTiIUc6J9ik4XCjDkVueYu9iV2IrOKJfC6n/Y4tAc="),
 		AgentVersion: "v0.0.0-test", Name: "devbox"}
+	retiring := Notice{State: NoticeRetiring, Origin: "https://edge.example", Replacement: "https://edge2.example", Date: "2027-03-01"}
+	retired := Notice{State: NoticeRetired, Origin: "https://edge0.example", Replacement: "https://edge2.example"}
+	noticesSig := unb64(t, "9JFPavmgDE0LBmPZeYz/awFOEt7P2tAKDOpdS6ByqXeEl1Phe8+HTyUD//YXMVkyo7FLdICZwVFvuNAN9odSCw==")
+	withNonce := hello
+	withNonce.NoticeNonce = bytes.Repeat([]byte{2}, NonceSize)
 	want := map[string]Message{
 		"account_deleted":          AccountDeleted{Provider: ProviderGitHub, Subject: "1001"},
 		"account_deletion_applied": AccountDeletionApplied{Provider: ProviderGitHub, Subject: "1001"},
@@ -240,21 +245,34 @@ func TestDecodesVersion1Fixtures(t *testing.T) {
 			{Kind: "member", Provider: ProviderGitHub, Subject: "1001", Role: "admin"},
 			{Kind: "invitation", Email: "new@example.com", Role: "viewer", ExpiresAt: time.Date(2030, 1, 1, 0, 0, 0, 0, time.UTC)},
 		}},
-		"drain":                 Drain{},
-		"drain_hint":            Drain{RetryAfterMS: 3000, JitterMS: 5000},
-		"drain_unknown_fields":  Drain{RetryAfterMS: 3000, JitterMS: 5000},
-		"drain_out_of_range":    Drain{RetryAfterMS: -1, JitterMS: 99999999999999},
-		"hello":                 hello,
-		"hello_unknown_fields":  hello,
-		"open":                  Open{ConnID: conn, Ticket: "S2-Wb5bWULbHSO81DjrP99AnnrLlBv2KKS_-qolTRqI", Kind: "ssh", Grant: "payload.sig", ClientAddr: "192.0.2.1:5555"},
-		"open_result":           OpenResult{ConnID: conn},
-		"owner_transfer_result": OwnerTransferResult{ID: conn, Owner: account("1002")},
-		"owner_transferred":     OwnerTransferred{ID: conn, Owner: account("1002")},
-		"ownerless":             Ownerless{},
-		"ping":                  Ping{},
-		"pong":                  Pong{},
-		"ready":                 Ready{ServerID: "7ozstx3hvprfzhna3cakjwhdnw", State: StateUnclaimed, EdgeKey: unb64(t, "zswVB9wd3XKVlRwpCIjwla25BE0bc9aW5t8GXWg71Pw=")},
-		"unenroll":              Unenroll{},
+		"drain":                           Drain{},
+		"drain_hint":                      Drain{RetryAfterMS: 3000, JitterMS: 5000},
+		"drain_unknown_fields":            Drain{RetryAfterMS: 3000, JitterMS: 5000},
+		"drain_out_of_range":              Drain{RetryAfterMS: -1, JitterMS: 99999999999999},
+		"hello":                           hello,
+		"hello_unknown_fields":            hello,
+		"hello_notice_nonce":              withNonce,
+		"hello_bad_notice_nonce":          hello,
+		"hello_notice_nonce_not_a_string": hello,
+		"open":                            Open{ConnID: conn, Ticket: "S2-Wb5bWULbHSO81DjrP99AnnrLlBv2KKS_-qolTRqI", Kind: "ssh", Grant: "payload.sig", ClientAddr: "192.0.2.1:5555"},
+		"open_result":                     OpenResult{ConnID: conn},
+		"owner_transfer_result":           OwnerTransferResult{ID: conn, Owner: account("1002")},
+		"owner_transferred":               OwnerTransferred{ID: conn, Owner: account("1002")},
+		"ownerless":                       Ownerless{},
+		"ping":                            Ping{},
+		"pong":                            Pong{},
+		"ready":                           Ready{ServerID: "7ozstx3hvprfzhna3cakjwhdnw", State: StateUnclaimed, EdgeKey: unb64(t, "zswVB9wd3XKVlRwpCIjwla25BE0bc9aW5t8GXWg71Pw=")},
+		"ready_notices": Ready{ServerID: "7ozstx3hvprfzhna3cakjwhdnw", State: StateClaimed, EdgeKey: unb64(t, "zswVB9wd3XKVlRwpCIjwla25BE0bc9aW5t8GXWg71Pw="),
+			RelayOrigins: []string{"https://edge.example", "https://edge2.example"}, Notices: Notices{retiring, retired}, NoticesSignature: noticesSig},
+		"ready_bad_notices": Ready{ServerID: "7ozstx3hvprfzhna3cakjwhdnw", State: StateClaimed, EdgeKey: unb64(t, "zswVB9wd3XKVlRwpCIjwla25BE0bc9aW5t8GXWg71Pw="),
+			Notices: Notices{retiring}, NoticesSignature: noticesSig},
+		"ready_bad_notices_signature": Ready{ServerID: "7ozstx3hvprfzhna3cakjwhdnw", State: StateClaimed, EdgeKey: unb64(t, "zswVB9wd3XKVlRwpCIjwla25BE0bc9aW5t8GXWg71Pw="),
+			Notices: Notices{{State: NoticeRetiring, Origin: "https://edge.example", Replacement: "https://edge2.example"}}},
+		"ready_notices_signature_not_a_string": Ready{ServerID: "7ozstx3hvprfzhna3cakjwhdnw", State: StateClaimed, EdgeKey: unb64(t, "zswVB9wd3XKVlRwpCIjwla25BE0bc9aW5t8GXWg71Pw="),
+			Notices: Notices{{State: NoticeRetiring, Origin: "https://edge.example", Replacement: "https://edge2.example"}}},
+		"ready_notices_not_a_list": Ready{ServerID: "7ozstx3hvprfzhna3cakjwhdnw", State: StateClaimed, EdgeKey: unb64(t, "zswVB9wd3XKVlRwpCIjwla25BE0bc9aW5t8GXWg71Pw="),
+			NoticesSignature: []byte("sig")},
+		"unenroll": Unenroll{},
 	}
 	files, err := filepath.Glob("testdata/v1/*.json")
 	if err != nil || len(files) != len(want)+1 {
@@ -309,5 +327,31 @@ func TestReadyKeepsUsableRelayOrigins(t *testing.T) {
 	}
 	if got := m.(Ready).RelayOrigins; !slices.Equal(got, sent[3:3+MaxRelayOrigins]) {
 		t.Fatalf("relay origins kept %v, want the first %d canonical ones", got, MaxRelayOrigins)
+	}
+}
+
+// TestReadyTellsUnusableOriginsFromNone checks that a ready whose relay
+// origins are all unusable decodes with an empty list, and one without
+// the member with none, so a server tells the two apart.
+func TestReadyTellsUnusableOriginsFromNone(t *testing.T) {
+	for _, tc := range []struct {
+		origins any
+		wantNil bool
+	}{{nil, true}, {[]string{}, true}, {[]string{"edge.example.test", "https://EDGE.example.test"}, false}} {
+		fields := map[string]any{"type": "ready", "server_id": "7ozstx3hvprfzhna3cakjwhdnw", "state": StateClaimed, "edge_key": edgeKey(1).Public()}
+		if tc.origins != nil {
+			fields["relay_origins"] = tc.origins
+		}
+		data, err := json.Marshal(fields)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m, err := DecodeControl(data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := m.(Ready).RelayOrigins; (got == nil) != tc.wantNil || len(got) != 0 {
+			t.Errorf("relay_origins %v: decoded %#v, want nil %v and empty", tc.origins, got, tc.wantNil)
+		}
 	}
 }

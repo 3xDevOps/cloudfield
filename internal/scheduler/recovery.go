@@ -1983,6 +1983,7 @@ func (s *Scheduler) entryFromSidecar(r *domain.Run, sc sidecar) *supervised {
 		acp:                 acp,
 		appServer:           sc.AppServer,
 		serverTurn:          sc.ServerTurn,
+		idleWake:            sc.IdleWake,
 		status:              r.Status,
 		reason:              r.Reason,
 		workersReason:       sc.WorkersReason,
@@ -2020,6 +2021,7 @@ func (s *Scheduler) entryFromSidecar(r *domain.Run, sc sidecar) *supervised {
 		usageLimit:          sc.UsageLimit,
 		asleepSince:         asleepSince,
 		asleepSaved:         sc.AsleepSaved,
+		asleepResident:      sc.AsleepResident,
 		wakeErr:             wakeErr,
 		done:                make(chan struct{}),
 	}

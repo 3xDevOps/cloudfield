@@ -750,7 +750,7 @@ describe('lanes view', () => {
     expect(items[2]).toBe('Working, 1 session')
     expect(items[4]).toBe('Finished, 0 sessions, 1 ended before this window')
     await waitFor(() => expect(api.workspaceTimeline).toHaveBeenCalledWith(expect.objectContaining({
-      workspace_id: workspace.id, types: ['run.status', 'coord.message', 'coord.message.acked'], newest: true,
+      workspace_id: workspace.id, types: ['run.status', 'coord.message', 'coord.message.acked'], no_rereads: true, newest: true,
     })))
   })
 
@@ -935,6 +935,81 @@ describe('lanes view', () => {
     expect(alert.textContent).toContain('timeline unavailable')
     await userEvent.click(within(alert).getByRole('button', { name: 'Retry' }))
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
+  })
+
+  it('reads on past a page the server filtered empty, to the history before it', async () => {
+    seed([working])
+    const first = Date.now() - 20 * 60_000
+    const mail = (seq: number, time: number): Event => ({
+      id: `evt_${seq}`, seq, time: new Date(time).toISOString(), workspace_id: workspace.id,
+      run_id: working.id, actor_id: '', type: 'coord.message', payload: {},
+    })
+    vi.mocked(api.workspaceTimeline)
+      .mockResolvedValueOnce({ events: [mail(900, first)], next_seq: 0, more: true, older_seq: 500 })
+      .mockResolvedValueOnce({ events: [], next_seq: 0, more: true, older_seq: 100 })
+      .mockResolvedValueOnce({ events: [mail(1, first - 24 * 60 * 60_000)], next_seq: 0, more: false })
+    await openLanes()
+    await waitFor(() => expect(api.workspaceTimeline).toHaveBeenCalledTimes(3))
+    expect(vi.mocked(api.workspaceTimeline).mock.calls.map(([query]) => query.before_seq)).toEqual([undefined, 500, 100])
+    await waitFor(() => expect(useStore.getState().laneHistory[workspace.id]).toMatchObject({ floor: -Infinity, loading: false, capped: false }))
+    expect(useStore.getState().laneHistory[workspace.id].events.map((event) => event.seq)).toEqual([1, 900])
+  })
+
+  it('counts the stretch a page read with nothing to show as loaded, and stops there', async () => {
+    seed([working])
+    const now = Date.now()
+    const mail: Event = {
+      id: 'evt_900', seq: 900, time: new Date(now - 60_000).toISOString(), workspace_id: workspace.id,
+      run_id: working.id, actor_id: '', type: 'coord.message', payload: {},
+    }
+    const reached = now - 3 * 24 * 60 * 60_000
+    vi.mocked(api.workspaceTimeline).mockResolvedValueOnce({ events: [mail], next_seq: 0, more: true, older_seq: 500, older_time: new Date(reached).toISOString() })
+    await openLanes()
+    await waitFor(() => expect(useStore.getState().laneHistory[workspace.id]).toMatchObject({ floor: reached, loading: false }))
+    expect(api.workspaceTimeline).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps only the newest of a page that its budget has room for', async () => {
+    seed([working])
+    const start = Date.now() - 30 * 60_000
+    const mail = (seq: number): Event => ({
+      id: `evt_${seq}`, seq, time: new Date(start + seq).toISOString(), workspace_id: workspace.id,
+      run_id: working.id, actor_id: '', type: 'coord.message', payload: {},
+    })
+    const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => mail(from + i))
+    vi.mocked(api.workspaceTimeline)
+      .mockResolvedValueOnce({ events: range(1001, historyBudget + 500), next_seq: 0, more: true, older_seq: 1001 })
+      .mockResolvedValueOnce({ events: range(1, 1000), next_seq: 0, more: false })
+    await openLanes()
+    expect(await screen.findByText('Older history not loaded')).toBeDefined()
+    expect(vi.mocked(api.workspaceTimeline).mock.calls.map(([query]) => query.limit)).toEqual([1000, 1000])
+    const history = useStore.getState().laneHistory[workspace.id]
+    expect(history.events).toHaveLength(historyBudget)
+    expect(history).toMatchObject({ olderSeq: 501, floor: Date.parse(mail(501).time) })
+    expect(history.events[0].seq).toBe(501)
+  })
+
+  it('keeps none of a page that live events left no room for', async () => {
+    seed([working])
+    const start = Date.now() - 30 * 60_000
+    const mail = (seq: number): Event => ({
+      id: `evt_${seq}`, seq, time: new Date(start + seq).toISOString(), workspace_id: workspace.id,
+      run_id: working.id, actor_id: '', type: 'coord.message', payload: {},
+    })
+    const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => mail(from + i))
+    let older!: (page: TimelinePage) => void
+    vi.mocked(api.workspaceTimeline)
+      .mockResolvedValueOnce({ events: range(1001, historyBudget + 999), next_seq: 0, more: true, older_seq: 1001 })
+      .mockImplementationOnce(() => new Promise((resolve) => { older = resolve }))
+    await openLanes()
+    await waitFor(() => expect(api.workspaceTimeline).toHaveBeenCalledTimes(2))
+    act(() => useStore.getState().appendLaneEvent(mail(historyBudget + 1000)))
+    await act(async () => older({ events: range(991, 1000), next_seq: 0, more: true, older_seq: 991 }))
+    expect(await screen.findByText('Older history not loaded')).toBeDefined()
+    const history = useStore.getState().laneHistory[workspace.id]
+    expect(history.events).toHaveLength(historyBudget)
+    expect(history.events[0].seq).toBe(1001)
+    expect(history.floor).toBe(Date.parse(mail(1001).time))
   })
 
   it('drops an older history page read while live events trimmed held history, so no gap reads as loaded', async () => {

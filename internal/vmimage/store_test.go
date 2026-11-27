@@ -590,7 +590,8 @@ func TestStoreHelperDisk(t *testing.T) {
 			t.Errorf("helper disk lacks %s:\n%s", dir, out)
 		}
 	}
-	if err = os.WriteFile(bin, []byte("helper v2"), 0o755); err != nil {
+	next := bin + ".new"
+	if err = errors.Join(os.WriteFile(next, []byte("helper v2"), 0o755), os.Rename(next, bin)); err != nil {
 		t.Fatal(err)
 	}
 	c, err := s.HelperDisk(ctx, bin, filepath.Join(runs, "c.helper"))
@@ -612,8 +613,9 @@ func TestStoreHelperDisk(t *testing.T) {
 	if err := errors.Join(os.Remove(b.Path), os.Remove(c.Path), s.Sweep()); err != nil {
 		t.Fatal(err)
 	}
-	if entries, _ := os.ReadDir(s.helpersDir()); len(entries) != 0 {
-		t.Errorf("sweep left %d unlinked helper disks", len(entries))
+	entries, _ := os.ReadDir(s.helpersDir())
+	if want, _ := fileDigest(bin); len(entries) != 1 || entries[0].Name() != want {
+		t.Errorf("sweep left %v, want only the current binary's helper disk %s", entries, want)
 	}
 }
 
