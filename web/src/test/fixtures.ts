@@ -41,6 +41,7 @@ export function stateContext(over: Partial<StateContext> = {}): StateContext {
     roomMessages: {},
     roomStatus: {},
     pausedRuns: {},
+    startingRuns: {},
     now: Date.parse('2026-08-14T10:20:00Z'),
     ...over,
   }
@@ -751,6 +752,7 @@ export function fakeApi(over: Partial<Api> = {}): Api {
     workspaceMirrorStatus: vi.fn(async () => ({ enabled: false })),
     workspaceMirrorConfigure: vi.fn(async () => ({ enabled: false })),
     workspaceMirrorRefresh: vi.fn(async () => ({ enabled: false })),
+    workspaceMirrorWarm: vi.fn(async () => ({})),
     workspaceMirrorAdopt: vi.fn(async () => ({ enabled: false })),
     workspaceMirrorDisable: vi.fn(async () => ({ enabled: false })),
     budgetSet: vi.fn(async () => budget(workspace.id)),

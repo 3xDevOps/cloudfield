@@ -1,6 +1,6 @@
 import type { Event } from '@/lib/types'
 import { createRootStore } from '@/store'
-import { historyBudget } from '@/store/lanes'
+import { historyBudget, historyBudgetFor } from '@/store/lanes'
 
 const event = (seq: number, type = 'run.status', workspace = 'wsp_1'): Event => ({
   id: `e${seq}`, seq, time: '2026-08-14T10:00:00Z', workspace_id: workspace, run_id: 'run_1', actor_id: '', type, payload: {},
@@ -21,6 +21,26 @@ describe('lane history', () => {
     expect(store.getState().laneHistory).toEqual({})
   })
 
+  it('sizes the budget by the window, raises it on request and forgets the raise with the last view', () => {
+    const hour = 3_600_000
+    expect([1, 6, 24, 168].map((hours) => historyBudgetFor(hours * hour))).toEqual([5000, 5000, 10_000, 25_000])
+    const store = createRootStore()
+    const release = store.getState().holdLanes()
+    const other = store.getState().holdLanes()
+    store.getState().raiseLaneBudget(25_000)
+    store.getState().raiseLaneBudget(10_000)
+    expect(store.getState().laneBudget).toBe(25_000)
+    other()
+    expect(store.getState().laneBudget).toBe(25_000)
+    release()
+    expect(store.getState().laneBudget).toBe(historyBudget)
+    // A server reset drops history, and the budget raised for it.
+    store.getState().holdLanes()
+    store.getState().raiseLaneBudget(35_000)
+    store.getState().resetSeq()
+    expect(store.getState().laneBudget).toBe(historyBudget)
+  })
+
   it('keeps the newest events up to the budget and moves the history floor to the oldest kept', () => {
     const store = createRootStore()
     store.getState().holdLanes()
@@ -32,5 +52,10 @@ describe('lane history', () => {
     expect(history.events[0].seq).toBe(2)
     expect(history.floor).toBe(Date.parse(timed(2).time))
     expect(history.olderSeq).toBe(2)
+    expect(history.capped).toBe(true)
+    // A raised budget keeps what the smaller one would drop.
+    store.getState().raiseLaneBudget(historyBudget + 1)
+    store.getState().appendLaneEvent(timed(historyBudget + 2))
+    expect(store.getState().laneHistory.wsp_1.events).toHaveLength(historyBudget + 1)
   })
 })

@@ -1056,6 +1056,10 @@ export interface RunMessage {
   outcome?: string
   summary?: string
   next_action?: string
+  /** Size of the body a report carries beside its summary; unset for none. */
+  report_body_bytes?: number
+  /** That body, when the list was asked for report bodies. */
+  report_body?: string
 }
 
 export interface CoordMessagesListResult {

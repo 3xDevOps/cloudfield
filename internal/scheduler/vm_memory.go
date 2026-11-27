@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/3xDevOps/cloudfield/internal/disk"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
@@ -450,7 +451,7 @@ func (s *Scheduler) saveFits(c memoryCandidate, writing uint64, warn bool) bool 
 		slog.Warn("scheduler: memory guard: measure the data filesystem", "error", err)
 		return false
 	}
-	if data.FreeBytes < diskReserve(data.TotalBytes, s.cfg.MinFreeBytes)+reclaimHeadroom+writing+c.memory {
+	if data.FreeBytes < disk.Reserve(data.TotalBytes, s.cfg.MinFreeBytes)+disk.ReclaimHeadroom+writing+c.memory {
 		if !warn {
 			return false
 		}

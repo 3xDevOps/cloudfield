@@ -62,7 +62,7 @@ func TestKVMStandardImageRunsDocker(t *testing.T) {
 		t.Skip("build the test binary with CGO_ENABLED=0")
 	}
 	_ = bin.Close()
-	s, err := Open(filepath.Join(dir, "images"), kernel, nil)
+	s, err := Open(filepath.Join(dir, "images"), kernel, nil, -1)
 	if err != nil {
 		t.Fatal(err)
 	}

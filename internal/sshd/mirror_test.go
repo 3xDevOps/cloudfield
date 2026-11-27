@@ -3,6 +3,7 @@ package sshd
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -79,6 +80,31 @@ func (f *mirrorRPCFake) Capture(context.Context, domain.WorkspaceID, string) (mi
 	return mirrorservice.CaptureResult{}, errors.New("not used")
 }
 func (f *mirrorRPCFake) Warm(context.Context, domain.WorkspaceID) error { return nil }
+func (f *mirrorRPCFake) WarmAhead(context.Context, domain.WorkspaceID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.calls = append(f.calls, "warm")
+	return f.refreshErr
+}
+
+func TestWorkspaceMirrorWarmIsForAMemberWhoMayLaunch(t *testing.T) {
+	fake := &mirrorRPCFake{}
+	e := newTestEnv(t, func(c *Config) { c.Services.Mirrors = fake })
+	params := protocol.WorkspaceMirrorParams{WorkspaceID: string(e.ws.ID)}
+	if _, perr := callJSON(t, e, e.member.ID, protocol.MethodWorkspaceMirrorWarm, params); perr != nil {
+		t.Fatal(perr)
+	}
+	fake.refreshErr = errors.New("gitengine: mirror offline")
+	if _, perr := callJSON(t, e, e.member.ID, protocol.MethodWorkspaceMirrorWarm, params); perr == nil || !strings.Contains(perr.Message, "mirror offline") {
+		t.Fatalf("warm of an unreachable source = %v, want its error", perr)
+	}
+	if _, perr := callJSON(t, e, "nobody", protocol.MethodWorkspaceMirrorWarm, params); perr == nil {
+		t.Fatal("a caller who is no member warmed a mirror")
+	}
+	if !slices.Equal(fake.calls, []string{"warm", "warm"}) {
+		t.Fatalf("calls = %v, want the member's two", fake.calls)
+	}
+}
 
 func mirrorRPCState(id domain.WorkspaceID) domain.WorkspaceMirror {
 	stamp := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)

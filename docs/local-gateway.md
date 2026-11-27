@@ -235,7 +235,9 @@ reconnect. A call with no answer after 60 seconds fails with `-32004`
 carry up to 64 MiB, and `workspace.import`, whose first fetch of a large repository is
 slow, get 15 minutes. Only that call's channel closes: a slow server
 handler is not a dead connection, so the connection, its streams and its
-other calls stay up. The keepalive below drops a dead one. A server refusal passes through untouched as that `protocol.Error`;
+other calls stay up. The keepalive below drops a dead one. A `run.launch`
+the server had not yet admitted when its channel closed starts no session.
+A server refusal passes through untouched as that `protocol.Error`;
 in particular, busy retention admission requires an explicit retry, not
 automatic replay. Streams have a separate guard: a channel that fails to open
 triggers a redial only when a keepalive, given 60 seconds to answer, shows the
@@ -727,7 +729,11 @@ metadata, not a prompt body or evidence of input. An optional `session_id`
 names the agent's own top-level session; a Standard session stores the latest one
 as `harness_session_id` so [a mode switch](enhanced-sessions.md#switching-a-running-agent)
 can resume it. One that is not 1-128 characters of letters, digits, `.`,
-`_`, `:` and `-` is ignored and the rest of the report applies.
+`_`, `:` and `-` is ignored and the rest of the report applies. An optional
+`last_message` on a `waiting` report is the agent's last message of the turn,
+which only a subsession's reporter sends. An optional `session_end: true`
+marks a `waiting` report sent as the agent's session ends, which is not a turn
+end ([coordination.md](coordination.md#lifecycle-status-is-separate)).
 
 | Operation | Fields | Meaning |
 | --- | --- | --- |
@@ -743,7 +749,7 @@ pending requests per session. Unknown operations/kinds, missing identities, and
 conflicting operation fields are rejected rather than normalized or truncated.
 `open`/`close` do not accept nonempty `requests`; `clear` accepts no request
 identity or request list; `replace` accepts no top-level request identity.
-Reports carry only correlation metadata, never prompts, answers, paths, or
+Input updates carry only correlation metadata, never prompts, answers, paths, or
 transcripts.
 
 A Default session's `sudo` command waiting for a person
@@ -1240,6 +1246,7 @@ The dashboard also calls these methods through the same route:
 | `workspace.mirror.refresh` | `WorkspaceMirrorParams` (`{"workspace_id":"..."}`) | `WorkspaceMirrorResult` after fetching the configured source branch |
 | `workspace.mirror.adopt` | `WorkspaceMirrorAdoptParams` (`{"workspace_id":"...","generation":7,"expected_commit":"<full-reviewed-sha>"}`; all fields required) | `WorkspaceMirrorResult` after explicitly accepting exactly the reviewed retained candidate |
 | `workspace.mirror.disable` | `WorkspaceMirrorParams` (`{"workspace_id":"..."}`) | `WorkspaceMirrorResult` with `enabled:false`; the workspace becomes local-only |
+| `workspace.mirror.warm` | `WorkspaceMirrorParams` (`{"workspace_id":"..."}`) | `{}`. For any member who may launch in the workspace. Fetches the configured source branch unless a fetch succeeded in the last 5 seconds or a launch in progress took the last fetch as its base, and does nothing in a workspace without a mirror, so a launch in the next seconds starts without fetching. The fetch goes on when the caller disconnects and gives up after 10 seconds ([failure-handling.md](failure-handling.md#launch-and-mirror-failures)) |
 | `github.connect` | none | `GitHubConnectResult` (`{"login":"...","signing_key":"ssh-ed25519 ...","fingerprint":"SHA256:..."}`) - finishes the GitHub connection for the calling member |
 | `github.probe` | none | `GitHubProbeResult` (`{"status":"ok","version":"2.100.0","minimum":"2.81.0","detail":"gh version 2.100.0 (2026-09-03)\nhttps://github.com/cli/cli/releases/tag/v2.100.0","image":"ghcr.io/3xdevops/aether-standard:v0.2.0-alpha.7"}`) - the gh in the calling member's environment terminal |
 | `github.oauth.start` | `{}` | `GitHubOAuthResult`; admin-only, starts or returns the calling member's active authorization attempt |
@@ -2180,7 +2187,8 @@ the server snapshot from loading.
   reads authoritative `link.status` before showing the connected clone.
 - `workspace.mirror.status` requires read access; admitted collaborators and
   viewers can inspect the existing public result without changing a mirror.
-  `configure`, `refresh`, `adopt`, and `disable` remain admin-only.
+  `configure`, `refresh`, `adopt`, and `disable` remain admin-only. `warm`
+  is for any member who may launch in the workspace.
   `configure` receives the verified source URL, branch, auth mode, and (for
   generic SSH) the `known_hosts` file contents; the server generates and stores
   any deploy key.

@@ -54,9 +54,13 @@ const (
 	RoleCardEnv = "AETHER_ROLE_CARD"
 	// HarnessEnv names the run's harness in its container.
 	HarnessEnv = "AETHER_HARNESS"
+	// SubsessionEnv is "1" in the container of a run another run started.
+	// Only there does the status reporter send the agent's last message
+	// with a turn end.
+	SubsessionEnv = "AETHER_SUBSESSION"
 )
 
 // SessionEnv are the variables the server sets for its own programs in a
 // session. Their readers take the CLOUDFIELD_ name first, so the server
 // empties that name wherever it builds a session's environment.
-var SessionEnv = [...]string{RunIDEnv, EnhancedEnv, ManagedHooksEnv, BackgroundEnv, WakeEnv, RoleCardEnv, HarnessEnv}
+var SessionEnv = [...]string{RunIDEnv, EnhancedEnv, ManagedHooksEnv, BackgroundEnv, WakeEnv, RoleCardEnv, HarnessEnv, SubsessionEnv}

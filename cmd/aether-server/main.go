@@ -333,7 +333,7 @@ func serveFlags(fs *flag.FlagSet) *serveOptions {
 		"how long an idle Enhanced session of an agent that can resume its conversation keeps its container running before it is stopped until its next use (0 = never); "+
 			"unset, an idle session VM is saved to disk after "+scheduler.DefaultVMSleepAfter.String()+" instead")
 	o.minFreeDisk = fs.Int64("min-free-disk", 0,
-		"free-byte reserve on data/runtime filesystems (0 = automatic 5-20GiB, negative = disable disk admission)")
+		"free-byte reserve on data/runtime filesystems (0 = automatic 5-20GiB, negative = disable disk admission and the free-space check on cache promotions)")
 	o.runCPUs = new(runCPUValue)
 	fs.Var(o.runCPUs, "run-cpus", "CPU ceiling per session/member environment (0 = automatic, up to 8 host CPUs)")
 	o.runMemory = new(runCountValue)

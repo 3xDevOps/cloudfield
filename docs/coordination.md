@@ -90,7 +90,7 @@ line. The base coordination method set is:
 | `coord.inbox` | optional `ack_token`, optional `wait_seconds`, optional `ack_only` | oldest-first `messages`, the `ack_token` for that batch, and `more`, the unacknowledged messages after it |
 | `coord.ask` | `to_run_id`, `body`, `idempotency_key` | `question_id`, `recipient_status` |
 | `coord.reply` | `question_id`, `body`, `idempotency_key` | `message_id` |
-| `coord.report` | `outcome`, `summary`, optional `waiting_for`, `until` and `evidence_refs`, `idempotency_key` | outcome, summary and next action; for success, failure and blocked also the durable `report_id`, evidence references, and automatic `evidence_ref` |
+| `coord.report` | `outcome`, `summary`, optional `body`, `waiting_for`, `until` and `evidence_refs`, `idempotency_key` | outcome, summary and next action; for success, failure and blocked also the durable `report_id`, evidence references, automatic `evidence_ref`, and `body_bytes` when a body was stored |
 
 The six advertised coordination methods are unchanged. Native hooks use
 `coord.hook.status`, an internal endpoint with a separate request budget, not
@@ -525,6 +525,8 @@ the time of the event at `older_seq`: the page covers everything after it,
 including events a filter left out. A session snapshot's
 `unacked_messages` counts mail addressed to the session that it has not
 acknowledged, and `oldest_unacked_at` is when the oldest of it was sent.
+`cloudfield sessions` shows the count in its `MAIL` column, and `cloudfield
+sessions <session-id>` shows both on its `mail` line.
 
 Mail stays as history until its session is explicitly deleted, including through
 workspace deletion. When a session's sandbox is released, mail it never
@@ -1367,13 +1369,20 @@ Parent and subsession may always message each other with `send`, `ask` and
 state `lineage`. A subsession's success,
 failure or blocked report reaches its parent's inbox with kind `report`:
 `from_run_id` is the subsession, `outcome` is the reported outcome, `body` is
-its complete report summary, and `correlation_id` is the report ID. It uses the same durable delivery and
+its complete report summary, `report_body` is the report's body when it has
+one, and `correlation_id` is the report ID. It uses the same durable delivery and
 acknowledgement as peer messages; if the inbox is full, report publication
 retries until it fits. A turn that ends without a success,
 failure or blocked report forwards the subsession's
 last message to the parent as a provisional report, which names the session's
 last `needs-input`, `waiting` or `answered` report if it made one; the subsession's own later
-success, failure or blocked report retires it while unread. A subsession that ends without a final report sends
+success, failure or blocked report retires it while unread. A Standard
+subsession forwards Claude Code's and Codex's last message; pi, oh-my-pi and
+OpenCode give none, so their report reads `(none)` and still wakes the parent
+([what a turn end sends](#lifecycle-status-is-separate)). A Standard
+subsession of an agent without
+[status reporting](harnesses.md#status-reporting) forwards nothing. A
+subsession that ends without a final report sends
 one message saying so, with its latest report of any outcome (summary and
 time) and its branch. A live attached subsession that has been waiting (for
 anything), `answered`, or waiting on a `needs-input` answer for over an hour
@@ -1436,6 +1445,32 @@ and is valid only with `waiting`, as is `--until` (see the waiting report
 below). A non-empty summary is required. `--evidence-ref` may be
 repeated, and `--summary-file` accepts a file or `-` for standard input. The result contains a durable
 `report_id` and the server-created `evidence_ref`.
+
+A success, failure or blocked report may carry a body beside its summary:
+`--body <text>` or `--body-file <path>`, at most 12 KiB. The body is the full
+result, such as a review's findings; the summary stays the one-line outcome
+shown on the session. A subsession's parent reads the body in the report's
+own inbox message, as `report_body`, so one result is one message and one
+wake: put findings in the report, not in messages sent before it. The body is stored
+as sent, with CRLF line ends made LF: one that is not valid UTF-8 or has a
+control character other than a line break or a tab, such as a terminal's color
+codes, is refused. So is a report whose summary and body would print as more
+than 16 KiB in the parent's inbox read, where quotes, backslashes and line
+breaks print as two bytes each and `<`, `>` and `&` as six: the parent's harness must be able to show the
+report whole before the next read acknowledges it. A longer body is
+refused, by the command with `body exceeds 12288 bytes` and by the server
+with `body is <n> bytes and exceeds 12288`, and a body on another
+outcome with `body is only valid with the "success", "failure" or "blocked"
+outcome`. The body is stored with the report and read through the parent's inbox. In the
+dashboard a report with a body has a **Full report** button on its row under
+Agent messages, which opens the body in place; whoever may see that message may
+open it. `coord.messages.list` gives each report's `report_body_bytes`, and the
+body itself as `report_body` when called with `report_bodies`. Nothing is
+redacted from a summary or a body: write no secret into either. A report's body counts toward the 16 KiB of an inbox batch, so a report
+with a long body is read in a batch of its own. A parent whose command or bridge predates report bodies gets the body after
+the summary in `body`, which it shows. A server older than report bodies stores the report without the
+body; the command and the `aether_report` tool then fail with `the report was
+recorded WITHOUT its body`, so the agent can send it another way.
 
 **A `success` or `failure` report is refused while mail is unread.** Mail is
 unread until an inbox read returns it. The refusal is `CodeInvalidState`
@@ -1675,6 +1710,27 @@ nor terminal output follows the hold for a minute, as when the answer never
 reached Claude Code, the server ends the turn itself. Enhanced sessions get
 the same rule as a [report reminder](enhanced-sessions.md#report-reminder)
 prompt. Background sessions, and Standard sessions of other agents, are not held.
+
+`run.report` carries the agent's last message in one case: the turn end of a
+Standard subsession, which the server forwards to its parent as the
+provisional report ([subsessions](#subsessions)). The server sets
+`AETHER_SUBSESSION=1` in the container of a session another session started.
+Only there does a Claude Code `Stop` hook's `run.report` carry `last_message`,
+the first 4 KiB of the payload's `last_assistant_message`. For a stop that was
+held, the server forwards the held stop's message, not the one that follows
+the reminder, unless a prompt started a new turn first, typed into the
+reminder's continuation or after Esc: that turn's end forwards its own
+message. The server keeps the held message in memory only, so after a server
+restart the stop that follows the reminder forwards its own. A Claude Code
+`SessionEnd` hook's `run.report` carries `session_end: true` and forwards
+nothing: `/clear` and `/exit` end no turn, and a turn cut off with Esc sends
+no `Stop`. For Codex, which loads no hooks, the server reads the thread's
+last turn from the app-server, for a subsession only. A `completed` turn
+forwards its last agent message, and an `interrupted` one, as after Esc,
+forwards nothing. If the read fails, the report reads `(none)` and the server
+logs the error. A session with no parent sends and reads neither. A
+subsession that a handoff detached from its parent still does, and the server
+discards the message.
 
 Coordination also does not provide a universal inbound terminal hook. When a
 human messages a Standard session, Cloudfield delivers the message through the

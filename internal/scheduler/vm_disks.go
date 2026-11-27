@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/3xDevOps/cloudfield/internal/disk"
 	"github.com/3xDevOps/cloudfield/internal/events"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
 )
@@ -63,8 +64,8 @@ func (s *Scheduler) guardVMDisks(ctx context.Context) {
 		slog.Warn("scheduler: disk guard: measure the data filesystem", "error", err)
 		return
 	}
-	floor := diskReserve(data.TotalBytes, s.cfg.MinFreeBytes)
-	recovered := s.cfg.MinFreeBytes < 0 || data.FreeBytes >= floor+reclaimHeadroom || floor+reclaimHeadroom >= data.TotalBytes
+	floor := disk.Reserve(data.TotalBytes, s.cfg.MinFreeBytes)
+	recovered := s.cfg.MinFreeBytes < 0 || data.FreeBytes >= floor+disk.ReclaimHeadroom || floor+disk.ReclaimHeadroom >= data.TotalBytes
 	if recovered {
 		s.releaseHeldVMs(ctx)
 		s.vmDiskLow, s.vmDiskBase = false, nil

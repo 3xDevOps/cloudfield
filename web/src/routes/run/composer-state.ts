@@ -93,6 +93,8 @@ export function pillFor({ paused, turnRunning, backgroundWait, steering, queueHe
   return queueHeld || !steering ? 'queue' : 'steer'
 }
 
+export const startingHint = 'The agent is starting. A message you send now is delivered when it is ready.'
+
 export const pillHint: Record<Pill, string> = {
   send: 'Starts a turn.',
   steer: 'Added to the current turn.',
