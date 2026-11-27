@@ -554,9 +554,10 @@ type supervised struct {
 	// parent got before it is mail that turn could handle.
 	turnStartedAt time.Time
 	// reportsSince is when the stretch of work that outcome reports are
-	// compared within began: the turn start, or the last time the agent
-	// stopped working on a prompt, as it does before a follow-up turn of
-	// its own. Zero after a restart or relaunch, when it is unknown.
+	// compared within began: the turn start, a member's message, or the
+	// last time the agent stopped working on a prompt, as it does before a
+	// follow-up turn of its own. Zero after a restart or relaunch, when it
+	// is unknown.
 	reportsSince time.Time
 	// reportAsked is the turnStartedAt of the last turn whose end was held
 	// for a missing report (HoldTurnEnd), and stopHeld marks a Standard run

@@ -54,8 +54,9 @@ func (e *reportRepeatEnv) launch(task string) domain.RunID {
 
 // family launches a parent whose first turn starts a subsession, and plays
 // script as the subsession's second turn, with $CLI naming the coordination
-// command and PARENT the parent. The second turn starts after the launch
-// finished, so the server has its start before script reports.
+// command and PARENT the parent. The second turn starts once the server
+// shows the first one's report, so it has both turn boundaries before
+// script reports.
 func (e *reportRepeatEnv) family(script string) (parent, child domain.RunID) {
 	e.t.Helper()
 	e.n++
@@ -69,6 +70,13 @@ func (e *reportRepeatEnv) family(script string) (parent, child domain.RunID) {
 	}
 	child = domain.RunID(tree.Children[0].RunID)
 	waitTurns(e.ctx, e.t, e.srv, child, 1)
+	for e.get(child).Reason != "ready" {
+		select {
+		case <-e.ctx.Done():
+			e.t.Fatalf("subsession %s never showed its waiting report: %+v", child, e.get(child))
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
 	prompt := acpmock.PromptRun + "CLI=" + coordtransport.CLIPath + "; " + strings.ReplaceAll(script, "PARENT", string(parent))
 	for {
 		err := e.srv.sched.WakeEnhanced(e.ctx, child, prompt)
@@ -151,9 +159,10 @@ func TestIntegrationRepeatReports(t *testing.T) {
 	report := func(outcome, summary, key string) string {
 		return fmt.Sprintf("$CLI report --outcome %s --summary %s --idempotency-key %s", outcome, summary, key)
 	}
-	// run plays script as a subsession's only turn and returns the mail it
-	// left its parent, the turns that mail started there, and itself.
-	run := func(t *testing.T, script string, wait time.Duration, started ...func(parent, child domain.RunID)) ([]string, int, protocol.Run) {
+	// run plays script, which makes reports of them, as a subsession's turn
+	// and returns the mail it left its parent, the turns that mail started
+	// there, and itself. Every report must have been accepted.
+	run := func(t *testing.T, script string, reports int, wait time.Duration, started ...func(parent, child domain.RunID)) ([]string, int, protocol.Run) {
 		t.Helper()
 		e.t = t
 		parent, child := e.family(script)
@@ -161,20 +170,23 @@ func TestIntegrationRepeatReports(t *testing.T) {
 		for _, fn := range started {
 			fn(parent, child)
 		}
-		waitTurns(ctx, t, e.srv, child, 2)
+		said := assistantText(waitTurns(ctx, t, e.srv, child, 2))
+		if got := strings.Count(said, `"report_id"`) - 1; got != reports {
+			t.Fatalf("%d of %d reports accepted: %s", got, reports, said)
+		}
 		time.Sleep(wait)
 		e.settle(child, parent)
 		return e.mail(child, parent), e.wakes(parent), e.get(child)
 	}
 
 	t.Run("a second success in one turn is sent once", func(t *testing.T) {
-		mail, wakes, child := run(t, report("success", "first", "a")+"; "+report("success", "again", "b"), 0)
+		mail, wakes, child := run(t, report("success", "first", "a")+"; "+report("success", "again", "b"), 2, 0)
 		if len(mail) != 1 || mail[0] != "first" || wakes != 1 || child.Reason != domain.ReportedSuccessReason {
 			t.Fatalf("parent mail %q in %d wakes, child %q; want the success once", mail, wakes, child.Reason)
 		}
 	})
 	t.Run("a second success after new mail is sent too", func(t *testing.T) {
-		mail, _, _ := run(t, report("success", "first", "a")+"; until $CLI inbox | grep -q follow-up; do sleep 1; done; "+report("success", "second", "b"), 0,
+		mail, _, _ := run(t, report("success", "first", "a")+"; until $CLI inbox | grep -q follow-up; do sleep 1; done; "+report("success", "second", "b"), 2, 0,
 			func(parent, child domain.RunID) {
 				for len(e.mail(child, parent)) == 0 {
 					select {
@@ -191,32 +203,32 @@ func TestIntegrationRepeatReports(t *testing.T) {
 		}
 	})
 	t.Run("a failure after a success is sent too", func(t *testing.T) {
-		mail, _, child := run(t, report("success", "done", "a")+"; "+report("failure", "broke", "b")+"; "+report("failure", "broke-again", "c"), 0)
+		mail, _, child := run(t, report("success", "done", "a")+"; "+report("failure", "broke", "b")+"; "+report("failure", "broke-again", "c"), 3, 0)
 		if len(mail) != 2 || mail[0] != "broke" || mail[1] != "done" || child.Reason != domain.ReportedFailureReason {
 			t.Fatalf("parent mail %q, child %q; want the success, then the failure once", mail, child.Reason)
 		}
 	})
 	t.Run("answered after success keeps the success", func(t *testing.T) {
-		mail, wakes, child := run(t, report("success", "done", "a")+"; "+report("answered", "replied", "b"), 0)
+		mail, wakes, child := run(t, report("success", "done", "a")+"; "+report("answered", "replied", "b"), 2, 0)
 		if len(mail) != 1 || mail[0] != "done" || wakes != 1 || child.Reason != domain.ReportedSuccessReason {
 			t.Fatalf("parent mail %q in %d wakes, child %q (%s); want the reported success kept", mail, wakes, child.Reason, child.Activity)
 		}
 	})
 	t.Run("success after waiting wins", func(t *testing.T) {
-		mail, _, child := run(t, report("waiting", "on-ci", "a")+"; "+report("success", "done", "b"), 0)
+		mail, _, child := run(t, report("waiting", "on-ci", "a")+"; "+report("success", "done", "b"), 2, 0)
 		if len(mail) != 1 || mail[0] != "done" || child.Reason != domain.ReportedSuccessReason {
 			t.Fatalf("parent mail %q, child %q; want the success", mail, child.Reason)
 		}
 	})
 	t.Run("an answered turn is forwarded as one", func(t *testing.T) {
-		mail, _, _ := run(t, report("answered", "replied", "a"), 20*time.Second)
+		mail, _, _ := run(t, report("answered", "replied", "a"), 1, 20*time.Second)
 		if len(mail) != 1 || !strings.HasPrefix(mail[0], "Provisional report: this session ended its turn after reporting answered") {
 			t.Fatalf("parent mail %q, want the answered turn's last message under a header that names its report", mail)
 		}
 	})
 	t.Run("findings in three mails and a report", func(t *testing.T) {
 		send := func(part string) string { return "$CLI send --to PARENT --body " + part }
-		mail, wakes, _ := run(t, send("part-1")+"; sleep 8; "+send("part-2")+"; sleep 8; "+send("part-3")+"; sleep 8; "+report("success", "sent-my-findings", "a"), 0)
+		mail, wakes, _ := run(t, send("part-1")+"; sleep 8; "+send("part-2")+"; sleep 8; "+send("part-3")+"; sleep 8; "+report("success", "sent-my-findings", "a"), 1, 0)
 		if len(mail) != 4 {
 			t.Fatalf("parent mail %q, want three parts and the report", mail)
 		}

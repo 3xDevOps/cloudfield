@@ -188,7 +188,11 @@ func (s *Scheduler) applyAgentReportIf(ctx context.Context, run domain.RunID, re
 	entry.agentReport, entry.pendingInputs = execution, pending
 	switch {
 	case turnStarts:
-		entry.turnStartedAt, entry.reportsSince = turnAt, turnAt
+		entry.turnStartedAt = turnAt
+		// An Enhanced turn repeats its start with every state it reports.
+		if turnAt.After(entry.reportsSince) {
+			entry.reportsSince = turnAt
+		}
 	case report.State != "" && (execution.State != agentstatus.Working || execution.Reason != ""):
 		entry.reportsSince = now
 	}

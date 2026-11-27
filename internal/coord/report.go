@@ -46,8 +46,8 @@ type OutcomeSink interface {
 	ReportWaiting(ctx context.Context, run domain.RunID, id, waitingFor, summary string, at time.Time) error
 	ReportAnswered(ctx context.Context, run domain.RunID, id, summary string, at time.Time) error
 	// ReportsSince is when the stretch of run's work that its reports are
-	// compared within began: its turn start, or the last time its agent
-	// stopped working on a prompt. Zero when unknown.
+	// compared within began: its turn start, a member's message, or the
+	// last time its agent stopped working on a prompt. Zero when unknown.
 	ReportsSince(run domain.RunID) time.Time
 }
 
@@ -176,9 +176,13 @@ func (s *Service) reportState(ctx context.Context, run domain.RunID, p protocol.
 		err = s.cfg.Outcomes.ReportNeedsInput(ctx, run, id, reportText(summary), receipt.CreatedAt)
 	case protocol.CoordOutcomeAnswered:
 		// After a success or failure in the same turn, saying it replied
-		// takes nothing back.
-		var final bool
-		if final, err = s.reportedFinal(ctx, run); err == nil && !final {
+		// takes nothing back; nor does a retry of a report that took effect,
+		// which may arrive in a later turn.
+		final := receipt.Applied
+		if !final {
+			final, err = s.reportedFinal(ctx, run)
+		}
+		if err == nil && !final {
 			err = s.cfg.Outcomes.ReportAnswered(ctx, run, id, reportReason(summary), receipt.CreatedAt)
 		}
 	default:
