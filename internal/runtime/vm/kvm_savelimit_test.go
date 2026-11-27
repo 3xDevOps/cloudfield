@@ -3,7 +3,6 @@
 package vm
 
 import (
-	"bytes"
 	"context"
 	"os"
 	"os/exec"
@@ -45,18 +44,27 @@ func TestKVMSaveOfAFullVMNeverReachesTheUnitsMemoryLimit(t *testing.T) {
 
 // TestKVMAResumeAfterASnapshotGivesTheUnitItsMemoryLimitBack resumes a full
 // VM that a server which stopped during a save left paused: its unit has no
-// memory limit and still holds the snapshot's page cache, so the limit is
-// written under what the unit holds.
+// memory limit and holds the snapshot's page cache. With the limit written
+// under that cache, the kernel killed the monitor as the guest ran on.
 func TestKVMAResumeAfterASnapshotGivesTheUnitItsMemoryLimitBack(t *testing.T) {
 	e := kvmEngine(t)
 	key := "run-save-cut"
-	t.Cleanup(func() { _ = e.destroy(context.Background(), key) })
+	t.Cleanup(func() {
+		if t.Failed() {
+			t.Log(oomKills())
+		}
+		_ = e.destroy(context.Background(), key)
+	})
 	sum := fullSession(t, e, key)
 	rec, err := e.load(key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	limit := uint64(unitMemoryMiB(rec)) << 20
+	limit := strconv.FormatInt(unitMemoryMiB(rec)<<20, 10)
+	held := func() string {
+		data, _ := os.ReadFile(filepath.Join(filepath.Dir(e.memoryMaxFile(key)), "memory.current"))
+		return strings.TrimSpace(string(data))
+	}
 	dir := e.path(key, snapshotDir)
 	for round := range 5 {
 		if err = e.pause(t.Context(), key); err != nil {
@@ -65,28 +73,24 @@ func TestKVMAResumeAfterASnapshotGivesTheUnitItsMemoryLimitBack(t *testing.T) {
 		if err = writeCgroup(e.memoryMaxFile(key), "max"); err != nil {
 			t.Fatal(err)
 		}
-		if err = os.RemoveAll(dir); err == nil {
-			err = os.Mkdir(dir, 0o700)
-		}
-		if err == nil {
+		if err = os.Mkdir(dir, 0o700); err == nil {
 			err = newCHAPI(e.path(key, apiSocket)).snapshot(t.Context(), dir)
 		}
 		if err != nil {
 			t.Fatal(err)
 		}
-		held, _ := os.ReadFile(filepath.Join(filepath.Dir(e.memoryMaxFile(key)), "memory.current"))
+		paused := held()
 		if err = e.resume(t.Context(), key); err != nil {
-			t.Fatalf("round %d: %v\n%s", round, err, oomKills())
+			t.Fatalf("round %d: %v", round, err)
 		}
-		got, _ := os.ReadFile(e.memoryMaxFile(key))
-		kills, alive := unitEvent(e, key, "oom_kill")
-		if strings.TrimSpace(string(got)) != strconv.FormatUint(limit, 10) || !alive || kills > 0 {
-			t.Fatalf("round %d: resumed holding %s bytes, the unit's memory.max is %q, want %d; it runs=%v after %d OOM kills\n%s", round, bytes.TrimSpace(held), got, limit, alive, kills, oomKills())
-		}
+		resumed := held()
 		if now := guestFields(t, e, key, "cksum </dev/shm/fill", 2); now[0] != sum[0] || now[1] != sum[1] {
 			t.Fatalf("round %d: the resumed guest reads its memory back as %v, want %v", round, now, sum)
 		}
-		t.Logf("round %d: the unit held %s bytes as its limit of %d was written", round, bytes.TrimSpace(held), limit)
+		if got, _ := os.ReadFile(e.memoryMaxFile(key)); strings.TrimSpace(string(got)) != limit {
+			t.Fatalf("round %d: the resumed guest's unit has a memory.max of %q, want %s", round, got, limit)
+		}
+		t.Logf("round %d: the unit held %s bytes paused after the snapshot and %s resumed, with a limit of %s", round, paused, resumed, limit)
 	}
 }
 
@@ -116,7 +120,18 @@ func oomKills() string {
 // reached the unit's limit meanwhile: the rise of max in memory.events,
 // read until the save ends the unit.
 func saveCountingLimit(e *engine, key string) (uint64, error) {
-	before, _ := unitEvent(e, key, "max")
+	events := filepath.Join(e.cgroupRoot, runtime.SessionSlice, unitName(key), "memory.events")
+	atLimit := func() (uint64, bool) {
+		data, _ := os.ReadFile(events)
+		for line := range strings.SplitSeq(string(data), "\n") {
+			if v, ok := strings.CutPrefix(line, "max "); ok {
+				n, err := strconv.ParseUint(v, 10, 64)
+				return n, err == nil
+			}
+		}
+		return 0, false
+	}
+	before, _ := atLimit()
 	stop, last := make(chan struct{}), make(chan uint64)
 	go func() {
 		seen := before
@@ -127,7 +142,7 @@ func saveCountingLimit(e *engine, key string) (uint64, error) {
 				return
 			case <-time.After(10 * time.Millisecond):
 			}
-			if n, ok := unitEvent(e, key, "max"); ok {
+			if n, ok := atLimit(); ok {
 				seen = n
 			}
 		}
@@ -135,17 +150,4 @@ func saveCountingLimit(e *engine, key string) (uint64, error) {
 	err := e.save(context.Background(), key)
 	close(stop)
 	return <-last - before, err
-}
-
-// unitEvent reads one count of memory.events in the cgroup of key's unit,
-// and reports whether the unit is there to read.
-func unitEvent(e *engine, key, name string) (uint64, bool) {
-	data, _ := os.ReadFile(filepath.Join(e.cgroupRoot, runtime.SessionSlice, unitName(key), "memory.events"))
-	for line := range strings.SplitSeq(string(data), "\n") {
-		if v, ok := strings.CutPrefix(line, name+" "); ok {
-			n, err := strconv.ParseUint(v, 10, 64)
-			return n, err == nil
-		}
-	}
-	return 0, false
 }

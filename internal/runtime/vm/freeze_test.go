@@ -3,6 +3,7 @@ package vm
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"os"
 	"slices"
 	"strconv"
@@ -171,13 +172,17 @@ func TestAPausedGuestGetsItsUnitsMemoryLimitAsItRuns(t *testing.T) {
 	check("run-a", "after a resume", true)
 
 	halt("run-b")
-	if err := os.WriteFile(h.engine.memoryMaxFile("run-b"), []byte("max"), 0o644); err != nil {
+	cut := h.engine.path("run-b", snapshotDir)
+	if err := errors.Join(os.Mkdir(cut, 0o700), os.WriteFile(h.engine.memoryMaxFile("run-b"), []byte("max"), 0o644)); err != nil {
 		t.Fatal(err)
 	}
 	if err := (&Runtime{vms: h.engine}).BootForCapture(t.Context(), runtime.ID(idPrefix+"run-b")); err != nil {
 		t.Fatal(err)
 	}
 	check("run-b", "after a capture started its vCPUs", true)
+	if _, err := os.Stat(cut); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("the snapshot a stopped server cut short is still there as its guest runs: %v", err)
+	}
 }
 
 // unitLimit returns what key's unit holds in memory.max, and the MemoryMax

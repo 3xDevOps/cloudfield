@@ -249,14 +249,22 @@ func (e *engine) memoryMaxFile(key string) string {
 }
 
 // resumeGuest starts the stopped vCPUs of rec's VM and writes its unit's
-// memory limit, which a save turned off for its snapshot. The limit comes
-// second: a monitor still writing a snapshot answers no resume until it is
-// done, and a limit under the page cache it holds gets it killed.
+// memory limit, which a save turned off for its snapshot. A limit under the
+// snapshot's page cache gets the monitor killed, so the limit comes last: a
+// monitor still writing answers no resume until it is done, and the files
+// of a snapshot that saved nothing take their page cache with them.
 func (e *engine) resumeGuest(ctx context.Context, rec *record) error {
 	if err := newCHAPI(e.path(rec.Key, apiSocket)).resume(ctx); err != nil {
 		return err
 	}
-	if err := writeCgroup(e.memoryMaxFile(rec.Key), strconv.FormatInt(unitMemoryMiB(rec)<<20, 10)); err != nil {
+	var err error
+	if !rec.Saved {
+		err = os.RemoveAll(e.path(rec.Key, snapshotDir))
+	}
+	if err == nil {
+		err = writeCgroup(e.memoryMaxFile(rec.Key), strconv.FormatInt(unitMemoryMiB(rec)<<20, 10))
+	}
+	if err != nil {
 		return fmt.Errorf("it runs, and its unit keeps no memory limit: %w", err)
 	}
 	return nil
