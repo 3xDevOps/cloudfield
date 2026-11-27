@@ -99,6 +99,7 @@ type cacheState struct {
 
 type readFlight struct {
 	done      chan struct{}
+	refresh   bool
 	providers []Provider
 	err       error
 }
@@ -136,8 +137,9 @@ type credentials struct {
 
 // Read returns both supported provider rows, including explicit rows for
 // missing, unsupported, unavailable, or malformed credentials. Calls for an
-// account are coalesced, and every caller, the first included, returns when
-// its ctx is done without cancelling the shared read.
+// account are coalesced, a fresh one only with another fresh one, and
+// every caller, the first included, returns when its ctx is done without
+// cancelling the shared read.
 func (s *Service) Read(ctx context.Context, account domain.MemberID, refresh bool) ([]Provider, error) {
 	return s.read(ctx, domain.AccountOf(account), refresh)
 }
@@ -169,8 +171,8 @@ func (s *Service) read(ctx context.Context, account domain.Account, refresh bool
 
 	s.mu.Lock()
 	flight := s.flight[key]
-	if flight == nil {
-		flight = &readFlight{done: make(chan struct{})}
+	if flight == nil || (refresh && !flight.refresh) {
+		flight = &readFlight{done: make(chan struct{}), refresh: refresh}
 		s.flight[key] = flight
 		go s.lead(key, account, refresh, flight)
 	}
@@ -210,7 +212,9 @@ func (s *Service) lead(key string, account domain.Account, refresh bool, flight 
 	flight.providers = cloneProviders(providers)
 	flight.err = readErr
 	s.mu.Lock()
-	delete(s.flight, key)
+	if s.flight[key] == flight {
+		delete(s.flight, key)
+	}
 	s.mu.Unlock()
 	close(flight.done)
 }
