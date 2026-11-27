@@ -648,7 +648,7 @@ function Side({ title, member }: { title: string; member: MergeMember }) {
     ...(member.logins?.length ? [['Added logins', (
       <ul aria-label="Added logins">
         {member.logins.map((login) => (
-          <li key={login.id}>{login.name} <span className="text-muted">{agentName(login.agent)} · <span className="font-code whitespace-nowrap">{login.id}</span></span></li>
+          <li key={login.id}>{login.name} <span className="text-muted">· {agentName(login.agent)} · <span className="font-code whitespace-nowrap">{login.id}</span></span></li>
         ))}
       </ul>
     )] as [string, ReactNode]] : []),

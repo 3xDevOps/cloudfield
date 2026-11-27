@@ -164,9 +164,9 @@ describe('propose a merge', () => {
     }
     render(<ProposeForm client={fakeApi()} self={alice} code="C" plan={withLogins} onProposed={() => {}} onRefused={() => {}} />)
     expect(within(within(screen.getByRole('region', { name: 'The other sign-in' })).getByRole('list', { name: 'Added logins' })).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
-      'work Claude Code · lgn-gh000000001',
-      'spare Claude Code · lgn-gh000000002',
-      `${long} Claude Code · lgn-gh000000003`,
+      'work · Claude Code · lgn-gh000000001',
+      'spare · Claude Code · lgn-gh000000002',
+      `${long} · Claude Code · lgn-gh000000003`,
     ])
 
     fireEvent.click(screen.getByRole('radio', { name: 'Alice (this sign-in)' }))
