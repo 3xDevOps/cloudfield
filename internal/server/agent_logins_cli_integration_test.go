@@ -382,7 +382,9 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 	rt.mu.Unlock()
 	shown, code = ada.onTerminal(map[string]string{"Paste code here": "test-code\r"}, "agent", "login", "claude", "--as", "work")
 	t.Logf("$ cloudfield agent login claude --as work\n%s", shown)
-	if code != 0 || !strings.Contains(shown, "added login work: subscription, plan max, ada@work.example.test, organisation Test Org\n") {
+	if code != 0 || !strings.Contains(shown, "added login work: subscription, plan max, ada@work.example.test, organisation Test Org\n"+
+		"Automatic is on: Cloudfield may start or move your sessions onto it; turn it off with: cloudfield agent logins auto work off\n"+
+		"Use for shares is on: teammates you share your account with can be served by it; turn it off with: cloudfield agent logins share work off\n") {
 		t.Fatalf("agent login claude --as work on a terminal = %d:\n%s", code, shown)
 	}
 	rt.mu.Lock()
@@ -486,7 +488,9 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 	rt.mu.Unlock()
 	shown, code = ada.onTerminal(map[string]string{"Paste code here": "test-reattach-code\r"}, "agent", "login", "claude", "--attach", attach[2])
 	t.Logf("$ %s\n%s", attach[1], shown)
-	if code != 0 || !strings.Contains(shown, "added login later: subscription, plan max, ada@later.example.test, organisation Test Org\n") {
+	if code != 0 || !strings.Contains(shown, "added login later: subscription, plan max, ada@later.example.test, organisation Test Org\n"+
+		"Automatic is on: Cloudfield may start or move your sessions onto it; turn it off with: cloudfield agent logins auto later off\n"+
+		"Use for shares is on: teammates you share your account with can be served by it; turn it off with: cloudfield agent logins share later off\n") {
 		t.Fatalf("%s = %d:\n%s", attach[1], code, shown)
 	}
 	rt.mu.Lock()
@@ -497,7 +501,9 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 	shown, code = ada.onTerminal(nil, "agent", "login", "claude", "--attach", attach[2])
 	t.Logf("$ %s   (again, after it ended)\n%s", attach[1], shown)
 	if code != 0 || shown != "returning to the sign-in of login "+attach[2]+": claude auth login runs in a container of its own; follow its prompts\n"+
-		"added login later: subscription, plan max, ada@later.example.test, organisation Test Org\n" {
+		"added login later: subscription, plan max, ada@later.example.test, organisation Test Org\n"+
+		"Automatic is on: Cloudfield may start or move your sessions onto it; turn it off with: cloudfield agent logins auto later off\n"+
+		"Use for shares is on: teammates you share your account with can be served by it; turn it off with: cloudfield agent logins share later off\n" {
 		t.Fatalf("%s after the sign-in ended = %d:\n%s", attach[1], code, shown)
 	}
 }

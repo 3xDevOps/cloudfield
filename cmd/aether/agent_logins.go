@@ -209,7 +209,19 @@ func signInEnded(out io.Writer, agent, id string, login *protocol.AgentLogin, er
 		}
 		return mayStillRun(err, agent, id)
 	}
-	_, err = fmt.Fprintf(out, "added login %s\n", describeLogin(*login))
+	lines := []string{"added login " + describeLogin(*login)}
+	charged := ""
+	if login.PerUse {
+		charged = ", and those sessions are charged per use to it"
+	}
+	name := shellquote.Quote(login.Name)
+	if login.Automatic {
+		lines = append(lines, "Automatic is on: Cloudfield may start or move your sessions onto it"+charged+"; turn it off with: cloudfield agent logins auto "+name+" off")
+	}
+	if login.Shared {
+		lines = append(lines, "Use for shares is on: teammates you share your account with can be served by it"+charged+"; turn it off with: cloudfield agent logins share "+name+" off")
+	}
+	_, err = fmt.Fprintln(out, strings.Join(lines, "\n"))
 	return err
 }
 

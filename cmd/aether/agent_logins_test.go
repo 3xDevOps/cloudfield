@@ -204,6 +204,31 @@ func TestFollowSignInShowsAFailedStartOnce(t *testing.T) {
 	}
 }
 
+func TestSignInEndedSaysHowToTurnOffAnAddedLoginsSwitches(t *testing.T) {
+	for _, tc := range []struct {
+		login protocol.AgentLogin
+		want  string
+	}{
+		{protocol.AgentLogin{Name: "work", Kind: "subscription", Plan: "max", Email: "ada@work.example.test", Automatic: true, Shared: true},
+			"added login work: subscription, plan max, ada@work.example.test\n" +
+				"Automatic is on: Cloudfield may start or move your sessions onto it; turn it off with: cloudfield agent logins auto work off\n" +
+				"Use for shares is on: teammates you share your account with can be served by it; turn it off with: cloudfield agent logins share work off\n"},
+		{protocol.AgentLogin{Name: "my-console", Kind: "console", Email: "ada@org.example.test", PerUse: true, Automatic: true, Shared: true},
+			"added login my-console: console, ada@org.example.test, billed per use\n" +
+				"Automatic is on: Cloudfield may start or move your sessions onto it, and those sessions are charged per use to it; turn it off with: cloudfield agent logins auto my-console off\n" +
+				"Use for shares is on: teammates you share your account with can be served by it, and those sessions are charged per use to it; turn it off with: cloudfield agent logins share my-console off\n"},
+		{protocol.AgentLogin{Name: "quiet", Kind: "subscription"}, "added login quiet: subscription\n"},
+	} {
+		var out bytes.Buffer
+		if err := signInEnded(&out, "claude", "lgn-test1", &tc.login, nil); err != nil {
+			t.Fatal(err)
+		}
+		if out.String() != tc.want {
+			t.Errorf("signInEnded(%+v) printed\n%s\nwant\n%s", tc.login, out.String(), tc.want)
+		}
+	}
+}
+
 // silentControl is a control channel that never answers, as a server whose
 // sign-in has not ended does not answer agent.login.result.
 func silentControl(t *testing.T) *protocol.Client {
