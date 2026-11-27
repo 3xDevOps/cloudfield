@@ -2303,7 +2303,8 @@ A device waiting for approval is not a session, so `deviceNeeds` in the same
 file turns it into a card for an admin, and a member's own pending device
 into a card for that member. The store's `devices` come from
 `member.device.list`, which names whom approving admits each waiting
-device as. It is read at hydration, on each `member.device` event (published
+device as. It is read at hydration, which does not wait for it (nor for the
+watches, the merge proposals or the edge), on each `member.device` event (published
 under the workspace id `server`, so the event's unknown workspace does not
 drop it), and whenever the tab returns to the foreground or the browser
 comes back online, which catches a failed read and an approval made with
@@ -5802,7 +5803,8 @@ in **Needs you**.
   hydration has listed the workspaces, again whenever the event stream comes
   back live - a reconnect that re-hydrates does not replay what it missed -
   and when the workspace set changes. A read before
-  hydration would find no workspaces and be repeated. Between those, `applyEvent` updates the store
+  hydration would find no workspaces and be repeated, and so would one for
+  a snapshot painted from the last visit, so neither is made. Between those, `applyEvent` updates the store
   from the events that change these reads:
   - `workspace.budget` carries the state, cap and spend, applied as they
     are. It fires on threshold crossings, refusals and admin edits, not on

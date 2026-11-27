@@ -97,6 +97,14 @@ describe('hydrate', () => {
     expect(Object.keys(s.members)).toHaveLength(2)
     expect(s.runs.run_1.status).toBe('running')
   })
+  it('is hydrated without waiting for the optional reads', async () => {
+    const store = createRootStore()
+    const never = () => new Promise<never>(() => {})
+    const client = fakeApi({ memberDeviceList: vi.fn(never), watchList: vi.fn(never), memberMergePending: vi.fn(never), serverEdge: vi.fn(never) })
+    expect(await hydrate(store, client)).toBe(true)
+    expect(store.getState().hydrated).toBe(true)
+    expect(client.memberDeviceList).toHaveBeenCalled()
+  })
   it('starts the optional reads together, so one slow read does not hold the others', async () => {
     const store = createRootStore()
     const client = fakeApi({ memberDeviceList: vi.fn(() => new Promise<never>(() => {})) })

@@ -259,14 +259,11 @@ export async function hydrate(
     )
     s.setOverlaps(overlaps)
     if (signal?.aborted) return false
-    // These reads are extras; a failure must not fail hydration.
-    await Promise.all([
-      loadDevices(store, client).catch(ignore),
-      loadWatches(store, client).catch(ignore),
-      loadMergeProposals(store, client),
-      loadEdge(store, client).catch(ignore),
-    ])
-    // Only the nav entry and the header link follow it, so a slow Linear must not hold hydration.
+    // These reads are extras: neither a slow one nor a failed one holds hydration.
+    void loadDevices(store, client).catch(ignore)
+    void loadWatches(store, client).catch(ignore)
+    void loadMergeProposals(store, client)
+    void loadEdge(store, client).catch(ignore)
     void loadLinear(store, client).catch(ignore)
     if (signal?.aborted) return false
     s.setHydrated(true)

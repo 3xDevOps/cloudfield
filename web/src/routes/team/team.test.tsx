@@ -1,4 +1,4 @@
-import { act, render, screen } from '@testing-library/react'
+import { act, render, screen, waitFor } from '@testing-library/react'
 import type { PresenceEntry } from '@/lib/types'
 import { useTeamRefresh } from '@/routes/team'
 import { TeamSummary } from '@/routes/team/budget'
@@ -50,6 +50,16 @@ function seed(extra: Partial<RootState> = {}) {
 }
 
 describe('team refresh and summary', () => {
+  it('reads each budget once: not for a painted snapshot, then after the hydration that follows it', async () => {
+    const client = fakeApi({ budgetGet: vi.fn(async (id: string) => budget(id)) })
+    seed({ staleSince: Date.now() })
+    render(<TeamRefresh client={client} />)
+    await Promise.resolve()
+    expect(client.budgetGet).not.toHaveBeenCalled()
+    act(() => useStore.setState({ staleSince: null }))
+    await waitFor(() => expect(client.budgetGet).toHaveBeenCalledTimes(1))
+  })
+
   it('reads the roster and the budget, and renders both', async () => {
     const client = fakeApi({
       presenceRoster: vi.fn(async () => [watching]),

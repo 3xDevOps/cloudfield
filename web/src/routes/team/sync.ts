@@ -93,7 +93,8 @@ function rememberDiskError(error: unknown): void {
 export function useTeamRefresh(client: Api = api): void {
   const route = useStore((s) => s.route)
   const offline = useStore((s) => s.connection !== 'live')
-  const hydrated = useStore((s) => s.hydrated)
+  // A painted snapshot is not a hydration: its read would be repeated by the one that follows.
+  const hydrated = useStore((s) => s.hydrated && s.staleSince === null)
   const workspaceIDs = useStore((s) => Object.keys(s.workspaces).sort().join(','))
   const lastRun = useRef(0)
 
