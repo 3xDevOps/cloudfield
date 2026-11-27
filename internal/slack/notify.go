@@ -200,7 +200,7 @@ func render(run *domain.Run, n *push.Need, it *protocol.AttentionItem, dashboard
 	}
 	// A Standard agent's own request carries no options, and a message sent
 	// while it is open is refused.
-	inTerminal := it != nil && (it.Kind == protocol.AttentionKindPermission || it.Kind == protocol.AttentionKindQuestion) &&
+	inTerminal := it != nil && !run.ACP && (it.Kind == protocol.AttentionKindPermission || it.Kind == protocol.AttentionKindQuestion) &&
 		(it.Request == nil || len(it.Request.Options) == 0)
 	switch {
 	case inTerminal:
