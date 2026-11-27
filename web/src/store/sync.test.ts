@@ -2430,11 +2430,18 @@ describe('connect', () => {
       expect(store.getState().laneHistory[workspace.id]).toBeUndefined()
       expect(store.getState().laneHistory.wsp_other).toBeDefined()
 
+      // Nor does a reread, which Lanes leaves out of its history.
+      store.getState().setLaneHistory(workspace.id, { floor: -Infinity })
+      vi.mocked(client.runGet).mockRejectedValueOnce(new ApiError(500, 'run.get: store busy'))
+      deliver(socket, statusEvent({ seq: 12, run_id: 'run_11', payload: { to: 'running', reread: true } }))
+      await vi.waitFor(() => expect(client.runList).toHaveBeenCalledTimes(3))
+      expect(store.getState().laneHistory[workspace.id]).toBeDefined()
+
       // An event Lanes does not hold costs its history nothing when it cannot be applied.
       store.getState().setLaneHistory(workspace.id, { floor: -Infinity })
       vi.mocked(client.runGet).mockRejectedValueOnce(new ApiError(500, 'run.get: store busy'))
-      deliver(socket, { ...statusEvent({ seq: 11, run_id: 'run_10' }), type: 'run.title', payload: { title: 'x' } })
-      await vi.waitFor(() => expect(client.runList).toHaveBeenCalledTimes(3))
+      deliver(socket, { ...statusEvent({ seq: 13, run_id: 'run_10' }), type: 'run.title', payload: { title: 'x' } })
+      await vi.waitFor(() => expect(client.runList).toHaveBeenCalledTimes(4))
       expect(store.getState().laneHistory[workspace.id]).toBeDefined()
     } finally {
       stop()

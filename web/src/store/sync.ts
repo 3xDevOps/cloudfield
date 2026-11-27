@@ -45,6 +45,7 @@ import { loadMergeProposals } from '@/store/members'
 import { loadEdge } from '@/store/edge'
 import { loadLinear } from '@/store/linear'
 import { pausedFromTimeline } from '@/store/board'
+import { isReread } from '@/lib/events'
 import { laneEventTypes } from '@/store/lanes'
 import { scheduleBudgetRead, type BudgetPayload } from '@/store/cost'
 import { touchChildren } from '@/store/child-touches'
@@ -905,7 +906,7 @@ export function connect(store: RootStore, client: Api = api): () => void {
       // carry lane history, which now lacks this event if it is one Lanes
       // holds: its workspace's goes, and a mounted Lanes view reads it again.
       if (signal.aborted) return
-      if (laneEventTypes.includes(ev.type) && store.getState().laneHistory[ev.workspace_id]) {
+      if (laneEventTypes.includes(ev.type) && !isReread(ev) && store.getState().laneHistory[ev.workspace_id]) {
         store.setState((s) => {
           const { [ev.workspace_id]: _incomplete, ...laneHistory } = s.laneHistory
           return { laneHistory }
