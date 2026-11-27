@@ -172,3 +172,38 @@ func TestConfigLockBesideTheRealFile(t *testing.T) {
 		t.Errorf("a lock beside the alias: %v", err)
 	}
 }
+
+// A lock name planted as a hard link to another file is refused, and that
+// file keeps its owner and mode.
+func TestConfigLockRefusesAPlantedLink(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "server.conf")
+	if err := os.WriteFile(path, []byte("addr = :2300\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	victim := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(victim, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(victim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Link(victim, path+".lock"); err != nil {
+		t.Skipf("no hard links here: %v", err)
+	}
+	err = WriteConfig(path, map[string]string{"addr": ":2301"})
+	if err == nil || !strings.Contains(err.Error(), "is not a regular file with one link owned by root or the config's owner") {
+		t.Fatalf("write with a planted lock: %v", err)
+	}
+	after, err := os.Stat(victim)
+	if err != nil || after.Mode() != before.Mode() {
+		t.Fatalf("the linked file changed: %v, %v", after, err)
+	}
+	if uid, _ := fileOwner(after); uid != os.Geteuid() {
+		t.Errorf("the linked file's owner is %d", uid)
+	}
+	if got, lerr := Load(path); lerr != nil || got["addr"] != ":2300" {
+		t.Errorf("config after the refusal: %v, %v", got, lerr)
+	}
+}

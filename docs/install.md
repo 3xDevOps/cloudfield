@@ -564,8 +564,9 @@ editor is open, `install`, `setup`, `edge move`, `edge leave`) holds
 `sudo`, owned by the config file's owner. One that finds it held for 10 seconds
 fails with `<file>.lock is still held after 10s by another command writing the
 config; nothing changed`; one that cannot create it, as when the directory is
-not writable, changes nothing. An editor other than `config edit` takes no
-lock.
+not writable, changes nothing, and so does one that finds a lock file that is
+not a regular file with one link owned by root or the config file's owner. An
+editor other than `config edit` takes no lock.
 
 | Option | Default | What it does |
 | --- | --- | --- |
