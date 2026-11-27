@@ -308,6 +308,9 @@ func (s *Server) agentLoginAutomatic(ctx context.Context, member domain.MemberID
 	if perr != nil {
 		return nil, perr
 	}
+	if p.Automatic == nil {
+		return nil, invalidParams("automatic is required: true or false")
+	}
 	s.authorizationMu.Lock()
 	defer s.authorizationMu.Unlock()
 	logins, perr := s.agentLoginCaller(ctx, member, p.Agent)
@@ -317,7 +320,7 @@ func (s *Server) agentLoginAutomatic(ctx context.Context, member domain.MemberID
 	if len(logins) == 0 {
 		return nil, invalidParams("you have only the default login; add a login first")
 	}
-	if err := s.cfg.Store.SetAgentLoginAutomatic(ctx, member, p.Agent, domain.LoginID(p.LoginID), p.Automatic); err != nil {
+	if err := s.cfg.Store.SetAgentLoginAutomatic(ctx, member, p.Agent, domain.LoginID(p.LoginID), *p.Automatic); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, &protocol.Error{Code: protocol.CodeNotFound, Message: fmt.Sprintf("you have no login %q", p.LoginID)}
 		}
@@ -419,6 +422,9 @@ func (s *Server) agentLoginShare(ctx context.Context, member domain.MemberID, ra
 	if perr != nil {
 		return nil, perr
 	}
+	if p.Shared == nil {
+		return nil, invalidParams("shared is required: true or false")
+	}
 	s.authorizationMu.Lock()
 	defer s.authorizationMu.Unlock()
 	logins, perr := s.agentLoginCaller(ctx, member, p.Agent)
@@ -428,14 +434,14 @@ func (s *Server) agentLoginShare(ctx context.Context, member domain.MemberID, ra
 	if len(logins) == 0 {
 		return nil, invalidParams("you have only the default login; add a login first")
 	}
-	if err := s.cfg.Store.SetAgentLoginShared(ctx, member, p.Agent, domain.LoginID(p.LoginID), p.Shared); err != nil {
+	if err := s.cfg.Store.SetAgentLoginShared(ctx, member, p.Agent, domain.LoginID(p.LoginID), *p.Shared); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, &protocol.Error{Code: protocol.CodeNotFound, Message: fmt.Sprintf("you have no login %q", p.LoginID)}
 		}
 		return nil, rpcError(err)
 	}
 	noteChange(ctx)
-	if !p.Shared && s.cfg.LoginSignIns != nil {
+	if !*p.Shared && s.cfg.LoginSignIns != nil {
 		login := domain.Account{Member: member}
 		if id := domain.LoginID(p.LoginID); id.Added() {
 			login.Login = id

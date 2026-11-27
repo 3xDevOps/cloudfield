@@ -160,7 +160,7 @@ func TestAgentLoginMethodsActOnTheCallersOwnLogins(t *testing.T) {
 	if _, perr := e.call(t, e.member.ID, protocol.MethodAgentLoginOrder, protocol.AgentLoginOrderParams{Agent: "claude", LoginIDs: []string{"lgn-spare00000", "default", "lgn-work000000"}}); perr != nil {
 		t.Fatal(perr)
 	}
-	if _, perr := e.call(t, e.member.ID, protocol.MethodAgentLoginAutomatic, protocol.AgentLoginAutomaticParams{Agent: "claude", LoginID: "lgn-work000000"}); perr != nil {
+	if _, perr := e.call(t, e.member.ID, protocol.MethodAgentLoginAutomatic, protocol.AgentLoginAutomaticParams{Agent: "claude", LoginID: "lgn-work000000", Automatic: new(false)}); perr != nil {
 		t.Fatal(perr)
 	}
 	if out, _ := e.list(t, e.member.ID); ids(out.Logins) != "spare,default,work" || out.Logins[2].Automatic {
@@ -501,5 +501,33 @@ func TestANamedLoginAVariableWouldPayForIsRefused(t *testing.T) {
 	defer e.runs.mu.Unlock()
 	if len(e.runs.launchOptions) != 0 {
 		t.Fatalf("launches = %+v; want none", e.runs.launchOptions)
+	}
+}
+
+// A switch request whose boolean is missing, misspelled or null is
+// refused, never read as off: off for shares would move teammates'
+// sessions away.
+func TestALoginSwitchNeedsItsValue(t *testing.T) {
+	e := newLoginEnv(t)
+	e.seed(t, e.member.ID, "lgn-work000000", "work", "ada@work.example.test")
+	for _, tc := range []struct{ method, params string }{
+		{protocol.MethodAgentLoginShare, `{"agent":"claude","login_id":"lgn-work000000"}`},
+		{protocol.MethodAgentLoginShare, `{"agent":"claude","login_id":"lgn-work000000","shared":null}`},
+		{protocol.MethodAgentLoginShare, `{"agent":"claude","login_id":"lgn-work000000","share":true}`},
+		{protocol.MethodAgentLoginAutomatic, `{"agent":"claude","login_id":"lgn-work000000"}`},
+		{protocol.MethodAgentLoginAutomatic, `{"agent":"claude","login_id":"lgn-work000000","automatic":null}`},
+	} {
+		if _, perr := e.srv.dispatch(context.Background(), e.member.ID, tc.method, json.RawMessage(tc.params)); perr == nil || perr.Code != protocol.CodeInvalidParams {
+			t.Errorf("%s %s: %v; want invalid params", tc.method, tc.params, perr)
+		}
+	}
+	if out, _ := e.list(t, e.member.ID); !out.Logins[1].Shared || !out.Logins[1].Automatic {
+		t.Fatalf("after refused requests: %+v; want work still automatic and on for shares", out.Logins[1])
+	}
+	if _, perr := e.call(t, e.member.ID, protocol.MethodAgentLoginShare, protocol.AgentLoginShareParams{Agent: "claude", LoginID: "lgn-work000000", Shared: new(false)}); perr != nil {
+		t.Fatal(perr)
+	}
+	if out, _ := e.list(t, e.member.ID); out.Logins[1].Shared {
+		t.Fatalf("after turning it off: %+v", out.Logins[1])
 	}
 }
