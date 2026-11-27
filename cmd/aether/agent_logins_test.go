@@ -103,6 +103,15 @@ func TestAgentLoginRefusesAnEmptyAs(t *testing.T) {
 	}
 }
 
+func TestAgentLoginRefusesAddedLoginsOfAnotherAgentBeforeConnecting(t *testing.T) {
+	unlinked(t)
+	for _, args := range [][]string{{"codex", "--as", "work"}, {"codex", "--attach", "lgn-test1"}} {
+		if err := agentLogin(args); err == nil || err.Error() != "only Claude Code keeps added logins, so codex has none; cloudfield agent login codex signs in its one login" {
+			t.Errorf("agentLogin(%q) = %v; want the refusal before any connection", args, err)
+		}
+	}
+}
+
 func TestSignInResultFollowsAFailedTerminal(t *testing.T) {
 	result := &fakeReply{result: protocol.AgentLogin{ID: "lgn-test1", Name: "work", Kind: "subscription", Plan: "max"}}
 	c := fakeControlMethods(t, map[string]*fakeReply{protocol.MethodAgentLoginResult: result})

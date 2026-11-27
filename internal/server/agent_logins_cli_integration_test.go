@@ -299,6 +299,11 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 	if code == 0 || shown != "aether: --as needs a name: cloudfield agent login claude --as <name>\n" {
 		t.Fatalf("agent login claude --as= on a terminal = %d:\n%s", code, shown)
 	}
+	shown, code = ada.onTerminal(nil, "agent", "login", "codex", "--attach", "lgn-test1")
+	t.Logf("$ cloudfield agent login codex --attach lgn-test1\n%s", shown)
+	if code == 0 || shown != "aether: only Claude Code keeps added logins, so codex has none; cloudfield agent login codex signs in its one login\n" {
+		t.Fatalf("agent login codex --attach on a terminal = %d:\n%s", code, shown)
+	}
 	if got := rows(); len(got) != 0 {
 		t.Fatalf("agent_logins rows before any login was added: %+v", got)
 	}
