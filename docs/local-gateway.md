@@ -1042,7 +1042,9 @@ rather than after the room's moderation delay; its result's `outcome` is
 `sent`, `queued` or `injected` for an enhanced session. A `queued` message
 carries `agent_delivery: "queued"` until the agent takes it
 (`"delivered"`), or turns `not_sent` with `failure.code` `agent_refused` or
-`agent_disconnected`; each change publishes `workspace.room_message`
+`agent_disconnected`, or, when it was held while the agent started and the
+server then could not hand it over, `session_unavailable`, `prompt_not_sent`
+or `unsupported_image`; each change publishes `workspace.room_message`
 ([enhanced-sessions.md](enhanced-sessions.md#permissions-and-input)).
 A message the server could not hand to the agent at all is `not_sent` with
 `failure.message` the real error and `failure.code`: `session_unavailable`
@@ -2984,7 +2986,9 @@ does not run its agent over ACP`. Every frame is JSON text.
 
 2. Server answers one ack frame. `seq` is the high-water mark the client
    holds once the `replay` frames that follow are applied; `live` says
-   whether a session is running; `state` is its snapshot (turn in flight,
+   whether a session is running; `starting`, set with `live` false, says
+   the launched session's agent has not started yet, so a `run.inject`
+   sent now is held and delivered once it has; `state` is its snapshot (turn in flight,
    queued prompts, pending requests with their options, mode, config
    options, commands, the agent's `auth` status and `auth_methods`,
    `prompt_images`: whether the agent accepts ACP image content, and
