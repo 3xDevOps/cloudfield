@@ -8,6 +8,7 @@ import { narrowBelow } from '@/components/tiles/area'
 import { useTileDrag } from '@/components/tiles/drag'
 import { ConnectionLine } from '@/components/shell/connection'
 import { Badge } from '@/components/ui/badge'
+import { PerUseBadge } from '@/components/per-use-badge'
 import { Button } from '@/components/ui/button'
 import { ProgressBar } from '@/components/ui/progress-bar'
 import { TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -214,7 +215,7 @@ function StateLine({ run, agentName, narrow, controls, chip }: { run: RunRecord;
         )}
       </div>
       {/* What the session costs stays when every other part has gone. */}
-      {run.account_login_per_use && <Badge className="shrink-0">Billed per use</Badge>}
+      {run.account_login_per_use && <PerUseBadge className="shrink-0" />}
       {!narrow && run.permission && run.permission !== 'default' && (
         <Badge tone={run.permission === 'root' ? 'needs-you' : 'neutral'} className="shrink-0" title={permissions.find((p) => p.value === run.permission)?.detail}>{permissionLabel(run.permission)}</Badge>
       )}

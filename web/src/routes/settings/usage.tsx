@@ -55,7 +55,21 @@ function resetsIn(resetsAt: string | undefined, now: number): string | null {
   const minutes = Math.max(1, Math.ceil((reset - now) / 60_000))
   if (minutes < 60) return `resets in ${minutes}m`
   const hours = Math.floor(minutes / 60)
+  if (hours >= 48) return hours % 24 === 0 ? `resets in ${hours / 24}d` : `resets in ${Math.floor(hours / 24)}d ${hours % 24}h`
   return minutes % 60 === 0 ? `resets in ${hours}h` : `resets in ${hours}h ${minutes % 60}m`
+}
+
+/** The server's ExhaustedPercent (internal/fallback): a window used this far counts as run out. */
+const exhaustedPercent = 95
+
+/** "At its limit (7 days) · resets in 1d 16h" while a current window is run out; the one that resets last says when the login serves again. */
+export function limitWords(provider: UsageProvider | undefined, now: number): string | null {
+  const spent = currentWindows(provider, now).filter((window) => window.used_percent >= exhaustedPercent)
+  if (spent.length === 0) return null
+  const resets = (window: UsageWindow) => (window.resets_at ? Date.parse(window.resets_at) : Infinity)
+  const last = spent.reduce((latest, window) => (resets(window) > resets(latest) ? window : latest))
+  const reset = resetsIn(last.resets_at, now)
+  return `At its limit (${last.label})${reset ? ` · ${reset}` : ''}`
 }
 
 type MeterTone = Extract<Tone, 'failed' | 'needs-you' | 'done'>

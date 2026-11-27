@@ -1,5 +1,6 @@
-import { type ReactNode, useCallback, useEffect, useId, useState } from 'react'
-import { ArrowDown, ArrowUp, Pencil, Trash2 } from '@/components/icons'
+import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from 'react'
+import { ArrowDown, ArrowUp, Gauge, Pencil, Trash2 } from '@/components/icons'
+import { PerUseBadge } from '@/components/per-use-badge'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Callout } from '@/components/ui/callout'
@@ -19,7 +20,7 @@ import type { Api } from '@/lib/api'
 import { useClock } from '@/lib/clock'
 import { message } from '@/lib/format'
 import type { AgentLogin, Member, UsageProvider } from '@/lib/types'
-import { currentWindows, UsageMeters } from '@/routes/settings/usage'
+import { currentWindows, limitWords, UsageMeters } from '@/routes/settings/usage'
 import { useStore } from '@/store'
 
 /** Only Claude Code has added logins. */
@@ -30,17 +31,23 @@ export type LoginsClient = Pick<Api, 'agentLoginRename' | 'agentLoginRemove' | '
 export function useAgentLogins(client: Pick<Api, 'agentLoginList'>, enabled: boolean) {
   const [logins, setLogins] = useState<AgentLogin[] | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const reload = useCallback(() => {
-    if (!enabled) return
-    client.agentLoginList(loginAgent).then(
+  // Only the newest read lands, so an older answer arriving last never replaces it.
+  const reads = useRef(0)
+  const reload = useCallback((): Promise<void> => {
+    if (!enabled) return Promise.resolve()
+    const read = ++reads.current
+    return client.agentLoginList(loginAgent).then(
       (list) => {
+        if (read !== reads.current) return
         setLogins(list)
         setError(null)
       },
-      (err: unknown) => setError(message(err)),
+      (err: unknown) => {
+        if (read === reads.current) setError(message(err))
+      },
     )
   }, [client, enabled])
-  useEffect(reload, [reload])
+  useEffect(() => { void reload() }, [reload])
   return { logins: enabled ? logins : null, error: enabled ? error : null, reload }
 }
 
@@ -112,7 +119,8 @@ function RenameForm({ login, client, onDone, onCancel }: { login: AgentLogin; cl
   )
 }
 
-// The server names the caller's own sessions that hold a login, and points at the CLI to revoke a teammate's share.
+// The server names the caller's own sessions that hold a login after "your sessions", and points at the CLI to revoke a teammate's share.
+const ownSessions = /your sessions (.*?) \(end them\)/
 const runIDs = /\brun-[0-9a-z]{10}\b/g
 const revokeCommand = 'cloudfield account revoke'
 
@@ -124,14 +132,15 @@ export function RemoveLogin({ login, client, onRemoved, onClose }: { login: Agen
     onClose()
     navigate(...route)
   }
-  const runs = error ? [...new Set(error.match(runIDs))] : []
+  const runs = [...new Set(ownSessions.exec(error ?? '')?.[1].match(runIDs))]
+  const who = [login.email, login.organization_name].filter(Boolean).join(' · ')
   return (
     <AlertDialog open onOpenChange={() => !busy && onClose()}>
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle className="break-words">Remove the login “{login.name}”?</AlertDialogTitle>
           <AlertDialogDescription className="break-words">
-            Deletes this login&apos;s files from the server, so no session starts or moves onto it again. It does not sign the login out at Anthropic: its sign-in stays valid there until Anthropic expires it or you revoke it.
+            {who && <>Signed in as {who}. </>}Deletes this login&apos;s files from the server, so no session starts or moves onto it again. It does not sign the login out at Anthropic: its sign-in stays valid there until Anthropic expires it or you revoke it.
           </AlertDialogDescription>
         </AlertDialogHeader>
         {error !== null && (
@@ -148,6 +157,7 @@ export function RemoveLogin({ login, client, onRemoved, onClose }: { login: Agen
         <AlertDialogFooter>
           <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
           <AlertDialogAction
+            variant={error === null ? 'danger' : 'secondary'}
             disabled={busy || error !== null}
             onClick={(event) => {
               event.preventDefault()
@@ -199,7 +209,9 @@ function LoginRow({ login, index, count, firstAutomatic, usage, sharedWith, busy
   onRemove: () => void
   renaming?: ReactNode
 }) {
-  const windows = currentWindows(usage?.provider, Date.now())
+  const now = Date.now()
+  const windows = currentWindows(usage?.provider, now)
+  const limit = limitWords(usage?.provider, now)
   // A Console login has no usage windows by design; the server says so with `unsupported`.
   const perUseWindows = login.per_use && !usage?.error && usage?.provider?.status === 'unsupported'
   const usageError = perUseWindows ? undefined : usage?.error ?? (windows.length === 0 ? usage?.provider?.error : undefined)
@@ -207,12 +219,12 @@ function LoginRow({ login, index, count, firstAutomatic, usage, sharedWith, busy
   const who = [login.email, login.organization_name].filter(Boolean).join(' · ')
   return (
     <li aria-label={`Login ${login.name}`} className="flex gap-2 py-3 first:pt-0 last:pb-0">
-      <div className="flex shrink-0 flex-col items-center">
+      <div className="flex shrink-0 flex-col items-center gap-1">
         <span className="flex h-6 items-center text-ui-sm text-muted tabular-nums coarse:h-11">{index + 1}</span>
-        <Button variant="ghost" size="icon-sm" label="Move up" disabled={busy || index === 0} onClick={() => onMove(-1)}>
+        <Button variant="secondary" size="icon-sm" label={`Move ${login.name} up`} disabled={busy || index === 0} onClick={() => onMove(-1)}>
           <ArrowUp />
         </Button>
-        <Button variant="ghost" size="icon-sm" label="Move down" disabled={busy || index === count - 1} onClick={() => onMove(1)}>
+        <Button variant="secondary" size="icon-sm" label={`Move ${login.name} down`} disabled={busy || index === count - 1} onClick={() => onMove(1)}>
           <ArrowDown />
         </Button>
       </div>
@@ -221,8 +233,10 @@ function LoginRow({ login, index, count, firstAutomatic, usage, sharedWith, busy
           {renaming ?? (
             <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
               <span className="min-w-0 truncate text-ui font-medium text-text">{login.name}</span>
-              <span className="text-ui-sm text-muted">{kindWords(login)}{firstAutomatic && ' · Tried first'}</span>
-              {login.per_use && <Badge>Billed per use</Badge>}
+              <span className="text-ui-sm text-muted">{kindWords(login)}</span>
+              {firstAutomatic && <Badge>Tried first</Badge>}
+              {login.per_use && <PerUseBadge />}
+              {limit && <span className="inline-flex items-center gap-1 text-ui-sm text-state-needs-you"><Gauge aria-hidden className="size-3.5 shrink-0" />{limit}</span>}
             </span>
           )}
         </div>
@@ -258,7 +272,7 @@ function LoginRow({ login, index, count, firstAutomatic, usage, sharedWith, busy
             {usageError && <span className="text-ui-sm text-muted">Usage not read: <span className="font-code">{usageError}</span></span>}
             {windows.length > 0 && (
               <div className="max-w-sm">
-                <UsageMeters label={`Login ${login.name}`} windows={windows} now={Date.now()} />
+                <UsageMeters label={`Login ${login.name}`} windows={windows} now={now} />
               </div>
             )}
           </div>
@@ -273,7 +287,8 @@ export function LoginList({ logins, sharedWith, client, onChanged }: {
   logins: AgentLogin[]
   sharedWith: Member[]
   client: LoginsClient
-  onChanged: () => void
+  /** Reads the list again; the controls wait for it, so the next move starts from the order the server keeps. */
+  onChanged: () => Promise<void>
 }) {
   const usage = useLoginUsage(client, logins)
   useClock()
@@ -284,7 +299,10 @@ export function LoginList({ logins, sharedWith, client, onChanged }: {
   const act = (call: Promise<unknown>) => {
     setBusy(true)
     setError(null)
-    call.then(onChanged, (err: unknown) => setError(message(err))).finally(() => setBusy(false))
+    call.then(onChanged, (err: unknown) => {
+      setError(message(err))
+      return onChanged()
+    }).finally(() => setBusy(false))
   }
   const move = (index: number, by: number) => {
     const ids = logins.map((login) => login.id)
@@ -318,7 +336,7 @@ export function LoginList({ logins, sharedWith, client, onChanged }: {
             onRename={() => setRenaming(login.id)}
             onRemove={() => setRemoving(login)}
             renaming={renaming === login.id
-              ? <RenameForm login={login} client={client} onCancel={() => setRenaming(null)} onDone={() => { setRenaming(null); onChanged() }} />
+              ? <RenameForm login={login} client={client} onCancel={() => setRenaming(null)} onDone={() => { setRenaming(null); void onChanged() }} />
               : undefined}
           />
         ))}

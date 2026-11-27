@@ -1,7 +1,7 @@
 import { Tooltip as TooltipPrimitive } from 'radix-ui'
 import { useLayoutEffect, useRef, useState, type ComponentProps, type ReactElement } from 'react'
 import { Avatar } from '@/components/ui/avatar'
-import { Badge } from '@/components/ui/badge'
+import { PerUseBadge } from '@/components/per-use-badge'
 import { StatusDot } from '@/components/ui/status-dot'
 import { useIsMobile } from '@/lib/breakpoints'
 import { coarsePointer, useMediaQuery } from '@/lib/hooks'
@@ -168,7 +168,7 @@ function Details({ run, state, waiting, reason, next, cause, wait, since, counts
         {account && (
           <>
             <dt>Account</dt>
-            <dd className="break-words">{account}{run.account_login_per_use && <Badge className="ml-1.5">Billed per use</Badge>}</dd>
+            <dd className="break-words">{account}{run.account_login_per_use && <PerUseBadge className="ml-1.5" />}</dd>
           </>
         )}
       </dl>

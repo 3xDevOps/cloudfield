@@ -129,6 +129,7 @@ import {
   Eye as LucideEye,
   EyeOff as LucideEyeOff,
   Gauge as LucideGauge,
+  Coins as LucideCoins,
   Upload as LucideUpload,
   type LucideIcon,
   type LucideProps,
@@ -192,6 +193,7 @@ export const Bell = icon(LucideBell)
 export const Eye = icon(LucideEye)
 export const EyeOff = icon(LucideEyeOff)
 export const Gauge = icon(LucideGauge)
+export const Coins = icon(LucideCoins)
 export const Upload = icon(LucideUpload)
 export const Keyboard = icon(LucideKeyboard)
 export const ListTodo = icon(LucideListTodo)

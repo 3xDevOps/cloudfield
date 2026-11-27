@@ -3,7 +3,7 @@ import type * as React from 'react'
 import { Copy } from '@/components/icons'
 import { MessageRow } from '@/components/messages/message-row'
 import { Avatar } from '@/components/ui/avatar'
-import { Badge } from '@/components/ui/badge'
+import { PerUseBadge } from '@/components/per-use-badge'
 import { Button } from '@/components/ui/button'
 import { Code } from '@/components/ui/code'
 import { copyText } from '@/lib/clipboard'
@@ -187,7 +187,7 @@ function Facts({ run, agent, agentName, inset }: { run: RunRecord; agent: AgentT
       <dl className="text-ui-sm">
         <Row label="Owner"><Person id={run.member_id} /></Row>
         {run.account_member_id && run.account_member_id !== run.member_id && <Row label="Agent account"><Person id={run.account_member_id} /></Row>}
-        {login && <Row label="Login">{login}{run.account_login_per_use && <Badge className="ml-1.5">Billed per use</Badge>}</Row>}
+        {login && <Row label="Login">{login}{run.account_login_per_use && <PerUseBadge className="ml-1.5" />}</Row>}
         <Row label="Agent">{agentName} · {modeLabel[run.mode] ?? run.mode}</Row>
         <Row label="Branch">
           <Button variant="quiet" size="sm" hint="Copy branch name" aria-label={`Copy branch ${run.branch}`} className="max-w-full" onClick={(event) => void copyText(run.branch, event.currentTarget)}>

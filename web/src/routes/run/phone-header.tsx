@@ -4,7 +4,7 @@ import { useAssistantAvailable } from '@/components/assistant/button'
 import { ChevronLeft, Lock, Network, PanelRight, Search, Sparkles } from '@/components/icons'
 import { RunActions, type ExtraItem } from '@/components/run-actions'
 import { ConnectionLine } from '@/components/shell/connection'
-import { Badge } from '@/components/ui/badge'
+import { PerUseBadge } from '@/components/per-use-badge'
 import { Button } from '@/components/ui/button'
 import { StatusDot } from '@/components/ui/status-dot'
 import { TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -102,7 +102,7 @@ export function PhoneRunHeader({ run, view, views, nav, agentName, keyboard, pri
         {primary && !keyboard && <Button size="sm" variant={asking && view === 'session' ? 'secondary' : 'primary'} onClick={primary.act}>{primary.label}</Button>}
         <RunActions run={run} compact views={[...elsewhere, ...panels]} extra={extra} />
       </header>
-      {account && !keyboard && <p className="break-words pr-3 pb-1 pl-9 text-ui-sm text-muted coarse:pl-13">{account}{run.account_login_per_use && <Badge className="ml-1.5">Billed per use</Badge>}</p>}
+      {account && !keyboard && <p className="break-words pr-3 pb-1 pl-9 text-ui-sm text-muted coarse:pl-13">{account}{run.account_login_per_use && <PerUseBadge className="ml-1.5" />}</p>}
       {/* Folded, the tabs stay mounted out of sight: each view's panel is labelled by its tab. */}
       <div className={keyboard ? 'sr-only' : 'flex h-11 shrink-0 items-stretch border-b border-seam'}>
         <TabsList aria-label="Session views" className="h-11 min-w-0 flex-1 gap-0 coarse:h-11">
