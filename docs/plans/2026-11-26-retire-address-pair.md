@@ -107,9 +107,9 @@ connectors at more than one address from v0.8.7 (edge protocol 6);
 | 1 | Server enrolled at the old relay origin, on a build with this plan | A signed notice in `ready`: a warning in the server log at each connect, a `retiring` row in `cloudfield-server edge status`, and for super admins a warning on Settings, Remote access and in Needs you, each with the command | On the server's host: `sudo cloudfield-server edge move <new>`, then `sudo systemctl restart aether-server`. `edge status` can exit 3 for about a second after the restart | `edge status` exits 3 with `dial <old>/v1/server/control: 410 Gone: <text>` and the stored notice's command. Nobody reaches the server through the edge. `edge move <new>` works | Server id, name, owner, build, last enrolled |
 | 2 | The same on an older build with `edge move` (v0.9.0 or later) | Nothing in the product: it ignores the notice. The guide, the release notes, the operator | The same command | The same `410 Gone: <text>` in `edge status` and the log. `edge move` is refused at the retired address; the guide gives `sudo cloudfield-server config set edge-url <new>` and a restart, which keeps the pinned key | The same, with the build |
 | 3 | Server below v0.9.0 (no `edge move`; the binary is `aether-server`) or below v0.8.7 (connectors at one address only) | Nothing in the product | Update the server, then as 1 | As 2 | The same, with the build |
-| 4 | Device signed in at the old pair: CLI | Every answer from the old pair carries `Aether-Edge-Retiring`; the CLI prints the notice on stderr once per run, with the commands | `cloudfield login --edge <new>`; `cloudfield link --edge <new> [--name <name>] [--addr <addr>] <server id>` for each saved link at the old address; `cloudfield daemon install` again where the sync daemon was installed from such a link; then `cloudfield logout --edge <old>` | `<old> refused: <text> (HTTP 410)`. `logout --edge <old>` then removes the local token | Count of devices issued at the old sign-in origin, by last use |
+| 4 | Device signed in at the old pair: CLI | Every answer from the old pair carries `Aether-Edge-Retiring`; the CLI prints the notice on stderr once per run, with `cloudfield login --edge <new>` for a known address, what still names the old address, and a pointer to the guide | `cloudfield login --edge <new>`; `cloudfield link --edge <new> [--name <name>] [--addr <addr>] <server id>` for each saved link at the old address; `cloudfield daemon install` again where the sync daemon was installed from such a link; then `cloudfield logout --edge <old>` | `<old> refused: <text> (HTTP 410)`. `logout --edge <old>` then removes the local token | Count of devices issued at the old sign-in origin, by last use |
 | 5 | The same on an older CLI or app | Nothing | As 4 | The same 410 text on the CLI; the older dashboard shows only `<edge> refused the connection to <server>` | Counted with 4 |
-| 6 | The same in the desktop or Android app, on a build with this plan | The local gateway asks `GET /v1/edge` for each signed-in edge and reports the notice on `edge.status`; the dashboard shows it beside the signed-in edge, as text, with the new address filled into the existing sign-in field for the person to confirm | Sign in at the new address there, then link again | The 410 text in the same place | Counted with 4 |
+| 6 | The same in the desktop or Android app, on a build with this plan | When the sign-in screen asks, the local gateway asks `GET /v1/edge` of each signed-in edge and reports the notices on that `edge.status` answer, keeping nothing; the dashboard shows each beside its signed-in edge as text only, says when this computer is already signed in at the new address, and fills in nothing | Sign in at the new address (`cloudfield login --edge <new>`), then link again | The 410 text in the same place | Counted with 4 |
 | 7 | Connector added at `<old>/mcp...` (Claude, ChatGPT, Claude Code and others) | The consent page at the old address; `cloudfield mcp` marks each of the member's connectors at the old address and prints the URL to add instead, with the same path; one extra text block on a tool result, at most once a day per connector | Add the connector again at the same path on `<new>`, check it works, remove the old connector in the app, then `cloudfield mcp revoke <id>`. The grant is bound to the address and is not moved | `410` with the retired text on every connector path; the client shows a failed connection. `cloudfield mcp` marks the connector retired | Count of servers that got connector requests through the old relay origin, by last use |
 | 8 | Browser signed in at the old sign-in origin | A banner on every edge page there, the device page included | Sign in at the new sign-in origin. Cookies are per host | A page with status 410 that names the new address as text and clears the edge's cookies on that host | Count of accounts with a session issued there, by last use |
 | 9 | Links made at the old pair: join links, claim links, saved or printed | The join page shows the banner | A new invitation or claim link from the server after it has moved. A claim code lasts 30 minutes and an invitation 7 days | The 410 page: ask whoever sent the link for a new one | Not counted: the edge stores no link |
@@ -220,12 +220,13 @@ are bound to it.
 
 A client cannot authenticate a notice, and after a pair is removed the
 host name may answer for someone else. So the client labels it as the old
-address's own statement and offers a command or a filled-in field only
-when it already has reason to know the replacement: it holds a token
-there, a saved link names it, it is the client's built-in default edge,
-or, in the dashboard, the linked server's verified notice names the same
-address. Otherwise it shows the text and says to confirm the address with
-whoever runs the edge.
+address's own statement. The CLI prints a sign-in command only when it
+already has reason to know the replacement: it holds a token there or a
+saved link names it, or the replacement is the client's built-in default
+edge and the old address is one of the project's hosted ones. The
+dashboard shows text only and fills in nothing. Otherwise the client
+shows the text and says to confirm the address with whoever runs the
+edge.
 
 ### Device tokens and browser sessions
 
@@ -304,12 +305,18 @@ and browser paths, with no ids.
 
 - CLI, once per run on stderr:
   `cloudfield: <old> says it is retiring[ on <date>] and that its new address is <new>.`
-  then, when the replacement is known as above, `Sign in there with:
-  cloudfield login --edge <new>` and the link, daemon and logout commands
-  of row 4 for what this machine holds; otherwise `Confirm that address
-  with whoever runs the edge before you sign in there.`
-- The gateway caches each signed-in edge's `GET /v1/edge` notice for
-  `edge.status`. The dashboard never starts a sign-in from a notice.
+  then, when the replacement is known as above and this machine holds no
+  token for exactly that address, `Sign in there with: cloudfield login
+  --edge <new>`; otherwise `Confirm that address with whoever runs the
+  edge before you sign in there.` Then, as facts, each saved link and the
+  sync daemon that still name the old address, and a pointer to the
+  guide for moving them and signing out. No link, daemon or logout
+  command is generated.
+- `edge.status` asks each signed-in edge's `GET /v1/edge` only when its
+  caller asks for notices (`{"notices":true}`), all at once with a 2
+  second limit, and keeps nothing between calls. Only the sign-in screen
+  asks, on entering and on focus. The dashboard shows the notice as text,
+  fills in no address and never starts a sign-in from a notice.
 - The connector reads only the server's verified notices. The consent
   page shows a static warning. `connector.list` returns the retiring and
   retired origins so `cloudfield mcp` can mark connectors. The tool-result
@@ -411,6 +418,16 @@ already holds a token or a saved link for because the person already
 uses that edge. An edge proving possession of its key to a server at
 every connect, rather than presenting the public key, is a change to the
 existing handshake and is left to its own plan.
+
+Review of the client pull request (2026-11-27):
+
+- Generated `link` and `daemon install` commands rewrote a default link
+  and dropped a named link's repository and keys; the CLI now prints
+  facts and points to the guide.
+- Each way of filling the dashboard's sign-in field from a notice
+  outlived the trust behind it; the notice is now text only.
+- Each round found a new race in the gateway's notice cache; notices are
+  now fetched on request and not kept.
 
 Not changed: `FormerURL` stays in the client's choice of a hosted edge
 until the hosted pair is removed, since it only orders addresses a
