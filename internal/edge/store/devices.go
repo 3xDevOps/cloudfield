@@ -35,6 +35,9 @@ type DeviceAuth struct {
 	// when the edge does not record origins. Redemption copies it to the
 	// device.
 	SigninOrigin string
+	// RelayOrigin is the relay origin of the pair the request was made
+	// at, "" when the edge does not record origins.
+	RelayOrigin string
 }
 
 // CreateDeviceAuth stores a pending authorization and drops expired ones.
@@ -44,22 +47,22 @@ func (s *Store) CreateDeviceAuth(ctx context.Context, a DeviceAuth) error {
 		return fmt.Errorf("edgestore: drop expired device authorizations: %w", err)
 	}
 	if _, err := s.db.ExecContext(ctx, `INSERT INTO device_authorizations
-		(code_hash, user_code_hash, label, public_key, client_addr, status, created_at, expires_at, last_poll_at, signin_origin)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULLIF(?, ''))`,
-		a.CodeHash, a.UserCodeHash, a.Label, a.Key, a.ClientAddr, AuthPending, unix(a.CreatedAt), unix(a.ExpiresAt), a.SigninOrigin); err != nil {
+		(code_hash, user_code_hash, label, public_key, client_addr, status, created_at, expires_at, last_poll_at, signin_origin, relay_origin)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, NULLIF(?, ''), NULLIF(?, ''))`,
+		a.CodeHash, a.UserCodeHash, a.Label, a.Key, a.ClientAddr, AuthPending, unix(a.CreatedAt), unix(a.ExpiresAt), a.SigninOrigin, a.RelayOrigin); err != nil {
 		return fmt.Errorf("edgestore: create device authorization: %w", conflict(err))
 	}
 	return nil
 }
 
 const deviceAuthCols = `code_hash, user_code_hash, label, public_key, client_addr, status,
-	created_at, expires_at, last_poll_at, COALESCE(signin_origin, '')`
+	created_at, expires_at, last_poll_at, COALESCE(signin_origin, ''), COALESCE(relay_origin, '')`
 
 func scanDeviceAuth(row *sql.Row) (DeviceAuth, error) {
 	var a DeviceAuth
 	var created, expires, polled int64
 	err := row.Scan(&a.CodeHash, &a.UserCodeHash, &a.Label, &a.Key, &a.ClientAddr, &a.Status,
-		&created, &expires, &polled, &a.SigninOrigin)
+		&created, &expires, &polled, &a.SigninOrigin, &a.RelayOrigin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return DeviceAuth{}, ErrNotFound
 	}

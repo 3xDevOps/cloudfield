@@ -129,9 +129,10 @@ func (s *Service) pendingDevice(r *http.Request, v visitor) (edgestore.DeviceAut
 		return edgestore.DeviceAuth{}, "", pageErr(http.StatusNotFound,
 			"no sign-in is waiting for code %s; codes expire after %s, so run aether login again", code, deviceCodeTTL)
 	}
-	if p := s.pair(r); err == nil && a.SigninOrigin != "" && !sameOrigin(a.SigninOrigin, p.signin) {
+	if p := s.pair(r); err == nil && !startedAt(a, p) {
 		return edgestore.DeviceAuth{}, "", pageErr(http.StatusForbidden,
-			"code %s is for a sign-in started at %s, not at %s; enter it at %s/device", code, a.SigninOrigin, p.signin, a.SigninOrigin)
+			"code %s is for a sign-in started at %s for the relay origin %s, not at %s for %s; enter it at %s/device",
+			code, a.SigninOrigin, a.RelayOrigin, p.signin, p.relay, a.SigninOrigin)
 	}
 	return a, code, err
 }

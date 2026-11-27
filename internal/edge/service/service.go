@@ -400,9 +400,6 @@ func (s *Service) StartRecording(ctx context.Context) error {
 			return err
 		}
 	}
-	if run.MovedSignIns, err = s.movedSignIns(ctx, pairings); err != nil {
-		return err
-	}
 	n, err := s.store.RecordPairs(ctx, run, s.now())
 	if err != nil {
 		return err
@@ -413,41 +410,6 @@ func (s *Service) StartRecording(ctx context.Context) error {
 	}
 	s.recording.Store(true)
 	return nil
-}
-
-// movedSignIns lists the recorded sign-in origins, in every spelling, of a
-// served sign-in origin last recorded with another relay origin than the
-// one it is served with now: a device sign-in started there would
-// otherwise complete on the new pair.
-func (s *Service) movedSignIns(ctx context.Context, pairings []edgestore.Pairing) ([]string, error) {
-	last := map[string]edgestore.Pairing{}
-	for _, p := range pairings {
-		k := CanonicalOrigin(p.SigninOrigin)
-		if l, ok := last[k]; !ok || p.ServedAt.After(l.ServedAt) {
-			last[k] = p
-		}
-	}
-	moved := map[string]bool{}
-	for _, p := range s.pairs {
-		k := CanonicalOrigin(p.signin)
-		if l, ok := last[k]; ok && CanonicalOrigin(l.RelayOrigin) != CanonicalOrigin(p.relay) {
-			moved[k] = true
-		}
-	}
-	if len(moved) == 0 {
-		return nil, nil
-	}
-	recorded, err := s.store.SignInOrigins(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var out []string
-	for _, o := range recorded {
-		if moved[CanonicalOrigin(o)] {
-			out = append(out, o)
-		}
-	}
-	return out, nil
 }
 
 // Close records the end of a recording run StartRecording began and

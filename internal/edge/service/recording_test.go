@@ -10,8 +10,8 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"testing"
-	"time"
 
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	edgestore "github.com/3xDevOps/cloudfield/internal/edge/store"
@@ -268,8 +268,9 @@ func TestRedemptionAfterRecordingStops(t *testing.T) {
 }
 
 // TestRedemptionAfterRecordingStarts starts a device sign-in while the
-// edge does not record origins and redeems it once it does, on the same
-// database: the device takes the redemption's pair, marked as seen.
+// edge does not record origins and polls it once it does, on the same
+// database: the sign-in, bound to no pair, was dropped at the start and
+// is started again.
 func TestRedemptionAfterRecordingStarts(t *testing.T) {
 	h := newHarness(t)
 	b := signedInBrowser(t, h)
@@ -294,12 +295,8 @@ func TestRedemptionAfterRecordingStarts(t *testing.T) {
 	req.Header.Set(edgeproto.HeaderVersion, fmt.Sprint(edgeproto.Version))
 	rec := httptest.NewRecorder()
 	restarted.Handler().ServeHTTP(rec, req)
-	var tok edgeproto.DeviceTokenResponse
-	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &tok) != nil {
-		t.Fatalf("poll after the restart: %d %s", rec.Code, rec.Body)
-	}
-	if got := h.column(t, `SELECT signin_origin || ' ' || signin_origin_seen FROM devices WHERE id = ?`, tok.Device.ID); got != testSignin+" 1" {
-		t.Fatalf("device redeemed once recording began records %q, want %s seen", got, testSignin)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), string(edgeproto.DeviceExpired)) {
+		t.Fatalf("poll after the restart: %d %s, want 400 %s", rec.Code, rec.Body, edgeproto.DeviceExpired)
 	}
 }
 
@@ -330,41 +327,52 @@ func TestRecordingStartsWhenServing(t *testing.T) {
 	}
 }
 
-// TestMovedSignInsDeleteDeviceAuthorizations starts recording after the
-// edge recorded a served sign-in origin with another relay origin: its
-// device authorizations, in every spelling, are deleted. A relay origin
-// spelled with its default port is the same relay.
-func TestMovedSignInsDeleteDeviceAuthorizations(t *testing.T) {
-	const relay9 = "https://relay9.example.test"
+// TestDeviceAuthAcrossRestart starts a device sign-in, then restarts the
+// edge: with its sign-in origin paired with another relay origin the poll
+// is refused; with the same pair, also spelled with its default port, it
+// goes on. A pending sign-in bound to no relay origin is dropped when a
+// start records origins.
+func TestDeviceAuthAcrossRestart(t *testing.T) {
 	for _, tt := range []struct {
-		name    string
-		history []map[string]string
-		auths   []string
-		kept    string
+		relay   string
+		refused bool
 	}{
-		{"same pairs", nil, []string{testSignin}, "1"},
-		{"relay changed", []map[string]string{{relay9: testSignin}}, []string{testSignin}, "0"},
-		{"relay taken over", []map[string]string{{relay9: testSignin}, {relay9: "https://signin9.example.test"}}, []string{testSignin}, "0"},
-		{"sign-in spelled with its port", []map[string]string{{relay9: testSignin + ":443"}}, []string{testSignin, testSignin + ":443"}, "0"},
-		{"relay spelled with its port", []map[string]string{{testRelay + ":443": testSignin}}, []string{testSignin, testSignin + ":443"}, "2"},
+		{"https://relay9.example.test", true},
+		{testRelay, false},
+		{testRelay + ":443", false},
 	} {
 		h := newRecordingHarness(t)
-		for _, pairs := range tt.history {
-			h.clock.Advance(time.Minute)
-			if _, err := h.svc.store.RecordPairs(context.Background(), edgestore.Run{Pairs: pairs}, h.clock.Now()); err != nil {
-				t.Fatal(err)
-			}
-		}
-		for i, origin := range tt.auths {
-			h.exec(t, `INSERT INTO device_authorizations (code_hash, user_code_hash, label, public_key, client_addr, status, created_at, expires_at, last_poll_at, signin_origin)
-				VALUES (?, ?, 'laptop', 'key', '127.0.0.1', 'pending', 0, 9000000000000000000, 0, ?)`, fmt.Sprint("code-", i), fmt.Sprint("user-", i), origin)
-		}
-		h.clock.Advance(time.Minute)
-		if err := h.svc.StartRecording(context.Background()); err != nil {
+		start := startDevice(t, h)
+		if err := h.svc.Close(); err != nil {
 			t.Fatal(err)
 		}
-		if got := h.column(t, `SELECT COUNT(*) FROM device_authorizations`); got != tt.kept {
-			t.Errorf("%s: %s device authorizations left, want %s", tt.name, got, tt.kept)
+		svc, err := New(Config{DataDir: h.dataDir, SigninOrigin: testSignin, RelayOrigin: tt.relay, GitHub: h.provider.app(), Clock: h.clock.Now, RecordOrigins: true})
+		if err != nil {
+			t.Fatal(err)
 		}
+		t.Cleanup(func() { _ = svc.Close() })
+		svc.SetLink(&fakeLink{})
+		if err = svc.StartRecording(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		h.clock.Advance(pollInterval)
+		body, _ := json.Marshal(edgeproto.DeviceTokenRequest{DeviceCode: start.DeviceCode})
+		req := httptest.NewRequest(http.MethodPost, testSignin+edgeproto.PathDeviceToken, bytes.NewReader(body))
+		req.Header.Set(edgeproto.HeaderVersion, fmt.Sprint(edgeproto.Version))
+		rec := httptest.NewRecorder()
+		svc.Handler().ServeHTTP(rec, req)
+		if refused := strings.Contains(rec.Body.String(), "this sign-in was started at"); refused != tt.refused {
+			t.Errorf("poll after a restart with the relay origin %s: %d %s, want refused %v", tt.relay, rec.Code, rec.Body, tt.refused)
+		}
+	}
+
+	h := newRecordingHarness(t)
+	h.exec(t, `INSERT INTO device_authorizations (code_hash, user_code_hash, label, public_key, client_addr, status, created_at, expires_at, last_poll_at, signin_origin)
+		VALUES ('legacy', 'user-legacy', 'laptop', 'key', '127.0.0.1', 'pending', 0, 9000000000000000000, 0, ?)`, testSignin)
+	if err := h.svc.StartRecording(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.column(t, `SELECT COUNT(*) FROM device_authorizations`); got != "0" {
+		t.Errorf("%s device authorizations bound to no relay origin survived a start that records origins", got)
 	}
 }

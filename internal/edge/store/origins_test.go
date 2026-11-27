@@ -568,7 +568,7 @@ func TestRetireSignIns(t *testing.T) {
 			t.Fatal(err)
 		}
 		if err := s.CreateDeviceAuth(ctx, DeviceAuth{CodeHash: strconv.Itoa(n), UserCodeHash: strconv.Itoa(n), Label: "l", Key: "k",
-			CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour), SigninOrigin: fmt.Sprint(origin)}); err != nil {
+			CreatedAt: testNow, ExpiresAt: testNow.Add(time.Hour), SigninOrigin: fmt.Sprint(origin), RelayOrigin: testRelay}); err != nil {
 			t.Fatal(err)
 		}
 	}

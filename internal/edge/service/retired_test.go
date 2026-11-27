@@ -384,7 +384,8 @@ func TestDeviceAuthBoundToPair(t *testing.T) {
 	other.origin = testSignin2
 	other.signIn(t)
 	code := strings.ReplaceAll(start.UserCode, "-", "")
-	want := "code " + code + " is for a sign-in started at " + testSignin + ", not at " + testSignin2 + "; enter it at " + testSignin + "/device"
+	want := "code " + code + " is for a sign-in started at " + testSignin + " for the relay origin " + testRelay + ", not at " + testSignin2 + " for " + testRelay2 +
+		"; enter it at " + testSignin + "/device"
 	for _, path := range []string{"/device", "/device/confirm"} {
 		resp, page := other.post(t, path, url.Values{"user_code": {start.UserCode}, "decision": {"approve"}})
 		if resp.StatusCode != http.StatusForbidden || !strings.Contains(page, want) {
@@ -395,7 +396,7 @@ func TestDeviceAuthBoundToPair(t *testing.T) {
 		h.clock.Advance(pollInterval)
 		return h.apiCallOn(t, origin, http.MethodPost, edgeproto.PathDeviceToken, "", edgeproto.DeviceTokenRequest{DeviceCode: start.DeviceCode}, nil)
 	}
-	wantPoll := "this sign-in was started at " + testSignin + ", not at " + testSignin2 + "; finish it there"
+	wantPoll := "this sign-in was started at " + testSignin + " for the relay origin " + testRelay + ", not at " + testSignin2 + " for " + testRelay2 + "; finish it there"
 	if status, msg := poll(testSignin2); status != http.StatusBadRequest || msg != wantPoll {
 		t.Errorf("poll on %s: %d %q, want 400 %q", testSignin2, status, msg, wantPoll)
 	}
@@ -523,8 +524,8 @@ func TestRetiredDeletesByHost(t *testing.T) {
 			SELECT ?, ?, account_id, 'key', 'label', created_at, created_at, ? FROM web_sessions LIMIT 1`, fmt.Sprintf("dev-%d", i), fmt.Sprintf("hash-%d", i), origin)
 		h.exec(t, `INSERT INTO web_sessions (id, token_hash, account_id, created_at, expires_at, signin_origin)
 			SELECT ?, ?, account_id, created_at, expires_at, ? FROM web_sessions LIMIT 1`, fmt.Sprintf("sess-%d", i), fmt.Sprintf("hash-%d", i), origin)
-		h.exec(t, `INSERT INTO device_authorizations (code_hash, user_code_hash, label, public_key, client_addr, status, created_at, expires_at, last_poll_at, signin_origin)
-			SELECT ?, ?, 'label', 'key', '127.0.0.1', 'pending', created_at, expires_at, 0, ? FROM web_sessions LIMIT 1`, fmt.Sprintf("code-%d", i), fmt.Sprintf("user-%d", i), origin)
+		h.exec(t, `INSERT INTO device_authorizations (code_hash, user_code_hash, label, public_key, client_addr, status, created_at, expires_at, last_poll_at, signin_origin, relay_origin)
+			SELECT ?, ?, 'label', 'key', '127.0.0.1', 'pending', created_at, expires_at, 0, ?, ? FROM web_sessions LIMIT 1`, fmt.Sprintf("code-%d", i), fmt.Sprintf("user-%d", i), origin, testRelay)
 	}
 	if err := h.restartRetiring(t, Retired{SigninOrigin: testSignin2, RelayOrigin: testRelay2, Replacement: testRelay},
 		Retired{SigninOrigin: "https://[2001:db8::1]", RelayOrigin: "https://[2001:db8::2]", Replacement: testRelay}); err != nil {

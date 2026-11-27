@@ -30,15 +30,14 @@ type Run struct {
 	// whose sign-in origin is one of RetiredSignIns or that have none.
 	Retire         bool
 	RetiredSignIns []string
-	// MovedSignIns are sign-in origins whose device authorizations are
-	// deleted, since the pair that started them is no longer theirs.
-	MovedSignIns []string
 }
 
 // RecordPairs deletes the sign-ins run retires and records, as of now,
 // that the edge serves each relay origin of run.Pairs with the sign-in
 // origin it names and records origins, all in one transaction, and
-// returns how many sign-ins it retired. A relay origin
+// returns how many sign-ins it retired. It deletes the device
+// authorizations not bound to the relay origin of a pair, which a binary
+// that records no origins started. A relay origin
 // keeps its row after the edge stops serving it, and every pairing ever
 // written to origin_pairs, by any binary, stays in origin_pair_history
 // (Pairings). The recording period
@@ -56,10 +55,8 @@ func (s *Store) RecordPairs(ctx context.Context, run Run, now time.Time) (SignIn
 			return SignIns{}, err
 		}
 	}
-	for _, signin := range run.MovedSignIns {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM device_authorizations WHERE signin_origin = ?`, signin); err != nil {
-			return SignIns{}, fmt.Errorf("edgestore: delete the device sign-ins of %s: %w", signin, err)
-		}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM device_authorizations WHERE relay_origin IS NULL`); err != nil {
+		return SignIns{}, fmt.Errorf("edgestore: delete device authorizations not bound to a pair: %w", err)
 	}
 	for relay, signin := range run.Pairs {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO origin_pairs (relay_origin, signin_origin, served_at) VALUES (?, ?, ?)

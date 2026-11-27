@@ -297,6 +297,8 @@ CREATE TABLE origin_pair_history (
 	PRIMARY KEY (relay_origin, signin_origin)
 ) WITHOUT ROWID;
 
+ALTER TABLE device_authorizations ADD COLUMN relay_origin TEXT;
+
 INSERT INTO origin_pair_history (relay_origin, signin_origin, first_served_at, served_at)
 	SELECT relay_origin, signin_origin, served_at, served_at FROM origin_pairs;
 

@@ -1309,12 +1309,15 @@ checks only that an edge presents the edge key it pinned.
 
 A device sign-in from a client that names its relay origin (`relay_origin` in
 the start request) is refused unless that is the relay origin of the pair the
-request arrived at, whatever the options. Binding the pending sign-in to that
-pair needs its recorded origin: while either option is set, it is confirmed,
-polled and redeemed only on the pair it was started at; with neither set, any
-pair confirms and redeems it, as before. A start that pairs a sign-in origin
-with another relay origin than the one last recorded deletes that sign-in
-origin's pending device sign-ins; the person starts `cloudfield login` again.
+request arrived at, whatever the options. While either option is set, a new
+pending sign-in records the sign-in origin and relay origin of its pair, and
+it is confirmed, polled and redeemed only where both are the same, whatever
+the spelling of a default port; after a restart that pairs its sign-in origin
+with another relay origin it is refused there. With neither option set, any
+pair confirms and redeems it, as before. A start with either option deletes
+the pending sign-ins that record no relay origin, from a run without the
+options or an older image; the person runs `cloudfield login` again. Device
+tokens and sessions are not touched by this.
 
 ### Firewall
 
