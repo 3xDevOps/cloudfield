@@ -646,6 +646,18 @@ func TestRetiredCertificates(t *testing.T) {
 	if _, err := get(ecdsaHello("edge9.example.org")); err != nil {
 		t.Errorf("a certificate missing at the last read was not read again after retiredCertRetry: %v", err)
 	}
+	clock = now.Add(25 * time.Hour)
+	if _, err := get(ecdsaHello("auth9.example.org")); err == nil {
+		t.Error("a certificate kept in memory was answered after it expired")
+	}
+	put("auth9.example.org", now.Add(48*time.Hour))
+	if _, err := get(ecdsaHello("auth9.example.org")); err == nil {
+		t.Error("an expired certificate was read again before retiredCertRetry")
+	}
+	clock = clock.Add(retiredCertRetry)
+	if _, err := get(ecdsaHello("auth9.example.org")); err != nil {
+		t.Errorf("an expired certificate replaced in the cache was not read again after retiredCertRetry: %v", err)
+	}
 }
 
 // TestOlderImageServes reads one environment both ways: the CLOUDFIELD_EDGE_

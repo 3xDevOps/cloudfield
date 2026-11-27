@@ -281,7 +281,7 @@ func certHosts(o options) []string {
 }
 
 // retiredCertRetry is the least time before a retired host's certificate
-// that the cache did not hold is read again.
+// that the cache did not hold, or that expired, is read again.
 const retiredCertRetry = 5 * time.Minute
 
 // retiredCertificates answers a handshake for a retired pair's host
@@ -289,8 +289,9 @@ const retiredCertRetry = 5 * time.Minute
 // supports, and fails it when there is none; any other host goes to next.
 // A retired host never reaches the autocert manager, which would order a
 // certificate for it, as it does for a key type it has none of. A
-// certificate read from cache stays in memory; a missing one is read again
-// after retiredCertRetry, so handshakes do not each read the disk.
+// certificate read from cache stays in memory until it expires; a missing
+// or expired one is read again after retiredCertRetry, so handshakes do not
+// each read the disk.
 func retiredCertificates(o options, cache autocert.Cache, now func() time.Time,
 	next func(*tls.ClientHelloInfo) (*tls.Certificate, error)) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 	retired := map[string]bool{}
@@ -306,7 +307,7 @@ func retiredCertificates(o options, cache autocert.Cache, now func() time.Time,
 	load := func(key string) *tls.Certificate {
 		mu.Lock()
 		defer mu.Unlock()
-		if l, ok := certs[key]; ok && (l.cert != nil || now().Sub(l.at) < retiredCertRetry) {
+		if l, ok := certs[key]; ok && (now().Sub(l.at) < retiredCertRetry || l.cert != nil && now().Before(l.cert.Leaf.NotAfter)) {
 			return l.cert
 		}
 		l := loaded{at: now()}

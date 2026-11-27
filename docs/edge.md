@@ -1242,7 +1242,7 @@ certificate already in its ACME cache that is unexpired and of a key type the
 client supports, and neither orders nor renews one: once that certificate
 expires, or for a client that supports none of those cached, the handshake
 fails. It reads each such certificate once and keeps it in memory, and looks
-for a missing one again at most every five minutes. Behind a reverse proxy the proxy's certificates apply. Every request to
+for a missing or expired one again at most every five minutes. Behind a reverse proxy the proxy's certificates apply. Every request to
 either host that net/http admits, except `GET /healthz`, gets `410 Gone` with `Cache-Control: no-store` and no `Location` or
 `WWW-Authenticate` header. Nothing is relayed, signed in or issued, and no such
 request reads the database or reaches a server. API, WebSocket and connector
