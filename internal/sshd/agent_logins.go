@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
-	"github.com/3xDevOps/cloudfield/internal/fallback"
 	"github.com/3xDevOps/cloudfield/internal/memberhome"
 	"github.com/3xDevOps/cloudfield/internal/permissions"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
@@ -313,8 +312,8 @@ func (s *Server) agentLoginAutomatic(ctx context.Context, member domain.MemberID
 	return struct{}{}, nil
 }
 
-// launchLogin resolves the login a launch by member on account starts
-// from: the one its owner named, or the account's first login in its
+// launchLogin resolves the login a launch by member on account, admitted
+// already, starts from: the one its owner named, or the account's first login in its
 // owner's order that member may use without naming it. Only a login's owner
 // may name it. An account none of whose logins member may use is not shared
 // with them; on their own account the first login serves when none is
@@ -322,13 +321,6 @@ func (s *Server) agentLoginAutomatic(ctx context.Context, member domain.MemberID
 func (s *Server) launchLogin(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, harness, named string, mode domain.LaunchMode) (domain.LoginID, *protocol.Error) {
 	if account == "" {
 		account = member
-	}
-	// Nothing of another member's logins is read before the share is.
-	if _, err := fallback.ResolveLaunchAccount(ctx, s.cfg.Store, member, string(account)); err != nil {
-		if errors.Is(err, permissions.ErrDenied) {
-			return "", &protocol.Error{Code: protocol.CodeDenied, Message: protocol.MethodRunLaunch + ": " + err.Error()}
-		}
-		return "", rpcError(err)
 	}
 	logins, err := s.cfg.Store.ListAgentLogins(ctx, account, harness)
 	if err != nil {

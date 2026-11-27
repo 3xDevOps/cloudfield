@@ -228,3 +228,33 @@ func TestAgentLoginMethodsNameClaudeOnly(t *testing.T) {
 		}
 	}
 }
+
+// A launch is admitted before anything of its workspace or of the
+// account's logins is read, so a member with no added login meets the
+// refusals in the order they met before logins existed: a workspace they
+// cannot reach before an account not shared with them, and no read of the
+// workspace's variables for a launch that is refused.
+func TestALaunchIsAdmittedBeforeItReadsTheWorkspaceOrTheLogins(t *testing.T) {
+	e := newAccessEnv(t, nil)
+	if err := e.db.GrantWorkspace(context.Background(), e.wsA.ID, e.u.ID, e.member.ID); err != nil {
+		t.Fatal(err)
+	}
+	for _, account := range []domain.MemberID{e.a.ID, e.u.ID} {
+		raw, err := json.Marshal(protocol.RunLaunchParams{
+			WorkspaceID: string(e.wsA.ID), ExtraWorkspaceIDs: []string{string(e.wsB.ID)}, Task: "refused", Harness: "claude", AccountMemberID: string(account),
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, perr := e.srv.dispatch(context.Background(), e.u.ID, protocol.MethodRunLaunch, raw)
+		if perr == nil || perr.Code != protocol.CodeNotFound {
+			t.Fatalf("U's launch on %s's account with a workspace U cannot reach: %v; want the workspace refusal first", account, perr)
+		}
+		e.runs.mu.Lock()
+		reads := e.runs.environmentReads
+		e.runs.mu.Unlock()
+		if len(reads) != 0 {
+			t.Fatalf("a refused launch read the variables of %v", reads)
+		}
+	}
+}
