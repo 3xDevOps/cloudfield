@@ -524,20 +524,23 @@ export function ProposeForm({ client, self, code, plan, onProposed, onRefused }:
         </RadioGroup>
       </div>
       <Consequences plan={plan} shown={shown} />
-      {shown.keepAdminOffered && (
-        <CheckRow checked={form.keepAdmin} onChange={(keepAdmin) => setForm({ ...form, keepAdmin })}>
-          Keep the merged member an admin
-        </CheckRow>
-      )}
-      {shown.choice && (
-        <CheckRow checked={form.discardAck} onChange={(discardAck) => setForm({ ...form, discardAck })}>
-          Discard the listed settings
-        </CheckRow>
-      )}
-      <div className="flex justify-end">
-        <Button variant="danger" disabled={pending || !shown.canSubmit} onClick={() => void propose()}>
-          {pending ? 'Proposing…' : 'Propose merge'}
-        </Button>
+      {/* The dialog scrolls; what confirms the merge stays in view at its foot. */}
+      <div className="sticky -bottom-4 -mx-4 -mb-4 flex flex-col gap-1 border-t border-seam bg-raised px-4 pt-2 pb-4">
+        {shown.keepAdminOffered && (
+          <CheckRow checked={form.keepAdmin} onChange={(keepAdmin) => setForm({ ...form, keepAdmin })}>
+            Keep the merged member an admin
+          </CheckRow>
+        )}
+        {shown.choice && (
+          <CheckRow checked={form.discardAck} onChange={(discardAck) => setForm({ ...form, discardAck })}>
+            Discard the listed settings
+          </CheckRow>
+        )}
+        <div className="flex justify-end">
+          <Button variant="danger" disabled={pending || !shown.canSubmit} onClick={() => void propose()}>
+            {pending ? 'Proposing…' : 'Propose merge'}
+          </Button>
+        </div>
       </div>
     </div>
   )
@@ -580,32 +583,42 @@ function Consequences({ plan, shown }: { plan: MergePlan; shown: MergeOutcome })
           <ul aria-label="Discarded settings" className="list-disc pl-5 text-ui text-text">
             {settingsLines(shown.choice.discarded, names).map((line) => <li key={line} className="break-words">{line}</li>)}
           </ul>
-          <MovedLogins survivor={shown.survivor} absorbed={shown.absorbed} className="text-ui text-text" />
+          <MovedLogins survivor={shown.survivor} absorbed={shown.absorbed} home={shown.choice.discarded.home} className="text-ui text-text" />
         </div>
       )}
     </div>
   )
 }
 
-function MovedLogins({ survivor, absorbed, className }: { survivor: MergeMember; absorbed: MergeMember; className?: string }) {
+function useAgentName() {
   const agents = useStore((s) => s.agentList?.agents)
+  return (name: string) => agents?.find((agent) => agent.name === name)?.display_name ?? name
+}
+
+/** What the merge does with the absorbed member's logins; `home` is whether it archives the absorbed member's home. */
+function MovedLogins({ survivor, absorbed, home, className }: { survivor: MergeMember; absorbed: MergeMember; home: boolean; className?: string }) {
+  const agentName = useAgentName()
   const moved = movedLogins(survivor, absorbed)
-  if (moved.length === 0) return null
-  const agentName = (name: string) => agents?.find((agent) => agent.name === name)?.display_name ?? name
+  if (moved.length === 0 && !home) return null
   return (
     <div className={cn('flex min-w-0 flex-col gap-1', className)}>
-      <p>
-        {absorbed.display_name}&apos;s added logins move to {survivor.display_name}, each off for shares until {survivor.display_name} turns Use for shares
-        on:
-      </p>
-      <ul aria-label="Logins that move" className="list-disc pl-5">
-        {moved.map((login) => (
-          <li key={login.id} className="break-words">
-            {agentName(login.agent)} login {login.name}
-            {login.renamed && <>, renamed {login.renamed}: {survivor.display_name} has a login named {login.name}</>}
-          </li>
-        ))}
-      </ul>
+      {home && <p>{absorbed.display_name}&apos;s default logins are archived with its home; no session uses them after the merge.</p>}
+      {moved.length > 0 && (
+        <>
+          <p>
+            {absorbed.display_name}&apos;s added logins move to {survivor.display_name}, each off for shares until {survivor.display_name} turns Use for shares
+            on. One whose name {survivor.display_name} has takes the first free <span className="font-code">&lt;name&gt;-2</span>, <span className="font-code">&lt;name&gt;-3</span>, …:
+          </p>
+          <ul aria-label="Logins that move" className="list-disc pl-5">
+            {moved.map((login) => (
+              <li key={login.id} className="break-words">
+                {agentName(login.agent)} login {login.name}
+                {login.renamed && <>, renamed {login.renamed}: {survivor.display_name} has a login named {login.name}</>}
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
     </div>
   )
 }
@@ -622,6 +635,7 @@ function Sides({ plan, self, other }: { plan: MergePlan; self: MergeMember; othe
 
 function Side({ title, member }: { title: string; member: MergeMember }) {
   const names = useNames()
+  const agentName = useAgentName()
   const settings = member.settings
   const rows: [string, ReactNode][] = [
     ['Role', roleLabel[member.role]],
@@ -631,7 +645,13 @@ function Side({ title, member }: { title: string; member: MergeMember }) {
     ['Devices', member.devices.length ? member.devices.map((d) => `${d.label} (${deviceStatus[d.status].label.toLowerCase()})`).join(', ') : 'none'],
     ['Sessions', String(member.runs)],
     ['Schedules', String(member.schedules)],
-    ...(member.logins?.length ? [['Added logins', member.logins.map((login) => login.name).join(', ')] as [string, string]] : []),
+    ...(member.logins?.length ? [['Added logins', (
+      <ul aria-label="Added logins">
+        {member.logins.map((login) => (
+          <li key={login.id}>{login.name} <span className="text-muted">{agentName(login.agent)} · <span className="font-code whitespace-nowrap">{login.id}</span></span></li>
+        ))}
+      </ul>
+    )] as [string, ReactNode]] : []),
     ['Settings', settingsLines(settings, names).join('; ')],
   ]
   return (
@@ -707,7 +727,7 @@ function ProposalToAccept({ client, proposal, onMerged, onFailed }: {
             <ul aria-label="Discarded settings" className="list-disc pl-5">
               {settingsLines(shown.choice.discarded, names).map((line) => <li key={line} className="break-words">{line}</li>)}
             </ul>
-            <MovedLogins survivor={shown.survivor} absorbed={shown.absorbed} />
+            <MovedLogins survivor={shown.survivor} absorbed={shown.absorbed} home={shown.choice.discarded.home} />
           </>
         )}
         <p>The merged member will be <strong>{roleLabel[shown.role]}</strong>.</p>

@@ -136,7 +136,7 @@ describe('propose a merge', () => {
     expect(discarded()).toEqual(['Display name Alice on GitHub', 'Colour #e6194b', 'Git name Alice G', 'Agent account shared with Bob'])
     expect(merge.disabled).toBe(true)
     fireEvent.click(screen.getByRole('radio', { name: 'Alice on GitHub (the other sign-in)' }))
-    expect(discarded()).toEqual(['Display name Alice', 'Colour #e6194b', 'Saved environment image aether/mem_alice:saved', 'Home on the server (agent logins, files) and git signing key, archived on the server'])
+    expect(discarded()).toEqual(['Display name Alice', 'Colour #e6194b', 'Saved environment image aether/mem_alice:saved', 'Home on the server (default agent logins, files) and git signing key, archived on the server'])
     fireEvent.click(screen.getByRole('checkbox', { name: 'Discard the listed settings' }))
     expect(merge.disabled).toBe(false)
     fireEvent.click(merge)
@@ -163,10 +163,15 @@ describe('propose a merge', () => {
       ] },
     }
     render(<ProposeForm client={fakeApi()} self={alice} code="C" plan={withLogins} onProposed={() => {}} onRefused={() => {}} />)
-    expect(within(screen.getByRole('region', { name: 'The other sign-in' })).getByText('work, spare, ' + long)).toBeDefined()
+    expect(within(within(screen.getByRole('region', { name: 'The other sign-in' })).getByRole('list', { name: 'Added logins' })).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
+      'work Claude Code · lgn-gh000000001',
+      'spare Claude Code · lgn-gh000000002',
+      `${long} Claude Code · lgn-gh000000003`,
+    ])
 
     fireEvent.click(screen.getByRole('radio', { name: 'Alice (this sign-in)' }))
-    expect(screen.getByText(/added logins move to/).textContent).toBe("Alice on GitHub's added logins move to Alice, each off for shares until Alice turns Use for shares on:")
+    expect(screen.queryByText(/default logins are archived/)).toBeNull()
+    expect(screen.getByText(/added logins move to/).textContent).toBe("Alice on GitHub's added logins move to Alice, each off for shares until Alice turns Use for shares on. One whose name Alice has takes the first free <name>-2, <name>-3, …:")
     expect(within(screen.getByRole('list', { name: 'Logins that move' })).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
       'Claude Code login work, renamed work-3: Alice has a login named work',
       'Claude Code login spare',
@@ -174,6 +179,7 @@ describe('propose a merge', () => {
     ])
 
     fireEvent.click(screen.getByRole('radio', { name: 'Alice on GitHub (the other sign-in)' }))
+    expect(screen.getByText(/default logins are archived/).textContent).toBe("Alice's default logins are archived with its home; no session uses them after the merge.")
     expect(within(screen.getByRole('list', { name: 'Logins that move' })).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
       'Claude Code login work, renamed work-2: Alice on GitHub has a login named work',
       'Claude Code login work-2, renamed work-2-2: Alice on GitHub has a login named work-2',
