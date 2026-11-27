@@ -541,13 +541,20 @@ func TestFirstPinFallbacks(t *testing.T) {
 	p, created, err := s.pinFirst(key)
 	t.Cleanup(p.close)
 	if err != nil || !created || !p.Key.Equal(key) {
-		t.Fatalf("renameat2 refused by policy: pinFirst = created %v, %v; want a pin by hard link", created, err)
+		t.Fatalf("renameat2 refused with EPERM: pinFirst = created %v, %v; want a pin by hard link", created, err)
+	}
+	s = OpenState(t.TempDir())
+	s.renameNoReplace = renameErr(syscall.EACCES)
+	p, created, err = s.pinFirst(key)
+	t.Cleanup(p.close)
+	if err != nil || !created || !p.Key.Equal(key) {
+		t.Fatalf("renameat2 refused with EACCES: pinFirst = created %v, %v; want a pin by hard link", created, err)
 	}
 	s = OpenState(t.TempDir())
 	s.renameNoReplace = renameErr(syscall.EACCES)
 	s.beforePublish = func() { writeOlderPin(t, s, other) }
-	if _, _, err = s.pinFirst(key); err == nil {
-		t.Fatal("renameat2 refused by policy: pinFirst replaced a pin that appeared meanwhile")
+	if _, _, err = s.pinFirst(key); err == nil || !strings.Contains(err.Error(), "edge key changed") {
+		t.Fatalf("renameat2 refused by policy, a pin appeared meanwhile: pinFirst = %v; want the changed edge key", err)
 	}
 	if got, _ := s.PinnedKey(); !got.Equal(other) {
 		t.Fatalf("pinned key %x; want the one that appeared meanwhile", got)
