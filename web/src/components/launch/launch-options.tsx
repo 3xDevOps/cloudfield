@@ -36,6 +36,7 @@ export function FallbackOptions({
   accounts,
   ownAccountID,
   account,
+  logins = false,
   fallback,
   onFallback,
   status,
@@ -43,6 +44,8 @@ export function FallbackOptions({
   accounts: Member[]
   ownAccountID: string
   account: string
+  /** The launch is on the member's own account and it has several logins, which a session also moves between. */
+  logins?: boolean
   fallback: Fallback
   onFallback: (fallback: Fallback) => void
   status: (member: Member) => Readiness | null
@@ -50,6 +53,7 @@ export function FallbackOptions({
   const ids = candidates(fallback, accounts, account)
   const owner = accounts.find((member) => member.id === account)?.display_name ?? account
   const params = fallbackParams(fallback, accounts, account)
+  const target = fallback.order ? 'the first ticked account, top to bottom, with usage left' : 'the ticked account with the most usage left'
   // Editing the shown list keeps the hidden launch account's place and tick
   // (last, ticked, coming from automatic), and leaves every account it did
   // not show ticked unticked.
@@ -81,11 +85,11 @@ export function FallbackOptions({
       <CollapsibleContent className="flex flex-col gap-1 pt-2 pl-5">
         <label className="flex min-h-7 cursor-pointer items-center gap-2 text-ui coarse:min-h-11">
           <Checkbox checked={!fallback.off} onCheckedChange={(on) => onFallback({ ...fallback, off: on !== true })} />
-          Fall back to another account
+          {!logins ? 'Fall back to another account' : ids.length ? 'Move to another login or account' : 'Move to another login'}
         </label>
         {!fallback.off && (
           <>
-            <ul aria-label="Fallback accounts" className="flex flex-col pl-6">
+            {ids.length > 0 && <ul aria-label="Fallback accounts" className="flex flex-col pl-6">
               {ids.map((id, index) => {
                 const member = accounts.find((item) => item.id === id)
                 const name = member?.display_name ?? id
@@ -110,9 +114,11 @@ export function FallbackOptions({
                   </li>
                 )
               })}
-            </ul>
+            </ul>}
             <p className="text-ui-sm text-muted">
-              If {owner}&apos;s usage is 95% or more at launch, or the vendor reports the limit mid-session, the session moves to {fallback.order ? 'the first ticked account, top to bottom, with usage left' : 'the ticked account with the most usage left'}.
+              {logins
+                ? `If a login's usage is 95% or more at launch, or the vendor reports its limit mid-session, the session moves to your next login in order with usage left${ids.length ? `, then to ${target}` : ''}.`
+                : `If ${owner}'s usage is 95% or more at launch, or the vendor reports the limit mid-session, the session moves to ${target}.`}
             </p>
           </>
         )}

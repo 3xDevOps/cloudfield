@@ -4,21 +4,29 @@ import { Coins } from '@/components/icons'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import type { Api } from '@/lib/api'
+import { message } from '@/lib/format'
 import type { AgentLogin, UsageProvider } from '@/lib/types'
 import { limitWords } from '@/routes/settings/usage'
 
 const automatic = '@automatic'
 
-/** The member's own Claude Code logins, read while `enabled`; null until read or when the read fails. */
-export function useOwnLogins(client: Pick<Api, 'agentLoginList'>, enabled: boolean): AgentLogin[] | null {
-  const [logins, setLogins] = useState<AgentLogin[] | null>(null)
+/** The member's own Claude Code logins, read anew each time `enabled` turns on or `attempt` changes; null while off or reading. */
+export function useOwnLogins(client: Pick<Api, 'agentLoginList'>, enabled: boolean, attempt = 0): { logins: AgentLogin[] | null; error: string | null } | null {
+  const [read, setRead] = useState<{ logins: AgentLogin[] | null; error: string | null } | null>(null)
   useEffect(() => {
     if (!enabled) return
     let live = true
-    client.agentLoginList(loginAgent).then((list) => live && setLogins(list), () => live && setLogins(null))
-    return () => { live = false }
-  }, [client, enabled])
-  return enabled ? logins : null
+    client.agentLoginList(loginAgent).then(
+      (list) => live && setRead({ logins: list, error: null }),
+      (err: unknown) => live && setRead({ logins: null, error: message(err) }),
+    )
+    return () => {
+      live = false
+      // A list read before must not stand for the next one: a login removed since would still be offered.
+      setRead(null)
+    }
+  }, [client, enabled, attempt])
+  return enabled ? read : null
 }
 
 function orList(names: string[]): string {
@@ -41,27 +49,30 @@ function CostLine({ children }: { children: ReactNode }) {
 }
 
 /**
- * Which of the member's own logins a launch starts on; '' lets the server choose. Shown only with more than one login.
- * `usage` is any login's usage the dialog already read, by login id, for its limit state.
+ * Which of the member's own logins a launch starts on; '' lets the server choose. A `value` the list no longer holds shows no choice.
+ * `usage` is any login's usage the dialog already read, by login id, for its limit state; `moves` is whether automatic changes are on.
  */
-export function LoginPicker({ logins, value, onChange, usage = {}, now, disabled }: {
+export function LoginPicker({ logins, value, onChange, usage = {}, now, moves, disabled }: {
   logins: AgentLogin[]
   value: string
   onChange: (login: string) => void
   usage?: Record<string, UsageProvider | undefined>
   now: number
+  moves: boolean
   disabled?: boolean
 }) {
   const first = logins.find((login) => login.automatic)
-  const perUse = automaticReachesPerUse(logins)
+  const perUse = moves ? automaticReachesPerUse(logins) : ''
   const picked = logins.find((login) => login.id === value)
+  const known = value === '' || picked !== undefined
+  const pickedLimit = picked && limitWords(usage[picked.id], now)
   const detail = (login: AgentLogin) => [login.per_use && 'billed per use', !login.automatic && 'Automatic off', limitWords(usage[login.id], now)].filter(Boolean).join(' · ')
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <Label htmlFor="launch-login">Login</Label>
-      <Select value={value || automatic} onValueChange={(next) => onChange(next === automatic ? '' : next)} disabled={disabled}>
+      <Select value={known ? value || automatic : ''} onValueChange={(next) => onChange(next === automatic ? '' : next)} disabled={disabled}>
         <SelectTrigger id="launch-login" className="w-full min-w-0">
-          <SelectValue />
+          <SelectValue placeholder="Pick a login" />
         </SelectTrigger>
         {/* As wide as the field, so a long option wraps instead of leaving the screen. */}
         <SelectContent className="max-w-(--radix-select-trigger-width)">
@@ -73,12 +84,18 @@ export function LoginPicker({ logins, value, onChange, usage = {}, now, disabled
       </Select>
       {picked ? (
         <>
-          <p className="text-ui-sm text-muted">The session starts on this login; it may still move to another when this one runs out.</p>
+          <p className="text-ui-sm text-muted">
+            {!moves
+              ? 'The session starts on this login and stays on it.'
+              : pickedLimit
+                ? 'This login is at its limit, so the session may start on the next login in your order with usage left.'
+                : 'The session starts on this login; it may still move to another when this one runs out.'}
+          </p>
           {picked.per_use && <CostLine><span className="font-code">{picked.name}</span> is billed per use.</CostLine>}
         </>
-      ) : (
+      ) : known && (
         <>
-          <p className="text-ui-sm text-muted">Starts on the first login in your order with usage left.</p>
+          <p className="text-ui-sm text-muted">{moves ? 'Starts on the first login in your order with usage left.' : 'Starts on the first automatic login in your order and stays on it.'}</p>
           {first?.per_use && <CostLine>Can start on {first.name}, billed per use.</CostLine>}
           {perUse && <CostLine>Can move to {perUse}, billed per use, when the logins before it run out.</CostLine>}
         </>

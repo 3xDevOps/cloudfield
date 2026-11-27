@@ -139,10 +139,16 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   const shown = useRef(true)
   const sharedAccount = account !== '' && account !== ownAccountID
   const loginsServer = useLoginsServer()
-  const ownLogins = useOwnLogins(api, open && !sharedAccount && harness === loginAgent && loginsServer)
-  const [login, setLogin] = useState('')
-  const picked = ownLogins && ownLogins.length > 1 ? ownLogins.find((item) => item.id === login) : undefined
-  const pickedLogin = picked?.id ?? ''
+  const loginsOffered = open && !sharedAccount && harness === loginAgent && loginsServer
+  const [loginAttempt, setLoginAttempt] = useState(0)
+  const ownRead = useOwnLogins(api, loginsOffered, loginAttempt)
+  const ownLogins = ownRead?.logins ?? null
+  const severalLogins = !!ownLogins && ownLogins.length > 1
+  const [login, setLogin] = useState(restored?.login ?? null)
+  const picked = login ? ownLogins?.find((item) => item.id === login.id) : undefined
+  const pickedLogin = loginsOffered && picked ? picked.id : ''
+  // A picked login is sent only once a fresh read of the list holds it; until then the launch waits.
+  const loginWait = loginsOffered && login && !picked ? (ownRead === null ? 'reading' : ownRead.error !== null ? 'unread' : 'gone') : null
   const accountName = accounts.find((member) => member.id === account)?.display_name ?? account
   const taskMissing = needsTask(mode, task)
   const dictating = useDictating()
@@ -205,11 +211,12 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
       version: 1, id: draftID, workspace: workspaceID, extras, account, fallback,
       permission, childRuns, limits, harness, mode, model, effort, task,
       ...(link ? { linear: link } : {}),
+      ...(login ? { login } : {}),
     }
     const failure = state.setLaunchDraft(draft, !launchDraftError)
     if (failure && !storageFailed.current) toast.error(`Draft could not be saved in this browser: ${failure}`)
     storageFailed.current = failure !== null
-  }, [identityKey, draftID, open, workspaceID, extras, account, fallback, permission, childRuns, limits, harness, mode, model, effort, task, link, launchDraftError, linkStatus])
+  }, [identityKey, draftID, open, workspaceID, extras, account, fallback, permission, childRuns, limits, harness, mode, model, effort, task, link, login, launchDraftError, linkStatus])
 
   const collapse = () => {
     setPickedWorkspace(workspaceID)
@@ -344,6 +351,16 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
         </Callout>
       )}
       {agentError && <Callout tone="failed" role="alert">{agentError}</Callout>}
+      {loginsOffered && ownRead?.error && (
+        <Callout
+          tone="failed"
+          role="alert"
+          title="Your logins could not be read."
+          actions={<Button type="button" size="sm" variant="secondary" onClick={() => setLoginAttempt((n) => n + 1)}>Retry login read</Button>}
+        >
+          {ownRead.error}{login && ` Launch waits for them, since you picked ${login.name}.`}
+        </Callout>
+      )}
       {noAgents && (
         <Callout
           tone="neutral"
@@ -376,20 +393,33 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   const accountReadiness = (member: Member) => readiness(accountStatus[member.id], harness, member.id === ownAccountID ? undefined : member.display_name, now)
   // Only the default login's usage is read here, with the account's when there are several accounts.
   const loginUsage = { default: accountStatus[ownAccountID]?.usage?.find((provider) => provider.provider === loginAgent) }
-  const loginChoice = ownLogins && ownLogins.length > 1 && <LoginPicker logins={ownLogins} value={pickedLogin} onChange={setLogin} usage={loginUsage} now={now} disabled={launching} />
-  const automaticPerUse = ownLogins && ownLogins.length > 1 && !picked ? automaticReachesPerUse(ownLogins) : ''
-  const loginWords = picked ? `${picked.name}${picked.per_use ? ', billed per use' : ''}` : automaticPerUse && `Automatic, can reach ${automaticPerUse} (billed per use)`
-  const accountChoice = (accounts.length > 1 || loginChoice) && (
+  const moves = !fallbackParams(fallback, accounts, account).no_fallback
+  const loginChoice = loginsOffered && (severalLogins || login) && (ownLogins
+    ? (
+      <div className="flex flex-col gap-1">
+        <LoginPicker logins={ownLogins} value={login?.id ?? ''} onChange={(id) => setLogin(id ? { id, name: ownLogins.find((item) => item.id === id)?.name ?? id } : null)} usage={loginUsage} now={now} moves={moves} disabled={launching} />
+        {loginWait === 'gone' && login && <p role="alert" className="text-ui-sm text-state-failed">You have no login {login.name} any more. Pick another to launch.</p>}
+      </div>
+    )
+    : login && (
+      <p className="flex flex-col gap-1 text-ui-sm text-muted">
+        <span className="text-ui font-medium text-text">Login</span>
+        {loginWait === 'reading' ? `${login.name}: reading your logins…` : `${login.name}: your logins could not be read.`}
+      </p>
+    ))
+  const automaticPerUse = severalLogins && !picked && !login && moves ? automaticReachesPerUse(ownLogins) : ''
+  const loginWords = picked ? `${picked.name}${picked.per_use ? ', billed per use' : ''}` : login ? login.name : automaticPerUse && `Automatic, can reach ${automaticPerUse} (billed per use)`
+  const fallbackOffered = accounts.length > 1 || severalLogins
+  const accountChoice = (fallbackOffered || loginChoice) && (
     <div className="flex flex-col gap-2">
-      {accounts.length > 1 && (
+      {accounts.length > 1 && <AccountPicker accounts={accounts} ownAccountID={ownAccountID} value={account} onChange={(next) => { accountPicked.current = true; setError(null); setAccount(next) }} agentName={harness ? agentLabel(choice.agent, harness) : ''} status={accountReadiness} disabled={launching} />}
+      {loginChoice}
+      {fallbackOffered && (
         <>
-          <AccountPicker accounts={accounts} ownAccountID={ownAccountID} value={account} onChange={(next) => { accountPicked.current = true; setError(null); setAccount(next) }} agentName={harness ? agentLabel(choice.agent, harness) : ''} status={accountReadiness} disabled={launching} />
-          {loginChoice}
-          <FallbackOptions accounts={accounts} ownAccountID={ownAccountID} account={account} fallback={fallback} onFallback={(next) => { fallbackPicked.current = true; setFallback(next) }} status={accountReadiness} />
+          <FallbackOptions accounts={accounts} ownAccountID={ownAccountID} account={account} logins={severalLogins} fallback={fallback} onFallback={(next) => { fallbackPicked.current = true; setFallback(next) }} status={accountReadiness} />
           {savesDefaults && <SaveAccountDefault choice={JSON.stringify([account, fallback])} onSave={saveAccountDefault} />}
         </>
       )}
-      {accounts.length <= 1 && loginChoice}
     </div>
   )
 
@@ -414,7 +444,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
     </>
   )
   // agents is null while the chosen account's list is read, and harness may still be the last account's.
-  const launchDisabled = launching || !accountsRead || accountsReadError !== null || !workspace || !account || !harness || !agents || taskMissing || dictating
+  const launchDisabled = launching || !accountsRead || accountsReadError !== null || !workspace || !account || !harness || !agents || taskMissing || dictating || loginWait !== null
 
   if (!visible) return null
 
