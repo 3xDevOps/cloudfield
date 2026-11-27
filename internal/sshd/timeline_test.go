@@ -351,7 +351,7 @@ func TestWorkspaceTimelineSaysHowFarBackAFilteredPageRead(t *testing.T) {
 	publish(events.RunStatusPayload{From: domain.RunRunning, To: domain.RunCompleted})
 
 	var page protocol.WorkspaceTimelineResult
-	if err := controlClient(t, e).Call(protocol.MethodWorkspaceTimeline, protocol.WorkspaceTimelineParams{
+	if err = controlClient(t, e).Call(protocol.MethodWorkspaceTimeline, protocol.WorkspaceTimelineParams{
 		WorkspaceID: string(e.ws.ID), Types: []string{string(events.TypeRunStatus)}, Newest: true, Limit: 2, NoRereads: true,
 	}, &page); err != nil {
 		t.Fatalf("workspace.timeline: %v", err)
