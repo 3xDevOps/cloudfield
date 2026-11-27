@@ -474,7 +474,8 @@ func (e *engine) pause(ctx context.Context, key string) error {
 		return err
 	}
 	if len(rec.CheckoutDisks) == 0 {
-		err = newCHAPI(e.path(key, apiSocket)).pause(ctx)
+		// As in save: a pause that lands is not left behind an error.
+		err = newCHAPI(e.path(key, apiSocket)).pause(context.WithoutCancel(ctx))
 	} else {
 		err = e.freezeSession(ctx, rec)
 	}

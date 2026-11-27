@@ -194,7 +194,9 @@ func (s *Scheduler) wake(ctx context.Context, entry *supervised) error {
 			return fmt.Errorf("%w: the session ended while it was asleep", ErrNoLiveEnvironment)
 		case entry.sleeping:
 			done := entry.sleepDone
-			if entry.abortSleep != nil {
+			entry.wakeWaits = true
+			// A shutdown lets a save finish, so the VM survives it.
+			if entry.abortSleep != nil && s.superCtx.Err() == nil {
 				entry.abortSleep()
 			}
 			s.mu.Unlock()
@@ -919,7 +921,7 @@ func (s *Scheduler) stopSleeping(ctx context.Context, entry *supervised) error {
 // sleeping run paused.
 func (s *Scheduler) endSleep(entry *supervised, asleep bool) {
 	s.mu.Lock()
-	entry.sleeping, entry.abortSleep = false, nil
+	entry.sleeping, entry.abortSleep, entry.wakeWaits = false, nil, false
 	if asleep {
 		entry.paused = true
 	}

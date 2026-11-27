@@ -125,6 +125,7 @@ func (s *Scheduler) saveMarked(ctx context.Context, entry *supervised, saver run
 	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), wakeTimeout)
 	defer cancel()
 	var detachErr, saveErr error
+	aborted := false
 	if frozen {
 		agent := s.acp.letGo(entry.runID)
 		detachCtx, saved := context.WithCancel(saveCtx)
@@ -152,13 +153,19 @@ func (s *Scheduler) saveMarked(ctx context.Context, entry *supervised, saver run
 	} else {
 		s.mu.Lock()
 		entry.abortSleep = cancel
+		if entry.wakeWaits && s.superCtx.Err() == nil {
+			cancel()
+		}
 		s.mu.Unlock()
 		if detachErr = s.detachForSave(saveCtx, entry); park {
 			saveErr = saver.Park(saveCtx, cid)
 		} else {
 			saveErr = saver.Save(saveCtx, cid)
 		}
-		if saveErr != nil && errors.Is(saveCtx.Err(), context.Canceled) {
+		// A save cut short by a wake says so; one that failed otherwise
+		// while a wake came in keeps its own error for the log.
+		aborted = saveErr != nil && errors.Is(saveCtx.Err(), context.Canceled) && (park || errors.Is(saveErr, context.Canceled))
+		if aborted {
 			saveErr = errors.Join(errStayAwake, saveErr)
 		}
 	}
@@ -169,7 +176,13 @@ func (s *Scheduler) saveMarked(ctx context.Context, entry *supervised, saver run
 	}
 	saveErr = errors.Join(fmt.Errorf("save the idle session: %w", saveErr), detachErr)
 	s.mu.Lock()
-	entry.saveFailedAt = time.Now().UTC()
+	// A sleep a wake ended did not fail: the memory guard may still save
+	// the VM, and the sleep sweep waits out a new idle time.
+	if aborted {
+		entry.quietFrom = time.Now().UTC()
+	} else {
+		entry.saveFailedAt = time.Now().UTC()
+	}
 	entry.paused = false
 	s.mu.Unlock()
 	if info, err := s.cfg.Runtime.Inspect(context.WithoutCancel(ctx), cid); errors.Is(err, runtime.ErrNotFound) || err == nil && info.Exited {

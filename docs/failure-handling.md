@@ -1057,7 +1057,8 @@ A saved VM takes about as much disk as the memory its processes use, after
 the guest drops its page cache: 137 MiB for an idle test VM of 2 GiB whose
 page cache held 1400 MiB. A save waits up to 40 seconds for the host to get
 that cache back first ([vm-guest.md](vm-guest.md#limits-stats-and-the-clock)),
-and a wake, close or kill that arrives meanwhile waits for the save. When disk runs low, Cloudfield deletes the saved
+and a wake, close or kill that arrives during that wait ends the save and
+leaves the session awake; once the guest is paused it waits for the save. When disk runs low, Cloudfield deletes the saved
 memory of the longest-sleeping sessions first
 ([Recover from disk pressure](#recover-from-disk-pressure)). A server
 restart or update leaves sleeping VMs asleep; the next use wakes them. A

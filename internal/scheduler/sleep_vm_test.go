@@ -74,6 +74,9 @@ func (r *saveRuntime) SavedMemory(runtime.ID) (uint64, error) { return 0, nil }
 // held runs the saving hook and reports saveErr, for a save and for the
 // pause an idle sleep makes in its place.
 func (r *saveRuntime) held(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	r.saveMu.Lock()
 	saving, release, saveErr := r.saving, r.release, r.saveErr
 	r.saveMu.Unlock()
@@ -455,13 +458,79 @@ func TestAPromptEndsASleepThatHasNotPausedTheGuest(t *testing.T) {
 	sr.saveMu.Lock()
 	sr.saving = nil
 	sr.saveMu.Unlock()
-	if _, err := e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "not yet"}, false, nil); err != nil {
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	if _, err := e.sched.Inject(ctx, run.ID, e.member.ID, domain.AgentPrompt{Text: "not yet"}, false, nil); err != nil {
 		t.Fatalf("a prompt to a session falling asleep: %v", err)
 	}
 	if state := containerState(e.container(t, run.ID)); state != "running" || !adopted(rt) {
 		t.Fatalf("the prompt left the VM %s with %d agents, want it running with the one it had", state, len(rt.all()))
 	}
 	waitItems(t, e.sched, run.ID, "a turn after the ended sleep", turnEnded("end_turn", 2))
+}
+
+// A prompt that arrives while the sleep still asks the guest whether it is
+// busy, before there is a save to end, ends the sleep once it gets there.
+func TestAPromptBeforeTheSaveStartsEndsTheSleep(t *testing.T) {
+	t.Parallel()
+	e, rt, _ := newSaveEnv(t, false)
+	run := e.launchACP(t, "say pong")
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	probing, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	e.rt.mu.Lock()
+	e.rt.execHandler = func(_ runtime.ID, argv []string) (int, string, error) {
+		if slices.Contains(argv, guestCPUScript) {
+			once.Do(func() {
+				close(probing)
+				<-release
+			})
+			return 0, "0\n", nil
+		}
+		return 0, "", nil
+	}
+	e.rt.mu.Unlock()
+	waitFor(t, "a sleep asking the guest", func() bool {
+		e.sched.sleepIdle(t.Context())
+		select {
+		case <-probing:
+			return true
+		case <-time.After(20 * time.Millisecond):
+			return false
+		}
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+	sent := make(chan error, 1)
+	go func() {
+		_, err := e.sched.Inject(ctx, run.ID, e.member.ID, domain.AgentPrompt{Text: "not yet"}, false, nil)
+		sent <- err
+	}()
+	waitFor(t, "the prompt waiting for the sleep", func() bool {
+		e.sched.mu.Lock()
+		defer e.sched.mu.Unlock()
+		return e.sched.runs[run.ID].wakeWaits
+	})
+	sub := e.subscribe(t)
+	close(release)
+	if err := <-sent; err != nil {
+		t.Fatalf("a prompt to a session about to fall asleep: %v", err)
+	}
+	if state := containerState(e.container(t, run.ID)); state != "running" || !adopted(rt) {
+		t.Fatalf("the prompt left the VM %s with %d agents, want it running with the one it had", state, len(rt.all()))
+	}
+	waitItems(t, e.sched, run.ID, "a turn after the ended sleep", turnEnded("end_turn", 2))
+	for {
+		select {
+		case ev := <-sub.Events():
+			if p, ok := ev.Payload.(events.RunSleepPayload); ok && p.AsleepSince != nil {
+				t.Fatalf("the session slept before the prompt reached it: %+v", ev.Payload)
+			}
+			continue
+		default:
+		}
+		break
+	}
 }
 
 // A server that shuts down while a VM is being saved lets the save finish

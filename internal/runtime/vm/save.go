@@ -92,7 +92,9 @@ func (e *engine) save(ctx context.Context, key string) error {
 		synced = e.syncGuest(ctx, key)
 	}
 	if !paused {
-		if err = api.pause(ctx); err != nil {
+		// Not cut short: a pause that lands after its caller gave up would
+		// leave the guest stopped behind an error.
+		if err = api.pause(context.WithoutCancel(ctx)); err != nil {
 			return fmt.Errorf("vm runtime: save VM %s: %w", key, err)
 		}
 	}
