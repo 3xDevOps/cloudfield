@@ -352,7 +352,16 @@ func (s *State) publishPin(key ed25519.PublicKey) (pin, bool, error) {
 	err = s.noReplace(tmp, s.path(pinFile))
 	if noReplaceUnavailable(err) {
 		if err = s.link(tmp, s.path(pinFile)); cannotLink(err) {
-			err = os.Rename(tmp, s.path(pinFile))
+			// The rename replaces whatever is there, such as a symbolic
+			// link to a missing file the read above took for no pin.
+			switch _, lerr := os.Lstat(s.path(pinFile)); {
+			case lerr == nil:
+				err = fmt.Errorf("edgeagent: %s: %w", s.path(pinFile), fs.ErrExist)
+			case errors.Is(lerr, fs.ErrNotExist):
+				err = os.Rename(tmp, s.path(pinFile))
+			default:
+				err = lerr
+			}
 		}
 	}
 	if errors.Is(err, fs.ErrExist) {

@@ -485,18 +485,35 @@ func TestSymlinkedPinStoresNoNotices(t *testing.T) {
 // TestFirstPinOverADanglingLink pins where edge_key.json is a symbolic
 // link to a missing file: the error says so and names the repair.
 func TestFirstPinOverADanglingLink(t *testing.T) {
-	s := OpenState(t.TempDir())
-	if err := s.mkdir(s.dir); err != nil {
-		t.Fatal(err)
+	refuse := func(e syscall.Errno) func(string, string) error {
+		return func(oldname, newname string) error {
+			return &os.LinkError{Op: "test", Old: oldname, New: newname, Err: e}
+		}
 	}
-	if err := os.Symlink(filepath.Join(t.TempDir(), "missing"), s.path(pinFile)); err != nil {
-		t.Fatal(err)
-	}
-	key, _, _ := ed25519.GenerateKey(rand.Reader)
-	_, _, err := s.pinFirst(key)
-	want := s.path(pinFile) + " exists but names no readable pin file"
-	if err == nil || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "edge trust") || strings.Contains(err.Error(), "edge key changed") {
-		t.Fatalf("pinFirst over a dangling link = %v", err)
+	for _, path := range []string{"rename without replacing", "hard link", "plain rename"} {
+		s := OpenState(t.TempDir())
+		switch path {
+		case "hard link":
+			s.renameNoReplace = refuse(syscall.ENOSYS)
+		case "plain rename":
+			s.renameNoReplace, s.linkFile = refuse(syscall.ENOSYS), refuse(syscall.EACCES)
+		}
+		if err := s.mkdir(s.dir); err != nil {
+			t.Fatal(err)
+		}
+		missing := filepath.Join(t.TempDir(), "missing")
+		if err := os.Symlink(missing, s.path(pinFile)); err != nil {
+			t.Fatal(err)
+		}
+		key, _, _ := ed25519.GenerateKey(rand.Reader)
+		_, _, err := s.pinFirst(key)
+		want := s.path(pinFile) + " exists but names no readable pin file"
+		if err == nil || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), "edge trust") || strings.Contains(err.Error(), "edge key changed") {
+			t.Errorf("%s: pinFirst over a dangling link = %v", path, err)
+		}
+		if target, err := os.Readlink(s.path(pinFile)); err != nil || target != missing {
+			t.Errorf("%s: the operator's link was replaced: %q, %v", path, target, err)
+		}
 	}
 }
 
