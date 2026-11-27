@@ -6820,10 +6820,14 @@ sign-in is **Cancel sign-in**, which sends Ctrl-C; pressed while the
 terminal is still starting, the panel says it is cancelling and sends it as
 soon as the terminal is up, also when the member has left the panel by then. A dropped socket reconnects to the same sign-in
 ("Reconnecting to the sign-in…") instead of ending it. A line under the
-buttons says the member can leave the page and how long the sign-in keeps
-running: "for about <n> more minutes" when this tab opened its terminal,
+buttons says how long the sign-in keeps running if the member leaves the
+page: "for about <n> more minutes" when this tab opened its terminal,
 else "until about 15 minutes after it started"; the server's 15 minutes run
-from the sign-in's container start, a little before its terminal opens. While a sign-in runs, the Claude Code row
+from the sign-in's container start, a little before its terminal opens. It
+says Add login offers **Return to the sign-in** for it, and after a reload
+only once **Start sign-in** is refused because it is still running: the
+page keeps the running sign-in in memory alone, and the server's refusal
+names it again. While a sign-in runs, the Claude Code row
 says "Sign-in for <name> is still running." with **Return to the sign-in**, which reattaches its terminal, and
 Add login leads with the same callout, its primary button and **Close**,
 which leaves the sign-in running, and hides the form until that sign-in ends. The server refuses another add

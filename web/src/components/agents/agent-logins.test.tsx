@@ -620,7 +620,7 @@ describe('add login', () => {
     await user.type(screen.getByRole('textbox', { name: 'Name' }), 'spare')
     await user.click(screen.getByRole('button', { name: 'Start sign-in' }))
     const panel = await screen.findByRole('region', { name: 'Sign in to Claude Code' })
-    expect(panel.textContent).toContain('You can leave this page: the sign-in keeps running until about 15 minutes after it started, and Add login offers Return to the sign-in.')
+    expect(panel.textContent).toContain('If you leave this page, the sign-in keeps running until about 15 minutes after it started, and Add login offers Return to the sign-in for it; after a reload, once Start sign-in is refused because it is still running.')
     await waitFor(() => expect(signInSockets()).toHaveLength(1))
     accept(signInSockets()[0]!)
     expect(onOpened).toHaveBeenCalledWith('lgn-new00000004')

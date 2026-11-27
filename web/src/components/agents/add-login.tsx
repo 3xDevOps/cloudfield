@@ -24,8 +24,9 @@ function LeaveNote({ opened }: { opened?: number }) {
   const minutes = opened === undefined ? undefined : Math.max(1, Math.ceil((opened + signInRunsMs - Date.now()) / 60_000))
   return (
     <>
-      You can leave this page: the sign-in keeps running {minutes === undefined ? 'until about 15 minutes after it started' : `for about ${minutes} more minute${minutes === 1 ? '' : 's'}`}, and{' '}
-      <strong className="font-medium">Add login</strong> offers <strong className="font-medium">Return to the sign-in</strong>.
+      If you leave this page, the sign-in keeps running {minutes === undefined ? 'until about 15 minutes after it started' : `for about ${minutes} more minute${minutes === 1 ? '' : 's'}`}, and{' '}
+      <strong className="font-medium">Add login</strong> offers <strong className="font-medium">Return to the sign-in</strong> for it; after a reload, once{' '}
+      <strong className="font-medium">Start sign-in</strong> is refused because it is still running.
     </>
   )
 }
