@@ -149,9 +149,9 @@ address:
 
 ```
 Connected:
-  con-7k2m9q4xbd  Claude (claude.ai)  scopes read  added 2026-11-26  never used  universal URL
+  con-7k2m9q4xbd  Claude (claude.ai)  scopes read  added 2026-11-26  never used  at https://relay-old.example.com/mcp
     retiring on 2027-03-01: add it again at https://relay-new.example.com/mcp, check it works, remove the old one in the app, then: aether mcp revoke con-7k2m9q4xbd
-  con-3h8n2w5rcd  ChatGPT (chatgpt.com)  scopes read  added 2026-11-26  never used  at https://relay-old.example.com/mcp
+  con-3h8n2w5rcd  ChatGPT (chatgpt.com)  scopes read  added 2026-11-26  never used  at https://relay-older.example.com/mcp
     retired: add it again at https://relay-new.example.com/mcp if you still use it, remove the old one in the app, then: aether mcp revoke con-3h8n2w5rcd
 ```
 
@@ -166,9 +166,10 @@ retiring on 2027-03-01**, one at a retired address **This address is
 retired**, each with the new URL to copy when one is named, or else the
 same advice as `cloudfield mcp`. Such a row has no **Reconnect** or
 **Move**, and Settings does not revoke it: once the connector works at the
-new URL, select **Revoke** on the old one. A move or reconnect started before the notice
-stops without revoking anything once the old connector or its replacement
-is at such an address. To give such a connector another scope, such as one
+new URL, select **Revoke** on the old one. Starting a move or reconnect is refused when
+the connector, or one added meanwhile that would replace it, is at such an
+address, and one started before the notice stops without revoking
+anything once the old connector or its replacement is. To give such a connector another scope, such as one
 a refusal names, add it again at the new URL and check the box on its
 consent page.
 
@@ -191,9 +192,10 @@ next tool result carries the notice again. After finding no notice for an
 address, the consent page and tool results do not read the edge's notices
 for it again for a minute, so a new notice can show up to a minute late; a
 notice that exists, and any URL it names, is read again on every consent
-page and on every tool result of a connector that has not had the note
-that day. One that has does not read the notices for its tool results
-until the day is up.
+page. For tool results, a connector that got its note does not read the
+notices again that day, and one whose notice gives it no note reads them
+at most once a minute, so a URL added to the notice, or GitHub linked
+later, can show up to a minute late.
 
 To move a connector:
 
