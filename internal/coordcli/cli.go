@@ -261,10 +261,10 @@ specific question shown as the Needs you reason at turn end. End your turn
 after it; the reply arrives as your next prompt. Refused for Background sessions.
 Waiting is nonterminal and takes no --evidence-ref: ` + coordhooks.WaitingUse + `
 The summary is what you wait on, and your next turn clears it. Only Enhanced
-sessions, managed Claude Code launches and native pi/omp/OpenCode integrations are
-resumed by mail while idle; elsewhere, in Background sessions and while status
-shows protected, never report waiting: wait inside your turn with
-inbox --wait 30 instead.
+sessions, managed Claude Code launches, Standard Codex on its app-server and
+native pi/omp/OpenCode integrations are resumed by mail while idle; elsewhere,
+in Background sessions and while status shows protected, never report
+waiting: wait inside your turn with inbox --wait 30 instead.
 --until, only with waiting and at most 4 times, names a condition Cloudfield
 watches for you: pr:<owner>/<repo>#<n>:merged,
 pr:<owner>/<repo>#<n>:checks[@<head-sha>] (name the commit you pushed) or
