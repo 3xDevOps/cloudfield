@@ -189,6 +189,15 @@ freed all but one page in each 2 MiB went from 421 MiB on the host back to
 `page_reporting_order=9` the huge pages stay whole, but the host then held
 twice as much of the same guest.
 
+A guest that booted on huge pages can hold more of the host later. After 14
+minutes of filling, building and freeing memory, two such guests held 1257
+and 1295 MiB against 1012 and 1060 MiB for two on 4 KiB pages, and their
+first saves wrote 1340 and 1391 MiB against 1072 and 1102 MiB. They had
+swapped out almost none of an idle 600 MiB tmpfs file, where the guests on
+4 KiB pages swapped out about 250 MiB of it; why is not known. Once woken,
+on 4 KiB pages, they saved no more than the others (983 and 986 MiB against
+1057 and 1084 MiB).
+
 The trim frees no program memory, so the helper also turns on the kernel's
 DAMON_RECLAIM at boot: it pages out memory left untouched for `min_age`, 60
 seconds, while pages in use stay. It samples memory by region, so a cold
