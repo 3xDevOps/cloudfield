@@ -12,8 +12,22 @@ export const laneEdgeKinds: LaneEdgeKind[] = ['message', 'overlap']
 /** The event types Lanes reads: state changes for the bars and agent mail for the edges. */
 export const laneEventTypes = ['run.status', 'coord.message', 'coord.message.acked']
 
-/** Events held per workspace. A busy workspace's 7d window can hold far more; past this the bars say history is not loaded. */
+/** Events held per workspace at least. A busy workspace's window can hold far more; past the budget the bars say history is not loaded. */
 export const historyBudget = 5000
+/** What **Load more** adds to the budget. */
+export const historyStep = 10_000
+
+const hour = 3_600_000
+
+/**
+ * The budget a window of `span` ms starts with. Held events cost the browser
+ * about 0.3 KB of heap each and one re-derive of the view per 1,000-event
+ * page, so 25,000 is about 8 MB a workspace.
+ */
+export function historyBudgetFor(span: number): number {
+  if (span <= 6 * hour) return historyBudget
+  return span <= 24 * hour ? 10_000 : 25_000
+}
 
 const arrivalsKept = 64
 
@@ -37,6 +51,8 @@ export interface LanesSlice {
   laneArrivals: string[]
   /** Live events are kept only while a Lanes view is mounted. */
   laneViews: number
+  /** Events held per workspace now: the widest window's budget so far, plus what Load more added. */
+  laneBudget: number
   /** Null follows the default: 1h while anything works, else 6h. */
   laneWindow: LaneWindow | null
   laneGroup: LaneGroup
@@ -44,6 +60,8 @@ export interface LanesSlice {
   /** The phone's Sessions tab shows lanes instead of the list. */
   sessionsLanes: boolean
   holdLanes: () => () => void
+  /** Raises the budget to `budget`; it never falls while a view holds history. */
+  raiseLaneBudget: (budget: number) => void
   appendLaneEvent: (event: Event) => void
   setLaneHistory: (workspaceID: string, patch: Partial<LaneHistory>, older?: Event[]) => void
   setLaneWindow: (window: LaneWindow | null) => void
@@ -72,6 +90,7 @@ export const createLanesSlice: SliceCreator<LanesSlice> = (set, get) => ({
   laneHistory: {},
   laneArrivals: [],
   laneViews: 0,
+  laneBudget: historyBudget,
   laneWindow: null,
   laneGroup: 'status',
   laneHidden: [],
@@ -79,8 +98,9 @@ export const createLanesSlice: SliceCreator<LanesSlice> = (set, get) => ({
   // The last view to leave drops the history: nothing appends to it unheld.
   holdLanes: () => {
     set((s) => ({ laneViews: s.laneViews + 1 }))
-    return () => set((s) => (s.laneViews === 1 ? { laneViews: 0, laneHistory: {}, laneArrivals: [] } : { laneViews: s.laneViews - 1 }))
+    return () => set((s) => (s.laneViews === 1 ? { laneViews: 0, laneHistory: {}, laneArrivals: [], laneBudget: historyBudget } : { laneViews: s.laneViews - 1 }))
   },
+  raiseLaneBudget: (budget) => set((s) => (budget > s.laneBudget ? { laneBudget: budget } : s)),
   appendLaneEvent: (event) => {
     const s = get()
     if (s.laneViews === 0 || !laneEventTypes.includes(event.type) || isReread(event)) return
@@ -88,7 +108,7 @@ export const createLanesSlice: SliceCreator<LanesSlice> = (set, get) => ({
     if (!history) return
     if (history.events.some((e) => e.seq === event.seq)) return
     const events = merged(history.events, [event])
-    const drop = events.length - historyBudget
+    const drop = events.length - s.laneBudget
     // Dropping the oldest moves the boundary up to the oldest kept, so bars before it read History not loaded.
     const next = drop > 0 ? { events: events.slice(drop), floor: Date.parse(events[drop].time), olderSeq: events[drop].seq } : { events }
     const id = event.type === 'coord.message' ? (event.payload as { message_id?: string }).message_id : undefined

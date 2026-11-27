@@ -1,6 +1,6 @@
 import type { Event } from '@/lib/types'
 import { createRootStore } from '@/store'
-import { historyBudget } from '@/store/lanes'
+import { historyBudget, historyBudgetFor } from '@/store/lanes'
 
 const event = (seq: number, type = 'run.status', workspace = 'wsp_1'): Event => ({
   id: `e${seq}`, seq, time: '2026-08-14T10:00:00Z', workspace_id: workspace, run_id: 'run_1', actor_id: '', type, payload: {},
@@ -19,6 +19,18 @@ describe('lane history', () => {
     expect(store.getState().laneHistory.wsp_2).toBeUndefined()
     release()
     expect(store.getState().laneHistory).toEqual({})
+  })
+
+  it('sizes the budget by the window, raises it on request and forgets the raise with the last view', () => {
+    const hour = 3_600_000
+    expect([1, 6, 24, 168].map((hours) => historyBudgetFor(hours * hour))).toEqual([5000, 5000, 10_000, 25_000])
+    const store = createRootStore()
+    const release = store.getState().holdLanes()
+    store.getState().raiseLaneBudget(25_000)
+    store.getState().raiseLaneBudget(10_000)
+    expect(store.getState().laneBudget).toBe(25_000)
+    release()
+    expect(store.getState().laneBudget).toBe(historyBudget)
   })
 
   it('keeps the newest events up to the budget and moves the history floor to the oldest kept', () => {

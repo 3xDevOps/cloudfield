@@ -989,6 +989,27 @@ describe('lanes view', () => {
     expect(history.events[0].seq).toBe(501)
   })
 
+  it('offers Load more beside a capped history and reads on from where it stopped', async () => {
+    seed([working])
+    const start = Date.now() - 30 * 60_000
+    const mail = (seq: number): Event => ({
+      id: `evt_${seq}`, seq, time: new Date(start + seq).toISOString(), workspace_id: workspace.id,
+      run_id: working.id, actor_id: '', type: 'coord.message', payload: {},
+    })
+    const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => mail(from + i))
+    vi.mocked(api.workspaceTimeline)
+      .mockResolvedValueOnce({ events: range(1001, historyBudget + 1000), next_seq: 0, more: true, older_seq: 1001 })
+      .mockResolvedValueOnce({ events: range(1, 1000), next_seq: 0, more: false })
+    await openLanes()
+    expect(await screen.findByText('Older history not loaded')).toBeDefined()
+    expect(api.workspaceTimeline).toHaveBeenCalledTimes(1)
+    await userEvent.click(screen.getByRole('button', { name: 'Load more' }))
+    await waitFor(() => expect(useStore.getState().laneHistory[workspace.id]).toMatchObject({ floor: -Infinity, capped: false, loading: false }))
+    expect(vi.mocked(api.workspaceTimeline).mock.calls[1][0]).toMatchObject({ before_seq: 1001 })
+    expect(useStore.getState().laneHistory[workspace.id].events).toHaveLength(historyBudget + 1000)
+    expect(screen.queryByText('Older history not loaded')).toBeNull()
+  })
+
   it('keeps none of a page that live events left no room for', async () => {
     seed([working])
     const start = Date.now() - 30 * 60_000

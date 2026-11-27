@@ -27,7 +27,7 @@ import { useLaneAgents, useLaneHistory } from '@/routes/board/lanes/use-lane-dat
 import { useMapRuns, type BoardCard } from '@/routes/board/selectors'
 import { useStore } from '@/store'
 import { useStateContext } from '@/store/hooks'
-import { laneEdgeKinds, laneWindows, type LaneEdgeKind, type LaneWindow } from '@/store/lanes'
+import { historyBudgetFor, laneEdgeKinds, laneWindows, type LaneEdgeKind, type LaneWindow } from '@/store/lanes'
 
 const phone = '(max-width: 767px)'
 const minute = 60_000
@@ -131,7 +131,7 @@ export function BoardLanes({ agentNames }: { agentNames: Record<string, string> 
   }, [following, now, end, span])
 
   const workspaces = useMemo(() => [...new Set(visible.map((card) => card.run.workspace_id))].sort(), [visible])
-  const history = useLaneHistory(workspaces, Math.floor(timeWindow.start / minute) * minute)
+  const history = useLaneHistory(workspaces, Math.floor(timeWindow.start / minute) * minute, historyBudgetFor(span))
   const { agents, toggle: toggleAgents, retry: retryAgents } = useLaneAgents()
   const [open, setOpen] = useState<ReadonlyMap<string, boolean>>(() => new Map())
 
@@ -346,7 +346,12 @@ export function BoardLanes({ agentNames }: { agentNames: Record<string, string> 
         )}
         {!following && <Button variant="secondary" size="sm" onClick={() => setEnd(null)}>Now</Button>}
         {history.loading && <span role="status" className="text-ui-sm text-muted">Loading history…</span>}
-        {!history.loading && history.capped && <span className="text-ui-sm text-muted">Older history not loaded</span>}
+        {!history.loading && history.capped && (
+          <>
+            <span className="text-ui-sm text-muted">Older history not loaded</span>
+            <Button variant="secondary" size="sm" onClick={history.more}>Load more</Button>
+          </>
+        )}
       </header>
       {history.error && (
         <div className="shrink-0 px-4 pt-3">
