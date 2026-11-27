@@ -159,22 +159,47 @@ func signInSteps(agent string, profile harness.Profile) string {
 // agent in without the account's login: Claude Code's in every mode, Codex's
 // CODEX_API_KEY in Background runs only (docs/harnesses.md).
 func (s *Scheduler) environmentSignsIn(ctx context.Context, workspace domain.WorkspaceID, agent string, profile harness.Profile, mode domain.LaunchMode) (bool, error) {
-	if signInKeys(agent, mode) == nil {
+	var keys []string
+	switch {
+	case agent == "claude":
+		keys = []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"}
+	case agent == "codex" && mode == domain.LaunchHeadless:
+		keys = []string{"CODEX_API_KEY"}
+	default:
 		return false, nil
 	}
-	ws, err := s.cfg.Store.GetWorkspace(ctx, workspace)
-	if err != nil {
-		return false, fmt.Errorf("read workspace environment: %w", err)
-	}
-	ws, secrets, err := s.workspaceEnvironment(ctx, ws)
+	env, err := s.workspaceVariables(ctx, workspace, profile)
 	if err != nil {
 		return false, err
 	}
-	env, err := explicitEnvironment(profile, ws, secrets)
+	return slices.ContainsFunc(keys, func(key string) bool { return env[key] != "" }), nil
+}
+
+// environmentPays reports whether a variable the workspace sets signs agent
+// in, as the agent reads it, whatever added login a session mounts.
+func (s *Scheduler) environmentPays(ctx context.Context, workspace domain.WorkspaceID, agent string, profile harness.Profile, mode domain.LaunchMode) (bool, error) {
+	if signInKeys(agent, mode) == nil {
+		return false, nil
+	}
+	env, err := s.workspaceVariables(ctx, workspace, profile)
 	if err != nil {
 		return false, err
 	}
 	return signsIn(env, agent, mode), nil
+}
+
+// workspaceVariables are the variables a session of profile in workspace
+// gets from the workspace and the server.
+func (s *Scheduler) workspaceVariables(ctx context.Context, workspace domain.WorkspaceID, profile harness.Profile) (map[string]string, error) {
+	ws, err := s.cfg.Store.GetWorkspace(ctx, workspace)
+	if err != nil {
+		return nil, fmt.Errorf("read workspace environment: %w", err)
+	}
+	ws, secrets, err := s.workspaceEnvironment(ctx, ws)
+	if err != nil {
+		return nil, err
+	}
+	return explicitEnvironment(profile, ws, secrets)
 }
 
 // signInKeys are the variables that sign agent in, in mode, whatever its

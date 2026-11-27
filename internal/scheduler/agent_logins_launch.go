@@ -355,7 +355,7 @@ func (s *Scheduler) EnvironmentSignsIn(ctx context.Context, workspace domain.Wor
 	if !ok || workspace == "" {
 		return false, nil
 	}
-	return s.environmentSignsIn(ctx, workspace, agent, profile, mode)
+	return s.environmentPays(ctx, workspace, agent, profile, mode)
 }
 
 // checkDefaultLoginShared refuses a launch in member's home on another

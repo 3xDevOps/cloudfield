@@ -319,7 +319,7 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 		err = s.checkAddedLogin(ctx, member, domain.Account{Member: account, Login: opts.AccountLogin}, harness, opts.Permission == domain.PermissionIsolated)
 		if err == nil {
 			var byEnv bool
-			if byEnv, err = s.environmentSignsIn(ctx, workspace, harness, profile, mode); err == nil && byEnv {
+			if byEnv, err = s.environmentPays(ctx, workspace, harness, profile, mode); err == nil && byEnv {
 				err = EnvironmentPays(opts.AccountLogin)
 			}
 		}
