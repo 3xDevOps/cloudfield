@@ -315,7 +315,14 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 			return nil, rpcError(cmp.Or(envErr, scheduler.EnvironmentPays(login)))
 		}
 	}
-	measured, err := fallback.Measure(ctx, s.cfg.Store, s.cfg.Services.Usage, member, domain.Account{Member: domain.MemberID(p.AccountMemberID), Login: login}, p.Harness, policy)
+	account := cmp.Or(domain.MemberID(p.AccountMemberID), member)
+	measure := func() (fallback.Measured, error) {
+		if p.Login != "" {
+			return fallback.Measure(ctx, s.cfg.Store, s.cfg.Services.Usage, member, domain.Account{Member: account, Login: login}, p.Harness, policy)
+		}
+		return MeasureUnnamed(ctx, &s.cfg, member, domain.Account{Member: account, Login: login}, p.Harness, policy)
+	}
+	measured, err := measure()
 	if err != nil {
 		return nil, rpcError(err)
 	}
@@ -328,9 +335,18 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 	}
 	// An unnamed start is chosen again under the mutex: the login chosen
 	// before the usage read may have been turned off or removed meanwhile.
+	// Another choice is measured once more, holding the mutex for at most
+	// that read's bound, so Select decides on its own usage.
 	if p.Login == "" {
-		if login, perr = s.launchLogin(ctx, domain.WorkspaceID(p.WorkspaceID), member, domain.MemberID(p.AccountMemberID), p.Harness, p.Login, mode, permission); perr != nil {
+		again, perr := s.launchLogin(ctx, domain.WorkspaceID(p.WorkspaceID), member, domain.MemberID(p.AccountMemberID), p.Harness, p.Login, mode, permission)
+		if perr != nil {
 			return nil, perr
+		}
+		if again != login {
+			login = again
+			if measured, err = measure(); err != nil {
+				return nil, rpcError(err)
+			}
 		}
 	}
 	requested := admission.Account.ID
@@ -339,15 +355,9 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 			return nil, rpcError(err)
 		}
 	}
-	chosen, excluded := fallback.Select(ctx, s.cfg.Store, measured, member, domain.Account{Member: requested, Login: login}, p.Harness, workspaces, policy, func(ctx context.Context, account domain.Account) (bool, error) {
-		if account.Login.Added() {
-			if signsIn, envErr := byEnv(); envErr != nil || signsIn {
-				return false, envErr
-			}
-		}
-		return s.cfg.Runs.FallbackLaunchable(ctx, member, requested, account, p.Harness, mode, permission)
-	})
-	account := chosen.Member
+	chosen, excluded := fallback.Select(ctx, s.cfg.Store, measured, member, domain.Account{Member: requested, Login: login}, p.Harness, workspaces, policy,
+		Launchable(s.cfg.Runs, byEnv, member, requested, p.Harness, mode, permission))
+	account = chosen.Member
 	if excluded != nil {
 		slog.Warn("sshd: fallback accounts left out of a launch", "member", member, "error", excluded)
 	}

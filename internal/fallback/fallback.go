@@ -154,6 +154,29 @@ func Measure(ctx context.Context, st store.Store, usage QuotaReader, launcher do
 	return measured, nil
 }
 
+// MeasureStart is Measure for a launch that named no login and starts on
+// requested. A start billed per use (perUse) has no usage to read: it
+// counts as Unknown, so Select takes the first candidate with usage known to
+// be left, in its order, before it, and stays on it when none is.
+func MeasureStart(ctx context.Context, st store.Store, usage QuotaReader, launcher domain.MemberID, requested domain.Account, harness string, policy domain.AccountFallback, perUse bool) (Measured, error) {
+	if !perUse {
+		return Measure(ctx, st, usage, launcher, requested, harness, policy)
+	}
+	if policy.Disabled || usage == nil {
+		return nil, nil
+	}
+	account, err := ResolveLaunchAccount(ctx, st, launcher, string(requested.Member))
+	if err != nil {
+		return nil, nil
+	}
+	requested.Member = account
+	measured := Measured{requested: Unknown}
+	if err := measureCandidates(ctx, st, usage, launcher, requested, harness, policy, measured, false); err != nil {
+		return nil, err
+	}
+	return measured, nil
+}
+
 // MeasureNext reads the usage Select decides on for a running run whose
 // vendor reported its current login's usage exhausted: current and every
 // login in used count as exhausted, so Select returns current when no other
@@ -237,7 +260,8 @@ type Launchable func(ctx context.Context, account domain.Account) (bool, error)
 // launch on requested and holds the shared authorization mutex until the
 // scheduler's durable launch boundary, so each candidate needs only its
 // account authorization checked here; a login Measure could not read, or
-// launchable refuses, is never chosen. Candidates come in three groups: the
+// launchable refuses, is never chosen. A requested login Measure recorded
+// as Unknown is the first Unknown candidate. Candidates come in three groups: the
 // requested account's other logins in its owner's order; the launcher's own
 // logins when the account is a teammate's and the launcher added logins;
 // and the other accounts, in the policy's order or by most usage left, each
@@ -251,7 +275,8 @@ func Select(ctx context.Context, st store.Store, measured Measured, launcher dom
 	if policy.Disabled {
 		return requested, nil
 	}
-	if used, ok := measured[requested]; !ok || used < ExhaustedPercent {
+	used, ok := measured[requested]
+	if !ok || (used != Unknown && used < ExhaustedPercent) {
 		return requested, nil
 	}
 	candidates, err := candidates(ctx, st, launcher, requested, harness, policy)
@@ -265,6 +290,9 @@ func Select(ctx context.Context, st store.Store, measured Measured, launcher dom
 		bestUsed float64
 		served   = map[domain.MemberID]bool{}
 	)
+	if used == Unknown {
+		unknown = &requested
+	}
 	for _, c := range candidates {
 		if c.account == requested || (c.group == otherAccounts && served[c.account.Member]) {
 			continue

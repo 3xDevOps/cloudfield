@@ -841,7 +841,7 @@ func (s *Scheduler) commitMove(ctx context.Context, entry *supervised, f *UsageF
 	if killed {
 		return 0, errors.New("the session is being killed")
 	}
-	perUse, err := s.loginPerUse(ctx, run.HomeMember(), to, run.Harness)
+	perUse, err := s.LoginPerUse(ctx, run.HomeMember(), to, run.Harness)
 	if err != nil {
 		return 0, err
 	}

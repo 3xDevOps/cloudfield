@@ -108,6 +108,10 @@ func (f *fakeRuns) EnvironmentSignsIn(context.Context, domain.WorkspaceID, strin
 	return false, nil
 }
 
+func (f *fakeRuns) LoginPerUse(context.Context, domain.MemberID, domain.Account, string) (bool, error) {
+	return false, nil
+}
+
 // ChildLogin inherits an added login and starts on the default otherwise.
 func (f *fakeRuns) ChildLogin(_ context.Context, _ domain.WorkspaceID, _, _ domain.MemberID, inherited domain.LoginID, _ string, _ domain.LaunchMode, _ domain.Permission) (domain.LoginID, error) {
 	if inherited.Added() {

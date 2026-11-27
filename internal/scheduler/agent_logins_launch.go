@@ -439,7 +439,7 @@ func (s *Scheduler) ChildLogin(ctx context.Context, workspace domain.WorkspaceID
 	inherits := i >= 0 && logins[i].Automatic && (owner == account || logins[i].Shared)
 	login := domain.Account{Member: account, Login: loginOf(inherited)}
 	if inherits {
-		perUse, perUseErr := s.loginPerUse(ctx, owner, login, harness)
+		perUse, perUseErr := s.LoginPerUse(ctx, owner, login, harness)
 		inherits = perUseErr == nil && !perUse
 	}
 	if byEnv, envErr := s.EnvironmentSignsIn(ctx, workspace, harness, mode); envErr != nil || byEnv {
@@ -453,12 +453,12 @@ func (s *Scheduler) ChildLogin(ctx context.Context, workspace domain.WorkspaceID
 	return s.StartLogin(ctx, workspace, owner, account, harness, mode, permission)
 }
 
-// loginPerUse reports whether login of agent, in a session in home's home,
+// LoginPerUse reports whether login of agent, in a session in home's home,
 // is billed per use: a Console login, or home's own default login kept as
 // an API key or a Console profile once they keep login rows. Another
 // member's default login is shared only as a subscription, and a member
 // who keeps no rows is shown as before logins existed.
-func (s *Scheduler) loginPerUse(ctx context.Context, home domain.MemberID, login domain.Account, agent string) (bool, error) {
+func (s *Scheduler) LoginPerUse(ctx context.Context, home domain.MemberID, login domain.Account, agent string) (bool, error) {
 	var identity memberhome.LoginIdentity
 	var err error
 	switch {

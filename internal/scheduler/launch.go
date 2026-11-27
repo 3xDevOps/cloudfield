@@ -328,7 +328,7 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 	if err != nil {
 		return nil, err
 	}
-	perUse, err := s.loginPerUse(ctx, member, domain.Account{Member: account, Login: opts.AccountLogin}, harness)
+	perUse, err := s.LoginPerUse(ctx, member, domain.Account{Member: account, Login: opts.AccountLogin}, harness)
 	if err != nil {
 		return nil, err
 	}

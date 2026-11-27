@@ -252,3 +252,43 @@ func TestResolveRunRelaunchChecksEveryMemberAndBothSwitches(t *testing.T) {
 		t.Fatalf("Bo, who keeps no login rows, reopening Lena's session on his default: %v; want allowed, as before logins existed", err)
 	}
 }
+
+// A launch that named no login and starts on one billed per use takes the
+// first candidate with readable usage left, in the same order, before it,
+// and stays on it when none is left.
+func TestAStartBilledPerUseIsTakenOnlyWhenNoReadableLoginIsLeft(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		added     []string
+		requested string
+		usage     map[string]float64
+		want      string
+	}{
+		{"the account's next login", []string{"Lena/console", "Lena/work"}, "Lena/console",
+			map[string]float64{"Lena/default": 99, "Lena/work": 40, "Ada/default": 0}, "Lena/work"},
+		{"the launcher's own login before a teammate's", []string{"Ada/console", "Lena/work"}, "Ada/console",
+			map[string]float64{"Ada/default": 97, "Lena/default": 99, "Lena/work": 30, "Bo/default": 0}, "Lena/work"},
+		{"another account", []string{"Lena/console"}, "Lena/console",
+			map[string]float64{"Lena/default": 97, "Ada/default": 60, "Bo/default": 20}, "Bo/default"},
+		{"stays when nothing readable is left", []string{"Lena/console", "Lena/spare"}, "Lena/console",
+			map[string]float64{"Lena/default": 97, "Ada/default": 99, "Bo/default": 99}, "Lena/console"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newLoginWorld(t, tc.added...)
+			ctx := context.Background()
+			reader := usageByLogin{}
+			for name, used := range tc.usage {
+				reader[w.logins[name]] = used
+			}
+			launcher, requested := w.ids["Lena"], w.logins[tc.requested]
+			measured, err := MeasureStart(ctx, w.db, reader, launcher, requested, "claude", domain.AccountFallback{}, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, excluded := Select(ctx, w.db, measured, launcher, requested, "claude", []domain.WorkspaceID{w.ws}, domain.AccountFallback{}, nil)
+			if excluded != nil || w.name(got) != tc.want {
+				t.Fatalf("chose %s, %v; want %s", w.name(got), excluded, tc.want)
+			}
+		})
+	}
+}

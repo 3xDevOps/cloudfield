@@ -85,6 +85,9 @@ type RunController interface {
 	// EnvironmentSignsIn reports whether a workspace variable signs the
 	// agent in, so that no login pays and a launch chooses between none.
 	EnvironmentSignsIn(ctx context.Context, workspace domain.WorkspaceID, harness string, mode domain.LaunchMode) (bool, error)
+	// LoginPerUse reports whether login, in a session in home's home, is
+	// billed per use.
+	LoginPerUse(ctx context.Context, home domain.MemberID, login domain.Account, harness string) (bool, error)
 	FallbackLaunchable(ctx context.Context, member, requested domain.MemberID, account domain.Account, harness string, mode domain.LaunchMode, permission domain.Permission) (bool, error)
 	// LoginProblem is why agent's login in account's home cannot sign it
 	// in for a launch by member, empty when the server knows of none, and

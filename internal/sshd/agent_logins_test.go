@@ -423,6 +423,68 @@ func TestAnUnnamedStartIsChosenAgainUnderTheMutex(t *testing.T) {
 	}
 }
 
+// usageByLogin reads each login's used share of its Claude five-hour
+// window.
+type usageByLogin map[domain.Account]float64
+
+func (u usageByLogin) Read(ctx context.Context, member domain.MemberID, refresh bool) ([]quota.Provider, error) {
+	return u.ReadLogin(ctx, domain.AccountOf(member), refresh)
+}
+
+func (u usageByLogin) ReadLogin(_ context.Context, account domain.Account, _ bool) ([]quota.Provider, error) {
+	resets := time.Now().Add(time.Hour)
+	return []quota.Provider{{Provider: "claude", Status: "ok", Windows: []quota.Window{{ID: "five_hour", UsedPercent: u[account], ResetsAt: &resets}}}}, nil
+}
+
+// When the start chosen again under the mutex differs from the one whose
+// usage was read, it is measured itself: a spent start then falls back to
+// the next login with usage left rather than being kept unmeasured.
+func TestAStartChosenAgainIsMeasuredAgain(t *testing.T) {
+	e := newLoginEnv(t)
+	e.seed(t, e.member.ID, "lgn-work000000", "work", "ada@work.example.test")
+	e.seed(t, e.member.ID, "lgn-spare00000", "spare", "ada@spare.example.test")
+	if err := e.db.SetAgentLoginAutomatic(context.Background(), e.member.ID, "claude", "lgn-work000000", false); err != nil {
+		t.Fatal(err)
+	}
+	installUsageStub(e.testEnv, usageByLogin{
+		{Member: e.member.ID, Login: "lgn-work000000"}: 10, domain.AccountOf(e.member.ID): 100, {Member: e.member.ID, Login: "lgn-spare00000"}: 20,
+	})
+	e.runs.mu.Lock()
+	e.runs.startLogins = []domain.LoginID{"lgn-work000000", ""}
+	e.runs.mu.Unlock()
+	if _, perr := e.call(t, e.member.ID, protocol.MethodRunLaunch, protocol.RunLaunchParams{WorkspaceID: string(e.ws.ID), Task: "t", Harness: "claude"}); perr != nil {
+		t.Fatalf("run.launch: %v", perr)
+	}
+	e.runs.mu.Lock()
+	defer e.runs.mu.Unlock()
+	if n := len(e.runs.launchOptions); n != 1 || e.runs.launchOptions[0].AccountLogin != "lgn-spare00000" {
+		t.Fatalf("launches = %+v; want one on spare, past the spent default chosen under the mutex", e.runs.launchOptions)
+	}
+}
+
+// A launch that names no login and starts on one billed per use takes a
+// login with readable usage left first; one that names the per-use login
+// keeps it.
+func TestAnUnnamedStartBilledPerUseYieldsToReadableUsage(t *testing.T) {
+	e := newLoginEnv(t)
+	e.seed(t, e.member.ID, "lgn-console000", "console", "ada@console.example.test")
+	installUsageStub(e.testEnv, usageByLogin{domain.AccountOf(e.member.ID): 10})
+	e.runs.mu.Lock()
+	e.runs.startLogins = []domain.LoginID{"lgn-console000", "lgn-console000"}
+	e.runs.perUse = map[domain.LoginID]bool{"lgn-console000": true}
+	e.runs.mu.Unlock()
+	for _, named := range []string{"", "lgn-console000"} {
+		if _, perr := e.call(t, e.member.ID, protocol.MethodRunLaunch, protocol.RunLaunchParams{WorkspaceID: string(e.ws.ID), Task: "t", Harness: "claude", Login: named}); perr != nil {
+			t.Fatalf("run.launch naming %q: %v", named, perr)
+		}
+	}
+	e.runs.mu.Lock()
+	defer e.runs.mu.Unlock()
+	if n := len(e.runs.launchOptions); n != 2 || e.runs.launchOptions[0].AccountLogin != "" || e.runs.launchOptions[1].AccountLogin != "lgn-console000" {
+		t.Fatalf("launches = %+v; want the unnamed one on the default login and the named one on console", e.runs.launchOptions)
+	}
+}
+
 // A launch that names an added login where a workspace variable signs the
 // agent in is refused with the reason, never moved to another login.
 func TestANamedLoginAVariableWouldPayForIsRefused(t *testing.T) {
