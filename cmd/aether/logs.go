@@ -409,8 +409,9 @@ func (l *acpLog) follow(c *protocol.Client, w io.Writer, runID string, last int6
 		if err != nil {
 			return err
 		}
-		done := make(chan struct{})
+		done, stopped := make(chan struct{}), make(chan struct{})
 		go func() {
+			defer close(stopped)
 			defer func() { _ = stream.Close() }()
 			for !ended {
 				select {
@@ -448,6 +449,7 @@ func (l *acpLog) follow(c *protocol.Client, w io.Writer, runID string, last int6
 			}
 		}
 		close(done)
+		<-stopped
 		if werr != nil || ended {
 			return werr
 		}
