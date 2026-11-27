@@ -989,7 +989,34 @@ describe('lanes view', () => {
     expect(history.events[0].seq).toBe(501)
   })
 
-  it('offers Load more beside a capped history and reads on from where it stopped', async () => {
+  it('offers Load more beside a capped history, shows the read running, and reads on from where it stopped', async () => {
+    seed([working])
+    const start = Date.now() - 30 * 60_000
+    const mail = (seq: number): Event => ({
+      id: `evt_${seq}`, seq, time: new Date(start + seq).toISOString(), workspace_id: workspace.id,
+      run_id: working.id, actor_id: '', type: 'coord.message', payload: {},
+    })
+    const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => mail(from + i))
+    let older!: (page: TimelinePage) => void
+    vi.mocked(api.workspaceTimeline)
+      .mockResolvedValueOnce({ events: range(1001, historyBudget + 1000), next_seq: 0, more: true, older_seq: 1001 })
+      .mockImplementationOnce(() => new Promise((resolve) => { older = resolve }))
+    await openLanes()
+    expect(await screen.findByText('Older history not loaded')).toBeDefined()
+    expect(api.workspaceTimeline).toHaveBeenCalledTimes(1)
+    await userEvent.click(screen.getByRole('button', { name: 'Load more' }))
+    // While the read runs the control stays, says so, and cannot start a second read.
+    expect((await screen.findByRole('button', { name: 'Loading…' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(screen.getByText('Older history not loaded')).toBeDefined()
+    expect(api.workspaceTimeline).toHaveBeenCalledTimes(2)
+    expect(vi.mocked(api.workspaceTimeline).mock.calls[1][0]).toMatchObject({ before_seq: 1001 })
+    await act(async () => older({ events: range(1, 1000), next_seq: 0, more: false }))
+    await waitFor(() => expect(useStore.getState().laneHistory[workspace.id]).toMatchObject({ floor: -Infinity, capped: false, loading: false }))
+    expect(useStore.getState().laneHistory[workspace.id].events).toHaveLength(historyBudget + 1000)
+    expect(screen.queryByText('Older history not loaded')).toBeNull()
+  })
+
+  it('shows a failed Load more read with the server message and reads on from Retry', async () => {
     seed([working])
     const start = Date.now() - 30 * 60_000
     const mail = (seq: number): Event => ({
@@ -999,15 +1026,16 @@ describe('lanes view', () => {
     const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => mail(from + i))
     vi.mocked(api.workspaceTimeline)
       .mockResolvedValueOnce({ events: range(1001, historyBudget + 1000), next_seq: 0, more: true, older_seq: 1001 })
+      .mockRejectedValueOnce(new ApiError(503, 'server did not answer workspace.timeline within 1m0s'))
       .mockResolvedValueOnce({ events: range(1, 1000), next_seq: 0, more: false })
     await openLanes()
-    expect(await screen.findByText('Older history not loaded')).toBeDefined()
-    expect(api.workspaceTimeline).toHaveBeenCalledTimes(1)
-    await userEvent.click(screen.getByRole('button', { name: 'Load more' }))
-    await waitFor(() => expect(useStore.getState().laneHistory[workspace.id]).toMatchObject({ floor: -Infinity, capped: false, loading: false }))
-    expect(vi.mocked(api.workspaceTimeline).mock.calls[1][0]).toMatchObject({ before_seq: 1001 })
+    await userEvent.click(await screen.findByRole('button', { name: 'Load more' }))
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('server did not answer workspace.timeline within 1m0s')
+    await userEvent.click(within(alert).getByRole('button', { name: 'Retry' }))
+    await waitFor(() => expect(useStore.getState().laneHistory[workspace.id]).toMatchObject({ floor: -Infinity, error: null }))
+    expect(vi.mocked(api.workspaceTimeline).mock.calls[2][0]).toMatchObject({ before_seq: 1001 })
     expect(useStore.getState().laneHistory[workspace.id].events).toHaveLength(historyBudget + 1000)
-    expect(screen.queryByText('Older history not loaded')).toBeNull()
   })
 
   it('keeps none of a page that live events left no room for', async () => {
