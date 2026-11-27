@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -68,11 +69,15 @@ func Serve(socket, user string, argv []string) int {
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL, Credential: cred}
 	var unprotected error
-	// A prefix the session already sets stays the agent's.
-	if name := os.Getenv(CommandPrefixEnv); name != "" && os.Getenv(name) == "" {
-		var prefix string
-		if prefix, unprotected = protectAgent(); unprotected == nil {
-			cmd.Env = append(os.Environ(), name+"="+prefix)
+	if name := os.Getenv(CommandPrefixEnv); name != "" {
+		// The agent's commands must not take it for a request to them.
+		cmd.Env = slices.DeleteFunc(os.Environ(), func(kv string) bool { return strings.HasPrefix(kv, CommandPrefixEnv+"=") })
+		// A prefix the session already sets stays the agent's.
+		if os.Getenv(name) == "" {
+			var prefix string
+			if prefix, unprotected = protectAgent(); unprotected == nil {
+				cmd.Env = append(cmd.Env, name+"="+prefix)
+			}
 		}
 	}
 	stdin, err := cmd.StdinPipe()

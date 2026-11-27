@@ -188,15 +188,15 @@ func kvmTurn(t *testing.T, e *testEnv, run domain.RunID, n int, prompt string) (
 func TestKVMEnhancedAgentOutlivesCommandsThatFillTheSessionsMemory(t *testing.T) {
 	e, run, cid := kvmEnhancedSession(t)
 	sess := e.sched.acp.session(run.ID)
-	// A command holds its memory in one process for 20 seconds without
-	// forking, so a kill takes that memory and the command prints nothing.
+	// A command holds its memory in its shell for 20 seconds, then prints
+	// a line of its own; bash reports a killed one on a longer line.
 	const fill = `exec bash -c 'mkfifo /tmp/hold; exec 3<>/tmp/hold; for i in $(seq 48); do (x=$(head -c 30000000 /dev/zero | tr "\0" x); read -t 20 -u 3 _; echo held) & done; wait'`
 	said, ended := kvmTurn(t, e, run.ID, 2, acpmock.PromptRun+fill)
 	events, _, err := e.cfg.Runtime.(runtime.MemoryEventsRuntime).MemoryEvents(t.Context(), cid)
 	if err != nil {
 		t.Fatal(err)
 	}
-	held := strings.Count(said, "held")
+	held := strings.Count("\n"+said, "\nheld\n")
 	t.Logf("48 commands filled the session's %d MiB: the kernel killed %d processes, %d commands lived, the agent's turn ended: %t", kvmSessionMemory>>20, events.OOMKills, held, ended)
 	if !ended || e.sched.acp.session(run.ID) != sess {
 		t.Fatalf("the kernel killed the agent, the largest process at %d MiB, not one of its commands", kvmAgentMiB)
