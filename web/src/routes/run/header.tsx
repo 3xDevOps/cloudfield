@@ -15,7 +15,7 @@ import { TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Tooltip } from '@/components/ui/tooltip'
 import { StatusDot } from '@/components/ui/status-dot'
 import { useIsMobile } from '@/lib/breakpoints'
-import { useRunAccountOwner, useRunAccountWords, useRunPayer } from '@/lib/run-account'
+import { runLoginName, useRunAccountOwner, useRunAccountWords, useRunPayer } from '@/lib/run-account'
 import { extraRepoCount, repoLabel } from '@/lib/repos'
 import { isSudo } from '@/lib/run-requests'
 import type { AgentInfo } from '@/lib/types'
@@ -150,9 +150,11 @@ function StateLine({ run, agentName, narrow, compact, controls, chip }: { run: R
     .join(' · ')
   const account = useRunAccountWords(run)
   const payer = useRunPayer(run)
-  const teammate = useRunAccountOwner(run) !== null
+  const owner = useRunAccountOwner(run)
   // Whose account pays stays in sight at every width: the parts that wrap out of sight go first.
-  const pinned = account !== null && (payer !== null || teammate)
+  const pinned = account !== null && (payer !== null || owner !== null)
+  const login = runLoginName(run)
+  const shortAccount = compact && owner !== null && login ? `${owner}'s login ${login}` : account
   const mode = modeLabel[run.mode] ?? run.mode
   const watch = useStore((s) => runWatch(s, run.id))
   const navigate = useStore((s) => s.navigate)
@@ -222,7 +224,7 @@ function StateLine({ run, agentName, narrow, compact, controls, chip }: { run: R
         )}
       </div>
       {pinned && !(compact && payer) && (
-        <span className="min-w-0 truncate text-ui-sm text-muted" title={account}>{account}</span>
+        <span className="min-w-0 truncate text-ui-sm text-muted" title={account}>{shortAccount}</span>
       )}
       {/* What the session costs stays when every other part has gone. */}
       {payer && <PerUseBadge className="shrink-0" payer={compact ? payer.payer : undefined} title={payer.title} />}

@@ -3372,7 +3372,8 @@ protected session. The row holds, from the left:
 - Whose account pays, kept out of those parts so that it stays at every
   width: the account line of a session on another member's account, or on
   a login billed per use, truncating only when nothing else is left, with
-  the full line as its tooltip. A session on a login billed per use
+  the full line as its tooltip; below 800px of row width a teammate's
+  reads "`<name>`'s login `<login>`". A session on a login billed per use
   (`account_login_per_use`) has a **Billed per use** badge, led by a coins
   icon (`PerUseBadge`, the same on every surface), whose tooltip and
   accessible name say "Billed per use to Ada's account, login console".

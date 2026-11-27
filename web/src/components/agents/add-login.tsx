@@ -39,7 +39,7 @@ function AddedSwitches({ login, sharedWith, client, onChanged }: {
 }) {
   const { pending, error, act } = useLoginControls(onChanged)
   return (
-    <div className="flex flex-col">
+    <div className="flex flex-col gap-2 pt-1">
       <SwitchRow
         label="Automatic"
         detail="Your automatic sessions can move here when the logins above it run out."

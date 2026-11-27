@@ -154,7 +154,8 @@ describe('run frame', () => {
       return this.dataset.slot === 'pane-header' ? DOMRect.fromRect({ width: 420, height: 32 }) : measure.call(this)
     })
     open({ account_member_id: bob.id, account_login: 'lgn-work0000001', account_login_name: 'work' })
-    expect(await within(screen.getByRole('banner')).findByText("On Bob's account, login work")).toBeDefined()
+    const line = await within(screen.getByRole('banner')).findByText("Bob's login work")
+    expect(line.title).toBe("On Bob's account, login work")
     expect(screen.getByRole('banner').textContent).not.toContain('Standard')
   })
 
