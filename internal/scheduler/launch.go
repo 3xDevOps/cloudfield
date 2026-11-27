@@ -319,7 +319,7 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 		if err == nil {
 			var byEnv bool
 			if byEnv, err = s.environmentSignsIn(ctx, workspace, harness, profile, mode); err == nil && byEnv {
-				err = fmt.Errorf("scheduler: a workspace variable signs %s in here, so login %s would not pay; launch on the default login", harness, opts.AccountLogin)
+				err = EnvironmentPays(opts.AccountLogin)
 			}
 		}
 	} else if err = s.checkDefaultLoginShared(ctx, member, account, harness); err == nil {

@@ -15,6 +15,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/memberhome"
 	"github.com/3xDevOps/cloudfield/internal/permissions"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
+	"github.com/3xDevOps/cloudfield/internal/secretstore"
 )
 
 type loginShareEnv struct {
@@ -477,5 +478,37 @@ func TestALoginTurnedOffAfterAdmissionDoesNotStart(t *testing.T) {
 	}
 	if n := e.containerCount(); n != 0 {
 		t.Fatalf("%d containers after the refused launch; want none", n)
+	}
+}
+
+// A session on an added login sets the variables that would sign Claude
+// Code in empty, so an image's ENV cannot fill them, and its plan refuses
+// the login when a workspace variable added after admission would pay.
+func TestAnAddedLoginSessionLeavesNoVariableToPay(t *testing.T) {
+	e := newLoginShareEnv(t)
+	e.sched.cfg.Secrets = secretstore.New(t.TempDir())
+	ctx := t.Context()
+	work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+	run, err := e.launchOn(t, work, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the session's container", func() bool { return e.rt.byName(string(run.ID)) != nil })
+	spec := e.rt.byName(string(run.ID)).spec
+	for _, key := range []string{"ANTHROPIC_API_KEY", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN"} {
+		if v, ok := spec.Env[key]; !ok || v != "" {
+			t.Errorf("%s = %q, set %v; want set empty", key, v, ok)
+		}
+	}
+	_, err = e.sched.LaunchWithOptions(ctx, e.ws.ID, e.member.ID, e.member.ID, "t", "claude", domain.LaunchTUI, domain.LaunchOptions{
+		AccountLogin: work.Login,
+		Created: func(domain.RunID) {
+			if setErr := e.db.SetWorkspaceEnvironment(ctx, e.ws.ID, domain.WorkspaceEnvironment{Variables: map[string]string{"ANTHROPIC_API_KEY": "test-not-a-key"}}); setErr != nil {
+				t.Error(setErr)
+			}
+		},
+	})
+	if !errors.Is(err, ErrEnvironmentPays) && (err == nil || !strings.Contains(err.Error(), "would not pay")) {
+		t.Fatalf("a launch on work once a workspace key was added: %v; want refused", err)
 	}
 }

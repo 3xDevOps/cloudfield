@@ -158,13 +158,7 @@ func signInSteps(agent string, profile harness.Profile) string {
 // agent in without the account's login: Claude Code's in every mode, Codex's
 // CODEX_API_KEY in Background runs only (docs/harnesses.md).
 func (s *Scheduler) environmentSignsIn(ctx context.Context, workspace domain.WorkspaceID, agent string, profile harness.Profile, mode domain.LaunchMode) (bool, error) {
-	var keys []string
-	switch {
-	case agent == "claude":
-		keys = []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"}
-	case agent == "codex" && mode == domain.LaunchHeadless:
-		keys = []string{"CODEX_API_KEY"}
-	default:
+	if signInKeys(agent, mode) == nil {
 		return false, nil
 	}
 	ws, err := s.cfg.Store.GetWorkspace(ctx, workspace)
@@ -179,7 +173,33 @@ func (s *Scheduler) environmentSignsIn(ctx context.Context, workspace domain.Wor
 	if err != nil {
 		return false, err
 	}
-	return slices.ContainsFunc(keys, func(key string) bool { return env[key] != "" }), nil
+	return signsIn(env, agent, mode), nil
+}
+
+// signInKeys are the variables that sign agent in, in mode, whatever its
+// login.
+func signInKeys(agent string, mode domain.LaunchMode) []string {
+	switch {
+	case agent == "claude":
+		return []string{"ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_USE_BEDROCK", "CLAUDE_CODE_USE_VERTEX"}
+	case agent == "codex" && mode == domain.LaunchHeadless:
+		return []string{"CODEX_API_KEY"}
+	}
+	return nil
+}
+
+// signsIn reports whether env signs agent in, in mode, whatever its login.
+func signsIn(env map[string]string, agent string, mode domain.LaunchMode) bool {
+	return slices.ContainsFunc(signInKeys(agent, mode), func(key string) bool { return env[key] != "" })
+}
+
+// ErrEnvironmentPays refuses an added login where a variable signs the agent
+// in: that variable would pay, not the login.
+var ErrEnvironmentPays = errors.New("a workspace or server variable signs the agent in here")
+
+// EnvironmentPays is why a session in such a workspace cannot run on login.
+func EnvironmentPays(login domain.LoginID) error {
+	return fmt.Errorf("scheduler: %w, so login %s would not pay; launch on the default login", ErrEnvironmentPays, login)
 }
 
 // checkLogin refuses a launch of agent on account whose login cannot sign it

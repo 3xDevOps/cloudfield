@@ -64,6 +64,17 @@ func (s *Scheduler) addedLoginMounts(run *domain.Run, launcher domain.MemberID, 
 		default:
 			return nil, fmt.Errorf("scheduler: login %s no longer holds the %s sign-in it was added with; its owner removes it and adds it again", run.AccountLogin, recorded.Kind)
 		}
+		// Checked again on the variables this plan sets: one added after the
+		// launch was admitted would pay instead of the login.
+		if signsIn(env, profile.Name, run.Mode) {
+			return nil, EnvironmentPays(run.AccountLogin)
+		}
+		// Empty, not absent: an image's own ENV would fill an absent one.
+		for _, key := range append(slices.Clone(profile.EnvPassthrough), signInKeys(profile.Name, run.Mode)...) {
+			if _, set := env[key]; !set {
+				env[key] = ""
+			}
+		}
 		console = shape.Kind == memberhome.LoginConsole
 		if isolated && console {
 			return nil, errors.New("scheduler: an Isolated session cannot use a Console login: it is a whole directory the session could change for later sessions; launch it at Default, or on another login")

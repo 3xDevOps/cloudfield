@@ -179,6 +179,13 @@ func runRealClaude(t *testing.T, claude string, plan *EnvironmentPlan, laid []ru
 			env = append(env, key+"="+remap(v))
 		}
 	}
+	// The variables the plan sets empty, so an image's ENV cannot fill
+	// them; the stand-in's address stays.
+	for key, v := range plan.Env {
+		if v == "" && key != "ANTHROPIC_BASE_URL" {
+			env = append(env, key+"=")
+		}
+	}
 	args := []string{"-rm", "sh", "-c", mountScript, "sh"}
 	for _, m := range laid {
 		mode := "rw"
