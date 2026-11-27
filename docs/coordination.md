@@ -1530,8 +1530,8 @@ What a report does depends on the session:
   state. While a needs-input or blocked report still waits on a member it
   is refused with `CodeInvalidParams` (`your needs-input or blocked report
   is still open and stays shown; end your turn without another report`). After
-  a success or failure report in the same turn it is accepted and changes
-  nothing: the session keeps the reported outcome. Like waiting it is nonterminal,
+  a success or failure report in the same turn it is accepted and does not
+  replace it: the session keeps the reported outcome. Like waiting it is nonterminal,
   takes no `--evidence-ref` or `--for`, belongs to the turn that reported
   it, is refused with the same errors for a session that already finished or is
   ending and for a superseded key, and the next turn clears it. A

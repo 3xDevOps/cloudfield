@@ -34,6 +34,12 @@ func TestAnsweredDoesNotReplaceTheTurnsOutcome(t *testing.T) {
 					}
 				}
 			}},
+		{name: "in a later turn that began before the outcome showed", outcome: domain.RunCompleted, turn: true, want: answeredReasonPrefix + "said so",
+			between: func(t *testing.T, e *testEnv, run domain.RunID) {
+				if err := e.sched.ReportAgentState(t.Context(), run, agentstatus.Report{State: agentstatus.Working, TurnStart: true}); err != nil {
+					t.Fatal(err)
+				}
+			}},
 		{name: "after a waiting report", outcome: domain.RunCompleted, turn: true, want: answeredReasonPrefix + "said so",
 			between: func(t *testing.T, e *testEnv, run domain.RunID) {
 				if err := e.sched.ReportWaiting(t.Context(), run, "waiting-1", "", "on CI", time.Now()); err != nil {
