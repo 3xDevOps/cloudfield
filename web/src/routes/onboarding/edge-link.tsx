@@ -61,12 +61,18 @@ function edgeOrigin(edge: string): string {
 }
 
 /** edge.status with each edge's retiring notice, for the screen that shows
- * them: asked while active, and again when the window gets focus. The
- * latest request wins; a failed one keeps the last answer. */
-function useEdgeNotices(client: Api, active: boolean): EdgeStatus | null {
+ * them. It is asked while that screen is visible on a sign-in, on becoming
+ * so and again when the window gets focus; the latest request wins, a failed
+ * one keeps the last answer, and hiding the screen drops the requests in
+ * flight. The last answer lasts as long as the sign-in. */
+function useEdgeNotices(client: Api, signedIn: boolean, visible: boolean): EdgeStatus | null {
   const [status, setStatus] = useState<EdgeStatus | null>(null)
   useEffect(() => {
-    if (!active) return
+    if (!signedIn) return
+    return () => setStatus(null)
+  }, [signedIn])
+  useEffect(() => {
+    if (!signedIn || !visible) return
     let latest = 0
     let live = true
     const ask = () => {
@@ -81,12 +87,11 @@ function useEdgeNotices(client: Api, active: boolean): EdgeStatus | null {
     ask()
     window.addEventListener('focus', ask)
     return () => {
-      setStatus(null)
       live = false
       window.removeEventListener('focus', ask)
     }
-  }, [client, active])
-  return active ? status : null
+  }, [client, signedIn, visible])
+  return signedIn ? status : null
 }
 
 /** The gateway's edge sign-in as edge.status reports it, started here and
@@ -294,7 +299,7 @@ export function EdgeSignIn({
   const claimEdge = handed === undefined ? undefined : edgeOrigin(handed)
   const signIn = useEdgeSignIn(client, claimEdge)
   const { phase, setPhase } = signIn
-  const notices = useEdgeNotices(client, visible && phase.name === 'signed-in')
+  const notices = useEdgeNotices(client, phase.name === 'signed-in', visible)
   // Each notices answer also says which edges are signed in now: the choice
   // follows it, keeps the chosen edge while it is there, and falls back as
   // on entering when it is not. The replacement a notice names is never

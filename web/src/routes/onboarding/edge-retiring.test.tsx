@@ -172,6 +172,30 @@ describe('a signed-in edge that says its address is retiring', () => {
     ])
   })
 
+  it('keeps a retired mark across a switch to another way and back, when the refetch fails', async () => {
+    seed()
+    const client = fakeApi({
+      localLinkStatus: vi.fn(async () => unlinked),
+      localEdgeStatus: vi.fn(async (): Promise<EdgeStatus> => ({ edges: [{ edge, account }] })),
+      localEdgeServers: vi.fn(async () => ({
+        edge,
+        servers: [{ id: serverEdge.server_id, name: 'work box', role: 'owner', online: true, access_policy: 'account' as const, kind: 'self-hosted' as const }],
+      })),
+    })
+    render(<OnboardingRoute params={{}} client={client} />)
+    fireEvent.click(await screen.findByRole('radio', { name: 'Cloudfield relay' }))
+    expect(await screen.findByRole('button', { name: 'Link work box' })).toBeDefined()
+    vi.mocked(client.localEdgeStatus).mockResolvedValue({ edges: [{ edge, account, retiring: { state: 'retired', replacement: next } }] })
+    window.dispatchEvent(new Event('focus'))
+    await vi.waitFor(() => expect(noticeText()).toContain('says it is retired'))
+    vi.mocked(client.localEdgeStatus).mockRejectedValue(new Error('edge.status: the gateway is restarting'))
+    fireEvent.click(screen.getByRole('radio', { name: /^Tailscale/ }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Cloudfield relay' }))
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(screen.queryByRole('button', { name: 'Link work box' })).toBeNull()
+    expect(noticeText()).toContain('says it is retired')
+  })
+
   it('goes back to signing in when the chosen edge was signed out elsewhere, and on once signed in again', async () => {
     vi.spyOn(window, 'open').mockReturnValue(null)
     seed()
