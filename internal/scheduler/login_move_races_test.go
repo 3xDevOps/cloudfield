@@ -548,7 +548,8 @@ func TestAPromptDuringAMoveIsRefused(t *testing.T) {
 	segments, err := e.db.ListRunAccountSegments(t.Context(), run.ID)
 	row, rowErr := e.db.GetRun(t.Context(), run.ID)
 	switch {
-	case !errors.Is(injectErr, ErrMoving) || !slices.Equal(sentPrompts(t, first), []string{acpmock.PromptUsageLimit}):
+	case !errors.Is(injectErr, ErrMoving) || !strings.Contains(injectErr.Error(), "the session is moving to another account or login; send the message when it finishes") ||
+		!slices.Equal(sentPrompts(t, first), []string{acpmock.PromptUsageLimit}):
 		t.Fatalf("prompt during the move: %v; the replaced agent was prompted %q; want it refused", injectErr, sentPrompts(t, first))
 	case err != nil || len(segments) != 2 || len(execs) != 2:
 		t.Fatalf("segments %+v, %v, %d agents; want one move", segments, err, len(execs))
@@ -861,5 +862,30 @@ func TestALoginLeftOnARestrictionIsNotListedAsTried(t *testing.T) {
 	got := e.waitStoreStatus(t, run.ID, domain.RunNeedsAttention)
 	if want := "; logins tried: Grace; the first is usable again at " + usage.resets.UTC().Format(time.RFC3339); !strings.HasSuffix(got.Reason, want) {
 		t.Fatalf("reason %q; want it to end %q", got.Reason, want)
+	}
+}
+
+// Where nobody involved keeps added logins, the refusal of a message
+// during a move names accounts only.
+func TestAPromptDuringAMoveBetweenAccountsNamesNoLogin(t *testing.T) {
+	t.Parallel()
+	e, _, notes := newFallbackEnv(t, enhancedClaude)
+	e.share(t)
+	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+	var injectErr error
+	e.sched.UseUsageFallback(UsageFallback{Usage: &hookedLoginUsage{loginUsage: newLoginUsage(nil), during: func() {
+		_, injectErr = e.sched.Inject(context.Background(), run.ID, e.member.ID, domain.AgentPrompt{Text: "run a long tool"}, false, nil)
+	}}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+	_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
+	waitFor(t, "the session on Grace's account", func() bool {
+		row, rowErr := e.db.GetRun(t.Context(), run.ID)
+		return rowErr == nil && row.AccountMemberID == e.owner.ID
+	})
+	if !errors.Is(injectErr, ErrMoving) || !strings.HasSuffix(injectErr.Error(), "scheduler: the session is moving to another account; send the message when it finishes") {
+		t.Fatalf("prompt during the move: %v; want it refused naming accounts only", injectErr)
 	}
 }
