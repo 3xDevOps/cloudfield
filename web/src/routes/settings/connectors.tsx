@@ -151,6 +151,11 @@ const atUniversal = (info: ListInfo, url?: string | null) =>
 // page, the same sign-in, and a connector added at one counts at another.
 const sameURL = (info: ListInfo, a?: string, b?: string) => a === b || (atUniversal(info, a) && atUniversal(info, b))
 
+// noticeStop is why a move or reconnect of old stops once c, old itself or
+// its replacement, is at an address the edge marks retiring or retired.
+const noticeStop = (c: Connector, old: Connector) =>
+  `The edge now says the address ${label(c)} was added at is ${c.notice?.state}, so ${label(old)} was not revoked. Follow the steps on its row in this list.`
+
 const signsInAt = (info: ListInfo, url?: string) => !!info.sign_in && (!url || sameURL(info, url, info.url))
 
 function Setup({
@@ -318,6 +323,13 @@ function Connectors({ client }: { client: Api }) {
       // never have arrived.
       const candidates = next.filter((c) => !attempt.known.has(c.id) && sameURL(attempt.info, c.resource, attempt.into) &&
         (old.client_id ? c.client_id === old.client_id : c.redirect_host === old.redirect_host))
+      const noticed = [next.find((c) => c.id === old.id), ...candidates].find((c) => c?.notice)
+      if (noticed) {
+        finish()
+        setTarget(null)
+        setPollError({ text: noticeStop(noticed, old), fix: <Link href={`${docs}/connectors.md#adding-a-connector-again-at-a-new-address`}>Adding a connector again</Link> })
+        return
+      }
       let added: Connector | undefined
       try {
         added = [...candidates.filter((c) => c.last_used_at), ...candidates.filter((c) => !c.last_used_at)].find((c) => claimMove(c.id, attempt.id, next))
@@ -396,6 +408,11 @@ function Connectors({ client }: { client: Api }) {
     setInfo(rest)
     setConnectors(fresh)
     setListError(null)
+    const now = next && fresh.find((c) => c.id === next.replaces.id)
+    if (now?.notice) {
+      setTarget(null)
+      throw new Error(noticeStop(now, now))
+    }
     // A move goes to the universal URL; a reconnect stays where its
     // connector was added. At the server's own URL the page asks for a
     // code even when the universal URL takes the sign-in.
@@ -548,11 +565,11 @@ function Connectors({ client }: { client: Api }) {
                 {c.notice.url
                   ? (
                       <div className="flex min-w-0 flex-col gap-1.5">
-                        <p>Add it again in {c.client_name} at this URL and check that it works, then remove the old connector in {c.client_name} and select <strong>Revoke</strong> on this row.{asksCode && <> Its page asks for a code; run <Code className="whitespace-nowrap">aether mcp code</Code> to get one.</>}</p>
+                        <p>Add it again in {c.client_name} at this URL and check that it works, then remove the old connector in {c.client_name} and select <strong>Revoke</strong> on this row.{asksCode && <> Its page asks for a code; run <Code className="whitespace-nowrap">aether mcp code</Code> to get one.</>} Its consent page is where you choose its scopes.</p>
                         <CopyableCommand command={c.notice.url} />
                       </div>
                     )
-                  : <p>{c.notice.date ? 'It keeps working until then. ' : ''}Ask this server’s admin where to add it again.</p>}
+                  : <p>It keeps working until the address is retired. Ask this server’s admin where to add it again.</p>}
               </Callout>
             )}
             {c.notice?.state === 'retired' && (
@@ -560,7 +577,7 @@ function Connectors({ client }: { client: Api }) {
                 {c.notice.url
                   ? (
                       <div className="flex min-w-0 flex-col gap-1.5">
-                        <p>This connector no longer works. Add it again in {c.client_name} at this URL, then remove the old connector in {c.client_name} and select <strong>Revoke</strong> on this row.{asksCode && <> Its page asks for a code; run <Code className="whitespace-nowrap">aether mcp code</Code> to get one.</>}</p>
+                        <p>This connector no longer works. Add it again in {c.client_name} at this URL, then remove the old connector in {c.client_name} and select <strong>Revoke</strong> on this row.{asksCode && <> Its page asks for a code; run <Code className="whitespace-nowrap">aether mcp code</Code> to get one.</>} Its consent page is where you choose its scopes.</p>
                         <CopyableCommand command={c.notice.url} />
                       </div>
                     )
