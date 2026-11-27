@@ -455,7 +455,7 @@ func (s *Scheduler) saveFits(c memoryCandidate, writing uint64, warn bool) bool 
 		if !warn {
 			return false
 		}
-		slog.Warn("scheduler: memory guard: no room on disk to save a session VM", "run", c.e.runID, "memory", c.memory, "writing", writing, "free", data.FreeBytes)
+		slog.Warn("scheduler: no room on disk to save a session VM", "run", c.e.runID, "memory", c.memory, "writing", writing, "free", data.FreeBytes)
 		return false
 	}
 	return true

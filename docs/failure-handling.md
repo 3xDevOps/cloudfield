@@ -296,12 +296,16 @@ than on a VM disk, is not counted, as it is not for a Docker session.
 Attaching, messaging, pulling, closing, killing and deleting sessions keep
 working below the reserve, and so does reopening a closed session whose container
 is still there. Waking a sleeping session, or starting a closed one's stopped
-container, creates no session disk, and waking a saved VM deletes its saved
-memory, so it needs only 1 GiB free for itself and each start in flight, not
-the reserve. With less it is refused with the error above, naming a reserve of
-0 bytes. The one copy such a start can make is of a closed session VM's
-package cache, when you reopen it while the server still copies that cache
-for the member's next session. The 1 GiB is checked when the session wakes,
+container, creates no session disk, so it needs only 1 GiB free for itself
+and each start in flight, not the reserve. With less it is refused with the
+error above, naming a reserve of 0 bytes. Waking a saved VM deletes its saved
+memory, and the server does not write it back while the disk is short: a VM
+that goes idle again stays running until its memory fits
+([Sessions in VMs](#sessions-in-vms)). A start from a VM's disks can still
+write three things: a copy of a closed session VM's package cache, when you
+reopen it while the server still copies that cache for the member's next
+session; the helper disk, built once for each server binary; and the root
+disk of a VM whose setup script never finished. The 1 GiB is checked when the session wakes,
 not held afterwards: a woken session VM whose disks then grow is paused as
 described above, and a woken Docker session, like a running one, is not. The
 7-day idle close is the server's own, so below the reserve it leaves a
@@ -948,11 +952,14 @@ pressure](#recover-from-memory-pressure)): 1.6 to 2.3 seconds each in that
 test. So paused VMs hold only memory above that line, and a small host
 saves most of them soon after they pause. A session the server saved while
 it worked wakes on its own into the room paused VMs hold, when they hold
-enough for it: the server saves them first. A paused VM is saved only while the data filesystem has its
-reserve, 4 GiB and the VM's memory free, so an idle VM is paused only while
-it does: on a fuller disk a sleep saves it at once, and disk reclaim makes
-the room. A VM already paused when the disk fills stays paused, a launch
-that needs its memory is refused, and at the floor working sessions stay
+enough for it: the server saves them first. A session VM's memory is written to disk only while the data filesystem has its
+reserve, 4 GiB and the VM's memory free, whatever asks for the save: the
+memory guard, a failed wake that puts the session back to sleep, or a
+server restart that finds a sleeping session's VM running. So an idle VM
+is paused only while it does: on a fuller disk it stays running, and the
+server looks again after the sleep delay. A VM already paused when the disk
+fills stays paused. Neither gives its memory back, so a launch
+that needs it is refused, and at the floor working sessions stay
 frozen: free disk space or close sessions
 ([Recover from disk pressure](#recover-from-disk-pressure)). A wake
 restores a saved VM where it was. A server restart or update leaves a

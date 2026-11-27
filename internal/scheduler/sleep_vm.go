@@ -470,7 +470,11 @@ func (s *Scheduler) resaveAsleep(ctx context.Context, entry *supervised, saver r
 	s.mu.Unlock()
 	defer s.markSaving(entry)()
 	detachErr := s.detachForSave(ctx, entry)
-	if err := saver.Save(ctx, cid); err != nil {
+	err := errSaveDoesNotFit
+	if s.saveFits(memoryCandidate{e: entry, memory: s.vmMemoryUse(ctx)[cid]}, 0, true) {
+		err = saver.Save(ctx, cid)
+	}
+	if err != nil {
 		return errors.Join(fmt.Errorf("save the session again: %w", err), detachErr)
 	}
 	return errors.Join(detachErr, s.recordSaved(entry, true, false))

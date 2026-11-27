@@ -50,8 +50,8 @@ func TestASessionIdleForSevenDaysIsClosedAndCanBeRelaunched(t *testing.T) {
 }
 
 // A sleeping VM idle for 7 days is woken to commit before its close. While
-// admission refuses the wake it stays open for the next sweep, and so does
-// one the memory guard saved while it worked.
+// the data filesystem is below its reserve it stays open for the next
+// sweep, and so does one the memory guard saved while it worked.
 func TestAnIdleSleepingVMIsClosedOnlyOnceItWakes(t *testing.T) {
 	t.Parallel()
 	e, _, _ := newSaveEnv(t, true)

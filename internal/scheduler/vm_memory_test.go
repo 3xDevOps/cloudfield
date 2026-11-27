@@ -349,25 +349,76 @@ func (e *testEnv) pauseIdle(t *testing.T, vms ...runtime.ID) {
 	}
 }
 
-// An idle VM whose memory does not fit on the data disk is saved at once:
-// paused, it would keep its memory whatever the host is short of.
-func TestAnIdleVMThatDoesNotFitOnDiskIsSavedNotPaused(t *testing.T) {
+// A VM woken below the disk reserve is not saved when it goes idle again:
+// writing its memory would take the data filesystem lower still. It stays
+// running, and sleeps once its memory fits.
+func TestAnIdleVMThatDoesNotFitOnDiskStaysRunning(t *testing.T) {
 	t.Parallel()
 	e, mr := newMemoryEnv(t)
-	fits := e.launchVM(t, mr, "say pong", 1<<30)
-	e.pauseIdle(t, fits)
-	tight := e.launchVM(t, mr, "say pong", 1<<30)
-	// As in TestTheMemoryGuardSkipsSavesThatFailedOrWouldNotFitOnDisk.
+	cid := e.launchVM(t, mr, "say pong", 3<<30)
+	run := e.runOf(t, cid)
+	e.pauseIdle(t, cid)
+	e.saveRun(t, run)
+	// A 100 GiB disk keeps 5 GiB.
 	var free atomic.Uint64
-	free.Store(19 << 29)
+	free.Store(2 << 30)
 	setFreeBytes(e, &free)
-	e.pauseIdle(t, tight)
-
-	if mr.isSaved(fits) || !e.sched.Sleep(e.runOf(t, fits)).InMemory {
-		t.Fatalf("an idle VM that fits on disk sleeps as %+v, want it paused in memory", e.sched.Sleep(e.runOf(t, fits)))
+	if _, err := e.sched.Inject(t.Context(), run, e.member.ID, domain.AgentPrompt{Text: "after sleep"}, false, nil); err != nil {
+		t.Fatalf("a prompt to a saved session below the disk reserve: %v", err)
 	}
-	if state := e.sched.Sleep(e.runOf(t, tight)); !mr.isSaved(tight) || state.InMemory || !state.Saved {
-		t.Fatalf("an idle VM that does not fit on disk sleeps as %+v, saved %v; want it saved to disk", state, mr.isSaved(tight))
+	waitItems(t, e.sched, run, "a turn after the wake", turnEnded("end_turn", 2))
+
+	e.sched.cfg.VMSleepAfter = time.Nanosecond
+	e.sched.mu.Lock()
+	entry := e.sched.runs[run]
+	e.sched.mu.Unlock()
+	waitFor(t, "the sleep sweep refusing the save", func() bool {
+		_ = e.sched.sleepLive(t.Context(), entry)
+		e.sched.mu.Lock()
+		defer e.sched.mu.Unlock()
+		return !entry.saveFailedAt.IsZero()
+	})
+	if mr.saveCount() != 1 || e.asleep(run) || containerState(e.container(t, run)) != "running" {
+		t.Fatalf("with 2 GiB free an idle VM holding 3 GiB made %d saves and sleeps as %+v; want it left running", mr.saveCount(), e.sched.Sleep(run))
+	}
+
+	free.Store(80 << 30)
+	e.pauseIdle(t, cid)
+	if !e.sched.Sleep(run).InMemory {
+		t.Fatalf("with room on disk the idle VM sleeps as %+v, want it paused in memory", e.sched.Sleep(run))
+	}
+}
+
+// A VM recorded asleep that still runs, as after a failed wake or a server
+// restart, is saved again only once its memory fits on the data disk.
+func TestASleepingVMStillRunningIsSavedOnlyOnceItFitsOnDisk(t *testing.T) {
+	t.Parallel()
+	e, mr := newMemoryEnv(t)
+	cid := e.launchVM(t, mr, "say pong", 3<<30)
+	run := e.runOf(t, cid)
+	e.sched.mu.Lock()
+	entry := e.sched.runs[run]
+	e.sched.mu.Unlock()
+	if err := e.sched.markAsleep(entry); err != nil {
+		t.Fatal(err)
+	}
+	// A 100 GiB disk keeps 5 GiB.
+	var free atomic.Uint64
+	free.Store(2 << 30)
+	setFreeBytes(e, &free)
+
+	e.sched.stopRecoveredAsleep(t.Context(), entry)
+	entry.lifecycleMu.Lock()
+	err := e.sched.stopAsleep(t.Context(), entry)
+	entry.lifecycleMu.Unlock()
+	if !errors.Is(err, errSaveDoesNotFit) || mr.saveCount() != 0 || containerState(e.container(t, run)) != "running" {
+		t.Fatalf("with 2 GiB free a sleeping VM holding 3 GiB made %d saves, the save after a failed wake = %v; want none and %v", mr.saveCount(), err, errSaveDoesNotFit)
+	}
+
+	free.Store(80 << 30)
+	e.sched.stopRecoveredAsleep(t.Context(), entry)
+	if !mr.isSaved(cid) || !e.sched.Sleep(run).Saved {
+		t.Fatalf("with room on disk the sleeping VM is %+v, want it saved", e.sched.Sleep(run))
 	}
 }
 
