@@ -603,6 +603,28 @@ func TestDialHonoursAStatusThatArrived(t *testing.T) {
 	}
 }
 
+// An upgrade response that arrived is an answer even when the timer fired
+// before the dial returned; only nothing coming back is no answer.
+func TestDialFailureCountsAnArrivedUpgradeAsAnAnswer(t *testing.T) {
+	const url = "https://edge.example.test/v1/server/control"
+	upgrade := &http.Response{StatusCode: http.StatusSwitchingProtocols}
+	for _, tc := range []struct {
+		name     string
+		resp     *http.Response
+		err      error
+		noAnswer bool
+	}{
+		{"a failed upgrade", upgrade, errors.New("WebSocket protocol violation: invalid Sec-WebSocket-Accept"), false},
+		{"an upgrade completed late", upgrade, nil, false},
+		{"nothing came back", nil, context.Canceled, true},
+	} {
+		err := dialFailure(url, tc.resp, tc.err, true, time.Second)
+		if err == nil || errors.Is(err, errNoAnswer) != tc.noAnswer {
+			t.Errorf("%s: %v, no answer %v, want %v", tc.name, err, errors.Is(err, errNoAnswer), tc.noAnswer)
+		}
+	}
+}
+
 // A stored entry that would not pass in a ready is no notice.
 func TestStoredNoticesIgnoreDamagedEntries(t *testing.T) {
 	const own = "https://edge-old.example.test"

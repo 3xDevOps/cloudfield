@@ -122,27 +122,39 @@ func dial(ctx context.Context, url string, header http.Header, timeout time.Dura
 	}
 	if err != nil || expired {
 		cancel()
-		// A status that arrived is the answer, whenever the timer fired.
-		if resp != nil && resp.StatusCode != http.StatusSwitchingProtocols {
-			var body edgeproto.ErrorBody
-			if resp.Body != nil {
-				_ = json.NewDecoder(resp.Body).Decode(&body)
-			}
-			msg := body.Error
-			if loc := resp.Header.Get("Location"); loc != "" && resp.StatusCode/100 == 3 {
-				msg = strings.TrimSpace(msg + " Location: " + loc)
-			}
-			return nil, nil, &DialError{URL: url, Status: resp.StatusCode, Message: printableText(msg, maxDialMessage)}
-		}
-		if expired {
-			return nil, nil, noAnswer{fmt.Errorf("dial %s: no handshake within %s", url, timeout)}
-		}
-		if op := (*net.OpError)(nil); errors.As(err, &op) && op.Op == "dial" {
-			return nil, nil, noAnswer{fmt.Errorf("dial %s: %w", url, err)}
-		}
-		return nil, nil, fmt.Errorf("dial %s: %w", url, err)
+		return nil, nil, dialFailure(url, resp, err, expired, timeout)
 	}
 	return c, cancel, nil
+}
+
+// dialFailure is the error of a dial to url that failed with err, or
+// whose timer expired. A response that arrived is an answer, whenever the
+// timer fired: a refused upgrade is a *DialError, a failed one an error.
+func dialFailure(url string, resp *http.Response, err error, expired bool, timeout time.Duration) error {
+	if resp != nil && resp.StatusCode != http.StatusSwitchingProtocols {
+		var body edgeproto.ErrorBody
+		if resp.Body != nil {
+			_ = json.NewDecoder(resp.Body).Decode(&body)
+		}
+		msg := body.Error
+		if loc := resp.Header.Get("Location"); loc != "" && resp.StatusCode/100 == 3 {
+			msg = strings.TrimSpace(msg + " Location: " + loc)
+		}
+		return &DialError{URL: url, Status: resp.StatusCode, Message: printableText(msg, maxDialMessage)}
+	}
+	if resp != nil {
+		if err == nil {
+			err = fmt.Errorf("the upgrade completed after %s", timeout)
+		}
+		return fmt.Errorf("dial %s: %w", url, err)
+	}
+	if expired {
+		return noAnswer{fmt.Errorf("dial %s: no handshake within %s", url, timeout)}
+	}
+	if op := (*net.OpError)(nil); errors.As(err, &op) && op.Op == "dial" {
+		return noAnswer{fmt.Errorf("dial %s: %w", url, err)}
+	}
+	return fmt.Errorf("dial %s: %w", url, err)
 }
 
 func readMessage(ctx context.Context, c *websocket.Conn, timeout time.Duration) (edgeproto.Message, error) {
