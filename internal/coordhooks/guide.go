@@ -26,8 +26,8 @@ type Guide struct {
 	// between turns, whatever their role.
 	Background bool
 	// Wake is set where Aether resumes an idle session when mail arrives:
-	// Enhanced runs, managed Claude Code launches and loaded native
-	// pi/omp/OpenCode integrations.
+	// Enhanced runs, managed Claude Code launches, Standard Codex on its
+	// app-server and loaded native pi/omp/OpenCode integrations.
 	Wake  bool
 	Repos string
 	// Parent is the run that started this child run.
@@ -159,7 +159,13 @@ func Brief(g Guide) string {
 	if g.cli() == NewCLI {
 		command, never = NewCLI+" report", "Never report mid-work."
 	}
-	return "Cloudfield hosts this session. End every turn with exactly one aether_report (or " + command + ") as your last action, new idempotency_key each turn: " +
+	// A Background run can be closed two minutes after its report, so it
+	// replies first.
+	rule := "Report once a turn with aether_report (or " + command + ") when done, then reply; new idempotency_key each turn: "
+	if g.Background {
+		rule = "End every turn with exactly one aether_report (or " + command + ") as your last action, new idempotency_key each turn: "
+	}
+	return "Cloudfield hosts this session. " + rule +
 		answered + waiting + needsInput + "blocked = a human must act; success|failure = the work you own is verified done or cannot be done. " +
 		never + " Subagents and spawned workflows never report."
 }
@@ -232,8 +238,15 @@ func ReportGuide(g Guide) string {
 		// NewCLI's guide goes without the quotes, to fit its cap.
 		command = "`" + command + "`"
 	}
-	fmt.Fprintf(&b, "END EVERY TURN WITH EXACTLY ONE REPORT, as your last action: aether_report (a new idempotency_key each turn), else %s.\n", command)
-	b.WriteString("Write your reply as message text before the report; thinking and the summary are not your reply. Say the result only there, none after.\n")
+	if g.Background {
+		// The run can be closed two minutes after its report, so the reply
+		// comes first.
+		fmt.Fprintf(&b, "END EVERY TURN WITH EXACTLY ONE REPORT, as your last action: aether_report (a new idempotency_key each turn), else %s.\n", command)
+		b.WriteString("Write your reply as message text before the report; thinking and the summary are not your reply. Say the result only there, none after.\n")
+	} else {
+		fmt.Fprintf(&b, "REPORT ONCE A TURN, when its work is done: aether_report (a new idempotency_key each turn), else %s.\n", command)
+		b.WriteString("Then give the result as text and stop; thinking and the summary are not a reply. Report again only if a refusal, `resolved` or new input changes it.\n")
+	}
 	for _, o := range Outcomes(g) {
 		fmt.Fprintf(&b, "- %s: %s\n", o.Name, o.Use)
 	}

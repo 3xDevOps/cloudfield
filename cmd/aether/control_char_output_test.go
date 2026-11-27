@@ -46,8 +46,8 @@ func TestNeedLinesStripControlCharacters(t *testing.T) {
 	}
 }
 
-func TestPrintableStripsC0AndDel(t *testing.T) {
-	if got := printable("a\x1bb\x07\x7fc"); got != "a b  c" {
+func TestPrintableStripsC0DelAndC1(t *testing.T) {
+	if got := printable("a\x1bb\x07\x7fc\u009bd"); got != "a b  c d" {
 		t.Fatalf("printable = %q", got)
 	}
 }
