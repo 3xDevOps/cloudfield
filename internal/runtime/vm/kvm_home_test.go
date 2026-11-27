@@ -397,4 +397,59 @@ sync; echo filled`
 		t.Fatalf("after the trim the cache disk holds %d of %d bytes (%q): %v", used, size, out, err)
 	}
 	t.Logf("the trim was done %s after the boot and left %d MiB on the cache disk", took, used>>20)
+
+	// A session over that cache trims an entry the cache holds: its discard
+	// does not reach the cache it reads through, and the cache promoted from
+	// it still leaves the entry's blocks out.
+	promoted := func(after string) string {
+		for start := time.Now(); ; time.Sleep(100 * time.Millisecond) {
+			name, _ := os.Readlink(filepath.Join(e.root, imagesDir, "caches", cachePool(pool), "current"))
+			if name != after {
+				return filepath.Join(e.root, imagesDir, "caches", cachePool(pool), name)
+			}
+			if time.Since(start) > 2*time.Minute {
+				t.Fatalf("no cache was promoted after %q", after)
+			}
+		}
+	}
+	allocated := func(path string) int64 {
+		var st syscall.Stat_t
+		if err := syscall.Stat(path, &st); err != nil {
+			t.Fatal(err)
+		}
+		return st.Blocks * 512
+	}
+	first := promoted("")
+	written := "cd /aether-cache/go-build/ab && head -c 1G /dev/urandom > base-d && touch -d '5 hours ago' base-d && sync && echo written"
+	if out, code := vmRun(t, e, key, written); code != 0 || !strings.Contains(out, "written") {
+		t.Fatalf("write an entry to the cache disk: %d %q", code, out)
+	}
+	if err := e.stop(t.Context(), key, 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	base := promoted(filepath.Base(first))
+	if got := allocated(base); got < 1<<30 {
+		t.Fatalf("the promoted cache takes %d bytes, want the 1 GiB entry on it", got)
+	}
+	const over = "run-vmcachetrim-over"
+	kvmUserSession(t, e, over, pool)
+	if out, code := vmRun(t, e, over, "fallocate -l 6G /aether-cache/go-build/ab/new-d && sync && echo filled"); code != 0 || !strings.Contains(out, "filled") {
+		t.Fatalf("fill the cache disk over the promoted cache: %d %q", code, out)
+	}
+	if err := e.stop(t.Context(), over, 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	// The stop promoted the cache as it was before the trim.
+	untrimmed := promoted(filepath.Base(base))
+	if err := e.start(t.Context(), over); err != nil {
+		t.Fatal(err)
+	}
+	eventually(t, e, over, "cd /aether-cache && ls go-build/ab npm | tr '\\n' ' '", "in-use-d new-d  npm: package")
+	t.Logf("trimming 10 GiB of the cache it reads through left the session's cache disk at %d MiB", allocated(e.path(over, cacheDisk))>>20)
+	if err := e.stop(t.Context(), over, 2*time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if got := allocated(promoted(filepath.Base(untrimmed))); got > 512<<20 {
+		t.Errorf("the cache promoted after the trim takes %d bytes, want the 1 GiB entry the session deleted left out", got)
+	}
 }

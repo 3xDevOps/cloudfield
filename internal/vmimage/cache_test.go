@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -49,7 +50,7 @@ func qemuWrite(t *testing.T, path string, pattern byte) {
 }
 
 func TestCachePoolLayersCachesOverRawBases(t *testing.T) {
-	needTools(t, "mkfs.ext4", "cp", "qemu-img", "qemu-io")
+	needTools(t, "mkfs.ext4", "debugfs", "cp", "e2fsck", "qemu-img", "qemu-io")
 	dir := t.TempDir()
 	s, err := Open(filepath.Join(dir, "images"), "", nil)
 	if err != nil {
@@ -153,7 +154,7 @@ func TestCachePoolLayersCachesOverRawBases(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := head(t, flat.Path, 2048); !bytes.Equal(got[:512], bytes.Repeat([]byte{0xcd}, 512)) || !bytes.Equal(got[1024:], head(t, newest.Path, 2048)[1024:]) {
+	if got := head(t, flat.Path, 512); !bytes.Equal(got, bytes.Repeat([]byte{0xcd}, 512)) || label(t, flat.Path) != "aether-cache" {
 		t.Errorf("the cache promoted from a qcow2 disk is not its writes over its base: starts %x", got[:16])
 	}
 	if _, err = os.Stat(newest.Path); err != nil {
@@ -231,5 +232,67 @@ func TestCachePoolLayersCachesOverRawBases(t *testing.T) {
 	}
 	if _, err = s.NewCacheDisk(t.Context(), "../escape", filepath.Join(dir, "x.img")); err == nil {
 		t.Error("a pool name with a path was accepted")
+	}
+}
+
+// TestPromotedCacheLeavesOutWhatTheSessionDeleted deletes a file from a
+// cache disk the way a session over a base does: the filesystem frees its
+// blocks and the disk file keeps them, since a guest's discard does not
+// reach the base. The promoted cache must not hold them.
+func TestPromotedCacheLeavesOutWhatTheSessionDeleted(t *testing.T) {
+	needTools(t, "mkfs.ext4", "debugfs", "cp", "e2fsck")
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "images"), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	disk, err := s.NewCacheDisk(t.Context(), "pool1", filepath.Join(dir, "cache.img"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	allocated := func(path string) int64 {
+		var st syscall.Stat_t
+		if statErr := syscall.Stat(path, &st); statErr != nil {
+			t.Fatal(statErr)
+		}
+		return st.Blocks * 512
+	}
+	const size = 64 << 20
+	entry := filepath.Join(dir, "entry")
+	if err = os.WriteFile(entry, bytes.Repeat([]byte{0xab}, size), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(dir, "kept"), []byte("kept"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, request := range []string{"write " + entry + " entry", "write " + filepath.Join(dir, "kept") + " kept", "rm entry"} {
+		var out []byte
+		if out, err = exec.Command("debugfs", "-w", "-R", request, disk.Path).CombinedOutput(); err != nil {
+			t.Fatalf("debugfs %q: %v: %s", request, err, out)
+		}
+	}
+	before := allocated(disk.Path)
+	if before < size {
+		t.Fatalf("the cache disk takes %d bytes after a %d byte file was deleted from it, want the file's blocks still on it", before, size)
+	}
+	snapshot, err := s.SnapshotCache(disk)
+	if err == nil {
+		err = s.PromoteCache("pool1", snapshot)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	newest, err := s.readNewest(filepath.Join(s.cachesDir(), "pool1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := allocated(newest.Path); got > before-size {
+		t.Errorf("the promoted cache takes %d bytes, want at most %d: the %d of the deleted file are still on it", got, before-size, size)
+	}
+	if got := debugfs(t, newest.Path, "cat /kept"); got != "kept" {
+		t.Errorf("the promoted cache's kept file reads %q", got)
+	}
+	if got := allocated(disk.Path); got != before {
+		t.Errorf("promotion changed the session's cache disk: %d bytes, was %d", got, before)
 	}
 }

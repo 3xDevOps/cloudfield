@@ -396,14 +396,16 @@ What changes:
   so sessions share those caches' blocks and each holds only what it wrote.
   The layer holds at most 32 GiB, and the VM deletes old Go build cache
   files while it is more than half full
-  ([environment-home.md](environment-home.md#tool-caches)).
+  ([environment-home.md](environment-home.md#tool-caches)). Deleting a file
+  that came from the member's newest caches frees no disk space on the
+  server until the session's caches become the newest.
   A session's caches become the member's newest when its VM stops for good:
   it is stopped, or deleted while stopped or saved. A VM that holds its
   session's checkout stays up for up to 10 minutes after a stop, so its
   caches go back when it powers off, and a reopen before then keeps them on
   the session. The server writes the member's new caches in the background,
-  and a VM that starts again before that is done first copies its own cache
-  disk. An idle sleep does not promote them. Caches over 20 GiB are dropped,
+  without the blocks of deleted files, and a VM that starts again before
+  that is done first copies its own cache disk. An idle sleep does not promote them. Caches over 20 GiB are dropped,
   and so are a member's newest caches once no VM has used them for 7 days;
   the next session then starts empty. An Isolated session's caches never go
   back.

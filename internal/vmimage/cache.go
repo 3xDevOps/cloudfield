@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -162,11 +163,11 @@ func (s *Store) UnshareCache(ctx context.Context, disk Disk) error {
 }
 
 // PromoteCache writes a snapshot SnapshotCache took as a raw disk, a copy
-// of a qcow2 one read over its base, and makes that pool's newest cache, or
-// drops the pool's caches when it takes more than cacheLimit, then deletes
-// the snapshot and every cache of the pool no disk uses. A snapshot older
-// than the pool's newest cache, whose promotion finished first, changes
-// nothing.
+// of a qcow2 one read over its base, less the blocks its filesystem does
+// not use, and makes that pool's newest cache, or drops the pool's caches
+// when it takes more than cacheLimit, then deletes the snapshot and every
+// cache of the pool no disk uses. A snapshot older than the pool's newest
+// cache, whose promotion finished first, changes nothing.
 func (s *Store) PromoteCache(pool, snapshot string) error {
 	defer func() { _ = os.RemoveAll(snapshot) }()
 	if !validPool(pool) {
@@ -183,6 +184,9 @@ func (s *Store) PromoteCache(pool, snapshot string) error {
 		}
 	} else {
 		err = copyDisk(ctx, cache, disk)
+	}
+	if err == nil {
+		err = discardFree(ctx, disk)
 	}
 	if err != nil {
 		return fmt.Errorf("vmimage: promote cache: %w", err)
@@ -204,6 +208,20 @@ func (s *Store) PromoteCache(pool, snapshot string) error {
 	}
 	// The snapshot's link would keep the base it read through from the sweep.
 	return errors.Join(err, os.RemoveAll(snapshot), s.sweepCachesLocked(dir))
+}
+
+// discardFree punches the blocks the ext4 filesystem in the raw disk at path
+// does not use out of the file. A guest's discard never reaches the base its
+// cache disk reads through, so a flattened cache still holds the files the
+// session deleted from that base.
+func discardFree(ctx context.Context, path string) error {
+	err := run(ctx, "e2fsck", "-f", "-p", "-E", "discard", path)
+	// Status 1 is a filesystem e2fsck repaired, as it does when it replays
+	// the journal of a disk the guest never unmounted.
+	if exit := (*exec.ExitError)(nil); errors.As(err, &exit) && exit.ExitCode() == 1 {
+		return nil
+	}
+	return err
 }
 
 // sweepCachesLocked deletes a pool's caches that no disk links to, but its
