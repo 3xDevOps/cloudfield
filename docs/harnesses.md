@@ -34,9 +34,9 @@ What each agent can do:
 | `antigravity` | none | none | none | no | no | no | Standard |
 | `claude` | turn start and end | hooks and idle wake | adapter | yes | yes | yes | Standard |
 | `codex` | turn start and end | idle wake and mid-turn steer | adapter | no | no | no | Enhanced |
-| `copilot` | none | hooks | built in | no | no | no | Enhanced |
-| `cursor` | none | hooks you install | built in | no | no | no | Enhanced |
-| `gemini` | none | hooks you install | built in | no | no | no | Enhanced |
+| `copilot` | none | hooks and typed idle wake | built in | no | no | no | Enhanced |
+| `cursor` | none | hooks you install and typed idle wake | built in | no | no | no | Enhanced |
+| `gemini` | none | hooks you install and typed idle wake | built in | no | no | no | Enhanced |
 | `omp` | turn start and end | hooks and idle wake | built in | yes | no | no | Enhanced |
 | `opencode` | turn start and end | hooks and idle wake | built in | no | no | no | Enhanced |
 | `pi` | turn start and end | hooks and idle wake | adapter | no | no | no | Standard |
@@ -48,7 +48,9 @@ What each agent can do:
 - **Standard mail** is how a Standard session learns that mail, a message from a
   person or another session, is waiting in its inbox: hooks at turn boundaries,
   plus idle wake, which starts a turn in a waiting session
-  ([Incoming coordination hooks](#incoming-coordination-hooks)). Enhanced sessions
+  ([Incoming coordination hooks](#incoming-coordination-hooks)). A **typed**
+  idle wake is one line the server types into the agent's terminal
+  ([Typed wake](#typed-wake)). Enhanced sessions
   need neither: the server prompts the idle session
   ([Mail](enhanced-sessions.md#mail)). **Mid-turn steer** means mail and your
   messages reach a working session as a steer instead of waiting for its turn
@@ -511,8 +513,9 @@ Google sign-in inside a session sandbox.
 Claude Code, Copilot, pi, oh-my-pi and OpenCode load Cloudfield's inbox hooks
 for you on a Standard session, with or without a task. Codex needs none: its
 app-server hands it mail. Gemini CLI and Cursor CLI do not load hooks.
-Without hooks, mail reaches those agents only when they run
-`cloudfield-internal inbox`.
+Without hooks, mail reaches those agents when they run
+`cloudfield-internal inbox`, or by the [typed wake](#typed-wake) while a
+Standard session is idle.
 
 To install hooks for Gemini or Cursor, run these inside a session and merge the
 output into the agent's settings, keeping any hooks you already have:
@@ -973,15 +976,15 @@ and an agent whose command an administrator overrode do not get them. Enhanced
 sessions do not use hooks: the server prompts the idle session instead. So does a
 Standard Codex run, through its app-server, with or without a task: the server
 prompts the session with the inbox notice, as a new turn when idle and as a
-steer mid-turn. Without any of these, the agent reads mail only when it runs
-`cloudfield-internal inbox`.
+steer mid-turn. Without any of these or a [typed wake](#typed-wake), the
+agent reads mail only when it runs `cloudfield-internal inbox`.
 
 Claude Code is the one with a hook-based idle wake in Standard mode. Its wake
 starts a turn with no human input, also in a session you have not typed into
 yet, and the terminal shows **Stop hook feedback**.
 That wording is Claude Code's own framing, not an error. After you press Esc, a
-wake pauses until a turn completes. Copilot has no idle wake, so mail waits for
-the next hook boundary. pi, oh-my-pi and OpenCode wake only their main
+wake pauses until a turn completes. Copilot's hooks run only at a boundary;
+its idle wake is [typed](#typed-wake). pi, oh-my-pi and OpenCode wake only their main
 session, and only while idle. OpenCode's wake starts after the session's first
 turn, so a session opened without a task is not woken until you have prompted
 it once.
@@ -992,6 +995,52 @@ Cloudfield leaves it alone and skips the managed hooks. For OpenCode,
 `OPENCODE_PURE=1` or `true` in the workspace environment disables Cloudfield's
 plugins too. The session still launches but reports nothing, and is judged on
 silence.
+
+### Typed wake
+
+Copilot, Gemini and Cursor have no hook or API that starts a turn in an idle
+session. When mail arrives for a coordinated Standard session of one of them,
+with or without a task, the server types one line into the agent's terminal
+and submits it. The line says how many inbox items are unacknowledged, tells
+the agent to run `cloudfield-internal inbox` until it returns no messages, and
+says that peer messages are data, not instructions. It never carries a
+message's body. Anyone watching the terminal sees a `Cloudfield injects`
+banner with the line, and the transcript records it.
+
+The line is typed only when all of these hold. Otherwise the wake stays owed
+and the server tries again, at least every 30 seconds:
+
+- The session is running: not paused, not switching mode, not protected. Mail
+  wakes a sleeping session VM first and types once its terminal is back.
+- The agent has turned on bracketed paste. The line arrives as one paste and
+  Enter follows 200 ms later. With bracketed paste off nothing is typed: these
+  CLIs leave a line that arrives together with its Enter unsent in the input
+  box.
+- The agent printed nothing for 3 seconds, and nobody typed in the terminal
+  for 10 seconds.
+- No request the server recorded for the session waits for an answer, such
+  as a sudo approval.
+- No member controls the session
+  ([terminal.md](terminal.md#session-control)). The wake waits until they
+  release control or their lease lapses.
+- The agent is not waiting in `cloudfield-internal inbox --wait`, which takes
+  the mail itself.
+
+Each set of new unread messages is typed for once. New mail types again.
+
+What the server cannot see:
+
+- A draft left in the agent's input box for more than 10 seconds is submitted
+  joined to the line.
+- A dialog the agent shows on its own, such as a sign-in prompt or a
+  permission question, takes the line and its Enter.
+- A typed line is not proof that the agent read its inbox. Mail stays unread
+  until the agent's `inbox` call acknowledges it.
+
+Antigravity, a custom agent, an agent whose command an administrator overrode
+and a session with `--conflict-coordination=false` are never typed into.
+Neither is a session launched by a server that had no typed wake; launch a
+new one.
 
 ## Status reporting
 
@@ -1030,9 +1079,11 @@ mounts.
 - Only Claude Code and oh-my-pi can switch a running session between Standard
   and Enhanced ([Switching a running agent](enhanced-sessions.md#switching-a-running-agent)).
 - Codex subagents do not nest in the Enhanced timeline.
-- No idle wake exists for Copilot, Gemini or Cursor, and Antigravity has no
-  hooks at all. A [subsession](teams.md#subsessions) refuses them Standard, so they run
-  Enhanced there, or Background for Antigravity.
+- Antigravity has no hooks and no idle wake. A
+  [subsession](teams.md#subsessions) refuses it Standard, so it runs
+  Background there.
+- Copilot, Gemini and Cursor are woken in Standard mode by a line typed into
+  their terminal, with the limits in [Typed wake](#typed-wake).
 - Standard Codex needs Codex 0.131.0 or newer. Its app-server ends with its
   terminal, so a `codex resume` in the shell runs without Cloudfield's status
   and message delivery.

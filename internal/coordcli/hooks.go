@@ -46,7 +46,9 @@ turn in the idle session. It exits 0 when a prompt, a newer waiter or the end
 of Claude Code ends the wait, and 1 on errors; it never exits 2 otherwise.
 
 Loaded native integrations can wake a live idle session; other command hooks
-cannot. Neither starts an exited session or types into its terminal.
+cannot. Neither starts an exited session or types into its terminal. The
+server itself wakes an idle Standard copilot, gemini or cursor session by
+typing one line that points at the inbox into its terminal.
 
 "hook file" lists the shipped integrations. With a filename, it writes that
 copyable file to stdout without needing a coordination socket. Merge JSON

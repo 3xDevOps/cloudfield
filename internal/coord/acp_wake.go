@@ -27,9 +27,9 @@ var enhancedWakeRetries = []time.Duration{time.Second, 2 * time.Second, 4 * time
 // SessionWaker prompts the agent sessions the server drives itself.
 type SessionWaker interface {
 	// Wakeable reports whether run's session takes a prompt now: an
-	// enhanced session with no turn running and no prompt queued, or a
+	// enhanced session with no turn running and no prompt queued, a
 	// Standard Codex terminal attached to its app-server, which takes one
-	// mid-turn as a steer.
+	// mid-turn as a steer, or a Standard session woken by typing.
 	Wakeable(run domain.RunID) bool
 	// Wake hands the session prompt, and fails unless it is still
 	// wakeable.
@@ -37,6 +37,9 @@ type SessionWaker interface {
 	// InTurn reports a wakeable session in a turn, which takes a prompt as
 	// a steer.
 	InTurn(run domain.RunID) bool
+	// TypedWake reports a session whose wake is one line typed into its
+	// terminal, which a draft in its input box is submitted with.
+	TypedWake(run domain.RunID) bool
 }
 
 // WakeIdle retries the run's owed wake: its hook observers rerun
@@ -152,7 +155,13 @@ func (s *Service) wakeEnhanced(run domain.RunID) (retry bool) {
 		return false
 	}
 	overlapSent := false
-	err = s.cfg.WakeAdmission(ctx, run, func() error {
+	typed := s.cfg.Waker.TypedWake(run)
+	admit := s.cfg.WakeAdmission
+	if typed {
+		// A member in control may be typing a prompt the line would join.
+		admit = s.cfg.ReminderAdmission
+	}
+	err = admit(ctx, run, func() error {
 		// An agent waiting in aether-internal inbox takes the mail from that
 		// call; the admission lock orders this against the wait's start.
 		admission := s.inboxAdmissionLock(run)
@@ -162,7 +171,11 @@ func (s *Service) wakeEnhanced(run domain.RunID) (retry bool) {
 		reading := s.inboxConsumers[run] > 0
 		s.mu.Unlock()
 		var prompt strings.Builder
-		if len(ids) > 0 && !reading {
+		switch {
+		case len(ids) == 0 || reading:
+		case typed:
+			prompt.WriteString(protocol.CoordInboxLine(len(ids)))
+		default:
 			prompt.WriteString(protocol.CoordInboxContext(len(ids)))
 		}
 		// The turn may have ended while admission waited.
@@ -174,7 +187,7 @@ func (s *Service) wakeEnhanced(run domain.RunID) (retry bool) {
 		if prompt.Len() == 0 {
 			return nil
 		}
-		if !steers {
+		if !steers && !typed {
 			prompt.WriteString(protocol.CoordReportReminder)
 		}
 		// Admission may have spent ctx waiting for a lock; a turn that starts

@@ -70,5 +70,6 @@ type PTYHost interface {
 	LastInput(key ptyhost.SessionKey) (time.Time, bool)
 	LastLine(ctx context.Context, run domain.RunID, wait time.Duration) (string, error)
 	Inject(ctx context.Context, key ptyhost.SessionKey, actorName, actorColor, message, submit string) error
+	InjectPasted(ctx context.Context, key ptyhost.SessionKey, actorName, actorColor, message, submit string) error
 	Annotate(ctx context.Context, key ptyhost.SessionKey, actorName, actorColor, message string) error
 }

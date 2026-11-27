@@ -22,7 +22,8 @@ type NativeLaunch struct {
 	DiscoveryFiles map[string]string
 	ReplacesStatus bool
 	// IdleWake is Capabilities.IdleWake for a launch that loaded the
-	// integration, or that attached the terminal to the agent's app-server.
+	// integration, that attached the terminal to the agent's app-server, or
+	// whose wake is typed (Capabilities.TypedWake).
 	IdleWake bool
 }
 
@@ -43,6 +44,7 @@ func (n NativeLaunch) Command(argv []string) []string {
 // AETHER_MANAGED_HOOKS marker.
 func (p Profile) PrepareNativeLaunch(dir string, argv []string, env map[string]string) (NativeLaunch, error) {
 	native, err := p.nativeLaunch(dir, argv, env)
+	native.IdleWake = p.Capabilities.TypedWake
 	if err != nil || len(native.Files) == 0 && len(native.Args) == 0 {
 		return native, err
 	}

@@ -1984,6 +1984,7 @@ func (s *Scheduler) entryFromSidecar(r *domain.Run, sc sidecar) *supervised {
 		appServer:           sc.AppServer,
 		serverTurn:          sc.ServerTurn,
 		idleWake:            sc.IdleWake,
+		harness:             r.Harness,
 		status:              r.Status,
 		reason:              r.Reason,
 		workersReason:       sc.WorkersReason,

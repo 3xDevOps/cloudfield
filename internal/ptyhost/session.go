@@ -963,7 +963,7 @@ const (
 	submitAfterPaste = 200 * time.Millisecond
 )
 
-func (s *session) inject(ctx context.Context, actorName, actorColor, message, submit string) error {
+func (s *session) inject(ctx context.Context, actorName, actorColor, message, submit string, pasted bool) error {
 	s.stdinMu.Lock()
 	defer s.stdinMu.Unlock()
 	s.mu.Lock()
@@ -981,6 +981,9 @@ func (s *session) inject(ctx context.Context, actorName, actorColor, message, su
 	bracketed := modes.set[2004]
 	tr := s.tr
 	s.mu.Unlock()
+	if pasted && !bracketed {
+		return ErrPasteModeOff
+	}
 	writeCtx, line := ctx, message+submit
 	if bracketed {
 		// Removing one end marker can join the bytes around it into

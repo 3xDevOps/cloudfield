@@ -334,8 +334,8 @@ as sent. When the window runs out the `-32004` message says `the request was not
 delivered and nothing applied` or `the request was sent and may already have
 applied`.
 
-Cloudfield does not type automated coordination messages into terminals. There
-are five ways to notice mail:
+There are six ways to notice mail. Only the last types into a terminal, and
+it types one line that points at the inbox, never a message:
 
 1. **An active inbox wait wins.** An agent expecting a reply should use
    `cloudfield-internal inbox --wait 30`. The current tool call receives the
@@ -350,8 +350,8 @@ are five ways to notice mail:
 3. **A boundary hook supplies context at the next native event.** A manually
    installed Claude Code `claude.json` and the Copilot CLI, Gemini CLI, and
    Cursor CLI command hooks do not watch an already-idle session. Mail
-   arriving after their last hook waits for the next supported boundary or
-   explicit inbox read.
+   arriving after their last hook waits for the next supported boundary, an
+   explicit inbox read, or the typed line below.
 4. **A Standard Codex run is prompted through its app-server.** The server
    prompts the session with the inbox notice, as a new turn when it is idle
    and as a steer mid-turn, with or without a task. A working session also
@@ -365,6 +365,14 @@ are five ways to notice mail:
    instruction, under the same admission as a native wake. Each set of new
    unread messages starts at most one such turn. Hooks stay silent in these sessions
    (`AETHER_ENHANCED=1`); see [enhanced-sessions.md](enhanced-sessions.md#mail).
+6. **A Standard Copilot, Gemini or Cursor session gets one typed line.** These
+   CLIs have no hook or API that starts a turn, so the server pastes the
+   inbox instruction into the agent's terminal as one line and submits it.
+   It does so only while the terminal is quiet, bracketed paste is on, no
+   recorded request waits for an answer and no member controls the session;
+   otherwise the wake stays owed. Each set of new unread messages is typed for once.
+   The conditions and what they cannot see are in
+   [harnesses.md](harnesses.md#typed-wake).
 
 A session owes a wake while it has unread mail that no wake has yet started a turn for. Announcing mail inside a turn
 does not settle it. The server retries an owed wake when mail arrives, a turn
@@ -420,9 +428,11 @@ approval waits. See the agent-specific resume behavior before relying on
 automatic wake after a Stop.
 
 Missing, disabled, untrusted, unsupported, or failed integrations do not lose
-mail. Inspect the real agent error and read the inbox explicitly. There is
-no silent PTY fallback, attachment to an arbitrary running terminal agent, or
-automatic restart of an exited or closed session. Background sessions may use
+mail. Inspect the real agent error and read the inbox explicitly. Outside the
+typed line for Standard Copilot, Gemini and Cursor sessions, nothing is typed
+into a terminal: there is no PTY fallback for another agent, no attachment to
+an arbitrary running terminal agent, and no automatic restart of an exited or
+closed session. Background sessions may use
 supported boundary hooks while alive, but do not receive native idle wake.
 
 Accepted messages, questions, and replies retain their originating session (see
@@ -675,7 +685,8 @@ user; a session with extra repositories (`--repo`) gets a line naming them.
 
 The `waiting` line appears only where Cloudfield resumes an idle session when
 mail arrives: Enhanced sessions and Standard sessions that load a native Claude
-Code, pi, omp or OpenCode integration or attach Codex to its app-server. A
+Code, pi, omp or OpenCode integration, attach Codex to its app-server, or are
+woken by a typed line (Copilot CLI, Gemini CLI and Cursor CLI). A
 protected session is never woken, so its line tells it
 to wait in its turn while `coord.status` returns `protected: true`. Any other
 launch is told instead to wait for subsessions,
@@ -696,9 +707,9 @@ capabilities lack `coord.report`, else
 else `interactive`. `AETHER_BACKGROUND=1` also drops answered, needs-input
 and waiting. The waiting line needs `AETHER_ENHANCED=1` or
 `AETHER_IDLE_WAKE=1`, which Cloudfield sets on a Standard launch that loads a
-native integration file (Claude Code, pi, OMP and OpenCode; Copilot CLI's
-hooks cannot wake it) or attaches Codex to its app-server, and a status
-without `protected: true`.
+native integration file (Claude Code, pi, OMP and OpenCode), attaches Codex
+to its app-server, or is woken by a typed line (Copilot CLI, Gemini CLI and
+Cursor CLI), and a status without `protected: true`.
 `AETHER_ROLE_CARD=1` marks a launch that already carries the card in its
 system prompt, so hooks and the bridge do not repeat it.
 
@@ -1274,9 +1285,8 @@ are on by default and go one level deep: a subsession cannot start subsessions, 
 `subsession start` from one is refused with `session <id> is itself a subsession of
 <parent>, and subsessions go one level deep; ...`. Any other session except a
 Background one may start subsessions. A parent must wake when
-mail arrives, so `subsession start` from a Standard session of an agent with no idle
-wake is refused with `<agent> in Standard mode has no idle wake; start it in
-Enhanced`, or for Antigravity, which has no Enhanced mode, with `antigravity
+mail arrives, so `subsession start` from a Standard Antigravity session, the
+one agent with no idle wake, is refused with `antigravity
 in Standard mode has no idle wake, and it has no Enhanced mode; as a
 subsession it runs only in Background, and a session that waits for mail needs
 another agent`. Who may turn them off is in [teams.md](teams.md#subsessions).
@@ -1298,16 +1308,16 @@ another agent`. Who may turn them off is in [teams.md](teams.md#subsessions).
   its quota used), `not-installed`, `not-signed-in` or `off` (the owner turned it
   off for subsessions, [teams.md](teams.md#choose-the-agents-subsessions-use)),
   with the sentence that says how to fix it. A `ready` login the server found signed out says so
-  in its sentence. Each agent lists its `modes` and `default_mode`; an agent
-  with no idle wake has no `standard`. `--harness` adds that agent's models.
+  in its sentence. Each agent lists its `modes` and `default_mode`;
+  Antigravity, which has no idle wake, has no `standard`. `--harness` adds that agent's models.
 - `subsession start` takes `--harness`, `--purpose` (3-8 words, shown in the
   dashboard) and `--task` or `--task-file` (at most 24 KiB, so the escaped request fits the socket's 64 KiB; `-` reads
   standard input), plus optional `--model`, `--mode
   standard|enhanced|background` and `--account <member-id>`. Without `--mode`
   the subsession runs Enhanced where the agent's Enhanced mode is installed.
-  Where it is not, the subsession runs Standard, or Background if the agent
-  has no idle wake. `--mode standard` for an agent with no idle wake is
-  refused with the same message as a Standard parent of that agent. Without
+  Where it is not, the subsession runs Standard, or Background for
+  Antigravity. `--mode standard` for Antigravity is
+  refused with the same message as a Standard Antigravity parent. Without
   `--account`, a subsession of the parent's agent starts on the parent's
   account, and any other agent on the owner's own account. A parent handed over
   from another member is refused: it still runs the previous owner's agent on
@@ -1516,8 +1526,9 @@ What a report does depends on the session:
   turn's own reason. `--for` with another outcome, or an unknown `--for`
   value, is refused with `CodeInvalidParams`. Report it only where mail
   resumes the idle session (Enhanced sessions, managed Claude Code launches,
-  Standard Codex on its app-server and native pi, omp or OpenCode
-  integrations); elsewhere nothing wakes the
+  Standard Codex on its app-server, native pi, omp or OpenCode
+  integrations, and Standard Copilot, Gemini and Cursor sessions, which the
+  server wakes by typing); elsewhere nothing wakes the
   agent when a reply arrives, so it waits inside its turn with
   `inbox --wait 30`, and a Background session's turn end finishes the session.
   Nothing re-prompts the agent when a process finishes. For a pull request,

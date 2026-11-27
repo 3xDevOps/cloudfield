@@ -19,6 +19,10 @@ type Capabilities struct {
 	// IdleWake: mail starts a turn in an idle Standard session instead of
 	// waiting for the next hook boundary.
 	IdleWake bool
+	// TypedWake: the idle wake is one line the server types into the
+	// agent's terminal and submits, for a CLI with no hook or API that
+	// starts a turn.
+	TypedWake bool
 	// Steer: a Standard run's terminal is attached to the agent's app-server,
 	// through which the server learns of its turns and hands it mail and
 	// messages, as a new turn when idle and as a steer mid-turn. The
@@ -63,8 +67,5 @@ func WakeRefusal(agent string, mode domain.LaunchMode) error {
 	if !shipped || agent == "custom" || mode != domain.LaunchTUI || p.Capabilities.IdleWake {
 		return nil
 	}
-	if p.EnhancedSupport() == EnhancedNone {
-		return fmt.Errorf("%s in Standard mode has no idle wake, and it has no Enhanced mode; as a subsession it runs only in Background, and a session that waits for mail needs another agent", agent)
-	}
-	return fmt.Errorf("%s in Standard mode has no idle wake; start it in Enhanced", agent)
+	return fmt.Errorf("%s in Standard mode has no idle wake, and it has no Enhanced mode; as a subsession it runs only in Background, and a session that waits for mail needs another agent", agent)
 }

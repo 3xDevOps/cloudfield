@@ -303,3 +303,67 @@ func TestCoordWakeDefersToControlBeforeSynchronousCleanup(t *testing.T) {
 		t.Fatal("Control-owned cleanup did not finish")
 	}
 }
+
+type typedWaker struct{ lines chan string }
+
+func (typedWaker) Wakeable(domain.RunID) bool  { return true }
+func (typedWaker) InTurn(domain.RunID) bool    { return false }
+func (typedWaker) TypedWake(domain.RunID) bool { return true }
+func (w typedWaker) Wake(_ context.Context, _ domain.RunID, prompt string) error {
+	w.lines <- prompt
+	return nil
+}
+
+// A member in control may be typing in the terminal, so a wake typed there
+// stays owed until they leave.
+func TestATypedWakeWaitsForTheMemberInControl(t *testing.T) {
+	f := newWakeServerFixture(t, false)
+	waker := typedWaker{lines: make(chan string, 4)}
+	deps := Deps{Store: f.db, Control: f.control}
+	svc, err := coord.New(coord.Config{Dir: filepath.Join(f.dir, "coord"), Store: f.db, Mail: f.db, Bus: f.bus, Peers: wakeNoPeers{},
+		Waker: waker, WakeAdmission: newCoordWakeAdmission(deps), ReminderAdmission: newCoordReminderAdmission(deps)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = svc.Close() })
+	if _, err = svc.Provision(context.Background(), f.run.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	lease, _, err := f.control.Acquire(string(f.run.ID), string(f.member.ID), "tab", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.WakeIdle(f.run.ID)
+	select {
+	case line := <-waker.lines:
+		t.Fatalf("typed %q into a session a member controls", line)
+	case <-time.After(300 * time.Millisecond):
+	}
+	if err = f.control.Release(string(f.run.ID), f.member.ID, "tab", lease.Generation); err != nil {
+		t.Fatal(err)
+	}
+	next := func(unread int) {
+		t.Helper()
+		svc.WakeIdle(f.run.ID)
+		select {
+		case line := <-waker.lines:
+			if line != protocol.CoordInboxLine(unread) {
+				t.Fatalf("typed %q, want the one line %q", line, protocol.CoordInboxLine(unread))
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("the owed wake was not typed")
+		}
+	}
+	next(1)
+	svc.WakeIdle(f.run.ID)
+	select {
+	case line := <-waker.lines:
+		t.Fatalf("mail a line was typed for was typed again: %q", line)
+	case <-time.After(300 * time.Millisecond):
+	}
+	msg := &store.RunMessage{WorkspaceID: f.run.WorkspaceID, FromRun: f.run.ID, ToRun: f.run.ID, Body: "more mail", IdempotencyKey: "wake-mail-2"}
+	if err = f.db.AppendRunMessage(context.Background(), msg, protocol.CoordMaxUnread); err != nil {
+		t.Fatal(err)
+	}
+	next(2)
+}

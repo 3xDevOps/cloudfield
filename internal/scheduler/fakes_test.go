@@ -863,6 +863,9 @@ type fakePTY struct {
 	logDir         string
 	// removedTranscripts are the session keys whose transcripts were removed.
 	removedTranscripts []ptyhost.SessionKey
+	// pasteOff makes every terminal refuse InjectPasted, as one whose agent
+	// has not turned bracketed paste mode on.
+	pasteOff bool
 }
 
 type fakePTYSession struct {
@@ -1057,6 +1060,22 @@ func (p *fakePTY) Inject(_ context.Context, key ptyhost.SessionKey, actorName, a
 	// modeled here; it is covered by the ptyhost tests.
 	_, err := sess.att.Stdin().Write([]byte(message + submit))
 	return err
+}
+
+func (p *fakePTY) setPasteOff(off bool) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.pasteOff = off
+}
+
+func (p *fakePTY) InjectPasted(ctx context.Context, key ptyhost.SessionKey, actorName, actorColor, message, submit string) error {
+	p.mu.Lock()
+	off := p.pasteOff
+	p.mu.Unlock()
+	if off {
+		return ptyhost.ErrPasteModeOff
+	}
+	return p.Inject(ctx, key, actorName, actorColor, message, submit)
 }
 
 func (p *fakePTY) session(run domain.RunID) *fakePTYSession {

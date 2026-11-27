@@ -112,6 +112,11 @@ and shows as `held`; it is delivered when you **Release** or leave the session
 page, or when the lease lapses 15 seconds after the tab is killed. See
 [coordination.md](coordination.md#subsessions).
 
+Mail wakes an idle Standard Copilot, Gemini or Cursor session with one line
+the server types into its terminal. While anyone controls the session that
+line waits the same way, so it cannot join what they are typing
+([harnesses.md](harnesses.md#typed-wake)).
+
 ### The Terminal toolbar
 
 The toolbar shows who controls the agent terminal (**You control**, **Alice

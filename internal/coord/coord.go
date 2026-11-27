@@ -150,7 +150,8 @@ type Config struct {
 	WakeAdmission WakeAdmission
 	// Nil leaves the runs it wakes to read mail on their own.
 	Waker SessionWaker
-	// ReminderAdmission is WakeAdmission for a report reminder, which also
+	// ReminderAdmission is WakeAdmission for a report reminder and for a
+	// wake typed into a terminal (SessionWaker.TypedWake), which also
 	// refuses a run a member controls: the next prompt is theirs. Nil sends
 	// no reminders.
 	ReminderAdmission WakeAdmission

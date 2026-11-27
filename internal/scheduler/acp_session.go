@@ -254,9 +254,10 @@ var errACPBusy = errors.New("scheduler: the Enhanced agent is busy")
 
 // Wakeable reports whether the server can prompt run's agent session: an
 // idle enhanced session, a Standard Codex terminal attached to its
-// app-server, or a sleeping Standard session VM.
+// app-server, a Standard session woken by typing, or a sleeping Standard
+// session VM.
 func (s *Scheduler) Wakeable(run domain.RunID) bool {
-	if s.asleepStandardVM(run) {
+	if s.asleepStandardVM(run) || s.TypedWake(run) {
 		return true
 	}
 	if s.attachedAppServer(run) {
@@ -278,15 +279,20 @@ func (s *Scheduler) Wake(ctx context.Context, run domain.RunID, prompt string) e
 		s.mu.Unlock()
 		prompt = coordhooks.Named(prompt, s.containerCLI(ctx, cid))
 	}
+	typed := s.TypedWake(run)
 	if s.asleepStandardVM(run) {
 		// The save cut the agent's mail hook and app-server bridge; both
-		// connect again once the VM runs. The hook then takes the mail.
+		// connect again once the VM runs. The hook then takes the mail. A
+		// typed wake has no hook: its line waits for the woken terminal.
 		if err := s.WakeRun(ctx, run, ""); err != nil {
 			return err
 		}
-		if !s.attachedAppServer(run) {
+		if !typed && !s.attachedAppServer(run) {
 			return nil
 		}
+	}
+	if typed {
+		return s.typeWake(ctx, run, prompt)
 	}
 	if !s.attachedAppServer(run) {
 		return s.WakeEnhanced(ctx, run, prompt)
