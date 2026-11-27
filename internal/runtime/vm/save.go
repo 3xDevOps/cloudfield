@@ -29,6 +29,9 @@ const (
 	// is about 30 s.
 	reportSettled = 16 << 20
 	reportTimeout = 40 * time.Second
+	// restorePoll is how often a restore asks Cloud Hypervisor whether it
+	// holds the VM, which takes no process, unlike asking the unit.
+	restorePoll = 10 * time.Millisecond
 	// snapshotRate is the slowest write a snapshot gets time for: a 24 GiB
 	// guest gets over 20 minutes. A monitor still busy after that is taken
 	// to hang; the VM it holds paused is resumed by the next wake.
@@ -96,7 +99,7 @@ func (e *engine) save(ctx context.Context, key string) error {
 		return e.resumeAfter(ctx, api, key, cause)
 	}
 	dir := e.path(key, snapshotDir)
-	if err = os.RemoveAll(dir); err != nil {
+	if err = errors.Join(os.RemoveAll(dir), os.RemoveAll(e.path(key, usedSnapshotDir))); err != nil {
 		return resumeAfter(err)
 	}
 	if err = os.Mkdir(dir, 0o700); err != nil {
@@ -321,12 +324,16 @@ func (e *engine) restore(ctx context.Context, key string) error {
 				return err
 			}
 		}
+		runtime.Step(ctx, "network")
 		if err = e.launch(ctx, rec, l); err != nil {
 			return err
 		}
+		runtime.Step(ctx, "unit")
 		loadCtx, cancel := context.WithTimeout(ctx, restoreTimeout+time.Duration(unitMemoryMiB(rec)<<20/snapshotRate)*time.Second)
 		err = e.awaitRestored(loadCtx, key, api)
 		cancel()
+		e.stepHypervisor(ctx, key)
+		runtime.Step(ctx, "restore")
 		if err == nil {
 			rec.Resumed, err = diskTimes(dir)
 		}
@@ -352,11 +359,13 @@ func (e *engine) restore(ctx context.Context, key string) error {
 		resumeErr = api.resume(live)
 	}
 	stuck := state() == "Paused"
+	runtime.Step(ctx, "resume")
 	var h helper
 	if stuck {
 		err = errors.Join(fmt.Errorf("vm runtime: resume restored VM %s: it stays paused%s", key, e.logTail(key)), resumeErr)
 	} else if h, err = e.helper(key); err == nil {
 		err = e.waitHelper(live, key, h)
+		runtime.Step(ctx, "helper")
 	}
 	if err == nil {
 		if err = h.SyncClock(live, time.Now()); err != nil {
@@ -383,7 +392,21 @@ func (e *engine) restore(ctx context.Context, key string) error {
 	if storeErr := e.store(rec); storeErr != nil {
 		return errors.Join(err, storeErr)
 	}
-	return errors.Join(err, os.RemoveAll(dir))
+	// Deleted behind the wake: unlinking 0.9 GiB of saved memory took
+	// 200 ms. The next save removes what a host that stopped meanwhile left.
+	used := e.path(key, usedSnapshotDir)
+	if renameErr := os.Rename(dir, used); renameErr != nil {
+		if errors.Is(renameErr, fs.ErrNotExist) {
+			return err
+		}
+		return errors.Join(err, renameErr)
+	}
+	go func() {
+		if rmErr := os.RemoveAll(used); rmErr != nil {
+			slog.Warn("vm runtime: delete the saved state a wake used", "vm", key, "error", rmErr)
+		}
+	}()
+	return err
 }
 
 // diskTimes is when each disk the saved guest in dir may write was last
@@ -422,18 +445,22 @@ func diskTimes(dir string) (map[string]int64, error) {
 // awaitRestored waits until Cloud Hypervisor holds the restored, still
 // paused VM.
 func (e *engine) awaitRestored(ctx context.Context, key string, api chAPI) error {
+	asked := time.Now()
 	for {
 		state, err := api.state(ctx)
 		if err == nil && state == "Paused" {
 			return nil
 		}
-		if up, upErr := e.running(ctx, key); upErr == nil && !up {
-			return fmt.Errorf("vm runtime: VM %s stopped while restoring%s", key, e.logTail(key))
+		if time.Since(asked) >= waitPoll {
+			asked = time.Now()
+			if up, upErr := e.running(ctx, key); upErr == nil && !up {
+				return fmt.Errorf("vm runtime: VM %s stopped while restoring%s", key, e.logTail(key))
+			}
 		}
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("vm runtime: restore VM %s: %w (last state %q, %v)%s", key, ctx.Err(), state, err, e.logTail(key))
-		case <-time.After(waitPoll):
+		case <-time.After(restorePoll):
 		}
 	}
 }

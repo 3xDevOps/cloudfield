@@ -78,6 +78,7 @@ func (f *mirrorRPCFake) Disable(_ context.Context, _ domain.WorkspaceID) (mirror
 func (f *mirrorRPCFake) Capture(context.Context, domain.WorkspaceID, string) (mirrorservice.CaptureResult, error) {
 	return mirrorservice.CaptureResult{}, errors.New("not used")
 }
+func (f *mirrorRPCFake) Warm(context.Context, domain.WorkspaceID) error { return nil }
 
 func mirrorRPCState(id domain.WorkspaceID) domain.WorkspaceMirror {
 	stamp := time.Date(2026, 9, 11, 12, 0, 0, 0, time.UTC)

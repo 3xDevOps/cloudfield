@@ -18,13 +18,13 @@ func TestSetRunAccountKeepsHistory(t *testing.T) {
 	ada, grace := mustCreateMember(t, db), mustCreateMember(t, db)
 	r := mustCreateRun(t, db, w.ID, ada.ID, domain.RunRunning)
 
-	if _, err := db.SetRunAccount(ctx, r.ID, domain.AccountOf("mem-nobody"), "usage limit", time.Now()); !errors.Is(err, ErrNotFound) {
+	if _, err := db.SetRunAccount(ctx, r.ID, domain.AccountOf("mem-nobody"), false, "usage limit", time.Now()); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("move to an unknown account = %v, want ErrNotFound", err)
 	}
 	if segments, err := db.ListRunAccountSegments(ctx, r.ID); err != nil || len(segments) != 0 {
 		t.Fatalf("segments after a refused move = %+v, %v", segments, err)
 	}
-	seq, err := db.SetRunAccount(ctx, r.ID, domain.AccountOf(grace.ID), "usage limit", time.Now())
+	seq, err := db.SetRunAccount(ctx, r.ID, domain.AccountOf(grace.ID), false, "usage limit", time.Now())
 	if err != nil || seq != 1 {
 		t.Fatalf("SetRunAccount = %d, %v", seq, err)
 	}
@@ -32,7 +32,7 @@ func TestSetRunAccountKeepsHistory(t *testing.T) {
 	if err != nil || got.AccountMember() != grace.ID || got.RequestedAccountMemberID != ada.ID {
 		t.Fatalf("moved run = %+v, %v", got, err)
 	}
-	if _, err = db.SetRunAccount(ctx, r.ID, domain.AccountOf(ada.ID), "usage limit", time.Now()); err != nil {
+	if _, err = db.SetRunAccount(ctx, r.ID, domain.AccountOf(ada.ID), false, "usage limit", time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	got, err = db.GetRun(ctx, r.ID)

@@ -116,6 +116,34 @@ func TestReclaimDiskRemovesClosedRunContainerFirstAndStopsWhenRecovered(t *testi
 	requireCacheExists(t, cache, true)
 }
 
+type keptDiskRuntime struct {
+	*fakeRuntime
+	dropped func()
+}
+
+func (r *keptDiskRuntime) SweepImages() error { return nil }
+
+func (r *keptDiskRuntime) DropKeptCheckoutDisks() error {
+	r.dropped()
+	return nil
+}
+
+func TestReclaimDiskDropsKeptCheckoutDisksBeforeAClosedSession(t *testing.T) {
+	e := newTestEnv(t, func(cfg *Config) { cfg.RunContainerTTL = time.Hour })
+	run := closeRetained(t, e, "closed session")
+	var free atomic.Uint64
+	free.Store(1 << 30)
+	setFreeBytes(e, &free)
+	e.sched.cfg.Runtime = &keptDiskRuntime{fakeRuntime: e.rt, dropped: func() { free.Store(80 << 30) }}
+	e.sched.reclaimDisk(t.Context(), "")
+	if free.Load() != 80<<30 {
+		t.Fatal("reclaim below the floor kept the prepared checkout disks")
+	}
+	if e.rt.byName(string(run.ID)) == nil {
+		t.Fatal("reclaim removed a closed session's container when dropping the kept checkout disks was enough")
+	}
+}
+
 func TestReclaimDiskSkipsRunNoLongerRetained(t *testing.T) {
 	e := newTestEnv(t, func(cfg *Config) { cfg.RunContainerTTL = time.Hour })
 	run := closeRetained(t, e, "reopened after snapshot")

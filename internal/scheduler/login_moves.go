@@ -3,12 +3,14 @@ package scheduler
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/fallback"
+	"github.com/3xDevOps/cloudfield/internal/ptyhost"
 	"github.com/3xDevOps/cloudfield/internal/quota"
 )
 
@@ -42,8 +44,10 @@ func (s *Scheduler) loginRow(ctx context.Context, account domain.Account, agent 
 }
 
 // readLogin reads a login's usage through the fallback's reader, afresh
-// when refresh is set.
+// when refresh is set, waiting no longer than a launch does.
 func readLogin(ctx context.Context, usage fallback.QuotaReader, account domain.Account, refresh bool) ([]quota.Provider, error) {
+	ctx, cancel := context.WithTimeout(ctx, fallback.ReadTimeout)
+	defer cancel()
 	if account.Login.Added() {
 		logins, ok := usage.(fallback.LoginReader)
 		if !ok {
@@ -81,7 +85,15 @@ func (s *Scheduler) checkTeammateSignal(ctx context.Context, f *UsageFallback, r
 	}
 	providers, err := readLogin(ctx, f.Usage, from, true)
 	if err == nil {
-		if spent, _ := spentWindows(providers, run.Harness, time.Now()); len(spent) > 0 {
+		now := time.Now()
+		for i := range providers {
+			// Within the request floor a fresh read is answered with the
+			// vendor's last report as stale; that report is fresh enough.
+			if quota.Recent(providers[i], now) {
+				providers[i].Status = "ok"
+			}
+		}
+		if spent, _ := spentWindows(providers, run.Harness, now); len(spent) > 0 {
 			return ""
 		}
 	}
@@ -101,38 +113,61 @@ func (s *Scheduler) noteRunOut(ctx context.Context, f *UsageFallback, run *domai
 			return
 		}
 	}
-	fallback.NoteRunOut(from, time.Now())
+	fallback.NoteRunOut(from, run.Harness, time.Now())
 }
 
 // triedLogins ends the reason of a session that ran out on every login it
-// could use with those logins and when the first of them is usable again:
-// for each, the latest reset among its spent windows, and the earliest of
-// those. It is empty for an account with one login, whose reason stays as
+// could use with the logins it left because they were spent, m's included,
+// and when the first of them is usable again: for each, the latest reset
+// among its spent windows, and the earliest of those, unknown when a
+// login's read gives none. It is empty for a session that ran on one
+// login, or where nobody involved keeps added logins, whose reason stays as
 // before logins existed.
-func (s *Scheduler) triedLogins(ctx context.Context, f *UsageFallback, run *domain.Run, measured fallback.Measured, from domain.Account) string {
-	var tried []domain.Account
-	for account, used := range measured {
-		if used >= fallback.ExhaustedPercent && account.Member == from.Member {
-			tried = append(tried, account)
-		}
-	}
-	if len(tried) < 2 {
+func (s *Scheduler) triedLogins(ctx context.Context, f *UsageFallback, run *domain.Run, m accountMove) string {
+	segments, err := s.cfg.Store.ListRunAccountSegments(ctx, run.ID)
+	if err != nil {
 		return ""
 	}
-	slices.SortFunc(tried, func(a, b domain.Account) int { return strings.Compare(a.String(), b.String()) })
+	var ran, tried []domain.Account
+	keepsLogins := false
+	for i, segment := range segments {
+		account := segment.Account()
+		// The next segment records why the session left this one.
+		spent := !m.restricted
+		if i+1 < len(segments) {
+			spent = segments[i+1].Reason == usageLimitSegment
+		}
+		if spent && !slices.Contains(tried, account) {
+			tried = append(tried, account)
+		}
+		if slices.Contains(ran, account) {
+			continue
+		}
+		ran = append(ran, account)
+		if logins, listErr := s.cfg.Store.ListAgentLogins(ctx, account.Member, run.Harness); listErr == nil && len(logins) > 0 {
+			keepsLogins = true
+		}
+	}
+	if len(ran) < 2 || !keepsLogins || len(tried) == 0 {
+		return ""
+	}
 	names := make([]string, len(tried))
 	var first *time.Time
+	known := true
 	now := time.Now()
 	for i, account := range tried {
 		names[i] = s.accountLabel(ctx, account, run.Harness)
 		providers, err := readLogin(ctx, f.Usage, account, false)
-		if err != nil {
+		spent, _ := spentWindows(providers, run.Harness, now)
+		if err != nil || len(spent) == 0 {
+			known = false
 			continue
 		}
-		spent, _ := spentWindows(providers, run.Harness, now)
 		var latest *time.Time
 		for _, w := range spent {
-			if w.ResetsAt != nil && (latest == nil || w.ResetsAt.After(*latest)) {
+			if w.ResetsAt == nil {
+				known = false
+			} else if latest == nil || w.ResetsAt.After(*latest) {
 				latest = w.ResetsAt
 			}
 		}
@@ -141,8 +176,71 @@ func (s *Scheduler) triedLogins(ctx context.Context, f *UsageFallback, run *doma
 		}
 	}
 	usable := "unknown"
-	if first != nil {
+	if known && first != nil {
 		usable = first.UTC().Format(time.RFC3339)
 	}
 	return "; logins tried: " + strings.Join(names, ", ") + "; the first is usable again at " + usable
+}
+
+// billedPerUse says that account's login is billed per use in a session in
+// home's home, as LoginPerUse decides.
+func (s *Scheduler) billedPerUse(ctx context.Context, home domain.MemberID, account domain.Account, agent string) (string, bool) {
+	if account.Login.Added() && s.cfg.Logins == nil {
+		return "", false
+	}
+	if perUse, err := s.LoginPerUse(ctx, home, account, agent); err != nil || !perUse {
+		return "", false
+	}
+	return s.accountLabel(ctx, account, agent) + "'s account is billed per use.", true
+}
+
+// annotateRun writes text to the run's terminal transcript.
+func (s *Scheduler) annotateRun(ctx context.Context, run domain.RunID, text string) {
+	if err := s.cfg.PTY.Annotate(context.WithoutCancel(ctx), ptyhost.RunSession(run), "Cloudfield", "", text); err != nil {
+		slog.Warn("scheduler: note in the session's terminal", "run", run, "error", err)
+	}
+}
+
+// notePerUse says in a session that launched on a login billed per use, in
+// its log and its room, that it is billed per use. An Enhanced session's
+// notice was written before its agent started.
+func (s *Scheduler) notePerUse(ctx context.Context, run *domain.Run, billed string) {
+	if !run.ACP {
+		s.annotateRun(ctx, run.ID, billed)
+	}
+	f := s.usageFallbackSeam()
+	if f == nil || f.Note == nil {
+		return
+	}
+	if err := f.Note(ctx, run, billed, string(run.ID)+":per-use"); err != nil {
+		slog.Warn("scheduler: post the login billed per use to the room", "run", run.ID, "error", err)
+	}
+}
+
+// vendorLine is what Cloudfield keeps of a usage-limit message from inside
+// a container: its first line, at most 200 characters.
+func vendorLine(message string) string {
+	line, _, _ := strings.Cut(message, "\n")
+	line = strings.TrimSpace(line)
+	if r := []rune(line); len(r) > 200 {
+		line = string(r[:200])
+	}
+	return line
+}
+
+// noteRestricted records that the run left member's account on a
+// restriction message, which its other logins share.
+func (s *Scheduler) noteRestricted(entry *supervised, member domain.MemberID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if slices.Contains(entry.restricted, member) {
+		return
+	}
+	entry.restricted = append(entry.restricted, member)
+	if s.runs[entry.runID] != entry {
+		return
+	}
+	if err := s.writeSidecar(entry.sidecar()); err != nil {
+		slog.Warn("scheduler: persist the account the session left on a restriction", "run", entry.runID, "error", err)
+	}
 }

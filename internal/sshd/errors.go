@@ -84,7 +84,7 @@ func rpcError(err error) *protocol.Error {
 		switch {
 		case errors.Is(err, store.ErrNotFound):
 			code = protocol.CodeNotFound
-		case errors.Is(err, scheduler.ErrSignedOut):
+		case errors.Is(err, scheduler.ErrSignedOut), errors.Is(err, scheduler.ErrNoStartLogin), errors.Is(err, scheduler.ErrEnvironmentPays):
 			code = protocol.CodeInvalidState
 		case errors.Is(err, store.ErrConflict), errors.Is(err, store.ErrInUse),
 			errors.Is(err, scheduler.ErrRunShellTabLimit), errors.Is(err, scheduler.ErrAgentInstallRunning),

@@ -64,10 +64,12 @@ type runView struct {
 	Branch        string          `json:"branch"`
 	Report        *runReport      `json:"report,omitempty"`
 	// AsleepSince is when idleness stopped the session's container or
-	// saved its VM; AsleepSaved while the saved VM keeps every process.
-	AsleepSince *string `json:"asleep_since,omitempty"`
-	AsleepSaved bool    `json:"asleep_saved,omitempty"`
-	WakeError   string  `json:"wake_error,omitempty"`
+	// paused or saved its VM; AsleepSaved while the VM keeps every process,
+	// AsleepInMemory while it is paused in memory rather than saved to disk.
+	AsleepSince    *string `json:"asleep_since,omitempty"`
+	AsleepSaved    bool    `json:"asleep_saved,omitempty"`
+	AsleepInMemory bool    `json:"asleep_in_memory,omitempty"`
+	WakeError      string  `json:"wake_error,omitempty"`
 	// AccountLogin is the added login the session spends; empty on the
 	// default login, and AccountLoginName empty once the login is removed.
 	AccountLogin       string `json:"account_login,omitempty"`
@@ -92,7 +94,7 @@ func viewOf(r protocol.Run, workspace string, items []protocol.AttentionItem, re
 	v := runView{
 		ID: r.ID, WorkspaceID: r.WorkspaceID, Workspace: workspace, Status: displayStatus(r), State: r.Status,
 		Reason: r.Reason, Wait: r.Wait, WaitText: r.Wait.Text(time.Now()), Branch: r.Branch, PendingInputs: []pendingInput{},
-		AsleepSince: r.AsleepSince, AsleepSaved: r.AsleepSaved, WakeError: r.WakeError,
+		AsleepSince: r.AsleepSince, AsleepSaved: r.AsleepSaved, AsleepInMemory: r.AsleepInMemory, WakeError: r.WakeError,
 		AccountLogin: r.AccountLogin, AccountLoginName: r.AccountLoginName, AccountLoginPerUse: r.AccountLoginPerUse,
 	}
 	offered := map[string][]protocol.AttentionOption{}
@@ -230,7 +232,10 @@ func printRunView(w io.Writer, v runView, items []protocol.AttentionItem) error 
 			wakes = "aether reopen " + v.ID + " wakes it"
 		}
 		held := "its container is stopped"
-		if v.AsleepSaved {
+		switch {
+		case v.AsleepInMemory:
+			held = "it is paused in memory with every process"
+		case v.AsleepSaved:
 			held = "it is saved to disk with every process"
 		}
 		_, _ = fmt.Fprintf(tw, "asleep\tsince %s; %s until %s\n", *v.AsleepSince, held, wakes)

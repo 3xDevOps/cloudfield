@@ -26,6 +26,10 @@ type subpathAPIChecker interface {
 	CheckSubpathAPI(context.Context) error
 }
 
+type subpathVolumeRemover interface {
+	RemoveSubpathVolume(ctx context.Context, hostPath string) error
+}
+
 type imageCacheEnvironmentResolver interface {
 	ImageCacheEnvironment(context.Context, string) (map[string]string, error)
 }
@@ -233,7 +237,7 @@ func (s *Scheduler) BuildEnvironmentPlan(ctx context.Context, run *domain.Run, w
 				plan.Mounts = append(plan.Mounts, logins...)
 				plan.LoginMember = run.AccountMemberID
 				if ac := profile.AccountConfig; ac != nil {
-					config, configErr := s.accountConfigMounts(filepath.Join(s.accountConfigRoot(), string(run.ID)), member.ID, profile, home)
+					config, configErr := s.accountConfigMounts(filepath.Join(s.accountConfigRoot(), string(run.ID)), member.ID, profile, home, false)
 					if configErr != nil {
 						return nil, configErr
 					}
@@ -647,12 +651,15 @@ func (s *Scheduler) loginMounts(ctx context.Context, launcher, account domain.Me
 // directory, which no container mounts, or a new login's directory, whose
 // sign-in fills the copy. The copy is made from the Legacy file when the launcher
 // has one, as their own CLI reads that, and an empty read-only file masks
-// the Legacy file so the CLI reads the copy. The copy is mounted where the
+// the Legacy file so the CLI reads the copy. With maskLegacy the mask goes
+// over an empty mountpoint where the launcher has no Legacy file, so one
+// another session writes later is masked too; Claude Code ignores an empty
+// Legacy file. The copy is mounted where the
 // profile's Env points the CLI: mounted over the launcher's file instead, it
 // would be detached by the launcher's other containers replacing that file
 // by rename. Each plan writes the copy afresh, so a run moved to another
 // account starts with none of the previous account cached.
-func (s *Scheduler) accountConfigMounts(dir string, launcher domain.MemberID, profile harness.Profile, home string) ([]runtime.Mount, error) {
+func (s *Scheduler) accountConfigMounts(dir string, launcher domain.MemberID, profile harness.Profile, home string, maskLegacy bool) ([]runtime.Mount, error) {
 	ac := profile.AccountConfig
 	set := profile.BorrowedState[ac.File]
 	data, legacy, err := s.cfg.Homes.StateWithout(launcher, ac.Legacy, ac.Keys, set)
@@ -676,8 +683,17 @@ func (s *Scheduler) accountConfigMounts(dir string, launcher domain.MemberID, pr
 		return nil, fmt.Errorf("scheduler: %w", err)
 	}
 	mounts := []runtime.Mount{{HostPath: filepath.Join(dir, name), ContainerPath: path.Join(home, target)}}
-	if legacy {
+	if !legacy && maskLegacy {
+		if err := s.cfg.Homes.PrepareLoginMountpoint(launcher, ac.Legacy, false); err != nil {
+			return nil, fmt.Errorf("scheduler: %w", err)
+		}
+	}
+	if legacy || maskLegacy {
 		mask := filepath.Join(dir, "legacy-mask")
+		// An earlier plan of this run left it read-only.
+		if err := os.Remove(mask); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("scheduler: mask the session's ~/%s: %w", ac.Legacy, err)
+		}
 		if err := writeFileIn(dir, path.Base(mask), nil); err != nil {
 			return nil, fmt.Errorf("scheduler: mask the session's ~/%s: %w", ac.Legacy, err)
 		}
@@ -914,32 +930,39 @@ func (s *Scheduler) DefaultMode(ctx context.Context, member, account domain.Memb
 // in mode on account can stand in for one on requested as a usage fallback:
 // the owner's login is there to share, an enhanced launch finds its ACP
 // server, and the agent runs from member's own installation, or from the
-// image when the launch on requested would too. It never borrows the owner's
-// installation, whose executables only a launcher who picked that account
-// has agreed to run, and never moves a launch that relied on requested's
-// installation to an account where the agent is missing, nor onto a login a
-// live container holds under another uid:gid. An added login is judged by
-// its own file, never its owner's default login. It reads member homes,
+// image when the launch on requested would too. It never borrows another
+// owner's installation, whose executables only a launcher who picked that
+// account has agreed to run, though a launcher who picked requested runs
+// its installation on requested's other logins too. It never moves a launch
+// that relied on requested's installation to an account where the agent is
+// missing, nor onto a login a live container holds under another uid:gid. An added login is judged by
+// its own file, never its owner's default login. Once member, requested or
+// the login's owner keeps an added login, a default login that cannot sign
+// in is never a fallback: its usage reads as unknown, which is no sign of a
+// login. It reads member homes,
 // login directories and the scheduler's own state only, never the runtime or
 // the vendor.
-func (s *Scheduler) FallbackLaunchable(ctx context.Context, member, requested domain.MemberID, login domain.Account, harnessName string, mode domain.LaunchMode) (bool, error) {
+func (s *Scheduler) FallbackLaunchable(ctx context.Context, member, requested domain.MemberID, login domain.Account, harnessName string, mode domain.LaunchMode, permission domain.Permission) (bool, error) {
 	account := login.Member
-	if login.Login.Added() {
-		if usable, err := s.addedLoginUsable(ctx, member, login, harnessName); err != nil || !usable {
-			return false, err
-		}
-	} else {
-		state, _, err := s.CheckSharedLaunch(ctx, member, account, harnessName)
-		if err != nil || state != SharedLaunchable || s.cfg.Homes == nil {
-			return err == nil && state == SharedLaunchable, err
-		}
+	// A default login whose files cannot be read stays a fallback, as
+	// before logins existed; only a launch that names none passes it over.
+	if refusal, err := s.loginRefusal(ctx, member, login, harnessName, permission == domain.PermissionIsolated); (err != nil && !errors.Is(err, errLoginUnread)) || refusal != "" || s.cfg.Homes == nil {
+		return err == nil && refusal == "", err
 	}
 	profile, argvs, err := s.launchProfile(ctx, member, account, harnessName)
 	if err != nil {
 		return false, err
 	}
-	if _, blocks, loginErr := s.LoginProblem(member, account, harnessName, profile); loginErr == nil && blocks && !login.Login.Added() {
-		return false, nil
+	if !login.Login.Added() {
+		added, err := s.keepsAddedLogin(ctx, harnessName, member, requested)
+		if err != nil {
+			return false, err
+		}
+		if added {
+			if problem, _ := s.defaultSignInProblem(account, harnessName, profile); problem != "" {
+				return false, nil
+			}
+		}
 	}
 	if mode == domain.LaunchACP {
 		installed, adapterErr := s.adapterInstalled(member, account, profile, argvs)
@@ -949,7 +972,7 @@ func (s *Scheduler) FallbackLaunchable(ctx context.Context, member, requested do
 	}
 	if len(profile.TUIArgs) > 0 {
 		installation, installErr := s.cfg.Homes.Installation(member, account, profile.TUIArgs[0], profile.InstallPaths)
-		if installErr != nil || (installation != "" && installation != member) {
+		if installErr != nil || (installation != "" && installation != member && installation != requested) {
 			return false, installErr
 		}
 		if installation == "" {

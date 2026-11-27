@@ -20,6 +20,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/linear"
 	"github.com/3xDevOps/cloudfield/internal/permissions"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/runtime"
 	"github.com/3xDevOps/cloudfield/internal/scheduler"
 	"github.com/3xDevOps/cloudfield/internal/store"
 )
@@ -284,24 +285,77 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 
 func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protocol.RunLaunchParams, mode domain.LaunchMode, policy domain.AccountFallback,
 	created func(domain.RunID), skipped *[]protocol.SkippedAccount) (*domain.Run, *protocol.Error) {
-	login, perr := s.launchLogin(ctx, member, domain.MemberID(p.AccountMemberID), p.Harness, p.Login, mode)
+	ctx = runtime.WithSteps(ctx)
+	workspaces := append([]domain.WorkspaceID{domain.WorkspaceID(p.WorkspaceID)}, workspaceIDs(p.ExtraWorkspaceIDs)...)
+	authorize := func() (LaunchAdmission, *protocol.Error) {
+		admission, err := AuthorizeLaunch(ctx, s.cfg.Store, member, p.AccountMemberID, workspaces)
+		if errors.Is(err, permissions.ErrDenied) {
+			return admission, &protocol.Error{Code: protocol.CodeDenied, Message: protocol.MethodRunLaunch + ": " + err.Error()}
+		}
+		if err != nil {
+			return admission, rpcError(err)
+		}
+		return admission, nil
+	}
+	// Admitted before anything of the workspace or the account's logins is
+	// read, and again under the mutex below.
+	if _, perr := authorize(); perr != nil {
+		return nil, perr
+	}
+	permission := cmp.Or(domain.Permission(p.Permission), domain.PermissionDefault)
+	login, perr := s.launchLogin(ctx, domain.WorkspaceID(p.WorkspaceID), member, domain.MemberID(p.AccountMemberID), p.Harness, p.Login, mode, permission)
 	if perr != nil {
 		return nil, perr
 	}
-	measured, err := fallback.Measure(ctx, s.cfg.Store, s.cfg.Services.Usage, member, domain.Account{Member: domain.MemberID(p.AccountMemberID), Login: login}, p.Harness, policy)
+	payer := sync.OnceValues(func() (string, error) {
+		return s.cfg.Runs.LoginPayer(ctx, domain.WorkspaceID(p.WorkspaceID), member, p.Harness, mode)
+	})
+	// A named login is refused, never traded for another, when a variable
+	// or a setting would pay instead of it.
+	if login.Added() {
+		if paidBy, payerErr := payer(); payerErr != nil || paidBy != "" {
+			return nil, rpcError(cmp.Or(payerErr, scheduler.EnvironmentPays(login, paidBy)))
+		}
+	}
+	account := cmp.Or(domain.MemberID(p.AccountMemberID), member)
+	measure := func() (fallback.Measured, error) {
+		if p.Login != "" {
+			return fallback.Measure(ctx, s.cfg.Store, s.cfg.Services.Usage, member, domain.Account{Member: account, Login: login}, p.Harness, policy)
+		}
+		return MeasureUnnamed(ctx, &s.cfg, member, domain.Account{Member: account, Login: login}, p.Harness, policy, payer)
+	}
+	var warming sync.WaitGroup
+	if mirrors := s.cfg.Services.Mirrors; mirrors != nil && p.CachedBase == "" {
+		// The launch's own base capture reports a refresh that fails.
+		warming.Go(func() { _ = mirrors.Warm(ctx, domain.WorkspaceID(p.WorkspaceID)) })
+	}
+	measured, err := measure()
+	warming.Wait()
 	if err != nil {
 		return nil, rpcError(err)
 	}
 	s.authorizationMu.Lock()
 	unlockAuthorization := sync.OnceFunc(s.authorizationMu.Unlock)
 	defer unlockAuthorization()
-	workspaces := append([]domain.WorkspaceID{domain.WorkspaceID(p.WorkspaceID)}, workspaceIDs(p.ExtraWorkspaceIDs)...)
-	admission, err := AuthorizeLaunch(ctx, s.cfg.Store, member, p.AccountMemberID, workspaces)
-	if err != nil {
-		if errors.Is(err, permissions.ErrDenied) {
-			return nil, &protocol.Error{Code: protocol.CodeDenied, Message: protocol.MethodRunLaunch + ": " + err.Error()}
+	admission, perr := authorize()
+	if perr != nil {
+		return nil, perr
+	}
+	// An unnamed start is chosen again under the mutex: the login chosen
+	// before the usage read may have been turned off or removed meanwhile.
+	// Another choice is measured once more, holding the mutex for at most
+	// that read's bound, so Select decides on its own usage.
+	if p.Login == "" {
+		again, perr := s.launchLogin(ctx, domain.WorkspaceID(p.WorkspaceID), member, domain.MemberID(p.AccountMemberID), p.Harness, p.Login, mode, permission)
+		if perr != nil {
+			return nil, perr
 		}
-		return nil, rpcError(err)
+		if again != login {
+			login = again
+			if measured, err = measure(); err != nil {
+				return nil, rpcError(err)
+			}
+		}
 	}
 	requested := admission.Account.ID
 	if mode == "" {
@@ -309,10 +363,9 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 			return nil, rpcError(err)
 		}
 	}
-	chosen, excluded := fallback.Select(ctx, s.cfg.Store, measured, member, domain.Account{Member: requested, Login: login}, p.Harness, workspaces, policy, func(ctx context.Context, account domain.Account) (bool, error) {
-		return s.cfg.Runs.FallbackLaunchable(ctx, member, requested, account, p.Harness, mode)
-	})
-	account := chosen.Member
+	chosen, excluded := fallback.Select(ctx, s.cfg.Store, measured, member, domain.Account{Member: requested, Login: login}, p.Harness, workspaces, policy,
+		Launchable(s.cfg.Runs, payer, member, requested, p.Harness, mode, permission))
+	account = chosen.Member
 	if excluded != nil {
 		slog.Warn("sshd: fallback accounts left out of a launch", "member", member, "error", excluded)
 	}
@@ -321,7 +374,6 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 	if p.Limits != nil {
 		limits = domain.RunLimits{CPUs: p.Limits.CPUs, MemoryBytes: p.Limits.MemoryBytes, Pids: p.Limits.Pids}
 	}
-	permission := cmp.Or(domain.Permission(p.Permission), domain.PermissionDefault)
 	run, err := launchWithOptions(ctx, s.cfg.Runs, domain.WorkspaceID(p.WorkspaceID), member, account, p.Task, p.Harness, mode, domain.LaunchOptions{
 		Limits:     limits,
 		CachedBase: p.CachedBase, Model: p.Model, Effort: p.Effort, Permission: permission, RequestedAccount: requested, AccountLogin: chosen.Login, Fallback: policy,
@@ -428,16 +480,12 @@ func (s *Server) runSnapshot(run *domain.Run) protocol.Run {
 				out.AccountLoginName = l.Name
 			}
 		}
-		if s.cfg.Logins != nil {
-			identity, idErr := s.cfg.Logins.Identity(run.AccountMember(), run.Harness, run.AccountLogin)
-			out.AccountLoginPerUse = idErr == nil && identity.PerUse()
-		}
 	}
 	if s.cfg.Runs != nil {
 		out.Paused = s.cfg.Runs.Paused(run.ID)
 		if sleep := s.cfg.Runs.Sleep(run.ID); sleep.AsleepSince != nil {
 			since := sleep.AsleepSince.UTC().Format(time.RFC3339Nano)
-			out.AsleepSince, out.AsleepSaved, out.Waking, out.WakeError = &since, sleep.Saved, sleep.Waking, sleep.WakeError
+			out.AsleepSince, out.AsleepSaved, out.AsleepInMemory, out.Waking, out.WakeError = &since, sleep.Saved, sleep.InMemory, sleep.Waking, sleep.WakeError
 		}
 		out.Cause = string(s.cfg.Runs.Cause(run.ID, run.Activity))
 		out.Wait = s.cfg.Runs.Wait(run.ID, run.Activity)
@@ -699,7 +747,7 @@ func (s *Server) runRelaunch(ctx context.Context, member domain.MemberID, params
 			}
 		}
 	}
-	if err = fallback.ResolveRunLogin(ctx, s.cfg.Store, member, run, workspaces); err != nil {
+	if err = fallback.ResolveRunRelaunch(ctx, s.cfg.Store, member, run, workspaces); err != nil {
 		return nil, rpcError(err)
 	}
 	reopened, err := s.cfg.Runs.Relaunch(ctx, id, member)

@@ -94,9 +94,12 @@ type MemoryUseRuntime interface {
 // Restore of a container that holds no saved state fails with ErrNotSaved.
 // SetCommand replaces the main command the next Start of a stopped
 // container runs, so one that starts again from its disk does not run its
-// launch command, with the task, again.
+// launch command, with the task, again. Park is Pause for an idle container
+// that stays paused: it first has the container give back the memory it
+// only caches.
 type SaveRuntime interface {
 	Saves(ID) bool
+	Park(context.Context, ID) error
 	Save(context.Context, ID) error
 	Restore(context.Context, ID) error
 	SavedMemory(ID) (uint64, error)

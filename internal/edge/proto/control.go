@@ -51,14 +51,18 @@ type Challenge struct {
 // Version is the lower of Version and the challenge's version.
 // AccessPolicy is the server's policy, read with ParseAccessPolicy; the
 // signature does not cover it, and the edge only reports it. A server
-// announces a changed policy by enrolling again.
+// announces a changed policy by enrolling again. NoticeNonce, NonceSize
+// random bytes the server draws for each enrollment, is what the edge
+// signs Ready.Notices for; an edge that does not know it, or gets
+// another size, signs none.
 type Hello struct {
-	Version      int          `json:"version"`
-	HostKey      []byte       `json:"host_key"`
-	Signature    []byte       `json:"signature"`
-	AgentVersion string       `json:"agent_version"`
-	Name         string       `json:"name"`
-	AccessPolicy AccessPolicy `json:"access_policy"`
+	Version      int           `json:"version"`
+	HostKey      []byte        `json:"host_key"`
+	Signature    []byte        `json:"signature"`
+	AgentVersion string        `json:"agent_version"`
+	Name         string        `json:"name"`
+	AccessPolicy AccessPolicy  `json:"access_policy"`
+	NoticeNonce  OptionalBytes `json:"notice_nonce,omitempty"`
 }
 
 // PublicKey parses HostKey.
@@ -74,12 +78,17 @@ func (h Hello) PublicKey() (ssh.PublicKey, error) {
 // signed with; the server pins it. RelayOrigins, sent only by an edge that
 // serves more than one relay origin, lists every one of them, the origin
 // the server enrolled at among them. A server that does not know the
-// member ignores it.
+// member ignores it. Notices holds a Notice for each retiring or retired
+// relay origin, and NoticesSignature is SignNotices' over them, sent only
+// to a server whose hello had a NoticeNonce; a server that does not know
+// the members ignores them.
 type Ready struct {
-	ServerID     string            `json:"server_id"`
-	State        string            `json:"state"`
-	EdgeKey      ed25519.PublicKey `json:"edge_key"`
-	RelayOrigins []string          `json:"relay_origins,omitempty"`
+	ServerID         string            `json:"server_id"`
+	State            string            `json:"state"`
+	EdgeKey          ed25519.PublicKey `json:"edge_key"`
+	RelayOrigins     []string          `json:"relay_origins,omitempty"`
+	Notices          Notices           `json:"notices,omitempty"`
+	NoticesSignature OptionalBytes     `json:"notices_signature,omitempty"`
 }
 
 // MaxRelayOrigins bounds the relay origins an edge serves, and the
@@ -244,6 +253,13 @@ func (m Ready) validate() error {
 		return fmt.Errorf("unknown server state %q", m.State)
 	case len(m.EdgeKey) != ed25519.PublicKeySize:
 		return fmt.Errorf("edge key is %d bytes, want %d", len(m.EdgeKey), ed25519.PublicKeySize)
+	case len(m.Notices) > MaxRelayOrigins:
+		return fmt.Errorf("%d notices, limit %d", len(m.Notices), MaxRelayOrigins)
+	}
+	for _, n := range m.Notices {
+		if err := n.validate(); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -251,9 +267,13 @@ func (m Ready) validate() error {
 // usableOrigins keeps the canonical origins of list, MaxRelayOrigins at
 // most. A list the server cannot use never refuses the ready it came in:
 // a later edge may send more origins, or forms this build does not
-// accept.
+// accept. It is nil only for a list that names nothing, and empty, not
+// nil, for one that names only origins it cannot use.
 func usableOrigins(list []string) []string {
-	var out []string
+	if len(list) == 0 {
+		return nil
+	}
+	out := []string{}
 	for _, o := range list {
 		if c, err := Origin(o); err == nil && c == o && len(out) < MaxRelayOrigins {
 			out = append(out, o)

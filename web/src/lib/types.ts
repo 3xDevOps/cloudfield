@@ -273,8 +273,10 @@ export interface Run {
   paused?: boolean
   /** When idleness stopped the live session's container or saved its VM; absent while it is awake. */
   asleep_since?: string
-  /** The sleeping session's VM was saved with every process, which a wake restores. */
+  /** The sleeping session's VM keeps every process, which a wake brings back. */
   asleep_saved?: boolean
+  /** That VM is paused in the server's memory, not saved to disk: a wake resumes it. */
+  asleep_in_memory?: boolean
   /** A wake is starting the sleeping container. */
   waking?: boolean
   /** The last wake's failure while the session stays asleep. */
@@ -1015,6 +1017,7 @@ export interface RunEffortPayload {
 export interface RunSleepPayload {
   asleep_since?: string
   asleep_saved?: boolean
+  asleep_in_memory?: boolean
   waking?: boolean
   wake_error?: string
 }
@@ -1118,6 +1121,8 @@ export interface TimelinePage {
   next_seq: number
   more: boolean
   older_seq?: number
+  /** When the event at `older_seq` happened: the page covers everything after it, shown or filtered out. */
+  older_time?: string
 }
 
 export interface TimelineQuery {
@@ -1129,6 +1134,8 @@ export interface TimelineQuery {
   newest?: boolean
   before_seq?: number
   limit?: number
+  /** Leaves out `run.status` rereads. A server that predates the field returns them. */
+  no_rereads?: boolean
 }
 
 /** One file in a `run.diff` snapshot. */

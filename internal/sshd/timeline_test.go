@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
@@ -253,4 +254,133 @@ func TestWorkspaceTimelineUnavailableWithoutReader(t *testing.T) {
 	if !errors.As(err, &pe) || pe.Code != protocol.CodeUnavailable {
 		t.Fatalf("workspace.timeline without a reader = %v, want CodeUnavailable", err)
 	}
+}
+
+// A view that draws state changes asks for run.status without rereads, which
+// would otherwise fill its pages; a caller that does not ask keeps them.
+func TestWorkspaceTimelineLeavesRereadsOutWhenAsked(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	log, err := events.OpenSQLiteLog(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatalf("event log: %v", err)
+	}
+	t.Cleanup(func() { _ = log.Close() })
+	bus, err := events.NewInProc(ctx, log)
+	if err != nil {
+		t.Fatalf("bus: %v", err)
+	}
+	t.Cleanup(func() { _ = bus.Close() })
+	e := newTestEnv(t, func(c *Config) {
+		c.Bus = bus
+		c.Services.Timeline = timeline.NewReader(log)
+	})
+	for _, payload := range []events.RunStatusPayload{
+		{From: domain.RunQueued, To: domain.RunRunning},
+		{From: domain.RunRunning, To: domain.RunRunning, Reread: true},
+		{From: domain.RunRunning, To: domain.RunRunning, Reread: true},
+		{From: domain.RunRunning, To: domain.RunCompleted},
+	} {
+		if _, perr := bus.Publish(ctx, events.Event{WorkspaceID: e.ws.ID, RunID: e.run.ID, Payload: payload}); perr != nil {
+			t.Fatalf("publish: %v", perr)
+		}
+	}
+	client := controlClient(t, e)
+	page := func(noRereads bool) protocol.WorkspaceTimelineResult {
+		t.Helper()
+		var res protocol.WorkspaceTimelineResult
+		if err := client.Call(protocol.MethodWorkspaceTimeline, protocol.WorkspaceTimelineParams{
+			WorkspaceID: string(e.ws.ID), Types: []string{string(events.TypeRunStatus)}, Newest: true, Limit: 2, NoRereads: noRereads,
+		}, &res); err != nil {
+			t.Fatalf("workspace.timeline: %v", err)
+		}
+		return res
+	}
+	rereads := func(res protocol.WorkspaceTimelineResult) int {
+		t.Helper()
+		n := 0
+		for _, ev := range res.Events {
+			var payload events.RunStatusPayload
+			if err := json.Unmarshal(ev.Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.Reread {
+				n++
+			}
+		}
+		return n
+	}
+	if got := page(false); len(got.Events) != 2 || rereads(got) != 1 || !got.More {
+		t.Fatalf("by type: %d events, %d rereads, more %v; want the newest 2 of 4 with 1 reread, and more", len(got.Events), rereads(got), got.More)
+	}
+	if got := page(true); len(got.Events) != 2 || rereads(got) != 0 || got.More {
+		t.Fatalf("without rereads: %d events, %d rereads, more %v; want the 2 status changes in one page and no more", len(got.Events), rereads(got), got.More)
+	}
+}
+
+// A page that stops inside a run of filtered-out rereads says how far back
+// it read, so a view does not call that stretch unread.
+func TestWorkspaceTimelineSaysHowFarBackAFilteredPageRead(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	log, err := events.OpenSQLiteLog(filepath.Join(t.TempDir(), "events.db"))
+	if err != nil {
+		t.Fatalf("event log: %v", err)
+	}
+	t.Cleanup(func() { _ = log.Close() })
+	bus, err := events.NewInProc(ctx, log)
+	if err != nil {
+		t.Fatalf("bus: %v", err)
+	}
+	t.Cleanup(func() { _ = bus.Close() })
+	e := newTestEnv(t, func(c *Config) {
+		c.Bus = bus
+		c.Services.Timeline = timeline.NewReader(log)
+	})
+	publish := func(payload events.RunStatusPayload) {
+		t.Helper()
+		if _, perr := bus.Publish(ctx, events.Event{WorkspaceID: e.ws.ID, RunID: e.run.ID, Payload: payload}); perr != nil {
+			t.Fatalf("publish: %v", perr)
+		}
+	}
+	publish(events.RunStatusPayload{From: domain.RunQueued, To: domain.RunRunning})
+	// More rereads than one read's scan budget for a one-event page.
+	for range 200 {
+		publish(events.RunStatusPayload{From: domain.RunRunning, To: domain.RunRunning, Reread: true})
+	}
+	publish(events.RunStatusPayload{From: domain.RunRunning, To: domain.RunCompleted})
+
+	var page protocol.WorkspaceTimelineResult
+	if err = controlClient(t, e).Call(protocol.MethodWorkspaceTimeline, protocol.WorkspaceTimelineParams{
+		WorkspaceID: string(e.ws.ID), Types: []string{string(events.TypeRunStatus)}, Newest: true, Limit: 2, NoRereads: true,
+	}, &page); err != nil {
+		t.Fatalf("workspace.timeline: %v", err)
+	}
+	if len(page.Events) != 1 || !page.More || page.OlderSeq == 0 {
+		t.Fatalf("page = %d events, more %v, older_seq %d; want the newest change alone with more behind it", len(page.Events), page.More, page.OlderSeq)
+	}
+	reached, err := time.Parse(time.RFC3339Nano, page.OlderTime)
+	if err != nil {
+		t.Fatalf("older_time %q: %v", page.OlderTime, err)
+	}
+	// The time must be that of the event the read stopped on.
+	var stopped string
+	for _, ev := range readTimeline(t, controlClient(t, e), protocol.WorkspaceTimelineParams{WorkspaceID: string(e.ws.ID), Types: []string{string(events.TypeRunStatus)}}) {
+		if ev.Seq == page.OlderSeq {
+			stopped = ev.Time
+		}
+	}
+	if stopped == "" || page.OlderTime != stopped || page.OlderSeq >= page.Events[0].Seq || !reached.Before(mustTime(t, page.Events[0].Time)) {
+		t.Fatalf("older_time %q at older_seq %d, want %q, the time of that event, before the page's only event (seq %d, %s)",
+			page.OlderTime, page.OlderSeq, stopped, page.Events[0].Seq, page.Events[0].Time)
+	}
+}
+
+func mustTime(t *testing.T, s string) time.Time {
+	t.Helper()
+	at, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return at
 }

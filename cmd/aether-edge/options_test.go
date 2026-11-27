@@ -1,7 +1,15 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
 	"fmt"
+	"maps"
+	"math/big"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -9,9 +17,11 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/acme/autocert"
 
+	edge "github.com/3xDevOps/cloudfield/internal/edge/service"
 	"github.com/3xDevOps/cloudfield/internal/envname"
 )
 
@@ -285,6 +295,7 @@ func TestOriginPairs(t *testing.T) {
 		{"https://auth.example.net https://edge.example.net fake-id-2", "is not <signin origin> <relay origin> <GitHub client id> <client secret file>"},
 		{"https://auth.example.net https://edge.example.test fake-id-2 " + secret, "has the host name edge.example.test of --relay-origin"},
 		{"https://auth.example.net https://AUTH.example.net:8443 fake-id-2 " + secret, "has the host name auth.example.net of https://auth.example.net"},
+		{"https://[2001:db8::1] https://[2001:0db8:0:0:0:0:0:1]:8443 fake-id-2 " + secret, "has the host name 2001:db8::1 of https://[2001:db8::1]"},
 		{"http://auth.example.net https://edge.example.net fake-id-2 " + secret, "--origin-pairs must be https://host[:port]"},
 		{"https://auth.example.net https://edge.example.net fake-id-2 " + filepath.Join(dir, "missing"), "the client secret file of https://auth.example.net"},
 		{"https://auth.example.net https://edge.example.net fake-id-2 " + blank, "holds no secret"},
@@ -305,6 +316,165 @@ func TestOriginPairs(t *testing.T) {
 	if _, err := parseOptions(append(slices.Clone(devOrigins), "--dev-listen", "127.0.0.1:8080", "--origin-pairs",
 		"http://127.0.0.2:8080 http://127.0.0.3:8080 fake-id-2 "+secret), envOf(nil)); err != nil {
 		t.Errorf("a second loopback pair in development mode: %v", err)
+	}
+}
+
+func TestRetiringPairs(t *testing.T) {
+	dir := t.TempDir()
+	secret := filepath.Join(dir, "github-client-secret")
+	if err := os.WriteFile(secret, []byte("fake-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pairs := "https://auth2.example.net https://edge2.example.net fake-id-2 " + secret + ",https://auth3.example.net https://edge3.example.net fake-id-3 " + secret
+	parse := func(retiring string) (options, error) {
+		return parseOptions(append(slices.Clone(origins), "--origin-pairs", pairs, "--retiring-pairs", retiring), envOf(nil))
+	}
+	o, err := parse("https://EDGE.example.test:443 https://edge2.example.net 2027-03-01, https://edge3.example.net https://edge2.example.net")
+	want := []edge.Retiring{
+		{RelayOrigin: "https://edge.example.test", Replacement: "https://edge2.example.net", Date: "2027-03-01"},
+		{RelayOrigin: "https://edge3.example.net", Replacement: "https://edge2.example.net"},
+	}
+	if err != nil || !reflect.DeepEqual(o.retiring, want) {
+		t.Fatalf("two retiring pairs: %+v %v, want %+v", o.retiring, err, want)
+	}
+	o, err = parseOptions(append(slices.Clone(origins), "--origin-pairs", pairs), envOf(map[string]string{
+		"AETHER_EDGE_RETIRING_PAIRS": "https://edge2.example.net https://edge.example.test"}))
+	if err != nil || !reflect.DeepEqual(o.retiring, []edge.Retiring{{RelayOrigin: "https://edge2.example.net", Replacement: "https://edge.example.test"}}) {
+		t.Fatalf("AETHER_EDGE_RETIRING_PAIRS: %+v %v", o.retiring, err)
+	}
+	if o, err = parseOptions(append(slices.Clone(origins), "--origin-pairs", pairs), envOf(nil)); err != nil || o.retiring != nil {
+		t.Fatalf("unset: %+v %v", o.retiring, err)
+	}
+	for _, blank := range []string{" ", "\t "} {
+		if o, err = parseOptions(append(slices.Clone(origins), "--origin-pairs", pairs), envOf(map[string]string{"AETHER_EDGE_RETIRING_PAIRS": blank})); err != nil || o.retiring != nil {
+			t.Fatalf("blank %q: %+v %v, want unset", blank, o.retiring, err)
+		}
+	}
+	for _, tt := range []struct{ retiring, want string }{
+		{"https://edge.example.test", `--retiring-pairs: "https://edge.example.test" is not <relay origin> <replacement relay origin> [<YYYY-MM-DD>]`},
+		{"https://edge.example.test https://edge2.example.net 2027-03-01 extra", `--retiring-pairs: "https://edge.example.test https://edge2.example.net 2027-03-01 extra" is not <relay origin>`},
+		{"https://edge.example.test https://edge2.example.net,", "has an empty entry: remove the extra comma"},
+		{"edge.example.test https://edge2.example.net", `--retiring-pairs must be https://host[:port], not "edge.example.test"`},
+		{"https://edge.example.test https://<relay-host-2>", "--retiring-pairs: edgeproto: edge url"},
+		{"https://edge9.example.net https://edge2.example.net", "--retiring-pairs: https://edge9.example.net is not a relay origin of this edge; name one of --relay-origin and the relay origins of --origin-pairs"},
+		{"https://edge.example.test https://edge9.example.net", "--retiring-pairs: https://edge9.example.net is not a relay origin of this edge"},
+		{"https://auth2.example.net https://edge.example.test", "--retiring-pairs: https://auth2.example.net is a sign-in origin; name the relay origin of its pair, https://edge2.example.net"},
+		{"https://auth.example.test https://edge2.example.net", "--retiring-pairs: https://auth.example.test is a sign-in origin; name the relay origin of its pair, https://edge.example.test"},
+		{"https://edge.example.test https://EDGE.example.test", "--retiring-pairs: https://edge.example.test names its own pair as its replacement; name the relay origin of a pair that stays"},
+		{"https://edge.example.test https://edge2.example.net,https://edge2.example.net https://edge3.example.net",
+			"--retiring-pairs: https://edge2.example.net, the replacement of https://edge.example.test, is retiring too; name a pair that stays"},
+		{"https://edge.example.test https://edge2.example.net,https://edge.example.test:443 https://edge3.example.net",
+			"--retiring-pairs names the host edge.example.test in two entries; keep one entry for it"},
+		{"https://edge.example.test:8443 https://edge2.example.net",
+			"--retiring-pairs: https://edge.example.test:8443 has the host name of the relay origin https://edge.example.test; write that origin"},
+		{"https://edge.example.test https://edge2.example.net:8443",
+			"--retiring-pairs: https://edge2.example.net:8443 has the host name of the relay origin https://edge2.example.net; write that origin"},
+		{"https://edge.example.test https://edge2.example.net 2027-02-30", `--retiring-pairs: the date "2027-02-30" of https://edge.example.test is not a real date written YYYY-MM-DD, such as 2027-03-01`},
+		{"https://edge.example.test https://edge2.example.net 2027-3-1", `the date "2027-3-1" of https://edge.example.test is not a real date`},
+		{"https://edge.example.test https://edge2.example.net 01/03/2027", `the date "01/03/2027" of https://edge.example.test is not a real date`},
+	} {
+		if _, err = parse(tt.retiring); err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("--retiring-pairs %q: %v, want %q", tt.retiring, err, tt.want)
+		}
+	}
+	devPairs := []string{"--dev-listen", "127.0.0.1:8080", "--signin-origin", "http://localhost:443", "--relay-origin", "http://127.0.0.1:443",
+		"--origin-pairs", "http://127.0.0.2:8080 http://127.0.0.3:8080 fake-id-2 " + secret}
+	if _, err = parseOptions(append(slices.Clone(devPairs), "--retiring-pairs", "http://127.0.0.1 http://127.0.0.3:8080"), envOf(nil)); err == nil ||
+		!strings.Contains(err.Error(), "http://127.0.0.1 has the host name of the relay origin http://127.0.0.1:443; write that origin") {
+		t.Errorf("plain HTTP origin without its port :443: %v", err)
+	}
+	if o, err = parseOptions(append(slices.Clone(devPairs), "--retiring-pairs", "http://127.0.0.1:443 http://127.0.0.3:8080"), envOf(nil)); err != nil ||
+		!reflect.DeepEqual(o.retiring, []edge.Retiring{{RelayOrigin: "http://127.0.0.1:443", Replacement: "http://127.0.0.3:8080"}}) {
+		t.Errorf("plain HTTP origin on port 443: %+v, %v", o.retiring, err)
+	}
+	_, err = parseOptions(append(slices.Clone(origins), "--retiring-pairs", "https://edge.example.test https://edge2.example.net"), envOf(nil))
+	if err == nil || err.Error() != "--retiring-pairs: this edge serves one address pair, which cannot retire; serve its replacement first with --origin-pairs (AETHER_EDGE_ORIGIN_PAIRS)" {
+		t.Errorf("one pair: %v", err)
+	}
+}
+
+func TestRetiredPairs(t *testing.T) {
+	dir := t.TempDir()
+	secret := filepath.Join(dir, "github-client-secret")
+	if err := os.WriteFile(secret, []byte("fake-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pairs := "https://auth2.example.net https://edge2.example.net fake-id-2 " + secret + ",https://auth3.example.net https://edge3.example.net fake-id-3 " + secret
+	parse := func(retired string, more ...string) (options, error) {
+		return parseOptions(append(append(slices.Clone(origins), "--origin-pairs", pairs, "--retired-pairs", retired), more...), envOf(nil))
+	}
+	o, err := parse("https://auth9.example.org:443 https://EDGE9.example.org https://edge2.example.net, https://auth8.example.org https://edge8.example.org:8443 https://edge.example.test:443")
+	want := []edge.Retired{
+		{SigninOrigin: "https://auth9.example.org", RelayOrigin: "https://edge9.example.org", Replacement: "https://edge2.example.net"},
+		{SigninOrigin: "https://auth8.example.org", RelayOrigin: "https://edge8.example.org:8443", Replacement: "https://edge.example.test"},
+	}
+	if err != nil || !reflect.DeepEqual(o.retired, want) {
+		t.Fatalf("two retired pairs: %+v %v, want %+v", o.retired, err, want)
+	}
+	o, err = parseOptions(origins, envOf(map[string]string{
+		"AETHER_EDGE_RETIRED_PAIRS": "https://auth9.example.org https://edge9.example.org https://edge.example.test"}))
+	if err != nil || !reflect.DeepEqual(o.retired, []edge.Retired{{SigninOrigin: "https://auth9.example.org", RelayOrigin: "https://edge9.example.org", Replacement: "https://edge.example.test"}}) {
+		t.Fatalf("AETHER_EDGE_RETIRED_PAIRS with one served pair: %+v %v", o.retired, err)
+	}
+	if o, err = parseOptions(append(slices.Clone(origins), "--origin-pairs", pairs), envOf(nil)); err != nil || o.retired != nil {
+		t.Fatalf("unset: %+v %v", o.retired, err)
+	}
+	for _, tt := range []struct{ retired, want string }{
+		{"https://auth9.example.org https://edge9.example.org", `--retired-pairs: "https://auth9.example.org https://edge9.example.org" is not <sign-in origin> <relay origin> <replacement relay origin>`},
+		{"https://auth9.example.org https://edge9.example.org https://edge2.example.net extra", "is not <sign-in origin> <relay origin> <replacement relay origin>"},
+		{"https://auth9.example.org https://edge9.example.org https://edge2.example.net,", "--retired-pairs \"https://auth9.example.org https://edge9.example.org https://edge2.example.net,\" has an empty entry: remove the extra comma"},
+		{"auth9.example.org https://edge9.example.org https://edge2.example.net", `--retired-pairs must be https://host[:port], not "auth9.example.org"`},
+		{"https://auth9.example.org https://<relay-host-1> https://edge2.example.net", "--retired-pairs: edgeproto: edge url"},
+		{"https://auth9.example.org https://edge9.example.org https://<relay-host-2>", "--retired-pairs: edgeproto: edge url"},
+		{"https://auth2.example.net https://edge2.example.net https://edge3.example.net",
+			"--retired-pairs: https://auth2.example.net is still served; remove its pair from --origin-pairs in the same edit"},
+		{"https://auth9.example.org https://edge3.example.net:8443 https://edge2.example.net",
+			"--retired-pairs: https://edge3.example.net:8443 is still served; remove its pair from --origin-pairs in the same edit"},
+		{"https://auth.example.test https://edge.example.test https://edge2.example.net",
+			"--retired-pairs: https://auth.example.test is still served as --signin-origin or --relay-origin; first make its replacement the first pair (--signin-origin, --relay-origin, --github-client-id) and remove this pair"},
+		{"https://auth9.example.org https://edge.example.test:8443 https://edge2.example.net", "--retired-pairs: https://edge.example.test:8443 is still served as --signin-origin or --relay-origin"},
+		{"https://auth9.example.org https://AUTH9.example.org:8443 https://edge2.example.net",
+			"--retired-pairs names the host auth9.example.org in two entries, https://auth9.example.org and https://AUTH9.example.org:8443; keep one entry for it"},
+		{"https://auth9.example.org https://edge9.example.org https://edge2.example.net,https://auth8.example.org https://edge9.example.org:8443 https://edge2.example.net",
+			"--retired-pairs names the host edge9.example.org in two entries"},
+		{"https://auth9.example.org https://edge9.example.org:0443 https://edge2.example.net",
+			"--retired-pairs: https://edge9.example.org:0443 cannot be named in a signed notice to servers: write a host name of at most 253 bytes and a port without leading zeros"},
+		{"https://auth9.example.org:08443 https://edge9.example.org https://edge2.example.net",
+			"--retired-pairs: https://auth9.example.org:08443 cannot be named in a signed notice to servers"},
+		{"https://auth9.example.org https://edge9.example.org https://edge7.example.org",
+			"--retired-pairs: https://edge7.example.org is not a relay origin of this edge; name one of --relay-origin and the relay origins of --origin-pairs"},
+		{"https://auth9.example.org https://edge9.example.org https://edge9.example.org", "--retired-pairs: https://edge9.example.org is not a relay origin of this edge"},
+		{"https://auth9.example.org https://edge9.example.org https://auth2.example.net",
+			"--retired-pairs: https://auth2.example.net is a sign-in origin; name the relay origin of its pair, https://edge2.example.net"},
+		{"https://auth9.example.org https://edge9.example.org https://auth.example.test",
+			"--retired-pairs: https://auth.example.test is a sign-in origin; name the relay origin of its pair, https://edge.example.test"},
+		{"https://[2001:db8::1] https://edge9.example.org https://edge2.example.net",
+			"--retired-pairs: https://[2001:db8::1] is an IPv6 address; a retired pair is named by host names"},
+		{"https://auth9.example.org https://edge9.example.org https://edge2.example.net:8443",
+			"--retired-pairs: https://edge2.example.net:8443 has the host name of the relay origin https://edge2.example.net; write that origin"},
+	} {
+		if _, err = parse(tt.retired); err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Errorf("--retired-pairs %q: %v, want %q", tt.retired, err, tt.want)
+		}
+	}
+	_, err = parse("https://auth9.example.org https://edge9.example.org https://edge2.example.net", "--retiring-pairs", "https://edge2.example.net https://edge3.example.net")
+	if want := "--retired-pairs: https://edge2.example.net, the replacement of https://edge9.example.org, is retiring; name a pair that stays"; err == nil || err.Error() != want {
+		t.Errorf("replacement retiring: %v, want %q", err, want)
+	}
+	var many []string
+	for i := range 17 {
+		many = append(many, fmt.Sprintf("https://auth%d.example.org https://edge%d.example.org https://edge2.example.net", i, i))
+	}
+	if _, err = parse(strings.Join(many[:16], ",")); err != nil {
+		t.Errorf("16 retired pairs: %v", err)
+	}
+	if _, err = parse(strings.Join(many, ",")); err == nil || err.Error() != "--retired-pairs names 17 pairs; an edge keeps at most 16" {
+		t.Errorf("17 retired pairs: %v", err)
+	}
+	_, err = parse(strings.Join(many[:16], ","), "--retiring-pairs", "https://edge3.example.net https://edge2.example.net")
+	if want := "--retiring-pairs and --retired-pairs name 17 pairs together, and a server is sent at most 16 notices: " +
+		"retire this pair once fewer pairs are retiring or retired"; err == nil || err.Error() != want {
+		t.Errorf("16 retired and 1 retiring: %v, want %q", err, want)
 	}
 }
 
@@ -342,6 +512,20 @@ func TestEveryVariableTakesItsCloudfieldName(t *testing.T) {
 	}, {
 		"AETHER_EDGE_DEV_LISTEN": "127.0.0.1:9090", "AETHER_EDGE_SIGNIN_ORIGIN": "http://localhost:9090", "AETHER_EDGE_RELAY_ORIGIN": "http://127.0.0.1:9090",
 		"AETHER_EDGE_GITHUB_CLIENT_ID": "other-id", "AETHER_EDGE_GITHUB_CLIENT_SECRET_FILE": filepath.Join(dir, "missing"),
+	}}, {{
+		"AETHER_EDGE_SIGNIN_ORIGIN": "https://auth.example.test", "AETHER_EDGE_RELAY_ORIGIN": "https://edge.example.test",
+		"AETHER_EDGE_ORIGIN_PAIRS":   "https://auth2.example.net https://edge2.example.net fake-id-2 " + secretFile,
+		"AETHER_EDGE_RETIRING_PAIRS": "https://edge.example.test https://edge2.example.net 2027-03-01",
+	}, {
+		"AETHER_EDGE_SIGNIN_ORIGIN": "https://auth.example.test", "AETHER_EDGE_RELAY_ORIGIN": "https://edge.example.test",
+		"AETHER_EDGE_ORIGIN_PAIRS":   "https://auth2.example.net https://edge2.example.net fake-id-2 " + secretFile,
+		"AETHER_EDGE_RETIRING_PAIRS": "https://edge.example.test https://edge2.example.net 2027-04-01",
+	}}, {{
+		"AETHER_EDGE_SIGNIN_ORIGIN": "https://auth.example.test", "AETHER_EDGE_RELAY_ORIGIN": "https://edge.example.test",
+		"AETHER_EDGE_RETIRED_PAIRS": "https://auth9.example.org https://edge9.example.org https://edge.example.test",
+	}, {
+		"AETHER_EDGE_SIGNIN_ORIGIN": "https://auth.example.test", "AETHER_EDGE_RELAY_ORIGIN": "https://edge.example.test",
+		"AETHER_EDGE_RETIRED_PAIRS": "https://auth8.example.org https://edge8.example.org https://edge.example.test",
 	}}, {{
 		"AETHER_EDGE_SIGNIN_ORIGIN": "https://auth.example.test", "AETHER_EDGE_RELAY_ORIGIN": "https://edge.example.test",
 		"AETHER_EDGE_REVIEWER_ACCOUNT_FILE": filepath.Join(dir, "reviewer-a.json"),
@@ -385,6 +569,167 @@ func TestEveryVariableTakesItsCloudfieldName(t *testing.T) {
 		}
 		if got := parse(emptyNew); !reflect.DeepEqual(got, want) {
 			t.Errorf("configuration %d with empty CLOUDFIELD_ names must read AETHER_ ones:\n got %+v\nwant %+v", i, got, want)
+		}
+	}
+}
+
+// TestRetiredCertificates answers handshakes for retired hosts from the
+// ACME cache alone: a cached certificate the client supports and that is
+// unexpired, else a failed handshake, and never the autocert manager, even
+// for a client that offers RSA only while the cache holds ECDSA.
+func TestRetiredCertificates(t *testing.T) {
+	o, err := parseOptions(append(slices.Clone(origins), "--retired-pairs",
+		"https://auth9.example.org https://edge9.example.org https://edge.example.test"), envOf(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cache := autocert.DirCache(t.TempDir())
+	now := time.Date(2027, 3, 1, 0, 0, 0, 0, time.UTC)
+	put := func(key string, notAfter time.Time) {
+		priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), DNSNames: []string{strings.TrimSuffix(key, "+rsa")},
+			NotBefore: notAfter.Add(-90 * 24 * time.Hour), NotAfter: notAfter}
+		der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		keyDER, err := x509.MarshalECPrivateKey(priv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data := append(pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})...)
+		if err = cache.Put(t.Context(), key, data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put("auth9.example.org", now.Add(24*time.Hour))
+	put("edge9.example.org", now.Add(-time.Hour))
+	var managed []string
+	clock := now
+	get := retiredCertificates(o, cache, func() time.Time { return clock }, func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+		managed = append(managed, hello.ServerName)
+		return &tls.Certificate{}, nil
+	})
+	ecdsaHello := func(name string) *tls.ClientHelloInfo {
+		return &tls.ClientHelloInfo{ServerName: name, SupportedVersions: []uint16{tls.VersionTLS12},
+			CipherSuites:     []uint16{tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256},
+			SignatureSchemes: []tls.SignatureScheme{tls.ECDSAWithP256AndSHA256}, SupportedCurves: []tls.CurveID{tls.CurveP256}}
+	}
+	rsaOnly := &tls.ClientHelloInfo{ServerName: "auth9.example.org", SupportedVersions: []uint16{tls.VersionTLS12},
+		CipherSuites:     []uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256},
+		SignatureSchemes: []tls.SignatureScheme{tls.PKCS1WithSHA256, tls.PSSWithSHA256}, SupportedCurves: []tls.CurveID{tls.CurveP256}}
+	if cert, err := get(ecdsaHello("AUTH9.example.org")); err != nil || cert.Leaf == nil || cert.Leaf.DNSNames[0] != "auth9.example.org" {
+		t.Errorf("ECDSA client at a retired host with a cached certificate: %v", err)
+	}
+	for name, hello := range map[string]*tls.ClientHelloInfo{"RSA-only client": rsaOnly, "expired certificate": ecdsaHello("edge9.example.org")} {
+		host := hello.ServerName
+		if _, err := get(hello); err == nil || err.Error() != host+" is the host of a retired pair and the ACME cache holds no unexpired certificate for it that the client supports; the edge orders none" {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+	if _, err := get(ecdsaHello("edge.example.test")); err != nil || !slices.Equal(managed, []string{"edge.example.test"}) {
+		t.Errorf("served host: %v; the manager saw %v, want only edge.example.test", err, managed)
+	}
+	if err := cache.Delete(t.Context(), "auth9.example.org"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := get(ecdsaHello("auth9.example.org")); err != nil {
+		t.Errorf("a certificate read once must be answered from memory after the cache entry is gone: %v", err)
+	}
+	put("edge9.example.org+rsa", now.Add(24*time.Hour))
+	if _, err := get(ecdsaHello("edge9.example.org")); err == nil {
+		t.Error("a certificate missing at the last read was read again before retiredCertRetry")
+	}
+	clock = now.Add(retiredCertRetry)
+	if _, err := get(ecdsaHello("edge9.example.org")); err != nil {
+		t.Errorf("a certificate missing at the last read was not read again after retiredCertRetry: %v", err)
+	}
+	clock = now.Add(25 * time.Hour)
+	if _, err := get(ecdsaHello("auth9.example.org")); err == nil {
+		t.Error("a certificate kept in memory was answered after it expired")
+	}
+	put("auth9.example.org", now.Add(48*time.Hour))
+	if _, err := get(ecdsaHello("auth9.example.org")); err == nil {
+		t.Error("an expired certificate was read again before retiredCertRetry")
+	}
+	clock = clock.Add(retiredCertRetry)
+	if _, err := get(ecdsaHello("auth9.example.org")); err != nil {
+		t.Errorf("an expired certificate replaced in the cache was not read again after retiredCertRetry: %v", err)
+	}
+}
+
+// TestOlderImageServes reads one environment both ways: the CLOUDFIELD_EDGE_
+// names this image reads first retire pair A, while the AETHER_EDGE_ names an
+// older image reads alone still serve it.
+func TestOlderImageServes(t *testing.T) {
+	dir := t.TempDir()
+	secret := filepath.Join(dir, "github-client-secret")
+	if err := os.WriteFile(secret, []byte("fake-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	data, alias := filepath.Join(dir, "data"), filepath.Join(dir, "alias")
+	if err := os.Mkdir(data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(data, alias); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "x", "y"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(dir, "x", "data"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(dir, "x", "y"), filepath.Join(dir, "up")); err != nil {
+		t.Fatal(err)
+	}
+	newer := map[string]string{
+		"CLOUDFIELD_EDGE_SIGNIN_ORIGIN": "https://auth2.example.net", "CLOUDFIELD_EDGE_RELAY_ORIGIN": "https://edge2.example.net",
+		"AETHER_EDGE_RETIRED_PAIRS":    "https://auth.example.test https://edge.example.test https://edge2.example.net",
+		"AETHER_EDGE_GITHUB_CLIENT_ID": "fake-id", "AETHER_EDGE_GITHUB_CLIENT_SECRET_FILE": secret,
+	}
+	for _, tt := range []struct {
+		name string
+		env  map[string]string
+		args []string
+		want string
+	}{
+		{"stale first pair", map[string]string{"AETHER_EDGE_SIGNIN_ORIGIN": "https://auth.example.test", "AETHER_EDGE_RELAY_ORIGIN": "https://edge2.example.net"}, nil,
+			"AETHER_EDGE_SIGNIN_ORIGIN names https://auth.example.test, which --retired-pairs retires: an edge image older than v0.8.7 reads only the AETHER_EDGE_ names " +
+				"and would serve it in full after a rollback. Remove AETHER_EDGE_SIGNIN_ORIGIN, or set it to the value of CLOUDFIELD_EDGE_SIGNIN_ORIGIN"},
+		{"stale relay origin", map[string]string{"AETHER_EDGE_RELAY_ORIGIN": "https://EDGE.example.test:8443"}, nil,
+			"AETHER_EDGE_RELAY_ORIGIN names https://EDGE.example.test:8443, which --retired-pairs retires"},
+		{"stale more pairs", map[string]string{"AETHER_EDGE_ORIGIN_PAIRS": "https://auth.example.test https://edge.example.test fake-id " + secret,
+			"CLOUDFIELD_EDGE_ORIGIN_PAIRS": "https://auth3.example.net https://edge3.example.net fake-id " + secret}, nil,
+			"AETHER_EDGE_ORIGIN_PAIRS names https://auth.example.test, which --retired-pairs retires"},
+		{"aligned", map[string]string{"AETHER_EDGE_SIGNIN_ORIGIN": "https://auth2.example.net", "AETHER_EDGE_RELAY_ORIGIN": "https://edge2.example.net"}, nil, ""},
+		{"stale data directory", map[string]string{"CLOUDFIELD_EDGE_DATA": "/srv/edge", "AETHER_EDGE_DATA": "/srv/old-edge"}, nil,
+			"this edge uses the data directory /srv/edge from CLOUDFIELD_EDGE_DATA, but an edge image older than v0.8.7 reads only AETHER_EDGE_DATA " +
+				"and would open /srv/old-edge, whose database keeps the sign-ins --retired-pairs deletes, after a rollback. Set AETHER_EDGE_DATA to /srv/edge, " +
+				"or pass --data /srv/edge on the command line, which both images read"},
+		{"data directory under the new name only", map[string]string{"CLOUDFIELD_EDGE_DATA": "/srv/edge"}, nil,
+			"this edge uses the data directory /srv/edge from CLOUDFIELD_EDGE_DATA, but an edge image older than v0.8.7 reads only AETHER_EDGE_DATA and would open /var/lib/aether-edge"},
+		{"data directory aligned", map[string]string{"CLOUDFIELD_EDGE_DATA": "/srv/edge", "AETHER_EDGE_DATA": "/srv/edge/"}, nil, ""},
+		{"data directory flag", map[string]string{"CLOUDFIELD_EDGE_DATA": "/srv/edge"}, []string{"--data", "/srv/edge"}, ""},
+		{"data directory under another path", map[string]string{"CLOUDFIELD_EDGE_DATA": data, "AETHER_EDGE_DATA": alias}, nil, ""},
+		{"data directory behind a symlink and ..", map[string]string{"CLOUDFIELD_EDGE_DATA": filepath.Join(dir, "x", "data"), "AETHER_EDGE_DATA": dir + "/up/../data"}, nil,
+			"this edge uses the data directory " + filepath.Join(dir, "x", "data") + " from CLOUDFIELD_EDGE_DATA"},
+		{"flag wins in both images", map[string]string{"AETHER_EDGE_SIGNIN_ORIGIN": "https://auth.example.test"},
+			[]string{"--signin-origin", "https://auth2.example.net"}, ""},
+	} {
+		env := maps.Clone(newer)
+		maps.Copy(env, tt.env)
+		raw := func(k string) string { return env[k] }
+		o, err := parseOptions(tt.args, func(name string) string { return envname.Get(raw, name) })
+		if err != nil {
+			t.Fatalf("%s: %v", tt.name, err)
+		}
+		err = olderImageServes(o, raw)
+		if (tt.want == "" && err != nil) || (tt.want != "" && (err == nil || !strings.HasPrefix(err.Error(), tt.want))) {
+			t.Errorf("%s: %v, want %q", tt.name, err, tt.want)
 		}
 	}
 }

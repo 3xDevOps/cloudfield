@@ -522,7 +522,7 @@ func automaticLogin(args []string) error {
 			return err
 		}
 		on := args[1] == "on"
-		if err := c.Call(protocol.MethodAgentLoginAutomatic, protocol.AgentLoginAutomaticParams{Agent: addedLoginsAgent, LoginID: id, Automatic: on}, nil); err != nil {
+		if err := c.Call(protocol.MethodAgentLoginAutomatic, protocol.AgentLoginAutomaticParams{Agent: addedLoginsAgent, LoginID: id, Automatic: &on}, nil); err != nil {
 			return err
 		}
 		if on {
@@ -544,7 +544,7 @@ func shareLogin(args []string) error {
 			return err
 		}
 		on := args[1] == "on"
-		if err := c.Call(protocol.MethodAgentLoginShare, protocol.AgentLoginShareParams{Agent: addedLoginsAgent, LoginID: id, Shared: on}, nil); err != nil {
+		if err := c.Call(protocol.MethodAgentLoginShare, protocol.AgentLoginShareParams{Agent: addedLoginsAgent, LoginID: id, Shared: &on}, nil); err != nil {
 			return err
 		}
 		if on {

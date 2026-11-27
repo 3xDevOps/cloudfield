@@ -441,7 +441,9 @@ type sidecar struct {
 	LoginID domain.LoginID `json:"login_id,omitempty"`
 	// VerifiedLogins are the account owners whose own login the runtime
 	// confirmed in a container of this run.
-	VerifiedLogins      []domain.Account         `json:"verified_logins,omitempty"`
+	VerifiedLogins []domain.Account `json:"verified_logins,omitempty"`
+	// Restricted are the accounts the run left on a restriction message.
+	Restricted          []domain.MemberID        `json:"restricted,omitempty"`
 	Reporter            harness.Reporter         `json:"reporter,omitempty"`
 	Egress              bool                     `json:"egress,omitempty"`
 	AgentState          agentstatus.State        `json:"agent_state,omitempty"`
@@ -483,9 +485,10 @@ type sidecar struct {
 	UsageLimit  string        `json:"usage_limit,omitempty"`
 	// AsleepSince is when idleness stopped the container; WakeError is the
 	// last wake's failure.
-	AsleepSince *time.Time `json:"asleep_since,omitempty"`
-	AsleepSaved bool       `json:"asleep_saved,omitempty"`
-	WakeError   string     `json:"wake_error,omitempty"`
+	AsleepSince    *time.Time `json:"asleep_since,omitempty"`
+	AsleepSaved    bool       `json:"asleep_saved,omitempty"`
+	AsleepResident bool       `json:"asleep_resident,omitempty"`
+	WakeError      string     `json:"wake_error,omitempty"`
 }
 
 // sidecar snapshots the entry's durable state. Caller must hold s.mu.
@@ -543,6 +546,7 @@ func (e *supervised) sidecar() sidecar {
 		LoginMember:         string(e.loginMember),
 		LoginID:             e.loginID,
 		VerifiedLogins:      e.verifiedLogins,
+		Restricted:          e.restricted,
 		Reporter:            e.reporter,
 		Egress:              e.egress,
 		AgentState:          e.agentReport.State,
@@ -577,6 +581,7 @@ func (e *supervised) sidecar() sidecar {
 		UsageLimit:          e.usageLimit,
 		AsleepSince:         asleepSince,
 		AsleepSaved:         e.asleepSaved,
+		AsleepResident:      e.asleepResident,
 		WakeError:           wakeError,
 	}
 }

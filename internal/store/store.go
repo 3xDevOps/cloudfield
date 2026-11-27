@@ -176,7 +176,7 @@ type Store interface {
 	// (Run.HarnessSessionID), leaving every other field untouched.
 	SetRunAgentSession(ctx context.Context, id domain.RunID, session string) error
 	SetRunMode(ctx context.Context, id domain.RunID, mode domain.LaunchMode, acp bool) error
-	SetRunAccount(ctx context.Context, id domain.RunID, account domain.Account, reason string, at time.Time) (int, error)
+	SetRunAccount(ctx context.Context, id domain.RunID, account domain.Account, perUse bool, reason string, at time.Time) (int, error)
 	ListRunAccountSegments(ctx context.Context, id domain.RunID) ([]*RunAccountSegment, error)
 	SetRunModel(ctx context.Context, id domain.RunID, model string) error
 	RefuseRunModel(ctx context.Context, id domain.RunID, model, running, reason string) (bool, error)

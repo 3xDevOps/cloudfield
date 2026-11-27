@@ -28,7 +28,7 @@ func FetchEdgeInfo(ctx context.Context, edgeURL string) (edgeproto.EdgeInfo, err
 		return edgeproto.EdgeInfo{}, fmt.Errorf("edgeagent: %w", err)
 	}
 	req.Header.Set(edgeproto.HeaderVersion, strconv.Itoa(edgeproto.Version))
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := noRedirect.Do(req)
 	if err != nil {
 		return edgeproto.EdgeInfo{}, fmt.Errorf("edgeagent: %w", err)
 	}
@@ -37,7 +37,8 @@ func FetchEdgeInfo(ctx context.Context, edgeURL string) (edgeproto.EdgeInfo, err
 	if resp.StatusCode != http.StatusOK {
 		var body edgeproto.ErrorBody
 		_ = dec.Decode(&body)
-		return edgeproto.EdgeInfo{}, fmt.Errorf("edgeagent: GET %s: %s %s", url, resp.Status, body.Error)
+		return edgeproto.EdgeInfo{}, fmt.Errorf("edgeagent: GET %s: %d %s %s", url, resp.StatusCode, http.StatusText(resp.StatusCode),
+			printableText(body.Error, maxDialMessage))
 	}
 	var info edgeproto.EdgeInfo
 	if err := dec.Decode(&info); err != nil {
