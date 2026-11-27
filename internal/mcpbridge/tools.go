@@ -167,7 +167,7 @@ func registerTools(srv *mcp.Server, socket string, g *gate, cli string) error {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: toolReport,
 		Description: coordhooks.SubagentRule + " " +
-			"Records this session's state; report once every turn, when its work is done, then reply as text. Never report while still working. " +
+			"Records this session's state; report once every turn, when its work is done; your instructions say whether the reply goes before or after it. Never report while still working. " +
 			"answered means " + coordhooks.AnsweredUse + " It shows the session as Answered, never needs a member and takes no evidence_refs. " +
 			"needs-input is only for a question a human must answer: the summary is that question, shown as the Needs you reason at turn end; end your turn after it. It takes no evidence_refs and is refused for Background sessions. " +
 			"waiting means " + coordhooks.WaitingUse + " The next turn clears it. It takes no evidence_refs. " +

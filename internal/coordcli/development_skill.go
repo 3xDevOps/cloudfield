@@ -107,7 +107,7 @@ Steps:
    image base64.
 2. Verify and collect required evidence before reporting an outcome, terminal
    stop, or artifact deletion.
-3. Report, then reply and end your turn. Before a success or failure report, do the
+3. Report and reply in the order your role card gives. Before a success or failure report, do the
    retain steps below where they follow.
 Rules:
 - If your harness cannot read images, report exactly that limitation and the
