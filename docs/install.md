@@ -1145,7 +1145,7 @@ The server keeps all its state in `/var/lib/aether`, or the `data-dir` you set.
 | `checkouts/` | One git worktree per session, and each session's recorded diff history in `<run-id>.diffsnap/`. With `session-runtime vm`, `<run-id>/` holds the session's checkout disk instead of a worktree. |
 | `transcripts/` | Terminal recordings and Enhanced conversation logs, kept until you delete the session. |
 | `homes/<member>/` | Each member's persistent home: installed agents, agent logins, uploaded configuration, and their GitHub token. |
-| `logins/<member>/<agent>/<login-id>/` | Each login a member added beside the one in their home ([agents.md](agents.md#several-logins)): its sign-in and what it reported at sign-in. |
+| `logins/<member-id>/<agent>/<login-id>/` | Each Claude Code login a member added beside the one in their home: its sign-in, and what Claude Code recorded at sign-in ([privacy.md](privacy.md#agent-logins)). |
 | `signing-keys/` | Each member's private commit signing key, which no container mounts. Without a backup, each member runs `cloudfield github connect` again for a new key. |
 | `linear/` | Each member's personal Linear API key, `<member-id>.key`, readable only by the server's user and never mounted into a container ([linear.md](linear.md#where-the-key-is-stored)). Without a backup, each member saves a new key. |
 | `workspace-secrets/` | Secret workspace variables in plain text, readable only by the server's user. |
@@ -1197,7 +1197,8 @@ sudo systemctl daemon-reload
 # 2. Containers and VMs. Stopping the server does NOT remove them.
 sudo docker rm -f $(sudo docker ps -aq --filter label=aether.managed=true)
 sudo systemctl stop 'aether-vm-*'   # with session-runtime vm
-# Volumes for shared agent accounts. Removing one does not delete a home.
+# Volumes (aether-home-…) for shared agent accounts and added logins.
+# Removing one does not delete a home or a login.
 sudo docker volume rm $(sudo docker volume ls -q --filter label=aether.managed=true)
 # Remove the standard image and saved member images according to your Docker
 # image retention policy.

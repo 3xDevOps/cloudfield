@@ -789,37 +789,32 @@ move, interactive sessions park as **Needs you**, a Background session fails, an
 | `Usage limit reached on <owner>'s account; fallback is off for this session` | The session was launched with `--no-fallback`. |
 | `Usage limit reached on <owner>'s account; cannot continue on another account: <reason>` | The session cannot move: for example the agent reported no session to resume, it is a member's own agent definition, or the owner may no longer launch. Nothing was changed. |
 | `Usage limit reached on <A>'s account; continuing on <B>'s account failed: <error>` | The move started and failed. The session fails. `start container: runtime: <path> in the container is inode <n>, not <login> in <B's home> ...` means the container would have signed in with another login than B's; the rest of the error says whether Docker or the container runtime left B's login out. |
-| `Usage limit reached on <A>'s account; the session is on <B>'s account and its session could not be restored: <error>` | The session moved, but the Enhanced session did not come back. Send a message to start fresh. |
+| `Usage limit reached on <A>'s account; the session is on <B>'s account and its conversation could not be restored: <error>` | The session moved, but the Enhanced session did not come back. Send a message to start fresh. |
 
 A paused session, or one being closed or killed, is not moved. A move survives a
 server restart: the next start finishes it.
 
 ### Several logins
 
-On an account with several Claude Code logins ([agents.md](agents.md#several-logins))
-a session moves first to the account's next login, and the room note names both:
-`Continued on Ada (work)'s account because Ada's usage ran out.` Only a spent
-balance moves it between logins of one account
-([harnesses.md](harnesses.md#usage-limit-signals)). The continuation prompt is sent
-at most once: after a server restart in the middle of sending it, the session's
-log says `The session moved to <login>; the continuation prompt may not have been
-delivered.` and nothing is sent again. Send the session a message if it waits.
+On an account with added Claude Code logins
+([agents.md](agents.md#when-a-login-runs-out)) the reasons name a login as
+`Ada (work)`, and a session that has run on more than one login ends a
+usage-limit reason with the logins it left spent:
 
-| Reason | Meaning |
+| Reason | Meaning and what to do |
 | --- | --- |
-| `...; logins tried: <login>, <login>; the first is usable again at <time>` | Every login of the account the session could use ran out. `<time>` is the earliest reset among them, `unknown` when no usage read gave one. |
-| `...; the agent reported a usage limit that <owner> (<login>)'s usage does not show` | A session on a teammate's login reported a limit that a fresh usage read does not show, so it did not move. |
-| `scheduler: login <id> no longer holds the <kind> sign-in it was added with; its owner removes it and adds it again` | The login's files changed kind since it was added. Its owner runs `cloudfield agent logins remove <login>` and adds it again. |
-| `scheduler: session VMs cannot verify an added login's mounts yet, so they do not run on one; launch on your default login` | The server runs sessions in VMs. Launch with `--login default`. |
-| `scheduler: an Isolated session cannot use a Console login: ...` | Launch the session at Default, or on another login. |
-| `scheduler: a workspace variable signs claude in here, so login <id> would not pay; launch on the default login` | A workspace secret such as `ANTHROPIC_API_KEY` signs Claude Code in. Drop `--login`. |
+| `Usage limit reached on Ada (work)'s account; <why>; logins tried: Ada, Ada (work); the first is usable again at <time>` | Every login the session may use ran out. `<time>` is the earliest of each login's latest reset among its windows at 95% or more, in UTC, or `unknown` when a usage read gave none. Wait until then, or add a login. |
+| `Usage limit reached on Ada (work)'s account; the agent reported a usage limit that Ada (work)'s usage does not show` | A session on another member's login reported a limit that a fresh read of the login's usage does not show, so it did not move ([security.md](security.md#several-logins)). Ask the login's owner, or start a new session on another account. |
+| `login share revoked: Ada turned use for shares off for login work; <why>` | The login's owner turned **Use for shares** off and the session could not move to another login or account. `<why>` is one of the `account share revoked:` endings in [security.md](security.md#account-sharing), such as `no other account can run claude`. Start a new session on a login you may use. |
+| `scheduler: the session has no live environment: the login this session is on is no longer shared with it, so the session stops` | Waking a sleeping session whose login its launcher or owner may no longer use fails with this, and the session moves off the login or stops as in the row above. |
+| `the session moved to Ada (work); the continuation prompt may not have been delivered` | The server restarted while a Background session's continuation prompt was being sent, and the session's log does not show it. Check what the session finished before you rely on it. |
+| `permission denied: login <id> of this account is not available to you: its owner turned it off for shares; a kept session cannot change login, so start a new session, or ask the login's owner to turn it on again` | Reopening a session on another member's login that is now off for shares, or automatic off (`its owner turned it automatic off, so only they start sessions on it`). Start a new session. |
 
-A sign-in that `cloudfield agent login claude --as <name>` started fails with what
-it saved: `the sign-in ended before Claude Code saved a login; nothing was added`,
-`the sign-in saved an Anthropic Console API key, which Cloudfield does not keep as
-an added login: ...`, or `this sign-in is the account and organisation your login
-"<name>" is signed in to, so it was not added; ...`. A second sign-in while one runs
-fails with `the sign-in of login "<name>" is still running; finish it first`.
+The continuation prompt is sent at most once. An Enhanced session whose server
+restarted while sending it shows **The continuation prompt may not have been
+delivered** and sends nothing again: send the session a message if it waits.
+One whose conversation went on before the prompt was sent shows **Continuation
+prompt not sent**.
 
 ## Raise file-watch limits
 

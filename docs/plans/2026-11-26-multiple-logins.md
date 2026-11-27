@@ -625,3 +625,54 @@ The rewritten sections were reviewed again by Claude Opus
   restriction messages contradicted "as today"; a merge handed logins to
   the survivor's teammates; budgets were described wrongly; removal
   missed a session still starting.
+
+## As built
+
+Built in #1142, #1148, #1149, #1144 and #1143. Where the build differs from
+the plan above:
+
+- A merge moves the absorbed member's login directories after its
+  transaction commits, not in the step that moves the home; a crash between
+  the two is settled by the next start's `ReconcileLogins`.
+- A sign-in needs the launch permission and is admitted like a launch. Its
+  terminal must open within 10 minutes and its container start within 5; it
+  is stopped 15 minutes after its terminal opened.
+- Besides a workspace or server variable, an `apiKeyHelper` or a sign-in
+  variable under `env` in the home's `~/.claude/settings.json` refuses a named
+  added login, and automatic choices skip added logins there. So does an
+  agent definition that gives `claude` its own executable. A launch naming
+  no login on the member's own account, where no login serves without being
+  named, is refused, naming each login and why.
+- Every variable that signs Claude Code in, and `ANTHROPIC_PROFILE`, are set
+  empty in a session on an added login. Only a change of a login's kind is
+  refused; a session that can write a login's directory can put another
+  account's sign-in of the same kind there. A setting written into the home
+  after the launch checks, a repository's `.claude/settings.json` or
+  `.claude/settings.local.json`, and managed settings in an image can still
+  sign Claude Code in.
+- The mask over the legacy `~/.claude/.config.json` is a plain bind and is
+  not inode-checked; the inode check of the other mounts runs once, when the
+  container starts. Session VMs refuse every added login.
+- An owed continuation prompt is dropped, with a notice in the item log,
+  when a person's prompt reaches the conversation first. Only a session the
+  server cannot reach, or a prompt the agent host reports unsent, leaves it
+  owed; any other error clears it.
+- A Background session that a restart finds sending its continuation is
+  settled from its log: ended with "the continuation prompt may not have
+  been delivered" when the log does not show the prompt, resumed when the
+  turn it started was cut short, and otherwise ended as that turn ended.
+- A teammate's run-out signal counts a report the vendor sent in the last 10
+  seconds as a fresh read.
+- A reopened session whose login is gone, off for shares or automatic off
+  for a member who does not own it is refused, not chosen for anew.
+- The owner of a login billed per use is not notified when a teammate's
+  session lands on it; the session's log, the room note and `per_use` on
+  `run.account` say so.
+- Three checks apply only to accounts whose owner keeps login rows, so a
+  member with no added login sees no change: the fresh read of a teammate's
+  signal, the owner check in the revoke sweep, and the login check on wake.
+- The 30-minute pass-over of a login reported run out is kept in memory; a
+  restart forgets it.
+- The run repository's "account changed" check still compares members; a
+  move between one member's logins replaces the container, which the
+  execution check refuses.

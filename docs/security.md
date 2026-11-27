@@ -474,49 +474,81 @@ After you first share a `claude` or `gemini` account, restart your environment
 
 ### Several logins
 
-A member can keep several Claude Code logins ([agents.md](agents.md#several-logins)).
-An added login lives in `<data-dir>/logins/<member>/claude/<login-id>/`, mode
-`0700` with `0600` files, outside every member home. Its refresh token is a bearer
-secret. It exists only there and in the containers of sessions running on the
-login. The server reads the login only to read its usage and its kind; no RPC
-returns it, and logs, events, room notes and errors carry its id and name, never
-its content.
+A member's added Claude Code logins ([agents.md](agents.md#several-logins))
+live in `<data-dir>/logins/<member-id>/claude/<login-id>/`, outside every member
+home, mode `0700` with `0600` files, read through paths that refuse a symlink
+([privacy.md](privacy.md#agent-logins)). A login's refresh token is a bearer
+secret. It exists there, in the sign-in's container while the login is added,
+and in the containers of sessions running on the login. The server reads a
+login to learn its usage and its kind; no RPC returns its content.
 
-What the switches stop:
+What the two switches stop:
 
-- **Use for shares** off keeps a teammate from reaching the login by any path:
-  launch, fallback order, subsession, handoff, move or reopen. Turning it off moves
-  teammates' running sessions off the login, or stops them.
-- **Automatic** off keeps Cloudfield from choosing the login, or moving a session
-  onto it, unless its owner names it for a launch.
-- A teammate cannot name an owner's login, read its email, organisation or files,
-  or make the server choose a particular one.
+- **Use for shares** off: Cloudfield never starts, moves, reopens or wakes a
+  teammate's session on the login, nor hands a session on it to anyone but
+  its owner, and turning it off moves teammates' running sessions off it or
+  stops them ([teams.md](teams.md#shares-and-several-logins)).
+- **Automatic** off: Cloudfield never chooses the login or moves a session onto
+  it unless its owner names it, and no teammate's session starts on it.
+- A teammate cannot name a login, read its email, organisation or files
+  through Cloudfield, or make the server choose a particular one.
 
 What they do not stop:
 
-- A teammate's session holds the refresh token of the one login it runs on, as a
-  shared default login always did; a share now reaches every login left on for
-  shares. A forged usage-limit report moves a teammate's session only when a fresh
-  read of the login shows a window at 95% or more.
-- A member's own sessions are not walled from each other. They share the home, so
-  code one session plants there runs in the next container, and a session with
-  sudo can unmount what covers the default login. A compromised session can
-  reach, in time, every login Cloudfield puts that member's sessions on, so each
-  login left automatic adds to what it can reach. Isolated sessions do not write
+- A session holds the refresh token of the login it runs on, as a session on a
+  shared default login does, and a share reaches every login left on for
+  shares and automatic. Revoking a share, switching a login off or removing it
+  stops Cloudfield mounting it; it does not recall a token a session already
+  copied, which stays valid until it expires or is revoked at Anthropic.
+- Claude Code fetches the profile of the login it runs on, so a teammate's
+  session can still learn whose login it is.
+- A member's own sessions are not walled from each other. They share the home,
+  so code one session plants there runs in the next container, and a session
+  with sudo can unmount what covers the default login. A compromised session
+  can reach, in time, every login Cloudfield puts that member's sessions on,
+  and each login left automatic adds to that. Isolated sessions do not write
   to the home and narrow this.
-- The sign-in of an added login runs the `claude` binary from the member's home,
-  where `~/.local/bin` comes first on `PATH`. Code a compromised session planted
-  there can capture the new login and change what the server reads back about it.
-- Whoever may steer a session can tell its agent to print its login file, whichever
-  login it is on ([who can act](#who-can-see-and-act-on-a-session)).
-- A move to another login carries the conversation: the next login's organisation
-  receives the whole transcript when the agent resumes.
-- The server's operator, and setup scripts a workspace admin makes every session
-  run, can read any login a session is on. Backups of the data directory hold the
-  added logins ([install.md](install.md#what-lives-in-the-data-directory)).
-- Claude Code serialises token refreshes with a lock in the home's `~/.claude/`. A
-  teammate's session and an Isolated session have another home, and so another
-  lock, as for a shared default login.
+- The sign-in of an added login runs the `claude` binary found in the member's
+  home, whose `~/.local/bin` comes first on `PATH`. Code a compromised session
+  planted there can capture the new login and change what the server reads
+  back about it.
+- Whoever may steer a session can tell its agent to print its login file,
+  whichever login it is on ([who can act](#who-can-see-and-act-on-a-session)).
+- A session that can write its login's directory can replace the sign-in in
+  it with another account's of the same kind. Cloudfield refuses only a change
+  of kind: `login lgn-… no longer holds the subscription sign-in it was added
+  with; its owner removes it and adds it again`.
+- A move to another login carries the conversation: the next login's
+  organisation receives the whole transcript when the agent resumes.
+- The server's operator, and setup scripts a workspace admin makes every
+  session run, can read any login a session is on. Backups of the data
+  directory hold the added logins ([install.md](install.md#what-lives-in-the-data-directory)).
+- Claude Code serialises token refreshes with a lock in the home's
+  `~/.claude/`. A teammate's session and an Isolated session have another home,
+  and so another lock, as for a shared default login.
+
+A usage-limit report comes from inside the container and can be forged. When
+a session's owner, or the member whose home it mounts, is not the owner of
+the login it runs on, and that owner keeps added logins, Cloudfield reads the
+login's usage afresh before it moves the session, counting a report the vendor
+sent in the last 10 seconds as fresh. It moves the session only when a window
+reads 95% or more; otherwise the session stops with `the agent reported a usage
+limit that Ada (work)'s usage does not show`. A teammate therefore cannot walk
+a session through the owner's logins, or off one billed per use, on its own
+word. The owner's own sessions move on the report alone.
+
+Cloudfield checks what would pay before a session runs on an added login, at
+launch and again when its mounts are built: a workspace or server variable
+that signs Claude Code in, and an `apiKeyHelper` or such a variable under
+`env` in the home's `~/.claude/settings.json`, refuse it
+([agents.md](agents.md#what-does-not-work-with-added-logins)). In the
+session, every variable that signs Claude Code in and `ANTHROPIC_PROFILE` are
+set empty, so an image's `ENV` cannot pay instead. What it does not check: a
+setting written into the home after those checks, a repository's own
+`.claude/settings.json` or `.claude/settings.local.json`, and managed settings
+in an image can still sign Claude Code in, as they can on a default login.
+The **billed per use** label reads the login, not a workspace key that pays
+in its place.
 
 ## GitHub credentials and signing keys
 

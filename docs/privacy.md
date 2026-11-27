@@ -590,17 +590,42 @@ are forgotten.
 
 ## Agent logins
 
-A Claude Code login you add with `cloudfield agent login claude --as <name>`
-([agents.md](agents.md#several-logins)) is kept on your server, never on the phone,
-in `<data-dir>/logins/<member>/claude/<login-id>/`: the sign-in Claude Code saved
-(`credentials.json`, or a Console profile in `anthropic/`) and `identity.json`
-with the plan, email and organisation it reported. The database keeps the login's
-name, order and switches. Its name is shown to everyone who sees a session on it;
-the email and organisation only to you. Whoever can read the server's data
-directory, such as its administrator, can read the login, and backups of the data
-directory hold it. `cloudfield agent logins remove <login>` deletes its files and
-its row, and removing a member deletes theirs; neither signs the login out at
-Anthropic.
+A Claude Code login added with `cloudfield agent login claude --as <name>`
+([agents.md](agents.md#several-logins)) is kept on your server, in
+`<data-dir>/logins/<member-id>/claude/<login-id>/`:
+
+| File | Holds |
+| --- | --- |
+| `credentials.json` | A subscription login's sign-in, with its access and refresh tokens; empty for a Console login |
+| `anthropic/` | A Console login's Anthropic profile, with its token |
+| `identity.json` | The kind, plan, email and organisation Claude Code recorded at sign-in; no secret |
+
+The sign-in's scratch copy of Claude Code's configuration is kept there while
+it runs and removed when it ends. The database keeps each login's name, place
+in the order and switches, and which login each session ran on. Whoever can
+read the data directory, such as the server's operator, can read the logins,
+and backups of the data directory hold them.
+
+The server reads a login's files:
+
+- to read its usage, for a subscription login: when you list your logins on
+  the CLI or the **Agents** page, when a launch or a move weighs it, and before
+  a teammate's session on it moves;
+- to learn its kind and whether it holds a sign-in: when a launch or a move
+  considers it, and when a session's container is built on it;
+- `identity.json`: when it lists the login to you, checks that a new sign-in
+  is another account, places a new login in your order, and labels a session
+  billed per use.
+
+A usage read sends the login's access token to Anthropic's usage endpoint,
+`https://api.anthropic.com/api/oauth/usage`, and keeps the answer for 60
+seconds; a Console login's usage is never read. Sessions on the login send its
+tokens to Anthropic as Claude Code does. The email and organisation reach only
+you; the login's name reaches everyone who sees a session on it. `cloudfield
+agent logins remove <login>` deletes its files and its row, removing a member
+deletes theirs, and merging a member moves theirs to the survivor
+([teams.md](teams.md#link-or-merge-sign-ins)). None of these signs the login
+out at Anthropic.
 
 ## Dictation
 

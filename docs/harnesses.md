@@ -341,20 +341,30 @@ that is a symlink leaving your home. Cloudfield reads the profile directory at
 `ANTHROPIC_PROFILE` that points Claude Code elsewhere is not followed.
 
 `cloudfield agent login claude --as <name>` adds a login beside this one
-([agents.md](agents.md#several-logins)). An added login lives in its own
-directory on the server, and a session on it mounts three files from there:
-its `credentials.json` over `~/.claude/.credentials.json`, its `anthropic/`
-profile directory at `~/.config/anthropic` (`ANTHROPIC_CONFIG_DIR` points there
-and `ANTHROPIC_PROFILE` is unset), and a copy of your `~/.claude.json` without
-the account keys at `CLAUDE_CONFIG_DIR`. The store the login does not use is
-read-only. Docker checks each mount's inode in the container before the agent
-starts. In a test against a stand-in for Anthropic's API, Claude Code 2.1.332
-sent the added login's credential over each kind of default login. Before each launch the
-server checks that the login's files still hold the kind it was added with,
-and refuses it with `login <id> no longer holds the <kind> sign-in it was added
-with; its owner removes it and adds it again` otherwise. An Isolated session
-refuses a Console login, a whole directory it could change, and a session VM
-refuses every added login: its mounts are not checked yet.
+([agents.md](agents.md#several-logins)). A session on an added login mounts,
+from the login's directory on the server, its `credentials.json` over
+`~/.claude/.credentials.json` and its `anthropic/` at `~/.config/anthropic`;
+the one the login does not use is read-only. `ANTHROPIC_CONFIG_DIR` points at
+`~/.config/anthropic` and `ANTHROPIC_PROFILE` is empty. Like a session on a
+shared account ([security.md](security.md#account-sharing)) it gets its own
+copy of your `~/.claude.json` without the account keys at
+`CLAUDE_CONFIG_DIR`, with the legacy `~/.claude/.config.json` masked. Docker
+checks the inode of the login's mounts and of the copy in the container
+before the agent starts, so a dropped mount fails the launch; this needs
+Docker Engine 26.0 or newer, as sharing does. `TestIntegrationRealClaudeCodeUsesTheAddedLogin` in
+`internal/scheduler` (tag `integration`; it needs `claude` on `PATH`) runs
+Claude Code against a stand-in for Anthropic's API over each kind of default
+login and fails if a request carries any credential but the added login's.
+
+Before a session runs on an added login, its files must still hold a sign-in
+of the kind it was added with. A session's reason, or the launch's refusal,
+then says:
+
+| Message | What to do |
+| --- | --- |
+| `scheduler: login lgn-… no longer holds the <kind> sign-in it was added with; its owner removes it and adds it again` | The login's owner runs `cloudfield agent logins remove <name>`, then `cloudfield agent login claude --as <name>`. |
+| `scheduler: login is signed out: login <name>: <problem>; its owner removes it and adds it again, with cloudfield agent logins remove <name>, then cloudfield agent login claude --as <name>` | A login is signed in once, when it is added, so its owner runs those two commands. When `<problem>` is `it holds no sign-in right now; a session on it may be refreshing it, so launch again; ...`, launch again first. |
+| `scheduler: login lgn-… has no directory on this server; it was removed` | The login was removed, so a session on it cannot reopen. Start a new session. |
 
 For an API key, set `ANTHROPIC_API_KEY` in the server's environment, and
 `ANTHROPIC_BASE_URL` for a gateway. A `CLAUDE_CODE_OAUTH_TOKEN` from
@@ -636,12 +646,13 @@ not exhausted.
 If a vendor changes its signal, the session fails or ends its turn with the vendor's
 error instead of moving.
 
-Between the logins of one account only a spent balance moves a session: messages
-that start "You've hit your", "You've reached your", "You're out of usage
-credits", "You're out of extra usage" or "Your org is out of usage". A seat,
-allocation, group or model message is a restriction on the account, so the
-session skips the account's other logins and moves to another account or stops,
-as before ([agents.md](agents.md#several-logins)).
+Between the logins of one account ([agents.md](agents.md#when-a-login-runs-out))
+only a spent balance moves a session: a message that starts `You've hit your`,
+`You've reached your`, `You're out of usage credits`, `You're out of extra
+usage` or `Your org is out of usage`. The others in Claude Code's list, such as
+`Your seat type doesn't include usage` or `Your usage allocation has been
+disabled by your admin`, restrict the whole account: the session skips its
+other logins and moves to another account or stops.
 
 ## Launching
 

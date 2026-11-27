@@ -289,73 +289,210 @@ Sign-in works as in step 5. Agent names: `claude`, `codex`, `opencode`, `pi`,
 
 ## Several logins
 
-A **login** is one sign-in of an agent. `cloudfield agent login claude` signs
-in your **default login**, the one kept in your home. Claude Code can also
-keep **added logins**, each a subscription or a keyless Anthropic Console
-sign-in, stored on the server outside your home:
+A **login** is one sign-in of an agent. Your **default login** is the one in
+your home, which `cloudfield agent login claude` signs in. Claude Code can
+also keep **added logins**, stored on the server outside your home, so that a
+session can start or continue on another of your subscriptions when one runs
+out:
 
 ```sh
-cloudfield agent login claude --as work      # add a login named work
-cloudfield agent logins                      # list them, with usage
-cloudfield session "fix the flaky test" --workspace app --agent claude --login work
+cloudfield agent login claude --as work     # add a login named work
+cloudfield agent logins                     # list your logins in the order Cloudfield tries them
+cloudfield session "fix the flaky test" --agent claude --login work
 ```
 
-`--as` runs `claude auth login` in a container of its own and prints
-`adding login work as lgn-…`. **Human:** follow its prompts in your own
-terminal. It ends with `added login work: subscription, plan max, <email>,
-organisation <name>`. A name has 1 to 32 lowercase letters, digits and `-`,
-starting with a letter or digit; `default` names the login in your home. The
-sign-in is refused, and nothing is kept, when it:
+Notes, reasons and prompts name a login as its member's name with an added
+login's name after it, `Ada (work)`; a default login is the member's name
+alone. The dashboard's **Agents** page lists the same logins with the same
+controls, and the launch dialog's **Login** field names one.
 
-- saved an Anthropic Console API key. Keep a key as your default login or as a
-  workspace secret ([harnesses.md](harnesses.md#use-an-api-key));
-- saved nothing;
-- signed in to the account and organisation of a login you already have.
+### Add a login
 
-You run one sign-in at a time. One whose terminal is not opened within 10
-minutes, or that runs 15 minutes, ends with nothing added. If your terminal
-goes first, `cloudfield agent login claude --attach <login-id>` returns to it.
+`--as <name>` runs `claude auth login` in a container of its own, with the new
+login mounted over your default one, so the sign-in cannot overwrite another
+login. It prints:
 
-`cloudfield agent logins` prints, in the order Cloudfield tries them, each
-login's kind, plan, email, organisation, usage, and its two switches. `--json`
-prints the same as JSON. Manage them by name:
+```text
+adding login work as lgn-…: claude auth login runs in a container of its own; follow its prompts
+if this terminal goes before the sign-in ends, return to it with: cloudfield agent login claude --attach lgn-…
+```
+
+**Human:** run it in your own terminal and follow the prompts; without a
+terminal it prints the command for one and reserves nothing. It ends with
+`added login work: subscription, plan max, <email>, organisation <name>`.
+
+A name has 1 to 32 lowercase letters, digits and `-`, starts with a letter or
+digit, and is unique among your logins. `default` and names starting with
+`lgn-`, the form of a login's id, are refused.
+
+You can add a Claude subscription (claude.ai) sign-in, or an Anthropic Console
+sign-in that creates no API key. Nothing is added when the sign-in:
+
+- saved a Console API key: `the sign-in saved an Anthropic Console API key,
+  which Cloudfield does not keep as an added login: Claude Code copies it into
+  backups in your home, where it would outlive the login. ...`. Keep a key as
+  your default login or as a workspace secret
+  ([harnesses.md](harnesses.md#use-an-api-key));
+- saved nothing: `the sign-in ended before Claude Code saved a login; nothing
+  was added`;
+- is the account and organisation of a login you have: `this sign-in is the
+  account and organisation your login "work" is signed in to, so it was not
+  added; sign in to another account to add a login`.
+
+You run one sign-in at a time: a second `--as` fails with `the sign-in of login
+"work" (lgn-…) is still running; finish it first`, followed by the `--attach`
+command. A sign-in whose terminal is not opened within 10 minutes, or whose
+container does not start within 5, ends with nothing added; one still running
+15 minutes after its terminal opened is stopped. Closing your terminal does
+not end it: `cloudfield agent login claude --attach <login-id>` returns to it,
+or, for 10 minutes after it ended, prints how it ended.
+
+### Manage logins
+
+`cloudfield agent logins` prints one row per login:
+
+| Column | Meaning |
+| --- | --- |
+| `#` | Position in your order |
+| `LOGIN` | Name; `default` is the login in your home |
+| `KIND` | `subscription`, `console` (a Console sign-in without a key), or `api_key` (a default login only) |
+| `PLAN`, `EMAIL`, `ORGANISATION` | What Claude Code recorded at sign-in |
+| `USAGE` | Each usage window's share used; `unsupported` for a Console login, which has no windows; `not read` when the read failed, with the error under the table |
+| `AUTOMATIC`, `SHARES` | The two switches below |
+| `BILLED` | `per use` for a login [billed per use](#when-a-login-runs-out) |
+| `YOUR SESSIONS` | How many of your sessions that have not ended run on it |
+
+`--json` prints the same, with the ids of those sessions. The other commands
+take a login's name or id:
 
 ```sh
-cloudfield agent logins order work default spare   # every login, default included
-cloudfield agent logins auto spare off             # only when you name it with --login
-cloudfield agent logins share work off             # only your own sessions run on it
+cloudfield agent logins order work default spare   # every login once, default included
+cloudfield agent logins auto spare off
+cloudfield agent logins share work off
 cloudfield agent logins rename spare personal
 cloudfield agent logins remove personal
 ```
 
-- **Order** is your priority. A new subscription login goes before your first
-  login billed per use, and a Console login last.
-- **Automatic** off: Cloudfield uses the login only when you name it, and never
-  moves a session onto it.
-- **Use for shares** off: members you share your account with never run on it
-  ([teams.md](teams.md#agent-accounts)).
+- **Order** is the order Cloudfield tries your logins in, for your sessions
+  and your teammates'. A new subscription login goes after your other
+  subscription logins, before the first login billed per use; a new login
+  billed per use goes last. The dashboard marks the first login with
+  Automatic on **tried first**: a launch that names no login starts there
+  unless it cannot serve the session or its usage is at its limit.
+- **Automatic**, on when the login is added: off, Cloudfield starts a session
+  on the login only when you name it with `--login`, never moves a session
+  onto it, and no teammate's session starts on it.
+- **Use for shares**, on when the login is added: off, only your own sessions
+  run on it ([teams.md](teams.md#shares-and-several-logins)).
+- **Rename** changes the name; the id stays.
 - **Remove** deletes the login's files from the server. It does not sign the
-  login out at Anthropic. It is refused while a session uses the login, a move is
-  taking a session to it, or a subsession is queued on it; the refusal names your
-  own sessions and counts teammates'.
+  login out at Anthropic, where its sign-in stays valid. It is refused while a
+  session that has not ended runs on the login, a kept container of an ended
+  session mounts it, a move is taking a session to it, or a subsession is
+  queued on it: `login "work" is in use by your sessions run-… (end them) and
+  1 of your teammates' sessions, which hold it until they end and their
+  containers go (revoking the share you gave a teammate, with cloudfield
+  account revoke <member-id>, moves their running sessions off it)`.
 
-A launch without `--login` starts on your first login that is automatic and can
-sign in. When that login's usage reads 95% or more, Cloudfield starts the session
-on the next one in your order. A login whose usage cannot be read, such as a
-Console login, is used only when no login with readable usage is left. When the
-agent reports mid-session that a login ran out, the session moves to the next
-login and continues the same conversation ([teams.md](teams.md#usage-fallback)).
-A Console login is billed per use: `cloudfield agent logins` and `cloudfield sessions`
-say `billed per use`. A workspace secret such as `ANTHROPIC_API_KEY` pays
-whatever the login, so a launch in that workspace chooses no login, and one that
-names an added login is refused.
+The default login is not renamed or removed here. Order and both switches
+cover it once you have added a login; before that they fail with `you have only
+the default login; add a login first`.
 
-Anthropic's pages describe keeping
-[several accounts, each in its own configuration directory](https://code.claude.com/docs/en/authentication),
-and suggest a [Console account at a subscription limit](https://support.claude.com/en/articles/11145838),
-but neither allow nor forbid moving between two of your own subscriptions at a
-limit, while the [Usage Policy](https://www.anthropic.com/legal/aup) forbids
-using several accounts to get around its restrictions.
+### Which login a session starts on
+
+`--login <name>` takes one of your own logins by name or id; `--login default`
+is the login in your home. Only a login's owner names it.
+
+Without `--login`, the session starts on the first login in your order that is
+automatic and can serve it: it holds a sign-in, the session can mount it, and
+nothing in [What does not work](#what-does-not-work-with-added-logins) rules
+it out. When none of your logins can, the launch fails with `none of your
+logins starts a session unless you name it: <login>: <why>; ...; name one with
+cloudfield session --login <name>, or let Cloudfield choose it with cloudfield
+agent logins auto <name> on`.
+
+Named or not, when a usage read shows a window of that login at 95% or more,
+the session starts on the first other candidate with usage left: your other
+automatic logins in your order, then the accounts shared with you
+([usage fallback](teams.md#usage-fallback)). When none has, it takes one whose
+usage cannot be read, in the same order, and otherwise starts where it was
+going to. The CLI then says where it started when that is not the login you
+named, and when the login is billed per use:
+
+```text
+session run-4zjmsfgn3s running
+started on your login console, not work; billed per use
+```
+
+`--no-fallback` turns every automatic change off, between your own logins
+too: the session starts on the login named or chosen, even at its limit, and
+never moves.
+
+### When a login runs out
+
+A session moves only on Claude Code's own usage-limit message ending a turn
+([harnesses.md](harnesses.md#usage-limit-signals)). Cloudfield stops the agent,
+starts a new container on the next login, resumes the same conversation, and
+sends the agent one prompt:
+
+```text
+Your previous turn stopped because Ada's usage ran out. The session continues on Ada (work)'s account. Continue the task where you stopped.
+```
+
+The candidates are those of a launch, and a login the session already ran on
+is not tried again. Only a spent balance moves a session between the logins of
+one account; a seat, allocation, group or model message restricts the whole
+account, so the session skips its other logins and moves to another account or
+stops. A signed-out login, a network error or a transient 429 is no usage
+limit and moves nothing. When the session is not its login owner's own,
+Cloudfield first reads the login's usage again
+([security.md](security.md#several-logins)).
+
+The room gets `Continued on Ada (work)'s account because Ada's usage ran out.`
+The continuation prompt is sent at most once, and not at all when a person's
+message reaches the agent first. A message sent while a move is in flight is
+refused with `the session is moving to another account or login; send the
+message when it finishes`.
+
+A login **billed per use** has no usage windows: the API bills each request.
+That is a Console login, and, once you have added a login, a default login
+kept as an API key or a Console profile, or signed in by an `apiKeyHelper` or
+a key in `~/.claude/settings.json`. Unless you name it, a session reaches one,
+at launch or by a move, only when no login it may use has usage known to be
+left; a subsession never inherits one. Landing on it adds `Ada (console)'s
+account is billed per use.` to the session's log and room note, and
+`cloudfield sessions` shows `billed per use`. Its limit is the credit bought in the Console, whose `You're out of
+usage credits` moves the session on; after that report from your own session
+the login is passed over for 30 minutes.
+
+When every login the session may use has run out, an interactive session
+parks as **Needs you** and a Background session fails, with a reason such as
+`Usage limit reached on Ada (work)'s account; no fallback has usage left;
+logins tried: Ada, Ada (work); the first is usable again at
+2026-11-27T18:00:00Z` ([failure-handling.md](failure-handling.md#several-logins)).
+
+### What does not work with added logins
+
+| Setup | Refusal | Why |
+| --- | --- | --- |
+| A workspace or server variable that signs Claude Code in, such as `ANTHROPIC_API_KEY` | `a sign-in outside the login pays here: a workspace or server variable signs the agent in, so login lgn-… would not pay; launch on the default login` | Claude Code would pay with the variable. A launch that names no login stays on the default login. |
+| `apiKeyHelper`, or a variable that signs Claude Code in under `env`, in `~/.claude/settings.json` | `a sign-in outside the login pays here: apiKeyHelper in ~/.claude/settings.json signs the agent in, ...`, or `ANTHROPIC_API_KEY under env in ~/.claude/settings.json signs the agent in, ...` | Claude Code prefers those settings to a login file. |
+| An agent definition (`--agent-definitions`) that gives `claude` its own executable | `only Claude Code keeps added logins: this server runs claude from its --agent-definitions entry, whose executable leaves no place for an added login; use the default login, ...` | The definition has no sign-in command and no account configuration to mount a login into. |
+| An Isolated session on a Console login | `an Isolated session cannot use a Console login: it is a whole directory the session could change for later sessions; launch it at Default, or on another login` | The session could change the login's directory for later sessions. |
+| Session VMs (`session-runtime vm`) | `session VMs cannot verify an added login's mounts yet, so they do not run on one; launch on the default login` | Cloudfield cannot yet check a VM's mounts. |
+
+Anthropic's pages show how to stay [signed in to several accounts, each in
+its own configuration directory](https://code.claude.com/docs/en/authentication),
+offer [a Console account at a subscription
+limit](https://support.claude.com/en/articles/11145838), and say [you can belong
+to several Team or Enterprise
+organizations](https://support.claude.com/en/articles/13566435), while the
+[Usage Policy](https://www.anthropic.com/legal/aup) rules out creating multiple
+accounts to "circumvent product guardrails" and [Claude Code's legal
+page](https://code.claude.com/docs/en/legal-and-compliance) says advertised
+limits "assume ordinary, individual usage"; none of them says whether moving
+between two of your own subscriptions at a usage limit is allowed or
+forbidden.
 
 ## Follow and answer sessions
 
