@@ -311,8 +311,10 @@ Cloudfield checks that the host has free disk and memory, and that the server is
 not stalling on memory (its cgroup's `memory.pressure`, `some avg60` below
 10%). Otherwise the launch fails with `scheduler: insufficient disk headroom`,
 `scheduler: insufficient host memory headroom` or `scheduler: host capacity
-unavailable`. Cloudfield never stops a running agent to make room, and reopening
-a retained session needs no check. A refusal for low available memory first
+unavailable`. Cloudfield never stops a running agent to make room. Reopening a
+retained session whose container still runs needs no check; one whose
+container a sleep stopped is checked as a wake, on memory and for 1 GiB of
+free disk. A refusal for low available memory first
 saves idle session VMs to disk and checks once more. When the host runs out of
 memory, a session VM can be saved to disk while it works, with every process
 kept, and woken again once memory is back. [Recover from disk
