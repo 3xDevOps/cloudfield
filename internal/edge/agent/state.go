@@ -558,9 +558,6 @@ func (s *State) writeNotices(p pin, n StoredNotices) error {
 		return nil
 	}
 	name, link := keyDirFile(p.Key, noticesFile), keyDirFile(p.Key, noticesPinFile)
-	if err = s.forgetNotices(p.Key); err != nil {
-		return err
-	}
 	// Only this build writes them, under the lock: any left is a crash's.
 	dir := filepath.Dir(s.path(name))
 	entries, _ := os.ReadDir(dir)
@@ -568,6 +565,14 @@ func (s *State) writeNotices(p pin, n StoredNotices) error {
 		if e.Type().IsRegular() && noticesTemp.MatchString(e.Name()) {
 			_ = os.Remove(filepath.Join(dir, e.Name()))
 		}
+	}
+	// With the link already naming this pin file, replacing the list alone
+	// keeps a lock-free reader from seeing no notices in between.
+	if len(n.Notices) > 0 && sameRegular(s.path(link), p.file) {
+		return s.write(name, n)
+	}
+	if err = s.forgetNotices(p.Key); err != nil {
+		return err
 	}
 	if len(n.Notices) == 0 {
 		return nil
