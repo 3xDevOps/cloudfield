@@ -43,6 +43,7 @@ type edgeNotices struct {
 	by   map[string]*cachedNotice
 	gen  uint64
 	now  func() time.Time
+	http *http.Client
 }
 
 // cachedNotice is one edge's entry. A result is kept only while the entry
@@ -58,7 +59,10 @@ type cachedNotice struct {
 }
 
 func newEdgeNotices() *edgeNotices {
-	return &edgeNotices{by: map[string]*cachedNotice{}, now: time.Now}
+	hc := edgeclient.HTTPClient()
+	t := hc.Transport.(*http.Transport)
+	t.MaxIdleConnsPerHost, t.MaxConnsPerHost, t.IdleConnTimeout = 1, 2, time.Minute
+	return &edgeNotices{by: map[string]*cachedNotice{}, now: time.Now, http: hc}
 }
 
 // generation is the count a lookup's signed-in rows are read under.
@@ -130,7 +134,7 @@ wait:
 func (n *edgeNotices) ask(life context.Context, dir, origin string, entry *cachedNotice) {
 	ctx, cancel := context.WithTimeout(life, noticeTimeout)
 	defer cancel()
-	notice, err := askNotice(ctx, dir, origin)
+	notice, err := askNotice(ctx, n.http, dir, origin)
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	close(entry.asking)
@@ -143,12 +147,11 @@ func (n *edgeNotices) ask(life context.Context, dir, origin string, entry *cache
 // askNotice reads origin's notice, nil when it carries none. A refusal
 // as retired is a notice too, and a 410 without a replacement clears it;
 // any other failure is an error, which keeps what the cache holds.
-func askNotice(ctx context.Context, dir, origin string) (*edgeNotice, error) {
-	client, err := edgeclient.New(dir, origin)
+func askNotice(ctx context.Context, hc *http.Client, dir, origin string) (*edgeNotice, error) {
+	client, err := edgeclient.NewWith(dir, origin, hc)
 	if err != nil {
 		return nil, err
 	}
-	defer client.CloseIdleConnections()
 	r, ok, err := client.RetiringNotice(ctx)
 	var refused *edgeclient.RefusedError
 	switch {
@@ -182,3 +185,6 @@ func (n *edgeNotices) reset() {
 	clear(n.by)
 	n.gen++
 }
+
+// close closes the connections the asks keep open.
+func (n *edgeNotices) close() { n.http.CloseIdleConnections() }

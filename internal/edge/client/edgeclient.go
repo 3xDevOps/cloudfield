@@ -86,20 +86,24 @@ type Client struct {
 // the Aether config directory, which holds the device key and the device
 // tokens.
 func New(dir, edgeURL string) (*Client, error) {
+	return NewWith(dir, edgeURL, HTTPClient())
+}
+
+// HTTPClient is a client for edge requests: the edge client's transport,
+// and redirects refused.
+func HTTPClient() *http.Client {
+	return &http.Client{Transport: newTransport(nil), CheckRedirect: noRedirect}
+}
+
+// NewWith is New with hc, an HTTPClient its caller shares between
+// clients and closes.
+func NewWith(dir, edgeURL string, hc *http.Client) (*Client, error) {
 	origin, err := edgeproto.Origin(edgeURL)
 	if err != nil {
 		return nil, fmt.Errorf("edge URL %q: %w", edgeURL, err)
 	}
-	return &Client{
-		origin: origin,
-		host:   HostOf(origin),
-		dir:    dir,
-		http:   &http.Client{Transport: newTransport(nil), CheckRedirect: noRedirect},
-	}, nil
+	return &Client{origin: origin, host: HostOf(origin), dir: dir, http: hc}, nil
 }
-
-// CloseIdleConnections closes the connections c keeps open for reuse.
-func (c *Client) CloseIdleConnections() { c.http.CloseIdleConnections() }
 
 // Choose returns the client for edgeURL. An empty edgeURL means the only
 // edge dir holds a device token for; else the project's edge at the

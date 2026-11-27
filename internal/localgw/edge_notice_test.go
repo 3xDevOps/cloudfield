@@ -442,8 +442,9 @@ func TestEdgeStatusNoticeWithAnUnreadableConfig(t *testing.T) {
 	}
 }
 
-// Every ask closes its connection.
-func TestEdgeStatusNoticeClosesConnections(t *testing.T) {
+// The asks share one connection across rechecks, and the gateway closes
+// it when it closes.
+func TestEdgeStatusNoticeReusesItsConnection(t *testing.T) {
 	g, clk := noticeGateway(t)
 	edge := newNoticeEdge(t)
 	signInTo(t, edge.URL)
@@ -451,6 +452,10 @@ func TestEdgeStatusNoticeClosesConnections(t *testing.T) {
 		retiringOf(t, g, edge.URL)
 		clk.add(noticeRecheck)
 	}
+	if _, opened := edge.conns(); opened != 1 || edge.askedCount() != 4 {
+		t.Fatalf("4 asks opened %d connections, asked %d times", opened, edge.askedCount())
+	}
+	g.local.notices.close()
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		open, _ := edge.conns()
