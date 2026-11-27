@@ -827,3 +827,39 @@ func TestNoContinuationIsSentWhileAMoveHoldsTheSession(t *testing.T) {
 	entry.accountSwap, entry.moving = nil, false
 	e.sched.mu.Unlock()
 }
+
+// A session that left Ada's account on a restriction and then ran out on
+// Grace's lists only Grace's login as tried: Ada's was not spent, and her
+// usage, which shows no reset, does not make the time unknown.
+func TestALoginLeftOnARestrictionIsNotListedAsTried(t *testing.T) {
+	t.Parallel()
+	e, _, notes, usage, _ := newLoginMoveEnv(t, func(cfg *Config) { delete(cfg.Harnesses, "claude") })
+	e.share(t)
+	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "fix it", "claude", domain.LaunchTUI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = e.sched.ReportAgentState(t.Context(), run.ID, agentstatus.Report{State: agentstatus.Working, SessionID: "sess-1"}); err != nil {
+		t.Fatal(err)
+	}
+	restricted, _ := agentstatus.FromClaudeHook([]byte(`{"session_id":"sess-1","hook_event_name":"StopFailure","error":"rate_limit","last_assistant_message":"Your seat type doesn't include usage credits"}`))
+	if err = e.sched.ReportAgentState(t.Context(), run.ID, restricted); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the room note", func() bool { return len(notes.all()) == 1 })
+	waitFor(t, "the session on Grace's account", func() bool {
+		row, rowErr := e.db.GetRun(t.Context(), run.ID)
+		return rowErr == nil && row.Account() == domain.AccountOf(e.owner.ID) && row.Status == domain.RunRunning
+	})
+	usage.set(domain.AccountOf(e.owner.ID), 100)
+	if err = e.sched.ReportAgentState(t.Context(), run.ID, agentstatus.Report{State: agentstatus.Working, SessionID: "sess-1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err = e.sched.ReportAgentState(t.Context(), run.ID, standardLimit(t)); err != nil {
+		t.Fatal(err)
+	}
+	got := e.waitStoreStatus(t, run.ID, domain.RunNeedsAttention)
+	if want := "; logins tried: Grace; the first is usable again at " + usage.resets.UTC().Format(time.RFC3339); !strings.HasSuffix(got.Reason, want) {
+		t.Fatalf("reason %q; want it to end %q", got.Reason, want)
+	}
+}

@@ -28,8 +28,12 @@ const workspaceRevokedReason = "workspace access revoked: "
 const loginRevokedReason = "login share revoked: "
 
 // revokedSegment is the reason an account segment records for a move off a
-// revoked account.
-const revokedSegment = "share revoked"
+// revoked account, and restrictedSegment for one off an account whose
+// vendor message was a restriction.
+const (
+	revokedSegment    = "share revoked"
+	restrictedSegment = "account restricted"
+)
 
 // accountMove is why a run leaves the account it is on: the account's usage
 // ran out, or its owner revoked the share the run uses it by. offLogin, on
@@ -48,8 +52,11 @@ var (
 )
 
 func (m accountMove) segment() string {
-	if m.revoked {
+	switch {
+	case m.revoked:
 		return revokedSegment
+	case m.restricted:
+		return restrictedSegment
 	}
 	return usageLimitSegment
 }

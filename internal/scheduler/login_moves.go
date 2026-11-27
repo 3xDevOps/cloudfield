@@ -117,29 +117,38 @@ func (s *Scheduler) noteRunOut(ctx context.Context, f *UsageFallback, run *domai
 }
 
 // triedLogins ends the reason of a session that ran out on every login it
-// could use with the logins it ran on and when the first of them is usable
-// again: for each, the latest reset among its spent windows, and the
-// earliest of those, unknown when a login's read gives none. It is empty
-// for a session that ran on one login, or where nobody involved keeps
-// added logins, whose reason stays as before logins existed.
-func (s *Scheduler) triedLogins(ctx context.Context, f *UsageFallback, run *domain.Run) string {
+// could use with the logins it left because they were spent, m's included,
+// and when the first of them is usable again: for each, the latest reset
+// among its spent windows, and the earliest of those, unknown when a
+// login's read gives none. It is empty for a session that ran on one
+// login, or where nobody involved keeps added logins, whose reason stays as
+// before logins existed.
+func (s *Scheduler) triedLogins(ctx context.Context, f *UsageFallback, run *domain.Run, m accountMove) string {
 	segments, err := s.cfg.Store.ListRunAccountSegments(ctx, run.ID)
 	if err != nil {
 		return ""
 	}
-	var tried []domain.Account
+	var ran, tried []domain.Account
 	keepsLogins := false
-	for _, segment := range segments {
+	for i, segment := range segments {
 		account := segment.Account()
-		if slices.Contains(tried, account) {
+		// The next segment records why the session left this one.
+		spent := !m.restricted
+		if i+1 < len(segments) {
+			spent = segments[i+1].Reason == usageLimitSegment
+		}
+		if spent && !slices.Contains(tried, account) {
+			tried = append(tried, account)
+		}
+		if slices.Contains(ran, account) {
 			continue
 		}
-		tried = append(tried, account)
+		ran = append(ran, account)
 		if logins, listErr := s.cfg.Store.ListAgentLogins(ctx, account.Member, run.Harness); listErr == nil && len(logins) > 0 {
 			keepsLogins = true
 		}
 	}
-	if len(tried) < 2 || !keepsLogins {
+	if len(ran) < 2 || !keepsLogins || len(tried) == 0 {
 		return ""
 	}
 	names := make([]string, len(tried))
