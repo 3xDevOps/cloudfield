@@ -345,7 +345,7 @@ func (m *Manager) TrimGoBuildCache(ctx context.Context, member domain.MemberID, 
 		defer func() { _ = root.Close() }()
 		caches = append(caches, root)
 	}
-	return errors.Join(append(errs, disk.TrimGoBuildCache(ctx, caches, cutoff, excess))...)
+	return errors.Join(append(errs, disk.TrimGoBuildCache(ctx, caches, cutoff, excess, nil))...)
 }
 
 func (m *Manager) updateCacheMetadata(member domain.MemberID, pool string, create bool, update func(*cacheMetadata) error) error {
