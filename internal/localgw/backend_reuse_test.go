@@ -40,12 +40,15 @@ func TestSSHBackendReusesAnAnsweredControlChannel(t *testing.T) {
 		t.Fatalf("5 calls in a row opened %d control channels, want 1", got)
 	}
 
-	// A call that may not run twice never rides a channel that may have ended.
-	if _, perr := b.Call(ctx, protocol.MethodRunLaunch, nil); perr != nil {
-		t.Fatal(perr)
-	}
-	if got := channels.Load(); got != 2 {
-		t.Fatalf("a call unsafe to replay left %d control channels opened, want its own, 2", got)
+	// Only reads ride a kept channel: a write opens its own, whether or
+	// not it may run twice.
+	for i, method := range []string{protocol.MethodRunLaunch, protocol.MethodWatchDelete} {
+		if _, perr := b.Call(ctx, method, nil); perr != nil {
+			t.Fatal(perr)
+		}
+		if got := channels.Load(); got != int32(2+i) {
+			t.Fatalf("%s left %d control channels opened, want its own, %d", method, got, 2+i)
+		}
 	}
 
 	// A call cancelled before its answer leaves a channel that still owes
@@ -55,13 +58,13 @@ func TestSSHBackendReusesAnAnsweredControlChannel(t *testing.T) {
 	if _, perr := b.Call(short, protocol.MethodRunList, nil); perr == nil || perr.Message != "request cancelled" {
 		t.Fatalf("unanswered call = %v, want request cancelled", perr)
 	}
-	// Two channels were kept and the cancelled call took one.
+	// Three channels were kept and the cancelled call took one.
 	backend := b.(*sshBackend)
 	backend.mu.Lock()
 	kept := len(backend.idle)
 	backend.mu.Unlock()
-	if kept != 1 {
-		t.Fatalf("%d control channels kept after a cancelled call, want 1: its own must be dropped", kept)
+	if kept != 2 {
+		t.Fatalf("%d control channels kept after a cancelled call, want 2: its own must be dropped", kept)
 	}
 	close(unanswered)
 	for range 3 {

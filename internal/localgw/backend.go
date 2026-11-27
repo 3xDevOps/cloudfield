@@ -430,6 +430,39 @@ func (b *sshBackend) callOnce(ctx context.Context, method string, params json.Ra
 	return nil, endToEnd(cfg, err)
 }
 
+// keptReads holds the methods that may ride a kept channel: the reads the
+// dashboard makes as a page loads, which change nothing on the server. A
+// kept channel sends a call sooner than a new one would, before the caller
+// can cancel it or the connection has proved itself, so nothing that
+// writes goes on one.
+var keptReads = map[string]bool{
+	protocol.MethodServerInfo:         true,
+	protocol.MethodWorkspaceList:      true,
+	protocol.MethodMemberList:         true,
+	protocol.MethodRunList:            true,
+	protocol.MethodRunOverlaps:        true,
+	protocol.MethodMemberDeviceList:   true,
+	protocol.MethodWatchList:          true,
+	protocol.MethodMemberMergePending: true,
+	protocol.MethodServerEdge:         true,
+	protocol.MethodLinearStatus:       true,
+	protocol.MethodAgentList:          true,
+	protocol.MethodBudgetGet:          true,
+	protocol.MethodPresenceRoster:     true,
+	protocol.MethodLaunchDefaultsGet:  true,
+	protocol.MethodAssistantStatus:    true,
+	protocol.MethodServerUpdateStatus: true,
+	protocol.MethodServerSysboxStatus: true,
+	protocol.MethodWorkspaceTimeline:  true,
+	protocol.MethodRunGet:             true,
+	protocol.MethodRunChildren:        true,
+	protocol.MethodCoordMessagesList:  true,
+	protocol.MethodRunRoomList:        true,
+	protocol.MethodRunRoomStatus:      true,
+	protocol.MethodRunACPHistory:      true,
+	protocol.MethodChangesList:        true,
+}
+
 // noReplay holds the methods unsafe to run twice: a second run creates a
 // duplicate, repeats an external side effect, or answers with an error such
 // as not found where the first succeeded. Prefixes in Call cover dev.*,
@@ -528,7 +561,7 @@ var noReplay = map[string]bool{
 // that may have committed a mutation before the response was lost.
 func (b *sshBackend) Call(ctx context.Context, method string, params json.RawMessage) (json.RawMessage, *protocol.Error) {
 	replaySafe := !noReplay[method] && !strings.HasPrefix(method, "dev.") && !strings.HasPrefix(method, "run.git.") && !strings.HasPrefix(method, "run.pr.")
-	result, err := b.callOnce(ctx, method, params, replaySafe)
+	result, err := b.callOnce(ctx, method, params, replaySafe && keptReads[method])
 	if err == nil {
 		return result, nil
 	}

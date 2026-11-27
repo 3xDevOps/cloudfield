@@ -204,7 +204,8 @@ round trips to the server before the call's own, so a channel whose call was
 answered is kept (up to 8) and carries a later call, one call at a time.
 Calls in flight together each have their own channel. A channel whose call
 was cancelled or timed out is closed, never reused. A call takes a kept
-channel only when it is replay-safe and the server sent something on the
+channel only when it is one of the reads a page makes as it loads
+(`keptReads` in `internal/localgw/backend.go`; nothing that writes) and the server sent something on the
 connection in the last second (any byte: another call's answer, an event,
 terminal output); otherwise it opens its own, which proves the connection
 answers before the call's time limit starts. The price of skipping that
