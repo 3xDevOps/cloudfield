@@ -196,6 +196,14 @@ the image before sending.
 An image sent while the agent starts shows **Not sent** if the agent turns out
 not to take images.
 
+From the CLI, `cloudfield message` queues a message sent during a turn, and
+`cloudfield message --steer <session-id> "<text>"` is **Steer**. `--steer`
+changes nothing when no turn runs, when the agent cannot steer, and when the
+message waits for the controller. `--attach <path>` is **Attach files**; a
+message with an image is `not sent` to an agent without image support. Both
+flags go before the session id ([Messages and
+notes](terminal.md#messages-and-notes)).
+
 ## Permissions and input
 
 A new session starts in the agent's no-prompt setting, so a request arrives
