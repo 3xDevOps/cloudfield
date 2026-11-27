@@ -43,9 +43,10 @@ const (
 	// CommandPrefixEnv, in the environment of a keeper or its bridge, names
 	// the variable through which the agent takes a program to run each of
 	// its commands through, as Claude Code's CLAUDE_CODE_SHELL_PREFIX. A
-	// keeper that can moves itself to AgentCgroup with a lower OOM score,
-	// which the agent inherits, and sets that variable to a program that
-	// undoes both for each command; its bridge protects itself the same way.
+	// keeper at the default OOM score moves itself to AgentCgroup with a
+	// lower score, which the agent inherits, and sets that variable to a
+	// program that undoes both for each command; its bridge protects itself
+	// the same way.
 	CommandPrefixEnv = "AETHER_ACP_COMMAND_PREFIX_ENV"
 
 	// maxLine bounds one frame. The SDK reads agent messages of up to 10

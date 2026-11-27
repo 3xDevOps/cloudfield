@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 )
 
 // agentOOMScoreAdj ranks the agent behind every process at the default
@@ -35,10 +36,17 @@ const (
 
 // protectSelf moves this process's parent, the managed exec the server
 // tracks it by, and this process, whose children follow it, to AgentCgroup
-// and applies agentOOMScoreAdj to both. Only root in a session VM can: a
-// container has no AgentCgroup, and lowering the score needs
-// CAP_SYS_RESOURCE.
+// and applies agentOOMScoreAdj to both. It does so only from the default
+// score, the one the command wrapper gives back: any other is one the host
+// ranks the session by, as a container's, which has no AgentCgroup either.
 func protectSelf() error {
+	score, err := os.ReadFile("/proc/self/oom_score_adj")
+	if err != nil {
+		return err
+	}
+	if s := strings.TrimSpace(string(score)); s != "0" {
+		return fmt.Errorf("the OOM score is %s, not the default 0", s)
+	}
 	for _, pid := range []string{strconv.Itoa(os.Getppid()), strconv.Itoa(os.Getpid())} {
 		if err := os.WriteFile(AgentCgroup+"/cgroup.procs", []byte(pid), 0); err != nil {
 			return err
