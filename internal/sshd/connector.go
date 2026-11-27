@@ -267,11 +267,11 @@ func (s *Server) githubLinked(ctx context.Context, member domain.MemberID) (bool
 }
 
 // connectorURLFor is the URL member adds as a connector, and whether it is
-// the universal one: that while the edge speaks it and member has a GitHub
-// account bound, the server's own URL otherwise; either at the address
-// notices name instead of a retiring or retired one.
-func (s *Server) connectorURLFor(ctx context.Context, member domain.MemberID, notices edgeNotices) (string, bool, error) {
-	universal := s.UniversalConnectorURL()
+// the universal one: universal, UniversalConnectorURL as the caller read
+// it, while not empty and member has a GitHub account bound, the server's
+// own URL otherwise; either at the address notices name instead of a
+// retiring or retired one.
+func (s *Server) connectorURLFor(ctx context.Context, member domain.MemberID, universal string, notices edgeNotices) (string, bool, error) {
 	if universal == "" {
 		return s.offered(notices, s.ConnectorURL()), false, nil
 	}
@@ -328,7 +328,7 @@ func (s *Server) connectorCode(ctx context.Context, member domain.MemberID, _ js
 			"%s: edge %s speaks edge protocol %d and cannot forward connectors; its operator upgrades it",
 			method, edge.Origin(), version)}
 	}
-	connectorURL, _, err := s.connectorURLFor(ctx, member, s.edgeNotices())
+	connectorURL, _, err := s.connectorURLFor(ctx, member, s.UniversalConnectorURL(), s.edgeNotices())
 	if err != nil {
 		return nil, rpcError(err)
 	}
@@ -435,12 +435,12 @@ func (s *Server) connectorList(ctx context.Context, member domain.MemberID, _ js
 		return nil, rpcError(err)
 	}
 	notices := s.edgeNotices()
-	connectorURL, onUniversal, err := s.connectorURLFor(ctx, member, notices)
+	universal := s.UniversalConnectorURL()
+	connectorURL, onUniversal, err := s.connectorURLFor(ctx, member, universal, notices)
 	if err != nil {
 		return nil, rpcError(err)
 	}
 	// The universal URL moves only for a member the edge offers it to.
-	universal := s.UniversalConnectorURL()
 	if onUniversal {
 		universal = s.offered(notices, universal)
 	}

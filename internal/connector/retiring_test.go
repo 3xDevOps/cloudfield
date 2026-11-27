@@ -347,8 +347,14 @@ func TestConnectorCodeNeverMintsWithoutAURL(t *testing.T) {
 		e.edge.version.Store(int64(edgeproto.VersionRelayOrigin))
 		e.edge.dropAfter.Store(k)
 		var list protocol.ConnectorListResult
-		if err := e.device.Call(protocol.MethodConnectorList, struct{}{}, &list); err != nil || list.URL == "" {
-			t.Fatalf("edge dropping after %d version reads: connector.list = %+v, %v; want a URL", k, list, err)
+		err := e.device.Call(protocol.MethodConnectorList, struct{}{}, &list)
+		// One read of the edge answers for the URL, the universal URL and
+		// sign_in together: the member has GitHub linked, so the URL is the
+		// universal one whenever there is one, and edge-access
+		// approved-devices takes no sign-in.
+		if err != nil || list.URL == "" || (list.UniversalURL != "" && list.URL != list.UniversalURL) ||
+			(list.UniversalURL == "" && list.URL != e.base) || list.SignIn {
+			t.Fatalf("edge dropping after %d version reads: connector.list = %+v, %v; want one read's URL, universal URL and sign_in", k, list, err)
 		}
 	}
 	e.edge.dropAfter.Store(0)
