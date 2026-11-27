@@ -403,10 +403,14 @@ What changes:
   so a session that starts again finds the member's newest caches, not
   always its own: they did not go back if the stop had to kill the VM, if
   another session's went back later, or if the start or a server restart
-  came before the write finished. Its tools then download and build again. A
-  sleeping session's VM keeps its cache disk and promotes nothing until it
-  is stopped: when the session is closed, or when its saved memory is
-  deleted because disk space was low
+  came before the write finished. Nor did they if writing them could leave
+  the data filesystem with less free than its reserve (`--min-free-disk`)
+  plus 4 GiB, the level below which the server starts deleting stopped
+  sessions' state: the member's newest caches stay as they were, and the
+  server log gives the sizes. The session's tools then download and build
+  again. A sleeping session's VM keeps its cache disk and promotes nothing
+  until it is stopped: when the session is closed, or when its saved memory
+  is deleted because disk space was low
   ([failure-handling.md](failure-handling.md#recover-from-disk-pressure)).
   Caches over 20 GiB are dropped, and so are a member's newest caches once
   no VM has used them for 7 days; the next session then starts empty. An

@@ -11,6 +11,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/3xDevOps/cloudfield/internal/disk"
 )
 
 const (
@@ -168,12 +170,49 @@ func (s *Store) UnshareCache(ctx context.Context, disk Disk) error {
 	return nil
 }
 
+// reservePromotion holds, until release, the room a promotion of cache may
+// take on the store's filesystem: a copy of cache, and for one read over
+// base a copy of base and cache's blocks again, which land in that copy's
+// holes. It refuses a promotion that would leave less free than disk
+// reclaim keeps, counting what the promotions under way hold: reclaim would
+// delete sessions' state to make up a dip that ends with the promotion.
+func (s *Store) reservePromotion(cache, base string) (release func(), err error) {
+	if s.minFree < 0 {
+		return func() {}, nil
+	}
+	info, err := os.Stat(cache)
+	if err != nil {
+		return nil, err
+	}
+	need := uint64(info.Sys().(*syscall.Stat_t).Blocks) * 512
+	if info, err = os.Stat(base); err == nil {
+		need = 2*need + uint64(info.Sys().(*syscall.Stat_t).Blocks)*512
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	data, err := disk.Filesystem(s.dir)
+	if err != nil {
+		return nil, err
+	}
+	floor := disk.Reserve(data.TotalBytes, s.minFree) + disk.ReclaimHeadroom
+	if data.FreeBytes < floor+s.promoting+need {
+		return nil, fmt.Errorf("skipped: it may write %d bytes and other promotions hold %d more, and %s has %d free with %d to keep free",
+			need, s.promoting, s.dir, data.FreeBytes, floor)
+	}
+	s.promoting += need
+	return func() {
+		s.mu.Lock()
+		s.promoting -= need
+		s.mu.Unlock()
+	}, nil
+}
+
 // PromoteCache writes a snapshot SnapshotCache took as a raw disk, a copy
 // of a qcow2 one read over its base, and makes that pool's newest cache, or
 // drops the pool's caches when it takes more than cacheLimit, then deletes
 // the snapshot and every cache of the pool no disk uses. A snapshot older
 // than the pool's newest cache, whose promotion finished first, changes
-// nothing.
+// nothing, and so does one the store's filesystem has no room to write.
 func (s *Store) PromoteCache(pool, snapshot string) error {
 	defer func() { _ = os.RemoveAll(snapshot) }()
 	if !validPool(pool) {
@@ -182,7 +221,14 @@ func (s *Store) PromoteCache(pool, snapshot string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
 	defer cancel()
 	disk, cache, base := filepath.Join(snapshot, "disk.raw"), filepath.Join(snapshot, "cache"), filepath.Join(snapshot, "base.raw")
-	var err error
+	dir := filepath.Join(s.cachesDir(), pool)
+	release, err := s.reservePromotion(cache, base)
+	if err != nil {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return errors.Join(fmt.Errorf("vmimage: promote cache: %w", err), os.RemoveAll(snapshot), s.sweepCachesLocked(dir))
+	}
+	defer release()
 	if _, statErr := os.Stat(base); statErr == nil {
 		top := filepath.Join(snapshot, "top.qcow2")
 		if err = copyDisk(ctx, cache, top); err == nil {
@@ -199,7 +245,6 @@ func (s *Store) PromoteCache(pool, snapshot string) error {
 		return fmt.Errorf("vmimage: promote cache: %w", err)
 	}
 	seq := snapshotSeq(snapshot)
-	dir := filepath.Join(s.cachesDir(), pool)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch newest, _ := s.readNewest(dir); {
