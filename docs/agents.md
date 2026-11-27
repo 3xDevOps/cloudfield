@@ -315,11 +315,13 @@ task they gave you already answers it.
 open; `cloudfield message` then starts the next one. It works on an Enhanced
 session and on a Standard Codex session that is not paused. It prints
 `sent an interrupt to session <session-id>` and exits 0 whether or not a turn
-was running. A session the server saved to disk for memory while it worked
-keeps its turn: the command fails and names `cloudfield resume <session-id>`,
-which wakes it. Any other Standard agent stops only on its own key, so the
-command fails and names `cloudfield attach <session-id>`: **Human:** press the
-key there. While another member controls the session it fails with their name.
+was running; `cloudfield timeline <session-id>` then shows the note
+`sent an interrupt` with the member who ran it. A session the server saved to
+disk for memory while it worked keeps its turn: the command fails and names
+`cloudfield resume <session-id>`, which wakes it. Any other Standard agent
+stops only on its own key, so the command fails and names
+`cloudfield attach <session-id>`: **Human:** press the key there. While
+another member controls the session it fails with their name.
 
 ## Bring results back and publish
 

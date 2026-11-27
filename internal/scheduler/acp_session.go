@@ -195,7 +195,17 @@ var ErrNoInterrupt = errors.New("scheduler: the session's agent takes an interru
 // stopped waits for that app-server's answer, for the caller to take
 // outside control admission. A session that fell asleep idle has no turn to
 // stop.
-func (s *Scheduler) Interrupt(ctx context.Context, run *domain.Run) (stopped func() error, err error) {
+func (s *Scheduler) Interrupt(ctx context.Context, run *domain.Run, actor domain.MemberID) (stopped func() error, err error) {
+	defer func() {
+		if err != nil {
+			return
+		}
+		// The agent already has the interrupt, so recording who sent it
+		// must not depend on the caller staying connected.
+		recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), steerRecordTimeout)
+		defer cancel()
+		s.publishTimeline(recordCtx, run.WorkspaceID, run.ID, actor, events.TimelineNote, "sent an interrupt")
+	}()
 	s.mu.Lock()
 	var appServer, sleeping, asleep, midTurn, paused bool
 	var cid runtime.ID

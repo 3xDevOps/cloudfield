@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -51,14 +52,15 @@ func TestRunInterruptNeedsNoLeaseAndYieldsToAnotherMembersControl(t *testing.T) 
 	if perr := interrupt(bob.ID, run.ID); perr != nil {
 		t.Fatalf("interrupt from the controller's member = %v", perr)
 	}
-	admitted := 0
+	var admitted []string
 	for _, call := range e.runs.Calls() {
-		if call == "interrupt:"+string(run.ID) {
-			admitted++
+		if strings.HasPrefix(call, "interrupt:") {
+			admitted = append(admitted, call)
 		}
 	}
-	if admitted != 2 {
-		t.Fatalf("calls = %v, want only the two admitted interrupts", e.runs.Calls())
+	senders := []string{fmt.Sprintf("interrupt:%s:%s", run.ID, e.member.ID), fmt.Sprintf("interrupt:%s:%s", run.ID, bob.ID)}
+	if !slices.Equal(admitted, senders) {
+		t.Fatalf("interrupts = %v, want only the two admitted ones, each with its sender: %v", admitted, senders)
 	}
 
 	e.runs.setErr(fmt.Errorf("%w: cloudfield attach %s", scheduler.ErrNoInterrupt, e.run.ID))

@@ -28,12 +28,15 @@ func (s *Server) runInterrupt(ctx context.Context, member domain.MemberID, raw j
 	}
 	var stopped func() error
 	perr = s.admitWithoutLease(ctx, member, run.ID, protocol.MethodRunInterrupt, "the turn is theirs to interrupt", func() error {
-		stopped, err = s.cfg.Runs.Interrupt(ctx, run)
+		stopped, err = s.cfg.Runs.Interrupt(ctx, run, member)
 		return err
 	})
 	if perr != nil {
 		return nil, perr
 	}
 	// Outside control admission, which a turn slow to stop must not hold.
-	return struct{}{}, acpError(stopped())
+	if perr = acpError(stopped()); perr != nil {
+		return nil, perr
+	}
+	return struct{}{}, nil
 }
