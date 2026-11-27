@@ -246,3 +246,22 @@ func TestASubsessionOutcomeReadsAsItsParents(t *testing.T) {
 		t.Error("a subsession's failure needs someone")
 	}
 }
+
+func TestRenderRunsNamesTheLoginASessionIsOn(t *testing.T) {
+	runs := []protocol.Run{
+		{ID: "r1", Status: "running", Activity: "working", Harness: "claude", MemberID: "m1", AccountMemberID: "m1", AccountLogin: "lgn-test1", AccountLoginName: "work", Title: "On work", Task: "one"},
+		{ID: "r2", Status: "running", Activity: "working", Harness: "claude", MemberID: "m1", AccountMemberID: "m1", AccountLogin: "lgn-test2", Title: "Removed", Task: "two"},
+		{ID: "r3", Status: "running", Activity: "working", Harness: "claude", MemberID: "m1", AccountMemberID: "m1", Title: "Default", Task: "three"},
+	}
+	var buf bytes.Buffer
+	if err := renderRuns(&buf, runs, func(id string) string { return id }, map[string]string{}, false, false); err != nil {
+		t.Fatal(err)
+	}
+	want := "ID  STATUS   AGENT   MEMBER  ACCOUNT              OVERLAP  TITLE    TASK\n" +
+		"r1  Working  claude  m1      m1, login work                On work  one\n" +
+		"r2  Working  claude  m1      m1, login lgn-test2           Removed  two\n" +
+		"r3  Working  claude  m1      m1                            Default  three\n"
+	if buf.String() != want {
+		t.Errorf("renderRuns =\n%s\nwant\n%s", buf.String(), want)
+	}
+}

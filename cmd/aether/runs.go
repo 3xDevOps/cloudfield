@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -310,8 +311,8 @@ func renderRuns(w io.Writer, runs []protocol.Run, memberName func(string) string
 		title = printable(strings.ReplaceAll(title, "\n", " "))
 		task := printable(strings.ReplaceAll(r.Task, "\n", " "))
 		account := memberName(r.AccountMemberID)
-		if r.AccountLoginName != "" {
-			account += ", login " + r.AccountLoginName
+		if r.AccountLogin != "" {
+			account += ", login " + cmp.Or(r.AccountLoginName, r.AccountLogin)
 		}
 		if r.AccountLoginPerUse {
 			account += ", billed per use"
