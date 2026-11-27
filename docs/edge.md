@@ -1313,10 +1313,10 @@ request arrived at, whatever the options. While either option is set, a new
 pending sign-in records the sign-in origin and relay origin of its pair, and
 it is confirmed, polled and redeemed only where both are the same, whatever
 the spelling of a default port; after a restart that pairs its sign-in origin
-with another relay origin it is refused there. With neither option set, any
-pair confirms and redeems it, as before, except one that records only its
-sign-in origin, from an edge that recorded origins before this release: it
-completes only at that sign-in origin. A start with either option deletes
+with another relay origin it is refused there. With neither option set, only
+a pending sign-in that records no origin is confirmed and redeemed on any
+pair, as before; one started while the edge recorded origins still completes
+only where the origins it records match. A start with either option deletes
 the pending sign-ins that record no relay origin, from a run without the
 options or an older image; the person runs `cloudfield login` again. Device
 tokens and sessions are not touched by this.
