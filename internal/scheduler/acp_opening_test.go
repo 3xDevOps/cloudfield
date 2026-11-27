@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/acphost"
 	"github.com/3xDevOps/cloudfield/internal/domain"
@@ -15,6 +16,7 @@ import (
 func (e *testEnv) launchOpening(t *testing.T, rt *acpRuntime, task string) (run *domain.Run, open func(error)) {
 	t.Helper()
 	gate := make(chan error, 1)
+	t.Cleanup(func() { close(gate) })
 	rt.onAttach = func() error { return <-gate }
 	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, task, "fake", domain.LaunchACP)
 	if err != nil {
@@ -114,6 +116,19 @@ func TestEnhancedRunKilledWhileItsAgentStartsEndsWithoutASession(t *testing.T) {
 	<-delivered
 	e.waitTerminal(t, run.ID)
 	waitFor(t, "the agent's session to stop", func() bool { return e.sched.acp.session(run.ID) == nil })
+}
+
+func TestCloseWaitsForAnAgentStillStarting(t *testing.T) {
+	t.Parallel()
+	e, rt := newACPEnv(t)
+	run, open := e.launchOpening(t, rt, "")
+	time.AfterFunc(100*time.Millisecond, func() { open(nil) })
+	if err := e.sched.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if e.sched.acp.starting(run.ID) {
+		t.Fatal("Close returned while the launch's open was still running")
+	}
 }
 
 func TestEnhancedRunARestartCaughtStartingGetsItsTask(t *testing.T) {

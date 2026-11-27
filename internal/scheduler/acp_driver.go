@@ -137,10 +137,8 @@ func (d *acpDriver) Start(ctx context.Context, entry *supervised, att runtime.At
 	if !d.continuationOwed(entry) {
 		// A Background run takes no prompt, so nothing waits on its launch
 		// returning early.
-		if d.oneShot(entry) {
+		if d.oneShot(entry) || !d.openBehindLaunch(ctx, entry) {
 			d.connect(ctx, entry, openNew)
-		} else {
-			d.openBehindLaunch(ctx, entry)
 		}
 		return nil
 	}

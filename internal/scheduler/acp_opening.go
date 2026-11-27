@@ -17,16 +17,26 @@ type opening struct {
 	held []func()
 }
 
-// openBehindLaunch opens entry's first session without holding the launch.
-// It takes the run's op lock before the launch returns, so a stop, a mode
-// switch or a resume right after it runs behind the open.
-func (d *acpDriver) openBehindLaunch(ctx context.Context, entry *supervised) {
+// openBehindLaunch opens entry's first session without holding the launch,
+// and reports whether it did: Close waits for the open, and cancels superCtx
+// under s.mu, so none starts once it waits. It takes the run's op lock before
+// the launch returns, so a stop, a mode switch or a resume right after it
+// runs behind the open.
+func (d *acpDriver) openBehindLaunch(ctx context.Context, entry *supervised) bool {
+	d.s.mu.Lock()
+	if d.s.superCtx.Err() != nil {
+		d.s.mu.Unlock()
+		return false
+	}
+	d.s.wg.Add(1)
+	d.s.mu.Unlock()
 	unlock := d.lockOp(entry.runID)
 	o := &opening{done: make(chan struct{})}
 	d.mu.Lock()
 	d.opening[entry.runID] = o
 	d.mu.Unlock()
 	go func() {
+		defer d.s.wg.Done()
 		d.connectLocked(ctx, entry, openNew)
 		unlock()
 		for {
@@ -46,6 +56,7 @@ func (d *acpDriver) openBehindLaunch(ctx context.Context, entry *supervised) {
 			deliver()
 		}
 	}()
+	return true
 }
 
 // hold keeps prompt for the session the launch is still opening and reports
