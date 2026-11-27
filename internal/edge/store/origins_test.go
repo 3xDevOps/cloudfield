@@ -99,7 +99,7 @@ func TestOriginsBackupAndRestore(t *testing.T) {
 	if err := s.UseConnector(ctx, serverA, testRelay2, testNow); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RecordPairs(ctx, map[string]string{testRelay: testSignin}, testNow); err != nil {
+	if _, err := s.RecordPairs(ctx, Run{Pairs: map[string]string{testRelay: testSignin}}, testNow); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.db.Exec(`INSERT INTO devices (id, token_hash, account_id, public_key, label, created_at, last_used_at, signin_origin)
@@ -423,7 +423,7 @@ func TestRetiringReport(t *testing.T) {
 	if got, err := s.Retiring(ctx, testNow); err != nil || !got.RecordingSince.IsZero() || got.Origins == nil || len(got.Origins) != 0 || got.Unknown != (Unknown{}) {
 		t.Fatalf("report of an empty store = %+v, %v", got, err)
 	}
-	if err := s.RecordPairs(ctx, map[string]string{testRelay: testSignin}, testNow.Add(-90*24*time.Hour)); err != nil {
+	if _, err := s.RecordPairs(ctx, Run{Pairs: map[string]string{testRelay: testSignin}}, testNow.Add(-90*24*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	got, err := s.Retiring(ctx, testNow)
@@ -434,7 +434,7 @@ func TestRetiringReport(t *testing.T) {
 	if err = s.StopRecording(ctx, testNow.Add(-5*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.RecordPairs(ctx, map[string]string{testRelay: testSignin, testRelay2: testSignin2}, testNow); err != nil {
+	if _, err = s.RecordPairs(ctx, Run{Pairs: map[string]string{testRelay: testSignin, testRelay2: testSignin2}}, testNow); err != nil {
 		t.Fatal(err)
 	}
 
@@ -547,10 +547,11 @@ func TestRetiringReport(t *testing.T) {
 	}
 }
 
-// TestDeleteSignIns deletes, in one call, the device tokens, sessions and
-// pending authorizations of the given origins and those with none, and
-// counts what has none.
-func TestDeleteSignIns(t *testing.T) {
+// TestRetireSignIns deletes, in the transaction that records the pairs,
+// the device tokens, sessions and pending authorizations of the given
+// origins and those with none, and counts what has none. A failure to
+// record the pairs deletes nothing.
+func TestRetireSignIns(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()
 	id, err := s.SignIn(ctx, owner(), testNow)
@@ -578,7 +579,20 @@ func TestDeleteSignIns(t *testing.T) {
 	if got, err := s.SignInsWithoutOrigin(ctx); err != nil || got != (SignIns{Devices: 2, Sessions: 2, Authorizations: 2}) {
 		t.Fatalf("without an origin: %+v, %v", got, err)
 	}
-	if got, err := s.DeleteSignIns(ctx, []string{testSignin2}); err != nil || got != (SignIns{Devices: 3, Sessions: 3, Authorizations: 3}) {
+	run := Run{Pairs: map[string]string{testRelay: testSignin}, Retire: true, RetiredSignIns: []string{testSignin2}}
+	if _, err := s.db.Exec(`CREATE TRIGGER fail BEFORE INSERT ON origin_pairs BEGIN SELECT RAISE(ABORT, 'database or disk is full'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.RecordPairs(ctx, run, testNow); err == nil || !strings.Contains(err.Error(), "disk is full") {
+		t.Fatalf("recording with a failing insert: %v", err)
+	}
+	if got, err := s.SignInsWithoutOrigin(ctx); err != nil || got != (SignIns{Devices: 2, Sessions: 2, Authorizations: 2}) || countRows(t, s, "devices") != 4 {
+		t.Fatalf("after a failed recording: without an origin %+v, %v; the deletion was not rolled back", got, err)
+	}
+	if _, err := s.db.Exec(`DROP TRIGGER fail`); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := s.RecordPairs(ctx, run, testNow); err != nil || got != (SignIns{Devices: 3, Sessions: 3, Authorizations: 3}) {
 		t.Fatalf("deleted %+v, %v; want the three of each at %s or with no origin", got, err, testSignin2)
 	}
 	for _, table := range []string{"devices", "web_sessions", "device_authorizations"} {
@@ -586,7 +600,7 @@ func TestDeleteSignIns(t *testing.T) {
 			t.Errorf("%s left: %q, want only %s", table, got.String, testSignin)
 		}
 	}
-	if got, err := s.DeleteSignIns(ctx, nil); err != nil || got != (SignIns{}) {
+	if got, err := s.RecordPairs(ctx, Run{Retire: true}, testNow); err != nil || got != (SignIns{}) {
 		t.Fatalf("delete with no origins and nothing without one: %+v, %v", got, err)
 	}
 }
@@ -623,7 +637,7 @@ func TestRecordingPeriod(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		if err := s.RecordPairs(ctx, pairs, step.start); err != nil {
+		if _, err := s.RecordPairs(ctx, Run{Pairs: pairs}, step.start); err != nil {
 			t.Fatal(err)
 		}
 		if got := since(); !got.Equal(step.want) {
@@ -651,14 +665,14 @@ func TestReportAcrossRepairing(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = s.RecordPairs(ctx, map[string]string{testRelay: testSignin}, testNow.Add(-2*time.Hour)); err != nil {
+	if _, err = s.RecordPairs(ctx, Run{Pairs: map[string]string{testRelay: testSignin}}, testNow.Add(-2*time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = s.db.Exec(`INSERT INTO devices (id, token_hash, account_id, public_key, label, created_at, last_used_at, signin_origin)
 		VALUES ('old', 'old-hash', ?, 'k', 'laptop', 0, ?, ?)`, id, unix(testNow), testSignin); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.RecordPairs(ctx, map[string]string{testRelay: testSignin2}, testNow.Add(-time.Hour)); err != nil {
+	if _, err = s.RecordPairs(ctx, Run{Pairs: map[string]string{testRelay: testSignin2}}, testNow.Add(-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	rep, err := s.Retiring(ctx, testNow)
@@ -671,10 +685,10 @@ func TestReportAcrossRepairing(t *testing.T) {
 		t.Fatalf("after re-pairing %s with %s: %+v", testRelay, testSignin2, rep)
 	}
 
-	if err = s.RecordPairs(ctx, map[string]string{testRelay: testSignin2, testRelay2: testSignin}, testNow.Add(-30*time.Minute)); err != nil {
+	if _, err = s.RecordPairs(ctx, Run{Pairs: map[string]string{testRelay: testSignin2, testRelay2: testSignin}}, testNow.Add(-30*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if err = s.RecordPairs(ctx, map[string]string{testRelay: testSignin}, testNow); err != nil {
+	if _, err = s.RecordPairs(ctx, Run{Pairs: map[string]string{testRelay: testSignin}}, testNow); err != nil {
 		t.Fatal(err)
 	}
 	if rep, err = s.Retiring(ctx, testNow); err != nil {
@@ -730,13 +744,13 @@ func TestRecordingPeriodClockStep(t *testing.T) {
 	s := openStore(t)
 	ctx := context.Background()
 	pairs := map[string]string{testRelay: testSignin}
-	if err := s.RecordPairs(ctx, pairs, testNow.Add(-time.Hour)); err != nil {
+	if _, err := s.RecordPairs(ctx, Run{Pairs: pairs}, testNow.Add(-time.Hour)); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.StopRecording(ctx, testNow.Add(5*time.Minute)); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.RecordPairs(ctx, pairs, testNow); err != nil {
+	if _, err := s.RecordPairs(ctx, Run{Pairs: pairs}, testNow); err != nil {
 		t.Fatal(err)
 	}
 	rep, err := s.Retiring(ctx, testNow)
@@ -753,7 +767,7 @@ func TestPairingsKeepEarlierSigninOrigins(t *testing.T) {
 	ctx := context.Background()
 	now := time.Unix(1_800_000_000, 0)
 	for _, signin := range []string{"https://auth-early.example.test", "https://auth.example.test"} {
-		if err := s.RecordPairs(ctx, map[string]string{"https://edge.example.test": signin}, now); err != nil {
+		if _, err := s.RecordPairs(ctx, Run{Pairs: map[string]string{"https://edge.example.test": signin}}, now); err != nil {
 			t.Fatal(err)
 		}
 		now = now.Add(time.Hour)
@@ -783,7 +797,7 @@ func TestPairingHistoryAcrossUpgrade(t *testing.T) {
 	}
 	closeStore(t, old)
 	s := openSteps(t, path, migrations)
-	if err := s.RecordPairs(context.Background(), map[string]string{"https://edge.example.test": "https://auth2.example.test"}, time.Unix(1_800_000_000, 0)); err != nil {
+	if _, err := s.RecordPairs(context.Background(), Run{Pairs: map[string]string{"https://edge.example.test": "https://auth2.example.test"}}, time.Unix(1_800_000_000, 0)); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.db.Exec(`INSERT INTO origin_pairs (relay_origin, signin_origin, served_at) VALUES ('https://edge.example.test', 'https://auth3.example.test', 2)
@@ -810,7 +824,7 @@ func TestRepairingDeletesDeviceAuthorizations(t *testing.T) {
 	now := time.Unix(1_800_000_000, 0)
 	record := func(pairs map[string]string) {
 		t.Helper()
-		if err := s.RecordPairs(ctx, pairs, now); err != nil {
+		if _, err := s.RecordPairs(ctx, Run{Pairs: pairs}, now); err != nil {
 			t.Fatal(err)
 		}
 		now = now.Add(time.Minute)
@@ -864,7 +878,7 @@ func TestRepairingAfterRelayTakenOver(t *testing.T) {
 		{"https://edge1.example.test": "https://auth.example.test"},
 		{"https://edge1.example.test": "https://auth2.example.test"},
 	} {
-		if err := s.RecordPairs(ctx, pairs, now); err != nil {
+		if _, err := s.RecordPairs(ctx, Run{Pairs: pairs}, now); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := s.db.Exec(`INSERT OR IGNORE INTO device_authorizations (code_hash, user_code_hash, label, public_key, client_addr, status, created_at, expires_at, last_poll_at, signin_origin)
@@ -873,7 +887,7 @@ func TestRepairingAfterRelayTakenOver(t *testing.T) {
 		}
 		now = now.Add(time.Minute)
 	}
-	if err := s.RecordPairs(ctx, map[string]string{"https://edge3.example.test": "https://auth.example.test"}, now); err != nil {
+	if _, err := s.RecordPairs(ctx, Run{Pairs: map[string]string{"https://edge3.example.test": "https://auth.example.test"}}, now); err != nil {
 		t.Fatal(err)
 	}
 	var n int

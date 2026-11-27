@@ -16,6 +16,7 @@ import (
 
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	"github.com/3xDevOps/cloudfield/internal/edge/relay"
+	edgestore "github.com/3xDevOps/cloudfield/internal/edge/store"
 )
 
 // The retired pair of a test edge, which serves testSignin and testRelay.
@@ -583,7 +584,7 @@ func TestRetiredContradictsRecordedPair(t *testing.T) {
 func TestRetiredRelaySpelledTwice(t *testing.T) {
 	for _, signin := range []string{testSignin2, "https://signin-old.example.test"} {
 		h := newRecordingHarness(t)
-		if err := h.svc.store.RecordPairs(context.Background(), map[string]string{testRelay2 + ":443": "https://signin-old.example.test"}, h.clock.Now()); err != nil {
+		if _, err := h.svc.store.RecordPairs(context.Background(), edgestore.Run{Pairs: map[string]string{testRelay2 + ":443": "https://signin-old.example.test"}}, h.clock.Now()); err != nil {
 			t.Fatal(err)
 		}
 		if err := h.restartRetiring(t, Retired{SigninOrigin: signin, RelayOrigin: testRelay2, Replacement: testRelay}); err != nil {
@@ -664,11 +665,11 @@ func TestRetiredDeletesEarlierSigninOrigins(t *testing.T) {
 	b.signIn(t)
 	early := "https://signin-early.example.test"
 	for _, signin := range []string{testSignin, early} {
-		if err := h.svc.store.RecordPairs(context.Background(), map[string]string{testRelay2: signin}, h.clock.Now()); err != nil {
+		if _, err := h.svc.store.RecordPairs(context.Background(), edgestore.Run{Pairs: map[string]string{testRelay2: signin}}, h.clock.Now()); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := h.svc.store.RecordPairs(context.Background(), map[string]string{testRelay2: testSignin2}, h.clock.Now()); err != nil {
+	if _, err := h.svc.store.RecordPairs(context.Background(), edgestore.Run{Pairs: map[string]string{testRelay2: testSignin2}}, h.clock.Now()); err != nil {
 		t.Fatal(err)
 	}
 	h.exec(t, `INSERT INTO devices (id, token_hash, account_id, public_key, label, created_at, last_used_at, signin_origin)

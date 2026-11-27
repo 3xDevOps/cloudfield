@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"log/slog"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -377,25 +378,32 @@ func New(cfg Config) (*Service, error) {
 // a request.
 func (s *Service) SetLink(l ServerLink) { s.link = l }
 
-// StartRecording deletes the sign-ins of the retired pairs, then records,
-// when the edge records origins, the pairs it serves and the start of its
-// recording run. Call it once the edge's listeners are bound, so a start
-// that fails before it deletes nothing.
+// StartRecording, when the edge records origins, deletes the sign-ins of
+// the retired pairs and records the pairs it serves and the start of its
+// recording run, in one transaction. Call it once the edge's listeners are
+// bound, so a start that fails before it changes nothing. An edge with a
+// retired pair always records origins.
 func (s *Service) StartRecording(ctx context.Context) error {
-	if len(s.retiredPairs) > 0 {
-		if err := s.deleteRetiredSignIns(ctx, s.retiredPairs); err != nil {
-			return err
-		}
-	}
 	if !s.recordOrigins {
 		return nil
 	}
-	served := map[string]string{}
+	run := edgestore.Run{Pairs: map[string]string{}, Retire: len(s.retiredPairs) > 0}
 	for _, p := range s.pairs {
-		served[p.relay] = p.signin
+		run.Pairs[p.relay] = p.signin
 	}
-	if err := s.store.RecordPairs(ctx, served, s.now()); err != nil {
+	if run.Retire {
+		var err error
+		if run.RetiredSignIns, err = s.retiredSignIns(ctx, s.retiredPairs); err != nil {
+			return err
+		}
+	}
+	n, err := s.store.RecordPairs(ctx, run, s.now())
+	if err != nil {
 		return err
+	}
+	if run.Retire {
+		slog.Info("edge: deleted the sign-ins of retired pairs and those with no recorded origin",
+			"devices", n.Devices, "sessions", n.Sessions, "authorizations", n.Authorizations)
 	}
 	s.recording.Store(true)
 	return nil
