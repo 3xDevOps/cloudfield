@@ -252,7 +252,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   const saveAccountDefault = () => saveLaunchDefaults((current) => ({
     ...current,
     account_member_id: account === ownAccountID ? '' : account,
-    fallback: fallbackToSaved(fallback, accounts, account),
+    fallback: fallbackToSaved(fallback, accounts, account, severalLogins),
   }))
 
   const setUp = () => {
@@ -287,7 +287,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
       ...(link ? { linear_issue_url: link.url } : {}),
       ...(sharedAccount ? { account_member_id: account } : {}),
       ...(pickedLogin ? { login: pickedLogin } : {}),
-      ...fallbackParams(fallback, accounts, account),
+      ...fallbackParams(fallback, accounts, account, severalLogins),
       ...extraRepos,
       ...(childRunsOffered && childRuns && mode !== 'headless' ? { children: childRuns } : {}),
       ...(Object.keys(parsedLimits.limits).length ? { limits: parsedLimits.limits } : {}),
@@ -393,7 +393,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   const accountReadiness = (member: Member) => readiness(accountStatus[member.id], harness, member.id === ownAccountID ? undefined : member.display_name, now)
   // Only the default login's usage is read here, with the account's when there are several accounts.
   const loginUsage = { default: accountStatus[ownAccountID]?.usage?.find((provider) => provider.provider === loginAgent) }
-  const moves = !fallbackParams(fallback, accounts, account).no_fallback
+  const moves = !fallbackParams(fallback, accounts, account, severalLogins).no_fallback
   const setMoves = (on: boolean) => { fallbackPicked.current = true; setFallback(withMoves(fallback, on)) }
   const moveSwitch = severalLogins && <MoveSwitch accounts={accounts.length > 1} moves={moves} onMoves={setMoves} disabled={launching} />
   const loginChoice = loginsOffered && (severalLogins || login) && (ownLogins

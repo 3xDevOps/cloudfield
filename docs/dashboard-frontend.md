@@ -3048,7 +3048,13 @@ accounts and whether a session may move to another login or account, …".
 Most usage left first** (or **In your order**) **· after your logins**, which
 wraps between words on a narrow sheet and never breaks "after your logins", the
 other accounts' list without a checkbox, shown while the switch is on and
-another account is shared with the caller, and gone otherwise.
+another account is shared with the caller, and gone otherwise. Unticking
+every other account leaves moves between the caller's own logins on: the
+caption reads **Fallback accounts · None · your logins only**, and the
+launch sends `fallback_account_member_ids` with the caller's own id alone,
+which the server reads as that account's logins only; only the switch sends
+`no_fallback`. Saved, that is the `ordered` policy with the caller's id, which
+the dialog and the right half of **New session** read back the same way.
 
 Where the server offers `run.children.allow`, the form has a **Child
 sessions** select: **Use my setting** (naming it, "(off)"), **Allow for this
@@ -3078,7 +3084,7 @@ the first other automatic login in your order with usage left", then to those ac
 the form sends neither field and the server
 orders by usage left. After a reorder or untick it sends the ticked accounts
 in order as `fallback_account_member_ids`; with the checkbox off, or every
-account unticked, it sends `no_fallback: true`. The list leaves out the
+account unticked (with a single login), it sends `no_fallback: true`. The list leaves out the
 selected account but keeps its place and tick, so selecting another account
 and editing the list never drops it; changed from automatic, the list adds
 it last, ticked. An account the changed list did not hold, such as one

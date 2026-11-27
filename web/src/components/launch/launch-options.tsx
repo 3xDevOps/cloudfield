@@ -25,12 +25,14 @@ function ticked(fallback: Fallback, id: string): boolean {
   return !fallback.excluded.includes(id) && (!fallback.order || fallback.order.includes(id))
 }
 
-export function fallbackParams(fallback: Fallback, accounts: Member[], skip: string): { fallback_account_member_ids?: string[]; no_fallback?: boolean } {
+/** `logins`: the launch is on an account with several logins, which a session still moves between with every other account unticked. */
+export function fallbackParams(fallback: Fallback, accounts: Member[], skip: string, logins = false): { fallback_account_member_ids?: string[]; no_fallback?: boolean } {
   if (fallback.off) return { no_fallback: true }
   if (!fallback.order) return {}
   const ids = candidates(fallback, accounts, skip).filter((id) => ticked(fallback, id))
-  // An empty list reads as automatic on the server, so unticking every account means off.
-  return ids.length ? { fallback_account_member_ids: ids } : { no_fallback: true }
+  if (ids.length) return { fallback_account_member_ids: ids }
+  // An empty list reads as automatic on the server; the launch account alone reads as its own logins only.
+  return logins ? { fallback_account_member_ids: [skip] } : { no_fallback: true }
 }
 
 /** Turns automatic changes on or off; every account unticked is the other way they are off, so turning them on from there starts from automatic. */
@@ -62,7 +64,8 @@ export function FallbackOptions({
 }) {
   const ids = candidates(fallback, accounts, account)
   const owner = accounts.find((member) => member.id === account)?.display_name ?? account
-  const params = fallbackParams(fallback, accounts, account)
+  const params = fallbackParams(fallback, accounts, account, logins)
+  const ownOnly = params.fallback_account_member_ids?.length === 1 && params.fallback_account_member_ids[0] === account
   const target = fallback.order ? 'the first ticked account, top to bottom, with usage left' : 'the ticked account with the most usage left'
   // Editing the shown list keeps the hidden launch account's place and tick
   // (last, ticked, coming from automatic), and leaves every account it did
@@ -93,7 +96,9 @@ export function FallbackOptions({
             {/* "after your logins" never breaks: shut, it is the one place that says the member's logins come first. */}
             <span className="min-w-0">
               <span className="font-medium">Fallback accounts</span>{' '}
-              <span className="text-muted">· {params.fallback_account_member_ids ? 'In your order' : 'Most usage left first'} · <span className="whitespace-nowrap">after your logins</span></span>
+              <span className="text-muted">
+                · {ownOnly ? <>None · <span className="whitespace-nowrap">your logins only</span></> : <>{params.fallback_account_member_ids ? 'In your order' : 'Most usage left first'} · <span className="whitespace-nowrap">after your logins</span></>}
+              </span>
             </span>
           </>
         ) : (
@@ -142,7 +147,7 @@ export function FallbackOptions({
             </ul>}
             <p className="text-ui-sm text-muted">
               {logins
-                ? `If a login's usage is 95% or more at launch, or the vendor reports its limit mid-session, the session moves to the first other automatic login in your order with usage left, then to ${target}.`
+                ? `If a login's usage is 95% or more at launch, or the vendor reports its limit mid-session, the session moves to the first other automatic login in your order with usage left${ownOnly ? '' : `, then to ${target}`}.`
                 : `If ${owner}'s usage is 95% or more at launch, or the vendor reports the limit mid-session, the session moves to ${target}.`}
             </p>
           </>

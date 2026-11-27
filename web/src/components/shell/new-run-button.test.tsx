@@ -97,6 +97,15 @@ it('sends the saved account and fallback with the launch', async () => {
   expect(vi.mocked(api.runLaunch).mock.calls[0]![0]).toMatchObject({ mode: 'tui', no_fallback: true, children: 'on' })
 })
 
+it('relaunches a saved fallback naming only your own account on your own logins, not with fallback off', async () => {
+  vi.mocked(api.launchDefaultsGet).mockResolvedValue(saved('tui', { fallback: { policy: 'ordered', order: [alice.id] } }))
+  render(<SplitNewRun blocked={null} shortcut="n" onOpen={() => {}} />)
+  fireEvent.click(await quick())
+  await waitFor(() => expect(api.runLaunch).toHaveBeenCalled())
+  expect(vi.mocked(api.runLaunch).mock.calls[0]![0]).toMatchObject({ fallback_account_member_ids: [alice.id] })
+  expect(vi.mocked(api.runLaunch).mock.calls[0]![0]).not.toHaveProperty('no_fallback')
+})
+
 it('shows the server refusal as a toast and stays put', async () => {
   vi.mocked(api.runLaunch).mockRejectedValue(new Error('no capacity'))
   render(<SplitNewRun blocked={null} shortcut="n" onOpen={() => {}} />)
