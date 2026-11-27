@@ -296,10 +296,16 @@ than on a VM disk, is not counted, as it is not for a Docker session.
 Attaching, messaging, pulling, closing, killing and deleting sessions keep
 working below the reserve, and so does reopening a closed session whose container
 is still there. Waking a sleeping session, or starting a closed one's stopped
-container, creates no disk, and waking a saved VM deletes its saved memory, so
-it needs only 1 GiB free for itself and each start in flight, not the reserve.
-With less it is refused with the error above, naming a reserve of 0 bytes. A
-woken session whose disks then grow is paused as described above. To free
+container, creates no session disk, and waking a saved VM deletes its saved
+memory, so it needs only 1 GiB free for itself and each start in flight, not
+the reserve. With less it is refused with the error above, naming a reserve of
+0 bytes. The one copy such a start can make is of a closed session VM's
+package cache, when you reopen it while the server still copies that cache
+for the member's next session. The 1 GiB is checked when the session wakes,
+not held afterwards: a woken session VM whose disks then grow is paused as
+described above, and a woken Docker session, like a running one, is not. The
+7-day idle close is the server's own, so below the reserve it leaves a
+sleeping session VM asleep and open until the next hourly check. To free
 space yourself:
 
 1. Open **Insights → System** to see what uses the space.

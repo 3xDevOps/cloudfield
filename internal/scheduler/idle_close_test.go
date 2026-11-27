@@ -59,7 +59,8 @@ func TestAnIdleSleepingVMIsClosedOnlyOnceItWakes(t *testing.T) {
 	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
 	e.saveRun(t, run.ID)
 	var free atomic.Uint64
-	free.Store(512 << 20)
+	// Below the 5 GiB reserve, with the 1 GiB its owner's wake needs.
+	free.Store(2 << 30)
 	setFreeBytes(e, &free)
 	later := time.Now().UTC().Add(idleCloseAfter + time.Hour)
 
