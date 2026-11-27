@@ -195,8 +195,8 @@ func (f *fakeRuns) ACPSetOption(_ context.Context, run domain.RunID, optionID st
 	return f.record(fmt.Sprintf("acp.set_option:%s:%s:%v", run, optionID, value))
 }
 
-func (f *fakeRuns) ACPSetModelEffort(_ context.Context, run domain.RunID, model, effort string) (string, string, error) {
-	return strings.ToLower(model), strings.ToLower(effort), f.record(fmt.Sprintf("acp.set_model_effort:%s:%s:%s", run, model, effort))
+func (f *fakeRuns) ACPSetModelEffort(_ context.Context, run *domain.Run, actor domain.MemberID, model, effort string) (string, string, error) {
+	return strings.ToLower(model), strings.ToLower(effort), f.record(fmt.Sprintf("acp.set_model_effort:%s:%s:%s:%s", run.ID, actor, model, effort))
 }
 
 func (f *fakeRuns) ACPHistory(run domain.RunID, beforeSeq int64, limit int) (acphost.HistoryPage, error) {

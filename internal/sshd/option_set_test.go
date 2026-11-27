@@ -55,10 +55,10 @@ func TestRunOptionSetNeedsNoLeaseAndYieldsToAnotherMembersControl(t *testing.T) 
 	}
 	admitted := slices.DeleteFunc(e.runs.Calls(), func(call string) bool { return !strings.HasPrefix(call, "acp.set_model_effort:") })
 	if !slices.Equal(admitted, []string{
-		fmt.Sprintf("acp.set_model_effort:%s:Opus:high", run.ID),
-		fmt.Sprintf("acp.set_model_effort:%s::low", run.ID),
+		fmt.Sprintf("acp.set_model_effort:%s:%s:Opus:high", run.ID, e.member.ID),
+		fmt.Sprintf("acp.set_model_effort:%s:%s::low", run.ID, bob.ID),
 	}) {
-		t.Fatalf("changes that reached the agent = %v, want only the two admitted", admitted)
+		t.Fatalf("changes that reached the agent = %v, want only the two admitted, each with its sender", admitted)
 	}
 
 	want = fmt.Sprintf("run.option.set: session %[1]s is a Standard session, where the model and effort change only inside the agent's own terminal: "+

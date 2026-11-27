@@ -328,10 +328,14 @@ another member controls the session it fails with their name.
 Enhanced session, to values its agent offers: `cloudfield agent models <agent>`
 lists models, and `cloudfield agent list --json` each agent's `effort_levels`.
 It prints `session <session-id> set to model <model>, effort <level>` with the
-values the agent reports afterwards, which can differ from the ones passed. The
-model is set first and stays changed if the effort then fails. A Standard
-session changes them only inside the agent's own terminal, so the command
-fails and names `cloudfield attach <session-id>` and
+values the agent reports afterwards, which can differ from the ones passed;
+`cloudfield timeline <session-id>` then shows the note
+`set model <model>, effort <level>` with the member who ran it. The model is
+set first and stays changed if the effort then fails: the error then ends with
+`; the session is now set to model <model>`. A paused session fails and names
+`cloudfield resume <session-id>`. A Standard session changes them only inside
+the agent's own terminal, so the command fails and names
+`cloudfield attach <session-id>` and
 `cloudfield session switch <session-id> --mode enhanced`. While another member
 controls the session it fails with their name.
 

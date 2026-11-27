@@ -44,7 +44,7 @@ func (s *Server) runOptionSet(ctx context.Context, member domain.MemberID, raw j
 	perr = s.admitWithoutLease(ctx, member, run.ID, protocol.MethodRunOptionSet, "its model and effort are theirs to change", func() error {
 		optionCtx, cancel := context.WithTimeout(ctx, acpOptionTimeout)
 		defer cancel()
-		res.Model, res.Effort, err = s.cfg.Runs.ACPSetModelEffort(optionCtx, run.ID, p.Model, p.Effort)
+		res.Model, res.Effort, err = s.cfg.Runs.ACPSetModelEffort(optionCtx, run, member, p.Model, p.Effort)
 		return err
 	})
 	if perr != nil {

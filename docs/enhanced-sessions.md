@@ -107,25 +107,30 @@ menu, and is recorded like a pick there. `cloudfield agent models <agent>`
 lists models and `cloudfield agent list --json` each agent's `effort_levels`.
 The command prints what the agent reports afterwards, such as
 `session <session-id> set to model opus, effort high`, which can differ from
-what you typed: Claude Code's adapter takes `Sonnet` as `sonnet`. A value the
-agent refuses fails with its reason:
+what you typed: Claude Code's adapter takes `Sonnet` as `sonnet`.
+`cloudfield timeline <session-id>` then shows the note
+`set model opus, effort high` with the member who ran it. A value the agent
+refuses fails with its reason:
 
 ```text
-set the session's model: acphost: session/set_config_option: {"code":-32603,"message":"Internal error","data":{"details":"Invalid value for config option model: xyz"}}
+aether: rpc error -32603: set the session's model: acphost: session/set_config_option: {"code":-32603,"message":"Internal error","data":{"details":"Invalid value for config option model: xyz"}}
 ```
 
-The model is set first and stays changed if the effort then fails. The effort
-levels can depend on the model, and an agent with no option for one is refused:
+The model is set first and stays changed if the effort then fails: the error
+then ends with `; the session is now set to model <model>`, and the timeline
+note names the model alone. The effort levels can depend on the model, and an
+agent with no option for one is refused:
 
 ```text
-scheduler: the session's agent offers no such option: effort
+aether: rpc error -32602: scheduler: the session's agent offers no such option: effort
 ```
 
-A Standard session is refused too, because its model and effort change only
-inside the agent's own terminal:
+A paused session is refused, and the error names
+`cloudfield resume <session-id>`. A Standard session is refused too, because
+its model and effort change only inside the agent's own terminal:
 
 ```text
-run.option.set: session run-d6ay38tj8j is a Standard session, where the model and effort change only inside the agent's own terminal: run cloudfield attach run-d6ay38tj8j and change them there, or run cloudfield session switch run-d6ay38tj8j --mode enhanced first
+aether: rpc error -32002: run.option.set: session run-d6ay38tj8j is a Standard session, where the model and effort change only inside the agent's own terminal: run cloudfield attach run-d6ay38tj8j and change them there, or run cloudfield session switch run-d6ay38tj8j --mode enhanced first
 ```
 
 The session's sandbox is the same as a Standard session's, with the same image, home,

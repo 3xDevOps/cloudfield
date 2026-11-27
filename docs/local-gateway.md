@@ -1045,13 +1045,18 @@ agent reports them afterwards, which can differ from the values sent when the
 agent takes one under another name; an effort the agent does not report is
 omitted. The model is set first and stays changed if the effort then fails;
 the message says which one failed, with the agent's error when it refused the
-value. A session whose agent has no option for one answers `-32602`
-`scheduler: the session's agent offers no such option: effort`. A Standard
+value, and ends with `; the session is now set to model <model>`. A session
+whose agent has no option for one answers `-32602`
+`scheduler: the session's agent offers no such option: effort`. One that is
+paused, or whose VM the server froze for memory, answers `-32002` without
+asking its agent, as it does to `run.acp.set_option`. A Standard
 session answers `-32002`: its model and effort change only inside the agent's
 own terminal, so the message names `cloudfield attach <session-id>` and
 `cloudfield session switch <session-id> --mode enhanced`. A Background
 session with `acp: false` answers `-32602`. A connector is refused it
-(`-32001`).
+(`-32001`). Every call that set one records a `note` entry on the workspace
+timeline, `set model <model>, effort <level>` with the values the agent
+reports and only the ones it set, with the caller as the event's `actor_id`.
 `run.inject` takes `steer: true` to add a message to the agent's running
 turn, and `control_session_id`/`control_generation` to deliver it at once
 rather than after the room's moderation delay; its result's `outcome` is

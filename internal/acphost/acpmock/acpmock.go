@@ -429,10 +429,21 @@ func (a *Agent) setOption(id string, value any) []map[string]any {
 		a.options = r.ConfigOptions
 	}
 	for _, option := range a.options {
-		if option["id"] == id {
-			option["currentValue"] = value
-			return a.options
+		if option["id"] != id {
+			continue
 		}
+		// An agent can take a value under another name: this one takes one
+		// it offers in any letter case.
+		choices, _ := option["options"].([]any)
+		for _, choice := range choices {
+			fields, _ := choice.(map[string]any)
+			offered, _ := fields["value"].(string)
+			if sent, isString := value.(string); isString && strings.EqualFold(offered, sent) {
+				value = offered
+			}
+		}
+		option["currentValue"] = value
+		return a.options
 	}
 	a.options = append(a.options, map[string]any{"id": id, "currentValue": value})
 	return a.options

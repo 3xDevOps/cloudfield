@@ -153,9 +153,10 @@ type RunController interface {
 	ACPSetOption(ctx context.Context, run domain.RunID, optionID string, value any) error
 	// ACPSetModelEffort sets an enhanced run's model, then its effort, by
 	// value, and returns the two as the agent then reports them; an empty
-	// one is left as it is. scheduler.ErrNoSuchOption refuses one the run's
-	// agent has no option for.
-	ACPSetModelEffort(ctx context.Context, run domain.RunID, model, effort string) (nowModel, nowEffort string, err error)
+	// one is left as it is. What it set is recorded on the timeline with
+	// actor. scheduler.ErrNoSuchOption refuses one the run's agent has no
+	// option for.
+	ACPSetModelEffort(ctx context.Context, run *domain.Run, actor domain.MemberID, model, effort string) (nowModel, nowEffort string, err error)
 	// ACPHistory reads up to limit items before beforeSeq, oldest first;
 	// zero reads from the newest.
 	ACPHistory(run domain.RunID, beforeSeq int64, limit int) (acphost.HistoryPage, error)
