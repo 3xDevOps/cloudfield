@@ -480,11 +480,12 @@ more than one workspace exists`. `cloudfield sessions` lists sessions from every
 | `cloudfield sessions` | Every session you can see, colored by owner, with an overlap column. `--needs-you` lists only sessions that need you |
 | `cloudfield who` | Who is online and which sessions they watch |
 | `cloudfield attach [--read-only] <session>` | Attach to a session's terminal. Several people can attach at once |
-| `cloudfield message <session> "..."` | Message a session's agent. It shows as a banner in your color |
+| `cloudfield message [--steer] [--attach <path>]... <session> "..."` | Message a session's agent. It shows as a banner in your color. `--attach` sends a file with it, `--steer` adds it to an Enhanced agent's running turn |
 | `cloudfield pause`, `resume`, `kill <session>` | Suspend, thaw or stop a session. The checkout and transcript survive a kill |
 | `cloudfield interrupt <session>` | Stop the agent's current turn and keep the session open: an Enhanced session, or a Standard Codex one. Any other Standard agent stops on its own key after `cloudfield attach` |
 | `cloudfield sessions --needs-you` | Sessions waiting on you. `cloudfield sessions <session-id>` shows what one needs and the command that answers it |
 | `cloudfield timeline` | The workspace history. `cloudfield timeline <session-id>` shows one session's. Filter with `--member`, `--type`, `--limit`. `--jsonl` exports |
+| `cloudfield messages` | The messages agents sent each other, with bodies. `cloudfield messages <session-id>` shows one session's, `--thread <id>` one question and its replies ([coordination.md](coordination.md#seeing-agent-messages)) |
 | `cloudfield changes` | Session changes since a cursor: status, reports, mail, pull requests and lifecycle. `--follow` keeps polling ([coordination.md](coordination.md#follow-changes-from-a-cursor)) |
 | `cloudfield cost --runs` | Token spend per member and run |
 
@@ -822,7 +823,13 @@ Subsessions go one level deep: a subsession cannot start subsessions. A parent m
 a Standard or Enhanced session that wakes when mail arrives; `subsession start` from a
 Standard session of an agent with no idle wake is refused with
 `<agent> in Standard mode has no idle wake; start it in Enhanced`. A
-Background session cannot start subsessions.
+Background session cannot start subsessions, so Antigravity, which has no
+Enhanced mode, cannot be a parent: its refusal is `antigravity in Standard
+mode has no idle wake, and it has no Enhanced mode; as a subsession it runs
+only in Background, and a session that waits for mail needs another agent`. A
+subsession must wake on mail too: `--mode standard` for a subsession of an
+agent with no idle wake is refused with the same message as a Standard parent
+of that agent, and it runs Enhanced, or Background for Antigravity.
 
 ### Turn subsessions off
 

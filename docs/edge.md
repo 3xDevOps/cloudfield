@@ -992,6 +992,8 @@ and names the problem, such as `no GitHub OAuth app is configured; set
 | `--dev-listen` | `AETHER_EDGE_DEV_LISTEN` | None. Plain HTTP on a loopback address for local testing |
 | none | `AETHER_EDGE_GITHUB_CLIENT_SECRET` | None. The secret itself, instead of a file; setting both is refused |
 | `--origin-pairs` | `AETHER_EDGE_ORIGIN_PAIRS` | None. More origin pairs, each with its own GitHub OAuth app ([More than one address pair](#more-than-one-address-pair)) |
+| `--retiring-pairs` | `AETHER_EDGE_RETIRING_PAIRS` | None. Pairs that are retiring, each with its replacement and an optional date ([Retiring an address pair](#retiring-an-address-pair)) |
+| `--retired-pairs` | `AETHER_EDGE_RETIRED_PAIRS` | None. Pairs taken out of service, at most 16, each with its replacement; their hosts answer 410 ([Retired](#retired)) |
 
 ### More than one address pair
 
@@ -1073,6 +1075,251 @@ holding a control channel by the relay origin they enrolled at),
 and `aether_edge_connector_requests_total{origin,protocol}` (connector requests
 by the relay origin they came in on and the protocol version of the server they
 were for, `0` when it was not connected).
+
+### Retiring an address pair
+
+Before an edge stops serving one of its pairs, mark the pair retiring so that
+whoever still uses it is told where to go. `--retiring-pairs`
+(`AETHER_EDGE_RETIRING_PAIRS`) lists the retiring pairs, comma-separated, each
+as its relay origin, the relay origin of the pair that replaces it, and an
+optional date:
+
+```sh
+AETHER_EDGE_RETIRING_PAIRS=https://<relay-host-1> https://<relay-host-2> 2027-03-01
+```
+
+Set it in the environment file, not as a flag: an older edge image ignores an
+unknown variable and refuses an unknown flag. A retiring pair keeps working in
+full. The date is text for people; the edge never acts on it. At start the edge
+logs `aether-edge: retiring relay=<relay origin> replacement=<relay origin>
+date=<date>` for each entry, and it refuses to start, naming the entry and the
+fix, when:
+
+- it serves one pair only;
+- an entry does not have two or three fields, or an origin does not parse;
+- an origin is not a relay origin of a served pair; a sign-in origin is refused
+  with the relay origin of its pair;
+- the replacement is the entry's own pair, or is itself retiring;
+- a host name is named in two entries, whatever its port, or with another
+  port than the served origin's; a replacement may repeat;
+- the date is not a real date written `YYYY-MM-DD`;
+- an origin of an entry is longer than 267 bytes or spells its port with a
+  leading zero, such as `:0443`.
+
+Origins are compared in canonical form: case and a default `:443` do not
+matter. Remove the entry and restart the edge to undo it. An older edge image
+ignores the option and loses only the notices below.
+
+Notices reach servers whether or not a pair is retiring, and this is the one
+addition to the wire with the option unset. A server's `hello` carries
+`notice_nonce`, 32 random bytes it draws for each enrollment. To a server that
+sent one, every `ready`, at any pair, carries a notice for each retiring relay
+origin, none when nothing is retiring, and one signature over the whole list,
+an empty list included, so that a missing or unsigned list can never stand for
+"no notices":
+
+```json
+"notices": [{"state": "retiring", "origin": "https://<relay-host-1>", "replacement": "https://<relay-host-2>", "date": "2027-03-01"}],
+"notices_signature": "<base64>"
+```
+
+The edge key signs `aether-edge-notices-v1`, the server id, the relay origin the
+server dialed, its nonce and every entry's state, origins and date, so the list
+is good for one server and one connection and never verifies as a grant or a
+connector assertion. The server keeps the list only when the signature verifies
+against the edge key it pinned, and otherwise keeps none; neither refuses the
+`ready`. It stores the list with the time it came beside the owner, in
+`<data dir>/edge/keys/sha256-<fingerprint>/notices.json`, and each `ready`
+replaces it, so a notice the edge stops sending is gone at the next connection.
+A missing or bad signature and a signed empty list both clear the stored
+notices: whoever answers for a relay host can suppress a warning until the next
+real connection, but cannot add a notice or change a replacement.
+Pinning a key, by the first connection or `edge trust`, deletes the
+`notices.json` of the key it replaces and of the key it pins, and the first
+connection pins only where no pin file is. Stored notices are bound to the pin
+file: every pin, by this build or an older one, puts a new `edge_key.json` in
+place. Beside `notices.json` the server keeps `notices.pin`, a hard link to the
+pin file the notices were verified under, made last and only while that file is
+still `edge_key.json`, and reads the notices only while the link is the current
+`edge_key.json`. A pin by an older binary therefore shows no notices until the
+next connection, and nothing in this build rewrites the pin file except a pin.
+The first connection puts its pin in place by a rename that replaces nothing,
+or else a hard link. Where the file system offers neither, as on vfat or many
+FUSE file systems, it pins by a plain rename, as builds before notices did,
+which can replace a pin another process wrote in the same instant: pin with
+`sudo cloudfield-server edge trust` before the first start there. Without hard
+links the server stores no notices, and a symbolic link at `edge_key.json`
+stores none either. To restore the data directory, stop the server, restore it
+into a new, empty directory and swap that in: copying a backup over an existing
+tree can keep that tree's `notices.pin` and so bring back its notices, or its
+pin. A restore that does not keep hard links drops the stored notices until the
+next connection. Stored notices also name the server id that verified them and count
+for no other. A list that arrived with the `ready` that pinned the key is
+trusted as that pin is, and only shown. An edge or a server that does not know
+the fields ignores them, and a server that sends no nonce gets the `ready` it
+got before.
+
+While a pair is retiring:
+
+- Every answer on both host names of the pair, API answers and WebSocket
+  handshakes included, carries `Aether-Edge-Retiring: https://<relay-host-2>;
+  date=2027-03-01`, without the `; date=` part when no date is set, and `GET
+  /v1/edge` carries `"retiring": "https://<relay-host-2>"` and
+  `"retiring_date": "2027-03-01"`. `/healthz` carries no header. A client
+  uses the value only when it is a canonical origin and a real date, and only
+  shows it. A connector answer the relay passes on from a server carries the
+  edge's value, never the server's.
+- Every edge page of the pair shows `This address of the edge is retiring on
+  2027-03-01. Its new address is https://<signin-host-2>: sign in there.` on the
+  sign-in host, the device pages included, and the replacement's relay origin
+  on the join page. The address is text, not a link, and no request is
+  redirected: sign-in, token and join paths carry codes and tokens that must
+  not reach another origin.
+
+#### Retired
+
+When the pair should serve nobody any more, take it out of the served pairs and
+name it in `--retired-pairs` (`AETHER_EDGE_RETIRED_PAIRS`) in the same edit:
+comma-separated, at most 16 entries, each the pair's sign-in origin, its relay
+origin and the relay origin of a served pair that replaces it:
+
+```sh
+AETHER_EDGE_RETIRED_PAIRS=https://<signin-host-1> https://<relay-host-1> https://<relay-host-2>
+```
+
+Set it in the environment file, not as a flag: an older image ignores an
+unknown variable and refuses an unknown flag. An older image does not serve the
+pair either: behind a reverse proxy that still holds the certificates it
+answers `421 Misdirected Request` on those hosts, and with its own certificates
+it refuses the TLS handshake for them. A retired pair needs no GitHub OAuth
+app. The edge turns on recording of origins
+([Monitoring](#monitoring)) while either option is set.
+
+The first pair (`--signin-origin`, `--relay-origin`, `--github-client-id`)
+cannot be taken out. To retire it, swap first: make its replacement the first
+pair, move the old one into `--origin-pairs`, and restart. No pair is
+preferred, so the swap changes only the order of the relay origins a server is
+sent. Then retire it.
+
+At start the edge logs `aether-edge: retired signin=<origin> relay=<origin>
+replacement=<relay origin>` for each entry. It refuses to start, naming the
+entry and the fix, when:
+
+- an entry does not have three fields, or an origin does not parse;
+- an origin cannot stand in a signed notice: a port with a leading zero, or
+  a host name longer than 253 bytes;
+- a retired origin is an IPv6 address. Such a pair cannot be retired: mark
+  it retiring to move people, then take it out of the served pairs with no
+  retired entry. Behind a reverse proxy its addresses then answer `421
+  Misdirected Request` without naming a replacement, and with the edge's own
+  certificates their TLS handshake fails. Its sign-ins are not deleted:
+  people sign those devices out on the Devices page (`/devices`) of a served
+  sign-in origin;
+- a retired origin has the host name of a served origin, whatever the port:
+  remove its pair from `--origin-pairs`, or swap first for the first pair;
+- a host name is named in two entries;
+- the replacement is not a relay origin of a served pair, or is retiring;
+- there are more than 16 entries, or more than 16 with `--retiring-pairs`;
+- `AETHER_EDGE_SIGNIN_ORIGIN`, `AETHER_EDGE_RELAY_ORIGIN` or
+  `AETHER_EDGE_ORIGIN_PAIRS` names a retired host while a `CLOUDFIELD_EDGE_`
+  name overrides it here: an edge image older than v0.8.7 reads only the
+  `AETHER_EDGE_` names and would serve the pair after a rollback;
+- `CLOUDFIELD_EDGE_DATA` names another data directory than
+  `AETHER_EDGE_DATA` (or, with that unset, `/var/lib/aether-edge`) and
+  `--data` is not a flag: an image older than v0.8.7 would open the other
+  directory's database, which keeps the deleted sign-ins, after a rollback.
+  Set `AETHER_EDGE_DATA` to the directory in use, or pass `--data` on the
+  command line; two paths of one existing directory pass;
+- the edge last recorded the pair's origins in the other roles, or recorded its
+  relay origin only with other sign-in origins;
+- rows without a recorded origin exist and the edge has never recorded
+  origins: serve the pair again, run the edge with `--retiring-pairs` naming
+  it for as long as you give people to move, then retire it.
+
+The edge answers both host names before it looks for a served pair. With its
+own certificates it answers a retired host's TLS handshake only with a
+certificate already in its ACME cache that is unexpired and of a key type the
+client supports, and neither orders nor renews one: once that certificate
+expires, or for a client that supports none of those cached, the handshake
+fails. It reads each such certificate once and keeps it in memory, and looks
+for a missing or expired one again at most every five minutes. Behind a reverse proxy the proxy's certificates apply. Every request to
+either host that net/http admits, except `GET /healthz`, gets `410 Gone` with `Cache-Control: no-store` and no `Location` or
+`WWW-Authenticate` header. Nothing is relayed, signed in or issued, and no such
+request reads the database or reaches a server. API, WebSocket and connector
+requests, the server control path included, get, before any handshake:
+
+```json
+{"error": "https://<relay-host-1> is retired; this edge is at https://<relay-host-2>. Move a server with: cloudfield-server edge move https://<relay-host-2>. Sign a device in with: cloudfield login --edge https://<relay-host-2>", "retired": {"replacement": "https://<relay-host-2>"}}
+```
+
+The error names the origin of the host asked, the sign-in origin on the sign-in
+host. A WebSocket upgrade, and any request under `/v1/server/` or
+`/v1/connect/`, gets the error without the two commands, `<old> is retired;
+this edge is at <new>`, since a client reads only the first 1024 bytes of a
+refused upgrade. A browser page request (a `GET` outside `/v1/` whose
+`Accept` names `text/html` with a nonzero quality) gets a static page with the same commands, naming the replacement's sign-in
+origin on the sign-in host and its relay origin on the relay host; on a join
+link it says to ask whoever sent the link for a new one. The page loads nothing,
+shows nothing of the request, and clears the edge's `__Host-` cookies on that
+host with `Max-Age=0`. Behind a reverse proxy, keep both hosts' `server` blocks
+and certificates until the pair is removed. The edge's own refusals of a
+connection come before the 410: too many open connections from one address
+(`429`), a request from the proxy without a client address (`400`), and with
+`--trusted-proxies` a request from another peer (`403`).
+
+Every `ready` carries, beside the retiring notices,
+`{"state": "retired", "origin": "https://<relay-host-1>", "replacement":
+"https://<relay-host-2>"}`, signed with the rest of the list. A retired relay
+origin is not in `relay_origins`, so a server refuses connector requests said
+to come from it. A server still enrolled there shows `dial
+https://<relay-host-1>/v1/server/control: 410 Gone: https://<relay-host-1> is
+retired; this edge is at https://<relay-host-2>` in `edge status`.
+
+Once its listeners are bound and before it serves, an edge with
+`--retired-pairs` set deletes, in one transaction, the device tokens, browser sessions and pending device sign-ins
+issued at a retired sign-in origin, or at any sign-in origin the edge recorded
+beside the retired relay origin earlier, matched by host name whatever the
+port, and those with no recorded origin, which were not used while the pair
+was retiring. A start that fails earlier, on a refused option or a listener
+that cannot bind, deletes nothing. A host that a served pair still signs in at
+keeps its rows, even when the edge once recorded it beside the retired relay
+origin; a host now used only as a served relay origin does not. The edge
+cannot tell the tokens and sessions issued there while it was paired with the
+retired relay from later ones, so they stay valid. At every such start it
+warns `edge: keeping the sign-ins of a served sign-in origin once recorded
+beside a retired relay origin` naming both origins. To end those sign-ins,
+each person revokes those device tokens on the Devices page (`/devices`) of
+that sign-in origin, which does not end browser sessions; a browser session
+ends when that browser signs out or after 30 days unused. It logs
+`edge: deleted the sign-ins of retired pairs and those with no recorded origin
+devices=<n> sessions=<n> authorizations=<n>`. A server keeps its record of each device and its approval,
+as after a sign-out; the person signs the device in again at the replacement.
+Deleted tokens and sessions stay deleted when the option is removed. An image
+rollback, or any run without either option, issues rows without a recorded
+origin, and the next start with `--retired-pairs` deletes those on the kept
+pairs too.
+
+Keep the entry after the pair's DNS records are gone: a database restored from
+a backup taken before the retirement holds the deleted tokens again, and the
+deletion at start removes them. Across a retirement, roll back the image only,
+never the database: an image older than this option accepts restored tokens at
+every served pair. Keep the host names under your control after the pair is
+removed: a server or client that never moved still dials them, and a server
+checks only that an edge presents the edge key it pinned.
+
+A device sign-in from a client that names its relay origin (`relay_origin` in
+the start request) is refused unless that is the relay origin of the pair the
+request arrived at, whatever the options. While either option is set, a new
+pending sign-in records the sign-in origin and relay origin of its pair, and
+it is confirmed, polled and redeemed only where both are the same, whatever
+the spelling of a default port; after a restart that pairs its sign-in origin
+with another relay origin it is refused there. With neither option set, only
+a pending sign-in that records no origin is confirmed and redeemed on any
+pair, as before; one started while the edge recorded origins still completes
+only where the origins it records match. A start with either option deletes
+the pending sign-ins that record no relay origin, from a run without the
+options or an older image; the person runs `cloudfield login` again. Device
+tokens and sessions are not touched by this.
 
 ### Firewall
 
@@ -1226,6 +1473,12 @@ used since recording began has no origin. `--json` prints the same as
 "device_only_accounts"}], "unknown": {"device_tokens", "session_accounts",
 "servers"}}`, each count as `{"1d", "7d", "30d", "total"}`, with non-printing
 characters escaped as `\uXXXX`.
+
+`aether_edge_retired_requests_total{origin,kind}` counts the requests that
+reach a host of a retired pair since the edge started, by that host's origin and
+the kind of path: `server` (`/v1/server/`), `client` (the rest of `/v1/`),
+`connector` (`/mcp`, `/.well-known/` and `/connectors/choose`) or `browser`
+(everything else). It is exported only while `--retired-pairs` is set.
 
 `/healthz` (`aether-edge healthcheck`) is liveness. `/readyz` (`aether-edge
 healthcheck --ready`) answers 200 when the database answers within a second, the

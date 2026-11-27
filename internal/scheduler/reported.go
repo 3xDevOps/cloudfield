@@ -326,6 +326,11 @@ func (s *Scheduler) recordIdleReportLocked(ctx context.Context, entry *supervise
 		// Only after the fences: a refusal releases the report's key, which
 		// an older report must keep.
 		return coord.ErrHumanOpen
+	case strings.HasPrefix(reason, answeredReasonPrefix) && reportedIdleReason(entry.idleReason) &&
+		!entry.turnStartedAt.IsZero() && !entry.idleReportAt.Before(entry.turnStartedAt):
+		// The turn already reported success or failure, which saying it
+		// replied does not take back.
+		return nil
 	}
 	old := entry.sidecar()
 	entry.idleReason, entry.idleShown = reason, false

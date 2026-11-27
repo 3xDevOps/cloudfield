@@ -388,7 +388,7 @@ func TestLaunchDoesNotBlameTheImageForAMountFailure(t *testing.T) {
 
 func TestTerminalFallsBackFromUnstartableSavedImage(t *testing.T) {
 	t.Parallel()
-	e := newTestEnv(t, nil)
+	e := newTestEnv(t, holdTerminalSupervisor)
 	if _, err := e.sched.EnsureTerminal(t.Context(), e.member.ID); err != nil {
 		t.Fatalf("EnsureTerminal: %v", err)
 	}
@@ -444,7 +444,7 @@ func TestUnstartableImageCause(t *testing.T) {
 
 func TestSaveAfterRestartRecordsTheTerminalsFallbackImage(t *testing.T) {
 	t.Parallel()
-	e := newTestEnv(t, nil)
+	e := newTestEnv(t, holdTerminalSupervisor)
 	if _, err := e.sched.EnsureTerminal(t.Context(), e.member.ID); err != nil {
 		t.Fatalf("EnsureTerminal: %v", err)
 	}

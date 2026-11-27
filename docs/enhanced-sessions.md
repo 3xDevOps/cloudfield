@@ -192,6 +192,14 @@ other files up to 64 MiB. Images go to the agent as image content and other file
 as a path in the container. If the agent does not advertise image support, remove
 the image before sending.
 
+From the CLI, `cloudfield message` queues a message sent during a turn, and
+`cloudfield message --steer <session-id> "<text>"` is **Steer**. `--steer`
+changes nothing when no turn runs, when the agent cannot steer, and when the
+message waits for the controller. `--attach <path>` is **Attach files**; a
+message with an image is `not sent` to an agent without image support. Both
+flags go before the session id ([Messages and
+notes](terminal.md#messages-and-notes)).
+
 ## Permissions and input
 
 A new session starts in the agent's no-prompt setting, so a request arrives
@@ -302,7 +310,7 @@ Messages from other sessions and people ([coordination.md](coordination.md)) rea
 Enhanced session without hooks. When mail arrives and the session has no turn running,
 the server sends the agent one prompt telling it to run
 `cloudfield-internal inbox` and acknowledge the batch, ending with
-`End this turn with exactly one report as your last action: aether_report, or /usr/local/bin/aether-internal report where you have no aether_report tool.`
+`Report when this turn's work is done, then reply as text: aether_report, or /usr/local/bin/aether-internal report where you have no aether_report tool.`
 Mail that arrives during a turn waits until the turn ends; the agent is not
 told mid-turn. Messages that arrive together
 share one prompt, and each set of new unread messages starts at most one turn,

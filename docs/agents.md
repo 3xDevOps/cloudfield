@@ -292,11 +292,21 @@ Sign-in works as in step 5. Agent names: `claude`, `codex`, `opencode`, `pi`,
 ```sh
 cloudfield sessions --needs-you
 cloudfield sessions <session-id> --json
-cloudfield wait <session-id> --timeout 30m
+cloudfield wait <session-id> [<session-id>...] --timeout 30m
 cloudfield logs <session-id>
+cloudfield messages <session-id> --json
 cloudfield message <session-id> "<reply>"
 cloudfield interrupt <session-id>
 ```
+
+Given several session ids, `cloudfield wait` returns when the first of them
+would end a wait on it alone, prints that session and exits with its code;
+when more than one would, the first in the order given. A session already in
+such a state (finished, failed, needs you, parked or a broken wait) ends the
+wait at once every time, so leave it out to wait on the rest. It reads the
+sessions in the order given and stops at the one that ends the wait, so an
+unknown id after that one is not reported. On timeout it prints every session,
+and with `--json` nothing.
 
 `cloudfield wait` exits 0 when the session finished, 1 when it failed, 3 when it needs
 you, 4 when it is parked with nothing pending (its turn ended without a
@@ -304,7 +314,16 @@ report, or it went silent) and a message continues it, 5 when its wait broke
 (a condition resolved and the wake never reached the agent, or its source
 went unread for an hour), and 124 on
 timeout. `cloudfield sessions <session-id>` shows what a session needs, each
-with the command that answers it.
+with the command that answers it. `cloudfield messages <session-id>` prints
+the messages the session sent to or received from other agents, bodies
+included; a line from the session to itself is one the server wrote to wake
+it. What you send with `cloudfield message` reaches the agent as a prompt and
+is not listed.
+
+`cloudfield message --attach <path> <session-id> "<text>"` sends a file from
+this computer with the message, and `--steer` adds the message to an Enhanced
+agent's running turn instead of queueing it. Both flags go before the session
+id: every word after it is the message, and either flag there is refused.
 
 A permission request is the human's: show it with its options, and run the
 `cloudfield answer <session-id> <request-id> <option-id>` they pick. It allows or
