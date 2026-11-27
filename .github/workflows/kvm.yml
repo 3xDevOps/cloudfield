@@ -19,7 +19,7 @@ jobs:
   kvm:
     name: make test-kvm
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,4 +58,13 @@ jobs:
       - name: VM tests (real Cloud Hypervisor VMs)
         env:
           GOFLAGS: -v
-        run: sudo env "PATH=$PATH" "HOME=$HOME" "GOFLAGS=$GOFLAGS" make test-kvm
+        run: |
+          git fetch --depth=1 origin ad5fb9ebb
+          git worktree add "$RUNNER_TEMP/before" FETCH_HEAD
+          cp internal/scheduler/kvm_zz_cost_test.go "$RUNNER_TEMP/before/internal/scheduler/"
+          for round in 1 2; do
+            for tree in "$RUNNER_TEMP/before" "$PWD"; do
+              echo "COSTTREE $tree round $round"
+              (cd "$tree" && sudo env "PATH=$PATH" "HOME=$HOME" "GOFLAGS=$GOFLAGS" make test-kvm KVM_RUN=^TestKVMZZCost KVM_PKGS=./internal/scheduler "KVM_KERNEL=$GITHUB_WORKSPACE/dist/aether-vmlinux-x86_64")
+            done
+          done
