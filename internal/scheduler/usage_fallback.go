@@ -574,10 +574,14 @@ func (s *Scheduler) tryMove(ctx context.Context, entry *supervised, m accountMov
 	stop := func(cause string) (usageOutcome, string) {
 		return usageNoFallback, m.cannotContinue(fromName, cause)
 	}
+	f := s.usageFallbackSeam()
+	logins, listErr := s.cfg.Store.ListAgentLogins(ctx, from.Member, run.Harness)
+	if !m.revoked && len(logins) > 0 && f != nil && f.Usage != nil {
+		s.noteRunOut(ctx, f, run, from)
+	}
 	if run.Fallback.Disabled {
 		return usageNoFallback, m.stopped(fromName) + "fallback is off for this session"
 	}
-	f := s.usageFallbackSeam()
 	if f == nil || f.Usage == nil {
 		return stop("usage fallback is not configured on this server")
 	}
@@ -635,7 +639,6 @@ func (s *Scheduler) tryMove(ctx context.Context, entry *supervised, m accountMov
 		s.mu.Lock()
 		message := entry.usageLimit
 		s.mu.Unlock()
-		logins, listErr := s.cfg.Store.ListAgentLogins(ctx, from.Member, run.Harness)
 		if listErr != nil {
 			return stop(listErr.Error())
 		}
@@ -645,7 +648,6 @@ func (s *Scheduler) tryMove(ctx context.Context, entry *supervised, m accountMov
 			if refusal := s.checkTeammateSignal(ctx, f, run, from); refusal != "" {
 				return usageNoFallback, m.stopped(fromName) + refusal
 			}
-			s.noteRunOut(ctx, f, run, from)
 			// A seat, allocation, group or model message is a restriction
 			// on the account, not a spent balance: its other logins share it
 			// and are no candidates.

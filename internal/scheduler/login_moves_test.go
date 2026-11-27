@@ -19,6 +19,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/agentstatus"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
+	"github.com/3xDevOps/cloudfield/internal/fallback"
 	"github.com/3xDevOps/cloudfield/internal/memberhome"
 	"github.com/3xDevOps/cloudfield/internal/quota"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
@@ -735,5 +736,50 @@ func TestAMoveSkipsAddedLoginsWhereAVariablePays(t *testing.T) {
 	want := "Usage limit reached on Ada's account; no account that may have usage left can run claude here"
 	if got.Reason != want || got.Account() != domain.AccountOf(e.member.ID) || e.rt.byName(string(run.ID)) != first || len(notes.all()) != 0 {
 		t.Fatalf("run on %s with %q, container kept %v, notes %v; want it kept where it was with %q", got.Account(), got.Reason, e.rt.byName(string(run.ID)) == first, notes.all(), want)
+	}
+}
+
+// unreadableLogin is loginUsage with one login whose usage cannot be read,
+// as a Console login's cannot.
+type unreadableLogin struct {
+	*loginUsage
+	login domain.Account
+}
+
+func (u unreadableLogin) Read(ctx context.Context, member domain.MemberID, refresh bool) ([]quota.Provider, error) {
+	return u.ReadLogin(ctx, domain.AccountOf(member), refresh)
+}
+
+func (u unreadableLogin) ReadLogin(ctx context.Context, account domain.Account, refresh bool) ([]quota.Provider, error) {
+	if account == u.login {
+		return nil, errors.New("usage cannot be read")
+	}
+	return u.loginUsage.ReadLogin(ctx, account, refresh)
+}
+
+// Ada's own session with fallback off runs out on her Console login: it
+// stays as --no-fallback asks, and her next launch still passes that login
+// over rather than choose it again.
+func TestARunOutIsNotedWhenTheSessionCannotMove(t *testing.T) {
+	t.Parallel()
+	e, _, notes, usage, _ := newLoginMoveEnv(t, enhancedClaude)
+	console := e.addLogin(t, e.member.ID, "lgn-console000", "console", "")
+	reader := unreadableLogin{loginUsage: usage, login: console}
+	e.sched.UseUsageFallback(UsageFallback{Usage: reader, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+	t.Cleanup(func() { fallback.ForgetRunOuts(e.member.ID, "claude") })
+	run, err := e.sched.LaunchWithOptions(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP,
+		domain.LaunchOptions{AccountLogin: console.Login, Fallback: domain.AccountFallback{Disabled: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+	_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
+	got := e.waitStoreStatus(t, run.ID, domain.RunNeedsAttention)
+	if want := "Usage limit reached on Ada (console)'s account; fallback is off for this session"; got.Reason != want {
+		t.Fatalf("reason %q; want %q", got.Reason, want)
+	}
+	measured, err := fallback.Measure(t.Context(), e.db, reader, e.member.ID, console, "claude", domain.AccountFallback{})
+	if err != nil || measured[console] != 100 {
+		t.Fatalf("measured %v, %v; want the console login passed over", measured, err)
 	}
 }
