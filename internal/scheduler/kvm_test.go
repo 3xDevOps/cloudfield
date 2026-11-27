@@ -208,9 +208,9 @@ func TestKVMEnhancedAgentOutlivesCommandsThatFillTheSessionsMemory(t *testing.T)
 		t.Fatalf("the agent did not answer the prompt after the kills: %q", said)
 	}
 
-	const probe = `cat /proc/self/oom_score_adj /proc/$PPID/oom_score_adj; printf '%s|' "a b" 'c"d' "$((1+2))"; exit 7`
+	const probe = `cat /proc/self/oom_score_adj /proc/$PPID/oom_score_adj; echo "${AETHER_ACP_COMMAND_PREFIX_ENV-unset}"; printf '%s|' "a b" 'c"d' "$((1+2))"; exit 7`
 	said, _ = kvmTurn(t, e, run.ID, 4, acpmock.PromptRun+probe)
-	if want := "0\n-500\na b|c\"d|3|\nexit status 7"; said != want {
-		t.Fatalf("a command through the wrapper printed %q, want %q: its own OOM score, the agent's, its arguments and its exit status", said, want)
+	if want := "0\n-500\nunset\na b|c\"d|3|\nexit status 7"; said != want {
+		t.Fatalf("a command through the wrapper printed %q, want %q: its own OOM score, the agent's, no request of the keeper's, its arguments and its exit status", said, want)
 	}
 }
