@@ -194,6 +194,7 @@ describe('a retiring or retired edge address', () => {
     const callout = within(screen.getByRole('status'))
     const caution = callout.getByText("This came with the server's first connection to the edge, when it pinned the edge's key: confirm the new address with whoever runs the edge before you move.")
     expect(caution.compareDocumentPosition(callout.getByText(`sudo cloudfield-server edge move ${replacement}`)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(caution.compareDocumentPosition(callout.getByText(/^Move this server to/)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
   it('says to change the service flag when edge_url came from --edge-url', () => {

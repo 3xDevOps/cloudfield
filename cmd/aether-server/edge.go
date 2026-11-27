@@ -113,7 +113,7 @@ func edgeCmd(args []string) error {
 		return errors.New(edgeUsage)
 	}
 	edgeURL := string(*o.edgeURL)
-	if edgeURL == "" && sub == "status" {
+	if edgeURL == "" && (sub == "status" || sub == "move") {
 		// A service started with --edge-url runs on the edge whatever the
 		// file says.
 		if st, _, err := edgeagent.OpenState(*o.dataDir).Status(); err == nil && st.EdgeURLFlag {
@@ -441,13 +441,6 @@ func edgeTrust(w io.Writer, in io.Reader, dataDir, edgeURL string) error {
 // edgeMove moves the server to target, another relay address of the edge
 // it is enrolled with, once edgeagent.Agent.Move found the move safe.
 func edgeMove(w io.Writer, dataDir, edgeURL string, policy edgeproto.AccessPolicy, target, configPath string) error {
-	values, err := serversetup.Load(configPath)
-	if err != nil {
-		return err
-	}
-	if err = configGives(configPath, values, edgeURL, dataDir); err != nil {
-		return err
-	}
 	status, _, err := edgeagent.OpenState(dataDir).Status()
 	if err != nil {
 		return err
@@ -455,6 +448,13 @@ func edgeMove(w io.Writer, dataDir, edgeURL string, policy edgeproto.AccessPolic
 	if status.EdgeURLFlag {
 		return fmt.Errorf("the running server took its edge-url, %s, from the --edge-url flag, which a restart keeps, so edge-url in %s would not apply; nothing changed. "+
 			"Change the service's --edge-url flag to %s, then run %s", status.Edge, configPath, shellquote.Quote(target), sudoPrefix()+serversetup.RestartCommand)
+	}
+	values, err := serversetup.Load(configPath)
+	if err != nil {
+		return err
+	}
+	if err = configGives(configPath, values, edgeURL, dataDir); err != nil {
+		return err
 	}
 	hostKey, err := sshd.LoadOrCreateHostKey(server.HostKeyPath(dataDir))
 	if err != nil {

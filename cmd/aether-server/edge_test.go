@@ -293,6 +293,14 @@ func TestEdgeMoveRefusesAServiceFlag(t *testing.T) {
 	if _, err = os.Stat(server.HostKeyPath(dir)); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the refused move made a host key: %v", err)
 	}
+	if err = serversetup.WriteConfig(path, map[string]string{"data-dir": dir}); err != nil {
+		t.Fatal(err)
+	}
+	err = edgeCmd([]string{"move", "https://edge-new.example.test", "--config", path})
+	if want := "the running server took its edge-url, " + old + ", from the --edge-url flag, which a restart keeps, so edge-url in " + path +
+		" would not apply; nothing changed. Change the service's --edge-url flag to https://edge-new.example.test, then run sudo systemctl restart aether-server"; fmt.Sprint(err) != want {
+		t.Errorf("move with no edge-url in the file: %v\nwant: %s", err, want)
+	}
 }
 
 // A flag that overrides the config's edge-url refuses edge move before it

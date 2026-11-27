@@ -44,8 +44,8 @@ export function EdgeMoveSteps({ need }: { need: EdgeNeed }) {
   }
   return (
     <div className="flex min-w-0 flex-col gap-1.5 text-ui-sm">
-      <p>Move this server to {need.notice.replacement}, another address of the same edge. Run on the server's host, adding the service's --config &lt;file&gt; if it has one.</p>
       {caution}
+      <p>Move this server to {need.notice.replacement}, another address of the same edge. Run on the server's host, adding the service's --config &lt;file&gt; if it has one.</p>
       <p>1. Move the server:</p>
       <CopyableCommand command={need.move} wrap />
       <p>2. Restart it to apply:</p>
