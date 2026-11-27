@@ -262,8 +262,14 @@ apply it with:
 Until the restart `edge status` prints `running      the server last dialed
 <old>; restart to apply edge-url: sudo systemctl restart aether-server`. Settings
 › Remote access and Needs you read the config file's `edge-url` again and, while
-it names another address than the running one, show only the restart command;
-a server started with `--edge-url` skips this, since a restart keeps the flag.
+it names another address than the running one, show super admins only the
+restart command and other members that a restart is pending. A server started
+with `--edge-url` reads no file, since a restart keeps the flag: Settings, Needs
+you and `edge status` tell super admins to change the service's `--edge-url`
+flag to the new address and restart, with `edge status` printing `retiring
+<old> is retiring; move this server with: the service's --edge-url flag set to
+<new> (a restart keeps the flag, so edge move does not apply), then sudo
+systemctl restart aether-server`.
 
 `edge move` holds the pin file open from its start. Each enrollment, and the
 write of `edge-url`, needs that same pin file still in place, so a key pinned

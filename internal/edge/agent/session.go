@@ -425,7 +425,7 @@ func (a *Agent) ping(ctx context.Context, s *session) {
 // connected is the status of live session s whose edge last answered at
 // heartbeat.
 func (a *Agent) connected(s *session, heartbeat time.Time) Status {
-	return Status{Edge: a.origin, Connected: true, Since: s.since, PID: os.Getpid(), Heartbeat: heartbeat, Protocol: s.protocol}
+	return Status{Edge: a.origin, Connected: true, Since: s.since, PID: os.Getpid(), Heartbeat: heartbeat, Protocol: s.protocol, EdgeURLFlag: a.cfg.EdgeURLFlag}
 }
 
 // answered queues the heartbeat at now for recordBeats, replacing one it

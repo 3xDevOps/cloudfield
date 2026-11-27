@@ -10,6 +10,14 @@ import { useStore } from '@/store'
 
 /** How a super admin moves the server off the address `need` names. */
 export function EdgeMoveSteps({ need }: { need: EdgeNeed }) {
+  if (need.notice.edge_url_flag) {
+    return (
+      <div className="flex min-w-0 flex-col gap-1.5 text-ui-sm">
+        <p className="break-words">The service starts the server with --edge-url {need.edgeURL}, and a restart keeps that flag, so edge move does not apply. Change the flag to {need.notice.replacement} where the service starts cloudfield-server serve, then restart it on the server's host:</p>
+        <CopyableCommand command={need.restart} />
+      </div>
+    )
+  }
   if (need.notice.moved_to) {
     return (
       <div className="flex min-w-0 flex-col gap-1.5 text-ui-sm">

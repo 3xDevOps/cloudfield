@@ -191,7 +191,15 @@ func edgeStatus(w io.Writer, dataDir, edgeURL, configPath string, policy edgepro
 	_, noticedThere := notices.For(status.Edge)
 	elsewhere := status.Edge != "" && !sameOrigin(status.Edge, origin)
 	cmds := serverCommands(configPath)
+	flagged, flaggedNoticed := notices.For(status.Edge)
 	switch {
+	case status.EdgeURLFlag && flaggedNoticed:
+		line := edgeagent.NoticeLine(flagged, "the service's --edge-url flag set to "+shellquote.Quote(flagged.Replacement)+
+			" (a restart keeps the flag, so edge move does not apply), then "+cmds.Restart)
+		if notices.FirstUse {
+			line += firstUseNote
+		}
+		_, _ = fmt.Fprintf(tw, "retiring\t%s\n", line)
 	case status.Connected && stale == nil && elsewhere:
 		_, _ = fmt.Fprintf(tw, "running\tthe running server is at %s; restart to apply edge-url: %s\n", status.Edge, cmds.Restart)
 	case elsewhere && (noticed || noticedThere):
@@ -201,7 +209,7 @@ func edgeStatus(w io.Writer, dataDir, edgeURL, configPath string, policy edgepro
 	case noticed:
 		line := edgeagent.NoticeLine(notice, cmds.Server("edge move "+shellquote.Quote(notice.Replacement)))
 		if notices.FirstUse {
-			line += " (the edge sent this with the connection that pinned its key, so it is trusted on first use and shown only)"
+			line += firstUseNote
 		}
 		_, _ = fmt.Fprintf(tw, "retiring\t%s\n", line)
 	}
@@ -451,6 +459,10 @@ func edgeMove(w io.Writer, dataDir, edgeURL string, policy edgeproto.AccessPolic
 	}
 	return applyMove(w, dataDir, edgeURL, configPath, held, moved)
 }
+
+// firstUseNote ends a retiring row whose notice came with the connection
+// that pinned the edge key.
+const firstUseNote = " (the edge sent this with the connection that pinned its key, so it is trusted on first use and shown only)"
 
 // sameOrigin reports whether a and b name the same edge origin, as
 // https://host and https://host:443 do.

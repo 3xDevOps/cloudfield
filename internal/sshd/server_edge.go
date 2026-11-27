@@ -19,7 +19,7 @@ func init() {
 	registerMethod(protocol.MethodServerEdgeClaimCode, (*Server).serverEdgeClaimCode)
 }
 
-func (s *Server) serverEdge(context.Context, domain.MemberID, json.RawMessage) (any, *protocol.Error) {
+func (s *Server) serverEdge(ctx context.Context, member domain.MemberID, _ json.RawMessage) (any, *protocol.Error) {
 	out := protocol.ServerEdgeResult{ServerID: edgeproto.ServerID(s.hostKey.PublicKey()), AccessPolicy: string(s.cfg.EdgeAccess)}
 	edge := s.currentEdgeOwner()
 	if edge == nil {
@@ -42,7 +42,16 @@ func (s *Server) serverEdge(context.Context, domain.MemberID, json.RawMessage) (
 		out.Owner = &protocol.EdgeAccount{Provider: owner.Provider, Login: owner.Login}
 	}
 	if n, ok := notices.For(out.EdgeURL); ok {
-		out.Notice = &protocol.EdgeNotice{State: n.State, Replacement: n.Replacement, Date: n.Date, FirstUse: notices.FirstUse, MovedTo: s.configuredEdgeURL(out.EdgeURL)}
+		out.Notice = &protocol.EdgeNotice{State: n.State, Replacement: n.Replacement, Date: n.Date, FirstUse: notices.FirstUse}
+		admin := s.superAdmin(ctx, member)
+		if s.cfg.EdgeURLFlag {
+			out.Notice.EdgeURLFlag = admin
+		} else if moved := s.configuredEdgeURL(out.EdgeURL); moved != "" {
+			out.Notice.RestartPending = true
+			if admin {
+				out.Notice.MovedTo = moved
+			}
+		}
 	}
 	return out, nil
 }

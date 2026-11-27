@@ -1527,8 +1527,12 @@ export interface EdgeNotice {
   date?: string
   /** Came with the connection that pinned the edge key: trusted on first use only. */
   first_use?: boolean
-  /** The edge-url the server's options file names when it differs from edge_url: moved, not yet restarted. */
+  /** The server's options file names another edge-url than edge_url: moved, not yet restarted. */
+  restart_pending?: boolean
+  /** Super admins only: that edge-url, canonical. */
   moved_to?: string
+  /** Super admins only: edge_url came from the service's --edge-url flag, which a restart keeps. */
+  edge_url_flag?: boolean
 }
 
 /** server.edge.claimcode: a claim code bound to the calling admin. */

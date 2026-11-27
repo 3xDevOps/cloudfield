@@ -70,6 +70,10 @@ func TestEdgeStatusRetiringRow(t *testing.T) {
 		{name: "an IPv6 replacement", status: connected,
 			notices: edgeagent.StoredNotices{Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: old, Replacement: "https://[2001:db8::1]:8443"}}},
 			row:     "retiring     " + old + " is retiring; move this server with: sudo cloudfield-server edge move 'https://[2001:db8::1]:8443'"},
+		{name: "edge-url from the service's flag", status: edgeagent.Status{Edge: other, Connected: true, Since: since, PID: os.Getpid(), Heartbeat: now, EdgeURLFlag: true},
+			notices: edgeagent.StoredNotices{Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: other, Replacement: "https://edge-third.example.test"}}},
+			row: "retiring     " + other + " is retiring; move this server with: the service's --edge-url flag set to https://edge-third.example.test " +
+				"(a restart keeps the flag, so edge move does not apply), then sudo systemctl restart aether-server"},
 		{name: "a damaged entry that still parses", status: connected,
 			notices: edgeagent.StoredNotices{Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: old, Replacement: "not-a-url"}}}},
 		{name: "a stale connection at another address", status: edgeagent.Status{Edge: other, Connected: true, Since: since, PID: os.Getpid(), Heartbeat: now.Add(-time.Hour)},

@@ -195,8 +195,23 @@ describe('a retiring or retired edge address', () => {
     expect(caution.compareDocumentPosition(callout.getByText(`sudo cloudfield-server edge move ${replacement}`)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
+  it('says to change the service flag when edge_url came from --edge-url', () => {
+    seed('super_admin', { ...claimed, notice: { state: 'retiring', replacement, edge_url_flag: true } })
+    render(<RemoteAccessSection client={api()} />)
+    const callout = within(screen.getByRole('status'))
+    expect(callout.getByText(`The service starts the server with --edge-url ${edgeURL}, and a restart keeps that flag, so edge move does not apply. Change the flag to ${replacement} where the service starts cloudfield-server serve, then restart it on the server's host:`)).toBeTruthy()
+    expect(callout.getByText('sudo systemctl restart aether-server')).toBeTruthy()
+    expect(callout.queryByText(/edge move https/)).toBeNull()
+  })
+
+  it('tells other members a move waits for a restart', () => {
+    seed('collaborator', { ...claimed, notice: { state: 'retiring', replacement, restart_pending: true } })
+    render(<RemoteAccessSection client={api()} />)
+    expect(screen.getByText(`${edgeURL} is retiring; its new address is ${replacement}. The server is moved and takes the new address when it restarts.`)).toBeTruthy()
+  })
+
   it('says to restart once the options file names the new address', () => {
-    seed('super_admin', { ...claimed, notice: { state: 'retiring', replacement, moved_to: replacement } })
+    seed('super_admin', { ...claimed, notice: { state: 'retiring', replacement, restart_pending: true, moved_to: replacement } })
     render(<RemoteAccessSection client={api()} />)
     const callout = within(screen.getByRole('status'))
     expect(callout.getByText(`The server's options file already names ${replacement}; the server still runs at ${edgeURL}. Restart it on the server's host to apply:`)).toBeTruthy()

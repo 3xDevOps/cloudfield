@@ -128,7 +128,7 @@ describe('a retiring edge address', () => {
   }
   const replacement = 'https://edge-new.example.test'
 
-  type Notice = { state: 'retiring' | 'retired'; replacement: string; date?: string; moved_to?: string }
+  type Notice = { state: 'retiring' | 'retired'; replacement: string; date?: string; restart_pending?: boolean; moved_to?: string }
   /** `later`, when given, is what the read on entering Needs you answers; a rejected promise is a failed read. */
   async function show(role: 'super_admin' | 'collaborator', notice?: Notice, later?: () => Promise<typeof edge & { notice?: Notice }>) {
     atViewport(390, { pointer: 'coarse' })
@@ -182,7 +182,7 @@ describe('a retiring edge address', () => {
   })
 
   it('says to restart once the options file names the new address', async () => {
-    await show('super_admin', { state: 'retired', replacement, moved_to: replacement })
+    await show('super_admin', { state: 'retired', replacement, restart_pending: true, moved_to: replacement })
     const card = (await screen.findByText('https://edge-old.example.test is retired')).closest('[data-edge-notice]') as HTMLElement
     expect(within(card).getByText('sudo systemctl restart aether-server')).toBeTruthy()
     expect(within(card).queryByText(/edge move/)).toBeNull()
