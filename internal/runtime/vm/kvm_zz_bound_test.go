@@ -58,6 +58,21 @@ func (z *zz) punchFree(label string) {
 	listed := time.Since(start)
 	file := filepath.Join(z.e.path(z.key, snapshotDir), "memory-ranges")
 	before := allocatedMiB(file)
+	free, punched, calls := z.freeWalk(file, bits, true)
+	zzFreeBits = bits
+	z.logf("punchfree %s list_ms=%d punch_ms=%d guest_frames=%d free_mib=%d punched_mib=%d punch_calls=%d source_allocated_mib before=%d after=%d",
+		label, listed.Milliseconds(), (time.Since(start) - listed).Milliseconds(), len(bits)*8, free>>20, punched>>20, calls, before, allocatedMiB(file))
+}
+
+// zzFreeBits is the last free frame map punchFree read.
+var zzFreeBits []byte
+
+// freeWalk visits the parts of a memory file that hold data under frames a
+// free frame map lists, punching them out if punch is set. It returns the
+// bytes listed free, the bytes of data found under them and the count of
+// data runs.
+func (z *zz) freeWalk(file string, bits []byte, punch bool) (free, data int64, runs int) {
+	z.t.Helper()
 	f, err := os.OpenFile(file, os.O_RDWR, 0)
 	if err != nil {
 		z.t.Fatal(err)
@@ -68,25 +83,25 @@ func (z *zz) punchFree(label string) {
 		z.t.Fatal(err)
 	}
 	size, fd := info.Size(), int(f.Fd())
-	var free, punched int64
-	calls := 0
-	punch := func(off, end int64) {
+	visit := func(off, end int64) {
 		free += end - off
 		for pos := off; pos < end; {
-			data, seekErr := unix.Seek(fd, pos, unix.SEEK_DATA)
-			if seekErr != nil || data >= end {
+			at, seekErr := unix.Seek(fd, pos, unix.SEEK_DATA)
+			if seekErr != nil || at >= end {
 				return
 			}
-			hole, seekErr := unix.Seek(fd, data, unix.SEEK_HOLE)
+			hole, seekErr := unix.Seek(fd, at, unix.SEEK_HOLE)
 			if seekErr != nil {
 				z.t.Fatalf("seek the next hole: %v", seekErr)
 			}
 			hole = min(hole, end)
-			if err = unix.Fallocate(fd, unix.FALLOC_FL_PUNCH_HOLE|unix.FALLOC_FL_KEEP_SIZE, data, hole-data); err != nil {
-				z.t.Fatalf("punch %d+%d: %v", data, hole-data, err)
+			if punch {
+				if err = unix.Fallocate(fd, unix.FALLOC_FL_PUNCH_HOLE|unix.FALLOC_FL_KEEP_SIZE, at, hole-at); err != nil {
+					z.t.Fatalf("punch %d+%d: %v", at, hole-at, err)
+				}
 			}
-			punched += hole - data
-			calls++
+			data += hole - at
+			runs++
 			pos = hole
 		}
 	}
@@ -102,14 +117,15 @@ func (z *zz) punchFree(label string) {
 			for pfn < r[1]/4096 && isFree(pfn) {
 				pfn++
 			}
-			punch(r[2]+first*4096-r[0], r[2]+pfn*4096-r[0])
+			visit(r[2]+first*4096-r[0], r[2]+pfn*4096-r[0])
 		}
 	}
-	if err = f.Sync(); err != nil {
-		z.t.Fatal(err)
+	if punch {
+		if err = f.Sync(); err != nil {
+			z.t.Fatal(err)
+		}
 	}
-	z.logf("punchfree %s list_ms=%d punch_ms=%d guest_frames=%d free_mib=%d punched_mib=%d punch_calls=%d source_allocated_mib before=%d after=%d",
-		label, listed.Milliseconds(), (time.Since(start) - listed).Milliseconds(), frames, free>>20, punched>>20, calls, before, allocatedMiB(file))
+	return free, data, runs
 }
 
 // privateConfig rewrites the saved VM configuration to private guest memory,
@@ -419,6 +435,10 @@ func TestKVMZZFileBound(t *testing.T) {
 		z.syncfs()
 		file = filepath.Join(snapDir, "memory-ranges")
 		count, shared, _, _ := extents(file)
+		if arm == "G" && n > 0 {
+			free, stale, runs := z.freeWalk(file, zzFreeBits, false)
+			z.logf("stalefree %s listed_free_mib=%d of_it_in_the_new_file_mib=%d runs=%d", label, free>>20, stale>>20, runs)
+		}
 		z.logf("BOUND cycle=%d label=%q guest_used_mib=%d host_held_mib=%.0f private_mib=%.0f save_ms=%d dev_written_mib=%.0f file_mib_as_written=%d file_mib_at_rest=%d over_live_mib=%d extents=%d shared_extents=%d fs_used_mib before=%d at_rest=%d",
 			n, label, used, held, private, (res.snapshot + res.fsync).Milliseconds(), float64(res.devBytes)/(1<<20), written, allocatedMiB(file),
 			allocatedMiB(file)-int64(used), count, shared, fsBefore>>20, z.fsUsed()>>20)
