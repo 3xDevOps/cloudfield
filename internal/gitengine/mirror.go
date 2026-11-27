@@ -1,6 +1,7 @@
 package gitengine
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -595,8 +596,12 @@ func (e *Engine) fetchMirror(ctx context.Context, repo string, req MirrorRequest
 	args = append(args, "fetch", "--no-tags", "--no-recurse-submodules", "--no-write-fetch-head", req.SourceURL, "+refs/heads/"+req.Branch+":"+incomingRef)
 	cmd := exec.CommandContext(ctx, e.cfg.GitPath, args...)
 	cmd.Env = env
-	if out, err := cmd.CombinedOutput(); err != nil {
-		output := string(out)
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	// The fetch's transport helper outlives a killed git and keeps its
+	// output open, so the call would not return when ctx ends.
+	if err := runInProcessGroup(cmd); err != nil {
+		output := out.String()
 		if req.Auth == domain.MirrorAuthGitHub {
 			output = redactMirrorGitHubCredential(output, req.GitHubToken)
 		}

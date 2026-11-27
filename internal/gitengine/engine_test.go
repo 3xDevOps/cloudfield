@@ -375,6 +375,29 @@ func TestMirrorFetchDeployKeySkipsDNSResolver(t *testing.T) {
 	}
 }
 
+func TestMirrorFetchCancelEndsAHelperHoldingItsOutput(t *testing.T) {
+	e := newUnitEngine(t)
+	git := filepath.Join(t.TempDir(), "git")
+	if err := os.WriteFile(git, []byte("#!/bin/sh\nsleep 30 &\nwait\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	e.cfg.GitPath = git
+	req := MirrorRequest{
+		SourceURL:      "ssh://deploy@github.example/aether.git",
+		Branch:         "main",
+		Auth:           domain.MirrorAuthDeployKey,
+		PrivateKeyPath: "/srv/key",
+		KnownHostsPath: "/srv/known_hosts",
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 200*time.Millisecond)
+	defer cancel()
+	started := time.Now()
+	err := e.fetchMirror(ctx, t.TempDir(), req, "refs/aether/incoming/test")
+	if took := time.Since(started); err == nil || took > 5*time.Second {
+		t.Fatalf("fetch past its deadline = %v after %s, want an error once the deadline passes", err, took)
+	}
+}
+
 func TestDisableWorkspaceMirrorOrdersPolicyBeforeAtomicDelete(t *testing.T) {
 	e := newUnitEngine(t)
 	realGit, err := exec.LookPath("git")
