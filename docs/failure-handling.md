@@ -713,6 +713,47 @@ An upstream that was rewritten or diverged stays held (`rewritten` or
 --commit <reviewed-sha> --yes`. Published session branches stay fetchable while a
 mirror is failing.
 
+## What the server did for want of memory or disk
+
+The server counts each time it was short of memory or disk and what it did
+about it, and logs each one:
+
+```sh
+sudo journalctl -u aether-server | grep 'scheduler: capacity:'
+```
+
+```
+INFO scheduler: capacity: refusal op=wake cause=memory run=<run id> available=... floor=... used=... idle_hour=... vm=0 text="scheduler: insufficient host memory headroom: ..."
+INFO scheduler: capacity: save op=idle cause="" run=<run id> available=... floor=... used=0 idle_hour=0 vm=... text=""
+INFO scheduler: capacity: freeze op="" cause="" run="" available=... floor=... used=0 idle_hour=0 vm=0 text="froze 3 session VMs"
+```
+
+The counts are kept in the database, in table `capacity_counts`, one row
+per hour and counter, so they outlast a restart. A counter is a `kind`, an
+`op` and a `cause`:
+
+| `kind` | Counted when | `op` | `cause` |
+| --- | --- | --- | --- |
+| `refusal` | Admission refused a start | `launch`, `launch-retry` (the server trying a waiting subsession again), `wake`, `boot` (a stopped VM booted to commit its work), `start` (a login terminal, a browser, an agent update, a move to another account) | `memory`, `stall`, `disk`, `unknown` (a measurement failed) |
+| `wait` | A subsession the server had no room for went back to the queue | `subsession` | |
+| `wait-end` | A subsession that waited stopped waiting | `subsession` | `started`, `refused`, `cancelled` |
+| `freeze` | The memory brake froze the session VMs, once per shortage | | |
+| `save` | The memory guard, or an admission short of memory, saved a session VM to disk | `idle`, `paused` (it was paused in memory), `closed`, `working` | |
+
+Each row holds the `count` and the sum of each event's figures, in bytes:
+`available_bytes` and `floor_bytes` (available memory and the floor
+admission keeps, for a memory refusal, a freeze and a save, measured before
+the save), `used_bytes` (memory in use at a memory or stall refusal),
+`idle_hour_bytes` (what session VMs idle for over an hour held of it) and
+`vm_bytes` (what a saved VM held). `waited_seconds` and
+`max_waited_seconds` are the total and the longest time between a
+subsession being asked for and its wait ending. `last_at`, `last_run` and
+`last_text` are the counter's latest event, with the refusal as its caller
+got it.
+
+A disk refusal's figures are in its text. A VM saved because it stayed
+paused for an hour is not counted: no shortage caused it.
+
 ## Where a launch or a wake spends its time
 
 The server logs one line for every session it launched and every sleeping

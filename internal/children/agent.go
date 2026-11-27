@@ -332,6 +332,7 @@ func (s *Service) stop(ctx context.Context, c *domain.ChildReservation) error {
 	case domain.ChildQueued:
 		err := s.cfg.Store.SetChildState(ctx, c.RunID, domain.ChildCancelled, "cancelled before it started", domain.ChildQueued)
 		if err == nil {
+			s.countWaitEnd(ctx, c, "cancelled", "cancelled before it started")
 			s.publish(ctx, c.ParentRunID, "")
 		}
 		if !errors.Is(err, store.ErrConflict) {
