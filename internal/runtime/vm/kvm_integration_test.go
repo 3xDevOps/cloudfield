@@ -45,7 +45,7 @@ func kvmEngine(t *testing.T) *engine {
 	if _, err := os.Stat("/dev/kvm"); err != nil || os.Geteuid() != 0 {
 		t.Skip("needs root and /dev/kvm")
 	}
-	images, err := vmimage.Open(filepath.Join(dir, "vm", "images"), kernel, nil)
+	images, err := vmimage.Open(filepath.Join(dir, "vm", "images"), kernel, nil, -1)
 	if err != nil {
 		t.Fatal(err)
 	}

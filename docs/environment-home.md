@@ -81,6 +81,11 @@ per pool, or once all caches together pass 16 GiB. Other tools' caches break
 when single files disappear, so they shrink only this way. A cache path you
 set yourself is never cleaned. Logins, CLIs and keys stay in the home.
 
+A session in a VM writes its own copy-on-write layer over these caches, which
+is removed when its VM stops: its next start begins from the member's newest
+caches and may download and build again
+([environments.md](environments.md#sessions-in-virtual-machines)).
+
 ## Set up an agent
 
 [harnesses.md](harnesses.md#set-up-an-agent) has the steps: **Set up** on the

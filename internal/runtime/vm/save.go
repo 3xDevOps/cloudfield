@@ -87,6 +87,9 @@ func (e *engine) save(ctx context.Context, key string) error {
 		e.awaitReported(ctx, key)
 		synced = e.syncGuest(ctx, key)
 	}
+	if synced && rec.Cache.Path != "" {
+		rec.CacheUse = e.cacheUse(ctx, key)
+	}
 	if !paused {
 		if err = api.pause(ctx); err != nil {
 			return fmt.Errorf("vm runtime: save VM %s: %w", key, err)

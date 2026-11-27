@@ -103,13 +103,14 @@ func sessionSpec(key string) runtime.Spec {
 }
 
 type fakeImages struct {
-	mu        sync.Mutex
-	rootDisks int
-	promoted  chan string
-	tags      map[string]vmimage.Base
-	saves     []fakeSave
-	saveErr   error
-	programs  map[string]bool
+	mu         sync.Mutex
+	rootDisks  int
+	cacheDisks int
+	promoted   chan string
+	tags       map[string]vmimage.Base
+	saves      []fakeSave
+	saveErr    error
+	programs   map[string]bool
 }
 
 type fakeSave struct {
@@ -210,7 +211,11 @@ func (f *fakeImages) NewDataDisk(_ context.Context, path string, _ int64) (vmima
 }
 
 func (f *fakeImages) NewCacheDisk(_ context.Context, _, path string) (vmimage.Disk, error) {
-	return vmimage.Disk{Path: path, Format: "qcow2", Backing: path + ".base"}, os.WriteFile(path, nil, 0o600)
+	f.mu.Lock()
+	f.cacheDisks++
+	f.mu.Unlock()
+	disk := vmimage.Disk{Path: path, Format: "qcow2", Backing: path + ".base"}
+	return disk, errors.Join(os.WriteFile(path, nil, 0o600), os.WriteFile(disk.Backing, nil, 0o600))
 }
 
 func (f *fakeImages) SnapshotCache(disk vmimage.Disk) (string, error) {
@@ -523,6 +528,9 @@ type fakeHelper struct {
 	bootHangs bool
 	syncErr   error
 	syncs     int
+	// cacheUse and cacheUseErr are what CacheUse answers.
+	cacheUse    guest.CacheUse
+	cacheUseErr error
 	// unresponsive makes calls fail as a guest that stopped answering does.
 	unresponsive bool
 	stats        guest.Stats
@@ -675,6 +683,12 @@ func (g *fakeHelper) Sync(context.Context) error {
 	g.syncs++
 	g.mu.Unlock()
 	return g.syncErr
+}
+
+func (g *fakeHelper) CacheUse(context.Context) (guest.CacheUse, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.cacheUse, g.cacheUseErr
 }
 
 func (g *fakeHelper) Close() error { return nil }

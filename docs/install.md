@@ -566,7 +566,7 @@ after the key and value of `config set`.
 | `tailnet-auto-join` | off | Tailnet logins join as approved members instead of pending. |
 | `tailnet-require-key` | off | Tailnet connections must also present a registered SSH key. Cannot be combined with `web-port`. |
 | `run-cpus`, `run-memory`, `run-pids` | 8 CPUs (at most the host's), 8 GiB, 4096 | Ceilings per session and member environment, not reservations. |
-| `min-free-disk` | `0` (5% of the filesystem, 5 to 20 GiB) | Free-space reserve below which new sessions are refused. Negative turns the check off. |
+| `min-free-disk` | `0` (5% of the filesystem, 5 to 20 GiB) | Free-space reserve below which new sessions are refused, and which a stopped session VM's cache write-back must leave free with 4 GiB more. Negative turns both checks off. |
 | `checkout-ttl` | `72h` | How long a finished session's checkout is kept after the session ends. It also stays while the session's container is kept. Negative keeps it forever. |
 | `run-container-ttl` | `720h`; `168h` for a container that stays frozen in memory | How long a closed session's container or VM disks are kept so the session can be relaunched ([Relaunching a closed session](failure-handling.md#relaunching-a-closed-session)). A relaunched session's clock restarts at its next close. |
 | `run-sleep-after` | `30m`; `5m` for session VMs | How long an idle Enhanced Claude Code session keeps its container running before Cloudfield stops it until its next use, and how long an idle session VM runs before Cloudfield pauses it in memory ([Idle sleep](failure-handling.md#idle-sleep)). A value you set applies to both. `0` keeps every session awake. |
