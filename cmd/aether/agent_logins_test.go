@@ -541,3 +541,21 @@ func TestLandedLinesSayWhereALaunchStarted(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentLoginOfAnAddedLoginOpensNoTerminalOnAServerWithoutLogins(t *testing.T) {
+	asked := fakeLinkedServer(t, map[string]*fakeReply{
+		protocol.MethodServerInfo: {result: protocol.ServerInfoResult{ServerVersion: "v0.9.0", Features: []string{protocol.FeaturePermission}}},
+		protocol.MethodAgentList: {result: protocol.AgentListResult{Agents: []protocol.AgentInfo{
+			{Name: "claude", LoginCommand: "claude auth login", Installed: true},
+		}}},
+	})
+	for _, args := range [][]string{{"claude", "--as", "x"}, {"claude", "--attach", "lgn-x"}} {
+		want := args[1] + `: server v0.9.0 lacks the "logins" feature, so it keeps only the login in your home; update the server with cloudfield server update`
+		if err := agentLogin(args); err == nil || err.Error() != want {
+			t.Errorf("cloudfield agent login %q = %v; want %q", args, err, want)
+		}
+	}
+	if got := asked(); !reflect.DeepEqual(got, []string{protocol.SubsystemControl, protocol.SubsystemControl}) {
+		t.Errorf("subsystems opened = %q; want the control channel only", got)
+	}
+}
