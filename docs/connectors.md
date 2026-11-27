@@ -52,6 +52,8 @@ connected** with its scopes once the app connects. It lists your connectors
 with their scopes, the URL each was added at, when each was added and last
 used, and **Reconnect** and **Revoke** buttons. Errors appear as `cloudfield mcp`
 prints them, with a link to the fix.
+A connector at a retiring or retired address has no **Reconnect**; see
+[Adding a connector again at a new address](#adding-a-connector-again-at-a-new-address).
 
 From a terminal:
 
@@ -161,8 +163,13 @@ the error.
 In Settings a connector at a retiring address shows **This address is
 retiring on 2027-03-01**, one at a retired address **This address is
 retired**, each with the new URL to copy when one is named, or else the
-same advice as `cloudfield mcp`. Settings revokes nothing by itself: once the
-connector works at the new URL, select **Revoke** on the old one.
+same advice as `cloudfield mcp`. Such a row has no **Reconnect** and Settings
+does not revoke it: once the connector works at the new URL, select
+**Revoke** on the old one. A move or reconnect started before the notice
+stops without revoking anything once the old connector or its replacement
+is at such an address. To give such a connector another scope, such as one
+a refusal names, add it again at the new URL and check the box on its
+consent page.
 
 The consent page at a retiring address says `This address is retiring on
 2027-03-01. Add the connector at <url> instead. Connecting here still works
@@ -179,9 +186,10 @@ Notice for the user: this connector was added at https://relay-old.example.com/m
 ```
 
 The server keeps that once-a-day record in memory, so after a restart the
-next tool result carries the notice again. The consent page and tool results
-read the edge's notices for an address at most once a minute, so a change
-shows up to a minute late.
+next tool result carries the notice again. After finding no notice for an
+address, the consent page and tool results do not read the edge's notices
+for it again for a minute, so a new notice can show up to a minute late; a
+notice that exists, and any URL it names, is read on every call.
 
 To move a connector:
 
