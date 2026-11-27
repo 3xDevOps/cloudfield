@@ -375,8 +375,8 @@ func TestModelAndEffortSetByValueAreRecorded(t *testing.T) {
 	}
 	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
 	sub := e.subscribe(t)
-	if model, effort, err := e.sched.ACPSetModelEffort(t.Context(), run, e.member.ID, "Opus", "MEDIUM"); err != nil || model != "opus" || effort != "medium" {
-		t.Fatalf("Opus and MEDIUM leave the session on model %q and effort %q (%v), want the agent's own names for them, opus and medium", model, effort, err)
+	if model, effort, err := e.sched.ACPSetModelEffort(t.Context(), run, e.member.ID, "Opus", "medium"); err != nil || model != "opus" || effort != "medium" {
+		t.Fatalf("Opus and medium leave the session on model %q and effort %q (%v), want the agent's own name for the model, opus, and medium", model, effort, err)
 	}
 	if ev := waitTimelineEvent(t, sub, run.ID, events.TimelineNote); ev.ActorID != e.member.ID || ev.Payload.(events.TimelinePayload).Message != "set model opus, effort medium" {
 		t.Fatalf("timeline note = %+v, want the change recorded as the agent reports it, with who made it", ev)
@@ -388,8 +388,8 @@ func TestModelAndEffortSetByValueAreRecorded(t *testing.T) {
 		t.Fatalf("the session records model %q and effort %q (%v), want opus and low", row.Model, row.Effort, err)
 	}
 	exec := rt.all()[0]
-	if model, effort := exec.wire.setOption(t, "model"), exec.wire.setOption(t, "effort"); !slices.Equal(model, []any{"Opus"}) || !slices.Equal(effort, []any{"MEDIUM", "low"}) {
-		t.Fatalf("the agent's model option was set to %v and its effort option to %v, want [Opus] and [MEDIUM low]", model, effort)
+	if model, effort := exec.wire.setOption(t, "model"), exec.wire.setOption(t, "effort"); !slices.Equal(model, []any{"Opus"}) || !slices.Equal(effort, []any{"medium", "low"}) {
+		t.Fatalf("the agent's model option was set to %v and its effort option to %v, want [Opus] and [medium low]", model, effort)
 	}
 	exec.wire.mu.Lock()
 	wire := exec.wire.data.String()

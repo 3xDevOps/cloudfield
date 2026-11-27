@@ -432,9 +432,13 @@ func (a *Agent) setOption(id string, value any) []map[string]any {
 		if option["id"] != id {
 			continue
 		}
-		// An agent can take a value under another name: this one takes one
-		// it offers in any letter case.
-		choices, _ := option["options"].([]any)
+		// Claude Code's adapter takes a model under another name and every
+		// other option by its exact value: this one takes a model it offers
+		// in any letter case.
+		var choices []any
+		if option["category"] == "model" {
+			choices, _ = option["options"].([]any)
+		}
 		for _, choice := range choices {
 			fields, _ := choice.(map[string]any)
 			offered, _ := fields["value"].(string)

@@ -31,6 +31,11 @@ func runSet(args []string) error {
 func setSessionOptions(c *protocol.Client, w io.Writer, runID, model, effort string) error {
 	var res protocol.RunOptionSetResult
 	if err := c.Call(protocol.MethodRunOptionSet, protocol.RunOptionSetParams{RunID: runID, Model: model, Effort: effort}, &res); err != nil {
+		// A change that set the model alone fails naming the model the agent reports.
+		var perr *protocol.Error
+		if errors.As(err, &perr) {
+			perr.Message = printable(perr.Message)
+		}
 		return runNotFound(runID, err)
 	}
 	// What the agent reports: it can take a value under another name.

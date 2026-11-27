@@ -1051,8 +1051,9 @@ whose agent has no option for one answers `-32602`
 paused, or whose VM the server froze for memory, answers `-32002` without
 asking its agent, as it does to `run.acp.set_option`. A Standard
 session answers `-32002`: its model and effort change only inside the agent's
-own terminal, so the message names `cloudfield attach <session-id>` and
-`cloudfield session switch <session-id> --mode enhanced`. A Background
+own terminal, so the message names `cloudfield attach <session-id>`, and
+`cloudfield session switch <session-id> --mode enhanced` when
+`run.mode.switch` can move the session's agent. A Background
 session with `acp: false` answers `-32602`. A connector is refused it
 (`-32001`), and the gateway does not replay it. Every call that set one
 records a `note` entry on the workspace timeline,

@@ -29,10 +29,16 @@ func (s *Server) runOptionSet(ctx context.Context, member domain.MemberID, raw j
 	}
 	switch {
 	case run.Mode == domain.LaunchTUI:
-		return nil, &protocol.Error{Code: protocol.CodeInvalidState, Message: fmt.Sprintf(
-			"%s: session %[2]s is a Standard session, where the model and effort change only inside the agent's own terminal: "+
-				"run cloudfield attach %[2]s and change them there, or run cloudfield session switch %[2]s --mode enhanced first",
-			protocol.MethodRunOptionSet, run.ID)}
+		message := fmt.Sprintf("%s: session %[2]s is a Standard session, where the model and effort change only inside the agent's own terminal: "+
+			"run cloudfield attach %[2]s and change them there", protocol.MethodRunOptionSet, run.ID)
+		switchable, switchErr := s.cfg.Runs.AgentSwitchable(ctx, run.MemberID, run.AccountMember(), run.Harness)
+		if switchErr != nil {
+			return nil, rpcError(switchErr)
+		}
+		if switchable {
+			message += fmt.Sprintf(", or run cloudfield session switch %s --mode enhanced first", run.ID)
+		}
+		return nil, &protocol.Error{Code: protocol.CodeInvalidState, Message: message}
 	case !run.ACP:
 		return nil, invalidParams(fmt.Sprintf("session %s does not run its agent over ACP", run.ID))
 	}

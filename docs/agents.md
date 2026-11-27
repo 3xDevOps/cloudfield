@@ -335,9 +335,11 @@ set first and stays changed if the effort then fails: the error then ends with
 `; the session is now set to model <model>`. A paused session fails and names
 `cloudfield resume <session-id>`. A Standard session changes them only inside
 the agent's own terminal, so the command fails and names
-`cloudfield attach <session-id>` and
-`cloudfield session switch <session-id> --mode enhanced`. While another member
-controls the session it fails with their name.
+`cloudfield attach <session-id>`, and
+`cloudfield session switch <session-id> --mode enhanced` when its agent can
+switch a running session
+([enhanced-sessions.md](enhanced-sessions.md#switching-a-running-agent)). While
+another member controls the session it fails with their name.
 
 ## Bring results back and publish
 

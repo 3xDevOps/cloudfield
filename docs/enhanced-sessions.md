@@ -133,6 +133,9 @@ its model and effort change only inside the agent's own terminal:
 aether: rpc error -32002: run.option.set: session run-d6ay38tj8j is a Standard session, where the model and effort change only inside the agent's own terminal: run cloudfield attach run-d6ay38tj8j and change them there, or run cloudfield session switch run-d6ay38tj8j --mode enhanced first
 ```
 
+The error names `cloudfield session switch` only when the session's agent can
+switch a running session ([Switching a running agent](#switching-a-running-agent)).
+
 The session's sandbox is the same as a Standard session's, with the same image, home,
 retention, Pause and Close. The agent's ACP server runs beside a login shell,
 and the **Terminal** tab is that shell: use it to log the agent in or inspect

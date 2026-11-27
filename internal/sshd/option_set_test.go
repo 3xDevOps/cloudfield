@@ -66,6 +66,14 @@ func TestRunOptionSetNeedsNoLeaseAndYieldsToAnotherMembersControl(t *testing.T) 
 	if perr = set(e.member.ID, e.run.ID, "opus", ""); perr == nil || perr.Code != protocol.CodeInvalidState || perr.Message != want {
 		t.Fatalf("model of a Standard session = %+v, want CodeInvalidState and %q", perr, want)
 	}
+	e.runs.mu.Lock()
+	e.runs.unswitchable = map[string]bool{"claude": true}
+	e.runs.mu.Unlock()
+	want = fmt.Sprintf("run.option.set: session %[1]s is a Standard session, where the model and effort change only inside the agent's own terminal: "+
+		"run cloudfield attach %[1]s and change them there", e.run.ID)
+	if perr = set(e.member.ID, e.run.ID, "opus", ""); perr == nil || perr.Code != protocol.CodeInvalidState || perr.Message != want {
+		t.Fatalf("model of a Standard session whose agent cannot switch to Enhanced = %+v, want CodeInvalidState and %q", perr, want)
+	}
 	background := &domain.Run{WorkspaceID: e.ws.ID, MemberID: e.member.ID, Task: "t", Harness: "claude", Mode: domain.LaunchHeadless, Status: domain.RunRunning}
 	if err = e.store.CreateRun(t.Context(), background); err != nil {
 		t.Fatal(err)
