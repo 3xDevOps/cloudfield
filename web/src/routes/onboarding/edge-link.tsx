@@ -77,10 +77,10 @@ function useEdgeNotices(client: Api, active: boolean): EdgeStatus | null {
         () => {},
       )
     }
-    setStatus(null)
     ask()
     window.addEventListener('focus', ask)
     return () => {
+      setStatus(null)
       live = false
       window.removeEventListener('focus', ask)
     }
@@ -147,7 +147,7 @@ function useEdgeSignIn(client: Api, edge?: string): SignIn {
               // Matched on the gateway's own spelling of the edge, not a
               // handed claim's; an answer without its entry yet is polled again.
               const next = signedInPhase(status, edge === undefined ? undefined : login.edge, login.edge)
-              if (!next) {
+              if (!next || !status.edges.some((e) => e.edge === login.edge && e.account)) {
                 poll()
                 return
               }

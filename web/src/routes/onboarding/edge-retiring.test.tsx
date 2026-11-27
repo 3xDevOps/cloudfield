@@ -136,12 +136,39 @@ describe('a signed-in edge that says its address is retiring', () => {
     expect(screen.queryByRole('form', { name: 'Add a server' })).toBeNull()
   })
 
-  it('goes back to signing in when the chosen edge was signed out elsewhere', async () => {
+  it('goes back to signing in when the chosen edge was signed out elsewhere, and on once signed in again', async () => {
+    vi.spyOn(window, 'open').mockReturnValue(null)
     seed()
     const client = await open()
     vi.mocked(client.localEdgeStatus).mockResolvedValue({ edges: [] })
     window.dispatchEvent(new Event('focus'))
-    expect(await screen.findByRole('button', { name: 'Sign in with GitHub' })).toBeDefined()
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in with GitHub' }))
+    expect(await screen.findByText('WDJB-MJHT')).toBeDefined()
+    const login = { edge: next, signin_origin: next, user_code: 'WDJB-MJHT', verification_uri: `${next}/device` }
+    vi.mocked(client.localEdgeStatus).mockResolvedValue({ edges: [{ edge: next, account }], login: { ...login, state: 'signed_in', account } })
+    await vi.waitFor(() => expect(screen.getByText((_, el) => el?.tagName === 'P' && /^Signed in to new\.example\.test as/.test(el.textContent ?? ''))).toBeDefined(), { timeout: 5000 })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(screen.queryByRole('button', { name: 'Sign in with GitHub' })).toBeNull()
+  })
+
+  it('waits for the edge it signed in to among the rows', async () => {
+    vi.spyOn(window, 'open').mockReturnValue(null)
+    const login = { edge, signin_origin: edge, user_code: 'WDJB-MJHT', verification_uri: `${edge}/device` }
+    let answers = 0
+    const client = fakeApi({
+      localEdgeStatus: vi.fn(async (): Promise<EdgeStatus> => {
+        answers++
+        if (answers === 1) return { edges: [], login: { ...login, state: 'pending' } }
+        if (answers === 2) return { edges: [{ edge: next, account }], login: { ...login, state: 'signed_in', account } }
+        return { edges: [{ edge: next, account }, { edge, account }], login: { ...login, state: 'signed_in', account } }
+      }),
+      localEdgeServers: vi.fn(async () => ({ edge, servers: [] })),
+    })
+    render(<EdgeSignIn client={client} onHand={vi.fn()} onLinked={vi.fn()} onSignedOut={vi.fn()} />)
+    expect(await screen.findByText('WDJB-MJHT')).toBeDefined()
+    await vi.waitFor(() => expect(answers).toBe(2), { timeout: 5000 })
+    expect(screen.getByText('WDJB-MJHT')).toBeDefined()
+    await vi.waitFor(() => expect(screen.getByText((_, el) => el?.tagName === 'P' && /^Signed in to old\.example\.test as/.test(el.textContent ?? ''))).toBeDefined(), { timeout: 5000 })
   })
 
   it('takes a sign-in at another spelling of the new address for none', async () => {
