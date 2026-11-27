@@ -118,6 +118,14 @@ describe('run frame', () => {
     await waitFor(() => expect(screen.getByRole('banner').textContent).toContain("On Alice's account, login console·Billed per use"))
   })
 
+  it("puts the member and the login a phone session pays with on a line of their own under the title", async () => {
+    atViewport(360, { pointer: 'coarse' })
+    open({ account_member_id: alice.id, account_login: 'lgn-console0001', account_login_name: 'console', account_login_per_use: true })
+    const line = await screen.findByText("On Alice's account, login console, billed per use")
+    expect(line.className).not.toContain('truncate')
+    expect(screen.getByRole('banner').textContent).not.toContain('console')
+  })
+
   it('names the login a run.account event moves the run to', async () => {
     open({ account_member_id: alice.id })
     await act(() => applyEvent(useStore, {

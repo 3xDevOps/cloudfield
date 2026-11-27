@@ -9,6 +9,8 @@ import { StatusDot } from '@/components/ui/status-dot'
 import { TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { coarsePointer, useMediaQuery } from '@/lib/hooks'
 import { useKeyboardUp } from '@/lib/keyboard-inset'
+import { memberName } from '@/lib/member-name'
+import { runAccountWords } from '@/lib/run-account'
 import { cn } from '@/lib/utils'
 import { runLabel, stateName, toneOf } from '@/lib/status'
 import { historyDepth, redirectRoute, sessionEntry } from '@/lib/url-state'
@@ -75,6 +77,7 @@ export function PhoneRunHeader({ run, view, views, nav, agentName, keyboard, pri
     ...(assistant ? [{ id: 'assistant', label: 'Assistant', Icon: Sparkles, onSelect: () => useStore.getState().setAssistantOpen(true) }] : []),
   ]
   const state = run.switching ? `Switching to ${modeLabel[run.switching] ?? run.switching}…` : stateName(shown)
+  const account = runAccountWords(run, useStore((s) => memberName(s, run.account_member_id || run.member_id)))
 
   return (
     <>
@@ -91,7 +94,7 @@ export function PhoneRunHeader({ run, view, views, nav, agentName, keyboard, pri
             <StatusDot tone={toneOf(shown)} pulse={shown.state === 'working'} />
             <span className={keyboard ? 'whitespace-nowrap max-[399px]:sr-only' : 'min-w-0 truncate'}>
               <span role="status">{state}</span>
-              {!keyboard && <span> · {agentName} · {modeLabel[run.mode] ?? run.mode}{run.account_login_name && ` · login ${run.account_login_name}`}{run.account_login_per_use && ' · billed per use'}</span>}
+              {!keyboard && <span> · {agentName} · {modeLabel[run.mode] ?? run.mode}</span>}
             </span>
             {!keyboard && <RunLinearIssue run={run} compact className="coarse:h-auto coarse:px-0" />}
           </p>
@@ -99,6 +102,7 @@ export function PhoneRunHeader({ run, view, views, nav, agentName, keyboard, pri
         {primary && !keyboard && <Button size="sm" variant={asking && view === 'session' ? 'secondary' : 'primary'} onClick={primary.act}>{primary.label}</Button>}
         <RunActions run={run} compact views={[...elsewhere, ...panels]} extra={extra} />
       </header>
+      {account && !keyboard && <p className="break-words pr-3 pb-1 pl-9 text-ui-sm text-muted coarse:pl-13">{account}{run.account_login_per_use && ', billed per use'}</p>}
       {/* Folded, the tabs stay mounted out of sight: each view's panel is labelled by its tab. */}
       <div className={keyboard ? 'sr-only' : 'flex h-11 shrink-0 items-stretch border-b border-seam'}>
         <TabsList aria-label="Session views" className="h-11 min-w-0 flex-1 gap-0 coarse:h-11">
