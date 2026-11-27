@@ -50,11 +50,13 @@ type Connector struct {
 // ConnectorNotice is what the server's edge says about the address a
 // connector was added at. State is "retiring", where it still works, or
 // "retired", where it no longer does; URL is Resource's path at the
-// address the edge names instead. Date, YYYY-MM-DD or empty, is when the
-// edge's operator plans to retire it, text for people.
+// address the edge names instead, empty while the server does not take
+// connectors there or the notice came with the edge's pin. Date,
+// YYYY-MM-DD or empty, is when the edge's operator plans to retire it,
+// text for people.
 type ConnectorNotice struct {
 	State string `json:"state"`
-	URL   string `json:"url"`
+	URL   string `json:"url,omitempty"`
 	Date  string `json:"date,omitempty"`
 }
 

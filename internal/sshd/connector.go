@@ -190,13 +190,14 @@ func (s *Server) edgeNotices() edgeNotices {
 
 // noticeFor is what notices say about the connector URL u of this
 // server, nil when they say nothing. Its URL, u's path at the
-// replacement, is set only while the edge takes connectors there.
+// replacement, is set only while the edge takes connectors there and the
+// notices did not come with the pin, which nothing vouches for.
 func (s *Server) noticeFor(notices edgeNotices, u string) *protocol.ConnectorNotice {
 	for origin, n := range notices.byOrigin {
 		path, ok := strings.CutPrefix(u, origin)
 		if ok && (path == edgeproto.PathUniversalMCP || path == edgeproto.MCPPath(edgeproto.ServerID(s.hostKey.PublicKey()))) {
 			out := &protocol.ConnectorNotice{State: n.State, Date: n.Date}
-			if slices.Contains(notices.relays, n.Replacement) {
+			if !notices.firstUse && slices.Contains(notices.relays, n.Replacement) {
 				out.URL = n.Replacement + path
 			}
 			return out
@@ -212,10 +213,9 @@ func (s *Server) ConnectorNotice(u string) *protocol.ConnectorNotice {
 }
 
 // offered is the connector URL u at the address notices name instead of
-// u's, when the edge takes connectors there and the notices did not come
-// with the pin, and u otherwise.
+// u's when noticeFor names it, and u otherwise.
 func (s *Server) offered(notices edgeNotices, u string) string {
-	if n := s.noticeFor(notices, u); n != nil && n.URL != "" && !notices.firstUse {
+	if n := s.noticeFor(notices, u); n != nil && n.URL != "" {
 		return n.URL
 	}
 	return u

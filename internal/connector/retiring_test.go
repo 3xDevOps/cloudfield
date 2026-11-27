@@ -51,7 +51,7 @@ func TestConsentPageAtRetiringAddress(t *testing.T) {
 		{"retiring without a date", both, stored(false, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: newRelay}),
 			`<p class="retiring">This address is retiring. Add the connector at <code>` + newRelay + path + `</code> instead. Connecting here still works until it is retired.</p>`},
 		{"first use", both, stored(true, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: newRelay}),
-			`<p class="retiring">This address is retiring. Add the connector at <code>` + newRelay + path + `</code> instead. Connecting here still works until it is retired.</p>`},
+			`<p class="retiring">This address is retiring. Ask this server's admin where to add the connector instead. Connecting here still works until it is retired.</p>`},
 		{"replacement not announced", nil, stored(false, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: newRelay, Date: "2027-03-01"}),
 			`<p class="retiring">This address is retiring on <time>2027-03-01</time>. Ask this server's admin where to add the connector instead. Connecting here still works until it is retired.</p>`},
 		{"another address retiring", both, stored(false, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: oldRelay, Replacement: e.origin}), ""},
@@ -152,7 +152,7 @@ func TestConnectorListAtRetiringAddress(t *testing.T) {
 		{"retiring without a date", 6, both, stored(false, undated), nil, want{url: newRelay + "/mcp", universal: newRelay + "/mcp",
 			notices: at("retiring", "", newRelay+ownPath, newRelay+"/mcp")}},
 		{"first use", 6, both, stored(true, retiring), nil, want{url: universal, universal: universal,
-			notices: at("retiring", "2027-03-01", newRelay+ownPath, newRelay+"/mcp")}},
+			notices: at("retiring", "2027-03-01", "", "")}},
 		{"replacement not announced", 6, nil, stored(false, retiring), nil, want{url: universal, universal: universal,
 			notices: at("retiring", "2027-03-01", "", "")}},
 		{"edge before relay origins", 3, both, stored(false, retiring), nil, want{url: universal, universal: universal,
@@ -282,7 +282,7 @@ func TestToolResultNoticeAtRetiringAddress(t *testing.T) {
 	later(24*time.Hour - time.Second)
 	blocks(1)
 
-	e.edge.set(both, stored(true, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: newRelay}))
+	e.edge.set(both, stored(false, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: newRelay}))
 	later(24 * time.Hour)
 	if got, want := notice(blocks(2)), "Notice for the user: this connector was added at "+e.base+
 		", an address that is retiring. It must be added again at "+newURL+"."; got != want {
