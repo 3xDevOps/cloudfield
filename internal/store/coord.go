@@ -625,7 +625,7 @@ const RunMessageBatchBytes = 16 << 10
 // batchFit is how many of msgs, oldest first and at least one, fit in
 // RunMessageBatchBytes. 256 bytes cover the read's own fields and 120 each
 // message's field names, kind and timestamp; a report's message is printed
-// with its outcome and body, which count with 64 more.
+// with its outcome and its body, which count with 64 more.
 func batchFit(ctx context.Context, tx *sql.Tx, msgs []*RunMessage) (int, error) {
 	size := 256
 	for i, m := range msgs {
@@ -634,10 +634,11 @@ func batchFit(ctx context.Context, tx *sql.Tx, msgs []*RunMessage) (int, error) 
 		if m.Kind == RunMessageKindMessage && m.CorrelationID != "" {
 			var reportBody string
 			err := tx.QueryRowContext(ctx, `SELECT body FROM coord_reports WHERE id = ? AND run_id = ?`, m.CorrelationID, m.FromRun).Scan(&reportBody)
-			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			switch {
+			case errors.Is(err, sql.ErrNoRows):
+			case err != nil:
 				return 0, fmt.Errorf("store: size a report's body for its message batch: %w", err)
-			}
-			if reportBody != "" {
+			default:
 				printed, _ := json.Marshal(reportBody)
 				size += len(printed) + 64
 			}
