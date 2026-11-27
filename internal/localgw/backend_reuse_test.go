@@ -149,13 +149,46 @@ func TestSSHBackendSurvivesAnIdleControlChannelEnding(t *testing.T) {
 	}
 }
 
-// A kept channel skips the channel open that used to prove the connection
-// before a call's watchdog started. On a link that went silent the watchdog
-// fires long before the keepalive drops the connection, so the call must
-// find the connection dead itself and be answered over a new one.
-func TestSSHBackendRedialsWhenAKeptChannelGoesSilent(t *testing.T) {
+func shortenKeptFresh(t *testing.T, d time.Duration) {
+	old := keptFresh
+	keptFresh = d
+	t.Cleanup(func() { keptFresh = old })
+}
+
+// A kept channel skips the channel open that proves the connection answers
+// before a call's watchdog starts, so it carries a call only while the
+// server has just been heard from.
+func TestSSHBackendOpensAChannelOnAQuietConnection(t *testing.T) {
+	shortenKeptFresh(t, 200*time.Millisecond)
+	home := testhome.Isolate(t)
+	server := listen(t)
+	_, channels := serveControlChannels(t, server, nil, false)
+	b := NewSSHBackend(cli.Config{Addr: server.Addr().String(), KnownHosts: filepath.Join(home, "known_hosts")})
+	t.Cleanup(func() { _ = b.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	call := func() {
+		t.Helper()
+		if _, perr := b.Call(ctx, protocol.MethodServerInfo, nil); perr != nil {
+			t.Fatal(perr)
+		}
+	}
+	call()
+	time.Sleep(400 * time.Millisecond)
+	call()
+	if got := channels.Load(); got != 2 {
+		t.Fatalf("a call on a connection quiet for longer than keptFresh left %d control channels opened, want its own, 2", got)
+	}
+}
+
+// On a link that went silent the watchdog fires long before the keepalive
+// drops the connection. A call made then must wait for the drop and be
+// answered over a new connection, as it was when every call opened a channel.
+func TestSSHBackendRedialsASilentConnectionWithKeptChannels(t *testing.T) {
+	shortenKeptFresh(t, 100*time.Millisecond)
 	// As in production, the keepalive drop (10 intervals) outlasts the watchdog.
-	shortenKeepalive(t, 2*time.Second, 300*time.Millisecond)
+	shortenKeepalive(t, 100*time.Millisecond, 200*time.Millisecond)
 	old := callTimeout
 	callTimeout = 300 * time.Millisecond
 	t.Cleanup(func() { callTimeout = old })
@@ -172,8 +205,9 @@ func TestSSHBackendRedialsWhenAKeptChannelGoesSilent(t *testing.T) {
 		t.Fatal(perr)
 	}
 	path.silence()
+	time.Sleep(200 * time.Millisecond)
 	if _, perr := b.Call(ctx, protocol.MethodServerInfo, nil); perr != nil {
-		t.Fatalf("call on a kept channel of a silent connection = %v, want it answered over a new one", perr)
+		t.Fatalf("call on a silent connection that holds a kept channel = %v, want it answered over a new one", perr)
 	}
 	if got := connections.Load(); got != 2 {
 		t.Fatalf("server accepted %d connections, want 2", got)

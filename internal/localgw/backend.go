@@ -293,9 +293,20 @@ func callBound(method string) time.Duration {
 // for its next calls: the browser sends at most six requests at a time.
 const maxIdleControls = 8
 
+// keptFresh is how recently the server must have sent a byte for a call to
+// go on a kept channel. Opening a channel proves the connection answers
+// before the call's watchdog starts; a kept channel has only this. On a
+// quieter connection the call opens its own channel, which waits out a
+// dead link until the keepalive drops it and the call is redialed. A
+// variable so a test can shorten it.
+var keptFresh = 5 * time.Second
+
 // idleControl takes one of conn's answered control channels, nil when it
-// has none.
+// has none or conn has been quiet.
 func (b *sshBackend) idleControl(conn *cli.Conn) *protocol.Client {
+	if time.Since(conn.LastRead()) > keptFresh {
+		return nil
+	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.conn != conn || len(b.idle) == 0 {
@@ -381,19 +392,11 @@ func (b *sshBackend) callOnce(ctx context.Context, method string, params json.Ra
 			if answered {
 				b.keepControl(conn, client)
 			}
-			if answered || ctx.Err() != nil {
+			if answered || errors.As(cerr, &perr) {
 				return result, cerr
 			}
-			// Opening a channel used to prove the connection before the
-			// watchdog started. A watchdog that fires on a kept channel
-			// has no such proof, so the connection is probed: a dead one
-			// is dropped for Call to redial.
-			if errors.As(cerr, &perr) {
-				if b.alive(conn) {
-					return nil, cerr
-				}
-				b.invalidate(conn)
-				return nil, endToEnd(cfg, fmt.Errorf("%w: %s", errSilent, perr.Message))
+			if ctx.Err() != nil {
+				return nil, &protocol.Error{Code: protocol.CodeUnavailable, Message: "request cancelled"}
 			}
 		}
 	}
@@ -413,14 +416,14 @@ func (b *sshBackend) callOnce(ctx context.Context, method string, params json.Ra
 		return nil, err
 	}
 	b.invalidate(conn)
-	if resent {
-		return nil, unreachableError(endToEnd(cfg, err))
-	}
 	b.mu.Lock()
 	silent := b.silent == conn
 	b.mu.Unlock()
 	if silent {
-		return nil, endToEnd(cfg, fmt.Errorf("%w: %w", errSilent, err))
+		err = fmt.Errorf("%w: %w", errSilent, err)
+	}
+	if resent {
+		return nil, unreachableError(endToEnd(cfg, err))
 	}
 	return nil, endToEnd(cfg, err)
 }

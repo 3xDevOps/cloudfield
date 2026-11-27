@@ -203,13 +203,13 @@ For the local backend, opening a control channel on the connection costs two
 round trips to the server before the call's own, so a channel whose call was
 answered is kept (up to 8) and carries a later call, one call at a time.
 Calls in flight together each have their own channel. A channel whose call
-was cancelled or timed out is closed, never reused. Only replay-safe calls
-take a kept channel: if one has ended under a live connection, the call is
-sent again on a new channel, and the connection stays up. That second send is
-the call's one replay; if it fails too the call fails with `-32004`. A call
-that gets no answer on a kept channel within its time limit probes the
-connection with a keepalive, given 60 seconds: a connection that does not
-answer is dropped and the call is replayed over a new one.
+was cancelled or timed out is closed, never reused. A call takes a kept
+channel only when it is replay-safe and the server sent something on the
+connection in the last 5 seconds; otherwise it opens its own, which proves
+the connection answers before the call's time limit starts. If a kept
+channel has ended under a live connection, the call is sent again on a new
+channel and the connection stays up. That second send is the call's one
+replay: if it fails too, the call fails with `-32004`.
 
 A replay-safe call that fails on transport (a server
 restart or dropped network) redials once and retries once before surfacing
