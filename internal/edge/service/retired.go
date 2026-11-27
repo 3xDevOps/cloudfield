@@ -194,7 +194,9 @@ func (s *Service) deleteRetiredSignIns(ctx context.Context, retired []Retired) e
 			continue
 		}
 		if host := originHost(p.SigninOrigin); served[host] {
-			slog.Info("edge: keeping the sign-ins of a served sign-in origin once recorded beside a retired relay origin",
+			slog.Warn("edge: keeping the sign-ins of a served sign-in origin once recorded beside a retired relay origin: "+
+				"those issued while it was paired with the retired relay origin cannot be told apart and stay valid; "+
+				"sign those devices out on the Devices page of the sign-in origin",
 				"signin_origin", p.SigninOrigin, "relay_origin", p.RelayOrigin)
 		} else {
 			signinHosts[host] = true

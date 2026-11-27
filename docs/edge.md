@@ -1270,11 +1270,15 @@ Once its listeners are bound and before it serves, an edge with
 issued at a retired sign-in origin, or at any sign-in origin the edge recorded
 beside the retired relay origin earlier, matched by host name whatever the
 port, and those with no recorded origin, which were not used while the pair
-was retiring. A sign-in origin that a served pair still uses keeps its rows,
-even when the edge once recorded it beside the retired relay origin; the edge
-logs `edge: keeping the sign-ins of a served sign-in origin once recorded
-beside a retired relay origin` naming it. A start that fails earlier, on a refused option or a listener that
-cannot bind, deletes nothing. It logs `edge: deleted the sign-ins
+was retiring. A start that fails earlier, on a refused option or a listener
+that cannot bind, deletes nothing. A sign-in origin that a served pair still
+uses keeps its rows, even when the edge once recorded it beside the retired
+relay origin. The edge cannot tell the tokens and sessions issued there while
+it was paired with the retired relay from later ones, so they stay valid. At
+every such start it warns `edge: keeping the sign-ins of a served sign-in
+origin once recorded beside a retired relay origin` naming both origins. To
+end those sign-ins, have the people sign those devices out on the Devices page
+(`/devices`) of that sign-in origin. It logs `edge: deleted the sign-ins
 of retired pairs and those with no recorded origin devices=<n> sessions=<n>
 authorizations=<n>`. A server keeps its record of each device and its approval,
 as after a sign-out; the person signs the device in again at the replacement.
