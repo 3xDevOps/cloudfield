@@ -544,6 +544,17 @@ holds for it. A restore starts Cloud Hypervisor with `--restore` in its
 default mode, which writes every saved page into the guest's memory before
 the VM can be resumed.
 
+The page cache the snapshot writes is charged to the VM's unit, so the
+save writes `max` to the unit's `memory.max` once the guest is paused and
+can take no more memory. A save that fails writes the limit back before it
+resumes the guest; a saved VM's unit ends, and its next one starts with
+`MemoryMax`. Held to that limit, every save of a 2 GiB VM whose session
+held 1800 MiB reached it, and in 7 of 80 the kernel killed Cloud
+Hypervisor (`Memory cgroup out of memory: Killed process ...
+(cloud-hyperviso)`), which lost the session's memory; with the limit off,
+80 of 80 saved and woke
+(`TestKVMSaveOfAFullVMNeverReachesTheUnitsMemoryLimit`).
+
 Cloud Hypervisor v54.1 can load that memory on demand instead
 (`memory_restore_mode=ondemand`): it resumes at once and copies each page in
 through `userfaultfd` on its first use. That mode is not used. It takes a

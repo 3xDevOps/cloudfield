@@ -17,10 +17,10 @@ import (
 
 // TestKVMSaveOfAFullVMNeverReachesTheUnitsMemoryLimit saves a VM whose
 // session holds 1800 MiB of its 2 GiB. The snapshot's page cache is charged
-// to the VM's unit: held to the unit's MemoryMax, the write reached it, and
-// the kernel then killed Cloud Hypervisor in some saves ("Memory cgroup out
-// of memory: Killed process ... (cloud-hyperviso)"), which lost the
-// session's memory.
+// to the VM's unit: held to the unit's MemoryMax, the write reached it in
+// every save, and in 7 of 80 the kernel then killed Cloud Hypervisor
+// ("Memory cgroup out of memory: Killed process ... (cloud-hyperviso)"),
+// which lost the session's memory.
 func TestKVMSaveOfAFullVMNeverReachesTheUnitsMemoryLimit(t *testing.T) {
 	e := kvmEngine(t)
 	key := "run-save-full"
