@@ -675,7 +675,8 @@ user; a session with extra repositories (`--repo`) gets a line naming them.
 
 The `waiting` line appears only where Cloudfield resumes an idle session when
 mail arrives: Enhanced sessions and Standard sessions that load a native Claude
-Code, pi, omp or OpenCode integration. A protected session is never woken, so its line tells it
+Code, pi, omp or OpenCode integration or attach Codex to its app-server. A
+protected session is never woken, so its line tells it
 to wait in its turn while `coord.status` returns `protected: true`. Any other
 launch is told instead to wait for subsessions,
 peers or mail inside its turn with `cloudfield-internal inbox --wait 30` and never to report
@@ -792,7 +793,8 @@ See [agent installation](harnesses.md#incoming-coordination-hooks) for each
 destination, and [authoring an integration](harness-integration.md) for an
 unsupported agent.
 
-Coordinated, task-bearing Claude Code Standard sessions need no installation:
+Coordinated Claude Code Standard sessions, with or without a task, need no
+installation:
 their [managed launch](harnesses.md#incoming-coordination-hooks) loads the
 `claude.json` hooks next to the status reporter and an idle-wake waiter. It
 leaves out the inbox `Stop` hook: Claude Code runs all `Stop` hooks in
@@ -1274,7 +1276,10 @@ are on by default and go one level deep: a subsession cannot start subsessions, 
 Background one may start subsessions. A parent must wake when
 mail arrives, so `subsession start` from a Standard session of an agent with no idle
 wake is refused with `<agent> in Standard mode has no idle wake; start it in
-Enhanced`. Who may turn them off is in [teams.md](teams.md#subsessions).
+Enhanced`, or for Antigravity, which has no Enhanced mode, with `antigravity
+in Standard mode has no idle wake, and it has no Enhanced mode; as a
+subsession it runs only in Background, and a session that waits for mail needs
+another agent`. Who may turn them off is in [teams.md](teams.md#subsessions).
 
 ```sh
 /usr/local/bin/aether-internal subsession options
@@ -1293,11 +1298,16 @@ Enhanced`. Who may turn them off is in [teams.md](teams.md#subsessions).
   its quota used), `not-installed`, `not-signed-in` or `off` (the owner turned it
   off for subsessions, [teams.md](teams.md#choose-the-agents-subsessions-use)),
   with the sentence that says how to fix it. A `ready` login the server found signed out says so
-  in its sentence. `--harness` adds that agent's models.
+  in its sentence. Each agent lists its `modes` and `default_mode`; an agent
+  with no idle wake has no `standard`. `--harness` adds that agent's models.
 - `subsession start` takes `--harness`, `--purpose` (3-8 words, shown in the
   dashboard) and `--task` or `--task-file` (at most 24 KiB, so the escaped request fits the socket's 64 KiB; `-` reads
   standard input), plus optional `--model`, `--mode
-  standard|enhanced|background` and `--account <member-id>`. Without
+  standard|enhanced|background` and `--account <member-id>`. Without `--mode`
+  the subsession runs Enhanced where the agent's Enhanced mode is installed.
+  Where it is not, the subsession runs Standard, or Background if the agent
+  has no idle wake. `--mode standard` for an agent with no idle wake is
+  refused with the same message as a Standard parent of that agent. Without
   `--account`, a subsession of the parent's agent starts on the parent's
   account, and any other agent on the owner's own account. A parent handed over
   from another member is refused: it still runs the previous owner's agent on
@@ -1505,8 +1515,9 @@ What a report does depends on the session:
   stops short (for example on `max_tokens`) drops it, and the session shows that
   turn's own reason. `--for` with another outcome, or an unknown `--for`
   value, is refused with `CodeInvalidParams`. Report it only where mail
-  resumes the idle session (Enhanced sessions, managed Claude Code launches and
-  native pi, omp or OpenCode integrations); elsewhere nothing wakes the
+  resumes the idle session (Enhanced sessions, managed Claude Code launches,
+  Standard Codex on its app-server and native pi, omp or OpenCode
+  integrations); elsewhere nothing wakes the
   agent when a reply arrives, so it waits inside its turn with
   `inbox --wait 30`, and a Background session's turn end finishes the session.
   Nothing re-prompts the agent when a process finishes. For a pull request,

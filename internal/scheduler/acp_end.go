@@ -223,11 +223,18 @@ func (d *acpDriver) watch(entry *supervised, r *acpRun) {
 		entry.sessionLostAt = time.Now()
 	}
 	d.s.mu.Unlock()
-	if again {
+	switch {
+	case again:
 		cause = fmt.Errorf("%w; it was killed within %d minutes of its last restart, so Cloudfield did not restart it again", cause, int(acpLostAgain.Minutes()))
-	} else if restart {
-		d.restartKilled(entry, killedBy)
-		return
+	case restart:
+		// An agent started on a host short of memory takes back what its
+		// kill freed, and the next kill may land on another session.
+		available, floor, err := d.s.hostMemory()
+		if err != nil || available >= floor {
+			d.restartKilled(entry, killedBy)
+			return
+		}
+		cause = fmt.Errorf("%w; the host has %s of memory available, under the %s every launch keeps free, so Cloudfield did not restart it", cause, formatGiB(available), formatGiB(floor))
 	}
 	idle := agentstatus.Report{State: agentstatus.Idle, Reason: acpEndedReason + cause.Error()}
 	if stopped != "" {
@@ -265,7 +272,13 @@ func (d *acpDriver) restartKilled(entry *supervised, sig int) {
 	defer d.needGuest(entry)()
 	ctx, cancel := context.WithTimeout(context.Background(), acpConnectTimeout)
 	defer cancel()
-	if err := d.open(ctx, entry, openRestore); err != nil {
+	how := openRestore
+	// The restore is likeliest to fail right after a kill for memory, and a
+	// new conversation would replace the one the run records.
+	if run, err := d.s.cfg.Store.GetRun(ctx, entry.runID); err == nil && d.s.resumes(run.Harness) {
+		how = openWake
+	}
+	if err := d.open(ctx, entry, how); err != nil {
 		d.fail(entry, err)
 	}
 }
