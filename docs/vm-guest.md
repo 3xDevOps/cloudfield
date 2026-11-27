@@ -504,7 +504,7 @@ as nothing. A wake is admitted only when that fits
 
 A restored VM's clock stopped while it was saved. The server calls
 `SetClock`, through `guest.Client.SyncClock`, after every restore. Before a
-save it calls `Sync`, which writes every filesystem's dirty data to its
+save of a running VM it calls `Sync`, which writes every filesystem's dirty data to its
 disk, so the cache disk of a saved VM that is deleted without a restore
 holds what the session wrote. `Sync` then drops the guest's page cache.
 Free page reporting hands the freed memory to the host in passes 2 seconds
@@ -519,7 +519,10 @@ as each pass reports it, before the save ends. A VM frozen because the host
 was running out of memory
 ([failure-handling.md](failure-handling.md#recover-from-memory-pressure))
 is saved with neither `Sync` nor the wait, which would let its guest run:
-its saved state holds its page cache too.
+its saved state holds its page cache too. So is an idle VM paused in
+memory, whose page cache the guest's own trim
+([Memory the guest returns](#memory-the-guest-returns)) has cut to what
+the session keeps in use by then.
 
 ## Save and restore
 

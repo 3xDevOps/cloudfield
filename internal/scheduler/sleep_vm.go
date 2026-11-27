@@ -40,12 +40,6 @@ type woke struct {
 	resident bool
 }
 
-// residentLocked reports a sleeping VM still paused in the host's memory.
-// Caller holds Scheduler.mu.
-func (e *supervised) residentLocked() bool {
-	return e.asleepResident && !e.asleepSaved
-}
-
 func (w woke) notice() string {
 	kept := "the conversation, files and checkout are kept."
 	switch {
@@ -159,10 +153,7 @@ func (s *Scheduler) saveMarked(ctx context.Context, entry *supervised, saver run
 		saveErr = saver.Save(saveCtx, cid)
 	}
 	if saveErr == nil {
-		s.mu.Lock()
-		entry.asleepResident = park
-		s.mu.Unlock()
-		recordErr := s.recordSaved(entry, !park)
+		recordErr := s.recordSaved(entry, !park, park)
 		s.endSleep(entry, true)
 		return errors.Join(detachErr, recordErr)
 	}
@@ -253,7 +244,7 @@ func (s *Scheduler) reattach(ctx context.Context, entry *supervised, restored bo
 // capacity.
 func (s *Scheduler) restoreAsleep(ctx context.Context, entry *supervised, saver runtime.SaveRuntime) (woke, error) {
 	s.mu.Lock()
-	cid, closed, resident := entry.containerID, entry.retained, entry.residentLocked()
+	cid, closed, resident := entry.containerID, entry.retained, entry.asleepResident
 	s.mu.Unlock()
 	restoreErr := saver.Restore(ctx, cid)
 	if restoreErr == nil {
@@ -288,6 +279,7 @@ func (s *Scheduler) restoreAsleep(ctx context.Context, entry *supervised, saver 
 	}
 	if !info.Exited {
 		_ = s.cfg.Runtime.Resume(ctx, cid)
+		resident = resident && errors.Is(restoreErr, runtime.ErrNotSaved)
 		s.superviseWoken(entry, resident)
 		return woke{restored: true, resident: resident}, nil
 	}
@@ -456,15 +448,12 @@ func (s *Scheduler) superviseWoken(entry *supervised, resident bool) {
 	go s.superviseWait(entry)
 }
 
-// recordSaved records whether entry's sleeping VM holds its saved memory.
-// One whose saved memory is gone holds no paused guest either.
-func (s *Scheduler) recordSaved(entry *supervised, saved bool) error {
+// recordSaved records where entry's sleeping VM holds its memory: saved to
+// disk, paused in the host's, or nowhere.
+func (s *Scheduler) recordSaved(entry *supervised, saved, resident bool) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if entry.asleepSaved && !saved {
-		entry.asleepResident = false
-	}
-	entry.asleepSaved = saved
+	entry.asleepSaved, entry.asleepResident = saved, resident
 	if err := s.writeSidecar(entry.sidecar()); err != nil {
 		return fmt.Errorf("record whether the sleeping session is saved: %w", err)
 	}
@@ -484,7 +473,7 @@ func (s *Scheduler) resaveAsleep(ctx context.Context, entry *supervised, saver r
 	if err := saver.Save(ctx, cid); err != nil {
 		return errors.Join(fmt.Errorf("save the session again: %w", err), detachErr)
 	}
-	return errors.Join(detachErr, s.recordSaved(entry, true))
+	return errors.Join(detachErr, s.recordSaved(entry, true, false))
 }
 
 // saveRecoveredAsleep finishes the save of the VM of a run recorded asleep
@@ -502,7 +491,7 @@ func (s *Scheduler) saveRecoveredAsleep(ctx context.Context, entry *supervised, 
 		s.mu.Unlock()
 		return fmt.Errorf("save the sleeping session: %w", err)
 	}
-	return s.recordSaved(entry, true)
+	return s.recordSaved(entry, true, false)
 }
 
 // saveAsleepRunning is saveRecoveredAsleep for the memory guard: the VM is
@@ -557,5 +546,5 @@ func (s *Scheduler) endAsleepVM(ctx context.Context, entry *supervised) error {
 	if err := s.cfg.Runtime.Stop(ctx, cid, s.cfg.StopGrace); err != nil && !errors.Is(err, runtime.ErrNotFound) {
 		return fmt.Errorf("discard the saved session: %w", err)
 	}
-	return errors.Join(s.recordSaved(entry, false), s.MarkDevelopmentContainerEnded(ctx, entry.runID))
+	return errors.Join(s.recordSaved(entry, false, false), s.MarkDevelopmentContainerEnded(ctx, entry.runID))
 }

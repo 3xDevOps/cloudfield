@@ -57,8 +57,7 @@ func (s *Scheduler) watchVMMemory(ctx context.Context) {
 
 // guardVMMemory saves session VMs to disk before the host's OOM killer ends
 // one, and never stops one. While less than twice the floor is free it
-// saves the VMs of sleeping and closed sessions, one a check. For the
-// others it starts once available memory falls below
+// saves the VMs paused in memory. For the others it starts once available memory falls below
 // admission's floor, or the host has stalled on memory as systemd-oomd
 // measures it, and stops once twice the floor is free and the stall has
 // eased. Until then it saves one VM a check while less than twice the floor
@@ -105,27 +104,35 @@ func (s *Scheduler) checkVMMemory(ctx context.Context) (uint64, bool) {
 	}
 	if !calm {
 		if available < 2*floor {
-			s.saveAsleepVM(ctx)
+			s.savePausedVMs(ctx)
 		}
 		return 0, false
 	}
-	return available - 2*floor, true
-}
-
-// saveAsleepVM saves one VM nobody uses, as the sleep sweep left paused in
-// memory, while less than twice the floor is free: its memory is back
-// before the host is short and the brake freezes the sessions that work.
-// Caller holds vmMemoryMu.
-func (s *Scheduler) saveAsleepVM(ctx context.Context) {
+	// A wake's admission saves the paused VMs for the room it lacks.
+	var paused uint64
 	candidates, writing := s.memoryCandidates(ctx)
 	for _, c := range candidates {
-		if c.rank() > 0 {
+		if c.resident && s.saveFits(c, writing, false) {
+			paused += c.memory
+		}
+	}
+	return available - 2*floor + paused, true
+}
+
+// savePausedVMs saves the VMs the sleep sweep left paused in memory, the
+// longest asleep first, until twice the floor is free: their memory is
+// back before the host is short and the brake freezes the sessions that
+// work. Caller holds vmMemoryMu.
+func (s *Scheduler) savePausedVMs(ctx context.Context) {
+	candidates, writing := s.memoryCandidates(ctx)
+	for _, c := range candidates {
+		if available, floor, err := s.hostMemory(); err != nil || available >= 2*floor || ctx.Err() != nil {
 			return
 		}
-		if !s.saveFits(c, writing) {
+		if !c.resident || !s.saveFits(c, writing, false) {
 			continue
 		}
-		if saved, held := s.heldSave(c, false); saved || held {
+		if _, held := s.heldSave(c, false); held {
 			return
 		}
 	}
@@ -195,7 +202,7 @@ func (s *Scheduler) saveIdleVMs(ctx context.Context, need uint64) bool {
 		if available, floor, err := s.hostMemory(); err != nil || available >= 2*floor+need || !c.idle || ctx.Err() != nil {
 			break
 		}
-		if !s.saveFits(c, writing) {
+		if !s.saveFits(c, writing, true) {
 			continue
 		}
 		done, held := s.heldSave(c, false)
@@ -243,16 +250,18 @@ func (s *Scheduler) markSaving(entry *supervised) func() {
 
 // memoryCandidate is a running session VM a save under memory pressure may
 // take. asleep is one of a run recorded asleep, which this server holds
-// nothing in. idle is false while its agent works, since is its last
+// nothing in, and resident one of those the sleep sweep paused in memory.
+// idle is false while its agent works, since is its last
 // activity and memory is what it holds of the host's.
 type memoryCandidate struct {
-	e      *supervised
-	cid    runtime.ID
-	closed bool
-	asleep bool
-	idle   bool
-	since  time.Time
-	memory uint64
+	e        *supervised
+	cid      runtime.ID
+	closed   bool
+	asleep   bool
+	resident bool
+	idle     bool
+	since    time.Time
+	memory   uint64
 }
 
 func (c memoryCandidate) rank() int {
@@ -296,7 +305,7 @@ func (s *Scheduler) memoryCandidates(ctx context.Context) (out []memoryCandidate
 		switch {
 		case !e.asleepSince.IsZero():
 			if !e.asleepSaved && memory[e.containerID] > 0 {
-				out = append(out, memoryCandidate{e: e, cid: e.containerID, closed: e.retained, asleep: true, idle: true, since: e.asleepSince, memory: memory[e.containerID]})
+				out = append(out, memoryCandidate{e: e, cid: e.containerID, closed: e.retained, asleep: true, resident: e.asleepResident, idle: true, since: e.asleepSince, memory: memory[e.containerID]})
 			}
 		case e.retained && e.paused && !e.destroyPending && !e.evidencePending && e.retainedUntil != nil:
 			out = append(out, memoryCandidate{e: e, cid: e.containerID, closed: true, idle: true, memory: memory[e.containerID]})
@@ -336,7 +345,7 @@ func (s *Scheduler) saveForMemory(ctx context.Context, working bool) bool {
 		if !working && !c.idle {
 			break
 		}
-		if !s.saveFits(c, writing) {
+		if !s.saveFits(c, writing, true) {
 			continue
 		}
 		if saved, held := s.heldSave(c, working); saved || held {
@@ -352,7 +361,7 @@ func (s *Scheduler) saveForMemory(ctx context.Context, working bool) bool {
 // writing have written theirs. A VM whose memory is unknown does not: its
 // save could write anything. A closed one always does, as it is stopped and
 // writes nothing.
-func (s *Scheduler) saveFits(c memoryCandidate, writing uint64) bool {
+func (s *Scheduler) saveFits(c memoryCandidate, writing uint64, warn bool) bool {
 	if c.closed {
 		return true
 	}
@@ -368,6 +377,9 @@ func (s *Scheduler) saveFits(c memoryCandidate, writing uint64) bool {
 		return false
 	}
 	if data.FreeBytes < diskReserve(data.TotalBytes, s.cfg.MinFreeBytes)+reclaimHeadroom+writing+c.memory {
+		if !warn {
+			return false
+		}
 		slog.Warn("scheduler: memory guard: no room on disk to save a session VM", "run", c.e.runID, "memory", c.memory, "writing", writing, "free", data.FreeBytes)
 		return false
 	}

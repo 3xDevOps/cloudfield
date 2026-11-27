@@ -62,7 +62,7 @@ func (s *Scheduler) Sleep(run domain.RunID) SleepState {
 		return SleepState{}
 	}
 	since := entry.asleepSince
-	state := SleepState{AsleepSince: &since, Saved: entry.asleepSaved || entry.asleepResident, InMemory: entry.residentLocked(), Waking: entry.waking != nil}
+	state := SleepState{AsleepSince: &since, Saved: entry.asleepSaved || entry.asleepResident, InMemory: entry.asleepResident, Waking: entry.waking != nil}
 	if entry.wakeErr != nil {
 		state.WakeError = entry.wakeErr.Error()
 	}
@@ -296,7 +296,7 @@ func (s *Scheduler) wakeLive(ctx context.Context, entry *supervised) (woke, erro
 		return woke{}, fmt.Errorf("%w: the session is ending", ErrNoLiveEnvironment)
 	}
 	cid := entry.containerID
-	resident := entry.residentLocked()
+	resident := entry.asleepResident
 	entry.admitting = true
 	s.mu.Unlock()
 

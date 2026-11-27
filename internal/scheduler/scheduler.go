@@ -614,8 +614,8 @@ type supervised struct {
 	// waiting for it, and the save again after a failed wake.
 	asleepSaved bool
 	// asleepResident is set while a sleeping VM is paused in the host's
-	// memory, where the sleep sweep left it; one the memory guard has
-	// saved since comes back paused.
+	// memory, where the sleep sweep left it, until the memory guard saves
+	// it or it stops.
 	asleepResident bool
 	saveFailedAt   time.Time
 	memorySaving   int

@@ -338,29 +338,69 @@ func TestTheMemoryGuardSavesTheLongestIdleVMFirst(t *testing.T) {
 	}
 }
 
-// A VM the sleep sweep paused in memory is saved while less than twice the
-// floor is free, before the host is short; one whose session is awake is
-// left alone until then.
-func TestTheMemoryGuardSavesAPausedVMBeforeTheHostIsShort(t *testing.T) {
-	t.Parallel()
-	e, mr := newMemoryEnv(t)
-	paused := e.launchVM(t, mr, "say pong", 1<<30)
+// pauseIdle has the sleep sweep pause every idle VM in memory.
+func (e *testEnv) pauseIdle(t *testing.T, vms ...runtime.ID) {
+	t.Helper()
 	after := e.sched.cfg.VMSleepAfter
 	e.sched.cfg.VMSleepAfter = time.Nanosecond
-	e.sleepRun(t, e.runOf(t, paused))
-	e.sched.cfg.VMSleepAfter = after
-	idle := e.launchVM(t, mr, "say pong", 1<<30)
-	if mr.isSaved(paused) {
-		t.Fatal("the idle sleep saved the VM instead of pausing it")
+	defer func() { e.sched.cfg.VMSleepAfter = after }()
+	for _, cid := range vms {
+		e.sleepRun(t, e.runOf(t, cid))
 	}
+}
+
+// VMs the sleep sweep paused in memory are saved until twice the floor is
+// free, before the host is short; one whose session is awake is left alone
+// until then.
+func TestTheMemoryGuardSavesPausedVMsBeforeTheHostIsShort(t *testing.T) {
+	t.Parallel()
+	e, mr := newMemoryEnv(t)
+	first := e.launchVM(t, mr, "say pong", 1<<30)
+	second := e.launchVM(t, mr, "say pong", 1<<30)
+	third := e.launchVM(t, mr, "say pong", 1<<30)
+	e.pauseIdle(t, first, second, third)
+	if mr.saveCount() != 0 {
+		t.Fatal("the idle sleep saved a VM instead of pausing it")
+	}
+	idle := e.launchVM(t, mr, "say pong", 1<<30)
 	mr.setAvailable(5 << 30)
 
 	e.guard(t)
-	if !mr.isSaved(paused) || mr.isSaved(idle) {
-		t.Fatalf("with 5 GiB available the paused VM is saved %v and the awake one %v, want only the paused one", mr.isSaved(paused), mr.isSaved(idle))
+	if mr.saveCount() != 2 || mr.isSaved(idle) {
+		t.Fatalf("with 5 GiB available the guard saved %d VMs, the awake one %v; want two paused ones, which free twice the floor", mr.saveCount(), mr.isSaved(idle))
 	}
-	if state := e.sched.Sleep(e.runOf(t, paused)); !state.Saved || state.InMemory {
-		t.Fatalf("the saved VM sleeps as %+v, want it saved to disk", state)
+	for _, cid := range []runtime.ID{first, second, third} {
+		if state := e.sched.Sleep(e.runOf(t, cid)); state.InMemory == mr.isSaved(cid) || !state.Saved {
+			t.Fatalf("a paused VM, saved %v, sleeps as %+v", mr.isSaved(cid), state)
+		}
+	}
+}
+
+// A session the guard saved while it worked wakes on its own into the room
+// a paused VM holds, and the paused VM is saved for it.
+func TestTheMemoryGuardWakesAVMItSavedIntoTheRoomPausedVMsHold(t *testing.T) {
+	t.Parallel()
+	e, mr := newMemoryEnv(t)
+	working := e.launchVM(t, mr, acpmock.PromptWait, 3<<30)
+	workingRun := e.runOf(t, working)
+	mr.setAvailable(3 << 30)
+	e.guard(t)
+	if !mr.isSaved(working) || e.memorySaved(workingRun) != 3<<30 {
+		t.Fatal("the guard did not save the working VM, marked to wake")
+	}
+	mr.setAvailable(20 << 30)
+	paused := e.launchVM(t, mr, "say pong", 3<<30)
+	e.pauseIdle(t, paused)
+
+	// 0.6 GiB above the stop level, and 3 GiB more in the paused VM.
+	mr.setAvailable(7 << 30)
+	e.guard(t)
+	if e.asleep(workingRun) {
+		t.Fatal("the guard left the VM it saved asleep although a paused VM held the room it needs")
+	}
+	e.guard(t)
+	if !mr.isSaved(paused) {
+		t.Fatal("the guard did not save the paused VM once the woken one took its room")
 	}
 }
 

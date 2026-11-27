@@ -290,6 +290,42 @@ func TestAnIdleVMIsPausedInMemoryAndResumesWithItsAgent(t *testing.T) {
 	waitItems(t, s2, run.ID, "the wake's notice", noticed("Woke from sleep", "paused this idle session in the server's memory"))
 }
 
+// A paused VM a prompt resumed is still waited on: its exit ends the run.
+func TestAResumedVMsExitEndsItsRun(t *testing.T) {
+	t.Parallel()
+	e, _, _ := newSaveEnv(t, false)
+	run := e.launchACP(t, "say pong")
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	e.sleepRun(t, run.ID)
+	if _, err := e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "after the pause"}, false, nil); err != nil {
+		t.Fatalf("a prompt to a paused session: %v", err)
+	}
+	waitItems(t, e.sched, run.ID, "a turn after the pause", turnEnded("end_turn", 2))
+	e.container(t, run.ID).endProcess(0)
+	e.waitTerminal(t, run.ID)
+}
+
+// A VM that stops while paused in memory sleeps on its disks from then on,
+// and its next use starts it from them.
+func TestAPausedVMThatStopsSleepsOnItsDisks(t *testing.T) {
+	t.Parallel()
+	e, _, _ := newSaveEnv(t, true)
+	run := e.launchACP(t, "say pong")
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	e.sleepRun(t, run.ID)
+	e.container(t, run.ID).endProcess(137)
+	waitFor(t, "the session asleep on its disks", func() bool {
+		state := e.sched.Sleep(run.ID)
+		return state.AsleepSince != nil && !state.Saved && !state.InMemory
+	})
+	if _, err := e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "after the stop"}, false, nil); err != nil {
+		t.Fatalf("a prompt to a session whose paused VM stopped: %v", err)
+	}
+	if state := containerState(e.container(t, run.ID)); state != "running" {
+		t.Fatalf("the prompt left the VM %s, want it started from its disks", state)
+	}
+}
+
 // A VM that stopped while paused in memory, as with its host, is taken up
 // asleep on its disks.
 func TestAPausedVMThatStoppedWithItsHostSleepsOnItsDisks(t *testing.T) {

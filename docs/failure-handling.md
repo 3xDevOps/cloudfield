@@ -389,7 +389,8 @@ last memory in two steps: a brake that freezes them at once, and a memory
 guard that then frees memory by saving them to disk.
 
 The brake reads `MemAvailable` from `/proc/meminfo` every 500 ms. Below the
-floor it freezes every session's VM by writing `1` to the
+floor it freezes every session's VM, except those already paused in memory,
+by writing `1` to the
 `cgroup.freeze` of its unit under `/sys/fs/cgroup/aether.slice`. That takes
 one write per VM, no new process and no answer from systemd, Cloud
 Hypervisor or the guest, so it works on a host with no memory left. A
@@ -452,9 +453,11 @@ close sessions, which thaws theirs, or free memory or disk.
 
 The memory guard reads `/proc/meminfo` and
 `/proc/pressure/memory` every 5 seconds. While less than twice the floor is
-free it saves the VMs of sleeping sessions that are paused in memory, one
-each check and the longest asleep first, so their memory is back before
-any session that works is touched. For the others it starts when available memory
+free it saves the VMs of sleeping sessions that are paused in memory, the
+longest asleep first, until twice the floor is free again, so their memory
+is back before any session that works is touched. Working VMs that take
+memory faster than those saves return it still reach the floor and the
+brake. For the others it starts when available memory
 falls below the floor, or when the host stalls on memory: `full avg10` at
 60% or more for 30 seconds, which means every task was blocked on memory
 for most of the time. Those are systemd-oomd's defaults, where it starts
@@ -813,8 +816,9 @@ the connection is refused until you start it again. The request that woke it wai
 container starts and the agent restores its conversation, then goes through.
 Two wakes at once start the container once. Waking counts against the same
 memory and disk checks as a launch, and a saved VM must fit its saved memory
-([Recover from memory pressure](#recover-from-memory-pressure)); a VM paused
-in memory already holds what it wakes with and passes no check. A refused or failed wake returns its
+([Recover from memory pressure](#recover-from-memory-pressure)); a VM
+still paused in memory already holds what it wakes with and passes no
+check. A refused or failed wake returns its
 error to the request that caused it, keeps the session asleep and shows the
 error under **Asleep since**. A container's wake never starts a new
 conversation: when the agent cannot restore its own, every wake fails with
@@ -871,9 +875,14 @@ launch's memory check counts as used. While less than twice the memory
 floor is free, the server saves paused VMs to disk, one every 5 seconds and
 the longest paused first ([Recover from memory
 pressure](#recover-from-memory-pressure)): 1.6 to 2.3 seconds each in that
-test. So paused VMs only ever hold memory the host has to spare, and a
-small host saves most of them soon after they pause. A paused VM whose
-memory does not fit on the data disk above its reserve stays paused. A wake
+test. So paused VMs hold only memory above that line, and a small host
+saves most of them soon after they pause. A session the server saved while
+it worked wakes on its own into the room paused VMs hold: its wake saves
+them. A paused VM is saved only while the data filesystem has its reserve,
+4 GiB and the VM's memory free. On a fuller disk it stays paused, launches
+are refused for memory, and at the floor working sessions stay frozen:
+free disk space or close sessions
+([Recover from disk pressure](#recover-from-disk-pressure)). A wake
 restores a saved VM where it was. A server restart or update leaves a
 paused VM paused. Its memory is gone with the host's: after a host reboot,
 or once the kernel's OOM killer ended its hypervisor, the session starts
