@@ -22,11 +22,27 @@ func TestRenderRunsStripsControlCharacters(t *testing.T) {
 		Title:  "t\x1b]0;spoof\x07",
 		Task:   "x\r\x1b[2K",
 	}}
-	if err := renderRuns(&b, runs, func(string) string { return "m" }, map[string]string{}, false, false); err != nil {
+	if err := renderRuns(&b, &b, runs, func(string) string { return "m" }, map[string]string{}, nil, false, false); err != nil {
 		t.Fatal(err)
 	}
 	if strings.ContainsAny(b.String(), "\x1b\x07\r") {
 		t.Fatalf("control bytes reached the terminal output: %q", b.String())
+	}
+}
+
+// A request's link and option ids come from the agent.
+func TestNeedLinesStripControlCharacters(t *testing.T) {
+	lines := needLines(protocol.AttentionItem{
+		RunID: "run-1",
+		Kind:  protocol.AttentionKindPermission,
+		Request: &protocol.AttentionRequest{
+			ID:      "req-1",
+			URL:     "https://x\x1b]0;spoof\x07",
+			Options: []protocol.AttentionOption{{ID: "allow\x1b[2J", Label: "Allow", Kind: "allow_once"}},
+		},
+	})
+	if out := strings.Join(lines, "\n"); len(lines) < 2 || strings.ContainsAny(out, "\x1b\x07") {
+		t.Fatalf("control bytes reached the terminal output: %q", out)
 	}
 }
 
