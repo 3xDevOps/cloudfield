@@ -80,11 +80,15 @@ func TestLoginIDResolvesTheCallersOwnLogin(t *testing.T) {
 		t.Fatalf("loginID(personal) = %v; want the names it takes", err)
 	}
 
-	renamed := []protocol.AgentLogin{{ID: "lgn-test2", Name: "lgn-test1"}, {ID: "default", Name: "default"}, {ID: "lgn-test1", Name: "work"}}
-	if _, err := loginID(renamed, "lgn-test1"); err == nil || err.Error() != `"lgn-test1" names two of your logins, as the id of login work and as the name of the login with id lgn-test2; use work or lgn-test2` {
-		t.Fatalf("loginID(one login's id and another's name) = %v; want both named", err)
+	// Each login's name is the other's id: each is still reached by its id.
+	crossed := []protocol.AgentLogin{{ID: "lgn-test2", Name: "lgn-test1"}, {ID: "default", Name: "default"}, {ID: "lgn-test1", Name: "lgn-test2"}}
+	for value, want := range map[string]string{"lgn-test1": "lgn-test1", "lgn-test2": "lgn-test2", "default": "default"} {
+		if id, err := loginID(crossed, value); err != nil || id != want {
+			t.Errorf("loginID(%s) = %q, %v; want %s", value, id, err, want)
+		}
 	}
-	for value, want := range map[string]string{"work": "lgn-test1", "lgn-test2": "lgn-test2", "default": "default"} {
+	renamed := []protocol.AgentLogin{{ID: "lgn-test2", Name: "lgn-test1"}, {ID: "default", Name: "default"}, {ID: "lgn-test1", Name: "work"}}
+	for value, want := range map[string]string{"work": "lgn-test1", "lgn-test1": "lgn-test1", "lgn-test2": "lgn-test2", "default": "default"} {
 		if id, err := loginID(renamed, value); err != nil || id != want {
 			t.Errorf("loginID(%s) = %q, %v; want %s", value, id, err, want)
 		}

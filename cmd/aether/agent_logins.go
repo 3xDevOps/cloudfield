@@ -376,20 +376,14 @@ func listLogins(c *protocol.Client, agent string) ([]protocol.AgentLogin, error)
 }
 
 // loginID resolves one of the caller's logins, named by its id or its name,
-// to its id; a retry a launch printed names the login by id. A name may
-// look like an id, so a value that is one login's id and another's name is
-// refused.
+// to its id. An id wins: a name taken before ids were reserved may look
+// like another login's id, and the id is how either is still reached.
 func loginID(logins []protocol.AgentLogin, name string) (string, error) {
-	byID := slices.IndexFunc(logins, func(l protocol.AgentLogin) bool { return l.ID == name })
-	byName := slices.IndexFunc(logins, func(l protocol.AgentLogin) bool { return l.Name == name })
-	switch {
-	case byID >= 0 && byName >= 0 && byID != byName:
-		return "", fmt.Errorf("%q names two of your logins, as the id of login %s and as the name of the login with id %s; use %s or %s",
-			name, logins[byID].Name, logins[byName].ID, logins[byID].Name, logins[byName].ID)
-	case byID >= 0:
-		return logins[byID].ID, nil
-	case byName >= 0:
-		return logins[byName].ID, nil
+	if i := slices.IndexFunc(logins, func(l protocol.AgentLogin) bool { return l.ID == name }); i >= 0 {
+		return logins[i].ID, nil
+	}
+	if i := slices.IndexFunc(logins, func(l protocol.AgentLogin) bool { return l.Name == name }); i >= 0 {
+		return logins[i].ID, nil
 	}
 	return "", fmt.Errorf("you have no login named %q; cloudfield agent logins lists yours", name)
 }
