@@ -1,7 +1,9 @@
 package scheduler
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -150,6 +152,34 @@ func TestSupervisorStartsANewConversationWhenTheResumeFailsAtOnce(t *testing.T) 
 	if got, _ := os.ReadFile(state); strings.TrimSpace(string(got)) != "n1 started" {
 		t.Fatalf("state after the new conversation started = %q", got)
 	}
+}
+
+// A state file from the container's previous start must not read as this
+// start's agent having exited.
+func TestSupervisorRecordsThatItsAgentExited(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	next, state := filepath.Join(dir, "next-command"), filepath.Join(dir, "state")
+	if err := os.WriteFile(state, []byte("exited 0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := startTestPTYProcess(t, supervisorCommand(next, state, 0, []string{"/bin/sh", "-c", "printf 'agent-%s\\n' up; read -r line; exit 3"}))
+	defer func() {
+		_ = p.cmd.Process.Kill()
+		_ = p.master.Close()
+	}()
+	p.waitForOutput(t, "agent-up")
+	if got, err := os.ReadFile(state); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("state while the agent runs = %q, err = %v; want none", got, err)
+	}
+	if _, err := p.master.Write([]byte("quit\n")); err != nil {
+		t.Fatal(err)
+	}
+	p.waitForOutput(t, "[aether] harness exited with code 3")
+	waitFor(t, "the agent's exit in the supervisor state", func() bool {
+		got, _ := os.ReadFile(state)
+		return string(got) == "exited 3\n"
+	})
 }
 
 func TestSupervisorIgnoresServedSwap(t *testing.T) {

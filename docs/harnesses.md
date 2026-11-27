@@ -1010,8 +1010,8 @@ banner with the line, and the transcript records it.
 The line is typed only when all of these hold. Otherwise the wake stays owed
 and the server tries again, at least every 30 seconds:
 
-- The session is running: not paused, not switching mode, not protected. Mail
-  wakes a sleeping session VM first and types once its terminal is back.
+- The session is running: not paused, not protected. Mail wakes a sleeping
+  session VM first and types once its terminal is back.
 - The agent has turned on bracketed paste. The line arrives as one paste and
   Enter follows 200 ms later. With bracketed paste off nothing is typed: these
   CLIs leave a line that arrives together with its Enter unsent in the input
@@ -1033,9 +1033,14 @@ What the server cannot see:
 - A draft left in the agent's input box for more than 10 seconds is submitted
   joined to the line.
 - A dialog the agent shows on its own, such as a sign-in prompt or a
-  permission question, takes the line and its Enter.
+  permission question, takes the line. The Enter confirms the dialog's
+  highlighted choice, and that mail is not typed for again.
 - A typed line is not proof that the agent read its inbox. Mail stays unread
   until the agent's `inbox` call acknowledges it.
+
+Nothing is typed once the agent exits and its terminal shows a login shell.
+Mail then starts no turn in that session, also not in an agent you start in
+the shell by hand.
 
 Antigravity, a custom agent, an agent whose command an administrator overrode
 and a session with `--conflict-coordination=false` are never typed into.

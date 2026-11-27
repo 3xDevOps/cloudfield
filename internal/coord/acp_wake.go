@@ -171,11 +171,7 @@ func (s *Service) wakeEnhanced(run domain.RunID) (retry bool) {
 		reading := s.inboxConsumers[run] > 0
 		s.mu.Unlock()
 		var prompt strings.Builder
-		switch {
-		case len(ids) == 0 || reading:
-		case typed:
-			prompt.WriteString(protocol.CoordInboxLine(len(ids)))
-		default:
+		if len(ids) > 0 && !reading {
 			prompt.WriteString(protocol.CoordInboxContext(len(ids)))
 		}
 		// The turn may have ended while admission waited.

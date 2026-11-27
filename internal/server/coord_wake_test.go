@@ -347,8 +347,8 @@ func TestATypedWakeWaitsForTheMemberInControl(t *testing.T) {
 		svc.WakeIdle(f.run.ID)
 		select {
 		case line := <-waker.lines:
-			if line != protocol.CoordInboxLine(unread) {
-				t.Fatalf("typed %q, want the one line %q", line, protocol.CoordInboxLine(unread))
+			if line != protocol.CoordInboxContext(unread) {
+				t.Fatalf("typed %q, want the inbox notice alone: %q", line, protocol.CoordInboxContext(unread))
 			}
 		case <-time.After(3 * time.Second):
 			t.Fatal("the owed wake was not typed")

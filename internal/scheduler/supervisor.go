@@ -44,10 +44,12 @@ func supervisorCommand(nextFile, stateFile string, resumeSettle time.Duration, a
 // empty; a second SIGALRM while the first is pending kills the child, and one
 // after the file's nonce was consumed is ignored. The file's first line is
 // "# <nonce>"; the state file reads "<nonce> started" once the old child is
-// gone and "<nonce> exited <status>" when the new one exits. With
+// gone and "<nonce> exited <status>" when the new one exits. It starts
+// absent, and reads "exited <status>" once the argv exits on its own. With
 // resume_settle set, an argv that fails within that many seconds runs the
 // file's body as SIGALRM would.
 const supervisorScript = `exec 3<&0
+rm -f "$state_file"
 nl='
 '
 child=
@@ -137,6 +139,8 @@ if [ "$#" -gt 0 ]; then
 		if [ -n "$resume_settle" ] && [ "$status" -ne 0 ] && [ $(($(date +%s) - started)) -lt "$resume_settle" ]; then
 			printf '[aether] the agent could not reopen its conversation, so it starts a new one\n'
 			swap=1
+		else
+			printf 'exited %s\n' "$status" > "$state_file"
 		fi
 	fi
 fi
@@ -201,6 +205,13 @@ esac`
 
 // swapBound must exceed swapScript's own 15 seconds plus the settle time.
 const swapBound = 30 * time.Second
+
+// supervisorState reads the supervisor's state file, empty while it has
+// none.
+func (s *Scheduler) supervisorState(ctx context.Context, cid runtime.ID) (string, error) {
+	_, stdout, _, err := s.cfg.Runtime.Exec(ctx, cid, []string{"/bin/sh", "-c", `cat "$1" 2>/dev/null || :`, "aether-state", supervisorStateFile}, "")
+	return stdout, err
+}
 
 func (s *Scheduler) swapChild(ctx context.Context, cid runtime.ID, nonce string, settle time.Duration) error {
 	ctx, cancel := context.WithTimeout(ctx, swapBound)

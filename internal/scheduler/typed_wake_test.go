@@ -11,6 +11,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
 	"github.com/3xDevOps/cloudfield/internal/ptyhost"
+	"github.com/3xDevOps/cloudfield/internal/runtime"
 )
 
 // launchQuiet launches a coordinated Standard session of agent and ages it
@@ -30,7 +31,7 @@ func (e *testEnv) launchQuiet(t *testing.T, agent string) (domain.RunID, *superv
 }
 
 func typedWakeLine(unread int) string {
-	return coordhooks.Named(protocol.CoordInboxLine(unread), coordhooks.NewCLI)
+	return strings.TrimSuffix(coordhooks.Named(protocol.CoordInboxContext(unread), coordhooks.NewCLI), "\n")
 }
 
 func TestMailTypesOneLineIntoAnIdleTerminal(t *testing.T) {
@@ -43,7 +44,7 @@ func TestMailTypesOneLineIntoAnIdleTerminal(t *testing.T) {
 			if !e.sched.Wakeable(run) || !e.sched.TypedWake(run) || e.sched.InTurn(run) {
 				t.Fatalf("an idle Standard %s session: wakeable %v, typed %v, in turn %v", agent, e.sched.Wakeable(run), e.sched.TypedWake(run), e.sched.InTurn(run))
 			}
-			if err := e.sched.Wake(t.Context(), run, protocol.CoordInboxLine(2)); err != nil {
+			if err := e.sched.Wake(t.Context(), run, protocol.CoordInboxContext(2)); err != nil {
 				t.Fatalf("Wake: %v", err)
 			}
 			line := typedWakeLine(2)
@@ -86,12 +87,11 @@ func TestATypedWakeWaitsForAQuietUnattendedTerminal(t *testing.T) {
 		{"a person typed 9 s ago", terminal(func() { sess.typed = time.Now().Add(-9 * time.Second) }), terminal(func() { sess.typed = time.Now().Add(-11 * time.Second) })},
 		{"the session resumed 2 s ago", session(func() { entry.quietFrom = time.Now().Add(-2 * time.Second) }), session(func() { entry.quietFrom = time.Now().Add(-4 * time.Second) })},
 		{"the session is paused", session(func() { entry.paused = true }), session(func() { entry.paused = false })},
-		{"the session is switching mode", session(func() { entry.switching = domain.LaunchACP }), session(func() { entry.switching = "" })},
 		{"an input request is open", session(func() { entry.pendingInputs = []domain.RunInputRequest{{}} }), session(func() { entry.pendingInputs = nil })},
 		{"a sudo prompt is open", session(func() { entry.sudo = []*sudoRequest{{}} }), session(func() { entry.sudo = nil })},
 	} {
 		tc.block()
-		err := e.sched.Wake(t.Context(), run, protocol.CoordInboxLine(1))
+		err := e.sched.Wake(t.Context(), run, protocol.CoordInboxContext(1))
 		if err == nil || len(e.pty.injected()) != 0 {
 			t.Fatalf("while %s: Wake = %v, typed %+v; want the wake left owed", tc.name, err, e.pty.injected())
 		}
@@ -103,7 +103,7 @@ func TestATypedWakeWaitsForAQuietUnattendedTerminal(t *testing.T) {
 		}
 		tc.clear()
 	}
-	if err := e.sched.Wake(t.Context(), run, protocol.CoordInboxLine(1)); err != nil {
+	if err := e.sched.Wake(t.Context(), run, protocol.CoordInboxContext(1)); err != nil {
 		t.Fatalf("Wake once nothing holds it: %v", err)
 	}
 	if got := e.pty.injected(); len(got) != 1 || got[0].message != typedWakeLine(1) {
@@ -126,7 +126,7 @@ func TestATypedWakeTypesAfterItsVMWakes(t *testing.T) {
 	if !sr.isSaved(e.cid(t, run)) || !e.sched.Wakeable(run) {
 		t.Fatal("the saved Standard VM is not wakeable for mail")
 	}
-	if err := e.sched.Wake(t.Context(), run, protocol.CoordInboxLine(1)); err == nil {
+	if err := e.sched.Wake(t.Context(), run, protocol.CoordInboxContext(1)); err == nil {
 		t.Fatal("Wake of a sleeping VM reported the line typed")
 	}
 	if e.sched.Sleep(run).AsleepSince != nil || sr.restores != 1 || len(e.pty.injected()) != 0 {
@@ -135,11 +135,33 @@ func TestATypedWakeTypesAfterItsVMWakes(t *testing.T) {
 	e.sched.mu.Lock()
 	entry.quietFrom = time.Now().Add(-time.Minute)
 	e.sched.mu.Unlock()
-	if err := e.sched.Wake(t.Context(), run, protocol.CoordInboxLine(1)); err != nil {
+	if err := e.sched.Wake(t.Context(), run, protocol.CoordInboxContext(1)); err != nil {
 		t.Fatalf("Wake of the woken VM: %v", err)
 	}
 	if got := e.pty.injected(); len(got) != 1 || got[0].message != typedWakeLine(1) {
 		t.Fatalf("typed %+v, want the line once", got)
+	}
+}
+
+// The supervisor leaves a login shell where the agent exited. bash turns
+// bracketed paste on at its prompt, so only the supervisor's state tells the
+// two apart.
+func TestMailIsNotTypedIntoTheShellAnExitedAgentLeaves(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t, withServerBinary(fakeServerBinary(t, "typed wake cli")))
+	withCoordination(t, e)
+	e.rt.execHandler = func(_ runtime.ID, argv []string) (int, string, error) {
+		if slices.Contains(argv, supervisorStateFile) {
+			return 0, "exited 0\n", nil
+		}
+		return 0, "", nil
+	}
+	run, _ := e.launchQuiet(t, "gemini")
+	if err := e.sched.Wake(t.Context(), run, protocol.CoordInboxContext(1)); err == nil || len(e.pty.injected()) != 0 {
+		t.Fatalf("Wake = %v, typed %+v; want nothing typed into the shell", err, e.pty.injected())
+	}
+	if e.sched.Wakeable(run) {
+		t.Fatal("the session whose agent exited is still wakeable, so its wake is retried without end")
 	}
 }
 
@@ -168,7 +190,7 @@ func TestOnlyShippedTypedWakeAgentsAreTypedInto(t *testing.T) {
 			if e.sched.TypedWake(run) {
 				t.Fatalf("a Standard session of %s is woken by typing", tc.name)
 			}
-			_ = e.sched.Wake(t.Context(), run, protocol.CoordInboxLine(1))
+			_ = e.sched.Wake(t.Context(), run, protocol.CoordInboxContext(1))
 			if got := e.pty.injected(); len(got) != 0 {
 				t.Fatalf("mail typed %+v into a Standard session of %s", got, tc.name)
 			}

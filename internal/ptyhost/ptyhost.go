@@ -68,8 +68,7 @@ var (
 	ErrWriteDenied     = errors.New("ptyhost: write access denied")
 	ErrInvalidRunID    = errors.New("ptyhost: invalid session id")
 	ErrSessionReplaced = errors.New("ptyhost: terminal was replaced")
-	// ErrPasteModeOff refuses InjectPasted.
-	ErrPasteModeOff = errors.New("ptyhost: the terminal has bracketed paste mode off")
+	ErrPasteModeOff    = errors.New("ptyhost: the terminal has bracketed paste mode off")
 	// ErrSnapshotPending means one bounded, deduplicated background repair is
 	// rebuilding a missing, stale, or invalid screen checkpoint.
 	ErrSnapshotPending = errors.New("ptyhost: terminal snapshot repair pending")

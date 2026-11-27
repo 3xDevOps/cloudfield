@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
@@ -19,7 +20,7 @@ const (
 
 // TypedWake reports a Standard session whose idle wake is a line typed into
 // its terminal. A launch on a definition that replaces the shipped agent
-// records no idle wake.
+// records no idle wake, and a session whose agent exited loses it.
 func (s *Scheduler) TypedWake(run domain.RunID) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -43,11 +44,11 @@ func (s *Scheduler) typeWake(ctx context.Context, run domain.RunID, line string)
 	defer awake()
 	s.mu.Lock()
 	entry := s.runs[run]
-	if entry == nil || entry.paused || entry.switching != "" || entry.atPrompt() {
+	if entry == nil || entry.paused || entry.atPrompt() {
 		s.mu.Unlock()
-		return errors.New("scheduler: typed wake held: the session is paused, switching mode or waiting for an answer")
+		return errors.New("scheduler: typed wake held: the session is paused or waiting for an answer")
 	}
-	quiet, agent := entry.startedAt, entry.harness
+	quiet, agent, cid := entry.startedAt, entry.harness, entry.containerID
 	if entry.quietFrom.After(quiet) {
 		quiet = entry.quietFrom
 	}
@@ -62,5 +63,17 @@ func (s *Scheduler) typeWake(ctx context.Context, run domain.RunID, line string)
 	if in, _ := s.cfg.PTY.LastInput(key); time.Since(in) < typedWakeQuietInput {
 		return errors.New("scheduler: typed wake held: a person typed in the terminal")
 	}
-	return s.cfg.PTY.InjectPasted(ctx, key, "Cloudfield", "", line, harness.SubmitSequence(agent))
+	// The supervisor leaves a login shell where the agent exited, and bash
+	// turns bracketed paste on at its prompt.
+	state, err := s.supervisorState(ctx, cid)
+	if err != nil {
+		return fmt.Errorf("scheduler: typed wake: read the session supervisor's state: %w", err)
+	}
+	if strings.Contains(state, "exited ") {
+		s.mu.Lock()
+		entry.idleWake = false
+		s.mu.Unlock()
+		return errors.New("scheduler: typed wake dropped: the agent exited and its terminal runs a shell")
+	}
+	return s.cfg.PTY.InjectPasted(ctx, key, "Cloudfield", "", strings.TrimSuffix(line, "\n"), harness.SubmitSequence(agent))
 }
