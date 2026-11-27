@@ -349,7 +349,28 @@ func (e *testEnv) pauseIdle(t *testing.T, vms ...runtime.ID) {
 	}
 }
 
-// VMs the sleep sweep paused in memory are saved until twice the floor is
+// An idle VM whose memory does not fit on the data disk is saved at once:
+// paused, it would keep its memory whatever the host is short of.
+func TestAnIdleVMThatDoesNotFitOnDiskIsSavedNotPaused(t *testing.T) {
+	t.Parallel()
+	e, mr := newMemoryEnv(t)
+	fits := e.launchVM(t, mr, "say pong", 1<<30)
+	e.pauseIdle(t, fits)
+	tight := e.launchVM(t, mr, "say pong", 1<<30)
+	// As in TestTheMemoryGuardSkipsSavesThatFailedOrWouldNotFitOnDisk.
+	var free atomic.Uint64
+	free.Store(19 << 29)
+	setFreeBytes(e, &free)
+	e.pauseIdle(t, tight)
+
+	if mr.isSaved(fits) || !e.sched.Sleep(e.runOf(t, fits)).InMemory {
+		t.Fatalf("an idle VM that fits on disk sleeps as %+v, want it paused in memory", e.sched.Sleep(e.runOf(t, fits)))
+	}
+	if state := e.sched.Sleep(e.runOf(t, tight)); !mr.isSaved(tight) || state.InMemory || !state.Saved {
+		t.Fatalf("an idle VM that does not fit on disk sleeps as %+v, saved %v; want it saved to disk", state, mr.isSaved(tight))
+	}
+}
+
 // free, before the host is short; one whose session is awake is left alone
 // until then.
 func TestTheMemoryGuardSavesPausedVMsBeforeTheHostIsShort(t *testing.T) {

@@ -767,7 +767,12 @@ func (s *Scheduler) sleepLive(ctx context.Context, entry *supervised) error {
 		return err
 	}
 	if saving {
-		return s.saveLive(ctx, entry, saver, true)
+		// The guard could not take back the memory of a paused VM that does
+		// not fit on the data disk, so that one is saved now, and disk
+		// reclaim makes its room.
+		memory := s.vmMemoryUse(ctx)[cid]
+		park := memory == 0 || s.saveFits(memoryCandidate{e: entry, memory: memory}, 0, false)
+		return s.saveLive(ctx, entry, saver, park)
 	}
 	undo := func(cause error) error {
 		undoCtx := context.WithoutCancel(ctx)

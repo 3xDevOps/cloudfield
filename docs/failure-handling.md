@@ -879,9 +879,11 @@ test. So paused VMs hold only memory above that line, and a small host
 saves most of them soon after they pause. A session the server saved while
 it worked wakes on its own into the room paused VMs hold: the server saves
 them first. A paused VM is saved only while the data filesystem has its
-reserve, 4 GiB and the VM's memory free. On a fuller disk it stays paused,
-a launch that needs its memory is refused, and at the floor working
-sessions stay frozen: free disk space or close sessions
+reserve, 4 GiB and the VM's memory free, so an idle VM is paused only while
+it does: on a fuller disk a sleep saves it at once, and disk reclaim makes
+the room. A VM already paused when the disk fills stays paused, a launch
+that needs its memory is refused, and at the floor working sessions stay
+frozen: free disk space or close sessions
 ([Recover from disk pressure](#recover-from-disk-pressure)). A wake
 restores a saved VM where it was. A server restart or update leaves a
 paused VM paused. Wake paused sessions before `cloudfield server update
