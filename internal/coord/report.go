@@ -45,11 +45,8 @@ type OutcomeSink interface {
 	// empty for agents.
 	ReportWaiting(ctx context.Context, run domain.RunID, id, waitingFor, summary string, at time.Time) error
 	ReportAnswered(ctx context.Context, run domain.RunID, id, summary string, at time.Time) error
-	// ReportsSince is when the stretch of run's work that its reports are
-	// compared within began: its turn start, the last time its agent
-	// stopped working on a prompt, or the server's start. Zero when
-	// unknown or when a member's message may have changed the work.
-	ReportsSince(run domain.RunID) time.Time
+	// TurnStartedAt is when run's current turn started, zero when unknown.
+	TurnStartedAt(run domain.RunID) time.Time
 }
 
 // UntilRegistry keeps the conditions a run waits on: the watch service.
@@ -242,14 +239,13 @@ func (s *Service) reportState(ctx context.Context, run domain.RunID, p protocol.
 }
 
 // repeatWindow is how long after a report another one can be its repeat.
-// Claude Code's second model call after a report follows within seconds; a
-// report made later is the result of more work, whatever caused it.
+// Claude Code's second model call after a report follows within seconds.
 var repeatWindow = 2 * time.Minute
 
-// reportedFinal reports whether the last success, failure or blocked report
-// of run's current turn is a success or failure that still stands.
+// reportedFinal reports whether run's current turn reported, within
+// repeatWindow, a success or failure that still stands.
 func (s *Service) reportedFinal(ctx context.Context, run domain.RunID) (bool, error) {
-	since := s.cfg.Outcomes.ReportsSince(run)
+	since := s.cfg.Outcomes.TurnStartedAt(run)
 	if since.IsZero() {
 		return false, nil
 	}

@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -822,31 +821,19 @@ func (s *Service) enqueueChildReport(ctx context.Context, report *store.CoordRep
 	if target == nil || target.WorkspaceID != report.WorkspaceID || target.ID == report.RunID {
 		return errors.New("subsession report parent is outside the reporting subsession's workspace")
 	}
-	// A retry sends under the key first chosen, whatever the run did since.
-	s.mu.Lock()
-	first := s.reportFirsts[report.ID]
-	s.mu.Unlock()
-	if first == "" {
-		if first, err = s.turnReport(ctx, report); err != nil {
-			return fmt.Errorf("enqueue subsession report: %w", err)
-		}
-		s.mu.Lock()
-		s.reportFirsts[report.ID] = first
-		s.mu.Unlock()
+	first, err := s.firstOfRepeat(ctx, report)
+	if err != nil {
+		return fmt.Errorf("enqueue subsession report: %w", err)
 	}
 	msg := &store.RunMessage{
 		WorkspaceID: report.WorkspaceID, FromRun: report.RunID, ToRun: target.ID,
-		Kind: store.RunMessageKindMessage, Body: report.Summary, CorrelationID: report.ID,
+		Kind: store.RunMessageKindMessage, Body: report.Summary, CorrelationID: first,
 		IdempotencyKey: "coord-report-" + string(report.Outcome) + ":" + first + ":" + string(target.ID),
 	}
 	if err = s.cfg.Mail.RetireProvisionalReports(ctx, report.RunID, target.ID, report.CreatedAt); err != nil {
 		return fmt.Errorf("enqueue subsession report: %w", err)
 	}
 	created, err := appendRunMessage(ctx, s.cfg.Mail, msg)
-	// The key holds another report of the turn: the parent has the outcome.
-	if errors.Is(err, store.ErrIdempotencyConflict) {
-		return nil
-	}
 	if err != nil {
 		return fmt.Errorf("enqueue subsession report: %w", err)
 	}
@@ -856,43 +843,28 @@ func (s *Service) enqueueChildReport(ctx context.Context, report *store.CoordRep
 	return nil
 }
 
-// turnReport is the ID of the report whose inbox message key report shares:
-// the first of the reports with report's outcome that the run made in a row
-// since ReportsSince and within repeatWindow before it. A parent
-// that has a message under that key is not sent the outcome again, and one
-// that has none gets report. A report has a key of its own when the run
-// read mail or reported needs-input, waiting or answered since then.
-func (s *Service) turnReport(ctx context.Context, report *store.CoordReport) (string, error) {
-	if s.cfg.Outcomes == nil {
-		return report.ID, nil
-	}
-	since := s.cfg.Outcomes.ReportsSince(report.RunID)
-	if since.IsZero() || report.CreatedAt.Before(since) {
-		return report.ID, nil
-	}
-	turn, err := s.cfg.Mail.CoordReportsSince(ctx, report.RunID, since)
+// firstOfRepeat is the ID of the report whose inbox message stands for
+// report: report itself, unless it is the run's latest report and says
+// again, word for word, what the report before it said less than
+// repeatWindow earlier, with no mail read in between. The parent then has,
+// or now gets, that earlier report's message, which reads the same.
+func (s *Service) firstOfRepeat(ctx context.Context, report *store.CoordReport) (string, error) {
+	recent, err := s.cfg.Mail.CoordReportsSince(ctx, report.RunID, report.CreatedAt.Add(-repeatWindow))
 	if err != nil {
 		return "", err
 	}
-	i := slices.IndexFunc(turn, func(r *store.CoordReport) bool { return r.ID == report.ID })
-	if i <= 0 || turn[i-1].Outcome != report.Outcome || report.CreatedAt.Sub(turn[i-1].CreatedAt) >= repeatWindow {
+	i := len(recent) - 1
+	if i <= 0 || recent[i].ID != report.ID {
 		return report.ID, nil
 	}
 	read, err := s.cfg.Mail.LastRunMessageDeliveredAt(ctx, report.RunID)
 	if err != nil {
 		return "", err
 	}
-	state, err := s.cfg.Mail.CoordStateReportedSince(ctx, report.RunID, since)
-	if err != nil {
-		return "", err
-	}
-	if state != "" || !read.Before(since) {
-		return report.ID, nil
-	}
-	for i > 0 && turn[i-1].Outcome == report.Outcome && report.CreatedAt.Sub(turn[i-1].CreatedAt) < repeatWindow {
+	for i > 0 && recent[i-1].Outcome == report.Outcome && recent[i-1].Summary == report.Summary && recent[i-1].CreatedAt.After(read) {
 		i--
 	}
-	return turn[i].ID, nil
+	return recent[i].ID, nil
 }
 
 // publishReportEvidence persists any child-report inbox message, then
@@ -973,7 +945,6 @@ func (s *Service) publishReportEvidence(ctx context.Context, report *store.Coord
 	report.PublishedAt = &now
 	s.mu.Lock()
 	delete(s.reportPackets, report.ID)
-	delete(s.reportFirsts, report.ID)
 	s.mu.Unlock()
 	return nil
 }

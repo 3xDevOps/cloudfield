@@ -682,12 +682,6 @@ func (s *Scheduler) injectLive(ctx context.Context, entry *supervised, workspace
 	if err = s.endRunWaits(ctx, run, "a person sent a new prompt"); err != nil {
 		return "", err
 	}
-	// What the agent reports from here to its next turn may answer this
-	// message, whenever it reads it. Set before delivery, so the turn the
-	// message starts ends the hold.
-	s.mu.Lock()
-	entry.reportsHeld = true
-	s.mu.Unlock()
 	outcome, err := s.entryDriver(entry).Deliver(ctx, r, m, prompt, steer, delivered)
 	if err != nil {
 		return "", err

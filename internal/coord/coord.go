@@ -221,15 +221,12 @@ type Service struct {
 	enhancedWakeLocks map[domain.RunID]*sync.Mutex
 	enhancedSweeps    map[domain.RunID]struct{}
 	reportPackets     map[string]protocol.EvidencePacket
-	// reportFirsts is, per unpublished report, the report whose inbox
-	// message key it shares.
-	reportFirsts map[string]string
-	runs         map[domain.RunID]*runLifecycle
-	reportCursor store.CoordOutboxCursor
-	auditCursor  store.CoordOutboxCursor
-	outboxKick   chan struct{}
-	closed       bool
-	wg           sync.WaitGroup
+	runs              map[domain.RunID]*runLifecycle
+	reportCursor      store.CoordOutboxCursor
+	auditCursor       store.CoordOutboxCursor
+	outboxKick        chan struct{}
+	closed            bool
+	wg                sync.WaitGroup
 
 	// mailRefusals holds each run whose last success or failure report was
 	// refused for unread mail; true once it has called coord.inbox since.
@@ -300,7 +297,6 @@ func New(cfg Config) (*Service, error) {
 		enhancedWakeLocks: make(map[domain.RunID]*sync.Mutex),
 		enhancedSweeps:    make(map[domain.RunID]struct{}),
 		reportPackets:     make(map[string]protocol.EvidencePacket),
-		reportFirsts:      make(map[string]string),
 		runs:              make(map[domain.RunID]*runLifecycle),
 		outboxKick:        make(chan struct{}, 1),
 	}, nil

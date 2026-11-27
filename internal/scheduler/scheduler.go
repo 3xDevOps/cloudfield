@@ -553,15 +553,6 @@ type supervised struct {
 	// turnStartedAt is when the agent's last turn started; child mail a
 	// parent got before it is mail that turn could handle.
 	turnStartedAt time.Time
-	// reportsSince is when the stretch of work that outcome reports are
-	// compared within began: the turn start, the last time the agent
-	// stopped working on a prompt, as it does before a follow-up turn of
-	// its own, a relaunch, or this server's start. It is never persisted
-	// and never moves back.
-	reportsSince time.Time
-	// reportsHeld is set from a member's message, question or answer to the
-	// next turn start: no report in between repeats an earlier one.
-	reportsHeld bool
 	// reportAsked is the turnStartedAt of the last turn whose end was held
 	// for a missing report (HoldTurnEnd), and stopHeld marks a Standard run
 	// whose held stop no idle report has followed yet.
