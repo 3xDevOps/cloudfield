@@ -3038,10 +3038,15 @@ collapsing the form and a reload. Each opening reads `agent.login.list`
 afresh, and the pick is sent only once that read holds it: while it is read
 the field says "<name>: reading your logins…", a failed read shows "Your
 logins could not be read." with the error verbatim and **Retry login read**
-(only with a login picked or several logins in the last read, so a member
-who has added none sees nothing of it),
+(only with a login picked, several logins in the last read, or a saved
+"your logins only" below, so a member who has added none sees nothing of
+it),
 and a login removed meanwhile reads "You have no login <name> any more. Pick
-another to launch."; **Launch** stays off in all three. When the caller's only
+another to launch."; **Launch** stays off in all three. Without a pick,
+for a member with several logins in the last read or a saved "your logins
+only", **Launch** also waits for the read under "Login · Reading your
+logins…", and a failed read keeps the several-logins form, so the saved
+choice is sent and saved unchanged. When the caller's only
 login has Automatic off, a line above **Launch** says a session that names no
 login is refused until Automatic is on, on Agents or with `cloudfield agent
 logins auto default on`. With several

@@ -9,14 +9,14 @@ import { AccountPicker, readiness, useAccountStatus } from '@/components/launch/
 import { agentLabel } from '@/components/launch/modes'
 import { loginAgent } from '@/components/agents/agent-logins'
 import { LoginPicker, MoveSwitch, useOwnLogins } from '@/components/launch/login-picker'
-import { automaticFallback, ChildRunsSwitch, type ChildRunsChoice, fallbackParams, FallbackOptions, RunLimitsOption, WorkspaceLine } from '@/components/launch/launch-options'
+import { automaticFallback, ChildRunsSwitch, type ChildRunsChoice, fallbackParams, FallbackOptions, ownLoginsOnly, RunLimitsOption, WorkspaceLine } from '@/components/launch/launch-options'
 import { PermissionControl, permissionFeature } from '@/components/launch/permission-control'
 import { ExtraRepos } from '@/components/launch/extra-repos'
 import { PhoneLaunchSheet } from '@/components/launch/phone-launch'
 import { LinkedIssue, OfferedIssue } from '@/components/launch/linked-issue'
 import { AgentOptions, needsTask, RunFields, useAgentChoice } from '@/components/launch/run-fields'
 import { emptyLimits, parseLimits, useServerRunLimits } from '@/components/launch/run-limits'
-import { fallbackFromSaved, fallbackToSaved, SaveAccountDefault, SavedIssues } from '@/components/launch/saved-defaults'
+import { fallbackFromSaved, fallbackToSaved, SaveAccountDefault, SavedIssues, savedOwnLogins } from '@/components/launch/saved-defaults'
 import { AdoptCommand, adoptCommand, SetupOutput, setupOutput } from '@/components/launch/setup-output'
 import { LoaderCircle, X } from '@/components/icons'
 import { Button } from '@/components/ui/button'
@@ -152,6 +152,10 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   const pickedLogin = loginsOffered && picked ? picked.id : ''
   // A picked login is sent only once a fresh read of the list holds it; until then the launch waits.
   const loginWait = loginsOffered && login && !picked ? (ownRead === null ? 'reading' : ownRead.error !== null ? 'unread' : 'gone') : null
+  // For a member who saved "your logins only", read several logins before or picked one, the list decides what is sent:
+  // Launch waits while it is read, and a failed read keeps the several-logins form, so the saved choice is sent and saved unchanged.
+  const listMatters = loginsOffered && (savedOwnLogins(saved?.defaults, ownAccountID) || knewSeveral || !!login)
+  const ownForm = severalLogins || (listMatters && !ownLogins)
   const accountName = accounts.find((member) => member.id === account)?.display_name ?? account
   const taskMissing = needsTask(mode, task)
   const dictating = useDictating()
@@ -255,7 +259,10 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   const saveAccountDefault = () => saveLaunchDefaults((current) => ({
     ...current,
     account_member_id: account === ownAccountID ? '' : account,
-    fallback: fallbackToSaved(fallback, accounts, account, severalLogins),
+    // Read as Off where it cannot show (another agent, or one login), "your logins only" stays saved.
+    fallback: !ownForm && !sharedAccount && savedOwnLogins(current, ownAccountID) && ownLoginsOnly(fallback, accounts, account)
+      ? current.fallback
+      : fallbackToSaved(fallback, accounts, account, ownForm),
   }))
 
   const setUp = () => {
@@ -290,7 +297,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
       ...(link ? { linear_issue_url: link.url } : {}),
       ...(sharedAccount ? { account_member_id: account } : {}),
       ...(pickedLogin ? { login: pickedLogin } : {}),
-      ...fallbackParams(fallback, accounts, account, severalLogins),
+      ...fallbackParams(fallback, accounts, account, ownForm),
       ...extraRepos,
       ...(childRunsOffered && childRuns && mode !== 'headless' ? { children: childRuns } : {}),
       ...(Object.keys(parsedLimits.limits).length ? { limits: parsedLimits.limits } : {}),
@@ -354,7 +361,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
         </Callout>
       )}
       {agentError && <Callout tone="failed" role="alert">{agentError}</Callout>}
-      {loginsOffered && ownRead?.error && (login || knewSeveral) && (
+      {listMatters && ownRead?.error && (
         <Callout
           tone="failed"
           role="alert"
@@ -401,20 +408,20 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   const accountReadiness = (member: Member) => readiness(accountStatus[member.id], harness, member.id === ownAccountID ? undefined : member.display_name, now)
   // Only the default login's usage is read here, with the account's when there are several accounts.
   const loginUsage = { default: accountStatus[ownAccountID]?.usage?.find((provider) => provider.provider === loginAgent) }
-  const moves = !fallbackParams(fallback, accounts, account, severalLogins).no_fallback
+  const moves = !fallbackParams(fallback, accounts, account, ownForm).no_fallback
   const setMoves = (on: boolean) => { fallbackPicked.current = true; setFallback({ ...fallback, off: !on }) }
   const moveSwitch = severalLogins && <MoveSwitch accounts={accounts.length > 1} moves={moves} onMoves={setMoves} disabled={launching} />
-  const loginChoice = loginsOffered && (severalLogins || login) && (ownLogins
-    ? (
+  const loginChoice = loginsOffered && (ownLogins
+    ? (severalLogins || login) && (
       <div className="flex flex-col gap-1">
         <LoginPicker logins={ownLogins} value={login?.id ?? ''} onChange={(id) => setLogin(id ? { id, name: ownLogins.find((item) => item.id === id)?.name ?? id } : null)} usage={loginUsage} now={now} moves={moves} move={moveSwitch} disabled={launching} />
         {loginWait === 'gone' && login && <p role="alert" className="text-ui-sm text-state-failed">You have no login {login.name} any more. Pick another to launch.</p>}
       </div>
     )
-    : login && (
+    : listMatters && (login || ownRead === null) && (
       <p className="flex flex-col gap-1 text-ui-sm text-muted">
         <span className="text-ui font-medium text-text">Login</span>
-        {loginWait === 'reading' ? `${login.name}: reading your logins…` : `${login.name}: your logins could not be read.`}
+        {login ? `${login.name}: ${ownRead === null ? 'reading your logins…' : 'your logins could not be read.'}` : 'Reading your logins…'}
       </p>
     ))
   const fallbackOffered = accounts.length > 1 || severalLogins
@@ -430,7 +437,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
       {!phone && loginChoice}
       {fallbackOffered && (
         <>
-          <FallbackOptions accounts={accounts} ownAccountID={ownAccountID} account={account} logins={severalLogins} fallback={fallback} onFallback={(next) => { fallbackPicked.current = true; setFallback(next) }} status={accountReadiness} />
+          <FallbackOptions accounts={accounts} ownAccountID={ownAccountID} account={account} logins={ownForm} fallback={fallback} onFallback={(next) => { fallbackPicked.current = true; setFallback(next) }} status={accountReadiness} />
           {savesDefaults && <SaveAccountDefault choice={JSON.stringify([account, fallback])} onSave={saveAccountDefault} saves={saves} />}
         </>
       )}
@@ -458,7 +465,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
     </>
   )
   // agents is null while the chosen account's list is read, and harness may still be the last account's.
-  const launchDisabled = launching || !accountsRead || accountsReadError !== null || !workspace || !account || !harness || !agents || taskMissing || dictating || loginWait !== null
+  const launchDisabled = launching || !accountsRead || accountsReadError !== null || !workspace || !account || !harness || !agents || taskMissing || dictating || loginWait !== null || (listMatters && ownRead === null)
 
   if (!visible) return null
 
