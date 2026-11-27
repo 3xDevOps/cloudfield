@@ -1,10 +1,12 @@
 package connector
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -96,6 +98,29 @@ func TestConsentPageAtRetiringAddress(t *testing.T) {
 				t.Fatalf("wrong code = %d, want 403 still warning %s:\n%s", resp.StatusCode, tt.want, page)
 			}
 		})
+	}
+}
+
+func TestConsentPageWithoutNoticeIsUnchanged(t *testing.T) {
+	feature := regexp.MustCompile(`(?s)\{\{if \.Retiring\}\}.*?\{\{end\}\}|\{\{with \.Retiring\}\}.*?retired\.</p>\n\{\{end\}\}`)
+	if n := len(feature.FindAllString(consentHTML, -1)); n != 2 {
+		t.Fatalf("found %d notice blocks in the consent template, want 2", n)
+	}
+	without := parseConsent(feature.ReplaceAllString(consentHTML, ""))
+	for _, st := range consentStates() {
+		if st.page.Retiring != nil {
+			continue
+		}
+		var got, want bytes.Buffer
+		if err := consentTemplate.Execute(&got, st.page); err != nil {
+			t.Fatal(err)
+		}
+		if err := without.Execute(&want, st.page); err != nil {
+			t.Fatal(err)
+		}
+		if got.String() != want.String() {
+			t.Errorf("%s: the page with no notice differs from the template without notices:\n%s\nwant:\n%s", st.name, got.String(), want.String())
+		}
 	}
 }
 
