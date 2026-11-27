@@ -62,7 +62,7 @@ async function open(retiring?: EdgeStatusNotice, alsoAt: string[] = [], serversE
   render(<OnboardingRoute params={{}} client={client} />)
   fireEvent.click(await screen.findByRole('radio', { name: 'Cloudfield relay' }))
   if (alsoAt.length === 0) await vi.waitFor(() => expect(client.localEdgeServers).toHaveBeenCalled())
-  else await vi.waitFor(() => expect(noticeText()).not.toBeNull())
+  if (retiring) await vi.waitFor(() => expect(noticeText()).not.toBeNull())
   return client
 }
 
@@ -136,6 +136,26 @@ describe('a signed-in edge that says its address is retiring', () => {
     expect(screen.queryByRole('form', { name: 'Add a server' })).toBeNull()
   })
 
+  it('asks for notices only once the relay panel is shown', async () => {
+    seed()
+    const client = fakeApi({
+      localLinkStatus: vi.fn(async () => unlinked),
+      localEdgeStatus: vi.fn(async (): Promise<EdgeStatus> => ({ edges: [{ edge, account }] })),
+      localEdgeServers: vi.fn(async () => ({ edge, servers: [] })),
+    })
+    render(<OnboardingRoute params={{}} client={client} />)
+    const relay = await screen.findByRole('radio', { name: 'Cloudfield relay' })
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    window.dispatchEvent(new Event('focus'))
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    const asked = () => vi.mocked(client.localEdgeStatus).mock.calls.filter(([notices]) => notices).length
+    expect(asked()).toBe(0)
+    vi.mocked(client.localEdgeStatus).mockResolvedValue({ edges: [{ edge, account, retiring: { state: 'retired', replacement: next } }] })
+    fireEvent.click(relay)
+    await vi.waitFor(() => expect(noticeText()).toContain('says it is retired'))
+    expect(asked()).toBe(1)
+  })
+
   it('goes back to signing in when the chosen edge was signed out elsewhere, and on once signed in again', async () => {
     vi.spyOn(window, 'open').mockReturnValue(null)
     seed()
@@ -164,7 +184,7 @@ describe('a signed-in edge that says its address is retiring', () => {
       }),
       localEdgeServers: vi.fn(async () => ({ edge, servers: [] })),
     })
-    render(<EdgeSignIn client={client} onHand={vi.fn()} onLinked={vi.fn()} onSignedOut={vi.fn()} />)
+    render(<EdgeSignIn client={client} onHand={vi.fn()} onLinked={vi.fn()} onSignedOut={vi.fn()} visible />)
     expect(await screen.findByText('WDJB-MJHT')).toBeDefined()
     await vi.waitFor(() => expect(answers).toBe(2), { timeout: 5000 })
     expect(screen.getByText('WDJB-MJHT')).toBeDefined()
@@ -230,7 +250,7 @@ describe('a signed-in edge that says its address is retiring', () => {
       ),
       localEdgeServers: vi.fn(async () => ({ edge, servers: [] })),
     })
-    render(<EdgeSignIn client={client} onHand={vi.fn()} onLinked={vi.fn()} onSignedOut={vi.fn()} />)
+    render(<EdgeSignIn client={client} onHand={vi.fn()} onLinked={vi.fn()} onSignedOut={vi.fn()} visible />)
     expect(await screen.findByText('WDJB-MJHT')).toBeDefined()
     done = true
     await vi.waitFor(() => expect(noticeText()).not.toBeNull(), { timeout: 5000 })
@@ -248,7 +268,7 @@ describe('a signed-in edge that says its address is retiring', () => {
       }),
       localEdgeServers: vi.fn(async () => ({ edge, servers: [] })),
     })
-    render(<EdgeSignIn client={client} onHand={vi.fn()} onLinked={vi.fn()} onSignedOut={vi.fn()} />)
+    render(<EdgeSignIn client={client} onHand={vi.fn()} onLinked={vi.fn()} onSignedOut={vi.fn()} visible />)
     expect(await screen.findByText('WDJB-MJHT')).toBeDefined()
     done = true
     await vi.waitFor(() => expect(screen.getByText((_, el) => el?.tagName === 'P' && /^Signed in to old\.example\.test as/.test(el.textContent ?? ''))).toBeDefined(), { timeout: 5000 })
@@ -280,7 +300,7 @@ describe('a signed-in edge that says its address is retiring', () => {
       }),
       localEdgeServers: vi.fn(async () => ({ edge, servers: [] })),
     })
-    render(<EdgeSignIn client={client} onHand={vi.fn()} onLinked={vi.fn()} onSignedOut={vi.fn()} />)
+    render(<EdgeSignIn client={client} onHand={vi.fn()} onLinked={vi.fn()} onSignedOut={vi.fn()} visible />)
     expect(await screen.findByText('WDJB-MJHT')).toBeDefined()
     await vi.waitFor(() => expect(answers).toBe(2), { timeout: 5000 })
     expect(screen.getByText('WDJB-MJHT')).toBeDefined()
@@ -293,7 +313,7 @@ describe('a signed-in edge that says its address is retiring', () => {
       localEdgeStatus: vi.fn(async (): Promise<EdgeStatus> => ({ edges: [{ edge, account }] })),
       localEdgeServers: vi.fn(async () => ({ edge, servers: [] })),
     })
-    render(<EdgeSignIn client={client} claim={claim} onHand={vi.fn()} onLinked={vi.fn()} onSignedOut={vi.fn()} />)
+    render(<EdgeSignIn client={client} claim={claim} onHand={vi.fn()} onLinked={vi.fn()} onSignedOut={vi.fn()} visible />)
     await vi.waitFor(() => expect(screen.getByText((_, el) => el?.tagName === 'P' && /^Signed in to old\.example\.test as/.test(el.textContent ?? ''))).toBeDefined())
     expect(screen.queryByRole('button', { name: 'Sign in with GitHub' })).toBeNull()
   })
@@ -301,7 +321,7 @@ describe('a signed-in edge that says its address is retiring', () => {
   it('keeps an explicit port in a claim\'s edge', async () => {
     const claim = `aether://claim?edge=${encodeURIComponent(edge + ':8443')}&server=${serverEdge.server_id}#abcdefghijklmnop`
     const client = fakeApi({ localEdgeStatus: vi.fn(async (): Promise<EdgeStatus> => ({ edges: [{ edge, account }] })) })
-    render(<EdgeSignIn client={client} claim={claim} onHand={vi.fn()} onLinked={vi.fn()} onSignedOut={vi.fn()} />)
+    render(<EdgeSignIn client={client} claim={claim} onHand={vi.fn()} onLinked={vi.fn()} onSignedOut={vi.fn()} visible />)
     expect(await screen.findByRole('button', { name: 'Sign in with GitHub' })).toBeDefined()
   })
 
@@ -319,7 +339,7 @@ describe('a signed-in edge that says its address is retiring', () => {
       localEdgeLogin: vi.fn(async () => ({ ...login, state: 'pending' as const })),
       localEdgeServers: vi.fn(async () => ({ edge, servers: [] })),
     })
-    render(<EdgeSignIn client={client} claim={claim} onHand={vi.fn()} onLinked={vi.fn()} onSignedOut={vi.fn()} />)
+    render(<EdgeSignIn client={client} claim={claim} onHand={vi.fn()} onLinked={vi.fn()} onSignedOut={vi.fn()} visible />)
     fireEvent.click(await screen.findByRole('button', { name: 'Sign in with GitHub' }))
     expect(await screen.findByText('WDJB-MJHT')).toBeDefined()
     done = true
@@ -335,7 +355,7 @@ describe('a signed-in edge that says its address is retiring', () => {
       })),
       localEdgeServers: vi.fn(async () => ({ edge, servers: [] })),
     })
-    render(<EdgeSignIn client={client} claim={claim} onHand={vi.fn()} onLinked={vi.fn()} onSignedOut={vi.fn()} />)
+    render(<EdgeSignIn client={client} claim={claim} onHand={vi.fn()} onLinked={vi.fn()} onSignedOut={vi.fn()} visible />)
     await vi.waitFor(() => expect(noticeText()).toContain('You are already signed in at https://new.example.test.'))
     expect(screen.queryByRole('radio')).toBeNull()
   })

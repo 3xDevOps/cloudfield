@@ -1,7 +1,7 @@
 // The local gateway runs the edge device flow and keeps the device token;
 // this screen never sees it.
 
-import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react'
+import { type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { CopyableCommand } from '@/components/copyable-command'
 import { Button } from '@/components/ui/button'
@@ -37,7 +37,7 @@ function ErrorLine({ children }: { children: string }) {
 
 type SignIn = {
   phase: Phase
-  setPhase: (phase: Phase) => void
+  setPhase: Dispatch<SetStateAction<Phase>>
   error: string | null
   starting: boolean
   signIn: () => Promise<void>
@@ -274,11 +274,15 @@ export function EdgeSignIn({
   onHand,
   onLinked,
   onSignedOut,
+  visible,
 }: {
   client: Api
   /** A claim link handed to the dashboard, filled into the claim form. The
    * edge it names is the only one signed in to. */
   claim?: string
+  /** Whether the person sees this screen; it stays mounted while hidden so
+   * a sign-in in flight keeps going. Becoming visible counts as entering. */
+  visible: boolean
   /** Called with a join link, or a claim link naming another edge, pasted
    * into the claim form. */
   onHand: (link: HandedLink) => void
@@ -289,7 +293,7 @@ export function EdgeSignIn({
   const claimEdge = handed === undefined ? undefined : edgeOrigin(handed)
   const signIn = useEdgeSignIn(client, claimEdge)
   const { phase, setPhase } = signIn
-  const notices = useEdgeNotices(client, phase.name === 'signed-in')
+  const notices = useEdgeNotices(client, visible && phase.name === 'signed-in')
   const chosenGone =
     notices !== null && phase.name === 'signed-in' && phase.chosen !== null &&
     !notices.edges.some((e) => e.edge === phase.chosen && e.account)
