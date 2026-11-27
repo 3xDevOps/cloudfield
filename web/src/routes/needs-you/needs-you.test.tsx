@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { AppShell } from '@/components/shell/app-shell'
 import { api } from '@/lib/api'
 import type { AttentionItem, RoomPostResult } from '@/lib/types'
@@ -179,6 +179,16 @@ describe('a retiring edge address', () => {
     fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }))
     await screen.findByText('Nothing needs you')
     expect(document.querySelector('[data-edge-notice]')).toBeNull()
+  })
+
+  it('leaves a failed edge read to the banner while saved state shows', async () => {
+    await show('super_admin', { state: 'retiring', replacement }, async () => {
+      throw new Error('server.edge: connection reset')
+    })
+    await screen.findByRole('alert')
+    act(() => useStore.setState({ staleSince: 1, hydrationError: 'Cannot reach the server' }))
+    expect(screen.queryByText("Showing the last answer: reading the server's edge again failed")).toBeNull()
+    expect(screen.getByText('https://edge-old.example.test is retiring')).toBeTruthy()
   })
 
   it('says to restart once the options file names the new address', async () => {

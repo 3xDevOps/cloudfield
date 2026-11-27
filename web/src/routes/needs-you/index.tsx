@@ -403,7 +403,7 @@ function NeedsYou() {
           </Callout>
         )}
         {mergeError && <div className="mb-3"><ProposalsReadError /></div>}
-        {superAdmin && edgeError && (
+        {superAdmin && edgeError && !bannerError && (
           <Callout
             tone="failed"
             role="alert"
