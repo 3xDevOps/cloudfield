@@ -502,6 +502,21 @@ offers the tool, the real one is served instead, and the scenario's `answers`
 need an entry for each RPC method it calls; a missing one shows up as
 "is not available in this synthetic scenario" in the reply.
 
+`TestACPCheck` covers that difference for one turn: it drives the Claude Code
+ACP adapter an Enhanced session uses, with the same staged session, role card
+and bridge, and writes each run's ACP history and accepted reports. Give it the
+adapter's entry script:
+
+```sh
+CLOUDFIELD_SESSION_EVAL_ACP=<path>/claude-agent-acp/dist/index.js \
+  go test -count=1 -tags sessioneval -run TestACPCheck -timeout 30m -v ./internal/sessioneval
+```
+
+It reads `CLOUDFIELD_SESSION_EVAL_RUNS`, `_ONLY` (default `small-fix`), `_LABEL`
+and `_OUT`, and appends `CLOUDFIELD_SESSION_EVAL_ACP_SUFFIX` to the prompt. It
+scores nothing: read `<label>-<scenario>-<n>.acp.json` and the
+`.items.jsonl` history beside it.
+
 Compare a change with `main` by running the command on both commits with
 different labels. Model output varies between sessions, so a few sessions per scenario
 shows a direction, not a proof. Scripted tests of the scorer itself,
@@ -642,6 +657,21 @@ eval does not. In the runs so far Claude Code offered the bridge's tools only
 through its tool search, and agents reported with the command instead. Before
 the modes existed every run was what `standard` is now plus the bridge, so
 earlier results do not compare with either mode.
+
+`TestACPCheck` covers that difference for one turn: it drives the Claude Code
+ACP adapter an Enhanced session uses, with the same staged session, role card
+and bridge, and writes each run's ACP history and accepted reports. Give it the
+adapter's entry script:
+
+```sh
+CLOUDFIELD_SESSION_EVAL_ACP=<path>/claude-agent-acp/dist/index.js \
+  go test -count=1 -tags sessioneval -run TestACPCheck -timeout 30m -v ./internal/sessioneval
+```
+
+It reads `CLOUDFIELD_SESSION_EVAL_RUNS`, `_ONLY` (default `small-fix`), `_LABEL`
+and `_OUT`, and appends `CLOUDFIELD_SESSION_EVAL_ACP_SUFFIX` to the prompt. It
+scores nothing: read `<label>-<scenario>-<n>.acp.json` and the
+`.items.jsonl` history beside it.
 
 Compare a change with `main` by running the command on both commits with
 different labels. Model output varies between sessions, so a few sessions per
