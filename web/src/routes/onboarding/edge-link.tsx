@@ -294,12 +294,19 @@ export function EdgeSignIn({
   const signIn = useEdgeSignIn(client, claimEdge)
   const { phase, setPhase } = signIn
   const notices = useEdgeNotices(client, visible && phase.name === 'signed-in')
-  const chosenGone =
-    notices !== null && phase.name === 'signed-in' && phase.chosen !== null &&
-    !notices.edges.some((e) => e.edge === phase.chosen && e.account)
+  // Each notices answer also says which edges are signed in now: the choice
+  // follows it, keeps the chosen edge while it is there, and falls back as
+  // on entering when it is not. The replacement a notice names is never
+  // chosen for the person.
   useEffect(() => {
-    if (chosenGone && notices) setPhase(signedInPhase(notices, claimEdge) ?? { name: 'signed-out' })
-  }, [chosenGone, notices, claimEdge, setPhase])
+    if (!notices) return
+    setPhase((p) => {
+      if (p.name !== 'signed-in') return p
+      const next = signedInPhase(notices, claimEdge)
+      if (!next || next.name !== 'signed-in') return { name: 'signed-out' }
+      return p.chosen !== null && next.edges.some((e) => e.edge === p.chosen) ? { ...next, chosen: p.chosen } : next
+    })
+  }, [notices, claimEdge, setPhase])
   const picked = phase.name === 'signed-in' ? phase.edges.find((e) => e.edge === phase.chosen) : undefined
   const signedOut = phase.name === 'signed-out'
   useEffect(() => {

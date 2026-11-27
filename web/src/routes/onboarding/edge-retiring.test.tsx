@@ -156,6 +156,22 @@ describe('a signed-in edge that says its address is retiring', () => {
     expect(asked()).toBe(1)
   })
 
+  it('offers the new sign-in beside a retired edge, choosing nothing for the person', async () => {
+    seed()
+    const client = await open({ state: 'retired', replacement: next })
+    expect(screen.queryAllByRole('radio', { name: / as / })).toHaveLength(0)
+    vi.mocked(client.localEdgeStatus).mockResolvedValue({
+      edges: [{ edge, account, retiring: { state: 'retired', replacement: next } }, { edge: next, account }],
+    })
+    window.dispatchEvent(new Event('focus'))
+    await vi.waitFor(() => expect(noticeText()).toContain('You are already signed in at https://new.example.test.'))
+    const radios = screen.getAllByRole('radio', { name: / as / }) as HTMLInputElement[]
+    expect(radios.map((r) => [r.labels?.[0]?.textContent, r.checked])).toEqual([
+      ['old.example.test as octocat (GitHub)', true],
+      ['new.example.test as octocat (GitHub)', false],
+    ])
+  })
+
   it('goes back to signing in when the chosen edge was signed out elsewhere, and on once signed in again', async () => {
     vi.spyOn(window, 'open').mockReturnValue(null)
     seed()
