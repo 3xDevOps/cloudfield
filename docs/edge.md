@@ -409,14 +409,14 @@ without the edge's protocol version header, keeps the token, as any other
 refusal does.
 
 In the desktop and Android apps, the sign-in step shows the notice under the
-signed-in edge, as that address's statement, and a **Sign in to another edge
-address** field beside it. The field is filled with the new address only while
-this computer already knows it, as above, or the linked server's own notice,
-verified against the edge key it pinned, names the same address; signing in
-there is your click. When a linked server is behind a retired address, the
-connection error is titled `<old relay host> says it is retired`, gives the
-`cloudfield login --edge <new address>` command and shows the
-edge's refusal text.
+signed-in edge as text, `<old relay host> says it is retiring[ on <date>] and
+that its new address is <new>.`, followed by `You are already signed in at
+<new>.` when this computer is, or else the line asking you to confirm the
+address. The app fills in no address and starts no sign-in because of a notice;
+sign in there yourself, with `cloudfield login --edge <new address>`. When a linked server is behind a retired
+address, the connection error is titled `<old relay host> says it is retired`,
+gives the `cloudfield login --edge <new address>` command and shows the edge's
+refusal text.
 
 `cloudfield login` sends the relay origin it signs in for with the device start
 (`relay_origin`), so the edge can check that the request reached that origin's

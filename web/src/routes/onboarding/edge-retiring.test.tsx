@@ -1,7 +1,8 @@
-import { act, fireEvent, render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import type { EdgeStatusNotice, EdgeStatus, GatewayCapabilities, LinkStatus, ServerEdge } from '@/lib/types'
 import { forgetHandedLink } from '@/lib/url-state'
 import { OnboardingRoute } from '@/routes/onboarding'
+import { EdgeSignIn } from '@/routes/onboarding/edge-link'
 import { useStore } from '@/store'
 import { fakeApi, serverInfo, workspace } from '@/test/fixtures'
 
@@ -87,99 +88,75 @@ describe('a signed-in edge that says its address is retiring', () => {
     seed()
     await open()
     expect(noticeText()).toBeNull()
-    expect(screen.queryByLabelText('Sign in to another edge address')).toBeNull()
   })
 
-  it('shows an unknown replacement as the old address says it, and fills nothing in', async () => {
-    seed()
-    const client = await open({ state: 'retiring', replacement: next, known: false })
-    expect(noticeText()).toBe('old.example.test says it is retiring / It says its new address is https://new.example.test')
-    expect(screen.getByText('Confirm that address with whoever runs the edge before you sign in there below.')).toBeDefined()
-    expect((screen.getByLabelText('Sign in to another edge address') as HTMLInputElement).value).toBe('')
-    expect(screen.getByRole('button', { name: 'Sign in' }).hasAttribute('disabled')).toBe(true)
-    expect(client.localEdgeLogin).not.toHaveBeenCalled()
-  })
-
-  it('keeps the sign-in out of the notice', async () => {
-    seed()
-    await open({ state: 'retiring', replacement: next, known: true })
-    expect(noticeCallout()!.querySelector('input, button')).toBeNull()
-  })
-
-  it('fills in a replacement this computer knows, and signs in only when asked', async () => {
-    vi.spyOn(window, 'open').mockReturnValue(null)
+  it('shows the notice as the old address says it, as text only', async () => {
     seed()
     const client = await open({ state: 'retiring', replacement: next, date: '2027-03-01', known: true })
-    expect(noticeText()).toBe('old.example.test says it is retiring on 2027-03-01 / It says its new address is https://new.example.test')
-    expect(screen.getByText('Sign in at the new address below, then link your server again there.')).toBeDefined()
-    expect((screen.getByLabelText('Sign in to another edge address') as HTMLInputElement).value).toBe(next)
+    expect(noticeText()).toBe(
+      'old.example.test says it is retiring on 2027-03-01 and that its new address is https://new.example.test. / Confirm that address with whoever runs the edge before you sign in there.',
+    )
+    expect(noticeCallout()!.querySelector('input, button')).toBeNull()
+    expect(screen.queryByRole('textbox', { name: /sign in/i })).toBeNull()
     expect(client.localEdgeLogin).not.toHaveBeenCalled()
-    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }))
-    expect(client.localEdgeLogin).toHaveBeenCalledWith(next)
-    expect(await screen.findByText('WDJB-MJHT')).toBeDefined()
   })
 
-  it('offers no sign-in at a replacement this computer is already signed in at', async () => {
+  it('does not take the linked server\'s notice as a reason to fill anything in', async () => {
+    seed({ ...serverEdge, notice: { state: 'retiring', replacement: next } })
+    await open({ state: 'retiring', replacement: next, known: false })
+    expect(screen.getByText('Confirm that address with whoever runs the edge before you sign in there.')).toBeDefined()
+    expect(screen.queryByDisplayValue(next)).toBeNull()
+  })
+
+  it('says when this computer is already signed in at the new address', async () => {
     seed()
     await open({ state: 'retiring', replacement: next, known: true }, [next])
-    expect(screen.getByText((_, el) => el?.tagName === 'P' && el.textContent === 'You are signed in to new.example.test too: choose it above and link your server again through it.')).toBeDefined()
-    expect(screen.queryByLabelText('Sign in to another edge address')).toBeNull()
+    expect(noticeText()).toBe(
+      'old.example.test says it is retiring and that its new address is https://new.example.test. / You are already signed in at https://new.example.test.',
+    )
   })
 
-  it('says a retired address is retired', async () => {
+  it('says a retired address is retired, after its refusal, with no dead ends', async () => {
     seed()
     await open({ state: 'retired', replacement: next, known: false }, [], new Error('edge.servers: list servers: old.example.test refused: retired (HTTP 410)'))
-    expect(noticeText()).toBe('old.example.test says it is retired / It says its new address is https://new.example.test')
+    expect(noticeText()).toBe(
+      'old.example.test says it is retired and that its new address is https://new.example.test. / Confirm that address with whoever runs the edge before you sign in there.',
+    )
     const refusal = await screen.findByText(/refused: retired \(HTTP 410\)/)
-    const callout = noticeCallout()!
-    expect(refusal.compareDocumentPosition(callout) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(refusal.compareDocumentPosition(noticeCallout()!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
     expect(screen.queryByRole('form', { name: 'Add a server' })).toBeNull()
     expect(screen.queryByText('Other ways to link')).toBeNull()
   })
 
-  it('fills in the replacement the linked server verified', async () => {
-    seed({ ...serverEdge, notice: { state: 'retiring', replacement: next } })
-    await open({ state: 'retiring', replacement: next, known: false })
-    expect((screen.getByLabelText('Sign in to another edge address') as HTMLInputElement).value).toBe(next)
+  it('shows the notice of an edge signed in to just now, without a remount', async () => {
+    vi.spyOn(window, 'open').mockReturnValue(null)
+    const login = { edge, signin_origin: edge, user_code: 'WDJB-MJHT', verification_uri: `${edge}/device` }
+    let done = false
+    const client = fakeApi({
+      localEdgeStatus: vi.fn(async (): Promise<EdgeStatus> =>
+        done
+          ? { edges: [{ edge, account, retiring: { state: 'retiring', replacement: next, known: false } }], login: { ...login, state: 'signed_in', account } }
+          : { edges: [], login: { ...login, state: 'pending' } },
+      ),
+      localEdgeServers: vi.fn(async () => ({ edge, servers: [] })),
+    })
+    render(<EdgeSignIn client={client} onHand={vi.fn()} onLinked={vi.fn()} onSignedOut={vi.fn()} />)
+    expect(await screen.findByText('WDJB-MJHT')).toBeDefined()
+    done = true
+    await vi.waitFor(() => expect(noticeText()).not.toBeNull(), { timeout: 5000 })
   })
 
-  it('does not fill in a replacement from a notice the server trusted on first use', async () => {
-    seed({ ...serverEdge, notice: { state: 'retiring', replacement: next, first_use: true } })
-    await open({ state: 'retiring', replacement: next, known: false })
-    expect((screen.getByLabelText('Sign in to another edge address') as HTMLInputElement).value).toBe('')
-  })
-
-  it('fills in the verified spelling of the address the server names', async () => {
-    seed({ ...serverEdge, notice: { state: 'retiring', replacement: 'https://NEW.example.test:443' } })
-    await open({ state: 'retiring', replacement: next, known: false })
-    expect((screen.getByLabelText('Sign in to another edge address') as HTMLInputElement).value).toBe('https://NEW.example.test:443')
-  })
-
-  it('compares addresses as the gateway does', async () => {
-    seed({ ...serverEdge, notice: { state: 'retiring', replacement: 'https://127.1' } })
-    await open({ state: 'retiring', replacement: 'https://127.0.0.1', known: false })
-    expect((screen.getByLabelText('Sign in to another edge address') as HTMLInputElement).value).toBe('')
-  })
-
-  it('fills the field from the trust it has now', async () => {
-    seed({ ...serverEdge, notice: { state: 'retiring', replacement: next } })
-    await open({ state: 'retiring', replacement: next, known: false })
-    const field = () => screen.getByLabelText('Sign in to another edge address') as HTMLInputElement
-    expect(field().value).toBe(next)
-    act(() => useStore.setState({ edge: { ...serverEdge, notice: { state: 'retiring', replacement: 'https://other.example.test' } } }))
-    expect(field().value).toBe('')
-    expect(screen.getByText('Confirm that address with whoever runs the edge before you sign in there below.')).toBeDefined()
-    expect(screen.getByRole('button', { name: 'Sign in' }).hasAttribute('disabled')).toBe(true)
-    fireEvent.change(field(), { target: { value: 'https://typed.example.test' } })
-    expect(field().value).toBe('https://typed.example.test')
-    act(() => useStore.setState({ edge: { ...serverEdge, notice: { state: 'retiring', replacement: next } } }))
-    expect(field().value).toBe(next)
-  })
-
-  it('does not fill in a replacement the server names differently', async () => {
-    seed({ ...serverEdge, notice: { state: 'retiring', replacement: 'https://other.example.test' } })
-    await open({ state: 'retiring', replacement: next, known: false })
-    expect((screen.getByLabelText('Sign in to another edge address') as HTMLInputElement).value).toBe('')
+  it('finds a sign-in at the new address while a handed claim names the old one', async () => {
+    const claim = `aether://claim?edge=${encodeURIComponent(edge)}&server=${serverEdge.server_id}#abcdefghijklmnop`
+    const client = fakeApi({
+      localEdgeStatus: vi.fn(async (): Promise<EdgeStatus> => ({
+        edges: [{ edge, account, retiring: { state: 'retiring', replacement: next, known: true } }, { edge: next, account }],
+      })),
+      localEdgeServers: vi.fn(async () => ({ edge, servers: [] })),
+    })
+    render(<EdgeSignIn client={client} claim={claim} onHand={vi.fn()} onLinked={vi.fn()} onSignedOut={vi.fn()} />)
+    await vi.waitFor(() => expect(noticeText()).toContain('You are already signed in at https://new.example.test.'))
+    expect(screen.queryByRole('radio')).toBeNull()
   })
 })

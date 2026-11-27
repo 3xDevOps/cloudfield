@@ -15,7 +15,7 @@ import { ApiError, type Api } from '@/lib/api'
 import { parseClaim, parseJoin } from '@/lib/claim-link'
 import { edgeHost, message, providerName } from '@/lib/format'
 import { isApprovalCode, shellQuote } from '@/lib/shell'
-import type { EdgeAccount, EdgeLinkResult, EdgeLogin, EdgeStatusNotice, EdgeRefusal, EdgeServer } from '@/lib/types'
+import type { EdgeAccount, EdgeLinkResult, EdgeLogin, EdgeStatus, EdgeStatusNotice, EdgeRefusal, EdgeServer } from '@/lib/types'
 import type { HandedLink } from '@/lib/url-state'
 import { useStore } from '@/store'
 import type { Capability } from '@/lib/capability'
@@ -26,7 +26,7 @@ type Phase =
   | { name: 'checking' }
   | { name: 'signed-out' }
   | { name: 'waiting'; login: EdgeLogin }
-  | { name: 'signed-in'; edges: SignedInEdge[]; chosen: string | null }
+  | { name: 'signed-in'; edges: SignedInEdge[]; chosen: string | null; all: SignedInEdge[] }
 
 type SignedInEdge = { edge: string; account: EdgeAccount; retiring?: EdgeStatusNotice }
 
@@ -40,8 +40,16 @@ type SignIn = {
   setPhase: (phase: Phase) => void
   error: string | null
   starting: boolean
-  /** Starts a sign-in at `target`, else at the hook's edge. */
-  signIn: (target?: string) => Promise<void>
+  signIn: () => Promise<void>
+}
+
+/** Every edge edge.status reports this machine signed in to, and among them
+ * the ones that count, only `edge` when the sign-in is for it. */
+function signedInPhase(status: EdgeStatus, edge: string | undefined, chosen?: string): Phase | null {
+  const all = status.edges.flatMap((e) => (e.account ? [{ edge: e.edge, account: e.account, retiring: e.retiring }] : []))
+  const edges = all.filter((e) => !edge || e.edge === edge)
+  if (edges.length === 0) return null
+  return { name: 'signed-in', edges, all, chosen: chosen ?? (edges.length === 1 ? edges[0].edge : null) }
 }
 
 /** The gateway's edge sign-in as edge.status reports it, started here and
@@ -65,13 +73,12 @@ function useEdgeSignIn(client: Api, edge?: string): SignIn {
           return
         }
         if (login?.state === 'failed' && login.error) setError(login.error)
-        const edges = status.edges.filter((e) => !edge || e.edge === edge)
-        const signedIn = edges.flatMap((e) => (e.account ? [{ edge: e.edge, account: e.account, retiring: e.retiring }] : []))
-        if (signedIn.length > 0) {
-          setPhase({ name: 'signed-in', edges: signedIn, chosen: signedIn.length === 1 ? signedIn[0].edge : null })
+        const signedIn = signedInPhase(status, edge)
+        if (signedIn) {
+          setPhase(signedIn)
           return
         }
-        const unreadable = edges.find((e) => e.error)?.error
+        const unreadable = status.edges.find((e) => (!edge || e.edge === edge) && e.error)?.error
         if (unreadable) setError(unreadable)
         setPhase({ name: 'signed-out' })
       } catch (err) {
@@ -102,11 +109,9 @@ function useEdgeSignIn(client: Api, edge?: string): SignIn {
               setPhase({ name: 'signed-out' })
             } else if (login.state === 'signed_in' && login.account) {
               setError(null)
-              setPhase({
-                name: 'signed-in',
-                edges: [{ edge: login.edge, account: login.account }],
-                chosen: login.edge,
-              })
+              const row = { edge: login.edge, account: login.account }
+              const rows = status.edges.some((e) => e.edge === login.edge && e.account) ? status.edges : [...status.edges, row]
+              setPhase(signedInPhase({ ...status, edges: rows }, edge, login.edge)!)
             } else if (login.state === 'failed') {
               setError(login.error ?? 'sign in failed')
               setPhase({ name: 'signed-out' })
@@ -128,9 +133,9 @@ function useEdgeSignIn(client: Api, edge?: string): SignIn {
       live = false
       clearTimeout(timer)
     }
-  }, [client, waitingEdge, waitingCode])
+  }, [client, edge, waitingEdge, waitingCode])
 
-  const signIn = async (target?: string) => {
+  const signIn = async () => {
     setStarting(true)
     setError(null)
     // Opened before the await so it is not blocked as a popup. The desktop
@@ -138,7 +143,7 @@ function useEdgeSignIn(client: Api, edge?: string): SignIn {
     const popup = window.open('about:blank', '_blank')
     if (popup) popup.opener = null
     try {
-      const login = await client.localEdgeLogin(target ?? edge)
+      const login = await client.localEdgeLogin(edge)
       if (popup) popup.location.replace(login.verification_uri)
       else window.open(login.verification_uri, '_blank', 'noopener,noreferrer')
       setPhase({ name: 'waiting', login })
@@ -242,7 +247,7 @@ export function EdgeSignIn({
   const claimEdge = claim === undefined ? undefined : parseClaim(claim)?.edge
   const signIn = useEdgeSignIn(client, claimEdge)
   const { phase, setPhase } = signIn
-  const signedIn = phase.name === 'signed-in' ? phase.edges : []
+  const signedIn = phase.name === 'signed-in' ? phase.all : []
   const picked = phase.name === 'signed-in' ? phase.edges.find((e) => e.edge === phase.chosen) : undefined
   const signedOut = phase.name === 'signed-out'
   useEffect(() => {
@@ -276,14 +281,14 @@ export function EdgeSignIn({
         />
       )}
       {phase.name === 'signed-in' &&
-        phase.edges.map((e) => e.edge !== picked?.edge && retiringNotice(e, phase.edges, signIn))}
+        phase.edges.map((e) => e.edge !== picked?.edge && retiringNotice(e, phase.all))}
       {picked && (
         <ServerPicker
           key={`${picked.edge} ${claim ?? ''}`}
           client={client}
           edge={picked.edge}
           account={picked.account}
-          notice={retiringNotice(picked, signedIn, signIn)}
+          notice={retiringNotice(picked, signedIn)}
           retired={picked.retiring?.state === 'retired'}
           claim={claim}
           onHand={onHand}
@@ -461,97 +466,43 @@ function canonicalEdge(origin: string): string | null {
   return m[1] === 'https' ? `https://${host.replace(/:443$/, '')}` : `http://${host}`
 }
 
-function retiringNotice(e: SignedInEdge, edges: SignedInEdge[], signIn: SignIn) {
+function retiringNotice(e: SignedInEdge, all: SignedInEdge[]) {
   if (!e.retiring) return null
   const replacement = canonicalEdge(e.retiring.replacement)
-  const there = edges.find((o) => replacement !== null && canonicalEdge(o.edge) === replacement)
-  return <RetiringNotice key={e.edge} edge={e.edge} notice={e.retiring} signedInThere={there?.edge} signIn={signIn} />
+  const signedInThere = all.some((o) => replacement !== null && canonicalEdge(o.edge) === replacement)
+  return <RetiringNotice key={e.edge} edge={e.edge} notice={e.retiring} signedInThere={signedInThere} />
 }
 
-/** What an edge address says of itself. Nothing authenticates it, so the
- * sign-in field beside it is filled only with an address this computer
- * already knows, or the one the linked server's verified notice names;
- * signing in stays the person's step. */
-export function RetiringNotice({
-  edge,
-  notice,
-  signedInThere,
-  signIn,
-}: {
-  edge: string
-  notice: EdgeStatusNotice
-  /** The signed-in edge at the replacement, when there is one. */
-  signedInThere?: string
-  signIn: SignIn
-}) {
-  const server = useStore((s) => s.edge)
-  const own = server?.notice
-  const verified =
-    own && !own.first_use && canonicalEdge(server.edge_url) === canonicalEdge(edge) &&
-    canonicalEdge(own.replacement) !== null && canonicalEdge(own.replacement) === canonicalEdge(notice.replacement)
-      ? own.replacement
-      : null
-  const trusted = notice.known ? notice.replacement : verified
-  // What the person typed belongs to the notice and the trust it was typed under.
-  const scope = `${edge} ${notice.state} ${notice.replacement} ${trusted ?? ''}`
-  const [edit, setEdit] = useState<{ scope: string; value: string } | null>(null)
-  const target = edit?.scope === scope ? edit.value : (trusted ?? '')
+/** What an edge address says of itself, as text: nothing authenticates
+ * it, so nothing here fills in or signs in at the address it names. */
+export function RetiringNotice({ edge, notice, signedInThere }: { edge: string; notice: EdgeStatusNotice; signedInThere: boolean }) {
   return (
-    <div className="mb-1 flex min-w-0 flex-col gap-2 self-stretch">
-      <Callout
-        tone={notice.state === 'retired' ? 'failed' : 'needs-you'}
-        className="self-stretch"
-        title={
-          <>
-            <span className="font-code">{edgeHost(edge)}</span> says it{' '}
-            {notice.state === 'retired' ? 'is retired' : 'is retiring'}
-            {notice.state === 'retiring' && notice.date && (
-              <>
-                {' '}on <span className="whitespace-nowrap">{notice.date}</span>
-              </>
-            )}
-          </>
-        }
-      >
-        <p>
-          It says its new address is <span className="break-words font-code">{notice.replacement}</span>
-        </p>
-        <p className="text-muted">
-          {signedInThere ? (
+    <Callout
+      tone={notice.state === 'retired' ? 'failed' : 'needs-you'}
+      className="self-stretch"
+      title={
+        <>
+          <span className="font-code">{edgeHost(edge)}</span> says it{' '}
+          {notice.state === 'retired' ? 'is retired' : 'is retiring'}
+          {notice.state === 'retiring' && notice.date && (
             <>
-              You are signed in to <span className="font-code">{edgeHost(signedInThere)}</span> too: choose it above
-              and link your server again through it.
+              {' '}on <span className="whitespace-nowrap">{notice.date}</span>
             </>
-          ) : trusted ? (
-            'Sign in at the new address below, then link your server again there.'
-          ) : (
-            'Confirm that address with whoever runs the edge before you sign in there below.'
-          )}
-        </p>
-      </Callout>
-      {!signedInThere && (
-        <form
-          aria-label="Sign in to another edge"
-          className="flex min-w-0 max-w-md flex-wrap items-end gap-2"
-          onSubmit={(e) => {
-            e.preventDefault()
-            void signIn.signIn(target.trim())
-          }}
-        >
-          <FormField className="min-w-0 flex-1 basis-56" label="Sign in to another edge address">
-            <Input
-              className="font-code"
-              autoComplete="off"
-              value={target}
-              onChange={(e) => setEdit({ scope, value: e.target.value })}
-            />
-          </FormField>
-          <Button type="submit" variant="secondary" disabled={!target.trim() || signIn.starting}>
-            {signIn.starting ? 'Signing in…' : 'Sign in'}
-          </Button>
-        </form>
-      )}
-    </div>
+          )}{' '}
+          and that its new address is <span className="break-words font-code">{notice.replacement}</span>.
+        </>
+      }
+    >
+      <p className="text-muted">
+        {signedInThere ? (
+          <>
+            You are already signed in at <span className="font-code">{notice.replacement}</span>.
+          </>
+        ) : (
+          'Confirm that address with whoever runs the edge before you sign in there.'
+        )}
+      </p>
+    </Callout>
   )
 }
 
