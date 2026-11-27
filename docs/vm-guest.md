@@ -521,7 +521,7 @@ nothing restarts it. Without this the agent, where it was the largest, died
 first and was restarted with its conversation
 ([enhanced-sessions.md](enhanced-sessions.md#restarts-and-failures)). The
 agent's commands run under the limits of `procs`. The script adds about
-0.4 ms to a command. What Claude Code starts without its prefix stays with
+0.5 ms to a command. What Claude Code starts without its prefix stays with
 the agent, in its cgroup and at its score: exec-form hooks, the language
 servers of its plugins, and the `rg` and `git` it runs for itself. A
 language server that grows large is then killed after the agent's commands.
