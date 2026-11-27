@@ -137,7 +137,7 @@ func TestMergePlanNamesTheLoginsThatMove(t *testing.T) {
 	for _, want := range []string{
 		"1. Ada (m-admin), admin\n   tailnet login: ada@\n   claude login work (lgn-test1)\n",
 		"2. Ada GH (m-gh), collaborator\n   claude login work (lgn-test2)\n   claude login team (lgn-test3)\n",
-		"its added logins move to m-admin, off for shares, each renamed if m-admin has a login of that name:\n" +
+		"its added logins move to m-admin, off for shares; one whose name m-admin already has is renamed to the first free of <name>-2, <name>-3, ...:\n" +
 			"  claude login work (lgn-test2)\n  claude login team (lgn-test3)\n",
 	} {
 		if !strings.Contains(out.String(), want) {
