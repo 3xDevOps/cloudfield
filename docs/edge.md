@@ -269,9 +269,14 @@ write of `edge-url`, needs that same pin file still in place, so a key pinned
 meanwhile refuses the move even when it is the same key again. The write also
 needs the config file to give the `edge-url` and `data-dir` the move ran with,
 so it refuses when `--edge-url` or `--data-dir` overrode the file or the file
-changed since. It compares and writes holding a lock on the config file's
-directory, which `config set` also takes, so no other `config set` or `edge
-move` lands in between; an editor, including `config edit`'s, takes no lock. It
+changed since. It compares and writes holding `<config file>.lock`, created
+mode 0600 beside the config file, which `config set` also takes, so no other
+`config set` or `edge move` lands in between; an editor, `config edit` and
+`install` take no lock. Where the lock file cannot be created, as when the
+directory is not writable, nothing changes. A lock still held after 10 seconds
+fails with `<config file>.lock is still held after 10s by another config set or
+edge move; nothing changed`. It takes the config lock before the edge state
+lock, so waiting for it never holds up the running server. It
 prints `enrolled at ...` only after the write. An older binary's `edge trust`
 writes the pin without the state lock, so a pin it writes between that check
 and the write is outside this guarantee.

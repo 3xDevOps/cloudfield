@@ -364,11 +364,11 @@ func TestConfigRewritesTakeTurns(t *testing.T) {
 	}
 	inside, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
 	go func() {
-		done <- updateConfig(path, func(values map[string]string) error {
+		done <- updateConfig(path, func(values map[string]string, write func() error) error {
 			close(inside)
 			<-release
 			values["edge-url"] = "https://edge-new.example.test"
-			return nil
+			return write()
 		})
 	}()
 	<-inside

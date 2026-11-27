@@ -12,6 +12,7 @@ import (
 	"strings"
 	"syscall"
 	"text/tabwriter"
+	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/server"
 	"github.com/3xDevOps/cloudfield/internal/serversetup"
@@ -96,9 +97,10 @@ func configSet(w io.Writer, path, key, value string) error {
 	return configSetIf(w, path, key, value, nil)
 }
 
-// configSetIf is configSet once check, when set, accepts the values the
-// file holds under the lock updateConfig takes.
-func configSetIf(w io.Writer, path, key, value string, check func(values map[string]string) error) error {
+// configSetIf is configSet with guard, when set, deciding on the values
+// the file holds, under the config lock: it calls set to make the change,
+// or returns why not.
+func configSetIf(w io.Writer, path, key, value string, guard func(values map[string]string, set func() error) error) error {
 	fs := serveFlagSet()
 	if fs.Lookup(key) == nil {
 		return fmt.Errorf("unknown option %q (known: %s)", key, joinOptions())
@@ -107,22 +109,23 @@ func configSetIf(w io.Writer, path, key, value string, check func(values map[str
 		return fmt.Errorf("invalid value for %q: %w", key, err)
 	}
 	var was string
-	err := updateConfig(path, func(values map[string]string) error {
-		if check != nil {
-			if err := check(values); err != nil {
-				return err
+	err := updateConfig(path, func(values map[string]string, write func() error) error {
+		set := func() error {
+			v, ok := values[key]
+			was = v
+			if !ok {
+				was = "unset"
+				if def := fs.Lookup(key).DefValue; def != "" {
+					was += ", meaning " + def
+				}
 			}
+			values[key] = value
+			return write()
 		}
-		v, ok := values[key]
-		was = v
-		if !ok {
-			was = "unset"
-			if def := fs.Lookup(key).DefValue; def != "" {
-				was += ", meaning " + def
-			}
+		if guard == nil {
+			return set()
 		}
-		values[key] = value
-		return nil
+		return guard(values, set)
 	})
 	if err != nil {
 		return err
@@ -136,31 +139,43 @@ func configSetIf(w io.Writer, path, key, value string, check func(values map[str
 	return nil
 }
 
-// updateConfig rewrites the config file at path with change's edit of its
-// values. It holds an exclusive lock on the file's directory, which every
-// rewrite by this binary takes, so no other rewrite lands between its
-// read and its write.
-func updateConfig(path string, change func(values map[string]string) error) error {
+// configLockWait is how long updateConfig waits for another holder of the
+// config lock before it gives up.
+var configLockWait = 10 * time.Second
+
+// updateConfig reads the config file at path and calls edit with its values
+// and write, which writes them back, holding <path>.lock: a file only
+// whoever can write beside the config creates, mode 0600, which config set
+// and edge move take. Where it cannot be created, as when the directory is
+// not writable, nothing is written.
+func updateConfig(path string, edit func(values map[string]string, write func() error) error) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("create %s: %w", dir, err)
 	}
-	d, err := os.Open(dir)
+	name := path + ".lock"
+	f, err := os.OpenFile(name, os.O_CREATE|os.O_RDWR|syscall.O_NOFOLLOW, 0o600)
 	if err != nil {
-		return err
+		return fmt.Errorf("config lock: %w; nothing changed", err)
 	}
-	defer d.Close() //nolint:errcheck // read-only handle; closing releases the lock
-	if err = syscall.Flock(int(d.Fd()), syscall.LOCK_EX); err != nil {
-		return fmt.Errorf("lock %s: %w", dir, err)
+	defer f.Close() //nolint:errcheck // closing releases the lock
+	for deadline := time.Now().Add(configLockWait); ; time.Sleep(50 * time.Millisecond) {
+		err = syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB)
+		if !errors.Is(err, syscall.EWOULDBLOCK) {
+			break
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("%s is still held after %s by another config set or edge move; nothing changed", name, configLockWait)
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("lock %s: %w", name, err)
 	}
 	values, err := serversetup.Load(path)
 	if err != nil {
 		return err
 	}
-	if err = change(values); err != nil {
-		return err
-	}
-	return serversetup.WriteConfig(path, values)
+	return edit(values, func() error { return serversetup.WriteConfig(path, values) })
 }
 
 // configEdit opens the config file in the operator's editor, then reparses

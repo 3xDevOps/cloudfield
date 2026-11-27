@@ -469,19 +469,17 @@ func serverCommands(configPath string) edgeagent.Commands {
 // undo it.
 func applyMove(w io.Writer, dataDir, edgeURL, configPath string, held *edgeagent.HeldPin, m edgeagent.Moved) error {
 	var written bytes.Buffer
-	err := edgeagent.OpenState(dataDir).WhilePinned(held, func() error {
-		return configSetIf(&written, configPath, "edge-url", m.To, func(values map[string]string) error {
-			fs := flag.NewFlagSet("config", flag.ContinueOnError)
-			o := serveFlags(fs)
-			if _, err := serversetup.Apply(fs, values); err != nil {
-				return err
-			}
-			if string(*o.edgeURL) != edgeURL || *o.dataDir != dataDir {
-				return fmt.Errorf("%s gives edge-url %q and data-dir %q, but edge move ran with %q and %q: the file changed since, or a flag overrode it; "+
-					"nothing changed, run it again without --edge-url or --data-dir", configPath, string(*o.edgeURL), *o.dataDir, edgeURL, dataDir)
-			}
-			return nil
-		})
+	err := configSetIf(&written, configPath, "edge-url", m.To, func(values map[string]string, set func() error) error {
+		fs := flag.NewFlagSet("config", flag.ContinueOnError)
+		o := serveFlags(fs)
+		if _, err := serversetup.Apply(fs, values); err != nil {
+			return err
+		}
+		if string(*o.edgeURL) != edgeURL || *o.dataDir != dataDir {
+			return fmt.Errorf("%s gives edge-url %q and data-dir %q, but edge move ran with %q and %q: the file changed since, or a flag overrode it; "+
+				"nothing changed, run it again without --edge-url or --data-dir", configPath, string(*o.edgeURL), *o.dataDir, edgeURL, dataDir)
+		}
+		return edgeagent.OpenState(dataDir).WhilePinned(held, set)
 	})
 	if err != nil {
 		return err
