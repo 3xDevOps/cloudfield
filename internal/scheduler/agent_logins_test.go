@@ -499,10 +499,10 @@ func TestReconcileAfterASignInCouldNotEndKeepsOnlyItsDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	writeHomeFile(t, settled, memberhome.LoginCredentials, addedLoginFile)
-	if err := e.logins.Settle(e.member.ID, "claude", "lgn-settled000", memberhome.LoginIdentity{Kind: memberhome.LoginSubscription}); err != nil {
+	if err = e.logins.Settle(e.member.ID, "claude", "lgn-settled000", memberhome.LoginIdentity{Kind: memberhome.LoginSubscription}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.db.AddAgentLogin(ctx, domain.AgentLogin{MemberID: e.member.ID, Agent: "claude", ID: "lgn-settled000", Name: "settled", CreatedAt: time.Now()}, ""); err != nil {
+	if _, err = e.db.AddAgentLogin(ctx, domain.AgentLogin{MemberID: e.member.ID, Agent: "claude", ID: "lgn-settled000", Name: "settled", CreatedAt: time.Now()}, ""); err != nil {
 		t.Fatal(err)
 	}
 	id, err := e.sched.BeginLoginSignIn(ctx, e.member.ID, "claude", "work")

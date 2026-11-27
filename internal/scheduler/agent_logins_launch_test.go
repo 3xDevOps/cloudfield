@@ -286,7 +286,7 @@ func TestALaunchNamingNoLoginNeverFallsBackToALoginThatIsOff(t *testing.T) {
 	}
 	dir, _ := e.logins.Path(e.member.ID, "claude", work.Login)
 	writeHomeFile(t, dir, memberhome.LoginCredentials, workLogin)
-	if err := e.db.SetAgentLoginAutomatic(ctx, e.member.ID, "claude", work.Login, false); err != nil {
+	if err = e.db.SetAgentLoginAutomatic(ctx, e.member.ID, "claude", work.Login, false); err != nil {
 		t.Fatal(err)
 	}
 	_, err = e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI)
@@ -368,10 +368,10 @@ func TestAnAddedLoginIsMountedByItsShape(t *testing.T) {
 	writeHomeFile(t, dir, memberhome.LoginCredentials, "")
 	profile, _ := harness.Lookup("claude")
 	gap := &domain.Run{ID: "run-gap", MemberID: e.member.ID, AccountMemberID: e.member.ID, AccountLogin: work.Login, Harness: "claude"}
-	if _, err := e.sched.addedLoginMounts(gap, e.member.ID, profile, "/root", map[string]string{}, EnvironmentPurposeRun, false); !errors.Is(err, ErrSignedOut) || !strings.Contains(err.Error(), "launch again") || strings.Contains(err.Error(), "adds it again") {
+	if _, err = e.sched.addedLoginMounts(gap, e.member.ID, profile, "/root", map[string]string{}, EnvironmentPurposeRun, false); !errors.Is(err, ErrSignedOut) || !strings.Contains(err.Error(), "launch again") || strings.Contains(err.Error(), "adds it again") {
 		t.Fatalf("mounting a login whose file is empty: %v; want signed out right now, launch again", err)
 	}
-	if _, err := e.launchOn(t, work, ""); !errors.Is(err, ErrSignedOut) || !strings.Contains(err.Error(), "launch again") {
+	if _, err = e.launchOn(t, work, ""); !errors.Is(err, ErrSignedOut) || !strings.Contains(err.Error(), "launch again") {
 		t.Fatalf("a launch on a login whose file is empty: %v; want signed out right now, launch again", err)
 	}
 	writeHomeFile(t, dir, "anthropic/configs/default.json", `{"authentication":{"type":"user_oauth"}}`)
