@@ -13,17 +13,18 @@ import (
 
 	"github.com/3xDevOps/cloudfield/internal/coordcli"
 	"github.com/3xDevOps/cloudfield/internal/coordhooks"
+	"github.com/3xDevOps/cloudfield/internal/coordtransport"
 	"github.com/3xDevOps/cloudfield/internal/mcpbridge"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
 )
 
-func stage(t *testing.T, s Scenario) *Launch {
+func stageMode(t *testing.T, s Scenario, mode Mode) *Launch {
 	t.Helper()
 	helper, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
 	}
-	l, err := Stage(t.Context(), helper, s)
+	l, err := Stage(t.Context(), helper, s, mode)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +55,7 @@ func methods(calls []Call) []string {
 }
 
 func TestStagedSessionThroughTheRealCommand(t *testing.T) {
-	l := stage(t, Scenario{Prompt: "fix the discount"})
+	l := stageMode(t, Scenario{Prompt: "fix the discount"}, ModeStandard)
 
 	if out, err := exec.CommandContext(t.Context(), "git", "-C", l.Repo, "status", "--porcelain").CombinedOutput(); err != nil || len(out) != 0 {
 		t.Fatalf("the fixture is not a clean committed repository: %v: %s", err, out)
@@ -109,7 +110,7 @@ func TestStagedSessionThroughTheRealCommand(t *testing.T) {
 }
 
 func TestSubsessionCannotStartSubsessions(t *testing.T) {
-	l := stage(t, Scenario{Prompt: "fix the discount", Parent: "run-parent"})
+	l := stageMode(t, Scenario{Prompt: "fix the discount", Parent: "run-parent"}, ModeEnhanced)
 	if !strings.Contains(l.Instructions, "Session run-parent started you as its subsession") || strings.Contains(l.Instructions, "skill subsessions` says how") {
 		t.Fatalf("the instructions are not a subsession's role card:\n%s", l.Instructions)
 	}
@@ -169,5 +170,25 @@ func TestSubsessionCannotStartSubsessions(t *testing.T) {
 	}
 	if got := Score(Scenario{Parent: "run-parent"}, calls, 0)[0]; got.Pass {
 		t.Fatalf("a subsession that asked for a subsession passed: %+v", got)
+	}
+}
+
+func TestStandardSessionHasNoBridge(t *testing.T) {
+	l := stageMode(t, Scenario{Prompt: "fix the discount"}, ModeStandard)
+	raw, err := os.ReadFile(l.MCPConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != `{"mcpServers":{}}` {
+		t.Fatalf("a Standard session's MCP servers = %s", raw)
+	}
+	if !slices.Contains(l.Env, coordtransport.WakeEnv+"=1") || slices.Contains(l.Env, coordtransport.EnhancedEnv+"=1") {
+		t.Fatalf("a Standard session's environment = %v", l.Env)
+	}
+	if out, code := cli(t, l, "report", "success", "--summary", "done"); code != coordcli.ExitOK {
+		t.Fatalf("report: exit %d: %s", code, out)
+	}
+	if n, err := l.CommandReports(); err != nil || n != 1 {
+		t.Fatalf("CommandReports = %d, %v", n, err)
 	}
 }

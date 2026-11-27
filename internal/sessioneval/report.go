@@ -14,8 +14,8 @@ import (
 func Summary(label string, scenarios []Scenario, results []Result) string {
 	w := &strings.Builder{}
 	fmt.Fprintf(w, "# Session prompt eval: %s\n\n", label)
-	fmt.Fprintln(w, "| scenario | pass | subsession starts | start attempts | wanted | harnesses | subagents | reports | socket calls | latency | cost |")
-	fmt.Fprintln(w, "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
+	fmt.Fprintln(w, "| scenario | pass | subsession starts | start attempts | wanted | harnesses | subagents | reports | by tool/command | nudges | socket calls | latency | cost |")
+	fmt.Fprintln(w, "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |")
 	var pass, total int
 	for _, s := range scenarios {
 		var rs []Result
@@ -28,7 +28,7 @@ func Summary(label string, scenarios []Scenario, results []Result) string {
 			continue
 		}
 		var p, calls, costed int
-		var asked, attempts, harnesses, subagents, reported []string
+		var asked, attempts, harnesses, subagents, reported, via, nudges []string
 		var lat time.Duration
 		var cost float64
 		for _, r := range rs {
@@ -45,6 +45,8 @@ func Summary(label string, scenarios []Scenario, results []Result) string {
 			}
 			subagents = append(subagents, fmt.Sprint(r.Subagents))
 			reported = append(reported, strings.Join(reports(r.Calls), "+"))
+			via = append(via, fmt.Sprintf("%d/%d", r.ToolReports, r.CommandReports))
+			nudges = append(nudges, fmt.Sprint(r.Nudges))
 			calls += len(r.Calls)
 			lat += r.Latency
 			if r.CostUSD != nil {
@@ -66,10 +68,10 @@ func Summary(label string, scenarios []Scenario, results []Result) string {
 		if costed > 0 {
 			costCol = fmt.Sprintf("$%.3f", cost/float64(costed))
 		}
-		fmt.Fprintf(w, "| %s | %d/%d | %s | %s | %s | %s | %s | %s | %d | %s | %s |\n", s.ID, p, n, strings.Join(asked, ", "), strings.Join(attempts, ", "), wanted,
-			strings.Join(harnesses, ", "), strings.Join(subagents, ", "), strings.Join(reported, ", "), calls/n, (lat / time.Duration(n)).Round(time.Second), costCol)
+		fmt.Fprintf(w, "| %s | %d/%d | %s | %s | %s | %s | %s | %s | %s | %s | %d | %s | %s |\n", s.ID, p, n, strings.Join(asked, ", "), strings.Join(attempts, ", "), wanted,
+			strings.Join(harnesses, ", "), strings.Join(subagents, ", "), strings.Join(reported, ", "), strings.Join(via, ", "), strings.Join(nudges, ", "), calls/n, (lat / time.Duration(n)).Round(time.Second), costCol)
 	}
-	fmt.Fprintf(w, "\n%d/%d runs passed. Subsession starts, start attempts, subagents and reports list one entry per run; socket calls, latency and cost are per-run means.\n", pass, total)
+	fmt.Fprintf(w, "\n%d/%d runs passed. Subsession starts, start attempts, subagents, reports, reports by tool/command and nudges list one entry per run; socket calls, latency and cost are per-run means.\n", pass, total)
 
 	fmt.Fprintln(w, "\n## Failed checks")
 	for _, r := range results {

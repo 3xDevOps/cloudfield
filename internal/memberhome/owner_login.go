@@ -90,6 +90,18 @@ func (m *Manager) ClaudeSettings(member domain.MemberID) (ClaudeSettings, error)
 		return ClaudeSettings{}, err
 	}
 	defer func() { _ = home.Close() }()
+	// Stat first: opening a device node a session planted there would act
+	// on the host's device.
+	before, err := home.Stat(claudeSettingsPath)
+	if errors.Is(err, fs.ErrNotExist) {
+		return ClaudeSettings{}, nil
+	}
+	if err == nil && !before.Mode().IsRegular() {
+		err = errors.New("it is not a regular file")
+	}
+	if err != nil {
+		return ClaudeSettings{}, fmt.Errorf("memberhome: %s of %q: %w", claudeSettingsPath, member, err)
+	}
 	f, err := home.OpenFile(claudeSettingsPath, os.O_RDONLY|syscall.O_NONBLOCK, 0)
 	if errors.Is(err, fs.ErrNotExist) {
 		return ClaudeSettings{}, nil
@@ -101,7 +113,7 @@ func (m *Manager) ClaudeSettings(member domain.MemberID) (ClaudeSettings, error)
 	info, err := f.Stat()
 	switch {
 	case err != nil:
-	case !info.Mode().IsRegular():
+	case !info.Mode().IsRegular() || !os.SameFile(before, info):
 		err = errors.New("it is not a regular file")
 	case hasMultipleLinks(info):
 		err = errors.New("it has another hard link")

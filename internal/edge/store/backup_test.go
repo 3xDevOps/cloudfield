@@ -1,6 +1,7 @@
 package edgestore
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -182,13 +183,35 @@ func TestFloorColumnAdded(t *testing.T) {
 	}
 }
 
-var additiveStatement = regexp.MustCompile(`(?is)^(CREATE TABLE|CREATE INDEX|ALTER TABLE \w+ ADD COLUMN)\s`)
+var (
+	additiveStatement = regexp.MustCompile(`(?is)^(CREATE TABLE|CREATE INDEX|ALTER TABLE \w+ ADD COLUMN)\s`)
+	createdTable      = regexp.MustCompile(`(?is)^CREATE TABLE (\w+)`)
+	writtenTable      = regexp.MustCompile(`(?is)^INSERT INTO (\w+)\s`)
+	triggerStatement  = regexp.MustCompile(`(?s)CREATE TRIGGER .*?END;`)
+)
+
+// auditedTriggers are the SHA-256 digests of the triggers a step keeping
+// an older floor may create, each reviewed to write only to a table its
+// step creates and never to fail an older binary's write. A changed or new
+// trigger fails TestFloorKeptOnlyByAdditiveSteps until it is reviewed and
+// listed.
+var auditedTriggers = map[string]bool{
+	"5f015d61f9d3d80fb761fc3f46d91fdc761c07bcdd8577b8bb5364a5b750cc52": true, // origin_pair_history_insert
+	"b3045eb74baa3b54c16825a6a6ab22a30d54c7e7cab4c935971b9bbc866d3f3e": true, // origin_pair_history_update
+}
 
 // additive reports whether a statement keeps a database usable by a binary
-// that does not know it: a new table or index, or a column that is
-// nullable or has a default.
-func additive(q string) bool {
+// that does not know it: a new table or index, a column that is nullable
+// or has a default, or an insert into a table the same step creates. It
+// adds the tables q creates to created.
+func additive(q string, created map[string]bool) bool {
 	q = strings.TrimSpace(q)
+	if m := createdTable.FindStringSubmatch(q); m != nil {
+		created[m[1]] = true
+	}
+	if m := writtenTable.FindStringSubmatch(q); m != nil {
+		return created[m[1]]
+	}
 	if !additiveStatement.MatchString(q) {
 		return false
 	}
@@ -206,8 +229,14 @@ func TestFloorKeptOnlyByAdditiveSteps(t *testing.T) {
 		if m.floor == v {
 			continue
 		}
-		for q := range strings.SplitSeq(m.sql, ";") {
-			if strings.TrimSpace(q) != "" && !additive(q) {
+		for _, trigger := range triggerStatement.FindAllString(m.sql, -1) {
+			if !auditedTriggers[fmt.Sprintf("%x", sha256.Sum256([]byte(trigger)))] {
+				t.Errorf("migration %d keeps floor %d with a trigger not in auditedTriggers: %s", v, m.floor, trigger)
+			}
+		}
+		created := map[string]bool{}
+		for q := range strings.SplitSeq(triggerStatement.ReplaceAllString(m.sql, ""), ";") {
+			if strings.TrimSpace(q) != "" && !additive(q, created) {
 				t.Errorf("migration %d keeps floor %d but is not additive: %s", v, m.floor, q)
 			}
 		}
@@ -221,8 +250,12 @@ func TestFloorKeptOnlyByAdditiveSteps(t *testing.T) {
 		"CREATE UNIQUE INDEX i ON t(a)":                       false,
 		"DROP TABLE t":                                        false,
 		"UPDATE t SET a = ''":                                 false,
+		"INSERT INTO t SELECT a FROM u":                       false,
+		"INSERT INTO n SELECT a FROM u":                       true,
+		"UPDATE n SET a = ''":                                 false,
+		"CREATE TRIGGER g AFTER INSERT ON u BEGIN INSERT INTO n VALUES (NEW.a); END": false,
 	} {
-		if additive(q) != want {
+		if additive(q, map[string]bool{"n": true}) != want {
 			t.Errorf("additive(%q) = %v, want %v", q, !want, want)
 		}
 	}

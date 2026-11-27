@@ -32,3 +32,10 @@ func Get(getenv func(string) string, old string) string {
 func Getenv(old string) string {
 	return Get(os.Getenv, old)
 }
+
+// Legacy reads old under its AETHER_ name alone, as an image older than
+// v0.8.7, which knows no CLOUDFIELD_ names, reads it: for checking what a
+// rollback to such an image would do.
+func Legacy(old string) string {
+	return os.Getenv(old)
+}
