@@ -1,6 +1,8 @@
 package coordcli
 
 import (
+	"context"
+	"io"
 	"strings"
 	"testing"
 
@@ -19,5 +21,24 @@ func TestReportSaysWhenTheServerDroppedItsBody(t *testing.T) {
 	}
 	if err := protocol.CheckReportBody("", protocol.CoordReportResult{}); err != nil {
 		t.Fatalf("a report without a body = %v", err)
+	}
+}
+
+// A flag after a positional summary would be read as summary text, and a
+// body named there would be dropped without a word.
+func TestReportRefusesAFlagAfterThePositionalSummary(t *testing.T) {
+	for _, args := range [][]string{
+		{"success", "two", "findings", "--body-file", "/tmp/findings"},
+		{"success", "done", "-body=x"},
+	} {
+		_, err := report(context.Background(), "/nonexistent.sock", args, strings.NewReader(""), io.Discard)
+		if err == nil || !strings.Contains(err.Error(), "after the summary; put flags before it") {
+			t.Fatalf("report %q = %v, want the flag refused", args, err)
+		}
+	}
+	// A summary may still contain a word that only looks like a flag.
+	_, err := report(context.Background(), "/nonexistent.sock", []string{"success", "tests", "pass", "with", "-race"}, strings.NewReader(""), io.Discard)
+	if err == nil || strings.Contains(err.Error(), "after the summary") {
+		t.Fatalf("report with -race in its summary = %v, want it to reach the socket", err)
 	}
 }

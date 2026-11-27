@@ -1413,9 +1413,9 @@ refused with `body is <n> bytes and exceeds 12288`, and a body on another
 outcome with `body is only valid with the "success", "failure" or "blocked"
 outcome`. The body is stored with the report and read through the parent's inbox; the
 dashboard does not show it yet. Nothing is redacted from a summary or a body:
-write no secret into either. A report's body is not
-counted in the 16 KiB of an inbox batch, so a batch with a report can be
-larger. A server older than report bodies stores the report without the
+write no secret into either. A report's body counts toward the 16 KiB of an inbox batch, so a report
+with a long body is read in a batch of its own; that one message can exceed
+16 KiB, up to its summary and body. A server older than report bodies stores the report without the
 body; the command and the `aether_report` tool then fail with `the report was
 recorded WITHOUT its body`, so the agent can send it another way.
 

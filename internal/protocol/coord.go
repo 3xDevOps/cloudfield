@@ -46,8 +46,8 @@ const (
 	// CoordMaxSummaryBytes bounds a durable outcome summary.
 	CoordMaxSummaryBytes = 4 << 10
 	// CoordMaxReportBodyBytes bounds the body a success, failure or blocked
-	// report may carry beside its summary. With the summary it fits one
-	// inbox read.
+	// report may carry beside its summary. An inbox batch counts it, so a
+	// report with a long body is read alone.
 	CoordMaxReportBodyBytes = 12 << 10
 	// CoordMaxEvidenceRefs bounds the number of evidence references in one
 	// report, while CoordMaxEvidenceRefBytes bounds each reference.

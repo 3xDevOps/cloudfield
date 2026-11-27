@@ -47,3 +47,25 @@ func TestReportBodyReachesTheParentWithTheReport(t *testing.T) {
 		t.Fatalf("report message = kind %q, body %q, report body of %d bytes; want the summary and the whole %d-byte body", m.Kind, m.Body, len(m.ReportBody), len(findings))
 	}
 }
+
+// TestReportBodiesCountTowardTheInboxBatch: two reports with long bodies do
+// not share a batch, so neither is printed past what a harness shows.
+func TestReportBodiesCountTowardTheInboxBatch(t *testing.T) {
+	ctx := context.Background()
+	h, child, parent := newProvisionalHarness(t)
+	h.svc.cfg.Outcomes = &recordingOutcomes{}
+	long := strings.Repeat("finding\n", 1200)
+	for _, outcome := range []string{protocol.CoordOutcomeBlocked, protocol.CoordOutcomeFailure} {
+		if _, rpcErr := h.svc.CoordReport(ctx, child, protocol.CoordReportParams{Outcome: outcome, Summary: outcome, Body: long, IdempotencyKey: outcome}); rpcErr != nil {
+			t.Fatalf("report %s: %v", outcome, rpcErr)
+		}
+	}
+	first, rpcErr := h.svc.Inbox(ctx, parent, protocol.CoordInboxParams{})
+	if rpcErr != nil || len(first.Messages) != 1 || first.Messages[0].ReportBody != long || first.More != 1 {
+		t.Fatalf("first read = %d messages, more %d, %v; want one report and one more waiting", len(first.Messages), first.More, rpcErr)
+	}
+	second, rpcErr := h.svc.Inbox(ctx, parent, protocol.CoordInboxParams{AckToken: first.AckToken})
+	if rpcErr != nil || len(second.Messages) != 1 || second.Messages[0].Body != protocol.CoordOutcomeFailure || second.Messages[0].ReportBody != long {
+		t.Fatalf("second read = %+v, %v; want the other report whole", second.Messages, rpcErr)
+	}
+}

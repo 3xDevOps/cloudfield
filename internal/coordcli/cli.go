@@ -637,6 +637,14 @@ func report(ctx context.Context, socket string, args []string, in io.Reader, err
 	case positional != "":
 		*outcome = positional
 	}
+	// Flag parsing stops at the summary's first word, so a flag after it
+	// would be read as summary text and dropped.
+	for _, a := range fs.Args() {
+		name, _, _ := strings.Cut(strings.TrimLeft(a, "-"), "=")
+		if strings.HasPrefix(a, "-") && fs.Lookup(name) != nil {
+			return protocol.CoordReportResult{}, usageError(fmt.Sprintf("flag %s after the summary; put flags before it", a))
+		}
+	}
 	if *summary == "" && fs.NArg() > 0 {
 		*summary = strings.Join(fs.Args(), " ")
 	}

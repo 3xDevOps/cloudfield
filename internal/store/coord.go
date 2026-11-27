@@ -547,7 +547,11 @@ func (d *DB) DeliverRunMessages(ctx context.Context, to domain.RunID, ackToken s
 		}
 		// A batch an earlier server stamped can exceed the bound; its
 		// tail goes back to wait for a later batch, unacknowledged.
-		if fit := batchFit(msgs); fit < len(msgs) {
+		fit, ferr := batchFit(ctx, tx, msgs)
+		if ferr != nil {
+			return nil, "", false, ferr
+		}
+		if fit < len(msgs) {
 			args := make([]any, 0, len(msgs)-fit)
 			for _, m := range msgs[fit:] {
 				args = append(args, m.ID)
@@ -571,7 +575,11 @@ func (d *DB) DeliverRunMessages(ctx context.Context, to domain.RunID, ackToken s
 	if len(msgs) == 0 {
 		return nil, "", acked, commitBatch(tx)
 	}
-	msgs = msgs[:batchFit(msgs)]
+	fit, err := batchFit(ctx, tx, msgs)
+	if err != nil {
+		return nil, "", false, err
+	}
+	msgs = msgs[:fit]
 	token, err := newID("ack")
 	if err != nil {
 		return nil, "", false, err
@@ -616,16 +624,29 @@ const RunMessageBatchBytes = 16 << 10
 
 // batchFit is how many of msgs, oldest first and at least one, fit in
 // RunMessageBatchBytes. 120 bytes covers each message's field names, kind
-// and timestamp.
-func batchFit(msgs []*RunMessage) int {
+// and timestamp. A report's message is printed with the report's body, which
+// counts.
+func batchFit(ctx context.Context, tx *sql.Tx, msgs []*RunMessage) (int, error) {
 	size := 0
 	for i, m := range msgs {
 		body, _ := json.Marshal(m.Body)
-		if size += len(body) + len(m.ID) + len(m.FromRun) + len(m.CorrelationID) + 120; i > 0 && size > RunMessageBatchBytes {
-			return i
+		size += len(body) + len(m.ID) + len(m.FromRun) + len(m.CorrelationID) + 120
+		if m.Kind == RunMessageKindMessage && m.CorrelationID != "" {
+			var reportBody string
+			err := tx.QueryRowContext(ctx, `SELECT body FROM coord_reports WHERE id = ? AND run_id = ?`, m.CorrelationID, m.FromRun).Scan(&reportBody)
+			if err != nil && !errors.Is(err, sql.ErrNoRows) {
+				return 0, fmt.Errorf("store: size a report's body for its message batch: %w", err)
+			}
+			if reportBody != "" {
+				printed, _ := json.Marshal(reportBody)
+				size += len(printed)
+			}
+		}
+		if i > 0 && size > RunMessageBatchBytes {
+			return i, nil
 		}
 	}
-	return len(msgs)
+	return len(msgs), nil
 }
 
 func outstandingToken(ctx context.Context, tx *sql.Tx, to domain.RunID) (string, error) {
