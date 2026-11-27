@@ -424,7 +424,7 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 	}{
 		{[]string{"rename", "work", "job"}, "renamed login work to job\n"},
 		{[]string{"order", "job", "default"}, "login order: 1 job, 2 default\n"},
-		{[]string{"auto", "job", "off"}, "login job: used only when you name it with cloudfield session --login job\n"},
+		{[]string{"auto", "job", "off"}, "login job: used only when you name it with cloudfield session --agent claude --login job\n"},
 		{[]string{"share", "job", "off"}, "login job: only your own sessions run on it; Cloudfield moves teammates' sessions off it, and stops those no other login can run\n"},
 	} {
 		out, stderr, code := ada.cli(append([]string{"agent", "logins"}, step.args...)...)

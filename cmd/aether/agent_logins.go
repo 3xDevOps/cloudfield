@@ -623,7 +623,7 @@ func automaticLogin(args []string) error {
 		if on {
 			fmt.Printf("login %s: Cloudfield may choose it and move sessions onto it\n", args[0])
 		} else {
-			fmt.Printf("login %s: used only when you name it with cloudfield session --login %s\n", args[0], shellquote.Quote(args[0]))
+			fmt.Printf("login %s: used only when you name it with cloudfield session --agent %s --login %s\n", args[0], addedLoginsAgent, shellquote.Quote(args[0]))
 		}
 		return nil
 	})
