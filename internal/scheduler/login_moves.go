@@ -184,3 +184,14 @@ func (s *Scheduler) notePerUse(ctx context.Context, run *domain.Run, billed stri
 		slog.Warn("scheduler: post the login billed per use to the room", "run", run.ID, "error", err)
 	}
 }
+
+// vendorLine is what Cloudfield keeps of a usage-limit message from inside
+// a container: its first line, at most 200 characters.
+func vendorLine(message string) string {
+	line, _, _ := strings.Cut(message, "\n")
+	line = strings.TrimSpace(line)
+	if r := []rune(line); len(r) > 200 {
+		line = string(r[:200])
+	}
+	return line
+}

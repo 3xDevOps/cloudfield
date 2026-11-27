@@ -604,6 +604,9 @@ func (s *Scheduler) tryMove(ctx context.Context, entry *supervised, m accountMov
 		}
 	}
 	var measured fallback.Measured
+	// reported is the vendor's message as a move off an account with added
+	// logins keeps it in the item log; it is empty otherwise.
+	var reported string
 	if m.revoked {
 		measured, err = fallback.MeasureAway(ctx, s.cfg.Store, f.Usage, run.MemberID, from, run.Harness, run.Fallback)
 	} else {
@@ -635,6 +638,7 @@ func (s *Scheduler) tryMove(ctx context.Context, entry *supervised, m accountMov
 		}
 		restricted := false
 		if len(logins) > 0 {
+			reported = vendorLine(message)
 			if refusal := s.checkTeammateSignal(ctx, f, run, from); refusal != "" {
 				return usageNoFallback, m.stopped(fromName) + refusal
 			}
@@ -671,7 +675,7 @@ func (s *Scheduler) tryMove(ctx context.Context, entry *supervised, m accountMov
 	case excluded != nil:
 		slog.Warn("scheduler: fallback accounts left out of a move", "run", run.ID, "error", excluded)
 	}
-	return s.replaceContainer(ctx, entry, f, m, run, from, to, session)
+	return s.replaceContainer(ctx, entry, f, m, run, from, to, session, reported)
 }
 
 // mayLaunch is the launch admission a member's own standing needs in every
@@ -851,7 +855,8 @@ func (s *Scheduler) commitMove(ctx context.Context, entry *supervised, f *UsageF
 
 // replaceContainer removes the run's container, records the run on to, and
 // starts the replacement on to's login. A failure leaves no replacement.
-func (s *Scheduler) replaceContainer(ctx context.Context, entry *supervised, f *UsageFallback, m accountMove, run *domain.Run, from, to domain.Account, session string) (usageOutcome, string) {
+// reported, when set, goes to an Enhanced session's item log only.
+func (s *Scheduler) replaceContainer(ctx context.Context, entry *supervised, f *UsageFallback, m accountMove, run *domain.Run, from, to domain.Account, session, reported string) (usageOutcome, string) {
 	fromName, toName := s.accountLabel(ctx, from, run.Harness), s.accountLabel(ctx, to, run.Harness)
 	failure := func(err error) string {
 		return fmt.Sprintf("%scontinuing on %s's account failed: %v", m.stopped(fromName), toName, err)
@@ -913,6 +918,9 @@ func (s *Scheduler) replaceContainer(ctx context.Context, entry *supervised, f *
 	billed, perUse := s.billedPerUse(ctx, to, run.Harness)
 	if run.ACP {
 		description := m.because(fromName) + "."
+		if reported != "" {
+			description += " The agent reported: " + reported
+		}
 		if perUse {
 			description += " " + billed
 		}

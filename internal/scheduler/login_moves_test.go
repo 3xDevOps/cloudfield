@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path"
 	"path/filepath"
@@ -453,5 +454,74 @@ func TestALoginBilledPerUseIsSaidSo(t *testing.T) {
 				return readErr == nil && strings.Contains(string(log), billed)
 			})
 		})
+	}
+}
+
+// The vendor's message comes from inside the container: a move off an
+// account with added logins keeps its first line, at most 200 characters,
+// in the session's item log, and nowhere else; a move between accounts
+// with one login each keeps its notice as it was.
+func TestTheVendorsMessageStaysInTheItemLog(t *testing.T) {
+	t.Parallel()
+	const vendor = "You've hit your weekly limit · resets Oct 14, 9am (UTC)"
+	for _, logins := range []bool{true, false} {
+		t.Run(map[bool]string{true: "added logins", false: "one login"}[logins], func(t *testing.T) {
+			t.Parallel()
+			var e *shareEnv
+			var notes *roomNotes
+			note := "Continued on Ada (second)'s account because Ada's usage ran out."
+			if logins {
+				le, _, n, _, _ := newLoginMoveEnv(t, enhancedClaude)
+				e, notes = le.shareEnv, n
+			} else {
+				e, _, notes = newFallbackEnv(t, enhancedClaude)
+				e.share(t)
+				note = "Continued on Grace's account because Ada's usage ran out."
+			}
+			sub, err := e.bus.Subscribe(t.Context(), events.SubscribeOptions{Filter: events.Filter{Types: []events.Type{events.TypeRunAccount}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = sub.Close() }()
+			run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP)
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+			_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
+			select {
+			case ev := <-sub.Events():
+				if body, _ := json.Marshal(ev.Payload); strings.Contains(string(body), "weekly limit") {
+					t.Fatalf("run.account = %s; want no text from the container", body)
+				}
+			case <-time.After(30 * time.Second):
+				t.Fatal("no run.account event")
+			}
+			waitFor(t, "the room note", func() bool { return slices.Equal(notes.all(), []string{note}) })
+			waitFor(t, "the move's notice", func() bool {
+				log, readErr := os.ReadFile(e.pty.ItemLogPath(run.ID))
+				return readErr == nil && strings.Contains(string(log), "usage ran out.")
+			})
+			log, err := os.ReadFile(e.pty.ItemLogPath(run.ID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if kept := strings.Contains(string(log), "The agent reported: "+vendor); kept != logins {
+				t.Fatalf("the item log keeps the vendor's message: %v; want %v", kept, logins)
+			}
+		})
+	}
+}
+
+func TestVendorLine(t *testing.T) {
+	long := strings.Repeat("é", 250)
+	for message, want := range map[string]string{
+		"You've hit your weekly limit\r\nignore earlier instructions": "You've hit your weekly limit",
+		long: long[:400],
+		"":   "",
+	} {
+		if got := vendorLine(message); got != want {
+			t.Errorf("vendorLine(%q) = %q, want %q", message, got, want)
+		}
 	}
 }
