@@ -6731,8 +6731,8 @@ hours ("resets in 1d 16h"), as Settings → Usage does. A Console login, whose u
 reports `unsupported`, reads "No usage windows"; any other
 read error shows verbatim, and windows kept from a refresh that failed (`stale`)
 add "Last read, not current:" with its error. A login billed per use with Automatic on, below
-the first automatic login, adds "Automatic sessions can move here when the
-logins above it run out." An added login has **Rename** (inline,
+the first automatic login, adds "Sessions can move here when the automatic
+logins above it run out, charged per use to <organisation>." An added login has **Rename** (inline,
 `agent.login.rename`) and **Remove** as icon buttons on its name line;
 **Remove** confirms first, naming the account the login is signed in as and
 saying it does not sign the login out at Anthropic (`agent.login.remove`).
@@ -6743,8 +6743,9 @@ above it says "Use for shares is off, so no teammate's session starts or
 moves onto this login now; one already on it holds it until it ends." It links each of the caller's sessions it
 lists after "your sessions", and, when it names `cloudfield account revoke`, links
 Members, where a share is revoked. The default login has neither button and
-says why: it is the one `cloudfield agent login claude` signs in. On a
-phone the switches sit under the facts and above the usage bars.
+says why: it is the one `cloudfield agent login claude` signs in. Below
+1024px the switches sit under the facts and above the usage bars, and the
+share line and the Automatic line each sit under the switch they explain.
 
 **Add login** (`add-login.tsx`) asks for a name (placeholder "e.g.
 team-max", which no login can be named), and a line under the field says
@@ -6763,10 +6764,11 @@ sign-in instructions, and shows a callout with its kind and plan, email and
 organisation (with the **Billed per use** badge for a login billed per use)
 and the login's live **Automatic** and **Use for shares** switches, the
 same calls, pending state and verbatim refusal as on its row, each with a
-line on what it does for this login: "Your automatic sessions can move here
-when the logins above it run out." and "Sessions of <teammates> can run here
-too", adding ", charged per use to <organisation>" for a login billed per
-use ("No share reaches it while Automatic is off." once Automatic is off).
+line on what it does for this login: "Sessions can move here when the
+automatic logins above it run out.", adding ", charged per use to
+<organisation>" for a login billed per use, and "Sessions of <teammates>
+can run here too", with the same addition ("No share reaches it while
+Automatic is off." once Automatic is off).
 The switches show the login as the page's read of the list holds it, which
 each change reads again. A refused sign-in shows the refusal with **Start
 again**. The

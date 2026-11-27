@@ -8,6 +8,7 @@ import type { AgentLogin, Member } from '@/lib/types'
 import { useStore } from '@/store'
 import { alice, bob, fakeApi } from '@/test/fixtures'
 import { StubSocket } from '@/test/stub-socket'
+import { atViewport } from '@/test/viewport'
 import { stillWaiting } from '@/store/optimistic'
 import type * as xtermHostModule from '@/components/xterm-host'
 
@@ -199,11 +200,11 @@ describe('login list', () => {
     expect(row('work').textContent).toContain('Usage not read: ')
   })
 
-  it('says automatic sessions can move onto a login billed per use, and whose sessions it charges', () => {
+  it('says sessions can move onto a login billed per use and whom that charges, and whose sessions it serves', () => {
     const client = fakeApi()
     const { unmount } = render(<LoginList logins={logins.map((login) => ({ ...login, automatic: true }))} sharedWith={[]} client={client} onChanged={async () => {}} />)
-    expect(row('console').textContent).toContain('Automatic sessions can move here when the logins above it run out.')
-    expect(row('work').textContent).not.toContain('Automatic sessions can move here')
+    expect(row('console').textContent).toContain('Sessions can move here when the automatic logins above it run out, charged per use to Alice API.')
+    expect(row('work').textContent).not.toContain('Sessions can move here')
     unmount()
 
     const carol = { ...bob, id: 'member-carol', display_name: 'Carol' }
@@ -217,6 +218,22 @@ describe('login list', () => {
     render(<LoginList logins={shared.map((login) => ({ ...login, organization_name: undefined }))} sharedWith={[bob]} client={client} onChanged={async () => {}} />)
     expect(row('console').textContent).toContain(`Sessions of ${bob.display_name} can run here too, charged per use to login console.`)
     expect(within(row('console')).getByTitle('Billed per use to login console')).toBeDefined()
+  })
+
+  it('puts each line under the switch it explains below 1024px, and beside the switches from there', () => {
+    const client = fakeApi()
+    const shared = logins.map((login) => ({ ...login, automatic: true }))
+    const describedBy = (name: string) => within(row('console')).getByRole('switch', { name }).getAttribute('aria-describedby')
+    const wide = render(<LoginList logins={shared} sharedWith={[bob]} client={client} onChanged={async () => {}} />)
+    expect(describedBy('Automatic')).toBeNull()
+    expect(describedBy('Use for shares')).toBeNull()
+    expect(row('console').textContent).toContain('Sessions can move here when the automatic logins above it run out, charged per use to Alice API.')
+    wide.unmount()
+
+    atViewport(1023)
+    render(<LoginList logins={shared} sharedWith={[bob]} client={client} onChanged={async () => {}} />)
+    expect(document.getElementById(describedBy('Automatic')!)!.textContent).toBe('Sessions can move here when the automatic logins above it run out, charged per use to Alice API.')
+    expect(document.getElementById(describedBy('Use for shares')!)!.textContent).toBe(`Sessions of ${bob.display_name} can run here too, charged per use to Alice API.`)
   })
 
   it('confirms a removal, says Anthropic keeps the sign-in, and shows a refusal verbatim with ways to act on it', async () => {
@@ -447,7 +464,7 @@ describe('add login', () => {
     expect(screen.getAllByRole('status')[0]!.textContent).toBe('Subscription · pro · alice@work.example.test')
     expect(screen.queryByText('Billed per use')).toBeNull()
     expect(screen.getByRole('switch', { name: 'Automatic' }).getAttribute('aria-checked')).toBe('true')
-    expect(screen.getByText('Your automatic sessions can move here when the logins above it run out.')).toBeDefined()
+    expect(screen.getByText('Sessions can move here when the automatic logins above it run out.')).toBeDefined()
     expect(screen.getByRole('switch', { name: 'Use for shares' }).getAttribute('aria-checked')).toBe('true')
     expect(screen.getByText('Sessions of teammates you share your account with can run here too.')).toBeDefined()
     expect(screen.getByRole('region', { name: 'Sign in to Claude Code' }).textContent).not.toContain('Sign in with the account for')
@@ -499,7 +516,7 @@ describe('add login', () => {
     expect(await screen.findByRole('heading', { name: 'Added api' })).toBeDefined()
     expect(screen.getAllByRole('status')[0]!.textContent).toBe('Console · alice@example.test · Alice APIBilled per useBilled per use to Alice API')
     const described = (name: string) => document.getElementById(screen.getByRole('switch', { name }).getAttribute('aria-describedby')!)!.textContent
-    expect(described('Automatic')).toBe('Your automatic sessions can move here when the logins above it run out.')
+    expect(described('Automatic')).toBe('Sessions can move here when the automatic logins above it run out, charged per use to Alice API.')
     expect(described('Use for shares')).toBe(`Sessions of ${bob.display_name} can run here too, charged per use to Alice API.`)
   })
 

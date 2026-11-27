@@ -1,5 +1,5 @@
 import { useId, useState } from 'react'
-import { kindWords, loginAgent, LoginPerUseBadge, names, shareWords, SwitchRow, useLoginControls } from '@/components/agents/agent-logins'
+import { automaticWords, kindWords, loginAgent, LoginPerUseBadge, names, shareWords, SwitchRow, useLoginControls } from '@/components/agents/agent-logins'
 import { SignInTerminal } from '@/components/assistant/sign-in'
 import { Button } from '@/components/ui/button'
 import { Callout } from '@/components/ui/callout'
@@ -42,7 +42,7 @@ function AddedSwitches({ login, sharedWith, client, onChanged }: {
     <div className="flex flex-col gap-2 pt-1">
       <SwitchRow
         label="Automatic"
-        detail="Your automatic sessions can move here when the logins above it run out."
+        detail={automaticWords(login) ?? 'Sessions can move here when the automatic logins above it run out.'}
         checked={login.automatic}
         pending={`automatic:${login.id}` in pending}
         onChange={(on) => act(`automatic:${login.id}`, '', client.agentLoginAutomatic(loginAgent, login.id, on))}

@@ -17,6 +17,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import type { Api } from '@/lib/api'
 import { useClock } from '@/lib/clock'
+import { useMediaQuery } from '@/lib/hooks'
 import { message } from '@/lib/format'
 import type { AgentLogin, Member, UsageProvider } from '@/lib/types'
 import { currentWindows, limitWords, UsageMeters } from '@/routes/settings/usage'
@@ -84,6 +85,11 @@ export function reach(login: AgentLogin, sharedWith: Member[] | null): string | 
   if (login.id === 'default' && (login.kind === 'api_key' || login.kind === 'console')) return 'A share cannot use this kind of login.'
   if (!login.automatic) return 'No share reaches it while Automatic is off.'
   return sharedWith?.length ? shareWords(login, sharedWith) : null
+}
+
+/** What Automatic does for a login, where it adds a fact: a login billed per use charges for the sessions that move to it. */
+export function automaticWords(login: AgentLogin): string | null {
+  return login.per_use ? `Sessions can move here when the automatic logins above it run out, charged per use to ${perUsePayer(login)}.` : null
 }
 
 /** A login's badge when it is billed per use, naming whom it charges. */
@@ -284,6 +290,9 @@ function LoginRow({ login, index, count, firstAutomatic, usage, sharedWith, orde
   const added = login.id !== 'default'
   const who = [login.email, login.organization_name].filter(Boolean).join(' · ')
   const shares = reach(login, sharedWith)
+  const automatic = login.automatic && !firstAutomatic ? automaticWords(login) : null
+  // Below Tailwind's lg the switches stack under the facts, and each line sits under the switch it explains.
+  const stacked = useMediaQuery('(max-width: 1023px)')
   return (
     <li aria-label={`Login ${login.name}`} className="flex gap-2 py-3 first:pt-0 last:pb-0">
       <div className="flex shrink-0 flex-col items-center gap-1">
@@ -319,10 +328,8 @@ function LoginRow({ login, index, count, firstAutomatic, usage, sharedWith, orde
         <div className="col-span-2 flex min-w-0 flex-col gap-0.5 lg:col-span-1 lg:col-start-1 lg:row-start-2">
           {moving && <Pending label="Moving…" />}
           {who && <span className="min-w-0 truncate text-ui-sm text-muted" title={who}>{who}</span>}
-          {shares && <span className="text-ui-sm text-muted">{shares}</span>}
-          {login.per_use && login.automatic && !firstAutomatic && (
-            <span className="text-ui-sm text-muted">Automatic sessions can move here when the logins above it run out.</span>
-          )}
+          {!stacked && shares && <span className="text-ui-sm text-muted">{shares}</span>}
+          {!stacked && automatic && <span className="text-ui-sm text-muted">{automatic}</span>}
           {!added && (
             <span className="text-ui-sm text-muted">
               Your default login, the one <span className="font-code">cloudfield agent login claude</span> signs in. It cannot be renamed or removed.
@@ -330,8 +337,8 @@ function LoginRow({ login, index, count, firstAutomatic, usage, sharedWith, orde
           )}
         </div>
         <div className="col-span-2 flex flex-col lg:col-span-1 lg:col-start-2 lg:row-span-3 lg:row-start-1">
-          <SwitchRow label="Automatic" checked={login.automatic} pending={!!pending.automatic} onChange={onAutomatic} />
-          <SwitchRow label="Use for shares" checked={login.shared} pending={!!pending.shared} onChange={onShare} />
+          <SwitchRow label="Automatic" detail={stacked ? automatic ?? undefined : undefined} checked={login.automatic} pending={!!pending.automatic} onChange={onAutomatic} />
+          <SwitchRow label="Use for shares" detail={stacked ? shares ?? undefined : undefined} checked={login.shared} pending={!!pending.shared} onChange={onShare} />
         </div>
         {(perUseWindows || usageError || windows.length > 0) && (
           <div className="col-span-2 min-w-0 lg:col-span-1 lg:col-start-1 lg:row-start-3">
