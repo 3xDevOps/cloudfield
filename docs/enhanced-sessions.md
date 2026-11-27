@@ -180,8 +180,10 @@ tooltip say why.
 
 While a launched session's agent starts, the session's state reads
 **Starting** and the empty box reads **Message the agent while it starts**. If
-the start fails, the panel above the box offers **Retry Enhanced**
-([Restarts and failures](#restarts-and-failures)).
+the start fails, the box and an unsent message stay, and the panel above the
+box shows the error and offers **Retry Enhanced**
+([Restarts and failures](#restarts-and-failures)). A message sent before the
+retry is refused with the server's error.
 
 Steering, answering, interrupting and changing options need control of the session.
 The owner's desktop tab takes it when it first shows Chat and nobody holds

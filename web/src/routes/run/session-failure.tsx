@@ -188,7 +188,7 @@ export function SessionFailureCallout({ run, session, switchable, shells, nav }:
     </Button>
   )
   if (failure.kind === 'auth') {
-    // Signing in restarts no agent that failed to start, and its composer has no box to send from.
+    // Signing in restarts no agent that failed to start.
     const { stopped } = failure
     const then = stopped ? 'then choose Retry Enhanced' : 'then send your message again'
     const label = session?.state?.auth?.authStatus?.label

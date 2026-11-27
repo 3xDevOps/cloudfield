@@ -455,8 +455,6 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
     maySteer,
     canReopen: maySteer && cap.hasMethod('run.relaunch') && canReopenRun(run),
     refused: stream === 'refused' ? session?.streamError ?? 'The agent stream was refused.' : undefined,
-    sessionLive: shape ? session?.live ?? false : true,
-    starting,
     pending: session?.pending.length ?? 0,
     hasLease: shape?.canAct ?? true,
   })
