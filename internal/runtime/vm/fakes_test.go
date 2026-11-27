@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
@@ -248,6 +249,8 @@ func (f *fakeImages) BuildProgram(_, _, unit string) error {
 }
 
 func (f *fakeImages) Sweep() error { return nil }
+
+func (f *fakeImages) DropKeptCheckoutDisks() error { return nil }
 
 func (f *fakeImages) roots() int {
 	f.mu.Lock()
@@ -511,6 +514,7 @@ type fakeHelper struct {
 	pingErr error
 	// pingHold, when set, holds Ping until it is closed.
 	pingHold chan struct{}
+	redials  atomic.Int32
 	output   map[string]string
 	ignoreTE bool
 	clock    time.Time
@@ -674,6 +678,8 @@ func (g *fakeHelper) Sync(context.Context) error {
 }
 
 func (g *fakeHelper) Close() error { return nil }
+
+func (g *fakeHelper) Redial() { g.redials.Add(1) }
 
 func (g *fakeHelper) Freeze(_ context.Context, _ string, timeout time.Duration) error {
 	g.mu.Lock()

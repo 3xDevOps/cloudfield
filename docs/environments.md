@@ -517,7 +517,8 @@ What changes:
   until it next starts from its disk; every such cold start also takes the
   current browser image, so a VM running across an upgrade keeps its older
   browser until then.
-- An idle session's VM is saved to disk with every process
+- An idle session's VM is paused in memory, and saved to disk when the
+  host needs that memory or after an hour, with every process
   ([Sessions in VMs](failure-handling.md#sessions-in-vms)), and closing a
   session stops its VM, which keeps its disks
   ([Relaunching a closed session](failure-handling.md#relaunching-a-closed-session)). Closing a

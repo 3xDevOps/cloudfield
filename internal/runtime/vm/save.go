@@ -324,15 +324,19 @@ func (e *engine) restore(ctx context.Context, key string) error {
 				return err
 			}
 		}
+		runtime.Step(ctx, "network")
 		if err = plainPages(dir); err != nil {
 			return err
 		}
 		if err = e.launch(ctx, rec, l); err != nil {
 			return err
 		}
+		runtime.Step(ctx, "unit")
 		loadCtx, cancel := context.WithTimeout(ctx, restoreTimeout+time.Duration(unitMemoryMiB(rec)<<20/snapshotRate)*time.Second)
 		err = e.awaitRestored(loadCtx, key, api)
 		cancel()
+		e.stepHypervisor(ctx, key)
+		runtime.Step(ctx, "restore")
 		if err == nil {
 			rec.Resumed, err = diskTimes(dir)
 		}
@@ -358,11 +362,13 @@ func (e *engine) restore(ctx context.Context, key string) error {
 		resumeErr = api.resume(live)
 	}
 	stuck := state() == "Paused"
+	runtime.Step(ctx, "resume")
 	var h helper
 	if stuck {
 		err = errors.Join(fmt.Errorf("vm runtime: resume restored VM %s: it stays paused%s", key, e.logTail(key)), resumeErr)
 	} else if h, err = e.helper(key); err == nil {
 		err = e.waitHelper(live, key, h)
+		runtime.Step(ctx, "helper")
 	}
 	if err == nil {
 		if err = h.SyncClock(live, time.Now()); err != nil {

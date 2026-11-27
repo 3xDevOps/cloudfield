@@ -48,6 +48,10 @@ In order, as PID 1:
     only (vsock CID 2): a process in the VM that reached it through vsock
     loopback could start processes as root.
 
+While it waits for a booting or restored VM, the server retries a failed
+connection to that port every 10 ms. At other times its client reconnects with
+a backoff that grows from 50 ms to 1 s.
+
 A step that fails is logged on the serial console and reported by the API's
 `Info` as `boot_error`; the helper still serves, so the server can show the
 error. When it cannot serve at all, it powers the VM off.
@@ -529,7 +533,7 @@ as nothing. A wake is admitted only when that fits
 
 A restored VM's clock stopped while it was saved. The server calls
 `SetClock`, through `guest.Client.SyncClock`, after every restore. Before a
-save it calls `Sync`, which writes every filesystem's dirty data to its
+save of a running VM it calls `Sync`, which writes every filesystem's dirty data to its
 disk, so the cache disk of a saved VM that is deleted without a restore
 holds what the session wrote. `Sync` then drops the guest's page cache.
 Free page reporting hands the freed memory to the host in passes 2 seconds
@@ -544,7 +548,11 @@ as each pass reports it, before the save ends. A VM frozen because the host
 was running out of memory
 ([failure-handling.md](failure-handling.md#recover-from-memory-pressure))
 is saved with neither `Sync` nor the wait, which would let its guest run:
-its saved state holds its page cache too.
+its saved state holds its page cache too. An idle VM is paused in memory
+after one `Sync`, so it holds what its processes use and not its page
+cache: a frozen session's guest kernel reports the freed pages after the
+pause, and a VM whose vCPUs stop waits for them first, as a save does. A
+later save of the paused VM writes it as it stands.
 
 ## Save and restore
 
@@ -635,6 +643,16 @@ by the session's user. The first session on a base builds it (1.7 seconds for
 40,000 files on local NVMe); every later one gets a qcow2 disk over it in
 `<data dir>/checkouts/<run-id>/disk.qcow2` in constant time (17 ms). That disk
 follows the checkout's retention, not the VM's.
+
+A prepared disk is deleted once no session disk is over it, except the one of
+the base branch's current commit: the server keeps that per workspace and
+owner, linked under `<data dir>/vm/images/kept/<workspace>/<uid>-<gid>`, until
+the workspace is deleted or the server runs low on disk
+([Recover from disk pressure](failure-handling.md#recover-from-disk-pressure)).
+When a source mirror moves the base branch, the
+server builds the new commit's prepared disk in the background for every owner
+kept there. A launch after that build does not wait for it; the launch whose
+own refresh moved the base waits for the rest of it.
 
 The helper mounts each checkout disk on `/run/aether-guest/checkouts/<key>`,
 binds its `checkout/` at `/run/aether-guest/data/git/<key>` for the git
@@ -740,7 +758,8 @@ what it creates to the checkout's owner, and keeps its staging under
 `/run/aether-guest/data/git/mutagen`. Live sync to a sleeping session wakes
 it and holds it awake while the overlay runs.
 
-While the VM does not run, because the session sleeps or ended, its Files
+While the VM does not run, because the session sleeps saved to disk or
+ended, its Files
 view and diffs come from the last snapshot the server recorded: nothing can
 have changed the checkout since. A Files write or upload to a sleeping
 session wakes it first; one to an ended session, whose VM was removed,
