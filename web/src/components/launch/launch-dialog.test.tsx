@@ -1364,7 +1364,7 @@ describe('login', () => {
   const logins = [
     { id: 'default', name: 'default', kind: 'subscription' as const, automatic: false, shared: true, position: 0 },
     { id: 'lgn-work0000001', name: 'work', kind: 'subscription' as const, automatic: true, shared: true, position: 1 },
-    { id: 'lgn-console0001', name: 'console', kind: 'console' as const, per_use: true, automatic: true, shared: true, position: 2 },
+    { id: 'lgn-console0001', name: 'console', kind: 'console' as const, organization_name: 'Alice API', per_use: true, automatic: true, shared: true, position: 2 },
   ]
   beforeEach(() => {
     useStore.getState().setCapabilities({ gateway: 'remote', methods: ['*'], ws: [] })
@@ -1399,8 +1399,8 @@ describe('login', () => {
     await open()
     const picker = await screen.findByRole('combobox', { name: 'Login' })
     expect(picker.textContent).toBe('Automatic')
-    expect(screen.getByText(/^Starts on the first/).textContent).toBe('Starts on the first automatic login in your order with usage left, and moves down the order when it runs out.')
-    expect(screen.getByText(/^Can move to/).textContent).toBe('Can move to console, billed per use, when the logins before it run out.')
+    expect(screen.getByText(/^Starts on the first/).textContent).toBe('Starts on the first automatic login in your order with usage left, and moves to the first other one with usage left when it runs out.')
+    expect(screen.getByText(/^Can move to/).textContent).toBe('Can move to console, billed per use to Alice API, when the automatic logins before it run out.')
     // The switch under the Login select is the one control for moving; with no other account there is no Fallback to open.
     expect(screen.getByRole('switch', { name: 'Let this session move to another login' })).toBeDefined()
     expect(screen.queryByRole('button', { name: /^Fallback/ })).toBeNull()
@@ -1412,7 +1412,7 @@ describe('login', () => {
     fireEvent.keyDown(within(menu).getByRole('option', { name: 'Automatic' }), { key: 'Escape' })
     await pickOption(picker, 'console')
     expect(picker.textContent).toBe('console')
-    expect(screen.getByText(/is billed per use\.$/).textContent).toBe('console is billed per use.')
+    expect(screen.getByText(/is billed per use to/).textContent).toBe('console is billed per use to Alice API.')
     expect(screen.getByText(/^The session starts on this login/).textContent).toBe('The session starts on this login. It has no usage windows, so it moves only when its credit is spent, to the first other automatic login in your order with usage left.')
     expect(screen.getByRole('switch', { name: 'Let this session move to another login' })).toBeDefined()
     expect(screen.queryByText(/^Can move to/)).toBeNull()
@@ -1431,9 +1431,9 @@ describe('login', () => {
     expect(more().getAttribute('aria-expanded')).toBe('false')
     const follows = (a: Node, b: Node) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
     expect(follows(picker, moves) && follows(moves, more())).toBe(true)
-    expect(screen.getByText(/^Can move to/).textContent).toBe('Can move to console, billed per use, when the logins before it run out.')
+    expect(screen.getByText(/^Can move to/).textContent).toBe('Can move to console, billed per use to Alice API, when the automatic logins before it run out.')
     fireEvent.click(moves)
-    expect(screen.getByText('Stays on work, so it never moves to console.')).toBeDefined()
+    expect(screen.getByText('Starts on the first automatic login in your order, even at its limit, and stays on it: it never moves to console.')).toBeDefined()
     await pickOption(picker, 'console')
     expect(screen.getByRole('switch', { name: 'Let this session move to another login' })).toBeDefined()
     fireEvent.click(more())
@@ -1450,16 +1450,23 @@ describe('login', () => {
     expect(screen.getByText(/^Can move to/).closest('p')!.querySelector('svg')).not.toBeNull()
     expect(screen.getByText('Saves whether a session may move to another login, for launches on every device; not the login.')).toBeDefined()
     fireEvent.click(moves)
-    expect(screen.getByText('Stays on work, so it never moves to console.').querySelector('svg')).toBeNull()
-    expect(screen.getByText('Starts on the first automatic login in your order and stays on it.')).toBeDefined()
+    // One sentence, with no coins icon, since nothing is billed.
+    expect(screen.getByText('Starts on the first automatic login in your order, even at its limit, and stays on it: it never moves to console.').querySelector('svg')).toBeNull()
+    expect(screen.queryByText(/^Can move to/)).toBeNull()
     fireEvent.click(moves)
     expect(moves.getAttribute('aria-checked')).toBe('true')
     await pickOption(screen.getByRole('combobox', { name: 'Login' }), 'work')
-    expect(screen.getByText(/^Can move to/).textContent).toBe('Can move to console, billed per use, when work runs out.')
+    expect(screen.getByText(/^Can move to/).textContent).toBe('Can move to console, billed per use to Alice API, when work runs out.')
     fireEvent.click(screen.getByRole('switch', { name: 'Let this session move to another login' }))
     setTask('stays on work')
     fireEvent.click(launchButton())
     await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith(expect.objectContaining({ login: 'lgn-work0000001', no_fallback: true })))
+  })
+
+  it('names your account as the payer of a login billed per use whose sign-in named no organisation', async () => {
+    vi.mocked(api.agentLoginList).mockResolvedValue([logins[0]!, logins[1]!, { ...logins[2]!, organization_name: undefined }])
+    await open()
+    expect((await screen.findByText(/^Can move to/)).textContent).toBe('Can move to console, billed per use to your account, when the automatic logins before it run out.')
   })
 
   it("shows a login's limit in the menu when the dialog already read its usage", async () => {
@@ -1546,12 +1553,12 @@ describe('login', () => {
     await screen.findByRole('combobox', { name: 'Login' })
     expect(screen.getByRole('button', { name: 'Save as my default' })).toBeDefined()
     const moves = screen.getByRole('switch', { name: 'Let this session move to another login' })
-    expect(screen.getByText('Can move to console, billed per use, when the logins before it run out.')).toBeDefined()
+    expect(screen.getByText('Can move to console, billed per use to Alice API, when the automatic logins before it run out.')).toBeDefined()
     fireEvent.click(moves)
-    expect(screen.getByText('Starts on the first automatic login in your order and stays on it.')).toBeDefined()
+    expect(screen.getByText('Starts on the first automatic login in your order, even at its limit, and stays on it: it never moves to console.')).toBeDefined()
     expect(screen.queryByText(/^Can move to/)).toBeNull()
     await pickOption(screen.getByRole('combobox', { name: 'Login' }), 'work')
-    expect(screen.getByText('The session starts on this login and stays on it.')).toBeDefined()
+    expect(screen.getByText('The session starts on this login and stays on it: it never moves to console.')).toBeDefined()
     setTask('stay on work')
     fireEvent.click(launchButton())
     await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith(expect.objectContaining({ login: 'lgn-work0000001', no_fallback: true })))
@@ -1568,7 +1575,7 @@ describe('login', () => {
     await open()
     await waitFor(() => expect(api.accountUsage).toHaveBeenCalledWith({}))
     await pickOption(await screen.findByRole('combobox', { name: 'Login' }), 'default')
-    expect(await screen.findByText('This login is at its limit, so the session may start on the next login in your order with usage left.')).toBeDefined()
+    expect(await screen.findByText('This login is at its limit, so the session may start on the first other automatic login in your order with usage left.')).toBeDefined()
   })
 
   it('keeps only the other accounts\' order under Fallback with several logins, and saves what the switch holds', async () => {
@@ -1583,7 +1590,7 @@ describe('login', () => {
     fireEvent.click(fallback)
     expect(within(screen.getByRole('list', { name: 'Fallback accounts' })).getAllByRole('listitem')).toHaveLength(1)
     expect(screen.queryByRole('checkbox', { name: /^Move to another/ })).toBeNull()
-    expect(screen.getByText(/^If a login's usage/).textContent).toBe("If a login's usage is 95% or more at launch, or the vendor reports its limit mid-session, the session moves to your next login in order with usage left, then to the ticked account with the most usage left.")
+    expect(screen.getByText(/^If a login's usage/).textContent).toBe("If a login's usage is 95% or more at launch, or the vendor reports its limit mid-session, the session moves to the first other automatic login in your order with usage left, then to the ticked account with the most usage left.")
     fireEvent.click(moves)
     expect(screen.queryByRole('button', { name: /^Fallback/ })).toBeNull()
     setTask('stays put')

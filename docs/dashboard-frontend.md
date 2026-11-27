@@ -2988,24 +2988,28 @@ the caller's own account, where `server.info` lists the `logins` feature and
 **Automatic**, which sends no `login`, or the picked login's name, which it
 sends as `run.launch` `login`. A line under it says what happens: Automatic
 "Starts on the first automatic login in your order with usage left, and
-moves down the order when it runs out." (the Agents page's lead says the
-same), and a picked login "The session starts on this login, and moves to
-the first other automatic login in your order with usage left when it runs
-out.", or, for a login billed per use, which has no usage windows, "… It has
-no usage windows, so it moves only when its credit is spent, to the first
-other automatic login …", or, when the dialog read it at its limit, "This
-login is at its limit, so the session may start on the next login in your
-order with usage left." With automatic changes off they read "Starts on the
-first automatic login in your order and stays on it." and "The session
-starts on this login and stays on it." Under them, on lines of their own led
-by a coins icon, it says what can cost: "<name> is billed per use." for a
-picked one, "Can start on <name>, billed per use." when the first automatic
-login is, and, whenever another login with Automatic on that a move could
-reach is billed per use, "Can move to <name>, billed per use, when the logins
-before it run out." ("when <picked> runs out" for a picked login, "when
-<picked>'s credit is spent" for one billed per use) or, with automatic
-changes off, "Stays on <name>, so it never moves to <name>.", without the
-icon, since nothing is billed. Under those lines sits the dialog's one
+moves to the first other one with usage left when it runs out." (the Agents
+page's lead says the same), and a picked login "The session starts on this
+login, and moves to the first other automatic login in your order with usage
+left when it runs out.", or, for a login billed per use, which has no usage
+windows, "… It has no usage windows, so it moves only when its credit is
+spent, to the first other automatic login …", or, when the dialog read it at
+its limit, "This login is at its limit, so the session may start on the
+first other automatic login in your order with usage left." A move goes only
+to a login with Automatic on, whatever the session started on. With
+automatic changes off the server weighs no usage, so they read "Starts on the
+first automatic login in your order, even at its limit, and stays on it: it
+never moves to <name>." and "The session starts on this login and stays on
+it: it never moves to <name>.", naming the logins billed per use a move could
+have reached, if any. Under them, on lines of their own led by a coins icon,
+it says what can cost and whom it charges, the login's organisation or else
+"your account": "<name> is billed per use to <organisation>." for a picked
+one, "Can start on <name>, billed per use to <organisation>." when the first
+automatic login is, and, while moves are on and another login with Automatic
+on that a move could reach is billed per use, "Can move to <name>, billed per
+use to <organisation>, when the automatic logins before it run out." ("when
+<picked> runs out" for a picked login, "when <picked>'s credit is spent" for
+one billed per use). Under those lines sits the dialog's one
 control for moves, the **Let this session move to another login** switch
 (**… login or account** when another account is shared with the caller;
 `MoveSwitch` in `login-picker.tsx`), for Automatic and for a picked login
@@ -3061,7 +3065,7 @@ mid-session, the session moves to the ticked account with the most usage
 left.", with "the first ticked account, top to bottom, with usage left" once
 the list was changed; with several logins, "If a login's usage is 95% or more
 at launch, or the vendor reports its limit mid-session, the session moves to
-your next login in order with usage left", then to those accounts. Untouched,
+the first other automatic login in your order with usage left", then to those accounts. Untouched,
 the form sends neither field and the server
 orders by usage left. After a reorder or untick it sends the ticked accounts
 in order as `fallback_account_member_ids`; with the checkbox off, or every

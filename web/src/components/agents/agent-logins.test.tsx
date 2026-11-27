@@ -75,7 +75,7 @@ describe('login list', () => {
     expect(within(row('default')).getByRole('button', { name: 'Move default up' }).className).not.toContain('shadow-button')
     expect(within(row('default')).getByRole('button', { name: 'Move default down' }).className).toContain('shadow-button')
     expect(within(row('console')).getByRole('button', { name: 'Move console down' })).toHaveProperty('disabled', true)
-    expect(screen.getByRole('region', { name: 'Claude Code logins' }).textContent).toContain('Sessions start on the first automatic login in your order with usage left, and move down the order when it runs out.')
+    expect(screen.getByRole('region', { name: 'Claude Code logins' }).textContent).toContain('Sessions start on the first automatic login in your order with usage left, and move to the first other one with usage left when it runs out.')
   })
 
   it('says when the account is shared with nobody', () => {

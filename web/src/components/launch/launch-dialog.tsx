@@ -8,7 +8,7 @@ import { RefusalNotes, SignedOutNote } from '@/components/launch/agent-picker'
 import { AccountPicker, readiness, useAccountStatus } from '@/components/launch/account-picker'
 import { agentLabel } from '@/components/launch/modes'
 import { loginAgent } from '@/components/agents/agent-logins'
-import { LoginPicker, MoveSwitch, perUseReach, useOwnLogins } from '@/components/launch/login-picker'
+import { LoginPicker, MoveSwitch, useOwnLogins } from '@/components/launch/login-picker'
 import { automaticFallback, ChildRunsSwitch, type ChildRunsChoice, fallbackParams, FallbackOptions, RunLimitsOption, withMoves, WorkspaceLine } from '@/components/launch/launch-options'
 import { PermissionControl, permissionFeature } from '@/components/launch/permission-control'
 import { ExtraRepos } from '@/components/launch/extra-repos'
@@ -395,9 +395,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   const loginUsage = { default: accountStatus[ownAccountID]?.usage?.find((provider) => provider.provider === loginAgent) }
   const moves = !fallbackParams(fallback, accounts, account).no_fallback
   const setMoves = (on: boolean) => { fallbackPicked.current = true; setFallback(withMoves(fallback, on)) }
-  const start = severalLogins ? picked ?? (!login ? ownLogins.find((item) => item.automatic) : undefined) : undefined
-  const reach = start ? perUseReach(ownLogins!, start) : ''
-  const moveSwitch = severalLogins && <MoveSwitch reach={reach} from={start} picked={!!picked} accounts={accounts.length > 1} moves={moves} onMoves={setMoves} disabled={launching} />
+  const moveSwitch = severalLogins && <MoveSwitch accounts={accounts.length > 1} moves={moves} onMoves={setMoves} disabled={launching} />
   const loginChoice = loginsOffered && (severalLogins || login) && (ownLogins
     ? (
       <div className="flex flex-col gap-1">

@@ -139,7 +139,7 @@ export function FallbackOptions({
             </ul>}
             <p className="text-ui-sm text-muted">
               {logins
-                ? `If a login's usage is 95% or more at launch, or the vendor reports its limit mid-session, the session moves to your next login in order with usage left, then to ${target}.`
+                ? `If a login's usage is 95% or more at launch, or the vendor reports its limit mid-session, the session moves to the first other automatic login in your order with usage left, then to ${target}.`
                 : `If ${owner}'s usage is 95% or more at launch, or the vendor reports the limit mid-session, the session moves to ${target}.`}
             </p>
           </>

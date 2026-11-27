@@ -374,7 +374,7 @@ export function LoginList({ logins, sharedWith, sharedError, client, onChanged }
   return (
     <section aria-label="Claude Code logins" className="flex min-w-0 basis-full flex-col gap-3 border-t border-seam pt-3 sm:pl-11">
       <p className="text-ui-sm text-muted">
-        Sessions start on the first automatic login in your order with usage left, and move down the order when it runs out. A login with Automatic off is used only when you pick it at launch.
+        Sessions start on the first automatic login in your order with usage left, and move to the first other one with usage left when it runs out. A login with Automatic off is used only when you pick it at launch.
         {sharedWith && (sharedWith.length > 0
           ? ` Your account is shared with ${names(sharedWith)}: logins on for shares serve their sessions too.`
           : ' Your account is not shared with anyone.')}

@@ -34,10 +34,13 @@ function orList(names: string[]): string {
   return names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}`
 }
 
-/** The automatic logins billed per use a session can move to from the login it starts on; '' when none. */
-export function perUseReach(logins: AgentLogin[], start: AgentLogin): string {
-  return orList(logins.filter((login) => login.automatic && login.per_use && login !== start).map((login) => login.name))
+/** Whom the logins billed per use charge: their organisations where the sign-in named one, else the member's account. */
+function payers(logins: AgentLogin[]): string {
+  return orList([...new Set(logins.map((login) => login.organization_name || 'your account'))])
 }
+
+/** Where a move goes, for every login and both ways a session starts. */
+const nextLogin = 'the first other automatic login in your order with usage left'
 
 function CostLine({ children }: { children: ReactNode }) {
   return (
@@ -48,30 +51,18 @@ function CostLine({ children }: { children: ReactNode }) {
   )
 }
 
-/**
- * The one switch for whether the session may move to another login, or account with `accounts`; it sets `no_fallback`.
- * Above it, a line names the logins billed per use a move could reach: `from` is the login it starts on, `picked` whether the member picked it rather than Automatic.
- */
-export function MoveSwitch({ reach, from, picked, accounts, moves, onMoves, disabled }: {
-  reach: string
-  from?: AgentLogin
-  picked: boolean
+/** The one switch for whether the session may move to another login, or account with `accounts`; it sets `no_fallback`. */
+export function MoveSwitch({ accounts, moves, onMoves, disabled }: {
   accounts: boolean
   moves: boolean
   onMoves: (on: boolean) => void
   disabled?: boolean
 }) {
   const id = useId()
-  const when = !picked ? 'when the logins before it run out' : from?.per_use ? `when ${from.name}'s credit is spent` : `when ${from?.name} runs out`
   return (
-    <div className="flex flex-col gap-1">
-      {reach && from && (moves
-        ? <CostLine>Can move to {reach}, billed per use, {when}.</CostLine>
-        : <p className="text-ui-sm text-muted">Stays on {from.name}, so it never moves to {reach}.</p>)}
-      <div className="flex min-h-7 items-center justify-between gap-3 coarse:min-h-11">
-        <Label htmlFor={id}>{accounts ? 'Let this session move to another login or account' : 'Let this session move to another login'}</Label>
-        <Switch id={id} checked={moves} disabled={disabled} onCheckedChange={onMoves} />
-      </div>
+    <div className="flex min-h-7 items-center justify-between gap-3 coarse:min-h-11">
+      <Label htmlFor={id}>{accounts ? 'Let this session move to another login or account' : 'Let this session move to another login'}</Label>
+      <Switch id={id} checked={moves} disabled={disabled} onCheckedChange={onMoves} />
     </div>
   )
 }
@@ -96,6 +87,22 @@ export function LoginPicker({ logins, value, onChange, usage = {}, now, moves, m
   const known = value === '' || picked !== undefined
   const pickedLimit = picked && limitWords(usage[picked.id], now)
   const detail = (login: AgentLogin) => [kindWords(login), login.per_use && 'billed per use', !login.automatic && 'Automatic off', limitWords(usage[login.id], now)].filter(Boolean).join(' · ')
+  // The automatic logins billed per use a move could reach from the login the session starts on.
+  const start = picked ?? first
+  const reach = logins.filter((login) => login.automatic && login.per_use && login !== start)
+  const never = reach.length ? `: it never moves to ${orList(reach.map((login) => login.name))}` : ''
+  const when = !picked ? 'when the automatic logins before it run out' : picked.per_use ? `when ${picked.name}'s credit is spent` : `when ${picked.name} runs out`
+  const help = picked
+    ? !moves
+      ? `The session starts on this login and stays on it${never}.`
+      : pickedLimit
+        ? `This login is at its limit, so the session may start on ${nextLogin}.`
+        : picked.per_use
+          ? `The session starts on this login. It has no usage windows, so it moves only when its credit is spent, to ${nextLogin}.`
+          : `The session starts on this login, and moves to ${nextLogin} when it runs out.`
+    : moves
+      ? 'Starts on the first automatic login in your order with usage left, and moves to the first other one with usage left when it runs out.'
+      : `Starts on the first automatic login in your order, even at its limit, and stays on it${never}.`
   return (
     <div className="flex min-w-0 flex-col gap-1">
       <Label htmlFor="launch-login">Login</Label>
@@ -111,24 +118,12 @@ export function LoginPicker({ logins, value, onChange, usage = {}, now, moves, m
           ))}
         </SelectContent>
       </Select>
-      {picked ? (
+      {known && (
         <>
-          <p className="text-ui-sm text-muted">
-            {!moves
-              ? 'The session starts on this login and stays on it.'
-              : pickedLimit
-                ? 'This login is at its limit, so the session may start on the next login in your order with usage left.'
-                : picked.per_use
-                  ? 'The session starts on this login. It has no usage windows, so it moves only when its credit is spent, to the first other automatic login in your order with usage left.'
-                  : 'The session starts on this login, and moves to the first other automatic login in your order with usage left when it runs out.'}
-          </p>
-          {picked.per_use && <CostLine><span className="font-code">{picked.name}</span> is billed per use.</CostLine>}
-          {move}
-        </>
-      ) : known && (
-        <>
-          <p className="text-ui-sm text-muted">{moves ? 'Starts on the first automatic login in your order with usage left, and moves down the order when it runs out.' : 'Starts on the first automatic login in your order and stays on it.'}</p>
-          {first?.per_use && <CostLine>Can start on {first.name}, billed per use.</CostLine>}
+          <p className="text-ui-sm text-muted">{help}</p>
+          {picked?.per_use && <CostLine>{picked.name} is billed per use to {payers([picked])}.</CostLine>}
+          {!picked && first?.per_use && <CostLine>Can start on {first.name}, billed per use to {payers([first])}.</CostLine>}
+          {moves && reach.length > 0 && <CostLine>Can move to {orList(reach.map((login) => login.name))}, billed per use to {payers(reach)}, {when}.</CostLine>}
           {move}
         </>
       )}
