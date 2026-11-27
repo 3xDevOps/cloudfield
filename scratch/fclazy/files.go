@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strings"
 	"time"
 
 	"golang.org/x/sys/unix"
@@ -58,12 +59,19 @@ type compared struct {
 	// snapshot holds zeroes and the merged file holds data, which is what a
 	// page the balloon discarded and the guest has not reused looks like.
 	differ, fullZero, mergedZero, other int
+	// Where the first few "other" pages are and how many bytes differ.
+	others []otherPage
 	// Pattern pages found in the merged file at the expected generation,
 	// those missing, and whole pattern pages at another generation.
 	found, missing, staleCopies int
 	// offset of each stable page in the merged file, -1 when not found.
 	stableOff []int64
 	took      time.Duration
+}
+
+type otherPage struct {
+	off   int64
+	bytes int
 }
 
 func isZero(b []byte) bool {
@@ -132,6 +140,15 @@ func compare(merged, full string, e *expect) (compared, error) {
 					c.mergedZero++
 				default:
 					c.other++
+					if len(c.others) < 8 {
+						o := otherPage{off: off + int64(p)}
+						for i := range mp {
+							if mp[i] != fb[p+i] {
+								o.bytes++
+							}
+						}
+						c.others = append(c.others, o)
+					}
 				}
 			}
 			if e == nil || binary.LittleEndian.Uint64(mp) != magic {
@@ -169,8 +186,12 @@ func compare(merged, full string, e *expect) (compared, error) {
 }
 
 func (c compared) String() string {
-	return fmt.Sprintf("pages=%d differ=%d differ_full_zero=%d differ_merged_zero=%d differ_other=%d pattern_found=%d pattern_missing=%d pattern_stale_copies=%d compare_ms=%s",
-		c.pages, c.differ, c.fullZero, c.mergedZero, c.other, c.found, c.missing, c.staleCopies, ms(c.took))
+	var others []string
+	for _, o := range c.others {
+		others = append(others, fmt.Sprintf("0x%x:%d", o.off, o.bytes))
+	}
+	return fmt.Sprintf("pages=%d differ=%d differ_full_zero=%d differ_merged_zero=%d differ_other=%d differ_other_at=[%s] pattern_found=%d pattern_missing=%d pattern_stale_copies=%d compare_ms=%s",
+		c.pages, c.differ, c.fullZero, c.mergedZero, c.other, strings.Join(others, ","), c.found, c.missing, c.staleCopies, ms(c.took))
 }
 
 // sizeMiB returns a file's apparent and allocated size.

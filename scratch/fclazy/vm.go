@@ -70,7 +70,8 @@ func (m *vm) tail() string {
 }
 
 // console returns what the VM's console and monitor logs gained since the
-// last call for this directory, and how many of those lines look like trouble.
+// last call for this directory, without the monitor's own timestamped log
+// lines unless they look like trouble, and how many lines look like trouble.
 func console(dir string) (bad int, lines []string) {
 	for _, name := range []string{"console.log", "serial.log", "vmm.log"} {
 		path := filepath.Join(dir, name)
@@ -81,10 +82,12 @@ func console(dir string) (bad int, lines []string) {
 			if l = strings.TrimSpace(l); l == "" {
 				continue
 			}
-			lines = append(lines, name+": "+l)
 			if badConsole.MatchString(l) {
 				bad++
+			} else if strings.HasPrefix(l, "20") {
+				continue
 			}
+			lines = append(lines, name+": "+l)
 		}
 	}
 	return
@@ -394,26 +397,35 @@ func wake(dir string, c vmConfig, mem, state string) (*vm, wakeTimes, error) {
 
 // sleep pauses the VM and saves it: a Diff snapshot to diff/diffState and,
 // when full is set, a Full snapshot of the same paused VM to full.
-func (m *vm) sleep(diff, diffState, full string) (paused, diffTook, fullTook time.Duration, err error) {
+// The diff file is removed first unless into is set: Firecracker merges a
+// Diff into an existing memory file of the right size.
+func (m *vm) sleep(diff, diffState, full string, into bool) (paused, diffTook, fullTook time.Duration, err error) {
 	m.conn.Close()
 	t := time.Now()
 	if err = m.api(http.MethodPatch, "/vm", map[string]string{"state": "Paused"}); err != nil {
 		return
 	}
 	paused = time.Since(t)
-	_ = os.Remove(diff)
+	if !into {
+		_ = os.Remove(diff)
+	}
 	t = time.Now()
 	if err = m.api(http.MethodPut, "/snapshot/create", map[string]string{"snapshot_type": "Diff", "snapshot_path": diffState, "mem_file_path": diff}); err != nil {
 		return
 	}
 	diffTook = time.Since(t)
 	if full != "" {
-		_ = os.Remove(full)
-		t = time.Now()
-		err = m.api(http.MethodPut, "/snapshot/create", map[string]string{"snapshot_type": "Full", "snapshot_path": full + ".state", "mem_file_path": full})
-		fullTook = time.Since(t)
+		fullTook, err = m.full(full)
 	}
 	return
+}
+
+// full takes a Full snapshot of the paused VM.
+func (m *vm) full(path string) (time.Duration, error) {
+	_ = os.Remove(path)
+	t := time.Now()
+	err := m.api(http.MethodPut, "/snapshot/create", map[string]string{"snapshot_type": "Full", "snapshot_path": path + ".state", "mem_file_path": path})
+	return time.Since(t), err
 }
 
 type memStat struct {

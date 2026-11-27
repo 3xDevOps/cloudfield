@@ -25,7 +25,7 @@ on:
       n:
         default: '10'
       sections:
-        default: chain,timing,idle,baseline,frag,mincore,chcow
+        default: chain,timing,idle,baseline,frag,mincore,direct,chcow
 
 permissions:
   contents: read

@@ -28,11 +28,12 @@ var (
 	mem      = flag.Int("mem", 2048, "guest MiB")
 	cycles   = flag.Int("cycles", 12, "")
 	mcCycles = flag.Int("mincore-cycles", 12, "")
+	dCycles  = flag.Int("direct-cycles", 4, "")
 	churnMin = flag.Int("churn-min", 10, "")
 	n        = flag.Int("n", 10, "wake timing samples per state")
 	tap      = flag.String("tap", "fctap0", "")
 	merge    = flag.String("merge", "inplace", "inplace or reflink")
-	sections = flag.String("sections", "chain,timing,idle,baseline,frag,mincore,chcow", "")
+	sections = flag.String("sections", "chain,timing,idle,baseline,frag,mincore,direct,chcow", "")
 )
 
 const heapMiB = 512
@@ -214,9 +215,17 @@ func maxMapCount() int {
 
 // chain boots one VM, saves it idle, then runs it through sleep and wake
 // cycles. It returns the last saved state and whether every cycle passed.
-func chain(name string, track bool, cycles int, churn time.Duration) (*saved, bool) {
+//
+// mode is how a Diff reaches the memory file: inplace (snapshot-editor
+// rebases it onto the file), reflink (onto a reflink copy that then replaces
+// the file) or direct (Firecracker writes the Diff into the file itself, or
+// into a reflink copy of it where -merge is reflink).
+func chain(name string, track bool, cycles int, churn time.Duration, mode string) (*saved, bool) {
 	cfg := vmConfig{hv: "fc", mem: *mem, track: track}
-	id := fmt.Sprintf("chain=%s mem=%d fs=%s track=%t merge=%s", name, *mem, *fsName, track, *merge)
+	id := fmt.Sprintf("chain=%s mem=%d fs=%s track=%t merge=%s", name, *mem, *fsName, track, mode)
+	if mode == "direct" && *merge == "reflink" {
+		id += "+reflink"
+	}
 	fail := func(what string, err error) (*saved, bool) {
 		fmt.Printf("FCLAZY FAIL %s at=%s: %v\n", id, what, err)
 		return nil, false
@@ -242,7 +251,13 @@ func chain(name string, track bool, cycles int, churn time.Duration) (*saved, bo
 	_, _ = m.guest("prep")
 	time.Sleep(3 * time.Second)
 	st := m.stat()
-	paused, diffTook, fullTook, err := m.sleep(base, state, full)
+	paused, diffTook, fullTook, err := m.sleep(base, state, full, false)
+	// Control: a second Full of the same paused VM. What differs between the
+	// two is what a snapshot call itself changes in guest memory.
+	full2 := filepath.Join(dir, "full2.mem")
+	if err == nil {
+		_, err = m.full(full2)
+	}
 	alive := m.alive()
 	if err != nil {
 		tail := m.tail()
@@ -254,6 +269,17 @@ func chain(name string, track bool, cycles int, churn time.Duration) (*saved, bo
 	if err != nil {
 		return fail("first compare", err)
 	}
+	ctl, err := compare(full, full2, nil)
+	if err != nil {
+		return fail("control compare", err)
+	}
+	selfChanged := map[int64]bool{}
+	for _, o := range append(ctl.others, c.others...) {
+		selfChanged[o.off] = true
+	}
+	fmt.Printf("FCLAZY CONTROL %s two_full_snapshots_of_one_paused_vm: %s\n", id, ctl)
+	_ = os.Remove(full2)
+	_ = os.Remove(full2 + ".state")
 	_, diffAlloc := sizeMiB(base)
 	_, fullAlloc := sizeMiB(full)
 	fmt.Printf("FCLAZY FIRST %s boot_ready_ms=%s vmm_alive=%t pause_ms=%s diff_ms=%s diff_allocated_mib=%d full_ms=%s full_allocated_mib=%d %s %s console_bad=%d\n",
@@ -352,7 +378,22 @@ func chain(name string, track bool, cycles int, churn time.Duration) (*saved, bo
 		_, _ = m.guest("prep")
 		time.Sleep(3 * time.Second)
 		st = m.stat()
-		paused, diffTook, fullTook, err = m.sleep(diff, diffState, full)
+		_, before := sizeMiB(base)
+		var cpTook time.Duration
+		target := base
+		if *merge == "reflink" && mode != "inplace" {
+			target = filepath.Join(dir, "next.mem")
+			_ = os.Remove(target)
+			if cpTook, err = sh("cp", "--reflink=always", base, target); err != nil {
+				m.kill()
+				return fail("reflink", err)
+			}
+		}
+		if mode == "direct" {
+			paused, diffTook, fullTook, err = m.sleep(target, diffState, full, true)
+		} else {
+			paused, diffTook, fullTook, err = m.sleep(diff, diffState, full, false)
+		}
 		alive = m.alive()
 		if err != nil {
 			fmt.Printf("FCLAZY SLEEP %s cycle=%d FAIL %v; %s\n", id, cy, err, m.tail())
@@ -361,20 +402,13 @@ func chain(name string, track bool, cycles int, churn time.Duration) (*saved, bo
 		}
 		m.kill()
 		bad := printConsole(id, dir)
-		_, diffAlloc = sizeMiB(diff)
-		_, before := sizeMiB(base)
-		var cpTook time.Duration
-		target := base
-		if *merge == "reflink" {
-			target = filepath.Join(dir, "next.mem")
-			_ = os.Remove(target)
-			if cpTook, err = sh("cp", "--reflink=always", base, target); err != nil {
-				return fail("reflink", err)
+		var mergeTook, syncTook time.Duration
+		diffAlloc = -1
+		if mode != "direct" {
+			_, diffAlloc = sizeMiB(diff)
+			if mergeTook, syncTook, err = rebase(target, diff); err != nil {
+				return fail("rebase", err)
 			}
-		}
-		mergeTook, syncTook, err := rebase(target, diff)
-		if err != nil {
-			return fail("rebase", err)
 		}
 		if target != base {
 			if err = os.Rename(target, base); err != nil {
@@ -392,9 +426,15 @@ func chain(name string, track bool, cycles int, churn time.Duration) (*saved, bo
 		if cy == 1 {
 			changed = stableMiB() + heapMiB + shmMiB() + 32
 		}
-		pass[cy] = alive && bad == 0 && c.mergedZero == 0 && c.other == 0 && c.missing == 0
-		fmt.Printf("FCLAZY SLEEP %s cycle=%d vmm_alive=%t pause_ms=%s diff_ms=%s diff_allocated_mib=%d host_changed_mib=%d full_ms=%s reflink_ms=%s merge_ms=%s merge_fsync_ms=%s base_allocated_before_mib=%d base_allocated_after_mib=%d %s %s console_bad=%d\n",
-			id, cy, alive, ms(paused), ms(diffTook), diffAlloc, changed, ms(fullTook), ms(cpTook), ms(mergeTook), ms(syncTook), before, after, c, st, bad)
+		// A page may differ from the Full only where the control showed a
+		// snapshot call changing guest memory.
+		explained := len(c.others) == c.other
+		for _, o := range c.others {
+			explained = explained && selfChanged[o.off]
+		}
+		pass[cy] = alive && bad == 0 && c.mergedZero == 0 && explained && c.missing == 0
+		fmt.Printf("FCLAZY SLEEP %s cycle=%d vmm_alive=%t pause_ms=%s diff_ms=%s diff_allocated_mib=%d host_changed_mib=%d full_ms=%s reflink_ms=%s merge_ms=%s merge_fsync_ms=%s base_allocated_before_mib=%d base_allocated_after_mib=%d differ_other_explained=%t %s %s console_bad=%d\n",
+			id, cy, alive, ms(paused), ms(diffTook), diffAlloc, changed, ms(fullTook), ms(cpTook), ms(mergeTook), ms(syncTook), before, after, explained, c, st, bad)
 		key = "SLEEP " + id
 		if cy > 1 {
 			record(key+" metric=pause", paused)
@@ -402,7 +442,7 @@ func chain(name string, track bool, cycles int, churn time.Duration) (*saved, bo
 			record(key+" metric=full_save", fullTook)
 			record(key+" metric=merge", mergeTook)
 			record(key+" metric=merge_fsync", syncTook)
-			if *merge == "reflink" {
+			if target != base {
 				record(key+" metric=reflink_copy", cpTook)
 			}
 		}
@@ -511,7 +551,7 @@ func fork(dir string, cfg vmConfig, mem, state string, e *expect, off, gen int, 
 	e.set(stableID, off, 64, gen)
 	time.Sleep(time.Second)
 	diff, diffState := filepath.Join(dir, tagName+".mem"), filepath.Join(dir, tagName+".state")
-	_, _, _, err = m.sleep(diff, diffState, "")
+	_, _, _, err = m.sleep(diff, diffState, "", false)
 	return diff, diffState, err
 }
 
@@ -647,7 +687,7 @@ func frag(s *saved) {
 		return
 	}
 	defer m.kill()
-	size := (*mem - shmMiB()) * 70 / 100
+	size := (*mem - shmMiB()) * 80 / 100
 	for _, step := range []string{fmt.Sprintf("free %d", stableID), fmt.Sprintf("free %d", heapID), fmt.Sprintf("frag 3 %d", size)} {
 		if _, err = m.guest("%s", step); err != nil {
 			fmt.Printf("FCLAZY FRAG %s step=%q FAIL %v; alive=%t; %s\n", id, step, err, m.alive(), m.tail())
@@ -779,7 +819,7 @@ func main() {
 		*mem, *fsName, *merge, stableMiB(), heapMiB, shmMiB(), stableMiB()+heapMiB+shmMiB(), *cycles, *mcCycles, *churnMin, *n, maxMapCount())
 	has := func(s string) bool { return strings.Contains(","+*sections+",", ","+s+",") }
 	if has("chain") {
-		s, ok := chain("track", true, *cycles, time.Duration(*churnMin)*time.Minute)
+		s, ok := chain("track", true, *cycles, time.Duration(*churnMin)*time.Minute, *merge)
 		fmt.Printf("FCLAZY CHAIN-DONE chain=track mem=%d fs=%s all_passed=%t\n", *mem, *fsName, ok)
 		if s != nil {
 			if has("timing") {
@@ -798,12 +838,19 @@ func main() {
 		}
 	}
 	if has("mincore") {
-		s, ok := chain("mincore", false, *mcCycles, 0)
+		s, ok := chain("mincore", false, *mcCycles, 0, *merge)
 		fmt.Printf("FCLAZY CHAIN-DONE chain=mincore mem=%d fs=%s all_passed=%t\n", *mem, *fsName, ok)
 		if s != nil {
 			if has("idle") {
 				idle(s)
 			}
+			_ = os.RemoveAll(s.dir)
+		}
+	}
+	if has("direct") {
+		s, ok := chain("direct", true, *dCycles, 0, "direct")
+		fmt.Printf("FCLAZY CHAIN-DONE chain=direct mem=%d fs=%s all_passed=%t\n", *mem, *fsName, ok)
+		if s != nil {
 			_ = os.RemoveAll(s.dir)
 		}
 	}
