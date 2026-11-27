@@ -558,6 +558,15 @@ that names a different value fails as shown above.
 `sudo systemctl restart aether-server`. `--config <file>` may go before or
 after the key and value of `config set`.
 
+Every command that writes the file (`config set`, `config edit` while its
+editor is open, `install`, `setup`, `edge move`, `edge leave`) holds
+`<file>.lock` beside the file the path resolves to, created mode 0600 and, under
+`sudo`, owned by the config file's owner. One that finds it held for 10 seconds
+fails with `<file>.lock is still held after 10s by another command writing the
+config; nothing changed`; one that cannot create it, as when the directory is
+not writable, changes nothing. An editor other than `config edit` takes no
+lock.
+
 | Option | Default | What it does |
 | --- | --- | --- |
 | `web-port` | `0` (off) | Serve the dashboard over HTTPS on the tailnet at this port ([networking.md](networking.md#the-dashboard)). |

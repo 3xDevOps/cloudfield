@@ -54,9 +54,9 @@ func Install(unitPath, configPath string, values map[string]string, force bool) 
 	return res, nil
 }
 
-// WriteConfig renders values into the config file at path, creating its
+// writeConfig renders values into the config file at path, creating its
 // directory if needed.
-func WriteConfig(path string, values map[string]string) error {
+func writeConfig(path string, values map[string]string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("serversetup: create %s: %w", dir, err)

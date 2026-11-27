@@ -250,25 +250,36 @@ func TestApplyMoveFromARetiringOrRetiredAddress(t *testing.T) {
 	}
 }
 
-// With the config lock held elsewhere, config set and edge move give up
-// within the wait, name the lock file and change nothing; edge move waits
-// for it without holding the edge state lock.
+// With the config lock held elsewhere, config set (through the file's
+// real name or another), a forced rewrite such as install --force and
+// edge move give up within the wait, name the lock file and change
+// nothing; edge move waits for it without holding the edge state lock.
 func TestConfigLockHeldElsewhere(t *testing.T) {
 	t.Setenv("SUDO_USER", "ubuntu")
-	wait := configLockWait
-	configLockWait = 500 * time.Millisecond
-	t.Cleanup(func() { configLockWait = wait })
+	wait := serversetup.ConfigLockWait
+	serversetup.ConfigLockWait = 500 * time.Millisecond
+	t.Cleanup(func() { serversetup.ConfigLockWait = wait })
 	const from, to = "https://edge-old.example.test", "https://edge-new.example.test"
-	dir := t.TempDir()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	path := filepath.Join(dir, "server.conf")
-	if err := serversetup.WriteConfig(path, map[string]string{"data-dir": dir, "edge-url": from}); err != nil {
+	if err = serversetup.WriteConfig(path, map[string]string{"data-dir": dir, "edge-url": from}); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(t.TempDir(), "alias.conf")
+	if err = os.Symlink(path, alias); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if info, serr := os.Stat(path + ".lock"); serr != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("lock file: %v, %v", info, serr)
+	}
+	lock, err := os.OpenFile(path+".lock", os.O_RDWR, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -276,12 +287,15 @@ func TestConfigLockHeldElsewhere(t *testing.T) {
 	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
 		t.Fatal(err)
 	}
-	if info, serr := os.Stat(path + ".lock"); serr != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("lock file: %v, %v", info, serr)
-	}
-	want := path + ".lock is still held after 500ms by another config set or edge move; nothing changed"
-	if err = configSet(io.Discard, path, "edge-access", "account"); fmt.Sprint(err) != want {
-		t.Errorf("config set: %v, want %q", err, want)
+	want := path + ".lock is still held after 500ms by another command writing the config; nothing changed"
+	for name, write := range map[string]func() error{
+		"config set":             func() error { return configSet(io.Discard, path, "edge-access", "account") },
+		"config set by an alias": func() error { return configSet(io.Discard, alias, "edge-access", "account") },
+		"a forced rewrite":       func() error { return serversetup.WriteConfig(alias, map[string]string{"edge-url": to}) },
+	} {
+		if err = write(); fmt.Sprint(err) != want {
+			t.Errorf("%s: %v, want %q", name, err, want)
+		}
 	}
 	state := edgeagent.OpenState(dir)
 	pub, _, _ := ed25519.GenerateKey(rand.Reader)
