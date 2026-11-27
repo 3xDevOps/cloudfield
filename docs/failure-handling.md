@@ -1023,9 +1023,9 @@ runner, a VM with 1.3 GiB of saved memory woke in 1.9 to 8.5 seconds with
 the file read from disk, and in about 1 second with it still in the host's
 page cache. Cloud Hypervisor can also load the memory on demand, which ran
 the first command 0.8 to 1.5 seconds after the wake began, and Cloudfield
-does not use it: Cloud Hypervisor v54.1 takes a page that is already there
-as loaded, so a page anything on the host had touched first kept zeros, and
-VMs died as they woke
+does not use it: through v55.0 Cloud Hypervisor takes a page that is already
+there as loaded, so with v54.1 a page anything on the host had touched first
+kept zeros, and VMs died as they woke
 ([vm-guest.md](vm-guest.md#save-and-restore)). On a test host, a
 message to a sleeping Claude Code or Codex session running a dev server and
 a `docker compose` stack was accepted 0.7 to 1.5 seconds after it was sent,

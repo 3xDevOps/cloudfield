@@ -36,13 +36,13 @@ type Pinned struct {
 // installs it with aether-server vm install. /usr/local/bin precedes /usr/bin on systemd's PATH, so
 // it wins over a distribution package.
 var CloudHypervisor = Pinned{
-	Name: "Cloud Hypervisor v54.1",
-	URL:  "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v54.1/cloud-hypervisor-static",
+	Name: "Cloud Hypervisor v55.0",
+	URL:  "https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v55.0/cloud-hypervisor-static",
 	Path: "/usr/local/bin/cloud-hypervisor",
 	Mode: 0o755,
 	Asset: selfupdate.Asset{
-		SHA256: "f9ffb9646783233d1f0fb09e77db1fca66499d1041e63bc011b90683c0d49933",
-		Size:   7344872,
+		SHA256: "ce7133bf535ed5a4e2a63ea1f26025445a5b1241f73ddfb81ff2fbcb2e803a59",
+		Size:   7709448,
 	},
 }
 

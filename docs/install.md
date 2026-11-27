@@ -87,7 +87,9 @@ The old names keep working, with no end date.
 With `session-runtime vm`, each session runs in its own Cloud Hypervisor
 virtual machine ([environments.md](environments.md#sessions-in-virtual-machines)).
 The host must be x86-64 and expose `/dev/kvm`: bare metal, or a cloud VM with
-nested virtualization.
+nested virtualization. It needs Linux 6.8 or newer, the oldest host kernel
+Cloud Hypervisor v55.0 supports: `uname -r` prints the version. Ubuntu 24.04
+ships 6.8, Debian 12 ships 6.1.
 
 Before installing, put the data directory on a filesystem that can share
 blocks between files: XFS made with `reflink=1`, the `mkfs.xfs` default, or
@@ -123,7 +125,7 @@ Both first open `/dev/kvm` and stop with the error when they cannot, such as
 then writes nothing. They install `qemu-img`, `mkfs.ext4`,
 `/usr/libexec/virtiofsd`, `iptables`, `nft` and `ip` with `apt-get` when
 missing (Debian 12 or Ubuntu 24.04 and newer ship `virtiofsd` at that path), Cloud Hypervisor
-v54.1 at `/usr/local/bin/cloud-hypervisor` after checking its SHA-256, the
+v55.0 at `/usr/local/bin/cloud-hypervisor` after checking its SHA-256, the
 oh-my-pi release whose auth broker holds session VMs' omp logins at
 `/usr/local/libexec/aether/omp` after checking its SHA-256
 ([harnesses.md](harnesses.md#oh-my-pi-in-session-vms)), and the
