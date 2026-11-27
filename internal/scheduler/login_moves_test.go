@@ -360,6 +360,62 @@ func TestATeammatesSignalMovesOnlyOnAFreshRead(t *testing.T) {
 	}
 }
 
+// cooledUsage answers fresh reads as the quota service does within its
+// request floor: with the vendor's report from age ago, as stale.
+type cooledUsage struct {
+	*loginUsage
+	age time.Duration
+}
+
+func (u cooledUsage) ReadLogin(ctx context.Context, account domain.Account, refresh bool) ([]quota.Provider, error) {
+	providers, err := u.loginUsage.ReadLogin(ctx, account, refresh)
+	if refresh {
+		at := time.Now().Add(-u.age)
+		for i := range providers {
+			providers[i].Status, providers[i].UpdatedAt, providers[i].Error = "stale", &at, "quota request cooldown"
+		}
+	}
+	return providers, err
+}
+
+func (u cooledUsage) Read(ctx context.Context, member domain.MemberID, refresh bool) ([]quota.Provider, error) {
+	return u.ReadLogin(ctx, domain.AccountOf(member), refresh)
+}
+
+// A fresh read of Grace's login just after another, as when two teammates'
+// sessions hit its limit within seconds, is answered with what the vendor
+// reported then: that moves Ada's session on, a report older than the
+// request floor does not.
+func TestATeammatesSignalTrustsAReadJustBefore(t *testing.T) {
+	t.Parallel()
+	for _, age := range []time.Duration{2 * time.Second, time.Minute} {
+		t.Run(age.String(), func(t *testing.T) {
+			t.Parallel()
+			e, _, notes, usage, _ := newLoginMoveEnv(t, enhancedClaude)
+			e.share(t)
+			work := e.addLogin(t, e.owner.ID, "lgn-work000000", "work", workLogin)
+			usage.set(work, 100)
+			e.sched.UseUsageFallback(UsageFallback{Usage: cooledUsage{loginUsage: usage, age: age}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+			run, err := e.sched.LaunchWithOptions(t.Context(), e.ws.ID, e.member.ID, e.owner.ID, "", "claude", domain.LaunchACP, domain.LaunchOptions{AccountLogin: work.Login})
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+			_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
+			if age > time.Minute/2 {
+				if got := e.waitStoreStatus(t, run.ID, domain.RunNeedsAttention); got.Account() != work {
+					t.Fatalf("run on %s with %q; want it kept on work", got.Account(), got.Reason)
+				}
+				return
+			}
+			waitFor(t, "the session off the work login", func() bool {
+				row, rowErr := e.db.GetRun(t.Context(), run.ID)
+				return rowErr == nil && row.Account() == domain.AccountOf(e.owner.ID) && !row.Status.Terminal()
+			})
+		})
+	}
+}
+
 // A session that lands on a login billed per use says so in its log, its
 // room and its run.account event: at launch, and when a move takes it
 // there, Enhanced and Standard.

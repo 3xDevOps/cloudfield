@@ -85,7 +85,15 @@ func (s *Scheduler) checkTeammateSignal(ctx context.Context, f *UsageFallback, r
 	}
 	providers, err := readLogin(ctx, f.Usage, from, true)
 	if err == nil {
-		if spent, _ := spentWindows(providers, run.Harness, time.Now()); len(spent) > 0 {
+		now := time.Now()
+		for i := range providers {
+			// Within the request floor a fresh read is answered with the
+			// vendor's last report as stale; that report is fresh enough.
+			if quota.Recent(providers[i], now) {
+				providers[i].Status = "ok"
+			}
+		}
+		if spent, _ := spentWindows(providers, run.Harness, now); len(spent) > 0 {
 			return ""
 		}
 	}

@@ -171,6 +171,18 @@ func (s *Service) read(ctx context.Context, account domain.Account, refresh bool
 
 	s.mu.Lock()
 	flight := s.flight[key]
+	if refresh && flight != nil && !flight.refresh {
+		// A vendor read it makes starts the request floor, which would
+		// answer this one from the cache; this one reads after it.
+		s.mu.Unlock()
+		select {
+		case <-flight.done:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		s.mu.Lock()
+		flight = s.flight[key]
+	}
 	if flight == nil || (refresh && !flight.refresh) {
 		flight = &readFlight{done: make(chan struct{}), refresh: refresh}
 		s.flight[key] = flight
@@ -460,6 +472,13 @@ func cachedOrUnavailable(state cacheState, provider string, cred credential, now
 		return staleProvider(state.provider, now, reason, retryAt)
 	}
 	return failedProvider(provider, cred.plan, "unavailable", now, retryAt, reason)
+}
+
+// Recent reports whether p holds what the vendor reported less than the
+// request floor before now, which a fresh read within the floor is answered
+// with as a stale row.
+func Recent(p Provider, now time.Time) bool {
+	return p.Status == "ok" || p.Status == "stale" && p.UpdatedAt != nil && now.Sub(*p.UpdatedAt) < requestFloor
 }
 
 func staleProvider(cached Provider, now time.Time, reason string, retryAt time.Time) Provider {

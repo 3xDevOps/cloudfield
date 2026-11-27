@@ -446,7 +446,7 @@ func TestAFreshReadDoesNotJoinACachedOne(t *testing.T) {
 	service.mu.Lock()
 	service.flight[string(member)] = cached
 	service.mu.Unlock()
-	defer close(cached.done)
+	time.AfterFunc(50*time.Millisecond, func() { close(cached.done) })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	got, err := service.Read(ctx, member, true)
@@ -455,5 +455,36 @@ func TestAFreshReadDoesNotJoinACachedOne(t *testing.T) {
 	}
 	if got[0].Status != "ok" || got[0].Windows[0].UsedPercent != 20 {
 		t.Fatalf("fresh read = %+v; want the vendor's 20%%, not the read in flight", got[0])
+	}
+}
+
+// A fresh read that starts while another read is at the vendor waits for
+// it, rather than be answered from the request floor that read started, and
+// gets what the vendor reported.
+func TestAFreshReadWaitsForAReadAtTheVendor(t *testing.T) {
+	homes, member := fixtureHomes(t, `{"claudeAiOauth":{"accessToken":"token","expiresAt":4102444800000,"scopes":["user:inference"]}}`, ``)
+	atVendor, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	oldTransport := usageHTTPClient.Transport
+	usageHTTPClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		once.Do(func() {
+			close(atVendor)
+			<-release
+		})
+		return fixtureResponse(`{"five_hour":{"utilization":99,"resets_at":"2100-01-01T00:00:00Z"}}`), nil
+	})
+	t.Cleanup(func() { usageHTTPClient.Transport = oldTransport })
+	service := New(homes, nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	go func() { _, _ = service.Read(ctx, member, false) }()
+	<-atVendor
+	time.AfterFunc(50*time.Millisecond, func() { close(release) })
+	got, err := service.Read(ctx, member, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !Recent(got[0], time.Now()) || len(got[0].Windows) != 1 || got[0].Windows[0].UsedPercent != 99 {
+		t.Fatalf("fresh read = %+v; want the vendor's 99%% as read just now", got[0])
 	}
 }
