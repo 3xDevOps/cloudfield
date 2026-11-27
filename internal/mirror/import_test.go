@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/gitengine"
@@ -180,6 +181,8 @@ func TestGitHubImportRefreshRetainsProtectedBaseAcrossCredentialChanges(t *testi
 		credentialCalls++
 		return token, accountID, credentialErr
 	}
+	now := time.Now().UTC()
+	svc.now = func() time.Time { return now }
 	configured, err := svc.Configure(t.Context(), "github-import", ConfigureRequest{
 		SourceURL: "https://github.com/acme/private.git", Branch: "main", Auth: domain.MirrorAuthGitHub,
 		GitHubMemberID: "admin", GitHubUserID: 42,
@@ -198,6 +201,7 @@ func TestGitHubImportRefreshRetainsProtectedBaseAcrossCredentialChanges(t *testi
 	importGit(t, source, "-c", "user.name=Source", "-c", "user.email=source@example.test", "commit", "--allow-empty", "-m", "next source")
 	next := importGit(t, source, "rev-parse", "HEAD")
 	token = "rotated-native-credential"
+	now = now.Add(captureFresh)
 	captured, err := svc.Capture(t.Context(), "github-import", "")
 	if err != nil || captured.Commit != next || captured.Cached || credentialCalls != 2 {
 		t.Fatalf("launch refresh = %+v, %v; credential reads = %d", captured, err, credentialCalls)
@@ -215,6 +219,7 @@ func TestGitHubImportRefreshRetainsProtectedBaseAcrossCredentialChanges(t *testi
 	if out, err := push.CombinedOutput(); err == nil {
 		t.Fatalf("direct push bypassed protected GitHub base: %s", out)
 	}
+	now = now.Add(captureFresh)
 	for _, state := range []string{"switched account", "revoked", "missing token", "invalid token", "missing provider"} {
 		accountID, token, credentialErr = 42, "test-native-credential", nil
 		switch state {
