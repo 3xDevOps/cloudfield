@@ -476,9 +476,9 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 	}
 	shown, code = ada.onTerminal(nil, "agent", "login", "claude", "--as", "other")
 	t.Logf("$ cloudfield agent login claude --as other\n%s", shown)
-	if code == 0 || !strings.Contains(shown, `the sign-in of login "later" is still running; finish it first`+"\n"+
+	if code == 0 || !strings.Contains(shown, `the sign-in of login "later" (`+attach[2]+`) is still running; finish it first`+"\n"+
 		"that sign-in ends by itself 15 minutes after its terminal opened, or 10 minutes after it started if none did; "+
-		"to finish it sooner, run the cloudfield agent login claude --attach <login-id> line it printed when it started\n") {
+		"to finish it sooner, return to it with:\n  "+attach[1]+"\n") {
 		t.Fatalf("a second add while one runs = %d:\n%s", code, shown)
 	}
 	rt.mu.Lock()
@@ -512,12 +512,16 @@ func TestIntegrationSessionOnANamedLogin(t *testing.T) {
 	srv := e.seed(ctx, t, false)
 	second := domain.LoginID("lgn-second0000")
 	addLogin(ctx, t, srv, e.dataDir, e.ada.id, second, "second")
+	signInDefault(t, e.dataDir, e.ada.id)
 	aether := buildCLIBinary(t)
 	ada := newCLIUser(t, aether, srv.addr, e.keyPath)
 
 	_, stderr, code := ada.cli("session", "on no login", "--agent", "claude", "--mode", "background", "--login", "nope")
 	if code == 0 || !strings.Contains(stderr, `--login: you have no login named "nope"; cloudfield agent logins lists yours`) {
 		t.Fatalf("session --login nope = %d %q", code, stderr)
+	}
+	if _, err := srv.srv.Store().ShareAccount(ctx, e.bo.id, e.ada.id); err != nil {
+		t.Fatal(err)
 	}
 	for _, named := range []string{"nope", "second"} {
 		_, stderr, code = ada.cli("session", "on Bo's login", "--agent", "claude", "--mode", "background", "--account", string(e.bo.id), "--login", named)
