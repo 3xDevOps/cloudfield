@@ -285,7 +285,7 @@ func RoleCard(g Guide) string {
 	}
 	if g.Parent != "" {
 		fmt.Fprintf(&b, "Session %s started you as its subsession: do the task yourself; subsessions go one level deep, so you cannot start subsessions. "+
-			"Ask it with `%s ask --to %s` before asking the user; your final report reaches it. If you sit idle or waiting for over an hour, it is told and may wake you or stop you.\n", g.Parent, g.cli(), g.Parent)
+			"Ask it with `%s ask --to %s` before asking the user; your final report reaches it: put your whole result, such as review findings, in its body (`%s report --body-file <file>`, or body in aether_report), not in messages sent before it. If you sit idle or waiting for over an hour, it is told and may wake you or stop you.\n", g.Parent, g.cli(), g.Parent, g.cli())
 	}
 	if g.Parent == "" && !g.Background {
 		write(OneSessionRule + " " + ReviewerRule + " " +
