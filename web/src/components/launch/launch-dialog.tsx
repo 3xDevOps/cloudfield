@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Dialog, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Dialog as DialogPrimitive } from 'radix-ui'
 import { toast } from 'sonner'
 import { useDictating } from '@/components/dictation/state'
@@ -49,6 +49,8 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   const [restored] = useState(() => useStore.getState().launchDraft)
   const [draftID] = useState(() => restored?.id ?? randomID('launch-draft'))
   const ended = useRef(false)
+  const [confirmClose, setConfirmClose] = useState(false)
+  const closeOpener = useRef<HTMLElement | null>(null)
   const outsideClick = useRef(false)
   const storageFailed = useRef(false)
   const choiceEdited = useRef(false)
@@ -226,12 +228,36 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
 
   const discard = () => {
     ended.current = true
+    setConfirmClose(false)
     const state = useStore.getState()
     if (state.identityKey !== identityKey) return
     if (state.launchDraft?.id === draftID) {
       const failure = state.setLaunchDraft(null)
       if (failure) toast.error(`Draft could not be removed from this browser: ${failure}`)
     }
+    close()
+  }
+
+  const requestClose = () => {
+    if (launching) collapse()
+    else {
+      closeOpener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null
+      setConfirmClose(true)
+    }
+  }
+
+  const finishDraft = (save: boolean) => {
+    const state = useStore.getState()
+    const draft = state.launchDraft
+    if (state.identityKey !== identityKey || draft?.id !== draftID) return
+    const saved = save ? [draft, ...state.savedLaunchDrafts.filter(({ id }) => id !== draftID)] : state.savedLaunchDrafts
+    const error = state.updateLaunchDrafts(null, saved)
+    if (error) {
+      toast.error(`Could not ${save ? 'save' : 'delete'} draft: ${error}`)
+      return
+    }
+    ended.current = true
+    setConfirmClose(false)
     close()
   }
 
@@ -399,11 +425,30 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
 
   if (!visible) return null
 
-  if (phone) {
-    return (
+  const closeChoice = (
+    <Dialog open={open && confirmClose} onOpenChange={setConfirmClose}>
+      <DialogContent showCloseButton={false} onCloseAutoFocus={(event) => {
+        if (!ended.current && closeOpener.current?.isConnected) {
+          event.preventDefault()
+          closeOpener.current.focus()
+        }
+      }}>
+        <DialogHeader>
+          <DialogTitle>Close new session?</DialogTitle>
+          <DialogDescription>Save this task and its launch settings to continue later.</DialogDescription>
+        </DialogHeader>
+        <DialogFooter>
+          <Button variant="danger" onClick={() => finishDraft(false)}>Delete draft</Button>
+          <Button autoFocus onClick={() => finishDraft(true)}>Save draft</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+
+  const form = phone ? (
       <PhoneLaunchSheet
         open={open}
-        onClose={discard}
+        onClose={requestClose}
         onSubmit={() => { if (!dictating) void submit() }}
         task={task}
         onTask={setTask}
@@ -434,11 +479,8 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
         returnFocus={returnFocus}
         launch={<Button type="submit" form="launch-form" className="w-full" disabled={launchDisabled}>{launchLabel}</Button>}
       />
-    )
-  }
-
-  return (
-    <Dialog open={open} modal={false} onOpenChange={(next) => { if (!next) discard() }}>
+  ) : (
+    <Dialog open={open} modal={false} onOpenChange={(next) => { if (!next) requestClose() }}>
       <SlideOut open={open} width={`${visibleLaunchWidth}px`}>
       <DialogPrimitive.Content
         {...returnFocus}
@@ -449,7 +491,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
         }}
         onPointerDownOutside={(event) => {
           event.preventDefault()
-          if (!open) return
+          if (!open || confirmClose) return
           outsideClick.current = true
           if (launching || dictating || task.trim()) {
             collapse()
@@ -460,7 +502,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
           }
           discard()
         }}
-        onEscapeKeyDown={(event) => { event.preventDefault(); collapse() }}
+        onEscapeKeyDown={(event) => { event.preventDefault(); if (!confirmClose) collapse() }}
         onInteractOutside={(event) => event.preventDefault()}
         className={cn(surface, 'relative grid h-full w-full grid-rows-[auto_minmax(0,1fr)_auto] gap-3 overflow-hidden rounded-none border-y-0 border-l-0 p-4 pt-[calc(1rem+var(--safe-top))] shadow-dialog outline-none')}
       >
@@ -485,7 +527,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
           <div className="min-w-0 max-sm:order-last sm:mr-auto">
             <WorkspaceLine workspace={workspace} />
           </div>
-          <Button variant="secondary" onClick={discard}>Cancel</Button>
+          <Button variant="secondary" onClick={requestClose}>Cancel</Button>
           <Button type="submit" form="launch-form" disabled={launchDisabled}>{launchLabel}</Button>
         </DialogFooter>
         <DialogPrimitive.Close asChild>
@@ -510,6 +552,8 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
       </SlideOut>
     </Dialog>
   )
+
+  return <>{form}{closeChoice}</>
 }
 
 /** Your newest session you started yourself, in a workspace that still exists; subsessions and connector launches do not count. */

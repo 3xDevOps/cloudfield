@@ -71,9 +71,9 @@ export const createLocalSlice: SliceCreator<LocalSlice> = (set, get) => ({
       })
       return
     }
-    if (state.launchDraftError === launchDraftLinkStatusPending && state.identityKey && state.paletteDialog !== 'launch' && !state.launchDraft) {
+    if (state.launchDraftError === launchDraftLinkStatusPending && state.identityKey && state.paletteDialog !== 'launch' && !state.launchDraft && !state.savedLaunchDrafts.length) {
       const restored = readLaunchDraft(state.identityKey)
-      set({ linkStatus, launchDraft: restored.draft, launchDraftError: restored.error })
+      set({ linkStatus, launchDraft: restored.draft, savedLaunchDrafts: restored.saved, launchDraftError: restored.error })
       return
     }
     set({ linkStatus })

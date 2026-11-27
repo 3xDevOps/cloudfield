@@ -4,7 +4,7 @@ import { saveLaunchDraft, type LaunchDraft } from '@/components/launch/draft'
 import type { SliceCreator } from '@/store/slice'
 
 /** Every form the shell hosts; sweep this list rather than keep a copy. */
-export const paletteDialogs = ['launch', 'inject', 'forward', 'close', 'clear-done', 'release-finished', 'watch'] as const
+export const paletteDialogs = ['launch', 'launch-drafts', 'inject', 'forward', 'close', 'clear-done', 'release-finished', 'watch'] as const
 
 export type PaletteDialog = (typeof paletteDialogs)[number]
 
@@ -21,6 +21,8 @@ export interface PaletteSlice {
   /** The Linear issue a launch from the Linear page links to; null for none. */
   paletteLaunchLinear: LinearLink | null
   launchDraft: LaunchDraft | null
+  savedLaunchDrafts: LaunchDraft[]
+  updateLaunchDrafts: (draft: LaunchDraft | null, saved: LaunchDraft[]) => string | null
   launchDraftError: string | null
   setLaunchDraft: (draft: LaunchDraft | null, persist?: boolean) => string | null
   clearLaunchDraftError: () => void
@@ -48,11 +50,19 @@ export const createPaletteSlice: SliceCreator<PaletteSlice> = (set, get) => ({
   paletteLaunchTask: '',
   paletteLaunchLinear: null,
   launchDraft: null,
+  savedLaunchDrafts: [],
+  updateLaunchDrafts: (launchDraft, savedLaunchDrafts) => {
+    const state = get()
+    const linkStatusPending = state.capabilities === null || (state.capabilities.local?.includes('link.status') && !state.linkStatus)
+    const error = saveLaunchDraft(state.identityKey, launchDraft, !state.linkStatus?.edge_url && !linkStatusPending, savedLaunchDrafts)
+    if (!error) set({ launchDraft, savedLaunchDrafts })
+    return error
+  },
   launchDraftError: null,
   setLaunchDraft: (launchDraft, persist = true) => {
     const state = get()
     const linkStatusPending = state.capabilities === null || (state.capabilities.local?.includes('link.status') && !state.linkStatus)
-    const error = saveLaunchDraft(state.identityKey, launchDraft, persist && !state.linkStatus?.edge_url && !linkStatusPending)
+    const error = saveLaunchDraft(state.identityKey, launchDraft, persist && !state.linkStatus?.edge_url && !linkStatusPending, state.savedLaunchDrafts)
     set({
       launchDraft,
       launchDraftError: error ? `Could not save launch draft: ${error}` : persist ? null : state.launchDraftError,
@@ -64,15 +74,15 @@ export const createPaletteSlice: SliceCreator<PaletteSlice> = (set, get) => ({
   closeChecking: {},
   togglePalette: (open) => set((s) => ({ paletteOpen: open ?? !s.paletteOpen })),
   openPaletteDialog: (dialog, runID) =>
-    set({
+    set((s) => ({
       paletteOpen: false,
-      paletteDialog: dialog,
+      paletteDialog: dialog === 'launch' && !s.launchDraft && s.savedLaunchDrafts.length ? 'launch-drafts' : dialog,
       paletteRunID: runID ?? null,
       paletteForwardTarget: null,
       paletteWatchTarget: null,
       paletteLaunchTask: '',
       paletteLaunchLinear: null,
-    }),
+    })),
   openLaunchWithTask: (task, linear) =>
     set({
       paletteOpen: false,
