@@ -87,6 +87,32 @@ describe('refused sign-in', () => {
   })
 })
 
+describe('a launched session whose agent failed to start', () => {
+  const ack = { ok: true as const, seq: 0, replay: 0, epoch: 0, has_control: false }
+  const failed = (description: string) => {
+    useStore.setState({ acpSessions: {}, agentList: null, info: serverInfo })
+    const store = useStore.getState()
+    store.acpAck('run_1', { ...ack, live: false, starting: true })
+    store.acpAck('run_1', { ...ack, seq: 1, replay: 1, live: false })
+    store.acpFrames('run_1', [{ seq: 1, item: { seq: 1, epoch: 0, time: '2026-11-27T10:00:00Z', turn: 0, kind: 'notice', notice: { severity: 'error', title: 'Enhanced agent failed', description } } }])
+    return useStore.getState().acpSessions.run_1!
+  }
+
+  it('offers a retry and Standard under the real error', () => {
+    renderCallout(failed('start the agent: exec: "claude-agent-acp": executable file not found in $PATH'))
+    expect(screen.getByText('Enhanced agent failed')).toBeDefined()
+    expect(screen.getByText(/executable file not found in \$PATH/)).toBeDefined()
+    for (const name of ['Retry Enhanced', 'Open in Standard']) expect(screen.getByRole('button', { name })).toBeDefined()
+  })
+
+  it('offers the sign-in steps when the agent refused the login', () => {
+    renderCallout(failed('the agent refused: Authentication required; sign in again on the Agents page'))
+    expect(screen.getByText('The agent is not signed in')).toBeDefined()
+    expect(screen.getByText(/Authentication required; sign in again on the Agents page/)).toBeDefined()
+    for (const name of ['Sign in on Agents', 'Open a terminal']) expect(screen.getByRole('button', { name })).toBeDefined()
+  })
+})
+
 describe('open in Standard', () => {
   beforeEach(() => {
     vi.spyOn(api, 'runCloseCheck').mockResolvedValue([{ run_id: 'run_1', warnings: [] }])

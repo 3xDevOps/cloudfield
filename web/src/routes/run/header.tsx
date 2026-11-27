@@ -123,12 +123,18 @@ function WaitLine({ run }: { run: RunRecord }) {
 }
 
 /** The state's dot and label, for which `chip` stands in, then on a wide row the reason and what the session runs as. */
-function StateLine({ run, agentName, narrow, controls, chip }: { run: RunRecord; agentName: string; narrow: boolean; controls: boolean; chip?: React.ReactNode }) {
+export function StateLine({ run, agentName, narrow, controls, chip }: { run: RunRecord; agentName: string; narrow: boolean; controls: boolean; chip?: React.ReactNode }) {
   const presented = useRunPresentation(run)
   const asks = useNeedsYouRuns([run.id]).has(run.id)
+  const starting = useStore((s) => {
+    const session = s.acpSessions[run.id]
+    return Boolean(session?.starting && !session.live)
+  })
   const presentation = run.switching
     ? { state: 'working' as const, reason: `Switching to ${modeLabel[run.switching] ?? run.switching}…` }
-    : presented
+    : starting
+      ? { state: 'working' as const, reason: 'Starting' }
+      : presented
   const { state } = presentation
   const subagents = useStore((s) =>
     state === 'waiting-agents'

@@ -180,7 +180,9 @@ tooltip say why.
 
 A launched session opens before its agent has started. Until it has, the empty
 box reads **Message the agent while it starts**, and a message you send shows
-**Queued** until the agent takes it.
+**Queued** until the agent takes it. If the agent fails to start, the message
+shows **Not sent** with the agent's error, and the panel above the box offers
+the next step.
 
 Steering, answering, interrupting and changing options need control of the session.
 The owner's desktop tab takes it when it first shows Chat and nobody holds
