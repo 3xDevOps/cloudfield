@@ -331,8 +331,9 @@ func (s *Scheduler) attachedAppServer(run domain.RunID) bool {
 func (s *Scheduler) IdleEnhanced(run domain.RunID) bool {
 	s.mu.Lock()
 	entry := s.runs[run]
-	// A move's continuation goes first; its turn's end wakes again.
-	owed := entry != nil && entry.accountSwap != nil && entry.accountSwap.Continuation != ""
+	// A move stops the agent it replaces, and its continuation goes first;
+	// its turn's end wakes again.
+	owed := entry != nil && (entry.moving || entry.accountSwap != nil && entry.accountSwap.Continuation != "")
 	asleep := entry != nil && entry.launchMode == domain.LaunchACP && !entry.retained && (entry.sleeping || !entry.asleepSince.IsZero())
 	enhanced := entry != nil && entry.launchMode == domain.LaunchACP && !entry.paused && entry.switching == ""
 	s.mu.Unlock()

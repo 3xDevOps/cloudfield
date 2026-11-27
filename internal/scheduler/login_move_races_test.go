@@ -779,3 +779,28 @@ func TestMailWaitsForTheContinuation(t *testing.T) {
 		})
 	}
 }
+
+// Mail is not handed to the agent a move holds, which the move would stop
+// mid-turn.
+func TestMailDuringAMoveIsNotDelivered(t *testing.T) {
+	t.Parallel()
+	e, rt, notes, usage, second := newLoginMoveEnv(t, enhancedClaude)
+	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+	first := rt.all()[0]
+	var wakeErr error
+	e.sched.UseUsageFallback(UsageFallback{Usage: &hookedLoginUsage{loginUsage: usage, during: func() {
+		wakeErr = e.sched.WakeEnhanced(context.Background(), run.ID, "unread mail")
+	}}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+	_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
+	waitFor(t, "the session on the second login", func() bool {
+		row, rowErr := e.db.GetRun(t.Context(), run.ID)
+		return rowErr == nil && row.Account() == second
+	})
+	if !errors.Is(wakeErr, errACPBusy) || !slices.Equal(sentPrompts(t, first), []string{acpmock.PromptUsageLimit}) {
+		t.Fatalf("wake during the move: %v; the replaced agent was prompted %q; want it refused", wakeErr, sentPrompts(t, first))
+	}
+}
