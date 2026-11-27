@@ -158,6 +158,10 @@ func (s *Service) apiDeviceToken(r *http.Request) (any, error) {
 	a, err := s.store.DeviceAuth(ctx, hash)
 	if err == nil {
 		if p := s.pair(r); !startedAt(a, p) {
+			if sameOrigin(a.SigninOrigin, p.signin) {
+				return nil, pageErr(http.StatusBadRequest, "this sign-in was started for the relay origin %s, which %s no longer signs devices in for; "+
+					"start it again with: cloudfield login --edge %s", a.RelayOrigin, p.signin, p.relay)
+			}
 			return nil, pageErr(http.StatusBadRequest, "this sign-in was started at %s, not at %s for %s; finish it there",
 				startedWhere(a), p.signin, p.relay)
 		}

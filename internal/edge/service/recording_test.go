@@ -362,7 +362,7 @@ func TestDeviceAuthAcrossRestart(t *testing.T) {
 		req.Header.Set(edgeproto.HeaderVersion, fmt.Sprint(edgeproto.Version))
 		rec := httptest.NewRecorder()
 		svc.Handler().ServeHTTP(rec, req)
-		if refused := strings.Contains(rec.Body.String(), "this sign-in was started at"); refused != tt.refused {
+		if refused := strings.Contains(rec.Body.String(), "this sign-in was started"); refused != tt.refused {
 			t.Errorf("poll after a restart with the relay origin %s: %d %s, want refused %v", tt.relay, rec.Code, rec.Body, tt.refused)
 		}
 	}
