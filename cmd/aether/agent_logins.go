@@ -313,6 +313,14 @@ func onOff(on bool) string {
 	return "off"
 }
 
+// requireLogins refuses flag on a server that keeps no added logins.
+func requireLogins(info protocol.ServerInfoResult, flag string) error {
+	if slices.Contains(info.Features, protocol.FeatureLogins) {
+		return nil
+	}
+	return fmt.Errorf("%s: server %s lacks the %q feature, so it keeps only the login in your home; update the server with cloudfield server update", flag, info.ServerVersion, protocol.FeatureLogins)
+}
+
 func listLogins(c *protocol.Client, agent string) ([]protocol.AgentLogin, error) {
 	var list protocol.AgentLoginListResult
 	if err := c.Call(protocol.MethodAgentLoginList, protocol.AgentLoginParams{Agent: agent}, &list); err != nil {

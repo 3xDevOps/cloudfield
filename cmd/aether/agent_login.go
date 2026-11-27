@@ -46,11 +46,18 @@ func agentLogin(args []string) error {
 	case (adding || attaching) && name != addedLoginsAgent:
 		return fmt.Errorf("only Claude Code keeps added logins, so %s has none; cloudfield agent login %s signs in its one login", name, name)
 	}
+	added := ""
+	switch {
+	case adding:
+		added = "--as"
+	case attaching:
+		added = "--attach"
+	}
 	var agent protocol.AgentInfo
 	found := false
 	if err := withControl(func(c *protocol.Client) error {
 		var err error
-		agent, found, err = lookupAgent(c, name)
+		agent, found, err = loginAgent(c, name, added)
 		return err
 	}); err != nil {
 		return err
@@ -85,6 +92,24 @@ func agentLogin(args []string) error {
 			"An API key stored as a workspace secret works instead: docs/harnesses.md#use-an-api-key", agent.Name, agent.LoginCommand, agent.Name)
 	}
 	return deviceLogin(os.Stdout, agent)
+}
+
+// loginAgent looks up the agent to sign in. The sign-in of an added login,
+// asked for by the flag added, needs a server that keeps added logins: an
+// older one ignores the login in the terminal request and opens the
+// member's own terminal, where a code typed would sign in the default
+// login.
+func loginAgent(c *protocol.Client, name, added string) (protocol.AgentInfo, bool, error) {
+	if added != "" {
+		var info protocol.ServerInfoResult
+		if err := c.Call(protocol.MethodServerInfo, struct{}{}, &info); err != nil {
+			return protocol.AgentInfo{}, false, err
+		}
+		if err := requireLogins(info, added); err != nil {
+			return protocol.AgentInfo{}, false, err
+		}
+	}
+	return lookupAgent(c, name)
 }
 
 // deviceLogin runs the sign-in in a new tab each time: a tab found by name

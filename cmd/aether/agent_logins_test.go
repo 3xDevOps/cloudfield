@@ -230,3 +230,27 @@ func TestAgentLoginTakesItsFlagsBeforeOrAfterTheAgent(t *testing.T) {
 		t.Errorf("agentLogin without an agent = %v; want the usage", err)
 	}
 }
+
+func TestAddedLoginSignInNeedsAServerThatKeepsLogins(t *testing.T) {
+	agents := &fakeReply{result: protocol.AgentListResult{Agents: []protocol.AgentInfo{{Name: "claude", LoginCommand: "claude auth login", Installed: true}}}}
+	old := fakeControlMethods(t, map[string]*fakeReply{
+		protocol.MethodServerInfo: {result: protocol.ServerInfoResult{ServerVersion: "v0.9.0", Features: []string{protocol.FeaturePermission}}},
+		protocol.MethodAgentList:  agents,
+	})
+	for _, flag := range []string{"--as", "--attach"} {
+		if _, _, err := loginAgent(old, "claude", flag); err == nil || err.Error() != flag+`: server v0.9.0 lacks the "logins" feature, so it keeps only the login in your home; update the server with cloudfield server update` {
+			t.Errorf("loginAgent(%s) on a server without logins = %v; want the refusal before any terminal opens", flag, err)
+		}
+	}
+	listOnly := fakeControlMethods(t, map[string]*fakeReply{protocol.MethodAgentList: agents})
+	if agent, found, err := loginAgent(listOnly, "claude", ""); err != nil || !found || agent.Name != "claude" {
+		t.Errorf("loginAgent of the default login = %+v, %v, %v; want the agent, read as before", agent, found, err)
+	}
+	current := fakeControlMethods(t, map[string]*fakeReply{
+		protocol.MethodServerInfo: {result: protocol.ServerInfoResult{ServerVersion: "v0.10.0", Features: []string{protocol.FeatureLogins}}},
+		protocol.MethodAgentList:  agents,
+	})
+	if _, found, err := loginAgent(current, "claude", "--attach"); err != nil || !found {
+		t.Errorf("loginAgent(--attach) on a server with logins = %v, %v", found, err)
+	}
+}

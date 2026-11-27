@@ -119,8 +119,10 @@ func runRun(args []string) error {
 			if *permission != "" && !slices.Contains(info.Features, protocol.FeaturePermission) {
 				return fmt.Errorf("--permission: server %s runs every agent as root and has no permission tiers; update the server with aether server update", info.ServerVersion)
 			}
-			if *login != "" && !slices.Contains(info.Features, protocol.FeatureLogins) {
-				return fmt.Errorf("--login: server %s keeps only the login in your home; update the server with cloudfield server update", info.ServerVersion)
+			if *login != "" {
+				if err := requireLogins(info, "--login"); err != nil {
+					return err
+				}
 			}
 		}
 		var res protocol.RunLaunchResult
