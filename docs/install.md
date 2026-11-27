@@ -128,6 +128,23 @@ existed gets it on its next update; until then, write it by hand:
 echo '$nrconf{override_rc}{qr(^aether-vm-)} = 0;' | sudo tee /etc/needrestart/conf.d/cloudfield.conf
 ```
 
+Put the data directory of a new server on a filesystem that can share
+blocks between files: XFS made with `reflink=1`, the `mkfs.xfs` default, or
+Btrfs. The server copies VM disks with `cp --reflink=auto --sparse=always`.
+On such a filesystem Save environment, a stopped session's caches becoming
+the member's newest, and a VM copying its own cache disk
+([environments.md](environments.md#sessions-in-virtual-machines)) share
+blocks with the disk they are made from, and take new space only for what
+the session wrote. ext4 works, but each of them copies all the data of the
+disk it starts from, so it takes longer and needs that much free disk. VM
+disks, checkouts and the image store must share one filesystem, because
+they hard-link each other. To check an existing data directory:
+
+```sh
+findmnt -no FSTYPE,TARGET -T /var/lib/aether   # filesystem type and mount point
+xfs_info <mount point> | grep -o 'reflink=[01]'
+```
+
 On AWS:
 
 - Use an Intel instance from the M7i, C7i, R7i, M8i, C8i or R8i families,
@@ -150,11 +167,7 @@ On AWS:
   sudo mount /dev/nvme1n1 /var/lib/aether
   ```
 
-  On XFS, Save environment and a member's next package cache share blocks
-  with the disk they are made from, and take new space only for what the
-  session wrote; ext4 copies the whole disk. VM disks,
-  checkouts and the image store must share one filesystem, because they
-  hard-link each other. Instance storage is lost when the instance stops or
+  Instance storage is lost when the instance stops or
   fails, so keep the [backups](#what-lives-in-the-data-directory) current, or
   keep the data directory on EBS and accept slower wakes.
 
