@@ -65,7 +65,7 @@ func (s *Scheduler) guardVMDisks(ctx context.Context) {
 		return
 	}
 	floor := disk.Reserve(data.TotalBytes, s.cfg.MinFreeBytes)
-	recovered := s.cfg.MinFreeBytes < 0 || data.FreeBytes >= floor+reclaimHeadroom || floor+reclaimHeadroom >= data.TotalBytes
+	recovered := s.cfg.MinFreeBytes < 0 || data.FreeBytes >= floor+disk.ReclaimHeadroom || floor+disk.ReclaimHeadroom >= data.TotalBytes
 	if recovered {
 		s.releaseHeldVMs(ctx)
 		s.vmDiskLow, s.vmDiskBase = false, nil

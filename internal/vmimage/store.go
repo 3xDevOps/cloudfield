@@ -49,7 +49,7 @@ type Store struct {
 	kernel string
 	docker DockerImages
 	// minFree overrides the reserve a cache promotion leaves free on the
-	// store's filesystem; negative, nothing is kept.
+	// store's filesystem; negative, promotions are not checked.
 	minFree int64
 
 	mu     sync.Mutex
@@ -59,8 +59,8 @@ type Store struct {
 	// helper is the helper binary HelperDisk last hashed, guarded by mu. The
 	// sweep keeps its disk, so a host without VMs does not rebuild it.
 	helper helperDigest
-	// promoting is what the cache promotions under way may still write,
-	// guarded by mu.
+	// promoting is the sum of what each cache promotion under way was
+	// allowed to write, held until it ends, guarded by mu.
 	promoting uint64
 }
 

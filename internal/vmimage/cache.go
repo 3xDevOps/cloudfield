@@ -166,8 +166,9 @@ func (s *Store) UnshareCache(ctx context.Context, disk Disk) error {
 // reservePromotion holds, until release, the room a promotion of cache may
 // take on the store's filesystem: a copy of cache, and for one read over
 // base a copy of base and cache's blocks again, which land in that copy's
-// holes. It refuses a promotion that would leave less than the reserve
-// free, counting what the promotions under way hold.
+// holes. It refuses a promotion that would leave less free than disk
+// reclaim keeps, counting what the promotions under way hold: reclaim would
+// delete sessions' state to make up a dip that ends with the promotion.
 func (s *Store) reservePromotion(cache, base string) (release func(), err error) {
 	if s.minFree < 0 {
 		return func() {}, nil
@@ -180,16 +181,16 @@ func (s *Store) reservePromotion(cache, base string) (release func(), err error)
 	if info, err = os.Stat(base); err == nil {
 		need = 2*need + uint64(info.Sys().(*syscall.Stat_t).Blocks)*512
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	data, err := disk.Filesystem(s.dir)
 	if err != nil {
 		return nil, err
 	}
-	reserve := disk.Reserve(data.TotalBytes, s.minFree)
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if data.FreeBytes < reserve+s.promoting+need {
-		return nil, fmt.Errorf("skipped: it may write %d bytes and other promotions %d more, and %s has %d free with %d to keep free",
-			need, s.promoting, s.dir, data.FreeBytes, reserve)
+	floor := disk.Reserve(data.TotalBytes, s.minFree) + disk.ReclaimHeadroom
+	if data.FreeBytes < floor+s.promoting+need {
+		return nil, fmt.Errorf("skipped: it may write %d bytes and other promotions hold %d more, and %s has %d free with %d to keep free",
+			need, s.promoting, s.dir, data.FreeBytes, floor)
 	}
 	s.promoting += need
 	return func() {
@@ -213,9 +214,12 @@ func (s *Store) PromoteCache(pool, snapshot string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
 	defer cancel()
 	disk, cache, base := filepath.Join(snapshot, "disk.raw"), filepath.Join(snapshot, "cache"), filepath.Join(snapshot, "base.raw")
+	dir := filepath.Join(s.cachesDir(), pool)
 	release, err := s.reservePromotion(cache, base)
 	if err != nil {
-		return fmt.Errorf("vmimage: promote cache: %w", err)
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return errors.Join(fmt.Errorf("vmimage: promote cache: %w", err), os.RemoveAll(snapshot), s.sweepCachesLocked(dir))
 	}
 	defer release()
 	if _, statErr := os.Stat(base); statErr == nil {
@@ -234,7 +238,6 @@ func (s *Store) PromoteCache(pool, snapshot string) error {
 		return fmt.Errorf("vmimage: promote cache: %w", err)
 	}
 	seq := snapshotSeq(snapshot)
-	dir := filepath.Join(s.cachesDir(), pool)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	switch newest, _ := s.readNewest(dir); {

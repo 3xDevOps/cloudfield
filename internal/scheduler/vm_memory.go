@@ -451,7 +451,7 @@ func (s *Scheduler) saveFits(c memoryCandidate, writing uint64, warn bool) bool 
 		slog.Warn("scheduler: memory guard: measure the data filesystem", "error", err)
 		return false
 	}
-	if data.FreeBytes < disk.Reserve(data.TotalBytes, s.cfg.MinFreeBytes)+reclaimHeadroom+writing+c.memory {
+	if data.FreeBytes < disk.Reserve(data.TotalBytes, s.cfg.MinFreeBytes)+disk.ReclaimHeadroom+writing+c.memory {
 		if !warn {
 			return false
 		}

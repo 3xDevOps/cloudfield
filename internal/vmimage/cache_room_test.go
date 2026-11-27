@@ -2,6 +2,8 @@ package vmimage
 
 import (
 	"bytes"
+	"errors"
+	"io/fs"
 	"math"
 	"os"
 	"path/filepath"
@@ -71,5 +73,38 @@ func TestCachePromotionKeepsTheReserveFree(t *testing.T) {
 	}
 	if s.promoting != 0 {
 		t.Errorf("%d bytes stay held after every promotion ended", s.promoting)
+	}
+
+	release, err := s.reservePromotion(first.Path, filepath.Join(dir, "no-base"))
+	if err != nil {
+		t.Fatalf("holding room for a promotion: %v", err)
+	}
+	if s.promoting == 0 {
+		t.Error("a promotion under way holds no room against the next one")
+	}
+	release()
+	s.promoting = math.MaxInt64
+	if snapshot, err = s.SnapshotCache(first); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.PromoteCache("pool1", snapshot); err == nil || !strings.Contains(err.Error(), "skipped") {
+		t.Errorf("promoting while other promotions hold the room = %v, want it skipped", err)
+	}
+	s.promoting = 0
+
+	// The session is deleted while stopped: only its snapshot still links
+	// the cache it read over, which is no longer the pool's newest.
+	s.minFree = math.MaxInt64
+	if snapshot, err = s.SnapshotCache(session); err != nil {
+		t.Fatal(err)
+	}
+	if err = errors.Join(os.Remove(session.Path), os.Remove(session.Backing)); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.PromoteCache("pool1", snapshot); err == nil || !strings.Contains(err.Error(), "skipped") {
+		t.Errorf("promoting a deleted session's cache without room = %v, want it skipped", err)
+	}
+	if _, err = os.Stat(newest.Path); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("a skipped promotion left the cache no disk reads on disk: stat = %v", err)
 	}
 }

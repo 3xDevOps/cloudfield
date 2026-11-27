@@ -354,5 +354,9 @@ func Reserve(total uint64, override int64) uint64 {
 	return max(uint64(5<<30), min(total/20, uint64(20<<30)))
 }
 
+// ReclaimHeadroom is how far above its reserve disk reclaim keeps a
+// filesystem's free space, so admission rarely meets a refusal.
+const ReclaimHeadroom uint64 = 4 << 30
+
 // Filesystem reads only headroom, without walking Docker's private data root.
 func Filesystem(path string) (Usage, error) { return filesystem(path) }
