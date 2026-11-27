@@ -28,9 +28,11 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/vmimage"
 )
 
-// Scratch measurement (scratch/lazy-ch-incremental-save); never merged.
-// After a copy-on-write wake, does the next save write only what changed,
-// on which filesystem, and does a chain of such saves stay correct?
+// Scratch measurement (scratch/lazy-adopted-chain); never merged. The
+// adopted sleep shape over a long chain: boot with shared memory, a sparse
+// first save, the saved configuration rewritten to private memory, every
+// wake copy-on-write with a host process reading guest RAM as it starts,
+// every later save a reflink clone plus the changed pages.
 //
 //	LAZY_DIR        data directory on the filesystem under test
 //	LAZY_FS         its name, for the log
@@ -38,7 +40,8 @@ import (
 //	LAZY_MIB        the session's memory limit
 //	LAZY_DUMP_DIR   directory on ext4 for full dumps of guest RAM
 //	LAZY_MEMCHECK   static zzmemcheck binary
-//	LAZY_CYCLES     cycles, 12 unless set
+//	LAZY_CYCLES     cycles, 20 unless set
+//	LAZY_RUN        seeds the choice of rewritten chunks
 //	LAZY_UNCAP      1 lifts the unit's MemoryMax before every save
 
 type zz struct {
@@ -59,6 +62,12 @@ type zz struct {
 	counter     uint64
 	chain       [32]byte
 	rng         *rand.Rand
+
+	// quiet makes a failed check a caught control, not a test failure.
+	quiet     bool
+	caught    []string
+	staleBase string
+	logAt     int
 }
 
 func (z *zz) logf(format string, args ...any) {
@@ -119,6 +128,11 @@ func (z *zz) verify(label string) bool {
 	ok := true
 	fail := func(format string, args ...any) {
 		ok = false
+		if z.quiet {
+			z.caught = append(z.caught, fmt.Sprintf(format, args...))
+			z.logf("CONTROL-CAUGHT %s: %s", label, fmt.Sprintf(format, args...))
+			return
+		}
 		z.t.Errorf("ZZ fs=%s mib=%d CHECK-FAILED %s: %s", z.fs, z.mib, label, fmt.Sprintf(format, args...))
 	}
 	if got := z.guest("cat /proc/sys/kernel/random/boot_id"); got != z.bootID {
@@ -452,17 +466,27 @@ func (z *zz) privateMiB() float64 {
 	return float64(p) / (1 << 20)
 }
 
+// hypervisorLog prints what the monitor logged since the last call, and
+// fails the test when it gave up the copy-on-write restore or the reflink.
 func (z *zz) hypervisorLog(label string) {
 	data, _ := os.ReadFile(z.e.path(z.key, monitorLog))
+	if len(data) < z.logAt {
+		z.logAt = 0
+	}
+	fresh := string(data[z.logAt:])
+	z.logAt = len(data)
 	n := 0
-	for line := range strings.SplitSeq(string(data), "\n") {
+	for line := range strings.SplitSeq(fresh, "\n") {
 		l := strings.ToLower(line)
-		if strings.Contains(l, "copyonwrite") || strings.Contains(l, "snapshot") || strings.Contains(l, "warn") || strings.Contains(l, "error") {
+		if strings.Contains(l, "copyonwrite") || strings.Contains(l, "snapshot") || strings.Contains(l, "warn") || strings.Contains(l, "error") || strings.Contains(l, "falling back") {
 			z.logf("chlog %s: %s", label, line)
 			n++
 		}
+		if strings.Contains(l, "falling back") || strings.Contains(l, "not cloned") || strings.Contains(l, "all guest memory") {
+			z.t.Errorf("ZZ fs=%s mib=%d CHECK-FAILED %s: the monitor left the adopted path: %s", z.fs, z.mib, label, line)
+		}
 	}
-	z.logf("chlog %s: %d matching lines of %d bytes of monitor log", label, n, len(data))
+	z.logf("chlog %s: %d matching lines of %d new bytes of monitor log", label, n, len(fresh))
 }
 
 type saveResult struct {
@@ -537,6 +561,13 @@ func (z *zz) snapshot(label, into string, dump bool, changedMiB int) (saveResult
 			z.t.Errorf("ZZ fs=%s mib=%d CHECK-FAILED page compare %s: %d of %d pages differ, first %v", z.fs, z.mib, label, differing, pages, first)
 		}
 		z.logf("pagecompare %s differing_pages=%d pages=%d err=%v took=%s", label, differing, pages, diffErr, time.Since(start).Round(time.Millisecond))
+		if z.staleBase != "" {
+			differing, pages, _, diffErr = diffPages(dumpPath, z.staleBase)
+			if diffErr != nil || differing == 0 {
+				z.t.Errorf("ZZ fs=%s mib=%d CONTROL-MISSED page compare %s against the stale base: %d pages differ, %v", z.fs, z.mib, label, differing, diffErr)
+			}
+			z.logf("pagecompare-control %s against_stale_base differing_pages=%d pages=%d err=%v", label, differing, pages, diffErr)
+		}
 	}
 	return res, nil
 }
@@ -587,16 +618,29 @@ func (z *zz) wake(label string, cold bool) {
 		}
 	}
 	start := time.Now()
-	if err := z.e.restore(z.t.Context(), z.key); err != nil {
+	inj := zzInject(filepath.Join(z.e.cgroupRoot, runtime.SessionSlice, unitName(z.key)), start)
+	err := z.e.restore(z.t.Context(), z.key)
+	took := time.Since(start)
+	inj.end()
+	for _, line := range inj.lines {
+		z.logf("inj %s %s", label, line)
+	}
+	if err != nil {
 		z.t.Fatalf("wake %s: %v%s", label, err, z.e.logTail(z.key))
 	}
-	took := time.Since(start)
 	private, mapped := z.privateBytes(z.chPID())
-	z.logf("wake %s cold_cache=%v took=%dms cow_mapped_mib=%d private_mib=%.1f", label, cold, took.Milliseconds(), mapped>>20, float64(private)/(1<<20))
+	z.logf("wake %s cold_cache=%v took=%dms cow_mapped_mib=%d private_mib=%.1f inj_rounds=%d inj_reads=%d inj_zero=%d inj_err=%d inj_first_maps_ms=%.2f",
+		label, cold, took.Milliseconds(), mapped>>20, float64(private)/(1<<20), inj.rounds, inj.reads, inj.zero, inj.failed, inj.firstMapsMS)
+	if inj.reads-inj.failed == 0 {
+		z.t.Errorf("ZZ fs=%s mib=%d CHECK-FAILED wake %s: the early reader read no guest RAM", z.fs, z.mib, label)
+	}
+	if mapped>>20 != guestMiB(int64(z.mib)) {
+		z.t.Errorf("ZZ fs=%s mib=%d CHECK-FAILED wake %s: %d MiB of guest RAM is mapped from the saved file, want %d", z.fs, z.mib, label, mapped>>20, guestMiB(int64(z.mib)))
+	}
 	z.hypervisorLog("after wake " + label)
 }
 
-func (z *zz) rewrite(gen uint64, chunks int) {
+func (z *zz) rewrite(gen uint64, chunks int) []int {
 	picked := z.rng.Perm(z.mainChunks)[:chunks]
 	args := make([]string, len(picked))
 	for i, c := range picked {
@@ -604,6 +648,7 @@ func (z *zz) rewrite(gen uint64, chunks int) {
 		z.gens[c] = gen
 	}
 	z.call(fmt.Sprintf("rewrite %d %s", gen, strings.Join(args, " ")))
+	return picked
 }
 
 // churn frees the churn region and fills it again, twice: the first refill
@@ -636,7 +681,7 @@ func (z *zz) churn(label string, gen uint64) {
 		label, z.churnChunks, before, freed, refilled, low, private())
 }
 
-func TestKVMZZIncrementalSave(t *testing.T) {
+func TestKVMZZAdoptedChain(t *testing.T) {
 	dir, kernel, server := os.Getenv("LAZY_DIR"), os.Getenv("AETHER_VM_TEST_KERNEL"), os.Getenv("AETHER_VM_TEST_SERVER")
 	if dir == "" {
 		t.Skip("set LAZY_DIR")
@@ -645,20 +690,21 @@ func TestKVMZZIncrementalSave(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cycles := 12
+	cycles := 20
 	if v := os.Getenv("LAZY_CYCLES"); v != "" {
 		if cycles, err = strconv.Atoi(v); err != nil {
 			t.Fatal(err)
 		}
 	}
-	zzShared, zzRestoreOpts, zzRestoreArgs, zzKeepSource = "off", ",memory_restore_mode=copyonwrite", []string{"-v"}, true
+	run, _ := strconv.Atoi(os.Getenv("LAZY_RUN"))
+	zzShared, zzRestoreOpts, zzRestoreArgs, zzKeepSource = "on", "", []string{"-v"}, true
 	images, err := vmimage.Open(filepath.Join(dir, "vm", "images"), kernel, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	e := newEngine(Config{DataDir: dir, Images: images, Monitor: []string{server, MonitorCommand}, Helper: server, ProgramUnit: localBinProgram}, SystemdUnits{}, dialHelper)
 	z := &zz{t: t, e: e, key: "run-zz-incr", fs: os.Getenv("LAZY_FS"), mib: mib, stat: os.Getenv("LAZY_DEV_STAT"), dump: os.Getenv("LAZY_DUMP_DIR"),
-		chain: sha256.Sum256([]byte("zzmemcheck")), rng: rand.New(rand.NewSource(int64(mib)))}
+		chain: sha256.Sum256([]byte("zzmemcheck")), rng: rand.New(rand.NewSource(int64(mib)*100 + int64(run)))}
 	t.Cleanup(func() { _ = e.destroy(context.Background(), z.key) })
 	shmMiB := 128
 	prepare := func() {
@@ -749,12 +795,18 @@ func TestKVMZZIncrementalSave(t *testing.T) {
 	}
 	z.sleep()
 	z.logf("rest 0 fs_used_mib=%d other_files_mib=%d", z.fsUsed()>>20, z.otherBytes()>>20)
+	was, now, err := zzPrivateConfig(snapDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	z.logf("config rewritten memory_was=%q memory_now=%q", was, now)
+	zzRestoreOpts = ",memory_restore_mode=copyonwrite"
 
 	// mode full: check, rewrite 64 MiB, and churn every third cycle;
 	// checked: the full check and no other work; untouched: one command.
 	cycle := func(n int, mode string) {
 		label := strconv.Itoa(n)
-		z.wake(label, n == 6 || n == 12)
+		z.wake(label, n%7 == 0)
 		woke := z.privateMiB()
 		changed := 0
 		if mode == "untouched" {
@@ -782,7 +834,7 @@ func TestKVMZZIncrementalSave(t *testing.T) {
 			t.Fatal(err)
 		}
 		used := z.fsUsed()
-		if _, err = z.snapshot(label, nextDir, n == 1 || n == 6 || n == 12, changed); err != nil {
+		if _, err = z.snapshot(label, nextDir, n == 1 || n == cycles/2 || n == cycles, changed); err != nil {
 			z.kernelLog("save " + label)
 			t.Fatalf("save %d: %v%s", n, err, e.logTail(z.key))
 		}
@@ -803,40 +855,10 @@ func TestKVMZZIncrementalSave(t *testing.T) {
 	cycle(cycles+2, "untouched")
 	cycle(cycles+3, "untouched")
 
+	z.staleControl(snapDir, nextDir, uint64(cycles+5))
+
 	z.wake("final", false)
 	if !z.verify("after wake final") {
 		t.Fatalf("the guest check failed after the last save%s", e.logTail(z.key))
-	}
-
-	// Saved into the directory the guest's RAM is mapped from.
-	z.rewrite(uint64(cycles+5), 64)
-	z.settle("inplace")
-	digest := func() string {
-		var parts []string
-		for _, name := range []string{"config.json", "state.json", "memory-ranges"} {
-			info, statErr := os.Stat(filepath.Join(snapDir, name))
-			if statErr != nil {
-				parts = append(parts, name+"="+statErr.Error())
-				continue
-			}
-			parts = append(parts, fmt.Sprintf("%s=%d@%d", name, info.Size(), info.ModTime().UnixNano()))
-		}
-		return strings.Join(parts, " ")
-	}
-	before := digest()
-	_, err = z.snapshot("inplace over source", snapDir, false, 64)
-	z.logf("inplace over the mapped source: error=%v source_unchanged=%v", err, digest() == before)
-	if err != nil {
-		// What engine.save does today: delete the old state, then write.
-		if err = errors.Join(os.RemoveAll(snapDir), os.Mkdir(snapDir, 0o700)); err != nil {
-			t.Fatal(err)
-		}
-		_, err = z.snapshot("inplace after unlink", snapDir, true, 64)
-		z.logf("inplace after unlinking the mapped source: error=%v", err)
-	}
-	if err == nil {
-		z.sleep()
-		z.wake("inplace", false)
-		z.verify("after wake inplace")
 	}
 }
