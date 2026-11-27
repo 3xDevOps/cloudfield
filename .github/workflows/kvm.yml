@@ -11,6 +11,10 @@ name: VM tests
 on:
   workflow_call:
   workflow_dispatch:
+    inputs:
+      uncap:
+        description: 1 lifts the unit's MemoryMax before every save
+        default: "0"
 
 permissions:
   contents: read
@@ -68,4 +72,4 @@ jobs:
           sudo install -m 0755 "$RUNNER_TEMP/ch" /usr/local/bin/cloud-hypervisor
           cloud-hypervisor --version
       - name: Incremental save measurement
-        run: sudo env "PATH=$PATH" "HOME=$HOME" scripts/zz-lazy-incremental.sh ${{ matrix.fs }} ${{ matrix.mib }} "$PWD/dist/aether-vmlinux-x86_64"
+        run: sudo env "PATH=$PATH" "HOME=$HOME" "LAZY_UNCAP=${{ inputs.uncap }}" "RUNNER_NAME=$RUNNER_NAME" scripts/zz-lazy-incremental.sh ${{ matrix.fs }} ${{ matrix.mib }} "$PWD/dist/aether-vmlinux-x86_64"

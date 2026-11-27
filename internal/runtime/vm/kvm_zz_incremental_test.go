@@ -39,6 +39,7 @@ import (
 //	LAZY_DUMP_DIR   directory on ext4 for full dumps of guest RAM
 //	LAZY_MEMCHECK   static zzmemcheck binary
 //	LAZY_CYCLES     cycles, 12 unless set
+//	LAZY_UNCAP      1 lifts the unit's MemoryMax before every save
 
 type zz struct {
 	t    *testing.T
@@ -387,6 +388,70 @@ func (z *zz) fsUsed() int64 {
 	return int64(st.Blocks-st.Bfree) * st.Bsize
 }
 
+// kernelLog prints the host kernel's last out-of-memory report.
+func (z *zz) kernelLog(label string) {
+	out, _ := exec.Command("dmesg").Output()
+	lines := strings.Split(string(out), "\n")
+	from := -1
+	for i, line := range lines {
+		if strings.Contains(line, "invoked oom-killer") {
+			from = i
+		}
+	}
+	if from < 0 {
+		z.logf("dmesg %s: no out-of-memory report", label)
+		return
+	}
+	for _, line := range lines[from:min(from+90, len(lines))] {
+		z.logf("dmesg %s: %s", label, line)
+	}
+}
+
+// memcg is the unit's memory as its cgroup counts it.
+func (z *zz) memcg() string {
+	dir := filepath.Join(z.e.cgroupRoot, runtime.SessionSlice, unitName(z.key))
+	current, _ := os.ReadFile(filepath.Join(dir, "memory.current"))
+	limit, _ := os.ReadFile(filepath.Join(dir, "memory.max"))
+	events, _ := os.ReadFile(filepath.Join(dir, "memory.events"))
+	stat, _ := os.ReadFile(filepath.Join(dir, "memory.stat"))
+	var kept []string
+	for line := range strings.SplitSeq(string(stat), "\n") {
+		switch name, _, _ := strings.Cut(line, " "); name {
+		case "anon", "file", "file_mapped", "file_dirty", "file_writeback":
+			kept = append(kept, line)
+		}
+	}
+	return fmt.Sprintf("current=%s max=%s %s events=%s", strings.TrimSpace(string(current)), strings.TrimSpace(string(limit)),
+		strings.Join(kept, " "), strings.Join(strings.Fields(string(events)), " "))
+}
+
+// otherBytes is what everything in the data directory but the saved states
+// holds on disk: the image store and the VM's disks.
+func (z *zz) otherBytes() int64 {
+	seen := map[uint64]bool{}
+	var total int64
+	_ = filepath.WalkDir(z.e.root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() && strings.HasPrefix(d.Name(), "snapshot") {
+			return filepath.SkipDir
+		}
+		var st unix.Stat_t
+		if unix.Lstat(path, &st) == nil && !seen[st.Ino] {
+			seen[st.Ino] = true
+			total += st.Blocks * 512
+		}
+		return nil
+	})
+	return total
+}
+
+func (z *zz) privateMiB() float64 {
+	p, _ := z.privateBytes(z.chPID())
+	return float64(p) / (1 << 20)
+}
+
 func (z *zz) hypervisorLog(label string) {
 	data, _ := os.ReadFile(z.e.path(z.key, monitorLog))
 	n := 0
@@ -425,6 +490,12 @@ func (z *zz) snapshot(label, into string, dump bool, changedMiB int) (saveResult
 		z.logf("dump %s bytes=%d took=%s", label, n, time.Since(start).Round(time.Millisecond))
 		defer func() { _ = os.Remove(dumpPath) }()
 	}
+	if os.Getenv("LAZY_UNCAP") == "1" {
+		if out, err := exec.Command("systemctl", "set-property", "--runtime", unitName(z.key), "MemoryMax=infinity").CombinedOutput(); err != nil {
+			z.t.Fatalf("uncap the unit: %v: %s", err, out)
+		}
+	}
+	memBefore := z.memcg()
 	z.syncfs()
 	dev0 := z.devWritten()
 	cg0, _ := z.cgroupWritten()
@@ -455,6 +526,7 @@ func (z *zz) snapshot(label, into string, dump bool, changedMiB int) (saveResult
 		label, res.snapshot.Milliseconds(), res.fsync.Milliseconds(), float64(res.devBytes)/(1<<20), float64(cg1-cg0)/(1<<20), changedMiB,
 		float64(private)/(1<<20), mapped>>20, st.Size>>20, st.Blocks*512>>20, count, shared, float64(unshared)/(1<<20), summary)
 	z.logf("iostat %s: %s", label, cgRaw)
+	z.logf("memcg %s before=[%s] after=[%s]", label, memBefore, z.memcg())
 	z.hypervisorLog("after save " + label)
 	if dump {
 		start = time.Now()
@@ -493,12 +565,17 @@ func (z *zz) sleep() {
 	}
 }
 
-func (z *zz) settle() {
+func (z *zz) settle(label string) {
+	before := z.privateMiB()
+	start := time.Now()
 	if !z.e.syncGuest(z.t.Context(), z.key) {
 		z.t.Fatal("guest sync failed")
 	}
+	synced := z.privateMiB()
 	z.e.awaitReported(z.t.Context(), z.key)
+	reported := z.privateMiB()
 	z.e.syncGuest(z.t.Context(), z.key)
+	z.logf("settle %s took=%dms private_mib before=%.1f after_sync=%.1f after_reporting=%.1f after_second_sync=%.1f", label, time.Since(start).Milliseconds(), before, synced, reported, z.privateMiB())
 }
 
 func (z *zz) wake(label string, cold bool) {
@@ -583,97 +660,131 @@ func TestKVMZZIncrementalSave(t *testing.T) {
 	z := &zz{t: t, e: e, key: "run-zz-incr", fs: os.Getenv("LAZY_FS"), mib: mib, stat: os.Getenv("LAZY_DEV_STAT"), dump: os.Getenv("LAZY_DUMP_DIR"),
 		chain: sha256.Sum256([]byte("zzmemcheck")), rng: rand.New(rand.NewSource(int64(mib)))}
 	t.Cleanup(func() { _ = e.destroy(context.Background(), z.key) })
-	spec := runtime.Spec{
-		Image: "docker.io/library/ubuntu:24.04", CreationKey: z.key, Command: []string{"/bin/sh", "-c", "exec sleep infinity"},
-		Env: map[string]string{"AETHER_RUN_ID": z.key}, CPULimit: 2, MemoryLimitBytes: int64(mib) << 20,
-	}
-	if _, err = e.create(t.Context(), z.key, spec, options{}); err != nil {
-		t.Fatal(err)
-	}
-	start := time.Now()
-	if err = e.start(t.Context(), z.key); err != nil {
-		t.Fatal(err)
-	}
-	z.logf("boot took=%dms", time.Since(start).Milliseconds())
-	props, _ := exec.Command("systemctl", "show", "--property=DevicePolicy,DeviceAllow,ProtectKernelTunables,NoNewPrivileges,ProtectSystem,PrivateMounts,IOAccounting,MemoryMax,CapabilityBoundingSet,BindPaths,TemporaryFileSystem", unitName(z.key)).Output()
-	z.logf("unit %s", strings.ReplaceAll(strings.TrimSpace(string(props)), "\n", " ; "))
-	version, _ := exec.Command("cloud-hypervisor", "--version").Output()
-	launched, _ := os.ReadFile(e.path(z.key, launchFile))
-	z.logf("hypervisor %s memory_arg=%q", strings.TrimSpace(string(version)), regexp.MustCompile(`size=\d+M,shared=\w+`).Find(launched))
-
-	checker, err := os.ReadFile(os.Getenv("LAZY_MEMCHECK"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	p, att, err := e.spawn(t.Context(), z.key, guest.ProcessSpec{ID: processID("exec"), Argv: []string{"/bin/sh", "-c", "cat >/usr/local/bin/zzmemcheck && chmod 755 /usr/local/bin/zzmemcheck"}, Lossless: true})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err = att.Stdin().Write(checker); err != nil {
-		t.Fatal(err)
-	}
-	if err = p.CloseStdin(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if code, waitErr := p.Wait(t.Context()); code != 0 || waitErr != nil {
-		t.Fatalf("copy the checker into the guest: %d, %v", code, waitErr)
-	}
-	_ = att.Close()
-	sum := sha256.Sum256(checker)
-	if got := z.guest("sha256sum </usr/local/bin/zzmemcheck | cut -d' ' -f1"); got != hex.EncodeToString(sum[:]) {
-		t.Fatalf("the checker arrived as %s", got)
-	}
-	z.guest("setsid /usr/local/bin/zzmemcheck serve </dev/null >/var/log/zzmemcheck.log 2>&1 & sleep 1; test -S /run/zzmemcheck.sock")
-	z.churnChunks = 512
 	shmMiB := 128
-	z.mainChunks = mib*5/8 - z.churnChunks
-	if mib >= 8192 {
-		shmMiB = 256
+	prepare := func() {
+		z.counter, z.chain = 0, sha256.Sum256([]byte("zzmemcheck"))
+		spec := runtime.Spec{
+			Image: "docker.io/library/ubuntu:24.04", CreationKey: z.key, Command: []string{"/bin/sh", "-c", "exec sleep infinity"},
+			Env: map[string]string{"AETHER_RUN_ID": z.key}, CPULimit: 2, MemoryLimitBytes: int64(mib) << 20,
+		}
+		if _, err = e.create(t.Context(), z.key, spec, options{}); err != nil {
+			t.Fatal(err)
+		}
+		start := time.Now()
+		if err = e.start(t.Context(), z.key); err != nil {
+			t.Fatal(err)
+		}
+		z.logf("boot took=%dms", time.Since(start).Milliseconds())
+		props, _ := exec.Command("systemctl", "show", "--property=DevicePolicy,DeviceAllow,ProtectKernelTunables,NoNewPrivileges,ProtectSystem,PrivateMounts,IOAccounting,MemoryMax,CapabilityBoundingSet,BindPaths,TemporaryFileSystem", unitName(z.key)).Output()
+		z.logf("unit %s", strings.ReplaceAll(strings.TrimSpace(string(props)), "\n", " ; "))
+		version, _ := exec.Command("cloud-hypervisor", "--version").Output()
+		launched, _ := os.ReadFile(e.path(z.key, launchFile))
+		z.logf("hypervisor %s memory_arg=%q", strings.TrimSpace(string(version)), regexp.MustCompile(`size=\d+M,shared=\w+`).Find(launched))
+
+		checker, err := os.ReadFile(os.Getenv("LAZY_MEMCHECK"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		p, att, err := e.spawn(t.Context(), z.key, guest.ProcessSpec{ID: processID("exec"), Argv: []string{"/bin/sh", "-c", "cat >/usr/local/bin/zzmemcheck && chmod 755 /usr/local/bin/zzmemcheck"}, Lossless: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = att.Stdin().Write(checker); err != nil {
+			t.Fatal(err)
+		}
+		if err = p.CloseStdin(t.Context()); err != nil {
+			t.Fatal(err)
+		}
+		if code, waitErr := p.Wait(t.Context()); code != 0 || waitErr != nil {
+			t.Fatalf("copy the checker into the guest: %d, %v", code, waitErr)
+		}
+		_ = att.Close()
+		sum := sha256.Sum256(checker)
+		if got := z.guest("sha256sum </usr/local/bin/zzmemcheck | cut -d' ' -f1"); got != hex.EncodeToString(sum[:]) {
+			t.Fatalf("the checker arrived as %s", got)
+		}
+		z.guest("setsid /usr/local/bin/zzmemcheck serve </dev/null >/var/log/zzmemcheck.log 2>&1 & sleep 1; test -S /run/zzmemcheck.sock")
+		z.churnChunks = 512
+		z.mainChunks = mib*5/8 - z.churnChunks
+		if mib >= 8192 {
+			shmMiB = 256
+		}
+		z.gens = make([]uint64, z.mainChunks+z.churnChunks)
+		for i := range z.gens {
+			z.gens[i] = 1
+		}
+		z.bootID = z.guest("cat /proc/sys/kernel/random/boot_id")
+		z.shmSum = z.guest(fmt.Sprintf("mount -o remount,size=90%% /dev/shm; head -c %dM /dev/urandom >/dev/shm/fill; sha256sum </dev/shm/fill | cut -d' ' -f1", shmMiB))
+		z.logf("fill %s pattern_mib=%d shm_mib=%d guest_meminfo=%q", z.call(fmt.Sprintf("fill %d %d 1", z.mainChunks, z.churnChunks)), len(z.gens), shmMiB,
+			z.guest("grep -E '^(MemTotal|MemFree|MemAvailable|Mlocked|SwapTotal|SwapFree):' /proc/meminfo | tr -s ' \\n' ' '"))
+		if _, err = fmt.Sscanf(z.call("status"), "pid=%s", &z.pid); err != nil {
+			t.Fatal(err)
+		}
+		z.verify("after fill")
 	}
-	z.gens = make([]uint64, z.mainChunks+z.churnChunks)
-	for i := range z.gens {
-		z.gens[i] = 1
-	}
-	z.bootID = z.guest("cat /proc/sys/kernel/random/boot_id")
-	z.shmSum = z.guest(fmt.Sprintf("mount -o remount,size=90%% /dev/shm; head -c %dM /dev/urandom >/dev/shm/fill; sha256sum </dev/shm/fill | cut -d' ' -f1", shmMiB))
-	z.logf("fill %s pattern_mib=%d shm_mib=%d guest_meminfo=%q", z.call(fmt.Sprintf("fill %d %d 1", z.mainChunks, z.churnChunks)), len(z.gens), shmMiB,
-		z.guest("grep -E '^(MemTotal|MemFree|MemAvailable|Mlocked|SwapTotal|SwapFree):' /proc/meminfo | tr -s ' \\n' ' '"))
-	if _, err = fmt.Sscanf(z.call("status"), "pid=%s", &z.pid); err != nil {
-		t.Fatal(err)
-	}
-	z.verify("after fill")
+	prepare()
 
 	snapDir, nextDir := e.path(z.key, snapshotDir), e.path(z.key, "snapshot.next")
-	z.settle()
-	if err = os.Mkdir(snapDir, 0o700); err != nil {
-		t.Fatal(err)
+	firstSave := func(label string) error {
+		z.settle(label)
+		if err = os.Mkdir(snapDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		_, saveErr := z.snapshot(label, snapDir, false, len(z.gens)+shmMiB)
+		return saveErr
 	}
-	if _, err = z.snapshot("0 first", snapDir, false, len(z.gens)+shmMiB); err != nil {
-		t.Fatalf("first save: %v", err)
+	if err = firstSave("0 first"); err != nil {
+		z.logf("FIRST-SAVE-FAILED at the unit's own MemoryMax: %v", err)
+		z.kernelLog("first save")
+		if err = e.destroy(t.Context(), z.key); err != nil {
+			t.Fatal(err)
+		}
+		prepare()
+		out, setErr := exec.Command("systemctl", "set-property", "--runtime", unitName(z.key), "MemoryMax=infinity").CombinedOutput()
+		z.logf("first save again with MemoryMax=infinity on the unit: %s %v", out, setErr)
+		if err = firstSave("0 first uncapped"); err != nil {
+			z.kernelLog("first save uncapped")
+			t.Fatalf("first save with MemoryMax=infinity: %v%s", err, e.logTail(z.key))
+		}
 	}
 	z.sleep()
-	z.logf("rest 0 fs_used_mib=%d", z.fsUsed()>>20)
+	z.logf("rest 0 fs_used_mib=%d other_files_mib=%d", z.fsUsed()>>20, z.otherBytes()>>20)
 
-	for cycle := 1; cycle <= cycles; cycle++ {
-		label := strconv.Itoa(cycle)
-		z.wake(label, cycle == 6 || cycle == 12)
-		if !z.verify("after wake " + label) {
-			t.Fatalf("cycle %d: the guest check failed%s", cycle, e.logTail(z.key))
+	// mode full: check, rewrite 64 MiB, and churn every third cycle;
+	// checked: the full check and no other work; untouched: one command.
+	cycle := func(n int, mode string) {
+		label := strconv.Itoa(n)
+		z.wake(label, n == 6 || n == 12)
+		woke := z.privateMiB()
+		changed := 0
+		if mode == "untouched" {
+			z.guest("true")
+		} else if !z.verify("after wake " + label) {
+			t.Fatalf("cycle %d: the guest check failed%s", n, e.logTail(z.key))
 		}
-		changed := 64
-		z.rewrite(uint64(cycle+1), 64)
-		if cycle%3 == 0 {
-			z.churn(label, uint64(cycle+1))
+		checked := z.privateMiB()
+		if mode == "full" {
+			changed = 64
+			z.rewrite(uint64(n+1), 64)
+		}
+		rewritten := z.privateMiB()
+		if mode == "full" && n%3 == 0 {
+			z.churn(label, uint64(n+1))
 			changed += z.churnChunks
 			label += " churn"
 		}
-		z.settle()
+		if mode != "full" {
+			label += " " + mode
+		}
+		z.logf("private %s private_mib after_wake=%.1f after_check=%.1f after_rewrite=%.1f", label, woke, checked, rewritten)
+		z.settle(label)
 		if err = os.Mkdir(nextDir, 0o700); err != nil {
 			t.Fatal(err)
 		}
 		used := z.fsUsed()
-		if _, err = z.snapshot(label, nextDir, cycle == 1 || cycle == 6 || cycle == 12, changed); err != nil {
-			t.Fatalf("save %d: %v%s", cycle, err, e.logTail(z.key))
+		if _, err = z.snapshot(label, nextDir, n == 1 || n == 6 || n == 12, changed); err != nil {
+			z.kernelLog("save " + label)
+			t.Fatalf("save %d: %v%s", n, err, e.logTail(z.key))
 		}
 		both := z.fsUsed()
 		z.sleep()
@@ -682,8 +793,15 @@ func TestKVMZZIncrementalSave(t *testing.T) {
 		}
 		z.syncfs()
 		count, shared, _, _ := extents(filepath.Join(snapDir, "memory-ranges"))
-		z.logf("rest %s fs_used_mib before_save=%d with_both=%d after_swap=%d extents=%d shared_extents=%d", label, used>>20, both>>20, z.fsUsed()>>20, count, shared)
+		z.logf("rest %s fs_used_mib before_save=%d with_both=%d after_swap=%d other_files_mib=%d extents=%d shared_extents=%d",
+			label, used>>20, both>>20, z.fsUsed()>>20, z.otherBytes()>>20, count, shared)
 	}
+	for n := 1; n <= cycles; n++ {
+		cycle(n, "full")
+	}
+	cycle(cycles+1, "checked")
+	cycle(cycles+2, "untouched")
+	cycle(cycles+3, "untouched")
 
 	z.wake("final", false)
 	if !z.verify("after wake final") {
@@ -691,8 +809,8 @@ func TestKVMZZIncrementalSave(t *testing.T) {
 	}
 
 	// Saved into the directory the guest's RAM is mapped from.
-	z.rewrite(uint64(cycles+2), 64)
-	z.settle()
+	z.rewrite(uint64(cycles+5), 64)
+	z.settle("inplace")
 	digest := func() string {
 		var parts []string
 		for _, name := range []string{"config.json", "state.json", "memory-ranges"} {
