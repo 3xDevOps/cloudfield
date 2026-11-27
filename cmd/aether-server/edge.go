@@ -17,6 +17,7 @@ import (
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	edgeagent "github.com/3xDevOps/cloudfield/internal/edge/agent"
+	edgeclient "github.com/3xDevOps/cloudfield/internal/edge/client"
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	"github.com/3xDevOps/cloudfield/internal/server"
 	"github.com/3xDevOps/cloudfield/internal/serversetup"
@@ -186,11 +187,13 @@ func edgeStatus(w io.Writer, dataDir, edgeURL, configPath string, policy edgepro
 	_, _ = fmt.Fprintf(tw, "server id\t%s\n", id)
 	stale := status.Stale(now)
 	notice, noticed := notices.For(origin)
+	_, noticedThere := notices.For(status.Edge)
+	elsewhere := status.Edge != "" && !sameOrigin(status.Edge, origin)
 	cmds := serverCommands(configPath)
 	switch {
-	case status.Connected && stale == nil && status.Edge != "" && status.Edge != origin:
+	case status.Connected && stale == nil && elsewhere:
 		_, _ = fmt.Fprintf(tw, "running\tthe running server is at %s; restart to apply edge-url: %s\n", status.Edge, cmds.Restart)
-	case status.Edge != "" && status.Edge != origin:
+	case elsewhere && (noticed || noticedThere):
 		_, _ = fmt.Fprintf(tw, "running\tthe server last dialed %s; restart to apply edge-url: %s\n", status.Edge, cmds.Restart)
 	case noticesErr != nil:
 		_, _ = fmt.Fprintf(tw, "notices\tunreadable, so none is shown: %s\n", edgeagent.Clean(noticesErr.Error()))
@@ -439,6 +442,14 @@ func edgeMove(w io.Writer, dataDir, edgeURL string, policy edgeproto.AccessPolic
 		return err
 	}
 	return applyMove(w, dataDir, edgeURL, configPath, held, moved)
+}
+
+// sameOrigin reports whether a and b name the same edge origin, as
+// https://host and https://host:443 do.
+func sameOrigin(a, b string) bool {
+	ca, aerr := edgeclient.Canonical(a)
+	cb, berr := edgeclient.Canonical(b)
+	return aerr == nil && berr == nil && ca == cb || a == b
 }
 
 // serverCommands spell cloudfield-server and the restart as an admin
