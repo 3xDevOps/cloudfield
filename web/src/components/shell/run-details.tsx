@@ -6,7 +6,7 @@ import { StatusDot } from '@/components/ui/status-dot'
 import { useIsMobile } from '@/lib/breakpoints'
 import { coarsePointer, useMediaQuery } from '@/lib/hooks'
 import { memberName, resolveMember } from '@/lib/member-name'
-import { useRunAccountWords } from '@/lib/run-account'
+import { useRunAccountLine } from '@/lib/run-account'
 import { clipLabel, runLabel, stateTitle, toneOf, type PresentationState } from '@/lib/status'
 import { cn, surface } from '@/lib/utils'
 import { modeLabel } from '@/routes/run/agent-name'
@@ -94,7 +94,7 @@ function Details({ run, state, waiting, reason, next, cause, wait, since, counts
   const mergedInto = useStore((s) => s.mergedInto)
   const workspace = useStore((s) => s.workspaces[run.workspace_id]?.name ?? run.workspace_id)
   const agent = useStore((s) => s.agentList?.agents.find((a) => a.name === run.harness)?.display_name) || run.harness
-  const account = useRunAccountWords(run)
+  const account = useRunAccountLine(run)
   const name = (id: string) => `${memberName({ members, mergedInto }, id)}${id === self ? ' (you)' : ''}`
   const person = (id: string) => (
     <span className="flex min-w-0 items-center gap-1.5">

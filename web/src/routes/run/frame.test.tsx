@@ -138,6 +138,29 @@ describe('run frame', () => {
     expect(screen.getByRole('banner').textContent).not.toContain('console')
   })
 
+  it('adds no phone account line for a fallback from a server without logins, as before them', async () => {
+    atViewport(360, { pointer: 'coarse' })
+    const view = open({ account_member_id: bob.id, requested_account_member_id: alice.id })
+    await screen.findByRole('banner')
+    expect(screen.queryByText(/account \(fallback\)/)).toBeNull()
+    view.unmount()
+
+    useStore.setState({ info: { ...serverInfo, features: ['logins'] } })
+    open({ account_member_id: bob.id, requested_account_member_id: alice.id })
+    expect((await screen.findByText("On Bob's account (fallback)")).tagName).toBe('P')
+  })
+
+  it('keeps the login a run.account event set over a run snapshot read before it', async () => {
+    open({ account_member_id: alice.id, status_seq: 4 })
+    act(() => useStore.getState().applyRunAccount('run_1', { account_member_id: alice.id, previous_account_member_id: alice.id, login: 'lgn-console0001', login_name: 'console', per_use: true }))
+    act(() => useStore.getState().upsertRun(run({ account_member_id: alice.id, status_seq: 4 })))
+    expect(screen.getByRole('banner').textContent).toContain('On your account, login console')
+    expect(within(screen.getByRole('banner')).getByText('Billed per use')).toBeDefined()
+
+    act(() => useStore.getState().upsertRun(run({ account_member_id: alice.id, status_seq: 5 })))
+    expect(screen.getByRole('banner').textContent).not.toContain('login console')
+  })
+
   it('names the login a run.account event moves the run to', async () => {
     open({ account_member_id: alice.id })
     await act(() => applyEvent(useStore, {

@@ -63,6 +63,22 @@ describe('child run usage', () => {
     expect(screen.getByText('1 of 8 busy, 1 queued, 2 started')).toBeDefined()
   })
 
+  it("names a subsession's login where it names its account", async () => {
+    const parent = run()
+    setUp([parent, run({ id: 'run_c1', parent_run_id: 'run_1', account_member_id: bob.id, account_login: 'lgn-console0001', account_login_name: 'console' })])
+    const client = fakeApi({
+      runChildren: vi.fn(async () => ({
+        root_run_id: 'run_1',
+        children: [child({})],
+        limits: { max_live: 8 },
+        usage: { runs: 1, metered_runs: 0, unmetered_runs: 1, input_tokens: 0, output_tokens: 0, cost_usd: 0, by_account: [] },
+      })),
+    })
+    render(<ChildRuns run={toRecord(parent)} inset={false} client={client} />)
+    const list = await screen.findByRole('list', { name: /Subsessions of/ })
+    expect(within(list).getByRole('listitem').textContent).toContain("On Bob's account, login console")
+  })
+
   it('shows a disconnected subsession with why it stopped', async () => {
     const parent = run()
     setUp([parent, run({ id: 'run_c1', parent_run_id: 'run_1' })])

@@ -175,7 +175,9 @@ export function useRunTerminalSession(input: RunTerminalSessionInput): RunTermin
   const previousPhoneRef = useRef(phone)
   const previousStatusRef = useRef(run?.status)
   const relaunchPendingRef = useRef(false)
-  const previousAccountRef = useRef(run?.account_member_id)
+  // The account and its login: a move between two logins of one member also replaces the session.
+  const accountKey = run?.account_member_id === undefined ? undefined : `${run.account_member_id} ${run.account_login || 'default'}`
+  const previousAccountRef = useRef(accountKey)
   const previousAsleepRef = useRef(run?.asleep_since)
   terminalRef.current = terminal
   // Render the new authority as revoked immediately; the layout cleanup below
@@ -567,11 +569,11 @@ export function useRunTerminalSession(input: RunTerminalSessionInput): RunTermin
   // attachment never reconnects on its own.
   useEffect(() => {
     const previous = previousAccountRef.current
-    previousAccountRef.current = run?.account_member_id
-    if (previous === undefined || previous === run?.account_member_id) return
+    previousAccountRef.current = accountKey
+    if (previous === undefined || previous === accountKey) return
     relaunchPendingRef.current = true
     relaunchIfEnded()
-  }, [relaunchIfEnded, run?.account_member_id])
+  }, [relaunchIfEnded, accountKey])
 
   // A wake starts the session's terminal anew, which the stream the sleep
   // ended never reconnects to on its own.

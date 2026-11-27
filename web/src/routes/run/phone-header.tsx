@@ -10,7 +10,7 @@ import { StatusDot } from '@/components/ui/status-dot'
 import { TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { coarsePointer, useMediaQuery } from '@/lib/hooks'
 import { useKeyboardUp } from '@/lib/keyboard-inset'
-import { useRunAccountWords } from '@/lib/run-account'
+import { useRunAccountLine } from '@/lib/run-account'
 import { cn } from '@/lib/utils'
 import { runLabel, stateName, toneOf } from '@/lib/status'
 import { historyDepth, redirectRoute, sessionEntry } from '@/lib/url-state'
@@ -77,7 +77,7 @@ export function PhoneRunHeader({ run, view, views, nav, agentName, keyboard, pri
     ...(assistant ? [{ id: 'assistant', label: 'Assistant', Icon: Sparkles, onSelect: () => useStore.getState().setAssistantOpen(true) }] : []),
   ]
   const state = run.switching ? `Switching to ${modeLabel[run.switching] ?? run.switching}…` : stateName(shown)
-  const account = useRunAccountWords(run)
+  const account = useRunAccountLine(run)
 
   return (
     <>
