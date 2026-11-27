@@ -145,8 +145,8 @@ type Engine struct {
 	pruneCtx           context.Context
 	cancelPrunes       context.CancelFunc
 	prunesRunning      sync.WaitGroup
-	// preparing counts the background builds of prepared checkout disks,
-	// which Close ends through pruneCtx and waits for.
+	// preparing counts the background preparations of checkout disks. Close
+	// waits for them to stop; a build already started outlives them.
 	preparing sync.WaitGroup
 }
 

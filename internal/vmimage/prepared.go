@@ -35,11 +35,7 @@ func (s *Store) KeepCheckoutDisk(ctx context.Context, group, slot, key string, s
 	if !validPreparedKey(group) || !validPreparedKey(slot) {
 		return fmt.Errorf("vmimage: kept disk %q of %q must be letters, digits, - or _", slot, group)
 	}
-	dir := filepath.Join(s.keptDir(), group)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return fmt.Errorf("vmimage: keep prepared disk %s: %w", key, err)
-	}
-	_, err := s.pinPrepared(ctx, key, size, fill, filepath.Join(dir, slot))
+	_, err := s.pinPrepared(ctx, key, size, fill, filepath.Join(s.keptDir(), group, slot))
 	return err
 }
 
@@ -72,6 +68,17 @@ func (s *Store) ForgetCheckoutDisks(group string) error {
 	return nil
 }
 
+// DropKeptCheckoutDisks stops keeping every prepared disk and deletes those
+// no disk backs onto.
+func (s *Store) DropKeptCheckoutDisks() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if err := os.RemoveAll(s.keptDir()); err != nil {
+		return fmt.Errorf("vmimage: drop kept prepared disks: %w", err)
+	}
+	return s.sweepLocked()
+}
+
 // pinPrepared hard-links the prepared disk under key to pin, building the
 // disk first when it is missing.
 func (s *Store) pinPrepared(ctx context.Context, key string, size int64, fill func(ctx context.Context, dir string) error, pin string) (Base, error) {
@@ -86,7 +93,10 @@ func (s *Store) pinPrepared(ctx context.Context, key string, size int64, fill fu
 		_, statErr := os.Stat(base.Path)
 		var err error
 		if statErr == nil {
-			err = s.pinLocked(base.Path, pin)
+			// Made under the lock: dropping the kept disks removes it.
+			if err = os.MkdirAll(filepath.Dir(pin), 0o755); err == nil {
+				err = s.pinLocked(base.Path, pin)
+			}
 		}
 		s.mu.Unlock()
 		if statErr == nil {

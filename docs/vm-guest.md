@@ -607,7 +607,9 @@ follows the checkout's retention, not the VM's.
 A prepared disk is deleted once no session disk is over it, except the one of
 the base branch's current commit: the server keeps that per workspace and
 owner, linked under `<data dir>/vm/images/kept/<workspace>/<uid>-<gid>`, until
-the workspace is deleted. When a source mirror moves the base branch, the
+the workspace is deleted or the server runs low on disk
+([Recover from disk pressure](failure-handling.md#recover-from-disk-pressure)).
+When a source mirror moves the base branch, the
 server builds the new commit's prepared disk in the background for every owner
 kept there, so the next launch does not build it.
 

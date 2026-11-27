@@ -162,6 +162,9 @@ func (e *Engine) prepareCheckouts(ws domain.WorkspaceID, repo, base string) {
 	}
 	e.preparing.Go(func() {
 		for _, slot := range slots {
+			if e.pruneCtx.Err() != nil {
+				return
+			}
 			var uid, gid int
 			if _, scanErr := fmt.Sscanf(slot, "%d-%d", &uid, &gid); scanErr != nil {
 				slog.Warn("gitengine: kept checkout disk has no owner", "workspace", ws, "slot", slot, "error", scanErr)

@@ -239,9 +239,10 @@ what nobody loses: unused standard and browser images, caches over their
 budget or unused for long, and leftover scratch directories, until it is at
 most 80% full. Those are the marks and the period of Kubernetes' image
 garbage collection. When free space drops below the reserve plus 4 GiB it
-then frees what sessions and members would lose, in this order, until it is
-back above, and after them every cache, image and scratch directory nobody
-uses:
+first deletes the prepared checkout disks kept for the next launch
+([Checkouts](vm-guest.md#checkouts)), which that launch rebuilds. It then
+frees what sessions and members would lose, in this order, until it is back
+above, and after them every cache, image and scratch directory nobody uses:
 
 1. Containers and VM disks of closed sessions, the soonest to expire first.
    They go first because a closed session's work is already on its branch,

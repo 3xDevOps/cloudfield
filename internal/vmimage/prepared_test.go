@@ -56,6 +56,16 @@ func TestKeptPreparedDiskOutlivesTheSweepUntilAnotherTakesItsSlot(t *testing.T) 
 	if exists("old") || !exists("new") {
 		t.Fatalf("after another disk took the slot: old kept %v, new kept %v", exists("old"), exists("new"))
 	}
+	if err := s.DropKeptCheckoutDisks(); err != nil {
+		t.Fatal(err)
+	}
+	if slots, err := s.KeptCheckoutDisks("ws"); err != nil || len(slots) != 0 || exists("new") {
+		t.Fatalf("after dropping: slots %v, %v, disk kept %v", slots, err, exists("new"))
+	}
+	keep("new")
+	if !exists("new") {
+		t.Fatal("a disk kept after a drop did not survive the sweep")
+	}
 	if err := s.ForgetCheckoutDisks("ws"); err != nil {
 		t.Fatal(err)
 	}
