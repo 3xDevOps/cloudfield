@@ -65,7 +65,7 @@ func (e *loginShareEnv) launchOwn(t *testing.T, mode domain.LaunchMode) *domain.
 // assertMovedOnceTo waits for the live Standard or headless run to be on
 // login, moved once, in one container that mounts login and resumes the
 // conversation with the continuation alone, never the task again.
-func (e *loginShareEnv) assertMovedOnceTo(t *testing.T, run domain.RunID, login domain.Account, notes *roomNotes, continuation string) {
+func (e *loginShareEnv) assertMovedOnceTo(t *testing.T, run domain.RunID, login domain.Account, notes *roomNotes) {
 	t.Helper()
 	waitFor(t, "the session on "+login.String(), func() bool {
 		row, err := e.db.GetRun(t.Context(), run)
@@ -80,7 +80,7 @@ func (e *loginShareEnv) assertMovedOnceTo(t *testing.T, run domain.RunID, login 
 	if e.containerCount() != 1 {
 		t.Fatalf("%d containers; want only the session's one", e.containerCount())
 	}
-	if !slices.Contains(c.spec.Command, continuation) || slices.ContainsFunc(c.spec.Command, func(arg string) bool { return strings.Contains(arg, "fix it") }) {
+	if !slices.Contains(c.spec.Command, continuedOnSecond) || slices.ContainsFunc(c.spec.Command, func(arg string) bool { return strings.Contains(arg, "fix it") }) {
 		t.Fatalf("replacement command %q; want the continuation and not the task", c.spec.Command)
 	}
 	waitFor(t, "one room note", func() bool {
@@ -134,7 +134,7 @@ func TestALoginMoveRacesTheEndOfTheTurn(t *testing.T) {
 				e.report(t, run.ID, idle)
 				e.report(t, run.ID, standardLimit(t))
 			}
-			e.assertMovedOnceTo(t, run.ID, second, notes, continuedOnSecond)
+			e.assertMovedOnceTo(t, run.ID, second, notes)
 		})
 	}
 }
@@ -175,7 +175,7 @@ func TestASecondLimitDuringALoginMoveIsTheSameMove(t *testing.T) {
 				})
 				e.rt.byName(string(run.ID)).exitNow(1)
 			}
-			e.assertMovedOnceTo(t, run.ID, second, notes, continuedOnSecond)
+			e.assertMovedOnceTo(t, run.ID, second, notes)
 			if !repeated.Load() {
 				t.Fatal("the repeat was never sent")
 			}
@@ -217,7 +217,7 @@ func TestRemovingALoginAMoveChoseIsRefused(t *testing.T) {
 	var inUseErr error
 	ran := e.moveGap(run.ID, mu, func() { inUse, inUseErr = e.sched.LoginInUse(t.Context(), second) })
 	e.report(t, run.ID, standardLimit(t))
-	e.assertMovedOnceTo(t, run.ID, second, notes, continuedOnSecond)
+	e.assertMovedOnceTo(t, run.ID, second, notes)
 	if !ran.Load() || inUseErr != nil || inUse[run.ID] != e.member.ID {
 		t.Fatalf("in the gap LoginInUse = %v, %v; want the moving session, which refuses the removal", inUse, inUseErr)
 	}
@@ -243,7 +243,7 @@ func TestTurningAChosenLoginOffDuringAMove(t *testing.T) {
 			}
 		})
 		e.report(t, run.ID, standardLimit(t))
-		e.assertMovedOnceTo(t, run.ID, second, notes, continuedOnSecond)
+		e.assertMovedOnceTo(t, run.ID, second, notes)
 		if !ran.Load() {
 			t.Fatal("the gap never ran")
 		}
@@ -471,7 +471,7 @@ func TestALateLimitFromTheReplacedContainerIsDropped(t *testing.T) {
 				return err == nil && sc.UsageLimit != ""
 			})
 			e.rt.byName(string(run.ID)).exitNow(1)
-			e.assertMovedOnceTo(t, run.ID, second, notes, continuedOnSecond)
+			e.assertMovedOnceTo(t, run.ID, second, notes)
 
 			late := events.RunUsageLimitPayload{Message: sessionLimit, SessionID: "sess-1", Account: e.member.ID}
 			if from == "the replacement" {

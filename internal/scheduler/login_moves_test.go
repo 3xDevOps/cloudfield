@@ -137,8 +137,8 @@ func TestEnhancedRunMovesToTheAccountsNextLogin(t *testing.T) {
 	waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
 	_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
 	waitFor(t, "the session on the second login", func() bool {
-		row, err := e.db.GetRun(t.Context(), run.ID)
-		return err == nil && row.Account() == second
+		row, rowErr := e.db.GetRun(t.Context(), run.ID)
+		return rowErr == nil && row.Account() == second
 	})
 	waitFor(t, "the continuation prompt", func() bool {
 		execs := rt.all()
@@ -334,9 +334,9 @@ func TestRestartNeverResendsAContinuationBeingSent(t *testing.T) {
 				// A Background run's supervisor exits 0 on SIGUSR1 and 1 on
 				// SIGUSR2, as it ends the run.
 				e.rt.execHandler = func(id runtime.ID, argv []string) (int, string, error) {
-					c, err := e.rt.get(id)
-					if err != nil {
-						return 1, "", err
+					c, getErr := e.rt.get(id)
+					if getErr != nil {
+						return 1, "", getErr
 					}
 					switch strings.Join(argv, " ") {
 					case "/bin/sh -c kill -USR1 1":
@@ -745,8 +745,8 @@ func TestAHandedOffSessionFollowsItsLoginsShareSwitch(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if revoked, err := e.sched.accountRevoked(t.Context(), row); err != nil || revoked {
-				t.Fatalf("accountRevoked = %v, %v; want the handed-off session kept on a shared login", revoked, err)
+			if revoked, revokeErr := e.sched.accountRevoked(t.Context(), row); revokeErr != nil || revoked {
+				t.Fatalf("accountRevoked = %v, %v; want the handed-off session kept on a shared login", revoked, revokeErr)
 			}
 			if err = e.db.SetAgentLoginShared(t.Context(), e.member.ID, "claude", cmp.Or(login.Login, domain.DefaultLogin), false); err != nil {
 				t.Fatal(err)
