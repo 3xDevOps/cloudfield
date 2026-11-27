@@ -296,7 +296,9 @@ describe('Claude Code logins', () => {
     expect(within(logins).getAllByRole('listitem').map((item) => item.getAttribute('aria-label'))).toEqual(['Login default', 'Login work'])
     expect(within(claudeRow()).getAllByRole('button', { name: 'Add login' })).toHaveLength(1)
     await waitFor(() => expect(logins.textContent).toContain('Your account is shared with Bob'))
-    expect(within(logins).getByRole('link', { name: 'What they say' }).getAttribute('href')).toContain('docs/agents.md#several-logins')
+    const note = within(logins).getByRole('link', { name: 'What they say' })
+    expect(note.getAttribute('href')).toContain('docs/agents.md#several-logins')
+    expect(note.parentElement?.textContent).not.toMatch(/allowed|forbidden/)
   })
 
   it('opens Add login in the page', async () => {

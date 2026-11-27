@@ -48,7 +48,7 @@ export function useAgentLogins(client: Pick<Api, 'agentLoginList'>, enabled: boo
 export function AnthropicNote() {
   return (
     <p className="text-ui-sm text-muted">
-      Anthropic&apos;s pages show how to stay signed in to several accounts and do not say whether switching between personal subscriptions at a usage limit is allowed.{' '}
+      Anthropic&apos;s pages describe keeping several accounts and using a Console account at a subscription limit; they do not settle moving between two of your own subscriptions at a limit.{' '}
       <a className="text-accent hover:underline" href={severalLoginsDocs} target="_blank" rel="noopener noreferrer">What they say</a>
     </p>
   )
