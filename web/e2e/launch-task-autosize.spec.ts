@@ -67,6 +67,7 @@ test('pasted tasks grow to the limit and scroll past it', async ({ page, aether 
 
   await page.setViewportSize({ width: 1440, height: 900 })
   await page.getByRole('dialog', { name: 'New session' }).getByRole('button', { name: 'Cancel', exact: true }).click()
+  await page.getByRole('dialog', { name: 'Close new session?' }).getByRole('button', { name: 'Delete draft' }).click()
   await page.setViewportSize({ width: 390, height: 844 })
   const sharedURL = new URL(alice.url)
   sharedURL.searchParams.set('new', '1')

@@ -28,10 +28,10 @@ export function DraftPicker() {
 
   const take = (draft: LaunchDraft, resume: boolean) => {
     const state = useStore.getState()
-    const error = state.updateLaunchDrafts(resume ? draft : null, state.savedLaunchDrafts.filter(({ id }) => id !== draft.id))
+    const error = state.updateLaunchDrafts(resume ? draft : null, (current) => current.filter(({ id }) => id !== draft.id))
     if (error) toast.error(`Could not ${resume ? 'continue' : 'delete'} draft: ${error}`)
     else if (resume) start()
-    else if (drafts.length === 1) close()
+    else if (!useStore.getState().savedLaunchDrafts.length) close()
     else {
       setDeleting(null)
       startButton.current?.focus()

@@ -250,8 +250,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
     const state = useStore.getState()
     const draft = state.launchDraft
     if (state.identityKey !== identityKey || draft?.id !== draftID) return
-    const saved = save ? [draft, ...state.savedLaunchDrafts.filter(({ id }) => id !== draftID)] : state.savedLaunchDrafts
-    const error = state.updateLaunchDrafts(null, saved)
+    const error = state.updateLaunchDrafts(null, (current) => save ? [draft, ...current.filter(({ id }) => id !== draftID)] : current)
     if (error) {
       toast.error(`Could not ${save ? 'save' : 'delete'} draft: ${error}`)
       return

@@ -22,7 +22,7 @@ export interface PaletteSlice {
   paletteLaunchLinear: LinearLink | null
   launchDraft: LaunchDraft | null
   savedLaunchDrafts: LaunchDraft[]
-  updateLaunchDrafts: (draft: LaunchDraft | null, saved: LaunchDraft[]) => string | null
+  updateLaunchDrafts: (draft: LaunchDraft | null, changeSaved: (current: LaunchDraft[]) => LaunchDraft[]) => string | null
   launchDraftError: string | null
   setLaunchDraft: (draft: LaunchDraft | null, persist?: boolean) => string | null
   clearLaunchDraftError: () => void
@@ -51,20 +51,21 @@ export const createPaletteSlice: SliceCreator<PaletteSlice> = (set, get) => ({
   paletteLaunchLinear: null,
   launchDraft: null,
   savedLaunchDrafts: [],
-  updateLaunchDrafts: (launchDraft, savedLaunchDrafts) => {
+  updateLaunchDrafts: (launchDraft, changeSaved) => {
     const state = get()
     const linkStatusPending = state.capabilities === null || (state.capabilities.local?.includes('link.status') && !state.linkStatus)
-    const error = saveLaunchDraft(state.identityKey, launchDraft, !state.linkStatus?.edge_url && !linkStatusPending, savedLaunchDrafts)
-    if (!error) set({ launchDraft, savedLaunchDrafts })
+    const { saved, error } = saveLaunchDraft(state.identityKey, launchDraft, !state.linkStatus?.edge_url && !linkStatusPending, state.savedLaunchDrafts, changeSaved)
+    if (!error) set({ launchDraft, savedLaunchDrafts: saved })
     return error
   },
   launchDraftError: null,
   setLaunchDraft: (launchDraft, persist = true) => {
     const state = get()
     const linkStatusPending = state.capabilities === null || (state.capabilities.local?.includes('link.status') && !state.linkStatus)
-    const error = saveLaunchDraft(state.identityKey, launchDraft, persist && !state.linkStatus?.edge_url && !linkStatusPending, state.savedLaunchDrafts)
+    const { saved, error } = saveLaunchDraft(state.identityKey, launchDraft, persist && !state.linkStatus?.edge_url && !linkStatusPending, state.savedLaunchDrafts)
     set({
       launchDraft,
+      savedLaunchDrafts: saved,
       launchDraftError: error ? `Could not save launch draft: ${error}` : persist ? null : state.launchDraftError,
     })
     return error
