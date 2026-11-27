@@ -66,7 +66,7 @@ func parseMessage(args []string, stdin io.Reader) (func(*protocol.Client, io.Wri
 		}
 	}
 	if len(attach) > protocol.CollaborationMaxAttachments {
-		return nil, fmt.Errorf("message: %d files attached, at most %d", len(attach), protocol.CollaborationMaxAttachments)
+		return nil, fmt.Errorf("message: %d --attach files, at most %d", len(attach), protocol.CollaborationMaxAttachments)
 	}
 	for _, path := range attach {
 		info, err := os.Stat(path)
@@ -86,11 +86,7 @@ func parseMessage(args []string, stdin io.Reader) (func(*protocol.Client, io.Wri
 		if err != nil {
 			return nil, fmt.Errorf("attach: %w", err)
 		}
-		limit, what := int64(configMaxFileBytes), "64 MiB"
-		if terminalImage(head) {
-			limit, what = domain.MaxImageBytes, "8 MiB image"
-		}
-		if info.Size() > limit {
+		if limit, what := attachLimit(head); info.Size() > limit {
 			return nil, fmt.Errorf("attach %s: %d bytes is over the %s limit", path, info.Size(), what)
 		}
 	}
@@ -108,12 +104,28 @@ func terminalImage(data []byte) bool {
 	return slices.Contains([]string{"image/png", "image/jpeg", "image/gif", "image/webp"}, http.DetectContentType(data))
 }
 
+func attachLimit(head []byte) (int64, string) {
+	if terminalImage(head) {
+		return domain.MaxImageBytes, "8 MiB image"
+	}
+	return configMaxFileBytes, "64 MiB"
+}
+
 func sendMessage(c *protocol.Client, w io.Writer, runID, text string, attach []string, steer bool, key string) error {
 	params := protocol.RunInjectParams{RunID: runID, Message: text, IdempotencyKey: key, Steer: steer}
 	for _, path := range attach {
-		data, err := os.ReadFile(path)
+		f, err := os.Open(path)
 		if err != nil {
 			return fmt.Errorf("attach: %w", err)
+		}
+		// The file can have grown since parseMessage checked its size.
+		data, err := io.ReadAll(io.LimitReader(f, configMaxFileBytes+1))
+		_ = f.Close()
+		if err != nil {
+			return fmt.Errorf("attach: %w", err)
+		}
+		if limit, what := attachLimit(data); int64(len(data)) > limit {
+			return fmt.Errorf("attach %s: grew past the %s limit after its size was checked", path, what)
 		}
 		content := base64.StdEncoding.EncodeToString(data)
 		var uploaded protocol.TerminalUploadResult

@@ -62,17 +62,22 @@ func TestMessageSteersAndAttachesUploadedFiles(t *testing.T) {
 		protocol.MethodTerminalFile:  {result: protocol.TerminalUploadResult{Path: fileRef}},
 		protocol.MethodRunInject:     {result: protocol.RunRoomPostResult{Message: protocol.RoomMessage{ID: "m1", State: protocol.RoomMessageSent}}},
 	}
-	send, err := parseMessage([]string{"--steer", "--attach", shot, "--attach", notes, "r1", "--steer=true is ignored,", "-v", "too"}, nil)
-	if err != nil {
-		t.Fatal(err)
+	inject := func(stdin string, args ...string) protocol.RunInjectParams {
+		t.Helper()
+		send, err := parseMessage(args, strings.NewReader(stdin))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := send(fakeControlMethods(t, replies), io.Discard); err != nil {
+			t.Fatal(err)
+		}
+		var sent protocol.RunInjectParams
+		if err := json.Unmarshal(replies[protocol.MethodRunInject].params(), &sent); err != nil || sent.IdempotencyKey == "" {
+			t.Fatalf("run.inject params = %s (%v), want an idempotency key", replies[protocol.MethodRunInject].params(), err)
+		}
+		return sent
 	}
-	if err := send(fakeControlMethods(t, replies), io.Discard); err != nil {
-		t.Fatal(err)
-	}
-	var sent protocol.RunInjectParams
-	if err := json.Unmarshal(replies[protocol.MethodRunInject].params(), &sent); err != nil || sent.IdempotencyKey == "" {
-		t.Fatalf("run.inject params = %s (%v), want an idempotency key", replies[protocol.MethodRunInject].params(), err)
-	}
+	sent := inject("", "--steer", "--attach", shot, "--attach", notes, "r1", "--steer=true is ignored,", "-v", "too")
 	for method, want := range map[string]any{
 		protocol.MethodTerminalImage: protocol.TerminalImageParams{RunID: "r1", Content: base64.StdEncoding.EncodeToString(png)},
 		protocol.MethodTerminalFile:  protocol.TerminalFileParams{RunID: "r1", Name: "notes.txt", Content: base64.StdEncoding.EncodeToString(text)},
@@ -86,6 +91,23 @@ func TestMessageSteersAndAttachesUploadedFiles(t *testing.T) {
 		if got := replies[method].params(); string(got) != string(wantJSON) {
 			t.Errorf("%s params = %s, want %s", method, got, wantJSON)
 		}
+	}
+	if got := inject("--steer\n", "r1", "-"); got.Message != "--steer" || got.Steer {
+		t.Errorf("--steer on stdin sent %+v, want it as the message text", got)
+	}
+	if got := inject("", "--attach", notes, "r1"); got.Message != "" || !slices.Equal(got.Attachments, []string{fileRef}) {
+		t.Errorf("--attach without text sent %+v, want only %s", got, fileRef)
+	}
+
+	send, err := parseMessage([]string{"--attach", shot, "r1"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(shot, domain.MaxImageBytes+1); err != nil {
+		t.Fatal(err)
+	}
+	if err := send(fakeControlMethods(t, replies), io.Discard); err == nil || !strings.Contains(err.Error(), "shot.png: grew past the 8 MiB image limit") {
+		t.Errorf("an image that grew after the size check = %v, want it refused", err)
 	}
 }
 
@@ -108,7 +130,7 @@ func TestMessageRefusesWhatItCannotSendBeforeDialing(t *testing.T) {
 		"big.bin: 67108865 bytes is over the 64 MiB limit":      {"--attach", big, "r1", "hi"},
 		"shot.png: 8388609 bytes is over the 8 MiB image limit": {"--attach", shot, "r1", "hi"},
 		"attach " + dir + ": not a regular file":                {"--attach", dir, "r1"},
-		"message: 9 files attached, at most 8":                  append(slices.Repeat([]string{"--attach", big}, 9), "r1"),
+		"message: 9 --attach files, at most 8":                  append(slices.Repeat([]string{"--attach", big}, 9), "r1"),
 		"message: --attach comes after the session id":          {"r1", "use this mock", "--attach", "mock.png"},
 		"message: --steer comes after the session id":           {"r1", "--steer", "stop editing the README"},
 		"message: -attach=mock.png comes after the session id":  {"r1", "-attach=mock.png", "use this mock"},
