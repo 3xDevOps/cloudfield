@@ -644,6 +644,23 @@ func TestRemoveLoginWithoutATerminalNeedsYes(t *testing.T) {
 	}
 }
 
+// A lone --yes names no login, and the default login is the server's to
+// refuse: neither is asked about.
+func TestRemoveLoginAsksOnlyAboutALoginItCanRemove(t *testing.T) {
+	if err := removeLogin([]string{"--yes"}); err == nil || err.Error() != "usage: cloudfield agent logins remove <login> [--yes]" {
+		t.Fatalf("removeLogin --yes = %v; want the usage", err)
+	}
+	remove := &fakeReply{}
+	c := fakeControlMethods(t, map[string]*fakeReply{protocol.MethodAgentLoginRemove: remove})
+	var out bytes.Buffer
+	if err := removeLoginOf(c, []protocol.AgentLogin{{ID: "default", Name: "default"}}, "default", false, strings.NewReader(""), &out); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "[y/N]") || remove.params() == nil {
+		t.Fatalf("removing the default login printed %q and called the server %v; want no question and the server asked", out.String(), remove.params() != nil)
+	}
+}
+
 func TestLoginsHelpEndsWithTheGuide(t *testing.T) {
 	for _, path := range []string{"agent login", "agent logins"} {
 		out, err := captureStdout(t, func() error { return dispatch(append(strings.Fields(path), "--help")) })
