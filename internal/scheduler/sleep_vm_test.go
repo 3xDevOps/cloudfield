@@ -590,7 +590,7 @@ func TestAVMWhoseStateCannotBeRestoredStartsFromItsDisk(t *testing.T) {
 }
 
 // A wake that started a session from its disk and then could not reattach
-// to it pauses it with no processes: the timeline and the wake's error
+// to it saves it again with no processes: the timeline and the wake's error
 // still say what was lost.
 func TestAColdStartWhoseReattachFailsNotesTheLostProcesses(t *testing.T) {
 	t.Parallel()
@@ -610,8 +610,8 @@ func TestAColdStartWhoseReattachFailsNotesTheLostProcesses(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "the agent did not start") || !strings.Contains(err.Error(), "without its processes, as its restore failed: restore: the saved state was written by another kernel") || strings.Contains(err.Error(), "Kernel panic") {
 		t.Fatalf("WakeRun = %v; want the reattach's error and the first line of the restore's", err)
 	}
-	if state := e.sched.Sleep(run.ID); !state.InMemory || sr.isSaved(e.cid(t, run.ID)) {
-		t.Fatalf("the cold-started VM sleeps as %+v, saved %v; want it paused in memory", state, sr.isSaved(e.cid(t, run.ID)))
+	if !sr.isSaved(e.cid(t, run.ID)) {
+		t.Fatal("the cold-started VM was not saved again")
 	}
 	note := waitTimelineEvent(t, sub, run.ID, events.TimelineNote).Payload.(events.TimelinePayload).Message
 	if !strings.Contains(note, "Processes and terminals that were running were stopped") || !strings.HasSuffix(note, "another kernel") {

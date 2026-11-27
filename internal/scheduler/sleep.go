@@ -419,7 +419,7 @@ func (s *Scheduler) startAsleep(ctx context.Context, entry *supervised) (woke, e
 }
 
 // stopAsleep puts entry back to sleep after a failed wake: it stops the
-// container or a closed session's VM, or pauses an open session's VM.
+// container or a closed session's VM, or saves an open session's VM again.
 // A server shutting down leaves it as it is, recorded asleep, for the next
 // server's recovery to take up. Caller holds entry.lifecycleMu.
 func (s *Scheduler) stopAsleep(ctx context.Context, entry *supervised) error {
@@ -430,7 +430,7 @@ func (s *Scheduler) stopAsleep(ctx context.Context, entry *supervised) error {
 	cid, closed := entry.containerID, entry.retained
 	s.mu.Unlock()
 	if saver, ok := s.saver(cid); ok && !closed {
-		return s.parkAsleep(ctx, entry, saver)
+		return s.resaveAsleep(ctx, entry, saver)
 	}
 	_ = s.entryDriver(entry).Stop(ctx, entry.runID)
 	s.cfg.Git.StopDiffWatch(entry.runID)
@@ -773,7 +773,12 @@ func (s *Scheduler) sleepLive(ctx context.Context, entry *supervised) error {
 		return err
 	}
 	if saving {
-		return s.saveLive(ctx, entry, saver, true)
+		// The guard could not take back the memory of a paused VM that does
+		// not fit on the data disk, so that one is saved now, and disk
+		// reclaim makes its room.
+		memory := s.vmMemoryUse(ctx)[cid]
+		park := memory == 0 || s.saveFits(memoryCandidate{e: entry, memory: memory}, 0, false)
+		return s.saveLive(ctx, entry, saver, park)
 	}
 	undo := func(cause error) error {
 		undoCtx := context.WithoutCancel(ctx)

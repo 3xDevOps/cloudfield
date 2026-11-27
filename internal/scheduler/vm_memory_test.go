@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -350,52 +349,26 @@ func (e *testEnv) pauseIdle(t *testing.T, vms ...runtime.ID) {
 	}
 }
 
-// A VM woken below the disk reserve writes no memory to disk: one whose wake
-// fails, and one that goes idle again, is paused in memory, where it cannot
-// write to its disks either.
-func TestAVMWokenBelowTheDiskReserveIsPausedNotSaved(t *testing.T) {
+// An idle VM whose memory does not fit on the data disk is saved at once:
+// paused, it would keep its memory whatever the host is short of.
+func TestAnIdleVMThatDoesNotFitOnDiskIsSavedNotPaused(t *testing.T) {
 	t.Parallel()
 	e, mr := newMemoryEnv(t)
-	cid := e.launchVM(t, mr, "say pong", 3<<30)
-	run := e.runOf(t, cid)
-	e.pauseIdle(t, cid)
-	e.saveRun(t, run)
-	// A 100 GiB disk keeps 5 GiB.
+	fits := e.launchVM(t, mr, "say pong", 1<<30)
+	e.pauseIdle(t, fits)
+	tight := e.launchVM(t, mr, "say pong", 1<<30)
+	// As in TestTheMemoryGuardSkipsSavesThatFailedOrWouldNotFitOnDisk.
 	var free atomic.Uint64
-	free.Store(2 << 30)
+	free.Store(19 << 29)
 	setFreeBytes(e, &free)
-	paused := func(when string) {
-		t.Helper()
-		if state := e.sched.Sleep(run); mr.saveCount() != 1 || !state.InMemory || containerState(e.container(t, run)) != "paused" {
-			t.Fatalf("%s with 2 GiB free, a VM holding 3 GiB made %d saves and sleeps as %+v; want one save, from before, and the VM paused in memory", when, mr.saveCount(), state)
-		}
-	}
+	e.pauseIdle(t, tight)
 
-	// The restore fails, so the wake starts the VM from its disks, and the
-	// agent then fails to start in it.
-	mr.saveMu.Lock()
-	mr.restoreErr = errors.New("the saved state was written by another kernel")
-	mr.saveMu.Unlock()
-	mr.mu.Lock()
-	mr.startErr = errors.New("the agent did not start")
-	mr.mu.Unlock()
-	if err := e.sched.WakeRun(t.Context(), run, e.member.ID); err == nil || !strings.Contains(err.Error(), "the agent did not start") {
-		t.Fatalf("WakeRun = %v, want the reattach's error", err)
+	if mr.isSaved(fits) || !e.sched.Sleep(e.runOf(t, fits)).InMemory {
+		t.Fatalf("an idle VM that fits on disk sleeps as %+v, want it paused in memory", e.sched.Sleep(e.runOf(t, fits)))
 	}
-	paused("after a failed wake")
-
-	mr.saveMu.Lock()
-	mr.restoreErr = nil
-	mr.saveMu.Unlock()
-	mr.mu.Lock()
-	mr.startErr = nil
-	mr.mu.Unlock()
-	if _, err := e.sched.Inject(t.Context(), run, e.member.ID, domain.AgentPrompt{Text: "after sleep"}, false, nil); err != nil {
-		t.Fatalf("a prompt to a sleeping session below the disk reserve: %v", err)
+	if state := e.sched.Sleep(e.runOf(t, tight)); !mr.isSaved(tight) || state.InMemory || !state.Saved {
+		t.Fatalf("an idle VM that does not fit on disk sleeps as %+v, saved %v; want it saved to disk", state, mr.isSaved(tight))
 	}
-	waitItems(t, e.sched, run, "a turn after the wake", turnEnded("end_turn", 2))
-	e.pauseIdle(t, cid)
-	paused("idle again")
 }
 
 // free, before the host is short; one whose session is awake is left alone

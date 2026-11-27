@@ -299,8 +299,10 @@ is still there. Waking a sleeping session, or starting a closed one's stopped
 container, creates no session disk, so it needs only 1 GiB free for itself
 and each start in flight, not the reserve. With less it is refused with the
 error above, naming a reserve of 0 bytes. Waking a saved VM deletes its saved
-memory, and neither a failed wake nor the next idle sleep writes it back:
-both pause the VM in memory ([Sessions in VMs](#sessions-in-vms)). A start
+memory, but not for good: while the disk is this full the session's next
+idle sleep saves the VM again at once, and a wake that fails after the VM
+started always does, both with no free-space check
+([Sessions in VMs](#sessions-in-vms)). A start
 from a VM's disks, as after disk reclaim deleted its saved memory, still
 writes to the data filesystem with no free-space check: the disk of an agent
 program that changed in the member's home since its last disk was built,
@@ -955,8 +957,10 @@ test. So paused VMs hold only memory above that line, and a small host
 saves most of them soon after they pause. A session the server saved while
 it worked wakes on its own into the room paused VMs hold, when they hold
 enough for it: the server saves them first. A paused VM is saved only while the data filesystem has its
-reserve, 4 GiB and the VM's memory free. On a fuller disk it stays paused,
-a launch that needs its memory is refused, and at the floor working sessions stay
+reserve, 4 GiB and the VM's memory free, so an idle VM is paused only while
+it does: on a fuller disk a sleep saves it at once, and disk reclaim makes
+the room. A VM already paused when the disk fills stays paused, a launch
+that needs its memory is refused, and at the floor working sessions stay
 frozen: free disk space or close sessions
 ([Recover from disk pressure](#recover-from-disk-pressure)). A wake
 restores a saved VM where it was. A server restart or update leaves a
@@ -1064,7 +1068,7 @@ cannot reattach to the session says in its error that the session started
 from its disk without its processes, with that first line. A guest
 that keeps running but does not answer within 90 seconds holds the session
 from then on: its saved state is deleted, and the wake takes the guest up
-as it is, or pauses it in memory when the agent cannot be reached. A wake also
+as it is, or saves it again when the agent cannot be reached. A wake also
 ends as soon as the VM stops under it, with
 `the session's container exited with status <n> while the session woke`,
 rather than after its time runs out: 3 minutes, plus 1 second per 20 MiB
