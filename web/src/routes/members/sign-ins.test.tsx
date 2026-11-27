@@ -187,6 +187,14 @@ describe('propose a merge', () => {
     ])
   })
 
+  it('says nothing of logins in a plan from a server without them, though it archives a home', () => {
+    seed()
+    render(<ProposeForm client={fakeApi()} self={alice} code="C" plan={plan} onProposed={() => {}} onRefused={() => {}} />)
+    fireEvent.click(screen.getByRole('radio', { name: 'Alice on GitHub (the other sign-in)' }))
+    expect(discarded()).toContain('Home on the server (default agent logins, files) and git signing key, archived on the server')
+    expect(screen.queryByText(/default logins are archived/)).toBeNull()
+  })
+
   it('says nothing of logins when the absorbed member has none', () => {
     seed()
     render(<ProposeForm client={fakeApi()} self={alice} code="C" plan={plan} onProposed={() => {}} onRefused={() => {}} />)

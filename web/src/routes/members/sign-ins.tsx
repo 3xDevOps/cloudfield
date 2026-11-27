@@ -599,7 +599,8 @@ function useAgentName() {
 function MovedLogins({ survivor, absorbed, home, className }: { survivor: MergeMember; absorbed: MergeMember; home: boolean; className?: string }) {
   const agentName = useAgentName()
   const moved = movedLogins(survivor, absorbed)
-  if (moved.length === 0 && !home) return null
+  // A plan from a server without logins carries none, and says nothing of them.
+  if (!absorbed.logins || (moved.length === 0 && !home)) return null
   return (
     <div className={cn('flex min-w-0 flex-col gap-1', className)}>
       {home && <p>{absorbed.display_name}&apos;s default logins are archived with its home; no session uses them after the merge.</p>}
