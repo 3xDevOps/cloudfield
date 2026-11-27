@@ -17,7 +17,7 @@ func Bridge(socket string, in io.Reader, out io.Writer) error {
 	}
 	if os.Getenv(CommandPrefixEnv) != "" {
 		// A bridge that cannot, as in a container, relays all the same.
-		_ = protectSelf()
+		_ = lowerOOMScore()
 	}
 	conn, err := net.Dial("unix", socket)
 	if err != nil {
