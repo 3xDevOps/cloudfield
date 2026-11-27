@@ -578,10 +578,10 @@ func (s *Service) CoordReport(ctx context.Context, run domain.RunID, p protocol.
 	if p.Body != "" && !final {
 		return protocol.CoordReportResult{}, invalidParams(method, "body is only valid with the \"success\", \"failure\" or \"blocked\" outcome")
 	}
-	if err := protocol.ValidateReportBody(p.Body); err != nil {
+	if err := protocol.ValidateReportBody(summary, p.Body); err != nil {
 		return protocol.CoordReportResult{}, invalidParams(method, err.Error())
 	}
-	body := strings.ReplaceAll(p.Body, "\r", "")
+	body := strings.ReplaceAll(p.Body, "\r\n", "\n")
 	specs, problem := parseUntil(p.Outcome, p.Until)
 	if problem != "" {
 		return protocol.CoordReportResult{}, invalidParams(method, problem)

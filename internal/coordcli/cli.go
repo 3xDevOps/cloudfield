@@ -659,7 +659,7 @@ func report(ctx context.Context, socket string, args []string, in io.Reader, err
 	if err != nil {
 		return protocol.CoordReportResult{}, err
 	}
-	if err = protocol.ValidateReportBody(full); err != nil {
+	if err = protocol.ValidateReportBody(text, full); err != nil {
 		return protocol.CoordReportResult{}, usageError(err.Error())
 	}
 	idempotencyKey, err := mutationKey("report", *key, errOut)

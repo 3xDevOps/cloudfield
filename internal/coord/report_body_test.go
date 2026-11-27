@@ -39,7 +39,12 @@ func TestReportBodyReachesTheParentWithTheReport(t *testing.T) {
 	if rpcErr := send(protocol.CoordOutcomeSuccess, "other findings", "review"); rpcErr == nil || rpcErr.Code != protocol.CodeConflict {
 		t.Fatalf("the same key with another body = %v, want CodeConflict", rpcErr)
 	}
-	for name, body := range map[string]string{"a terminal escape": "red \x1b[31mtext", "invalid UTF-8": "caf\xe9"} {
+	for name, body := range map[string]string{
+		"a terminal escape": "red \x1b[31mtext", "invalid UTF-8": "caf\xe9", "replaced UTF-8": "caf\ufffd", "a bare carriage return": "one\rtwo",
+		// 6 KiB of quotes print as 12 KiB, so the report would not print
+		// whole in one inbox read.
+		"more than one read prints": strings.Repeat(`"`, 6<<10) + strings.Repeat("x", 6<<10),
+	} {
 		if rpcErr := send(protocol.CoordOutcomeSuccess, body, name); rpcErr == nil || rpcErr.Code != protocol.CodeInvalidParams {
 			t.Fatalf("report with %s in its body = %v, want it refused, not changed", name, rpcErr)
 		}
@@ -57,6 +62,13 @@ func TestReportBodyReachesTheParentWithTheReport(t *testing.T) {
 	}
 	if m := inbox.Messages[0]; m.Kind != protocol.CoordMessageKindReport || m.Body != "2 findings" || m.ReportBody != findings {
 		t.Fatalf("report message = kind %q, body %q, report body of %d bytes; want the summary and the whole %d-byte body", m.Kind, m.Body, len(m.ReportBody), len(findings))
+	}
+	if rpcErr = send(protocol.CoordOutcomeBlocked, "line one\r\nline two", "crlf"); rpcErr != nil {
+		t.Fatalf("report with CRLF line ends: %v", rpcErr)
+	}
+	crlf, rpcErr := h.svc.Inbox(ctx, parent, protocol.CoordInboxParams{AckToken: inbox.AckToken, ReportBodies: true})
+	if rpcErr != nil || len(crlf.Messages) != 1 || crlf.Messages[0].ReportBody != "line one\nline two" {
+		t.Fatalf("inbox = %+v, %v; want the CRLF body with plain line ends", crlf, rpcErr)
 	}
 }
 

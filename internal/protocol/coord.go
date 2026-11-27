@@ -1,6 +1,8 @@
 package protocol
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"slices"
@@ -360,23 +362,48 @@ type CoordReportResult struct {
 	BodyBytes int `json:"body_bytes,omitempty"`
 }
 
+// CoordReportPrintBytes bounds a report's summary and body as an inbox read
+// prints them, JSON escapes and the message's other fields included: the
+// size of one inbox batch, so a harness shows the report whole.
+const CoordReportPrintBytes = 16 << 10
+
 // ValidateReportBody refuses a report body the server would have to change
-// to store: one over the cap, with invalid UTF-8, or with a control
-// character other than a line break or a tab. A carriage return is allowed
-// and dropped.
-func ValidateReportBody(body string) error {
+// to store or that its reader could not be shown whole: one over the cap,
+// with invalid UTF-8 (or the replacement character JSON decoding leaves
+// for it), with a control character other than a line break or a tab, or
+// that with summary prints past CoordReportPrintBytes. A carriage return
+// is allowed only before a line break, where it is dropped.
+func ValidateReportBody(summary, body string) error {
+	if body == "" {
+		return nil
+	}
 	if n := len(body); n > CoordMaxReportBodyBytes {
 		return fmt.Errorf("body is %d bytes and exceeds %d; shorten it, or put the rest in a file on your branch and name it", n, CoordMaxReportBodyBytes)
 	}
-	if !utf8.ValidString(body) {
+	if !utf8.ValidString(body) || strings.ContainsRune(body, utf8.RuneError) {
 		return errors.New("body is not valid UTF-8")
 	}
-	for i, r := range body {
-		if unicode.IsControl(r) && r != '\n' && r != '\t' && r != '\r' {
-			return fmt.Errorf("body has a control character (U+%04X at byte %d); remove it, such as a terminal's color codes", r, i)
+	for i, r := range strings.ReplaceAll(body, "\r\n", "\n") {
+		if unicode.IsControl(r) && r != '\n' && r != '\t' {
+			return fmt.Errorf("body has a control character (U+%04X near byte %d); remove it, such as a terminal's color codes", r, i)
 		}
 	}
+	// 512 bytes cover the message's id, sender, kind, outcome, time and
+	// field names.
+	if printed := printedLen(summary) + printedLen(body) + 512; printed > CoordReportPrintBytes {
+		return fmt.Errorf("the summary and body print as %d bytes in the parent's inbox read, which holds %d: quotes, backslashes and line breaks print as two bytes each; shorten the body, or put the rest in a file on your branch and name it", printed, CoordReportPrintBytes)
+	}
 	return nil
+}
+
+// printedLen is how many bytes s takes as a JSON string without HTML
+// escapes, as the inbox command prints it.
+func printedLen(s string) int {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	_ = enc.Encode(s)
+	return b.Len() - 1
 }
 
 // CheckReportBody is the error for a report whose body its server did not
