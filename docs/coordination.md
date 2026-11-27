@@ -1646,8 +1646,11 @@ held, nor is a `!command` or `/compact`, which the app-server lists as a
 `completed` turn with no agent message. A session that was idle before a
 server restart is not asked again after it. If the read fails, the turn is
 not held and the server logs the error. If admission refuses the reminder,
-the turn ends as it would have. Background sessions, and Standard sessions of
-pi, oh-my-pi and OpenCode, are not held.
+the turn ends as it would have. The server sends the reminder only while the
+app-server lists no turn in progress, so the reminder joins no other turn: if
+one has started by then, such as a follow-up queued in the terminal, the
+first turn ends as it would have and the new one owes its own report.
+Background sessions, and Standard sessions of other agents, are not held.
 
 `run.report` carries the agent's last message in one case: the turn end of a
 Standard subsession, which the server forwards to its parent as the

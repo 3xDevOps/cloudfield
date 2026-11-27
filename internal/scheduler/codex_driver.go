@@ -112,13 +112,19 @@ func (d *appServerDriver) Deliver(ctx context.Context, run *domain.Run, member *
 
 // wake hands mail or a report reminder to the run's terminal. A turn it
 // starts is the server's, which does not answer a question the run shows.
-func (d *appServerDriver) wake(ctx context.Context, run domain.RunID, prompt string) error {
+// Mail joins a running turn. A reminder does not: a turn that started after
+// the one it asks about reports its own end.
+func (d *appServerDriver) wake(ctx context.Context, run domain.RunID, prompt string, reminder bool) error {
 	client := d.connected(run)
 	if client == nil {
 		return errAppServerUnavailable
 	}
+	send := client.Send
+	if reminder {
+		send = client.StartTurn
+	}
 	d.serverTurn(run, true)
-	err := client.Send(ctx, prompt)
+	err := send(ctx, prompt)
 	if err != nil {
 		d.serverTurn(run, false)
 	}
@@ -378,22 +384,21 @@ func (d *appServerDriver) status(entry *supervised, r *appServerRun, thread stri
 			case codexapp.Failed:
 				report.Reason = agentstatus.ReasonFailed
 			case codexapp.Idle:
-				if c := d.s.coordinationSeam(); c != nil && c.enabled {
+				d.s.mu.Lock()
+				working := entry.agentReport.State == agentstatus.Working
+				d.s.mu.Unlock()
+				// The idle thread a connection finds ends no turn.
+				if c := d.s.coordinationSeam(); working && c != nil && c.enabled {
 					ctx, cancel := context.WithTimeout(r.ctx, acpSteerTimeout)
 					message, interrupted, err := client.LastMessage(ctx, thread)
 					if err != nil {
 						slog.Warn("scheduler: read a Standard Codex session's last turn", "run", entry.runID, "error", err)
 					}
 					report.LastMessage, report.Interrupted = message, interrupted
-					d.s.mu.Lock()
-					working := entry.agentReport.State == agentstatus.Working
-					d.s.mu.Unlock()
-					// Only a turn that ends here is held, not the idle thread a
-					// connection finds, and only one the agent answered: a
-					// !command and /compact are completed turns too, with no
-					// agent message.
+					// Only a turn the agent answered is held: a !command and
+					// /compact are completed turns too, with no agent message.
 					reminded := false
-					if working && message != "" {
+					if message != "" {
 						reminder, holdErr := d.s.HoldTurnEnd(ctx, entry.runID, message)
 						if holdErr != nil {
 							slog.Warn("scheduler: check the ending turn's report", "run", entry.runID, "error", holdErr)

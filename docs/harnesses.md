@@ -1016,8 +1016,8 @@ reminder shows in the terminal as a prompt and starts one more turn. It
 follows only a turn the app-server lists as `completed` with an agent
 message, so not a turn you cut off with Esc, a `!command` or `/compact`. A
 protected session and one whose terminal a member
-[controls](terminal.md#session-control) get none. Standard sessions of pi,
-oh-my-pi and OpenCode are not held.
+[controls](terminal.md#session-control) get none. Standard sessions of other
+agents are not held.
 
 When a Standard [subsession](teams.md#subsessions) of an agent with status
 reporting ends a turn without an outcome report, its parent gets a provisional

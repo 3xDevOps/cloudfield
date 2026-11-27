@@ -360,6 +360,57 @@ func TestStandardCodexAskedTurnForwardsWhenItsReminderDoesNotFinish(t *testing.T
 	}
 }
 
+// A turn that starts before the reminder is sent, as a follow-up queued in the
+// terminal does, is not asked about the turn before it: that turn's end is
+// shown, and the new turn is asked for its own report at its end.
+func TestStandardCodexReminderJoinsNoLaterTurn(t *testing.T) {
+	shortProvisionalGrace(t)
+	e, rt, coord := newCodexEnv(t)
+	parent, _ := e.launchFake(t, "parent")
+	child := launchChildRun(t, e, parent, "codex", domain.LaunchTUI)
+	srv, _ := rt.bridge(t, 1)
+	dialed(t, srv, 1)
+	srv.StartThread("thread-1", false, "")
+	waitFor(t, "the connected client", func() bool { return e.sched.Wakeable(child.ID) })
+	var followUp sync.Once
+	reminded := make(chan error, 2)
+	coord.remind = func(ctx context.Context, run domain.RunID, reminder string) error {
+		followUp.Do(func() {
+			if _, err := e.sched.Inject(ctx, run, e.member.ID, domain.AgentPrompt{Text: "say ping"}, false, nil); err != nil {
+				t.Errorf("Inject: %v", err)
+			}
+		})
+		err := e.sched.Wake(ctx, run, reminder)
+		reminded <- err
+		return err
+	}
+	if _, err := e.sched.Inject(t.Context(), child.ID, e.member.ID, domain.AgentPrompt{Text: "say pong"}, false, nil); err != nil {
+		t.Fatal(err)
+	}
+	e.waitAgentWorking(t, child.ID)
+
+	srv.EndTurn("thread-1", "completed", "pong")
+	waitFor(t, "the asked turn's reminder", func() bool { return len(reminded) == 1 })
+	if err := <-reminded; err == nil {
+		t.Fatalf("the reminder was sent into the follow-up's turn: turn/steer = %s", srv.Requests("turn/steer"))
+	}
+	srv.EndTurn("thread-1", "completed", "ping")
+	waitFor(t, "the follow-up's reminder", func() bool { return len(reminded) == 1 })
+	if err := <-reminded; err != nil {
+		t.Fatalf("the follow-up's reminder: %v", err)
+	}
+	srv.EndTurn("thread-1", "completed", "reported")
+	e.waitStoreStatus(t, child.ID, domain.RunNeedsAttention)
+	want := []string{"say pong", "say ping", reminderPrefix + " (answered, waiting, needs-input, blocked, success or failure) before ending the turn."}
+	if got := promptTexts(t, srv.Requests("turn/start")); !slices.Equal(got, want) {
+		t.Fatalf("turn/start inputs = %q, want %q", got, want)
+	}
+	waitFor(t, "the follow-up's message at the parent", func() bool {
+		calls := coord.provisionalReports()
+		return len(calls) > 0 && calls[len(calls)-1].run == child.ID && calls[len(calls)-1].message == "ping"
+	})
+}
+
 // A restarted server finds a Standard Codex thread idle after a turn nobody
 // reported. No turn ends there, so the session is not asked.
 func TestRecoveredStandardCodexIsNotAskedForAnOldTurn(t *testing.T) {
@@ -376,6 +427,7 @@ func TestRecoveredStandardCodexIsNotAskedForAnOldTurn(t *testing.T) {
 	e.waitAgentWorking(t, run.ID)
 	srv.EndTurn("thread-1", "completed", "pong")
 	waitFor(t, "the turn's end", func() bool { return len(coord.idleWakeRuns()) == 2 })
+	reads := len(srv.Requests("thread/turns/list"))
 	binDir := e.sched.coordinationSeam().binDir
 	if err := e.sched.Close(); err != nil {
 		t.Fatalf("Close: %v", err)
@@ -394,6 +446,9 @@ func TestRecoveredStandardCodexIsNotAskedForAnOldTurn(t *testing.T) {
 	waitFor(t, "the idle thread's report", func() bool { return len(coord.idleWakeRuns()) == 3 })
 	if starts := srv.Requests("turn/start"); len(starts) != 1 {
 		t.Fatalf("turn/start = %s, want the member's prompt only", starts)
+	}
+	if got := len(srv.Requests("thread/turns/list")); got != reads {
+		t.Fatalf("thread/turns/list read %d times after the restart, want no read of a thread no turn ended on", got-reads)
 	}
 }
 
