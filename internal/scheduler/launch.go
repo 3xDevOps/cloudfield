@@ -318,9 +318,9 @@ func (s *Scheduler) LaunchWithOptions(ctx context.Context, workspace domain.Work
 	if opts.AccountLogin.Added() {
 		err = s.checkAddedLogin(ctx, member, domain.Account{Member: account, Login: opts.AccountLogin}, harness, opts.Permission == domain.PermissionIsolated)
 		if err == nil {
-			var byEnv bool
-			if byEnv, err = s.environmentPays(ctx, workspace, harness, profile, mode); err == nil && byEnv {
-				err = EnvironmentPays(opts.AccountLogin)
+			var payer string
+			if payer, err = s.loginPayer(ctx, workspace, member, harness, profile, mode); err == nil && payer != "" {
+				err = EnvironmentPays(opts.AccountLogin, payer)
 			}
 		}
 	} else if err = s.checkDefaultLoginShared(ctx, member, account, harness); err == nil {

@@ -526,6 +526,50 @@ func TestAnAddedLoginSessionLeavesNoVariableToPay(t *testing.T) {
 	}
 }
 
+// Claude Code prefers what ~/.claude/settings.json in the session's home
+// signs it in with to any login file
+// (TestIntegrationRealClaudeCodePrefersHomeSettingsToAnAddedLogin). Where
+// that file holds an apiKeyHelper or a variable that signs in, or cannot
+// be read, a named added login is refused naming it, a launch that names
+// none chooses between no logins, and a plan built once it appears
+// refuses the login.
+func TestHomeSettingsThatSignInRefuseAnAddedLogin(t *testing.T) {
+	for _, tc := range []struct{ settings, want string }{
+		{`{"apiKeyHelper":"echo test-helper-key"}`, "apiKeyHelper in ~/.claude/settings.json signs the agent in"},
+		{`{"env":{"ANTHROPIC_API_KEY":"test-settings-key"}}`, "ANTHROPIC_API_KEY under env in ~/.claude/settings.json signs the agent in"},
+		{`{"env":{"CLAUDE_CODE_USE_MANTLE":"1"}}`, "CLAUDE_CODE_USE_MANTLE under env in ~/.claude/settings.json signs the agent in"},
+		{`{"env":{"ANTHROPIC_API_KEY":"test-settings-key"`, ".claude/settings.json is not valid JSON"},
+	} {
+		t.Run(tc.want, func(t *testing.T) {
+			e := newLoginShareEnv(t)
+			ctx := t.Context()
+			if err := os.Remove(filepath.Join(e.adaHome, ".claude.json")); err != nil {
+				t.Fatal(err)
+			}
+			writeHomeFile(t, e.adaHome, ".claude/.credentials.json", `{"claudeAiOauth":{"accessToken":"test-access-old","expiresAt":1}}`)
+			work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+			if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI, ""); err != nil || got != work.Login {
+				t.Fatalf("Ada's start past her signed-out default = %q, %v; want work", got, err)
+			}
+			_, err := e.sched.LaunchWithOptions(ctx, e.ws.ID, e.member.ID, e.member.ID, "t", "claude", domain.LaunchTUI, domain.LaunchOptions{
+				AccountLogin: work.Login,
+				Created: func(domain.RunID) {
+					writeHomeFile(t, e.adaHome, ".claude/settings.json", tc.settings)
+				},
+			})
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("a launch on work once the settings appeared: %v; want refused with %q", err, tc.want)
+			}
+			if _, err = e.launchOn(t, work, ""); !errors.Is(err, ErrEnvironmentPays) || !strings.Contains(err.Error(), tc.want) || strings.Contains(err.Error(), "test-settings-key") {
+				t.Fatalf("a launch naming work: %v; want refused with %q and nothing of the file", err, tc.want)
+			}
+			if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI, ""); err != nil || got != "" {
+				t.Fatalf("Ada's start = %q, %v; want no login chosen", got, err)
+			}
+		})
+	}
+}
+
 // A workspace switch Claude Code reads as off pays nothing, so it leaves a
 // launch on an added login alone.
 func TestAWorkspaceSwitchSetOffLeavesAnAddedLoginToPay(t *testing.T) {

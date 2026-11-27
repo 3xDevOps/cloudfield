@@ -374,7 +374,7 @@ type fakeRuns struct {
 	calls           []string
 	// revokes lists each RevokeAccount as owner:grantee.
 	revokes []string
-	// environmentReads lists the workspaces EnvironmentSignsIn read.
+	// environmentReads lists the workspaces LoginPayer read.
 	environmentReads []domain.WorkspaceID
 	launchOptions    []domain.LaunchOptions
 	paused           map[domain.RunID]bool
@@ -397,7 +397,7 @@ type fakeRuns struct {
 	startLogins []domain.LoginID
 	// perUse are the logins LoginPerUse reports billed per use.
 	perUse map[domain.LoginID]bool
-	// environmentPays is what EnvironmentSignsIn answers.
+	// environmentPays is whether LoginPayer names a payer.
 	environmentPays bool
 }
 
@@ -512,11 +512,14 @@ func (f *fakeRuns) StartLogin(context.Context, domain.WorkspaceID, domain.Member
 	return login, nil
 }
 
-func (f *fakeRuns) EnvironmentSignsIn(_ context.Context, workspace domain.WorkspaceID, _ string, _ domain.LaunchMode) (bool, error) {
+func (f *fakeRuns) LoginPayer(_ context.Context, workspace domain.WorkspaceID, _ domain.MemberID, _ string, _ domain.LaunchMode) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.environmentReads = append(f.environmentReads, workspace)
-	return f.environmentPays, nil
+	if f.environmentPays {
+		return "a workspace or server variable signs the agent in", nil
+	}
+	return "", nil
 }
 
 func (f *fakeRuns) DefaultMode(context.Context, domain.MemberID, domain.MemberID, string) (domain.LaunchMode, error) {

@@ -217,11 +217,17 @@ func signInKeys(agent string, mode domain.LaunchMode) []string {
 }
 
 // signsIn reports whether env signs agent in, in mode, whatever its login.
-// Claude Code reads a CLAUDE_CODE_USE_ switch as on only when it is 1, true,
-// yes or on, in any case, and signs in by workload identity federation only
-// when both its rule and its organization are set.
 func signsIn(env map[string]string, agent string, mode domain.LaunchMode) bool {
-	return slices.ContainsFunc(signInKeys(agent, mode), func(key string) bool {
+	return signingKey(env, agent, mode) != ""
+}
+
+// signingKey is the first variable of env that signs agent in, in mode,
+// whatever its login. Claude Code reads a CLAUDE_CODE_USE_ switch as on only
+// when it is 1, true, yes or on, in any case, and signs in by workload
+// identity federation only when both its rule and its organization are set.
+func signingKey(env map[string]string, agent string, mode domain.LaunchMode) string {
+	keys := signInKeys(agent, mode)
+	if i := slices.IndexFunc(keys, func(key string) bool {
 		switch {
 		case strings.HasPrefix(key, "CLAUDE_CODE_USE_"):
 			return slices.Contains([]string{"1", "true", "yes", "on"}, strings.ToLower(strings.TrimSpace(env[key])))
@@ -229,16 +235,51 @@ func signsIn(env map[string]string, agent string, mode domain.LaunchMode) bool {
 			return env["ANTHROPIC_FEDERATION_RULE_ID"] != "" && env["ANTHROPIC_ORGANIZATION_ID"] != ""
 		}
 		return env[key] != ""
-	})
+	}); i >= 0 {
+		return keys[i]
+	}
+	return ""
 }
 
-// ErrEnvironmentPays refuses an added login where a variable signs the agent
-// in: that variable would pay, not the login.
-var ErrEnvironmentPays = errors.New("a workspace or server variable signs the agent in here")
+// ErrEnvironmentPays refuses an added login where another sign-in of the
+// agent would pay instead of it.
+var ErrEnvironmentPays = errors.New("a sign-in outside the login pays here")
 
-// EnvironmentPays is why a session in such a workspace cannot run on login.
-func EnvironmentPays(login domain.LoginID) error {
-	return fmt.Errorf("scheduler: %w, so login %s would not pay; launch on the default login", ErrEnvironmentPays, login)
+// EnvironmentPays is why a session cannot run on login while payer, a
+// loginPayer answer, signs its agent in.
+func EnvironmentPays(login domain.LoginID, payer string) error {
+	return fmt.Errorf("scheduler: %w: %s, so login %s would not pay; launch on the default login", ErrEnvironmentPays, payer, login)
+}
+
+// loginPayer is what signs agent in, in mode, in a session in home's home in
+// workspace, whatever added login it mounts: a workspace or server variable,
+// or home's ~/.claude/settings.json, which Claude Code prefers to a login
+// file. Empty when nothing does.
+func (s *Scheduler) loginPayer(ctx context.Context, workspace domain.WorkspaceID, home domain.MemberID, agent string, profile harness.Profile, mode domain.LaunchMode) (string, error) {
+	if byEnv, err := s.environmentPays(ctx, workspace, agent, profile, mode); err != nil || byEnv {
+		return "a workspace or server variable signs the agent in", err
+	}
+	return s.settingsPayer(home, agent), nil
+}
+
+// settingsPayer is what home's ~/.claude/settings.json sets that signs agent
+// in whatever login a session in that home mounts: an apiKeyHelper, or a
+// variable of its env block. A file the server cannot read may hold either.
+func (s *Scheduler) settingsPayer(home domain.MemberID, agent string) string {
+	if agent != "claude" || s.cfg.Homes == nil {
+		return ""
+	}
+	settings, err := s.cfg.Homes.ClaudeSettings(home)
+	switch {
+	case err != nil:
+		return "~/.claude/settings.json may sign the agent in and cannot be read: " + err.Error()
+	case settings.APIKeyHelper:
+		return "apiKeyHelper in ~/.claude/settings.json signs the agent in"
+	}
+	if key := signingKey(settings.Env, agent, ""); key != "" {
+		return key + " under env in ~/.claude/settings.json signs the agent in"
+	}
+	return ""
 }
 
 // checkLogin refuses a launch of agent on account whose login cannot sign it

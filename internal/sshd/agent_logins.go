@@ -383,13 +383,13 @@ func MeasureUnnamed(ctx context.Context, cfg *Config, member domain.MemberID, lo
 }
 
 // Launchable is the fallback.Launchable of member's launch on requested: a
-// candidate the scheduler can launch on, never an added login where a
-// workspace variable signs the agent in (byEnv), as that variable would
-// pay instead.
-func Launchable(runs RunController, byEnv func() (bool, error), member, requested domain.MemberID, harness string, mode domain.LaunchMode, permission domain.Permission) fallback.Launchable {
+// candidate the scheduler can launch on, never an added login where
+// something else signs the agent in (payer, a RunController.LoginPayer
+// answer), as that would pay instead.
+func Launchable(runs RunController, payer func() (string, error), member, requested domain.MemberID, harness string, mode domain.LaunchMode, permission domain.Permission) fallback.Launchable {
 	return func(ctx context.Context, account domain.Account) (bool, error) {
 		if account.Login.Added() {
-			if signsIn, err := byEnv(); err != nil || signsIn {
+			if paidBy, err := payer(); err != nil || paidBy != "" {
 				return false, err
 			}
 		}

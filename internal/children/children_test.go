@@ -104,8 +104,8 @@ func (f *fakeRuns) FallbackLaunchable(context.Context, domain.MemberID, domain.M
 	return true, nil
 }
 
-func (f *fakeRuns) EnvironmentSignsIn(context.Context, domain.WorkspaceID, string, domain.LaunchMode) (bool, error) {
-	return false, nil
+func (f *fakeRuns) LoginPayer(context.Context, domain.WorkspaceID, domain.MemberID, string, domain.LaunchMode) (string, error) {
+	return "", nil
 }
 
 func (f *fakeRuns) LoginPerUse(context.Context, domain.MemberID, domain.Account, string) (bool, error) {

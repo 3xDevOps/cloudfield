@@ -82,9 +82,11 @@ type RunController interface {
 	// StartLogin is the login a launch by member on account starts from
 	// when it names none.
 	StartLogin(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, harness string, mode domain.LaunchMode, permission domain.Permission) (domain.LoginID, error)
-	// EnvironmentSignsIn reports whether a workspace variable signs the
-	// agent in, so that no login pays and a launch chooses between none.
-	EnvironmentSignsIn(ctx context.Context, workspace domain.WorkspaceID, harness string, mode domain.LaunchMode) (bool, error)
+	// LoginPayer is what signs the agent in, in a session in home's home,
+	// whatever added login it mounts: a workspace variable or home's agent
+	// settings. A launch then chooses between no logins. Empty when nothing
+	// does.
+	LoginPayer(ctx context.Context, workspace domain.WorkspaceID, home domain.MemberID, harness string, mode domain.LaunchMode) (string, error)
 	// LoginPerUse reports whether login, in a session in home's home, is
 	// billed per use.
 	LoginPerUse(ctx context.Context, home domain.MemberID, login domain.Account, harness string) (bool, error)

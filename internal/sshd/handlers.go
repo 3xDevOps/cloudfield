@@ -307,14 +307,14 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 	if perr != nil {
 		return nil, perr
 	}
-	byEnv := sync.OnceValues(func() (bool, error) {
-		return s.cfg.Runs.EnvironmentSignsIn(ctx, domain.WorkspaceID(p.WorkspaceID), p.Harness, mode)
+	payer := sync.OnceValues(func() (string, error) {
+		return s.cfg.Runs.LoginPayer(ctx, domain.WorkspaceID(p.WorkspaceID), member, p.Harness, mode)
 	})
 	// A named login is refused, never traded for another, when a variable
-	// would pay instead of it.
+	// or a setting would pay instead of it.
 	if login.Added() {
-		if signsIn, envErr := byEnv(); envErr != nil || signsIn {
-			return nil, rpcError(cmp.Or(envErr, scheduler.EnvironmentPays(login)))
+		if paidBy, payerErr := payer(); payerErr != nil || paidBy != "" {
+			return nil, rpcError(cmp.Or(payerErr, scheduler.EnvironmentPays(login, paidBy)))
 		}
 	}
 	account := cmp.Or(domain.MemberID(p.AccountMemberID), member)
@@ -358,7 +358,7 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 		}
 	}
 	chosen, excluded := fallback.Select(ctx, s.cfg.Store, measured, member, domain.Account{Member: requested, Login: login}, p.Harness, workspaces, policy,
-		Launchable(s.cfg.Runs, byEnv, member, requested, p.Harness, mode, permission))
+		Launchable(s.cfg.Runs, payer, member, requested, p.Harness, mode, permission))
 	account = chosen.Member
 	if excluded != nil {
 		slog.Warn("sshd: fallback accounts left out of a launch", "member", member, "error", excluded)

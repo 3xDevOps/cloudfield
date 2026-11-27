@@ -64,10 +64,14 @@ func (s *Scheduler) addedLoginMounts(run *domain.Run, launcher domain.MemberID, 
 		default:
 			return nil, fmt.Errorf("scheduler: login %s no longer holds the %s sign-in it was added with; its owner removes it and adds it again", run.AccountLogin, recorded.Kind)
 		}
-		// Checked again on the variables this plan sets: one added after the
-		// launch was admitted would pay instead of the login.
+		// Checked again on the variables this plan sets and the home's
+		// settings: one added after the launch was admitted would pay instead
+		// of the login.
 		if signsIn(env, profile.Name, run.Mode) {
-			return nil, EnvironmentPays(run.AccountLogin)
+			return nil, EnvironmentPays(run.AccountLogin, "a workspace or server variable signs the agent in")
+		}
+		if payer := s.settingsPayer(launcher, profile.Name); payer != "" {
+			return nil, EnvironmentPays(run.AccountLogin, payer)
 		}
 		// Empty, not absent: an image's own ENV would fill an absent one.
 		for _, key := range append(slices.Clone(profile.EnvPassthrough), signInKeys(profile.Name, run.Mode)...) {
@@ -348,14 +352,15 @@ func (s *Scheduler) addedLoginName(ctx context.Context, account domain.Account, 
 	return string(account.Login)
 }
 
-// EnvironmentSignsIn reports whether a variable of workspace signs agent
-// in, whatever login a session mounts.
-func (s *Scheduler) EnvironmentSignsIn(ctx context.Context, workspace domain.WorkspaceID, agent string, mode domain.LaunchMode) (bool, error) {
+// LoginPayer is what signs agent in, in mode, in a session in home's home in
+// workspace, whatever added login it mounts: a workspace or server
+// variable, or home's ~/.claude/settings.json. Empty when nothing does.
+func (s *Scheduler) LoginPayer(ctx context.Context, workspace domain.WorkspaceID, home domain.MemberID, agent string, mode domain.LaunchMode) (string, error) {
 	profile, ok := harness.Lookup(agent)
 	if !ok || workspace == "" {
-		return false, nil
+		return "", nil
 	}
-	return s.environmentPays(ctx, workspace, agent, profile, mode)
+	return s.loginPayer(ctx, workspace, home, agent, profile, mode)
 }
 
 // checkDefaultLoginShared refuses a launch in member's home on another
@@ -386,10 +391,10 @@ func (s *Scheduler) StartLogin(ctx context.Context, workspace domain.WorkspaceID
 	if err != nil || len(logins) == 0 {
 		return "", err
 	}
-	// A workspace variable that signs the agent in pays whatever the login:
-	// such a launch chooses between no logins.
-	if byEnv, envErr := s.EnvironmentSignsIn(ctx, workspace, harness, mode); envErr != nil || byEnv {
-		return "", envErr
+	// A variable or a setting that signs the agent in pays whatever the
+	// login: such a launch chooses between no logins.
+	if payer, payerErr := s.LoginPayer(ctx, workspace, member, harness, mode); payerErr != nil || payer != "" {
+		return "", payerErr
 	}
 	var refused []string
 	for _, l := range logins {
@@ -442,8 +447,8 @@ func (s *Scheduler) ChildLogin(ctx context.Context, workspace domain.WorkspaceID
 		perUse, perUseErr := s.LoginPerUse(ctx, owner, login, harness)
 		inherits = perUseErr == nil && !perUse
 	}
-	if byEnv, envErr := s.EnvironmentSignsIn(ctx, workspace, harness, mode); envErr != nil || byEnv {
-		return "", envErr
+	if payer, payerErr := s.LoginPayer(ctx, workspace, owner, harness, mode); payerErr != nil || payer != "" {
+		return "", payerErr
 	}
 	if inherits {
 		if refusal, refusalErr := s.loginRefusal(ctx, owner, login, harness, permission == domain.PermissionIsolated); refusalErr == nil && refusal == "" {

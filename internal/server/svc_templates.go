@@ -82,9 +82,9 @@ func (g guardedRuns) LaunchWithOptions(ctx context.Context, workspace domain.Wor
 			return nil, err
 		}
 	}
-	byEnv := sync.OnceValues(func() (bool, error) { return g.ssh.Runs.EnvironmentSignsIn(ctx, workspace, harness, mode) })
+	payer := sync.OnceValues(func() (string, error) { return g.ssh.Runs.LoginPayer(ctx, workspace, member, harness, mode) })
 	chosen, excluded := fallback.Select(ctx, g.ssh.Store, measured, member, domain.Account{Member: account, Login: login}, harness, []domain.WorkspaceID{workspace}, policy,
-		sshd.Launchable(g.ssh.Runs, byEnv, member, account, harness, mode, opts.Permission))
+		sshd.Launchable(g.ssh.Runs, payer, member, account, harness, mode, opts.Permission))
 	if excluded != nil {
 		slog.Warn("templates: logins left out of a launch", "member", member, "error", excluded)
 	}

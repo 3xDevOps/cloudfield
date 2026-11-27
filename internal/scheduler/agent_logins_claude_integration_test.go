@@ -328,3 +328,72 @@ func TestIntegrationRealClaudeCodeUsesTheAddedLogin(t *testing.T) {
 		}
 	}
 }
+
+// TestIntegrationRealClaudeCodePrefersHomeSettingsToAnAddedLogin shows,
+// with the unmodified Claude Code against the stand-in API, that an
+// apiKeyHelper or a key under env in ~/.claude/settings.json of the
+// session's home pays instead of a mounted added login of either kind, and
+// that a plan for such a session is refused.
+func TestIntegrationRealClaudeCodePrefersHomeSettingsToAnAddedLogin(t *testing.T) {
+	claude, err := exec.LookPath("claude")
+	if err != nil {
+		t.Skip("Claude Code is not on PATH")
+	}
+	profile, ok := harness.Lookup("claude")
+	if !ok {
+		t.Fatal("no claude profile")
+	}
+	settings := map[string]struct{ file, auth string }{
+		"apiKeyHelper":                {`{"apiKeyHelper":"echo test-helper-key"}`, "Bearer test-helper-keytest-helper-key"},
+		"ANTHROPIC_API_KEY under env": {`{"env":{"ANTHROPIC_API_KEY":"test-settings-key"}}`, "test-settings-key"},
+	}
+	added := map[string]string{
+		"subscription": `{"claudeAiOauth":{"accessToken":"test-access-added","refreshToken":"test-refresh-added","expiresAt":4102444800000,"scopes":["user:inference"]}}`,
+		"console":      "",
+	}
+	for setting, want := range settings {
+		for addedKind, file := range added {
+			t.Run(setting+" over "+addedKind, func(t *testing.T) {
+				e := newLoginShareEnv(t)
+				login := e.addLogin(t, e.member.ID, "lgn-added00000", "added", file)
+				member, err := e.db.GetMember(t.Context(), e.member.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ws, err := e.db.GetWorkspace(t.Context(), e.ws.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				run := &domain.Run{ID: "run-gate", MemberID: member.ID, HomeMemberID: member.ID, AccountMemberID: member.ID, AccountLogin: login.Login, Harness: "claude"}
+				plan, err := e.sched.BuildEnvironmentPlan(t.Context(), run, ws, member, profile, EnvironmentPurposeRun)
+				if err != nil {
+					t.Fatal(err)
+				}
+				writeHomeFile(t, e.adaHome, ".claude/settings.json", want.file)
+				mock := &mockMessages{}
+				server := httptest.NewServer(mock)
+				defer server.Close()
+				proxy := &proxyLog{}
+				proxyServer := httptest.NewServer(proxy)
+				defer proxyServer.Close()
+				root := t.TempDir()
+				out, runErr := runRealClaude(t, claude, plan, containerView(t, plan, root), root, server.URL, proxyServer.URL)
+				if runErr != nil {
+					t.Errorf("claude: %v: %.600s", runErr, out)
+				}
+				seen := mock.seen()
+				if len(seen) == 0 {
+					t.Fatal("Claude Code sent no request")
+				}
+				for _, auth := range seen {
+					if auth != want.auth {
+						t.Fatalf("a request carried %q; want the setting's %q", auth, want.auth)
+					}
+				}
+				if _, err = e.sched.BuildEnvironmentPlan(t.Context(), run, ws, member, profile, EnvironmentPurposeRun); !errors.Is(err, ErrEnvironmentPays) {
+					t.Fatalf("a plan with %s in the home's settings: %v; want refused", setting, err)
+				}
+			})
+		}
+	}
+}
