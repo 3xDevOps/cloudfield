@@ -122,7 +122,15 @@ pages. Unless it reads `deny`, the start also writes `0` to
 `khugepaged/max_ptes_none` in that directory, for every process on the host:
 the kernel then merges 4 KiB pages into a huge page only where all 512 are
 in use, so it does not refill memory a guest returned. Both settings last
-until the host reboots.
+until the host reboots, as does a `deny` written by hand: write it again
+before the server starts after each boot. Read the two values, the first
+between brackets, with:
+
+```sh
+cat /sys/kernel/mm/transparent_hugepage/shmem_enabled
+cat /sys/kernel/mm/transparent_hugepage/khugepaged/max_ptes_none
+```
+
 `install` leaves
 Sysbox out: sessions and environment terminals run their own Docker daemon in
 their VM.
