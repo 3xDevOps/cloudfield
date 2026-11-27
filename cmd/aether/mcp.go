@@ -131,13 +131,14 @@ func printConnected(w io.Writer, list protocol.ConnectorListResult, connectorURL
 		at := ""
 		switch {
 		case c.Resource == "":
+		case c.Notice != nil:
+			// The address tells apart connectors on different retiring addresses.
+			at = "  at " + c.Resource
 		case c.Resource == list.UniversalURL || slices.Contains(list.UniversalURLs, c.Resource):
 			at = "  universal URL"
 		default:
 			at = "  at " + c.Resource
-			if c.Notice == nil {
-				own = append(own, c.ID)
-			}
+			own = append(own, c.ID)
 		}
 		if c.Notice != nil && c.Notice.URL != "" && !strings.HasSuffix(c.Notice.URL, edgeproto.PathUniversalMCP) {
 			ownPath = true

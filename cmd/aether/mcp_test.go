@@ -116,7 +116,7 @@ Remove one: aether mcp revoke <id>
   URL   https://relay-new.example.test/mcp
   No code: on the page that opens, sign in to the edge with GitHub, pick this server and select Allow
 Connected:
-  con-1  Claude (claude.ai)  scopes read  added 2026-11-26  never used  universal URL
+  con-1  Claude (claude.ai)  scopes read  added 2026-11-26  never used  at https://relay-old.example.test/mcp
     retiring on 2027-03-01: add it again at https://relay-new.example.test/mcp, check it works, remove the old one in the app, then: aether mcp revoke con-1
   con-2  Claude (claude.ai)  scopes read  added 2026-11-26  never used  at https://relay-old.example.test/mcp/abc
     retiring on 2027-03-01: add it again at https://relay-new.example.test/mcp/abc, check it works, remove the old one in the app, then: aether mcp revoke con-2
@@ -156,7 +156,7 @@ Remove one: aether mcp revoke <id>
   URL   https://relay-old.example.test/mcp
   No code: on the page that opens, sign in to the edge with GitHub, pick this server and select Allow
 Connected:
-  con-1  Claude (claude.ai)  scopes read  added 2026-11-26  never used  universal URL
+  con-1  Claude (claude.ai)  scopes read  added 2026-11-26  never used  at https://relay-old.example.test/mcp
     retiring on 2027-03-01: ask this server's admin where to add it again
 Remove one: aether mcp revoke <id>
 `},
