@@ -2105,15 +2105,17 @@ beyond (`historyBudgetFor`; an event held costs the browser about 0.3 KB).
 "Older history not loaded" marks the last case, with **Load more** beside
 it, which adds 10,000 to the budget and reads on. Both show only while the
 window reaches back past what is held and no read has failed (a failed read
-shows **Retry**). The budget only rises while a view holds history; a server
-switch or a new signed-in member puts it back to the window's own. History counts as read back to the page's `older_time` (how far the server
+shows **Retry**). The budget only rises while history is held, and goes back
+to the window's own whenever the history is dropped. History counts as read back to the page's `older_time` (how far the server
 read, rereads included), or to its first event when a server does not send
 one. Of a page that would pass the budget only the newest events that fit
 are kept, and history then counts as read back to the oldest of those. `sync.ts` appends
 live events of those types, rereads left out, to held history, which keeps a workspace's newest
-events up to the budget and moves its loaded boundary past what it drops; the last view to leave
-drops it, and a server switch or a new signed-in member clears it for a fresh
-read. Lane geometry comes from the model
+events up to the budget and moves its loaded boundary past what it drops. The
+history outlives the view, so coming back to Lanes reads nothing; live events
+keep it current meanwhile. It is dropped, for a fresh read, every time the
+event stream comes live (events sent while it was away may never be
+replayed), on a server reset, a server switch and a new signed-in member. Lane geometry comes from the model
 (`model.ts`, `segments.ts`, `edges.ts`, `axis.ts`), never from DOM
 measurement; above 60 lanes only those near the viewport render. Live bars
 move on a timer of window width per pixel, between 1s and 30s. Lanes move with

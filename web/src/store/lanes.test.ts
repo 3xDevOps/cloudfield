@@ -7,7 +7,7 @@ const event = (seq: number, type = 'run.status', workspace = 'wsp_1'): Event => 
 })
 
 describe('lane history', () => {
-  it('keeps live lane events only while a view holds a read workspace, once each, and drops them on release', () => {
+  it('keeps live lane events for a read workspace, once each, after its last view has left', () => {
     const store = createRootStore()
     store.getState().appendLaneEvent(event(1))
     expect(store.getState().laneHistory).toEqual({})
@@ -18,10 +18,36 @@ describe('lane history', () => {
     expect(store.getState().laneHistory.wsp_1.events.map((e) => e.seq)).toEqual([1, 2, 3])
     expect(store.getState().laneHistory.wsp_2).toBeUndefined()
     release()
+    // No view is mounted: the history stays, and a live event still reaches it.
+    store.getState().appendLaneEvent(event(7))
+    expect(store.getState().laneHistory.wsp_1.events.map((e) => e.seq)).toEqual([1, 2, 3, 7])
+  })
+
+  it('drops held history every time the event stream comes live, so a reconnect cannot leave a stale lane', () => {
+    const store = createRootStore()
+    store.getState().setConnection('live')
+    store.getState().holdLanes()()
+    store.getState().setLaneHistory('wsp_1', { floor: -Infinity }, [event(1)])
+    store.getState().raiseLaneBudget(35_000)
+    // The stream drops: events sent meanwhile never reach the history.
+    store.getState().setConnection('reconnecting')
+    expect(store.getState().laneHistory.wsp_1.events).toHaveLength(1)
+    store.getState().setConnection('live')
+    expect(store.getState().laneHistory).toEqual({})
+    expect(store.getState().laneBudget).toBe(historyBudget)
+    // Nothing held, so an event after the reconnect has nowhere to land until a view reads again.
+    store.getState().appendLaneEvent(event(9))
+    expect(store.getState().laneHistory).toEqual({})
+    // Staying live drops nothing.
+    store.getState().setLaneHistory('wsp_1', { floor: -Infinity }, [event(10)])
+    store.getState().setConnection('live')
+    expect(store.getState().laneHistory.wsp_1.events).toHaveLength(1)
+    // A server reset drops it too.
+    store.getState().resetSeq()
     expect(store.getState().laneHistory).toEqual({})
   })
 
-  it('sizes the budget by the window, raises it on request and forgets the raise with the last view', () => {
+  it('sizes the budget by the window, raises it on request and keeps it while history is held', () => {
     const hour = 3_600_000
     expect([1, 6, 24, 168].map((hours) => historyBudgetFor(hours * hour))).toEqual([5000, 5000, 10_000, 25_000])
     const store = createRootStore()
@@ -31,11 +57,10 @@ describe('lane history', () => {
     store.getState().raiseLaneBudget(10_000)
     expect(store.getState().laneBudget).toBe(25_000)
     other()
-    expect(store.getState().laneBudget).toBe(25_000)
     release()
-    expect(store.getState().laneBudget).toBe(historyBudget)
+    // The history outlives its views, and so does the budget that holds it.
+    expect(store.getState().laneBudget).toBe(25_000)
     // A server reset drops history, and the budget raised for it.
-    store.getState().holdLanes()
     store.getState().raiseLaneBudget(35_000)
     store.getState().resetSeq()
     expect(store.getState().laneBudget).toBe(historyBudget)

@@ -288,7 +288,10 @@ export const createServerSlice: SliceCreator<ServerSlice> = (set) => {
       const restored = readLaunchDraft(s.identityKey)
       return { capabilities, launchDraft: restored.draft, launchDraftError: restored.error }
     }),
-    setConnection: (connection) => set({ connection }),
+    // Events sent while the stream was away may never be replayed, so lane history held across it would
+    // be missing them: it goes each time the stream comes live, and a mounted view reads it again.
+    setConnection: (connection) =>
+      set((s) => (connection === 'live' && s.connection !== 'live' ? { connection, laneHistory: {}, laneBudget: historyBudget } : { connection })),
     noteSeq: (seq) =>
       set((s) => (seq > s.lastSeq ? { lastSeq: seq } : {})),
     resetSeq: () =>

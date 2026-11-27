@@ -64,6 +64,8 @@ function seed(runs: Run[], { active = workspace.id, self = alice } = {}) {
     info: { ...serverInfo, member: self },
     members: { [alice.id]: alice, [bob.id]: bob },
     devices: [],
+    laneHistory: {},
+    laneBudget: historyBudget,
     runs: Object.fromEntries(runs.map((r) => [r.id, toRecord(r)])),
     agentList: null,
     pausedRuns: {},
@@ -1054,6 +1056,34 @@ describe('lanes view', () => {
     act(() => useStore.getState().setLaneHistory(workspace.id, { error: 'server did not answer workspace.timeline within 1m0s' }))
     expect(screen.queryByRole('button', { name: 'Load more' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Retry' })).toBeDefined()
+  })
+
+  it('reads nothing on coming back to Lanes, and reads again once the event stream has reconnected', async () => {
+    useStore.getState().setConnection('live')
+    seed([working])
+    const start = Date.now() - 30 * 60_000
+    const mail = (seq: number): Event => ({
+      id: `evt_${seq}`, seq, time: new Date(start + seq * 1000).toISOString(), workspace_id: workspace.id,
+      run_id: working.id, actor_id: '', type: 'coord.message', payload: {},
+    })
+    vi.mocked(api.workspaceTimeline).mockResolvedValue({ events: [mail(1)], next_seq: 0, more: false })
+    await openLanes()
+    await waitFor(() => expect(useStore.getState().laneHistory[workspace.id]).toMatchObject({ floor: -Infinity, loading: false }))
+    expect(api.workspaceTimeline).toHaveBeenCalledTimes(1)
+
+    await userEvent.click(screen.getByRole('tab', { name: 'Board' }))
+    // A live event while no Lanes view is mounted still reaches the held history.
+    act(() => useStore.getState().appendLaneEvent(mail(2)))
+    await userEvent.click(screen.getByRole('tab', { name: 'Lanes' }))
+    expect(useStore.getState().laneHistory[workspace.id].events.map((event) => event.seq)).toEqual([1, 2])
+    expect(api.workspaceTimeline).toHaveBeenCalledTimes(1)
+
+    // The stream drops and returns: what was held may miss events, so it is read again.
+    act(() => useStore.getState().setConnection('reconnecting'))
+    act(() => useStore.getState().setConnection('live'))
+    await waitFor(() => expect(api.workspaceTimeline).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(useStore.getState().laneHistory[workspace.id]).toMatchObject({ floor: -Infinity, loading: false }))
+    expect(useStore.getState().laneHistory[workspace.id].events.map((event) => event.seq)).toEqual([1])
   })
 
   it('keeps none of a page that live events left no room for', async () => {

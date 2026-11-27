@@ -49,7 +49,7 @@ export interface LanesSlice {
   laneHistory: Record<string, LaneHistory>
   /** Agent mail that arrived live while a Lanes view was mounted, newest last; history pages never add to it. */
   laneArrivals: string[]
-  /** Live events are kept only while a Lanes view is mounted. */
+  /** The Lanes views mounted. History outlives them: live events keep it current until the event stream reconnects. */
   laneViews: number
   /** Events held per workspace now: the widest window's budget so far, plus what Load more added. */
   laneBudget: number
@@ -95,26 +95,28 @@ export const createLanesSlice: SliceCreator<LanesSlice> = (set, get) => ({
   laneGroup: 'status',
   laneHidden: [],
   sessionsLanes: false,
-  // The last view to leave drops the history: nothing appends to it unheld.
   holdLanes: () => {
     set((s) => ({ laneViews: s.laneViews + 1 }))
-    return () => set((s) => (s.laneViews === 1 ? { laneViews: 0, laneHistory: {}, laneArrivals: [], laneBudget: historyBudget } : { laneViews: s.laneViews - 1 }))
+    return () => set((s) => (s.laneViews === 1 ? { laneViews: 0, laneArrivals: [] } : { laneViews: s.laneViews - 1 }))
   },
   raiseLaneBudget: (budget) => set((s) => (budget > s.laneBudget ? { laneBudget: budget } : s)),
   appendLaneEvent: (event) => {
     const s = get()
-    if (s.laneViews === 0 || !laneEventTypes.includes(event.type) || isReread(event)) return
+    if (!laneEventTypes.includes(event.type) || isReread(event)) return
     const history = s.laneHistory[event.workspace_id]
     if (!history) return
-    if (history.events.some((e) => e.seq === event.seq)) return
-    const events = merged(history.events, [event])
+    // Nearly every live event is newer than all held, which needs no search and no sort.
+    const newest = history.events.at(-1)
+    const inOrder = !newest || event.seq > newest.seq
+    if (!inOrder && history.events.some((e) => e.seq === event.seq)) return
+    const events = inOrder ? [...history.events, event] : merged(history.events, [event])
     const drop = events.length - s.laneBudget
     // Dropping the oldest moves the boundary up to the oldest kept, so bars before it read History not loaded.
     const next = drop > 0 ? { events: events.slice(drop), floor: Date.parse(events[drop].time), olderSeq: events[drop].seq, capped: true } : { events }
     const id = event.type === 'coord.message' ? (event.payload as { message_id?: string }).message_id : undefined
     set((state) => ({
       laneHistory: { ...state.laneHistory, [event.workspace_id]: { ...history, ...next } },
-      ...(id && { laneArrivals: [...state.laneArrivals.slice(1 - arrivalsKept), id] }),
+      ...(id && state.laneViews > 0 && { laneArrivals: [...state.laneArrivals.slice(1 - arrivalsKept), id] }),
     }))
   },
   setLaneHistory: (workspaceID, patch, older = []) =>
