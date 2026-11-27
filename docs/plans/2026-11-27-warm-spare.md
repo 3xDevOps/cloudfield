@@ -10,8 +10,9 @@ with no agent in it. A launch that matches the spare takes it over (a
 **Status:** draft, 2026-11-27, not yet reviewed by the owner. The owner
 ruled out agent snapshots and warm agent templates on 2026-11-18; this plan
 keeps a live VM, never a snapshot or a clone, and work item 3, the first
-that makes a spare, waits for the owner's decision on the two points marked
-*Open for the owner*. Everything marked *Assumption* is this plan's choice.
+that makes a spare, waits for the owner's answers in
+[Open decisions](#open-decisions). Everything marked *Assumption* is this
+plan's choice.
 Everything marked *To measure* is settled by the first work item that can
 measure it. The [Review](#review) section lists what review changed.
 
@@ -137,7 +138,13 @@ authorization lock, the memory guard's lock and the admission gate.
   directory, and the row last. A VM that cannot be removed keeps its row,
   so the next server start finds it and tries again. A destroy never goes
   through the kill or failure paths of a session, so it leaves no finished
-  or failed session, no commit and no published branch.
+  or failed session, no commit and no published branch. It never writes the
+  spare's caches back to the member (see [Disk](#disk)).
+- The launch that holds a spare in `claiming` is the only one that moves it
+  on: to `destroying` on a miss, a refusal or a failed transaction (claim
+  steps 2 to 4), or out of the manager when the transaction commits. A
+  spare never goes back from `claiming` to `ready`, so a destroy that found
+  it in `claiming` is never owed.
 - A make moves its spare from `starting` to `ready` after its VM has
   started. If the state is no longer `starting`, by the authorization lock
   before the row exists or at that move, the make stops and the destroy
@@ -172,15 +179,21 @@ refreshed it (#1166, a draft today), and a claim pays it like any launch.
    gone only if admission comes up short or its run user is still reserved
    by the spare.
 3. Run memory admission's refusals (memory pressure, disk room) with no new
-   reservation: the VM is already running. A refusal refuses the launch as
-   it would a cold one, and the spare goes back to `ready`.
+   reservation: the VM is already running. Before it refuses, it does what
+   a cold launch does: the other spares are destroyed and it measures
+   again. A refusal that stands destroys this spare too and refuses the
+   launch as it would a cold one.
 4. In one transaction: write the launch's fields to the run row, clear the
    `spare` mark, and record the state transitions a cold launch has
    recorded by this point, stamped now. If it fails, the spare is destroyed
    and the launch runs cold. Then the launch's `Created` callback runs
    (idempotency receipt, subsession setting), and the authorization lock is
    released, both as for a cold launch. The row is `provisioning`.
-5. Rename the branch if the task changes it.
+5. Rename the branch if the task changes it. The row keeps the spare's
+   branch name until the rename is done, so a server that stops in between
+   cleans up the branch that exists. This is the only step after step 4
+   that a cold launch does not run; work item 2 states what a rename that
+   fails leaves.
 6. Run the rest of provisioning as a cold launch runs it: the access check
    it makes before its VM starts, made again here; agent start with the
    instructions built now, agent mode, model, effort, task; the move to
@@ -246,7 +259,10 @@ waits until its VM is gone, and then goes on as if it had never existed:
   row under that lock, so no spare can appear behind it. The wait is the
   VM stop (0.23 s measured, 15 s at worst, the unit's stop timeout); these
   are rare, and today the same request is refused outright while a session
-  is provisioning.
+  is provisioning. The lock is server-wide, so every launch waits behind
+  that stop. #1195 removes a wait under this lock that stopped every
+  launch for seven hours; work item 3 bounds this one the same way, by
+  killing the spare's VM or by waiting for it outside the lock.
 - A launch or terminal that needs the run user the spare reserved on the
   member's home or the account owner's login.
 - Anything that takes a cache lock a make holds (`lockRunCaches`: the
@@ -328,9 +344,10 @@ guard stops at twice the floor. Launch admission keeps the floor plus
 - A spare's VM processes run with the highest out-of-memory score, reset
   to a session's before claim step 4, so the kernel takes a spare before a
   session.
-- A make needs the disk room a launch needs and is refused once disk
-  reclaim has started; disk reclaim destroys spares before it takes
-  anything from a session.
+
+No destroy for memory waits for a VM while it holds the admission gate (a
+launch gives up on the gate after 5 s, `capacityProbeTimeout`) or the
+guard's lock.
 
 On an 8 GiB host the floor is 2 GiB, so a spare needs 5 GiB available and
 such a host holds one rarely. On a 64 GiB host the bar is 13.8 GiB
@@ -340,6 +357,46 @@ launch form open.
 *Open for the owner:* that cost. The owner's constraint for this work is no
 significant rise in memory use; a spare uses only memory that is free
 beyond what the guard asks for and is the first thing returned.
+
+### Disk
+
+A spare holds the disks of a session VM. All are sparse or copy-on-write,
+so each takes little at boot and grows with what the setup script writes:
+
+| Disk | What a spare adds |
+| --- | --- |
+| Root | What the setup script installs |
+| Data (`/tmp`, swap) | What the setup script writes |
+| Cache (`/aether-cache`) | A copy-on-write layer over the member's newest caches at the make, and a hard link that keeps that generation on disk |
+| Checkout | A qcow2 disk over the prepared disk for the base commit, which it keeps from being deleted |
+
+It holds no saved memory, because a spare is never saved. *To measure* in
+work item 3, on KVM: the allocated bytes of each disk for a spare at
+`ready`, with no setup script and with one that installs dependencies.
+There is no figure today.
+
+- A make needs the disk room a launch needs (the reserve plus 1 GiB for
+  each start in flight) and is refused once disk reclaim has started.
+  Nothing bounds what a setup script writes afterwards, as for a session.
+- A spare is the first thing disk reclaim takes: before the prepared
+  checkout disks kept for the next launch, and before anything of a
+  session. When the data filesystem falls below the reserve, spares are
+  destroyed before the server measures which sessions to pause for filling
+  the disk, and a spare is never one of those.
+- A destroyed spare's caches are never written back to the member. A
+  session VM that stops clean publishes its cache layer as the member's
+  newest, and that write copies the layer and the caches under it. A spare
+  that did so would write that copy each time a launch form closed, and on
+  `main` today, where the latest stop wins, it would replace caches a
+  session published after the spare was made with the older ones under the
+  spare. #1203 drops such a publish, #1201 skips one the disk cannot hold
+  and #1200 frees a stopped VM's cache disk; a destroy depends on none of
+  them and deletes the cache layer with the VM.
+- A claimed spare's cache layer is over the member's newest caches at the
+  make, not at the click. If another session of the member published in
+  between, the claimed session does not see those caches, and after #1203
+  its own are not published when it stops. *To measure* in work item 3:
+  how often. The fingerprint can take the cache generation if it matters.
 
 ## Standard sessions and agents
 
@@ -361,6 +418,31 @@ member who switches agents in the form gets a new spare.
 - Spares for the launches the [Claim](#claim) section lists as never
   claiming.
 
+## Open decisions
+
+Work item 3 does not start until the owner has answered these. The plan
+above is written for the first answer to question 1.
+
+1. **Agent in the spare, or not.** This plan: no agent, about 0.6 GiB per
+   spare (593-599 MiB measured), and a claim still pays the agent start
+   (3.7 s traced). The other variant starts the agent in the spare. It is
+   the only one that removes the agent start. It holds more: 420 MiB more
+   by the resident sizes above, so about 1.0 GiB, where an earlier estimate
+   said about 0.8 GiB (*to measure*). It runs the member's hooks and MCP
+   servers and holds the login in a process before a click, and a launch
+   with a task still needs a new agent session after the branch rename
+   ([What the spare does not hold](#what-the-spare-does-not-hold)).
+2. **Whether that memory is within "no significant rise in memory use"**,
+   given that spares take only memory above twice the floor and are given
+   back first.
+3. **Whether a setup script may run before a click**, with the workspace's
+   secrets, the member's home and the account's login, in a VM no member
+   can see or stop. With an agent in the spare the same question covers the
+   agent, its hooks and its MCP servers.
+4. **Whether an agent in the spare reopens the 2026-11-18 ruling** against
+   agent snapshots and warm agent templates. A spare with no agent is a
+   live VM with no agent state.
+
 ## Work items
 
 1. **Spare rows.** The `spare` mark, the member-facing filters, the event
@@ -373,8 +455,8 @@ member who switches agents in the form gets a new spare.
    the point where the VM has started, the manager and its states, the
    checks on each make, the memory and disk rules, every destroy in
    [Never in the way](#never-in-the-way), the fingerprint, the claim, the
-   wait measurements. KVM measurement of the claim and of the share of
-   launches that claim.
+   wait measurements. KVM measurement of the claim, of the share of
+   launches that claim and of the disk a spare holds.
 4. **Launch form** reports its choice.
 5. Documentation: `docs/enhanced-sessions.md`, `docs/vm-guest.md`,
    `docs/failure-handling.md` (memory pressure, what stays after a server
@@ -425,7 +507,12 @@ Items 1 and 2 change no behavior.
   pressure, and making one saves no session; the brake, a guard check below
   twice the floor, a lasting stall and a short admission each destroy
   spares before a session is frozen or saved; disk reclaim destroys spares
-  first.
+  first, and a filesystem below the reserve destroys them before a session
+  is paused. A launch refused at claim step 3 leaves no spare.
+- **Caches.** A session publishes its caches while a spare is `ready`, then
+  the spare is destroyed, once with a setup script that wrote to
+  `/aether-cache` and once with none. The member's newest caches are still
+  the session's, and the destroy wrote no copy of them.
 - **KVM** (`make test-kvm`): form reported, spare ready, launch, first
   prompt accepted, printing click to ready for a claim and a cold launch in
   the same run, and the host memory the spare holds. A second launch right
@@ -451,3 +538,24 @@ Four rounds of adversarial review changed these:
   nothing, and are destroyed before the brake, the guard, an admission or
   disk reclaim takes anything from a session.
 - Only an open launch form makes a spare.
+- A spare leaves `claiming` only by its own launch, and a launch refused at
+  the claim destroys it.
+- A destroy never writes a spare's caches back, a spare is the first thing
+  disk reclaim takes, and the disks it holds are listed, to be measured.
+- A wait for a spare's VM is bounded under the authorization lock and is
+  never held under the admission gate or the guard's lock.
+
+Round four left these for the work items that reach them:
+
+- A report inside the 30 seconds after a make is dropped, and nothing makes
+  a spare later. A member who opens the form and then changes a choice has
+  no spare for the choice they launch (work item 4).
+- Two launch forms of one member, in two tabs, share one spare, and the
+  close of either destroys it (work item 4).
+- A removed or switched login stays mounted in a `ready` spare until the
+  next launch misses or 10 minutes pass (work item 3).
+- A check that destroyed a spare does nothing else, so a host already
+  below the floor freezes its sessions one check later (work item 3
+  measures the delay).
+- What becomes of the make's 1 GiB charge at a claim, when the agent starts
+  in a VM that admission did not reserve for (work item 3).
