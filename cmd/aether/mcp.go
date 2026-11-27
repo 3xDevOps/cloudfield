@@ -75,7 +75,7 @@ func mcpOverview(w io.Writer, call func(method string, params, result any) error
 			if !slices.ContainsFunc(list.Connectors, func(c protocol.Connector) bool { return c.Notice != nil }) {
 				return olderServer(err)
 			}
-			if perr := printConnected(w, list, "", false, now()); perr != nil {
+			if perr := printConnected(w, list, list.URL, false, now()); perr != nil {
 				return perr
 			}
 			return olderServer(err)
@@ -106,7 +106,7 @@ func printConnectors(w io.Writer, list protocol.ConnectorListResult, code *proto
 }
 
 // printConnected lists the caller's connectors, connectorURL being the
-// URL to add, empty when none was minted, and signIn whether that URL's
+// URL to add and signIn whether that URL's
 // page takes the edge sign-in.
 func printConnected(w io.Writer, list protocol.ConnectorListResult, connectorURL string, signIn bool, now time.Time) error {
 	if len(list.Connectors) == 0 {
@@ -148,7 +148,7 @@ func printConnected(w io.Writer, list protocol.ConnectorListResult, connectorURL
 			_, _ = fmt.Fprintln(w, "    "+noticeLine(c))
 		}
 	}
-	if len(own) > 0 && connectorURL != "" && connectorURL == list.UniversalURL {
+	if len(own) > 0 && connectorURL == list.UniversalURL {
 		_, _ = fmt.Fprintf(w, "Move %s to the universal URL: connect again at %s, then aether mcp revoke <id>\n", strings.Join(own, ", "), list.UniversalURL)
 	}
 	if (len(own) > 0 || ownPath) && signIn {

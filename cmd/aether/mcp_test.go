@@ -60,6 +60,15 @@ Connected:
   con-3  ChatGPT (chatgpt.com)  scopes read  added 2026-10-18  never used  universal URL
 Remove one: aether mcp revoke <id>
 `},
+		{"no URL", protocol.ConnectorListResult{Connectors: connectors[:1]}, nil, `Add this server to ChatGPT or Claude as a custom connector:
+  URL   
+  No code: on the page that opens, sign in to the edge with GitHub, pick this server and select Allow
+Connected:
+  con-1  ChatGPT (chatgpt.com)  scopes read,write  added 2026-10-18  last used 2h ago  at https://edge.onaether.dev/mcp/abc
+Move con-1 to the universal URL: connect again at , then aether mcp revoke <id>
+Reconnecting one at the server's own URL asks for a code: aether mcp code
+Remove one: aether mcp revoke <id>
+`},
 	} {
 		var out strings.Builder
 		if err := printConnectors(&out, tt.list, tt.code, now); err != nil {
