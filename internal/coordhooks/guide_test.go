@@ -28,7 +28,7 @@ func TestGuidanceOffersOnlyUsableOutcomes(t *testing.T) {
 			[]string{"REPORT ONCE A TURN", "- answered: ", "- needs-input: only", "use needs-input", "never report waiting"},
 			[]string{"- waiting", "--for"}},
 		{"enhanced interactive", Guide{Role: RoleInteractive, Wake: true},
-			[]string{"- answered: ", "- waiting: ", "use needs-input", "Not while aether_status shows protected", "Then give the result as text and stop", "Report again only if a refusal, `resolved` or new mail changes it."},
+			[]string{"- answered: ", "- waiting: ", "use needs-input", "Not while aether_status shows protected", "Then give the result as text and stop", "Report again only if a refusal, `resolved` or new input changes it."},
 			[]string{"without a report", "before the report", "as your last action"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -56,7 +56,11 @@ func TestBriefFitsEveryLaunch(t *testing.T) {
 				for _, cli := range []string{OldCLI, NewCLI} {
 					g := Guide{Role: role, Background: background, Wake: wake && !background, CLI: cli}
 					brief := Brief(g)
-					if len(brief) > 512 || !strings.Contains(brief, "Report once a turn with aether_report") ||
+					rule := "Report once a turn with aether_report"
+					if background {
+						rule = "End every turn with exactly one aether_report"
+					}
+					if len(brief) > 512 || !strings.Contains(brief, rule) ||
 						(background && strings.Contains(brief, "needs-input =")) || background == strings.Contains(brief, "answered =") {
 						t.Errorf("Brief(%+v) is %d bytes: %s", g, len(brief), brief)
 					}
