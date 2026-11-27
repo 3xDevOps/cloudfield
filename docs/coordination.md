@@ -1416,9 +1416,12 @@ breaks print as two bytes each and `<`, `>` and `&` as six: the parent's harness
 report whole before the next read acknowledges it. A longer body is
 refused with `body is <n> bytes and exceeds 12288`, and a body on another
 outcome with `body is only valid with the "success", "failure" or "blocked"
-outcome`. The body is stored with the report and read through the parent's inbox; the
-dashboard does not show it yet. Nothing is redacted from a summary or a body:
-write no secret into either. A report's body counts toward the 16 KiB of an inbox batch, so a report
+outcome`. The body is stored with the report and read through the parent's inbox. In the
+dashboard a report with a body has a **Full report** button on its row under
+Agent messages, which opens the body in place; whoever may see that message may
+open it. `coord.messages.list` gives each report's `report_body_bytes`, and the
+body itself as `report_body` when called with `report_bodies`. Nothing is
+redacted from a summary or a body: write no secret into either. A report's body counts toward the 16 KiB of an inbox batch, so a report
 with a long body is read in a batch of its own. A parent whose command or bridge predates report bodies gets the body after
 the summary in `body`, which it shows. A server older than report bodies stores the report without the
 body; the command and the `aether_report` tool then fail with `the report was

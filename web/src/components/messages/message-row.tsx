@@ -2,6 +2,8 @@ import { memo, useState } from 'react'
 import { ArrowRight, CircleHelp, ClipboardCheck, type LucideIcon, MessageSquare, Reply } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { RelativeTime } from '@/components/ui/relative-time'
+import { api, type Api } from '@/lib/api'
+import { formatBytes } from '@/lib/format'
 import { plainReason } from '@/lib/reasons'
 import { runLabel } from '@/lib/status'
 import type { RunMessage, RunMessageKind } from '@/lib/types'
@@ -61,13 +63,29 @@ export const MessageRow = memo(function MessageRow({
   onThread,
   label,
   flush = false,
+  client = api,
 }: {
   message: RunMessage
   onThread?: (thread: string) => void
   label?: ParticipantLabel
   flush?: boolean
+  client?: Api
 }) {
   const [expanded, setExpanded] = useState(false)
+  // The report's body: unset until asked for, then the text or the error.
+  const [full, setFull] = useState<{ open: boolean; loading?: boolean; body?: string; error?: string }>({ open: false })
+  const bodyBytes = message.kind === 'report' ? (message.report_body_bytes ?? 0) : 0
+  const toggleFull = () => {
+    if (full.open || full.body !== undefined) return setFull((state) => ({ ...state, open: !state.open }))
+    setFull({ open: true, loading: true })
+    client
+      .coordMessagesList({ workspace_id: message.workspace_id, correlation_id: message.correlation_id, report_bodies: true })
+      .then((page) => {
+        const row = page.messages.find((m) => m.id === message.id)
+        setFull(row?.report_body ? { open: true, body: row.report_body } : { open: true, error: 'The server returned no body for this report.' })
+      })
+      .catch((error: unknown) => setFull({ open: true, error: error instanceof Error ? error.message : String(error) }))
+  }
   const long = message.body.split('\n').length > 3 || message.body.length > 280
   const thread = message.correlation_id || (message.kind === 'question' || message.kind === 'report' ? message.id : '')
   const report = message.kind === 'report' ? [['Outcome', message.outcome], ['Summary', message.summary === message.body ? '' : message.summary], ['Next', message.next_action && plainReason(message.next_action)]].filter(([, value]) => value) : []
@@ -101,9 +119,25 @@ export const MessageRow = memo(function MessageRow({
           ))}
         </dl>
       )}
-      {(long || (thread && onThread)) && (
+      {full.open && (
+        <div className="col-start-2 min-w-0">
+          {full.loading && <p className="text-ui-sm text-muted">Loading the full report…</p>}
+          {full.error && <p role="alert" className="text-ui-sm break-words text-state-failed">{full.error}</p>}
+          {full.body !== undefined && (
+            <pre aria-label="Full report" className="max-h-96 min-w-0 overflow-auto border border-seam/70 bg-chrome p-3 font-code text-ui-sm break-words whitespace-pre-wrap text-text">
+              {full.body}
+            </pre>
+          )}
+        </div>
+      )}
+      {(long || bodyBytes > 0 || (thread && onThread)) && (
         <div className="col-start-2 flex gap-3">
           {long && <Button variant="link" size="sm" onClick={() => setExpanded((open) => !open)}>{expanded ? 'Show less' : 'Show more'}</Button>}
+          {bodyBytes > 0 && (
+            <Button variant="link" size="sm" aria-expanded={full.open} onClick={toggleFull}>
+              {full.open ? 'Hide full report' : `Full report (${formatBytes(bodyBytes)})`}
+            </Button>
+          )}
           {thread && onThread && <Button variant="link" size="sm" onClick={() => onThread(thread)}>Thread</Button>}
         </div>
       )}

@@ -93,12 +93,36 @@ test('an agent starts a child run that its owner sees, follows and stops', async
   if (shots) await page.screenshot({ path: `${shots}/parent.png`, fullPage: true })
 
   await waitForCoordCLI(receipt.run_id, aether.server.dataDir)
-  runCoordCLI(receipt.run_id, ['report', '--outcome', 'success', '--summary', 'No open redirect; one test missing.', '--idempotency-key', 'verdict'])
+  const findings = '1. internal/auth/redirect.go:41 accepts a scheme-relative URL (//evil.example): a sign-in link can leave the site.\n' +
+    '2. internal/auth/redirect_test.go has no case for a backslash after the host.\n\nNo other open redirect found in the three callers of safeRedirect.'
+  runCoordCLI(receipt.run_id, ['report', '--outcome', 'success', '--summary', 'No open redirect; one test missing.', '--body', findings, '--idempotency-key', 'verdict'])
   await expect.poll(() => {
     const inbox = runCoordCLI<{ messages: { from_run_id: string; body: string }[] }>(parent.id, ['inbox'])
     return inbox.messages.find((m) => m.from_run_id === receipt.run_id)?.body ?? ''
   }, { timeout: 60_000 }).toBe('No open redirect; one test missing.')
   await expect(section.getByText('No open redirect; one test missing.')).toBeVisible({ timeout: 60_000 })
+
+  // The report's body opens beside its summary, on request.
+  const open = page.getByRole('button', { name: /^Full report \(/ }).first()
+  await expect(open).toBeVisible({ timeout: 60_000 })
+  if (shots) await page.screenshot({ path: `${shots}/report-body-closed.png`, fullPage: true })
+  await open.click()
+  await expect(page.getByLabel('Full report').first()).toContainText('internal/auth/redirect.go:41')
+  if (shots) await page.screenshot({ path: `${shots}/report-body-open.png`, fullPage: true })
+  if (shots) {
+    for (const width of [360, 430]) {
+      const phone = await browser.newPage({ viewport: { width, height: 800 }, isMobile: true, hasTouch: true })
+      await phone.goto(parentURL.toString())
+      await phone.getByRole('button', { name: 'More' }).click()
+      await phone.getByText('Session details').click()
+      const body = phone.getByRole('button', { name: /^Full report \(/ }).first()
+      await expect(body).toBeVisible({ timeout: 60_000 })
+      await body.click()
+      await expect(phone.getByLabel('Full report').first()).toContainText('internal/auth/redirect.go:41')
+      await phone.screenshot({ path: `${shots}/report-body-open-${width}.png`, fullPage: true })
+      await phone.close()
+    }
+  }
 
   const childURL = new URL(alice.url)
   childURL.searchParams.set('run', receipt.run_id)
@@ -109,7 +133,8 @@ test('an agent starts a child run that its owner sees, follows and stops', async
   if (shots) {
     const phone = await browser.newPage({ viewport: { width: 393, height: 851 }, isMobile: true, hasTouch: true })
     await phone.goto(parentURL.toString())
-    await phone.getByRole('button', { name: 'Show details' }).click()
+    await phone.getByRole('button', { name: 'More' }).click()
+    await phone.getByText('Session details').click()
     await expect(phone.getByText('Adversarial review of the redirect fix').first()).toBeVisible({ timeout: 60_000 })
     await phone.screenshot({ path: `${shots}/parent-mobile.png`, fullPage: true })
     await phone.close()
