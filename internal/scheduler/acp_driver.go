@@ -145,49 +145,6 @@ func (d *acpDriver) Start(ctx context.Context, entry *supervised, att runtime.At
 	return nil
 }
 
-func (d *acpDriver) continuationOwed(entry *supervised) bool {
-	d.s.mu.Lock()
-	defer d.s.mu.Unlock()
-	return entry.accountSwap != nil && entry.accountSwap.Continuation != "" && !entry.accountSwap.Sending
-}
-
-func (d *acpDriver) sendContinuation(entry *supervised) {
-	ctx, cancel := context.WithTimeout(context.Background(), acpConnectTimeout)
-	defer cancel()
-	// A session the server cannot reach was sent nothing: the continuation
-	// stays owed.
-	sess, err := d.live(ctx, entry.runID)
-	if err != nil {
-		slog.Warn("scheduler: reach the agent for its continuation", "run", entry.runID, "error", err)
-		return
-	}
-	d.s.mu.Lock()
-	swap := entry.accountSwap
-	if swap == nil || swap.Continuation == "" || swap.Sending {
-		d.s.mu.Unlock()
-		return
-	}
-	swap.Sending = true
-	persistErr := d.s.writeSidecar(entry.sidecar())
-	if persistErr != nil {
-		swap.Sending = false
-	}
-	d.s.mu.Unlock()
-	if persistErr != nil {
-		slog.Warn("scheduler: record the continuation as being sent; it stays owed", "run", entry.runID, "error", persistErr)
-		return
-	}
-	_, err = sess.Prompt(ctx, []acp.ContentBlock{acp.TextBlock(swap.Continuation)}, false, nil)
-	d.s.clearAccountSwap(entry, swap)
-	switch {
-	case err == nil || usageLimited(err):
-	case d.oneShot(entry):
-		d.endOneShot(entry, false, agentstatus.Report{State: agentstatus.Idle, Reason: "send the continuation to the agent: " + err.Error()})
-	default:
-		slog.Warn("scheduler: send the continuation to the agent", "run", entry.runID, "error", err)
-	}
-}
-
 // usageLimited reports a prompt refused on the account's usage limit, which
 // the session's turn-end callback hands to a move: ending a background run
 // for it here would race that move.
@@ -215,12 +172,15 @@ func (d *acpDriver) Resume(ctx context.Context, entry *supervised, att runtime.A
 		}
 		return d.openRestored(ctx, entry, how)
 	}
+	d.s.mu.Lock()
+	swap := entry.accountSwap
+	d.s.mu.Unlock()
 	if !d.continuationOwed(entry) {
 		d.connect(ctx, entry, openRestore)
 		return nil
 	}
 	d.connect(ctx, entry, openContinue)
-	d.sendContinuation(entry)
+	d.sendContinuation(entry, swap)
 	return nil
 }
 
@@ -297,6 +257,9 @@ func (d *acpDriver) Deliver(ctx context.Context, run *domain.Run, _ *domain.Memb
 		// No turn took the prompt; one awaiting acceptance settles through
 		// the callback.
 		settle(err)
+	}
+	if err == nil {
+		d.continued(sess, run.ID)
 	}
 	if errors.Is(err, acphost.ErrClosed) {
 		err = fmt.Errorf("%w: %w", ptyhost.ErrSessionEnded, err)
@@ -802,6 +765,11 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 		// The restore's idle report can run before setRun, when the run
 		// does not look idle yet.
 		d.wakeIdle(runID)
+	}
+	if how != openContinue && sess.SessionID() == sessionID {
+		if swap := d.owedContinuation(entry); swap != nil {
+			d.s.goMove(func() { d.sendContinuation(entry, swap) })
+		}
 	}
 	return nil
 }

@@ -1029,7 +1029,7 @@ func (s *Scheduler) replaceContainer(ctx context.Context, entry *supervised, f *
 	}
 	switch {
 	case again == "" && run.ACP:
-		s.acp.sendContinuation(entry)
+		s.acp.sendContinuation(entry, swap)
 	case again == "":
 	case run.ACP:
 		// The follow-up move supersedes the continuation this one owed.

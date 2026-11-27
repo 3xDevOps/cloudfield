@@ -16,6 +16,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/events"
 	"github.com/3xDevOps/cloudfield/internal/quota"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
+	acp "github.com/coder/acp-go-sdk"
 )
 
 const sessionLimit = "You've hit your session limit · resets 3pm (UTC)"
@@ -551,5 +552,117 @@ func TestARepeatedLimitFromTheReplacedAgentIsDropped(t *testing.T) {
 		t.Fatalf("the replacement was prompted %q; want the continuation once", sentPrompts(t, execs[1]))
 	case rowErr != nil || row.Status.Terminal() || row.Account() != second || len(notes.all()) != 1:
 		t.Fatalf("run = %+v, %v, notes %v; want it live on the second login", row, rowErr, notes.all())
+	}
+}
+
+// owe gives the run's live entry a move's marker whose continuation the
+// session is still owed.
+func (e *shareEnv) owe(t *testing.T, run domain.RunID, continuation string) (*supervised, *accountSwap) {
+	t.Helper()
+	swap := &accountSwap{From: e.member.ID, To: e.member.ID, Continuation: continuation}
+	e.sched.mu.Lock()
+	defer e.sched.mu.Unlock()
+	entry := e.sched.runs[run]
+	entry.accountSwap = swap
+	if err := e.sched.writeSidecar(entry.sidecar()); err != nil {
+		t.Fatal(err)
+	}
+	return entry, swap
+}
+
+func (e *shareEnv) marker(entry *supervised) (swap *accountSwap, sending bool) {
+	e.sched.mu.Lock()
+	defer e.sched.mu.Unlock()
+	if entry.accountSwap != nil {
+		sending = entry.accountSwap.Sending
+	}
+	return entry.accountSwap, sending
+}
+
+// A send for one move neither marks nor clears the marker of the move that
+// replaced it, and sends nothing.
+func TestAContinuationIsSentOnlyForItsOwnMove(t *testing.T) {
+	t.Parallel()
+	e, rt, _ := newFallbackEnv(t, enhancedClaude)
+	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+	entry, later := e.owe(t, run.ID, "the later move's continuation")
+	e.sched.acp.sendContinuation(entry, &accountSwap{From: e.member.ID, To: e.member.ID, Continuation: "the earlier move's continuation"})
+	if got, sending := e.marker(entry); got != later || sending {
+		t.Fatalf("marker %+v, sending %v; want the later move's, still owed", got, sending)
+	}
+	if prompts := sentPrompts(t, rt.all()[0]); len(prompts) != 0 {
+		t.Fatalf("prompts %q; want none", prompts)
+	}
+}
+
+// A continuation whose prompt the closing session refused before any of it
+// reached the agent stays owed.
+func TestAContinuationTheAgentNeverGotStaysOwed(t *testing.T) {
+	t.Parallel()
+	e, _, _ := newFallbackEnv(t, enhancedClaude)
+	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+	entry, swap := e.owe(t, run.ID, "Continue the task where you stopped.")
+	sess := e.sched.acp.session(run.ID)
+	if err = sess.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the session gone", func() bool { return e.sched.acp.session(run.ID) == nil })
+	// As between finding the session live and sending to it.
+	e.sched.acp.mu.Lock()
+	e.sched.acp.runs[run.ID].session = sess
+	e.sched.acp.mu.Unlock()
+	e.sched.acp.sendContinuation(entry, swap)
+	sc, err := e.sched.readSidecar(run.ID)
+	if got, sending := e.marker(entry); got != swap || sending || err != nil || sc.AccountSwap == nil || sc.AccountSwap.Sending {
+		t.Fatalf("marker %+v, sending %v, sidecar %+v, %v; want the continuation still owed", got, sending, sc.AccountSwap, err)
+	}
+}
+
+// An owed continuation goes to the session once it comes up again in this
+// server process; a member's prompt to the conversation first means it is
+// not sent late, and the session's log says so.
+func TestAnOwedContinuationGoesOnlyToAConversationThatWaited(t *testing.T) {
+	t.Parallel()
+	const continuation = "Continue the task where you stopped."
+	for _, tc := range []string{"the session comes up again", "a member prompts first"} {
+		t.Run(tc, func(t *testing.T) {
+			t.Parallel()
+			e, rt, _ := newFallbackEnv(t, enhancedClaude)
+			run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP)
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+			entry, _ := e.owe(t, run.ID, continuation)
+			if tc == "a member prompts first" {
+				if _, err = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "say pong"}, false, nil); err != nil {
+					t.Fatal(err)
+				}
+				waitFor(t, "the notice", func() bool {
+					log, readErr := os.ReadFile(e.pty.ItemLogPath(run.ID))
+					return readErr == nil && strings.Contains(string(log), "the continuation prompt was not sent because the conversation went on without it")
+				})
+				time.Sleep(200 * time.Millisecond)
+				if got, _ := e.marker(entry); got != nil || !slices.Equal(sentPrompts(t, rt.all()[0]), []string{"say pong"}) {
+					t.Fatalf("marker %+v, prompts %q; want the member's prompt alone and the marker dropped", got, sentPrompts(t, rt.all()[0]))
+				}
+				return
+			}
+			// Sent to the agent directly, not as a member's prompt.
+			_, _ = e.sched.acp.session(run.ID).Prompt(t.Context(), []acp.ContentBlock{acp.TextBlock(acpmock.PromptLoseSession)}, false, nil)
+			waitFor(t, "the continuation in the restored session", func() bool {
+				execs := rt.all()
+				got, _ := e.marker(entry)
+				return len(execs) == 2 && slices.Equal(sentPrompts(t, execs[1]), []string{continuation}) && got == nil
+			})
+		})
 	}
 }
