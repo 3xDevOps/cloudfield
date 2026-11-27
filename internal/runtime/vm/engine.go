@@ -554,7 +554,7 @@ func (e *engine) bootLaunch(ctx context.Context, rec *record) (launch, error) {
 		// run no VMs of their own.
 		"--cpus", fmt.Sprintf("boot=%d,nested=off", rec.CPUs),
 		"--memory", fmt.Sprintf("size=%dM,shared=%s", guestMiB(rec.MemoryMiB), zzShared),
-		"--balloon", "size=0,free_page_reporting=on",
+		"--balloon", "size=0,free_page_reporting="+zzReporting,
 	)
 	if rec.Net != offline {
 		args = append(args, "--net", "id=net0,"+chNetArg(rec.Net, rec.Egress))
@@ -862,6 +862,7 @@ func readNoFollow(path string) ([]byte, error) {
 var (
 	zzShared      = "on"
 	zzCmdline     string
+	zzReporting   = "on"
 	zzRestoreOpts string
 	zzRestoreArgs []string
 	zzKeepSource  bool

@@ -29,12 +29,11 @@ jobs:
       matrix:
         include:
           - { arm: A, fs: xfs, mib: 8192, cycles: 16 }
-          - { arm: B, fs: xfs, mib: 8192, cycles: 16 }
           - { arm: C, fs: xfs, mib: 8192, cycles: 16 }
-          - { arm: D, fs: xfs, mib: 8192, cycles: 16 }
+          - { arm: E, fs: xfs, mib: 8192, cycles: 16 }
+          - { arm: E, fs: xfs, mib: 2048, cycles: 16 }
           - { arm: A, fs: xfs, mib: 2048, cycles: 16 }
           - { arm: C, fs: xfs, mib: 2048, cycles: 16 }
-          - { arm: C, fs: ext4, mib: 8192, cycles: 10 }
           - { arm: cost, fs: xfs, mib: 8192, cycles: 0 }
     steps:
       - uses: actions/checkout@v4

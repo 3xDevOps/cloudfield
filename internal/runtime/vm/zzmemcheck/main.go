@@ -202,6 +202,18 @@ func (s *state) handle(args []string) string {
 			return "error: " + err.Error()
 		}
 		return fmt.Sprintf("ok nonzero=%d took=%s", s.nonzero, time.Since(start).Round(time.Millisecond))
+	case "blind":
+		// As a program uses new memory: written first, never read first,
+		// not locked.
+		mem, err := unix.Mmap(-1, 0, int(num(1))<<20, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
+		if err != nil {
+			return "error: " + err.Error()
+		}
+		fillChunks(mem, spikeBase*3, 7)
+		if err = unix.Munmap(mem); err != nil {
+			return "error: " + err.Error()
+		}
+		return fmt.Sprintf("ok took=%s", time.Since(start).Round(time.Millisecond))
 	case "spike":
 		var err error
 		if s.spike, err = s.alloc(int(num(1))); err != nil {

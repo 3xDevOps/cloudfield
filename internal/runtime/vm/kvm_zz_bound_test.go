@@ -34,6 +34,7 @@ import (
 //
 //	LAZY_ARM   A today's guest, B A + holes dug after every save,
 //	           C init_on_free=1 + holes dug, D init_on_free=1 alone,
+//	           E C + zero pages punched out of the booted VM,
 //	           cost: the build timing below instead of the chain
 
 // privateConfig rewrites the saved VM configuration to private guest memory,
@@ -159,6 +160,7 @@ func (z *zz) fresh(args string) string {
 // another block is allocated, filled and freed. It logs what the host got
 // back of the freed memory.
 func (z *zz) work(label string, gen uint64) {
+	blind := z.call("blind 256")
 	before := z.held()
 	moved := z.fresh(fmt.Sprintf("move %d", gen))
 	for i := z.mainChunks; i < len(z.gens); i++ {
@@ -175,8 +177,49 @@ func (z *zz) work(label string, gen uint64) {
 			break
 		}
 	}
-	z.logf("work %s move=[%s] transient=[%s] held_mib before=%.0f after_move=%.0f after_transient=%.0f later=%.0f waited=%dms private_mib=%.0f",
-		label, moved, transient, before, afterMove, peak, low, time.Since(start).Milliseconds(), z.privateMiB())
+	z.logf("work %s move=[%s] transient=[%s] held_mib before=%.0f after_move=%.0f after_transient=%.0f later=%.0f waited=%dms private_mib=%.0f blind_256=[%s]",
+		label, moved, transient, before, afterMove, peak, low, time.Since(start).Milliseconds(), z.privateMiB(), blind)
+}
+
+// digBoot pauses a booted VM whose memory is shared, punches the zero pages
+// out of its memory and resumes it.
+func (z *zz) digBoot() {
+	z.t.Helper()
+	ctx := z.t.Context()
+	api := newCHAPI(z.e.path(z.key, apiSocket))
+	pid := z.chPID()
+	fds, err := os.ReadDir(fmt.Sprintf("/proc/%d/fd", pid))
+	if err != nil {
+		z.t.Fatal(err)
+	}
+	var memfds []string
+	for _, fd := range fds {
+		path := fmt.Sprintf("/proc/%d/fd/%s", pid, fd.Name())
+		if target, _ := os.Readlink(path); strings.HasPrefix(target, "/memfd:") {
+			var st unix.Stat_t
+			if unix.Stat(path, &st) == nil && st.Size >= 1<<30 {
+				memfds = append(memfds, path+"="+target)
+			}
+		}
+	}
+	if len(memfds) != 1 {
+		z.t.Fatalf("guest memory files of the monitor: %v, want one", memfds)
+	}
+	path, _, _ := strings.Cut(memfds[0], "=")
+	before := z.held()
+	start := time.Now()
+	if err = api.pause(ctx); err != nil {
+		z.t.Fatalf("pause: %v", err)
+	}
+	out, digErr := exec.Command("fallocate", "--dig-holes", path).CombinedOutput()
+	dug := time.Since(start)
+	if err = api.resume(ctx); err != nil {
+		z.t.Fatalf("resume: %v", err)
+	}
+	if digErr != nil {
+		z.t.Fatalf("fallocate --dig-holes %s: %v: %s", memfds[0], digErr, out)
+	}
+	z.logf("bootdig file=%q paused_ms=%d dig_ms=%d held_mib before=%.0f after=%.0f", memfds[0], time.Since(start).Milliseconds(), dug.Milliseconds(), before, z.held())
 }
 
 func TestKVMZZFileBound(t *testing.T) {
@@ -196,7 +239,7 @@ func TestKVMZZFileBound(t *testing.T) {
 		}
 	}
 	zzShared, zzRestoreOpts, zzRestoreArgs, zzKeepSource = "on", ",memory_restore_mode=copyonwrite", []string{"-v"}, true
-	if arm == "C" || arm == "D" {
+	if arm == "C" || arm == "D" || arm == "E" {
 		zzCmdline = " init_on_free=1"
 	}
 	images, err := vmimage.Open(filepath.Join(dir, "vm", "images"), kernel, nil)
@@ -205,7 +248,7 @@ func TestKVMZZFileBound(t *testing.T) {
 	}
 	e := newEngine(Config{DataDir: dir, Images: images, Monitor: []string{server, MonitorCommand}, Helper: server, ProgramUnit: localBinProgram}, SystemdUnits{}, dialHelper)
 	z := &zz{t: t, e: e, key: "run-zz-incr", fs: os.Getenv("LAZY_FS"), mib: mib, stat: os.Getenv("LAZY_DEV_STAT"), dump: os.Getenv("LAZY_DUMP_DIR"),
-		arm: arm, dig: arm == "B" || arm == "C",
+		arm: arm, dig: arm == "B" || arm == "C" || arm == "E",
 		chain: sha256.Sum256([]byte("zzmemcheck")), rng: rand.New(rand.NewSource(int64(mib)))}
 	t.Cleanup(func() { _ = e.destroy(context.Background(), z.key) })
 	shmMiB := 128
@@ -225,7 +268,11 @@ func TestKVMZZFileBound(t *testing.T) {
 	if err = e.start(t.Context(), z.key); err != nil {
 		t.Fatal(err)
 	}
-	z.logf("boot took=%dms", time.Since(start).Milliseconds())
+	z.logf("boot took=%dms held_mib=%.0f", time.Since(start).Milliseconds(), z.held())
+	if arm == "E" {
+		z.digBoot()
+		z.guest("true")
+	}
 	version, _ := exec.Command("cloud-hypervisor", "--version").Output()
 	launched, _ := os.ReadFile(e.path(z.key, launchFile))
 	z.logf("hypervisor %s memory_arg=%q", strings.TrimSpace(string(version)), regexp.MustCompile(`size=\d+M,shared=\w+`).Find(launched))
@@ -398,15 +445,32 @@ func TestKVMZZInitOnFreeCost(t *testing.T) {
 	}
 	const env = "export PATH=/opt/go/bin:$PATH GOROOT=/opt/go GOCACHE=/tmp/zzcache GOPATH=/tmp/zzgopath GOTOOLCHAIN=local CGO_ENABLED=0 GOFLAGS= HOME=/root; TIMEFORMAT='real=%R user=%U sys=%S'; "
 	benches := []struct{ name, script string }{
-		{"go-build-std", "rm -rf /tmp/zzcache; cd /opt/go/src && time go build -a std"},
+		{"go-build-std-cmd", "rm -rf /tmp/zzcache; cd /opt/go/src && time go build -a std cmd"},
 		{"untar-and-delete", "time (mkdir /tmp/zzcopy && tar -cf - -C /opt go | tar -xf - -C /tmp/zzcopy && rm -rf /tmp/zzcopy)"},
 		{"alloc-fill-free-1g", "time /usr/local/bin/zzmemcheck call transient 1024"},
 	}
-	for round := range 6 {
-		iof := round%2 == 1
-		zzShared, zzCmdline = "on", ""
-		if iof {
+	held := func() int64 {
+		stat, _ := os.ReadFile(filepath.Join(e.cgroupRoot, runtime.SessionSlice, unitName(key), "memory.stat"))
+		var total int64
+		for line := range strings.SplitSeq(string(stat), "\n") {
+			if name, v, _ := strings.Cut(line, " "); name == "anon" || name == "shmem" {
+				n, _ := strconv.ParseInt(v, 10, 64)
+				total += n
+			}
+		}
+		return total >> 20
+	}
+	// today: reporting on; zeroed: init_on_free=1, which makes the guest
+	// refuse reporting; unreported: today's kernel arguments on a balloon
+	// that offers no reporting, to tell the zeroing from the reporting.
+	for round := range 9 {
+		iof := []string{"today", "zeroed", "unreported"}[round%3]
+		zzShared, zzCmdline, zzReporting = "on", "", "on"
+		switch iof {
+		case "zeroed":
 			zzCmdline = " init_on_free=1"
+		case "unreported":
+			zzReporting = "off"
 		}
 		spec := runtime.Spec{
 			Image: "docker.io/library/ubuntu:24.04", CreationKey: key, Command: []string{"/bin/sh", "-c", "exec sleep infinity"},
@@ -418,7 +482,7 @@ func TestKVMZZInitOnFreeCost(t *testing.T) {
 		if err = e.start(t.Context(), key); err != nil {
 			t.Fatal(err)
 		}
-		t.Logf("ZZ cost round=%d init_on_free=%v guest %s", round, iof, zzGuestFacts(guestRun))
+		t.Logf("ZZ cost round=%d guest_kind=%v guest %s", round, iof, zzGuestFacts(guestRun))
 		zzPush(t, e, key, os.Getenv("LAZY_MEMCHECK"), "cat >/usr/local/bin/zzmemcheck && chmod 755 /usr/local/bin/zzmemcheck")
 		guestRun("setsid /usr/local/bin/zzmemcheck serve </dev/null >/var/log/zzmemcheck.log 2>&1 & sleep 1; test -S /run/zzmemcheck.sock")
 		start := time.Now()
@@ -428,9 +492,14 @@ func TestKVMZZInitOnFreeCost(t *testing.T) {
 			for _, b := range benches {
 				cpu0, wall := cpu(), time.Now()
 				out := guestRun("bash -c " + shellQuote(env+b.script) + " 2>&1 | tail -3 | tr '\\n' ' '")
-				t.Logf("ZZ COST round=%d init_on_free=%v bench=%s rep=%d host_wall_ms=%d unit_cpu_ms=%d guest=[%s]", round, iof, b.name, rep, time.Since(wall).Milliseconds(), cpu()-cpu0, out)
+				t.Logf("ZZ COST round=%d guest_kind=%v bench=%s rep=%d host_wall_ms=%d unit_cpu_ms=%d guest=[%s]", round, iof, b.name, rep, time.Since(wall).Milliseconds(), cpu()-cpu0, out)
 			}
 		}
+		guestRun("rm -rf /tmp/zzcache; sync; echo 3 >/proc/sys/vm/drop_caches")
+		after := held()
+		time.Sleep(40 * time.Second)
+		t.Logf("ZZ HELD round=%d guest_kind=%v host_held_mib after_benches=%d 40s_later=%d guest_used_mib=%s", round, iof, after, held(),
+			guestRun("awk '/^MemTotal:/{t=$2} /^MemFree:/{f=$2} END{print int((t-f)/1024)}' /proc/meminfo"))
 		if err = e.destroy(t.Context(), key); err != nil {
 			t.Fatal(err)
 		}
