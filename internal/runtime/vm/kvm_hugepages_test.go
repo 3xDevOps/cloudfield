@@ -75,11 +75,12 @@ func TestKVMGuestMemoryUsesHugePages(t *testing.T) {
 		return starts[1], cpu[1], held[1], huge[1]
 	}
 
-	if err := os.WriteFile(shmemHugePages, []byte("never"), 0o644); err != nil {
+	t.Cleanup(func() { _, _ = adviseHugePages(hugePages) })
+	if err := os.WriteFile(filepath.Join(hugePages, "shmem_enabled"), []byte("never"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	plainStart, plainCPU, plainHeld, plainHuge := measure("never")
-	if was, err := adviseHugePages(shmemHugePages); err != nil || was != "never" {
+	if was, err := adviseHugePages(hugePages); err != nil || was != "never" {
 		t.Fatalf("adviseHugePages found %q: %v", was, err)
 	}
 	start, cpu, held, huge := measure("advise")
@@ -109,4 +110,76 @@ func TestKVMGuestMemoryUsesHugePages(t *testing.T) {
 	if woken := unitStat(key, "memory.stat", "shmem_thp"); woken != 0 {
 		t.Errorf("the host backs %d bytes of a woken guest with huge pages, want none", woken)
 	}
+}
+
+// TestKVMReturnedGuestMemoryStaysWithTheHost frees all but one page in each
+// 2 MiB of 1 GiB a guest filled, then has khugepaged, sped up, walk the
+// guest's memory twice: under the settings adviseHugePages leaves the host
+// keeps what the guest returned. The log has what the host holds after two
+// more walks at the kernel's max_ptes_none.
+func TestKVMReturnedGuestMemoryStaysWithTheHost(t *testing.T) {
+	e := kvmEngine(t)
+	khugepaged := filepath.Join(hugePages, "khugepaged")
+	set := func(name, value string) {
+		t.Helper()
+		path := filepath.Join(khugepaged, name)
+		was, err := os.ReadFile(path)
+		if err == nil {
+			err = os.WriteFile(path, []byte(value), 0o644)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.WriteFile(path, was, 0o644) })
+	}
+	set("scan_sleep_millisecs", "10")
+	set("alloc_sleep_millisecs", "10")
+	set("pages_to_scan", "1048576")
+	walks := func() uint64 {
+		t.Helper()
+		data, err := os.ReadFile(filepath.Join(khugepaged, "full_scans"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return parseUint(t, strings.TrimSpace(string(data)))
+	}
+	walkTwice := func() {
+		t.Helper()
+		for began, deadline := walks(), time.Now().Add(2*time.Minute); walks() < began+3; time.Sleep(time.Second) {
+			if time.Now().After(deadline) {
+				t.Fatalf("khugepaged finished %d walks in 2 minutes", walks()-began)
+			}
+		}
+	}
+
+	const key, fill = "run-hugepages-returned", 1 << 30
+	t.Cleanup(func() { _ = e.destroy(context.Background(), key) })
+	spec := runtime.Spec{
+		Image: "docker.io/library/ubuntu:24.04", CreationKey: key, Command: []string{"/bin/sh", "-c", "exec sleep infinity"},
+		Env: map[string]string{"AETHER_RUN_ID": key}, CPULimit: 1, MemoryLimitBytes: 4 << 30,
+	}
+	if _, err := e.create(t.Context(), key, spec, options{Offline: true}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.start(t.Context(), key); err != nil {
+		t.Fatal(err)
+	}
+	guestFields(t, e, key, "head -c 1G /dev/urandom >/dev/shm/fill", 0)
+	filled := guestRAMOnHost(t, key)
+	guestFields(t, e, key, "i=0; while [ $i -lt 512 ]; do fallocate -p -o $((i*2097152+4096)) -l 2093056 /dev/shm/fill || exit; i=$((i+1)); done", 0)
+	for deadline := time.Now().Add(2 * time.Minute); guestRAMOnHost(t, key) > filled-fill*3/4; time.Sleep(time.Second) {
+		if time.Now().After(deadline) {
+			t.Fatalf("2 minutes after the guest freed %d bytes the host holds %d of the %d it held", fill, guestRAMOnHost(t, key), filled)
+		}
+	}
+	returned := guestRAMOnHost(t, key)
+	walkTwice()
+	kept := guestRAMOnHost(t, key)
+	if kept > returned+fill/16 {
+		t.Errorf("the host held %d bytes of the guest once it had returned its memory and %d after khugepaged walked it", returned, kept)
+	}
+	set("max_ptes_none", "511")
+	walkTwice()
+	t.Logf("the host held %d MiB of the guest filled, %d MiB once the guest had freed its memory, %d MiB after khugepaged walked it twice with max_ptes_none 0 and %d MiB after two more walks with 511",
+		filled>>20, returned>>20, kept>>20, guestRAMOnHost(t, key)>>20)
 }

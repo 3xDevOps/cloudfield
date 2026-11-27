@@ -116,9 +116,13 @@ Every start with `session-runtime vm` also sets
 `/sys/kernel/mm/transparent_hugepage/shmem_enabled` to `advise` when it reads
 `never`, and logs the change, so the host backs a booting guest's memory with
 2 MiB pages ([vm-guest.md](vm-guest.md#memory-the-guest-returns)). Under
-`advise` only shared memory that asks for huge pages gets them. The setting
-lasts until the host reboots; any other value is left as it is, so write
-`deny` there to keep guest memory on 4 KiB pages.
+`advise` only shared memory that asks for huge pages gets them. Any other
+value is left as it is, so write `deny` there to keep guest memory on 4 KiB
+pages. Unless it reads `deny`, the start also writes `0` to
+`khugepaged/max_ptes_none` in that directory, for every process on the host:
+the kernel then merges 4 KiB pages into a huge page only where all 512 are
+in use, so it does not refill memory a guest returned. Both settings last
+until the host reboots.
 `install` leaves
 Sysbox out: sessions and environment terminals run their own Docker daemon in
 their VM.
