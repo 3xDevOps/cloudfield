@@ -68,17 +68,16 @@ low, every older Go build file goes.
 A session in a virtual machine
 ([environments.md](environments.md#sessions-in-virtual-machines)) keeps its
 caches on a disk of its own that holds at most 32 GiB, which the rule above
-does not reach. Its VM bounds what the session adds: every 10 minutes, while
-that disk is more than half full, it deletes the least recently used Go build
-cache files written since the VM booted, again sparing those used in the last
-hour. The files that came with the member's caches stay: deleting one frees
-no disk space on the server, not even when the session's caches become the
-member's newest, so those only grow until they pass 20 GiB and are dropped.
-Once they and other tools' caches fill more than half the disk, the session
-keeps only the Go build files it used in the last 2 hours. On a full cache
-disk `go test`, `go vet`, a module download and `npm install` fail with `no
-space left on device`, `bun add` fails with `error: Fail extracting tarball
-from <package>`, and `go build` works without caching.
+does not reach. Its VM has its own: every 10 minutes, while that disk is more
+than half full, it deletes the least recently used Go build cache files until
+the disk is back to half, again sparing those used in the last hour. Deleting
+a file that came with the member's caches makes room on the session's disk
+but frees no disk space on the server. Once other tools' caches fill more
+than half the disk, the session keeps only the Go build files it used in the
+last 2 hours. On a full cache disk `go test`, `go vet`, a module download and
+`npm install` fail with `no space left on device`, `bun add` fails with
+`error: Fail extracting tarball from <package>`, and `go build` works without
+caching.
 
 Caches no session or environment is using are removed whole, oldest first, hourly
 and before refusing work for disk pressure: after 7 days unused, above 4 GiB

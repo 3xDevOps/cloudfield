@@ -18,10 +18,9 @@ const GoBuildInUseAge = 2 * time.Hour
 
 // TrimGoBuildCache removes the entries of the Go build caches that were last
 // used before cutoff, oldest first, until it has freed at least excess bytes.
-// An entry spare reports stays; a nil spare reports none. It walks the same
-// 256 shard directories as Go's own trim. A cache that cannot be read is
-// left alone and reported; the others are still trimmed.
-func TrimGoBuildCache(ctx context.Context, caches []*os.Root, cutoff time.Time, excess uint64, spare func(cache *os.Root, name string) bool) error {
+// It walks the same 256 shard directories as Go's own trim. A cache that
+// cannot be read is left alone and reported; the others are still trimmed.
+func TrimGoBuildCache(ctx context.Context, caches []*os.Root, cutoff time.Time, excess uint64) error {
 	type entry struct {
 		cache *os.Root
 		name  string
@@ -58,7 +57,7 @@ func TrimGoBuildCache(ctx context.Context, caches []*os.Root, cutoff time.Time, 
 				if err != nil {
 					return err
 				}
-				if !info.ModTime().Before(cutoff) || spare != nil && spare(root, name) {
+				if !info.ModTime().Before(cutoff) {
 					continue
 				}
 				size := uint64(0)

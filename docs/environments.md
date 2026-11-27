@@ -395,8 +395,8 @@ What changes:
   layer over the member's newest caches, made when the session is created
   and at each start after a stop, so sessions share those caches' blocks and
   each holds only what it wrote. The layer holds at most 32 GiB, and the VM
-  deletes old Go build cache files the session wrote while it is more than
-  half full ([environment-home.md](environment-home.md#tool-caches)). A
+  deletes the least recently used Go build cache files while it is more
+  than half full ([environment-home.md](environment-home.md#tool-caches)). A
   session's caches become the member's newest when its VM stops for good:
   it is stopped, or deleted while stopped
   or saved. A VM that holds its session's checkout stays up for up to 10
