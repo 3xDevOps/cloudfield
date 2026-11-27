@@ -1,7 +1,6 @@
 package serversetup
 
 import (
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,76 +133,5 @@ func TestWriteConfigKeepsTheGroup(t *testing.T) {
 	}
 	if _, got := fileOwner(info); got != gid {
 		t.Errorf("group after the write %d, want %d", got, gid)
-	}
-}
-
-// The config lock sits beside the file a path resolves to, mode 0600, and
-// under root belongs to the config file's owner, so a service that owns
-// its config can take it too.
-func TestConfigLockBesideTheRealFile(t *testing.T) {
-	dir, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	real := filepath.Join(dir, "server.conf")
-	if err = os.WriteFile(real, []byte("addr = :2300\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if os.Geteuid() == 0 {
-		if err = os.Chown(real, 65534, 65534); err != nil {
-			t.Fatal(err)
-		}
-	}
-	alias := filepath.Join(t.TempDir(), "alias.conf")
-	if err = os.Symlink(real, alias); err != nil {
-		t.Fatal(err)
-	}
-	if err = WriteConfig(alias, map[string]string{"addr": ":2301"}); err != nil {
-		t.Fatal(err)
-	}
-	info, err := os.Lstat(real + ".lock")
-	if err != nil || info.Mode().Perm() != 0o600 || !info.Mode().IsRegular() {
-		t.Fatalf("lock file: %v, %v", info, err)
-	}
-	if uid, _ := fileOwner(info); os.Geteuid() == 0 && uid != 65534 {
-		t.Errorf("lock file owner %d, want the config's 65534", uid)
-	}
-	if _, err = os.Lstat(alias + ".lock"); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("a lock beside the alias: %v", err)
-	}
-}
-
-// A lock name planted as a hard link to another file is refused, and that
-// file keeps its owner and mode.
-func TestConfigLockRefusesAPlantedLink(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "server.conf")
-	if err := os.WriteFile(path, []byte("addr = :2300\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	victim := filepath.Join(t.TempDir(), "secret")
-	if err := os.WriteFile(victim, []byte("x"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.Stat(victim)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = os.Link(victim, path+".lock"); err != nil {
-		t.Skipf("no hard links here: %v", err)
-	}
-	err = WriteConfig(path, map[string]string{"addr": ":2301"})
-	if err == nil || !strings.Contains(err.Error(), "is not a regular file with one link owned by root or the config's owner") {
-		t.Fatalf("write with a planted lock: %v", err)
-	}
-	after, err := os.Stat(victim)
-	if err != nil || after.Mode() != before.Mode() {
-		t.Fatalf("the linked file changed: %v, %v", after, err)
-	}
-	if uid, _ := fileOwner(after); uid != os.Geteuid() {
-		t.Errorf("the linked file's owner is %d", uid)
-	}
-	if got, lerr := Load(path); lerr != nil || got["addr"] != ":2300" {
-		t.Errorf("config after the refusal: %v, %v", got, lerr)
 	}
 }

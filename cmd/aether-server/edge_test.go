@@ -287,8 +287,8 @@ func TestEdgeMoveRefusesAFlagOverrideFirst(t *testing.T) {
 		t.Fatal(err)
 	}
 	err := edgeCmd([]string{"move", "https://edge-new.example.test", "--config", path, "--edge-url", flagged})
-	if want := path + ` gives edge-url "` + file + `" and data-dir "` + dir + `", but edge move ran with "` + flagged + `" and "` + dir +
-		`": the file changed since, or a flag overrode it; nothing changed, run it again without --edge-url or --data-dir`; fmt.Sprint(err) != want {
+	if want := path + ` gives edge-url "` + file + `" and data-dir "` + dir + `", but edge move runs with "` + flagged + `" and "` + dir +
+		`" from its flags; nothing changed, run it again without --edge-url or --data-dir`; fmt.Sprint(err) != want {
 		t.Errorf("move: %v\nwant: %s", err, want)
 	}
 	if _, err = os.Stat(server.HostKeyPath(dir)); !errors.Is(err, os.ErrNotExist) {
@@ -318,7 +318,7 @@ func TestApplyMoveAndThePendingRestart(t *testing.T) {
 		t.Fatal(herr)
 	}
 	defer held.Close()
-	if err := applyMove(&out, dir, from, path, held, edgeagent.Moved{To: to}); err != nil {
+	if err := applyMove(&out, dir, from, path, map[string]string{"data-dir": dir, "edge-url": from}, held, edgeagent.Moved{To: to}); err != nil {
 		t.Fatal(err)
 	}
 	want := "enrolled at " + to + ", an address of the same edge (edge key " + edgeproto.EdgeKeyFingerprint(pub) + ", still pinned); " +

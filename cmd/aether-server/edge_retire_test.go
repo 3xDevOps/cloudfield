@@ -6,11 +6,9 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -201,7 +199,7 @@ func TestApplyMoveFromARetiringOrRetiredAddress(t *testing.T) {
 		{name: "the same key pinned again since", moved: edgeagent.Moved{To: to},
 			meanwhile: func(dir, _ string) error { return edgeagent.OpenState(dir).Pin(pub) },
 			err:       "the pinned edge key changed from " + edgeproto.EdgeKeyFingerprint(pub) + " while this ran; nothing changed, run it again"},
-		{name: "edge-url given by a flag", moved: edgeagent.Moved{To: to},
+		{name: "edge-url removed since", moved: edgeagent.Moved{To: to},
 			meanwhile: func(dir, path string) error {
 				return serversetup.WriteConfig(path, map[string]string{"data-dir": dir})
 			}},
@@ -229,13 +227,12 @@ func TestApplyMoveFromARetiringOrRetiredAddress(t *testing.T) {
 				t.Fatal(err)
 			}
 			if tc.err == "" {
-				tc.err = path + ` gives edge-url "" and data-dir "` + dir + `", but edge move ran with "` + from + `" and "` + dir +
-					`": the file changed since, or a flag overrode it; nothing changed, run it again without --edge-url or --data-dir`
+				tc.err = path + ` changed while edge move ran: edge-url is now "", was "` + from + `"; nothing changed, run it again`
 				wantURL = ""
 			}
 		}
 		var out bytes.Buffer
-		err = applyMove(&out, dir, from, path, held, tc.moved)
+		err = applyMove(&out, dir, from, path, map[string]string{"data-dir": dir, "edge-url": from}, held, tc.moved)
 		held.Close()
 		want := tc.want
 		if tc.err == "" {
@@ -251,82 +248,5 @@ func TestApplyMoveFromARetiringOrRetiredAddress(t *testing.T) {
 		if got, err := serversetup.Load(path); err != nil || got["edge-url"] != wantURL {
 			t.Errorf("%s: config after the move: %v, %v", tc.name, got, err)
 		}
-	}
-}
-
-// With the config lock held elsewhere, config set (through the file's
-// real name or another), a forced rewrite such as install --force and
-// edge move give up within the wait, name the lock file and change
-// nothing; edge move waits for it without holding the edge state lock.
-func TestConfigLockHeldElsewhere(t *testing.T) {
-	t.Setenv("SUDO_USER", "ubuntu")
-	wait := serversetup.ConfigLockWait
-	serversetup.ConfigLockWait = 500 * time.Millisecond
-	t.Cleanup(func() { serversetup.ConfigLockWait = wait })
-	const from, to = "https://edge-old.example.test", "https://edge-new.example.test"
-	dir, err := filepath.EvalSymlinks(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(dir, "server.conf")
-	if err = serversetup.WriteConfig(path, map[string]string{"data-dir": dir, "edge-url": from}); err != nil {
-		t.Fatal(err)
-	}
-	alias := filepath.Join(t.TempDir(), "alias.conf")
-	if err = os.Symlink(path, alias); err != nil {
-		t.Fatal(err)
-	}
-	before, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info, serr := os.Stat(path + ".lock"); serr != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("lock file: %v, %v", info, serr)
-	}
-	lock, err := os.OpenFile(path+".lock", os.O_RDWR, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lock.Close() //nolint:errcheck // test lock
-	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
-		t.Fatal(err)
-	}
-	want := path + ".lock is still held after 500ms by another command writing the config; nothing changed"
-	for name, write := range map[string]func() error{
-		"config set":             func() error { return configSet(io.Discard, path, "edge-access", "account") },
-		"config set by an alias": func() error { return configSet(io.Discard, alias, "edge-access", "account") },
-		"a forced rewrite":       func() error { return serversetup.WriteConfig(alias, map[string]string{"edge-url": to}) },
-	} {
-		if err = write(); fmt.Sprint(err) != want {
-			t.Errorf("%s: %v, want %q", name, err, want)
-		}
-	}
-	state := edgeagent.OpenState(dir)
-	pub, _, _ := ed25519.GenerateKey(rand.Reader)
-	if err = state.Pin(pub); err != nil {
-		t.Fatal(err)
-	}
-	held, err := state.HoldPin()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer held.Close()
-	moved := make(chan error, 1)
-	go func() { moved <- applyMove(io.Discard, dir, from, path, held, edgeagent.Moved{To: to}) }()
-	time.Sleep(100 * time.Millisecond)
-	other, err := state.HoldPin()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer other.Close()
-	start := time.Now()
-	if err = state.WhilePinned(other, func() error { return nil }); err != nil || time.Since(start) > 200*time.Millisecond {
-		t.Errorf("the edge state lock while edge move waits for the config lock: %v after %s", err, time.Since(start))
-	}
-	if err = <-moved; fmt.Sprint(err) != want {
-		t.Errorf("edge move: %v, want %q", err, want)
-	}
-	if after, rerr := os.ReadFile(path); rerr != nil || !bytes.Equal(after, before) {
-		t.Errorf("config changed: %s, %v", after, rerr)
 	}
 }

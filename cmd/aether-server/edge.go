@@ -465,7 +465,7 @@ func edgeMove(w io.Writer, dataDir, edgeURL string, policy edgeproto.AccessPolic
 	if err != nil {
 		return err
 	}
-	return applyMove(w, dataDir, edgeURL, configPath, held, moved)
+	return applyMove(w, dataDir, edgeURL, configPath, values, held, moved)
 }
 
 // firstUseNote ends a retiring row whose notice came with the connection
@@ -481,9 +481,8 @@ func sameOrigin(a, b string) bool {
 }
 
 // configGives refuses unless values, read from configPath, give the
-// edge-url and data-dir edge move runs with: a flag that overrode them, or
-// a change to the file, would have the move write one edge-url while the
-// service reads another.
+// edge-url and data-dir edge move runs with: with a flag overriding them,
+// the move would write one edge-url while the service reads another.
 func configGives(configPath string, values map[string]string, edgeURL, dataDir string) error {
 	fs := flag.NewFlagSet("config", flag.ContinueOnError)
 	o := serveFlags(fs)
@@ -491,7 +490,7 @@ func configGives(configPath string, values map[string]string, edgeURL, dataDir s
 		return err
 	}
 	if string(*o.edgeURL) != edgeURL || *o.dataDir != dataDir {
-		return fmt.Errorf("%s gives edge-url %q and data-dir %q, but edge move ran with %q and %q: the file changed since, or a flag overrode it; "+
+		return fmt.Errorf("%s gives edge-url %q and data-dir %q, but edge move runs with %q and %q from its flags; "+
 			"nothing changed, run it again without --edge-url or --data-dir", configPath, string(*o.edgeURL), *o.dataDir, edgeURL, dataDir)
 	}
 	return nil
@@ -508,16 +507,22 @@ func serverCommands(configPath string) edgeagent.Commands {
 
 // applyMove writes m.To, the address edgeagent.Agent.Move checked, as
 // edge-url while held is still the pin in place and the config file still
-// gives the edge-url and data-dir the move ran with. It then says what it
-// did, how to apply it and, unless edgeURL is retired or retiring, how to
-// undo it.
-func applyMove(w io.Writer, dataDir, edgeURL, configPath string, held *edgeagent.HeldPin, m edgeagent.Moved) error {
+// holds the edge-url and data-dir of snapshot, the values the move ran
+// with. It then says what it did, how to apply it and, unless edgeURL is
+// retired or retiring, how to undo it.
+func applyMove(w io.Writer, dataDir, edgeURL, configPath string, snapshot map[string]string, held *edgeagent.HeldPin, m edgeagent.Moved) error {
 	var written bytes.Buffer
-	err := configSetIf(&written, configPath, "edge-url", m.To, func(values map[string]string, set func() error) error {
-		if err := configGives(configPath, values, edgeURL, dataDir); err != nil {
+	err := edgeagent.OpenState(dataDir).WhilePinned(held, func() error {
+		now, err := serversetup.Load(configPath)
+		if err != nil {
 			return err
 		}
-		return edgeagent.OpenState(dataDir).WhilePinned(held, set)
+		for _, key := range []string{"edge-url", "data-dir"} {
+			if now[key] != snapshot[key] {
+				return fmt.Errorf("%s changed while edge move ran: %s is now %q, was %q; nothing changed, run it again", configPath, key, now[key], snapshot[key])
+			}
+		}
+		return configSet(&written, configPath, "edge-url", m.To)
 	})
 	if err != nil {
 		return err

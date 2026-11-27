@@ -277,15 +277,13 @@ systemctl restart aether-server`.
 
 `edge move` holds the pin file open from its start. Each enrollment, and the
 write of `edge-url`, needs that same pin file still in place, so a key pinned
-meanwhile refuses the move even when it is the same key again. The write also
-needs the config file to give the `edge-url` and `data-dir` the move ran with,
-so it refuses when `--edge-url` or `--data-dir` overrode the file or the file
-changed since; that check also runs before the first enrollment, so a refused
-move never touches the running server's connection. It compares and writes
-holding the config lock ([install.md](install.md#server-options)), which every
-command writing the config takes, and takes it before the edge state
-lock, so waiting for it never holds up the running server. It
-prints `enrolled at ...` only after the write. An older binary's `edge trust`
+meanwhile refuses the move even when it is the same key again. Before the
+first enrollment it refuses when `--edge-url` or `--data-dir` overrode the
+config file, so a refused move never touches the running server's connection.
+Right before the write it reads the file again and refuses when its `edge-url`
+or `data-dir` changed since the start; another process that rewrites the file
+in the instant between that read and the write is not detected, as for `config
+set`. It prints `enrolled at ...` only after the write. An older binary's `edge trust`
 writes the pin without the state lock, so a pin it writes between that check
 and the write is outside this guarantee.
 

@@ -91,13 +91,6 @@ func configShow(w io.Writer, path string) error {
 // The key and value are validated against the real `serve` options, so the
 // file can never hold something the server would reject at startup.
 func configSet(w io.Writer, path, key, value string) error {
-	return configSetIf(w, path, key, value, nil)
-}
-
-// configSetIf is configSet with guard, when set, deciding on the values
-// the file holds, under the config lock: it calls set to make the change,
-// or returns why not.
-func configSetIf(w io.Writer, path, key, value string, guard func(values map[string]string, set func() error) error) error {
 	fs := serveFlagSet()
 	if fs.Lookup(key) == nil {
 		return fmt.Errorf("unknown option %q (known: %s)", key, joinOptions())
@@ -105,26 +98,19 @@ func configSetIf(w io.Writer, path, key, value string, guard func(values map[str
 	if err := fs.Set(key, value); err != nil {
 		return fmt.Errorf("invalid value for %q: %w", key, err)
 	}
-	var was string
-	err := serversetup.UpdateConfig(path, func(values map[string]string, write func() error) error {
-		set := func() error {
-			v, ok := values[key]
-			was = v
-			if !ok {
-				was = "unset"
-				if def := fs.Lookup(key).DefValue; def != "" {
-					was += ", meaning " + def
-				}
-			}
-			values[key] = value
-			return write()
-		}
-		if guard == nil {
-			return set()
-		}
-		return guard(values, set)
-	})
+	values, err := serversetup.Load(path)
 	if err != nil {
+		return err
+	}
+	was, ok := values[key]
+	if !ok {
+		was = "unset"
+		if def := fs.Lookup(key).DefValue; def != "" {
+			was += ", meaning " + def
+		}
+	}
+	values[key] = value
+	if err := serversetup.WriteConfig(path, values); err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintf(w, "%s: %s = %s (was %s)\n", path, key, value, was)
@@ -136,47 +122,45 @@ func configSetIf(w io.Writer, path, key, value string, guard func(values map[str
 	return nil
 }
 
-// configEdit opens the config file in the operator's editor, holding the
-// config lock, then reparses it so a syntax error or a bad key surfaces
-// now rather than at the next restart.
+// configEdit opens the config file in the operator's editor, then reparses
+// it so a syntax error or a bad key surfaces now rather than at the next
+// restart.
 func configEdit(w io.Writer, path string) error {
-	return serversetup.WithConfigLock(path, func(_ string, write func(map[string]string) error) error {
-		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-			if err := write(map[string]string{}); err != nil {
-				return err
-			}
-		}
-		// EDITOR commonly carries arguments ("code --wait", "emacs -nw"), so
-		// it is split the way cmd/aether/agent.go splits its own command
-		// strings. exec.Command never invokes a shell, so a value with shell
-		// metacharacters is looked up as a literal name and fails safely.
-		editor := strings.Fields(os.Getenv("EDITOR"))
-		if len(editor) == 0 {
-			fallback := "/usr/bin/editor"
-			if _, err := os.Stat(fallback); err != nil {
-				fallback = "vi"
-			}
-			editor = []string{fallback}
-		}
-		cmd := exec.Command(editor[0], append(editor[1:], path)...)
-		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-		if err := cmd.Run(); err != nil {
-			return fmt.Errorf("%s %s: %w", strings.Join(editor, " "), path, err)
-		}
-		values, err := serversetup.Load(path)
-		if err != nil {
+	if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
+		if err := serversetup.WriteConfig(path, map[string]string{}); err != nil {
 			return err
 		}
-		retired, err := serversetup.Apply(serveFlagSet(), values)
-		if err != nil {
-			return err
+	}
+	// EDITOR commonly carries arguments ("code --wait", "emacs -nw"), so
+	// it is split the way cmd/aether/agent.go splits its own command
+	// strings. exec.Command never invokes a shell, so a value with shell
+	// metacharacters is looked up as a literal name and fails safely.
+	editor := strings.Fields(os.Getenv("EDITOR"))
+	if len(editor) == 0 {
+		fallback := "/usr/bin/editor"
+		if _, err := os.Stat(fallback); err != nil {
+			fallback = "vi"
 		}
-		for _, key := range retired {
-			_, _ = fmt.Fprintf(w, "note: %q is no longer an option and is ignored\n", key)
-		}
-		_, _ = fmt.Fprintf(w, "apply it with:\n  %s\n", serversetup.RestartCommand)
-		return nil
-	})
+		editor = []string{fallback}
+	}
+	cmd := exec.Command(editor[0], append(editor[1:], path)...)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("%s %s: %w", strings.Join(editor, " "), path, err)
+	}
+	values, err := serversetup.Load(path)
+	if err != nil {
+		return err
+	}
+	retired, err := serversetup.Apply(serveFlagSet(), values)
+	if err != nil {
+		return err
+	}
+	for _, key := range retired {
+		_, _ = fmt.Fprintf(w, "note: %q is no longer an option and is ignored\n", key)
+	}
+	_, _ = fmt.Fprintf(w, "apply it with:\n  %s\n", serversetup.RestartCommand)
+	return nil
 }
 
 // serveFlagSet builds the `serve` options for validation only, with output
