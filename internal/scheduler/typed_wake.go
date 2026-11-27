@@ -50,20 +50,21 @@ func (s *Scheduler) typeWake(ctx context.Context, run domain.RunID, line string)
 		s.mu.Unlock()
 		return errors.New("scheduler: typed wake held: the session is paused, ending, moving account or waiting for an answer")
 	}
-	quiet, agent, cid := entry.startedAt, entry.harness, entry.containerID
-	if entry.quietFrom.After(quiet) {
-		quiet = entry.quietFrom
+	unattended, agent, cid := entry.startedAt, entry.harness, entry.containerID
+	if entry.quietFrom.After(unattended) {
+		unattended = entry.quietFrom
 	}
 	s.mu.Unlock()
 	key := ptyhost.RunSession(run)
-	if out, _ := s.cfg.PTY.LastOutput(key); out.After(quiet) {
-		quiet = out
+	if out, _ := s.cfg.PTY.LastOutput(key); time.Since(out) < typedWakeQuietOutput {
+		return fmt.Errorf("scheduler: typed wake held: the terminal printed %s ago", time.Since(out).Round(time.Millisecond))
 	}
-	if since := time.Since(quiet); since < typedWakeQuietOutput {
-		return fmt.Errorf("scheduler: typed wake held: the terminal printed, started or resumed %s ago", since.Round(time.Millisecond))
+	// A restarted server knows neither who controlled the terminal nor when a person last typed in it.
+	if in, _ := s.cfg.PTY.LastInput(key); in.After(unattended) {
+		unattended = in
 	}
-	if in, _ := s.cfg.PTY.LastInput(key); time.Since(in) < typedWakeQuietInput {
-		return errors.New("scheduler: typed wake held: a person typed in the terminal")
+	if time.Since(unattended) < typedWakeQuietInput {
+		return fmt.Errorf("scheduler: typed wake held: a person typed in the terminal, or the session started or resumed, in the last %s", typedWakeQuietInput)
 	}
 	// The supervisor leaves a login shell where the agent exited, and bash
 	// turns bracketed paste on at its prompt.

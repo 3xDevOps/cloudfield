@@ -1018,7 +1018,9 @@ and the server tries again, at least every 30 seconds:
   CLIs leave a line that arrives together with its Enter unsent in the input
   box.
 - The agent printed nothing for 3 seconds, and nobody typed in the terminal
-  for 10 seconds.
+  for 10 seconds. Those 10 seconds also run from the session's start, resume
+  or wake and from a server restart, which forgets who controlled the session
+  and when a person last typed.
 - No request the server recorded for the session waits for an answer, such
   as a sudo approval.
 - No member controls the session
@@ -1047,8 +1049,10 @@ the shell by hand.
 
 Antigravity, a custom agent, an agent whose command an administrator overrode
 and a session with `--conflict-coordination=false` are never typed into.
-Neither is a session launched by a server that had no typed wake; launch a
-new one.
+A session launched by a server that had no typed wake is typed into only
+after its VM starts again from its disk
+([failure-handling.md](failure-handling.md#sessions-in-vms)), which starts
+its agent anew. Otherwise launch a new one.
 
 ## Status reporting
 

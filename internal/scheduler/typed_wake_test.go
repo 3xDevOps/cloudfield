@@ -85,7 +85,7 @@ func TestATypedWakeWaitsForAQuietUnattendedTerminal(t *testing.T) {
 		{"bracketed paste mode is off", func() { e.pty.setPasteOff(true) }, func() { e.pty.setPasteOff(false) }},
 		{"the agent printed 2 s ago", terminal(func() { sess.last = time.Now().Add(-2 * time.Second) }), terminal(func() { sess.last = time.Now().Add(-4 * time.Second) })},
 		{"a person typed 9 s ago", terminal(func() { sess.typed = time.Now().Add(-9 * time.Second) }), terminal(func() { sess.typed = time.Now().Add(-11 * time.Second) })},
-		{"the session resumed 2 s ago", session(func() { entry.quietFrom = time.Now().Add(-2 * time.Second) }), session(func() { entry.quietFrom = time.Now().Add(-4 * time.Second) })},
+		{"the session resumed, or the server restarted, 9 s ago", session(func() { entry.quietFrom = time.Now().Add(-9 * time.Second) }), session(func() { entry.quietFrom = time.Now().Add(-11 * time.Second) })},
 		{"the session is paused", session(func() { entry.paused = true }), session(func() { entry.paused = false })},
 		{"the session is ending or moving account", session(func() { entry.finalizing = true }), session(func() { entry.finalizing = false })},
 		{"a stop was requested", session(func() { entry.killRequested = true }), session(func() { entry.killRequested = false })},
