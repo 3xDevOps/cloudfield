@@ -379,3 +379,22 @@ func TestAnUnnamedStartIsChosenAgainUnderTheMutex(t *testing.T) {
 		t.Fatalf("launches = %+v; want one on the login chosen under the mutex, the default", e.runs.launchOptions)
 	}
 }
+
+// A launch that names an added login where a workspace variable signs the
+// agent in is refused with the reason, never moved to another login.
+func TestANamedLoginAVariableWouldPayForIsRefused(t *testing.T) {
+	e := newLoginEnv(t)
+	e.seed(t, e.member.ID, "lgn-work000000", "work", "ada@work.example.test")
+	e.runs.mu.Lock()
+	e.runs.environmentPays = true
+	e.runs.mu.Unlock()
+	_, perr := e.call(t, e.member.ID, protocol.MethodRunLaunch, protocol.RunLaunchParams{WorkspaceID: string(e.ws.ID), Task: "t", Harness: "claude", Login: "lgn-work000000"})
+	if perr == nil || perr.Code != protocol.CodeInvalidState || !strings.Contains(perr.Message, "login lgn-work000000 would not pay") {
+		t.Fatalf("run.launch naming work where a variable pays: %v; want refused with the reason", perr)
+	}
+	e.runs.mu.Lock()
+	defer e.runs.mu.Unlock()
+	if len(e.runs.launchOptions) != 0 {
+		t.Fatalf("launches = %+v; want none", e.runs.launchOptions)
+	}
+}

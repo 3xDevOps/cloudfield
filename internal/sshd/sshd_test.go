@@ -395,6 +395,8 @@ type fakeRuns struct {
 	whileTerminalStopped func()
 	// startLogins are what StartLogin answers, one per call, then "".
 	startLogins []domain.LoginID
+	// environmentPays is what EnvironmentSignsIn answers.
+	environmentPays bool
 }
 
 func (f *fakeRuns) Retention(run *domain.Run) (scheduler.RetentionInfo, error) {
@@ -506,7 +508,7 @@ func (f *fakeRuns) EnvironmentSignsIn(_ context.Context, workspace domain.Worksp
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.environmentReads = append(f.environmentReads, workspace)
-	return false, nil
+	return f.environmentPays, nil
 }
 
 func (f *fakeRuns) DefaultMode(context.Context, domain.MemberID, domain.MemberID, string) (domain.LaunchMode, error) {

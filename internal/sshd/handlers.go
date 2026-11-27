@@ -307,6 +307,13 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 	byEnv := sync.OnceValues(func() (bool, error) {
 		return s.cfg.Runs.EnvironmentSignsIn(ctx, domain.WorkspaceID(p.WorkspaceID), p.Harness, mode)
 	})
+	// A named login is refused, never traded for another, when a variable
+	// would pay instead of it.
+	if login.Added() {
+		if signsIn, envErr := byEnv(); envErr != nil || signsIn {
+			return nil, rpcError(cmp.Or(envErr, scheduler.EnvironmentPays(login)))
+		}
+	}
 	measured, err := fallback.Measure(ctx, s.cfg.Store, s.cfg.Services.Usage, member, domain.Account{Member: domain.MemberID(p.AccountMemberID), Login: login}, p.Harness, policy)
 	if err != nil {
 		return nil, rpcError(err)
