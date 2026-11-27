@@ -31,6 +31,6 @@ func interruptSession(c *protocol.Client, w io.Writer, runID string) error {
 	if err := c.Call(protocol.MethodRunInterrupt, protocol.RunIDParams{RunID: runID}, nil); err != nil {
 		return runNotFound(runID, err)
 	}
-	_, err := fmt.Fprintf(w, "stopped the agent's turn in session %s\n", runID)
+	_, err := fmt.Fprintf(w, "sent an interrupt to session %s\n", runID)
 	return err
 }

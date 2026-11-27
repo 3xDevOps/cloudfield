@@ -181,8 +181,14 @@ func (f *fakeRuns) ACPCancel(_ context.Context, run domain.RunID) error {
 	return f.record(fmt.Sprintf("acp.cancel:%s", run))
 }
 
-func (f *fakeRuns) Interrupt(_ context.Context, run *domain.Run) error {
-	return f.record("interrupt:" + string(run.ID))
+func (f *fakeRuns) Interrupt(_ context.Context, run *domain.Run) (func() error, error) {
+	if err := f.record("interrupt:" + string(run.ID)); err != nil {
+		return nil, err
+	}
+	if f.interruptAnswer != nil {
+		return f.interruptAnswer, nil
+	}
+	return func() error { return nil }, nil
 }
 
 func (f *fakeRuns) ACPSetOption(_ context.Context, run domain.RunID, optionID string, value any) error {

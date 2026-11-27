@@ -198,26 +198,34 @@ func (c *Client) Send(ctx context.Context, text string) error {
 	return nil
 }
 
-// Interrupt stops the running turn of the terminal's thread, and does
-// nothing when none runs.
-func (c *Client) Interrupt(ctx context.Context) error {
+// Interrupt asks the app-server to stop the running turn of the terminal's
+// thread, and does nothing when none runs. stopped waits for the answer,
+// which Codex gives only once the turn has stopped.
+func (c *Client) Interrupt(ctx context.Context) (stopped func() error, err error) {
 	// A frozen app-server answers nothing, and a running one never answers
 	// an interrupt that reaches its turn after the turn ended.
 	ctx, cancel := context.WithTimeout(ctx, sendTimeout)
-	defer cancel()
 	thread := c.Thread()
 	turn, err := c.runningTurn(ctx, thread)
 	if turn == "" {
+		defer cancel()
 		if err != nil && (c.Busy() || ctx.Err() != nil) {
-			return fmt.Errorf("codex app-server: find the turn to interrupt: %w", err)
+			return nil, fmt.Errorf("codex app-server: find the turn to interrupt: %w", err)
+		}
+		return func() error { return nil }, nil
+	}
+	answer := make(chan error, 1)
+	go func() {
+		defer cancel()
+		_, sendErr := acp.SendRequest[json.RawMessage](c.conn, ctx, "turn/interrupt", map[string]any{"threadId": thread, "turnId": turn})
+		answer <- sendErr
+	}()
+	return func() error {
+		if sendErr := <-answer; sendErr != nil && c.Busy() {
+			return fmt.Errorf("codex app-server: interrupt the turn: %w", sendErr)
 		}
 		return nil
-	}
-	_, err = acp.SendRequest[json.RawMessage](c.conn, ctx, "turn/interrupt", map[string]any{"threadId": thread, "turnId": turn})
-	if err != nil && c.Busy() {
-		return fmt.Errorf("codex app-server: interrupt the turn: %w", err)
-	}
-	return nil
+	}, nil
 }
 
 // runningTurn is empty when the thread has no turn in progress, or none yet:

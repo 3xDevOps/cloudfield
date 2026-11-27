@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -378,6 +379,30 @@ func TestTheMemoryGuardSavesAWorkingVMWhenNoneIsIdleAndWakesEachOnceItsMemoryFit
 	if sess := e.sched.acp.session(bigRun); sess == nil || !sess.State().TurnInFlight {
 		t.Fatal("the woken session's turn did not carry on")
 	}
+}
+
+func TestAnInterruptOfAVMSavedWhileItWorkedIsRefusedUntilItWakes(t *testing.T) {
+	t.Parallel()
+	e, mr := newMemoryEnv(t)
+	id := e.runOf(t, e.launchVM(t, mr, acpmock.PromptWait, 3<<30))
+	run := e.waitStoreStatus(t, id, domain.RunRunning)
+	mr.setAvailable(3 << 30)
+	e.guard(t)
+	if e.memorySaved(id) == 0 {
+		t.Fatal("the guard did not save the working VM")
+	}
+	if err := e.interrupt(t, run); !errors.Is(err, ErrInvalidTransition) || !strings.Contains(err.Error(), "cloudfield resume "+string(id)) {
+		t.Fatalf("Interrupt of a VM saved while it worked = %v, want it refused naming cloudfield resume", err)
+	}
+	mr.setAvailable(2*memoryFloor(32<<30) + 3<<30)
+	e.guard(t)
+	if err := e.interrupt(t, run); err != nil {
+		t.Fatalf("Interrupt once the VM woke: %v", err)
+	}
+	waitFor(t, "the woken turn stopped", func() bool {
+		sess := e.sched.acp.session(id)
+		return sess != nil && !sess.State().TurnInFlight
+	})
 }
 
 func TestAMemoryRefusalSavesIdleVMsAndAdmitsAgain(t *testing.T) {

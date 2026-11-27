@@ -57,12 +57,12 @@ func TestRunActionsPrintTheStatusAndNameMissingRuns(t *testing.T) {
 	}
 }
 
-func TestInterruptSaysItStoppedTheTurnOrWhyNot(t *testing.T) {
+func TestInterruptSaysItWasSentOrWhyNot(t *testing.T) {
 	reply := &fakeReply{result: struct{}{}}
 	c := fakeControlMethods(t, map[string]*fakeReply{protocol.MethodRunInterrupt: reply})
 	var out bytes.Buffer
-	if err := interruptSession(c, &out, "r1"); err != nil || out.String() != "stopped the agent's turn in session r1\n" {
-		t.Fatalf("interrupt printed %q (%v), want it to say the turn stopped", out.String(), err)
+	if err := interruptSession(c, &out, "r1"); err != nil || out.String() != "sent an interrupt to session r1\n" {
+		t.Fatalf("interrupt printed %q (%v), want no claim that a turn was running", out.String(), err)
 	}
 	if got := string(reply.params()); got != `{"run_id":"r1"}` {
 		t.Fatalf("run.interrupt params = %s", got)

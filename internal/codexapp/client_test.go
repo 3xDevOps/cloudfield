@@ -196,7 +196,7 @@ func TestInterruptStopsTheRunningTurn(t *testing.T) {
 	c, changes := dial(t, srv, "")
 	srv.StartThread("main", false, "")
 	waitThread(t, c)
-	if err := c.Interrupt(t.Context()); err != nil {
+	if err := interrupt(t, c); err != nil {
 		t.Fatalf("Interrupt with no turn running: %v", err)
 	}
 	if got := srv.Requests("turn/interrupt"); len(got) != 0 {
@@ -208,7 +208,7 @@ func TestInterruptStopsTheRunningTurn(t *testing.T) {
 	if got := next(t, changes); got != (statusChange{"main", codexapp.Working}) {
 		t.Fatalf("status change = %+v, want the turn working", got)
 	}
-	if err := c.Interrupt(t.Context()); err != nil {
+	if err := interrupt(t, c); err != nil {
 		t.Fatalf("Interrupt: %v", err)
 	}
 	if got := next(t, changes); got != (statusChange{"main", codexapp.Idle}) {
@@ -226,7 +226,7 @@ func TestInterruptThatCannotFindTheRunningTurnShowsTheAppServersError(t *testing
 	srv.StartThread("main", false, "")
 	srv.SetStatus("main", "active")
 	next(t, changes)
-	err := c.Interrupt(t.Context())
+	err := interrupt(t, c)
 	if err == nil || !strings.Contains(err.Error(), "thread main is not materialized yet") {
 		t.Fatalf("Interrupt of a working thread whose turns cannot be listed = %v, want the app-server's error", err)
 	}
@@ -244,12 +244,26 @@ func TestInterruptOfATurnThatEndedFirstIsNotAFailure(t *testing.T) {
 	srv.LateInterrupts()
 	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
 	defer cancel()
-	if err := c.Interrupt(ctx); err != nil {
-		t.Fatalf("Interrupt of a turn that ended first: %v", err)
+	stopped, err := c.Interrupt(ctx)
+	if err != nil || ctx.Err() != nil {
+		t.Fatalf("Interrupt of a turn that ended first = %v, context %v; want it back before the answer", err, ctx.Err())
+	}
+	if err = stopped(); err != nil {
+		t.Fatalf("the answer to an interrupt of a turn that ended first: %v", err)
 	}
 	if len(srv.Requests("turn/interrupt")) != 1 || c.Busy() {
 		t.Fatalf("turn/interrupt requests = %s, busy = %v; want one unanswered and the thread idle", srv.Requests("turn/interrupt"), c.Busy())
 	}
+}
+
+// interrupt is Interrupt and the wait for its answer.
+func interrupt(t *testing.T, c *codexapp.Client) error {
+	t.Helper()
+	stopped, err := c.Interrupt(t.Context())
+	if err != nil {
+		return err
+	}
+	return stopped()
 }
 
 func waitThread(t *testing.T, c *codexapp.Client) {

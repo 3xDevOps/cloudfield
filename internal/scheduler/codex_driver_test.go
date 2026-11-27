@@ -319,7 +319,7 @@ func TestInterruptStopsAStandardCodexTurnAndTypesNoKeyElsewhere(t *testing.T) {
 		t.Fatalf("Inject: %v", err)
 	}
 	e.waitStoreStatus(t, run.ID, domain.RunRunning)
-	if err := e.sched.Interrupt(t.Context(), run); err != nil {
+	if err := e.interrupt(t, run); err != nil {
 		t.Fatalf("Interrupt: %v", err)
 	}
 	interrupts := srv.Requests("turn/interrupt")
@@ -329,7 +329,7 @@ func TestInterruptStopsAStandardCodexTurnAndTypesNoKeyElsewhere(t *testing.T) {
 	e.waitStoreStatus(t, run.ID, domain.RunNeedsAttention)
 
 	other, _ := e.launchOn(t, "claude")
-	err := e.sched.Interrupt(t.Context(), other)
+	err := e.interrupt(t, other)
 	if !errors.Is(err, ErrNoInterrupt) || !strings.Contains(err.Error(), "cloudfield attach "+string(other.ID)) {
 		t.Fatalf("Interrupt of a Standard Claude Code session = %v, want ErrNoInterrupt naming cloudfield attach", err)
 	}
@@ -346,21 +346,44 @@ func TestInterruptOfAStandardCodexSessionItCannotReachGivesTheRealReason(t *test
 	rt.startErr = errors.New("no such container")
 	run, _ := e.launchOn(t, "codex")
 	e.waitStoreStatus(t, run.ID, domain.RunNeedsAttention)
-	if err := e.sched.Interrupt(t.Context(), run); !errors.Is(err, ErrAppServerUnavailable) {
+	if err := e.interrupt(t, run); !errors.Is(err, ErrAppServerUnavailable) {
 		t.Fatalf("Interrupt with no app-server client = %v, want ErrAppServerUnavailable", err)
 	}
 	if err := e.sched.Pause(t.Context(), run.ID, e.member.ID); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.sched.Interrupt(t.Context(), run); !errors.Is(err, ErrInvalidTransition) || !strings.Contains(err.Error(), "the session is paused") {
+	if err := e.interrupt(t, run); !errors.Is(err, ErrInvalidTransition) || !strings.Contains(err.Error(), "the session is paused") {
 		t.Fatalf("Interrupt of a paused session = %v, want it refused as paused", err)
 	}
 	e.sched.mu.Lock()
 	e.sched.runs[run.ID].asleepSince = time.Now().UTC()
 	e.sched.mu.Unlock()
-	if err := e.sched.Interrupt(t.Context(), run); err != nil {
+	if err := e.interrupt(t, run); err != nil {
 		t.Fatalf("Interrupt of a sleeping session = %v, want no turn to stop", err)
 	}
+	e.sched.mu.Lock()
+	e.sched.runs[run.ID].memorySaved = 1
+	e.sched.mu.Unlock()
+	if err := e.interrupt(t, run); !errors.Is(err, ErrInvalidTransition) || !strings.Contains(err.Error(), "cloudfield resume "+string(run.ID)) {
+		t.Fatalf("Interrupt of a session saved while it worked = %v, want it refused naming cloudfield resume", err)
+	}
+	for _, status := range []domain.RunStatus{domain.RunProvisioning, domain.RunCompleted} {
+		gone := *run
+		gone.Status = status
+		if err := e.interrupt(t, &gone); !errors.Is(err, ErrNoLiveEnvironment) || !strings.Contains(err.Error(), "the session is "+string(status)) {
+			t.Fatalf("Interrupt of a %s session = %v, want ErrNoLiveEnvironment naming its status", status, err)
+		}
+	}
+}
+
+// interrupt is Interrupt and the wait for its answer.
+func (e *testEnv) interrupt(t *testing.T, run *domain.Run) error {
+	t.Helper()
+	stopped, err := e.sched.Interrupt(t.Context(), run)
+	if err != nil {
+		return err
+	}
+	return stopped()
 }
 
 func promptTexts(t *testing.T, params []json.RawMessage) []string {

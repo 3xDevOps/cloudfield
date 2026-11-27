@@ -26,7 +26,14 @@ func (s *Server) runInterrupt(ctx context.Context, member domain.MemberID, raw j
 	if err = s.cfg.Runs.SettleSleep(ctx, run.ID); err != nil {
 		return nil, rpcError(err)
 	}
-	return struct{}{}, s.admitWithoutLease(ctx, member, run.ID, protocol.MethodRunInterrupt, "the turn is theirs to interrupt", func() error {
-		return s.cfg.Runs.Interrupt(ctx, run)
+	var stopped func() error
+	perr = s.admitWithoutLease(ctx, member, run.ID, protocol.MethodRunInterrupt, "the turn is theirs to interrupt", func() error {
+		stopped, err = s.cfg.Runs.Interrupt(ctx, run)
+		return err
 	})
+	if perr != nil {
+		return nil, perr
+	}
+	// Outside control admission, which a turn slow to stop must not hold.
+	return struct{}{}, acpError(stopped())
 }

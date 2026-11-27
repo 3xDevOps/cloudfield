@@ -190,30 +190,40 @@ func (s *Scheduler) ACPCancel(ctx context.Context, run domain.RunID) error {
 // in its own terminal: typing a guessed key there could quit it instead.
 var ErrNoInterrupt = errors.New("scheduler: the session's agent takes an interrupt only in its own terminal")
 
-// Interrupt stops the turn run's agent is in: an Enhanced session's over
-// ACP, a Standard Codex terminal's through its app-server. A sleeping
-// session has no turn to stop.
-func (s *Scheduler) Interrupt(ctx context.Context, run *domain.Run) error {
-	if run.ACP {
-		return s.ACPCancel(ctx, run.ID)
-	}
+// Interrupt asks run's agent to stop the turn it is in: an Enhanced
+// session's over ACP, a Standard Codex terminal's through its app-server.
+// stopped waits for that app-server's answer, for the caller to take
+// outside control admission. A session that fell asleep idle has no turn to
+// stop.
+func (s *Scheduler) Interrupt(ctx context.Context, run *domain.Run) (stopped func() error, err error) {
 	s.mu.Lock()
-	entry := s.runs[run.ID]
-	appServer := entry != nil && entry.appServer
-	asleep := appServer && (entry.sleeping || !entry.asleepSince.IsZero())
-	paused := appServer && entry.paused
+	var appServer, sleeping, asleep, midTurn, paused bool
+	if entry := s.runs[run.ID]; entry != nil {
+		appServer, sleeping, paused = entry.appServer, entry.sleeping, entry.paused
+		asleep = !entry.asleepSince.IsZero()
+		midTurn = asleep && entry.memorySaved > 0
+	}
 	s.mu.Unlock()
+	stopped = func() error { return nil }
 	switch {
-	case !appServer:
-		return fmt.Errorf("%w: run cloudfield attach %s and press the agent's own interrupt key", ErrNoInterrupt, run.ID)
+	case !run.ACP && run.Status != domain.RunRunning && run.Status != domain.RunNeedsAttention:
+		return nil, fmt.Errorf("%w: the session is %s", ErrNoLiveEnvironment, run.Status)
+	case !run.ACP && !appServer:
+		return nil, fmt.Errorf("%w: run cloudfield attach %s and press the agent's own interrupt key", ErrNoInterrupt, run.ID)
+	case midTurn:
+		return nil, fmt.Errorf("%w: the session was saved to disk under memory pressure, and a turn it was in carries on when it wakes: run cloudfield resume %s first", ErrInvalidTransition, run.ID)
+	case run.ACP:
+		return stopped, s.ACPCancel(ctx, run.ID)
+	case sleeping:
+		return nil, errFallingAsleep
 	case asleep:
-		return nil
+		return stopped, nil
 	case paused:
-		return fmt.Errorf("%w: the session is paused: run cloudfield resume %s first", ErrInvalidTransition, run.ID)
+		return nil, fmt.Errorf("%w: the session is paused: run cloudfield resume %s first", ErrInvalidTransition, run.ID)
 	}
 	client := s.appServer.connected(run.ID)
 	if client == nil {
-		return ErrAppServerUnavailable
+		return nil, ErrAppServerUnavailable
 	}
 	return client.Interrupt(ctx)
 }

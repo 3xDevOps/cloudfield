@@ -2,10 +2,14 @@ package sshd
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/acphost"
+	"github.com/3xDevOps/cloudfield/internal/control"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
 	"github.com/3xDevOps/cloudfield/internal/scheduler"
@@ -64,5 +68,29 @@ func TestRunInterruptNeedsNoLeaseAndYieldsToAnotherMembersControl(t *testing.T) 
 	e.runs.setErr(scheduler.ErrAppServerUnavailable)
 	if perr := interrupt(e.member.ID, e.run.ID); perr == nil || perr.Code != protocol.CodeUnavailable {
 		t.Fatalf("interrupt of a Codex session with no app-server client = %+v, want CodeUnavailable", perr)
+	}
+}
+
+func TestRunInterruptWaitsForItsAnswerOutsideControlAdmission(t *testing.T) {
+	e, run := newACPEnv(t)
+	interrupt := protocol.RunIDParams{RunID: string(run.ID)}
+	e.runs.interruptAnswer = func() error {
+		admitted := make(chan error, 1)
+		go func() {
+			admitted <- e.srv.cfg.Control.AdmitSnapshot(string(run.ID), func(control.Snapshot, bool) error { return nil })
+		}()
+		select {
+		case err := <-admitted:
+			return err
+		case <-time.After(5 * time.Second):
+			return errors.New("the run's control admission is still held")
+		}
+	}
+	if _, perr := callJSON(t, e, e.member.ID, protocol.MethodRunInterrupt, interrupt); perr != nil {
+		t.Fatalf("interrupt whose answer is awaited = %v, want control admission free meanwhile", perr)
+	}
+	e.runs.interruptAnswer = func() error { return errors.New("codex app-server: interrupt the turn: no such turn") }
+	if _, perr := callJSON(t, e, e.member.ID, protocol.MethodRunInterrupt, interrupt); perr == nil || !strings.Contains(perr.Message, "no such turn") {
+		t.Fatalf("interrupt the app-server refused = %v, want its error", perr)
 	}
 }
