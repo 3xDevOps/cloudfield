@@ -13,7 +13,7 @@ import (
 
 // heldStopGrace is how long a Standard turn whose stop was held may go
 // without a working report or terminal output before Aether applies the stop
-// itself: the reporter may have lost the answer, leaving Claude Code stopped
+// itself: the reminder may not have reached the agent, leaving it stopped
 // with nothing reported.
 var heldStopGrace = time.Minute
 
@@ -57,8 +57,9 @@ func (s *Scheduler) HoldTurnEnd(ctx context.Context, run domain.RunID, message s
 }
 
 // applyHeldStop ends a held Standard turn that reported no work since
-// heldAt and whose terminal stayed quiet for heldStopGrace: Claude Code can
-// think or write for longer than that without a hook, but not without output.
+// heldAt and whose terminal stayed quiet for heldStopGrace: an agent can
+// think or write for longer than that without a report, but not without
+// output.
 func (s *Scheduler) applyHeldStop(entry *supervised, started, heldAt time.Time) {
 	quiet := func(e *supervised) bool {
 		return e == entry && e.turnStartedAt.Equal(started) && e.reportAsked.Equal(started) &&

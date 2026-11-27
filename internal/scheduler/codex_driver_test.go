@@ -327,6 +327,39 @@ func TestStandardCodexTurnWithoutAReportIsAskedOnce(t *testing.T) {
 	})
 }
 
+// The asked turn completed, so a parent gets its message even when the
+// reminder's turn is cut off with Esc or fails.
+func TestStandardCodexAskedTurnForwardsWhenItsReminderDoesNotFinish(t *testing.T) {
+	shortProvisionalGrace(t)
+	for name, end := range map[string]func(*codexmock.Server){
+		"cut off": func(srv *codexmock.Server) { srv.EndTurn("thread-1", "interrupted") },
+		"failed":  func(srv *codexmock.Server) { srv.SetStatus("thread-1", "systemError") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			e, rt, coord := newCodexEnv(t)
+			coord.remind = e.sched.Wake
+			parent, _ := e.launchFake(t, "parent")
+			child := launchChildRun(t, e, parent, "codex", domain.LaunchTUI)
+			srv, _ := rt.bridge(t, 1)
+			dialed(t, srv, 1)
+			srv.StartThread("thread-1", false, "")
+			waitFor(t, "the connected client", func() bool { return e.sched.Wakeable(child.ID) })
+			if _, err := e.sched.Inject(t.Context(), child.ID, e.member.ID, domain.AgentPrompt{Text: "say pong"}, false, nil); err != nil {
+				t.Fatal(err)
+			}
+			e.waitAgentWorking(t, child.ID)
+			srv.EndTurn("thread-1", "completed", "pong")
+			waitFor(t, "the reminder's turn", func() bool { return len(srv.Requests("turn/start")) == 2 })
+			end(srv)
+			e.waitStoreStatus(t, child.ID, domain.RunNeedsAttention)
+			waitFor(t, "the asked turn's message at the parent", func() bool {
+				calls := coord.provisionalReports()
+				return len(calls) == 1 && calls[0].run == child.ID && calls[0].message == "pong"
+			})
+		})
+	}
+}
+
 // A restarted server finds a Standard Codex thread idle after a turn nobody
 // reported. No turn ends there, so the session is not asked.
 func TestRecoveredStandardCodexIsNotAskedForAnOldTurn(t *testing.T) {

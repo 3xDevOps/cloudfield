@@ -109,7 +109,11 @@ type textInput struct {
 func Dial(ctx context.Context, r io.Reader, w io.WriteCloser, cfg Config) (*Client, error) {
 	c := &Client{input: w, cfg: cfg, threads: make(map[string]bool), unread: make(map[string]threadStatus), unloaded: make(map[string]bool)}
 	c.conn = acp.NewConnection(c.handle, w, r)
-	info := map[string]any{"clientInfo": map[string]string{"name": "aether", "title": "Aether", "version": version.String()}}
+	info := map[string]any{
+		"clientInfo": map[string]string{"name": "aether", "title": "Aether", "version": version.String()},
+		// Codex 0.131.0 lists a thread's turns only for a client that opts in.
+		"capabilities": map[string]bool{"experimentalApi": true},
+	}
 	if _, err := acp.SendRequest[json.RawMessage](c.conn, ctx, "initialize", info); err != nil {
 		_ = w.Close()
 		return nil, fmt.Errorf("codex app-server: initialize: %w", err)
