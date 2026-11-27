@@ -396,11 +396,11 @@ func (s *Service) StartRecording(ctx context.Context) error {
 	for _, p := range s.pairs {
 		run.Pairs[p.relay] = p.signin
 	}
-	pairings, err := s.store.Pairings(ctx)
-	if err != nil {
-		return err
-	}
 	if run.Retire {
+		pairings, err := s.store.Pairings(ctx)
+		if err != nil {
+			return err
+		}
 		if run.RetiredSignIns, err = s.retiredSignIns(ctx, s.retiredPairs, pairings); err != nil {
 			return err
 		}
