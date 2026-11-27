@@ -362,6 +362,15 @@ What changes:
   launch before it in `monitor.log.1`, and `console.log` the guest's serial
   console, at most 1 MiB, with the 1 MiB before it in `console.log.1`. A boot
   or restore that fails shows the end of both.
+- [Docker inside sessions](#docker-inside-sessions) needs no Sysbox: the VM of a
+  session that is not Isolated starts the image's `dockerd` itself, and the
+  launch does not wait for it. A `docker` command run before `dockerd`
+  serves waits for its answer. If `dockerd` cannot start, `docker` commands
+  fail with `Cannot connect to the Docker daemon`; the reason is in
+  `/var/log/aether-dockerd.log` in the session, which the session's user can
+  read. The launch still succeeds unless the setup script fails, and then
+  its output ends with `dockerd exited <code>:` and the end of that log
+  ([vm-guest.md](vm-guest.md#sessions-and-processes)).
 - The VM gets the CPU limit rounded up to whole vCPUs, held to the exact
   limit by the unit's `CPUQuota`. The session gets the whole memory limit
   and swap of a quarter of it on its data disk, as a container does; the
