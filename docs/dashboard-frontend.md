@@ -2901,7 +2901,11 @@ saved account is preselected when `account.list` still lists it and `get`
 does not mark it invalid, and the saved fallback policy fills the fallback
 list, keeping only listed accounts. A launch never saves the account or the
 fallback; **Save as my default** under **Account** does, and says "Saved
-for every device." until the account or fallback changes again. It saves the fallback list as the session sends
+for every device." until the account or fallback changes again. Beside it,
+it says what it saves: "Saves this account and fallback for launches on
+every device.", "Saves the fallback …" with only the caller's own account,
+and "; not the login" while the **Login** field shows, since the login is
+not saved. It saves the fallback list as the session sends
 it, without the selected account. **Session**, **Default mode** and **Set up** on
 Agents, and the onboarding wizard, save their agent and mode the same way
 (`rememberChoice`); **Default mode** leaves the preselected agent alone.
@@ -2981,20 +2985,33 @@ the caller's own account, where `server.info` lists the `logins` feature and
 `agent.login.list` returns more than one login. Its value is short:
 **Automatic**, which sends no `login`, or the picked login's name, which it
 sends as `run.launch` `login`. A line under it says what happens: Automatic
-"Starts on the first login in your order with usage left.", and a picked login
-"The session starts on this login; it may still move to another when this
-one runs out.", or, when the dialog read it at its limit, "This login is at
-its limit, so the session may start on the next login in your order with
-usage left." With **Fallback** off they read "Starts on the first automatic
-login in your order and stays on it." and "The session starts on this login
-and stays on it." Under them, on lines of their own led by a coins icon, it
-says what can cost: "Can move to <name>, billed per use, when the logins
-before it run out." when a later login with Automatic on is billed per use
-and Fallback is on, or "<name> is billed per use." for a picked one. On a phone
-the closed **More options** summary carries the same: "Automatic, can reach
-<name> (billed per use)" or the picked login. The menu is as wide as the
+"Starts on the first automatic login in your order with usage left, and
+moves down the order when it runs out." (the Agents page's lead says the
+same), and a picked login "The session starts on this login, and moves to
+the first other automatic login in your order with usage left when it runs
+out.", or, for a login billed per use, which has no usage windows, "… It has
+no usage windows, so it moves only when its credit is spent, to the first
+other automatic login …", or, when the dialog read it at its limit, "This
+login is at its limit, so the session may start on the next login in your
+order with usage left." With automatic changes off they read "Starts on the
+first automatic login in your order and stays on it." and "The session
+starts on this login and stays on it." Under them, on lines of their own led
+by a coins icon, it says what can cost: "<name> is billed per use." for a
+picked one, "Can start on <name>, billed per use." when the first automatic
+login is, and, whenever another login with Automatic on that a move could
+reach is billed per use, "Can move to <name>, billed per use, when the logins
+before it run out." ("when <picked> runs out" for a picked login, "when
+<picked>'s credit is spent" for one billed per use) or, with automatic
+changes off, "Stays on <name>, so it never moves to <name>." Directly under
+that line sits the **Let this session move to another login** switch
+(`PerUseMove` in `login-picker.tsx`), which sets `no_fallback`, the same
+state as the **Fallback** checkbox below, so the two always agree. On a
+phone the line and the switch sit in the sheet above **More options**, in
+view with it shut, and the shut summary names a picked login, "<name>,
+billed per use" for one billed per use. The menu is as wide as the
 field and its options wrap; each shows as muted detail "Tries <name> first"
-for Automatic, and for a login its billing, an Automatic that is off, and
+for Automatic, and for a login its kind and plan ("Subscription · pro",
+"Console · billed per use"), an Automatic that is off, and
 "At its limit (<window>) · resets in …" when the dialog already read its
 usage (the default login's, read with the account's when there are several
 accounts; the dialog reads no usage per login). A teammate's account never
@@ -3017,8 +3034,9 @@ session** and **Off for this session**, sent as `run.launch` `subsessions: "on"`
 `"off"`; the first sends nothing.
 
 The collapsed **Fallback** under the account list, whose caption reads
-"Automatic", "Ordered" or "Off", then "if <owner> runs out" with only the
-name truncated, holds the [usage
+"On", "On, ordered" or "Off", then "when <owner>'s usage runs out" with only
+the name truncated ("when a login runs out" on the caller's own account with
+several logins), holds the [usage
 fallback](teams.md#usage-fallback) controls (`launch-options.tsx`): a
 **Fall back to another account** checkbox (**Move to another login or
 account** on the caller's own account with several logins, **Move to another
@@ -5944,7 +5962,8 @@ in **Needs you**.
   [usage fallback](teams.md#usage-fallback) move reads "Moved from Alice's
   account to your account" (`run.account`, filter **Account changed**); a
   move to or from an added login names both logins, "Moved from login work
-  to login console · billed per use", with each account only when the two
+  to login console" and the **Billed per use** badge when the login that now
+  pays is billed per use, with each account only when the two
   differ, and
   the headless Claude output that triggered it "Usage limit reached: You've
   hit your session limit · resets 3pm (UTC)", the agent's message cut at 160
@@ -6652,7 +6671,8 @@ whom the account is shared with, **Add login** and its outcome and the
 running sign-in, belongs to the signed-in identity: a gateway bound to
 another member shows none of it, and an answer read for the previous one
 never lands. Each login has its rank (1, 2, 3) with framed
-**Move <name> up** and **Move <name> down** arrows under it
+**Move <name> up** and **Move <name> down** arrows under it, the disabled
+one at either end drawn without a frame
 (`agent.login.order`, every id). Each control is a server-decided action
 (see [Actions](#actions)): while its call and the read of the list after it
 are pending, it alone is locked and shows "Saving…" beside a switch or
@@ -6660,8 +6680,8 @@ are pending, it alone is locked and shows "Saving…" beside a switch or
 deadline. Every arrow waits for an order call, since the next move is built
 from the order the server keeps. Any outcome of a change, an answer, a
 refusal or a failure that may hide a committed change, reads the list again,
-and only the newest read of the list lands. Each login shows its name, kind and plan, a "Tried
-first" badge on the first login with Automatic on (the login a launch that
+and only the newest read of the list lands. Each login shows its name, kind and plan, "· tried
+first" in the same muted text on the first login with Automatic on (the login a launch that
 names none starts from before usage is weighed), a **Billed per use** badge,
 and, in the needs-you colour with a gauge icon, "At its limit (<window>) ·
 resets in …" while one of its current usage windows is at 95% or more (the
@@ -6669,37 +6689,48 @@ server's `ExhaustedPercent`), naming the window that resets last; email and
 organisation; the Use for shares state and whom it
 reaches ("Off for shares", "On for shares: your account is not shared", "On
 for shares: no share reaches it while Automatic is off", or "On for shares:
-also serves" the teammates from `account.list` `shared_with`; "On for shares:
+also serves" the teammates from `account.list` `shared_with`, which for a
+login billed per use reads "Sessions of <teammates> can run on this login
+too, charged per use to <organisation>." with the login's name when it has
+no organisation; "On for shares:
 a share cannot use this kind of login" for a default login kept as an API key
 or a Console profile, which has no file a share mounts; and plain "On for
 shares" until `account.list` answers, whose error the list's lead shows
 verbatim instead of calling the account not shared); its
 **Automatic** (`agent.login.automatic`) and **Use for shares**
 (`agent.login.share`) switches, each a row of its own; and its usage windows
-(`account.usage` with `login`), whose reset reads in days and hours past 48
-hours ("resets in 3d 18h"). A Console login, whose usage the server
-reports `unsupported`, reads "No usage windows: billed per use"; any other
+(`account.usage` with `login`), whose reset reads in days and hours past 24
+hours ("resets in 1d 16h"), as Settings → Usage does. A Console login, whose usage the server
+reports `unsupported`, reads "No usage windows"; any other
 read error shows verbatim, and windows kept from a refresh that failed (`stale`)
 add "Last read, not current:" with its error. A login billed per use with Automatic on, below
 the first automatic login, adds "Automatic sessions can move here when the
 logins above it run out." An added login has **Rename** (inline,
 `agent.login.rename`) and **Remove** as icon buttons on its name line;
 **Remove** confirms first, naming the account the login is signed in as and
-saying it does not sign the login out at Anthropic (`agent.login.remove`);
-for the last added login it warns that the default login keeps its switches
-only beside an added one, so removing it turns the ones that are off back on.
+saying it does not sign the login out at Anthropic (`agent.login.remove`).
 A
-refusal shows verbatim, turns **Remove** into a disabled secondary button
-until the dialog is opened again, links each of the caller's sessions it
+refusal shows verbatim and leaves only **Cancel** until the dialog is opened
+again; on a login off for shares that teammates' sessions still hold, a line
+above it says "Use for shares is off, so no teammate's session starts or
+moves onto this login now; one already on it holds it until it ends." It links each of the caller's sessions it
 lists after "your sessions", and, when it names `cloudfield account revoke`, links
 Members, where a share is revoked. The default login has neither button and
 says why: it is the one `cloudfield agent login claude` signs in. On a
 phone the switches sit under the facts and above the usage bars.
 
-**Add login** (`add-login.tsx`) asks for a name, calls `agent.login.add`,
+**Add login** (`add-login.tsx`) asks for a name, and a line under the field
+says the new login starts with Automatic and Use for shares on: Cloudfield
+may start or move the member's sessions onto it, and the teammates
+`account.list` names ("teammates you share your account with" until it
+answers) can use it; either is turned off with the switches on its row. It
+calls `agent.login.add`,
 and runs the sign-in under the heading "Sign in to <name>" in the
 assistant's sign-in terminal on `/ws/terminal?agent_login=<id>`, then shows
-how it ended: the login added, or the refusal with **Start again**. The
+how it ended: "Added login <name>" with its kind and plan, email and
+organisation, and for a login billed per use the **Billed per use** badge
+and the row's line on whose sessions it is charged for; or the refusal with
+**Start again**. The
 running sign-in is kept in `store/login-sign-in.ts` while the member moves
 between pages, and the Agents page holds the one `agent.login.result` wait
 for it, which the panel reads; an answer the server did not give (the
@@ -6712,7 +6743,7 @@ soon as the terminal is up. A dropped socket reconnects to the same sign-in
 buttons says the member can leave the page and how long the sign-in keeps
 running: the minutes left of its 15 when this tab opened its terminal, else
 "up to 15 minutes from its start". While a sign-in runs, the Claude Code row
-says so with **Return to the sign-in**, which reattaches its terminal, and
+says "Sign-in for <name> is still running." with **Return to the sign-in**, which reattaches its terminal, and
 Add login offers the same as its primary button with the name field and
 **Start sign-in** disabled. The server refuses another add while one runs,
 naming it; the refusal shows the same way, with the server's words
@@ -7151,8 +7182,9 @@ opens a dialog with two tabs:
   added logins, settings), stacked at phone width. **Keep settings from** has no
   default; choosing a side lists what the other loses: its home, with its
   default logins, archived, and its added logins moving to the survivor,
-  off for shares, each under the name it arrives with: the first free
-  `<name>-2`, `<name>-3`, … when the survivor has its name; a plan from a
+  off for shares, each under the name it arrives with: "If <survivor>
+  already has a login with the same name, the moved login is renamed
+  `<name>-2`, or the next free number"; a plan from a
   server without logins carries none and the preview says nothing of them.
   Each card lists
   its added logins with what the plan carries for each, name, agent and id;
