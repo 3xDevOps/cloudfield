@@ -309,4 +309,55 @@ func TestCachePoolKeepsTheCacheALaterStopDidNotStartFrom(t *testing.T) {
 	if after, _ = s.readNewest(pool); after.Path != warm.Path {
 		t.Errorf("a session replaced a newest cache that neither is its base nor came from it: %s, want %s", after.Path, warm.Path)
 	}
+
+	// A VM that starts again during its promotion has a new disk at the
+	// same path, which is not the one the newest cache came from.
+	restarted, err := s.NewCacheDisk(t.Context(), "pool1", filepath.Join(dir, "restarted.img"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	qemuWrite(t, restarted.Path, 0x11)
+	snapshot, err := s.SnapshotCache(restarted)
+	if err == nil {
+		err = s.UnshareCache(t.Context(), restarted)
+	}
+	if err == nil {
+		err = s.PromoteCache("pool1", snapshot)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	qemuWrite(t, restarted.Path, 0x22)
+	stop(restarted)
+	if after, err = s.readNewest(pool); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(head(t, after.Path, 512), bytes.Repeat([]byte{0x11}, 512)) {
+		t.Errorf("a disk made after the snapshot the newest cache came from replaced it: starts %x", head(t, after.Path, 8))
+	}
+
+	// Two promotions of one disk finish newest first.
+	twice, err := s.NewCacheDisk(t.Context(), "pool1", filepath.Join(dir, "twice.img"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	qemuWrite(t, twice.Path, 0x33)
+	older, err := s.SnapshotCache(twice)
+	if err == nil {
+		err = s.UnshareCache(t.Context(), twice)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	qemuWrite(t, twice.Path, 0x44)
+	stop(twice)
+	if err = s.PromoteCache("pool1", older); err != nil {
+		t.Fatal(err)
+	}
+	if after, err = s.readNewest(pool); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(head(t, after.Path, 512), bytes.Repeat([]byte{0x44}, 512)) {
+		t.Errorf("an older snapshot of the disk the newest cache came from replaced it: starts %x", head(t, after.Path, 8))
+	}
 }

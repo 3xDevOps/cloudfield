@@ -134,7 +134,7 @@ func linkNewest(dir, name string) error {
 
 // extendsNewest reports whether the cache in snapshot holds what the pool's
 // newest cache does: the pool has none, the snapshot's disk reads through
-// it, or it was promoted from that same disk.
+// it, or it was promoted from an earlier snapshot of that same disk.
 func (s *Store) extendsNewest(dir, snapshot string) bool {
 	newest, err := s.readNewest(dir)
 	if err != nil || sameFile(newest.Path, filepath.Join(snapshot, "base.raw")) {
@@ -142,7 +142,7 @@ func (s *Store) extendsNewest(dir, snapshot string) bool {
 	}
 	source, err := os.Readlink(filepath.Join(snapshot, cacheSource))
 	publisher, _ := os.Readlink(filepath.Join(dir, cachePublisher))
-	return err == nil && source == publisher
+	return err == nil && source == publisher && snapshotSeq(newest.Path) < snapshotSeq(snapshot)
 }
 
 // SnapshotCache links a stopped VM's cache disk, and a qcow2 one's base,
@@ -280,7 +280,8 @@ func (s *Store) sweepCachesLocked(dir string) error {
 	return errors.Join(errs...)
 }
 
-// snapshotSeq is when SnapshotCache took a snapshot, from its name.
+// snapshotSeq is when SnapshotCache took a snapshot, from its name or that
+// of the cache promoted from it.
 func snapshotSeq(snapshot string) int64 {
 	digits, _, _ := strings.Cut(strings.TrimPrefix(filepath.Base(snapshot), "snapshot-"), "-")
 	seq, _ := strconv.ParseInt(digits, 10, 64)
