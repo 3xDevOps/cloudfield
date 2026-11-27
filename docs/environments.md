@@ -401,10 +401,11 @@ What changes:
   reopen before then keeps them on the session. The server writes the
   member's new caches in the background. A stopped VM keeps no cache disk,
   so a session that starts again finds the member's newest caches, not
-  always its own: they did not go back if the stop had to kill the VM, if
-  the session had not started from the member's newest and the newest did
-  not come from this session's previous stop, or if the start or a server
-  restart came before the write finished. Nor did they if writing them could leave
+  always its own: they did not go back if the session added nothing to them
+  (the VM counts as many free blocks and inodes on them as when it first
+  started on them), if another session's went back after this one started,
+  if the stop had to kill the VM, or if the start or a server restart came
+  before the write finished. Nor did they if writing them could leave
   the data filesystem with less free than its reserve (`--min-free-disk`)
   plus 4 GiB, the level below which the server starts deleting stopped
   sessions' state: the member's newest caches stay as they were, and the

@@ -528,6 +528,9 @@ type fakeHelper struct {
 	bootHangs bool
 	syncErr   error
 	syncs     int
+	// cacheUse and cacheUseErr are what CacheUse answers.
+	cacheUse    guest.CacheUse
+	cacheUseErr error
 	// unresponsive makes calls fail as a guest that stopped answering does.
 	unresponsive bool
 	stats        guest.Stats
@@ -680,6 +683,12 @@ func (g *fakeHelper) Sync(context.Context) error {
 	g.syncs++
 	g.mu.Unlock()
 	return g.syncErr
+}
+
+func (g *fakeHelper) CacheUse(context.Context) (guest.CacheUse, error) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return g.cacheUse, g.cacheUseErr
 }
 
 func (g *fakeHelper) Close() error { return nil }
