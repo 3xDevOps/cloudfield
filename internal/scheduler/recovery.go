@@ -29,6 +29,10 @@ const (
 	recoveryPTYRetryMax       = 250 * time.Millisecond
 	defaultExitProbeTimeout   = 2 * time.Second
 	runRecoveryConcurrency    = 4
+	// recoveryStepTimeout bounds each step of startup recovery that waits
+	// for an answer from inside one session's container, which may never
+	// come.
+	recoveryStepTimeout = 30 * time.Second
 )
 
 func retainedTransitionError() error {
@@ -1985,6 +1989,7 @@ func (s *Scheduler) entryFromSidecar(r *domain.Run, sc sidecar) *supervised {
 		acp:                 acp,
 		appServer:           sc.AppServer,
 		serverTurn:          sc.ServerTurn,
+		idleWake:            sc.IdleWake,
 		status:              r.Status,
 		reason:              r.Reason,
 		workersReason:       sc.WorkersReason,

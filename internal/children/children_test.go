@@ -100,7 +100,10 @@ func (f *fakeRuns) Review(ctx context.Context, run domain.RunID, _ domain.Member
 	return f.db.GetRun(ctx, run)
 }
 
-func (f *fakeRuns) DefaultMode(context.Context, domain.MemberID, domain.MemberID, string) (domain.LaunchMode, error) {
+func (f *fakeRuns) DefaultMode(_ context.Context, _, _ domain.MemberID, agent string) (domain.LaunchMode, error) {
+	if agent == "antigravity" {
+		return domain.LaunchTUI, nil
+	}
 	return domain.LaunchACP, nil
 }
 
@@ -120,8 +123,12 @@ func (g *fakeGit) FetchRunBranch(context.Context, domain.WorkspaceID, string, do
 }
 
 // fakeAgents signs every member in to every agent except those in missing,
-// and cannot list the agents on an account in broken.
-type fakeAgents struct{ missing, broken map[domain.MemberID]bool }
+// and cannot list the agents on an account in broken. more follows claude
+// and codex on every account.
+type fakeAgents struct {
+	missing, broken map[domain.MemberID]bool
+	more            []protocol.AgentInfo
+}
 
 func (a fakeAgents) ListAgents(_ context.Context, _, account domain.MemberID) ([]protocol.AgentInfo, error) {
 	if a.broken[account] {
@@ -132,7 +139,7 @@ func (a fakeAgents) ListAgents(_ context.Context, _, account domain.MemberID) ([
 	for _, name := range []string{"claude", "codex"} {
 		out = append(out, protocol.AgentInfo{Name: name, Installed: true, EnhancedInstalled: true, LoginFound: &found})
 	}
-	return out, nil
+	return append(out, a.more...), nil
 }
 
 type mail struct {
@@ -405,19 +412,6 @@ func TestAChildCannotStartChildren(t *testing.T) {
 	_, err := h.start(domain.RunID(child.RunID), protocol.ChildStartParams{Harness: "claude", Task: "grandchild"})
 	if code(err) != protocol.CodeDenied || !strings.Contains(err.Error(), "subsessions go one level deep") {
 		t.Fatalf("a grandchild = %v, want the one-level refusal", err)
-	}
-}
-
-func TestParentsMustWakeOnMail(t *testing.T) {
-	h := newHarness(t)
-	parent := h.run(h.ada.ID, domain.LaunchTUI, "standard gemini")
-	parent.Harness = "gemini"
-	if err := h.db.UpdateRun(h.ctx, parent); err != nil {
-		t.Fatal(err)
-	}
-	_, err := h.start(parent.ID, protocol.ChildStartParams{Harness: "codex"})
-	if code(err) != protocol.CodeDenied || !strings.Contains(err.Error(), "gemini in Standard mode has no idle wake; start it in Enhanced") {
-		t.Fatalf("start from a Standard session that cannot wake = %v", err)
 	}
 }
 

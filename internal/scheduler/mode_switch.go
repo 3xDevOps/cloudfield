@@ -192,11 +192,11 @@ func (m modeSwitch) toStandard(ctx context.Context) error {
 	if err := m.s.acp.stopAdapter(ctx, m.entry.runID); err != nil {
 		return errors.Join(err, m.reopenEnhanced(ctx))
 	}
-	nonce, reporter, err := m.writeTerminal(ctx)
+	nonce, reporter, idleWake, err := m.writeTerminal(ctx)
 	if err != nil {
 		return errors.Join(err, m.reopenEnhanced(ctx))
 	}
-	if err := m.recordIntent(&switchIntent{Mode: domain.LaunchTUI, Nonce: nonce, Reporter: reporter}); err != nil {
+	if err := m.recordIntent(&switchIntent{Mode: domain.LaunchTUI, Nonce: nonce, Reporter: reporter, IdleWake: idleWake}); err != nil {
 		return errors.Join(err, m.reopenEnhanced(ctx))
 	}
 	if err := m.s.swapChild(ctx, m.cid, nonce, tuiSettle); err != nil {
@@ -204,7 +204,7 @@ func (m modeSwitch) toStandard(ctx context.Context) error {
 	}
 	m.s.acp.switchNotice(m.entry.runID, "info", "Switched to Standard",
 		"The conversation continues in the agent's terminal and is not recorded here until the session switches back to Enhanced.")
-	if err := m.s.commitMode(ctx, m.entry, domain.LaunchTUI, reporter); err != nil {
+	if err := m.s.commitMode(ctx, m.entry, domain.LaunchTUI, reporter, idleWake); err != nil {
 		return err
 	}
 	if err := m.s.ReportAgentState(ctx, m.entry.runID, agentstatus.Report{
@@ -233,7 +233,7 @@ func (m modeSwitch) toEnhanced(ctx context.Context) error {
 		m.s.acp.switchNotice(m.entry.runID, "error", "Switch to Enhanced failed", err.Error())
 		return errors.Join(err, m.restoreStandard(ctx))
 	}
-	return m.s.commitMode(ctx, m.entry, domain.LaunchACP, harness.ReporterFull)
+	return m.s.commitMode(ctx, m.entry, domain.LaunchACP, harness.ReporterFull, false)
 }
 
 // restoreEnhanced and restoreStandard keep the switch's intent until the
@@ -262,7 +262,7 @@ func (m modeSwitch) reopenEnhanced(ctx context.Context) error {
 }
 
 func (m modeSwitch) restoreStandard(ctx context.Context) error {
-	nonce, _, err := m.writeTerminal(ctx)
+	nonce, _, _, err := m.writeTerminal(ctx)
 	if err == nil {
 		err = m.s.swapChild(ctx, m.cid, nonce, tuiSettle)
 	}
@@ -286,38 +286,38 @@ func (m modeSwitch) recordIntent(intent *switchIntent) error {
 	return nil
 }
 
-// writeTerminal returns the next-command file's nonce and the reporter the
-// command gives the run.
-func (m modeSwitch) writeTerminal(ctx context.Context) (string, harness.Reporter, error) {
+// writeTerminal returns the next-command file's nonce, the reporter the
+// command gives the run and whether it loads an idle wake.
+func (m modeSwitch) writeTerminal(ctx context.Context) (string, harness.Reporter, bool, error) {
 	current, err := m.s.cfg.Store.GetRun(ctx, m.entry.runID)
 	if err != nil {
-		return "", 0, fmt.Errorf("load the session's model: %w", err)
+		return "", 0, false, fmt.Errorf("load the session's model: %w", err)
 	}
 	nonce := rand.Text()
-	script, files, reporter, err := m.terminalScript(ctx, nonce, m.profile.ResumeCommand(m.session, current.Model, current.Effort), current.Model)
+	script, files, reporter, idleWake, err := m.terminalScript(ctx, nonce, m.profile.ResumeCommand(m.session, current.Model, current.Effort), current.Model)
 	if err != nil {
-		return "", 0, err
+		return "", 0, false, err
 	}
 	files[coordtransport.NextCommandName] = script
 	if err := m.c.svc.WriteFiles(m.entry.runID, files); err != nil {
-		return "", 0, fmt.Errorf("write the agent's command: %w", err)
+		return "", 0, false, fmt.Errorf("write the agent's command: %w", err)
 	}
-	return nonce, reporter, nil
+	return nonce, reporter, idleWake, nil
 }
 
 // terminalScript is the next-command script that runs argv as the session's
 // Standard agent with the arguments and environment a launch gives it, the
-// session directory files that launch reads, and the reporter it gives the
-// run.
-func (m modeSwitch) terminalScript(ctx context.Context, nonce string, argv []string, model string) ([]byte, map[string][]byte, harness.Reporter, error) {
+// session directory files that launch reads, the reporter it gives the run
+// and whether it loads an idle wake.
+func (m modeSwitch) terminalScript(ctx context.Context, nonce string, argv []string, model string) ([]byte, map[string][]byte, harness.Reporter, bool, error) {
 	base, err := m.s.harnessEnvironment(ctx, m.run, m.profile, model)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, 0, false, err
 	}
 	var native harness.NativeLaunch
-	if m.c.enabled && m.run.Task != "" {
+	if m.c.enabled {
 		if native, err = m.profile.PrepareNativeLaunch(coordtransport.MountDir, argv, base); err != nil {
-			return nil, nil, 0, fmt.Errorf("prepare native coordination: %w", err)
+			return nil, nil, 0, false, fmt.Errorf("prepare native coordination: %w", err)
 		}
 	}
 	// As a launch: the terminal of an agent the server steers attaches to
@@ -331,17 +331,17 @@ func (m modeSwitch) terminalScript(ctx context.Context, nonce string, argv []str
 	tui.Mode, tui.ACP = domain.LaunchTUI, false
 	instructions, err := m.s.launchInstructions(ctx, &tui, m.profile, native, m.s.containerCLI(ctx, m.cid))
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, 0, false, err
 	}
 	launch, err := newCoordinationLaunch(m.c.enabled, &tui, m.profile, native, instructions)
 	if err != nil {
-		return nil, nil, 0, err
+		return nil, nil, 0, false, err
 	}
 	// The container already holds base; the command exports only what it
 	// changes, merged into base as the launch path merges it.
 	merged := maps.Clone(base)
 	if err := harness.MergeEnv(merged, launch.env); err != nil {
-		return nil, nil, 0, err
+		return nil, nil, 0, false, err
 	}
 	maps.Copy(merged, native.Env)
 	env := make(map[string]string, len(launch.env)+len(native.Env))
@@ -356,7 +356,7 @@ func (m modeSwitch) terminalScript(ctx context.Context, nonce string, argv []str
 	} else {
 		argv = append(argv, launch.args...)
 	}
-	return nextCommand(nonce, native.Command(argv), env), maps.Clone(launch.files), launch.reporter, nil
+	return nextCommand(nonce, native.Command(argv), env), maps.Clone(launch.files), launch.reporter, native.IdleWake, nil
 }
 
 func (m modeSwitch) writeShell() (string, error) {
@@ -369,7 +369,7 @@ func (m modeSwitch) writeShell() (string, error) {
 
 // commitMode records the mode the container now runs. The intent stays until
 // the run row holds the mode, so a restart retries a row that failed to save.
-func (s *Scheduler) commitMode(ctx context.Context, entry *supervised, mode domain.LaunchMode, reporter harness.Reporter) error {
+func (s *Scheduler) commitMode(ctx context.Context, entry *supervised, mode domain.LaunchMode, reporter harness.Reporter, idleWake bool) error {
 	acp := mode == domain.LaunchACP
 	err := s.cfg.Store.SetRunMode(ctx, entry.runID, mode, acp)
 	if err != nil {
@@ -377,7 +377,7 @@ func (s *Scheduler) commitMode(ctx context.Context, entry *supervised, mode doma
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	entry.launchMode, entry.acp, entry.reporter = mode, acp, reporter
+	entry.launchMode, entry.acp, entry.reporter, entry.idleWake = mode, acp, reporter, idleWake
 	if err == nil {
 		entry.switchIntent = nil
 	}
@@ -398,13 +398,15 @@ func (s *Scheduler) settleSwitch(ctx context.Context, entry *supervised) {
 	if intent == nil {
 		return
 	}
-	_, stdout, _, err := s.cfg.Runtime.Exec(ctx, cid, []string{"/bin/sh", "-c", `cat "$1" 2>/dev/null || :`, "aether-switch", supervisorStateFile}, "")
+	readCtx, cancel := context.WithTimeout(ctx, recoveryStepTimeout)
+	_, stdout, _, err := s.cfg.Runtime.Exec(readCtx, cid, []string{"/bin/sh", "-c", `cat "$1" 2>/dev/null || :`, "aether-switch", supervisorStateFile}, "")
+	cancel()
 	if err != nil {
 		slog.Warn("scheduler: read the run supervisor's state", "run", entry.runID, "error", err)
 		return
 	}
 	if nonce, _, _ := strings.Cut(stdout, " "); nonce == intent.Nonce {
-		if err := s.commitMode(ctx, entry, intent.Mode, intent.Reporter); err != nil {
+		if err := s.commitMode(ctx, entry, intent.Mode, intent.Reporter, intent.IdleWake); err != nil {
 			slog.Warn("scheduler: finish an interrupted mode switch", "run", entry.runID, "error", err)
 		}
 		return
@@ -422,6 +424,7 @@ type switchIntent struct {
 	Mode     domain.LaunchMode `json:"mode"`
 	Nonce    string            `json:"nonce"`
 	Reporter harness.Reporter  `json:"reporter,omitempty"`
+	IdleWake bool              `json:"idle_wake,omitempty"`
 }
 
 // nextCommand is the supervisor's next-command file: "# <nonce>", then a
