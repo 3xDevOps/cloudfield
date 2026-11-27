@@ -119,8 +119,9 @@ func printTerminalLogs(c *protocol.Client, w io.Writer, runID string, limit int)
 // turn (an agent may reuse a tool call id in a later turn) and sits where
 // its first item was written.
 type acpEntry struct {
-	// head is a message's "role: ", which its segments append to. Any other
-	// entry has none, and its newest snapshot replaces text.
+	// head is a message's "role: " or a thought's thoughtHead, which its
+	// segments append to. Any other entry has none, and its newest snapshot
+	// replaces text.
 	head string
 	text strings.Builder
 	// whole marks a message whose last segment arrived.
@@ -331,9 +332,12 @@ func hasReset(frames []protocol.ACPFrame) bool {
 	})
 }
 
-// A message or thought resumes under its MessageID only after entries of
-// other kinds, so one whose first segment is off the page is the page's
-// first message or its first thought.
+// One agent resumes a message or thought under its MessageID only after
+// entries of other kinds, so the one whose first segment is off the page is
+// the page's first message or its first thought.
+// shortcut: subagents writing at once interleave their messages, so one of
+// theirs later on the page can start off it too. No item marks a first
+// segment; read back to the turn's start if that cut line has to go.
 func enough(entries []*acpEntry, limit int) bool {
 	first := max(
 		slices.IndexFunc(entries, func(e *acpEntry) bool { return e.head == thoughtHead }),
