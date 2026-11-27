@@ -22,17 +22,19 @@ was read.
 1. Keep one server as the **primary**. It keeps everything it has today:
    the database, members, mail between sessions, git, the dashboard, and
    the scheduler that supervises every session.
-2. Other machines join as **hosts**. A host runs session VMs and nothing
-   else: Cloud Hypervisor, the disks, the memory brake. It dials out to the
+2. Other machines join as **hosts**. A host runs session VMs and what they
+   need on their machine: Cloud Hypervisor, the disks, the VM network, the
+   memory brake. It has no scheduler and no database. It dials out to the
    primary, and the primary drives each VM through that link with the
    protocol it already speaks to a VM on its own disk.
-3. A session is placed once, at launch, on a machine its workspace and
-   its members allow and that has the most room, and stays there. A launch
-   that fits nowhere waits in a queue in the primary's database; it is not
-   refused.
-4. A host that loses its link freezes its VMs until the link is back, and
-   Cloudfield never starts a second copy of a session by itself. Work on a
-   host pauses whenever the primary restarts.
+3. A session is placed once, at launch, on a machine that everyone whose
+   data it carries allows and that has the most room, and stays there. A
+   launch that fits nowhere for now waits in a queue in the primary's
+   database; it is not refused.
+4. A host that loses its link for longer than a grace period freezes its
+   VMs until the link is back, and Cloudfield never starts a second copy
+   of a session by itself. Work on a host pauses when the primary is down
+   for longer than that.
 5. No job queue product. Ship the single-machine half first (a waiting
    launch, a count of every refusal): it is useful alone and it measures
    whether a second machine is worth building. A two-machine spike with
@@ -290,17 +292,19 @@ throttles all traffic to 256 KiB/s once its egress budget is spent
   A session on a host that is somebody's tailnet node could therefore sign
   in to the primary as that person. Three rules close it: a host on a
   tailnet must be a tagged node, which the primary already refuses to
-  identify (`docs/networking.md:101-102`); the primary gives no tailnet
-  identity to an address registered as a host; and a host's firewall drops
-  traffic from its VMs to the primary's address.
+  identify (`docs/networking.md:101-102`), and the primary checks the tag
+  itself, at the join and at every connection, and refuses an untagged
+  host; the primary gives no tailnet identity to an address registered as
+  a host; and a host's firewall drops traffic from its VMs to the
+  primary's address.
 - **Two connections.** One carries control: heartbeats, calls, and the
   streams of live sessions. The other carries bulk: images, packs and
   disks. A 1 GB image copy on the same connection as the heartbeat could
   delay it past the grace period and freeze the machine.
 - **Liveness is a round trip.** The link is up while the host has had an
-  answer to its own heartbeat within the grace period, timed on the host
-  with a clock that keeps counting through a suspend. An open TCP
-  connection proves nothing.
+  answer to its own heartbeat within the grace period, timed on the host.
+  An open TCP connection proves nothing. A host also freezes its VMs
+  before it suspends, since a timer may not count a suspend.
 - **Limits per host.** The caps that exist per session (16 connections
   per socket, 64 KiB requests: `internal/coord/socket.go:61-76`) become
   totals per host as well, for streams, signing requests, open home files
@@ -314,12 +318,27 @@ fails today with `a VM named … already exists`
 scheduler look at the VM's state and may drop its saved memory
 (`internal/scheduler/sleep_vm.go:241-300`). So:
 
-- The primary writes the placement, a **generation** for the VM and the
-  operation with its id in the database before it calls the host.
-- Every call names the VM, its generation and the operation id. The host
-  records each result and returns the recorded result to a repeat. It
-  refuses a call for an older generation, so a command delayed past a
-  reconnect cannot undo a newer one.
+- The primary writes the placement, the VM's **generation** and the
+  operation in the database before it calls the host. The generation
+  grows each time the primary creates the session's VM anew; operations
+  on one generation carry a sequence number.
+- Every call names the VM, its generation, its sequence number and an
+  operation id. The host writes the call down when it arrives, before it
+  acts, then writes the result. A repeat gets the recorded result, or
+  "still running". A call for an older generation or an earlier sequence
+  number is refused, so a command delayed past a reconnect cannot undo a
+  newer one.
+- A link freeze stops the clock of every operation on the host. Today a
+  restore that outlives its timer kills the VM, and the wake then drops
+  the saved memory and starts from disk
+  (`internal/runtime/vm/save.go:330-343`,
+  `internal/scheduler/sleep_vm.go:261-295`). An operation cut by a freeze
+  is recorded as interrupted, resumes on thaw, and is never reported as
+  failed.
+- A host agent that died in the middle of a call finds it written down
+  with no result. It reports that, and the primary inspects the VM as it
+  does after a restart today. This case stays a judgement from the VM's
+  state; the record only makes it visible.
 - A call with no answer is *unknown*, not failed. The primary asks the
   same host again after reconnect. It never retries an unknown call on
   another machine. Only a refusal that came before anything was created
@@ -437,7 +456,8 @@ started as soon as its session row exists
 
 Sub-sessions already queue in `run_children` with state `queued` for the
 per-parent limit (`internal/children/dispatch.go:17-48`); a capacity refusal
-returns the child to `queued` instead of `refused`. The admission code
+that comes before the child's session row exists returns it to `queued`
+instead of `refused`. The admission code
 says "Never loop or reinterpret unavailable capacity"
 (`internal/scheduler/capacity.go:197-211`); that rule stays inside one
 attempt. Nomad and Kubernetes also hold work that does not fit (a blocked
@@ -685,7 +705,7 @@ Two ways to give a VM on a host a home:
 | | One home, served from the primary | A home per machine |
 | --- | --- | --- |
 | Sign-ins | One per login, as today | One per login per machine |
-| Logins copied | Never | Never |
+| Logins copied between machines | Claude Code and Codex: never. `copilot` and `antigravity` are copied into each VM at cold start today, and so onto a host's disk | The same |
 | Build | The file service for a remote VM runs on the primary and is reached through the tunnel | About 190 call sites of the home manager become calls to the host (E7 §2.3); placement needs the login to be on the machine |
 | A compromised host gets | Read and write on the whole home of every member with a session there: their real logins, and a place to plant code that their later sessions run on every machine | The logins signed in on that machine |
 | Link stall | Every home operation stalls | Nothing |
@@ -704,19 +724,25 @@ primary, and only if it passes these gates in the spike:
 - **Refresh.** File locks "hold only within one VM"
   (`docs/vm-guest.md:252-255`), so two VMs of one member can refresh the
   same login at once. That is true on one machine today; a link widens the
-  window between a vendor's answer and the write of the new token. The
-  gate: two VMs on two machines refresh one login while the link is cut
-  mid-write, for each agent supported on hosts, and the login survives.
+  window between a vendor's answer and the write of the new token. Agents
+  differ: Claude Code refreshes under a lock file it creates, Codex under
+  a file lock
+  (`docs/plans/2026-11-03-shared-account-credentials.md:42`, `55`), so the
+  gate is per agent: two VMs on two machines refresh one login while the
+  link is cut mid-write, and the login survives. An agent that fails is
+  limited to one machine per login before the whole design falls back.
 - **Speed.** An agent starts and completes a turn with its home served at
   the link's round-trip time.
 
 If a gate fails, phase 1 uses a home per machine.
 
-On the primary, the file service for a remote VM keeps what protects it
-today: a process of its own per VM, in a unit that cannot see the rest of
-the data directory, with its own limit on open files
-(`internal/guest/home/server_linux.go:24-39`). It is not folded into the
-server process.
+Today the file service runs inside the VM's own systemd unit
+(`docs/vm-guest.md:219-221`), whose mount namespace hides the rest of the
+data directory (`docs/environments.md:358-361`); the service caps a VM at 16,384
+open files and 128 requests in flight
+(`internal/guest/home/server_linux.go:24-39`). On the primary, the service
+for a remote VM keeps that shape: a process and a unit per VM, with the
+same limits. It is not folded into the server process.
 
 `omp`'s broker holds the one copy of its logins and hands a session access
 tokens and API keys (`docs/harnesses.md:738-754`); it stays on the primary
@@ -766,9 +792,20 @@ freezes and thaws single VMs through their own flag
 restart of its process and on a clean stop
 (`internal/scheduler/vm_freeze.go:36-45`, `129-146`). A link freeze on
 single VMs would be undone by it. On the group, the brake's thaws cannot
-reach it. Only the host agent clears it, on the primary's word, for the
+reach it. The group is `aether.slice`, which on a host holds only VM
+units; on the primary the same slice also holds environment terminals,
+the assistant and other services, so the link freeze exists in the host
+role only. Only the host agent clears it, on the primary's word, for the
 link that is up now. After a restart the agent starts with the group
 frozen until the primary says otherwise.
+
+Some VMs must stay stopped while their neighbours run: one the primary
+does not know, one whose session ended or was forked while its host was
+away. The brake would thaw those too. So the host agent keeps, on disk,
+the reasons each VM is held (memory, an admin's decision, an ended
+session); a VM runs only when it has none, and the brake clears only its
+own. A VM whose session ended or was forked is stopped, not frozen, when
+its host reconnects.
 
 **The primary never starts a second copy of a session by itself.** An
 unreachable machine is shown as unreachable and its sessions are left
@@ -788,9 +825,10 @@ or cleanup acts on a machine's silence.
 
 ### What a freeze costs
 
-A frozen VM keeps its memory and disks. It does not keep time: the guest's
-clock runs on (#1159 measured it 0.03 s behind after 5 s), so when the VM
-thaws, every timeout inside it has passed.
+A frozen VM keeps its memory and disks. Whether it keeps time is not
+measured for a cgroup freeze. After a hypervisor pause of 5 s the guest's
+clock was 0.03 s behind (#1159), so the plan assumes the worst: when the
+VM thaws, every timeout inside it has passed.
 
 - A model request in flight fails; the vendor may still have completed and
   billed it.
@@ -834,12 +872,12 @@ on a host that has not reconnected is *unreachable*, not `interrupted`.
 | --- | --- | --- | --- |
 | The link drops for less than the grace period (30 s proposed) | In-flight calls end as *unavailable* and are retried | Streams reattach | Nothing |
 | The link is down longer | Time; requests in flight inside the VMs | The host freezes the group. Reattaching thaws it | Nothing |
-| The primary restarts or updates | The same, on every host at once | As above, per host | Nothing |
+| The primary restarts or updates | A restart shorter than the grace period: nothing; the VMs ran that long with no supervisor. Longer: the same as a link drop, on every host at once | As above, per host | Nothing |
 | The primary's machine dies | Control of everything, until it is back | Hosts stay frozen | Restore the primary from its backup ([install.md](../install.md#what-lives-in-the-data-directory)). It is a single point of failure, as the server is today |
-| The primary is restored from an older backup | Sessions newer than the backup are unknown to it | Nothing is deleted: a VM the primary does not know is kept frozen and listed | An admin decides per VM. The old primary must be off before the restored one is started |
+| The primary is restored from an older backup | Sessions newer than the backup are unknown to it. Hosts removed since the backup are known to it again | Nothing is deleted: a VM the primary does not know is held and listed | An admin decides per VM, and removes again any host removed since the backup. The old primary must be off before the restored one is started |
 | A host loses power | The processes and memory of its VMs, including VMs paused in memory (#1159) | On boot the host reconnects. Saved VMs wake on their next use; the others start from disk or end, as after a server reboot today | Nothing, if it comes back |
 | A host is gone for good | What its sessions changed since the primary last recorded it | — | **Declare lost** in **Settings → Machines**. Its sessions end `interrupted`, their sub-session slots and reports are released, and each can be forked |
-| A host returns with older disks (a restored image), or a copy of a host connects | — | The primary knows each VM's generation; a host that presents an older one, or a second host with a key that is already connected, is kept frozen and listed. A boot counter alone would not catch this: a restored image passes after one more start | An admin chooses per host |
+| A host returns with older disks (a restored image), or a copy of a host connects | — | A host that presents an older generation, or a second host with a key that is already connected, is held and listed. A restored image at the same generation is caught per session: the primary knows the last snapshot it recorded, and a VM whose checkout is behind it is held and its branch is not moved back | An admin chooses |
 | A host has a VM the primary did not place there | — | It stays frozen and is listed. The host deletes it only on the primary's explicit call | An admin confirms |
 
 ### What "never twice" means, exactly
@@ -852,7 +890,9 @@ on a host that has not reconnected is *unreachable*, not `interrupted`.
   does the freeze, so it happens when the agent is the part that died; a
   VM lives in its own unit and outlives the agent
   (`internal/runtime/vm/unit.go:20-21`). The timer then checks the
-  group's `frozen` event and keeps trying.
+  group's `frozen` event. If it cannot confirm the freeze it cuts the
+  VMs' network at the host firewall and keeps trying, which bounds what a
+  running copy can reach without ending its processes.
 
 What this does not give:
 
@@ -869,7 +909,12 @@ a new session, with a new id and a new branch, from the old one's last
 recorded commit; the old session ends `interrupted`, and the primary
 refuses everything its machine sends for it from then on. The dialog says
 the old copy may still be running if its machine is, and names what it
-holds: the member's login, the gh token and the workspace's secrets.
+holds: the member's login, the gh token and the workspace's secrets. Two
+harms reach back into Cloudfield without the link, and the dialog names
+them: an old copy that refreshes the agent login spends the token in the
+member's home, which signs out every session of that member, the fork
+included; and with the gh token it can push to the repository a source
+mirror follows.
 
 ### What the primary has when a host dies
 
@@ -901,8 +946,8 @@ not established.
   runs the attacker's sessions; `host join` shows the primary's id and
   address and asks before it joins.
 - A machine that was a Cloudfield server is refused as a host.
-- A host's key is replaced by joining again; the old key is revoked in the
-  same step. Only one connection per key is accepted, and a second is
+- In phase 1 a host's key is replaced by removing the host and joining
+  again. Replacing it in place comes in phase 2. Only one connection per key is accepted, and a second is
   listed for an admin and not served.
 
 ### What a host may do
@@ -914,7 +959,9 @@ A host is a machine, not a member. Its connection carries only:
   primary chose, while those sessions live. This follows Kubernetes' node
   rules, where a kubelet reads only what belongs to pods bound to it
   (E4 B7).
-- Images and packs the primary sends. A host fetches nothing by name.
+- Images and packs the primary sends. A host asks the primary for nothing
+  by name. It fetches only the signed release, from the release's own
+  address, as any server does.
 
 ### What a compromised host gets
 
@@ -973,6 +1020,18 @@ first remote launch, not after.
 - A session's machine is shown wherever its account is shown, and a member
   can list where their home has been served.
 
+The lists are checked wherever a machine is chosen: by placement, when a
+person names a machine at launch, at a handoff and at a fork.
+
+Withdrawing a machine stops new sessions there at once. A member who
+withdraws one has their sessions on it saved and their home no longer
+served to it; those sessions wake only if the member allows the machine
+again, or are forked. A workspace withdrawn from a machine keeps its
+running sessions until they sleep, and they do not wake there. A session
+whose account is revoked moves only to an account that allows its
+machine (the move exists: `internal/scheduler/account_revoke.go:92-123`);
+with none, it stops with that reason.
+
 Phase 1 does not stop a super admin from adding a teammate's own machine
 as a host. The lists above are what limits it.
 
@@ -992,8 +1051,8 @@ it. A *declare lost* shows the same list.
 In transit: SSH with pinned keys, both ways; the guest protocol's lack of
 encryption is covered between machines by that and stays as it is inside
 each machine. At rest on a host: VM disks, VM records with the
-environment, saved memory, images, and its own key. No home, no database,
-no key of the primary.
+environment, saved memory, images, the login copies of agents that copy
+them, and its own key. No home, no database, no key of the primary.
 
 ### Privacy
 
@@ -1036,6 +1095,8 @@ item 1 was. It passes or fails, and failing sends the plan to
 | The brake | A memory fill on the host while the primary holds a VM awake does not take the machine down |
 | Throughput | Terminal output and a launch on the far machine, with #1158's step log, are within a factor the owner accepts of the local figures |
 | The primary's cost | CPU, memory and disk on the primary per remote session, so a cap per primary can be stated |
+| Cut at the worst moment | The link is cut during a boot, a save and a restore, and the host agent is killed mid-call: no session is lost, no saved memory is dropped, no VM is created twice |
+| Suspend and return | A host that suspends, and a host that returns after one of its sessions was forked, end with every VM frozen or stopped as the plan says |
 | The link itself | Drops per day and round-trip time between the two machines, over a week |
 
 ### Phase 1: a second machine takes session VMs
@@ -1108,7 +1169,7 @@ Then the spike above.
 2. **One home served from the primary, or a home and a sign-in per
    machine?** Recommended: one home, for machines the team trusts as much
    as the primary, if it passes its gates. People sign in once and no
-   login is copied. The cost is plain: a compromised host can take the
+   Claude Code or Codex login is copied. The cost is plain: a compromised host can take the
    real logins of everyone who allowed it and plant code in their homes.
    A home per machine limits that to the logins signed in there, costs a
    sign-in per machine, and is the fallback if a gate fails.
@@ -1185,6 +1246,15 @@ What they changed:
 | Delivery states mixed with reachability; a wait "resolves as failed" | Reachability is its own field; waits keep their rules |
 | "Lost: about a minute" | No bound is promised; each session shows its last recorded commit and time |
 
+A fourth reviewer, a fresh Opus, re-checked this revision
+([`recheck.md`](../../research/2026-11-27-multi-machine/reviews/recheck.md)):
+15 findings, two blocking. They are fixed above: holds per VM that the
+brake cannot clear, operation clocks that stop during a link freeze,
+when a generation changes, what a fork's old copy can still do, the tag
+check, withdrawing a machine, and eight places where the plan
+contradicted itself or its summary. That last round of fixes was not
+reviewed again.
+
 What was rejected, and why:
 
 - **"Compare the full host as a narrower design before recommending."**
@@ -1193,14 +1263,16 @@ What was rejected, and why:
   spike fails, the "three to four times" effort claim is withdrawn, and
   it is listed under Not established.
 - **"The host's watchdog should stop a VM it cannot confirm frozen."**
-  Not adopted. Stopping destroys the session's processes to guard against
-  a failure the plan no longer relies on: a fork is labelled unsafe
-  whatever the watchdog did. The watchdog retries and reports.
+  Not adopted as written: stopping destroys the session's processes. The
+  re-check showed the first reason given here was wrong, since the plan
+  does rely on the freeze to bound unsupervised running. The watchdog now
+  cuts the VMs' network when it cannot confirm the freeze.
 - **"A stream multiplexer for the link."** SSH channels already
   multiplex. The real problem, bulk delaying heartbeats, is met by a
   second connection and a spike gate.
 - **"Use one refresher or a broker per login."** A broker for Claude Code
   and Codex was built and removed after it failed its canary. The plan
-  gates on a test and falls back to a home per machine.
+  gates on a test per agent, limits a failing agent to one machine per
+  login, and falls back to a home per machine.
 - **"Do not count RPCs as effort."** Accepted in wording, but the counts
   stay: they are the only measure of the cuts that came from the code.

@@ -29,7 +29,7 @@ Nothing is built.
 | --- | --- | --- |
 | 0. One machine that waits and explains | A full server queues launches and sub-sessions instead of dropping them, and shows why. Every refusal is counted | 6 to 8 pull requests |
 | Spike | Two real machines, scripts only. Pass or fail on seven questions | No product code |
-| 1. A second machine takes session VMs | Add a machine with one command. Sessions start there and work with the others as today. A dead machine can be declared lost and its sessions forked | About 20 pull requests |
+| 1. A second machine takes session VMs | Add a machine with a join code, a fingerprint check and an allow list. Sessions start there and work with the others as today. A dead machine can be declared lost and its sessions forked | About 20 pull requests |
 | 2. Operating several machines | Draining, updates, key replacement | About 5 |
 | 3. Move a sleeping session | Only if phase 0's numbers show it is needed | Not sized |
 
@@ -53,10 +53,11 @@ vanish and no view of why.
    whenever the primary restarts?** Recommended: yes, if the spike passes.
    It keeps one scheduler and one database, and limits phase 1 to machines
    on one LAN or a direct tailnet path. If not, the design to examine is a
-   host that supervises its own sessions, which is a larger build.
+   host that supervises its own sessions, which this research did not size.
 2. **One home served from the primary, or a sign-in per machine?**
    Recommended: one home, for machines you trust as much as the primary,
-   if it passes its tests. People sign in once and no login is copied. The
+   if it passes its tests. People sign in once and no Claude Code or Codex
+   login is copied. The
    cost: a compromised host can take the real logins of everyone who
    allowed it. A home per machine limits that, costs a sign-in per
    machine, and is the fallback.
@@ -74,7 +75,10 @@ survive them: the memory brake would have undone the link freeze, a
 primary restart would have left remote sessions unattached, a session on
 a tailnet host could have signed in to the primary as its owner, and "can
 never run twice" claimed more than silence can prove. The plan's Review
-section lists each change and the five points rejected with reasons.
+section lists each change and the five points rejected with reasons. A
+fourth, fresh Opus reviewer then re-checked the revision and found 15 more
+points, two blocking; those are fixed too, and that last round of fixes
+has not been reviewed again.
 
 ## Where the evidence is
 
