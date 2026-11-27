@@ -418,7 +418,7 @@ func TestEdgeStatusNoticeClosesConnections(t *testing.T) {
 }
 
 // A retired refusal carries its replacement in the error data, and
-// edge.logout says when it deleted a token the edge did not revoke.
+// edge.logout there deletes the token.
 func TestEdgeLogoutAtARetiredAddress(t *testing.T) {
 	g, _ := noticeGateway(t)
 	edge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -434,7 +434,12 @@ func TestEdgeLogoutAtARetiredAddress(t *testing.T) {
 		t.Fatalf("edge.servers = %d: %s", rec.Code, rec.Body)
 	}
 	rec = do(g, http.MethodPost, "/local/v1/edge.logout", `{"edge":"`+edge.URL+`"}`, true)
-	if want := `{"edge":"` + edge.URL + `","unrevoked":{"device_id":"dev-1","replacement":"https://new.example.test"}}` + "\n"; rec.Code != http.StatusOK || rec.Body.String() != want {
+	if want := `{"edge":"` + edge.URL + `"}` + "\n"; rec.Code != http.StatusOK || rec.Body.String() != want {
 		t.Fatalf("edge.logout = %d: %s, want %s", rec.Code, rec.Body, want)
+	}
+	if dir, err := cli.Dir(); err != nil {
+		t.Fatal(err)
+	} else if signedIn, err := edgeclient.SignedIn(dir); err != nil || len(signedIn) != 0 {
+		t.Fatalf("signed in to %v (%v) after logout at a retired address", signedIn, err)
 	}
 }

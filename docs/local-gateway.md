@@ -2071,10 +2071,8 @@ does, with the same files in the config directory:
   `edge.logout` and `link.reset` forget it. Without a notice the field is
   absent.
 - `edge.logout` at an address that answers `410` naming a replacement deletes
-  the token and answers
-  `{"edge":"https://...","unrevoked":{"device_id":"...","replacement":"https://..."}}`:
-  the edge did not revoke the token. A refusal from such an address also
-  carries `data.retired: {"replacement":"https://..."}` beside
+  the token, though the edge did not revoke it. A refusal from such an
+  address carries `data.retired: {"replacement":"https://..."}` beside
   `data.refusal`, whose `refusal` is the edge's text.
 - Errors carry the client's own message. Not signed in, or an edge refusal
   with a `4xx` status such as a revoked token or a claimed server, answers

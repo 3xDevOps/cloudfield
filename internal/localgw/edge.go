@@ -299,19 +299,6 @@ func sessionOn(dir, origin string) (edgeclient.Session, error) {
 	return client.Session()
 }
 
-// logoutAnswer is edge.logout's answer. Unrevoked is set when the token
-// was deleted here although the edge did not revoke it, because the
-// address that issued it answered that it is retired.
-type logoutAnswer struct {
-	Edge      string           `json:"edge"`
-	Unrevoked *unrevokedDevice `json:"unrevoked,omitempty"`
-}
-
-type unrevokedDevice struct {
-	DeviceID    string `json:"device_id"`
-	Replacement string `json:"replacement"`
-}
-
 func (g *Gateway) localEdgeLogout(r *http.Request, body []byte) (any, *protocol.Error) {
 	var params struct {
 		Edge string `json:"edge"`
@@ -324,16 +311,13 @@ func (g *Gateway) localEdgeLogout(r *http.Request, body []byte) (any, *protocol.
 		return nil, perr
 	}
 	g.local.edge.forget(client.URL())
-	unrevoked, err := client.Logout(r.Context())
-	if err != nil {
+	if _, err := client.Logout(r.Context()); err != nil {
 		return nil, edgeError(err)
 	}
 	g.local.notices.forget(client.URL())
-	answer := logoutAnswer{Edge: client.URL()}
-	if unrevoked != nil {
-		answer.Unrevoked = &unrevokedDevice{DeviceID: unrevoked.Device.ID, Replacement: unrevoked.Replacement}
-	}
-	return answer, nil
+	return struct {
+		Edge string `json:"edge"`
+	}{Edge: client.URL()}, nil
 }
 
 func (g *Gateway) localEdgeServers(r *http.Request, body []byte) (any, *protocol.Error) {
