@@ -293,9 +293,13 @@ func (s *Server) memberRemove(ctx context.Context, member domain.MemberID, param
 			if s.cfg.LoginSignIns != nil {
 				if err := s.cfg.LoginSignIns.EndLoginSignIns(ctx, id); err != nil {
 					// The next start finds a sign-in's container through its
-					// directory, so the directories stay until then.
-					slog.Warn("sshd: end the removed member's sign-ins; their logins are removed at the next start", "member", id, "error", err)
+					// directory, so that directory stays until then; the
+					// member's other logins go now.
+					slog.Warn("sshd: end the removed member's sign-ins; a sign-in's login is removed at the next start", "member", id, "error", err)
 					signInsEnded = false
+					if reconcileErr := s.cfg.LoginSignIns.ReconcileLogins(ctx, id); reconcileErr != nil {
+						slog.Warn("sshd: remove the removed member's logins; the next start removes them", "member", id, "error", reconcileErr)
+					}
 				}
 			}
 			if s.cfg.Logins != nil && signInsEnded {

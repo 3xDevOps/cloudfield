@@ -259,14 +259,26 @@ func TestALaunchIsAdmittedBeforeItReadsTheWorkspaceOrTheLogins(t *testing.T) {
 	}
 }
 
-// fakeLoginSignIns reports the sessions LoginInUse lists.
+// fakeLoginSignIns reports the sessions LoginInUse lists, fails to end
+// sign-ins with endErr, and records whose logins it reconciled.
 type fakeLoginSignIns struct {
 	LoginSignIns
-	inUse map[domain.RunID]domain.MemberID
+	inUse      map[domain.RunID]domain.MemberID
+	endErr     error
+	reconciled []domain.MemberID
 }
 
 func (f *fakeLoginSignIns) LoginInUse(context.Context, domain.Account) (map[domain.RunID]domain.MemberID, error) {
 	return f.inUse, nil
+}
+
+func (f *fakeLoginSignIns) EndLoginSignIns(context.Context, domain.MemberID) error {
+	return f.endErr
+}
+
+func (f *fakeLoginSignIns) ReconcileLogins(_ context.Context, member domain.MemberID) error {
+	f.reconciled = append(f.reconciled, member)
+	return nil
 }
 
 // A removal refused for a login in use names the owner's own sessions,
@@ -321,5 +333,27 @@ func TestRelaunchOnALoginTurnedAutomaticOffIsRefusedUpFront(t *testing.T) {
 	}
 	if _, perr := e.call(t, e.member.ID, protocol.MethodRunRelaunch, protocol.RunIDParams{RunID: string(run.ID)}); perr != nil {
 		t.Fatalf("relaunch once the login is automatic again: %v", perr)
+	}
+}
+
+// Removing a member whose sign-in could not be ended keeps that sign-in's
+// login directory for the next start, and removes every other login of the
+// member now rather than keeping them all.
+func TestMemberRemovalThatCannotEndASignInStillRemovesTheOtherLogins(t *testing.T) {
+	e := newLoginEnv(t)
+	asSuperAdmin(t, e.testEnv)
+	_, bob := addMember(t, e.testEnv, "Bob", domain.RoleCollaborator, false)
+	e.seed(t, bob.ID, "lgn-work000000", "work", "bob@work.example.test")
+	signIns := &fakeLoginSignIns{endErr: errors.New("test: destroy unavailable")}
+	e.srv.cfg.LoginSignIns = signIns
+	if err := controlClient(t, e.testEnv).Call(protocol.MethodMemberRemove, protocol.MemberRemoveParams{MemberID: string(bob.ID)}, nil); err != nil {
+		t.Fatalf("member.remove: %v", err)
+	}
+	if len(signIns.reconciled) != 1 || signIns.reconciled[0] != bob.ID {
+		t.Fatalf("logins reconciled for %v; want Bob's, whose other logins go now", signIns.reconciled)
+	}
+	dir, _ := e.logins.Path(bob.ID, "claude", "lgn-work000000")
+	if _, err := os.Lstat(dir); err != nil {
+		t.Fatalf("Bob's login directory before reconcile: %v; want it left to reconcile, not removed whole", err)
 	}
 }
