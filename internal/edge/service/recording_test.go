@@ -340,6 +340,7 @@ func TestDeviceAuthAcrossRestart(t *testing.T) {
 		{"https://relay9.example.test", true},
 		{testRelay, false},
 		{testRelay + ":443", false},
+		{testRelay + ":0443", false},
 	} {
 		h := newRecordingHarness(t)
 		start := startDevice(t, h)

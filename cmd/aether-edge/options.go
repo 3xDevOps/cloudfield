@@ -357,7 +357,7 @@ func parseRetiredPairs(list, scheme, signin, relay string, more []edge.Pair, ret
 			if a, err := netip.ParseAddr(h); err == nil && a.Is6() {
 				return nil, fmt.Errorf("--retired-pairs: %s is an IPv6 address; a retired pair is named by host names", origin)
 			}
-			if !edgeproto.NoticeOrigin(edge.CanonicalOrigin(origin)) {
+			if c, _ := edgeproto.Origin(origin); !edgeproto.NoticeOrigin(c) {
 				return nil, fmt.Errorf("--retired-pairs: %s cannot be named in a signed notice to servers: write a host name of at most 253 bytes "+
 					"and a port without leading zeros", origin)
 			}
@@ -400,9 +400,13 @@ func parseRetiredPairs(list, scheme, signin, relay string, more []edge.Pair, ret
 	return out, nil
 }
 
-// host is the lowercase host name of a valid origin.
+// host is the host name of a valid origin in lowercase, or its IP address
+// in its standard form.
 func host(origin string) string {
 	u, _ := url.Parse(origin) // parseOptions checked it
+	if a, err := netip.ParseAddr(u.Hostname()); err == nil {
+		return a.String()
+	}
 	return strings.ToLower(u.Hostname())
 }
 

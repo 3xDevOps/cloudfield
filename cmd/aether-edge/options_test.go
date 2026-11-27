@@ -295,6 +295,7 @@ func TestOriginPairs(t *testing.T) {
 		{"https://auth.example.net https://edge.example.net fake-id-2", "is not <signin origin> <relay origin> <GitHub client id> <client secret file>"},
 		{"https://auth.example.net https://edge.example.test fake-id-2 " + secret, "has the host name edge.example.test of --relay-origin"},
 		{"https://auth.example.net https://AUTH.example.net:8443 fake-id-2 " + secret, "has the host name auth.example.net of https://auth.example.net"},
+		{"https://[2001:db8::1] https://[2001:0db8:0:0:0:0:0:1]:8443 fake-id-2 " + secret, "has the host name 2001:db8::1 of https://[2001:db8::1]"},
 		{"http://auth.example.net https://edge.example.net fake-id-2 " + secret, "--origin-pairs must be https://host[:port]"},
 		{"https://auth.example.net https://edge.example.net fake-id-2 " + filepath.Join(dir, "missing"), "the client secret file of https://auth.example.net"},
 		{"https://auth.example.net https://edge.example.net fake-id-2 " + blank, "holds no secret"},

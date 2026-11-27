@@ -75,7 +75,11 @@ func (s *Service) newRetired(retired []Retired) ([]Retired, error) {
 				return nil, fmt.Errorf("edge: retired origin: %w", err)
 			}
 			host := edgeproto.OriginHost(origin)
-			if s.byHost[host] != nil || s.retired[host] != nil {
+			served := false
+			for _, p := range s.pairs {
+				served = served || canonicalHost(host) == canonicalHost(p.signinHost) || canonicalHost(host) == canonicalHost(p.relayHost)
+			}
+			if served || s.retired[host] != nil {
 				return nil, fmt.Errorf("edge: the retired origin %s has the host name %s of another origin; each host name is served or retired once", origin, host)
 			}
 			signin := i == 0

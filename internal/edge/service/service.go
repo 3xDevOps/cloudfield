@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -138,13 +139,17 @@ func CanonicalOrigin(origin string) string {
 }
 
 // canonicalHostPort is u's host as CanonicalOrigin writes it, with its port
-// unless it is the default of u's scheme.
+// as a number unless it is the default of u's scheme.
 func canonicalHostPort(u *url.URL) string {
 	host := canonicalHost(u.Hostname())
 	if strings.Contains(host, ":") {
 		host = "[" + host + "]"
 	}
-	if p := u.Port(); p != "" && (u.Scheme != "https" || p != "443") && (u.Scheme != "http" || p != "80") {
+	p := u.Port()
+	if n, err := strconv.Atoi(p); err == nil {
+		p = strconv.Itoa(n)
+	}
+	if p != "" && (u.Scheme != "https" || p != "443") && (u.Scheme != "http" || p != "80") {
 		host += ":" + p
 	}
 	return host
@@ -291,7 +296,7 @@ type Service struct {
 // on first start.
 func New(cfg Config) (*Service, error) {
 	var pairs []*pair
-	byHost := map[string]*pair{}
+	byHost, byCanonicalHost := map[string]*pair{}, map[string]*pair{}
 	for i, cp := range append([]Pair{{cfg.SigninOrigin, cfg.RelayOrigin, cfg.GitHub}}, cfg.MorePairs...) {
 		noApp := "edge: no GitHub OAuth app is configured; set --github-client-id and its client secret"
 		if i > 0 {
@@ -302,10 +307,10 @@ func New(cfg Config) (*Service, error) {
 			return nil, err
 		}
 		for _, host := range []string{p.signinHost, p.relayHost} {
-			if other := byHost[host]; other != nil {
-				return nil, fmt.Errorf("edge: the origin pairs %s %s and %s %s share the host name %s", other.signin, other.relay, p.signin, p.relay, host)
+			if other := byCanonicalHost[canonicalHost(host)]; other != nil {
+				return nil, fmt.Errorf("edge: the origin pairs %s %s and %s %s share the host name %s", other.signin, other.relay, p.signin, p.relay, canonicalHost(host))
 			}
-			byHost[host] = p
+			byHost[host], byCanonicalHost[canonicalHost(host)] = p, p
 		}
 		pairs = append(pairs, p)
 	}

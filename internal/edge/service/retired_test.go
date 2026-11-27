@@ -428,17 +428,30 @@ func TestDeviceAuthBoundToPair(t *testing.T) {
 
 func TestCanonicalOrigin(t *testing.T) {
 	for in, want := range map[string]string{
-		"https://Auth.Example.test":      "https://auth.example.test",
-		"https://auth.example.test:443":  "https://auth.example.test",
-		"https://auth.example.test:8443": "https://auth.example.test:8443",
-		"http://127.0.0.1:443":           "http://127.0.0.1:443",
-		"http://localhost:80":            "http://localhost",
-		"https://[2001:DB8:0::1]:443":    "https://[2001:db8::1]",
-		"https://[2001:db8::1]:8443":     "https://[2001:db8::1]:8443",
+		"https://Auth.Example.test":       "https://auth.example.test",
+		"https://auth.example.test:443":   "https://auth.example.test",
+		"https://auth.example.test:8443":  "https://auth.example.test:8443",
+		"http://127.0.0.1:443":            "http://127.0.0.1:443",
+		"http://localhost:80":             "http://localhost",
+		"https://[2001:DB8:0::1]:443":     "https://[2001:db8::1]",
+		"https://[2001:db8::1]:8443":      "https://[2001:db8::1]:8443",
+		"https://auth.example.test:0443":  "https://auth.example.test",
+		"https://auth.example.test:08443": "https://auth.example.test:8443",
 	} {
 		if got := CanonicalOrigin(in); got != want {
 			t.Errorf("CanonicalOrigin(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestNewRefusesOneHostTwice refuses two pairs whose hosts are one IPv6
+// address written two ways.
+func TestNewRefusesOneHostTwice(t *testing.T) {
+	app := &OAuthApp{ClientID: "id", ClientSecret: "secret"}
+	_, err := New(Config{DataDir: t.TempDir(), SigninOrigin: testSignin, RelayOrigin: "https://[2001:db8::1]", GitHub: app,
+		MorePairs: []Pair{{SigninOrigin: testSignin2, RelayOrigin: "https://[2001:0db8:0:0:0:0:0:1]:8443", GitHub: app}}})
+	if err == nil || !strings.Contains(err.Error(), "share the host name 2001:db8::1") {
+		t.Errorf("two spellings of one IPv6 address: %v", err)
 	}
 }
 
