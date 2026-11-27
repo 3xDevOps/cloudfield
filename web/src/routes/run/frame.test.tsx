@@ -517,6 +517,24 @@ describe('run details', () => {
     expect(JSON.parse(localStorage.getItem('aether.ui')!).state.runDetailsWidth).toBe(560)
   })
 
+  it('shows a failed first read of agent messages with the server message and reads again on Retry', async () => {
+    let answer!: (page: { messages: [] }) => void
+    vi.mocked(api.coordMessagesList)
+      .mockRejectedValueOnce(new Error('coord.messages.list: server did not answer coord.messages.list within 1m0s'))
+      .mockImplementationOnce(() => new Promise((resolve) => { answer = resolve }))
+    open()
+    const panel = await details()
+    const section = await panel.findByRole('region', { name: 'Agent messages' })
+    const alert = within(section).getByRole('alert')
+    expect(within(alert).getByText('server did not answer coord.messages.list within 1m0s')).toBeDefined()
+    const reads = vi.mocked(api.coordMessagesList).mock.calls.length
+    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }))
+    expect((await within(alert).findByRole('button', { name: 'Retrying…' }) as HTMLButtonElement).disabled).toBe(true)
+    expect(api.coordMessagesList).toHaveBeenCalledTimes(reads + 1)
+    await act(async () => answer({ messages: [] }))
+    await waitFor(() => expect(panel.queryByRole('region', { name: 'Agent messages' })).toBeNull())
+  })
+
   it('lists what waits on the viewer, the notes and the run record', async () => {
     open({ pending_inputs: [{ id: 'in_1', session_id: 's', kind: 'question' }] })
     const panel = await details()

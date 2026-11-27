@@ -35,9 +35,10 @@ const (
 	realAgentCommand = "echo aether-$((40+2))"
 	realAgentOutput  = "aether-42"
 	realAgentAnswer  = "aether-turn-done"
-	// realAgentContract starts the reporting rules every launch route
-	// carries.
-	realAgentContract = "END EVERY TURN WITH EXACTLY ONE REPORT"
+	// realAgentContract starts the reporting rules an interactive launch
+	// carries, and backgroundAgentContract those of a Background one.
+	realAgentContract       = "REPORT ONCE A TURN"
+	backgroundAgentContract = "END EVERY TURN WITH EXACTLY ONE REPORT"
 	// codexCompactLimit is the token count past which the test's Codex
 	// compacts; a compaction step claims more than any model's context.
 	codexCompactLimit = 100000
@@ -450,9 +451,13 @@ func (a *realAgentRun) instructed(t *testing.T) {
 	if !noted {
 		t.Errorf("instruction missing: no run instructions note on the timeline")
 	}
+	contract := realAgentContract
+	if a.mode == domain.LaunchHeadless {
+		contract = backgroundAgentContract
+	}
 	bodies := a.model.bodies(a.marker)
-	if len(bodies) == 0 || !strings.Contains(bodies[0], realAgentContract) {
-		t.Errorf("instruction missing: the first request does not carry %q", realAgentContract)
+	if len(bodies) == 0 || !strings.Contains(bodies[0], contract) {
+		t.Errorf("instruction missing: the first request does not carry %q", contract)
 	}
 }
 
