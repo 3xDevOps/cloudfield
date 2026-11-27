@@ -51,6 +51,11 @@ type fakeEdge struct {
 	// does not verify with a policy violation, as a relay does, instead of
 	// failing the test.
 	refuseBadSignatures bool
+	// dropBadSignatures drops such a connection without a close frame;
+	// refusal, when set, refuses every enrollment with it as the relay's
+	// close reason.
+	dropBadSignatures bool
+	refusal           string
 	// readyKey, when set, is the edge key the ready names instead of pub;
 	// rawReady, when set, is sent instead of the ready.
 	readyKey ed25519.PublicKey
@@ -143,7 +148,13 @@ func (e *fakeEdge) control(w http.ResponseWriter, r *http.Request) {
 		if !e.refuseBadSignatures {
 			e.t.Errorf("enrollment signature: %v", err)
 		}
-		_ = c.Close(websocket.StatusPolicyViolation, err.Error())
+		if !e.dropBadSignatures {
+			_ = c.Close(websocket.StatusPolicyViolation, err.Error())
+		}
+		return
+	}
+	if e.refusal != "" {
+		_ = c.Close(websocket.StatusPolicyViolation, e.refusal)
 		return
 	}
 	e.mu.Lock()

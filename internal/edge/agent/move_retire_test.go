@@ -285,18 +285,38 @@ func TestMoveDoesNotRetryAnAnswer(t *testing.T) {
 	for name, answer := range map[string]func(e *fakeEdge){
 		"another key":      func(e *fakeEdge) { e.readyKey = otherKey },
 		"an invalid ready": func(e *fakeEdge) { e.rawReady = `{"type":"ready"}` },
+		"a refusal":        func(e *fakeEdge) { e.refusal = "relay: server is blocked at this edge" },
 	} {
 		from := retiredHost(t, "retired")
 		to := newFakeEdge(t)
 		servedAs(t, to, bare)
 		answer(to)
 		got, err := moveHeld(t, moveAgentAt(t, from, to.pub), bare)
-		if err == nil || strings.Contains(err.Error(), "; tried") {
+		if err == nil || strings.Contains(err.Error(), "; tried") || to.refusal != "" && !strings.Contains(err.Error(), to.refusal) {
 			t.Errorf("%s: move %+v, %v; want a refusal without a retry", name, got, err)
 		}
 		if hellos := len(to.hellos); hellos != 1 {
 			t.Errorf("%s: %d enrollments at the target, want 1", name, hellos)
 		}
+	}
+}
+
+// An edge that drops an enrollment without a close frame may have refused
+// its signature, so after a 410 that too is tried in the other spelling.
+func TestMoveRetriesADroppedEnrollment(t *testing.T) {
+	const target, bare = "https://target.example.test:443", "https://target.example.test"
+	from := retiredHost(t, "retired")
+	to := newFakeEdge(t)
+	servedAs(t, to, target)
+	to.dropBadSignatures = true
+	to.relayOrigins = []string{target}
+	signedNotices(to, to.priv, edgeproto.Notices{{State: edgeproto.NoticeRetired, Origin: from, Replacement: target}})
+	got, err := moveHeld(t, moveAgentAt(t, from, to.pub), bare)
+	if want := (Moved{To: target, Retired: true}); err != nil || got != want {
+		t.Fatalf("move: %+v, %v; want %+v", got, err, want)
+	}
+	if hellos := len(to.hellos); hellos != 2 {
+		t.Errorf("%d enrollments at the target, want 2", hellos)
 	}
 }
 

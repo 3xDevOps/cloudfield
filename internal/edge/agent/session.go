@@ -105,9 +105,9 @@ func (noAnswer) Is(target error) bool { return target == errNoAnswer }
 
 func (n noAnswer) Unwrap() error { return n.error }
 
-// errNoReady is an enrollment the edge closed after the hello without a
-// ready, as a relay does for a signature it does not verify. A ready that
-// came but does not decode, a timeout or a cancellation is not one.
+// errNoReady is an enrollment the edge refused after the hello for its
+// signature, or dropped without a ready. Any other refusal, a ready that
+// does not decode, a timeout or a cancellation is not one.
 var errNoReady = errors.New("no ready")
 
 type noReady struct{ error }
@@ -266,7 +266,12 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn, origin string,
 		return enrollment{}, fmt.Errorf("send hello: %w", err)
 	}
 	m, err = readMessage(ctx, c, handshakeTimeout)
-	if err != nil && ctx.Err() == nil && (websocket.CloseStatus(err) != -1 || errors.Is(err, io.EOF)) {
+	var closed websocket.CloseError
+	refusedSignature := errors.As(err, &closed) && closed.Code == websocket.StatusPolicyViolation &&
+		strings.HasPrefix(closed.Reason, edgeproto.ErrEnrollmentSignature.Error()+": ")
+	// A bare EOF is the one ambiguous case: an edge that drops the
+	// connection without a close frame may have refused the signature.
+	if err != nil && ctx.Err() == nil && (refusedSignature || websocket.CloseStatus(err) == -1 && errors.Is(err, io.EOF)) {
 		return enrollment{}, fmt.Errorf("read ready: %w", noReady{err})
 	}
 	if err != nil {
