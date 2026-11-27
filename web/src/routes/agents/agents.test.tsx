@@ -325,7 +325,7 @@ describe('Claude Code logins', () => {
     expect(within(claudeRow()).getAllByRole('button', { name: 'Add login' })).toHaveLength(1)
     await waitFor(() => expect(logins.textContent).toContain('Your account is shared with Bob'))
     expect(claudeRow().textContent).toContain('Installed · 2 logins')
-    expect(within(claudeRow()).queryByRole('link')).toBeNull()
+    expect(within(claudeRow()).getAllByRole('link').map((link) => link.textContent)).toEqual(['How logins work'])
   })
 
   it('keeps a sign-in left running on the Claude Code row until it ends, and returns to it, with one wait on its result', async () => {

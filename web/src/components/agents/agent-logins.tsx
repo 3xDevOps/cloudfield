@@ -27,6 +27,8 @@ import { stillWaiting, usePastDeadline } from '@/store/optimistic'
 /** Only Claude Code has added logins. */
 export const loginAgent = 'claude'
 
+const loginsGuide = 'https://github.com/3xDevOps/cloudfield/blob/main/docs/agents.md#several-logins'
+
 export type LoginsClient = Pick<Api, 'agentLoginRename' | 'agentLoginRemove' | 'agentLoginOrder' | 'agentLoginAutomatic' | 'agentLoginShare' | 'accountUsage'>
 
 /** The signed-in member's logins: a read made for another identity never shows. */
@@ -404,6 +406,7 @@ export function LoginList({ logins, sharedWith, sharedError, client, onChanged }
           ? ` Your account is shared with ${names(sharedWith)}: logins on for shares serve their sessions too.`
           : ' Your account is not shared with anyone.')}
         {!sharedWith && sharedError && <> Whom your account is shared with was not read: <span className="font-code">{sharedError}</span></>}
+        {' '}<a href={loginsGuide} target="_blank" rel="noreferrer" className="text-accent underline-offset-2 hover:underline">How logins work</a>
       </p>
       {error && <Callout tone="failed" role="alert"><span className="font-code">{error}</span></Callout>}
       <ol aria-label="Claude Code logins in priority order" className="flex flex-col divide-y divide-seam">

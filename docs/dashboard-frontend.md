@@ -6752,7 +6752,8 @@ moves onto it while Automatic is off; one already on it keeps running."; or "A s
 kept as an API key or a Console profile, which has no file a share mounts.
 Nothing is said while `account.list` is unanswered, whose error the list's
 lead shows verbatim, or when the account is shared with nobody, which the
-lead says. The badge's tooltip and accessible name name the payer, "Billed
+lead says. The lead ends with **How logins work**, a link to
+[agents.md](agents.md#several-logins). The badge's tooltip and accessible name name the payer, "Billed
 per use to <organisation>"; its
 **Automatic** (`agent.login.automatic`) and **Use for shares**
 (`agent.login.share`) switches, each a row of its own; and its usage windows

@@ -77,6 +77,7 @@ describe('login list', () => {
     expect(within(row('default')).getByRole('button', { name: 'Move default down' }).className).toContain('shadow-button')
     expect(within(row('console')).getByRole('button', { name: 'Move console down' })).toHaveProperty('disabled', true)
     expect(screen.getByRole('region', { name: 'Claude Code logins' }).textContent).toContain('Sessions start on the first automatic login in your order with usage left, and move to the first other one with usage left when it runs out.')
+    expect(within(screen.getByRole('region', { name: 'Claude Code logins' })).getByRole('link', { name: 'How logins work' }).getAttribute('href')).toBe('https://github.com/3xDevOps/cloudfield/blob/main/docs/agents.md#several-logins')
   })
 
   it('says when the account is shared with nobody', () => {
