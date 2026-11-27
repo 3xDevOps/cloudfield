@@ -389,13 +389,22 @@ func listen(t *testing.T) net.Listener {
 // gives every call an empty result. It counts the connections it accepts.
 func serveControl(t *testing.T, ln net.Listener, answer func(method string) json.RawMessage) *atomic.Int32 {
 	t.Helper()
+	connections, _ := serveControlChannels(t, ln, answer, false)
+	return connections
+}
+
+// serveControlChannels is serveControl counting the control channels too.
+// Like the server, a channel answers call after call; with oneCall it ends
+// after its first answer, as a channel the server gave up on does.
+func serveControlChannels(t *testing.T, ln net.Listener, answer func(method string) json.RawMessage, oneCall bool) (connections, channels *atomic.Int32) {
+	t.Helper()
 	signer, err := ssh.NewSignerFromKey(testhome.Ed25519Key(t))
 	if err != nil {
 		t.Fatal(err)
 	}
 	cfg := &ssh.ServerConfig{NoClientAuth: true}
 	cfg.AddHostKey(signer)
-	var connections atomic.Int32
+	connections, channels = new(atomic.Int32), new(atomic.Int32)
 	go func() {
 		for {
 			raw, err := ln.Accept()
@@ -404,7 +413,7 @@ func serveControl(t *testing.T, ln net.Listener, answer func(method string) json
 			}
 			go func() {
 				defer func() { _ = raw.Close() }()
-				conn, channels, requests, err := ssh.NewServerConn(raw, cfg)
+				conn, incomings, requests, err := ssh.NewServerConn(raw, cfg)
 				if err != nil {
 					return
 				}
@@ -415,7 +424,7 @@ func serveControl(t *testing.T, ln net.Listener, answer func(method string) json
 						_ = req.Reply(req.Type == "keepalive@openssh.com", nil)
 					}
 				}()
-				for incoming := range channels {
+				for incoming := range incomings {
 					channel, requests, err := incoming.Accept()
 					if err != nil {
 						return
@@ -428,26 +437,32 @@ func serveControl(t *testing.T, ln net.Listener, answer func(method string) json
 								continue
 							}
 							go ssh.DiscardRequests(requests)
-							var rpc protocol.Request
-							if json.NewDecoder(channel).Decode(&rpc) != nil {
-								return
+							channels.Add(1)
+							decoder := json.NewDecoder(channel)
+							for {
+								var rpc protocol.Request
+								if decoder.Decode(&rpc) != nil {
+									return
+								}
+								result := json.RawMessage(`{}`)
+								if answer != nil {
+									result = answer(rpc.Method)
+								}
+								if result == nil {
+									return
+								}
+								_ = json.NewEncoder(channel).Encode(protocol.Response{JSONRPC: "2.0", ID: rpc.ID, Result: result})
+								if oneCall {
+									return
+								}
 							}
-							result := json.RawMessage(`{}`)
-							if answer != nil {
-								result = answer(rpc.Method)
-							}
-							if result == nil {
-								return
-							}
-							_ = json.NewEncoder(channel).Encode(protocol.Response{JSONRPC: "2.0", ID: rpc.ID, Result: result})
-							return
 						}
 					}()
 				}
 			}()
 		}
 	}()
-	return &connections
+	return connections, channels
 }
 
 // silencer relays TCP to target, pausing pace after each 4 KiB toward the

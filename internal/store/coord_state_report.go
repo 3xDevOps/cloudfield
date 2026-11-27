@@ -24,6 +24,8 @@ type CoordStateReport struct {
 	// Until is a waiting report's conditions, canonical.
 	Until     []string
 	CreatedAt time.Time
+	// Applied is set on a loaded receipt whose report took effect.
+	Applied bool
 }
 
 // queryExecer is a *sql.DB or a *sql.Tx.
@@ -88,9 +90,9 @@ func getCoordStateReport(ctx context.Context, db queryExecer, run domain.RunID, 
 		until     string
 	)
 	err := db.QueryRowContext(ctx,
-		`SELECT outcome, waiting_for, summary, until_conditions, created_at FROM coord_state_reports
+		`SELECT outcome, waiting_for, summary, until_conditions, created_at, applied_at IS NOT NULL FROM coord_state_reports
 		 WHERE run_id = ? AND idempotency_key = ?`, run, key,
-	).Scan(&report.Outcome, &report.WaitingFor, &report.Summary, &until, &createdAt)
+	).Scan(&report.Outcome, &report.WaitingFor, &report.Summary, &until, &createdAt, &report.Applied)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
 	}

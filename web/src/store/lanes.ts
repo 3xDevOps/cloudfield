@@ -1,3 +1,4 @@
+import { isReread } from '@/lib/events'
 import type { Event } from '@/lib/types'
 import type { SliceCreator } from '@/store/slice'
 
@@ -82,7 +83,7 @@ export const createLanesSlice: SliceCreator<LanesSlice> = (set, get) => ({
   },
   appendLaneEvent: (event) => {
     const s = get()
-    if (s.laneViews === 0 || !laneEventTypes.includes(event.type)) return
+    if (s.laneViews === 0 || !laneEventTypes.includes(event.type) || isReread(event)) return
     const history = s.laneHistory[event.workspace_id]
     if (!history) return
     if (history.events.some((e) => e.seq === event.seq)) return

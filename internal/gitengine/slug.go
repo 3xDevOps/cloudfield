@@ -61,6 +61,10 @@ const (
 	legacyRunBranchPrefix = "aether/run-"
 )
 
+func isRunBranch(branch string) bool {
+	return strings.HasPrefix(branch, runBranchPrefix) || strings.HasPrefix(branch, legacyRunBranchPrefix)
+}
+
 // runBranch is the run branch name: <prefix><slug>-<id>. The task leads
 // so the branch reads as what it is in `git branch` output, and the ID
 // trails as the disambiguator. Callers pass a short ID; uniqueRunBranch

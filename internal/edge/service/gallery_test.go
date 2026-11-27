@@ -92,6 +92,10 @@ func galleryStates(t *testing.T) []galleryState {
 	}
 	out := func(title string, data any) view { return view{Title: title, Data: data} }
 	withErr := func(v view, msg string) view { v.Error = msg; return v }
+	retiring := func(v view, address, date string, signin bool) view {
+		v.Retiring = &banner{Address: address, Date: date, SignIn: signin}
+		return v
+	}
 	join := struct {
 		App  template.URL
 		Link string
@@ -127,6 +131,10 @@ func galleryStates(t *testing.T) []galleryState {
 		{"account-wrong-confirm", "account_page", 400, withErr(in(me, "Account", acct(sum, true)), "the confirmation does not name this account: type octo-dev")},
 		{"account-deleted", "account_deleted", 200, out("Account deleted", sum)},
 		{"join", "join", 200, out("Join a Cloudfield server", join)},
+		{"join-retiring", "join", 200, retiring(out("Join a Cloudfield server", join), "https://relay2.example.test", "2027-03-01", false)},
+		{"signin-retiring", "signin", 200, retiring(out("Sign in", signinData{GitHub: "/signin/github?next=%2Fservers"}), "https://signin2.example.test", "", true)},
+		{"servers-retiring", "servers", 200, retiring(in(me, "Servers", rows), "https://signin2.example.test", "2027-03-01", true)},
+		{"device-retiring", "device", 200, retiring(in(me, "Sign in a device", nil), "https://signin2.example.test", "2027-03-01", true)},
 		{"error-csrf", "error", 403, withErr(in(me, http.StatusText(http.StatusForbidden), nil), "this form did not come from this edge page or your session changed; reload the page and try again")},
 		{"error-github", "error", 403, withErr(out(http.StatusText(http.StatusForbidden), nil), "GitHub sign-in failed: access_denied The user has denied your application access.")},
 		{"error-server", "error", 500, withErr(out(http.StatusText(500), nil), "edge: store: database is locked")},
@@ -159,6 +167,15 @@ func TestEveryPageRenders(t *testing.T) {
 			}
 			if n := strings.Count(body, "<h1"); n != 1 {
 				t.Errorf("%d h1 elements, want 1", n)
+			}
+			if b := st.view.Retiring; b != nil && !strings.Contains(body, "</p>\n<h1>") {
+				t.Errorf("page does not show the retiring banner for %s on its own line", b.Address)
+			}
+			if st.view.Retiring == nil && !strings.Contains(body, "<main>\n<h1>") {
+				t.Error("a page with nothing retiring does not open <main> as it did before the banner existed")
+			}
+			if b := st.view.Retiring; b != nil && !strings.Contains(body, "Its new address is <code>"+b.Address+"</code>") {
+				t.Errorf("page does not show the retiring banner for %s", b.Address)
 			}
 			if st.view.Error != "" && !strings.Contains(body, html.EscapeString(st.view.Error)) {
 				t.Errorf("page does not show the error %q", st.view.Error)

@@ -171,7 +171,11 @@ func (s *Service) reportState(ctx context.Context, run domain.RunID, p protocol.
 		nextAction = "answer the agent's question"
 		err = s.cfg.Outcomes.ReportNeedsInput(ctx, run, id, reportText(summary), receipt.CreatedAt)
 	case protocol.CoordOutcomeAnswered:
-		err = s.cfg.Outcomes.ReportAnswered(ctx, run, id, reportReason(summary), receipt.CreatedAt)
+		// A retry of a report that took effect may arrive in a later turn,
+		// where the scheduler would take it for that turn's.
+		if !receipt.Applied {
+			err = s.cfg.Outcomes.ReportAnswered(ctx, run, id, reportReason(summary), receipt.CreatedAt)
+		}
 	default:
 		err = s.cfg.Outcomes.ReportWaiting(ctx, run, id, p.WaitingFor, reportReason(summary), receipt.CreatedAt)
 	}

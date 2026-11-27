@@ -130,7 +130,7 @@ func serve(args []string) (err error) {
 
 	svc, err := edge.New(edge.Config{
 		DataDir: o.dataDir, SigninOrigin: o.signinOrigin, RelayOrigin: o.relayOrigin,
-		GitHub: o.github, MorePairs: o.morePairs, OpenAIChallenge: o.openAIChallenge, Reviewer: o.reviewer,
+		GitHub: o.github, MorePairs: o.morePairs, Retiring: o.retiring, OpenAIChallenge: o.openAIChallenge, Reviewer: o.reviewer,
 	})
 	if err != nil {
 		return err
@@ -209,6 +209,9 @@ func serve(args []string) (err error) {
 	slog.Info("aether-edge: serving", "signin", o.signinOrigin, "relay", o.relayOrigin, "metrics", metricsLn.Addr())
 	for _, p := range o.morePairs {
 		slog.Info("aether-edge: serving", "signin", p.SigninOrigin, "relay", p.RelayOrigin)
+	}
+	for _, r := range o.retiring {
+		slog.Info("aether-edge: retiring", "relay", r.RelayOrigin, "replacement", r.Replacement, "date", r.Date)
 	}
 	if o.reviewer != nil {
 		slog.Warn("aether-edge: reviewer account on", "login", o.reviewer.Login, "server", o.reviewer.ServerID,

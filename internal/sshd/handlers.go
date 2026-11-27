@@ -20,6 +20,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/linear"
 	"github.com/3xDevOps/cloudfield/internal/permissions"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/runtime"
 	"github.com/3xDevOps/cloudfield/internal/scheduler"
 	"github.com/3xDevOps/cloudfield/internal/store"
 )
@@ -281,6 +282,7 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 
 func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protocol.RunLaunchParams, mode domain.LaunchMode, policy domain.AccountFallback,
 	created func(domain.RunID), skipped *[]protocol.SkippedAccount) (*domain.Run, *protocol.Error) {
+	ctx = runtime.WithSteps(ctx)
 	measured, err := fallback.Measure(ctx, s.cfg.Store, s.cfg.Services.Usage, member, p.AccountMemberID, p.Harness, policy)
 	if err != nil {
 		return nil, rpcError(err)
@@ -418,7 +420,7 @@ func (s *Server) runSnapshot(run *domain.Run) protocol.Run {
 		out.Paused = s.cfg.Runs.Paused(run.ID)
 		if sleep := s.cfg.Runs.Sleep(run.ID); sleep.AsleepSince != nil {
 			since := sleep.AsleepSince.UTC().Format(time.RFC3339Nano)
-			out.AsleepSince, out.AsleepSaved, out.Waking, out.WakeError = &since, sleep.Saved, sleep.Waking, sleep.WakeError
+			out.AsleepSince, out.AsleepSaved, out.AsleepInMemory, out.Waking, out.WakeError = &since, sleep.Saved, sleep.InMemory, sleep.Waking, sleep.WakeError
 		}
 		out.Cause = string(s.cfg.Runs.Cause(run.ID, run.Activity))
 		out.Wait = s.cfg.Runs.Wait(run.ID, run.Activity)

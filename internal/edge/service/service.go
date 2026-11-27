@@ -44,6 +44,8 @@ type Config struct {
 	// request is served by the pair its host name belongs to, and no
 	// pair is preferred.
 	MorePairs []Pair
+	// Retiring marks pairs retiring, each by its relay origin.
+	Retiring []Retiring
 	// Clock is time.Now when nil.
 	Clock func() time.Time
 	// OpenAIChallenge is the token the relay origin serves at
@@ -81,6 +83,13 @@ type Pair struct {
 	GitHub       *OAuthApp
 }
 
+// Retiring marks the served pair whose relay origin is RelayOrigin
+// retiring, in favour of the served pair whose relay origin is
+// Replacement. Date, YYYY-MM-DD or empty, is only shown.
+type Retiring struct {
+	RelayOrigin, Replacement, Date string
+}
+
 // pair is a Pair as the Service serves it.
 type pair struct {
 	signin, relay         string
@@ -89,6 +98,13 @@ type pair struct {
 	githubAPI             string
 	// deviceLogins counts device tokens issued on the sign-in origin.
 	deviceLogins atomic.Uint64
+	// retiring is set while the pair is retiring.
+	retiring *retiring
+}
+
+// retiring is a retiring pair's replacement, by both its origins.
+type retiring struct {
+	relay, signin, date string
 }
 
 type pairKey struct{}
@@ -239,6 +255,17 @@ func New(cfg Config) (*Service, error) {
 		}
 		pairs = append(pairs, p)
 	}
+	byRelay := map[string]*pair{}
+	for _, p := range pairs {
+		byRelay[p.relay] = p
+	}
+	for _, r := range cfg.Retiring {
+		old, repl := byRelay[r.RelayOrigin], byRelay[r.Replacement]
+		if old == nil || repl == nil || old == repl {
+			return nil, fmt.Errorf("edge: retiring %s in favour of %s: both must be relay origins of two pairs this edge serves", r.RelayOrigin, r.Replacement)
+		}
+		old.retiring = &retiring{relay: repl.relay, signin: repl.signin, date: r.Date}
+	}
 	if cfg.DataDir == "" {
 		return nil, errors.New("edge: data directory is required")
 	}
@@ -337,6 +364,17 @@ func (s *Service) DeviceLogins() map[string]uint64 {
 	return out
 }
 
+// notices are the unsigned notices of the retiring pairs.
+func (s *Service) notices() []edgeproto.Notice {
+	var out []edgeproto.Notice
+	for _, p := range s.pairs {
+		if p.retiring != nil {
+			out = append(out, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: p.relay, Replacement: p.retiring.relay, Date: p.retiring.date})
+		}
+	}
+	return out
+}
+
 // moreRelayOrigins are the relay origins of Config.MorePairs.
 func (s *Service) moreRelayOrigins() []string {
 	var out []string
@@ -417,6 +455,9 @@ func (s *Service) Handler() http.Handler {
 			return
 		}
 		r = r.WithContext(context.WithValue(r.Context(), pairKey{}, p))
+		if p.retiring != nil {
+			w.Header().Set(edgeproto.HeaderRetiring, edgeproto.FormatRetiring(p.retiring.relay, p.retiring.date))
+		}
 		if host == p.signinHost {
 			if routes(relay, r) {
 				misdirected(w, r, p.relay)

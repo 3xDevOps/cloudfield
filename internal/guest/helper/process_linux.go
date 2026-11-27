@@ -128,10 +128,11 @@ func newProcesses(cgroup *os.File) *processes {
 // both output streams to a file instead of the process's buffers; root runs
 // the process chrooted there, with an absolute program in it; cgroup starts
 // it in that cgroup instead of the session's; newIPC gives it an IPC
-// namespace of its own.
+// namespace of its own; passed is a file the program inherits as fd 5.
 type spawnSpec struct {
 	guest.ProcessSpec
-	log *os.File
+	log    *os.File
+	passed *os.File
 	// cgroup, when set, is the directory the process starts in instead of
 	// the session cgroup.
 	cgroup *os.File
@@ -284,9 +285,12 @@ func (t *processes) start(p *process, spec spawnSpec, program, dir string, env [
 				attr.Cloneflags |= syscall.CLONE_NEWNS
 				argv = append([]string{"aether-internal", "guest", enterRootArg, spec.root, strconv.Itoa(uid), strconv.Itoa(gid), dir, program}, spec.Argv...)
 			}
-			fds := make([]uintptr, 0, len(child)+2)
+			fds := make([]uintptr, 0, len(child)+3)
 			for _, f := range append(child, statusW, environ) {
 				fds = append(fds, f.Fd())
+			}
+			if spec.passed != nil {
+				fds = append(fds, spec.passed.Fd())
 			}
 			pid, err = syscall.ForkExec("/proc/self/exe", argv, &syscall.ProcAttr{Dir: "/", Files: fds, Sys: attr})
 			_ = environ.Close()
