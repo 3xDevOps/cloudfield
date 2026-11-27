@@ -87,8 +87,8 @@ type harness struct {
 	pairBAddrs      [2]string
 	// retiring, when set, is what --retiring-pairs names.
 	retiring []edge.Retiring
-	// recordOrigins sets edge.Config.RecordOrigins, which retiring or
-	// retired also sets, as in aether-edge serve.
+	// recordOrigins sets edge.Config.RecordOrigins, which retiring also
+	// sets, as in aether-edge serve.
 	recordOrigins bool
 	// retired, when set, is what --retired-pairs names.
 	retired []edge.Retired
@@ -198,7 +198,7 @@ func (h *harness) startEdge() {
 		DataDir: h.edgeDir, SigninOrigin: first.SigninOrigin, RelayOrigin: first.RelayOrigin, MorePairs: morePairs,
 		Retiring: h.retiring, Retired: h.retired,
 		GitHub: first.GitHub, Clock: h.now, ConnectorClientHosts: []string{"127.0.0.1"}, Reviewer: h.reviewer,
-		RecordOrigins: h.recordOrigins || h.retiring != nil || h.retired != nil,
+		RecordOrigins: h.recordOrigins || h.retiring != nil,
 	})
 	if err != nil {
 		t.Fatal(err)

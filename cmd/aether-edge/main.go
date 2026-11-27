@@ -136,7 +136,7 @@ func serve(args []string) (err error) {
 	svc, err := edge.New(edge.Config{
 		DataDir: o.dataDir, SigninOrigin: o.signinOrigin, RelayOrigin: o.relayOrigin,
 		GitHub: o.github, MorePairs: o.morePairs, Retiring: o.retiring, Retired: o.retired, OpenAIChallenge: o.openAIChallenge, Reviewer: o.reviewer,
-		RecordOrigins: len(o.retiring) > 0 || len(o.retired) > 0,
+		RecordOrigins: len(o.retiring) > 0,
 	})
 	if err != nil {
 		return err

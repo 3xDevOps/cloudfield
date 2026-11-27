@@ -65,7 +65,8 @@ type Config struct {
 	Reviewer *ReviewerAccount
 	// RecordOrigins has the edge record which origin pair each server,
 	// device token, session and connector request is on, for aether-edge
-	// retiring. Retired turns it on too.
+	// retiring. aether-edge serve sets it with --retiring-pairs; the edge
+	// records whenever Retired is set, whatever RecordOrigins says.
 	RecordOrigins bool
 }
 
