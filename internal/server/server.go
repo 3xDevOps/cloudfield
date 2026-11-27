@@ -22,6 +22,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/collab"
 	"github.com/3xDevOps/cloudfield/internal/connector"
 	"github.com/3xDevOps/cloudfield/internal/control"
+	"github.com/3xDevOps/cloudfield/internal/ctxlock"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	edgeagent "github.com/3xDevOps/cloudfield/internal/edge/agent"
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
@@ -509,7 +510,7 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 	}); err != nil {
 		return nil, err
 	}
-	authMu := &sync.Mutex{}
+	authMu := &ctxlock.Mutex{}
 	if s.evidence, err = evidence.New(evidence.Config{
 		Store:           s.db,
 		Git:             s.git,

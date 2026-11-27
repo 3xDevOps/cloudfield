@@ -588,6 +588,9 @@ func TestEnhancedRunPermissionAnsweredOnce(t *testing.T) {
 	if pending[0].Kind != "permission" {
 		t.Fatalf("pending %+v", pending)
 	}
+	if outcome, err := e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "then say pong"}, false, nil); err != nil || outcome != acphost.OutcomeQueued {
+		t.Fatalf("Inject beside the request = %q, %v, want queued", outcome, err)
+	}
 	if err := e.sched.ACPAnswer(run.ID, pending[0].ID, "allow", nil); err != nil {
 		t.Fatal(err)
 	}
@@ -652,7 +655,7 @@ func TestEnhancedRunCancel(t *testing.T) {
 	e, _ := newACPEnv(t)
 	run := e.launchACP(t, acpmock.PromptWait)
 	e.waitAgentWorking(t, run.ID)
-	if err := e.sched.ACPCancel(t.Context(), run.ID); err != nil {
+	if err := e.interrupt(t, run); err != nil {
 		t.Fatal(err)
 	}
 	waitItems(t, e.sched, run.ID, "cancelled turn", turnEnded("cancelled", 1))

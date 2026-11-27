@@ -23,20 +23,27 @@ func init() {
 		usage: "cloudfield session <task> [flags]\n" +
 			"cloudfield session - [flags]\n" +
 			"cloudfield session --template <name> [--param <name=value>]... [--workspace <name>]\n" +
-			"cloudfield session switch <session-id> --mode standard|enhanced",
+			"cloudfield session switch <session-id> --mode standard|enhanced\n" +
+			"cloudfield session set <session-id> [--model <model>] [--effort <level>]",
 		example: "cloudfield session \"fix the flaky login test\" --agent claude\n" +
 			"cloudfield session \"review this dependency upgrade\" --agent claude --permission isolated\n" +
 			"cloudfield session - --agent codex --idempotency-key fix-login-1 < task.md\n" +
 			"cloudfield session --template nightly-audit\n" +
-			"cloudfield session switch run-d6ay38tj8j --mode enhanced",
+			"cloudfield session switch run-d6ay38tj8j --mode enhanced\n" +
+			"cloudfield session set run-d6ay38tj8j --model opus --effort high",
 		flags: true,
 		run:   runRun,
 	})
 }
 
 func runRun(args []string) error {
-	if len(args) > 1 && args[0] == "switch" && !strings.HasPrefix(args[1], "-") {
-		return runSwitch(args[1:])
+	if len(args) > 1 && !strings.HasPrefix(args[1], "-") {
+		switch args[0] {
+		case "switch":
+			return runSwitch(args[1:])
+		case "set":
+			return runSet(args[1:])
+		}
 	}
 	fs := newFlagSet("session")
 	agent := fs.String("agent", "", "agent name")
@@ -91,7 +98,7 @@ func runRun(args []string) error {
 		return fmt.Errorf("invalid --children %q: want on or off", *children)
 	}
 	if *agent == "" || fs.NArg() > 1 || (task == "" && *mode == "headless") {
-		return fmt.Errorf("usage: cloudfield session [\"task\"|-] --agent <name> [--mode standard|enhanced|background] [--model <model>] [--effort <level>] [--permission root|default|isolated] [--workspace] [--account <member-id>] [--fallback <member-id>,... | --no-fallback] [--cached-base <full-sha>] [--repo <workspace> ...] [--children on|off] [--linear-issue <url>] [--idempotency-key <key>]\n   (a task is required with --mode background; - reads it from stdin)\n   or: cloudfield session --template <name> [--param k=v] [--workspace]\n   or: cloudfield session switch <session-id> --mode standard|enhanced")
+		return fmt.Errorf("usage: cloudfield session [\"task\"|-] --agent <name> [--mode standard|enhanced|background] [--model <model>] [--effort <level>] [--permission root|default|isolated] [--workspace] [--account <member-id>] [--fallback <member-id>,... | --no-fallback] [--cached-base <full-sha>] [--repo <workspace> ...] [--children on|off] [--linear-issue <url>] [--idempotency-key <key>]\n   (a task is required with --mode background; - reads it from stdin)\n   or: cloudfield session --template <name> [--param k=v] [--workspace]\n   or: cloudfield session switch <session-id> --mode standard|enhanced\n   or: cloudfield session set <session-id> [--model <model>] [--effort <level>]")
 	}
 	fromStdin := task == "-"
 	task, err = stdinText(task, "task", os.Stdin)
@@ -146,8 +153,8 @@ func runRun(args []string) error {
 
 var errInterrupted = errors.New("interrupted")
 
-// The server finishes a call the user interrupts, so callInterruptibly
-// does not wait for it.
+// The server finishes a call the user interrupts, except a launch it had
+// not yet admitted, so callInterruptibly does not wait for it.
 func callInterruptibly(c *protocol.Client, method string, params, result any) error {
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
@@ -168,7 +175,7 @@ func launchError(err error, params protocol.RunLaunchParams, fromStdin bool) err
 	var rpcErr *protocol.Error
 	switch {
 	case errors.Is(err, errInterrupted):
-		return &exitStatusError{code: 130, err: fmt.Errorf("%w; the launch continues on the server. aether sessions lists it, and aether kill <session-id> stops it once it is listed.\nto get its session id without launching twice, run:\n  %s", errInterrupted, launchCommand(params, fromStdin))}
+		return &exitStatusError{code: 130, err: fmt.Errorf("%w; a launch the server had already accepted keeps starting: aether sessions lists it, and aether kill <session-id> stops it once it is listed.\nto get its session id, or to launch it once if the server had not accepted it, run:\n  %s", errInterrupted, launchCommand(params, fromStdin))}
 	case errors.As(err, &rpcErr):
 		return cachedBaseLaunchError(err, params, fromStdin)
 	}

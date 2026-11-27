@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -152,7 +153,7 @@ func TestSendStartsATurnOrSteersTheRunningOne(t *testing.T) {
 			t.Fatalf("Send(%q): %v", text, err)
 		}
 	}
-	srv.EndTurn("main")
+	srv.EndTurn("main", "completed")
 	if err := c.Send(ctx, "next"); err != nil {
 		t.Fatal(err)
 	}
@@ -168,6 +169,42 @@ func TestSendStartsATurnOrSteersTheRunningOne(t *testing.T) {
 	}
 	if err := json.Unmarshal(steers[0], &steer); err != nil || steer.ExpectedTurnID != "turn-1" {
 		t.Fatalf("steer = %s, want expectedTurnId turn-1", steers[0])
+	}
+}
+
+// The last message is a completed turn's last agent message: a turn cut off
+// with Esc has none and reads as interrupted, and a list the app-server
+// refuses is an error. It is read from the thread asked for, whichever one
+// the terminal shows.
+func TestLastMessageNeedsACompletedTurn(t *testing.T) {
+	srv := codexmock.New()
+	c, _ := dial(t, srv, "")
+	srv.StartThread("main", false, "")
+	waitThread(t, c)
+	ctx := t.Context()
+	if got, _, err := c.LastMessage(ctx, "main"); err == nil {
+		t.Fatalf("last message before any turn = %q, want the app-server's refusal", got)
+	}
+	for _, tc := range []struct {
+		status, want string
+		interrupted  bool
+	}{{"interrupted", "", true}, {"completed", "done", false}} {
+		if err := c.Send(ctx, "go"); err != nil {
+			t.Fatal(err)
+		}
+		srv.EndTurn("main", tc.status, "looking", "done")
+		if got, interrupted, err := c.LastMessage(ctx, "main"); err != nil || got != tc.want || interrupted != tc.interrupted {
+			t.Fatalf("last message of a turn that %s = %q, interrupted %v, %v; want %q, %v", tc.status, got, interrupted, err, tc.want, tc.interrupted)
+		}
+	}
+	srv.StartThread("second", false, "")
+	for deadline := time.Now().Add(5 * time.Second); c.Thread() != "second"; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the client never followed the terminal's new thread")
+		}
+	}
+	if got, _, err := c.LastMessage(ctx, "main"); err != nil || got != "done" {
+		t.Fatalf("last message of the thread the terminal left = %q, %v; want done", got, err)
 	}
 }
 
@@ -188,6 +225,80 @@ func TestSendStartsATurnWhenTheSteerMisses(t *testing.T) {
 	if got := texts(t, srv.Requests("turn/start")); !slices.Equal(got, []string{"first", "late"}) {
 		t.Fatalf("turn/start inputs = %q", got)
 	}
+}
+
+func TestInterruptStopsTheRunningTurn(t *testing.T) {
+	srv := codexmock.New()
+	c, changes := dial(t, srv, "")
+	srv.StartThread("main", false, "")
+	waitThread(t, c)
+	if err := interrupt(t, c); err != nil {
+		t.Fatalf("Interrupt with no turn running: %v", err)
+	}
+	if got := srv.Requests("turn/interrupt"); len(got) != 0 {
+		t.Fatalf("turn/interrupt with no turn running = %s", got)
+	}
+	if err := c.Send(t.Context(), "first"); err != nil {
+		t.Fatal(err)
+	}
+	if got := next(t, changes); got != (statusChange{"main", codexapp.Working}) {
+		t.Fatalf("status change = %+v, want the turn working", got)
+	}
+	if err := interrupt(t, c); err != nil {
+		t.Fatalf("Interrupt: %v", err)
+	}
+	if got := next(t, changes); got != (statusChange{"main", codexapp.Idle}) {
+		t.Fatalf("status change = %+v, want the thread idle", got)
+	}
+	interrupts := srv.Requests("turn/interrupt")
+	if len(interrupts) != 1 || string(interrupts[0]) != `{"threadId":"main","turnId":"turn-1"}` {
+		t.Fatalf("turn/interrupt = %s, want one for turn-1 of main", interrupts)
+	}
+}
+
+func TestInterruptThatCannotFindTheRunningTurnShowsTheAppServersError(t *testing.T) {
+	srv := codexmock.New()
+	c, changes := dial(t, srv, "")
+	srv.StartThread("main", false, "")
+	srv.SetStatus("main", "active")
+	next(t, changes)
+	err := interrupt(t, c)
+	if err == nil || !strings.Contains(err.Error(), "thread main is not materialized yet") {
+		t.Fatalf("Interrupt of a working thread whose turns cannot be listed = %v, want the app-server's error", err)
+	}
+}
+
+func TestInterruptOfATurnThatEndedFirstIsNotAFailure(t *testing.T) {
+	srv := codexmock.New()
+	c, changes := dial(t, srv, "")
+	srv.StartThread("main", false, "")
+	waitThread(t, c)
+	if err := c.Send(t.Context(), "first"); err != nil {
+		t.Fatal(err)
+	}
+	next(t, changes)
+	srv.LateInterrupts()
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	stopped, err := c.Interrupt(ctx)
+	if err != nil || ctx.Err() != nil {
+		t.Fatalf("Interrupt of a turn that ended first = %v, context %v; want it back before the answer", err, ctx.Err())
+	}
+	if err = stopped(); err != nil {
+		t.Fatalf("the answer to an interrupt of a turn that ended first: %v", err)
+	}
+	if len(srv.Requests("turn/interrupt")) != 1 || c.Busy() {
+		t.Fatalf("turn/interrupt requests = %s, busy = %v; want one unanswered and the thread idle", srv.Requests("turn/interrupt"), c.Busy())
+	}
+}
+
+func interrupt(t *testing.T, c *codexapp.Client) error {
+	t.Helper()
+	stopped, err := c.Interrupt(t.Context())
+	if err != nil {
+		return err
+	}
+	return stopped()
 }
 
 func waitThread(t *testing.T, c *codexapp.Client) {
