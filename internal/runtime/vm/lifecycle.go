@@ -492,8 +492,10 @@ func (e *engine) pause(ctx context.Context, key string) error {
 func (e *engine) park(ctx context.Context, key string) error {
 	unlock := e.lock(key)
 	rec, err := e.requireRunning(ctx, key, "pause")
-	if err == nil && e.syncGuest(ctx, key) && len(rec.CheckoutDisks) == 0 {
-		e.awaitReported(ctx, key)
+	if err == nil {
+		if e.syncGuest(ctx, key) && len(rec.CheckoutDisks) == 0 {
+			e.awaitReported(ctx, key)
+		}
 		// As in save: the guest still runs, so a caller that gave up loses
 		// nothing.
 		if ctx.Err() != nil {

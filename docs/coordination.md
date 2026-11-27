@@ -525,6 +525,8 @@ the time of the event at `older_seq`: the page covers everything after it,
 including events a filter left out. A session snapshot's
 `unacked_messages` counts mail addressed to the session that it has not
 acknowledged, and `oldest_unacked_at` is when the oldest of it was sent.
+`cloudfield sessions` shows the count in its `MAIL` column, and `cloudfield
+sessions <session-id>` shows both on its `mail` line.
 
 Mail stays as history until its session is explicitly deleted, including through
 workspace deletion. When a session's sandbox is released, mail it never
@@ -1459,9 +1461,12 @@ report whole before the next read acknowledges it. A longer body is
 refused, by the command with `body exceeds 12288 bytes` and by the server
 with `body is <n> bytes and exceeds 12288`, and a body on another
 outcome with `body is only valid with the "success", "failure" or "blocked"
-outcome`. The body is stored with the report and read through the parent's inbox; the
-dashboard does not show it yet. Nothing is redacted from a summary or a body:
-write no secret into either. A report's body counts toward the 16 KiB of an inbox batch, so a report
+outcome`. The body is stored with the report and read through the parent's inbox. In the
+dashboard a report with a body has a **Full report** button on its row under
+Agent messages, which opens the body in place; whoever may see that message may
+open it. `coord.messages.list` gives each report's `report_body_bytes`, and the
+body itself as `report_body` when called with `report_bodies`. Nothing is
+redacted from a summary or a body: write no secret into either. A report's body counts toward the 16 KiB of an inbox batch, so a report
 with a long body is read in a batch of its own. A parent whose command or bridge predates report bodies gets the body after
 the summary in `body`, which it shows. A server older than report bodies stores the report without the
 body; the command and the `aether_report` tool then fail with `the report was
@@ -1749,6 +1754,27 @@ report reads `(none)` and the server logs the error. A Claude Code session
 with no parent sends no message, and the server forwards none of a Codex
 one's. A subsession that a handoff detached from its parent still sends its
 message or has it read, and the server discards it.
+
+`run.report` carries the agent's last message in one case: the turn end of a
+Standard subsession, which the server forwards to its parent as the
+provisional report ([subsessions](#subsessions)). The server sets
+`AETHER_SUBSESSION=1` in the container of a session another session started.
+Only there does a Claude Code `Stop` hook's `run.report` carry `last_message`,
+the first 4 KiB of the payload's `last_assistant_message`. For a stop that was
+held, the server forwards the held stop's message, not the one that follows
+the reminder, unless a prompt started a new turn first, typed into the
+reminder's continuation or after Esc: that turn's end forwards its own
+message. The server keeps the held message in memory only, so after a server
+restart the stop that follows the reminder forwards its own. A Claude Code
+`SessionEnd` hook's `run.report` carries `session_end: true` and forwards
+nothing: `/clear` and `/exit` end no turn, and a turn cut off with Esc sends
+no `Stop`. For Codex, which loads no hooks, the server reads the thread's
+last turn from the app-server, for a subsession only. A `completed` turn
+forwards its last agent message, and an `interrupted` one, as after Esc,
+forwards nothing. If the read fails, the report reads `(none)` and the server
+logs the error. A session with no parent sends and reads neither. A
+subsession that a handoff detached from its parent still does, and the server
+discards the message.
 
 Coordination also does not provide a universal inbound terminal hook. When a
 human messages a Standard session, Cloudfield delivers the message through the

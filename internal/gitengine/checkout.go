@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
 )
@@ -197,7 +198,9 @@ func (e *Engine) CreateRunCheckoutAt(ctx context.Context, ws domain.WorkspaceID,
 	if origin != "" {
 		if _, err := e.git(ctx, checkoutPath, "remote", "set-url", "origin", origin); err != nil {
 			cleanup()
-			return "", "", fmt.Errorf("gitengine: point session %s origin at %s: %w", run, origin, err)
+			// git repeats the origin in its arguments and its own message, and it may hold a
+			// credential: this error becomes the session's failure reason, which every reader sees.
+			return "", "", fmt.Errorf("gitengine: point session %s at its workspace's origin: %s", run, strings.ReplaceAll(err.Error(), origin, "<origin>"))
 		}
 	}
 	if err := e.writeRunMeta(run, runMeta{Base: baseCommit, Branch: branch, BaseBranch: baseBranch, Workspace: ws}); err != nil {

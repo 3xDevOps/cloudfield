@@ -318,7 +318,7 @@ func (s *Service) attached(ctx context.Context, id domain.RunID) (*domain.ChildR
 		return nil, err
 	}
 	if c.Detached {
-		return nil, denied("%s: subsession %s is detached and runs on its own", protocol.MethodChildCancel, id)
+		return nil, denied("subsession %s is detached and runs on its own", id)
 	}
 	return c, nil
 }

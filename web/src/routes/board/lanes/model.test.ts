@@ -26,6 +26,7 @@ function ctxOf(runs: Run[], over: Partial<StateContext> = {}): StateContext {
     roomMessages: {},
     roomStatus: {},
     pausedRuns: {},
+    startingRuns: {},
     now,
     ...over,
   }

@@ -13,6 +13,7 @@ import type {
 } from '@/lib/types'
 import type { SliceCreator } from '@/store/slice'
 import { emptyTiles, routeTiles, viewContext } from '@/store/tiles'
+import { historyBudget } from '@/store/lanes'
 
 /** Which hop is down when the app cannot reach its data.
  * `network`: this machine has no usable network at all - DNS is dead, or
@@ -296,6 +297,7 @@ export const createServerSlice: SliceCreator<ServerSlice> = (set) => {
         terminalCacheEpoch: s.terminalCacheEpoch + 1,
         sessionLogs: {},
         laneHistory: {},
+        laneBudget: historyBudget,
         traceLogs: {},
       })),
     setHydrated: (hydrated, error = null) =>

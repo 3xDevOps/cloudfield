@@ -178,6 +178,13 @@ Reloading the page discards it. While the agent reconnects, the composer keeps
 its shape and Send stays disabled until it is back; an empty box and Send's
 tooltip say why.
 
+While a launched session's agent starts, the session's state reads
+**Starting** and the empty box reads **Message the agent while it starts**. If
+the start fails, the box and an unsent message stay, and the panel above the
+box shows the error and offers **Retry Enhanced**
+([Restarts and failures](#restarts-and-failures)). A message sent before the
+retry is refused with the server's error.
+
 Steering, answering, interrupting and changing options need control of the session.
 The owner's desktop tab takes it when it first shows Chat and nobody holds
 it. Without control you still get **Send**, and the message waits for the
@@ -188,6 +195,8 @@ notes](terminal.md#messages-and-notes)).
 other files up to 64 MiB. Images go to the agent as image content and other files
 as a path in the container. If the agent does not advertise image support, remove
 the image before sending.
+An image sent while the agent starts shows **Not sent** if the agent turns out
+not to take images.
 
 From the CLI, `cloudfield message` queues a message sent during a turn, and
 `cloudfield message --steer <session-id> "<text>"` is **Steer**. `--steer`
@@ -481,8 +490,9 @@ enhanced session ended: the agent's ACP server exited with code 1; stderr: ...
 Fix the cause (for a login, run the agent's login command in the Terminal tab).
 Then choose **Retry Enhanced** in the Chat view, or pause and resume the session,
 to start a fresh ACP server. **Open in Standard** switches the session when the agent
-can switch. Otherwise it starts a new Standard session with the same task and closes
-this one without merging, after asking.
+can switch and has reported a conversation, which it does on its first turn.
+Otherwise, as after a failed start, it starts a new Standard session with the
+same task and closes this one without merging, after asking.
 
 A turn that fails on the account's usage limit does not park with
 `enhanced turn failed:`. The session moves to another account
