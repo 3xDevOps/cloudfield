@@ -435,23 +435,25 @@ func TestMoveGivesTheManualSteps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = silent.Close() })
-	held := make(chan net.Conn, 4)
-	t.Cleanup(func() {
-		close(held)
-		for c := range held {
-			_ = c.Close()
-		}
-	})
+	var held []net.Conn
+	accepted := make(chan struct{})
 	go func() {
+		defer close(accepted)
 		for {
 			c, err := silent.Accept()
 			if err != nil {
 				return
 			}
-			held <- c
+			held = append(held, c)
 		}
 	}()
+	t.Cleanup(func() {
+		_ = silent.Close()
+		<-accepted
+		for _, c := range held {
+			_ = c.Close()
+		}
+	})
 	tlsHost := httptest.NewTLSServer(http.NotFoundHandler())
 	t.Cleanup(tlsHost.Close)
 	for _, tc := range []struct {
