@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Confirm } from '@/components/confirm'
 import { modeLabel } from '@/components/launch/modes'
-import { SavedIssues } from '@/components/launch/saved-defaults'
+import { SavedIssues, savedOwnLogins } from '@/components/launch/saved-defaults'
 import { Button } from '@/components/ui/button'
 import { Callout } from '@/components/ui/callout'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -62,6 +62,7 @@ function SavedLaunchDefaults({ client }: { client: Api }) {
   const saved = result !== null && result.revision > 0
   const disabled = !editable || result === null || busy
   const fallback = defaults.fallback
+  const ownLogins = savedOwnLogins(defaults, self)
   const unusable = new Set((result?.invalid ?? []).filter((issue) => issue.field === 'account_member_id' || issue.field === 'fallback.order').map((issue) => issue.value))
   const removeUnusable = () => change((current) => {
     const order = (current.fallback?.order ?? []).filter((id) => !unusable.has(id))
@@ -165,9 +166,11 @@ function SavedLaunchDefaults({ client }: { client: Api }) {
       <SettingRow
         label="Fallback"
         labelFor="settings-launch-fallback"
-        help={fallback?.policy === 'ordered'
-          ? `When usage runs out, a launch moves to ${(fallback.order ?? []).map(name).join(', then ')}. Reorder the list in the launch dialog under Options.`
-          : 'Where a launch moves when its account\'s usage runs out. Order the accounts in the launch dialog under Options, then Save as my default.'}
+        help={ownLogins
+          ? 'A Claude Code launch moves only between your own logins, never to another account; any other agent\'s launch does not move. Change it in the launch dialog under Options, then Save as my default.'
+          : fallback?.policy === 'ordered'
+            ? `When usage runs out, a launch moves to ${(fallback.order ?? []).map(name).join(', then ')}. Reorder the list in the launch dialog under Options.`
+            : 'Where a launch moves when its account\'s usage runs out. Order the accounts in the launch dialog under Options, then Save as my default.'}
         control={(
           <Select
             value={fallback?.policy ?? 'automatic'}
@@ -179,7 +182,7 @@ function SavedLaunchDefaults({ client }: { client: Api }) {
             </SelectTrigger>
             <SelectContent>
               {(['automatic', 'off', ...(fallback?.policy === 'ordered' ? ['ordered' as const] : [])] as FallbackPolicy[]).map((policy) => (
-                <SelectItem key={policy} value={policy}>{fallbackWords[policy]}</SelectItem>
+                <SelectItem key={policy} value={policy}>{policy === 'ordered' && ownLogins ? 'Your logins only' : fallbackWords[policy]}</SelectItem>
               ))}
             </SelectContent>
           </Select>

@@ -3064,8 +3064,14 @@ every other account leaves moves between the caller's own logins on: the
 caption reads **Fallback accounts · None · your logins only**, and the
 launch sends `fallback_account_member_ids` with the caller's own id alone,
 which the server reads as that account's logins only; only the switch sends
-`no_fallback`. Saved, that is the `ordered` policy with the caller's id, which
-the dialog and the right half of **New session** read back the same way.
+`no_fallback`. Saved, that is the `ordered` policy with the caller's id,
+which has one meaning wherever it is read: on the caller's own account, for
+Claude Code on a server with `logins`, it is sent as their own logins only
+while they have several or the list cannot be read, and as `no_fallback`
+otherwise (another agent, one login). The right half of **New session**
+reads `agent.login.list` to send exactly that. **Save as my default** in a
+dialog that reads it as Off keeps it saved unless the fallback was changed. Settings
+→ **Launch** and the assistant's launch card name it "Your logins only".
 
 Where the server offers `run.children.allow`, the form has a **Child
 sessions** select: **Use my setting** (naming it, "(off)"), **Allow for this
@@ -7668,7 +7674,8 @@ Categories:
   reason. When the saved account or a fallback member is invalid, **Remove
   unusable accounts** saves both repaired at once: your own account, and
   the order without them, or fallback off when none are left. **Account** and **Fallback** (any account, off, or the saved
-  ordered list) save on change; the order itself is set in the launch
+  ordered list, "Your logins only" when it names your own account alone)
+  save on change; the order itself is set in the launch
   dialog with **Save as my default**. **Clear** asks first, then clears
   them. Each change uses `launch.defaults.set` with the revision read and
   retries once on a conflict, as the launch dialog does. The section starts
