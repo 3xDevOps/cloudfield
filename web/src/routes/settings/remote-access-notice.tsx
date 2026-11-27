@@ -8,24 +8,10 @@ import { cn } from '@/lib/utils'
 import { wideIndent } from '@/routes/board/run-card'
 import { useStore } from '@/store'
 
-/** How a super admin moves the server off the address `need` names. */
+/** How a super admin moves the server off the address `need` names. A
+ * replacement that is not a plain https address gets no instruction, and a
+ * first-use notice is cautioned before any. */
 export function EdgeMoveSteps({ need }: { need: EdgeNeed }) {
-  if (need.notice.edge_url_flag) {
-    return (
-      <div className="flex min-w-0 flex-col gap-1.5 text-ui-sm">
-        <p className="break-words">The service starts the server with --edge-url {need.edgeURL}, and a restart keeps that flag, so edge move does not apply. Change the flag to {need.notice.replacement} where the service starts cloudfield-server serve, then restart it on the server's host:</p>
-        <CopyableCommand command={need.restart} />
-      </div>
-    )
-  }
-  if (need.notice.moved_to) {
-    return (
-      <div className="flex min-w-0 flex-col gap-1.5 text-ui-sm">
-        <p className="break-words">The server's options file already names {need.notice.moved_to}; the server still runs at {need.edgeURL}. Restart it on the server's host to apply:</p>
-        <CopyableCommand command={need.restart} />
-      </div>
-    )
-  }
   if (!need.move) {
     return (
       <div className="flex min-w-0 flex-col gap-1.5 text-ui-sm">
@@ -35,12 +21,31 @@ export function EdgeMoveSteps({ need }: { need: EdgeNeed }) {
       </div>
     )
   }
+  const caution = need.notice.first_use && (
+    <p>This came with the server's first connection to the edge, when it pinned the edge's key: confirm the new address with whoever runs the edge before you move.</p>
+  )
+  if (need.notice.edge_url_flag) {
+    return (
+      <div className="flex min-w-0 flex-col gap-1.5 text-ui-sm">
+        {caution}
+        <p className="break-words">The service starts the server with --edge-url {need.edgeURL}, and a restart keeps that flag, so edge move does not apply. Change the flag to {need.notice.replacement} where the service starts cloudfield-server serve, then restart it on the server's host:</p>
+        <CopyableCommand command={need.restart} />
+      </div>
+    )
+  }
+  if (need.notice.moved_to) {
+    return (
+      <div className="flex min-w-0 flex-col gap-1.5 text-ui-sm">
+        {caution}
+        <p className="break-words">The server's options file already names {need.notice.moved_to}; the server still runs at {need.edgeURL}. Restart it on the server's host to apply:</p>
+        <CopyableCommand command={need.restart} />
+      </div>
+    )
+  }
   return (
     <div className="flex min-w-0 flex-col gap-1.5 text-ui-sm">
       <p>Move this server to {need.notice.replacement}, another address of the same edge. Run on the server's host, adding the service's --config &lt;file&gt; if it has one.</p>
-      {need.notice.first_use && (
-        <p>This came with the server's first connection to the edge, when it pinned the edge's key: confirm the new address with whoever runs the edge before you move.</p>
-      )}
+      {caution}
       <p>1. Move the server:</p>
       <CopyableCommand command={need.move} wrap />
       <p>2. Restart it to apply:</p>

