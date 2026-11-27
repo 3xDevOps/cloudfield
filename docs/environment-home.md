@@ -60,8 +60,8 @@ image, workspace or profile sets them:
 
 You do not need to clean them. Cloudfield keeps each member's caches under
 20 GiB: every hour it deletes their least recently used Go build cache
-(`go-build`) files until the member is back under. Files used in the last 2
-hours stay, so running builds keep their files, and a member who builds more
+(`go-build`) files until the member is back under. Files used in the last
+hour stay, so running builds keep their files, and a member who builds more
 than 20 GiB in 2 hours stays over until those files age. When disk space runs
 low, every older Go build file goes.
 
@@ -70,9 +70,10 @@ A session in a virtual machine
 caches on a disk of its own that holds at most 32 GiB, which the rule above
 does not reach. Its VM has its own: at boot and every 10 minutes, while that
 disk is more than half full, it deletes the least recently used Go build
-cache files, again sparing the last 2 hours. On a full cache disk `go test`,
-`go vet`, a module download, `npm install` and `bun add` fail with `no space
-left on device`, and `go build` works without caching.
+cache files, again sparing those used in the last hour. On a full cache disk
+`go test`, `go vet`, a module download and `npm install` fail with `no space
+left on device`, `bun add` fails with `error: Fail extracting tarball from
+<package>`, and `go build` works without caching.
 
 Caches no session or environment is using are removed whole, oldest first, hourly
 and before refusing work for disk pressure: after 7 days unused, above 4 GiB
