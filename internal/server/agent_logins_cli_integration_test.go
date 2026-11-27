@@ -439,6 +439,17 @@ func TestIntegrationSessionOnANamedLogin(t *testing.T) {
 	if code == 0 || !strings.Contains(stderr, `--login: you have no login named "nope"; cloudfield agent logins lists yours`) {
 		t.Fatalf("session --login nope = %d %q", code, stderr)
 	}
+	for _, named := range []string{"nope", "second"} {
+		_, stderr, code = ada.cli("session", "on Bo's login", "--agent", "claude", "--mode", "background", "--account", string(e.bo.id), "--login", named)
+		t.Logf("$ cloudfield session \"on Bo's login\" --agent claude --mode background --account %s --login %s\n%s", e.bo.id, named, stderr)
+		if code == 0 || !strings.Contains(stderr, "run.launch: only a login's owner names it; a launch on a teammate's account is served in their order") {
+			t.Fatalf("session --account bo --login %s = %d %q; want the server's refusal", named, code, stderr)
+		}
+	}
+	_, stderr, code = ada.cli("session", "on my own account", "--agent", "claude", "--mode", "background", "--account", string(e.ada.id), "--login", "nope")
+	if code == 0 || !strings.Contains(stderr, `--login: you have no login named "nope"; cloudfield agent logins lists yours`) {
+		t.Fatalf("session --account ada --login nope = %d %q", code, stderr)
+	}
 	out, stderr, code := ada.cli("session", "on the second login", "--agent", "claude", "--mode", "background", "--login", "second")
 	t.Logf("$ cloudfield session \"on the second login\" --agent claude --mode background --login second\n%s%s", out, stderr)
 	if code != 0 {

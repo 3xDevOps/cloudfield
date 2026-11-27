@@ -108,8 +108,8 @@ func runRun(args []string) error {
 		if err != nil {
 			return err
 		}
+		var info protocol.ServerInfoResult
 		if len(repos) > 0 || *permission != "" || *login != "" {
-			var info protocol.ServerInfoResult
 			if err := c.Call(protocol.MethodServerInfo, struct{}{}, &info); err != nil {
 				return err
 			}
@@ -126,7 +126,10 @@ func runRun(args []string) error {
 		var res protocol.RunLaunchResult
 		params := launchParams(wsID, task, *agent, *mode, *model, *effort, *account, *cachedBase)
 		params.FallbackAccountMemberIDs, params.NoFallback = fallbacks, *noFallback
-		if *login != "" {
+		// Only a login's owner names it, so a login named on a teammate's
+		// account goes as given, for the server to refuse.
+		params.Login = *login
+		if *login != "" && (*account == "" || *account == info.Member.ID) {
 			logins, err := listLogins(c, *agent)
 			if err != nil {
 				return err
