@@ -69,13 +69,15 @@ type Run struct {
 	// to know", never "not paused", or clients cannot seed pause state.
 	Paused bool `json:"paused"`
 	// AsleepSince is when idleness stopped the live session's container, or
-	// saved its VM, set while it sleeps; AsleepSaved while the saved VM
-	// keeps every process, Waking while a wake starts it, and WakeError is
-	// the last wake's failure.
-	AsleepSince *string `json:"asleep_since,omitempty"`
-	AsleepSaved bool    `json:"asleep_saved,omitempty"`
-	Waking      bool    `json:"waking,omitempty"`
-	WakeError   string  `json:"wake_error,omitempty"`
+	// paused or saved its VM, set while it sleeps; AsleepSaved while the VM
+	// keeps every process, AsleepInMemory while it is paused in the host's
+	// memory rather than saved to disk, Waking while a wake starts it, and
+	// WakeError is the last wake's failure.
+	AsleepSince    *string `json:"asleep_since,omitempty"`
+	AsleepSaved    bool    `json:"asleep_saved,omitempty"`
+	AsleepInMemory bool    `json:"asleep_in_memory,omitempty"`
+	Waking         bool    `json:"waking,omitempty"`
+	WakeError      string  `json:"wake_error,omitempty"`
 	// Runtime retention is enriched from scheduler ownership, not run-row age.
 	ContainerRetainedUntil *string `json:"container_retained_until,omitempty"`
 	CleanupPending         bool    `json:"cleanup_pending,omitempty"`

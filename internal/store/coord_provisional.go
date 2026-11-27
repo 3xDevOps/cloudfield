@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -29,6 +31,26 @@ func (d *DB) CoordReportedSince(ctx context.Context, run domain.RunID, since tim
 		return false, fmt.Errorf("store: coord reported since: %w", err)
 	}
 	return reported, nil
+}
+
+// CoordStateReportedSince is the outcome of run's latest needs-input, waiting
+// or answered report that took effect at or after since, or "" for none.
+func (d *DB) CoordStateReportedSince(ctx context.Context, run domain.RunID, since time.Time) (string, error) {
+	var after int64
+	if !since.IsZero() {
+		var err error
+		if after, err = encodeTime(since); err != nil {
+			return "", fmt.Errorf("store: coord state reported since: %w", err)
+		}
+	}
+	var outcome string
+	err := d.db.QueryRowContext(ctx,
+		`SELECT outcome FROM coord_state_reports WHERE run_id = ? AND created_at >= ? AND applied_at IS NOT NULL
+		 ORDER BY created_at DESC LIMIT 1`, run, after).Scan(&outcome)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("store: coord state reported since: %w", err)
+	}
+	return outcome, nil
 }
 
 // RetireProvisionalReports retires the undelivered provisional reports from

@@ -208,11 +208,15 @@ func (s *Service) apiServers(r *http.Request) (any, error) {
 
 func (s *Service) apiEdgeInfo(r *http.Request) (any, error) {
 	key := s.EdgeKey()
-	return edgeproto.EdgeInfo{
+	info := edgeproto.EdgeInfo{
 		SigninOrigin: s.pair(r).signin,
 		Key:          key,
 		Fingerprint:  edgeproto.EdgeKeyFingerprint(key),
 		Version:      edgeproto.Version,
 		MinVersion:   edgeproto.MinVersion,
-	}, nil
+	}
+	if rt := s.pair(r).retiring; rt != nil {
+		info.Retiring, info.RetiringDate = rt.relay, rt.date
+	}
+	return info, nil
 }

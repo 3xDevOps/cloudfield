@@ -50,6 +50,9 @@ type fakeEdge struct {
 
 	mu      sync.Mutex
 	tickets map[string]string
+	// notices, when set, gives each ready its Notices and their
+	// signature, from the hello's notice nonce.
+	notices func(serverID string, nonce []byte) (edgeproto.Notices, []byte)
 }
 
 type edgeControl struct {
@@ -132,7 +135,14 @@ func (e *fakeEdge) control(w http.ResponseWriter, r *http.Request) {
 		e.t.Errorf("enrollment signature: %v", err)
 		return
 	}
-	writeMsg(e.t, c, edgeproto.Ready{ServerID: id, State: e.state, EdgeKey: e.pub, RelayOrigins: e.relayOrigins})
+	e.mu.Lock()
+	notices := e.notices
+	e.mu.Unlock()
+	ready := edgeproto.Ready{ServerID: id, State: e.state, EdgeKey: e.pub, RelayOrigins: e.relayOrigins}
+	if notices != nil {
+		ready.Notices, ready.NoticesSignature = notices(id, hello.NoticeNonce)
+	}
+	writeMsg(e.t, c, ready)
 	ec := &edgeControl{t: e.t, c: c, serverID: id, msgs: make(chan edgeproto.Message, 64)}
 	select {
 	case e.controls <- ec:

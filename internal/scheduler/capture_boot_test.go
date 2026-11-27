@@ -196,7 +196,7 @@ func endAVMThatCannotWake(t *testing.T, why, how string) {
 	e, vr, _, capture := newVMEnv(t, nil)
 	run := e.launchACP(t, "say pong")
 	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
-	e.sleepRun(t, run.ID)
+	e.saveRun(t, run.ID)
 	c := e.container(t, run.ID)
 	if why == "admission" {
 		vr.refuse.Store(true)
@@ -301,7 +301,7 @@ func TestFailingCaptureBootsKeepTheCheckoutUntilTheVMIsGone(t *testing.T) {
 	})
 	run := e.launchACP(t, "say pong")
 	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
-	e.sleepRun(t, run.ID)
+	e.saveRun(t, run.ID)
 	vr.saveMu.Lock()
 	vr.restoreErr = errors.New("restore: monitor exited")
 	vr.saveMu.Unlock()
