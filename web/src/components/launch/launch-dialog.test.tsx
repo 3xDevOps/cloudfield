@@ -1419,10 +1419,10 @@ describe('login', () => {
     vi.mocked(api.agentLoginList).mockResolvedValue(logins)
     await open()
     const more = () => screen.getByRole('button', { name: /^More options/ })
-    await waitFor(() => expect(more().textContent).toContain('· Automatic, can reach console (billed per use)'))
+    await waitFor(() => expect(more().textContent).toContain('Automatic, can reach console (billed per use)'))
     fireEvent.click(more())
     await pickOption(await screen.findByRole('combobox', { name: 'Login' }), 'console')
-    expect(more().textContent).toContain('· console, billed per use')
+    expect(more().textContent).toContain('console, billed per use')
   })
 
   it("shows a login's limit in the menu when the dialog already read its usage", async () => {

@@ -127,7 +127,7 @@ export function PhoneLaunchSheet({
                   <span className="-ml-1 shrink-0 text-muted">&apos;s account</span>
                 </>
               )}
-              {loginWords && <span className="min-w-0 break-words text-muted">· {loginWords}</span>}
+              {loginWords && <span className="basis-full break-words pl-4 text-muted">{loginWords}</span>}
             </CollapsibleTrigger>
             <CollapsibleContent className="flex flex-col gap-4 pt-2">
               {!choice.noAgents && <Button type="button" variant="link" size="sm" className="self-start" disabled={disabled} onClick={onSetUp}>Install more agents...</Button>}
