@@ -205,12 +205,16 @@ answered is kept (up to 8) and carries a later call, one call at a time.
 Calls in flight together each have their own channel. A channel whose call
 was cancelled or timed out is closed, never reused. A call takes a kept
 channel only when it is replay-safe and the server sent something on the
-connection in the last second, as when it follows another call's answer;
-otherwise it opens its own, which proves the connection answers before the
-call's time limit starts. If a kept
-channel has ended under a live connection, the call is sent again on a new
-channel and the connection stays up. That second send is the call's one
-replay: if it fails too, the call fails with `-32004`.
+connection in the last second (any byte: another call's answer, an event,
+terminal output); otherwise it opens its own, which proves the connection
+answers before the call's time limit starts. The price of skipping that
+proof: when the link dies or the server stalls within that second, the call
+gets no answer and fails at its time limit, where a call that opens its own
+channel waits, for the stall to end or for the connection to be dropped and
+redialed. If a kept channel has ended, the call is sent again on a new
+channel of the same connection, which keeps a live connection and its
+streams up. That second send is the call's one replay: if it fails too, the
+connection is dropped and the call fails with `-32004`.
 
 A replay-safe call that fails on transport (a server
 restart or dropped network) redials once and retries once before surfacing
