@@ -1012,6 +1012,25 @@ describe('lanes view', () => {
     expect(history.floor).toBe(Date.parse(mail(1001).time))
   })
 
+  it('reads history again when the signed-in member changed during a read, and does not stay loading', async () => {
+    seed([working])
+    let first!: (page: TimelinePage) => void
+    vi.mocked(api.workspaceTimeline)
+      .mockImplementationOnce(() => new Promise((resolve) => { first = resolve }))
+      .mockResolvedValueOnce({ events: [], next_seq: 0, more: false })
+    await openLanes()
+    await waitFor(() => expect(api.workspaceTimeline).toHaveBeenCalledTimes(1))
+    // Another member signs in on this dashboard while the page is on its way.
+    const before = useStore.getState().identityKey
+    onTestFinished(() => { useStore.setState({ identityKey: before }) })
+    act(() => useStore.getState().setIdentityKey('another member'))
+    await act(async () => first({ events: [], next_seq: 0, more: false }))
+    // The page was read for the member before: it is not kept, and the view reads for the new one.
+    await waitFor(() => expect(api.workspaceTimeline).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(useStore.getState().laneHistory[workspace.id]).toMatchObject({ loading: false, floor: -Infinity }))
+    expect(screen.queryByText('Loading history…')).toBeNull()
+  })
+
   it('drops an older history page read while live events trimmed held history, so no gap reads as loaded', async () => {
     seed([working])
     const start = Date.now() - 30 * 60_000
