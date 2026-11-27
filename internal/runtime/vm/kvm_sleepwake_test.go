@@ -58,7 +58,7 @@ func TestKVMSleepWakeChain(t *testing.T) { sleepWakeChain(t, "run-sleepwake", 20
 // TestLargeKVMSleepWakeChain is the chain at 8 GiB, where Cloud Hypervisor
 // maps the guest's memory past 4 GiB apart from the first 3 GiB. Its name
 // keeps it out of the tests make test-kvm runs unless KVM_RUN names it: it
-// takes too long for every run.
+// takes 15 minutes on a CI runner.
 func TestLargeKVMSleepWakeChain(t *testing.T) { sleepWakeChain(t, "run-sleepwake-large", 8192, 5120) }
 
 type sleepWake struct {
