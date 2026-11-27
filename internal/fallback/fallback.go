@@ -129,8 +129,9 @@ const Unknown = -1
 
 // Measure reads the usage Select decides on: the requested login's, and,
 // only when it is exhausted, every candidate's. It reads vendor quota, so
-// callers run it before taking the shared authorization mutex; Select
-// authorises each account again under that mutex.
+// callers run it before taking the shared authorization mutex, and under it
+// only once more, bounded by readTimeout, for a login chosen again there;
+// Select authorises each account again under that mutex.
 func Measure(ctx context.Context, st store.Store, usage QuotaReader, launcher domain.MemberID, requested domain.Account, harness string, policy domain.AccountFallback) (Measured, error) {
 	if policy.Disabled || usage == nil {
 		return nil, nil
