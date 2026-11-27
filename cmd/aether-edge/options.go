@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -511,8 +512,10 @@ func readSecretFile(path string) (string, error) {
 // olderImageServes refuses a retired host that an edge image older than
 // v0.8.7 would serve: such an image reads the origins only from the
 // AETHER_EDGE_ names, so one that a CLOUDFIELD_EDGE_ name shadows here is
-// still what it serves after a rollback. getenv reads the environment
-// without the CLOUDFIELD_EDGE_ names.
+// still what it serves after a rollback. For the same reason it refuses
+// another data directory under AETHER_EDGE_DATA, whose database keeps the
+// sign-ins this start deletes. getenv reads the environment without the
+// CLOUDFIELD_EDGE_ names.
 func olderImageServes(o options, getenv func(string) string) error {
 	retired := map[string]bool{}
 	for _, r := range o.retired {
@@ -520,6 +523,11 @@ func olderImageServes(o options, getenv func(string) string) error {
 	}
 	if len(retired) == 0 {
 		return nil
+	}
+	if older := dataDirDefault(getenv); !o.flags["data"] && filepath.Clean(older) != filepath.Clean(o.dataDir) {
+		return fmt.Errorf("this edge uses the data directory %s from CLOUDFIELD_EDGE_DATA, but an edge image older than v0.8.7 reads only AETHER_EDGE_DATA "+
+			"and would open %s, whose database keeps the sign-ins --retired-pairs deletes, after a rollback. Set AETHER_EDGE_DATA to %s, or remove CLOUDFIELD_EDGE_DATA",
+			o.dataDir, older, o.dataDir)
 	}
 	for _, v := range []struct{ flag, name string }{
 		{"signin-origin", "AETHER_EDGE_SIGNIN_ORIGIN"}, {"relay-origin", "AETHER_EDGE_RELAY_ORIGIN"}, {"origin-pairs", "AETHER_EDGE_ORIGIN_PAIRS"},

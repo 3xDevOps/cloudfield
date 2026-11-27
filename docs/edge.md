@@ -1217,6 +1217,10 @@ entry and the fix, when:
   `AETHER_EDGE_ORIGIN_PAIRS` names a retired host while a `CLOUDFIELD_EDGE_`
   name overrides it here: an edge image older than v0.8.7 reads only the
   `AETHER_EDGE_` names and would serve the pair after a rollback;
+- `CLOUDFIELD_EDGE_DATA` names another data directory than
+  `AETHER_EDGE_DATA` (or, with that unset, `/var/lib/aether-edge`) and
+  `--data` is not a flag: an image older than v0.8.7 would open the other
+  directory's database, which keeps the deleted sign-ins, after a rollback;
 - the edge recorded the pair's origins in the other roles or in another pair;
 - rows without a recorded origin exist and the edge has never recorded
   origins: serve the pair again, run the edge with `--retiring-pairs` naming
