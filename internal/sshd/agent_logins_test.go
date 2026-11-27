@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -292,7 +293,9 @@ func TestRemovingALoginInUseNamesTheOwnersSessionsAndCountsTheRest(t *testing.T)
 		e.run.ID: e.member.ID, "run-queuedchild": e.member.ID, "run-teammate000": bo.ID,
 	}}
 	_, perr := e.call(t, e.member.ID, protocol.MethodAgentLoginRemove, protocol.AgentLoginParams{Agent: "claude", LoginID: "lgn-work000000"})
-	want := `login "work" is in use by your sessions ` + string(e.run.ID) + `, run-queuedchild (end them) and 1 of your teammates' sessions`
+	own := []string{string(e.run.ID), "run-queuedchild"}
+	slices.Sort(own)
+	want := `login "work" is in use by your sessions ` + strings.Join(own, ", ") + ` (end them) and 1 of your teammates' sessions`
 	if perr == nil || perr.Code != protocol.CodeConflict || !strings.Contains(perr.Message, want) || !strings.Contains(perr.Message, "cloudfield account revoke <member-id>") || strings.Contains(perr.Message, "use for shares") {
 		t.Fatalf("removal of a login in use: %v; want %q and the revoke command", perr, want)
 	}
