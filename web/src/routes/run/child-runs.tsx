@@ -10,6 +10,7 @@ import { StatusDot, type Tone } from '@/components/ui/status-dot'
 import { api, type Api } from '@/lib/api'
 import { errorSentence, message, money } from '@/lib/format'
 import { memberName } from '@/lib/member-name'
+import { runLoginName } from '@/lib/run-account'
 import { runLabel } from '@/lib/status'
 import type { Child, ChildState, ChildUsage, RunChildrenResult } from '@/lib/types'
 import { cn } from '@/lib/utils'
@@ -82,12 +83,17 @@ function useChildren(run: RunRecord, client: Api): { result: RunChildrenResult |
 
 function Account({ child }: { child: Child }) {
   const requested = useStore((s) => s.runs[child.run_id]?.requested_account_member_id)
+  const login = useStore((s) => {
+    const run = s.runs[child.run_id]
+    // The login is the run's, so only while the run is on the account the row names.
+    return run && (run.account_member_id || run.member_id) === child.account_member_id ? runLoginName(run) : ''
+  })
   const name = useStore((s) => memberName(s, child.account_member_id))
   const from = useStore((s) => (requested ? memberName(s, requested) : ''))
   const owner = useStore((s) => memberName(s, child.owner_member_id))
   return (
     <span title={`Owned by ${owner}`}>
-      On {name}&apos;s account{from && ` (fallback from ${from})`}
+      On {name}&apos;s account{login && `, login ${login}`}{from && ` (fallback from ${from})`}
     </span>
   )
 }

@@ -113,6 +113,133 @@ describe('run frame', () => {
     await waitFor(() => expect(screen.getByRole('banner').textContent).toContain("On Bob's account (fallback)"))
   })
 
+  it('names the login a run is on, and badges it when it is billed per use', async () => {
+    open({ account_member_id: alice.id, account_login: 'lgn-console0001', account_login_name: 'console', account_login_per_use: true })
+    await waitFor(() => expect(screen.getByRole('banner').textContent).toContain('On your account, login console'))
+    expect(within(screen.getByRole('banner')).getByTitle('Billed per use to your account, login console').dataset.slot).toBe('badge')
+  })
+
+  it("keeps whose account and which login a teammate's session pays with in a wide header, before the mode drops", async () => {
+    open({ account_member_id: bob.id, account_login: 'lgn-console0001', account_login_name: 'console', account_login_per_use: true })
+    const banner = await screen.findByRole('banner')
+    const line = await within(banner).findByText("On Bob's account, login console")
+    // Outside the parts that wrap out of sight, so a long reason or a narrow row cannot hide it.
+    expect(line.closest('.flex-wrap')).toBeNull()
+    expect(line.title).toBe("On Bob's account, login console")
+    const badge = within(banner).getByTitle("Billed per use to Bob's account, login console")
+    expect(within(badge).getByText('Billed per use')).toBeDefined()
+  })
+
+  it('names who pays in the badge itself in a narrow tile, for a teammate and for the owner, and keeps every view', async () => {
+    const measure = HTMLElement.prototype.getBoundingClientRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return this.dataset.slot === 'pane-header' ? DOMRect.fromRect({ width: 420, height: 32 }) : measure.call(this)
+    })
+    const viewNames = () => {
+      const strip = within(screen.getByRole('banner')).getByRole('tablist', { name: 'Session views' })
+      // As icons the switch keeps its width: the payer's badge never pushes a view out of sight.
+      expect(strip.className).toContain('shrink-0')
+      return within(strip).getAllByRole('tab').map((tab) => tab.getAttribute('aria-label'))
+    }
+    const view = open({ account_member_id: bob.id, account_login: 'lgn-console0001', account_login_name: 'console', account_login_per_use: true })
+    let badge = await within(screen.getByRole('banner')).findByTitle("Billed per use to Bob's account, login console")
+    expect(within(badge).getByText("Per use · Bob's")).toBeDefined()
+    expect(within(badge).getByText("Billed per use to Bob's account, login console").className).toContain('sr-only')
+    expect(screen.queryByText("On Bob's account, login console")).toBeNull()
+    expect(screen.getByRole('banner').textContent).not.toContain('Standard')
+    const teammate = viewNames()
+    view.unmount()
+
+    open({ account_member_id: alice.id, account_login: 'lgn-console0001', account_login_name: 'console', account_login_per_use: true })
+    badge = await within(screen.getByRole('banner')).findByTitle('Billed per use to your account, login console')
+    expect(within(badge).getByText('Per use · yours')).toBeDefined()
+    expect(viewNames()).toEqual(teammate)
+    expect(teammate).toEqual(['Chat', 'Terminal', 'Changes', 'Files', 'Browser'])
+  })
+
+  it('folds the state to its dot when a narrow row is still full, and keeps it for a screen reader', async () => {
+    const measure = HTMLElement.prototype.getBoundingClientRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return this.dataset.slot === 'pane-header' ? DOMRect.fromRect({ width: 420, height: 32 }) : measure.call(this)
+    })
+    // The label is squeezed: it needs 54px and has fewer.
+    vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.parentElement?.title.startsWith('Working') && this.previousElementSibling ? 54 : 0
+    })
+    open({ account_member_id: bob.id, account_login: 'lgn-work0000001', account_login_name: 'work' })
+    const banner = await screen.findByRole('banner')
+    const label = within(banner).getByText('Working')
+    await waitFor(() => expect(label.className).toBe('sr-only'))
+    expect(label.getAttribute('role')).toBe('status')
+    expect(label.previousElementSibling).not.toBeNull()
+    expect(within(banner).getByText("Bob's login work")).toBeDefined()
+    expect(within(within(banner).getByRole('tablist', { name: 'Session views' })).getAllByRole('tab')).toHaveLength(5)
+  })
+
+  it("keeps a teammate's account and login in a narrow tile when the login is not billed per use", async () => {
+    const measure = HTMLElement.prototype.getBoundingClientRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return this.dataset.slot === 'pane-header' ? DOMRect.fromRect({ width: 420, height: 32 }) : measure.call(this)
+    })
+    open({ account_member_id: bob.id, account_login: 'lgn-work0000001', account_login_name: 'work' })
+    const line = await within(screen.getByRole('banner')).findByText("Bob's login work")
+    expect(line.title).toBe("On Bob's account, login work")
+    expect(screen.getByRole('banner').textContent).not.toContain('Standard')
+  })
+
+  it('names a removed login by its id, as the activity line does', async () => {
+    open({ account_member_id: alice.id, account_login: 'lgn-gone0000001' })
+    await waitFor(() => expect(screen.getByRole('banner').textContent).toContain('On your account, login lgn-gone0000001'))
+  })
+
+  it("names a teammate's account by name", async () => {
+    open({ account_member_id: bob.id, account_login: 'lgn-work0000001', account_login_name: 'work' })
+    await waitFor(() => expect(screen.getByRole('banner').textContent).toContain("On Bob's account, login work"))
+  })
+
+  it("puts the member and the login a phone session pays with on a line of their own under the title", async () => {
+    atViewport(360, { pointer: 'coarse' })
+    open({ account_member_id: alice.id, account_login: 'lgn-console0001', account_login_name: 'console', account_login_per_use: true })
+    const line = (await screen.findByText(/^On your account, login console/)).closest('p')!
+    expect(line.className).not.toContain('truncate')
+    expect(within(line).getByTitle('Billed per use to your account, login console').dataset.slot).toBe('badge')
+    expect(screen.getByRole('banner').textContent).not.toContain('console')
+  })
+
+  it('adds no phone account line for a fallback from a server without logins, as before them', async () => {
+    atViewport(360, { pointer: 'coarse' })
+    const view = open({ account_member_id: bob.id, requested_account_member_id: alice.id })
+    await screen.findByRole('banner')
+    expect(screen.queryByText(/account \(fallback\)/)).toBeNull()
+    view.unmount()
+
+    useStore.setState({ info: { ...serverInfo, features: ['logins'] } })
+    open({ account_member_id: bob.id, requested_account_member_id: alice.id })
+    expect((await screen.findByText("On Bob's account (fallback)")).tagName).toBe('P')
+  })
+
+  it('keeps the login a run.account event set over a run snapshot read before it', async () => {
+    open({ account_member_id: alice.id, status_seq: 4 })
+    act(() => useStore.getState().applyRunAccount('run_1', { account_member_id: alice.id, previous_account_member_id: alice.id, login: 'lgn-console0001', login_name: 'console', per_use: true }))
+    act(() => useStore.getState().upsertRun(run({ account_member_id: alice.id, status_seq: 4 })))
+    expect(screen.getByRole('banner').textContent).toContain('On your account, login console')
+    expect(within(screen.getByRole('banner')).getByText('Billed per use')).toBeDefined()
+
+    act(() => useStore.getState().upsertRun(run({ account_member_id: alice.id, status_seq: 5 })))
+    expect(screen.getByRole('banner').textContent).not.toContain('login console')
+  })
+
+  it('names the login a run.account event moves the run to', async () => {
+    open({ account_member_id: alice.id })
+    await act(() => applyEvent(useStore, {
+      id: 'evt_2', seq: 2, time: '2026-08-14T11:00:00Z', workspace_id: workspace.id, run_id: 'run_1', actor_id: '',
+      type: 'run.account',
+      payload: { account_member_id: alice.id, previous_account_member_id: alice.id, login: 'lgn-work0000001', previous_login: '', login_name: 'work', previous_login_name: '' },
+    }, api))
+    await waitFor(() => expect(screen.getByRole('banner').textContent).toContain('On your account, login work'))
+    expect(screen.getByRole('banner').textContent).not.toContain('Billed per use')
+  })
+
   it('keeps the state time on the state line when no reason shows, and on the session tab', async () => {
     open({ paused: true })
     await waitFor(() => expect(within(screen.getByRole('banner')).getByTitle(/^Paused since /)).toBeDefined())

@@ -1,0 +1,132 @@
+import { type ReactNode, useEffect, useId, useState } from 'react'
+import { kindWords, loginAgent } from '@/components/agents/agent-logins'
+import { Coins } from '@/components/icons'
+import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import type { Api } from '@/lib/api'
+import { message } from '@/lib/format'
+import type { AgentLogin, UsageProvider } from '@/lib/types'
+import { limitWords } from '@/routes/settings/usage'
+
+const automatic = '@automatic'
+
+/** The member's own Claude Code logins, read anew each time `enabled` turns on or `attempt` changes; null while off or reading. */
+export function useOwnLogins(client: Pick<Api, 'agentLoginList'>, enabled: boolean, attempt = 0): { logins: AgentLogin[] | null; error: string | null } | null {
+  const [read, setRead] = useState<{ logins: AgentLogin[] | null; error: string | null } | null>(null)
+  useEffect(() => {
+    if (!enabled) return
+    let live = true
+    client.agentLoginList(loginAgent).then(
+      (list) => live && setRead({ logins: list, error: null }),
+      (err: unknown) => live && setRead({ logins: null, error: message(err) }),
+    )
+    return () => {
+      live = false
+      // A list read before must not stand for the next one: a login removed since would still be offered.
+      setRead(null)
+    }
+  }, [client, enabled, attempt])
+  return enabled ? read : null
+}
+
+function orList(names: string[]): string {
+  return names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}`
+}
+
+/** Whom the logins billed per use charge: their organisations where the sign-in named one, else the member's account. */
+function payers(logins: AgentLogin[]): string {
+  return orList([...new Set(logins.map((login) => login.organization_name || 'your account'))])
+}
+
+/** Where a move goes, for every login and both ways a session starts. */
+const nextLogin = 'the first other automatic login in your order with usage left'
+
+function CostLine({ children }: { children: ReactNode }) {
+  return (
+    <p className="flex items-start gap-1.5 text-ui-sm text-text">
+      <Coins aria-hidden className="mt-0.5 size-3.5 shrink-0 text-muted" />
+      <span className="min-w-0 break-words">{children}</span>
+    </p>
+  )
+}
+
+/** The one switch for whether the session may move to another login, or account with `accounts`; it sets `no_fallback`. */
+export function MoveSwitch({ accounts, moves, onMoves, disabled }: {
+  accounts: boolean
+  moves: boolean
+  onMoves: (on: boolean) => void
+  disabled?: boolean
+}) {
+  const id = useId()
+  return (
+    <div className="flex min-h-7 items-center justify-between gap-3 coarse:min-h-11">
+      <Label htmlFor={id}>{accounts ? 'Let this session move to another login or account' : 'Let this session move to another login'}</Label>
+      <Switch id={id} checked={moves} disabled={disabled} onCheckedChange={onMoves} />
+    </div>
+  )
+}
+
+/**
+ * Which of the member's own logins a launch starts on; '' lets the server choose. A `value` the list no longer holds shows no choice.
+ * `usage` is any login's usage the dialog already read, by login id, for its limit state; `moves` is whether automatic changes are on.
+ * `move` is the MoveSwitch, shown under the help.
+ */
+export function LoginPicker({ logins, value, onChange, usage = {}, now, moves, move, disabled }: {
+  logins: AgentLogin[]
+  value: string
+  onChange: (login: string) => void
+  usage?: Record<string, UsageProvider | undefined>
+  now: number
+  moves: boolean
+  move?: ReactNode
+  disabled?: boolean
+}) {
+  const first = logins.find((login) => login.automatic)
+  const picked = logins.find((login) => login.id === value)
+  const known = value === '' || picked !== undefined
+  const pickedLimit = picked && limitWords(usage[picked.id], now)
+  const detail = (login: AgentLogin) => [kindWords(login), login.per_use && 'billed per use', !login.automatic && 'Automatic off', limitWords(usage[login.id], now)].filter(Boolean).join(' · ')
+  // The automatic logins billed per use a move could reach from the login the session starts on.
+  const start = picked ?? first
+  const reach = logins.filter((login) => login.automatic && login.per_use && login !== start)
+  const never = reach.length ? `: it never moves to ${orList(reach.map((login) => login.name))}` : ''
+  const when = !picked ? 'when the automatic logins before it run out' : picked.per_use ? `when ${picked.name}'s credit is spent` : `when ${picked.name} runs out`
+  const help = picked
+    ? !moves
+      ? `The session starts on this login and stays on it${never}.`
+      : pickedLimit
+        ? `This login is at its limit, so the session may start on ${nextLogin}.`
+        : picked.per_use
+          ? `The session starts on this login. It has no usage windows, so it moves only when its credit is spent, to ${nextLogin}.`
+          : `The session starts on this login, and moves to ${nextLogin} when it runs out.`
+    : moves
+      ? 'Starts on the first automatic login in your order with usage left, and moves to the first other one with usage left when it runs out.'
+      : `Starts on the first automatic login in your order, even at its limit, and stays on it${never}.`
+  return (
+    <div className="flex min-w-0 flex-col gap-1">
+      <Label htmlFor="launch-login">Login</Label>
+      <Select value={known ? value || automatic : ''} onValueChange={(next) => onChange(next === automatic ? '' : next)} disabled={disabled}>
+        <SelectTrigger id="launch-login" className="w-full min-w-0">
+          <SelectValue placeholder="Pick a login" />
+        </SelectTrigger>
+        {/* As wide as the field, so a long option wraps instead of leaving the screen. */}
+        <SelectContent className="max-w-(--radix-select-trigger-width)">
+          <SelectItem value={automatic} description={first ? `Tries ${first.name} first` : undefined}>Automatic</SelectItem>
+          {logins.map((login) => (
+            <SelectItem key={login.id} value={login.id} description={detail(login)}>{login.name}</SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      {known && (
+        <>
+          <p className="text-ui-sm text-muted">{help}</p>
+          {picked?.per_use && <CostLine>{picked.name} is billed per use to {payers([picked])}.</CostLine>}
+          {!picked && first?.per_use && <CostLine>Can start on {first.name}, billed per use to {payers([first])}.</CostLine>}
+          {moves && reach.length > 0 && <CostLine>Can move to {orList(reach.map((login) => login.name))}, billed per use to {payers(reach)}, {when}.</CostLine>}
+          {move}
+        </>
+      )}
+    </div>
+  )
+}

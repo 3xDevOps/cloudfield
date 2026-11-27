@@ -7,7 +7,9 @@ import { launchDraftLinkStatusPending, type LaunchDraft } from '@/components/lau
 import { RefusalNotes, SignedOutNote } from '@/components/launch/agent-picker'
 import { AccountPicker, readiness, useAccountStatus } from '@/components/launch/account-picker'
 import { agentLabel } from '@/components/launch/modes'
-import { automaticFallback, ChildRunsSwitch, type ChildRunsChoice, fallbackParams, FallbackOptions, RunLimitsOption, WorkspaceLine } from '@/components/launch/launch-options'
+import { loginAgent } from '@/components/agents/agent-logins'
+import { LoginPicker, MoveSwitch, useOwnLogins } from '@/components/launch/login-picker'
+import { automaticFallback, ChildRunsSwitch, type ChildRunsChoice, fallbackParams, FallbackOptions, RunLimitsOption, withMoves, WorkspaceLine } from '@/components/launch/launch-options'
 import { PermissionControl, permissionFeature } from '@/components/launch/permission-control'
 import { ExtraRepos } from '@/components/launch/extra-repos'
 import { PhoneLaunchSheet } from '@/components/launch/phone-launch'
@@ -32,7 +34,7 @@ import { cn, focusRing, randomID, surface } from '@/lib/utils'
 import { type RootState, sameIdentity, useStore } from '@/store'
 import { useChildSettings, useChildSettingsRead } from '@/store/children'
 import { rememberChoice, saveLaunchDefaults, useLaunchDefaultsRead } from '@/store/launch-defaults'
-import { useCapability, useIsAdmin, useMainWidth, useSelf } from '@/store/hooks'
+import { useCapability, useIsAdmin, useLoginsServer, useMainWidth, useSelf } from '@/store/hooks'
 import { stillWaiting, usePastDeadline } from '@/store/optimistic'
 import { maxLaunchWidth, minLaunchWidth } from '@/store/ui'
 
@@ -136,6 +138,17 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   const errorCallout = useRef<HTMLDivElement>(null)
   const shown = useRef(true)
   const sharedAccount = account !== '' && account !== ownAccountID
+  const loginsServer = useLoginsServer()
+  const loginsOffered = open && !sharedAccount && harness === loginAgent && loginsServer
+  const [loginAttempt, setLoginAttempt] = useState(0)
+  const ownRead = useOwnLogins(api, loginsOffered, loginAttempt)
+  const ownLogins = ownRead?.logins ?? null
+  const severalLogins = !!ownLogins && ownLogins.length > 1
+  const [login, setLogin] = useState(restored?.login ?? null)
+  const picked = login ? ownLogins?.find((item) => item.id === login.id) : undefined
+  const pickedLogin = loginsOffered && picked ? picked.id : ''
+  // A picked login is sent only once a fresh read of the list holds it; until then the launch waits.
+  const loginWait = loginsOffered && login && !picked ? (ownRead === null ? 'reading' : ownRead.error !== null ? 'unread' : 'gone') : null
   const accountName = accounts.find((member) => member.id === account)?.display_name ?? account
   const taskMissing = needsTask(mode, task)
   const dictating = useDictating()
@@ -198,11 +211,12 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
       version: 1, id: draftID, workspace: workspaceID, extras, account, fallback,
       permission, childRuns, limits, harness, mode, model, effort, task,
       ...(link ? { linear: link } : {}),
+      ...(login ? { login } : {}),
     }
     const failure = state.setLaunchDraft(draft, !launchDraftError)
     if (failure && !storageFailed.current) toast.error(`Draft could not be saved in this browser: ${failure}`)
     storageFailed.current = failure !== null
-  }, [identityKey, draftID, open, workspaceID, extras, account, fallback, permission, childRuns, limits, harness, mode, model, effort, task, link, launchDraftError, linkStatus])
+  }, [identityKey, draftID, open, workspaceID, extras, account, fallback, permission, childRuns, limits, harness, mode, model, effort, task, link, login, launchDraftError, linkStatus])
 
   const collapse = () => {
     setPickedWorkspace(workspaceID)
@@ -272,6 +286,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
       ...(permissionOffered ? { permission } : {}),
       ...(link ? { linear_issue_url: link.url } : {}),
       ...(sharedAccount ? { account_member_id: account } : {}),
+      ...(pickedLogin ? { login: pickedLogin } : {}),
       ...fallbackParams(fallback, accounts, account),
       ...extraRepos,
       ...(childRunsOffered && childRuns && mode !== 'headless' ? { children: childRuns } : {}),
@@ -336,6 +351,16 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
         </Callout>
       )}
       {agentError && <Callout tone="failed" role="alert">{agentError}</Callout>}
+      {loginsOffered && ownRead?.error && (
+        <Callout
+          tone="failed"
+          role="alert"
+          title="Your logins could not be read."
+          actions={<Button type="button" size="sm" variant="secondary" onClick={() => setLoginAttempt((n) => n + 1)}>Retry login read</Button>}
+        >
+          {ownRead.error}{login && ` Launch waits for them, since you picked ${login.name}.`}
+        </Callout>
+      )}
       {noAgents && (
         <Callout
           tone="neutral"
@@ -366,11 +391,41 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   useClock()
   const now = Date.now()
   const accountReadiness = (member: Member) => readiness(accountStatus[member.id], harness, member.id === ownAccountID ? undefined : member.display_name, now)
-  const accountChoice = accounts.length > 1 && (
+  // Only the default login's usage is read here, with the account's when there are several accounts.
+  const loginUsage = { default: accountStatus[ownAccountID]?.usage?.find((provider) => provider.provider === loginAgent) }
+  const moves = !fallbackParams(fallback, accounts, account).no_fallback
+  const setMoves = (on: boolean) => { fallbackPicked.current = true; setFallback(withMoves(fallback, on)) }
+  const moveSwitch = severalLogins && <MoveSwitch accounts={accounts.length > 1} moves={moves} onMoves={setMoves} disabled={launching} />
+  const loginChoice = loginsOffered && (severalLogins || login) && (ownLogins
+    ? (
+      <div className="flex flex-col gap-1">
+        <LoginPicker logins={ownLogins} value={login?.id ?? ''} onChange={(id) => setLogin(id ? { id, name: ownLogins.find((item) => item.id === id)?.name ?? id } : null)} usage={loginUsage} now={now} moves={moves} move={moveSwitch} disabled={launching} />
+        {loginWait === 'gone' && login && <p role="alert" className="text-ui-sm text-state-failed">You have no login {login.name} any more. Pick another to launch.</p>}
+      </div>
+    )
+    : login && (
+      <p className="flex flex-col gap-1 text-ui-sm text-muted">
+        <span className="text-ui font-medium text-text">Login</span>
+        {loginWait === 'reading' ? `${login.name}: reading your logins…` : `${login.name}: your logins could not be read.`}
+      </p>
+    ))
+  const fallbackOffered = accounts.length > 1 || severalLogins
+  const saves = severalLogins
+    ? accounts.length > 1
+      ? 'Saves this account, the fallback accounts and whether a session may move to another login or account, for launches on every device; not the login.'
+      : 'Saves whether a session may move to another login, for launches on every device; not the login.'
+    : `Saves ${accounts.length > 1 ? 'this account and fallback' : 'the fallback'} for launches on every device${loginChoice ? '; not the login' : ''}.`
+  // A phone keeps the login and its switch above More options, in sight with it shut.
+  const accountChoice = (fallbackOffered || (!phone && loginChoice)) && (
     <div className="flex flex-col gap-2">
-      <AccountPicker accounts={accounts} ownAccountID={ownAccountID} value={account} onChange={(next) => { accountPicked.current = true; setError(null); setAccount(next) }} agentName={harness ? agentLabel(choice.agent, harness) : ''} status={accountReadiness} disabled={launching} />
-      <FallbackOptions accounts={accounts} ownAccountID={ownAccountID} account={account} fallback={fallback} onFallback={(next) => { fallbackPicked.current = true; setFallback(next) }} status={accountReadiness} />
-      {savesDefaults && <SaveAccountDefault choice={JSON.stringify([account, fallback])} onSave={saveAccountDefault} />}
+      {accounts.length > 1 && <AccountPicker accounts={accounts} ownAccountID={ownAccountID} value={account} onChange={(next) => { accountPicked.current = true; setError(null); setAccount(next) }} agentName={harness ? agentLabel(choice.agent, harness) : ''} status={accountReadiness} disabled={launching} />}
+      {!phone && loginChoice}
+      {fallbackOffered && (
+        <>
+          <FallbackOptions accounts={accounts} ownAccountID={ownAccountID} account={account} logins={severalLogins} fallback={fallback} onFallback={(next) => { fallbackPicked.current = true; setFallback(next) }} status={accountReadiness} />
+          {savesDefaults && <SaveAccountDefault choice={JSON.stringify([account, fallback])} onSave={saveAccountDefault} saves={saves} />}
+        </>
+      )}
     </div>
   )
 
@@ -395,7 +450,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
     </>
   )
   // agents is null while the chosen account's list is read, and harness may still be the last account's.
-  const launchDisabled = launching || !accountsRead || accountsReadError !== null || !workspace || !account || !harness || !agents || taskMissing || dictating
+  const launchDisabled = launching || !accountsRead || accountsReadError !== null || !workspace || !account || !harness || !agents || taskMissing || dictating || loginWait !== null
 
   if (!visible) return null
 
@@ -415,6 +470,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
         workspace={workspace}
         onWorkspace={(id) => { setError(null); setPickedWorkspace(id) }}
         accountName={sharedAccount ? accountName : undefined}
+        login={loginChoice || undefined}
         lastSession={!last || pickedWorkspace !== null || workspaceID !== last.workspace_id ? 'none' : harness === last.harness ? 'repository and agent' : 'repository'}
         onAddWorkspace={() => { close(); navigate('workspaces') }}
         options={

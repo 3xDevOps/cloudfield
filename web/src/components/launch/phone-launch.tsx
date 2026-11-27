@@ -29,6 +29,7 @@ export function PhoneLaunchSheet({
   onWorkspace,
   lastSession,
   accountName,
+  login,
   onAddWorkspace,
   options,
   notes,
@@ -53,6 +54,8 @@ export function PhoneLaunchSheet({
   /** What still matches your newest session, which the sheet starts from. */
   lastSession: 'repository and agent' | 'repository' | 'none'
   accountName?: string
+  /** The Login field with its switch, kept in sight with More options shut. */
+  login?: ReactNode
   onAddWorkspace: () => void
   /** Permission, mode, model, limits and the rest of the desktop form. */
   options: ReactNode
@@ -113,6 +116,7 @@ export function PhoneLaunchSheet({
               <p className="text-ui-sm text-muted">{lastSession === 'repository' ? 'Repository from your last session.' : 'Same repository and agent as your last session.'}</p>
             )}
           </div>
+          {login}
           <Collapsible>
             <CollapsibleTrigger>
               <span className="shrink-0 font-medium">More options</span>

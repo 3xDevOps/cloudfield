@@ -182,6 +182,11 @@ export function useWorkspaceAccessServer(): boolean {
   return useStore((s) => !!s.info?.features?.includes(workspaceAccessFeature))
 }
 
+/** Whether the server keeps added logins: it serves agent.login.* and honours login on run.launch. */
+export function useLoginsServer(): boolean {
+  return useStore((s) => !!s.info?.features?.includes('logins'))
+}
+
 export function useIsSuperAdmin(): boolean {
   return useStore((s) => administersServer(s.info))
 }
