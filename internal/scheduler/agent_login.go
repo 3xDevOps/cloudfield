@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"time"
@@ -180,19 +181,6 @@ func (s *Scheduler) environmentSignsIn(ctx context.Context, workspace domain.Wor
 	return slices.ContainsFunc(keys, func(key string) bool { return env[key] != "" }), nil
 }
 
-// environmentPays reports whether a variable the workspace sets signs agent
-// in, as the agent reads it, whatever added login a session mounts.
-func (s *Scheduler) environmentPays(ctx context.Context, workspace domain.WorkspaceID, agent string, profile harness.Profile, mode domain.LaunchMode) (bool, error) {
-	if signInKeys(agent, mode) == nil {
-		return false, nil
-	}
-	env, err := s.workspaceVariables(ctx, workspace, profile)
-	if err != nil {
-		return false, err
-	}
-	return signsIn(env, agent, mode), nil
-}
-
 // workspaceVariables are the variables a session of profile in workspace
 // gets from the workspace and the server.
 func (s *Scheduler) workspaceVariables(ctx context.Context, workspace domain.WorkspaceID, profile harness.Profile) (map[string]string, error) {
@@ -261,22 +249,32 @@ func EnvironmentPays(login domain.LoginID, payer string) error {
 // or home's ~/.claude/settings.json, which Claude Code prefers to a login
 // file. Empty when nothing does.
 func (s *Scheduler) loginPayer(ctx context.Context, workspace domain.WorkspaceID, home domain.MemberID, agent string, profile harness.Profile, mode domain.LaunchMode) (string, error) {
-	if byEnv, err := s.environmentPays(ctx, workspace, agent, profile, mode); err != nil || byEnv {
-		return "a workspace or server variable signs the agent in", err
+	var env map[string]string
+	if signInKeys(agent, mode) != nil {
+		var err error
+		if env, err = s.workspaceVariables(ctx, workspace, profile); err != nil {
+			return "", err
+		}
 	}
-	return s.settingsPayer(home, agent), nil
+	return s.payer(env, home, agent, mode), nil
 }
 
-// settingsPayer is what home's ~/.claude/settings.json sets that signs agent
-// in whatever login a session in that home mounts. A file the server cannot
-// read may sign it in.
-func (s *Scheduler) settingsPayer(home domain.MemberID, agent string) string {
-	key, err := s.settingsSignIn(home, agent)
+// payer is what signs agent in, in mode, whatever login a session in home's
+// home with the variables env mounts: one of env, or home's
+// ~/.claude/settings.json, whose env block Claude Code adds to them. A
+// settings file the server cannot read may sign it in.
+func (s *Scheduler) payer(env map[string]string, home domain.MemberID, agent string, mode domain.LaunchMode) string {
+	if signsIn(env, agent, mode) {
+		return "a workspace or server variable signs the agent in"
+	}
+	key, err := s.settingsSignIn(home, agent, env)
 	switch {
 	case err != nil:
 		return "~/.claude/settings.json may sign the agent in and cannot be read: " + err.Error()
 	case key == "apiKeyHelper":
 		return "apiKeyHelper in ~/.claude/settings.json signs the agent in"
+	case key == "ANTHROPIC_FEDERATION_RULE_ID":
+		return "ANTHROPIC_FEDERATION_RULE_ID and ANTHROPIC_ORGANIZATION_ID, set under env in ~/.claude/settings.json or by the workspace or server, sign the agent in"
 	case key != "":
 		return key + " under env in ~/.claude/settings.json signs the agent in"
 	}
@@ -284,9 +282,10 @@ func (s *Scheduler) settingsPayer(home domain.MemberID, agent string) string {
 }
 
 // settingsSignIn is what home's ~/.claude/settings.json sets that signs
-// agent in, ahead of any login file: "apiKeyHelper", the first variable of
-// its env block that does, or empty for none.
-func (s *Scheduler) settingsSignIn(home domain.MemberID, agent string) (string, error) {
+// agent in, ahead of any login file, with the variables env beside it:
+// "apiKeyHelper", the first variable of its env block over env that does,
+// or empty for none.
+func (s *Scheduler) settingsSignIn(home domain.MemberID, agent string, env map[string]string) (string, error) {
 	if agent != "claude" || s.cfg.Homes == nil {
 		return "", nil
 	}
@@ -297,7 +296,10 @@ func (s *Scheduler) settingsSignIn(home domain.MemberID, agent string) (string, 
 	case settings.APIKeyHelper:
 		return "apiKeyHelper", nil
 	}
-	return signingKey(settings.Env, agent, ""), nil
+	merged := make(map[string]string, len(env)+len(settings.Env))
+	maps.Copy(merged, env)
+	maps.Copy(merged, settings.Env)
+	return signingKey(merged, agent, ""), nil
 }
 
 // checkLogin refuses a launch of agent on account whose login cannot sign it

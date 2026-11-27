@@ -591,6 +591,24 @@ func TestAWorkspaceSwitchSetOffLeavesAnAddedLoginToPay(t *testing.T) {
 	}
 }
 
+// Workload identity federation's rule set by the workspace and its
+// organisation under env in ~/.claude/settings.json sign Claude Code in
+// together, so a launch on an added login is refused.
+func TestAFederationSplitBetweenWorkspaceAndSettingsRefusesAnAddedLogin(t *testing.T) {
+	e := newLoginShareEnv(t)
+	work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+	if err := e.db.SetWorkspaceEnvironment(t.Context(), e.ws.ID, domain.WorkspaceEnvironment{Variables: map[string]string{"ANTHROPIC_FEDERATION_RULE_ID": "fdrl_test"}}); err != nil {
+		t.Fatal(err)
+	}
+	writeHomeFile(t, e.adaHome, ".claude/settings.json", `{"env":{"ANTHROPIC_ORGANIZATION_ID":"org-test"}}`)
+	if _, err := e.launchOn(t, work, ""); !errors.Is(err, ErrEnvironmentPays) || !strings.Contains(err.Error(), "ANTHROPIC_FEDERATION_RULE_ID and ANTHROPIC_ORGANIZATION_ID") {
+		t.Fatalf("a launch naming work: %v; want refused, naming both variables", err)
+	}
+	if payer, err := e.sched.LoginPayer(t.Context(), e.ws.ID, e.member.ID, "claude", domain.LaunchTUI); err != nil || payer == "" {
+		t.Fatalf("LoginPayer = %q, %v; want the federation named", payer, err)
+	}
+}
+
 // Choosing a login knows whether the session is Isolated, which cannot
 // mount a Console login's directory, and skips a login whose files no
 // longer hold the sign-in it was added with, rather than choosing either

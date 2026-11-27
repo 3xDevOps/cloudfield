@@ -68,10 +68,7 @@ func (s *Scheduler) addedLoginMounts(run *domain.Run, launcher domain.MemberID, 
 		// Checked again on the variables this plan sets and the home's
 		// settings: one added after the launch was admitted would pay instead
 		// of the login.
-		if signsIn(env, profile.Name, run.Mode) {
-			return nil, EnvironmentPays(run.AccountLogin, "a workspace or server variable signs the agent in")
-		}
-		if payer := s.settingsPayer(launcher, profile.Name); payer != "" {
+		if payer := s.payer(env, launcher, profile.Name, run.Mode); payer != "" {
 			return nil, EnvironmentPays(run.AccountLogin, payer)
 		}
 		// Empty, not absent: an image's own ENV would fill an absent one.
@@ -273,7 +270,7 @@ func (s *Scheduler) defaultSignInProblem(member domain.MemberID, agent string, p
 	if problem == "" {
 		return "", nil
 	}
-	key, err := s.settingsSignIn(member, agent)
+	key, err := s.settingsSignIn(member, agent, nil)
 	if err != nil {
 		return "", fmt.Errorf("%w: %w", errLoginUnread, err)
 	}
