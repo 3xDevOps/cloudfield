@@ -10,6 +10,14 @@ import { useStore } from '@/store'
 
 /** How a super admin moves the server off the address `need` names. */
 export function EdgeMoveSteps({ need }: { need: EdgeNeed }) {
+  if (need.notice.moved_to) {
+    return (
+      <div className="flex min-w-0 flex-col gap-1.5 text-ui-sm">
+        <p className="break-words">The server's options file already names {need.notice.moved_to}; the server still runs at {need.edgeURL}. Restart it on the server's host to apply:</p>
+        <CopyableCommand command={need.restart} />
+      </div>
+    )
+  }
   if (!need.move) {
     return (
       <div className="flex min-w-0 flex-col gap-1.5 text-ui-sm">

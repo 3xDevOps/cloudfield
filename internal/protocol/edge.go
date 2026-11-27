@@ -29,6 +29,9 @@ type EdgeNotice struct {
 	Replacement string `json:"replacement"`
 	Date        string `json:"date,omitempty"`
 	FirstUse    bool   `json:"first_use,omitempty"`
+	// MovedTo is the edge-url the server's options file names when it is
+	// another address, as after edge move and before the restart.
+	MovedTo string `json:"moved_to,omitempty"`
 }
 
 // EdgeAccount is an account signed in at an edge.

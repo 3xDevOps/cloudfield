@@ -8,8 +8,10 @@ import (
 	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
+	edgeclient "github.com/3xDevOps/cloudfield/internal/edge/client"
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/serversetup"
 )
 
 func init() {
@@ -40,9 +42,30 @@ func (s *Server) serverEdge(context.Context, domain.MemberID, json.RawMessage) (
 		out.Owner = &protocol.EdgeAccount{Provider: owner.Provider, Login: owner.Login}
 	}
 	if n, ok := notices.For(out.EdgeURL); ok {
-		out.Notice = &protocol.EdgeNotice{State: n.State, Replacement: n.Replacement, Date: n.Date, FirstUse: notices.FirstUse}
+		out.Notice = &protocol.EdgeNotice{State: n.State, Replacement: n.Replacement, Date: n.Date, FirstUse: notices.FirstUse, MovedTo: s.configuredEdgeURL(out.EdgeURL)}
 	}
 	return out, nil
+}
+
+// configuredEdgeURL is the edge-url the options file names when it is not
+// running, the address the server runs at; empty when the file names
+// running, none, or cannot be read.
+func (s *Server) configuredEdgeURL(running string) string {
+	if s.cfg.ConfigPath == "" {
+		return ""
+	}
+	values, err := serversetup.Load(s.cfg.ConfigPath)
+	if err != nil {
+		slog.Warn("sshd: server.edge cannot tell whether edge-url changed since the start", "error", err)
+		return ""
+	}
+	configured := values["edge-url"]
+	a, aerr := edgeclient.Canonical(configured)
+	b, berr := edgeclient.Canonical(running)
+	if configured == "" || aerr == nil && berr == nil && a == b {
+		return ""
+	}
+	return configured
 }
 
 // serverEdgeClaimCode issues the calling super admin a claim code bound to

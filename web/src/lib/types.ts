@@ -1527,6 +1527,8 @@ export interface EdgeNotice {
   date?: string
   /** Came with the connection that pinned the edge key: trusted on first use only. */
   first_use?: boolean
+  /** The edge-url the server's options file names when it differs from edge_url: moved, not yet restarted. */
+  moved_to?: string
 }
 
 /** server.edge.claimcode: a claim code bound to the calling admin. */

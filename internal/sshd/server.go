@@ -123,6 +123,9 @@ type Config struct {
 	// and admitted; under PolicyApprovedDevices, which empty selects, it
 	// waits until a person approves it.
 	EdgeAccess edgeproto.AccessPolicy
+	// ConfigPath is the server's options file, read again by server.edge
+	// for an edge-url set since the start; empty reads none.
+	ConfigPath string
 	// EdgeReviewer lets an admin bind the edge's reviewer account to a
 	// member who is no admin, and a connector authorized by signing in
 	// with it act as that member. False refuses both.

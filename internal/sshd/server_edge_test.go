@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -124,6 +126,35 @@ func TestServerEdgeNotice(t *testing.T) {
 		}
 		if got := fmt.Sprint(raw); strings.Contains(got, "notices.json") || raw["edge_url"] == nil {
 			t.Errorf("%s: server.edge = %s", tc.name, got)
+		}
+	}
+}
+
+// After edge move and before the restart, the notice says which address
+// the options file now names; a file naming the running address, the same
+// origin with its port written out, or none says nothing.
+func TestServerEdgeNoticeAfterAMove(t *testing.T) {
+	t.Parallel()
+	path := filepath.Join(t.TempDir(), "server.conf")
+	e := newTestEnv(t, func(c *Config) { c.ConfigPath = path })
+	bobKey, _ := addMember(t, e, "Bob", domain.RoleViewer, false)
+	bob := controlAs(t, e, bobKey)
+	const own, other = "https://edge.example", "https://edge2.example"
+	e.srv.SetEdgeOwner(&fakeEdgeOwner{notices: edgeagent.StoredNotices{Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: own, Replacement: other}}}})
+	for _, tc := range []struct{ config, want string }{
+		{"", `{"state":"retiring","replacement":"https://edge2.example"}`},
+		{"edge-url = " + own + ":443\n", `{"state":"retiring","replacement":"https://edge2.example"}`},
+		{"edge-url = " + other + "\n", `{"state":"retiring","replacement":"https://edge2.example","moved_to":"https://edge2.example"}`},
+	} {
+		if err := os.WriteFile(path, []byte(tc.config), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var raw map[string]json.RawMessage
+		if err := bob.Call(protocol.MethodServerEdge, struct{}{}, &raw); err != nil {
+			t.Fatal(err)
+		}
+		if got := string(raw["notice"]); got != tc.want {
+			t.Errorf("config %q: notice %s, want %s", tc.config, got, tc.want)
 		}
 	}
 }

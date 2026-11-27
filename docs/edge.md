@@ -260,7 +260,9 @@ apply it with:
 ```
 
 Until the restart `edge status` prints `running      the server last dialed
-<old>; restart to apply edge-url: sudo systemctl restart aether-server`.
+<old>; restart to apply edge-url: sudo systemctl restart aether-server`. Settings
+› Remote access and Needs you read the config file's `edge-url` again and, while
+it names another address than the running one, show only the restart command.
 
 `edge move` holds the pin file open from its start. Each enrollment, and the
 write of `edge-url`, needs that same pin file still in place, so a key pinned

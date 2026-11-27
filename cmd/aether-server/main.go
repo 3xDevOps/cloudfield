@@ -415,6 +415,7 @@ func serve(args []string) error {
 		EdgeURL:      string(*o.edgeURL),
 		EdgeAccess:   edgeproto.AccessPolicy(*o.edgeAccess),
 		EdgeReviewer: *o.edgeReviewer,
+		ConfigPath:   *configPath,
 
 		CoordinationDisabled: !*o.conflictCoordination,
 
