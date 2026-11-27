@@ -307,9 +307,19 @@ func (s *Scheduler) checkAddedLogin(ctx context.Context, member domain.MemberID,
 		return err
 	}
 	if problem != "" {
-		return fmt.Errorf("scheduler: %w: login %s: %s; its owner signs in again with cloudfield agent login %s", ErrSignedOut, account.Login, problem, agent)
+		return fmt.Errorf("scheduler: %w: login %s: %s; %s", ErrSignedOut, logins[i].Name, problem, readdSteps(agent, logins[i].Name))
 	}
 	return nil
+}
+
+// addedLoginName is the name of account's added login of agent, or its id
+// when the name cannot be read.
+func (s *Scheduler) addedLoginName(ctx context.Context, account domain.Account, agent string) string {
+	logins, err := s.cfg.Store.ListAgentLogins(ctx, account.Member, agent)
+	if i := slices.IndexFunc(logins, func(l domain.AgentLogin) bool { return l.ID == account.Login }); err == nil && i >= 0 {
+		return logins[i].Name
+	}
+	return string(account.Login)
 }
 
 // EnvironmentSignsIn reports whether a variable of workspace signs agent

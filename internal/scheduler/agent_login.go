@@ -237,6 +237,8 @@ type runLogin struct {
 	agent   string
 	label   string
 	profile harness.Profile
+	// name is the added login's, empty for the default login.
+	name string
 	// fileProblem is loginFileProblem's answer and stamp the login files'.
 	fileProblem string
 	stamp       string
@@ -255,6 +257,7 @@ func (s *Scheduler) runLogin(ctx context.Context, runID domain.RunID) runLogin {
 		return runLogin{}
 	}
 	if login.account.Login.Added() {
+		login.name = s.addedLoginName(ctx, login.account, login.agent)
 		if login.fileProblem, err = s.addedLoginProblem(login.account, login.agent); err != nil {
 			return runLogin{}
 		}
@@ -301,18 +304,27 @@ func (s *Scheduler) loginRefusedAdvice(login runLogin, cause error, how refusedH
 		return "sign the agent in from this session's Terminal tab"
 	}
 	s.loginRefused(login.account, login.agent, login.stamp, cause)
-	steps := signInSteps(login.agent, login.profile)
+	steps, which := signInSteps(login.agent, login.profile), login.label+" login"
+	if login.name != "" {
+		steps, which = readdSteps(login.agent, login.name), which+" "+login.name
+	}
 	switch {
 	case login.fileProblem != "" && how == refusedRestarting:
-		return fmt.Sprintf("%s's %s login is signed out. Sign in, then send the message again: %s", login.owner, login.label, steps)
+		return fmt.Sprintf("%s's %s is signed out. Sign in, then send the message again: %s", login.owner, which, steps)
 	case login.fileProblem != "":
-		return fmt.Sprintf("%s's %s login is signed out. Sign in: %s", login.owner, login.label, steps)
+		return fmt.Sprintf("%s's %s is signed out. Sign in: %s", login.owner, which, steps)
 	case how == refusedRestarting:
 		return fmt.Sprintf("Cloudfield restarted the agent to reread %s's login: send the message again. Refused again? Sign in: %s", login.owner, steps)
 	case how == refusedAfterRestart:
-		return fmt.Sprintf("a restart did not help. Start a new session, or if %s's %s login is signed out, sign in: %s", login.owner, login.label, steps)
+		return fmt.Sprintf("a restart did not help. Start a new session, or if %s's %s is signed out, sign in: %s", login.owner, which, steps)
 	}
-	return fmt.Sprintf("%s's %s login may be signed out. Sign in: %s", login.owner, login.label, steps)
+	return fmt.Sprintf("%s's %s may be signed out. Sign in: %s", login.owner, which, steps)
+}
+
+// readdSteps is how the owner of agent's added login name signs it in
+// again: a login is signed in once, when it is added.
+func readdSteps(agent, name string) string {
+	return fmt.Sprintf("its owner removes it and adds it again, with cloudfield agent logins remove %s, then cloudfield agent login %s --as %s", name, agent, name)
 }
 
 // turnWorked forgets a refusal on the run's account once a turn there ends

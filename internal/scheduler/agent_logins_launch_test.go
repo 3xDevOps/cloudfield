@@ -151,7 +151,7 @@ func TestLaunchOnAnAddedLoginRefusals(t *testing.T) {
 		wantText   string
 	}{
 		{name: "off for shares", file: workLogin, unshared: true, want: permissions.ErrDenied},
-		{name: "signed out", file: `{"claudeAiOauth":{"accessToken":"test-access-old","expiresAt":1}}`, want: ErrSignedOut},
+		{name: "signed out", file: `{"claudeAiOauth":{"accessToken":"test-access-old","expiresAt":1}}`, want: ErrSignedOut, wantText: "cloudfield agent login claude --as work"},
 		{name: "isolated Console", own: true, permission: domain.PermissionIsolated, wantText: "Isolated session cannot use a Console login"},
 		{name: "a workspace key pays", own: true, file: workLogin, variables: map[string]string{"ANTHROPIC_API_KEY": "test-not-a-key"}, wantText: "would not pay"},
 		{name: "Microsoft Foundry pays", own: true, file: workLogin, variables: map[string]string{"CLAUDE_CODE_USE_FOUNDRY": "True"}, wantText: "would not pay"},
@@ -660,7 +660,7 @@ func TestLoginInUseFailsClosedOnAnUnreadSession(t *testing.T) {
 
 // An agent's refusal for want of a sign-in in a session on an added login
 // is remembered for that login, not the default one, and a turn that works
-// there forgets it.
+// there forgets it. Its advice names the login and how to add it again.
 func TestARefusalOnAnAddedLoginIsKeyedByThatLogin(t *testing.T) {
 	e := newLoginShareEnv(t)
 	ctx := t.Context()
@@ -673,7 +673,11 @@ func TestARefusalOnAnAddedLoginIsKeyedByThatLogin(t *testing.T) {
 	if !login.known {
 		t.Fatal("the session's login is unknown")
 	}
-	e.sched.loginRefusedAdvice(login, acp.NewAuthRequired(nil), refusedUnrestarted)
+	advice := e.sched.loginRefusedAdvice(login, acp.NewAuthRequired(nil), refusedUnrestarted)
+	if !strings.Contains(advice, "Claude Code login work may be signed out") || !strings.Contains(advice, "cloudfield agent logins remove work, then cloudfield agent login claude --as work") ||
+		strings.Contains(advice, "Agents page") {
+		t.Fatalf("advice = %q; want it to name work and how to add it again, not the default login's sign-in", advice)
+	}
 	profile, _ := harness.Lookup("claude")
 	if problem, _, err := e.sched.LoginProblem(e.member.ID, e.member.ID, "claude", profile); err != nil || problem != "" {
 		t.Fatalf("Ada's default login after a refusal on work = %q, %v; want no problem", problem, err)

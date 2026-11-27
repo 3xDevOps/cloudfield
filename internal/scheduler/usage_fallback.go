@@ -136,11 +136,7 @@ func (s *Scheduler) loginName(ctx context.Context, account domain.Account, agent
 	if !account.Login.Added() {
 		return owner + "default login"
 	}
-	logins, err := s.cfg.Store.ListAgentLogins(ctx, account.Member, agent)
-	if i := slices.IndexFunc(logins, func(l domain.AgentLogin) bool { return l.ID == account.Login }); err == nil && i >= 0 {
-		return owner + "login " + logins[i].Name
-	}
-	return owner + "login " + string(account.Login)
+	return owner + "login " + s.addedLoginName(ctx, account, agent)
 }
 
 // usageMovableLocked reports whether entry's run may move to another account
