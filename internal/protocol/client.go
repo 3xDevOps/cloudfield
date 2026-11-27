@@ -64,7 +64,8 @@ func (c *Client) Call(method string, params, result any) error {
 		return fmt.Errorf("protocol: write request: %w", werr)
 	}
 
-	respLine, err := readResponse(c.r, responseLineLimit(method), c.gzip)
+	limit := responseLineLimit(method)
+	respLine, err := readResponse(c.r, limit, c.gzip && limit == MaxLineBytes)
 	if err != nil {
 		return fmt.Errorf("protocol: read response: %w", err)
 	}

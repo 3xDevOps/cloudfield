@@ -9,17 +9,16 @@ import (
 	"fmt"
 	"io"
 	"math/rand/v2"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/3xDevOps/cloudfield/internal/domain"
 )
 
 func TestGzipFrameRoundTrip(t *testing.T) {
 	t.Parallel()
-	result, _ := json.Marshal(RunListResult{Runs: benchRuns(100)})
+	result, _ := json.Marshal(WorkspaceTimelineResult{Events: benchEvents(100)})
 	resp := Response{JSONRPC: "2.0", ID: json.RawMessage("7"), Result: result}
 	plain, _ := json.Marshal(resp)
 	for _, compress := range []bool{false, true} {
@@ -61,35 +60,95 @@ func TestWriteResponseKeepsLinesThatDoNotShrink(t *testing.T) {
 	}
 }
 
-// A small frame cannot expand past the limit a JSON line has, and a frame
-// cannot claim more compressed bytes than that limit either.
-func TestReadResponseBoundsGzipFrames(t *testing.T) {
-	t.Parallel()
-	const limit = 1 << 20
-	var bomb bytes.Buffer
-	zw, _ := gzip.NewWriterLevel(&bomb, gzip.BestCompression)
-	_, _ = zw.Write([]byte(`{"jsonrpc":"2.0","id":1,"result":"`))
-	_, _ = zw.Write(make([]byte, 64<<20))
+func gzipped(t *testing.T, parts ...[]byte) []byte {
+	t.Helper()
+	var z bytes.Buffer
+	zw, _ := gzip.NewWriterLevel(&z, gzip.BestCompression)
+	for _, p := range parts {
+		_, _ = zw.Write(p)
+	}
 	_ = zw.Close()
-	frame := fmt.Sprintf("gzip %d\n%s", bomb.Len(), bomb.Bytes())
-	if bomb.Len() > limit/8 {
-		t.Fatalf("bomb is %d bytes, want it far below the limit", bomb.Len())
+	return z.Bytes()
+}
+
+func frame(body []byte) string { return fmt.Sprintf("gzip %010d\n%s", len(body), body) }
+
+// A small frame cannot expand past the limit a JSON line has, and the
+// bound holds while inflating: reading a 64 MiB bomb against a 1 MiB limit
+// allocates a few MiB, not the bomb.
+func TestReadResponseBoundsGzipFrames(t *testing.T) {
+	const limit = 1 << 20
+	bomb := gzipped(t, []byte(`{"jsonrpc":"2.0","id":1,"result":"`), make([]byte, 64<<20))
+	if len(bomb) > limit/8 {
+		t.Fatalf("bomb is %d bytes, want it far below the limit", len(bomb))
 	}
-	if _, err := readResponse(bufio.NewReader(strings.NewReader(frame)), limit, true); err == nil || !strings.Contains(err.Error(), "exceeds") {
-		t.Fatalf("64 MiB bomb in a %d-byte frame: err %v, want the line limit", bomb.Len(), err)
+	in := frame(bomb)
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	_, err := readResponse(bufio.NewReader(strings.NewReader(in)), limit, true)
+	runtime.ReadMemStats(&after)
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("64 MiB bomb in a %d-byte frame: err %v, want the line limit", len(bomb), err)
 	}
-	huge := fmt.Sprintf("gzip %d\n", limit+1)
-	if _, err := readResponse(bufio.NewReader(strings.NewReader(huge)), limit, true); err == nil || !strings.Contains(err.Error(), "exceeds") {
+	if alloc := after.TotalAlloc - before.TotalAlloc; alloc > 8*limit {
+		t.Fatalf("reading the bomb allocated %d bytes, want the inflation stopped near the %d-byte limit", alloc, limit)
+	}
+	if _, err := readResponse(bufio.NewReader(strings.NewReader(fmt.Sprintf("gzip %010d\n", limit+1))), limit, true); err == nil || !strings.Contains(err.Error(), "exceeds") {
 		t.Fatalf("oversized frame header: err %v, want the line limit", err)
 	}
-	for _, header := range []string{"gzip -1\n", "gzip x\n", "gzip 99999999999999999999\n"} {
-		if _, err := readResponse(bufio.NewReader(strings.NewReader(header)), limit, true); err == nil {
-			t.Fatalf("header %q accepted", header)
+}
+
+// The header is exactly the documented 16 bytes, digits only, and the
+// frame holds one gzip member and nothing after it.
+func TestReadResponseRefusesMalformedGzipFrames(t *testing.T) {
+	t.Parallel()
+	member := gzipped(t, []byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
+	for name, in := range map[string]string{
+		"short length":   "gzip 5\nabcde",
+		"signed length":  "gzip +000000005\nabcde",
+		"negative":       "gzip -000000005\nabcde",
+		"letter":         "gzip 00000000x5\nabcde",
+		"long header":    "gzip 00000000005\nabcde",
+		"zero length":    "gzip 0000000000\n",
+		"trailing bytes": frame(append(append([]byte{}, member...), "junk"...)),
+		"two members":    frame(append(append([]byte{}, member...), member...)),
+		"truncated body": fmt.Sprintf("gzip %010d\n%s", len(member)+10, member),
+	} {
+		if line, err := readResponse(bufio.NewReader(strings.NewReader(in)), MaxLineBytes, true); err == nil {
+			t.Errorf("%s: read %q, want an error", name, line)
 		}
 	}
+	if line, err := readResponse(bufio.NewReader(strings.NewReader(frame(member))), MaxLineBytes, true); err != nil || string(line) != `{"jsonrpc":"2.0","id":1,"result":{}}` {
+		t.Fatalf("well-formed frame: %q, %v", line, err)
+	}
 	// A client that did not ask treats the frame as a malformed line.
-	if line, err := readResponse(bufio.NewReader(strings.NewReader("gzip 3\nabc\n")), limit, false); err != nil || string(line) != "gzip 3" {
+	if line, err := readResponse(bufio.NewReader(strings.NewReader("gzip 3\nabc\n")), MaxLineBytes, false); err != nil || string(line) != "gzip 3" {
 		t.Fatalf("client without gzip read %q, %v", line, err)
+	}
+}
+
+type scriptedStream struct {
+	io.Reader
+	io.Writer
+}
+
+func (scriptedStream) Close() error { return nil }
+
+// The server never compresses a blob method, so a client that asked still
+// refuses a frame for one instead of inflating toward the blob limit.
+func TestClientRefusesGzipFrameForBlobMethods(t *testing.T) {
+	t.Parallel()
+	member := gzipped(t, []byte(`{"jsonrpc":"2.0","id":1,"result":{}}`))
+	c := NewClient(scriptedStream{Reader: strings.NewReader(frame(member)), Writer: io.Discard})
+	c.AcceptGzip()
+	if err := c.Call(MethodFilesRead, nil, nil); err == nil {
+		t.Fatal("files.read answered with a gzip frame was accepted")
+	}
+	c = NewClient(scriptedStream{Reader: strings.NewReader(frame(member)), Writer: io.Discard})
+	c.AcceptGzip()
+	if err := c.Call(MethodWorkspaceTimeline, nil, nil); err != nil {
+		t.Fatalf("workspace.timeline answered with a gzip frame: %v", err)
 	}
 }
 
@@ -151,27 +210,6 @@ func benchEvents(n int) []Event {
 	return out
 }
 
-// benchRuns is a run.list page: varied tasks and titles, random IDs.
-func benchRuns(n int) []Run {
-	rng := rand.New(rand.NewPCG(2, uint64(n)))
-	ws := benchID(rng, "ws-")
-	out := make([]Run, n)
-	at := time.Date(2026, 11, 6, 9, 0, 0, 0, time.UTC)
-	for i := range out {
-		at = at.Add(time.Duration(rng.IntN(3_600_000_000_000)))
-		created, finished := at.Format(time.RFC3339), at.Add(time.Hour).Format(time.RFC3339)
-		member := benchID(rng, "mem-")
-		out[i] = Run{
-			ID: benchID(rng, "run-"), WorkspaceID: ws, MemberID: member, AccountMemberID: member,
-			Task: benchText(rng, 8+rng.IntN(60)), Title: benchText(rng, 5), Harness: "claude", Mode: "acp", Model: "claude-opus-5-5",
-			Permission: "bypass", ACP: true, Status: "completed", StatusSeq: int64(rng.IntN(900)), PendingInputs: []domain.RunInputRequest{},
-			Branch: "cloudfield/" + benchID(rng, "run-"), LastCommit: fmt.Sprintf("%040x", rng.Uint64()),
-			CreatedAt: created, StartedAt: &created, FinishedAt: &finished,
-		}
-	}
-	return out
-}
-
 func benchBase64(n int) string {
 	rng := rand.New(rand.NewPCG(3, uint64(n)))
 	raw := make([]byte, n*3/4)
@@ -200,9 +238,6 @@ func benchPayloads(b *testing.B) []benchPayload {
 	for _, n := range []int{10, 40, 200, 1000, 10000} {
 		out = append(out, benchPayload{fmt.Sprintf("timeline-%d", n), line(WorkspaceTimelineResult{Events: benchEvents(n)})})
 	}
-	for _, n := range []int{10, 30, 120, 600, 3000} {
-		out = append(out, benchPayload{fmt.Sprintf("runs-%d", n), line(RunListResult{Runs: benchRuns(n)})})
-	}
 	for _, n := range []int{16 << 10, 350 << 10, 8 << 20} {
 		out = append(out, benchPayload{fmt.Sprintf("base64-%dKiB", n>>10), line(map[string]string{"content_base64": benchBase64(n)})})
 	}
@@ -229,11 +264,11 @@ func BenchmarkGzipLevels(b *testing.B) {
 				b.ReportMetric(float64(z.Len()), "wire-B")
 				b.ReportMetric(float64(len(p.line))/float64(z.Len()), "ratio")
 			})
-			frame := fmt.Appendf(nil, "gzip %d\n%s", z.Len(), z.Bytes())
+			encoded := frame(z.Bytes())
 			b.Run(fmt.Sprintf("%s/%dB/level%d/decompress", p.name, len(p.line), level), func(b *testing.B) {
 				b.SetBytes(int64(len(p.line)))
 				for b.Loop() {
-					if _, err := readResponse(bufio.NewReader(bytes.NewReader(frame)), MaxLineBytes, true); err != nil {
+					if _, err := readResponse(bufio.NewReader(strings.NewReader(encoded)), MaxLineBytes, true); err != nil {
 						b.Fatal(err)
 					}
 				}

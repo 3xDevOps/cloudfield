@@ -341,24 +341,24 @@ unavailable identity service is reported as `-32004`.
 
 Nothing between the server and `cloudfield gui` compresses: SSH runs
 without compression and the edge relay's WebSockets have it off. A 1,000-event
-`workspace.timeline` page or a 600-session `run.list` is about 350 KB of
-JSON, so the gateway asks the server to gzip large answers.
+`workspace.timeline` page, of which Lanes reads up to 25 per workspace, is
+about 370 KB of JSON, so the gateway asks the server to gzip it.
 
 The control channel (`aether-control`) carries one JSON request line and
 gets one response frame back. A caller asks for compression per request with
 one more member on the request object:
 
 ```json
-{"jsonrpc":"2.0","id":7,"method":"run.list","params":{},"accept_encoding":"gzip"}
+{"jsonrpc":"2.0","id":7,"method":"workspace.timeline","params":{"workspace_id":"..."},"accept_encoding":"gzip"}
 ```
 
 The server may then answer with a gzip frame instead of a JSON line: the
-16-byte ASCII header `gzip <n>\n`, with `n` as ten zero-padded decimal digits,
-followed by `n` bytes holding one gzip member (RFC 1952) whose content is the
-response object, without its newline:
+16-byte ASCII header `gzip <n>\n`, with `n` as exactly ten decimal digits,
+zero-padded, followed by `n` bytes holding one gzip member (RFC 1952) whose
+content is the response object, without its newline, and nothing after it:
 
 ```text
-gzip 0000021634\n<21634 bytes of gzip>
+gzip 0000029977\n<29977 bytes of gzip>
 ```
 
 A JSON response always starts with `{`, so a caller that asked tells the two
@@ -375,40 +375,50 @@ The server compresses a response only when all of these hold
 
 - the request asked for it;
 - the call succeeded: errors are always JSON lines;
-- the method is `workspace.timeline`, `run.list` or `changes.list`
-  (`gzipMethods` in `internal/sshd/control.go`);
+- the method is `workspace.timeline`, the only entry of `gzipMethods` in
+  `internal/sshd/control.go`;
 - the JSON line is at least 8 KiB;
 - the gzip frame is smaller than the line.
 
 It uses `compress/gzip` at the default level 6 and reserves a quarter of the
 line's size for the frame, beside the encoded line it already holds. Measured
 on one CPU of a Ryzen 7600X (`BenchmarkGzipLevels` in
-`internal/protocol/compress_test.go`), a 365 KB timeline page costs 1.5 ms to
-compress and 0.5 ms to decompress and goes out as 41 KB; level 1 takes 0.4 ms
-and sends 45 KB, which wins only on links faster than about 35 Mbit/s. Under
-8 KiB compressing costs several times what encoding the response does, and the
-response fits in the first TCP round trip either way.
+`internal/protocol/compress_test.go`), a 365 KB timeline page costs 1.0 to
+1.5 ms to compress, depending on the run, and 0.5 ms to decompress, and goes
+out as 41 KB; level 1 takes 0.4 ms and sends 45 KB, which wins only on links
+faster than about 35 to 55 Mbit/s. Under 8 KiB compressing costs several times what encoding the
+response does, and the response fits in the first TCP round trip either way.
 
-The gateway holds a frame to the same limit as the line it replaces, 96 MiB
-(`MaxLineBytes`), or the larger limit of `files.read`, `run.patch` and the
-other blob methods (`responseLineLimit` in `internal/protocol/client.go`): a
-header naming more bytes is refused before anything is read, and
-decompression stops one byte past the limit with
-`protocol: line exceeds <limit> bytes`, so a small frame cannot expand
-without bound.
+The gateway reads a frame only for a method whose limit is `MaxLineBytes`
+(96 MiB); for `files.read`, `run.patch` and the other blob methods, which the
+server never compresses, a frame is refused as a malformed line. A header
+that is not exactly the documented 16 bytes, or names more than 96 MiB, is
+refused before the body is read; the body is read as it arrives, not
+allocated at its declared size; decompression stops one byte past the limit
+with `protocol: line exceeds <limit> bytes`, so a small frame cannot expand
+without bound; and bytes after the gzip member are refused.
 
-The list of methods is short on purpose. Compressing a response that holds
-both text an attacker can write and a secret lets someone who sees the
-encrypted stream's sizes, a network observer or the edge relay, recover the
-secret by changing the text and watching the size. The three methods carry
-session tasks, titles and status, agent reports, mail metadata and, on the
-timeline, notices addressed to the reader; no event payload or session record
-has a token, invite code or credential field. A secret reaches them only if a
-member or agent writes one into a task, title or report. `run.acp.history` stays a JSON line because a transcript holds
-tool output, which can include files and environment values, beside text an
-agent fetched from anywhere. File reads, patches, configuration and home
-files stay JSON lines for the same reason, and because base64 and diffs gain
-little.
+The method list is one compression context per access domain. Compressing a
+response that holds both text an attacker can write and a secret lets someone
+who sees the encrypted stream's sizes, a network observer or the edge relay,
+recover the secret by changing the text and watching the size. A
+`workspace.timeline` page is confined to one workspace the caller may read.
+`run.list` and `changes.list` are not compressed: without a workspace they
+append every workspace the caller reaches into one response, so a member of
+one workspace could place text beside another workspace's sessions. A method
+whose response can span workspaces must not be added. `run.acp.history`
+stays a JSON line because a transcript holds tool output, which can include
+files and environment values, beside text an agent fetched from anywhere.
+File reads, patches, configuration and home files stay JSON lines for the
+same reason, and because base64 and diffs gain little.
+
+A timeline page still holds free text that can carry a secret in practice: a
+person's steering message, agent report summaries and next actions, agent
+activity details (command lines, URLs, file paths), pending input titles, and
+notices addressed only to the reader. Someone who sees the stream's sizes and
+can make an agent in the same workspace write chosen text could, over many
+page reads, probe that text. Removing `workspace.timeline` from
+`gzipMethods` turns compression off entirely.
 
 ## Routes
 

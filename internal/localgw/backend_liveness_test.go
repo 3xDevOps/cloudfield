@@ -1,6 +1,7 @@
 package localgw
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -387,16 +388,18 @@ func listen(t *testing.T) net.Listener {
 // serveControl serves SSH on ln, answering keepalives and each control
 // call with the result answer gives, none for a nil one; a nil answer
 // gives every call an empty result. It counts the connections it accepts.
+// With gzipFrames it answers the way a compressing server does, gzip frames
+// to a call that asks, and counts the frames it sent.
 func serveControl(t *testing.T, ln net.Listener, answer func(method string) json.RawMessage) *atomic.Int32 {
 	t.Helper()
-	connections, _ := serveControlChannels(t, ln, answer, false)
+	connections, _ := serveControlChannels(t, ln, answer, false, nil)
 	return connections
 }
 
 // serveControlChannels is serveControl counting the control channels too.
 // Like the server, a channel answers call after call; with oneCall it ends
 // after its first answer, as a channel the server gave up on does.
-func serveControlChannels(t *testing.T, ln net.Listener, answer func(method string) json.RawMessage, oneCall bool) (connections, channels *atomic.Int32) {
+func serveControlChannels(t *testing.T, ln net.Listener, answer func(method string) json.RawMessage, oneCall bool, gzipFrames *atomic.Int32) (connections, channels *atomic.Int32) {
 	t.Helper()
 	signer, err := ssh.NewSignerFromKey(testhome.Ed25519Key(t))
 	if err != nil {
@@ -451,7 +454,12 @@ func serveControlChannels(t *testing.T, ln net.Listener, answer func(method stri
 								if result == nil {
 									return
 								}
-								_ = json.NewEncoder(channel).Encode(protocol.Response{JSONRPC: "2.0", ID: rpc.ID, Result: result})
+								resp := protocol.Response{JSONRPC: "2.0", ID: rpc.ID, Result: result}
+								if gzipFrames == nil {
+									_ = json.NewEncoder(channel).Encode(resp)
+								} else {
+									_ = protocol.WriteResponse(frameCounter{channel, gzipFrames}, resp, rpc.AcceptEncoding == protocol.EncodingGzip)
+								}
 								if oneCall {
 									return
 								}
@@ -536,4 +544,16 @@ func relay(dst io.Writer, src io.Reader, silent <-chan struct{}, pace time.Durat
 			return
 		}
 	}
+}
+
+type frameCounter struct {
+	w      io.Writer
+	frames *atomic.Int32
+}
+
+func (c frameCounter) Write(p []byte) (int, error) {
+	if bytes.HasPrefix(p, []byte("gzip ")) {
+		c.frames.Add(1)
+	}
+	return c.w.Write(p)
 }

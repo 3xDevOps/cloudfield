@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"strconv"
 	"sync"
 )
 
@@ -60,7 +59,8 @@ func WriteResponse(w io.Writer, resp Response, compress bool) error {
 
 // readResponse reads one response frame. Only a caller that asked for gzip
 // accepts a gzip frame; both its compressed and decompressed sizes are
-// held to maxBytes, the limit an uncompressed line has.
+// held to maxBytes, the limit an uncompressed line has, and the body is
+// read as it arrives rather than allocated at its declared size.
 func readResponse(r *bufio.Reader, maxBytes int, gzipOK bool) ([]byte, error) {
 	if !gzipOK {
 		return readLine(r, maxBytes)
@@ -72,18 +72,26 @@ func readResponse(r *bufio.Reader, maxBytes int, gzipOK bool) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	n, err := strconv.Atoi(string(header[len(gzipFramePrefix):]))
-	if err != nil || n <= 0 {
+	digits := header[len(gzipFramePrefix):]
+	n := 0
+	for _, d := range digits {
+		if d < '0' || d > '9' {
+			n = -1
+			break
+		}
+		n = n*10 + int(d-'0')
+	}
+	if len(header) != gzipHeaderBytes-1 || n <= 0 {
 		return nil, fmt.Errorf("protocol: bad gzip frame header %q", header)
 	}
 	if n > maxBytes {
 		return nil, fmt.Errorf("protocol: line exceeds %d bytes", maxBytes)
 	}
-	body := make([]byte, n)
-	if _, err = io.ReadFull(r, body); err != nil {
+	var body bytes.Buffer
+	if _, err = io.CopyN(&body, r, int64(n)); err != nil {
 		return nil, err
 	}
-	zr, err := gzip.NewReader(bytes.NewReader(body))
+	zr, err := gzip.NewReader(&body)
 	if err != nil {
 		return nil, fmt.Errorf("protocol: gzip frame: %w", err)
 	}
@@ -94,6 +102,9 @@ func readResponse(r *bufio.Reader, maxBytes int, gzipOK bool) ([]byte, error) {
 	}
 	if len(line) > maxBytes {
 		return nil, fmt.Errorf("protocol: line exceeds %d bytes", maxBytes)
+	}
+	if body.Len() != 0 {
+		return nil, fmt.Errorf("protocol: gzip frame: %d bytes after the gzip member", body.Len())
 	}
 	return line, nil
 }

@@ -89,56 +89,50 @@ func seedLargeReads(t *testing.T) *testEnv {
 	return e
 }
 
-// A client that asks gets the same result in fewer bytes; a client that
-// does not gets exactly the JSON line a server without compression sends.
-func TestControlGzipLargeReads(t *testing.T) {
+// A client that asks gets the same timeline page in fewer bytes; a client
+// that does not gets exactly the JSON line a server without compression
+// sends.
+func TestControlGzipTimelinePage(t *testing.T) {
 	t.Parallel()
 	e := seedLargeReads(t)
-	reads := []struct {
-		method string
-		params any
-	}{
-		{protocol.MethodWorkspaceTimeline, protocol.WorkspaceTimelineParams{
-			WorkspaceID: string(e.ws.ID), Newest: true, Limit: 1000,
-			Types: []string{string(events.TypeRunStatus), string(events.TypeCoordMessage)},
-		}},
-		{protocol.MethodRunList, protocol.RunListParams{WorkspaceID: string(e.ws.ID)}},
+	params := protocol.WorkspaceTimelineParams{
+		WorkspaceID: string(e.ws.ID), Newest: true, Limit: 1000,
+		Types: []string{string(events.TypeRunStatus), string(events.TypeCoordMessage)},
 	}
-	for _, read := range reads {
-		plain, plainPipe := tappedClient(t, e, false)
-		var want json.RawMessage
-		if err := plain.Call(read.method, read.params, &want); err != nil {
-			t.Fatalf("%s: %v", read.method, err)
-		}
-		line, err := json.Marshal(protocol.Response{JSONRPC: "2.0", ID: json.RawMessage("1"), Result: want})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := plainPipe.got.Bytes(); !bytes.Equal(got, append(line, '\n')) {
-			t.Fatalf("%s without accept_encoding: %d bytes on the wire, want the %d-byte JSON line", read.method, len(got), len(line)+1)
-		}
+	plain, plainPipe := tappedClient(t, e, false)
+	var want json.RawMessage
+	if err := plain.Call(protocol.MethodWorkspaceTimeline, params, &want); err != nil {
+		t.Fatal(err)
+	}
+	line, err := json.Marshal(protocol.Response{JSONRPC: "2.0", ID: json.RawMessage("1"), Result: want})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plainPipe.got.Bytes(); !bytes.Equal(got, append(line, '\n')) {
+		t.Fatalf("without accept_encoding: %d bytes on the wire, want the %d-byte JSON line", len(got), len(line)+1)
+	}
 
-		zipped, zippedPipe := tappedClient(t, e, true)
-		var got json.RawMessage
-		if err := zipped.Call(read.method, read.params, &got); err != nil {
-			t.Fatalf("%s with gzip: %v", read.method, err)
-		}
-		if !bytes.Equal(got, want) {
-			t.Fatalf("%s with gzip: result differs from the uncompressed one", read.method)
-		}
-		wire := zippedPipe.got.Len()
-		if !strings.HasPrefix(zippedPipe.got.String(), "gzip ") || wire*5 > len(line) {
-			t.Fatalf("%s with gzip: %d bytes on the wire for a %d-byte line, want a gzip frame under a fifth of it", read.method, wire, len(line)+1)
-		}
-		t.Logf("%s: %d bytes as a JSON line, %d as a gzip frame", read.method, len(line)+1, wire)
+	zipped, zippedPipe := tappedClient(t, e, true)
+	var got json.RawMessage
+	if err := zipped.Call(protocol.MethodWorkspaceTimeline, params, &got); err != nil {
+		t.Fatal(err)
 	}
+	if !bytes.Equal(got, want) {
+		t.Fatal("with gzip: result differs from the uncompressed one")
+	}
+	wire := zippedPipe.got.Len()
+	if !strings.HasPrefix(zippedPipe.got.String(), "gzip ") || wire*5 > len(line) {
+		t.Fatalf("with gzip: %d bytes on the wire for a %d-byte line, want a gzip frame under a fifth of it", wire, len(line)+1)
+	}
+	t.Logf("workspace.timeline: %d bytes as a JSON line, %d as a gzip frame", len(line)+1, wire)
 }
 
-// Only the allowlisted reads compress: a large run.get, which is not on
-// the list, stays a JSON line for a client that asks.
-func TestControlGzipOnlyAllowlistedResults(t *testing.T) {
+// Only workspace.timeline compresses. run.list and changes.list can span
+// workspaces in one response, and run.get is not on the list: each stays a
+// JSON line for a client that asks, however large.
+func TestControlGzipOnlyTheTimeline(t *testing.T) {
 	t.Parallel()
-	e := newTestEnv(t, nil)
+	e := seedLargeReads(t)
 	run := &domain.Run{
 		WorkspaceID: e.ws.ID, MemberID: e.member.ID, Task: strings.Repeat("a long task ", 4<<10),
 		Harness: "claude", Mode: domain.LaunchTUI, Status: domain.RunRunning, Branch: "aether/run-long",
@@ -147,11 +141,20 @@ func TestControlGzipOnlyAllowlistedResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	c, pipe := tappedClient(t, e, true)
-	var got protocol.RunResult
-	if err := c.Call(protocol.MethodRunGet, protocol.RunIDParams{RunID: string(run.ID)}, &got); err != nil {
-		t.Fatal(err)
-	}
-	if got.Run.Task != run.Task || pipe.got.Len() < protocol.GzipMinBytes || pipe.got.Bytes()[0] != '{' {
-		t.Fatalf("run.get sent %d bytes starting %q, want the whole JSON line", pipe.got.Len(), pipe.got.Bytes()[:1])
+	for _, read := range []struct {
+		method string
+		params any
+	}{
+		{protocol.MethodRunList, protocol.RunListParams{}},
+		{protocol.MethodChangesList, protocol.ChangesListParams{Limit: 1000}},
+		{protocol.MethodRunGet, protocol.RunIDParams{RunID: string(run.ID)}},
+	} {
+		pipe.got.Reset()
+		if err := c.Call(read.method, read.params, nil); err != nil {
+			t.Fatalf("%s: %v", read.method, err)
+		}
+		if pipe.got.Len() < protocol.GzipMinBytes || pipe.got.Bytes()[0] != '{' {
+			t.Fatalf("%s sent %d bytes starting %q, want a JSON line of at least %d bytes", read.method, pipe.got.Len(), pipe.got.Bytes()[:1], protocol.GzipMinBytes)
+		}
 	}
 }

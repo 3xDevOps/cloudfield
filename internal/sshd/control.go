@@ -274,13 +274,13 @@ func writeJSONLine(w io.Writer, v any) error {
 }
 
 // gzipMethods are the methods whose result may go out as a gzip frame to
-// a caller that asks. Each is a large read whose text sits beside no
-// credential, token or invite code; docs/local-gateway.md#compressed-responses
-// says why each is here and why others are not.
+// a caller that asks. The rule: one compression context per access domain.
+// A response that can span workspaces (run.list, changes.list and other
+// member-wide reads) must not be added, or text one workspace's member
+// writes would be compressed beside another workspace's, and the frame's
+// size would tell them about it; docs/local-gateway.md#compressed-responses.
 var gzipMethods = map[string]bool{
 	protocol.MethodWorkspaceTimeline: true,
-	protocol.MethodRunList:           true,
-	protocol.MethodChangesList:       true,
 }
 
 // handleRequest also reports whether the response may be compressed.
