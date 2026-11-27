@@ -73,4 +73,12 @@ func TestPlainPagesChangesOnlyTheHugePageRequest(t *testing.T) {
 	if got, _ := os.ReadFile(path); string(got) != want {
 		t.Errorf("the saved configuration reads %s, want %s", got, want)
 	}
+	for _, saved := range []string{`{"memory":null,"disks":[]}`, `{"disks":[]}`} {
+		if err := os.WriteFile(path, []byte(saved), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := plainPages(dir); err == nil {
+			t.Errorf("%s: no error", saved)
+		}
+	}
 }

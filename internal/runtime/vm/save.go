@@ -425,6 +425,9 @@ func plainPages(dir string) error {
 	if err = json.Unmarshal(data, &cfg); err == nil {
 		err = json.Unmarshal(cfg["memory"], &memory)
 	}
+	if err == nil && memory == nil {
+		err = errors.New("no memory section")
+	}
 	if err != nil {
 		return fmt.Errorf("vm runtime: saved VM configuration: %w", err)
 	}
