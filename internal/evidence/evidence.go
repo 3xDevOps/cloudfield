@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/3xDevOps/cloudfield/internal/ctxlock"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
 	"github.com/3xDevOps/cloudfield/internal/gitengine"
@@ -186,7 +187,7 @@ type Config struct {
 	// AuthorizationMu is the shared credential-bearing admission gate used
 	// by account, membership, role, and workspace policy mutations.
 	// Explicit captures require it; trusted lifecycle captures do not.
-	AuthorizationMu *sync.Mutex
+	AuthorizationMu *ctxlock.Mutex
 }
 
 // Request describes one evidence capture. Objective and provenance are bounded
@@ -232,7 +233,7 @@ type Service struct {
 	retention       time.Duration
 	now             func() time.Time
 	fs              FileSystem
-	authorizationMu *sync.Mutex
+	authorizationMu *ctxlock.Mutex
 
 	mu      sync.Mutex
 	locks   map[domain.RunID]*sync.Mutex

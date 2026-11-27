@@ -474,7 +474,8 @@ func (e *engine) pause(ctx context.Context, key string) error {
 		return err
 	}
 	if len(rec.CheckoutDisks) == 0 {
-		err = newCHAPI(e.path(key, apiSocket)).pause(ctx)
+		// As in save: a pause that lands is not left behind an error.
+		err = newCHAPI(e.path(key, apiSocket)).pause(context.WithoutCancel(ctx))
 	} else {
 		err = e.freezeSession(ctx, rec)
 	}
@@ -493,6 +494,11 @@ func (e *engine) park(ctx context.Context, key string) error {
 	rec, err := e.requireRunning(ctx, key, "pause")
 	if err == nil && e.syncGuest(ctx, key) && len(rec.CheckoutDisks) == 0 {
 		e.awaitReported(ctx, key)
+		// As in save: the guest still runs, so a caller that gave up loses
+		// nothing.
+		if ctx.Err() != nil {
+			err = fmt.Errorf("vm runtime: pause VM %s: %w", key, ctx.Err())
+		}
 	}
 	unlock()
 	if err != nil {

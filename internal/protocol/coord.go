@@ -1,9 +1,13 @@
 package protocol
 
 import (
+	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
 )
@@ -44,6 +48,10 @@ const (
 	CoordMaxMessageIDBytes = 256
 	// CoordMaxSummaryBytes bounds a durable outcome summary.
 	CoordMaxSummaryBytes = 4 << 10
+	// CoordMaxReportBodyBytes bounds the body a success, failure or blocked
+	// report may carry beside its summary. An inbox batch counts it, so a
+	// report with a long body is read alone.
+	CoordMaxReportBodyBytes = 12 << 10
 	// CoordMaxEvidenceRefs bounds the number of evidence references in one
 	// report, while CoordMaxEvidenceRefBytes bounds each reference.
 	CoordMaxEvidenceRefs     = 32
@@ -288,6 +296,10 @@ type CoordInboxParams struct {
 	AckToken    string `json:"ack_token,omitempty" jsonschema:"the ack_token of the batch you handled; it acknowledges exactly that batch"`
 	WaitSeconds int    `json:"wait_seconds,omitempty" jsonschema:"seconds the server waits for new mail when the inbox is empty; 0 returns at once"`
 	AckOnly     bool   `json:"ack_only,omitempty" jsonschema:"acknowledge the ack_token batch without reading the next one"`
+	// ReportBodies says the caller shows a report's body from report_body.
+	// The command and the bridge set it; a caller that does not gets the
+	// body appended to the summary in body, which every caller shows.
+	ReportBodies bool `json:"report_bodies,omitempty" jsonschema:"set for you; leave it out"`
 }
 
 // CoordMessage is one delivered message.
@@ -298,9 +310,12 @@ type CoordMessage struct {
 	FromRunID     string `json:"from_run_id"`
 	// Outcome is the reported outcome of a report: success, failure or
 	// blocked.
-	Outcome   string `json:"outcome,omitempty"`
-	Body      string `json:"body"`
-	CreatedAt string `json:"created_at"`
+	Outcome string `json:"outcome,omitempty"`
+	Body    string `json:"body"`
+	// ReportBody is the body a report carries beside its summary, which is
+	// Body.
+	ReportBody string `json:"report_body,omitempty"`
+	CreatedAt  string `json:"created_at"`
 }
 
 // CoordInboxResult is the result of coord.inbox: one batch, oldest first,
@@ -321,8 +336,11 @@ type CoordReportParams struct {
 	Summary        string   `json:"summary" jsonschema:"what you verified; for needs-input the question for the user; for blocked what a human must do; for waiting what you wait on; for answered what you replied"`
 	EvidenceRefs   []string `json:"evidence_refs,omitempty" jsonschema:"retained evidence packet ids; not for needs-input, waiting or answered"`
 	IdempotencyKey string   `json:"idempotency_key" jsonschema:"a fresh key you choose for each new report; reuse it only to retry the same report, since the same key with another outcome or summary is refused"`
-	WaitingFor     string   `json:"waiting_for,omitempty" jsonschema:"only with waiting: agents (the default), ci or process"`
-	Until          []string `json:"until,omitempty" jsonschema:"only with waiting: up to 4 conditions that wake you when any resolves: pr:<owner>/<repo>#<n>:merged, pr:<owner>/<repo>#<n>:checks or run:<run-id>:finished"`
+	// Body is the report's full result, such as a review's findings. A
+	// subsession's parent reads it with the report.
+	Body       string   `json:"body,omitempty" jsonschema:"only with success, failure or blocked: the full result (findings, details), up to 12 KiB; a subsession's parent reads it with the report"`
+	WaitingFor string   `json:"waiting_for,omitempty" jsonschema:"only with waiting: agents (the default), ci or process"`
+	Until      []string `json:"until,omitempty" jsonschema:"only with waiting: up to 4 conditions that wake you when any resolves: pr:<owner>/<repo>#<n>:merged, pr:<owner>/<repo>#<n>:checks or run:<run-id>:finished"`
 }
 
 // CoordReportResult is the complete durable outcome receipt. EvidenceRef is
@@ -338,6 +356,59 @@ type CoordReportResult struct {
 	// Resolved are until conditions already resolved when the report was
 	// recorded: the agent learns them here, and no wake follows.
 	Resolved []WaitCondition `json:"resolved,omitempty"`
+	// BodyBytes is the size of the body the server stored with the report.
+	// A server older than the body leaves it zero.
+	BodyBytes int `json:"body_bytes,omitempty"`
+}
+
+// CoordReportPrintBytes bounds a report's summary and body as an inbox read
+// prints them, JSON escapes and the message's other fields included: the
+// size of one inbox batch, so a harness shows the report whole.
+const CoordReportPrintBytes = 16 << 10
+
+// ValidateReportBody refuses a report body the server would have to change
+// to store or that its reader could not be shown whole: one over the cap,
+// with invalid UTF-8 (or the replacement character JSON decoding leaves
+// for it), with a control character other than a line break or a tab, or
+// that with summary prints past CoordReportPrintBytes. A carriage return
+// is allowed only before a line break, where it is dropped.
+func ValidateReportBody(summary, body string) error {
+	if body == "" {
+		return nil
+	}
+	if n := len(body); n > CoordMaxReportBodyBytes {
+		return fmt.Errorf("body is %d bytes and exceeds %d; shorten it, or put the rest in a file on your branch and name it", n, CoordMaxReportBodyBytes)
+	}
+	if !utf8.ValidString(body) || strings.ContainsRune(body, utf8.RuneError) {
+		return errors.New("body is not valid UTF-8")
+	}
+	for i, r := range strings.ReplaceAll(body, "\r\n", "\n") {
+		if unicode.IsControl(r) && r != '\n' && r != '\t' {
+			return fmt.Errorf("body has a control character (U+%04X near byte %d); remove it, such as a terminal's color codes", r, i)
+		}
+	}
+	// 512 bytes cover the message's id, sender, kind, outcome, time and
+	// field names.
+	if printed := printedLen(summary) + printedLen(body) + 512; printed > CoordReportPrintBytes {
+		return fmt.Errorf("the summary and body print as %d bytes in the parent's inbox read, which holds %d: quotes, backslashes and line breaks print as two bytes each and <, > and & as six; shorten the body, or put the rest in a file on your branch and name it", printed, CoordReportPrintBytes)
+	}
+	return nil
+}
+
+// printedLen is how many bytes s takes as a JSON string in the widest form
+// an inbox read prints: the bridge's, which escapes <, > and &.
+func printedLen(s string) int {
+	printed, _ := json.Marshal(s)
+	return len(printed)
+}
+
+// CheckReportBody is the error for a report whose body its server did not
+// store: a server older than the field accepts the report without it.
+func CheckReportBody(sent string, result CoordReportResult) error {
+	if sent == "" || result.BodyBytes > 0 {
+		return nil
+	}
+	return errors.New("the report was recorded WITHOUT its body: this server is older than report bodies. Send the body's content with aether-internal send instead, in messages of at most 4096 bytes")
 }
 
 // RunReportParams carries independent execution and correlated input updates.

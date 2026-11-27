@@ -445,6 +445,8 @@ const (
 	openWake
 )
 
+var errKeeperUnreached = errors.New("reattach to the agent's keeper")
+
 func (d *acpDriver) connect(ctx context.Context, entry *supervised, how acpOpen) {
 	defer d.lockOp(entry.runID)()
 	d.connectLocked(ctx, entry, how)
@@ -462,6 +464,12 @@ func (d *acpDriver) connectLocked(ctx context.Context, entry *supervised, how ac
 				entry.failReason = acpFailedReason + err.Error()
 			}
 			d.s.mu.Unlock()
+		}
+		// Running out of time to reach the agent's keeper proves nothing
+		// about the agent, so it ends no Background run as a failure does.
+		if how == openRestore && errors.Is(err, errKeeperUnreached) && d.oneShot(entry) {
+			d.disconnected(entry, err)
+			return
 		}
 		d.fail(entry, err)
 	}
@@ -555,7 +563,7 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 			d.record(entry, func() { entry.keeperDelivered, entry.keeperAdopted = state.Delivered, true })
 		} else {
 			if ctx.Err() != nil {
-				return fmt.Errorf("reattach to the agent's keeper: %w", err)
+				return fmt.Errorf("%w: %w", errKeeperUnreached, err)
 			}
 			slog.Warn("scheduler: reattach to the agent's keeper", "run", entry.runID, "error", err)
 			after := "the server restarted"
@@ -841,10 +849,15 @@ func (d *acpDriver) wakeLocked(run domain.RunID) {
 	}
 }
 
-func (d *acpDriver) fail(entry *supervised, err error) {
+// disconnected records err as why the run has no agent session.
+func (d *acpDriver) disconnected(entry *supervised, err error) {
 	slog.Warn("scheduler: enhanced session failed", "run", entry.runID, "error", err)
 	d.setRun(entry.runID, &acpRun{err: err})
 	d.notice(entry.runID, "error", "Enhanced agent failed", err.Error())
+}
+
+func (d *acpDriver) fail(entry *supervised, err error) {
+	d.disconnected(entry, err)
 	idle := agentstatus.Report{State: agentstatus.Idle, Reason: acpFailedReason + err.Error()}
 	if d.oneShot(entry) {
 		d.endOneShot(entry, false, idle)

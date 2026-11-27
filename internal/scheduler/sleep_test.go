@@ -239,6 +239,41 @@ func TestFailedWakeReturnsItsErrorAndKeepsTheRunAsleep(t *testing.T) {
 	}
 }
 
+// A wake waits for the session's other operation only as long as the wake
+// itself may take, which a shutdown ends at once.
+func TestAWakeGivesUpWaitingForTheSessionsOtherOperation(t *testing.T) {
+	t.Parallel()
+	e, _ := newSleepEnv(t)
+	run := e.launchACP(t, "say pong")
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	e.sleepRun(t, run.ID)
+	e.sched.mu.Lock()
+	entry := e.sched.runs[run.ID]
+	e.sched.mu.Unlock()
+
+	entry.lifecycleMu.Lock()
+	woke := make(chan error, 1)
+	go func() { woke <- e.sched.WakeRun(t.Context(), run.ID, e.member.ID) }()
+	waitFor(t, "the wake to start", func() bool { return e.sched.Sleep(run.ID).Waking })
+	closed := make(chan error, 1)
+	go func() { closed <- e.sched.Close() }()
+	select {
+	case err := <-woke:
+		if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), string(run.ID)) {
+			t.Errorf("the wake = %v, want the shutdown's error naming session %s", err, run.ID)
+		}
+	case <-time.After(10 * time.Second):
+		t.Error("the wake still waited for the session's other operation after the shutdown")
+	}
+	entry.lifecycleMu.Unlock()
+	if err := <-closed; err != nil {
+		t.Fatal(err)
+	}
+	if state := e.sched.Sleep(run.ID); state.AsleepSince == nil || state.Waking || state.WakeError != "" {
+		t.Fatalf("sleep state after the wake gave up = %+v, want asleep with no failed wake", state)
+	}
+}
+
 func TestSleepingRunSurvivesARestart(t *testing.T) {
 	t.Parallel()
 	e, rt := newSleepEnv(t)

@@ -87,6 +87,43 @@ func TestKill(t *testing.T) {
 	waitFor(t, "container destroyed", func() bool { return e.rt.byName(string(run.ID)) == nil })
 }
 
+// A parent's stop that had to wait for the child's other operation stops
+// nothing when its caller gave up meanwhile, or when the child is no longer
+// the parent's once the wait is over.
+func TestStopForParentAfterWaitingForTheChild(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t, nil)
+	run, _ := e.launchFake(t, "busy child")
+	e.sched.mu.Lock()
+	entry := e.sched.runs[run.ID]
+	e.sched.mu.Unlock()
+	untouched := func(after string) {
+		t.Helper()
+		e.sched.mu.Lock()
+		killed := entry.killRequested
+		e.sched.mu.Unlock()
+		if c := e.rt.byName(string(run.ID)); killed || c == nil || c.currentState() != "running" {
+			t.Fatalf("%s stopped the session", after)
+		}
+	}
+
+	entry.lifecycleMu.Lock()
+	gone, leave := context.WithCancel(t.Context())
+	leave()
+	err := e.sched.StopForParent(gone, run.ID, "run-parent", func() error { return nil })
+	entry.lifecycleMu.Unlock()
+	if !errors.Is(err, context.Canceled) || !strings.Contains(err.Error(), string(run.ID)) {
+		t.Fatalf("stop whose caller gave up = %v, want the caller's error naming session %s", err, run.ID)
+	}
+	untouched("a stop whose caller gave up")
+
+	detached := errors.New("handed off meanwhile")
+	if err = e.sched.StopForParent(t.Context(), run.ID, "run-parent", func() error { return detached }); !errors.Is(err, detached) {
+		t.Fatalf("stop of a child handed off meanwhile = %v, want %v", err, detached)
+	}
+	untouched("a stop of a child handed off meanwhile")
+}
+
 func TestPauseResumeAndStallExemption(t *testing.T) {
 	t.Parallel()
 	// 500ms/20ms: a tighter threshold can elapse under contention before
