@@ -69,14 +69,17 @@ func Monitor(args []string) error {
 		}
 		go func() { served <- home.Serve(listener, *l.Home) }()
 	}
-	return runHypervisor(l.Args, served, flush)
+	return runHypervisor(l.Bin, l.Args, served, flush)
 }
 
 // runHypervisor runs Cloud Hypervisor and exits as it does. The unit's stop
 // signals every process in it, so the monitor only waits for its child.
-func runHypervisor(args []string, served <-chan error, flush func()) error {
+func runHypervisor(bin string, args []string, served <-chan error, flush func()) error {
 	signal.Notify(make(chan os.Signal, 1), unix.SIGTERM, unix.SIGINT, unix.SIGHUP)
-	cmd := exec.Command(cloudHypervisor, args...)
+	if bin == "" {
+		bin = cloudHypervisor
+	}
+	cmd := exec.Command(bin, args...)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("vm monitor: %w", err)

@@ -11,15 +11,31 @@ name: VM tests
 on:
   workflow_call:
   workflow_dispatch:
+    inputs:
+      arms:
+        description: Lazy-restore experiment arms, a JSON list
+        default: '["E"]'
+      sizes:
+        description: Session memory limits in MiB, a JSON list
+        default: '[2048]'
+      cold:
+        default: '30'
+      warm:
+        default: '10'
 
 permissions:
   contents: read
 
 jobs:
   kvm:
-    name: make test-kvm
+    name: lazy ${{ matrix.arm }} ${{ matrix.mib }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 355
+    strategy:
+      fail-fast: false
+      matrix:
+        mib: ${{ fromJSON(inputs.sizes || '[2048]') }}
+        arm: ${{ fromJSON(inputs.arms || '["E"]') }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -55,7 +71,27 @@ jobs:
         run: |
           CGO_ENABLED=0 go build -o "$RUNNER_TEMP/aether-server" ./cmd/aether-server
           sudo "$RUNNER_TEMP/aether-server" vm install --vm-kernel "$PWD/dist/aether-vmlinux-x86_64"
-      - name: VM tests (real Cloud Hypervisor VMs)
+      # Scratch, never merged: the lazy-restore experiment in place of the
+      # VM tests. Cloud Hypervisor publishes no checksum file; the hash is
+      # printed for the record.
+      - name: Install Cloud Hypervisor v55.0 beside the pinned one
+        run: |
+          sudo curl -fsSL -o /usr/local/bin/cloud-hypervisor-v55 https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v55.0/cloud-hypervisor-static
+          sudo chmod +x /usr/local/bin/cloud-hypervisor-v55
+          for b in cloud-hypervisor cloud-hypervisor-v55; do echo "LAZY-ENV $b: $(/usr/local/bin/$b --version) sha256=$(sha256sum /usr/local/bin/$b | cut -d' ' -f1)"; done
+      - name: Lazy restore experiment
         env:
-          GOFLAGS: -v
-        run: sudo env "PATH=$PATH" "HOME=$HOME" "GOFLAGS=$GOFLAGS" make test-kvm
+          LAZY_ARM: ${{ matrix.arm }}
+          LAZY_MIB: ${{ matrix.mib }}
+          LAZY_COLD: ${{ inputs.cold || '30' }}
+          LAZY_WARM: ${{ inputs.warm || '10' }}
+        run: |
+          work=/tmp
+          if [ "$(df --output=avail /mnt 2>/dev/null | tail -1)" -gt "$(df --output=avail /tmp | tail -1)" ]; then work=/mnt/lazy; sudo mkdir -p "$work"; fi
+          echo "LAZY-ENV work=$work cpu=$(lscpu | sed -n 's/^Model name: *//p') nproc=$(nproc) mem_mib=$(free -m | awk '/^Mem:/{print $2}') swap_mib=$(free -m | awk '/^Swap:/{print $2}') kernel=$(uname -r)"
+          echo "LAZY-ENV fs: $(df -T "$work" | tail -1)"
+          echo "LAZY-ENV userfaultfd: $(ls -l /dev/userfaultfd 2>&1) unprivileged=$(cat /proc/sys/vm/unprivileged_userfaultfd)"
+          echo "LAZY-ENV host agents: $(ps -eo pid,user,comm | grep -iE 'provjob|hosted-compute|Runner|walinux|mdsd|defender' | tr '\n' ';')"
+          sudo env "PATH=$PATH" "HOME=$HOME" GOFLAGS=-v "TMPDIR=$work" "LAZY_ARM=$LAZY_ARM" "LAZY_MIB=$LAZY_MIB" "LAZY_COLD=$LAZY_COLD" "LAZY_WARM=$LAZY_WARM" \
+            LAZY_CH55=/usr/local/bin/cloud-hypervisor-v55 LAZY_BUDGET_MIN=290 \
+            make test-kvm KVM_RUN=^TestKVMZZLazy KVM_PKGS=./internal/runtime/vm KVM_TIMEOUT=340m

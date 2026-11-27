@@ -111,7 +111,7 @@ func sandbox(dataDir, monitor string, rec *record, l launch) []string {
 		"NoNewPrivileges=yes", "ProtectSystem=strict",
 		"ProtectKernelTunables=yes", "ProtectKernelModules=yes", "ProtectKernelLogs=yes",
 		"ProtectControlGroups=yes", "ProtectClock=yes",
-		"DevicePolicy=closed", "DeviceAllow=/dev/kvm rw", "DeviceAllow=/dev/net/tun rw",
+		"DevicePolicy=closed", "DeviceAllow=/dev/kvm rw", "DeviceAllow=/dev/net/tun rw", "DeviceAllow=/dev/userfaultfd rw",
 		"RestrictAddressFamilies=AF_UNIX AF_INET",
 		"TemporaryFileSystem=" + dataDir + ":ro",
 		"CapabilityBoundingSet=" + strings.Join(caps, " "),

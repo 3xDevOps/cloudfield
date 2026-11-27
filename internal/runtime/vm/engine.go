@@ -462,6 +462,13 @@ func (e *engine) startLocked(ctx context.Context, key string) (err error) {
 	return nil
 }
 
+// scratchBin and scratchMemory are the lazy-restore experiment's Cloud
+// Hypervisor binary and guest memory backing for a boot.
+var (
+	scratchBin    string
+	scratchMemory = "shared=on"
+)
+
 func (e *engine) bootLaunch(ctx context.Context, rec *record) (launch, error) {
 	p, err := e.plan(rec)
 	if err != nil {
@@ -553,13 +560,13 @@ func (e *engine) bootLaunch(ctx context.Context, rec *record) (launch, error) {
 		// (Cloud Hypervisor v54.1 on a host that is itself a VM). Sessions
 		// run no VMs of their own.
 		"--cpus", fmt.Sprintf("boot=%d,nested=off", rec.CPUs),
-		"--memory", fmt.Sprintf("size=%dM,shared=on", guestMiB(rec.MemoryMiB)),
+		"--memory", fmt.Sprintf("size=%dM,%s", guestMiB(rec.MemoryMiB), scratchMemory),
 		"--balloon", "size=0,free_page_reporting=on",
 	)
 	if rec.Net != offline {
 		args = append(args, "--net", "id=net0,"+chNetArg(rec.Net, rec.Egress))
 	}
-	l := launch{Args: args, Shares: p.shares, Home: p.homeConfig(rec.User), Reveal: revealPaths(e.dir(rec.Key), kernel, rec, p)}
+	l := launch{Bin: scratchBin, Args: args, Shares: p.shares, Home: p.homeConfig(rec.User), Reveal: revealPaths(e.dir(rec.Key), kernel, rec, p)}
 	if len(p.shares) > 0 {
 		l.Args = append(l.Args, "--fs", "tag="+guest.ShareTag+",socket="+e.path(rec.Key, fsSocket))
 	}
