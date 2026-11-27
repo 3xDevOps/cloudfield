@@ -17,9 +17,17 @@ permissions:
 
 jobs:
   kvm:
-    name: make test-kvm
+    name: ${{ matrix.test }} ${{ matrix.n }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        test: [TestKVMSleepWakeChain]
+        n: [1, 2, 3]
+        include:
+          - test: TestLargeKVMSleepWakeChain
+            n: 1
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,4 +66,8 @@ jobs:
       - name: VM tests (real Cloud Hypervisor VMs)
         env:
           GOFLAGS: -v
-        run: sudo env "PATH=$PATH" "HOME=$HOME" "GOFLAGS=$GOFLAGS" make test-kvm
+        run: |
+          df -h / /tmp; free -m; nproc
+          sudo env "PATH=$PATH" "HOME=$HOME" "GOFLAGS=$GOFLAGS" make test-kvm KVM_RUN='^${{ matrix.test }}' KVM_PKGS=./internal/runtime/vm
+      - if: ${{ failure() }}
+        run: sudo dmesg | grep -iE 'oom|killed process' | tail -20
