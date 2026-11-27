@@ -213,3 +213,45 @@ func TestControlGzipRefusesUnlistedMethodsThatAsk(t *testing.T) {
 		t.Fatalf("run.list asking for gzip got %d bytes starting %q, want a JSON line", len(line), line[:1])
 	}
 }
+
+// On the real server, a Lanes page of a workspace holding a session with a
+// repository in another workspace stays a JSON line, even for a super admin
+// who sees all of it; a page of a session wholly inside it compresses.
+func TestControlGzipSendsMultiRepositoryPagesPlain(t *testing.T) {
+	t.Parallel()
+	w := newScopeWorld(t)
+	ctx := context.Background()
+	for _, run := range []*domain.Run{w.runA, w.runUA} {
+		for i := range 100 {
+			if _, err := w.bus.Publish(ctx, events.Event{WorkspaceID: w.wsA.ID, RunID: run.ID, Payload: events.RunStatusPayload{
+				From: domain.RunRunning, To: domain.RunRunning, StatusSeq: int64(i), Reason: fmt.Sprintf("agent-written reason %d", i),
+			}}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	client, err := w.e.dialWith(w.signers["S"], nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	pipe := &tappedPipe{subsystemPipe: openSubsystem(t, client, protocol.SubsystemControl, nil)}
+	c := protocol.NewClient(pipe)
+	c.AcceptGzip()
+	for _, tc := range []struct {
+		run  domain.RunID
+		gzip bool
+	}{{"", false}, {w.runA.ID, false}, {w.runUA.ID, true}} {
+		pipe.got.Reset()
+		var page protocol.WorkspaceTimelineResult
+		if err := c.Call(protocol.MethodWorkspaceTimeline, protocol.WorkspaceTimelineParams{
+			WorkspaceID: string(w.wsA.ID), RunID: string(tc.run), Newest: true, Limit: 1000,
+			Types: []string{string(events.TypeRunStatus), string(events.TypeCoordMessage), string(events.TypeCoordMessageAcked)},
+		}, &page); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.HasPrefix(pipe.got.String(), "gzip "); got != tc.gzip || len(page.Events) < 100 {
+			t.Fatalf("session %q: %d events, gzip frame %v, want %v", tc.run, len(page.Events), got, tc.gzip)
+		}
+	}
+}

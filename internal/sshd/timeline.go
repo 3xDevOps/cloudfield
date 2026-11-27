@@ -67,8 +67,9 @@ func (s *Server) workspaceTimeline(ctx context.Context, member domain.MemberID, 
 	if !page.OlderTime.IsZero() {
 		out.OlderTime = page.OlderTime.UTC().Format(time.RFC3339Nano)
 	}
+	shared := s.pageScope(ctx, domain.WorkspaceID(p.WorkspaceID))
 	for _, ev := range page.Events {
-		if !events.OneWorkspace(ev) {
+		if !events.OneWorkspace(ev, shared) {
 			sendPlain(ctx)
 		}
 		payload, merr := json.Marshal(ev.Payload)

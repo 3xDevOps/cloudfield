@@ -381,8 +381,8 @@ The server compresses a response only when all of these hold
 - the method is `workspace.timeline`, the only entry of `GzipMethods`;
 - the JSON line is at least 8 KiB and shorter than 96 MiB (`MaxLineBytes`),
   so a line the gateway would refuse is refused before anything is inflated;
-- for `workspace.timeline`, the page holds no payload only some of the
-  workspace's readers may see (below);
+- for `workspace.timeline`, every reader of the workspace sees every event
+  on the page whole (below);
 - the gzip frame is smaller than the line.
 
 It uses `compress/gzip` at the default level 6 and reserves a quarter of the
@@ -407,15 +407,24 @@ The method list is one compression context per access domain. Compressing a
 response that holds both text an attacker can write and a secret lets someone
 who sees the encrypted stream's sizes, a network observer or the edge relay,
 recover the secret by changing the text and watching the size. The log query
-behind a `workspace.timeline` page matches one workspace, but some payloads
-in it carry what only some of that workspace's readers may see: anything
-addressed to one member (an assistant notice), another workspace's
-repository (a branch, pull request or diff of an extra repository, a deleted
-session's extra repositories) and other sessions (overlap peers). The server
-sends a page holding any of them as a JSON line (`events.OneWorkspace` in
-`internal/events/stream.go`, called from `internal/sshd/timeline.go`). The
-pages Lanes reads, `run.status`, `coord.message` and `coord.message.acked`,
-never hold one. `run.list` and `changes.list` are not compressed: without a
+behind a `workspace.timeline` page matches one workspace, but the server
+filters each event per reader (`events.Reachable` in
+`internal/events/stream.go`), so a page can hold what only some of that
+workspace's readers see: anything addressed to one member (an assistant
+notice); every event of a session with a repository in another workspace, or
+of a deleted session; agent mail to such a session; another workspace's
+repository (a branch, pull request or diff of an extra repository); member
+changes, shown only to readers who see that member; and overlap peers. The
+server sends a page holding any of them as a JSON line: `events.OneWorkspace`
+asks `Reachable` itself whether the event passes a scope that reaches only
+the page's workspace, only sessions wholly inside it, and no member by name
+(`pageScope` in `internal/sshd/workspace_scope.go`, called from
+`internal/sshd/timeline.go`). A Lanes page (`run.status`, `coord.message`,
+`coord.message.acked`) compresses unless its window holds an event of a
+multi-repository or deleted session or mail to one. That a page asked for
+gzip came back plain tells a size observer such an event is in the window;
+plaintext sizes and the live event stream already show most of that.
+`run.list` and `changes.list` are not compressed: without a
 workspace they append every workspace the caller reaches into one response,
 so a member of one workspace could place text beside another workspace's
 sessions. A method whose response can span workspaces must not be added.

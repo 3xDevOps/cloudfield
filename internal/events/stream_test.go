@@ -132,25 +132,40 @@ func TestScopedLeavesOutUnreachableOverlapPeers(t *testing.T) {
 	}
 }
 
+// OneWorkspace keeps every gate Reachable applies: run-1 lies wholly in the
+// page's workspace, run-multi has a repository elsewhere, run-gone is deleted.
 func TestOneWorkspace(t *testing.T) {
 	t.Parallel()
 	const ws, other = domain.WorkspaceID("ws-a"), domain.WorkspaceID("ws-b")
+	page := Scope{
+		Workspace: func(id domain.WorkspaceID) bool { return id == ws },
+		Run:       func(id domain.RunID) bool { return id == "run-1" },
+		Sees:      func(domain.MemberID) bool { return false },
+	}
 	for name, tc := range map[string]struct {
+		run     domain.RunID
+		actor   domain.MemberID
 		payload Payload
 		want    bool
 	}{
-		"status":                  {RunStatusPayload{To: domain.RunRunning}, true},
-		"primary branch":          {GitBranchPayload{WorkspaceID: ws}, true},
-		"extra repository branch": {GitBranchPayload{WorkspaceID: other, Repo: other}, false},
-		"primary pull request":    {RunPRPayload{}, true},
-		"extra repository PR":     {RunPRPayload{Repo: other}, false},
-		"extra repository diff":   {RunDiffPayload{Repo: other}, false},
-		"deleted, one workspace":  {RunDeletedPayload{ExtraWorkspaceIDs: []domain.WorkspaceID{ws}}, true},
-		"deleted, extra repos":    {RunDeletedPayload{ExtraWorkspaceIDs: []domain.WorkspaceID{ws, other}}, false},
-		"assistant notice":        {AssistantNoticePayload{MemberID: "mem-1"}, false},
-		"overlap":                 {OverlapPayload{}, false},
+		"status":                     {"run-1", "", RunStatusPayload{To: domain.RunRunning}, true},
+		"primary branch":             {"run-1", "", GitBranchPayload{WorkspaceID: ws}, true},
+		"mail inside the workspace":  {"run-1", "", CoordMessagePayload{WorkspaceID: ws, FromRunID: "run-1", ToRunID: "run-1"}, true},
+		"extra repository branch":    {"run-1", "", GitBranchPayload{WorkspaceID: other, Repo: other}, false},
+		"extra repository PR":        {"run-1", "", RunPRPayload{Repo: other}, false},
+		"extra repository diff":      {"run-1", "", RunDiffPayload{Repo: other}, false},
+		"deleted, one workspace":     {"run-gone", "", RunDeletedPayload{ExtraWorkspaceIDs: []domain.WorkspaceID{ws}}, true},
+		"deleted, extra repos":       {"run-gone", "", RunDeletedPayload{ExtraWorkspaceIDs: []domain.WorkspaceID{ws, other}}, false},
+		"deleted, old format":        {"run-gone", "", RunDeletedPayload{}, false},
+		"event of a deleted run":     {"run-gone", "", RunStatusPayload{To: domain.RunCompleted}, false},
+		"status of a multi-repo run": {"run-multi", "", RunStatusPayload{To: domain.RunRunning, Reason: "agent text"}, false},
+		"mail to a multi-repo run":   {"run-1", "", CoordMessagePayload{WorkspaceID: ws, FromRunID: "run-1", ToRunID: "run-multi"}, false},
+		"member change":              {"", "mem-2", MemberChangedPayload{MemberID: "mem-1", DisplayName: "Ada"}, false},
+		"assistant notice":           {"run-1", "", AssistantNoticePayload{MemberID: "mem-1"}, false},
+		"overlap":                    {"run-1", "", OverlapPayload{}, false},
 	} {
-		if got := OneWorkspace(Event{WorkspaceID: ws, RunID: "run-1", Payload: tc.payload}); got != tc.want {
+		ev := Event{WorkspaceID: ws, RunID: tc.run, ActorID: tc.actor, Payload: tc.payload}
+		if got := OneWorkspace(ev, page); got != tc.want {
 			t.Errorf("%s: OneWorkspace = %v, want %v", name, got, tc.want)
 		}
 	}

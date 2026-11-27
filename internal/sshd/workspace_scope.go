@@ -145,6 +145,31 @@ func (s *Server) eventScope(ctx context.Context, actor permissions.Actor) events
 	}
 }
 
+// pageScope is what every reader of workspace ws may see in its history:
+// that workspace, the runs that exist and have no repository elsewhere,
+// and no member by name.
+func (s *Server) pageScope(ctx context.Context, ws domain.WorkspaceID) events.Scope {
+	wholly := map[domain.RunID]bool{}
+	return events.Scope{
+		Workspace: func(id domain.WorkspaceID) bool { return id == ws },
+		Run: func(id domain.RunID) bool {
+			in, ok := wholly[id]
+			if !ok {
+				run, err := s.cfg.Store.GetRun(ctx, id)
+				in = err == nil
+				if in {
+					for _, w := range runWorkspaces(run) {
+						in = in && w == ws
+					}
+				}
+				wholly[id] = in
+			}
+			return in
+		},
+		Sees: func(domain.MemberID) bool { return false },
+	}
+}
+
 // memberSight is visibleMembers for an event reader: an actor that could
 // not be loaded, or whose sight cannot be read, sees no one.
 func (s *Server) memberSight(ctx context.Context, actor permissions.Actor) func(domain.MemberID) bool {

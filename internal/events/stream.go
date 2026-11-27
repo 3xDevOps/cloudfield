@@ -168,23 +168,16 @@ func seesNamed(ev Event, scope Scope) bool {
 	return true
 }
 
-// OneWorkspace reports whether ev's payload holds only what every reader
-// of ev's workspace may see: nothing addressed to one member and nothing
-// that Reachable checks against another workspace or other runs.
-func OneWorkspace(ev Event) bool {
-	switch p := ev.Payload.(type) {
+// OneWorkspace reports whether every reader of a page of one workspace
+// sees ev whole: it is addressed to no one member, names no peers, and
+// Reachable admits it under page, a scope that reaches only that
+// workspace, only runs wholly inside it, and no named member.
+func OneWorkspace(ev Event, page Scope) bool {
+	switch ev.Payload.(type) {
 	case private, peerScoped:
 		return false
-	case repoScoped:
-		return p.RepoWorkspace() == "" || p.RepoWorkspace() == ev.WorkspaceID
-	case runScoped:
-		for _, ws := range p.RunExtraWorkspaces() {
-			if ws != ev.WorkspaceID {
-				return false
-			}
-		}
 	}
-	return true
+	return Reachable(ev, page)
 }
 
 // Reachable reports whether scope allows ev's workspace, for an event

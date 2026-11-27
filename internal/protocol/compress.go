@@ -25,8 +25,8 @@ const GzipMinBytes = 8 << 10
 // workspace's member writes would be compressed beside another workspace's,
 // and the frame's size would tell them about it. A listed method whose
 // result can still mix access domains sends that result plain, as
-// workspace.timeline does for a page holding a private payload or another
-// workspace's; docs/local-gateway.md#compressed-responses.
+// workspace.timeline does for a page holding any event not every reader of
+// the workspace sees whole; docs/local-gateway.md#compressed-responses.
 var GzipMethods = map[string]bool{
 	MethodWorkspaceTimeline: true,
 }
