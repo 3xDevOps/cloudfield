@@ -233,16 +233,16 @@ func TestStartLoginAndChildLogin(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// On her own account Grace with no usable automatic login launches on
-	// the default login, never on one she did not pick.
+	// On her own account Grace with no automatic login is refused, never
+	// launched on one she did not pick.
 	if err := e.db.SetAgentLoginAutomatic(ctx, e.owner.ID, "claude", work.Login, false); err != nil {
 		t.Fatal(err)
 	}
 	if err := e.db.SetAgentLoginAutomatic(ctx, e.owner.ID, "claude", console.Login, false); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.owner.ID, e.owner.ID, "claude", domain.LaunchTUI); err != nil || got != "" {
-		t.Fatalf("Grace's start with no automatic login = %q, %v; want her default", got, err)
+	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.owner.ID, e.owner.ID, "claude", domain.LaunchTUI); !errors.Is(err, ErrNoStartLogin) {
+		t.Fatalf("Grace's start with no automatic login = %q, %v; want refused", got, err)
 	}
 	if _, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.owner.ID, "claude", domain.LaunchTUI); !errors.Is(err, permissions.ErrDenied) {
 		t.Fatalf("Ada's start with no shared login: %v; want denied", err)
@@ -257,6 +257,47 @@ func TestStartLoginAndChildLogin(t *testing.T) {
 	}
 	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.owner.ID, "claude", domain.LaunchTUI); err != nil || got != "" {
 		t.Fatalf("a start where a variable pays = %q, %v; want the default login", got, err)
+	}
+}
+
+// A launch that names no login never lands on a login its owner turned
+// automatic off because nothing else served: it is refused, naming each
+// login and why, and the flag that names one. A member who added no login
+// has no row, so nothing of theirs is off and the launch starts on the
+// default login as before logins existed.
+func TestALaunchNamingNoLoginNeverFallsBackToALoginThatIsOff(t *testing.T) {
+	e := newLoginShareEnv(t)
+	ctx := t.Context()
+	expired := `{"claudeAiOauth":{"accessToken":"test-access-old","expiresAt":1}}`
+	writeHomeFile(t, e.ownerHome, ".claude/.credentials.json", expired)
+	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.owner.ID, e.owner.ID, "claude", domain.LaunchTUI); err != nil || got != "" {
+		t.Fatalf("Grace's start with no added login and a signed-out default = %q, %v; want the default login, whose launch says why", got, err)
+	}
+	work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", expired)
+	if err := e.db.OrderAgentLogins(ctx, e.member.ID, "claude", []domain.LoginID{work.Login, domain.DefaultLogin}); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.db.SetAgentLoginAutomatic(ctx, e.member.ID, "claude", domain.DefaultLogin, false); err != nil {
+		t.Fatal(err)
+	}
+	_, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI)
+	if !errors.Is(err, ErrNoStartLogin) || !strings.Contains(err.Error(), ": work: ") || !strings.Contains(err.Error(), "default is automatic off; name one with cloudfield session --login <name>") {
+		t.Fatalf("Ada's start with work signed out and her API-key default automatic off: %v; want refused naming both", err)
+	}
+	dir, _ := e.logins.Path(e.member.ID, "claude", work.Login)
+	writeHomeFile(t, dir, memberhome.LoginCredentials, workLogin)
+	if err := e.db.SetAgentLoginAutomatic(ctx, e.member.ID, "claude", work.Login, false); err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI)
+	if !errors.Is(err, ErrNoStartLogin) || !strings.Contains(err.Error(), "work is automatic off; default is automatic off") {
+		t.Fatalf("Ada's start with every login automatic off: %v; want refused naming both", err)
+	}
+	if err := e.db.SetAgentLoginAutomatic(ctx, e.member.ID, "claude", domain.DefaultLogin, true); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.member.ID, "claude", domain.LaunchTUI); err != nil || got != "" {
+		t.Fatalf("Ada's start with her default automatic again = %q, %v; want the default login", got, err)
 	}
 }
 

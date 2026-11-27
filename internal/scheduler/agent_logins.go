@@ -41,6 +41,10 @@ const (
 // keeps none.
 var ErrNoAddedLogins = errors.New("only Claude Code keeps added logins")
 
+// ErrNoStartLogin refuses a launch that names no login when none of the
+// launcher's own logins serves without being named.
+var ErrNoStartLogin = errors.New("none of your logins starts a session unless you name it")
+
 // loginSignIn is the sign-in of one new login. done closes once ended is
 // set, with login or err.
 type loginSignIn struct {
@@ -774,8 +778,8 @@ func (s *Scheduler) checkDefaultLoginShared(ctx context.Context, member, account
 // none is named: the account's first login in its owner's order that member
 // may use without naming it, automatic and, for a teammate, on for shares.
 // An account none of whose logins member may use is not shared with them;
-// on their own account the first login serves, and its launch says why it
-// cannot sign in.
+// on their own account the launch is refused, naming each login and why it
+// does not serve, since one that is automatic off serves only when named.
 func (s *Scheduler) StartLogin(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, harness string, mode domain.LaunchMode) (domain.LoginID, error) {
 	logins, err := s.cfg.Store.ListAgentLogins(ctx, account, harness)
 	if err != nil || len(logins) == 0 {
@@ -786,21 +790,29 @@ func (s *Scheduler) StartLogin(ctx context.Context, workspace domain.WorkspaceID
 	if byEnv, envErr := s.EnvironmentSignsIn(ctx, workspace, harness, mode); envErr != nil || byEnv {
 		return "", envErr
 	}
+	var refused []string
 	for _, l := range logins {
-		if !l.Automatic || (account != member && !l.Shared) {
+		if account != member && (!l.Automatic || !l.Shared) {
+			continue
+		}
+		if !l.Automatic {
+			refused = append(refused, l.Name+" is automatic off")
 			continue
 		}
 		login := domain.Account{Member: account, Login: loginOf(l.ID)}
-		if refusal, refusalErr := s.loginRefusal(ctx, member, login, harness); refusalErr == nil && refusal == "" {
+		refusal, refusalErr := s.loginRefusal(ctx, member, login, harness)
+		if refusalErr != nil {
+			refusal = refusalErr.Error()
+		}
+		if refusal == "" {
 			return login.Login, nil
 		}
+		refused = append(refused, l.Name+": "+refusal)
 	}
-	// On their own account a member with no usable login launches on the
-	// default login, as before logins existed, and its launch says why.
-	if account == member {
-		return "", nil
+	if account != member {
+		return "", fmt.Errorf("%w: none of this account's logins is available to you, so it is not shared with you", permissions.ErrDenied)
 	}
-	return "", fmt.Errorf("%w: none of this account's logins is available to you, so it is not shared with you", permissions.ErrDenied)
+	return "", fmt.Errorf("%w: %s; name one with cloudfield session --login <name>", ErrNoStartLogin, strings.Join(refused, "; "))
 }
 
 // ChildLogin is the login a subsession of owner starts from on account.
