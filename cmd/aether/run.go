@@ -145,9 +145,11 @@ func runRun(args []string) error {
 		params := launchParams(wsID, task, *agent, *mode, *model, *effort, *account, *cachedBase)
 		params.FallbackAccountMemberIDs, params.NoFallback = fallbacks, *noFallback
 		if *login != "" {
-			if params.Login, err = launchLogin(c, info.Member.ID, *agent, *account, *login); err != nil {
+			id, err := launchLogin(c, info.Member.ID, *agent, *account, *login)
+			if err != nil {
 				return err
 			}
+			params.Login = id
 		}
 		params.Children = *children
 		params.Permission = *permission

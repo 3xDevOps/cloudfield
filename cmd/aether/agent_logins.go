@@ -180,15 +180,15 @@ func followSignIn(out, errOut io.Writer, c *protocol.Client, agent, id string, o
 			case !time.Now().Before(deadline):
 				return stillStarting(agent, id)
 			case first:
-				if _, err := fmt.Fprintf(errOut, "%v\ntrying again every %v for up to %v; Ctrl-C stops trying and leaves the sign-in running\n", err, signInRetryPause, signInRetryLimit); err != nil {
-					return err
+				if _, werr := fmt.Fprintf(errOut, "%v\ntrying again every %v for up to %v; Ctrl-C stops trying and leaves the sign-in running\n", err, signInRetryPause, signInRetryLimit); werr != nil {
+					return werr
 				}
 			}
 			continue
 		}
 		if err != nil {
-			if _, err := fmt.Fprintf(errOut, "%v\nwaiting for the sign-in of login %s to end; Ctrl-C stops waiting and leaves it running\n", err, id); err != nil {
-				return err
+			if _, werr := fmt.Fprintf(errOut, "%v\nwaiting for the sign-in of login %s to end; Ctrl-C stops waiting and leaves it running\n", err, id); werr != nil {
+				return werr
 			}
 		}
 		return signInEnded(out, agent, id, &login, ended(nil))
@@ -489,7 +489,7 @@ func removeLogin(args []string) error {
 
 func orderLogins(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: cloudfield agent logins order <login>...")
+		return errors.New("usage: cloudfield agent logins order <login> [<login> ...]")
 	}
 	return withLogins(func(c *protocol.Client, logins []protocol.AgentLogin) error {
 		ids := make([]string, len(args))
