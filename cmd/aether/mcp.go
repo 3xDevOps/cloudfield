@@ -30,7 +30,7 @@ const mcpUsage = "usage: cloudfield mcp [code | revoke <connector id>]"
 func runMCP(args []string) error {
 	switch {
 	case len(args) == 0:
-		return withControl(func(c *protocol.Client) error { return mcpOverview(os.Stdout, c.Call, time.Now()) })
+		return withControl(func(c *protocol.Client) error { return mcpOverview(os.Stdout, c.Call, time.Now) })
 	case len(args) == 1 && args[0] == "code":
 		return withControl(func(c *protocol.Client) error {
 			var code protocol.ConnectorCodeResult
@@ -63,7 +63,7 @@ func olderServer(err error) error {
 // mcpOverview prints how to add a connector and the caller's connectors.
 // When no code can be minted and the edge says something about the
 // address of one of them, it still prints the connectors before the error.
-func mcpOverview(w io.Writer, call func(method string, params, result any) error, now time.Time) error {
+func mcpOverview(w io.Writer, call func(method string, params, result any) error, now func() time.Time) error {
 	var list protocol.ConnectorListResult
 	if err := call(protocol.MethodConnectorList, struct{}{}, &list); err != nil {
 		return olderServer(err)
@@ -75,13 +75,13 @@ func mcpOverview(w io.Writer, call func(method string, params, result any) error
 			if !slices.ContainsFunc(list.Connectors, func(c protocol.Connector) bool { return c.Notice != nil }) {
 				return olderServer(err)
 			}
-			if perr := printConnected(w, list, "", false, now); perr != nil {
+			if perr := printConnected(w, list, "", false, now()); perr != nil {
 				return perr
 			}
 			return olderServer(err)
 		}
 	}
-	return printConnectors(w, list, code, now)
+	return printConnectors(w, list, code, now())
 }
 
 func printConnectors(w io.Writer, list protocol.ConnectorListResult, code *protocol.ConnectorCodeResult, now time.Time) error {

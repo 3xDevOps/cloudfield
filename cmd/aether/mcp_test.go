@@ -180,7 +180,9 @@ func TestMCPOverviewWithoutACode(t *testing.T) {
 		RedirectHost: "claude.ai", Resource: "https://relay-old.example.test/mcp/abc", Scopes: []string{"read"}, CreatedAt: now.UTC().Format(time.RFC3339),
 		Notice: &protocol.ConnectorNotice{State: "retiring", Date: "2027-03-01"}}}}
 	refused := &protocol.Error{Code: protocol.CodeUnavailable, Message: "connector.code: this server is not connected to its edge at https://relay-old.example.test"}
+	calls := 0
 	call := func(method string, _, result any) error {
+		calls++
 		if method == protocol.MethodConnectorList {
 			*result.(*protocol.ConnectorListResult) = list
 			return nil
@@ -188,7 +190,12 @@ func TestMCPOverviewWithoutACode(t *testing.T) {
 		return refused
 	}
 	var out strings.Builder
-	if err := mcpOverview(&out, call, now); err == nil || err.Error() != refused.Error() {
+	if err := mcpOverview(&out, call, func() time.Time {
+		if calls != 2 {
+			t.Errorf("the clock was read after %d calls, want both", calls)
+		}
+		return now
+	}); err == nil || err.Error() != refused.Error() {
 		t.Fatalf("error %v, want %v", err, refused)
 	}
 	unmarked := list
@@ -201,7 +208,7 @@ func TestMCPOverviewWithoutACode(t *testing.T) {
 			return nil
 		}
 		return refused
-	}, now); err == nil || err.Error() != refused.Error() || none.Len() != 0 {
+	}, func() time.Time { return now }); err == nil || err.Error() != refused.Error() || none.Len() != 0 {
 		t.Fatalf("with no notice: error %v, output %q, want %v and no output", err, none.String(), refused)
 	}
 	if want := `Connected:
