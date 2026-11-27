@@ -85,11 +85,22 @@ func signIn(out io.Writer, conn *cli.Conn, c *protocol.Client, agent, id string)
 		stream, _, err = conn.TerminalStream(protocol.TerminalRequest{AgentLogin: id, Cols: cols, Rows: rows})
 		return err
 	})
+	if errors.Is(err, errInterrupted) {
+		return mayStillRun(err, agent, id)
+	}
 	if err == nil {
 		err = describeTerminalEnd(copyRaw(stream, 0))
 	}
-	if err != nil {
-		return mayStillRun(err, agent, id)
+	return signInResult(out, os.Stderr, c, agent, id, err)
+}
+
+// signInResult prints how the sign-in terminal failed, if it did, and then
+// what the server made of the sign-in.
+func signInResult(out, errOut io.Writer, c *protocol.Client, agent, id string, terminalErr error) error {
+	if terminalErr != nil {
+		if _, err := fmt.Fprintf(errOut, "%v\nwaiting for the sign-in of login %s to end; Ctrl-C stops waiting and leaves it running\n", terminalErr, id); err != nil {
+			return err
+		}
 	}
 	var login protocol.AgentLogin
 	if err := callInterruptibly(c, protocol.MethodAgentLoginResult, protocol.AgentLoginParams{Agent: agent, LoginID: id}, &login); err != nil {
@@ -99,7 +110,7 @@ func signIn(out io.Writer, conn *cli.Conn, c *protocol.Client, agent, id string)
 		}
 		return mayStillRun(err, agent, id)
 	}
-	_, err = fmt.Fprintf(out, "added login %s\n", describeLogin(login))
+	_, err := fmt.Fprintf(out, "added login %s\n", describeLogin(login))
 	return err
 }
 

@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"strings"
 	"testing"
 
 	"github.com/3xDevOps/cloudfield/internal/cli"
@@ -87,5 +89,31 @@ func TestAgentLoginRefusesAnEmptyAs(t *testing.T) {
 		if err := agentLogin(args); err == nil || err.Error() != "--as needs a name: cloudfield agent login claude --as <name>" {
 			t.Errorf("agentLogin(%q) = %v; want the empty name refused before any sign-in", args, err)
 		}
+	}
+}
+
+func TestSignInResultFollowsAFailedTerminal(t *testing.T) {
+	result := &fakeReply{result: protocol.AgentLogin{ID: "lgn-test1", Name: "work", Kind: "subscription", Plan: "max"}}
+	c := fakeControlMethods(t, map[string]*fakeReply{protocol.MethodAgentLoginResult: result})
+	var out, errOut bytes.Buffer
+	if err := signInResult(&out, &errOut, c, "claude", "lgn-test1", errors.New("remote exited with status 1")); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := errOut.String(), "remote exited with status 1\nwaiting for the sign-in of login lgn-test1 to end; Ctrl-C stops waiting and leaves it running\n"; got != want {
+		t.Errorf("stderr = %q, want %q", got, want)
+	}
+	if got, want := out.String(), "added login work: subscription, plan max\n"; got != want {
+		t.Errorf("stdout = %q, want %q", got, want)
+	}
+
+	result.err = &protocol.Error{Code: protocol.CodeInternal, Message: "the sign-in ended before Claude Code saved a login; nothing was added"}
+	out.Reset()
+	errOut.Reset()
+	err := signInResult(&out, &errOut, c, "claude", "lgn-test1", errors.New("cli: terminal: ptyhost: no terminal for session"))
+	if err == nil || err.Error() != "rpc error -32603: the sign-in ended before Claude Code saved a login; nothing was added" {
+		t.Errorf("signInResult = %v; want the server's reason", err)
+	}
+	if !strings.Contains(errOut.String(), "cli: terminal: ptyhost: no terminal for session\n") {
+		t.Errorf("stderr = %q; want the terminal's error", errOut.String())
 	}
 }
