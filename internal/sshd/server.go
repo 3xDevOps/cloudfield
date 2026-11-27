@@ -181,6 +181,9 @@ type Server struct {
 	// edgeOwner records ownership at the edge; nil while no edge agent
 	// runs. Guarded by mu.
 	edgeOwner EdgeOwner
+	// noticesErr is the last error reading the edge's stored notices,
+	// empty after a read that succeeded, so server.edge logs each once.
+	noticesErr atomic.Pointer[string]
 	// tailnetDashboardURL and tailnetDashboardErr are what server.info
 	// reports as dashboard_url and tailnet_dashboard_error. Guarded by mu.
 	tailnetDashboardURL string

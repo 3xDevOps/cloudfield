@@ -7,11 +7,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -622,6 +624,38 @@ func TestDialFailureCountsAnArrivedUpgradeAsAnAnswer(t *testing.T) {
 		if err == nil || errors.Is(err, errNoAnswer) != tc.noAnswer {
 			t.Errorf("%s: %v, no answer %v, want %v", tc.name, err, errors.Is(err, errNoAnswer), tc.noAnswer)
 		}
+	}
+}
+
+// Reading the stored notices creates nothing and does not wait for the
+// state lock, which an owner change can hold.
+func TestNoticesReadTakesNoLockAndCreatesNothing(t *testing.T) {
+	absent := filepath.Join(t.TempDir(), "data")
+	if n, err := OpenState(absent).Notices("server"); err != nil || n.Notices != nil {
+		t.Fatalf("notices without state: %+v, %v", n, err)
+	}
+	if _, err := os.Lstat(absent); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("reading notices created %s: %v", absent, err)
+	}
+	state := OpenState(t.TempDir())
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	if err := state.Pin(pub); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := state.lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	done := make(chan error, 1)
+	go func() { _, err := state.Notices("server"); done <- err }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("reading notices waited for the state lock")
 	}
 }
 
