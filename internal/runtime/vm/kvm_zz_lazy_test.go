@@ -55,13 +55,16 @@ def child(i):
     for p in range(pages): struct.pack_into('<III', buf, p * PG, 0x5aa50000 + i, gen, p)
     put('done.%d' % i, '0 0\n')
     while True:
-        try: want = int(open(CTL + '/gen').read())
+        blind = False
+        try:
+            parts = open(CTL + '/gen').read().split(); want = int(parts[0]); blind = len(parts) > 1
         except Exception: want = gen
         if want != gen:
             bad = 0
             for p in range(pages):
                 off = p * PG; b = off % BLK
-                if struct.unpack_from('<III', buf, off) != (0x5aa50000 + i, gen, p) or view[off + 12:off + PG] != ref[b + 12:b + PG]: bad += 1
+                if blind: pass
+                elif struct.unpack_from('<III', buf, off) != (0x5aa50000 + i, gen, p) or view[off + 12:off + PG] != ref[b + 12:b + PG]: bad += 1
                 struct.pack_into('<III', buf, off, 0x5aa50000 + i, want, p)
             gen = want
             put('done.%d' % i, '%d %d\n' % (gen, bad))
@@ -78,11 +81,13 @@ while True:
     n += 1; put('hb', '%d\n' % n); time.sleep(0.2)
 `
 
-const lazyBump = `g=$1; echo $g >/dev/shm/ctl/gen.tmp && mv /dev/shm/ctl/gen.tmp /dev/shm/ctl/gen
+const lazyBump = `g=$1; echo $g $2 >/dev/shm/ctl/gen.tmp && mv /dev/shm/ctl/gen.tmp /dev/shm/ctl/gen
 while :; do ok=0; for i in 0 1 2; do a=; read a b </dev/shm/ctl/done.$i 2>/dev/null; [ "$a" = "$g" ] && ok=$((ok+1)); done; [ $ok = 3 ] && break; sleep 0.02; done
 cat /dev/shm/ctl/done.0 /dev/shm/ctl/done.1 /dev/shm/ctl/done.2`
 
-const lazyDmesg = `dmesg | grep -ciE 'BUG|Oops|stall|lockup|hung task|Bad page|corrupt|segfault|I/O error|Out of memory|Call Trace|soft lockup'; true`
+const lazyDmesgPattern = `'BUG|Oops|stall|lockup|hung task|Bad page|corrupt|segfault|I/O error|Out of memory|Call Trace|soft lockup'`
+
+const lazyDmesg = `dmesg | grep -ciE ` + lazyDmesgPattern + `; true`
 
 type lazyArm struct {
 	name          string
@@ -243,6 +248,18 @@ func newLazyHost(t *testing.T) *lazyHost {
 	return h
 }
 
+// written is how many bytes the data directory's block device has been
+// asked to write.
+func (h *lazyHost) written() uint64 {
+	src, _ := exec.Command("findmnt", "-no", "SOURCE", "-T", h.e.root).Output()
+	data, _ := os.ReadFile("/sys/block/" + filepath.Base(strings.TrimSpace(string(src))) + "/stat")
+	if f := strings.Fields(string(data)); len(f) > 6 {
+		n, _ := strconv.ParseUint(f[6], 10, 64)
+		return n * 512
+	}
+	return 0
+}
+
 func (h *lazyHost) set(arm lazyArm) {
 	zzPrivate, zzKeep, zzRestoreMode, zzHypervisor = arm.private, arm.keep, arm.mode, arm.hv
 }
@@ -308,9 +325,14 @@ func (v *lazyVM) down() {
 
 // bump moves the tree to the next generation, which rewrites a word of
 // every page of its 300 MiB after checking the whole page.
-func (v *lazyVM) bump() error {
+func (v *lazyVM) bump() error { return v.bumpAs("") }
+
+// bumpAs with a mode stamps the next generation without reading the pages
+// first, so each page takes one write fault instead of a read fault and a
+// copy-on-write fault.
+func (v *lazyVM) bumpAs(mode string) error {
 	v.gen++
-	out, _, err := v.sh(lazyBump, strconv.Itoa(v.gen))
+	out, _, err := v.sh(lazyBump, strconv.Itoa(v.gen), mode)
 	if err != nil {
 		return err
 	}
@@ -352,6 +374,8 @@ type lazyRound struct {
 	idle time.Duration
 	// between runs after the save, before the restore.
 	between func() error
+	// blind makes the write tail stamp the heap without reading it first.
+	blind bool
 }
 
 // round saves the VM, wakes it and checks it. It reports false when the
@@ -369,11 +393,22 @@ func (v *lazyVM) round(r lazyRound) bool {
 	}
 	pre := v.sample()
 	v.held = pre.stat["anon"] + pre.stat["shmem"]
+	wrote := h.written()
 	start := time.Now()
-	if fail("save", h.e.save(ctx, v.key)) {
+	if err := h.e.save(ctx, v.key); err != nil {
+		events, _ := os.ReadFile(filepath.Join(v.cgroup(), "memory.events"))
+		kernel, _ := exec.Command("sh", "-c", "dmesg | tail -25").CombinedOutput()
+		h.logf("savefail %s before_save: %s", tag, pre)
+		h.logf("savefail %s memory.events=%q monitor_log=%q", tag, strings.Join(strings.Fields(string(events)), " "), h.e.logTail(v.key))
+		for line := range strings.SplitSeq(strings.TrimSpace(string(kernel)), "\n") {
+			h.logf("savefail %s host_dmesg %s", tag, line)
+		}
+		fail("save", err)
 		return false
 	}
 	saved := time.Since(start)
+	_ = exec.Command("sync").Run()
+	wrote = h.written() - wrote
 	var st unix.Stat_t
 	_ = unix.Stat(v.snapshotFile(), &st)
 	if v.arm.thpOff && fail("thp off", lazyThpOff(h.e.path(v.key, snapshotDir))) {
@@ -426,7 +461,12 @@ func (v *lazyVM) round(r lazyRound) bool {
 	ws := time.Since(t1)
 	atWS := v.sample()
 	t2 := time.Now()
-	tailErr := v.bump()
+	var tailErr error
+	if r.blind {
+		tailErr = v.bumpAs("blind")
+	} else {
+		tailErr = v.bump()
+	}
 	tail := time.Since(t2)
 	var wrong []string
 	if wsErr != nil {
@@ -450,7 +490,7 @@ func (v *lazyVM) round(r lazyRound) bool {
 		wrong = append(wrong, fmt.Sprintf("boot id, pids, heartbeat, start times %q, want %q", state, want))
 	}
 	if hits, hitErr := v.root(lazyDmesg); hitErr != nil || hits != v.dmesg {
-		lines, _ := v.root("dmesg | tail -30")
+		lines, _ := v.root("dmesg | grep -iE " + lazyDmesgPattern + " | tail -6")
 		wrong = append(wrong, fmt.Sprintf("dmesg hits %q (%v), want %q: %s", hits, hitErr, v.dmesg, lines))
 	}
 	ok := len(wrong) == 0
@@ -465,8 +505,8 @@ func (v *lazyVM) round(r lazyRound) bool {
 		}
 		return ms(m[b].Sub(m[a]))
 	}
-	h.logf("round %s ok=%t save_ms=%s saved_alloc_mib=%s saved_len_mib=%s held_before_save_mib=%s exec_to_paused_ms=%s unit_ms=%s paused_to_resumed_ms=%s resume_to_helper_ms=%s restore_ms=%s first_cmd_ms=%s working_set_cmd_ms=%s to_working_set_ms=%s tail_cmd_ms=%s to_tail_ms=%s wrong=%q",
-		tag, ok, ms(saved), mib(uint64(st.Blocks)*512), mib(uint64(st.Size)), mib(v.held),
+	h.logf("round %s ok=%t save_ms=%s save_wrote_mib=%s saved_alloc_mib=%s saved_len_mib=%s held_before_save_mib=%s exec_to_paused_ms=%s unit_ms=%s paused_to_resumed_ms=%s resume_to_helper_ms=%s restore_ms=%s first_cmd_ms=%s working_set_cmd_ms=%s to_working_set_ms=%s tail_cmd_ms=%s to_tail_ms=%s wrong=%q",
+		tag, ok, ms(saved), mib(wrote), mib(uint64(st.Blocks)*512), mib(uint64(st.Size)), mib(v.held),
 		ms(m["paused"].Sub(t0)), ms(m["unit"].Sub(t0)), since("paused", "resume"), since("resume", "helper"), ms(restored), ms(first),
 		ms(ws), ms(first+ws), ms(tail), ms(first+ws+tail), strings.Join(wrong, "; "))
 	h.logf("mem %s at=wake %s", tag, atWake)
@@ -496,9 +536,43 @@ func (v *lazyVM) compare(key string) {
 	var a, b unix.Stat_t
 	_ = unix.Stat(v.snapshotFile(), &a)
 	_ = unix.Stat(second, &b)
-	out, err := exec.Command("cmp", v.snapshotFile(), second).CombinedOutput()
-	h.logf("pagecompare arm=%s mem=%d equal=%t bytes=%d first_alloc_mib=%s second_alloc_mib=%s second_snapshot_ms=%s cmp=%q",
-		v.arm.name, h.mem, err == nil && a.Size == b.Size, a.Size, mib(uint64(a.Blocks)*512), mib(uint64(b.Blocks)*512), ms(snap), strings.TrimSpace(string(out)))
+	pages, differ, where, err := lazyDiff(v.snapshotFile(), second)
+	h.logf("pagecompare arm=%s mem=%d pages=%d pages_that_differ=%d first_offsets=%v same_size=%t err=%v first_alloc_mib=%s second_alloc_mib=%s second_snapshot_ms=%s",
+		v.arm.name, h.mem, pages, differ, where, a.Size == b.Size, err, mib(uint64(a.Blocks)*512), mib(uint64(b.Blocks)*512), ms(snap))
+}
+
+// lazyDiff counts the 4 KiB pages in which two files differ.
+func lazyDiff(first, second string) (pages, differ int, where []int64, err error) {
+	a, err := os.Open(first)
+	if err != nil {
+		return 0, 0, nil, err
+	}
+	defer func() { _ = a.Close() }()
+	b, err := os.Open(second)
+	if err != nil {
+		return 0, 0, nil, err
+	}
+	defer func() { _ = b.Close() }()
+	x, y := make([]byte, 4<<20), make([]byte, 4<<20)
+	for off := int64(0); ; off += int64(len(x)) {
+		n, errA := a.ReadAt(x, off)
+		m, _ := b.ReadAt(y, off)
+		if n != m {
+			return pages, differ, where, fmt.Errorf("lengths differ at %d", off)
+		}
+		for p := 0; p < n; p += 4096 {
+			pages++
+			if !bytes.Equal(x[p:min(p+4096, n)], y[p:min(p+4096, n)]) {
+				differ++
+				if len(where) < 8 {
+					where = append(where, off+int64(p))
+				}
+			}
+		}
+		if errA != nil {
+			return pages, differ, where, nil
+		}
+	}
 }
 
 // h8 has the guest take 512 MiB, free it, and take it again after the
@@ -567,24 +641,44 @@ func TestKVMZZLazyWake(t *testing.T) {
 		if !slices.Contains(strings.Split(lazyEnv("ZZ_ARMS", "copy,cow,cowthp"), ","), arm.name) {
 			continue
 		}
-		v, err := h.up(arm, "")
-		if err != nil {
-			h.logf("boot arm=%s mem=%d err=%q", arm.name, h.mem, err)
-			totals = append(totals, fmt.Sprintf("total arm=%s mem=%d boot failed", arm.name, h.mem))
+		var v *lazyVM
+		alive := false
+		// A VM whose first save fails is replaced, so the arm still gets
+		// its wakes; each failure is logged and counted.
+		for attempt := 0; attempt < 4 && !alive; attempt++ {
+			var err error
+			if v, err = h.up(arm, strings.Repeat("x", attempt)); err != nil {
+				h.logf("boot arm=%s mem=%d err=%q", arm.name, h.mem, err)
+				totals = append(totals, fmt.Sprintf("total arm=%s mem=%d attempt=%d boot failed", arm.name, h.mem, attempt))
+				continue
+			}
+			if alive = v.round(lazyRound{kind: "first", cold: true}); !alive {
+				totals = append(totals, fmt.Sprintf("total arm=%s mem=%d attempt=%d died in its first save and wake", arm.name, h.mem, attempt))
+				v.down()
+			}
+		}
+		if !alive {
 			continue
 		}
-		alive := true
+		first := fmt.Sprintf("first_ok=%d first_bad=%d", v.ok, v.bad)
+		v.ok, v.bad = 0, 0
 		for _, kind := range []string{"cold", "warm"} {
 			for i := 0; alive && i < n; i++ {
 				alive = v.round(lazyRound{kind: kind, i: i, cold: kind == "cold"})
 			}
 		}
-		timed := fmt.Sprintf("timed_ok=%d timed_bad=%d", v.ok, v.bad)
+		timed := fmt.Sprintf("%s timed_ok=%d timed_bad=%d", first, v.ok, v.bad)
 		if alive && extra {
 			alive = v.round(lazyRound{kind: "idle-cold", cold: true, idle: 60 * time.Second})
 		}
 		if alive && extra {
 			alive = v.round(lazyRound{kind: "idle-warm", idle: 300 * time.Second})
+		}
+		if alive && extra {
+			alive = v.round(lazyRound{kind: "blind-cold", cold: true, blind: true})
+		}
+		if alive && extra {
+			alive = v.round(lazyRound{kind: "blind-warm", blind: true})
 		}
 		if alive && extra {
 			zzPaused = func(key string) { v.compare(key) }
@@ -660,14 +754,18 @@ func lazyPunch(h *lazyHost, path string, prefixes ...[]byte) error {
 	buf := make([]byte, 4<<20)
 	for off := int64(0); ; off += int64(len(buf)) {
 		n, readErr := f.ReadAt(buf, off)
-		for p := 0; p+4096 <= n; p += 4096 {
-			for i, prefix := range prefixes {
-				if bytes.HasPrefix(buf[p:], prefix) {
-					found[i]++
-					if err = unix.Fallocate(int(f.Fd()), unix.FALLOC_FL_PUNCH_HOLE|unix.FALLOC_FL_KEEP_SIZE, off+int64(p), 4096); err != nil {
-						return err
-					}
+		for i, prefix := range prefixes {
+			for p := 0; ; {
+				at := bytes.Index(buf[p:n], prefix)
+				if at < 0 {
+					break
 				}
+				found[i]++
+				page := (off + int64(p+at)) &^ 4095
+				if err = unix.Fallocate(int(f.Fd()), unix.FALLOC_FL_PUNCH_HOLE|unix.FALLOC_FL_KEEP_SIZE, page, 4096); err != nil {
+					return err
+				}
+				p += at + len(prefix)
 			}
 		}
 		if readErr != nil {
