@@ -240,6 +240,24 @@ describe('a signed-in edge that says its address is retiring', () => {
     await vi.waitFor(() => expect(screen.getByText((_, el) => el?.tagName === 'P' && /^Signed in to old\.example\.test as/.test(el.textContent ?? ''))).toBeDefined(), { timeout: 5000 })
   })
 
+  it('finds the gateway\'s sign-in for a claim that spells its edge differently, on entering', async () => {
+    const claim = `aether://claim?edge=${encodeURIComponent('HTTPS://Old.example.test/')}&server=${serverEdge.server_id}#abcdefghijklmnop`
+    const client = fakeApi({
+      localEdgeStatus: vi.fn(async (): Promise<EdgeStatus> => ({ edges: [{ edge, account }] })),
+      localEdgeServers: vi.fn(async () => ({ edge, servers: [] })),
+    })
+    render(<EdgeSignIn client={client} claim={claim} onHand={vi.fn()} onLinked={vi.fn()} onSignedOut={vi.fn()} />)
+    await vi.waitFor(() => expect(screen.getByText((_, el) => el?.tagName === 'P' && /^Signed in to old\.example\.test as/.test(el.textContent ?? ''))).toBeDefined())
+    expect(screen.queryByRole('button', { name: 'Sign in with GitHub' })).toBeNull()
+  })
+
+  it('keeps an explicit port in a claim\'s edge', async () => {
+    const claim = `aether://claim?edge=${encodeURIComponent(edge + ':8443')}&server=${serverEdge.server_id}#abcdefghijklmnop`
+    const client = fakeApi({ localEdgeStatus: vi.fn(async (): Promise<EdgeStatus> => ({ edges: [{ edge, account }] })) })
+    render(<EdgeSignIn client={client} claim={claim} onHand={vi.fn()} onLinked={vi.fn()} onSignedOut={vi.fn()} />)
+    expect(await screen.findByRole('button', { name: 'Sign in with GitHub' })).toBeDefined()
+  })
+
   it('finishes a sign-in for a claim that spells its edge differently from the gateway', async () => {
     vi.spyOn(window, 'open').mockReturnValue(null)
     const claim = `aether://claim?edge=${encodeURIComponent('https://Old.example.test/')}&server=${serverEdge.server_id}#abcdefghijklmnop`

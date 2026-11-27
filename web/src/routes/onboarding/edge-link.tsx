@@ -51,6 +51,14 @@ function signedInPhase(status: EdgeStatus, edge: string | undefined, chosen?: st
   return { name: 'signed-in', edges, chosen: chosen ?? (edges.length === 1 ? edges[0].edge : null) }
 }
 
+/** edge as the gateway spells an edge's relay origin, as edgeproto.Origin
+ * does: scheme and host in lower case, no trailing slash, an explicit port
+ * kept. Anything else is returned unchanged. */
+function edgeOrigin(edge: string): string {
+  const m = /^(https?):\/\/([^/?#@\s]+)\/?$/i.exec(edge)
+  return m ? `${m[1].toLowerCase()}://${m[2].toLowerCase()}` : edge
+}
+
 /** edge.status with each edge's retiring notice, for the screen that shows
  * them: asked while active, and again when the window gets focus. The
  * latest request wins; a failed one keeps the last answer. */
@@ -277,7 +285,8 @@ export function EdgeSignIn({
   onLinked: (result: EdgeLinkResult) => void
   onSignedOut: (signedOut: boolean) => void
 }) {
-  const claimEdge = claim === undefined ? undefined : parseClaim(claim)?.edge
+  const handed = claim === undefined ? undefined : parseClaim(claim)?.edge
+  const claimEdge = handed === undefined ? undefined : edgeOrigin(handed)
   const signIn = useEdgeSignIn(client, claimEdge)
   const { phase, setPhase } = signIn
   const notices = useEdgeNotices(client, phase.name === 'signed-in')
