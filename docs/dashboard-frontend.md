@@ -6786,8 +6786,8 @@ terminal is still starting, the panel says it is cancelling and sends it as
 soon as the terminal is up. A dropped socket reconnects to the same sign-in
 ("Reconnecting to the sign-in…") instead of ending it. A line under the
 buttons says the member can leave the page and how long the sign-in keeps
-running: "until 15 minutes after its start", with "(<n> minutes left)" when
-this tab opened its terminal. While a sign-in runs, the Claude Code row
+running: "for <n> more minutes" when this tab opened its terminal, else
+"until 15 minutes after its start". While a sign-in runs, the Claude Code row
 says "Sign-in for <name> is still running." with **Return to the sign-in**, which reattaches its terminal, and
 Add login leads with the same callout, its primary button and **Cancel**,
 and hides the form until that sign-in ends. The server refuses another add

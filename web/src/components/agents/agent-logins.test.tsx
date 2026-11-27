@@ -606,7 +606,7 @@ describe('add login', () => {
 
     const opened = Date.now() - 5 * 60_000
     addLogin({ client, running: { id: 'lgn-new00000004', name: 'spare', opened }, resume: true, onOpened })
-    expect(screen.getByRole('region', { name: 'Sign in to Claude Code' }).textContent).toContain('keeps running until 15 minutes after its start (10 minutes left), and')
+    expect(screen.getByRole('region', { name: 'Sign in to Claude Code' }).textContent).toContain('keeps running for 10 more minutes, and')
     await waitFor(() => expect(signInSockets()).toHaveLength(2))
     accept(signInSockets()[1]!)
     expect(onOpened).toHaveBeenCalledTimes(1)
