@@ -139,7 +139,7 @@ const runReached = `r.workspace_id IN (SELECT value FROM json_each(?)) AND NOT E
 // memoryReached keeps the notes no session wrote and those of a session
 // runReached keeps. A deleted session's note is left out: which extra
 // workspaces it had is no longer known.
-const memoryReached = `(m.run_id = '' OR EXISTS (SELECT 1 FROM runs r WHERE r.id = m.run_id AND ` + runReached + `))`
+const memoryReached = `(m.run_id = '' OR EXISTS (SELECT 1 FROM visible_runs r WHERE r.id = m.run_id AND ` + runReached + `))`
 
 // unlinkHidden clears, for a reader limited to workspaces, the replacement
 // a note names when that replacement is a note the reader cannot see.
@@ -860,7 +860,7 @@ func (d *DB) ReadMemoryBrief(ctx context.Context, q MemoryBriefQuery) (*MemoryBr
 				AND outcome IN ('success', 'failure') AND superseded_at IS NULL ORDER BY created_at DESC LIMIT 1), ''),
 			r.branch, COALESCE(pr.number, 0), COALESCE(pr.state, ''), r.finished_at,
 			r.task
-		FROM runs r
+		FROM visible_runs r
 		LEFT JOIN members member ON member.id = r.member_id
 		LEFT JOIN run_pull_requests pr ON pr.rowid = (
 			SELECT rowid FROM run_pull_requests WHERE run_id = r.id ORDER BY created_at DESC, rowid DESC LIMIT 1)
@@ -886,7 +886,7 @@ func (d *DB) ReadMemoryBrief(ctx context.Context, q MemoryBriefQuery) (*MemoryBr
 	}
 	placeholders, statuses := liveStatusArgs()
 	if err := tx.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM runs r WHERE r.workspace_id = ? AND r.id <> ? AND r.status IN (`+placeholders+`) AND `+runsReached,
+		`SELECT COUNT(*) FROM visible_runs r WHERE r.workspace_id = ? AND r.id <> ? AND r.status IN (`+placeholders+`) AND `+runsReached,
 		append(append([]any{q.Workspace, q.Self}, statuses...), reach...)...).Scan(&brief.LiveRuns); err != nil {
 		return nil, fmt.Errorf("store: read memory brief: live sessions: %w", err)
 	}
@@ -955,7 +955,7 @@ func (d *DB) reportMemory(ctx context.Context, report *CoordReport) (*Memory, er
 	var ownerPending bool
 	if err := d.db.QueryRowContext(ctx, `
 		SELECT r.permission, COALESCE(m.role, ''), COALESCE(m.pending, 0)
-		FROM runs r LEFT JOIN members m ON m.id = r.member_id AND m.merged_into = ''
+		FROM visible_runs r LEFT JOIN members m ON m.id = r.member_id AND m.merged_into = ''
 		WHERE r.id = ?`, report.RunID).Scan(&permission, &ownerRole, &ownerPending); err != nil {
 		return nil, fmt.Errorf("read the permission of session %s: %w", report.RunID, err)
 	}
@@ -1009,7 +1009,7 @@ func upsertReportMemory(ctx context.Context, tx *sql.Tx, m *Memory) (OutcomeNote
 	var note string
 	if err = tx.QueryRowContext(ctx, `INSERT INTO memory (id, workspace_id, kind, scope, source, source_ref, title, body, files,
 			author_member_id, run_id, harness, commit_sha, hash, created_at, updated_at)
-		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, r.member_id, r.id, r.harness, ?, ?, ?, ? FROM runs r WHERE r.id = ?
+		SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, r.member_id, r.id, r.harness, ?, ?, ?, ? FROM visible_runs r WHERE r.id = ?
 		ON CONFLICT (run_id) WHERE source = 'report' AND invalid_at IS NULL DO UPDATE SET
 			source_ref = excluded.source_ref, title = excluded.title, body = excluded.body, files = excluded.files,
 			author_member_id = excluded.author_member_id, harness = excluded.harness,

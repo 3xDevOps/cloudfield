@@ -782,7 +782,7 @@ func (d *DB) ReserveCoordReport(ctx context.Context, report *CoordReport) (bool,
 		   AND NOT EXISTS (
 		       SELECT 1 FROM coord_reports WHERE run_id = ? AND idempotency_key = ?)
 		   AND EXISTS (
-		       SELECT 1 FROM runs WHERE id = ? AND mode IN ('tui', 'acp')
+		       SELECT 1 FROM visible_runs WHERE id = ? AND mode IN ('tui', 'acp')
 		         AND status IN ('queued', 'provisioning', 'running', 'needs-attention'))`,
 		createdAt, report.RunID, report.RunID, report.IdempotencyKey, report.RunID); err != nil {
 		return false, fmt.Errorf("store: reserve coord report: supersede previous: %w", err)

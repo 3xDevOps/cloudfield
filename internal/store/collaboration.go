@@ -559,7 +559,7 @@ func (d *DB) ListOpenRoomRequests(ctx context.Context, run domain.RunID) ([]*Roo
 			question.kind = 'steer_request' AND question.state = 'queued'
 			OR question.kind = 'question'
 			AND question.state NOT IN ('denied', 'cancelled')
-			AND question.actor_id <> (SELECT member_id FROM runs WHERE id = question.run_id)
+			AND question.actor_id <> (SELECT member_id FROM visible_runs WHERE id = question.run_id)
 			AND NOT EXISTS (
 				SELECT 1 FROM room_messages reply
 				WHERE reply.run_id = question.run_id

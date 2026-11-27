@@ -118,14 +118,14 @@ func (d *DB) createRun(ctx context.Context, r *domain.Run, reserved bool) error 
 		                   reason, branch, worktree, protected, created_at, started_at,
 		                   finished_at, profile_snapshot_id, title, last_commit, last_commit_at,
 		                   harness_session_id, base_commit, base_branch, base_source, base_checked_at, acp,
-		                   status_changed_at, requested_account_member_id, fallback_disabled, fallback_order, model, effort, permission, via, cpu_limit, memory_limit_bytes, pids_limit, linear_issue_url)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		                   status_changed_at, requested_account_member_id, fallback_disabled, fallback_order, model, effort, permission, via, cpu_limit, memory_limit_bytes, pids_limit, linear_issue_url, spare)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULLIF(?, ''), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		id, r.WorkspaceID, r.MemberID, r.AccountMemberID, r.HomeMemberID, r.Task, r.Harness, r.Mode, r.Status,
 		r.Reason, r.Branch, r.Worktree, r.Protected, createdAt, startedAt, finishedAt,
 		r.ProfileSnapshotID, r.Title, r.LastCommit, lastCommitAt, r.HarnessSessionID,
 		r.BaseCommit, r.BaseBranch, r.BaseSource, baseCheckedAt, r.ACP, createdAt,
 		r.RequestedAccountMemberID, r.Fallback.Disabled, fallbackOrder, r.Model, r.Effort, r.Permission, r.Via,
-		r.Limits.CPUs, r.Limits.MemoryBytes, r.Limits.Pids, r.LinearIssueURL,
+		r.Limits.CPUs, r.Limits.MemoryBytes, r.Limits.Pids, r.LinearIssueURL, r.Spare,
 	); err != nil {
 		return fmt.Errorf("store: create session: %w", mapConstraint(err, ErrNotFound))
 	}
@@ -203,7 +203,7 @@ func runSnapshotQuery(where string) string {
 		(SELECT MIN(created_at) FROM run_messages WHERE run_messages.to_run = runs.id AND ` + unreadMessage + `),
 		COALESCE(child.parent_run_id, ''), COALESCE(child.root_run_id, ''),
 		COALESCE(child.purpose, ''), COALESCE(child.detached, 0)
-		FROM runs
+		FROM visible_runs AS runs
 		LEFT JOIN run_children child ON child.run_id = runs.id
 		LEFT JOIN room_messages question
 			ON question.run_id = runs.id
@@ -290,7 +290,7 @@ func (d *DB) ListLiveRunSummaries(ctx context.Context, workspace domain.Workspac
 		`SELECT id, member_id, status, activity, reason, protected,
 		     COALESCE(CAST(substr(CAST(CASE WHEN task = '' THEN title ELSE task END AS BLOB), 1, ?) AS TEXT), ''),
 		     length(CAST(CASE WHEN task = '' THEN title ELSE task END AS BLOB))
-		 FROM runs WHERE workspace_id = ? AND status IN (`+placeholders+`)
+		 FROM visible_runs WHERE workspace_id = ? AND status IN (`+placeholders+`)
 		 ORDER BY max(COALESCE(status_changed_at, created_at), created_at) DESC, rowid DESC`,
 		append([]any{taskBytes, workspace}, statuses...)...)
 	if err != nil {
@@ -443,7 +443,7 @@ func recordTransition(ctx context.Context, tx *sql.Tx, id domain.RunID, status d
 	if _, err := tx.ExecContext(ctx,
 		`INSERT INTO run_state_transitions (run_id, workspace_id, from_status, to_status, reason, activity, at)
 		 SELECT id, workspace_id, status, ?, ?, ?, CASE WHEN status = ? AND reason = ? THEN ? ELSE ? END
-		 FROM runs WHERE id = ? AND (status <> ? OR reason <> ? OR activity <> ?)`,
+		 FROM visible_runs WHERE id = ? AND (status <> ? OR reason <> ? OR activity <> ?)`,
 		status, reason, activity, status, reason, now, changed, id, status, reason, activity); err != nil {
 		return fmt.Errorf("record transition: %w", err)
 	}

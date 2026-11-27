@@ -511,7 +511,7 @@ func mergeSnapshot(ctx context.Context, tx *sql.Tx, id domain.MemberID) (*MergeS
 		dev.ApprovalCode, dev.LastSeenAt = "", nil
 	}
 	if err = tx.QueryRowContext(ctx, `SELECT
-		(SELECT COUNT(*) FROM runs WHERE member_id = ?1), (SELECT COUNT(*) FROM schedules WHERE member_id = ?1)`, id).
+		(SELECT COUNT(*) FROM visible_runs WHERE member_id = ?1), (SELECT COUNT(*) FROM schedules WHERE member_id = ?1)`, id).
 		Scan(&snap.Runs, &snap.Schedules); err != nil {
 		return nil, fmt.Errorf("store: plan merge: counts: %w", err)
 	}

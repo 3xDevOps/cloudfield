@@ -111,9 +111,9 @@ func (d *DB) WorkspaceMembers(ctx context.Context, workspaces []domain.Workspace
 	}
 	rows, err := d.db.QueryContext(ctx,
 		`WITH ws(id) AS (SELECT value FROM json_each(?)),
-		 rs AS (SELECT member_id, account_member_id, home_member_id FROM runs WHERE workspace_id IN ws
+		 rs AS (SELECT member_id, account_member_id, home_member_id FROM visible_runs WHERE workspace_id IN ws
 		     UNION ALL SELECT r.member_id, r.account_member_id, r.home_member_id
-		     FROM run_repos rr JOIN runs r ON r.id = rr.run_id WHERE rr.workspace_id IN ws)
+		     FROM run_repos rr JOIN visible_runs r ON r.id = rr.run_id WHERE rr.workspace_id IN ws)
 		 SELECT owner_member_id FROM workspaces WHERE id IN ws AND owner_member_id <> ''
 		 UNION SELECT member_id FROM workspace_grants WHERE workspace_id IN ws
 		 UNION SELECT member_id FROM rs
