@@ -683,7 +683,7 @@ func (s *Scheduler) tryMove(ctx context.Context, entry *supervised, m accountMov
 	case to.Member == "" && m.revoked:
 		return usageNoFallback, m.stopped(fromName) + "no other account can run " + run.Harness
 	case to.Member == "":
-		return usageNoFallback, noFallbackReason(fromName, run.Harness, measured, from) + s.triedLogins(ctx, f, run, measured, from)
+		return usageNoFallback, noFallbackReason(fromName, run.Harness, measured, from) + s.triedLogins(ctx, f, run)
 	case excluded != nil:
 		slog.Warn("scheduler: fallback accounts left out of a move", "run", run.ID, "error", excluded)
 	}

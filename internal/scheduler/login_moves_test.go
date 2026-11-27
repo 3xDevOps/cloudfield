@@ -27,13 +27,15 @@ import (
 )
 
 // loginUsage reports each login's used share of its Claude five-hour window,
-// which resets at resets; a login it has no figure for reads 0%. It counts
-// the fresh reads of each login.
+// which resets at resets, or at no time given for a login in noReset; a
+// login it has no figure for reads 0%. It counts the fresh reads of each
+// login.
 type loginUsage struct {
-	mu     sync.Mutex
-	used   map[domain.Account]float64
-	fresh  map[domain.Account]int
-	resets time.Time
+	mu      sync.Mutex
+	used    map[domain.Account]float64
+	fresh   map[domain.Account]int
+	resets  time.Time
+	noReset map[domain.Account]bool
 }
 
 func newLoginUsage(used map[domain.Account]float64) *loginUsage {
@@ -53,9 +55,12 @@ func (u *loginUsage) ReadLogin(_ context.Context, account domain.Account, refres
 	if refresh {
 		u.fresh[account]++
 	}
-	resets := u.resets
+	resets := &u.resets
+	if u.noReset[account] {
+		resets = nil
+	}
 	return []quota.Provider{{Provider: "claude", Status: "ok", Windows: []quota.Window{
-		{ID: "five_hour", UsedPercent: u.used[account], ResetsAt: &resets},
+		{ID: "five_hour", UsedPercent: u.used[account], ResetsAt: resets},
 	}}}, nil
 }
 
@@ -965,5 +970,48 @@ func TestAMoveToADefaultLoginBilledPerUseIsSaidSo(t *testing.T) {
 	})
 	if row, err := e.db.GetRun(t.Context(), run.ID); err != nil || !row.AccountLoginPerUse || row.Account() != domain.AccountOf(e.member.ID) {
 		t.Fatalf("run = %+v, %v; want it on the default login, billed per use", row, err)
+	}
+}
+
+// Ada's session runs out on her default login and then on Grace's, with
+// Ada's second login spent too. The reason lists the two logins the session
+// ran on, across both accounts, and when the first is usable again: unknown
+// once a spent window of one of them gives no reset time.
+func TestTheAllSpentReasonNamesTheLoginsTheSessionRanOn(t *testing.T) {
+	t.Parallel()
+	for _, reset := range []bool{true, false} {
+		t.Run(map[bool]string{true: "reset known", false: "reset unknown"}[reset], func(t *testing.T) {
+			t.Parallel()
+			e, _, _, usage, second := newLoginMoveEnv(t, enhancedClaude)
+			e.share(t)
+			grace := domain.AccountOf(e.owner.ID)
+			usage.set(second, 100)
+			if !reset {
+				usage.noReset = map[domain.Account]bool{grace: true}
+			}
+			run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP)
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+			_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
+			waitFor(t, "the session on Grace's account", func() bool {
+				row, rowErr := e.db.GetRun(t.Context(), run.ID)
+				sc, scErr := e.sched.readSidecar(run.ID)
+				_, liveErr := e.sched.acp.live(t.Context(), run.ID)
+				return rowErr == nil && scErr == nil && liveErr == nil && row.Account() == grace && sc.AccountSwap == nil
+			})
+			usage.set(domain.AccountOf(e.member.ID), 100)
+			usage.set(grace, 100)
+			_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
+			got := e.waitStoreStatus(t, run.ID, domain.RunNeedsAttention)
+			usable := usage.resets.UTC().Format(time.RFC3339)
+			if !reset {
+				usable = "unknown"
+			}
+			if want := "Usage limit reached on Grace's account; no fallback has usage left; logins tried: Ada, Grace; the first is usable again at " + usable; got.Reason != want {
+				t.Fatalf("reason %q; want %q", got.Reason, want)
+			}
+		})
 	}
 }

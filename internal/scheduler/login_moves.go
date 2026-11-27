@@ -109,34 +109,48 @@ func (s *Scheduler) noteRunOut(ctx context.Context, f *UsageFallback, run *domai
 }
 
 // triedLogins ends the reason of a session that ran out on every login it
-// could use with those logins and when the first of them is usable again:
-// for each, the latest reset among its spent windows, and the earliest of
-// those. It is empty for an account with one login, whose reason stays as
-// before logins existed.
-func (s *Scheduler) triedLogins(ctx context.Context, f *UsageFallback, run *domain.Run, measured fallback.Measured, from domain.Account) string {
-	var tried []domain.Account
-	for account, used := range measured {
-		if used >= fallback.ExhaustedPercent && account.Member == from.Member {
-			tried = append(tried, account)
-		}
-	}
-	if len(tried) < 2 {
+// could use with the logins it ran on and when the first of them is usable
+// again: for each, the latest reset among its spent windows, and the
+// earliest of those, unknown when a login's read gives none. It is empty
+// for a session that ran on one login, or where nobody involved keeps
+// added logins, whose reason stays as before logins existed.
+func (s *Scheduler) triedLogins(ctx context.Context, f *UsageFallback, run *domain.Run) string {
+	segments, err := s.cfg.Store.ListRunAccountSegments(ctx, run.ID)
+	if err != nil {
 		return ""
 	}
-	slices.SortFunc(tried, func(a, b domain.Account) int { return strings.Compare(a.String(), b.String()) })
+	var tried []domain.Account
+	keepsLogins := false
+	for _, segment := range segments {
+		account := segment.Account()
+		if slices.Contains(tried, account) {
+			continue
+		}
+		tried = append(tried, account)
+		if logins, listErr := s.cfg.Store.ListAgentLogins(ctx, account.Member, run.Harness); listErr == nil && len(logins) > 0 {
+			keepsLogins = true
+		}
+	}
+	if len(tried) < 2 || !keepsLogins {
+		return ""
+	}
 	names := make([]string, len(tried))
 	var first *time.Time
+	known := true
 	now := time.Now()
 	for i, account := range tried {
 		names[i] = s.accountLabel(ctx, account, run.Harness)
 		providers, err := readLogin(ctx, f.Usage, account, false)
-		if err != nil {
+		spent, _ := spentWindows(providers, run.Harness, now)
+		if err != nil || len(spent) == 0 {
+			known = false
 			continue
 		}
-		spent, _ := spentWindows(providers, run.Harness, now)
 		var latest *time.Time
 		for _, w := range spent {
-			if w.ResetsAt != nil && (latest == nil || w.ResetsAt.After(*latest)) {
+			if w.ResetsAt == nil {
+				known = false
+			} else if latest == nil || w.ResetsAt.After(*latest) {
 				latest = w.ResetsAt
 			}
 		}
@@ -145,7 +159,7 @@ func (s *Scheduler) triedLogins(ctx context.Context, f *UsageFallback, run *doma
 		}
 	}
 	usable := "unknown"
-	if first != nil {
+	if known && first != nil {
 		usable = first.UTC().Format(time.RFC3339)
 	}
 	return "; logins tried: " + strings.Join(names, ", ") + "; the first is usable again at " + usable
