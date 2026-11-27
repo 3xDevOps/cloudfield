@@ -107,7 +107,7 @@ func TestTheMemberInControlTypesAHeldWakeOverTheirOwnInput(t *testing.T) {
 	}
 }
 
-func TestAWakeShownToTheMemberInControlWaitsForTheirDraft(t *testing.T) {
+func TestAHeldWakeIsNeverTypedOverTheDraftOfTheMemberInControl(t *testing.T) {
 	t.Parallel()
 	e := newTestEnv(t, withServerBinary(fakeServerBinary(t, "typed wake cli")))
 	withCoordination(t, e)
@@ -119,10 +119,12 @@ func TestAWakeShownToTheMemberInControlWaitsForTheirDraft(t *testing.T) {
 		sess.typed, sess.draft = typed, at
 		sess.mu.Unlock()
 	}
-	shown := domain.WithWakeShown(t.Context())
+	shown, asked := domain.WithWakeShown(t.Context()), domain.WithWakeApproved(t.Context())
 	draft(typed)
-	if err := e.sched.Wake(shown, run, protocol.CoordInboxContext(1)); !errors.Is(err, domain.ErrWakeHeld) || len(e.pty.injected()) != 0 {
-		t.Fatalf("over text typed an hour ago and not sent: Wake = %v, typed %+v", err, e.pty.injected())
+	for name, ctx := range map[string]context.Context{"shown the line": shown, "asked for the line": asked} {
+		if err := e.sched.Wake(ctx, run, protocol.CoordInboxContext(1)); !errors.Is(err, domain.ErrWakeDraft) || len(e.pty.injected()) != 0 {
+			t.Fatalf("%s, over text typed an hour ago and not sent: Wake = %v, typed %+v", name, err, e.pty.injected())
+		}
 	}
 	for _, tc := range []struct {
 		name  string
@@ -130,8 +132,8 @@ func TestAWakeShownToTheMemberInControlWaitsForTheirDraft(t *testing.T) {
 		draft time.Time
 	}{
 		{"they pressed Enter", shown, time.Time{}},
+		{"they pressed Enter and asked for the line", asked, time.Time{}},
 		{"they let go of control", t.Context(), typed},
-		{"they asked for the line", domain.WithWakeApproved(t.Context()), typed},
 	} {
 		draft(tc.draft)
 		if err := e.sched.Wake(tc.ctx, run, protocol.CoordInboxContext(1)); err != nil {

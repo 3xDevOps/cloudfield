@@ -1051,14 +1051,17 @@ Their dashboard lists **Unread agent mail** under **Details → Needs you**,
 shows an **Agent mail** row in Chat that counts down, and offers **Agent
 mail** in the header:
 
-- **Type it now** types the line at once, also right after the member typed
-  in the terminal. The click moves focus off the terminal, which these CLIs
-  redraw for, so for this click the server asks for 750 ms without output,
-  not 3 seconds, and waits up to 2 seconds for them. An agent that keeps
-  printing, as a working one does, holds the line. Text in the agent's input
-  box is submitted joined to the line. The other conditions above still
-  apply: if the terminal cannot take the line, the card and the Chat row
-  show why and the notice stays.
+- **Type it now** types the line at once, also right after the member sent
+  a prompt in the terminal. The click moves focus off the terminal, which
+  these CLIs redraw for, so for this click the server asks for 750 ms
+  without output, not 3 seconds, and waits up to 2 seconds for them. An
+  agent that keeps printing, as a working one does, holds the line. It is
+  refused while the member has typed in the terminal and not pressed Enter
+  since, so a prompt they are still writing is not sent with the line:
+  `The terminal may have text you have not sent. Press Enter there, then
+  try again.` The other conditions above still apply. Whenever the terminal
+  cannot take the line, the card and the Chat row show why and the notice
+  stays.
 - **Dismiss** ends the notice. The mail it was shown for is not typed for
   again, and a server restart does not forget that. The agent still finds
   it the next time it reads its inbox. Mail that arrived after the notice
@@ -1087,8 +1090,9 @@ What the server cannot see:
 
 - The agent's input box. The server sees keystrokes, not what they left
   there. Any key but Enter that the member in control pressed since their
-  last Enter, Esc or an arrow included, holds the line like a draft until
-  they press Enter, use **Type it now** or **Dismiss**, or let go. Enter
+  last Enter, Esc or an arrow included, holds the line and refuses **Type
+  it now** like a draft, also once they deleted what they typed, until they
+  press Enter, use **Dismiss**, or let go. Enter
   that picks a completion, such as an `@` file or a `/` command, counts as
   sending: the text it leaves in the box is submitted joined to the line
   unless they type again. So is text left by a member who no longer holds

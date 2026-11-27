@@ -1010,6 +1010,11 @@ func WakeShown(ctx context.Context) bool {
 // take the line now. The wake stays owed and a later try may type it.
 var ErrWakeHeld = errors.New("typed wake held")
 
+// ErrWakeDraft is the ErrWakeHeld of a terminal whose member in control
+// typed and has not pressed Enter since: the line would be submitted with
+// what they left in the agent's input box.
+var ErrWakeDraft = fmt.Errorf("%w: the member in control typed in the terminal and has not pressed Enter since", ErrWakeHeld)
+
 // AgentMailReason is why a session with a held mail wake needs its member
 // in control, on every surface.
 const AgentMailReason = "The agent has unread mail. Cloudfield will type a line telling it to read its inbox."

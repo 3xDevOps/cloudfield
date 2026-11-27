@@ -117,9 +117,10 @@ the server types into its terminal. While you are connected in control, the
 line is held for 45 seconds and shown to you first, once the agent has
 stopped printing: **Unread agent mail** under **Details → Needs you**, an
 **Agent mail** row in Chat and **Agent mail** in the header. **Type it
-now** types it at once, joined to any text in the agent's input box, unless
-the agent keeps printing. **Dismiss** ends the notice; the agent still
-finds the mail the next time it reads its inbox.
+now** types it at once. It is refused, with the reason, while the agent
+keeps printing or you have typed in the terminal and not pressed Enter
+since, so your unsent text is not sent with it. **Dismiss** ends the
+notice; the agent still finds the mail the next time it reads its inbox.
 Otherwise the line is typed when the 45 seconds end, you have not typed in the
 terminal for 10 seconds, and you pressed Enter after the last thing you
 typed there. A subsession's mail gets no notice and waits as above

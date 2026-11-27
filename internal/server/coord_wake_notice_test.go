@@ -401,16 +401,16 @@ func TestAHeldWakeTellsTheTerminalAMemberInControlWasShownIt(t *testing.T) {
 	f := newNoticeFixture(t)
 	lease := f.takeControl(t)
 	notice := f.notice(t, 1)[0]
-	f.waker.refuse(fmt.Errorf("scheduler: %w: the member in control typed and has not pressed Enter", domain.ErrWakeHeld))
+	f.waker.refuse(fmt.Errorf("scheduler: %w", domain.ErrWakeDraft))
 	f.expire(t)
 	if !f.waker.lastShown() {
 		t.Fatal("the overdue wake of a notice was not typed as shown to the member in control, so their draft would not hold it")
 	}
-	if _, err := f.rooms.ApproveNow(context.Background(), notice.ID, f.member.ID, "tab", lease.Generation); !errors.Is(err, collab.ErrWakeNotTyped) {
-		t.Fatalf("typing it now into a refusing terminal = %v", err)
+	if _, err := f.rooms.ApproveNow(context.Background(), notice.ID, f.member.ID, "tab", lease.Generation); !errors.Is(err, collab.ErrWakeNotTyped) || !errors.Is(err, domain.ErrWakeDraft) {
+		t.Fatalf("typing it now over the member's draft = %v, want the draft's refusal", err)
 	}
-	if f.waker.lastShown() {
-		t.Fatal("a wake the member asked for was typed as shown, so their own draft would hold it")
+	if room := f.room(t); room[0].State != store.RoomMessageQueued || room[0].DecidedBy != "" {
+		t.Fatalf("a notice refused over a draft = %+v, want it still queued and undecided", room[0])
 	}
 	f.control.Disconnect(string(f.run.ID), "tab", lease.Generation)
 	f.expire(t)

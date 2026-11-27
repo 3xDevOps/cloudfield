@@ -54,10 +54,10 @@ func (s *Scheduler) Printing(run domain.RunID) bool {
 // about to be replaced or it is not at rest: the line would join a draft,
 // answer the request, be lost with the old terminal or stay unsent. The
 // member in control who asks for the line (domain.WithWakeApproved) is not
-// held for their own input, and their click's redraw is waited out: only an
-// agent that keeps printing holds them. One who was shown the line and did
-// not ask (domain.WithWakeShown) holds it with whatever they typed and did
-// not press Enter after.
+// held for input they sent, and their click's redraw is waited out: only an
+// agent that keeps printing holds them. Whatever they typed and did not
+// press Enter after refuses the line with domain.ErrWakeDraft, whether they
+// asked for it or were shown it (domain.WithWakeShown).
 func (s *Scheduler) typeWake(ctx context.Context, run domain.RunID, line string) error {
 	awake, err := s.holdAwakeNow(run)
 	if err != nil {
@@ -107,8 +107,8 @@ func (s *Scheduler) typeWake(ctx context.Context, run domain.RunID, line string)
 	if time.Since(unattended) < typedWakeQuietInput {
 		return fmt.Errorf("scheduler: %w: a person typed in the terminal, or the session started or resumed, in the last %s", domain.ErrWakeHeld, typedWakeQuietInput)
 	}
-	if domain.WakeShown(ctx) && !s.cfg.PTY.Drafting(key).IsZero() {
-		return fmt.Errorf("scheduler: %w: the member in control typed in the terminal and has not pressed Enter since", domain.ErrWakeHeld)
+	if (asked || domain.WakeShown(ctx)) && !s.cfg.PTY.Drafting(key).IsZero() {
+		return fmt.Errorf("scheduler: %w", domain.ErrWakeDraft)
 	}
 	// The supervisor leaves a login shell where the agent exited, and bash
 	// turns bracketed paste on at its prompt.
