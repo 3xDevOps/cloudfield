@@ -11,6 +11,9 @@ import type { AgentLogin } from '@/lib/types'
 
 type Outcome = { login: AgentLogin } | { refused: string }
 
+// The server refuses a second sign-in while one runs, naming it; its terminal reattaches until it ends.
+const runningSignIn = /the sign-in of login "([^"]+)" \((lgn-[^)\s]+)\) is still running/
+
 /** Names a new Claude Code login, runs its sign-in in a terminal of its own and shows what the server made of it. */
 export function AddLogin({ client, onClose }: { client: Pick<Api, 'agentLoginAdd' | 'agentLoginResult' | 'agentLoginSocket'>; onClose: () => void }) {
   const [name, setName] = useState('')
@@ -34,6 +37,8 @@ export function AddLogin({ client, onClose }: { client: Pick<Api, 'agentLoginAdd
     setSignIn(null)
     setOutcome(null)
   }
+
+  const running = error ? runningSignIn.exec(error) : null
 
   if (signIn) {
     return (
@@ -90,7 +95,11 @@ export function AddLogin({ client, onClose }: { client: Pick<Api, 'agentLoginAdd
         <Input id={field} value={name} autoFocus autoComplete="off" spellCheck={false} placeholder="work" className="max-w-xs" onChange={(event) => setName(event.target.value)} />
         <p className="text-ui-sm text-muted">Lowercase letters, digits and <span className="font-code">-</span>, up to 32 characters.</p>
       </div>
-      {error && <Callout tone="failed" role="alert" title="Not started"><span className="font-code">{error}</span></Callout>}
+      {error && (
+        <Callout tone="failed" role="alert" title="Not started" actions={running && <Button size="sm" variant="secondary" onClick={() => { setError(null); setSignIn({ id: running[2], name: running[1] }) }}>Return to the sign-in</Button>}>
+          <span className="font-code">{error}</span>
+        </Callout>
+      )}
       <AnthropicNote />
       <div className="flex gap-2">
         <Button type="submit" disabled={busy || !name.trim()}>Start sign-in</Button>

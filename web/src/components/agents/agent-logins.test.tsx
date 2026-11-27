@@ -187,4 +187,32 @@ describe('add login', () => {
     await user.click(within(alert).getByRole('button', { name: 'Start again' }))
     expect(screen.getByRole('textbox', { name: 'Name' })).toBeDefined()
   })
+
+  it('returns to a sign-in still running when the server refuses another', async () => {
+    const user = userEvent.setup()
+    const refusal = 'store: conflict: the sign-in of login "work" (lgn-run00000001) is still running; finish it first'
+    const client = fakeApi({
+      agentLoginAdd: vi.fn(async () => { throw new Error(refusal) }),
+      agentLoginResult: vi.fn(() => new Promise<never>(() => {})),
+    })
+    render(<AddLogin client={client} onClose={() => {}} />)
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'spare')
+    await user.click(screen.getByRole('button', { name: 'Start sign-in' }))
+    const alert = await screen.findByRole('alert')
+    expect(within(alert).getByText(refusal)).toBeDefined()
+    await user.click(within(alert).getByRole('button', { name: 'Return to the sign-in' }))
+    await waitFor(() => expect(client.agentLoginSocket).toHaveBeenCalledWith('lgn-run00000001'))
+    expect(client.agentLoginResult).toHaveBeenCalledWith('claude', 'lgn-run00000001')
+    expect(screen.getByRole('region', { name: 'Sign in to Claude Code' }).textContent).toContain('Sign in with the account for work.')
+  })
+
+  it('offers no return for any other refusal', async () => {
+    const user = userEvent.setup()
+    const client = fakeApi({ agentLoginAdd: vi.fn(async () => { throw new Error('store: conflict: you already have a login named "work"') }) })
+    render(<AddLogin client={client} onClose={() => {}} />)
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'work')
+    await user.click(screen.getByRole('button', { name: 'Start sign-in' }))
+    expect((await screen.findByRole('alert')).textContent).toBe('Not startedstore: conflict: you already have a login named "work"')
+    expect(screen.queryByRole('button', { name: 'Return to the sign-in' })).toBeNull()
+  })
 })
