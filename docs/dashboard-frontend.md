@@ -1523,7 +1523,9 @@ Removal also repairs the selection and open route before any refresh awaits.
 - A `run.status` event for a session the client has never seen fetches that session
   before the event is applied, which is what keeps two quick transitions of a
   brand new session in order. If the fetch fails the event is unresolved: the
-  cursor stays put and a fresh snapshot is taken to repair the store. A
+  cursor stays put and a fresh snapshot is taken to repair the store. The
+  snapshot holds no Lanes history, so when the event is one Lanes holds that
+  workspace's is dropped and a mounted Lanes view reads it again. A
   `run.deleted` event removes the session from every connected dashboard; a
   `run.status` event that raced a local deletion treats a `404` re-fetch as
   resolved instead of forcing a redundant hydration. An event naming an
