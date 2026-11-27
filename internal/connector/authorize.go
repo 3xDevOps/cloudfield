@@ -562,15 +562,9 @@ func (h *handler) retiring(res resource, now time.Time) *protocol.ConnectorNotic
 //go:embed cloudfield-logo-small.svg
 var consentLogo string
 
-var consentTemplate = parseConsent(consentHTML)
-
-func parseConsent(src string) *template.Template {
-	return template.Must(template.New("consent").Funcs(template.FuncMap{
-		"logo": func() template.HTML { return template.HTML(consentLogo) },
-	}).Parse(src))
-}
-
-const consentHTML = `<!doctype html>
+var consentTemplate = template.Must(template.New("consent").Funcs(template.FuncMap{
+	"logo": func() template.HTML { return template.HTML(consentLogo) },
+}).Parse(`<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
@@ -663,7 +657,7 @@ button:hover{background:var(--accent-fill-hover)}
 </main>
 </body>
 </html>
-`
+`))
 
 func (h *handler) renderConsent(w http.ResponseWriter, status int, page consentPage) {
 	page.Server, page.ServerID = h.serverName(), h.serverID

@@ -2,12 +2,14 @@ package connector
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
-	"regexp"
+	"path"
 	"strings"
 	"testing"
 	"time"
@@ -103,26 +105,55 @@ func TestConsentPageAtRetiringAddress(t *testing.T) {
 	}
 }
 
-func TestConsentPageWithoutNoticeIsUnchanged(t *testing.T) {
-	feature := regexp.MustCompile(`(?s)\{\{if \.Retiring\}\}.*?\{\{end\}\}|\{\{with \.Retiring\}\}.*?retired\.</p>\n\{\{end\}\}`)
-	if n := len(feature.FindAllString(consentHTML, -1)); n != 2 {
-		t.Fatalf("found %d notice blocks in the consent template, want 2", n)
+// mainConsentPages are the SHA-256 hashes of the consent page states with
+// no notice as main rendered them before notices, 2e71342e6.
+var mainConsentPages = map[string]string{
+	"consent-code":       "0782a15763d6398cf5a2eb2c9dcb39d7c3a978e2a96501f6df7235c612ed54b6",
+	"consent-code-error": "df2ea017f8c43107f1d9453ec340361a703a98cbdfcff8e17824b96374c4433c",
+	"consent-member":     "e54af339ad16f72bf3e15e918a148d92fc4ae33e22f63af76947af0f7f35cd1b",
+	"consent-long":       "9fbc3907cd5ed43a06d34e85d75d3b0b373206eddf5ebfbd02281caa48ef5d6b",
+	"consent-failed":     "f1be0f7fa0b4563e4e67e8a21151c23b3e28b83d158400984d398dfe43a7c05c",
+}
+
+func TestUniversalConsentPageAtRetiringAddress(t *testing.T) {
+	e := newEnv(t)
+	e.edge.version.Store(int64(edgeproto.VersionRelayOrigin))
+	e.edge.set([]string{e.origin, newRelay}, stored(false, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: newRelay, Date: "2027-03-01"}))
+	universal := e.origin + edgeproto.PathUniversalMCP
+	q := url.Values{"response_type": {"code"}, "client_id": {e.clientID}, "redirect_uri": {e.redirect}, "state": {"s"},
+		"code_challenge": {strings.Repeat("a", 43)}, "code_challenge_method": {"S256"}, "resource": {universal},
+		edgeproto.ParamServer: {path.Base(e.base)}}
+	resp, err := http.Get(universal + "/authorize?" + q.Encode())
+	if err != nil {
+		t.Fatal(err)
 	}
-	without := parseConsent(feature.ReplaceAllString(consentHTML, ""))
+	page, err := readBody(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `<p class="retiring">This address is retiring on <time>2027-03-01</time>. Add the connector at <code>` + newRelay + edgeproto.PathUniversalMCP + `</code> instead.`
+	if resp.StatusCode != http.StatusOK || !strings.Contains(page, want) {
+		t.Fatalf("universal consent page = %d, want 200 with %s:\n%s", resp.StatusCode, want, page)
+	}
+}
+
+func TestConsentPageWithoutNoticeIsUnchanged(t *testing.T) {
+	seen := 0
 	for _, st := range consentStates() {
 		if st.page.Retiring != nil {
 			continue
 		}
-		var got, want bytes.Buffer
-		if err := consentTemplate.Execute(&got, st.page); err != nil {
+		seen++
+		var b bytes.Buffer
+		if err := consentTemplate.Execute(&b, st.page); err != nil {
 			t.Fatal(err)
 		}
-		if err := without.Execute(&want, st.page); err != nil {
-			t.Fatal(err)
+		if got := fmt.Sprintf("%x", sha256.Sum256(b.Bytes())); got != mainConsentPages[st.name] {
+			t.Errorf("%s with no notice renders %s, not main's page %s:\n%s", st.name, got, mainConsentPages[st.name], b.String())
 		}
-		if got.String() != want.String() {
-			t.Errorf("%s: the page with no notice differs from the template without notices:\n%s\nwant:\n%s", st.name, got.String(), want.String())
-		}
+	}
+	if seen != len(mainConsentPages) {
+		t.Errorf("checked %d states with no notice, want %d", seen, len(mainConsentPages))
 	}
 }
 
