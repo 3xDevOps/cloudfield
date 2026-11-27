@@ -212,6 +212,7 @@ func TestKVMHelper(t *testing.T) {
 	}
 	t.Logf("helper answered %v after the VM started", time.Since(start).Round(time.Millisecond))
 	env := []string{"PATH=" + defaultPath}
+	start = time.Now()
 	if err = client.Boot(ctx, guest.BootSpec{
 		Main:         guest.ProcessSpec{Argv: []string{"/bin/sh", "-c", "echo main; exec sleep infinity"}, Env: env},
 		SetupScript:  "echo set up > /tmp/setup",
@@ -220,6 +221,7 @@ func TestKVMHelper(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	booted := time.Since(start)
 
 	run := func(id, user string, argv ...string) (string, int) {
 		t.Helper()
@@ -236,6 +238,16 @@ func TestKVMHelper(t *testing.T) {
 		}
 		return string(out), code
 	}
+	// Boot returns with dockerd started, not serving: a docker command run
+	// at once waits on the socket the helper listens on and is answered.
+	early, _ := run("early", "", "/bin/sh", "-c", "stat -c '%u:%g %a' "+dockerSocket+"; grep -c 'Daemon has completed initialization' "+dockerdLog)
+	if early != "0:0 660\n0\n" {
+		t.Errorf("right after Boot the socket and dockerd's finished starts are %q, want the helper's socket and a dockerd still starting", early)
+	}
+	if out, code := run("docker-early", "", "docker", "info", "--format", "{{.ServerVersion}}"); code != 0 {
+		t.Errorf("docker info right after Boot: exit %d: %s", code, out)
+	}
+	t.Logf("Boot returned after %v; dockerd answered docker info %v after Boot was called", booted.Round(time.Millisecond), time.Since(start).Round(time.Millisecond))
 	mounts, _ := run("mounts", "", "/bin/sh", "-c", `cat /tmp/setup; hostname; cat /proc/1/comm; cut -d" " -f5,6 /proc/self/mountinfo; echo pids.max=$(cat /sys/fs/cgroup/session/pids.max)`)
 	for _, want := range []string{"set up\n", "kvm-helper\n", "/workspace rw,nosuid,nodev", "/run/aether ro,nosuid,nodev", "/usr/local/bin/aether-internal ro,nosuid,nodev", "/tmp rw", "/run/aether/coord3.sock", "pids.max=128"} {
 		if !strings.Contains(mounts, want) {

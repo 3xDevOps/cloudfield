@@ -2097,10 +2097,14 @@ a time (the Session tree panel's announcer, `src/lib/use-announcement.ts`).
 
 **Data.** `useLaneHistory` holds `laneHistory` in `src/store/lanes.ts` while
 the view is mounted and reads `workspace.timeline` backward with
-`types: ["run.status", "coord.message", "coord.message.acked"]`, 1000 a page,
+`types: ["run.status", "coord.message", "coord.message.acked"]` and
+`no_rereads: true`, 1000 a page,
 until it passes the window's start, the log's start or 5000 events per
-workspace; "Older history not loaded" marks the last case. `sync.ts` appends
-live events of those types to held history, which keeps a workspace's newest
+workspace; "Older history not loaded" marks the last case. History counts as read back to the page's `older_time` (how far the server
+read, rereads included), or to its first event when a server does not send
+one. Of a page that would pass the budget only the newest events that fit
+are kept, and history then counts as read back to the oldest of those. `sync.ts` appends
+live events of those types, rereads left out, to held history, which keeps a workspace's newest
 5000 and moves its loaded boundary past what it drops; the last view to leave
 drops it, and a server switch or a new signed-in member clears it for a fresh
 read. Lane geometry comes from the model
@@ -3705,9 +3709,9 @@ new agent conversation (`store/session-steps.ts`). In a segment, the agent's
 prose stays in the conversation as `assistant` rows, and the work between
 two pieces of prose (thoughts, tool calls, plans, subagent launches and
 answered requests) joins one `steps` block. The prose after the last block
-is the answer. The `cloudfield-internal report` call (or `aether_report` tool)
-that ends a Cloudfield turn joins the block before the prose it follows, so a
-reply written before reporting stays the answer. A segment without work,
+is the answer. A turn's `cloudfield-internal report` call (or `aether_report`
+tool) joins the block before the prose it follows, so a reply written before
+reporting, as a Background session writes it, stays the answer. A segment without work,
 such as `ping` and `pong`, has no block. The
 block's header names the work ("Read 12 files, ran 5 commands and edited 3
 files") with up to three tool icons, failures, plan progress and tools still

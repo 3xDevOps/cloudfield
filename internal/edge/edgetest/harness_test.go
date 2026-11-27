@@ -87,6 +87,8 @@ type harness struct {
 	pairBAddrs      [2]string
 	// recordOrigins sets edge.Config.RecordOrigins.
 	recordOrigins bool
+	// retiring, when set, is what --retiring-pairs names.
+	retiring []edge.Retiring
 
 	mu        sync.Mutex
 	skew      time.Duration
@@ -183,7 +185,7 @@ func (h *harness) startEdge() {
 		morePairs = []edge.Pair{{SigninOrigin: h.signinB, RelayOrigin: h.relayB, GitHub: app}}
 	}
 	svc, err := edge.New(edge.Config{
-		DataDir: h.edgeDir, SigninOrigin: h.signinURL, RelayOrigin: h.relayURL, MorePairs: morePairs,
+		DataDir: h.edgeDir, SigninOrigin: h.signinURL, RelayOrigin: h.relayURL, MorePairs: morePairs, Retiring: h.retiring,
 		GitHub: h.github.app(), Clock: h.now, ConnectorClientHosts: []string{"127.0.0.1"}, Reviewer: h.reviewer,
 		RecordOrigins: h.recordOrigins,
 	})

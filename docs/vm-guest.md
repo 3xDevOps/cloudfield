@@ -48,6 +48,10 @@ In order, as PID 1:
     only (vsock CID 2): a process in the VM that reached it through vsock
     loopback could start processes as root.
 
+While it waits for a booting or restored VM, the server retries a failed
+connection to that port every 10 ms. At other times its client reconnects with
+a backoff that grows from 50 ms to 1 s.
+
 A step that fails is logged on the serial console and reported by the API's
 `Info` as `boot_error`; the helper still serves, so the server can show the
 error. When it cannot serve at all, it powers the VM off.
@@ -370,14 +374,21 @@ kills out of the session's.
 after the one before succeeded:
 
 1. With `nested_docker`, and when the image has `dockerd` and `docker` on
-   Docker's default `PATH`, `dockerd -H unix:///var/run/docker.sock --group
-   <main gid> --cgroup-parent /session` as root, logging to
-   `/var/log/aether-dockerd.log`. It gets the main process's environment
-   with that `PATH`, never the session's, which starts in the member's home. It must answer within
-   60 seconds.
+   Docker's default `PATH`, `dockerd -H fd:// --cgroup-parent /session` as
+   root, logging to `/var/log/aether-dockerd.log`, which the main process's
+   group can read. It gets the main process's environment with that `PATH`,
+   never the session's, which starts in the member's home. `Boot` does not
+   wait for it, which would add about a second to every launch: the helper
+   listens on `/var/run/docker.sock` itself, mode `0660` with the main
+   process's group, and passes the socket to dockerd as systemd's socket
+   activation does (`LISTEN_FDS`, set by the `/bin/sh` that becomes dockerd).
+   A `docker` command run before dockerd serves waits for its answer. When dockerd exits before the main process does, the helper
+   logs its exit code and the end of its log on the serial console, and
+   `docker` commands fail with `Cannot connect to the Docker daemon`.
 2. The setup script, as `/bin/sh -ec "exec 2>&1; <script>"` with the main
    process's user, environment and directory, and no input. A nonzero exit returns its code
-   and the last 16 KiB of its output, and the main process never starts.
+   and the last 16 KiB of its output, followed by dockerd's exit code and the
+   end of its log when dockerd has exited, and the main process never starts.
 3. The main process, under the ID `main`.
 
 A later `Boot` call, also from a restarted server, returns the first call's
@@ -504,7 +515,7 @@ as nothing. A wake is admitted only when that fits
 
 A restored VM's clock stopped while it was saved. The server calls
 `SetClock`, through `guest.Client.SyncClock`, after every restore. Before a
-save it calls `Sync`, which writes every filesystem's dirty data to its
+save of a running VM it calls `Sync`, which writes every filesystem's dirty data to its
 disk, so the cache disk of a saved VM that is deleted without a restore
 holds what the session wrote. `Sync` then drops the guest's page cache.
 Free page reporting hands the freed memory to the host in passes 2 seconds
@@ -519,7 +530,11 @@ as each pass reports it, before the save ends. A VM frozen because the host
 was running out of memory
 ([failure-handling.md](failure-handling.md#recover-from-memory-pressure))
 is saved with neither `Sync` nor the wait, which would let its guest run:
-its saved state holds its page cache too.
+its saved state holds its page cache too. An idle VM is paused in memory
+after one `Sync`, so it holds what its processes use and not its page
+cache: a frozen session's guest kernel reports the freed pages after the
+pause, and a VM whose vCPUs stop waits for them first, as a save does. A
+later save of the paused VM writes it as it stands.
 
 ## Save and restore
 
@@ -603,6 +618,16 @@ by the session's user. The first session on a base builds it (1.7 seconds for
 40,000 files on local NVMe); every later one gets a qcow2 disk over it in
 `<data dir>/checkouts/<run-id>/disk.qcow2` in constant time (17 ms). That disk
 follows the checkout's retention, not the VM's.
+
+A prepared disk is deleted once no session disk is over it, except the one of
+the base branch's current commit: the server keeps that per workspace and
+owner, linked under `<data dir>/vm/images/kept/<workspace>/<uid>-<gid>`, until
+the workspace is deleted or the server runs low on disk
+([Recover from disk pressure](failure-handling.md#recover-from-disk-pressure)).
+When a source mirror moves the base branch, the
+server builds the new commit's prepared disk in the background for every owner
+kept there. A launch after that build does not wait for it; the launch whose
+own refresh moved the base waits for the rest of it.
 
 The helper mounts each checkout disk on `/run/aether-guest/checkouts/<key>`,
 binds its `checkout/` at `/run/aether-guest/data/git/<key>` for the git
@@ -708,7 +733,8 @@ what it creates to the checkout's owner, and keeps its staging under
 `/run/aether-guest/data/git/mutagen`. Live sync to a sleeping session wakes
 it and holds it awake while the overlay runs.
 
-While the VM does not run, because the session sleeps or ended, its Files
+While the VM does not run, because the session sleeps saved to disk or
+ended, its Files
 view and diffs come from the last snapshot the server recorded: nothing can
 have changed the checkout since. A Files write or upload to a sleeping
 session wakes it first; one to an ended session, whose VM was removed,

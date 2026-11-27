@@ -20,6 +20,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -75,6 +76,10 @@ type Client struct {
 	host   string
 	dir    string
 	http   *http.Client
+
+	mu sync.Mutex
+	// retiring is the notice of the edge's latest answer.
+	retiring *Retiring
 }
 
 // New returns a client for the edge whose relay origin is edgeURL. dir is
@@ -278,6 +283,7 @@ func (c *Client) call(ctx context.Context, op, method, origin, path, token strin
 		return fmt.Errorf("%s: %w", op, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	c.observe(resp)
 	raw, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseSize+1))
 	if err != nil {
 		return fmt.Errorf("%s: read %s answer: %w", op, host, err)

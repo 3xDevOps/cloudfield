@@ -326,6 +326,9 @@ func (e *Engine) RefreshWorkspaceMirror(ctx context.Context, ws domain.Workspace
 			return result, mirrorErr(MirrorErrorCASConflict, ws, req, base, observed, err)
 		}
 		result.AcceptedCommit, result.BaseCommit, result.CandidateCommit = nextAccepted, nextBase, observed
+		if nextBase != base {
+			e.prepareCheckouts(ws, repo, nextBase)
+		}
 		if status == domain.MirrorStatusRewritten {
 			return result, mirrorErr(MirrorErrorRewritten, ws, req, base, observed, nil)
 		}
@@ -398,6 +401,9 @@ func (e *Engine) AdoptWorkspaceMirror(ctx context.Context, ws domain.WorkspaceID
 		}
 		result.AcceptedCommit, result.BaseCommit, result.CandidateCommit = candidate, candidate, candidate
 		result.Changed = base != candidate || accepted != candidate
+		if base != candidate {
+			e.prepareCheckouts(ws, repo, candidate)
+		}
 		return result, nil
 	}
 	return MirrorResult{WorkspaceID: ws, Generation: generation, CheckedAt: time.Now().UTC(), Status: domain.MirrorStatusError}, mirrorErr(MirrorErrorCASConflict, ws, MirrorRequest{Generation: generation}, "", "", nil)
