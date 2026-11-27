@@ -39,6 +39,12 @@ func TestSubsessionReportRepeat(t *testing.T) {
 					t.Fatalf("inbox: %v", err)
 				}
 			}},
+		{name: "the same words after another message to the parent are sent", reports: []sent{{success, "done"}, {success, "done"}}, want: []string{"done", "wait, one test fails", "done"},
+			between: func(t *testing.T, h *coordHarness, child, parent domain.RunID) {
+				if _, err := h.svc.Send(ctx, child, sendParams(parent, "wait, one test fails")); err != nil {
+					t.Fatalf("send: %v", err)
+				}
+			}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.window != 0 {
@@ -92,20 +98,53 @@ func TestProvisionalReportNamesWhatTheTurnReported(t *testing.T) {
 	}
 }
 
-// TestAnsweredAfterSuccessChangesNothing: a turn that reported success and
-// then that it replied keeps its success; the scheduler is not told.
-func TestAnsweredAfterSuccessChangesNothing(t *testing.T) {
-	outcomes := &recordingOutcomes{since: time.Now().UTC()}
-	h := newHarness(t, 1, func(c *Config) {
-		c.Evidence = &coordReportEvidenceCapture{id: "answered-packet"}
-		c.Outcomes = outcomes
-	})
-	run := h.run(0)
-	report(t, h, run, protocol.CoordOutcomeSuccess, "merged #7", "done")
-	report(t, h, run, protocol.CoordOutcomeAnswered, "said so", "replied")
-	outcomes.mu.Lock()
-	defer outcomes.mu.Unlock()
-	if len(outcomes.calls) != 1 || outcomes.calls[0].status != domain.RunCompleted {
-		t.Fatalf("scheduler got %+v, want only the success", outcomes.calls)
+// TestAnsweredAfterSuccess: a turn that reported success and then that it
+// replied keeps its success, and the scheduler is not told. An answered
+// report in a turn the scheduler does not know, in a later turn, after the
+// window, or after a blocked report is handed to the scheduler as before.
+func TestAnsweredAfterSuccess(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		first  string
+		window time.Duration
+		// turn is when the turn started, relative to the first report.
+		turn    func(firstAt time.Time) time.Time
+		ignored bool
+	}{
+		{name: "in the same turn it is ignored", first: protocol.CoordOutcomeSuccess, ignored: true,
+			turn: func(at time.Time) time.Time { return at.Add(-time.Minute) }},
+		{name: "after a failure in the same turn it is ignored", first: protocol.CoordOutcomeFailure, ignored: true,
+			turn: func(at time.Time) time.Time { return at.Add(-time.Minute) }},
+		{name: "in an unknown turn it applies", first: protocol.CoordOutcomeSuccess,
+			turn: func(time.Time) time.Time { return time.Time{} }},
+		{name: "in a later turn it applies", first: protocol.CoordOutcomeSuccess,
+			turn: func(at time.Time) time.Time { return at.Add(time.Millisecond) }},
+		{name: "after the window it applies", first: protocol.CoordOutcomeSuccess, window: time.Nanosecond,
+			turn: func(at time.Time) time.Time { return at.Add(-time.Minute) }},
+		{name: "after a blocked report it is left to the scheduler", first: protocol.CoordOutcomeBlocked,
+			turn: func(at time.Time) time.Time { return at.Add(-time.Minute) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.window != 0 {
+				window := repeatWindow
+				repeatWindow = tc.window
+				t.Cleanup(func() { repeatWindow = window })
+			}
+			outcomes := &recordingOutcomes{}
+			h := newHarness(t, 1, func(c *Config) {
+				c.Evidence = &coordReportEvidenceCapture{id: "answered-packet"}
+				c.Outcomes = outcomes
+			})
+			run := h.run(0)
+			report(t, h, run, tc.first, "merged #7", "done")
+			outcomes.mu.Lock()
+			outcomes.since = tc.turn(time.Now().UTC())
+			outcomes.mu.Unlock()
+			report(t, h, run, protocol.CoordOutcomeAnswered, "said so", "replied")
+			calls := outcomes.recorded()
+			if got := len(calls) == 1; got != tc.ignored {
+				t.Fatalf("scheduler got %+v; answered ignored = %v, want %v", calls, got, tc.ignored)
+			}
+		})
 	}
 }

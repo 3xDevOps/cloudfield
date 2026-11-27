@@ -178,7 +178,7 @@ func (s *Service) reportState(ctx context.Context, run domain.RunID, p protocol.
 		// which may arrive in a later turn.
 		final := receipt.Applied
 		if !final {
-			final, err = s.reportedFinal(ctx, run)
+			final, err = s.reportedFinal(ctx, run, receipt.CreatedAt)
 		}
 		if err == nil && !final {
 			err = s.cfg.Outcomes.ReportAnswered(ctx, run, id, reportReason(summary), receipt.CreatedAt)
@@ -242,9 +242,9 @@ func (s *Service) reportState(ctx context.Context, run domain.RunID, p protocol.
 // Claude Code's second model call after a report follows within seconds.
 var repeatWindow = 2 * time.Minute
 
-// reportedFinal reports whether run's current turn reported, within
-// repeatWindow, a success or failure that still stands.
-func (s *Service) reportedFinal(ctx context.Context, run domain.RunID) (bool, error) {
+// reportedFinal reports whether run's current turn reported, less than
+// repeatWindow before at, a success or failure that still stands.
+func (s *Service) reportedFinal(ctx context.Context, run domain.RunID, at time.Time) (bool, error) {
 	since := s.cfg.Outcomes.TurnStartedAt(run)
 	if since.IsZero() {
 		return false, nil
@@ -254,7 +254,7 @@ func (s *Service) reportedFinal(ctx context.Context, run domain.RunID) (bool, er
 		return false, err
 	}
 	last := turn[len(turn)-1]
-	return last.SupersededAt == nil && last.Outcome != store.CoordOutcomeBlocked && s.now().Sub(last.CreatedAt) < repeatWindow, nil
+	return last.SupersededAt == nil && last.Outcome != store.CoordOutcomeBlocked && at.Sub(last.CreatedAt) < repeatWindow, nil
 }
 
 // reusedKey refuses a report whose key another report of the run used.

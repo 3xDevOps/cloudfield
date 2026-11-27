@@ -821,14 +821,16 @@ func (s *Service) enqueueChildReport(ctx context.Context, report *store.CoordRep
 	if target == nil || target.WorkspaceID != report.WorkspaceID || target.ID == report.RunID {
 		return errors.New("subsession report parent is outside the reporting subsession's workspace")
 	}
-	first, err := s.firstOfRepeat(ctx, report)
-	if err != nil {
-		return fmt.Errorf("enqueue subsession report: %w", err)
+	if repeat, err := s.repeatsLastMail(ctx, report, target.ID); err != nil || repeat {
+		if err != nil {
+			return fmt.Errorf("enqueue subsession report: %w", err)
+		}
+		return nil
 	}
 	msg := &store.RunMessage{
 		WorkspaceID: report.WorkspaceID, FromRun: report.RunID, ToRun: target.ID,
-		Kind: store.RunMessageKindMessage, Body: report.Summary, CorrelationID: first,
-		IdempotencyKey: "coord-report-" + string(report.Outcome) + ":" + first + ":" + string(target.ID),
+		Kind: store.RunMessageKindMessage, Body: report.Summary, CorrelationID: report.ID,
+		IdempotencyKey: "coord-report-" + string(report.Outcome) + ":" + report.ID + ":" + string(target.ID),
 	}
 	if err = s.cfg.Mail.RetireProvisionalReports(ctx, report.RunID, target.ID, report.CreatedAt); err != nil {
 		return fmt.Errorf("enqueue subsession report: %w", err)
@@ -843,28 +845,35 @@ func (s *Service) enqueueChildReport(ctx context.Context, report *store.CoordRep
 	return nil
 }
 
-// firstOfRepeat is the ID of the report whose inbox message stands for
-// report: report itself, unless it is the run's latest report and says
-// again, word for word, what the report before it said less than
-// repeatWindow earlier, with no mail read in between. The parent then has,
-// or now gets, that earlier report's message, which reads the same.
-func (s *Service) firstOfRepeat(ctx context.Context, report *store.CoordReport) (string, error) {
-	recent, err := s.cfg.Mail.CoordReportsSince(ctx, report.RunID, report.CreatedAt.Add(-repeatWindow))
+// repeatsLastMail reports whether the newest message report's run sent
+// parent, still in its inbox or read, is an earlier report that says the same:
+// the same outcome and summary, made less than repeatWindow before report,
+// with no mail read by the run since. The parent is then told nothing new.
+func (s *Service) repeatsLastMail(ctx context.Context, report *store.CoordReport, parent domain.RunID) (bool, error) {
+	sent, err := s.cfg.Mail.LastSentRunMessages(ctx, report.RunID)
 	if err != nil {
-		return "", err
+		return false, err
 	}
-	i := len(recent) - 1
-	if i <= 0 || recent[i].ID != report.ID {
-		return report.ID, nil
+	last := sent[parent]
+	if last == nil || last.RetiredAt != nil || last.Body != report.Summary || last.CorrelationID == report.ID {
+		return false, nil
+	}
+	prior, err := s.cfg.Mail.GetCoordReport(ctx, last.CorrelationID)
+	if errors.Is(err, store.ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if prior.RunID != report.RunID || prior.Outcome != report.Outcome ||
+		!prior.CreatedAt.Before(report.CreatedAt) || report.CreatedAt.Sub(prior.CreatedAt) >= repeatWindow {
+		return false, nil
 	}
 	read, err := s.cfg.Mail.LastRunMessageDeliveredAt(ctx, report.RunID)
 	if err != nil {
-		return "", err
+		return false, err
 	}
-	for i > 0 && recent[i-1].Outcome == report.Outcome && recent[i-1].Summary == report.Summary && recent[i-1].CreatedAt.After(read) {
-		i--
-	}
-	return recent[i].ID, nil
+	return prior.CreatedAt.After(read), nil
 }
 
 // publishReportEvidence persists any child-report inbox message, then
