@@ -8,7 +8,7 @@ import { RefusalNotes, SignedOutNote } from '@/components/launch/agent-picker'
 import { AccountPicker, readiness, useAccountStatus } from '@/components/launch/account-picker'
 import { agentLabel } from '@/components/launch/modes'
 import { loginAgent } from '@/components/agents/agent-logins'
-import { LoginPicker, useOwnLogins } from '@/components/launch/login-picker'
+import { automaticReachesPerUse, LoginPicker, useOwnLogins } from '@/components/launch/login-picker'
 import { automaticFallback, ChildRunsSwitch, type ChildRunsChoice, fallbackParams, FallbackOptions, RunLimitsOption, WorkspaceLine } from '@/components/launch/launch-options'
 import { PermissionControl, permissionFeature } from '@/components/launch/permission-control'
 import { ExtraRepos } from '@/components/launch/extra-repos'
@@ -374,7 +374,11 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   useClock()
   const now = Date.now()
   const accountReadiness = (member: Member) => readiness(accountStatus[member.id], harness, member.id === ownAccountID ? undefined : member.display_name, now)
-  const loginChoice = ownLogins && ownLogins.length > 1 && <LoginPicker logins={ownLogins} value={pickedLogin} onChange={setLogin} disabled={launching} />
+  // Only the default login's usage is read here, with the account's when there are several accounts.
+  const loginUsage = { default: accountStatus[ownAccountID]?.usage?.find((provider) => provider.provider === loginAgent) }
+  const loginChoice = ownLogins && ownLogins.length > 1 && <LoginPicker logins={ownLogins} value={pickedLogin} onChange={setLogin} usage={loginUsage} now={now} disabled={launching} />
+  const automaticPerUse = ownLogins && ownLogins.length > 1 && !picked ? automaticReachesPerUse(ownLogins) : ''
+  const loginWords = picked ? `${picked.name}${picked.per_use ? ', billed per use' : ''}` : automaticPerUse && `Automatic, can reach ${automaticPerUse} (billed per use)`
   const accountChoice = (accounts.length > 1 || loginChoice) && (
     <div className="flex flex-col gap-2">
       {accounts.length > 1 && (
@@ -430,7 +434,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
         workspace={workspace}
         onWorkspace={(id) => { setError(null); setPickedWorkspace(id) }}
         accountName={sharedAccount ? accountName : undefined}
-        loginWords={picked && `${picked.name}${picked.per_use ? ', billed per use' : ''}`}
+        loginWords={loginWords || undefined}
         lastSession={!last || pickedWorkspace !== null || workspaceID !== last.workspace_id ? 'none' : harness === last.harness ? 'repository and agent' : 'repository'}
         onAddWorkspace={() => { close(); navigate('workspaces') }}
         options={

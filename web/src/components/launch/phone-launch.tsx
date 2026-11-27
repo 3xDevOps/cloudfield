@@ -54,7 +54,7 @@ export function PhoneLaunchSheet({
   /** What still matches your newest session, which the sheet starts from. */
   lastSession: 'repository and agent' | 'repository' | 'none'
   accountName?: string
-  /** The login picked at launch, kept in sight with More options shut. */
+  /** The login picked at launch, or a login billed per use Automatic can reach, kept in sight with More options shut. */
   loginWords?: string
   onAddWorkspace: () => void
   /** Permission, mode, model, limits and the rest of the desktop form. */
@@ -117,7 +117,7 @@ export function PhoneLaunchSheet({
             )}
           </div>
           <Collapsible>
-            <CollapsibleTrigger>
+            <CollapsibleTrigger className="flex-wrap">
               <span className="shrink-0 font-medium">More options</span>
               {harness && <span className="shrink-0 text-muted">· {modeLabel(mode)}</span>}
               {accountName && (
@@ -127,7 +127,7 @@ export function PhoneLaunchSheet({
                   <span className="-ml-1 shrink-0 text-muted">&apos;s account</span>
                 </>
               )}
-              {loginWords && <span className="min-w-0 truncate text-muted">· {loginWords}</span>}
+              {loginWords && <span className="min-w-0 break-words text-muted">· {loginWords}</span>}
             </CollapsibleTrigger>
             <CollapsibleContent className="flex flex-col gap-4 pt-2">
               {!choice.noAgents && <Button type="button" variant="link" size="sm" className="self-start" disabled={disabled} onClick={onSetUp}>Install more agents...</Button>}

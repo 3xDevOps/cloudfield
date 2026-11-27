@@ -14,7 +14,7 @@ import { optimisticDeadlineMs } from '@/store/optimistic'
 import { atViewport } from '@/test/viewport'
 import { agentInfo, alice, bob, otherWorkspace, run, runRecords, serverInfo, vera, workspace } from '@/test/fixtures'
 import { chooseModel, pickModel } from '@/test/model'
-import { pickOption } from '@/test/select'
+import { openSelect, pickOption } from '@/test/select'
 
 vi.mock('@/lib/api', async () => {
   const { fakeApi } = await import('@/test/fixtures')
@@ -1393,26 +1393,54 @@ describe('login', () => {
     expect(vi.mocked(api.runLaunch).mock.calls[0]![0]).not.toHaveProperty('login')
   })
 
-  it('starts automatically, naming the first automatic login, and sends a login only when one is picked', async () => {
+  it('starts automatically, says in full which login billed per use it can reach, and sends a login only when one is picked', async () => {
     vi.mocked(api.agentLoginList).mockResolvedValue(logins)
     await open()
     const picker = await screen.findByRole('combobox', { name: 'Login' })
-    expect(picker.textContent).toBe('Automatic: starts on work, can move to console, billed per use')
-    expect(screen.getByText(/^Starts on the first login/).textContent).toBe('Starts on the first login in your order with usage left. When that one runs out, the session moves down your order and can reach console, billed per use.')
-    await pickOption(picker, 'console · billed per use')
+    expect(picker.textContent).toBe('Automatic')
+    expect(screen.getByText(/^Starts on the first login/).textContent).toBe('Starts on the first login in your order with usage left.')
+    expect(screen.getByText(/^Can move to/).textContent).toBe('Can move to console, billed per use, when the logins before it run out.')
+    const menu = await openSelect(picker)
+    expect(menu.className).toContain('max-w-(--radix-select-trigger-width)')
+    expect(within(menu).getByRole('option', { name: 'Automatic' }).textContent).toBe('AutomaticTries work first')
+    expect(within(menu).getByRole('option', { name: 'console' }).textContent).toBe('consolebilled per use')
+    expect(within(menu).getByRole('option', { name: 'default' }).textContent).toBe('defaultAutomatic off')
+    fireEvent.keyDown(within(menu).getByRole('option', { name: 'Automatic' }), { key: 'Escape' })
+    await pickOption(picker, 'console')
+    expect(picker.textContent).toBe('console')
+    expect(screen.getByText(/is billed per use\.$/).textContent).toBe('console is billed per use.')
     setTask('on console')
     fireEvent.click(launchButton())
     await waitFor(() => expect(api.runLaunch).toHaveBeenCalledWith(expect.objectContaining({ login: 'lgn-console0001' })))
   })
 
-  it('keeps a picked login in sight on a phone with More options shut', async () => {
+  it('keeps Automatic\'s reach onto a login billed per use, and a picked login, in sight on a phone with More options shut', async () => {
     atViewport(390, { pointer: 'coarse' })
     vi.mocked(api.agentLoginList).mockResolvedValue(logins)
     await open()
     const more = () => screen.getByRole('button', { name: /^More options/ })
+    await waitFor(() => expect(more().textContent).toContain('· Automatic, can reach console (billed per use)'))
     fireEvent.click(more())
-    await pickOption(await screen.findByRole('combobox', { name: 'Login' }), 'console · billed per use')
+    await pickOption(await screen.findByRole('combobox', { name: 'Login' }), 'console')
     expect(more().textContent).toContain('· console, billed per use')
+  })
+
+  it("shows a login's limit in the menu when the dialog already read its usage", async () => {
+    vi.mocked(api.agentLoginList).mockResolvedValue(logins)
+    vi.mocked(api.accountList).mockResolvedValue({ accounts: [alice, bob], shared_with: [] })
+    const resets = new Date(Date.now() + 40 * 3_600_000).toISOString()
+    vi.mocked(api.accountUsage).mockImplementation(async (params = {}) => ({
+      account_member_id: params.account_member_id ?? alice.id,
+      providers: params.account_member_id ? [] : [{ provider: 'claude', status: 'ok', checked_at: resets, windows: [{ id: 'seven_day', label: '7 days', used_percent: 100, resets_at: resets }] }],
+    }))
+    await open()
+    const picker = await screen.findByRole('combobox', { name: 'Login' })
+    await waitFor(() => expect(api.accountUsage).toHaveBeenCalledWith({}))
+    await act(async () => {})
+    const menu = await openSelect(picker)
+    expect(within(menu).getByRole('option', { name: 'default' }).textContent).toBe('defaultAutomatic off · At its limit (7 days) · resets in 40h')
+    expect(within(menu).getByRole('option', { name: 'work' }).textContent).toBe('work')
+    expect(api.accountUsage).not.toHaveBeenCalledWith(expect.objectContaining({ login: expect.anything() }))
   })
 
   it('offers no login on a teammate account', async () => {
