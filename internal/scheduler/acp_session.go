@@ -200,8 +200,8 @@ func (s *Scheduler) Interrupt(ctx context.Context, run *domain.Run, actor domain
 		if err != nil {
 			return
 		}
-		// The agent already has the interrupt, so recording who sent it
-		// must not depend on the caller staying connected.
+		// The interrupt is accepted, so recording who sent it must not
+		// depend on the caller staying connected.
 		recordCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), steerRecordTimeout)
 		defer cancel()
 		s.publishTimeline(recordCtx, run.WorkspaceID, run.ID, actor, events.TimelineNote, "sent an interrupt")
