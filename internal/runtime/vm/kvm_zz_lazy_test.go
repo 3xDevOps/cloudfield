@@ -165,8 +165,7 @@ func TestKVMZZLazyFirstSave(t *testing.T) {
 			err := r.run(ws, base)
 			if err != nil {
 				failed++
-				kernel, _ := exec.Command("sh", "-c", "dmesg | grep -iE 'oom|out of memory|killed process' | tail -8").CombinedOutput()
-				fmt.Printf("LAZY FAIL %s took_s=%.0f err=%q log=%q dmesg=%q\n", r.tag, time.Since(start).Seconds(), err.Error(), h.e.logTail(r.key), kernel)
+				fmt.Printf("LAZY FAIL %s took_s=%.0f err=%q log=%q %s\n", r.tag, time.Since(start).Seconds(), err.Error(), h.e.logTail(r.key), lazyDeath(r.key))
 			} else {
 				fmt.Printf("LAZY ROUND %s ok=true took_s=%.0f\n", r.tag, time.Since(start).Seconds())
 			}
@@ -180,6 +179,13 @@ func TestKVMZZLazyFirstSave(t *testing.T) {
 	if failed > 0 {
 		t.Errorf("%d rounds failed", failed)
 	}
+}
+
+// lazyDeath is what the kernel and systemd said of a monitor that died.
+func lazyDeath(key string) string {
+	kernel, _ := exec.Command("sh", "-c", "dmesg | grep -iE 'oom|out of memory|killed process|segfault|traps:|cloud-hyperv' | tail -12").CombinedOutput()
+	unit, _ := exec.Command("journalctl", "-u", unitName(key), "-n", "12", "--no-pager", "-o", "cat").CombinedOutput()
+	return fmt.Sprintf("dmesg=%q journal=%q", kernel, unit)
 }
 
 func (r *lazyRound) sh(timeout time.Duration, script string) (string, error) {
@@ -479,7 +485,8 @@ func (r *lazyRound) dumpCompare(n int, dir string, api chAPI) string {
 	defer cancel()
 	start := time.Now()
 	if err := api.snapshot(ctx, dst); err != nil {
-		return "error=" + strconv.Quote(err.Error())
+		time.Sleep(time.Second)
+		return "error=" + strconv.Quote(err.Error()) + " " + lazyDeath(r.key)
 	}
 	dumped := time.Since(start)
 	start = time.Now()
