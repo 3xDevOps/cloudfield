@@ -326,7 +326,7 @@ func (h *handler) server(r *http.Request) *mcp.Server {
 			// search and fetch answer with JSON alone, which clients may
 			// decode as such, so the notice waits for another tool.
 			if call, ok := res.(*mcp.CallToolResult); ok && err == nil && !call.IsError && !jsonOnly(req) {
-				if text := h.retiringNotice(c, h.now()); text != "" {
+				if text := h.retiringNotice(ctx, c, h.now()); text != "" {
 					call.Content = append(call.Content, &mcp.TextContent{Text: text})
 				}
 			}
@@ -372,9 +372,9 @@ func (h *handler) sweepNotices(now time.Time) {
 
 // retiringNotice is the text a tool result of connector c adds when the
 // edge says the address c was added at is retiring, names where the
-// server takes it instead, and the notice was not added in the last
-// noticeEvery; empty otherwise.
-func (h *handler) retiringNotice(c *store.Connector, now time.Time) string {
+// server takes it instead for c's member, and the notice was not added
+// in the last noticeEvery; empty otherwise.
+func (h *handler) retiringNotice(ctx context.Context, c *store.Connector, now time.Time) string {
 	recent := func() bool {
 		last, ok := h.noticed[c.ID]
 		return ok && now.Sub(last) < noticeEvery
@@ -388,6 +388,11 @@ func (h *handler) retiringNotice(c *store.Connector, now time.Time) string {
 	n := h.noticeAt(c.Resource, now)
 	if n == nil || n.State != edgeproto.NoticeRetiring || n.URL == "" {
 		return ""
+	}
+	if strings.HasSuffix(n.URL, edgeproto.PathUniversalMCP) {
+		if on, err := h.ssh.OnUniversal(ctx, c.Member); err != nil || !on {
+			return ""
+		}
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()

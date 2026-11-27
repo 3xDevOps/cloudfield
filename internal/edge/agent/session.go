@@ -501,6 +501,20 @@ func (a *Agent) RelayOrigins() []string {
 	return slices.Clone(a.live.origins)
 }
 
+// ConnectorOrigins are the relay origins the edge announced on the live
+// control connection, read with its version and the edge's state in one
+// snapshot: none unless the connection is up at
+// edgeproto.VersionRelayOrigin or later and the edge reports the server
+// claimed, since the relay refuses every other connection to it.
+func (a *Agent) ConnectorOrigins() []string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.live == nil || a.live.protocol < edgeproto.VersionRelayOrigin || a.edgeState != edgeproto.StateClaimed {
+		return nil
+	}
+	return slices.Clone(a.live.origins)
+}
+
 // Notices are the verified notices of the server's latest enrollment at
 // the edge holding the pinned key.
 func (a *Agent) Notices() (StoredNotices, error) { return a.state.Notices(a.serverID) }

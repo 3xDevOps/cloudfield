@@ -11,6 +11,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/3xDevOps/cloudfield/internal/domain"
 	edgeagent "github.com/3xDevOps/cloudfield/internal/edge/agent"
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
@@ -138,20 +139,26 @@ func TestConnectorListAtRetiringAddress(t *testing.T) {
 	}
 	ownPath := strings.TrimPrefix(e.base, e.origin)
 	now := time.Now()
-	add := func(resource string) string {
-		c := &store.Connector{Member: member.ID, ClientID: e.clientID, ClientName: "Test client", RedirectHost: e.clientHost,
+	add := func(member domain.MemberID, resource string) string {
+		c := &store.Connector{Member: member, ClientID: e.clientID, ClientName: "Test client", RedirectHost: e.clientHost,
 			Resource: resource, Scopes: []string{"read"}, CreatedAt: now}
-		if err := e.db.CreateConnector(ctx, c, store.ConnectorTokens{Access: tokenHash(resource + "a"), AccessExpiresAt: now.Add(time.Hour),
-			Refresh: tokenHash(resource + "r"), RefreshExpiresAt: now.Add(time.Hour)}); err != nil {
+		if err := e.db.CreateConnector(ctx, c, store.ConnectorTokens{Access: tokenHash(string(member) + resource + "a"), AccessExpiresAt: now.Add(time.Hour),
+			Refresh: tokenHash(string(member) + resource + "r"), RefreshExpiresAt: now.Add(time.Hour)}); err != nil {
 			t.Fatal(err)
 		}
 		return c.ID
 	}
-	resources := []string{e.base, e.origin + edgeproto.PathUniversalMCP, newRelay + ownPath, oldRelay + ownPath, oldRelay + edgeproto.PathUniversalMCP}
+	oldPort := "https://relay-old.example.test:443" + ownPath
+	resources := []string{e.base, e.origin + edgeproto.PathUniversalMCP, newRelay + ownPath, oldRelay + ownPath, oldRelay + edgeproto.PathUniversalMCP, oldPort}
 	ids := map[string]string{}
 	for _, r := range resources {
-		ids[add(r)] = r
+		ids[add(member.ID, r)] = r
 	}
+	other := &domain.Member{DisplayName: "Bea", TailnetLogin: "bea@example.test", Color: "#3cb44b", Role: domain.RoleCollaborator}
+	if err := e.db.CreateMember(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	add(other.ID, e.base)
 	retiring := edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: newRelay, Date: "2027-03-01"}
 	undated := retiring
 	undated.Date = ""
@@ -169,36 +176,41 @@ func TestConnectorListAtRetiringAddress(t *testing.T) {
 	}
 	universal := e.origin + "/mcp"
 	for _, tt := range []struct {
-		name    string
-		version int64
-		relays  []string
-		notices edgeagent.StoredNotices
-		err     error
-		want    want
+		name      string
+		version   int64
+		unclaimed bool
+		relays    []string
+		notices   edgeagent.StoredNotices
+		err       error
+		want      want
 	}{
-		{"no notice", 2, both, edgeagent.StoredNotices{}, nil, want{url: e.base}},
-		{"no notice, universal", 6, both, edgeagent.StoredNotices{}, nil, want{url: universal, universal: universal}},
-		{"unreadable notices", 6, both, edgeagent.StoredNotices{}, errors.New("read notices.json: permission denied"), want{url: universal, universal: universal}},
-		{"enrolled at a retiring address", 6, both, stored(false, retiring), nil, want{url: newRelay + "/mcp", universal: newRelay + "/mcp",
+		{"no notice", 2, false, both, edgeagent.StoredNotices{}, nil, want{url: e.base}},
+		{"no notice, universal", 6, false, both, edgeagent.StoredNotices{}, nil, want{url: universal, universal: universal}},
+		{"unreadable notices", 6, false, both, edgeagent.StoredNotices{}, errors.New("read notices.json: permission denied"), want{url: universal, universal: universal}},
+		{"enrolled at a retiring address", 6, false, both, stored(false, retiring), nil, want{url: newRelay + "/mcp", universal: newRelay + "/mcp",
 			notices: at("retiring", "2027-03-01", newRelay+ownPath, newRelay+"/mcp")}},
-		{"retiring without a date", 6, both, stored(false, undated), nil, want{url: newRelay + "/mcp", universal: newRelay + "/mcp",
+		{"retiring without a date", 6, false, both, stored(false, undated), nil, want{url: newRelay + "/mcp", universal: newRelay + "/mcp",
 			notices: at("retiring", "", newRelay+ownPath, newRelay+"/mcp")}},
-		{"first use", 6, both, stored(true, retiring), nil, want{url: universal, universal: universal,
+		{"first use", 6, false, both, stored(true, retiring), nil, want{url: universal, universal: universal,
 			notices: at("retiring", "2027-03-01", "", "")}},
-		{"replacement not announced", 6, nil, stored(false, retiring), nil, want{url: universal, universal: universal,
+		{"replacement not announced", 6, false, nil, stored(false, retiring), nil, want{url: universal, universal: universal,
 			notices: at("retiring", "2027-03-01", "", "")}},
-		{"edge before relay origins", 3, both, stored(false, retiring), nil, want{url: universal, universal: universal,
+		{"edge before relay origins", 3, false, both, stored(false, retiring), nil, want{url: universal, universal: universal,
 			notices: at("retiring", "2027-03-01", "", "")}},
-		{"edge offline", 0, both, stored(false, retiring), nil, want{url: e.base,
+		{"unclaimed", 6, true, both, stored(false, retiring), nil, want{url: universal, universal: universal,
 			notices: at("retiring", "2027-03-01", "", "")}},
-		{"enrolled at the replacement of a retired address", 6, nil, stored(false, retired), nil, want{url: universal, universal: universal,
+		{"edge offline", 0, false, both, stored(false, retiring), nil, want{url: e.base,
+			notices: at("retiring", "2027-03-01", "", "")}},
+		{"enrolled at the replacement of a retired address", 6, false, nil, stored(false, retired), nil, want{url: universal, universal: universal,
 			notices: map[string]*protocol.ConnectorNotice{
 				oldRelay + ownPath: {State: "retired", URL: e.origin + ownPath},
 				oldRelay + "/mcp":  {State: "retired", URL: e.origin + "/mcp"},
+				oldPort:            {State: "retired", URL: e.origin + ownPath},
 			}}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			e.edge.version.Store(tt.version)
+			e.edge.unclaimed.Store(tt.unclaimed)
 			e.edge.set(tt.relays, tt.notices)
 			e.edge.setErr(tt.err)
 			var list protocol.ConnectorListResult
@@ -229,6 +241,33 @@ func TestConnectorListAtRetiringAddress(t *testing.T) {
 				t.Errorf("connector.code url %q, want %q", code.URL, tt.want.url)
 			}
 		})
+	}
+
+	// A member with no GitHub account bound is not offered the universal
+	// URL at the edge, so no notice names it to them.
+	e.edge.version.Store(6)
+	e.edge.unclaimed.Store(false)
+	e.edge.set(both, stored(false, retiring))
+	e.edge.setErr(nil)
+	if _, err := e.db.UnlinkIdentity(ctx, member.ID, "github", "1"); err != nil {
+		t.Fatal(err)
+	}
+	var list protocol.ConnectorListResult
+	if err := e.admin.Call(protocol.MethodConnectorList, struct{}{}, &list); err != nil {
+		t.Fatal(err)
+	}
+	if list.URL != newRelay+ownPath {
+		t.Errorf("url %q, want %q", list.URL, newRelay+ownPath)
+	}
+	for _, c := range list.Connectors {
+		got, _ := json.Marshal(c.Notice)
+		want, _ := json.Marshal(map[string]*protocol.ConnectorNotice{
+			e.base:            {State: "retiring", URL: newRelay + ownPath, Date: "2027-03-01"},
+			e.origin + "/mcp": {State: "retiring", Date: "2027-03-01"},
+		}[ids[c.ID]])
+		if string(got) != string(want) {
+			t.Errorf("without GitHub, connector at %s: notice %s, want %s", ids[c.ID], got, want)
+		}
 	}
 }
 

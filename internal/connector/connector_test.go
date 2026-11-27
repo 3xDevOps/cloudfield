@@ -968,6 +968,15 @@ type edgeAt struct {
 	relays  []string
 	notices edgeagent.StoredNotices
 	err     error
+	// unclaimed is an edge that reports the server not claimed.
+	unclaimed atomic.Bool
+}
+
+func (e *edgeAt) ConnectorOrigins() []string {
+	if e.version.Load() < int64(edgeproto.VersionRelayOrigin) || e.unclaimed.Load() {
+		return nil
+	}
+	return e.RelayOrigins()
 }
 
 func (e *edgeAt) Origin() string   { return e.origin }
