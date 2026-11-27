@@ -1376,7 +1376,13 @@ retries until it fits. A turn that ends without a success,
 failure or blocked report forwards the subsession's
 last message to the parent as a provisional report, which names the session's
 last `needs-input`, `waiting` or `answered` report if it made one; the subsession's own later
-success, failure or blocked report retires it while unread. A subsession that ends without a final report sends
+success, failure or blocked report retires it while unread. A Standard
+subsession forwards Claude Code's and Codex's last message; pi, oh-my-pi and
+OpenCode give none, so their report reads `(none)` and still wakes the parent
+([what a turn end sends](#lifecycle-status-is-separate)). A Standard
+subsession of an agent without
+[status reporting](harnesses.md#status-reporting) forwards nothing. A
+subsession that ends without a final report sends
 one message saying so, with its latest report of any outcome (summary and
 time) and its branch. A live attached subsession that has been waiting (for
 anything), `answered`, or waiting on a `needs-input` answer for over an hour
@@ -1704,6 +1710,27 @@ nor terminal output follows the hold for a minute, as when the answer never
 reached Claude Code, the server ends the turn itself. Enhanced sessions get
 the same rule as a [report reminder](enhanced-sessions.md#report-reminder)
 prompt. Background sessions, and Standard sessions of other agents, are not held.
+
+`run.report` carries the agent's last message in one case: the turn end of a
+Standard subsession, which the server forwards to its parent as the
+provisional report ([subsessions](#subsessions)). The server sets
+`AETHER_SUBSESSION=1` in the container of a session another session started.
+Only there does a Claude Code `Stop` hook's `run.report` carry `last_message`,
+the first 4 KiB of the payload's `last_assistant_message`. For a stop that was
+held, the server forwards the held stop's message, not the one that follows
+the reminder, unless a prompt started a new turn first, typed into the
+reminder's continuation or after Esc: that turn's end forwards its own
+message. The server keeps the held message in memory only, so after a server
+restart the stop that follows the reminder forwards its own. A Claude Code
+`SessionEnd` hook's `run.report` carries `session_end: true` and forwards
+nothing: `/clear` and `/exit` end no turn, and a turn cut off with Esc sends
+no `Stop`. For Codex, which loads no hooks, the server reads the thread's
+last turn from the app-server, for a subsession only. A `completed` turn
+forwards its last agent message, and an `interrupted` one, as after Esc,
+forwards nothing. If the read fails, the report reads `(none)` and the server
+logs the error. A session with no parent sends and reads neither. A
+subsession that a handoff detached from its parent still does, and the server
+discards the message.
 
 Coordination also does not provide a universal inbound terminal hook. When a
 human messages a Standard session, Cloudfield delivers the message through the

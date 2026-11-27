@@ -729,7 +729,11 @@ metadata, not a prompt body or evidence of input. An optional `session_id`
 names the agent's own top-level session; a Standard session stores the latest one
 as `harness_session_id` so [a mode switch](enhanced-sessions.md#switching-a-running-agent)
 can resume it. One that is not 1-128 characters of letters, digits, `.`,
-`_`, `:` and `-` is ignored and the rest of the report applies.
+`_`, `:` and `-` is ignored and the rest of the report applies. An optional
+`last_message` on a `waiting` report is the agent's last message of the turn,
+which only a subsession's reporter sends. An optional `session_end: true`
+marks a `waiting` report sent as the agent's session ends, which is not a turn
+end ([coordination.md](coordination.md#lifecycle-status-is-separate)).
 
 | Operation | Fields | Meaning |
 | --- | --- | --- |
@@ -745,7 +749,7 @@ pending requests per session. Unknown operations/kinds, missing identities, and
 conflicting operation fields are rejected rather than normalized or truncated.
 `open`/`close` do not accept nonempty `requests`; `clear` accepts no request
 identity or request list; `replace` accepts no top-level request identity.
-Reports carry only correlation metadata, never prompts, answers, paths, or
+Input updates carry only correlation metadata, never prompts, answers, paths, or
 transcripts.
 
 A Default session's `sudo` command waiting for a person
