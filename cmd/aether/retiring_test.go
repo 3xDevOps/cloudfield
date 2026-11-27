@@ -382,3 +382,23 @@ func TestEdgeSSHPrintsTheNoticeOnce(t *testing.T) {
 		t.Fatalf("stderr = %q, want the refusal, then the notice once", out)
 	}
 }
+
+// A saved-link config that cannot be read does not hide the Devices page
+// of a readable record for exactly the replacement.
+func TestDevicesPageWithAnUnreadableConfig(t *testing.T) {
+	testhome.Isolate(t)
+	dir := writeEdgeTokens(t, "dev-1", map[string]string{newEdge: "https://auth.new.example.test"})
+	path, err := cli.Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := devicesPage(dir, oldEdge, newEdge), "revoke it on https://auth.new.example.test/devices"; got != want {
+		t.Fatalf("devicesPage = %q, want %q", got, want)
+	}
+	if got := devicesPage(dir, oldEdge, "https://other.example.test"); !strings.HasPrefix(got, "ask whoever runs the edge") {
+		t.Fatalf("devicesPage for an address no record names = %q", got)
+	}
+}

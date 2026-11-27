@@ -68,10 +68,6 @@ func runLogout(args []string) error {
 // read, or records that disagree, name no page.
 func devicesPage(dir, old, replacement string) string {
 	const ask = "ask whoever runs the edge for the address of its Devices page and revoke it there"
-	holdings, err := cli.LoadEdgeHoldings(dir)
-	if err != nil || !holdings.Known(old, replacement) {
-		return ask
-	}
 	signinAt := func(origin string) (string, bool) {
 		c, err := edgeclient.New(dir, origin)
 		if err != nil {
@@ -80,29 +76,37 @@ func devicesPage(dir, old, replacement string) string {
 		s, err := c.Session()
 		return s.SigninOrigin, err == nil
 	}
-	page := ""
-	if slices.Contains(holdings.SignedIn, replacement) {
+	page := func(signin string) string { return "revoke it on " + edgeclient.Clean(signin) + "/devices" }
+	signedIn, err := edgeclient.SignedIn(dir)
+	if err != nil {
+		return ask
+	}
+	if slices.Contains(signedIn, replacement) {
 		signin, ok := signinAt(replacement)
 		if !ok {
 			return ask
 		}
-		page = signin
-	} else {
-		for _, origin := range holdings.SignedIn {
-			if !cli.SameEdge(origin, replacement) {
-				continue
-			}
-			signin, ok := signinAt(origin)
-			if !ok || (page != "" && signin != page) {
-				return ask
-			}
-			page = signin
-		}
+		return page(signin)
 	}
-	if page == "" {
+	holdings, err := cli.LoadEdgeHoldings(dir)
+	if err != nil || !holdings.Known(old, replacement) {
+		return ask
+	}
+	found := ""
+	for _, origin := range signedIn {
+		if !cli.SameEdge(origin, replacement) {
+			continue
+		}
+		signin, ok := signinAt(origin)
+		if !ok || (found != "" && signin != found) {
+			return ask
+		}
+		found = signin
+	}
+	if found == "" {
 		return "revoke it on the Devices page of the sign-in origin of " + replacement
 	}
-	return "revoke it on " + edgeclient.Clean(page) + "/devices"
+	return page(found)
 }
 
 // printStillSignedIn names the edges this machine still holds a token
