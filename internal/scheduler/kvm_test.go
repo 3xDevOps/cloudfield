@@ -102,6 +102,7 @@ func kvmEnhancedSession(t *testing.T) (*testEnv, *domain.Run, runtime.ID) {
 // agent is back with its conversation and answers it.
 func TestKVMEnhancedAgentKilledMidSessionRestarts(t *testing.T) {
 	e, run, cid := kvmEnhancedSession(t)
+	conversation := e.sched.acp.session(run.ID).SessionID()
 	killed := time.Now()
 	const kill = `missed=1; for p in /proc/[0-9]*; do if [ "$(cat "$p/comm" 2>/dev/null)" = acp-mock ]; then kill -9 "${p#/proc/}" && missed=0; fi; done; exit $missed`
 	if code, _, stderr, err := e.cfg.Runtime.Exec(t.Context(), cid, []string{"/bin/sh", "-c", kill}, ""); err != nil || code != 0 {
@@ -109,7 +110,10 @@ func TestKVMEnhancedAgentKilledMidSessionRestarts(t *testing.T) {
 	}
 	for deadline := killed.Add(time.Minute); ; time.Sleep(20 * time.Millisecond) {
 		page, err := e.sched.ACPHistory(run.ID, 0, 0)
-		if err == nil && hasNotice("Agent restarted")(page.Items) && e.sched.acp.session(run.ID) != nil {
+		if sess := e.sched.acp.session(run.ID); err == nil && hasNotice("Agent killed")(page.Items) && sess != nil {
+			if got := sess.SessionID(); got != conversation {
+				t.Fatalf("the restarted agent runs conversation %s, not the killed agent's %s", got, conversation)
+			}
 			break
 		}
 		if time.Now().After(deadline) {

@@ -204,14 +204,14 @@ func TestEnhancedRunRestartsAnAgentASignalKilled(t *testing.T) {
 		t.Fatal(err)
 	}
 	items := waitItems(t, e.sched, run.ID, "a turn after the kill", turnEnded("end_turn", 2))
-	if !hasNotice("Agent restarted")(items) {
+	if !hasNotice("Agent killed")(items) {
 		t.Fatalf("the restart left no notice: %+v", items)
 	}
 
 	kill(rt.all()[1])
 	waitFor(t, "the agent killed again left stopped", func() bool {
 		row, err := e.db.GetRun(t.Context(), run.ID)
-		return err == nil && strings.HasPrefix(row.Reason, acpEndedReason) && strings.Contains(row.Reason, "killed again within 5 minutes")
+		return err == nil && strings.HasPrefix(row.Reason, acpEndedReason) && strings.Contains(row.Reason, "killed within 5 minutes of its last restart")
 	})
 	if n := len(rt.all()); n != 2 {
 		t.Fatalf("an agent killed again right after its restart was restarted: %d ACP servers", n)
