@@ -937,6 +937,24 @@ describe('lanes view', () => {
     await waitFor(() => expect(screen.queryByRole('alert')).toBeNull())
   })
 
+  it('reads on past a page the server filtered empty, to the history before it', async () => {
+    seed([working])
+    const first = Date.now() - 20 * 60_000
+    const mail = (seq: number, time: number): Event => ({
+      id: `evt_${seq}`, seq, time: new Date(time).toISOString(), workspace_id: workspace.id,
+      run_id: working.id, actor_id: '', type: 'coord.message', payload: {},
+    })
+    vi.mocked(api.workspaceTimeline)
+      .mockResolvedValueOnce({ events: [mail(900, first)], next_seq: 0, more: true, older_seq: 500 })
+      .mockResolvedValueOnce({ events: [], next_seq: 0, more: true, older_seq: 100 })
+      .mockResolvedValueOnce({ events: [mail(1, first - 24 * 60 * 60_000)], next_seq: 0, more: false })
+    await openLanes()
+    await waitFor(() => expect(api.workspaceTimeline).toHaveBeenCalledTimes(3))
+    expect(vi.mocked(api.workspaceTimeline).mock.calls.map(([query]) => query.before_seq)).toEqual([undefined, 500, 100])
+    await waitFor(() => expect(useStore.getState().laneHistory[workspace.id]).toMatchObject({ floor: -Infinity, loading: false, capped: false }))
+    expect(useStore.getState().laneHistory[workspace.id].events.map((event) => event.seq)).toEqual([1, 900])
+  })
+
   it('drops an older history page read while live events trimmed held history, so no gap reads as loaded', async () => {
     seed([working])
     const start = Date.now() - 30 * 60_000

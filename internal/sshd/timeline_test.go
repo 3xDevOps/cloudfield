@@ -312,7 +312,7 @@ func TestWorkspaceTimelineLeavesRereadsOutWhenAsked(t *testing.T) {
 	if got := page(false); len(got.Events) != 2 || rereads(got) != 1 || !got.More {
 		t.Fatalf("by type: %d events, %d rereads, more %v; want the newest 2 of 4 with 1 reread, and more", len(got.Events), rereads(got), got.More)
 	}
-	if got := page(true); len(got.Events) != 2 || rereads(got) != 0 {
-		t.Fatalf("without rereads: %d events, %d rereads; want the 2 status changes in one page", len(got.Events), rereads(got))
+	if got := page(true); len(got.Events) != 2 || rereads(got) != 0 || got.More {
+		t.Fatalf("without rereads: %d events, %d rereads, more %v; want the 2 status changes in one page and no more", len(got.Events), rereads(got), got.More)
 	}
 }
