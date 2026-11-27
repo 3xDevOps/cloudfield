@@ -18,6 +18,7 @@ func (s *Service) RelayConfig(budget int64) relay.Config {
 	cfg := relay.Config{
 		Origin:       s.pairs[0].relay,
 		MoreOrigins:  s.moreRelayOrigins(),
+		Notices:      s.notices(),
 		EdgeKey:      s.key,
 		Directory:    d,
 		Egress:       d,

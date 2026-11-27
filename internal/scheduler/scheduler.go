@@ -617,9 +617,13 @@ type supervised struct {
 	// memorySaving counts the saves running that sleeping does not mark: one
 	// the memory guard or an admission started, also once heldSave stopped
 	// waiting for it, and the save again after a failed wake.
-	asleepSaved  bool
-	saveFailedAt time.Time
-	memorySaving int
+	asleepSaved bool
+	// asleepResident is set while a sleeping VM is paused in the host's
+	// memory, where the sleep sweep left it, until the memory guard saves
+	// it or it stops.
+	asleepResident bool
+	saveFailedAt   time.Time
+	memorySaving   int
 	// frozenNotedAt is when the timeline last said the memory brake froze
 	// the session's VM. frozenSave is set while the memory guard saves the
 	// VM frozen, and admitting while a wake holding the lifecycle lock

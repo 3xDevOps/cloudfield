@@ -399,6 +399,14 @@ func (r *Runtime) Save(ctx context.Context, id runtime.ID) error {
 	return r.vms.save(ctx, key)
 }
 
+func (r *Runtime) Park(ctx context.Context, id runtime.ID) error {
+	key, ok := vmKey(id)
+	if !ok {
+		return errors.New("vm runtime: only a session VM can be parked; Docker containers cannot")
+	}
+	return r.vms.park(ctx, key)
+}
+
 func (r *Runtime) SavedMemory(id runtime.ID) (uint64, error) {
 	key, ok := vmKey(id)
 	if !ok {
@@ -412,7 +420,9 @@ func (r *Runtime) Restore(ctx context.Context, id runtime.ID) error {
 	if !ok {
 		return errors.New("vm runtime: only a session VM can be restored; Docker containers cannot")
 	}
-	return r.vms.restore(ctx, key)
+	err := r.vms.restore(ctx, key)
+	runtime.Step(ctx, "saved_state")
+	return err
 }
 
 func (r *Runtime) SetCommand(_ context.Context, id runtime.ID, command []string) error {

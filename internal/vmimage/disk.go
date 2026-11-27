@@ -19,14 +19,22 @@ import (
 // is built once per binary digest. Booting it as the kernel's root keeps the
 // helper's pages reclaimable, which an initramfs would not.
 func (s *Store) HelperDisk(ctx context.Context, binary, path string) (Disk, error) {
-	sum, err := fileDigest(binary)
+	info, err := os.Stat(binary)
 	if err != nil {
-		return Disk{}, err
+		return Disk{}, fmt.Errorf("vmimage: helper disk for %s: %w", binary, err)
 	}
 	// Building under the lock keeps a sweep from removing the disk before it
 	// is linked; it happens once per helper binary.
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if h := s.helper; h.info == nil || !os.SameFile(h.info, info) || h.info.Size() != info.Size() || !h.info.ModTime().Equal(info.ModTime()) {
+		sum, err := fileDigest(binary)
+		if err != nil {
+			return Disk{}, err
+		}
+		s.helper = helperDigest{info: info, sum: sum}
+	}
+	sum := s.helper.sum
 	dir := filepath.Join(s.helpersDir(), sum)
 	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
 		if err = s.buildHelper(ctx, binary, dir); err != nil {

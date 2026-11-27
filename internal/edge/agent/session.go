@@ -1,9 +1,9 @@
 package edgeagent
 
 import (
-	"bytes"
 	"context"
 	"crypto/ed25519"
+	crand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,8 +12,10 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	"github.com/3xDevOps/cloudfield/internal/version"
@@ -72,15 +74,36 @@ func (s *session) send(m edgeproto.Message) error {
 	return nil
 }
 
+// DialError is a WebSocket upgrade the edge, or something in between,
+// answered with Status instead of 101. Message is the error text its
+// body carried, and for a redirect the Location it named, with control
+// characters replaced and at most maxDialMessage bytes long.
+type DialError struct {
+	URL     string
+	Status  int
+	Message string
+}
+
+func (e *DialError) Error() string {
+	status := fmt.Sprintf("%d %s", e.Status, http.StatusText(e.Status))
+	if e.Message == "" {
+		return fmt.Sprintf("dial %s: %s", e.URL, status)
+	}
+	return fmt.Sprintf("dial %s: %s: %s", e.URL, status, e.Message)
+}
+
+// noRedirect keeps every dial and probe on the origin it named.
+var noRedirect = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+
 // dial opens a WebSocket that lives until ctx is done or the returned
 // cancel is called. Only the handshake is bounded by timeout: net/http ties
 // an upgraded connection to its request's context, so a WithTimeout context
-// would close the connection when the timer fired. The zero DialOptions
-// client is http.DefaultClient, which honours HTTPS_PROXY.
+// would close the connection when the timer fired. The client honours
+// HTTPS_PROXY and follows no redirect; a refused upgrade is a *DialError.
 func dial(ctx context.Context, url string, header http.Header, timeout time.Duration) (*websocket.Conn, context.CancelFunc, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	timer := time.AfterFunc(timeout, cancel)
-	c, resp, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: header})
+	c, resp, err := websocket.Dial(ctx, url, &websocket.DialOptions{HTTPHeader: header, HTTPClient: noRedirect})
 	if !timer.Stop() {
 		if c != nil {
 			_ = c.CloseNow()
@@ -90,11 +113,16 @@ func dial(ctx context.Context, url string, header http.Header, timeout time.Dura
 	}
 	if err != nil {
 		cancel()
-		if resp != nil && resp.Body != nil {
+		if resp != nil && resp.StatusCode != http.StatusSwitchingProtocols {
 			var body edgeproto.ErrorBody
-			if json.NewDecoder(resp.Body).Decode(&body) == nil && body.Error != "" {
-				return nil, nil, fmt.Errorf("dial %s: %s: %s", url, resp.Status, body.Error)
+			if resp.Body != nil {
+				_ = json.NewDecoder(resp.Body).Decode(&body)
 			}
+			msg := body.Error
+			if loc := resp.Header.Get("Location"); loc != "" && resp.StatusCode/100 == 3 {
+				msg = strings.TrimSpace(msg + " Location: " + loc)
+			}
+			return nil, nil, &DialError{URL: url, Status: resp.StatusCode, Message: printableText(msg, maxDialMessage)}
 		}
 		return nil, nil, fmt.Errorf("dial %s: %w", url, err)
 	}
@@ -122,43 +150,60 @@ func readMessage(ctx context.Context, c *websocket.Conn, timeout time.Duration) 
 	}
 }
 
+// enrollment is what one enrollment proved.
+type enrollment struct {
+	ready    edgeproto.Ready
+	protocol int
+	// notices are ready's notices when their signature verified against
+	// the pinned key for this server, the origin it dialed and the nonce
+	// it drew for this enrollment; nil otherwise.
+	notices []edgeproto.Notice
+	// pinned is set when this enrollment pinned the edge key, so its
+	// notices are trusted on first use, as the pin is.
+	pinned bool
+	// pin is the pin the notices were verified under, its file held open
+	// until the enrollment's owner calls pin.close.
+	pin pin
+}
+
 // enroll dials the control endpoint at origin and answers the challenge.
-// It returns the enrolled connection, the edge's ready and the protocol
-// version the hello named once the edge key matches the pinned one,
-// pinning it on first enrollment.
-func (a *Agent) enroll(ctx context.Context, origin string) (*websocket.Conn, context.CancelFunc, edgeproto.Ready, int, error) {
+// It returns the enrolled connection and what the enrollment proved once
+// the edge key matches the pinned one, pinning it on first enrollment.
+func (a *Agent) enroll(ctx context.Context, origin string) (*websocket.Conn, context.CancelFunc, enrollment, error) {
 	c, cancel, err := dial(ctx, origin+edgeproto.PathServerControl, nil, handshakeTimeout)
 	if err != nil {
-		return nil, nil, edgeproto.Ready{}, 0, err
+		return nil, nil, enrollment{}, err
 	}
 	c.SetReadLimit(edgeproto.MaxControlMessageSize)
-	ready, protocol, err := a.handshake(ctx, c, origin)
+	e, err := a.handshake(ctx, c, origin)
 	if err != nil {
 		_ = c.Close(websocket.StatusPolicyViolation, truncate(err.Error(), 120))
 		cancel()
-		return nil, nil, edgeproto.Ready{}, 0, err
+		return nil, nil, enrollment{}, err
 	}
-	return c, cancel, ready, protocol, nil
+	return c, cancel, e, nil
 }
 
-func (a *Agent) handshake(ctx context.Context, c *websocket.Conn, origin string) (edgeproto.Ready, int, error) {
+func (a *Agent) handshake(ctx context.Context, c *websocket.Conn, origin string) (enrollment, error) {
 	m, err := readMessage(ctx, c, handshakeTimeout)
 	if err != nil {
-		return edgeproto.Ready{}, 0, fmt.Errorf("read challenge: %w", err)
+		return enrollment{}, fmt.Errorf("read challenge: %w", err)
 	}
 	ch, ok := m.(edgeproto.Challenge)
 	if !ok {
-		return edgeproto.Ready{}, 0, fmt.Errorf("edge sent %T, want a challenge", m)
+		return enrollment{}, fmt.Errorf("edge sent %T, want a challenge", m)
 	}
 	if err = edgeproto.CheckVersion(ch.Version); err != nil {
-		return edgeproto.Ready{}, 0, fmt.Errorf("edge speaks protocol %d: %w", ch.Version, err)
+		return enrollment{}, fmt.Errorf("edge speaks protocol %d: %w", ch.Version, err)
 	}
 	// The signature names the origin this server dialed, never ch.Origin:
 	// a challenge relayed from another edge must not enroll there.
 	sig, err := edgeproto.SignEnrollment(a.cfg.HostKey, origin, ch.Nonce)
 	if err != nil {
-		return edgeproto.Ready{}, 0, err
+		return enrollment{}, err
 	}
+	noticeNonce := make([]byte, edgeproto.NonceSize)
+	_, _ = crand.Read(noticeNonce) // crypto/rand.Read never returns an error.
 	protocol := min(edgeproto.Version, ch.Version)
 	hello, err := edgeproto.EncodeControl(edgeproto.Hello{
 		Version:      protocol,
@@ -167,53 +212,59 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn, origin string)
 		AgentVersion: version.Version,
 		Name:         a.name,
 		AccessPolicy: a.policy,
+		NoticeNonce:  noticeNonce,
 	})
 	if err != nil {
-		return edgeproto.Ready{}, 0, err
+		return enrollment{}, err
 	}
 	wctx, cancel := context.WithTimeout(ctx, writeTimeout)
 	err = c.Write(wctx, websocket.MessageText, hello)
 	cancel()
 	if err != nil {
-		return edgeproto.Ready{}, 0, fmt.Errorf("send hello: %w", err)
+		return enrollment{}, fmt.Errorf("send hello: %w", err)
 	}
 	m, err = readMessage(ctx, c, handshakeTimeout)
 	if err != nil {
-		return edgeproto.Ready{}, 0, fmt.Errorf("read ready: %w", err)
+		return enrollment{}, fmt.Errorf("read ready: %w", err)
 	}
 	ready, ok := m.(edgeproto.Ready)
 	if !ok {
-		return edgeproto.Ready{}, 0, fmt.Errorf("edge sent %T, want ready", m)
+		return enrollment{}, fmt.Errorf("edge sent %T, want ready", m)
 	}
 	if ready.ServerID != a.serverID {
-		return edgeproto.Ready{}, 0, fmt.Errorf("edge enrolled server %s, this server is %s", ready.ServerID, a.serverID)
+		return enrollment{}, fmt.Errorf("edge enrolled server %s, this server is %s", ready.ServerID, a.serverID)
 	}
-	pinned, err := a.state.PinnedKey()
+	cur, err := a.state.PinnedKey()
 	if err != nil {
-		return edgeproto.Ready{}, 0, err
+		return enrollment{}, err
 	}
-	switch {
-	case pinned == nil:
-		if err := a.state.refuseEarlierPins(); err != nil {
-			return edgeproto.Ready{}, 0, err
+	if cur == nil {
+		if err = a.state.refuseEarlierPins(); err != nil {
+			return enrollment{}, err
 		}
-		if err := a.state.Pin(ready.EdgeKey); err != nil {
-			return edgeproto.Ready{}, 0, err
-		}
+	}
+	e := enrollment{ready: ready, protocol: protocol}
+	if e.pin, e.pinned, err = a.state.pinFirst(ready.EdgeKey); err != nil {
+		return enrollment{}, err
+	}
+	if e.pinned {
 		slog.Info("edge: pinned edge key", "edge", origin, "fingerprint", edgeproto.EdgeKeyFingerprint(ready.EdgeKey))
-	case !bytes.Equal(pinned, ready.EdgeKey):
-		return edgeproto.Ready{}, 0, pinMismatch(pinned, ready.EdgeKey)
 	}
-	return ready, protocol, nil
+	if edgeproto.VerifyNotices(ready.EdgeKey, a.serverID, origin, noticeNonce, ready.Notices, ready.NoticesSignature) == nil {
+		e.notices = ready.Notices
+	}
+	return e, nil
 }
 
 // session runs one control connection until it ends and returns how long
 // it stayed enrolled with an accepted edge key.
 func (a *Agent) session(ctx context.Context) (time.Duration, error) {
-	c, cancel, ready, protocol, err := a.enroll(ctx, a.origin)
+	c, cancel, e, err := a.enroll(ctx, a.origin)
 	if err != nil {
 		return 0, err
 	}
+	defer e.pin.close()
+	ready, protocol := e.ready, e.protocol
 	defer cancel()
 	defer c.CloseNow() //nolint:errcheck // the close error of a dead session is not actionable
 	start := time.Now()
@@ -226,6 +277,9 @@ func (a *Agent) session(ctx context.Context) (time.Duration, error) {
 	s := &session{c: c, edgeKey: ready.EdgeKey, protocol: protocol, origins: origins, since: start, beats: make(chan time.Time, 1),
 		transfers: map[string]chan edgeproto.OwnerTransferResult{}}
 	if err = a.setEdgeState(ready.State); err != nil {
+		return time.Since(start), err
+	}
+	if err = a.state.writeNotices(e.pin, StoredNotices{ServerID: a.serverID, Received: start, FirstUse: e.pinned, Notices: e.notices}); err != nil {
 		return time.Since(start), err
 	}
 	if err = a.reconcileOwner(s, ready.State); err != nil {
@@ -378,6 +432,10 @@ func (a *Agent) RelayOrigins() []string {
 	return slices.Clone(a.live.origins)
 }
 
+// Notices are the verified notices of the server's latest enrollment at
+// the edge holding the pinned key.
+func (a *Agent) Notices() (StoredNotices, error) { return a.state.Notices(a.serverID) }
+
 // EdgeKey is the key of the edge the control connection is enrolled
 // with, nil while there is none.
 func (a *Agent) EdgeKey() ed25519.PublicKey {
@@ -509,10 +567,11 @@ func (a *Agent) serve(run, ctx context.Context, s *session) error {
 // Leave tells the edge the operator removed this server, then forgets the
 // owner and the claim code. The pinned edge key is kept.
 func (a *Agent) Leave(ctx context.Context) error {
-	c, cancel, _, _, err := a.enroll(ctx, a.origin)
+	c, cancel, e, err := a.enroll(ctx, a.origin)
 	if err != nil {
 		return fmt.Errorf("edgeagent: leave %s: %w", a.origin, err)
 	}
+	e.pin.close()
 	defer cancel()
 	s := &session{c: c}
 	if err := s.send(edgeproto.Unenroll{}); err != nil {
@@ -521,6 +580,25 @@ func (a *Agent) Leave(ctx context.Context) error {
 	}
 	_ = c.Close(websocket.StatusNormalClosure, "")
 	return errors.Join(a.setEdgeState(edgeproto.StateUnclaimed), a.state.ClearOwner(), a.state.RemoveClaimCode())
+}
+
+// maxDialMessage bounds the refusal text a DialError keeps.
+const maxDialMessage = 1024
+
+// printableText is s from another party, safe to print, log and store:
+// invalid UTF-8, control and format characters (bidi overrides among
+// them) and line and paragraph separators replaced, at most n bytes.
+func printableText(s string, n int) string {
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
+			return '?'
+		}
+		return r
+	}, strings.ToValidUTF8(s, "?"))
+	if len(s) > n {
+		s = strings.ToValidUTF8(s[:n-len("...")], "") + "..."
+	}
+	return s
 }
 
 func truncate(s string, n int) string {
