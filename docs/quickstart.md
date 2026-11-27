@@ -434,6 +434,9 @@ From the CLI, on your computer:
 
 - `cloudfield message <session-id> "also update the README"` messages the agent and
   prints the receipt (`delivered`, or `queued` for the member in control).
+  Before the session id, `--attach <path>` sends a file with it and `--steer`
+  adds it to an Enhanced agent's running turn
+  ([Messages and notes](terminal.md#messages-and-notes)).
 - `cloudfield logs <session-id>` prints what the agent did as plain text.
 - `cloudfield attach <session-id>` attaches your terminal to a Standard session's agent.
   Every key, Ctrl-C included, goes to the agent; close the terminal to detach,
@@ -503,17 +506,26 @@ an `answered` report or no report or it went silent, and a message continues it 
 <session-id> "<reply>"`), 5 when its wait broke (a condition it waited on resolved
 and the wake never reached the agent, or its source went unread for an hour; see [Waits Cloudfield can
 check](failure-handling.md#waits-cloudfield-can-check)), and 124 on timeout.
-Before exiting it prints `run
+Before exiting it prints `session
 <session-id> <state>: <reason>`, with the state as `cloudfield sessions` labels it. It keeps waiting
 while the session waits on agents, CI or a process. When Cloudfield cannot vouch for that wait
 it says so once on stderr: `session <session-id> still waits, but <condition>: status
 unknown (last read 12m ago): <error>`. It also exits 1 on its
 own error, such as an unknown session id, with the error on stderr and nothing on
-stdout. `cloudfield sessions --needs-you` lists the sessions waiting on you, and `cloudfield
-sessions <session-id>` shows what one needs with the command that answers it. `cloudfield
-answer` allows a permission request once or denies it once, never always.
+stdout. `cloudfield sessions --needs-you` lists the sessions waiting on a member, then on stderr what each
+needs from you with the command that answers it, or that it waits on another member, and
+`cloudfield sessions <session-id>` prints that for one session on stdout. `cloudfield answer` allows a
+permission request once or denies it once, never always.
 `--json` on `cloudfield sessions <session-id>` and `cloudfield wait` prints the session as one JSON
 object.
+
+`cloudfield wait <session-id> <session-id> ...` waits on several sessions. It returns when the
+first of them would end a wait on it alone, prints that session and exits with its code; when
+more than one would, the first in the order given. A session already in such a state (finished,
+failed, needs you, parked or a broken wait) ends the wait at once every time, so leave it out to
+wait on the rest. It reads the sessions in the order given and stops at the one that ends the
+wait, so an unknown id after that one is not reported. On timeout it prints every session, and
+with `--json` nothing.
 
 ## Prove the plumbing without an agent subscription
 

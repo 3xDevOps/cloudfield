@@ -181,7 +181,7 @@ Test with the real agent in a coordinated session:
 
 ## Limits
 
-- Hooks and wake apply only to Standard sessions with a task. Background sessions and
-  taskless launches get neither.
+- Hooks and wake apply only to Standard sessions, with or without a task.
+  Background sessions get neither.
 - A Background or exited process is never restarted by mail.
 - Keep credentials and session state out of checked-in examples and tests.

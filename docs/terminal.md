@@ -162,7 +162,18 @@ eight files per message.
   message.
 - `cloudfield message <session-id> "<text>"` (or `-` for stdin) prints the receipt:
   `delivered`, `queued for the member in control` with when it is delivered,
-  or the denial reason.
+  or the denial reason. `--attach <path>` uploads a file from your computer and
+  sends it with the message. Repeat it for up to eight files, images up to
+  8 MiB and other files up to 64 MiB; the text is then optional. A Standard
+  agent gets each file as a path in the container, listed under the text.
+  `--steer` joins an Enhanced agent's running turn ([The
+  composer](enhanced-sessions.md#the-composer)) and changes nothing in a
+  Standard session. Both flags go before the session id, because every word
+  after it is the message:
+  `cloudfield message --attach shot.png <session-id> "match this layout"`.
+  A `--steer` or `--attach` word after the session id is refused, not sent
+  as text. To send one as written, quote the whole message; a message that
+  is one word or starts with `--attach=` or `-attach=` goes on stdin with `-`.
 - If you cannot message the agent, the composer says why: **This session has
   finished.**, **The agent is still starting.**, **This session is protected: only
   its owner or an admin can message the agent.** or **You can watch this session but

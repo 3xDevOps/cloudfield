@@ -87,7 +87,31 @@ The old names keep working, with no end date.
 With `session-runtime vm`, each session runs in its own Cloud Hypervisor
 virtual machine ([environments.md](environments.md#sessions-in-virtual-machines)).
 The host must be x86-64 and expose `/dev/kvm`: bare metal, or a cloud VM with
-nested virtualization. Install a server for it with:
+nested virtualization.
+
+Before installing, put the data directory on a filesystem that can share
+blocks between files: XFS made with `reflink=1`, the `mkfs.xfs` default, or
+Btrfs. The server copies VM disks with `cp --reflink=auto --sparse=always`.
+On such a filesystem Save environment, a stopped session's caches becoming
+the member's newest, and a VM copying its own cache disk
+([environments.md](environments.md#sessions-in-virtual-machines)) share
+blocks with the disk they are made from, and take new space only for what
+the session wrote. ext4 works, but each of them takes longer and copies in
+full: the first two need free disk for up to all the data of the disk the
+session started from plus twice what the session wrote, the third for all
+the data of the cache disk. VM disks, checkouts and the image store must
+share one filesystem, because they hard-link each other. To check a data
+directory:
+
+```sh
+findmnt -no FSTYPE,TARGET -T /var/lib/aether   # filesystem type and mount point
+xfs_info <mount point> | grep -o 'reflink=[01]'   # only when the type is xfs
+```
+
+`btrfs` always shares blocks, `xfs` does with `reflink=1`, and `ext4` never
+does.
+
+Install a server for it with:
 
 ```sh
 sudo cloudfield-server install --session-runtime vm   # a new server
@@ -150,13 +174,9 @@ On AWS:
   sudo mount /dev/nvme1n1 /var/lib/aether
   ```
 
-  On XFS, Save environment and a member's next package cache share blocks
-  with the disk they are made from, and take new space only for what the
-  session wrote; ext4 copies the whole disk. VM disks,
-  checkouts and the image store must share one filesystem, because they
-  hard-link each other. Instance storage is lost when the instance stops or
-  fails, so keep the [backups](#what-lives-in-the-data-directory) current, or
-  keep the data directory on EBS and accept slower wakes.
+  Instance storage is lost when the instance stops or fails, so keep the
+  [backups](#what-lives-in-the-data-directory) current, or keep the data
+  directory on EBS and accept slower wakes.
 
 [Nitro Sandboxes](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/amazon-ec2-nitro-sandboxes.html)
 do not fit: they cannot snapshot, pause or resume, which saving an idle

@@ -656,3 +656,47 @@ func TestDevelopmentTerminalOfAPausedSessionReconnectsOnResume(t *testing.T) {
 	}
 	keeper.eventually(t, "the input", func() bool { return strings.HasSuffix(keeper.input.String(), "ls\r") })
 }
+
+// A terminal whose recovery ran out of time, as the bound of a restart cuts
+// short the wait for a sandbox that does not answer, is taken up whole by the
+// next request: it runs, and its exit is reported.
+func TestDevelopmentTerminalRecoveryCutShortIsTriedAgain(t *testing.T) {
+	e := newKeptTerminalEnv(t)
+	rt := e.sched.cfg.Runtime.(*terminalTestRuntime)
+	run, _ := e.launchFake(t, "kept-silent")
+	terminal := startTestTerminal(t, e, run.ID, "job")
+	var keeper *testTermKeeper
+	for _, k := range rt.keeperTerms {
+		keeper = k
+	}
+	recovered := restartScheduler(t, e)
+	hold := make(chan struct{})
+	rt.mu.Lock()
+	rt.recoverHold = hold
+	rt.mu.Unlock()
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	err := recovered.RecoverDevelopmentTerminals(ctx, run.ID)
+	cancel()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rt.mu.Lock()
+	rt.recoverHold = nil
+	rt.mu.Unlock()
+	close(hold)
+
+	got, err := recovered.LookupDevelopmentTerminal(t.Context(), run.ID, terminal.TerminalID)
+	if err != nil || got.Process.State != "running" {
+		t.Fatalf("the terminal after its sandbox answered is %+v, %v; want it running", got.Process, err)
+	}
+	keeper.exec.process.exitNow(4)
+	principal := control.Principal{Kind: control.PrincipalRunAgent, RunID: run.ID}
+	result, err := terminalTestCall(t, recovered, run.ID, principal, protocol.MethodDevTerminalWait, protocol.DevTerminalWaitParams{
+		DevTerminalTarget: terminalTestTarget(terminal), Exit: true, TimeoutMS: 2000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wait := result.(protocol.DevTerminalWaitResult); !wait.Matched || wait.Terminal.Process.ExitCode == nil || *wait.Terminal.Process.ExitCode != 4 {
+		t.Fatalf("the terminal's exit after its sandbox answered = %+v", wait)
+	}
+}
