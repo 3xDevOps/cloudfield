@@ -48,9 +48,10 @@ const mirrorRollbackTimeout = 5 * time.Second
 // launch to start from its commit without asking the source again.
 const captureFresh = 10 * time.Second
 
-// warmMargin is how long a launch may take from its Warm to its Capture,
-// which waits for the account usage read (3 seconds at most) in between,
-// and still start from the refresh its Warm accepted.
+// warmMargin is how long a launch may take from its Warm to its Capture and
+// still start from the refresh its Warm accepted. It covers one account
+// usage read (3 seconds at most); a launch that also reads the fallback
+// candidates' usage can take longer and then fetches in its Capture.
 const warmMargin = 3 * time.Second
 
 // Config wires the service.
@@ -78,6 +79,8 @@ type Service struct {
 	// fetched is when this process last refreshed each workspace's mirror
 	// with success.
 	fetched sync.Map
+	// launching is the refresh each workspace's last launch Warm accepted.
+	launching sync.Map
 }
 
 // ConfigureRequest is the administrator-supplied mirror source.
@@ -471,17 +474,22 @@ func (s *Service) PurgeWorkspace(ctx context.Context, workspace domain.Workspace
 // taking the locks its Capture runs under, so those are not held across the
 // fetch.
 func (s *Service) Warm(ctx context.Context, workspace domain.WorkspaceID) error {
-	return s.warm(ctx, workspace, captureFresh-warmMargin)
+	return s.warm(ctx, workspace, true)
 }
 
 // WarmAhead refreshes a configured mirror unless its last refresh is in the
 // first half of captureFresh, so a launch in the other half still starts
-// from it. A client calls it while a member prepares a launch.
+// from it, or a launch's Warm accepted that refresh and its Capture can
+// still start from it. A client calls it while a member prepares a launch.
+// No launch is behind the call, so the refresh outlives a caller that
+// disconnects and gives up after captureFresh.
 func (s *Service) WarmAhead(ctx context.Context, workspace domain.WorkspaceID) error {
-	return s.warm(ctx, workspace, captureFresh/2)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), captureFresh)
+	defer cancel()
+	return s.warm(ctx, workspace, false)
 }
 
-func (s *Service) warm(ctx context.Context, workspace domain.WorkspaceID, within time.Duration) error {
+func (s *Service) warm(ctx context.Context, workspace domain.WorkspaceID, launch bool) error {
 	unlock := s.workspaceLock(workspace)
 	defer unlock()
 	m, err := s.store.GetWorkspaceMirror(ctx, workspace)
@@ -494,11 +502,23 @@ func (s *Service) warm(ctx context.Context, workspace domain.WorkspaceID, within
 	if m.Status == domain.MirrorStatusDisabling {
 		return nil
 	}
-	if _, fresh := s.fresh(ctx, workspace, *m, within); fresh {
-		return nil
+	at, _ := s.fetched.Load(workspace)
+	within := captureFresh / 2
+	if launch {
+		within = captureFresh - warmMargin
+	} else if accepted, ok := s.launching.Load(workspace); ok && accepted == at {
+		within = captureFresh
 	}
-	_, err = s.refreshLocked(ctx, workspace, *m)
-	return err
+	if _, fresh := s.fresh(ctx, workspace, *m, within); !fresh {
+		if _, err = s.refreshLocked(ctx, workspace, *m); err != nil {
+			return err
+		}
+		at, _ = s.fetched.Load(workspace)
+	}
+	if launch {
+		s.launching.Store(workspace, at)
+	}
+	return nil
 }
 
 // fresh reports when the source was last fetched, if that is less than

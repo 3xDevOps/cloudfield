@@ -868,6 +868,8 @@ type mirrorTestGit struct {
 	refreshBlock         chan struct{}
 	refreshEntered       chan struct{}
 	refreshCalls         int
+	refreshCtxErr        error
+	refreshBounded       bool
 	adoptCalls           int
 	branchCommit         string
 	disableErr           error
@@ -905,6 +907,8 @@ func (g *mirrorTestGit) RefreshWorkspaceMirror(ctx context.Context, ws domain.Wo
 	g.mu.Lock()
 	g.calls = append(g.calls, "refresh")
 	g.refreshCalls++
+	g.refreshCtxErr = ctx.Err()
+	_, g.refreshBounded = ctx.Deadline()
 	entered, block, ferr, refreshResult := g.refreshEntered, g.refreshBlock, g.refreshErr, g.refreshResult
 	g.mu.Unlock()
 	if entered != nil {
