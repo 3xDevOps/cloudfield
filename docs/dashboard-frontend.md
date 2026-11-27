@@ -674,7 +674,10 @@ session orders them **Terminal**, **Chat**, **Changes**. **Changes** carries
 the muted `+N −M` of the latest snapshot, unless it was truncated, and drops
 it below 400px while a fourth tab shows. The pull request, with its checks,
 feedback and **Watch PR**, would crowd the tabs, so it sits in a 44px row of
-its own under them on the Changes tab only.
+its own under them on the Changes tab only. A session on an added login, or
+moved to another account by a fallback, has the account on a line of its own
+under the title, wrapping rather than cut: "On Ada's account, login console,
+billed per use".
 
 **More** opens with a **Views** group (Trace, Files, Browser, **Session
 details**, **Session tree**, **Search…**, **Assistant**), then the session's
@@ -2966,6 +2969,13 @@ heading reads "Neither you nor <owner> has an agent installed." and the note
 says the session uses the owner's login and the caller's installation, or the
 owner's when the caller has none.
 
+**Login** (`login-picker.tsx`) is a select under Account for Claude Code on
+the caller's own account, where `server.info` lists the `logins` feature and
+`agent.login.list` returns more than one login. **Automatic: starts on
+<name>**, the first login with Automatic on, sends no `login`; a picked
+login sends its id as `run.launch` `login`. A teammate's account never shows
+it: only a login's owner names one.
+
 Where the server offers `run.children.allow`, the form has a **Child
 sessions** select: **Use my setting** (naming it, "(off)"), **Allow for this
 session** and **Off for this session**, sent as `run.launch` `subsessions: "on"` or
@@ -3283,7 +3293,9 @@ protected session. The row holds, from the left:
   tooltip adds the `agent.list` display name, `run.model` and `run.effort`,
   "Claude Code · Standard · opus · high"), "On `<name>`'s account (fallback)" when the session carries
   `requested_account_member_id` ([usage fallback](teams.md#usage-fallback);
-  a `run.account` event updates it live when the session moves), "Launched via
+  a `run.account` event updates it live when the session moves), "On
+  `<name>`'s account, login `<login>`" and **Billed per use** when it is on
+  an added login (`account_login_name`, `account_login_per_use`), "Launched via
   `<name>`". Each part that does not fit drops whole,
   last first; the reason truncates last, and with under 96px left for it
   drops whole too, before the view switch gives way.
@@ -5880,7 +5892,9 @@ in **Needs you**.
   type without words fails the test. A type this dashboard has never heard of
   reads "Something changed" under the type name "Other". A
   [usage fallback](teams.md#usage-fallback) move reads "Moved from Alice's
-  account to your account" (`run.account`, filter **Account changed**), and
+  account to your account" (`run.account`, filter **Account changed**); a
+  move to or from an added login names both logins, "Moved from your
+  account, login default to your account, login console, billed per use", and
   the headless Claude output that triggered it "Usage limit reached: You've
   hit your session limit · resets 3pm (UTC)", the agent's message cut at 160
   characters (`run.usage_limit`, filter **Usage limit reached**).
@@ -6574,6 +6588,28 @@ command's first word, which is also the executable. A session that is not
 signed in offers its terminal login method, typed as the ACP server command
 (`agent_command` in the session state) with the method's args.
 
+**Several logins.** Where `server.info` lists the `logins` feature, the
+installed Claude Code row adds **Add login**. A member with only the default
+login sees nothing else new. With more, the row lists `agent.login.list` in
+priority order (`agent-logins.tsx`), each login with its name, kind and plan,
+email and organisation, usage windows (`account.usage` with `login`), a
+**Billed per use** badge, whether a share reaches it (off for shares, the
+account not shared, Automatic off, or the teammates from `account.list`
+`shared_with`), and beside it move up and down (`agent.login.order`, every id),
+**Automatic** (`agent.login.automatic`), **Use for shares**
+(`agent.login.share`), **Rename** inline (`agent.login.rename`) and
+**Remove** behind a confirmation that says it does not sign the login out at
+Anthropic (`agent.login.remove`). The default login's Rename and Remove are
+disabled with the server's reason. One sentence under the list says what
+Anthropic's pages say and links
+[agents.md](agents.md#several-logins). **Add login** (`add-login.tsx`) asks
+for a name, calls `agent.login.add`, runs the sign-in in the assistant's
+sign-in terminal on `/ws/terminal?agent_login=<id>` and shows
+`agent.login.result`: the login added, or the refusal with **Start again**.
+A sign-in outlives its screen; while one runs the server refuses another
+add, naming it, and the refusal offers **Return to the sign-in**, which
+reattaches its terminal. Every refusal shows verbatim.
+
 **Signed-out logins.** `SignedOutAlert` (`components/shell/signed-out-alert.tsx`),
 mounted by `AppShell` under `StaleBanner`, shows while any installed agent in
 the member's own `agent.list` has `login_problem`: a needs-you band with one
@@ -6998,8 +7034,11 @@ opens a dialog with two tabs:
   board and in Sign-ins.
 - **I have a merge code** sends `member.merge.preview` and shows both
   members side by side (role, sign-ins, devices, sessions, schedules,
-  settings), stacked at phone width. **Keep settings from** has no
-  default; choosing a side lists what the other loses. When the roles
+  added logins, settings), stacked at phone width. **Keep settings from** has no
+  default; choosing a side lists what the other loses, and the added logins
+  that move to the survivor, off for shares, each under the name it arrives
+  with: the first free `<name>-2`, `<name>-3`, … when the survivor has its
+  name. The accepting side's card lists the same. When the roles
   differ the resulting role is stated, and the admin side gets **Keep the
   merged member an admin** only when the plan carries
   `role_with_keep_admin`. **Propose merge** (danger style) stays disabled
