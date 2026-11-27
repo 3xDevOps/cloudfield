@@ -110,10 +110,11 @@ func (s *Scheduler) agentWorking(entry *supervised) bool {
 // flight carries on after the restore, as across a server restart. The
 // guest of a frozen VM answers no detach, so its keeper is let go of as a
 // server restart lets go of it, before the save ends its connection: the
-// save goes ahead meanwhile and ends the wait. A wake that arrives while a
-// VM that still answers is being saved ends the save if its guest has yet
-// to be paused, and the session stays awake. A VM that died instead of
-// being saved is not left asleep: its run ends as that of any VM that died.
+// save goes ahead meanwhile and ends the wait. A wake that arrives while
+// the sleep sweep saves a VM that still answers ends the save if its guest
+// has yet to be paused, and the session stays awake. A VM that died instead
+// of being saved is not left asleep: its run ends as that of any VM that
+// died.
 func (s *Scheduler) saveMarked(ctx context.Context, entry *supervised, saver runtime.SaveRuntime, frozen, park bool) error {
 	s.mu.Lock()
 	cid := entry.containerID
