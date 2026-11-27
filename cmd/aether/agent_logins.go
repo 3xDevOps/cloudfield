@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/cli"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
@@ -81,37 +82,88 @@ func withSignIn(fn func(conn *cli.Conn, c *protocol.Client) error) error {
 // names the command that returns to it.
 func signIn(out io.Writer, conn *cli.Conn, c *protocol.Client, agent, id string) error {
 	cols, rows := termSize()
-	var stream *cli.TerminalStream
-	err := interruptibly(func() (err error) {
-		stream, _, err = conn.TerminalStream(protocol.TerminalRequest{AgentLogin: id, Cols: cols, Rows: rows})
-		return err
+	return followSignIn(out, os.Stderr, c, agent, id, func() (*cli.TerminalStream, protocol.TerminalResponse, error) {
+		return conn.TerminalStream(protocol.TerminalRequest{AgentLogin: id, Cols: cols, Rows: rows})
 	})
-	if errors.Is(err, errInterrupted) {
-		return mayStillRun(err, agent, id)
-	}
-	if err == nil {
-		err = describeTerminalEnd(copyRaw(stream, 0))
-	}
-	return signInResult(out, os.Stderr, c, agent, id, err)
 }
 
-// signInResult prints how the sign-in terminal failed, if it did, and then
-// what the server made of the sign-in.
-func signInResult(out, errOut io.Writer, c *protocol.Client, agent, id string, terminalErr error) error {
-	if terminalErr != nil {
-		if _, err := fmt.Fprintf(errOut, "%v\nwaiting for the sign-in of login %s to end; Ctrl-C stops waiting and leaves it running\n", terminalErr, id); err != nil {
-			return err
-		}
-	}
+// signInRetryPause is how long a refused sign-in terminal waits for the
+// sign-in's result before it is opened again.
+var signInRetryPause = 5 * time.Second
+
+const signInAttempts = 12
+
+var errNotEnded = errors.New("the sign-in has not ended")
+
+// followSignIn waits for the sign-in's result while it opens the terminal:
+// the server refuses a sign-in that ended and one still starting with the
+// same code, and only one that ended has a result.
+func followSignIn(out, errOut io.Writer, c *protocol.Client, agent, id string, open func() (*cli.TerminalStream, protocol.TerminalResponse, error)) error {
 	var login protocol.AgentLogin
-	if err := callInterruptibly(c, protocol.MethodAgentLoginResult, protocol.AgentLoginParams{Agent: agent, LoginID: id}, &login); err != nil {
+	result := make(chan error, 1)
+	go func() {
+		result <- c.Call(protocol.MethodAgentLoginResult, protocol.AgentLoginParams{Agent: agent, LoginID: id}, &login)
+	}()
+	ended := func(wait <-chan time.Time) error {
+		return interruptibly(func() error {
+			select {
+			case err := <-result:
+				return err
+			case <-wait:
+				return errNotEnded
+			}
+		})
+	}
+	for attempt := 1; ; attempt++ {
+		var stream *cli.TerminalStream
+		var ack protocol.TerminalResponse
+		err := interruptibly(func() (err error) {
+			stream, ack, err = open()
+			return err
+		})
+		switch {
+		case errors.Is(err, errInterrupted):
+			return mayStillRun(err, agent, id)
+		case err == nil:
+			err = describeTerminalEnd(copyRaw(stream, 0))
+		case ack.Code == protocol.CodeNotFound:
+			return err
+		case ack.Code != 0:
+			resultErr := ended(time.After(signInRetryPause))
+			switch {
+			case !errors.Is(resultErr, errNotEnded):
+				return signInEnded(out, agent, id, &login, resultErr)
+			case ack.Code != protocol.CodeConflict:
+				return err
+			case attempt == signInAttempts:
+				return fmt.Errorf("the sign-in of login %s is still starting; open its terminal again with:\n  %s", id, attachCommand(agent, id))
+			case attempt == 1:
+				if _, err := fmt.Fprintf(errOut, "%v\ntrying again every %v for up to a minute; Ctrl-C stops trying and leaves the sign-in running\n", err, signInRetryPause); err != nil {
+					return err
+				}
+			}
+			continue
+		}
+		if err != nil {
+			if _, err := fmt.Fprintf(errOut, "%v\nwaiting for the sign-in of login %s to end; Ctrl-C stops waiting and leaves it running\n", err, id); err != nil {
+				return err
+			}
+		}
+		return signInEnded(out, agent, id, &login, ended(nil))
+	}
+}
+
+// signInEnded prints the login the sign-in added, or returns why it added
+// none.
+func signInEnded(out io.Writer, agent, id string, login *protocol.AgentLogin, err error) error {
+	if err != nil {
 		var rpc *protocol.Error
 		if errors.As(err, &rpc) {
 			return err
 		}
 		return mayStillRun(err, agent, id)
 	}
-	_, err := fmt.Fprintf(out, "added login %s\n", describeLogin(login))
+	_, err = fmt.Fprintf(out, "added login %s\n", describeLogin(*login))
 	return err
 }
 

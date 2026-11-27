@@ -304,6 +304,12 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 	if code == 0 || shown != "aether: only Claude Code keeps added logins, so codex has none; cloudfield agent login codex signs in its one login\n" {
 		t.Fatalf("agent login codex --attach on a terminal = %d:\n%s", code, shown)
 	}
+	shown, code = ada.onTerminal(nil, "agent", "login", "claude", "--attach", "lgn-test1")
+	t.Logf("$ cloudfield agent login claude --attach lgn-test1\n%s", shown)
+	if code != 1 || shown != "returning to the sign-in of login lgn-test1: claude auth login runs in a container of its own; follow its prompts\n"+
+		"aether: cli: terminal: store: not found: no sign-in of a login lgn-test1\n" {
+		t.Fatalf("agent login claude --attach with an unknown id = %d:\n%s", code, shown)
+	}
 	if got := rows(); len(got) != 0 {
 		t.Fatalf("agent_logins rows before any login was added: %+v", got)
 	}
@@ -431,6 +437,12 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 	t.Logf("$ %s\n%s", attach[1], shown)
 	if code != 0 || !strings.Contains(shown, "added login later: subscription, plan max, ada@later.example.test, organisation Test Org\n") {
 		t.Fatalf("%s = %d:\n%s", attach[1], code, shown)
+	}
+	shown, code = ada.onTerminal(nil, "agent", "login", "claude", "--attach", attach[2])
+	t.Logf("$ %s   (again, after it ended)\n%s", attach[1], shown)
+	if code != 0 || shown != "returning to the sign-in of login "+attach[2]+": claude auth login runs in a container of its own; follow its prompts\n"+
+		"added login later: subscription, plan max, ada@later.example.test, organisation Test Org\n" {
+		t.Fatalf("%s after the sign-in ended = %d:\n%s", attach[1], code, shown)
 	}
 }
 

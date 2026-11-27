@@ -3,8 +3,11 @@ package main
 import (
 	"bytes"
 	"errors"
+	"io"
+	"net"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/cli"
 	"github.com/3xDevOps/cloudfield/internal/envname"
@@ -112,29 +115,107 @@ func TestAgentLoginRefusesAddedLoginsOfAnotherAgentBeforeConnecting(t *testing.T
 	}
 }
 
-func TestSignInResultFollowsAFailedTerminal(t *testing.T) {
+// refusedTerminal opens no terminal: the server refuses it as the CLI's
+// TerminalStream returns a refusal, and opened counts the attempts.
+func refusedTerminal(opened *int, code int, message string) func() (*cli.TerminalStream, protocol.TerminalResponse, error) {
+	return func() (*cli.TerminalStream, protocol.TerminalResponse, error) {
+		*opened++
+		return nil, protocol.TerminalResponse{Code: code, Error: message}, errors.New("cli: terminal: " + message)
+	}
+}
+
+func TestFollowSignInWaitsAfterALostTerminal(t *testing.T) {
 	result := &fakeReply{result: protocol.AgentLogin{ID: "lgn-test1", Name: "work", Kind: "subscription", Plan: "max"}}
 	c := fakeControlMethods(t, map[string]*fakeReply{protocol.MethodAgentLoginResult: result})
 	var out, errOut bytes.Buffer
-	if err := signInResult(&out, &errOut, c, "claude", "lgn-test1", errors.New("remote exited with status 1")); err != nil {
+	lost := func() (*cli.TerminalStream, protocol.TerminalResponse, error) {
+		return nil, protocol.TerminalResponse{}, errors.New("cli: write terminal header: EOF")
+	}
+	if err := followSignIn(&out, &errOut, c, "claude", "lgn-test1", lost); err != nil {
 		t.Fatal(err)
 	}
-	if got, want := errOut.String(), "remote exited with status 1\nwaiting for the sign-in of login lgn-test1 to end; Ctrl-C stops waiting and leaves it running\n"; got != want {
+	if got, want := errOut.String(), "cli: write terminal header: EOF\nwaiting for the sign-in of login lgn-test1 to end; Ctrl-C stops waiting and leaves it running\n"; got != want {
 		t.Errorf("stderr = %q, want %q", got, want)
 	}
 	if got, want := out.String(), "added login work: subscription, plan max\n"; got != want {
 		t.Errorf("stdout = %q, want %q", got, want)
 	}
+}
+
+func TestFollowSignInRefusesAnUnknownIDWithoutWaiting(t *testing.T) {
+	result := &fakeReply{result: protocol.AgentLogin{ID: "lgn-test1", Name: "work"}}
+	c := fakeControlMethods(t, map[string]*fakeReply{protocol.MethodAgentLoginResult: result})
+	var out, errOut bytes.Buffer
+	opened := 0
+	err := followSignIn(&out, &errOut, c, "claude", "lgn-test1", refusedTerminal(&opened, protocol.CodeNotFound, "store: not found: no sign-in of a login lgn-test1"))
+	if err == nil || err.Error() != "cli: terminal: store: not found: no sign-in of a login lgn-test1" {
+		t.Errorf("followSignIn = %v; want the server's refusal alone", err)
+	}
+	if opened != 1 || out.Len() != 0 || errOut.Len() != 0 {
+		t.Errorf("opened %d times, stdout %q, stderr %q; want one attempt and nothing else printed", opened, out.String(), errOut.String())
+	}
+}
+
+func TestFollowSignInReportsASignInThatEndedOnce(t *testing.T) {
+	result := &fakeReply{result: protocol.AgentLogin{ID: "lgn-test1", Name: "work", Kind: "subscription", Plan: "max"}}
+	c := fakeControlMethods(t, map[string]*fakeReply{protocol.MethodAgentLoginResult: result})
+	var out, errOut bytes.Buffer
+	opened := 0
+	ended := refusedTerminal(&opened, protocol.CodeConflict, "store: conflict: the sign-in of login lgn-test1 has ended; add the login again")
+	if err := followSignIn(&out, &errOut, c, "claude", "lgn-test1", ended); err != nil {
+		t.Fatal(err)
+	}
+	if out.String() != "added login work: subscription, plan max\n" || errOut.Len() != 0 {
+		t.Errorf("stdout %q, stderr %q; want the added login alone", out.String(), errOut.String())
+	}
 
 	result.err = &protocol.Error{Code: protocol.CodeInternal, Message: "the sign-in ended before Claude Code saved a login; nothing was added"}
 	out.Reset()
-	errOut.Reset()
-	err := signInResult(&out, &errOut, c, "claude", "lgn-test1", errors.New("cli: terminal: ptyhost: no terminal for session"))
+	err := followSignIn(&out, &errOut, c, "claude", "lgn-test1", ended)
 	if err == nil || err.Error() != "rpc error -32603: the sign-in ended before Claude Code saved a login; nothing was added" {
-		t.Errorf("signInResult = %v; want the server's reason", err)
+		t.Errorf("followSignIn = %v; want the server's reason", err)
 	}
-	if !strings.Contains(errOut.String(), "cli: terminal: ptyhost: no terminal for session\n") {
-		t.Errorf("stderr = %q; want the terminal's error", errOut.String())
+	if out.Len() != 0 || errOut.Len() != 0 || opened != 2 {
+		t.Errorf("opened %d times, stdout %q, stderr %q; want one attempt each and only the reason", opened, out.String(), errOut.String())
+	}
+}
+
+func TestFollowSignInShowsAFailedStartOnce(t *testing.T) {
+	const failed = "scheduler: start the sign-in of login lgn-test1: runtime: image e2e/fake not found"
+	result := &fakeReply{err: &protocol.Error{Code: protocol.CodeInternal, Message: failed}}
+	c := fakeControlMethods(t, map[string]*fakeReply{protocol.MethodAgentLoginResult: result})
+	var out, errOut bytes.Buffer
+	opened := 0
+	err := followSignIn(&out, &errOut, c, "claude", "lgn-test1", refusedTerminal(&opened, protocol.CodeInternal, failed))
+	if err == nil || err.Error() != "rpc error -32603: "+failed {
+		t.Errorf("followSignIn = %v; want the failed start", err)
+	}
+	if opened != 1 || out.Len() != 0 || errOut.Len() != 0 {
+		t.Errorf("opened %d times, stdout %q, stderr %q; want the failure shown once", opened, out.String(), errOut.String())
+	}
+}
+
+func TestFollowSignInRetriesASignInStillStarting(t *testing.T) {
+	pause := signInRetryPause
+	signInRetryPause = time.Millisecond
+	t.Cleanup(func() { signInRetryPause = pause })
+	server, client := net.Pipe()
+	go func() { _, _ = io.Copy(io.Discard, server) }()
+	c := protocol.NewClient(client)
+	t.Cleanup(func() { _ = c.Close(); _ = server.Close() })
+	var out, errOut bytes.Buffer
+	opened := 0
+	starting := refusedTerminal(&opened, protocol.CodeConflict, "store: conflict: the sign-in of login lgn-test1 is starting; open its terminal again in a moment")
+	err := followSignIn(&out, &errOut, c, "claude", "lgn-test1", starting)
+	if err == nil || err.Error() != "the sign-in of login lgn-test1 is still starting; open its terminal again with:\n  cloudfield agent login claude --attach lgn-test1" {
+		t.Errorf("followSignIn = %v; want the command to run again", err)
+	}
+	if got, want := errOut.String(), "cli: terminal: store: conflict: the sign-in of login lgn-test1 is starting; open its terminal again in a moment\n"+
+		"trying again every 1ms for up to a minute; Ctrl-C stops trying and leaves the sign-in running\n"; got != want {
+		t.Errorf("stderr = %q, want %q", got, want)
+	}
+	if opened != signInAttempts || out.Len() != 0 {
+		t.Errorf("opened %d times, stdout %q; want %d attempts", opened, out.String(), signInAttempts)
 	}
 }
 
