@@ -223,7 +223,7 @@ pinned edge key signs in each `ready`, and:
 
 - logs at each connection `edge: <old> is retiring on <date>; move this server
   with: sudo cloudfield-server edge move <new> (with the service's --config
-  <file>, if it has one)`;
+  <file>, if it has one) if edge-url there still names <old>`;
 - `edge status` prints `retiring     <old> is retiring on <date>; move this
   server with: sudo cloudfield-server edge move <new>`, with `--config <file>`
   when it read another config file, unless a `running` row says the server runs,

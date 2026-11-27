@@ -483,9 +483,9 @@ func TestConnectWarnsOfARetiringAddress(t *testing.T) {
 		{"no notice", nil, nil},
 		{"another address", edgeproto.Notices{{State: edgeproto.NoticeRetiring, Origin: "https://edge0.example.test", Replacement: "https://edge2.example.test"}}, nil},
 		{"retiring", edgeproto.Notices{{State: edgeproto.NoticeRetiring, Origin: edge.origin, Replacement: "https://edge2.example.test"}},
-			[]string{"edge: " + edge.origin + " is retiring; move this server with: sudo cloudfield-server edge move https://edge2.example.test (with the service's --config <file>, if it has one)"}},
+			[]string{"edge: " + edge.origin + " is retiring; move this server with: sudo cloudfield-server edge move https://edge2.example.test (with the service's --config <file>, if it has one) if edge-url there still names " + edge.origin}},
 		{"retiring on a date", edgeproto.Notices{{State: edgeproto.NoticeRetiring, Origin: edge.origin, Replacement: "https://edge2.example.test", Date: "2027-03-01"}},
-			[]string{"edge: " + edge.origin + " is retiring on 2027-03-01; move this server with: sudo cloudfield-server edge move https://edge2.example.test (with the service's --config <file>, if it has one)"}},
+			[]string{"edge: " + edge.origin + " is retiring on 2027-03-01; move this server with: sudo cloudfield-server edge move https://edge2.example.test (with the service's --config <file>, if it has one) if edge-url there still names " + edge.origin}},
 	} {
 		if got := connect(tc.list); !slices.Equal(got, tc.want) {
 			t.Errorf("%s: warnings %q, want %q", tc.name, got, tc.want)
