@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -188,6 +189,68 @@ func TestMoveFromARetiredAddress(t *testing.T) {
 				t.Fatalf("move: %v\nwant: %s", err, want)
 			}
 		})
+	}
+}
+
+// at443 serves e over TLS as origin, an https origin written with :443,
+// for the rest of the test: every dial of its host reaches e.
+func at443(t *testing.T, e *fakeEdge, origin string) {
+	t.Helper()
+	srv := httptest.NewTLSServer(e.srv.Config.Handler)
+	t.Cleanup(srv.Close)
+	host := strings.TrimPrefix(origin, "https://")
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} //nolint:gosec // the test edge's certificate names 127.0.0.1
+	transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if addr == host {
+			addr = srv.Listener.Addr().String()
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, addr)
+	}
+	prev := http.DefaultTransport
+	http.DefaultTransport = transport
+	t.Cleanup(func() { http.DefaultTransport = prev })
+	e.origin = origin
+}
+
+// An edge that writes a relay origin with :443 verifies the enrollment
+// against that spelling: edge move enrolls there and writes it, whether
+// the target was typed with the port or without, and whether the old
+// address still answers or refuses with 410.
+func TestMoveToAnOriginWrittenWith443(t *testing.T) {
+	const target = "https://target.example.test:443"
+	for _, retired := range []bool{false, true} {
+		for _, typed := range []string{target, "https://target.example.test"} {
+			from := newFakeEdge(t)
+			to := newFakeEdgeWithKey(t, from.priv)
+			at443(t, to, target)
+			origin := from.origin
+			for _, e := range []*fakeEdge{from, to} {
+				e.relayOrigins = []string{origin, target}
+			}
+			if retired {
+				origin = retiredHost(t, "retired")
+				to.relayOrigins = []string{target}
+				signedNotices(to, to.priv, edgeproto.Notices{{State: edgeproto.NoticeRetired, Origin: origin, Replacement: target}})
+			}
+			a := moveAgentAt(t, origin, from.pub)
+			if retired {
+				held, err := a.state.HoldPin()
+				if err != nil {
+					t.Fatal(err)
+				}
+				err = a.state.writeNotices(held.p, StoredNotices{ServerID: a.serverID, Received: time.Now(),
+					Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: origin, Replacement: target}}})
+				held.Close()
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			got, err := moveHeld(t, a, typed)
+			if want := (Moved{To: target, Retired: retired}); err != nil || got != want {
+				t.Errorf("retired %v, typed %s: %+v, %v; want %+v", retired, typed, got, err, want)
+			}
+		}
 	}
 }
 

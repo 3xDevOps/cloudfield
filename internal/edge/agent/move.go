@@ -29,7 +29,8 @@ type Commands struct {
 
 // Moved is what Move proved.
 type Moved struct {
-	// To is the target as a canonical origin.
+	// To is the target as the edge spells it, which the enrollment there
+	// signed and edge-url takes: an origin may keep an explicit :443.
 	To string
 	// Retired is set when this run shows the address left retired: it
 	// refused the control dial with 410 and the target signed it retired,
@@ -103,7 +104,13 @@ func (s *State) WhilePinned(held *HeldPin, write func() error) error {
 // retiring or retired, as soon as that probe shows it. cmds spell the
 // commands its refusals give.
 func (a *Agent) Move(ctx context.Context, target string, held *HeldPin, cmds Commands) (Moved, error) {
+	// to compares; spelled is dialed and signed, since the edge verifies
+	// an enrollment against its own spelling of the origin.
 	to, err := edgeclient.Canonical(target)
+	if err != nil {
+		return Moved{}, fmt.Errorf("edgeagent: %w", err)
+	}
+	spelled, err := edgeproto.Origin(target)
 	if err != nil {
 		return Moved{}, fmt.Errorf("edgeagent: %w", err)
 	}
@@ -121,9 +128,17 @@ func (a *Agent) Move(ctx context.Context, target string, held *HeldPin, cmds Com
 	}
 	first, err := a.probe(ctx, a.origin, &held.p)
 	var refused *DialError
-	moved := Moved{To: to, Retired: errors.As(err, &refused) && refused.Status == http.StatusGone}
+	moved := Moved{Retired: errors.As(err, &refused) && refused.Status == http.StatusGone}
 	switch {
 	case moved.Retired:
+		// The stored notices only tell how the edge spells to; the move
+		// still rests on this run's probe.
+		stored, _ := a.state.Notices(a.serverID)
+		replacements := make([]string, 0, len(stored.Notices))
+		for _, n := range stored.Notices {
+			replacements = append(replacements, n.Replacement)
+		}
+		spelled = spelling(replacements, to, spelled)
 	case errors.Is(err, errNoAnswer):
 		return Moved{}, fmt.Errorf("%w. %s", err, manualMove(cmds, from, to, true))
 	case err != nil:
@@ -135,8 +150,10 @@ func (a *Agent) Move(ctx context.Context, target string, held *HeldPin, cmds Com
 		if err = checkMove(first, a.origin, from, to); err != nil {
 			return Moved{}, err
 		}
+		spelled = spelling(first.ready.RelayOrigins, to, spelled)
 	}
-	info, err := FetchEdgeInfo(ctx, to)
+	moved.To = spelled
+	info, err := FetchEdgeInfo(ctx, spelled)
 	if err != nil {
 		return Moved{}, err
 	}
@@ -149,7 +166,7 @@ func (a *Agent) Move(ctx context.Context, target string, held *HeldPin, cmds Com
 			"edge move only changes the address of one edge; changing edges is in docs/edge.md#turning-it-on",
 			to, edgeproto.EdgeKeyFingerprint(info.Key), edgeproto.EdgeKeyFingerprint(pinned), source)
 	}
-	second, err := a.probe(ctx, to, &held.p)
+	second, err := a.probe(ctx, spelled, &held.p)
 	if err != nil {
 		return Moved{}, err
 	}
@@ -159,7 +176,7 @@ func (a *Agent) Move(ctx context.Context, target string, held *HeldPin, cmds Com
 	if moved.Retired {
 		err = checkMoveFromRetired(second, refused, cmds, from, to)
 	} else {
-		err = checkMove(second, to, from, to)
+		err = checkMove(second, spelled, from, to)
 	}
 	if err != nil {
 		return Moved{}, err
@@ -187,6 +204,19 @@ func refuseRetiringTarget(notices []edgeproto.Notice, cmds Commands, from, to st
 	}
 	return fmt.Errorf("the edge says, signed with the pinned key, that %s; move there instead: %s",
 		retiringClause(n), cmds.Server("edge move "+shellquote.Quote(n.Replacement)))
+}
+
+// spelling is how origins, as an edge writes them, spell the canonical
+// origin to; spelled when none names it.
+func spelling(origins []string, to, spelled string) string {
+	for _, o := range origins {
+		if c, err := edgeclient.Canonical(o); err == nil && c == to {
+			if s, err := edgeproto.Origin(o); err == nil {
+				return s
+			}
+		}
+	}
+	return spelled
 }
 
 // checkMove checks that the edge answering at origin speaks
