@@ -523,7 +523,8 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 		return fmt.Errorf("%w: the runtime cannot run a managed exec", runtime.ErrExecUnavailable)
 	}
 	// A restart during a launch's open leaves no session to restore: the
-	// run's first one is still owed, with its task.
+	// run's first one is still owed, with its mode, model, effort and task,
+	// whatever a keeper of the unfinished open holds.
 	fresh := how == openNew || how == openRestore && run.HarnessSessionID == "" && cachedSession == ""
 	sessionID, mode := "", profile.ACPMode
 	if !fresh {
@@ -543,7 +544,7 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 	var exec, bridge runtime.ManagedExec
 	var keeper *acpkeeper.Client
 	var adopt *acphost.Adoption
-	if (how == openRestore || how == openWake) && kept {
+	if (how == openRestore || how == openWake) && kept && !fresh {
 		exec, keeper, bridge, err = d.reattach(ctx, entry, managed, cid)
 		if err == nil {
 			state := keeper.State()
@@ -699,12 +700,6 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 		}
 		return adapterError(fmt.Errorf("open the agent conversation: %w", err), stderr)
 	}
-	if id := sess.SessionID(); id != run.HarnessSessionID {
-		if err := d.s.cfg.Store.SetRunAgentSession(ctx, runID, id); err != nil {
-			slog.Warn("scheduler: record agent session", "run", runID, "error", err)
-		}
-	}
-	d.record(entry, func() { entry.agentSessionID = sess.SessionID() })
 	// An adopted session keeps the mode, model and effort it had.
 	if adopt != nil {
 		mode = ""
@@ -765,6 +760,14 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 			}
 		}
 	}
+	// Recorded once the session is set up: a restart that finds none opens
+	// the run's first session again.
+	if id := sess.SessionID(); id != run.HarnessSessionID {
+		if err := d.s.cfg.Store.SetRunAgentSession(ctx, runID, id); err != nil {
+			slog.Warn("scheduler: record agent session", "run", runID, "error", err)
+		}
+	}
+	d.record(entry, func() { entry.agentSessionID = sess.SessionID() })
 	r.session = sess
 	// A session that started anew, here or after a failed restore, or
 	// refused its prompts so far has not had them yet.
@@ -949,8 +952,10 @@ func (d *acpDriver) activity(entry *supervised, kind, target string) {
 }
 
 func (d *acpDriver) resumeAfterPause(ctx context.Context, entry *supervised) {
+	// Behind a launch's open, which a pause does not wait for.
+	defer d.lockOp(entry.runID)()
 	if d.session(entry.runID) == nil {
-		d.connect(ctx, entry, openRestore)
+		d.connectLocked(ctx, entry, openRestore)
 		return
 	}
 	d.wakeIdle(entry.runID)

@@ -9,6 +9,8 @@ import (
 
 	"github.com/3xDevOps/cloudfield/internal/acphost"
 	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/ptyhost"
+	"github.com/3xDevOps/cloudfield/internal/runtime"
 )
 
 // launchOpening launches an Enhanced run whose agent does not start until
@@ -93,7 +95,7 @@ func TestEnhancedLaunchReturnsAHeldPromptWithWhyItsAgentDidNotStart(t *testing.T
 	rt.startErr = errors.New("acpRuntime: the agent is not installed")
 	rt.mu.Unlock()
 	open(errors.New("acpRuntime: the bridge failed"))
-	if err := <-delivered; !errors.Is(err, ErrACPNotRunning) || !strings.Contains(err.Error(), "the agent is not installed") {
+	if err := <-delivered; !errors.Is(err, ErrACPNotRunning) || !errors.Is(err, ptyhost.ErrNoSession) || !strings.Contains(err.Error(), "the agent is not installed") {
 		t.Fatalf("held prompt settled with %v, want the agent's own failure", err)
 	}
 	<-stream.Started
@@ -145,5 +147,105 @@ func TestEnhancedRunARestartCaughtStartingGetsItsTask(t *testing.T) {
 	execs := rt.all()
 	if got := textOf(execs[len(execs)-1].wire.prompts(t)[0]); !slices.Equal(got, []string{"the task"}) {
 		t.Fatalf("the agent got %q, want the task", got)
+	}
+}
+
+func TestTheMemoryBrakeLeavesASessionWhoseAgentStartsRunning(t *testing.T) {
+	t.Parallel()
+	e, fr := newFreezeEnv(t)
+	run, open := e.launchOpening(t, fr.acpRuntime, "")
+	cid := e.cid(t, run.ID)
+	e.brake(fr, 4<<30)
+	e.brake(fr, 3<<30)
+	if frozen := fr.Frozen(); len(frozen) != 0 {
+		t.Fatalf("the brake froze %v while its agent started", frozen)
+	}
+	open(nil)
+	e.opened(t, run.ID)
+	e.brake(fr, 3<<30)
+	e.brake(fr, 3<<30)
+	if frozen := fr.Frozen(); !slices.Equal(frozen, []runtime.ID{cid}) {
+		t.Fatalf("frozen = %v, want the session once its agent has started", frozen)
+	}
+}
+
+func TestEnhancedRunPausedAndResumedWhileItsAgentStartsKeepsItsTask(t *testing.T) {
+	t.Parallel()
+	e, rt := newACPEnv(t)
+	run, open := e.launchOpening(t, rt, "the task")
+	if err := e.sched.Pause(t.Context(), run.ID, e.member.ID); err != nil {
+		t.Fatal(err)
+	}
+	resumed := make(chan error, 1)
+	go func() { resumed <- e.sched.Resume(t.Context(), run.ID, e.member.ID) }()
+	waitFor(t, "the resume to reach the agent", func() bool {
+		e.sched.mu.Lock()
+		defer e.sched.mu.Unlock()
+		return e.sched.runs[run.ID].resuming
+	})
+	open(nil)
+	if err := <-resumed; err != nil {
+		t.Fatal(err)
+	}
+	items := waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	if execs := rt.all(); len(execs) != 1 || interrupted(items) {
+		t.Fatalf("the resume started %d agents, task interrupted %t; want the one the launch started", len(execs), interrupted(items))
+	}
+}
+
+func TestEnhancedRunCancelAndAnswerDoNotWaitForAnAgentStillStarting(t *testing.T) {
+	t.Parallel()
+	e, rt := newACPEnv(t)
+	run, open := e.launchOpening(t, rt, "")
+	defer open(nil)
+	if err := e.sched.ACPCancel(t.Context(), run.ID); !errors.Is(err, ErrACPNotRunning) || !strings.Contains(err.Error(), "still starting") {
+		t.Fatalf("ACPCancel while the agent starts = %v", err)
+	}
+	if err := e.sched.ACPAnswer(run.ID, "request", "allow", nil); !errors.Is(err, ErrACPNotRunning) || !strings.Contains(err.Error(), "still starting") {
+		t.Fatalf("ACPAnswer while the agent starts = %v", err)
+	}
+}
+
+// A server killed between session/new and the task leaves a keeper that
+// holds a session the run never recorded.
+func TestEnhancedRunAKillCaughtStartingStartsItsAgentAgainWithItsTask(t *testing.T) {
+	t.Parallel()
+	e, rt := newACPEnv(t)
+	run := e.launchACP(t, "the task")
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	if err := e.sched.Close(); err != nil {
+		t.Fatal(err)
+	}
+	sc, err := e.sched.readSidecar(run.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sc.AgentSessionID = ""
+	if err = e.sched.writeSidecar(sc); err != nil {
+		t.Fatal(err)
+	}
+	if err = e.db.SetRunAgentSession(t.Context(), run.ID, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := e.cfg
+	cfg.PTY = newFakePTY()
+	cfg.PTY.(*fakePTY).logDir = e.pty.logDir
+	s, err := New(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	startScheduler(t, s)
+	items := waitItems(t, s, run.ID, "the task's second turn", turnEnded("end_turn", 2))
+	execs := rt.all()
+	if len(execs) != 2 || !execs[0].exited() {
+		t.Fatalf("%d agents, the first exited %t; want the unfinished start replaced", len(execs), len(execs) > 0 && execs[0].exited())
+	}
+	if got := textOf(execs[1].wire.prompts(t)[0]); !slices.Equal(got, []string{"the task"}) {
+		t.Fatalf("the new agent got %q, want the task", got)
+	}
+	if hasNotice("Agent restarted")(items) {
+		t.Fatal("the start was reported as a restored session")
 	}
 }

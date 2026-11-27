@@ -6,6 +6,8 @@ import (
 
 	"github.com/3xDevOps/cloudfield/internal/acphost"
 	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/ptyhost"
+	"github.com/3xDevOps/cloudfield/internal/runtime"
 )
 
 // opening is a launch's first open running after the launch returned, so the
@@ -21,7 +23,8 @@ type opening struct {
 // and reports whether it did: Close waits for the open, and cancels superCtx
 // under s.mu, so none starts once it waits. It takes the run's op lock before
 // the launch returns, so a stop, a mode switch or a resume right after it
-// runs behind the open.
+// runs behind the open, and keeps the memory brake off the run's VM, as the
+// launch did until it returned.
 func (d *acpDriver) openBehindLaunch(ctx context.Context, entry *supervised) bool {
 	d.s.mu.Lock()
 	if d.s.superCtx.Err() != nil {
@@ -30,6 +33,7 @@ func (d *acpDriver) openBehindLaunch(ctx context.Context, entry *supervised) boo
 	}
 	d.s.wg.Add(1)
 	d.s.mu.Unlock()
+	needed := d.needGuest(entry)
 	unlock := d.lockOp(entry.runID)
 	o := &opening{done: make(chan struct{})}
 	d.mu.Lock()
@@ -37,7 +41,10 @@ func (d *acpDriver) openBehindLaunch(ctx context.Context, entry *supervised) boo
 	d.mu.Unlock()
 	go func() {
 		defer d.s.wg.Done()
-		d.connectLocked(ctx, entry, openNew)
+		defer needed()
+		timed := runtime.WithSteps(ctx)
+		d.connectLocked(timed, entry, openNew)
+		runtime.LogSteps(timed, "scheduler: agent start", "run", entry.runID)
 		unlock()
 		for {
 			d.mu.Lock()
@@ -75,6 +82,8 @@ func (d *acpDriver) hold(ctx context.Context, run *domain.Run, prompt domain.Age
 		var outcome string
 		if err == nil {
 			outcome, err = d.prompt(ctx, sess, run, prompt, steer, delivered)
+		} else {
+			err = fmt.Errorf("%w: %w", ptyhost.ErrNoSession, err)
 		}
 		// A prompt queued behind a turn reports through prompt's callback.
 		if delivered != nil && (err != nil || outcome != acphost.OutcomeQueued) {
@@ -105,4 +114,19 @@ func (d *acpDriver) starting(run domain.RunID) bool {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.opening[run] != nil
+}
+
+// liveStarted is live for a call that acts on what the agent is doing. A
+// session still starting has no turn to cancel and no request to answer,
+// and such a call holds the run's control admission, which must not wait
+// for the start or the prompts held for it.
+func (d *acpDriver) liveStarted(ctx context.Context, run domain.RunID) (*acphost.Session, error) {
+	if !d.starting(run) {
+		return d.live(ctx, run)
+	}
+	sess, err, opened := d.liveNow(run)
+	if !opened {
+		err = fmt.Errorf("%w: the agent is still starting", err)
+	}
+	return sess, err
 }

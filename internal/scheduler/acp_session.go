@@ -167,7 +167,7 @@ func (s *Scheduler) ACPAnswer(run domain.RunID, requestID, optionID string, valu
 		return err
 	}
 	defer awake()
-	sess, err := s.acp.live(context.Background(), run)
+	sess, err := s.acp.liveStarted(context.Background(), run)
 	if err != nil {
 		return err
 	}
@@ -183,7 +183,7 @@ func (s *Scheduler) ACPCancel(ctx context.Context, run domain.RunID) error {
 		return err
 	}
 	defer awake()
-	sess, err := s.acp.live(ctx, run)
+	sess, err := s.acp.liveStarted(ctx, run)
 	if err != nil {
 		return err
 	}
