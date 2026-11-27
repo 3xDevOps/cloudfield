@@ -253,6 +253,8 @@ export interface SessionStreamAck {
   truncated_before?: boolean
   epoch: number
   live: boolean
+  /** The launched session's agent has not started yet; the server holds a prompt sent now and delivers it once it has. */
+  starting?: boolean
   state?: SessionState
   has_control: boolean
   control_session_id?: string

@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import type * as React from 'react'
 import { api } from '@/lib/api'
 import type * as apiModule from '@/lib/api'
@@ -86,5 +86,26 @@ describe.each([{ mode: 'tui', acp: false }, { mode: 'acp', acp: true }] as const
   it('offers nothing when the gateway lacks run.relaunch', () => {
     mount({ ...kind, ...closed }, { gateway: 'remote', methods: ['run.get'], ws: [] })
     expect(screen.queryByRole('button', { name: 'Relaunch' })).toBeNull()
+  })
+})
+
+describe('a launched Enhanced session whose agent is still starting', () => {
+  const ack = { ok: true as const, seq: 0, replay: 0, epoch: 0, has_control: false }
+
+  it('takes a message instead of refusing it, and keeps the box and an unsent draft when the start fails', async () => {
+    mount({ mode: 'acp', acp: true })
+    act(() => {
+      useStore.getState().acpStream('run_1', 'live')
+      useStore.getState().acpAck('run_1', { ...ack, live: false, starting: true })
+    })
+    fireEvent.change(screen.getByPlaceholderText('Message the agent while it starts'), { target: { value: 'also add tests' } })
+    fireEvent.click(screen.getByRole('button', { name: /Send/ }))
+    await waitFor(() => expect(api.runInject).toHaveBeenCalledWith('run_1', 'also add tests', expect.any(String), expect.anything()))
+
+    const box = screen.getByPlaceholderText('Message the agent while it starts')
+    fireEvent.change(box, { target: { value: 'and update the docs' } })
+    act(() => useStore.getState().acpAck('run_1', { ...ack, live: false }))
+    expect(box).toHaveProperty('value', 'and update the docs')
+    expect(box.isConnected).toBe(true)
   })
 })

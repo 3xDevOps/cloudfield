@@ -15,7 +15,7 @@ import { AskAssistantButton } from '@/components/assistant/ask'
 import { CloseWarnings, useCloseCheck, warningScroll } from '@/components/close-warnings'
 import { Button } from '@/components/ui/button'
 import { Callout } from '@/components/ui/callout'
-import { api } from '@/lib/api'
+import { api, ApiError } from '@/lib/api'
 import { closeWarned } from '@/lib/close-check'
 import { errorSentence } from '@/lib/format'
 import { focusRingShown } from '@/lib/utils'
@@ -32,7 +32,7 @@ const authError = /authentication required|authrequired|not logged in|not signed
 
 type SessionFailure =
   | { kind: 'adapter'; title: string; detail?: string; seq?: number }
-  | { kind: 'auth'; detail?: string; seq?: number }
+  | { kind: 'auth'; detail?: string; seq?: number; stopped: boolean }
 
 function sessionFailure(session: AcpSession | undefined): SessionFailure | null {
   if (!session) return null
@@ -50,19 +50,22 @@ function sessionFailure(session: AcpSession | undefined): SessionFailure | null 
   }
   const authNone = session.state?.auth?.authStatus?.kind === 'none'
   const detail = notice?.notice?.description
-  if ((detail && authError.test(detail)) || authNone) return { kind: 'auth', detail, seq: notice?.seq }
-  if (notice && !session.live && adapterFailed.includes(notice.notice!.title)) return { kind: 'adapter', title: notice.notice!.title, detail, seq: notice.seq }
+  const stopped = !!notice && !session.live && adapterFailed.includes(notice.notice!.title)
+  if ((detail && authError.test(detail)) || authNone) return { kind: 'auth', detail, seq: notice?.seq, stopped }
+  if (stopped) return { kind: 'adapter', title: notice!.notice!.title, detail, seq: notice!.seq }
   return null
 }
 
 function OpenInStandard({ run, switchable, nav }: { run: RunRecord; switchable: boolean; nav: RunNavigation }) {
   const [confirm, setConfirm] = useState(false)
   const [busy, setBusy] = useState(false)
+  // A switch needs a conversation the agent reported, which one that never started has not.
+  const [fresh, setFresh] = useState(!switchable)
   const check = useCloseCheck(confirm ? run.id : null, 'abandoned')
   const act = async () => {
     setBusy(true)
     try {
-      if (switchable) {
+      if (!fresh) {
         useStore.getState().upsertRun(await api.runModeSwitch(run.id, 'tui', sessionLease(useStore, run.id)))
         nav.go('terminal')
         return
@@ -90,7 +93,10 @@ function OpenInStandard({ run, switchable, nav }: { run: RunRecord; switchable: 
       useStore.getState().upsertRun(await api.runClose(run.id, 'abandoned'))
       useStore.getState().navigate('run', { runId: next.id })
     } catch (err) {
-      toast.error(`Open in Standard failed: ${errorSentence(err)}`)
+      if (!fresh && err instanceof ApiError && err.data?.reason === 'session_not_reported') {
+        setFresh(true)
+        setConfirm(true)
+      } else toast.error(`Open in Standard failed: ${errorSentence(err)}`)
     } finally {
       setBusy(false)
     }
@@ -101,8 +107,8 @@ function OpenInStandard({ run, switchable, nav }: { run: RunRecord; switchable: 
         size="sm"
         variant="secondary"
         disabled={busy}
-        hint={switchable ? 'Resumes this conversation in the agent’s own terminal' : 'Starts a new Standard session with the same task and closes this one'}
-        onClick={() => (switchable ? void act() : setConfirm(true))}
+        hint={fresh ? 'Starts a new Standard session with the same task and closes this one' : 'Resumes this conversation in the agent’s own terminal'}
+        onClick={() => (fresh ? setConfirm(true) : void act())}
       >
         Open in Standard
       </Button>
@@ -111,7 +117,7 @@ function OpenInStandard({ run, switchable, nav }: { run: RunRecord; switchable: 
           <AlertDialogHeader>
             <AlertDialogTitle>Start a Standard session instead?</AlertDialogTitle>
             <AlertDialogDescription>
-              This agent cannot move a running conversation between modes. Cloudfield starts a new Standard session with the same task and closes this one without merging. The conversation so far stays in this session’s history.
+              Cloudfield cannot move this conversation to Standard. It starts a new Standard session with the same task and closes this one without merging. The conversation so far stays in this session’s history.
             </AlertDialogDescription>
           </AlertDialogHeader>
           {check ? <CloseWarnings check={check} run={run} onLeave={() => setConfirm(false)} className={warningScroll} /> : <p className="text-ui-sm text-muted">Checking what closing affects…</p>}
@@ -165,40 +171,6 @@ export function SessionFailureCallout({ run, session, switchable, shells, nav }:
   const failure = sessionFailure(session)
   if (!failure || isTerminal(run.status)) return null
   const target = { kind: 'failure' as const, workspace_id: run.workspace_id, run_id: run.id, failure: failure.kind, seq: failure.seq, label: failure.kind === 'auth' ? 'Agent not signed in' : failure.title }
-  if (failure.kind === 'auth') {
-    const label = session?.state?.auth?.authStatus?.label
-    const methods = session?.state?.auth_methods ?? []
-    return (
-      <Callout
-        tone="needs-you"
-        title={signedOut ? signedOutTitle(signedOut) : 'The agent is not signed in'}
-        actions={
-          <>
-            {own && <Button size="sm" variant="secondary" onClick={() => useStore.getState().navigate('agents')}>Sign in on Agents</Button>}
-            <LoginActions run={run} command={session?.state?.agent_command} methods={methods} shells={shells} nav={nav} />
-            <AskAssistantButton size="sm" variant="secondary" ask={{ draft: 'Help me sign the agent in', attachments: [target] }}>Ask the assistant</AskAssistantButton>
-          </>
-        }
-      >
-        {signedOut ? (
-          <>
-            <p>Sign in again on the Agents page, or from a terminal in this session, then send your message again.</p>
-            {signedOut.login_blocks_launch && <p className="mt-1 font-code text-ui-sm break-words">{signedOut.login_problem}</p>}
-          </>
-        ) : own ? (
-          <p>{label ? `${label}. ` : ''}Log the agent in from a terminal in this session, then send your message again.</p>
-        ) : (
-          <p>{label ? `${label}. ` : ''}This session signs in with another member's account. They sign in again on their Agents page or with <code className="font-code">aether agent login {run.harness}</code>; then send your message again.</p>
-        )}
-        {methods.length > 0 && (
-          <ul className="mt-1 list-disc pl-5 text-ui-sm">
-            {methods.map((method) => <li key={method.id}>{method.name}{method.description ? `: ${method.description}` : ''}</li>)}
-          </ul>
-        )}
-        {failure.detail && <pre className="mt-1 font-code text-ui-sm break-words whitespace-pre-wrap text-muted">{failure.detail}</pre>}
-      </Callout>
-    )
-  }
   const retry = async () => {
     setRetrying(true)
     try {
@@ -210,15 +182,56 @@ export function SessionFailureCallout({ run, session, switchable, shells, nav }:
       setRetrying(false)
     }
   }
+  const retryButton = (variant?: 'secondary') => (
+    <Button size="sm" variant={variant} disabled={retrying} hint="Pauses and resumes the session, which starts the agent again" onClick={() => void retry()}>
+      {retrying ? 'Retrying…' : 'Retry Enhanced'}
+    </Button>
+  )
+  if (failure.kind === 'auth') {
+    // Signing in restarts no agent that failed to start.
+    const { stopped } = failure
+    const then = stopped ? 'then choose Retry Enhanced' : 'then send your message again'
+    const label = session?.state?.auth?.authStatus?.label
+    const methods = session?.state?.auth_methods ?? []
+    return (
+      <Callout
+        tone="needs-you"
+        title={signedOut ? signedOutTitle(signedOut) : 'The agent is not signed in'}
+        actions={
+          <>
+            {own && <Button size="sm" variant="secondary" onClick={() => useStore.getState().navigate('agents')}>Sign in on Agents</Button>}
+            <LoginActions run={run} command={session?.state?.agent_command} methods={methods} shells={shells} nav={nav} />
+            {stopped && retryButton('secondary')}
+            <AskAssistantButton size="sm" variant="secondary" ask={{ draft: 'Help me sign the agent in', attachments: [target] }}>Ask the assistant</AskAssistantButton>
+          </>
+        }
+      >
+        {signedOut ? (
+          <>
+            <p>Sign in again on the Agents page, or from a terminal in this session, {then}.</p>
+            {signedOut.login_blocks_launch && <p className="mt-1 font-code text-ui-sm break-words">{signedOut.login_problem}</p>}
+          </>
+        ) : own ? (
+          <p>{label ? `${label}. ` : ''}Log the agent in from a terminal in this session, {then}.</p>
+        ) : (
+          <p>{label ? `${label}. ` : ''}This session signs in with another member's account. They sign in again on their Agents page or with <code className="font-code">aether agent login {run.harness}</code>; {then}.</p>
+        )}
+        {methods.length > 0 && (
+          <ul className="mt-1 list-disc pl-5 text-ui-sm">
+            {methods.map((method) => <li key={method.id}>{method.name}{method.description ? `: ${method.description}` : ''}</li>)}
+          </ul>
+        )}
+        {failure.detail && <pre className="mt-1 font-code text-ui-sm break-words whitespace-pre-wrap text-muted">{failure.detail}</pre>}
+      </Callout>
+    )
+  }
   return (
     <Callout
       tone="failed"
       title={failure.title}
       actions={
         <>
-          <Button size="sm" disabled={retrying} hint="Pauses and resumes the session, which starts the agent again" onClick={() => void retry()}>
-            {retrying ? 'Retrying…' : 'Retry Enhanced'}
-          </Button>
+          {retryButton()}
           <OpenInStandard run={run} switchable={switchable} nav={nav} />
           <AskAssistantButton size="sm" variant="secondary" ask={{ draft: 'Fix this', attachments: [target] }}>Fix this</AskAssistantButton>
         </>

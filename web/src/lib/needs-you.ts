@@ -24,6 +24,8 @@ export interface StateContext {
   roomMessages: Record<string, RoomMessage[]>
   roomStatus: Record<string, RoomStatusResult | undefined>
   pausedRuns: Record<string, boolean>
+  /** Runs whose open session's agent has not started yet. */
+  startingRuns: Record<string, true>
   now: number
 }
 
