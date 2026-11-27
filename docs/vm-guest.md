@@ -611,7 +611,8 @@ the workspace is deleted or the server runs low on disk
 ([Recover from disk pressure](failure-handling.md#recover-from-disk-pressure)).
 When a source mirror moves the base branch, the
 server builds the new commit's prepared disk in the background for every owner
-kept there, so the next launch does not build it.
+kept there. A launch after that build does not wait for it; the launch whose
+own refresh moved the base waits for the rest of it.
 
 The helper mounts each checkout disk on `/run/aether-guest/checkouts/<key>`,
 binds its `checkout/` at `/run/aether-guest/data/git/<key>` for the git

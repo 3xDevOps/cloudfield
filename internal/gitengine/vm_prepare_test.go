@@ -106,15 +106,16 @@ func TestMirrorAdvancePreparesTheCheckoutDiskOfTheNewBase(t *testing.T) {
 	key := func(base string) string {
 		return "checkout-mirror-" + base + "-" + strconv.Itoa(uid) + "-" + strconv.Itoa(gid)
 	}
-	launch := func(run domain.RunID, base string) {
+	launch := func(run domain.RunID, base, from string) string {
 		t.Helper()
-		checkout, _, createErr := e.CreateRunCheckoutAt(ctx, ws, run, base, "main", "a task", "")
+		checkout, branch, createErr := e.CreateRunCheckoutAt(ctx, ws, run, base, from, "a task", "")
 		if createErr != nil {
 			t.Fatal(createErr)
 		}
 		if _, _, ok, diskErr := e.VMCheckoutDisk(ctx, checkout, "/workspace", uid, gid); diskErr != nil || !ok {
 			t.Fatalf("checkout disk = %v, %v", ok, diskErr)
 		}
+		return branch
 	}
 	kept := func() string {
 		disks.mu.Lock()
@@ -126,7 +127,7 @@ func TestMirrorAdvancePreparesTheCheckoutDiskOfTheNewBase(t *testing.T) {
 	if kept() != "" {
 		t.Fatalf("a workspace no session started in keeps %q", kept())
 	}
-	launch("run-first", first)
+	launch("run-first", first, "main")
 	if kept() != key(first) {
 		t.Fatalf("after a launch from the base, kept = %q, want %q", kept(), key(first))
 	}
@@ -148,9 +149,13 @@ func TestMirrorAdvancePreparesTheCheckoutDiskOfTheNewBase(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	launch("run-older", first)
+	parent := launch("run-older", first, "main")
 	if kept() != key(advanced.BaseCommit) {
 		t.Fatalf("a launch from an older commit took the kept slot: %q", kept())
+	}
+	launch("run-child", first, parent)
+	if kept() != key(advanced.BaseCommit) {
+		t.Fatalf("a subsession from its parent's branch took the kept slot: %q", kept())
 	}
 
 	if err = e.RemoveWorkspaceRepo(ctx, ws); err != nil {

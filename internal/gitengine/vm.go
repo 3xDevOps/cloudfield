@@ -127,8 +127,9 @@ func (e *Engine) VMCheckoutDisk(ctx context.Context, path, target string, uid, g
 		return "", guest.Checkout{}, false, fmt.Errorf("gitengine: checkout disk of session %s: %w", key, err)
 	}
 	// Only the base branch's own commit is kept: a session from an older
-	// commit must not take the place of the disk the next launch needs.
-	if meta.BaseBranch != "" && readRefBestEffort(ctx, e, repo, "refs/heads/"+meta.BaseBranch) == meta.Base {
+	// commit or from its parent session's branch must not take the place of
+	// the disk the next launch needs.
+	if meta.BaseBranch != "" && !isRunBranch(meta.BaseBranch) && readRefBestEffort(ctx, e, repo, "refs/heads/"+meta.BaseBranch) == meta.Base {
 		if err = e.cfg.VM.Disks.KeepCheckoutDisk(ctx, string(meta.Workspace), preparedSlot(uid, gid), prepared, vmCheckoutDiskBytes, fill); err != nil {
 			return "", guest.Checkout{}, false, fmt.Errorf("gitengine: keep the prepared checkout disk of session %s: %w", key, err)
 		}
