@@ -260,6 +260,44 @@ func TestStartLoginAndChildLogin(t *testing.T) {
 	}
 }
 
+// A teammate who picks an account whose owner added logins may still run
+// the owner's Claude Code installation, as before logins existed; only a
+// fallback the launcher did not pick refuses to borrow it.
+func TestATeammatesStartOnASharedAccountMayBorrowTheOwnersInstallation(t *testing.T) {
+	e := newLoginShareEnv(t)
+	ctx := t.Context()
+	writeHomeFile(t, e.ownerHome, ".claude/.credentials.json", workLogin)
+	installClaude(t, e.ownerHome)
+	if _, err := e.db.ShareAccount(ctx, e.owner.ID, e.member.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.owner.ID, "claude", domain.LaunchTUI); err != nil || got != "" {
+		t.Fatalf("Ada's start before Grace adds a login = %q, %v; want the default login", got, err)
+	}
+	work := e.addLogin(t, e.owner.ID, "lgn-work000000", "work", workLogin)
+	if got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.owner.ID, "claude", domain.LaunchTUI); err != nil || got != "" {
+		t.Fatalf("Ada's start after Grace adds a login = %q, %v; want the default login, first in Grace's order", got, err)
+	}
+	if err := e.db.SetAgentLoginShared(ctx, e.owner.ID, "claude", domain.DefaultLogin, false); err != nil {
+		t.Fatal(err)
+	}
+	got, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.owner.ID, "claude", domain.LaunchTUI)
+	if err != nil || got != work.Login {
+		t.Fatalf("Ada's start with Grace's default off for shares = %q, %v; want work", got, err)
+	}
+	run, err := e.launchOn(t, work, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the session's container", func() bool { return e.rt.byName(string(run.ID)) != nil })
+	if spec := e.rt.byName(string(run.ID)).spec; !strings.HasSuffix(spec.Env["PATH"], ":/root/"+accountBin) {
+		t.Fatalf("PATH = %q; want Grace's installation borrowed", spec.Env["PATH"])
+	}
+	if ok, err := e.sched.FallbackLaunchable(ctx, e.member.ID, e.member.ID, work, "claude", domain.LaunchTUI); err != nil || ok {
+		t.Fatalf("work as a fallback Ada did not pick = %v, %v; want refused, as it borrows Grace's installation", ok, err)
+	}
+}
+
 // A login's other store is read-only to sessions on it, and a login whose
 // files no longer hold what it signed in as is not mounted.
 func TestAnAddedLoginIsMountedByItsShape(t *testing.T) {

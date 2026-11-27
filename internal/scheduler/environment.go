@@ -924,25 +924,12 @@ func (s *Scheduler) DefaultMode(ctx context.Context, member, account domain.Memb
 // the vendor.
 func (s *Scheduler) FallbackLaunchable(ctx context.Context, member, requested domain.MemberID, login domain.Account, harnessName string, mode domain.LaunchMode) (bool, error) {
 	account := login.Member
-	if login.Login.Added() {
-		if usable, err := s.addedLoginUsable(ctx, member, login, harnessName); err != nil || !usable {
-			return false, err
-		}
-	} else {
-		if shareErr := s.checkDefaultLoginShared(ctx, member, account, harnessName); shareErr != nil {
-			return false, nil
-		}
-		state, _, err := s.CheckSharedLaunch(ctx, member, account, harnessName)
-		if err != nil || state != SharedLaunchable || s.cfg.Homes == nil {
-			return err == nil && state == SharedLaunchable, err
-		}
+	if refusal, err := s.loginRefusal(ctx, member, login, harnessName); err != nil || refusal != "" || s.cfg.Homes == nil {
+		return err == nil && refusal == "", err
 	}
 	profile, argvs, err := s.launchProfile(ctx, member, account, harnessName)
 	if err != nil {
 		return false, err
-	}
-	if _, blocks, loginErr := s.LoginProblem(member, account, harnessName, profile); loginErr == nil && blocks && !login.Login.Added() {
-		return false, nil
 	}
 	if mode == domain.LaunchACP {
 		installed, adapterErr := s.adapterInstalled(member, account, profile, argvs)

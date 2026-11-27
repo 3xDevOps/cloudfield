@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -663,23 +664,56 @@ func (s *Scheduler) addedLoginProblem(account domain.Account, agent string) (str
 	return "its sign-in never finished", nil
 }
 
-// addedLoginUsable reports whether a session in member's home can run on
-// the added login: it still exists, member owns it or it is on for shares,
-// the runtime can verify its mounts, and it can sign in.
-func (s *Scheduler) addedLoginUsable(ctx context.Context, member domain.MemberID, account domain.Account, agent string) (bool, error) {
-	if _, err := s.addedLoginProfile(agent); err != nil || s.sessionVMs() {
-		return false, nil
+// loginRefusal is why a session in member's home may not run on login
+// unless its owner names it, its automatic switch apart: it is not open to
+// member, cannot sign in, or cannot be mounted. It is empty when the login
+// is eligible. It reads member homes, login directories and the store only,
+// and leaves where the agent's installation comes from to the caller.
+func (s *Scheduler) loginRefusal(ctx context.Context, member domain.MemberID, login domain.Account, harnessName string) (string, error) {
+	if login.Login.Added() {
+		return s.addedLoginRefusal(ctx, member, login, harnessName)
+	}
+	if shareErr := s.checkDefaultLoginShared(ctx, member, login.Member, harnessName); shareErr != nil {
+		return "it is not open to you", nil
+	}
+	state, refusal, err := s.CheckSharedLaunch(ctx, member, login.Member, harnessName)
+	switch {
+	case err != nil:
+		return "", err
+	case state != SharedLaunchable:
+		return cmp.Or(refusal, "it cannot be shared"), nil
+	case s.cfg.Homes == nil:
+		return "", nil
+	}
+	profile, _, err := s.launchProfile(ctx, member, login.Member, harnessName)
+	if err != nil {
+		return "", err
+	}
+	if problem, blocks, loginErr := s.LoginProblem(member, login.Member, harnessName, profile); loginErr == nil && blocks {
+		return problem, nil
+	}
+	return "", nil
+}
+
+// addedLoginRefusal is loginRefusal for an added login: it must still
+// exist, be member's own or on for shares and automatic, have mounts the
+// runtime can verify, and sign in.
+func (s *Scheduler) addedLoginRefusal(ctx context.Context, member domain.MemberID, account domain.Account, agent string) (string, error) {
+	if _, err := s.addedLoginProfile(agent); err != nil {
+		return err.Error(), nil
+	}
+	if s.sessionVMs() {
+		return "session VMs cannot verify an added login's mounts yet", nil
 	}
 	logins, err := s.cfg.Store.ListAgentLogins(ctx, account.Member, agent)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	i := slices.IndexFunc(logins, func(l domain.AgentLogin) bool { return l.ID == account.Login })
 	if i < 0 || (member != account.Member && (!logins[i].Shared || !logins[i].Automatic)) {
-		return false, nil
+		return "it is not open to you", nil
 	}
-	problem, err := s.addedLoginProblem(account, agent)
-	return err == nil && problem == "", err
+	return s.addedLoginProblem(account, agent)
 }
 
 // checkAddedLogin refuses a launch in member's home on an added login that
@@ -757,7 +791,7 @@ func (s *Scheduler) StartLogin(ctx context.Context, workspace domain.WorkspaceID
 			continue
 		}
 		login := domain.Account{Member: account, Login: loginOf(l.ID)}
-		if ok, launchErr := s.FallbackLaunchable(ctx, member, account, login, harness, mode); launchErr == nil && ok {
+		if refusal, refusalErr := s.loginRefusal(ctx, member, login, harness); refusalErr == nil && refusal == "" {
 			return login.Login, nil
 		}
 	}
@@ -794,7 +828,7 @@ func (s *Scheduler) ChildLogin(ctx context.Context, workspace domain.WorkspaceID
 		return "", envErr
 	}
 	if inherits {
-		if ok, launchErr := s.FallbackLaunchable(ctx, owner, account, login, harness, mode); launchErr == nil && ok {
+		if refusal, refusalErr := s.loginRefusal(ctx, owner, login, harness); refusalErr == nil && refusal == "" {
 			return login.Login, nil
 		}
 	}
