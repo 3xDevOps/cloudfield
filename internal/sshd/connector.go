@@ -171,8 +171,14 @@ func (s *Server) edgeNotices() edgeNotices {
 		return edgeNotices{}
 	}
 	stored, err := edge.Notices()
+	var msg string
 	if err != nil {
+		msg = err.Error()
+	}
+	if last := s.connectorNoticesErr.Swap(&msg); err != nil && (last == nil || *last != msg) {
 		slog.Warn("sshd: connectors shown without the edge's notices", "error", err)
+	}
+	if err != nil {
 		return edgeNotices{}
 	}
 	if len(stored.Notices) == 0 {
