@@ -17,9 +17,13 @@ permissions:
 
 jobs:
   kvm:
-    name: make test-kvm
+    name: save full ${{ matrix.fs }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        fs: [ext4, xfs]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -55,7 +59,23 @@ jobs:
         run: |
           CGO_ENABLED=0 go build -o "$RUNNER_TEMP/aether-server" ./cmd/aether-server
           sudo "$RUNNER_TEMP/aether-server" vm install --vm-kernel "$PWD/dist/aether-vmlinux-x86_64"
-      - name: VM tests (real Cloud Hypervisor VMs)
+      # Scratch, never merged: 40 saves of a full VM, on the runner's ext4 or
+      # on an XFS loop device.
+      - name: Saves of a full VM
         env:
           GOFLAGS: -v
-        run: sudo env "PATH=$PATH" "HOME=$HOME" "GOFLAGS=$GOFLAGS" make test-kvm
+          FS: ${{ matrix.fs }}
+        run: |
+          df -hT / /mnt /tmp || true
+          base=/mnt
+          [ "$(df --output=avail /mnt | tail -1)" -gt "$(df --output=avail / | tail -1)" ] || base=/var/tmp
+          work=$base/savefull
+          sudo mkdir -p "$work"
+          if [ "$FS" = xfs ]; then
+            command -v mkfs.xfs || sudo apt-get install -qq -y xfsprogs
+            sudo truncate -s 40G "$base/savefull.img"
+            sudo mkfs.xfs -q -m reflink=1 "$base/savefull.img"
+            sudo mount "$(sudo losetup --find --show --direct-io=on "$base/savefull.img")" "$work"
+          fi
+          echo "SAVEFULL-ENV fs=$(findmnt -no SOURCE,FSTYPE -T "$work") kernel=$(uname -r) ch=$(cloud-hypervisor --version) nproc=$(nproc) mem_mib=$(free -m | awk '/^Mem:/{print $2}') head=$(git rev-parse HEAD)"
+          sudo env "PATH=$PATH" "HOME=$HOME" "GOFLAGS=$GOFLAGS" "TMPDIR=$work" make test-kvm 'KVM_RUN=^TestKVM(SaveOfAFullVM|ZZSaveFull)' KVM_PKGS=./internal/runtime/vm
