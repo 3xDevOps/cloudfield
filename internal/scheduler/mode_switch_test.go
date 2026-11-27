@@ -356,6 +356,19 @@ func TestSwitchingASubsessionMidTurnForwardsNoTurnEnd(t *testing.T) {
 	if err := e.sched.ReportAgentState(t.Context(), child.ID, agentstatus.Report{State: agentstatus.Working, TurnStart: true}); err != nil {
 		t.Fatal(err)
 	}
+	// The restored session's idle report races the switch's end, so the
+	// switch waits here until it has arrived.
+	e.coord.mu.Lock()
+	e.coord.onWake = func(r domain.RunID) {
+		if r == child.ID {
+			waitFor(t, "the restored session's idle report", func() bool {
+				e.sched.mu.Lock()
+				defer e.sched.mu.Unlock()
+				return e.sched.runs[r].agentReport.State == agentstatus.Idle
+			})
+		}
+	}
+	e.coord.mu.Unlock()
 	cutOffBy(domain.LaunchACP)
 
 	if _, err := e.sched.Inject(t.Context(), child.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptWait}, false, nil); err != nil {

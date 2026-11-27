@@ -356,8 +356,8 @@ func (d *appServerDriver) status(entry *supervised, r *appServerRun, thread stri
 	d.mu.Unlock()
 	go func() {
 		// A status seen while dialing waits for serve to store the client
-		// that reads its thread. A dial that fails stores none, and the next
-		// connection reports the thread's status again.
+		// that reads its thread. A dial that fails stores none, and serve
+		// reports that failure instead.
 		<-r.ready
 		for {
 			d.mu.Lock()
