@@ -1,0 +1,40 @@
+## cold open (Board)
+requests 25, bytes 368486, waves 4, sockets opened /ws/events
+shown after 2001 ms, last response at 2695 ms (delay 450 ms per request)
+budget.get×4 (610 B), capabilities×2 (1198 B), launch.defaults.get×2 (56 B), agent.list×2 (11524 B), member.list×1 (99 B), server.info×1 (269 B), workspace.list×1 (601 B), run.list×1 (350941 B), run.overlaps×1 (15 B), member.device.list×1 (14 B), watch.list×1 (14 B), member.merge.pending×1 (16 B), server.edge×1 (138 B), server.update_status×1 (125 B), server.sysbox.status×1 (119 B), assistant.status×1 (423 B), linear.status×1 (19 B), presence.roster×1 (96 B), disk×1 (2209 B)
+## Board to Map
+requests 2, bytes 121, waves 1, sockets opened none
+last response at 555 ms (delay 450 ms per request)
+push.active×1 (2 B), server.sysbox.status×1 (119 B)
+## Map to List
+requests 1, bytes 119, waves 1, sockets opened none
+last response at 494 ms (delay 450 ms per request)
+server.sysbox.status×1 (119 B)
+## List to Lanes (default window)
+requests 2, bytes 371972, waves 1, sockets opened none
+last response at 530 ms (delay 450 ms per request)
+server.sysbox.status×1 (119 B), workspace.timeline×1 (371853 B)
+## Lanes: 24h window
+requests 1, bytes 373536, waves 1, sockets opened none
+last response at 508 ms (delay 450 ms per request)
+workspace.timeline×1 (373536 B)
+## Lanes: leave to Board and come back
+requests 4, bytes 745627, waves 2, sockets opened none
+last response at 1074 ms (delay 450 ms per request)
+server.sysbox.status×2 (238 B), workspace.timeline×2 (745389 B)
+## open a finished session
+requests 6, bytes 359, waves 1, sockets opened /ws/attach/<run>
+last response at 579 ms (delay 450 ms per request)
+dev.terminal.list×1 (16 B), run.room.list×1 (15 B), run.room.status×1 (107 B), presence.heartbeat×1 (18 B), run.children×1 (188 B), coord.messages.list×1 (15 B)
+## session: Changes tab
+requests 4, bytes 182, waves 1, sockets opened none
+last response at 540 ms (delay 450 ms per request)
+patch×1 (105 B), workspace.timeline×1 (43 B), dev.terminal.list×1 (16 B), presence.heartbeat×1 (18 B)
+## reload on a session (deep link)
+requests 37, bytes 371758, waves 4, sockets opened /ws/attach/<run> /ws/events
+last response at 2615 ms (delay 450 ms per request)
+budget.get×8 (1220 B), capabilities×2 (1198 B), agent.list×2 (11524 B), run.room.list×2 (30 B), presence.roster×2 (192 B), disk×2 (4418 B), dev.terminal.list×1 (16 B), run.room.status×1 (107 B), assistant.status×1 (423 B), patch×1 (105 B), run.children×1 (188 B), coord.messages.list×1 (15 B), launch.defaults.get×1 (28 B), server.update_status×1 (125 B), workspace.timeline×1 (43 B), member.list×1 (99 B), server.info×1 (269 B), workspace.list×1 (601 B), run.list×1 (350941 B), run.overlaps×1 (15 B), member.device.list×1 (14 B), watch.list×1 (14 B), member.merge.pending×1 (16 B), server.edge×1 (138 B), linear.status×1 (19 B)
+## idle for 30 s on a session
+requests 10, bytes 4823, waves 7, sockets opened none
+last response at 28810 ms (delay 450 ms per request)
+run.room.status×3 (321 B), dev.terminal.list×3 (48 B), presence.heartbeat×2 (36 B), disk×2 (4418 B)

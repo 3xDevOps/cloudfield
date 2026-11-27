@@ -1,0 +1,5 @@
+page.json: 356410 bytes, gzip -6: 21634 bytes
+runs.json: 350941 bytes, gzip -6: 23543 bytes
+events 1000 rereads 658 avg bytes per reread 385
+one reread: {"id":"evt-seed00072291","seq":72292,"time":"2026-11-27T01:22:14.711375853Z","workspace_id":"ws-bgfpbtw03z","run_id":"run-seed00012","actor_id":"","type":"run.status","payload":{"from":"running","to":"running","state":"waiting-agents","status_seq":577,"cause":"turn","wait":{"kind":"condition","detail":"pull request checks","verified_at":"2026-11-27T01:22:14.711375853Z"},"reread":true}}
+sessions 600 avg bytes per session 585

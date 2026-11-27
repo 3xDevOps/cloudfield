@@ -1,0 +1,104 @@
+# Why the dashboard is slow, measured (2026-11-26)
+
+Phase 1 of the performance overhaul: the ranked causes on one page, then the evidence.
+Every number below was taken in a sandbox (1 CPU) against a real `aether-server` and a
+real `cloudfield gui` gateway holding one seeded store; the command that produced it is
+named beside it. Nothing here was measured on a live server or on the hosted Edge.
+
+## The symptom, reproduced
+
+Lanes opens at once and its bars stay hollow ("History not loaded"). On the seeded store,
+24h window, all workspaces (`measure/lanes-browser.ts … 24h 450`,
+[evidence/lanes-browser.txt](evidence/lanes-browser.txt),
+[screenshot](evidence/lanes-24h-settled.png)):
+
+- Lanes makes 12 `workspace.timeline` requests carrying 4.44 MB of uncompressed JSON.
+- The visible bars go from 100% hollow to 70% hollow in five steps, one step per
+  serial request, and **stop there**: the view settles with 70% of the visible bar
+  width never coloured (6h window: 43%), under the label "Older history not loaded".
+- 73% of the events fetched for the busy workspace (3,639 of 5,000) are `run.status`
+  rereads, which the view throws away
+  (`measure/lanes-chain.ts`, [evidence/lanes-chain.txt](evidence/lanes-chain.txt)).
+
+So "takes forever to be coloured in" is two things: a slow serial crawl, and bars that
+are never coloured at all because the crawl stops at an event budget that rereads use up.
+
+## Ranked causes
+
+`r` is one round trip between the gateway and the server. On the path through the hosted
+Edge relay each `r` crosses the relay; its size on a real link is not established (see
+"What one recording would settle").
+
+| # | Cause (where) | Measured | Fix | Expected gain | Risk | Size |
+| - | --- | --- | --- | --- | --- | --- |
+| 1 | **Lanes pages are mostly rereads.** A waiting session publishes a same-status `run.status` with `reread: true` as often as once a minute (`docs/failure-handling.md`); `workspace.timeline` returns them whenever `types` names `run.status` (`internal/timeline/timeline.go` `keeps`); Lanes drops them (`segments.ts` `statusChanges`). They fill the 1,000-event pages and the 5,000-event budget (`web/src/store/lanes.ts` `historyBudget`). | Seeded busy workspace, last 24h: 15,331 rereads of 19,856 lane events (77%). 6h window: budget reached at 3.08 h, 51% of the window. 24h: 13%. | Let Lanes ask for history without rereads. The reader already has the filter (`timeline.Filter.NoRereads`, used by `changes.list`); `workspace.timeline` does not expose it. | Seeded: 6h needs 2,405 events (3 pages, whole window coloured); 24h needs 4,525 (5 pages, whole window); the same five pages then reach back 24 h where they reached 3.08 h. | A new optional request field: **protocol change, ask first.** An older server ignores or refuses it; needs a fallback. | S |
+| 2 | **Every request costs three serial round trips to the server.** The gateway opens a new SSH channel and a `control` subsystem for each call (`internal/localgw/backend.go` `callOnce`, `internal/cli/channel.go` `openSubsystem`): channel open, subsystem accept, then the call. The server's control channel already serves any number of calls (`internal/sshd/control.go` `serveControl` loops). | From code: 3r per call, 4r before a stream's first byte. Lanes' five pages per workspace are 15r in series; cold open's 4 waves are 12r. Not yet measured with a delayed link (planned as the fix's before/after). | Keep control channels open in the gateway and reuse them. | 3r to 1r for every call in the app on `cloudfield gui`, with or without the relay: Lanes 15r to 5r per workspace, cold open 12r to 4r, every click that fetches 3r to 1r. | Concurrency and cancellation on a shared channel (the call watchdog closes the channel today); no protocol change. | M |
+| 3 | **Lanes reads serially and stops at 5,000 events.** `readBack` awaits each 1,000-event page before asking for the next (`use-lane-data.ts`); bars before the oldest event read are hollow. | With 450 ms per request: 24h settles after 2.8 s with 70% hollow; without delay 1.1 s. After fix 1 the 7d window still needs 6,651 events on the seeded store, over budget. | After 1 and 2: decide whether the budget should count drawn events, or grow with the window. | Coloured bars for the whole 24h window on the seeded store after fix 1; 7d needs the budget decision. | Changing the budget changes what the view shows: **ask first.** | S |
+| 4 | **Nothing between the gateway and the server is compressed**, and the browser's copy is not either (`internal/webgate/api.go` `writeResult`; SSH offers no compression; relay WebSockets have it off). | A 1,000-event page is 356,410 bytes and gzips to 21,634 (16x); `run.list` for 600 sessions is 350,941 bytes, 23,543 gzipped (15x) ([evidence/payload-sizes.txt](evidence/payload-sizes.txt)). Seeded data repeats more than real data; the real ratio is not established. | Compress large control responses between server and gateway. | An order of magnitude fewer bytes for Lanes pages and `run.list` on a slow or throttled link (the relay throttles to 256 KiB/s once an egress budget is spent, `internal/edge/relay/splice.go`; whether the hosted Edge has a budget is not established). | **Protocol change, ask first.** | M |
+| 5 | **Cold open fetches every session ever and repeats calls.** `run.list` returns all sessions (585 bytes each); hydration runs in 4 serial waves; `budget.get` is called 4 times, `capabilities`, `agent.list` and `launch.defaults.get` twice. | Cold open: 25 requests, 368 KB, 95% of it `run.list`, 4 waves; the Board shows after 2.0 s with 450 ms per request against 1.2 s without ([evidence/journeys-450ms.txt](evidence/journeys-450ms.txt)). A reload on a session: 37 requests, `budget.get` 8 times. | Drop the duplicate calls; flatten the waves that do not depend on each other. Paging `run.list` changes what loads when: ask. | 25 to about 19 requests and one wave fewer (estimate from the call list, to be measured in the fix). | Low for the duplicates. | S |
+| 6 | **Leaving Lanes drops its history** (`web/src/store/lanes.ts` `holdLanes`); coming back reads it all again. | Leave to Board and back: 2 `workspace.timeline` requests, 745 KB, for a small workspace; the full chain again for a busy one. | Keep history while the events socket stays connected and append live events to it. | Second and later opens of Lanes cost no requests. | A held copy can go stale across a reconnect: **ask first.** | S |
+| 7 | **A session view polls.** `dev.terminal.list` and `run.room.status` on timers (`web/src/routes/run/shells.tsx`, `room.ts`), `presence.heartbeat`, `disk`. | 10 requests in 30 idle seconds on one open session, each 3r today. | Fix 2 cuts each to 1r; replacing polls with events is a larger change. | 30r to 10r per 30 s per open session after fix 2. | Low. | with 2 |
+| 8 | **Client work per page.** Each page replaces the workspace's history and re-derives every lane (`board-lanes.tsx` `statusChanges`, `buildLanes`, `mailOf`, `laneEdges`). | Renderer CPU while a 24h fill ran: 0.6 to 0.9 s script, 1.5 to 1.9 s all tasks, on this 1-CPU sandbox (CDP `Performance.getMetrics`). Not the bottleneck beside 1 to 4. | Revisit after 1: 73% fewer events to merge and scan. | Not established. | | |
+
+Server time is not a cause on this store: a 1,000-event lane page takes 27x a trivial
+call and `run.list` 33x, both under 16 ms median on an idle host
+([evidence/server-times.txt](evidence/server-times.txt)); the lane query is index-served
+(`internal/events/sqlitelog.go` `readQuery`). What a congested host does to those numbers
+is not established here.
+
+## What I could not establish
+
+- The real mix on the owner's server: rereads per hour, lane events per window, the number of
+  workspaces in scope, sessions in `run.list`. The seed assumes waiting sessions reread
+  once a minute, the documented upper bound; a server with few verified waits would see a
+  smaller share for cause 1 and a larger one for 2 to 4.
+- `r` and the throughput of the owner's link through the relay, and whether the relay's egress
+  throttle applies.
+- Server time under load (many agents writing events), and lock contention in `run.list`
+  (read from code in [evidence/server-static.md](evidence/server-static.md), not measured).
+- Opening a session with a long transcript, the terminal, and a reconnect after the link
+  drops: read from code only ([evidence/network-static.md](evidence/network-static.md)
+  sections 2.4, 2.5, 2.9); the seeded sessions have no transcripts.
+- Memory growth over a long-open tab; bundle and font loading after #1103.
+
+## What one recording would settle
+
+A HAR of Lanes filling in, from the browser where it is slow: DevTools, Network, tick
+**Preserve log**, reload the dashboard, open **Lanes**, choose **24h**, wait until the
+bars stop changing, then **Export HAR (sanitized)**. It gives the number, size and timing
+of the `workspace.timeline` requests (so `r` and the link's throughput), the share of
+rereads inside them, and the cold-open waterfall.
+
+## The data set and the tools
+
+- [seed/main.go](seed/main.go): 600 sessions over 21 days in 4 workspaces (60% in one),
+  73,462 lane events, fixed by `--seed`; times are offsets back from the moment it runs.
+  Counts by type and window: [evidence/seed-summary.txt](evidence/seed-summary.txt). The 24
+  sessions seeded as running are marked interrupted when the server restarts over them.
+- [measure/world.ts](measure/world.ts) starts the server and gateway from `dist/` and seeds
+  them. The server needs Docker to restart over a store that has members.
+- [measure/lanes-chain.ts](measure/lanes-chain.ts), [lanes-browser.ts](measure/lanes-browser.ts),
+  [journeys.ts](measure/journeys.ts), [server-times.ts](measure/server-times.ts): each file's
+  header says what it measures and how to run it. The delay is added in the browser in
+  front of every `/api/v1` request; 450 ms stands for three round trips of 150 ms.
+
+There was no repeatable way to see a regression in any of this before: the server has one
+Go benchmark (the ACP log cache) and no timing logs or metrics endpoint
+([evidence/server-static.md](evidence/server-static.md) section 5). The smallest one is a
+request-count assertion per journey in the e2e suite; each fix adds the one for its journey.
+
+## Evidence
+
+- [evidence/network-static.md](evidence/network-static.md): transport, limits, compression,
+  and the request inventory per journey, from code (Sonnet subagent; the transport claims
+  in causes 2 and 4 were re-read by the lead).
+- [evidence/server-static.md](evidence/server-static.md): handlers, queries, locks and the
+  event stream, from code (Opus subagent).
+- [evidence/journeys-0ms.txt](evidence/journeys-0ms.txt), [journeys-450ms.txt](evidence/journeys-450ms.txt):
+  requests, bytes and serial waves per journey.
+- [evidence/lanes-chain.txt](evidence/lanes-chain.txt), [lanes-browser.txt](evidence/lanes-browser.txt),
+  [server-times.txt](evidence/server-times.txt), [payload-sizes.txt](evidence/payload-sizes.txt).
+
+The edge's `MaxHTTPConnsPerServer = 8` does not apply to the dashboard: it limits the
+connector path only (`internal/edge/relay/http.go`); the dashboard's calls all ride one SSH
+connection through the relay.
