@@ -207,7 +207,9 @@ func statements(sql string) []string {
 // additive reports whether a statement keeps a database usable by a binary
 // that does not know it: a new table or index, a column that is nullable
 // or has a default, or a write, also by a trigger, only to a table the
-// same step creates. It adds the tables q creates to created.
+// same step creates. A trigger fires on an older binary's writes, so it
+// may not raise and inserts only WHERE NOT EXISTS, so it cannot fail them.
+// It adds the tables q creates to created.
 func additive(q string, created map[string]bool) bool {
 	if m := createdTable.FindStringSubmatch(q); m != nil {
 		created[m[1]] = true
@@ -217,7 +219,10 @@ func additive(q string, created map[string]bool) bool {
 	}
 	if m := trigger.FindStringSubmatch(q); m != nil {
 		for _, body := range statements(m[1]) {
-			if w := writtenTable.FindStringSubmatch(body); w == nil || !created[w[1]] {
+			upper := strings.ToUpper(body)
+			w := writtenTable.FindStringSubmatch(body)
+			if w == nil || !created[w[1]] || strings.Contains(upper, "RAISE") ||
+				(strings.HasPrefix(upper, "INSERT") && !strings.Contains(upper, "WHERE NOT EXISTS")) {
 				return false
 			}
 		}
@@ -258,9 +263,11 @@ func TestFloorKeptOnlyByAdditiveSteps(t *testing.T) {
 		"UPDATE t SET a = ''":                                 false,
 		"INSERT INTO t SELECT a FROM u":                       false,
 		"INSERT INTO n SELECT a FROM u":                       true,
-		"CREATE TRIGGER g AFTER INSERT ON u BEGIN INSERT INTO n VALUES (NEW.a);\nUPDATE n SET a = NEW.a; END": true,
-		"CREATE TRIGGER g AFTER INSERT ON u BEGIN INSERT INTO n VALUES (NEW.a);\nUPDATE u SET a = NEW.a; END": false,
-		"CREATE TRIGGER g AFTER INSERT ON u BEGIN DELETE FROM n; END":                                         false,
+		"CREATE TRIGGER g AFTER INSERT ON u BEGIN INSERT INTO n SELECT NEW.a WHERE NOT EXISTS (SELECT 1 FROM n WHERE a = NEW.a);\nUPDATE n SET a = NEW.a; END": true,
+		"CREATE TRIGGER g AFTER INSERT ON u BEGIN INSERT INTO n VALUES (NEW.a); END":                                                                           false,
+		"CREATE TRIGGER g AFTER INSERT ON u BEGIN UPDATE n SET a = RAISE(ABORT, 'no'); END":                                                                    false,
+		"CREATE TRIGGER g AFTER INSERT ON u BEGIN INSERT INTO n VALUES (NEW.a);\nUPDATE u SET a = NEW.a; END":                                                  false,
+		"CREATE TRIGGER g AFTER INSERT ON u BEGIN DELETE FROM n; END":                                                                                          false,
 	} {
 		if additive(q, map[string]bool{"n": true}) != want {
 			t.Errorf("additive(%q) = %v, want %v", q, !want, want)
