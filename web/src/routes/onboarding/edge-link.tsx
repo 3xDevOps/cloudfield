@@ -350,7 +350,7 @@ export function EdgeSignIn({
         phase.edges.map((e) => e.edge !== picked?.edge && retiringNotice(e.edge, notices))}
       {picked && (
         <ServerPicker
-          key={`${picked.edge} ${claim ?? ''}`}
+          key={`${picked.edge} ${picked.account.id} ${claim ?? ''}`}
           client={client}
           edge={picked.edge}
           account={picked.account}

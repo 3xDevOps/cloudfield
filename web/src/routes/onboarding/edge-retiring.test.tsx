@@ -196,6 +196,25 @@ describe('a signed-in edge that says its address is retiring', () => {
     expect(noticeText()).toContain('says it is retired')
   })
 
+  it('reloads the server list when the same edge is now signed in as another account', async () => {
+    seed()
+    const bob = { ...account, id: 'acct_bbbbbbbbbbbbbbbbbbbbbbbbbb', login: 'bob' }
+    const box = (name: string) => ({ id: serverEdge.server_id, name, role: 'owner', online: true, access_policy: 'account' as const, kind: 'self-hosted' as const })
+    const client = fakeApi({
+      localLinkStatus: vi.fn(async () => unlinked),
+      localEdgeStatus: vi.fn(async (): Promise<EdgeStatus> => ({ edges: [{ edge, account }] })),
+      localEdgeServers: vi.fn(async () => ({ edge, servers: [box('alice box')] })),
+    })
+    render(<OnboardingRoute params={{}} client={client} />)
+    fireEvent.click(await screen.findByRole('radio', { name: 'Cloudfield relay' }))
+    expect(await screen.findByRole('button', { name: 'Link alice box' })).toBeDefined()
+    vi.mocked(client.localEdgeStatus).mockResolvedValue({ edges: [{ edge, account: bob }] })
+    vi.mocked(client.localEdgeServers).mockResolvedValue({ edge, servers: [box('bob box')] })
+    window.dispatchEvent(new Event('focus'))
+    expect(await screen.findByRole('button', { name: 'Link bob box' })).toBeDefined()
+    expect(screen.queryByRole('button', { name: 'Link alice box' })).toBeNull()
+  })
+
   it('goes back to signing in when the chosen edge was signed out elsewhere, and on once signed in again', async () => {
     vi.spyOn(window, 'open').mockReturnValue(null)
     seed()
