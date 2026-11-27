@@ -603,7 +603,8 @@ func TestRetiredCertificates(t *testing.T) {
 	put("auth9.example.org", now.Add(24*time.Hour))
 	put("edge9.example.org", now.Add(-time.Hour))
 	var managed []string
-	get := retiredCertificates(o, cache, func() time.Time { return now }, func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+	clock := now
+	get := retiredCertificates(o, cache, func() time.Time { return clock }, func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 		managed = append(managed, hello.ServerName)
 		return &tls.Certificate{}, nil
 	})
@@ -626,6 +627,20 @@ func TestRetiredCertificates(t *testing.T) {
 	}
 	if _, err := get(ecdsaHello("edge.example.test")); err != nil || !slices.Equal(managed, []string{"edge.example.test"}) {
 		t.Errorf("served host: %v; the manager saw %v, want only edge.example.test", err, managed)
+	}
+	if err := cache.Delete(t.Context(), "auth9.example.org"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := get(ecdsaHello("auth9.example.org")); err != nil {
+		t.Errorf("a certificate read once must be answered from memory after the cache entry is gone: %v", err)
+	}
+	put("edge9.example.org+rsa", now.Add(24*time.Hour))
+	if _, err := get(ecdsaHello("edge9.example.org")); err == nil {
+		t.Error("a certificate missing at the last read was read again before retiredCertRetry")
+	}
+	clock = now.Add(retiredCertRetry)
+	if _, err := get(ecdsaHello("edge9.example.org")); err != nil {
+		t.Errorf("a certificate missing at the last read was not read again after retiredCertRetry: %v", err)
 	}
 }
 

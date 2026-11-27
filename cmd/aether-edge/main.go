@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -274,16 +275,43 @@ func certHosts(o options) []string {
 	return hosts
 }
 
+// retiredCertRetry is the least time before a retired host's certificate
+// that the cache did not hold is read again.
+const retiredCertRetry = 5 * time.Minute
+
 // retiredCertificates answers a handshake for a retired pair's host
 // with a certificate from cache that is valid at now and that the client
 // supports, and fails it when there is none; any other host goes to next.
 // A retired host never reaches the autocert manager, which would order a
-// certificate for it, as it does for a key type it has none of.
+// certificate for it, as it does for a key type it has none of. A
+// certificate read from cache stays in memory; a missing one is read again
+// after retiredCertRetry, so handshakes do not each read the disk.
 func retiredCertificates(o options, cache autocert.Cache, now func() time.Time,
 	next func(*tls.ClientHelloInfo) (*tls.Certificate, error)) func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 	retired := map[string]bool{}
 	for _, r := range o.retired {
 		retired[host(r.SigninOrigin)], retired[host(r.RelayOrigin)] = true, true
+	}
+	type loaded struct {
+		cert *tls.Certificate
+		at   time.Time
+	}
+	var mu sync.Mutex
+	certs := map[string]loaded{}
+	load := func(key string) *tls.Certificate {
+		mu.Lock()
+		defer mu.Unlock()
+		if l, ok := certs[key]; ok && (l.cert != nil || now().Sub(l.at) < retiredCertRetry) {
+			return l.cert
+		}
+		l := loaded{at: now()}
+		if data, err := cache.Get(context.Background(), key); err == nil {
+			if cert, err := tls.X509KeyPair(data, data); err == nil && cert.Leaf != nil {
+				l.cert = &cert
+			}
+		}
+		certs[key] = l
+		return l.cert
 	}
 	return func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
 		name := strings.TrimSuffix(strings.ToLower(hello.ServerName), ".")
@@ -291,16 +319,12 @@ func retiredCertificates(o options, cache autocert.Cache, now func() time.Time,
 			return next(hello)
 		}
 		for _, key := range []string{name, name + "+rsa"} {
-			data, err := cache.Get(context.Background(), key)
-			if err != nil {
+			cert := load(key)
+			if cert == nil || now().Before(cert.Leaf.NotBefore) || !now().Before(cert.Leaf.NotAfter) {
 				continue
 			}
-			cert, err := tls.X509KeyPair(data, data)
-			if err != nil || cert.Leaf == nil || now().Before(cert.Leaf.NotBefore) || !now().Before(cert.Leaf.NotAfter) {
-				continue
-			}
-			if hello.SupportsCertificate(&cert) == nil {
-				return &cert, nil
+			if hello.SupportsCertificate(cert) == nil {
+				return cert, nil
 			}
 		}
 		return nil, fmt.Errorf("%s is the host of a retired pair and the ACME cache holds no unexpired certificate for it that the client supports; the edge orders none", name)
