@@ -826,6 +826,35 @@ func TestAnAddedLoginSessionsConfigVolumeGoesWithItsContainer(t *testing.T) {
 	})
 }
 
+// A session on a teammate's default login, where nobody added a login,
+// mounted its configuration copy without a volume: it ends as before,
+// asking the runtime to remove none.
+func TestASharedDefaultSessionsConfigCopyGoesWithoutAVolume(t *testing.T) {
+	e := newShareEnv(t, nil)
+	writeHomeFiles(t, e.ownerHome, ".claude/.credentials.json")
+	run, err := e.launch(t, "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the session's container", func() bool { return e.rt.byName(string(run.ID)) != nil })
+	dir := filepath.Join(e.sched.accountConfigRoot(), string(run.ID))
+	if _, err := os.Lstat(dir); err != nil {
+		t.Fatalf("the session's configuration copy: %v", err)
+	}
+	if err := e.sched.Kill(t.Context(), run.ID, e.member.ID); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the configuration copy removed", func() bool {
+		_, statErr := os.Lstat(dir)
+		return errors.Is(statErr, fs.ErrNotExist)
+	})
+	e.rt.mu.Lock()
+	defer e.rt.mu.Unlock()
+	if len(e.rt.removedVolumes) != 0 {
+		t.Fatalf("volumes removed = %v; want none", e.rt.removedVolumes)
+	}
+}
+
 // A login a merge gave another member moves to them only once the volume
 // of its old path is gone: moved, its directory no longer names that
 // volume, so a later reconcile could not remove it.

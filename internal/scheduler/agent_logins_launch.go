@@ -130,6 +130,11 @@ func (s *Scheduler) addedLoginMounts(run *domain.Run, launcher domain.MemberID, 
 	if err != nil {
 		return nil, err
 	}
+	if purpose != EnvironmentPurposeLogin {
+		if err = writeFileIn(configDir, accountConfigVolume, nil); err != nil {
+			return nil, fmt.Errorf("scheduler: mark the session's account config volume: %w", err)
+		}
+	}
 	for i, m := range config {
 		if !m.ReadOnly {
 			config[i].HostPath, config[i].Subpath = filepath.Dir(m.HostPath), filepath.Base(m.HostPath)
