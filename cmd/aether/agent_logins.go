@@ -247,7 +247,7 @@ func addRefused(err error, agent string) error {
 	if !errors.As(err, &rpc) || rpc.Code != protocol.CodeConflict || !strings.Contains(rpc.Message, "is still running") {
 		return err
 	}
-	const ends = "that sign-in ends by itself 15 minutes after its terminal opened, or 10 minutes after it started if none did"
+	const ends = "that sign-in ends by itself about 15 minutes after its terminal opened, or 10 minutes after it was started if none did"
 	if ids := loginIDText.FindAllString(rpc.Message, -1); len(ids) > 0 {
 		return fmt.Errorf("%w\n%s; to finish it sooner, return to it with:\n  %s", err, ends, attachCommand(agent, ids[len(ids)-1]))
 	}

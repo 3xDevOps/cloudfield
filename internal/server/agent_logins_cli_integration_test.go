@@ -482,7 +482,7 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 	shown, code = ada.onTerminal(nil, "agent", "login", "claude", "--as", "other")
 	t.Logf("$ cloudfield agent login claude --as other\n%s", shown)
 	if code == 0 || !strings.Contains(shown, `the sign-in of login "later" (`+attach[2]+`) is still running; finish it first`+"\n"+
-		"that sign-in ends by itself 15 minutes after its terminal opened, or 10 minutes after it started if none did; "+
+		"that sign-in ends by itself about 15 minutes after its terminal opened, or 10 minutes after it was started if none did; "+
 		"to finish it sooner, return to it with:\n  "+attach[1]+"\n") {
 		t.Fatalf("a second add while one runs = %d:\n%s", code, shown)
 	}

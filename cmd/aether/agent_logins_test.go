@@ -329,7 +329,7 @@ func TestAddedLoginSignInNeedsAServerThatKeepsLogins(t *testing.T) {
 }
 
 func TestAddRefusedNamesTheRunningSignInsAttachLine(t *testing.T) {
-	const ends = "that sign-in ends by itself 15 minutes after its terminal opened, or 10 minutes after it started if none did; "
+	const ends = "that sign-in ends by itself about 15 minutes after its terminal opened, or 10 minutes after it was started if none did; "
 	for _, tc := range []struct{ message, want string }{
 		{`the sign-in of login "work" (lgn-test1) is still running; finish it first`,
 			"rpc error -32003: the sign-in of login \"work\" (lgn-test1) is still running; finish it first\n" + ends +
