@@ -63,7 +63,7 @@ func TestMigrationFromVersion1(t *testing.T) {
 		t.Fatalf("schema = %+v, %v; want version %d at floor 1", got, err, SchemaVersion())
 	}
 	if names := backupsIn(t, dir); len(names) != 1 || !strings.HasPrefix(names[0], fmt.Sprintf("edge-v1-v%d-", SchemaVersion())) {
-		t.Fatalf("backups = %v, want one taken before migrating 1 to 2", names)
+		t.Fatalf("backups = %v, want one taken before migrating 1 to %d", names, SchemaVersion())
 	}
 	for _, q := range []string{
 		`SELECT signin_origin FROM devices WHERE id = 'dev'`,
