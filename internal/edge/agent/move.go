@@ -163,10 +163,13 @@ func (a *Agent) Move(ctx context.Context, target string, held *HeldPin, cmds Com
 	if err != nil {
 		return Moved{}, err
 	}
-	if n, ok := noticeFor(slices.Concat(first.notices, second.notices), from); ok {
-		moved.Retired = moved.Retired || n.State == edgeproto.NoticeRetired
-		moved.Retiring = n.State == edgeproto.NoticeRetiring
+	for _, e := range []enrollment{first, second} {
+		if n, ok := noticeFor(e.notices, from); ok {
+			moved.Retired = moved.Retired || n.State == edgeproto.NoticeRetired
+			moved.Retiring = moved.Retiring || n.State == edgeproto.NoticeRetiring
+		}
 	}
+	moved.Retiring = moved.Retiring && !moved.Retired
 	return moved, nil
 }
 

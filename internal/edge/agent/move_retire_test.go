@@ -466,6 +466,26 @@ func TestMoveReadsBothProbesNotices(t *testing.T) {
 	}
 }
 
+// When one probe names the address in use retiring and the other retired,
+// it is retired, whichever probe said which.
+func TestMoveTakesRetiredOverRetiring(t *testing.T) {
+	from := newFakeEdge(t)
+	to := newFakeEdgeWithKey(t, from.priv)
+	for _, e := range []*fakeEdge{from, to} {
+		e.relayOrigins = []string{from.origin, to.origin}
+	}
+	retiring := edgeproto.Notices{{State: edgeproto.NoticeRetiring, Origin: from.origin, Replacement: to.origin}}
+	retired := edgeproto.Notices{{State: edgeproto.NoticeRetired, Origin: from.origin, Replacement: to.origin}}
+	for _, order := range [][2]edgeproto.Notices{{retiring, retired}, {retired, retiring}} {
+		signedNotices(from, from.priv, order[0])
+		signedNotices(to, from.priv, order[1])
+		got, err := moveHeld(t, moveAgentAt(t, from.origin, from.pub), to.origin)
+		if want := (Moved{To: to.origin, Retired: true}); err != nil || got != want {
+			t.Errorf("first probe %s, second %s: %+v, %v; want %+v", order[0][0].State, order[1][0].State, got, err, want)
+		}
+	}
+}
+
 // Move enrolls only under the key pinned when it started and never pins
 // one: a pin changed or removed while it runs refuses the move, and
 // WhilePinned refuses to write under another pin.
