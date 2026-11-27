@@ -77,6 +77,9 @@ type Client struct {
 	dir    string
 	http   *http.Client
 
+	// seen is whether the notices of this client's answers go to Seen.
+	seen bool
+
 	mu sync.Mutex
 	// retiring is the notice of the edge's latest answer.
 	retiring *Retiring
@@ -86,16 +89,28 @@ type Client struct {
 // the Aether config directory, which holds the device key and the device
 // tokens.
 func New(dir, edgeURL string) (*Client, error) {
+	c, err := NewWith(dir, edgeURL, HTTPClient())
+	if err == nil {
+		c.seen = true
+	}
+	return c, err
+}
+
+// HTTPClient is a client for edge requests: the edge client's transport,
+// and redirects refused.
+func HTTPClient() *http.Client {
+	return &http.Client{Transport: newTransport(nil), CheckRedirect: noRedirect}
+}
+
+// NewWith is New with hc, an HTTPClient its caller shares between
+// clients and closes, for a reader of its own: the notices of its
+// client's answers do not go to Seen.
+func NewWith(dir, edgeURL string, hc *http.Client) (*Client, error) {
 	origin, err := edgeproto.Origin(edgeURL)
 	if err != nil {
 		return nil, fmt.Errorf("edge URL %q: %w", edgeURL, err)
 	}
-	return &Client{
-		origin: origin,
-		host:   HostOf(origin),
-		dir:    dir,
-		http:   &http.Client{Transport: newTransport(nil), CheckRedirect: noRedirect},
-	}, nil
+	return &Client{origin: origin, host: HostOf(origin), dir: dir, http: hc}, nil
 }
 
 // Choose returns the client for edgeURL. An empty edgeURL means the only
@@ -186,6 +201,10 @@ type RefusedError struct {
 	// protocol version. Without either it came from something in
 	// between, such as a captive portal, a proxy or a firewall.
 	FromEdge bool
+	// Retired is the replacement relay origin a 410 from a retired
+	// address named, empty unless the answer carried the edge's protocol
+	// version and the origin is a printable notice origin.
+	Retired string
 }
 
 func (e *RefusedError) Error() string {
@@ -210,7 +229,8 @@ func (c *Client) refusal(op, origin string, resp *http.Response, body []byte) *R
 	status := resp.StatusCode
 	msg := http.StatusText(status)
 	fromEdge := resp.Header.Get(edgeproto.HeaderVersion) != ""
-	if json.Unmarshal(body, &eb) == nil && eb.Error != "" {
+	decoded := json.Unmarshal(body, &eb) == nil
+	if decoded && eb.Error != "" {
 		msg, fromEdge = eb.Error, true
 	} else if shown := strings.TrimSpace(string(body)); shown != "" {
 		msg += ": " + shown
@@ -218,15 +238,20 @@ func (c *Client) refusal(op, origin string, resp *http.Response, body []byte) *R
 	if len(msg) > maxShownText {
 		msg = msg[:maxShownText] + "..."
 	}
-	return &RefusedError{Edge: HostOf(origin), URL: c.origin, Op: op, Status: status, Message: clean(msg), FromEdge: fromEdge}
+	var retired string
+	if status == http.StatusGone && decoded && resp.Header.Get(edgeproto.HeaderVersion) != "" && eb.Retired != nil && Clean(eb.Retired.Replacement) == eb.Retired.Replacement && edgeproto.NoticeOrigin(eb.Retired.Replacement) {
+		retired = eb.Retired.Replacement
+	}
+	return &RefusedError{Edge: HostOf(origin), URL: c.origin, Op: op, Status: status, Message: Clean(msg), FromEdge: fromEdge, Retired: retired}
 }
 
-// clean replaces control characters and invalid UTF-8 in text the edge
-// sent before it reaches a terminal.
-func clean(s string) string {
+// Clean replaces control and format characters, line and paragraph
+// separators and invalid UTF-8 in text the edge sent before it reaches a
+// terminal or a page.
+func Clean(s string) string {
 	s = strings.ToValidUTF8(s, "?")
 	return strings.Map(func(r rune) rune {
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
 			return '?'
 		}
 		return r
@@ -244,7 +269,7 @@ func checkVersion(host string, resp *http.Response) error {
 	}
 	n, err := strconv.Atoi(v)
 	if err != nil {
-		return fmt.Errorf("%s sent protocol version %q", host, clean(v))
+		return fmt.Errorf("%s sent protocol version %q", host, Clean(v))
 	}
 	if err := edgeproto.CheckVersion(n); err != nil {
 		return fmt.Errorf("%s speaks edge protocol %d: %w", host, n, err)
@@ -363,5 +388,5 @@ func (c *Client) Servers(ctx context.Context) ([]edgeproto.ServerInfo, error) {
 // printable reports whether text from the edge is safe to print: short,
 // valid UTF-8, and free of control characters.
 func printable(s string) bool {
-	return len(s) <= 256 && clean(s) == s
+	return len(s) <= 256 && Clean(s) == s
 }

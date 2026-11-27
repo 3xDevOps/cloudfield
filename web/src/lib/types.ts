@@ -1417,9 +1417,18 @@ export interface EdgeLogin {
   error?: string
 }
 
+/** edge.status's `retiring`: what an edge address says of itself, that it
+ * is retiring or, as a refusal, retired, and the address to use instead.
+ * Nothing authenticates it. */
+export interface EdgeStatusNotice {
+  state: 'retiring' | 'retired'
+  replacement: string
+  date?: string
+}
+
 /** edge.status: every edge this machine is signed in to. */
 export interface EdgeStatus {
-  edges: { edge: string; signin_origin?: string; account?: EdgeAccount; error?: string }[]
+  edges: { edge: string; signin_origin?: string; account?: EdgeAccount; error?: string; retiring?: EdgeStatusNotice }[]
   login?: EdgeLogin
 }
 

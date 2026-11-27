@@ -61,11 +61,12 @@ function unreachableSentence(
   link: Pick<LinkStatus, 'addr' | 'edge_url' | 'server_id'> | null,
   approvalCode: string | null,
   at: Partial<EdgePath> | null = null,
+  retiredText: string | null = null,
 ): string {
   const edge = at?.edge || (link?.edge_url ? edgeHost(link.edge_url) : null)
   const id = at?.server_id || link?.server_id || link?.addr
   const server = id ? `server ${id}` : 'the server'
-  const sentence = kindSentence(kind, edge, server, link, approvalCode)
+  const sentence = kindSentence(kind, edge, server, link, approvalCode, retiredText)
   if (!at?.online?.length) return sentence
   const online = at.online.map((s) => (s.name ? `${s.name} (${s.id})` : s.id)).join(', ')
   return `${sentence}; ${edge ?? 'the edge'} sees ${online} online, and this dashboard is linked to ${server}`
@@ -77,6 +78,7 @@ function kindSentence(
   server: string,
   link: Pick<LinkStatus, 'edge_url'> | null,
   approvalCode: string | null,
+  retiredText: string | null,
 ): string {
   switch (kind) {
     case 'network':
@@ -96,7 +98,9 @@ function kindSentence(
     case 'edge-not-claimed':
       return `${server} is connected to ${edge ?? 'the edge'} and is finishing its claim - retrying`
     case 'edge-refused':
-      return `${edge ?? 'the edge'} refused the connection to ${server}`
+      return retiredText
+        ? `${edge ?? 'the edge'} refused the connection to ${server}: ${retiredText}`
+        : `${edge ?? 'the edge'} refused the connection to ${server}`
     case 'signed-out':
       return `signed out of ${edge ?? 'the edge'} - run ${link?.edge_url ? `aether login --edge ${link.edge_url}` : 'aether login'}`
     case 'not-member':
@@ -125,11 +129,12 @@ export function useConnectionProblem(): string | null {
   const unreachable = useStore((s) => s.unreachable)
   const at = useStore((s) => s.unreachableAt)
   const approvalCode = useStore((s) => s.approvalCode)
+  const retiredText = useStore((s) => s.retiredText)
   const link = useStore((s) => s.linkStatus)
   if (link?.server_configured === false) return null
   if (unreachable) {
     const layer = at?.layer ? pathLayer[at.layer] : layerOf(unreachable, link)
-    return `${layer} failed · ${unreachableSentence(unreachable, link, approvalCode, at)}`
+    return `${layer} failed · ${unreachableSentence(unreachable, link, approvalCode, at, retiredText)}`
   }
   if (connection === 'live' || connection === 'connecting') return null
   return connectionLabel[connection]

@@ -123,7 +123,12 @@ function edgeHop(detail: string, refusal: EdgeRefusal | undefined, store: RootSt
 function noteUnreachable(store: RootStore, client: Api, err: unknown, signal: AbortSignal | undefined): void {
   if (signal?.aborted) return
   const data = err instanceof ApiError ? err.data : undefined
-  recordUnreachable(store, client, classifyUnreachable(err, store), data?.refusal?.approval_code, measuredAt(store, data))
+  recordUnreachable(store, client, classifyUnreachable(err, store), data?.refusal?.approval_code, measuredAt(store, data), retiredText(data))
+}
+
+/** The edge's own text when the address dialed refused as retired. */
+function retiredText(data: ApiErrorData | undefined): string | undefined {
+  return data?.retired ? data.refusal?.refusal : undefined
 }
 
 /** The kinds that refuse this member or device access, not just a route to it. */
@@ -139,9 +144,10 @@ function recordUnreachable(
   kind: UnreachableKind | null,
   approvalCode: string | undefined,
   at: Partial<EdgePath> | undefined,
+  retiredText?: string,
 ): void {
   if (kind && accessRefusals.has(kind)) refuseSnapshot(store)
-  store.getState().setUnreachable(kind, approvalCode, at)
+  store.getState().setUnreachable(kind, approvalCode, at, retiredText)
   const linked = store.getState().linkStatus?.server_id
   if (!at?.server_id || !linked || at.server_id === linked) return
   if (!store.getState().capabilities?.local?.includes('link.status')) return
@@ -152,7 +158,7 @@ function recordUnreachable(
       if (status.server_id === s.linkStatus?.server_id) return
       s.setLinkStatus(status)
       s.reconnect()
-      if (status.server_id === at.server_id) s.setUnreachable(kind, approvalCode, at)
+      if (status.server_id === at.server_id) s.setUnreachable(kind, approvalCode, at, retiredText)
     })
     .catch(ignore)
 }
@@ -1010,7 +1016,7 @@ export function connect(store: RootStore, client: Api = api): () => void {
         const s = store.getState()
         const refusal = data?.refusal
         const hop = kind === 'server' ? edgeHop(detail, refusal, store) ?? kind : kind
-        recordUnreachable(store, client, hop, refusal?.approval_code, measuredAt(store, data))
+        recordUnreachable(store, client, hop, refusal?.approval_code, measuredAt(store, data), retiredText(data))
         // A refused subscribe never goes live, so nothing else records this.
         // A dead token already recorded is more precise than a dead hop.
         // A painted snapshot stays on screen with the error written beside
@@ -1064,7 +1070,7 @@ export function connect(store: RootStore, client: Api = api): () => void {
       // reason while the stream keeps retrying.
       const { refused } = probe
       const kind = refusalKind(refused, store)
-      recordUnreachable(store, client, kind, refused.data?.refusal?.approval_code, measuredAt(store, refused.data))
+      recordUnreachable(store, client, kind, refused.data?.refusal?.approval_code, measuredAt(store, refused.data), retiredText(refused.data))
       // The client prefixes its own request path; the gateway's words are
       // what the page shows.
       // An unreachable server keeps a painted snapshot on screen; an access
