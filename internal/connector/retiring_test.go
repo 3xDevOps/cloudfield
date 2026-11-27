@@ -544,3 +544,32 @@ func TestToolResultNoticeAtUniversalURLNeedsGitHub(t *testing.T) {
 		t.Fatalf("without GitHub the result has %d content blocks, want 1: the edge does not offer the universal URL", n)
 	}
 }
+
+func TestToolResultWithoutANoteReadsNoticesOncePerMinute(t *testing.T) {
+	e := newEnv(t)
+	c := e.connect(t)
+	e.edge.version.Store(int64(edgeproto.VersionRelayOrigin))
+	e.edge.set([]string{e.origin, newRelay}, stored(false, edgeproto.Notice{State: edgeproto.NoticeRetired, Origin: e.origin, Replacement: newRelay}))
+	call := func() {
+		t.Helper()
+		res, err := c.session.CallTool(t.Context(), &mcp.CallToolParams{Name: "aether_list_workspaces"})
+		if err != nil || res.IsError || len(res.Content) != 1 {
+			t.Fatalf("aether_list_workspaces = %+v %v, want one content block", res, err)
+		}
+	}
+	// Connecting read the consent page while there was no notice.
+	e.skew.Add(int64(noticeReadEvery))
+	before := e.edge.reads.Load()
+	call()
+	call()
+	e.skew.Add(int64(noticeReadEvery - time.Second))
+	call()
+	if got := e.edge.reads.Load() - before; got != 1 {
+		t.Fatalf("read the notices %d times within a minute, want 1", got)
+	}
+	e.skew.Add(int64(time.Second))
+	call()
+	if got := e.edge.reads.Load() - before; got != 2 {
+		t.Fatalf("read the notices %d times after a minute, want 2", got)
+	}
+}

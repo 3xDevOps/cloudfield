@@ -973,6 +973,8 @@ type edgeAt struct {
 	// dropAfter, when set, is how many more EdgeVersion reads see the
 	// edge before it drops to version 0.
 	dropAfter atomic.Int64
+	// reads counts Notices calls.
+	reads atomic.Int64
 }
 
 func (e *edgeAt) ConnectorOrigins() []string {
@@ -1001,6 +1003,7 @@ func (e *edgeAt) RelayOrigins() []string {
 }
 
 func (e *edgeAt) Notices() (edgeagent.StoredNotices, error) {
+	e.reads.Add(1)
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.notices, e.err
