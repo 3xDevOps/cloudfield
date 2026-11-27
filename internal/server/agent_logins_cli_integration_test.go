@@ -256,8 +256,19 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 		t.Fatalf("server.New: %v", err)
 	}
 	runCtx, stop := context.WithCancel(ctx)
-	defer stop()
-	go func() { _ = srv.Run(runCtx) }()
+	ran := make(chan error, 1)
+	go func() { ran <- srv.Run(runCtx) }()
+	defer func() {
+		stop()
+		select {
+		case err := <-ran:
+			if err != nil {
+				t.Errorf("server.Run: %v", err)
+			}
+		case <-time.After(30 * time.Second):
+			t.Error("server did not shut down")
+		}
+	}()
 	addr := waitSSHAddr(t, srv)
 
 	keyPath, signer := writeClientKey(t)
@@ -302,10 +313,22 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 		"1  default  -     -     -      -             5h 12%  on         on      -       0\n" {
 		t.Fatalf("agent logins with only the default login:\n%s", out)
 	}
-	if out, stderr, code := ada.cli("agent", "logins", "claude", "--json"); code != 0 || !strings.Contains(out, `"id":"default"`) || !strings.Contains(out, `"used_percent":12`) {
-		t.Fatalf("agent logins claude --json = %d %q %q", code, out, stderr)
+	out, stderr, code := ada.cli("agent", "logins", "claude", "--json")
+	var listed []struct {
+		ID    string `json:"id"`
+		Name  string `json:"name"`
+		Usage struct {
+			Windows []struct {
+				UsedPercent float64 `json:"used_percent"`
+			} `json:"windows"`
+		} `json:"usage"`
+		Sessions []string `json:"sessions"`
 	}
-	_, stderr, code := ada.cli("agent", "login", "claude")
+	if err := json.Unmarshal([]byte(out), &listed); code != 0 || err != nil || len(listed) != 1 || listed[0].ID != "default" || listed[0].Name != "default" ||
+		len(listed[0].Usage.Windows) != 1 || listed[0].Usage.Windows[0].UsedPercent != 12 || listed[0].Sessions == nil || len(listed[0].Sessions) != 0 {
+		t.Fatalf("agent logins claude --json = %d %q %q (%v); want one document: the default login, 12%% used, no sessions", code, out, stderr, err)
+	}
+	_, stderr, code = ada.cli("agent", "login", "claude")
 	if code == 0 || !strings.Contains(stderr, "claude signs in with claude auth login, which needs typed input, so it needs a terminal. The human runs this in their own terminal:\n  aether agent login claude\n") {
 		t.Fatalf("agent login claude without a terminal = %d %q; want today's instruction", code, stderr)
 	}
@@ -430,7 +453,7 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 		}
 	}
 
-	out, stderr, code := ada.cli("agent", "logins", "remove", "job")
+	out, stderr, code = ada.cli("agent", "logins", "remove", "job")
 	t.Logf("$ cloudfield agent logins remove job\n%s", out)
 	if code != 0 || out != "removed login job and its files from Cloudfield; this does not sign it out at Anthropic\n" {
 		t.Fatalf("agent logins remove job = %d %q %q", code, out, stderr)
@@ -458,11 +481,19 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 		"to finish it sooner, run the cloudfield agent login claude --attach <login-id> line it printed when it started\n") {
 		t.Fatalf("a second add while one runs = %d:\n%s", code, shown)
 	}
-	shown, code = ada.onTerminal(map[string]string{"Paste code here": "test-code\r"}, "agent", "login", "claude", "--attach", attach[2])
+	rt.mu.Lock()
+	typed := len(rt.codes)
+	rt.mu.Unlock()
+	shown, code = ada.onTerminal(map[string]string{"Paste code here": "test-reattach-code\r"}, "agent", "login", "claude", "--attach", attach[2])
 	t.Logf("$ %s\n%s", attach[1], shown)
 	if code != 0 || !strings.Contains(shown, "added login later: subscription, plan max, ada@later.example.test, organisation Test Org\n") {
 		t.Fatalf("%s = %d:\n%s", attach[1], code, shown)
 	}
+	rt.mu.Lock()
+	if len(rt.codes) != typed+1 || rt.codes[typed] != "test-reattach-code" {
+		t.Errorf("the sign-in returned to read %q after %d codes; want the code typed on the reattached terminal", rt.codes, typed)
+	}
+	rt.mu.Unlock()
 	shown, code = ada.onTerminal(nil, "agent", "login", "claude", "--attach", attach[2])
 	t.Logf("$ %s   (again, after it ended)\n%s", attach[1], shown)
 	if code != 0 || shown != "returning to the sign-in of login "+attach[2]+": claude auth login runs in a container of its own; follow its prompts\n"+
@@ -531,13 +562,16 @@ func TestIntegrationSessionOnANamedLogin(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("sessions = %d %q", code, stderr)
 	}
+	listedRow := map[string]string{}
 	for _, row := range strings.Split(out, "\n") {
-		fields := strings.Fields(row)
-		switch {
-		case strings.HasPrefix(row, onSecond) && !strings.Contains(row, " Ada, login second "):
-			t.Errorf("the session on login second lists %q; want its account and login", row)
-		case strings.HasPrefix(row, onDefault) && (len(fields) < 5 || fields[4] != "Ada"):
-			t.Errorf("the session on the default login lists %q; want its account as before", row)
+		if fields := strings.Fields(row); len(fields) > 0 {
+			listedRow[fields[0]] = row
 		}
+	}
+	if row, ok := listedRow[onSecond]; !ok || !strings.Contains(row, " Ada, login second ") {
+		t.Errorf("the session on login second lists %q (listed: %v); want its account and login", row, ok)
+	}
+	if row, ok := listedRow[onDefault]; !ok || len(strings.Fields(row)) < 5 || strings.Fields(row)[4] != "Ada" || strings.Contains(row, "Ada, login") {
+		t.Errorf("the session on the default login lists %q (listed: %v); want its account as before", row, ok)
 	}
 }
