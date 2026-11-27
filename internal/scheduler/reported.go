@@ -270,16 +270,6 @@ func (s *Scheduler) FinishReported(ctx context.Context, run domain.RunID, report
 	return nil
 }
 
-// TurnStartedAt is when run's current turn started, zero when unknown.
-func (s *Scheduler) TurnStartedAt(run domain.RunID) time.Time {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if entry := s.runs[run]; entry != nil {
-		return entry.turnStartedAt
-	}
-	return time.Time{}
-}
-
 // reportSuperseded fences an outbox hand-off loaded before a newer reservation.
 // Direct lifecycle callers may not have a coordination row.
 func (s *Scheduler) reportSuperseded(ctx context.Context, id string) (bool, error) {
@@ -336,6 +326,11 @@ func (s *Scheduler) recordIdleReportLocked(ctx context.Context, entry *supervise
 		// Only after the fences: a refusal releases the report's key, which
 		// an older report must keep.
 		return coord.ErrHumanOpen
+	case strings.HasPrefix(reason, answeredReasonPrefix) && reportedIdleReason(entry.idleReason) &&
+		!entry.turnStartedAt.IsZero() && !entry.idleReportAt.Before(entry.turnStartedAt):
+		// The turn already reported success or failure, which saying it
+		// replied does not take back.
+		return nil
 	}
 	old := entry.sidecar()
 	entry.idleReason, entry.idleShown = reason, false

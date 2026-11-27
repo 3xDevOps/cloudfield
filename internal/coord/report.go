@@ -45,8 +45,6 @@ type OutcomeSink interface {
 	// empty for agents.
 	ReportWaiting(ctx context.Context, run domain.RunID, id, waitingFor, summary string, at time.Time) error
 	ReportAnswered(ctx context.Context, run domain.RunID, id, summary string, at time.Time) error
-	// TurnStartedAt is when run's current turn started, zero when unknown.
-	TurnStartedAt(run domain.RunID) time.Time
 }
 
 // UntilRegistry keeps the conditions a run waits on: the watch service.
@@ -173,14 +171,9 @@ func (s *Service) reportState(ctx context.Context, run domain.RunID, p protocol.
 		nextAction = "answer the agent's question"
 		err = s.cfg.Outcomes.ReportNeedsInput(ctx, run, id, reportText(summary), receipt.CreatedAt)
 	case protocol.CoordOutcomeAnswered:
-		// After a success or failure in the same turn, saying it replied
-		// takes nothing back; nor does a retry of a report that took effect,
-		// which may arrive in a later turn.
-		final := receipt.Applied
-		if !final && self.Mode.Interactive() {
-			final, err = s.reportedFinal(ctx, run, receipt.CreatedAt)
-		}
-		if err == nil && !final {
+		// A retry of a report that took effect may arrive in a later turn,
+		// where the scheduler would take it for that turn's.
+		if !receipt.Applied {
 			err = s.cfg.Outcomes.ReportAnswered(ctx, run, id, reportReason(summary), receipt.CreatedAt)
 		}
 	default:
@@ -236,31 +229,6 @@ func (s *Service) reportState(ctx context.Context, run domain.RunID, p protocol.
 		return protocol.CoordReportResult{}, internalError(method, fmt.Errorf("publish report timeline: %w", err))
 	}
 	return protocol.CoordReportResult{Outcome: p.Outcome, Summary: summary, NextAction: nextAction, Resolved: resolved}, nil
-}
-
-// repeatWindow is how long after a report another one can be its repeat.
-// Claude Code's second model call after a report follows within seconds.
-var repeatWindow = 2 * time.Minute
-
-// reportedFinal reports whether run's current turn reported, less than
-// repeatWindow before at, a success or failure that still stands, and no
-// needs-input, waiting or answered report since.
-func (s *Service) reportedFinal(ctx context.Context, run domain.RunID, at time.Time) (bool, error) {
-	since := s.cfg.Outcomes.TurnStartedAt(run)
-	if since.IsZero() {
-		return false, nil
-	}
-	turn, err := s.cfg.Mail.CoordReportsSince(ctx, run, since)
-	if err != nil || len(turn) == 0 {
-		return false, err
-	}
-	last := turn[len(turn)-1]
-	if last.SupersededAt != nil || last.Outcome == store.CoordOutcomeBlocked || at.Sub(last.CreatedAt) >= repeatWindow {
-		return false, nil
-	}
-	// A needs-input or waiting report since then is the session's state.
-	state, err := s.cfg.Mail.CoordStateReportedSince(ctx, run, last.CreatedAt)
-	return state == "", err
 }
 
 // reusedKey refuses a report whose key another report of the run used.

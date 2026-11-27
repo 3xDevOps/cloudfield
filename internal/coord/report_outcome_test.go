@@ -29,8 +29,6 @@ type recordingOutcomes struct {
 	err        error
 	calls      []outcomeCall
 	reportedAt []time.Time
-	// since answers TurnStartedAt.
-	since time.Time
 }
 
 func (o *recordingOutcomes) FinishReported(_ context.Context, run domain.RunID, reportID string, outcome domain.RunStatus, reportedAt time.Time) error {
@@ -76,8 +74,6 @@ func (o *recordingOutcomes) ReportWaiting(_ context.Context, run domain.RunID, i
 	o.calls = append(o.calls, outcomeCall{run: run, reason: strings.TrimSpace("waiting: "+waitingFor) + " " + summary, reportID: id})
 	return nil
 }
-
-func (o *recordingOutcomes) TurnStartedAt(domain.RunID) time.Time { return o.since }
 
 func (o *recordingOutcomes) ReportAnswered(_ context.Context, run domain.RunID, id, summary string, at time.Time) error {
 	o.mu.Lock()

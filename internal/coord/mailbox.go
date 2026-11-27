@@ -821,12 +821,6 @@ func (s *Service) enqueueChildReport(ctx context.Context, report *store.CoordRep
 	if target == nil || target.WorkspaceID != report.WorkspaceID || target.ID == report.RunID {
 		return errors.New("subsession report parent is outside the reporting subsession's workspace")
 	}
-	if repeat, err := s.repeatsLastMail(ctx, report, target.ID); err != nil || repeat {
-		if err != nil {
-			return fmt.Errorf("enqueue subsession report: %w", err)
-		}
-		return nil
-	}
 	msg := &store.RunMessage{
 		WorkspaceID: report.WorkspaceID, FromRun: report.RunID, ToRun: target.ID,
 		Kind: store.RunMessageKindMessage, Body: report.Summary, CorrelationID: report.ID,
@@ -843,37 +837,6 @@ func (s *Service) enqueueChildReport(ctx context.Context, report *store.CoordRep
 		s.wakeInbox(target.ID)
 	}
 	return nil
-}
-
-// repeatsLastMail reports whether the newest message report's run sent
-// parent, still in its inbox or read, is an earlier report that says the same:
-// the same outcome and summary, made less than repeatWindow before report,
-// with no mail read by the run since. The parent is then told nothing new.
-func (s *Service) repeatsLastMail(ctx context.Context, report *store.CoordReport, parent domain.RunID) (bool, error) {
-	sent, err := s.cfg.Mail.LastSentRunMessages(ctx, report.RunID)
-	if err != nil {
-		return false, err
-	}
-	last := sent[parent]
-	if last == nil || last.RetiredAt != nil || last.Body != report.Summary || last.CorrelationID == report.ID {
-		return false, nil
-	}
-	prior, err := s.cfg.Mail.GetCoordReport(ctx, last.CorrelationID)
-	if errors.Is(err, store.ErrNotFound) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if prior.RunID != report.RunID || prior.Outcome != report.Outcome ||
-		!prior.CreatedAt.Before(report.CreatedAt) || report.CreatedAt.Sub(prior.CreatedAt) >= repeatWindow {
-		return false, nil
-	}
-	read, err := s.cfg.Mail.LastRunMessageDeliveredAt(ctx, report.RunID)
-	if err != nil {
-		return false, err
-	}
-	return prior.CreatedAt.After(read), nil
 }
 
 // publishReportEvidence persists any child-report inbox message, then

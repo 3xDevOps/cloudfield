@@ -150,7 +150,8 @@ func (e *reportRepeatEnv) settle(runs ...domain.RunID) {
 
 // TestIntegrationRepeatReports: what a parent and a person get when a
 // subsession reports more than once in a turn, reports only that it
-// replied, or sends its findings as mail before its report.
+// replied, or sends its findings as mail before its report. Every success,
+// failure or blocked report is mailed: a second one cannot be told from news.
 func TestIntegrationRepeatReports(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Minute)
 	defer cancel()
@@ -162,14 +163,11 @@ func TestIntegrationRepeatReports(t *testing.T) {
 	// run plays script, which makes reports of them, as a subsession's turn
 	// and returns the mail it left its parent, the turns that mail started
 	// there, and itself. Every report must have been accepted.
-	run := func(t *testing.T, script string, reports int, wait time.Duration, started ...func(parent, child domain.RunID)) ([]string, int, protocol.Run) {
+	run := func(t *testing.T, script string, reports int, wait time.Duration) ([]string, int, protocol.Run) {
 		t.Helper()
 		e.t = t
 		parent, child := e.family(script)
 		defer e.kill(parent, child)
-		for _, fn := range started {
-			fn(parent, child)
-		}
 		said := assistantText(waitTurns(ctx, t, e.srv, child, 2))
 		if got := strings.Count(said, `"report_id"`) - 1; got != reports {
 			t.Fatalf("%d of %d reports accepted: %s", got, reports, said)
@@ -179,39 +177,10 @@ func TestIntegrationRepeatReports(t *testing.T) {
 		return e.mail(child, parent), e.wakes(parent), e.get(child)
 	}
 
-	t.Run("the same success again is sent once", func(t *testing.T) {
-		mail, wakes, child := run(t, report("success", "done", "a")+"; "+report("success", "done", "b"), 2, 0)
-		if len(mail) != 1 || mail[0] != "done" || wakes != 1 || child.Reason != domain.ReportedSuccessReason {
-			t.Fatalf("parent mail %q in %d wakes, child %q; want the success once", mail, wakes, child.Reason)
-		}
-	})
-	t.Run("a reworded success is sent too", func(t *testing.T) {
-		mail, _, _ := run(t, report("success", "first", "a")+"; "+report("success", "again", "b"), 2, 0)
-		if len(mail) != 2 || mail[0] != "again" || mail[1] != "first" {
-			t.Fatalf("parent mail %q, want both", mail)
-		}
-	})
-	t.Run("the same success after new mail is sent too", func(t *testing.T) {
-		mail, _, _ := run(t, report("success", "done", "a")+"; until $CLI inbox | grep -q follow-up; do sleep 1; done; "+report("success", "done", "b"), 2, 0,
-			func(parent, child domain.RunID) {
-				for len(e.mail(child, parent)) == 0 {
-					select {
-					case <-ctx.Done():
-						t.Fatal("the first success never reached the parent")
-					case <-time.After(200 * time.Millisecond):
-					}
-				}
-				sender := e.launch(acpmock.PromptRun + coordtransport.CLIPath + " send --to " + string(child) + " --body follow-up")
-				t.Cleanup(func() { e.kill(sender) })
-			})
-		if len(mail) != 2 {
-			t.Fatalf("parent mail %q, want the success twice", mail)
-		}
-	})
-	t.Run("a failure after a success is sent too", func(t *testing.T) {
-		mail, _, child := run(t, report("success", "done", "a")+"; "+report("failure", "broke", "b")+"; "+report("failure", "broke", "c"), 3, 0)
-		if len(mail) != 2 || mail[0] != "broke" || mail[1] != "done" || child.Reason != domain.ReportedFailureReason {
-			t.Fatalf("parent mail %q, child %q; want the success, then the failure once", mail, child.Reason)
+	t.Run("a second success is sent too", func(t *testing.T) {
+		mail, _, child := run(t, report("success", "first", "a")+"; "+report("success", "again", "b"), 2, 0)
+		if len(mail) != 2 || mail[0] != "again" || mail[1] != "first" || child.Reason != domain.ReportedSuccessReason {
+			t.Fatalf("parent mail %q, child %q; want both reports", mail, child.Reason)
 		}
 	})
 	t.Run("answered after success keeps the success", func(t *testing.T) {

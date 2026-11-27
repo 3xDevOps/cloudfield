@@ -33,47 +33,6 @@ func (d *DB) CoordReportedSince(ctx context.Context, run domain.RunID, since tim
 	return reported, nil
 }
 
-// CoordReportsSince is run's finalized reports reserved at or after since,
-// oldest first.
-func (d *DB) CoordReportsSince(ctx context.Context, run domain.RunID, since time.Time) ([]*CoordReport, error) {
-	after, err := encodeTime(since)
-	if err != nil {
-		return nil, fmt.Errorf("store: coord reports since: %w", err)
-	}
-	rows, err := d.db.QueryContext(ctx,
-		`SELECT `+coordReportCols+` FROM coord_reports WHERE run_id = ? AND state = ? AND created_at >= ?
-		 ORDER BY created_at, id`, run, CoordReportFinalized, after)
-	if err != nil {
-		return nil, fmt.Errorf("store: coord reports since: %w", err)
-	}
-	defer rows.Close() //nolint:errcheck // read-only
-	var reports []*CoordReport
-	for rows.Next() {
-		report, err := scanCoordReport(rows)
-		if err != nil {
-			return nil, fmt.Errorf("store: coord reports since: %w", err)
-		}
-		reports = append(reports, report)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("store: coord reports since: %w", err)
-	}
-	return reports, nil
-}
-
-// LastRunMessageDeliveredAt is when an inbox read last returned mail to to
-// for the first time, zero when none did.
-func (d *DB) LastRunMessageDeliveredAt(ctx context.Context, to domain.RunID) (time.Time, error) {
-	var last sql.NullInt64
-	if err := d.db.QueryRowContext(ctx, `SELECT MAX(delivered_at) FROM run_messages WHERE to_run = ?`, to).Scan(&last); err != nil {
-		return time.Time{}, fmt.Errorf("store: last message delivered to %s: %w", to, err)
-	}
-	if !last.Valid {
-		return time.Time{}, nil
-	}
-	return decodeTime(last.Int64), nil
-}
-
 // CoordStateReportedSince is the outcome of run's latest needs-input, waiting
 // or answered report that took effect at or after since, or "" for none.
 func (d *DB) CoordStateReportedSince(ctx context.Context, run domain.RunID, since time.Time) (string, error) {

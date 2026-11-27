@@ -1325,10 +1325,7 @@ failure or blocked report reaches its parent's inbox with kind `report`:
 `from_run_id` is the subsession, `outcome` is the reported outcome, `body` is
 its complete report summary, and `correlation_id` is the report ID. It uses the same durable delivery and
 acknowledgement as peer messages; if the inbox is full, report publication
-retries until it fits. A report that repeats the subsession's report before it word
-for word, same outcome and same summary, less than two minutes later and with
-no mail read in between, sends its parent nothing more: the first message
-stands. Every other report is sent. A turn that ends without a success,
+retries until it fits. A turn that ends without a success,
 failure or blocked report forwards the subsession's
 last message to the parent as a provisional report, which says whether the turn
 reported nothing or names the `needs-input`, `waiting` or `answered` it did
@@ -1533,9 +1530,9 @@ What a report does depends on the session:
   task outranks it with the matching waiting
   state. While a needs-input or blocked report still waits on a member it
   is refused with `CodeInvalidParams` (`your needs-input or blocked report
-  is still open and stays shown; end your turn without another report`). Within
-  two minutes of a success or failure report in the same turn it is accepted
-  and changes nothing: the session keeps the reported outcome. Like waiting it is nonterminal,
+  is still open and stays shown; end your turn without another report`). After
+  a success or failure report in the same turn it is accepted and changes
+  nothing: the session keeps the reported outcome. Like waiting it is nonterminal,
   takes no `--evidence-ref` or `--for`, belongs to the turn that reported
   it, is refused with the same errors for a session that already finished or is
   ending and for a superseded key, and the next turn clears it. A
