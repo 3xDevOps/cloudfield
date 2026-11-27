@@ -569,6 +569,8 @@ describe('add login', () => {
     expect(screen.queryByRole('textbox', { name: 'Name' })).toBeNull()
     const back = within(running).getByRole('button', { name: 'Return to the sign-in' })
     expect(back.className).toContain('bg-action')
+    // Beside it, Close leaves the sign-in running: only the sign-in screen's Cancel sign-in ends it.
+    expect(within(running).getByRole('button', { name: 'Close' })).toBeDefined()
     await user.click(back)
     await waitFor(() => expect(client.agentLoginSocket).toHaveBeenCalledWith('lgn-run00000001'))
     expect(screen.getByRole('heading', { name: 'Sign in to work' })).toBeDefined()

@@ -6789,8 +6789,8 @@ buttons says the member can leave the page and how long the sign-in keeps
 running: "for <n> more minutes" when this tab opened its terminal, else
 "until 15 minutes after its start". While a sign-in runs, the Claude Code row
 says "Sign-in for <name> is still running." with **Return to the sign-in**, which reattaches its terminal, and
-Add login leads with the same callout, its primary button and **Cancel**,
-and hides the form until that sign-in ends. The server refuses another add
+Add login leads with the same callout, its primary button and **Close**,
+which leaves the sign-in running, and hides the form until that sign-in ends. The server refuses another add
 while one runs, naming it; the refusal shows the same way, with the server's
 words verbatim, until that sign-in ends. Every other refusal shows verbatim under
 "Sign-in not started". Once the server has ended a sign-in the panel shows

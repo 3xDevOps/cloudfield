@@ -155,7 +155,7 @@ export function AddLogin({ client, sharedWith, logins, onChanged, running, ended
           actions={
             <>
               <Button size="sm" onClick={() => open(blocking)}>Return to the sign-in</Button>
-              <Button size="sm" variant="ghost" onClick={onClose}>Cancel</Button>
+              <Button size="sm" variant="ghost" onClick={onClose}>Close</Button>
             </>
           }
         >
