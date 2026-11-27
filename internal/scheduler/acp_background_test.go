@@ -23,15 +23,15 @@ import (
 
 // installed puts the agent and its ACP server in the member's home, where a
 // background launch looks for them.
-func newBackgroundEnv(t *testing.T, agent string, installed bool) (*testEnv, *acpRuntime) {
+func newBackgroundEnv(t *testing.T, agent string, installed bool, opts ...func(*Config)) (*testEnv, *acpRuntime) {
 	t.Helper()
-	e, rt := newACPEnv(t, func(cfg *Config) {
+	e, rt := newACPEnv(t, append([]func(*Config){func(cfg *Config) {
 		cfg.Harnesses[agent] = HarnessSpec{
 			TUIArgs:      []string{"fake-agent", "{task}"},
 			HeadlessArgs: []string{"fake-agent", "-p", "{task}"},
 			ACPArgs:      []string{"acp-mock"},
 		}
-	})
+	}}, opts...)...)
 	if installed {
 		home, err := e.cfg.Homes.Path(e.member.ID)
 		if err != nil {

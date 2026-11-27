@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/acphost/acpmock"
+	"github.com/3xDevOps/cloudfield/internal/ctxlock"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/store"
 )
@@ -127,7 +128,7 @@ func TestRevokeStopsARunNoOtherAccountCanTake(t *testing.T) {
 		setup        func(*shareEnv, domain.RunID)
 	}{
 		{"no account", "account share revoked: Grace revoked access to their account; no other account can run claude", func(e *shareEnv, _ domain.RunID) {
-			e.sched.UseUsageFallback(UsageFallback{Usage: claudeUsage{e.member.ID: 100}, AuthorizationMu: &sync.Mutex{}, Note: (&roomNotes{}).post})
+			e.sched.UseUsageFallback(UsageFallback{Usage: claudeUsage{e.member.ID: 100}, AuthorizationMu: &ctxlock.Mutex{}, Note: (&roomNotes{}).post})
 		}},
 		{"from before narrowed shares", "account share revoked: Grace revoked access to their account; cannot continue on another account: the session predates narrowed account shares, and its container mounts the account owner's whole home", func(e *shareEnv, run domain.RunID) {
 			e.clearHomeMember(t, run)

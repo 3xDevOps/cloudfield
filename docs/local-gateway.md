@@ -235,7 +235,9 @@ reconnect. A call with no answer after 60 seconds fails with `-32004`
 carry up to 64 MiB, and `workspace.import`, whose first fetch of a large repository is
 slow, get 15 minutes. Only that call's channel closes: a slow server
 handler is not a dead connection, so the connection, its streams and its
-other calls stay up. The keepalive below drops a dead one. A server refusal passes through untouched as that `protocol.Error`;
+other calls stay up. The keepalive below drops a dead one. A `run.launch`
+the server had not yet admitted when its channel closed starts no session.
+A server refusal passes through untouched as that `protocol.Error`;
 in particular, busy retention admission requires an explicit retry, not
 automatic replay. Streams have a separate guard: a channel that fails to open
 triggers a redial only when a keepalive, given 60 seconds to answer, shows the

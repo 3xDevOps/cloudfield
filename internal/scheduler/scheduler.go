@@ -23,6 +23,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/agentstatus"
 	"github.com/3xDevOps/cloudfield/internal/control"
 	"github.com/3xDevOps/cloudfield/internal/coordtransport"
+	"github.com/3xDevOps/cloudfield/internal/ctxlock"
 	"github.com/3xDevOps/cloudfield/internal/disk"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
@@ -476,7 +477,7 @@ type supervised struct {
 	// lifecycleMu serializes close, relaunch, expiry and steering admission for
 	// this container. It is separate from Scheduler.mu: runtime and git calls
 	// must not run under the scheduler lock.
-	lifecycleMu sync.Mutex
+	lifecycleMu ctxlock.Mutex
 	// runUser is the resolved "uid:gid" for the container and ownership pass;
 	// empty means root (no ownership pass).
 	runUser string
@@ -611,6 +612,12 @@ type supervised struct {
 	sleepGen    uint64
 	waking      chan struct{}
 	wakeErr     error
+	// abortSleep, set while a sleep saves or pauses a VM that still
+	// answers, makes it give up if its guest has yet to be paused.
+	// wakeWaits is set once a wake waits for the sleep, which a sleep that
+	// has yet to set abortSleep reads instead.
+	abortSleep context.CancelFunc
+	wakeWaits  bool
 	// asleepSaved is set while a sleeping VM holds its saved memory, which
 	// a wake restores with every process. saveFailedAt is the last failed
 	// save, which the sleep sweep waits a full sleep delay after.
