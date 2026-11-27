@@ -35,6 +35,10 @@ const (
 	// had to kill.
 	killedExitCode = 137
 	waitPoll       = 200 * time.Millisecond
+	// powerOffPoll is short: a guest told to power off is gone about 0.2 s
+	// later, and the stop, destroy or restart waiting for it holds the VM's
+	// lock.
+	powerOffPoll = 25 * time.Millisecond
 	// lingerTimeout bounds how long a VM stays up after its main process
 	// exited: long enough for the server to finish the session's checkout,
 	// which is on the VM's disk.
@@ -247,7 +251,7 @@ func (e *engine) powerOff(ctx context.Context, rec *record) (bool, error) {
 		select {
 		case <-ctx.Done():
 			return false, e.units.Stop(context.WithoutCancel(ctx), unitName(rec.Key))
-		case <-time.After(waitPoll):
+		case <-time.After(powerOffPoll):
 		}
 	}
 }
