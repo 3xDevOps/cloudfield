@@ -256,6 +256,27 @@ func TestEdgeMoveNeedsAPinnedKey(t *testing.T) {
 	}
 }
 
+// A running server that took its edge-url from --edge-url refuses edge
+// move before it dials anything: the file it would write does not apply.
+func TestEdgeMoveRefusesAServiceFlag(t *testing.T) {
+	t.Setenv("SUDO_USER", "ubuntu")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "server.conf")
+	const old = "https://edge-old.example.test"
+	if err := serversetup.WriteConfig(path, map[string]string{"data-dir": dir, "edge-url": old}); err != nil {
+		t.Fatal(err)
+	}
+	writeJSON(t, filepath.Join(edgeagent.StateDir(dir), "status.json"), edgeagent.Status{Edge: old, Connected: true, EdgeURLFlag: true})
+	err := edgeCmd([]string{"move", "https://edge-new.example.test", "--config", path})
+	if want := "the running server took its edge-url, " + old + ", from the --edge-url flag, which a restart keeps, so edge-url in " + path +
+		" would not apply; nothing changed. Change the service's --edge-url flag to https://edge-new.example.test, then run sudo systemctl restart aether-server"; fmt.Sprint(err) != want {
+		t.Errorf("move: %v\nwant: %s", err, want)
+	}
+	if _, err = os.Stat(server.HostKeyPath(dir)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the refused move made a host key: %v", err)
+	}
+}
+
 // A flag that overrides the config's edge-url refuses edge move before it
 // dials anything, since the move would write the file the flag overrides.
 func TestEdgeMoveRefusesAFlagOverrideFirst(t *testing.T) {

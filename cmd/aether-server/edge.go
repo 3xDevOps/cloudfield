@@ -439,6 +439,14 @@ func edgeMove(w io.Writer, dataDir, edgeURL string, policy edgeproto.AccessPolic
 	if err = configGives(configPath, values, edgeURL, dataDir); err != nil {
 		return err
 	}
+	status, _, err := edgeagent.OpenState(dataDir).Status()
+	if err != nil {
+		return err
+	}
+	if status.EdgeURLFlag {
+		return fmt.Errorf("the running server took its edge-url, %s, from the --edge-url flag, which a restart keeps, so edge-url in %s would not apply; nothing changed. "+
+			"Change the service's --edge-url flag to %s, then run %s", status.Edge, configPath, shellquote.Quote(target), sudoPrefix()+serversetup.RestartCommand)
+	}
 	hostKey, err := sshd.LoadOrCreateHostKey(server.HostKeyPath(dataDir))
 	if err != nil {
 		return err

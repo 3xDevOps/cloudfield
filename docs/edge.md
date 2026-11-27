@@ -269,6 +269,10 @@ you and `edge status` tell super admins to change the service's `--edge-url`
 flag to the new address and restart, with `edge status` printing `retiring
 <old> is retiring; move this server with: the service's --edge-url flag set to
 <new> (a restart keeps the flag, so edge move does not apply), then sudo
+systemctl restart aether-server`. `edge move` on such a server refuses before it dials
+anything: `the running server took its edge-url, <old>, from the --edge-url
+flag, which a restart keeps, so edge-url in <config file> would not apply;
+nothing changed. Change the service's --edge-url flag to <new>, then run sudo
 systemctl restart aether-server`.
 
 `edge move` holds the pin file open from its start. Each enrollment, and the
