@@ -518,15 +518,18 @@ describe('run details', () => {
   })
 
   it('shows a failed first read of agent messages with the server message and reads again on Retry', async () => {
+    let answer!: (page: { messages: [] }) => void
     vi.mocked(api.coordMessagesList)
-      .mockRejectedValueOnce(new Error('server did not answer coord.messages.list within 1m0s'))
-      .mockResolvedValue({ messages: [] })
+      .mockRejectedValueOnce(new Error('coord.messages.list: server did not answer coord.messages.list within 1m0s'))
+      .mockImplementationOnce(() => new Promise((resolve) => { answer = resolve }))
     open()
     const panel = await details()
     const section = await panel.findByRole('region', { name: 'Agent messages' })
     const alert = within(section).getByRole('alert')
-    expect(alert.textContent).toContain('server did not answer coord.messages.list within 1m0s')
+    expect(within(alert).getByText('server did not answer coord.messages.list within 1m0s')).toBeDefined()
     fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }))
+    expect((await within(alert).findByRole('button', { name: 'Retrying…' }) as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => answer({ messages: [] }))
     await waitFor(() => expect(panel.queryByRole('region', { name: 'Agent messages' })).toBeNull())
   })
 

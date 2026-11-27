@@ -13,7 +13,7 @@ import { SectionLabel } from '@/components/ui/section-label'
 import { api } from '@/lib/api'
 import { useClock } from '@/lib/clock'
 import { isRetainedRun } from '@/lib/commands'
-import { formatBytes } from '@/lib/format'
+import { errorSentence, formatBytes } from '@/lib/format'
 import { memberName, resolveMember } from '@/lib/member-name'
 import { needsYou } from '@/lib/needs-you'
 import { plainReason } from '@/lib/reasons'
@@ -74,6 +74,7 @@ function AgentMessages({ run, inset }: { run: RunRecord; inset: boolean }) {
   const error = useStore((s) => s.messageErrors[key])
   const [all, setAll] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [retrying, setRetrying] = useState(false)
   const hidden = useStore((s) => s.hiddenAgentMessages[run.id] === true)
   useMessageList(useStore, api, scope)
   if (messages.length === 0 && !error) return null
@@ -84,12 +85,17 @@ function AgentMessages({ run, inset }: { run: RunRecord; inset: boolean }) {
     await loadMessagePage(useStore, api, scope, true)
     setLoading(false)
   }
+  const retry = async () => {
+    setRetrying(true)
+    await loadMessagePage(useStore, api, scope)
+    setRetrying(false)
+  }
   return (
     <Section title="Agent messages" count={messages.length} inset={inset}>
       {error && (
         <div role="alert" className="flex items-center gap-2 text-ui-sm text-state-failed">
-          <span className="min-w-0 flex-1 break-words">{error}</span>
-          <Button variant="quiet" onClick={() => void loadMessagePage(useStore, api, scope)}>Retry</Button>
+          <span className="min-w-0 flex-1 break-words">{errorSentence(error)}</span>
+          <Button size="sm" variant="quiet" disabled={retrying} onClick={() => void retry()}>{retrying ? 'Retrying…' : 'Retry'}</Button>
         </div>
       )}
       {all && olderCursor && (
