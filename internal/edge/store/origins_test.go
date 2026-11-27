@@ -852,3 +852,32 @@ func TestRepairingDeletesDeviceAuthorizations(t *testing.T) {
 		t.Fatalf("after a restart with the same pairs: %v, want [new stays]", got)
 	}
 }
+
+// TestRepairingAfterRelayTakenOver deletes the device authorizations of a
+// sign-in origin whose relay origin another sign-in origin took over in
+// between, which origin_pairs no longer shows.
+func TestRepairingAfterRelayTakenOver(t *testing.T) {
+	s := openStore(t)
+	ctx := context.Background()
+	now := time.Unix(1_800_000_000, 0)
+	for _, pairs := range []map[string]string{
+		{"https://edge1.example.test": "https://auth.example.test"},
+		{"https://edge1.example.test": "https://auth2.example.test"},
+	} {
+		if err := s.RecordPairs(ctx, pairs, now); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := s.db.Exec(`INSERT OR IGNORE INTO device_authorizations (code_hash, user_code_hash, label, public_key, client_addr, status, created_at, expires_at, last_poll_at, signin_origin)
+			VALUES ('started', 'user-started', 'laptop', 'key', '127.0.0.1', 'pending', 0, 9000000000000000000, 0, 'https://auth.example.test')`); err != nil {
+			t.Fatal(err)
+		}
+		now = now.Add(time.Minute)
+	}
+	if err := s.RecordPairs(ctx, map[string]string{"https://edge3.example.test": "https://auth.example.test"}, now); err != nil {
+		t.Fatal(err)
+	}
+	var n int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM device_authorizations`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("%d device authorizations, %v: one started on edge1 survived auth.example.test moving to edge3", n, err)
+	}
+}

@@ -38,7 +38,7 @@ func (s *Store) RecordPairs(ctx context.Context, relayToSignin map[string]string
 	defer tx.Rollback() //nolint:errcheck // no-op after Commit
 	for relay, signin := range relayToSignin {
 		if _, err := tx.ExecContext(ctx, `DELETE FROM device_authorizations WHERE signin_origin = ?1
-			AND ?2 <> (SELECT relay_origin FROM origin_pairs WHERE signin_origin = ?1 ORDER BY served_at DESC, relay_origin LIMIT 1)`,
+			AND ?2 <> (SELECT relay_origin FROM origin_pair_history WHERE signin_origin = ?1 ORDER BY served_at DESC, relay_origin LIMIT 1)`,
 			signin, relay); err != nil {
 			return fmt.Errorf("edgestore: delete the device sign-ins of %s, now paired with %s: %w", signin, relay, err)
 		}
