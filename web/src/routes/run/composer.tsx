@@ -467,8 +467,8 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
   const turnRunning = state?.turn_in_flight ?? false
   const waiting = shape?.waiting ?? false
   const blocked = Boolean(gate || connecting)
-  // A sleeping session's agent reports its prompt types once a wake starts it.
-  const supportsImages = state?.prompt_images === true || Boolean(run.asleep_since)
+  // Only a live agent has reported its prompt types; the server refuses the rest.
+  const supportsImages = state ? state.prompt_images === true : true
   const images = useComposerImages(run.id, !blocked && cap.hasMethod('terminal.file'))
   const attachOff = busy || blocked || !cap.hasMethod('terminal.file')
   const drop = dropRoom(images, attachOff)

@@ -1013,6 +1013,26 @@ describe('the Enhanced composer draft', () => {
     expect(await box()).toMatchObject({ value: 'Update the docs', readOnly: false })
   })
 
+  it('refuses an image only when a live agent says it takes none', async () => {
+    const ack = (live: boolean) => act(() => useStore.getState().acpAck('run_1', { ok: true, seq: 0, replay: 0, epoch: 0, live, has_control: true, state: live ? state() : undefined }))
+    const unsupported = 'This agent does not support image prompts.'
+    open()
+    acpSocket().open(lease)
+    await userEvent.type(await box(), 'Round the totals')
+    await userEvent.upload(screen.getByLabelText('Choose files to attach'), new File(['png'], 'totals.png', { type: 'image/png' }))
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', false))
+    ack(false)
+    expect(screen.queryByText(unsupported)).toBeNull()
+    const refusal = 'scheduler: the Enhanced agent is not running'
+    vi.mocked(api.runInject).mockClear().mockRejectedValueOnce(new Error(refusal))
+    await userEvent.click(screen.getByRole('button', { name: 'Send' }))
+    expect((await screen.findByRole('alert')).textContent).toContain(refusal)
+    expect(vi.mocked(api.runInject).mock.calls[0]![3]).toMatchObject({ attachments: ['/home/alice/.aether/uploads/image.png'] })
+    ack(true)
+    expect(screen.getByText(unsupported)).toBeDefined()
+    expect(screen.getByRole('button', { name: 'Send' })).toHaveProperty('disabled', true)
+  })
+
   it('waits for an upload that outlives its composer, so a resent prompt keeps its attachment and key', async () => {
     let uploaded = (_: { path: string }) => {}
     vi.mocked(api.uploadTerminalImage).mockReset().mockReturnValueOnce(new Promise((resolve) => { uploaded = resolve }))
