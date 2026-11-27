@@ -497,7 +497,7 @@ export function RetiringNotice({
   const [edit, setEdit] = useState<{ scope: string; value: string } | null>(null)
   const target = edit?.scope === scope ? edit.value : (trusted ?? '')
   return (
-    <div className="flex min-w-0 flex-col gap-2 self-stretch">
+    <div className="mb-1 flex min-w-0 flex-col gap-2 self-stretch">
       <Callout
         tone={notice.state === 'retired' ? 'failed' : 'needs-you'}
         className="self-stretch"
@@ -542,7 +542,6 @@ export function RetiringNotice({
             <Input
               className="font-code"
               autoComplete="off"
-              placeholder="https://edge.example"
               value={target}
               onChange={(e) => setEdit({ scope, value: e.target.value })}
             />
