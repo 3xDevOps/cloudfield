@@ -143,18 +143,35 @@ func (s *Service) retiredAnswers(origin string, repl *pair, signin bool) (*retir
 // origin when the edge never recorded origins, since every row would have
 // none.
 func (s *Service) retiredSignIns(ctx context.Context, retired []Retired, pairings []edgestore.Pairing) ([]string, error) {
+	// lastAs holds, per host name and role, the latest pairing that
+	// served the host in that role.
+	type role struct {
+		host  string
+		relay bool
+	}
+	lastAs := map[role]edgestore.Pairing{}
+	for _, p := range pairings {
+		for _, k := range []role{{originHost(p.RelayOrigin), true}, {originHost(p.SigninOrigin), false}} {
+			if l, ok := lastAs[k]; !ok || p.ServedAt.After(l.ServedAt) {
+				lastAs[k] = p
+			}
+		}
+	}
 	signinHosts := map[string]bool{}
 	for _, r := range retired {
 		signin, relay := originHost(r.SigninOrigin), originHost(r.RelayOrigin)
 		signinHosts[signin] = true
+		for _, k := range []role{{relay, false}, {signin, true}} {
+			wrong, ok := lastAs[k]
+			if right, rightOK := lastAs[role{k.host, !k.relay}]; ok && (!rightOK || wrong.ServedAt.After(right.ServedAt)) {
+				return nil, fmt.Errorf("edge: --retired-pairs names %s as a sign-in origin and %s as a relay origin, but the edge last served them the other way round, "+
+					"in the pair %s %s: write <sign-in origin> <relay origin> <replacement relay origin>", r.SigninOrigin, r.RelayOrigin, wrong.SigninOrigin, wrong.RelayOrigin)
+			}
+		}
 		var known []string
 		named := false
 		for _, p := range pairings {
 			pRelay, pSignin := originHost(p.RelayOrigin), originHost(p.SigninOrigin)
-			if p.Current && (pRelay == signin || pSignin == relay) {
-				return nil, fmt.Errorf("edge: --retired-pairs names %s as a sign-in origin and %s as a relay origin, but the edge served them the other way round, "+
-					"in the pair %s %s: write <sign-in origin> <relay origin> <replacement relay origin>", r.SigninOrigin, r.RelayOrigin, p.SigninOrigin, p.RelayOrigin)
-			}
 			if pRelay == relay {
 				known = append(known, p.SigninOrigin)
 				named = named || pSignin == signin

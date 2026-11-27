@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	"github.com/3xDevOps/cloudfield/internal/edge/relay"
@@ -566,7 +567,7 @@ func TestRetiredContradictsRecordedPair(t *testing.T) {
 		want    string
 	}{
 		{Retired{SigninOrigin: testRelay2, RelayOrigin: testSignin2, Replacement: testRelay},
-			"edge: --retired-pairs names " + testRelay2 + " as a sign-in origin and " + testSignin2 + " as a relay origin, but the edge served them the other way round, " +
+			"edge: --retired-pairs names " + testRelay2 + " as a sign-in origin and " + testSignin2 + " as a relay origin, but the edge last served them the other way round, " +
 				"in the pair " + testSignin2 + " " + testRelay2 + ": write <sign-in origin> <relay origin> <replacement relay origin>"},
 		{Retired{SigninOrigin: "https://signin9.example.test", RelayOrigin: testRelay2, Replacement: testRelay},
 			"edge: --retired-pairs pairs " + testRelay2 + " with https://signin9.example.test, but the edge served it with the sign-in origin " + testSignin2 + ": name that one"},
@@ -575,6 +576,22 @@ func TestRetiredContradictsRecordedPair(t *testing.T) {
 		if err := h.restartRetiring(t, tt.retired); err == nil || err.Error() != tt.want {
 			t.Errorf("%+v: %v, want %q", tt.retired, err, tt.want)
 		}
+	}
+}
+
+// TestRetiredHostChangedRole retires a pair whose relay host was, before
+// it served as that relay, the sign-in host of a relay the edge no longer
+// serves: the newer pairing decides.
+func TestRetiredHostChangedRole(t *testing.T) {
+	h := newRecordingHarness(t)
+	for _, pairs := range []map[string]string{{"https://relayx.example.test": "https://relay9.example.test"}, {"https://relay9.example.test": "https://signin9.example.test"}} {
+		h.clock.Advance(time.Minute)
+		if _, err := h.svc.store.RecordPairs(context.Background(), edgestore.Run{Pairs: pairs}, h.clock.Now()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := h.restartRetiring(t, Retired{SigninOrigin: "https://signin9.example.test", RelayOrigin: "https://relay9.example.test", Replacement: testRelay}); err != nil {
+		t.Errorf("retiring the latest pairing of a host that changed role: %v", err)
 	}
 }
 

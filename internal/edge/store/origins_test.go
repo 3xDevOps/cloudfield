@@ -780,9 +780,9 @@ func TestPairingsKeepEarlierSigninOrigins(t *testing.T) {
 		got[i].ServedAt = time.Time{}
 	}
 	want := []Pairing{
-		{RelayOrigin: "https://edge.example.test", SigninOrigin: "https://auth-early.example.test", Current: false},
-		{RelayOrigin: "https://edge.example.test", SigninOrigin: "https://auth.example.test", Current: true},
-		{RelayOrigin: "https://edge2.example.test", SigninOrigin: "https://auth2.example.test", Current: true},
+		{RelayOrigin: "https://edge.example.test", SigninOrigin: "https://auth-early.example.test"},
+		{RelayOrigin: "https://edge.example.test", SigninOrigin: "https://auth.example.test"},
+		{RelayOrigin: "https://edge2.example.test", SigninOrigin: "https://auth2.example.test"},
 	}
 	if err != nil || !slices.Equal(got, want) {
 		t.Errorf("Pairings = %v, %v; want %v", got, err, want)
@@ -812,9 +812,9 @@ func TestPairingHistoryAcrossUpgrade(t *testing.T) {
 		got[i].ServedAt = time.Time{}
 	}
 	want := []Pairing{
-		{RelayOrigin: "https://edge.example.test", SigninOrigin: "https://auth1.example.test", Current: false},
-		{RelayOrigin: "https://edge.example.test", SigninOrigin: "https://auth2.example.test", Current: false},
-		{RelayOrigin: "https://edge.example.test", SigninOrigin: "https://auth3.example.test", Current: true},
+		{RelayOrigin: "https://edge.example.test", SigninOrigin: "https://auth1.example.test"},
+		{RelayOrigin: "https://edge.example.test", SigninOrigin: "https://auth2.example.test"},
+		{RelayOrigin: "https://edge.example.test", SigninOrigin: "https://auth3.example.test"},
 	}
 	if err != nil || !slices.Equal(got, want) {
 		t.Errorf("Pairings = %v, %v; want %v", got, err, want)

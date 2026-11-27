@@ -1228,7 +1228,8 @@ entry and the fix, when:
   `AETHER_EDGE_DATA` (or, with that unset, `/var/lib/aether-edge`) and
   `--data` is not a flag: an image older than v0.8.7 would open the other
   directory's database, which keeps the deleted sign-ins, after a rollback;
-- the edge recorded the pair's origins in the other roles or in another pair;
+- the edge last recorded the pair's origins in the other roles, or recorded its
+  relay origin only with other sign-in origins;
 - rows without a recorded origin exist and the edge has never recorded
   origins: serve the pair again, run the edge with `--retiring-pairs` naming
   it for as long as you give people to move, then retire it.
