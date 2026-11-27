@@ -205,7 +205,7 @@ function UserRow({ row, ctx, name }: { row: Extract<SessionRow, { kind: 'user' }
       }
     >
       {body}
-      {row.failure && <span className="mt-1 block font-code text-ui-sm break-words text-muted">{row.failure}</span>}
+      {row.failure && <span className="mt-1 block text-ui-sm text-muted">{row.failure}</span>}
     </MessageRow>
   )
 }
