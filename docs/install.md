@@ -824,8 +824,9 @@ aether         /usr/local/bin/aether  v0.8.7-beta.13
 With `session-runtime vm`, `sudo cloudfield-server update` has the new binary run
 `cloudfield-server vm install` before the restart, and prints its steps, so new VMs
 boot the release's Cloud Hypervisor and guest kernel. Running VMs keep theirs,
-and their helper disk, until they stop; Ctrl-C during that step undoes the
-update. Before it starts any VM, a server started by its systemd unit also puts
+and their helper disk, until they stop, and a VM saved to disk wakes on the
+new Cloud Hypervisor: v55.0 wakes a VM that v54.1 saved. Ctrl-C during that
+step undoes the update. Before it starts any VM, a server started by its systemd unit also puts
 its release's Cloud Hypervisor and kernel in place, downloading the kernel only
 when the one there came from another release. That covers an update from a
 client or the dashboard, and a rollback. If it cannot during an update's first
