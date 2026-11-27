@@ -9,7 +9,14 @@ owner asked for it on 2026-11-26: "allowing for people to have multiple
 machines they can run Cloudfield on, so that if one machine gets congested
 or is almost full with RAM or whatever, another machine can pick up the
 slack." [Decisions for the owner](#decisions-for-the-owner) lists what only
-he can settle. [Review](#review) lists what review changed.
+he can settle; they were decided on 2026-11-27. [Review](#review) lists
+what review changed.
+
+The sections phase 0 builds on ([Today](#today), [What says a machine is
+full](#what-says-a-machine-is-full), [When nothing fits](#when-nothing-fits))
+were checked again against `main` at `2cee7b1ba` on 2026-11-27 and
+corrected. File and line references elsewhere are as of the plan's writing
+and may have moved.
 
 Evidence is in
 [`research/2026-11-27-multi-machine/`](../../research/2026-11-27-multi-machine/README.md).
@@ -94,10 +101,11 @@ unrelated servers today and switch between them.
 ### The baseline is moving
 
 Pull requests #1153 to #1172 change launch, wake and memory on one machine
-(E1, opening section and §9). Merged: #1161, #1163, #1168. Open: #1154,
-#1156, #1158, #1162, #1164, and the drafts #1159 (idle VMs paused in
-memory, saved to disk only when memory is short or after an hour), #1160,
-#1167 and #1172 (huge pages). This plan assumes they land:
+(E1, opening section and §9). Merged by `2cee7b1ba`: #1154, #1156, #1158,
+#1159 (idle VMs paused in memory, saved to disk only when memory is short
+or after an hour), #1160, #1161, #1162, #1163, #1164, #1167, #1168 and
+#1195. Open: the draft #1172 (huge pages), and #1206, which lets a wake go
+ahead below the disk reserve. What they mean for this plan:
 
 - #1158 logs the time of each launch and wake step. The plan's
   measurements use that log.
@@ -105,11 +113,15 @@ memory, saved to disk only when memory is short or after an hour), #1160,
   it. A machine then looks fuller than its working sessions make it, and
   placement must count memory the guard can still free
   ([Placement](#2-placement)).
-- #1164 moves the mirror fetch out of the server-wide launch lock
-  (`internal/sshd/handlers.go:288`). Placement adds a call to another
-  machine to a launch, and that call must stay outside the lock too. Today
-  the lock is held across the capacity check
-  (`internal/scheduler/launch.go:316-418`; E7 §3).
+- #1164 moves the mirror fetch out of the server-wide launch lock, which
+  is now taken at `internal/sshd/handlers.go:299`. Placement adds a call to
+  another machine to a launch, and that call must stay outside the lock
+  too. Today the lock is held across the capacity check
+  (`internal/scheduler/launch.go:320-421`; E7 §3).
+- #1195 makes the wait for that lock follow the caller: a launch still
+  waiting for admission when its caller leaves is dropped, and a retry with
+  the same idempotency key launches it (`internal/sshd/handlers.go:299-301`).
+  A waiting launch must not depend on its caller staying connected.
 
 ### What 2026-11-26 showed
 
@@ -123,8 +135,10 @@ The code explains each symptom:
 
 - The guard saves VMs to disk to free memory, and a wake must then pass
   admission for the size of the saved memory
-  (`internal/scheduler/capacity.go:173-190`). On a full machine every wake
-  is refused and the session stays asleep (`docs/failure-handling.md:809-812`).
+  (`internal/scheduler/capacity.go:166-183`). On a full machine the wake of
+  a saved VM is refused and the session stays asleep. Since #1159 a VM
+  still paused in memory wakes without admission
+  (`internal/scheduler/sleep.go:312-322`).
 - A close of a VM session boots the VM to commit its work when the VM is
   gone (`internal/scheduler/evidence.go:150-177`); that boot needs memory.
 - A queued sub-session that capacity refuses is not retried
@@ -368,12 +382,12 @@ Each machine is measured where it stands. The checks exist today:
 
 | Check | Rule today | Source |
 | --- | --- | --- |
-| Memory | `MemAvailable` ≥ `max(2 GiB, total/10)` + 512 MiB for this start + what admitted starts have yet to take | `internal/scheduler/capacity.go:37`, `105-107`, `213-220` |
-| Stall | The server's cgroup `memory.pressure` `some avg60` under 10 | `internal/scheduler/capacity.go:44`, `368-371` |
-| Disk | Free ≥ `max(5 GiB, min(total/20, 20 GiB))` + 1 GiB per start in flight | `internal/scheduler/capacity.go:97-102`, `321-334` |
-| Brake | Under the memory floor every session VM is frozen, checked every 500 ms | `internal/scheduler/vm_freeze.go:18`, `73-83` |
-| Guard | Under the floor, or stalled 30 s, it saves one VM to disk every 5 s | `internal/scheduler/vm_memory.go:19-23`, `85-103` |
-| Disk guard | Under the disk floor it stops the VMs whose disks grow | `internal/scheduler/vm_disks.go:15-30` |
+| Memory | `MemAvailable` ≥ `max(2 GiB, total/10)` + 512 MiB for this start + what admitted starts have yet to take. The wake of a saved VM claims the size of its saved memory | `internal/scheduler/capacity.go:37`, `97-100`, `166-183`, `206-213` |
+| Stall | The server's cgroup `memory.pressure` `some avg60` under 10; skipped when the server has no cgroup of its own | `internal/scheduler/capacity.go:44`, `350-364` |
+| Disk | Free ≥ `max(5 GiB, min(total/20, 20 GiB))` + 1 GiB per start in flight | `internal/disk/disk.go:350-355`, `internal/scheduler/capacity.go:34`, `314-336` |
+| Brake | Under the memory floor the session VMs are frozen, checked every 500 ms. VMs paused in memory and VMs being launched, woken or closed are left out | `internal/scheduler/vm_freeze.go:18`, `67-130` |
+| Guard | Checked every 5 s. Under twice the floor it first saves the VMs paused in memory. Under the floor, or stalled 30 s, it saves one more VM a check until twice the floor is free, then wakes the VMs it saved while they worked. A VM paused for an hour is saved whatever memory is free | `internal/scheduler/vm_memory.go:18-35`, `81-139`, `178-214`, `592-642` |
+| Disk guard | Under the disk floor it stops the VMs whose disks grow | `internal/scheduler/vm_disks.go:16-25`, `49-88` |
 
 There is no CPU check and no session count limit (E1 §0). PR #1130
 measured one vCPU per session sandbox on the production server and launch
@@ -425,8 +439,9 @@ pack and transcript of a remote session lands there
 
 **Not under the launch lock.** Today the server-wide lock is held from
 authorization until the session's row exists, across the capacity check
-and a save pass of up to 30 s (`internal/sshd/handlers.go:288-322`,
-`internal/scheduler/launch.go:316-418`). With hosts the order is: authorize
+and a pass that saves idle VMs, each save limited to 30 s
+(`internal/sshd/handlers.go:299-336`, `internal/scheduler/launch.go:320-421`,
+`internal/scheduler/vm_memory.go:31`). With hosts the order is: authorize
 and release the lock; reserve; take the lock again, check the
 authorization and the machine lists again, write the row and the
 placement; then call the host.
@@ -1072,9 +1087,16 @@ from E7's counts and the reviews; they are not measurements.
   when it starts, cancellable, fair, with a retry floor.
 - **Settings → Machines** shows the one machine: memory against the floor,
   the stall figure, disk, VMs awake, paused, frozen and saved, and why the
-  last launch or wake was refused. `cloudfield-server status` prints the
-  same.
-- Every refusal, wait, freeze and guard save is counted and logged.
+  last launch or wake was refused. The command line prints the same from
+  a new `cloudfield-server` subcommand: the server binary has no status
+  command today (`cmd/aether-server/main.go:83-120` has only `edge status`,
+  `sysbox status` and `dictation status`). It belongs there and not in the
+  client because, like `cloudfield-server member`, it opens the database
+  and measures the machine itself, so it still answers on the machine when
+  the server is too short of memory to answer a request.
+- Every refusal, wait, freeze and guard save is counted and logged. The
+  counts are kept in the database: a server update restarts the server,
+  and two weeks of counting must outlast it.
 
 After it: a busy server stops dropping sub-sessions, and a person sees why
 a launch waits. Cost: about 6 to 8 pull requests, no new protocol. Left
@@ -1161,11 +1183,16 @@ Then the spike above.
 
 ## Decisions for the owner
 
+All four were decided on 2026-11-27 by the owner's liaison, to whom he
+delegated them: each as recommended.
+
 1. **Is it acceptable that work on a host pauses when its link drops and
    whenever the primary restarts or updates?** Recommended: yes, if the
    spike passes. It keeps one scheduler and one database, and it limits
    phase 1 to machines on one LAN or a direct tailnet path. If not, the
    cut to examine is a host that supervises its own sessions.
+   **Decided: yes.** A host freezes its VMs when it loses the primary, and
+   on a primary restart, if the spike passes.
 2. **One home served from the primary, or a home and a sign-in per
    machine?** Recommended: one home, for machines the team trusts as much
    as the primary, if it passes its gates. People sign in once and no
@@ -1173,11 +1200,16 @@ Then the spike above.
    real logins of everyone who allowed it and plant code in their homes.
    A home per machine limits that to the logins signed in there, costs a
    sign-in per machine, and is the fallback if a gate fails.
+   **Decided: one member home served from the primary,** for machines the
+   owner trusts.
 3. **May a host link run through the hosted edge?** Recommended: no. The
    link needs LAN-grade speed, and the relay is capped and metered.
+   **Decided: no.** Hosts do not connect through the hosted edge.
 4. **Phase 0 now, then the spike, then decide on phase 1?** Recommended:
    yes. Phase 0 is useful alone and its numbers may show a second machine
    is not the fix.
+   **Decided: yes.** Phase 0 now, then the spike, then phase 1 is decided
+   with the counters.
 
 ## Not established
 
