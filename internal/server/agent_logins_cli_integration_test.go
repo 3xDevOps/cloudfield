@@ -201,7 +201,9 @@ func (u *cliUser) terminal(answers map[string]string, closeAt string, args ...st
 	case <-time.After(time.Minute):
 		_ = cmd.Process.Kill()
 		mu.Lock()
-		t.Fatalf("aether %v on a terminal did not end; it showed:\n%s", args, seen.String())
+		shown := seen.String()
+		mu.Unlock()
+		t.Fatalf("aether %v on a terminal did not end; it showed:\n%s", args, shown)
 	}
 	<-read
 	code := 0
@@ -292,6 +294,11 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 	if code == 0 || !strings.Contains(stderr, "only Claude Code keeps added logins, so codex has none; cloudfield agent login codex signs in its one login\n") {
 		t.Fatalf("agent login codex --as work without a terminal = %d %q", code, stderr)
 	}
+	shown, code := ada.onTerminal(nil, "agent", "login", "claude", "--as=")
+	t.Logf("$ cloudfield agent login claude --as=\n%s", shown)
+	if code == 0 || shown != "aether: --as needs a name: cloudfield agent login claude --as <name>\n" {
+		t.Fatalf("agent login claude --as= on a terminal = %d:\n%s", code, shown)
+	}
 	if got := rows(); len(got) != 0 {
 		t.Fatalf("agent_logins rows before any login was added: %+v", got)
 	}
@@ -314,7 +321,7 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 	rt.mu.Lock()
 	rt.signIn = saveAs("ada@work.example.test", "org-work")
 	rt.mu.Unlock()
-	shown, code := ada.onTerminal(map[string]string{"Paste code here": "test-code\r"}, "agent", "login", "claude", "--as", "work")
+	shown, code = ada.onTerminal(map[string]string{"Paste code here": "test-code\r"}, "agent", "login", "claude", "--as", "work")
 	t.Logf("$ cloudfield agent login claude --as work\n%s", shown)
 	if code != 0 || !strings.Contains(shown, "added login work: subscription, plan max, ada@work.example.test, organisation Test Org\n") {
 		t.Fatalf("agent login claude --as work on a terminal = %d:\n%s", code, shown)
