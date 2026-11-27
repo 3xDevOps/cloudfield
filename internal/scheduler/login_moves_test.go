@@ -200,7 +200,8 @@ func TestALoginTheSessionUsedIsNotTriedAgain(t *testing.T) {
 
 // A seat, allocation, group or model message is a restriction on the
 // account, not a spent balance: the session does not move to the account's
-// other login but to a teammate's account, or stops as it would with one
+// other login but to a teammate's account, saying the account could not be
+// used rather than that its usage ran out, or stops as it would with one
 // login.
 func TestARestrictionSkipsTheAccountsOtherLogins(t *testing.T) {
 	t.Parallel()
@@ -226,7 +227,16 @@ func TestARestrictionSkipsTheAccountsOtherLogins(t *testing.T) {
 				t.Fatal(err)
 			}
 			if shared {
-				e.assertMovedToOwner(t, run.ID, notes)
+				const because = "Ada's account could not be used for this session"
+				waitFor(t, "the room note", func() bool {
+					return slices.Equal(notes.all(), []string{"Continued on Grace's account because " + because + "."})
+				})
+				row, rowErr := e.db.GetRun(t.Context(), run.ID)
+				c := e.rt.byName(string(run.ID))
+				if rowErr != nil || row.Account() != domain.AccountOf(e.owner.ID) || c == nil ||
+					!slices.Contains(c.spec.Command, "Your previous turn stopped because "+because+". The session continues on Grace's account. Continue the task where you stopped.") {
+					t.Fatalf("run %+v, %v; want it on Grace's account, resumed with the restriction's continuation", row, rowErr)
+				}
 				return
 			}
 			got := e.waitStoreStatus(t, run.ID, domain.RunNeedsAttention)

@@ -34,10 +34,12 @@ const revokedSegment = "share revoked"
 // accountMove is why a run leaves the account it is on: the account's usage
 // ran out, or its owner revoked the share the run uses it by. offLogin, on
 // a revoke, says that the owner turned the run's login off for shares
-// instead.
+// instead; restricted, on a usage move off an account with added logins,
+// that the vendor's message was a restriction, not a spent balance.
 type accountMove struct {
-	revoked  bool
-	offLogin string
+	revoked    bool
+	offLogin   string
+	restricted bool
 }
 
 var (
@@ -59,6 +61,8 @@ func (m accountMove) because(from string) string {
 		return m.offLogin
 	case m.revoked:
 		return from + " revoked access to their account"
+	case m.restricted:
+		return from + "'s account could not be used for this session"
 	}
 	return from + "'s usage ran out"
 }
