@@ -45,6 +45,8 @@ type fakeRuntime struct {
 	startHook   func(c *fakeContainer)
 	startDelay  time.Duration
 	stopHook    func()
+	// destroyHook runs at the start of every Destroy.
+	destroyHook func(id runtime.ID)
 	commitErr   error
 	commits     []fakeCommitCall
 	// heldImages are tags the fake daemon refuses to remove, as Docker does
@@ -285,6 +287,12 @@ func (r *fakeRuntime) Stop(_ context.Context, id runtime.ID, _ time.Duration) er
 }
 
 func (r *fakeRuntime) Destroy(_ context.Context, id runtime.ID) error {
+	r.mu.Lock()
+	hook := r.destroyHook
+	r.mu.Unlock()
+	if hook != nil {
+		hook(id)
+	}
 	r.mu.Lock()
 	if r.destroyErr != nil {
 		r.mu.Unlock()
