@@ -197,3 +197,20 @@ func vendorLine(message string) string {
 	}
 	return line
 }
+
+// noteRestricted records that the run left member's account on a
+// restriction message, which its other logins share.
+func (s *Scheduler) noteRestricted(entry *supervised, member domain.MemberID) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if slices.Contains(entry.restricted, member) {
+		return
+	}
+	entry.restricted = append(entry.restricted, member)
+	if s.runs[entry.runID] != entry {
+		return
+	}
+	if err := s.writeSidecar(entry.sidecar()); err != nil {
+		slog.Warn("scheduler: persist the account the session left on a restriction", "run", entry.runID, "error", err)
+	}
+}

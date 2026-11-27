@@ -653,14 +653,20 @@ func (s *Scheduler) tryMove(ctx context.Context, entry *supervised, m accountMov
 			// and are no candidates.
 			restricted = !agentstatus.IsDepletionMessage(message)
 		}
-		measured, err = fallback.MeasureNext(ctx, s.cfg.Store, f.Usage, run.MemberID, from, used, run.Harness, run.Fallback)
 		if restricted {
-			maps.DeleteFunc(measured, func(account domain.Account, _ float64) bool { return account.Member == from.Member && account != from })
+			s.noteRestricted(entry, from.Member)
 		}
+		measured, err = fallback.MeasureNext(ctx, s.cfg.Store, f.Usage, run.MemberID, from, used, run.Harness, run.Fallback)
 	}
 	if err != nil {
 		return stop("read fallback usage: " + err.Error())
 	}
+	s.mu.Lock()
+	restricted := slices.Clone(entry.restricted)
+	s.mu.Unlock()
+	maps.DeleteFunc(measured, func(account domain.Account, _ float64) bool {
+		return account != from && slices.Contains(restricted, account.Member)
+	})
 	// Admitted like a launch, and held until the replacement has started.
 	release, err := s.reserveCapacity(ctx)
 	if err != nil {

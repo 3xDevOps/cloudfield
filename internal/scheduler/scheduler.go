@@ -420,6 +420,9 @@ type supervised struct {
 	// verifiedLogins are the account owners whose own login a container of
 	// this run was started with, as the runtime confirmed at start.
 	verifiedLogins []domain.Account
+	// restricted are the accounts this run left on a restriction message,
+	// whose logins it does not move to again.
+	restricted []domain.MemberID
 	// reporter is recovered from the sidecar, since only the launch or mode
 	// switch knew which command the container runs.
 	reporter harness.Reporter

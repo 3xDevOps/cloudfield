@@ -885,3 +885,35 @@ func TestAMovesUsageReadIsBounded(t *testing.T) {
 		t.Fatalf("run %q after %s; want it parked on the unanswered read within seconds", got.Reason, time.Since(start))
 	}
 }
+
+// A session that left Ada's account on a seat restriction does not come
+// back to her second login when Grace's runs out later in the session: the
+// restriction holds for every login of Ada's account.
+func TestARestrictedAccountIsNotReturnedTo(t *testing.T) {
+	t.Parallel()
+	e, _, _, usage, second := newLoginMoveEnv(t, func(cfg *Config) { delete(cfg.Harnesses, "claude") })
+	e.share(t)
+	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "fix it", "claude", domain.LaunchTUI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e.report(t, run.ID, agentstatus.Report{State: agentstatus.Working, SessionID: "sess-1"})
+	seat, ok := agentstatus.FromClaudeHook([]byte(`{"session_id":"sess-1","hook_event_name":"StopFailure","error":"rate_limit","last_assistant_message":"Your seat type doesn't include usage credits"}`))
+	if !ok {
+		t.Fatal("the StopFailure hook was not mapped")
+	}
+	e.report(t, run.ID, seat)
+	waitFor(t, "the session on Grace's account", func() bool {
+		row, rowErr := e.db.GetRun(t.Context(), run.ID)
+		return rowErr == nil && row.Account() == domain.AccountOf(e.owner.ID) && e.rt.byName(string(run.ID)) != nil
+	})
+	usage.set(domain.AccountOf(e.owner.ID), 100)
+	waitFor(t, "the replacement's report", func() bool {
+		return e.sched.ReportAgentState(t.Context(), run.ID, agentstatus.Report{State: agentstatus.Working, SessionID: "sess-1"}) == nil
+	})
+	e.report(t, run.ID, standardLimit(t))
+	got := e.waitStoreStatus(t, run.ID, domain.RunNeedsAttention)
+	if got.Account() != domain.AccountOf(e.owner.ID) || usage.freshReads(second) != 0 {
+		t.Fatalf("run on %s (%q); want it kept on Grace's account, Ada's second login not tried", got.Account(), got.Reason)
+	}
+}
