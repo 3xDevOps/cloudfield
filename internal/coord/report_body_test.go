@@ -44,6 +44,8 @@ func TestReportBodyReachesTheParentWithTheReport(t *testing.T) {
 		// 6 KiB of quotes print as 12 KiB, so the report would not print
 		// whole in one inbox read.
 		"more than one read prints": strings.Repeat(`"`, 6<<10) + strings.Repeat("x", 6<<10),
+		// The bridge prints < as six bytes.
+		"more than one read prints through the bridge": strings.Repeat("<", 3<<10),
 	} {
 		if rpcErr := send(protocol.CoordOutcomeSuccess, body, name); rpcErr == nil || rpcErr.Code != protocol.CodeInvalidParams {
 			t.Fatalf("report with %s in its body = %v, want it refused, not changed", name, rpcErr)

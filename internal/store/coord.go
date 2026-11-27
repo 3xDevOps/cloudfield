@@ -623,11 +623,11 @@ func (d *DB) RetireRunMessages(ctx context.Context, to domain.RunID) error {
 const RunMessageBatchBytes = 16 << 10
 
 // batchFit is how many of msgs, oldest first and at least one, fit in
-// RunMessageBatchBytes. 120 bytes covers each message's field names, kind
-// and timestamp. A report's message is printed with the report's body, which
-// counts.
+// RunMessageBatchBytes. 256 bytes cover the read's own fields and 120 each
+// message's field names, kind and timestamp; a report's message is printed
+// with its outcome and body, which count with 64 more.
 func batchFit(ctx context.Context, tx *sql.Tx, msgs []*RunMessage) (int, error) {
-	size := 0
+	size := 256
 	for i, m := range msgs {
 		body, _ := json.Marshal(m.Body)
 		size += len(body) + len(m.ID) + len(m.FromRun) + len(m.CorrelationID) + 120
@@ -639,7 +639,7 @@ func batchFit(ctx context.Context, tx *sql.Tx, msgs []*RunMessage) (int, error) 
 			}
 			if reportBody != "" {
 				printed, _ := json.Marshal(reportBody)
-				size += len(printed)
+				size += len(printed) + 64
 			}
 		}
 		if i > 0 && size > RunMessageBatchBytes {

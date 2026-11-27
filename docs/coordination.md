@@ -1412,7 +1412,7 @@ as sent, with CRLF line ends made LF: one that is not valid UTF-8 or has a
 control character other than a line break or a tab, such as a terminal's color
 codes, is refused. So is a report whose summary and body would print as more
 than 16 KiB in the parent's inbox read, where quotes, backslashes and line
-breaks print as two bytes each: the parent's harness must be able to show the
+breaks print as two bytes each and `<`, `>` and `&` as six: the parent's harness must be able to show the
 report whole before the next read acknowledges it. A longer body is
 refused with `body is <n> bytes and exceeds 12288`, and a body on another
 outcome with `body is only valid with the "success", "failure" or "blocked"

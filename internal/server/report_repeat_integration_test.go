@@ -203,9 +203,7 @@ func TestIntegrationRepeatReports(t *testing.T) {
 	})
 	t.Run("findings in the report body arrive in one read", func(t *testing.T) {
 		e.t = t
-		// The body is all "<", which a JSON encoder that escapes HTML grows
-		// six times, past the socket's request frame.
-		parent, child := e.family("head -c 12000 /dev/zero | tr \"\\000\" \"<\" >/tmp/findings; echo END-OF-FINDINGS >>/tmp/findings; " +
+		parent, child := e.family("head -c 12000 /dev/zero | tr \"\\000\" x >/tmp/findings; echo END-OF-FINDINGS >>/tmp/findings; " +
 			"$CLI report --outcome success --summary two-findings --body-file /tmp/findings --idempotency-key a")
 		defer e.kill(parent, child)
 		if said := assistantText(waitTurns(ctx, t, e.srv, child, 2)); !strings.Contains(said, `"body_bytes":12016`) {

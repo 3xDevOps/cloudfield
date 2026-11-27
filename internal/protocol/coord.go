@@ -1,7 +1,6 @@
 package protocol
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -391,19 +390,16 @@ func ValidateReportBody(summary, body string) error {
 	// 512 bytes cover the message's id, sender, kind, outcome, time and
 	// field names.
 	if printed := printedLen(summary) + printedLen(body) + 512; printed > CoordReportPrintBytes {
-		return fmt.Errorf("the summary and body print as %d bytes in the parent's inbox read, which holds %d: quotes, backslashes and line breaks print as two bytes each; shorten the body, or put the rest in a file on your branch and name it", printed, CoordReportPrintBytes)
+		return fmt.Errorf("the summary and body print as %d bytes in the parent's inbox read, which holds %d: quotes, backslashes and line breaks print as two bytes each and <, > and & as six; shorten the body, or put the rest in a file on your branch and name it", printed, CoordReportPrintBytes)
 	}
 	return nil
 }
 
-// printedLen is how many bytes s takes as a JSON string without HTML
-// escapes, as the inbox command prints it.
+// printedLen is how many bytes s takes as a JSON string in the widest form
+// an inbox read prints: the bridge's, which escapes <, > and &.
 func printedLen(s string) int {
-	var b bytes.Buffer
-	enc := json.NewEncoder(&b)
-	enc.SetEscapeHTML(false)
-	_ = enc.Encode(s)
-	return b.Len() - 1
+	printed, _ := json.Marshal(s)
+	return len(printed)
 }
 
 // CheckReportBody is the error for a report whose body its server did not
