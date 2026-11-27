@@ -443,7 +443,9 @@ notice error: Turn interrupted: The agent connection ended before the turn finis
 printing an Enhanced session's conversation as it is written: a message fills
 its line as it arrives, and a tool call, plan or request prints again each
 time its state changes. It only reads. It prints `[conversation reset]` when
-the agent's conversation starts over, and exits when the session ends.
+the agent's conversation starts over, and `[conversation skipped]` where it
+fell too far behind to print every line; `cloudfield logs <session-id>`
+prints the lines it left out. It exits when the session ends.
 `cloudfield sessions <session-id>` shows how to answer a pending request. A
 Standard session has no conversation to follow, so `--follow` is refused
 there; `cloudfield attach <session-id> --read-only` watches its terminal.

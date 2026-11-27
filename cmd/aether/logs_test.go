@@ -24,8 +24,8 @@ func acpFrame(t *testing.T, seq int64, it acphost.Item) protocol.ACPFrame {
 	return protocol.ACPFrame{Seq: seq, Item: raw}
 }
 
-// An Enhanced run's log is one line per message and tool call, however many
-// segments and snapshots the session wrote for each.
+// An Enhanced run's log is one line per message, thought and tool call,
+// however many segments and snapshots the session wrote for each.
 func TestLogsPrintsAnEnhancedSessionAsLines(t *testing.T) {
 	exit := 1
 	frames := []protocol.ACPFrame{
@@ -365,6 +365,28 @@ func TestLogsFollowPrintsAnEnhancedSessionUntilItEnds(t *testing.T) {
 	}
 }
 
+// A stream replays only the newest items, so a follow that fell further
+// behind says that it left some out.
+func TestLogsFollowMarksWhatItSkipped(t *testing.T) {
+	message := func(seq int64, text string) protocol.ACPFrame {
+		return acpFrame(t, seq, acphost.Item{Kind: acphost.KindMessage, Message: &acphost.Message{Role: "assistant", MessageID: text, Text: text, Complete: true}})
+	}
+	c := fakeControlMethods(t, map[string]*fakeReply{
+		protocol.MethodRunGet:        {result: protocol.RunResult{Run: protocol.Run{ID: "r1", ACP: true, Status: string(domain.RunCompleted)}}},
+		protocol.MethodRunACPHistory: {result: protocol.RunACPHistoryResult{Frames: []protocol.ACPFrame{message(1, "one")}, OldestSeq: 1}},
+	})
+	var out bytes.Buffer
+	err := printLogs(c, &out, "r1", 10, func(protocol.ACPStreamRequest) (io.ReadWriteCloser, protocol.ACPStreamResponse, error) {
+		return acpStreamOf(true, message(5, "five"), message(6, "six")), protocol.ACPStreamResponse{OK: true, Replay: 2}, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := out.String(), "assistant: one\n[conversation skipped]\nassistant: five\nassistant: six\n"; got != want {
+		t.Fatalf("logs --follow = %q, want %q", got, want)
+	}
+}
+
 func TestLogsFollowNamesAttachForAStandardSession(t *testing.T) {
 	c := fakeControlMethods(t, map[string]*fakeReply{
 		protocol.MethodRunGet: {result: protocol.RunResult{Run: protocol.Run{ID: "r1", Status: string(domain.RunRunning)}}},
@@ -374,7 +396,7 @@ func TestLogsFollowNamesAttachForAStandardSession(t *testing.T) {
 		t.Error("opened a conversation stream on a Standard session")
 		return nil, protocol.ACPStreamResponse{}, io.EOF
 	})
-	if err == nil || !strings.Contains(err.Error(), "aether attach r1 --read-only") || out.Len() != 0 {
+	if err == nil || !strings.Contains(err.Error(), "cloudfield attach r1 --read-only") || out.Len() != 0 {
 		t.Fatalf("logs --follow on a Standard session = %v, printed %q", err, out.String())
 	}
 }

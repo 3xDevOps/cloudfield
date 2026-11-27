@@ -74,7 +74,7 @@ func printLogs(c *protocol.Client, w io.Writer, runID string, limit int, open ac
 	case r.ACP:
 		return printACPLogs(c, w, r.ID, limit, open)
 	case open != nil:
-		return fmt.Errorf("session %s is a Standard session, which has no conversation to follow; aether attach %s --read-only watches its terminal live", r.ID, r.ID)
+		return fmt.Errorf("session %s is a Standard session, which has no conversation to follow; cloudfield attach %s --read-only watches its terminal live", r.ID, r.ID)
 	}
 	return printTerminalLogs(c, w, r.ID, limit)
 }
@@ -176,6 +176,12 @@ type acpLog struct {
 	open    *acpEntry
 }
 
+func acpMarker(text string) *acpEntry {
+	e := &acpEntry{}
+	e.text.WriteString(text)
+	return e
+}
+
 func acpLogOf(frames []protocol.ACPFrame) *acpLog {
 	l := &acpLog{}
 	for _, f := range frames {
@@ -196,9 +202,7 @@ func (l *acpLog) add(f protocol.ACPFrame) *acpEntry {
 	switch {
 	case f.Reset || it.Kind == "reset":
 		l.entries, l.byKey = nil, nil
-		marker := &acpEntry{}
-		marker.text.WriteString("[conversation reset]")
-		return marker
+		return acpMarker("[conversation reset]")
 	case (it.Kind == "message" || it.Kind == "thought") && it.Message != nil:
 		id, head, text = it.Message.MessageID, it.Message.Role+": ", it.Message.Text
 		if it.Kind == "thought" {
@@ -423,9 +427,13 @@ func (l *acpLog) follow(c *protocol.Client, w io.Writer, runID string, last int6
 			}
 			if f.Item != nil {
 				owed--
+				// A replay holds only the newest items written after last.
+				if last > 0 && f.Seq > last+1 {
+					werr = l.print(w, acpMarker("[conversation skipped]"))
+				}
 			}
 			last = f.Seq
-			if e := l.add(fullACPFrame(c, runID, f)); e != nil {
+			if e := l.add(fullACPFrame(c, runID, f)); e != nil && werr == nil {
 				werr = l.print(w, e)
 			}
 		}
