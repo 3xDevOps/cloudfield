@@ -22,6 +22,11 @@ const (
 	// currentCache names, in a pool's directory, the link to its newest
 	// cache.
 	currentCache = "current"
+	// cachePublisher names, in a pool's directory, the link to the cache
+	// disk the newest cache was promoted from, and cacheSource the same link
+	// in a snapshot.
+	cachePublisher = "publisher"
+	cacheSource    = "source"
 	// cacheIdleAge is how long a pool's newest cache stays after a session
 	// last started from it or a sweep last found a disk reading through it.
 	cacheIdleAge = 7 * 24 * time.Hour
@@ -83,27 +88,37 @@ func (s *Store) readNewest(dir string) (Base, error) {
 	return Base{ID: "cache:" + strings.TrimSuffix(name, ".raw"), Path: filepath.Join(dir, name)}, nil
 }
 
-// publishCacheLocked moves disk, a session's cache as of seq, into dir as
-// the pool's newest cache.
-func (s *Store) publishCacheLocked(dir, disk string, seq int64) (Base, error) {
+// publishCacheLocked moves snapshot's disk.raw into dir as the pool's newest
+// cache and records the cache disk it came from, unless a VM that started
+// again has replaced that disk.
+func (s *Store) publishCacheLocked(dir, snapshot string) error {
 	id, err := newLocalID()
 	if err != nil {
-		return Base{}, err
+		return err
 	}
-	name := fmt.Sprintf("%020d-%s.raw", seq, strings.TrimPrefix(id, localPrefix))
+	name := fmt.Sprintf("%020d-%s.raw", snapshotSeq(snapshot), strings.TrimPrefix(id, localPrefix))
+	disk := filepath.Join(snapshot, "disk.raw")
 	if err = os.MkdirAll(dir, 0o700); err != nil {
-		return Base{}, fmt.Errorf("vmimage: cache pool: %w", err)
+		return fmt.Errorf("vmimage: cache pool: %w", err)
 	}
 	if err = os.Chmod(disk, 0o444); err != nil {
-		return Base{}, fmt.Errorf("vmimage: cache: %w", err)
+		return fmt.Errorf("vmimage: cache: %w", err)
 	}
 	if err = os.Rename(disk, filepath.Join(dir, name)); err != nil {
-		return Base{}, fmt.Errorf("vmimage: cache: %w", err)
+		return fmt.Errorf("vmimage: cache: %w", err)
 	}
-	if err = linkNewest(dir, name); err != nil {
-		return Base{}, fmt.Errorf("vmimage: cache: %w", err)
+	// Removed first, so a crash never leaves the last publisher on a newest
+	// cache it did not write.
+	if err = removeIfExists(filepath.Join(dir, cachePublisher)); err == nil {
+		err = linkNewest(dir, name)
 	}
-	return Base{ID: "cache:" + strings.TrimSuffix(name, ".raw"), Path: filepath.Join(dir, name)}, nil
+	if source, _ := os.Readlink(filepath.Join(snapshot, cacheSource)); err == nil && sameFile(source, filepath.Join(snapshot, "cache")) {
+		err = os.Symlink(source, filepath.Join(dir, cachePublisher))
+	}
+	if err != nil {
+		return fmt.Errorf("vmimage: cache: %w", err)
+	}
+	return nil
 }
 
 func linkNewest(dir, name string) error {
@@ -115,6 +130,19 @@ func linkNewest(dir, name string) error {
 		return err
 	}
 	return os.Rename(link+".tmp", link)
+}
+
+// extendsNewest reports whether the cache in snapshot holds what the pool's
+// newest cache does: the pool has none, the snapshot's disk reads through
+// it, or it was promoted from that same disk.
+func (s *Store) extendsNewest(dir, snapshot string) bool {
+	newest, err := s.readNewest(dir)
+	if err != nil || sameFile(newest.Path, filepath.Join(snapshot, "base.raw")) {
+		return true
+	}
+	source, err := os.Readlink(filepath.Join(snapshot, cacheSource))
+	publisher, _ := os.Readlink(filepath.Join(dir, cachePublisher))
+	return err == nil && source == publisher
 }
 
 // SnapshotCache links a stopped VM's cache disk, and a qcow2 one's base,
@@ -134,6 +162,9 @@ func (s *Store) SnapshotCache(disk Disk) (string, error) {
 	}
 	if err == nil {
 		err = s.pin(disk.Path, filepath.Join(work, "cache"))
+	}
+	if err == nil {
+		err = os.Symlink(disk.Path, filepath.Join(work, cacheSource))
 	}
 	if err != nil {
 		return "", errors.Join(fmt.Errorf("vmimage: snapshot cache %s: %w", disk.Path, err), os.RemoveAll(work))
@@ -164,9 +195,10 @@ func (s *Store) UnshareCache(ctx context.Context, disk Disk) error {
 // PromoteCache writes a snapshot SnapshotCache took as a raw disk, a copy
 // of a qcow2 one read over its base, and makes that pool's newest cache, or
 // drops the pool's caches when it takes more than cacheLimit, then deletes
-// the snapshot and every cache of the pool no disk uses. A snapshot older
-// than the pool's newest cache, whose promotion finished first, changes
-// nothing.
+// the snapshot and every cache of the pool no disk uses. A snapshot that
+// does not extend the pool's newest cache changes nothing and is not copied,
+// so a session that started from an older cache never replaces what another
+// has promoted since.
 func (s *Store) PromoteCache(pool, snapshot string) error {
 	defer func() { _ = os.RemoveAll(snapshot) }()
 	if !validPool(pool) {
@@ -174,6 +206,12 @@ func (s *Store) PromoteCache(pool, snapshot string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), buildTimeout)
 	defer cancel()
+	dir := filepath.Join(s.cachesDir(), pool)
+	if !s.extendsNewest(dir, snapshot) {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		return errors.Join(os.RemoveAll(snapshot), s.sweepCachesLocked(dir))
+	}
 	disk, cache, base := filepath.Join(snapshot, "disk.raw"), filepath.Join(snapshot, "cache"), filepath.Join(snapshot, "base.raw")
 	var err error
 	if _, statErr := os.Stat(base); statErr == nil {
@@ -191,16 +229,14 @@ func (s *Store) PromoteCache(pool, snapshot string) error {
 	if err != nil {
 		return fmt.Errorf("vmimage: promote cache: %w", err)
 	}
-	seq := snapshotSeq(snapshot)
-	dir := filepath.Join(s.cachesDir(), pool)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	switch newest, _ := s.readNewest(dir); {
-	case newestSeq(newest) > seq:
+	switch {
+	case !s.extendsNewest(dir, snapshot):
 	case info.Sys().(*syscall.Stat_t).Blocks*512 > cacheLimit:
 		err = removeIfExists(filepath.Join(dir, currentCache))
 	default:
-		_, err = s.publishCacheLocked(dir, disk, seq)
+		err = s.publishCacheLocked(dir, snapshot)
 	}
 	// The snapshot's link would keep the base it read through from the sweep.
 	return errors.Join(err, os.RemoveAll(snapshot), s.sweepCachesLocked(dir))
@@ -247,14 +283,6 @@ func (s *Store) sweepCachesLocked(dir string) error {
 // snapshotSeq is when SnapshotCache took a snapshot, from its name.
 func snapshotSeq(snapshot string) int64 {
 	digits, _, _ := strings.Cut(strings.TrimPrefix(filepath.Base(snapshot), "snapshot-"), "-")
-	seq, _ := strconv.ParseInt(digits, 10, 64)
-	return seq
-}
-
-// newestSeq is when the snapshot a pool's newest cache came from was taken,
-// 0 for none.
-func newestSeq(newest Base) int64 {
-	digits, _, _ := strings.Cut(filepath.Base(newest.Path), "-")
 	seq, _ := strconv.ParseInt(digits, 10, 64)
 	return seq
 }

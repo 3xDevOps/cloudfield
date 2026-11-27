@@ -233,3 +233,80 @@ func TestCachePoolLayersCachesOverRawBases(t *testing.T) {
 		t.Error("a pool name with a path was accepted")
 	}
 }
+
+func TestCachePoolKeepsTheCacheALaterStopDidNotStartFrom(t *testing.T) {
+	needTools(t, "mkfs.ext4", "cp", "qemu-img", "qemu-io")
+	dir := t.TempDir()
+	s, err := Open(filepath.Join(dir, "images"), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := filepath.Join(s.cachesDir(), "pool1")
+	stop := func(disk Disk) {
+		t.Helper()
+		snapshot, stopErr := s.SnapshotCache(disk)
+		if stopErr == nil {
+			stopErr = s.PromoteCache("pool1", snapshot)
+		}
+		if stopErr != nil {
+			t.Fatal(stopErr)
+		}
+	}
+	first, err := s.NewCacheDisk(t.Context(), "pool1", filepath.Join(dir, "first.img"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop(first)
+	writer, err := s.NewCacheDisk(t.Context(), "pool1", filepath.Join(dir, "writer.img"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	idle, err := s.NewCacheDisk(t.Context(), "pool1", filepath.Join(dir, "idle.img"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	qemuWrite(t, writer.Path, 0xcd)
+	stop(writer)
+	warm, err := s.readNewest(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sameFile(warm.Path, writer.Backing) {
+		t.Fatal("the session that wrote did not become the pool's newest cache")
+	}
+	stop(idle)
+	after, err := s.readNewest(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.Path != warm.Path || !bytes.Equal(head(t, after.Path, 512), bytes.Repeat([]byte{0xcd}, 512)) {
+		t.Errorf("a session that started from an older cache replaced the newest: %s starting %x, want %s", after.Path, head(t, after.Path, 8), warm.Path)
+	}
+	if entries, _ := os.ReadDir(s.tmpDir()); len(entries) != 0 {
+		t.Errorf("the dropped promotion left %d entries in %s", len(entries), s.tmpDir())
+	}
+
+	// The session whose cache is the newest starts again, writes and stops.
+	qemuWrite(t, writer.Path, 0xee)
+	stop(writer)
+	if after, err = s.readNewest(pool); err != nil {
+		t.Fatal(err)
+	}
+	if after.Path == warm.Path || !bytes.Equal(head(t, after.Path, 512), bytes.Repeat([]byte{0xee}, 512)) {
+		t.Errorf("the session the newest cache came from did not replace it: %s starting %x", after.Path, head(t, after.Path, 8))
+	}
+	later, err := s.NewCacheDisk(t.Context(), "pool1", filepath.Join(dir, "later.img"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stop(later)
+	warm, err = s.readNewest(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	qemuWrite(t, writer.Path, 0xaa)
+	stop(writer)
+	if after, _ = s.readNewest(pool); after.Path != warm.Path {
+		t.Errorf("a session replaced a newest cache that neither is its base nor came from it: %s, want %s", after.Path, warm.Path)
+	}
+}

@@ -395,10 +395,13 @@ What changes:
   layer over the member's newest caches, made when the session is created,
   so sessions share those caches' blocks and each holds only what it wrote.
   A session's caches become the member's newest when its VM stops for good:
-  it is stopped, or deleted while stopped or saved. A VM that holds its
-  session's checkout stays up for up to 10 minutes after a stop, so its
-  caches go back when it powers off, and a reopen before then keeps them on
-  the session. The server writes the member's new caches in the background,
+  it is stopped, or deleted while stopped or saved. They do so only when
+  they hold the member's newest: the session started from the newest, or the
+  newest came from this session. Otherwise another session's caches went
+  back first; the newest stays and this session's caches stay on its own
+  disk. A VM that holds its session's checkout stays up for up to 10
+  minutes after a stop, so its caches go back when it powers off, and a
+  reopen before then keeps them on the session. The server writes the member's new caches in the background,
   and a VM that starts again before that is done first copies its own cache
   disk. An idle sleep does not promote them. Caches over 20 GiB are dropped,
   and so are a member's newest caches once no VM has used them for 7 days;
