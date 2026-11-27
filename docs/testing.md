@@ -325,7 +325,7 @@ launch starts `turn`, mail starts `wake`, and `run.inject` starts the rest:
 
 | Turn | The agent | The session must show |
 | --- | --- | --- |
-| `turn` | runs a command and ends the turn without a report | `answered` after one reminder; Standard Codex, which Cloudfield cannot remind, `waiting` |
+| `turn` | runs a command and ends the turn without a report | `answered` after one reminder |
 | `wake` | gets mail while idle | a new turn, where Cloudfield can wake the session |
 | `waiting` | reports `waiting --for ci` | `waiting-ci` with the summary |
 | `answered` | reports `answered` | `answered`, not Needs you |
@@ -525,18 +525,17 @@ Each run stages a session in a temporary directory and removes it afterwards:
   ever starts. It refuses what the server refuses: a start from a session that
   is itself a subsession, and a `success` report while a subsession is
   unfinished.
-- `aether-internal` and `cloudfield-internal` on `PATH` and the MCP server
-  `aether`. All are the test
-  binary run again as `coordcli.Run` and `mcpbridge.Run`, pointed at the fake
-  socket.
+- `aether-internal` and `cloudfield-internal` on `PATH` and, in `enhanced`
+  mode, the MCP server `aether`. All are the test binary run again as
+  `coordcli.Run` and `mcpbridge.Run`, pointed at the fake socket.
 
 It then runs the real Claude Code CLI with the `claude` profile's Background
 command line (`claude -p --output-format stream-json --verbose
 --dangerously-skip-permissions`), the scenario's prompt as the task, the role
-card of a Standard session in `--append-system-prompt`, and the variables a
-Standard launch sets (`AETHER_RUN_ID`, `AETHER_WORKSPACE_ID`,
-`AETHER_ACCOUNT_MEMBER_ID`, `AETHER_HARNESS`, `AETHER_ROLE_CARD`,
-`AETHER_IDLE_WAKE`, `AETHER_MANAGED_HOOKS` and the profile's own). The agent
+card of an interactive session in `--append-system-prompt`, and the variables
+a launch sets (`AETHER_RUN_ID`, `AETHER_WORKSPACE_ID`,
+`AETHER_ACCOUNT_MEMBER_ID`, `AETHER_HARNESS`, `AETHER_ROLE_CARD`, the mode's own
+and the profile's own). The agent
 keeps all of its tools, so it can edit, commit and start subagents.
 
 The agent runs with `--dangerously-skip-permissions` on your machine, not in a
@@ -563,11 +562,12 @@ CLOUDFIELD_SESSION_EVAL_LABEL=main \
 | --- | --- | --- |
 | `CLOUDFIELD_SESSION_EVAL_LABEL` | `unlabeled` | Names the output files; use the commit or branch under test |
 | `CLOUDFIELD_SESSION_EVAL_RUNS` | `3` | Sessions per scenario |
+| `CLOUDFIELD_SESSION_EVAL_MODE` | `enhanced` | `standard` or `enhanced`: which kind of session to stage |
 | `CLOUDFIELD_SESSION_EVAL_MODEL` | Claude Code's default | Passed to `claude --model`; the report names the model the harness reports |
 | `CLOUDFIELD_SESSION_EVAL_ONLY` | all | Comma-separated scenario ids |
 | `CLOUDFIELD_SESSION_EVAL_PARALLEL` | `4` | Concurrent agent sessions |
 | `CLOUDFIELD_SESSION_EVAL_MAX_USD` | `5` | Passed to `claude --max-budget-usd`: one session stops when it has spent this |
-| `CLOUDFIELD_SESSION_EVAL_OUT` | `$TMPDIR/session-eval` | Where `<label>.md`, `<label>.json` and each session's `<label>-<scenario>-<n>.jsonl` transcript go |
+| `CLOUDFIELD_SESSION_EVAL_OUT` | `$TMPDIR/session-eval` | Where `<label>-<mode>.md`, `<label>-<mode>.json` and each session's `<label>-<mode>-<scenario>-<n>.jsonl` transcript go |
 
 A session also stops after 10 minutes, or one minute before the test's
 `-timeout`. The scenarios are in
@@ -581,6 +581,13 @@ A session also stops after 10 minutes, or one minute before the test's
 | `two-subsessions` | The user asks for exactly two subsessions | 2 |
 | `codex-review` | The user asks for a review by Codex | 1, on `codex` |
 | `subsession` | The session is itself a subsession, and must get its change reviewed | 0 |
+| `separate-prs` | Two large streams that each need their own pull request; nobody mentions subsessions | 1 or 2 |
+| `hours-of-work` | A quick fix beside an independent stream described as hours of work | 1 |
+| `another-agent` | A check by an agent from a different vendor | 1 |
+
+`small-fix`, `independent-review`, `parallel-parts` and `subsession` ask whether the agent starts a subsession where none is wanted;
+the last three whether it starts one unasked where the role card says to. The
+fixture is small, so the last three state the size of the work in the prompt.
 
 A start counts when the socket accepted it or refused it by policy; a retry of
 the same idempotency key and a request with invalid parameters do not. Where no
@@ -601,26 +608,59 @@ that ended a turn from one sent mid-turn.
 The Markdown report has a row per scenario: sessions passed, subsession starts,
 start attempts, the starts wanted, the agents the starts asked for, subagents
 started (`subagent_stats.spawned` in Claude Code's result), report outcomes,
+report calls made with the tool and with the command, refused ones included, so
+their sum can exceed the accepted outcomes beside them, nudges (Claude Code's `[Your
+previous response had no visible output...]` prompts),
 socket requests, latency and cost. Cost
 is the figure `claude` reports. The bridge itself makes two `coord.status`
-requests when it starts, so every session records at least those. Below the
+requests when it starts, so every `enhanced` session records at least those
+and a `standard` one two fewer. A subagent's report call or nudge counts with
+the session's own. Below the
 table are the failed checks and, per session, the agent's own tool calls by
 name, every recorded request with its parameters, and the reply, with the
 questions a person should answer from them. Results are rewritten after every
 session.
 
-What a real Standard session has and the eval does not:
+What a real session has and the eval does not:
 
 - The co-author rule and the team memory brief the scheduler appends to the
   role card.
 - The hooks a launch loads: the inbox, status and wake hooks, and the server's
-  reminder to a turn that ends without a report. `aether-internal skill` still
-  says the launch loaded them, because `AETHER_MANAGED_HOOKS=1` is set.
+  reminder to a turn that ends without a report. In `standard` mode
+  `aether-internal skill` still says the launch loaded them, because
+  `AETHER_MANAGED_HOOKS=1` is set.
 - A container. The agent sees your machine's tools and paths.
 
-The eval registers the MCP bridge, which an Enhanced session gets and a
-Standard session only has when its owner [registers
-it](mcp-bridge.md#registration).
+The two modes differ in what the agent can report with. `enhanced` registers
+the MCP bridge, so the agent has `aether_report`, and sets `AETHER_ENHANCED`.
+`standard` registers no MCP server, so the agent reports with the command, and
+sets `AETHER_IDLE_WAKE` and `AETHER_MANAGED_HOOKS`; a real Standard session has
+the bridge only when its owner [registers it](mcp-bridge.md#registration).
+Both run the `claude` on your `PATH` with `-p`: a real Enhanced session drives
+the Claude Code version its ACP adapter pins through that adapter, which the
+eval does not. In the runs so far Claude Code offered the bridge's tools only
+through its tool search, and agents reported with the command instead. Before
+the modes existed every run was what `standard` is now plus the bridge, so
+earlier results do not compare with either mode.
+
+`TestACPCheck` covers the ACP difference for one turn: it drives the Claude
+Code ACP adapter with the same staged session, role card and bridge, and
+writes each run's ACP history and accepted reports. It needs `node` and
+`claude` on `PATH` and the adapter's entry script:
+
+```sh
+CLOUDFIELD_SESSION_EVAL_ACP=<path>/claude-agent-acp/dist/index.js \
+  go test -count=1 -tags sessioneval -run TestACPCheck -timeout 30m -v ./internal/sessioneval
+```
+
+It reads `CLOUDFIELD_SESSION_EVAL_RUNS` (default 3), `_ONLY` (default
+`small-fix`), `_LABEL` and `_OUT`, and appends
+`CLOUDFIELD_SESSION_EVAL_ACP_SUFFIX` to the prompt. It scores nothing: read
+`<label>-<scenario>-<n>.acp.json` and the `.items.jsonl` history beside it.
+Unlike an Enhanced launch it runs the `claude` on your `PATH` whatever its
+version, answers permission requests itself instead of setting the bypass
+mode, sets no model or effort, and loads your own Claude Code settings,
+plugins and hooks, which the adapter gives no way to leave out.
 
 Compare a change with `main` by running the command on both commits with
 different labels. Model output varies between sessions, so a few sessions per
@@ -951,7 +991,7 @@ runs every package that has them:
 | --- | --- | --- |
 | `internal/vmimage` | `TestKVMStandardImageRunsDocker` | The standard image from store disks, with Docker inside ([The guest kernel](#the-guest-kernel)) |
 | `internal/guest/helper` | `TestKVMHelper` | The helper as PID 1, driven through its client ([The VM helper](#the-vm-helper)) |
-| `internal/runtime/vm` | `TestKVM...` in each `kvm_*_test.go` | Sessions through the engine, with real systemd units and the server binary as monitor and helper: lifecycle, six saves and wakes of one VM, a guest reboot, the home, the checkout, the helper keeping the console and outliving connections hung up at birth, the network, Save environment, cold memory returning to the host, the memory a wake loads back, a freeze stopping VMs that fill their memory at once, a shutdown letting go of a frozen VM's agent keeper |
+| `internal/runtime/vm` | `TestKVM...` in each `kvm_*_test.go` | Sessions through the engine, with real systemd units and the server binary as monitor and helper: lifecycle, six saves and wakes of one VM, a guest reboot, the home, the checkout, the helper keeping the console and outliving connections hung up at birth, a redialing client noticing the helper before one left to its backoff, the network, Save environment, cold memory returning to the host, the memory a wake loads back, a freeze stopping VMs that fill their memory at once, a shutdown letting go of a frozen VM's agent keeper |
 
 It needs root on a Linux x86-64 host with `/dev/kvm`, `cloud-hypervisor`,
 `qemu-img`, `mkfs.ext4`, `virtiofsd` at `/usr/libexec/virtiofsd`, systemd,

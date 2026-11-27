@@ -27,6 +27,12 @@ services:
       # than one address pair"); add its hosts to the router rule and its
       # secret below.
       #AETHER_EDGE_ORIGIN_PAIRS: https://auth.example.net https://edge.example.net <github-client-id-2> /run/secrets/github-client-secret-2
+      # Mark the first pair retiring in favour of the second (docs/edge.md,
+      # "Retiring an address pair"); the date is optional and only shown.
+      #AETHER_EDGE_RETIRING_PAIRS: https://edge.example.com https://edge.example.net <YYYY-MM-DD>
+      # Retire the pair that was first after making the second the first
+      # (docs/edge.md, "Retired"); keep its hosts in the router rule.
+      #AETHER_EDGE_RETIRED_PAIRS: https://auth.example.com https://edge.example.com https://edge.example.net
     secrets:
       - github-client-secret
       #- github-client-secret-2

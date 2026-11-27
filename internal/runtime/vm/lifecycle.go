@@ -35,6 +35,10 @@ const (
 	// had to kill.
 	killedExitCode = 137
 	waitPoll       = 200 * time.Millisecond
+	// powerOffPoll is short: a guest told to power off is gone about 0.2 s
+	// later, and the stop, destroy or restart waiting for it holds the VM's
+	// lock.
+	powerOffPoll = 25 * time.Millisecond
 	// lingerTimeout bounds how long a VM stays up after its main process
 	// exited: long enough for the server to finish the session's checkout,
 	// which is on the VM's disk.
@@ -247,7 +251,7 @@ func (e *engine) powerOff(ctx context.Context, rec *record) (bool, error) {
 		select {
 		case <-ctx.Done():
 			return false, e.units.Stop(context.WithoutCancel(ctx), unitName(rec.Key))
-		case <-time.After(waitPoll):
+		case <-time.After(powerOffPoll):
 		}
 	}
 }
@@ -470,7 +474,8 @@ func (e *engine) pause(ctx context.Context, key string) error {
 		return err
 	}
 	if len(rec.CheckoutDisks) == 0 {
-		err = newCHAPI(e.path(key, apiSocket)).pause(ctx)
+		// As in save: a pause that lands is not left behind an error.
+		err = newCHAPI(e.path(key, apiSocket)).pause(context.WithoutCancel(ctx))
 	} else {
 		err = e.freezeSession(ctx, rec)
 	}
@@ -478,6 +483,28 @@ func (e *engine) pause(ctx context.Context, key string) error {
 		return fmt.Errorf("vm runtime: pause VM %s: %w", key, err)
 	}
 	return nil
+}
+
+// park is pause after the guest wrote its dirty data and dropped its page
+// cache, as before a save, so the paused VM holds what its processes use.
+// A frozen session's guest kernel goes on reporting the freed pages to the
+// host; stopped vCPUs report nothing, so that VM waits for them first.
+func (e *engine) park(ctx context.Context, key string) error {
+	unlock := e.lock(key)
+	rec, err := e.requireRunning(ctx, key, "pause")
+	if err == nil && e.syncGuest(ctx, key) && len(rec.CheckoutDisks) == 0 {
+		e.awaitReported(ctx, key)
+		// As in save: the guest still runs, so a caller that gave up loses
+		// nothing.
+		if ctx.Err() != nil {
+			err = fmt.Errorf("vm runtime: pause VM %s: %w", key, ctx.Err())
+		}
+	}
+	unlock()
+	if err != nil {
+		return err
+	}
+	return e.pause(ctx, key)
 }
 
 func (e *engine) resume(ctx context.Context, key string) error {

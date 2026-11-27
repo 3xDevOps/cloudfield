@@ -36,7 +36,7 @@ func TestRoundTripCancelUnblocks(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan *protocol.Error, 1)
 	go func() {
-		_, err := roundTrip(ctx, client, "server.status", nil)
+		_, _, err := roundTrip(ctx, client, "server.status", nil)
 		var perr *protocol.Error
 		if !errors.As(err, &perr) {
 			t.Errorf("roundTrip error = %v, want *protocol.Error", err)

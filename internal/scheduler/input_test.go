@@ -520,3 +520,87 @@ func TestInputRequestsCannotSurviveEndedLifetime(t *testing.T) {
 		})
 	}
 }
+
+// A message typed into a terminal that shows a question would answer it. The
+// second question is a subagent's and its answer is never reported: the end of
+// the main agent's turn stands in.
+func TestInjectIsRefusedWhileAStandardAgentAsks(t *testing.T) {
+	t.Parallel()
+	e := newReportingEnv(t, nil)
+	run, _ := e.launchReporting(t)
+	asks := `{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","session_id":"session","tool_use_id":"asked"}`
+	typed := 0
+	for _, step := range []struct {
+		hook    string
+		refused bool
+	}{
+		{asks, true},
+		{`{"hook_event_name":"PostToolUse","tool_name":"AskUserQuestion","session_id":"session","tool_use_id":"asked"}`, false},
+		{`{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","session_id":"session","agent_id":"subagent","tool_use_id":"asked"}`, true},
+		{`{"hook_event_name":"Stop","session_id":"session"}`, false},
+	} {
+		report, _ := agentstatus.FromClaudeHook([]byte(step.hook))
+		if err := e.sched.ReportAgentState(t.Context(), run.ID, report); err != nil {
+			t.Fatal(err)
+		}
+		if !step.refused {
+			typed++
+		}
+		_, err := e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "also run the tests"}, false, nil)
+		if errors.Is(err, domain.ErrPromptNotSent) != step.refused || len(e.pty.injected()) != typed {
+			t.Fatalf("after %s: Inject = %v, typed %+v, want %d typed", step.hook, err, e.pty.injected(), typed)
+		}
+	}
+}
+
+// A request ends with the turn and the agent that reported it. The account
+// move takes the report of a turn the usage limit ended, and starts another
+// agent when the run moves.
+func TestInputRequestsEndWithTheirTurnAndAgent(t *testing.T) {
+	t.Parallel()
+	hook := func(payload string) agentstatus.Report {
+		report, _ := agentstatus.FromClaudeHook([]byte(payload))
+		return report
+	}
+	for _, tc := range []struct {
+		name string
+		opts domain.LaunchOptions
+		end  func(*testing.T, *shareEnv, domain.RunID)
+	}{
+		{"usage limit with fallback off", domain.LaunchOptions{Fallback: domain.AccountFallback{Disabled: true}}, func(t *testing.T, e *shareEnv, run domain.RunID) {
+			limit := hook(`{"session_id":"sess-1","hook_event_name":"StopFailure","error":"rate_limit","last_assistant_message":"You've hit your session limit · resets 3pm (UTC)"}`)
+			if err := e.sched.ReportAgentState(t.Context(), run, limit); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"account share revoked", domain.LaunchOptions{}, func(t *testing.T, e *shareEnv, _ domain.RunID) { e.revoke(t) }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e, _, _ := newFallbackEnv(t, func(cfg *Config) { delete(cfg.Harnesses, "claude") })
+			e.share(t)
+			run, err := e.sched.LaunchWithOptions(t.Context(), e.ws.ID, e.member.ID, e.owner.ID, "fix it", "claude", domain.LaunchTUI, tc.opts)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, payload := range []string{
+				`{"hook_event_name":"UserPromptSubmit","session_id":"sess-1"}`,
+				`{"hook_event_name":"PreToolUse","tool_name":"AskUserQuestion","session_id":"sess-1","agent_id":"subagent","tool_use_id":"asked"}`,
+			} {
+				if err := e.sched.ReportAgentState(t.Context(), run.ID, hook(payload)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if asked := e.sched.PendingInputs(run.ID); len(asked) != 1 {
+				t.Fatalf("pending inputs = %+v, want the subagent's question", asked)
+			}
+			sub := e.subscribe(t)
+			tc.end(t, e, run.ID)
+			waitInputEvent(t, sub, run.ID, []domain.RunInputRequest{})
+			assertPendingInputs(t, e.sched, run.ID, []domain.RunInputRequest{})
+			if row, err := e.db.GetRun(t.Context(), run.ID); err != nil || row.Status.Terminal() {
+				t.Fatalf("run = %+v, %v; want it live", row, err)
+			}
+		})
+	}
+}

@@ -408,7 +408,8 @@ func (s *Scheduler) Wakeable(run domain.RunID) bool {
 // command its container has. The turn-end report reminder keeps the old
 // name: released dashboards recognise it by its lead.
 func (s *Scheduler) Wake(ctx context.Context, run domain.RunID, prompt string) error {
-	if !strings.HasPrefix(prompt, coordhooks.ReportReminderLead) {
+	reminder := strings.HasPrefix(prompt, coordhooks.ReportReminderLead)
+	if !reminder {
 		s.mu.Lock()
 		var cid runtime.ID
 		if entry := s.runs[run]; entry != nil {
@@ -430,7 +431,7 @@ func (s *Scheduler) Wake(ctx context.Context, run domain.RunID, prompt string) e
 	if !s.attachedAppServer(run) {
 		return s.WakeEnhanced(ctx, run, prompt)
 	}
-	return s.appServer.wake(ctx, run, prompt)
+	return s.appServer.wake(ctx, run, prompt, reminder)
 }
 
 // asleepStandardVM reports an open Standard session whose VM is saved or

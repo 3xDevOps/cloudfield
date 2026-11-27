@@ -123,6 +123,7 @@ func registerTools(srv *mcp.Server, socket string, g *gate, cli string) error {
 		if in.AckToken == "" {
 			in.AckToken = g.token()
 		}
+		in.ReportBodies = true
 		var out protocol.CoordInboxResult
 		if err := coordtransport.Call(ctx, socket, protocol.MethodCoordInbox, in, &out); err != nil {
 			return failed(err), empty, nil
@@ -167,7 +168,7 @@ func registerTools(srv *mcp.Server, socket string, g *gate, cli string) error {
 	mcp.AddTool(srv, &mcp.Tool{
 		Name: toolReport,
 		Description: coordhooks.SubagentRule + " " +
-			"Records this session's state; end every turn with exactly one report as your last action. Never report while still working. " +
+			"Records this session's state; report once every turn, when its work is done; your instructions say whether the reply goes before or after it. Never report while still working. " +
 			"answered means " + coordhooks.AnsweredUse + " It shows the session as Answered, never needs a member and takes no evidence_refs. " +
 			"needs-input is only for a question a human must answer: the summary is that question, shown as the Needs you reason at turn end; end your turn after it. It takes no evidence_refs and is refused for Background sessions. " +
 			"waiting means " + coordhooks.WaitingUse + " The next turn clears it. It takes no evidence_refs. " +
@@ -180,6 +181,9 @@ func registerTools(srv *mcp.Server, socket string, g *gate, cli string) error {
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in protocol.CoordReportParams) (*mcp.CallToolResult, protocol.CoordReportResult, error) {
 		var out protocol.CoordReportResult
 		if err := coordtransport.Call(ctx, socket, protocol.MethodCoordReport, in, &out); err != nil {
+			return failed(err), out, nil
+		}
+		if err := protocol.CheckReportBody(in.Body, out); err != nil {
 			return failed(err), out, nil
 		}
 		return nil, out, nil

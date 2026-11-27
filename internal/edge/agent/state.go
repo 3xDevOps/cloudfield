@@ -6,10 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -34,6 +36,12 @@ const (
 	// edgeStateFile, beside ownerFile, records the state the edge holding
 	// the key last reported for this server.
 	edgeStateFile = "edge_state.json"
+	// noticesFile, beside ownerFile, holds the verified notices of the
+	// latest enrollment at the edge holding the key; noticesPinFile, a
+	// hard link to the pin file they were stored under, binds them to
+	// that pin.
+	noticesFile    = "notices.json"
+	noticesPinFile = "notices.pin"
 )
 
 // State is the agent's persistent state: the pinned edge key, the owner,
@@ -46,7 +54,17 @@ const (
 // same edge keeps its pin and owner. The owner is kept per edge key: an
 // edge with another key, once `aether-server edge trust` pins it, starts
 // without one, and pinning the first edge's key again finds its owner.
-type State struct{ dir string }
+type State struct {
+	dir string
+	// beforeLink and beforePublish, when set, run just before
+	// writeNotices links the pin file and pinFirst publishes one; tests
+	// pin a key there as an older binary, which takes no lock, would.
+	beforeLink, beforePublish func()
+	// linkFile and renameNoReplace replace os.Link and the rename that
+	// replaces nothing when set; tests make them fail as a file system
+	// without them does.
+	linkFile, renameNoReplace func(oldname, newname string) error
+}
 
 // OpenState returns the state under dataDir. Nothing is created until a
 // method writes.
@@ -119,29 +137,252 @@ func (c ClaimCode) Usable(now time.Time) bool {
 	return c.Hash != "" && c.AttemptsLeft > 0 && !now.After(c.ExpiresAt)
 }
 
+// pin is the pinned edge key. file is the pin file it was read from:
+// every pin, by this build or an older one, puts a new file in place, so a
+// later pin, even of the same key, is another file. f, when set, holds
+// that file open, which keeps its file number from being reused; close
+// it with close.
 type pin struct {
-	Key ed25519.PublicKey `json:"key"`
+	Key  ed25519.PublicKey `json:"key"`
+	file os.FileInfo
+	f    *os.File
+}
+
+func (p pin) close() {
+	if p.f != nil {
+		_ = p.f.Close()
+	}
+}
+
+// openPin opens the pin file at path and returns its pin, holding the
+// file open, or a zero pin when there is none.
+func openPin(path string) (pin, error) {
+	f, err := os.Open(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return pin{}, nil
+	}
+	if err != nil {
+		return pin{}, fmt.Errorf("edgeagent: %w", err)
+	}
+	p, err := readPin(f)
+	if err != nil {
+		_ = f.Close()
+		return pin{}, err
+	}
+	return p, nil
+}
+
+// readPin reads the pin in f, which the pin keeps.
+func readPin(f *os.File) (pin, error) {
+	info, err := f.Stat()
+	if err != nil {
+		return pin{}, fmt.Errorf("edgeagent: %w", err)
+	}
+	data, err := io.ReadAll(f)
+	if err != nil {
+		return pin{}, fmt.Errorf("edgeagent: read %s: %w", f.Name(), err)
+	}
+	var p pin
+	if err := json.Unmarshal(data, &p); err != nil {
+		return pin{}, fmt.Errorf("edgeagent: parse %s: %w", f.Name(), err)
+	}
+	if len(p.Key) != ed25519.PublicKeySize {
+		return pin{}, fmt.Errorf("edgeagent: %s holds a %d-byte key, want %d", f.Name(), len(p.Key), ed25519.PublicKeySize)
+	}
+	p.file, p.f = info, f
+	return p, nil
+}
+
+// pinned returns the pin, with a nil Key when none is pinned, and does
+// not hold its file.
+func (s *State) pinned() (pin, error) {
+	p, err := openPin(s.path(pinFile))
+	p.close()
+	p.f = nil
+	return p, err
 }
 
 // PinnedKey returns the pinned edge key, nil when none is pinned.
 func (s *State) PinnedKey() (ed25519.PublicKey, error) {
-	var p pin
-	ok, err := s.read(pinFile, &p)
-	if err != nil || !ok {
-		return nil, err
-	}
-	if len(p.Key) != ed25519.PublicKeySize {
-		return nil, fmt.Errorf("edgeagent: %s holds a %d-byte key, want %d", s.path(pinFile), len(p.Key), ed25519.PublicKeySize)
-	}
-	return p.Key, nil
+	p, err := s.pinned()
+	return p.Key, err
 }
 
-// Pin replaces the pinned edge key.
+// Pin replaces the pinned edge key. It deletes the notices stored for the
+// key it replaces and for key, so none survives a change of pin.
 func (s *State) Pin(key ed25519.PublicKey) error {
 	if len(key) != ed25519.PublicKeySize {
 		return fmt.Errorf("edgeagent: edge key is %d bytes, want %d", len(key), ed25519.PublicKeySize)
 	}
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	cur, err := s.pinned()
+	if err != nil {
+		return err
+	}
+	if err := s.forgetNotices(cur.Key, key); err != nil {
+		return err
+	}
 	return s.write(pinFile, pin{Key: key})
+}
+
+func (s *State) noReplace(oldname, newname string) error {
+	if s.renameNoReplace != nil {
+		return s.renameNoReplace(oldname, newname)
+	}
+	return renameNoReplace(oldname, newname)
+}
+
+// unsupported reports whether err says the file system or the kernel
+// does not offer the operation.
+func unsupported(err error) bool {
+	return errors.Is(err, errors.ErrUnsupported) || errors.Is(err, syscall.EINVAL) || errors.Is(err, syscall.ENOSYS) ||
+		errors.Is(err, syscall.EOPNOTSUPP)
+}
+
+// noReplaceUnavailable reports whether err says the rename that
+// replaces nothing cannot be used here: unsupported, or refused by a
+// system call policy such as seccomp, which answers EPERM or EACCES.
+func noReplaceUnavailable(err error) bool {
+	return unsupported(err) || errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES)
+}
+
+// cannotLink reports whether err says this file system or policy makes
+// no hard link here: unsupported (ENOSYS, ENOTSUP, EOPNOTSUPP), EPERM
+// (vfat, or protected hard links), EACCES (a container policy), EXDEV and
+// EMLINK. Any other error, such as EIO, ENOSPC or EDQUOT, is a failure.
+func cannotLink(err error) bool {
+	if errors.Is(err, errors.ErrUnsupported) {
+		return true
+	}
+	for _, e := range []syscall.Errno{syscall.EPERM, syscall.EACCES, syscall.EXDEV, syscall.EMLINK} {
+		if errors.Is(err, e) {
+			return true
+		}
+	}
+	return false
+}
+
+// noticesTemp matches the names writeNotices' temporary files take: the
+// notices file's name with a generated number, and its link with .pin.
+var noticesTemp = regexp.MustCompile(`^\.` + regexp.QuoteMeta(noticesFile) + `\.[0-9]+(\.pin)?$`)
+
+func (s *State) link(oldname, newname string) error {
+	if s.linkFile != nil {
+		return s.linkFile(oldname, newname)
+	}
+	return os.Link(oldname, newname)
+}
+
+// sameRegular reports whether path itself, not a file a symbolic link
+// there names, is the regular file held.
+func sameRegular(path string, held os.FileInfo) bool {
+	info, err := os.Lstat(path)
+	return err == nil && info.Mode().IsRegular() && os.SameFile(info, held)
+}
+
+// forgetNotices deletes the stored notices of each key.
+func (s *State) forgetNotices(keys ...ed25519.PublicKey) error {
+	for _, k := range keys {
+		if k == nil {
+			continue
+		}
+		for _, file := range []string{noticesPinFile, noticesFile} {
+			if err := s.remove(keyDirFile(k, file)); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// pinFirst returns the pin of key, holding its file open: the one it
+// pinned, and true, when none was pinned, or the one already pinned, and
+// false. It publishes a pin only where none is, so a pin an older binary,
+// which takes no lock, wrote meanwhile is neither overwritten nor taken
+// for this one; another key is refused as a changed edge key.
+func (s *State) pinFirst(key ed25519.PublicKey) (pin, bool, error) {
+	unlock, err := s.lock()
+	if err != nil {
+		return pin{}, false, err
+	}
+	defer unlock()
+	cur, err := openPin(s.path(pinFile))
+	if err != nil {
+		return pin{}, false, err
+	}
+	created := false
+	if cur.Key == nil {
+		if err = s.forgetNotices(key); err != nil {
+			return pin{}, false, err
+		}
+		if cur, created, err = s.publishPin(key); err != nil {
+			return pin{}, false, err
+		}
+	}
+	if !cur.Key.Equal(key) {
+		cur.close()
+		return pin{}, false, pinMismatch(cur.Key, key)
+	}
+	return cur, created, nil
+}
+
+// publishPin puts a pin of key in place unless a pin file appeared, and
+// returns the pin file in place, held open, and whether it is this one.
+func (s *State) publishPin(key ed25519.PublicKey) (pin, bool, error) {
+	tmp, err := s.writeTemp(pinFile, pin{Key: key})
+	if err != nil {
+		return pin{}, false, err
+	}
+	defer os.Remove(tmp) //nolint:errcheck // a second name of the pin, or unused
+	f, err := os.Open(tmp)
+	if err != nil {
+		return pin{}, false, fmt.Errorf("edgeagent: %w", err)
+	}
+	if s.beforePublish != nil {
+		s.beforePublish()
+	}
+	// Put the pin in place only where none is: a rename that replaces
+	// nothing, else a hard link. A file system with neither pins by a
+	// plain rename, as builds before notices did, which can replace a pin
+	// another process wrote in the same instant.
+	err = s.noReplace(tmp, s.path(pinFile))
+	if noReplaceUnavailable(err) {
+		if err = s.link(tmp, s.path(pinFile)); cannotLink(err) {
+			// The rename replaces whatever is there, such as a symbolic
+			// link to a missing file the read above took for no pin.
+			switch _, lerr := os.Lstat(s.path(pinFile)); {
+			case lerr == nil:
+				err = fmt.Errorf("edgeagent: %s: %w", s.path(pinFile), fs.ErrExist)
+			case errors.Is(lerr, fs.ErrNotExist):
+				err = os.Rename(tmp, s.path(pinFile))
+			default:
+				err = lerr
+			}
+		}
+	}
+	if errors.Is(err, fs.ErrExist) {
+		_ = f.Close()
+		p, oerr := openPin(s.path(pinFile))
+		if oerr == nil && p.Key == nil {
+			oerr = fmt.Errorf("edgeagent: %s exists but names no readable pin file, as a symbolic link to a missing file does; "+
+				"pin the edge's key with `aether-server edge trust`", s.path(pinFile))
+		}
+		return p, false, oerr
+	}
+	if err != nil {
+		_ = f.Close()
+		return pin{}, false, fmt.Errorf("edgeagent: %w", err)
+	}
+	p, err := readPin(f)
+	if err != nil {
+		_ = f.Close()
+		return pin{}, false, err
+	}
+	return p, true, nil
 }
 
 // refuseEarlierPins refuses a first pin while an edge key pinned by a
@@ -207,8 +448,13 @@ func (s *State) keyFile(file string) (string, error) {
 	if err != nil || key == nil {
 		return "", err
 	}
+	return keyDirFile(key, file), nil
+}
+
+// keyDirFile is file in key's directory.
+func keyDirFile(key ed25519.PublicKey, file string) string {
 	id := strings.NewReplacer("+", "-", "/", "_").Replace(strings.TrimPrefix(edgeproto.EdgeKeyFingerprint(key), "SHA256:"))
-	return filepath.Join(keysDir, "sha256-"+id, file), nil
+	return filepath.Join(keysDir, "sha256-"+id, file)
 }
 
 type edgeStateRecord struct {
@@ -249,6 +495,101 @@ func (s *State) writeEdgeState(serverID, state string) error {
 		return errors.New("edgeagent: no edge key is pinned, so no edge state can be recorded")
 	}
 	return s.write(name, edgeStateRecord{ServerID: serverID, State: state})
+}
+
+// StoredNotices are the notices of the latest enrollment at the edge
+// holding the pinned key, verified against it for the server ServerID,
+// and when they came. FirstUse is set
+// when that enrollment pinned the key, so they are trusted as the pin
+// is: on first use, for display only.
+type StoredNotices struct {
+	ServerID string             `json:"server_id"`
+	Received time.Time          `json:"received"`
+	FirstUse bool               `json:"first_use,omitempty"`
+	Notices  []edgeproto.Notice `json:"notices"`
+}
+
+// Notices returns the stored notices of the pinned key for the server
+// serverID. They are none when the latest enrollment had none, no key is
+// pinned, they were verified for another server id, which is this server
+// before its host key changed, or they were stored under another pin
+// file, as when any build pinned a key since: notices.pin, the hard link
+// made when they were stored, must be the current pin file.
+func (s *State) Notices(serverID string) (StoredNotices, error) {
+	unlock, err := s.lock()
+	if err != nil {
+		return StoredNotices{}, err
+	}
+	defer unlock()
+	cur, err := s.pinned()
+	if err != nil || cur.Key == nil {
+		return StoredNotices{}, err
+	}
+	if !sameRegular(s.path(pinFile), cur.file) || !sameRegular(s.path(keyDirFile(cur.Key, noticesPinFile)), cur.file) {
+		return StoredNotices{}, nil
+	}
+	var n StoredNotices
+	if _, err = s.read(keyDirFile(cur.Key, noticesFile), &n); err != nil || n.ServerID != serverID {
+		return StoredNotices{}, err
+	}
+	return n, nil
+}
+
+// writeNotices replaces the stored notices of p's key, which verified
+// them, with n, and forgets them when n holds none. p holds its pin file
+// open. Nothing is stored unless that file still is the pin file when it
+// is linked: a pin by any build since, the same key's included, stores
+// nothing. Where the pin file cannot be hard linked, nothing is stored.
+func (s *State) writeNotices(p pin, n StoredNotices) error {
+	if p.f == nil {
+		return errors.New("edgeagent: notices are stored only under a pin file held open")
+	}
+	unlock, err := s.lock()
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	if !sameRegular(s.path(pinFile), p.file) {
+		return nil
+	}
+	name, link := keyDirFile(p.Key, noticesFile), keyDirFile(p.Key, noticesPinFile)
+	if err = s.forgetNotices(p.Key); err != nil {
+		return err
+	}
+	// Only this build writes them, under the lock: any left is a crash's.
+	dir := filepath.Dir(s.path(name))
+	entries, _ := os.ReadDir(dir)
+	for _, e := range entries {
+		if e.Type().IsRegular() && noticesTemp.MatchString(e.Name()) {
+			_ = os.Remove(filepath.Join(dir, e.Name()))
+		}
+	}
+	if len(n.Notices) == 0 {
+		return nil
+	}
+	payload, err := s.writeTemp(name, n)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(payload) //nolint:errcheck // gone after a successful rename
+	candidate := payload + ".pin"
+	if s.beforeLink != nil {
+		s.beforeLink()
+	}
+	if s.link(s.path(pinFile), candidate) != nil {
+		return nil
+	}
+	defer os.Remove(candidate) //nolint:errcheck // gone after a successful rename
+	if !sameRegular(candidate, p.file) {
+		return nil
+	}
+	if err := os.Rename(payload, s.path(name)); err != nil {
+		return fmt.Errorf("edgeagent: %w", err)
+	}
+	if err := os.Rename(candidate, s.path(link)); err != nil {
+		return fmt.Errorf("edgeagent: %w", err)
+	}
+	return nil
 }
 
 // writeOwner records owner for the pinned key.
@@ -467,38 +808,46 @@ func (s *State) read(name string, v any) (bool, error) {
 // write replaces name atomically, so a reader in another process sees the
 // old file or the new one.
 func (s *State) write(name string, v any) error {
-	data, err := json.Marshal(v)
+	tmp, err := s.writeTemp(name, v)
 	if err != nil {
-		return fmt.Errorf("edgeagent: encode %s: %w", name, err)
-	}
-	dir := filepath.Dir(s.path(name))
-	if err = s.mkdir(dir); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(dir, "."+filepath.Base(name)+".*")
-	if err != nil {
-		return fmt.Errorf("edgeagent: %w", err)
-	}
-	defer os.Remove(f.Name()) //nolint:errcheck // gone after a successful rename
-	if err := s.chown(f.Name()); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("edgeagent: write %s: %w", f.Name(), err)
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		return fmt.Errorf("edgeagent: sync %s: %w", f.Name(), err)
-	}
-	if err := f.Close(); err != nil {
-		return fmt.Errorf("edgeagent: close %s: %w", f.Name(), err)
-	}
-	if err := os.Rename(f.Name(), s.path(name)); err != nil {
+	defer os.Remove(tmp) //nolint:errcheck // gone after a successful rename
+	if err := os.Rename(tmp, s.path(name)); err != nil {
 		return fmt.Errorf("edgeagent: %w", err)
 	}
 	return nil
+}
+
+// writeTemp writes v to a new file beside name and returns its path.
+func (s *State) writeTemp(name string, v any) (string, error) {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return "", fmt.Errorf("edgeagent: encode %s: %w", name, err)
+	}
+	dir := filepath.Dir(s.path(name))
+	if err = s.mkdir(dir); err != nil {
+		return "", err
+	}
+	f, err := os.CreateTemp(dir, "."+filepath.Base(name)+".*")
+	if err != nil {
+		return "", fmt.Errorf("edgeagent: %w", err)
+	}
+	if err = s.chown(f.Name()); err == nil {
+		if _, err = f.Write(data); err != nil {
+			err = fmt.Errorf("edgeagent: write %s: %w", f.Name(), err)
+		} else if err = f.Sync(); err != nil {
+			err = fmt.Errorf("edgeagent: sync %s: %w", f.Name(), err)
+		}
+	}
+	if cerr := f.Close(); err == nil && cerr != nil {
+		err = fmt.Errorf("edgeagent: close %s: %w", f.Name(), cerr)
+	}
+	if err != nil {
+		_ = os.Remove(f.Name())
+		return "", err
+	}
+	return f.Name(), nil
 }
 
 func (s *State) remove(name string) error {

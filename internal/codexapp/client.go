@@ -109,7 +109,11 @@ type textInput struct {
 func Dial(ctx context.Context, r io.Reader, w io.WriteCloser, cfg Config) (*Client, error) {
 	c := &Client{input: w, cfg: cfg, threads: make(map[string]bool), unread: make(map[string]threadStatus), unloaded: make(map[string]bool)}
 	c.conn = acp.NewConnection(c.handle, w, r)
-	info := map[string]any{"clientInfo": map[string]string{"name": "aether", "title": "Aether", "version": version.String()}}
+	info := map[string]any{
+		"clientInfo": map[string]string{"name": "aether", "title": "Aether", "version": version.String()},
+		// Codex 0.131.0 lists a thread's turns only for a client that opts in.
+		"capabilities": map[string]bool{"experimentalApi": true},
+	}
 	if _, err := acp.SendRequest[json.RawMessage](c.conn, ctx, "initialize", info); err != nil {
 		_ = w.Close()
 		return nil, fmt.Errorf("codex app-server: initialize: %w", err)
@@ -172,6 +176,19 @@ func (c *Client) Busy() bool {
 // Send hands text to the terminal's thread: it steers the running turn, or
 // starts a turn when none runs. Either shows in the terminal.
 func (c *Client) Send(ctx context.Context, text string) error {
+	return c.send(ctx, text, true)
+}
+
+// StartTurn hands text to the terminal's thread as a new turn, and fails
+// while the app-server lists one in progress: it takes a turn/start then as
+// input to that turn.
+// shortcut: a turn that starts between the list and the turn/start still
+// takes text, until the app-server offers a start that refuses a running turn.
+func (c *Client) StartTurn(ctx context.Context, text string) error {
+	return c.send(ctx, text, false)
+}
+
+func (c *Client) send(ctx context.Context, text string, steer bool) error {
 	thread := c.Thread()
 	if thread == "" {
 		return errors.New("codex app-server: the terminal has not opened a thread yet")
@@ -179,6 +196,9 @@ func (c *Client) Send(ctx context.Context, text string) error {
 	turn, _ := c.runningTurn(ctx, thread)
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if turn != "" && !steer {
+		return errors.New("codex app-server: a turn is running")
 	}
 	// The app-server may act on a request whose answer the caller does not
 	// wait for, and a delivered message must not read as failed.
@@ -241,6 +261,37 @@ func (c *Client) runningTurn(ctx context.Context, thread string) (string, error)
 		return "", err
 	}
 	return turns.Data[0].ID, nil
+}
+
+// LastMessage is the last agent message of thread's last turn, empty unless
+// that turn completed. interrupted says the turn was cut off, as with Esc,
+// which leaves the thread idle too.
+func (c *Client) LastMessage(ctx context.Context, thread string) (message string, interrupted bool, err error) {
+	turns, err := acp.SendRequest[struct {
+		Data []struct {
+			Status string `json:"status"`
+			Items  []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"items"`
+		} `json:"data"`
+	}](c.conn, ctx, "thread/turns/list", map[string]any{"threadId": thread, "limit": 1, "itemsView": "summary"})
+	if err != nil {
+		return "", false, fmt.Errorf("codex app-server: list the last turn of thread %s: %w", thread, err)
+	}
+	if len(turns.Data) == 0 {
+		return "", false, nil
+	}
+	last := turns.Data[0]
+	if last.Status != "completed" {
+		return "", last.Status == "interrupted", nil
+	}
+	for _, item := range slices.Backward(last.Items) {
+		if item.Type == "agentMessage" {
+			return item.Text, false, nil
+		}
+	}
+	return "", false, nil
 }
 
 func (c *Client) read(ctx context.Context, id string) (thread, error) {

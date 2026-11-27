@@ -1,17 +1,14 @@
 package helper
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
-	"net/http"
 	"os"
 	"slices"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/guest"
 	"github.com/3xDevOps/cloudfield/internal/guest/guestpb"
@@ -20,13 +17,13 @@ import (
 )
 
 const (
-	dockerSocket        = "/var/run/docker.sock"
-	dockerdLog          = "/var/log/aether-dockerd.log"
-	dockerdStartTimeout = 60 * time.Second
+	dockerSocket = "/var/run/docker.sock"
+	dockerdLog   = "/var/log/aether-dockerd.log"
 )
 
 // boot is Docker's start of a container: dockerd first, then the setup
 // script, then the main process, each only when the one before succeeded.
+// dockerd has only to be started, not to serve.
 func (s *service) boot(req *guestpb.BootRequest) (*guestpb.BootReply, error) {
 	main := processSpec(req.GetMain())
 	main.ID = guest.MainID
@@ -44,14 +41,23 @@ func (s *service) boot(req *guestpb.BootRequest) (*guestpb.BootReply, error) {
 			return nil, status.Errorf(codes.FailedPrecondition, "working directory: %v", err)
 		}
 	}
+	var dockerd *process
 	if req.GetNestedDocker() {
-		if err := s.startDockerd(main); err != nil {
+		var err error
+		if dockerd, err = s.startDockerd(main); err != nil {
 			return nil, status.Error(codes.FailedPrecondition, err.Error())
 		}
 	}
 	if script := req.GetSetupScript(); script != "" {
 		reply, err := s.setup(main, script)
 		if err != nil || reply.GetSetupExitCode() != 0 {
+			if dockerd != nil && reply != nil {
+				select {
+				case <-dockerd.done:
+					reply.SetupOutput = fmt.Appendf(reply.SetupOutput, "\ndockerd exited %d: %s", dockerd.code, logTail(dockerdLog))
+				default:
+				}
+			}
 			return reply, err
 		}
 	}
@@ -92,80 +98,79 @@ func (s *service) setup(main guest.ProcessSpec, script string) (*guestpb.BootRep
 
 // startDockerd starts the image's dockerd when it has dockerd and docker,
 // with the socket's group set to the main process's so its user reaches it,
-// and nested containers under the session's process limit.
-func (s *service) startDockerd(main guest.ProcessSpec) error {
+// and nested containers under the session's process limit. It returns nil
+// when the image has no dockerd.
+func (s *service) startDockerd(main guest.ProcessSpec) (*process, error) {
 	_, home, err := credential("0")
 	if err != nil {
-		return err
+		return nil, err
 	}
 	// dockerd runs as root, so it is never looked up on the session's PATH,
 	// which starts in the member's writable home.
 	env := withDefaults(slices.DeleteFunc(slices.Clone(main.Env), func(e string) bool { return strings.HasPrefix(e, "PATH=") }), home, false)
 	for _, name := range []string{"dockerd", "docker"} {
 		if _, err = lookPath(name, defaultPath, "/"); err != nil {
-			return nil
+			return nil, nil
 		}
 	}
 	cred, _, err := credential(main.User)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	group := "0"
+	group := 0
 	if cred != nil {
-		group = strconv.FormatUint(uint64(cred.Gid), 10)
+		group = int(cred.Gid)
 	}
 	// A saved environment can hold a stopped daemon's files.
 	for _, stale := range []string{"/var/run/docker.pid", dockerSocket, "/var/run/docker/containerd/containerd.pid", "/var/run/docker/containerd/containerd.sock"} {
 		_ = os.Remove(stale)
 	}
+	listener, err := net.ListenUnix("unix", &net.UnixAddr{Name: dockerSocket, Net: "unix"})
+	if err != nil {
+		return nil, fmt.Errorf("listen on %s: %w", dockerSocket, err)
+	}
+	// The socket file stays for dockerd once the helper's listener closes.
+	listener.SetUnlinkOnClose(false)
+	socket, err := listener.File()
+	_ = listener.Close()
+	if err != nil {
+		return nil, fmt.Errorf("listen on %s: %w", dockerSocket, err)
+	}
+	defer func() { _ = socket.Close() }()
+	if err = errors.Join(os.Chown(dockerSocket, 0, group), os.Chmod(dockerSocket, 0o660)); err != nil {
+		return nil, fmt.Errorf("give %s to group %d: %w", dockerSocket, group, err)
+	}
 	log, err := os.OpenFile(dockerdLog, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
 	if err != nil {
-		return fmt.Errorf("open %s: %w", dockerdLog, err)
+		return nil, fmt.Errorf("open %s: %w", dockerdLog, err)
 	}
 	defer func() { _ = log.Close() }()
-	argv := []string{"dockerd", "-H", "unix://" + dockerSocket, "--group", group}
+	if err = log.Chown(0, group); err != nil {
+		return nil, fmt.Errorf("give %s to group %d: %w", dockerdLog, group, err)
+	}
+	// Socket activation passes the socket as fd 3 and names the pid it is
+	// for, which only the shell that becomes dockerd knows.
+	argv := []string{"/bin/sh", "-c", `LISTEN_FDS=1 LISTEN_PID=$$ exec "$@" 3<&5 5<&-`, "dockerd", "dockerd", "-H", "fd://"}
 	if s.cgroup != nil {
 		argv = append(argv, "--cgroup-parent", sessionCgroupParent)
 	}
-	p, err := s.procs.spawn(spawnSpec{ProcessSpec: guest.ProcessSpec{ID: dockerdID, Argv: argv, Env: env, NoNewPrivileges: main.NoNewPrivileges}, log: log})
+	p, err := s.procs.spawn(spawnSpec{ProcessSpec: guest.ProcessSpec{ID: dockerdID, Argv: argv, Env: env, NoNewPrivileges: main.NoNewPrivileges}, log: log, passed: socket})
 	if err != nil {
-		return fmt.Errorf("start dockerd: %w", err)
+		return nil, fmt.Errorf("start dockerd: %w", err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), dockerdStartTimeout)
-	defer cancel()
-	for {
-		if dockerAnswers(ctx) {
-			return nil
+	go func() {
+		<-p.done
+		// The end of the session kills dockerd with everything else.
+		if m, err := s.procs.get(guest.MainID); err == nil {
+			select {
+			case <-m.done:
+				return
+			default:
+			}
 		}
-		select {
-		case <-p.done:
-			return fmt.Errorf("dockerd exited %d: %s", p.code, logTail(dockerdLog))
-		case <-ctx.Done():
-			return fmt.Errorf("dockerd did not answer within %s: %s", dockerdStartTimeout, logTail(dockerdLog))
-		case <-time.After(100 * time.Millisecond):
-		}
-	}
-}
-
-func dockerAnswers(ctx context.Context) bool {
-	client := http.Client{Transport: &http.Transport{
-		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
-			return (&net.Dialer{}).DialContext(ctx, "unix", dockerSocket)
-		},
-	}}
-	defer client.CloseIdleConnections()
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "http://docker/_ping", nil)
-	if err != nil {
-		return false
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return false
-	}
-	_ = resp.Body.Close()
-	return resp.StatusCode == http.StatusOK
+		slog.Error("guest: dockerd exited", "code", p.code, "log", logTail(dockerdLog))
+	}()
+	return p, nil
 }
 
 // logTail is the end of a log, where a failure is.

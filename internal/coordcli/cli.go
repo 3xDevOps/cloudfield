@@ -238,10 +238,10 @@ Delivery and denials work as for send. To ask the user, report needs-input.
 Reply to the sender of one durable question. A body file of "-" reads standard input.
 Answer only what was asked; never include secrets or credentials.
 `,
-	"report": `usage: aether-internal report [--outcome] <success|failure|blocked|needs-input|waiting|answered> [--for <agents|ci|process>] [--until <condition>]... (--summary <text> | --summary-file <path>) [--evidence-ref <ref>] [--idempotency-key <key>]
+	"report": `usage: aether-internal report [--outcome] <success|failure|blocked|needs-input|waiting|answered> [--for <agents|ci|process>] [--until <condition>]... (--summary <text> | --summary-file <path>) [--body <text> | --body-file <path>] [--evidence-ref <ref>] [--idempotency-key <key>]
 
-Record your state: end every turn with exactly one report, as your last
-action. aether-internal skill lists which outcome your role reports when.
+Record your state: report once every turn, when its work is done; your role
+card says whether your reply goes before or after it. aether-internal skill lists which outcome your role reports when.
 Subagents and spawned workflows never report; they return their results to
 the agent that started them.
 Success and failure: verify the changed behavior and collect required evidence
@@ -251,15 +251,20 @@ sessions have one success or failure per launch. A subsession's report goes to i
 parent session. ` + coordhooks.ReviewRule + `
 Blocked is nonterminal and may repeat; its summary is the Needs you reason at
 turn end, not while input is open.
+A success, failure or blocked report may carry a body of up to 12 KiB with
+--body or --body-file: the full result, such as a review's findings. A
+subsession's parent reads it with the report, in the same inbox message, so
+put findings there and do not send them as separate messages first. A longer
+body is refused: shorten it, or commit the rest to a file and name it.
 Needs-input is nonterminal and takes no --evidence-ref: the summary is one
 specific question shown as the Needs you reason at turn end. End your turn
 after it; the reply arrives as your next prompt. Refused for Background sessions.
 Waiting is nonterminal and takes no --evidence-ref: ` + coordhooks.WaitingUse + `
 The summary is what you wait on, and your next turn clears it. Only Enhanced
-sessions, managed Claude Code launches and native pi/omp/OpenCode integrations are
-resumed by mail while idle; elsewhere, in Background sessions and while status
-shows protected, never report waiting: wait inside your turn with
-inbox --wait 30 instead.
+sessions, managed Claude Code launches, Standard Codex on its app-server and
+native pi/omp/OpenCode integrations are resumed by mail while idle; elsewhere,
+in Background sessions and while status shows protected, never report
+waiting: wait inside your turn with inbox --wait 30 instead.
 --until, only with waiting and at most 4 times, names a condition Cloudfield
 watches for you: pr:<owner>/<repo>#<n>:merged,
 pr:<owner>/<repo>#<n>:checks[@<head-sha>] (name the commit you pushed) or
@@ -612,6 +617,8 @@ func report(ctx context.Context, socket string, args []string, in io.Reader, err
 	waitingFor := fs.String("for", "", "with waiting: agents, ci or process")
 	summary := fs.String("summary", "", "bounded outcome summary")
 	summaryFile := fs.String("summary-file", "", "read summary from a file, or - for stdin")
+	body := fs.String("body", "", "with success, failure or blocked: the full result, such as findings")
+	bodyFile := fs.String("body-file", "", "read the body from a file")
 	key := fs.String("idempotency-key", "", "stable key used to replay this mutation")
 	refs := stringList{}
 	fs.Var(&refs, "evidence-ref", "evidence reference (repeatable)")
@@ -630,6 +637,14 @@ func report(ctx context.Context, socket string, args []string, in io.Reader, err
 	case positional != "":
 		*outcome = positional
 	}
+	// Flag parsing stops at the summary's first word, so a flag after it
+	// would be read as summary text and dropped.
+	for _, a := range fs.Args() {
+		name, _, _ := strings.Cut(strings.TrimLeft(a, "-"), "=")
+		if strings.HasPrefix(a, "-") && fs.Lookup(name) != nil {
+			return protocol.CoordReportResult{}, usageError(fmt.Sprintf("flag %s after the summary; put flags before it", a))
+		}
+	}
 	if *summary == "" && fs.NArg() > 0 {
 		*summary = strings.Join(fs.Args(), " ")
 	}
@@ -637,16 +652,26 @@ func report(ctx context.Context, socket string, args []string, in io.Reader, err
 	if err != nil {
 		return protocol.CoordReportResult{}, err
 	}
+	if *bodyFile == "-" || *body == "-" {
+		return protocol.CoordReportResult{}, usageError("report: the body is read from --body or a file, not from standard input")
+	}
+	full, err := resolveText(*body, *bodyFile, in, protocol.CoordMaxReportBodyBytes)
+	if err != nil {
+		return protocol.CoordReportResult{}, err
+	}
+	if err = protocol.ValidateReportBody(text, full); err != nil {
+		return protocol.CoordReportResult{}, usageError(err.Error())
+	}
 	idempotencyKey, err := mutationKey("report", *key, errOut)
 	if err != nil {
 		return protocol.CoordReportResult{}, err
 	}
-	p := protocol.CoordReportParams{Outcome: *outcome, Summary: text, EvidenceRefs: append([]string(nil), refs...), IdempotencyKey: idempotencyKey, WaitingFor: *waitingFor, Until: append([]string(nil), until...)}
+	p := protocol.CoordReportParams{Outcome: *outcome, Summary: text, Body: full, EvidenceRefs: append([]string(nil), refs...), IdempotencyKey: idempotencyKey, WaitingFor: *waitingFor, Until: append([]string(nil), until...)}
 	var out protocol.CoordReportResult
 	if err := coordtransport.Call(ctx, socket, protocol.MethodCoordReport, p, &out); err != nil {
 		return out, err
 	}
-	return out, nil
+	return out, protocol.CheckReportBody(full, out)
 }
 
 type untilList []string
@@ -706,13 +731,19 @@ func positionalBody(args []string, target, body *string) error {
 	return nil
 }
 
-func resolveBody(body, file string, in io.Reader) (result string, retErr error) {
+func resolveBody(body, file string, in io.Reader) (string, error) {
+	return resolveText(body, file, in, protocol.CoordMaxBodyBytes)
+}
+
+// resolveText is body, or the content of file, or of in for "-", refused
+// above limit bytes.
+func resolveText(body, file string, in io.Reader, limit int) (result string, retErr error) {
 	if body != "" && file != "" {
 		return "", usageError("choose one of --body and --body-file")
 	}
 	if file == "" && body != "-" {
-		if len(body) > protocol.CoordMaxBodyBytes {
-			return "", usageError(fmt.Sprintf("body exceeds %d bytes", protocol.CoordMaxBodyBytes))
+		if len(body) > limit {
+			return "", usageError(fmt.Sprintf("body exceeds %d bytes", limit))
 		}
 		return body, nil
 	}
@@ -731,12 +762,12 @@ func resolveBody(body, file string, in io.Reader) (result string, retErr error) 
 		}()
 		r = f
 	}
-	data, err := io.ReadAll(io.LimitReader(r, protocol.CoordMaxBodyBytes+1))
+	data, err := io.ReadAll(io.LimitReader(r, int64(limit)+1))
 	if err != nil {
 		return "", fmt.Errorf("read body: %w", err)
 	}
-	if len(data) > protocol.CoordMaxBodyBytes {
-		return "", usageError(fmt.Sprintf("body exceeds %d bytes", protocol.CoordMaxBodyBytes))
+	if len(data) > limit {
+		return "", usageError(fmt.Sprintf("body exceeds %d bytes", limit))
 	}
 	return string(data), nil
 }

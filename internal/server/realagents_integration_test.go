@@ -35,9 +35,10 @@ const (
 	realAgentCommand = "echo aether-$((40+2))"
 	realAgentOutput  = "aether-42"
 	realAgentAnswer  = "aether-turn-done"
-	// realAgentContract starts the reporting rules every launch route
-	// carries.
-	realAgentContract = "END EVERY TURN WITH EXACTLY ONE REPORT"
+	// realAgentContract starts the reporting rules an interactive launch
+	// carries, and backgroundAgentContract those of a Background one.
+	realAgentContract       = "REPORT ONCE A TURN"
+	backgroundAgentContract = "END EVERY TURN WITH EXACTLY ONE REPORT"
 	// codexCompactLimit is the token count past which the test's Codex
 	// compacts; a compaction step claims more than any model's context.
 	codexCompactLimit = 100000
@@ -171,10 +172,8 @@ func TestIntegrationRealAgents(t *testing.T) {
 					t.Parallel()
 					a := &realAgentRun{srv: srv, ctrl: ctrl, model: model, workspace: string(e.ws.ID), agent: agent, mode: mode, marker: "real-agent-" + agent + "-" + modeName}
 					// Aether asks a turn that ended without a report for one: a
-					// Standard Claude Code stop is held, an Enhanced session is
-					// prompted. Standard Codex is not asked: Aether loads no
-					// hooks into it, so its silent turn parks as waiting.
-					gated := agent != "codex" || mode != domain.LaunchTUI
+					// Standard Claude Code stop is held, and an Enhanced session
+					// and a Standard Codex one are prompted.
 					gate := a.marker + "/gate"
 					model.script(gate, step{command: realAgentCommand})
 					launch(t, a, tagged(gate)+" run the command, then stop.")
@@ -184,11 +183,7 @@ func TestIntegrationRealAgents(t *testing.T) {
 						a.instructed(t)
 						a.waitIdle(ctx, t, 0)
 						a.waitFor(ctx, t, "the model's answer in the run", func() bool { return strings.Contains(a.transcript(), realAgentAnswer) })
-						want := turnWant{activity: domain.ActivityAnswered, cause: events.CauseReport, outcome: protocol.CoordOutcomeAnswered, summary: remindedPrefix + gate, reminders: 1}
-						if !gated {
-							want = turnWant{activity: domain.ActivityWaiting, cause: events.CauseTurnEnd}
-						}
-						a.check(ctx, t, gate, 0, want)
+						a.check(ctx, t, gate, 0, turnWant{activity: domain.ActivityAnswered, cause: events.CauseReport, outcome: protocol.CoordOutcomeAnswered, summary: remindedPrefix + gate, reminders: 1})
 					}) {
 						return
 					}
@@ -260,9 +255,6 @@ func TestIntegrationRealAgents(t *testing.T) {
 							return []step{{subagent: subagentTagged(turn+"/sub") + " run the subagent's step."}}
 						},
 						want: func(turn string) turnWant {
-							if !gated {
-								return turnWant{activity: domain.ActivityWaiting, cause: events.CauseTurnEnd, subagent: turn + "/sub"}
-							}
 							return turnWant{activity: domain.ActivityAnswered, cause: events.CauseReport, outcome: protocol.CoordOutcomeAnswered, summary: remindedPrefix + turn, reminders: 1, subagent: turn + "/sub"}
 						},
 					}, {
@@ -450,9 +442,13 @@ func (a *realAgentRun) instructed(t *testing.T) {
 	if !noted {
 		t.Errorf("instruction missing: no run instructions note on the timeline")
 	}
+	contract := realAgentContract
+	if a.mode == domain.LaunchHeadless {
+		contract = backgroundAgentContract
+	}
 	bodies := a.model.bodies(a.marker)
-	if len(bodies) == 0 || !strings.Contains(bodies[0], realAgentContract) {
-		t.Errorf("instruction missing: the first request does not carry %q", realAgentContract)
+	if len(bodies) == 0 || !strings.Contains(bodies[0], contract) {
+		t.Errorf("instruction missing: the first request does not carry %q", contract)
 	}
 }
 

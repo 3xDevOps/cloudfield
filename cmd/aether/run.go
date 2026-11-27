@@ -153,8 +153,8 @@ func runRun(args []string) error {
 
 var errInterrupted = errors.New("interrupted")
 
-// The server finishes a call the user interrupts, so callInterruptibly
-// does not wait for it.
+// The server finishes a call the user interrupts, except a launch it had
+// not yet admitted, so callInterruptibly does not wait for it.
 func callInterruptibly(c *protocol.Client, method string, params, result any) error {
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt, syscall.SIGTERM)
@@ -175,7 +175,7 @@ func launchError(err error, params protocol.RunLaunchParams, fromStdin bool) err
 	var rpcErr *protocol.Error
 	switch {
 	case errors.Is(err, errInterrupted):
-		return &exitStatusError{code: 130, err: fmt.Errorf("%w; the launch continues on the server. aether sessions lists it, and aether kill <session-id> stops it once it is listed.\nto get its session id without launching twice, run:\n  %s", errInterrupted, launchCommand(params, fromStdin))}
+		return &exitStatusError{code: 130, err: fmt.Errorf("%w; a launch the server had already accepted keeps starting: aether sessions lists it, and aether kill <session-id> stops it once it is listed.\nto get its session id, or to launch it once if the server had not accepted it, run:\n  %s", errInterrupted, launchCommand(params, fromStdin))}
 	case errors.As(err, &rpcErr):
 		return cachedBaseLaunchError(err, params, fromStdin)
 	}

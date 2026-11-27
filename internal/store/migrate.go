@@ -2686,6 +2686,11 @@ CREATE TABLE agent_logins (
 );
 CREATE UNIQUE INDEX idx_agent_logins_id ON agent_logins (agent, id) WHERE id <> 'default';
 `,
+	// v116: the body a success, failure or blocked report carries beside
+	// its summary, such as a review's findings; empty for none.
+	`
+ALTER TABLE coord_reports ADD COLUMN body TEXT NOT NULL DEFAULT '';
+`,
 }
 
 // existingDatabaseMigrations run after their version's migration, in the

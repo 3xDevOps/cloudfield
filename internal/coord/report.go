@@ -28,7 +28,7 @@ const maxReportReason = 256
 // per turn, or "".
 type ReportSink interface {
 	ReportAgentState(ctx context.Context, run domain.RunID, report agentstatus.Report) error
-	HoldTurnEnd(ctx context.Context, run domain.RunID) (string, error)
+	HoldTurnEnd(ctx context.Context, run domain.RunID, message string) (string, error)
 }
 
 // OutcomeSink receives an ordinary run's published coord.report. Success and
@@ -171,7 +171,11 @@ func (s *Service) reportState(ctx context.Context, run domain.RunID, p protocol.
 		nextAction = "answer the agent's question"
 		err = s.cfg.Outcomes.ReportNeedsInput(ctx, run, id, reportText(summary), receipt.CreatedAt)
 	case protocol.CoordOutcomeAnswered:
-		err = s.cfg.Outcomes.ReportAnswered(ctx, run, id, reportReason(summary), receipt.CreatedAt)
+		// A retry of a report that took effect may arrive in a later turn,
+		// where the scheduler would take it for that turn's.
+		if !receipt.Applied {
+			err = s.cfg.Outcomes.ReportAnswered(ctx, run, id, reportReason(summary), receipt.CreatedAt)
+		}
 	default:
 		err = s.cfg.Outcomes.ReportWaiting(ctx, run, id, p.WaitingFor, reportReason(summary), receipt.CreatedAt)
 	}
@@ -292,7 +296,8 @@ func (s *Service) Report(ctx context.Context, run domain.RunID, p protocol.RunRe
 	}
 	report := agentstatus.Report{State: state, Reason: reportReason(p.Reason), InputUpdates: p.InputUpdates, SessionID: p.SessionID,
 		UsageLimit: p.UsageLimit && state == agentstatus.Idle, Tools: p.Tools && state == agentstatus.Working, Subagent: p.Subagent,
-		TurnStart: p.TurnStart && state == agentstatus.Working}
+		TurnStart: p.TurnStart && state == agentstatus.Working, LastMessage: p.LastMessage,
+		SessionEnd: p.SessionEnd && state == agentstatus.Idle}
 	if report.SessionID != "" && !domain.ValidAgentSessionID(report.SessionID) {
 		slog.Warn("coord: run.report carries an unusable agent conversation id; ignoring it", "run", run, "bytes", len(report.SessionID))
 		report.SessionID = ""
@@ -300,7 +305,7 @@ func (s *Service) Report(ctx context.Context, run domain.RunID, p protocol.RunRe
 	if p.Stop && state == agentstatus.Idle && !report.UsageLimit {
 		// A failed check lets the turn end: a stop Aether cannot judge is
 		// not worth keeping an agent from stopping.
-		reminder, err := s.cfg.Reports.HoldTurnEnd(ctx, run)
+		reminder, err := s.cfg.Reports.HoldTurnEnd(ctx, run, report.LastMessage)
 		if err != nil {
 			slog.Warn("coord: check the ending turn's report", "run", run, "error", err)
 		}

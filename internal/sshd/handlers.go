@@ -20,6 +20,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/linear"
 	"github.com/3xDevOps/cloudfield/internal/permissions"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/runtime"
 	"github.com/3xDevOps/cloudfield/internal/scheduler"
 	"github.com/3xDevOps/cloudfield/internal/store"
 )
@@ -245,6 +246,9 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 	}
 	// Cancelling a launch mid-provisioning fails the run it is creating, so
 	// it outlives the caller's channel; a server shutdown still stops it.
+	// A launch still waiting for admission has created nothing, and waits
+	// only as long as its caller.
+	caller := ctx
 	ctx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	defer cancel()
 	defer context.AfterFunc(s.authCtx(), cancel)()
@@ -253,7 +257,7 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 	run, replayed, perr := s.idempotentLaunch(ctx, member, key, protocol.MethodRunLaunch, p, earlier, func(created func(domain.RunID)) (*domain.Run, *protocol.Error) {
 		launched := p
 		launched.LinearIssueURL = linkedIssue
-		return s.launchRun(ctx, member, launched, mode, policy, func(id domain.RunID) {
+		return s.launchRun(ctx, caller, member, launched, mode, policy, func(id domain.RunID) {
 			if created != nil {
 				created(id)
 			}
@@ -279,13 +283,22 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 	return protocol.RunLaunchResult{Run: s.runSnapshot(run), Replayed: replayed, SkippedFallbackAccounts: skipped}, nil
 }
 
-func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protocol.RunLaunchParams, mode domain.LaunchMode, policy domain.AccountFallback,
+func (s *Server) launchRun(ctx, caller context.Context, member domain.MemberID, p protocol.RunLaunchParams, mode domain.LaunchMode, policy domain.AccountFallback,
 	created func(domain.RunID), skipped *[]protocol.SkippedAccount) (*domain.Run, *protocol.Error) {
+	ctx = runtime.WithSteps(ctx)
+	var warming sync.WaitGroup
+	if mirrors := s.cfg.Services.Mirrors; mirrors != nil && p.CachedBase == "" {
+		// The launch's own base capture reports a refresh that fails.
+		warming.Go(func() { _ = mirrors.Warm(ctx, domain.WorkspaceID(p.WorkspaceID)) })
+	}
 	measured, err := fallback.Measure(ctx, s.cfg.Store, s.cfg.Services.Usage, member, p.AccountMemberID, p.Harness, policy)
+	warming.Wait()
 	if err != nil {
 		return nil, rpcError(err)
 	}
-	s.authorizationMu.Lock()
+	if err = s.authorizationMu.LockContext(caller); err != nil {
+		return nil, rpcError(fmt.Errorf("%s: the request ended before the session was admitted, so no session was started: %w", protocol.MethodRunLaunch, err))
+	}
 	unlockAuthorization := sync.OnceFunc(s.authorizationMu.Unlock)
 	defer unlockAuthorization()
 	workspaces := append([]domain.WorkspaceID{domain.WorkspaceID(p.WorkspaceID)}, workspaceIDs(p.ExtraWorkspaceIDs)...)
@@ -418,7 +431,7 @@ func (s *Server) runSnapshot(run *domain.Run) protocol.Run {
 		out.Paused = s.cfg.Runs.Paused(run.ID)
 		if sleep := s.cfg.Runs.Sleep(run.ID); sleep.AsleepSince != nil {
 			since := sleep.AsleepSince.UTC().Format(time.RFC3339Nano)
-			out.AsleepSince, out.AsleepSaved, out.Waking, out.WakeError = &since, sleep.Saved, sleep.Waking, sleep.WakeError
+			out.AsleepSince, out.AsleepSaved, out.AsleepInMemory, out.Waking, out.WakeError = &since, sleep.Saved, sleep.InMemory, sleep.Waking, sleep.WakeError
 		}
 		out.Cause = string(s.cfg.Runs.Cause(run.ID, run.Activity))
 		out.Wait = s.cfg.Runs.Wait(run.ID, run.Activity)

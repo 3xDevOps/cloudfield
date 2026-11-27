@@ -33,12 +33,13 @@ const (
 	cacheDisk   = "cache.img"
 	// stateDiskFile is the session's state disk, in the directory its state
 	// mounts name.
-	stateDiskFile = "disk.img"
-	consoleLog    = "console.log"
-	consolePipe   = "console.pipe"
-	eventsFile    = "events.json"
-	monitorLog    = "monitor.log"
-	snapshotDir   = "snapshot"
+	stateDiskFile   = "disk.img"
+	consoleLog      = "console.log"
+	consolePipe     = "console.pipe"
+	eventsFile      = "events.json"
+	monitorLog      = "monitor.log"
+	snapshotDir     = "snapshot"
+	usedSnapshotDir = "snapshot.used"
 )
 
 // offline is the Net of a VM with no network device.
