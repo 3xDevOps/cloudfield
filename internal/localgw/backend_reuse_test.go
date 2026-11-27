@@ -4,7 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
-	"sync"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -19,7 +20,6 @@ func TestSSHBackendReusesAnAnsweredControlChannel(t *testing.T) {
 	home := testhome.Isolate(t)
 	server := listen(t)
 	unanswered := make(chan struct{})
-	t.Cleanup(func() { close(unanswered) })
 	connections, channels := serveControlChannels(t, server, func(method string) json.RawMessage {
 		if method == protocol.MethodRunList {
 			<-unanswered
@@ -55,14 +55,20 @@ func TestSSHBackendReusesAnAnsweredControlChannel(t *testing.T) {
 	if _, perr := b.Call(short, protocol.MethodRunList, nil); perr == nil || perr.Message != "request cancelled" {
 		t.Fatalf("unanswered call = %v, want request cancelled", perr)
 	}
-	before := channels.Load()
+	// Two channels were kept and the cancelled call took one.
+	backend := b.(*sshBackend)
+	backend.mu.Lock()
+	kept := len(backend.idle)
+	backend.mu.Unlock()
+	if kept != 1 {
+		t.Fatalf("%d control channels kept after a cancelled call, want 1: its own must be dropped", kept)
+	}
+	// The late answer must reach no later call.
+	close(unanswered)
 	for range 3 {
 		if _, perr := b.Call(ctx, protocol.MethodServerInfo, nil); perr != nil {
 			t.Fatal(perr)
 		}
-	}
-	if got := channels.Load() - before; got > 1 {
-		t.Fatalf("3 calls after a cancelled one opened %d control channels, want at most 1", got)
 	}
 	if got := connections.Load(); got != 1 {
 		t.Fatalf("server accepted %d connections, want 1", got)
@@ -75,11 +81,10 @@ func TestSSHBackendGivesConcurrentCallsTheirOwnChannels(t *testing.T) {
 	home := testhome.Isolate(t)
 	server := listen(t)
 	const calls = 4
-	var arrived sync.WaitGroup
-	arrived.Add(calls)
+	arrived := make(chan struct{}, calls)
 	release := make(chan struct{})
 	_, channels := serveControlChannels(t, server, func(string) json.RawMessage {
-		arrived.Done()
+		arrived <- struct{}{}
 		<-release
 		return json.RawMessage(`{}`)
 	}, false)
@@ -88,6 +93,11 @@ func TestSSHBackendGivesConcurrentCallsTheirOwnChannels(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	// One kept channel, so the calls contend for it.
+	go func() { <-arrived; release <- struct{}{} }()
+	if _, perr := b.Call(ctx, protocol.MethodServerInfo, nil); perr != nil {
+		t.Fatal(perr)
+	}
 	errs := make(chan *protocol.Error, calls)
 	for range calls {
 		go func() {
@@ -96,7 +106,13 @@ func TestSSHBackendGivesConcurrentCallsTheirOwnChannels(t *testing.T) {
 		}()
 	}
 	// Every call reaches the server before any is answered.
-	arrived.Wait()
+	for range calls {
+		select {
+		case <-arrived:
+		case <-ctx.Done():
+			t.Fatal("a call waited for another's answer")
+		}
+	}
 	close(release)
 	for range calls {
 		if perr := <-errs; perr != nil {
@@ -104,7 +120,7 @@ func TestSSHBackendGivesConcurrentCallsTheirOwnChannels(t *testing.T) {
 		}
 	}
 	if got := channels.Load(); got != calls {
-		t.Fatalf("%d calls in flight together used %d control channels, want %d", calls, got, calls)
+		t.Fatalf("%d calls in flight together, one channel kept before them, used %d control channels, want %d", calls, got, calls)
 	}
 }
 
@@ -130,5 +146,67 @@ func TestSSHBackendSurvivesAnIdleControlChannelEnding(t *testing.T) {
 	}
 	if got := channels.Load(); got != 3 {
 		t.Fatalf("3 calls on channels that end after one answer opened %d, want 3", got)
+	}
+}
+
+// A kept channel skips the channel open that used to prove the connection
+// before a call's watchdog started. On a link that went silent the watchdog
+// fires long before the keepalive drops the connection, so the call must
+// find the connection dead itself and be answered over a new one.
+func TestSSHBackendRedialsWhenAKeptChannelGoesSilent(t *testing.T) {
+	// As in production, the keepalive drop (10 intervals) outlasts the watchdog.
+	shortenKeepalive(t, 2*time.Second, 300*time.Millisecond)
+	old := callTimeout
+	callTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { callTimeout = old })
+	home := testhome.Isolate(t)
+	server := listen(t)
+	connections := serveControl(t, server, nil)
+	path := newSilencer(t, server.Addr().String(), 0)
+	b := NewSSHBackend(cli.Config{Addr: path.addr(), KnownHosts: filepath.Join(home, "known_hosts")})
+	t.Cleanup(func() { _ = b.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if _, perr := b.Call(ctx, protocol.MethodServerInfo, nil); perr != nil {
+		t.Fatal(perr)
+	}
+	path.silence()
+	if _, perr := b.Call(ctx, protocol.MethodServerInfo, nil); perr != nil {
+		t.Fatalf("call on a kept channel of a silent connection = %v, want it answered over a new one", perr)
+	}
+	if got := connections.Load(); got != 2 {
+		t.Fatalf("server accepted %d connections, want 2", got)
+	}
+}
+
+// A call is sent at most twice, as before channels were kept: once on a
+// kept channel and once more on a new one. When both fail on transport the
+// error is final, with no third send after a redial.
+func TestSSHBackendSendsACallAtMostTwice(t *testing.T) {
+	home := testhome.Isolate(t)
+	server := listen(t)
+	var sends atomic.Int32
+	_, _ = serveControlChannels(t, server, func(method string) json.RawMessage {
+		if method == protocol.MethodRunList {
+			sends.Add(1)
+			return nil
+		}
+		return json.RawMessage(`{}`)
+	}, false)
+	b := NewSSHBackend(cli.Config{Addr: server.Addr().String(), KnownHosts: filepath.Join(home, "known_hosts")})
+	t.Cleanup(func() { _ = b.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if _, perr := b.Call(ctx, protocol.MethodServerInfo, nil); perr != nil {
+		t.Fatal(perr)
+	}
+	_, perr := b.Call(ctx, protocol.MethodRunList, nil)
+	if perr == nil || perr.Code != protocol.CodeUnavailable || !strings.HasPrefix(perr.Message, "server unreachable: ") {
+		t.Fatalf("call the server never answers = %v, want server unreachable", perr)
+	}
+	if got := sends.Load(); got != 2 {
+		t.Fatalf("the call reached the server %d times, want 2", got)
 	}
 }

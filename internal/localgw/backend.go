@@ -364,22 +364,36 @@ func roundTrip(ctx context.Context, client *protocol.Client, method string, para
 // redials; server refusals, cancellations and timeouts leave it alone.
 // A replay-safe call goes on an idle control channel when there is one. An
 // idle channel can have ended under a live connection, so a transport
-// failure on one is tried again on a new channel before it counts against
-// the connection; the server may have run the call both times.
+// failure on one is sent again on a new channel before it counts against
+// the connection. That second send is the call's one replay: when it fails
+// too, the error is final and Call does not send a third.
 func (b *sshBackend) callOnce(ctx context.Context, method string, params json.RawMessage, replaySafe bool) (json.RawMessage, error) {
 	conn, cfg, err := b.live(ctx)
 	if err != nil {
 		return nil, err
 	}
 	var perr *protocol.Error
+	resent := false
 	if replaySafe {
 		if client := b.idleControl(conn); client != nil {
+			resent = true
 			result, answered, cerr := roundTrip(ctx, client, method, params)
 			if answered {
 				b.keepControl(conn, client)
 			}
-			if cerr == nil || errors.As(cerr, &perr) {
+			if answered || ctx.Err() != nil {
 				return result, cerr
+			}
+			// Opening a channel used to prove the connection before the
+			// watchdog started. A watchdog that fires on a kept channel
+			// has no such proof, so the connection is probed: a dead one
+			// is dropped for Call to redial.
+			if errors.As(cerr, &perr) {
+				if b.alive(conn) {
+					return nil, cerr
+				}
+				b.invalidate(conn)
+				return nil, endToEnd(cfg, fmt.Errorf("%w: %s", errSilent, perr.Message))
 			}
 		}
 	}
@@ -399,6 +413,9 @@ func (b *sshBackend) callOnce(ctx context.Context, method string, params json.Ra
 		return nil, err
 	}
 	b.invalidate(conn)
+	if resent {
+		return nil, unreachableError(endToEnd(cfg, err))
+	}
 	b.mu.Lock()
 	silent := b.silent == conn
 	b.mu.Unlock()
