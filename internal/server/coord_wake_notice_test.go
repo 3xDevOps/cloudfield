@@ -28,14 +28,17 @@ type noticeWaker struct {
 	approved int
 	refusal  error
 	enhanced atomic.Bool
+	printing atomic.Bool
 	// shown is whether each wake's line was shown to a member in control
 	// who did not ask for it.
-	shown []bool
+	shown  []bool
+	onType func()
 }
 
 func (*noticeWaker) Wakeable(domain.RunID) bool    { return true }
 func (*noticeWaker) InTurn(domain.RunID) bool      { return false }
 func (w *noticeWaker) TypedWake(domain.RunID) bool { return !w.enhanced.Load() }
+func (w *noticeWaker) Printing(domain.RunID) bool  { return w.printing.Load() }
 
 func (w *noticeWaker) Wake(ctx context.Context, _ domain.RunID, prompt string) error {
 	w.mu.Lock()
@@ -47,6 +50,9 @@ func (w *noticeWaker) Wake(ctx context.Context, _ domain.RunID, prompt string) e
 	w.lines = append(w.lines, prompt)
 	if domain.WakeApproved(ctx) {
 		w.approved++
+	}
+	if w.onType != nil {
+		w.onType()
 	}
 	return nil
 }
@@ -284,6 +290,38 @@ func TestTheMemberInControlTypesAHeldWakeNow(t *testing.T) {
 	f.wantTyped(t, 1)
 	f.expire(t)
 	f.wantTyped(t, 1)
+}
+
+// The paste and its Enter outlast the request that asked for them.
+func TestAHeldWakeTypedAsItsRequestIsCancelledIsRecordedSent(t *testing.T) {
+	f := newNoticeFixture(t)
+	lease := f.takeControl(t)
+	notice := f.notice(t, 1)[0]
+	ctx, cancel := context.WithCancel(context.Background())
+	f.waker.mu.Lock()
+	f.waker.onType = cancel
+	f.waker.mu.Unlock()
+	_, err := f.rooms.ApproveNow(ctx, notice.ID, f.member.ID, "tab", lease.Generation)
+	if room := f.room(t); err != nil || room[0].State != store.RoomMessageSent {
+		t.Fatalf("a typed line whose request was cancelled: ApproveNow = %v, notice %+v; a queued notice is typed again", err, room[0])
+	}
+	f.expire(t)
+	f.wantTyped(t, 1)
+}
+
+// No line is typed while the agent prints, so the member in control could
+// only dismiss a notice shown then.
+func TestMailForAWorkingAgentMakesNoNoticeUntilItsTerminalIsQuiet(t *testing.T) {
+	f := newNoticeFixture(t)
+	f.waker.printing.Store(true)
+	f.takeControl(t)
+	f.settled()
+	f.wantTyped(t)
+	if room := f.room(t); len(room) != 0 {
+		t.Fatalf("mail for an agent that is printing made %d notices", len(room))
+	}
+	f.waker.printing.Store(false)
+	f.notice(t, 1)
 }
 
 func TestADismissedWakeIsNotTypedAndNewMailMakesANewNotice(t *testing.T) {

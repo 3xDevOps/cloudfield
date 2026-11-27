@@ -309,6 +309,7 @@ type typedWaker struct{ lines chan string }
 func (typedWaker) Wakeable(domain.RunID) bool  { return true }
 func (typedWaker) InTurn(domain.RunID) bool    { return false }
 func (typedWaker) TypedWake(domain.RunID) bool { return true }
+func (typedWaker) Printing(domain.RunID) bool  { return false }
 func (w typedWaker) Wake(_ context.Context, _ domain.RunID, prompt string) error {
 	w.lines <- prompt
 	return nil

@@ -331,7 +331,7 @@ var attentionRows = []attentionRow{
 			}
 			item.Reason, item.Since = sender+" sent a message, approve to deliver", since(&m.CreatedAt)
 			if m.Via == domain.ViaAgentMail {
-				item.Reason = "The agent has unread mail, a line telling it to read its inbox is typed soon"
+				item.Reason = "The agent has unread mail, a line telling it to read its inbox is held"
 			}
 			item.Message = &protocol.AttentionMessage{ID: m.ID, Body: m.Body, From: string(m.ActorID), Via: m.Via}
 		},

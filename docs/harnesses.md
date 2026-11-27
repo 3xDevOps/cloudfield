@@ -1010,9 +1010,9 @@ banner with the line, and the transcript records it.
 The line is typed only when all of these hold. Otherwise the wake stays owed
 and the server tries again, at least every 30 seconds:
 
-- The session is running: not paused, not protected, not ending and not
-  moving to another account. Mail wakes a sleeping session VM first and types
-  once its terminal is back.
+- The session is running: not paused, not protected, not ending, not moving
+  to another account and not switching between Standard and Enhanced. Mail
+  wakes a sleeping session VM first and types once its terminal is back.
 - The agent has turned on bracketed paste. The line arrives as one paste and
   Enter follows 200 ms later. With bracketed paste off nothing is typed: these
   CLIs leave a line that arrives together with its Enter unsent in the input
@@ -1038,6 +1038,12 @@ Each set of new unread messages is typed for once. New mail types again.
 While a member is connected in control, the owner's desktop Terminal view
 included, the server holds the wake for 45 seconds and shows it to them like
 a teammate's held message ([terminal.md](terminal.md#messages-and-notes)).
+The notice appears once the agent has printed nothing for 3 seconds: while
+it prints, no line is typed, and Copilot's hooks hand a working agent the
+mail at their next boundary
+([coordination.md](coordination.md#delivery-acknowledgement-and-retries)).
+Mail still unread when the agent stops printing gets the notice then, within
+30 seconds.
 Their dashboard lists **The agent has unread mail** under **Details → Needs
 you**, shows an **Agent mail** row in Chat that counts down, and offers
 **Review agent mail** in the header:

@@ -137,7 +137,9 @@ func (s *Service) deliverWake(ctx context.Context, msg *store.RoomMessage, appro
 		if err != nil {
 			return fmt.Errorf("%w: %w", ErrWakeNotTyped, err)
 		}
-		claimed, err := s.cfg.Store.ClaimRoomMessage(ctx, msg.ID, s.now(), approver != "", string(approver))
+		// The line is in the terminal: a request cancelled since must not
+		// leave its notice queued, to be typed again.
+		claimed, err := s.cfg.Store.ClaimRoomMessage(context.WithoutCancel(ctx), msg.ID, s.now(), approver != "", string(approver))
 		if err != nil || !claimed {
 			return err
 		}

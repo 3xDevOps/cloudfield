@@ -202,6 +202,8 @@ func TestATypedWakeWaitsForAQuietUnattendedTerminal(t *testing.T) {
 		{"a stop was requested", session(func() { entry.killRequested = true }), session(func() { entry.killRequested = false })},
 		{"an input request is open", session(func() { entry.pendingInputs = []domain.RunInputRequest{{}} }), session(func() { entry.pendingInputs = nil })},
 		{"a sudo prompt is open", session(func() { entry.sudo = []*sudoRequest{{}} }), session(func() { entry.sudo = nil })},
+		{"the session is switching to Enhanced", session(func() { entry.switching = domain.LaunchACP }), session(func() { entry.switching = "" })},
+		{"a mode switch's child swap is unconfirmed", session(func() { entry.switchIntent = &switchIntent{Mode: domain.LaunchACP} }), session(func() { entry.switchIntent = nil })},
 	} {
 		tc.block()
 		err := e.sched.Wake(t.Context(), run, protocol.CoordInboxContext(1))
@@ -216,6 +218,9 @@ func TestATypedWakeWaitsForAQuietUnattendedTerminal(t *testing.T) {
 		}
 		if !e.sched.Wakeable(run) {
 			t.Fatalf("while %s the session is not wakeable, so nothing retries its wake", tc.name)
+		}
+		if printing := tc.name == "the agent printed 2 s ago"; e.sched.Printing(run) != printing {
+			t.Fatalf("while %s: Printing = %v, so a notice for its mail is held back or shown at the wrong time", tc.name, !printing)
 		}
 		tc.clear()
 	}

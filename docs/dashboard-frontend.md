@@ -2287,7 +2287,7 @@ they come from the room, which the session's `state` does not cover, so push and
 | Pending native permission | owner or terminal controller | Permission: … (enhanced: Permission requested) |
 | Pending native question | owner or terminal controller | Question: answer in the terminal (enhanced: Question from the agent) |
 | Queued message from another member | terminal controller | Bob sent a message, approve to deliver |
-| Held [typed wake](harnesses.md#typed-wake): a queued message whose `via` is `agent mail`, written as the owner | terminal controller, the owner included | The agent has unread mail, a line telling it to read its inbox is typed soon |
+| Held [typed wake](harnesses.md#typed-wake): a queued message whose `via` is `agent mail`, written as the owner | terminal controller, the owner included | The agent has unread mail, a line telling it to read its inbox is held |
 | Teammate question to the owner | owner | Bob asked you: … |
 | `state` `disconnected` (labelled Disconnected) | owner | the reason: Agent disconnected: … / Enhanced could not start: … |
 | `state` `needs-you` with a `blocked: <summary>` reason | owner | Blocked: … |

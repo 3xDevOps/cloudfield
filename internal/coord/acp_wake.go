@@ -43,6 +43,9 @@ type SessionWaker interface {
 	// TypedWake reports a session whose wake is one line typed into its
 	// terminal, which a draft in its input box is submitted with.
 	TypedWake(run domain.RunID) bool
+	// Printing reports a TypedWake session whose terminal printed too
+	// recently to take the line: its agent is working.
+	Printing(run domain.RunID) bool
 }
 
 // WakeIdle retries the run's owed wake: its hook observers rerun
@@ -164,6 +167,12 @@ func (s *Service) wakeEnhanced(run domain.RunID) (retry bool) {
 		// A member in control may be typing a prompt the line would join.
 		admit = s.cfg.ReminderAdmission
 		if s.cfg.HoldWake != nil {
+			// No line is typed while the agent prints, so a notice now is
+			// one the member can only dismiss, and an agent with hooks is
+			// handed the mail at their next boundary.
+			if s.cfg.Waker.Printing(run) {
+				return true
+			}
 			set := sha256.Sum256([]byte(strings.Join(ids, "\n")))
 			unread := fmt.Sprintf("%d unread messages from other agents", len(ids))
 			if len(ids) == 1 {

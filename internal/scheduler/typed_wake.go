@@ -41,6 +41,13 @@ func (s *Scheduler) TypedWake(run domain.RunID) bool {
 	return profile.Capabilities.TypedWake
 }
 
+// Printing reports whether run's terminal printed too recently for a typed
+// wake: its agent is working.
+func (s *Scheduler) Printing(run domain.RunID) bool {
+	out, _ := s.cfg.PTY.LastOutput(ptyhost.RunSession(run))
+	return time.Since(out) < typedWakeQuietOutput
+}
+
 // typeWake types line into run's terminal and submits it as the agent's
 // next prompt. It writes nothing and fails with domain.ErrWakeHeld while a
 // person may be typing there, a request waits for an answer, the terminal is
@@ -81,10 +88,12 @@ func (s *Scheduler) typeWake(ctx context.Context, run domain.RunID, line string)
 	}
 	s.mu.Lock()
 	entry := s.runs[run]
-	// A Standard session moving account is finalizing throughout.
-	if entry == nil || entry.paused || entry.finalizing || entry.killRequested || entry.atPrompt() {
+	// A Standard session moving account is finalizing throughout. One
+	// switching to Enhanced runs a login shell, with bracketed paste on,
+	// until its mode is committed.
+	if entry == nil || entry.paused || entry.finalizing || entry.killRequested || entry.atPrompt() || entry.switching != "" || entry.switchIntent != nil {
 		s.mu.Unlock()
-		return fmt.Errorf("scheduler: %w: the session is paused, ending, moving account or waiting for an answer", domain.ErrWakeHeld)
+		return fmt.Errorf("scheduler: %w: the session is paused, ending, moving account, switching mode or waiting for an answer", domain.ErrWakeHeld)
 	}
 	unattended, agent, cid := entry.startedAt, entry.harness, entry.containerID
 	if entry.quietFrom.After(unattended) {

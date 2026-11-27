@@ -151,7 +151,7 @@ describe('needs you conditions', () => {
     const wake = roomMessage({ kind: 'steer_request', state: 'queued', via: 'agent mail' })
     const context = stateContext({ roomMessages: { run_1: [wake, roomMessage({ id: 'own', kind: 'steer_request', state: 'queued' })] } })
     const controlled = record({ controller_member_id: alice.id })
-    expect(needsYou(controlled, context)?.reason(controlled, context)).toBe('The agent has unread mail, a line telling it to read its inbox is typed soon')
+    expect(needsYou(controlled, context)?.reason(controlled, context)).toBe('The agent has unread mail, a line telling it to read its inbox is held')
     expect(needsYou(controlled, stateContext({ roomMessages: { run_1: [{ ...wake, via: undefined }] } }))).toBeUndefined()
   })
 
