@@ -130,9 +130,10 @@ func TestServerEdgeNotice(t *testing.T) {
 	}
 }
 
-// After edge move and before the restart, the notice says which address
-// the options file now names; a file naming the running address, the same
-// origin with its port written out, or none says nothing.
+// After edge move and before the restart, the notice says which origin
+// the options file now names, canonical; a file naming the running
+// address, the same origin with its port written out, none or no origin
+// says nothing.
 func TestServerEdgeNoticeAfterAMove(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "server.conf")
@@ -145,6 +146,8 @@ func TestServerEdgeNoticeAfterAMove(t *testing.T) {
 		{"", `{"state":"retiring","replacement":"https://edge2.example"}`},
 		{"edge-url = " + own + ":443\n", `{"state":"retiring","replacement":"https://edge2.example"}`},
 		{"edge-url = " + other + "\n", `{"state":"retiring","replacement":"https://edge2.example","moved_to":"https://edge2.example"}`},
+		{"edge-url = https://EDGE2.example:443\n", `{"state":"retiring","replacement":"https://edge2.example","moved_to":"https://edge2.example"}`},
+		{"edge-url = <b>edge</b>\n", `{"state":"retiring","replacement":"https://edge2.example"}`},
 	} {
 		if err := os.WriteFile(path, []byte(tc.config), 0o600); err != nil {
 			t.Fatal(err)

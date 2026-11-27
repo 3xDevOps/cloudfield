@@ -47,22 +47,30 @@ func (s *Server) serverEdge(context.Context, domain.MemberID, json.RawMessage) (
 	return out, nil
 }
 
-// configuredEdgeURL is the edge-url the options file names when it is not
-// running, the address the server runs at; empty when the file names
-// running, none, or cannot be read.
+// configuredEdgeURL is the canonical edge-url the options file names when
+// it is another origin than running, the one the server runs at; empty
+// when the file names running, none, or one that is not an origin, or
+// cannot be read, which is logged once per error.
 func (s *Server) configuredEdgeURL(running string) string {
 	if s.cfg.ConfigPath == "" {
 		return ""
 	}
 	values, err := serversetup.Load(s.cfg.ConfigPath)
+	var msg string
 	if err != nil {
+		msg = err.Error()
+	}
+	if last := s.configErr.Swap(&msg); err != nil && (last == nil || *last != msg) {
 		slog.Warn("sshd: server.edge cannot tell whether edge-url changed since the start", "error", err)
+	}
+	if err != nil || values["edge-url"] == "" {
 		return ""
 	}
-	configured := values["edge-url"]
-	a, aerr := edgeclient.Canonical(configured)
-	b, berr := edgeclient.Canonical(running)
-	if configured == "" || aerr == nil && berr == nil && a == b {
+	configured, err := edgeclient.Canonical(values["edge-url"])
+	if err != nil {
+		return ""
+	}
+	if now, err := edgeclient.Canonical(running); err == nil && now == configured {
 		return ""
 	}
 	return configured

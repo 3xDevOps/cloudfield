@@ -363,6 +363,12 @@ func serve(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	edgeURLConfig := *configPath
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "edge-url" {
+			edgeURLConfig = ""
+		}
+	})
 	from, configErr := applyConfigFile(fs, *configPath, *configPath == serversetup.DefaultConfigPath)
 	if configErr != nil {
 		return configErr
@@ -415,7 +421,7 @@ func serve(args []string) error {
 		EdgeURL:      string(*o.edgeURL),
 		EdgeAccess:   edgeproto.AccessPolicy(*o.edgeAccess),
 		EdgeReviewer: *o.edgeReviewer,
-		ConfigPath:   *configPath,
+		ConfigPath:   edgeURLConfig,
 
 		CoordinationDisabled: !*o.conflictCoordination,
 

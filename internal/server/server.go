@@ -129,8 +129,9 @@ type Config struct {
 	// EdgeReviewer lets a connector authorized by the edge's reviewer
 	// account act as the member an admin bound it to.
 	EdgeReviewer bool
-	// ConfigPath is the options file the server read at start; server.edge
-	// reads its edge-url again to tell a move waiting for a restart.
+	// ConfigPath is the options file the server read at start, empty when
+	// a flag set edge-url; server.edge reads its edge-url again to tell a
+	// move waiting for a restart.
 	ConfigPath string
 	// CoordinationDisabled turns the conflict coordination kill switch off.
 	// The zero value keeps coordination enabled, which is the shipped
