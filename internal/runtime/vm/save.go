@@ -317,8 +317,9 @@ func (e *engine) restore(ctx context.Context, key string) error {
 		}
 		l := launch{Home: booted.Home, Reveal: booted.Reveal, Args: []string{
 			"--api-socket", "path=" + e.path(key, apiSocket), "--event-monitor", "path=" + e.path(key, eventsFile),
-			"--restore", "source_url=file://" + dir,
+			"--restore", "source_url=file://" + dir + zzRestoreOpts,
 		}}
+		l.Args = append(l.Args, zzRestoreArgs...)
 		if rec.Net != offline {
 			if err = e.ensureNetwork(ctx); err != nil {
 				return err
@@ -394,6 +395,9 @@ func (e *engine) restore(ctx context.Context, key string) error {
 	}
 	// Deleted behind the wake: unlinking 0.9 GiB of saved memory took
 	// 200 ms. The next save removes what a host that stopped meanwhile left.
+	if zzKeepSource {
+		return err
+	}
 	used := e.path(key, usedSnapshotDir)
 	if renameErr := os.Rename(dir, used); renameErr != nil {
 		if errors.Is(renameErr, fs.ErrNotExist) {

@@ -17,9 +17,14 @@ permissions:
 
 jobs:
   kvm:
-    name: make test-kvm
+    name: incremental save ${{ matrix.fs }} ${{ matrix.mib }}
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        fs: [xfs, btrfs, ext4]
+        mib: [2048, 8192]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -55,7 +60,12 @@ jobs:
         run: |
           CGO_ENABLED=0 go build -o "$RUNNER_TEMP/aether-server" ./cmd/aether-server
           sudo "$RUNNER_TEMP/aether-server" vm install --vm-kernel "$PWD/dist/aether-vmlinux-x86_64"
-      - name: VM tests (real Cloud Hypervisor VMs)
-        env:
-          GOFLAGS: -v
-        run: sudo env "PATH=$PATH" "HOME=$HOME" "GOFLAGS=$GOFLAGS" make test-kvm
+      - name: Install Cloud Hypervisor v55.0 and the filesystem tools
+        run: |
+          sudo apt-get install -y -qq xfsprogs btrfs-progs >/dev/null
+          curl -fsSL -o "$RUNNER_TEMP/ch" https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v55.0/cloud-hypervisor-static
+          echo "ce7133bf535ed5a4e2a63ea1f26025445a5b1241f73ddfb81ff2fbcb2e803a59  $RUNNER_TEMP/ch" | sha256sum -c
+          sudo install -m 0755 "$RUNNER_TEMP/ch" /usr/local/bin/cloud-hypervisor
+          cloud-hypervisor --version
+      - name: Incremental save measurement
+        run: sudo env "PATH=$PATH" "HOME=$HOME" scripts/zz-lazy-incremental.sh ${{ matrix.fs }} ${{ matrix.mib }} "$PWD/dist/aether-vmlinux-x86_64"

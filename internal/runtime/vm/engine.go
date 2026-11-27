@@ -553,7 +553,7 @@ func (e *engine) bootLaunch(ctx context.Context, rec *record) (launch, error) {
 		// (Cloud Hypervisor v54.1 on a host that is itself a VM). Sessions
 		// run no VMs of their own.
 		"--cpus", fmt.Sprintf("boot=%d,nested=off", rec.CPUs),
-		"--memory", fmt.Sprintf("size=%dM,shared=on", guestMiB(rec.MemoryMiB)),
+		"--memory", fmt.Sprintf("size=%dM,shared=%s", guestMiB(rec.MemoryMiB), zzShared),
 		"--balloon", "size=0,free_page_reporting=on",
 	)
 	if rec.Net != offline {
@@ -640,6 +640,7 @@ func (e *engine) launch(ctx context.Context, rec *record, l launch) error {
 		// 500: a host OOM kill of the monitor ends the whole session, not
 		// one process in it.
 		fmt.Sprintf("MemoryMax=%dM", unitMemoryMiB(rec)), "MemorySwapMax=0",
+		"IOAccounting=yes",
 		"StandardOutput=append:" + logPath, "StandardError=append:" + logPath,
 	}
 	if rec.CPULimit > 0 {
@@ -856,3 +857,11 @@ func readNoFollow(path string) ([]byte, error) {
 	defer func() { _ = f.Close() }()
 	return io.ReadAll(f)
 }
+
+// Scratch measurement knobs (scratch/lazy-ch-incremental-save); never merged.
+var (
+	zzShared      = "on"
+	zzRestoreOpts string
+	zzRestoreArgs []string
+	zzKeepSource  bool
+)
