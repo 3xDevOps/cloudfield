@@ -276,7 +276,7 @@ func (s *Scheduler) FinishReported(ctx context.Context, run domain.RunID, report
 func (s *Scheduler) ReportsSince(run domain.RunID) time.Time {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if entry := s.runs[run]; entry != nil && !entry.turnStartedAt.IsZero() && !entry.reportsHeld {
+	if entry := s.runs[run]; entry != nil && entry.reporter != harness.ReporterNone && !entry.turnStartedAt.IsZero() && !entry.reportsHeld {
 		return entry.reportsSince
 	}
 	return time.Time{}

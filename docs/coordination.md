@@ -1325,9 +1325,9 @@ failure or blocked report reaches its parent's inbox with kind `report`:
 `from_run_id` is the subsession, `outcome` is the reported outcome, `body` is
 its complete report summary, and `correlation_id` is the report ID. It uses the same durable delivery and
 acknowledgement as peer messages; if the inbox is full, report publication
-retries until it fits. A subsession that reports the same outcome again within
-two minutes in the same turn sends its parent nothing more: the first report's
-message stands. A report is always sent when it has another outcome, or follows
+retries until it fits. A subsession that reports the same outcome again in the
+same turn, within two minutes of the first such report, sends its parent nothing
+more: the first report's message stands. A report is always sent when it has another outcome, or follows
 mail the subsession read, a member's message or answer, a `needs-input`,
 `waiting` or `answered` report, a turn the agent started on its own, a relaunch
 or a server restart. A turn that ends without a success,
