@@ -596,7 +596,7 @@ A Claude Code login added with `cloudfield agent login claude --as <name>`
 
 | File | Holds |
 | --- | --- |
-| `credentials.json` | A subscription login's sign-in, with its access and refresh tokens; empty for a Console login |
+| `credentials.json` | A subscription login's sign-in, with its tokens; empty for a Console login |
 | `anthropic/` | A Console login's Anthropic profile, with its token |
 | `identity.json` | The kind, plan, email and organisation Claude Code recorded at sign-in; no secret |
 
@@ -619,13 +619,19 @@ The server reads a login's files:
 
 A usage read sends the login's access token to Anthropic's usage endpoint,
 `https://api.anthropic.com/api/oauth/usage`, and keeps the answer for 60
-seconds; a Console login's usage is never read. Sessions on the login send its
-tokens to Anthropic as Claude Code does. The email and organisation reach only
-you; the login's name reaches everyone who sees a session on it. `cloudfield
-agent logins remove <login>` deletes its files and its row, removing a member
-deletes theirs, and merging a member moves theirs to the survivor
-([teams.md](teams.md#link-or-merge-sign-ins)). None of these signs the login
-out at Anthropic.
+seconds; a Console login's usage is never read. A session on the login sends
+its token with each request to Anthropic, or to `ANTHROPIC_BASE_URL` when a
+workspace or server variable sets it; with none set, the session runs with
+`ANTHROPIC_BASE_URL` empty. Only your own listing of your logins shows their
+email and organisation; the login's name reaches everyone who sees a session
+on it, and a session on the login can learn whose it is
+([security.md](security.md#several-logins)). `cloudfield agent logins remove
+<login>` deletes its files and its row, removing a member deletes theirs, and
+merging a member moves theirs to the survivor
+([teams.md](teams.md#link-or-merge-sign-ins)). When a member removal or a
+merge fails to delete or move the files, it still succeeds: the server logs a
+warning, and the next server start deletes or moves them.
+None of these signs the login out at Anthropic.
 
 ## Dictation
 

@@ -229,4 +229,4 @@ Code's own sign-in, and resuming a conversation on another login without
 replaying its prompt ([agents.md](agents.md#several-logins)) follow the design
 of [Orca](https://github.com/stablyai/orca), read at commit
 `055555dfa7d78ce12ac3244f8d95dbba21d8556d` (MIT licence, Copyright (c) 2026
-Lovecast Inc.). No Orca code is copied into Cloudfield.
+Lovecast Inc.). No Orca code was copied for this feature.

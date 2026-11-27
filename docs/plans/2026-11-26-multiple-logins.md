@@ -633,18 +633,26 @@ the plan above:
 
 - A merge moves the absorbed member's login directories after its
   transaction commits, not in the step that moves the home; a crash between
-  the two is settled by the next start's `ReconcileLogins`.
+  the two, or a move or a member removal that fails to move or delete the
+  directories, is logged and settled by the next start's `ReconcileLogins`,
+  and the merge or removal still succeeds. Moved logins keep their Automatic
+  switch and go after the survivor's own, off for shares; a clashing name is
+  cut to fit 32 characters before its suffix.
 - A sign-in needs the launch permission and is admitted like a launch. Its
   terminal must open within 10 minutes and its container start within 5; it
-  is stopped 15 minutes after its terminal opened.
+  is stopped 15 minutes after its container started. Pending sign-ins and
+  their outcomes are kept in the server's memory and do not survive a
+  restart.
 - Besides a workspace or server variable, an `apiKeyHelper` or a sign-in
   variable under `env` in the home's `~/.claude/settings.json` refuses a named
   added login, and automatic choices skip added logins there. So does an
   agent definition that gives `claude` its own executable. A launch naming
   no login on the member's own account, where no login serves without being
   named, is refused, naming each login and why.
-- Every variable that signs Claude Code in, and `ANTHROPIC_PROFILE`, are set
-  empty in a session on an added login. Only a change of a login's kind is
+- In a session on an added login, each variable that signs Claude Code in,
+  and `ANTHROPIC_BASE_URL`, that no workspace or server variable sets is set
+  empty; a set value that does not sign Claude Code in stays.
+  `ANTHROPIC_PROFILE` is always set empty. Only a change of a login's kind is
   refused; a session that can write a login's directory can put another
   account's sign-in of the same kind there. A setting written into the home
   after the launch checks, a repository's `.claude/settings.json` or
@@ -653,10 +661,12 @@ the plan above:
 - The mask over the legacy `~/.claude/.config.json` is a plain bind and is
   not inode-checked; the inode check of the other mounts runs once, when the
   container starts. Session VMs refuse every added login.
-- An owed continuation prompt is dropped, with a notice in the item log,
-  when a person's prompt reaches the conversation first. Only a session the
-  server cannot reach, or a prompt the agent host reports unsent, leaves it
-  owed; any other error clears it.
+- An Enhanced session's owed continuation prompt is dropped, with a notice
+  in the item log, when a person's prompt reaches the conversation first.
+  Only a session the server cannot reach, a prompt the agent host reports
+  unsent, or a failure to record durably that it is being sent leaves it
+  owed; any other error clears it. A Standard or Background session gets the
+  continuation as the prompt of the command that resumes the conversation.
 - A Background session that a restart finds sending its continuation is
   settled from its log: ended with "the continuation prompt may not have
   been delivered" when the log does not show the prompt, resumed when the
@@ -669,7 +679,8 @@ the plan above:
   session lands on it; the session's log, the room note and `per_use` on
   `run.account` say so.
 - Three checks apply only to accounts whose owner keeps login rows, so a
-  member with no added login sees no change: the fresh read of a teammate's
+  member who keeps none sees no change; removing the last added login keeps
+  the default login's row when one of its switches is off: the fresh read of a teammate's
   signal, the owner check in the revoke sweep, and the login check on wake.
 - The 30-minute pass-over of a login reported run out is kept in memory; a
   restart forgets it.

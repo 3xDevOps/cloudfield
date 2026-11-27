@@ -2989,8 +2989,8 @@ owner's when the caller has none.
 **Login** (`login-picker.tsx`) is a select under Account for Claude Code on
 the caller's own account, where `server.info` lists the `logins` feature and
 `agent.login.list` returns more than one login. Its value is short:
-**Automatic**, which sends no `login`, or the picked login's name, which it
-sends as `run.launch` `login`. A line under it says what happens: Automatic
+**Automatic**, which sends no `login`, or the picked login's name; it sends
+that login's id as `run.launch` `login` (`default` for the default login). A line under it says what happens: Automatic
 "Starts on the first automatic login in your order with usage left, and
 moves to the first other one with usage left when it runs out." (the Agents
 page's lead says the same), and a picked login "The session starts on this
@@ -3042,9 +3042,11 @@ not the login.", or with other accounts "Saves this account, the fallback
 accounts and whether a session may move to another login or account, …".
 **Fallback** then holds only what the switch does not: **Fallback accounts ·
 Most usage left first** (or **In your order**) **· after your logins**, which
-wraps between words on a narrow sheet and never breaks "after your logins", the
-other accounts' list without a checkbox, shown while the switch is on and
-another account is shared with the caller, and gone otherwise.
+wraps between words on a narrow sheet and never breaks "after your logins", and
+the other accounts' list, each with its checkbox, without the **Fall back to
+another account** checkbox, shown while the switch is on and another account
+is shared with the caller, and gone otherwise. Unticking every account sends
+`no_fallback`, which also stops moves between the caller's own logins.
 
 Where the server offers `run.children.allow`, the form has a **Child
 sessions** select: **Use my setting** (naming it, "(off)"), **Allow for this
@@ -4244,10 +4246,12 @@ The header's **Answer** focuses the docked card on every screen. While Session s
 you** shows one link, "1 request, shown below the timeline", that closes a
 Details sheet and focuses the card; on other views it lists the cards. `routes/run/session-failure.tsx` shows an adapter failure with
 **Retry Enhanced** and **Open in Standard**, and a sign-in failure with the
-agent's auth methods. **Open in Standard** that starts a replacement launches
-it on the owner's account, login, fallback and subsession setting; the login
-only while the run is on the owner's own account, not one a fallback moved it
-to. On a run on the viewer's own account it adds **Sign in
+agent's auth methods. **Open in Standard** that starts a replacement keeps,
+when the viewer owns the run, its account, fallback and subsession setting,
+and the added login it is on while the run is on the owner's own account, not
+one a fallback moved it to; a run on the default login sends no login, so the
+server chooses one anew. Another viewer's replacement launches as any launch
+of theirs does, on their own account and settings. On a run on the viewer's own account it adds **Sign in
 on Agents**, and when that agent's `agent.list` row has `login_problem` its
 title is the alert's ("Claude Code is signed out" or "Claude Code's sign-in
 was refused"); a login-file problem shows verbatim, while a refusal is
@@ -6692,10 +6696,12 @@ signed in offers its terminal login method, typed as the ACP server command
 (`agent_command` in the session state) with the method's args.
 
 **Several logins.** Where `server.info` lists the `logins` feature, the
-installed Claude Code row adds **Add login**. A member with only the default
-login sees nothing else new. With more, the row's status reads "Installed · 3
-logins" ("Installed · 3 logins · default login signed out" while
-`login_problem` names the default one), the row offers **Run** while any
+installed Claude Code row adds **Add login** once `agent.login.list` has
+answered and the server offers the terminal WebSocket. A member with only the
+default login sees nothing else new. With more, the row's status reads
+"Installed · 3 logins" ("Installed · 3 logins · default login signed out"
+while `login_problem` names the default one and `login_blocks_launch` is set,
+"… · default login sign-in refused" while it is not), the row offers **Run** while any
 login is found (an added login whose kind the list reads counts as
 `login_found` does; the list does not say whether a login can still sign
 in), and the row lists `agent.login.list` in priority order
@@ -6706,9 +6712,9 @@ another member shows none of it, and an answer read for the previous one
 never lands. Each login has its rank (1, 2, 3) with framed
 **Move <name> up** and **Move <name> down** arrows under it, the disabled
 one at either end drawn without a frame
-(`agent.login.order`, every id). Each control is a server-decided action
-(see [Actions](#actions)): while its call and the read of the list after it
-are pending, it alone is locked and shows "Saving…" beside a switch or
+(`agent.login.order`, every id). Each switch and arrow is a server-decided
+action (see [Actions](#actions)): while its call and the read of the list
+after it are pending, it alone is locked and shows "Saving…" beside a switch or
 "Moving…" in the moved row, then "Still waiting for the server…" past the
 deadline. Every arrow waits for an order call, since the next move is built
 from the order the server keeps. Any outcome of a change, an answer, a
@@ -6726,13 +6732,13 @@ login billed per use adds ", charged per use to <organisation>" ("login
 <name>" when it has no organisation); "No share reaches it while Automatic
 is off."; or "A share cannot use this kind of login." for a default login
 kept as an API key or a Console profile, which has no file a share mounts.
-Nothing is said while `account.list` is unanswered, whose error the list's
-lead shows verbatim, or when the account is shared with nobody, which the
-lead says. The badge's tooltip and accessible name name the payer, "Billed
+The teammates line is left out while `account.list` is unanswered, whose
+error the list's lead shows verbatim, and when the account is shared with
+nobody, which the lead says; the other two do not wait for it. The badge's tooltip and accessible name name the payer, "Billed
 per use to <organisation>"; its
 **Automatic** (`agent.login.automatic`) and **Use for shares**
 (`agent.login.share`) switches, each a row of its own; and its usage windows
-(`account.usage` with `login`), whose reset reads in days and hours past 24
+(`account.usage` with `login`, without it for the default login), whose reset reads in days and hours past 24
 hours ("resets in 1d 16h"), as Settings → Usage does. A Console login, whose usage the server
 reports `unsupported`, reads "No usage windows"; any other
 read error shows verbatim, and windows kept from a refresh that failed (`stale`)
@@ -6740,9 +6746,10 @@ add "Last read, not current:" with its error. A login billed per use with Automa
 the first automatic login, adds "Sessions can move here when the automatic
 logins above it run out, charged per use to <organisation>." An added login has **Rename** (inline,
 `agent.login.rename`) and **Remove** as icon buttons on its name line;
-**Remove** confirms first, naming the account the login is signed in as and
-saying it does not sign the login out at Anthropic (`agent.login.remove`).
-A
+**Remove** confirms first, naming the email and organisation recorded for
+the login when there are any and saying it does not sign the login out at
+Anthropic (`agent.login.remove`). **Save** of a rename and **Remove** close
+once their call answers, and the list is read again after. A
 refusal shows verbatim and leaves only **Cancel** until the dialog is opened
 again; on a login off for shares that teammates' sessions still hold, a line
 above it says "Use for shares is off, so no teammate's session starts or
@@ -7235,7 +7242,10 @@ opens a dialog with two tabs:
   default logins, archived, and its added logins moving to the survivor,
   off for shares, each under the name it arrives with: "If <survivor>
   already has a login with the same name, the moved login is renamed
-  `<name>-2`, or the next free number"; a plan from a
+  `<name>-2`, or the next free number". The preview does not say that the
+  server keeps each moved login's Automatic switch, puts it after the
+  survivor's own logins, and cuts a long name to fit 32 characters before
+  the suffix ([teams.md](teams.md#link-or-merge-sign-ins)). A plan from a
   server without logins carries none and the preview says nothing of them.
   Each card lists
   its added logins with what the plan carries for each, name, agent and id;

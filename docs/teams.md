@@ -147,8 +147,11 @@ discarded before you confirm. The survivor takes the other member's sessions,
 schedules, devices and accounts, and the lower of the two roles. The absorbed
 member's home moves to `<data-dir>/merged/<merge id>/home` and their private
 signing key to `signing-key` beside it. Their added Claude Code logins move to
-the survivor, off for shares, and one whose name the survivor already uses is
-renamed `<name>-2`, `<name>-3`, and so on. Both hold credentials, so remove the
+the survivor after the survivor's own, off for shares and with their
+Automatic switch as it was, so the survivor's sessions can move onto them;
+check `cloudfield agent logins` afterwards. A name the survivor already uses
+gets the first free suffix, `-2`, `-3` and so on, the name cut to fit 32
+characters. Both hold credentials, so remove the
 directory with `sudo rm -r` once nothing in it is needed. A merge is
 refused, with the reason, when either member is pending or has an unfinished
 session or terminal. It is also refused when the merged role would be below
@@ -695,8 +698,8 @@ An owner can keep several Claude Code logins
 owner left on for shares and automatic, until the owner turns one off:
 
 ```sh
-cloudfield agent logins share work off   # owner: only the owner's sessions run on work
-cloudfield agent logins auto work off    # owner: no teammate's session starts on work either
+cloudfield agent logins share work off   # owner: teammates' sessions leave work; only the owner's run on it
+cloudfield agent logins auto work off    # owner: no new session starts on work unless the owner names it
 ```
 
 The owner's order decides which login serves you: a launch on their account
@@ -704,27 +707,34 @@ starts on the first login in their order that is on for both and can serve
 the session, and moves on in that order when one runs out. When you launch
 on your own account, your own logins come before any teammate's. When you
 launch on a teammate's account, their other logins come first, then yours if
-you added logins, then the other accounts shared with you.
+you added logins and your account is among the fallback accounts (it is
+unless `--fallback` leaves it out), then the other accounts.
 
 You cannot name a teammate's login: `--login` on their account fails with
 `run.launch: only a login's owner names it; a launch on a teammate's account is
-served in their order`. You see a login's name wherever its session shows
-the account, `, login work` in `cloudfield sessions`, never its email or
-organisation. An account none of whose logins is open to you fails with
-`run.launch: permission denied: none of this account's logins is available to
-you, so it is not shared with you`.
+served in their order`. Cloudfield shows you a login's name wherever its
+session shows the account, `, login work` in `cloudfield sessions`, but not
+its email or organisation; a session on the login can still learn whose it is
+([security.md](security.md#several-logins)). An account none of whose logins
+is open to you fails with `run.launch: permission denied: none of this
+account's logins is available to you, so it is not shared with you`; one
+whose open logins cannot serve the session fails with `run.launch: permission
+denied: none of this account's logins can serve you: <login>: <why>; ...`.
 
 - Turning a login off for shares moves teammates' running sessions off it to
   another login or account they may use, as revoking the share does, and
   stops those that cannot move with `login share revoked: <owner> turned use
   for shares off for login <name>; ...`. The owner's own sessions stay.
+  Turning a login automatic off moves nothing: sessions already on it stay
+  ([agents.md](agents.md#manage-logins)).
 - A session on a login that is off for shares is handed off only to that
   login's owner: `cannot hand off to <name>: the session is on a login its
   owner keeps out of shares`.
-- A subsession starts on its parent's login when its owner owns that login or
-  the login is on for shares, the login is automatic and can still serve it,
-  and it is not billed per use. Otherwise it starts on the first login that
-  serves it, as a launch that names none.
+- A subsession that names no account, runs its parent's agent and belongs to
+  the member whose home its parent mounts starts on its parent's login when
+  its owner owns that login or the login is on for shares, the login is automatic and can still serve
+  it, and it is not billed per use. Otherwise it starts on the first login
+  that serves it, as a launch that names none.
 
 ### Usage fallback
 
@@ -739,10 +749,12 @@ Candidates are your own account and every account shared with you whose owner is
 logged in to the agent. The one with the most usage left wins. Where members keep
 several Claude Code logins ([shares and several
 logins](#shares-and-several-logins)), each account is scored by its first
-automatic login with usage left, after the requested account's own logins and
-your own. `--fallback` lists the other accounts; the requested account's own
-logins stay candidates. In the launch
-dialog, **Fallback → Fall back to another account** turns it off and lists
+automatic login with usage left, after the requested account's own logins and,
+when your account is among the fallback accounts, your own. `--fallback` lists
+the other accounts; the requested account's own logins stay candidates. In the
+launch dialog, **Fallback → Fall back to another account** (with several logins
+of your own, the **Let this session move to another login or account** switch)
+turns it off and lists
 **Fallback accounts**, which you untick or reorder; an account a launch could
 not run on reads **Skipped:** and the reason. Your own account with no login
 file for the agent reads **No saved login**: a launch may still fall back to
