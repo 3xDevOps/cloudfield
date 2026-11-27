@@ -938,7 +938,7 @@ func (s *Scheduler) replaceContainer(ctx context.Context, entry *supervised, f *
 	if err != nil {
 		return failed(err)
 	}
-	billed, perUse := s.billedPerUse(ctx, to, run.Harness)
+	billed, perUse := s.billedPerUse(ctx, run.HomeMember(), to, run.Harness)
 	if run.ACP {
 		description := m.because(fromName) + "."
 		if reported != "" {
@@ -1081,12 +1081,9 @@ func (s *Scheduler) publishAccount(ctx context.Context, id domain.RunID, from do
 		Account: run.AccountMember(), Previous: from.Member, Requested: run.RequestedAccountMemberID,
 		Login: run.AccountLogin, PreviousLogin: from.Login,
 	}
+	payload.PerUse = run.AccountLoginPerUse
 	if l, ok := s.loginRow(ctx, run.Account(), run.Harness); ok && run.AccountLogin.Added() {
 		payload.LoginName = l.Name
-		if s.cfg.Logins != nil {
-			identity, idErr := s.cfg.Logins.Identity(run.AccountMember(), run.Harness, run.AccountLogin)
-			payload.PerUse = idErr == nil && identity.PerUse()
-		}
 	}
 	if l, ok := s.loginRow(ctx, from, run.Harness); ok && from.Login.Added() {
 		payload.PreviousLoginName = l.Name

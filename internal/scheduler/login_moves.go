@@ -151,14 +151,13 @@ func (s *Scheduler) triedLogins(ctx context.Context, f *UsageFallback, run *doma
 	return "; logins tried: " + strings.Join(names, ", ") + "; the first is usable again at " + usable
 }
 
-// billedPerUse says that account's login is billed per use, when it is an
-// added Console login.
-func (s *Scheduler) billedPerUse(ctx context.Context, account domain.Account, agent string) (string, bool) {
-	if !account.Login.Added() || s.cfg.Logins == nil {
+// billedPerUse says that account's login is billed per use in a session in
+// home's home, as LoginPerUse decides.
+func (s *Scheduler) billedPerUse(ctx context.Context, home domain.MemberID, account domain.Account, agent string) (string, bool) {
+	if account.Login.Added() && s.cfg.Logins == nil {
 		return "", false
 	}
-	identity, err := s.cfg.Logins.Identity(account.Member, agent, account.Login)
-	if err != nil || !identity.PerUse() {
+	if perUse, err := s.LoginPerUse(ctx, home, account, agent); err != nil || !perUse {
 		return "", false
 	}
 	return s.accountLabel(ctx, account, agent) + "'s account is billed per use.", true

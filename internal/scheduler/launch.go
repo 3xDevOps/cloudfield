@@ -542,7 +542,7 @@ func (s *Scheduler) provisionSteps(ctx context.Context, entry *supervised, run *
 	entry.gitAuthorEmail = actor.GitIdentity().Email
 	entry.egress = plan.Egress
 	s.mu.Unlock()
-	billed, perUse := s.billedPerUse(ctx, run.Account(), run.Harness)
+	billed, perUse := s.billedPerUse(ctx, run.HomeMember(), run.Account(), run.Harness)
 	if perUse && run.ACP {
 		s.acp.switchNotice(run.ID, "info", "Billed per use", billed)
 	}

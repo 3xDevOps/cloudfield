@@ -927,3 +927,43 @@ func TestARestrictedAccountIsNotReturnedTo(t *testing.T) {
 		t.Fatalf("run on %s (%q); want it kept on Grace's account, Ada's second login not tried", got.Account(), got.Reason)
 	}
 }
+
+// Ada keeps her default login as an API key beside a subscription login.
+// A session that runs out on the subscription and moves to the default
+// login says it is billed per use, as a move to an added Console login
+// does: in its log, its room note, its run.account event and its row.
+func TestAMoveToADefaultLoginBilledPerUseIsSaidSo(t *testing.T) {
+	t.Parallel()
+	e, _, notes, _, second := newLoginMoveEnv(t, enhancedClaude)
+	writeHomeFile(t, e.adaHome, ".claude.json", `{"primaryApiKey":"test-not-a-key-of-ada","numStartups":2}`)
+	sub, err := e.bus.Subscribe(t.Context(), events.SubscribeOptions{Filter: events.Filter{Types: []events.Type{events.TypeRunAccount}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = sub.Close() }()
+	run, err := e.sched.LaunchWithOptions(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP, domain.LaunchOptions{AccountLogin: second.Login})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+	_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
+	const billed = "Ada's account is billed per use."
+	select {
+	case ev := <-sub.Events():
+		if p, ok := ev.Payload.(events.RunAccountPayload); !ok || !p.PerUse || p.Login != "" {
+			t.Fatalf("run.account = %+v; want the default login, billed per use", ev.Payload)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("no run.account event")
+	}
+	waitFor(t, "the room note", func() bool {
+		return slices.Equal(notes.all(), []string{"Continued on Ada's account because Ada (second)'s usage ran out. " + billed})
+	})
+	waitFor(t, "the log line", func() bool {
+		log, readErr := os.ReadFile(e.pty.ItemLogPath(run.ID))
+		return readErr == nil && strings.Contains(string(log), billed)
+	})
+	if row, err := e.db.GetRun(t.Context(), run.ID); err != nil || !row.AccountLoginPerUse || row.Account() != domain.AccountOf(e.member.ID) {
+		t.Fatalf("run = %+v, %v; want it on the default login, billed per use", row, err)
+	}
+}
