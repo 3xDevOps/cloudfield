@@ -340,6 +340,22 @@ that is a symlink leaving your home. Cloudfield reads the profile directory at
 `~/.config/anthropic`; a workspace variable `ANTHROPIC_CONFIG_DIR` or
 `ANTHROPIC_PROFILE` that points Claude Code elsewhere is not followed.
 
+`cloudfield agent login claude --as <name>` adds a login beside this one
+([agents.md](agents.md#several-logins)). An added login lives in its own
+directory on the server, and a session on it mounts three files from there:
+its `credentials.json` over `~/.claude/.credentials.json`, its `anthropic/`
+profile directory at `~/.config/anthropic` (`ANTHROPIC_CONFIG_DIR` points there
+and `ANTHROPIC_PROFILE` is unset), and a copy of your `~/.claude.json` without
+the account keys at `CLAUDE_CONFIG_DIR`. The store the login does not use is
+read-only. Docker checks each mount's inode in the container before the agent
+starts. In a test against a stand-in for Anthropic's API, Claude Code 2.1.332
+sent the added login's credential over each kind of default login. Before each launch the
+server checks that the login's files still hold the kind it was added with,
+and refuses it with `login <id> no longer holds the <kind> sign-in it was added
+with; its owner removes it and adds it again` otherwise. An Isolated session
+refuses a Console login, a whole directory it could change, and a session VM
+refuses every added login: its mounts are not checked yet.
+
 For an API key, set `ANTHROPIC_API_KEY` in the server's environment, and
 `ANTHROPIC_BASE_URL` for a gateway. A `CLAUDE_CODE_OAUTH_TOKEN` from
 `claude setup-token` is not passed through, so use the terminal for
@@ -619,6 +635,13 @@ not exhausted.
 
 If a vendor changes its signal, the session fails or ends its turn with the vendor's
 error instead of moving.
+
+Between the logins of one account only a spent balance moves a session: messages
+that start "You've hit your", "You've reached your", "You're out of usage
+credits", "You're out of extra usage" or "Your org is out of usage". A seat,
+allocation, group or model message is a restriction on the account, so the
+session skips the account's other logins and moves to another account or stops,
+as before ([agents.md](agents.md#several-logins)).
 
 ## Launching
 

@@ -730,6 +730,33 @@ move, interactive sessions park as **Needs you**, a Background session fails, an
 A paused session, or one being closed or killed, is not moved. A move survives a
 server restart: the next start finishes it.
 
+### Several logins
+
+On an account with several Claude Code logins ([agents.md](agents.md#several-logins))
+a session moves first to the account's next login, and the room note names both:
+`Continued on Ada (work)'s account because Ada's usage ran out.` Only a spent
+balance moves it between logins of one account
+([harnesses.md](harnesses.md#usage-limit-signals)). The continuation prompt is sent
+at most once: after a server restart in the middle of sending it, the session's
+log says `The session moved to <login>; the continuation prompt may not have been
+delivered.` and nothing is sent again. Send the session a message if it waits.
+
+| Reason | Meaning |
+| --- | --- |
+| `...; logins tried: <login>, <login>; the first is usable again at <time>` | Every login of the account the session could use ran out. `<time>` is the earliest reset among them, `unknown` when no usage read gave one. |
+| `...; the agent reported a usage limit that <owner> (<login>)'s usage does not show` | A session on a teammate's login reported a limit that a fresh usage read does not show, so it did not move. |
+| `scheduler: login <id> no longer holds the <kind> sign-in it was added with; its owner removes it and adds it again` | The login's files changed kind since it was added. Its owner runs `cloudfield agent logins remove <login>` and adds it again. |
+| `scheduler: session VMs cannot verify an added login's mounts yet, so they do not run on one; launch on your default login` | The server runs sessions in VMs. Launch with `--login default`. |
+| `scheduler: an Isolated session cannot use a Console login: ...` | Launch the session at Default, or on another login. |
+| `scheduler: a workspace variable signs claude in here, so login <id> would not pay; launch on the default login` | A workspace secret such as `ANTHROPIC_API_KEY` signs Claude Code in. Drop `--login`. |
+
+A sign-in that `cloudfield agent login claude --as <name>` started fails with what
+it saved: `the sign-in ended before Claude Code saved a login; nothing was added`,
+`the sign-in saved an Anthropic Console API key, which Cloudfield does not keep as
+an added login: ...`, or `this sign-in is the account and organisation your login
+"<name>" is signed in to, so it was not added; ...`. A second sign-in while one runs
+fails with `the sign-in of login "<name>" is still running; finish it first`.
+
 ## Raise file-watch limits
 
 Cloudfield watches each session's checkout for changes with inotify. The kernel

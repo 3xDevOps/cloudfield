@@ -686,6 +686,35 @@ lists exactly what is shared.
   fails with `runtime: docker engine API "1.44" cannot mount a path beneath a
   member home; that needs API 1.45 (Docker Engine 26.0) or newer`.
 
+### Shares and several logins
+
+A share reaches every Claude Code login the owner keeps on for shares
+([agents.md](agents.md#several-logins)), which is all of them until the owner turns
+one off with `cloudfield agent logins share <login> off`. The owner's order
+decides which one serves you: a launch on their account starts on their first
+login that is automatic, on for shares and signed in. Only a login's owner names
+one; `--login` on a teammate's account fails with `run.launch: only a login's
+owner names it; a launch on a teammate's account is served in their order`. An
+account none of whose logins you may use fails with `none of this account's
+logins is available to you, so it is not shared with you`.
+
+`cloudfield sessions` shows the login after the account (`, login <name>`), and
+`, billed per use` for a Console login. Login names are shown to everyone who
+sees the session; the email and organisation only to the login's owner.
+
+- Turning a login off for shares, like revoking the share, moves your running
+  sessions off it to another login you may use, or stops those none can run.
+- A session on a login that is off for shares is handed off only to its owner:
+  `cannot hand off to <name>: the session is on a login its owner keeps out of
+  shares`.
+- A subsession starts on its parent's login when its owner owns that login, or
+  it is on for shares and automatic, and it is not billed per use. Otherwise it
+  starts as a launch that names no login.
+- When your session on a teammate's login reports a usage limit, Cloudfield reads
+  that login's usage afresh before it moves you, since the report comes from
+  inside the session. If no window is at 95% or more, the session stops with
+  `the agent reported a usage limit that <owner> (<login>)'s usage does not show`.
+
 ### Usage fallback
 
 When a `claude` or `codex` launch's account has used 95% or more of its
@@ -694,7 +723,14 @@ Other agents always launch as requested, and so does an account whose usage
 cannot be read (an API-key login, signed out, or a vendor read over 3 seconds).
 
 Candidates are your own account and every account shared with you whose owner is
-logged in to the agent. The one with the most usage left wins. In the launch
+logged in to the agent. The one with the most usage left wins. Where members keep
+several Claude Code logins, the candidates come in this order: the requested
+account's other logins in its owner's order; then your own logins, when the
+account is a teammate's and you added logins; then the other accounts, by most
+usage left, each served by its first login below 95%. A login whose usage cannot
+be read, such as a Console login, is taken only when no candidate with readable
+usage is left. With `--fallback`, the list names the other accounts; the
+requested account's own logins are always candidates. In the launch
 dialog, **Fallback → Fall back to another account** turns it off and lists
 **Fallback accounts**, which you untick or reorder; an account a launch could
 not run on reads **Skipped:** and the reason. Your own account with no login

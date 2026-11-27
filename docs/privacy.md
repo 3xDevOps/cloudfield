@@ -588,6 +588,20 @@ records each as deleted in the same file before it commits. Merging two members 
 remains, even past the 200 limit; new saves are then refused until enough
 are forgotten.
 
+## Agent logins
+
+A Claude Code login you add with `cloudfield agent login claude --as <name>`
+([agents.md](agents.md#several-logins)) is kept on your server, never on the phone,
+in `<data-dir>/logins/<member>/claude/<login-id>/`: the sign-in Claude Code saved
+(`credentials.json`, or a Console profile in `anthropic/`) and `identity.json`
+with the plan, email and organisation it reported. The database keeps the login's
+name, order and switches. Its name is shown to everyone who sees a session on it;
+the email and organisation only to you. Whoever can read the server's data
+directory, such as its administrator, can read the login, and backups of the data
+directory hold it. `cloudfield agent logins remove <login>` deletes its files and
+its row, and removing a member deletes theirs; neither signs the login out at
+Anthropic.
+
 ## Dictation
 
 With [dictation](dictation.md) installed, the dashboard sends each clip you

@@ -287,6 +287,76 @@ Sign-in works as in step 5. Agent names: `claude`, `codex`, `opencode`, `pi`,
 `omp`, `copilot`, `gemini`, `cursor`, `antigravity`
 ([harnesses.md](harnesses.md)).
 
+## Several logins
+
+A **login** is one sign-in of an agent. `cloudfield agent login claude` signs
+in your **default login**, the one kept in your home. Claude Code can also
+keep **added logins**, each a subscription or a keyless Anthropic Console
+sign-in, stored on the server outside your home:
+
+```sh
+cloudfield agent login claude --as work      # add a login named work
+cloudfield agent logins                      # list them, with usage
+cloudfield session "fix the flaky test" --workspace app --agent claude --login work
+```
+
+`--as` runs `claude auth login` in a container of its own and prints
+`adding login work as lgn-…`. **Human:** follow its prompts in your own
+terminal. It ends with `added login work: subscription, plan max, <email>,
+organisation <name>`. A name has 1 to 32 lowercase letters, digits and `-`,
+starting with a letter or digit; `default` names the login in your home. The
+sign-in is refused, and nothing is kept, when it:
+
+- saved an Anthropic Console API key. Keep a key as your default login or as a
+  workspace secret ([harnesses.md](harnesses.md#use-an-api-key));
+- saved nothing;
+- signed in to the account and organisation of a login you already have.
+
+You run one sign-in at a time. One whose terminal is not opened within 10
+minutes, or that runs 15 minutes, ends with nothing added. If your terminal
+goes first, `cloudfield agent login claude --attach <login-id>` returns to it.
+
+`cloudfield agent logins` prints, in the order Cloudfield tries them, each
+login's kind, plan, email, organisation, usage, and its two switches. `--json`
+prints the same as JSON. Manage them by name:
+
+```sh
+cloudfield agent logins order work default spare   # every login, default included
+cloudfield agent logins auto spare off             # only when you name it with --login
+cloudfield agent logins share work off             # only your own sessions run on it
+cloudfield agent logins rename spare personal
+cloudfield agent logins remove personal
+```
+
+- **Order** is your priority. A new subscription login goes before your first
+  login billed per use, and a Console login last.
+- **Automatic** off: Cloudfield uses the login only when you name it, and never
+  moves a session onto it.
+- **Use for shares** off: members you share your account with never run on it
+  ([teams.md](teams.md#agent-accounts)).
+- **Remove** deletes the login's files from the server. It does not sign the
+  login out at Anthropic. It is refused while a session uses the login, a move is
+  taking a session to it, or a subsession is queued on it; the refusal names your
+  own sessions and counts teammates'.
+
+A launch without `--login` starts on your first login that is automatic and can
+sign in. When that login's usage reads 95% or more, Cloudfield starts the session
+on the next one in your order. A login whose usage cannot be read, such as a
+Console login, is used only when no login with readable usage is left. When the
+agent reports mid-session that a login ran out, the session moves to the next
+login and continues the same conversation ([teams.md](teams.md#usage-fallback)).
+A Console login is billed per use: `cloudfield agent logins` and `cloudfield sessions`
+say `billed per use`. A workspace secret such as `ANTHROPIC_API_KEY` pays
+whatever the login, so a launch in that workspace chooses no login, and one that
+names an added login is refused.
+
+Anthropic's pages describe keeping
+[several accounts, each in its own configuration directory](https://code.claude.com/docs/en/authentication),
+and suggest a [Console account at a subscription limit](https://support.claude.com/en/articles/11145838),
+but neither allow nor forbid moving between two of your own subscriptions at a
+limit, while the [Usage Policy](https://www.anthropic.com/legal/aup) forbids
+using several accounts to get around its restrictions.
+
 ## Follow and answer sessions
 
 ```sh

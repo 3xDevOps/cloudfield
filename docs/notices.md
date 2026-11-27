@@ -221,3 +221,11 @@ the member's own server, not on the phone: the APK carries none of them.
 They are declared with their versions in
 [`web/package.json`](../web/package.json) and [`go.mod`](../go.mod), each
 under its own licence.
+
+## Design sources
+
+Keeping several Claude Code logins, each in a store of its own, signed in only
+through Claude Code's own flow and resumed on another login without replaying
+the prompt ([agents.md](agents.md#several-logins)), follows the design of
+[Orca](https://github.com/stablyai/orca) at commit `055555dfa7d7` (MIT licence,
+Copyright (c) 2026 Lovecast Inc.). No Orca code is copied into Cloudfield.

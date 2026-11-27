@@ -1145,6 +1145,7 @@ The server keeps all its state in `/var/lib/aether`, or the `data-dir` you set.
 | `checkouts/` | One git worktree per session, and each session's recorded diff history in `<run-id>.diffsnap/`. With `session-runtime vm`, `<run-id>/` holds the session's checkout disk instead of a worktree. |
 | `transcripts/` | Terminal recordings and Enhanced conversation logs, kept until you delete the session. |
 | `homes/<member>/` | Each member's persistent home: installed agents, agent logins, uploaded configuration, and their GitHub token. |
+| `logins/<member>/<agent>/<login-id>/` | Each login a member added beside the one in their home ([agents.md](agents.md#several-logins)): its sign-in and what it reported at sign-in. |
 | `signing-keys/` | Each member's private commit signing key, which no container mounts. Without a backup, each member runs `cloudfield github connect` again for a new key. |
 | `linear/` | Each member's personal Linear API key, `<member-id>.key`, readable only by the server's user and never mounted into a container ([linear.md](linear.md#where-the-key-is-stored)). Without a backup, each member saves a new key. |
 | `workspace-secrets/` | Secret workspace variables in plain text, readable only by the server's user. |
@@ -1155,7 +1156,7 @@ The server keeps all its state in `/var/lib/aether`, or the `data-dir` you set.
 | `dictation/` | The speech-to-text engine and model `cloudfield-server dictation install` downloaded. Reinstallable; no backup needed. |
 
 The other directories hold internal server state. To recover a server, back
-up `aether.db`, `repos/`, `checkouts/*.diffsnap/`, `transcripts/`, `homes/`,
+up `aether.db`, `repos/`, `checkouts/*.diffsnap/`, `transcripts/`, `homes/`, `logins/`,
 `signing-keys/`, `linear/`, `profiles/`, `mirrors/` and `workspace-secrets/`. Each
 `<run-id>.diffsnap/` of an ended session reads its fork point from `repos/`,
 so back up and restore the two together. With
