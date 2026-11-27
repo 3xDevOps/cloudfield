@@ -136,16 +136,6 @@ func memcheckServe(mib int) error {
 			time.Sleep(50 * time.Millisecond)
 		}
 	}()
-	boot, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
-	if err != nil {
-		return err
-	}
-	stat, err := os.ReadFile("/proc/self/stat")
-	if err != nil {
-		return err
-	}
-	// Field 22, the start time, counted from after the command's ")".
-	started := strings.Fields(string(stat[bytes.LastIndexByte(stat, ')')+1:]))[19]
 	_ = os.Remove(memcheckSock)
 	l, err := net.Listen("unix", memcheckSock)
 	if err != nil {
@@ -157,6 +147,18 @@ func memcheckServe(mib int) error {
 			return err
 		}
 		line, _ := bufio.NewReader(conn).ReadString('\n')
+		// Read for every answer: a copy from before a save would vouch for
+		// a kernel that is not the one answering.
+		boot, err := os.ReadFile("/proc/sys/kernel/random/boot_id")
+		if err != nil {
+			return err
+		}
+		stat, err := os.ReadFile("/proc/self/stat")
+		if err != nil {
+			return err
+		}
+		// Field 22, the start time, counted from after the command's ")".
+		started := strings.Fields(string(stat[bytes.LastIndexByte(stat, ')')+1:]))[19]
 		answer := fmt.Sprintf("MEMCHECK id=%d/%s/%s rounds=%d torn=%d", os.Getpid(), started, strings.TrimSpace(string(boot)), rounds.Load(), torn.Load())
 		switch args := strings.Fields(line); {
 		case len(args) == 3 && args[0] == "rewrite":
