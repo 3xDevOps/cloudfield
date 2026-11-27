@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -821,10 +822,14 @@ func (s *Service) enqueueChildReport(ctx context.Context, report *store.CoordRep
 	if target == nil || target.WorkspaceID != report.WorkspaceID || target.ID == report.RunID {
 		return errors.New("subsession report parent is outside the reporting subsession's workspace")
 	}
+	sent, err := s.turnReport(ctx, report)
+	if err != nil {
+		return fmt.Errorf("enqueue subsession report: %w", err)
+	}
 	msg := &store.RunMessage{
 		WorkspaceID: report.WorkspaceID, FromRun: report.RunID, ToRun: target.ID,
-		Kind: store.RunMessageKindMessage, Body: report.Summary, CorrelationID: report.ID,
-		IdempotencyKey: "coord-report-" + string(report.Outcome) + ":" + report.ID + ":" + string(target.ID),
+		Kind: store.RunMessageKindMessage, Body: sent.Summary, CorrelationID: sent.ID,
+		IdempotencyKey: "coord-report-" + string(sent.Outcome) + ":" + sent.ID + ":" + string(target.ID),
 	}
 	if err = s.cfg.Mail.RetireProvisionalReports(ctx, report.RunID, target.ID, report.CreatedAt); err != nil {
 		return fmt.Errorf("enqueue subsession report: %w", err)
@@ -837,6 +842,37 @@ func (s *Service) enqueueChildReport(ctx context.Context, report *store.CoordRep
 		s.wakeInbox(target.ID)
 	}
 	return nil
+}
+
+// turnReport is the report whose inbox message speaks for report: the first
+// of the reports with report's outcome that the run made in a row in its
+// current turn without reading new mail in between. A parent that has that
+// message is not sent the outcome again, and one that does not gets it now.
+// A report from a turn the scheduler no longer holds speaks for itself.
+func (s *Service) turnReport(ctx context.Context, report *store.CoordReport) (*store.CoordReport, error) {
+	if s.cfg.Outcomes == nil {
+		return report, nil
+	}
+	since := s.cfg.Outcomes.TurnStartedAt(report.RunID)
+	if since.IsZero() || report.CreatedAt.Before(since) {
+		return report, nil
+	}
+	turn, err := s.cfg.Mail.CoordReportsSince(ctx, report.RunID, since)
+	if err != nil {
+		return nil, err
+	}
+	read, err := s.cfg.Mail.LastRunMessageDeliveredAt(ctx, report.RunID)
+	if err != nil {
+		return nil, err
+	}
+	i := slices.IndexFunc(turn, func(r *store.CoordReport) bool { return r.ID == report.ID })
+	if i < 0 {
+		return report, nil
+	}
+	for i > 0 && turn[i-1].Outcome == report.Outcome && turn[i-1].CreatedAt.After(read) {
+		i--
+	}
+	return turn[i], nil
 }
 
 // publishReportEvidence persists any child-report inbox message, then

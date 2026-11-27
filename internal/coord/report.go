@@ -45,6 +45,8 @@ type OutcomeSink interface {
 	// empty for agents.
 	ReportWaiting(ctx context.Context, run domain.RunID, id, waitingFor, summary string, at time.Time) error
 	ReportAnswered(ctx context.Context, run domain.RunID, id, summary string, at time.Time) error
+	// TurnStartedAt is when run's current turn started, zero when unknown.
+	TurnStartedAt(run domain.RunID) time.Time
 }
 
 // UntilRegistry keeps the conditions a run waits on: the watch service.

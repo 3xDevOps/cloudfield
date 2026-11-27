@@ -75,6 +75,8 @@ func (o *recordingOutcomes) ReportWaiting(_ context.Context, run domain.RunID, i
 	return nil
 }
 
+func (o *recordingOutcomes) TurnStartedAt(domain.RunID) time.Time { return time.Time{} }
+
 func (o *recordingOutcomes) ReportAnswered(_ context.Context, run domain.RunID, id, summary string, at time.Time) error {
 	o.mu.Lock()
 	defer o.mu.Unlock()
