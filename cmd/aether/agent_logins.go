@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -268,13 +269,21 @@ func listLogins(c *protocol.Client, agent string) ([]protocol.AgentLogin, error)
 	return list.Logins, nil
 }
 
-// loginID resolves the name of one of the caller's logins to its id; an
-// id resolves to itself, so a retry a launch printed names the same login.
+// loginID resolves one of the caller's logins, named by its id or its name,
+// to its id; a retry a launch printed names the login by id. A name may
+// look like an id, so a value that is one login's id and another's name is
+// refused.
 func loginID(logins []protocol.AgentLogin, name string) (string, error) {
-	for _, l := range logins {
-		if l.Name == name || l.ID == name {
-			return l.ID, nil
-		}
+	byID := slices.IndexFunc(logins, func(l protocol.AgentLogin) bool { return l.ID == name })
+	byName := slices.IndexFunc(logins, func(l protocol.AgentLogin) bool { return l.Name == name })
+	switch {
+	case byID >= 0 && byName >= 0 && byID != byName:
+		return "", fmt.Errorf("%q names two of your logins, as the id of login %s and as the name of the login with id %s; use %s or %s",
+			name, logins[byID].Name, logins[byName].ID, logins[byID].Name, logins[byName].ID)
+	case byID >= 0:
+		return logins[byID].ID, nil
+	case byName >= 0:
+		return logins[byName].ID, nil
 	}
 	return "", fmt.Errorf("you have no login named %q; cloudfield agent logins lists yours", name)
 }
