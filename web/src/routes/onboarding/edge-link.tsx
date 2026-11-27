@@ -596,7 +596,7 @@ function EdgeChoice({
               <Radio id={`${id}-${i}`} value={e.edge} />
               <span className="min-w-0 break-all">
                 <span className="font-code">{edgeHost(e.edge)}</span> as {accountName(e.account)}
-                {state && <span className="text-muted"> · says it is {state}</span>}
+                {state && <span className="whitespace-nowrap text-muted"> · says it is {state}</span>}
               </span>
             </label>
           )
