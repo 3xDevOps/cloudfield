@@ -969,7 +969,7 @@ describe('lanes view', () => {
     expect(api.workspaceTimeline).toHaveBeenCalledTimes(1)
   })
 
-  it('asks for no more history than its budget has room for', async () => {
+  it('keeps only the newest of a page that its budget has room for', async () => {
     seed([working])
     const start = Date.now() - 30 * 60_000
     const mail = (seq: number): Event => ({
@@ -979,11 +979,14 @@ describe('lanes view', () => {
     const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => mail(from + i))
     vi.mocked(api.workspaceTimeline)
       .mockResolvedValueOnce({ events: range(1001, historyBudget + 500), next_seq: 0, more: true, older_seq: 1001 })
-      .mockResolvedValueOnce({ events: range(501, 1000), next_seq: 0, more: true, older_seq: 501 })
+      .mockResolvedValueOnce({ events: range(1, 1000), next_seq: 0, more: false })
     await openLanes()
     expect(await screen.findByText('Older history not loaded')).toBeDefined()
-    expect(vi.mocked(api.workspaceTimeline).mock.calls.map(([query]) => query.limit)).toEqual([1000, 500])
-    expect(useStore.getState().laneHistory[workspace.id].events).toHaveLength(historyBudget)
+    expect(vi.mocked(api.workspaceTimeline).mock.calls.map(([query]) => query.limit)).toEqual([1000, 1000])
+    const history = useStore.getState().laneHistory[workspace.id]
+    expect(history.events).toHaveLength(historyBudget)
+    expect(history).toMatchObject({ olderSeq: 501, floor: Date.parse(mail(501).time) })
+    expect(history.events[0].seq).toBe(501)
   })
 
   it('drops an older history page read while live events trimmed held history, so no gap reads as loaded', async () => {

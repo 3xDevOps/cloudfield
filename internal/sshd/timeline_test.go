@@ -363,11 +363,24 @@ func TestWorkspaceTimelineSaysHowFarBackAFilteredPageRead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("older_time %q: %v", page.OlderTime, err)
 	}
-	newest, err := time.Parse(time.RFC3339Nano, page.Events[0].Time)
+	// The event the read stopped on, a reread, and no earlier one.
+	var stopped string
+	for _, ev := range readTimeline(t, controlClient(t, e), protocol.WorkspaceTimelineParams{WorkspaceID: string(e.ws.ID), Types: []string{string(events.TypeRunStatus)}}) {
+		if ev.Seq == page.OlderSeq {
+			stopped = ev.Time
+		}
+	}
+	if stopped == "" || page.OlderTime != stopped || page.OlderSeq >= page.Events[0].Seq || !reached.Before(mustTime(t, page.Events[0].Time)) {
+		t.Fatalf("older_time %q at older_seq %d, want %q, the time of that event, before the page's only event (seq %d, %s)",
+			page.OlderTime, page.OlderSeq, stopped, page.Events[0].Seq, page.Events[0].Time)
+	}
+}
+
+func mustTime(t *testing.T, s string) time.Time {
+	t.Helper()
+	at, err := time.Parse(time.RFC3339Nano, s)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reached.Before(newest) {
-		t.Fatalf("older_time %v is not before the page's only event %v: the rereads read past it are not counted", reached, newest)
-	}
+	return at
 }
