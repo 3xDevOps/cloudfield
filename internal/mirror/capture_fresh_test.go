@@ -37,14 +37,16 @@ func TestCaptureStartsFromARefreshYoungerThanCaptureFresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	capture(1, warmed)
-	now = warmed.Add(captureFresh - warmMargin - time.Second)
-	if err = svc.Warm(ctx, "w"); err != nil {
-		t.Fatal(err)
+	now = warmed.Add(captureFresh - time.Second)
+	git.refreshErr = errors.New("upstream answered 502")
+	if err = svc.Warm(ctx, "w"); err != nil || git.refreshCalls != 1 {
+		t.Fatalf("a second launch's warm of a refresh the first can still start from = %v after %d refreshes, want none", err, git.refreshCalls)
 	}
-	now = now.Add(warmMargin)
+	git.refreshErr = nil
 	capture(1, warmed)
+	now = warmed.Add(captureFresh)
 	if err = svc.Warm(ctx, "w"); err != nil || git.refreshCalls != 2 {
-		t.Fatalf("a launch's warm with less than the margin left = %v after %d refreshes, want a second", err, git.refreshCalls)
+		t.Fatalf("a launch's warm of a refresh no capture starts from = %v after %d refreshes, want a second", err, git.refreshCalls)
 	}
 	launched := now
 	now = now.Add(captureFresh / 2)

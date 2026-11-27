@@ -48,12 +48,6 @@ const mirrorRollbackTimeout = 5 * time.Second
 // launch to start from its commit without asking the source again.
 const captureFresh = 10 * time.Second
 
-// warmMargin is how long a launch may take from its Warm to its Capture and
-// still start from the refresh its Warm accepted. It covers one account
-// usage read (3 seconds at most); a launch that also reads the fallback
-// candidates' usage can take longer and then fetches in its Capture.
-const warmMargin = 3 * time.Second
-
 // Config wires the service.
 type Config struct {
 	Root  string
@@ -469,10 +463,9 @@ func (s *Service) PurgeWorkspace(ctx context.Context, workspace domain.Workspace
 	return nil
 }
 
-// Warm refreshes a configured mirror unless a Capture up to warmMargin from
-// now would still start from its last refresh. A launch calls it before
-// taking the locks its Capture runs under, so those are not held across the
-// fetch.
+// Warm refreshes a configured mirror unless a Capture would already start
+// from its last refresh. A launch calls it before taking the locks its
+// Capture runs under, so those are not held across the fetch.
 func (s *Service) Warm(ctx context.Context, workspace domain.WorkspaceID) error {
 	return s.warm(ctx, workspace, true)
 }
@@ -503,11 +496,9 @@ func (s *Service) warm(ctx context.Context, workspace domain.WorkspaceID, launch
 		return nil
 	}
 	at, _ := s.fetched.Load(workspace)
-	within := captureFresh / 2
-	if launch {
-		within = captureFresh - warmMargin
-	} else if accepted, ok := s.launching.Load(workspace); ok && accepted == at {
-		within = captureFresh
+	within := captureFresh
+	if accepted, ok := s.launching.Load(workspace); !launch && (!ok || accepted != at) {
+		within = captureFresh / 2
 	}
 	if _, fresh := s.fresh(ctx, workspace, *m, within); !fresh {
 		if _, err = s.refreshLocked(ctx, workspace, *m); err != nil {
