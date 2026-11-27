@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -191,6 +192,71 @@ func TestRunLaunchOutlivesItsCaller(t *testing.T) {
 	close(release)
 	if perr := <-done; perr != nil {
 		t.Fatalf("launch whose caller went away = %v, want the session", perr)
+	}
+}
+
+type reservedReceipts struct {
+	store.Store
+	reserved chan struct{}
+}
+
+func (r reservedReceipts) ReserveLaunchReceipt(ctx context.Context, member domain.MemberID, key, fingerprint string) error {
+	defer close(r.reserved)
+	return r.Store.ReserveLaunchReceipt(ctx, member, key, fingerprint)
+}
+
+// A launch whose caller goes away while it still waits to be admitted
+// starts nothing, then or later, and a retry with its key launches.
+func TestRunLaunchWaitingForAdmissionEndsWithItsCaller(t *testing.T) {
+	e := newTestEnv(t, nil)
+	e.runs.admitInto = e.store
+	reserved := make(chan struct{})
+	e.srv.cfg.Store = reservedReceipts{Store: e.store, reserved: reserved}
+	raw, err := json.Marshal(protocol.RunLaunchParams{WorkspaceID: string(e.ws.ID), Task: "queued", Harness: "claude", IdempotencyKey: "k-waiting"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	launches := func() int {
+		n := 0
+		for _, call := range e.runs.Calls() {
+			if strings.HasPrefix(call, "launch:") {
+				n++
+			}
+		}
+		return n
+	}
+	e.srv.authorizationMu.Lock()
+	admit := sync.OnceFunc(e.srv.authorizationMu.Unlock)
+	defer admit()
+	ctx, leave := context.WithCancel(t.Context())
+	done := make(chan *protocol.Error, 1)
+	go func() {
+		_, perr := e.srv.Local(e.member.ID).Call(ctx, protocol.MethodRunLaunch, raw)
+		done <- perr
+	}()
+	select {
+	case <-reserved:
+	case <-time.After(time.Second):
+		t.Fatal("launch did not reach its admission")
+	}
+	leave()
+	select {
+	case perr := <-done:
+		if perr == nil || !strings.Contains(perr.Message, "no session was started") {
+			t.Fatalf("launch whose caller left while it waited = %v, want it dropped", perr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("launch kept waiting for admission after its caller left")
+	}
+	admit()
+	if n := launches(); n != 0 {
+		t.Fatalf("launches after the dropped one was let in = %d, want none", n)
+	}
+	e.srv.cfg.Store = e.store
+	again, perr := e.srv.Local(e.member.ID).Call(t.Context(), protocol.MethodRunLaunch, raw)
+	var result protocol.RunLaunchResult
+	if perr != nil || json.Unmarshal(again, &result) != nil || result.Replayed || launches() != 1 {
+		t.Fatalf("retry of the dropped launch = %s, %v after %d launches; want it to launch", again, perr, launches())
 	}
 }
 

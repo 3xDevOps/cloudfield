@@ -17,6 +17,7 @@ import (
 
 	"golang.org/x/crypto/ssh"
 
+	"github.com/3xDevOps/cloudfield/internal/ctxlock"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/fallback"
 	agentharness "github.com/3xDevOps/cloudfield/internal/harness"
@@ -58,7 +59,10 @@ func (f *fakeRuns) LaunchWithOptions(ctx context.Context, ws domain.WorkspaceID,
 	return r, nil
 }
 
-func (f *fakeRuns) StopForParent(ctx context.Context, run, parent domain.RunID) error {
+func (f *fakeRuns) StopForParent(ctx context.Context, run, parent domain.RunID, attached func() error) error {
+	if err := attached(); err != nil {
+		return err
+	}
 	f.mu.Lock()
 	f.killed = append(f.killed, run)
 	f.mu.Unlock()
@@ -213,7 +217,7 @@ func newHarness(t *testing.T) *harness {
 		t.Fatal(err)
 	}
 	h.ada, h.bob = h.member("Ada", domain.RoleAdmin), h.member("Bob", domain.RoleCollaborator)
-	var mu sync.Mutex
+	var mu ctxlock.Mutex
 	h.svc, err = New(Config{
 		Store: db, Runs: h.runs, Git: &fakeGit{head: strings.Repeat("a", 40)},
 		Agents: func() Agents { return h.agents },

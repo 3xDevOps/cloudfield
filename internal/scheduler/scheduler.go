@@ -23,6 +23,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/agentstatus"
 	"github.com/3xDevOps/cloudfield/internal/control"
 	"github.com/3xDevOps/cloudfield/internal/coordtransport"
+	"github.com/3xDevOps/cloudfield/internal/ctxlock"
 	"github.com/3xDevOps/cloudfield/internal/disk"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
@@ -476,7 +477,7 @@ type supervised struct {
 	// lifecycleMu serializes close, relaunch, expiry and steering admission for
 	// this container. It is separate from Scheduler.mu: runtime and git calls
 	// must not run under the scheduler lock.
-	lifecycleMu sync.Mutex
+	lifecycleMu ctxlock.Mutex
 	// runUser is the resolved "uid:gid" for the container and ownership pass;
 	// empty means root (no ownership pass).
 	runUser string

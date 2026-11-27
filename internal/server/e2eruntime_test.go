@@ -31,6 +31,15 @@ type e2eRuntime struct {
 	containers map[runtime.ID]*e2eContainer
 	scripts    map[string]func(*e2eContainer)
 	images     map[string]struct{}
+	pauseHolds map[string]*e2ePauseHold
+}
+
+// e2ePauseHold keeps one container's Pause from returning, as a runtime
+// call that hangs does.
+type e2ePauseHold struct {
+	entered  chan struct{}
+	released chan struct{}
+	once     sync.Once
 }
 
 func newE2ERuntime() *e2eRuntime {
@@ -38,7 +47,18 @@ func newE2ERuntime() *e2eRuntime {
 		containers: make(map[runtime.ID]*e2eContainer),
 		scripts:    make(map[string]func(*e2eContainer)),
 		images:     make(map[string]struct{}),
+		pauseHolds: make(map[string]*e2ePauseHold),
 	}
+}
+
+// holdPause makes a Pause of the container created under key block until
+// release is called. entered closes once a Pause is blocked.
+func (r *e2eRuntime) holdPause(key string) (entered <-chan struct{}, release func()) {
+	hold := &e2ePauseHold{entered: make(chan struct{}), released: make(chan struct{})}
+	r.mu.Lock()
+	r.pauseHolds[key] = hold
+	r.mu.Unlock()
+	return hold.entered, sync.OnceFunc(func() { close(hold.released) })
 }
 
 // script replaces the default agent behaviour for the run whose launch
@@ -245,6 +265,13 @@ func (r *e2eRuntime) Pause(_ context.Context, id runtime.ID) error {
 	c, err := r.get(id)
 	if err != nil {
 		return err
+	}
+	r.mu.Lock()
+	hold := r.pauseHolds[c.spec.CreationKey]
+	r.mu.Unlock()
+	if hold != nil {
+		hold.once.Do(func() { close(hold.entered) })
+		<-hold.released
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()

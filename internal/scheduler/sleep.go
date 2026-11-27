@@ -296,7 +296,9 @@ func (s *Scheduler) noteWake(ctx context.Context, run domain.RunID, how woke) {
 // agent again, as Relaunch reopens a closed one. A failure puts the run back
 // to sleep, with nothing half started.
 func (s *Scheduler) wakeLive(ctx context.Context, entry *supervised) (woke, error) {
-	entry.lifecycleMu.Lock()
+	if err := entry.lockLifecycle(ctx); err != nil {
+		return woke{}, err
+	}
 	defer entry.lifecycleMu.Unlock()
 	s.mu.Lock()
 	if s.runs[entry.runID] != entry || entry.asleepSince.IsZero() || entry.finalizing || entry.killRequested || entry.retained || entry.destroyPending {
