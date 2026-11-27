@@ -220,7 +220,7 @@ func TestSteerUsage(t *testing.T) {
 		{[]string{"pause"}, "usage: cloudfield pause <session-id>"},
 		{[]string{"resume"}, "usage: cloudfield resume <session-id>"},
 		{[]string{"interrupt"}, "usage: cloudfield interrupt <session-id>"},
-		{[]string{"session", "set", "run-1"}, "usage: cloudfield session set <session-id> [--model <model>] [--effort <level>]"},
+		{[]string{"session", "set", "run-1"}, "usage: cloudfield session set <session-id> [--model <model>] [--effort <level>]\n   (give --model, --effort or both)"},
 		{[]string{"session", "set", "run-1", "--model", "opus", "high"}, "usage: cloudfield session set <session-id> [--model <model>] [--effort <level>]"},
 		{[]string{"message"}, "usage: cloudfield message <session-id> <message...>"},
 		{[]string{"message", "run-1"}, "usage: cloudfield message <session-id> <message...>"},

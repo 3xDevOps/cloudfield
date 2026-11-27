@@ -455,28 +455,14 @@ func TestModelOrEffortTheAgentHasNoOptionForIsRefused(t *testing.T) {
 	}
 }
 
-// frozenACPRuntime lists as frozen the VMs a test says the memory brake
-// froze.
-type frozenACPRuntime struct {
-	*acpRuntime
-	frozen []runtime.ID
-}
-
-func (r *frozenACPRuntime) Freeze(runtime.ID) (bool, error) { return false, nil }
-func (r *frozenACPRuntime) Thaw(runtime.ID) error           { return nil }
-
-func (r *frozenACPRuntime) Frozen() []runtime.ID {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return slices.Clone(r.frozen)
-}
-
 func TestAnOptionOfAPausedOrFrozenSessionIsRefusedUnasked(t *testing.T) {
 	t.Parallel()
-	var fr *frozenACPRuntime
+	fr := &frozenVMs{}
 	e, rt := newACPEnv(t, withMockClaude, func(cfg *Config) {
-		fr = &frozenACPRuntime{acpRuntime: cfg.Runtime.(*acpRuntime)}
-		cfg.Runtime = fr
+		cfg.Runtime = struct {
+			*acpRuntime
+			*frozenVMs
+		}{cfg.Runtime.(*acpRuntime), fr}
 		cfg.hostMemory = func() (total, available uint64, err error) { return 32 << 30, 24 << 30, nil }
 	})
 	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "say pong", "claude", domain.LaunchACP)
@@ -502,6 +488,12 @@ func TestAnOptionOfAPausedOrFrozenSessionIsRefusedUnasked(t *testing.T) {
 	}
 	if model, effort := exec.wire.setOption(t, "model"), exec.wire.setOption(t, "effort"); len(model)+len(effort) != 0 {
 		t.Fatalf("an agent that could not answer was sent model %v and effort %v, want neither", model, effort)
+	}
+	// A server that restarts while the session is paused has no agent session
+	// to ask until the resume.
+	s2 := e.restartACP(t)
+	if _, _, err = s2.ACPSetModelEffort(t.Context(), run, e.member.ID, "opus", ""); !errors.Is(err, ErrInvalidTransition) || !strings.Contains(err.Error(), "cloudfield resume "+string(run.ID)) {
+		t.Fatalf("a model for a session paused across a server restart = %v, want it refused naming cloudfield resume", err)
 	}
 }
 

@@ -87,22 +87,6 @@ func dialed(t *testing.T, srv *codexmock.Server, n int) {
 	waitFor(t, "the client to connect", func() bool { return len(srv.Requests("thread/loaded/list")) >= n })
 }
 
-// frozenCodexRuntime lists as frozen the VMs a test says the memory brake
-// froze.
-type frozenCodexRuntime struct {
-	*codexRuntime
-	frozen []runtime.ID
-}
-
-func (r *frozenCodexRuntime) Freeze(runtime.ID) (bool, error) { return false, nil }
-func (r *frozenCodexRuntime) Thaw(runtime.ID) error           { return nil }
-
-func (r *frozenCodexRuntime) Frozen() []runtime.ID {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	return slices.Clone(r.frozen)
-}
-
 func newCodexEnv(t *testing.T, opts ...func(*Config)) (*testEnv, *codexRuntime, *fakeCoordinator) {
 	t.Helper()
 	rt := &codexRuntime{fakeRuntime: newFakeRuntime(), servers: make(map[runtime.ID]*codexmock.Server)}
@@ -425,10 +409,12 @@ func TestInterruptOfAStandardCodexSessionItCannotReachGivesTheRealReason(t *test
 
 func TestInterruptOfAStandardCodexVMTheMemoryBrakeFrozeIsRefusedUnasked(t *testing.T) {
 	t.Parallel()
-	var fr *frozenCodexRuntime
+	fr := &frozenVMs{}
 	e, rt, _ := newCodexEnv(t, func(cfg *Config) {
-		fr = &frozenCodexRuntime{codexRuntime: cfg.Runtime.(*codexRuntime)}
-		cfg.Runtime = fr
+		cfg.Runtime = struct {
+			*codexRuntime
+			*frozenVMs
+		}{cfg.Runtime.(*codexRuntime), fr}
 		cfg.hostMemory = func() (total, available uint64, err error) { return 32 << 30, 24 << 30, nil }
 	})
 	run, c := e.launchOn(t, "codex")

@@ -10,7 +10,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/protocol"
 )
 
-const runSetUsage = "usage: cloudfield session set <session-id> [--model <model>] [--effort <level>]"
+const runSetUsage = "usage: cloudfield session set <session-id> [--model <model>] [--effort <level>]\n   (give --model, --effort or both)"
 
 func runSet(args []string) error {
 	runID := args[0]
@@ -36,10 +36,10 @@ func setSessionOptions(c *protocol.Client, w io.Writer, runID, model, effort str
 	// What the agent reports: it can take a value under another name.
 	var set []string
 	if model != "" {
-		set = append(set, "model "+res.Model)
+		set = append(set, "model "+printable(res.Model))
 	}
 	if effort != "" {
-		set = append(set, "effort "+res.Effort)
+		set = append(set, "effort "+printable(res.Effort))
 	}
 	_, err := fmt.Fprintf(w, "session %s set to %s\n", runID, strings.Join(set, ", "))
 	return err

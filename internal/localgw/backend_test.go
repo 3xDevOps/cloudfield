@@ -230,6 +230,7 @@ func TestSSHBackendTransportFailureRetryPolicy(t *testing.T) {
 		{name: "pr_create_no_replay", method: protocol.MethodRunPRCreate, wantCalls: 1, wantError: true},
 		{name: "run_launch_no_replay", method: protocol.MethodRunLaunch, wantCalls: 1, wantError: true},
 		{name: "template_launch_no_replay", method: protocol.MethodTemplateLaunch, wantCalls: 1, wantError: true},
+		{name: "run_option_set_no_replay", method: protocol.MethodRunOptionSet, wantCalls: 1, wantError: true},
 		{name: "workspace_add_no_replay", method: protocol.MethodWorkspaceAdd, wantCalls: 1, wantError: true},
 		{name: "server_info_reconnects", method: protocol.MethodServerInfo, wantCalls: 2},
 		{name: "run_list_reconnects", method: protocol.MethodRunList, wantCalls: 2},

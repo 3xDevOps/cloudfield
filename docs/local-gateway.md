@@ -1054,9 +1054,10 @@ session answers `-32002`: its model and effort change only inside the agent's
 own terminal, so the message names `cloudfield attach <session-id>` and
 `cloudfield session switch <session-id> --mode enhanced`. A Background
 session with `acp: false` answers `-32602`. A connector is refused it
-(`-32001`). Every call that set one records a `note` entry on the workspace
-timeline, `set model <model>, effort <level>` with the values the agent
-reports and only the ones it set, with the caller as the event's `actor_id`.
+(`-32001`), and the gateway does not replay it. Every call that set one
+records a `note` entry on the workspace timeline,
+`set model <model>, effort <level>` with the values the agent reports and
+only the ones it set, with the caller as the event's `actor_id`.
 `run.inject` takes `steer: true` to add a message to the agent's running
 turn, and `control_session_id`/`control_generation` to deliver it at once
 rather than after the room's moderation delay; its result's `outcome` is

@@ -251,20 +251,8 @@ func (s *Scheduler) ACPSetOption(ctx context.Context, run domain.RunID, optionID
 		return err
 	}
 	defer awake()
-	s.mu.Lock()
-	var paused bool
-	var cid runtime.ID
-	if entry := s.runs[run]; entry != nil {
-		paused, cid = entry.paused, entry.containerID
-	}
-	s.mu.Unlock()
-	// A paused or frozen agent answers nothing, and the caller holds control
-	// admission until this returns.
-	switch {
-	case paused:
-		return fmt.Errorf("%w: the session is paused: run cloudfield resume %s first", ErrInvalidTransition, run)
-	case s.vmFrozen(cid):
-		return fmt.Errorf("%w: the server froze the session's VM while it is short of memory, and it carries on by itself once memory is free again: change it then", ErrInvalidTransition)
+	if err = s.optionsAnswered(run); err != nil {
+		return err
 	}
 	sess, err := s.acp.live(ctx, run)
 	if err != nil {
@@ -324,6 +312,27 @@ func (s *Scheduler) ACPSetOption(ctx context.Context, run domain.RunID, optionID
 	return nil
 }
 
+// optionsAnswered refuses a session that is paused or whose VM is frozen:
+// its agent answers nothing, and the caller holds control admission until
+// its call returns. It goes before the live session, which a session paused
+// across a server restart lacks until its resume.
+func (s *Scheduler) optionsAnswered(run domain.RunID) error {
+	s.mu.Lock()
+	var paused bool
+	var cid runtime.ID
+	if entry := s.runs[run]; entry != nil {
+		paused, cid = entry.paused, entry.containerID
+	}
+	s.mu.Unlock()
+	switch {
+	case paused:
+		return fmt.Errorf("%w: the session is paused: run cloudfield resume %s first", ErrInvalidTransition, run)
+	case s.vmFrozen(cid):
+		return fmt.Errorf("%w: the server froze the session's VM while it is short of memory, and it carries on by itself once memory is free again: change it then", ErrInvalidTransition)
+	}
+	return nil
+}
+
 // ErrNoSuchOption refuses a model or an effort for a session whose agent
 // offers no option that sets it.
 var ErrNoSuchOption = errors.New("scheduler: the session's agent offers no such option")
@@ -339,6 +348,9 @@ func (s *Scheduler) ACPSetModelEffort(ctx context.Context, run *domain.Run, acto
 		return "", "", err
 	}
 	defer awake()
+	if err = s.optionsAnswered(run.ID); err != nil {
+		return "", "", err
+	}
 	sess, err := s.acp.live(ctx, run.ID)
 	if err != nil {
 		return "", "", err
