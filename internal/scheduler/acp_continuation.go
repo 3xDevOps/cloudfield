@@ -66,11 +66,12 @@ func (d *acpDriver) sendContinuation(entry *supervised, swap *accountSwap) {
 }
 
 // markSending records that swap's continuation is being sent, unless swap is
-// no longer the run's marker or is sent already.
+// no longer the run's marker, is sent already, or another move holds the
+// run and would stop the agent it goes to.
 func (d *acpDriver) markSending(entry *supervised, swap *accountSwap) bool {
 	d.s.mu.Lock()
 	defer d.s.mu.Unlock()
-	if entry.accountSwap != swap || swap.Continuation == "" || swap.Sending {
+	if entry.accountSwap != swap || swap.Continuation == "" || swap.Sending || entry.moving {
 		return false
 	}
 	swap.Sending = true

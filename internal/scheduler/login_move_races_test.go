@@ -804,3 +804,26 @@ func TestMailDuringAMoveIsNotDelivered(t *testing.T) {
 		t.Fatalf("wake during the move: %v; the replaced agent was prompted %q; want it refused", wakeErr, sentPrompts(t, first))
 	}
 }
+
+// A continuation is not marked as being sent once another move holds the
+// session: that move would stop the agent it went to.
+func TestNoContinuationIsSentWhileAMoveHoldsTheSession(t *testing.T) {
+	t.Parallel()
+	e, _, _, _, _ := newLoginMoveEnv(t, enhancedClaude)
+	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+	swap := &accountSwap{From: e.member.ID, To: e.member.ID, Continuation: "Continue."}
+	e.sched.mu.Lock()
+	entry := e.sched.runs[run.ID]
+	entry.accountSwap, entry.moving = swap, true
+	e.sched.mu.Unlock()
+	if e.sched.acp.markSending(entry, swap) {
+		t.Fatal("the continuation was marked as being sent while a move held the session")
+	}
+	e.sched.mu.Lock()
+	entry.accountSwap, entry.moving = nil, false
+	e.sched.mu.Unlock()
+}
