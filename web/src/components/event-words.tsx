@@ -272,12 +272,13 @@ const describers: Record<EventType, (p: Payload, event: Event) => ReactNode> = {
   },
   'run.mode': (p) => modeLine(p),
   'run.account': (p) => {
-    // Both logins are named once either is an added one; an empty name is the default login.
-    const logins = text(p.login) !== '' || text(p.previous_login) !== ''
-    const login = (name: unknown) => logins && `, login ${text(name) || 'default'}`
+    // Both logins are named once either is an added one; an empty or `default` id is the default login.
+    const added = (id: unknown) => text(id) !== '' && text(id) !== 'default'
+    const logins = added(p.login) || added(p.previous_login)
+    const login = (id: unknown, name: unknown) => logins && `, login ${text(name) || (added(id) ? text(id) : 'default')}`
     return (
       <>
-        Moved from <AccountOf id={p.previous_account_member_id} />{login(p.previous_login_name)} to <AccountOf id={p.account_member_id} />{login(p.login_name)}
+        Moved from <AccountOf id={p.previous_account_member_id} />{login(p.previous_login, p.previous_login_name)} to <AccountOf id={p.account_member_id} />{login(p.login, p.login_name)}
         {p.per_use === true && ', billed per use'}
       </>
     )

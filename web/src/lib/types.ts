@@ -213,7 +213,7 @@ export interface Run {
   account_member_id?: string
   /** The account the launcher chose, present only when usage fallback moved the run to `account_member_id`. */
   requested_account_member_id?: string
-  /** The account's login the run is on; empty is the default login. */
+  /** The account's login the run is on; empty or `default` is the default login. */
   account_login?: string
   /** That login's name; empty for the default login. */
   account_login_name?: string
@@ -1057,7 +1057,7 @@ export interface RunAccountPayload {
   account_member_id: string
   previous_account_member_id: string
   requested_account_member_id?: string
-  /** Login ids; empty is the default login. */
+  /** Login ids; empty or `default` is the default login. */
   login?: string
   previous_login?: string
   /** Login names; empty for the default login. */

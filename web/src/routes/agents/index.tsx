@@ -196,7 +196,7 @@ function AgentsRoute({ client = api }: RouteProps & { client?: Api }) {
                           Logins not read: <span className="font-code">{logins.error}</span>
                         </Callout>
                       )}
-                      {severalLogins && logins.logins && <LoginList logins={logins.logins} sharedWith={sharedWith} client={client} onChanged={logins.reload} onShare={caps.hasMethod('agent.login.share') ? (login, on) => client.agentLoginShare(loginAgent, login.id, on) : undefined} />}
+                      {severalLogins && logins.logins && <LoginList logins={logins.logins} sharedWith={sharedWith} client={client} onChanged={logins.reload} />}
                     </>
                   )}
                   returnFocusTo={returnFocusTo}

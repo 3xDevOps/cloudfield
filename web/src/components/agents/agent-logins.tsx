@@ -26,7 +26,7 @@ export const loginAgent = 'claude'
 
 export const severalLoginsDocs = 'https://github.com/3xDevOps/cloudfield/blob/main/docs/agents.md#several-logins'
 
-export type LoginsClient = Pick<Api, 'agentLoginList' | 'agentLoginRename' | 'agentLoginRemove' | 'agentLoginOrder' | 'agentLoginAutomatic' | 'accountUsage'>
+export type LoginsClient = Pick<Api, 'agentLoginRename' | 'agentLoginRemove' | 'agentLoginOrder' | 'agentLoginAutomatic' | 'agentLoginShare' | 'accountUsage'>
 
 export function useAgentLogins(client: Pick<Api, 'agentLoginList'>, enabled: boolean) {
   const [logins, setLogins] = useState<AgentLogin[] | null>(null)
@@ -175,8 +175,7 @@ function LoginRow({ login, index, count, usage, sharedWith, busy, onMove, onAuto
   busy: boolean
   onMove: (by: number) => void
   onAutomatic: (on: boolean) => void
-  /** Absent until the server serves agent.login.share. */
-  onShare?: (on: boolean) => void
+  onShare: (on: boolean) => void
   onRename: () => void
   onRemove: () => void
   renaming?: ReactNode
@@ -219,7 +218,7 @@ function LoginRow({ login, index, count, usage, sharedWith, busy, onMove, onAuto
         </span>
         <span className="flex min-h-7 items-center gap-2 coarse:min-h-11">
           <label htmlFor={`${id}-share`} className="text-ui-sm text-text">Use for shares</label>
-          <Switch id={`${id}-share`} checked={login.shared} disabled={busy || !onShare} onCheckedChange={onShare} />
+          <Switch id={`${id}-share`} checked={login.shared} disabled={busy} onCheckedChange={onShare} />
         </span>
         <span className="flex items-center gap-1">
           <Button variant="ghost" size="sm" disabled={busy || !added} hint={added ? undefined : defaultFixed} aria-label={`Rename ${login.name}`} onClick={onRename}>Rename</Button>
@@ -233,12 +232,11 @@ function LoginRow({ login, index, count, usage, sharedWith, busy, onMove, onAuto
 }
 
 /** The member's logins of Claude Code in priority order, each with its controls beside it. */
-export function LoginList({ logins, sharedWith, client, onChanged, onShare }: {
+export function LoginList({ logins, sharedWith, client, onChanged }: {
   logins: AgentLogin[]
   sharedWith: Member[]
   client: LoginsClient
   onChanged: () => void
-  onShare?: (login: AgentLogin, on: boolean) => Promise<unknown>
 }) {
   const usage = useLoginUsage(client, logins)
   useClock()
@@ -277,7 +275,7 @@ export function LoginList({ logins, sharedWith, client, onChanged, onShare }: {
             busy={busy}
             onMove={(by) => move(index, by)}
             onAutomatic={(on) => act(client.agentLoginAutomatic(loginAgent, login.id, on))}
-            onShare={onShare && ((on) => act(onShare(login, on)))}
+            onShare={(on) => act(client.agentLoginShare(loginAgent, login.id, on))}
             onRename={() => setRenaming(login.id)}
             onRemove={() => setRemoving(login)}
             renaming={renaming === login.id

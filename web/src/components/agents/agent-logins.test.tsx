@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AddLogin } from '@/components/agents/add-login'
 import { LoginList } from '@/components/agents/agent-logins'
+import type { Api } from '@/lib/api'
 import type { AgentLogin, Member } from '@/lib/types'
 import { alice, bob, fakeApi } from '@/test/fixtures'
 
@@ -84,7 +85,7 @@ describe('login list', () => {
     const user = userEvent.setup()
     show({
       agentLoginRename: vi.fn(async () => { throw new Error('you already have a login named "console"') }),
-      agentLoginOrder: vi.fn(async () => { throw new Error('agent.login.order: name every login once') }),
+      agentLoginOrder: vi.fn(async () => { throw new Error('login_ids must name each of your logins once, default included') }),
     })
     await user.click(screen.getByRole('button', { name: 'Rename work' }))
     const field = screen.getByRole('textbox', { name: 'New name for work' })
@@ -95,20 +96,15 @@ describe('login list', () => {
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
 
     await user.click(screen.getByRole('button', { name: 'Move work up' }))
-    expect((await screen.findByRole('alert')).textContent).toBe('agent.login.order: name every login once')
+    expect((await screen.findByRole('alert')).textContent).toBe('login_ids must name each of your logins once, default included')
   })
 
-  it('keeps Use for shares read-only until the server can change it', () => {
-    show()
-    expect(within(row('work')).getByRole('switch', { name: 'Use for shares' })).toHaveProperty('disabled', true)
-    expect(within(row('work')).getByRole('switch', { name: 'Use for shares' }).getAttribute('aria-checked')).toBe('false')
-  })
-
-  it('turns Use for shares through the share call', async () => {
+  it('turns Use for shares through agent.login.share, and shows its refusal verbatim', async () => {
     const user = userEvent.setup()
-    const client = fakeApi({ agentLoginShare: vi.fn(async () => ({})) })
-    const onChanged = vi.fn()
-    render(<LoginList logins={logins} sharedWith={[bob]} client={client} onChanged={onChanged} onShare={(login, on) => client.agentLoginShare('claude', login.id, on)} />)
+    const refusal = 'you have no login "lgn-work0000001"'
+    const share = vi.fn<Api['agentLoginShare']>().mockResolvedValueOnce({}).mockRejectedValueOnce(new Error(refusal))
+    const { client, onChanged } = show({ agentLoginShare: share })
+    expect(within(row('work')).getByRole('switch', { name: 'Use for shares' }).getAttribute('aria-checked')).toBe('false')
     await user.click(within(row('work')).getByRole('switch', { name: 'Use for shares' }))
     expect(client.agentLoginShare).toHaveBeenCalledWith('claude', 'lgn-work0000001', true)
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
@@ -116,7 +112,7 @@ describe('login list', () => {
 
   it('confirms a removal, says Anthropic keeps the sign-in, and shows a refusal verbatim', async () => {
     const user = userEvent.setup()
-    const refusal = 'login "work" has 2 sessions on it; end them first'
+    const refusal = 'login "work" is in use by your sessions run-7kq2m9x4ab (end them)'
     const { client, onChanged } = show({ agentLoginRemove: vi.fn(async () => { throw new Error(refusal) }) })
     await user.click(screen.getByRole('button', { name: 'Remove work' }))
     const dialog = screen.getByRole('alertdialog', { name: 'Remove login work?' })
@@ -159,7 +155,7 @@ describe('add login', () => {
 
   it('shows the server refusing the sign-in verbatim and starts again', async () => {
     const user = userEvent.setup()
-    const refusal = 'this sign-in is the same account and organisation as your login "default"'
+    const refusal = 'this sign-in is the account and organisation your login "default" is signed in to, so it was not added; sign in to another account to add a login'
     const client = fakeApi({
       agentLoginAdd: vi.fn(async () => ({ login_id: 'lgn-new00000002' })),
       agentLoginResult: vi.fn(async () => { throw new Error(refusal) }),
