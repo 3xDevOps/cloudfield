@@ -11,7 +11,7 @@ import (
 
 // agentOOMScoreAdj ranks the agent behind every process at the default
 // score when the kernel picks an out-of-memory victim, unless the agent
-// holds half the session's memory more than that process.
+// holds half the session's memory and swap more than that process.
 const agentOOMScoreAdj = "-500"
 
 // commandWrapper is the program an agent runs each of its commands through:
@@ -42,6 +42,11 @@ func lowerOOMScore() error {
 func protectAgent() (string, error) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		return "", fmt.Errorf("the command wrapper needs bash: %w", err)
+	}
+	// Claude Code may build its commands for zsh where there is one, and
+	// the wrapper would run them with bash.
+	if zsh, err := exec.LookPath("zsh"); err == nil {
+		return "", fmt.Errorf("the command wrapper runs bash, and the agent may use %s", zsh)
 	}
 	tmp := commandWrapper + "." + strconv.Itoa(os.Getpid())
 	if err := os.WriteFile(tmp, []byte(commandWrapperScript), 0o755); err != nil {
