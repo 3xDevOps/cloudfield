@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import { Participants } from '@/components/messages/message-row'
+import { PerUseBadge } from '@/components/per-use-badge'
 import type { EventType } from '@/lib/events'
 import { budgetStateLabel, money } from '@/lib/format'
 import { memberName, resolveMember } from '@/lib/member-name'
@@ -276,7 +277,7 @@ const describers: Record<EventType, (p: Payload, event: Event) => ReactNode> = {
     const added = (id: unknown) => text(id) !== '' && text(id) !== 'default'
     const logins = added(p.login) || added(p.previous_login)
     const login = (id: unknown, name: unknown) => `login ${text(name) || (added(id) ? text(id) : 'default')}`
-    const perUse = p.per_use === true && ' · billed per use'
+    const perUse = p.per_use === true && <PerUseBadge className="ml-1.5 align-middle" />
     if (logins && text(p.account_member_id) === text(p.previous_account_member_id)) {
       return <>Moved from {login(p.previous_login, p.previous_login_name)} to {login(p.login, p.login_name)}{perUse}</>
     }

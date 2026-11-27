@@ -52,9 +52,8 @@ describe('login list', () => {
     expect(items.map((item) => item.getAttribute('aria-label'))).toEqual(['Login default', 'Login work', 'Login console'])
 
     expect(items.map((item) => item.textContent?.charAt(0))).toEqual(['1', '2', '3'])
-    expect(row('default').textContent).toContain('Subscription · max')
-    expect(within(row('default')).getByText('Tried first').dataset.slot).toBe('badge')
-    expect(row('work').textContent).not.toContain('Tried first')
+    expect(within(row('default')).getByText('Subscription · max · tried first').dataset.slot).toBeUndefined()
+    expect(row('work').textContent).not.toContain('tried first')
     expect(row('default').textContent).toContain('alice@example.test · Alice personal')
     expect(row('default').textContent).toContain(`On for shares: also serves ${bob.display_name}`)
     expect(await within(row('default')).findByRole('progressbar', { name: 'Login default 5-hour usage' })).toBeDefined()
@@ -70,10 +69,13 @@ describe('login list', () => {
 
     expect(within(row('default')).queryByRole('button', { name: 'Rename default' })).toBeNull()
     expect(within(row('default')).queryByRole('button', { name: 'Remove default' })).toBeNull()
-    expect(row('default').textContent).toContain('Your default login, the one cloudfield agent login claude signs in. It keeps its name and is not removed here.')
+    expect(row('default').textContent).toContain('Your default login, the one cloudfield agent login claude signs in. It cannot be renamed or removed.')
     expect(within(row('work')).getByRole('button', { name: 'Rename work' })).toBeDefined()
     expect(within(row('default')).getByRole('button', { name: 'Move default up' })).toHaveProperty('disabled', true)
+    expect(within(row('default')).getByRole('button', { name: 'Move default up' }).className).not.toContain('shadow-button')
+    expect(within(row('default')).getByRole('button', { name: 'Move default down' }).className).toContain('shadow-button')
     expect(within(row('console')).getByRole('button', { name: 'Move console down' })).toHaveProperty('disabled', true)
+    expect(screen.getByRole('region', { name: 'Claude Code logins' }).textContent).toContain('Sessions start on the first automatic login in your order with usage left, and move down the order when it runs out.')
   })
 
   it('says when the account is shared with nobody', () => {
@@ -143,7 +145,7 @@ describe('login list', () => {
     expect(onChanged).toHaveBeenCalledTimes(2)
   })
 
-  it('says which login is at its limit and when it serves again, in days past 48 hours', async () => {
+  it('says which login is at its limit and when it serves again, in days past 24 hours', async () => {
     const hour = 3_600_000
     const at = (hours: number) => new Date(Date.now() + hours * hour).toISOString()
     const windows: Record<string, { id: string; label: string; used_percent: number; resets_at: string }[]> = {
@@ -157,7 +159,7 @@ describe('login list', () => {
         providers: [{ provider: 'claude' as const, status: 'ok' as const, windows: windows[params.login ?? 'default'] ?? [], checked_at: at(0) }],
       })),
     })
-    expect(await within(row('work')).findByText('At its limit (7 days) · resets in 40h')).toBeDefined()
+    expect(await within(row('work')).findByText('At its limit (7 days) · resets in 1d 16h')).toBeDefined()
     expect(await within(row('default')).findByText('58% used · resets in 3d 18h')).toBeDefined()
     expect(row('default').textContent).not.toContain('At its limit')
     expect(row('console').textContent).not.toContain('At its limit')
@@ -191,17 +193,29 @@ describe('login list', () => {
         }
       }),
     })
-    expect(await within(row('console')).findByText('No usage windows: billed per use')).toBeDefined()
+    expect(await within(row('console')).findByText('No usage windows')).toBeDefined()
     expect(row('console').textContent).not.toContain('Usage not read')
     expect(await within(row('work')).findByText('account.usage: claude: credential file unavailable')).toBeDefined()
     expect(row('work').textContent).toContain('Usage not read: ')
   })
 
-  it('says automatic sessions can move onto a login billed per use', () => {
+  it('says automatic sessions can move onto a login billed per use, and whose sessions it charges', () => {
     const client = fakeApi()
-    render(<LoginList logins={logins.map((login) => ({ ...login, automatic: true }))} sharedWith={[]} client={client} onChanged={async () => {}} />)
+    const { unmount } = render(<LoginList logins={logins.map((login) => ({ ...login, automatic: true }))} sharedWith={[]} client={client} onChanged={async () => {}} />)
     expect(row('console').textContent).toContain('Automatic sessions can move here when the logins above it run out.')
     expect(row('work').textContent).not.toContain('Automatic sessions can move here')
+    unmount()
+
+    const carol = { ...bob, id: 'member-carol', display_name: 'Carol' }
+    const shared = logins.map((login) => ({ ...login, automatic: true }))
+    const { unmount: again } = render(<LoginList logins={shared} sharedWith={[bob, carol]} client={client} onChanged={async () => {}} />)
+    expect(row('console').textContent).toContain(`Sessions of ${bob.display_name} and Carol can run on this login too, charged per use to Alice API.`)
+    expect(row('console').textContent).not.toContain('also serves')
+    expect(row('default').textContent).toContain(`On for shares: also serves ${bob.display_name} and Carol`)
+    again()
+
+    render(<LoginList logins={shared.map((login) => ({ ...login, organization_name: undefined }))} sharedWith={[bob]} client={client} onChanged={async () => {}} />)
+    expect(row('console').textContent).toContain(`Sessions of ${bob.display_name} can run on this login too, charged per use to console.`)
   })
 
   it('confirms a removal, says Anthropic keeps the sign-in, and shows a refusal verbatim with ways to act on it', async () => {
@@ -220,8 +234,8 @@ describe('login list', () => {
     await user.click(within(dialog).getByRole('button', { name: 'Remove' }))
     expect(client.agentLoginRemove).toHaveBeenCalledWith('claude', 'lgn-work0000001')
     expect(await within(dialog).findByText(refusal)).toBeDefined()
-    expect(within(dialog).getByRole('button', { name: 'Remove' })).toHaveProperty('disabled', true)
-    expect(within(dialog).getByRole('button', { name: 'Remove' }).className).not.toContain('bg-state-failed')
+    expect(dialog.textContent).toContain("Use for shares is off, so no teammate's session starts or moves onto this login now; one already on it holds it until it ends.")
+    expect(within(dialog).queryByRole('button', { name: 'Remove' })).toBeNull()
     expect(onChanged).toHaveBeenCalledTimes(1)
     await user.click(within(dialog).getByRole('button', { name: 'Open run-7kq2m9x4ab' }))
     expect(navigate).toHaveBeenCalledWith('run', { runId: 'run-7kq2m9x4ab' })
@@ -266,20 +280,6 @@ describe('login list', () => {
     expect(await within(row('default')).findByText('claude usage: 429 Too Many Requests')).toBeDefined()
     expect(row('default').textContent).toContain('Last read, not current: claude usage: 429 Too Many Requests')
     expect(within(row('default')).getByRole('progressbar', { name: 'Login default 5-hour usage' })).toBeDefined()
-  })
-
-  it("warns that removing the last added login turns the default login's switches back on", async () => {
-    const user = userEvent.setup()
-    const withheld = { ...logins[0]!, automatic: false, shared: false }
-    const { unmount } = render(<LoginList logins={[withheld, logins[1]!]} sharedWith={[bob]} client={fakeApi()} onChanged={async () => {}} />)
-    await user.click(screen.getByRole('button', { name: 'Remove work' }))
-    const dialog = screen.getByRole('alertdialog')
-    expect(dialog.textContent).toContain('Removing this last one turns Automatic and Use for shares on again for the default login, so the teammates you share your account with can use it.')
-    unmount()
-
-    render(<LoginList logins={[withheld, ...logins.slice(1)]} sharedWith={[bob]} client={fakeApi()} onChanged={async () => {}} />)
-    await user.click(screen.getByRole('button', { name: 'Remove work' }))
-    expect(screen.getByRole('alertdialog').textContent).not.toContain('turn back on')
   })
 
   it('reads the list again after a refused rename and after a call the server may have run without answering', async () => {
@@ -406,7 +406,7 @@ describe('login list reads', () => {
 })
 
 function addLogin(props: Partial<ComponentProps<typeof AddLogin>> & Pick<ComponentProps<typeof AddLogin>, 'client'>) {
-  return render(<AddLogin running={null} ended={null} onRunning={() => {}} onOpened={() => {}} onClose={() => {}} {...props} />)
+  return render(<AddLogin sharedWith={null} running={null} ended={null} onRunning={() => {}} onOpened={() => {}} onClose={() => {}} {...props} />)
 }
 
 const signInSockets = () => StubSocket.opened.filter((socket) => socket.url.includes('agent_login='))
@@ -442,9 +442,28 @@ describe('add login', () => {
     expect(onRunning).toHaveBeenCalledWith({ id: 'lgn-new00000001', name: 'work' })
     expect(client.agentLoginResult).not.toHaveBeenCalled()
     const login = { id: 'lgn-new00000001', name: 'work', kind: 'subscription' as const, plan: 'pro', email: 'alice@work.example.test', automatic: true, shared: true, position: 1 }
-    rerender(<AddLogin client={client} running={null} ended={{ id: 'lgn-new00000001', outcome: { login } }} onRunning={onRunning} onOpened={() => {}} onClose={() => {}} />)
+    rerender(<AddLogin client={client} sharedWith={null} running={null} ended={{ id: 'lgn-new00000001', outcome: { login } }} onRunning={onRunning} onOpened={() => {}} onClose={() => {}} />)
     expect(await screen.findByText('Added login work')).toBeDefined()
-    expect(screen.getByText('Subscription · pro · alice@work.example.test')).toBeDefined()
+    expect(screen.getByText('Added login work').closest('[role="status"]')!.textContent).toBe('Added login workSubscription · pro · alice@work.example.test')
+  })
+
+  it('says before the sign-in what the new login is used for, and after it that a Console login is billed per use and charged for whom', async () => {
+    const user = userEvent.setup()
+    const client = fakeApi({ agentLoginAdd: vi.fn(async () => ({ login_id: 'lgn-new00000009' })) })
+    const { unmount } = addLogin({ client })
+    expect(screen.getByRole('form', { name: 'Add a Claude Code login' }).textContent).toContain('It starts with Automatic and Use for shares on: Cloudfield may start or move your sessions onto it, and teammates you share your account with can use it too. Turn either off with the switches on its row under Claude Code.')
+    unmount()
+
+    const { rerender } = addLogin({ client, sharedWith: [bob] })
+    expect(screen.getByRole('form', { name: 'Add a Claude Code login' }).textContent).toContain(`and sessions of ${bob.display_name} can run on it too.`)
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'api')
+    await user.click(screen.getByRole('button', { name: 'Start sign-in' }))
+    await screen.findByRole('heading', { name: 'Sign in to api' })
+    const login = { id: 'lgn-new00000009', name: 'api', kind: 'console' as const, per_use: true, email: 'alice@example.test', organization_name: 'Alice API', automatic: true, shared: true, position: 3 }
+    rerender(<AddLogin client={client} sharedWith={[bob]} running={null} ended={{ id: 'lgn-new00000009', outcome: { login } }} onRunning={() => {}} onOpened={() => {}} onClose={() => {}} />)
+    const added = (await screen.findByText('Added login api')).closest<HTMLElement>('[role="status"]')!
+    expect(within(added).getByText('Billed per use')).toBeDefined()
+    expect(added.textContent).toBe(`Added login apiConsole · alice@example.test · Alice APIBilled per useSessions of ${bob.display_name} can run on this login too, charged per use to Alice API.`)
   })
 
   it('shows the server refusing the sign-in verbatim and starts again', async () => {
@@ -455,7 +474,7 @@ describe('add login', () => {
     await user.type(screen.getByRole('textbox', { name: 'Name' }), 'twin')
     await user.click(screen.getByRole('button', { name: 'Start sign-in' }))
     await screen.findByRole('heading', { name: 'Sign in to twin' })
-    rerender(<AddLogin client={client} running={null} ended={{ id: 'lgn-new00000002', outcome: { refused: refusal } }} onRunning={() => {}} onOpened={() => {}} onClose={() => {}} />)
+    rerender(<AddLogin client={client} sharedWith={null} running={null} ended={{ id: 'lgn-new00000002', outcome: { refused: refusal } }} onRunning={() => {}} onOpened={() => {}} onClose={() => {}} />)
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('Login twin was not added')
     expect(within(alert).getByText(refusal)).toBeDefined()
@@ -472,7 +491,7 @@ describe('add login', () => {
     await user.type(screen.getByRole('textbox', { name: 'Name' }), 'spare')
     await user.click(screen.getByRole('button', { name: 'Start sign-in' }))
     const running = await screen.findByRole('status')
-    expect(running.textContent).toContain('The sign-in of work is still running')
+    expect(running.textContent).toContain('Sign-in for work is still running')
     expect(within(running).getByText(refusal)).toBeDefined()
     expect(onRunning).toHaveBeenCalledWith({ id: 'lgn-run00000001', name: 'work' })
     expect(screen.getByRole('button', { name: 'Start sign-in' })).toHaveProperty('disabled', true)
@@ -490,7 +509,7 @@ describe('add login', () => {
     const client = fakeApi()
     const running = { id: 'lgn-run00000002', name: 'spare' }
     const { unmount } = addLogin({ client, running })
-    expect(screen.getByRole('status').textContent).toContain('The sign-in of spare is still running')
+    expect(screen.getByRole('status').textContent).toContain('Sign-in for spare is still running')
     expect(screen.getByRole('button', { name: 'Start sign-in' })).toHaveProperty('disabled', true)
     await user.click(screen.getByRole('button', { name: 'Return to the sign-in' }))
     await waitFor(() => expect(client.agentLoginSocket).toHaveBeenCalledWith('lgn-run00000002'))
@@ -579,7 +598,7 @@ describe('add login', () => {
     await user.click(screen.getByRole('button', { name: 'Start sign-in' }))
     expect(await screen.findByRole('button', { name: 'Return to the sign-in' })).toBeDefined()
     const login = { id: 'lgn-run00000003', name: 'work', kind: 'subscription' as const, automatic: true, shared: true, position: 1 }
-    rerender(<AddLogin client={client} running={null} ended={{ id: 'lgn-run00000003', outcome: { login } }} onRunning={() => {}} onOpened={() => {}} onClose={() => {}} />)
+    rerender(<AddLogin client={client} sharedWith={null} running={null} ended={{ id: 'lgn-run00000003', outcome: { login } }} onRunning={() => {}} onOpened={() => {}} onClose={() => {}} />)
     expect(screen.queryByRole('button', { name: 'Return to the sign-in' })).toBeNull()
     expect(screen.getByRole('button', { name: 'Start sign-in' })).toHaveProperty('disabled', false)
   })
@@ -590,7 +609,7 @@ describe('add login', () => {
     const client = fakeApi()
     const { rerender } = addLogin({ client, running, resume: true })
     await waitFor(() => expect(signInSockets()).toHaveLength(1))
-    rerender(<AddLogin client={client} running={null} ended={{ id: running.id, outcome: { refused } }} onRunning={() => {}} onOpened={() => {}} onClose={() => {}} />)
+    rerender(<AddLogin client={client} sharedWith={null} running={null} ended={{ id: running.id, outcome: { refused } }} onRunning={() => {}} onOpened={() => {}} onClose={() => {}} />)
     act(() => {
       signInSockets()[0]!.onopen?.()
       signInSockets()[0]!.onmessage?.({ data: JSON.stringify({ ok: false, error: 'agent login lgn-run00000007 has ended' }) })

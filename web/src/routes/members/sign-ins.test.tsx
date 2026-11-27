@@ -171,7 +171,7 @@ describe('propose a merge', () => {
 
     fireEvent.click(screen.getByRole('radio', { name: 'Alice (this sign-in)' }))
     expect(screen.queryByText(/default logins are archived/)).toBeNull()
-    expect(screen.getByText(/added logins move to/).textContent).toBe("Alice on GitHub's added logins move to Alice, each off for shares until Alice turns Use for shares on. One whose name Alice has takes the first free <name>-2, <name>-3, …:")
+    expect(screen.getByText(/added logins move to/).textContent).toBe("Alice on GitHub's added logins move to Alice, each off for shares until Alice turns Use for shares on. If Alice already has a login with the same name, the moved login is renamed <name>-2, or the next free number:")
     expect(within(screen.getByRole('list', { name: 'Logins that move' })).getAllByRole('listitem').map((li) => li.textContent)).toEqual([
       'Claude Code login work, renamed work-3: Alice has a login named work',
       'Claude Code login spare',

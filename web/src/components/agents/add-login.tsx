@@ -1,6 +1,7 @@
 import { useId, useState } from 'react'
-import { loginAgent } from '@/components/agents/agent-logins'
+import { kindWords, loginAgent, names, reach } from '@/components/agents/agent-logins'
 import { SignInTerminal } from '@/components/assistant/sign-in'
+import { PerUseBadge } from '@/components/per-use-badge'
 import { Button } from '@/components/ui/button'
 import { Callout } from '@/components/ui/callout'
 import { Input } from '@/components/ui/input'
@@ -8,6 +9,7 @@ import { Label } from '@/components/ui/label'
 import type { Api } from '@/lib/api'
 import { useClock } from '@/lib/clock'
 import { message } from '@/lib/format'
+import type { Member } from '@/lib/types'
 import { sameIdentity } from '@/store'
 import { useHeaderPrimary } from '@/store/hooks'
 import type { LoginSignIn, LoginSignInOutcome } from '@/store/login-sign-in'
@@ -33,8 +35,10 @@ function LeaveNote({ opened }: { opened?: number }) {
  * Names a new Claude Code login, runs its sign-in in a terminal of its own and shows what the server made of it.
  * `running` is the sign-in the page knows is still running, which `resume` opens at once; the page waits on its result and passes it as `ended`.
  */
-export function AddLogin({ client, running, ended, resume, onRunning, onOpened, onClose }: {
+export function AddLogin({ client, sharedWith, running, ended, resume, onRunning, onOpened, onClose }: {
   client: Pick<Api, 'agentLoginAdd' | 'agentLoginSocket'>
+  /** Whom the account is shared with; null until read. */
+  sharedWith: Member[] | null
   running: LoginSignIn | null
   ended: { id: string; outcome: LoginSignInOutcome } | null
   resume?: boolean
@@ -67,7 +71,11 @@ export function AddLogin({ client, running, ended, resume, onRunning, onOpened, 
         <h2 className="text-title">Sign in to <span className="font-code">{signIn.name}</span></h2>
         {outcome && ('login' in outcome ? (
           <Callout tone="done" role="status" title={`Added login ${outcome.login.name}`}>
-            {[outcome.login.kind === 'console' ? 'Console, billed per use' : outcome.login.plan ? `Subscription · ${outcome.login.plan}` : 'Subscription', outcome.login.email, outcome.login.organization_name].filter(Boolean).join(' · ')}
+            <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              {[kindWords(outcome.login), outcome.login.email, outcome.login.organization_name].filter(Boolean).join(' · ')}
+              {outcome.login.per_use && <PerUseBadge />}
+            </span>
+            {outcome.login.per_use && <p className="text-ui-sm">{reach(outcome.login, sharedWith)}</p>}
           </Callout>
         ) : (
           <Callout tone="failed" role="alert" title={`Login ${signIn.name} was not added`} actions={<Button size="sm" variant="secondary" onClick={() => setSignIn(null)}>Start again</Button>}>
@@ -121,16 +129,20 @@ export function AddLogin({ client, running, ended, resume, onRunning, onOpened, 
     >
       <h2 className="text-title">Add a Claude Code login</h2>
       <p className="text-ui text-muted">
-        Keep another Claude subscription or a Console sign-in beside your default login. Cloudfield lists it under Claude Code and can start or move sessions onto it.
-        A Console API key is not added here: keep it as your default login or as a workspace secret with <span className="font-code">cloudfield workspace env set --secret ANTHROPIC_API_KEY</span>.
+        Sign in to another Claude subscription or a Console account beside your default login.
+        An API key is not added here: keep it as your default login or as a workspace secret with <span className="font-code">cloudfield workspace env set --secret ANTHROPIC_API_KEY</span>.
       </p>
       <div className="flex flex-col gap-1">
         <Label htmlFor={field}>Name</Label>
         <Input id={field} value={name} autoFocus autoComplete="off" spellCheck={false} placeholder="work" disabled={blocking !== null} className="max-w-xs" onChange={(event) => setName(event.target.value)} />
         <p className="text-ui-sm text-muted">Lowercase letters, digits and <span className="font-code">-</span>, up to 32 characters.</p>
       </div>
+      <p className="text-ui-sm text-text">
+        It starts with Automatic and Use for shares on: Cloudfield may start or move your sessions onto it, and
+        {sharedWith?.length ? ` sessions of ${names(sharedWith)} can run on it too.` : ' teammates you share your account with can use it too.'} Turn either off with the switches on its row under Claude Code.
+      </p>
       {blocking && (refusedBy || !error) ? (
-        <Callout tone="neutral" role="status" title={<>The sign-in of <span className="font-code">{blocking.name}</span> is still running</>} actions={returnButton}>
+        <Callout tone="neutral" role="status" title={<>Sign-in for <span className="font-code">{blocking.name}</span> is still running</>} actions={returnButton}>
           {refusedBy ? <span className="font-code">{error}</span> : 'Finish or cancel it before you add another login.'}
         </Callout>
       ) : error && (

@@ -608,7 +608,7 @@ function MovedLogins({ survivor, absorbed, home, className }: { survivor: MergeM
         <>
           <p>
             {absorbed.display_name}&apos;s added logins move to {survivor.display_name}, each off for shares until {survivor.display_name} turns Use for shares
-            on. One whose name {survivor.display_name} has takes the first free <span className="font-code">&lt;name&gt;-2</span>, <span className="font-code">&lt;name&gt;-3</span>, …:
+            on. If {survivor.display_name} already has a login with the same name, the moved login is renamed <span className="font-code">&lt;name&gt;-2</span>, or the next free number:
           </p>
           <ul aria-label="Logins that move" className="list-disc pl-5">
             {moved.map((login) => (

@@ -55,7 +55,7 @@ function resetsIn(resetsAt: string | undefined, now: number): string | null {
   const minutes = Math.max(1, Math.ceil((reset - now) / 60_000))
   if (minutes < 60) return `resets in ${minutes}m`
   const hours = Math.floor(minutes / 60)
-  if (hours >= 48) return hours % 24 === 0 ? `resets in ${hours / 24}d` : `resets in ${Math.floor(hours / 24)}d ${hours % 24}h`
+  if (hours >= 24) return hours % 24 === 0 ? `resets in ${hours / 24}d` : `resets in ${Math.floor(hours / 24)}d ${hours % 24}h`
   return minutes % 60 === 0 ? `resets in ${hours}h` : `resets in ${hours}h ${minutes % 60}m`
 }
 

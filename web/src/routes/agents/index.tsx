@@ -123,8 +123,9 @@ function AgentsRoute({ client = api }: RouteProps & { client?: Api }) {
   const logins = useAgentLogins(client, claudeInstalled && loginsServer)
   const severalLogins = (logins.logins?.length ?? 0) > 1
   const [shared, setShared] = useState<{ identity: string | null; members: Member[] | null; error: string | null }>({ identity: null, members: null, error: null })
+  const wantShared = severalLogins || screen === loginScreen
   useEffect(() => {
-    if (!severalLogins) return
+    if (!wantShared) return
     let live = true
     const at = useStore.getState().identityKey
     client.accountList().then(
@@ -132,7 +133,7 @@ function AgentsRoute({ client = api }: RouteProps & { client?: Api }) {
       (err: unknown) => live && setShared({ identity: at, members: null, error: message(err) }),
     )
     return () => { live = false }
-  }, [client, severalLogins, identity])
+  }, [client, wantShared, identity])
   const sharedWith = shared.identity === identity ? shared : { members: null, error: null }
   const signIn = useLoginSignIn((s) => s.running)
   const signInEnded = useLoginSignIn((s) => s.ended)
@@ -178,7 +179,7 @@ function AgentsRoute({ client = api }: RouteProps & { client?: Api }) {
       <div className="min-h-0 flex-1 overflow-y-auto">
         <PageBody width="lg" className="gap-6">
           {screen === loginScreen ? (
-            <AddLogin key={identity} client={client} running={signIn} ended={signInEnded} resume={resume} onRunning={rememberLoginSignIn} onOpened={noteLoginSignInOpened} onClose={() => { void logins.reload(); close() }} />
+            <AddLogin key={identity} client={client} sharedWith={sharedWith.members} running={signIn} ended={signInEnded} resume={resume} onRunning={rememberLoginSignIn} onOpened={noteLoginSignInOpened} onClose={() => { void logins.reload(); close() }} />
           ) : screen === githubScreen ? (
             <GitHubConnect client={client} caps={caps} onConnected={setGithub} onClose={close} />
           ) : screen === addScreen ? (
@@ -213,7 +214,7 @@ function AgentsRoute({ client = api }: RouteProps & { client?: Api }) {
                     <>
                       {signIn && loginsServer && (
                         <p className="flex basis-full flex-wrap items-center gap-x-2 gap-y-1 text-ui-sm text-muted sm:pl-11">
-                          <span>The sign-in of <span className="font-code">{signIn.name}</span> is still running.</span>
+                          <span>Sign-in for <span className="font-code">{signIn.name}</span> is still running.</span>
                           <Button size="sm" variant="secondary" onClick={() => addLogin(true)}>Return to the sign-in</Button>
                         </p>
                       )}

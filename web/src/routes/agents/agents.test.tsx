@@ -323,7 +323,7 @@ describe('Claude Code logins', () => {
     expect(api.agentLoginResult).toHaveBeenCalledTimes(1)
     expect(api.agentLoginResult).toHaveBeenCalledWith('claude', 'lgn-spare000001', expect.any(AbortSignal))
     fireEvent.click(screen.getByRole('button', { name: 'All agents' }))
-    expect(claudeRow().textContent).toContain('The sign-in of spare is still running.')
+    expect(claudeRow().textContent).toContain('Sign-in for spare is still running.')
 
     fireEvent.click(within(claudeRow()).getByRole('button', { name: 'Return to the sign-in' }))
     expect(screen.getByRole('heading', { name: 'Sign in to spare' })).toBeDefined()
@@ -367,9 +367,9 @@ describe('Claude Code logins', () => {
     vi.mocked(api.agentLoginAdd).mockClear()
     mount()
     await flush()
-    expect(claudeRow().textContent).toContain('The sign-in of spare is still running.')
+    expect(claudeRow().textContent).toContain('Sign-in for spare is still running.')
     fireEvent.click(within(claudeRow()).getByRole('button', { name: 'Add login' }))
-    expect(screen.getByRole('status').textContent).toContain('The sign-in of spare is still running')
+    expect(screen.getByRole('status').textContent).toContain('Sign-in for spare is still running')
     expect(screen.getByRole('button', { name: 'Start sign-in' })).toHaveProperty('disabled', true)
     expect(api.agentLoginAdd).not.toHaveBeenCalled()
     expect(api.agentLoginResult).toHaveBeenCalledTimes(2)
@@ -445,11 +445,13 @@ describe('Claude Code logins', () => {
     expect(calls()).toEqual(before)
   })
 
-  it('opens Add login in the page', async () => {
+  it('opens Add login in the page, naming whom the new login serves', async () => {
+    vi.mocked(api.accountList).mockResolvedValue({ accounts: [], shared_with: [{ id: 'mem-bob', display_name: 'Bob' } as never] })
     mount()
     await flush()
     fireEvent.click(within(claudeRow()).getByRole('button', { name: 'Add login' }))
-    expect(screen.getByRole('form', { name: 'Add a Claude Code login' })).toBeDefined()
+    const form = screen.getByRole('form', { name: 'Add a Claude Code login' })
+    await waitFor(() => expect(form.textContent).toContain('and sessions of Bob can run on it too.'))
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(screen.getByRole('list', { name: 'Agents' })).toBeDefined()
   })

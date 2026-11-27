@@ -2,7 +2,6 @@ import { type ReactNode, useCallback, useEffect, useId, useRef, useState } from 
 import { ArrowDown, ArrowUp, Gauge, Pencil, Trash2 } from '@/components/icons'
 import { PerUseBadge } from '@/components/per-use-badge'
 import { Button } from '@/components/ui/button'
-import { Badge } from '@/components/ui/badge'
 import { Callout } from '@/components/ui/callout'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
@@ -53,14 +52,14 @@ export function useAgentLogins(client: Pick<Api, 'agentLoginList'>, enabled: boo
   return { logins: shown ? read.logins : null, error: shown ? read.error : null, reload }
 }
 
-function kindWords(login: AgentLogin): string {
+export function kindWords(login: AgentLogin): string {
   if (login.kind === 'subscription') return login.plan ? `Subscription · ${login.plan}` : 'Subscription'
   if (login.kind === 'console') return 'Console'
   if (login.kind === 'api_key') return 'API key'
   return 'No login found'
 }
 
-function names(members: Member[]): string {
+export function names(members: Member[]): string {
   const list = members.map((member) => member.display_name)
   return list.length < 2 ? list.join('') : `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`
 }
@@ -69,12 +68,13 @@ function names(members: Member[]): string {
  * The Use for shares switch's state, and whom it reaches: teammates never name a login, so only an automatic one reaches them,
  * and a default login kept as an API key or a Console profile has no file a share mounts. `sharedWith` is null until read.
  */
-function reach(login: AgentLogin, sharedWith: Member[] | null): string {
+export function reach(login: AgentLogin, sharedWith: Member[] | null): string {
   if (!login.shared) return 'Off for shares'
   if (login.id === 'default' && (login.kind === 'api_key' || login.kind === 'console')) return 'On for shares: a share cannot use this kind of login'
   if (sharedWith === null) return 'On for shares'
   if (sharedWith.length === 0) return 'On for shares: your account is not shared'
   if (!login.automatic) return 'On for shares: no share reaches it while Automatic is off'
+  if (login.per_use) return `Sessions of ${names(sharedWith)} can run on this login too, charged per use to ${login.organization_name || login.name}.`
   return `On for shares: also serves ${names(sharedWith)}`
 }
 
@@ -137,9 +137,9 @@ function RenameForm({ login, client, onDone, onFailed, onCancel }: { login: Agen
 const ownSessions = /your sessions (.*?) \(end them\)/
 const runIDs = /\brun-[0-9a-z]{10}\b/g
 const revokeCommand = 'cloudfield account revoke'
+const teammateSessions = "of your teammates' sessions"
 
-/** `defaultLogin` is the default login's row when `login` is the last added one, whose removal also drops that row. */
-export function RemoveLogin({ login, defaultLogin, client, onChanged, onClose }: { login: AgentLogin; defaultLogin?: AgentLogin; client: LoginsClient; onChanged: () => void; onClose: () => void }) {
+export function RemoveLogin({ login, client, onChanged, onClose }: { login: AgentLogin; client: LoginsClient; onChanged: () => void; onClose: () => void }) {
   const navigate = useStore((s) => s.navigate)
   const [busy, setBusy] = useState(false)
   const late = usePastDeadline(busy)
@@ -150,7 +150,6 @@ export function RemoveLogin({ login, defaultLogin, client, onChanged, onClose }:
   }
   const runs = [...new Set(ownSessions.exec(error ?? '')?.[1].match(runIDs))]
   const who = [login.email, login.organization_name].filter(Boolean).join(' · ')
-  const turnsOn = [!defaultLogin?.automatic && 'Automatic', !defaultLogin?.shared && 'Use for shares'].filter(Boolean).join(' and ')
   return (
     <AlertDialog open onOpenChange={() => !busy && onClose()}>
       <AlertDialogContent>
@@ -160,14 +159,11 @@ export function RemoveLogin({ login, defaultLogin, client, onChanged, onClose }:
             {who && <>Signed in as {who}. </>}Deletes this login&apos;s files from the server, so no session starts or moves onto it again. It does not sign the login out at Anthropic: its sign-in stays valid there until Anthropic expires it or you revoke it.
           </AlertDialogDescription>
         </AlertDialogHeader>
-        {defaultLogin && turnsOn && (
-          <Callout tone="needs-you" title="Your default login's switches turn back on">
-            Your default login keeps its switches only while you have an added login. Removing this last one turns {turnsOn} on again for the default login
-            {!defaultLogin.shared && ', so the teammates you share your account with can use it'}.
-          </Callout>
-        )}
         {error !== null && (
           <Callout tone="failed" role="alert" title="Not removed">
+            {!login.shared && error.includes(teammateSessions) && (
+              <p className="mb-1">Use for shares is off, so no teammate&apos;s session starts or moves onto this login now; one already on it holds it until it ends.</p>
+            )}
             <span className="font-code">{error}</span>
             {(runs.length > 0 || error.includes(revokeCommand)) && (
               <span className="mt-1 flex flex-wrap gap-x-3">
@@ -179,9 +175,9 @@ export function RemoveLogin({ login, defaultLogin, client, onChanged, onClose }:
         )}
         <AlertDialogFooter>
           <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
-          <AlertDialogAction
-            variant={error === null ? 'danger' : 'secondary'}
-            disabled={busy || error !== null}
+          {error === null && <AlertDialogAction
+            variant="danger"
+            disabled={busy}
             onClick={(event) => {
               event.preventDefault()
               setBusy(true)
@@ -200,7 +196,7 @@ export function RemoveLogin({ login, defaultLogin, client, onChanged, onClose }:
             }}
           >
             {late ? stillWaiting : busy ? 'Removing…' : 'Remove'}
-          </AlertDialogAction>
+          </AlertDialogAction>}
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
@@ -256,10 +252,10 @@ function LoginRow({ login, index, count, firstAutomatic, usage, sharedWith, orde
     <li aria-label={`Login ${login.name}`} className="flex gap-2 py-3 first:pt-0 last:pb-0">
       <div className="flex shrink-0 flex-col items-center gap-1">
         <span className="flex h-6 items-center text-ui-sm text-muted tabular-nums coarse:h-11">{index + 1}</span>
-        <Button variant="secondary" size="icon-sm" label={`Move ${login.name} up`} disabled={ordering || index === 0} onClick={() => onMove(-1)}>
+        <Button variant={index === 0 ? 'ghost' : 'secondary'} size="icon-sm" label={`Move ${login.name} up`} disabled={ordering || index === 0} onClick={() => onMove(-1)}>
           <ArrowUp />
         </Button>
-        <Button variant="secondary" size="icon-sm" label={`Move ${login.name} down`} disabled={ordering || index === count - 1} onClick={() => onMove(1)}>
+        <Button variant={index === count - 1 ? 'ghost' : 'secondary'} size="icon-sm" label={`Move ${login.name} down`} disabled={ordering || index === count - 1} onClick={() => onMove(1)}>
           <ArrowDown />
         </Button>
       </div>
@@ -268,8 +264,7 @@ function LoginRow({ login, index, count, firstAutomatic, usage, sharedWith, orde
           {renaming ?? (
             <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
               <span className="min-w-0 truncate text-ui font-medium text-text">{login.name}</span>
-              <span className="text-ui-sm text-muted">{kindWords(login)}</span>
-              {firstAutomatic && <Badge>Tried first</Badge>}
+              <span className="text-ui-sm text-muted">{kindWords(login)}{firstAutomatic && ' · tried first'}</span>
               {login.per_use && <PerUseBadge />}
               {limit && <span className="inline-flex items-center gap-1 text-ui-sm text-state-needs-you"><Gauge aria-hidden className="size-3.5 shrink-0" />{limit}</span>}
             </span>
@@ -294,7 +289,7 @@ function LoginRow({ login, index, count, firstAutomatic, usage, sharedWith, orde
           )}
           {!added && (
             <span className="text-ui-sm text-muted">
-              Your default login, the one <span className="font-code">cloudfield agent login claude</span> signs in. It keeps its name and is not removed here.
+              Your default login, the one <span className="font-code">cloudfield agent login claude</span> signs in. It cannot be renamed or removed.
             </span>
           )}
         </div>
@@ -304,7 +299,7 @@ function LoginRow({ login, index, count, firstAutomatic, usage, sharedWith, orde
         </div>
         {(perUseWindows || usageError || windows.length > 0) && (
           <div className="col-span-2 min-w-0 lg:col-span-1 lg:col-start-1 lg:row-start-3">
-            {perUseWindows && <span className="text-ui-sm text-muted">No usage windows: billed per use</span>}
+            {perUseWindows && <span className="text-ui-sm text-muted">No usage windows</span>}
             {usageError && <span className="text-ui-sm text-muted">Usage not read: <span className="font-code">{usageError}</span></span>}
             {staleError && <span className="text-ui-sm text-muted">Last read, not current: <span className="font-code">{staleError}</span></span>}
             {windows.length > 0 && (
@@ -351,12 +346,10 @@ export function LoginList({ logins, sharedWith, sharedError, client, onChanged }
     act('order', logins[index]!.id, client.agentLoginOrder(loginAgent, ids))
   }
   const firstAutomatic = logins.find((login) => login.automatic)?.id
-  const added = logins.filter((login) => login.id !== 'default')
-  const defaultLogin = logins.find((login) => login.id === 'default')
   return (
     <section aria-label="Claude Code logins" className="flex min-w-0 basis-full flex-col gap-3 border-t border-seam pt-3 sm:pl-11">
       <p className="text-ui-sm text-muted">
-        Sessions start on the first login with usage left and move down the list when one runs out. A login with Automatic off is used only when you pick it at launch.
+        Sessions start on the first automatic login in your order with usage left, and move down the order when it runs out. A login with Automatic off is used only when you pick it at launch.
         {sharedWith && (sharedWith.length > 0
           ? ` Your account is shared with ${names(sharedWith)}: logins on for shares serve their sessions too.`
           : ' Your account is not shared with anyone.')}
@@ -390,7 +383,6 @@ export function LoginList({ logins, sharedWith, sharedError, client, onChanged }
       {removing && (
         <RemoveLogin
           login={removing}
-          defaultLogin={added.length === 1 && added[0]!.id === removing.id ? defaultLogin : undefined}
           client={client}
           onChanged={() => void onChanged()}
           onClose={() => setRemoving(null)}
