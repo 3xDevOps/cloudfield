@@ -199,9 +199,29 @@ in-process backend for the member identified by Tailscale WhoIs. This keeps
 the API and stream behavior independent of whether the browser is local or on
 the tailnet.
 
-For the local backend, a replay-safe call that fails on transport (a server
+For the local backend, opening a control channel on the connection costs two
+round trips to the server before the call's own, so a channel whose call was
+answered is kept (up to 8) and carries a later call, one call at a time.
+Calls in flight together each have their own channel. A channel whose call
+was cancelled or timed out is closed, never reused. A call takes a kept
+channel only when it is one of the reads a page makes as it loads
+(`keptReads` in `internal/localgw/backend.go`; nothing that writes) and the server sent something on the
+connection in the last second (any byte: another call's answer, an event,
+terminal output); otherwise it opens its own, which proves the connection
+answers before the call's time limit starts. The price of skipping that
+proof: when the link dies or the server stalls within that second, the call
+gets no answer and fails at its time limit, where a call that opens its own
+channel waits, for the stall to end or for the connection to be dropped and
+redialed. If a kept channel has ended, the call is sent again on a new
+channel of the same connection, which keeps a live connection and its
+streams up. That second send is the call's one replay: if it is lost too,
+the connection is dropped and the call fails with `-32004`. If no new
+channel opens, nothing was sent on it, and the call is replayed after a redial.
+
+A replay-safe call that fails on transport (a server
 restart or dropped network) redials once and retries once before surfacing
-`-32004` (unavailable). A method unsafe to run twice is not replayed: one
+`-32004` (unavailable); one already sent again on a new channel is not
+sent a third time. A method unsafe to run twice is not replayed: one
 whose second session creates a duplicate (`run.launch`, `template.launch`,
 `workspace.add`, `member.invite`), repeats an external side effect
 (`server.update`, `terminal.exec`, `github.connect`, `run.git.*`,

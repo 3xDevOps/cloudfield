@@ -423,6 +423,7 @@ type sidecar struct {
 	Mode            domain.LaunchMode `json:"mode,omitempty"`
 	AppServer       bool              `json:"app_server,omitempty"`
 	ServerTurn      bool              `json:"server_turn,omitempty"`
+	IdleWake        bool              `json:"idle_wake,omitempty"`
 	Paused          bool              `json:"paused"`
 	DiskHeld        bool              `json:"disk_held,omitempty"`
 	MemorySaved     uint64            `json:"memory_saved,omitempty"`
@@ -481,9 +482,10 @@ type sidecar struct {
 	UsageLimit  string        `json:"usage_limit,omitempty"`
 	// AsleepSince is when idleness stopped the container; WakeError is the
 	// last wake's failure.
-	AsleepSince *time.Time `json:"asleep_since,omitempty"`
-	AsleepSaved bool       `json:"asleep_saved,omitempty"`
-	WakeError   string     `json:"wake_error,omitempty"`
+	AsleepSince    *time.Time `json:"asleep_since,omitempty"`
+	AsleepSaved    bool       `json:"asleep_saved,omitempty"`
+	AsleepResident bool       `json:"asleep_resident,omitempty"`
+	WakeError      string     `json:"wake_error,omitempty"`
 }
 
 // sidecar snapshots the entry's durable state. Caller must hold s.mu.
@@ -527,6 +529,7 @@ func (e *supervised) sidecar() sidecar {
 		Mode:                e.launchMode,
 		AppServer:           e.appServer,
 		ServerTurn:          e.serverTurn,
+		IdleWake:            e.idleWake,
 		Paused:              e.paused,
 		DiskHeld:            e.diskHeld,
 		MemorySaved:         e.memorySaved,
@@ -574,6 +577,7 @@ func (e *supervised) sidecar() sidecar {
 		UsageLimit:          e.usageLimit,
 		AsleepSince:         asleepSince,
 		AsleepSaved:         e.asleepSaved,
+		AsleepResident:      e.asleepResident,
 		WakeError:           wakeError,
 	}
 }

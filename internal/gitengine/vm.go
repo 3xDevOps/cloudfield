@@ -27,6 +27,9 @@ type VM struct {
 // VMDisks is the part of the VM image store checkout disks come from.
 type VMDisks interface {
 	NewCheckoutDisk(ctx context.Context, key string, size int64, fill func(ctx context.Context, dir string) error, path string) error
+	KeepCheckoutDisk(ctx context.Context, group, slot, key string, size int64, fill func(ctx context.Context, dir string) error) error
+	KeptCheckoutDisks(group string) ([]string, error)
+	ForgetCheckoutDisks(group string) error
 }
 
 const (
@@ -119,14 +122,61 @@ func (e *Engine) VMCheckoutDisk(ctx context.Context, path, target string, uid, g
 	if err != nil {
 		return "", guest.Checkout{}, false, err
 	}
-	prepared := "checkout-" + string(meta.Workspace) + "-" + meta.Base + "-" + strconv.Itoa(uid) + "-" + strconv.Itoa(gid)
-	err = e.cfg.VM.Disks.NewCheckoutDisk(ctx, prepared, vmCheckoutDiskBytes, func(buildCtx context.Context, dir string) error {
-		return e.fillPreparedCheckout(buildCtx, repo, meta.Base, filepath.Join(dir, PreparedDir), uid, gid)
-	}, disk)
-	if err != nil {
+	prepared, fill := e.preparedCheckout(meta.Workspace, repo, meta.Base, uid, gid)
+	if err = e.cfg.VM.Disks.NewCheckoutDisk(ctx, prepared, vmCheckoutDiskBytes, fill, disk); err != nil {
 		return "", guest.Checkout{}, false, fmt.Errorf("gitengine: checkout disk of session %s: %w", key, err)
 	}
+	// Only the base branch's own commit is kept: a session from an older
+	// commit or from its parent session's branch must not take the place of
+	// the disk the next launch needs.
+	if meta.BaseBranch != "" && !isRunBranch(meta.BaseBranch) && readRefBestEffort(ctx, e, repo, "refs/heads/"+meta.BaseBranch) == meta.Base {
+		if err = e.cfg.VM.Disks.KeepCheckoutDisk(ctx, string(meta.Workspace), preparedSlot(uid, gid), prepared, vmCheckoutDiskBytes, fill); err != nil {
+			return "", guest.Checkout{}, false, fmt.Errorf("gitengine: keep the prepared checkout disk of session %s: %w", key, err)
+		}
+	}
 	return disk, id, true, nil
+}
+
+func preparedSlot(uid, gid int) string { return strconv.Itoa(uid) + "-" + strconv.Itoa(gid) }
+
+func (e *Engine) preparedCheckout(ws domain.WorkspaceID, repo, base string, uid, gid int) (string, func(context.Context, string) error) {
+	key := "checkout-" + string(ws) + "-" + base + "-" + preparedSlot(uid, gid)
+	return key, func(ctx context.Context, dir string) error {
+		return e.fillPreparedCheckout(ctx, repo, base, filepath.Join(dir, PreparedDir), uid, gid)
+	}
+}
+
+// prepareCheckouts builds, in the background, the prepared checkout disk of
+// the base branch's new commit for every owner a session of ws started as,
+// so the next launch does not build it.
+func (e *Engine) prepareCheckouts(ws domain.WorkspaceID, repo, base string) {
+	if e.cfg.VM == nil {
+		return
+	}
+	slots, err := e.cfg.VM.Disks.KeptCheckoutDisks(string(ws))
+	if err != nil {
+		slog.Warn("gitengine: list kept checkout disks", "workspace", ws, "error", err)
+		return
+	}
+	if len(slots) == 0 {
+		return
+	}
+	e.preparing.Go(func() {
+		for _, slot := range slots {
+			if e.pruneCtx.Err() != nil {
+				return
+			}
+			var uid, gid int
+			if _, scanErr := fmt.Sscanf(slot, "%d-%d", &uid, &gid); scanErr != nil {
+				slog.Warn("gitengine: kept checkout disk has no owner", "workspace", ws, "slot", slot, "error", scanErr)
+				continue
+			}
+			key, fill := e.preparedCheckout(ws, repo, base, uid, gid)
+			if keepErr := e.cfg.VM.Disks.KeepCheckoutDisk(e.pruneCtx, string(ws), slot, key, vmCheckoutDiskBytes, fill); keepErr != nil {
+				slog.Warn("gitengine: prepare checkout disk", "workspace", ws, "base", base, "error", keepErr)
+			}
+		}
+	})
 }
 
 // fillPreparedCheckout makes the checkout a prepared disk holds: a
