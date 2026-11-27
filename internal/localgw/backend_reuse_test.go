@@ -291,3 +291,91 @@ func TestSSHBackendCancelledCallOnAKeptChannelIsNotSentAgain(t *testing.T) {
 		t.Fatalf("a cancelled call left %d control channels opened, want no new one, 1", got)
 	}
 }
+
+// Kept channels belong to their connection: a relink or a dropped
+// connection must leave none behind for the next connection's calls.
+func TestSSHBackendDropsKeptChannelsWithTheirConnection(t *testing.T) {
+	home := testhome.Isolate(t)
+	server := listen(t)
+	serveControl(t, server, nil)
+	cfg := cli.Config{Addr: server.Addr().String(), KnownHosts: filepath.Join(home, "known_hosts")}
+	b := NewSSHBackend(cfg).(*sshBackend)
+	t.Cleanup(func() { _ = b.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	kept := func() int {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		return len(b.idle)
+	}
+	call := func() {
+		t.Helper()
+		if _, perr := b.Call(ctx, protocol.MethodServerInfo, nil); perr != nil {
+			t.Fatal(perr)
+		}
+		if got := kept(); got != 1 {
+			t.Fatalf("%d control channels kept after an answered call, want 1", got)
+		}
+	}
+	call()
+	next, err := dialLink(ctx, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.Relink(cfg, next)
+	if got := kept(); got != 0 {
+		t.Fatalf("%d control channels kept across a relink, want 0", got)
+	}
+	call()
+	b.invalidate(next)
+	if got := kept(); got != 0 {
+		t.Fatalf("%d control channels kept after their connection was dropped, want 0", got)
+	}
+}
+
+// A burst wider than maxIdleControls leaves only that many channels open
+// on the server afterwards.
+func TestSSHBackendKeepsAtMostMaxIdleControls(t *testing.T) {
+	home := testhome.Isolate(t)
+	server := listen(t)
+	const calls = maxIdleControls + 2
+	arrived := make(chan struct{}, calls)
+	release := make(chan struct{})
+	serveControl(t, server, func(string) json.RawMessage {
+		arrived <- struct{}{}
+		<-release
+		return json.RawMessage(`{}`)
+	})
+	b := NewSSHBackend(cli.Config{Addr: server.Addr().String(), KnownHosts: filepath.Join(home, "known_hosts")}).(*sshBackend)
+	t.Cleanup(func() { _ = b.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	errs := make(chan *protocol.Error, calls)
+	for range calls {
+		go func() {
+			_, perr := b.Call(ctx, protocol.MethodServerInfo, nil)
+			errs <- perr
+		}()
+	}
+	for range calls {
+		select {
+		case <-arrived:
+		case <-ctx.Done():
+			t.Fatal("the burst did not reach the server")
+		}
+	}
+	close(release)
+	for range calls {
+		if perr := <-errs; perr != nil {
+			t.Fatal(perr)
+		}
+	}
+	b.mu.Lock()
+	kept := len(b.idle)
+	b.mu.Unlock()
+	if kept != maxIdleControls {
+		t.Fatalf("%d control channels kept after %d calls at once, want %d", kept, calls, maxIdleControls)
+	}
+}
