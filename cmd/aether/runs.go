@@ -68,6 +68,11 @@ type runView struct {
 	AsleepSince *string `json:"asleep_since,omitempty"`
 	AsleepSaved bool    `json:"asleep_saved,omitempty"`
 	WakeError   string  `json:"wake_error,omitempty"`
+	// AccountLogin is the added login the session spends; empty on the
+	// default login, and AccountLoginName empty once the login is removed.
+	AccountLogin       string `json:"account_login,omitempty"`
+	AccountLoginName   string `json:"account_login_name,omitempty"`
+	AccountLoginPerUse bool   `json:"account_login_per_use,omitempty"`
 }
 
 // pendingInput.Options are those aether answer accepts; a standard run's
@@ -88,6 +93,7 @@ func viewOf(r protocol.Run, workspace string, items []protocol.AttentionItem, re
 		ID: r.ID, WorkspaceID: r.WorkspaceID, Workspace: workspace, Status: displayStatus(r), State: r.Status,
 		Reason: r.Reason, Wait: r.Wait, WaitText: r.Wait.Text(time.Now()), Branch: r.Branch, PendingInputs: []pendingInput{},
 		AsleepSince: r.AsleepSince, AsleepSaved: r.AsleepSaved, WakeError: r.WakeError,
+		AccountLogin: r.AccountLogin, AccountLoginName: r.AccountLoginName, AccountLoginPerUse: r.AccountLoginPerUse,
 	}
 	offered := map[string][]protocol.AttentionOption{}
 	for _, it := range items {
@@ -235,6 +241,16 @@ func printRunView(w io.Writer, v runView, items []protocol.AttentionItem) error 
 	_, _ = fmt.Fprintf(tw, "workspace\t%s (%s)\n", v.Workspace, v.WorkspaceID)
 	_, _ = fmt.Fprintf(tw, "branch\t%s\n", v.Branch)
 	_, _ = fmt.Fprintf(tw, "state\t%s\n", v.State)
+	if v.AccountLogin != "" {
+		login := v.AccountLogin
+		if v.AccountLoginName != "" {
+			login = v.AccountLoginName + " (" + v.AccountLogin + ")"
+		}
+		if v.AccountLoginPerUse {
+			login += ", billed per use"
+		}
+		_, _ = fmt.Fprintf(tw, "login\t%s\n", login)
+	}
 	if v.Report != nil {
 		_, _ = fmt.Fprintf(tw, "report\t%s: %s\n", v.Report.Outcome, printable(v.Report.Summary))
 	}
@@ -391,7 +407,7 @@ func runRuns(args []string) error {
 	fs := newFlagSet("sessions")
 	onlyNeedsYou := fs.Bool("needs-you", false, "list only sessions that need you (state needs-you or disconnected, or an unseen failure; never paused, never a finished session awaiting review)")
 	archived := fs.Bool("archived", false, "list only archived sessions")
-	asJSON := fs.Bool("json", false, "print a JSON array, or with a session id one JSON object: id, workspace_id, workspace, status, state, reason, pending_inputs, branch, report")
+	asJSON := fs.Bool("json", false, "print a JSON array, or with a session id one JSON object: id, workspace_id, workspace, status, state, reason, pending_inputs, branch, report, and on an added login account_login, account_login_name, account_login_per_use")
 	runID := ""
 	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
 		runID, args = args[0], args[1:]

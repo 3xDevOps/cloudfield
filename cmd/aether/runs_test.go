@@ -265,3 +265,40 @@ func TestRenderRunsNamesTheLoginASessionIsOn(t *testing.T) {
 		t.Errorf("renderRuns =\n%s\nwant\n%s", buf.String(), want)
 	}
 }
+
+func TestRunViewCarriesTheLoginASessionIsOn(t *testing.T) {
+	for _, tc := range []struct {
+		run  protocol.Run
+		json map[string]any
+		line string
+	}{
+		{protocol.Run{ID: "r1", Status: "running", AccountMemberID: "m1", AccountLogin: "lgn-test1", AccountLoginName: "console", AccountLoginPerUse: true},
+			map[string]any{"account_login": "lgn-test1", "account_login_name": "console", "account_login_per_use": true},
+			"login      console (lgn-test1), billed per use\n"},
+		{protocol.Run{ID: "r2", Status: "running", AccountMemberID: "m1", AccountLogin: "lgn-test2"},
+			map[string]any{"account_login": "lgn-test2"},
+			"login      lgn-test2\n"},
+	} {
+		v := viewOf(tc.run, "demo", nil, nil)
+		var buf bytes.Buffer
+		if err := writeJSON(&buf, v); err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(buf.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		for k, want := range tc.json {
+			if got[k] != want {
+				t.Errorf("sessions %s --json %s = %v, want %v", tc.run.ID, k, got[k], want)
+			}
+		}
+		buf.Reset()
+		if err := printRunView(&buf, v, nil); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(buf.String(), tc.line) {
+			t.Errorf("sessions %s =\n%s\nwant the line %q", tc.run.ID, buf.String(), tc.line)
+		}
+	}
+}
