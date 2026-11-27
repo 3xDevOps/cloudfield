@@ -25,10 +25,10 @@ func TestGuidanceOffersOnlyUsableOutcomes(t *testing.T) {
 		{"background", Guide{Role: RoleBackground, Background: true},
 			[]string{"never report needs-input, waiting or answered", "inbox --wait 30"}, []string{"- needs-input", "- waiting", "- answered"}},
 		{"standard interactive", Guide{Role: RoleInteractive},
-			[]string{"END EVERY TURN WITH EXACTLY ONE REPORT", "- answered: ", "- needs-input: only", "use needs-input", "never report waiting"},
+			[]string{"REPORT ONCE EVERY TURN", "- answered: ", "- needs-input: only", "use needs-input", "never report waiting"},
 			[]string{"- waiting", "--for"}},
 		{"enhanced interactive", Guide{Role: RoleInteractive, Wake: true},
-			[]string{"- answered: ", "- waiting: ", "use needs-input", "Not while aether_status shows protected", "reply as message text before the report", "Say the result only there, none after"},
+			[]string{"- answered: ", "- waiting: ", "use needs-input", "Not while aether_status shows protected", "Then write your reply as message text and stop", "Never report again."},
 			[]string{"without a report", "after the report"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

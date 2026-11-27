@@ -232,8 +232,8 @@ func ReportGuide(g Guide) string {
 		// NewCLI's guide goes without the quotes, to fit its cap.
 		command = "`" + command + "`"
 	}
-	fmt.Fprintf(&b, "END EVERY TURN WITH EXACTLY ONE REPORT, as your last action: aether_report (a new idempotency_key each turn), else %s.\n", command)
-	b.WriteString("Write your reply as message text before the report; thinking and the summary are not your reply. Say the result only there, none after.\n")
+	fmt.Fprintf(&b, "REPORT ONCE EVERY TURN, when its work is done: aether_report (a new idempotency_key each turn), else %s.\n", command)
+	b.WriteString("Then write your reply as message text and stop: the result goes only there; thinking and the summary are not your reply. Never report again.\n")
 	for _, o := range Outcomes(g) {
 		fmt.Fprintf(&b, "- %s: %s\n", o.Name, o.Use)
 	}

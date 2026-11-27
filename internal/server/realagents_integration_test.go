@@ -37,7 +37,7 @@ const (
 	realAgentAnswer  = "aether-turn-done"
 	// realAgentContract starts the reporting rules every launch route
 	// carries.
-	realAgentContract = "END EVERY TURN WITH EXACTLY ONE REPORT"
+	realAgentContract = "REPORT ONCE EVERY TURN"
 	// codexCompactLimit is the token count past which the test's Codex
 	// compacts; a compaction step claims more than any model's context.
 	codexCompactLimit = 100000
