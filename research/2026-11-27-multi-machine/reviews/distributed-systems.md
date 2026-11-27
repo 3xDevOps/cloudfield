@@ -196,7 +196,7 @@ without qualification.
 - **Suspend and pause.** systemd monotonic timers and Go's monotonic
   clock do not advance while the machine is suspended. A host can be a
   laptop, or itself a VM that its hypervisor pauses or live-migrates. The
-  engine notes the production host "is itself a VM"
+  engine notes a host "is itself a VM"
   (`internal/runtime/vm/engine.go:541-544`, via E1 §5). Such a host can
   sleep for 10 minutes and resume. The primary offered "start again" at
   60 s. On resume, the host's VMs run for up to the rest of their 30 s
