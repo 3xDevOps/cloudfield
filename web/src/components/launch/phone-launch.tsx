@@ -29,8 +29,7 @@ export function PhoneLaunchSheet({
   onWorkspace,
   lastSession,
   accountName,
-  loginWords,
-  move,
+  login,
   onAddWorkspace,
   options,
   notes,
@@ -55,10 +54,8 @@ export function PhoneLaunchSheet({
   /** What still matches your newest session, which the sheet starts from. */
   lastSession: 'repository and agent' | 'repository' | 'none'
   accountName?: string
-  /** The login picked at launch, kept in sight with More options shut. */
-  loginWords?: string
-  /** The switch for moving onto a login billed per use, kept out of More options. */
-  move?: ReactNode
+  /** The Login field with its switch, kept in sight with More options shut. */
+  login?: ReactNode
   onAddWorkspace: () => void
   /** Permission, mode, model, limits and the rest of the desktop form. */
   options: ReactNode
@@ -119,9 +116,9 @@ export function PhoneLaunchSheet({
               <p className="text-ui-sm text-muted">{lastSession === 'repository' ? 'Repository from your last session.' : 'Same repository and agent as your last session.'}</p>
             )}
           </div>
-          {move}
+          {login}
           <Collapsible>
-            <CollapsibleTrigger className="flex-wrap">
+            <CollapsibleTrigger>
               <span className="shrink-0 font-medium">More options</span>
               {harness && <span className="shrink-0 text-muted">· {modeLabel(mode)}</span>}
               {accountName && (
@@ -131,7 +128,6 @@ export function PhoneLaunchSheet({
                   <span className="-ml-1 shrink-0 text-muted">&apos;s account</span>
                 </>
               )}
-              {loginWords && <span className="basis-full break-words pl-4 text-muted">{loginWords}</span>}
             </CollapsibleTrigger>
             <CollapsibleContent className="flex flex-col gap-4 pt-2">
               {!choice.noAgents && <Button type="button" variant="link" size="sm" className="self-start" disabled={disabled} onClick={onSetUp}>Install more agents...</Button>}

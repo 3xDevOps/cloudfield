@@ -49,24 +49,27 @@ function CostLine({ children }: { children: ReactNode }) {
 }
 
 /**
- * Whether the session may move to another login, under the line naming the logins billed per use a move could reach.
- * `from` is the login it starts on, `picked` whether the member picked it rather than Automatic. It sets `no_fallback`, the state the Fallback checkbox also sets.
+ * The one switch for whether the session may move to another login, or account with `accounts`; it sets `no_fallback`.
+ * Above it, a line names the logins billed per use a move could reach: `from` is the login it starts on, `picked` whether the member picked it rather than Automatic.
  */
-export function PerUseMove({ reach, from, picked, moves, onMoves, disabled }: {
+export function MoveSwitch({ reach, from, picked, accounts, moves, onMoves, disabled }: {
   reach: string
-  from: AgentLogin
+  from?: AgentLogin
   picked: boolean
+  accounts: boolean
   moves: boolean
   onMoves: (on: boolean) => void
   disabled?: boolean
 }) {
   const id = useId()
-  const when = !picked ? 'when the logins before it run out' : from.per_use ? `when ${from.name}'s credit is spent` : `when ${from.name} runs out`
+  const when = !picked ? 'when the logins before it run out' : from?.per_use ? `when ${from.name}'s credit is spent` : `when ${from?.name} runs out`
   return (
     <div className="flex flex-col gap-1">
-      <CostLine>{moves ? `Can move to ${reach}, billed per use, ${when}.` : `Stays on ${from.name}, so it never moves to ${reach}.`}</CostLine>
+      {reach && from && (moves
+        ? <CostLine>Can move to {reach}, billed per use, {when}.</CostLine>
+        : <p className="text-ui-sm text-muted">Stays on {from.name}, so it never moves to {reach}.</p>)}
       <div className="flex min-h-7 items-center justify-between gap-3 coarse:min-h-11">
-        <Label htmlFor={id}>Let this session move to another login</Label>
+        <Label htmlFor={id}>{accounts ? 'Let this session move to another login or account' : 'Let this session move to another login'}</Label>
         <Switch id={id} checked={moves} disabled={disabled} onCheckedChange={onMoves} />
       </div>
     </div>
@@ -76,7 +79,7 @@ export function PerUseMove({ reach, from, picked, moves, onMoves, disabled }: {
 /**
  * Which of the member's own logins a launch starts on; '' lets the server choose. A `value` the list no longer holds shows no choice.
  * `usage` is any login's usage the dialog already read, by login id, for its limit state; `moves` is whether automatic changes are on.
- * `move` is the PerUseMove the dialog shows under the help, when it does not show it elsewhere.
+ * `move` is the MoveSwitch, shown under the help.
  */
 export function LoginPicker({ logins, value, onChange, usage = {}, now, moves, move, disabled }: {
   logins: AgentLogin[]
