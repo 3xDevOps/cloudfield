@@ -225,8 +225,11 @@ type Scheduler struct {
 	recoveryReady     chan struct{}
 	recoveryReadyOnce sync.Once
 	// retainedListed is set once a pass over the terminal sidecars has read
-	// every one, so every retained container is in runs.
+	// every one, so every retained container is in runs. Until then
+	// retainedUnread holds the latest pass's first sidecar it could not
+	// settle, with why.
 	retainedListed atomic.Bool
+	retainedUnread atomic.Value
 	// recovering is set while Start recovers runs.
 	recovering atomic.Bool
 	// superCtx bounds every supervision goroutine; cancelling it never stops a

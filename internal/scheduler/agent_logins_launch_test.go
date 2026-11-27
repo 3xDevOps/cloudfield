@@ -610,8 +610,9 @@ func TestASubsessionIsChosenForAnewOffAPerUseOrNamedLogin(t *testing.T) {
 }
 
 // Removing a login waits until every kept session container's record was
-// read, and a kept container whose session cannot be read holds the login:
-// neither is passed over as not on it.
+// read, naming the one that could not be, and a kept container whose
+// session cannot be read holds the login: neither is passed over as not on
+// it.
 func TestLoginInUseFailsClosedOnAnUnreadSession(t *testing.T) {
 	e := newLoginShareEnv(t)
 	ctx := t.Context()
@@ -635,10 +636,22 @@ func TestLoginInUseFailsClosedOnAnUnreadSession(t *testing.T) {
 			return false
 		}
 	})
-	if inUse, err := e.sched.LoginInUse(ctx, work); err == nil || !strings.Contains(err.Error(), "could not yet read") {
-		t.Fatalf("LoginInUse with an unreadable kept session = %v, %v; want refused", inUse, err)
+	if inUse, err := e.sched.LoginInUse(ctx, work); err == nil || !strings.Contains(err.Error(), "could not read the record of a kept session container") || !strings.Contains(err.Error(), e.sched.sidecarPath(kept.ID)) {
+		t.Fatalf("LoginInUse with an unreadable kept session = %v, %v; want refused, naming the record", inUse, err)
 	}
 	if err := os.Remove(e.sched.sidecarPath(kept.ID)); err != nil {
+		t.Fatal(err)
+	}
+	// A record whose session row is gone, and that cannot be read, is named
+	// too.
+	if err := os.WriteFile(e.sched.sidecarPath("run-orphan"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e.sched.cleanupTerminalSidecars(ctx)
+	if inUse, err := e.sched.LoginInUse(ctx, work); err == nil || !strings.Contains(err.Error(), e.sched.sidecarPath("run-orphan")) {
+		t.Fatalf("LoginInUse with an unreadable orphan record = %v, %v; want refused, naming the record", inUse, err)
+	}
+	if err := os.Remove(e.sched.sidecarPath("run-orphan")); err != nil {
 		t.Fatal(err)
 	}
 	e.sched.cleanupTerminalSidecars(ctx)

@@ -455,7 +455,10 @@ func (s *Scheduler) LoginInUse(ctx context.Context, account domain.Account) (map
 		return nil, errors.New("the server is still recovering its sessions; try again in a moment")
 	}
 	if !s.retainedListed.Load() {
-		return nil, errors.New("the server could not yet read the record of every kept session container, so one may still mount this login; try again in a few minutes, and see the server log if it persists")
+		if unread, _ := s.retainedUnread.Load().(string); unread != "" {
+			return nil, fmt.Errorf("the server could not read the record of a kept session container, so that container may still mount this login: %s; the server reads its records again every hour, and the server's operator repairs or removes that file if this persists", unread)
+		}
+		return nil, errors.New("the server has not yet read the record of every kept session container, so one may still mount this login; try again in a moment")
 	}
 	runs, err := s.cfg.Store.ListActiveRuns(ctx)
 	if err != nil {
