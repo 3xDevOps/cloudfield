@@ -105,10 +105,13 @@ func TestWaitOnSeveralSessions(t *testing.T) {
 		asJSON bool
 		code   int
 		out    string
+		jsonID string
 		err    string
 	}{
 		{name: "first with an outcome", ids: []string{"r1", "r2", "r3"}, code: waitFailed,
 			out: "session r2 Failed: agent exited 1: boom\n", err: "session r2 failed"},
+		{name: "first with an outcome as JSON", ids: []string{"r1", "r2", "r3"}, asJSON: true, code: waitFailed,
+			jsonID: "r2", err: "session r2 failed"},
 		{name: "timeout", ids: []string{"r1", "r4"}, code: waitTimedOut,
 			out: "session r1 Working\nsession r4 Waiting for CI\n", err: "timed out after 1m0s waiting for sessions r1, r4"},
 		{name: "timeout as JSON", ids: []string{"r1", "r4"}, asJSON: true, code: waitTimedOut,
@@ -137,7 +140,12 @@ func TestWaitOnSeveralSessions(t *testing.T) {
 			if !errors.As(err, &status) || status.code != tc.code || err.Error() != tc.err {
 				t.Fatalf("wait = %v, want exit %d: %s", err, tc.code, tc.err)
 			}
-			if out.String() != tc.out {
+			if tc.jsonID != "" {
+				var v runView
+				if err := json.Unmarshal(out.Bytes(), &v); err != nil || v.ID != tc.jsonID {
+					t.Errorf("wait printed %q (%v), want session %s as one JSON object", out.String(), err, tc.jsonID)
+				}
+			} else if out.String() != tc.out {
 				t.Errorf("wait printed %q, want %q", out.String(), tc.out)
 			}
 			if n := lists.Load(); n != 1 {
