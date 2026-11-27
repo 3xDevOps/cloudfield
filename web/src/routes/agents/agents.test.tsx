@@ -9,7 +9,7 @@ import { lookupRoute } from '@/routes/registry'
 import '@/routes/agents'
 import { useStore } from '@/store'
 import { useLaunchDefaults } from '@/store/launch-defaults'
-import { agentInfo } from '@/test/fixtures'
+import { agentInfo, serverInfo } from '@/test/fixtures'
 import { pickOption } from '@/test/select'
 
 // vi.mock factories are hoisted above static imports, so the fixture module
@@ -249,20 +249,32 @@ describe('agents page', () => {
 
 describe('Claude Code logins', () => {
   const claudeRow = () => within(screen.getByRole('list', { name: 'Agents' })).getAllByRole('listitem')[0]
+  const loginsServer = () => useStore.setState({ info: { ...serverInfo, features: ['logins'] } })
 
   beforeEach(() => {
     useStore.setState({ capabilities: { gateway: 'local', methods: ['*'], ws: ['events', 'attach', 'terminal'] } })
+    loginsServer()
+  })
+
+  it('shows no login controls and reads no logins on a server without added logins', async () => {
+    useStore.setState({ info: { ...serverInfo, features: ['permission'] } })
+    vi.mocked(api.agentLoginList).mockClear()
+    mount()
+    await flush()
+    expect(within(claudeRow()).queryByRole('button', { name: 'Add login' })).toBeNull()
+    expect(screen.queryByRole('region', { name: 'Claude Code logins' })).toBeNull()
+    expect(api.agentLoginList).not.toHaveBeenCalled()
   })
 
   it('leaves the row of a member with only the default login as it was, plus Add login', async () => {
-    useStore.setState({ capabilities: { gateway: 'local', methods: ['agent.list', 'agent.install', 'agent.remove', 'run.launch'], ws: ['events', 'attach', 'terminal'] } })
+    useStore.setState({ info: { ...serverInfo, features: [] } })
     const view = mount()
     await flush()
     const before = claudeRow().textContent
     expect(within(claudeRow()).queryByRole('button', { name: 'Add login' })).toBeNull()
     view.unmount()
 
-    useStore.setState({ capabilities: { gateway: 'local', methods: ['*'], ws: ['events', 'attach', 'terminal'] } })
+    loginsServer()
     mount()
     await flush()
     expect(api.agentLoginList).toHaveBeenCalledWith('claude')
@@ -282,6 +294,7 @@ describe('Claude Code logins', () => {
     await flush()
     const logins = within(claudeRow()).getByRole('region', { name: 'Claude Code logins' })
     expect(within(logins).getAllByRole('listitem').map((item) => item.getAttribute('aria-label'))).toEqual(['Login default', 'Login work'])
+    expect(within(claudeRow()).getAllByRole('button', { name: 'Add login' })).toHaveLength(1)
     await waitFor(() => expect(logins.textContent).toContain('Your account is shared with Bob'))
     expect(within(logins).getByRole('link', { name: 'What they say' }).getAttribute('href')).toContain('docs/agents.md#several-logins')
   })

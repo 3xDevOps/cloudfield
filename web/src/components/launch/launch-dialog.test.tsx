@@ -1365,7 +1365,24 @@ describe('login', () => {
     { id: 'lgn-work0000001', name: 'work', kind: 'subscription' as const, automatic: true, shared: true, position: 1 },
     { id: 'lgn-console0001', name: 'console', kind: 'console' as const, per_use: true, automatic: true, shared: true, position: 2 },
   ]
-  beforeEach(() => useStore.getState().setCapabilities({ gateway: 'remote', methods: ['*'], ws: [] }))
+  beforeEach(() => {
+    useStore.getState().setCapabilities({ gateway: 'remote', methods: ['*'], ws: [] })
+    useStore.setState({ info: { ...serverInfo, features: ['logins'] } })
+    vi.mocked(api.agentLoginList).mockResolvedValue([logins[0]!])
+  })
+
+  it('offers no login and reads none on a server without added logins', async () => {
+    useStore.setState({ info: { ...serverInfo, features: [] } })
+    vi.mocked(api.agentLoginList).mockClear()
+    vi.mocked(api.agentLoginList).mockResolvedValue(logins)
+    await open()
+    setTask('old server')
+    fireEvent.click(launchButton())
+    await waitFor(() => expect(api.runLaunch).toHaveBeenCalled())
+    expect(screen.queryByRole('combobox', { name: 'Login' })).toBeNull()
+    expect(api.agentLoginList).not.toHaveBeenCalled()
+    expect(vi.mocked(api.runLaunch).mock.calls[0]![0]).not.toHaveProperty('login')
+  })
 
   it('adds nothing for a member with one login', async () => {
     await open()

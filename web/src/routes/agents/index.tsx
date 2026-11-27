@@ -29,7 +29,7 @@ import { GitHubConnect } from '@/routes/onboarding/github-connect'
 import { registerRoute, type RouteProps } from '@/routes/registry'
 import { useStore } from '@/store'
 import { rememberChoice, rememberedChoice, useLaunchDefaults, useLaunchDefaultsRead } from '@/store/launch-defaults'
-import { useCapability } from '@/store/hooks'
+import { useCapability, useLoginsServer } from '@/store/hooks'
 
 const addScreen = '@add'
 const githubScreen = '@github'
@@ -116,7 +116,8 @@ function AgentsRoute({ client = api }: RouteProps & { client?: Api }) {
   const [removing, setRemoving] = useState<AgentInfo | null>(null)
   const addButton = useRef<HTMLButtonElement>(null)
   const claudeInstalled = agents?.some((agent) => agent.name === loginAgent && agent.installed === true) ?? false
-  const logins = useAgentLogins(client, claudeInstalled && caps.hasMethod('agent.login.list'))
+  const loginsServer = useLoginsServer()
+  const logins = useAgentLogins(client, claudeInstalled && loginsServer)
   const [sharedWith, setSharedWith] = useState<Member[]>([])
   const severalLogins = (logins.logins?.length ?? 0) > 1
   useEffect(() => {
@@ -188,7 +189,7 @@ function AgentsRoute({ client = api }: RouteProps & { client?: Api }) {
                   onSetUp={canSetUp ? (agent) => openSetup(agent.name) : undefined}
                   onRun={caps.hasMethod('run.launch') ? run : undefined}
                   onRemove={caps.hasMethod('agent.remove') ? setRemoving : undefined}
-                  onAddLogin={logins.logins && caps.hasMethod('agent.login.add') && caps.hasWS('terminal') ? () => setScreen(loginScreen) : undefined}
+                  onAddLogin={logins.logins && caps.hasWS('terminal') ? () => setScreen(loginScreen) : undefined}
                   below={(agent) => agent.name === loginAgent && (
                     <>
                       {logins.error && (

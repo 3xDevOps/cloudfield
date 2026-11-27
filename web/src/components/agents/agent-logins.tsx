@@ -42,7 +42,7 @@ export function useAgentLogins(client: Pick<Api, 'agentLoginList'>, enabled: boo
     )
   }, [client, enabled])
   useEffect(reload, [reload])
-  return { logins, error, reload }
+  return { logins: enabled ? logins : null, error: enabled ? error : null, reload }
 }
 
 export function AnthropicNote() {

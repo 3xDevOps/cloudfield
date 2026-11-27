@@ -34,7 +34,7 @@ import { cn, focusRing, randomID, surface } from '@/lib/utils'
 import { type RootState, sameIdentity, useStore } from '@/store'
 import { useChildSettings, useChildSettingsRead } from '@/store/children'
 import { rememberChoice, saveLaunchDefaults, useLaunchDefaultsRead } from '@/store/launch-defaults'
-import { useCapability, useIsAdmin, useMainWidth, useSelf } from '@/store/hooks'
+import { useCapability, useIsAdmin, useLoginsServer, useMainWidth, useSelf } from '@/store/hooks'
 import { stillWaiting, usePastDeadline } from '@/store/optimistic'
 import { maxLaunchWidth, minLaunchWidth } from '@/store/ui'
 
@@ -138,7 +138,8 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   const errorCallout = useRef<HTMLDivElement>(null)
   const shown = useRef(true)
   const sharedAccount = account !== '' && account !== ownAccountID
-  const ownLogins = useOwnLogins(api, open && !sharedAccount && harness === loginAgent && cap.hasMethod('agent.login.list'))
+  const loginsServer = useLoginsServer()
+  const ownLogins = useOwnLogins(api, open && !sharedAccount && harness === loginAgent && loginsServer)
   const [login, setLogin] = useState('')
   const pickedLogin = ownLogins && ownLogins.length > 1 && ownLogins.some((item) => item.id === login) ? login : ''
   const accountName = accounts.find((member) => member.id === account)?.display_name ?? account
