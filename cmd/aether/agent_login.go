@@ -63,6 +63,9 @@ func agentLogin(args []string) error {
 	}
 	if adding || attaching {
 		if !term.IsTerminal(int(os.Stdin.Fd())) {
+			if agent.Name != addedLoginsAgent {
+				return fmt.Errorf("only Claude Code keeps added logins, so %s has none; cloudfield agent login %s signs in its one login", agent.Name, agent.Name)
+			}
 			command := "cloudfield agent login " + agent.Name + " --as " + *as
 			if attaching {
 				command = attachCommand(agent.Name, *attach)

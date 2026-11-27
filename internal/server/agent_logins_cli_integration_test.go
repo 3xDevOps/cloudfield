@@ -238,13 +238,15 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 	if err = srv.Store().CreateMember(ctx, member); err != nil {
 		t.Fatal(err)
 	}
-	claude := filepath.Join(data, "homes", string(member.ID), ".local", "bin", "claude")
-	if err = os.MkdirAll(filepath.Dir(claude), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	writeFile(t, claude, "#!/bin/sh\n")
-	if err = os.Chmod(claude, 0o700); err != nil {
-		t.Fatal(err)
+	for _, agent := range []string{"claude", "codex"} {
+		installed := filepath.Join(data, "homes", string(member.ID), ".local", "bin", agent)
+		if err = os.MkdirAll(filepath.Dir(installed), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, installed, "#!/bin/sh\n")
+		if err = os.Chmod(installed, 0o700); err != nil {
+			t.Fatal(err)
+		}
 	}
 	aether := buildCLIBinary(t)
 	ada := &cliUser{sshUser: newSSHUser(t, aether, addr, keyPath), aether: aether}
@@ -285,6 +287,11 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 		t.Fatalf("agent login claude --as work without a terminal = %d %q", code, stderr)
 	}
 	t.Logf("$ cloudfield agent login claude --as work </dev/null\n%s", stderr)
+	_, stderr, code = ada.cli("agent", "login", "codex", "--as", "work")
+	t.Logf("$ cloudfield agent login codex --as work </dev/null\n%s", stderr)
+	if code == 0 || !strings.Contains(stderr, "only Claude Code keeps added logins, so codex has none; cloudfield agent login codex signs in its one login\n") {
+		t.Fatalf("agent login codex --as work without a terminal = %d %q", code, stderr)
+	}
 	if got := rows(); len(got) != 0 {
 		t.Fatalf("agent_logins rows before any login was added: %+v", got)
 	}
