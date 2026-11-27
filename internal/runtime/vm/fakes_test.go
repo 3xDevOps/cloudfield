@@ -275,7 +275,7 @@ type fakeUnits struct {
 	rebootOnResume bool
 	resumeWrites   string
 	// cgroups is the cgroup root, which holds a memory.current, a
-	// memory.stat and a cgroup.freeze for each running unit.
+	// memory.stat, a cgroup.freeze and a memory.max for each running unit.
 	cgroups string
 }
 
@@ -309,6 +309,9 @@ func (u *fakeUnits) Start(_ context.Context, name string, argv, properties []str
 		return err
 	}
 	if err = os.WriteFile(filepath.Join(u.cgroup(name), "cgroup.freeze"), []byte("0\n"), 0o644); err != nil {
+		return err
+	}
+	if err = os.WriteFile(filepath.Join(u.cgroup(name), "memory.max"), nil, 0o644); err != nil {
 		return err
 	}
 	u.mu.Lock()

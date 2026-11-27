@@ -10,6 +10,7 @@ import (
 	"maps"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -99,7 +100,12 @@ func (e *engine) save(ctx context.Context, key string) error {
 			return fmt.Errorf("vm runtime: save VM %s: %w", key, err)
 		}
 	}
+	memoryMax := filepath.Join(e.cgroupRoot, runtime.SessionSlice, unitName(key), "memory.max")
 	resumeAfter := func(cause error) error {
+		// A unit that is gone has no limit to put back.
+		if err := writeCgroup(memoryMax, strconv.FormatInt(unitMemoryMiB(rec)<<20, 10)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+			cause = fmt.Errorf("%w; and its unit keeps no memory limit: %w", cause, err)
+		}
 		if paused {
 			return fmt.Errorf("vm runtime: save VM %s: %w", key, cause)
 		}
@@ -110,6 +116,12 @@ func (e *engine) save(ctx context.Context, key string) error {
 		return resumeAfter(err)
 	}
 	if err = os.Mkdir(dir, 0o700); err != nil {
+		return resumeAfter(err)
+	}
+	// The snapshot's page cache is charged to the unit, and at the unit's
+	// limit the kernel kills the monitor. The guest is paused and takes no
+	// more memory, so the limit is off until it runs again.
+	if err = writeCgroup(memoryMax, "max"); err != nil {
 		return resumeAfter(err)
 	}
 	// Not cut short with ctx: a monitor cut off goes on writing, and answers

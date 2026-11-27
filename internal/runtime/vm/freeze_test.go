@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -90,6 +92,51 @@ func TestAFailedSaveLeavesTheVMRunning(t *testing.T) {
 	}
 	if h.engine.halted(t.Context(), "run-a") {
 		t.Fatal("a failed save left the VM paused")
+	}
+}
+
+// The snapshot's page cache is charged to the unit: its memory limit is off
+// while the monitor writes, and back before a failed save's guest runs on.
+func TestASaveLiftsTheUnitsMemoryLimitForTheSnapshot(t *testing.T) {
+	h := newHarness(t)
+	limit := func(key string) string {
+		data, err := os.ReadFile(filepath.Join(h.units.cgroup(unitName(key)), "memory.max"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(data)
+	}
+	h.createStarted("run-a", sessionSpec("run-a"))
+	hold := make(chan struct{})
+	vmm := h.units.vmm("run-a")
+	vmm.mu.Lock()
+	vmm.snapshotHold = hold
+	vmm.mu.Unlock()
+	saved := make(chan error, 1)
+	go func() { saved <- h.engine.save(t.Context(), "run-a") }()
+	<-hold
+	if got := limit("run-a"); got != "max" {
+		t.Errorf("during the snapshot the unit's memory.max is %q, want max", got)
+	}
+	hold <- struct{}{}
+	if err := <-saved; err != nil {
+		t.Fatal(err)
+	}
+
+	h.createStarted("run-b", sessionSpec("run-b"))
+	vmm = h.units.vmm("run-b")
+	vmm.mu.Lock()
+	vmm.snapshotFails = true
+	vmm.mu.Unlock()
+	if err := h.engine.save(t.Context(), "run-b"); err == nil {
+		t.Fatal("a save whose snapshot fails returned no error")
+	}
+	rec, err := h.engine.load("run-b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := limit("run-b"), strconv.FormatInt(unitMemoryMiB(rec)<<20, 10); got != want {
+		t.Errorf("after a failed save the unit's memory.max is %q, want %s", got, want)
 	}
 }
 
