@@ -192,6 +192,46 @@ func TestRetiringNotice(t *testing.T) {
 	}
 }
 
+// A client from NewWith, the gateway's reader, keeps its answers' notices
+// out of Seen, which the CLI prints once per run; one from New does not.
+func TestNewWithKeepsNoticesOutOfSeen(t *testing.T) {
+	key, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(edgeproto.HeaderRetiring, "https://edge2.example.test")
+		writeJSON(w, http.StatusOK, edgeproto.EdgeInfo{
+			SigninOrigin: "http://127.0.0.1:1", Key: key, Fingerprint: edgeproto.EdgeKeyFingerprint(key),
+			Version: edgeproto.Version, MinVersion: edgeproto.MinVersion,
+		})
+	}))
+	t.Cleanup(srv.Close)
+	reader, err := NewWith(t.TempDir(), srv.URL, HTTPClient())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := reader.RetiringNotice(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := reader.Retiring(); !ok {
+		t.Fatal("the reader did not read the header")
+	}
+	if _, ok := Seen()[reader.origin]; ok {
+		t.Fatal("the reader's notice went to Seen")
+	}
+	c, err := New(t.TempDir(), srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := c.RetiringNotice(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := Seen()[c.origin]; !ok {
+		t.Fatal("a client from New kept its notice out of Seen")
+	}
+}
+
 // TestRetiringNoticeOfAnotherType reads edge metadata whose retiring
 // fields are not strings: the metadata is read and the notice ignored.
 func TestRetiringNoticeOfAnotherType(t *testing.T) {

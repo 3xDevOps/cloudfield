@@ -60,7 +60,7 @@ func (c *Client) observe(resp *http.Response) {
 	c.mu.Lock()
 	c.retiring = notice
 	c.mu.Unlock()
-	if notice != nil {
+	if notice != nil && c.seen {
 		seen.Lock()
 		seen.by[c.origin] = *notice
 		seen.Unlock()

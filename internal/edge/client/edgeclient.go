@@ -77,6 +77,9 @@ type Client struct {
 	dir    string
 	http   *http.Client
 
+	// seen is whether the notices of this client's answers go to Seen.
+	seen bool
+
 	mu sync.Mutex
 	// retiring is the notice of the edge's latest answer.
 	retiring *Retiring
@@ -86,7 +89,11 @@ type Client struct {
 // the Aether config directory, which holds the device key and the device
 // tokens.
 func New(dir, edgeURL string) (*Client, error) {
-	return NewWith(dir, edgeURL, HTTPClient())
+	c, err := NewWith(dir, edgeURL, HTTPClient())
+	if err == nil {
+		c.seen = true
+	}
+	return c, err
 }
 
 // HTTPClient is a client for edge requests: the edge client's transport,
@@ -96,7 +103,8 @@ func HTTPClient() *http.Client {
 }
 
 // NewWith is New with hc, an HTTPClient its caller shares between
-// clients and closes.
+// clients and closes, for a reader of its own: the notices of its
+// client's answers do not go to Seen.
 func NewWith(dir, edgeURL string, hc *http.Client) (*Client, error) {
 	origin, err := edgeproto.Origin(edgeURL)
 	if err != nil {
