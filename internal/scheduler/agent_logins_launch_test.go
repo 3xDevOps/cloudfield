@@ -774,3 +774,26 @@ func TestAnAddedLoginSessionsConfigVolumeGoesWithItsContainer(t *testing.T) {
 		return removed && errors.Is(statErr, fs.ErrNotExist)
 	})
 }
+
+// A login directory whose row is gone goes with the volume its sessions'
+// mounts came from, which removing their containers leaves.
+func TestALoginWithNoRowGoesWithItsVolume(t *testing.T) {
+	e := newLoginShareEnv(t)
+	work := e.addLogin(t, e.member.ID, "lgn-work000000", "work", workLogin)
+	dir, err := e.logins.Path(e.member.ID, "claude", work.Login)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.db.DeleteAgentLogin(t.Context(), e.member.ID, "claude", work.Login); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.sched.ReconcileLogins(t.Context(), e.member.ID); err != nil {
+		t.Fatal(err)
+	}
+	e.rt.mu.Lock()
+	removed := slices.Contains(e.rt.removedVolumes, dir)
+	e.rt.mu.Unlock()
+	if _, statErr := os.Lstat(dir); !removed || !errors.Is(statErr, fs.ErrNotExist) {
+		t.Fatalf("volume removed %v, directory %v; want both gone", removed, statErr)
+	}
+}

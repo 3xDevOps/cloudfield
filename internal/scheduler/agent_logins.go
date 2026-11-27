@@ -563,12 +563,31 @@ func (s *Scheduler) ReconcileLogins(ctx context.Context, member domain.MemberID)
 			if s.cfg.PTY != nil {
 				errs = append(errs, s.cfg.PTY.RemoveSessionTranscript(ctx, ptyhost.LoginSignInSession(l.Member, l.ID)))
 			}
+			if volumeErr := s.RemoveLoginVolume(ctx, l.Member, l.Agent, l.ID); volumeErr != nil {
+				errs = append(errs, volumeErr)
+				continue
+			}
 			errs = append(errs, s.cfg.Logins.Remove(l.Member, l.Agent, l.ID))
 		case err != nil:
 			errs = append(errs, fmt.Errorf("login %s: %w", l.ID, err))
 		case owner != l.Member:
-			errs = append(errs, s.cfg.Logins.Move(l.Member, owner, l.Agent, l.ID))
+			errs = append(errs, s.RemoveLoginVolume(ctx, l.Member, l.Agent, l.ID), s.cfg.Logins.Move(l.Member, owner, l.Agent, l.ID))
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// RemoveLoginVolume removes the volume the subpath mounts of member's login
+// id of agent come from, which removing their containers leaves; the
+// runtime refuses it while a container still uses it.
+func (s *Scheduler) RemoveLoginVolume(ctx context.Context, member domain.MemberID, agent string, id domain.LoginID) error {
+	remover, ok := s.cfg.Runtime.(subpathVolumeRemover)
+	if !ok {
+		return nil
+	}
+	dir, err := s.cfg.Logins.Path(member, agent, id)
+	if err != nil {
+		return err
+	}
+	return remover.RemoveSubpathVolume(ctx, dir)
 }

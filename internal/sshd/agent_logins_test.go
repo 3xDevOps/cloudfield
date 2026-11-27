@@ -261,12 +261,20 @@ func TestALaunchIsAdmittedBeforeItReadsTheWorkspaceOrTheLogins(t *testing.T) {
 }
 
 // fakeLoginSignIns reports the sessions LoginInUse lists, fails to end
-// sign-ins with endErr, and records whose logins it reconciled.
+// sign-ins with endErr, records whose logins it reconciled, and records the
+// logins whose volume it removed, failing with volumeErr.
 type fakeLoginSignIns struct {
 	LoginSignIns
 	inUse      map[domain.RunID]domain.MemberID
 	endErr     error
 	reconciled []domain.MemberID
+	volumes    []domain.LoginID
+	volumeErr  error
+}
+
+func (f *fakeLoginSignIns) RemoveLoginVolume(_ context.Context, _ domain.MemberID, _ string, id domain.LoginID) error {
+	f.volumes = append(f.volumes, id)
+	return f.volumeErr
 }
 
 func (f *fakeLoginSignIns) LoginInUse(context.Context, domain.Account) (map[domain.RunID]domain.MemberID, error) {
@@ -298,6 +306,30 @@ func TestRemovingALoginInUseNamesTheOwnersSessionsAndCountsTheRest(t *testing.T)
 	want := `login "work" is in use by your sessions ` + strings.Join(own, ", ") + ` (end them) and 1 of your teammates' sessions`
 	if perr == nil || perr.Code != protocol.CodeConflict || !strings.Contains(perr.Message, want) || !strings.Contains(perr.Message, "cloudfield account revoke <member-id>") || strings.Contains(perr.Message, "use for shares") {
 		t.Fatalf("removal of a login in use: %v; want %q and the revoke command", perr, want)
+	}
+}
+
+// Removing a login removes the volume its sessions' mounts came from
+// before its directory and row; a volume the runtime will not remove keeps
+// the login, so the removal can be asked again.
+func TestRemovingALoginRemovesItsVolume(t *testing.T) {
+	e := newLoginEnv(t)
+	e.seed(t, e.member.ID, "lgn-work000000", "work", "ada@work.example.test")
+	signIns := &fakeLoginSignIns{volumeErr: errors.New("volume is in use")}
+	e.srv.cfg.LoginSignIns = signIns
+	params := protocol.AgentLoginParams{Agent: "claude", LoginID: "lgn-work000000"}
+	if _, perr := e.call(t, e.member.ID, protocol.MethodAgentLoginRemove, params); perr == nil || !strings.Contains(perr.Message, "volume is in use") {
+		t.Fatalf("removal whose volume stays: %v; want refused with the runtime's error", perr)
+	}
+	if _, ids := e.list(t, e.member.ID); !strings.Contains(ids, "lgn-work000000") {
+		t.Fatalf("logins after the refused removal = %s; want work kept", ids)
+	}
+	signIns.volumeErr = nil
+	if _, perr := e.call(t, e.member.ID, protocol.MethodAgentLoginRemove, params); perr != nil {
+		t.Fatal(perr)
+	}
+	if !slices.Equal(signIns.volumes, []domain.LoginID{"lgn-work000000", "lgn-work000000"}) {
+		t.Fatalf("volumes removed = %v; want work's, once per attempt", signIns.volumes)
 	}
 }
 

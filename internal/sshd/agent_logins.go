@@ -42,6 +42,9 @@ type LoginSignIns interface {
 	// LoginInUse lists the sessions on an added login, moving to it, or
 	// queued to start on it, each with the member who owns it.
 	LoginInUse(ctx context.Context, account domain.Account) (map[domain.RunID]domain.MemberID, error)
+	// RemoveLoginVolume removes the volume the mounts of a login's
+	// directory come from.
+	RemoveLoginVolume(ctx context.Context, member domain.MemberID, agent string, id domain.LoginID) error
 }
 
 var errNoAddedLogins = &protocol.Error{Code: protocol.CodeUnavailable, Message: "this server keeps no added logins"}
@@ -252,6 +255,11 @@ func (s *Server) agentLoginRemove(ctx context.Context, member domain.MemberID, r
 	}
 	for _, l := range stored {
 		if l.Agent == p.Agent && l.ID == login.ID {
+			if signIns := s.cfg.LoginSignIns; signIns != nil {
+				if err := signIns.RemoveLoginVolume(ctx, l.Member, l.Agent, l.ID); err != nil {
+					return nil, rpcError(fmt.Errorf("remove login %q: %w", login.Name, err))
+				}
+			}
 			if err := s.cfg.Logins.Remove(l.Member, l.Agent, l.ID); err != nil {
 				return nil, rpcError(fmt.Errorf("remove login %q: %w", login.Name, err))
 			}
