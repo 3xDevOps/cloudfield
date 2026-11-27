@@ -135,9 +135,9 @@ func (e *engine) sample(ctx context.Context, key string) (*runtime.ContainerStat
 		ID: idPrefix + key, CreationKey: cmp.Or(rec.CreationKey, key), Read: time.Now(),
 		CPUUsageNanos: g.CPUUsageNanos, CPULimitCores: cores,
 		MemoryBytes: g.MemoryBytes, HostMemoryBytes: held, MemoryLimitBytes: g.MemoryLimitBytes, Pids: g.Pids, PidsLimit: g.PidsLimit,
-		NetRxBytes: counters["net0"]["rx_bytes"], NetTxBytes: counters["net0"]["tx_bytes"],
-		DiskReadBytes:  counters["root"]["read_bytes"] + counters["data"]["read_bytes"],
-		DiskWriteBytes: counters["root"]["write_bytes"] + counters["data"]["write_bytes"],
+		NetRxBytes: counters["net0"].RxBytes, NetTxBytes: counters["net0"].TxBytes,
+		DiskReadBytes:  counters["root"].ReadBytes + counters["data"].ReadBytes,
+		DiskWriteBytes: counters["root"].WriteBytes + counters["data"].WriteBytes,
 	}, err
 }
 
