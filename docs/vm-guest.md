@@ -511,12 +511,16 @@ Claude Code starts without its prefix keeps the agent's score: exec-form
 hooks, the language servers of its plugins, and the `rg` and `git` it runs
 for itself. A language server that grows large is then killed after the
 agent's commands. A command can lower its own score back to `-500`, so this
-orders accidents, not a hostile command. The keeper leaves the agent at the
-default score and sets no prefix when the session's environment already sets
-`CLAUDE_CODE_SHELL_PREFIX`, when `bash` is not on the `PATH` or `zsh` is,
-since Claude Code may then build its commands for zsh, or when it may not
-lower its score, as in a Docker session. The bridge, which only relays,
-lowers its own score where it may all the same. Except for a prefix the
+orders accidents, not a hostile command. The keeper leaves the agent's
+score as it was and sets no prefix when the session's environment already
+sets `CLAUDE_CODE_SHELL_PREFIX`, when `bash` is not on the `PATH` or `zsh`
+is, since Claude Code may then build its commands for zsh, when its own
+score is not the default `0`, or when the kernel refuses the write. A Docker
+session's container runs at `500`, under runc and Sysbox alike, which is
+what has a host out of memory kill its processes first
+([failure-handling.md](failure-handling.md#recover-from-memory-pressure)),
+so the agent keeps `500` there. The bridge, which only relays, lowers its
+own score from `0` whatever the keeper did. Except for a prefix the
 session already sets, the keeper logs the reason to `keeper.log` beside its
 socket, in a directory of `/run/aether-acp` that only root can read and that
 goes when the agent stops:

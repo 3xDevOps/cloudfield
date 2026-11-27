@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"strconv"
+	"strings"
 )
 
 // agentOOMScoreAdj ranks the agent behind every process at the default
@@ -25,9 +26,17 @@ const (
 
 // lowerOOMScore applies agentOOMScoreAdj to this process's parent, the
 // managed exec the server tracks it by, and to this process, whose children
-// inherit it. It needs CAP_SYS_RESOURCE, which root has in a session VM and
-// not in a container.
+// inherit it. It does so only from the default score, the one the command
+// wrapper gives back: any other is one the host ranks the session by, as a
+// container's.
 func lowerOOMScore() error {
+	score, err := os.ReadFile("/proc/self/oom_score_adj")
+	if err != nil {
+		return err
+	}
+	if s := strings.TrimSpace(string(score)); s != "0" {
+		return fmt.Errorf("the OOM score is %s, not the default 0", s)
+	}
 	for _, pid := range []string{strconv.Itoa(os.Getppid()), "self"} {
 		if err := os.WriteFile("/proc/"+pid+"/oom_score_adj", []byte(agentOOMScoreAdj), 0); err != nil {
 			return err

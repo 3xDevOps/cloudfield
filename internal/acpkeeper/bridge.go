@@ -16,7 +16,7 @@ func Bridge(socket string, in io.Reader, out io.Writer) error {
 		return err
 	}
 	if os.Getenv(CommandPrefixEnv) != "" {
-		// A bridge that cannot, as in a container, relays all the same.
+		// A bridge that keeps its score relays all the same.
 		_ = lowerOOMScore()
 	}
 	conn, err := net.Dial("unix", socket)

@@ -117,7 +117,7 @@ func Serve(socket, user string, argv []string) int {
 	}
 	k.cfg.Logger = slog.New(slog.NewTextHandler(os.Stderr, nil))
 	if unprotected != nil {
-		k.cfg.Logger.Info("acpkeeper: the agent keeps the default OOM score", "error", unprotected)
+		k.cfg.Logger.Info("acpkeeper: the agent's OOM score is not lowered", "error", unprotected)
 	}
 
 	go func() {
