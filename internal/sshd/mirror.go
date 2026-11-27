@@ -74,9 +74,6 @@ func (s *Server) workspaceMirrorWarm(ctx context.Context, _ domain.MemberID, par
 	if perr != nil {
 		return nil, perr
 	}
-	if p.WorkspaceID == "" {
-		return nil, invalidParams("workspace_id is required")
-	}
 	svc, perr := s.mirrors()
 	if perr != nil {
 		return nil, perr

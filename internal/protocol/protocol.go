@@ -151,9 +151,7 @@ const (
 	MethodWorkspaceMirrorRefresh   = "workspace.mirror.refresh"
 	MethodWorkspaceMirrorAdopt     = "workspace.mirror.adopt"
 	MethodWorkspaceMirrorDisable   = "workspace.mirror.disable"
-	// MethodWorkspaceMirrorWarm is for a member about to launch, not an
-	// admin: it refreshes the mirror unless a refresh just did.
-	MethodWorkspaceMirrorWarm = "workspace.mirror.warm"
+	MethodWorkspaceMirrorWarm      = "workspace.mirror.warm"
 )
 
 // JSON-RPC 2.0 error codes.

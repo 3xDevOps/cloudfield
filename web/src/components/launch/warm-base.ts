@@ -1,10 +1,9 @@
 import { useEffect, useRef } from 'react'
 import { api } from '@/lib/api'
 
-/** The server takes a launch within 10 seconds of a refresh without fetching the upstream again, and refreshes on a call from 5 seconds after one. */
+/** The server refreshes on a call from 5 seconds after its last refresh. */
 const warmEvery = 5000
 
-/** Refreshes the workspace's source mirror when the workspace is first named and, at most every 5 seconds, when `edit` changes, so a launch right after does not wait for the upstream. One call runs at a time, and none follows a failed one until the workspace changes or is emptied, as a closed panel does. */
 export function useWarmBase(workspaceID: string, edit: unknown) {
   const next = useRef({ workspaceID: '', at: 0 })
   useEffect(() => {
