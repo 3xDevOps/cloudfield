@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -575,7 +576,7 @@ func TestASleepingSessionWakesOnlyOnALoginStillShared(t *testing.T) {
 			}
 			waitFor(t, "the session stopped by the revoke", func() bool {
 				row, rowErr := e.db.GetRun(t.Context(), run.ID)
-				return rowErr == nil && row.Status.Terminal() && strings.HasPrefix(row.Reason, revokedReason)
+				return rowErr == nil && row.Status.Terminal() && strings.HasPrefix(row.Reason, loginRevokedReason+"Grace turned use for shares off for login work; ")
 			})
 			if state := containerState(c); state == "running" {
 				t.Fatalf("container %s; want it never started on the login again", state)
@@ -633,4 +634,82 @@ func TestAMoveToAnAddedLoginIsSetUpAsALaunchOnIt(t *testing.T) {
 		_, statErr := os.Lstat(dir)
 		return removed && errors.Is(statErr, fs.ErrNotExist)
 	})
+}
+
+// Ada hands her own session to Grace, who holds no share of Ada's account.
+// It keeps running on Ada's login, default or added, while that login is on
+// for shares; when Ada turns it off for shares the session leaves it, and
+// the reason says what Ada did.
+func TestAHandedOffSessionFollowsItsLoginsShareSwitch(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"default", "second"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			e, _, notes, _, second := newLoginMoveEnv(t, enhancedClaude)
+			login := domain.AccountOf(e.member.ID)
+			if name == "second" {
+				login = second
+			}
+			startScheduler(t, e.sched)
+			<-e.sched.RecoveryReady()
+			run, err := e.sched.LaunchWithOptions(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP, domain.LaunchOptions{AccountLogin: login.Login})
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+			if err = e.db.TransferRun(t.Context(), run.ID, e.owner.ID); err != nil {
+				t.Fatal(err)
+			}
+			row, err := e.db.GetRun(t.Context(), run.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if revoked, err := e.sched.accountRevoked(t.Context(), row); err != nil || revoked {
+				t.Fatalf("accountRevoked = %v, %v; want the handed-off session kept on a shared login", revoked, err)
+			}
+			if err = e.db.SetAgentLoginShared(t.Context(), e.member.ID, "claude", cmp.Or(login.Login, domain.DefaultLogin), false); err != nil {
+				t.Fatal(err)
+			}
+			e.sched.RevokeLogin(login)
+			want := loginRevokedReason + "Ada turned use for shares off for login " + name + "; no other account can run claude"
+			got := e.waitStoreStatus(t, run.ID, domain.RunFailed)
+			if got.Reason != want || len(notes.all()) != 0 {
+				t.Fatalf("run %q, notes %v; want %q", got.Reason, notes.all(), want)
+			}
+		})
+	}
+}
+
+// Grace turns her work login off for shares while Ada's session runs on
+// it: the session moves on, and its continuation and room note say what
+// Grace did, not that she revoked access to her account.
+func TestALoginTurnedOffForSharesSaysSoWhenTheSessionMoves(t *testing.T) {
+	t.Parallel()
+	e, rt, notes, _, _ := newLoginMoveEnv(t, enhancedClaude)
+	e.share(t)
+	work := e.addLogin(t, e.owner.ID, "lgn-work000000", "work", workLogin)
+	startScheduler(t, e.sched)
+	<-e.sched.RecoveryReady()
+	run, err := e.sched.LaunchWithOptions(t.Context(), e.ws.ID, e.member.ID, e.owner.ID, "", "claude", domain.LaunchACP, domain.LaunchOptions{AccountLogin: work.Login})
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+	if err = e.db.SetAgentLoginShared(t.Context(), e.owner.ID, "claude", work.Login, false); err != nil {
+		t.Fatal(err)
+	}
+	e.sched.RevokeLogin(work)
+	const because = "because Grace turned use for shares off for login work."
+	waitFor(t, "the room note", func() bool {
+		all := notes.all()
+		return len(all) == 1 && strings.HasPrefix(all[0], "Continued on ") && strings.HasSuffix(all[0], because)
+	})
+	waitFor(t, "the continuation prompt", func() bool {
+		execs := rt.all()
+		sent := sentPrompts(t, execs[len(execs)-1])
+		return len(sent) == 1 && strings.HasPrefix(sent[0], "Your previous turn stopped "+because[:len(because)-1]+". ")
+	})
+	if row, err := e.db.GetRun(t.Context(), run.ID); err != nil || row.Account() == work || row.Status.Terminal() {
+		t.Fatalf("run = %+v, %v; want it live off the work login", row, err)
+	}
 }

@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -22,13 +23,22 @@ const revokedReason = "account share revoked: "
 // launcher or the member whose home it mounts lost one of its workspaces.
 const workspaceRevokedReason = "workspace access revoked: "
 
+// loginRevokedReason starts the reason of a run that stopped because the
+// owner of the login it ran on turned it off for shares.
+const loginRevokedReason = "login share revoked: "
+
 // revokedSegment is the reason an account segment records for a move off a
 // revoked account.
 const revokedSegment = "share revoked"
 
 // accountMove is why a run leaves the account it is on: the account's usage
-// ran out, or its owner revoked the share the run uses it by.
-type accountMove struct{ revoked bool }
+// ran out, or its owner revoked the share the run uses it by. offLogin, on
+// a revoke, says that the owner turned the run's login off for shares
+// instead.
+type accountMove struct {
+	revoked  bool
+	offLogin string
+}
 
 var (
 	usageMove  = accountMove{}
@@ -44,7 +54,10 @@ func (m accountMove) segment() string {
 
 // because says why the run left from's account.
 func (m accountMove) because(from string) string {
-	if m.revoked {
+	switch {
+	case m.offLogin != "":
+		return m.offLogin
+	case m.revoked:
 		return from + " revoked access to their account"
 	}
 	return from + "'s usage ran out"
@@ -53,7 +66,10 @@ func (m accountMove) because(from string) string {
 // stopped starts the reason of a run that did not leave from's account, or
 // whose move off it failed.
 func (m accountMove) stopped(from string) string {
-	if m.revoked {
+	switch {
+	case m.offLogin != "":
+		return loginRevokedReason + m.offLogin + "; "
+	case m.revoked:
 		return revokedReason + m.because(from) + "; "
 	}
 	return usageLimitReason + from + "'s account; "
@@ -135,7 +151,10 @@ func (s *Scheduler) leaveRevokedAccounts(ctx context.Context, match func(*domain
 // launcher's account, so the new owner's shares do not count. A row from
 // before shares were narrowed records no launcher; its owner stands in.
 func (s *Scheduler) accountRevoked(ctx context.Context, run *domain.Run) (bool, error) {
-	err := s.resolveRunAccount(ctx, run)
+	return revokedBy(s.resolveRunAccount(ctx, run))
+}
+
+func revokedBy(err error) (bool, error) {
 	switch {
 	case errors.Is(err, permissions.ErrDenied) || errors.Is(err, store.ErrNotFound):
 		return true, nil
@@ -153,15 +172,16 @@ func (s *Scheduler) resolveRunAccount(ctx context.Context, run *domain.Run) erro
 	if err := s.checkRunReach(ctx, run); err != nil {
 		return err
 	}
-	if err := fallback.ResolveRunLogin(ctx, s.cfg.Store, runLauncher(run), run, runWorkspaces(run)); err != nil {
+	launcher := runLauncher(run)
+	if err := fallback.ResolveRunLogin(ctx, s.cfg.Store, launcher, run, runWorkspaces(run)); err != nil {
 		return err
 	}
-	// The run's owner is checked for its login's share switch too; whether
-	// the owner holds the share itself is the handoff's to decide.
-	if run.MemberID == runLauncher(run) || !run.AccountLogin.Added() {
+	// A run handed to a member who holds no share of the account keeps
+	// running, as before logins existed, while its login is on for shares.
+	if run.MemberID == run.AccountMember() || launcher != run.AccountMember() {
 		return nil
 	}
-	return fallback.ResolveRunLogin(ctx, s.cfg.Store, run.MemberID, run, runWorkspaces(run))
+	return fallback.LoginShared(ctx, s.cfg.Store, run.Account(), run.Harness)
 }
 
 // checkRunReach refuses the run when its launcher or the member whose home
@@ -233,8 +253,10 @@ func (s *Scheduler) leaveRevokedAccount(entry *supervised) {
 	// the revoked account already.
 	run, err := s.cfg.Store.GetRun(ctx, entry.runID)
 	revoked := err == nil
+	var authErr error
 	if err == nil {
-		revoked, err = s.accountRevoked(ctx, run)
+		authErr = s.resolveRunAccount(ctx, run)
+		revoked, err = revokedBy(authErr)
 	}
 	if err != nil || !revoked {
 		if err != nil {
@@ -247,15 +269,23 @@ func (s *Scheduler) leaveRevokedAccount(entry *supervised) {
 		s.stopRevoked(ctx, entry, workspaceRevokedReason+reachErr.Error())
 		return
 	}
+	m := revokeMove
+	if errors.Is(authErr, fallback.ErrOffForShares) {
+		name := string(cmp.Or(run.AccountLogin, domain.DefaultLogin))
+		if l, ok := s.loginRow(ctx, run.Account(), run.Harness); ok {
+			name = l.Name
+		}
+		m.offLogin = s.memberName(ctx, run.AccountMember()) + " turned use for shares off for login " + name
+	}
 	if !movable {
 		cause := "the session cannot move to another account now"
 		if paused {
 			cause = "the session is paused"
 		}
-		s.stopRevoked(ctx, entry, revokeMove.cannotContinue(s.memberName(ctx, run.AccountMember()), cause))
+		s.stopRevoked(ctx, entry, m.cannotContinue(s.memberName(ctx, run.AccountMember()), cause))
 		return
 	}
-	outcome, reason := s.moveAccount(ctx, entry, revokeMove)
+	outcome, reason := s.moveAccount(ctx, entry, m)
 	switch outcome {
 	case usageContinued, usageShutdown:
 		return

@@ -544,23 +544,30 @@ func ResolveRunLogin(ctx context.Context, st store.Store, actor domain.MemberID,
 // switch governs which login is chosen next, not a session already on it
 // or a move already committed to it.
 func ResolveLoginShared(ctx context.Context, st store.Store, actor domain.MemberID, login domain.Account, harness string, workspaces []domain.WorkspaceID) error {
-	if _, err := ResolveLaunchAccountIn(ctx, st, actor, string(login.Member), workspaces); err != nil {
+	if _, err := ResolveLaunchAccountIn(ctx, st, actor, string(login.Member), workspaces); err != nil || actor == login.Member {
 		return err
 	}
-	if actor == login.Member {
-		return nil
-	}
+	return LoginShared(ctx, st, login, harness)
+}
+
+// LoginShared refuses login for a member who does not own it unless its
+// owner left it on for shares, wrapping ErrOffForShares when they turned it
+// off. A member who keeps no login rows has only the default login, which
+// is on for shares.
+func LoginShared(ctx context.Context, st store.Store, login domain.Account, harness string) error {
 	logins, err := st.ListAgentLogins(ctx, login.Member, harness)
 	if err != nil || len(logins) == 0 {
 		return err
 	}
 	id := cmp.Or(login.Login, domain.DefaultLogin)
-	for _, l := range logins {
-		if l.ID == id && l.Shared {
-			return nil
-		}
+	i := slices.IndexFunc(logins, func(l domain.AgentLogin) bool { return l.ID == id })
+	switch {
+	case i < 0:
+		return fmt.Errorf("%w: login %s of this account is not shared with you", permissions.ErrDenied, id)
+	case !logins[i].Shared:
+		return fmt.Errorf("%w: login %s of this account is not shared with you: %w", permissions.ErrDenied, id, ErrOffForShares)
 	}
-	return fmt.Errorf("%w: login %s of this account is not shared with you", permissions.ErrDenied, id)
+	return nil
 }
 
 // runOutFor is how long a login whose usage cannot be read is passed over
@@ -608,7 +615,7 @@ func ResolveLoginUse(ctx context.Context, st store.Store, actor domain.MemberID,
 	case i < 0:
 		return fmt.Errorf("%w: login %s of this account is not available to you", permissions.ErrDenied, id)
 	case !logins[i].Shared:
-		return fmt.Errorf("%w: login %s of this account is not available to you: %w", permissions.ErrDenied, id, errOffForShares)
+		return fmt.Errorf("%w: login %s of this account is not available to you: %w", permissions.ErrDenied, id, ErrOffForShares)
 	case !logins[i].Automatic:
 		return fmt.Errorf("%w: login %s of this account is not available to you: %w", permissions.ErrDenied, id, errAutomaticOff)
 	}
@@ -616,7 +623,8 @@ func ResolveLoginUse(ctx context.Context, st store.Store, actor domain.MemberID,
 }
 
 var (
-	errOffForShares = errors.New("its owner turned it off for shares")
+	// ErrOffForShares is a login its owner turned off for shares.
+	ErrOffForShares = errors.New("its owner turned it off for shares")
 	errAutomaticOff = errors.New("its owner turned it automatic off, so only they start sessions on it")
 )
 
@@ -637,7 +645,7 @@ func ResolveRunRelaunch(ctx context.Context, st store.Store, actor domain.Member
 	}
 	for _, member := range []domain.MemberID{actor, run.MemberID, run.HomeMember()} {
 		err := ResolveLoginUse(ctx, st, member, account, run.Harness, workspaces)
-		if errors.Is(err, errOffForShares) || errors.Is(err, errAutomaticOff) {
+		if errors.Is(err, ErrOffForShares) || errors.Is(err, errAutomaticOff) {
 			return fmt.Errorf("%w; a kept session cannot change login, so start a new session, or ask the login's owner to turn it on again", err)
 		}
 		if err != nil {
