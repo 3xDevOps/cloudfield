@@ -147,6 +147,28 @@ describe('a signed-in edge that says its address is retiring', () => {
     await vi.waitFor(() => expect(noticeText()).not.toBeNull(), { timeout: 5000 })
   })
 
+  it('finishes a sign-in for a claim that spells its edge differently from the gateway', async () => {
+    vi.spyOn(window, 'open').mockReturnValue(null)
+    const claim = `aether://claim?edge=${encodeURIComponent('https://Old.example.test/')}&server=${serverEdge.server_id}#abcdefghijklmnop`
+    const login = { edge, signin_origin: edge, user_code: 'WDJB-MJHT', verification_uri: `${edge}/device` }
+    let done = false
+    const client = fakeApi({
+      localEdgeStatus: vi.fn(async (): Promise<EdgeStatus> =>
+        done
+          ? { edges: [{ edge, account, retiring: { state: 'retiring', replacement: next, known: false } }], login: { ...login, state: 'signed_in', account } }
+          : { edges: [] },
+      ),
+      localEdgeLogin: vi.fn(async () => ({ ...login, state: 'pending' as const })),
+      localEdgeServers: vi.fn(async () => ({ edge, servers: [] })),
+    })
+    render(<EdgeSignIn client={client} claim={claim} onHand={vi.fn()} onLinked={vi.fn()} onSignedOut={vi.fn()} />)
+    fireEvent.click(await screen.findByRole('button', { name: 'Sign in with GitHub' }))
+    expect(await screen.findByText('WDJB-MJHT')).toBeDefined()
+    done = true
+    await vi.waitFor(() => expect(noticeText()).not.toBeNull(), { timeout: 5000 })
+    expect(screen.getByText((_, el) => el?.tagName === 'P' && /^Signed in to old\.example\.test as/.test(el.textContent ?? ''))).toBeDefined()
+  })
+
   it('finds a sign-in at the new address while a handed claim names the old one', async () => {
     const claim = `aether://claim?edge=${encodeURIComponent(edge)}&server=${serverEdge.server_id}#abcdefghijklmnop`
     const client = fakeApi({

@@ -111,7 +111,16 @@ function useEdgeSignIn(client: Api, edge?: string): SignIn {
               setError(null)
               const row = { edge: login.edge, account: login.account }
               const rows = status.edges.some((e) => e.edge === login.edge && e.account) ? status.edges : [...status.edges, row]
-              setPhase(signedInPhase({ ...status, edges: rows }, edge, login.edge)!)
+              // The gateway's own spelling of the edge, not a handed claim's.
+              const only = edge === undefined ? undefined : login.edge
+              setPhase(
+                signedInPhase({ ...status, edges: rows }, only, login.edge) ?? {
+                  name: 'signed-in',
+                  edges: [row],
+                  all: [row],
+                  chosen: login.edge,
+                },
+              )
             } else if (login.state === 'failed') {
               setError(login.error ?? 'sign in failed')
               setPhase({ name: 'signed-out' })
