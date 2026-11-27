@@ -292,11 +292,20 @@ Sign-in works as in step 5. Agent names: `claude`, `codex`, `opencode`, `pi`,
 ```sh
 cloudfield sessions --needs-you
 cloudfield sessions <session-id> --json
-cloudfield wait <session-id> --timeout 30m
+cloudfield wait <session-id> [<session-id>...] --timeout 30m
 cloudfield logs <session-id>
 cloudfield messages <session-id> --json
 cloudfield message <session-id> "<reply>"
 ```
+
+Given several session ids, `cloudfield wait` returns when the first of them
+would end a wait on it alone, prints that session and exits with its code;
+when more than one would, the first in the order given. A session already in
+such a state (finished, failed, needs you, parked or a broken wait) ends the
+wait at once every time, so leave it out to wait on the rest. It reads the
+sessions in the order given and stops at the one that ends the wait, so an
+unknown id after that one is not reported. On timeout it prints every session,
+and with `--json` nothing.
 
 `cloudfield wait` exits 0 when the session finished, 1 when it failed, 3 when it needs
 you, 4 when it is parked with nothing pending (its turn ended without a
