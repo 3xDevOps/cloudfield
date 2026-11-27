@@ -182,13 +182,47 @@ func TestFloorColumnAdded(t *testing.T) {
 	}
 }
 
-var additiveStatement = regexp.MustCompile(`(?is)^(CREATE TABLE|CREATE INDEX|ALTER TABLE \w+ ADD COLUMN)\s`)
+var (
+	additiveStatement = regexp.MustCompile(`(?is)^(CREATE TABLE|CREATE INDEX|ALTER TABLE \w+ ADD COLUMN)\s`)
+	createdTable      = regexp.MustCompile(`(?is)^CREATE TABLE (\w+)`)
+	writtenTable      = regexp.MustCompile(`(?is)^(?:INSERT INTO|UPDATE) (\w+)\s`)
+	trigger           = regexp.MustCompile(`(?is)^CREATE TRIGGER \w+ AFTER (?:INSERT|UPDATE) ON \w+ BEGIN(.*)END$`)
+)
+
+// statements splits a step's SQL at semicolons, keeping a trigger's body
+// with its CREATE TRIGGER.
+func statements(sql string) []string {
+	var out []string
+	for q := range strings.SplitSeq(sql, ";") {
+		q = strings.TrimSpace(q)
+		if n := len(out); n > 0 && strings.HasPrefix(strings.ToUpper(out[n-1]), "CREATE TRIGGER") && !strings.HasSuffix(strings.ToUpper(out[n-1]), "END") {
+			out[n-1] += ";\n" + q
+		} else if q != "" {
+			out = append(out, q)
+		}
+	}
+	return out
+}
 
 // additive reports whether a statement keeps a database usable by a binary
-// that does not know it: a new table or index, or a column that is
-// nullable or has a default.
-func additive(q string) bool {
-	q = strings.TrimSpace(q)
+// that does not know it: a new table or index, a column that is nullable
+// or has a default, or a write, also by a trigger, only to a table the
+// same step creates. It adds the tables q creates to created.
+func additive(q string, created map[string]bool) bool {
+	if m := createdTable.FindStringSubmatch(q); m != nil {
+		created[m[1]] = true
+	}
+	if m := writtenTable.FindStringSubmatch(q); m != nil {
+		return created[m[1]]
+	}
+	if m := trigger.FindStringSubmatch(q); m != nil {
+		for _, body := range statements(m[1]) {
+			if w := writtenTable.FindStringSubmatch(body); w == nil || !created[w[1]] {
+				return false
+			}
+		}
+		return true
+	}
 	if !additiveStatement.MatchString(q) {
 		return false
 	}
@@ -206,8 +240,9 @@ func TestFloorKeptOnlyByAdditiveSteps(t *testing.T) {
 		if m.floor == v {
 			continue
 		}
-		for q := range strings.SplitSeq(m.sql, ";") {
-			if strings.TrimSpace(q) != "" && !additive(q) {
+		created := map[string]bool{}
+		for _, q := range statements(m.sql) {
+			if !additive(q, created) {
 				t.Errorf("migration %d keeps floor %d but is not additive: %s", v, m.floor, q)
 			}
 		}
@@ -221,8 +256,13 @@ func TestFloorKeptOnlyByAdditiveSteps(t *testing.T) {
 		"CREATE UNIQUE INDEX i ON t(a)":                       false,
 		"DROP TABLE t":                                        false,
 		"UPDATE t SET a = ''":                                 false,
+		"INSERT INTO t SELECT a FROM u":                       false,
+		"INSERT INTO n SELECT a FROM u":                       true,
+		"CREATE TRIGGER g AFTER INSERT ON u BEGIN INSERT INTO n VALUES (NEW.a);\nUPDATE n SET a = NEW.a; END": true,
+		"CREATE TRIGGER g AFTER INSERT ON u BEGIN INSERT INTO n VALUES (NEW.a);\nUPDATE u SET a = NEW.a; END": false,
+		"CREATE TRIGGER g AFTER INSERT ON u BEGIN DELETE FROM n; END":                                         false,
 	} {
-		if additive(q) != want {
+		if additive(q, map[string]bool{"n": true}) != want {
 			t.Errorf("additive(%q) = %v, want %v", q, !want, want)
 		}
 	}

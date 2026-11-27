@@ -771,3 +771,32 @@ func TestPairingsKeepEarlierSigninOrigins(t *testing.T) {
 		t.Errorf("Pairings = %v, %v; want %v", got, err, want)
 	}
 }
+
+// TestPairingHistoryAcrossUpgrade keeps a pairing that only origin_pairs
+// held when the database is migrated to origin_pair_history, and one that
+// a binary without it writes afterwards, as after a rollback.
+func TestPairingHistoryAcrossUpgrade(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "edge.db")
+	old := openSteps(t, path, migrations[:2])
+	if _, err := old.db.Exec(`INSERT INTO origin_pairs (relay_origin, signin_origin, served_at) VALUES ('https://edge.example.test', 'https://auth1.example.test', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	closeStore(t, old)
+	s := openSteps(t, path, migrations)
+	if err := s.RecordPairs(context.Background(), map[string]string{"https://edge.example.test": "https://auth2.example.test"}, time.Unix(1_800_000_000, 0)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`INSERT INTO origin_pairs (relay_origin, signin_origin, served_at) VALUES ('https://edge.example.test', 'https://auth3.example.test', 2)
+		ON CONFLICT (relay_origin) DO UPDATE SET signin_origin = excluded.signin_origin, served_at = excluded.served_at`); err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.Pairings(context.Background())
+	want := []Pairing{
+		{"https://edge.example.test", "https://auth1.example.test"},
+		{"https://edge.example.test", "https://auth2.example.test"},
+		{"https://edge.example.test", "https://auth3.example.test"},
+	}
+	if err != nil || !slices.Equal(got, want) {
+		t.Errorf("Pairings = %v, %v; want %v", got, err, want)
+	}
+}

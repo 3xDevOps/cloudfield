@@ -296,6 +296,27 @@ CREATE TABLE origin_pair_history (
 	served_at       INTEGER NOT NULL,
 	PRIMARY KEY (relay_origin, signin_origin)
 ) WITHOUT ROWID;
+
+INSERT INTO origin_pair_history (relay_origin, signin_origin, first_served_at, served_at)
+	SELECT relay_origin, signin_origin, served_at, served_at FROM origin_pairs;
+
+CREATE TRIGGER origin_pair_history_insert AFTER INSERT ON origin_pairs BEGIN
+	UPDATE origin_pair_history SET served_at = NEW.served_at
+		WHERE relay_origin = NEW.relay_origin AND signin_origin = NEW.signin_origin;
+	INSERT INTO origin_pair_history (relay_origin, signin_origin, first_served_at, served_at)
+		SELECT NEW.relay_origin, NEW.signin_origin, NEW.served_at, NEW.served_at
+		WHERE NOT EXISTS (SELECT 1 FROM origin_pair_history
+			WHERE relay_origin = NEW.relay_origin AND signin_origin = NEW.signin_origin);
+END;
+
+CREATE TRIGGER origin_pair_history_update AFTER UPDATE ON origin_pairs BEGIN
+	UPDATE origin_pair_history SET served_at = NEW.served_at
+		WHERE relay_origin = NEW.relay_origin AND signin_origin = NEW.signin_origin;
+	INSERT INTO origin_pair_history (relay_origin, signin_origin, first_served_at, served_at)
+		SELECT NEW.relay_origin, NEW.signin_origin, NEW.served_at, NEW.served_at
+		WHERE NOT EXISTS (SELECT 1 FROM origin_pair_history
+			WHERE relay_origin = NEW.relay_origin AND signin_origin = NEW.signin_origin);
+END;
 `}}
 
 // Schema is a database's schema version and the compat floor recorded

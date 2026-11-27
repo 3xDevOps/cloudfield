@@ -24,7 +24,8 @@ const recordingGap = 10 * time.Minute
 // RecordPairs records, as of now, that the edge serves each relay origin
 // with the sign-in origin it names and records origins. A relay origin
 // keeps its row after the edge stops serving it, and every pairing ever
-// recorded stays in origin_pair_history (Pairings). The recording period
+// written to origin_pairs, by any binary, stays in origin_pair_history
+// (Pairings). The recording period
 // goes on when the edge's last recording run stopped cleanly
 // (StopRecording) within recordingGap, and starts at now otherwise.
 func (s *Store) RecordPairs(ctx context.Context, relayToSignin map[string]string, now time.Time) error {
@@ -38,11 +39,6 @@ func (s *Store) RecordPairs(ctx context.Context, relayToSignin map[string]string
 			ON CONFLICT (relay_origin) DO UPDATE SET signin_origin = excluded.signin_origin, served_at = excluded.served_at`,
 			relay, signin, unix(now)); err != nil {
 			return fmt.Errorf("edgestore: record origin pair %s %s: %w", signin, relay, err)
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO origin_pair_history (relay_origin, signin_origin, first_served_at, served_at) VALUES (?, ?, ?, ?)
-			ON CONFLICT (relay_origin, signin_origin) DO UPDATE SET served_at = excluded.served_at`,
-			relay, signin, unix(now), unix(now)); err != nil {
-			return fmt.Errorf("edgestore: record origin pair %s %s: history: %w", signin, relay, err)
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO origin_recording (id, since, started_at) VALUES (1, ?, ?)
@@ -159,8 +155,8 @@ type Pairing struct {
 }
 
 // Pairings lists every pairing the edge recorded serving, current and
-// earlier. origin_pairs holds the current ones, also those recorded before
-// origin_pair_history existed or by a binary that does not know it.
+// earlier. origin_pairs also holds a pairing written to a database
+// restored from before origin_pair_history existed.
 func (s *Store) Pairings(ctx context.Context) ([]Pairing, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT relay_origin, signin_origin FROM origin_pair_history
 		UNION SELECT relay_origin, signin_origin FROM origin_pairs ORDER BY 1, 2`)
