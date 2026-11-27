@@ -224,7 +224,7 @@ function StateLine({ run, agentName, narrow, compact, controls, chip }: { run: R
         )}
       </div>
       {pinned && !(compact && payer) && (
-        <span className="min-w-0 truncate text-ui-sm text-muted" title={account}>{shortAccount}</span>
+        <span className="max-w-1/2 shrink-0 truncate text-ui-sm text-muted" title={account}>{shortAccount}</span>
       )}
       {/* What the session costs stays when every other part has gone. */}
       {payer && <PerUseBadge className="shrink-0" payer={compact ? payer.payer : undefined} title={payer.title} />}
