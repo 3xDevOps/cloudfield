@@ -608,7 +608,8 @@ function ServerPicker({
   account: EdgeAccount
   /** The signed-in edge's retiring notice, shown under the line that names it. */
   notice: ReactNode
-  /** The edge address is retired: its refusals do not change on a retry. */
+  /** The edge address is retired: its refusals do not change on a retry,
+   * and a server list it gave before is stale. */
   retired: boolean
   claim?: string
   onHand: (link: HandedLink) => void
@@ -696,13 +697,13 @@ function ServerPicker({
         </div>
       )}
       {notice}
-      {servers?.length === 0 && (
+      {!retired && servers?.length === 0 && (
         <p className="text-muted">
           Your account reaches no servers yet. Paste the claim link <span className="font-code">aether-server setup</span>{' '}
           printed, or the invite link an admin sent {account.login ?? account.email ?? 'your account'}.
         </p>
       )}
-      {servers && servers.length > 0 && (
+      {!retired && servers && servers.length > 0 && (
         <InsetList aria-label="Your servers">
           {servers.map((server) => (
             <InsetListItem key={server.id}>
@@ -726,7 +727,7 @@ function ServerPicker({
           ))}
         </InsetList>
       )}
-      {confirming && (
+      {!retired && confirming && (
         <ConfirmPin
           key={confirming.id}
           client={client}
