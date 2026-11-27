@@ -677,8 +677,9 @@ session orders them **Terminal**, **Chat**, **Changes**. **Changes** carries
 the muted `+N −M` of the latest snapshot, unless it was truncated, and drops
 it below 400px while a fourth tab shows. The pull request, with its checks,
 feedback and **Watch PR**, would crowd the tabs, so it sits in a 44px row of
-its own under them on the Changes tab only. A session on an added login, or
-moved to another account by a fallback, has the account on a line of its own
+its own under them on the Changes tab only. A session on an added login, on
+a default login billed per use, or moved to another account by a fallback,
+has the account on a line of its own
 under the title (from a server with the `logins` feature, or for a run that
 carries a login; a server without them shows the phone what it did before), wrapping rather than cut: "On your account, login console"
 with a **Billed per use** badge, whose tooltip and accessible name say
@@ -3382,7 +3383,9 @@ protected session. The row holds, from the left:
   `<name>`'s account, login `<login>`", or "On your account, …" to its
   owner, when it is on an added login (`account_login_name`, or the
   `account_login` id once that login is removed, as the activity line
-  names it). It truncates only past half the row, with the full line as
+  names it), or "login default" when its default login is billed per use
+  (an API key, a Console profile, or a key that `~/.claude/settings.json`
+  signs in with). It truncates only past half the row, with the full line as
   its tooltip. Under 560px it stays only where it says who pays: on
   another member's account, or on a login billed per use; below 800px a
   teammate's reads "`<name>`'s login `<login>`". A session on a login
@@ -5777,7 +5780,7 @@ and applies again once there is room. Sections (`details.tsx`):
   cannot re-add the row, and a retried send that turns out to target an
   already-deleted note drops its own sticky too, rather than leaving an orphan.
 - **Details**: the task, Owner, Agent account (when it is someone else's),
-  Login (an added one, with the **Billed per use** badge whose tooltip names
+  Login (an added one, or "default" for a default login billed per use, with the **Billed per use** badge whose tooltip names
   the account and login that pay, since a session does not know the
   login's organisation), Agent and mode, Branch, Created, Changed, Last commit, In control,
   Watching, Sandbox ("Starting", "Running", "Stopped, kept for reopening"

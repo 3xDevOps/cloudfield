@@ -17,12 +17,12 @@ export function useRunAccountOwner(run: Run): string | null {
   return own ? null : owner
 }
 
-/** The account a run spends, when it is worth saying: an added login, or a fallback to another account. */
+/** The account a run spends, when it is worth saying: an added login, a default login billed per use, or a fallback to another account. */
 export function useRunAccountWords(run: Run): string | null {
   const owner = useRunAccountOwner(run)
   const whose = owner === null ? 'your' : `${owner}'s`
   const fallback = run.requested_account_member_id ? ' (fallback)' : ''
-  const login = runLoginName(run)
+  const login = runLoginName(run) || (run.account_login_per_use ? 'default' : '')
   if (login) return `On ${whose} account, login ${login}${fallback}`
   return fallback ? `On ${whose} account${fallback}` : null
 }

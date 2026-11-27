@@ -206,6 +206,18 @@ describe('run frame', () => {
     expect(screen.getByRole('banner').textContent).not.toContain('console')
   })
 
+  it('names and badges a default login billed per use, on a wide header and on a phone', async () => {
+    const view = open({ account_member_id: alice.id, account_login_per_use: true })
+    await waitFor(() => expect(screen.getByRole('banner').textContent).toContain('On your account, login default'))
+    expect(within(screen.getByRole('banner')).getByTitle('Billed per use to your account').dataset.slot).toBe('badge')
+    view.unmount()
+
+    atViewport(360, { pointer: 'coarse' })
+    open({ account_member_id: alice.id, account_login_per_use: true })
+    const line = (await screen.findByText(/^On your account, login default/)).closest('p')!
+    expect(within(line).getByTitle('Billed per use to your account').dataset.slot).toBe('badge')
+  })
+
   it('adds no phone account line for a fallback from a server without logins, as before them', async () => {
     atViewport(360, { pointer: 'coarse' })
     const view = open({ account_member_id: bob.id, requested_account_member_id: alice.id })
