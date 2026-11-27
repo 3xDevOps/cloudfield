@@ -509,6 +509,17 @@ func readSecretFile(path string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
+// sameDir reports whether a and b name one directory: the same path, or
+// two paths of one existing directory.
+func sameDir(a, b string) bool {
+	if filepath.Clean(a) == filepath.Clean(b) {
+		return true
+	}
+	ai, errA := os.Stat(a)
+	bi, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(ai, bi)
+}
+
 // olderImageServes refuses a retired host that an edge image older than
 // v0.8.7 would serve: such an image reads the origins only from the
 // AETHER_EDGE_ names, so one that a CLOUDFIELD_EDGE_ name shadows here is
@@ -524,10 +535,11 @@ func olderImageServes(o options, getenv func(string) string) error {
 	if len(retired) == 0 {
 		return nil
 	}
-	if older := dataDirDefault(getenv); !o.flags["data"] && filepath.Clean(older) != filepath.Clean(o.dataDir) {
+	if older := dataDirDefault(getenv); !o.flags["data"] && !sameDir(older, o.dataDir) {
 		return fmt.Errorf("this edge uses the data directory %s from CLOUDFIELD_EDGE_DATA, but an edge image older than v0.8.7 reads only AETHER_EDGE_DATA "+
-			"and would open %s, whose database keeps the sign-ins --retired-pairs deletes, after a rollback. Set AETHER_EDGE_DATA to %s, or remove CLOUDFIELD_EDGE_DATA",
-			o.dataDir, older, o.dataDir)
+			"and would open %s, whose database keeps the sign-ins --retired-pairs deletes, after a rollback. Set AETHER_EDGE_DATA to %s, "+
+			"or pass --data %s on the command line, which both images read",
+			o.dataDir, older, o.dataDir, o.dataDir)
 	}
 	for _, v := range []struct{ flag, name string }{
 		{"signin-origin", "AETHER_EDGE_SIGNIN_ORIGIN"}, {"relay-origin", "AETHER_EDGE_RELAY_ORIGIN"}, {"origin-pairs", "AETHER_EDGE_ORIGIN_PAIRS"},

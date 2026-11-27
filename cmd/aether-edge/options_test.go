@@ -657,6 +657,13 @@ func TestOlderImageServes(t *testing.T) {
 	if err := os.WriteFile(secret, []byte("fake-secret\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	data, alias := filepath.Join(dir, "data"), filepath.Join(dir, "alias")
+	if err := os.Mkdir(data, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(data, alias); err != nil {
+		t.Fatal(err)
+	}
 	newer := map[string]string{
 		"CLOUDFIELD_EDGE_SIGNIN_ORIGIN": "https://auth2.example.net", "CLOUDFIELD_EDGE_RELAY_ORIGIN": "https://edge2.example.net",
 		"AETHER_EDGE_RETIRED_PAIRS":    "https://auth.example.test https://edge.example.test https://edge2.example.net",
@@ -679,11 +686,13 @@ func TestOlderImageServes(t *testing.T) {
 		{"aligned", map[string]string{"AETHER_EDGE_SIGNIN_ORIGIN": "https://auth2.example.net", "AETHER_EDGE_RELAY_ORIGIN": "https://edge2.example.net"}, nil, ""},
 		{"stale data directory", map[string]string{"CLOUDFIELD_EDGE_DATA": "/srv/edge", "AETHER_EDGE_DATA": "/srv/old-edge"}, nil,
 			"this edge uses the data directory /srv/edge from CLOUDFIELD_EDGE_DATA, but an edge image older than v0.8.7 reads only AETHER_EDGE_DATA " +
-				"and would open /srv/old-edge, whose database keeps the sign-ins --retired-pairs deletes, after a rollback. Set AETHER_EDGE_DATA to /srv/edge, or remove CLOUDFIELD_EDGE_DATA"},
+				"and would open /srv/old-edge, whose database keeps the sign-ins --retired-pairs deletes, after a rollback. Set AETHER_EDGE_DATA to /srv/edge, " +
+				"or pass --data /srv/edge on the command line, which both images read"},
 		{"data directory under the new name only", map[string]string{"CLOUDFIELD_EDGE_DATA": "/srv/edge"}, nil,
 			"this edge uses the data directory /srv/edge from CLOUDFIELD_EDGE_DATA, but an edge image older than v0.8.7 reads only AETHER_EDGE_DATA and would open /var/lib/aether-edge"},
 		{"data directory aligned", map[string]string{"CLOUDFIELD_EDGE_DATA": "/srv/edge", "AETHER_EDGE_DATA": "/srv/edge/"}, nil, ""},
 		{"data directory flag", map[string]string{"CLOUDFIELD_EDGE_DATA": "/srv/edge"}, []string{"--data", "/srv/edge"}, ""},
+		{"data directory under another path", map[string]string{"CLOUDFIELD_EDGE_DATA": data, "AETHER_EDGE_DATA": alias}, nil, ""},
 		{"flag wins in both images", map[string]string{"AETHER_EDGE_SIGNIN_ORIGIN": "https://auth.example.test"},
 			[]string{"--signin-origin", "https://auth2.example.net"}, ""},
 	} {

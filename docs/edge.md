@@ -1227,7 +1227,9 @@ entry and the fix, when:
 - `CLOUDFIELD_EDGE_DATA` names another data directory than
   `AETHER_EDGE_DATA` (or, with that unset, `/var/lib/aether-edge`) and
   `--data` is not a flag: an image older than v0.8.7 would open the other
-  directory's database, which keeps the deleted sign-ins, after a rollback;
+  directory's database, which keeps the deleted sign-ins, after a rollback.
+  Set `AETHER_EDGE_DATA` to the directory in use, or pass `--data` on the
+  command line; two paths of one existing directory pass;
 - the edge last recorded the pair's origins in the other roles, or recorded its
   relay origin only with other sign-in origins;
 - rows without a recorded origin exist and the edge has never recorded
