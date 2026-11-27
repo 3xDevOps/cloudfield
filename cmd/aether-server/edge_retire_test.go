@@ -187,6 +187,10 @@ func TestApplyMoveFromARetiringOrRetiredAddress(t *testing.T) {
 		{name: "the same key pinned again since", moved: edgeagent.Moved{To: to},
 			meanwhile: func(dir, _ string) error { return edgeagent.OpenState(dir).Pin(pub) },
 			err:       "the pinned edge key changed from " + edgeproto.EdgeKeyFingerprint(pub) + " while this ran; nothing changed, run it again"},
+		{name: "edge-url given by a flag", moved: edgeagent.Moved{To: to},
+			meanwhile: func(dir, path string) error {
+				return serversetup.WriteConfig(path, map[string]string{"data-dir": dir})
+			}},
 		{name: "the edge turned off since", moved: edgeagent.Moved{To: to},
 			meanwhile: func(dir, path string) error {
 				return serversetup.WriteConfig(path, map[string]string{"data-dir": dir, "edge-url": ""})
@@ -201,10 +205,6 @@ func TestApplyMoveFromARetiringOrRetiredAddress(t *testing.T) {
 		if err := state.Pin(pub); err != nil {
 			t.Fatal(err)
 		}
-		before, err := serversetup.Load(path)
-		if err != nil {
-			t.Fatal(err)
-		}
 		held, err := state.HoldPin()
 		if err != nil {
 			t.Fatal(err)
@@ -215,12 +215,13 @@ func TestApplyMoveFromARetiringOrRetiredAddress(t *testing.T) {
 				t.Fatal(err)
 			}
 			if tc.err == "" {
-				tc.err = path + ` changed while edge move ran: edge-url is now "", was "` + from + `"; nothing changed, run it again`
+				tc.err = path + ` gives edge-url "" and data-dir "` + dir + `", but edge move ran with "` + from + `" and "` + dir +
+					`": the file changed since, or a flag overrode it; nothing changed, run it again without --edge-url or --data-dir`
 				wantURL = ""
 			}
 		}
 		var out bytes.Buffer
-		err = applyMove(&out, dir, from, path, before, held, tc.moved)
+		err = applyMove(&out, dir, from, path, held, tc.moved)
 		held.Close()
 		want := tc.want
 		if tc.err == "" {

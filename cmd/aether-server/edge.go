@@ -429,10 +429,6 @@ func edgeMove(w io.Writer, dataDir, edgeURL string, policy edgeproto.AccessPolic
 	if err != nil {
 		return err
 	}
-	before, err := serversetup.Load(configPath)
-	if err != nil {
-		return err
-	}
 	held, err := edgeagent.OpenState(dataDir).HoldPin()
 	if err != nil {
 		return err
@@ -442,7 +438,7 @@ func edgeMove(w io.Writer, dataDir, edgeURL string, policy edgeproto.AccessPolic
 	if err != nil {
 		return err
 	}
-	return applyMove(w, dataDir, edgeURL, configPath, before, held, moved)
+	return applyMove(w, dataDir, edgeURL, configPath, held, moved)
 }
 
 // serverCommands spell cloudfield-server and the restart as an admin
@@ -456,22 +452,24 @@ func serverCommands(configPath string) edgeagent.Commands {
 
 // applyMove writes m.To, the address edgeagent.Agent.Move checked, as
 // edge-url while held is still the pin in place and the config file still
-// names the edge-url and data-dir it had, before, when the move began. It
-// then says what it did, how to apply it and, unless edgeURL is retired
-// or retiring, how to undo it.
-func applyMove(w io.Writer, dataDir, edgeURL, configPath string, before map[string]string, held *edgeagent.HeldPin, m edgeagent.Moved) error {
+// gives the edge-url and data-dir the move ran with. It then says what it
+// did, how to apply it and, unless edgeURL is retired or retiring, how to
+// undo it.
+func applyMove(w io.Writer, dataDir, edgeURL, configPath string, held *edgeagent.HeldPin, m edgeagent.Moved) error {
 	var written bytes.Buffer
 	err := edgeagent.OpenState(dataDir).WhilePinned(held, func() error {
-		now, err := serversetup.Load(configPath)
-		if err != nil {
-			return err
-		}
-		for _, key := range []string{"edge-url", "data-dir"} {
-			if now[key] != before[key] {
-				return fmt.Errorf("%s changed while edge move ran: %s is now %q, was %q; nothing changed, run it again", configPath, key, now[key], before[key])
+		return configSetIf(&written, configPath, "edge-url", m.To, func(values map[string]string) error {
+			fs := flag.NewFlagSet("config", flag.ContinueOnError)
+			o := serveFlags(fs)
+			if _, err := serversetup.Apply(fs, values); err != nil {
+				return err
 			}
-		}
-		return configSet(&written, configPath, "edge-url", m.To)
+			if string(*o.edgeURL) != edgeURL || *o.dataDir != dataDir {
+				return fmt.Errorf("%s gives edge-url %q and data-dir %q, but edge move ran with %q and %q: the file changed since, or a flag overrode it; "+
+					"nothing changed, run it again without --edge-url or --data-dir", configPath, string(*o.edgeURL), *o.dataDir, edgeURL, dataDir)
+			}
+			return nil
+		})
 	})
 	if err != nil {
 		return err

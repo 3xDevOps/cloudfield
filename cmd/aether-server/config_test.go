@@ -3,10 +3,12 @@ package main
 import (
 	"bytes"
 	"flag"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/server"
 	"github.com/3xDevOps/cloudfield/internal/serversetup"
@@ -350,5 +352,42 @@ func TestConfigEditRejectsAnEditThatBreaksTheFile(t *testing.T) {
 	err := configEdit(&out, path)
 	if err == nil || !strings.Contains(err.Error(), "min-free-disc") {
 		t.Fatalf("err = %v, want it to name the unknown key", err)
+	}
+}
+
+// A config rewrite waits for one in progress, so neither loses the
+// other's change, and edge move's compare and write is one of them.
+func TestConfigRewritesTakeTurns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server.conf")
+	if err := serversetup.WriteConfig(path, map[string]string{"edge-url": "https://edge-old.example.test"}); err != nil {
+		t.Fatal(err)
+	}
+	inside, release, done := make(chan struct{}), make(chan struct{}), make(chan error, 1)
+	go func() {
+		done <- updateConfig(path, func(values map[string]string) error {
+			close(inside)
+			<-release
+			values["edge-url"] = "https://edge-new.example.test"
+			return nil
+		})
+	}()
+	<-inside
+	set := make(chan error, 1)
+	go func() { set <- configSet(io.Discard, path, "edge-access", "account") }()
+	select {
+	case err := <-set:
+		t.Fatalf("config set ran while another rewrite held the file: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-set; err != nil {
+		t.Fatal(err)
+	}
+	got, err := serversetup.Load(path)
+	if err != nil || got["edge-url"] != "https://edge-new.example.test" || got["edge-access"] != "account" {
+		t.Fatalf("config after both rewrites: %v, %v", got, err)
 	}
 }

@@ -272,16 +272,12 @@ func TestApplyMoveAndThePendingRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	var out bytes.Buffer
-	before, lerr := serversetup.Load(path)
-	if lerr != nil {
-		t.Fatal(lerr)
-	}
 	held, herr := edgeagent.OpenState(dir).HoldPin()
 	if herr != nil {
 		t.Fatal(herr)
 	}
 	defer held.Close()
-	if err := applyMove(&out, dir, from, path, before, held, edgeagent.Moved{To: to}); err != nil {
+	if err := applyMove(&out, dir, from, path, held, edgeagent.Moved{To: to}); err != nil {
 		t.Fatal(err)
 	}
 	want := "enrolled at " + to + ", an address of the same edge (edge key " + edgeproto.EdgeKeyFingerprint(pub) + ", still pinned); " +

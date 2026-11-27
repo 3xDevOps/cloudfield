@@ -7,8 +7,10 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 
 	"github.com/3xDevOps/cloudfield/internal/server"
@@ -91,6 +93,12 @@ func configShow(w io.Writer, path string) error {
 // The key and value are validated against the real `serve` options, so the
 // file can never hold something the server would reject at startup.
 func configSet(w io.Writer, path, key, value string) error {
+	return configSetIf(w, path, key, value, nil)
+}
+
+// configSetIf is configSet once check, when set, accepts the values the
+// file holds under the lock updateConfig takes.
+func configSetIf(w io.Writer, path, key, value string, check func(values map[string]string) error) error {
 	fs := serveFlagSet()
 	if fs.Lookup(key) == nil {
 		return fmt.Errorf("unknown option %q (known: %s)", key, joinOptions())
@@ -98,19 +106,25 @@ func configSet(w io.Writer, path, key, value string) error {
 	if err := fs.Set(key, value); err != nil {
 		return fmt.Errorf("invalid value for %q: %w", key, err)
 	}
-	values, err := serversetup.Load(path)
-	if err != nil {
-		return err
-	}
-	was, ok := values[key]
-	if !ok {
-		was = "unset"
-		if def := fs.Lookup(key).DefValue; def != "" {
-			was += ", meaning " + def
+	var was string
+	err := updateConfig(path, func(values map[string]string) error {
+		if check != nil {
+			if err := check(values); err != nil {
+				return err
+			}
 		}
-	}
-	values[key] = value
-	if err := serversetup.WriteConfig(path, values); err != nil {
+		v, ok := values[key]
+		was = v
+		if !ok {
+			was = "unset"
+			if def := fs.Lookup(key).DefValue; def != "" {
+				was += ", meaning " + def
+			}
+		}
+		values[key] = value
+		return nil
+	})
+	if err != nil {
 		return err
 	}
 	_, _ = fmt.Fprintf(w, "%s: %s = %s (was %s)\n", path, key, value, was)
@@ -120,6 +134,33 @@ func configSet(w io.Writer, path, key, value string) error {
 	}
 	_, _ = fmt.Fprintf(w, "apply it with:\n  %s\n", apply)
 	return nil
+}
+
+// updateConfig rewrites the config file at path with change's edit of its
+// values. It holds an exclusive lock on the file's directory, which every
+// rewrite by this binary takes, so no other rewrite lands between its
+// read and its write.
+func updateConfig(path string, change func(values map[string]string) error) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create %s: %w", dir, err)
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer d.Close() //nolint:errcheck // read-only handle; closing releases the lock
+	if err = syscall.Flock(int(d.Fd()), syscall.LOCK_EX); err != nil {
+		return fmt.Errorf("lock %s: %w", dir, err)
+	}
+	values, err := serversetup.Load(path)
+	if err != nil {
+		return err
+	}
+	if err = change(values); err != nil {
+		return err
+	}
+	return serversetup.WriteConfig(path, values)
 }
 
 // configEdit opens the config file in the operator's editor, then reparses
