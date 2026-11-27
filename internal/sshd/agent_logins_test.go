@@ -306,7 +306,7 @@ func TestRemovingALoginInUseNamesTheOwnersSessionsAndCountsTheRest(t *testing.T)
 	_, perr := e.call(t, e.member.ID, protocol.MethodAgentLoginRemove, protocol.AgentLoginParams{Agent: "claude", LoginID: "lgn-work000000"})
 	own := []string{string(e.run.ID), "run-queuedchild"}
 	slices.Sort(own)
-	want := `login "work" is in use by your sessions ` + strings.Join(own, ", ") + ` (end them) and 1 of your teammates' sessions`
+	want := `login "work" is in use by your sessions ` + strings.Join(own, ", ") + ` (end them, or free the sandbox of one that has ended) and 1 of your teammates' sessions`
 	if perr == nil || perr.Code != protocol.CodeConflict || !strings.Contains(perr.Message, want) || !strings.Contains(perr.Message, "cloudfield account revoke <member-id>") || strings.Contains(perr.Message, "use for shares") {
 		t.Fatalf("removal of a login in use: %v; want %q and the revoke command", perr, want)
 	}
