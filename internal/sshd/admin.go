@@ -289,20 +289,24 @@ func (s *Server) memberRemove(ctx context.Context, member domain.MemberID, param
 				keyErr = s.cfg.Signing.Remove(id)
 			}
 			linearErr = s.disconnectLinear(id)
-			signInsEnded := true
+			loginsLeft := false
 			if s.cfg.LoginSignIns != nil {
 				if err := s.cfg.LoginSignIns.EndLoginSignIns(ctx, id); err != nil {
 					// The next start finds a sign-in's container through its
 					// directory, so that directory stays until then; the
 					// member's other logins go now.
 					slog.Warn("sshd: end the removed member's sign-ins; a sign-in's login is removed at the next start", "member", id, "error", err)
-					signInsEnded = false
-					if reconcileErr := s.cfg.LoginSignIns.ReconcileLogins(ctx, id); reconcileErr != nil {
-						slog.Warn("sshd: remove the removed member's logins; the next start removes them", "member", id, "error", reconcileErr)
-					}
+					loginsLeft = true
+				}
+				// Each login goes with its Docker volume; one whose volume
+				// stays keeps its directory, through which the next start
+				// finds and removes both.
+				if reconcileErr := s.cfg.LoginSignIns.ReconcileLogins(ctx, id); reconcileErr != nil {
+					slog.Warn("sshd: remove the removed member's logins; the next start removes them", "member", id, "error", reconcileErr)
+					loginsLeft = true
 				}
 			}
-			if s.cfg.Logins != nil && signInsEnded {
+			if s.cfg.Logins != nil && !loginsLeft {
 				if err := s.cfg.Logins.RemoveMember(id); err != nil {
 					slog.Warn("sshd: member logins cleanup failed", "member", id, "error", err)
 				}

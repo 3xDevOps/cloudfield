@@ -121,3 +121,45 @@ func TestCacheMetadataRefusesAFIFO(t *testing.T) {
 		t.Fatal("deleted data behind FIFO ownership metadata")
 	}
 }
+
+// Settings a session replaced with a FIFO or a device node are refused by
+// their type, before anything opens them.
+func TestClaudeSettingsRefuseAFIFO(t *testing.T) {
+	manager, home, _ := newLoginHomes(t)
+	if err := os.MkdirAll(filepath.Join(home, ".claude"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(home, ".claude", "settings.json")
+	if err := syscall.Mkfifo(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opened := make(chan struct{})
+	stop := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			// A write-only open of a FIFO succeeds only while a reader
+			// holds it open.
+			if fd, err := syscall.Open(path, syscall.O_WRONLY|syscall.O_NONBLOCK, 0); err == nil {
+				_ = syscall.Close(fd)
+				close(opened)
+				return
+			}
+		}
+	}()
+	for range 200 {
+		if _, err := manager.ClaudeSettings("owner"); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+			t.Fatalf("settings that are a FIFO: %v; want them refused", err)
+		}
+	}
+	close(stop)
+	select {
+	case <-opened:
+		t.Fatal("the server opened the FIFO to learn its type")
+	default:
+	}
+}

@@ -928,7 +928,7 @@ func TestRestartSettlesAnInterruptedAccountMove(t *testing.T) {
 			if err = e.sched.Close(); err != nil {
 				t.Fatal(err)
 			}
-			if _, err = e.db.SetRunAccount(t.Context(), run.ID, domain.AccountOf(e.owner.ID), usageLimitSegment, time.Now()); err != nil {
+			if _, err = e.db.SetRunAccount(t.Context(), run.ID, domain.AccountOf(e.owner.ID), false, usageLimitSegment, time.Now()); err != nil {
 				t.Fatal(err)
 			}
 			sc, err := e.sched.readSidecar(run.ID)
@@ -1483,5 +1483,103 @@ func TestNoFallbackReason(t *testing.T) {
 		if got := noFallbackReason("Ada", tc.harness, tc.measured, ada); got != "Usage limit reached on Ada's account; "+tc.want {
 			t.Errorf("%s %v: %q, want the reason to end %q", tc.harness, tc.measured, got, tc.want)
 		}
+	}
+}
+
+// A move records its target only while the run's members may still use
+// that login: Grace turning her default login off for shares after the move
+// chose it, while the old container goes, fails the move, and the run stays
+// recorded on the account it ran on. Turning it automatic off governs the
+// next choice, not the move in flight, which carries on.
+func TestMoveIsNotRecordedOnALoginTurnedOffMeanwhile(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name  string
+		turn  func(db store.Store, owner domain.MemberID) error
+		moves bool
+	}{
+		{name: "off for shares", turn: func(db store.Store, owner domain.MemberID) error {
+			return db.SetAgentLoginShared(context.Background(), owner, "claude", domain.DefaultLogin, false)
+		}},
+		{name: "automatic off", moves: true, turn: func(db store.Store, owner domain.MemberID) error {
+			return db.SetAgentLoginAutomatic(context.Background(), owner, "claude", domain.DefaultLogin, false)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e, _, notes := newFallbackEnv(t, enhancedClaude)
+			e.share(t)
+			if _, err := e.db.AddAgentLogin(t.Context(), domain.AgentLogin{MemberID: e.owner.ID, Agent: "claude", ID: "lgn-work000000", Name: "work", CreatedAt: time.Now()}, ""); err != nil {
+				t.Fatal(err)
+			}
+			run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP)
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+			var turnedOff atomic.Bool
+			old := e.rt.byName(string(run.ID)).id
+			e.rt.mu.Lock()
+			e.rt.destroyHook = func(id runtime.ID) {
+				if id == old && turnedOff.CompareAndSwap(false, true) {
+					if setErr := tc.turn(e.db, e.owner.ID); setErr != nil {
+						panic(setErr)
+					}
+				}
+			}
+			e.rt.mu.Unlock()
+			_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
+			if tc.moves {
+				e.assertMovedToOwner(t, run.ID, notes)
+				if !turnedOff.Load() {
+					t.Fatal("the switch was not turned while the old container went")
+				}
+				return
+			}
+			waitFor(t, "the move to give up", func() bool {
+				row, getErr := e.db.GetRun(t.Context(), run.ID)
+				if getErr == nil && row.Status.Terminal() && !strings.Contains(row.Reason, "not shared with you") {
+					t.Fatalf("run %s (%q), hook ran %v; want the move refused for the login", row.Status, row.Reason, turnedOff.Load())
+				}
+				return turnedOff.Load() && getErr == nil && strings.Contains(row.Reason, "not shared with you")
+			})
+			got, err := e.db.GetRun(t.Context(), run.ID)
+			if err != nil || got.AccountMemberID != e.member.ID || len(notes.all()) != 0 {
+				t.Fatalf("run %s on %s (%q), notes %v, %v; want it left on Ada's account", got.Status, got.AccountMemberID, got.Reason, notes.all(), err)
+			}
+			if segments, err := e.db.ListRunAccountSegments(t.Context(), run.ID); err != nil || len(segments) != 0 {
+				t.Fatalf("segments = %+v, %v; want no move recorded", segments, err)
+			}
+		})
+	}
+}
+
+// A move onto the home's own default login, whose kind cannot be read
+// beside an added login, is recorded: whether it is billed per use is read
+// before the old container goes, and an unreadable kind is not.
+func TestAMoveOntoAnUnreadableDefaultLoginIsRecorded(t *testing.T) {
+	t.Parallel()
+	e, _, notes := newFallbackEnv(t, enhancedClaude)
+	e.share(t)
+	e.sched.UseUsageFallback(UsageFallback{Usage: claudeUsage{e.owner.ID: 100}, AuthorizationMu: &sync.Mutex{}, Note: notes.post})
+	if _, err := e.db.AddAgentLogin(t.Context(), domain.AgentLogin{MemberID: e.member.ID, Agent: "claude", ID: "lgn-work000000", Name: "work", CreatedAt: time.Now()}, ""); err != nil {
+		t.Fatal(err)
+	}
+	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.owner.ID, "", "claude", domain.LaunchACP)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+	writeHomeFile(t, e.adaHome, ".claude.json", `{"primaryApiKey":"test-not-a-key-of-ada"`)
+	_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
+	waitFor(t, "the move to Ada's account", func() bool {
+		row, getErr := e.db.GetRun(t.Context(), run.ID)
+		if getErr == nil && row.Status.Terminal() {
+			t.Fatalf("run %s (%q); want it moved to Ada's default login", row.Status, row.Reason)
+		}
+		return getErr == nil && row.AccountMemberID == e.member.ID
+	})
+	if got, err := e.db.GetRun(t.Context(), run.ID); err != nil || got.AccountLoginPerUse {
+		t.Fatalf("moved run marked billed per use %v, %v; want not", got.AccountLoginPerUse, err)
 	}
 }

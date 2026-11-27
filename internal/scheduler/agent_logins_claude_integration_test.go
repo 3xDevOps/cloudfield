@@ -173,10 +173,20 @@ func runRealClaude(t *testing.T, claude string, plan *EnvironmentPlan, laid []ru
 		"DISABLE_TELEMETRY=1",
 		"DISABLE_AUTOUPDATER=1",
 		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
+		// An image's ENV naming a profile the login does not hold; the
+		// plan's own value comes after it, as a container's does.
+		"ANTHROPIC_PROFILE=elsewhere",
 	}
 	for _, key := range []string{"CLAUDE_CONFIG_DIR", "ANTHROPIC_CONFIG_DIR"} {
 		if v, ok := plan.Env[key]; ok {
 			env = append(env, key+"="+remap(v))
+		}
+	}
+	// The variables the plan sets empty, so an image's ENV cannot fill
+	// them; the stand-in's address stays.
+	for key, v := range plan.Env {
+		if v == "" && key != "ANTHROPIC_BASE_URL" {
+			env = append(env, key+"=")
 		}
 	}
 	args := []string{"-rm", "sh", "-c", mountScript, "sh"}
@@ -282,6 +292,9 @@ func TestIntegrationRealClaudeCodeUsesTheAddedLogin(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
+					// Another session in the home writes a legacy configuration
+					// holding a key once this one has started.
+					writeHomeFile(t, e.adaHome, ".claude/.config.json", `{"hasCompletedOnboarding":true,"primaryApiKey":"test-key-planted-not-a-real-key-00000000"}`)
 					mock := &mockMessages{}
 					server := httptest.NewServer(mock)
 					defer server.Close()
@@ -312,6 +325,125 @@ func TestIntegrationRealClaudeCodeUsesTheAddedLogin(t *testing.T) {
 					}
 				})
 			}
+		}
+	}
+}
+
+// TestIntegrationRealClaudeCodePrefersHomeSettingsToAnAddedLogin shows,
+// with the unmodified Claude Code against the stand-in API, that an
+// apiKeyHelper or a key under env in ~/.claude/settings.json of the
+// session's home pays instead of a mounted added login of either kind, and
+// that a plan for such a session is refused.
+func TestIntegrationRealClaudeCodePrefersHomeSettingsToAnAddedLogin(t *testing.T) {
+	claude, err := exec.LookPath("claude")
+	if err != nil {
+		t.Skip("Claude Code is not on PATH")
+	}
+	profile, ok := harness.Lookup("claude")
+	if !ok {
+		t.Fatal("no claude profile")
+	}
+	settings := map[string]struct{ file, auth string }{
+		"apiKeyHelper":                {`{"apiKeyHelper":"echo test-helper-key"}`, "Bearer test-helper-keytest-helper-key"},
+		"ANTHROPIC_API_KEY under env": {`{"env":{"ANTHROPIC_API_KEY":"test-settings-key"}}`, "test-settings-key"},
+	}
+	added := map[string]string{
+		"subscription": `{"claudeAiOauth":{"accessToken":"test-access-added","refreshToken":"test-refresh-added","expiresAt":4102444800000,"scopes":["user:inference"]}}`,
+		"console":      "",
+	}
+	for setting, want := range settings {
+		for addedKind, file := range added {
+			t.Run(setting+" over "+addedKind, func(t *testing.T) {
+				e := newLoginShareEnv(t)
+				login := e.addLogin(t, e.member.ID, "lgn-added00000", "added", file)
+				member, err := e.db.GetMember(t.Context(), e.member.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ws, err := e.db.GetWorkspace(t.Context(), e.ws.ID)
+				if err != nil {
+					t.Fatal(err)
+				}
+				run := &domain.Run{ID: "run-gate", MemberID: member.ID, HomeMemberID: member.ID, AccountMemberID: member.ID, AccountLogin: login.Login, Harness: "claude"}
+				plan, err := e.sched.BuildEnvironmentPlan(t.Context(), run, ws, member, profile, EnvironmentPurposeRun)
+				if err != nil {
+					t.Fatal(err)
+				}
+				writeHomeFile(t, e.adaHome, ".claude/settings.json", want.file)
+				mock := &mockMessages{}
+				server := httptest.NewServer(mock)
+				defer server.Close()
+				proxy := &proxyLog{}
+				proxyServer := httptest.NewServer(proxy)
+				defer proxyServer.Close()
+				root := t.TempDir()
+				out, runErr := runRealClaude(t, claude, plan, containerView(t, plan, root), root, server.URL, proxyServer.URL)
+				if runErr != nil {
+					t.Errorf("claude: %v: %.600s", runErr, out)
+				}
+				seen := mock.seen()
+				if len(seen) == 0 {
+					t.Fatal("Claude Code sent no request")
+				}
+				for _, auth := range seen {
+					if auth != want.auth {
+						t.Fatalf("a request carried %q; want the setting's %q", auth, want.auth)
+					}
+				}
+				if _, err = e.sched.BuildEnvironmentPlan(t.Context(), run, ws, member, profile, EnvironmentPurposeRun); !errors.Is(err, ErrEnvironmentPays) {
+					t.Fatalf("a plan with %s in the home's settings: %v; want refused", setting, err)
+				}
+			})
+		}
+	}
+}
+
+// TestIntegrationRealClaudeCodeSendsADeadSubscriptionAheadOfConsole shows,
+// with the unmodified Claude Code against the stand-in API, that a default
+// login whose subscription sign-in expired with no refresh token still
+// sends that token, not the Console sign-in beside it: such a login is
+// signed out, not billed per use.
+func TestIntegrationRealClaudeCodeSendsADeadSubscriptionAheadOfConsole(t *testing.T) {
+	claude, err := exec.LookPath("claude")
+	if err != nil {
+		t.Skip("Claude Code is not on PATH")
+	}
+	profile, ok := harness.Lookup("claude")
+	if !ok {
+		t.Fatal("no claude profile")
+	}
+	e := newLoginShareEnv(t)
+	writeHomeFile(t, e.adaHome, ".claude.json", `{"hasCompletedOnboarding":true}`)
+	defaultLogins["console"](t, e.adaHome)
+	writeHomeFile(t, e.adaHome, ".claude/.credentials.json", `{"claudeAiOauth":{"accessToken":"test-access-expired","expiresAt":1000,"scopes":["user:inference"]}}`)
+	member, err := e.db.GetMember(t.Context(), e.member.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ws, err := e.db.GetWorkspace(t.Context(), e.ws.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := &domain.Run{ID: "run-gate", MemberID: member.ID, HomeMemberID: member.ID, AccountMemberID: member.ID, Harness: "claude"}
+	plan, err := e.sched.BuildEnvironmentPlan(t.Context(), run, ws, member, profile, EnvironmentPurposeRun)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mock := &mockMessages{}
+	server := httptest.NewServer(mock)
+	defer server.Close()
+	proxy := &proxyLog{}
+	proxyServer := httptest.NewServer(proxy)
+	defer proxyServer.Close()
+	root := t.TempDir()
+	out, _ := runRealClaude(t, claude, plan, containerView(t, plan, root), root, server.URL, proxyServer.URL)
+	seen := mock.seen()
+	if len(seen) == 0 {
+		t.Fatalf("Claude Code sent no request: %.600s", out)
+	}
+	for _, auth := range seen {
+		if auth != "Bearer test-access-expired" {
+			t.Fatalf("a request carried %q; want the expired subscription token", auth)
 		}
 	}
 }

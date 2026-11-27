@@ -2,6 +2,7 @@ package edgeproto
 
 import (
 	"crypto/ed25519"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -90,9 +91,16 @@ const MaxRequestBodySize = 64 << 10
 // KindHTTP connection; a larger one is refused with 413.
 const MaxHTTPBodySize = 1 << 20
 
-// ErrorBody is the JSON body of every refused edge API request.
+// ErrorBody is the JSON body of every refused edge API request. Retired
+// is set on the 410 Gone of a retired address of the edge.
 type ErrorBody struct {
-	Error string `json:"error"`
+	Error   string   `json:"error"`
+	Retired *Retired `json:"retired,omitempty"`
+}
+
+// Retired names the relay origin that replaces a retired one.
+type Retired struct {
+	Replacement string `json:"replacement"`
 }
 
 // Refusal is a refusal message the edge sends as ErrorBody.Error, with the
@@ -158,10 +166,12 @@ const (
 )
 
 // DeviceStartRequest registers a client install: its label and its device
-// key as an authorized_keys line.
+// key as an authorized_keys line. RelayOrigin is the relay origin the
+// client signs in for; an edge that does not know the field ignores it.
 type DeviceStartRequest struct {
-	Label string `json:"label"`
-	Key   string `json:"key"`
+	Label       string `json:"label"`
+	Key         string `json:"key"`
+	RelayOrigin string `json:"relay_origin,omitempty"`
 }
 
 // Validate checks the label and parses the key.
@@ -251,13 +261,18 @@ type AccountSummary struct {
 
 // EdgeInfo answers GET PathEdgeInfo on the relay origin: the sign-in
 // origin, the key grants are signed with and its EdgeKeyFingerprint, and
-// the protocol versions the edge speaks.
+// the protocol versions the edge speaks. Retiring, set only while the
+// operator marks this origin's pair retiring, is the replacement relay
+// origin, with RetiringDate as in HeaderRetiring; Validate does not read
+// them, and a reader checks them with ParseRetiring.
 type EdgeInfo struct {
 	SigninOrigin string            `json:"signin_origin"`
 	Key          ed25519.PublicKey `json:"key"`
 	Fingerprint  string            `json:"fingerprint"`
 	Version      int               `json:"version"`
 	MinVersion   int               `json:"min_version"`
+	Retiring     string            `json:"retiring,omitempty"`
+	RetiringDate string            `json:"retiring_date,omitempty"`
 }
 
 // Validate checks that SigninOrigin is a canonical Origin, that Key is an
@@ -278,6 +293,33 @@ func (i EdgeInfo) Validate() error {
 		return fmt.Errorf("edgeproto: edge speaks versions %d to %d", i.MinVersion, i.Version)
 	}
 	return nil
+}
+
+// UnmarshalJSON decodes an EdgeInfo, leaving Retiring and RetiringDate
+// empty when either is present and not a string, null included: a notice
+// an edge sends in a form this build does not read never fails the rest.
+func (i *EdgeInfo) UnmarshalJSON(data []byte) error {
+	type plain EdgeInfo
+	var v struct {
+		plain
+		Retiring     json.RawMessage `json:"retiring"`
+		RetiringDate json.RawMessage `json:"retiring_date"`
+	}
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*i = EdgeInfo(v.plain)
+	var retiring, date string
+	if optionalString(v.Retiring, &retiring) && optionalString(v.RetiringDate, &date) {
+		i.Retiring, i.RetiringDate = retiring, date
+	}
+	return nil
+}
+
+// optionalString decodes raw into s, true when raw is absent or a
+// string; null is neither.
+func optionalString(raw json.RawMessage, s *string) bool {
+	return raw == nil || (raw[0] == '"' && json.Unmarshal(raw, s) == nil)
 }
 
 // RequestHost is the host name r names, lowercase, without a port or a

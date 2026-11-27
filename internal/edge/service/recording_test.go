@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
@@ -267,8 +268,9 @@ func TestRedemptionAfterRecordingStops(t *testing.T) {
 }
 
 // TestRedemptionAfterRecordingStarts starts a device sign-in while the
-// edge does not record origins and redeems it once it does, on the same
-// database: the device takes the redemption's pair, marked as seen.
+// edge does not record origins and polls it once it does, on the same
+// database: the sign-in, bound to no pair, was dropped at the start and
+// is started again.
 func TestRedemptionAfterRecordingStarts(t *testing.T) {
 	h := newHarness(t)
 	b := signedInBrowser(t, h)
@@ -293,12 +295,8 @@ func TestRedemptionAfterRecordingStarts(t *testing.T) {
 	req.Header.Set(edgeproto.HeaderVersion, fmt.Sprint(edgeproto.Version))
 	rec := httptest.NewRecorder()
 	restarted.Handler().ServeHTTP(rec, req)
-	var tok edgeproto.DeviceTokenResponse
-	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &tok) != nil {
-		t.Fatalf("poll after the restart: %d %s", rec.Code, rec.Body)
-	}
-	if got := h.column(t, `SELECT signin_origin || ' ' || signin_origin_seen FROM devices WHERE id = ?`, tok.Device.ID); got != testSignin+" 1" {
-		t.Fatalf("device redeemed once recording began records %q, want %s seen", got, testSignin)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), string(edgeproto.DeviceExpired)) {
+		t.Fatalf("poll after the restart: %d %s, want 400 %s", rec.Code, rec.Body, edgeproto.DeviceExpired)
 	}
 }
 
@@ -326,5 +324,94 @@ func TestRecordingStartsWhenServing(t *testing.T) {
 		if got := h.column(t, `SELECT COUNT(*) FROM `+table); got != "0" {
 			t.Errorf("%s holds %s rows after a start that never served", table, got)
 		}
+	}
+}
+
+// TestDeviceAuthAcrossRestart starts a device sign-in, then restarts the
+// edge: with its sign-in origin paired with another relay origin the poll
+// is refused; with the same pair, also spelled with its default port, it
+// goes on. A pending sign-in bound to no relay origin is dropped when a
+// start records origins.
+func TestDeviceAuthAcrossRestart(t *testing.T) {
+	for _, tt := range []struct{ relay, want string }{
+		{"https://relay9.example.test", "this sign-in was started for the relay origin " + testRelay + ", which " + testSignin +
+			" no longer signs devices in for; start it again with: cloudfield login --edge https://relay9.example.test"},
+		{testRelay, string(edgeproto.DevicePending)},
+		{testRelay + ":443", string(edgeproto.DevicePending)},
+		{testRelay + ":0443", string(edgeproto.DevicePending)},
+	} {
+		h := newRecordingHarness(t)
+		start := startDevice(t, h)
+		if err := h.svc.Close(); err != nil {
+			t.Fatal(err)
+		}
+		svc, err := New(Config{DataDir: h.dataDir, SigninOrigin: testSignin, RelayOrigin: tt.relay, GitHub: h.provider.app(), Clock: h.clock.Now, RecordOrigins: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = svc.Close() })
+		svc.SetLink(&fakeLink{})
+		if err = svc.StartRecording(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		h.clock.Advance(pollInterval)
+		body, _ := json.Marshal(edgeproto.DeviceTokenRequest{DeviceCode: start.DeviceCode})
+		req := httptest.NewRequest(http.MethodPost, testSignin+edgeproto.PathDeviceToken, bytes.NewReader(body))
+		req.Header.Set(edgeproto.HeaderVersion, fmt.Sprint(edgeproto.Version))
+		rec := httptest.NewRecorder()
+		svc.Handler().ServeHTTP(rec, req)
+		var e edgeproto.ErrorBody
+		if err = json.Unmarshal(rec.Body.Bytes(), &e); err != nil || rec.Code != http.StatusBadRequest || e.Error != tt.want {
+			t.Errorf("poll after a restart with the relay origin %s: %d %s, want 400 %q", tt.relay, rec.Code, rec.Body, tt.want)
+		}
+	}
+
+	h := newRecordingHarness(t)
+	h.exec(t, `INSERT INTO device_authorizations (code_hash, user_code_hash, label, public_key, client_addr, status, created_at, expires_at, last_poll_at, signin_origin)
+		VALUES ('legacy', 'user-legacy', 'laptop', 'key', '127.0.0.1', 'pending', 0, 9000000000000000000, 0, ?)`, testSignin)
+	if err := h.svc.StartRecording(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.column(t, `SELECT COUNT(*) FROM device_authorizations`); got != "0" {
+		t.Errorf("%s device authorizations bound to no relay origin survived a start that records origins", got)
+	}
+}
+
+// TestDeviceAuthWithoutRelayOrigin polls, on an edge that does not record
+// origins, a pending sign-in that records only its sign-in origin, as one
+// started while the edge recorded origins before the step that added the
+// relay origin: it goes on at its sign-in origin and is refused at the
+// other.
+func TestDeviceAuthWithoutRelayOrigin(t *testing.T) {
+	h := newPairsHarness(t)
+	code := edgeproto.NewToken()
+	h.exec(t, `INSERT INTO device_authorizations (code_hash, user_code_hash, label, public_key, client_addr, status, created_at, expires_at, last_poll_at, signin_origin)
+		VALUES (?, 'user-code', 'laptop', 'key', '127.0.0.1', 'pending', 0, 9000000000000000000, 0, ?)`, edgeproto.HashToken(code), testSignin)
+	poll := func(origin string) (int, string) {
+		h.clock.Advance(pollInterval)
+		return h.apiCallOn(t, origin, http.MethodPost, edgeproto.PathDeviceToken, "", edgeproto.DeviceTokenRequest{DeviceCode: code}, nil)
+	}
+	if status, msg := poll(testSignin); msg != string(edgeproto.DevicePending) {
+		t.Errorf("poll at %s: %d %q, want %s", testSignin, status, msg, edgeproto.DevicePending)
+	}
+	want := "this sign-in was started at " + testSignin + ", not at " + testSignin2 + " for " + testRelay2 + "; finish it there"
+	if status, msg := poll(testSignin2); status != http.StatusBadRequest || msg != want {
+		t.Errorf("poll at %s: %d %q, want 400 %q", testSignin2, status, msg, want)
+	}
+}
+
+// TestDeviceAuthRecordsCanonicalRelay starts a device sign-in on a pair
+// whose relay origin is written with its default port: the sign-in
+// records the relay origin without it.
+func TestDeviceAuthRecordsCanonicalRelay(t *testing.T) {
+	h := newHarness(t, func(cfg *Config, _ *fakeProvider) {
+		cfg.RelayOrigin, cfg.RecordOrigins = testRelay+":443", true
+	})
+	if err := h.svc.StartRecording(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	startDevice(t, h)
+	if got := h.column(t, `SELECT relay_origin FROM device_authorizations`); got != testRelay {
+		t.Errorf("relay_origin = %q, want %s", got, testRelay)
 	}
 }

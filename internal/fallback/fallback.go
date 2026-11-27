@@ -4,6 +4,7 @@
 package fallback
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -24,10 +25,10 @@ import (
 // minutes.
 const ExhaustedPercent = 95
 
-// readTimeout bounds how long a launch waits on one account's quota read. A
+// ReadTimeout bounds how long a launch waits on one account's quota read. A
 // slower read counts as unreadable; it carries on and fills the quota cache
 // for the next launch.
-const readTimeout = 3 * time.Second
+const ReadTimeout = 3 * time.Second
 
 // QuotaReader reads the vendor quota of a member's default login without
 // exposing its credentials or the provider's responses to the caller.
@@ -128,8 +129,9 @@ const Unknown = -1
 
 // Measure reads the usage Select decides on: the requested login's, and,
 // only when it is exhausted, every candidate's. It reads vendor quota, so
-// callers run it before taking the shared authorization mutex; Select
-// authorises each account again under that mutex.
+// callers run it before taking the shared authorization mutex, and under it
+// only once more, bounded by ReadTimeout, for a login chosen again there;
+// Select authorises each account again under that mutex.
 func Measure(ctx context.Context, st store.Store, usage QuotaReader, launcher domain.MemberID, requested domain.Account, harness string, policy domain.AccountFallback) (Measured, error) {
 	if policy.Disabled || usage == nil {
 		return nil, nil
@@ -140,7 +142,7 @@ func Measure(ctx context.Context, st store.Store, usage QuotaReader, launcher do
 	}
 	requested.Member = account
 	used, ok := usedPercent(ctx, usage, requested, harness)
-	if !ok && ranOutRecently(requested, time.Now()) {
+	if !ok && ranOutRecently(requested, harness, time.Now()) {
 		used, ok = 100, true
 	}
 	if !ok {
@@ -150,6 +152,29 @@ func Measure(ctx context.Context, st store.Store, usage QuotaReader, launcher do
 	if used < ExhaustedPercent {
 		return measured, nil
 	}
+	if err := measureCandidates(ctx, st, usage, launcher, requested, harness, policy, measured, false); err != nil {
+		return nil, err
+	}
+	return measured, nil
+}
+
+// MeasureStart is Measure for a launch that named no login and starts on
+// requested. A start billed per use (perUse) has no usage to read: it
+// counts as Unknown, so Select takes the first candidate with usage known to
+// be left, in its order, before it, and stays on it when none is.
+func MeasureStart(ctx context.Context, st store.Store, usage QuotaReader, launcher domain.MemberID, requested domain.Account, harness string, policy domain.AccountFallback, perUse bool) (Measured, error) {
+	if !perUse {
+		return Measure(ctx, st, usage, launcher, requested, harness, policy)
+	}
+	if policy.Disabled || usage == nil {
+		return nil, nil
+	}
+	account, err := ResolveLaunchAccount(ctx, st, launcher, string(requested.Member))
+	if err != nil {
+		return nil, nil
+	}
+	requested.Member = account
+	measured := Measured{requested: Unknown}
 	if err := measureCandidates(ctx, st, usage, launcher, requested, harness, policy, measured, false); err != nil {
 		return nil, err
 	}
@@ -191,10 +216,10 @@ func MeasureAway(ctx context.Context, st store.Store, usage QuotaReader, launche
 }
 
 // measureCandidates reads every candidate's usage. One whose usage cannot
-// be read is recorded as Unknown when unknown is set, and at launch only
-// when it is a login added or ordered beside the requested one: a launch
-// never fell back on another account's unreadable default login, and one
-// whose members added no login still does not.
+// be read is recorded as Unknown when unknown is set, and at launch unless
+// the candidate is legacy: a launch never fell back on another account's
+// unreadable default login, and one where nobody added a login still does
+// not.
 func measureCandidates(ctx context.Context, st store.Store, usage QuotaReader, launcher domain.MemberID, requested domain.Account, harness string, policy domain.AccountFallback, measured Measured, unknown bool) error {
 	candidates, err := candidates(ctx, st, launcher, requested, harness, policy)
 	if err != nil {
@@ -214,10 +239,10 @@ func measureCandidates(ctx context.Context, st store.Store, usage QuotaReader, l
 		}
 		wait.Go(func() {
 			used, ok := usedPercent(ctx, usage, c.account, harness)
-			if !ok && !unknown && c.group == otherAccounts && !c.account.Login.Added() {
+			if !ok && !unknown && c.legacy {
 				return
 			}
-			if !ok && ranOutRecently(c.account, time.Now()) {
+			if !ok && ranOutRecently(c.account, harness, time.Now()) {
 				used = 100
 			} else if !ok {
 				used = Unknown
@@ -241,7 +266,8 @@ type Launchable func(ctx context.Context, account domain.Account) (bool, error)
 // launch on requested and holds the shared authorization mutex until the
 // scheduler's durable launch boundary, so each candidate needs only its
 // account authorization checked here; a login Measure could not read, or
-// launchable refuses, is never chosen. Candidates come in three groups: the
+// launchable refuses, is never chosen. A requested login Measure recorded
+// as Unknown is the first Unknown candidate. Candidates come in three groups: the
 // requested account's other logins in its owner's order; the launcher's own
 // logins when the account is a teammate's and the launcher added logins;
 // and the other accounts, in the policy's order or by most usage left, each
@@ -255,7 +281,8 @@ func Select(ctx context.Context, st store.Store, measured Measured, launcher dom
 	if policy.Disabled {
 		return requested, nil
 	}
-	if used, ok := measured[requested]; !ok || used < ExhaustedPercent {
+	used, ok := measured[requested]
+	if !ok || (used != Unknown && used < ExhaustedPercent) {
 		return requested, nil
 	}
 	candidates, err := candidates(ctx, st, launcher, requested, harness, policy)
@@ -269,6 +296,9 @@ func Select(ctx context.Context, st store.Store, measured Measured, launcher dom
 		bestUsed float64
 		served   = map[domain.MemberID]bool{}
 	)
+	if used == Unknown {
+		unknown = &requested
+	}
 	for _, c := range candidates {
 		if c.account == requested || (c.group == otherAccounts && served[c.account.Member]) {
 			continue
@@ -366,6 +396,9 @@ const (
 type candidate struct {
 	account domain.Account
 	group   int
+	// legacy: neither the launcher, the requested account nor the
+	// candidate's account keeps an added login.
+	legacy bool
 }
 
 // candidates lists the logins a run of launcher on requested may move to.
@@ -375,17 +408,24 @@ type candidate struct {
 // launcher who added none is ranked with the teammates as before logins
 // existed.
 func candidates(ctx context.Context, st store.Store, launcher domain.MemberID, requested domain.Account, harness string, policy domain.AccountFallback) ([]candidate, error) {
-	var out []candidate
-	add := func(member domain.MemberID, group int) error {
-		logins, err := accountLogins(ctx, st, launcher, member, harness)
-		for _, l := range logins {
-			out = append(out, candidate{l, group})
-		}
-		return err
-	}
-	if err := add(requested.Member, sameAccount); err != nil {
+	own, err := st.ListAgentLogins(ctx, launcher, harness)
+	if err != nil {
 		return nil, err
 	}
+	var out []candidate
+	involved := hasAddedLogin(own)
+	add := func(member domain.MemberID, group int) (bool, error) {
+		logins, added, listErr := accountLogins(ctx, st, launcher, member, harness)
+		for _, l := range logins {
+			out = append(out, candidate{l, group, !involved && !added})
+		}
+		return added, listErr
+	}
+	requestedAdded, err := add(requested.Member, sameAccount)
+	if err != nil {
+		return nil, err
+	}
+	involved = involved || requestedAdded
 	members := policy.Order
 	if len(members) == 0 {
 		owners, err := st.ListAccountOwners(ctx, launcher)
@@ -397,13 +437,9 @@ func candidates(ctx context.Context, st store.Store, launcher domain.MemberID, r
 			members = append(members, owner.ID)
 		}
 	}
-	own, err := st.ListAgentLogins(ctx, launcher, harness)
-	if err != nil {
-		return nil, err
-	}
-	ownGroup := requested.Member != launcher && len(own) > 0 && slices.Contains(members, launcher)
+	ownGroup := requested.Member != launcher && hasAddedLogin(own) && slices.Contains(members, launcher)
 	if ownGroup {
-		if err := add(launcher, launcherOwn); err != nil {
+		if _, err := add(launcher, launcherOwn); err != nil {
 			return nil, err
 		}
 	}
@@ -411,7 +447,7 @@ func candidates(ctx context.Context, st store.Store, launcher domain.MemberID, r
 		if member == requested.Member || (ownGroup && member == launcher) {
 			continue
 		}
-		if err := add(member, otherAccounts); err != nil {
+		if _, err := add(member, otherAccounts); err != nil {
 			return nil, err
 		}
 	}
@@ -421,11 +457,11 @@ func candidates(ctx context.Context, st store.Store, launcher domain.MemberID, r
 // accountLogins is member's logins of harness that may serve launcher
 // without being named: in their owner's order, automatic, and on for shares
 // unless launcher owns them. A member who added none has their default
-// login alone.
-func accountLogins(ctx context.Context, st store.Store, launcher, member domain.MemberID, harness string) ([]domain.Account, error) {
+// login alone. added reports whether member keeps an added login.
+func accountLogins(ctx context.Context, st store.Store, launcher, member domain.MemberID, harness string) (logins []domain.Account, added bool, err error) {
 	rows, err := st.ListAgentLogins(ctx, member, harness)
 	if err != nil || len(rows) == 0 {
-		return []domain.Account{domain.AccountOf(member)}, err
+		return []domain.Account{domain.AccountOf(member)}, false, err
 	}
 	var out []domain.Account
 	for _, row := range rows {
@@ -438,7 +474,11 @@ func accountLogins(ctx context.Context, st store.Store, launcher, member domain.
 		}
 		out = append(out, account)
 	}
-	return out, nil
+	return out, hasAddedLogin(rows), nil
+}
+
+func hasAddedLogin(rows []domain.AgentLogin) bool {
+	return slices.ContainsFunc(rows, func(l domain.AgentLogin) bool { return l.ID.Added() })
 }
 
 // usedPercent reports the highest used share of account's quota windows in
@@ -450,7 +490,7 @@ func usedPercent(ctx context.Context, usage QuotaReader, account domain.Account,
 	if ids == nil {
 		return 0, false
 	}
-	ctx, cancel := context.WithTimeout(ctx, readTimeout)
+	ctx, cancel := context.WithTimeout(ctx, ReadTimeout)
 	defer cancel()
 	var (
 		providers []quota.Provider
@@ -496,74 +536,136 @@ func usedPercent(ctx context.Context, usage QuotaReader, account domain.Account,
 // shares. Every check that asks whether a member holds a share of a run's
 // account asks this.
 func ResolveRunLogin(ctx context.Context, st store.Store, actor domain.MemberID, run *domain.Run, workspaces []domain.WorkspaceID) error {
-	account := run.Account()
-	if _, err := ResolveLaunchAccountIn(ctx, st, actor, string(account.Member), workspaces); err != nil {
+	return ResolveLoginShared(ctx, st, actor, run.Account(), run.Harness, workspaces)
+}
+
+// ResolveLoginShared is ResolveRunLogin for a session on login, which
+// actor need not own if its owner left it on for shares. Its automatic
+// switch governs which login is chosen next, not a session already on it
+// or a move already committed to it.
+func ResolveLoginShared(ctx context.Context, st store.Store, actor domain.MemberID, login domain.Account, harness string, workspaces []domain.WorkspaceID) error {
+	if _, err := ResolveLaunchAccountIn(ctx, st, actor, string(login.Member), workspaces); err != nil || actor == login.Member {
 		return err
 	}
-	if actor == account.Member {
-		return nil
-	}
-	logins, err := st.ListAgentLogins(ctx, account.Member, run.Harness)
+	return LoginShared(ctx, st, login, harness)
+}
+
+// LoginShared refuses login for a member who does not own it unless its
+// owner left it on for shares, wrapping ErrOffForShares when they turned it
+// off. A member who keeps no login rows has only the default login, which
+// is on for shares.
+func LoginShared(ctx context.Context, st store.Store, login domain.Account, harness string) error {
+	logins, err := st.ListAgentLogins(ctx, login.Member, harness)
 	if err != nil || len(logins) == 0 {
 		return err
 	}
-	id := account.Login
-	if id == "" {
-		id = domain.DefaultLogin
+	id := cmp.Or(login.Login, domain.DefaultLogin)
+	i := slices.IndexFunc(logins, func(l domain.AgentLogin) bool { return l.ID == id })
+	switch {
+	case i < 0:
+		return fmt.Errorf("%w: login %s of this account is not shared with you", permissions.ErrDenied, id)
+	case !logins[i].Shared:
+		return fmt.Errorf("%w: login %s of this account is not shared with you: %w", permissions.ErrDenied, id, ErrOffForShares)
 	}
-	for _, l := range logins {
-		if l.ID == id && l.Shared {
-			return nil
-		}
-	}
-	return fmt.Errorf("%w: the login this session is on is not shared with you", permissions.ErrDenied)
+	return nil
 }
 
 // runOutFor is how long a login whose usage cannot be read is passed over
 // after its owner's session reported it run out.
 const runOutFor = 30 * time.Minute
 
-var runOuts = struct {
-	sync.Mutex
-	at map[domain.Account]time.Time
-}{at: map[domain.Account]time.Time{}}
-
-// NoteRunOut records that account, whose usage cannot be read, ran out at.
-func NoteRunOut(account domain.Account, at time.Time) {
-	runOuts.Lock()
-	defer runOuts.Unlock()
-	runOuts.at[account] = at
+type runOut struct {
+	account domain.Account
+	agent   string
 }
 
-func ranOutRecently(account domain.Account, now time.Time) bool {
+var runOuts = struct {
+	sync.Mutex
+	at map[runOut]time.Time
+}{at: map[runOut]time.Time{}}
+
+// NoteRunOut records that account's login of agent, whose usage cannot be
+// read, ran out at.
+func NoteRunOut(account domain.Account, agent string, at time.Time) {
 	runOuts.Lock()
 	defer runOuts.Unlock()
-	at, ok := runOuts.at[account]
+	runOuts.at[runOut{account, agent}] = at
+}
+
+// ForgetRunOuts drops what NoteRunOut recorded of member's logins of agent,
+// once one of them is removed.
+func ForgetRunOuts(member domain.MemberID, agent string) {
+	runOuts.Lock()
+	defer runOuts.Unlock()
+	maps.DeleteFunc(runOuts.at, func(k runOut, _ time.Time) bool { return k.account.Member == member && k.agent == agent })
+}
+
+func ranOutRecently(account domain.Account, agent string, now time.Time) bool {
+	runOuts.Lock()
+	defer runOuts.Unlock()
+	key := runOut{account, agent}
+	at, ok := runOuts.at[key]
 	if ok && now.Sub(at) >= runOutFor {
-		delete(runOuts.at, account)
+		delete(runOuts.at, key)
 		return false
 	}
 	return ok
 }
 
-// ResolveRunRelaunch is ResolveRunLogin for reopening run, whose container
-// mounts its login again: an added login actor does not own must also be
-// automatic, as the session's provisioning requires, and is refused in the
-// words provisioning uses.
-func ResolveRunRelaunch(ctx context.Context, st store.Store, actor domain.MemberID, run *domain.Run, workspaces []domain.WorkspaceID) error {
-	account := run.Account()
-	if !account.Login.Added() || actor == account.Member {
-		return ResolveRunLogin(ctx, st, actor, run, workspaces)
-	}
-	if _, err := ResolveLaunchAccountIn(ctx, st, actor, string(account.Member), workspaces); err != nil {
+// ResolveLoginUse is ResolveLaunchAccountIn for a container that mounts
+// login in actor's session: a login actor does not own must also be on for
+// shares and automatic, as provisioning requires. A member who keeps no
+// login rows has only the default login, which needs the share alone.
+func ResolveLoginUse(ctx context.Context, st store.Store, actor domain.MemberID, login domain.Account, harness string, workspaces []domain.WorkspaceID) error {
+	if _, err := ResolveLaunchAccountIn(ctx, st, actor, string(login.Member), workspaces); err != nil || actor == login.Member {
 		return err
 	}
+	logins, err := st.ListAgentLogins(ctx, login.Member, harness)
+	if err != nil || (len(logins) == 0 && !login.Login.Added()) {
+		return err
+	}
+	id := cmp.Or(login.Login, domain.DefaultLogin)
+	i := slices.IndexFunc(logins, func(l domain.AgentLogin) bool { return l.ID == id })
+	switch {
+	case i < 0:
+		return fmt.Errorf("%w: login %s of this account is not available to you", permissions.ErrDenied, id)
+	case !logins[i].Shared:
+		return fmt.Errorf("%w: login %s of this account is not available to you: %w", permissions.ErrDenied, id, ErrOffForShares)
+	case !logins[i].Automatic:
+		return fmt.Errorf("%w: login %s of this account is not available to you: %w", permissions.ErrDenied, id, errAutomaticOff)
+	}
+	return nil
+}
+
+var (
+	// ErrOffForShares is a login its owner turned off for shares.
+	ErrOffForShares = errors.New("its owner turned it off for shares")
+	errAutomaticOff = errors.New("its owner turned it automatic off, so only they start sessions on it")
+)
+
+// ResolveRunRelaunch is ResolveRunLogin for actor's reopening run, whose
+// container mounts its login again. When the account's owner keeps login
+// rows, actor, the session's owner and the member whose home it mounts each
+// need ResolveLoginUse. A member who keeps none has only the default login,
+// which needs actor's share alone, as before logins existed.
+func ResolveRunRelaunch(ctx context.Context, st store.Store, actor domain.MemberID, run *domain.Run, workspaces []domain.WorkspaceID) error {
+	account := run.Account()
 	logins, err := st.ListAgentLogins(ctx, account.Member, run.Harness)
 	if err != nil {
 		return err
 	}
-	if i := slices.IndexFunc(logins, func(l domain.AgentLogin) bool { return l.ID == account.Login }); i < 0 || !logins[i].Shared || !logins[i].Automatic {
-		return fmt.Errorf("%w: login %s of this account is not available to you", permissions.ErrDenied, account.Login)
+	if len(logins) == 0 && !account.Login.Added() {
+		_, err = ResolveLaunchAccountIn(ctx, st, actor, string(account.Member), workspaces)
+		return err
+	}
+	for _, member := range []domain.MemberID{actor, run.MemberID, run.HomeMember()} {
+		err := ResolveLoginUse(ctx, st, member, account, run.Harness, workspaces)
+		if errors.Is(err, ErrOffForShares) || errors.Is(err, errAutomaticOff) {
+			return fmt.Errorf("%w; a kept session cannot change login, so start a new session, or ask the login's owner to turn it on again", err)
+		}
+		if err != nil {
+			return err
+		}
 	}
 	return nil
 }

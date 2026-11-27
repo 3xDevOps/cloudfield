@@ -15,7 +15,7 @@ import { SectionLabel } from '@/components/ui/section-label'
 import { api } from '@/lib/api'
 import { useClock } from '@/lib/clock'
 import { isRetainedRun } from '@/lib/commands'
-import { formatBytes } from '@/lib/format'
+import { errorSentence, formatBytes } from '@/lib/format'
 import { memberName, resolveMember } from '@/lib/member-name'
 import { needsYou } from '@/lib/needs-you'
 import { plainReason } from '@/lib/reasons'
@@ -24,6 +24,7 @@ import type { RoomMessage } from '@/lib/types'
 import { modeLabel } from '@/routes/run/agent-name'
 import type { AgentTerminal } from '@/routes/run/agent-terminal'
 import { ChildRuns } from '@/routes/run/child-runs'
+import { RetryRead } from '@/routes/run/retry-read'
 import { usePrimaryAction, type RunNavigation } from '@/routes/run/header'
 import { RunLinearIssue } from '@/routes/run/linear-issue'
 import { NoteComposer } from '@/routes/run/note-composer'
@@ -35,7 +36,7 @@ import { WaitConditions } from '@/routes/run/wait-conditions'
 import { cn } from '@/lib/utils'
 import { useStore } from '@/store'
 import { compareInstants, isDoneNote, isOpenNote } from '@/store/collaboration'
-import { useRunPresentation } from '@/store/hooks'
+import { useCapability, useRunPresentation } from '@/store/hooks'
 import { useShallow } from 'zustand/react/shallow'
 import { loadMessagePage, messageScopeKey, useMessageList, type MessageScope } from '@/store/messages'
 import { isTerminal, type RunRecord } from '@/store/runs'
@@ -76,9 +77,12 @@ function AgentMessages({ run, inset }: { run: RunRecord; inset: boolean }) {
   const error = useStore((s) => s.messageErrors[key])
   const [all, setAll] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [retrying, setRetrying] = useState(false)
+  const readable = useCapability().hasMethod('coord.messages.list')
   const hidden = useStore((s) => s.hiddenAgentMessages[run.id] === true)
   useMessageList(useStore, api, scope)
-  if (messages.length === 0) return null
+  // A gateway without the method has nothing to retry.
+  if (messages.length === 0 && (!error || !readable)) return null
   const label = (id: string) => (id === run.id ? 'This session' : undefined)
   const shown = all ? messages : messages.slice(-recentMessages)
   const older = async () => {
@@ -86,10 +90,19 @@ function AgentMessages({ run, inset }: { run: RunRecord; inset: boolean }) {
     await loadMessagePage(useStore, api, scope, true)
     setLoading(false)
   }
+  const retry = async () => {
+    setRetrying(true)
+    await loadMessagePage(useStore, api, scope)
+    setRetrying(false)
+  }
   return (
     <Section title="Agent messages" count={messages.length} inset={inset}>
-      {messages.length === 0 && <p className="text-ui-sm text-muted">No messages between agents yet.</p>}
-      {error && <p role="alert" className="text-ui-sm text-state-failed">{error}</p>}
+      {error && (
+        <div role="alert" className="flex items-center gap-2 text-ui-sm text-state-failed">
+          <span className="min-w-0 flex-1 break-words">{errorSentence(error)}</span>
+          <RetryRead retrying={retrying} onRetry={() => void retry()} />
+        </div>
+      )}
       {all && olderCursor && (
         <Button size="sm" variant="ghost" disabled={loading} onClick={() => void older()}>{loading ? 'Loading…' : 'Show older'}</Button>
       )}
@@ -167,6 +180,7 @@ function Row({ label, children }: { label: string; children: React.ReactNode }) 
 function container(run: RunRecord): string {
   if (run.status === 'queued' || run.status === 'provisioning') return 'Starting'
   if (run.asleep_since && !isTerminal(run.status)) {
+    if (run.asleep_in_memory) return run.waking ? 'Resuming (waking)' : 'Paused in memory while asleep'
     if (run.asleep_saved) return run.waking ? 'Restoring (waking)' : 'Saved to disk while asleep'
     return run.waking ? 'Starting (waking)' : 'Stopped while asleep'
   }

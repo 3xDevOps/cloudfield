@@ -1,0 +1,19 @@
+{{define "retired"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark light">
+<title>This address is retired - Cloudfield Edge</title>
+</head>
+<body>
+<main>
+<h1>This address is retired</h1>
+<p><code>{{.Old}}</code> is retired. This edge is now at <code>{{.Address}}</code>{{if .SignIn}}: sign in there{{end}}.</p>
+{{if .Join}}<p>This link was made at the retired address and no longer works. Ask whoever sent it for a new one.</p>
+{{end}}<p>Move a server with: <code>cloudfield-server edge move {{.Relay}}</code></p>
+<p>Sign a device in with: <code>cloudfield login --edge {{.Relay}}</code></p>
+</main>
+</body>
+</html>
+{{end}}

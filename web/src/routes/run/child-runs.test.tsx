@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, within } from '@testing-library/react'
 import { RunCommandConfirmation } from '@/components/run-command-confirmation'
 import type { Child, Run } from '@/lib/types'
 import { ChildRuns, costText } from '@/routes/run/child-runs'
@@ -77,6 +77,29 @@ describe('child run usage', () => {
     render(<ChildRuns run={toRecord(parent)} inset={false} client={client} />)
     const list = await screen.findByRole('list', { name: /Subsessions of/ })
     expect(within(list).getByRole('listitem').textContent).toContain("On Bob's account, login console")
+  })
+
+  it('shows a failed read with the server message and reads again on Retry', async () => {
+    const parent = run()
+    setUp([parent, run({ id: 'run_c1', parent_run_id: 'run_1' })])
+    let answer!: (result: unknown) => void
+    const runChildren = vi.fn()
+      .mockRejectedValueOnce(new Error('run.children: server did not answer run.children within 1m0s'))
+      .mockImplementationOnce(() => new Promise((resolve) => { answer = resolve }))
+    render(<ChildRuns run={toRecord(parent)} inset={false} client={fakeApi({ runChildren })} />)
+    const alert = await screen.findByRole('alert')
+    expect(within(alert).getByText('server did not answer run.children within 1m0s')).toBeDefined()
+    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }))
+    // The read takes up to a minute to fail again: the button must say it is running.
+    expect((await within(alert).findByRole('button', { name: 'Retrying…' }) as HTMLButtonElement).disabled).toBe(true)
+    await act(async () => answer({
+      root_run_id: 'run_1',
+      children: [child({})],
+      limits: { max_live: 8 },
+      usage: { runs: 2, metered_runs: 0, unmetered_runs: 2, input_tokens: 0, output_tokens: 0, cost_usd: 0, by_account: [] },
+    }))
+    expect(await screen.findByRole('list', { name: /Subsessions of/ })).toBeDefined()
+    expect(screen.queryByRole('alert')).toBeNull()
   })
 
   it('shows a disconnected subsession with why it stopped', async () => {

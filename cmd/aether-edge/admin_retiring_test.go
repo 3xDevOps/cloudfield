@@ -38,7 +38,7 @@ func retiringEdge(t *testing.T, pairs map[string]string) string {
 		t.Fatal(err)
 	}
 	if pairs != nil {
-		if err := s.RecordPairs(context.Background(), pairs, recordingSince); err != nil {
+		if _, err := s.RecordPairs(context.Background(), edgestore.Run{Pairs: pairs}, recordingSince); err != nil {
 			t.Fatal(err)
 		}
 	}

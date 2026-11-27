@@ -35,10 +35,12 @@ const (
 	AgentLoginSignInTimeout    = 15 * time.Minute
 )
 
+// AgentLoginShareParams sets a login's use-for-shares switch; Shared is
+// required.
 type AgentLoginShareParams struct {
 	Agent   string `json:"agent"`
 	LoginID string `json:"login_id"`
-	Shared  bool   `json:"shared"`
+	Shared  *bool  `json:"shared"`
 }
 
 // AgentLoginParams names an agent, and for most methods one of the caller's
@@ -72,10 +74,12 @@ type AgentLoginOrderParams struct {
 	LoginIDs []string `json:"login_ids"`
 }
 
+// AgentLoginAutomaticParams sets a login's automatic switch; Automatic is
+// required.
 type AgentLoginAutomaticParams struct {
 	Agent     string `json:"agent"`
 	LoginID   string `json:"login_id"`
-	Automatic bool   `json:"automatic"`
+	Automatic *bool  `json:"automatic"`
 }
 
 // AgentLoginListResult lists the logins in the order Cloudfield tries them.

@@ -374,7 +374,7 @@ type fakeRuns struct {
 	calls           []string
 	// revokes lists each RevokeAccount as owner:grantee.
 	revokes []string
-	// environmentReads lists the workspaces EnvironmentSignsIn read.
+	// environmentReads lists the workspaces LoginPayer read.
 	environmentReads []domain.WorkspaceID
 	launchOptions    []domain.LaunchOptions
 	paused           map[domain.RunID]bool
@@ -393,6 +393,12 @@ type fakeRuns struct {
 	// whileTerminalStopped, when set, runs inside WithStoppedTerminal
 	// before its callback.
 	whileTerminalStopped func()
+	// startLogins are what StartLogin answers, one per call, then "".
+	startLogins []domain.LoginID
+	// perUse are the logins LoginUsageUnknown reports billed per use.
+	perUse map[domain.LoginID]bool
+	// environmentPays is whether LoginPayer names a payer.
+	environmentPays bool
 }
 
 func (f *fakeRuns) Retention(run *domain.Run) (scheduler.RetentionInfo, error) {
@@ -485,19 +491,35 @@ func (f *fakeRuns) CachedAgentModels(_ domain.MemberID, harness string) (protoco
 	return protocol.AgentModelsResult{Source: protocol.ModelSourceAgent, Models: []protocol.AgentModel{{ID: harness}, {ID: "opus"}}}, true
 }
 
-func (f *fakeRuns) FallbackLaunchable(context.Context, domain.MemberID, domain.MemberID, domain.Account, string, domain.LaunchMode) (bool, error) {
+func (f *fakeRuns) FallbackLaunchable(context.Context, domain.MemberID, domain.MemberID, domain.Account, string, domain.LaunchMode, domain.Permission) (bool, error) {
 	return true, nil
 }
 
-func (f *fakeRuns) StartLogin(context.Context, domain.WorkspaceID, domain.MemberID, domain.MemberID, string, domain.LaunchMode) (domain.LoginID, error) {
-	return "", nil
+func (f *fakeRuns) LoginUsageUnknown(_ context.Context, _ domain.MemberID, login domain.Account, _ string) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.perUse[login.Login], nil
 }
 
-func (f *fakeRuns) EnvironmentSignsIn(_ context.Context, workspace domain.WorkspaceID, _ string, _ domain.LaunchMode) (bool, error) {
+func (f *fakeRuns) StartLogin(context.Context, domain.WorkspaceID, domain.MemberID, domain.MemberID, string, domain.LaunchMode, domain.Permission) (domain.LoginID, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.startLogins) == 0 {
+		return "", nil
+	}
+	login := f.startLogins[0]
+	f.startLogins = f.startLogins[1:]
+	return login, nil
+}
+
+func (f *fakeRuns) LoginPayer(_ context.Context, workspace domain.WorkspaceID, _ domain.MemberID, _ string, _ domain.LaunchMode) (string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.environmentReads = append(f.environmentReads, workspace)
-	return false, nil
+	if f.environmentPays {
+		return "a workspace or server variable signs the agent in", nil
+	}
+	return "", nil
 }
 
 func (f *fakeRuns) DefaultMode(context.Context, domain.MemberID, domain.MemberID, string) (domain.LaunchMode, error) {
