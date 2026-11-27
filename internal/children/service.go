@@ -207,7 +207,12 @@ func (s *Service) recover(ctx context.Context) error {
 		if _, getErr := s.cfg.Store.GetRun(ctx, c.RunID); getErr == nil {
 			to = domain.ChildStarted
 		}
-		if err := s.cfg.Store.SetChildState(ctx, c.RunID, to, "", domain.ChildLaunching); err != nil {
+		// One returned to the queue keeps the refusal it waited on.
+		errText := ""
+		if to == domain.ChildQueued {
+			errText = c.Error
+		}
+		if err := s.cfg.Store.SetChildState(ctx, c.RunID, to, errText, domain.ChildLaunching); err != nil {
 			return err
 		}
 	}
@@ -223,10 +228,10 @@ func (s *Service) repairStarted(ctx context.Context) error {
 		return err
 	}
 	for _, c := range launching {
+		// Read before the row: a launch that ends between the two reads
+		// may have created it.
+		held := s.held(c.RunID)
 		if _, getErr := s.cfg.Store.GetRun(ctx, c.RunID); getErr != nil {
-			s.mu.Lock()
-			held := s.inFlight[c.RunID]
-			s.mu.Unlock()
 			if errors.Is(getErr, store.ErrNotFound) && !held {
 				if err := s.cfg.Store.SetChildState(ctx, c.RunID, domain.ChildQueued, c.Error, domain.ChildLaunching); err != nil && !errors.Is(err, store.ErrConflict) {
 					return err

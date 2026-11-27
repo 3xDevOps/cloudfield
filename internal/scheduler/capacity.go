@@ -140,7 +140,9 @@ func (s *Scheduler) reserveCapacity(ctx context.Context) (func(), error) {
 }
 
 // reserveLaunch admits the launch of a session, which has the ID run when
-// one was reserved for it.
+// one was reserved for it. With retry the server tries it again unasked
+// after a capacity refusal: disk reclaim removes what closed and sleeping
+// sessions keep, so only an attempt somebody asked for runs it.
 func (s *Scheduler) reserveLaunch(ctx context.Context, run domain.RunID, retry bool) (func(), error) {
 	op := opLaunch
 	if retry {
@@ -219,7 +221,7 @@ func (s *Scheduler) reserve(ctx context.Context, claim *memoryClaim) (release fu
 	var short *memoryShortage
 	switch {
 	case ctx.Err() != nil:
-	case errors.Is(err, ErrDiskFull):
+	case errors.Is(err, ErrDiskFull) && claim.op != opLaunchRetry:
 		s.reclaimDisk(ctx, "")
 		return s.tryReserveCapacity(ctx, claim)
 	case errors.As(err, &short) && s.saveIdleVMs(ctx, short.need+short.claimed):

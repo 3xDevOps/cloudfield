@@ -330,8 +330,9 @@ type LaunchOptions struct {
 	ExtraWorkspaces []WorkspaceID
 	// ReservedRunID creates the run under an ID minted beforehand.
 	ReservedRunID RunID
-	// Retry marks a launch tried again after the server had no room for
-	// it, so its refusals are counted apart from first attempts.
+	// Retry marks a launch tried again unasked after the server had no
+	// room for it: it reclaims no disk, and its refusals are counted apart
+	// from first attempts.
 	Retry bool
 	// FromCommit starts the checkout at this commit of the workspace repo,
 	// recorded with FromBranch, instead of capturing the workspace base.

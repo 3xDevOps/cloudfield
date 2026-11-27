@@ -1190,7 +1190,10 @@ func TestSubsessionWithNoRoomWaitsAndStartsLater(t *testing.T) {
 	h.runs.full = nil
 	h.runs.mu.Unlock()
 	h.now = h.now.Add(capacityRetryEvery)
-	h.settle()
+	// Each start lets the next one follow in a later pass.
+	for range 3 {
+		h.settle()
+	}
 	for _, id := range []string{first.RunID, second.RunID, third.RunID} {
 		child, err = h.db.GetChild(h.ctx, domain.RunID(id))
 		if err != nil || child.State != domain.ChildStarted || child.Error != "" {
@@ -1232,9 +1235,21 @@ func TestReservationNoLaunchHoldsReturnsToTheQueue(t *testing.T) {
 	h.runs.full = errNoRoom
 	c := h.mustStart(parent.ID, protocol.ChildStartParams{Harness: "codex"})
 	h.settle()
-	if err := h.db.SetChildState(h.ctx, domain.RunID(c.RunID), domain.ChildLaunching, errNoRoom.Error(), domain.ChildQueued); err != nil {
+	launching := func() {
+		t.Helper()
+		if err := h.db.SetChildState(h.ctx, domain.RunID(c.RunID), domain.ChildLaunching, errNoRoom.Error(), domain.ChildQueued); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// A restart returns it to the queue with the refusal it waited on.
+	launching()
+	if err := h.svc.recover(h.ctx); err != nil {
 		t.Fatal(err)
 	}
+	if child, err := h.db.GetChild(h.ctx, domain.RunID(c.RunID)); err != nil || child.State != domain.ChildQueued || child.Error != errNoRoom.Error() {
+		t.Fatalf("reservation recovered after a restart = %+v, %v; want it queued with its refusal", child, err)
+	}
+	launching()
 	h.runs.mu.Lock()
 	h.runs.full = nil
 	h.runs.mu.Unlock()
