@@ -38,7 +38,7 @@ describe('event words', () => {
   it('does not name the owner a held mail wake is written as', () => {
     const wake = { kind: 'steer_request', actor_id: alice.id, via: 'agent mail' }
     expect(words('workspace.room_message', { ...wake, state: 'queued' })).toBe('A line telling the agent to read its mail is waiting for the controller')
-    expect(words('workspace.room_message', { ...wake, state: 'denied' })).toBe('A line telling the agent to read its mail was declined')
+    expect(words('workspace.room_message', { ...wake, state: 'denied' })).toBe('A line telling the agent to read its mail was dismissed')
     expect(words('workspace.room_message', { ...wake, via: undefined, state: 'denied' })).toBe(`A message from ${alice.display_name} was declined`)
   })
 })

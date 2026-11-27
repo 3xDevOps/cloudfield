@@ -3,7 +3,9 @@ package server
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -26,9 +28,9 @@ type noticeWaker struct {
 	approved int
 	refusal  error
 	enhanced atomic.Bool
-	// shown is since when each wake's line was shown to a member connected
-	// in control, the zero time for a wake nobody was shown.
-	shown []time.Time
+	// shown is whether each wake's line was shown to a member in control
+	// who did not ask for it.
+	shown []bool
 }
 
 func (*noticeWaker) Wakeable(domain.RunID) bool    { return true }
@@ -38,8 +40,7 @@ func (w *noticeWaker) TypedWake(domain.RunID) bool { return !w.enhanced.Load() }
 func (w *noticeWaker) Wake(ctx context.Context, _ domain.RunID, prompt string) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	shown, _ := domain.WakeShownSince(ctx)
-	w.shown = append(w.shown, shown)
+	w.shown = append(w.shown, domain.WakeShown(ctx))
 	if w.refusal != nil {
 		return w.refusal
 	}
@@ -56,7 +57,7 @@ func (w *noticeWaker) typed() []string {
 	return append([]string(nil), w.lines...)
 }
 
-func (w *noticeWaker) lastShown() time.Time {
+func (w *noticeWaker) lastShown() bool {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	return w.shown[len(w.shown)-1]
@@ -212,6 +213,17 @@ func (f *noticeFixture) wantTyped(t *testing.T, unread ...int) {
 	}
 }
 
+// The coordination builder takes the room service the collaboration builder
+// attached, and builders run in the order their files' inits registered them.
+func TestTheCollaborationServiceRegistersBeforeCoordination(t *testing.T) {
+	index := func(name string) int {
+		return slices.IndexFunc(serviceBuilders, func(b serviceBuilder) bool { return b.name == name })
+	}
+	if rooms, coordination := index("collaboration"), index("coord"); rooms < 0 || rooms > coordination {
+		t.Fatalf("collaboration registers at %d and coord at %d, so coord is built without the room service that shows held wakes", rooms, coordination)
+	}
+}
+
 func TestATypedWakeWithNobodyConnectedInControlIsTypedAtOnce(t *testing.T) {
 	f := newNoticeFixture(t)
 	lease := f.takeControl(t)
@@ -315,7 +327,7 @@ func TestAHeldWakeWaitsForATerminalThatCannotTakeItsLine(t *testing.T) {
 	f := newNoticeFixture(t)
 	lease := f.takeControl(t)
 	notice := f.notice(t, 1)[0]
-	refusal := errors.New("scheduler: typed wake held: a person typed in the terminal in the last 10s")
+	refusal := fmt.Errorf("scheduler: %w: a person typed in the terminal in the last 10s", domain.ErrWakeHeld)
 	f.waker.refuse(refusal)
 	if _, err := f.rooms.ApproveNow(context.Background(), notice.ID, f.member.ID, "tab", lease.Generation); !errors.Is(err, refusal) || !errors.Is(err, collab.ErrWakeNotTyped) {
 		t.Fatalf("typing it now into a busy terminal = %v, want the refusal", err)
@@ -327,6 +339,15 @@ func TestAHeldWakeWaitsForATerminalThatCannotTakeItsLine(t *testing.T) {
 	}
 	f.wantTyped(t)
 
+	failure := errors.New("scheduler: typed wake: read the session supervisor's state: exec failed")
+	f.waker.refuse(failure)
+	if _, err := f.rooms.DeliverDue(context.Background(), 0); !errors.Is(err, failure) {
+		t.Fatalf("an overdue notice whose wake failed = %v, want the failure and not a postponement", err)
+	}
+	if room := f.room(t); room[0].State != store.RoomMessageQueued {
+		t.Fatalf("notice whose wake failed = %+v", room[0])
+	}
+
 	f.waker.refuse(nil)
 	f.expire(t)
 	f.wantTyped(t, 1)
@@ -335,27 +356,35 @@ func TestAHeldWakeWaitsForATerminalThatCannotTakeItsLine(t *testing.T) {
 	}
 }
 
-// A member who typed after the notice appeared may have a draft in the input
-// box, which only the terminal's side can tell.
-func TestAHeldWakeTellsTheTerminalSinceWhenAConnectedMemberSawIt(t *testing.T) {
+// Text a member in control left in the input box is submitted joined to the
+// line, which only the terminal's side can tell. A dropped connection keeps
+// the lease, and the draft, for the reconnect window.
+func TestAHeldWakeTellsTheTerminalAMemberInControlWasShownIt(t *testing.T) {
 	f := newNoticeFixture(t)
 	lease := f.takeControl(t)
 	notice := f.notice(t, 1)[0]
-	f.waker.refuse(errors.New("scheduler: typed wake held: the member in control typed and has not pressed Enter"))
+	f.waker.refuse(fmt.Errorf("scheduler: %w: the member in control typed and has not pressed Enter", domain.ErrWakeHeld))
 	f.expire(t)
-	if shown := f.waker.lastShown(); !shown.Equal(notice.CreatedAt) {
-		t.Fatalf("the wake of a notice created at %s was typed as shown since %s", notice.CreatedAt, shown)
+	if !f.waker.lastShown() {
+		t.Fatal("the overdue wake of a notice was not typed as shown to the member in control, so their draft would not hold it")
 	}
 	if _, err := f.rooms.ApproveNow(context.Background(), notice.ID, f.member.ID, "tab", lease.Generation); !errors.Is(err, collab.ErrWakeNotTyped) {
 		t.Fatalf("typing it now into a refusing terminal = %v", err)
 	}
-	if shown := f.waker.lastShown(); !shown.IsZero() {
-		t.Fatalf("a wake the member asked for was typed as shown since %s, so their own draft would hold it", shown)
+	if f.waker.lastShown() {
+		t.Fatal("a wake the member asked for was typed as shown, so their own draft would hold it")
 	}
 	f.control.Disconnect(string(f.run.ID), "tab", lease.Generation)
 	f.expire(t)
-	if shown := f.waker.lastShown(); !shown.IsZero() {
-		t.Fatalf("a wake whose member left was typed as shown since %s, so a draft they left would hold it for good", shown)
+	if !f.waker.lastShown() {
+		t.Fatal("a dropped connection that still holds the lease lost the member their draft's hold")
+	}
+	if err := f.control.Release(string(f.run.ID), f.member.ID, "tab", lease.Generation); err != nil {
+		t.Fatal(err)
+	}
+	f.expire(t)
+	if f.waker.lastShown() {
+		t.Fatal("a wake whose member let go was typed as shown, so a draft they left would hold it for good")
 	}
 }
 

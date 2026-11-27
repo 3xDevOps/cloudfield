@@ -90,7 +90,7 @@ function roomLine(p: Payload, actor: string): ReactNode {
       return 'Cloudfield added a note'
     case 'steer_request': {
       const state = steerStates[text(p.state) as RoomMessageState]
-      if (p.via === agentMailVia) return `A line telling the agent to read its mail ${state ?? 'was held'}`
+      if (p.via === agentMailVia) return `A line telling the agent to read its mail ${p.state === 'denied' ? 'was dismissed' : state ?? 'was held'}`
       return state ? <>A message from <Who id={p.actor_id} object /> {state}</> : <>{who} messaged the agent</>
     }
     default:

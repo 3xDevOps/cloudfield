@@ -31,10 +31,9 @@ func init() {
 		if childSvc != nil {
 			childAuthority = childSvc
 		}
-		rooms, _ := d.SSH.Services.Rooms.(*collab.Service)
-		var holdWake func(context.Context, domain.RunID, string, string) (bool, bool, error)
-		if rooms != nil {
-			holdWake = rooms.HoldWake
+		rooms, ok := d.SSH.Services.Rooms.(*collab.Service)
+		if !ok {
+			return nil, errors.New("coordination needs the collaboration service, which must register before it")
 		}
 		svc, err := coord.New(coord.Config{
 			Dir:              filepath.Join(d.DataDir, "coord"),
@@ -63,14 +62,12 @@ func init() {
 			WakeAdmission:     newCoordWakeAdmission(d),
 			Waker:             d.Runs,
 			ReminderAdmission: newCoordReminderAdmission(d),
-			HoldWake:          holdWake,
+			HoldWake:          rooms.HoldWake,
 		})
 		if err != nil {
 			return nil, err
 		}
-		if rooms != nil {
-			rooms.SetWaker(svc.TypeHeldWake)
-		}
+		rooms.SetWaker(svc.TypeHeldWake)
 		if childSvc != nil {
 			childSvc.SetMailer(svc)
 		}

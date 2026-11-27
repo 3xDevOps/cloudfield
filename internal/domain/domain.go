@@ -4,6 +4,7 @@ package domain
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -993,18 +994,21 @@ func WakeApproved(ctx context.Context) bool {
 
 type wakeShownKey struct{}
 
-// WithWakeShownSince marks ctx as typing a held mail wake that the member
-// connected in control of the session has been shown since t and did not
-// ask for.
-func WithWakeShownSince(ctx context.Context, t time.Time) context.Context {
-	return context.WithValue(ctx, wakeShownKey{}, t)
+// WithWakeShown marks ctx as typing a held mail wake that the member in
+// control of the session was shown and did not ask for.
+func WithWakeShown(ctx context.Context) context.Context {
+	return context.WithValue(ctx, wakeShownKey{}, true)
 }
 
-// WakeShownSince reports the time WithWakeShownSince marked ctx with.
-func WakeShownSince(ctx context.Context) (time.Time, bool) {
-	t, ok := ctx.Value(wakeShownKey{}).(time.Time)
-	return t, ok
+// WakeShown reports whether WithWakeShown marked ctx.
+func WakeShown(ctx context.Context) bool {
+	shown, _ := ctx.Value(wakeShownKey{}).(bool)
+	return shown
 }
+
+// ErrWakeHeld means a typed wake wrote nothing because its terminal cannot
+// take the line now. The wake stays owed and a later try may type it.
+var ErrWakeHeld = errors.New("typed wake held")
 
 // AccountMember returns the member whose agent account backs the run.
 func (r *Run) AccountMember() MemberID {

@@ -117,11 +117,11 @@ the server types into its terminal. While you are connected in control, the
 line is held for 45 seconds and shown to you first: **The agent has unread
 mail** under **Details → Needs you**, an **Agent mail** row in Chat and
 **Review agent mail** in the header. **Type it now** types it at once,
-joined to any text in the agent's input box, and **Not now** dismisses it.
-Otherwise it is typed when the 45 seconds end, you have not typed in the
-terminal for 10 seconds, and you pressed Enter after anything you typed
-since the notice appeared. A subsession's mail gets no notice and waits as
-above ([harnesses.md](harnesses.md#typed-wake)).
+joined to any text in the agent's input box, unless the agent keeps
+printing, and **Not now** dismisses it. Otherwise it is typed when the 45
+seconds end, you have not typed in the terminal for 10 seconds, and you
+pressed Enter after the last thing you typed there. A subsession's mail gets
+no notice and waits as above ([harnesses.md](harnesses.md#typed-wake)).
 
 ### The Terminal toolbar
 

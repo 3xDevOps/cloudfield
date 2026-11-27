@@ -5,6 +5,7 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -84,8 +85,22 @@ func TestTheMemberInControlTypesAHeldWakeOverTheirOwnInput(t *testing.T) {
 	e.sched.mu.Lock()
 	entry.quietFrom = time.Time{}
 	e.sched.mu.Unlock()
+	printing := func(on bool) {
+		sess.mu.Lock()
+		sess.printing, sess.last = on, time.Now()
+		sess.mu.Unlock()
+	}
+	printing(true)
+	if err := e.sched.Wake(asked, run, protocol.CoordInboxContext(1)); !errors.Is(err, domain.ErrWakeHeld) || len(e.pty.injected()) != 0 {
+		t.Fatalf("into the terminal of an agent that keeps printing: Wake = %v, typed %+v", err, e.pty.injected())
+	}
+	printing(false)
+	began := time.Now()
 	if err := e.sched.Wake(asked, run, protocol.CoordInboxContext(1)); err != nil {
 		t.Fatalf("Wake the member in control asked for: %v", err)
+	}
+	if waited := time.Since(began); waited < typedWakeAskedQuiet-50*time.Millisecond {
+		t.Fatalf("typed %s after the terminal printed, before a working agent would have printed again", waited)
 	}
 	if got := e.pty.injected(); len(got) != 1 || got[0].message != typedWakeLine(1) {
 		t.Fatalf("typed %+v, want the line once", got)
@@ -98,16 +113,16 @@ func TestAWakeShownToTheMemberInControlWaitsForTheirDraft(t *testing.T) {
 	withCoordination(t, e)
 	run, _ := e.launchQuiet(t, "gemini")
 	sess := e.pty.session(run)
-	noticed := time.Now().Add(-time.Minute)
+	typed := time.Now().Add(-time.Hour)
 	draft := func(at time.Time) {
 		sess.mu.Lock()
-		sess.typed, sess.draft = noticed.Add(30*time.Second), at
+		sess.typed, sess.draft = typed, at
 		sess.mu.Unlock()
 	}
-	shown := domain.WithWakeShownSince(t.Context(), noticed)
-	draft(noticed.Add(30 * time.Second))
-	if err := e.sched.Wake(shown, run, protocol.CoordInboxContext(1)); err == nil || len(e.pty.injected()) != 0 {
-		t.Fatalf("over text typed 30 s ago and not sent: Wake = %v, typed %+v", err, e.pty.injected())
+	shown := domain.WithWakeShown(t.Context())
+	draft(typed)
+	if err := e.sched.Wake(shown, run, protocol.CoordInboxContext(1)); !errors.Is(err, domain.ErrWakeHeld) || len(e.pty.injected()) != 0 {
+		t.Fatalf("over text typed an hour ago and not sent: Wake = %v, typed %+v", err, e.pty.injected())
 	}
 	for _, tc := range []struct {
 		name  string
@@ -115,17 +130,42 @@ func TestAWakeShownToTheMemberInControlWaitsForTheirDraft(t *testing.T) {
 		draft time.Time
 	}{
 		{"they pressed Enter", shown, time.Time{}},
-		{"their draft is older than the notice", shown, noticed.Add(-time.Second)},
-		{"they let go of control", t.Context(), noticed.Add(30 * time.Second)},
-		{"they asked for the line", domain.WithWakeApproved(t.Context()), noticed.Add(30 * time.Second)},
+		{"they let go of control", t.Context(), typed},
+		{"they asked for the line", domain.WithWakeApproved(t.Context()), typed},
 	} {
 		draft(tc.draft)
 		if err := e.sched.Wake(tc.ctx, run, protocol.CoordInboxContext(1)); err != nil {
 			t.Fatalf("once %s: Wake = %v", tc.name, err)
 		}
 	}
-	if got := e.pty.injected(); len(got) != 4 {
-		t.Fatalf("typed %d lines, want 4", len(got))
+	if got := e.pty.injected(); len(got) != 3 {
+		t.Fatalf("typed %d lines, want 3", len(got))
+	}
+}
+
+// The overdue sweep asks every second, inside the admission the member's
+// keystrokes wait for.
+func TestAHeldTypedWakeDoesNotInspectItsContainer(t *testing.T) {
+	t.Parallel()
+	e := newTestEnv(t, withServerBinary(fakeServerBinary(t, "typed wake cli")))
+	withCoordination(t, e)
+	run, _ := e.launchQuiet(t, "gemini")
+	sess := e.pty.session(run)
+	sess.mu.Lock()
+	sess.typed = time.Now()
+	sess.mu.Unlock()
+	var inspects atomic.Int32
+	e.rt.mu.Lock()
+	e.rt.inspectHook = func(runtime.ID) { inspects.Add(1) }
+	e.rt.mu.Unlock()
+	const wakes = 20
+	for range wakes {
+		if err := e.sched.Wake(t.Context(), run, protocol.CoordInboxContext(1)); !errors.Is(err, domain.ErrWakeHeld) {
+			t.Fatalf("Wake over a person's input = %v", err)
+		}
+	}
+	if got := inspects.Load(); got >= wakes {
+		t.Fatalf("%d held wakes inspected the container %d times", wakes, got)
 	}
 }
 
@@ -167,6 +207,9 @@ func TestATypedWakeWaitsForAQuietUnattendedTerminal(t *testing.T) {
 		err := e.sched.Wake(t.Context(), run, protocol.CoordInboxContext(1))
 		if err == nil || len(e.pty.injected()) != 0 {
 			t.Fatalf("while %s: Wake = %v, typed %+v; want the wake left owed", tc.name, err, e.pty.injected())
+		}
+		if !errors.Is(err, domain.ErrWakeHeld) {
+			t.Fatalf("while %s: Wake = %v, which a notice takes for a failed delivery", tc.name, err)
 		}
 		if tc.name == "bracketed paste mode is off" && !errors.Is(err, ptyhost.ErrPasteModeOff) {
 			t.Fatalf("with paste mode off Wake = %v, want the terminal's refusal", err)

@@ -266,20 +266,31 @@ func (s *Scheduler) Wakeable(run domain.RunID) bool {
 	return s.IdleEnhanced(run)
 }
 
-// Wake prompts run's agent with prompt, text coord generates, naming the
-// command its container has. The turn-end report reminder keeps the old
-// name: released dashboards recognise it by its lead.
-func (s *Scheduler) Wake(ctx context.Context, run domain.RunID, prompt string) error {
-	if !strings.HasPrefix(prompt, coordhooks.ReportReminderLead) {
-		s.mu.Lock()
-		var cid runtime.ID
-		if entry := s.runs[run]; entry != nil {
-			cid = entry.containerID
-		}
-		s.mu.Unlock()
-		prompt = coordhooks.Named(prompt, s.containerCLI(ctx, cid))
+// wakeNamed is prompt naming the command run's container has. The turn-end
+// report reminder keeps the old name: released dashboards recognise it by
+// its lead.
+func (s *Scheduler) wakeNamed(ctx context.Context, run domain.RunID, prompt string) string {
+	if strings.HasPrefix(prompt, coordhooks.ReportReminderLead) {
+		return prompt
 	}
+	s.mu.Lock()
+	var cid runtime.ID
+	if entry := s.runs[run]; entry != nil {
+		cid = entry.containerID
+	}
+	s.mu.Unlock()
+	return coordhooks.Named(prompt, s.containerCLI(ctx, cid))
+}
+
+// Wake prompts run's agent with prompt, text coord generates, naming the
+// command its container has (wakeNamed). A typed wake names it only once
+// its guards pass: they refuse every second while a notice is overdue, and
+// the name can cost a container inspect.
+func (s *Scheduler) Wake(ctx context.Context, run domain.RunID, prompt string) error {
 	typed := s.TypedWake(run)
+	if !typed {
+		prompt = s.wakeNamed(ctx, run, prompt)
+	}
 	if s.asleepStandardVM(run) {
 		// The save cut the agent's mail hook and app-server bridge; both
 		// connect again once the VM runs. The hook then takes the mail. A

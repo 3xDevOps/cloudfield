@@ -11,13 +11,14 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/store"
 )
 
-// ErrWakeNotTyped means the member in control asked for a held mail wake
-// now and its terminal could not take the line; the notice stays queued.
+// ErrWakeNotTyped means a held mail wake's line was not typed, for the
+// reason it wraps; the notice stays queued.
 var ErrWakeNotTyped = errors.New("collab: the line was not typed and stays queued")
 
 // Waker types the mail wake a notice held for run into its terminal. It
-// reports false when nothing is left to wake, and fails, having typed
-// nothing, while the terminal cannot take the line.
+// reports false when nothing is left to wake, and fails with
+// domain.ErrWakeHeld, having typed nothing, while the terminal cannot take
+// the line.
 type Waker func(ctx context.Context, run domain.RunID) (bool, error)
 
 // SetWaker installs what delivers a mail wake notice; until then a notice
@@ -102,9 +103,9 @@ func (s *Service) HoldWake(ctx context.Context, runID domain.RunID, key, notice 
 // deliverWake has the Waker type the wake a notice held. It types before it
 // claims the row, inside the run's admission, so a terminal that cannot take
 // the line leaves the notice queued for the next sweep and no second
-// delivery types meanwhile. A wake nobody asked for is typed as shown since
-// the notice appeared (domain.WithWakeShownSince) while a member is still
-// connected in control.
+// delivery types meanwhile. A wake nobody asked for is typed as shown
+// (domain.WithWakeShown) while a member holds control: a dropped connection
+// keeps its lease, and what the member was typing, for the reconnect window.
 func (s *Service) deliverWake(ctx context.Context, msg *store.RoomMessage, approver domain.MemberID, admit func(func() error) error) (Result, error) {
 	s.mu.Lock()
 	wake := s.waker
@@ -115,9 +116,9 @@ func (s *Service) deliverWake(ctx context.Context, msg *store.RoomMessage, appro
 	}
 	if admit == nil {
 		admit = func(fn func() error) error {
-			return s.cfg.Control.AdmitSnapshot(string(msg.RunID), func(current control.Snapshot, controlled bool) error {
-				if controlled && current.Connected {
-					wakeCtx = domain.WithWakeShownSince(ctx, msg.CreatedAt)
+			return s.cfg.Control.AdmitSnapshot(string(msg.RunID), func(_ control.Snapshot, controlled bool) error {
+				if controlled {
+					wakeCtx = domain.WithWakeShown(ctx)
 				}
 				return fn()
 			})
@@ -146,7 +147,7 @@ func (s *Service) deliverWake(ctx context.Context, msg *store.RoomMessage, appro
 		}
 		return nil
 	})
-	if approver == "" && errors.Is(err, ErrWakeNotTyped) {
+	if approver == "" && errors.Is(err, domain.ErrWakeHeld) {
 		// An overdue notice whose line the terminal cannot take yet is not
 		// a failed delivery: the next sweep tries again.
 		slog.Debug("collab: mail wake postponed", "run", msg.RunID, "message", msg.ID, "error", err)

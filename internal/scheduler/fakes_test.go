@@ -878,6 +878,9 @@ type fakePTYSession struct {
 	typed time.Time
 	draft time.Time
 	ended bool
+	// printing makes every LastOutput report output just now, as a working
+	// agent's spinner does.
+	printing bool
 }
 
 type fakeInject struct {
@@ -999,6 +1002,9 @@ func (p *fakePTY) LastOutput(key ptyhost.SessionKey) (time.Time, bool) {
 	}
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
+	if sess.printing {
+		return time.Now(), true
+	}
 	return sess.last, true
 }
 
