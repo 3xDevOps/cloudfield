@@ -517,9 +517,11 @@ object.
 
 `cloudfield wait <session-id> <session-id> ...` waits on several sessions. It returns when the
 first of them would end a wait on it alone, prints that session and exits with its code; when
-more than one would, the first in the order given. A session that already finished or needs
-you ends the wait at once, so leave it out to wait on the rest. On timeout it prints one line
-per session, and with `--json` nothing.
+more than one would, the first in the order given. A session already in such a state (finished,
+failed, needs you, parked or a broken wait) ends the wait at once every time, so leave it out to
+wait on the rest. It reads the sessions in the order given and stops at the one that ends the
+wait, so an unknown id after that one is not reported. On timeout it prints every session, and
+with `--json` nothing.
 
 ## Prove the plumbing without an agent subscription
 

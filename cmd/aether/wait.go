@@ -50,27 +50,48 @@ const (
 // the output, may take before the connection is cut.
 const waitOutputGrace = 15 * time.Second
 
-func runWait(args []string) error {
+func parseWaitArgs(args []string) ([]string, time.Duration, bool, error) {
 	fs := newFlagSet("wait")
 	timeout := fs.Duration("timeout", 0, "give up after this long and exit 124, e.g. 30m (default: no limit)")
 	asJSON := fs.Bool("json", false, "print the session as cloudfield sessions <session-id> --json does")
 	var runIDs []string
 	for {
 		if err := fs.Parse(args); err != nil {
-			return fmt.Errorf("%w\nusage: cloudfield wait <session-id> [<session-id>...] [--timeout <duration>] [--json]", err)
+			return nil, 0, false, fmt.Errorf("%w\nusage: cloudfield wait <session-id> [<session-id>...] [--timeout <duration>] [--json]", err)
 		}
 		if fs.NArg() == 0 {
 			break
 		}
-		runIDs, args = append(runIDs, fs.Arg(0)), fs.Args()[1:]
+		if id := fs.Arg(0); !slices.Contains(runIDs, id) {
+			runIDs = append(runIDs, id)
+		}
+		args = fs.Args()[1:]
 	}
-	if len(runIDs) == 0 {
-		return fmt.Errorf("usage: cloudfield wait <session-id> [<session-id>...] [--timeout <duration>] [--json]")
+	if len(runIDs) == 0 || slices.Contains(runIDs, "") {
+		return nil, 0, false, fmt.Errorf("usage: cloudfield wait <session-id> [<session-id>...] [--timeout <duration>] [--json]")
+	}
+	return runIDs, *timeout, *asJSON, nil
+}
+
+// A subscription names one session at most, so several take every
+// session's status and signalLines keeps theirs.
+func waitSubscription(runIDs []string) protocol.SubscribeRequest {
+	req := protocol.SubscribeRequest{Types: []string{string(events.TypeRunStatus)}}
+	if len(runIDs) == 1 {
+		req.RunID = runIDs[0]
+	}
+	return req
+}
+
+func runWait(args []string) error {
+	runIDs, timeout, asJSON, err := parseWaitArgs(args)
+	if err != nil {
+		return err
 	}
 	var deadline <-chan time.Time
-	end := time.Now().Add(*timeout)
-	if *timeout > 0 {
-		timer := time.NewTimer(*timeout)
+	end := time.Now().Add(timeout)
+	if timeout > 0 {
+		timer := time.NewTimer(timeout)
 		defer timer.Stop()
 		deadline = timer.C
 	}
@@ -84,7 +105,7 @@ func runWait(args []string) error {
 	}
 	defer func() { _ = conn.Close() }()
 	var cutOff atomic.Bool
-	if *timeout > 0 {
+	if timeout > 0 {
 		// A call has no deadline of its own: a server that stops answering
 		// is cut off by closing the connection.
 		cut := time.AfterFunc(time.Until(end)+waitOutputGrace, func() {
@@ -95,24 +116,18 @@ func runWait(args []string) error {
 	}
 	c, err := conn.Control()
 	if err != nil {
-		return timedOutAfterCut(err, cutOff.Load(), *timeout, runIDs)
+		return timedOutAfterCut(err, cutOff.Load(), timeout, runIDs)
 	}
 	defer func() { _ = c.Close() }()
 	changed, every := make(chan struct{}, 1), waitPoll
-	// A subscription names one session at most, so several take every
-	// session's status and signalLines keeps theirs.
-	subscribe := protocol.SubscribeRequest{Types: []string{string(events.TypeRunStatus)}}
-	if len(runIDs) == 1 {
-		subscribe.RunID = runIDs[0]
-	}
-	stream, err := conn.EventsStream(subscribe)
+	stream, err := conn.EventsStream(waitSubscription(runIDs))
 	if err == nil {
 		defer func() { _ = stream.Close() }()
 		go signalLines(stream, runIDs, changed)
 		every = waitRecheck
 	}
-	err = waitRun(c, os.Stdout, os.Stderr, runIDs, *asJSON, changed, every, deadline, *timeout)
-	return timedOutAfterCut(err, cutOff.Load(), *timeout, runIDs)
+	err = waitRun(c, os.Stdout, os.Stderr, runIDs, asJSON, changed, every, deadline, timeout)
+	return timedOutAfterCut(err, cutOff.Load(), timeout, runIDs)
 }
 
 func sessionsNamed(runIDs []string) string {
@@ -164,6 +179,7 @@ func waitRun(c *protocol.Client, w, stderr io.Writer, runIDs []string, asJSON bo
 			code   int
 			done   bool
 		)
+		attention := map[string][]protocol.AttentionItem{}
 		for _, id := range runIDs {
 			r, err := getRun(c, id)
 			if err != nil {
@@ -178,9 +194,12 @@ func waitRun(c *protocol.Client, w, stderr io.Writer, runIDs []string, asJSON bo
 					_, _ = fmt.Fprintf(stderr, "session %s still waits, but %s\n", r.ID, printable(r.Wait.Text(time.Now())))
 				}
 			}
-			items, err := attentionItems(c, r.WorkspaceID)
-			if err != nil {
-				return err
+			items, listed := attention[r.WorkspaceID]
+			if !listed {
+				if items, err = attentionItems(c, r.WorkspaceID); err != nil {
+					return err
+				}
+				attention[r.WorkspaceID] = items
 			}
 			if code, done = waitOutcome(r, items); done {
 				waited = []waitedRun{{r, items}}

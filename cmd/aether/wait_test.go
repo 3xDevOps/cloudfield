@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -113,6 +115,7 @@ func TestWaitOnSeveralSessions(t *testing.T) {
 			err: "timed out after 1m0s waiting for sessions r1, r4"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			var lists atomic.Int32
 			c := fakeControlMethods(t, map[string]*fakeReply{
 				protocol.MethodRunGet: {byParams: func(params json.RawMessage) any {
 					var p protocol.RunIDParams
@@ -121,7 +124,10 @@ func TestWaitOnSeveralSessions(t *testing.T) {
 					r.ID, r.WorkspaceID = p.RunID, "ws1"
 					return protocol.RunResult{Run: r}
 				}},
-				protocol.MethodAttentionList:     {result: protocol.AttentionListResult{}},
+				protocol.MethodAttentionList: {byParams: func(json.RawMessage) any {
+					lists.Add(1)
+					return protocol.AttentionListResult{}
+				}},
 				protocol.MethodWorkspaceList:     {result: protocol.WorkspaceListResult{}},
 				protocol.MethodWorkspaceTimeline: {result: protocol.WorkspaceTimelineResult{}},
 			})
@@ -134,7 +140,51 @@ func TestWaitOnSeveralSessions(t *testing.T) {
 			if out.String() != tc.out {
 				t.Errorf("wait printed %q, want %q", out.String(), tc.out)
 			}
+			if n := lists.Load(); n != 1 {
+				t.Errorf("attention.list ran %d times for sessions of one workspace, want 1", n)
+			}
 		})
+	}
+}
+
+func TestParseWaitArgs(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		args    []string
+		ids     []string
+		timeout time.Duration
+		asJSON  bool
+	}{
+		{name: "one id", args: []string{"r1"}, ids: []string{"r1"}},
+		{name: "flags between ids", args: []string{"r1", "--timeout", "1m", "r2", "--json"}, ids: []string{"r1", "r2"}, timeout: time.Minute, asJSON: true},
+		{name: "flags first", args: []string{"--json", "r1", "r2"}, ids: []string{"r1", "r2"}, asJSON: true},
+		{name: "an id given twice", args: []string{"r1", "r2", "r1"}, ids: []string{"r1", "r2"}},
+		{name: "no id"},
+		{name: "an empty id", args: []string{"r1", ""}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ids, timeout, asJSON, err := parseWaitArgs(tc.args)
+			if tc.ids == nil {
+				if err == nil || !strings.HasPrefix(err.Error(), "usage: cloudfield wait ") {
+					t.Fatalf("parseWaitArgs = %q, %v, want the usage error", ids, err)
+				}
+				return
+			}
+			if err != nil || !slices.Equal(ids, tc.ids) || timeout != tc.timeout || asJSON != tc.asJSON {
+				t.Fatalf("parseWaitArgs = %q, %s, %v, %v, want %q, %s, %v", ids, timeout, asJSON, err, tc.ids, tc.timeout, tc.asJSON)
+			}
+		})
+	}
+}
+
+// A wait on several sessions that filtered its subscription on one of them
+// would hear of the others only at its recheck.
+func TestWaitSubscribesToOneSessionOrEvery(t *testing.T) {
+	if got := waitSubscription([]string{"r1"}).RunID; got != "r1" {
+		t.Errorf("a wait on r1 subscribed to session %q, want r1", got)
+	}
+	if got := waitSubscription([]string{"r1", "r2"}).RunID; got != "" {
+		t.Errorf("a wait on r1 and r2 subscribed to session %q, want every session", got)
 	}
 }
 

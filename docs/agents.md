@@ -299,9 +299,9 @@ cloudfield message <session-id> "<reply>"
 
 Given several session ids, `cloudfield wait` returns when the first of them
 would end a wait on it alone, prints that session and exits with its code. A
-session that already finished or needs you ends the wait at once, so leave it
-out to wait on the rest. On timeout it prints one line per session, and with
-`--json` nothing.
+session already in such a state (finished, failed, needs you, parked or a
+broken wait) ends the wait at once every time, so leave it out to wait on the
+rest. On timeout it prints every session, and with `--json` nothing.
 
 `cloudfield wait` exits 0 when the session finished, 1 when it failed, 3 when it needs
 you, 4 when it is parked with nothing pending (its turn ended without a
