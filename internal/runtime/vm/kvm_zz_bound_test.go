@@ -38,6 +38,7 @@ import (
 //	           E C + zero pages punched out of the booted VM,
 //	           G today's guest; before every save the frames the guest
 //	           lists as free are punched out of the mapped memory file,
+//	           H G while the guest keeps allocating, checking and freeing,
 //	           cost: the build timing below instead of the chain
 
 // lowRAM is where Cloud Hypervisor's x86-64 guests stop below 4 GiB; the
@@ -58,6 +59,10 @@ func (z *zz) punchFree(label string) {
 	listed := time.Since(start)
 	file := filepath.Join(z.e.path(z.key, snapshotDir), "memory-ranges")
 	before := allocatedMiB(file)
+	if z.arm == "H" {
+		// Frames change hands for two seconds between the list and the punch.
+		time.Sleep(2 * time.Second)
+	}
 	free, punched, calls := z.freeWalk(file, bits, true)
 	zzFreeBits = bits
 	z.logf("punchfree %s list_ms=%d punch_ms=%d guest_frames=%d free_mib=%d punched_mib=%d punch_calls=%d source_allocated_mib before=%d after=%d",
@@ -389,6 +394,27 @@ func TestKVMZZFileBound(t *testing.T) {
 		t.Fatal(err)
 	}
 	z.verify("after fill")
+	stressRounds := 0
+	// stressed checks the guest's allocate-write-hold-read-free loop, which
+	// runs through every list, punch, save and wake of arm H.
+	stressed := func(label string) {
+		if arm != "H" {
+			return
+		}
+		var rounds, bad int
+		out := z.guest("cat /run/zzstress")
+		if _, scanErr := fmt.Sscanf(out, "rounds=%d bad=%d", &rounds, &bad); scanErr != nil {
+			t.Fatalf("stress status %q: %v", out, scanErr)
+		}
+		if bad != 0 || rounds <= stressRounds {
+			t.Errorf("ZZ arm=%s fs=%s mib=%d CHECK-FAILED stress %s: %s, after %d rounds", z.arm, z.fs, z.mib, label, out, stressRounds)
+		}
+		z.logf("stress %s ok=%v %s", label, bad == 0 && rounds > stressRounds, out)
+		stressRounds = rounds
+	}
+	if arm == "H" {
+		z.guest("setsid /usr/local/bin/zzmemcheck stress </dev/null >/var/log/zzstress.log 2>&1 & sleep 2; test -s /run/zzstress")
+	}
 	// The boot's own high-water mark: a block is used and freed before the
 	// first save, as in a session that built something before it went idle.
 	z.work("0 first", 1)
@@ -398,7 +424,7 @@ func TestKVMZZFileBound(t *testing.T) {
 	// monitor and, in the arms that do, digs the holes.
 	save := func(n int, label, into string, dump bool, changed int) {
 		z.settle(label)
-		if arm == "G" && n > 0 {
+		if (arm == "G" || arm == "H") && n > 0 {
 			z.punchFree(label)
 		}
 		used, held, private := z.guestUsed(), z.held(), z.privateMiB()
@@ -435,7 +461,7 @@ func TestKVMZZFileBound(t *testing.T) {
 		z.syncfs()
 		file = filepath.Join(snapDir, "memory-ranges")
 		count, shared, _, _ := extents(file)
-		if arm == "G" && n > 0 {
+		if (arm == "G" || arm == "H") && n > 0 {
 			free, stale, runs := z.freeWalk(file, zzFreeBits, false)
 			z.logf("stalefree %s listed_free_mib=%d of_it_in_the_new_file_mib=%d runs=%d", label, free>>20, stale>>20, runs)
 		}
@@ -463,6 +489,7 @@ func TestKVMZZFileBound(t *testing.T) {
 		}
 		z.rewrite(uint64(n+1), 64)
 		z.work(label, uint64(n+1))
+		stressed(label)
 		if n == 6 {
 			z.logf("spike %s spike_mib=%d %s", label, z.spikeMiB, z.fresh(fmt.Sprintf("spike %d", z.spikeMiB)))
 			z.spiked = true
@@ -476,6 +503,8 @@ func TestKVMZZFileBound(t *testing.T) {
 		t.Fatalf("the guest check failed after the last save%s", e.logTail(z.key))
 	}
 	z.logf("final nonzero check: %s", z.fresh("transient 64"))
+	time.Sleep(3 * time.Second)
+	stressed("final")
 }
 
 // zzGuestFacts says how the guest kernel was booted and whether its balloon

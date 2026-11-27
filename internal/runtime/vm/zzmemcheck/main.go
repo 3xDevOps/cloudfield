@@ -344,12 +344,60 @@ func freemap() error {
 	return err
 }
 
+// stress keeps allocating memory, writing a pattern, holding it for a
+// moment, reading it back and freeing it, so frames change hands while the
+// host acts on a free frame map. It records its rounds and bad pages.
+func stress() error {
+	var mu sync.Mutex
+	rounds, bad, first := 0, 0, ""
+	worker := func(id uint64, mib int, hold time.Duration) {
+		for gen := uint64(1); ; gen++ {
+			mem, err := unix.Mmap(-1, 0, mib<<20, unix.PROT_READ|unix.PROT_WRITE, unix.MAP_ANON|unix.MAP_PRIVATE)
+			if err != nil {
+				time.Sleep(time.Second)
+				continue
+			}
+			base := spikeBase * (4 + id)
+			fillChunks(mem, base, gen)
+			time.Sleep(time.Duration(gen%4) * hold)
+			n, why := 0, ""
+			for c := 0; c < mib; c++ {
+				got, m, w := checkChunk(mem[c*chunk:(c+1)*chunk], base+uint64(c)*chunk/page)
+				if got != gen && m == 0 {
+					m, w = chunk/page, fmt.Sprintf("chunk %d has gen %d, want %d", c, got, gen)
+				}
+				if m > 0 && why == "" {
+					why = w
+				}
+				n += m
+			}
+			_ = unix.Munmap(mem)
+			mu.Lock()
+			rounds++
+			bad += n
+			if first == "" {
+				first = why
+			}
+			line := fmt.Sprintf("rounds=%d bad=%d first=%q\n", rounds, bad, first)
+			mu.Unlock()
+			if os.WriteFile("/run/zzstress.tmp", []byte(line), 0o644) == nil {
+				_ = os.Rename("/run/zzstress.tmp", "/run/zzstress")
+			}
+		}
+	}
+	go worker(0, 64, 100*time.Millisecond)
+	worker(1, 16, 0)
+	return nil
+}
+
 func main() {
 	var err error
 	if v := os.Getenv("ZZ_SOCK"); v != "" {
 		sock = v
 	}
 	switch {
+	case len(os.Args) == 2 && os.Args[1] == "stress":
+		err = stress()
 	case len(os.Args) == 2 && os.Args[1] == "freemap":
 		err = freemap()
 	case len(os.Args) == 2 && os.Args[1] == "serve":
