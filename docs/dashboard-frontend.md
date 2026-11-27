@@ -3041,7 +3041,10 @@ logins could not be read." with the error verbatim and **Retry login read**
 (only with a login picked or several logins in the last read, so a member
 who has added none sees nothing of it),
 and a login removed meanwhile reads "You have no login <name> any more. Pick
-another to launch."; **Launch** stays off in all three. With several
+another to launch."; **Launch** stays off in all three. When the caller's only
+login has Automatic off, a line above **Launch** says a session that names no
+login is refused until Automatic is on, on Agents or with `cloudfield agent
+logins auto default on`. With several
 logins, **Save as my default** still shows, since `no_fallback` also stops
 moves between one account's logins, and names what it saves: "Saves
 whether a session may move to another login, for launches on every device;
@@ -6715,7 +6718,11 @@ signed in offers its terminal login method, typed as the ACP server command
 installed Claude Code row adds **Add login**. A member with only the default
 login sees nothing else new, unless a switch of that login is off: the server
 keeps its row then, and the list below shows it with its switches, so they can
-be turned back on. With more, the row's status reads "Installed · 3
+be turned back on. With Automatic off there, the list's lead says that a
+session that names no login is refused until Automatic is on, here or with
+`cloudfield agent logins auto default on`, since the launch dialog offers no
+pick with one login. Turned back on, the server drops the row; the page keeps
+it, and the focus on its switch, until the member leaves the page. With more, the row's status reads "Installed · 3
 logins" ("Installed · 3 logins · default login signed out" while
 `login_problem` names the default one), the row offers **Run** while any
 login is found (an added login whose kind the list reads counts as

@@ -1394,6 +1394,20 @@ describe('login', () => {
     expect(vi.mocked(api.runLaunch).mock.calls[0]![0]).not.toHaveProperty('login')
   })
 
+  it('says before Launch that a lone login with Automatic off refuses a session that names none', async () => {
+    const line = 'Your only login has Automatic off, so a session that names no login is refused until you turn Automatic on, on Agents or with cloudfield agent logins auto default on.'
+    vi.mocked(api.agentLoginList).mockResolvedValue([{ ...logins[0]!, automatic: false }])
+    const view = render(<LaunchDialog />)
+    expect(await screen.findByText(/^Your only login has Automatic off/)).toBeDefined()
+    expect(screen.getByText(/^Your only login has Automatic off/).textContent).toBe(line)
+    expect(screen.queryByRole('combobox', { name: 'Login' })).toBeNull()
+    view.unmount()
+
+    vi.mocked(api.agentLoginList).mockResolvedValue([{ ...logins[0]!, automatic: true }])
+    await open()
+    expect(screen.queryByText(/^Your only login has Automatic off/)).toBeNull()
+  })
+
   it('shows Fallback as before logins to a member with one login, on a server with them or without', async () => {
     vi.mocked(api.accountList).mockResolvedValue({ accounts: [alice, bob], shared_with: [] })
     for (const features of [['logins'], []]) {

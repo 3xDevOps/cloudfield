@@ -398,10 +398,14 @@ export function LoginList({ logins, sharedWith, sharedError, client, onChanged }
     act('order', logins[index]!.id, client.agentLoginOrder(loginAgent, ids), () => onChanged().then((landed) => setUnread(!landed)))
   }
   const firstAutomatic = logins.find((login) => login.automatic)?.id
+  // The launch dialog offers no pick with one login, so a lone login with Automatic off starts nothing.
+  const lone = logins.length === 1 ? logins[0] : undefined
   return (
     <section aria-label="Claude Code logins" className="flex min-w-0 basis-full flex-col gap-3 border-t border-seam pt-3 sm:pl-11">
       <p className="text-ui-sm text-muted">
-        Sessions start on the first automatic login in your order with usage left, and move to the first other one with usage left when it runs out. A login with Automatic off is used only when you pick it at launch.
+        {lone && !lone.automatic
+          ? <>Your only login has Automatic off, so a session that names no login is refused until you turn Automatic on, here or with <span className="font-code">cloudfield agent logins auto {lone.name} on</span>.</>
+          : `Sessions start on the first automatic login in your order with usage left, and move to the first other one with usage left when it runs out.${lone ? '' : ' A login with Automatic off is used only when you pick it at launch.'}`}
         {sharedWith && (sharedWith.length > 0
           ? ` Your account is shared with ${names(sharedWith)}: logins on for shares serve their sessions too.`
           : ' Your account is not shared with anyone.')}

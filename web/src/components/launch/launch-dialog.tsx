@@ -364,6 +364,11 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
           {ownRead.error}{login && ` Launch waits for them, since you picked ${login.name}.`}
         </Callout>
       )}
+      {loginsOffered && ownLogins?.length === 1 && !ownLogins[0]!.automatic && (
+        <p className="text-ui-sm text-state-needs-you">
+          Your only login has Automatic off, so a session that names no login is refused until you turn Automatic on, on Agents or with <span className="font-code">cloudfield agent logins auto {ownLogins[0]!.name} on</span>.
+        </p>
+      )}
       {noAgents && (
         <Callout
           tone="neutral"
