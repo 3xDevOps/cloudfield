@@ -409,7 +409,7 @@ func refuseLiveWork(ctx context.Context, tx *sql.Tx, a, b domain.MemberID) error
 			live = append(live, "'"+string(s)+"'")
 		}
 	}
-	runs, err := queryStrings(ctx, tx, `SELECT id FROM visible_runs WHERE status IN (`+strings.Join(live, ", ")+`)
+	runs, err := queryStrings(ctx, tx, `SELECT id FROM runs WHERE status IN (`+strings.Join(live, ", ")+`)
 		AND (member_id IN (?1, ?2) OR account_member_id IN (?1, ?2) OR home_member_id IN (?1, ?2)
 		     OR requested_account_member_id IN (?1, ?2)) ORDER BY id`, a, b)
 	if err != nil {

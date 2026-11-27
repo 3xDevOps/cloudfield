@@ -20,7 +20,8 @@ func (d *DB) CheckWorkspaceDeletion(ctx context.Context, id domain.WorkspaceID) 
 		extra   []any
 	}{
 		{`SELECT EXISTS (SELECT 1 FROM schedules s JOIN templates t ON t.id = s.template_id WHERE t.workspace_id = ?)`, "remove workspace schedules before deleting the workspace", nil},
-		{`SELECT EXISTS (SELECT 1 FROM run_repos rr JOIN visible_runs r ON r.id = rr.run_id WHERE rr.workspace_id = ? AND r.status IN (` + placeholders + `))`, "workspace is an extra repository of an unfinished session", liveArgs},
+		{`SELECT EXISTS (SELECT 1 FROM runs WHERE workspace_id = ? AND spare = 1)`, "a spare session still uses the workspace", nil},
+		{`SELECT EXISTS (SELECT 1 FROM run_repos rr JOIN runs r ON r.id = rr.run_id WHERE rr.workspace_id = ? AND r.status IN (` + placeholders + `))`, "workspace is an extra repository of an unfinished session", liveArgs},
 	}
 	for _, check := range checks {
 		var blocked bool

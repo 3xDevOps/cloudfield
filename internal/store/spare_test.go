@@ -21,6 +21,9 @@ func TestEveryRunsReadHidesSpares(t *testing.T) {
 		{"migrate.go", "", "migrations change the table itself, spares included"},
 		{"runs.go", "`DELETE FROM runs WHERE id = ?`", "deleting a run deletes a spare too"},
 		{"profile.go", "SELECT profile_snapshot_id FROM runs", "pruning must keep the profile snapshot a live spare pinned"},
+		{"workspace_delete.go", "FROM runs WHERE workspace_id = ? AND spare = 1", "a spare's row keeps its workspace from being deleted"},
+		{"workspace_delete.go", "FROM run_repos rr JOIN runs r", "a live spare mounts its extra repositories"},
+		{"merge.go", "SELECT id FROM runs WHERE status IN (", "a live spare still acts as its member"},
 	}
 	read := regexp.MustCompile(`\b(FROM|JOIN) runs\b`)
 	files, err := filepath.Glob("*.go")
@@ -79,15 +82,12 @@ func TestVisibleRunsShowsALaterRunsColumn(t *testing.T) {
 func TestSpareRunsAreHidden(t *testing.T) {
 	ctx := context.Background()
 	db := openTestDB(t)
-	w, extra := mustCreateWorkspace(t, db), mustCreateWorkspace(t, db)
+	w := mustCreateWorkspace(t, db)
 	ada, bob := mustCreateMember(t, db), mustCreateTeammate(t, db)
 	live := mustCreateRun(t, db, w.ID, ada.ID, domain.RunQueued)
 	spare := &domain.Run{WorkspaceID: w.ID, MemberID: ada.ID, AccountMemberID: bob.ID, Harness: "claude",
 		Mode: domain.LaunchTUI, Status: domain.RunQueued, Spare: true}
 	if err := db.CreateRun(ctx, spare); err != nil {
-		t.Fatal(err)
-	}
-	if err := db.SetRunRepos(ctx, spare.ID, []domain.RunRepo{{WorkspaceID: extra.ID, Name: "lib", Path: "/repos/lib", BaseBranch: "main"}}); err != nil {
 		t.Fatal(err)
 	}
 	for _, id := range []domain.RunID{live.ID, spare.ID} {
@@ -129,9 +129,6 @@ func TestSpareRunsAreHidden(t *testing.T) {
 	if costs, _, err := db.ListWorkspaceCosts(ctx, w.ID); err != nil || len(costs) != 1 || costs[0].RunID != live.ID {
 		t.Errorf("ListWorkspaceCosts = %d costs, %v; want only the live run's", len(costs), err)
 	}
-	if err := db.CheckWorkspaceDeletion(ctx, extra.ID); err != nil {
-		t.Errorf("CheckWorkspaceDeletion(extra repository of the spare) = %v, want nil", err)
-	}
 
 	finished := time.Now().UTC()
 	for _, id := range []domain.RunID{live.ID, spare.ID} {
@@ -167,6 +164,37 @@ func TestSpareRunsAreHidden(t *testing.T) {
 	}
 	if spares() != 0 {
 		t.Error("DeleteRun left the spare's row")
+	}
+}
+
+func TestSpareRunsStillBlockDeletionAndMerge(t *testing.T) {
+	ctx := context.Background()
+	db := openTestDB(t)
+	now := time.Now().UTC()
+	w, extra := mustCreateWorkspace(t, db), mustCreateWorkspace(t, db)
+	ada := mustCreateMember(t, db)
+	bob := &domain.Member{DisplayName: "Bob", TailnetLogin: "bob@", Color: "#3cb44b", Role: domain.RoleCollaborator}
+	if err := db.CreateMember(ctx, bob); err != nil {
+		t.Fatal(err)
+	}
+	spare := &domain.Run{WorkspaceID: w.ID, MemberID: bob.ID, AccountMemberID: bob.ID, Harness: "claude",
+		Mode: domain.LaunchTUI, Status: domain.RunRunning, Spare: true}
+	if err := db.CreateRun(ctx, spare); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetRunRepos(ctx, spare.ID, []domain.RunRepo{{WorkspaceID: extra.ID, Name: "lib", Path: "/repos/lib", BaseBranch: "main"}}); err != nil {
+		t.Fatal(err)
+	}
+	for name, id := range map[string]domain.WorkspaceID{"workspace": w.ID, "extra repository": extra.ID} {
+		if err := db.CheckWorkspaceDeletion(ctx, id); !errors.Is(err, ErrInUse) {
+			t.Errorf("CheckWorkspaceDeletion(%s of a spare) = %v, want ErrInUse", name, err)
+		}
+	}
+	if err := db.CreateMergeCode(ctx, ada.ID, "code", now, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.PlanMerge(ctx, "code", bob.ID, "", now); !isRefusal(err, string(spare.ID)) {
+		t.Errorf("PlanMerge with a live spare = %v, want a refusal naming it", err)
 	}
 }
 
