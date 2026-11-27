@@ -36,23 +36,27 @@ func TestCaptureStartsFromARefreshYoungerThanCaptureFresh(t *testing.T) {
 		t.Fatal(err)
 	}
 	capture(1, warmed)
-	now = now.Add(captureFresh/2 - time.Second)
+	now = warmed.Add(captureFresh - warmMargin - time.Second)
 	if err = svc.Warm(ctx, "w"); err != nil {
 		t.Fatal(err)
 	}
+	now = now.Add(warmMargin)
 	capture(1, warmed)
-	now = now.Add(time.Second)
-	if err = svc.WarmAhead(ctx, "w"); err != nil || git.refreshCalls != 2 {
-		t.Fatalf("warm ahead in the second half of the window = %v after %d refreshes, want a second", err, git.refreshCalls)
+	if err = svc.Warm(ctx, "w"); err != nil || git.refreshCalls != 2 {
+		t.Fatalf("a launch's warm with less than the margin left = %v after %d refreshes, want a second", err, git.refreshCalls)
 	}
-	capture(2, now)
+	now = now.Add(captureFresh / 2)
+	if err = svc.WarmAhead(ctx, "w"); err != nil || git.refreshCalls != 3 {
+		t.Fatalf("warm ahead in the second half of the window = %v after %d refreshes, want a third", err, git.refreshCalls)
+	}
+	capture(3, now)
 
 	git.branchCommit = "1111111111111111111111111111111111111111"
-	if _, err = svc.Capture(ctx, "w", ""); err != nil || git.refreshCalls != 3 {
-		t.Fatalf("capture of a base that moved since the refresh = %v after %d refreshes, want a third", err, git.refreshCalls)
+	if _, err = svc.Capture(ctx, "w", ""); err != nil || git.refreshCalls != 4 {
+		t.Fatalf("capture of a base that moved since the refresh = %v after %d refreshes, want a fourth", err, git.refreshCalls)
 	}
 	git.branchCommit = ""
 
 	now = now.Add(captureFresh)
-	capture(4, now)
+	capture(5, now)
 }
