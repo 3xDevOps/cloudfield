@@ -5,8 +5,8 @@ import { useClock } from '@/lib/clock'
 import { deviceNeeds, type DeviceNeed, type StateContext } from '@/lib/needs-you'
 import { isAdminRole } from '@/lib/permissions'
 import { isSudo } from '@/lib/run-requests'
-import { presentRun, type PresentationState, type RunPresentation } from '@/lib/status'
-import type { Member, Run, RunStatusCause, RunWait, ServerInfo } from '@/lib/types'
+import { presentRun, type PresentationState, type RunPresentation, type StateCause } from '@/lib/status'
+import type { Member, Run, RunWait, ServerInfo } from '@/lib/types'
 import { unansweredQuestions } from '@/store/collaboration'
 import { runPeople, runWatchers } from '@/store/presence'
 import type { RunRecord } from '@/store/runs'
@@ -69,17 +69,9 @@ export function useRunPresentation(run: RunRecord): RunPresentation {
     return JSON.stringify([shown.state, shown.reason, shown.next, shown.cause, shown.wait])
   })
   return useMemo(() => {
-    const [state, reason, next, cause, wait] = JSON.parse(key) as [PresentationState, string, string | undefined, RunStatusCause | undefined, RunWait | undefined]
+    const [state, reason, next, cause, wait] = JSON.parse(key) as [PresentationState, string, string | undefined, StateCause | undefined, RunWait | undefined]
     return { state, reason, ...(next !== undefined && { next }), ...(cause !== undefined && { cause }), ...(wait && { wait }) }
   }, [key])
-}
-
-/** A launched Enhanced session is open and its agent has not started yet. */
-export function useAgentStarting(runID: string): boolean {
-  return useStore((s) => {
-    const session = s.acpSessions[runID]
-    return Boolean(session?.starting && !session.live)
-  })
 }
 
 /** Which of these runs need the viewer; stable while that set is. */

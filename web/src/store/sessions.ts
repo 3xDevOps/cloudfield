@@ -75,6 +75,8 @@ export interface SessionsSlice {
   appendSessionEvent: (event: Event) => void
 
   acpSessions: Record<string, AcpSession>
+  /** Runs whose open session's agent has not started yet. */
+  startingRuns: Record<string, true>
   /** A person's open or shut choice per row, block or step; a row without one follows its default. */
   expandedRows: Record<string, Record<string, boolean>>
   /** Runs whose Session timeline leaves out messages between agents. */
@@ -181,6 +183,15 @@ function advance(session: AcpSession, items: SessionItem[]): Pick<AcpSession, 's
   return { state, pending }
 }
 
+/** Keeps `startingRuns` to the runs whose live stream last said the agent has not started. */
+function patchStarting(s: SessionsSlice, runID: string, patch: Partial<AcpSession>): Pick<SessionsSlice, 'acpSessions' | 'startingRuns'> {
+  const next = patchSession(s, runID, patch)
+  const { starting, stream } = next.acpSessions[runID]!
+  const { [runID]: was, ...rest } = s.startingRuns
+  const now = starting && stream === 'live'
+  return { ...next, startingRuns: now === Boolean(was) ? s.startingRuns : now ? { ...rest, [runID]: true } : rest }
+}
+
 function patchSession(s: SessionsSlice, runID: string, patch: Partial<AcpSession>): Pick<SessionsSlice, 'acpSessions'> {
   return { acpSessions: { ...s.acpSessions, [runID]: { ...(s.acpSessions[runID] ?? emptySession), ...patch } } }
 }
@@ -223,6 +234,7 @@ export const createSessionsSlice: SliceCreator<SessionsSlice> = (set, get) => ({
   },
 
   acpSessions: {},
+  startingRuns: {},
   expandedRows: {},
   hiddenAgentMessages: {},
   acpAck: (runID, ack) =>
@@ -232,7 +244,7 @@ export const createSessionsSlice: SliceCreator<SessionsSlice> = (set, get) => ({
       const base = restart
         ? { turns: [], agents: noAgents, seq: 0, oldestSeq: 0, more: (ack.oldest_seq ?? 0) > 1, historyGeneration: held.historyGeneration + 1, olderLoading: false, olderError: undefined }
         : {}
-      return patchSession(s, runID, { ...base, truncatedBefore: ack.truncated_before ?? (ack.epoch === held.epoch && held.truncatedBefore), epoch: ack.epoch, live: ack.live, starting: ack.starting ?? false, state: ack.state ?? null, stateSeq: ack.seq, pending: ack.state?.pending ?? [] })
+      return patchStarting(s, runID, { ...base, truncatedBefore: ack.truncated_before ?? (ack.epoch === held.epoch && held.truncatedBefore), epoch: ack.epoch, live: ack.live, starting: !ack.live && (ack.starting ?? false), state: ack.state ?? null, stateSeq: ack.seq, pending: ack.state?.pending ?? [] })
     }),
   acpFrames: (runID, frames) =>
     set((s) => {
@@ -295,7 +307,7 @@ export const createSessionsSlice: SliceCreator<SessionsSlice> = (set, get) => ({
       const session = s.acpSessions[runID]
       return session ? patchSession(s, runID, { turns: replaceItem(session.turns, localItem(session.agents, item)), agents: replaceAgentItem(session.agents, item) }) : {}
     }),
-  acpStream: (runID, stream, error) => set((s) => patchSession(s, runID, { stream, streamError: error })),
+  acpStream: (runID, stream, error) => set((s) => patchStarting(s, runID, { stream, streamError: error })),
   acpControl: (runID, control, error) => set((s) => patchSession(s, runID, { control, controlError: error })),
   acpTakeover: (runID, takeover, error) => set((s) => patchSession(s, runID, { takeover, takeoverError: error })),
   touchAcpSession: (runID, open) =>

@@ -19,6 +19,20 @@ describe('enhanced sessions in the store', () => {
     expect(store.getState().acpSessions.run_1).toMatchObject({ live: true, starting: false })
   })
 
+  it('lists a starting run only while its stream is live', () => {
+    const store = createRootStore()
+    const starting = { ok: true as const, seq: 0, replay: 0, epoch: 0, live: false, starting: true, has_control: false }
+    store.getState().acpAck('run_1', starting)
+    expect(store.getState().startingRuns).toEqual({})
+    store.getState().acpStream('run_1', 'live')
+    expect(store.getState().startingRuns).toEqual({ run_1: true })
+    store.getState().acpStream('run_1', 'connecting')
+    expect(store.getState().startingRuns).toEqual({})
+    store.getState().acpStream('run_1', 'live')
+    store.getState().acpAck('run_1', { ...starting, starting: false })
+    expect(store.getState().startingRuns).toEqual({})
+  })
+
   it('applies the ack and frames, skips duplicates and keeps requests and options current', () => {
     const store = createRootStore()
     const request = { id: 'q', kind: 'permission' as const, title: 'go test', status: 'pending' as const }

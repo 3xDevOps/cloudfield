@@ -41,6 +41,7 @@ export function stateContext(over: Partial<StateContext> = {}): StateContext {
     roomMessages: {},
     roomStatus: {},
     pausedRuns: {},
+    startingRuns: {},
     now: Date.parse('2026-08-14T10:20:00Z'),
     ...over,
   }

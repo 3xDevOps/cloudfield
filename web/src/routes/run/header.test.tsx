@@ -10,14 +10,25 @@ describe('the header state of a launched Enhanced session', () => {
   const ack = { ok: true as const, seq: 0, replay: 0, epoch: 0, has_control: false }
   const record = runRecords(run({ id: 'run_1', status: 'running', state: undefined, mode: 'acp', acp: true })).run_1!
 
-  beforeEach(() => useStore.setState({ acpSessions: {} }))
+  beforeEach(() => {
+    useStore.setState({ acpSessions: {}, startingRuns: {} })
+    useStore.getState().acpStream('run_1', 'live')
+  })
 
   it('reads Starting until its agent runs', () => {
     act(() => useStore.getState().acpAck('run_1', { ...ack, live: false, starting: true }))
     render(<StateLine run={record} agentName="Claude Code" narrow={false} controls />)
     expect(screen.getByRole('status').textContent).toBe('Starting')
+    expect(screen.getByRole('status').parentElement!.title).toMatch(/^Starting since .* A message you send now is delivered when the agent is ready\./)
 
     act(() => useStore.getState().acpAck('run_1', { ...ack, live: true }))
+    expect(screen.getByRole('status').textContent).toBe('Running')
+  })
+
+  it('drops a Starting its closed stream can no longer correct', () => {
+    act(() => useStore.getState().acpAck('run_1', { ...ack, live: false, starting: true }))
+    render(<StateLine run={record} agentName="Claude Code" narrow={false} controls />)
+    act(() => useStore.getState().acpStream('run_1', 'connecting'))
     expect(screen.getByRole('status').textContent).toBe('Running')
   })
 

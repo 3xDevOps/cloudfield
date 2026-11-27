@@ -2208,6 +2208,7 @@ running"; beside the chip, the chip's own count stands.
 | State | Dot | Comes from | Group |
 | --- | --- | --- | --- |
 | Working | filled circle, pulses | `state` `working` (a turn is in progress), or `queued` / `provisioning` ("Queued", "Starting") | Working |
+| Starting | filled circle, pulses | A `running` session whose `aether-acp` stream is live in this tab and last acked `starting`: the launch returned before the agent started | Working |
 | Waiting for agents | clock | `waiting-agents`: held background subagents or workflows, ACP Task agents, a session with live subsessions, or a `waiting --for agents` report | Working |
 | Waiting for CI | clock | `waiting-ci`: a `waiting --for ci` report | Working |
 | Waiting for process | clock | `waiting-tools`: a background task the agent holds, such as Claude's Monitor, or a `waiting --for process` report | Working |
@@ -4143,7 +4144,8 @@ The header's **Answer** focuses the docked card on every screen. While Session s
 you** shows one link, "1 request, shown below the timeline", that closes a
 Details sheet and focuses the card; on other views it lists the cards. `routes/run/session-failure.tsx` shows an adapter failure with
 **Retry Enhanced** and **Open in Standard**, and a sign-in failure with the
-agent's auth methods. On a run on the viewer's own account it adds **Sign in
+agent's auth methods, plus **Retry Enhanced** when the agent is not running,
+since signing in does not start it. On a run on the viewer's own account it adds **Sign in
 on Agents**, and when that agent's `agent.list` row has `login_problem` its
 title is the alert's ("Claude Code is signed out" or "Claude Code's sign-in
 was refused"); a login-file problem shows verbatim, while a refusal is

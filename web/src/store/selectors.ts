@@ -7,10 +7,11 @@ import {
   presentRun,
   type PresentationState,
   type RunGroup,
+  type StateCause,
 } from '@/lib/status'
 import { extraRepoCount, repoLabel } from '@/lib/repos'
 import { rootKey, runKey, runParents } from '@/routes/board/map-layout'
-import type { Member, RunStatusCause, RunWait } from '@/lib/types'
+import type { Member, RunWait } from '@/lib/types'
 import type { RootState } from '@/store'
 import { isTerminal, type RunRecord } from '@/store/runs'
 
@@ -33,7 +34,7 @@ export interface RunRow {
   state: PresentationState
   reason: string
   next?: string
-  cause?: RunStatusCause
+  cause?: StateCause
   wait?: RunWait
   needsYou?: NeedsYouID
   group: RunGroup
@@ -89,6 +90,7 @@ export function stateContextOf(s: RootState, now: number): StateContext {
     roomMessages: s.roomMessages,
     roomStatus: s.roomStatus,
     pausedRuns: s.pausedRuns,
+    startingRuns: s.startingRuns,
     now,
   }
 }
