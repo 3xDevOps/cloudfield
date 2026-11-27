@@ -165,10 +165,10 @@ describe('a signed-in edge that says its address is retiring', () => {
     })
     window.dispatchEvent(new Event('focus'))
     await vi.waitFor(() => expect(noticeText()).toContain('You are already signed in at https://new.example.test.'))
-    const radios = screen.getAllByRole('radio', { name: / as / }) as HTMLInputElement[]
-    expect(radios.map((r) => [r.labels?.[0]?.textContent, r.checked])).toEqual([
-      ['old.example.test as octocat (GitHub)', true],
-      ['new.example.test as octocat (GitHub)', false],
+    const radios = screen.getAllByRole('radio', { name: / as / })
+    expect(radios.map((r) => [document.querySelector(`label[for="${r.id}"]`)?.textContent, r.getAttribute('aria-checked')])).toEqual([
+      ['old.example.test as octocat (GitHub) · says it is retired', 'true'],
+      ['new.example.test as octocat (GitHub)', 'false'],
     ])
   })
 
@@ -241,14 +241,14 @@ describe('a signed-in edge that says its address is retiring', () => {
     )
   })
 
-  it('says a retired address is retired, after its refusal, with no dead ends', async () => {
+  it('says a retired address is retired, before its refusal, with no dead ends', async () => {
     seed()
     await open({ state: 'retired', replacement: next }, [], new Error('edge.servers: list servers: old.example.test refused: retired (HTTP 410)'))
     expect(noticeText()).toBe(
       'old.example.test says it is retired and that its new address is https://new.example.test. / Confirm that address with whoever runs the edge before you sign in there. Then run cloudfield login --edge <new address>.',
     )
     const refusal = await screen.findByText(/refused: retired \(HTTP 410\)/)
-    expect(refusal.compareDocumentPosition(noticeCallout()!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(refusal.compareDocumentPosition(noticeCallout()!) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull()
     expect(screen.queryByRole('form', { name: 'Add a server' })).toBeNull()
     expect(screen.queryByText('Other ways to link')).toBeNull()

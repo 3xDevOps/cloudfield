@@ -1,11 +1,12 @@
 // The local gateway runs the edge device flow and keeps the device token;
 // this screen never sees it.
 
-import { type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useRef, useState } from 'react'
+import { type Dispatch, type ReactNode, type SetStateAction, useCallback, useEffect, useId, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { CopyableCommand } from '@/components/copyable-command'
 import { Button } from '@/components/ui/button'
 import { Callout } from '@/components/ui/callout'
+import { Radio, RadioGroup } from '@/components/ui/radio'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { FormField } from '@/components/ui/form-field'
 import { Input } from '@/components/ui/input'
@@ -336,6 +337,7 @@ export function EdgeSignIn({
         <EdgeChoice
           edges={phase.edges}
           chosen={phase.chosen}
+          notices={notices}
           onChoose={(edge) => setPhase({ ...phase, chosen: edge })}
         />
       )}
@@ -570,31 +572,36 @@ function accountName(account: EdgeAccount): string {
 function EdgeChoice({
   edges,
   chosen,
+  notices,
   onChoose,
 }: {
   edges: SignedInEdge[]
   chosen: string | null
+  /** The latest notices answer, to mark an edge that says it is leaving. */
+  notices: EdgeStatus | null
   onChoose: (edge: string) => void
 }) {
+  const id = useId()
   if (edges.length < 2) return null
   return (
     <fieldset className="flex min-w-0 flex-col gap-1.5">
-      <legend className="mb-1.5">
+      <legend id={id} className="mb-1.5">
         You are signed in to {edges.length} edges. Link through:
       </legend>
-      {edges.map((e) => (
-        <label key={e.edge} className="flex min-w-0 items-center gap-2">
-          <input
-            type="radio"
-            name="edge"
-            checked={chosen === e.edge}
-            onChange={() => onChoose(e.edge)}
-          />
-          <span className="min-w-0 break-all">
-            <span className="font-code">{edgeHost(e.edge)}</span> as {accountName(e.account)}
-          </span>
-        </label>
-      ))}
+      <RadioGroup aria-labelledby={id} value={chosen ?? ''} onValueChange={onChoose} className="gap-0">
+        {edges.map((e, i) => {
+          const state = notices?.edges.find((n) => n.edge === e.edge)?.retiring?.state
+          return (
+            <label key={e.edge} htmlFor={`${id}-${i}`} className="flex min-h-7 min-w-0 cursor-pointer items-center gap-2 coarse:min-h-11">
+              <Radio id={`${id}-${i}`} value={e.edge} />
+              <span className="min-w-0 break-all">
+                <span className="font-code">{edgeHost(e.edge)}</span> as {accountName(e.account)}
+                {state && <span className="text-muted"> · says it is {state}</span>}
+              </span>
+            </label>
+          )
+        })}
+      </RadioGroup>
     </fieldset>
   )
 }
@@ -697,6 +704,7 @@ function ServerPicker({
         Signed in to <span className="font-code">{edgeHost(edge)}</span> as{' '}
         <span className="font-medium">{accountName(account)}</span>.
       </p>
+      {retired && notice}
       {error && (
         <div className="flex min-w-0 flex-col items-start gap-2">
           <ErrorLine>{error}</ErrorLine>
@@ -707,7 +715,7 @@ function ServerPicker({
           )}
         </div>
       )}
-      {notice}
+      {!retired && notice}
       {!retired && servers?.length === 0 && (
         <p className="text-muted">
           Your account reaches no servers yet. Paste the claim link <span className="font-code">aether-server setup</span>{' '}
