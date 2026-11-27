@@ -1036,7 +1036,9 @@ rather than after the room's moderation delay; its result's `outcome` is
 `sent`, `queued` or `injected` for an enhanced session. A `queued` message
 carries `agent_delivery: "queued"` until the agent takes it
 (`"delivered"`), or turns `not_sent` with `failure.code` `agent_refused` or
-`agent_disconnected`; each change publishes `workspace.room_message`
+`agent_disconnected`, or, when it was held while the agent started and the
+server then could not hand it over, `session_unavailable`, `prompt_not_sent`
+or `unsupported_image`; each change publishes `workspace.room_message`
 ([enhanced-sessions.md](enhanced-sessions.md#permissions-and-input)).
 A message the server could not hand to the agent at all is `not_sent` with
 `failure.message` the real error and `failure.code`: `session_unavailable`
