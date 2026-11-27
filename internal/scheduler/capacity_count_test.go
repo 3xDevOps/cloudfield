@@ -109,3 +109,34 @@ func TestAFreezeIsCountedOncePerShortage(t *testing.T) {
 		t.Fatalf("counted freeze = %+v, want one, with the memory that caused it", froze)
 	}
 }
+
+// The session VMs are counted by what they hold of the host, and the count
+// is kept where cloudfield-server status reads it.
+func TestSessionVMsAreCountedByWhatTheyHold(t *testing.T) {
+	t.Parallel()
+	e, fr := newFreezeEnv(t)
+	mr := fr.memoryRuntime
+	paused := e.launchVM(t, mr, "say pong", 1<<30)
+	saved := e.launchVM(t, mr, "say pong", 6<<30)
+	e.launchVM(t, mr, acpmock.PromptWait, 1<<30)
+	e.launchVM(t, mr, acpmock.PromptWait, 1<<30)
+	if got, want := e.sched.VMs(), (domain.VMCounts{Awake: 4}); got != want {
+		t.Fatalf("four running VMs counted as %+v", got)
+	}
+	e.pauseIdle(t, paused)
+	e.pauseIdle(t, saved)
+	savedRun := e.runOf(t, saved)
+	e.sched.mu.Lock()
+	e.sched.runs[savedRun].asleepResident, e.sched.runs[savedRun].asleepSaved = false, true
+	e.sched.mu.Unlock()
+	floor := memoryFloor(32 << 30)
+	e.brake(fr, 4*floor)
+	e.brake(fr, floor-1)
+	if got, want := e.sched.VMs(), (domain.VMCounts{Frozen: 2, Paused: 1, Saved: 1}); got != want {
+		t.Fatalf("VMs = %+v, want %+v", got, want)
+	}
+	m := e.sched.Machine(t.Context())
+	if m.MemoryAvailableBytes != floor-1 || m.MemoryFloorBytes != floor || m.MemoryTotalBytes != 32<<30 || m.StartMemoryBytes != startupMemoryBytes {
+		t.Fatalf("machine memory = %+v, want what admission reads", m)
+	}
+}

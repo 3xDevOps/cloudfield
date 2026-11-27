@@ -715,6 +715,43 @@ mirror is failing.
 
 ## What the server did for want of memory or disk
 
+`cloudfield-server status`, run on the server, prints the machine as the
+server measures it before it starts or wakes a session, and what it did when
+it was short:
+
+```sh
+sudo cloudfield-server status
+```
+
+```
+memory   7.3 GiB available of 30.0 GiB; the server keeps 3.0 GiB, and a launch needs 0.5 GiB above that
+stall    the server's cgroup over 60s, which refuses launches: 0.0%, limit 10%
+stall    the host over 10s, which saves session VMs: 0.1%, limit 60%
+disk     Cloudfield data filesystem: 122.6 GiB free of 500.0 GiB; the server keeps 20.0 GiB, and a launch needs 1.0 GiB above that
+VMs      3 awake, 0 frozen by the memory brake, 2 asleep in memory, 4 asleep on disk (counted 2026-11-27T23:00:00Z)
+last refused launch: 2026-11-27T22:10:03Z session <run id>
+  scheduler: insufficient host memory headroom: ...
+last refused wake: none in 14 days
+
+counted                              24 hours    14 days
+refusal launch memory                       2          5
+...
+```
+
+It opens the database and measures memory, the stall and the data
+filesystem itself, so it answers while the server is too short of memory to
+answer a request. The server's own stall is read from the cgroup of the
+running `aether-server` unit and is left out when that unit is not running.
+The VM counts are the running server's, written when they change, with the
+time they were counted. The refusal is the text the caller got. Under the
+counters it prints the share of the memory in use at memory refusals that
+sessions idle for over an hour held, and the mean and longest wait of the
+waits that ended in a start.
+
+The dashboard shows the same under **Settings → Machines**, and
+`server.capacity` ([local gateway](local-gateway.md)) returns it to any
+member; the session a refusal names is returned to a super admin only.
+
 The server counts each time it was short of memory or disk and what it did
 about it, and logs each one:
 
@@ -729,7 +766,8 @@ INFO scheduler: capacity: freeze op="" cause="" run="" available=... floor=... u
 ```
 
 The counts are kept in the database, in table `capacity_counts`, one row
-per hour and counter, so they outlast a restart. A counter is a `kind`, an
+per hour and counter, so they outlast a restart; table `capacity_vms` holds
+the latest VM counts. A counter is a `kind`, an
 `op` and a `cause`:
 
 | `kind` | Counted when | `op` | `cause` |
