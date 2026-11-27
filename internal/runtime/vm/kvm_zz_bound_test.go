@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -35,7 +36,81 @@ import (
 //	LAZY_ARM   A today's guest, B A + holes dug after every save,
 //	           C init_on_free=1 + holes dug, D init_on_free=1 alone,
 //	           E C + zero pages punched out of the booted VM,
+//	           G today's guest; before every save the frames the guest
+//	           lists as free are punched out of the mapped memory file,
 //	           cost: the build timing below instead of the chain
+
+// lowRAM is where Cloud Hypervisor's x86-64 guests stop below 4 GiB; the
+// rest of their memory starts at 4 GiB and follows in the memory file.
+const lowRAM = 3072 << 20
+
+// punchFree asks the guest which page frames its allocator holds free and
+// punches them out of the memory file the VM is mapped from. The guest
+// zeroes every page it allocates (CONFIG_INIT_ON_ALLOC_DEFAULT_ON), so it
+// never reads what a free frame held.
+func (z *zz) punchFree(label string) {
+	z.t.Helper()
+	start := time.Now()
+	bits, err := hex.DecodeString(z.guest("/usr/local/bin/zzmemcheck freemap"))
+	if err != nil {
+		z.t.Fatalf("free frame map: %v", err)
+	}
+	listed := time.Since(start)
+	file := filepath.Join(z.e.path(z.key, snapshotDir), "memory-ranges")
+	before := allocatedMiB(file)
+	f, err := os.OpenFile(file, os.O_RDWR, 0)
+	if err != nil {
+		z.t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		z.t.Fatal(err)
+	}
+	size, fd := info.Size(), int(f.Fd())
+	var free, punched int64
+	calls := 0
+	punch := func(off, end int64) {
+		free += end - off
+		for pos := off; pos < end; {
+			data, seekErr := unix.Seek(fd, pos, unix.SEEK_DATA)
+			if seekErr != nil || data >= end {
+				return
+			}
+			hole, seekErr := unix.Seek(fd, data, unix.SEEK_HOLE)
+			if seekErr != nil {
+				z.t.Fatalf("seek the next hole: %v", seekErr)
+			}
+			hole = min(hole, end)
+			if err = unix.Fallocate(fd, unix.FALLOC_FL_PUNCH_HOLE|unix.FALLOC_FL_KEEP_SIZE, data, hole-data); err != nil {
+				z.t.Fatalf("punch %d+%d: %v", data, hole-data, err)
+			}
+			punched += hole - data
+			calls++
+			pos = hole
+		}
+	}
+	frames := int64(len(bits)) * 8
+	isFree := func(pfn int64) bool { return pfn < frames && bits[pfn/8]&(1<<(pfn%8)) != 0 }
+	// ranges of the guest's physical memory and where each starts in the file
+	for _, r := range [][3]int64{{0, min(lowRAM, size), 0}, {4 << 30, 4<<30 + max(size-lowRAM, 0), lowRAM}} {
+		for pfn := r[0] / 4096; pfn < r[1]/4096; pfn++ {
+			if !isFree(pfn) {
+				continue
+			}
+			first := pfn
+			for pfn < r[1]/4096 && isFree(pfn) {
+				pfn++
+			}
+			punch(r[2]+first*4096-r[0], r[2]+pfn*4096-r[0])
+		}
+	}
+	if err = f.Sync(); err != nil {
+		z.t.Fatal(err)
+	}
+	z.logf("punchfree %s list_ms=%d punch_ms=%d guest_frames=%d free_mib=%d punched_mib=%d punch_calls=%d source_allocated_mib before=%d after=%d",
+		label, listed.Milliseconds(), (time.Since(start) - listed).Milliseconds(), frames, free>>20, punched>>20, calls, before, allocatedMiB(file))
+}
 
 // privateConfig rewrites the saved VM configuration to private guest memory,
 // which a copy-on-write restore needs.
@@ -202,24 +277,30 @@ func (z *zz) digBoot() {
 			}
 		}
 	}
-	if len(memfds) != 1 {
-		z.t.Fatalf("guest memory files of the monitor: %v, want one", memfds)
+	if len(memfds) == 0 {
+		z.t.Fatal("the monitor has no guest memory file")
 	}
-	path, _, _ := strings.Cut(memfds[0], "=")
 	before := z.held()
 	start := time.Now()
 	if err = api.pause(ctx); err != nil {
 		z.t.Fatalf("pause: %v", err)
 	}
-	out, digErr := exec.Command("fallocate", "--dig-holes", path).CombinedOutput()
+	var out []byte
+	var digErr error
+	for _, memfd := range memfds {
+		path, _, _ := strings.Cut(memfd, "=")
+		if out, digErr = exec.Command("fallocate", "--dig-holes", path).CombinedOutput(); digErr != nil {
+			break
+		}
+	}
 	dug := time.Since(start)
 	if err = api.resume(ctx); err != nil {
 		z.t.Fatalf("resume: %v", err)
 	}
 	if digErr != nil {
-		z.t.Fatalf("fallocate --dig-holes %s: %v: %s", memfds[0], digErr, out)
+		z.t.Fatalf("fallocate --dig-holes %v: %v: %s", memfds, digErr, out)
 	}
-	z.logf("bootdig file=%q paused_ms=%d dig_ms=%d held_mib before=%.0f after=%.0f", memfds[0], time.Since(start).Milliseconds(), dug.Milliseconds(), before, z.held())
+	z.logf("bootdig files=%q paused_ms=%d dig_ms=%d held_mib before=%.0f after=%.0f", memfds, time.Since(start).Milliseconds(), dug.Milliseconds(), before, z.held())
 }
 
 func TestKVMZZFileBound(t *testing.T) {
@@ -277,6 +358,7 @@ func TestKVMZZFileBound(t *testing.T) {
 	launched, _ := os.ReadFile(e.path(z.key, launchFile))
 	z.logf("hypervisor %s memory_arg=%q", strings.TrimSpace(string(version)), regexp.MustCompile(`size=\d+M,shared=\w+`).Find(launched))
 	z.logf("guest %s", zzGuestFacts(z.guest))
+	z.logf("guest ram %s", z.guest("grep -i 'system ram' /proc/iomem | tr -s ' \\n' ' ;'; ls -l /proc/kpageflags 2>&1 | tr '\\n' ' '; zcat /proc/config.gz 2>/dev/null | grep -E 'INIT_ON|PROC_PAGE_MONITOR' | tr '\\n' ' '; true"))
 
 	zzPush(t, e, z.key, os.Getenv("LAZY_MEMCHECK"), "cat >/usr/local/bin/zzmemcheck && chmod 755 /usr/local/bin/zzmemcheck")
 	z.guest("setsid /usr/local/bin/zzmemcheck serve </dev/null >/var/log/zzmemcheck.log 2>&1 & sleep 1; test -S /run/zzmemcheck.sock")
@@ -300,6 +382,9 @@ func TestKVMZZFileBound(t *testing.T) {
 	// monitor and, in the arms that do, digs the holes.
 	save := func(n int, label, into string, dump bool, changed int) {
 		z.settle(label)
+		if arm == "G" && n > 0 {
+			z.punchFree(label)
+		}
 		used, held, private := z.guestUsed(), z.held(), z.privateMiB()
 		if err = os.Mkdir(into, 0o700); err != nil {
 			t.Fatal(err)

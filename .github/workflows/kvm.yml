@@ -21,20 +21,18 @@ permissions:
 
 jobs:
   kvm:
-    name: file bound ${{ matrix.arm }} ${{ matrix.fs }} ${{ matrix.mib }}
+    name: file bound ${{ matrix.arm }} ${{ matrix.fs }} ${{ matrix.mib }} ${{ matrix.rep }}
     runs-on: ubuntu-latest
     timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         include:
-          - { arm: A, fs: xfs, mib: 8192, cycles: 16 }
-          - { arm: C, fs: xfs, mib: 8192, cycles: 16 }
-          - { arm: E, fs: xfs, mib: 8192, cycles: 16 }
-          - { arm: E, fs: xfs, mib: 2048, cycles: 16 }
-          - { arm: A, fs: xfs, mib: 2048, cycles: 16 }
-          - { arm: C, fs: xfs, mib: 2048, cycles: 16 }
-          - { arm: cost, fs: xfs, mib: 8192, cycles: 0 }
+          - { arm: G, fs: xfs, mib: 8192, cycles: 16, rep: 1 }
+          - { arm: G, fs: xfs, mib: 8192, cycles: 16, rep: 2 }
+          - { arm: G, fs: xfs, mib: 2048, cycles: 16, rep: 1 }
+          - { arm: G, fs: xfs, mib: 2048, cycles: 16, rep: 2 }
+          - { arm: E, fs: xfs, mib: 8192, cycles: 16, rep: 1 }
     steps:
       - uses: actions/checkout@v4
         with:

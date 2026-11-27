@@ -314,12 +314,44 @@ func call(args []string) error {
 	return err
 }
 
+// freemap prints, in hex, one bit per page frame of the guest: set when the
+// kernel's page allocator holds the frame as free (KPF_BUDDY).
+func freemap() error {
+	f, err := os.Open("/proc/kpageflags")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	var bits []byte
+	buf := make([]byte, 1<<20)
+	pfn := 0
+	for {
+		n, readErr := io.ReadFull(f, buf)
+		for i := 0; i+8 <= n; i += 8 {
+			if pfn%8 == 0 {
+				bits = append(bits, 0)
+			}
+			if buf[i+1]&(1<<2) != 0 {
+				bits[pfn/8] |= 1 << (pfn % 8)
+			}
+			pfn++
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	_, err = fmt.Println(hex.EncodeToString(bits))
+	return err
+}
+
 func main() {
 	var err error
 	if v := os.Getenv("ZZ_SOCK"); v != "" {
 		sock = v
 	}
 	switch {
+	case len(os.Args) == 2 && os.Args[1] == "freemap":
+		err = freemap()
 	case len(os.Args) == 2 && os.Args[1] == "serve":
 		err = serve()
 	case len(os.Args) > 2 && os.Args[1] == "call":
