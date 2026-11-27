@@ -396,7 +396,9 @@ func (s *Scheduler) settleSwitch(ctx context.Context, entry *supervised) {
 	if intent == nil {
 		return
 	}
-	_, stdout, _, err := s.cfg.Runtime.Exec(ctx, cid, []string{"/bin/sh", "-c", `cat "$1" 2>/dev/null || :`, "aether-switch", supervisorStateFile}, "")
+	readCtx, cancel := context.WithTimeout(ctx, recoveryStepTimeout)
+	_, stdout, _, err := s.cfg.Runtime.Exec(readCtx, cid, []string{"/bin/sh", "-c", `cat "$1" 2>/dev/null || :`, "aether-switch", supervisorStateFile}, "")
+	cancel()
 	if err != nil {
 		slog.Warn("scheduler: read the run supervisor's state", "run", entry.runID, "error", err)
 		return

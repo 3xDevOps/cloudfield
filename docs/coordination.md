@@ -90,7 +90,7 @@ line. The base coordination method set is:
 | `coord.inbox` | optional `ack_token`, optional `wait_seconds`, optional `ack_only` | oldest-first `messages`, the `ack_token` for that batch, and `more`, the unacknowledged messages after it |
 | `coord.ask` | `to_run_id`, `body`, `idempotency_key` | `question_id`, `recipient_status` |
 | `coord.reply` | `question_id`, `body`, `idempotency_key` | `message_id` |
-| `coord.report` | `outcome`, `summary`, optional `waiting_for`, `until` and `evidence_refs`, `idempotency_key` | outcome, summary and next action; for success, failure and blocked also the durable `report_id`, evidence references, and automatic `evidence_ref` |
+| `coord.report` | `outcome`, `summary`, optional `body`, `waiting_for`, `until` and `evidence_refs`, `idempotency_key` | outcome, summary and next action; for success, failure and blocked also the durable `report_id`, evidence references, automatic `evidence_ref`, and `body_bytes` when a body was stored |
 
 The six advertised coordination methods are unchanged. Native hooks use
 `coord.hook.status`, an internal endpoint with a separate request budget, not
@@ -447,7 +447,30 @@ kind, delivery (Sent, Delivered, Acknowledged), and a search over the loaded
 bodies. Sender, Recipient and Thread narrow it; **Show all** reads older
 pages. The ordinary Activity feed shows each send as a row without the body.
 
-Members read agent mail on the control channel with `coord.messages.list`.
+From a terminal, `cloudfield messages` prints the workspace's mail, and
+`cloudfield messages <session-id>` the mail that session sent or received:
+
+```text
+$ cloudfield messages run-child
+2026-11-26 04:25:51  run-child -> run-parent  question  acknowledged  thread msg-wkvws2www3
+  which branch do I target?
+2026-11-26 04:25:51  run-parent -> run-child  reply  delivered  thread msg-wkvws2www3
+  target main
+2026-11-26 04:25:52  run-child -> run-parent  report  sent  thread rpt-b5hv1drf21
+  tests pass, fix pushed
+  outcome: success
+  next action: review the branch
+```
+
+It prints the newest 50, oldest first, with control characters in a body
+replaced by spaces. `--thread <id>` keeps one question and its replies, or
+one report, `--limit` takes up to 100, and `--workspace <name>` picks the
+workspace when there are several. When older mail remains, the last line, on
+stderr, is `older messages: add --before <cursor>`. `--json` prints the
+rows described below. A person's `cloudfield message` reaches the agent as a
+prompt, not as mail, and is not listed.
+
+The command reads `coord.messages.list` on the control channel.
 It needs View on the workspace, so every member of the workspace can read
 message bodies, the same audience the workspace timeline has.
 
@@ -465,7 +488,9 @@ Each row has `id`, `workspace_id`, `from_run_id`, `to_run_id`,
 `kind`, `correlation_id`, `body`, `created_at`, `delivered_at`, and
 `acked_at`. `kind` is `message`, `question`, `reply`, or `report`: a subsession
 session's report forwarded to its parent lists as `report` and adds the report's
-`outcome`, `summary`, and `next_action`. `delivered_at` is when the
+`outcome`, `summary`, and `next_action`. A row from a session to itself is
+server-written: the wake for a [session wait](watches.md#session-waits) or a
+[relayed watch notice](watches.md#relaying-notices). `delivered_at` is when the
 recipient's inbox first returned the batch and `acked_at` when the agent
 acknowledged it; neither proves the model read the body.
 
@@ -482,7 +507,8 @@ the kind, then sender → recipient and, once the message is loaded, its
 delivery word, such as `run-child → run-parent · Delivered`. An
 acknowledgement shows as `run-child → run-parent · Acknowledged`.
 `cloudfield timeline` prints the send as `<from-run> -> <to-run> · question`.
-Neither shows the body. Bodies come from `coord.messages.list`.
+Neither shows the body. Bodies come from `cloudfield messages` and
+`coord.messages.list`.
 Board > **Lanes** marks each send on the sender's and recipient's lanes at
 the time it was sent, draws it as a link for the focused lane, and clicking
 it shows the bodies
@@ -1341,7 +1367,8 @@ Parent and subsession may always message each other with `send`, `ask` and
 state `lineage`. A subsession's success,
 failure or blocked report reaches its parent's inbox with kind `report`:
 `from_run_id` is the subsession, `outcome` is the reported outcome, `body` is
-its complete report summary, and `correlation_id` is the report ID. It uses the same durable delivery and
+its complete report summary, `report_body` is the report's body when it has
+one, and `correlation_id` is the report ID. It uses the same durable delivery and
 acknowledgement as peer messages; if the inbox is full, report publication
 retries until it fits. A turn that ends without a success,
 failure or blocked report forwards the subsession's
@@ -1410,6 +1437,29 @@ and is valid only with `waiting`, as is `--until` (see the waiting report
 below). A non-empty summary is required. `--evidence-ref` may be
 repeated, and `--summary-file` accepts a file or `-` for standard input. The result contains a durable
 `report_id` and the server-created `evidence_ref`.
+
+A success, failure or blocked report may carry a body beside its summary:
+`--body <text>` or `--body-file <path>`, at most 12 KiB. The body is the full
+result, such as a review's findings; the summary stays the one-line outcome
+shown on the session. A subsession's parent reads the body in the report's
+own inbox message, as `report_body`, so one result is one message and one
+wake: put findings in the report, not in messages sent before it. The body is stored
+as sent, with CRLF line ends made LF: one that is not valid UTF-8 or has a
+control character other than a line break or a tab, such as a terminal's color
+codes, is refused. So is a report whose summary and body would print as more
+than 16 KiB in the parent's inbox read, where quotes, backslashes and line
+breaks print as two bytes each and `<`, `>` and `&` as six: the parent's harness must be able to show the
+report whole before the next read acknowledges it. A longer body is
+refused, by the command with `body exceeds 12288 bytes` and by the server
+with `body is <n> bytes and exceeds 12288`, and a body on another
+outcome with `body is only valid with the "success", "failure" or "blocked"
+outcome`. The body is stored with the report and read through the parent's inbox; the
+dashboard does not show it yet. Nothing is redacted from a summary or a body:
+write no secret into either. A report's body counts toward the 16 KiB of an inbox batch, so a report
+with a long body is read in a batch of its own. A parent whose command or bridge predates report bodies gets the body after
+the summary in `body`, which it shows. A server older than report bodies stores the report without the
+body; the command and the `aether_report` tool then fail with `the report was
+recorded WITHOUT its body`, so the agent can send it another way.
 
 **A `success` or `failure` report is refused while mail is unread.** Mail is
 unread until an inbox read returns it. The refusal is `CodeInvalidState`

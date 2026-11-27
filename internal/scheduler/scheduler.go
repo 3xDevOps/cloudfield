@@ -608,6 +608,12 @@ type supervised struct {
 	sleepGen    uint64
 	waking      chan struct{}
 	wakeErr     error
+	// abortSleep, set while a sleep saves or pauses a VM that still
+	// answers, makes it give up if its guest has yet to be paused.
+	// wakeWaits is set once a wake waits for the sleep, which a sleep that
+	// has yet to set abortSleep reads instead.
+	abortSleep context.CancelFunc
+	wakeWaits  bool
 	// asleepSaved is set while a sleeping VM holds its saved memory, which
 	// a wake restores with every process. saveFailedAt is the last failed
 	// save, which the sleep sweep waits a full sleep delay after.
