@@ -103,7 +103,7 @@ export function PhoneRunHeader({ run, view, views, nav, agentName, keyboard, pri
         {primary && !keyboard && <Button size="sm" variant={asking && view === 'session' ? 'secondary' : 'primary'} onClick={primary.act}>{primary.label}</Button>}
         <RunActions run={run} compact views={[...elsewhere, ...panels]} extra={extra} />
       </header>
-      {account && !keyboard && <p className="break-words pr-3 pb-1 pl-9 text-ui-sm text-muted coarse:pl-13">{account}{payer && <PerUseBadge className="ml-1.5" title={payer.title} />}</p>}
+      {account && !keyboard && <p className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 break-words pr-3 pb-1 pl-9 text-ui-sm text-muted coarse:pl-13">{account}{payer && <PerUseBadge title={payer.title} />}</p>}
       {/* Folded, the tabs stay mounted out of sight: each view's panel is labelled by its tab. */}
       <div className={keyboard ? 'sr-only' : 'flex h-11 shrink-0 items-stretch border-b border-seam'}>
         <TabsList aria-label="Session views" className="h-11 min-w-0 flex-1 gap-0 coarse:h-11">
