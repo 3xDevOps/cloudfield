@@ -51,7 +51,7 @@ func retiringNotice(origin string, r edgeclient.Retiring, holdings cli.EdgeHoldi
 		when = " on " + r.Date
 	}
 	notice := fmt.Sprintf("cloudfield: %s says it is retiring%s and that its new address is %s.\n", old, when, r.Replacement)
-	if !read || !holdings.Known(r.Replacement) {
+	if !read || !holdings.Known(old, r.Replacement) {
 		return notice + "Confirm that address with whoever runs the edge before you sign in there.\n"
 	}
 	var commands []string

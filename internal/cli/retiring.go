@@ -35,20 +35,21 @@ func (h EdgeHoldings) SignedInAt(origin string) bool {
 	return false
 }
 
-// Known reports whether this machine has its own reason to trust origin
-// as an edge address: it holds a token there, a saved link names it, or
-// it is the client's built-in default edge. A notice that names an
+// Known reports whether this machine has its own reason to trust
+// replacement, named by the edge at old: it holds a token there or a saved
+// link names it. The client's built-in default edge counts only when old
+// is itself one of the project's hosted addresses. A notice that names an
 // address no such reason covers is only the old address's word.
-func (h EdgeHoldings) Known(origin string) bool {
-	if h.SignedInAt(origin) || SameEdge(origin, edgeclient.DefaultURL) || SameEdge(h.Config.EdgeURL, origin) {
+func (h EdgeHoldings) Known(old, replacement string) bool {
+	if h.SignedInAt(replacement) || SameEdge(h.Config.EdgeURL, replacement) {
 		return true
 	}
 	for _, l := range h.Config.Links {
-		if SameEdge(l.EdgeURL, origin) {
+		if SameEdge(l.EdgeURL, replacement) {
 			return true
 		}
 	}
-	return false
+	return edgeclient.Hosted(old) && SameEdge(replacement, edgeclient.DefaultURL)
 }
 
 // SameEdge reports whether a and b name the same relay origin.

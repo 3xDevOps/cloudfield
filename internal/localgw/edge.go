@@ -290,7 +290,7 @@ func (g *Gateway) addNotices(ctx context.Context, dir string, edges []signedInEd
 	}
 	for i := range edges {
 		if notice, ok := notices[edges[i].Edge]; ok {
-			notice.Known = holdings.Known(notice.Replacement)
+			notice.Known = holdings.Known(edges[i].Edge, notice.Replacement)
 			edges[i].Retiring = &notice
 		}
 	}
