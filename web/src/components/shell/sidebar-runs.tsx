@@ -19,7 +19,7 @@ import { useIsMobile } from '@/lib/breakpoints'
 import { coarsePointer, useDelayed, useMediaQuery } from '@/lib/hooks'
 import { memberName, resolveMember } from '@/lib/member-name'
 import { needsYou, type StateContext } from '@/lib/needs-you'
-import { groupOf, runLabel, stateWords, toneOf, type PresentationState } from '@/lib/status'
+import { groupOf, runLabel, stateWords, toneOf, type PresentationState, type StateCause } from '@/lib/status'
 import { chevronTurn, cn } from '@/lib/utils'
 import { targetRoute } from '@/routes/board/card-action'
 import { isRunRoute } from '@/routes/run/views'
@@ -29,7 +29,7 @@ import { isTerminal, type RunRecord } from '@/store/runs'
 import { childRunsText, hiddenByMine, type RunTree, type SidebarGroup, type TreeSummary } from '@/store/selectors'
 import { onScreenRuns } from '@/store/tiles'
 import type { Route } from '@/store/ui'
-import type { RunStatusCause, RunWait } from '@/lib/types'
+import type { RunWait } from '@/lib/types'
 
 export const runRowSelector = '#sidebar-runs [data-run-row]'
 
@@ -353,7 +353,7 @@ const RunRow = memo(function RunRow({ runID, ...shown }: {
   waiting: boolean
   reason: string
   next?: string
-  cause?: RunStatusCause
+  cause?: StateCause
   wait?: RunWait
   since: string
   workspaceName?: string
@@ -375,7 +375,7 @@ function RunRowButton({ run, state, waiting, reason, next, cause, wait, since, w
   waiting: boolean
   reason: string
   next?: string
-  cause?: RunStatusCause
+  cause?: StateCause
   wait?: RunWait
   since: string
   workspaceName?: string

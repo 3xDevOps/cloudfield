@@ -50,6 +50,7 @@ import { touchChildren } from '@/store/child-touches'
 import { inMessageScope, loadMessagePage } from '@/store/messages'
 import { watchOutcomeSeen } from '@/store/outcome-seen'
 import { serverUpdateApplying, type UnreachableKind } from '@/store/server'
+import { historyBudget } from '@/store/lanes'
 
 /**
  * The local gateway reports a dead transport as 503 with the failing hop in the
@@ -227,7 +228,7 @@ export async function hydrate(
       store.getState().resetNotes()
       store.getState().resetAssistant()
       store.getState().setLinear(null)
-      store.setState({ invitations: null, revokingInvitations: [], agentModels: {}, mergedInto: {}, deletingRuns: {}, laneHistory: {}, watches: {}, watchNotices: {}, watchesFor: null, closeConfirmation: null })
+      store.setState({ invitations: null, revokingInvitations: [], agentModels: {}, mergedInto: {}, deletingRuns: {}, laneHistory: {}, laneBudget: historyBudget, watches: {}, watchNotices: {}, watchesFor: null, closeConfirmation: null })
     }
     s.setCapabilities(capabilities)
     // Resolve Edge before restoring drafts: another app can serve script on
@@ -242,6 +243,9 @@ export async function hydrate(
         ignore()
       }
     }
+    // A Lanes view may have started a read for the member before, while the link status was awaited:
+    // its history goes with that identity, so the view reads for this one without waiting for it.
+    if (identityChanged) store.setState({ laneHistory: {} })
     s.setIdentityKey(incomingIdentity)
     noteServerTime(store, info.time)
     s.setInfo(info)
