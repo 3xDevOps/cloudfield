@@ -316,13 +316,8 @@ teammates you share your account with can run on it
 ([teams.md](teams.md#shares-and-several-logins)). On a Console login each of
 those sessions is charged per use to your Console organisation, and Cloudfield
 does not tell you when a teammate's session lands there. There is no interval in which the login
-is yours alone; to keep it out of reach, turn the switches off as soon as the
-sign-in ends:
-
-```sh
-cloudfield agent logins auto <name> off    # Cloudfield never chooses it
-cloudfield agent logins share <name> off   # teammates' sessions never run on it
-```
+is yours alone; to keep it out of reach, run the two commands the sign-in
+prints last as soon as it ends.
 
 `--as <name>` runs `claude auth login` in a container of its own, with the new
 login mounted over your default one, so the sign-in cannot overwrite another
@@ -334,10 +329,17 @@ if this terminal goes before the sign-in ends, return to it with: cloudfield age
 ```
 
 **Human:** run it in your own terminal and follow the prompts; without a
-terminal it prints the command for one and reserves nothing. It ends with a
-line such as `added login work: subscription, plan max, <email>, organisation
-<name>`, which leaves out what Claude Code did not record and ends with
-`billed per use` for a Console login.
+terminal it prints the command for one and reserves nothing. It ends with:
+
+```text
+added login work: subscription, plan max, <email>, organisation <name>
+Automatic is on: Cloudfield may start or move your sessions onto it; turn it off with: cloudfield agent logins auto work off
+Use for shares is on: teammates you share your account with can be served by it; turn it off with: cloudfield agent logins share work off
+```
+
+The first line leaves out what Claude Code did not record and ends with
+`billed per use` for a Console login, whose two switch lines add `, and those
+sessions are charged per use to it` before the `;`.
 
 A name has 1 to 32 lowercase letters, digits and `-`, starts with a letter or
 digit, and is unique among your logins. `default` and names starting with
@@ -361,9 +363,12 @@ sign-in that creates no API key. Nothing is added when the sign-in:
 
 You run one sign-in at a time: a second `--as` fails with `store: conflict: the
 sign-in of login "work" (lgn-…) is still running; finish it first`, followed by
-the `--attach` command. A sign-in whose terminal is not opened within 10
-minutes, or whose container does not start within 5, ends with nothing added;
-one still running 15 minutes after its container started is stopped. Closing
+`that sign-in ends by itself about 15 minutes after its terminal opened, or 10
+minutes after it was started if none did; to finish it sooner, return to it
+with:` and the `--attach` command. A sign-in whose terminal is not opened
+within 10 minutes, or whose container does not start within 5, ends with
+nothing added; one still running 15 minutes after its container started,
+which can be minutes after its terminal opened, is stopped. Closing
 your terminal does not end it: `cloudfield agent login claude --attach
 <login-id>` returns to it, or, for 10 minutes after it ended, prints how it
 ended. The server keeps a running sign-in and its outcome in memory: after a
@@ -393,7 +398,7 @@ cloudfield agent logins order work default spare   # every login once, default i
 cloudfield agent logins auto spare off
 cloudfield agent logins share work off
 cloudfield agent logins rename spare personal
-cloudfield agent logins remove personal
+cloudfield agent logins remove personal         # asks first; --yes without a terminal
 ```
 
 - **Order** is the order Cloudfield tries your logins in, for your sessions
@@ -426,7 +431,7 @@ yet (`the server is still recovering its sessions; try again in a moment`).
 The refusal names your own sessions and counts your teammates':
 
 ```text
-login "work" is in use by your sessions run-… (end them) and 1 of your teammates' sessions, which hold it until they end and their containers go (revoking the share you gave a teammate, with cloudfield account revoke <member-id>, moves their running sessions off it)
+login "work" is in use by your sessions run-… (end them, or free the sandbox of one that has ended) and 1 of your teammates' sessions, which hold it until they end and their containers go (revoking the share you gave a teammate, with cloudfield account revoke <member-id>, moves their running sessions off it)
 ```
 
 A closed session has ended but keeps its container, and so the login, for
@@ -439,7 +444,21 @@ transcript. For teammates' sessions, `cloudfield agent logins share <name>
 off` moves their running ones off the login; their kept containers wait for
 someone who may stop those sessions to free them
 ([who can act](security.md#who-can-see-and-act-on-a-session)), or for the
-deadline. `cloudfield agent logins remove` asks for no confirmation.
+deadline.
+
+On a terminal, `cloudfield agent logins remove <login>` describes the login
+and asks before it removes anything:
+
+```text
+login personal: subscription, plan max, <email>, organisation <name>
+Removing it deletes its files from Cloudfield and does not sign it out at Anthropic; Cloudfield refuses while a session is on it. Remove? [y/N]:
+```
+
+Only `y` or `yes`, in any case, removes it; any other answer prints
+`cloudfield agent logins remove: nothing was removed`. Without a terminal it
+refuses unless you add `--yes`, which skips the question: `--yes is required
+because cloudfield agent logins remove deletes the login's files from
+Cloudfield: cloudfield agent logins remove personal --yes`.
 
 The default login is not renamed or removed here. Order and both switches
 cover it once you have added a login; before that they fail with `you have
@@ -463,11 +482,10 @@ pays whatever the login. When none of your logins can serve, the launch fails
 with:
 
 ```text
-none of your logins starts a session unless you name it: <login>: <why>; <login> is automatic off; ...; name one with cloudfield session --login <name>, or let Cloudfield choose it with cloudfield agent logins auto <name> on
+none of your logins starts a session unless you name it: <login>: <why>; <login> is automatic off; ...; name one with cloudfield session --agent claude --login <name>, or let Cloudfield choose it with cloudfield agent logins auto <name> on
 ```
 
-The command it names also needs the agent: `cloudfield session "<task>"
---agent claude --login <name>`.
+The full command is `cloudfield session "<task>" --agent claude --login <name>`.
 
 Named or not, when a usage read shows the login's five-hour or seven-day
 window at 95% or more, the session starts on the first other candidate whose
