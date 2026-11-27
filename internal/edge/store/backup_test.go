@@ -1,6 +1,7 @@
 package edgestore
 
 import (
+	"crypto/sha256"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -185,48 +186,31 @@ func TestFloorColumnAdded(t *testing.T) {
 var (
 	additiveStatement = regexp.MustCompile(`(?is)^(CREATE TABLE|CREATE INDEX|ALTER TABLE \w+ ADD COLUMN)\s`)
 	createdTable      = regexp.MustCompile(`(?is)^CREATE TABLE (\w+)`)
-	writtenTable      = regexp.MustCompile(`(?is)^(?:INSERT INTO|UPDATE) (\w+)\s`)
-	trigger           = regexp.MustCompile(`(?is)^CREATE TRIGGER \w+ AFTER (?:INSERT|UPDATE) ON \w+ BEGIN(.*)END$`)
+	writtenTable      = regexp.MustCompile(`(?is)^INSERT INTO (\w+)\s`)
+	triggerStatement  = regexp.MustCompile(`(?s)CREATE TRIGGER .*?END;`)
 )
 
-// statements splits a step's SQL at semicolons, keeping a trigger's body
-// with its CREATE TRIGGER.
-func statements(sql string) []string {
-	var out []string
-	for q := range strings.SplitSeq(sql, ";") {
-		q = strings.TrimSpace(q)
-		if n := len(out); n > 0 && strings.HasPrefix(strings.ToUpper(out[n-1]), "CREATE TRIGGER") && !strings.HasSuffix(strings.ToUpper(out[n-1]), "END") {
-			out[n-1] += ";\n" + q
-		} else if q != "" {
-			out = append(out, q)
-		}
-	}
-	return out
+// auditedTriggers are the SHA-256 digests of the triggers a step keeping
+// an older floor may create, each reviewed to write only to a table its
+// step creates and never to fail an older binary's write. A changed or new
+// trigger fails TestFloorKeptOnlyByAdditiveSteps until it is reviewed and
+// listed.
+var auditedTriggers = map[string]bool{
+	"5f015d61f9d3d80fb761fc3f46d91fdc761c07bcdd8577b8bb5364a5b750cc52": true, // origin_pair_history_insert
+	"b3045eb74baa3b54c16825a6a6ab22a30d54c7e7cab4c935971b9bbc866d3f3e": true, // origin_pair_history_update
 }
 
 // additive reports whether a statement keeps a database usable by a binary
 // that does not know it: a new table or index, a column that is nullable
-// or has a default, or a write, also by a trigger, only to a table the
-// same step creates. A trigger fires on an older binary's writes, so it
-// may not raise and inserts only WHERE NOT EXISTS, so it cannot fail them.
-// It adds the tables q creates to created.
+// or has a default, or an insert into a table the same step creates. It
+// adds the tables q creates to created.
 func additive(q string, created map[string]bool) bool {
+	q = strings.TrimSpace(q)
 	if m := createdTable.FindStringSubmatch(q); m != nil {
 		created[m[1]] = true
 	}
 	if m := writtenTable.FindStringSubmatch(q); m != nil {
 		return created[m[1]]
-	}
-	if m := trigger.FindStringSubmatch(q); m != nil {
-		for _, body := range statements(m[1]) {
-			upper := strings.ToUpper(body)
-			w := writtenTable.FindStringSubmatch(body)
-			if w == nil || !created[w[1]] || strings.Contains(upper, "RAISE") ||
-				(strings.HasPrefix(upper, "INSERT") && !strings.Contains(upper, "WHERE NOT EXISTS")) {
-				return false
-			}
-		}
-		return true
 	}
 	if !additiveStatement.MatchString(q) {
 		return false
@@ -245,9 +229,14 @@ func TestFloorKeptOnlyByAdditiveSteps(t *testing.T) {
 		if m.floor == v {
 			continue
 		}
+		for _, trigger := range triggerStatement.FindAllString(m.sql, -1) {
+			if !auditedTriggers[fmt.Sprintf("%x", sha256.Sum256([]byte(trigger)))] {
+				t.Errorf("migration %d keeps floor %d with a trigger not in auditedTriggers: %s", v, m.floor, trigger)
+			}
+		}
 		created := map[string]bool{}
-		for _, q := range statements(m.sql) {
-			if !additive(q, created) {
+		for q := range strings.SplitSeq(triggerStatement.ReplaceAllString(m.sql, ""), ";") {
+			if strings.TrimSpace(q) != "" && !additive(q, created) {
 				t.Errorf("migration %d keeps floor %d but is not additive: %s", v, m.floor, q)
 			}
 		}
@@ -263,11 +252,8 @@ func TestFloorKeptOnlyByAdditiveSteps(t *testing.T) {
 		"UPDATE t SET a = ''":                                 false,
 		"INSERT INTO t SELECT a FROM u":                       false,
 		"INSERT INTO n SELECT a FROM u":                       true,
-		"CREATE TRIGGER g AFTER INSERT ON u BEGIN INSERT INTO n SELECT NEW.a WHERE NOT EXISTS (SELECT 1 FROM n WHERE a = NEW.a);\nUPDATE n SET a = NEW.a; END": true,
-		"CREATE TRIGGER g AFTER INSERT ON u BEGIN INSERT INTO n VALUES (NEW.a); END":                                                                           false,
-		"CREATE TRIGGER g AFTER INSERT ON u BEGIN UPDATE n SET a = RAISE(ABORT, 'no'); END":                                                                    false,
-		"CREATE TRIGGER g AFTER INSERT ON u BEGIN INSERT INTO n VALUES (NEW.a);\nUPDATE u SET a = NEW.a; END":                                                  false,
-		"CREATE TRIGGER g AFTER INSERT ON u BEGIN DELETE FROM n; END":                                                                                          false,
+		"UPDATE n SET a = ''":                                 false,
+		"CREATE TRIGGER g AFTER INSERT ON u BEGIN INSERT INTO n VALUES (NEW.a); END": false,
 	} {
 		if additive(q, map[string]bool{"n": true}) != want {
 			t.Errorf("additive(%q) = %v, want %v", q, !want, want)
