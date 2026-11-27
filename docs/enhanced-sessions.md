@@ -418,14 +418,15 @@ adapter and the session parks with
 When a signal kills the agent's process itself, as the kernel does with
 signal 9 when the session runs out of memory and as `pkill node` does,
 Cloudfield starts the agent again and restores the conversation the same way,
-with no **Retry Enhanced**. The **Agent restarted** notice names the signal,
-and the session's memory limit when the kernel killed a process for memory in
-the two minutes before. The turn in flight ends with **Turn interrupted**, and
-its commands and background tasks are gone: send the message again. An agent
-killed again within 5 minutes of a restart or a lost conversation is not
-restarted, and the session parks with `enhanced session ended: the agent's
-ACP server exited with code <n>; it was killed again within 5 minutes, so
-Cloudfield did not restart it`. A Background session is not restarted.
+with no **Retry Enhanced**. The **Agent killed** notice names the signal,
+and for signal 9 the session's memory limit when the kernel killed a process
+for memory in the two minutes before. The turn in flight ends with **Turn
+interrupted**, and its commands and background tasks are gone: send the
+message again. An agent killed within 5 minutes of such a restart or of a
+lost conversation is not restarted again, and the session parks with
+`enhanced session ended: the agent's ACP server exited with code <n>; ...;
+it was killed within 5 minutes of its last restart, so Cloudfield did not
+restart it again`. A Background session is not restarted.
 
 If the agent refuses a turn with `Authentication required`, Cloudfield shows
 **Sign-in refused**, or **Agent signed out** when the login file cannot sign

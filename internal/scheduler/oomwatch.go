@@ -63,12 +63,6 @@ type oomTarget struct {
 }
 
 func (s *Scheduler) checkOOMKills(ctx context.Context) {
-	pids, ok := s.cfg.Runtime.(runtime.InitPIDRuntime)
-	s.oom.mu.Lock()
-	defer s.oom.mu.Unlock()
-	if !ok || !s.oom.enable() {
-		return
-	}
 	s.mu.Lock()
 	var targets []oomTarget
 	for _, e := range s.runs {
@@ -81,8 +75,10 @@ func (s *Scheduler) checkOOMKills(ctx context.Context) {
 	seen := map[runtime.ID]bool{}
 	for _, t := range targets {
 		seen[t.container] = true
-		s.checkOOMKill(ctx, pids, t)
+		s.checkOOMKill(ctx, t)
 	}
+	s.oom.mu.Lock()
+	defer s.oom.mu.Unlock()
 	for id := range s.oom.kills {
 		if !seen[id] {
 			s.oom.forget(id)
@@ -90,9 +86,17 @@ func (s *Scheduler) checkOOMKills(ctx context.Context) {
 	}
 }
 
-// checkOOMKill reads t's counter and notes an increase on its timeline. The
-// caller holds s.oom.mu.
-func (s *Scheduler) checkOOMKill(ctx context.Context, pids runtime.InitPIDRuntime, t oomTarget) memoryStats {
+// checkOOMKill reads t's counter, notes an increase on its timeline, and
+// returns the session's memory limit, 0 for none, with when it last saw an
+// increase. It holds the watcher for one probe at most, so the sweep never
+// keeps an agent's restart waiting for longer.
+func (s *Scheduler) checkOOMKill(ctx context.Context, t oomTarget) (limit uint64, killedAt time.Time) {
+	pids, ok := s.cfg.Runtime.(runtime.InitPIDRuntime)
+	s.oom.mu.Lock()
+	defer s.oom.mu.Unlock()
+	if !ok || !s.oom.enable() {
+		return 0, time.Time{}
+	}
 	probeCtx, cancel := context.WithTimeout(ctx, oomProbeTimeout)
 	stats, err := s.oom.read(probeCtx, pids, t.container)
 	cancel()
@@ -101,7 +105,7 @@ func (s *Scheduler) checkOOMKill(ctx context.Context, pids runtime.InitPIDRuntim
 		if !errors.Is(err, fs.ErrNotExist) && !errors.Is(err, runtime.ErrNotFound) {
 			slog.Warn("scheduler: read container memory events", "run", t.run, "container", t.container, "error", err)
 		}
-		return stats
+		return 0, time.Time{}
 	}
 	prev, known := s.oom.kills[t.container]
 	s.oom.kills[t.container] = stats.oomKills
@@ -109,30 +113,12 @@ func (s *Scheduler) checkOOMKill(ctx context.Context, pids runtime.InitPIDRuntim
 		s.oom.killedAt[t.container] = time.Now()
 		s.publishTimeline(ctx, t.workspace, t.run, "", events.TimelineNote, oomMessage(stats))
 	}
-	return stats
+	return stats.max, s.oom.killedAt[t.container]
 }
 
 // oomKillWindow is how long after the kernel killed a process in a session
-// for memory the death of its agent is put down to that.
+// for memory the death of its agent by signal 9 is put down to that.
 const oomKillWindow = 2 * time.Minute
-
-// recentOOMKill reads entry's counter now and reports whether the kernel
-// killed a process in its session for memory within oomKillWindow, with the
-// session's memory limit, 0 for none.
-func (s *Scheduler) recentOOMKill(ctx context.Context, entry *supervised) (limit uint64, killed bool) {
-	pids, ok := s.cfg.Runtime.(runtime.InitPIDRuntime)
-	s.oom.mu.Lock()
-	defer s.oom.mu.Unlock()
-	if !ok || !s.oom.enable() {
-		return 0, false
-	}
-	s.mu.Lock()
-	t := oomTarget{entry.containerID, entry.workspaceID, entry.runID}
-	s.mu.Unlock()
-	stats := s.checkOOMKill(ctx, pids, t)
-	at, known := s.oom.killedAt[t.container]
-	return stats.max, known && time.Since(at) < oomKillWindow
-}
 
 func (w *oomWatcher) forget(id runtime.ID) {
 	delete(w.paths, id)
