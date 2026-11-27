@@ -217,7 +217,6 @@ type Scheduler struct {
 	// ompFront serves session VMs' omp logins; nil without session VMs.
 	ompFront *ompbroker.Front
 
-	// oom is touched only by the sweep loop in Start.
 	oom oomWatcher
 
 	// recoveryReady closes after startup reconciliation; room delivery waits

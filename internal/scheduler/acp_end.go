@@ -180,9 +180,14 @@ func (d *acpDriver) watch(entry *supervised, r *acpRun) {
 		return
 	}
 	var cause error
+	var killedBy int
 	switch exit := r.exit(); {
 	case exit != nil:
 		cause = fmt.Errorf("the agent's ACP server exited with code %d", exit.Code)
+		// The keeper reports a death by signal as 128 plus the signal.
+		if exit.Code > 128 && exit.Code < 128+64 {
+			killedBy = exit.Code - 128
+		}
 		_, _ = r.stderr.Write([]byte(exit.Stderr))
 		_, _ = r.exec.Wait(ctx)
 	case r.keeper != nil:
@@ -212,7 +217,18 @@ func (d *acpDriver) watch(entry *supervised, r *acpRun) {
 	}
 	d.s.mu.Lock()
 	stopped := entry.stopNoticeLocked()
+	restart := killedBy != 0 && stopped == "" && entry.launchMode != domain.LaunchHeadless
+	again := restart && time.Since(entry.sessionLostAt) < acpLostAgain
+	if restart {
+		entry.sessionLostAt = time.Now()
+	}
 	d.s.mu.Unlock()
+	if again {
+		cause = fmt.Errorf("%w; it was killed again within %d minutes, so Cloudfield did not restart it", cause, int(acpLostAgain.Minutes()))
+	} else if restart {
+		d.restartKilled(ctx, entry, killedBy)
+		return
+	}
 	idle := agentstatus.Report{State: agentstatus.Idle, Reason: acpEndedReason + cause.Error()}
 	if stopped != "" {
 		d.notice(entry.runID, "info", "Enhanced agent stopped", stopped)
@@ -225,6 +241,27 @@ func (d *acpDriver) watch(entry *supervised, r *acpRun) {
 		return
 	}
 	d.report(entry.runID, idle)
+}
+
+// restartKilled starts the agent a signal killed again and restores its
+// conversation, under the run's op lock. watch's acpLostAgain guard keeps an
+// agent that is killed on every start from restarting in a loop.
+func (d *acpDriver) restartKilled(ctx context.Context, entry *supervised, sig int) {
+	why := "The agent's ACP server was killed"
+	if limit, oom := d.s.recentOOMKill(ctx, entry); oom {
+		why = "This session ran out of memory"
+		if limit > 0 {
+			why += " at its " + formatGiB(limit) + " limit"
+		}
+		why += ", and the kernel killed the agent's ACP server"
+	}
+	d.notice(entry.runID, "warning", "Agent restarted", fmt.Sprintf("%s (signal %d). Cloudfield restarted the agent and restored the conversation from its history. A turn in flight was lost with its commands and background tasks: send that message again.", why, sig))
+	defer d.needGuest(entry)()
+	ctx, cancel := context.WithTimeout(context.Background(), acpConnectTimeout)
+	defer cancel()
+	if err := d.open(ctx, entry, openRestore); err != nil {
+		d.fail(entry, err)
+	}
 }
 
 // takenOver restarts the agent of a run whose keeper another attacher took
