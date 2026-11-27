@@ -108,7 +108,7 @@ func serve(args []string) (err error) {
 	if err != nil {
 		return err
 	}
-	if err = olderImageServes(o, os.Getenv); err != nil {
+	if err = olderImageServes(o, envname.Legacy); err != nil {
 		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
