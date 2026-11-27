@@ -200,16 +200,18 @@ func edgeStatus(w io.Writer, dataDir, edgeURL, configPath string, policy edgepro
 	elsewhere := status.Edge != "" && !sameOrigin(status.Edge, origin)
 	cmds := serverCommands(configPath)
 	switch {
-	case elsewhere && noticed && noticedThere:
+	case elsewhere && noticed:
 		// Restarting would take the server to an address that is leaving
-		// too. As in server.edge, only beside a notice for the address the
-		// server is at.
+		// too, whatever the notices say of the address it is at.
 		at := "the running server is at"
 		if !status.Connected || stale != nil {
 			at = "the server last dialed"
 		}
-		_, _ = fmt.Fprintf(tw, "running\t%s %s; edge-url names %s, but %s\n", at, status.Edge, origin,
-			edgeagent.NoticeLine(notice, cmds.Server("edge move "+shellquote.Quote(notice.Replacement))+", then "+cmds.Restart))
+		line := edgeagent.NoticeLine(notice, cmds.Server("edge move "+shellquote.Quote(notice.Replacement))+", then "+cmds.Restart)
+		if notices.FirstUse {
+			line += firstUse
+		}
+		_, _ = fmt.Fprintf(tw, "running\t%s %s; edge-url names %s, but %s\n", at, status.Edge, origin, line)
 	case status.Connected && stale == nil && elsewhere:
 		_, _ = fmt.Fprintf(tw, "running\tthe running server is at %s; restart to apply edge-url: %s\n", status.Edge, cmds.Restart)
 	case elsewhere && (noticed || noticedThere):
@@ -219,7 +221,7 @@ func edgeStatus(w io.Writer, dataDir, edgeURL, configPath string, policy edgepro
 	case noticed:
 		line := edgeagent.NoticeLine(notice, cmds.Server("edge move "+shellquote.Quote(notice.Replacement)))
 		if notices.FirstUse {
-			line += " (the edge sent this with the connection that pinned its key, so it is trusted on first use and shown only)"
+			line += firstUse
 		}
 		_, _ = fmt.Fprintf(tw, "retiring\t%s\n", line)
 	}
@@ -467,6 +469,10 @@ func edgeMove(w io.Writer, dataDir, edgeURL string, policy edgeproto.AccessPolic
 	}
 	return applyMove(w, dataDir, edgeURL, configPath, config, held, moved)
 }
+
+// firstUse ends a line whose notice came with the connection that pinned
+// the edge key.
+const firstUse = " (the edge sent this with the connection that pinned its key, so it is trusted on first use and shown only)"
 
 // sameOrigin reports whether a and b name the same edge origin, as
 // https://host and https://host:443 do.

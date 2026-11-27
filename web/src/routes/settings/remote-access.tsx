@@ -7,7 +7,7 @@ import { Code } from '@/components/ui/code'
 import { type Api, ApiError } from '@/lib/api'
 import { message } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { edgeNotice } from '@/lib/needs-you'
+import { edgeNotice, type EdgeNeed } from '@/lib/needs-you'
 import type { EdgeAccount, EdgeLogin, ServerEdge } from '@/lib/types'
 import { SettingRow, SettingsSection, TryAgain } from '@/routes/settings/layout'
 import { EdgeMoveSteps } from '@/routes/settings/remote-access-notice'
@@ -26,6 +26,15 @@ const policies: Record<ServerEdge['access_policy'], string> = {
 function connection(edge: ServerEdge): string {
   if (!edge.connected) return 'Not connected'
   return edge.claimed ? 'Connected' : 'Connected, but the edge has not recorded this server'
+}
+
+/** What a member who is not a super admin reads of the edge's notices. */
+function memberAddress(need: EdgeNeed): string {
+  const parts = need.notice ? [`${need.noticeReason}; the edge recommends ${need.notice.replacement}.`] : []
+  if (need.pending) parts.push(`A change of the server's edge address is configured and waits for a restart, and that address is itself ${need.pending.state}.`)
+  else if (need.notice?.restart_pending) parts.push("A change of the server's edge address is configured and waits for a restart.")
+  else parts.push('A super admin moves the server.')
+  return parts.join(' ')
 }
 
 export function RemoteAccessSection({ client }: { client: Api }) {
@@ -61,13 +70,13 @@ export function RemoteAccessSection({ client }: { client: Api }) {
         </Callout>
       )}
       {notice && admin && (
-        <Callout tone={notice.notice.state === 'retired' ? 'failed' : 'needs-you'} role="status" title={notice.reason} className={cn('rounded-none px-4 py-3', !error && 'rounded-t-[inherit]')}>
+        <Callout tone={notice.state === 'retired' ? 'failed' : 'needs-you'} role="status" title={notice.reason} className={cn('rounded-none px-4 py-3', !error && 'rounded-t-[inherit]')}>
           <EdgeMoveSteps need={notice} />
         </Callout>
       )}
       <SettingRow label="Edge URL" help={edge.edge_url || 'Off'} />
       {notice && !admin && (
-        <SettingRow label="Address" help={`${notice.reason}; the edge recommends ${notice.notice.replacement}. ${notice.notice.restart_pending ? `A change of the server's edge address is configured and waits for a restart${notice.notice.moved_to_state ? `, and that address is itself ${notice.notice.moved_to_state}` : ''}.` : 'A super admin moves the server.'}`} />
+        <SettingRow label="Address" help={memberAddress(notice)} />
       )}
       <SettingRow label="Server id">
         <CopyableCommand command={edge.server_id} />

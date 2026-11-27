@@ -265,10 +265,12 @@ Until the restart `edge status` prints `running      the server last dialed
 it names another address than the running one, show super admins only the
 restart command and other members that a restart is pending. When the
 stored notices say the address `edge-url` now names is itself retiring or
-retired, a restart would land on a leaving address: `edge status` prints
+retired, whatever they say of the running address, a restart would land on a
+leaving address: `edge status` prints
 `running      the running server is at <old>; edge-url names <new>, but <new>
 is retired; move this server with: sudo cloudfield-server edge move <next>,
-then sudo systemctl restart aether-server`, Settings and Needs you give super
+then sudo systemctl restart aether-server` (with the first-use note when the
+notice came on first use), Settings and Needs you give super
 admins the same two commands, and other members read that the configured
 address is itself leaving.
 

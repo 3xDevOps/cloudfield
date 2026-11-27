@@ -486,7 +486,7 @@ describe('edgeNotice', () => {
     [{ state: 'retired', replacement } as const, 'https://edge-old.example.test is retired'],
     [{ state: 'retiring', replacement, first_use: true } as const, 'https://edge-old.example.test is retiring'],
   ])('says what %o means and how to move', (notice, reason) => {
-    expect(edgeNotice({ ...edge, notice })).toEqual({ notice, edgeURL: edge.edge_url, reason, move, restart })
+    expect(edgeNotice({ ...edge, notice })).toEqual({ notice, edgeURL: edge.edge_url, state: notice.state, reason, noticeReason: reason, move, restart })
   })
 })
 

@@ -1517,6 +1517,19 @@ export interface ServerEdge {
   claimed: boolean
   /** What the pinned edge key signed about edge_url; absent when it said nothing. */
   notice?: EdgeNotice
+  /** What it signed about the edge-url a restart applies, when that address is leaving too. */
+  pending?: EdgePending
+}
+
+/** The edge-url the server's options file names for the next restart is itself retiring or retired. */
+export interface EdgePending {
+  state: 'retiring' | 'retired'
+  /** YYYY-MM-DD, text for people. */
+  date?: string
+  /** Super admins only: that edge-url, the address the edge names for it, and whether the notice came on first use. */
+  edge_url?: string
+  replacement?: string
+  first_use?: boolean
 }
 
 /** The server's edge address is retiring or retired; `replacement` is the address of the same edge to move to. */
@@ -1531,10 +1544,6 @@ export interface EdgeNotice {
   restart_pending?: boolean
   /** Super admins only: that edge-url, canonical. */
   moved_to?: string
-  /** The same notices say that edge-url is leaving too. */
-  moved_to_state?: 'retiring' | 'retired'
-  /** Super admins only: the address they name for it. */
-  moved_to_replacement?: string
 }
 
 /** server.edge.claimcode: a claim code bound to the calling admin. */

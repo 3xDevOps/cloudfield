@@ -75,7 +75,13 @@ func TestEdgeStatusRetiringRow(t *testing.T) {
 			connection: "connection   disconnected since " + since.Local().Format(time.DateTime) + ": " + gone, err: errNotConnected},
 		{name: "edge-url names a leaving address, none for the running one", status: edgeagent.Status{Edge: other, Connected: true, Since: since, PID: os.Getpid(), Heartbeat: now},
 			notices: edgeagent.StoredNotices{Notices: []edgeproto.Notice{retiring}},
-			row:     "running      the running server is at " + other + "; restart to apply edge-url: sudo systemctl restart aether-server"},
+			row: "running      the running server is at " + other + "; edge-url names " + old + ", but " + old + " is retiring; move this server with: " +
+				"sudo cloudfield-server edge move " + other + ", then sudo systemctl restart aether-server"},
+		{name: "edge-url names a leaving address, first use", status: edgeagent.Status{Edge: other, Connected: true, Since: since, PID: os.Getpid(), Heartbeat: now},
+			notices: edgeagent.StoredNotices{FirstUse: true, Notices: []edgeproto.Notice{retiring}},
+			row: "running      the running server is at " + other + "; edge-url names " + old + ", but " + old + " is retiring; move this server with: " +
+				"sudo cloudfield-server edge move " + other + ", then sudo systemctl restart aether-server" +
+				" (the edge sent this with the connection that pinned its key, so it is trusted on first use and shown only)"},
 		{name: "last dialed another address, no notice", status: edgeagent.Status{Edge: other, Error: gone, Since: since},
 			connection: "connection   disconnected since " + since.Local().Format(time.DateTime) + ": " + gone, err: errNotConnected},
 		{name: "running at the address with its port written out", status: edgeagent.Status{Edge: old + ":443", Connected: true, Since: since, PID: os.Getpid(), Heartbeat: now},

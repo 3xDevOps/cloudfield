@@ -41,20 +41,24 @@ func (s *Server) serverEdge(ctx context.Context, member domain.MemberID, _ json.
 	if owner != nil {
 		out.Owner = &protocol.EdgeAccount{Provider: owner.Provider, Login: owner.Login}
 	}
+	var admin bool
+	var moved string
+	if len(notices.Notices) > 0 {
+		admin, moved = s.superAdmin(ctx, member), s.configuredEdgeURL(out.EdgeURL)
+	}
 	if n, ok := notices.For(out.EdgeURL); ok {
 		out.Notice = &protocol.EdgeNotice{State: n.State, Replacement: n.Replacement, Date: n.Date, FirstUse: notices.FirstUse}
-		admin := s.superAdmin(ctx, member)
-		if moved := s.configuredEdgeURL(out.EdgeURL); moved != "" {
+		if moved != "" {
 			out.Notice.RestartPending = true
 			if admin {
 				out.Notice.MovedTo = moved
 			}
-			if m, ok := notices.For(moved); ok {
-				out.Notice.MovedToState = m.State
-				if admin {
-					out.Notice.MovedToReplacement = m.Replacement
-				}
-			}
+		}
+	}
+	if m, ok := notices.For(moved); moved != "" && ok {
+		out.Pending = &protocol.EdgePending{State: m.State, Date: m.Date}
+		if admin {
+			out.Pending.EdgeURL, out.Pending.Replacement, out.Pending.FirstUse = moved, m.Replacement, notices.FirstUse
 		}
 	}
 	return out, nil
