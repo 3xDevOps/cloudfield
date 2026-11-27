@@ -20,7 +20,7 @@ describe('waiting on a sign-in', () => {
         .mockRejectedValueOnce(new ApiError(409, `agent.login.result: ${refusal}`, -32003)),
     })
     const onEnded = vi.fn()
-    renderHook(() => useLoginSignInWait(client, 'claude', onEnded))
+    renderHook(() => useLoginSignInWait(client, 'claude', onEnded, true))
     for (let i = 0; i < 2; i++) {
       await act(async () => { await vi.advanceTimersByTimeAsync(1000) })
       expect(useLoginSignIn.getState().running?.id).toBe('lgn-wait0000001')

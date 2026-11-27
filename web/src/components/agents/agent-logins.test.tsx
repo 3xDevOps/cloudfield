@@ -8,6 +8,21 @@ import type { AgentLogin, Member } from '@/lib/types'
 import { useStore } from '@/store'
 import { alice, bob, fakeApi } from '@/test/fixtures'
 import { StubSocket } from '@/test/stub-socket'
+import { stillWaiting } from '@/store/optimistic'
+import type * as xtermHostModule from '@/components/xterm-host'
+
+// Passes every terminal through, keeping the link handler a sign-in gives it.
+const xterm = vi.hoisted(() => ({ onLink: undefined as ((uri: string) => boolean) | undefined }))
+vi.mock('@/components/xterm-host', async (importOriginal) => {
+  const actual = await importOriginal<typeof xtermHostModule>()
+  return {
+    ...actual,
+    useXterm: (options: Parameters<typeof actual.useXterm>[0]) => {
+      xterm.onLink = options?.onLink
+      return actual.useXterm(options)
+    },
+  }
+})
 
 const logins: AgentLogin[] = [
   { id: 'default', name: 'default', kind: 'subscription', plan: 'max', email: 'alice@example.test', organization_name: 'Alice personal', automatic: true, shared: true, position: 0 },
@@ -15,7 +30,7 @@ const logins: AgentLogin[] = [
   { id: 'lgn-console0001', name: 'console', kind: 'console', email: 'alice@example.test', organization_name: 'Alice API', per_use: true, automatic: false, shared: true, position: 2 },
 ]
 
-function show(over: Parameters<typeof fakeApi>[0] = {}, sharedWith: Member[] = [bob]) {
+function show(over: Parameters<typeof fakeApi>[0] = {}, sharedWith: Member[] | null = [bob]) {
   const client = fakeApi(over)
   const onChanged = vi.fn(async () => {})
   render(<LoginList logins={logins} sharedWith={sharedWith} client={client} onChanged={onChanged} />)
@@ -207,7 +222,7 @@ describe('login list', () => {
     expect(await within(dialog).findByText(refusal)).toBeDefined()
     expect(within(dialog).getByRole('button', { name: 'Remove' })).toHaveProperty('disabled', true)
     expect(within(dialog).getByRole('button', { name: 'Remove' }).className).not.toContain('bg-state-failed')
-    expect(onChanged).not.toHaveBeenCalled()
+    expect(onChanged).toHaveBeenCalledTimes(1)
     await user.click(within(dialog).getByRole('button', { name: 'Open run-7kq2m9x4ab' }))
     expect(navigate).toHaveBeenCalledWith('run', { runId: 'run-7kq2m9x4ab' })
     expect(screen.queryByRole('alertdialog')).toBeNull()
@@ -216,6 +231,128 @@ describe('login list', () => {
     await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Remove' }))
     await user.click(await screen.findByRole('button', { name: 'Revoke a share on Members' }))
     expect(navigate).toHaveBeenLastCalledWith('members')
+  })
+
+  it('claims nothing about shares while whom the account is shared with is unread, and shows why it is', () => {
+    const { unmount } = render(<LoginList logins={logins} sharedWith={null} client={fakeApi()} onChanged={async () => {}} />)
+    const section = screen.getByRole('region', { name: 'Claude Code logins' })
+    expect(section.textContent).not.toContain('not shared')
+    expect(section.textContent).not.toContain('also serves')
+    expect(within(row('default')).getByText('On for shares')).toBeDefined()
+    unmount()
+
+    render(<LoginList logins={logins} sharedWith={null} sharedError="account.list: server unreachable: dial tcp: connection refused" client={fakeApi()} onChanged={async () => {}} />)
+    expect(screen.getByRole('region', { name: 'Claude Code logins' }).textContent).toContain('Whom your account is shared with was not read: account.list: server unreachable: dial tcp: connection refused')
+    expect(screen.getByRole('region', { name: 'Claude Code logins' }).textContent).not.toContain('not shared with anyone')
+  })
+
+  it('says a share cannot use a default login kept as an API key or a Console profile', () => {
+    for (const kind of ['api_key', 'console'] as const) {
+      const { unmount } = render(<LoginList logins={[{ ...logins[0]!, kind, plan: undefined }, logins[1]!]} sharedWith={[bob]} client={fakeApi()} onChanged={async () => {}} />)
+      expect(row('default').textContent).toContain('On for shares: a share cannot use this kind of login')
+      expect(row('default').textContent).not.toContain('also serves')
+      unmount()
+    }
+  })
+
+  it('marks windows kept from a failed refresh as the last read, with the error', async () => {
+    show({
+      accountUsage: vi.fn(async (params: { login?: string } = {}) => ({
+        account_member_id: alice.id,
+        login: params.login,
+        providers: params.login ? [] : [{ provider: 'claude' as const, status: 'stale' as const, windows: [{ id: 'five_hour', label: '5-hour', used_percent: 42 }], checked_at: '2026-11-26T10:00:00Z', error: 'claude usage: 429 Too Many Requests' }],
+      })),
+    })
+    expect(await within(row('default')).findByText('claude usage: 429 Too Many Requests')).toBeDefined()
+    expect(row('default').textContent).toContain('Last read, not current: claude usage: 429 Too Many Requests')
+    expect(within(row('default')).getByRole('progressbar', { name: 'Login default 5-hour usage' })).toBeDefined()
+  })
+
+  it("warns that removing the last added login turns the default login's switches back on", async () => {
+    const user = userEvent.setup()
+    const withheld = { ...logins[0]!, automatic: false, shared: false }
+    const { unmount } = render(<LoginList logins={[withheld, logins[1]!]} sharedWith={[bob]} client={fakeApi()} onChanged={async () => {}} />)
+    await user.click(screen.getByRole('button', { name: 'Remove work' }))
+    const dialog = screen.getByRole('alertdialog')
+    expect(dialog.textContent).toContain('Removing this last one turns Automatic and Use for shares on again for the default login, so the teammates you share your account with can use it.')
+    unmount()
+
+    render(<LoginList logins={[withheld, ...logins.slice(1)]} sharedWith={[bob]} client={fakeApi()} onChanged={async () => {}} />)
+    await user.click(screen.getByRole('button', { name: 'Remove work' }))
+    expect(screen.getByRole('alertdialog').textContent).not.toContain('turn back on')
+  })
+
+  it('reads the list again after a refused rename and after a call the server may have run without answering', async () => {
+    const user = userEvent.setup()
+    const { onChanged } = show({
+      agentLoginRename: vi.fn(async () => { throw new Error('you already have a login named "console"') }),
+      agentLoginShare: vi.fn(async () => { throw new Error('agent.login.share: server did not answer agent.login.share within 1m0s') }),
+    })
+    await user.click(screen.getByRole('button', { name: 'Rename work' }))
+    await user.clear(screen.getByRole('textbox', { name: 'New name for work' }))
+    await user.type(screen.getByRole('textbox', { name: 'New name for work' }), 'console')
+    await user.click(screen.getByRole('button', { name: 'Save' }))
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
+    await user.click(screen.getByRole('button', { name: 'Cancel' }))
+    await user.click(within(row('work')).getByRole('switch', { name: 'Use for shares' }))
+    expect((await screen.findByRole('alert')).textContent).toBe('agent.login.share: server did not answer agent.login.share within 1m0s')
+    expect(onChanged).toHaveBeenCalledTimes(2)
+  })
+
+  it('shows which control is pending and locks only it, saying when the server is slow', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    onTestFinished(() => { vi.useRealTimers() })
+    const user = userEvent.setup({ advanceTimers: vi.advanceTimersByTime })
+    let answer = () => {}
+    const { client } = show({
+      agentLoginShare: vi.fn(() => new Promise<unknown>((resolve) => { answer = () => resolve({}) })),
+      agentLoginOrder: vi.fn(() => new Promise<unknown>(() => {})),
+    })
+    await user.click(within(row('work')).getByRole('switch', { name: 'Use for shares' }))
+    expect(within(row('work')).getByRole('status').textContent).toBe('Saving…')
+    expect(within(row('work')).getByRole('switch', { name: 'Use for shares' })).toHaveProperty('disabled', true)
+    expect(within(row('work')).getByRole('switch', { name: 'Automatic' })).toHaveProperty('disabled', false)
+    expect(within(row('default')).getByRole('switch', { name: 'Use for shares' })).toHaveProperty('disabled', false)
+    expect(within(row('work')).getByRole('button', { name: 'Move work up' })).toHaveProperty('disabled', false)
+    expect(within(row('console')).getByRole('button', { name: 'Remove console' })).toHaveProperty('disabled', false)
+    await act(async () => { await vi.advanceTimersByTimeAsync(5_000) })
+    expect(within(row('work')).getByRole('status').textContent).toBe(stillWaiting)
+    await act(async () => answer())
+    expect(within(row('work')).queryByRole('status')).toBeNull()
+    expect(within(row('work')).getByRole('switch', { name: 'Use for shares' })).toHaveProperty('disabled', false)
+
+    await user.click(within(row('console')).getByRole('button', { name: 'Move console up' }))
+    expect(client.agentLoginOrder).toHaveBeenCalledWith('claude', ['default', 'lgn-console0001', 'lgn-work0000001'])
+    expect(within(row('console')).getByRole('status').textContent).toBe('Moving…')
+    expect(within(row('default')).getByRole('button', { name: 'Move default down' })).toHaveProperty('disabled', true)
+    expect(within(row('default')).getByRole('switch', { name: 'Automatic' })).toHaveProperty('disabled', false)
+    expect(within(row('work')).getByRole('button', { name: 'Rename work' })).toHaveProperty('disabled', false)
+  })
+})
+
+/** A server keeping the logins in the order the calls leave them, read through the page's hook. */
+function ServedLogins({ client }: { client: Parameters<typeof useAgentLogins>[0] & ComponentProps<typeof LoginList>['client'] }) {
+  const { logins: list, reload } = useAgentLogins(client, true)
+  return list ? <LoginList logins={list} sharedWith={[]} client={client} onChanged={reload} /> : null
+}
+
+describe('login list against a server', () => {
+  it('builds each move on the order the server answered for the one before', async () => {
+    const user = userEvent.setup()
+    let served = [...logins]
+    const client = fakeApi({
+      agentLoginList: vi.fn(async () => served.map((login, position) => ({ ...login, position }))),
+      agentLoginOrder: vi.fn(async (_agent: string, ids: string[]) => {
+        served = ids.map((id) => served.find((login) => login.id === id)!)
+        return {}
+      }),
+    })
+    render(<ServedLogins client={client} />)
+    await user.click(await within(await screen.findByRole('listitem', { name: 'Login console' })).findByRole('button', { name: 'Move console up' }))
+    await waitFor(() => expect(within(row('console')).getByRole('button', { name: 'Move console up' })).toHaveProperty('disabled', false))
+    await user.click(within(row('console')).getByRole('button', { name: 'Move console up' }))
+    expect(client.agentLoginOrder).toHaveBeenLastCalledWith('claude', ['lgn-console0001', 'default', 'lgn-work0000001'])
+    await waitFor(() => expect(within(screen.getByRole('list', { name: 'Claude Code logins in priority order' })).getAllByRole('listitem').map((item) => item.getAttribute('aria-label'))).toEqual(['Login console', 'Login default', 'Login work']))
   })
 })
 
@@ -232,6 +369,26 @@ describe('login list reads', () => {
     })
     await act(async () => answers[0]!([logins[0]!]))
     expect(result.current.logins).toEqual(logins)
+  })
+
+  it("shows nothing of the member the gateway was bound to before, and drops that member's late answer", async () => {
+    useStore.setState({ identityKey: 'member:alice' })
+    onTestFinished(() => { useStore.setState({ identityKey: null }) })
+    const answers: ((list: AgentLogin[]) => void)[] = []
+    const client = fakeApi({ agentLoginList: vi.fn(() => new Promise<AgentLogin[]>((resolve) => { answers.push(resolve) })) })
+    const { result } = renderHook(() => useAgentLogins(client, true))
+    await act(async () => answers[0]!(logins))
+    expect(result.current.logins).toEqual(logins)
+
+    const late = act(() => { result.current.reload() })
+    await late
+    act(() => useStore.setState({ identityKey: 'member:bob' }))
+    expect(result.current.logins).toBeNull()
+    await act(async () => answers[1]!(logins))
+    expect(result.current.logins).toBeNull()
+    const bobs = [{ id: 'default', name: 'default', automatic: true, shared: true, position: 0 }]
+    await act(async () => answers[2]!(bobs))
+    expect(result.current.logins).toEqual(bobs)
   })
 
   it('links only the sessions a refusal lists, never a login named like one', async () => {
@@ -411,6 +568,65 @@ describe('add login', () => {
     expect(signInSockets()[1]!.url).toBe(signInSockets()[0]!.url)
     accept(signInSockets()[1]!)
     expect(within(panel).getByRole('status').textContent).toBe('Starting the sign-in…')
+  })
+
+  it('stops offering a sign-in another tab refused for once that sign-in has ended', async () => {
+    const user = userEvent.setup()
+    const refusal = 'store: conflict: the sign-in of login "work" (lgn-run00000003) is still running; finish it first'
+    const client = fakeApi({ agentLoginAdd: vi.fn(async () => { throw new Error(refusal) }) })
+    const { rerender } = addLogin({ client })
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'spare')
+    await user.click(screen.getByRole('button', { name: 'Start sign-in' }))
+    expect(await screen.findByRole('button', { name: 'Return to the sign-in' })).toBeDefined()
+    const login = { id: 'lgn-run00000003', name: 'work', kind: 'subscription' as const, automatic: true, shared: true, position: 1 }
+    rerender(<AddLogin client={client} running={null} ended={{ id: 'lgn-run00000003', outcome: { login } }} onRunning={() => {}} onOpened={() => {}} onClose={() => {}} />)
+    expect(screen.queryByRole('button', { name: 'Return to the sign-in' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Start sign-in' })).toHaveProperty('disabled', false)
+  })
+
+  it('shows one outcome and Start again for a sign-in the server ended, not also Try again', async () => {
+    const refused = 'agent.login.result: the sign-in container did not start: image pull failed'
+    const running = { id: 'lgn-run00000007', name: 'spare' }
+    const client = fakeApi()
+    const { rerender } = addLogin({ client, running, resume: true })
+    await waitFor(() => expect(signInSockets()).toHaveLength(1))
+    rerender(<AddLogin client={client} running={null} ended={{ id: running.id, outcome: { refused } }} onRunning={() => {}} onOpened={() => {}} onClose={() => {}} />)
+    act(() => {
+      signInSockets()[0]!.onopen?.()
+      signInSockets()[0]!.onmessage?.({ data: JSON.stringify({ ok: false, error: 'agent login lgn-run00000007 has ended' }) })
+    })
+    expect(screen.getAllByRole('alert')).toHaveLength(1)
+    expect(screen.getByRole('alert').textContent).toContain(refused)
+    expect(screen.getByRole('button', { name: 'Start again' })).toBeDefined()
+    expect(screen.queryByRole('button', { name: 'Try again' })).toBeNull()
+  })
+
+  it("opens only the vendor's sign-in pages from the terminal, and shows any other link as text", async () => {
+    addLogin({ client: fakeApi(), running: { id: 'lgn-run00000008', name: 'spare' }, resume: true })
+    await waitFor(() => expect(signInSockets()).toHaveLength(1))
+    const open = vi.spyOn(window, 'open').mockReturnValue(null)
+    onTestFinished(() => open.mockRestore())
+    expect(xterm.onLink!('https://claude.ai/oauth/authorize?code=true')).toBe(false)
+    act(() => { expect(xterm.onLink!('https://claude.ai.example.test/oauth/authorize')).toBe(true) })
+    expect(screen.getByText('https://claude.ai.example.test/oauth/authorize').closest('p')!.textContent).toBe('Not opened, as it is not a Claude sign-in page: https://claude.ai.example.test/oauth/authorize')
+    act(() => { expect(xterm.onLink!('http://claude.ai/oauth/authorize')).toBe(true) })
+    expect(open).not.toHaveBeenCalled()
+  })
+
+  it('remembers no sign-in started for a member the gateway is no longer bound to', async () => {
+    const user = userEvent.setup()
+    useStore.setState({ identityKey: 'member:alice' })
+    onTestFinished(() => { useStore.setState({ identityKey: null }) })
+    let answer = (_: { login_id: string }) => {}
+    const onRunning = vi.fn()
+    const client = fakeApi({ agentLoginAdd: vi.fn(() => new Promise<{ login_id: string }>((resolve) => { answer = resolve })) })
+    addLogin({ client, onRunning })
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'spare')
+    await user.click(screen.getByRole('button', { name: 'Start sign-in' }))
+    act(() => useStore.setState({ identityKey: 'member:bob' }))
+    await act(async () => answer({ login_id: 'lgn-alice000001' }))
+    expect(onRunning).not.toHaveBeenCalled()
+    expect(client.agentLoginSocket).not.toHaveBeenCalled()
   })
 
   it('offers no return for any other refusal', async () => {

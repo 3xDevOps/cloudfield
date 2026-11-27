@@ -22,33 +22,35 @@ import { message } from '@/lib/format'
 import type { AgentLogin, Member, UsageProvider } from '@/lib/types'
 import { currentWindows, limitWords, UsageMeters } from '@/routes/settings/usage'
 import { useStore } from '@/store'
+import { stillWaiting, usePastDeadline } from '@/store/optimistic'
 
 /** Only Claude Code has added logins. */
 export const loginAgent = 'claude'
 
 export type LoginsClient = Pick<Api, 'agentLoginRename' | 'agentLoginRemove' | 'agentLoginOrder' | 'agentLoginAutomatic' | 'agentLoginShare' | 'accountUsage'>
 
+/** The signed-in member's logins: a read made for another identity never shows. */
 export function useAgentLogins(client: Pick<Api, 'agentLoginList'>, enabled: boolean) {
-  const [logins, setLogins] = useState<AgentLogin[] | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  const identity = useStore((s) => s.identityKey)
+  const [read, setRead] = useState<{ identity: string | null; logins: AgentLogin[] | null; error: string | null }>({ identity: null, logins: null, error: null })
   // Only the newest read lands, so an older answer arriving last never replaces it.
   const reads = useRef(0)
   const reload = useCallback((): Promise<void> => {
     if (!enabled) return Promise.resolve()
     const read = ++reads.current
+    const at = useStore.getState().identityKey
     return client.agentLoginList(loginAgent).then(
       (list) => {
-        if (read !== reads.current) return
-        setLogins(list)
-        setError(null)
+        if (read === reads.current) setRead({ identity: at, logins: list, error: null })
       },
       (err: unknown) => {
-        if (read === reads.current) setError(message(err))
+        if (read === reads.current) setRead((current) => ({ identity: at, logins: current.identity === at ? current.logins : null, error: message(err) }))
       },
     )
   }, [client, enabled])
-  useEffect(() => { void reload() }, [reload])
-  return { logins: enabled ? logins : null, error: enabled ? error : null, reload }
+  useEffect(() => { void reload() }, [reload, identity])
+  const shown = enabled && read.identity === identity
+  return { logins: shown ? read.logins : null, error: shown ? read.error : null, reload }
 }
 
 function kindWords(login: AgentLogin): string {
@@ -63,12 +65,22 @@ function names(members: Member[]): string {
   return list.length < 2 ? list.join('') : `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`
 }
 
-/** The Use for shares switch's state, and whom it reaches: teammates never name a login, so only an automatic one reaches them. */
-function reach(login: AgentLogin, sharedWith: Member[]): string {
+/**
+ * The Use for shares switch's state, and whom it reaches: teammates never name a login, so only an automatic one reaches them,
+ * and a default login kept as an API key or a Console profile has no file a share mounts. `sharedWith` is null until read.
+ */
+function reach(login: AgentLogin, sharedWith: Member[] | null): string {
   if (!login.shared) return 'Off for shares'
+  if (login.id === 'default' && (login.kind === 'api_key' || login.kind === 'console')) return 'On for shares: a share cannot use this kind of login'
+  if (sharedWith === null) return 'On for shares'
   if (sharedWith.length === 0) return 'On for shares: your account is not shared'
   if (!login.automatic) return 'On for shares: no share reaches it while Automatic is off'
   return `On for shares: also serves ${names(sharedWith)}`
+}
+
+function Pending({ label }: { label: string }) {
+  const late = usePastDeadline(true)
+  return <span role="status" className="text-ui-sm text-muted">{late ? stillWaiting : label}</span>
 }
 
 type Usage = { provider?: UsageProvider; error?: string }
@@ -90,9 +102,10 @@ function useLoginUsage(client: Pick<Api, 'accountUsage'>, logins: AgentLogin[]):
   return usage
 }
 
-function RenameForm({ login, client, onDone, onCancel }: { login: AgentLogin; client: LoginsClient; onDone: () => void; onCancel: () => void }) {
+function RenameForm({ login, client, onDone, onFailed, onCancel }: { login: AgentLogin; client: LoginsClient; onDone: () => void; onFailed: () => void; onCancel: () => void }) {
   const [name, setName] = useState(login.name)
   const [busy, setBusy] = useState(false)
+  const late = usePastDeadline(busy)
   const [error, setError] = useState<string | null>(null)
   const id = useId()
   return (
@@ -105,13 +118,14 @@ function RenameForm({ login, client, onDone, onCancel }: { login: AgentLogin; cl
         client.agentLoginRename(loginAgent, login.id, name.trim()).then(onDone, (err: unknown) => {
           setBusy(false)
           setError(message(err))
+          onFailed()
         })
       }}
     >
       <label htmlFor={id} className="sr-only">New name for {login.name}</label>
       <span className="flex flex-wrap items-center gap-2">
         <Input id={id} value={name} autoFocus autoComplete="off" spellCheck={false} className="w-48 max-w-full" onChange={(event) => setName(event.target.value)} />
-        <Button size="sm" type="submit" variant="secondary" disabled={busy || !name.trim()}>Save</Button>
+        <Button size="sm" type="submit" variant="secondary" disabled={busy || !name.trim()}>{late ? stillWaiting : busy ? 'Saving…' : 'Save'}</Button>
         <Button size="sm" type="button" variant="ghost" disabled={busy} onClick={onCancel}>Cancel</Button>
       </span>
       {error && <p role="alert" className="font-code text-ui-sm break-words text-state-failed">{error}</p>}
@@ -124,9 +138,11 @@ const ownSessions = /your sessions (.*?) \(end them\)/
 const runIDs = /\brun-[0-9a-z]{10}\b/g
 const revokeCommand = 'cloudfield account revoke'
 
-export function RemoveLogin({ login, client, onRemoved, onClose }: { login: AgentLogin; client: LoginsClient; onRemoved: () => void; onClose: () => void }) {
+/** `defaultLogin` is the default login's row when `login` is the last added one, whose removal also drops that row. */
+export function RemoveLogin({ login, defaultLogin, client, onChanged, onClose }: { login: AgentLogin; defaultLogin?: AgentLogin; client: LoginsClient; onChanged: () => void; onClose: () => void }) {
   const navigate = useStore((s) => s.navigate)
   const [busy, setBusy] = useState(false)
+  const late = usePastDeadline(busy)
   const [error, setError] = useState<string | null>(null)
   const go = (...route: Parameters<typeof navigate>) => {
     onClose()
@@ -134,6 +150,7 @@ export function RemoveLogin({ login, client, onRemoved, onClose }: { login: Agen
   }
   const runs = [...new Set(ownSessions.exec(error ?? '')?.[1].match(runIDs))]
   const who = [login.email, login.organization_name].filter(Boolean).join(' · ')
+  const turnsOn = [!defaultLogin?.automatic && 'Automatic', !defaultLogin?.shared && 'Use for shares'].filter(Boolean).join(' and ')
   return (
     <AlertDialog open onOpenChange={() => !busy && onClose()}>
       <AlertDialogContent>
@@ -143,6 +160,12 @@ export function RemoveLogin({ login, client, onRemoved, onClose }: { login: Agen
             {who && <>Signed in as {who}. </>}Deletes this login&apos;s files from the server, so no session starts or moves onto it again. It does not sign the login out at Anthropic: its sign-in stays valid there until Anthropic expires it or you revoke it.
           </AlertDialogDescription>
         </AlertDialogHeader>
+        {defaultLogin && turnsOn && (
+          <Callout tone="needs-you" title="Your default login's switches turn back on">
+            Your default login keeps its switches only while you have an added login. Removing this last one turns {turnsOn} on again for the default login
+            {!defaultLogin.shared && ', so the teammates you share your account with can use it'}.
+          </Callout>
+        )}
         {error !== null && (
           <Callout tone="failed" role="alert" title="Not removed">
             <span className="font-code">{error}</span>
@@ -165,17 +188,18 @@ export function RemoveLogin({ login, client, onRemoved, onClose }: { login: Agen
               setError(null)
               client.agentLoginRemove(loginAgent, login.id).then(
                 () => {
-                  onRemoved()
+                  onChanged()
                   onClose()
                 },
                 (err: unknown) => {
                   setBusy(false)
                   setError(message(err))
+                  onChanged()
                 },
               )
             }}
           >
-            Remove
+            {late ? stillWaiting : busy ? 'Removing…' : 'Remove'}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
@@ -183,25 +207,34 @@ export function RemoveLogin({ login, client, onRemoved, onClose }: { login: Agen
   )
 }
 
-function SwitchRow({ label, checked, disabled, onChange }: { label: string; checked: boolean; disabled: boolean; onChange: (on: boolean) => void }) {
+function SwitchRow({ label, checked, pending, onChange }: { label: string; checked: boolean; pending: boolean; onChange: (on: boolean) => void }) {
   const id = useId()
   return (
     <span className="flex min-h-7 items-center justify-between gap-3 coarse:min-h-11">
       <label htmlFor={id} className="text-ui-sm text-text">{label}</label>
-      <Switch id={id} checked={checked} disabled={disabled} onCheckedChange={onChange} />
+      <span className="flex items-center gap-2">
+        {pending && <Pending label="Saving…" />}
+        <Switch id={id} checked={checked} disabled={pending} onCheckedChange={onChange} />
+      </span>
     </span>
   )
 }
 
-function LoginRow({ login, index, count, firstAutomatic, usage, sharedWith, busy, onMove, onAutomatic, onShare, onRename, onRemove, renaming }: {
+type Control = 'automatic' | 'shared'
+
+function LoginRow({ login, index, count, firstAutomatic, usage, sharedWith, ordering, moving, pending, onMove, onAutomatic, onShare, onRename, onRemove, renaming }: {
   login: AgentLogin
   index: number
   count: number
   /** This login is the first in the order with Automatic on. */
   firstAutomatic: boolean
   usage: Usage | undefined
-  sharedWith: Member[]
-  busy: boolean
+  sharedWith: Member[] | null
+  /** An order call or the read after it is pending: every arrow waits, since the next order is built from the list. */
+  ordering: boolean
+  /** That call moved this login. */
+  moving: boolean
+  pending: Partial<Record<Control, true>>
   onMove: (by: number) => void
   onAutomatic: (on: boolean) => void
   onShare: (on: boolean) => void
@@ -215,16 +248,18 @@ function LoginRow({ login, index, count, firstAutomatic, usage, sharedWith, busy
   // A Console login has no usage windows by design; the server says so with `unsupported`.
   const perUseWindows = login.per_use && !usage?.error && usage?.provider?.status === 'unsupported'
   const usageError = perUseWindows ? undefined : usage?.error ?? (windows.length === 0 ? usage?.provider?.error : undefined)
+  // A failed refresh keeps the last windows read, which are not current.
+  const staleError = windows.length > 0 && usage?.provider?.status === 'stale' ? usage.provider.error : undefined
   const added = login.id !== 'default'
   const who = [login.email, login.organization_name].filter(Boolean).join(' · ')
   return (
     <li aria-label={`Login ${login.name}`} className="flex gap-2 py-3 first:pt-0 last:pb-0">
       <div className="flex shrink-0 flex-col items-center gap-1">
         <span className="flex h-6 items-center text-ui-sm text-muted tabular-nums coarse:h-11">{index + 1}</span>
-        <Button variant="secondary" size="icon-sm" label={`Move ${login.name} up`} disabled={busy || index === 0} onClick={() => onMove(-1)}>
+        <Button variant="secondary" size="icon-sm" label={`Move ${login.name} up`} disabled={ordering || index === 0} onClick={() => onMove(-1)}>
           <ArrowUp />
         </Button>
-        <Button variant="secondary" size="icon-sm" label={`Move ${login.name} down`} disabled={busy || index === count - 1} onClick={() => onMove(1)}>
+        <Button variant="secondary" size="icon-sm" label={`Move ${login.name} down`} disabled={ordering || index === count - 1} onClick={() => onMove(1)}>
           <ArrowDown />
         </Button>
       </div>
@@ -242,15 +277,16 @@ function LoginRow({ login, index, count, firstAutomatic, usage, sharedWith, busy
         </div>
         {added && !renaming && (
           <div className="col-start-2 row-start-1 flex items-center justify-end lg:col-start-3">
-            <Button variant="ghost" size="icon-sm" label={`Rename ${login.name}`} disabled={busy} onClick={onRename}>
+            <Button variant="ghost" size="icon-sm" label={`Rename ${login.name}`} onClick={onRename}>
               <Pencil />
             </Button>
-            <Button variant="ghost" size="icon-sm" label={`Remove ${login.name}`} disabled={busy} onClick={onRemove}>
+            <Button variant="ghost" size="icon-sm" label={`Remove ${login.name}`} onClick={onRemove}>
               <Trash2 />
             </Button>
           </div>
         )}
         <div className="col-span-2 flex min-w-0 flex-col gap-0.5 lg:col-span-1 lg:col-start-1 lg:row-start-2">
+          {moving && <Pending label="Moving…" />}
           {who && <span className="min-w-0 truncate text-ui-sm text-muted" title={who}>{who}</span>}
           <span className="text-ui-sm text-muted">{reach(login, sharedWith)}</span>
           {login.per_use && login.automatic && !firstAutomatic && (
@@ -263,13 +299,14 @@ function LoginRow({ login, index, count, firstAutomatic, usage, sharedWith, busy
           )}
         </div>
         <div className="col-span-2 flex flex-col lg:col-span-1 lg:col-start-2 lg:row-span-3 lg:row-start-1">
-          <SwitchRow label="Automatic" checked={login.automatic} disabled={busy} onChange={onAutomatic} />
-          <SwitchRow label="Use for shares" checked={login.shared} disabled={busy} onChange={onShare} />
+          <SwitchRow label="Automatic" checked={login.automatic} pending={!!pending.automatic} onChange={onAutomatic} />
+          <SwitchRow label="Use for shares" checked={login.shared} pending={!!pending.shared} onChange={onShare} />
         </div>
         {(perUseWindows || usageError || windows.length > 0) && (
           <div className="col-span-2 min-w-0 lg:col-span-1 lg:col-start-1 lg:row-start-3">
             {perUseWindows && <span className="text-ui-sm text-muted">No usage windows: billed per use</span>}
             {usageError && <span className="text-ui-sm text-muted">Usage not read: <span className="font-code">{usageError}</span></span>}
+            {staleError && <span className="text-ui-sm text-muted">Last read, not current: <span className="font-code">{staleError}</span></span>}
             {windows.length > 0 && (
               <div className="max-w-sm">
                 <UsageMeters label={`Login ${login.name}`} windows={windows} now={now} />
@@ -283,40 +320,47 @@ function LoginRow({ login, index, count, firstAutomatic, usage, sharedWith, busy
 }
 
 /** The member's logins of Claude Code in priority order, each with its controls beside it. */
-export function LoginList({ logins, sharedWith, client, onChanged }: {
+export function LoginList({ logins, sharedWith, sharedError, client, onChanged }: {
   logins: AgentLogin[]
-  sharedWith: Member[]
+  /** Whom the account is shared with; null until `account.list` answers. */
+  sharedWith: Member[] | null
+  sharedError?: string | null
   client: LoginsClient
-  /** Reads the list again; the controls wait for it, so the next move starts from the order the server keeps. */
+  /** Reads the list again; a pending control waits for it, so it shows what the server keeps. */
   onChanged: () => Promise<void>
 }) {
   const usage = useLoginUsage(client, logins)
   useClock()
-  const [busy, setBusy] = useState(false)
+  // Each pending control by `<control>:<login id>`, and `order` with the login it moves.
+  const [pending, setPending] = useState<Record<string, string>>({})
   const [error, setError] = useState<string | null>(null)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [removing, setRemoving] = useState<AgentLogin | null>(null)
-  const act = (call: Promise<unknown>) => {
-    setBusy(true)
+  // A failure without an answer may hide a committed change, so every outcome reads the list again.
+  const act = (key: string, value: string, call: Promise<unknown>) => {
+    setPending((current) => ({ ...current, [key]: value }))
     setError(null)
     call.then(onChanged, (err: unknown) => {
       setError(message(err))
       return onChanged()
-    }).finally(() => setBusy(false))
+    }).finally(() => setPending(({ [key]: _, ...rest }) => rest))
   }
   const move = (index: number, by: number) => {
     const ids = logins.map((login) => login.id)
     ;[ids[index], ids[index + by]] = [ids[index + by], ids[index]]
-    act(client.agentLoginOrder(loginAgent, ids))
+    act('order', logins[index]!.id, client.agentLoginOrder(loginAgent, ids))
   }
   const firstAutomatic = logins.find((login) => login.automatic)?.id
+  const added = logins.filter((login) => login.id !== 'default')
+  const defaultLogin = logins.find((login) => login.id === 'default')
   return (
     <section aria-label="Claude Code logins" className="flex min-w-0 basis-full flex-col gap-3 border-t border-seam pt-3 sm:pl-11">
       <p className="text-ui-sm text-muted">
-        Sessions start on the first login with usage left and move down the list when one runs out. A login with Automatic off is used only when you pick it at launch.{' '}
-        {sharedWith.length > 0
-          ? `Your account is shared with ${names(sharedWith)}: logins on for shares serve their sessions too.`
-          : 'Your account is not shared with anyone.'}
+        Sessions start on the first login with usage left and move down the list when one runs out. A login with Automatic off is used only when you pick it at launch.
+        {sharedWith && (sharedWith.length > 0
+          ? ` Your account is shared with ${names(sharedWith)}: logins on for shares serve their sessions too.`
+          : ' Your account is not shared with anyone.')}
+        {!sharedWith && sharedError && <> Whom your account is shared with was not read: <span className="font-code">{sharedError}</span></>}
       </p>
       {error && <Callout tone="failed" role="alert"><span className="font-code">{error}</span></Callout>}
       <ol aria-label="Claude Code logins in priority order" className="flex flex-col divide-y divide-seam">
@@ -329,19 +373,29 @@ export function LoginList({ logins, sharedWith, client, onChanged }: {
             firstAutomatic={login.id === firstAutomatic}
             usage={usage[login.id]}
             sharedWith={sharedWith}
-            busy={busy}
+            ordering={'order' in pending}
+            moving={pending.order === login.id}
+            pending={{ ...(`automatic:${login.id}` in pending && { automatic: true }), ...(`shared:${login.id}` in pending && { shared: true }) }}
             onMove={(by) => move(index, by)}
-            onAutomatic={(on) => act(client.agentLoginAutomatic(loginAgent, login.id, on))}
-            onShare={(on) => act(client.agentLoginShare(loginAgent, login.id, on))}
+            onAutomatic={(on) => act(`automatic:${login.id}`, '', client.agentLoginAutomatic(loginAgent, login.id, on))}
+            onShare={(on) => act(`shared:${login.id}`, '', client.agentLoginShare(loginAgent, login.id, on))}
             onRename={() => setRenaming(login.id)}
             onRemove={() => setRemoving(login)}
             renaming={renaming === login.id
-              ? <RenameForm login={login} client={client} onCancel={() => setRenaming(null)} onDone={() => { setRenaming(null); void onChanged() }} />
+              ? <RenameForm login={login} client={client} onCancel={() => setRenaming(null)} onFailed={() => void onChanged()} onDone={() => { setRenaming(null); void onChanged() }} />
               : undefined}
           />
         ))}
       </ol>
-      {removing && <RemoveLogin login={removing} client={client} onRemoved={onChanged} onClose={() => setRemoving(null)} />}
+      {removing && (
+        <RemoveLogin
+          login={removing}
+          defaultLogin={added.length === 1 && added[0]!.id === removing.id ? defaultLogin : undefined}
+          client={client}
+          onChanged={() => void onChanged()}
+          onClose={() => setRemoving(null)}
+        />
+      )}
     </section>
   )
 }

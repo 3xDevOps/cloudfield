@@ -21,6 +21,7 @@ import { PageBody } from '@/components/ui/page-body'
 import { Skeleton } from '@/components/ui/skeleton'
 import { ViewHeader } from '@/components/view-header'
 import { api, type Api } from '@/lib/api'
+import { message } from '@/lib/format'
 import { useDelayed } from '@/lib/hooks'
 import { cn } from '@/lib/utils'
 import type { AgentInfo, GitHubConnectResult, LaunchMode, Member } from '@/lib/types'
@@ -118,19 +119,27 @@ function AgentsRoute({ client = api }: RouteProps & { client?: Api }) {
   const addButton = useRef<HTMLButtonElement>(null)
   const claudeInstalled = agents?.some((agent) => agent.name === loginAgent && agent.installed === true) ?? false
   const loginsServer = useLoginsServer()
+  const identity = useStore((s) => s.identityKey)
   const logins = useAgentLogins(client, claudeInstalled && loginsServer)
-  const [sharedWith, setSharedWith] = useState<Member[]>([])
   const severalLogins = (logins.logins?.length ?? 0) > 1
+  const [shared, setShared] = useState<{ identity: string | null; members: Member[] | null; error: string | null }>({ identity: null, members: null, error: null })
   useEffect(() => {
     if (!severalLogins) return
     let live = true
-    client.accountList().then((access) => live && setSharedWith(access.shared_with), () => {})
+    const at = useStore.getState().identityKey
+    client.accountList().then(
+      (access) => live && setShared({ identity: at, members: access.shared_with, error: null }),
+      (err: unknown) => live && setShared({ identity: at, members: null, error: message(err) }),
+    )
     return () => { live = false }
-  }, [client, severalLogins])
+  }, [client, severalLogins, identity])
+  const sharedWith = shared.identity === identity ? shared : { members: null, error: null }
   const signIn = useLoginSignIn((s) => s.running)
   const signInEnded = useLoginSignIn((s) => s.ended)
   const [resume, setResume] = useState(false)
-  useLoginSignInWait(client, loginAgent, () => void logins.reload())
+  useLoginSignInWait(client, loginAgent, () => void logins.reload(), loginsServer)
+  // A server that stops keeping logins takes the panel with it, and every agent.login.* call.
+  if (screen === loginScreen && !loginsServer) setScreen('')
   const addLogin = (again: boolean) => {
     setResume(again)
     setScreen(loginScreen)
@@ -169,7 +178,7 @@ function AgentsRoute({ client = api }: RouteProps & { client?: Api }) {
       <div className="min-h-0 flex-1 overflow-y-auto">
         <PageBody width="lg" className="gap-6">
           {screen === loginScreen ? (
-            <AddLogin client={client} running={signIn} ended={signInEnded} resume={resume} onRunning={rememberLoginSignIn} onOpened={noteLoginSignInOpened} onClose={() => { void logins.reload(); close() }} />
+            <AddLogin key={identity} client={client} running={signIn} ended={signInEnded} resume={resume} onRunning={rememberLoginSignIn} onOpened={noteLoginSignInOpened} onClose={() => { void logins.reload(); close() }} />
           ) : screen === githubScreen ? (
             <GitHubConnect client={client} caps={caps} onConnected={setGithub} onClose={close} />
           ) : screen === addScreen ? (
@@ -199,10 +208,10 @@ function AgentsRoute({ client = api }: RouteProps & { client?: Api }) {
                   onRun={caps.hasMethod('run.launch') ? run : undefined}
                   onRemove={caps.hasMethod('agent.remove') ? setRemoving : undefined}
                   onAddLogin={logins.logins && caps.hasWS('terminal') ? () => addLogin(false) : undefined}
-                  logins={(agent) => (agent.name === loginAgent ? logins.logins?.length : undefined)}
+                  logins={(agent) => (agent.name === loginAgent ? logins.logins ?? undefined : undefined)}
                   below={(agent) => agent.name === loginAgent && (
                     <>
-                      {signIn && (
+                      {signIn && loginsServer && (
                         <p className="flex basis-full flex-wrap items-center gap-x-2 gap-y-1 text-ui-sm text-muted sm:pl-11">
                           <span>The sign-in of <span className="font-code">{signIn.name}</span> is still running.</span>
                           <Button size="sm" variant="secondary" onClick={() => addLogin(true)}>Return to the sign-in</Button>
@@ -213,7 +222,7 @@ function AgentsRoute({ client = api }: RouteProps & { client?: Api }) {
                           Logins not read: <span className="font-code">{logins.error}</span>
                         </Callout>
                       )}
-                      {severalLogins && logins.logins && <LoginList logins={logins.logins} sharedWith={sharedWith} client={client} onChanged={logins.reload} />}
+                      {severalLogins && logins.logins && <LoginList key={identity} logins={logins.logins} sharedWith={sharedWith.members} sharedError={sharedWith.error} client={client} onChanged={logins.reload} />}
                     </>
                   )}
                   returnFocusTo={returnFocusTo}

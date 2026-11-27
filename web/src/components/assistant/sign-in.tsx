@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input'
 import { useXterm } from '@/components/xterm-host'
 import type { Api } from '@/lib/api'
 import type { AssistantAgent } from '@/lib/assistant-types'
-import { lastLine, readSignInPrompt, type SignInPrompt } from '@/lib/sign-in-prompt'
+import { lastLine, readSignInPrompt, type SignInPrompt, vendorURL } from '@/lib/sign-in-prompt'
 import { type Attachment, connectAttach } from '@/routes/terminal/attach'
 
 const vendor: Record<string, string> = { claude: 'Claude', codex: 'Codex' }
@@ -35,7 +35,7 @@ export function AssistantSignIn({ agent, client, onDone, onBack, terminal = true
  * Runs an agent's sign-in on the terminal `socket` opens.
  * It offers the URL and code the sign-in prints; the terminal shows from the start only with `terminal`, and once the sign-in ends.
  */
-export function SignInTerminal({ agent, socket, onDone, back, cancel, reattaches, onAttached, terminal: terminalFirst = true, children }: {
+export function SignInTerminal({ agent, socket, onDone, back, cancel, reattaches, onAttached, ended: over = false, terminal: terminalFirst = true, children }: {
   agent: { name: string; display_name: string }
   socket: () => string
   onDone: () => void
@@ -45,6 +45,8 @@ export function SignInTerminal({ agent, socket, onDone, back, cancel, reattaches
   /** The socket reattaches to the running sign-in, so a dropped one reconnects instead of ending it. */
   reattaches?: boolean
   onAttached?: () => void
+  /** The server ended the sign-in and its page shows how: a refused attach is not shown again, nor tried again. */
+  ended?: boolean
   terminal?: boolean
   /** What the sign-in is for. */
   children: ReactNode
@@ -74,9 +76,16 @@ export function SignInTerminal({ agent, socket, onDone, back, cancel, reattaches
   const attachedHere = useRef(onAttached)
   attachedHere.current = onAttached
   const codeText = useRef<HTMLElement>(null)
+  const [refusedLink, setRefusedLink] = useState<string>()
   const controller = useXterm({
     onData: (data) => attachment.current?.send(data),
     onResize: (cols, rows) => attachment.current?.resize(cols, rows),
+    // The terminal opens the same links the sign-in button does, and no other.
+    onLink: (uri) => {
+      if (vendorURL(uri, agent.name)) return false
+      setRefusedLink(uri)
+      return true
+    },
   })
   const { terminal, geometry } = controller
   useEffect(() => {
@@ -193,7 +202,7 @@ export function SignInTerminal({ agent, socket, onDone, back, cancel, reattaches
         </div>
       )}
       <p className="text-ui">{children}</p>
-      {refused && (
+      {refused && !over && (
         <Callout tone="failed" role="alert" title="The sign-in could not start" actions={<Button size="sm" variant="secondary" onClick={retry}>Try again</Button>}>
           <code className="font-code break-words">{refused}</code>
         </Callout>
@@ -242,6 +251,11 @@ export function SignInTerminal({ agent, socket, onDone, back, cancel, reattaches
         {!settled && !forced && <Button size="sm" variant="ghost" aria-pressed={shown} onClick={() => setShown(!shown)}>{shown ? 'Hide terminal' : 'Show terminal'}</Button>}
       </div>
       {cancel && !ended && <p className="text-ui-sm text-muted">{cancel.note}</p>}
+      {refusedLink && (
+        <p role="status" className="text-ui-sm break-words text-muted">
+          Not opened, as it is not a {name} sign-in page: <code className="font-code">{refusedLink}</code>
+        </p>
+      )}
       {/* The terminal draws on a canvas, so what the sign-in said last is also read out. */}
       {sent && <p className="sr-only" aria-live="polite">{said}</p>}
       {(shown || ended || forced || (refused !== undefined && said !== '')) && (

@@ -33,12 +33,12 @@ const rewaitMs = 1000
  * Waits on agent.login.result for the running sign-in, one wait at a time, until the server says how it ended.
  * A wait the server did not answer (the gateway's bound, a dropped hop, a failed fetch) is not an outcome: it waits again.
  */
-export function useLoginSignInWait(client: Pick<Api, 'agentLoginResult'>, agent: string, onEnded: () => void) {
+export function useLoginSignInWait(client: Pick<Api, 'agentLoginResult'>, agent: string, onEnded: () => void, enabled: boolean) {
   const id = useLoginSignIn((s) => s.running?.id)
   const ended = useRef(onEnded)
   ended.current = onEnded
   useEffect(() => {
-    if (!id) return
+    if (!id || !enabled) return
     const abort = new AbortController()
     const same = sameIdentity()
     let timer: ReturnType<typeof setTimeout> | undefined
@@ -62,5 +62,5 @@ export function useLoginSignInWait(client: Pick<Api, 'agentLoginResult'>, agent:
       abort.abort()
       clearTimeout(timer)
     }
-  }, [client, agent, id])
+  }, [client, agent, id, enabled])
 }

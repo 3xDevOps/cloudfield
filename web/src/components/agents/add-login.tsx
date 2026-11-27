@@ -8,6 +8,7 @@ import { Label } from '@/components/ui/label'
 import type { Api } from '@/lib/api'
 import { useClock } from '@/lib/clock'
 import { message } from '@/lib/format'
+import { sameIdentity } from '@/store'
 import { useHeaderPrimary } from '@/store/hooks'
 import type { LoginSignIn, LoginSignInOutcome } from '@/store/login-sign-in'
 
@@ -80,6 +81,7 @@ export function AddLogin({ client, running, ended, resume, onRunning, onOpened, 
           reattaches
           onAttached={signIn.fresh ? () => onOpened(signIn.id) : undefined}
           onDone={onClose}
+          ended={outcome !== null}
           cancel={outcome ? undefined : { onCancel: onClose, note: <LeaveNote opened={running?.id === signIn.id ? running.opened : undefined} /> }}
         >
           Sign in with the account for <span className="font-code">{signIn.name}</span>. The sign-in runs <span className="font-code">claude auth login</span> in a container of its own; your other logins are not touched.
@@ -96,15 +98,18 @@ export function AddLogin({ client, running, ended, resume, onRunning, onOpened, 
       onSubmit={(event) => {
         event.preventDefault()
         const chosen = name.trim()
+        const same = sameIdentity()
         setBusy(true)
         setError(null)
         client.agentLoginAdd(loginAgent, chosen).then(
           ({ login_id: id }) => {
+            if (!same()) return
             setBusy(false)
             onRunning({ id, name: chosen })
             setSignIn({ id, name: chosen, fresh: true })
           },
           (err: unknown) => {
+            if (!same()) return
             setBusy(false)
             const refusal = message(err)
             const found = runningSignIn.exec(refusal)
