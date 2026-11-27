@@ -3351,36 +3351,38 @@ agent's last terminal or Enhanced session title,
 line, else the task's first line cut at 120 characters, with a lock for a
 protected session. The row holds, from the left:
 
-- The view switch.
+- The view switch. Below 800px of row width its views are icons and it
+  keeps its width, so no view leaves the row; wider, as words, it scrolls
+  when the row is too narrow for it.
 - The state's dot and label. On the tile that carries the session's
   controls, from 560px of row width, they are the
-  [Session tree panel](#session-tree-panel)'s chip.
+  [Session tree panel](#session-tree-panel)'s chip. When the row is still
+  full the label folds to its dot, first of anything, and stays the
+  accessible state; it returns once the reason's room holds it.
 - From 560px of row width, the reason, then `repo +N` on a
-  [multi-repo session](#multi-repo-sessions), the account line, the mode
-  ("Standard"; the tooltip adds the `agent.list` display name, `run.model`
-  and `run.effort`, "Claude Code · Standard · opus · high"), "Launched via
-  `<name>`". The account line is "On `<name>`'s account (fallback)" when the
-  session carries `requested_account_member_id` ([usage
-  fallback](teams.md#usage-fallback); a `run.account` event updates it live
-  when the session moves), "On `<name>`'s account, login `<login>`", or "On
-  your account, …" to its owner, when it is on an added login
-  (`account_login_name`, or the `account_login` id once that login is
-  removed, as the activity line names it). Each part that does not fit
-  drops whole, last first, so the mode goes before the account line; the
-  reason truncates last, and with under 96px left for it drops whole too,
-  before the view switch gives way.
-- Whose account pays, kept out of those parts so that it stays at every
-  width: the account line of a session on another member's account, or on
-  a login billed per use, which keeps its width while the view switch
-  scrolls and truncates only past half the row, with the full line as its
-  tooltip; below 800px of row width a teammate's
-  reads "`<name>`'s login `<login>`". A session on a login billed per use
-  (`account_login_per_use`) has a **Billed per use** badge, led by a coins
-  icon (`PerUseBadge`, the same on every surface), whose tooltip and
-  accessible name say "Billed per use to Ada's account, login console".
-  Below 800px of row width, where the views are icons, the badge takes the
-  account line's place and names the payer itself: "Billed per use · Ada",
-  or "Billed per use · your account".
+  [multi-repo session](#multi-repo-sessions), the mode ("Standard"; the
+  tooltip adds the `agent.list` display name, `run.model` and `run.effort`,
+  "Claude Code · Standard · opus · high"), "Launched via `<name>`". Each
+  part that does not fit drops whole, last first; the reason truncates
+  last, and with under 96px left for it drops whole too, leaving the room
+  to the parts after it.
+- The account line, at the same place for every login: "On `<name>`'s
+  account (fallback)" when the session carries
+  `requested_account_member_id` ([usage fallback](teams.md#usage-fallback);
+  a `run.account` event updates it live when the session moves), "On
+  `<name>`'s account, login `<login>`", or "On your account, …" to its
+  owner, when it is on an added login (`account_login_name`, or the
+  `account_login` id once that login is removed, as the activity line
+  names it). It truncates only past half the row, with the full line as
+  its tooltip. Under 560px it stays only where it says who pays: on
+  another member's account, or on a login billed per use; below 800px a
+  teammate's reads "`<name>`'s login `<login>`". A session on a login
+  billed per use (`account_login_per_use`) has a **Billed per use** badge,
+  led by a coins icon (`PerUseBadge`, the same on every surface), whose
+  tooltip and accessible name say "Billed per use to Ada's account, login
+  console". Below 800px of row width, where the views are icons, the
+  badge takes the account line's place and names the payer itself in
+  short: "Per use · Ada's", or "Per use · yours".
 - From 560px, the **Root access** (needs-you tone) or **Isolated** badge and,
   on the tile that carries the session's controls, the watch button. Neither
   yields to a long reason.

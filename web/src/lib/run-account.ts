@@ -27,14 +27,15 @@ export function useRunAccountWords(run: Run): string | null {
   return fallback ? `On ${whose} account${fallback}` : null
 }
 
-/** Who pays for a run on a login billed per use: a short name for a badge, and its title; null for any other run. */
+/** Who pays for a run on a login billed per use: "yours" or "Ada's" for a badge, and its title; null for any other run. */
 export function useRunPayer(run: Run): { payer: string; title: string } | null {
   const owner = useRunAccountOwner(run)
   if (!run.account_login_per_use) return null
   const login = runLoginName(run)
+  const whose = owner === null ? 'your' : `${owner}'s`
   return {
-    payer: owner ?? 'your account',
-    title: `Billed per use to ${owner === null ? 'your' : `${owner}'s`} account${login ? `, login ${login}` : ''}`,
+    payer: owner === null ? 'yours' : whose,
+    title: `Billed per use to ${whose} account${login ? `, login ${login}` : ''}`,
   }
 }
 

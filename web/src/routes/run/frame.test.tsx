@@ -130,22 +130,50 @@ describe('run frame', () => {
     expect(within(badge).getByText('Billed per use')).toBeDefined()
   })
 
-  it('names who pays in the badge itself in a narrow tile, for a teammate and for the owner', async () => {
+  it('names who pays in the badge itself in a narrow tile, for a teammate and for the owner, and keeps every view', async () => {
     const measure = HTMLElement.prototype.getBoundingClientRect
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
       return this.dataset.slot === 'pane-header' ? DOMRect.fromRect({ width: 420, height: 32 }) : measure.call(this)
     })
+    const viewNames = () => {
+      const strip = within(screen.getByRole('banner')).getByRole('tablist', { name: 'Session views' })
+      // As icons the switch keeps its width: the payer's badge never pushes a view out of sight.
+      expect(strip.className).toContain('shrink-0')
+      return within(strip).getAllByRole('tab').map((tab) => tab.getAttribute('aria-label'))
+    }
     const view = open({ account_member_id: bob.id, account_login: 'lgn-console0001', account_login_name: 'console', account_login_per_use: true })
     let badge = await within(screen.getByRole('banner')).findByTitle("Billed per use to Bob's account, login console")
-    expect(within(badge).getByText('Billed per use · Bob')).toBeDefined()
+    expect(within(badge).getByText("Per use · Bob's")).toBeDefined()
     expect(within(badge).getByText("Billed per use to Bob's account, login console").className).toContain('sr-only')
     expect(screen.queryByText("On Bob's account, login console")).toBeNull()
     expect(screen.getByRole('banner').textContent).not.toContain('Standard')
+    const teammate = viewNames()
     view.unmount()
 
     open({ account_member_id: alice.id, account_login: 'lgn-console0001', account_login_name: 'console', account_login_per_use: true })
     badge = await within(screen.getByRole('banner')).findByTitle('Billed per use to your account, login console')
-    expect(within(badge).getByText('Billed per use · your account')).toBeDefined()
+    expect(within(badge).getByText('Per use · yours')).toBeDefined()
+    expect(viewNames()).toEqual(teammate)
+    expect(teammate).toEqual(['Chat', 'Terminal', 'Changes', 'Files', 'Browser'])
+  })
+
+  it('folds the state to its dot when a narrow row is still full, and keeps it for a screen reader', async () => {
+    const measure = HTMLElement.prototype.getBoundingClientRect
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
+      return this.dataset.slot === 'pane-header' ? DOMRect.fromRect({ width: 420, height: 32 }) : measure.call(this)
+    })
+    // The label is squeezed: it needs 54px and has fewer.
+    vi.spyOn(HTMLElement.prototype, 'scrollWidth', 'get').mockImplementation(function (this: HTMLElement) {
+      return this.parentElement?.title.startsWith('Working') && this.previousElementSibling ? 54 : 0
+    })
+    open({ account_member_id: bob.id, account_login: 'lgn-work0000001', account_login_name: 'work' })
+    const banner = await screen.findByRole('banner')
+    const label = within(banner).getByText('Working')
+    await waitFor(() => expect(label.className).toBe('sr-only'))
+    expect(label.getAttribute('role')).toBe('status')
+    expect(label.previousElementSibling).not.toBeNull()
+    expect(within(banner).getByText("Bob's login work")).toBeDefined()
+    expect(within(within(banner).getByRole('tablist', { name: 'Session views' })).getAllByRole('tab')).toHaveLength(5)
   })
 
   it("keeps a teammate's account and login in a narrow tile when the login is not billed per use", async () => {
