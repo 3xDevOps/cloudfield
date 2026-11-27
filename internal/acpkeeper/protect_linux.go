@@ -14,21 +14,35 @@ import (
 // holds half the session's memory more than that process.
 const agentOOMScoreAdj = "-500"
 
-// commandWrapper is the program an agent runs each of its commands through:
-// it gives the command the default OOM score back, which the command would
-// otherwise inherit from the agent, then runs it with bash as Claude Code
-// documents for CLAUDE_CODE_SHELL_PREFIX.
+// AgentCgroup is the leaf a session VM's helper creates for the agent
+// beside WorkCgroup, where every other session process runs: the session's
+// memory limit does not reclaim the agent's memory there, and processes that
+// fill WorkCgroup leave it room to start one.
 const (
-	commandWrapper       = "/run/aether-acp-command"
-	commandWrapperScript = "#!/bin/sh\necho 0 > /proc/self/oom_score_adj\nexec bash -c \"$1\"\n"
+	AgentCgroup = "/sys/fs/cgroup/session/agent"
+	WorkCgroup  = "/sys/fs/cgroup/session/procs"
 )
 
-// lowerOOMScore applies agentOOMScoreAdj to this process's parent, the
-// managed exec the server tracks it by, and to this process, whose children
-// inherit it. It needs CAP_SYS_RESOURCE, which root has in a session VM and
-// not in a container.
-func lowerOOMScore() error {
-	for _, pid := range []string{strconv.Itoa(os.Getppid()), "self"} {
+// commandWrapper is the program an agent runs each of its commands through:
+// it gives the command the default OOM score back and moves it to
+// WorkCgroup, both of which the command would otherwise inherit from the
+// agent, then runs it with bash as Claude Code documents for
+// CLAUDE_CODE_SHELL_PREFIX.
+const (
+	commandWrapper       = "/run/aether-acp-command"
+	commandWrapperScript = "#!/bin/sh\necho 0 > /proc/self/oom_score_adj\necho 0 > " + WorkCgroup + "/cgroup.procs\nexec bash -c \"$1\"\n"
+)
+
+// protectSelf moves this process's parent, the managed exec the server
+// tracks it by, and this process, whose children follow it, to AgentCgroup
+// and applies agentOOMScoreAdj to both. Only root in a session VM can: a
+// container has no AgentCgroup, and lowering the score needs
+// CAP_SYS_RESOURCE.
+func protectSelf() error {
+	for _, pid := range []string{strconv.Itoa(os.Getppid()), strconv.Itoa(os.Getpid())} {
+		if err := os.WriteFile(AgentCgroup+"/cgroup.procs", []byte(pid), 0); err != nil {
+			return err
+		}
 		if err := os.WriteFile("/proc/"+pid+"/oom_score_adj", []byte(agentOOMScoreAdj), 0); err != nil {
 			return err
 		}
@@ -36,9 +50,9 @@ func lowerOOMScore() error {
 	return nil
 }
 
-// protectAgent lowers the OOM score the agent will inherit and returns the
-// program the agent must run its commands through, so that they do not
-// inherit it too.
+// protectAgent protects this keeper, and so the agent it starts, and returns
+// the program the agent must run its commands through, so that they are not
+// protected with it.
 func protectAgent() (string, error) {
 	if _, err := exec.LookPath("bash"); err != nil {
 		return "", fmt.Errorf("the command wrapper needs bash: %w", err)
@@ -56,7 +70,7 @@ func protectAgent() (string, error) {
 		_ = os.Remove(tmp)
 		return "", err
 	}
-	if err := lowerOOMScore(); err != nil {
+	if err := protectSelf(); err != nil {
 		return "", err
 	}
 	return commandWrapper, nil

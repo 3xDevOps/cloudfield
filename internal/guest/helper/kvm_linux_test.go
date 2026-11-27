@@ -236,7 +236,7 @@ func TestKVMHelper(t *testing.T) {
 		}
 		return string(out), code
 	}
-	mounts, _ := run("mounts", "", "/bin/sh", "-c", `cat /tmp/setup; hostname; cat /proc/1/comm; cut -d" " -f5,6 /proc/self/mountinfo; echo pids.max=$(cat /sys/fs/cgroup/session/pids.max)`)
+	mounts, _ := run("mounts", "", "/bin/sh", "-c", `cat /tmp/setup; hostname; cat /proc/1/comm; cut -d" " -f5,6 /proc/self/mountinfo; echo pids.max=$(cat /sys/fs/cgroup/session/procs/pids.max)`)
 	for _, want := range []string{"set up\n", "kvm-helper\n", "/workspace rw,nosuid,nodev", "/run/aether ro,nosuid,nodev", "/usr/local/bin/aether-internal ro,nosuid,nodev", "/tmp rw", "/run/aether/coord3.sock", "pids.max=128"} {
 		if !strings.Contains(mounts, want) {
 			t.Errorf("the VM lacks %q:\n%s", want, mounts)
