@@ -682,6 +682,55 @@ An upstream that was rewritten or diverged stays held (`rewritten` or
 --commit <reviewed-sha> --yes`. Published session branches stay fetchable while a
 mirror is failing.
 
+## Where a launch or a wake spends its time
+
+The server logs one line for every session it launched and every sleeping
+session it woke, with how long each step took in milliseconds:
+
+```sh
+sudo journalctl -u aether-server | grep -E 'scheduler: (launch|wake) steps'
+```
+
+```
+INFO scheduler: launch steps run=<run id> total_ms=... admission_ms=... base_ms=... checkout_ms=... cache_lock_ms=... plan_ms=... image_ms=... disks_ms=... checkout_disk_ms=... prepare_ms=... helper_disk_ms=... network_ms=... unit_ms=... hypervisor_ms=... guest_boot_ms=... guest_setup_ms=... helper_boot_ms=... agent_ms=...
+INFO scheduler: wake steps run=<run id> total_ms=... wait_for_save_ms=... admission_ms=... network_ms=... unit_ms=... hypervisor_ms=... restore_ms=... resume_ms=... helper_ms=... saved_state_ms=... reattach_ms=...
+```
+
+Steps are in the order they ended, and each covers everything since the step
+before it. `total_ms` is the whole launch or wake; what it holds beyond the
+steps came after the last one. A launch or wake that fails logs no such
+line. A step that did not run is absent: a session in a Docker container has
+none of the steps from `image_ms` to `helper_boot_ms`, and a wake that
+started the session from its disks has a launch's steps from `prepare_ms` to
+`helper_boot_ms` as well. A step that ran twice, as in such a wake or in a
+launch retried on an older image, is on the line twice.
+
+| Step | What it covers |
+| --- | --- |
+| `admission_ms` | Launch: from the `run.launch` request to reserved capacity, with the wait for another launch's admission; a subsession's launch is timed from after that wait. Wake: reserving the memory the session loads back. |
+| `base_ms` | Fetching the repository mirror, and those of the session's extra repositories, and picking the base commit. |
+| `checkout_ms` | Creating the session's checkout and branch. |
+| `cache_lock_ms` | Recording the checkout, then waiting for another launch that uses the same member's home or login: it holds them until its own container or VM has started. |
+| `plan_ms` | Resolving the environment image, mounts, variables and the agent's files. |
+| `image_ms` | VM: finding the image's base disk, or pulling and converting it on first use. |
+| `disks_ms` | VM: creating the root, data and cache disks. |
+| `checkout_disk_ms` | VM: the checkout's disk, built from the base commit when no session has used it. |
+| `prepare_ms` | VM: the state disk, the VM's record and attaching the agent program disks. |
+| `helper_disk_ms` | VM: the helper disk ([vm-guest.md](vm-guest.md)): hashing a server binary not seen before, and building its disk when it has none. |
+| `network_ms` | VM: the host side of the VM network and its firewall. |
+| `unit_ms` | VM: `systemd-run` of the VM's unit. |
+| `hypervisor_ms` | VM: from the unit's start until Cloud Hypervisor made its API socket. Absent when the socket was there before `systemd-run` returned; `unit_ms` holds it then. |
+| `guest_boot_ms` | VM: the guest kernel's boot and the helper's mounts, until the helper answers. |
+| `guest_setup_ms` | VM: the session user's account and the checkout's git setup in the guest. |
+| `helper_boot_ms` | VM: the helper's `Boot`: the setup script, then the main process. |
+| `agent_ms` | Attaching to the agent; for an Enhanced session, until its conversation is open. In a Docker container, also creating and starting the container. |
+| `wait_for_save_ms` | Wake: waiting for a save still in progress when the wake was asked for. |
+| `restore_ms` | Wake: Cloud Hypervisor loading the saved memory. |
+| `resume_ms` | Wake: resuming the guest. |
+| `helper_ms` | Wake: until the guest's helper answers. |
+| `saved_state_ms` | Wake: setting the guest's clock, recording the wake and deleting the saved state. |
+| `reattach_ms` | Wake: taking up the agent, its terminal, the diff watch and the terminals again. In a Docker container, also starting the container. |
+
 ## Enhanced sessions
 
 An [Enhanced session](enhanced-sessions.md) talks to its agent through a separate

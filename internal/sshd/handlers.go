@@ -20,6 +20,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/linear"
 	"github.com/3xDevOps/cloudfield/internal/permissions"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
+	"github.com/3xDevOps/cloudfield/internal/runtime"
 	"github.com/3xDevOps/cloudfield/internal/scheduler"
 	"github.com/3xDevOps/cloudfield/internal/store"
 )
@@ -281,6 +282,7 @@ func (s *Server) runLaunch(ctx context.Context, member domain.MemberID, params j
 
 func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protocol.RunLaunchParams, mode domain.LaunchMode, policy domain.AccountFallback,
 	created func(domain.RunID), skipped *[]protocol.SkippedAccount) (*domain.Run, *protocol.Error) {
+	ctx = runtime.WithSteps(ctx)
 	measured, err := fallback.Measure(ctx, s.cfg.Store, s.cfg.Services.Usage, member, p.AccountMemberID, p.Harness, policy)
 	if err != nil {
 		return nil, rpcError(err)
