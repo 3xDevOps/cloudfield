@@ -866,7 +866,9 @@ func TestRemoveSubpathVolumeIsBoundedWhenTheDaemonHangs(t *testing.T) {
 	volumeRemoveTimeout = 50 * time.Millisecond
 	defer func() { volumeRemoveTimeout = bound }()
 	done := make(chan error, 1)
-	go func() { done <- (&Docker{cli: cli}).RemoveSubpathVolume(context.Background(), "/srv/logins/lgn-work000000") }()
+	go func() {
+		done <- (&Docker{cli: cli}).RemoveSubpathVolume(context.Background(), "/srv/logins/lgn-work000000")
+	}()
 	select {
 	case err := <-done:
 		if !errors.Is(err, context.DeadlineExceeded) {
