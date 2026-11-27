@@ -151,10 +151,6 @@ const atUniversal = (info: ListInfo, url?: string | null) =>
 // page, the same sign-in, and a connector added at one counts at another.
 const sameURL = (info: ListInfo, a?: string, b?: string) => a === b || (atUniversal(info, a) && atUniversal(info, b))
 
-// Where a move or reconnect of c adds its replacement.
-const moveTo = (info: ListInfo, c: Connector, kind: Target['kind']) =>
-  c.notice?.url || (kind === 'move' ? info.universal_url : c.resource ?? info.url)
-
 const signsInAt = (info: ListInfo, url?: string) => !!info.sign_in && (!url || sameURL(info, url, info.url))
 
 function Setup({
@@ -319,10 +315,8 @@ function Connectors({ client }: { client: Api }) {
         return
       }
       // A replacement that called Aether wins over one whose tokens may
-      // never have arrived. A move off a retiring or retired address takes
-      // only a connector at its exact new URL.
-      const candidates = next.filter((c) => !attempt.known.has(c.id) && !c.notice &&
-        (old.notice ? c.resource === attempt.into : sameURL(attempt.info, c.resource, attempt.into)) &&
+      // never have arrived.
+      const candidates = next.filter((c) => !attempt.known.has(c.id) && sameURL(attempt.info, c.resource, attempt.into) &&
         (old.client_id ? c.client_id === old.client_id : c.redirect_host === old.redirect_host))
       let added: Connector | undefined
       try {
@@ -402,22 +396,10 @@ function Connectors({ client }: { client: Api }) {
     setInfo(rest)
     setConnectors(fresh)
     setListError(null)
-    if (next?.replaces.notice) {
-      // The server may have changed or withdrawn the new address the
-      // dialog showed.
-      const id = next.replaces.id
-      const now = fresh.find((c) => c.id === id)
-      if (!now || now.notice?.state !== next.replaces.notice?.state || now.notice?.url !== next.replaces.notice?.url) {
-        setTarget(null)
-        throw new Error(`${label(next.replaces)} changed on the server since this was shown. Check its row and start again.`)
-      }
-      next = { ...next, replaces: now }
-    }
     // A move goes to the universal URL; a reconnect stays where its
-    // connector was added. Either goes to the address the edge names
-    // instead of a retiring or retired one. At the server's own URL the
-    // page asks for a code even when the universal URL takes the sign-in.
-    const into = next ? moveTo(rest, next.replaces, next.kind) : rest.url
+    // connector was added. At the server's own URL the page asks for a
+    // code even when the universal URL takes the sign-in.
+    const into = next?.kind === 'move' ? rest.universal_url : next?.replaces.resource ?? rest.url
     const at = into && into !== rest.url ? into : undefined
     const signIn = signsInAt(rest, at)
     const code = signIn ? null : await client.connectorCode()
@@ -459,7 +441,7 @@ function Connectors({ client }: { client: Api }) {
   }
 
   // A connector on the server's own URL reconnects there, with a code.
-  const signsIn = (c: Connector) => signsInAt(info, moveTo(info, c, 'reconnect'))
+  const signsIn = (c: Connector) => signsInAt(info, c.resource)
   const tooOld = listError?.old === true
   const edgeNote = edge && !edge.edge_url
     ? <p className="text-muted">This server has no edge, so ChatGPT and Claude cannot reach it. An admin turns one on: <Link href={`${docs}/edge.md#turning-it-on`}>Edge guide</Link>.</p>
@@ -539,6 +521,8 @@ function Connectors({ client }: { client: Api }) {
       {connectors?.map((c) => {
         const universal = atUniversal(info, c.resource)
         const movable = !c.notice && !!c.resource && !!info.universal_url && !universal && info.url === info.universal_url
+        // The new address's own URL asks for a code even while the universal URL takes the sign-in.
+        const asksCode = !!c.notice?.url && !!info.sign_in && !atUniversal(info, c.notice.url)
         return (
           <SettingRow
             key={c.id}
@@ -564,8 +548,7 @@ function Connectors({ client }: { client: Api }) {
                 {c.notice.url
                   ? (
                       <div className="flex min-w-0 flex-col gap-1.5">
-                        <p>First select <strong>Move to the new address</strong>, then add it again in {c.client_name} at this URL and remove the old connector there. This one is revoked once the new one calls Cloudfield.</p>
-                        <Button size="sm" variant="secondary" className="self-start" aria-label={`Move ${label(c)} to the new address`} disabled={busy || target !== null} onClick={() => setConfirming({ connector: c, action: 'move' })}>Move to the new address</Button>
+                        <p>Add it again in {c.client_name} at this URL and check that it works, then remove the old connector there and select <strong>Revoke</strong> here.{asksCode && <> Its page asks for a code: <Code>aether mcp code</Code>.</>}</p>
                         <CopyableCommand command={c.notice.url} />
                       </div>
                     )
@@ -577,8 +560,7 @@ function Connectors({ client }: { client: Api }) {
                 {c.notice.url
                   ? (
                       <div className="flex min-w-0 flex-col gap-1.5">
-                        <p>This connector no longer works. First select <strong>Reconnect</strong>, then add it again in {c.client_name} at this URL and remove the old connector there. This one is revoked once the new one calls Cloudfield.</p>
-                        <Button size="sm" variant="secondary" className="self-start" aria-label={`Reconnect ${label(c)}`} disabled={busy || target !== null} onClick={() => setConfirming({ connector: c, action: 'reconnect' })}>Reconnect</Button>
+                        <p>This connector no longer works. Add it again in {c.client_name} at this URL, then remove the old connector there and select <strong>Revoke</strong> here.{asksCode && <> Its page asks for a code: <Code>aether mcp code</Code>.</>}</p>
                         <CopyableCommand command={c.notice.url} />
                       </div>
                     )
@@ -590,10 +572,8 @@ function Connectors({ client }: { client: Api }) {
       })}
       {confirming?.action === 'move' && (
         <Confirm
-          title={`Move ${label(confirming.connector)} to ${confirming.connector.notice ? 'the new address' : 'the universal URL'}?`}
-          description={confirming.connector.notice
-            ? <>Add it again in {confirming.connector.client_name} with <Code>{moveTo(info, confirming.connector, 'move')}</Code>{signsInAt(info, moveTo(info, confirming.connector, 'move')) ? ' and sign in' : ' and paste the code'}. Once the new connection calls Cloudfield, this connector is revoked; remove the old connector in {confirming.connector.client_name} too.</>
-            : `Add Aether again in ${confirming.connector.client_name} with ${info.universal_url}${info.sign_in ? ' and sign in' : ' and paste the code'}. Once the new connection calls Cloudfield, this connector is revoked; remove the old Aether connector in ${confirming.connector.client_name} too.`}
+          title={`Move ${label(confirming.connector)} to the universal URL?`}
+          description={`Add Aether again in ${confirming.connector.client_name} with ${info.universal_url}${info.sign_in ? ' and sign in' : ' and paste the code'}. Once the new connection calls Cloudfield, this connector is revoked; remove the old Aether connector in ${confirming.connector.client_name} too.`}
           action="Move"
           pending="Starting…"
           onConfirm={async () => {
@@ -611,7 +591,7 @@ function Connectors({ client }: { client: Api }) {
       {confirming && confirming.action !== 'move' && (confirming.action === 'reconnect' ? (
         <Confirm
           title={`Reconnect ${label(confirming.connector)}?`}
-          description={`${signsIn(confirming.connector) ? '' : 'This gets a new code. '}${confirming.connector.notice ? 'Connect it again' : 'Connect Aether again'} in ${confirming.connector.client_name}${signsIn(confirming.connector) ? ' and sign in' : ' and paste the code'}; you can choose other scopes. Once the new connection calls Cloudfield, this connector is revoked.`}
+          description={`${signsIn(confirming.connector) ? 'Connect Aether again' : 'This gets a new code. Connect Aether again'} in ${confirming.connector.client_name}${signsIn(confirming.connector) ? ' and sign in' : ' and paste the code'}; you can choose other scopes. Once the new connection calls Cloudfield, this connector is revoked.`}
           action="Reconnect"
           pending="Reconnecting…"
           onConfirm={async () => {

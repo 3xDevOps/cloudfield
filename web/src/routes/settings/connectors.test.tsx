@@ -506,135 +506,59 @@ it('retries a move for its own app and still takes a replacement that appeared b
 
 const oldUniversal = 'https://relay-old.example.test/mcp'
 const newUniversal = 'https://relay-new.example.test/mcp'
+const oldOwn = 'https://relay-old.example.test/mcp/srv'
 const newOwn = 'https://relay-new.example.test/mcp/srv'
 const movedEdge = { url: newUniversal, universal_url: newUniversal, universal_urls: [oldUniversal, newUniversal], sign_in: true }
+// notice is a connector notice as the server sends it: JSON leaves out an empty url and date.
+const notice = (json: string) => JSON.parse(json) as Connector['notice']
 
 it('shows no address notice for a connector the edge says nothing about', async () => {
   show({ connectorList: vi.fn().mockResolvedValue({ connectors: [{ ...claude, resource: newUniversal }], ...movedEdge }) })
   expect(await screen.findByText('Universal URL')).toBeTruthy()
   expect(screen.queryByText(/This address is retir/)).toBeNull()
-  expect(screen.queryByRole('button', { name: /to the new address/ })).toBeNull()
 })
 
-it('moves a connector at a retiring address to the new one, skipping one added again at the old address', async () => {
-  vi.useFakeTimers({ shouldAdvanceTime: true, now: Date.parse('2026-11-26T12:00:00Z') })
-  const old: Connector = { ...claude, resource: oldUniversal, notice: { state: 'retiring', url: newUniversal, date: '2027-03-01' } }
-  const again: Connector = { ...old, id: 'con-oldagain01', last_used_at: '2026-11-26T12:00:01Z' }
-  const added: Connector = { ...claude, id: 'con-newaddr001', resource: newUniversal, last_used_at: '2026-11-26T12:00:05Z' }
-  const client = show({
-    connectorList: vi.fn().mockResolvedValueOnce({ connectors: [old], ...movedEdge }).mockResolvedValueOnce({ connectors: [old], ...movedEdge })
-      .mockResolvedValueOnce({ connectors: [old, again], ...movedEdge })
-      .mockResolvedValue({ connectors: [old, again, added], ...movedEdge }),
-  })
+it('shows where to add a connector at a retiring address again, and leaves the revoke to the member', async () => {
+  const old: Connector = { ...claude, resource: oldUniversal, notice: notice(`{"state":"retiring","url":"${newUniversal}","date":"2027-03-01"}`) }
+  const client = show({ connectorList: vi.fn().mockResolvedValue({ connectors: [old], ...movedEdge }) })
   const callout = (await screen.findByText('This address is retiring on 2027-03-01')).closest('[data-slot=callout]')
-  expect(callout?.textContent).toContain('First select Move to the new address, then add it again in Claude at this URL and remove the old connector there. This one is revoked once the new one calls Cloudfield.')
+  expect(callout?.textContent).toContain('Add it again in Claude at this URL and check that it works, then remove the old connector there and select Revoke here.')
+  expect(callout?.textContent).not.toContain('asks for a code')
   expect(within(callout as HTMLElement).getByText(newUniversal)).toBeTruthy()
   expect(screen.getByText(oldUniversal).closest('span')?.textContent).toBe(`Added at ${oldUniversal}`)
-  expect(screen.queryByRole('button', { name: 'Reconnect Claude (claude.ai)' })).toBeNull()
-  expect(screen.queryByRole('button', { name: 'Move Claude (claude.ai) to the universal URL' })).toBeNull()
-  fireEvent.click(screen.getByRole('button', { name: 'Move Claude (claude.ai) to the new address' }))
-  const dialog = await screen.findByRole('alertdialog')
-  expect(within(dialog).getByText('Move Claude (claude.ai) to the new address?')).toBeTruthy()
-  expect(dialog.textContent).toContain(`Add it again in Claude with ${newUniversal} and sign in. Once the new connection calls Cloudfield, this connector is revoked; remove the old connector in Claude too.`)
-  fireEvent.click(within(dialog).getByRole('button', { name: 'Move' }))
-  const panel = await screen.findByRole('tabpanel', { name: 'Claude' })
-  expect(await within(panel).findByText(newUniversal)).toBeTruthy()
-  expect(within(panel).getByText(/No code is needed/)).toBeTruthy()
-  await vi.advanceTimersByTimeAsync(3000)
+  expect(screen.queryByRole('button', { name: /^(Move|Reconnect) Claude/ })).toBeNull()
+  expect(screen.getByRole('button', { name: 'Revoke Claude (claude.ai)' })).toBeTruthy()
   expect(client.connectorRevoke).not.toHaveBeenCalled()
-  await vi.advanceTimersByTimeAsync(3000)
-  await waitFor(() => expect(client.connectorRevoke).toHaveBeenCalledWith(old.id))
-  expect(client.connectorRevoke).toHaveBeenCalledTimes(1)
-  expect(client.connectorCode).not.toHaveBeenCalled()
 })
 
-it('moves a connector at a retiring own URL to the same path on the new address, with a code', async () => {
-  vi.useFakeTimers({ shouldAdvanceTime: true, now: Date.parse('2026-11-26T12:00:00Z') })
-  const old: Connector = { ...chatgpt, resource: 'https://relay-old.example.test/mcp/srv', notice: { state: 'retiring', url: newOwn } }
-  const client = show({
-    connectorList: vi.fn().mockResolvedValue({ connectors: [old], url: newOwn, universal_url: newUniversal, universal_urls: [oldUniversal, newUniversal] }),
-    connectorCode: vi.fn(async () => ({ url: newOwn, code: 'ABCD-EFGH', expires_at: '2026-11-26T12:10:00Z' })),
-  })
+it('says the new own URL asks for a code while the universal URL takes the sign-in', async () => {
+  const old: Connector = { ...chatgpt, resource: oldOwn, notice: notice(`{"state":"retiring","url":"${newOwn}"}`) }
+  show({ connectorList: vi.fn().mockResolvedValue({ connectors: [old], ...movedEdge }) })
   const callout = (await screen.findByText('This address is retiring')).closest('[data-slot=callout]')
+  expect(callout?.textContent).toContain('select Revoke here. Its page asks for a code: aether mcp code.')
   expect(within(callout as HTMLElement).getByText(newOwn)).toBeTruthy()
-  fireEvent.click(screen.getByRole('button', { name: 'Move ChatGPT (chatgpt.com) to the new address' }))
-  const dialog = await screen.findByRole('alertdialog')
-  expect(dialog.textContent).toContain(`Add it again in ChatGPT with ${newOwn} and paste the code.`)
-  fireEvent.click(within(dialog).getByRole('button', { name: 'Move' }))
-  expect(await screen.findByText('ABCD-EFGH')).toBeTruthy()
-  const panel = screen.getByRole('tabpanel', { name: 'ChatGPT' })
-  expect(within(panel).getByText(newOwn)).toBeTruthy()
-  expect(client.connectorRevoke).not.toHaveBeenCalled()
 })
 
-it('tells the member to revoke a connector at a retired address, with no move', async () => {
-  const old: Connector = { ...claude, resource: oldUniversal, notice: { state: 'retired', url: newUniversal } }
+it('tells the member to add a connector at a retired address again and revoke it', async () => {
+  const old: Connector = { ...claude, resource: oldUniversal, notice: notice(`{"state":"retired","url":"${newUniversal}"}`) }
   show({ connectorList: vi.fn().mockResolvedValue({ connectors: [old], ...movedEdge, universal_urls: [newUniversal] }) })
   const callout = (await screen.findByText('This address is retired')).closest('[data-slot=callout]')
-  expect(screen.getByText(oldUniversal).closest('span')?.textContent).toBe(`Added at ${oldUniversal}`)
-  expect(callout?.textContent).toContain('This connector no longer works. First select Reconnect, then add it again in Claude at this URL and remove the old connector there. This one is revoked once the new one calls Cloudfield.')
+  expect(callout?.textContent).toContain('This connector no longer works. Add it again in Claude at this URL, then remove the old connector there and select Revoke here.')
   expect(within(callout as HTMLElement).getByText(newUniversal)).toBeTruthy()
-  expect(screen.queryByRole('button', { name: /^Move Claude/ })).toBeNull()
-  expect(screen.getByRole('button', { name: 'Reconnect Claude (claude.ai)' })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: /^(Move|Reconnect) Claude/ })).toBeNull()
   expect(screen.getByRole('button', { name: 'Revoke Claude (claude.ai)' })).toBeTruthy()
 })
 
-it('settles a move off a retiring address only on a connector at the exact new URL', async () => {
-  vi.useFakeTimers({ shouldAdvanceTime: true, now: Date.parse('2026-11-26T12:00:00Z') })
-  const third = 'https://relay-third.example.test/mcp'
-  const atThree = { ...movedEdge, universal_urls: [oldUniversal, newUniversal, third] }
-  const old: Connector = { ...claude, resource: oldUniversal, notice: { state: 'retiring', url: newUniversal } }
-  const elsewhere: Connector = { ...claude, id: 'con-thirdaddr1', resource: third, last_used_at: '2026-11-26T12:00:01Z' }
-  const client = show({
-    connectorList: vi.fn().mockResolvedValueOnce({ connectors: [old], ...atThree }).mockResolvedValueOnce({ connectors: [old], ...atThree })
-      .mockResolvedValue({ connectors: [old, elsewhere], ...atThree }),
-  })
-  fireEvent.click(await screen.findByRole('button', { name: 'Move Claude (claude.ai) to the new address' }))
-  fireEvent.click(within(await screen.findByRole('alertdialog')).getByRole('button', { name: 'Move' }))
-  expect(await screen.findByText('Waiting for Claude to connect…')).toBeTruthy()
-  await vi.advanceTimersByTimeAsync(9000)
-  expect(client.connectorRevoke).not.toHaveBeenCalled()
-})
-
-it('stops a move whose new address changed after the dialog was shown', async () => {
-  const old: Connector = { ...claude, resource: oldUniversal, notice: { state: 'retiring', url: newUniversal } }
-  const client = show({
-    connectorList: vi.fn().mockResolvedValueOnce({ connectors: [old], ...movedEdge })
-      .mockResolvedValue({ connectors: [{ ...old, notice: { state: 'retiring' } }], ...movedEdge }),
-  })
-  fireEvent.click(await screen.findByRole('button', { name: 'Move Claude (claude.ai) to the new address' }))
-  const dialog = await screen.findByRole('alertdialog')
-  fireEvent.click(within(dialog).getByRole('button', { name: 'Move' }))
-  expect((await within(dialog).findByRole('alert')).textContent).toBe('Claude (claude.ai) changed on the server since this was shown. Check its row and start again.')
-  expect(client.connectorCode).not.toHaveBeenCalled()
-  expect(screen.queryByText('Waiting for Claude to connect…')).toBeNull()
-})
-
-it('offers no move or reconnect while the server takes no connectors at the new address', async () => {
-  const old: Connector = { ...claude, resource: oldUniversal, notice: { state: 'retiring', date: '2027-03-01' } }
+it('says to ask the admin while no new address is named', async () => {
+  const old: Connector = { ...claude, resource: oldUniversal, notice: notice('{"state":"retiring","date":"2027-03-01"}') }
   show({ connectorList: vi.fn().mockResolvedValue({ connectors: [old], url: oldUniversal, universal_url: oldUniversal, universal_urls: [oldUniversal], sign_in: true }) })
   const callout = (await screen.findByText('This address is retiring on 2027-03-01')).closest('[data-slot=callout]')
   expect(callout?.textContent).toBe('This address is retiring on 2027-03-01It keeps working until then. Ask this server’s admin where to add it again.')
-  expect(screen.queryByRole('button', { name: /new address/ })).toBeNull()
-  expect(screen.queryByRole('button', { name: 'Reconnect Claude (claude.ai)' })).toBeNull()
-  expect(screen.getByRole('button', { name: 'Revoke Claude (claude.ai)' })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: /^(Move|Reconnect) Claude/ })).toBeNull()
 })
 
-it('reconnects a retired universal connector by signing in at the new address, as its dialog says', async () => {
-  const old: Connector = { ...claude, resource: oldUniversal, notice: { state: 'retired', url: newUniversal } }
-  const client = show({ connectorList: vi.fn().mockResolvedValue({ connectors: [old], ...movedEdge, universal_urls: [newUniversal] }) })
-  fireEvent.click(await screen.findByRole('button', { name: 'Reconnect Claude (claude.ai)' }))
-  const dialog = await screen.findByRole('alertdialog')
-  expect(dialog.textContent).toContain('Connect it again in Claude and sign in')
-  fireEvent.click(within(dialog).getByRole('button', { name: 'Reconnect' }))
-  const panel = await screen.findByRole('tabpanel', { name: 'Claude' })
-  expect(await within(panel).findByText(newUniversal)).toBeTruthy()
-  expect(client.connectorCode).not.toHaveBeenCalled()
-})
-
-it('says nothing of a date it was not given, and keeps the code a reconnect at the old own URL asks for', async () => {
-  const notice = JSON.parse('{"state":"retiring"}') as Connector['notice']
-  const old: Connector = { ...chatgpt, resource: 'https://relay-old.example.test/mcp/srv', notice }
+it('says nothing of a date it was not given, and keeps the code a revoke at the old own URL asks for', async () => {
+  const old: Connector = { ...chatgpt, resource: oldOwn, notice: notice('{"state":"retiring"}') }
   show({ connectorList: vi.fn().mockResolvedValue({ connectors: [old], url: oldUniversal, universal_url: oldUniversal, universal_urls: [oldUniversal], sign_in: true }) })
   const callout = (await screen.findByText('This address is retiring')).closest('[data-slot=callout]')
   expect(callout?.textContent).toBe('This address is retiringAsk this server’s admin where to add it again.')
@@ -642,10 +566,9 @@ it('says nothing of a date it was not given, and keeps the code a reconnect at t
   expect((await screen.findByRole('alertdialog')).textContent).toContain('ChatGPT asks you to connect again with a new code.')
 })
 
-it('reconnects a connector the server no longer lists, as before any address notice', async () => {
-  const client = show({ connectorList: vi.fn().mockResolvedValueOnce({ connectors: [claude] }).mockResolvedValue({ connectors: [] }) })
-  fireEvent.click(await screen.findByRole('button', { name: 'Reconnect Claude (claude.ai)' }))
-  fireEvent.click(await screen.findByRole('button', { name: 'Reconnect' }))
-  expect(await screen.findByText('ABCD-EFGH')).toBeTruthy()
-  expect(client.connectorCode).toHaveBeenCalled()
+it('leaves the code to the setup above when the server takes no sign-in', async () => {
+  const old: Connector = { ...chatgpt, resource: oldOwn, notice: notice(`{"state":"retiring","url":"${newOwn}"}`) }
+  show({ connectorList: vi.fn().mockResolvedValue({ connectors: [old], url: newOwn }) })
+  const callout = (await screen.findByText('This address is retiring')).closest('[data-slot=callout]')
+  expect(callout?.textContent).not.toContain('asks for a code')
 })
