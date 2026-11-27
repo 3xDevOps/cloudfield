@@ -98,7 +98,9 @@ func (s *Scheduler) SwitchMode(ctx context.Context, run domain.RunID, actor doma
 	if entry == nil {
 		return fmt.Errorf("%w: the session has no live sandbox", ErrInvalidTransition)
 	}
-	entry.lifecycleMu.Lock()
+	if err = entry.lockLifecycle(ctx); err != nil {
+		return err
+	}
 	defer entry.lifecycleMu.Unlock()
 	var from domain.LaunchMode
 	var session string
@@ -396,7 +398,9 @@ func (s *Scheduler) settleSwitch(ctx context.Context, entry *supervised) {
 	if intent == nil {
 		return
 	}
-	state, err := s.supervisorState(ctx, cid)
+	readCtx, cancel := context.WithTimeout(ctx, recoveryStepTimeout)
+	state, err := s.supervisorState(readCtx, cid)
+	cancel()
 	if err != nil {
 		slog.Warn("scheduler: read the run supervisor's state", "run", entry.runID, "error", err)
 		return

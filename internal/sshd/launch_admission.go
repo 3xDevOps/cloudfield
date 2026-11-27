@@ -3,8 +3,8 @@ package sshd
 import (
 	"context"
 	"fmt"
-	"sync"
 
+	"github.com/3xDevOps/cloudfield/internal/ctxlock"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/fallback"
 	"github.com/3xDevOps/cloudfield/internal/permissions"
@@ -80,7 +80,7 @@ func (s *Server) lockAuthorization(fn func() error) error {
 		return fmt.Errorf("sshd: nil launch admission callback")
 	}
 	if s.authorizationMu == nil {
-		s.authorizationMu = &sync.Mutex{}
+		s.authorizationMu = &ctxlock.Mutex{}
 	}
 	s.authorizationMu.Lock()
 	defer s.authorizationMu.Unlock()

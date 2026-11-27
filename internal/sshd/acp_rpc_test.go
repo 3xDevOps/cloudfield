@@ -181,8 +181,22 @@ func (f *fakeRuns) ACPCancel(_ context.Context, run domain.RunID) error {
 	return f.record(fmt.Sprintf("acp.cancel:%s", run))
 }
 
+func (f *fakeRuns) Interrupt(_ context.Context, run *domain.Run, actor domain.MemberID) (func() error, error) {
+	if err := f.record(fmt.Sprintf("interrupt:%s:%s", run.ID, actor)); err != nil {
+		return nil, err
+	}
+	if f.interruptAnswer != nil {
+		return f.interruptAnswer, nil
+	}
+	return func() error { return nil }, nil
+}
+
 func (f *fakeRuns) ACPSetOption(_ context.Context, run domain.RunID, optionID string, value any) error {
 	return f.record(fmt.Sprintf("acp.set_option:%s:%s:%v", run, optionID, value))
+}
+
+func (f *fakeRuns) ACPSetModelEffort(_ context.Context, run *domain.Run, actor domain.MemberID, model, effort string) (string, string, error) {
+	return strings.ToLower(model), strings.ToLower(effort), f.record(fmt.Sprintf("acp.set_model_effort:%s:%s:%s:%s", run.ID, actor, model, effort))
 }
 
 func (f *fakeRuns) ACPHistory(run domain.RunID, beforeSeq int64, limit int) (acphost.HistoryPage, error) {

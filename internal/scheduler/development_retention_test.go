@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/control"
+	"github.com/3xDevOps/cloudfield/internal/ctxlock"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/evidence"
 	"github.com/3xDevOps/cloudfield/internal/gitengine"
@@ -40,7 +41,7 @@ func TestDevelopmentRetentionUsesAuthenticatedOriginAndIndependentIdempotency(t 
 	if slices.Contains(before, protocol.MethodDevArtifactRetain) {
 		t.Fatal("advertised retention without durable evidence source")
 	}
-	service, err := evidence.New(evidence.Config{Store: e.db, Runs: e.db, Git: developmentRetentionGit{workspace: e.ws.ID}, Artifacts: e.sched, EvidenceDir: t.TempDir(), AuthorizationMu: &sync.Mutex{}})
+	service, err := evidence.New(evidence.Config{Store: e.db, Runs: e.db, Git: developmentRetentionGit{workspace: e.ws.ID}, Artifacts: e.sched, EvidenceDir: t.TempDir(), AuthorizationMu: &ctxlock.Mutex{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +157,7 @@ func TestDevelopmentRetentionWithdrawnBeforePublication(t *testing.T) {
 				if _, err := e.db.ShareAccount(t.Context(), account.ID, actor.ID); err != nil {
 					t.Fatal(err)
 				}
-				gate := &sync.Mutex{}
+				gate := &ctxlock.Mutex{}
 				boundary := &developmentRetentionBoundary{entered: make(chan struct{}), release: make(chan struct{})}
 				var releaseOnce sync.Once
 				unblock := func() { releaseOnce.Do(func() { close(boundary.release) }) }

@@ -685,6 +685,13 @@ func (s *Scheduler) startRunContainer(ctx context.Context, entry *supervised, ru
 	s.mu.Lock()
 	entry.appServer, entry.idleWake = appServer, native.IdleWake
 	s.mu.Unlock()
+	stored, err := s.cfg.Store.GetRun(ctx, run.ID)
+	if err != nil {
+		return nil, fmt.Errorf("read the session's parent: %w", err)
+	}
+	if stored.ParentRunID != "" {
+		plan.Env[coordtransport.SubsessionEnv] = "1"
+	}
 	limits, err := s.runLimits(ctx, run.Limits)
 	if err != nil {
 		return nil, err

@@ -461,7 +461,9 @@ func (h *Host) startSession(ctx context.Context, key SessionKey, att runtime.Att
 	// Ordinary sessions retain the pre-attach initial resize. Development
 	// processes were launched at the explicit geometry and may already be done.
 	if !development {
-		_ = att.Resize(ctx, initialCols, initialRows)
+		resizeCtx, cancel := context.WithTimeout(ctx, resizeTimeout)
+		_ = att.Resize(resizeCtx, initialCols, initialRows)
+		cancel()
 	}
 	s := &session{
 		run:              key,

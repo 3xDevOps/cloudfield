@@ -110,7 +110,9 @@ func (s *Scheduler) agentWorking(entry *supervised) bool {
 // flight carries on after the restore, as across a server restart. The
 // guest of a frozen VM answers no detach, so its keeper is let go of as a
 // server restart lets go of it, before the save ends its connection: the
-// save goes ahead meanwhile and ends the wait. A VM that died instead of
+// save goes ahead meanwhile and ends the wait. A wake that arrives while a
+// VM that still answers is being saved ends the save if its guest has yet
+// to be paused, and the session stays awake. A VM that died instead of
 // being saved is not left asleep: its run ends as that of any VM that died.
 func (s *Scheduler) saveMarked(ctx context.Context, entry *supervised, saver runtime.SaveRuntime, frozen, park bool) error {
 	s.mu.Lock()
@@ -123,6 +125,7 @@ func (s *Scheduler) saveMarked(ctx context.Context, entry *supervised, saver run
 	saveCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), wakeTimeout)
 	defer cancel()
 	var detachErr, saveErr error
+	aborted := false
 	if frozen {
 		agent := s.acp.letGo(entry.runID)
 		detachCtx, saved := context.WithCancel(saveCtx)
@@ -147,10 +150,28 @@ func (s *Scheduler) saveMarked(ctx context.Context, entry *supervised, saver run
 			case <-saveCtx.Done():
 			}
 		}
-	} else if detachErr = s.detachForSave(saveCtx, entry); park {
-		saveErr = saver.Park(saveCtx, cid)
 	} else {
-		saveErr = saver.Save(saveCtx, cid)
+		s.mu.Lock()
+		// A save the memory guard or admission makes is for memory the host
+		// lacks: a wake waits for it, and is admitted like any other.
+		if entry.memorySaving == 0 {
+			entry.abortSleep = cancel
+			if entry.wakeWaits && s.superCtx.Err() == nil {
+				cancel()
+			}
+		}
+		s.mu.Unlock()
+		if detachErr = s.detachForSave(saveCtx, entry); park {
+			saveErr = saver.Park(saveCtx, cid)
+		} else {
+			saveErr = saver.Save(saveCtx, cid)
+		}
+		// A save cut short by a wake says so; one that failed otherwise
+		// while a wake came in keeps its own error for the log.
+		aborted = saveErr != nil && errors.Is(saveCtx.Err(), context.Canceled) && (park || errors.Is(saveErr, context.Canceled))
+		if aborted {
+			saveErr = errors.Join(errStayAwake, saveErr)
+		}
 	}
 	if saveErr == nil {
 		recordErr := s.recordSaved(entry, !park, park)
@@ -159,7 +180,13 @@ func (s *Scheduler) saveMarked(ctx context.Context, entry *supervised, saver run
 	}
 	saveErr = errors.Join(fmt.Errorf("save the idle session: %w", saveErr), detachErr)
 	s.mu.Lock()
-	entry.saveFailedAt = time.Now().UTC()
+	// A sleep a wake ended did not fail: the memory guard may still save
+	// the VM, and the sleep sweep waits out a new idle time.
+	if aborted {
+		entry.quietFrom = time.Now().UTC()
+	} else {
+		entry.saveFailedAt = time.Now().UTC()
+	}
 	entry.paused = false
 	s.mu.Unlock()
 	if info, err := s.cfg.Runtime.Inspect(context.WithoutCancel(ctx), cid); errors.Is(err, runtime.ErrNotFound) || err == nil && info.Exited {

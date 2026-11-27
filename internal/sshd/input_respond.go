@@ -23,12 +23,7 @@ type controlHeldError struct{ holder domain.MemberID }
 
 func (e *controlHeldError) Error() string { return "session control is held by " + string(e.holder) }
 
-// runInputRespond is run.input.answer for a caller with no ACP stream. It
-// answers under the run's control admission lock, so no lease can be taken
-// between the check and the answer: with nobody in control, or the caller
-// in control from another session, it answers; while another member holds
-// control, even in a reconnect window, the request is theirs to answer and
-// it refuses rather than displacing them.
+// runInputRespond is run.input.answer for a caller with no ACP stream.
 func (s *Server) runInputRespond(ctx context.Context, member domain.MemberID, raw json.RawMessage) (any, *protocol.Error) {
 	p, perr := decodeParams[protocol.RunInputRespondParams](raw)
 	if perr != nil {
@@ -47,45 +42,61 @@ func (s *Server) runInputRespond(ctx context.Context, member domain.MemberID, ra
 	if perr != nil {
 		return nil, perr
 	}
-	if perr := s.connectorAnswerRefusal(ctx, run, p.RequestID); perr != nil {
+	if perr = s.connectorAnswerRefusal(ctx, run, p.RequestID); perr != nil {
 		return nil, perr
 	}
 	if err := s.cfg.Runs.SettleSleep(ctx, run); err != nil {
 		return nil, rpcError(err)
 	}
-	answer := func() error {
+	status := protocol.RunInputRespondAnswered
+	perr = s.admitWithoutLease(ctx, member, run, protocol.MethodRunInputRespond, "the request is theirs to answer", func() error {
+		err := s.cfg.Runs.ACPAnswer(run, p.RequestID, p.OptionID, p.Values)
+		if errors.Is(err, acphost.ErrAlreadyAnswered) {
+			status, err = protocol.RunInputRespondAlreadyAnswered, nil
+		}
+		return err
+	})
+	if perr != nil {
+		return nil, perr
+	}
+	return protocol.RunInputRespondResult{Status: status}, nil
+}
+
+// admitWithoutLease runs act for a caller with no ACP stream, with Steer
+// rechecked under the run's control admission lock, so no lease can be
+// taken between the check and act: with nobody in control, or the caller in
+// control from another session, it acts; while another member holds
+// control, even in a reconnect window, it refuses rather than displacing
+// them. theirs says what method would have taken from that member.
+func (s *Server) admitWithoutLease(ctx context.Context, member domain.MemberID, run domain.RunID, method, theirs string, act func() error) *protocol.Error {
+	admitted := func() error {
 		if err := checkSteer(ctx, s.cfg.Store, member, run); err != nil {
 			return err
 		}
-		return s.cfg.Runs.ACPAnswer(run, p.RequestID, p.OptionID, p.Values)
+		return act()
 	}
 	var err error
 	if s.cfg.Control == nil {
-		err = answer()
+		err = admitted()
 	} else {
 		err = s.cfg.Control.AdmitSnapshot(string(run), func(holder control.Snapshot, held bool) error {
 			if held && holder.MemberID != member {
 				return &controlHeldError{holder: holder.MemberID}
 			}
-			return answer()
+			return admitted()
 		})
 	}
 	var heldErr *controlHeldError
-	switch {
-	case errors.Is(err, acphost.ErrAlreadyAnswered):
-		return protocol.RunInputRespondResult{Status: protocol.RunInputRespondAlreadyAnswered}, nil
-	case errors.As(err, &heldErr):
-		name := string(heldErr.holder)
-		if holder, getErr := s.cfg.Store.GetMember(ctx, heldErr.holder); getErr == nil {
-			name = holder.DisplayName
-		}
-		data, _ := json.Marshal(map[string]string{"reason": protocol.ErrorReasonControlHeld, "member_id": string(heldErr.holder)})
-		return nil, &protocol.Error{Code: protocol.CodeConflict, Data: data, Message: fmt.Sprintf(
-			"%s: %s controls session %s, so the request is theirs to answer; ask them, or take control in the dashboard", protocol.MethodRunInputRespond, name, run)}
-	case err != nil:
-		return nil, acpError(err)
+	if !errors.As(err, &heldErr) {
+		return acpError(err)
 	}
-	return protocol.RunInputRespondResult{Status: protocol.RunInputRespondAnswered}, nil
+	name := string(heldErr.holder)
+	if holder, getErr := s.cfg.Store.GetMember(ctx, heldErr.holder); getErr == nil {
+		name = holder.DisplayName
+	}
+	data, _ := json.Marshal(map[string]string{"reason": protocol.ErrorReasonControlHeld, "member_id": string(heldErr.holder)})
+	return &protocol.Error{Code: protocol.CodeConflict, Data: data, Message: fmt.Sprintf(
+		"%s: %s controls session %s, so %s; ask them, or take control in the dashboard", method, name, run, theirs)}
 }
 
 // decideSudo answers a Default run's sudo request whoever holds control.
