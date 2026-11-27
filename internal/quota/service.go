@@ -98,8 +98,10 @@ type cacheState struct {
 }
 
 type readFlight struct {
-	done      chan struct{}
-	refresh   bool
+	done    chan struct{}
+	refresh bool
+	// cached: a provider's row came from the cache, not the vendor.
+	cached    bool
 	providers []Provider
 	err       error
 }
@@ -171,9 +173,11 @@ func (s *Service) read(ctx context.Context, account domain.Account, refresh bool
 
 	s.mu.Lock()
 	flight := s.flight[key]
+	var waited *readFlight
 	if refresh && flight != nil && !flight.refresh {
 		// A vendor read it makes starts the request floor, which would
-		// answer this one from the cache; this one reads after it.
+		// answer this one from the cache; this one takes that read, or
+		// reads after one the cache answered.
 		s.mu.Unlock()
 		select {
 		case <-flight.done:
@@ -181,12 +185,15 @@ func (s *Service) read(ctx context.Context, account domain.Account, refresh bool
 			return nil, ctx.Err()
 		}
 		s.mu.Lock()
-		flight = s.flight[key]
+		waited, flight = flight, s.flight[key]
 	}
-	if flight == nil || (refresh && !flight.refresh) {
+	switch {
+	case waited != nil && !waited.cached:
+		flight = waited
+	case flight == nil || (refresh && !flight.refresh):
 		flight = &readFlight{done: make(chan struct{}), refresh: refresh}
 		s.flight[key] = flight
-		go s.lead(key, account, refresh, flight)
+		go s.lead(key, account, flight)
 	}
 	s.mu.Unlock()
 	select {
@@ -205,13 +212,13 @@ func (s *Service) read(ctx context.Context, account domain.Account, refresh bool
 
 // lead performs one coalesced read on its own deadline, so a caller that
 // stops waiting never cancels it and its result still fills the cache.
-func (s *Service) lead(key string, account domain.Account, refresh bool, flight *readFlight) {
+func (s *Service) lead(key string, account domain.Account, flight *readFlight) {
 	requestCtx, cancel := context.WithTimeout(context.Background(), requestTimeout)
 	defer cancel()
 	creds, readErr := s.readCredentials(requestCtx, account)
 	var providers []Provider
 	if readErr == nil {
-		providers, readErr = s.readLeader(requestCtx, account, creds, refresh)
+		providers, readErr = s.readLeader(requestCtx, account, creds, flight)
 	}
 	if readErr == nil {
 		latest, latestErr := s.readCredentials(requestCtx, account)
@@ -231,12 +238,12 @@ func (s *Service) lead(key string, account domain.Account, refresh bool, flight 
 	close(flight.done)
 }
 
-func (s *Service) readLeader(ctx context.Context, account domain.Account, creds credentials, refresh bool) ([]Provider, error) {
-	claude, err := s.readProvider(ctx, account, creds.claude, "claude", refresh)
+func (s *Service) readLeader(ctx context.Context, account domain.Account, creds credentials, flight *readFlight) ([]Provider, error) {
+	claude, err := s.readProvider(ctx, account, creds.claude, "claude", flight)
 	if err != nil {
 		return nil, err
 	}
-	codex, err := s.readProvider(ctx, account, creds.codex, "codex", refresh)
+	codex, err := s.readProvider(ctx, account, creds.codex, "codex", flight)
 	if err != nil {
 		return nil, err
 	}
@@ -308,7 +315,7 @@ func (c credentials) fingerprints() [2]string {
 	return [2]string{c.claude.fingerprint, c.codex.fingerprint}
 }
 
-func (s *Service) readProvider(ctx context.Context, account domain.Account, cred credential, provider string, refresh bool) (Provider, error) {
+func (s *Service) readProvider(ctx context.Context, account domain.Account, cred credential, provider string, flight *readFlight) (Provider, error) {
 	now := s.now().UTC()
 	key := cacheKey{account: account.String(), provider: provider}
 	state := s.prepareState(key, cred.fingerprint)
@@ -316,13 +323,15 @@ func (s *Service) readProvider(ctx context.Context, account domain.Account, cred
 		s.clearState(key, cred.fingerprint)
 		return credentialProvider(provider, cred, now), nil
 	}
+	atVendor := false
+	defer func() { flight.cached = flight.cached || !atVendor }()
 
 	if state.success && !state.retryAt.IsZero() {
 		if now.Before(state.retryAt) {
 			return staleProvider(state.provider, now, state.failureError, state.retryAt), nil
 		}
 	}
-	if state.success && state.retryAt.IsZero() && !refresh && now.Sub(state.fetchedAt) < cacheTTL && !windowsExpired(state.provider.Windows, now) {
+	if state.success && state.retryAt.IsZero() && !flight.refresh && now.Sub(state.fetchedAt) < cacheTTL && !windowsExpired(state.provider.Windows, now) {
 		return cloneProvider(state.provider), nil
 	}
 	if state.success && windowsExpired(state.provider.Windows, now) && now.Sub(state.lastAttempt) < requestFloor {
@@ -335,6 +344,7 @@ func (s *Service) readProvider(ctx context.Context, account domain.Account, cred
 		return cachedOrUnavailable(state, provider, cred, now, "quota request cooldown", state.lastAttempt.Add(requestFloor)), nil
 	}
 
+	atVendor = true
 	s.markAttempt(key, cred.fingerprint, now)
 	var result usageResult
 	var err error

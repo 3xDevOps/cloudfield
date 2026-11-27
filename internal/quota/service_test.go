@@ -442,7 +442,7 @@ func TestAFreshReadDoesNotJoinACachedOne(t *testing.T) {
 	})
 	t.Cleanup(func() { usageHTTPClient.Transport = oldTransport })
 	service := New(homes, nil)
-	cached := &readFlight{done: make(chan struct{}), providers: []Provider{{Provider: "claude", Status: "ok", Windows: []Window{{ID: "five_hour", UsedPercent: 96}}}}}
+	cached := &readFlight{done: make(chan struct{}), cached: true, providers: []Provider{{Provider: "claude", Status: "ok", Windows: []Window{{ID: "five_hour", UsedPercent: 96}}}}}
 	service.mu.Lock()
 	service.flight[string(member)] = cached
 	service.mu.Unlock()
@@ -455,6 +455,26 @@ func TestAFreshReadDoesNotJoinACachedOne(t *testing.T) {
 	}
 	if got[0].Status != "ok" || got[0].Windows[0].UsedPercent != 20 {
 		t.Fatalf("fresh read = %+v; want the vendor's 20%%, not the read in flight", got[0])
+	}
+}
+
+// A read the cache answers is marked so, which keeps a fresh read from
+// taking it.
+func TestAReadTheCacheAnswersIsMarkedCached(t *testing.T) {
+	homes, member := fixtureHomes(t, `{"claudeAiOauth":{"accessToken":"token","expiresAt":4102444800000,"scopes":["user:inference"]}}`, ``)
+	oldTransport := usageHTTPClient.Transport
+	usageHTTPClient.Transport = roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		return fixtureResponse(`{"five_hour":{"utilization":20,"resets_at":"2100-01-01T00:00:00Z"}}`), nil
+	})
+	t.Cleanup(func() { usageHTTPClient.Transport = oldTransport })
+	service := New(homes, nil)
+	if _, err := service.Read(t.Context(), member, false); err != nil {
+		t.Fatal(err)
+	}
+	flight := &readFlight{done: make(chan struct{})}
+	service.lead(string(member), domain.AccountOf(member), flight)
+	if !flight.cached {
+		t.Fatal("a read the cache answered is not marked cached")
 	}
 }
 
@@ -484,7 +504,7 @@ func TestAFreshReadWaitsForAReadAtTheVendor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !Recent(got[0], time.Now()) || len(got[0].Windows) != 1 || got[0].Windows[0].UsedPercent != 99 {
-		t.Fatalf("fresh read = %+v; want the vendor's 99%% as read just now", got[0])
+	if got[0].Status != "ok" || len(got[0].Windows) != 1 || got[0].Windows[0].UsedPercent != 99 {
+		t.Fatalf("fresh read = %+v; want the vendor's 99%% from the read it waited for", got[0])
 	}
 }
