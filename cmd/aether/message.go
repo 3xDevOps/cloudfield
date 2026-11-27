@@ -58,11 +58,11 @@ func parseMessage(args []string, stdin io.Reader) (func(*protocol.Client, io.Wri
 	}
 	for _, word := range fs.Args()[1:] {
 		name, _, _ := strings.Cut(strings.TrimLeft(word, "-"), "=")
-		// A quoted message is one argument with spaces in it; only a bare word can be a misplaced flag.
-		if strings.HasPrefix(word, "-") && !strings.ContainsFunc(word, unicode.IsSpace) && fs.Lookup(name) != nil {
+		// A quoted message is one argument with spaces in it, and so is --attach=<path with spaces>.
+		if strings.HasPrefix(word, "-") && fs.Lookup(name) != nil && (name == "attach" || !strings.ContainsFunc(word, unicode.IsSpace)) {
 			return nil, fmt.Errorf("message: %s comes after the session id, where it would be sent as message text; "+
 				"put flags before %s, or to send it as written quote the whole message, "+
-				"or pipe a one-word message on stdin with -", word, fs.Arg(0))
+				"or pipe a message that starts with it on stdin with -", word, fs.Arg(0))
 		}
 	}
 	if len(attach) > protocol.CollaborationMaxAttachments {
@@ -71,20 +71,20 @@ func parseMessage(args []string, stdin io.Reader) (func(*protocol.Client, io.Wri
 	for _, path := range attach {
 		info, err := os.Stat(path)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("attach: %w", err)
 		}
 		if !info.Mode().IsRegular() {
 			return nil, fmt.Errorf("attach %s: not a regular file", path)
 		}
 		f, err := os.Open(path)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("attach: %w", err)
 		}
 		// http.DetectContentType looks at no more than 512 bytes.
 		head, err := io.ReadAll(io.LimitReader(f, 512))
 		_ = f.Close()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("attach: %w", err)
 		}
 		limit, what := int64(configMaxFileBytes), "64 MiB"
 		if terminalImage(head) {
@@ -113,7 +113,7 @@ func sendMessage(c *protocol.Client, w io.Writer, runID, text string, attach []s
 	for _, path := range attach {
 		data, err := os.ReadFile(path)
 		if err != nil {
-			return err
+			return fmt.Errorf("attach: %w", err)
 		}
 		content := base64.StdEncoding.EncodeToString(data)
 		var uploaded protocol.TerminalUploadResult

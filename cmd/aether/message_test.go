@@ -112,7 +112,9 @@ func TestMessageRefusesWhatItCannotSendBeforeDialing(t *testing.T) {
 		"message: --attach comes after the session id":          {"r1", "use this mock", "--attach", "mock.png"},
 		"message: --steer comes after the session id":           {"r1", "--steer", "stop editing the README"},
 		"message: -attach=mock.png comes after the session id":  {"r1", "-attach=mock.png", "use this mock"},
-		"or pipe a one-word message on stdin with -":            {"r1", "--steer"},
+		"message: --attach=My Shot.png comes after the session": {"r1", "match this", "--attach=My Shot.png"},
+		"or pipe a message that starts with it on stdin with -": {"r1", "--steer"},
+		"attach: ": {"--attach", filepath.Join(dir, "missing.png"), "r1", "hi"},
 	} {
 		if _, err := parseMessage(args, nil); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("message %v = %v, want %q", args, err, want)
