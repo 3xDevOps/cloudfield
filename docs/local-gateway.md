@@ -2065,11 +2065,13 @@ does, with the same files in the config directory:
   It is the address's own, unauthenticated word, validated as a canonical
   origin and a real date. `known` is whether this computer already holds a
   token at `replacement`, a saved link names it, or it is the built-in default
-  edge. The gateway asks each signed-in edge's `GET /v1/edge` at most every 5
-  minutes, waits 2 seconds at most, and shows a notice for at most an hour
-  after that edge last answered; an answer without a notice clears it, and
-  `edge.logout` and `link.reset` forget it. Without a notice the field is
-  absent.
+  edge, the built-in one counting only for a hosted old address. The gateway
+  asks each signed-in edge's `GET /v1/edge` at most every 5 minutes, and calls
+  share an ask in flight; a call waits 2 seconds at most and the ask outlives
+  it. A notice shows for at most an hour after that edge last answered. An
+  answer without a notice, or a `410` without a replacement, clears it; a
+  replacement that is the same edge is no notice; `edge.logout`, `link.reset`
+  and signing out elsewhere forget it. Without a notice the field is absent.
 - `edge.logout` at an address that answers `410` naming a replacement deletes
   the token, though the edge did not revoke it. A refusal from such an
   address carries `data.retired: {"replacement":"https://..."}` beside
