@@ -1,6 +1,6 @@
 import { type ComponentProps, useEffect, useRef, useState } from 'react'
 import { AddAgent } from '@/components/agents/add-agent'
-import { AddLogin } from '@/components/agents/add-login'
+import { AddLogin, type LoginSignIn } from '@/components/agents/add-login'
 import { LoginList, loginAgent, useAgentLogins } from '@/components/agents/agent-logins'
 import { defaultMode, enhancedSupported, label } from '@/components/agents/agent-copy'
 import { AgentExtras } from '@/components/agents/agent-extras'
@@ -56,7 +56,7 @@ function DefaultMode({ agent }: { agent: AgentInfo }) {
   )
 }
 
-function AgentRows({ agents, onAddLogin, ...actions }: { agents: AgentInfo[]; onAddLogin?: () => void } & Pick<ComponentProps<typeof AgentList>, 'onSetUp' | 'onRun' | 'onRemove' | 'returnFocusTo' | 'below'>) {
+function AgentRows({ agents, onAddLogin, ...actions }: { agents: AgentInfo[]; onAddLogin?: () => void } & Pick<ComponentProps<typeof AgentList>, 'onSetUp' | 'onRun' | 'onRemove' | 'returnFocusTo' | 'below' | 'logins'>) {
   const list = (shown: AgentInfo[], label?: string) => (
     <AgentList
       agents={shown}
@@ -126,6 +126,24 @@ function AgentsRoute({ client = api }: RouteProps & { client?: Api }) {
     client.accountList().then((access) => live && setSharedWith(access.shared_with), () => {})
     return () => { live = false }
   }, [client, severalLogins])
+  const [signIn, setSignIn] = useState<LoginSignIn | null>(null)
+  const [resume, setResume] = useState(false)
+  const reloadLogins = logins.reload
+  useEffect(() => {
+    if (!signIn) return
+    let live = true
+    const ended = () => {
+      if (!live) return
+      setSignIn(null)
+      reloadLogins()
+    }
+    client.agentLoginResult(loginAgent, signIn.id).then(ended, ended)
+    return () => { live = false }
+  }, [client, signIn, reloadLogins])
+  const addLogin = (again: boolean) => {
+    setResume(again)
+    setScreen(loginScreen)
+  }
   const loading = useDelayed(agents === null && error === null)
   const canSetUp = caps.hasMethod('agent.install') || caps.hasWS('terminal')
   const settingUp = agents?.find((agent) => agent.name === screen)
@@ -160,7 +178,7 @@ function AgentsRoute({ client = api }: RouteProps & { client?: Api }) {
       <div className="min-h-0 flex-1 overflow-y-auto">
         <PageBody width="lg" className="gap-6">
           {screen === loginScreen ? (
-            <AddLogin client={client} onClose={() => { logins.reload(); close() }} />
+            <AddLogin client={client} running={signIn} resume={resume} onRunning={setSignIn} onClose={() => { logins.reload(); close() }} />
           ) : screen === githubScreen ? (
             <GitHubConnect client={client} caps={caps} onConnected={setGithub} onClose={close} />
           ) : screen === addScreen ? (
@@ -189,9 +207,16 @@ function AgentsRoute({ client = api }: RouteProps & { client?: Api }) {
                   onSetUp={canSetUp ? (agent) => openSetup(agent.name) : undefined}
                   onRun={caps.hasMethod('run.launch') ? run : undefined}
                   onRemove={caps.hasMethod('agent.remove') ? setRemoving : undefined}
-                  onAddLogin={logins.logins && caps.hasWS('terminal') ? () => setScreen(loginScreen) : undefined}
+                  onAddLogin={logins.logins && caps.hasWS('terminal') ? () => addLogin(false) : undefined}
+                  logins={(agent) => (agent.name === loginAgent ? logins.logins?.length : undefined)}
                   below={(agent) => agent.name === loginAgent && (
                     <>
+                      {signIn && (
+                        <p className="flex basis-full flex-wrap items-center gap-x-2 gap-y-1 text-ui-sm text-muted sm:pl-11">
+                          <span>The sign-in of <span className="font-code">{signIn.name}</span> is still running.</span>
+                          <Button size="sm" variant="secondary" onClick={() => addLogin(true)}>Return to the sign-in</Button>
+                        </p>
+                      )}
                       {logins.error && (
                         <Callout tone="failed" role="alert" className="basis-full" actions={<Button size="sm" variant="secondary" onClick={logins.reload}>Retry</Button>}>
                           Logins not read: <span className="font-code">{logins.error}</span>

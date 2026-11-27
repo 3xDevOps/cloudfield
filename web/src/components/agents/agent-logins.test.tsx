@@ -4,6 +4,7 @@ import { AddLogin } from '@/components/agents/add-login'
 import { LoginList } from '@/components/agents/agent-logins'
 import type { Api } from '@/lib/api'
 import type { AgentLogin, Member } from '@/lib/types'
+import { useStore } from '@/store'
 import { alice, bob, fakeApi } from '@/test/fixtures'
 
 const logins: AgentLogin[] = [
@@ -33,27 +34,33 @@ describe('login list', () => {
     const items = within(screen.getByRole('list', { name: 'Claude Code logins in priority order' })).getAllByRole('listitem')
     expect(items.map((item) => item.getAttribute('aria-label'))).toEqual(['Login default', 'Login work', 'Login console'])
 
-    expect(row('default').textContent).toContain('Subscription · max')
+    expect(items.map((item) => item.textContent?.charAt(0))).toEqual(['1', '2', '3'])
+    expect(row('default').textContent).toContain('Subscription · max · Tried first')
+    expect(row('work').textContent).not.toContain('Tried first')
     expect(row('default').textContent).toContain('alice@example.test · Alice personal')
-    expect(row('default').textContent).toContain(`Shares reach it: ${bob.display_name}`)
+    expect(row('default').textContent).toContain(`On for shares: also serves ${bob.display_name}`)
     expect(await within(row('default')).findByRole('progressbar', { name: 'Login default 5-hour usage' })).toBeDefined()
-    expect(row('work').textContent).toContain('Off for shares: your sessions only')
+    expect(row('work').textContent).toContain('Off for shares')
+    expect(row('work').textContent).not.toContain('your sessions')
     expect(within(row('work')).queryByText('Billed per use')).toBeNull()
     expect(within(row('console')).getByText('Billed per use')).toBeDefined()
-    expect(row('console').textContent).toContain('No share reaches it while Automatic is off')
+    expect(row('console').textContent).toContain('On for shares: no share reaches it while Automatic is off')
+    expect(row('console').textContent).not.toContain('Automatic sessions can move here')
     expect(screen.getByText(`Your account is shared with ${bob.display_name}: logins on for shares serve their sessions too.`, { exact: false })).toBeDefined()
     expect(client.accountUsage).toHaveBeenCalledWith({})
     expect(client.accountUsage).toHaveBeenCalledWith({ login: 'lgn-work0000001' })
 
-    expect(within(row('default')).getByRole('button', { name: 'Rename default' })).toHaveProperty('disabled', true)
+    expect(within(row('default')).queryByRole('button', { name: 'Rename default' })).toBeNull()
     expect(within(row('default')).queryByRole('button', { name: 'Remove default' })).toBeNull()
-    expect(within(row('default')).getByRole('button', { name: 'Move default up' })).toHaveProperty('disabled', true)
-    expect(within(row('console')).getByRole('button', { name: 'Move console down' })).toHaveProperty('disabled', true)
+    expect(row('default').textContent).toContain('Your default login, the one cloudfield agent login claude signs in. It keeps its name and is not removed here.')
+    expect(within(row('work')).getByRole('button', { name: 'Rename work' })).toBeDefined()
+    expect(within(row('default')).getByRole('button', { name: 'Move up' })).toHaveProperty('disabled', true)
+    expect(within(row('console')).getByRole('button', { name: 'Move down' })).toHaveProperty('disabled', true)
   })
 
   it('says when the account is shared with nobody', () => {
     show({}, [])
-    expect(row('default').textContent).toContain('No share reaches it: your account is not shared')
+    expect(row('default').textContent).toContain('On for shares: your account is not shared')
     expect(screen.getByText('Your account is not shared with anyone.', { exact: false })).toBeDefined()
   })
 
@@ -64,7 +71,7 @@ describe('login list', () => {
       agentLoginAutomatic: vi.fn(async () => ({})),
       agentLoginRename: vi.fn(async () => ({})),
     })
-    await user.click(screen.getByRole('button', { name: 'Move work down' }))
+    await user.click(within(row('work')).getByRole('button', { name: 'Move down' }))
     expect(client.agentLoginOrder).toHaveBeenCalledWith('claude', ['default', 'lgn-console0001', 'lgn-work0000001'])
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
 
@@ -95,7 +102,7 @@ describe('login list', () => {
     expect((await screen.findByRole('alert')).textContent).toBe('you already have a login named "console"')
     await user.click(screen.getByRole('button', { name: 'Cancel' }))
 
-    await user.click(screen.getByRole('button', { name: 'Move work up' }))
+    await user.click(within(row('work')).getByRole('button', { name: 'Move up' }))
     expect((await screen.findByRole('alert')).textContent).toBe('login_ids must name each of your logins once, default included')
   })
 
@@ -114,31 +121,56 @@ describe('login list', () => {
     expect(onChanged).toHaveBeenCalledTimes(1)
   })
 
-  it("shows a login's usage error verbatim when it has no windows", async () => {
+  it("says a Console login has no usage windows, and shows any other usage error verbatim", async () => {
     show({
-      accountUsage: vi.fn(async (params: { login?: string } = {}) => ({
-        account_member_id: alice.id,
-        login: params.login,
-        providers: params.login === 'lgn-console0001'
-          ? [{ provider: 'claude' as const, status: 'unsupported' as const, windows: [], checked_at: '2026-11-26T10:00:00Z', error: 'claude: a Console login reports no usage windows' }]
-          : [],
-      })),
+      accountUsage: vi.fn(async (params: { login?: string } = {}) => {
+        if (params.login === 'lgn-work0000001') throw new Error('account.usage: claude: credential file unavailable')
+        return {
+          account_member_id: alice.id,
+          login: params.login,
+          providers: params.login === 'lgn-console0001'
+            ? [{ provider: 'claude' as const, status: 'unsupported' as const, windows: [], checked_at: '2026-11-26T10:00:00Z', error: 'an Anthropic Console sign-in is billed by the API and has no usage windows' }]
+            : [],
+        }
+      }),
     })
-    expect(await within(row('console')).findByText('claude: a Console login reports no usage windows')).toBeDefined()
-    expect(row('console').textContent).toContain('Usage not read: ')
+    expect(await within(row('console')).findByText('No usage windows: billed per use')).toBeDefined()
+    expect(row('console').textContent).not.toContain('Usage not read')
+    expect(await within(row('work')).findByText('account.usage: claude: credential file unavailable')).toBeDefined()
+    expect(row('work').textContent).toContain('Usage not read: ')
   })
 
-  it('confirms a removal, says Anthropic keeps the sign-in, and shows a refusal verbatim', async () => {
+  it('says automatic sessions can move onto a login billed per use', () => {
+    const client = fakeApi()
+    render(<LoginList logins={logins.map((login) => ({ ...login, automatic: true }))} sharedWith={[]} client={client} onChanged={() => {}} />)
+    expect(row('console').textContent).toContain('Automatic sessions can move here when the logins above it run out.')
+    expect(row('work').textContent).not.toContain('Automatic sessions can move here')
+  })
+
+  it('confirms a removal, says Anthropic keeps the sign-in, and shows a refusal verbatim with ways to act on it', async () => {
     const user = userEvent.setup()
-    const refusal = 'login "work" is in use by your sessions run-7kq2m9x4ab (end them)'
+    const refusal = "login \"work\" is in use by your sessions run-7kq2m9x4ab (end them) and 1 of your teammates' sessions, which hold it until they end and their containers go (revoking the share you gave a teammate, with cloudfield account revoke <member-id>, moves their running sessions off it)"
+    const navigate = vi.fn()
+    const original = useStore.getState().navigate
+    useStore.setState({ navigate })
+    onTestFinished(() => { useStore.setState({ navigate: original }) })
     const { client, onChanged } = show({ agentLoginRemove: vi.fn(async () => { throw new Error(refusal) }) })
     await user.click(screen.getByRole('button', { name: 'Remove work' }))
-    const dialog = screen.getByRole('alertdialog', { name: 'Remove login work?' })
+    const dialog = screen.getByRole('alertdialog', { name: 'Remove the login “work”?' })
     expect(dialog.textContent).toContain('It does not sign the login out at Anthropic')
     await user.click(within(dialog).getByRole('button', { name: 'Remove' }))
     expect(client.agentLoginRemove).toHaveBeenCalledWith('claude', 'lgn-work0000001')
     expect(await within(dialog).findByText(refusal)).toBeDefined()
+    expect(within(dialog).getByRole('button', { name: 'Remove' })).toHaveProperty('disabled', true)
     expect(onChanged).not.toHaveBeenCalled()
+    await user.click(within(dialog).getByRole('button', { name: 'Open run-7kq2m9x4ab' }))
+    expect(navigate).toHaveBeenCalledWith('run', { runId: 'run-7kq2m9x4ab' })
+    expect(screen.queryByRole('alertdialog')).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: 'Remove work' }))
+    await user.click(within(screen.getByRole('alertdialog')).getByRole('button', { name: 'Remove' }))
+    await user.click(await screen.findByRole('button', { name: 'Revoke a share on Members' }))
+    expect(navigate).toHaveBeenLastCalledWith('members')
   })
 })
 
@@ -147,7 +179,7 @@ describe('add login', () => {
     const user = userEvent.setup()
     const refusal = 'login name "Work": use lowercase letters, digits and \'-\', starting with a letter or digit'
     const client = fakeApi({ agentLoginAdd: vi.fn(async () => { throw new Error(refusal) }) })
-    render(<AddLogin client={client} onClose={() => {}} />)
+    render(<AddLogin client={client} running={null} onRunning={() => {}} onClose={() => {}} />)
     await user.type(screen.getByRole('textbox', { name: 'Name' }), 'Work')
     await user.click(screen.getByRole('button', { name: 'Start sign-in' }))
     expect(client.agentLoginAdd).toHaveBeenCalledWith('claude', 'Work')
@@ -162,7 +194,7 @@ describe('add login', () => {
       agentLoginAdd: vi.fn(async () => ({ login_id: 'lgn-new00000001' })),
       agentLoginResult: vi.fn(async () => ({ id: 'lgn-new00000001', name: 'work', kind: 'subscription' as const, plan: 'pro', email: 'alice@work.example.test', automatic: true, shared: true, position: 1 })),
     })
-    render(<AddLogin client={client} onClose={() => {}} />)
+    render(<AddLogin client={client} running={null} onRunning={() => {}} onClose={() => {}} />)
     await user.type(screen.getByRole('textbox', { name: 'Name' }), 'work')
     await user.click(screen.getByRole('button', { name: 'Start sign-in' }))
     await waitFor(() => expect(client.agentLoginSocket).toHaveBeenCalledWith('lgn-new00000001'))
@@ -178,7 +210,7 @@ describe('add login', () => {
       agentLoginAdd: vi.fn(async () => ({ login_id: 'lgn-new00000002' })),
       agentLoginResult: vi.fn(async () => { throw new Error(refusal) }),
     })
-    render(<AddLogin client={client} onClose={() => {}} />)
+    render(<AddLogin client={client} running={null} onRunning={() => {}} onClose={() => {}} />)
     await user.type(screen.getByRole('textbox', { name: 'Name' }), 'twin')
     await user.click(screen.getByRole('button', { name: 'Start sign-in' }))
     const alert = await screen.findByRole('alert')
@@ -191,25 +223,63 @@ describe('add login', () => {
   it('returns to a sign-in still running when the server refuses another', async () => {
     const user = userEvent.setup()
     const refusal = 'store: conflict: the sign-in of login "work" (lgn-run00000001) is still running; finish it first'
+    const onRunning = vi.fn()
     const client = fakeApi({
       agentLoginAdd: vi.fn(async () => { throw new Error(refusal) }),
       agentLoginResult: vi.fn(() => new Promise<never>(() => {})),
     })
-    render(<AddLogin client={client} onClose={() => {}} />)
+    render(<AddLogin client={client} running={null} onRunning={onRunning} onClose={() => {}} />)
     await user.type(screen.getByRole('textbox', { name: 'Name' }), 'spare')
     await user.click(screen.getByRole('button', { name: 'Start sign-in' }))
     const alert = await screen.findByRole('alert')
     expect(within(alert).getByText(refusal)).toBeDefined()
-    await user.click(within(alert).getByRole('button', { name: 'Return to the sign-in' }))
+    expect(onRunning).toHaveBeenCalledWith({ id: 'lgn-run00000001', name: 'work' })
+    expect(screen.getByRole('button', { name: 'Start sign-in' })).toHaveProperty('disabled', true)
+    const back = within(alert).getByRole('button', { name: 'Return to the sign-in' })
+    expect(back.className).toContain('bg-action')
+    await user.click(back)
     await waitFor(() => expect(client.agentLoginSocket).toHaveBeenCalledWith('lgn-run00000001'))
     expect(client.agentLoginResult).toHaveBeenCalledWith('claude', 'lgn-run00000001')
+    expect(screen.getByRole('heading', { name: 'Sign in to work' })).toBeDefined()
     expect(screen.getByRole('region', { name: 'Sign in to Claude Code' }).textContent).toContain('Sign in with the account for work.')
+  })
+
+  it('offers a sign-in the page knows is running before any refusal, and opens it at once to resume', async () => {
+    const user = userEvent.setup()
+    const client = fakeApi({ agentLoginResult: vi.fn(() => new Promise<never>(() => {})) })
+    const running = { id: 'lgn-run00000002', name: 'spare' }
+    const { unmount } = render(<AddLogin client={client} running={running} onRunning={() => {}} onClose={() => {}} />)
+    expect(screen.getByRole('status').textContent).toContain('The sign-in of spare is still running')
+    expect(screen.getByRole('button', { name: 'Start sign-in' })).toHaveProperty('disabled', true)
+    await user.click(screen.getByRole('button', { name: 'Return to the sign-in' }))
+    await waitFor(() => expect(client.agentLoginSocket).toHaveBeenCalledWith('lgn-run00000002'))
+    unmount()
+
+    render(<AddLogin client={client} running={running} resume onRunning={() => {}} onClose={() => {}} />)
+    expect(screen.getByRole('heading', { name: 'Sign in to spare' })).toBeDefined()
+  })
+
+  it('ends the sign-in only through Cancel sign-in, and says leaving keeps it running', async () => {
+    const user = userEvent.setup()
+    const onClose = vi.fn()
+    const client = fakeApi({
+      agentLoginAdd: vi.fn(async () => ({ login_id: 'lgn-new00000003' })),
+      agentLoginResult: vi.fn(() => new Promise<never>(() => {})),
+    })
+    render(<AddLogin client={client} running={null} onRunning={() => {}} onClose={onClose} />)
+    await user.type(screen.getByRole('textbox', { name: 'Name' }), 'spare')
+    await user.click(screen.getByRole('button', { name: 'Start sign-in' }))
+    const panel = await screen.findByRole('region', { name: 'Sign in to Claude Code' })
+    expect(within(panel).queryByRole('button', { name: 'Close' })).toBeNull()
+    expect(panel.textContent).toContain('Leaving this page keeps the sign-in running, for up to 15 minutes from its start; Add login then offers Return to the sign-in.')
+    await user.click(within(panel).getByRole('button', { name: 'Cancel sign-in' }))
+    expect(onClose).toHaveBeenCalledTimes(1)
   })
 
   it('offers no return for any other refusal', async () => {
     const user = userEvent.setup()
     const client = fakeApi({ agentLoginAdd: vi.fn(async () => { throw new Error('store: conflict: you already have a login named "work"') }) })
-    render(<AddLogin client={client} onClose={() => {}} />)
+    render(<AddLogin client={client} running={null} onRunning={() => {}} onClose={() => {}} />)
     await user.type(screen.getByRole('textbox', { name: 'Name' }), 'work')
     await user.click(screen.getByRole('button', { name: 'Start sign-in' }))
     expect((await screen.findByRole('alert')).textContent).toBe('Not startedstore: conflict: you already have a login named "work"')

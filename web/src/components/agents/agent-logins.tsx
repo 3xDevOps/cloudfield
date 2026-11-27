@@ -1,5 +1,5 @@
 import { type ReactNode, useCallback, useEffect, useId, useState } from 'react'
-import { ChevronDown, ChevronUp, Trash2 } from '@/components/icons'
+import { ArrowDown, ArrowUp, Pencil, Trash2 } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Callout } from '@/components/ui/callout'
@@ -20,11 +20,10 @@ import { useClock } from '@/lib/clock'
 import { message } from '@/lib/format'
 import type { AgentLogin, Member, UsageProvider } from '@/lib/types'
 import { currentWindows, UsageMeters } from '@/routes/settings/usage'
+import { useStore } from '@/store'
 
 /** Only Claude Code has added logins. */
 export const loginAgent = 'claude'
-
-export const severalLoginsDocs = 'https://github.com/3xDevOps/cloudfield/blob/main/docs/agents.md#several-logins'
 
 export type LoginsClient = Pick<Api, 'agentLoginRename' | 'agentLoginRemove' | 'agentLoginOrder' | 'agentLoginAutomatic' | 'agentLoginShare' | 'accountUsage'>
 
@@ -45,15 +44,6 @@ export function useAgentLogins(client: Pick<Api, 'agentLoginList'>, enabled: boo
   return { logins: enabled ? logins : null, error: enabled ? error : null, reload }
 }
 
-export function AnthropicNote() {
-  return (
-    <p className="text-ui-sm text-muted">
-      Anthropic&apos;s pages describe keeping several accounts and using a Console account at a subscription limit; they do not settle moving between two of your own subscriptions at a limit.{' '}
-      <a className="text-accent hover:underline" href={severalLoginsDocs} target="_blank" rel="noopener noreferrer">What they say</a>
-    </p>
-  )
-}
-
 function kindWords(login: AgentLogin): string {
   if (login.kind === 'subscription') return login.plan ? `Subscription · ${login.plan}` : 'Subscription'
   if (login.kind === 'console') return 'Console'
@@ -66,16 +56,13 @@ function names(members: Member[]): string {
   return list.length < 2 ? list.join('') : `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`
 }
 
-/** Whether a teammate's session can land on the login: teammates never name a login, so only an automatic one reaches them. */
+/** The Use for shares switch's state, and whom it reaches: teammates never name a login, so only an automatic one reaches them. */
 function reach(login: AgentLogin, sharedWith: Member[]): string {
-  if (!login.shared) return 'Off for shares: your sessions only'
-  if (sharedWith.length === 0) return 'No share reaches it: your account is not shared'
-  if (!login.automatic) return 'No share reaches it while Automatic is off'
-  return `Shares reach it: ${names(sharedWith)}`
+  if (!login.shared) return 'Off for shares'
+  if (sharedWith.length === 0) return 'On for shares: your account is not shared'
+  if (!login.automatic) return 'On for shares: no share reaches it while Automatic is off'
+  return `On for shares: also serves ${names(sharedWith)}`
 }
-
-/** The server's own rule: the default login is the files in the member's home. */
-const defaultFixed = 'The default login is the one in your home; it is not renamed or removed here'
 
 type Usage = { provider?: UsageProvider; error?: string }
 
@@ -125,23 +112,43 @@ function RenameForm({ login, client, onDone, onCancel }: { login: AgentLogin; cl
   )
 }
 
+// The server names the caller's own sessions that hold a login, and points at the CLI to revoke a teammate's share.
+const runIDs = /\brun-[0-9a-z]{10}\b/g
+const revokeCommand = 'cloudfield account revoke'
+
 export function RemoveLogin({ login, client, onRemoved, onClose }: { login: AgentLogin; client: LoginsClient; onRemoved: () => void; onClose: () => void }) {
+  const navigate = useStore((s) => s.navigate)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const go = (...route: Parameters<typeof navigate>) => {
+    onClose()
+    navigate(...route)
+  }
+  const runs = error ? [...new Set(error.match(runIDs))] : []
   return (
     <AlertDialog open onOpenChange={() => !busy && onClose()}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle className="break-words">Remove login {login.name}?</AlertDialogTitle>
+          <AlertDialogTitle className="break-words">Remove the login “{login.name}”?</AlertDialogTitle>
           <AlertDialogDescription className="break-words">
             Deletes this login&apos;s files from the server, so no session starts or moves onto it again. It does not sign the login out at Anthropic: its sign-in stays valid there until Anthropic expires it or you revoke it.
           </AlertDialogDescription>
         </AlertDialogHeader>
-        {error !== null && <Callout tone="failed" role="alert" title="Not removed"><span className="font-code">{error}</span></Callout>}
+        {error !== null && (
+          <Callout tone="failed" role="alert" title="Not removed">
+            <span className="font-code">{error}</span>
+            {(runs.length > 0 || error.includes(revokeCommand)) && (
+              <span className="mt-1 flex flex-wrap gap-x-3">
+                {runs.map((id) => <Button key={id} variant="link" className="text-ui-sm" onClick={() => go('run', { runId: id })}>Open {id}</Button>)}
+                {error.includes(revokeCommand) && <Button variant="link" className="text-ui-sm" onClick={() => go('members')}>Revoke a share on Members</Button>}
+              </span>
+            )}
+          </Callout>
+        )}
         <AlertDialogFooter>
           <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>
           <AlertDialogAction
-            disabled={busy}
+            disabled={busy || error !== null}
             onClick={(event) => {
               event.preventDefault()
               setBusy(true)
@@ -166,10 +173,22 @@ export function RemoveLogin({ login, client, onRemoved, onClose }: { login: Agen
   )
 }
 
-function LoginRow({ login, index, count, usage, sharedWith, busy, onMove, onAutomatic, onShare, onRename, onRemove, renaming }: {
+function SwitchRow({ label, checked, disabled, onChange }: { label: string; checked: boolean; disabled: boolean; onChange: (on: boolean) => void }) {
+  const id = useId()
+  return (
+    <span className="flex min-h-7 items-center justify-between gap-3 coarse:min-h-11">
+      <label htmlFor={id} className="text-ui-sm text-text">{label}</label>
+      <Switch id={id} checked={checked} disabled={disabled} onCheckedChange={onChange} />
+    </span>
+  )
+}
+
+function LoginRow({ login, index, count, firstAutomatic, usage, sharedWith, busy, onMove, onAutomatic, onShare, onRename, onRemove, renaming }: {
   login: AgentLogin
   index: number
   count: number
+  /** This login is the first in the order with Automatic on. */
+  firstAutomatic: boolean
   usage: Usage | undefined
   sharedWith: Member[]
   busy: boolean
@@ -180,53 +199,70 @@ function LoginRow({ login, index, count, usage, sharedWith, busy, onMove, onAuto
   onRemove: () => void
   renaming?: ReactNode
 }) {
-  const id = useId()
   const windows = currentWindows(usage?.provider, Date.now())
-  const usageError = usage?.error ?? (windows.length === 0 ? usage?.provider?.error : undefined)
+  // A Console login has no usage windows by design; the server says so with `unsupported`.
+  const perUseWindows = login.per_use && !usage?.error && usage?.provider?.status === 'unsupported'
+  const usageError = perUseWindows ? undefined : usage?.error ?? (windows.length === 0 ? usage?.provider?.error : undefined)
   const added = login.id !== 'default'
   const who = [login.email, login.organization_name].filter(Boolean).join(' · ')
   return (
-    <li aria-label={`Login ${login.name}`} className="flex flex-col gap-2 py-3 first:pt-0 last:pb-0 lg:flex-row lg:items-start lg:gap-4">
-      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-        {renaming ?? (
-          <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-            <span className="min-w-0 truncate text-ui font-medium text-text">{login.name}</span>
-            <span className="text-ui-sm text-muted">{kindWords(login)}</span>
-            {login.per_use && <Badge>Billed per use</Badge>}
-          </span>
-        )}
-        {who && <span className="min-w-0 truncate text-ui-sm text-muted" title={who}>{who}</span>}
-        <span className="text-ui-sm text-muted">{reach(login, sharedWith)}</span>
-        {usageError && <span className="text-ui-sm text-muted">Usage not read: <span className="font-code">{usageError}</span></span>}
-        {windows.length > 0 && (
-          <div className="mt-1.5 max-w-sm">
-            <UsageMeters label={`Login ${login.name}`} windows={windows} now={Date.now()} />
+    <li aria-label={`Login ${login.name}`} className="flex gap-2 py-3 first:pt-0 last:pb-0">
+      <div className="flex shrink-0 flex-col items-center">
+        <span className="flex h-6 items-center text-ui-sm text-muted tabular-nums coarse:h-11">{index + 1}</span>
+        <Button variant="ghost" size="icon-sm" label="Move up" disabled={busy || index === 0} onClick={() => onMove(-1)}>
+          <ArrowUp />
+        </Button>
+        <Button variant="ghost" size="icon-sm" label="Move down" disabled={busy || index === count - 1} onClick={() => onMove(1)}>
+          <ArrowDown />
+        </Button>
+      </div>
+      <div className="grid min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-start gap-x-4 gap-y-2 lg:grid-cols-[minmax(0,1fr)_auto_3rem]">
+        <div className="col-start-1 row-start-1 flex min-h-6 min-w-0 items-center coarse:min-h-11">
+          {renaming ?? (
+            <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+              <span className="min-w-0 truncate text-ui font-medium text-text">{login.name}</span>
+              <span className="text-ui-sm text-muted">{kindWords(login)}{firstAutomatic && ' · Tried first'}</span>
+              {login.per_use && <Badge>Billed per use</Badge>}
+            </span>
+          )}
+        </div>
+        {added && !renaming && (
+          <div className="col-start-2 row-start-1 flex items-center justify-end lg:col-start-3">
+            <Button variant="ghost" size="icon-sm" label={`Rename ${login.name}`} disabled={busy} onClick={onRename}>
+              <Pencil />
+            </Button>
+            <Button variant="ghost" size="icon-sm" label={`Remove ${login.name}`} disabled={busy} onClick={onRemove}>
+              <Trash2 />
+            </Button>
           </div>
         )}
-      </div>
-      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1">
-        <span className="flex items-center">
-          <Button variant="ghost" size="icon-sm" label={`Move ${login.name} up`} disabled={busy || index === 0} onClick={() => onMove(-1)}>
-            <ChevronUp />
-          </Button>
-          <Button variant="ghost" size="icon-sm" label={`Move ${login.name} down`} disabled={busy || index === count - 1} onClick={() => onMove(1)}>
-            <ChevronDown />
-          </Button>
-        </span>
-        <span className="flex min-h-7 items-center gap-2 coarse:min-h-11">
-          <label htmlFor={`${id}-auto`} className="text-ui-sm text-text">Automatic</label>
-          <Switch id={`${id}-auto`} checked={login.automatic} disabled={busy} onCheckedChange={onAutomatic} />
-        </span>
-        <span className="flex min-h-7 items-center gap-2 coarse:min-h-11">
-          <label htmlFor={`${id}-share`} className="text-ui-sm text-text">Use for shares</label>
-          <Switch id={`${id}-share`} checked={login.shared} disabled={busy} onCheckedChange={onShare} />
-        </span>
-        <span className="flex items-center gap-1">
-          <Button variant="ghost" size="sm" disabled={busy || !added} hint={added ? undefined : defaultFixed} aria-label={`Rename ${login.name}`} onClick={onRename}>Rename</Button>
-          <Button variant="ghost" size="icon-sm" label={added ? `Remove ${login.name}` : defaultFixed} disabled={busy || !added} onClick={onRemove}>
-            <Trash2 />
-          </Button>
-        </span>
+        <div className="col-span-2 flex min-w-0 flex-col gap-0.5 lg:col-span-1 lg:col-start-1 lg:row-start-2">
+          {who && <span className="min-w-0 truncate text-ui-sm text-muted" title={who}>{who}</span>}
+          <span className="text-ui-sm text-muted">{reach(login, sharedWith)}</span>
+          {login.per_use && login.automatic && !firstAutomatic && (
+            <span className="text-ui-sm text-muted">Automatic sessions can move here when the logins above it run out.</span>
+          )}
+          {!added && (
+            <span className="text-ui-sm text-muted">
+              Your default login, the one <span className="font-code">cloudfield agent login claude</span> signs in. It keeps its name and is not removed here.
+            </span>
+          )}
+        </div>
+        <div className="col-span-2 flex flex-col lg:col-span-1 lg:col-start-2 lg:row-span-3 lg:row-start-1">
+          <SwitchRow label="Automatic" checked={login.automatic} disabled={busy} onChange={onAutomatic} />
+          <SwitchRow label="Use for shares" checked={login.shared} disabled={busy} onChange={onShare} />
+        </div>
+        {(perUseWindows || usageError || windows.length > 0) && (
+          <div className="col-span-2 min-w-0 lg:col-span-1 lg:col-start-1 lg:row-start-3">
+            {perUseWindows && <span className="text-ui-sm text-muted">No usage windows: billed per use</span>}
+            {usageError && <span className="text-ui-sm text-muted">Usage not read: <span className="font-code">{usageError}</span></span>}
+            {windows.length > 0 && (
+              <div className="max-w-sm">
+                <UsageMeters label={`Login ${login.name}`} windows={windows} now={Date.now()} />
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </li>
   )
@@ -255,6 +291,7 @@ export function LoginList({ logins, sharedWith, client, onChanged }: {
     ;[ids[index], ids[index + by]] = [ids[index + by], ids[index]]
     act(client.agentLoginOrder(loginAgent, ids))
   }
+  const firstAutomatic = logins.find((login) => login.automatic)?.id
   return (
     <section aria-label="Claude Code logins" className="flex min-w-0 basis-full flex-col gap-3 border-t border-seam pt-3 sm:pl-11">
       <p className="text-ui-sm text-muted">
@@ -271,6 +308,7 @@ export function LoginList({ logins, sharedWith, client, onChanged }: {
             login={login}
             index={index}
             count={logins.length}
+            firstAutomatic={login.id === firstAutomatic}
             usage={usage[login.id]}
             sharedWith={sharedWith}
             busy={busy}
@@ -285,7 +323,6 @@ export function LoginList({ logins, sharedWith, client, onChanged }: {
           />
         ))}
       </ol>
-      <AnthropicNote />
       {removing && <RemoveLogin login={removing} client={client} onRemoved={onChanged} onClose={() => setRemoving(null)} />}
     </section>
   )

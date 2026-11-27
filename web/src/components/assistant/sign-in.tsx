@@ -35,11 +35,13 @@ export function AssistantSignIn({ agent, client, onDone, onBack, terminal = true
  * Runs an agent's sign-in on the terminal `socket` opens.
  * It offers the URL and code the sign-in prints; the terminal shows from the start only with `terminal`, and once the sign-in ends.
  */
-export function SignInTerminal({ agent, socket, onDone, back, terminal: terminalFirst = true, children }: {
+export function SignInTerminal({ agent, socket, onDone, back, cancel, terminal: terminalFirst = true, children }: {
   agent: { name: string; display_name: string }
   socket: () => string
   onDone: () => void
   back?: { label: string; onBack: () => void }
+  /** Replaces Close, which leaves the sign-in running, with Cancel sign-in, which ends it; `note` says what leaving does. */
+  cancel?: { onCancel: () => void; note: ReactNode }
   terminal?: boolean
   /** What the sign-in is for. */
   children: ReactNode
@@ -193,10 +195,18 @@ export function SignInTerminal({ agent, socket, onDone, back, terminal: terminal
       ) : (
         <p role="status" className="text-ui-sm text-muted">{prompt.url ? 'Open the link the sign-in printed in the terminal below.' : 'Starting the sign-in…'}</p>
       ))}
-      <div className="flex gap-2">
-        <Button size="sm" variant={ended ? 'primary' : 'secondary'} onClick={onDone}>{ended ? 'Done' : 'Close'}</Button>
+      <div className="flex flex-wrap gap-2">
+        {cancel && !ended ? (
+          <Button size="sm" variant="secondary" onClick={() => {
+            attachment.current?.send('\x03')
+            cancel.onCancel()
+          }}>Cancel sign-in</Button>
+        ) : (
+          <Button size="sm" variant={ended ? 'primary' : 'secondary'} onClick={onDone}>{ended ? 'Done' : 'Close'}</Button>
+        )}
         {!settled && !forced && <Button size="sm" variant="ghost" aria-pressed={shown} onClick={() => setShown(!shown)}>{shown ? 'Hide terminal' : 'Show terminal'}</Button>}
       </div>
+      {cancel && !ended && <p className="text-ui-sm text-muted">{cancel.note}</p>}
       {/* The terminal draws on a canvas, so what the sign-in said last is also read out. */}
       {sent && <p className="sr-only" aria-live="polite">{said}</p>}
       {(shown || ended || forced || (refused !== undefined && said !== '')) && (

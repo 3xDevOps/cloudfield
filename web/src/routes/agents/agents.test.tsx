@@ -296,9 +296,30 @@ describe('Claude Code logins', () => {
     expect(within(logins).getAllByRole('listitem').map((item) => item.getAttribute('aria-label'))).toEqual(['Login default', 'Login work'])
     expect(within(claudeRow()).getAllByRole('button', { name: 'Add login' })).toHaveLength(1)
     await waitFor(() => expect(logins.textContent).toContain('Your account is shared with Bob'))
-    const note = within(logins).getByRole('link', { name: 'What they say' })
-    expect(note.getAttribute('href')).toContain('docs/agents.md#several-logins')
-    expect(note.parentElement?.textContent).not.toMatch(/allowed|forbidden/)
+    expect(claudeRow().textContent).toContain('Installed · 2 logins')
+    expect(within(claudeRow()).queryByRole('link')).toBeNull()
+  })
+
+  it('keeps a sign-in left running on the Claude Code row until it ends, and returns to it', async () => {
+    let end: (login: never) => void = () => {}
+    const result = new Promise<never>((resolve) => { end = resolve })
+    vi.mocked(api.agentLoginAdd).mockResolvedValue({ login_id: 'lgn-spare000001' })
+    vi.mocked(api.agentLoginResult).mockReturnValue(result)
+    mount()
+    await flush()
+    fireEvent.click(within(claudeRow()).getByRole('button', { name: 'Add login' }))
+    fireEvent.change(screen.getByRole('textbox', { name: 'Name' }), { target: { value: 'spare' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Start sign-in' }))
+    expect(await screen.findByRole('heading', { name: 'Sign in to spare' })).toBeDefined()
+    fireEvent.click(screen.getByRole('button', { name: 'All agents' }))
+    expect(claudeRow().textContent).toContain('The sign-in of spare is still running.')
+
+    fireEvent.click(within(claudeRow()).getByRole('button', { name: 'Return to the sign-in' }))
+    expect(screen.getByRole('heading', { name: 'Sign in to spare' })).toBeDefined()
+    fireEvent.click(screen.getByRole('button', { name: 'All agents' }))
+
+    await act(async () => end({ id: 'lgn-spare000001', name: 'spare', automatic: true, shared: true, position: 1 } as never))
+    expect(claudeRow().textContent).not.toContain('still running')
   })
 
   it('opens Add login in the page', async () => {

@@ -9,9 +9,10 @@ import { Menu, MenuContent, MenuItem, MenuTrigger } from '@/components/ui/menu'
 import { StatusDot } from '@/components/ui/status-dot'
 import type { AgentInfo } from '@/lib/types'
 
-function facts(agent: AgentInfo): string {
+function facts(agent: AgentInfo, logins: number | undefined): string {
   if (agent.installed !== true) return 'Not installed'
   if (agent.login_problem) return signedOutState(agent)
+  if (logins !== undefined && logins > 1) return `Installed · ${logins} logins`
   if (agent.login_found === undefined) return 'Installed'
   return agent.login_found ? 'Installed · Login found' : 'Installed · No login found'
 }
@@ -24,6 +25,7 @@ export function AgentList({
   onRemove,
   extra,
   below,
+  logins,
   returnFocusTo,
   primary,
 }: {
@@ -35,6 +37,8 @@ export function AgentList({
   extra?: (agent: AgentInfo) => ReactNode
   /** Full-width content under the row, such as Claude Code's logins. */
   below?: (agent: AgentInfo) => ReactNode
+  /** How many logins the agent has, where it keeps more than one. */
+  logins?: (agent: AgentInfo) => number | undefined
   returnFocusTo?: string
   primary?: string
 }) {
@@ -60,13 +64,13 @@ export function AgentList({
               <span className="truncate text-ui font-medium text-text">{name}</span>
               <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-ui-sm text-muted">
                 <StatusDot tone={ready(agent) ? 'done' : agent.installed === true && agent.login_problem ? 'needs-you' : 'neutral'} />
-                <span>{facts(agent)}</span>
+                <span>{facts(agent, logins?.(agent))}</span>
                 <span aria-hidden>·</span>
                 <span aria-label={enhancedSupported(agent) ? 'Supports Standard and Enhanced' : 'Supports Standard only'}>{supportWords(agent)}</span>
               </span>
               {agent.installed === true && agent.login_problem && <span className="font-code text-ui-sm break-words text-muted">{agent.login_problem}</span>}
             </span>
-            <span className="ml-auto flex flex-wrap items-center gap-2">
+            <span className="ml-auto flex flex-wrap items-center justify-end gap-2 max-sm:order-1">
               {extra?.(agent)}
               {(runnable || onSetUp) && (
                 <Button
@@ -79,21 +83,22 @@ export function AgentList({
                   {action}
                 </Button>
               )}
-              {((runnable && onSetUp) || removable) && (
-                <Menu>
-                  <MenuTrigger asChild>
-                    <Button size="icon" variant="ghost" label={`More for ${name}`}>
-                      <Ellipsis />
-                    </Button>
-                  </MenuTrigger>
-                  <MenuContent align="end">
-                    {runnable && onSetUp && <MenuItem onSelect={() => onSetUp(agent)}>Set up again</MenuItem>}
-                    {removable && <MenuItem onSelect={() => onRemove(agent)}>Remove…</MenuItem>}
-                  </MenuContent>
-                </Menu>
-              )}
             </span>
-            {below?.(agent)}
+            {/* On a phone the overflow menu stays on the title line and the buttons wrap under it. */}
+            {((runnable && onSetUp) || removable) && (
+              <Menu>
+                <MenuTrigger asChild>
+                  <Button size="icon" variant="ghost" label={`More for ${name}`}>
+                    <Ellipsis />
+                  </Button>
+                </MenuTrigger>
+                <MenuContent align="end">
+                  {runnable && onSetUp && <MenuItem onSelect={() => onSetUp(agent)}>Set up again</MenuItem>}
+                  {removable && <MenuItem onSelect={() => onRemove(agent)}>Remove…</MenuItem>}
+                </MenuContent>
+              </Menu>
+            )}
+            <div className="order-2 flex basis-full flex-col gap-2 empty:hidden">{below?.(agent)}</div>
           </InsetListItem>
         )
       })}
