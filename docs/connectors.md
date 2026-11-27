@@ -52,7 +52,8 @@ connected** with its scopes once the app connects. It lists your connectors
 with their scopes, the URL each was added at, when each was added and last
 used, and **Reconnect** and **Revoke** buttons. Errors appear as `cloudfield mcp`
 prints them, with a link to the fix.
-A connector at a retiring or retired address has no **Reconnect**; see
+A connector at a retiring or retired address has no **Reconnect** or
+**Move**; see
 [Adding a connector again at a new address](#adding-a-connector-again-at-a-new-address).
 
 From a terminal:
@@ -163,9 +164,9 @@ the error.
 In Settings a connector at a retiring address shows **This address is
 retiring on 2027-03-01**, one at a retired address **This address is
 retired**, each with the new URL to copy when one is named, or else the
-same advice as `cloudfield mcp`. Such a row has no **Reconnect** and Settings
-does not revoke it: once the connector works at the new URL, select
-**Revoke** on the old one. A move or reconnect started before the notice
+same advice as `cloudfield mcp`. Such a row has no **Reconnect** or
+**Move**, and Settings does not revoke it: once the connector works at the
+new URL, select **Revoke** on the old one. A move or reconnect started before the notice
 stops without revoking anything once the old connector or its replacement
 is at such an address. To give such a connector another scope, such as one
 a refusal names, add it again at the new URL and check the box on its
