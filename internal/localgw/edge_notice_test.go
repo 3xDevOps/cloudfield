@@ -1,7 +1,6 @@
 package localgw
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net"
@@ -31,9 +30,6 @@ type noticeEdge struct {
 	asked, loggedOut int
 	open             map[net.Conn]bool
 	opened           int
-	// captured, when set, is sent to once the handler has read the
-	// notice it answers with; it then waits for release.
-	captured, release chan struct{}
 }
 
 func newNoticeEdge(t *testing.T) *noticeEdge {
@@ -50,13 +46,7 @@ func newNoticeEdge(t *testing.T) *noticeEdge {
 		} else {
 			e.loggedOut++
 		}
-		captured, release := e.captured, e.release
-		e.captured, e.release = nil, nil
 		e.mu.Unlock()
-		if captured != nil {
-			captured <- struct{}{}
-			<-release
-		}
 		time.Sleep(delay)
 		w.Header().Set(edgeproto.HeaderVersion, "1")
 		switch {
@@ -126,10 +116,10 @@ func signInTo(t *testing.T, origins ...string) {
 	}
 }
 
-// statusOf is the raw edge.status entry of origin.
-func statusOf(t *testing.T, g *Gateway, origin string) map[string]json.RawMessage {
+// statusOf is the raw edge.status entry of origin, asked with params.
+func statusOf(t *testing.T, g *Gateway, params, origin string) map[string]json.RawMessage {
 	t.Helper()
-	rec := do(g, http.MethodPost, "/local/v1/edge.status", "{}", true)
+	rec := do(g, http.MethodPost, "/local/v1/edge.status", params, true)
 	var st struct {
 		Edges []map[string]json.RawMessage `json:"edges"`
 	}
@@ -145,34 +135,11 @@ func statusOf(t *testing.T, g *Gateway, origin string) map[string]json.RawMessag
 	return nil
 }
 
+// retiringOf is the notice edge.status reports for origin when asked for
+// notices.
 func retiringOf(t *testing.T, g *Gateway, origin string) string {
 	t.Helper()
-	return string(statusOf(t, g, origin)["retiring"])
-}
-
-type clock struct {
-	mu  sync.Mutex
-	now time.Time
-}
-
-func (c *clock) get() time.Time {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.now
-}
-
-func (c *clock) add(d time.Duration) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.now = c.now.Add(d)
-}
-
-func noticeGateway(t *testing.T) (*Gateway, *clock) {
-	t.Helper()
-	g := edgeGateway(t)
-	c := &clock{now: time.Date(2026, 11, 26, 12, 0, 0, 0, time.UTC)}
-	g.local.notices.now = c.get
-	return g, c
+	return string(statusOf(t, g, `{"notices":true}`, origin)["retiring"])
 }
 
 // Every state edge.status reports, exact, and nothing for an edge with
@@ -209,7 +176,7 @@ func TestEdgeStatusNotice(t *testing.T) {
 		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			g, _ := noticeGateway(t)
+			g := edgeGateway(t)
 			edge := newNoticeEdge(t)
 			edge.set(tc.setup)
 			signInTo(t, edge.URL)
@@ -220,217 +187,72 @@ func TestEdgeStatusNotice(t *testing.T) {
 	}
 }
 
-func TestEdgeStatusNoticeCache(t *testing.T) {
-	g, clk := noticeGateway(t)
+// Without notices in its params edge.status asks no edge; with them it
+// asks again on every call and keeps nothing.
+func TestEdgeStatusNoticeOnlyOnRequest(t *testing.T) {
+	g := edgeGateway(t)
 	edge := newNoticeEdge(t)
 	signInTo(t, edge.URL)
-	const first = `{"state":"retiring","replacement":"https://new.example.test"}`
 	edge.set(func(e *noticeEdge) { e.retiring = "https://new.example.test" })
-	if got := retiringOf(t, g, edge.URL); got != first {
+	for _, params := range []string{"{}", `{"notices":false}`} {
+		if got := statusOf(t, g, params, edge.URL)["retiring"]; got != nil || edge.askedCount() != 0 {
+			t.Fatalf("edge.status %s: retiring %s, the edge asked %d times", params, got, edge.askedCount())
+		}
+	}
+	if got := retiringOf(t, g, edge.URL); got != `{"state":"retiring","replacement":"https://new.example.test"}` {
 		t.Fatalf("retiring = %s", got)
 	}
-
-	clk.add(noticeRecheck - time.Second)
-	edge.set(func(e *noticeEdge) { e.retiring = "https://other.example.test" })
-	if got := retiringOf(t, g, edge.URL); got != first || edge.askedCount() != 1 {
-		t.Fatalf("within the recheck the edge was asked %d times and the notice is %s", edge.askedCount(), got)
-	}
-
-	clk.add(time.Second)
-	if got := retiringOf(t, g, edge.URL); got != `{"state":"retiring","replacement":"https://other.example.test"}` {
-		t.Fatalf("a changed replacement shows as %s", got)
-	}
-
-	clk.add(noticeRecheck)
-	edge.set(func(e *noticeEdge) { e.status, e.body = http.StatusBadGateway, "down" })
-	if got := retiringOf(t, g, edge.URL); !strings.Contains(got, "other.example.test") {
-		t.Fatalf("a failed ask dropped the notice: %s", got)
-	}
-	clk.add(noticeMaxAge - noticeRecheck + time.Second)
-	if got := retiringOf(t, g, edge.URL); got != "" {
-		t.Fatalf("a notice older than %v shows: %s", noticeMaxAge, got)
-	}
-
-	clk.add(noticeRecheck)
-	edge.set(func(e *noticeEdge) { e.status, e.retiring = 0, "https://new.example.test" })
-	if got := retiringOf(t, g, edge.URL); got != first {
-		t.Fatalf("retiring = %s", got)
-	}
-	clk.add(noticeRecheck)
 	edge.set(func(e *noticeEdge) { e.retiring = "" })
-	if got := retiringOf(t, g, edge.URL); got != "" {
-		t.Fatalf("an empty answer kept %s", got)
-	}
-
-	clk.add(noticeRecheck)
-	edge.set(func(e *noticeEdge) { e.retiring = "https://new.example.test" })
-	if got := retiringOf(t, g, edge.URL); got != first {
-		t.Fatalf("retiring = %s", got)
-	}
-	clk.add(noticeRecheck)
-	edge.set(func(e *noticeEdge) { e.status, e.body = http.StatusGone, `{"error":"gone"}` })
-	if got := retiringOf(t, g, edge.URL); got != "" {
-		t.Fatalf("a 410 without a replacement kept %s", got)
-	}
-
-	clk.add(noticeRecheck)
-	edge.set(func(e *noticeEdge) { e.status = 0 })
-	retiringOf(t, g, edge.URL)
-	if rec := do(g, http.MethodPost, "/local/v1/edge.logout", `{"edge":"`+edge.URL+`"}`, true); rec.Code != http.StatusOK {
-		t.Fatalf("edge.logout = %d: %s", rec.Code, rec.Body)
-	}
-	if _, ok := g.local.notices.by[edge.URL]; ok {
-		t.Fatal("logout kept the notice")
+	if got := retiringOf(t, g, edge.URL); got != "" || edge.askedCount() != 2 {
+		t.Fatalf("second call: retiring %s, the edge asked %d times", got, edge.askedCount())
 	}
 }
 
-// A slow edge holds edge.status for noticeTimeout at most, and is not
-// asked again until the recheck.
-func TestEdgeStatusNoticeSlowEdge(t *testing.T) {
-	g, _ := noticeGateway(t)
-	edge := newNoticeEdge(t)
-	signInTo(t, edge.URL)
-	edge.set(func(e *noticeEdge) {
-		e.retiring, e.delay = "https://new.example.test", noticeTimeout+500*time.Millisecond
-	})
-	start := time.Now()
-	if got := retiringOf(t, g, edge.URL); got != "" {
-		t.Fatalf("retiring = %s", got)
+// Slow edges are asked at once and hold edge.status for noticeTimeout at
+// most in all; a fast one still reports its notice.
+func TestEdgeStatusNoticeSlowEdges(t *testing.T) {
+	g := edgeGateway(t)
+	slow1, slow2, fast := newNoticeEdge(t), newNoticeEdge(t), newNoticeEdge(t)
+	signInTo(t, slow1.URL, slow2.URL, fast.URL)
+	for _, e := range []*noticeEdge{slow1, slow2, fast} {
+		e.set(func(e *noticeEdge) { e.retiring = "https://new.example.test" })
 	}
+	for _, e := range []*noticeEdge{slow1, slow2} {
+		e.set(func(e *noticeEdge) { e.delay = noticeTimeout + 500*time.Millisecond })
+	}
+	start := time.Now()
+	rec := do(g, http.MethodPost, "/local/v1/edge.status", `{"notices":true}`, true)
 	if took := time.Since(start); took > noticeTimeout+time.Second {
 		t.Fatalf("edge.status took %v", took)
 	}
-	start = time.Now()
-	retiringOf(t, g, edge.URL)
-	if took := time.Since(start); took > time.Second {
-		t.Fatalf("edge.status asked the slow edge again, took %v", took)
+	var st struct {
+		Edges []signedInEdge `json:"edges"`
 	}
-}
-
-// Two edge.status calls during one slow ask share it and both see the
-// notice; the edge is asked once.
-func TestEdgeStatusNoticeSharedAsk(t *testing.T) {
-	g, _ := noticeGateway(t)
-	edge := newNoticeEdge(t)
-	signInTo(t, edge.URL)
-	edge.set(func(e *noticeEdge) { e.retiring, e.delay = "https://new.example.test", 300*time.Millisecond })
-	got := make([]string, 2)
-	var wg sync.WaitGroup
-	for i := range got {
-		wg.Go(func() { got[i] = retiringOf(t, g, edge.URL) })
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &st) != nil {
+		t.Fatalf("edge.status = %d: %s", rec.Code, rec.Body)
 	}
-	wg.Wait()
-	for _, r := range got {
-		if !strings.Contains(r, "new.example.test") {
-			t.Fatalf("edge.status answers %q, want the notice in both", got)
+	for _, e := range st.Edges {
+		if (e.Retiring != nil) != (e.Edge == fast.URL) {
+			t.Fatalf("edge %s retiring %+v", e.Edge, e.Retiring)
 		}
 	}
-	if n := edge.askedCount(); n != 1 {
-		t.Fatalf("the edge was asked %d times", n)
-	}
 }
 
-// A request that ends before the edge answers does not end the ask: the
-// next edge.status shows the answer.
-func TestEdgeStatusNoticeOutlivesItsRequest(t *testing.T) {
-	g, _ := noticeGateway(t)
-	edge := newNoticeEdge(t)
-	signInTo(t, edge.URL)
-	edge.set(func(e *noticeEdge) { e.retiring, e.delay = "https://new.example.test", 200*time.Millisecond })
-	dir, err := cli.Dir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if got := g.local.notices.lookup(g.ctx, ctx, dir, []string{edge.URL}, g.local.notices.generation()); len(got) != 0 {
-		t.Fatalf("an ended request got %v", got)
-	}
-	time.Sleep(400 * time.Millisecond)
-	if got := retiringOf(t, g, edge.URL); !strings.Contains(got, "new.example.test") || edge.askedCount() != 1 {
-		t.Fatalf("after the ended request: %s, asked %d times", got, edge.askedCount())
-	}
-}
-
-// An answer the edge gave before a logout and a new sign-in is dropped,
-// and an edge no longer signed in is forgotten.
-func TestEdgeStatusNoticeAfterSignOut(t *testing.T) {
-	g, _ := noticeGateway(t)
-	edge, other := newNoticeEdge(t), newNoticeEdge(t)
-	signInTo(t, edge.URL, other.URL)
-	captured, release := make(chan struct{}), make(chan struct{})
-	edge.set(func(e *noticeEdge) { e.retiring, e.captured, e.release = "https://new.example.test", captured, release })
-	dir, err := cli.Dir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	g.local.notices.lookup(g.ctx, ctx, dir, []string{edge.URL, other.URL}, g.local.notices.generation())
-	<-captured
-	g.local.notices.mu.Lock()
-	oldAsk := g.local.notices.by[edge.URL].asking
-	g.local.notices.mu.Unlock()
-	g.local.notices.forget(edge.URL)
-	g.local.notices.forget(edge.URL)
-	edge.set(func(e *noticeEdge) { e.retiring = "" })
-	if got := retiringOf(t, g, edge.URL); got != "" {
-		t.Fatalf("retiring = %s", got)
-	}
-	close(release)
-	<-oldAsk
-	if got := retiringOf(t, g, edge.URL); got != "" {
-		t.Fatalf("the answer from before the sign-out shows: %s", got)
-	}
-	signInTo(t, edge.URL)
-	retiringOf(t, g, edge.URL)
-	if _, ok := g.local.notices.by[other.URL]; ok {
-		t.Fatal("an edge no longer signed in is still cached")
-	}
-}
-
-// A status call whose signed-in rows were read before a logout neither
-// brings the forgotten edge back nor prunes, and asks nothing.
-func TestEdgeStatusNoticeFromAnObsoleteSnapshot(t *testing.T) {
-	g, _ := noticeGateway(t)
-	edge, other := newNoticeEdge(t), newNoticeEdge(t)
-	signInTo(t, edge.URL, other.URL)
-	edge.set(func(e *noticeEdge) { e.retiring = "https://new.example.test" })
-	retiringOf(t, g, other.URL)
-	dir, err := cli.Dir()
-	if err != nil {
-		t.Fatal(err)
-	}
-	gen := g.local.notices.generation()
-	g.local.notices.forget(edge.URL)
-	if got := g.local.notices.lookup(g.ctx, context.Background(), dir, []string{edge.URL}, gen); len(got) != 0 {
-		t.Fatalf("an obsolete snapshot got %v", got)
-	}
-	if _, ok := g.local.notices.by[edge.URL]; ok {
-		t.Fatal("an obsolete snapshot brought the forgotten edge back")
-	}
-	if _, ok := g.local.notices.by[other.URL]; !ok {
-		t.Fatal("an obsolete snapshot pruned an edge")
-	}
-	if n := edge.askedCount(); n != 1 {
-		t.Fatalf("the edge was asked %d times", n)
-	}
-}
-
-// The asks share one connection across rechecks, and the gateway closes
-// it when it closes.
+// The asks share one connection across calls, and the gateway closes it
+// when it closes.
 func TestEdgeStatusNoticeReusesItsConnection(t *testing.T) {
-	g, clk := noticeGateway(t)
+	g := edgeGateway(t)
 	edge := newNoticeEdge(t)
 	signInTo(t, edge.URL)
 	for range 4 {
 		retiringOf(t, g, edge.URL)
-		clk.add(noticeRecheck)
 	}
 	if _, opened := edge.conns(); opened != 1 || edge.askedCount() != 4 {
 		t.Fatalf("4 asks opened %d connections, asked %d times", opened, edge.askedCount())
 	}
-	g.local.notices.close()
+	if err := g.Close(); err != nil {
+		t.Fatal(err)
+	}
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		open, _ := edge.conns()
@@ -447,7 +269,7 @@ func TestEdgeStatusNoticeReusesItsConnection(t *testing.T) {
 // A retired refusal carries its replacement in the error data, and
 // edge.logout there deletes the token.
 func TestEdgeLogoutAtARetiredAddress(t *testing.T) {
-	g, _ := noticeGateway(t)
+	g := edgeGateway(t)
 	edge := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(edgeproto.HeaderVersion, "1")
 		w.WriteHeader(http.StatusGone)

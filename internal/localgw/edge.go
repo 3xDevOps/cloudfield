@@ -56,9 +56,8 @@ type loginAttempt struct {
 }
 
 // begin waits for l in the background, replacing any sign-in in
-// progress. parent bounds the wait beside the edge's own expiry, and
-// signedIn runs after the token is stored.
-func (e *edgeLogin) begin(parent context.Context, client *edgeclient.Client, l *edgeclient.Login, signedIn func()) loginView {
+// progress. parent bounds the wait beside the edge's own expiry.
+func (e *edgeLogin) begin(parent context.Context, client *edgeclient.Client, l *edgeclient.Login) loginView {
 	ctx, cancel := context.WithCancel(parent)
 	a := &loginAttempt{cancel: cancel, view: loginView{
 		State: loginPending, Edge: client.URL(), SigninOrigin: l.SigninOrigin, UserCode: l.UserCode, VerificationURI: l.VerificationURI,
@@ -83,7 +82,6 @@ func (e *edgeLogin) begin(parent context.Context, client *edgeclient.Client, l *
 			return
 		}
 		a.view.State, a.view.Account = loginSignedIn, &session.Account
-		signedIn()
 	})
 	return view
 }
@@ -232,7 +230,7 @@ func (g *Gateway) localEdgeLogin(r *http.Request, body []byte) (any, *protocol.E
 	}
 	g.local.switching.RLock()
 	defer g.local.switching.RUnlock()
-	return g.local.edge.begin(g.ctx, client, login, func() { g.local.notices.forget(client.URL()) }), nil
+	return g.local.edge.begin(g.ctx, client, login), nil
 }
 
 // signedInEdge is one edge this machine holds a device token for, by its
@@ -246,12 +244,22 @@ type signedInEdge struct {
 	Retiring     *edgeNotice            `json:"retiring,omitempty"`
 }
 
-func (g *Gateway) localEdgeStatus(r *http.Request, _ []byte) (any, *protocol.Error) {
+// localEdgeStatus answers the edges signed in to and the sign-in this
+// gateway runs. The sign-in is read first: one that ends meanwhile still
+// shows as pending, so its edge is never reported signed in without its
+// entry. With notices it asks each edge for its retiring notice.
+func (g *Gateway) localEdgeStatus(r *http.Request, body []byte) (any, *protocol.Error) {
+	var params struct {
+		Notices bool `json:"notices"`
+	}
+	if perr := decodeParams(body, &params); perr != nil {
+		return nil, perr
+	}
+	login := g.local.edge.view()
 	dir, err := cli.Dir()
 	if err != nil {
 		return nil, &protocol.Error{Code: protocol.CodeInternal, Message: err.Error()}
 	}
-	gen := g.local.notices.generation()
 	origins, err := edgeclient.SignedIn(dir)
 	if err != nil {
 		return nil, &protocol.Error{Code: protocol.CodeInternal, Message: err.Error()}
@@ -267,25 +275,13 @@ func (g *Gateway) localEdgeStatus(r *http.Request, _ []byte) (any, *protocol.Err
 		}
 		edges = append(edges, entry)
 	}
-	g.addNotices(r.Context(), dir, edges, gen)
+	if params.Notices {
+		addNotices(r.Context(), g.local.notices, dir, edges)
+	}
 	return struct {
 		Edges []signedInEdge `json:"edges"`
 		Login *loginView     `json:"login,omitempty"`
-	}{Edges: edges, Login: g.local.edge.view()}, nil
-}
-
-// addNotices sets each edge's notice.
-func (g *Gateway) addNotices(ctx context.Context, dir string, edges []signedInEdge, gen uint64) {
-	origins := make([]string, len(edges))
-	for i, e := range edges {
-		origins[i] = e.Edge
-	}
-	notices := g.local.notices.lookup(g.ctx, ctx, dir, origins, gen)
-	for i := range edges {
-		if notice, ok := notices[edges[i].Edge]; ok {
-			edges[i].Retiring = &notice
-		}
-	}
+	}{Edges: edges, Login: login}, nil
 }
 
 func sessionOn(dir, origin string) (edgeclient.Session, error) {
@@ -311,7 +307,6 @@ func (g *Gateway) localEdgeLogout(r *http.Request, body []byte) (any, *protocol.
 	if _, err := client.Logout(r.Context()); err != nil {
 		return nil, edgeError(err)
 	}
-	g.local.notices.forget(client.URL())
 	return struct {
 		Edge string `json:"edge"`
 	}{Edge: client.URL()}, nil

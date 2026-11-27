@@ -2059,17 +2059,15 @@ does, with the same files in the config directory:
   dashboard turns a pasted or handed claim link into one.
 - `edge.logout` revokes the device token at the edge and forgets it, and
   drops a pending `edge.login` for that edge.
-- An `edge.status` entry carries `retiring` when its edge address says it
-  is retiring, or refuses as retired:
+- With `{"notices":true}`, an `edge.status` entry carries `retiring` when
+  its edge address says it is retiring, or refuses as retired:
   `{"state":"retiring"|"retired","replacement":"https://...","date":"YYYY-MM-DD"}`.
   It is the address's own, unauthenticated word, validated as a canonical
-  origin and a real date. The gateway
-  asks each signed-in edge's `GET /v1/edge` at most every 5 minutes, and calls
-  share an ask in flight; a call waits 2 seconds at most and the ask outlives
-  it. A notice shows for at most an hour after that edge last answered. An
-  answer without a notice, or a `410` without a replacement, clears it; a
-  replacement that is the same edge is no notice; `edge.logout`, `link.reset`
-  and signing out elsewhere forget it. Without a notice the field is absent.
+  origin and a real date. The gateway asks every signed-in edge's
+  `GET /v1/edge` at once, with no token, waits 2 seconds at most in all, and
+  keeps nothing between calls; an edge that does not answer in time, or names
+  itself, has no `retiring`. The sign-in in `login` is read before the
+  entries, so a sign-in that ends meanwhile still shows as `pending`.
 - `edge.logout` at an address that answers `410` naming a replacement deletes
   the token, though the edge did not revoke it. A refusal from such an
   address carries `data.retired: {"replacement":"https://..."}` beside
