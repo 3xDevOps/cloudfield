@@ -1327,9 +1327,8 @@ its complete report summary, and `correlation_id` is the report ID. It uses the 
 acknowledgement as peer messages; if the inbox is full, report publication
 retries until it fits. A turn that ends without a success,
 failure or blocked report forwards the subsession's
-last message to the parent as a provisional report, which says whether the turn
-reported nothing or names the `needs-input`, `waiting` or `answered` it did
-report; the subsession's own later
+last message to the parent as a provisional report, which names the session's
+last `needs-input`, `waiting` or `answered` report if it made one; the subsession's own later
 success, failure or blocked report retires it while unread. A subsession that ends without a final report sends
 one message saying so, with its latest report of any outcome (summary and
 time) and its branch. A live attached subsession that has been waiting (for

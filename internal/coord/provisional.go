@@ -3,6 +3,7 @@ package coord
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"strings"
 	"time"
@@ -15,16 +16,18 @@ import (
 const (
 	provisionalHeader = "Provisional report: this session ended its turn without `aether-internal report`. " +
 		"A report from it supersedes this one. Its last message:\n\n"
-	// provisionalStateHeader takes the outcome the turn reported.
-	provisionalStateHeader = "Provisional report: this session ended its turn after reporting %s. " +
+	// provisionalStateHeader takes the session's last needs-input, waiting
+	// or answered report, which may be an earlier turn's where the agent
+	// started this one itself.
+	provisionalStateHeader = "Provisional report: this session ended its turn with no success, failure or blocked report; its last report was %s. " +
 		"A success, failure or blocked report from it supersedes this one. Its last message:\n\n"
 )
 
 // ProvisionalReport forwards a child run's last message to its parent when
 // the turn that started at since ended without a report its parent is
-// sent: none at all, or only needs-input, waiting or answered, which the
-// message then names. The turn start keys the message, so each turn sends
-// at most one.
+// sent: none at all, or only needs-input, waiting or answered, the last of
+// which the message then names. The turn start keys the message, so each
+// turn sends at most one.
 func (s *Service) ProvisionalReport(ctx context.Context, run domain.RunID, since time.Time, message string) error {
 	if s.cfg.Disabled {
 		return nil
@@ -53,9 +56,11 @@ func (s *Service) ProvisionalReport(ctx context.Context, run domain.RunID, since
 		return err
 	}
 	header := provisionalHeader
+	// The parent hears from the session whether or not its report can be
+	// read.
 	state, err := s.cfg.Mail.CoordStateReportedSince(ctx, run, since)
 	if err != nil {
-		return fmt.Errorf("provisional report: %w", err)
+		slog.Warn("coord: read the turn's report for its provisional report", "run", run, "error", err)
 	}
 	if state != "" {
 		header = fmt.Sprintf(provisionalStateHeader, state)

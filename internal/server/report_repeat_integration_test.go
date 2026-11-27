@@ -197,7 +197,7 @@ func TestIntegrationRepeatReports(t *testing.T) {
 	})
 	t.Run("an answered turn is forwarded as one", func(t *testing.T) {
 		mail, _, _ := run(t, report("answered", "replied", "a"), 1, 20*time.Second)
-		if len(mail) != 1 || !strings.HasPrefix(mail[0], "Provisional report: this session ended its turn after reporting answered") {
+		if len(mail) != 1 || !strings.HasPrefix(mail[0], "Provisional report: this session ended its turn with no success, failure or blocked report; its last report was answered") {
 			t.Fatalf("parent mail %q, want the answered turn's last message under a header that names its report", mail)
 		}
 	})
