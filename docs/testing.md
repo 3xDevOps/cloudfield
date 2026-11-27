@@ -325,7 +325,7 @@ launch starts `turn`, mail starts `wake`, and `run.inject` starts the rest:
 
 | Turn | The agent | The session must show |
 | --- | --- | --- |
-| `turn` | runs a command and ends the turn without a report | `answered` after one reminder; Standard Codex, which Cloudfield cannot remind, `waiting` |
+| `turn` | runs a command and ends the turn without a report | `answered` after one reminder |
 | `wake` | gets mail while idle | a new turn, where Cloudfield can wake the session |
 | `waiting` | reports `waiting --for ci` | `waiting-ci` with the summary |
 | `answered` | reports `answered` | `answered`, not Needs you |

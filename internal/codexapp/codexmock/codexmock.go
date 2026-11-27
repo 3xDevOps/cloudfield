@@ -21,8 +21,9 @@ type thread struct {
 }
 
 type turn struct {
-	id     string
-	status string
+	id       string
+	status   string
+	messages []string
 }
 
 type Request struct {
@@ -38,6 +39,9 @@ type Server struct {
 	requests []Request
 	// failSteer makes turn/steer fail as it does when the turn ends first.
 	failSteer bool
+	// experimental is set by a client that opted into the experimental API,
+	// which Codex 0.131.0 needs to list a thread's turns.
+	experimental bool
 	// lateInterrupt ends a turn before its turn/interrupt arrives.
 	lateInterrupt bool
 }
@@ -102,11 +106,16 @@ func (s *Server) answer(method string, raw json.RawMessage) (any, string) {
 	var p struct {
 		ThreadID       string `json:"threadId"`
 		ExpectedTurnID string `json:"expectedTurnId"`
+		ItemsView      string `json:"itemsView"`
+		Capabilities   struct {
+			ExperimentalAPI bool `json:"experimentalApi"`
+		} `json:"capabilities"`
 	}
 	_ = json.Unmarshal(raw, &p)
 	t := s.threads[p.ThreadID]
 	switch method {
 	case "initialize":
+		s.experimental = p.Capabilities.ExperimentalAPI
 		return map[string]any{"userAgent": "codexmock"}, ""
 	case "thread/loaded/list":
 		return map[string]any{"data": s.order}, ""
@@ -116,11 +125,20 @@ func (s *Server) answer(method string, raw json.RawMessage) (any, string) {
 		}
 		return map[string]any{"thread": t.json()}, ""
 	case "thread/turns/list":
+		if !s.experimental {
+			return nil, "thread/turns/list requires experimentalApi capability"
+		}
 		if t == nil || len(t.turns) == 0 {
 			return nil, fmt.Sprintf("thread %s is not materialized yet", p.ThreadID)
 		}
 		last := t.turns[len(t.turns)-1]
-		return map[string]any{"data": []any{map[string]any{"id": last.id, "status": last.status}}}, ""
+		items := []any{}
+		if p.ItemsView != "notLoaded" {
+			for _, text := range last.messages {
+				items = append(items, map[string]any{"type": "agentMessage", "text": text})
+			}
+		}
+		return map[string]any{"data": []any{map[string]any{"id": last.id, "status": last.status, "items": items}}}, ""
 	case "turn/start":
 		if t == nil {
 			return nil, "thread not found: " + p.ThreadID
@@ -200,12 +218,14 @@ func (s *Server) SetStatus(id, typ string, flags ...string) {
 	s.setStatus(s.threads[id], typ, flags...)
 }
 
-func (s *Server) EndTurn(id string) {
+// EndTurn ends the thread's last turn with status, "completed" or
+// "interrupted", and the agent messages it holds.
+func (s *Server) EndTurn(id, status string, messages ...string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	t := s.threads[id]
 	if n := len(t.turns); n > 0 {
-		t.turns[n-1].status = "completed"
+		t.turns[n-1].status, t.turns[n-1].messages = status, messages
 	}
 	s.setStatus(t, "idle")
 }

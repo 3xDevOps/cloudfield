@@ -235,7 +235,9 @@ reconnect. A call with no answer after 60 seconds fails with `-32004`
 carry up to 64 MiB, and `workspace.import`, whose first fetch of a large repository is
 slow, get 15 minutes. Only that call's channel closes: a slow server
 handler is not a dead connection, so the connection, its streams and its
-other calls stay up. The keepalive below drops a dead one. A server refusal passes through untouched as that `protocol.Error`;
+other calls stay up. The keepalive below drops a dead one. A `run.launch`
+the server had not yet admitted when its channel closed starts no session.
+A server refusal passes through untouched as that `protocol.Error`;
 in particular, busy retention admission requires an explicit retry, not
 automatic replay. Streams have a separate guard: a channel that fails to open
 triggers a redial only when a keepalive, given 60 seconds to answer, shows the
@@ -727,7 +729,11 @@ metadata, not a prompt body or evidence of input. An optional `session_id`
 names the agent's own top-level session; a Standard session stores the latest one
 as `harness_session_id` so [a mode switch](enhanced-sessions.md#switching-a-running-agent)
 can resume it. One that is not 1-128 characters of letters, digits, `.`,
-`_`, `:` and `-` is ignored and the rest of the report applies.
+`_`, `:` and `-` is ignored and the rest of the report applies. An optional
+`last_message` on a `waiting` report is the agent's last message of the turn,
+which only a subsession's reporter sends. An optional `session_end: true`
+marks a `waiting` report sent as the agent's session ends, which is not a turn
+end ([coordination.md](coordination.md#lifecycle-status-is-separate)).
 
 | Operation | Fields | Meaning |
 | --- | --- | --- |
@@ -743,7 +749,7 @@ pending requests per session. Unknown operations/kinds, missing identities, and
 conflicting operation fields are rejected rather than normalized or truncated.
 `open`/`close` do not accept nonempty `requests`; `clear` accepts no request
 identity or request list; `replace` accepts no top-level request identity.
-Reports carry only correlation metadata, never prompts, answers, paths, or
+Input updates carry only correlation metadata, never prompts, answers, paths, or
 transcripts.
 
 A Default session's `sudo` command waiting for a person
@@ -753,11 +759,15 @@ first: `{id, session_id: "aether-sudo", kind: "permission", title}`, where
 saved; a server restart ends the shim's wait. A report cannot open, close or
 replace one: the session ID and a `title` are refused.
 
-Repeated opens, closes, and unchanged replacements are idempotent. Turn
-completion, silence, prose, and idle execution do not clear outstanding input.
+Repeated opens, closes, and unchanged replacements are idempotent. Only an
+update clears outstanding input: a `waiting` state, silence, prose, and idle
+execution do not. Claude Code's reporter sends `replace` with `[]` when its
+main agent's turn ends with no background task it waits for: a dialog blocks
+the turn it opens in, so none is open then.
 The pending set is persisted independently from the last execution report and
 survives server restart for still-live sessions. Actual terminated or relaunched
-session lifetimes discard it; stale saved snapshots cannot restore a previous
+session lifetimes discard it, as does a move to another account, which starts
+a new agent; stale saved snapshots cannot restore a previous
 lifetime's requests. Persistence errors are returned to the reporter rather than
 announcing input state that was not saved.
 
@@ -1066,7 +1076,8 @@ carries `agent_delivery: "queued"` until the agent takes it
 A message the server could not hand to the agent at all is `not_sent` with
 `failure.message` the real error and `failure.code`: `session_unavailable`
 (no running agent, or a mode switch in flight), `prompt_not_sent` (such as a
-sleeping session that failed to wake), `unsupported_image`,
+sleeping session that failed to wake, or a Standard session with a request its
+agent reported still in `pending_inputs`), `unsupported_image`,
 `session_protected`, `steer_denied` or `access_revoked` (the sender lost
 **Steer** or membership before delivery), or `control_changed` (the session's
 control lease changed before delivery).

@@ -12,17 +12,19 @@ import (
 )
 
 // heldStopGrace is how long a Standard turn whose stop was held may go
-// without a hook or terminal output before Aether applies the stop itself:
-// the reporter may have lost the answer, leaving Claude Code stopped with
-// nothing reported.
+// without a working report or terminal output before Aether applies the stop
+// itself: the reminder may not have reached the agent, leaving it stopped
+// with nothing reported.
 var heldStopGrace = time.Minute
 
 // HoldTurnEnd returns the reminder for the turn run's agent is ending when
 // it owes a report: the run takes reports, and none arrived since the turn
 // started. It holds each turn at most once, so the caller asks the agent for
 // the report once, and returns "" otherwise. A Background run is never
-// held: its turn end finishes it.
-func (s *Scheduler) HoldTurnEnd(ctx context.Context, run domain.RunID) (string, error) {
+// held: its turn end finishes it. message is the agent's last message at a
+// Standard run's stop, which the turn's end forwards to a parent in place
+// of the reminded continuation's.
+func (s *Scheduler) HoldTurnEnd(ctx context.Context, run domain.RunID, message string) (string, error) {
 	c := s.coordinationSeam()
 	s.mu.Lock()
 	entry := s.runs[run]
@@ -47,16 +49,17 @@ func (s *Scheduler) HoldTurnEnd(ctx context.Context, run domain.RunID) (string, 
 	}
 	entry.reportAsked = started
 	if entry.launchMode == domain.LaunchTUI {
-		entry.stopHeld = true
+		entry.stopHeld, entry.heldMessage = true, message
 		heldAt := time.Now().UTC()
 		time.AfterFunc(heldStopGrace, func() { s.applyHeldStop(entry, started, heldAt) })
 	}
 	return reminder, nil
 }
 
-// applyHeldStop ends a held Standard turn that sent no hook since heldAt
-// and whose terminal stayed quiet for heldStopGrace: Claude Code can think
-// or write for longer than that without a hook, but not without output.
+// applyHeldStop ends a held Standard turn that reported no work since
+// heldAt and whose terminal stayed quiet for heldStopGrace: an agent can
+// think or write for longer than that without a report, but not without
+// output.
 func (s *Scheduler) applyHeldStop(entry *supervised, started, heldAt time.Time) {
 	quiet := func(e *supervised) bool {
 		return e == entry && e.turnStartedAt.Equal(started) && e.reportAsked.Equal(started) &&
