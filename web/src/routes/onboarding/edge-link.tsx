@@ -497,7 +497,7 @@ export function RetiringNotice({
   const [edit, setEdit] = useState<{ scope: string; value: string } | null>(null)
   const target = edit?.scope === scope ? edit.value : (trusted ?? '')
   return (
-    <>
+    <div className="flex min-w-0 flex-col gap-2 self-stretch">
       <Callout
         tone={notice.state === 'retired' ? 'failed' : 'needs-you'}
         className="self-stretch"
@@ -514,35 +514,35 @@ export function RetiringNotice({
         }
       >
         <p>
-          It says its new address is <span className="break-words font-code">{notice.replacement}</span>.
+          It says its new address is <span className="break-words font-code">{notice.replacement}</span>
         </p>
         <p className="text-muted">
           {signedInThere ? (
             <>
-              You are signed in at <span className="font-code">{edgeHost(signedInThere)}</span> too: choose it above and
-              link your server again through it.
+              You are signed in to <span className="font-code">{edgeHost(signedInThere)}</span> too: choose it above
+              and link your server again through it.
             </>
           ) : trusted ? (
             'Sign in at the new address below, then link your server again there.'
           ) : (
-            'Confirm that address with whoever runs the edge before you sign in there.'
+            'Confirm that address with whoever runs the edge before you sign in there below.'
           )}
         </p>
       </Callout>
       {!signedInThere && (
         <form
-          aria-label="Sign in at another edge"
-          className="flex min-w-0 flex-wrap items-end gap-2 self-stretch"
+          aria-label="Sign in to another edge"
+          className="flex min-w-0 max-w-md flex-wrap items-end gap-2"
           onSubmit={(e) => {
             e.preventDefault()
             void signIn.signIn(target.trim())
           }}
         >
-          <FormField className="min-w-0 flex-1 basis-56" label="Sign in at another edge address">
+          <FormField className="min-w-0 flex-1 basis-56" label="Sign in to another edge address">
             <Input
               className="font-code"
               autoComplete="off"
-              placeholder="https://"
+              placeholder="https://edge.example"
               value={target}
               onChange={(e) => setEdit({ scope, value: e.target.value })}
             />
@@ -552,7 +552,7 @@ export function RetiringNotice({
           </Button>
         </form>
       )}
-    </>
+    </div>
   )
 }
 
@@ -691,7 +691,6 @@ function ServerPicker({
         Signed in to <span className="font-code">{edgeHost(edge)}</span> as{' '}
         <span className="font-medium">{accountName(account)}</span>.
       </p>
-      {notice}
       {error && (
         <div className="flex min-w-0 flex-col items-start gap-2">
           <ErrorLine>{error}</ErrorLine>
@@ -702,6 +701,7 @@ function ServerPicker({
           )}
         </div>
       )}
+      {notice}
       {servers?.length === 0 && (
         <p className="text-muted">
           Your account reaches no servers yet. Paste the claim link <span className="font-code">aether-server setup</span>{' '}
@@ -748,31 +748,33 @@ function ServerPicker({
           }
         />
       )}
-      {claimForm}
-      <Collapsible>
-        <CollapsibleTrigger>Other ways to link</CollapsibleTrigger>
-        <CollapsibleContent className="flex flex-col gap-4 pt-2 pl-5">
-          <form
-            aria-label="Link by server id"
-            className="flex min-w-0 max-w-sm flex-col items-start gap-2"
-            onSubmit={(e) => {
-              e.preventDefault()
-              void link(() => client.localEdgeLink(serverID.trim(), edge))
-            }}
-          >
-            <FormField
-              className="self-stretch"
-              label="Server id from your admin"
-              help={<>The admin reads it from <span className="font-code">aether-server edge status</span>. The link accepts only the server this id names.</>}
+      {!retired && claimForm}
+      {!retired && (
+        <Collapsible>
+          <CollapsibleTrigger>Other ways to link</CollapsibleTrigger>
+          <CollapsibleContent className="flex flex-col gap-4 pt-2 pl-5">
+            <form
+              aria-label="Link by server id"
+              className="flex min-w-0 max-w-sm flex-col items-start gap-2"
+              onSubmit={(e) => {
+                e.preventDefault()
+                void link(() => client.localEdgeLink(serverID.trim(), edge))
+              }}
             >
-              <Input className="font-code" autoComplete="off" value={serverID} disabled={busy} onChange={(e) => setServerID(e.target.value)} />
-            </FormField>
-            <Button type="submit" size="sm" variant="secondary" disabled={busy || !serverID.trim()}>
-              Link by id
-            </Button>
-          </form>
-        </CollapsibleContent>
-      </Collapsible>
+              <FormField
+                className="self-stretch"
+                label="Server id from your admin"
+                help={<>The admin reads it from <span className="font-code">aether-server edge status</span>. The link accepts only the server this id names.</>}
+              >
+                <Input className="font-code" autoComplete="off" value={serverID} disabled={busy} onChange={(e) => setServerID(e.target.value)} />
+              </FormField>
+              <Button type="submit" size="sm" variant="secondary" disabled={busy || !serverID.trim()}>
+                Link by id
+              </Button>
+            </form>
+          </CollapsibleContent>
+        </Collapsible>
+      )}
     </div>
   )
 }
