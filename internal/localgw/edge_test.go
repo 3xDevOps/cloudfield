@@ -156,6 +156,7 @@ func awaitLogin(t *testing.T, g *Gateway, state string) (edgeStatus, string) {
 func TestEdgeLoginNeverAnswersTheTokenOrDeviceCode(t *testing.T) {
 	edge := newFakeEdge(t)
 	g := edgeGateway(t)
+	gen := g.local.notices.generation()
 
 	rec := do(g, http.MethodPost, "/local/v1/edge.login", `{"edge":"`+edge.URL+`","label":"laptop"}`, true)
 	if rec.Code != http.StatusOK {
@@ -172,6 +173,9 @@ func TestEdgeLoginNeverAnswersTheTokenOrDeviceCode(t *testing.T) {
 	st, body := awaitLogin(t, g, loginSignedIn)
 	if st.Login.Account == nil || st.Login.Account.Login != "octo" {
 		t.Fatalf("signed-in login = %+v", st.Login)
+	}
+	if g.local.notices.generation() == gen {
+		t.Fatal("a sign-in left status calls from before it current for the notice cache")
 	}
 	if len(st.Edges) != 1 || st.Edges[0].Edge != edge.URL || st.Edges[0].SigninOrigin != edge.URL ||
 		st.Edges[0].Account == nil || st.Edges[0].Device.ID != "dev-1" {

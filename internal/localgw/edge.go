@@ -56,8 +56,9 @@ type loginAttempt struct {
 }
 
 // begin waits for l in the background, replacing any sign-in in
-// progress. parent bounds the wait beside the edge's own expiry.
-func (e *edgeLogin) begin(parent context.Context, client *edgeclient.Client, l *edgeclient.Login) loginView {
+// progress. parent bounds the wait beside the edge's own expiry, and
+// signedIn runs after the token is stored.
+func (e *edgeLogin) begin(parent context.Context, client *edgeclient.Client, l *edgeclient.Login, signedIn func()) loginView {
 	ctx, cancel := context.WithCancel(parent)
 	a := &loginAttempt{cancel: cancel, view: loginView{
 		State: loginPending, Edge: client.URL(), SigninOrigin: l.SigninOrigin, UserCode: l.UserCode, VerificationURI: l.VerificationURI,
@@ -82,6 +83,7 @@ func (e *edgeLogin) begin(parent context.Context, client *edgeclient.Client, l *
 			return
 		}
 		a.view.State, a.view.Account = loginSignedIn, &session.Account
+		signedIn()
 	})
 	return view
 }
@@ -230,7 +232,7 @@ func (g *Gateway) localEdgeLogin(r *http.Request, body []byte) (any, *protocol.E
 	}
 	g.local.switching.RLock()
 	defer g.local.switching.RUnlock()
-	return g.local.edge.begin(g.ctx, client, login), nil
+	return g.local.edge.begin(g.ctx, client, login, func() { g.local.notices.forget(client.URL()) }), nil
 }
 
 // signedInEdge is one edge this machine holds a device token for, by its
@@ -249,6 +251,7 @@ func (g *Gateway) localEdgeStatus(r *http.Request, _ []byte) (any, *protocol.Err
 	if err != nil {
 		return nil, &protocol.Error{Code: protocol.CodeInternal, Message: err.Error()}
 	}
+	gen := g.local.notices.generation()
 	origins, err := edgeclient.SignedIn(dir)
 	if err != nil {
 		return nil, &protocol.Error{Code: protocol.CodeInternal, Message: err.Error()}
@@ -264,7 +267,7 @@ func (g *Gateway) localEdgeStatus(r *http.Request, _ []byte) (any, *protocol.Err
 		}
 		edges = append(edges, entry)
 	}
-	g.addNotices(r.Context(), dir, edges)
+	g.addNotices(r.Context(), dir, edges, gen)
 	return struct {
 		Edges []signedInEdge `json:"edges"`
 		Login *loginView     `json:"login,omitempty"`
@@ -273,12 +276,12 @@ func (g *Gateway) localEdgeStatus(r *http.Request, _ []byte) (any, *protocol.Err
 
 // addNotices sets each edge's notice, with whether this machine already
 // knows the replacement; what it holds being unreadable counts as not.
-func (g *Gateway) addNotices(ctx context.Context, dir string, edges []signedInEdge) {
+func (g *Gateway) addNotices(ctx context.Context, dir string, edges []signedInEdge, gen uint64) {
 	origins := make([]string, len(edges))
 	for i, e := range edges {
 		origins[i] = e.Edge
 	}
-	notices := g.local.notices.lookup(g.ctx, ctx, dir, origins)
+	notices := g.local.notices.lookup(g.ctx, ctx, dir, origins, gen)
 	if len(notices) == 0 {
 		return
 	}

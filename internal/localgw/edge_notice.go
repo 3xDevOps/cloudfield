@@ -35,11 +35,14 @@ type edgeNotice struct {
 	Known       bool   `json:"known"`
 }
 
-// edgeNotices caches each signed-in edge's notice by relay origin.
+// edgeNotices caches each signed-in edge's notice by relay origin. gen
+// counts sign-ins, logouts and resets: a lookup on signed-in rows read
+// before one of them neither adds nor prunes entries.
 type edgeNotices struct {
-	mu  sync.Mutex
-	by  map[string]*cachedNotice
-	now func() time.Time
+	mu   sync.Mutex
+	by   map[string]*cachedNotice
+	gen  uint64
+	now  func() time.Time
 }
 
 // cachedNotice is one edge's entry. A result is kept only while the entry
@@ -58,26 +61,40 @@ func newEdgeNotices() *edgeNotices {
 	return &edgeNotices{by: map[string]*cachedNotice{}, now: time.Now}
 }
 
-// lookup returns the notice of each of origins, the signed-in edges, that
-// has one. It forgets every other edge and asks, under life, each edge not
-// asked within noticeRecheck. Callers share an ask in flight and wait for
-// it at most noticeTimeout, and no longer than ctx.
-func (n *edgeNotices) lookup(life, ctx context.Context, dir string, origins []string) map[string]edgeNotice {
+// generation is the count a lookup's signed-in rows are read under.
+func (n *edgeNotices) generation() uint64 {
 	n.mu.Lock()
-	for origin := range n.by {
-		if !slices.Contains(origins, origin) {
-			delete(n.by, origin)
+	defer n.mu.Unlock()
+	return n.gen
+}
+
+// lookup returns the notice of each of origins, the signed-in edges read
+// under gen, that has one. When gen is current it forgets every other edge
+// and asks, under life, each edge not asked within noticeRecheck. Callers
+// share an ask in flight and wait for it at most noticeTimeout, and no
+// longer than ctx.
+func (n *edgeNotices) lookup(life, ctx context.Context, dir string, origins []string, gen uint64) map[string]edgeNotice {
+	n.mu.Lock()
+	current := gen == n.gen
+	if current {
+		for origin := range n.by {
+			if !slices.Contains(origins, origin) {
+				delete(n.by, origin)
+			}
 		}
 	}
 	now := n.now()
 	var waits []chan struct{}
 	for _, origin := range origins {
 		entry := n.by[origin]
+		if entry == nil && !current {
+			continue
+		}
 		if entry == nil {
 			entry = &cachedNotice{}
 			n.by[origin] = entry
 		}
-		if entry.asking == nil && now.Sub(entry.checked) >= noticeRecheck {
+		if current && entry.asking == nil && now.Sub(entry.checked) >= noticeRecheck {
 			entry.checked, entry.asking = now, make(chan struct{})
 			go n.ask(life, dir, origin, entry)
 		}
@@ -150,15 +167,18 @@ func askNotice(ctx context.Context, dir, origin string) (*edgeNotice, error) {
 	return &edgeNotice{State: edgeproto.NoticeRetiring, Replacement: r.Replacement, Date: r.Date}, nil
 }
 
-// forget drops what the cache holds for origin.
+// forget drops what the cache holds for origin, after a sign-in or a
+// logout there.
 func (n *edgeNotices) forget(origin string) {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	delete(n.by, origin)
+	n.gen++
 }
 
 func (n *edgeNotices) reset() {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 	clear(n.by)
+	n.gen++
 }
