@@ -20,8 +20,9 @@ func (s *Scheduler) Kill(ctx context.Context, run domain.RunID, actor domain.Mem
 
 // StopForParent stops a child run on its parent's say-so. The child ends
 // completed with a reason naming the parent, not as an abandoned failure.
-// The stop may wait for the child's other operations, so attached is asked
-// once it holds the child's lifecycle lock, and its error refuses the stop.
+// The stop may wait for the child's other operations or its git work, so
+// attached is asked just before the child is stopped, and its error refuses
+// the stop.
 func (s *Scheduler) StopForParent(ctx context.Context, run, parent domain.RunID, attached func() error) error {
 	return s.kill(ctx, run, "", parent, attached)
 }
@@ -274,6 +275,12 @@ func (s *Scheduler) killUnsupervised(ctx context.Context, id domain.RunID, actor
 	} else if serr != nil && !os.IsNotExist(serr) {
 		s.mu.Unlock()
 		return fmt.Errorf("scheduler: inspect destroy-pending sidecar: %w", serr)
+	}
+	if allowed != nil {
+		if err = allowed(); err != nil {
+			s.mu.Unlock()
+			return err
+		}
 	}
 	if err = s.persistEvidencePendingErr(id, identity, ""); err != nil {
 		s.mu.Unlock()
@@ -667,11 +674,6 @@ func (s *Scheduler) Inject(ctx context.Context, run domain.RunID, actor domain.M
 	if entry != nil && entry.switching != "" {
 		s.mu.Unlock()
 		return "", fmt.Errorf("%w: %w; send the message when it finishes", ptyhost.ErrNoSession, ErrSwitching)
-	}
-	// A terminal showing a dialog takes the typed message as its answer.
-	if entry != nil && !entry.acp && len(entry.pendingInputs) != 0 {
-		s.mu.Unlock()
-		return "", fmt.Errorf("%w: the agent is waiting for an answer in its terminal; answer it there, then send the message again", domain.ErrPromptNotSent)
 	}
 	if entry != nil && (entry.status == domain.RunRunning || entry.status == domain.RunNeedsAttention) {
 		workspace := entry.workspaceID

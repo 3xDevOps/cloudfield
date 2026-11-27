@@ -221,11 +221,10 @@ type localCall struct {
 
 // fakeLocal is both Config.Local and the Caller it returns.
 type fakeLocal struct {
-	mu     sync.Mutex
-	err    error
-	items  []protocol.AttentionItem
-	inject string
-	log    []localCall
+	mu    sync.Mutex
+	err   error
+	items []protocol.AttentionItem
+	log   []localCall
 }
 
 func (l *fakeLocal) open(_ context.Context, _ sshd.ConnectorGrant, _ string) (Caller, error) {
@@ -260,9 +259,6 @@ func (l *fakeLocal) Call(_ context.Context, method string, params json.RawMessag
 		raw, _ := json.Marshal(protocol.AttentionListResult{Items: l.items})
 		return raw, nil
 	case protocol.MethodRunInject:
-		if l.inject != "" {
-			return json.RawMessage(l.inject), nil
-		}
 		return json.RawMessage(`{"message":{"id":"m1","state":"sent"}}`), nil
 	case protocol.MethodRunInputRespond:
 		return json.RawMessage(`{"status":"answered"}`), nil

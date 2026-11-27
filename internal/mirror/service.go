@@ -73,6 +73,8 @@ type Service struct {
 	// fetched is when this process last refreshed each workspace's mirror
 	// with success.
 	fetched sync.Map
+	// launching is the refresh each workspace's last launch Warm accepted.
+	launching sync.Map
 }
 
 // ConfigureRequest is the administrator-supplied mirror source.
@@ -338,7 +340,7 @@ func (s *Service) Refresh(ctx context.Context, workspace domain.WorkspaceID) (Re
 	if m.Status == domain.MirrorStatusDisabling {
 		return s.result(*m, s.publicKey(workspace, *m)), disablingMirrorError(workspace)
 	}
-	return s.refreshLocked(ctx, workspace, *m)
+	return s.refreshLocked(ctx, workspace, *m, 0)
 }
 
 func (s *Service) Adopt(ctx context.Context, workspace domain.WorkspaceID, generation int64, expectedCommit string) (Result, error) {
@@ -465,6 +467,20 @@ func (s *Service) PurgeWorkspace(ctx context.Context, workspace domain.Workspace
 // from its last refresh. A launch calls it before taking the locks its
 // Capture runs under, so those are not held across the fetch.
 func (s *Service) Warm(ctx context.Context, workspace domain.WorkspaceID) error {
+	return s.warm(ctx, workspace, true)
+}
+
+// WarmAhead refreshes a configured mirror unless its last refresh is in the
+// first half of captureFresh, so a launch in the other half still starts
+// from it, or a launch's Warm accepted that refresh and its Capture can
+// still start from it. A client calls it while a member prepares a launch.
+// No launch is behind the call, so the refresh outlives a caller that
+// disconnects and its upstream fetch gives up after captureFresh.
+func (s *Service) WarmAhead(ctx context.Context, workspace domain.WorkspaceID) error {
+	return s.warm(context.WithoutCancel(ctx), workspace, false)
+}
+
+func (s *Service) warm(ctx context.Context, workspace domain.WorkspaceID, launch bool) error {
 	unlock := s.workspaceLock(workspace)
 	defer unlock()
 	m, err := s.store.GetWorkspaceMirror(ctx, workspace)
@@ -477,22 +493,36 @@ func (s *Service) Warm(ctx context.Context, workspace domain.WorkspaceID) error 
 	if m.Status == domain.MirrorStatusDisabling {
 		return nil
 	}
-	if _, fresh := s.fresh(ctx, workspace, *m); fresh {
-		return nil
+	at, _ := s.fetched.Load(workspace)
+	within := captureFresh
+	if accepted, ok := s.launching.Load(workspace); !launch && (!ok || accepted != at) {
+		within = captureFresh / 2
 	}
-	_, err = s.refreshLocked(ctx, workspace, *m)
-	return err
+	if _, fresh := s.fresh(ctx, workspace, *m, within); !fresh {
+		var fetchTimeout time.Duration
+		if !launch {
+			fetchTimeout = captureFresh
+		}
+		if _, err = s.refreshLocked(ctx, workspace, *m, fetchTimeout); err != nil {
+			return err
+		}
+		at, _ = s.fetched.Load(workspace)
+	}
+	if launch {
+		s.launching.Store(workspace, at)
+	}
+	return nil
 }
 
-// fresh reports when the source was last fetched, if that is recent enough
-// for a launch to start from the accepted commit.
-func (s *Service) fresh(ctx context.Context, workspace domain.WorkspaceID, m domain.WorkspaceMirror) (time.Time, bool) {
+// fresh reports when the source was last fetched, if that is less than
+// within ago and the accepted commit is still the base.
+func (s *Service) fresh(ctx context.Context, workspace domain.WorkspaceID, m domain.WorkspaceMirror, within time.Duration) (time.Time, bool) {
 	at, ok := s.fetched.Load(workspace)
 	if !ok || m.Status != domain.MirrorStatusReady || m.AcceptedCommit == "" {
 		return time.Time{}, false
 	}
 	fetched := at.(time.Time)
-	if age := s.now().Sub(fetched); age < 0 || age >= captureFresh {
+	if age := s.now().Sub(fetched); age < 0 || age >= within {
 		return time.Time{}, false
 	}
 	current, err := s.git.WorkspaceBranchCommit(ctx, workspace, m.Branch)
@@ -554,12 +584,12 @@ func (s *Service) Capture(ctx context.Context, workspace domain.WorkspaceID, cac
 		checked := s.now().UTC()
 		return captureResult(workspace, cachedCommit, m.Branch, m.SourceURL, checked, true, true), nil
 	}
-	if fetched, fresh := s.fresh(ctx, workspace, *m); fresh {
+	if fetched, fresh := s.fresh(ctx, workspace, *m, captureFresh); fresh {
 		return captureResult(workspace, m.AcceptedCommit, m.Branch, m.SourceURL, fetched, true, false), nil
 	}
 	// Refresh is called while this workspace lock is held; use the unlocked
 	// implementation to avoid recursively taking the same non-reentrant lock.
-	result, refreshErr := s.refreshLocked(ctx, workspace, *m)
+	result, refreshErr := s.refreshLocked(ctx, workspace, *m, 0)
 	if refreshErr != nil {
 		return CaptureResult{WorkspaceID: workspace, Commit: m.AcceptedCommit, Branch: m.Branch, Source: m.SourceURL, Configured: true}, refreshErr
 	}
@@ -574,14 +604,14 @@ func (s *Service) Capture(ctx context.Context, workspace domain.WorkspaceID, cac
 	return captureResult(workspace, commit, m.Branch, m.SourceURL, checked, true, false), nil
 }
 
-func (s *Service) refreshLocked(ctx context.Context, workspace domain.WorkspaceID, current domain.WorkspaceMirror) (Result, error) {
+func (s *Service) refreshLocked(ctx context.Context, workspace domain.WorkspaceID, current domain.WorkspaceMirror, fetchTimeout time.Duration) (Result, error) {
 	now := s.now().UTC()
 	s.fetched.Delete(workspace)
 	current.Status, current.LastError, current.LastAttemptAt = domain.MirrorStatusRefreshing, "", now
 	if err := s.store.SetWorkspaceMirror(ctx, &current); err != nil {
 		return Result{}, err
 	}
-	request := gitengine.MirrorRequest{SourceURL: current.SourceURL, Branch: current.Branch, Generation: current.Generation, Auth: current.Auth}
+	request := gitengine.MirrorRequest{SourceURL: current.SourceURL, Branch: current.Branch, Generation: current.Generation, Auth: current.Auth, FetchTimeout: fetchTimeout}
 	if current.Auth == domain.MirrorAuthDeployKey {
 		paths, pathErr := generationPaths(s.root, string(workspace), current.Generation)
 		if pathErr != nil {

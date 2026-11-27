@@ -116,8 +116,6 @@ func (s *Service) message(ctx context.Context, cb eventCallback) string {
 		return fmt.Sprintf("Queued: the member in control can approve or deny it, else it is delivered at %s.", *m.DeliverAfter)
 	case m.State == protocol.RoomMessageSent:
 		return "Sent to the session."
-	case m.Failure != nil:
-		return fmt.Sprintf("The message is %s: %s.", strings.ReplaceAll(string(m.State), "_", " "), m.Failure.Message)
 	default:
 		return fmt.Sprintf("The message is %s.", m.State)
 	}

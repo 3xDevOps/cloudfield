@@ -350,8 +350,6 @@ func TestARestartKeepsASessionWhoseGuestDoesNotAnswer(t *testing.T) {
 	if _, err := g.rt.get(c.id); err != nil {
 		t.Fatalf("after the restart the session's container: %v", err)
 	}
-	// A request for the terminal tries to take it up again, so it waits for
-	// the guest as well.
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	terminal, err := next.LookupDevelopmentTerminal(ctx, run.ID, "shell")
 	cancel()
@@ -359,6 +357,10 @@ func TestARestartKeepsASessionWhoseGuestDoesNotAnswer(t *testing.T) {
 		t.Fatalf("the terminal that could not be taken up is %+v, %v; want it unavailable with the guest's error", terminal.Process, err)
 	}
 	g.guests.answer(c.id)
+	terminal, err = next.LookupDevelopmentTerminal(t.Context(), run.ID, "shell")
+	if err != nil || strings.Contains(terminal.Process.Reason, context.DeadlineExceeded.Error()) {
+		t.Fatalf("the terminal once the guest answers is %+v, %v; want the request to have asked the guest again", terminal.Process, err)
+	}
 	g.requireTerminalOutput(t, run.ID)
 	if err := next.Pause(t.Context(), run.ID, g.member.ID); err != nil {
 		t.Fatalf("pause the kept session: %v", err)

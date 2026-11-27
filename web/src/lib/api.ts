@@ -740,6 +740,7 @@ export const api = {
     correlation_id?: string
     before?: string
     limit?: number
+    report_bodies?: boolean
   }) => call<CoordMessagesListResult>('coord.messages.list', params),
   runRoomStatus: (params: { workspace_id: string; run_id: string }, signal?: AbortSignal) =>
     call<RoomStatusResult>('run.room.status', params, signal),
@@ -938,6 +939,10 @@ export const api = {
   }) => call<WorkspaceMirrorResult>('workspace.mirror.configure', params),
   workspaceMirrorRefresh: (workspaceID: string) =>
     call<WorkspaceMirrorResult>('workspace.mirror.refresh', {
+      workspace_id: workspaceID,
+    }),
+  workspaceMirrorWarm: (workspaceID: string) =>
+    call<Record<string, never>>('workspace.mirror.warm', {
       workspace_id: workspaceID,
     }),
   workspaceMirrorAdopt: (workspaceID: string, generation: number, expectedCommit: string) =>

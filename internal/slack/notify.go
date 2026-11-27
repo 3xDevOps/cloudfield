@@ -198,21 +198,13 @@ func render(run *domain.Run, n *push.Need, it *protocol.AttentionItem, dashboard
 		page := "/?run=" + url.QueryEscape(string(run.ID))
 		notes = append(notes, "<"+dashboard+page+"|Open in Cloudfield>")
 	}
-	// A Standard agent's own request carries no options, and a message sent
-	// while it is open is refused.
-	inTerminal := it != nil && !run.ACP && (it.Kind == protocol.AttentionKindPermission || it.Kind == protocol.AttentionKindQuestion) &&
-		(it.Request == nil || len(it.Request.Options) == 0)
 	switch {
-	case inTerminal:
-		notes = append(notes, "Answer it in the session's terminal.")
 	case it != nil && len(buttons) == 0 && len([]rune(text)) > maxRequest:
 		notes = append(notes, "This request is longer than Slack shows; answer it in the Cloudfield dashboard.")
 	case it != nil && len(buttons) == 0:
 		notes = append(notes, "Answer it in the Cloudfield dashboard.")
 	}
-	if !inTerminal {
-		notes = append(notes, "Reply in this thread to message the session.")
-	}
+	notes = append(notes, "Reply in this thread to message the session.")
 	blocks = append(blocks, block{"type": "context", "elements": []block{{"type": "mrkdwn", "text": strings.Join(notes, " · ")}}})
 	return message{Text: escape(title + ": " + line), Blocks: blocks}
 }

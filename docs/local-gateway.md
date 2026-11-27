@@ -759,15 +759,11 @@ first: `{id, session_id: "aether-sudo", kind: "permission", title}`, where
 saved; a server restart ends the shim's wait. A report cannot open, close or
 replace one: the session ID and a `title` are refused.
 
-Repeated opens, closes, and unchanged replacements are idempotent. Only an
-update clears outstanding input: a `waiting` state, silence, prose, and idle
-execution do not. Claude Code's reporter sends `replace` with `[]` when its
-main agent's turn ends with no background task it waits for: a dialog blocks
-the turn it opens in, so none is open then.
+Repeated opens, closes, and unchanged replacements are idempotent. Turn
+completion, silence, prose, and idle execution do not clear outstanding input.
 The pending set is persisted independently from the last execution report and
 survives server restart for still-live sessions. Actual terminated or relaunched
-session lifetimes discard it, as does a move to another account, which starts
-a new agent; stale saved snapshots cannot restore a previous
+session lifetimes discard it; stale saved snapshots cannot restore a previous
 lifetime's requests. Persistence errors are returned to the reporter rather than
 announcing input state that was not saved.
 
@@ -1076,8 +1072,7 @@ carries `agent_delivery: "queued"` until the agent takes it
 A message the server could not hand to the agent at all is `not_sent` with
 `failure.message` the real error and `failure.code`: `session_unavailable`
 (no running agent, or a mode switch in flight), `prompt_not_sent` (such as a
-sleeping session that failed to wake, or a Standard session with a request its
-agent reported still in `pending_inputs`), `unsupported_image`,
+sleeping session that failed to wake), `unsupported_image`,
 `session_protected`, `steer_denied` or `access_revoked` (the sender lost
 **Steer** or membership before delivery), or `control_changed` (the session's
 control lease changed before delivery).
@@ -1276,6 +1271,7 @@ The dashboard also calls these methods through the same route:
 | `workspace.mirror.refresh` | `WorkspaceMirrorParams` (`{"workspace_id":"..."}`) | `WorkspaceMirrorResult` after fetching the configured source branch |
 | `workspace.mirror.adopt` | `WorkspaceMirrorAdoptParams` (`{"workspace_id":"...","generation":7,"expected_commit":"<full-reviewed-sha>"}`; all fields required) | `WorkspaceMirrorResult` after explicitly accepting exactly the reviewed retained candidate |
 | `workspace.mirror.disable` | `WorkspaceMirrorParams` (`{"workspace_id":"..."}`) | `WorkspaceMirrorResult` with `enabled:false`; the workspace becomes local-only |
+| `workspace.mirror.warm` | `WorkspaceMirrorParams` (`{"workspace_id":"..."}`) | `{}`. For any member who may launch in the workspace. Fetches the configured source branch unless a fetch succeeded in the last 5 seconds or a launch in progress took the last fetch as its base, and does nothing in a workspace without a mirror, so a launch in the next seconds starts without fetching. The fetch goes on when the caller disconnects and gives up after 10 seconds ([failure-handling.md](failure-handling.md#launch-and-mirror-failures)) |
 | `github.connect` | none | `GitHubConnectResult` (`{"login":"...","signing_key":"ssh-ed25519 ...","fingerprint":"SHA256:..."}`) - finishes the GitHub connection for the calling member |
 | `github.probe` | none | `GitHubProbeResult` (`{"status":"ok","version":"2.100.0","minimum":"2.81.0","detail":"gh version 2.100.0 (2026-09-03)\nhttps://github.com/cli/cli/releases/tag/v2.100.0","image":"ghcr.io/3xdevops/aether-standard:v0.2.0-alpha.7"}`) - the gh in the calling member's environment terminal |
 | `github.oauth.start` | `{}` | `GitHubOAuthResult`; admin-only, starts or returns the calling member's active authorization attempt |
@@ -2216,7 +2212,8 @@ the server snapshot from loading.
   reads authoritative `link.status` before showing the connected clone.
 - `workspace.mirror.status` requires read access; admitted collaborators and
   viewers can inspect the existing public result without changing a mirror.
-  `configure`, `refresh`, `adopt`, and `disable` remain admin-only.
+  `configure`, `refresh`, `adopt`, and `disable` remain admin-only. `warm`
+  is for any member who may launch in the workspace.
   `configure` receives the verified source URL, branch, auth mode, and (for
   generic SSH) the `known_hosts` file contents; the server generates and stores
   any deploy key.

@@ -588,9 +588,6 @@ func TestEnhancedRunPermissionAnsweredOnce(t *testing.T) {
 	if pending[0].Kind != "permission" {
 		t.Fatalf("pending %+v", pending)
 	}
-	if outcome, err := e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "then say pong"}, false, nil); err != nil || outcome != acphost.OutcomeQueued {
-		t.Fatalf("Inject beside the request = %q, %v, want queued", outcome, err)
-	}
 	if err := e.sched.ACPAnswer(run.ID, pending[0].ID, "allow", nil); err != nil {
 		t.Fatal(err)
 	}

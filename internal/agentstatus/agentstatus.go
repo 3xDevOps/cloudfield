@@ -213,19 +213,15 @@ func fromClaudeHook(hook claudeHook) (Report, bool) {
 		if held > 0 {
 			return Report{State: Working, Reason: BackgroundReason(held), Tools: agents == 0}, true
 		}
-		// A dialog blocks the turn it opens in and no held task means no
-		// subagent runs, so none is open: this closes a request whose own
-		// close was never reported.
-		closed := []domain.RunInputUpdate{{Operation: "replace", Requests: []domain.RunInputRequest{}}}
 		if hook.Event == "Stop" {
-			return Report{State: Idle, Reason: ReasonIdle, InputUpdates: closed, Stop: !hook.StopHookActive, LastMessage: hook.LastAssistantMessage}, true
+			return Report{State: Idle, Reason: ReasonIdle, Stop: !hook.StopHookActive, LastMessage: hook.LastAssistantMessage}, true
 		}
 		// "rate_limit" also covers transient 429s; only the vendor's
 		// usage-limit wording marks the account's limit.
 		if hook.Error == "rate_limit" && IsUsageLimitMessage(hook.LastAssistantMessage) {
-			return Report{State: Idle, Reason: hook.LastAssistantMessage, InputUpdates: closed, UsageLimit: true}, true
+			return Report{State: Idle, Reason: hook.LastAssistantMessage, UsageLimit: true}, true
 		}
-		return Report{State: Idle, Reason: ReasonFailed, InputUpdates: closed}, true
+		return Report{State: Idle, Reason: ReasonFailed}, true
 	case "SessionEnd":
 		if hook.SessionID == "" {
 			return Report{}, false

@@ -37,13 +37,10 @@ type Server struct {
 	threads  map[string]*thread
 	order    []string
 	requests []Request
-	// failSteer makes turn/steer fail as it does when the turn ends first.
-	failSteer bool
-	// experimental is set by a client that opted into the experimental API,
-	// which Codex 0.131.0 needs to list a thread's turns.
-	experimental bool
 	// lateInterrupt ends a turn before its turn/interrupt arrives.
 	lateInterrupt bool
+	// failSteer makes turn/steer fail as it does when the turn ends first.
+	failSteer bool
 }
 
 // unanswered is the result of a request the app-server never answers.
@@ -107,15 +104,11 @@ func (s *Server) answer(method string, raw json.RawMessage) (any, string) {
 		ThreadID       string `json:"threadId"`
 		ExpectedTurnID string `json:"expectedTurnId"`
 		ItemsView      string `json:"itemsView"`
-		Capabilities   struct {
-			ExperimentalAPI bool `json:"experimentalApi"`
-		} `json:"capabilities"`
 	}
 	_ = json.Unmarshal(raw, &p)
 	t := s.threads[p.ThreadID]
 	switch method {
 	case "initialize":
-		s.experimental = p.Capabilities.ExperimentalAPI
 		return map[string]any{"userAgent": "codexmock"}, ""
 	case "thread/loaded/list":
 		return map[string]any{"data": s.order}, ""
@@ -125,9 +118,6 @@ func (s *Server) answer(method string, raw json.RawMessage) (any, string) {
 		}
 		return map[string]any{"thread": t.json()}, ""
 	case "thread/turns/list":
-		if !s.experimental {
-			return nil, "thread/turns/list requires experimentalApi capability"
-		}
 		if t == nil || len(t.turns) == 0 {
 			return nil, fmt.Sprintf("thread %s is not materialized yet", p.ThreadID)
 		}
