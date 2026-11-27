@@ -44,7 +44,7 @@ func TestSessionEval(t *testing.T) {
 		t.Fatalf("CLOUDFIELD_SESSION_EVAL_MODE must be %s or %s", ModeStandard, ModeEnhanced)
 	}
 	model := os.Getenv("CLOUDFIELD_SESSION_EVAL_MODEL")
-	label := strings.NewReplacer("/", "-", " ", "-").Replace(envOr("CLOUDFIELD_SESSION_EVAL_LABEL", "unlabeled"))
+	label := strings.NewReplacer("/", "-", " ", "-").Replace(envOr("CLOUDFIELD_SESSION_EVAL_LABEL", "unlabeled")) + "-" + string(mode)
 	out := envOr("CLOUDFIELD_SESSION_EVAL_OUT", filepath.Join(os.TempDir(), "session-eval"))
 	if err = os.MkdirAll(out, 0o755); err != nil {
 		t.Fatal(err)

@@ -567,7 +567,7 @@ CLOUDFIELD_SESSION_EVAL_LABEL=main \
 | `CLOUDFIELD_SESSION_EVAL_ONLY` | all | Comma-separated scenario ids |
 | `CLOUDFIELD_SESSION_EVAL_PARALLEL` | `4` | Concurrent agent sessions |
 | `CLOUDFIELD_SESSION_EVAL_MAX_USD` | `5` | Passed to `claude --max-budget-usd`: one session stops when it has spent this |
-| `CLOUDFIELD_SESSION_EVAL_OUT` | `$TMPDIR/session-eval` | Where `<label>.md`, `<label>.json` and each session's `<label>-<scenario>-<n>.jsonl` transcript go |
+| `CLOUDFIELD_SESSION_EVAL_OUT` | `$TMPDIR/session-eval` | Where `<label>-<mode>.md`, `<label>-<mode>.json` and each session's `<label>-<mode>-<scenario>-<n>.jsonl` transcript go |
 
 A session also stops after 10 minutes, or one minute before the test's
 `-timeout`. The scenarios are in
@@ -585,7 +585,7 @@ A session also stops after 10 minutes, or one minute before the test's
 | `hours-of-work` | A quick fix beside an independent stream described as hours of work | 1 |
 | `another-agent` | A check by an agent from a different vendor | 1 |
 
-The first four ask whether the agent starts a subsession where none is wanted;
+`small-fix`, `independent-review`, `parallel-parts` and `subsession` ask whether the agent starts a subsession where none is wanted;
 the last three whether it starts one unasked where the role card says to. The
 fixture is small, so the last three state the size of the work in the prompt.
 
@@ -608,11 +608,14 @@ that ended a turn from one sent mid-turn.
 The Markdown report has a row per scenario: sessions passed, subsession starts,
 start attempts, the starts wanted, the agents the starts asked for, subagents
 started (`subagent_stats.spawned` in Claude Code's result), report outcomes,
-reports sent by the tool and by the command, nudges (Claude Code's `[Your
+report calls made with the tool and with the command, refused ones included, so
+their sum can exceed the accepted outcomes beside them, nudges (Claude Code's `[Your
 previous response had no visible output...]` prompts),
 socket requests, latency and cost. Cost
 is the figure `claude` reports. The bridge itself makes two `coord.status`
-requests when it starts, so every session records at least those. Below the
+requests when it starts, so every `enhanced` session records at least those
+and a `standard` one two fewer. A subagent's report call or nudge counts with
+the session's own. Below the
 table are the failed checks and, per session, the agent's own tool calls by
 name, every recorded request with its parameters, and the reply, with the
 questions a person should answer from them. Results are rewritten after every
@@ -623,8 +626,9 @@ What a real session has and the eval does not:
 - The co-author rule and the team memory brief the scheduler appends to the
   role card.
 - The hooks a launch loads: the inbox, status and wake hooks, and the server's
-  reminder to a turn that ends without a report. `aether-internal skill` still
-  says the launch loaded them, because `AETHER_MANAGED_HOOKS=1` is set.
+  reminder to a turn that ends without a report. In `standard` mode
+  `aether-internal skill` still says the launch loaded them, because
+  `AETHER_MANAGED_HOOKS=1` is set.
 - A container. The agent sees your machine's tools and paths.
 
 The two modes differ in what the agent can report with. `enhanced` registers
@@ -632,8 +636,12 @@ the MCP bridge, so the agent has `aether_report`, and sets `AETHER_ENHANCED`.
 `standard` registers no MCP server, so the agent reports with the command, and
 sets `AETHER_IDLE_WAKE` and `AETHER_MANAGED_HOOKS`; a real Standard session has
 the bridge only when its owner [registers it](mcp-bridge.md#registration).
-Both run `claude -p`: a real Enhanced session drives Claude Code through its
-ACP adapter, which the eval does not.
+Both run the `claude` on your `PATH` with `-p`: a real Enhanced session drives
+the Claude Code version its ACP adapter pins through that adapter, which the
+eval does not. In the runs so far Claude Code offered the bridge's tools only
+through its tool search, and agents reported with the command instead. Before
+the modes existed every run was what `standard` is now plus the bridge, so
+earlier results do not compare with either mode.
 
 Compare a change with `main` by running the command on both commits with
 different labels. Model output varies between sessions, so a few sessions per
