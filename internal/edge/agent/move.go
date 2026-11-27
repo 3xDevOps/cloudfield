@@ -159,12 +159,13 @@ func (a *Agent) Move(ctx context.Context, target string, held *HeldPin, cmds Com
 			to, edgeproto.EdgeKeyFingerprint(info.Key), edgeproto.EdgeKeyFingerprint(pinned), source)
 	}
 	second, err := a.probe(ctx, spelled, &held.p)
-	if other, ok := otherSpelling(spelled); err != nil && ok {
+	if other, ok := otherSpelling(spelled); moved.Retired && errors.Is(err, errNoReady) && ok {
 		// The edge verifies the signature against its own spelling, with
-		// or without :443, which nothing before this probe tells.
+		// or without :443, which after a 410 nothing this run saw tells.
+		// Otherwise the spelling the edge announced is the only one tried.
 		var retryErr error
 		if second, retryErr = a.probe(ctx, other, &held.p); retryErr != nil {
-			return Moved{}, fmt.Errorf("%w; tried %s and %s", err, spelled, other)
+			return Moved{}, fmt.Errorf("%w; tried %s and %s: %v", err, spelled, other, retryErr)
 		}
 		spelled, err = other, nil
 	}

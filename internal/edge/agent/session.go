@@ -104,6 +104,16 @@ func (noAnswer) Is(target error) bool { return target == errNoAnswer }
 
 func (n noAnswer) Unwrap() error { return n.error }
 
+// errNoReady is an enrollment the edge ended after the hello without a
+// ready, as a relay does for a signature it does not verify.
+var errNoReady = errors.New("no ready")
+
+type noReady struct{ error }
+
+func (noReady) Is(target error) bool { return target == errNoReady }
+
+func (n noReady) Unwrap() error { return n.error }
+
 // noRedirect keeps every dial and probe on the origin it named.
 var noRedirect = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
@@ -255,7 +265,7 @@ func (a *Agent) handshake(ctx context.Context, c *websocket.Conn, origin string,
 	}
 	m, err = readMessage(ctx, c, handshakeTimeout)
 	if err != nil {
-		return enrollment{}, fmt.Errorf("read ready: %w", err)
+		return enrollment{}, fmt.Errorf("read ready: %w", noReady{err})
 	}
 	ready, ok := m.(edgeproto.Ready)
 	if !ok {

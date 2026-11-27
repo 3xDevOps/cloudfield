@@ -254,6 +254,11 @@ func TestMoveToAnOriginWrittenWith443(t *testing.T) {
 			if want := (Moved{To: target, Retired: retired}); err != nil || got != want {
 				t.Errorf("retired %v, typed %s: %+v, %v; want %+v", retired, typed, got, err, want)
 			}
+			// Typed as the edge spells it, or as announced, one enrollment
+			// is enough: nothing stored named the other spelling to try.
+			if hellos := len(to.hellos); (retired && typed == bare) != (hellos == 2) || hellos == 0 {
+				t.Errorf("retired %v, typed %s: %d enrollments at the target", retired, typed, hellos)
+			}
 		}
 	}
 }
@@ -266,8 +271,25 @@ func TestMoveTriesBothSpellingsOf443(t *testing.T) {
 	to := newFakeEdge(t)
 	servedAs(t, to, "https://target.example.test:8443")
 	got, err := moveHeld(t, moveAgentAt(t, from, to.pub), bare)
-	if err == nil || !strings.HasSuffix(err.Error(), "; tried "+bare+" and "+bare+":443") {
-		t.Fatalf("move: %+v, %v; want both spellings named", got, err)
+	if err == nil || !strings.Contains(err.Error(), "; tried "+bare+" and "+bare+":443: edgeagent: enroll at "+bare+":443: read ready: ") {
+		t.Fatalf("move: %+v, %v; want both spellings and both errors", got, err)
+	}
+}
+
+// With the old address answering, the spelling it announces is the only
+// one tried: a target that verifies only the other spelling refuses.
+func TestMoveTriesOnlyTheAnnouncedSpelling(t *testing.T) {
+	const bare = "https://target.example.test"
+	from := newFakeEdge(t)
+	to := newFakeEdgeWithKey(t, from.priv)
+	servedAs(t, to, bare)
+	from.relayOrigins = []string{from.origin, bare + ":443"}
+	to.relayOrigins = []string{from.origin, bare}
+	if got, err := moveHeld(t, moveAgentAt(t, from.origin, from.pub), bare); err == nil {
+		t.Fatalf("move: %+v; want a refusal", got)
+	}
+	if hellos := len(to.hellos); hellos != 1 {
+		t.Errorf("%d enrollments at the target, want 1", hellos)
 	}
 }
 
