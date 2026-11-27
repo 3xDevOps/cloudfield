@@ -72,6 +72,8 @@ func TestEdgeStatusRetiringRow(t *testing.T) {
 			notices: edgeagent.StoredNotices{Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: other, Replacement: "https://edge-third.example.test"}}},
 			row: "retiring     " + other + " is retiring; move this server with: the service's --edge-url flag set to https://edge-third.example.test " +
 				"(a restart keeps the flag, so edge move does not apply), then sudo systemctl restart aether-server"},
+		{name: "running from the service's flag at another address", status: edgeagent.Status{Edge: other, Connected: true, Since: since, PID: os.Getpid(), Heartbeat: now, EdgeURLFlag: true},
+			row: "running      the server runs at " + other + " from the service's --edge-url flag, which a restart keeps; edge-url " + old + " applies only once the service drops the flag"},
 		{name: "a damaged entry that still parses", status: connected,
 			notices: edgeagent.StoredNotices{Notices: []edgeproto.Notice{{State: edgeproto.NoticeRetiring, Origin: old, Replacement: "not-a-url"}}}},
 		{name: "a stale connection at another address", status: edgeagent.Status{Edge: other, Connected: true, Since: since, PID: os.Getpid(), Heartbeat: now.Add(-time.Hour)},

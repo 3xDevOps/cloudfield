@@ -256,6 +256,24 @@ func TestEdgeMoveNeedsAPinnedKey(t *testing.T) {
 	}
 }
 
+// A service started with --edge-url and no edge-url in the file is on the
+// edge: edge status reports it instead of saying the edge is off.
+func TestEdgeStatusOfAServiceFlag(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "server.conf")
+	if err := serversetup.WriteConfig(path, map[string]string{"data-dir": dir}); err != nil {
+		t.Fatal(err)
+	}
+	if err := edgeCmd([]string{"status", "--config", path}); err == nil || !strings.Contains(err.Error(), "the edge is off") {
+		t.Fatalf("status with no edge: %v, want the edge off", err)
+	}
+	writeJSON(t, filepath.Join(edgeagent.StateDir(dir), "status.json"),
+		edgeagent.Status{Edge: "https://edge-flag.example.test", Error: "server stopped", Since: time.Now(), EdgeURLFlag: true})
+	if err := edgeCmd([]string{"status", "--config", path}); !errors.Is(err, errNotConnected) {
+		t.Fatalf("status of a service on the edge by its flag: %v, want %v", err, errNotConnected)
+	}
+}
+
 // A running server that took its edge-url from --edge-url refuses edge
 // move before it dials anything: the file it would write does not apply.
 func TestEdgeMoveRefusesAServiceFlag(t *testing.T) {

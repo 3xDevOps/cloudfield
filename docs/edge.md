@@ -273,7 +273,11 @@ systemctl restart aether-server`. `edge move` on such a server refuses before it
 anything: `the running server took its edge-url, <old>, from the --edge-url
 flag, which a restart keeps, so edge-url in <config file> would not apply;
 nothing changed. Change the service's --edge-url flag to <new>, then run sudo
-systemctl restart aether-server`.
+systemctl restart aether-server`. `edge status` reports such a server even when the config
+file has no `edge-url`, prints `running      the server runs at <address> from
+the service's --edge-url flag, which a restart keeps; edge-url <file's address>
+applies only once the service drops the flag` where the file names another
+address, and the connect warning gives the flag advice instead of `edge move`.
 
 `edge move` holds the pin file open from its start. Each enrollment, and the
 write of `edge-url`, needs that same pin file still in place, so a key pinned

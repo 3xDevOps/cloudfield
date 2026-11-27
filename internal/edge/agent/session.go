@@ -327,7 +327,11 @@ func (a *Agent) session(ctx context.Context) (time.Duration, error) {
 	}
 	if stored, serr := a.state.Notices(a.serverID); serr == nil && !stored.Received.Before(start) {
 		if n, ok := stored.For(a.origin); ok {
-			slog.Warn("edge: "+NoticeLine(n, "sudo cloudfield-server edge move "+shellquote.Quote(n.Replacement)+" (with the service's --config <file>, if it has one)"), "edge", a.origin, "replacement", n.Replacement, "date", n.Date, "first_use", e.pinned)
+			move := "sudo cloudfield-server edge move " + shellquote.Quote(n.Replacement) + " (with the service's --config <file>, if it has one)"
+			if a.cfg.EdgeURLFlag {
+				move = "the service's --edge-url flag set to " + shellquote.Quote(n.Replacement) + " (a restart keeps the flag, so edge move does not apply), then a restart"
+			}
+			slog.Warn("edge: "+NoticeLine(n, move), "edge", a.origin, "replacement", n.Replacement, "date", n.Date, "first_use", e.pinned)
 		}
 	}
 	if err = a.reconcileOwner(s, ready.State); err != nil {

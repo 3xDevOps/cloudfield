@@ -113,6 +113,13 @@ func edgeCmd(args []string) error {
 		return errors.New(edgeUsage)
 	}
 	edgeURL := string(*o.edgeURL)
+	if edgeURL == "" && sub == "status" {
+		// A service started with --edge-url runs on the edge whatever the
+		// file says.
+		if st, _, err := edgeagent.OpenState(*o.dataDir).Status(); err == nil && st.EdgeURLFlag {
+			edgeURL = st.Edge
+		}
+	}
 	if edgeURL == "" {
 		return fmt.Errorf("the edge is off: edge-url is empty in %s; turn it on with:\n  %saether-server config set edge-url %s%s",
 			configPath, sudoPrefix(), edgeagent.DefaultURL, configFlag(configPath))
@@ -200,6 +207,8 @@ func edgeStatus(w io.Writer, dataDir, edgeURL, configPath string, policy edgepro
 			line += firstUseNote
 		}
 		_, _ = fmt.Fprintf(tw, "retiring\t%s\n", line)
+	case status.EdgeURLFlag && elsewhere:
+		_, _ = fmt.Fprintf(tw, "running\tthe server runs at %s from the service's --edge-url flag, which a restart keeps; edge-url %s applies only once the service drops the flag\n", status.Edge, edgeURL)
 	case status.Connected && stale == nil && elsewhere:
 		_, _ = fmt.Fprintf(tw, "running\tthe running server is at %s; restart to apply edge-url: %s\n", status.Edge, cmds.Restart)
 	case elsewhere && (noticed || noticedThere):
