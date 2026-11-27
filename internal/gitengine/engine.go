@@ -145,6 +145,9 @@ type Engine struct {
 	pruneCtx           context.Context
 	cancelPrunes       context.CancelFunc
 	prunesRunning      sync.WaitGroup
+	// preparing counts the background preparations of checkout disks. Close
+	// waits for them to stop; a build already started outlives them.
+	preparing sync.WaitGroup
 }
 
 // New validates cfg, applies defaults, and creates the repos and checkouts
@@ -211,6 +214,7 @@ func (e *Engine) Close() error {
 		w.stop(false)
 	}
 	e.prunesRunning.Wait()
+	e.preparing.Wait()
 	if e.checkoutsRoot != nil {
 		return e.checkoutsRoot.Close()
 	}
@@ -270,6 +274,11 @@ func (e *Engine) RemoveWorkspaceRepo(ctx context.Context, ws domain.WorkspaceID)
 	}
 	if err := os.RemoveAll(removed); err != nil {
 		return fmt.Errorf("gitengine: remove workspace repository: %w", err)
+	}
+	if e.cfg.VM != nil && e.cfg.VM.Disks != nil {
+		if err := e.cfg.VM.Disks.ForgetCheckoutDisks(string(ws)); err != nil {
+			return fmt.Errorf("gitengine: remove workspace repository: %w", err)
+		}
 	}
 	e.mu.Lock()
 	for run, info := range e.registry {

@@ -307,7 +307,7 @@ Messages from other sessions and people ([coordination.md](coordination.md)) rea
 Enhanced session without hooks. When mail arrives and the session has no turn running,
 the server sends the agent one prompt telling it to run
 `cloudfield-internal inbox` and acknowledge the batch, ending with
-`End this turn with exactly one report as your last action: aether_report, or /usr/local/bin/aether-internal report where you have no aether_report tool.`
+`Report when this turn's work is done, then reply as text: aether_report, or /usr/local/bin/aether-internal report where you have no aether_report tool.`
 Mail that arrives during a turn waits until the turn ends; the agent is not
 told mid-turn. Messages that arrive together
 share one prompt, and each set of new unread messages starts at most one turn,
