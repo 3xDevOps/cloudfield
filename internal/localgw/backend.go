@@ -430,11 +430,11 @@ func (b *sshBackend) callOnce(ctx context.Context, method string, params json.Ra
 	return nil, endToEnd(cfg, err)
 }
 
-// keptReads holds the methods that may ride a kept channel: the reads the
-// dashboard makes as a page loads, which change nothing on the server. A
-// kept channel sends a call sooner than a new one would, before the caller
-// can cancel it or the connection has proved itself, so nothing that
-// writes goes on one.
+// keptReads holds the methods that may ride a kept channel: reads the
+// dashboard makes as a page loads, which change nothing on the server. On
+// a link that dies or a server that stalls, a call on a kept channel fails
+// at its watchdog with its outcome unknown, where one that opens a channel
+// waits or is redialed; a write must keep the second behaviour.
 var keptReads = map[string]bool{
 	protocol.MethodServerInfo:         true,
 	protocol.MethodWorkspaceList:      true,
@@ -451,7 +451,6 @@ var keptReads = map[string]bool{
 	protocol.MethodPresenceRoster:     true,
 	protocol.MethodLaunchDefaultsGet:  true,
 	protocol.MethodAssistantStatus:    true,
-	protocol.MethodServerUpdateStatus: true,
 	protocol.MethodServerSysboxStatus: true,
 	protocol.MethodWorkspaceTimeline:  true,
 	protocol.MethodRunGet:             true,
