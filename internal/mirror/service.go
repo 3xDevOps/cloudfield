@@ -461,12 +461,21 @@ func (s *Service) PurgeWorkspace(ctx context.Context, workspace domain.Workspace
 	return nil
 }
 
-// Warm refreshes a configured mirror unless its last refresh is in the first
-// half of captureFresh, so a Capture in the other half still starts from
-// it. A launch calls it before taking the locks its Capture runs under, so
-// those are not held across the fetch, and a client calls it while a member
-// prepares a launch.
+// Warm refreshes a configured mirror unless a Capture would already start
+// from its last refresh. A launch calls it before taking the locks its
+// Capture runs under, so those are not held across the fetch.
 func (s *Service) Warm(ctx context.Context, workspace domain.WorkspaceID) error {
+	return s.warm(ctx, workspace, captureFresh)
+}
+
+// WarmAhead refreshes a configured mirror unless its last refresh is in the
+// first half of captureFresh, so a launch in the other half still starts
+// from it. A client calls it while a member prepares a launch.
+func (s *Service) WarmAhead(ctx context.Context, workspace domain.WorkspaceID) error {
+	return s.warm(ctx, workspace, captureFresh/2)
+}
+
+func (s *Service) warm(ctx context.Context, workspace domain.WorkspaceID, within time.Duration) error {
 	unlock := s.workspaceLock(workspace)
 	defer unlock()
 	m, err := s.store.GetWorkspaceMirror(ctx, workspace)
@@ -479,7 +488,7 @@ func (s *Service) Warm(ctx context.Context, workspace domain.WorkspaceID) error 
 	if m.Status == domain.MirrorStatusDisabling {
 		return nil
 	}
-	if _, fresh := s.fresh(ctx, workspace, *m, captureFresh/2); fresh {
+	if _, fresh := s.fresh(ctx, workspace, *m, within); fresh {
 		return nil
 	}
 	_, err = s.refreshLocked(ctx, workspace, *m)

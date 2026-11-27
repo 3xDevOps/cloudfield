@@ -36,6 +36,7 @@ type MirrorService interface {
 	Disable(context.Context, domain.WorkspaceID) (mirrorservice.Result, error)
 	Capture(context.Context, domain.WorkspaceID, string) (mirrorservice.CaptureResult, error)
 	Warm(context.Context, domain.WorkspaceID) error
+	WarmAhead(context.Context, domain.WorkspaceID) error
 }
 
 func (s *Server) mirrors() (MirrorService, *protocol.Error) {
@@ -80,7 +81,7 @@ func (s *Server) workspaceMirrorWarm(ctx context.Context, _ domain.MemberID, par
 	if perr != nil {
 		return nil, perr
 	}
-	if err := svc.Warm(ctx, domain.WorkspaceID(p.WorkspaceID)); err != nil {
+	if err := svc.WarmAhead(ctx, domain.WorkspaceID(p.WorkspaceID)); err != nil {
 		return nil, rpcError(err)
 	}
 	return struct{}{}, nil

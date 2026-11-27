@@ -79,7 +79,8 @@ func (f *mirrorRPCFake) Disable(_ context.Context, _ domain.WorkspaceID) (mirror
 func (f *mirrorRPCFake) Capture(context.Context, domain.WorkspaceID, string) (mirrorservice.CaptureResult, error) {
 	return mirrorservice.CaptureResult{}, errors.New("not used")
 }
-func (f *mirrorRPCFake) Warm(context.Context, domain.WorkspaceID) error {
+func (f *mirrorRPCFake) Warm(context.Context, domain.WorkspaceID) error { return nil }
+func (f *mirrorRPCFake) WarmAhead(context.Context, domain.WorkspaceID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, "warm")

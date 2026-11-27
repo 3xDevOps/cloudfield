@@ -32,15 +32,18 @@ func TestCaptureStartsFromARefreshYoungerThanCaptureFresh(t *testing.T) {
 	warmed := now
 	capture(1, warmed)
 	now = now.Add(captureFresh/2 - time.Second)
-	if err = svc.Warm(ctx, "w"); err != nil {
+	if err = svc.WarmAhead(ctx, "w"); err != nil {
 		t.Fatal(err)
 	}
 	capture(1, warmed)
 	now = now.Add(captureFresh/2 - time.Second)
+	if err = svc.Warm(ctx, "w"); err != nil {
+		t.Fatal(err)
+	}
 	capture(1, warmed)
 	now = now.Add(time.Second)
-	if err = svc.Warm(ctx, "w"); err != nil || git.refreshCalls != 2 {
-		t.Fatalf("warm in the second half of the window = %v after %d refreshes, want a second", err, git.refreshCalls)
+	if err = svc.WarmAhead(ctx, "w"); err != nil || git.refreshCalls != 2 {
+		t.Fatalf("warm ahead in the second half of the window = %v after %d refreshes, want a second", err, git.refreshCalls)
 	}
 	capture(2, now)
 
