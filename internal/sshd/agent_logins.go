@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
@@ -39,8 +40,8 @@ type LoginSignIns interface {
 	// member to them and removes those with no row.
 	ReconcileLogins(ctx context.Context, member domain.MemberID) error
 	// LoginInUse lists the sessions on an added login, moving to it, or
-	// queued to start on it.
-	LoginInUse(ctx context.Context, account domain.Account) ([]domain.RunID, error)
+	// queued to start on it, each with the member who owns it.
+	LoginInUse(ctx context.Context, account domain.Account) (map[domain.RunID]domain.MemberID, error)
 }
 
 var errNoAddedLogins = &protocol.Error{Code: protocol.CodeUnavailable, Message: "this server keeps no added logins"}
@@ -225,21 +226,22 @@ func (s *Server) agentLoginRemove(ctx context.Context, member domain.MemberID, r
 			// named.
 			var own []string
 			teammates := 0
-			for _, id := range inUse {
-				if r, getErr := s.cfg.Store.GetRun(ctx, id); getErr == nil && r.MemberID == member {
+			for id, owner := range inUse {
+				if owner == member {
 					own = append(own, string(id))
 				} else {
 					teammates++
 				}
 			}
+			slices.Sort(own)
 			var parts []string
 			if len(own) > 0 {
-				parts = append(parts, "your sessions "+strings.Join(own, ", "))
+				parts = append(parts, "your sessions "+strings.Join(own, ", ")+" (end them)")
 			}
 			if teammates > 0 {
-				parts = append(parts, fmt.Sprintf("%d teammates' sessions", teammates))
+				parts = append(parts, fmt.Sprintf("%d of your teammates' sessions, which hold it until they end and their containers go (revoking the share you gave a teammate, with cloudfield account revoke <member-id>, moves their running sessions off it)", teammates))
 			}
-			return nil, &protocol.Error{Code: protocol.CodeConflict, Message: fmt.Sprintf("login %q is in use by %s; end your sessions, and turn its use for shares off to move teammates off it", login.Name, strings.Join(parts, " and "))}
+			return nil, &protocol.Error{Code: protocol.CodeConflict, Message: fmt.Sprintf("login %q is in use by %s", login.Name, strings.Join(parts, " and "))}
 		}
 	}
 	// The directory goes first, wherever a merge left it, so a removal that

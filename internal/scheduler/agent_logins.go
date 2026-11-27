@@ -863,11 +863,12 @@ func loginOf(id domain.LoginID) domain.LoginID {
 	return ""
 }
 
-// LoginInUse lists the sessions a removal of an added login must wait for:
-// those on it that have not ended, those a move is taking to it, and the
-// subsessions queued or launching on it. Callers hold the launch
-// authorization mutex, under which launches and moves choose their login.
-func (s *Scheduler) LoginInUse(ctx context.Context, account domain.Account) ([]domain.RunID, error) {
+// LoginInUse lists, with the member who owns each, the sessions a removal
+// of an added login must wait for: those on it that have not ended, those a
+// move is taking to it, and the subsessions queued or launching on it.
+// Callers hold the launch authorization mutex, under which launches and
+// moves choose their login.
+func (s *Scheduler) LoginInUse(ctx context.Context, account domain.Account) (map[domain.RunID]domain.MemberID, error) {
 	// Before recovery has rebuilt the live sessions, a retained container
 	// on the login could go unseen.
 	select {
@@ -879,28 +880,35 @@ func (s *Scheduler) LoginInUse(ctx context.Context, account domain.Account) ([]d
 	if err != nil {
 		return nil, err
 	}
-	var ids []domain.RunID
+	inUse := make(map[domain.RunID]domain.MemberID)
 	for _, r := range runs {
 		if r.Account() == account {
-			ids = append(ids, r.ID)
+			inUse[r.ID] = r.MemberID
 		}
 	}
-	var held []domain.RunID
+	var moving, held []domain.RunID
 	s.mu.Lock()
 	for id, entry := range s.runs {
 		if entry.accountSwap != nil && entry.accountSwap.to() == account {
-			ids = append(ids, id)
+			moving = append(moving, id)
 		}
 		if entry.containerID != "" {
 			held = append(held, id)
 		}
 	}
 	s.mu.Unlock()
+	for _, id := range moving {
+		r, getErr := s.cfg.Store.GetRun(ctx, id)
+		if getErr != nil {
+			return nil, fmt.Errorf("session %s moving to the login: %w", id, getErr)
+		}
+		inUse[id] = r.MemberID
+	}
 	// A session that ended keeps its container while it may be reopened,
 	// still mounting the login.
 	for _, id := range held {
 		if r, getErr := s.cfg.Store.GetRun(ctx, id); getErr == nil && r.Account() == account {
-			ids = append(ids, id)
+			inUse[id] = r.MemberID
 		}
 	}
 	if children, ok := s.cfg.Store.(interface {
@@ -913,13 +921,12 @@ func (s *Scheduler) LoginInUse(ctx context.Context, account domain.Account) ([]d
 			}
 			for _, c := range reserved {
 				if (domain.Account{Member: c.AccountID, Login: c.AccountLogin}) == account {
-					ids = append(ids, c.RunID)
+					inUse[c.RunID] = c.OwnerID
 				}
 			}
 		}
 	}
-	slices.Sort(ids)
-	return slices.Compact(ids), nil
+	return inUse, nil
 }
 
 // ReconcileLogins makes the login directories match the rows: a directory

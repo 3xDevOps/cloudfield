@@ -5,7 +5,6 @@ import (
 	"os"
 	"path"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -119,7 +118,7 @@ func TestATeammatesSessionMountsTheSharedAddedLogin(t *testing.T) {
 			return false
 		}
 	})
-	if inUse, err := e.sched.LoginInUse(t.Context(), work); err != nil || !slices.Contains(inUse, run.ID) {
+	if inUse, err := e.sched.LoginInUse(t.Context(), work); err != nil || inUse[run.ID] != e.member.ID {
 		t.Fatalf("LoginInUse = %v, %v; want the session", inUse, err)
 	}
 }
