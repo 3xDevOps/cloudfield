@@ -55,7 +55,6 @@ export interface AcpSession {
   stateSeq: number
   pending: SessionRequest[]
   live: boolean
-  /** The ack's `starting`. */
   starting: boolean
   stream: StreamState
   streamError?: string

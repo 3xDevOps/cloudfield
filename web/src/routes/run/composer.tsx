@@ -449,14 +449,14 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
   const lastLive = useRef<{ canAct: boolean; waiting: boolean }>(undefined)
   if (stream === 'live') lastLive.current = { canAct: control.canAct, waiting: backgroundWait(run, session) !== null }
   const shape = lastLive.current
-  const starting = stream === 'live' && !session?.live && (session?.starting ?? false)
+  const starting = session?.starting ?? false
   const gate = enhancedBlock({
     run,
     maySteer,
     canReopen: maySteer && cap.hasMethod('run.relaunch') && canReopenRun(run),
     refused: stream === 'refused' ? session?.streamError ?? 'The agent stream was refused.' : undefined,
     sessionLive: shape ? session?.live ?? false : true,
-    starting: session?.starting ?? false,
+    starting,
     pending: session?.pending.length ?? 0,
     hasLease: shape?.canAct ?? true,
   })
@@ -606,7 +606,7 @@ function EnhancedComposer({ run, agent, textarea, autoFocus, collapsed, docked, 
 
   const stops = pill === 'interrupt' || pill === 'stop-waiting'
   const pillDisabled = busy || Boolean(connecting) || images.uploading || (!stops && pill !== 'resume' && (!images.ready || !hasContent || refusedImages || dictating))
-  const hintText = connecting ?? (starting ? startingHint : moderated ? (control.waits ? 'Delivers in 45 s unless the controller decides sooner.' : '') : turnRunning || pill === 'stop-waiting' || pill === 'resume' ? pillHint[pill] : '')
+  const hintText = connecting ?? (moderated ? (control.waits ? 'Delivers in 45 s unless the controller decides sooner.' : '') : turnRunning || pill === 'stop-waiting' || pill === 'resume' ? pillHint[pill] : starting ? startingHint : '')
   const keyHint = coarse || stops ? undefined : pill === 'steer' ? `${shortcutLabel('composer-send')}; ${shortcutLabel('composer-queue')} queues` : shortcutLabel(pill === 'queue' && state?.steering ? 'composer-queue' : 'composer-send')
 
   return (

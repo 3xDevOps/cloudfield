@@ -92,13 +92,15 @@ describe.each([{ mode: 'tui', acp: false }, { mode: 'acp', acp: true }] as const
 describe('a launched Enhanced session whose agent is still starting', () => {
   const ack = { ok: true as const, seq: 0, replay: 0, epoch: 0, has_control: false }
 
-  it('takes a message instead of refusing it, until the start ends without an agent', () => {
+  it('takes a message instead of refusing it, until the start ends without an agent', async () => {
     mount({ mode: 'acp', acp: true })
     act(() => {
       useStore.getState().acpStream('run_1', 'live')
       useStore.getState().acpAck('run_1', { ...ack, live: false, starting: true })
     })
-    expect((screen.getByPlaceholderText('Message the agent while it starts') as HTMLTextAreaElement).disabled).toBe(false)
+    fireEvent.change(screen.getByPlaceholderText('Message the agent while it starts'), { target: { value: 'also add tests' } })
+    fireEvent.click(screen.getByRole('button', { name: /Send/ }))
+    await waitFor(() => expect(api.runInject).toHaveBeenCalledWith('run_1', 'also add tests', expect.any(String), expect.anything()))
 
     act(() => useStore.getState().acpAck('run_1', { ...ack, live: false }))
     expect(screen.getByText('The agent is not running.')).toBeTruthy()
