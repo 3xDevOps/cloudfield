@@ -231,9 +231,9 @@ func printLogins(w io.Writer, logins []loginUsage) error {
 			usage = strings.Join(used, ", ")
 		case l.Usage != nil && l.Usage.Status != "ok":
 			usage = l.Usage.Status
-			if l.Usage.Error != "" {
-				problems = append(problems, fmt.Sprintf("usage of login %s: %s", l.Name, l.Usage.Error))
-			}
+		}
+		if l.Usage != nil && l.Usage.Error != "" {
+			problems = append(problems, fmt.Sprintf("usage of login %s: %s", l.Name, l.Usage.Error))
 		}
 		billed := "-"
 		if l.PerUse {

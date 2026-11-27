@@ -16,7 +16,7 @@ func TestPrintLoginsInPriorityOrder(t *testing.T) {
 	err := printLogins(&out, []loginUsage{
 		{
 			AgentLogin: protocol.AgentLogin{ID: "lgn-test1", Name: "work", Kind: "subscription", Plan: "max", Email: "ada@work.example.test", Automatic: true, Shared: true, Position: 3},
-			Usage:      &protocol.UsageProvider{Provider: "claude", Status: "ok", Windows: []protocol.UsageWindow{{Label: "5h", UsedPercent: 12}, {Label: "7d", UsedPercent: 40.4}}},
+			Usage:      &protocol.UsageProvider{Provider: "claude", Status: "stale", Error: "usage endpoint answered 429; showing the last read", Windows: []protocol.UsageWindow{{Label: "5h", UsedPercent: 12}, {Label: "7d", UsedPercent: 40.4}}},
 		},
 		{
 			AgentLogin: protocol.AgentLogin{ID: "default", Name: "default", Kind: "subscription", Plan: "pro", Email: "ada@home.example.test", Automatic: true, Shared: false, Position: 0},
@@ -34,6 +34,7 @@ func TestPrintLoginsInPriorityOrder(t *testing.T) {
 1  work     subscription  max   ada@work.example.test  5h 12%, 7d 40%  on         on      -
 2  default  subscription  pro   ada@home.example.test  not read        on         off     -
 3  console  console       -     ada@org.example.test   unavailable     off        on      per use
+usage of login work: usage endpoint answered 429; showing the last read
 usage of login default: rpc error -32010: account.usage: usage service not configured
 usage of login console: no usage for a Console login
 `
