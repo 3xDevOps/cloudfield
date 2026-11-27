@@ -89,6 +89,7 @@ type lazyRound struct {
 	t       *testing.T
 	h       *checkoutHost
 	arm     string
+	kind    string
 	gib     int
 	round   int
 	bare    bool
@@ -144,10 +145,10 @@ func TestKVMZZLazyFirstSave(t *testing.T) {
 		lazy.reveal = dump
 	}
 	version, _ := exec.Command("cloud-hypervisor", "--version").CombinedOutput()
-	fmt.Printf("LAZY-ENV gib=%d rounds=%d arms=%s ch=%q engine_dir=%s engine_fs=%s dump_dir=%s dump_fs=%s kernel=%q thp=%q shmem_thp=%q meminfo=%q\n",
+	fmt.Printf("LAZY-ENV gib=%d rounds=%d arms=%s ch=%q engine_dir=%s engine_fs=%s dump_dir=%s dump_fs=%s kernel=%q thp=%q shmem_thp=%q use_zero_page=%s meminfo=%q\n",
 		gib, rounds, strings.Join(arms, ","), strings.TrimSpace(string(version)), h.e.root, lazyFS(h.e.root), dump, lazyFS(cmp.Or(dump, "/")),
 		lazyRead("/proc/sys/kernel/osrelease"), lazyRead("/sys/kernel/mm/transparent_hugepage/enabled"),
-		lazyRead("/sys/kernel/mm/transparent_hugepage/shmem_enabled"), strings.Join(strings.Fields(strings.SplitN(lazyRead("/proc/meminfo"), "\n", 2)[0]), " "))
+		lazyRead("/sys/kernel/mm/transparent_hugepage/shmem_enabled"), lazyRead("/sys/kernel/mm/transparent_hugepage/use_zero_page"), strings.Join(strings.Fields(strings.SplitN(lazyRead("/proc/meminfo"), "\n", 2)[0]), " "))
 
 	ws := domain.WorkspaceID("wslazy")
 	base := h.workspace(t, ws, 20)
@@ -155,7 +156,7 @@ func TestKVMZZLazyFirstSave(t *testing.T) {
 	for round := 0; round <= rounds; round++ {
 		for _, arm := range arms {
 			r := &lazyRound{
-				t: t, h: h, arm: arm, gib: gib, round: round, bare: round == 0, dump: dump,
+				t: t, h: h, arm: arm, kind: arm[:1], gib: gib, round: round, bare: round == 0, dump: dump,
 				compare: dump != "" && (gib <= 2 || round <= 1),
 				key:     fmt.Sprintf("run-lz%s%d-%d-%x", strings.ToLower(arm), gib, round, time.Now().Unix()&0xfffff),
 			}
@@ -164,10 +165,12 @@ func TestKVMZZLazyFirstSave(t *testing.T) {
 			err := r.run(ws, base)
 			if err != nil {
 				failed++
-				fmt.Printf("LAZY FAIL %s took_s=%.0f err=%q log=%q\n", r.tag, time.Since(start).Seconds(), err.Error(), h.e.logTail(r.key))
+				kernel, _ := exec.Command("sh", "-c", "dmesg | grep -iE 'oom|out of memory|killed process' | tail -8").CombinedOutput()
+				fmt.Printf("LAZY FAIL %s took_s=%.0f err=%q log=%q dmesg=%q\n", r.tag, time.Since(start).Seconds(), err.Error(), h.e.logTail(r.key), kernel)
 			} else {
 				fmt.Printf("LAZY ROUND %s ok=true took_s=%.0f\n", r.tag, time.Since(start).Seconds())
 			}
+			lazy.unitExtraMiB = 0
 			lazy.shared, lazy.restoreMode, lazy.beforePause, lazy.afterSnapshot, lazy.afterSync = "", "", nil, nil, nil
 			_ = h.e.destroy(context.Background(), r.key)
 			_ = h.git.RemoveRunHistory(context.Background(), domain.RunID(r.key))
@@ -191,8 +194,12 @@ func (r *lazyRound) sh(timeout time.Duration, script string) (string, error) {
 
 func (r *lazyRound) run(ws domain.WorkspaceID, base string) error {
 	e, ctx := r.h.e, r.t.Context()
-	if r.arm == "Q" || r.arm == "S" {
+	if r.kind == "Q" || r.kind == "S" {
 		lazy.shared = "off"
+	}
+	// An X arm's unit may hold the guest's memory twice over.
+	if len(r.arm) > 1 {
+		lazy.unitExtraMiB = guestMiB(int64(r.gib) << 10)
 	}
 	checkout, _, err := r.h.git.CreateRunCheckoutAt(ctx, ws, domain.RunID(r.key), base, "main", "a task", "")
 	if err != nil {
@@ -239,14 +246,14 @@ func (r *lazyRound) run(ws domain.WorkspaceID, base string) error {
 		return fmt.Errorf("guest state %q", out)
 	}
 	r.bootID, r.pid = fields[0], fields[1]
-	fmt.Printf("LAZY BOOT %s shared=%s create_ms=%d boot_ms=%d guest_used_mib=%s guest_cache_mib=%s\n",
-		r.tag, cmp.Or(lazy.shared, "on"), created.Milliseconds(), booted.Milliseconds(), fields[2], fields[3])
+	fmt.Printf("LAZY BOOT %s shared=%s unit_max_mib=%d create_ms=%d boot_ms=%d guest_used_mib=%s guest_cache_mib=%s\n",
+		r.tag, cmp.Or(lazy.shared, "on"), lazyUint(filepath.Join(r.cgroup(), "memory.max"))>>20, created.Milliseconds(), booted.Milliseconds(), fields[2], fields[3])
 
 	if err = r.save(1); err != nil {
 		return err
 	}
 	mode := lazyCOW
-	switch r.arm {
+	switch r.kind {
 	case "P":
 		mode = ""
 	case "Q":
@@ -263,7 +270,7 @@ func (r *lazyRound) run(ws domain.WorkspaceID, base string) error {
 	if err = r.wake(1, mode); err != nil {
 		return err
 	}
-	if r.arm != "R" {
+	if r.kind != "R" {
 		return nil
 	}
 	if !r.bare {
@@ -290,14 +297,19 @@ func lazyUint(path string) uint64 {
 	return v
 }
 
-// lazyStat is anon, file and shmem of a cgroup's memory.stat, in MiB.
-func lazyStat(cgroup string) string {
+func lazyStats(cgroup string) map[string]uint64 {
 	got := map[string]uint64{}
 	for _, line := range strings.Split(lazyRead(filepath.Join(cgroup, "memory.stat")), "\n") {
 		if name, v, ok := strings.Cut(line, " "); ok {
 			got[name], _ = strconv.ParseUint(v, 10, 64)
 		}
 	}
+	return got
+}
+
+// lazyStat is anon, file and shmem of a cgroup's memory.stat, in MiB.
+func lazyStat(cgroup string) string {
+	got := lazyStats(cgroup)
 	return fmt.Sprintf("%d/%d/%d", got["anon"]>>20, got["file"]>>20, got["shmem"]>>20)
 }
 
@@ -346,7 +358,14 @@ func (r *lazyRound) save(n int) error {
 		current, peakSnap, peakSync uint64
 		wrote                       uint64
 		statBefore, statAfter       string
-		compared                    string
+		compared, said              string
+		// Sampled every 50 ms from the pause on: the most the unit held,
+		// the most of it that was guest memory (anon and shmem), and the
+		// last of what it read.
+		maxCurrent, maxGuest uint64
+		lastStat, events     string
+		stop, done           = make(chan struct{}), make(chan struct{})
+		sampling             bool
 	)
 	held := lazyUint(filepath.Join(cg, "memory.current"))
 	readPeak := func() uint64 {
@@ -368,12 +387,36 @@ func (r *lazyRound) save(n int) error {
 			_, err = peak.WriteString("reset")
 			reset = err == nil
 		}
+		sampling = true
+		go func() {
+			defer close(done)
+			for {
+				if stat := lazyStats(cg); len(stat) > 0 {
+					maxGuest = max(maxGuest, stat["anon"]+stat["shmem"])
+					maxCurrent = max(maxCurrent, lazyUint(filepath.Join(cg, "memory.current")))
+					lastStat = fmt.Sprintf("anon=%d file=%d shmem=%d dirty=%d writeback=%d", stat["anon"]>>20, stat["file"]>>20, stat["shmem"]>>20, stat["file_dirty"]>>20, stat["file_writeback"]>>20)
+					events = strings.Join(strings.Fields(lazyRead(filepath.Join(cg, "memory.events"))), " ")
+				}
+				select {
+				case <-stop:
+					return
+				case <-time.After(50 * time.Millisecond):
+				}
+			}
+		}()
+	}
+	sampled := func() {
+		if sampling {
+			sampling = false
+			close(stop)
+			<-done
+		}
 	}
 	var dig time.Duration
 	lazy.afterSnapshot = func(_, dir string) error {
 		peakSnap = readPeak()
 		wrote = r.written() - wrote
-		if r.arm != "S" {
+		if r.kind != "S" {
 			return nil
 		}
 		start := time.Now()
@@ -387,6 +430,8 @@ func (r *lazyRound) save(n int) error {
 	lazy.afterSync = func(_, dir string, api chAPI) {
 		peakSync = readPeak()
 		statAfter = lazyStat(cg)
+		sampled()
+		said = r.chLog()
 		if r.compare {
 			compared = r.dumpCompare(n, dir, api)
 		}
@@ -399,6 +444,9 @@ func (r *lazyRound) save(n int) error {
 	}()
 	start := time.Now()
 	if err := e.save(r.t.Context(), r.key); err != nil {
+		sampled()
+		fmt.Printf("LAZY SAVEFAIL %s n=%d after_ms=%d current_mib=%d max_current_mib=%d max_guest_mib=%d before=%s last=%q events=%q\n",
+			r.tag, n, time.Since(start).Milliseconds(), current>>20, maxCurrent>>20, maxGuest>>20, statBefore, lastStat, events)
 		return fmt.Errorf("save %d: %w", n, err)
 	}
 	total := time.Since(start)
@@ -408,10 +456,10 @@ func (r *lazyRound) save(n int) error {
 	}
 	fmt.Printf("LAZY SAVE %s n=%d total_ms=%d sync1_ms=%d report_ms=%d sync2_ms=%d pause_ms=%d snapshot_ms=%d dig_ms=%d fsync_ms=%d "+
 		"apparent_mib=%d alloc_mib=%d ch_wrote_mib=%d held_at_start_mib=%d current_mib=%d peak_reset=%t peak_snapshot_mib=%d peak_fsync_mib=%d "+
-		"anon_file_shmem_before=%s anon_file_shmem_after=%s chlog=%q\n",
+		"anon_file_shmem_before=%s anon_file_shmem_after=%s max_current_mib=%d max_guest_mib=%d last=%q events=%q chlog=%q\n",
 		r.tag, n, total.Milliseconds(), lazy.sync1.Milliseconds(), lazy.report.Milliseconds(), lazy.sync2.Milliseconds(), lazy.pause.Milliseconds(),
 		lazy.snapshot.Milliseconds(), dig.Milliseconds(), (lazy.fsync).Milliseconds(),
-		st.Size>>20, st.Blocks*512>>20, wrote>>20, held>>20, current>>20, reset, peakSnap>>20, peakSync>>20, statBefore, statAfter, r.chLog())
+		st.Size>>20, st.Blocks*512>>20, wrote>>20, held>>20, current>>20, reset, peakSnap>>20, peakSync>>20, statBefore, statAfter, maxCurrent>>20, maxGuest>>20, lastStat, events, said)
 	if compared != "" {
 		fmt.Printf("LAZY CMP %s n=%d %s\n", r.tag, n, compared)
 	}

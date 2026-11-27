@@ -639,7 +639,7 @@ func (e *engine) launch(ctx context.Context, rec *record, l launch) error {
 		// behind the guest's back. No OOMScoreAdjust, unlike a container's
 		// 500: a host OOM kill of the monitor ends the whole session, not
 		// one process in it.
-		fmt.Sprintf("MemoryMax=%dM", unitMemoryMiB(rec)), "MemorySwapMax=0",
+		fmt.Sprintf("MemoryMax=%dM", unitMemoryMiB(rec)+lazy.unitExtraMiB), "MemorySwapMax=0",
 		"StandardOutput=append:" + logPath, "StandardError=append:" + logPath,
 	}
 	if rec.CPULimit > 0 {

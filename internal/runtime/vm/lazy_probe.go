@@ -12,6 +12,8 @@ var lazy struct {
 	restoreMode string
 	// reveal is one more host directory a VM's unit may write.
 	reveal string
+	// unitExtraMiB is added to the MemoryMax of a VM's unit.
+	unitExtraMiB int64
 
 	beforePause   func(key string)
 	afterSnapshot func(key, dir string) error
