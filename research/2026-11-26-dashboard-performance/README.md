@@ -46,6 +46,28 @@ call and `run.list` 33x, both under 16 ms median on an idle host
 (`internal/events/sqlitelog.go` `readQuery`). What a congested host does to those numbers
 is not established here.
 
+## What happened to each cause
+
+| Cause | Outcome |
+| --- | --- |
+| 1 Lanes pages mostly rereads | Merged, #1180: `no_rereads` and `older_time` on `workspace.timeline`. 6h: 43% of visible bars never coloured to 0%; 24h: 70% to 0%. |
+| 2 Three round trips per call | Merged, #1178: the gateway reuses control channels for an explicit list of reads when the server was heard from in the last second. 453 to 151 ms a read on a 150 ms link; Lanes' five pages 2,330 to 828 ms. |
+| 3 Serial reads and the 5,000 budget | #1196: the budget follows the window (5,000 / 10,000 / 25,000) with **Load more**; numbers in [evidence/cause3-budget.txt](evidence/cause3-budget.txt). Pages cannot be read in parallel: each cursor comes from the page before. |
+| 5 Cold open | **Tried and withdrawn**, #1193 (closed). See below. The duplicate budget read on reload remains. |
+| Follow-up | Merged, #1189: a failed agent-mail or subsessions read in session Details shows the server's error with Retry. |
+
+### Cold open: do not mark the store hydrated before the optional reads land
+
+#1193 stopped `hydrate` (`web/src/store/sync.ts`) awaiting four reads (devices, watches, merge proposals, the edge) before it marked the store hydrated. Measured on the seeded store over a 150 ms link, 9 visits each (`measure/cold-open.ts`): hydration 1,559 to 1,437 ms, about one round trip; the first session showed at the same time (1,548 against 1,512 ms), because sessions never waited for these reads.
+
+It was closed because "hydrated" also clears the stale mark (`staleSince`), and for a moment the Board then acts on state it has not re-read. The reviewer (omp, `openai-codex/gpt-6.2-astra`) traced three cases; anyone trying this again has to close all three first:
+
+1. **Deny can revoke an approved device.** `web/src/store/devices.ts` keeps the previous device list on a same-member retry. If another admin approved a pending device during an outage, the Board looks fresh while the list is still the old one, and Deny (`web/src/routes/board/device-card.tsx`) sends a revoke by id that the server applies to the now-approved device (`internal/sshd/identity.go`).
+2. **A watched pull request offers Watch PR again.** Before `watch.list` lands, `web/src/routes/run/pull-request.tsx` shows Watch PR instead of Watching PR; submitting the dialog uses a new idempotency key, so the server creates a second watch (`internal/watch/api.go`).
+3. **Needs you says "Nothing needs you".** `web/src/routes/needs-you/index.tsx` shows its empty state once the stale mark clears; a pending device or merge proposal then appears a round trip later. The empty Board (`web/src/routes/board/index.tsx`), the sidebar count and the app badge have the same gap.
+
+A second reviewer (Opus) confirmed case 3 and the empty-Board flash independently.
+
 ## What I could not establish
 
 - The real mix on the owner's server: rereads per hour, lane events per window, the number of
