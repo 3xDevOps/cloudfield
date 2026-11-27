@@ -68,6 +68,9 @@ func (s *Server) workspaceTimeline(ctx context.Context, member domain.MemberID, 
 		out.OlderTime = page.OlderTime.UTC().Format(time.RFC3339Nano)
 	}
 	for _, ev := range page.Events {
+		if !events.OneWorkspace(ev) {
+			sendPlain(ctx)
+		}
 		payload, merr := json.Marshal(ev.Payload)
 		if merr != nil {
 			return nil, rpcError(fmt.Errorf("sshd: encode %s payload of event %s: %w", ev.Type, ev.ID, merr))

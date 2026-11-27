@@ -168,6 +168,25 @@ func seesNamed(ev Event, scope Scope) bool {
 	return true
 }
 
+// OneWorkspace reports whether ev's payload holds only what every reader
+// of ev's workspace may see: nothing addressed to one member and nothing
+// that Reachable checks against another workspace or other runs.
+func OneWorkspace(ev Event) bool {
+	switch p := ev.Payload.(type) {
+	case private, peerScoped:
+		return false
+	case repoScoped:
+		return p.RepoWorkspace() == "" || p.RepoWorkspace() == ev.WorkspaceID
+	case runScoped:
+		for _, ws := range p.RunExtraWorkspaces() {
+			if ws != ev.WorkspaceID {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 // Reachable reports whether scope allows ev's workspace, for an event
 // about an extra repository of a run that repository's workspace, for an
 // event of a run every workspace of the run and of every other run it

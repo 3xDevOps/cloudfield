@@ -273,19 +273,32 @@ func writeJSONLine(w io.Writer, v any) error {
 	return err
 }
 
+type plainResponseKey struct{}
+
+// sendPlain keeps this request's response a JSON line even when the
+// caller asked for gzip: a handler calls it when the result mixes access
+// domains, which one compression context must not hold.
+func sendPlain(ctx context.Context) {
+	if plain, ok := ctx.Value(plainResponseKey{}).(*bool); ok {
+		*plain = true
+	}
+}
+
 // handleRequest also reports whether the response may be compressed.
 func (s *Server) handleRequest(ctx context.Context, member domain.MemberID, line []byte) (protocol.Response, bool) {
 	req, resp, valid := protocol.ParseRequest(line)
 	if !valid {
 		return resp, false
 	}
+	plain := new(bool)
+	ctx = context.WithValue(ctx, plainResponseKey{}, plain)
 	result, rpcErr := s.dispatch(ctx, member, req.Method, req.Params)
 	if rpcErr != nil {
 		resp.Error = rpcErr
 		return resp, false
 	}
 	resp.Result = result
-	return resp, req.AcceptEncoding == protocol.EncodingGzip && protocol.GzipMethods[req.Method]
+	return resp, req.AcceptEncoding == protocol.EncodingGzip && protocol.GzipMethods[req.Method] && !*plain
 }
 
 // dispatch runs one control-channel method for member: the SSH control

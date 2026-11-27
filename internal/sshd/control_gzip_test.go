@@ -1,6 +1,7 @@
 package sshd
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -57,6 +58,7 @@ func seedLargeReads(t *testing.T) *testEnv {
 		c.Bus = bus
 		c.Services.Timeline = timeline.NewReader(log)
 	})
+	e.bus = bus
 	start := time.Date(2026, 11, 26, 9, 0, 0, 0, time.UTC)
 	for i := range 600 {
 		begun := start.Add(time.Duration(i) * time.Minute)
@@ -156,5 +158,58 @@ func TestControlGzipOnlyTheTimeline(t *testing.T) {
 		if pipe.got.Len() < protocol.GzipMinBytes || pipe.got.Bytes()[0] != '{' {
 			t.Fatalf("%s sent %d bytes starting %q, want a JSON line of at least %d bytes", read.method, pipe.got.Len(), pipe.got.Bytes()[:1], protocol.GzipMinBytes)
 		}
+	}
+}
+
+// A timeline page holding a payload only some readers of the workspace may
+// see, here an assistant notice addressed to the caller, stays a JSON line;
+// the same page without it compresses.
+func TestControlGzipSendsMixedTimelinePagesPlain(t *testing.T) {
+	t.Parallel()
+	e := seedLargeReads(t)
+	if _, err := e.bus.Publish(context.Background(), events.Event{
+		WorkspaceID: e.ws.ID, RunID: e.run.ID,
+		Payload: events.AssistantNoticePayload{MemberID: e.member.ID, RunID: e.run.ID, Kind: events.AssistantNoticeFinished, Title: "done", Body: "the private notice"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	c, pipe := tappedClient(t, e, true)
+	for _, tc := range []struct {
+		types []events.Type
+		gzip  bool
+	}{
+		{[]events.Type{events.TypeRunStatus, events.TypeCoordMessage, events.TypeAssistantNotice}, false},
+		{[]events.Type{events.TypeRunStatus, events.TypeCoordMessage}, true},
+	} {
+		params := protocol.WorkspaceTimelineParams{WorkspaceID: string(e.ws.ID), Newest: true, Limit: 1000}
+		for _, typ := range tc.types {
+			params.Types = append(params.Types, string(typ))
+		}
+		pipe.got.Reset()
+		var page protocol.WorkspaceTimelineResult
+		if err := c.Call(protocol.MethodWorkspaceTimeline, params, &page); err != nil {
+			t.Fatal(err)
+		}
+		if got := strings.HasPrefix(pipe.got.String(), "gzip "); got != tc.gzip || len(page.Events) < 100 {
+			t.Fatalf("types %v: %d events, gzip frame %v, want %v", tc.types, len(page.Events), got, tc.gzip)
+		}
+	}
+}
+
+// The server's own gate: a request for a method off the list that asks for
+// gzip anyway gets a JSON line.
+func TestControlGzipRefusesUnlistedMethodsThatAsk(t *testing.T) {
+	t.Parallel()
+	e := seedLargeReads(t)
+	pipe := openSubsystem(t, e.dial(t), protocol.SubsystemControl, nil)
+	if _, err := pipe.Write([]byte(`{"jsonrpc":"2.0","id":1,"method":"run.list","params":{},"accept_encoding":"gzip"}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	line, err := bufio.NewReaderSize(pipe, 1<<20).ReadString('\n')
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(line) < protocol.GzipMinBytes || line[0] != '{' {
+		t.Fatalf("run.list asking for gzip got %d bytes starting %q, want a JSON line", len(line), line[:1])
 	}
 }

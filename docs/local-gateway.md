@@ -341,8 +341,9 @@ unavailable identity service is reported as `-32004`.
 
 Nothing between the server and `cloudfield gui` compresses: SSH runs
 without compression and the edge relay's WebSockets have it off. A 1,000-event
-`workspace.timeline` page, of which Lanes reads up to 25 per workspace, is
-about 370 KB of JSON, so the gateway asks the server to gzip it.
+`workspace.timeline` page, of which Lanes reads up to five per workspace
+(`historyBudget` in `web/src/store/lanes.ts`), is about 370 KB of JSON, so
+the gateway asks the server to gzip it.
 
 The control channel (`aether-control`) carries one JSON request line and
 gets one response frame back. A caller asks for compression per request with
@@ -378,8 +379,10 @@ The server compresses a response only when all of these hold
 - the request asked for it;
 - the call succeeded: errors are always JSON lines;
 - the method is `workspace.timeline`, the only entry of `GzipMethods`;
-- the JSON line is at least 8 KiB and at most 96 MiB (`MaxLineBytes`), so a
-  line the gateway would refuse is refused before anything is inflated;
+- the JSON line is at least 8 KiB and shorter than 96 MiB (`MaxLineBytes`),
+  so a line the gateway would refuse is refused before anything is inflated;
+- for `workspace.timeline`, the page holds no payload only some of the
+  workspace's readers may see (below);
 - the gzip frame is smaller than the line.
 
 It uses `compress/gzip` at the default level 6 and reserves a quarter of the
@@ -403,24 +406,38 @@ without bound; and bytes after the gzip member are refused.
 The method list is one compression context per access domain. Compressing a
 response that holds both text an attacker can write and a secret lets someone
 who sees the encrypted stream's sizes, a network observer or the edge relay,
-recover the secret by changing the text and watching the size. A
-`workspace.timeline` page is confined to one workspace the caller may read.
-`run.list` and `changes.list` are not compressed: without a workspace they
-append every workspace the caller reaches into one response, so a member of
-one workspace could place text beside another workspace's sessions. A method
-whose response can span workspaces must not be added. `run.acp.history`
-stays a JSON line because a transcript holds tool output, which can include
-files and environment values, beside text an agent fetched from anywhere.
-File reads, patches, configuration and home files stay JSON lines for the
-same reason, and because base64 and diffs gain little.
+recover the secret by changing the text and watching the size. The log query
+behind a `workspace.timeline` page matches one workspace, but some payloads
+in it carry what only some of that workspace's readers may see: anything
+addressed to one member (an assistant notice), another workspace's
+repository (a branch, pull request or diff of an extra repository, a deleted
+session's extra repositories) and other sessions (overlap peers). The server
+sends a page holding any of them as a JSON line (`events.OneWorkspace` in
+`internal/events/stream.go`, called from `internal/sshd/timeline.go`). The
+pages Lanes reads, `run.status`, `coord.message` and `coord.message.acked`,
+never hold one. `run.list` and `changes.list` are not compressed: without a
+workspace they append every workspace the caller reaches into one response,
+so a member of one workspace could place text beside another workspace's
+sessions. A method whose response can span workspaces must not be added.
+`run.acp.history` stays a JSON line because a transcript holds tool output,
+which can include files and environment values, beside text an agent fetched
+from anywhere. File reads, patches, configuration and home files stay JSON
+lines for the same reason, and because base64 and diffs gain little.
 
-A timeline page still holds free text that can carry a secret in practice: a
-person's steering message, agent report summaries and next actions, agent
-activity details (command lines, URLs, file paths), pending input titles, and
-notices addressed only to the reader. Someone who sees the stream's sizes and
-can make an agent in the same workspace write chosen text could, over many
-page reads, probe that text. Removing `workspace.timeline` from
-`GzipMethods` turns compression off entirely.
+A compressed page still holds text that can carry a secret. Agents write a
+status change's reason and its wait's detail and error, which every Lanes
+page holds, and session titles, reports (summary, next action, outcome,
+waiting for, evidence), usage-limit messages and activity details (command
+lines, URLs, file paths). People write steering messages. The server writes
+notes into the same timeline entries: environment variable names, egress
+hosts, `--allow-secret` names, and `workspace origin set to <origin>`, where
+an https origin may carry `user:TOKEN@`, so a credential can sit behind a
+known prefix. Branch names, conflicting file names, cleanup errors and
+snapshot errors come from the repository and the host. Someone who sees the
+stream's sizes and can make an agent in the same workspace write chosen
+text could, over many page reads, probe that text. Removing
+`workspace.timeline` from `GzipMethods` in `internal/protocol/compress.go`
+turns compression off entirely.
 
 ## Routes
 

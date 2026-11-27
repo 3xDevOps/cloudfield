@@ -23,8 +23,10 @@ const GzipMinBytes = 8 << 10
 // context per access domain. A response that can span workspaces (run.list,
 // changes.list and other member-wide reads) must not be added, or text one
 // workspace's member writes would be compressed beside another workspace's,
-// and the frame's size would tell them about it;
-// docs/local-gateway.md#compressed-responses.
+// and the frame's size would tell them about it. A listed method whose
+// result can still mix access domains sends that result plain, as
+// workspace.timeline does for a page holding a private payload or another
+// workspace's; docs/local-gateway.md#compressed-responses.
 var GzipMethods = map[string]bool{
 	MethodWorkspaceTimeline: true,
 }
@@ -42,23 +44,24 @@ var gzipWriters = sync.Pool{New: func() any {
 }}
 
 // WriteResponse writes resp as one frame: a gzip frame when compress is set,
-// the line is between GzipMinBytes and MaxLineBytes and compressing shrinks
-// it, otherwise the newline-terminated JSON line. A line over MaxLineBytes
-// goes out as is, so the client refuses it before inflating anything.
+// the line is at least GzipMinBytes and shorter than MaxLineBytes and
+// compressing shrinks it, otherwise the newline-terminated JSON line. A line
+// the client would refuse goes out as is, so it is refused before anything
+// is inflated.
 func WriteResponse(w io.Writer, resp Response, compress bool) error {
 	line, err := json.Marshal(resp)
 	if err != nil {
 		return err
 	}
-	if compress && len(line) >= GzipMinBytes && len(line) <= MaxLineBytes {
+	if compress && len(line) >= GzipMinBytes && len(line) < MaxLineBytes {
 		frame := bytes.NewBuffer(make([]byte, gzipHeaderBytes, gzipHeaderBytes+len(line)/4))
 		zw := gzipWriters.Get().(*gzip.Writer)
 		zw.Reset(frame)
-		_, _ = zw.Write(line)
-		_ = zw.Close()
+		_, werr := zw.Write(line)
+		cerr := zw.Close()
 		zw.Reset(io.Discard)
 		gzipWriters.Put(zw)
-		if frame.Len() < len(line) {
+		if werr == nil && cerr == nil && frame.Len() < len(line) {
 			out := frame.Bytes()
 			copy(out, fmt.Sprintf("%s%010d\n", gzipFramePrefix, len(out)-gzipHeaderBytes))
 			_, err = w.Write(out)
@@ -101,18 +104,19 @@ func readResponse(r *bufio.Reader, maxBytes int, gzipOK bool) ([]byte, error) {
 	}
 	var body bytes.Buffer
 	if _, err = io.CopyN(&body, r, int64(n)); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("protocol: gzip frame body of %d bytes: %w", n, err)
 	}
 	zr, err := gzip.NewReader(&body)
 	if err != nil {
 		return nil, fmt.Errorf("protocol: gzip frame: %w", err)
 	}
 	zr.Multistream(false)
-	line, err := io.ReadAll(io.LimitReader(zr, int64(maxBytes)+1))
+	line, err := io.ReadAll(io.LimitReader(zr, int64(maxBytes)))
 	if err != nil {
 		return nil, fmt.Errorf("protocol: gzip frame: %w", err)
 	}
-	if len(line) > maxBytes {
+	// A JSON line holds maxBytes with its newline, so its content is shorter.
+	if len(line) >= maxBytes {
 		return nil, fmt.Errorf("protocol: line exceeds %d bytes", maxBytes)
 	}
 	if body.Len() != 0 {

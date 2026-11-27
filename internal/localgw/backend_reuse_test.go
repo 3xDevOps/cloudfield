@@ -383,7 +383,7 @@ func TestSSHBackendKeepsAtMostMaxIdleControls(t *testing.T) {
 	}
 }
 
-// The gateway asks every server for compressed answers; one that does not
+// The gateway asks for compressed timeline pages; a server that does not
 // know the field answers with plain JSON lines, which the gateway reads as
 // before, on a new channel and on a kept one.
 func TestSSHBackendReadsPlainAnswersFromAServerWithoutCompression(t *testing.T) {
@@ -399,12 +399,12 @@ func TestSSHBackendReadsPlainAnswersFromAServerWithoutCompression(t *testing.T) 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	for range 2 {
-		got, perr := b.Call(ctx, protocol.MethodRunList, nil)
+		got, perr := b.Call(ctx, protocol.MethodWorkspaceTimeline, nil)
 		if perr != nil {
 			t.Fatal(perr)
 		}
 		if string(got) != string(big) {
-			t.Fatalf("run.list returned %d bytes, want the server's %d", len(got), len(big))
+			t.Fatalf("workspace.timeline returned %d bytes, want the server's %d", len(got), len(big))
 		}
 	}
 }

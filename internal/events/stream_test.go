@@ -131,3 +131,27 @@ func TestScopedLeavesOutUnreachableOverlapPeers(t *testing.T) {
 		t.Fatalf("scoped overlap of a hidden peer = %+v, want an empty set", got.With)
 	}
 }
+
+func TestOneWorkspace(t *testing.T) {
+	t.Parallel()
+	const ws, other = domain.WorkspaceID("ws-a"), domain.WorkspaceID("ws-b")
+	for name, tc := range map[string]struct {
+		payload Payload
+		want    bool
+	}{
+		"status":                  {RunStatusPayload{To: domain.RunRunning}, true},
+		"primary branch":          {GitBranchPayload{WorkspaceID: ws}, true},
+		"extra repository branch": {GitBranchPayload{WorkspaceID: other, Repo: other}, false},
+		"primary pull request":    {RunPRPayload{}, true},
+		"extra repository PR":     {RunPRPayload{Repo: other}, false},
+		"extra repository diff":   {RunDiffPayload{Repo: other}, false},
+		"deleted, one workspace":  {RunDeletedPayload{ExtraWorkspaceIDs: []domain.WorkspaceID{ws}}, true},
+		"deleted, extra repos":    {RunDeletedPayload{ExtraWorkspaceIDs: []domain.WorkspaceID{ws, other}}, false},
+		"assistant notice":        {AssistantNoticePayload{MemberID: "mem-1"}, false},
+		"overlap":                 {OverlapPayload{}, false},
+	} {
+		if got := OneWorkspace(Event{WorkspaceID: ws, RunID: "run-1", Payload: tc.payload}); got != tc.want {
+			t.Errorf("%s: OneWorkspace = %v, want %v", name, got, tc.want)
+		}
+	}
+}
