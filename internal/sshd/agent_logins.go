@@ -273,6 +273,7 @@ func (s *Server) agentLoginRemove(ctx context.Context, member domain.MemberID, r
 	if err := s.cfg.Store.DeleteAgentLogin(ctx, member, p.Agent, login.ID); err != nil {
 		return nil, rpcError(err)
 	}
+	fallback.ForgetRunOuts(member, p.Agent)
 	noteChange(ctx)
 	return struct{}{}, nil
 }

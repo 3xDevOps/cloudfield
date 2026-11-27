@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/fallback"
 	"github.com/3xDevOps/cloudfield/internal/memberhome"
 	"github.com/3xDevOps/cloudfield/internal/protocol"
 	"github.com/3xDevOps/cloudfield/internal/quota"
@@ -529,5 +530,29 @@ func TestALoginSwitchNeedsItsValue(t *testing.T) {
 	}
 	if out, _ := e.list(t, e.member.ID); out.Logins[1].Shared {
 		t.Fatalf("after turning it off: %+v", out.Logins[1])
+	}
+}
+
+type unreadableUsage struct{}
+
+func (unreadableUsage) Read(context.Context, domain.MemberID, bool) ([]quota.Provider, error) {
+	return nil, errors.New("usage cannot be read")
+}
+
+// Removing a login forgets that its owner's session ran out on one of
+// their logins whose usage cannot be read: the next launch on the default
+// login measures it as any launch with no added login does.
+func TestRemovingALoginForgetsItsRunOuts(t *testing.T) {
+	e := newLoginEnv(t)
+	e.seed(t, e.member.ID, "lgn-work000000", "work", "ada@work.example.test")
+	def := domain.AccountOf(e.member.ID)
+	fallback.NoteRunOut(def, "claude", time.Now())
+	t.Cleanup(func() { fallback.ForgetRunOuts(e.member.ID, "claude") })
+	if _, perr := e.call(t, e.member.ID, protocol.MethodAgentLoginRemove, protocol.AgentLoginParams{Agent: "claude", LoginID: "lgn-work000000"}); perr != nil {
+		t.Fatal(perr)
+	}
+	measured, err := fallback.Measure(context.Background(), e.db, unreadableUsage{}, e.member.ID, def, "claude", domain.AccountFallback{})
+	if err != nil || measured != nil {
+		t.Fatalf("measured %v, %v; want the default login unread and not passed over", measured, err)
 	}
 }

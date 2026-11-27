@@ -142,7 +142,7 @@ func Measure(ctx context.Context, st store.Store, usage QuotaReader, launcher do
 	}
 	requested.Member = account
 	used, ok := usedPercent(ctx, usage, requested, harness)
-	if !ok && ranOutRecently(requested, time.Now()) {
+	if !ok && ranOutRecently(requested, harness, time.Now()) {
 		used, ok = 100, true
 	}
 	if !ok {
@@ -242,7 +242,7 @@ func measureCandidates(ctx context.Context, st store.Store, usage QuotaReader, l
 			if !ok && !unknown && c.legacy {
 				return
 			}
-			if !ok && ranOutRecently(c.account, time.Now()) {
+			if !ok && ranOutRecently(c.account, harness, time.Now()) {
 				used = 100
 			} else if !ok {
 				used = Unknown
@@ -574,24 +574,39 @@ func LoginShared(ctx context.Context, st store.Store, login domain.Account, harn
 // after its owner's session reported it run out.
 const runOutFor = 30 * time.Minute
 
-var runOuts = struct {
-	sync.Mutex
-	at map[domain.Account]time.Time
-}{at: map[domain.Account]time.Time{}}
-
-// NoteRunOut records that account, whose usage cannot be read, ran out at.
-func NoteRunOut(account domain.Account, at time.Time) {
-	runOuts.Lock()
-	defer runOuts.Unlock()
-	runOuts.at[account] = at
+type runOut struct {
+	account domain.Account
+	agent   string
 }
 
-func ranOutRecently(account domain.Account, now time.Time) bool {
+var runOuts = struct {
+	sync.Mutex
+	at map[runOut]time.Time
+}{at: map[runOut]time.Time{}}
+
+// NoteRunOut records that account's login of agent, whose usage cannot be
+// read, ran out at.
+func NoteRunOut(account domain.Account, agent string, at time.Time) {
 	runOuts.Lock()
 	defer runOuts.Unlock()
-	at, ok := runOuts.at[account]
+	runOuts.at[runOut{account, agent}] = at
+}
+
+// ForgetRunOuts drops what NoteRunOut recorded of member's logins of agent,
+// once one of them is removed.
+func ForgetRunOuts(member domain.MemberID, agent string) {
+	runOuts.Lock()
+	defer runOuts.Unlock()
+	maps.DeleteFunc(runOuts.at, func(k runOut, _ time.Time) bool { return k.account.Member == member && k.agent == agent })
+}
+
+func ranOutRecently(account domain.Account, agent string, now time.Time) bool {
+	runOuts.Lock()
+	defer runOuts.Unlock()
+	key := runOut{account, agent}
+	at, ok := runOuts.at[key]
 	if ok && now.Sub(at) >= runOutFor {
-		delete(runOuts.at, account)
+		delete(runOuts.at, key)
 		return false
 	}
 	return ok

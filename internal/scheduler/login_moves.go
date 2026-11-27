@@ -103,7 +103,7 @@ func (s *Scheduler) noteRunOut(ctx context.Context, f *UsageFallback, run *domai
 			return
 		}
 	}
-	fallback.NoteRunOut(from, time.Now())
+	fallback.NoteRunOut(from, run.Harness, time.Now())
 }
 
 // triedLogins ends the reason of a session that ran out on every login it

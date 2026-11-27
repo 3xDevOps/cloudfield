@@ -292,3 +292,31 @@ func TestAStartBilledPerUseIsTakenOnlyWhenNoReadableLoginIsLeft(t *testing.T) {
 		})
 	}
 }
+
+// A login whose owner's session ran out on it is passed over by launches of
+// that agent only, and no longer once one of the member's logins of that
+// agent is removed.
+func TestARunOutIsPassedOverForItsAgentOnly(t *testing.T) {
+	w := newLoginWorld(t, "Ada/console")
+	ada, console := w.ids["Ada"], w.logins["Ada/console"]
+	t.Cleanup(func() { ForgetRunOuts(ada, "claude") })
+	measure := func(agent string) Measured {
+		t.Helper()
+		measured, err := Measure(context.Background(), w.db, usageByLogin{}, ada, console, agent, domain.AccountFallback{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return measured
+	}
+	NoteRunOut(console, "claude", time.Now())
+	if got := measure("claude")[console]; got != 100 {
+		t.Fatalf("claude's console login measured %v; want it passed over at 100", got)
+	}
+	if got, ok := measure("codex")[console]; ok {
+		t.Fatalf("codex's console login measured %v; want Claude Code's run-out kept to Claude Code", got)
+	}
+	ForgetRunOuts(ada, "claude")
+	if got, ok := measure("claude")[console]; ok {
+		t.Fatalf("after a removal claude's console login measured %v; want the run-out forgotten", got)
+	}
+}
