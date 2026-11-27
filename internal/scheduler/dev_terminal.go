@@ -211,11 +211,13 @@ func (s *Scheduler) recoverRunTerminalLocked(ctx context.Context, run domain.Run
 	execution, err := managed.RecoverExec(ctx, terminal.Identity)
 	if err != nil {
 		terminal.Unavailable = err.Error()
+		// A runtime cut short while it reads an exit record reports the
+		// execution not found, which proves nothing once ctx has ended.
 		switch {
-		case errors.Is(err, runtime.ErrNotFound):
-			terminalGone(terminal, err)
 		case ctx.Err() != nil:
 			set.deferred = true
+		case errors.Is(err, runtime.ErrNotFound):
+			terminalGone(terminal, err)
 		}
 		return
 	}
