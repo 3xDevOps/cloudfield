@@ -63,7 +63,6 @@ func TestSSHBackendReusesAnAnsweredControlChannel(t *testing.T) {
 	if kept != 1 {
 		t.Fatalf("%d control channels kept after a cancelled call, want 1: its own must be dropped", kept)
 	}
-	// The late answer must reach no later call.
 	close(unanswered)
 	for range 3 {
 		if _, perr := b.Call(ctx, protocol.MethodServerInfo, nil); perr != nil {
@@ -242,5 +241,52 @@ func TestSSHBackendSendsACallAtMostTwice(t *testing.T) {
 	}
 	if got := sends.Load(); got != 2 {
 		t.Fatalf("the call reached the server %d times, want 2", got)
+	}
+}
+
+// The replay after a redial is a call's second send. It must open its own
+// channel: a kept one that has ended would ask for a third.
+func TestSSHBackendReplayTakesNoKeptChannel(t *testing.T) {
+	home := testhome.Isolate(t)
+	server := listen(t)
+	_, channels := serveControlChannels(t, server, nil, false)
+	b := NewSSHBackend(cli.Config{Addr: server.Addr().String(), KnownHosts: filepath.Join(home, "known_hosts")}).(*sshBackend)
+	t.Cleanup(func() { _ = b.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if _, perr := b.Call(ctx, protocol.MethodServerInfo, nil); perr != nil {
+		t.Fatal(perr)
+	}
+	if _, err := b.callOnce(ctx, protocol.MethodServerInfo, nil, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := channels.Load(); got != 2 {
+		t.Fatalf("a replay beside a kept channel left %d control channels opened, want its own, 2", got)
+	}
+}
+
+// A caller that gave up while its call was on a kept channel gets "request
+// cancelled", and the call is not written to a new channel for nobody.
+func TestSSHBackendCancelledCallOnAKeptChannelIsNotSentAgain(t *testing.T) {
+	home := testhome.Isolate(t)
+	server := listen(t)
+	_, channels := serveControlChannels(t, server, nil, true)
+	b := NewSSHBackend(cli.Config{Addr: server.Addr().String(), KnownHosts: filepath.Join(home, "known_hosts")})
+	t.Cleanup(func() { _ = b.Close() })
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// The channel this call keeps has ended on the server's side.
+	if _, perr := b.Call(ctx, protocol.MethodServerInfo, nil); perr != nil {
+		t.Fatal(perr)
+	}
+	gone, stop := context.WithCancel(ctx)
+	stop()
+	if _, perr := b.Call(gone, protocol.MethodServerInfo, nil); perr == nil || perr.Message != "request cancelled" {
+		t.Fatalf("call for a caller that gave up = %v, want request cancelled", perr)
+	}
+	if got := channels.Load(); got != 1 {
+		t.Fatalf("a cancelled call left %d control channels opened, want no new one, 1", got)
 	}
 }

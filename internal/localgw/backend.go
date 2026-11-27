@@ -295,11 +295,13 @@ const maxIdleControls = 8
 
 // keptFresh is how recently the server must have sent a byte for a call to
 // go on a kept channel. Opening a channel proves the connection answers
-// before the call's watchdog starts; a kept channel has only this. On a
+// before the call's watchdog starts; a kept channel has only this, so a
+// link that dies inside the window fails the call at its watchdog. The
+// window covers calls that follow an answer, as a page's reads do. On a
 // quieter connection the call opens its own channel, which waits out a
 // dead link until the keepalive drops it and the call is redialed. A
 // variable so a test can shorten it.
-var keptFresh = 5 * time.Second
+var keptFresh = time.Second
 
 // idleControl takes one of conn's answered control channels, nil when it
 // has none or conn has been quiet.

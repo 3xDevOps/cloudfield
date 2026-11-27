@@ -205,15 +205,17 @@ answered is kept (up to 8) and carries a later call, one call at a time.
 Calls in flight together each have their own channel. A channel whose call
 was cancelled or timed out is closed, never reused. A call takes a kept
 channel only when it is replay-safe and the server sent something on the
-connection in the last 5 seconds; otherwise it opens its own, which proves
-the connection answers before the call's time limit starts. If a kept
+connection in the last second, as when it follows another call's answer;
+otherwise it opens its own, which proves the connection answers before the
+call's time limit starts. If a kept
 channel has ended under a live connection, the call is sent again on a new
 channel and the connection stays up. That second send is the call's one
 replay: if it fails too, the call fails with `-32004`.
 
 A replay-safe call that fails on transport (a server
 restart or dropped network) redials once and retries once before surfacing
-`-32004` (unavailable). A method unsafe to run twice is not replayed: one
+`-32004` (unavailable); one already sent again on a new channel is not
+sent a third time. A method unsafe to run twice is not replayed: one
 whose second session creates a duplicate (`run.launch`, `template.launch`,
 `workspace.add`, `member.invite`), repeats an external side effect
 (`server.update`, `terminal.exec`, `github.connect`, `run.git.*`,
