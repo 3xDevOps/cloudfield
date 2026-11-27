@@ -311,11 +311,12 @@ func TestReconcileRemovesOnlyLoginsWithoutARow(t *testing.T) {
 // once: a new sign-in under it starts.
 func TestASignInThatEndedFreesItsName(t *testing.T) {
 	e := newSignInEnv(t)
-	if _, err := e.sched.BeginLoginSignIn(t.Context(), e.member.ID, "claude", "other"); err != nil {
+	pending, err := e.sched.BeginLoginSignIn(t.Context(), e.member.ID, "claude", "other")
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.sched.BeginLoginSignIn(t.Context(), e.member.ID, "claude", "work"); !errors.Is(err, store.ErrConflict) {
-		t.Fatalf("a second sign-in while one is pending: %v; want a conflict", err)
+	if _, err := e.sched.BeginLoginSignIn(t.Context(), e.member.ID, "claude", "work"); !errors.Is(err, store.ErrConflict) || !strings.Contains(err.Error(), `"other" (`+string(pending)+`)`) {
+		t.Fatalf("a second sign-in while one is pending: %v; want a conflict naming the pending one and its id", err)
 	}
 	if err := e.sched.EndLoginSignIns(t.Context(), e.member.ID); err != nil {
 		t.Fatal(err)

@@ -105,7 +105,7 @@ func (s *Scheduler) BeginLoginSignIn(ctx context.Context, member domain.MemberID
 	defer s.mu.Unlock()
 	for _, other := range s.loginSignIns {
 		if other.member == member && !other.ended {
-			return "", fmt.Errorf("%w: the sign-in of login %q is still running; finish it first", store.ErrConflict, other.name)
+			return "", fmt.Errorf("%w: the sign-in of login %q (%s) is still running; finish it first", store.ErrConflict, other.name, other.id)
 		}
 	}
 	if s.loginSignIns == nil {

@@ -76,6 +76,9 @@ func ValidateLoginName(name string) error {
 	if name == string(DefaultLogin) {
 		return errors.New(`"default" names the login in your home; choose another name`)
 	}
+	if strings.HasPrefix(name, "lgn-") {
+		return errors.New(`a login name cannot start with "lgn-", which login ids do`)
+	}
 	for i, c := range name {
 		switch {
 		case c >= 'a' && c <= 'z', c >= '0' && c <= '9':
