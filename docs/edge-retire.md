@@ -6,8 +6,9 @@
 - A **retiring** pair works in full and says where to go: its edge pages
   show `This address of the edge is retiring on <date>. Its new address is
   <address>`, every answer carries the header `aether-edge-retiring: <new
-  relay origin>; date=<date>`, and TODO(after #1132): `sudo
-  cloudfield-server edge status` shows a `retiring` row.
+  relay origin>; date=<date>`, and on a server enrolled there `sudo
+  cloudfield-server edge status` prints a `retiring` row with the command
+  that moves it ([Moving a server](#moving-a-server)).
 - A **retired** pair answers every request but `/healthz` with `410 Gone`
   naming the new address.
 - Nothing moves by itself: a person moves each server, device and connector
@@ -40,6 +41,32 @@ https://edge-old.example.com`. The version line is `aether-server <version>`.
 The last command prints the replacement and the date, or `null` twice when
 the address is not retiring.
 
+The server reads the same from the notice the edge signs with its pinned key
+at each connection, and from then on says so itself:
+
+- `edge status` prints `retiring     https://edge-old.example.com is retiring
+  on <date>; move this server with: sudo cloudfield-server edge move
+  https://edge-new.example.com`, without `on <date>` when the operator set
+  none and with `--config <file>` when it read another options file. A
+  notice that came with the connection that pinned the edge key ends with
+  `(the edge sent this with the connection that pinned its key, so it is
+  trusted on first use and shown only)`.
+- The journal (`sudo journalctl -u aether-server`) gets a warning at each
+  connection: `edge: https://edge-old.example.com is retiring on <date>;
+  move this server with: sudo cloudfield-server edge move
+  https://edge-new.example.com (with the service's --config <file>, if it
+  has one) if edge-url there still names https://edge-old.example.com`.
+- In the dashboard, super admins get a warning titled
+  `https://edge-old.example.com is retiring on <date>` on **Settings →
+  Remote access** and a card with the same title on **Needs you**, each
+  with the move and restart commands of steps 2 and 3. Other members see
+  an **Address** row in Settings, `https://edge-old.example.com is retiring
+  on <date>; the edge recommends https://edge-new.example.com. A super
+  admin moves the server.`, and no card.
+
+A server build from before these notices shows none of the three; the
+`curl` line works on every build.
+
 What to do depends on the version:
 
 | Version | Do this |
@@ -64,17 +91,18 @@ where `cloudfield-server` does not exist yet.
    ```
 
    ```
-   enrolled at https://edge-new.example.com, an address of the same edge (edge key SHA256:<fingerprint>, still pinned); the edge announces https://edge-old.example.com too, so links and connectors made there keep working
+   enrolled at https://edge-new.example.com, an address of the same edge (edge key SHA256:<fingerprint>, still pinned); the edge announces https://edge-old.example.com too, so links and connectors made there keep working until it is retired; it is retiring, so there is no moving back
    /etc/aether/server.conf: edge-url = https://edge-new.example.com (was https://edge-old.example.com)
    apply it with:
      sudo systemctl restart aether-server
-   to move back:
-     sudo aether-server edge move https://edge-old.example.com
    ```
 
-   Links and connectors made at the old address keep working only until the
-   pair is retired. A refusal prints one line, exits 1 and writes nothing;
-   the refusals are listed in [edge.md](edge.md#moving-to-another-address-of-the-edge).
+   A build from before the notices ends the first line at `keep working`
+   and adds `to move back:` with `sudo aether-server edge move
+   https://edge-old.example.com`. With another options file, pass `--config
+   <file>` after the address. A refusal prints one line, exits 1 and writes
+   nothing; the refusals are listed in
+   [edge.md](edge.md#moving-to-another-address-of-the-edge).
 
 3. Apply it. The restart ends every relayed connection until the server is
    back:
@@ -107,24 +135,47 @@ devices and connectors ([Moving a device](#moving-a-device),
 connection   disconnected since <time>: dial https://edge-old.example.com/v1/server/control: 410 Gone: https://edge-old.example.com is retired; this edge is at https://edge-new.example.com
 ```
 
+It still prints the `retiring` row from the notice the server stored before.
 The journal (`sudo journalctl -u aether-server`) logs `edge: control
 connection ended; reconnecting` with the same error, and retries. Nobody
 reaches the server through the edge; member SSH keys and tailnet access are
 not affected.
 
-`edge move` from a retired address fails, because it enrolls at the old
-address first:
+`sudo cloudfield-server edge move https://edge-new.example.com` still moves
+it. When the old address refuses with `410`, the command enrolls at the new
+address only, and moves only when that answer carries a notice, signed with
+the pinned edge key for this enrollment, that the old address is retired in
+favour of the new one; the new address must also present the pinned key,
+speak edge protocol 6 or later and announce itself. A `410`, its text, or a
+notice stored earlier moves nothing. It prints no way back:
+
+```
+enrolled at https://edge-new.example.com, an address of the same edge (edge key SHA256:<fingerprint>, still pinned); the edge says https://edge-old.example.com is retired
+/etc/aether/server.conf: edge-url = https://edge-new.example.com (was https://edge-old.example.com)
+apply it with:
+  sudo systemctl restart aether-server
+```
+
+Restart as in step 3 and check as in step 4.
+
+Without that notice it changes nothing and says what to do by hand:
+
+```
+aether-server: dial https://edge-old.example.com/v1/server/control: 410 Gone: https://edge-old.example.com is retired; this edge is at https://edge-new.example.com; the edge at https://edge-new.example.com sends no notice signed with the pinned key that https://edge-old.example.com is retired, and a refusal alone does not show it, so nothing changed. If https://edge-old.example.com no longer answers for this edge: confirm https://edge-new.example.com and the edge key's fingerprint with whoever runs the edge, then run sudo cloudfield-server config set edge-url https://edge-new.example.com and sudo systemctl restart aether-server
+```
+
+It ends with the same steps when no connection to the old address could be
+made, and when no edge key is pinned, where `sudo cloudfield-server edge
+trust (it shows the fingerprint to compare; type yes)` comes before the
+restart. A build from before this check enrolls at the old address first
+and fails:
 
 ```
 aether-server: edgeagent: enroll at https://edge-old.example.com: dial https://edge-old.example.com/v1/server/control: 410 Gone: https://edge-old.example.com is retired; this edge is at https://edge-new.example.com
 ```
 
-TODO(after #1132): `edge move` accepts a retired address when the new
-address's own answer carries the edge's signed notice that the old one is
-retired in its favour.
-
-Move it by hand instead. First check that the new address presents the
-edge key the server pinned; both commands must print the same
+In either case, move it by hand. First check that the new address presents
+the edge key the server pinned; both commands must print the same
 `SHA256:` fingerprint:
 
 ```sh
@@ -168,8 +219,27 @@ The first prints each relay origin this computer holds a token for; the
 second each saved link through an edge and its server id. Look for
 `https://edge-old.example.com`.
 
-TODO(after #1133): the CLI prints, once per run on stderr, that the address
-is retiring and the commands below for what this computer holds.
+While the address is retiring, a `cloudfield` command that the old address
+answers prints, once, on stderr after its own output:
+
+```
+cloudfield: https://edge-old.example.com says it is retiring on <date> and that its new address is https://edge-new.example.com.
+Sign in there with: cloudfield login --edge https://edge-new.example.com
+The default link (server <server id>) still names https://edge-old.example.com.
+The link "<name>" (server <server id>) still names https://edge-old.example.com.
+The sync daemon's unit names https://edge-old.example.com.
+Moving links and the sync daemon, and signing out of https://edge-old.example.com: https://github.com/3xDevOps/cloudfield/blob/main/docs/edge-retire.md#moving-a-device
+```
+
+Nothing signs that notice: it is the old address's own word. The `Sign in
+there` line is printed only when this computer already knows the new address
+(a token there, or a saved link that names it; the CLI's built-in default
+edge counts only when the old address is one of the project's hosted ones)
+and holds no token for it. For an address it does not know, the line is
+`Confirm that address with whoever runs the edge before you sign in there.`
+The link and daemon lines appear for what this computer holds. The CLI
+prints no link, daemon or sign-out command and changes nothing; the steps
+are these:
 
 1. Sign in at the new address, and confirm the code in the browser:
 
@@ -188,18 +258,34 @@ is retiring and the commands below for what this computer holds.
    with the same name and direct address it had:
 
    ```sh
-   cloudfield link --edge https://edge-new.example.com [--name <name>] [--addr <host:port>] <server id>
+   cloudfield link <server id> --edge https://edge-new.example.com [--name <name>] [--addr <host[:port]>]
    ```
 
-3. Where the sync daemon was installed from such a link, install it again
-   with the same flags, then restart it
-   ([install.md](install.md#the-client-side-sync-daemon)):
+   ```
+   linked to server <server id> through edge-new.example.com as <display name> (<role>)
+   ```
+
+   Every `link` makes its server the default link, the top-level fields of
+   `config.json`, and `--name` also replaces the saved link of that name.
+   So link the default link's server last, without `--name` if it had none.
+
+3. Where the sync daemon's unit names the old address, write the unit again
+   and restart it ([install.md](install.md#the-client-side-sync-daemon)):
 
    ```sh
    grep edge-old.example.com ~/.config/systemd/user/aether-daemon.service
    cloudfield daemon install --repo <path>
    systemctl --user daemon-reload && systemctl --user restart aether-daemon
    ```
+
+   `daemon install` takes the server and its edge address from the default
+   link. For another server, name both: `cloudfield daemon install --repo
+   <path> --server-id <server id> --edge-url https://edge-new.example.com`.
+   It writes the whole unit again, so repeat `--workspace`, `--base`,
+   `--remote` and `--user` where the old `ExecStart` line has them, and
+   with `--server-id` also `--server`, `--key` and `--known-hosts`. The
+   unit path and the restart command are Linux's; install.md has the macOS
+   and Windows ones.
 
 4. Sign out at the old address while it still answers, so its token is
    revoked there:
@@ -210,6 +296,7 @@ is retiring and the commands below for what this computer holds.
 
    ```
    signed out of edge-old.example.com: the device token is revoked at the edge and deleted here; the device key and your links stay
+   still signed in to edge-new.example.com; sign out there with: aether logout --edge https://edge-new.example.com
    ```
 
 Check it: the `jq` command above prints only `https://edge-new.example.com`,
@@ -217,10 +304,15 @@ and `cloudfield servers --edge https://edge-new.example.com` lists your
 servers.
 
 The desktop app uses the same token file and links as the CLI on that
-computer, so the steps above move it too. TODO(after #1133): the desktop and
-Android apps show the notice beside the signed-in edge, with the new address
-filled into the sign-in field for you to confirm. How to point the Android
-app at another address of the edge is not documented yet.
+computer, so the steps above move it too. The app's sign-in step for the
+Cloudfield relay shows the notice under the signed-in edge, as text:
+`edge-old.example.com says it is retiring on <date> and that its new address
+is https://edge-new.example.com.`, then `You are already signed in at
+https://edge-new.example.com.` when this computer is, else `Confirm that
+address with whoever runs the edge before you sign in there. Then run
+cloudfield login --edge <new address>.` The app fills in no address and
+starts no sign-in from a notice. How to point the Android app at another
+address of the edge is not documented yet.
 
 ### If the address is retired before the device moved
 
@@ -234,16 +326,29 @@ aether: list servers: auth-old.example.com refused: https://auth-old.example.com
 
 A connection to a server ends in `connect to server <server id>:
 edge-old.example.com refused: https://edge-old.example.com is retired; this
-edge is at https://edge-new.example.com (HTTP 410)`. The dashboard shows
-`<edge> refused the connection to <server>`. Run steps 1 to 3.
+edge is at https://edge-new.example.com (HTTP 410)`. The dashboard's
+connection line reads `<edge> refused the connection to <server>: <the
+edge's text>`, and a first load that fails shows a panel titled
+`edge-old.example.com says it is retired`. Run steps 1 to 3.
 
-`cloudfield logout --edge https://edge-old.example.com` is refused the same
-way and keeps the local entry, ending `; the token is still valid and kept in
-<config dir>/edge-tokens.json so you can retry`. The edge deleted that token
-when it retired the pair. TODO(after #1133): on a `410` that names the
-replacement, `logout` removes the local token and says the edge did not
-confirm it, with the device id and the Devices page at the new address where
-to revoke it.
+Then `cloudfield logout --edge https://edge-old.example.com` deletes the
+local token, though a retired address confirms no sign-out:
+
+```
+deleted the device token for edge-old.example.com here, but the edge did not confirm the sign-out: it answered that this address is retired and that its new address is https://edge-new.example.com.
+Device <device id> may still be signed in; revoke it on https://auth-new.example.com/devices.
+still signed in to edge-new.example.com; sign out there with: aether logout --edge https://edge-new.example.com
+```
+
+The edge deleted that token when it retired the pair. The second line names
+the sign-in origin this computer recorded when it signed in at the new
+address. Without that sign-in it ends `revoke it on the Devices page of the
+sign-in origin of https://edge-new.example.com` when this computer knows the
+new address as above, else `ask whoever runs the edge for the address of its
+Devices page and revoke it there`. A `410` that names no replacement, or that comes
+without the edge's protocol version header, keeps the token and ends `; the
+token is still valid and kept in <config dir>/edge-tokens.json so you can
+retry`, as every `410` does on a CLI from before this change.
 
 ## Moving a connector
 
