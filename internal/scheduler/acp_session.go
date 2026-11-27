@@ -41,8 +41,12 @@ type ACPStream struct {
 	// that opened with no live session: the next session started, or the
 	// closing session it found has ended.
 	Started <-chan struct{}
-	State   *acphost.State
-	Cancel  func()
+	// Starting is a stream with no live session yet because the launch's
+	// open of the first one is still running; a prompt sent now is held
+	// for it.
+	Starting bool
+	State    *acphost.State
+	Cancel   func()
 }
 
 func (s *Scheduler) ACPSubscribe(run domain.RunID, afterSeq int64) (ACPStream, error) {
@@ -60,7 +64,7 @@ func (s *Scheduler) ACPSubscribe(run domain.RunID, afterSeq int64) (ACPStream, e
 		// The session is closing: the viewer resubscribes once it is gone.
 		started = sess.Done()
 	}
-	out := ACPStream{Started: started, Cancel: release}
+	out := ACPStream{Started: started, Cancel: release, Starting: s.acp.starting(run)}
 	log, err := s.openItemLog(run)
 	if err != nil {
 		release()

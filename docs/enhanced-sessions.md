@@ -69,6 +69,19 @@ first prompt. An agent with no ACP command is refused:
 scheduler: harness "custom" has no command for mode "acp"
 ```
 
+The launch returns once the session's sandbox runs, without waiting for the
+agent to start. A message sent while the agent starts is held: `run.inject`
+answers `outcome: "queued"`, the message reads **Queued**, and the agent gets
+the task first, then each held message in the order sent. If the agent does
+not start, each held message reads `not_sent` with the error that stopped it
+([Restarts and failures](#restarts-and-failures)). A stop or an option
+change in that window runs once the start has ended, and a switch to Standard
+is refused until the agent has reported its session. A server
+restart in that window turns held messages `not_sent` with `agent connection
+closed`; the next server process starts the agent and sends it the task. Background
+sessions still wait for the agent, so their launch reports a start that
+failed.
+
 `--model` is set after the session opens, so the launch itself still
 succeeds. If the agent rejects it, the session runs on the agent's default
 model, or the one it already had, and says so: the session's `model` becomes

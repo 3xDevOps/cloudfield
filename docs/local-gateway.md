@@ -2943,7 +2943,9 @@ does not run its agent over ACP`. Every frame is JSON text.
 
 2. Server answers one ack frame. `seq` is the high-water mark the client
    holds once the `replay` frames that follow are applied; `live` says
-   whether a session is running; `state` is its snapshot (turn in flight,
+   whether a session is running; `starting`, set with `live` false, says
+   the launched session's agent has not started yet, so a `run.inject`
+   sent now is held and delivered once it has; `state` is its snapshot (turn in flight,
    queued prompts, pending requests with their options, mode, config
    options, commands, the agent's `auth` status and `auth_methods`,
    `prompt_images`: whether the agent accepts ACP image content, and

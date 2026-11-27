@@ -25,7 +25,9 @@ type ACPStreamRequest struct {
 }
 
 // ACPStreamResponse is the aether-acp ack. Seq is the high-water mark the
-// client holds once the Replay frames that follow are applied.
+// client holds once the Replay frames that follow are applied. Starting is
+// set with Live false while a launched session's agent is still starting: a
+// prompt sent now is held and delivered once it has.
 type ACPStreamResponse struct {
 	OK                bool            `json:"ok"`
 	Seq               int64           `json:"seq"`
@@ -34,6 +36,7 @@ type ACPStreamResponse struct {
 	TruncatedBefore   bool            `json:"truncated_before,omitempty"`
 	Epoch             int64           `json:"epoch"`
 	Live              bool            `json:"live"`
+	Starting          bool            `json:"starting,omitempty"`
 	State             json.RawMessage `json:"state,omitempty"`
 	HasControl        bool            `json:"has_control"`
 	ControlSessionID  string          `json:"control_session_id,omitempty"`
