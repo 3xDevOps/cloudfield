@@ -112,6 +112,16 @@ describe('a launched session whose agent failed to start', () => {
     expect(screen.getByText(/then choose Retry Enhanced/)).toBeDefined()
     for (const name of ['Sign in on Agents', 'Open a terminal', 'Retry Enhanced']) expect(screen.getByRole('button', { name })).toBeDefined()
   })
+
+  it('keeps "send your message again" for a refused turn on an agent that is asleep', () => {
+    useStore.setState({ acpSessions: {}, agentList: null, info: serverInfo })
+    const store = useStore.getState()
+    store.acpAck('run_1', { ...ack, seq: 1, replay: 1, live: false })
+    store.acpFrames('run_1', [{ seq: 1, item: { seq: 1, epoch: 0, time: '2026-11-27T10:00:00Z', turn: 0, kind: 'notice', notice: { severity: 'error', title: 'Prompt failed', description: 'Authentication required' } } }])
+    renderCallout(useStore.getState().acpSessions.run_1!)
+    expect(screen.getByText(/then send your message again/)).toBeDefined()
+    expect(screen.queryByRole('button', { name: 'Retry Enhanced' })).toBeNull()
+  })
 })
 
 describe('open in Standard', () => {

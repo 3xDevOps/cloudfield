@@ -4144,7 +4144,7 @@ The header's **Answer** focuses the docked card on every screen. While Session s
 you** shows one link, "1 request, shown below the timeline", that closes a
 Details sheet and focuses the card; on other views it lists the cards. `routes/run/session-failure.tsx` shows an adapter failure with
 **Retry Enhanced** and **Open in Standard**, and a sign-in failure with the
-agent's auth methods, plus **Retry Enhanced** when the agent is not running,
+agent's auth methods, plus **Retry Enhanced** when the agent failed to start,
 since signing in does not start it. On a run on the viewer's own account it adds **Sign in
 on Agents**, and when that agent's `agent.list` row has `login_problem` its
 title is the alert's ("Claude Code is signed out" or "Claude Code's sign-in

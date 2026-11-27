@@ -32,7 +32,7 @@ const authError = /authentication required|authrequired|not logged in|not signed
 
 type SessionFailure =
   | { kind: 'adapter'; title: string; detail?: string; seq?: number }
-  | { kind: 'auth'; detail?: string; seq?: number }
+  | { kind: 'auth'; detail?: string; seq?: number; stopped: boolean }
 
 function sessionFailure(session: AcpSession | undefined): SessionFailure | null {
   if (!session) return null
@@ -50,8 +50,9 @@ function sessionFailure(session: AcpSession | undefined): SessionFailure | null 
   }
   const authNone = session.state?.auth?.authStatus?.kind === 'none'
   const detail = notice?.notice?.description
-  if ((detail && authError.test(detail)) || authNone) return { kind: 'auth', detail, seq: notice?.seq }
-  if (notice && !session.live && adapterFailed.includes(notice.notice!.title)) return { kind: 'adapter', title: notice.notice!.title, detail, seq: notice.seq }
+  const stopped = !!notice && !session.live && adapterFailed.includes(notice.notice!.title)
+  if ((detail && authError.test(detail)) || authNone) return { kind: 'auth', detail, seq: notice?.seq, stopped }
+  if (stopped) return { kind: 'adapter', title: notice!.notice!.title, detail, seq: notice!.seq }
   return null
 }
 
@@ -183,7 +184,7 @@ export function SessionFailureCallout({ run, session, switchable, shells, nav }:
   )
   if (failure.kind === 'auth') {
     // Signing in restarts no agent that failed to start, and its composer has no box to send from.
-    const stopped = !session?.live
+    const { stopped } = failure
     const then = stopped ? 'then choose Retry Enhanced' : 'then send your message again'
     const label = session?.state?.auth?.authStatus?.label
     const methods = session?.state?.auth_methods ?? []
