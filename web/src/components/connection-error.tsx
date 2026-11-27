@@ -136,7 +136,7 @@ function copyFor({ kind, dead, edge, serverID, approvalCode, retired }: Connecti
     return {
       icon: ShieldOff,
       eyebrow: 'Refused by the edge',
-      title: `${edge ? edgeHost(edge) : 'The edge address'} is retired`,
+      title: `${edge ? edgeHost(edge) : 'The edge address'} says it is retired`,
       description:
         'It refused the connection with the text below, which names its new address. Confirm that address with whoever runs the edge, then sign in there and link your server again.',
       action: 'Retry connection',

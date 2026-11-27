@@ -164,7 +164,7 @@ describe('ConnectionError', () => {
       const text = 'edge.example.test refused: https://edge.example.test is retired; this edge is at https://new.example.test (HTTP 410)'
       render(<ConnectionError kind="edge-refused" dead={false} error={text} edge="https://edge.example.test" retired onRetry={vi.fn()} />)
 
-      expect(screen.getByRole('heading', { name: 'edge.example.test is retired' })).toBeDefined()
+      expect(screen.getByRole('heading', { name: 'edge.example.test says it is retired' })).toBeDefined()
       expect(screen.getByText(/Confirm that address with whoever runs the edge/)).toBeDefined()
       expect(screen.getByText(text)).toBeDefined()
       expect(screen.getByRole('button', { name: 'Retry connection' }).getAttribute('class')).not.toContain('bg-action ')

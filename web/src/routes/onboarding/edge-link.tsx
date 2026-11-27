@@ -15,7 +15,7 @@ import { ApiError, type Api } from '@/lib/api'
 import { parseClaim, parseJoin } from '@/lib/claim-link'
 import { edgeHost, message, providerName } from '@/lib/format'
 import { isApprovalCode, shellQuote } from '@/lib/shell'
-import type { EdgeAccount, EdgeLinkResult, EdgeLogin, EdgeStatusNotice, EdgeRefusal, EdgeServer, ServerEdge } from '@/lib/types'
+import type { EdgeAccount, EdgeLinkResult, EdgeLogin, EdgeStatusNotice, EdgeRefusal, EdgeServer } from '@/lib/types'
 import type { HandedLink } from '@/lib/url-state'
 import { useStore } from '@/store'
 import type { Capability } from '@/lib/capability'
@@ -451,30 +451,27 @@ function JoinPanel({
   )
 }
 
-/** Whether the linked server's own notice, verified against the edge key it
- * pinned before this handshake, names the same move. */
-function serverConfirms(server: ServerEdge | null, edge: string, notice: EdgeStatusNotice): boolean {
-  const own = server?.notice
-  return !!own && !own.first_use && sameOrigin(server.edge_url, edge) && sameOrigin(own.replacement, notice.replacement)
-}
-
-function sameOrigin(a: string, b: string): boolean {
-  try {
-    return new URL(a).origin === new URL(b).origin
-  } catch {
-    return false
-  }
+/** An edge origin in the form edgeclient.Canonical gives it, null for
+ * anything else. It compares as the gateway does, so https://127.1 and
+ * https://127.0.0.1 stay two addresses. */
+function canonicalEdge(origin: string): string | null {
+  const m = /^(https?):\/\/([^/?#@\s]+)\/?$/.exec(origin)
+  if (!m) return null
+  const host = m[2].toLowerCase()
+  return m[1] === 'https' ? `https://${host.replace(/:443$/, '')}` : `http://${host}`
 }
 
 function retiringNotice(e: SignedInEdge, edges: SignedInEdge[], signIn: SignIn) {
   if (!e.retiring) return null
-  const there = edges.find((o) => sameOrigin(o.edge, e.retiring!.replacement))
+  const replacement = canonicalEdge(e.retiring.replacement)
+  const there = edges.find((o) => replacement !== null && canonicalEdge(o.edge) === replacement)
   return <RetiringNotice key={e.edge} edge={e.edge} notice={e.retiring} signedInThere={there?.edge} signIn={signIn} />
 }
 
 /** What an edge address says of itself. Nothing authenticates it, so the
- * new address is filled in only when this computer, or the linked server's
- * verified notice, already names it; signing in stays the person's step. */
+ * sign-in field beside it is filled only with an address this computer
+ * already knows, or the one the linked server's verified notice names;
+ * signing in stays the person's step. */
 export function RetiringNotice({
   edge,
   notice,
@@ -488,57 +485,66 @@ export function RetiringNotice({
   signIn: SignIn
 }) {
   const server = useStore((s) => s.edge)
-  const known = notice.known || serverConfirms(server, edge, notice)
-  const [target, setTarget] = useState('')
-  useEffect(() => {
-    if (known) setTarget((t) => t || notice.replacement)
-  }, [known, notice.replacement])
+  const own = server?.notice
+  const verified =
+    own && !own.first_use && canonicalEdge(server.edge_url) === canonicalEdge(edge) &&
+    canonicalEdge(own.replacement) !== null && canonicalEdge(own.replacement) === canonicalEdge(notice.replacement)
+      ? own.replacement
+      : null
+  const trusted = notice.known ? notice.replacement : verified
+  // What the person typed belongs to the notice and the trust it was typed under.
+  const scope = `${edge} ${notice.state} ${notice.replacement} ${trusted ?? ''}`
+  const [edit, setEdit] = useState<{ scope: string; value: string } | null>(null)
+  const target = edit?.scope === scope ? edit.value : (trusted ?? '')
   return (
-    <Callout
-      tone={notice.state === 'retired' ? 'failed' : 'needs-you'}
-      className="self-stretch"
-      title={
-        <>
-          <span className="font-code">{edgeHost(edge)}</span>{' '}
-          {notice.state === 'retired' ? 'is retired' : 'is retiring'}
-          {notice.state === 'retiring' && notice.date && (
-            <>
-              {' '}on <span className="whitespace-nowrap">{notice.date}</span>
-            </>
-          )}
-        </>
-      }
-    >
-      <p>
-        It says its new address is <span className="break-words font-code">{notice.replacement}</span>.
-      </p>
-      <p className="text-muted">
-        {signedInThere ? (
+    <>
+      <Callout
+        tone={notice.state === 'retired' ? 'failed' : 'needs-you'}
+        className="self-stretch"
+        title={
           <>
-            You are signed in at <span className="font-code">{edgeHost(signedInThere)}</span> too: choose it above and
-            link your server again through it.
+            <span className="font-code">{edgeHost(edge)}</span> says it{' '}
+            {notice.state === 'retired' ? 'is retired' : 'is retiring'}
+            {notice.state === 'retiring' && notice.date && (
+              <>
+                {' '}on <span className="whitespace-nowrap">{notice.date}</span>
+              </>
+            )}
           </>
-        ) : known ? (
-          'Sign in at the new address, then link your server again there.'
-        ) : (
-          'Confirm that address with whoever runs the edge before you sign in there.'
-        )}
-      </p>
+        }
+      >
+        <p>
+          It says its new address is <span className="break-words font-code">{notice.replacement}</span>.
+        </p>
+        <p className="text-muted">
+          {signedInThere ? (
+            <>
+              You are signed in at <span className="font-code">{edgeHost(signedInThere)}</span> too: choose it above and
+              link your server again through it.
+            </>
+          ) : trusted ? (
+            'Sign in at the new address below, then link your server again there.'
+          ) : (
+            'Confirm that address with whoever runs the edge before you sign in there.'
+          )}
+        </p>
+      </Callout>
       {!signedInThere && (
         <form
-          className="mt-1 flex min-w-0 flex-wrap items-end gap-2"
+          aria-label="Sign in at another edge"
+          className="flex min-w-0 flex-wrap items-end gap-2 self-stretch"
           onSubmit={(e) => {
             e.preventDefault()
             void signIn.signIn(target.trim())
           }}
         >
-          <FormField className="min-w-0 flex-1 basis-56" label="Sign in at">
+          <FormField className="min-w-0 flex-1 basis-56" label="Sign in at another edge address">
             <Input
               className="font-code"
               autoComplete="off"
               placeholder="https://"
               value={target}
-              onChange={(e) => setTarget(e.target.value)}
+              onChange={(e) => setEdit({ scope, value: e.target.value })}
             />
           </FormField>
           <Button type="submit" variant="secondary" disabled={!target.trim() || signIn.starting}>
@@ -546,7 +552,7 @@ export function RetiringNotice({
           </Button>
         </form>
       )}
-    </Callout>
+    </>
   )
 }
 
