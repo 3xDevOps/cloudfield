@@ -181,24 +181,36 @@ func TestEnhancedRunRestoresWhenItsKeeperIsGone(t *testing.T) {
 	}
 }
 
+func killAgent(t *testing.T, exec *acpExec) {
+	t.Helper()
+	exec.exitCode.Store(137)
+	if _, err := exec.Stop(t.Context(), 0); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func hostMemoryAvailable(available uint64) func(*Config) {
+	return func(cfg *Config) {
+		cfg.hostMemory = func() (uint64, uint64, error) { return 32 << 30, available, nil }
+	}
+}
+
 func TestEnhancedRunRestartsAnAgentASignalKilled(t *testing.T) {
 	t.Parallel()
-	e, rt := newACPEnv(t)
+	e, rt := newACPEnv(t, hostMemoryAvailable(16<<30))
 	run := e.launchACP(t, "say pong")
 	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
-	kill := func(exec *acpExec) {
-		t.Helper()
-		exec.exitCode.Store(137)
-		if _, err := exec.Stop(t.Context(), 0); err != nil {
-			t.Fatal(err)
-		}
-	}
+	kill := func(exec *acpExec) { killAgent(t, exec) }
 	kill(rt.all()[0])
 	waitFor(t, "the conversation restored in a new agent", func() bool {
 		return len(rt.all()) == 2 && e.sched.acp.session(run.ID) != nil && e.sched.IdleEnhanced(run.ID)
 	})
-	if !slices.Contains(rt.all()[1].agent.Methods(), acp.AgentMethodSessionResume) {
+	methods := rt.all()[1].agent.Methods()
+	if !slices.Contains(methods, acp.AgentMethodSessionResume) {
 		t.Fatal("the restart did not resume the conversation")
+	}
+	if slices.Contains(methods, acp.AgentMethodSessionPrompt) {
+		t.Fatalf("the restart sent a turn again: %v", methods)
 	}
 	if _, err := e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: "after the kill"}, false, nil); err != nil {
 		t.Fatal(err)
@@ -215,6 +227,43 @@ func TestEnhancedRunRestartsAnAgentASignalKilled(t *testing.T) {
 	})
 	if n := len(rt.all()); n != 2 {
 		t.Fatalf("an agent killed again right after its restart was restarted: %d ACP servers", n)
+	}
+}
+
+func TestAKilledAgentIsNotRestartedOnAHostShortOfMemory(t *testing.T) {
+	t.Parallel()
+	e, rt := newACPEnv(t, hostMemoryAvailable(1<<30))
+	run := e.launchACP(t, "say pong")
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	killAgent(t, rt.all()[0])
+	waitFor(t, "the killed agent left stopped", func() bool {
+		row, err := e.db.GetRun(t.Context(), run.ID)
+		return err == nil && strings.HasPrefix(row.Reason, acpEndedReason) &&
+			strings.Contains(row.Reason, "the host has 1.0 GiB of memory available, under the 3.2 GiB every launch keeps free")
+	})
+	if n := len(rt.all()); n != 1 {
+		t.Fatalf("an agent was restarted on a host short of memory: %d ACP servers", n)
+	}
+}
+
+func TestAKilledAgentThatResumesKeepsItsConversationWhenTheRestoreFails(t *testing.T) {
+	t.Parallel()
+	e, rt := newACPEnv(t, hostMemoryAvailable(16<<30), func(cfg *Config) { cfg.sleepAnyAgent = true })
+	run := e.launchACP(t, "say pong")
+	waitItems(t, e.sched, run.ID, "the task's turn", turnEnded("end_turn", 1))
+	conversation := e.sched.acp.session(run.ID).SessionID()
+	forgetConversations(rt)
+	killAgent(t, rt.all()[0])
+	waitFor(t, "the failed restore left the session stopped", func() bool {
+		row, err := e.db.GetRun(t.Context(), run.ID)
+		return err == nil && strings.HasPrefix(row.Reason, acpFailedReason) && strings.Contains(row.Reason, "restore conversation "+conversation)
+	})
+	execs := rt.all()
+	if methods := execs[len(execs)-1].agent.Methods(); len(execs) != 2 || slices.Contains(methods, acp.AgentMethodSessionNew) {
+		t.Fatalf("%d ACP servers, the last called %v, want a restart that starts no new conversation", len(execs), methods)
+	}
+	if row, err := e.db.GetRun(t.Context(), run.ID); err != nil || row.HarnessSessionID != conversation {
+		t.Fatalf("the run records conversation %q, %v, want the killed agent's %s", row.HarnessSessionID, err, conversation)
 	}
 }
 
