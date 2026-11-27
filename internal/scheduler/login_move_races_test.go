@@ -16,8 +16,10 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/agentstatus"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
+	"github.com/3xDevOps/cloudfield/internal/fallback"
 	"github.com/3xDevOps/cloudfield/internal/quota"
 	"github.com/3xDevOps/cloudfield/internal/runtime"
+	"github.com/3xDevOps/cloudfield/internal/store"
 	acp "github.com/coder/acp-go-sdk"
 )
 
@@ -827,6 +829,112 @@ func TestNoContinuationIsSentWhileAMoveHoldsTheSession(t *testing.T) {
 	e.sched.mu.Lock()
 	entry.accountSwap, entry.moving = nil, false
 	e.sched.mu.Unlock()
+}
+
+// recheckStore holds the first run read after armed until the next member
+// read, which a move makes only after it tried to send its continuation.
+type recheckStore struct {
+	store.Store
+	armed, held, released atomic.Bool
+	release               chan struct{}
+}
+
+func (s *recheckStore) GetRun(ctx context.Context, id domain.RunID) (*domain.Run, error) {
+	if s.armed.Load() && s.held.CompareAndSwap(false, true) {
+		<-s.release
+	}
+	return s.Store.GetRun(ctx, id)
+}
+
+func (s *recheckStore) GetMember(ctx context.Context, id domain.MemberID) (*domain.Member, error) {
+	if s.held.Load() && s.released.CompareAndSwap(false, true) {
+		close(s.release)
+	}
+	return s.Store.GetMember(ctx, id)
+}
+
+// A revoke sweep that claims the session as its move to Grace ends, before
+// the move sends its continuation, and then finds the session no longer on
+// the revoked account sends the continuation once instead: an Enhanced
+// session is told of the move and gets its mail after that turn, and a
+// Background session's continuation turn ends the run.
+func TestARevokeRecheckThatKeepsTheSessionSendsItsContinuation(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []domain.LaunchMode{domain.LaunchACP, domain.LaunchHeadless} {
+		t.Run(string(mode), func(t *testing.T) {
+			t.Parallel()
+			st := &recheckStore{release: make(chan struct{})}
+			e, rt, notes := newFallbackEnv(t, func(cfg *Config) {
+				enhancedClaude(cfg)
+				cfg.Harnesses["codex"] = HarnessSpec{HeadlessArgs: []string{"fake-agent", "-p", "{task}"}, ACPArgs: []string{"acp-mock"}}
+				st.Store = cfg.Store
+				cfg.Store = st
+			})
+			e.share(t)
+			var usage fallback.QuotaReader = claudeUsage{e.owner.ID: 10}
+			if mode == domain.LaunchHeadless {
+				writeHomeFiles(t, e.ownerHome, ".codex/auth.json")
+				endsBackgroundRuns(e.testEnv)
+				usage = codexUsage{}
+			}
+			var once sync.Once
+			e.sched.UseUsageFallback(UsageFallback{Usage: usage, AuthorizationMu: &sync.Mutex{}, Note: func(ctx context.Context, run *domain.Run, body, key string) error {
+				once.Do(func() {
+					e.sched.mu.Lock()
+					entry := e.sched.runs[run.ID]
+					e.sched.mu.Unlock()
+					st.armed.Store(true)
+					go e.sched.leaveRevokedAccount(entry)
+					for deadline := time.Now().Add(waitTimeout); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+						e.sched.mu.Lock()
+						claimed := st.held.Load() && entry.moving
+						e.sched.mu.Unlock()
+						if claimed {
+							return
+						}
+					}
+				})
+				return notes.post(ctx, run, body, key)
+			}})
+			var run *domain.Run
+			var err error
+			if mode == domain.LaunchACP {
+				run, err = e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP)
+				if err != nil {
+					t.Fatal(err)
+				}
+				waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+				_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
+			} else if run, err = e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, acpmock.PromptUsageLimit, "codex", domain.LaunchHeadless); err != nil {
+				t.Fatal(err)
+			}
+			e.sched.mu.Lock()
+			entry := e.sched.runs[run.ID]
+			e.sched.mu.Unlock()
+			waitFor(t, "the continuation", func() bool {
+				execs := rt.all()
+				return len(execs) > 1 && len(sentPrompts(t, execs[len(execs)-1])) > 0
+			})
+			replacement := rt.all()[len(rt.all())-1]
+			if mode == domain.LaunchHeadless {
+				e.waitStoreStatus(t, run.ID, domain.RunCompleted)
+			} else {
+				waitFor(t, "the session idle", func() bool { return e.sched.IdleEnhanced(run.ID) })
+				if err = e.sched.WakeEnhanced(t.Context(), run.ID, "unread mail"); err != nil {
+					t.Fatal(err)
+				}
+				waitFor(t, "the mail", func() bool { return len(sentPrompts(t, replacement)) == 2 })
+			}
+			swap, _ := e.marker(entry)
+			want := []string{continuedOnGrace}
+			if mode == domain.LaunchACP {
+				want = append(want, "unread mail")
+			}
+			if got := sentPrompts(t, replacement); !slices.Equal(got, want) || swap != nil {
+				t.Fatalf("the replacement was prompted %q, marker %+v; want %q and no marker", got, swap, want)
+			}
+		})
+	}
 }
 
 // A session that left Ada's account on a restriction and then ran out on

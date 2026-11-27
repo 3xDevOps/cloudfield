@@ -273,7 +273,13 @@ func (s *Scheduler) leaveRevokedAccount(entry *supervised) {
 		if err != nil {
 			slog.Warn("scheduler: recheck the session's account share", "run", entry.runID, "error", err)
 		}
-		s.releaseMoveClaim(entry)
+		// The claim may have kept a move that just ended from sending its
+		// continuation.
+		if !s.releaseMoveClaim(entry) {
+			if swap := s.acp.owedContinuation(entry); swap != nil {
+				s.goMove(func() { s.acp.sendContinuation(entry, swap) })
+			}
+		}
 		return
 	}
 	if reachErr := s.checkRunReach(ctx, run); errors.Is(reachErr, permissions.ErrDenied) || errors.Is(reachErr, store.ErrNotFound) {
