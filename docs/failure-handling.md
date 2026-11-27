@@ -38,7 +38,7 @@ shown beside the status says why it is there.
 | The kernel's file-watch limits are spent | Server log `gitengine: cannot watch checkout for file changes; polling for diff snapshots instead`. | Launches the session anyway and checks its files every 60 seconds. | [Raise file-watch limits](#raise-file-watch-limits). |
 | Another process holds the database at startup | `store: begin migration <n>: database is locked (5) (SQLITE_BUSY)` | The server exits. | Find and stop the other writer, then start again. Never delete the database. |
 | The first start after an upgrade takes minutes | Clients cannot connect and the server logs nothing yet. `sudo cloudfield-server update` prints `aether-server is migrating the database at schema <n> to <m>; waiting for it`. | Migrates the database before it serves. Migration 109 reads every stored event to build three indexes: on a 9 GB event log that took 1-2 minutes in testing, longer on a busy disk. | Wait. A restart starts the migration over, and an update rolls back a release that starts twice without finishing. Before the update, free the database's size again plus a tenth of it: the update copies the database into `server-update/`, and the migration adds indexes of about 4% of the event log's size (400 MB on 9 GB in testing), as much again in `aether.db-wal`, and sort files in `/var/tmp`. |
-| `sudo cloudfield-server update` takes minutes while many sessions are open | The update waits after the new server starts. The server log shows `scheduler: recovery: reconnecting sessions sessions=<n> at_once=4`, then `scheduler: recovery: session started run=<id>` and `scheduler: recovery: session done run=<id> took=<duration>` for each session, then `scheduler: recovery: sessions done`. | Reconnects every open session before it counts as started, 4 at a time, so one slow session does not hold up the rest. An update still rolls back if a session has not finished 5 minutes after the database migration. | Wait. `sudo journalctl -u aether-server -f` shows each session; a session with `session started` and no `session done` is the one still reconnecting, and a long `took` names a slow one. |
+| `sudo cloudfield-server update` takes minutes while many sessions are open | The update waits after the new server starts. The server log shows `scheduler: recovery: reconnecting sessions sessions=<n> at_once=4`, then `scheduler: recovery: session started run=<id>` and `scheduler: recovery: session done run=<id> took=<duration>` for each session, then `scheduler: recovery: sessions done`. | Reconnects every open session before it counts as started, 4 at a time, so one slow session does not hold up the rest. A sandbox that does not answer is waited for within fixed bounds, and its session is kept. A session whose VM is stopped, as the disk guard leaves it, is paused, so only its terminal's 5 seconds and its browser's 30 apply. One whose sandbox runs and stays silent gets 5 seconds for the agent's terminal, which carries on once the sandbox answers; 1 minute for an Enhanced agent, which then waits for **Retry Enhanced** ([Enhanced sessions](#enhanced-sessions)); 30 seconds for its other terminals and shell tabs, which the next request for them takes up; and 30 seconds each for its browser and for a switch between Standard and Enhanced the restart interrupted. The bounds apply to each session: with 9 or more Enhanced sessions whose sandboxes do not answer, an update can take longer than its 5 minutes. An update still rolls back if a session has not finished 5 minutes after the database migration. | Wait. `sudo journalctl -u aether-server -f` shows each session; a session with `session started` and no `session done` is the one still reconnecting, and a long `took` names a slow one. |
 | The server is down when a schedule is due | Nothing. | Skips the missed occurrence and waits for the next one. | Launch the session by hand if it matters. |
 
 A lost connection does not prove that a command failed. Before you retry
@@ -289,9 +289,11 @@ server has disk space again.`; one you paused, resumed, closed or woke
 yourself is yours, and the guard leaves it. A session that fills the disk
 again within 10 minutes of such a resume stays paused until you resume it
 (`Paused again: ...`). While a session is held, its Files view and closing it
-wait for the resume. Files a session deletes give their space back to the
-host. What a session writes to its home, which lives on the server rather
-than on a VM disk, is not counted, as it is not for a Docker session.
+wait for the resume. A server restart leaves a held session paused with its
+VM stopped, and it resumes the same way. Files a session deletes give their
+space back to the host. What a session writes to its home, which lives on
+the server rather than on a VM disk, is not counted, as it is not for a
+Docker session.
 
 Attaching, messaging, pulling, closing, killing and deleting sessions keep
 working below the reserve, and so does reopening a closed session whose container
@@ -762,6 +764,7 @@ login shell stay up.
 | Root in one of your sessions took your shared home, for example a package install that ran `systemd-tmpfiles` | **Home restored** with the owner and mode Cloudfield found, before the agent starts again. If restoring fails: **Disconnected**, `enhanced session failed: the agent cannot read its home: ...`. | Send the refused message again. Run `sudo chown "$(id -u):$(id -g)" "$HOME" && sudo chmod u+rwx "$HOME"` in the session's **Terminal** tab, which runs as the session's user, when restoring failed, or when the agent stays connected while its tools fail with `permission denied` or exit status 127, which no restore covers. After a failed restore, press **Retry Enhanced**. |
 | The server restarts mid-turn | The turn keeps running in the adopted conversation; a message queued behind it is sent again unless the agent already had it. In a session VM, a name lookup made while the server is down fails: the server answers the VM's DNS. | Nothing. Run again a command that failed to resolve a name. |
 | The server restarts and cannot reattach to the agent's keeper, or the session's sandbox predates keepers | **Agent restarted** with the reason, then **Needs you**, `turn interrupted`. Background tasks the agent was running are gone; commands in its `cloudfield-internal terminal` terminals keep running. | Send a message to continue. |
+| The server restarts and the session's sandbox does not answer within 1 minute | **Disconnected**, `enhanced session failed: reattach to the agent's keeper: <error>`. The agent keeps running in the sandbox. | **Retry Enhanced** once the sandbox answers. It reattaches to the same agent. |
 | You cancel a turn or press Stop | **Waiting**, `turn cancelled`. | Send a message when you want it to go on. |
 | A Claude background task never ends | `running`, `working in background: <n> tasks`. | Press Stop. |
 | The old session cannot be restored | A new session starts; the item log says why. | Repeat context the agent lost. |
@@ -770,7 +773,10 @@ A Background Enhanced session has no one to retry it: any of these failures ends
 it as `failed` with `agent exited 1: <cause>`, for example `agent exited 1:
 the agent's turn ended: cancelled`. A server restart mid-turn leaves its turn
 running; when the server cannot reattach, it restores the session and asks the
-agent to continue.
+agent to continue. A reattach to the agent's keeper that runs out of its 1
+minute, after a server restart or a resume, ends nothing: the session keeps
+running, its Chat view shows **Enhanced agent failed** with the error, and
+pausing and resuming it, which **Retry Enhanced** does, reattaches.
 
 ## Usage limit mid-session
 

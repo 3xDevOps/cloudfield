@@ -399,7 +399,10 @@ cannot be restored starts a new one and says `Started a new agent
 conversation`. When another process attaches to the keeper, which only a
 second server on the same data directory or root in the container can do, the
 server logs **Agent connection taken over** and restores the conversation the
-same way.
+same way. A sandbox that does not answer the reattach within 1 minute is not
+such a case: the keeper and the agent keep running, the session reads
+**Enhanced agent failed** with the error, and **Retry Enhanced** reattaches
+once the sandbox answers.
 
 A session sandbox keeps the server binary it was created with. A session
 whose container a server without keepers created runs its adapter without
