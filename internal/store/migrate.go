@@ -2686,6 +2686,15 @@ CREATE TABLE agent_logins (
 );
 CREATE UNIQUE INDEX idx_agent_logins_id ON agent_logins (agent, id) WHERE id <> 'default';
 `,
+	// v116: a spare session, made ahead of a launch and hidden from every
+	// member until a launch claims it. Reads of runs go through
+	// visible_runs, which names rowid because a view has none. A migration
+	// that rebuilds runs drops the view first and creates it again after:
+	// renaming a table checks every view.
+	`
+ALTER TABLE runs ADD COLUMN spare INTEGER NOT NULL DEFAULT 0;
+CREATE VIEW visible_runs AS SELECT rowid, * FROM runs WHERE spare = 0;
+`,
 }
 
 // existingDatabaseMigrations run after their version's migration, in the

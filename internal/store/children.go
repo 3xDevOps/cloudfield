@@ -91,12 +91,12 @@ const childReported = `EXISTS (SELECT 1 FROM coord_reports cr WHERE cr.run_id = 
 // started and provisioning or working. A child that reported, waits on its
 // own children or waits for a human holds none.
 const childBusy = `(rc.state = 'launching' OR (rc.state = 'started' AND NOT ` + childReported + ` AND EXISTS (
-	SELECT 1 FROM runs r WHERE r.id = rc.run_id AND (r.status IN ('queued', 'provisioning')
+	SELECT 1 FROM visible_runs r WHERE r.id = rc.run_id AND (r.status IN ('queued', 'provisioning')
 		OR (r.status IN ('running', 'needs-attention') AND r.activity IN ('', 'working', 'waiting-ci', 'waiting-tools', 'disconnected'))))))`
 
 // childUnfinished holds for a reservation its parent still waits on.
 const childUnfinished = `(rc.state IN ('queued', 'launching') OR (rc.state = 'started' AND NOT ` + childReported + ` AND EXISTS (
-	SELECT 1 FROM runs r WHERE r.id = rc.run_id AND r.status IN ('queued', 'provisioning', 'running', 'needs-attention')
+	SELECT 1 FROM visible_runs r WHERE r.id = rc.run_id AND r.status IN ('queued', 'provisioning', 'running', 'needs-attention')
 		AND r.activity NOT IN ('finished', 'failed', 'answered'))))`
 
 func scanChild(row interface{ Scan(...any) error }) (*domain.ChildReservation, error) {
@@ -186,8 +186,8 @@ func (d *DB) ChildrenInState(ctx context.Context, state domain.ChildState) ([]*d
 func (d *DB) ChildrenToSettle(ctx context.Context) ([]*domain.ChildReservation, error) {
 	return d.listChildren(ctx, "subsessions to settle",
 		`SELECT `+childCols+` FROM run_children rc
-		 LEFT JOIN runs child ON child.id = rc.run_id
-		 LEFT JOIN runs parent ON parent.id = rc.parent_run_id
+		 LEFT JOIN visible_runs child ON child.id = rc.run_id
+		 LEFT JOIN visible_runs parent ON parent.id = rc.parent_run_id
 		 WHERE (rc.state = 'started' AND rc.end_notified = 0 AND child.status IN (`+terminalStatuses+`))
 		    OR (rc.detached = 0 AND (parent.id IS NULL OR parent.status IN (`+terminalStatuses+`))
 		        AND (rc.state = 'queued' OR (rc.state = 'started' AND child.status NOT IN (`+terminalStatuses+`))))
@@ -208,8 +208,8 @@ func (d *DB) ChildrenInSpell(ctx context.Context, cutoff time.Time, in func(doma
 	live, args := liveStatusArgs()
 	cands, err := d.listChildren(ctx, "children in a spell",
 		`SELECT `+childCols+` FROM run_children rc
-		 JOIN runs child ON child.id = rc.run_id
-		 JOIN runs parent ON parent.id = rc.parent_run_id
+		 JOIN visible_runs child ON child.id = rc.run_id
+		 JOIN visible_runs parent ON parent.id = rc.parent_run_id
 		 WHERE rc.detached = 0 AND rc.state = 'started'
 		   AND child.status IN (`+live+`) AND parent.status IN (`+live+`)
 		 ORDER BY rc.created_at`, append(args, args...)...)
