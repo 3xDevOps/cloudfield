@@ -542,11 +542,22 @@ func ResolveLoginUse(ctx context.Context, st store.Store, actor domain.MemberID,
 		return err
 	}
 	id := cmp.Or(login.Login, domain.DefaultLogin)
-	if i := slices.IndexFunc(logins, func(l domain.AgentLogin) bool { return l.ID == id }); i < 0 || !logins[i].Shared || !logins[i].Automatic {
+	i := slices.IndexFunc(logins, func(l domain.AgentLogin) bool { return l.ID == id })
+	switch {
+	case i < 0:
 		return fmt.Errorf("%w: login %s of this account is not available to you", permissions.ErrDenied, id)
+	case !logins[i].Shared:
+		return fmt.Errorf("%w: login %s of this account is not available to you: %w", permissions.ErrDenied, id, errOffForShares)
+	case !logins[i].Automatic:
+		return fmt.Errorf("%w: login %s of this account is not available to you: %w", permissions.ErrDenied, id, errAutomaticOff)
 	}
 	return nil
 }
+
+var (
+	errOffForShares = errors.New("its owner turned it off for shares")
+	errAutomaticOff = errors.New("its owner turned it automatic off, so only they start sessions on it")
+)
 
 // ResolveRunRelaunch is ResolveRunLogin for actor's reopening run, whose
 // container mounts its login again. When the account's owner keeps login
@@ -564,7 +575,11 @@ func ResolveRunRelaunch(ctx context.Context, st store.Store, actor domain.Member
 		return err
 	}
 	for _, member := range []domain.MemberID{actor, run.MemberID, run.HomeMember()} {
-		if err := ResolveLoginUse(ctx, st, member, account, run.Harness, workspaces); err != nil {
+		err := ResolveLoginUse(ctx, st, member, account, run.Harness, workspaces)
+		if errors.Is(err, errOffForShares) || errors.Is(err, errAutomaticOff) {
+			return fmt.Errorf("%w; a kept session cannot change login, so start a new session, or ask the login's owner to turn it on again", err)
+		}
+		if err != nil {
 			return err
 		}
 	}

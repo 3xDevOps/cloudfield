@@ -302,9 +302,9 @@ func TestRemovingALoginInUseNamesTheOwnersSessionsAndCountsTheRest(t *testing.T)
 }
 
 // Reopening a teammate's session on an added login is refused by the
-// relaunch itself, in provisioning's words, once its owner turned the
-// login's automatic use off: the session would mount it without its owner
-// naming it.
+// relaunch itself once its owner turned the login automatic off or off for
+// shares: the session would mount it without its owner naming it. The
+// refusal says which switch and what to do instead.
 func TestRelaunchOnALoginTurnedAutomaticOffIsRefusedUpFront(t *testing.T) {
 	e := newLoginEnv(t)
 	ctx := context.Background()
@@ -325,13 +325,24 @@ func TestRelaunchOnALoginTurnedAutomaticOffIsRefusedUpFront(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, perr := e.call(t, e.member.ID, protocol.MethodRunRelaunch, protocol.RunIDParams{RunID: string(run.ID)})
-	if perr == nil || perr.Code != protocol.CodeDenied || !strings.Contains(perr.Message, "login lgn-work000000 of this account is not available to you") {
+	if perr == nil || perr.Code != protocol.CodeDenied || !strings.Contains(perr.Message, "login lgn-work000000 of this account is not available to you: its owner turned it automatic off") ||
+		!strings.Contains(perr.Message, "start a new session, or ask the login's owner to turn it on again") {
 		t.Fatalf("relaunch on a login turned automatic off: %v; want refused as provisioning refuses it", perr)
 	}
 	if calls := e.runs.Calls(); len(calls) != 0 {
 		t.Fatalf("scheduler calls after the refused relaunch = %v; want none", calls)
 	}
 	if err := e.db.SetAgentLoginAutomatic(ctx, grace.ID, "claude", "lgn-work000000", true); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.db.SetAgentLoginShared(ctx, grace.ID, "claude", "lgn-work000000", false); err != nil {
+		t.Fatal(err)
+	}
+	_, perr = e.call(t, e.member.ID, protocol.MethodRunRelaunch, protocol.RunIDParams{RunID: string(run.ID)})
+	if perr == nil || perr.Code != protocol.CodeDenied || !strings.Contains(perr.Message, "its owner turned it off for shares; a kept session cannot change login, so start a new session") {
+		t.Fatalf("relaunch on a login turned off for shares: %v; want refused, saying so", perr)
+	}
+	if err := e.db.SetAgentLoginShared(ctx, grace.ID, "claude", "lgn-work000000", true); err != nil {
 		t.Fatal(err)
 	}
 	if _, perr := e.call(t, e.member.ID, protocol.MethodRunRelaunch, protocol.RunIDParams{RunID: string(run.ID)}); perr != nil {
