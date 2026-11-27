@@ -98,7 +98,9 @@ func (s *Scheduler) SwitchMode(ctx context.Context, run domain.RunID, actor doma
 	if entry == nil {
 		return fmt.Errorf("%w: the session has no live sandbox", ErrInvalidTransition)
 	}
-	entry.lifecycleMu.Lock()
+	if err = entry.lockLifecycle(ctx); err != nil {
+		return err
+	}
 	defer entry.lifecycleMu.Unlock()
 	var from domain.LaunchMode
 	var session string

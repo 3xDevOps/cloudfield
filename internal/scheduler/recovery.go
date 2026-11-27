@@ -146,7 +146,9 @@ func (s *Scheduler) Relaunch(ctx context.Context, run domain.RunID, actor domain
 			defer s.needGuest(cid)()
 			reserved = true
 		}
-		entry.lifecycleMu.Lock()
+		if lockErr := entry.lockLifecycle(ctx); lockErr != nil {
+			return nil, lockErr
+		}
 		s.mu.Lock()
 		asleep = !entry.asleepSince.IsZero()
 		s.mu.Unlock()
