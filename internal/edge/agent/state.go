@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"syscall"
 	"time"
@@ -250,17 +251,24 @@ func noReplaceUnavailable(err error) bool {
 }
 
 // cannotLink reports whether err says this file system or policy makes
-// no hard link here: EOPNOTSUPP (ENOTSUP), ENOSYS, EPERM (vfat, or
-// protected hard links), EXDEV and EMLINK. Any other error, such as EIO,
-// ENOSPC or EDQUOT, is a failure.
+// no hard link here: unsupported (ENOSYS, ENOTSUP, EOPNOTSUPP), EPERM
+// (vfat, or protected hard links), EACCES (a container policy), EXDEV and
+// EMLINK. Any other error, such as EIO, ENOSPC or EDQUOT, is a failure.
 func cannotLink(err error) bool {
-	for _, e := range []syscall.Errno{syscall.EOPNOTSUPP, syscall.ENOSYS, syscall.EPERM, syscall.EXDEV, syscall.EMLINK} {
+	if errors.Is(err, errors.ErrUnsupported) {
+		return true
+	}
+	for _, e := range []syscall.Errno{syscall.EPERM, syscall.EACCES, syscall.EXDEV, syscall.EMLINK} {
 		if errors.Is(err, e) {
 			return true
 		}
 	}
 	return false
 }
+
+// noticesTemp matches the names writeNotices' temporary files take: the
+// notices file's name with a generated number, and its link with .pin.
+var noticesTemp = regexp.MustCompile(`^\.` + regexp.QuoteMeta(noticesFile) + `\.[0-9]+(\.pin)?$`)
 
 func (s *State) link(oldname, newname string) error {
 	if s.linkFile != nil {
@@ -543,7 +551,7 @@ func (s *State) writeNotices(p pin, n StoredNotices) error {
 	dir := filepath.Dir(s.path(name))
 	entries, _ := os.ReadDir(dir)
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), "."+noticesFile+".") {
+		if e.Type().IsRegular() && noticesTemp.MatchString(e.Name()) {
 			_ = os.Remove(filepath.Join(dir, e.Name()))
 		}
 	}

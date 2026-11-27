@@ -560,12 +560,14 @@ func TestFirstPinFallbacks(t *testing.T) {
 		t.Fatalf("pinned key %x; want the one that appeared meanwhile", got)
 	}
 
-	s = OpenState(t.TempDir())
-	s.renameNoReplace, s.linkFile = renameErr(syscall.ENOSYS), linkErr(syscall.EPERM)
-	p, created, err = s.pinFirst(key)
-	t.Cleanup(p.close)
-	if err != nil || !created {
-		t.Fatalf("no renameat2, links refused: pinFirst = created %v, %v; want the rename fallback", created, err)
+	for _, e := range []syscall.Errno{syscall.EPERM, syscall.EACCES, syscall.ENOSYS} {
+		s = OpenState(t.TempDir())
+		s.renameNoReplace, s.linkFile = renameErr(syscall.ENOSYS), linkErr(e)
+		p, created, err = s.pinFirst(key)
+		t.Cleanup(p.close)
+		if err != nil || !created {
+			t.Fatalf("no renameat2, link fails with %v: pinFirst = created %v, %v; want the rename fallback", e, created, err)
+		}
 	}
 
 	for _, e := range []syscall.Errno{syscall.EIO, syscall.ENOSPC, syscall.EDQUOT} {
@@ -590,10 +592,13 @@ func TestCrashLeftoversAreRemoved(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"." + noticesFile + ".123", "." + noticesFile + ".123.pin"} {
+	for _, f := range []string{"." + noticesFile + ".123", "." + noticesFile + ".123.pin", "." + noticesFile + ".backup"} {
 		if err := os.WriteFile(filepath.Join(dir, f), []byte("{}"), 0o600); err != nil {
 			t.Fatal(err)
 		}
+	}
+	if err := os.Mkdir(filepath.Join(dir, "."+noticesFile+".456"), 0o700); err != nil {
+		t.Fatal(err)
 	}
 	if err := s.writeNotices(p, testStored()); err != nil {
 		t.Fatal(err)
@@ -602,10 +607,14 @@ func TestCrashLeftoversAreRemoved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	var kept []string
 	for _, e := range entries {
 		if strings.HasPrefix(e.Name(), "."+noticesFile+".") {
-			t.Errorf("crash leftover kept: %s", e.Name())
+			kept = append(kept, e.Name())
 		}
+	}
+	if want := []string{"." + noticesFile + ".456", "." + noticesFile + ".backup"}; !slices.Equal(kept, want) {
+		t.Errorf("after the store, %v are left; want only the operator's %v", kept, want)
 	}
 	if got, err := s.Notices(noticeServerID); err != nil || len(got.Notices) != 1 {
 		t.Errorf("notices after removing leftovers: %+v, %v", got, err)
