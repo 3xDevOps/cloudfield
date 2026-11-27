@@ -134,8 +134,10 @@ server names it only while all of these hold:
 - the edge takes connectors at the new address;
 - the notice did not come with the server's first connection to the edge,
   which nothing vouches for;
-- for the universal URL, the member has a GitHub account linked, since the
-  edge offers the server there only to accounts it lists for it.
+- for the universal URL in `cloudfield mcp`, Settings and the tool note,
+  the member has a GitHub account linked, since the edge offers the server
+  there only to accounts it lists for it. The consent page at the universal
+  URL names it without this check: its visitor signs in at the edge there.
 
 While the server's own address is retiring and the new URL is named,
 `cloudfield mcp` and Settings offer that URL to add a connector at.
