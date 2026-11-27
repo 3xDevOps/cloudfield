@@ -33,6 +33,9 @@ var shareCaps = []string{"CAP_SYS_ADMIN", "CAP_SETUID", "CAP_SETGID", "CAP_SETPC
 // the directory.
 func revealPaths(dir, kernel string, rec *record, p plan) map[string]bool {
 	reveal := map[string]bool{dir: true}
+	if lazy.reveal != "" {
+		reveal[lazy.reveal] = true
+	}
 	readOnly := func(path string) {
 		reveal[path] = false
 	}

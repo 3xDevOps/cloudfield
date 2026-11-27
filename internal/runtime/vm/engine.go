@@ -553,7 +553,7 @@ func (e *engine) bootLaunch(ctx context.Context, rec *record) (launch, error) {
 		// (Cloud Hypervisor v54.1 on a host that is itself a VM). Sessions
 		// run no VMs of their own.
 		"--cpus", fmt.Sprintf("boot=%d,nested=off", rec.CPUs),
-		"--memory", fmt.Sprintf("size=%dM,shared=on", guestMiB(rec.MemoryMiB)),
+		"--memory", fmt.Sprintf("size=%dM,shared=%s", guestMiB(rec.MemoryMiB), cmp.Or(lazy.shared, "on")),
 		"--balloon", "size=0,free_page_reporting=on",
 	)
 	if rec.Net != offline {

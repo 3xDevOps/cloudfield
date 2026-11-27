@@ -81,17 +81,31 @@ func (e *engine) save(ctx context.Context, key string) error {
 	// Cloud Hypervisor refuses to pause a paused VM; one the caller paused
 	// stays paused if the save fails, and cannot sync first.
 	paused := state == "Paused"
+	mark := time.Now()
+	lap := func() time.Duration {
+		d := time.Since(mark)
+		mark = time.Now()
+		return d
+	}
 	synced := !paused && !frozen && e.syncGuest(ctx, key)
+	lazy.sync1, lazy.report, lazy.sync2 = lap(), 0, 0
 	if synced {
 		// The second sync writes what the session wrote during the wait.
 		e.awaitReported(ctx, key)
+		lazy.report = lap()
 		synced = e.syncGuest(ctx, key)
+		lazy.sync2 = lap()
 	}
+	if lazy.beforePause != nil {
+		lazy.beforePause(key)
+	}
+	mark = time.Now()
 	if !paused {
 		if err = api.pause(ctx); err != nil {
 			return fmt.Errorf("vm runtime: save VM %s: %w", key, err)
 		}
 	}
+	lazy.pause = lap()
 	resumeAfter := func(cause error) error {
 		if paused {
 			return fmt.Errorf("vm runtime: save VM %s: %w", key, cause)
@@ -108,10 +122,20 @@ func (e *engine) save(ctx context.Context, key string) error {
 	// Not cut short with ctx: a monitor cut off goes on writing, and answers
 	// no resume until it is done.
 	snapCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), chAPITimeout+time.Duration(unitMemoryMiB(rec)<<20/snapshotRate)*time.Second)
+	mark = time.Now()
 	err = api.snapshot(snapCtx, dir)
 	cancel()
+	lazy.snapshot = lap()
+	if err == nil && lazy.afterSnapshot != nil {
+		err = lazy.afterSnapshot(key, dir)
+	}
+	lazy.hook = lap()
 	if err == nil {
 		err = syncSnapshot(dir)
+	}
+	lazy.fsync = lap()
+	if err == nil && lazy.afterSync != nil {
+		lazy.afterSync(key, dir, api)
 	}
 	if err != nil {
 		_ = os.RemoveAll(dir)
@@ -317,7 +341,7 @@ func (e *engine) restore(ctx context.Context, key string) error {
 		}
 		l := launch{Home: booted.Home, Reveal: booted.Reveal, Args: []string{
 			"--api-socket", "path=" + e.path(key, apiSocket), "--event-monitor", "path=" + e.path(key, eventsFile),
-			"--restore", "source_url=file://" + dir,
+			"--restore", "source_url=file://" + dir + lazy.restoreMode,
 		}}
 		if rec.Net != offline {
 			if err = e.ensureNetwork(ctx); err != nil {
