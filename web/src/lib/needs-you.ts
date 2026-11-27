@@ -352,13 +352,29 @@ export interface EdgeNeed {
   restart: string
 }
 
-const label = '[a-z0-9](?:[a-z0-9-]*[a-z0-9])?'
-const httpsOrigin = new RegExp(`^https://(?:${label}(?:\\.${label})*|\\[[0-9a-f:.]+\\])(?::([0-9]{1,5}))?$`)
+const dnsLabel = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
+const octet = '(?:25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])'
+const ipv4 = new RegExp(`^${octet}(?:\\.${octet}){3}$`)
+const trailingIPv4 = new RegExp(`^(.*:)${octet}(?:\\.${octet}){3}$`)
 
-/** `value` is `https://` with a lowercase DNS name, an IPv4 address or a bracketed IPv6 address, and an optional port: nothing a shell or a reader could take for more. */
+function dnsName(host: string): boolean {
+  return host.length <= 253 && host.split('.').every((l) => dnsLabel.test(l))
+}
+
+/** Lowercase IPv6 without a zone: eight groups, or fewer around one `::`; the last two may be an IPv4 address. */
+function ipv6(host: string): boolean {
+  const v4 = trailingIPv4.exec(host)
+  const halves = (v4 ? `${v4[1]}0:0` : host).split('::')
+  if (halves.length > 2) return false
+  const groups = halves.flatMap((h) => (h === '' ? [] : h.split(':')))
+  return groups.every((g) => /^[0-9a-f]{1,4}$/.test(g)) && (halves.length === 2 ? groups.length <= 7 : groups.length === 8)
+}
+
+/** `value` is `https://` with a lowercase DNS name, an IPv4 address or a bracketed IPv6 address, and an optional port from 1 to 65535 without a leading zero, as the server writes an origin: nothing a shell or a reader could take for more. */
 export function bareOrigin(value: string): boolean {
-  const match = httpsOrigin.exec(value)
-  return match !== null && (match[1] === undefined || (Number(match[1]) >= 1 && Number(match[1]) <= 65535))
+  const match = /^https:\/\/(\[([^\]]*)\]|[^:/[\]]+)(?::([1-9][0-9]{0,4}))?$/.exec(value)
+  if (!match || (match[3] !== undefined && Number(match[3]) > 65535)) return false
+  return match[2] !== undefined ? ipv6(match[2]) : ipv4.test(match[1]) || dnsName(match[1])
 }
 
 /** The notice the server's pinned edge key signed about the address the server is enrolled at. */
