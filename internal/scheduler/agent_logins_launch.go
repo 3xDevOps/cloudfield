@@ -85,7 +85,7 @@ func (s *Scheduler) addedLoginMounts(run *domain.Run, launcher domain.MemberID, 
 				return nil, listErr
 			}
 			i := slices.IndexFunc(logins, func(l domain.AgentLogin) bool { return l.ID == run.AccountLogin })
-			if i < 0 || !logins[i].Shared || !logins[i].Automatic {
+			if i < 0 || !logins[i].Shared || (!logins[i].Automatic && !s.movingTo(run.ID, run.Account())) {
 				return nil, fmt.Errorf("%w: login %s of this account is not available to you", permissions.ErrDenied, run.AccountLogin)
 			}
 		}
@@ -137,6 +137,16 @@ func (s *Scheduler) addedLoginMounts(run *domain.Run, launcher domain.MemberID, 
 	// variable naming another would sign Claude Code in with none.
 	delete(env, "ANTHROPIC_PROFILE")
 	return append(mounts, config...), nil
+}
+
+// movingTo reports whether a move of run chose account and has not settled:
+// turning account automatic off since governs the next choice, not that
+// move.
+func (s *Scheduler) movingTo(run domain.RunID, account domain.Account) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	entry := s.runs[run]
+	return entry != nil && entry.accountSwap != nil && entry.accountSwap.to() == account
 }
 
 // addedLoginPath reports whether host is where an added login's subpath

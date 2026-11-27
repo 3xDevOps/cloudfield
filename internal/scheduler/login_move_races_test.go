@@ -246,6 +246,44 @@ func TestTurningAChosenLoginOffDuringAMove(t *testing.T) {
 			t.Fatal("the gap never ran")
 		}
 	})
+	t.Run("automatic off on a teammate's login", func(t *testing.T) {
+		t.Parallel()
+		e, _, notes, usage, _ := newLoginMoveEnv(t, func(cfg *Config) { delete(cfg.Harnesses, "claude") })
+		mu := &sync.Mutex{}
+		e.sched.UseUsageFallback(UsageFallback{Usage: usage, AuthorizationMu: mu, Note: notes.post})
+		e.share(t)
+		work := e.addLogin(t, e.owner.ID, "lgn-work000000", "work", workLogin)
+		spare := e.addLogin(t, e.owner.ID, "lgn-spare00000", "spare", workLogin)
+		if err := e.db.SetAgentLoginShared(t.Context(), e.owner.ID, "claude", domain.DefaultLogin, false); err != nil {
+			t.Fatal(err)
+		}
+		usage.set(work, 100)
+		startScheduler(t, e.sched)
+		<-e.sched.RecoveryReady()
+		run, err := e.sched.LaunchWithOptions(t.Context(), e.ws.ID, e.member.ID, e.owner.ID, "fix it", "claude", domain.LaunchTUI, domain.LaunchOptions{AccountLogin: work.Login})
+		if err != nil {
+			t.Fatal(err)
+		}
+		e.waitStoreStatus(t, run.ID, domain.RunRunning)
+		e.report(t, run.ID, agentstatus.Report{State: agentstatus.Working, SessionID: "sess-1"})
+		ran := e.moveGap(run.ID, mu, func() {
+			if err := e.db.SetAgentLoginAutomatic(t.Context(), e.owner.ID, "claude", spare.Login, false); err != nil {
+				panic(err)
+			}
+		})
+		e.report(t, run.ID, standardLimit(t))
+		waitFor(t, "the session on spare", func() bool {
+			row, err := e.db.GetRun(t.Context(), run.ID)
+			if err == nil && row.Status.Terminal() {
+				t.Fatalf("run %s (%q); want it moved to spare", row.Status, row.Reason)
+			}
+			c := e.rt.byName(string(run.ID))
+			return err == nil && row.Account() == spare && c != nil && e.mountsLogin(t, c.spec, spare)
+		})
+		if !ran.Load() {
+			t.Fatal("the gap never ran")
+		}
+	})
 	t.Run("off for shares", func(t *testing.T) {
 		t.Parallel()
 		e, _, notes, usage, _ := newLoginMoveEnv(t, func(cfg *Config) { delete(cfg.Harnesses, "claude") })
