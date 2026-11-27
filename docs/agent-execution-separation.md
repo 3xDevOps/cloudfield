@@ -20,7 +20,9 @@ restarted with its conversation
 ([enhanced-sessions.md](enhanced-sessions.md#restarts-and-failures)), and
 an Enhanced Claude Code agent ranks behind the session's processes at the
 default OOM score when the kernel picks one to kill at the session's memory
-limit ([vm-guest.md](vm-guest.md#limits-stats-and-the-clock)). Neither keeps the
+limit, and in a session VM runs in a cgroup of its own, so that neither a
+command that fills the memory nor one that forks without end takes the
+agent's ([vm-guest.md](vm-guest.md#limits-stats-and-the-clock)). Neither keeps the
 agent's process alive through a guest kernel panic or a killed VM.
 
 ## What “brain” and “hands” mean

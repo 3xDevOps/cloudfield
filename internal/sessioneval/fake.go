@@ -345,5 +345,5 @@ func (c *Coord) report(req protocol.Request, n int) (any, *protocol.Error) {
 			"coord.report: %d subsessions are unfinished (aether-internal subsession list); wait for their reports and report waiting --for agents, or stop them with subsession cancel", unfinished)}
 	}
 	return protocol.CoordReportResult{ReportID: fmt.Sprintf("report-eval-%d", n), Outcome: p.Outcome, Summary: p.Summary,
-		NextAction: "end your turn; the next prompt or mail resumes you"}, nil
+		NextAction: "end your turn; the next prompt or mail resumes you", BodyBytes: len(p.Body)}, nil
 }

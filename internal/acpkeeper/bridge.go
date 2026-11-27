@@ -16,8 +16,8 @@ func Bridge(socket string, in io.Reader, out io.Writer) error {
 		return err
 	}
 	if os.Getenv(CommandPrefixEnv) != "" {
-		// A bridge that keeps its score relays all the same.
-		_ = lowerOOMScore()
+		// A bridge that stays where it is relays all the same.
+		_ = protectSelf()
 	}
 	conn, err := net.Dial("unix", socket)
 	if err != nil {
