@@ -104,6 +104,9 @@ the checkout ([terminal.md](terminal.md)).
 ## The Chat view
 
 An Enhanced session opens on **Chat**: one timeline, newest at the bottom.
+`cloudfield logs <session-id> --follow` prints the same conversation in a
+terminal as plain lines: messages, thoughts, plans, tool calls, requests and
+notices ([terminal.md](terminal.md#scrollback-and-history)).
 
 - Your messages are bubbles on the right. Everything the agent writes to
   you renders Markdown under them; its last message is the answer, with the
