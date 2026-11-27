@@ -516,15 +516,11 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 	if err != nil {
 		return err
 	}
-	var protect []string
-	if profile.ShellPrefixEnv != "" {
-		protect = []string{acpkeeper.CommandPrefixEnv + "=" + profile.ShellPrefixEnv}
-	}
 	var exec, bridge runtime.ManagedExec
 	var keeper *acpkeeper.Client
 	var adopt *acphost.Adoption
 	if (how == openRestore || how == openWake) && kept {
-		exec, keeper, bridge, err = d.reattach(ctx, entry, managed, cid, protect)
+		exec, keeper, bridge, err = d.reattach(ctx, entry, managed, cid)
 		if err == nil {
 			state := keeper.State()
 			adopt = &acphost.Adoption{Initialize: state.Initialize, Session: state.Session, SessionID: state.SessionID, ReplayWait: acpRecoveryWait, Subagents: state.Subagents}
@@ -555,7 +551,7 @@ func (d *acpDriver) open(ctx context.Context, entry *supervised, how acpOpen) er
 			return err
 		}
 		d.stopStaleExec(ctx, entry)
-		exec, keeper, bridge, err = d.startKept(ctx, entry, managed, cid, adapter[0], command, protect)
+		exec, keeper, bridge, err = d.startKept(ctx, entry, managed, cid, adapter[0], command)
 		if err == nil {
 			break
 		}

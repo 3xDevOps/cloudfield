@@ -67,14 +67,6 @@ func Serve(socket, user string, argv []string) int {
 
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL, Credential: cred}
-	var unprotected error
-	// A prefix the session already sets stays the agent's.
-	if name := os.Getenv(CommandPrefixEnv); name != "" && os.Getenv(name) == "" {
-		var prefix string
-		if prefix, unprotected = protectAgent(); unprotected == nil {
-			cmd.Env = append(os.Environ(), name+"="+prefix)
-		}
-	}
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "acp-keeper:", err)
@@ -111,9 +103,6 @@ func Serve(socket, user string, argv []string) int {
 		return 125
 	}
 	k.cfg.Logger = slog.New(slog.NewTextHandler(os.Stderr, nil))
-	if unprotected != nil {
-		k.cfg.Logger.Info("acpkeeper: the agent keeps the default OOM score", "error", unprotected)
-	}
 
 	go func() {
 		for {

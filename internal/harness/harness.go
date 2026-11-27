@@ -292,11 +292,6 @@ type Profile struct {
 	// prompt, sends session_info_update only when that turn ends, and reports
 	// the title in session/list meanwhile.
 	ACPTitleLookup bool
-	// ShellPrefixEnv names the environment variable through which the
-	// agent takes a program to run each command it starts through. With it
-	// the agent can be given a lower OOM score than its commands
-	// (acpkeeper.CommandPrefixEnv).
-	ShellPrefixEnv string
 	// ResumeArgs reopens a stored session, SessionPlaceholder being its id.
 	// Empty when the CLI cannot target one session.
 	ResumeArgs []string
@@ -454,7 +449,6 @@ var profiles = map[string]Profile{
 		ACPMode:         "bypassPermissions",
 		ACPTitleLookup:  true,
 		ACPSystemPrompt: true,
-		ShellPrefixEnv:  "CLAUDE_CODE_SHELL_PREFIX",
 		ModelArgs:       []string{"--model", ModelPlaceholder},
 		ResumeArgs:      []string{"claude", "--dangerously-skip-permissions", "--resume", SessionPlaceholder},
 		EffortArgs:      []string{"--effort", EffortPlaceholder},
