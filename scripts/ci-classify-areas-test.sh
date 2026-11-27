@@ -118,7 +118,7 @@ internal/events: data types; the gitengine and guest helper unit tests cover how
 internal/overlay: the server side of live sync; only the unit tests of the guest helper use it, without a VM
 internal/linear: a leaf URL parser reached only through protocol
 internal/browser: the client of the browser companion, the same over Docker and VMs; the VM engine only relays its socket
-internal/scheduler: the same over Docker and VMs but for the files the vm list names, which the KVM tests in it cover: the restart of a killed agent and the start of its keeper
+internal/scheduler: the vm list names the files that restart a killed agent and start its keeper, which the KVM tests in it cover; a change elsewhere in it waits for the nightly VM run
 internal/acphost: the ACP client, the same over Docker and VMs
 internal/acphost/acpmock: the mock agent the scheduler tests run
 internal/harness: agent profiles, the same over Docker and VMs
@@ -138,7 +138,7 @@ internal/evidence: reached only through the scheduler
 internal/fallback: reached only through the scheduler
 internal/github: reached only through the scheduler
 internal/jsonc: reached only through the scheduler
-internal/memberhome: reached only through the scheduler
+internal/memberhome: the VM engine takes one function from it, which its unit tests cover
 internal/memory: reached only through the scheduler
 internal/mirror: reached only through the scheduler
 internal/overlap: reached only through the scheduler

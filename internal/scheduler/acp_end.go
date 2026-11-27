@@ -226,7 +226,7 @@ func (d *acpDriver) watch(entry *supervised, r *acpRun) {
 	if again {
 		cause = fmt.Errorf("%w; it was killed within %d minutes of its last restart, so Cloudfield did not restart it again", cause, int(acpLostAgain.Minutes()))
 	} else if restart {
-		d.restartKilled(ctx, entry, killedBy)
+		d.restartKilled(entry, killedBy)
 		return
 	}
 	idle := agentstatus.Report{State: agentstatus.Idle, Reason: acpEndedReason + cause.Error()}
@@ -246,14 +246,14 @@ func (d *acpDriver) watch(entry *supervised, r *acpRun) {
 // restartKilled starts the agent a signal killed again and restores its
 // conversation, under the run's op lock. watch's acpLostAgain guard keeps an
 // agent that is killed on every start from restarting in a loop.
-func (d *acpDriver) restartKilled(ctx context.Context, entry *supervised, sig int) {
+func (d *acpDriver) restartKilled(entry *supervised, sig int) {
 	why := "The agent's ACP server was killed"
 	// The kernel's OOM killer sends signal 9.
 	if sig == 9 {
 		d.s.mu.Lock()
 		target := oomTarget{entry.containerID, entry.workspaceID, entry.runID}
 		d.s.mu.Unlock()
-		if limit, at := d.s.checkOOMKill(ctx, target); time.Since(at) < oomKillWindow {
+		if limit, at := d.s.checkOOMKill(context.Background(), target); time.Since(at) < oomKillWindow {
 			why = "This session ran out of memory"
 			if limit > 0 {
 				why += " at its " + formatGiB(limit) + " limit"
@@ -261,7 +261,7 @@ func (d *acpDriver) restartKilled(ctx context.Context, entry *supervised, sig in
 			why += ", and the kernel killed the agent's ACP server"
 		}
 	}
-	d.notice(entry.runID, "warning", "Agent killed", fmt.Sprintf("%s (signal %d). Cloudfield is restarting the agent and restoring the conversation from its history. A turn in flight was lost with its commands and background tasks: send that message again.", why, sig))
+	d.notice(entry.runID, "warning", "Agent killed", fmt.Sprintf("%s (signal %d). Cloudfield is restarting the agent and restoring the conversation from its history. A turn that was in flight shows Turn interrupted and was lost with its commands and background tasks: send that message again.", why, sig))
 	defer d.needGuest(entry)()
 	ctx, cancel := context.WithTimeout(context.Background(), acpConnectTimeout)
 	defer cancel()
