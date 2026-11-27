@@ -1394,6 +1394,20 @@ describe('login', () => {
     expect(vi.mocked(api.runLaunch).mock.calls[0]![0]).not.toHaveProperty('login')
   })
 
+  it('says before Launch that a lone login with Automatic off refuses a session that names none', async () => {
+    const line = 'Your only login has Automatic off, so a session that names no login is refused until you turn Automatic on, on Agents or with cloudfield agent logins auto default on.'
+    vi.mocked(api.agentLoginList).mockResolvedValue([{ ...logins[0]!, automatic: false }])
+    const view = render(<LaunchDialog />)
+    expect(await screen.findByText(/^Your only login has Automatic off/)).toBeDefined()
+    expect(screen.getByText(/^Your only login has Automatic off/).textContent).toBe(line)
+    expect(screen.queryByRole('combobox', { name: 'Login' })).toBeNull()
+    view.unmount()
+
+    vi.mocked(api.agentLoginList).mockResolvedValue([{ ...logins[0]!, automatic: true }])
+    await open()
+    expect(screen.queryByText(/^Your only login has Automatic off/)).toBeNull()
+  })
+
   it('shows Fallback as before logins to a member with one login, on a server with them or without', async () => {
     vi.mocked(api.accountList).mockResolvedValue({ accounts: [alice, bob], shared_with: [] })
     for (const features of [['logins'], []]) {
@@ -1691,6 +1705,70 @@ describe('login', () => {
     await waitFor(() => expect(api.runLaunch).toHaveBeenCalled())
     expect(vi.mocked(api.runLaunch).mock.calls[0]![0]).toMatchObject({ fallback_account_member_ids: [alice.id] })
     expect(vi.mocked(api.runLaunch).mock.calls[0]![0]).not.toHaveProperty('no_fallback')
+  })
+
+  it('shows a failed login read to a member who saved your logins only, and sends and saves that choice unchanged', async () => {
+    const unreachable = 'agent.login.list: server unreachable: dial tcp: connection refused'
+    vi.mocked(api.agentLoginList).mockRejectedValue(new Error(unreachable))
+    vi.mocked(api.accountList).mockResolvedValue({ accounts: [alice, bob], shared_with: [] })
+    vi.mocked(api.launchDefaultsGet).mockResolvedValue({ revision: 1, defaults: { fallback: { policy: 'ordered', order: [alice.id] } } })
+    await open()
+    const failed = await screen.findByText('Your logins could not be read.')
+    expect(failed.closest('[role="alert"]')!.textContent).toContain(unreachable)
+    expect(screen.getByRole('button', { name: 'Retry login read' })).toBeDefined()
+    expect(screen.getByRole('button', { name: /^Fallback accounts/ }).textContent).toBe('Fallback accounts · None · your logins only')
+    fireEvent.click(screen.getByRole('button', { name: 'Save as my default' }))
+    await waitFor(() => expect(api.launchDefaultsSet).toHaveBeenCalledWith({ defaults: { account_member_id: '', fallback: { policy: 'ordered', order: [alice.id] } }, revision: 1 }))
+    setTask('logins unread')
+    fireEvent.click(launchButton())
+    await waitFor(() => expect(api.runLaunch).toHaveBeenCalled())
+    expect(vi.mocked(api.runLaunch).mock.calls[0]![0]).toMatchObject({ fallback_account_member_ids: [alice.id] })
+    expect(vi.mocked(api.runLaunch).mock.calls[0]![0]).not.toHaveProperty('no_fallback')
+  })
+
+  it('holds Launch, saying why, while the login read is pending for a member who saved your logins only', async () => {
+    let answer = (_: typeof logins) => {}
+    vi.mocked(api.agentLoginList).mockReturnValue(new Promise((resolve) => { answer = resolve }))
+    vi.mocked(api.accountList).mockResolvedValue({ accounts: [alice, bob], shared_with: [] })
+    vi.mocked(api.launchDefaultsGet).mockResolvedValue({ revision: 1, defaults: { fallback: { policy: 'ordered', order: [alice.id] } } })
+    render(<LaunchDialog />)
+    expect(await screen.findByText('Reading your logins…')).toBeDefined()
+    setTask('wait for the list')
+    await act(async () => {})
+    expect(launchButton().disabled).toBe(true)
+    await act(async () => answer(logins))
+    await waitFor(() => expect(launchButton().disabled).toBe(false))
+    expect(screen.queryByText('Reading your logins…')).toBeNull()
+    fireEvent.click(launchButton())
+    await waitFor(() => expect(api.runLaunch).toHaveBeenCalled())
+    expect(vi.mocked(api.runLaunch).mock.calls[0]![0]).toMatchObject({ fallback_account_member_ids: [alice.id] })
+  })
+
+  it('keeps your logins only saved from a dialog that reads it as Off: another agent or one login', async () => {
+    vi.mocked(api.agentList).mockResolvedValue([claude(), agentInfo({ name: 'codex', display_name: 'Codex', login_found: true })])
+    vi.mocked(api.accountList).mockResolvedValue({ accounts: [alice, bob], shared_with: [] })
+    vi.mocked(api.launchDefaultsGet).mockResolvedValue({ revision: 1, defaults: { fallback: { policy: 'ordered', order: [alice.id] } } })
+    const saved = { account_member_id: '', fallback: { policy: 'ordered', order: [alice.id] } }
+    let view = render(<LaunchDialog />)
+    await waitFor(() => expect(launchButton().disabled).toBe(false))
+    fireEvent.click(agentRow(/^Codex/))
+    expect(screen.getByRole('button', { name: /^Fallback/ }).textContent).toBe('Fallback· Off · ifAliceruns out')
+    fireEvent.click(screen.getByRole('button', { name: 'Save as my default' }))
+    await waitFor(() => expect(api.launchDefaultsSet).toHaveBeenCalledWith(expect.objectContaining({ defaults: expect.objectContaining(saved) })))
+    view.unmount()
+
+    vi.mocked(api.launchDefaultsSet).mockClear()
+    useStore.setState({ launchDraft: null })
+    view = render(<LaunchDialog />)
+    await waitFor(() => expect(launchButton().disabled).toBe(false))
+    await waitFor(() => expect(api.agentLoginList).toHaveBeenCalled())
+    expect(screen.getByRole('button', { name: /^Fallback/ }).textContent).toBe('Fallback· Off · ifAliceruns out')
+    fireEvent.click(screen.getByRole('button', { name: 'Save as my default' }))
+    await waitFor(() => expect(api.launchDefaultsSet).toHaveBeenCalledWith(expect.objectContaining({ defaults: expect.objectContaining(saved) })))
+    setTask('one login')
+    fireEvent.click(launchButton())
+    await waitFor(() => expect(api.runLaunch).toHaveBeenCalled())
+    expect(vi.mocked(api.runLaunch).mock.calls[0]![0]).toMatchObject({ no_fallback: true })
   })
 
   it('offers no login on a teammate account', async () => {

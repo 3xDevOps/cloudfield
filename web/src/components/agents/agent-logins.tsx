@@ -246,7 +246,14 @@ export function SwitchRow({ label, detail, checked, pending, onChange }: { label
       </span>
       <span className="flex shrink-0 items-center gap-2">
         {pending && <Pending label="Saving…" />}
-        <Switch id={id} checked={checked} disabled={pending} aria-describedby={detail ? `${id}-detail` : undefined} onCheckedChange={onChange} />
+        <Switch
+          id={id}
+          checked={checked}
+          aria-disabled={pending || undefined}
+          aria-describedby={detail ? `${id}-detail` : undefined}
+          className="aria-disabled:cursor-not-allowed aria-disabled:opacity-50"
+          onCheckedChange={(on) => { if (!pending) onChange(on) }}
+        />
       </span>
     </span>
   )
@@ -360,7 +367,7 @@ function LoginRow({ login, index, count, firstAutomatic, usage, sharedWith, orde
             {staleError && <span className="text-ui-sm text-muted">Last read, not current: <span className="font-code">{staleError}</span></span>}
             {windows.length > 0 && (
               <div className="max-w-sm">
-                <UsageMeters label={`Login ${login.name}`} windows={windows} now={now} />
+                <UsageMeters label={`Login ${login.name}`} windows={windows} now={now} days />
               </div>
             )}
           </div>
@@ -398,10 +405,14 @@ export function LoginList({ logins, sharedWith, sharedError, client, onChanged }
     act('order', logins[index]!.id, client.agentLoginOrder(loginAgent, ids), () => onChanged().then((landed) => setUnread(!landed)))
   }
   const firstAutomatic = logins.find((login) => login.automatic)?.id
+  // The launch dialog offers no pick with one login, so a lone login with Automatic off starts nothing.
+  const lone = logins.length === 1 ? logins[0] : undefined
   return (
     <section aria-label="Claude Code logins" className="flex min-w-0 basis-full flex-col gap-3 border-t border-seam pt-3 sm:pl-11">
       <p className="text-ui-sm text-muted">
-        Sessions start on the first automatic login in your order with usage left, and move to the first other one with usage left when it runs out. A login with Automatic off is used only when you pick it at launch.
+        {lone && !lone.automatic
+          ? <>Your only login has Automatic off, so a session that names no login is refused until you turn Automatic on, here or with <span className="font-code">cloudfield agent logins auto {lone.name} on</span>.</>
+          : `Sessions start on the first automatic login in your order with usage left, and move to the first other one with usage left when it runs out.${lone ? '' : ' A login with Automatic off is used only when you pick it at launch.'}`}
         {sharedWith && (sharedWith.length > 0
           ? ` Your account is shared with ${names(sharedWith)}: logins on for shares serve their sessions too.`
           : ' Your account is not shared with anyone.')}

@@ -127,8 +127,9 @@ function WaitLine({ run }: { run: RunRecord }) {
 /**
  * The state's dot and label, for which `chip` stands in, then on a wide row the reason and what the session runs as.
  * `compact` is a row whose views show as icons, where the per-use badge names who pays instead of the account line.
+ * `squeeze` is a run that names a login or is billed per use, whose row folds the label and keeps the mode to make room for it.
  */
-function StateLine({ run, agentName, narrow, compact, controls, chip }: { run: RunRecord; agentName: string; narrow: boolean; compact: boolean; controls: boolean; chip?: React.ReactNode }) {
+function StateLine({ run, agentName, narrow, compact, squeeze, controls, chip }: { run: RunRecord; agentName: string; narrow: boolean; compact: boolean; squeeze: boolean; controls: boolean; chip?: React.ReactNode }) {
   const presented = useRunPresentation(run)
   const asks = useNeedsYouRuns([run.id]).has(run.id)
   const presentation = run.switching
@@ -154,11 +155,10 @@ function StateLine({ run, agentName, narrow, compact, controls, chip }: { run: R
   const owner = useRunAccountOwner(run)
   const login = runLoginName(run)
   // A fallback with no login to name reads, and wraps out of sight, as it did before logins.
-  const fallbackOnly = !login && !run.account_login_per_use
-  const accountID = fallbackOnly && run.requested_account_member_id ? run.account_member_id ?? '' : ''
+  const accountID = !squeeze && run.requested_account_member_id ? run.account_member_id ?? '' : ''
   const accountOwner = useStore((s) => memberName(s, accountID))
   // Whose account pays stays in sight at every width; on a narrow row the viewer's own subscription login leaves with the rest.
-  const pinned = account !== null && !fallbackOnly && (payer !== null || owner !== null || !narrow)
+  const pinned = account !== null && squeeze && (payer !== null || owner !== null || !narrow)
   const shortAccount = compact && owner !== null && login ? `${owner}'s login ${login}` : account
   const mode = modeLabel[run.mode] ?? run.mode
   const watch = useStore((s) => runWatch(s, run.id))
@@ -167,6 +167,7 @@ function StateLine({ run, agentName, narrow, compact, controls, chip }: { run: R
   const [reasonRef, reason] = useElementSize<HTMLDivElement>()
   // Under its 96px floor the reason goes whole, so that it and not the view switch gives way.
   const short = reason.width > 0 && reason.width < 96
+  const bare = narrow || (short && !squeeze)
   const name = stateName(presentation)
   const [label, setLabelNode] = useState<HTMLSpanElement | null>(null)
   const [labelRef, labelBox] = useElementSize<HTMLSpanElement>()
@@ -190,9 +191,9 @@ function StateLine({ run, agentName, narrow, compact, controls, chip }: { run: R
           {chip}
         </>
       ) : (
-        <span className="flex min-w-0 items-center gap-1.5 text-ui-sm" title={stateTitle(presentation, since)}>
+        <span className={squeeze ? 'flex min-w-0 items-center gap-1.5 text-ui-sm' : 'flex shrink-0 items-center gap-1.5 text-ui-sm'} title={stateTitle(presentation, since)}>
           <StatusDot tone={toneOf(presentation)} pulse={state === 'working'} />
-          <span ref={setLabel} role={controls ? 'status' : undefined} className={folded ? 'sr-only' : 'min-w-0 overflow-hidden font-medium whitespace-nowrap'}>{name}</span>
+          <span ref={squeeze ? setLabel : undefined} role={controls ? 'status' : undefined} className={!squeeze ? 'font-medium' : folded ? 'sr-only' : 'min-w-0 overflow-hidden font-medium whitespace-nowrap'}>{name}</span>
         </span>
       )}
       {/* One line of a wrapping row: a part that does not fit whole wraps out of sight with its separator, and the reason, first, is the one that truncates. */}
@@ -201,7 +202,7 @@ function StateLine({ run, agentName, narrow, compact, controls, chip }: { run: R
         className="flex h-full min-w-0 flex-1 basis-0 flex-wrap content-start gap-x-1.5 overflow-hidden whitespace-nowrap text-ui-sm text-muted"
         title={narrow ? undefined : stateTitle(presentation, since)}
       >
-        {!narrow && (
+        {!bare && (
           <>
             {/* Without the reason the first part could not wrap away and would truncate instead. */}
             {short && <span aria-hidden className="h-full" />}
@@ -272,11 +273,11 @@ function StateLine({ run, agentName, narrow, compact, controls, chip }: { run: R
   )
 }
 
-/** As icons the switch keeps its width, so every view stays in sight; as
- * words it scrolls sideways when the row is too narrow for every view. It
+/** With `keep` the switch keeps its width, so every view stays in sight;
+ * otherwise it scrolls sideways when the row is too narrow for every view. It
  * keeps the shown view's tab in sight as the view or the room for it changes,
  * and fades its right edge while more tabs lie past it. */
-function ViewSwitch({ runId, view, views, go, arrows, onArrow, icons }: {
+function ViewSwitch({ runId, view, views, go, arrows, onArrow, icons, keep }: {
   runId: string
   view: RunView
   views: RunView[]
@@ -285,6 +286,8 @@ function ViewSwitch({ runId, view, views, go, arrows, onArrow, icons }: {
   onArrow: FrameTile['onArrow']
   /** Icons for words, each named by its tooltip, where the words would crowd out the state's reason. */
   icons: boolean
+  /** Icons beside a login or a per-use badge, which would otherwise push views out of sight. */
+  keep: boolean
 }) {
   const strip = useRef<HTMLDivElement>(null)
   const [more, setMore] = useState(false)
@@ -310,7 +313,7 @@ function ViewSwitch({ runId, view, views, go, arrows, onArrow, icons }: {
       look="segmented"
       aria-label="Session views"
       onScroll={measure}
-      className={cn('overflow-x-auto [scrollbar-width:none]', icons && 'shrink-0', more && '[mask-image:linear-gradient(to_right,black_calc(100%-1.5rem),transparent)]')}
+      className={cn('overflow-x-auto [scrollbar-width:none]', keep && 'shrink-0', more && '[mask-image:linear-gradient(to_right,black_calc(100%-1.5rem),transparent)]')}
     >
       {views.map((item) => {
         const Icon = runViewIcon[item]
@@ -401,6 +404,7 @@ export function RunHeader({
   const [rowRef, row] = useElementSize<HTMLElement>()
   const narrow = row.width > 0 && row.width < narrowBelow
   const icons = row.width > 0 && row.width < 800
+  const squeeze = runLoginName(run) !== '' || !!run.account_login_per_use
   const primary = usePrimaryAction(run, view, agent, nav)
   const modeSwitch = useModeSwitch(run, agent, agentEntry)
   const pullRequest = useRunPullRequest(run, agent, agentName)
@@ -455,8 +459,8 @@ export function RunHeader({
     <>
       <header ref={rowRef} data-slot="pane-header" className="@container/views relative flex h-8 shrink-0 items-center gap-1.5 border-b border-seam px-2 coarse:h-11">
         <Heading tabIndex={-1} className="sr-only">{runLabel(run)}</Heading>
-        <ViewSwitch runId={run.id} view={view} views={views} go={nav.go} arrows={arrows} onArrow={onArrow} icons={icons} />
-        <StateLine run={run} agentName={agentName} narrow={narrow} compact={icons} controls={controls} chip={controls && !narrow ? workflow : undefined} />
+        <ViewSwitch runId={run.id} view={view} views={views} go={nav.go} arrows={arrows} onArrow={onArrow} icons={icons} keep={icons && squeeze} />
+        <StateLine run={run} agentName={agentName} narrow={narrow} compact={icons} squeeze={squeeze} controls={controls} chip={controls && !narrow ? workflow : undefined} />
         {controls && (
           <div role="toolbar" aria-label="Session actions" className="flex shrink-0 items-center gap-1">
             {!narrow && pullRequest.status}

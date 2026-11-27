@@ -577,6 +577,19 @@ describe('confirmations', () => {
     expect(within(inject).getByText('Please stop and summarise')).toBeDefined()
   })
 
+  it('names a fallback of your own account alone your logins only', async () => {
+    useStore.setState({ members: { [alice.id]: alice, [bob.id]: bob } })
+    const aside = await openPanel()
+    acpOpen()
+    assistantSocket().send({ status: status({ confirmations: [
+      { ...stop, id: 'l', method: 'run.launch', summary: 'Launch claude (acp) in api: "Add the export"',
+        params: { workspace_id: 'ws_1', harness: 'claude', mode: 'acp', fallback_account_member_ids: [alice.id], task: 'Add the export' }, defaults: { applied: ['fallback'] } },
+    ] }) })
+    const launch = await within(aside).findByRole('group', { name: /^Approve this action\? Launch claude/ })
+    const rows = Object.fromEntries(within(launch).getAllByRole('term').map((term) => [term.textContent, term.nextElementSibling?.textContent]))
+    expect(rows.Fallback).toBe('Your logins only')
+  })
+
   it('says which launch choices came from saved defaults, which saved ones were skipped or unchecked, and why', async () => {
     useStore.setState({ members: { [alice.id]: alice, [bob.id]: bob } })
     const aside = await openPanel()

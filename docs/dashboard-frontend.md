@@ -3038,10 +3038,18 @@ collapsing the form and a reload. Each opening reads `agent.login.list`
 afresh, and the pick is sent only once that read holds it: while it is read
 the field says "<name>: reading your logins…", a failed read shows "Your
 logins could not be read." with the error verbatim and **Retry login read**
-(only with a login picked or several logins in the last read, so a member
-who has added none sees nothing of it),
+(only with a login picked, several logins in the last read, or a saved
+"your logins only" below, so a member who has added none sees nothing of
+it),
 and a login removed meanwhile reads "You have no login <name> any more. Pick
-another to launch."; **Launch** stays off in all three. With several
+another to launch."; **Launch** stays off in all three. Without a pick,
+for a member with several logins in the last read or a saved "your logins
+only", **Launch** also waits for the read under "Login · Reading your
+logins…", and a failed read keeps the several-logins form, so the saved
+choice is sent and saved unchanged. When the caller's only
+login has Automatic off, a line above **Launch** says a session that names no
+login is refused until Automatic is on, on Agents or with `cloudfield agent
+logins auto default on`. With several
 logins, **Save as my default** still shows, since `no_fallback` also stops
 moves between one account's logins, and names what it saves: "Saves
 whether a session may move to another login, for launches on every device;
@@ -3049,16 +3057,21 @@ not the login.", or with other accounts "Saves this account, the fallback
 accounts and whether a session may move to another login or account, …".
 **Fallback** then holds only what the switch does not: **Fallback accounts ·
 Most usage left first** (or **In your order**) **· after your logins**, which
-wraps between words on a narrow sheet and never breaks "after your logins", and
-the other accounts' list, each with its checkbox, without the **Fall back to
-another account** checkbox, shown while the switch is on and another account
-is shared with the caller, and gone otherwise. Unticking every other account
-leaves moves between the caller's own logins on: the caption reads
-**Fallback accounts · None · your logins only**, and the launch sends
-`fallback_account_member_ids` with the caller's own id alone, which the
-server reads as that account's logins only; only the switch sends
-`no_fallback`. Saved, that is the `ordered` policy with the caller's id, which
-the dialog and the right half of **New session** read back the same way.
+wraps between words on a narrow sheet and never breaks "after your logins", the
+other accounts' list without a checkbox, shown while the switch is on and
+another account is shared with the caller, and gone otherwise. Unticking
+every other account leaves moves between the caller's own logins on: the
+caption reads **Fallback accounts · None · your logins only**, and the
+launch sends `fallback_account_member_ids` with the caller's own id alone,
+which the server reads as that account's logins only; only the switch sends
+`no_fallback`. Saved, that is the `ordered` policy with the caller's id,
+which has one meaning wherever it is read: on the caller's own account, for
+Claude Code on a server with `logins`, it is sent as their own logins only
+while they have several or the list cannot be read, and as `no_fallback`
+otherwise (another agent, one login). The right half of **New session**
+reads `agent.login.list` to send exactly that. **Save as my default** in a
+dialog that reads it as Off keeps it saved unless the fallback was changed. Settings
+→ **Launch** and the assistant's launch card name it "Your logins only".
 
 Where the server offers `run.children.allow`, the form has a **Child
 sessions** select: **Use my setting** (naming it, "(off)"), **Allow for this
@@ -3374,21 +3387,23 @@ agent's last terminal or Enhanced session title,
 line, else the task's first line cut at 120 characters, with a lock for a
 protected session. The row holds, from the left:
 
-- The view switch. Below 800px of row width its views are icons and it
-  keeps its width, so no view leaves the row; wider, as words, it scrolls
-  when the row is too narrow for it.
+- The view switch. Below 800px of row width its views are icons; beside a
+  login or a per-use badge it then keeps its width, so no view leaves the
+  row. Otherwise it scrolls when the row is too narrow for it.
 - The state's dot and label. On the tile that carries the session's
   controls, from 560px of row width, they are the
-  [Session tree panel](#session-tree-panel)'s chip. When the row is still
-  full the label folds to its dot, first of anything, and stays the
-  accessible state; it returns once the reason's room holds it.
+  [Session tree panel](#session-tree-panel)'s chip. Beside a login or a
+  per-use badge, when the row is still full the label folds to its dot,
+  first of anything, and stays the accessible state; it returns once the
+  reason's room holds it.
 - From 560px of row width, the reason, then `repo +N` on a
   [multi-repo session](#multi-repo-sessions), the mode ("Standard"; the
   tooltip adds the `agent.list` display name, `run.model` and `run.effort`,
   "Claude Code · Standard · opus · high"), "Launched via `<name>`". Each
   part that does not fit drops whole, last first; the reason truncates
   last, and with under 96px left for it drops whole too, leaving the room
-  to the parts after it.
+  to the parts after it beside a login or a per-use badge; a session with
+  neither then drops every part, as before logins.
 - "On `<name>`'s account (fallback)" when the session carries
   `requested_account_member_id` and no login to name ([usage
   fallback](teams.md#usage-fallback); a `run.account` event updates it live
@@ -6713,11 +6728,14 @@ signed in offers its terminal login method, typed as the ACP server command
 (`agent_command` in the session state) with the method's args.
 
 **Several logins.** Where `server.info` lists the `logins` feature, the
-installed Claude Code row adds **Add login** once `agent.login.list` has
-answered and the server offers the terminal WebSocket. A member with only the
-default login sees nothing else new, unless a switch of that login is off: the
-server keeps its row then, and the list below shows it with its switches, so
-they can be turned back on. With more, the row's status reads "Installed · 3
+installed Claude Code row adds **Add login**. A member with only the default
+login sees nothing else new, unless a switch of that login is off: the server
+keeps its row then, and the list below shows it with its switches, so they can
+be turned back on. With Automatic off there, the list's lead says that a
+session that names no login is refused until Automatic is on, here or with
+`cloudfield agent logins auto default on`, since the launch dialog offers no
+pick with one login. Turned back on, the server drops the row; the page keeps
+it, and the focus on its switch, until the member leaves the page. With more, the row's status reads "Installed · 3
 logins" ("Installed · 3 logins · default login signed out" while
 `login_problem` names the default one and `login_blocks_launch` is set,
 "… · default login sign-in refused" while it is not), the row offers **Run** while any
@@ -6731,9 +6749,10 @@ another member shows none of it, and an answer read for the previous one
 never lands. Each login has its rank (1, 2, 3) with framed
 **Move <name> up** and **Move <name> down** arrows under it, the disabled
 one at either end drawn without a frame
-(`agent.login.order`, every id). Each switch and arrow is a server-decided
-action (see [Actions](#actions)): while its call and the read of the list
-after it are pending, it alone is locked and shows "Saving…" beside a switch or
+(`agent.login.order`, every id). Each control is a server-decided action
+(see [Actions](#actions)): while its call and the read of the list after it
+are pending, it alone is locked (a switch with `aria-disabled`, so it keeps
+focus) and shows "Saving…" beside a switch or
 "Moving…" in the moved row, then "Still waiting for the server…" past the
 deadline. Any outcome of a change, an answer, a refusal or a failure that
 may hide a committed change, reads the list again, and only the newest read
@@ -6763,8 +6782,9 @@ The badge's tooltip and accessible name name the payer, "Billed
 per use to <organisation>"; its
 **Automatic** (`agent.login.automatic`) and **Use for shares**
 (`agent.login.share`) switches, each a row of its own; and its usage windows
-(`account.usage` with `login`, without it for the default login), whose reset reads in days and hours past 24
-hours ("resets in 1d 16h"), as Settings → Usage does. A Console login, whose usage the server
+(`account.usage` with `login`), whose reset reads in days and hours past 24
+hours ("resets in 1d 16h"), as the launch dialog's limit lines do; Settings →
+Usage reads hours ("resets in 76h"). A Console login, whose usage the server
 reports `unsupported`, reads "No usage windows"; any other
 read error shows verbatim, and windows kept from a refresh that failed (`stale`)
 add "Last read, not current:" with its error. A login billed per use with Automatic on, below
@@ -6824,10 +6844,14 @@ sign-in is **Cancel sign-in**, which sends Ctrl-C; pressed while the
 terminal is still starting, the panel says it is cancelling and sends it as
 soon as the terminal is up, also when the member has left the panel by then. A dropped socket reconnects to the same sign-in
 ("Reconnecting to the sign-in…") instead of ending it. A line under the
-buttons says the member can leave the page and how long the sign-in keeps
-running: "for about <n> more minutes" when this tab opened its terminal,
+buttons says how long the sign-in keeps running if the member leaves the
+page: "for about <n> more minutes" when this tab opened its terminal,
 else "until about 15 minutes after it started"; the server's 15 minutes run
-from the sign-in's container start, a little before its terminal opens. While a sign-in runs, the Claude Code row
+from the sign-in's container start, a little before its terminal opens. It
+says Add login offers **Return to the sign-in** for it, and after a reload
+only once **Start sign-in** is refused because it is still running: the
+page keeps the running sign-in in memory alone, and the server's refusal
+names it again. While a sign-in runs, the Claude Code row
 says "Sign-in for <name> is still running." with **Return to the sign-in**, which reattaches its terminal, and
 Add login leads with the same callout, its primary button and **Close**,
 which leaves the sign-in running, and hides the form until that sign-in ends. The server refuses another add
@@ -7659,7 +7683,8 @@ Categories:
   reason. When the saved account or a fallback member is invalid, **Remove
   unusable accounts** saves both repaired at once: your own account, and
   the order without them, or fallback off when none are left. **Account** and **Fallback** (any account, off, or the saved
-  ordered list) save on change; the order itself is set in the launch
+  ordered list, "Your logins only" when it names your own account alone)
+  save on change; the order itself is set in the launch
   dialog with **Save as my default**. **Clear** asks first, then clears
   them. Each change uses `launch.defaults.set` with the revision read and
   retries once on a conflict, as the launch dialog does. The section starts

@@ -1,6 +1,7 @@
 import { toast } from 'sonner'
-import { automaticFallback, fallbackParams } from '@/components/launch/launch-options'
-import { fallbackFromSaved } from '@/components/launch/saved-defaults'
+import { loginAgent } from '@/components/agents/agent-logins'
+import { automaticFallback, fallbackParams, ownLoginsOnly } from '@/components/launch/launch-options'
+import { fallbackFromSaved, savedOwnLogins } from '@/components/launch/saved-defaults'
 import { api } from '@/lib/api'
 import { message } from '@/lib/format'
 import type { LaunchDefaultsResult, LaunchMode } from '@/lib/types'
@@ -48,6 +49,10 @@ export async function quickLaunch(last: LastLaunch, saved: LaunchDefaultsResult 
       account = wanted === own ? '' : wanted
       fallback = fallbackFromSaved(policy, accounts)
     }
+    // As the launch dialog sends it: on the member's own account, Claude Code on a server with logins reads an order naming that
+    // account alone as its own logins only while it has several, or, saved so, while the list cannot be read; anything else as Off.
+    const logins = !account && last.harness === loginAgent && !!info?.features?.includes('logins') && ownLoginsOnly(fallback, accounts, own) &&
+      await api.agentLoginList(loginAgent).then((list) => list.length > 1, () => savedOwnLogins(saved?.defaults, own))
     const run = await api.runLaunch({
       workspace_id: activeWorkspace,
       harness: last.harness,
@@ -55,8 +60,7 @@ export async function quickLaunch(last: LastLaunch, saved: LaunchDefaultsResult 
       ...(last.model ? { model: last.model } : {}),
       ...(saved?.defaults.permission ? { permission: saved.defaults.permission } : {}),
       ...(account ? { account_member_id: account } : {}),
-      // A saved order naming the launch account itself is that account's own logins only.
-      ...(accounts.length ? fallbackParams(fallback, accounts, account || own, fallback.order?.includes(account || own)) : {}),
+      ...(accounts.length ? fallbackParams(fallback, accounts, account || own, logins) : {}),
       ...(capability(capabilities).hasMethod('run.children.allow') ? { children: 'on' as const } : {}),
     })
     upsertRun(run)

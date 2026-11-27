@@ -97,13 +97,31 @@ it('sends the saved account and fallback with the launch', async () => {
   expect(vi.mocked(api.runLaunch).mock.calls[0]![0]).toMatchObject({ mode: 'tui', no_fallback: true, children: 'on' })
 })
 
-it('relaunches a saved fallback naming only your own account on your own logins, not with fallback off', async () => {
-  vi.mocked(api.launchDefaultsGet).mockResolvedValue(saved('tui', { fallback: { policy: 'ordered', order: [alice.id] } }))
-  render(<SplitNewRun blocked={null} shortcut="n" onOpen={() => {}} />)
-  fireEvent.click(await quick())
-  await waitFor(() => expect(api.runLaunch).toHaveBeenCalled())
-  expect(vi.mocked(api.runLaunch).mock.calls[0]![0]).toMatchObject({ fallback_account_member_ids: [alice.id] })
-  expect(vi.mocked(api.runLaunch).mock.calls[0]![0]).not.toHaveProperty('no_fallback')
+it('relaunches a saved your logins only as the launch dialog sends it, for the agent, the logins and the server', async () => {
+  const two = [
+    { id: 'default', name: 'default', kind: 'subscription' as const, automatic: true, shared: true, position: 0 },
+    { id: 'lgn-work0000001', name: 'work', kind: 'subscription' as const, automatic: true, shared: true, position: 1 },
+  ]
+  const cases = [
+    { name: 'several logins', agent: 'claude', features: ['logins'], list: async () => two, sends: { fallback_account_member_ids: [alice.id] } },
+    { name: 'a list that cannot be read', agent: 'claude', features: ['logins'], list: async () => { throw new Error('server unreachable') }, sends: { fallback_account_member_ids: [alice.id] } },
+    { name: 'one login', agent: 'claude', features: ['logins'], list: async () => [two[0]!], sends: { no_fallback: true } },
+    { name: 'another agent', agent: 'codex', features: ['logins'], list: async () => two, sends: { no_fallback: true } },
+    { name: 'a server without logins', agent: 'claude', features: [], list: async () => two, sends: { no_fallback: true } },
+  ]
+  for (const item of cases) {
+    vi.mocked(api.runLaunch).mockClear()
+    useLaunchDefaults.setState({ result: null, error: null })
+    useStore.setState({ info: { ...serverInfo, features: item.features } })
+    vi.mocked(api.agentLoginList).mockImplementation(item.list)
+    vi.mocked(api.launchDefaultsGet).mockResolvedValue({ revision: 2, defaults: { agent: item.agent, agents: { [item.agent]: { mode: 'tui' } }, fallback: { policy: 'ordered', order: [alice.id] } } })
+    const view = render(<SplitNewRun blocked={null} shortcut="n" onOpen={() => {}} />)
+    fireEvent.click(await quick())
+    await waitFor(() => expect(api.runLaunch).toHaveBeenCalled())
+    const sent = vi.mocked(api.runLaunch).mock.calls[0]![0]
+    expect({ case: item.name, fallback_account_member_ids: sent.fallback_account_member_ids, no_fallback: sent.no_fallback }).toEqual({ case: item.name, ...item.sends })
+    view.unmount()
+  }
 })
 
 it('shows the server refusal as a toast and stays put', async () => {

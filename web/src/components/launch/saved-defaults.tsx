@@ -13,6 +13,12 @@ export function fallbackFromSaved(saved: SavedLaunchDefaults['fallback'], accoun
   return { off: false, order, excluded: accounts.map((member) => member.id).filter((id) => !order.includes(id)) }
 }
 
+/** Whether saved choices hold "your logins only": the member's own account, with a fallback order naming it alone. */
+export function savedOwnLogins(saved: SavedLaunchDefaults | null | undefined, own: string): boolean {
+  if (!saved || (saved.account_member_id && saved.account_member_id !== own)) return false
+  return saved.fallback?.policy === 'ordered' && saved.fallback.order?.length === 1 && saved.fallback.order[0] === own
+}
+
 /** The policy a launch with `fallback` sends; `skip` is the account the Run tab leaves out of its list, as the launch does. */
 export function fallbackToSaved(fallback: Fallback, accounts: Member[], skip: string, logins: boolean): NonNullable<SavedLaunchDefaults['fallback']> {
   const params = fallbackParams(fallback, accounts, skip, logins)

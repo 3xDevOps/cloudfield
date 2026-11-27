@@ -35,6 +35,12 @@ export function fallbackParams(fallback: Fallback, accounts: Member[], skip: str
   return logins ? { fallback_account_member_ids: [skip] } : { no_fallback: true }
 }
 
+/** Whether `fallback` names `account` alone: with several logins on that account, its own logins only; else Off. */
+export function ownLoginsOnly(fallback: Fallback, accounts: Member[], account: string): boolean {
+  const ids = fallbackParams(fallback, accounts, account, true).fallback_account_member_ids
+  return ids?.length === 1 && ids[0] === account
+}
+
 export function FallbackOptions({
   accounts,
   ownAccountID,
@@ -59,7 +65,7 @@ export function FallbackOptions({
   const ids = candidates(fallback, accounts, account)
   const owner = accounts.find((member) => member.id === account)?.display_name ?? account
   const params = fallbackParams(fallback, accounts, account, logins)
-  const ownOnly = params.fallback_account_member_ids?.length === 1 && params.fallback_account_member_ids[0] === account
+  const ownOnly = ownLoginsOnly(fallback, accounts, account)
   const target = fallback.order ? 'the first ticked account, top to bottom, with usage left' : 'the ticked account with the most usage left'
   // Editing the shown list keeps the hidden launch account's place and tick
   // (last, ticked, coming from automatic), and leaves every account it did

@@ -98,6 +98,13 @@ describe('usage section', () => {
   })
 
 
+  test('reads a reset past a day in hours, as before logins', async () => {
+    seed()
+    const reset = new Date(Date.now() + 76 * 3_600_000).toISOString()
+    render(<UsageSection client={client({ accountUsage: vi.fn(async () => usage(alice.id, 25, reset)) })} />)
+    expect(await screen.findByText('25% used · resets in 76h')).toBeTruthy()
+  })
+
   test('does not present an expired window as current', async () => {
     seed()
     const api = client({ accountUsage: vi.fn(async () => usage(alice.id, 99, '2020-01-01T00:00:00Z')) })

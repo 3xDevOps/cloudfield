@@ -306,10 +306,21 @@ describe('Claude Code logins', () => {
     expect(within(row).queryByRole('button', { name: 'Rename default' })).toBeNull()
     expect(within(row).queryByRole('button', { name: 'Remove default' })).toBeNull()
     expect(within(row).getByRole('switch', { name: 'Use for shares' }).getAttribute('aria-checked')).toBe('true')
+    const logins = within(claudeRow()).getByRole('region', { name: 'Claude Code logins' })
+    expect(logins.textContent).toContain('Your only login has Automatic off, so a session that names no login is refused until you turn Automatic on, here or with cloudfield agent logins auto default on.')
+    expect(logins.textContent).not.toContain('when you pick it at launch')
     const automatic = within(row).getByRole('switch', { name: 'Automatic' })
     expect(automatic.getAttribute('aria-checked')).toBe('false')
+    automatic.focus()
+    // Turned back on, the server drops the lone row and lists the default it makes up, with both switches on.
+    vi.mocked(api.agentLoginList).mockResolvedValue([{ id: 'default', name: 'default', kind: 'subscription', automatic: true, shared: true, position: 0 }])
     fireEvent.click(automatic)
     expect(api.agentLoginAutomatic).toHaveBeenCalledWith('claude', 'default', true)
+    await waitFor(() => expect(automatic.getAttribute('aria-checked')).toBe('true'))
+    await flush()
+    expect(automatic.isConnected).toBe(true)
+    expect(document.activeElement).toBe(automatic)
+    expect(logins.textContent).toContain('Sessions start on the first automatic login in your order with usage left, and move to the first other one with usage left when it runs out. ')
   })
 
   it('lists several logins under the Claude Code row and names the teammates shares reach', async () => {

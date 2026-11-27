@@ -37,6 +37,8 @@ function fallbackLine(s: RootState, params: Params): string {
   if (params.no_fallback === true) return 'Off: stays on this account'
   const order = Array.isArray(params.fallback_account_member_ids) ? params.fallback_account_member_ids.filter((id): id is string => typeof id === 'string') : []
   if (!order.length) return 'Any account you may launch on, most usage left first'
+  // The member's own account alone, as the launch dialog saves it, is that account's own logins only.
+  if (order.length === 1 && order[0] === (str(params.account_member_id) ?? s.info?.member.id) && order[0] === s.info?.member.id) return 'Your logins only'
   return `Then ${order.map((id) => s.members[id]?.display_name || id).join(', ')}`
 }
 
