@@ -189,7 +189,10 @@ The server keeps that once-a-day record in memory, so after a restart the
 next tool result carries the notice again. After finding no notice for an
 address, the consent page and tool results do not read the edge's notices
 for it again for a minute, so a new notice can show up to a minute late; a
-notice that exists, and any URL it names, is read on every call.
+notice that exists, and any URL it names, is read again on every consent
+page and on every tool result of a connector that has not had the note
+that day. One that has does not read the notices for its tool results
+until the day is up.
 
 To move a connector:
 
