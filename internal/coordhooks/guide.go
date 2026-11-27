@@ -233,7 +233,7 @@ func ReportGuide(g Guide) string {
 		command = "`" + command + "`"
 	}
 	fmt.Fprintf(&b, "REPORT ONCE EVERY TURN, when its work is done: aether_report (a new idempotency_key each turn), else %s.\n", command)
-	b.WriteString("Then write your reply as message text and stop: the result goes only there; thinking and the summary are not your reply. Never report again.\n")
+	b.WriteString("Then give the result as message text and stop; thinking and the summary are not a reply. Report again only if one is refused or says to act.\n")
 	for _, o := range Outcomes(g) {
 		fmt.Fprintf(&b, "- %s: %s\n", o.Name, o.Use)
 	}
