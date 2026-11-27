@@ -372,7 +372,8 @@ func (s *Scheduler) restoreAsleep(ctx context.Context, entry *supervised, saver 
 // one the agent's terminal on the conversation it reported, or on a new one
 // when it reported none, has no command that reopens one, or that command
 // fails as it starts, as it does when the conversation is gone. It notes in
-// how what becomes of the conversation.
+// how what becomes of the conversation, and on entry whether that terminal
+// loads an idle wake.
 func (s *Scheduler) setBootCommand(ctx context.Context, entry *supervised, saver runtime.SaveRuntime, how *woke) error {
 	s.mu.Lock()
 	cid, mode, session := entry.containerID, entry.launchMode, entry.agentSessionID
@@ -391,6 +392,7 @@ func (s *Scheduler) setBootCommand(ctx context.Context, entry *supervised, saver
 	}
 	c := s.coordinationSeam()
 	files := map[string][]byte{}
+	var idleWake bool
 	script := func(nonce string, argv []string) (out []byte, scriptErr error) {
 		// As a launch without coordination, which adds nothing to the command.
 		if c == nil {
@@ -398,7 +400,7 @@ func (s *Scheduler) setBootCommand(ctx context.Context, entry *supervised, saver
 		}
 		sw := modeSwitch{s: s, c: c, entry: entry, run: run, profile: profile, cid: cid}
 		var launch map[string][]byte
-		out, launch, _, scriptErr = sw.terminalScript(ctx, nonce, argv, run.Model)
+		out, launch, _, idleWake, scriptErr = sw.terminalScript(ctx, nonce, argv, run.Model)
 		maps.Copy(files, launch)
 		return out, scriptErr
 	}
@@ -425,7 +427,13 @@ func (s *Scheduler) setBootCommand(ctx context.Context, entry *supervised, saver
 			return fmt.Errorf("write the agent's launch files: %w", err)
 		}
 	}
-	return saver.SetCommand(ctx, cid, wrap([]string{"/bin/sh", "-c", string(boot)}))
+	if err = saver.SetCommand(ctx, cid, wrap([]string{"/bin/sh", "-c", string(boot)})); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	entry.idleWake = idleWake
+	s.mu.Unlock()
+	return nil
 }
 
 // coldStartRefusal is why an open session keeps the saved memory a restore

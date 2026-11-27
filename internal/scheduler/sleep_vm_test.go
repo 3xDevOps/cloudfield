@@ -947,13 +947,17 @@ func TestARelaunchedStandardVMReopensItsConversationInsteadOfRunningItsTask(t *t
 			run := e.launch(t, "fix the flaky test", domain.LaunchTUI)
 			waitFor(t, "the container running", func() bool { return containerState(e.container(t, run.ID)) == "running" })
 			e.sched.mu.Lock()
-			e.sched.runs[run.ID].agentSessionID = session
+			// No idle wake, as a session launched by a server that recorded none.
+			e.sched.runs[run.ID].agentSessionID, e.sched.runs[run.ID].idleWake = session, false
 			e.sched.mu.Unlock()
 			if err := e.sched.CloseRun(t.Context(), run.ID, e.member.ID, domain.RunMerged); err != nil {
 				t.Fatal(err)
 			}
 			if _, err := e.sched.Relaunch(t.Context(), run.ID, e.member.ID); err != nil {
 				t.Fatalf("Relaunch: %v", err)
+			}
+			if sc, err := e.sched.readSidecar(run.ID); err != nil || !sc.IdleWake {
+				t.Fatalf("sidecar %+v (%v), want the idle wake the new terminal loads", sc, err)
 			}
 			supervisor := wrapTUICommand(nil)
 			if session != "" {

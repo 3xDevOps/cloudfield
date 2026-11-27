@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -113,9 +114,15 @@ func (p *proxy) serveControl(w http.ResponseWriter, r *http.Request, backAddr st
 	// The edge picks the origin by host name, so the dial keeps the one
 	// the server named.
 	peer, _, _ := net.SplitHostPort(r.RemoteAddr)
-	edgeWS, _, err := websocket.Dial(ctx, "ws://"+backAddr+edgeproto.PathServerControl,
+	edgeWS, refused, err := websocket.Dial(ctx, "ws://"+backAddr+edgeproto.PathServerControl,
 		&websocket.DialOptions{CompressionMode: websocket.CompressionDisabled, Host: r.Host,
 			HTTPHeader: http.Header{relay.HeaderForwardedFor: {peer}}})
+	if err != nil && refused != nil && refused.StatusCode != http.StatusSwitchingProtocols {
+		maps.Copy(w.Header(), refused.Header)
+		w.WriteHeader(refused.StatusCode)
+		_, _ = io.Copy(w, refused.Body)
+		return
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return

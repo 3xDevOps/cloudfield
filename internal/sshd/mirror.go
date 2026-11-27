@@ -34,6 +34,7 @@ type MirrorService interface {
 	Adopt(context.Context, domain.WorkspaceID, int64, string) (mirrorservice.Result, error)
 	Disable(context.Context, domain.WorkspaceID) (mirrorservice.Result, error)
 	Capture(context.Context, domain.WorkspaceID, string) (mirrorservice.CaptureResult, error)
+	Warm(context.Context, domain.WorkspaceID) error
 }
 
 func (s *Server) mirrors() (MirrorService, *protocol.Error) {

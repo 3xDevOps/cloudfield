@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -18,6 +19,7 @@ import (
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
 	"github.com/3xDevOps/cloudfield/internal/edge/relay"
 	edge "github.com/3xDevOps/cloudfield/internal/edge/service"
+	"github.com/3xDevOps/cloudfield/internal/envname"
 )
 
 // options is the edge's configuration. Every option is a flag whose
@@ -45,6 +47,10 @@ type options struct {
 	morePairs []edge.Pair
 	// retiring are the pairs --retiring-pairs marks retiring.
 	retiring []edge.Retiring
+	// retired are the pairs --retired-pairs names.
+	retired []edge.Retired
+	// flags are the options set on the command line.
+	flags map[string]bool
 	// openAIChallenge is OpenAI's domain verification token for the
 	// relay host, served at edgeproto.PathOpenAIChallenge.
 	openAIChallenge string
@@ -103,12 +109,18 @@ func parseOptions(args []string, getenv func(string) string) (options, error) {
 	retiring := fs.String("retiring-pairs", env("AETHER_EDGE_RETIRING_PAIRS", ""),
 		"address pairs that are retiring, comma-separated. Each is <relay origin> <replacement relay origin> [<YYYY-MM-DD>], both relay origins of pairs "+
 			"this edge serves: every answer and page of the pair names the replacement, and the date when set. The edge never acts on the date")
+	retired := fs.String("retired-pairs", env("AETHER_EDGE_RETIRED_PAIRS", ""),
+		"address pairs taken out of service, comma-separated, at most 16. Each is <sign-in origin> <relay origin> <replacement relay origin>: "+
+			"neither origin is served any more, every request to their hosts but /healthz gets 410 Gone naming the replacement, "+
+			"and at start the edge deletes the device tokens and browser sessions issued there and those with no recorded origin")
 	if err := fs.Parse(args); err != nil {
 		return options{}, err
 	}
 	if fs.NArg() != 0 {
 		return options{}, fmt.Errorf("unexpected argument %q", fs.Arg(0))
 	}
+	o.flags = map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { o.flags[f.Name] = true })
 
 	var err error
 	if o.egressBudget, err = strconv.ParseInt(*budget, 10, 64); err != nil || o.egressBudget < 0 {
@@ -162,6 +174,11 @@ func parseOptions(args []string, getenv func(string) string) (options, error) {
 	}
 	if strings.TrimSpace(*retiring) != "" {
 		if o.retiring, err = parseRetiringPairs(*retiring, scheme, o.signinOrigin, o.relayOrigin, o.morePairs); err != nil {
+			return options{}, err
+		}
+	}
+	if *retired != "" {
+		if o.retired, err = parseRetiredPairs(*retired, scheme, o.signinOrigin, o.relayOrigin, o.morePairs, o.retiring); err != nil {
 			return options{}, err
 		}
 	}
@@ -238,28 +255,9 @@ func parseRetiringPairs(list, scheme, signin, relay string, more []edge.Pair) ([
 		return nil, errors.New("--retiring-pairs: this edge serves one address pair, which cannot retire; " +
 			"serve its replacement first with --origin-pairs (AETHER_EDGE_ORIGIN_PAIRS)")
 	}
-	relays := map[string]string{host(relay): relay}
-	signinOrigins := map[string]string{host(signin): relay}
-	for _, p := range more {
-		relays[host(p.RelayOrigin)] = p.RelayOrigin
-		signinOrigins[host(p.SigninOrigin)] = p.RelayOrigin
-	}
+	relays, signinHosts := servedHosts(signin, relay, more)
 	served := func(origin string) (string, error) {
-		if err := checkOrigin("--retiring-pairs", origin, scheme); err != nil {
-			return "", err
-		}
-		r, ok := relays[host(origin)]
-		switch {
-		case ok && sameOrigin(r) != sameOrigin(origin):
-			return "", fmt.Errorf("--retiring-pairs: %s has the host name of the relay origin %s; write that origin", origin, r)
-		case ok:
-			c, _ := edgeproto.Origin(r) // parseOptions checked it
-			return c, nil
-		}
-		if r, ok := signinOrigins[host(origin)]; ok {
-			return "", fmt.Errorf("--retiring-pairs: %s is a sign-in origin; name the relay origin of its pair, %s", origin, r)
-		}
-		return "", fmt.Errorf("--retiring-pairs: %s is not a relay origin of this edge; name one of --relay-origin and the relay origins of --origin-pairs", origin)
+		return servedRelay("--retiring-pairs", origin, scheme, relays, signinHosts)
 	}
 	var out []edge.Retiring
 	for entry := range strings.SplitSeq(list, ",") {
@@ -304,19 +302,111 @@ func parseRetiringPairs(list, scheme, signin, relay string, more []edge.Pair) ([
 	return out, nil
 }
 
-// sameOrigin is a valid origin in the form two spellings of one origin
-// share: canonical, and without the port when it is https's default.
-func sameOrigin(origin string) string {
-	c, _ := edgeproto.Origin(origin) // parseOptions checked it
-	if strings.HasPrefix(c, "https://") {
-		return strings.TrimSuffix(c, ":443")
+// servedHosts maps the host names of the served relay origins to those
+// origins, and the host names of the served sign-in origins to their
+// pairs' relay origins; signin and relay are the first pair's.
+func servedHosts(signin, relay string, more []edge.Pair) (relays, signinHosts map[string]string) {
+	relays, signinHosts = map[string]string{host(relay): relay}, map[string]string{host(signin): relay}
+	for _, p := range more {
+		relays[host(p.RelayOrigin)] = p.RelayOrigin
+		signinHosts[host(p.SigninOrigin)] = p.RelayOrigin
 	}
-	return c
+	return relays, signinHosts
 }
 
-// host is the lowercase host name of a valid origin.
+// servedRelay is origin, which flagName names, as the served relay origin
+// it is.
+func servedRelay(flagName, origin, scheme string, relays, signinHosts map[string]string) (string, error) {
+	if err := checkOrigin(flagName, origin, scheme); err != nil {
+		return "", err
+	}
+	r, ok := relays[host(origin)]
+	switch {
+	case ok && edge.CanonicalOrigin(r) != edge.CanonicalOrigin(origin):
+		return "", fmt.Errorf("%s: %s has the host name of the relay origin %s; write that origin", flagName, origin, r)
+	case ok:
+		c, _ := edgeproto.Origin(r) // parseOptions checked it
+		return c, nil
+	}
+	if r, ok := signinHosts[host(origin)]; ok {
+		return "", fmt.Errorf("%s: %s is a sign-in origin; name the relay origin of its pair, %s", flagName, origin, r)
+	}
+	return "", fmt.Errorf("%s: %s is not a relay origin of this edge; name one of --relay-origin and the relay origins of --origin-pairs", flagName, origin)
+}
+
+// parseRetiredPairs parses --retired-pairs against the served pairs,
+// signin and relay the first one's, more --origin-pairs', and the
+// retiring ones.
+func parseRetiredPairs(list, scheme, signin, relay string, more []edge.Pair, retiring []edge.Retiring) ([]edge.Retired, error) {
+	relays, signinHosts := servedHosts(signin, relay, more)
+	var out []edge.Retired
+	hosts := map[string]string{}
+	for entry := range strings.SplitSeq(list, ",") {
+		fields := strings.Fields(entry)
+		if len(fields) == 0 {
+			return nil, fmt.Errorf("--retired-pairs %q has an empty entry: remove the extra comma", list)
+		}
+		if len(fields) != 3 {
+			return nil, fmt.Errorf("--retired-pairs: %q is not <sign-in origin> <relay origin> <replacement relay origin>", strings.TrimSpace(entry))
+		}
+		for _, origin := range fields[:2] {
+			if err := checkOrigin("--retired-pairs", origin, scheme); err != nil {
+				return nil, err
+			}
+			h := host(origin)
+			if a, err := netip.ParseAddr(h); err == nil && a.Is6() {
+				return nil, fmt.Errorf("--retired-pairs: %s is an IPv6 address; a retired pair is named by host names", origin)
+			}
+			if c, _ := edgeproto.Origin(origin); !edgeproto.NoticeOrigin(c) {
+				return nil, fmt.Errorf("--retired-pairs: %s cannot be named in a signed notice to servers: write a host name of at most 253 bytes "+
+					"and a port without leading zeros", origin)
+			}
+			_, isRelay := relays[h]
+			_, isSignin := signinHosts[h]
+			switch {
+			case h == host(signin) || h == host(relay):
+				return nil, fmt.Errorf("--retired-pairs: %s is still served as --signin-origin or --relay-origin; "+
+					"first make its replacement the first pair (--signin-origin, --relay-origin, --github-client-id) and remove this pair", origin)
+			case isRelay || isSignin:
+				return nil, fmt.Errorf("--retired-pairs: %s is still served; remove its pair from --origin-pairs in the same edit", origin)
+			}
+			if other, ok := hosts[h]; ok {
+				return nil, fmt.Errorf("--retired-pairs names the host %s in two entries, %s and %s; keep one entry for it", h, other, origin)
+			}
+			hosts[h] = origin
+		}
+		replacement, err := servedRelay("--retired-pairs", fields[2], scheme, relays, signinHosts)
+		if err != nil {
+			return nil, err
+		}
+		if !edgeproto.NoticeOrigin(replacement) {
+			return nil, fmt.Errorf("--retired-pairs: %s, the replacement of %s, cannot be named in a signed notice to servers: "+
+				"write its relay origin with a port without leading zeros", replacement, fields[1])
+		}
+		for _, r := range retiring {
+			if r.RelayOrigin == replacement {
+				return nil, fmt.Errorf("--retired-pairs: %s, the replacement of %s, is retiring; name a pair that stays", replacement, fields[1])
+			}
+		}
+		out = append(out, edge.Retired{SigninOrigin: edge.CanonicalOrigin(fields[0]), RelayOrigin: edge.CanonicalOrigin(fields[1]), Replacement: replacement})
+	}
+	if len(out) > edgeproto.MaxRelayOrigins {
+		return nil, fmt.Errorf("--retired-pairs names %d pairs; an edge keeps at most %d", len(out), edgeproto.MaxRelayOrigins)
+	}
+	if n := len(out) + len(retiring); n > edgeproto.MaxRelayOrigins {
+		return nil, fmt.Errorf("--retiring-pairs and --retired-pairs name %d pairs together, and a server is sent at most %d notices: "+
+			"retire this pair once fewer pairs are retiring or retired", n, edgeproto.MaxRelayOrigins)
+	}
+	return out, nil
+}
+
+// host is the host name of a valid origin in lowercase, or its IP address
+// in its standard form.
 func host(origin string) string {
 	u, _ := url.Parse(origin) // parseOptions checked it
+	if a, err := netip.ParseAddr(u.Hostname()); err == nil {
+		return a.String()
+	}
 	return strings.ToLower(u.Hostname())
 }
 
@@ -421,4 +511,63 @@ func readSecretFile(path string) (string, error) {
 		return "", fmt.Errorf("%s is larger than %d bytes", path, maxSecretFileSize)
 	}
 	return strings.TrimSpace(string(data)), nil
+}
+
+// sameDir reports whether a and b name one directory: the same path, or
+// two paths of one existing directory. Both are cleaned first, as
+// filepath.Join cleans the database path the edge opens.
+func sameDir(a, b string) bool {
+	a, b = filepath.Clean(a), filepath.Clean(b)
+	if a == b {
+		return true
+	}
+	ai, errA := os.Stat(a)
+	bi, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(ai, bi)
+}
+
+// olderImageServes refuses a retired host that an edge image older than
+// v0.8.7 would serve: such an image reads the origins only from the
+// AETHER_EDGE_ names, so one that a CLOUDFIELD_EDGE_ name shadows here is
+// still what it serves after a rollback. For the same reason it refuses
+// another data directory under AETHER_EDGE_DATA, whose database keeps the
+// sign-ins this start deletes. getenv reads the environment without the
+// CLOUDFIELD_EDGE_ names.
+func olderImageServes(o options, getenv func(string) string) error {
+	retired := map[string]bool{}
+	for _, r := range o.retired {
+		retired[host(r.SigninOrigin)], retired[host(r.RelayOrigin)] = true, true
+	}
+	if len(retired) == 0 {
+		return nil
+	}
+	if older := dataDirDefault(getenv); !o.flags["data"] && !sameDir(older, o.dataDir) {
+		return fmt.Errorf("this edge uses the data directory %s from CLOUDFIELD_EDGE_DATA, but an edge image older than v0.8.7 reads only AETHER_EDGE_DATA "+
+			"and would open %s, whose database keeps the sign-ins --retired-pairs deletes, after a rollback. Set AETHER_EDGE_DATA to %s, "+
+			"or pass --data %s on the command line, which both images read",
+			o.dataDir, older, o.dataDir, o.dataDir)
+	}
+	for _, v := range []struct{ flag, name string }{
+		{"signin-origin", "AETHER_EDGE_SIGNIN_ORIGIN"}, {"relay-origin", "AETHER_EDGE_RELAY_ORIGIN"}, {"origin-pairs", "AETHER_EDGE_ORIGIN_PAIRS"},
+	} {
+		value := getenv(v.name)
+		if o.flags[v.flag] || value == "" {
+			continue
+		}
+		for entry := range strings.SplitSeq(value, ",") {
+			fields := strings.Fields(entry)
+			if v.name != "AETHER_EDGE_ORIGIN_PAIRS" {
+				fields = []string{strings.TrimSpace(entry)}
+			}
+			for _, origin := range fields[:min(2, len(fields))] {
+				u, err := url.Parse(origin)
+				if err != nil || !retired[strings.ToLower(u.Hostname())] {
+					continue
+				}
+				return fmt.Errorf("%s names %s, which --retired-pairs retires: an edge image older than v0.8.7 reads only the AETHER_EDGE_ names "+
+					"and would serve it in full after a rollback. Remove %s, or set it to the value of %s", v.name, origin, v.name, envname.New(v.name))
+			}
+		}
+	}
+	return nil
 }
