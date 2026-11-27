@@ -18,24 +18,25 @@ var ConfigLockWait = 10 * time.Second
 // <file>.lock beside the file path resolves to, so every name of one file
 // takes the same lock. Every config write of this binary takes it.
 func UpdateConfig(path string, edit func(values map[string]string, write func() error) error) error {
-	return withConfigLock(path, func(resolved string) error {
+	return WithConfigLock(path, func(resolved string, write func(map[string]string) error) error {
 		values, err := Load(resolved)
 		if err != nil {
 			return err
 		}
-		return edit(values, func() error { return writeConfig(resolved, values) })
+		return edit(values, func() error { return write(values) })
 	})
 }
 
 // WriteConfig replaces the config file at path with values, whatever it
 // held, creating its directory if needed, holding the config lock.
 func WriteConfig(path string, values map[string]string) error {
-	return withConfigLock(path, func(resolved string) error { return writeConfig(resolved, values) })
+	return WithConfigLock(path, func(_ string, write func(map[string]string) error) error { return write(values) })
 }
 
-// withConfigLock calls fn with the file path resolves to while holding its
-// config lock.
-func withConfigLock(path string, fn func(resolved string) error) error {
+// WithConfigLock calls fn with the file path resolves to and write, which
+// replaces that file with values, while holding the config lock. It reads
+// nothing, so fn may face a file that does not parse.
+func WithConfigLock(path string, fn func(resolved string, write func(values map[string]string) error) error) error {
 	resolved, err := resolveConfig(path)
 	if err != nil {
 		return err
@@ -45,7 +46,7 @@ func withConfigLock(path string, fn func(resolved string) error) error {
 		return err
 	}
 	defer unlock()
-	return fn(resolved)
+	return fn(resolved, func(values map[string]string) error { return writeConfig(resolved, values) })
 }
 
 // resolveConfig is the absolute path of the file path names, following

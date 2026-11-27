@@ -355,6 +355,21 @@ func TestConfigEditRejectsAnEditThatBreaksTheFile(t *testing.T) {
 	}
 }
 
+// config edit opens a file that does not parse, so it can repair it.
+func TestConfigEditRepairsABrokenFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "server.conf")
+	if err := os.WriteFile(path, []byte("not a config line\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("EDITOR", fakeEditor(t, "'addr = :2401'"))
+	if err := configEdit(io.Discard, path); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := serversetup.Load(path); err != nil || got["addr"] != ":2401" {
+		t.Fatalf("config after the edit: %v, %v", got, err)
+	}
+}
+
 // A config rewrite waits for one in progress, so neither loses the
 // other's change, and edge move's compare and write is one of them.
 func TestConfigRewritesTakeTurns(t *testing.T) {

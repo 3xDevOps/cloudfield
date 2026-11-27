@@ -140,9 +140,9 @@ func configSetIf(w io.Writer, path, key, value string, guard func(values map[str
 // config lock, then reparses it so a syntax error or a bad key surfaces
 // now rather than at the next restart.
 func configEdit(w io.Writer, path string) error {
-	return serversetup.UpdateConfig(path, func(_ map[string]string, write func() error) error {
+	return serversetup.WithConfigLock(path, func(_ string, write func(map[string]string) error) error {
 		if _, err := os.Stat(path); errors.Is(err, os.ErrNotExist) {
-			if err := write(); err != nil {
+			if err := write(map[string]string{}); err != nil {
 				return err
 			}
 		}
