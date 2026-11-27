@@ -6750,8 +6750,10 @@ phone the switches sit under the facts and above the usage bars.
 team-max", which no login can be named), and a line under the field says
 Automatic and Use for shares both start on: Cloudfield may start or move the
 member's sessions onto it, and the teammates `account.list` names
-("teammates you share your account with" until it answers) can use it; the
-next screen can turn either off as soon as the login is added. The switches
+("teammates you share your account with" until it answers) can use it, that
+a Console account's organisation is charged per use for those sessions,
+the member's and theirs, and that the next screen can turn either off as
+soon as the login is added. The switches
 cannot sit on this step: `agent.login.add` takes only the name, and the
 login does not exist until its sign-in ends. It calls `agent.login.add`,
 and runs the sign-in under the heading "Sign in to <name>" in the

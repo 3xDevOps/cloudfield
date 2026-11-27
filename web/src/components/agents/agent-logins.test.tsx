@@ -486,7 +486,7 @@ describe('add login', () => {
     const user = userEvent.setup()
     const client = fakeApi({ agentLoginAdd: vi.fn(async () => ({ login_id: 'lgn-new00000009' })) })
     const { unmount } = addLogin({ client })
-    expect(screen.getByRole('form', { name: 'Add a Claude Code login' }).textContent).toContain('Automatic and Use for shares both start on: Cloudfield may start or move your sessions onto it, and teammates you share your account with can use it too. You can turn either off on the next screen as soon as the login is added.')
+    expect(screen.getByRole('form', { name: 'Add a Claude Code login' }).textContent).toContain('Automatic and Use for shares both start on: Cloudfield may start or move your sessions onto it, and teammates you share your account with can use it too. If you sign in to a Console account, its organisation is charged per use for those sessions, yours and theirs. You can turn either off on the next screen as soon as the login is added.')
     unmount()
 
     const { rerender } = addLogin({ client, sharedWith: [bob] })
