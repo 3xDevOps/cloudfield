@@ -18,6 +18,17 @@ const EncodingGzip = "gzip"
 // GzipMinBytes is the smallest response line WriteResponse compresses.
 const GzipMinBytes = 8 << 10
 
+// GzipMethods are the methods whose result may go out as a gzip frame; a
+// client sends accept_encoding only for them. The rule: one compression
+// context per access domain. A response that can span workspaces (run.list,
+// changes.list and other member-wide reads) must not be added, or text one
+// workspace's member writes would be compressed beside another workspace's,
+// and the frame's size would tell them about it;
+// docs/local-gateway.md#compressed-responses.
+var GzipMethods = map[string]bool{
+	MethodWorkspaceTimeline: true,
+}
+
 const (
 	gzipFramePrefix = "gzip "
 	// gzipHeaderBytes is the "gzip <n>" line: the prefix, n as ten
@@ -31,14 +42,15 @@ var gzipWriters = sync.Pool{New: func() any {
 }}
 
 // WriteResponse writes resp as one frame: a gzip frame when compress is set,
-// the line is at least GzipMinBytes and compressing shrinks it, otherwise
-// the newline-terminated JSON line.
+// the line is between GzipMinBytes and MaxLineBytes and compressing shrinks
+// it, otherwise the newline-terminated JSON line. A line over MaxLineBytes
+// goes out as is, so the client refuses it before inflating anything.
 func WriteResponse(w io.Writer, resp Response, compress bool) error {
 	line, err := json.Marshal(resp)
 	if err != nil {
 		return err
 	}
-	if compress && len(line) >= GzipMinBytes {
+	if compress && len(line) >= GzipMinBytes && len(line) <= MaxLineBytes {
 		frame := bytes.NewBuffer(make([]byte, gzipHeaderBytes, gzipHeaderBytes+len(line)/4))
 		zw := gzipWriters.Get().(*gzip.Writer)
 		zw.Reset(frame)

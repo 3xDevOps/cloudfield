@@ -388,8 +388,6 @@ func listen(t *testing.T) net.Listener {
 // serveControl serves SSH on ln, answering keepalives and each control
 // call with the result answer gives, none for a nil one; a nil answer
 // gives every call an empty result. It counts the connections it accepts.
-// With gzipFrames it answers the way a compressing server does, gzip frames
-// to a call that asks, and counts the frames it sent.
 func serveControl(t *testing.T, ln net.Listener, answer func(method string) json.RawMessage) *atomic.Int32 {
 	t.Helper()
 	connections, _ := serveControlChannels(t, ln, answer, false, nil)
@@ -398,8 +396,10 @@ func serveControl(t *testing.T, ln net.Listener, answer func(method string) json
 
 // serveControlChannels is serveControl counting the control channels too.
 // Like the server, a channel answers call after call; with oneCall it ends
-// after its first answer, as a channel the server gave up on does.
-func serveControlChannels(t *testing.T, ln net.Listener, answer func(method string) json.RawMessage, oneCall bool, gzipFrames *atomic.Int32) (connections, channels *atomic.Int32) {
+// after its first answer, as a channel the server gave up on does. With gz
+// it answers the way a compressing server does, gzip frames to a call that
+// asks, and records the frames it sent and the request bytes it read.
+func serveControlChannels(t *testing.T, ln net.Listener, answer func(method string) json.RawMessage, oneCall bool, gz *compressingServer) (connections, channels *atomic.Int32) {
 	t.Helper()
 	signer, err := ssh.NewSignerFromKey(testhome.Ed25519Key(t))
 	if err != nil {
@@ -441,7 +441,11 @@ func serveControlChannels(t *testing.T, ln net.Listener, answer func(method stri
 							}
 							go ssh.DiscardRequests(requests)
 							channels.Add(1)
-							decoder := json.NewDecoder(channel)
+							var in io.Reader = channel
+							if gz != nil {
+								in = io.TeeReader(channel, gz)
+							}
+							decoder := json.NewDecoder(in)
 							for {
 								var rpc protocol.Request
 								if decoder.Decode(&rpc) != nil {
@@ -455,10 +459,10 @@ func serveControlChannels(t *testing.T, ln net.Listener, answer func(method stri
 									return
 								}
 								resp := protocol.Response{JSONRPC: "2.0", ID: rpc.ID, Result: result}
-								if gzipFrames == nil {
+								if gz == nil {
 									_ = json.NewEncoder(channel).Encode(resp)
 								} else {
-									_ = protocol.WriteResponse(frameCounter{channel, gzipFrames}, resp, rpc.AcceptEncoding == protocol.EncodingGzip)
+									_ = protocol.WriteResponse(frameCounter{channel, gz}, resp, rpc.AcceptEncoding == protocol.EncodingGzip)
 								}
 								if oneCall {
 									return
@@ -546,14 +550,35 @@ func relay(dst io.Writer, src io.Reader, silent <-chan struct{}, pace time.Durat
 	}
 }
 
+// compressingServer is what serveControlChannels records when it answers
+// like a compressing server.
+type compressingServer struct {
+	frames   atomic.Int32
+	mu       sync.Mutex
+	requests bytes.Buffer
+}
+
+func (c *compressingServer) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.requests.Write(p)
+}
+
+// requestLines are the request lines read so far, without their newlines.
+func (c *compressingServer) requestLines() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return strings.Split(strings.TrimSuffix(c.requests.String(), "\n"), "\n")
+}
+
 type frameCounter struct {
-	w      io.Writer
-	frames *atomic.Int32
+	w  io.Writer
+	gz *compressingServer
 }
 
 func (c frameCounter) Write(p []byte) (int, error) {
 	if bytes.HasPrefix(p, []byte("gzip ")) {
-		c.frames.Add(1)
+		c.gz.frames.Add(1)
 	}
 	return c.w.Write(p)
 }

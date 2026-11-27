@@ -26,7 +26,8 @@ func NewClient(rwc io.ReadWriteCloser) *Client {
 }
 
 // AcceptGzip asks the server to compress large responses on every later
-// call. A server that does not know the request field answers as before.
+// call to a method in GzipMethods; other requests stay byte for byte as
+// before. A server that does not know the request field answers as before.
 func (c *Client) AcceptGzip() {
 	c.mu.Lock()
 	c.gzip = true
@@ -46,7 +47,8 @@ func (c *Client) Call(method string, params, result any) error {
 		ID:      json.RawMessage(strconv.FormatUint(c.nextID, 10)),
 		Method:  method,
 	}
-	if c.gzip {
+	gzipOK := c.gzip && GzipMethods[method]
+	if gzipOK {
 		req.AcceptEncoding = EncodingGzip
 	}
 	if params != nil {
@@ -64,8 +66,7 @@ func (c *Client) Call(method string, params, result any) error {
 		return fmt.Errorf("protocol: write request: %w", werr)
 	}
 
-	limit := responseLineLimit(method)
-	respLine, err := readResponse(c.r, limit, c.gzip && limit == MaxLineBytes)
+	respLine, err := readResponse(c.r, responseLineLimit(method), gzipOK)
 	if err != nil {
 		return fmt.Errorf("protocol: read response: %w", err)
 	}

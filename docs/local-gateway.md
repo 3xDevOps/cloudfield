@@ -367,17 +367,19 @@ the JSON line, byte for byte as before, and a server that predates the field
 ignores it and answers with the JSON line, so either side may be older with
 no error and no extra round trip. Only `cloudfield gui` asks
 (`Client.AcceptGzip` in `internal/protocol/client.go`, called in
-`internal/localgw/backend.go`); every other caller of the channel, the CLI
-among them, reads JSON lines.
+`internal/localgw/backend.go`), and only on requests for a method in
+`GzipMethods` (`internal/protocol/compress.go`), the one list the client and
+the server share; every other request, and every request from any other
+caller of the channel, the CLI among them, is byte for byte as before.
 
 The server compresses a response only when all of these hold
 (`WriteResponse` in `internal/protocol/compress.go`):
 
 - the request asked for it;
 - the call succeeded: errors are always JSON lines;
-- the method is `workspace.timeline`, the only entry of `gzipMethods` in
-  `internal/sshd/control.go`;
-- the JSON line is at least 8 KiB;
+- the method is `workspace.timeline`, the only entry of `GzipMethods`;
+- the JSON line is at least 8 KiB and at most 96 MiB (`MaxLineBytes`), so a
+  line the gateway would refuse is refused before anything is inflated;
 - the gzip frame is smaller than the line.
 
 It uses `compress/gzip` at the default level 6 and reserves a quarter of the
@@ -389,9 +391,9 @@ out as 41 KB; level 1 takes 0.4 ms and sends 45 KB, which wins only on links
 faster than about 35 to 55 Mbit/s. Under 8 KiB compressing costs several times what encoding the
 response does, and the response fits in the first TCP round trip either way.
 
-The gateway reads a frame only for a method whose limit is `MaxLineBytes`
-(96 MiB); for `files.read`, `run.patch` and the other blob methods, which the
-server never compresses, a frame is refused as a malformed line. A header
+The gateway reads a frame only in answer to a request that asked for one;
+for any other method, `files.read`, `run.patch` and the other blob methods
+among them, a frame is refused as a malformed line. A header
 that is not exactly the documented 16 bytes, or names more than 96 MiB, is
 refused before the body is read; the body is read as it arrives, not
 allocated at its declared size; decompression stops one byte past the limit
@@ -418,7 +420,7 @@ activity details (command lines, URLs, file paths), pending input titles, and
 notices addressed only to the reader. Someone who sees the stream's sizes and
 can make an agent in the same workspace write chosen text could, over many
 page reads, probe that text. Removing `workspace.timeline` from
-`gzipMethods` turns compression off entirely.
+`GzipMethods` turns compression off entirely.
 
 ## Routes
 

@@ -273,16 +273,6 @@ func writeJSONLine(w io.Writer, v any) error {
 	return err
 }
 
-// gzipMethods are the methods whose result may go out as a gzip frame to
-// a caller that asks. The rule: one compression context per access domain.
-// A response that can span workspaces (run.list, changes.list and other
-// member-wide reads) must not be added, or text one workspace's member
-// writes would be compressed beside another workspace's, and the frame's
-// size would tell them about it; docs/local-gateway.md#compressed-responses.
-var gzipMethods = map[string]bool{
-	protocol.MethodWorkspaceTimeline: true,
-}
-
 // handleRequest also reports whether the response may be compressed.
 func (s *Server) handleRequest(ctx context.Context, member domain.MemberID, line []byte) (protocol.Response, bool) {
 	req, resp, valid := protocol.ParseRequest(line)
@@ -295,7 +285,7 @@ func (s *Server) handleRequest(ctx context.Context, member domain.MemberID, line
 		return resp, false
 	}
 	resp.Result = result
-	return resp, req.AcceptEncoding == protocol.EncodingGzip && gzipMethods[req.Method]
+	return resp, req.AcceptEncoding == protocol.EncodingGzip && protocol.GzipMethods[req.Method]
 }
 
 // dispatch runs one control-channel method for member: the SSH control

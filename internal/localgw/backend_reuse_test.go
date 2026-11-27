@@ -409,9 +409,10 @@ func TestSSHBackendReadsPlainAnswersFromAServerWithoutCompression(t *testing.T) 
 	}
 }
 
-// The gateway asks for compression and reads the frames a compressing
-// server sends, on a new channel and on a kept one, and a plain answer on
-// the same kept channel after them.
+// The gateway asks for compression only on the methods the server may
+// compress, and reads the frames a compressing server sends, on a new
+// channel and on a kept one, and a plain answer on the same kept channel
+// after them. Every other request is byte for byte what it was before.
 func TestSSHBackendReadsCompressedAnswers(t *testing.T) {
 	home := testhome.Isolate(t)
 	server := listen(t)
@@ -420,13 +421,13 @@ func TestSSHBackendReadsCompressedAnswers(t *testing.T) {
 		t.Fatal(err)
 	}
 	small := json.RawMessage(`{"small":true}`)
-	frames := new(atomic.Int32)
+	gz := new(compressingServer)
 	_, channels := serveControlChannels(t, server, func(method string) json.RawMessage {
 		if method == protocol.MethodWorkspaceTimeline {
 			return big
 		}
 		return small
-	}, false, frames)
+	}, false, gz)
 	b := NewSSHBackend(cli.Config{Addr: server.Addr().String(), KnownHosts: filepath.Join(home, "known_hosts")})
 	t.Cleanup(func() { _ = b.Close() })
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -447,10 +448,26 @@ func TestSSHBackendReadsCompressedAnswers(t *testing.T) {
 			t.Fatalf("call %d, %s: %d bytes, want the server's %d", i, call.method, len(got), len(call.want))
 		}
 	}
-	if got := frames.Load(); got != 2 {
+	if got := gz.frames.Load(); got != 2 {
 		t.Fatalf("server sent %d gzip frames, want one per timeline call", got)
 	}
 	if got := channels.Load(); got != 1 {
 		t.Fatalf("3 calls opened %d control channels, want 1 kept channel", got)
+	}
+
+	launch := json.RawMessage(`{"workspace_id":"ws-1","task":"fix the build"}`)
+	if _, perr := b.Call(ctx, protocol.MethodRunLaunch, launch); perr != nil {
+		t.Fatal(perr)
+	}
+	lines := gz.requestLines()
+	if len(lines) != 4 || !strings.Contains(lines[0], `"accept_encoding":"gzip"`) || strings.Contains(lines[2], "accept_encoding") {
+		t.Fatalf("requests = %q, want accept_encoding on the timeline calls only", lines)
+	}
+	today, err := json.Marshal(protocol.Request{JSONRPC: "2.0", ID: json.RawMessage("1"), Method: protocol.MethodRunLaunch, Params: launch})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lines[3] != string(today) {
+		t.Fatalf("run.launch request line = %s, want today's %s", lines[3], today)
 	}
 }
