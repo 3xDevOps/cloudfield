@@ -21,6 +21,9 @@ type WorkspaceTimelineParams struct {
 	Newest      bool     `json:"newest,omitempty"`
 	BeforeSeq   uint64   `json:"before_seq,omitempty"`
 	Limit       int      `json:"limit,omitempty"`
+	// NoRereads leaves out run.status rereads even when Types names
+	// run.status. A server that predates the field ignores it and returns them.
+	NoRereads bool `json:"no_rereads,omitempty"`
 }
 
 // WorkspaceTimelineResult is one page of history, oldest first, in the same

@@ -491,7 +491,10 @@ it shows the bodies
 `workspace.timeline` pages forward from `after_seq`, or with `newest: true`
 backward from `before_seq` (zero: the log head; pass the previous page's
 `older_seq`), always returning events oldest first. Its `run_id` filter also matches mail
-addressed to the session. A session snapshot's
+addressed to the session. `no_rereads: true` leaves out the `run.status`
+rereads that a `types` filter naming `run.status` otherwise returns
+([failure-handling.md](failure-handling.md)); a server that predates the
+field ignores it. A session snapshot's
 `unacked_messages` counts mail addressed to the session that it has not
 acknowledged, and `oldest_unacked_at` is when the oldest of it was sent.
 

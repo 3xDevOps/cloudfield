@@ -13,7 +13,8 @@ describe('lane history', () => {
     expect(store.getState().laneHistory).toEqual({})
     const release = store.getState().holdLanes()
     store.getState().setLaneHistory('wsp_1', { floor: -Infinity }, [event(2)])
-    for (const e of [event(3), event(3), event(1), event(4, 'run.diff'), event(5, 'run.status', 'wsp_2')]) store.getState().appendLaneEvent(e)
+    const reread = { ...event(6), payload: { reread: true } }
+    for (const e of [event(3), event(3), event(1), event(4, 'run.diff'), event(5, 'run.status', 'wsp_2'), reread]) store.getState().appendLaneEvent(e)
     expect(store.getState().laneHistory.wsp_1.events.map((e) => e.seq)).toEqual([1, 2, 3])
     expect(store.getState().laneHistory.wsp_2).toBeUndefined()
     release()

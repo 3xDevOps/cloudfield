@@ -750,7 +750,7 @@ describe('lanes view', () => {
     expect(items[2]).toBe('Working, 1 session')
     expect(items[4]).toBe('Finished, 0 sessions, 1 ended before this window')
     await waitFor(() => expect(api.workspaceTimeline).toHaveBeenCalledWith(expect.objectContaining({
-      workspace_id: workspace.id, types: ['run.status', 'coord.message', 'coord.message.acked'], newest: true,
+      workspace_id: workspace.id, types: ['run.status', 'coord.message', 'coord.message.acked'], no_rereads: true, newest: true,
     })))
   })
 

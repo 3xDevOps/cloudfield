@@ -1129,6 +1129,8 @@ export interface TimelineQuery {
   newest?: boolean
   before_seq?: number
   limit?: number
+  /** Leaves out `run.status` rereads. A server that predates the field returns them. */
+  no_rereads?: boolean
 }
 
 /** One file in a `run.diff` snapshot. */

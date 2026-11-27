@@ -39,6 +39,7 @@ async function readBack(workspaceID: string, floor: number): Promise<void> {
       const page = await api.workspaceTimeline({
         workspace_id: workspaceID,
         types: laneEventTypes,
+        no_rereads: true,
         newest: true,
         before_seq: history.olderSeq,
         limit: pageSize,

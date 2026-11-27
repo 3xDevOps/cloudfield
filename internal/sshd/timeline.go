@@ -46,6 +46,7 @@ func (s *Server) workspaceTimeline(ctx context.Context, member domain.MemberID, 
 		Member:    domain.MemberID(p.MemberID),
 		Reader:    member,
 		Types:     types,
+		NoRereads: p.NoRereads,
 		Scope:     s.eventScope(ctx, actor),
 	}
 	var page timeline.Page

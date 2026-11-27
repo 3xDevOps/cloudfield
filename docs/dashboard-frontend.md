@@ -2097,10 +2097,11 @@ a time (the Session tree panel's announcer, `src/lib/use-announcement.ts`).
 
 **Data.** `useLaneHistory` holds `laneHistory` in `src/store/lanes.ts` while
 the view is mounted and reads `workspace.timeline` backward with
-`types: ["run.status", "coord.message", "coord.message.acked"]`, 1000 a page,
+`types: ["run.status", "coord.message", "coord.message.acked"]` and
+`no_rereads: true`, 1000 a page,
 until it passes the window's start, the log's start or 5000 events per
 workspace; "Older history not loaded" marks the last case. `sync.ts` appends
-live events of those types to held history, which keeps a workspace's newest
+live events of those types, rereads left out, to held history, which keeps a workspace's newest
 5000 and moves its loaded boundary past what it drops; the last view to leave
 drops it, and a server switch or a new signed-in member clears it for a fresh
 read. Lane geometry comes from the model

@@ -122,7 +122,8 @@ carries `wait` too. A wait whose source was read again at least a minute
 later is published as a same-status event with `reread: true`;
 `cloudfield timeline` and the dashboard's activity feed leave it out unless
 filtered to `run.status`, `changes.list` leaves it out, and the
-dashboard's lanes and trace bars never draw it as a state change. A live
+dashboard's lanes ask `workspace.timeline` to leave it out (`no_rereads`); its
+lanes and trace bars never draw it as a state change. A live
 session's record carries its latest `cause` too. `cloudfield timeline <session-id>`
 prints it after the state, for example
 `running -> needs-attention (waiting for 2 subsessions) · waiting-agents by
