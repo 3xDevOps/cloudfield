@@ -324,7 +324,13 @@ func (s *Server) launchRun(ctx context.Context, member domain.MemberID, p protoc
 		}
 		return MeasureUnnamed(ctx, &s.cfg, member, domain.Account{Member: account, Login: login}, p.Harness, policy, payer)
 	}
+	var warming sync.WaitGroup
+	if mirrors := s.cfg.Services.Mirrors; mirrors != nil && p.CachedBase == "" {
+		// The launch's own base capture reports a refresh that fails.
+		warming.Go(func() { _ = mirrors.Warm(ctx, domain.WorkspaceID(p.WorkspaceID)) })
+	}
 	measured, err := measure()
+	warming.Wait()
 	if err != nil {
 		return nil, rpcError(err)
 	}

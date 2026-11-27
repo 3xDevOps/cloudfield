@@ -3709,9 +3709,9 @@ new agent conversation (`store/session-steps.ts`). In a segment, the agent's
 prose stays in the conversation as `assistant` rows, and the work between
 two pieces of prose (thoughts, tool calls, plans, subagent launches and
 answered requests) joins one `steps` block. The prose after the last block
-is the answer. The `cloudfield-internal report` call (or `aether_report` tool)
-that ends a Cloudfield turn joins the block before the prose it follows, so a
-reply written before reporting stays the answer. A segment without work,
+is the answer. A turn's `cloudfield-internal report` call (or `aether_report`
+tool) joins the block before the prose it follows, so a reply written before
+reporting, as a Background session writes it, stays the answer. A segment without work,
 such as `ping` and `pong`, has no block. The
 block's header names the work ("Read 12 files, ran 5 commands and edited 3
 files") with up to three tool icons, failures, plan progress and tools still
@@ -5616,9 +5616,11 @@ and applies again once there is room. Sections (`details.tsx`):
   and "Cost not reported" when none are metered, never $0; the split by
   paying account; tokens; and "1 of 8 busy, 1 queued" against the
   workspace limit. The list rereads whenever a
-  descendant the store holds changes.
+  descendant the store holds changes. A failed read shows the server's
+  error with **Retry**.
 - **Agent messages**: the session-scoped agent mail, which the Chat view also
-  shows inline, with **Show older** and **Show all**.
+  shows inline, with **Show older** and **Show all**. A failed read shows the
+  server's error with **Retry**, also when no message has been read yet.
 - **Notes**: a thread (`note-thread.tsx`) of teammates' `question` messages,
   human to human on the session, plus open `comment` messages too, unless
   Chat is the active view and its pane is 1248px or over (however Details or

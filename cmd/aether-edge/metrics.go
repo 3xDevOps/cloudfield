@@ -46,7 +46,7 @@ func metricsHandler(svc *edge.Service, rl *relay.Relay, listener *listenerState)
 	})
 	mux.HandleFunc("GET /metrics", func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		writeMetrics(w, rl.Metrics(), svc.GitHubErrors(), svc.DeviceLogins())
+		writeMetrics(w, rl.Metrics(), svc.GitHubErrors(), svc.DeviceLogins(), svc.RetiredRequests())
 	})
 	return mux
 }
@@ -194,7 +194,7 @@ func healthcheck(args []string, getenv func(string) string, stdout io.Writer) er
 
 var labelEscaper = strings.NewReplacer(`\`, `\\`, `"`, `\"`, "\n", `\n`)
 
-func writeMetrics(w io.Writer, m relay.Metrics, githubErrors uint64, deviceLogins map[string]uint64) {
+func writeMetrics(w io.Writer, m relay.Metrics, githubErrors uint64, deviceLogins map[string]uint64, retired []edge.RetiredRequest) {
 	throttled, draining := 0, 0
 	if m.Throttled {
 		throttled = 1
@@ -265,5 +265,14 @@ aether_edge_github_errors_total %d
 	for _, k := range keys {
 		_, _ = fmt.Fprintf(w, "aether_edge_connector_requests_total{origin=\"%s\",protocol=\"%d\"} %d\n",
 			labelEscaper.Replace(k.Origin), k.Protocol, m.ConnectorRequests[k])
+	}
+	if len(retired) == 0 {
+		return
+	}
+	_, _ = fmt.Fprint(w, `# HELP aether_edge_retired_requests_total Requests since the edge started to a host of a retired pair, by that host's origin and the kind of path: server, client, connector or browser.
+# TYPE aether_edge_retired_requests_total counter
+`)
+	for _, r := range retired {
+		_, _ = fmt.Fprintf(w, "aether_edge_retired_requests_total{origin=\"%s\",kind=\"%s\"} %d\n", labelEscaper.Replace(r.Origin), r.Kind, r.Count)
 	}
 }
