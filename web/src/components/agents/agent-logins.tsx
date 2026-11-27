@@ -360,7 +360,7 @@ function LoginRow({ login, index, count, firstAutomatic, usage, sharedWith, orde
             {staleError && <span className="text-ui-sm text-muted">Last read, not current: <span className="font-code">{staleError}</span></span>}
             {windows.length > 0 && (
               <div className="max-w-sm">
-                <UsageMeters label={`Login ${login.name}`} windows={windows} now={now} />
+                <UsageMeters label={`Login ${login.name}`} windows={windows} now={now} days />
               </div>
             )}
           </div>

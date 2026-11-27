@@ -6758,7 +6758,8 @@ per use to <organisation>"; its
 **Automatic** (`agent.login.automatic`) and **Use for shares**
 (`agent.login.share`) switches, each a row of its own; and its usage windows
 (`account.usage` with `login`), whose reset reads in days and hours past 24
-hours ("resets in 1d 16h"), as Settings → Usage does. A Console login, whose usage the server
+hours ("resets in 1d 16h"), as the launch dialog's limit lines do; Settings →
+Usage reads hours ("resets in 76h"). A Console login, whose usage the server
 reports `unsupported`, reads "No usage windows"; any other
 read error shows verbatim, and windows kept from a refresh that failed (`stale`)
 add "Last read, not current:" with its error. A login billed per use with Automatic on, below
