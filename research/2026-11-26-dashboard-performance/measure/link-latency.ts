@@ -29,6 +29,13 @@ const one: number[] = []
 for (let i = 0; i < 15; i++) one.push((await rpc('server.info', {})).ms)
 line('one small call (server.info), one after another', one)
 
+const spaced: number[] = []
+for (let i = 0; i < 5; i++) {
+  await new Promise((r) => setTimeout(r, 2000))
+  spaced.push((await rpc('server.info', {})).ms)
+}
+line('one small call after 2 s without traffic', spaced)
+
 const burst: number[] = []
 for (let i = 0; i < 5; i++) {
   const started = performance.now()

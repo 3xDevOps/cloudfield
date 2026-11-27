@@ -1,0 +1,28 @@
+# Cause 3: what holding more lane history costs, and the 7d window after causes 1 and 2
+
+## Browser cost against events held
+measure/lanes-memory.ts on a store seeded with --sessions 3000 (346,343 lane events, 46,198 without
+rereads), dashboard built with historyBudget raised to 200,000 so each window loads whole, all four
+workspaces in scope, no link delay, headless Chromium on one CPU. Heap is JSHeapUsedSize after a
+forced collection, minus the same reading on the Board. Second of two runs (the first agreed on
+events and requests; its heap readings were 4.6 / n.a. / 8.7 / 15.4 MB).
+
+window  events held  requests  MB fetched  heap MB over Board  script s  all tasks s  settled s
+1h             4000         4         1.2                 4.7       0.4          1.3        1.7
+6h             7000         7         2.1                 4.5       0.5          1.4        1.7
+24h           15000        15         4.5                 7.3       0.8          2.0        2.2
+7d            33000        33         9.9                13.8       1.6          3.3        3.9
+
+From 4,000 to 33,000 events the heap grows 9.1 MB: about 0.31 KB an event.
+
+## Standard seeded store (600 sessions), 450 ms added per request, all workspaces
+measure/lanes-browser.ts, one run each.
+
+main after #1178 and #1180, 7d:   settled 3.3 s, 8 timeline requests, 2.35 MB, "Older history not loaded"
+window-sized budget, 7d:          settled 4.3 s, 10 timeline requests, 2.94 MB, whole window loaded
+window-sized budget, 24h:         settled 3.7 s, 8 timeline requests, 2.35 MB, whole window loaded (unchanged)
+
+## Load more
+On the 3,000-session store, busy workspace, zoomed out past 7d: the 25,000 budget is reached after
+25 requests; Load more reads 2 more pages (the rest of the log) and the label goes away.
+Screenshot: cause3-load-more.png (dark, 1440x900).
