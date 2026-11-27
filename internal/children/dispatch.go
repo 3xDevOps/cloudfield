@@ -219,9 +219,13 @@ func (s *Service) toldWaiting(ctx context.Context, c *domain.ChildReservation, r
 	if _, err := s.cfg.Store.GetRunMessageByIdempotency(ctx, c.ParentRunID, key); !errors.Is(err, store.ErrNotFound) {
 		return
 	}
+	// A cancel may have taken it from the queue since the launch lock went.
+	if now, err := s.cfg.Store.GetChild(ctx, c.RunID); err != nil || now.State == domain.ChildCancelled {
+		return
+	}
 	_ = s.notify(ctx, c.ParentRunID, c.ParentRunID,
-		fmt.Sprintf("Subsession %s (%s) is waiting to start: %s\nIt starts by itself when the server has room, and is refused if it has none within %s of your request. To stop waiting: aether-internal subsession cancel --run-id %s",
-			c.RunID, c.Purpose, reason, capacityWaitLimit, c.RunID), key)
+		fmt.Sprintf("Subsession %s (%s) is waiting to start: %s\nIt starts by itself when the server has room, and is refused if it has none within 24 hours of your request. To stop waiting: aether-internal subsession cancel --run-id %s",
+			c.RunID, c.Purpose, reason, c.RunID), key)
 }
 
 // retryDue reports whether a subsession that waits for room may be tried
