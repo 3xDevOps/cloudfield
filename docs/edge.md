@@ -1474,6 +1474,8 @@ the pending sign-ins that record no relay origin, from a run without the
 options or an older image; the person runs `cloudfield login` again. Device
 tokens and sessions are not touched by this.
 
+[edge-retire.md](edge-retire.md) is the guide for moving off a retiring pair, and the operator's order of steps.
+
 ### Firewall
 
 Allow inbound TCP 443 (IPv4 and IPv6), TCP 80 for certbot behind nginx, and SSH

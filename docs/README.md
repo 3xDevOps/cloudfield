@@ -101,6 +101,8 @@ Reference:
 20. [Privacy](privacy.md): what the Android app, the dashboard and the
     project's edge store and send.
 21. [Notices](notices.md): the licence and what the release artifacts bundle.
+22. [Retiring an edge address](edge-retire.md): moving servers, devices and
+    connectors off an edge address that is retiring.
 
 ## Extend Cloudfield
 
