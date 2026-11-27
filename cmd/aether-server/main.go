@@ -119,6 +119,8 @@ func main() {
 		exitOn(dictationCmd(args))
 	case "vm":
 		exitOn(vmCmd(args))
+	case "status":
+		exitOn(statusCmd(args))
 	default:
 		_, _ = fmt.Fprintf(os.Stderr, "aether-server: unknown command %q\n", cmd)
 		usage(os.Stderr)
@@ -142,6 +144,18 @@ show or change the options file serve reads; set and edit need root
 
 example:
   sudo cloudfield-server config set edge-access approved-devices
+`,
+	"status": `usage: cloudfield-server status [--config <file>]
+
+print the machine as the server measures it before it starts or wakes a
+session: memory against the floor, the memory stall, disk against its
+reserve, the session VMs, the last refused launch and wake with the refusal
+as the caller got it, and the counts of the last 24 hours and 14 days. It
+reads the database and measures the machine itself, so it answers while the
+server cannot (docs/failure-handling.md)
+
+example:
+  sudo cloudfield-server status
 `,
 	"device": `usage: cloudfield-server device approve <code> [--config <file>]
        cloudfield-server device review [--config <file>]
@@ -244,6 +258,7 @@ commands:
   slack    setup | remove: store or remove the Slack bot's tokens (docs/slack.md)
   dictation install [--gpu] | status | remove: speech-to-text for the dashboard (docs/dictation.md)
   vm       install: what sessions in VMs need (session-runtime vm)
+  status   memory, disk and session VMs against their limits, and what was refused for want of them
   version  print the version (also --version)
 
 serve and install options, which are also the config file keys:

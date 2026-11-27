@@ -46,6 +46,9 @@ func (s *Scheduler) watchVMMemory(ctx context.Context) {
 	}
 	tick := time.NewTicker(vmMemoryCheck)
 	defer tick.Stop()
+	// recorded is the count in the store, for cloudfield-server status;
+	// nil until this server wrote one, whatever an earlier one left.
+	var recorded *domain.VMCounts
 	for {
 		select {
 		case <-ctx.Done():
@@ -55,6 +58,13 @@ func (s *Scheduler) watchVMMemory(ctx context.Context) {
 			s.claimedMemory(ctx)
 			<-s.capacityGate
 			s.guardVMMemory(ctx)
+			if counts := s.VMs(); recorded == nil || counts != *recorded {
+				if err := s.cfg.Store.RecordVMCounts(ctx, counts, time.Now()); err != nil {
+					slog.Warn("scheduler: record the session VM counts", "error", err)
+				} else {
+					recorded = &counts
+				}
+			}
 		}
 	}
 }
