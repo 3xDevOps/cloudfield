@@ -400,3 +400,19 @@ func TestDeviceAuthWithoutRelayOrigin(t *testing.T) {
 		t.Errorf("poll at %s: %d %q, want 400 %q", testSignin2, status, msg, want)
 	}
 }
+
+// TestDeviceAuthRecordsCanonicalRelay starts a device sign-in on a pair
+// whose relay origin is written with its default port: the sign-in
+// records the relay origin without it.
+func TestDeviceAuthRecordsCanonicalRelay(t *testing.T) {
+	h := newHarness(t, func(cfg *Config, _ *fakeProvider) {
+		cfg.RelayOrigin, cfg.RecordOrigins = testRelay+":443", true
+	})
+	if err := h.svc.StartRecording(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	startDevice(t, h)
+	if got := h.column(t, `SELECT relay_origin FROM device_authorizations`); got != testRelay {
+		t.Errorf("relay_origin = %q, want %s", got, testRelay)
+	}
+}

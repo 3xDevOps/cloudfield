@@ -104,7 +104,7 @@ func (s *Service) apiDeviceStart(r *http.Request) (any, error) {
 	key, _ := edgeproto.ParseDeviceKey(req.Key) // Validate parsed it.
 	var relay string
 	if s.recording.Load() {
-		relay = s.pair(r).relay
+		relay = CanonicalOrigin(s.pair(r).relay)
 	}
 	deviceCode := edgeproto.NewToken()
 	now := s.now()
