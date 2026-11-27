@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"encoding/json"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -67,6 +68,21 @@ func runRun(args []string) error {
 	}
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	loginGiven := false
+	fs.Visit(func(f *flag.Flag) { loginGiven = loginGiven || f.Name == "login" })
+	if loginGiven && *login == "" {
+		return errors.New("--login needs a name: cloudfield agent logins lists yours")
+	}
+	if i := slices.IndexFunc(fs.Args(), func(arg string) bool {
+		name, _, _ := strings.Cut(arg, "=")
+		return name == "--login" || name == "-login"
+	}); i >= 0 {
+		stop := "--"
+		if i > 0 {
+			stop = fs.Arg(0)
+		}
+		return fmt.Errorf("%s comes after %q, where cloudfield session reads no more flags, so it would be ignored; give it before %q", fs.Arg(i), stop, stop)
 	}
 	if task == "" && fs.NArg() == 1 {
 		task = fs.Arg(0)

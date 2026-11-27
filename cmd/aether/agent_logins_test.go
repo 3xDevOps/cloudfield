@@ -359,3 +359,23 @@ func TestFollowSignInWaitsForASignInThatIsEnding(t *testing.T) {
 		t.Errorf("opened %d times, stdout %q; want the added login after one open", opened, out.String())
 	}
 }
+
+func TestSessionRefusesALoginItWouldNotUse(t *testing.T) {
+	unlinked(t)
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"a task", "--agent", "claude", "--login="}, "--login needs a name: cloudfield agent logins lists yours"},
+		{[]string{"a task", "--agent", "claude", "--login", ""}, "--login needs a name: cloudfield agent logins lists yours"},
+		{[]string{"--template", "nightly", "--login="}, "--login needs a name: cloudfield agent logins lists yours"},
+		{[]string{"--template", "nightly", "task", "--login", "work"},
+			`--login comes after "task", where cloudfield session reads no more flags, so it would be ignored; give it before "task"`},
+		{[]string{"a task", "--agent", "claude", "--", "--login=work"},
+			`--login=work comes after "--", where cloudfield session reads no more flags, so it would be ignored; give it before "--"`},
+	} {
+		if err := runRun(tc.args); err == nil || err.Error() != tc.want {
+			t.Errorf("cloudfield session %q = %v; want %q before any connection", tc.args, err, tc.want)
+		}
+	}
+}
