@@ -145,7 +145,10 @@ message across them.
 
 **(a) is recommended.** It is what the dev-environment and CI systems with
 self-hosted workers do: one control plane with the database, workers that
-dial out (E6).
+dial out (E6 comparison table). Gitpod's account of leaving Kubernetes
+gives the reason sessions stay where they start: environments "cannot be
+moved from one node to another" and their source, caches and data are
+"costly to migrate" (E6 B).
 
 ### Thin host or full host
 
@@ -207,8 +210,9 @@ flowchart LR
 
 The host needs to reach the primary's SSH port: on a LAN, over a tailnet,
 or at a public address. The host opens no port. That matches the systems
-read: GitHub's runner, GitLab Runner, Buildkite agents, Coder's
-provisioners and agents and Daytona's runners all dial out (E6; E4 E).
+read: GitHub's runner, GitLab Runner, Buildkite agents, Cursor's workers,
+Claude Code's self-hosted runners and Daytona's runners all dial out and
+need no inbound port (E6 E, F; E4 E).
 
 A link through the edge relay is left out of the first phases. The relay
 admits account devices, by a grant that names an account and a device
@@ -569,7 +573,12 @@ An unreachable machine is shown as unreachable and its sessions are left
 alone. This is Kubernetes' rule for StatefulSets (E4 B5), and the opposite
 of Nomad's default, which replaces at once and whose own documentation
 says "the server may reschedule the group before the client has stopped
-the allocation" (E4 A5).
+the allocation" (E4 A5). Among agent runners, Claude Code's self-hosted
+runners requeue a session to another runner about a minute after a runner
+stops polling (E6 F); they can, because the conversation is kept by the
+vendor and not on the runner. A Cloudfield session's disk, processes and
+login are on its machine. The CI systems split the same way: GitLab and
+Buildkite do not re-run a lost job unless told to (E6 E).
 
 | What happens | What is lost | What recovers by itself | What a person does |
 | --- | --- | --- | --- |
