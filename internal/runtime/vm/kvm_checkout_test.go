@@ -541,7 +541,7 @@ func waitDiff(t *testing.T, diffs <-chan events.Event, path string, within time.
 	}
 }
 
-func TestKVMPreparedCheckoutDiskOutlivesItsLastSession(t *testing.T) {
+func TestKVMPreparedCheckoutDiskOutlivesItsLastCheckout(t *testing.T) {
 	h := newCheckoutHost(t)
 	const files = 2000
 	ws := domain.WorkspaceID("wskept" + strconv.Itoa(files))
@@ -556,12 +556,20 @@ func TestKVMPreparedCheckoutDiskOutlivesItsLastSession(t *testing.T) {
 	if err = h.e.destroy(t.Context(), prefix+"-a"); err != nil {
 		t.Fatal(err)
 	}
+	// A retained checkout links to the prepared disk too; only the kept
+	// link is left once it is removed.
+	if err = h.git.RemoveRunCheckout(t.Context(), domain.RunID(prefix+"-a")); err != nil {
+		t.Fatal(err)
+	}
+	if err = h.e.cfg.Images.Sweep(); err != nil {
+		t.Fatal(err)
+	}
 	kept := h.session(t, ws, prefix+"-b", base)
 	after, err := os.Stat(prepared)
 	if err != nil || !os.SameFile(before, after) || !before.ModTime().Equal(after.ModTime()) {
-		t.Fatalf("the prepared disk of the base was built again after its only session was destroyed: %v", err)
+		t.Fatalf("the prepared disk of the base was built again after its only checkout was removed: %v", err)
 	}
-	t.Logf("%d files: creating the VM took %s with the prepared checkout disk built in it, and %s for the next session after the first was destroyed", files, built, kept)
+	t.Logf("%d files: creating the VM took %s with the prepared checkout disk built in it, and %s for the next session after the first one's VM and checkout were removed", files, built, kept)
 }
 
 func hasEntry(entries []gitengine.TreeEntry, name string) bool {
