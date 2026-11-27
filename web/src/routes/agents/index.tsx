@@ -179,7 +179,7 @@ function AgentsRoute({ client = api }: RouteProps & { client?: Api }) {
       <div className="min-h-0 flex-1 overflow-y-auto">
         <PageBody width="lg" className="gap-6">
           {screen === loginScreen ? (
-            <AddLogin key={identity} client={client} sharedWith={sharedWith.members} running={signIn} ended={signInEnded} resume={resume} onRunning={rememberLoginSignIn} onOpened={noteLoginSignInOpened} onClose={() => { void logins.reload(); close() }} />
+            <AddLogin key={identity} client={client} sharedWith={sharedWith.members} logins={logins.logins} onChanged={logins.reload} running={signIn} ended={signInEnded} resume={resume} onRunning={rememberLoginSignIn} onOpened={noteLoginSignInOpened} onClose={() => { void logins.reload(); close() }} />
           ) : screen === githubScreen ? (
             <GitHubConnect client={client} caps={caps} onConnected={setGithub} onClose={close} />
           ) : screen === addScreen ? (

@@ -64,18 +64,31 @@ export function names(members: Member[]): string {
   return list.length < 2 ? list.join('') : `${list.slice(0, -1).join(', ')} and ${list[list.length - 1]}`
 }
 
+/** Whom a login billed per use charges: its organisation where the sign-in named one, else the login. */
+export function perUsePayer(login: AgentLogin): string {
+  return login.organization_name || `login ${login.name}`
+}
+
+/** Whose sessions Use for shares lets run on a login, and for one billed per use who is charged. */
+export function shareWords(login: AgentLogin, sharedWith: Member[] | null): string {
+  const who = sharedWith?.length ? names(sharedWith) : 'teammates you share your account with'
+  return `Sessions of ${who} can run here too${login.per_use ? `, charged per use to ${perUsePayer(login)}` : ''}.`
+}
+
 /**
- * The Use for shares switch's state, and whom it reaches: teammates never name a login, so only an automatic one reaches them,
- * and a default login kept as an API key or a Console profile has no file a share mounts. `sharedWith` is null until read.
+ * What Use for shares does for a login beyond the switch's own state, or null: teammates never name a login, so only an automatic
+ * one reaches them, and a default login kept as an API key or a Console profile has no file a share mounts. `sharedWith` is null until read.
  */
-export function reach(login: AgentLogin, sharedWith: Member[] | null): string {
-  if (!login.shared) return 'Off for shares'
-  if (login.id === 'default' && (login.kind === 'api_key' || login.kind === 'console')) return 'On for shares: a share cannot use this kind of login'
-  if (sharedWith === null) return 'On for shares'
-  if (sharedWith.length === 0) return 'On for shares: your account is not shared'
-  if (!login.automatic) return 'On for shares: no share reaches it while Automatic is off'
-  if (login.per_use) return `Sessions of ${names(sharedWith)} can run on this login too, charged per use to ${login.organization_name || login.name}.`
-  return `On for shares: also serves ${names(sharedWith)}`
+export function reach(login: AgentLogin, sharedWith: Member[] | null): string | null {
+  if (!login.shared) return null
+  if (login.id === 'default' && (login.kind === 'api_key' || login.kind === 'console')) return 'A share cannot use this kind of login.'
+  if (!login.automatic) return 'No share reaches it while Automatic is off.'
+  return sharedWith?.length ? shareWords(login, sharedWith) : null
+}
+
+/** A login's badge when it is billed per use, naming whom it charges. */
+export function LoginPerUseBadge({ login }: { login: AgentLogin }) {
+  return login.per_use ? <PerUseBadge title={`Billed per use to ${perUsePayer(login)}`} /> : null
 }
 
 function Pending({ label }: { label: string }) {
@@ -203,17 +216,39 @@ export function RemoveLogin({ login, client, onChanged, onClose }: { login: Agen
   )
 }
 
-function SwitchRow({ label, checked, pending, onChange }: { label: string; checked: boolean; pending: boolean; onChange: (on: boolean) => void }) {
+/** A login's switch; `detail` says what it does for this login. */
+export function SwitchRow({ label, detail, checked, pending, onChange }: { label: string; detail?: string; checked: boolean; pending: boolean; onChange: (on: boolean) => void }) {
   const id = useId()
   return (
     <span className="flex min-h-7 items-center justify-between gap-3 coarse:min-h-11">
-      <label htmlFor={id} className="text-ui-sm text-text">{label}</label>
-      <span className="flex items-center gap-2">
+      <span className="flex min-w-0 flex-col">
+        <label htmlFor={id} className="text-ui-sm text-text">{label}</label>
+        {detail && <span id={`${id}-detail`} className="text-ui-sm text-muted">{detail}</span>}
+      </span>
+      <span className="flex shrink-0 items-center gap-2">
         {pending && <Pending label="Saving…" />}
-        <Switch id={id} checked={checked} disabled={pending} onCheckedChange={onChange} />
+        <Switch id={id} checked={checked} disabled={pending} aria-describedby={detail ? `${id}-detail` : undefined} onCheckedChange={onChange} />
       </span>
     </span>
   )
+}
+
+/**
+ * Pending login controls by `<control>:<login id>` (and `order` with the login it moves), and the last refusal.
+ * A failure without an answer may hide a committed change, so every outcome reads the list again through `onChanged`.
+ */
+export function useLoginControls(onChanged: () => Promise<void>) {
+  const [pending, setPending] = useState<Record<string, string>>({})
+  const [error, setError] = useState<string | null>(null)
+  const act = (key: string, value: string, call: Promise<unknown>) => {
+    setPending((current) => ({ ...current, [key]: value }))
+    setError(null)
+    call.then(onChanged, (err: unknown) => {
+      setError(message(err))
+      return onChanged()
+    }).finally(() => setPending(({ [key]: _, ...rest }) => rest))
+  }
+  return { pending, error, act }
 }
 
 type Control = 'automatic' | 'shared'
@@ -248,6 +283,7 @@ function LoginRow({ login, index, count, firstAutomatic, usage, sharedWith, orde
   const staleError = windows.length > 0 && usage?.provider?.status === 'stale' ? usage.provider.error : undefined
   const added = login.id !== 'default'
   const who = [login.email, login.organization_name].filter(Boolean).join(' · ')
+  const shares = reach(login, sharedWith)
   return (
     <li aria-label={`Login ${login.name}`} className="flex gap-2 py-3 first:pt-0 last:pb-0">
       <div className="flex shrink-0 flex-col items-center gap-1">
@@ -265,7 +301,7 @@ function LoginRow({ login, index, count, firstAutomatic, usage, sharedWith, orde
             <span className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
               <span className="min-w-0 truncate text-ui font-medium text-text">{login.name}</span>
               <span className="text-ui-sm text-muted">{kindWords(login)}{firstAutomatic && ' · tried first'}</span>
-              {login.per_use && <PerUseBadge />}
+              <LoginPerUseBadge login={login} />
               {limit && <span className="inline-flex items-center gap-1 text-ui-sm text-state-needs-you"><Gauge aria-hidden className="size-3.5 shrink-0" />{limit}</span>}
             </span>
           )}
@@ -283,7 +319,7 @@ function LoginRow({ login, index, count, firstAutomatic, usage, sharedWith, orde
         <div className="col-span-2 flex min-w-0 flex-col gap-0.5 lg:col-span-1 lg:col-start-1 lg:row-start-2">
           {moving && <Pending label="Moving…" />}
           {who && <span className="min-w-0 truncate text-ui-sm text-muted" title={who}>{who}</span>}
-          <span className="text-ui-sm text-muted">{reach(login, sharedWith)}</span>
+          {shares && <span className="text-ui-sm text-muted">{shares}</span>}
           {login.per_use && login.automatic && !firstAutomatic && (
             <span className="text-ui-sm text-muted">Automatic sessions can move here when the logins above it run out.</span>
           )}
@@ -326,20 +362,9 @@ export function LoginList({ logins, sharedWith, sharedError, client, onChanged }
 }) {
   const usage = useLoginUsage(client, logins)
   useClock()
-  // Each pending control by `<control>:<login id>`, and `order` with the login it moves.
-  const [pending, setPending] = useState<Record<string, string>>({})
-  const [error, setError] = useState<string | null>(null)
+  const { pending, error, act } = useLoginControls(onChanged)
   const [renaming, setRenaming] = useState<string | null>(null)
   const [removing, setRemoving] = useState<AgentLogin | null>(null)
-  // A failure without an answer may hide a committed change, so every outcome reads the list again.
-  const act = (key: string, value: string, call: Promise<unknown>) => {
-    setPending((current) => ({ ...current, [key]: value }))
-    setError(null)
-    call.then(onChanged, (err: unknown) => {
-      setError(message(err))
-      return onChanged()
-    }).finally(() => setPending(({ [key]: _, ...rest }) => rest))
-  }
   const move = (index: number, by: number) => {
     const ids = logins.map((login) => login.id)
     ;[ids[index], ids[index + by]] = [ids[index + by], ids[index]]

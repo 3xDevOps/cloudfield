@@ -48,7 +48,7 @@ export function SignInTerminal({ agent, socket, onDone, back, cancel, reattaches
   /** The server ended the sign-in and its page shows how: a refused attach is not shown again, nor tried again. */
   ended?: boolean
   terminal?: boolean
-  /** What the sign-in is for. */
+  /** What the sign-in is for; nothing once its page shows how it ended. */
   children: ReactNode
 }) {
   const attachment = useRef<Attachment | null>(null)
@@ -201,7 +201,7 @@ export function SignInTerminal({ agent, socket, onDone, back, cancel, reattaches
           }}><ArrowLeft />{back.label}</Button>
         </div>
       )}
-      <p className="text-ui">{children}</p>
+      {children && <p className="text-ui">{children}</p>}
       {refused && !over && (
         <Callout tone="failed" role="alert" title="The sign-in could not start" actions={<Button size="sm" variant="secondary" onClick={retry}>Try again</Button>}>
           <code className="font-code break-words">{refused}</code>
