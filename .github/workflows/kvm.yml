@@ -11,6 +11,16 @@ name: VM tests
 on:
   workflow_call:
   workflow_dispatch:
+    inputs:
+      mem:
+        description: session memory limit in GiB
+        default: "2"
+      arms:
+        default: "copy,cow,cowthp"
+      n:
+        default: "10"
+      extra:
+        default: "1"
 
 permissions:
   contents: read
@@ -19,7 +29,7 @@ jobs:
   kvm:
     name: make test-kvm
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 175
     steps:
       - uses: actions/checkout@v4
         with:
@@ -58,4 +68,21 @@ jobs:
       - name: VM tests (real Cloud Hypervisor VMs)
         env:
           GOFLAGS: -v
-        run: sudo env "PATH=$PATH" "HOME=$HOME" "GOFLAGS=$GOFLAGS" make test-kvm
+          ZZ_MEM: ${{ inputs.mem }}
+          ZZ_ARMS: ${{ inputs.arms }}
+          ZZ_N: ${{ inputs.n }}
+          ZZ_EXTRA: ${{ inputs.extra }}
+        run: |
+          sudo curl -fsSL -o /usr/local/bin/cloud-hypervisor-v55 https://github.com/cloud-hypervisor/cloud-hypervisor/releases/download/v55.0/cloud-hypervisor-static
+          sudo chmod 755 /usr/local/bin/cloud-hypervisor-v55
+          command -v mkfs.xfs >/dev/null || sudo apt-get install -y -qq xfsprogs >/dev/null
+          df -h / /mnt || true
+          base=/mnt
+          [ "$(df --output=avail -BG /mnt 2>/dev/null | tail -1 | tr -dc 0-9)" -ge 40 ] 2>/dev/null || base="$RUNNER_TEMP"
+          sudo truncate -s 48G "$base/lazy.img"
+          dev=$(sudo losetup --find --show --direct-io=on "$base/lazy.img")
+          sudo mkfs.xfs -q "$dev"
+          sudo mkdir -p /lazy
+          sudo mount "$dev" /lazy
+          echo "LAZY info data directory on $dev at /lazy backed by $base/lazy.img"; losetup -l; xfs_info /lazy | grep -o 'reflink=[01]'
+          sudo env "PATH=$PATH" "HOME=$HOME" "GOFLAGS=$GOFLAGS" TMPDIR=/lazy "ZZ_MEM=$ZZ_MEM" "ZZ_ARMS=$ZZ_ARMS" "ZZ_N=$ZZ_N" "ZZ_EXTRA=$ZZ_EXTRA" make test-kvm KVM_RUN=^TestKVMZZLazyWake KVM_PKGS=./internal/runtime/vm

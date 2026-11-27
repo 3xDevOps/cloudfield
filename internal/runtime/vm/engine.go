@@ -553,7 +553,7 @@ func (e *engine) bootLaunch(ctx context.Context, rec *record) (launch, error) {
 		// (Cloud Hypervisor v54.1 on a host that is itself a VM). Sessions
 		// run no VMs of their own.
 		"--cpus", fmt.Sprintf("boot=%d,nested=off", rec.CPUs),
-		"--memory", fmt.Sprintf("size=%dM,shared=on", guestMiB(rec.MemoryMiB)),
+		"--memory", fmt.Sprintf("size=%dM,shared=%s", guestMiB(rec.MemoryMiB), zzShared(len(p.shares))),
 		"--balloon", "size=0,free_page_reporting=on",
 	)
 	if rec.Net != offline {
@@ -625,6 +625,7 @@ func diskArgs(disks []attached) ([]string, error) {
 }
 
 func (e *engine) launch(ctx context.Context, rec *record, l launch) error {
+	l.Hypervisor = zzHypervisor
 	data, err := json.MarshalIndent(l, "", "  ")
 	if err != nil {
 		return fmt.Errorf("vm runtime: encode launch: %w", err)

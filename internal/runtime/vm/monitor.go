@@ -16,6 +16,8 @@ type launch struct {
 	Shares []share      `json:"shares,omitempty"`
 	Home   *home.Config `json:"home,omitempty"`
 	Args   []string     `json:"args"`
+	// Hypervisor is the experiment's cloud-hypervisor binary.
+	Hypervisor string `json:"hypervisor,omitempty"`
 	// Reveal is each host path the unit's processes need, by whether they
 	// write it, bound back through the tmpfs that hides the data directory.
 	Reveal map[string]bool `json:"reveal,omitempty"`

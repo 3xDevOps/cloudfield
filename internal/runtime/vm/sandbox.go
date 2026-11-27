@@ -116,6 +116,9 @@ func sandbox(dataDir, monitor string, rec *record, l launch) []string {
 		"TemporaryFileSystem=" + dataDir + ":ro",
 		"CapabilityBoundingSet=" + strings.Join(caps, " "),
 	}
+	if strings.HasPrefix(zzRestoreMode, ",memory_restore_mode=ondemand") {
+		props = append(props, "DeviceAllow=/dev/userfaultfd rw")
+	}
 	// ProtectHome hides the host's home directories from a monitor escape,
 	// but it hides them past every bind, so it is left off when the data
 	// directory, the monitor binary systemd execs, or anything the VM needs

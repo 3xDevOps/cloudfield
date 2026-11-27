@@ -98,8 +98,15 @@ func (e *engine) save(ctx context.Context, key string) error {
 		}
 		return e.resumeAfter(ctx, api, key, cause)
 	}
-	dir := e.path(key, snapshotDir)
-	if err = errors.Join(os.RemoveAll(dir), os.RemoveAll(e.path(key, usedSnapshotDir))); err != nil {
+	kept := e.path(key, snapshotDir)
+	dir := kept
+	if _, statErr := os.Stat(kept); zzKeep && statErr == nil {
+		dir = kept + ".next"
+		err = os.RemoveAll(dir)
+	} else {
+		err = errors.Join(os.RemoveAll(dir), os.RemoveAll(e.path(key, usedSnapshotDir)))
+	}
+	if err != nil {
 		return resumeAfter(err)
 	}
 	if err = os.Mkdir(dir, 0o700); err != nil {
@@ -123,10 +130,15 @@ func (e *engine) save(ctx context.Context, key string) error {
 		return resumeAfter(err)
 	}
 	e.forgetHelper(key)
-	if err := api.shutdownVMM(ctx); err != nil {
-		return e.units.Stop(context.WithoutCancel(ctx), unitName(key))
+	if err = api.shutdownVMM(ctx); err != nil {
+		err = e.units.Stop(context.WithoutCancel(ctx), unitName(key))
+	} else {
+		err = e.awaitStopped(ctx, key)
 	}
-	return e.awaitStopped(ctx, key)
+	if dir != kept {
+		err = errors.Join(err, os.RemoveAll(kept), os.Rename(dir, kept))
+	}
+	return err
 }
 
 // syncGuest writes the guest's dirty data to the VM's disks, so a saved
@@ -317,7 +329,7 @@ func (e *engine) restore(ctx context.Context, key string) error {
 		}
 		l := launch{Home: booted.Home, Reveal: booted.Reveal, Args: []string{
 			"--api-socket", "path=" + e.path(key, apiSocket), "--event-monitor", "path=" + e.path(key, eventsFile),
-			"--restore", "source_url=file://" + dir,
+			"--restore", "source_url=file://" + dir + zzRestoreMode,
 		}}
 		if rec.Net != offline {
 			if err = e.ensureNetwork(ctx); err != nil {
@@ -329,12 +341,15 @@ func (e *engine) restore(ctx context.Context, key string) error {
 			return err
 		}
 		runtime.Step(ctx, "unit")
+		zzMark("unit")
 		loadCtx, cancel := context.WithTimeout(ctx, restoreTimeout+time.Duration(unitMemoryMiB(rec)<<20/snapshotRate)*time.Second)
 		err = e.awaitRestored(loadCtx, key, api)
 		cancel()
 		e.stepHypervisor(ctx, key)
 		runtime.Step(ctx, "restore")
+		zzMark("paused")
 		if err == nil {
+			zzPaused(key)
 			rec.Resumed, err = diskTimes(dir)
 		}
 		if err == nil {
@@ -360,12 +375,14 @@ func (e *engine) restore(ctx context.Context, key string) error {
 	}
 	stuck := state() == "Paused"
 	runtime.Step(ctx, "resume")
+	zzMark("resume")
 	var h helper
 	if stuck {
 		err = errors.Join(fmt.Errorf("vm runtime: resume restored VM %s: it stays paused%s", key, e.logTail(key)), resumeErr)
 	} else if h, err = e.helper(key); err == nil {
 		err = e.waitHelper(live, key, h)
 		runtime.Step(ctx, "helper")
+		zzMark("helper")
 	}
 	if err == nil {
 		if err = h.SyncClock(live, time.Now()); err != nil {
@@ -391,6 +408,9 @@ func (e *engine) restore(ctx context.Context, key string) error {
 	rec.Saved, rec.Resumed, rec.Exited = false, nil, false
 	if storeErr := e.store(rec); storeErr != nil {
 		return errors.Join(err, storeErr)
+	}
+	if zzKeep {
+		return err
 	}
 	// Deleted behind the wake: unlinking 0.9 GiB of saved memory took
 	// 200 ms. The next save removes what a host that stopped meanwhile left.
