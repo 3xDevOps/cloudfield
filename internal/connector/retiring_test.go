@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	"golang.org/x/oauth2"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	edgeagent "github.com/3xDevOps/cloudfield/internal/edge/agent"
@@ -399,4 +400,53 @@ func TestToolResultNoticeAtRetiringAddress(t *testing.T) {
 		t.Fatalf("notice %q, want %q", got, want)
 	}
 	blocks(1)
+}
+
+func TestToolResultNoticeAtUniversalURLNeedsGitHub(t *testing.T) {
+	e := newEnv(t)
+	ctx := t.Context()
+	member, err := e.db.GetMemberByIdentity(ctx, "github", "1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	universal := e.origin + edgeproto.PathUniversalMCP
+	now := time.Now()
+	// at is a session of a connector of member added at the universal URL.
+	at := func(token string) *mcp.ClientSession {
+		t.Helper()
+		c := &store.Connector{Member: member.ID, ClientID: e.clientID, ClientName: "Test client", RedirectHost: e.clientHost,
+			Resource: universal, Scopes: []string{"read"}, CreatedAt: now}
+		if err := e.db.CreateConnector(ctx, c, store.ConnectorTokens{Access: tokenHash(token), AccessExpiresAt: now.Add(time.Hour),
+			Refresh: tokenHash(token + "r"), RefreshExpiresAt: now.Add(time.Hour)}); err != nil {
+			t.Fatal(err)
+		}
+		client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "v0"}, nil)
+		httpClient := &http.Client{Transport: &oauth2.Transport{Source: oauth2.StaticTokenSource(&oauth2.Token{AccessToken: token})}}
+		cs, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: universal, HTTPClient: httpClient, DisableStandaloneSSE: true}, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = cs.Close() })
+		return cs
+	}
+	blocks := func(cs *mcp.ClientSession) int {
+		t.Helper()
+		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "aether_list_workspaces"})
+		if err != nil || res.IsError {
+			t.Fatalf("aether_list_workspaces = %+v %v", res, err)
+		}
+		return len(res.Content)
+	}
+	linked, unlinked := at("universal-linked"), at("universal-unlinked")
+	e.edge.version.Store(int64(edgeproto.VersionRelayOrigin))
+	e.edge.set([]string{e.origin, newRelay}, stored(false, edgeproto.Notice{State: edgeproto.NoticeRetiring, Origin: e.origin, Replacement: newRelay}))
+	if n := blocks(linked); n != 2 {
+		t.Fatalf("with GitHub linked the result has %d content blocks, want 2", n)
+	}
+	if _, err := e.db.UnlinkIdentity(ctx, member.ID, "github", "1"); err != nil {
+		t.Fatal(err)
+	}
+	if n := blocks(unlinked); n != 1 {
+		t.Fatalf("without GitHub the result has %d content blocks, want 1: the edge does not offer the universal URL", n)
+	}
 }
