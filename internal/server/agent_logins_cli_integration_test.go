@@ -508,7 +508,8 @@ func TestIntegrationAgentLoginsCLI(t *testing.T) {
 func TestIntegrationSessionOnANamedLogin(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	e := &coordEnv{rt: newE2ERuntime(), image: "e2e/fake", usage: &stubLoginUsage{used: map[domain.Account]float64{}}}
+	usage := &stubLoginUsage{used: map[domain.Account]float64{}}
+	e := &coordEnv{rt: newE2ERuntime(), image: "e2e/fake", usage: usage}
 	srv := e.seed(ctx, t, false)
 	second := domain.LoginID("lgn-second0000")
 	addLogin(ctx, t, srv, e.dataDir, e.ada.id, second, "second")
@@ -577,5 +578,15 @@ func TestIntegrationSessionOnANamedLogin(t *testing.T) {
 	}
 	if row, ok := listedRow[onDefault]; !ok || len(strings.Fields(row)) < 5 || strings.Fields(row)[4] != "Ada" || strings.Contains(row, "Ada, login") {
 		t.Errorf("the session on the default login lists %q (listed: %v); want its account as before", row, ok)
+	}
+
+	// A named login at its usage limit: the launch falls back to the
+	// default login, and the CLI says where it started.
+	usage.set(domain.Account{Member: e.ada.id, Login: second}, 100)
+	out, stderr, code = ada.cli("session", "on a spent login", "--agent", "claude", "--mode", "background", "--login", "second")
+	t.Logf("$ cloudfield session \"on a spent login\" --agent claude --mode background --login second\n%s%s", out, stderr)
+	if lines := strings.Split(out, "\n"); code != 0 || len(lines) != 3 || !strings.HasPrefix(lines[0], "session run-") ||
+		lines[1] != "started on your login default, not second" || lines[2] != "" {
+		t.Fatalf("session --login second at its usage limit = %d %q %q; want where it started", code, out, stderr)
 	}
 }

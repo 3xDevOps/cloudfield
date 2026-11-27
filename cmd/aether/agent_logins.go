@@ -442,6 +442,60 @@ func launchLogin(c *protocol.Client, me, agent, account, value string) (string, 
 	return id, nil
 }
 
+// landedLines say where a launch that named a login started when that is
+// not the login named, which fallback accounts it left out, and for any
+// launch that its login is billed per use.
+func landedLines(res protocol.RunLaunchResult, named string, nameOf func(memberID string) string) []string {
+	run := res.Run
+	landed := cmp.Or(run.AccountLogin, string(domain.DefaultLogin))
+	moved := named != "" && (run.RequestedAccountMemberID != "" || (named != landed && named != run.AccountLoginName))
+	var lines []string
+	if moved || run.AccountLoginPerUse {
+		where := "your login "
+		if run.AccountMemberID != run.MemberID {
+			where = nameOf(run.AccountMemberID) + "'s account, login "
+		}
+		line := "started on " + where + cmp.Or(run.AccountLoginName, landed)
+		if moved {
+			line += ", not " + named
+		}
+		if run.AccountLoginPerUse {
+			line += "; billed per use"
+		}
+		lines = append(lines, line)
+	}
+	if named == "" {
+		return lines
+	}
+	for _, s := range res.SkippedFallbackAccounts {
+		if s.AccountMemberID == "" {
+			lines = append(lines, s.Error)
+			continue
+		}
+		lines = append(lines, "left out "+nameOf(s.AccountMemberID)+"'s account: "+s.Error)
+	}
+	return lines
+}
+
+// printLanded prints landedLines, reading member names only if a line
+// needs one; a failed read leaves the member's id and its error on stderr.
+func printLanded(c *protocol.Client, res protocol.RunLaunchResult, named string) {
+	var names map[string]string
+	nameOf := func(id string) string {
+		if names == nil {
+			var err error
+			if names, err = memberNames(c); err != nil {
+				_, _ = fmt.Fprintln(os.Stderr, err)
+				names = map[string]string{}
+			}
+		}
+		return nameOrID(names, id)
+	}
+	for _, line := range landedLines(res, named, nameOf) {
+		fmt.Println(line)
+	}
+}
+
 // withLogins runs fn with the caller's logins of Claude Code.
 func withLogins(fn func(c *protocol.Client, logins []protocol.AgentLogin) error) error {
 	return withControl(func(c *protocol.Client) error {

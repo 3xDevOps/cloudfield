@@ -169,6 +169,7 @@ func runRun(args []string) error {
 			_, _ = fmt.Fprintf(os.Stderr, "idempotency key %s already launched session %s; nothing new was launched\n", params.IdempotencyKey, res.Run.ID)
 		}
 		fmt.Printf("session %s %s\n", res.Run.ID, res.Run.Status)
+		printLanded(c, res, *login)
 		return nil
 	})
 }

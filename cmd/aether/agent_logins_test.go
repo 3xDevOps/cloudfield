@@ -470,3 +470,41 @@ func TestReadLoginsListsYourSessionsOnEachLogin(t *testing.T) {
 		t.Errorf("run.list params = %s, want %s: your sessions that have not ended", got, want)
 	}
 }
+
+func TestLandedLinesSayWhereALaunchStarted(t *testing.T) {
+	ada := protocol.Run{MemberID: "m-ada", AccountMemberID: "m-ada"}
+	onLogin := func(r protocol.Run, id, name string, perUse bool) protocol.Run {
+		r.AccountLogin, r.AccountLoginName, r.AccountLoginPerUse = id, name, perUse
+		return r
+	}
+	onBo := ada
+	onBo.AccountMemberID, onBo.RequestedAccountMemberID = "m-bo", "m-ada"
+	skipped := []protocol.SkippedAccount{{AccountMemberID: "m-cy", Error: "your access to the account could not be checked"}, {Error: "the fallback accounts could not be listed"}}
+	names := map[string]string{"m-bo": "Bo", "m-cy": "Cy"}
+	for _, tc := range []struct {
+		name  string
+		res   protocol.RunLaunchResult
+		named string
+		want  []string
+	}{
+		{"named and started there by name", protocol.RunLaunchResult{Run: onLogin(ada, "lgn-test1", "work", false)}, "work", nil},
+		{"named and started there by id", protocol.RunLaunchResult{Run: onLogin(ada, "lgn-test1", "work", false)}, "lgn-test1", nil},
+		{"named default and started there", protocol.RunLaunchResult{Run: ada}, "default", nil},
+		{"named, moved to default", protocol.RunLaunchResult{Run: ada}, "work", []string{"started on your login default, not work"}},
+		{"named default, moved to a login billed per use", protocol.RunLaunchResult{Run: onLogin(ada, "lgn-test2", "console", true)}, "default",
+			[]string{"started on your login console, not default; billed per use"}},
+		{"named, moved to a teammate", protocol.RunLaunchResult{Run: onBo, SkippedFallbackAccounts: skipped}, "work", []string{
+			"started on Bo's account, login default, not work",
+			"left out Cy's account: your access to the account could not be checked",
+			"the fallback accounts could not be listed",
+		}},
+		{"unnamed", protocol.RunLaunchResult{Run: onBo, SkippedFallbackAccounts: skipped}, "", nil},
+		{"unnamed, billed per use", protocol.RunLaunchResult{Run: onLogin(ada, "lgn-test2", "console", true)}, "",
+			[]string{"started on your login console; billed per use"}},
+	} {
+		got := landedLines(tc.res, tc.named, func(id string) string { return nameOrID(names, id) })
+		if !reflect.DeepEqual(got, tc.want) {
+			t.Errorf("%s: landedLines = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
