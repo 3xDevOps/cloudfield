@@ -62,6 +62,7 @@ func protectAgent() (string, error) {
 		return "", err
 	}
 	if err := lowerOOMScore(); err != nil {
+		_ = os.Remove(commandWrapper)
 		return "", err
 	}
 	return commandWrapper, nil
