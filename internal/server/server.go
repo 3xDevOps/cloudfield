@@ -22,6 +22,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/collab"
 	"github.com/3xDevOps/cloudfield/internal/connector"
 	"github.com/3xDevOps/cloudfield/internal/control"
+	"github.com/3xDevOps/cloudfield/internal/ctxlock"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	edgeagent "github.com/3xDevOps/cloudfield/internal/edge/agent"
 	edgeproto "github.com/3xDevOps/cloudfield/internal/edge/proto"
@@ -347,7 +348,7 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 			checkouts := func(ctx context.Context, path, target string, uid, gid int) (string, guest.Checkout, bool, error) {
 				return s.git.VMCheckoutDisk(ctx, path, target, uid, gid)
 			}
-			vms, images, vmErr := newVMRuntime(ctx, cfg.DataDir, cmp.Or(cfg.VMKernel, DefaultVMKernel), cfg.BrowserImage, ids, s.docker, checkouts)
+			vms, images, vmErr := newVMRuntime(ctx, cfg.DataDir, cmp.Or(cfg.VMKernel, DefaultVMKernel), cfg.BrowserImage, cfg.MinFreeDiskBytes, ids, s.docker, checkouts)
 			if vmErr != nil {
 				return nil, vmErr
 			}
@@ -509,7 +510,7 @@ func New(ctx context.Context, cfg Config) (srv *Server, err error) {
 	}); err != nil {
 		return nil, err
 	}
-	authMu := &sync.Mutex{}
+	authMu := &ctxlock.Mutex{}
 	if s.evidence, err = evidence.New(evidence.Config{
 		Store:           s.db,
 		Git:             s.git,

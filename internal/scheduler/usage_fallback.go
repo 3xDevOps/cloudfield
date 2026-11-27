@@ -13,6 +13,7 @@ import (
 	"github.com/3xDevOps/cloudfield/internal/acphost"
 	"github.com/3xDevOps/cloudfield/internal/adapter"
 	"github.com/3xDevOps/cloudfield/internal/agentstatus"
+	"github.com/3xDevOps/cloudfield/internal/ctxlock"
 	"github.com/3xDevOps/cloudfield/internal/domain"
 	"github.com/3xDevOps/cloudfield/internal/events"
 	"github.com/3xDevOps/cloudfield/internal/fallback"
@@ -31,7 +32,7 @@ type UsageFallback struct {
 	// its admission and over a share revocation; a move holds it from
 	// choosing the account until the run records it, and not while it
 	// replaces the container.
-	AuthorizationMu *sync.Mutex
+	AuthorizationMu *ctxlock.Mutex
 	// Note posts a system note to the run's room; key makes it idempotent.
 	Note func(ctx context.Context, run *domain.Run, body, key string) error
 }

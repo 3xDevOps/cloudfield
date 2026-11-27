@@ -2099,13 +2099,19 @@ a time (the Session tree panel's announcer, `src/lib/use-announcement.ts`).
 the view is mounted and reads `workspace.timeline` backward with
 `types: ["run.status", "coord.message", "coord.message.acked"]` and
 `no_rereads: true`, 1000 a page,
-until it passes the window's start, the log's start or 5000 events per
-workspace; "Older history not loaded" marks the last case. History counts as read back to the page's `older_time` (how far the server
+until it passes the window's start, the log's start or the budget per
+workspace: 5000 events for a window up to 6h, 10,000 up to 24h, 25,000
+beyond (`historyBudgetFor`; an event held costs the browser about 0.3 KB).
+"Older history not loaded" marks the last case, with **Load more** beside
+it, which adds 10,000 to the budget and reads on. Both show only while the
+window reaches back past what is held and no read has failed (a failed read
+shows **Retry**). The budget only rises while a view holds history; a server
+switch or a new signed-in member puts it back to the window's own. History counts as read back to the page's `older_time` (how far the server
 read, rereads included), or to its first event when a server does not send
 one. Of a page that would pass the budget only the newest events that fit
 are kept, and history then counts as read back to the oldest of those. `sync.ts` appends
 live events of those types, rereads left out, to held history, which keeps a workspace's newest
-5000 and moves its loaded boundary past what it drops; the last view to leave
+events up to the budget and moves its loaded boundary past what it drops; the last view to leave
 drops it, and a server switch or a new signed-in member clears it for a fresh
 read. Lane geometry comes from the model
 (`model.ts`, `segments.ts`, `edges.ts`, `axis.ts`), never from DOM

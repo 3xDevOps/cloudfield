@@ -15,16 +15,27 @@ import (
 )
 
 func (s *Scheduler) Kill(ctx context.Context, run domain.RunID, actor domain.MemberID) error {
-	return s.kill(ctx, run, actor, "")
+	return s.kill(ctx, run, actor, "", nil)
 }
 
 // StopForParent stops a child run on its parent's say-so. The child ends
 // completed with a reason naming the parent, not as an abandoned failure.
-func (s *Scheduler) StopForParent(ctx context.Context, run, parent domain.RunID) error {
-	return s.kill(ctx, run, "", parent)
+// The stop may wait for the child's other operations, so attached is asked
+// once it holds the child's lifecycle lock, and its error refuses the stop.
+func (s *Scheduler) StopForParent(ctx context.Context, run, parent domain.RunID, attached func() error) error {
+	return s.kill(ctx, run, "", parent, attached)
 }
 
-func (s *Scheduler) kill(ctx context.Context, run domain.RunID, actor domain.MemberID, by domain.RunID) error {
+// lockLifecycle takes the lifecycle lock for a request or a wake, which
+// stops waiting when ctx ends.
+func (e *supervised) lockLifecycle(ctx context.Context) error {
+	if err := e.lifecycleMu.LockContext(ctx); err != nil {
+		return fmt.Errorf("wait for another operation on session %s to finish: %w", e.runID, err)
+	}
+	return nil
+}
+
+func (s *Scheduler) kill(ctx context.Context, run domain.RunID, actor domain.MemberID, by domain.RunID, allowed func() error) error {
 	s.mu.Lock()
 	entry := s.runs[run]
 	if entry == nil {
@@ -36,17 +47,24 @@ func (s *Scheduler) kill(ctx context.Context, run domain.RunID, actor domain.Mem
 			return nil
 		}
 		s.mu.Unlock()
-		return s.killUnsupervised(ctx, run, actor, by)
+		return s.killUnsupervised(ctx, run, actor, by, allowed)
 	}
 	s.mu.Unlock()
 	s.wakeBeforeEnd(ctx, entry, actor)
 
-	entry.lifecycleMu.Lock()
+	if err := entry.lockLifecycle(ctx); err != nil {
+		return err
+	}
 	defer entry.lifecycleMu.Unlock()
+	if allowed != nil {
+		if err := allowed(); err != nil {
+			return err
+		}
+	}
 	s.mu.Lock()
 	if s.runs[run] != entry {
 		s.mu.Unlock()
-		return s.killUnsupervised(ctx, run, actor, by)
+		return s.killUnsupervised(ctx, run, actor, by, allowed)
 	}
 	if entry.destroyPending {
 		s.mu.Unlock()
@@ -157,7 +175,7 @@ func (s *Scheduler) reconcileActiveDestroyPending(ctx context.Context, id domain
 
 // killUnsupervised writes status under s.mu: every scheduler status write
 // holds the lock, so a concurrent terminal transition cannot be overwritten.
-func (s *Scheduler) killUnsupervised(ctx context.Context, id domain.RunID, actor domain.MemberID, by domain.RunID) error {
+func (s *Scheduler) killUnsupervised(ctx context.Context, id domain.RunID, actor domain.MemberID, by domain.RunID, allowed func() error) error {
 	r, err := s.cfg.Store.GetRun(ctx, id)
 	if err != nil {
 		return err
@@ -167,7 +185,7 @@ func (s *Scheduler) killUnsupervised(ctx context.Context, id domain.RunID, actor
 		// A launch registered the run meanwhile: route through the
 		// supervised path.
 		s.mu.Unlock()
-		return s.kill(ctx, id, actor, by)
+		return s.kill(ctx, id, actor, by, allowed)
 	}
 	if pending := s.pending[id]; pending != nil {
 		pending.killRequested = true
@@ -197,7 +215,7 @@ func (s *Scheduler) killUnsupervised(ctx context.Context, id domain.RunID, actor
 			// between expiry and a terminal no-op. A retry with no owner
 			// means a pending launch or a row that moved back to active;
 			// route it through Kill as well so that state is not discarded.
-			return s.kill(ctx, id, actor, by)
+			return s.kill(ctx, id, actor, by, allowed)
 		}
 		return s.dismissFinished(ctx, id, actor)
 	}
@@ -208,7 +226,7 @@ func (s *Scheduler) killUnsupervised(ctx context.Context, id domain.RunID, actor
 	if handled, reconcileErr := s.reconcileActiveDestroyPending(ctx, id); reconcileErr != nil {
 		return reconcileErr
 	} else if handled {
-		return s.kill(ctx, id, actor, by)
+		return s.kill(ctx, id, actor, by, allowed)
 	}
 
 	identity := "none"
@@ -229,7 +247,7 @@ func (s *Scheduler) killUnsupervised(ctx context.Context, id domain.RunID, actor
 		// A launch registered the run meanwhile: route through the
 		// supervised path.
 		s.mu.Unlock()
-		return s.kill(ctx, id, actor, by)
+		return s.kill(ctx, id, actor, by, allowed)
 	}
 	if pending := s.pending[id]; pending != nil {
 		pending.killRequested = true
@@ -245,14 +263,14 @@ func (s *Scheduler) killUnsupervised(ctx context.Context, id domain.RunID, actor
 	}
 	if r.Status.Terminal() {
 		s.mu.Unlock()
-		return s.killUnsupervised(ctx, id, actor, by)
+		return s.killUnsupervised(ctx, id, actor, by, allowed)
 	}
 	// Sidecar writes are serialized by s.mu. Recheck immediately before the
 	// status write so a pending marker installed after the first probe still
 	// owns cleanup and cannot be bypassed by this transition.
 	if sc, serr := s.readSidecar(id); serr == nil && sc.DestroyPending {
 		s.mu.Unlock()
-		return s.killUnsupervised(ctx, id, actor, by)
+		return s.killUnsupervised(ctx, id, actor, by, allowed)
 	} else if serr != nil && !os.IsNotExist(serr) {
 		s.mu.Unlock()
 		return fmt.Errorf("scheduler: inspect destroy-pending sidecar: %w", serr)
@@ -502,7 +520,9 @@ func (s *Scheduler) Pause(ctx context.Context, run domain.RunID, actor domain.Me
 	if entry == nil {
 		return fmt.Errorf("%w: session has no live sandbox", ErrInvalidTransition)
 	}
-	entry.lifecycleMu.Lock()
+	if err := entry.lockLifecycle(ctx); err != nil {
+		return err
+	}
 	defer entry.lifecycleMu.Unlock()
 	s.mu.Lock()
 	if s.runs[run] != entry || entry.containerID == "" ||
@@ -553,7 +573,9 @@ func (s *Scheduler) Resume(ctx context.Context, run domain.RunID, actor domain.M
 	if asleep {
 		return s.WakeRun(ctx, run, actor)
 	}
-	entry.lifecycleMu.Lock()
+	if err := entry.lockLifecycle(ctx); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	// A sleep that held the lifecycle lock may have finished meanwhile.
 	if !entry.asleepSince.IsZero() && !entry.retained {
@@ -853,7 +875,9 @@ func (s *Scheduler) closeRun(ctx context.Context, run domain.RunID, spec closeSp
 	}
 
 	s.wakeBeforeEnd(ctx, entry, actor)
-	entry.lifecycleMu.Lock()
+	if err := entry.lockLifecycle(ctx); err != nil {
+		return err
+	}
 	defer entry.lifecycleMu.Unlock()
 	s.mu.Lock()
 	if err := s.reportedOnlyRefusalLocked(ctx, run, spec); err != nil {

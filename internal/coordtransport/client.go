@@ -2,6 +2,7 @@ package coordtransport
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -132,13 +133,13 @@ type client struct{ socket string }
 func (c *client) call(ctx context.Context, method string, params, result any) error {
 	req := protocol.Request{JSONRPC: "2.0", ID: json.RawMessage("1"), Method: method}
 	if params != nil {
-		raw, err := json.Marshal(params)
+		raw, err := marshalLine(params)
 		if err != nil {
 			return internalError(method, err)
 		}
 		req.Params = raw
 	}
-	line, err := json.Marshal(req)
+	line, err := marshalLine(req)
 	if err != nil {
 		return internalError(method, err)
 	}
@@ -336,4 +337,17 @@ func ErrorCode(err error) int {
 		return ce.Code
 	}
 	return 0
+}
+
+// marshalLine is v as JSON on one line without the HTML escapes, which grow
+// each <, > and & six times and can push a legal request past the socket's
+// frame.
+func marshalLine(v any) ([]byte, error) {
+	var b bytes.Buffer
+	enc := json.NewEncoder(&b)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	return bytes.TrimRight(b.Bytes(), "\n"), nil
 }
