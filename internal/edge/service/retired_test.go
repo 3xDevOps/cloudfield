@@ -663,26 +663,37 @@ func TestRetiredBehindProxy(t *testing.T) {
 }
 
 // TestRetiredDeletesEarlierSigninOrigins retires a relay origin the edge
-// recorded beside two sign-in origins in turn: rows recorded at the
-// earlier one go too.
+// recorded beside three sign-in origins in turn: rows recorded at the
+// earlier one go too; rows at the one a kept pair serves stay.
 func TestRetiredDeletesEarlierSigninOrigins(t *testing.T) {
 	h := newRecordingHarness(t)
 	h.setGitHubUser(1, "owner", "owner@example.test", true)
 	b := h.browser(t)
 	b.signIn(t)
 	early := "https://signin-early.example.test"
-	if err := h.svc.store.RecordPairs(context.Background(), map[string]string{testRelay2: early}, h.clock.Now()); err != nil {
-		t.Fatal(err)
+	for _, signin := range []string{testSignin, early} {
+		if err := h.svc.store.RecordPairs(context.Background(), map[string]string{testRelay2: signin}, h.clock.Now()); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err := h.svc.store.RecordPairs(context.Background(), map[string]string{testRelay2: testSignin2}, h.clock.Now()); err != nil {
 		t.Fatal(err)
 	}
 	h.exec(t, `INSERT INTO devices (id, token_hash, account_id, public_key, label, created_at, last_used_at, signin_origin)
 		SELECT 'dev-early', 'hash-early', account_id, 'key', 'label', created_at, created_at, ? FROM web_sessions LIMIT 1`, early+":443")
+	h.exec(t, `INSERT INTO devices (id, token_hash, account_id, public_key, label, created_at, last_used_at, signin_origin)
+		SELECT 'dev-kept', 'hash-kept', account_id, 'key', 'label', created_at, created_at, ? FROM web_sessions LIMIT 1`, testSignin)
+	h.exec(t, `INSERT INTO web_sessions (id, token_hash, account_id, created_at, expires_at, signin_origin)
+		SELECT 'sess-kept', 'hash-sess-kept', account_id, created_at, expires_at, ? FROM web_sessions LIMIT 1`, testSignin)
 	if err := h.restartRetiring(t, Retired{SigninOrigin: testSignin2, RelayOrigin: testRelay2, Replacement: testRelay}); err != nil {
 		t.Fatal(err)
 	}
 	if got := h.column(t, `SELECT COUNT(*) FROM devices WHERE id = 'dev-early'`); got != "0" {
 		t.Errorf("a device recorded at %s, the earlier sign-in origin of %s, survived", early, testRelay2)
+	}
+	for _, q := range []string{`SELECT COUNT(*) FROM devices WHERE id = 'dev-kept'`, `SELECT COUNT(*) FROM web_sessions WHERE id = 'sess-kept'`} {
+		if got := h.column(t, q); got != "1" {
+			t.Errorf("%s: %s, want 1: a row at %s, which a kept pair serves, was deleted because %s was once recorded beside it", q, got, testSignin, testRelay2)
+		}
 	}
 }
