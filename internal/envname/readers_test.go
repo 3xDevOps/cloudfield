@@ -25,6 +25,7 @@ var unconverted = map[string]string{
 	"AETHER_RELEASE_SIGNING_KEY":                            "a secret the release workflows set; no person types it",
 	"AETHER_NATIVE_HOOK_OWNER":                              "set and read by the same in-process hook plugin",
 	"AETHER_MANAGED_NATIVE_WAKE":                            "set by the server for its own hook plugin",
+	"AETHER_ACP_COMMAND_PREFIX_ENV":                         "set by the server for one exec of its own keeper or bridge, which keeps it from the agent",
 	"AETHER_TTY":                                            "test seam of install-test.sh",
 	"AETHER_UNIT_PATH":                                      "test seam of install-test.sh",
 	"AETHER_SYSTEM_BIN_DIR":                                 "test seam of install-test.sh",

@@ -220,10 +220,10 @@ func TestKVMEnhancedAgentOutlivesCommandsThatFillTheSessionsMemory(t *testing.T)
 		t.Fatalf("the agent did not answer the prompt after the kills: %q", said)
 	}
 
-	const probe = `cat /proc/self/oom_score_adj /proc/$PPID/oom_score_adj /proc/self/cgroup /proc/$PPID/cgroup; printf '%s|' "a b" 'c"d' "$((1+2))"; exit 7`
+	const probe = `cat /proc/self/oom_score_adj /proc/$PPID/oom_score_adj /proc/self/cgroup /proc/$PPID/cgroup; echo "${AETHER_ACP_COMMAND_PREFIX_ENV-unset}"; printf '%s|' "a b" 'c"d' "$((1+2))"; exit 7`
 	said, _ = kvmTurn(t, e, run.ID, 4, acpmock.PromptRun+probe)
-	if want := "0\n-500\n0::/session/procs\n0::/session/agent\na b|c\"d|3|\nexit status 7"; said != want {
-		t.Errorf("a command through the wrapper printed %q, want %q: its own OOM score and the agent's, its own cgroup and the agent's, its arguments and its exit status", said, want)
+	if want := "0\n-500\n0::/session/procs\n0::/session/agent\nunset\na b|c\"d|3|\nexit status 7"; said != want {
+		t.Errorf("a command through the wrapper printed %q, want %q: its own OOM score and the agent's, its own cgroup and the agent's, no request of the keeper's, its arguments and its exit status", said, want)
 	}
 
 	const cost = `t() { s=$(date +%s%N); for i in $(seq 200); do "$@"; done; echo "$(( ($(date +%s%N) - s) / 200000 )) us"; }; t bash -c true; t /run/aether-acp-command true; cat /sys/fs/cgroup/session/memory.current`
