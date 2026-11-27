@@ -28,7 +28,7 @@ func (s *Scheduler) countCapacity(e domain.CapacityEvent) {
 	e.At = time.Now().UTC()
 	slog.Info("scheduler: capacity: "+e.Kind, "op", e.Op, "cause", e.Cause, "run", e.Run, "available", e.AvailableBytes, "floor", e.FloorBytes,
 		"used", e.UsedBytes, "idle_hour", e.IdleHourBytes, "vm", e.VMBytes, "text", e.Text)
-	ctx, cancel := context.WithTimeout(context.WithoutCancel(s.superCtx), capacityProbeTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), capacityProbeTimeout)
 	defer cancel()
 	if err := s.cfg.Store.CountCapacityEvent(ctx, e); err != nil {
 		slog.Warn("scheduler: capacity: count "+e.Kind, "error", err)
