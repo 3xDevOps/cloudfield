@@ -427,3 +427,12 @@ func TestPrintedSignInCommandsQuoteTheirValues(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentLoginRefusesADashBeforeConnecting(t *testing.T) {
+	unlinked(t)
+	for _, args := range [][]string{{"claude", "--"}, {"-"}, {"--", "claude"}} {
+		if err := agentLogin(args); err == nil || err.Error() != "usage: cloudfield agent login <name> [--as <login> | --attach <login-id>]" {
+			t.Errorf("agentLogin(%q) = %v; want the usage, as before --as", args, err)
+		}
+	}
+}

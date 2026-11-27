@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -31,7 +32,7 @@ func agentLogin(args []string) error {
 	if err != nil {
 		return fmt.Errorf("%w\n%s", err, usage)
 	}
-	if name == "" {
+	if name == "" || name[0] == '-' || slices.Contains(args, "--") {
 		return errors.New(usage)
 	}
 	given := map[string]bool{}
