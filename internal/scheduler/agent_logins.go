@@ -557,7 +557,11 @@ func (s *Scheduler) addedLoginMounts(run *domain.Run, launcher domain.MemberID, 
 		if shapeErr != nil {
 			return nil, shapeErr
 		}
-		if shape.Kind != recorded.Kind {
+		switch shape.Kind {
+		case recorded.Kind:
+		case "":
+			return nil, fmt.Errorf("scheduler: %w: login %s: %s", ErrSignedOut, run.AccountLogin, noSignInNow)
+		default:
 			return nil, fmt.Errorf("scheduler: login %s no longer holds the %s sign-in it was added with; its owner removes it and adds it again", run.AccountLogin, recorded.Kind)
 		}
 		console = shape.Kind == memberhome.LoginConsole
@@ -665,8 +669,13 @@ func (s *Scheduler) addedLoginProblem(account domain.Account, agent string) (str
 		}
 		return quota.LoginProblem(agent, data, time.Now()), nil
 	}
-	return "its sign-in never finished", nil
+	return noSignInNow, nil
 }
+
+// noSignInNow is why a login whose files hold no sign-in cannot serve: a
+// session on it may be rewriting its file in place as it refreshes, or the
+// login was signed out.
+const noSignInNow = "it holds no sign-in right now; a session on it may be refreshing it, so launch again"
 
 // loginRefusal is why a session in member's home may not run on login
 // unless its owner names it, its automatic switch apart: it is not open to

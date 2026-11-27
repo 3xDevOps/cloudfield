@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/3xDevOps/cloudfield/internal/domain"
+	"github.com/3xDevOps/cloudfield/internal/harness"
 	"github.com/3xDevOps/cloudfield/internal/memberhome"
 	"github.com/3xDevOps/cloudfield/internal/permissions"
 )
@@ -363,7 +364,17 @@ func TestAnAddedLoginIsMountedByItsShape(t *testing.T) {
 		}
 	}
 	dir, _ := e.logins.Path(e.member.ID, "claude", work.Login)
+	// Read while a session rewrites it in place, or after a sign-out, the
+	// file holds nothing: the login is not to be removed for it.
 	writeHomeFile(t, dir, memberhome.LoginCredentials, "")
+	profile, _ := harness.Lookup("claude")
+	gap := &domain.Run{ID: "run-gap", MemberID: e.member.ID, AccountMemberID: e.member.ID, AccountLogin: work.Login, Harness: "claude"}
+	if _, err := e.sched.addedLoginMounts(gap, e.member.ID, profile, "/root", map[string]string{}, EnvironmentPurposeRun, false); !errors.Is(err, ErrSignedOut) || !strings.Contains(err.Error(), "launch again") || strings.Contains(err.Error(), "adds it again") {
+		t.Fatalf("mounting a login whose file is empty: %v; want signed out right now, launch again", err)
+	}
+	if _, err := e.launchOn(t, work, ""); !errors.Is(err, ErrSignedOut) || !strings.Contains(err.Error(), "launch again") {
+		t.Fatalf("a launch on a login whose file is empty: %v; want signed out right now, launch again", err)
+	}
 	writeHomeFile(t, dir, "anthropic/configs/default.json", `{"authentication":{"type":"user_oauth"}}`)
 	writeHomeFile(t, dir, "anthropic/credentials/default.json", `{"access_token":"test-planted"}`)
 	planted, err := e.launchOn(t, work, "")
@@ -375,7 +386,7 @@ func TestAnAddedLoginIsMountedByItsShape(t *testing.T) {
 		r, _ := e.db.GetRun(t.Context(), planted.ID)
 		err = errors.New(r.Reason)
 	}
-	if err == nil || (!strings.Contains(err.Error(), "no longer holds") && !errors.Is(err, ErrSignedOut)) {
+	if err == nil || !strings.Contains(err.Error(), "no longer holds the subscription sign-in") {
 		t.Fatalf("a launch on a login planted with another kind: %v; want refused", err)
 	}
 }
