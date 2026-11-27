@@ -27,7 +27,7 @@ import { useLaneAgents, useLaneHistory } from '@/routes/board/lanes/use-lane-dat
 import { useMapRuns, type BoardCard } from '@/routes/board/selectors'
 import { useStore } from '@/store'
 import { useStateContext } from '@/store/hooks'
-import { laneEdgeKinds, laneWindows, type LaneEdgeKind, type LaneWindow } from '@/store/lanes'
+import { historyBudgetFor, laneEdgeKinds, laneWindows, type LaneEdgeKind, type LaneWindow } from '@/store/lanes'
 
 const phone = '(max-width: 767px)'
 const minute = 60_000
@@ -131,14 +131,19 @@ export function BoardLanes({ agentNames }: { agentNames: Record<string, string> 
   }, [following, now, end, span])
 
   const workspaces = useMemo(() => [...new Set(visible.map((card) => card.run.workspace_id))].sort(), [visible])
-  const history = useLaneHistory(workspaces, Math.floor(timeWindow.start / minute) * minute)
+  const history = useLaneHistory(workspaces, Math.floor(timeWindow.start / minute) * minute, historyBudgetFor(span))
+  // Load more was pressed and its read has not ended.
+  const [more, setMore] = useState(false)
+  useEffect(() => { if (!history.loading) setMore(false) }, [history.loading])
+  const loadingMore = more && history.loading
   const { agents, toggle: toggleAgents, retry: retryAgents } = useLaneAgents()
   const [open, setOpen] = useState<ReadonlyMap<string, boolean>>(() => new Map())
 
   const changes = useMemo(() => statusChanges(history.events), [history.events])
   const floor = useCallback((id: string) => {
     const h = history.byWorkspace.get(id)
-    return !h || h.error ? -Infinity : h.floor
+    // A read that failed before any history arrived says nothing; one that failed part-way keeps the boundary it reached.
+    return !h || (h.error && h.floor === Infinity) ? -Infinity : h.floor
   }, [history.byWorkspace])
   const previousModel = useRef<LanesModel | null>(null)
   const model = useMemo(() => {
@@ -345,8 +350,21 @@ export function BoardLanes({ agentNames }: { agentNames: Record<string, string> 
           </>
         )}
         {!following && <Button variant="secondary" size="sm" onClick={() => setEnd(null)}>Now</Button>}
-        {history.loading && <span role="status" className="text-ui-sm text-muted">Loading history…</span>}
-        {!history.loading && history.capped && <span className="text-ui-sm text-muted">Older history not loaded</span>}
+        {history.loading && !loadingMore && <span role="status" className="text-ui-sm text-muted">Loading history…</span>}
+        {(loadingMore || (!history.loading && history.capped)) && (
+          // One item, so the label and its button wrap together; on a phone it takes a row of its own.
+          <span className={cn('flex items-center gap-2', compact && 'basis-full')}>
+            <span className="text-ui-sm text-muted">Older history not loaded</span>
+            {/* Both labels share one cell, so the toolbar does not move while the read runs. */}
+            <Button variant="secondary" size="sm" disabled={loadingMore} onClick={() => { setMore(true); history.more() }}>
+              <span className="grid">
+                <span aria-hidden={loadingMore} className={cn('[grid-area:1/1]', loadingMore && 'invisible')}>Load more</span>
+                <span aria-hidden={!loadingMore} className={cn('[grid-area:1/1]', !loadingMore && 'invisible')}>Loading…</span>
+              </span>
+            </Button>
+            {loadingMore && <span role="status" className="sr-only">Loading older history…</span>}
+          </span>
+        )}
       </header>
       {history.error && (
         <div className="shrink-0 px-4 pt-3">
