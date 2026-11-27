@@ -294,6 +294,7 @@ cloudfield sessions --needs-you
 cloudfield sessions <session-id> --json
 cloudfield wait <session-id> --timeout 30m
 cloudfield logs <session-id>
+cloudfield messages <session-id> --json
 cloudfield message <session-id> "<reply>"
 ```
 
@@ -303,7 +304,11 @@ report, or it went silent) and a message continues it, 5 when its wait broke
 (a condition resolved and the wake never reached the agent, or its source
 went unread for an hour), and 124 on
 timeout. `cloudfield sessions <session-id>` shows what a session needs, each
-with the command that answers it.
+with the command that answers it. `cloudfield messages <session-id>` prints
+the messages the session sent to or received from other agents, bodies
+included; a line from the session to itself is one the server wrote to wake
+it. What you send with `cloudfield message` reaches the agent as a prompt and
+is not listed.
 
 A permission request is the human's: show it with its options, and run the
 `cloudfield answer <session-id> <request-id> <option-id>` they pick. It allows or
