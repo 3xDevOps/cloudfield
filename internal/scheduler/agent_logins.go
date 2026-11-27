@@ -675,7 +675,7 @@ func (s *Scheduler) addedLoginProblem(account domain.Account, agent string) (str
 // noSignInNow is why a login whose files hold no sign-in cannot serve: a
 // session on it may be rewriting its file in place as it refreshes, or the
 // login was signed out.
-const noSignInNow = "it holds no sign-in right now; a session on it may be refreshing it, so launch again"
+const noSignInNow = "it holds no sign-in right now; a session on it may be refreshing it, so launch again; a login that stays so was signed out"
 
 // loginRefusal is why a session in member's home may not run on login
 // unless its owner names it, its automatic switch apart: it is not open to
@@ -819,7 +819,10 @@ func (s *Scheduler) StartLogin(ctx context.Context, workspace domain.WorkspaceID
 		refused = append(refused, l.Name+": "+refusal)
 	}
 	if account != member {
-		return "", fmt.Errorf("%w: none of this account's logins is available to you, so it is not shared with you", permissions.ErrDenied)
+		if len(refused) == 0 {
+			return "", fmt.Errorf("%w: none of this account's logins is available to you, so it is not shared with you", permissions.ErrDenied)
+		}
+		return "", fmt.Errorf("%w: none of this account's logins can serve you: %s", permissions.ErrDenied, strings.Join(refused, "; "))
 	}
 	return "", fmt.Errorf("%w: %s; name one with cloudfield session --login <name>", ErrNoStartLogin, strings.Join(refused, "; "))
 }

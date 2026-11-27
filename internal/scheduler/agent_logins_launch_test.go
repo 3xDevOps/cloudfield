@@ -389,3 +389,20 @@ func TestAnAddedLoginIsMountedByItsShape(t *testing.T) {
 		t.Fatalf("a launch on a login planted with another kind: %v; want refused", err)
 	}
 }
+
+// A teammate whose shared logins are all signed out is told so, login by
+// login, rather than that the account is not shared.
+func TestATeammateIsToldWhyNoSharedLoginServes(t *testing.T) {
+	e := newLoginShareEnv(t)
+	ctx := t.Context()
+	expired := `{"claudeAiOauth":{"accessToken":"test-access-old","expiresAt":1}}`
+	writeHomeFile(t, e.ownerHome, ".claude/.credentials.json", expired)
+	e.addLogin(t, e.owner.ID, "lgn-work000000", "work", expired)
+	if _, err := e.db.ShareAccount(ctx, e.owner.ID, e.member.ID); err != nil {
+		t.Fatal(err)
+	}
+	_, err := e.sched.StartLogin(ctx, e.ws.ID, e.member.ID, e.owner.ID, "claude", domain.LaunchTUI)
+	if !errors.Is(err, permissions.ErrDenied) || !strings.Contains(err.Error(), "work: ") || !strings.Contains(err.Error(), "expired") || strings.Contains(err.Error(), "not shared with you") {
+		t.Fatalf("Ada's start on Grace's signed-out logins: %v; want denied, naming work and why", err)
+	}
+}

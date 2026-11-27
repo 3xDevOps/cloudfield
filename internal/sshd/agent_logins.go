@@ -318,8 +318,8 @@ func (s *Server) agentLoginAutomatic(ctx context.Context, member domain.MemberID
 // already, starts from: the one its owner named, or the account's first login in its
 // owner's order that member may use without naming it. Only a login's owner
 // may name it. An account none of whose logins member may use is not shared
-// with them; on their own account the first login serves when none is
-// usable, and its launch says why.
+// with them; on their own account the launch is refused, naming each login
+// and why it does not serve.
 func (s *Server) launchLogin(ctx context.Context, workspace domain.WorkspaceID, member, account domain.MemberID, harness, named string, mode domain.LaunchMode) (domain.LoginID, *protocol.Error) {
 	if account == "" {
 		account = member
