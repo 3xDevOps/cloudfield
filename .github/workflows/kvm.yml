@@ -59,7 +59,7 @@ jobs:
         env:
           GOFLAGS: -v
         run: |
-          git fetch --depth=1 origin ad5fb9ebb
+          git fetch --depth=1 origin ad5fb9ebb916e5026effa1fd27ab40d0198ead44
           git worktree add "$RUNNER_TEMP/before" FETCH_HEAD
           cp internal/scheduler/kvm_zz_cost_test.go "$RUNNER_TEMP/before/internal/scheduler/"
           for round in 1 2; do
