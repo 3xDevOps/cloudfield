@@ -8,8 +8,8 @@ import { RefusalNotes, SignedOutNote } from '@/components/launch/agent-picker'
 import { AccountPicker, readiness, useAccountStatus } from '@/components/launch/account-picker'
 import { agentLabel } from '@/components/launch/modes'
 import { loginAgent } from '@/components/agents/agent-logins'
-import { automaticReachesPerUse, LoginPicker, useOwnLogins } from '@/components/launch/login-picker'
-import { automaticFallback, ChildRunsSwitch, type ChildRunsChoice, fallbackParams, FallbackOptions, RunLimitsOption, WorkspaceLine } from '@/components/launch/launch-options'
+import { LoginPicker, PerUseMove, perUseReach, useOwnLogins } from '@/components/launch/login-picker'
+import { automaticFallback, ChildRunsSwitch, type ChildRunsChoice, fallbackParams, FallbackOptions, RunLimitsOption, withMoves, WorkspaceLine } from '@/components/launch/launch-options'
 import { PermissionControl, permissionFeature } from '@/components/launch/permission-control'
 import { ExtraRepos } from '@/components/launch/extra-repos'
 import { PhoneLaunchSheet } from '@/components/launch/phone-launch'
@@ -394,10 +394,14 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
   // Only the default login's usage is read here, with the account's when there are several accounts.
   const loginUsage = { default: accountStatus[ownAccountID]?.usage?.find((provider) => provider.provider === loginAgent) }
   const moves = !fallbackParams(fallback, accounts, account).no_fallback
+  const setMoves = (on: boolean) => { fallbackPicked.current = true; setFallback(withMoves(fallback, on)) }
+  const start = severalLogins && (picked ?? (!login ? ownLogins.find((item) => item.automatic) : undefined))
+  const reach = start ? perUseReach(ownLogins!, start) : ''
+  const perUseMove = start && reach && <PerUseMove reach={reach} from={start} picked={!!picked} moves={moves} onMoves={setMoves} disabled={launching} />
   const loginChoice = loginsOffered && (severalLogins || login) && (ownLogins
     ? (
       <div className="flex flex-col gap-1">
-        <LoginPicker logins={ownLogins} value={login?.id ?? ''} onChange={(id) => setLogin(id ? { id, name: ownLogins.find((item) => item.id === id)?.name ?? id } : null)} usage={loginUsage} now={now} moves={moves} disabled={launching} />
+        <LoginPicker logins={ownLogins} value={login?.id ?? ''} onChange={(id) => setLogin(id ? { id, name: ownLogins.find((item) => item.id === id)?.name ?? id } : null)} usage={loginUsage} now={now} moves={moves} move={phone ? undefined : perUseMove} disabled={launching} />
         {loginWait === 'gone' && login && <p role="alert" className="text-ui-sm text-state-failed">You have no login {login.name} any more. Pick another to launch.</p>}
       </div>
     )
@@ -407,8 +411,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
         {loginWait === 'reading' ? `${login.name}: reading your logins…` : `${login.name}: your logins could not be read.`}
       </p>
     ))
-  const automaticPerUse = severalLogins && !picked && !login && moves ? automaticReachesPerUse(ownLogins) : ''
-  const loginWords = picked ? `${picked.name}${picked.per_use ? ', billed per use' : ''}` : login ? login.name : automaticPerUse && `Automatic, can reach ${automaticPerUse} (billed per use)`
+  const loginWords = picked ? `${picked.name}${picked.per_use ? ', billed per use' : ''}` : login?.name
   const fallbackOffered = accounts.length > 1 || severalLogins
   const accountChoice = (fallbackOffered || loginChoice) && (
     <div className="flex flex-col gap-2">
@@ -417,7 +420,7 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
       {fallbackOffered && (
         <>
           <FallbackOptions accounts={accounts} ownAccountID={ownAccountID} account={account} logins={severalLogins} fallback={fallback} onFallback={(next) => { fallbackPicked.current = true; setFallback(next) }} status={accountReadiness} />
-          {savesDefaults && <SaveAccountDefault choice={JSON.stringify([account, fallback])} onSave={saveAccountDefault} />}
+          {savesDefaults && <SaveAccountDefault choice={JSON.stringify([account, fallback])} onSave={saveAccountDefault} saves={`Saves ${accounts.length > 1 ? 'this account and fallback' : 'the fallback'} for launches on every device${loginChoice ? '; not the login' : ''}.`} />}
         </>
       )}
     </div>
@@ -464,7 +467,8 @@ export function LaunchDialog({ open = true, visible = true }: { open?: boolean; 
         workspace={workspace}
         onWorkspace={(id) => { setError(null); setPickedWorkspace(id) }}
         accountName={sharedAccount ? accountName : undefined}
-        loginWords={loginWords || undefined}
+        loginWords={loginWords}
+        move={perUseMove || undefined}
         lastSession={!last || pickedWorkspace !== null || workspaceID !== last.workspace_id ? 'none' : harness === last.harness ? 'repository and agent' : 'repository'}
         onAddWorkspace={() => { close(); navigate('workspaces') }}
         options={

@@ -45,7 +45,8 @@ export function SavedIssues({ issues, title }: { issues: LaunchDefaultIssue[]; t
 }
 
 /** Saves the account and fallback chosen here, which `choice` identifies; a launch never saves them on its own. */
-export function SaveAccountDefault({ choice, onSave }: { choice: string; onSave: () => Promise<unknown> }) {
+/** `saves` says what the button saves. */
+export function SaveAccountDefault({ choice, onSave, saves }: { choice: string; onSave: () => Promise<unknown>; saves: string }) {
   const [state, setState] = useState<{ busy: boolean; savedFor: string | null; error: string | null }>({ busy: false, savedFor: null, error: null })
   const save = () => {
     setState({ busy: true, savedFor: null, error: null })
@@ -60,7 +61,7 @@ export function SaveAccountDefault({ choice, onSave }: { choice: string; onSave:
         <Button type="button" size="sm" variant="secondary" disabled={state.busy} onClick={save}>Save as my default</Button>
         {state.savedFor === choice
           ? <span role="status" className="text-ui-sm text-muted">Saved for every device.</span>
-          : <span className="text-ui-sm text-muted">Saves this account and fallback for launches on every device.</span>}
+          : <span className="text-ui-sm text-muted">{saves}</span>}
       </div>
       {state.error && <Callout tone="failed" role="alert">{state.error}</Callout>}
     </div>

@@ -32,6 +32,12 @@ export function fallbackParams(fallback: Fallback, accounts: Member[], skip: str
   return ids.length ? { fallback_account_member_ids: ids } : { no_fallback: true }
 }
 
+/** Turns automatic changes on or off; every account unticked is the other way they are off, so turning them on from there starts from automatic. */
+export function withMoves(fallback: Fallback, on: boolean): Fallback {
+  if (!on) return { ...fallback, off: true }
+  return fallback.off ? { ...fallback, off: false } : automaticFallback
+}
+
 export function FallbackOptions({
   accounts,
   ownAccountID,
@@ -78,13 +84,17 @@ export function FallbackOptions({
     <Collapsible>
       <CollapsibleTrigger>
         <span className="shrink-0 font-medium">Fallback</span>
-        <span className="shrink-0 text-muted">· {params.no_fallback ? 'Off' : params.fallback_account_member_ids ? 'Ordered' : 'Automatic'} · if</span>
-        <span className="min-w-0 truncate text-muted">{owner}</span>
-        <span className="shrink-0 text-muted">runs out</span>
+        <span className="shrink-0 text-muted">· {params.no_fallback ? 'Off' : params.fallback_account_member_ids ? 'On, ordered' : 'On'} · when</span>
+        {logins ? <span className="shrink-0 text-muted">a login runs out</span> : (
+          <>
+            <span className="min-w-0 truncate text-muted">{owner}</span>
+            <span className="-ml-1 shrink-0 text-muted">&apos;s usage runs out</span>
+          </>
+        )}
       </CollapsibleTrigger>
       <CollapsibleContent className="flex flex-col gap-1 pt-2 pl-5">
         <label className="flex min-h-7 cursor-pointer items-center gap-2 text-ui coarse:min-h-11">
-          <Checkbox checked={!fallback.off} onCheckedChange={(on) => onFallback({ ...fallback, off: on !== true })} />
+          <Checkbox checked={!params.no_fallback} onCheckedChange={(on) => onFallback(withMoves(fallback, on === true))} />
           {!logins ? 'Fall back to another account' : ids.length ? 'Move to another login or account' : 'Move to another login'}
         </label>
         {!fallback.off && (
