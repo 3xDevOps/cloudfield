@@ -835,7 +835,7 @@ func (s *Scheduler) commitMove(ctx context.Context, entry *supervised, f *UsageF
 		if launchErr := s.mayLaunch(ctx, member, workspaces); launchErr != nil {
 			return 0, launchErr
 		}
-		if authErr := fallback.ResolveLoginUse(ctx, s.cfg.Store, member, to, run.Harness, workspaces); authErr != nil {
+		if authErr := fallback.ResolveLoginShared(ctx, s.cfg.Store, member, to, run.Harness, workspaces); authErr != nil {
 			return 0, authErr
 		}
 	}

@@ -1491,46 +1491,70 @@ func TestNoFallbackReason(t *testing.T) {
 	}
 }
 
-// A move records its target only while that login still serves the run's
-// members: Grace turning her default login automatic off after the move
+// A move records its target only while the run's members may still use
+// that login: Grace turning her default login off for shares after the move
 // chose it, while the old container goes, fails the move, and the run stays
-// recorded on the account it ran on.
+// recorded on the account it ran on. Turning it automatic off governs the
+// next choice, not the move in flight, which carries on.
 func TestMoveIsNotRecordedOnALoginTurnedOffMeanwhile(t *testing.T) {
 	t.Parallel()
-	e, _, notes := newFallbackEnv(t, enhancedClaude)
-	e.share(t)
-	if _, err := e.db.AddAgentLogin(t.Context(), domain.AgentLogin{MemberID: e.owner.ID, Agent: "claude", ID: "lgn-work000000", Name: "work", CreatedAt: time.Now()}, ""); err != nil {
-		t.Fatal(err)
-	}
-	run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP)
-	if err != nil {
-		t.Fatal(err)
-	}
-	waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
-	var turnedOff atomic.Bool
-	old := e.rt.byName(string(run.ID)).id
-	e.rt.mu.Lock()
-	e.rt.destroyHook = func(id runtime.ID) {
-		if id == old && turnedOff.CompareAndSwap(false, true) {
-			if setErr := e.db.SetAgentLoginAutomatic(context.Background(), e.owner.ID, "claude", domain.DefaultLogin, false); setErr != nil {
-				panic(setErr)
+	for _, tc := range []struct {
+		name  string
+		turn  func(db store.Store, owner domain.MemberID) error
+		moves bool
+	}{
+		{name: "off for shares", turn: func(db store.Store, owner domain.MemberID) error {
+			return db.SetAgentLoginShared(context.Background(), owner, "claude", domain.DefaultLogin, false)
+		}},
+		{name: "automatic off", moves: true, turn: func(db store.Store, owner domain.MemberID) error {
+			return db.SetAgentLoginAutomatic(context.Background(), owner, "claude", domain.DefaultLogin, false)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			e, _, notes := newFallbackEnv(t, enhancedClaude)
+			e.share(t)
+			if _, err := e.db.AddAgentLogin(t.Context(), domain.AgentLogin{MemberID: e.owner.ID, Agent: "claude", ID: "lgn-work000000", Name: "work", CreatedAt: time.Now()}, ""); err != nil {
+				t.Fatal(err)
 			}
-		}
-	}
-	e.rt.mu.Unlock()
-	_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
-	waitFor(t, "the move to give up", func() bool {
-		row, getErr := e.db.GetRun(t.Context(), run.ID)
-		if getErr == nil && row.Status.Terminal() && !strings.Contains(row.Reason, "not available to you") {
-			t.Fatalf("run %s (%q), hook ran %v; want the move refused for the login", row.Status, row.Reason, turnedOff.Load())
-		}
-		return turnedOff.Load() && getErr == nil && strings.Contains(row.Reason, "not available to you")
-	})
-	got, err := e.db.GetRun(t.Context(), run.ID)
-	if err != nil || got.AccountMemberID != e.member.ID || len(notes.all()) != 0 {
-		t.Fatalf("run %s on %s (%q), notes %v, %v; want it left on Ada's account", got.Status, got.AccountMemberID, got.Reason, notes.all(), err)
-	}
-	if segments, err := e.db.ListRunAccountSegments(t.Context(), run.ID); err != nil || len(segments) != 0 {
-		t.Fatalf("segments = %+v, %v; want no move recorded", segments, err)
+			run, err := e.sched.Launch(t.Context(), e.ws.ID, e.member.ID, e.member.ID, "", "claude", domain.LaunchACP)
+			if err != nil {
+				t.Fatal(err)
+			}
+			waitFor(t, "session", func() bool { return e.sched.acp.session(run.ID) != nil })
+			var turnedOff atomic.Bool
+			old := e.rt.byName(string(run.ID)).id
+			e.rt.mu.Lock()
+			e.rt.destroyHook = func(id runtime.ID) {
+				if id == old && turnedOff.CompareAndSwap(false, true) {
+					if setErr := tc.turn(e.db, e.owner.ID); setErr != nil {
+						panic(setErr)
+					}
+				}
+			}
+			e.rt.mu.Unlock()
+			_, _ = e.sched.Inject(t.Context(), run.ID, e.member.ID, domain.AgentPrompt{Text: acpmock.PromptUsageLimit}, false, nil)
+			if tc.moves {
+				e.assertMovedToOwner(t, run.ID, notes)
+				if !turnedOff.Load() {
+					t.Fatal("the switch was not turned while the old container went")
+				}
+				return
+			}
+			waitFor(t, "the move to give up", func() bool {
+				row, getErr := e.db.GetRun(t.Context(), run.ID)
+				if getErr == nil && row.Status.Terminal() && !strings.Contains(row.Reason, "not shared with you") {
+					t.Fatalf("run %s (%q), hook ran %v; want the move refused for the login", row.Status, row.Reason, turnedOff.Load())
+				}
+				return turnedOff.Load() && getErr == nil && strings.Contains(row.Reason, "not shared with you")
+			})
+			got, err := e.db.GetRun(t.Context(), run.ID)
+			if err != nil || got.AccountMemberID != e.member.ID || len(notes.all()) != 0 {
+				t.Fatalf("run %s on %s (%q), notes %v, %v; want it left on Ada's account", got.Status, got.AccountMemberID, got.Reason, notes.all(), err)
+			}
+			if segments, err := e.db.ListRunAccountSegments(t.Context(), run.ID); err != nil || len(segments) != 0 {
+				t.Fatalf("segments = %+v, %v; want no move recorded", segments, err)
+			}
+		})
 	}
 }

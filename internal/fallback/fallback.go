@@ -502,27 +502,31 @@ func usedPercent(ctx context.Context, usage QuotaReader, account domain.Account,
 // shares. Every check that asks whether a member holds a share of a run's
 // account asks this.
 func ResolveRunLogin(ctx context.Context, st store.Store, actor domain.MemberID, run *domain.Run, workspaces []domain.WorkspaceID) error {
-	account := run.Account()
-	if _, err := ResolveLaunchAccountIn(ctx, st, actor, string(account.Member), workspaces); err != nil {
+	return ResolveLoginShared(ctx, st, actor, run.Account(), run.Harness, workspaces)
+}
+
+// ResolveLoginShared is ResolveRunLogin for a session on login, which
+// actor need not own if its owner left it on for shares. Its automatic
+// switch governs which login is chosen next, not a session already on it
+// or a move already committed to it.
+func ResolveLoginShared(ctx context.Context, st store.Store, actor domain.MemberID, login domain.Account, harness string, workspaces []domain.WorkspaceID) error {
+	if _, err := ResolveLaunchAccountIn(ctx, st, actor, string(login.Member), workspaces); err != nil {
 		return err
 	}
-	if actor == account.Member {
+	if actor == login.Member {
 		return nil
 	}
-	logins, err := st.ListAgentLogins(ctx, account.Member, run.Harness)
+	logins, err := st.ListAgentLogins(ctx, login.Member, harness)
 	if err != nil || len(logins) == 0 {
 		return err
 	}
-	id := account.Login
-	if id == "" {
-		id = domain.DefaultLogin
-	}
+	id := cmp.Or(login.Login, domain.DefaultLogin)
 	for _, l := range logins {
 		if l.ID == id && l.Shared {
 			return nil
 		}
 	}
-	return fmt.Errorf("%w: the login this session is on is not shared with you", permissions.ErrDenied)
+	return fmt.Errorf("%w: login %s of this account is not shared with you", permissions.ErrDenied, id)
 }
 
 // ResolveLoginUse is ResolveLaunchAccountIn for a container that mounts
