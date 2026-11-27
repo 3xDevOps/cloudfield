@@ -52,9 +52,16 @@ is not established here.
 | --- | --- |
 | 1 Lanes pages mostly rereads | Merged, #1180: `no_rereads` and `older_time` on `workspace.timeline`. 6h: 43% of visible bars never coloured to 0%; 24h: 70% to 0%. |
 | 2 Three round trips per call | Merged, #1178: the gateway reuses control channels for an explicit list of reads when the server was heard from in the last second. 453 to 151 ms a read on a 150 ms link; Lanes' five pages 2,330 to 828 ms. |
-| 3 Serial reads and the 5,000 budget | #1196: the budget follows the window (5,000 / 10,000 / 25,000) with **Load more**; numbers in [evidence/cause3-budget.txt](evidence/cause3-budget.txt). Pages cannot be read in parallel: each cursor comes from the page before. |
-| 5 Cold open | **Tried and withdrawn**, #1193 (closed). See below. The duplicate budget read on reload remains. |
+| 3 Serial reads and the 5,000 budget | #1196 (ready, in the merge queue on 2026-11-27): the budget follows the window (5,000 / 10,000 / 25,000) with **Load more**; numbers in [evidence/cause3-budget.txt](evidence/cause3-budget.txt). Pages cannot be read in parallel: each cursor comes from the page before. |
+| 4 No compression | Not started. Approved in principle: negotiated, both mixed-version directions tested, CPU cost measured on one CPU with a size threshold, security review. |
+| 5 Cold open | **Tried and rejected**, #1193 (closed). See below. The duplicate budget read on reload remains. |
+| 6 Leaving Lanes drops its history | **Tried and rejected**, #1208 (closed). See below. |
+| 7 Session polls, 8 client work per page | Not built. 7 rides on cause 2 (each poll is one round trip when it follows other traffic). |
 | Follow-up | Merged, #1189: a failed agent-mail or subsessions read in session Details shows the server's error with Retry. |
+
+Running totals on the seeded store over a 150 ms link, main before the first fix against #1196's head ([evidence/running-totals.txt](evidence/running-totals.txt)): Lanes 6h settles in 3.2 s with 44% of visible bars never coloured, now 1.4 s with 0%; 24h 2.8 s / 70%, now 1.9 s / 0%; 7d 2.9 s / 68%, now 2.0 s / 0% with the whole window loaded; cold open until sessions show 2,562 ms, now 1,538 ms.
+
+## Tried and rejected
 
 ### Cold open: do not mark the store hydrated before the optional reads land
 
@@ -67,6 +74,20 @@ It was closed because "hydrated" also clears the stale mark (`staleSince`), and 
 3. **Needs you says "Nothing needs you".** `web/src/routes/needs-you/index.tsx` shows its empty state once the stale mark clears; a pending device or merge proposal then appears a round trip later. The empty Board (`web/src/routes/board/index.tsx`), the sidebar count and the app badge have the same gap.
 
 A second reviewer (Opus) confirmed case 3 and the empty-Board flash independently.
+
+### Lanes: do not keep history after the view leaves
+
+#1208 kept `laneHistory` when the last Lanes view unmounted, kept appending live events to it, and dropped it every time the event stream came live. Measured gain: a return to Lanes made no `workspace.timeline` request where it made one per 1,000 events held (one 269 KB request on a small workspace). After #1178 each of those costs one round trip.
+
+It was closed because a reconnect is not the only way held history goes stale, and on main "leave Lanes and come back" repairs each of these for free. Two reviewers (Opus, and omp `openai-codex/gpt-6.2-astra`) traced them:
+
+1. **An event the client fails to apply is lost while the stream stays live.** `drain` in `web/src/store/sync.ts` takes the event off its queue; a `run.status` for a run not yet in the store whose `run.get` fails returns before `appendLaneEvent`; the hydration that follows repairs the Board, not the lane history. Reproduced. (The lost event is a bug on main in its own right.)
+2. **Workspace access revoked and granted back.** The server filters the stream by current access (`internal/sshd/events.go`) and never replays what it skipped, with the socket open throughout. A run that finished meanwhile still draws as running.
+3. **A history stuck at `loading: true`** after an identity change during a read (`hydrate` clears history, then awaits before it publishes the identity; `readBack` abandons the page without clearing the flag). On main leaving Lanes clears it. (Also a bug on main in its own right.)
+4. **Memory and work with Lanes closed.** History is kept per workspace ever viewed at the highest budget raised, and every lane event copies the held array.
+5. **Every reconnect re-reads everything for a mounted view**, on each phone wake or network switch, where main lets the server's replay catch up at no cost. And a write from before a server restore can still land in the fresh history (an event awaiting a fetch when the stream drops).
+
+A version that closes all five has to drop the history on every hydration, access change and failed apply and bound what is kept unmounted: far more code than the round trips it saves.
 
 ## What I could not establish
 
