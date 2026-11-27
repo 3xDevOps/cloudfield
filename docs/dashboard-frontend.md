@@ -5616,9 +5616,11 @@ and applies again once there is room. Sections (`details.tsx`):
   and "Cost not reported" when none are metered, never $0; the split by
   paying account; tokens; and "1 of 8 busy, 1 queued" against the
   workspace limit. The list rereads whenever a
-  descendant the store holds changes.
+  descendant the store holds changes. A failed read shows the server's
+  error with **Retry**.
 - **Agent messages**: the session-scoped agent mail, which the Chat view also
-  shows inline, with **Show older** and **Show all**.
+  shows inline, with **Show older** and **Show all**. A failed read shows the
+  server's error with **Retry**, also when no message has been read yet.
 - **Notes**: a thread (`note-thread.tsx`) of teammates' `question` messages,
   human to human on the session, plus open `comment` messages too, unless
   Chat is the active view and its pane is 1248px or over (however Details or
