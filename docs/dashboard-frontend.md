@@ -3705,9 +3705,9 @@ new agent conversation (`store/session-steps.ts`). In a segment, the agent's
 prose stays in the conversation as `assistant` rows, and the work between
 two pieces of prose (thoughts, tool calls, plans, subagent launches and
 answered requests) joins one `steps` block. The prose after the last block
-is the answer. The `cloudfield-internal report` call (or `aether_report` tool)
-that ends a Cloudfield turn joins the block before the prose it follows, so a
-reply written before reporting stays the answer. A segment without work,
+is the answer. A turn's `cloudfield-internal report` call (or `aether_report`
+tool) joins the block before the prose it follows, so a reply written before
+reporting, as a Background session writes it, stays the answer. A segment without work,
 such as `ping` and `pong`, has no block. The
 block's header names the work ("Read 12 files, ran 5 commands and edited 3
 files") with up to three tool icons, failures, plan progress and tools still
