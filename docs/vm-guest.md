@@ -626,8 +626,15 @@ the workspace is deleted or the server runs low on disk
 ([Recover from disk pressure](failure-handling.md#recover-from-disk-pressure)).
 When a source mirror moves the base branch, the
 server builds the new commit's prepared disk in the background for every owner
-kept there. A launch after that build does not wait for it; the launch whose
-own refresh moved the base waits for the rest of it.
+kept there, for one commit at a time per workspace: a commit the base has left
+before its turn is skipped. A launch after that build does not wait for it;
+the launch whose own refresh moved the base waits for the rest of it. A
+refresh from the launch panel
+([Launch and mirror failures](failure-handling.md#launch-and-mirror-failures))
+moves the base too, so each upstream commit that arrives while someone edits
+a task costs one build per owner, and the disk of the commit before it stays
+until the server next deletes unused disks, every hour and when a VM is
+removed.
 
 The helper mounts each checkout disk on `/run/aether-guest/checkouts/<key>`,
 binds its `checkout/` at `/run/aether-guest/data/git/<key>` for the git
